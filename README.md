@@ -38,35 +38,44 @@ USAGE
 <!-- usagestop -->
 # Commands
 <!-- commands -->
-* [`scrollsdk help [COMMAND]`](#scrollsdk-help-command)
-* [`scrollsdk helper activity`](#scrollsdk-helper-activity)
-* [`scrollsdk helper clear-accounts`](#scrollsdk-helper-clear-accounts)
-* [`scrollsdk helper derive-enode NODEKEY`](#scrollsdk-helper-derive-enode-nodekey)
-* [`scrollsdk helper fund-accounts`](#scrollsdk-helper-fund-accounts)
-* [`scrollsdk helper set-scalars`](#scrollsdk-helper-set-scalars)
-* [`scrollsdk plugins`](#scrollsdk-plugins)
-* [`scrollsdk plugins add PLUGIN`](#scrollsdk-plugins-add-plugin)
-* [`scrollsdk plugins:inspect PLUGIN...`](#scrollsdk-pluginsinspect-plugin)
-* [`scrollsdk plugins install PLUGIN`](#scrollsdk-plugins-install-plugin)
-* [`scrollsdk plugins link PATH`](#scrollsdk-plugins-link-path)
-* [`scrollsdk plugins remove [PLUGIN]`](#scrollsdk-plugins-remove-plugin)
-* [`scrollsdk plugins reset`](#scrollsdk-plugins-reset)
-* [`scrollsdk plugins uninstall [PLUGIN]`](#scrollsdk-plugins-uninstall-plugin)
-* [`scrollsdk plugins unlink [PLUGIN]`](#scrollsdk-plugins-unlink-plugin)
-* [`scrollsdk plugins update`](#scrollsdk-plugins-update)
-* [`scrollsdk setup configs`](#scrollsdk-setup-configs)
-* [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
-* [`scrollsdk setup domains [FILE]`](#scrollsdk-setup-domains-file)
-* [`scrollsdk setup gas-token`](#scrollsdk-setup-gas-token)
-* [`scrollsdk setup gen-keystore`](#scrollsdk-setup-gen-keystore)
-* [`scrollsdk setup prep-charts`](#scrollsdk-setup-prep-charts)
-* [`scrollsdk setup push-secrets`](#scrollsdk-setup-push-secrets)
-* [`scrollsdk setup tls`](#scrollsdk-setup-tls)
-* [`scrollsdk setup verify-contracts`](#scrollsdk-setup-verify-contracts)
-* [`scrollsdk test contracts`](#scrollsdk-test-contracts)
-* [`scrollsdk test dependencies`](#scrollsdk-test-dependencies)
-* [`scrollsdk test e2e`](#scrollsdk-test-e2e)
-* [`scrollsdk test ingress`](#scrollsdk-test-ingress)
+- [Scroll SDK CLI](#scroll-sdk-cli)
+  - [Introduction](#introduction)
+    - [Other Scroll SDK Repos](#other-scroll-sdk-repos)
+- [Usage](#usage)
+- [Commands](#commands)
+  - [`scrollsdk help [COMMAND]`](#scrollsdk-help-command)
+  - [`scrollsdk helper activity`](#scrollsdk-helper-activity)
+  - [`scrollsdk helper clear-accounts`](#scrollsdk-helper-clear-accounts)
+  - [`scrollsdk helper derive-enode NODEKEY`](#scrollsdk-helper-derive-enode-nodekey)
+  - [`scrollsdk helper fund-accounts`](#scrollsdk-helper-fund-accounts)
+  - [`scrollsdk helper set-scalars`](#scrollsdk-helper-set-scalars)
+  - [`scrollsdk plugins`](#scrollsdk-plugins)
+  - [`scrollsdk plugins add PLUGIN`](#scrollsdk-plugins-add-plugin)
+  - [`scrollsdk plugins:inspect PLUGIN...`](#scrollsdk-pluginsinspect-plugin)
+  - [`scrollsdk plugins install PLUGIN`](#scrollsdk-plugins-install-plugin)
+  - [`scrollsdk plugins link PATH`](#scrollsdk-plugins-link-path)
+  - [`scrollsdk plugins remove [PLUGIN]`](#scrollsdk-plugins-remove-plugin)
+  - [`scrollsdk plugins reset`](#scrollsdk-plugins-reset)
+  - [`scrollsdk plugins uninstall [PLUGIN]`](#scrollsdk-plugins-uninstall-plugin)
+  - [`scrollsdk plugins unlink [PLUGIN]`](#scrollsdk-plugins-unlink-plugin)
+  - [`scrollsdk plugins update`](#scrollsdk-plugins-update)
+  - [`scrollsdk setup configs`](#scrollsdk-setup-configs)
+  - [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
+  - [`scrollsdk setup domains [FILE]`](#scrollsdk-setup-domains-file)
+  - [`scrollsdk setup gas-token`](#scrollsdk-setup-gas-token)
+  - [`scrollsdk setup gen-keystore`](#scrollsdk-setup-gen-keystore)
+  - [`scrollsdk setup prep-charts`](#scrollsdk-setup-prep-charts)
+  - [`scrollsdk setup push-secrets`](#scrollsdk-setup-push-secrets)
+  - [`scrollsdk setup tls`](#scrollsdk-setup-tls)
+  - [`scrollsdk setup verify-contracts`](#scrollsdk-setup-verify-contracts)
+  - [`scrollsdk test contracts`](#scrollsdk-test-contracts)
+  - [`scrollsdk test dependencies`](#scrollsdk-test-dependencies)
+  - [`scrollsdk test e2e`](#scrollsdk-test-e2e)
+  - [`scrollsdk test ingress`](#scrollsdk-test-ingress)
+  - [`scrollsdk doge config`](#scrollsdk-doge-config)
+  - [`scrollsdk doge wallet new`](#scrollsdk-doge-wallet-new)
+  - [`scrollsdk doge wallet sync`](#scrollsdk-doge-wallet-sync)
+  - [`scrollsdk doge wallet send`](#scrollsdk-doge-wallet-send)
 
 ## `scrollsdk help [COMMAND]`
 
@@ -799,4 +808,99 @@ DESCRIPTION
 ```
 
 _See code: [src/commands/test/ingress.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.2/src/commands/test/ingress.ts)_
+
+## `scrollsdk doge config`
+
+Configure Dogecoin settings
+
+```
+USAGE
+  $ scrollsdk doge config [-c <value>]
+
+FLAGS
+  -c, --config=<value>  [default: .data/doge-config.toml] Path to config file
+
+DESCRIPTION
+  Configure Dogecoin settings
+
+EXAMPLES
+  $ scrollsdk doge:config
+  $ scrollsdk doge:config --config .data/doge-config.toml
+```
+
+## `scrollsdk doge wallet new`
+
+Create a new Dogecoin wallet
+
+```
+USAGE
+  $ scrollsdk doge wallet new [-c <value>] [-p <value>]
+
+FLAGS
+  -c, --config=<value>  [default: .data/doge-config.toml] Path to config file
+  -p, --path=<value>    Custom path for the wallet file (overrides config)
+
+DESCRIPTION
+  Create a new Dogecoin wallet
+
+EXAMPLES
+  $ scrollsdk doge:wallet new
+  $ scrollsdk doge:wallet new --path .data/my-wallet.json
+```
+
+## `scrollsdk doge wallet sync`
+
+Sync wallet UTXOs from the network
+
+```
+USAGE
+  $ scrollsdk doge wallet sync [-c <value>] [-p <value>]
+
+FLAGS
+  -c, --config=<value>  [default: .data/doge-config.toml] Path to config file
+  -p, --path=<value>    Custom path for the wallet file (overrides config)
+
+DESCRIPTION
+  Sync wallet UTXOs from the network
+
+EXAMPLES
+  $ scrollsdk doge:wallet sync
+  $ scrollsdk doge:wallet sync --path .data/my-wallet.json
+```
+
+## `scrollsdk doge wallet send`
+
+Send Dogecoin with optional OP_RETURN data
+
+```
+USAGE
+  $ scrollsdk doge wallet send -a <value> [-c <value>] [-p <value>] [-t <value>] [--chain-id <value> --evm-address <value> | --hex-data <value> | --text-data <value>]
+
+FLAGS
+  -a, --amount=<value>       Amount to send in DOGE (required)
+  -c, --config=<value>       [default: .data/doge-config.toml] Path to config file
+  -p, --path=<value>         Custom path for the wallet file (overrides config)
+  -t, --to=<value>          Recipient address (overrides config)
+  --chain-id=<value>        Chain ID (6 bytes)
+  --evm-address=<value>     EVM address (20 bytes)
+  --hex-data=<value>        Custom hex data to include in OP_RETURN output
+  --text-data=<value>       Text data to include in OP_RETURN output (will be converted to UTF-8 hex)
+
+DESCRIPTION
+  Send Dogecoin with optional OP_RETURN data
+
+  The command supports three ways to add OP_RETURN data:
+  1. Raw hex data using --hex-data
+  2. Text data using --text-data (automatically converted to UTF-8 hex)
+  3. Structured data using --chain-id and --evm-address (for cross-chain transactions)
+
+  Note: OP_RETURN data is limited to 80 bytes.
+
+EXAMPLES
+  $ scrollsdk doge:wallet send --amount 1.0
+  $ scrollsdk doge:wallet send --amount 1.0 --to D6...xyz
+  $ scrollsdk doge:wallet send --amount 1.0 --hex-data 6a0468656c6c6f
+  $ scrollsdk doge:wallet send --amount 1.0 --text-data "Hello, World!"
+  $ scrollsdk doge:wallet send --amount 1.0 --chain-id 0x1234 --evm-address 0xabc...
+```
 <!-- commandsstop -->
