@@ -14,7 +14,7 @@ export default class SetupConfigs extends Command {
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --image-tag gen-configs-64934888f4cd002e77414a8e62812f70c00c5937',
+    '<%= config.bin %> <%= command.id %> --image-tag gen-configs-1ffe3bb',
     '<%= config.bin %> <%= command.id %> --configs-dir custom-configs',
   ]
 
@@ -31,7 +31,7 @@ export default class SetupConfigs extends Command {
 
   private async runDockerCommand(imageTag: string): Promise<void> {
     const docker = new Docker()
-    const image = `scrolltech/scroll-stack-contracts:${imageTag}`
+    const image = `shuunifra/scroll-stack-contracts:${imageTag}`
 
     try {
       this.log(chalk.cyan('Pulling Docker Image...'))
@@ -452,7 +452,7 @@ export default class SetupConfigs extends Command {
   private async fetchDockerTags(): Promise<string[]> {
     try {
       const response = await fetch(
-        'https://registry.hub.docker.com/v2/repositories/scrolltech/scroll-stack-contracts/tags?page_size=100',
+        'https://registry.hub.docker.com/v2/repositories/shuunifra/scroll-stack-contracts/tags?page_size=100',
       )
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`)
@@ -465,7 +465,7 @@ export default class SetupConfigs extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'gen-configs-64934888f4cd002e77414a8e62812f70c00c5937'
+    const defaultTag = 'gen-configs-1ffe3bb'
 
     if (!providedTag) {
       return defaultTag
