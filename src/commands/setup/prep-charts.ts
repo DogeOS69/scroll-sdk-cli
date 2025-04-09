@@ -102,9 +102,10 @@ export default class SetupPrepCharts extends Command {
     this.log('Authenticated with GitHub Container Registry')
   }
 
-  private async validateOCIAccess(ociUrl: string): Promise<boolean> {
+  private async validateOCIAccess(ociUrl: string, ociVersion: string): Promise<boolean> {
     try {
-      await execAsync(`helm show chart ${ociUrl}`)
+      const versionArgument = ociVersion ? ` --version ${ociVersion}` : "";
+      await execAsync(`helm show chart ${ociUrl}${versionArgument}`)
       return true
     } catch (error) {
       return false
@@ -330,13 +331,15 @@ export default class SetupPrepCharts extends Command {
     for (const command of installCommands) {
       const chartNameMatch = command.match(/upgrade\s+-i\s+(\S+)/)
       const ociMatch = command.match(/oci:\/\/([^\s]+)/)
+      const ociVersionMatch = command.match(/--version\s*=\s*(\S+)\s+/);
 
       if (chartNameMatch && ociMatch) {
         const chartName = chartNameMatch[1]
         const ociUrl = ociMatch[0]
+        const ociVersion = ociVersionMatch && ociVersionMatch.length > 1 ? ociVersionMatch[1] : "";
 
         if (!skipAuthCheck) {
-          const hasAccess = await this.validateOCIAccess(ociUrl)
+          const hasAccess = await this.validateOCIAccess(ociUrl, ociVersion)
 
           if (hasAccess) {
             this.log(chalk.green(`Access verified for chart: ${chartName}`))
