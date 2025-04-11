@@ -5,7 +5,7 @@ import * as onchainHelpers from '../../src/utils/onchain/index.js';
 
 const EXTERNAL_RPC_URI_L1 = "https://eth-sepolia.g.alchemy.com/v2/demo";
 const EXTERNAL_RPC_URI_L2 = "https://sepolia-rpc.scroll.io/";
-const L1_MESSAGE_QUEUE_PROXY_ADDR = "0xF0B2293F5D834eAe920c6974D50957A1732de763";
+const L1_MESSAGE_QUEUE_V2_PROXY_ADDR = "0xF0B2293F5D834eAe920c6974D50957A1732de763";
 
 describe('Onchain Helpers', () => {
   let providerStub: sinon.SinonStubbedInstance<JsonRpcProvider>;
@@ -32,15 +32,16 @@ describe('Onchain Helpers', () => {
       const txHash = "0xc4cc1447185335970a26a8781fb17bd5bdfd49bd53474f1c322d0965b8906cea";
       const mockReceipt = {
         logs: [{
-          address: L1_MESSAGE_QUEUE_PROXY_ADDR,
+          address: L1_MESSAGE_QUEUE_V2_PROXY_ADDR,
           data: '0x0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000004'
         }]
       };
       providerStub.getTransactionReceipt.resolves(mockReceipt as unknown as TransactionReceipt);
       
       const contractStub = sinon.stub(Contract.prototype, 'getCrossDomainMessage').resolves('0x5678');
+      // const contractStub = sinon.stub(Contract.prototype, 'getMessageRollingHash').resolves('0x5678');
 
-      const result = await onchainHelpers.getCrossDomainMessageFromTx(providerStub as unknown as JsonRpcProvider, txHash, L1_MESSAGE_QUEUE_PROXY_ADDR);
+      const result = await onchainHelpers.getCrossDomainMessageFromTx(providerStub as unknown as JsonRpcProvider, txHash, L1_MESSAGE_QUEUE_V2_PROXY_ADDR);
       expect(result).to.deep.equal({ queueIndex: 2n, l2TxHash: '0x5678' });
       expect(contractStub.calledOnce).to.be.true;
     });
@@ -50,7 +51,7 @@ describe('Onchain Helpers', () => {
     it('should return the pending queue index', async () => {
       const contractStub = sinon.stub(Contract.prototype, 'pendingQueueIndex').resolves(10n);
       
-      const result = await onchainHelpers.getPendingQueueIndex(providerStub as unknown as JsonRpcProvider, L1_MESSAGE_QUEUE_PROXY_ADDR);
+      const result = await onchainHelpers.getPendingQueueIndex(providerStub as unknown as JsonRpcProvider, L1_MESSAGE_QUEUE_V2_PROXY_ADDR);
       expect(result).to.equal(10n);
       expect(contractStub.calledOnce).to.be.true;
     });
@@ -60,7 +61,7 @@ describe('Onchain Helpers', () => {
     it('should return the L2 base fee', async () => {
       const contractStub = sinon.stub(Contract.prototype, 'l2BaseFee').resolves(1000000000n);
       
-      const result = await onchainHelpers.getGasOracleL2BaseFee(providerStub as unknown as JsonRpcProvider, L1_MESSAGE_QUEUE_PROXY_ADDR);
+      const result = await onchainHelpers.getGasOracleL2BaseFee(providerStub as unknown as JsonRpcProvider, L1_MESSAGE_QUEUE_V2_PROXY_ADDR);
       expect(result).to.equal(1000000000n);
       expect(contractStub.calledOnce).to.be.true;
     });

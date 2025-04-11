@@ -11,7 +11,7 @@ import {
 
 const EXTERNAL_RPC_URI_L1 = "https://alien-flashy-arm.ethereum-sepolia.quiknode.pro/2aeb75414e5ee0e930b64c2e7feff59efb537f30"
 const EXTERNAL_RPC_URI_L2 = "https://sepolia-rpc.scroll.io/"
-const L1_MESSAGE_QUEUE_PROXY_ADDR = "0xF0B2293F5D834eAe920c6974D50957A1732de763";
+const L1_MESSAGE_QUEUE_V2_PROXY_ADDR = "0xF0B2293F5D834eAe920c6974D50957A1732de763";
 const BRIDGE_API_URI = "https://sepolia-api-bridge-v2.scroll.io/api"
 
 async function testGetFinalizedBlockHeight() {
@@ -26,7 +26,7 @@ async function testGetFinalizedBlockHeight() {
 async function testGetCrossDomainMessageFromTx() {
 	try {
 		const txHash = "0xc4cc1447185335970a26a8781fb17bd5bdfd49bd53474f1c322d0965b8906cea";
-		const crossDomainMessage = await getCrossDomainMessageFromTx(txHash, EXTERNAL_RPC_URI_L1, L1_MESSAGE_QUEUE_PROXY_ADDR)
+		const crossDomainMessage = await getCrossDomainMessageFromTx(txHash, EXTERNAL_RPC_URI_L1, L1_MESSAGE_QUEUE_V2_PROXY_ADDR)
 		console.log(`Cross-domain message (L2 tx hash): ${crossDomainMessage.l2TxHash}`);
 		console.log(`Queue Position: ${crossDomainMessage.queueIndex}`);
 	} catch (error) {
@@ -36,7 +36,7 @@ async function testGetCrossDomainMessageFromTx() {
 
 async function testGetPendingQueueIndex() {
 	try {
-		const pendingQueueIndex = await getPendingQueueIndex(EXTERNAL_RPC_URI_L1, L1_MESSAGE_QUEUE_PROXY_ADDR)
+		const pendingQueueIndex = await getPendingQueueIndex(EXTERNAL_RPC_URI_L1, L1_MESSAGE_QUEUE_V2_PROXY_ADDR)
 		console.log(`Pending queue index: ${pendingQueueIndex}`);
 	} catch (error) {
 		console.error('Error in testGetPendingQueueIndex:', error);
@@ -45,7 +45,7 @@ async function testGetPendingQueueIndex() {
 
 async function testGetGasOracleL2BaseFee() {
 	try {
-		const l2BaseFee = await getGasOracleL2BaseFee(EXTERNAL_RPC_URI_L1, L1_MESSAGE_QUEUE_PROXY_ADDR)
+		const l2BaseFee = await getGasOracleL2BaseFee(EXTERNAL_RPC_URI_L1, L1_MESSAGE_QUEUE_V2_PROXY_ADDR)
 		console.log(`L2 Basefee: ${l2BaseFee}`);
 	} catch (error) {
 		console.error('Error in testGetGasOracleL2BaseFee:', error);

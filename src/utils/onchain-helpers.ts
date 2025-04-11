@@ -40,14 +40,28 @@ export class OnchainHelpers {
       ['uint256', 'uint64', 'uint256', 'bytes'],
       queueTransactionLog.data
     );
-    const queueIndex = decodedLog[1];
-
+    
     const l1MessageQueueABI = [
-      "function getCrossDomainMessage(uint256) view returns (bytes32)"
+      "function computeTransactionHash(address,uint256,uint256,address,uint256,bytes) external view returns (bytes32)"
+
     ];
+    const value=decodedLog[0]
+    const queueIndex=decodedLog[1]
+    const gasLimit=decodedLog[2]
+    const data=decodedLog[3]
+    const sender = ethers.AbiCoder.defaultAbiCoder().decode(['address'], queueTransactionLog.topics[1])[0]
+    const target = ethers.AbiCoder.defaultAbiCoder().decode(['address'], queueTransactionLog.topics[2])[0]
+
     const l1MessageQueue = new Contract(l1MessageQueueProxyAddress, l1MessageQueueABI, this.provider);
 
-    const l2TxHash = await l1MessageQueue.getCrossDomainMessage(queueIndex);
+    const l2TxHash = await l1MessageQueue.computeTransactionHash(
+      sender,
+      queueIndex,
+      value,
+      target,
+      gasLimit,
+      data
+    );
 
     return { queueIndex, l2TxHash };
   }
