@@ -282,6 +282,11 @@ export default class HelperActivity extends Command {
         this.debugLog(`Error stack: ${error.stack}`)
         if ('code' in error) {
           this.debugLog(`Error code: ${(error as any).code}`)
+          if ((error as any).code === 'NONCE_EXPIRED') {
+            this.nonceTrackers[layer] = await wallet.getNonce();
+            this.log(chalk.blue(`Nonce expired. Trying use the latest nonce. ${this.nonceTrackers[layer]}`))
+            return
+          }
         }
       }
 
