@@ -33,6 +33,10 @@ class AWSSecretService implements SecretService {
     const fullSecretName = `${this.prefixName}/${secretName}`
     const jsonContent = JSON.stringify(content)
     const escapedJsonContent = jsonContent.replace(/'/g, "'\\''")
+    if(!jsonContent) {
+      console.log(chalk.red(`Skipping secret: ${secretName} because it is empty`))
+      return
+    }
 
     if (await this.secretExists(secretName)) {
       const shouldOverride = await confirm({
@@ -112,15 +116,31 @@ class AWSSecretService implements SecretService {
     let l2SequencerSecrets: Record<string, string> = {}
 
     for (const file of envFiles) {
-      const secretName = path.basename(file, '.env')
-      if (secretName.startsWith('l2-sequencer-')) {
+      const baseName = path.basename(file, '.env')
+      
+      // Special handling for l2-sequencer-N-secret.env files
+      if (baseName.match(/^l2-sequencer-\d+-secret$/)) {
+        const sequencerIndex = baseName.match(/l2-sequencer-(\d+)-secret/)?.[1] || '0'
+        const secretName = `l2-sequencer-secret-${sequencerIndex}-env`
+        
         console.log(chalk.cyan(`Processing L2 Sequencer secret: ${secretName}`))
         const data = await this.convertEnvToDict(path.join(secretsDir, file))
-        l2SequencerSecrets = { ...l2SequencerSecrets, ...data }
+        await this.createOrUpdateSecret(data, secretName)
+        
+        // Also add to combined secret with index suffix for backward compatibility
+        for (const [key, value] of Object.entries(data)) {
+          // If key already has index suffix, use it as is, otherwise add index suffix
+          if (key.endsWith(`_${sequencerIndex}`)) {
+            l2SequencerSecrets[key] = value
+          } else {
+            l2SequencerSecrets[`${key}_${sequencerIndex}`] = value
+          }
+        }
       } else {
-        console.log(chalk.cyan(`Processing ENV secret: ${secretName}-env`))
+        const secretName = `${baseName}-env`
+        console.log(chalk.cyan(`Processing ENV secret: ${secretName}`))
         const data = await this.convertEnvToDict(path.join(secretsDir, file))
-        await this.createOrUpdateSecret(data, `${secretName}-env`)
+        await this.createOrUpdateSecret(data, secretName)
       }
     }
 
@@ -134,9 +154,11 @@ class AWSSecretService implements SecretService {
 
 class HashicorpVaultDevService implements SecretService {
   private debug: boolean
+  private pathPrefix: string
 
-  constructor(debug: boolean) {
+  constructor(debug: boolean, pathPrefix: string = 'scroll') {
     this.debug = debug
+    this.pathPrefix = pathPrefix
   }
 
   private async runCommand(command: string): Promise<string> {
@@ -195,7 +217,11 @@ class HashicorpVaultDevService implements SecretService {
       .map(([key, value]) => `${key}='${value.replace(/'/g, "'\\''")}'`)
       .join(' ')
 
-    const command = `vault kv put scroll/${secretName} ${kvPairs}`
+    if(!kvPairs) {
+      console.log(chalk.red(`Skipping secret: ${secretName} because it is empty`))
+      return
+    }
+    const command = `vault kv put ${this.pathPrefix}/${secretName} ${kvPairs}`
 
     if (this.debug) {
       console.log(chalk.yellow('--- Debug Output ---'))
@@ -206,9 +232,9 @@ class HashicorpVaultDevService implements SecretService {
 
     try {
       await this.runCommand(command)
-      console.log(chalk.green(`Successfully pushed secret: scroll/${secretName}`))
+      console.log(chalk.green(`Successfully pushed secret: ${this.pathPrefix}/${secretName}`))
     } catch (error) {
-      console.error(chalk.red(`Failed to push secret: scroll/${secretName}`))
+      console.error(chalk.red(`Failed to push secret: ${this.pathPrefix}/${secretName}`))
       console.error(chalk.red(`Error: ${error}`))
     }
   }
@@ -217,7 +243,7 @@ class HashicorpVaultDevService implements SecretService {
     try {
       const jsonContent = JSON.parse(content);
       const escapedJson = JSON.stringify(jsonContent).replace(/'/g, "'\\''");
-      const command = `vault kv put scroll/${secretName} migrate-db.json='${escapedJson}'`;
+      const command = `vault kv put ${this.pathPrefix}/${secretName} migrate-db.json='${escapedJson}'`;
 
       if (this.debug) {
         console.log(chalk.yellow('--- Debug Output ---'));
@@ -226,10 +252,15 @@ class HashicorpVaultDevService implements SecretService {
         console.log(chalk.yellow('-------------------'));
       }
 
+      if(!jsonContent) {
+        console.log(chalk.red(`Skipping secret: ${secretName} because it is empty`))
+        return
+      }
+
       await this.runCommand(command);
-      console.log(chalk.green(`Successfully pushed JSON secret: scroll/${secretName}`));
+      console.log(chalk.green(`Successfully pushed JSON secret: ${this.pathPrefix}/${secretName}`));
     } catch (error) {
-      console.error(chalk.red(`Failed to push JSON secret: scroll/${secretName}`));
+      console.error(chalk.red(`Failed to push JSON secret: ${this.pathPrefix}/${secretName}`));
       console.error(chalk.red(`Error: ${error}`));
     }
   }
@@ -245,26 +276,26 @@ class HashicorpVaultDevService implements SecretService {
     }
 
     // Check if the KV secrets engine is already enabled
-    const isEnabled = await this.isSecretEngineEnabled('scroll')
+    const isEnabled = await this.isSecretEngineEnabled(this.pathPrefix)
     if (!isEnabled) {
       // Enable the KV secrets engine only if it's not already enabled
       try {
-        await this.runCommand("vault secrets enable -path=scroll kv-v2")
-        console.log(chalk.green("KV secrets engine enabled at path 'scroll'"))
+        await this.runCommand(`vault secrets enable -path=${this.pathPrefix} kv-v2`)
+        console.log(chalk.green(`KV secrets engine enabled at path '${this.pathPrefix}'`))
       } catch (error: unknown) {
         if (error instanceof Error) {
           // If the error is about the path already in use, we can ignore it
-          if (!error.message.includes("path is already in use at scroll/")) {
+          if (!error.message.includes(`path is already in use at ${this.pathPrefix}/`)) {
             throw error
           }
-          console.log(chalk.yellow("KV secrets engine already enabled at path 'scroll'"))
+          console.log(chalk.yellow(`KV secrets engine already enabled at path '${this.pathPrefix}'`))
         } else {
           // If it's not an Error instance, rethrow it
           throw error
         }
       }
     } else {
-      console.log(chalk.yellow("KV secrets engine already enabled at path 'scroll'"))
+      console.log(chalk.yellow(`KV secrets engine already enabled at path '${this.pathPrefix}'`))
     }
 
     const secretsDir = path.join(process.cwd(), 'secrets')
@@ -273,7 +304,7 @@ class HashicorpVaultDevService implements SecretService {
     const jsonFiles = fs.readdirSync(secretsDir).filter(file => file.endsWith('.json'))
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
-      console.log(chalk.cyan(`Processing JSON secret: scroll/${secretName}`))
+      console.log(chalk.cyan(`Processing JSON secret: ${this.pathPrefix}/${secretName}`))
       const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf-8')
       await this.pushJsonToVault(secretName, content)
     }
@@ -283,21 +314,37 @@ class HashicorpVaultDevService implements SecretService {
     let l2SequencerSecrets: Record<string, string> = {}
 
     for (const file of envFiles) {
-      const secretName = path.basename(file, '.env') + '-env'
-      if (secretName.startsWith('l2-sequencer-')) {
-        console.log(chalk.cyan(`Processing L2 Sequencer secret: ${secretName}`))
+      const baseName = path.basename(file, '.env')
+      
+      // Special handling for l2-sequencer-N-secret.env files
+      if (baseName.match(/^l2-sequencer-\d+-secret$/)) {
+        const sequencerIndex = baseName.match(/l2-sequencer-(\d+)-secret/)?.[1] || '0'
+        const secretName = `l2-sequencer-secret-${sequencerIndex}-env`
+        
+        console.log(chalk.cyan(`Processing L2 Sequencer secret: ${this.pathPrefix}/${secretName}`))
         const data = await this.convertEnvToDict(path.join(secretsDir, file))
-        l2SequencerSecrets = { ...l2SequencerSecrets, ...data }
+        await this.pushToVault(secretName, data)
+        
+        // Also add to combined secret with index suffix for backward compatibility
+        for (const [key, value] of Object.entries(data)) {
+          // If key already has index suffix, use it as is, otherwise add index suffix
+          if (key.endsWith(`_${sequencerIndex}`)) {
+            l2SequencerSecrets[key] = value
+          } else {
+            l2SequencerSecrets[`${key}_${sequencerIndex}`] = value
+          }
+        }
       } else {
-        console.log(chalk.cyan(`Processing ENV secret: scroll/${secretName}`))
+        const secretName = `${baseName}-env`
+        console.log(chalk.cyan(`Processing ENV secret: ${this.pathPrefix}/${secretName}`))
         const data = await this.convertEnvToDict(path.join(secretsDir, file))
         await this.pushToVault(secretName, data)
       }
     }
 
-    // Push combined L2 Sequencer secrets
+    // Push combined L2 Sequencer secrets for backward compatibility
     if (Object.keys(l2SequencerSecrets).length > 0) {
-      console.log(chalk.cyan(`Processing combined L2 Sequencer secrets: scroll/l2-sequencer-secret-env`))
+      console.log(chalk.cyan(`Processing combined L2 Sequencer secrets: ${this.pathPrefix}/l2-sequencer-secret-env`))
       await this.pushToVault('l2-sequencer-secret-env', l2SequencerSecrets)
     }
 
@@ -369,17 +416,16 @@ export default class SetupPushSecrets extends Command {
     }
   }
 
-  private async updateProductionYaml(provider: string, prefixName?: string): Promise<void> {
+  private async updateProductionYaml(provider: string, credentials: Record<string, string>): Promise<void> {
     const valuesDir = path.join(process.cwd(), this.flags['values-dir']);
     if (!fs.existsSync(valuesDir)) {
       this.error(chalk.red(`Values directory not found at ${valuesDir}`));
     }
-
-    let credentials: Record<string, string>;
+    let prefixName: string | undefined;
     if (provider === 'vault') {
-      credentials = await this.getVaultCredentials();
+      prefixName = credentials.path;
     } else {
-      credentials = await this.getAWSCredentials();
+      prefixName = credentials.prefixName;
     }
 
     const yamlFiles = fs.readdirSync(valuesDir).filter(file =>
@@ -389,6 +435,10 @@ export default class SetupPushSecrets extends Command {
     for (const yamlFile of yamlFiles) {
       const yamlPath = path.join(valuesDir, yamlFile);
       this.log(chalk.cyan(`Processing ${yamlFile}`));
+
+      // Extract sequencer index from filename if it matches the pattern
+      const sequencerMatch = yamlFile.match(/l2-sequencer-production-(\d+)\.yaml$/);
+      const sequencerIndex = sequencerMatch ? sequencerMatch[1] : null;
 
       const content = fs.readFileSync(yamlPath, 'utf8');
       const yamlContent = yaml.load(content) as any;
@@ -430,15 +480,36 @@ export default class SetupPushSecrets extends Command {
               }
             }
           }
-
+          
           // Update remoteRef for l2-sequencer secrets
+          // Always use the combined l2-sequencer-secret-env path for remoteRef.key
           if (secretName.match(/^l2-sequencer-secret-\d+-env$/)) {
             for (const data of secret.data) {
               if (data.remoteRef && data.remoteRef.key) {
-                // Use the prefixName if available
-                const prefix = prefixName || (data.remoteRef.key.startsWith('scroll/') ? 'scroll' : '');
-                data.remoteRef.key = `${prefix}/l2-sequencer-secret-env`;
-                updated = true;
+                // Keep the standard combined path format
+                const updatedKey = prefixName 
+                  ? `${prefixName}/l2-sequencer-secret-env` 
+                  : `l2-sequencer-secret-env`;
+                
+                // Only update if the key has changed
+                if (data.remoteRef.key !== updatedKey) {
+                  data.remoteRef.key = updatedKey;
+                  updated = true;
+                }
+                
+                // Make sure the property has the correct index suffix
+                // Extract the base property name (without index suffix)
+                const match = data.remoteRef.property.match(/^(.+?)(?:_\d+)?$/);
+                if (match && sequencerIndex !== null) {
+                  const baseProp = match[1];
+                  const updatedProp = `${baseProp}_${sequencerIndex}`;
+                  
+                  // Only update if different
+                  if (data.remoteRef.property !== updatedProp) {
+                    data.remoteRef.property = updatedProp;
+                    updated = true;
+                  }
+                }
               }
             }
           }
@@ -454,7 +525,6 @@ export default class SetupPushSecrets extends Command {
       }
     }
   }
-
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupPushSecrets)
@@ -472,15 +542,15 @@ export default class SetupPushSecrets extends Command {
 
     let service: SecretService
     let provider: string
-    let prefixName: string | undefined
+    let credentials: Record<string, string>
 
     if (secretService === 'aws') {
-      const awsCredentials = await this.getAWSCredentials()
-      service = new AWSSecretService(awsCredentials.secretRegion, awsCredentials.prefixName, flags.debug)
+      credentials = await this.getAWSCredentials()
+      service = new AWSSecretService(credentials.secretRegion, credentials.prefixName, flags.debug)
       provider = 'aws'
-      prefixName = awsCredentials.prefixName
     } else if (secretService === 'vault') {
-      service = new HashicorpVaultDevService(flags.debug)
+      credentials = await this.getVaultCredentials()
+      service = new HashicorpVaultDevService(flags.debug, credentials.path)
       provider = 'vault'
     } else {
       this.error(chalk.red('Invalid secret service selected'))
@@ -495,7 +565,7 @@ export default class SetupPushSecrets extends Command {
       })
 
       if (shouldUpdateYaml) {
-        await this.updateProductionYaml(provider, prefixName)
+        await this.updateProductionYaml(provider, credentials)
         this.log(chalk.green('Production YAML files updated successfully'))
       } else {
         this.log(chalk.yellow('Skipped updating production YAML files'))
