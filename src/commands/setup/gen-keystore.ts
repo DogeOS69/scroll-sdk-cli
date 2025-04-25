@@ -52,7 +52,14 @@ export default class SetupGenKeystore extends Command {
   }
 
   private async generateSequencerKeystore(index: number): Promise<SequencerData> {
-    const password = await input({ message: `Enter a password for sequencer-${index} keystore:` })
+    let password = ''
+    while (!password) {
+      password = await input({ message: `Enter a password for sequencer-${index} keystore:` })
+      if (!password) {
+        console.log('Password cannot be empty. Please try again.')
+      }
+    }
+    
     const wallet = Wallet.createRandom()
     const encryptedJson = await wallet.encrypt(password)
     return {

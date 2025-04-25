@@ -138,9 +138,9 @@ export default class SetupPrepCharts extends Command {
           if (configMapData && typeof configMapData === 'object' && 'data' in configMapData) {
             const envData = (configMapData as any).data
             for (const [key, value] of Object.entries(envData)) {
-              if (value === '' || value === '[""]' || value === '[]' ||
-                (Array.isArray(value) && (value.length === 0 || (value.length === 1 && value[0] === ''))) ||
-                value === null || value === undefined) {
+              // if (value === '' || value === '[""]' || value === '[]' ||
+              //   (Array.isArray(value) && (value.length === 0 || (value.length === 1 && value[0] === ''))) ||
+              //   value === null || value === undefined) {
                 const configMapping = this.configMapping[key]
                 if (configMapping) {
                   let configKey: string
@@ -157,14 +157,20 @@ export default class SetupPrepCharts extends Command {
                     } else {
                       newValue = String(configValue)
                     }
-                    changes.push({ key, oldValue: JSON.stringify(value), newValue: newValue })
-                    envData[key] = newValue
-                    updated = true
+
+                    if(chartName === "l1-devnet" && key === "CHAIN_ID"){
+                      continue;
+                    }
+                    if (newValue != value) {
+                      changes.push({ key, oldValue: JSON.stringify(value), newValue: newValue })
+                      envData[key] = newValue
+                      updated = true
+                    }
                   } else {
                     this.log(chalk.yellow(`${chartName}: No value found for ${configKey}`))
                   }
                 }
-              }
+              //}
             }
           }
         }

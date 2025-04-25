@@ -369,7 +369,7 @@ export default class SetupPushSecrets extends Command {
     }
   }
 
-  private async updateProductionYaml(provider: string): Promise<void> {
+  private async updateProductionYaml(provider: string, prefixName?: string): Promise<void> {
     const valuesDir = path.join(process.cwd(), this.flags['values-dir']);
     if (!fs.existsSync(valuesDir)) {
       this.error(chalk.red(`Values directory not found at ${valuesDir}`));
@@ -432,17 +432,19 @@ export default class SetupPushSecrets extends Command {
           }
 
           // Update remoteRef for l2-sequencer secrets
-          if (secretName.match(/^l2-sequencer-\d+-secret$/)) {
+          if (secretName.match(/^l2-sequencer-secret-\d+-env$/)) {
             for (const data of secret.data) {
               if (data.remoteRef && data.remoteRef.key) {
-                data.remoteRef.key = 'l2-sequencer-secret';
+                // Use the prefixName if available
+                const prefix = prefixName || (data.remoteRef.key.startsWith('scroll/') ? 'scroll' : '');
+                data.remoteRef.key = `${prefix}/l2-sequencer-secret-env`;
                 updated = true;
               }
             }
           }
         }
       }
-
+      
       if (updated) {
         const newContent = yaml.dump(yamlContent, { lineWidth: -1, noRefs: true, quotingType: '"', forceQuotes: true });
         fs.writeFileSync(yamlPath, newContent);
@@ -470,11 +472,13 @@ export default class SetupPushSecrets extends Command {
 
     let service: SecretService
     let provider: string
+    let prefixName: string | undefined
 
     if (secretService === 'aws') {
       const awsCredentials = await this.getAWSCredentials()
       service = new AWSSecretService(awsCredentials.secretRegion, awsCredentials.prefixName, flags.debug)
       provider = 'aws'
+      prefixName = awsCredentials.prefixName
     } else if (secretService === 'vault') {
       service = new HashicorpVaultDevService(flags.debug)
       provider = 'vault'
@@ -491,7 +495,7 @@ export default class SetupPushSecrets extends Command {
       })
 
       if (shouldUpdateYaml) {
-        await this.updateProductionYaml(provider)
+        await this.updateProductionYaml(provider, prefixName)
         this.log(chalk.green('Production YAML files updated successfully'))
       } else {
         this.log(chalk.yellow('Skipped updating production YAML files'))
