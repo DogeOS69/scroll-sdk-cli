@@ -457,6 +457,23 @@ export default class SetupDomains extends Command {
       delete existingConfig.ingress.L1_EXPLORER_HOST
     }
 
+    /*
+    [contracts.verification]
+    VERIFIER_TYPE_L1 = "blockscout"
+    VERIFIER_TYPE_L2 = "blockscout"
+    EXPLORER_URI_L1 = "http://l1-explorer.scrollsdk"
+    EXPLORER_URI_L2 = "http://blockscout.scrollsdk"
+    RPC_URI_L1 = "http://l1-devnet.scrollsdk"
+    RPC_URI_L2 = "http://l2-rpc.scrollsdk"
+    EXPLORER_API_KEY_L1 = ""
+    EXPLORER_API_KEY_L2 = ""
+    */
+    existingConfig.contracts.verification.EXPLORER_URI_L1 = domainConfig.EXTERNAL_EXPLORER_URI_L1;
+    existingConfig.contracts.verification.EXPLORER_URI_L2 = domainConfig.EXTERNAL_EXPLORER_URI_L2;
+    existingConfig.contracts.verification.RPC_URI_L1 = domainConfig.EXTERNAL_RPC_URI_L1;
+    existingConfig.contracts.verification.RPC_URI_L2 = domainConfig.EXTERNAL_RPC_URI_L2;
+    
+
     // Convert the updated config back to TOML string
     const updatedContent = toml.stringify(existingConfig)
 

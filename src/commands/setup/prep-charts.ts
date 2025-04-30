@@ -113,6 +113,8 @@ export default class SetupPrepCharts extends Command {
   }
 
   private async processProductionYaml(valuesDir: string): Promise<{ updated: number; skipped: number }> {
+
+
     const productionFiles = fs.readdirSync(valuesDir)
       .filter(file => file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
 
@@ -141,36 +143,35 @@ export default class SetupPrepCharts extends Command {
               // if (value === '' || value === '[""]' || value === '[]' ||
               //   (Array.isArray(value) && (value.length === 0 || (value.length === 1 && value[0] === ''))) ||
               //   value === null || value === undefined) {
-                const configMapping = this.configMapping[key]
-                if (configMapping) {
-                  let configKey: string
-                  if (typeof configMapping === 'function') {
-                    configKey = configMapping(chartName, productionNumber)
-                  } else {
-                    configKey = configMapping
-                  }
-                  const configValue = this.getConfigValue(configKey)
-                  if (configValue !== undefined && configValue !== null) {
-                    let newValue: string | string[]
-                    if (Array.isArray(configValue)) {
-                      newValue = JSON.stringify(configValue)
-                    } else {
-                      newValue = String(configValue)
-                    }
-
-                    if(chartName === "l1-devnet" && key === "CHAIN_ID"){
-                      continue;
-                    }
-                    if (newValue != value) {
-                      changes.push({ key, oldValue: JSON.stringify(value), newValue: newValue })
-                      envData[key] = newValue
-                      updated = true
-                    }
-                  } else {
-                    this.log(chalk.yellow(`${chartName}: No value found for ${configKey}`))
-                  }
+              const configMapping = this.configMapping[key]
+              if (configMapping) {
+                let configKey: string
+                if (typeof configMapping === 'function') {
+                  configKey = configMapping(chartName, productionNumber)
+                } else {
+                  configKey = configMapping
                 }
-              //}
+                if (chartName === "l1-devnet" && key === "CHAIN_ID") {
+                  configKey = "general.CHAIN_ID_L1";
+                }
+
+                const configValue = this.getConfigValue(configKey)
+                if (configValue !== undefined && configValue !== null) {
+                  let newValue: string | string[]
+                  if (Array.isArray(configValue)) {
+                    newValue = JSON.stringify(configValue)
+                  } else {
+                    newValue = String(configValue)
+                  }
+                  if (newValue != value) {
+                    changes.push({ key, oldValue: JSON.stringify(value), newValue: newValue })
+                    envData[key] = newValue
+                    updated = true
+                  }
+                } else {
+                  this.log(chalk.yellow(`${chartName}: No value found for ${configKey}`))
+                }
+              }
             }
           }
         }
@@ -241,6 +242,126 @@ export default class SetupPrepCharts extends Command {
               }
             }
           }
+        }
+      }
+      /*
+      blockscout-stack.blockscout.ingress.annotations.nginx.ingress.kubernetes.io/cors-allow-origin:https://blockscout.scrollsdk
+      blockscout-stack.blockscout.ingress.hostname:blockscout.scrollsdk
+      blockscout-stack.frontend.env.NEXT_PUBLIC_API_HOST:blockscout.scrollsdk
+      blockscout-stack.frontend.ingress.annotations.nginx.ingress.kubernetes.io/cors-allow-origin: "https://blockscout.scrollsdk"
+      blockscout-stack.frontend.ingress.hostname: "blockscout.scrollsdk"
+      */
+      if (productionYaml["blockscout-stack"]) {
+        let ingressUpdated = false;
+        const blockscout = productionYaml["blockscout-stack"].blockscout;
+        const frontend = productionYaml["blockscout-stack"].frontend;
+        let blockscout_host = this.getConfigValue("ingress.BLOCKSCOUT_HOST");
+        let blockscout_url = this.getConfigValue("frontend.EXTERNAL_EXPLORER_URI_L2");
+
+        if (blockscout?.ingress?.annotations?.["nginx.ingress.kubernetes.io/cors-allow-origin"]) {
+          changes.push({ key: `ingress.blockscout.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"]`, oldValue: blockscout.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"], newValue: blockscout_url });
+          blockscout.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"] = blockscout_url;
+          ingressUpdated = true;
+        }
+
+        if (blockscout?.ingress?.hostname) {
+          changes.push({ key: `ingress.blockscout.hostname`, oldValue: blockscout.ingress.hostname, newValue: blockscout_host });
+          blockscout.ingress.hostname = blockscout_host;
+          ingressUpdated = true;
+        }
+        if (frontend?.env?.NEXT_PUBLIC_API_HOST) {
+          changes.push({ key: `frontend.env.NEXT_PUBLIC_API_HOST`, oldValue: frontend.env.NEXT_PUBLIC_API_HOST, newValue: blockscout_host });
+          frontend.env.NEXT_PUBLIC_API_HOST = blockscout_host;
+          ingressUpdated = true;
+        }
+        if (frontend?.ingress?.annotations?.["nginx.ingress.kubernetes.io/cors-allow-origin"]) {
+          changes.push({ key: `frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"]`, oldValue: frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"], newValue: blockscout_url });
+          frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"] = blockscout_url;
+          ingressUpdated = true;
+        }
+        if (frontend?.ingress?.hostname) {
+          changes.push({ key: `frontend.ingress.hostname`, oldValue: frontend.ingress.hostname, newValue: blockscout_host });
+          frontend.ingress.hostname = blockscout_host;
+          ingressUpdated = true;
+        }
+        /*
+        INDEXER_SCROLL_L1_CHAIN_CONTRACT: ""
+        INDEXER_SCROLL_L1_BATCH_START_BLOCK: ""
+        INDEXER_SCROLL_L1_MESSENGER_CONTRACT: ""
+        INDEXER_SCROLL_L1_MESSENGER_START_BLOCK: ""
+        INDEXER_SCROLL_L2_MESSENGER_CONTRACT: ""
+        INDEXER_SCROLL_L2_GAS_ORACLE_CONTRACT: ""
+        INDEXER_SCROLL_L1_RPC: ""
+              INDEXER_SCROLL_L2_MESSENGER_START_BLOCK: 0
+      INDEXER_SCROLL_L1_ETH_GET_LOGS_RANGE_SIZE: 500
+      INDEXER_SCROLL_L2_ETH_GET_LOGS_RANGE_SIZE: 500
+        */
+        interface BlockscoutEnvMapping {
+          key: string;
+          configKey: string;
+          defaultValue?: string;
+        }
+
+        const BLOCKSCOUT_ENV_MAPPINGS: BlockscoutEnvMapping[] = [
+          {
+            key: 'INDEXER_SCROLL_L1_BATCH_START_BLOCK',
+            configKey: '',
+            defaultValue: '0'
+          },
+          {
+            key: 'INDEXER_SCROLL_L1_MESSENGER_START_BLOCK',
+            configKey: '',
+            defaultValue: '0'
+          },
+          {
+            key: 'INDEXER_SCROLL_L1_CHAIN_CONTRACT',
+            configKey: 'contractsFile.L1_SCROLL_CHAIN_PROXY_ADDR'
+          },
+          {
+            key: 'INDEXER_SCROLL_L1_MESSENGER_CONTRACT',
+            configKey: 'L1_SCROLL_MESSENGER_PROXY_ADDR'
+          },
+          {
+            key: 'INDEXER_SCROLL_L2_MESSENGER_CONTRACT',
+            configKey: 'L2_SCROLL_MESSENGER_PROXY_ADDR'
+          },
+          {
+            key: 'INDEXER_SCROLL_L2_GAS_ORACLE_CONTRACT',
+            configKey: 'L1_GAS_PRICE_ORACLE_ADDR'
+          },
+          {
+            key: 'INDEXER_SCROLL_L1_RPC',
+            configKey: 'general.L1_RPC_ENDPOINT'
+          }
+
+
+        ];
+        const benv = productionYaml["blockscout-stack"].blockscout.env;
+
+        BLOCKSCOUT_ENV_MAPPINGS.forEach(mapping => {
+          const { key, configKey, defaultValue } = mapping;
+
+          let newValue = this.getConfigValue(configKey);
+          if (!newValue) {
+            newValue = configKey ? this.contractsConfig[configKey] : defaultValue;
+          }
+
+          if (newValue !== undefined) {
+            changes.push({
+              key: `blockscout.env.${key}`,
+              oldValue: benv[key],
+              newValue: newValue
+            });
+            benv[key] = newValue;
+          } else {
+            this.log(chalk.yellow(`No value found for ${key}`));
+          }
+        });
+
+        updated = true;
+
+        if (ingressUpdated) {
+          updated = true;
         }
       }
 
