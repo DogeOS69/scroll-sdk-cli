@@ -29,6 +29,12 @@ export const contracts: DeployedContract[] = [
   {name: 'L2_ETH_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L2},
   {name: 'L2_WETH_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L2, bypassedInAltGas: true},
   {name: 'L1_MESSAGE_QUEUE_V2_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L1},
+  {name: 'L2_SCROLL_MESSENGER_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2},
+  {name: 'L2_ETH_GATEWAY_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2},
+  {name: 'L2_WETH_GATEWAY_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2, bypassedInAltGas: true},
+  {name: 'L2_GATEWAY_ROUTER_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2},
+
+
 
   // not used in dogeos
   // {name: 'L1_WETH_ADDR', initializes: false, owned: false, layer: Layer.L1},
