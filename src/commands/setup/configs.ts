@@ -681,6 +681,7 @@ export default class SetupConfigs extends Command {
     this.log(chalk.yellow('Note: If you do not set L1_PLONK_VERIFIER_ADDR, one will be automatically deployed.'))
 
     const updatePlonkVerifier = await confirm({
+      default: false,
       message: 'Would you like to set a value for L1_PLONK_VERIFIER_ADDR?',
     })
 
