@@ -250,6 +250,11 @@ export default class SetupPrepCharts extends Command {
       blockscout-stack.frontend.env.NEXT_PUBLIC_API_HOST:blockscout.scrollsdk
       blockscout-stack.frontend.ingress.annotations.nginx.ingress.kubernetes.io/cors-allow-origin: "https://blockscout.scrollsdk"
       blockscout-stack.frontend.ingress.hostname: "blockscout.scrollsdk"
+
+      NEXT_PUBLIC_API_PROTOCOL: https
+      NEXT_PUBLIC_API_WEBSOCKET_PROTOCOL: wss
+      NEXT_PUBLIC_API_HOST: "blockscout.scrollsdk"
+      NEXT_PUBLIC_APP_PROTOCOL: https
       */
       if (productionYaml["blockscout-stack"]) {
         let ingressUpdated = false;
@@ -269,11 +274,43 @@ export default class SetupPrepCharts extends Command {
           blockscout.ingress.hostname = blockscout_host;
           ingressUpdated = true;
         }
+
+        //only enable tls if use command scrollsdk setup tls
+        if (blockscout?.ingress?.tls?.enabled) {
+          if (blockscout.ingress.tls.enabled != "false") {
+            blockscout.ingress.tls.enabled = false;
+            changes.push({ key: `ingress.blockscout.tls`, oldValue: blockscout.ingress.tls, newValue: "false" });
+            ingressUpdated = true;
+          }
+        }
+
         if (frontend?.env?.NEXT_PUBLIC_API_HOST) {
           changes.push({ key: `frontend.env.NEXT_PUBLIC_API_HOST`, oldValue: frontend.env.NEXT_PUBLIC_API_HOST, newValue: blockscout_host });
           frontend.env.NEXT_PUBLIC_API_HOST = blockscout_host;
           ingressUpdated = true;
         }
+
+        if (frontend?.env?.NEXT_PUBLIC_API_PROTOCOL) {
+          let protocol = blockscout_host.startsWith("https") ? "https" : "http";
+          changes.push({
+            key: `frontend.env.NEXT_PUBLIC_API_PROTOCOL`,
+            oldValue: frontend.env.NEXT_PUBLIC_API_PROTOCOL,
+            newValue: protocol
+          });
+          frontend.env.NEXT_PUBLIC_API_PROTOCOL = protocol;
+          ingressUpdated = true;
+        }
+        if (frontend?.env?.NEXT_PUBLIC_APP_PROTOCOL) {
+          let protocol = blockscout_host.startsWith("https") ? "https" : "http";
+          changes.push({
+            key: `frontend.env.NEXT_PUBLIC_APP_PROTOCOL`,
+            oldValue: frontend.env.NEXT_PUBLIC_APP_PROTOCOL,
+            newValue: protocol
+          });
+          frontend.env.NEXT_PUBLIC_APP_PROTOCOL = protocol;
+          ingressUpdated = true;
+        }
+
         if (frontend?.ingress?.annotations?.["nginx.ingress.kubernetes.io/cors-allow-origin"]) {
           changes.push({ key: `frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"]`, oldValue: frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"], newValue: blockscout_url });
           frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"] = blockscout_url;
@@ -284,6 +321,15 @@ export default class SetupPrepCharts extends Command {
           frontend.ingress.hostname = blockscout_host;
           ingressUpdated = true;
         }
+
+        //only enable tls if use command scrollsdk setup tls
+        if(frontend?.ingress?.tls?.enabled) {
+          if(frontend.ingress.tls.enabled != "false"){
+            changes.push({ key: `frontend.ingress.tls`, oldValue: frontend.ingress.tls, newValue: "false" });
+            frontend.ingress.tls.enabled = false;
+            ingressUpdated = true;
+          }
+        }
         /*
         INDEXER_SCROLL_L1_CHAIN_CONTRACT: ""
         INDEXER_SCROLL_L1_BATCH_START_BLOCK: ""
@@ -292,9 +338,9 @@ export default class SetupPrepCharts extends Command {
         INDEXER_SCROLL_L2_MESSENGER_CONTRACT: ""
         INDEXER_SCROLL_L2_GAS_ORACLE_CONTRACT: ""
         INDEXER_SCROLL_L1_RPC: ""
-              INDEXER_SCROLL_L2_MESSENGER_START_BLOCK: 0
-      INDEXER_SCROLL_L1_ETH_GET_LOGS_RANGE_SIZE: 500
-      INDEXER_SCROLL_L2_ETH_GET_LOGS_RANGE_SIZE: 500
+        INDEXER_SCROLL_L2_MESSENGER_START_BLOCK: 0
+        INDEXER_SCROLL_L1_ETH_GET_LOGS_RANGE_SIZE: 500
+        INDEXER_SCROLL_L2_ETH_GET_LOGS_RANGE_SIZE: 500
         */
         interface BlockscoutEnvMapping {
           key: string;
