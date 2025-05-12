@@ -8,7 +8,7 @@ export default class ContractsVerification extends Command {
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --image-tag verify-c330f3602fa9506c012a5d4ea27ffe06c8c1c651',
+    '<%= config.bin %> <%= command.id %> --image-tag verify-64c65842e35017142b68d878e691dae7e41a7af9',
   ]
 
   static override flags = {
@@ -34,7 +34,7 @@ export default class ContractsVerification extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'verify-c330f3602fa9506c012a5d4ea27ffe06c8c1c651'
+    const defaultTag = 'verify-64c65842e35017142b68d878e691dae7e41a7af9'
 
     if (!providedTag) {
       return defaultTag
