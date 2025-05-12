@@ -143,13 +143,13 @@ export default class SetupPrepCharts extends Command {
               // if (value === '' || value === '[""]' || value === '[]' ||
               //   (Array.isArray(value) && (value.length === 0 || (value.length === 1 && value[0] === ''))) ||
               //   value === null || value === undefined) {
-              const configMapping = this.configMapping[key]
-              if (configMapping) {
+              const configPathOrResolver = this.configMapping[key]
+              if (configPathOrResolver) {
                 let configKey: string
-                if (typeof configMapping === 'function') {
-                  configKey = configMapping(chartName, productionNumber)
+                if (typeof configPathOrResolver === 'function') {
+                  configKey = configPathOrResolver(chartName, productionNumber)
                 } else {
-                  configKey = configMapping
+                  configKey = configPathOrResolver
                 }
                 if (chartName === "l1-devnet" && key === "CHAIN_ID") {
                   configKey = "general.CHAIN_ID_L1";
