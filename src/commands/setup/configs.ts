@@ -1,11 +1,11 @@
-import {Command, Flags} from '@oclif/core'
+import { Command, Flags } from '@oclif/core'
 import Docker from 'dockerode'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as toml from '@iarna/toml'
 import chalk from 'chalk'
-import {confirm, input, select} from '@inquirer/prompts'
-import {ethers} from 'ethers'
+import { confirm, input, select } from '@inquirer/prompts'
+import { ethers } from 'ethers'
 import * as yaml from 'js-yaml'
 import * as childProcess from 'child_process'
 
@@ -139,7 +139,7 @@ export default class SetupConfigs extends Command {
   }
 
   // TODO: check privatekey secrets once integrated
-  private generateEnvContent(service: string, config: any): {[key: string]: string} {
+  private generateEnvContent(service: string, config: any): { [key: string]: string } {
     const mapping: Record<string, string[]> = {
       'admin-system-backend': [
         'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_AUTH_DB_CONFIG_DSN',
@@ -164,7 +164,6 @@ export default class SetupConfigs extends Command {
         'COORDINATOR_JWT_SECRET_KEY:SCROLL_COORDINATOR_AUTH_SECRET',
       ],
       'gas-oracle': [
-        'L1_RPC_ENDPOINT:SCROLL_L1_RPC',
         'GAS_ORACLE_DB_CONNECTION_STRING:SCROLL_ROLLUP_DB_CONFIG_DSN',
         'L1_GAS_ORACLE_SENDER_PRIVATE_KEY:SCROLL_ROLLUP_L2_CONFIG_RELAYER_CONFIG_GAS_ORACLE_SENDER_SIGNER_CONFIG_PRIVATE_KEY_SIGNER_CONFIG_PRIVATE_KEY',
         'L2_GAS_ORACLE_SENDER_PRIVATE_KEY:SCROLL_ROLLUP_L1_CONFIG_RELAYER_CONFIG_GAS_ORACLE_SENDER_SIGNER_CONFIG_PRIVATE_KEY_SIGNER_CONFIG_PRIVATE_KEY',
@@ -182,7 +181,7 @@ export default class SetupConfigs extends Command {
       ],
     }
 
-    const envFiles: {[key: string]: string} = {}
+    const envFiles: { [key: string]: string } = {}
 
     if (service === 'l2-sequencer') {
       // Handle all sequencers (primary and backups)
@@ -225,9 +224,9 @@ export default class SetupConfigs extends Command {
 
   private createMigrateDbFiles(config: any): void {
     const migrateDbFiles = [
-      {service: 'bridge-history-fetcher', key: 'BRIDGE_HISTORY_DB_CONNECTION_STRING'},
-      {service: 'gas-oracle', key: 'GAS_ORACLE_DB_CONNECTION_STRING'},
-      {service: 'rollup-node', key: 'ROLLUP_NODE_DB_CONNECTION_STRING'},
+      { service: 'bridge-history-fetcher', key: 'BRIDGE_HISTORY_DB_CONNECTION_STRING' },
+      { service: 'gas-oracle', key: 'GAS_ORACLE_DB_CONNECTION_STRING' },
+      { service: 'rollup-node', key: 'ROLLUP_NODE_DB_CONNECTION_STRING' },
     ]
 
     for (const file of migrateDbFiles) {
@@ -319,7 +318,7 @@ export default class SetupConfigs extends Command {
       if (!config.contracts) {
         config.contracts = {}
       }
-      ;(config.contracts as any).DEPLOYMENT_SALT = newSalt
+      ; (config.contracts as any).DEPLOYMENT_SALT = newSalt
 
       fs.writeFileSync(configPath, toml.stringify(config as any))
       this.log(chalk.green(`Deployment salt updated in config.toml from "${currentSalt}" to "${newSalt}"`))
@@ -376,7 +375,7 @@ export default class SetupConfigs extends Command {
       if (!config.general) {
         config.general = {}
       }
-      ;(config.general as any).L1_CONTRACT_DEPLOYMENT_BLOCK = newBlock
+      ; (config.general as any).L1_CONTRACT_DEPLOYMENT_BLOCK = newBlock
 
       fs.writeFileSync(configPath, toml.stringify(config as any))
       this.log(
@@ -484,7 +483,7 @@ export default class SetupConfigs extends Command {
 
     const selectedTag = await select({
       message: 'Select a Docker image tag:',
-      choices: tags.map((tag) => ({name: tag, value: tag})),
+      choices: tags.map((tag) => ({ name: tag, value: tag })),
     })
 
     return selectedTag
@@ -496,7 +495,7 @@ export default class SetupConfigs extends Command {
 
     // Ensure the target directory exists
     if (!fs.existsSync(targetDir)) {
-      fs.mkdirSync(targetDir, {recursive: true})
+      fs.mkdirSync(targetDir, { recursive: true })
     }
 
     // Check permissions and potentially change ownership before processing
@@ -510,7 +509,7 @@ export default class SetupConfigs extends Command {
       if (changeOwnership) {
         try {
           const command = `sudo find ${sourceDir} -name "*.yaml" -user root -exec sudo chown -R $USER: {} \\;`
-          childProcess.execSync(command, {stdio: 'inherit'})
+          childProcess.execSync(command, { stdio: 'inherit' })
           this.log(chalk.green('File ownership changed successfully.'))
         } catch (error) {
           this.error(`Failed to change file ownership: ${error}`)
@@ -523,19 +522,19 @@ export default class SetupConfigs extends Command {
     }
 
     const fileMappings = [
-      {source: 'admin-system-backend-config.yaml', target: 'admin-system-backend-config.yaml'},
-      {source: 'admin-system-backend-config.yaml', target: 'admin-system-cron-config.yaml'},
-      {source: 'balance-checker-config.yaml', target: 'balance-checker-config.yaml'},
-      {source: 'bridge-history-config.yaml', target: 'bridge-history-api-config.yaml'},
-      {source: 'bridge-history-config.yaml', target: 'bridge-history-fetcher-config.yaml'},
-      {source: 'chain-monitor-config.yaml', target: 'chain-monitor-config.yaml'},
-      {source: 'coordinator-config.yaml', target: 'coordinator-api-config.yaml'},
-      {source: 'coordinator-config.yaml', target: 'coordinator-cron-config.yaml'},
-      {source: 'frontend-config.yaml', target: 'frontends-config.yaml'},
-      {source: 'genesis.yaml', target: 'genesis.yaml'},
-      {source: 'rollup-config.yaml', target: 'gas-oracle-config.yaml'},
-      {source: 'rollup-config.yaml', target: 'rollup-node-config.yaml'},
-      {source: 'rollup-explorer-backend-config.yaml', target: 'rollup-explorer-backend-config.yaml'},
+      { source: 'admin-system-backend-config.yaml', target: 'admin-system-backend-config.yaml' },
+      { source: 'admin-system-backend-config.yaml', target: 'admin-system-cron-config.yaml' },
+      { source: 'balance-checker-config.yaml', target: 'balance-checker-config.yaml' },
+      { source: 'bridge-history-config.yaml', target: 'bridge-history-api-config.yaml' },
+      { source: 'bridge-history-config.yaml', target: 'bridge-history-fetcher-config.yaml' },
+      { source: 'chain-monitor-config.yaml', target: 'chain-monitor-config.yaml' },
+      { source: 'coordinator-config.yaml', target: 'coordinator-api-config.yaml' },
+      { source: 'coordinator-config.yaml', target: 'coordinator-cron-config.yaml' },
+      { source: 'frontend-config.yaml', target: 'frontends-config.yaml' },
+      { source: 'genesis.yaml', target: 'genesis.yaml' },
+      { source: 'rollup-config.yaml', target: 'gas-oracle-config.yaml' },
+      { source: 'rollup-config.yaml', target: 'rollup-node-config.yaml' },
+      { source: 'rollup-explorer-backend-config.yaml', target: 'rollup-explorer-backend-config.yaml' },
     ]
 
     // Process all mappings
@@ -567,7 +566,7 @@ export default class SetupConfigs extends Command {
       const existingContent = fs.readFileSync(scrollMonitorProductionFilePath, 'utf8')
       const existingYaml = yaml.load(existingContent) as any
       existingYaml['kube-prometheus-stack'].additionalPrometheusRules = addedAlertRules
-      fs.writeFileSync(scrollMonitorProductionFilePath, yaml.dump(existingYaml, {indent: 2}))
+      fs.writeFileSync(scrollMonitorProductionFilePath, yaml.dump(existingYaml, { indent: 2 }))
     } catch {
       this.error(`generating balance-checker alert rules file failed`)
     }
@@ -591,8 +590,8 @@ export default class SetupConfigs extends Command {
 
     // Process config.toml and config-contracts.toml
     const configFiles = [
-      {source: 'config.toml', target: 'scroll-common-config.yaml', key: 'scrollConfig'},
-      {source: 'config-contracts.toml', target: 'scroll-common-config-contracts.yaml', key: 'scrollConfigContracts'},
+      { source: 'config.toml', target: 'scroll-common-config.yaml', key: 'scrollConfig' },
+      { source: 'config-contracts.toml', target: 'scroll-common-config-contracts.yaml', key: 'scrollConfigContracts' },
     ]
 
     for (const file of configFiles) {
@@ -604,7 +603,7 @@ export default class SetupConfigs extends Command {
         const yamlContent = {
           [file.key]: content,
         }
-        const yamlString = yaml.dump(yamlContent, {indent: 2})
+        const yamlString = yaml.dump(yamlContent, { indent: 2 })
         fs.writeFileSync(targetPath, yamlString)
         this.log(chalk.green(`Processed file: ${file.target}`))
       } else {
@@ -660,7 +659,7 @@ export default class SetupConfigs extends Command {
       if (!config.contracts) {
         config.contracts = {}
       }
-      ;(config.contracts as any).L1_FEE_VAULT_ADDR = newAddr
+      ; (config.contracts as any).L1_FEE_VAULT_ADDR = newAddr
 
       fs.writeFileSync(configPath, toml.stringify(config as any))
       this.log(chalk.green(`L1_FEE_VAULT_ADDR updated in config.toml to "${newAddr}"`))
@@ -709,7 +708,7 @@ export default class SetupConfigs extends Command {
       if (!config.contracts) {
         config.contracts = {}
       }
-      ;(config.contracts as any).L1_PLONK_VERIFIER_ADDR = newAddr
+      ; (config.contracts as any).L1_PLONK_VERIFIER_ADDR = newAddr
 
       fs.writeFileSync(configPath, toml.stringify(config as any))
       this.log(chalk.green(`L1_PLONK_VERIFIER_ADDR updated in config.toml to "${newAddr}"`))
@@ -719,7 +718,7 @@ export default class SetupConfigs extends Command {
   }
 
   public async run(): Promise<void> {
-    const {flags} = await this.parse(SetupConfigs)
+    const { flags } = await this.parse(SetupConfigs)
 
     const imageTag = await this.getDockerImageTag(flags['image-tag'])
     this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
@@ -764,7 +763,7 @@ export default class SetupConfigs extends Command {
     const yamlContent = fs.readFileSync(sourcePath, 'utf8')
     const parsedYaml = yaml.load(yamlContent) as any
     const jsonConfig = JSON.parse(parsedYaml.scrollConfig)
-    const {addresses} = jsonConfig
+    const { addresses } = jsonConfig
 
     const alertRules = [
       {
@@ -772,7 +771,7 @@ export default class SetupConfigs extends Command {
           {
             name: 'balance-cheker-group',
             rules: addresses.map(
-              (item: {address: string; min_balance_ether: string; name: string; rpc_url: string}) => ({
+              (item: { address: string; min_balance_ether: string; name: string; rpc_url: string }) => ({
                 alert: `ether_balance_of_${item.name}`,
                 annotations: {
                   description: `Balance of ${item.name} (${item.address}) is less than threshold ${item.min_balance_ether}`,
