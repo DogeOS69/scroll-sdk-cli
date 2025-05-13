@@ -170,6 +170,7 @@ export default class HelperFundAccounts extends Command {
       }
 
       const l2Addresses: Record<string, string> = {
+        
         L2_GAS_ORACLE_SENDER: config.accounts.L2_GAS_ORACLE_SENDER_ADDR,
       }
 

@@ -155,9 +155,10 @@ export default class SetupDomains extends Command {
       this.logKeyValue(key, value)
     }
 
+    ingressConfig.RPC_GATEWAY_WS_HOST = "ws."+ ingressConfig.RPC_GATEWAY_HOST
     const needRpcGateWay = await confirm({
       default: false,
-      message: 'Do you want to set a custom WebSocket RPC gateway URL (RPC_GATEWAY_WS_HOST)? If not, it will use the same domain as RPC gateway host (RPC_GATEWAY_HOST).',
+      message: `Do you want to use another RPC gateway for websocket host(${ingressConfig.RPC_GATEWAY_WS_HOST})`,
     })
 
     if (needRpcGateWay) {
@@ -166,7 +167,7 @@ export default class SetupDomains extends Command {
       })
     } else {
       // Use the same domain as RPC_GATEWAY_HOST
-      ingressConfig.RPC_GATEWAY_WS_HOST = ingressConfig.RPC_GATEWAY_HOST
+      
     }
     
     const confirmUpdate = await confirm({
