@@ -1,6 +1,6 @@
+import {select} from '@inquirer/prompts'
 import {Command, Flags} from '@oclif/core'
 import chalk from 'chalk'
-import { select } from '@inquirer/prompts'
 import Docker from 'dockerode'
 
 export default class ContractsVerification extends Command {
@@ -8,7 +8,7 @@ export default class ContractsVerification extends Command {
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --image-tag verify-64c65842e35017142b68d878e691dae7e41a7af9',
+    '<%= config.bin %> <%= command.id %> --image-tag verify-03267b6897c93080973252acb202ddcde035be99',
   ]
 
   static override flags = {
@@ -16,6 +16,17 @@ export default class ContractsVerification extends Command {
       description: 'Specify the Docker image tag to use',
       required: false,
     }),
+  }
+
+  public async run(): Promise<void> {
+    this.log(chalk.blue('Running docker command to contracts verification...'))
+
+    const {flags} = await this.parse(ContractsVerification)
+
+    const imageTag = await this.getDockerImageTag(flags['image-tag'])
+    this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
+
+    await this.runDockerCommand(imageTag)
   }
 
   private async fetchDockerTags(): Promise<string[]> {
@@ -26,6 +37,7 @@ export default class ContractsVerification extends Command {
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`)
       }
+
       const data = await response.json()
       return data.results.map((tag: any) => tag.name).filter((tag: string) => tag.startsWith('verify'))
     } catch (error) {
@@ -34,7 +46,7 @@ export default class ContractsVerification extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'verify-64c65842e35017142b68d878e691dae7e41a7af9'
+    const defaultTag = 'verify-03267b6897c93080973252acb202ddcde035be99'
 
     if (!providedTag) {
       return defaultTag
@@ -44,15 +56,19 @@ export default class ContractsVerification extends Command {
 
     if (providedTag.startsWith('gen-configs-v') && tags.includes(providedTag)) {
       return providedTag
-    } else if (providedTag.startsWith('v') && tags.includes(`verify-${providedTag}`)) {
+    }
+
+    if (providedTag.startsWith('v') && tags.includes(`verify-${providedTag}`)) {
       return `verify-${providedTag}`
-    } else if (/^\d+\.\d+\.\d+$/.test(providedTag) && tags.includes(`verify-v${providedTag}`)) {
+    }
+
+    if (/^\d+\.\d+\.\d+$/.test(providedTag) && tags.includes(`verify-v${providedTag}`)) {
       return `verify-v${providedTag}`
     }
 
     const selectedTag = await select({
-      message: 'Select a Docker image tag:',
       choices: tags.map((tag) => ({name: tag, value: tag})),
+      message: 'Select a Docker image tag:',
     })
 
     return selectedTag
@@ -80,11 +96,11 @@ export default class ContractsVerification extends Command {
       this.log(chalk.cyan('Creating Docker Container...'))
       // Create and run the container
       const container = await docker.createContainer({
-        Image: image,
         Cmd: [], // Add any command if needed
         HostConfig: {
           Binds: [`${process.cwd()}:/contracts/volume`],
         },
+        Image: image,
       })
 
       this.log(chalk.cyan('Starting Container'))
@@ -93,8 +109,8 @@ export default class ContractsVerification extends Command {
       // Wait for the container to finish and get the logs
       const stream = await container.logs({
         follow: true,
-        stdout: true,
         stderr: true,
+        stdout: true,
       })
 
       // Print the logs
@@ -108,6 +124,7 @@ export default class ContractsVerification extends Command {
           } else if (data.StatusCode !== 0) {
             this.error(`Container exited with status code: ${data.StatusCode}`)
           }
+
           resolve(null)
         })
       })
@@ -117,16 +134,5 @@ export default class ContractsVerification extends Command {
     } catch (error) {
       this.error(`Failed to run Docker command: ${error}`)
     }
-  }
-
-  public async run(): Promise<void> {
-    this.log(chalk.blue('Running docker command to contracts verification...'))
-
-    const {flags} = await this.parse(ContractsVerification)
-
-    const imageTag = await this.getDockerImageTag(flags['image-tag'])
-    this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
-
-    await this.runDockerCommand(imageTag)
   }
 }
