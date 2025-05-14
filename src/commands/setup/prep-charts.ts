@@ -290,8 +290,8 @@ export default class SetupPrepCharts extends Command {
           ingressUpdated = true;
         }
 
+        let protocol = blockscout_url.startsWith("https") ? "https" : "http";
         if (frontend?.env?.NEXT_PUBLIC_API_PROTOCOL) {
-          let protocol = blockscout_host.startsWith("https") ? "https" : "http";
           changes.push({
             key: `frontend.env.NEXT_PUBLIC_API_PROTOCOL`,
             oldValue: frontend.env.NEXT_PUBLIC_API_PROTOCOL,
@@ -301,7 +301,6 @@ export default class SetupPrepCharts extends Command {
           ingressUpdated = true;
         }
         if (frontend?.env?.NEXT_PUBLIC_APP_PROTOCOL) {
-          let protocol = blockscout_host.startsWith("https") ? "https" : "http";
           changes.push({
             key: `frontend.env.NEXT_PUBLIC_APP_PROTOCOL`,
             oldValue: frontend.env.NEXT_PUBLIC_APP_PROTOCOL,
