@@ -1,4 +1,5 @@
 # Scroll SDK CLI
+
 [![Twitter Follow](https://img.shields.io/twitter/follow/Scroll_ZKP?style=social)](https://twitter.com/Scroll_ZKP)
 [![Discord](https://img.shields.io/discord/984015101017346058?color=%235865F2&label=Discord&logo=discord&logoColor=%23fff)](https://discord.gg/scroll)
 
@@ -11,19 +12,21 @@ A tool for configuring, managing, and testing [Scroll SDK](https://docs.scroll.i
 - [Scroll SDK](https://www.github.com/scroll-tech/scroll-sdk)
 - [Scroll Proving SDK](https://www.github.com/scroll-tech/scroll-proving-sdk)
 
-
 [![oclif](https://img.shields.io/badge/cli-oclif-brightgreen.svg)](https://oclif.io)
 [![Version](https://img.shields.io/npm/v/@scroll-tech/scroll-sdk-cli.svg)](https://www.npmjs.com/package/@scroll-tech/scroll-sdk-cli)
 [![Downloads/week](https://img.shields.io/npm/dw/scroll-sdk-cli.svg)](https://www.npmjs.com/package/@scroll-tech/scroll-sdk-cli)
 
-
 <!-- toc -->
-* [Scroll SDK CLI](#scroll-sdk-cli)
-* [Usage](#usage)
-* [Commands](#commands)
+
+- [Scroll SDK CLI](#scroll-sdk-cli)
+- [Usage](#usage)
+- [Commands](#commands)
 <!-- tocstop -->
+
 # Usage
+
 <!-- usage -->
+
 ```sh-session
 $ npm install -g @scroll-tech/scroll-sdk-cli
 $ scrollsdk COMMAND
@@ -35,9 +38,13 @@ USAGE
   $ scrollsdk COMMAND
 ...
 ```
+
 <!-- usagestop -->
+
 # Commands
+
 <!-- commands -->
+
 - [Scroll SDK CLI](#scroll-sdk-cli)
   - [Introduction](#introduction)
     - [Other Scroll SDK Repos](#other-scroll-sdk-repos)
@@ -528,7 +535,7 @@ DESCRIPTION
 EXAMPLES
   $ scrollsdk setup configs
 
-  $ scrollsdk setup configs --image-tag gen-configs-64c65842e35017142b68d878e691dae7e41a7af9
+  $ scrollsdk setup configs --image-tag gen-configs-03267b6897c93080973252acb202ddcde035be99
 
   $ scrollsdk setup configs --configs-dir custom-configs
 ```
@@ -726,7 +733,7 @@ DESCRIPTION
 EXAMPLES
   $ scrollsdk setup verify-contracts
 
-  $ scrollsdk setup verify-contracts --image-tag verify-64c65842e35017142b68d878e691dae7e41a7af9
+  $ scrollsdk setup verify-contracts --image-tag verify-03267b6897c93080973252acb202ddcde035be99
 ```
 
 _See code: [src/commands/setup/verify-contracts.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.2/src/commands/setup/verify-contracts.ts)_
@@ -903,4 +910,5 @@ EXAMPLES
   $ scrollsdk doge:wallet send --amount 1.0 --text-data "Hello, World!"
   $ scrollsdk doge:wallet send --amount 1.0 --chain-id 0x1234 --evm-address 0xabc...
 ```
+
 <!-- commandsstop -->
