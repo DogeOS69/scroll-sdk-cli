@@ -209,6 +209,18 @@ spec:
 
       }
 
+      if (yamlContent["blockscout-stack"]) {
+
+        let blockscoutStack=yamlContent["blockscout-stack"];
+        let items = ["blockscout", "frontend"];
+        for (const item of items) {
+          if (blockscoutStack[item]?.ingress?.tls) {
+            blockscoutStack[item].ingress.tls.enabled = true;
+            updated = true;
+          }
+        }
+      }
+
       for (const ingressType of ingressTypes) {
         if (yamlContent.ingress?.[ingressType]) {
           const originalContent = yaml.dump(yamlContent.ingress[ingressType], { lineWidth: -1, noRefs: true })
