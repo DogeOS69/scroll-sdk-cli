@@ -1,3 +1,6 @@
+/* eslint-disable max-depth */
+/* eslint-disable no-await-in-loop */
+/* eslint-disable complexity */
 /**
  * Wallet Sync Implementation
  *
@@ -18,61 +21,66 @@ import chalk from 'chalk'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import {DogeWallet} from '../../../types/doge-config.js'
+import {DogeConfig, DogeUTXO, DogeWallet} from '../../../types/doge-config.js'
 import {loadDogeConfig} from '../../../utils/doge-config.js'
 
-interface AddressInfo {
+interface AddressTransactionVout {
+  addresses: string[]
+  hex: string
+  isAddress: boolean
+  n: number
+  spent?: boolean
+  spentTxId?: string
+  value: string
+}
+
+interface AddressTransaction {
+  blockHeight: number
+  confirmations: number
+  txid: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  vin: any[]
+  vout: AddressTransactionVout[]
+}
+
+interface AddressDetailsWithTxsResponse {
   address: string
   balance: string
+  itemsOnPage: number
+  page: number
+  totalPages: number
   totalReceived: string
   totalSent: string
+  transactions?: AddressTransaction[]
   txs: number
   unconfirmedBalance: string
   unconfirmedTxs: number
 }
 
-interface UTXOInfo {
-  confirmations: number
-  height: number
-  scriptPubKey: string
-  txid: string
-  value: string
-  vout: number
-}
-
-interface TransactionInfo {
-  vout: Array<{
-    hex: string
-    n: number
-    value: string
-  }>
-}
-
 export default class WalletSync extends Command {
   static default = false
 
-  static description = 'Sync wallet UTXOs and balance'
+  static description = 'Sync wallet UTXOs and balance (mainnet/testnet aware)'
 
   static examples = [
-    '$ scrollsdk doge:wallet sync',
-    '$ scrollsdk doge:wallet sync --path ./my-wallet.json',
-    '$ scrollsdk doge:wallet sync --api-key YOUR_KEY',
+    '$ scrollsdk doge:wallet sync --config .data/doge-config-mainnet.toml',
+    '$ scrollsdk doge:wallet sync --config .data/doge-config-testnet.toml',
   ]
 
   static flags = {
     'api-key': Flags.string({
       char: 'k',
-      description: 'NowNodes API key (overrides config)',
+      description: 'NowNodes API key (overrides API key from config)',
       env: 'NOWNODES_API_KEY',
     }),
     config: Flags.string({
       char: 'c',
       default: '.data/doge-config.toml',
-      description: 'Path to config file',
+      description: 'Path to Dogecoin config file',
     }),
     path: Flags.string({
       char: 'p',
-      description: 'Custom path for the wallet file (overrides config)',
+      description: 'Custom path for the wallet file (overrides path from config)',
     }),
   }
 
@@ -80,108 +88,152 @@ export default class WalletSync extends Command {
     const {flags} = await this.parse(WalletSync)
 
     try {
-      // Load config
-      const config = await loadDogeConfig(flags.config)
+      const config: DogeConfig = await loadDogeConfig(flags.config)
+      this.log(chalk.blue(`Syncing wallet for network: ${config.network} (from ${flags.config})`))
 
-      // Get API key from flags, env, or config
-      const apiKey = flags.apiKey || process.env.NOWNODES_API_KEY || config.rpc?.apiKey
+      const apiKey = flags['api-key'] || process.env.NOWNODES_API_KEY || config.rpc?.apiKey
       if (!apiKey) {
-        this.error(
-          'NowNodes API key is required. Provide it via --api-key flag, NOWNODES_API_KEY env var, or in config rpc.apiKey',
+        this.error('API key required. Provide via --api-key, NOWNODES_API_KEY, or rpc.apiKey in config.')
+        return
+      }
+
+      const blockbookBaseUrl = config.rpc?.blockbookAPIUrl
+      if (!blockbookBaseUrl) {
+        this.error('Config rpc.blockbookAPIUrl not found. Required for sync.')
+        return
+      }
+
+      const walletConfigPath = flags.path || config.wallet?.path
+      if (!walletConfigPath) {
+        this.error(`Wallet path not defined. Specify with --path or ensure 'wallet.path' is set in ${flags.config}`)
+        return
+      }
+
+      const resolvedWalletPath = path.resolve(walletConfigPath)
+
+      if (!fs.existsSync(resolvedWalletPath)) {
+        this.error(`Wallet file not found: ${resolvedWalletPath}. Use 'doge:wallet new' first.`)
+        return
+      }
+
+      const walletData: DogeWallet = JSON.parse(fs.readFileSync(resolvedWalletPath, 'utf8'))
+      if (!walletData.utxos) walletData.utxos = [] // Ensure utxos array exists
+      // Optionally, check if walletData.network matches config.network
+      if (walletData.network && walletData.network !== config.network) {
+        this.warn(
+          chalk.yellow(
+            `Warning: Wallet file network (${walletData.network}) does not match config network (${config.network}). Syncing for ${config.network}.`,
+          ),
         )
+        // No need to error, just sync for the config's network. Wallet file network field is mostly informational.
       }
 
-      // Load wallet
-      const walletPath = flags.path ? path.resolve(flags.path) : path.resolve(config.wallet.path)
-      if (!fs.existsSync(walletPath)) {
-        this.error(`Wallet file not found at ${walletPath}`)
-      }
-
-      const walletData: DogeWallet = JSON.parse(fs.readFileSync(walletPath, 'utf8'))
-
-      // Initialize RPC client
-      const baseUrl = 'https://dogebook.nownodes.io/api/v2'
-
-      // Helper function for API calls
-      const rpcCall = async <T>(endpoint: string): Promise<T> => {
-        const url = `${baseUrl}${endpoint}`
-        const response = await fetch(url, {
-          headers: {
-            'Content-Type': 'application/json',
-            'api-key': apiKey,
-          },
-          method: 'GET',
-        })
-
+      const rpcCall = async <T>(endpoint: string, queryParams: string = ''): Promise<T> => {
+        const url = `${blockbookBaseUrl.replace(/\/$/, '')}${endpoint}${queryParams}`
+        this.log(chalk.dim(`API: ${url}`))
+        const response = await fetch(url, {headers: {'api-key': apiKey}, method: 'GET'})
         if (!response.ok) {
-          throw new Error(`API call failed: ${response.status} ${response.statusText}`)
+          const errorBody = await response.text()
+          throw new Error(`API call to ${url} failed: ${response.status} ${response.statusText}. Body: ${errorBody}`)
         }
 
-        return response.json()
+        return response.json() as Promise<T>
       }
 
-      // Fetch address info first
-      this.log(chalk.cyan('Fetching wallet info...'))
-      const addressInfo = await rpcCall<AddressInfo>(`/address/${walletData.address}`)
+      this.log(chalk.cyan(`Syncing info for address ${walletData.address} using transaction details...`))
+      walletData.utxos = [] // Reset UTXOs
+      let currentPage = 1
+      let totalPages = 1 // Initialize to 1 to enter loop
+      const newUtxos: DogeUTXO[] = []
+      let firstPageAddressDetails: AddressDetailsWithTxsResponse | null = null // To store first page details
 
-      // Initialize empty UTXOs array
-      walletData.utxos = []
+      do {
+        this.log(
+          chalk.dim(
+            `Fetching address details page ${currentPage} of ${
+              totalPages === 1 && currentPage === 1 ? '?' : totalPages
+            }...`,
+          ),
+        )
+        const queryParams = `?page=${currentPage}&pageSize=100&details=txs` // pageSize can be adjusted
+        const currentAddressPageDetails = await rpcCall<AddressDetailsWithTxsResponse>(
+          `/address/${walletData.address}`,
+          queryParams,
+        )
 
-      // Only fetch UTXOs if balance is greater than 0
-      if (addressInfo.balance !== '0') {
-        const utxos = await rpcCall<UTXOInfo[]>(`/utxo/${walletData.address}`)
-
-        // Debug log the first UTXO
-        if (utxos && utxos.length > 0) {
-          this.log(chalk.dim('\nFirst UTXO details:'))
-          this.log(chalk.dim(JSON.stringify(utxos[0], null, 2)))
-
-          // Fetch full transaction details for each UTXO
-          this.log(chalk.cyan('\nFetching full transaction details for UTXOs...'))
-          const enhancedUtxos = await Promise.all(
-            utxos.map(async (utxo) => {
-              const txDetails = await rpcCall<TransactionInfo>(`/tx/${utxo.txid}`)
-
-              // Find matching vout
-              const voutDetails = txDetails.vout.find((v) => v.n === utxo.vout)
-              if (!voutDetails) {
-                throw new Error(`Could not find vout ${utxo.vout} in transaction ${utxo.txid}`)
-              }
-
-              this.log(chalk.dim(`- UTXO ${utxo.txid}:${utxo.vout} script: ${voutDetails.hex}`))
-
-              return {
-                satoshis: Number.parseInt(utxo.value, 10),
-                script: voutDetails.hex,
-                txid: utxo.txid,
-                vout: utxo.vout,
-              }
-            }),
-          )
-
-          walletData.utxos = enhancedUtxos
+        if (currentPage === 1) {
+          firstPageAddressDetails = currentAddressPageDetails // Store the first page response
         }
-      }
 
-      // Calculate total balance
-      const totalBalance = walletData.utxos.reduce((sum, utxo) => sum + utxo.satoshis, 0)
+        totalPages = currentAddressPageDetails.totalPages
 
-      // Save wallet
-      fs.writeFileSync(walletPath, JSON.stringify(walletData, null, 2))
+        if (currentAddressPageDetails.transactions && currentAddressPageDetails.transactions.length > 0) {
+          for (const tx of currentAddressPageDetails.transactions) {
+            for (const vout of tx.vout) {
+              // Check if the output is unspent and belongs to our address
+              const isOwnOutput = vout.addresses && vout.addresses.includes(walletData.address)
+              // Blockbook might not always include `spent: false`. An output is unspent if `spent` is not true.
+              const isUnspent = vout.spent !== true
 
-      this.log(chalk.green('\n✓ Wallet synced successfully'))
+              if (isOwnOutput && isUnspent) {
+                if (!vout.hex || typeof vout.hex !== 'string' || vout.hex.length === 0) {
+                  this.warn(
+                    chalk.yellow(`UTXO candidate ${tx.txid}:${vout.n} is missing scriptPubKey (hex). Skipping.`),
+                  )
+                  continue
+                }
+
+                const satoshis = Number.parseInt(vout.value, 10)
+                if (Number.isNaN(satoshis)) {
+                  this.warn(
+                    chalk.yellow(
+                      `Invalid satoshi value for UTXO candidate ${tx.txid}:${vout.n}. Value: ${vout.value}. Skipping.`,
+                    ),
+                  )
+                  continue
+                }
+
+                newUtxos.push({
+                  satoshis,
+                  script: vout.hex,
+                  txid: tx.txid,
+                  vout: vout.n,
+                })
+              }
+            }
+          }
+        } else if (
+          currentPage === 1 &&
+          (!currentAddressPageDetails.transactions || currentAddressPageDetails.transactions.length === 0)
+        ) {
+          this.log(chalk.yellow('No transactions found for this address.'))
+        }
+
+        currentPage++
+      } while (currentPage <= totalPages)
+
+      walletData.utxos = newUtxos
+      this.log(chalk.dim(`Found ${walletData.utxos.length} spendable UTXOs from address transaction details.`))
+
+      // Balance calculation and saving remains largely the same
+      const totalBalanceSatoshis = walletData.utxos.reduce((sum, utxo) => sum + utxo.satoshis, 0)
+      fs.writeFileSync(resolvedWalletPath, JSON.stringify(walletData, null, 2))
+      this.log(chalk.green(`\n✓ Wallet synced successfully on ${config.network} network`))
       this.log(`Address: ${chalk.cyan(walletData.address)}`)
-      this.log(`UTXOs: ${chalk.yellow(walletData.utxos.length)}`)
-      this.log(`Balance: ${chalk.yellow(totalBalance / 1e8)} DOGE`)
-      if (addressInfo.unconfirmedBalance !== '0') {
-        this.log(`Unconfirmed Balance: ${chalk.yellow(Number.parseInt(addressInfo.unconfirmedBalance, 10) / 1e8)} DOGE`)
-      }
-    } catch (error) {
-      if (error instanceof Error) {
-        this.error(error.message)
-      }
+      this.log(`UTXOs found: ${chalk.yellow(walletData.utxos.length)}`)
+      this.log(`Total Balance from UTXOs: ${chalk.yellow(totalBalanceSatoshis / 1e8)} DOGE`)
 
-      throw error
+      // Use unconfirmedBalance from the first page details we stored.
+      // If firstPageAddressDetails is null (e.g. address has 0 txs), unconfirmedBalance will be from a fresh basic call.
+      const unconfirmedSource =
+        firstPageAddressDetails || (await rpcCall<AddressDetailsWithTxsResponse>(`/address/${walletData.address}`))
+      const unconfirmedBalance = Number(unconfirmedSource.unconfirmedBalance)
+      if (unconfirmedBalance && unconfirmedBalance !== 0) {
+        this.log(`Unconfirmed Balance (API): ${chalk.yellow(unconfirmedBalance / 1e8)} DOGE`)
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (error: any) {
+      this.error(chalk.red(`Sync Error: ${error.message}`), {exit: 1})
     }
   }
 }
