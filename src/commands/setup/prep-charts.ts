@@ -368,7 +368,7 @@ export default class SetupPrepCharts extends Command {
           },
           {
             key: 'INDEXER_SCROLL_L2_MESSENGER_CONTRACT',
-            configKey: 'L2_SCROLL_MESSENGER_PROXY_ADDR'
+            configKey: 'L2_DOGEOS_MESSENGER_PROXY_ADDR'
           },
           {
             key: 'INDEXER_SCROLL_L2_GAS_ORACLE_CONTRACT',
