@@ -24,7 +24,9 @@ export default class SetupPrepCharts extends Command {
     'github-username': Flags.string({ description: 'GitHub username', required: false }),
     'github-token': Flags.string({ description: 'GitHub Personal Access Token', required: false }),
     'values-dir': Flags.string({ description: 'Directory containing values files', default: './values' }),
+    'doge-values-dir': Flags.string({ description: 'Directory containing doge values files', default: './dogeos-values' }),
     'skip-auth-check': Flags.boolean({ description: 'Skip authentication check for individual charts', default: false }),
+    config: Flags.string({ description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)', default: '.data/doge-config-testnet.toml' })
   }
 
   private configMapping: Record<string, string | ((chartName: string, productionNumber: string) => string)> = {
@@ -65,8 +67,9 @@ export default class SetupPrepCharts extends Command {
 
   private configData: any = {}
   private contractsConfig: any = {}
+  private dogeConfig: any = {}
 
-  private loadConfigs(): void {
+  private loadConfigs(flags: any): void {
     const configPath = path.join(process.cwd(), 'config.toml')
     const contractsConfigPath = path.join(process.cwd(), 'config-contracts.toml')
 
@@ -82,6 +85,17 @@ export default class SetupPrepCharts extends Command {
       this.contractsConfig = toml.parse(contractsConfigContent)
     } else {
       this.warn('config-contracts.toml not found. Some values may not be populated correctly.')
+    }
+
+    const dogeConfigPath = flags.config || path.join('.data', 'doge-config-testnet.toml')
+    const resolvedPath = path.resolve(dogeConfigPath)
+
+    if (fs.existsSync(resolvedPath)) {
+      const dogeConfigContent = fs.readFileSync(resolvedPath, 'utf-8')
+      this.dogeConfig = toml.parse(dogeConfigContent)
+      this.log(chalk.blue(`Using doge config: ${JSON.stringify(this.dogeConfig, null, 2)}`));
+    } else {
+      this.error(`${dogeConfigPath} not found. Some values may not be populated correctly.`);
     }
   }
 
@@ -110,6 +124,102 @@ export default class SetupPrepCharts extends Command {
     } catch (error) {
       return false
     }
+  }
+
+  private async processDogeProductionYaml(valuesDir: string): Promise<{ updated: number; skipped: number }> {
+    const dogeFiles = fs.readdirSync(valuesDir)
+      .filter(file => file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
+
+    let updatedCharts = 0
+    let skippedCharts = 0
+    const changes: Array<{ key: string; oldValue: string; newValue: string }> = []
+
+    for (const file of dogeFiles) {
+      const yamlPath = path.join(valuesDir, file)
+      const chartName = file.replace(/-production(-\d+)?\.yaml$/, '')
+      const productionNumber = file.match(/-production-(\d+)\.yaml$/)?.[1] || '0'
+
+      const productionYamlContent = fs.readFileSync(yamlPath, 'utf8')
+      let productionYaml = yaml.load(productionYamlContent) as any
+
+      let updated = false;
+      if (chartName == "deposit-processor") {
+        const oldAddr = productionYaml.configMaps?.env?.data?.DOGEOS_DEPOSIT_PROCESSOR_DEPOSIT_DOGE_ADDRESS ?? "";
+        let newAddr = this.dogeConfig.defaults.recipient;
+        if (oldAddr != newAddr) {
+          productionYaml.configMaps.env.data.DOGEOS_DEPOSIT_PROCESSOR_DEPOSIT_DOGE_ADDRESS = newAddr;
+          updated = true;
+        }
+      }
+
+      if (chartName == 'withdrawal-processor') {
+        const mappings = {
+          DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS: { value: this.dogeConfig.defaults.recipient, default: "2MtsUdsnFvmJKjYrFsZJEbVhSRmz1qH99YN" },
+          DOGEOS_WITHDRAWAL_BRIDGE_SCRIPT_HEX: { value: null, default: '63512102cd875ecffa074ce477c138bb35b33656558b0266632dbfed9a98066fdf3cc53051af52210218576973c01906af7026c8e00153e1795da9c0c3531157960a751c4d2292c3f221020218746c547b6ac226b42e22469c67443cfab6a6e54267f9d0e0b344e9b7ad282102533869b4035b46d0e8e0e616432b8a773fa02dedf978bd5de075cd182088b37853af522102a0fac7d83e0e6bd8bd9c12c3e7de4ec75f7d6bf43e50a68ab2626c773e3a13912103a27d6571d40e8cb3f711776c1c1e3eae6d780d1674c3d547b3334a3db2b617b121027d5fa6585c3c4a65764044a46c31217e4b5f8dfd2617dd16a74ae933dc7f480453ae6702100eb17552210299134d46749a74d4d771b5a30d29707acf392a96b6b8c7e86230458a25292f0321023379f3fa12079839fbbe8ade65e34b79ad7ef58046dc01d8c5ba31f4e303cc992103aabedb6a86ab0ed336a58fd4375b1aa85f24a214a0e3e3290aeada2bb306f79053ae68' },
+          DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY: { value: null, default: 'cTPQRfJJVwpGY36VLhCtNmEcxKLVZADZjh2p5c9Syc3z7ceeACFj' },
+          DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY: { value: null, default: 'cMg5GnvtNBnpU348wVFfEST1TiRhy1nJBURnZikwi21hXzJjiK7i' }
+        }
+        for (const [key, val] of Object.entries(mappings)) {
+          const newVal = val.value ?? val.default;
+          if (productionYaml.env[key] != newVal) {
+            productionYaml.env[key] = newVal;
+            updated = true;
+            changes.push({ key: `env.${key}`, oldValue: productionYaml.env[key], newValue: newVal });
+          }
+        }
+        /*
+        tsoSigners:
+          - network: "testnet"
+            uri: "https://sisbgbj3tv.us-east-1.awsapprunner.com" # Or 127.0.0.1:4001 if signers are on the K8s node
+            role: "Correctness"
+          - network: "testnet"
+            uri: "https://scrvfsmdei.us-east-1.awsapprunner.com" # Or 127.0.0.1:4001 if signers are on the K8s node
+            role: "Correctness"
+          - network: "testnet"
+            uri: "https://ishs2sgycn.us-east-1.awsapprunner.com" # Or 127.0.0.1:4001 if signers are on the K8s node
+            role: "Correctness"
+          - network: "testnet"
+            uri: "http://cubesigner-signer-0:3000" 
+            role: "Attestation"
+          - network: "testnet"
+            uri: "http://cubesigner-signer-1:3000" 
+            role: "Attestation"
+          - network: "testnet"
+            uri: "http://cubesigner-signer-2:3000" 
+            role: "Attestation"
+        */
+      }
+
+      if (updated) {
+        this.log(`\nFor ${chalk.cyan(file)}:`)
+        this.log(chalk.green('Changes:'))
+        for (const change of changes) {
+          this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`)
+        }
+
+        const shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` })
+        if (shouldUpdate) {
+          const yamlString = yaml.dump(productionYaml, {
+            lineWidth: -1,
+            noRefs: true,
+            quotingType: '"',
+            forceQuotes: true,
+          })
+
+          fs.writeFileSync(yamlPath, yamlString)
+          this.log(chalk.green(`Updated ${file}`))
+          updatedCharts++
+        } else {
+          this.log(chalk.yellow(`Skipped updating ${file}`))
+          skippedCharts++
+        }
+      } else {
+        this.log(chalk.yellow(`No changes needed in ${file}`))
+        skippedCharts++
+      }
+    }
+
+    return { updated: updatedCharts, skipped: skippedCharts }
   }
 
   private async processProductionYaml(valuesDir: string): Promise<{ updated: number; skipped: number }> {
@@ -322,8 +432,8 @@ export default class SetupPrepCharts extends Command {
         }
 
         //only enable tls if use command scrollsdk setup tls
-        if(frontend?.ingress?.tls?.enabled) {
-          if(frontend.ingress.tls.enabled != "false"){
+        if (frontend?.ingress?.tls?.enabled) {
+          if (frontend.ingress.tls.enabled != "false") {
             changes.push({ key: `frontend.ingress.tls`, oldValue: frontend.ingress.tls, newValue: "false" });
             frontend.ingress.tls.enabled = false;
             ingressUpdated = true;
@@ -482,6 +592,8 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
+
+
       if (updated) {
         this.log(`\nFor ${chalk.cyan(file)}:`)
         this.log(chalk.green('Changes:'))
@@ -578,7 +690,7 @@ export default class SetupPrepCharts extends Command {
     this.log('Starting chart preparation...')
 
     // Load configs before processing yaml files
-    this.loadConfigs()
+    this.loadConfigs(flags)
 
     if (flags['github-username'] && flags['github-token']) {
       try {
@@ -598,10 +710,15 @@ export default class SetupPrepCharts extends Command {
 
     // Process production.yaml files
     const valuesDir = flags['values-dir']
+
     const { updated, skipped } = await this.processProductionYaml(valuesDir)
+    const { updated: dogeUpdated, skipped: dogeSkipped } = await this.processDogeProductionYaml(flags['doge-values-dir'])
 
     this.log(chalk.green(`\nUpdated production YAML files for ${updated} chart(s).`))
     this.log(chalk.yellow(`Skipped ${skipped} chart(s).`))
+
+    this.log(chalk.green(`\nUpdated doge production YAML files for ${dogeUpdated} chart(s).`))
+    this.log(chalk.yellow(`Skipped doge${dogeSkipped} chart(s).`))
 
     this.log('Chart preparation completed.')
   }
