@@ -10,6 +10,25 @@ import chalk from 'chalk'
 
 const execAsync = promisify(exec)
 
+interface DogeConfig {
+  frontend?: Record<string, any>
+  network: string
+  test?: Record<string, any>
+  defaults: {
+    chainId: string
+    evmAddress: string
+    recipient: string
+  }
+  rpc: {
+    apiKey: string
+    blockbookAPIUrl: string
+    url: string
+  }
+  wallet: {
+    path: string
+  }
+}
+
 export default class SetupPrepCharts extends Command {
   static override description = 'Validate Makefile and prepare Helm charts for Scroll SDK'
 
@@ -67,7 +86,7 @@ export default class SetupPrepCharts extends Command {
 
   private configData: any = {}
   private contractsConfig: any = {}
-  private dogeConfig: any = {}
+  private dogeConfig: DogeConfig = {} as DogeConfig
 
   private loadConfigs(flags: any): void {
     const configPath = path.join(process.cwd(), 'config.toml')
@@ -92,7 +111,7 @@ export default class SetupPrepCharts extends Command {
 
     if (fs.existsSync(resolvedPath)) {
       const dogeConfigContent = fs.readFileSync(resolvedPath, 'utf-8')
-      this.dogeConfig = toml.parse(dogeConfigContent)
+      this.dogeConfig = toml.parse(dogeConfigContent) as unknown as DogeConfig
       this.log(chalk.blue(`Using doge config: ${JSON.stringify(this.dogeConfig, null, 2)}`));
     } else {
       this.error(`${dogeConfigPath} not found. Some values may not be populated correctly.`);
@@ -128,7 +147,7 @@ export default class SetupPrepCharts extends Command {
 
   private async processDogeProductionYaml(valuesDir: string): Promise<{ updated: number; skipped: number }> {
     const dogeFiles = fs.readdirSync(valuesDir)
-      .filter(file => file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
+      .filter(file => file.endsWith('-config.yaml') || file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
 
     let updatedCharts = 0
     let skippedCharts = 0
@@ -136,6 +155,10 @@ export default class SetupPrepCharts extends Command {
 
     for (const file of dogeFiles) {
       const yamlPath = path.join(valuesDir, file)
+      if (yamlPath.endsWith("-config.yaml")) {
+        this.processDogeConfigYaml(yamlPath);
+        continue;
+      }
       const chartName = file.replace(/-production(-\d+)?\.yaml$/, '')
       const productionNumber = file.match(/-production-(\d+)\.yaml$/)?.[1] || '0'
 
@@ -624,6 +647,74 @@ export default class SetupPrepCharts extends Command {
     }
 
     return { updated: updatedCharts, skipped: skippedCharts }
+  }
+
+  private async processDogeConfigYaml(file: string): Promise<{ updated: number, skipped: number }> {
+    let updatedCharts = 0
+    let skippedCharts = 0
+    let yamlContent = fs.readFileSync(file, "utf-8");
+    let chartName = file.replace(/-config\.yaml$/, '');
+    let yamlData = yaml.load(yamlContent) as any;
+    let changes: Array<{ key: string; oldValue: string; newValue: string }> = []
+
+    if (chartName == "frontends") {
+      let scrollConfig = yamlData["scrollConfig"];
+      let configObj: any = {};
+      try {
+        configObj = toml.parse(scrollConfig);
+      } catch (e: any) {
+        this.log(chalk.red("scrollConfig failed: " + e.message));
+      }
+      const configUpdates = {
+        REACT_APP_EXTERNAL_DOCS_URI: "https://docs.dogeos.com/en/home",
+        REACT_APP_FAUCET_URI: "https://faucet." + this.getConfigValue("ingress.FRONTEND_HOST"),
+        REACT_APP_DOGE_NETWORK: this.dogeConfig.network,
+        REACT_APP_DOGE_BRIDGE_ADDRESS: this.dogeConfig.defaults.recipient,
+        REACT_APP_MOAT_ADDRESS: this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
+        REACT_APP_L1_STANDARD_ERC20_GATEWAY_PROXY_ADDR: "",
+        REACT_APP_L1_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
+        REACT_APP_L2_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: ""
+      };
+
+      let updated = false;
+      for (const [key, newValue] of Object.entries(configUpdates)) {
+        const oldValue = configObj[key];
+        if (oldValue !== newValue) {
+          changes.push({ key, oldValue: String(oldValue || ''), newValue: String(newValue) });
+          configObj[key] = newValue;
+          updated = true;
+        }
+      }
+
+      if (updated) {
+        this.log(`\nFor ${chalk.cyan(file)}:`);
+        this.log(chalk.green('Changes:'));
+        for (const change of changes) {
+          this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`);
+        }
+
+        const shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` });
+        if (shouldUpdate) {
+          yamlData["scrollConfig"] = toml.stringify(configObj);
+          const yamlString = yaml.dump(yamlData, {
+            lineWidth: -1,
+            noRefs: true,
+            quotingType: '"',
+            forceQuotes: true,
+          });
+          fs.writeFileSync(file, yamlString);
+          this.log(chalk.green(`Updated ${file}`));
+          updatedCharts++;
+        } else {
+          this.log(chalk.yellow(`Skipped updating ${file}`));
+          skippedCharts++;
+        }
+      } else {
+        this.log(chalk.yellow(`No changes needed in ${file}`));
+        skippedCharts++;
+      }
+    }
+    return { updated: updatedCharts, skipped: skippedCharts };
   }
 
   private getNestedValue(obj: any, path: string): any {
