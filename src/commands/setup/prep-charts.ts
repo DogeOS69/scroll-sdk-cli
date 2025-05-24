@@ -411,6 +411,38 @@ export default class SetupPrepCharts extends Command {
       }
 
       if (productionYaml.grafana) {
+        /*
+          grafana.ini:
+            server:
+              domain: grafana.scrollsdk
+              root_url: "https://grafana.scrollsdk""
+        */
+        if (!productionYaml.grafana["grafana.ini"]) {
+          productionYaml.grafana["grafana.ini"] = { server: {} };
+        }
+        if (!productionYaml.grafana["grafana.ini"].server) {
+          productionYaml.grafana["grafana.ini"].server = {};
+        }
+
+        let existingDomain = productionYaml.grafana?.["grafana.ini"]?.server?.domain ?? null;
+        let existingRootUrl = productionYaml.grafana?.["grafana.ini"]?.server?.root_url ?? null;
+
+        let newDomain = this.getConfigValue("ingress.GRAFANA_HOST");
+        if (existingDomain != newDomain) {
+          changes.push({ key: `grafana["grafana.ini"].server.domain`, oldValue: existingDomain, newValue: newDomain });
+          productionYaml.grafana["grafana.ini"].server.domain = newDomain;
+          updated = true;
+        }
+
+        let newRootUrl = this.getConfigValue("frontend.GRAFANA_URI");
+        if (existingRootUrl != newRootUrl) {
+          changes.push({ key: `grafana["grafana.ini"].server.root_url`, oldValue: existingRootUrl, newValue: newRootUrl });
+          productionYaml.grafana["grafana.ini"].server.root_url = newRootUrl;
+          updated = true;
+        }
+
+
+
         let ingressUpdated = false;
         let ingressValue = productionYaml.grafana.ingress;
         if (ingressValue && typeof ingressValue === 'object' && 'hosts' in ingressValue) {
