@@ -43,7 +43,7 @@ export default class SetupPrepCharts extends Command {
     'github-username': Flags.string({ description: 'GitHub username', required: false }),
     'github-token': Flags.string({ description: 'GitHub Personal Access Token', required: false }),
     'values-dir': Flags.string({ description: 'Directory containing values files', default: './values' }),
-    'doge-values-dir': Flags.string({ description: 'Directory containing doge values files', default: './dogeos-values' }),
+    // 'doge-values-dir': Flags.string({ description: 'Directory containing doge values files', default: './dogeos-values' }),
     'skip-auth-check': Flags.boolean({ description: 'Skip authentication check for individual charts', default: false }),
     config: Flags.string({ description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)', default: '.data/doge-config-testnet.toml' })
   }
@@ -803,7 +803,7 @@ export default class SetupPrepCharts extends Command {
     const valuesDir = flags['values-dir']
 
     const { updated, skipped } = await this.processProductionYaml(valuesDir)
-    const { updated: dogeUpdated, skipped: dogeSkipped } = await this.processDogeProductionYaml(flags['doge-values-dir'])
+    const { updated: dogeUpdated, skipped: dogeSkipped } = await this.processDogeProductionYaml(valuesDir)
 
     this.log(chalk.green(`\nUpdated production YAML files for ${updated} chart(s).`))
     this.log(chalk.yellow(`Skipped ${skipped} chart(s).`))
