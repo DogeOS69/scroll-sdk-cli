@@ -92,6 +92,8 @@
   },
   "scripts": {
     "build": "shx rm -rf dist && tsc -b",
+    "watch": "tsc -b --watch",
+    "dev": "tsc -b --watch",
     "lint": "eslint . --ext .ts",
     "postpack": "shx rm -f oclif.manifest.json",
     "posttest": "yarn lint",

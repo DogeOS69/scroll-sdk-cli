@@ -501,6 +501,15 @@ export default class SetupGenKeystore extends Command {
       this.log(chalk.green(`Generated COORDINATOR_JWT_SECRET_KEY: ${coordinatorJwtSecretKey}`))
     }
 
+    // const generateDogecoinKeystore = await confirm({
+    //   message: 'Do you want to generate a Dogecoin rpc password for "user"?',
+    //   default: false,
+    // })
+    // if (generateDogecoinKeystore) {
+    //   const dogecoinRpcPassword = this.generateRandomHex(16)
+    //   this.log(chalk.green(`Generated DOGECOIN_RPC_PASSWORD: ${dogecoinRpcPassword}`))
+    // }
+
     const updateConfig = await confirm({ message: 'Do you want to update these values in config.toml?' })
 
     if (updateConfig) {

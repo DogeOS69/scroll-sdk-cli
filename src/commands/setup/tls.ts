@@ -386,7 +386,7 @@ spec:
         'l2-rpc',
         'l1-devnet',
         'scroll-monitor',
-        'tso',
+        'tso-service',
         'celestia',
         //'withdrawal-processor' //no ingress in withdrawal-processor  
       ]

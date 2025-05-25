@@ -1,0 +1,68 @@
+# Configuration for the Testnet Setup Tool
+
+# General network identifier
+network = "testnet"
+
+# --- Base Identity --- 
+# Seed string used to derive the base private key.
+# Recommend using environment variable TESTNET_SETUP_SEED_STRING instead.
+seed_string = "initial_tests-eeeejjj-05"
+
+# --- Dogecoin RPC --- 
+dogecoin_rpc_url = "https://testnet.doge.xyz"
+dogecoin_rpc_user = "user"
+dogecoin_rpc_pass = "password_test"
+# Recommend using environment variables DOGECOIN_RPC_USER and DOGECOIN_RPC_PASS
+
+# Optional: Blockbook URL for faster UTXO fetching (highly recommended)
+# If not provided, UTXO fetching might be slower or require manual input.
+dogecoin_blockbook_url = "https://dogebook-testnet.nownodes.io"
+dogecoin_blockbook_api_key = "7ef0af1d-43c2-45e5-9b96-76421a9f2f95" # If required
+
+# --- Bridge Script Generation Parameters --- 
+# Thresholds for the complex bridge script roles
+# The public keys themselves will be derived from the seed_string.
+sequencer_threshold = 1   # Must be 1
+correctness_threshold = 2
+attestation_threshold = 2
+recovery_threshold = 2
+# Number of keys to generate per role (adjust if needed)
+correctness_key_count = 3
+attestation_key_count = 3
+recovery_key_count = 3
+
+# Timelock (in seconds) for the recovery path
+timelock_seconds = 3600 # 1 hour example 
+
+correctness_pubkeys = [
+  "0218576973c01906af7026c8e00153e1795da9c0c3531157960a751c4d2292c3f2",
+  "020218746c547b6ac226b42e22469c67443cfab6a6e54267f9d0e0b344e9b7ad28",
+  "02533869b4035b46d0e8e0e616432b8a773fa02dedf978bd5de075cd182088b378"
+]
+
+attestation_pubkeys = [
+  "04a0fac7d83e0e6bd8bd9c12c3e7de4ec75f7d6bf43e50a68ab2626c773e3a13915960d4ff73b3fc739ec02bbd2bdec7f1ea15285f54fddfb497d37e904c5e1baa",
+  "04a27d6571d40e8cb3f711776c1c1e3eae6d780d1674c3d547b3334a3db2b617b1b07783b91ace392adab2396a0b501fcf765c46c972b1ceb9c201afff6b3a4757",
+  "047d5fa6585c3c4a65764044a46c31217e4b5f8dfd2617dd16a74ae933dc7f4804c898980c5514bff786a7de8e418ca0ed304bec7fce2c03ce695041ab4826b756"
+]
+
+# recovery_pubkeys = [] # Example if you want to provide recovery keys
+
+
+
+# Fee rate for transactions created by this script (in satoshis per kilovirtualbyte)
+# 1_000_000 = 0.01 DOGE/kvB (Common minimum)
+# 2_000_000 = 0.02 DOGE/kvB
+fee_rate_sat_per_kvb = 2000000
+
+# Ethereum address (hex string, 20 bytes, e.g., "0x...") for OP_RETURN data in bridge funding transactions.
+deposit_eth_recipient_address_hex = "0xbb8bc29695232088b1a2dbc117e8c6006478c295"
+
+# --- Target Amounts (in Satoshis) ---
+sequencer_target_amount = 42069000    # 0.42069 DOGE
+fee_wallet_target_amount = 1000000000 # 10 DOGE
+bridge_target_amount = 5000000000    # 50 DOGE
+
+# --- Optional Settings ---
+confirmations_required = 1 # How many confirmations to wait for after sending
+

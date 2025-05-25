@@ -1,11 +1,13 @@
 import * as toml from '@iarna/toml'
-import {input, select} from '@inquirer/prompts'
-import {Command, Flags} from '@oclif/core'
+import { input, select } from '@inquirer/prompts'
+import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
+import Docker from 'dockerode'
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-import type {DogeConfig, Network} from '../../types/doge-config.js'
+import type { DogeConfig, Network } from '../../types/doge-config.js'
 
 export class DogeConfigCommand extends Command {
   static description = 'Configure Dogecoin settings for mainnet or testnet'
@@ -24,12 +26,12 @@ export class DogeConfigCommand extends Command {
   }
 
   async run(): Promise<void> {
-    const {flags} = await this.parse(DogeConfigCommand)
+    const { flags } = await this.parse(DogeConfigCommand)
 
     const networkSelection = (await select({
       choices: [
-        {name: 'mainnet', value: 'mainnet' as const},
-        {name: 'testnet', value: 'testnet' as const},
+        { name: 'mainnet', value: 'mainnet' as const },
+        { name: 'testnet', value: 'testnet' as const },
       ],
       default: 'mainnet',
       message: 'Select network type to configure:',
@@ -56,8 +58,7 @@ export class DogeConfigCommand extends Command {
       } catch (error) {
         this.log(
           chalk.yellow(
-            `Warning: Failed to parse existing config at ${resolvedPath}: ${
-              error instanceof Error ? error.message : String(error)
+            `Warning: Failed to parse existing config at ${resolvedPath}: ${error instanceof Error ? error.message : String(error)
             }`,
           ),
         )
@@ -70,12 +71,16 @@ export class DogeConfigCommand extends Command {
         recipient: 'DARn34TPXXQZgcVo5nZ7iqvJJRsm2PkjSC',
         rpcUrl: 'https://doge.nownodes.io',
         walletPath: '.data/doge-wallet-mainnet.json',
+        rpcPassword: 'password',
+        rpcUser: 'user',
       },
       testnet: {
         blockbookAPIUrl: 'https://dogebook-testnet.nownodes.io/api/v2',
         recipient: 'nZVA3ysLh4LsmDog9hg1kkXMhzAT8DbnTT',
         rpcUrl: 'https://doge-testnet.nownodes.io',
         walletPath: '.data/doge-wallet-testnet.json',
+        rpcPassword: 'password',
+        rpcUser: 'user'
       },
     }
     const currentDefaults = networkDefaults[networkSelection]
@@ -114,6 +119,16 @@ export class DogeConfigCommand extends Command {
       message: `Enter the wallet file path (for ${networkSelection} network):`,
     })
 
+    const rpcUser = await input({
+      default: existingConfig.rpc?.username || currentDefaults.rpcUser,
+      message: `Enter the dogecoin RPC user (for ${networkSelection} network):`,
+    });
+
+    const rpcPassword = await input({
+      default: existingConfig.rpc?.password || currentDefaults.rpcPassword,
+      message: `Enter the dogecoin RPC password of user "${rpcUser}" (for ${networkSelection} network):`,
+    });
+
     const newConfig: DogeConfig = {
       ...(existingConfig as DogeConfig),
       defaults: {
@@ -122,15 +137,17 @@ export class DogeConfigCommand extends Command {
         evmAddress,
         recipient,
       },
-      frontend: existingConfig.frontend ? {...existingConfig.frontend} : undefined,
+      frontend: existingConfig.frontend ? { ...existingConfig.frontend } : undefined,
       network: networkSelection,
       rpc: {
         ...existingConfig.rpc,
         apiKey,
         blockbookAPIUrl: currentDefaults.blockbookAPIUrl,
         url: currentDefaults.rpcUrl,
+        password: rpcPassword,
+        username: rpcUser,
       },
-      test: existingConfig.test ? {...existingConfig.test} : undefined,
+      test: existingConfig.test ? { ...existingConfig.test } : undefined,
       wallet: {
         ...existingConfig.wallet,
         path: walletPathInput,
@@ -139,7 +156,7 @@ export class DogeConfigCommand extends Command {
 
     const configDir = path.dirname(resolvedPath)
     if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, {recursive: true})
+      fs.mkdirSync(configDir, { recursive: true })
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -154,6 +171,143 @@ export class DogeConfigCommand extends Command {
     this.log(chalk.blue(`Chain ID: ${newConfig.defaults!.chainId}`))
     this.log(chalk.blue(`EVM Address: ${newConfig.defaults!.evmAddress}`))
     this.log(chalk.blue(`Doge Bridge Address: ${newConfig.defaults!.recipient}`))
+
+    await this.generateSetupDefaultsToml(newConfig)
+    await this.runGenerateTestKeys('latest')
+  }
+
+
+  async generateSetupDefaultsToml(newDogeConfig: DogeConfig): Promise<void> {
+    // Create setup_defaults.toml in user's current working directory
+    const setupDefaultsPath = path.resolve(process.cwd(), 'crates/test_utils/config/setup_defaults.toml');
+
+    if (!fs.existsSync(setupDefaultsPath)) {
+      // Ensure the target directory exists
+      const targetDir = path.dirname(setupDefaultsPath);
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+      const currentDir = path.dirname(fileURLToPath(import.meta.url));
+      const templatePath = path.resolve(currentDir, '../../../src/config/setup_defaults.toml');
+      this.log(chalk.blue(`Copying template file from ${templatePath} to ${setupDefaultsPath}`));
+      fs.copyFileSync(templatePath, setupDefaultsPath);
+    }
+    //read existing config file from user's working directory
+    const existingConfigStr = fs.readFileSync(setupDefaultsPath, 'utf-8');
+    let newConfig = toml.parse(existingConfigStr);
+
+    newConfig.network = newDogeConfig.network;
+
+    const seedString = await input({
+      message: 'Enter seed string for key derivation:',
+      default: String(newConfig.seed_string || ''),
+      validate: (value) => value.length > 0 ? true : 'Seed string cannot be empty'
+    });
+    newConfig.seed_string = seedString;
+
+    // const rpcUrl = await input({
+    //   message: 'Enter Dogecoin RPC URL:',
+    //   default: String(newConfig.dogecoin_rpc_url || (network === 'testnet' ? 'https://testnet.doge.xyz' : 'https://doge.xyz')),
+    //   validate: (value) => value.startsWith('http') ? true : 'URL must start with http or https'
+    // });
+    //newConfig.dogecoin_rpc_url = newDogeConfig.rpc?.url || '';
+
+    // const rpcUser = await input({
+    //   message: 'Enter Dogecoin RPC username:',
+    //   default: String(newConfig.dogecoin_rpc_user || 'user')
+    // });
+    //newConfig.dogecoin_rpc_user = newDogeConfig.rpc?.username || '';
+
+    // const rpcPass = await input({
+    //   message: 'Enter Dogecoin RPC password:',
+    //   default: String(newConfig.dogecoin_rpc_pass || 'password_test')
+    // });
+    //newConfig.dogecoin_rpc_pass = newDogeConfig.rpc?.password || '';
+
+    // const blockbookUrl = await input({
+    //   message: 'Enter Blockbook API URL (optional):',
+    //   default: String(newConfig.dogecoin_blockbook_url || (network === 'testnet' ? 'https://dogebook-testnet.nownodes.io' : 'https://dogebook.nownodes.io'))
+    // });
+    const blockbookUrl = newDogeConfig.rpc?.blockbookAPIUrl?.replace('/api/v2', '') || '';
+    newConfig.dogecoin_blockbook_url = blockbookUrl;
+
+    // const apiKey = await input({
+    //   message: 'Enter Blockbook API key (if required):',
+    //   default: String(newConfig.dogecoin_blockbook_api_key || '')
+    // });
+    newConfig.dogecoin_blockbook_api_key = newDogeConfig.rpc?.apiKey || '';
+
+    // const ethAddress = await input({
+    //   message: 'Enter Ethereum recipient address (20 bytes hex):',
+    //   default: String(newConfig.deposit_eth_recipient_address_hex || "null"),
+    //   validate: (value) => /^0x[a-fA-F0-9]{40}$/.test(value) ? true : 'Must be a valid 20-byte hex address starting with 0x'
+    // });
+    newConfig.deposit_eth_recipient_address_hex = newDogeConfig.defaults?.evmAddress || '';
+
+    //write to crates/test_utils/config/setup_defaults.toml
+    fs.writeFileSync(setupDefaultsPath, toml.stringify(newConfig));
+  }
+
+  async runGenerateTestKeys(imageTag: string): Promise<void> {
+    const docker = new Docker();
+    const image = `ghcr.io/dogeos69/dogeos-core/generate-test-keys:${imageTag}`;
+    try {
+      this.log(chalk.cyan('Pulling Docker Image...'))
+      // Pull the image if it doesn't exist locally
+      const pullStream = await docker.pull(image)
+      await new Promise((resolve, reject) => {
+        docker.modem.followProgress(pullStream, (err, res) => {
+          if (err) {
+            reject(err)
+          } else {
+            this.log(chalk.green('Image pulled successfully'))
+            resolve(res)
+          }
+        })
+      })
+
+      this.log(chalk.cyan('Creating Docker Container...'))
+      // Create and run the container
+      const container = await docker.createContainer({
+        Cmd: [], // Add any command if needed
+        HostConfig: {
+          Binds: [`${process.cwd()}:/contracts/volume`],
+        },
+        Image: image,
+      })
+
+      this.log(chalk.cyan('Starting Container'))
+      await container.start()
+
+      // Wait for the container to finish and get the logs
+      const stream = await container.logs({
+        follow: true,
+        stderr: true,
+        stdout: true,
+      })
+
+      // Print the logs
+      stream.pipe(process.stdout)
+
+      // Wait for the container to finish
+      await new Promise((resolve) => {
+        container.wait((err, data) => {
+          if (err) {
+            this.error(`Container exited with error: ${err}`)
+          } else if (data.StatusCode !== 0) {
+            this.error(`Container exited with status code: ${data.StatusCode}`)
+          }
+
+          resolve(null)
+        })
+      })
+
+      // Remove the container
+      await container.remove()
+    } catch (error) {
+      this.error(`Failed to run Docker command: ${error}`)
+    }
+
   }
 }
 

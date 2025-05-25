@@ -5,29 +5,12 @@ import { exec } from 'child_process'
 import { promisify } from 'util'
 import * as yaml from 'js-yaml'
 import * as toml from '@iarna/toml'
-import { confirm } from '@inquirer/prompts'
+import { confirm, input, select } from '@inquirer/prompts'
 import chalk from 'chalk'
+import type { DogeConfig } from '../../types/doge-config.js'
+import { encodeBase64 } from 'ethers'
 
 const execAsync = promisify(exec)
-
-interface DogeConfig {
-  frontend?: Record<string, any>
-  network: string
-  test?: Record<string, any>
-  defaults: {
-    chainId: string
-    evmAddress: string
-    recipient: string
-  }
-  rpc: {
-    apiKey: string
-    blockbookAPIUrl: string
-    url: string
-  }
-  wallet: {
-    path: string
-  }
-}
 
 export default class SetupPrepCharts extends Command {
   static override description = 'Validate Makefile and prepare Helm charts for Scroll SDK'
@@ -43,9 +26,8 @@ export default class SetupPrepCharts extends Command {
     'github-username': Flags.string({ description: 'GitHub username', required: false }),
     'github-token': Flags.string({ description: 'GitHub Personal Access Token', required: false }),
     'values-dir': Flags.string({ description: 'Directory containing values files', default: './values' }),
-    // 'doge-values-dir': Flags.string({ description: 'Directory containing doge values files', default: './dogeos-values' }),
     'skip-auth-check': Flags.boolean({ description: 'Skip authentication check for individual charts', default: false }),
-    config: Flags.string({ description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)', default: '.data/doge-config-testnet.toml' })
+    'doge-config': Flags.string({ description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)', default: '.data/doge-config-testnet.toml' })
   }
 
   private configMapping: Record<string, string | ((chartName: string, productionNumber: string) => string)> = {
@@ -88,7 +70,7 @@ export default class SetupPrepCharts extends Command {
   private contractsConfig: any = {}
   private dogeConfig: DogeConfig = {} as DogeConfig
 
-  private loadConfigs(flags: any): void {
+  private async loadConfigs(flags: any): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
     const contractsConfigPath = path.join(process.cwd(), 'config-contracts.toml')
 
@@ -106,16 +88,35 @@ export default class SetupPrepCharts extends Command {
       this.warn('config-contracts.toml not found. Some values may not be populated correctly.')
     }
 
-    const dogeConfigPath = flags.config || path.join('.data', 'doge-config-testnet.toml')
-    const resolvedPath = path.resolve(dogeConfigPath)
+    let resolvedPath = '';
+    if (!flags.config) {
+      const dogeConfigPath = await select({
+        message: 'Select the doge-config.toml file to use:',
+        choices: this.findDogeConfigFiles(),
+      }) as string;
+
+      if (dogeConfigPath === 'custom') {
+        const customPath = await input({
+          message: 'Enter the path to the doge-config.toml file:',
+          default: '.data/doge-config-testnet.toml'
+        });
+        resolvedPath = path.resolve(customPath);
+      } else {
+        resolvedPath = path.resolve(dogeConfigPath);
+      }
+    }
+    else {
+      resolvedPath = path.resolve(flags.config)
+    }
 
     if (fs.existsSync(resolvedPath)) {
       const dogeConfigContent = fs.readFileSync(resolvedPath, 'utf-8')
       this.dogeConfig = toml.parse(dogeConfigContent) as unknown as DogeConfig
-      this.log(chalk.blue(`Using doge config: ${JSON.stringify(this.dogeConfig, null, 2)}`));
+      this.log(chalk.blue(`Using doge config: ${resolvedPath}`));
     } else {
-      this.error(`${dogeConfigPath} not found. Some values may not be populated correctly.`);
+      this.error(`${resolvedPath} not found. Some values may not be populated correctly.`);
     }
+    return;
   }
 
   private getConfigValue(key: string): any {
@@ -145,109 +146,7 @@ export default class SetupPrepCharts extends Command {
     }
   }
 
-  private async processDogeProductionYaml(valuesDir: string): Promise<{ updated: number; skipped: number }> {
-    const dogeFiles = fs.readdirSync(valuesDir)
-      .filter(file => file.endsWith('-config.yaml') || file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
-
-    let updatedCharts = 0
-    let skippedCharts = 0
-    const changes: Array<{ key: string; oldValue: string; newValue: string }> = []
-
-    for (const file of dogeFiles) {
-      const yamlPath = path.join(valuesDir, file)
-      if (yamlPath.endsWith("-config.yaml")) {
-        this.processDogeConfigYaml(yamlPath);
-        continue;
-      }
-      const chartName = file.replace(/-production(-\d+)?\.yaml$/, '')
-      const productionNumber = file.match(/-production-(\d+)\.yaml$/)?.[1] || '0'
-
-      const productionYamlContent = fs.readFileSync(yamlPath, 'utf8')
-      let productionYaml = yaml.load(productionYamlContent) as any
-
-      let updated = false;
-      if (chartName == "deposit-processor") {
-        const oldAddr = productionYaml.configMaps?.env?.data?.DOGEOS_DEPOSIT_PROCESSOR_DEPOSIT_DOGE_ADDRESS ?? "";
-        let newAddr = this.dogeConfig.defaults.recipient;
-        if (oldAddr != newAddr) {
-          productionYaml.configMaps.env.data.DOGEOS_DEPOSIT_PROCESSOR_DEPOSIT_DOGE_ADDRESS = newAddr;
-          updated = true;
-        }
-      }
-
-      if (chartName == 'withdrawal-processor') {
-        const mappings = {
-          DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS: { value: this.dogeConfig.defaults.recipient, default: "2MtsUdsnFvmJKjYrFsZJEbVhSRmz1qH99YN" },
-          DOGEOS_WITHDRAWAL_BRIDGE_SCRIPT_HEX: { value: null, default: '63512102cd875ecffa074ce477c138bb35b33656558b0266632dbfed9a98066fdf3cc53051af52210218576973c01906af7026c8e00153e1795da9c0c3531157960a751c4d2292c3f221020218746c547b6ac226b42e22469c67443cfab6a6e54267f9d0e0b344e9b7ad282102533869b4035b46d0e8e0e616432b8a773fa02dedf978bd5de075cd182088b37853af522102a0fac7d83e0e6bd8bd9c12c3e7de4ec75f7d6bf43e50a68ab2626c773e3a13912103a27d6571d40e8cb3f711776c1c1e3eae6d780d1674c3d547b3334a3db2b617b121027d5fa6585c3c4a65764044a46c31217e4b5f8dfd2617dd16a74ae933dc7f480453ae6702100eb17552210299134d46749a74d4d771b5a30d29707acf392a96b6b8c7e86230458a25292f0321023379f3fa12079839fbbe8ade65e34b79ad7ef58046dc01d8c5ba31f4e303cc992103aabedb6a86ab0ed336a58fd4375b1aa85f24a214a0e3e3290aeada2bb306f79053ae68' },
-          DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY: { value: null, default: 'cTPQRfJJVwpGY36VLhCtNmEcxKLVZADZjh2p5c9Syc3z7ceeACFj' },
-          DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY: { value: null, default: 'cMg5GnvtNBnpU348wVFfEST1TiRhy1nJBURnZikwi21hXzJjiK7i' }
-        }
-        for (const [key, val] of Object.entries(mappings)) {
-          const newVal = val.value ?? val.default;
-          if (productionYaml.env[key] != newVal) {
-            productionYaml.env[key] = newVal;
-            updated = true;
-            changes.push({ key: `env.${key}`, oldValue: productionYaml.env[key], newValue: newVal });
-          }
-        }
-        /*
-        tsoSigners:
-          - network: "testnet"
-            uri: "https://sisbgbj3tv.us-east-1.awsapprunner.com" # Or 127.0.0.1:4001 if signers are on the K8s node
-            role: "Correctness"
-          - network: "testnet"
-            uri: "https://scrvfsmdei.us-east-1.awsapprunner.com" # Or 127.0.0.1:4001 if signers are on the K8s node
-            role: "Correctness"
-          - network: "testnet"
-            uri: "https://ishs2sgycn.us-east-1.awsapprunner.com" # Or 127.0.0.1:4001 if signers are on the K8s node
-            role: "Correctness"
-          - network: "testnet"
-            uri: "http://cubesigner-signer-0:3000" 
-            role: "Attestation"
-          - network: "testnet"
-            uri: "http://cubesigner-signer-1:3000" 
-            role: "Attestation"
-          - network: "testnet"
-            uri: "http://cubesigner-signer-2:3000" 
-            role: "Attestation"
-        */
-      }
-
-      if (updated) {
-        this.log(`\nFor ${chalk.cyan(file)}:`)
-        this.log(chalk.green('Changes:'))
-        for (const change of changes) {
-          this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`)
-        }
-
-        const shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` })
-        if (shouldUpdate) {
-          const yamlString = yaml.dump(productionYaml, {
-            lineWidth: -1,
-            noRefs: true,
-            quotingType: '"',
-            forceQuotes: true,
-          })
-
-          fs.writeFileSync(yamlPath, yamlString)
-          this.log(chalk.green(`Updated ${file}`))
-          updatedCharts++
-        } else {
-          this.log(chalk.yellow(`Skipped updating ${file}`))
-          skippedCharts++
-        }
-      } else {
-        this.log(chalk.yellow(`No changes needed in ${file}`))
-        skippedCharts++
-      }
-    }
-
-    return { updated: updatedCharts, skipped: skippedCharts }
-  }
-
   private async processProductionYaml(valuesDir: string): Promise<{ updated: number; skipped: number }> {
-
-
     const productionFiles = fs.readdirSync(valuesDir)
       .filter(file => file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
 
@@ -340,7 +239,7 @@ export default class SetupPrepCharts extends Command {
                         'l1-devnet': 'L1_DEVNET_HOST',
                         'blockscout': 'BLOCKSCOUT_HOST',
                         'admin-system-dashboard': 'ADMIN_SYSTEM_DASHBOARD_HOST',
-                        'tso': 'TSO_HOST',
+                        'tso-service': 'TSO_HOST',
                         'celestia': 'CELESTIA_HOST',
                       };
 
@@ -382,18 +281,7 @@ export default class SetupPrepCharts extends Command {
           }
         }
       }
-      /*
-      blockscout-stack.blockscout.ingress.annotations.nginx.ingress.kubernetes.io/cors-allow-origin:https://blockscout.scrollsdk
-      blockscout-stack.blockscout.ingress.hostname:blockscout.scrollsdk
-      blockscout-stack.frontend.env.NEXT_PUBLIC_API_HOST:blockscout.scrollsdk
-      blockscout-stack.frontend.ingress.annotations.nginx.ingress.kubernetes.io/cors-allow-origin: "https://blockscout.scrollsdk"
-      blockscout-stack.frontend.ingress.hostname: "blockscout.scrollsdk"
 
-      NEXT_PUBLIC_API_PROTOCOL: https
-      NEXT_PUBLIC_API_WEBSOCKET_PROTOCOL: wss
-      NEXT_PUBLIC_API_HOST: "blockscout.scrollsdk"
-      NEXT_PUBLIC_APP_PROTOCOL: https
-      */
       if (productionYaml["blockscout-stack"]) {
         let ingressUpdated = false;
         const blockscout = productionYaml["blockscout-stack"].blockscout;
@@ -402,83 +290,95 @@ export default class SetupPrepCharts extends Command {
         let blockscout_url = this.getConfigValue("frontend.EXTERNAL_EXPLORER_URI_L2");
 
         if (blockscout?.ingress?.annotations?.["nginx.ingress.kubernetes.io/cors-allow-origin"]) {
-          changes.push({ key: `ingress.blockscout.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"]`, oldValue: blockscout.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"], newValue: blockscout_url });
-          blockscout.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"] = blockscout_url;
-          ingressUpdated = true;
+          const oldValue = blockscout.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"];
+          if (oldValue !== blockscout_url) {
+            changes.push({ key: `ingress.blockscout.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"]`, oldValue, newValue: blockscout_url });
+            blockscout.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"] = blockscout_url;
+            ingressUpdated = true;
+          }
         }
 
         if (blockscout?.ingress?.hostname) {
-          changes.push({ key: `ingress.blockscout.hostname`, oldValue: blockscout.ingress.hostname, newValue: blockscout_host });
-          blockscout.ingress.hostname = blockscout_host;
-          ingressUpdated = true;
+          const oldValue = blockscout.ingress.hostname;
+          if (oldValue !== blockscout_host) {
+            changes.push({ key: `ingress.blockscout.hostname`, oldValue, newValue: blockscout_host });
+            blockscout.ingress.hostname = blockscout_host;
+            ingressUpdated = true;
+          }
         }
 
         //only enable tls if use command scrollsdk setup tls
         if (blockscout?.ingress?.tls?.enabled) {
-          if (blockscout.ingress.tls.enabled != "false") {
-            blockscout.ingress.tls.enabled = false;
-            changes.push({ key: `ingress.blockscout.tls`, oldValue: blockscout.ingress.tls, newValue: "false" });
+          if (blockscout.ingress.tls.enabled !== false) {
+            const oldValue = blockscout.ingress.tls.enabled;
+            blockscout.ingress.tls.enabled = false; // Ensure it's boolean false
+            changes.push({ key: `ingress.blockscout.tls.enabled`, oldValue: String(oldValue), newValue: "false" });
             ingressUpdated = true;
           }
         }
 
         if (frontend?.env?.NEXT_PUBLIC_API_HOST) {
-          changes.push({ key: `frontend.env.NEXT_PUBLIC_API_HOST`, oldValue: frontend.env.NEXT_PUBLIC_API_HOST, newValue: blockscout_host });
-          frontend.env.NEXT_PUBLIC_API_HOST = blockscout_host;
-          ingressUpdated = true;
+          const oldValue = frontend.env.NEXT_PUBLIC_API_HOST;
+          if (oldValue !== blockscout_host) {
+            changes.push({ key: `frontend.env.NEXT_PUBLIC_API_HOST`, oldValue, newValue: blockscout_host });
+            frontend.env.NEXT_PUBLIC_API_HOST = blockscout_host;
+            ingressUpdated = true;
+          }
         }
 
         let protocol = blockscout_url.startsWith("https") ? "https" : "http";
         if (frontend?.env?.NEXT_PUBLIC_API_PROTOCOL) {
-          changes.push({
-            key: `frontend.env.NEXT_PUBLIC_API_PROTOCOL`,
-            oldValue: frontend.env.NEXT_PUBLIC_API_PROTOCOL,
-            newValue: protocol
-          });
-          frontend.env.NEXT_PUBLIC_API_PROTOCOL = protocol;
-          ingressUpdated = true;
+          const oldValue = frontend.env.NEXT_PUBLIC_API_PROTOCOL;
+          if (oldValue !== protocol) {
+            changes.push({
+              key: `frontend.env.NEXT_PUBLIC_API_PROTOCOL`,
+              oldValue,
+              newValue: protocol
+            });
+            frontend.env.NEXT_PUBLIC_API_PROTOCOL = protocol;
+            ingressUpdated = true;
+          }
         }
         if (frontend?.env?.NEXT_PUBLIC_APP_PROTOCOL) {
-          changes.push({
-            key: `frontend.env.NEXT_PUBLIC_APP_PROTOCOL`,
-            oldValue: frontend.env.NEXT_PUBLIC_APP_PROTOCOL,
-            newValue: protocol
-          });
-          frontend.env.NEXT_PUBLIC_APP_PROTOCOL = protocol;
-          ingressUpdated = true;
+          const oldValue = frontend.env.NEXT_PUBLIC_APP_PROTOCOL;
+          if (oldValue !== protocol) {
+            changes.push({
+              key: `frontend.env.NEXT_PUBLIC_APP_PROTOCOL`,
+              oldValue,
+              newValue: protocol
+            });
+            frontend.env.NEXT_PUBLIC_APP_PROTOCOL = protocol;
+            ingressUpdated = true;
+          }
         }
 
         if (frontend?.ingress?.annotations?.["nginx.ingress.kubernetes.io/cors-allow-origin"]) {
-          changes.push({ key: `frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"]`, oldValue: frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"], newValue: blockscout_url });
-          frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"] = blockscout_url;
-          ingressUpdated = true;
+          const oldValue = frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"];
+          if (oldValue !== blockscout_url) {
+            changes.push({ key: `frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"]`, oldValue, newValue: blockscout_url });
+            frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"] = blockscout_url;
+            ingressUpdated = true;
+          }
         }
         if (frontend?.ingress?.hostname) {
-          changes.push({ key: `frontend.ingress.hostname`, oldValue: frontend.ingress.hostname, newValue: blockscout_host });
-          frontend.ingress.hostname = blockscout_host;
-          ingressUpdated = true;
+          const oldValue = frontend.ingress.hostname;
+          if (oldValue !== blockscout_host) {
+            changes.push({ key: `frontend.ingress.hostname`, oldValue, newValue: blockscout_host });
+            frontend.ingress.hostname = blockscout_host;
+            ingressUpdated = true;
+          }
         }
 
         //only enable tls if use command scrollsdk setup tls
         if (frontend?.ingress?.tls?.enabled) {
-          if (frontend.ingress.tls.enabled != "false") {
-            changes.push({ key: `frontend.ingress.tls`, oldValue: frontend.ingress.tls, newValue: "false" });
+          if (frontend.ingress.tls.enabled !== false) {
+            const oldValue = frontend.ingress.tls.enabled;
+            changes.push({ key: `frontend.ingress.tls.enabled`, oldValue: String(oldValue), newValue: "false" });
             frontend.ingress.tls.enabled = false;
             ingressUpdated = true;
           }
         }
-        /*
-        INDEXER_SCROLL_L1_CHAIN_CONTRACT: ""
-        INDEXER_SCROLL_L1_BATCH_START_BLOCK: ""
-        INDEXER_SCROLL_L1_MESSENGER_CONTRACT: ""
-        INDEXER_SCROLL_L1_MESSENGER_START_BLOCK: ""
-        INDEXER_SCROLL_L2_MESSENGER_CONTRACT: ""
-        INDEXER_SCROLL_L2_GAS_ORACLE_CONTRACT: ""
-        INDEXER_SCROLL_L1_RPC: ""
-        INDEXER_SCROLL_L2_MESSENGER_START_BLOCK: 0
-        INDEXER_SCROLL_L1_ETH_GET_LOGS_RANGE_SIZE: 500
-        INDEXER_SCROLL_L2_ETH_GET_LOGS_RANGE_SIZE: 500
-        */
+
         interface BlockscoutEnvMapping {
           key: string;
           configKey: string;
@@ -529,19 +429,22 @@ export default class SetupPrepCharts extends Command {
             newValue = configKey ? this.contractsConfig[configKey] : defaultValue;
           }
 
-          if (newValue !== undefined) {
+          let oldValue = benv[key];
+
+          if (newValue !== oldValue) {
             changes.push({
               key: `blockscout.env.${key}`,
               oldValue: benv[key],
               newValue: newValue
             });
             benv[key] = newValue;
+            updated = true;
           } else {
             this.log(chalk.yellow(`No value found for ${key}`));
           }
         });
 
-        updated = true;
+
 
         if (ingressUpdated) {
           updated = true;
@@ -661,10 +564,256 @@ export default class SetupPrepCharts extends Command {
           }
         }
 
-
-
         if (ingressUpdated) {
           updated = true;
+        }
+      }
+
+      if (chartName == 'withdrawal-processor') {
+        if (!productionYaml.env) {
+          this.error(`${chartName}: env not found in config`);
+        }
+
+        const mappings = {
+          "DOGEOS_WITHDRAWAL_NETWORK_STR": "network_str",
+          "DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS": "bridge_address",
+          "DOGEOS_WITHDRAWAL_BRIDGE_SCRIPT_HEX": "bridge_script_hex",
+          //"DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY": "fee_signer_key", // it's a secret
+          //"DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY": "sequencer_signer_key" // it's a secret
+        }
+        if (!fs.existsSync("output-withdrawal-processor.toml")) {
+          this.warn(`${chartName}: output-withdrawal-processor.toml not found, skipping configuration update`);
+          skippedCharts++;
+          continue;
+        }
+        let withdrawalProcessorConfig = toml.parse(fs.readFileSync("output-withdrawal-processor.toml", "utf-8"));
+        for (const [envKey, tomlKey] of Object.entries(mappings)) {
+          const newVal = withdrawalProcessorConfig[tomlKey] as string;
+
+          // Find existing environment variable
+          let envVar = productionYaml.env.find((item: any) => item.name === envKey);
+
+          if (envVar) {
+            // Update existing value
+            if (envVar.value !== newVal) {
+              const oldValue = envVar.value;
+              envVar.value = newVal;
+              updated = true;
+              changes.push({ key: `env.${envKey}`, oldValue, newValue: newVal });
+            }
+          } else {
+            // Add new environment variable
+            productionYaml.env.push({ name: envKey, value: newVal });
+            updated = true;
+            changes.push({ key: `env.${envKey}`, oldValue: 'undefined', newValue: newVal });
+          }
+        }
+        const indexerMappings = {
+          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSENGER_ADDRESS": "contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR",
+          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSAGE_QUEUE_ADDRESS": "contractsFile.L2_MESSAGE_QUEUE_ADDR"
+        }
+        for (const [envKey, tomlKey] of Object.entries(indexerMappings)) {
+          const newVal = this.getConfigValue(tomlKey);
+
+          // Find existing environment variable
+          let envVar = productionYaml.env.find((item: any) => item.name === envKey);
+
+          if (envVar) {
+            // Update existing value
+            if (envVar.value !== newVal) {
+              const oldValue = envVar.value;
+              envVar.value = newVal;
+              updated = true;
+              changes.push({ key: `env.${envKey}`, oldValue, newValue: newVal });
+            }
+          } else {
+            // Add new environment variable
+            productionYaml.env.push({ name: envKey, value: newVal });
+            updated = true;
+            changes.push({ key: `env.${envKey}`, oldValue: 'undefined', newValue: newVal });
+          }
+        }
+
+        /*
+        tsoSigners:
+          - network: "testnet"
+            uri: "https://sisbgbj3tv.us-east-1.awsapprunner.com" # Or 127.0.0.1:4001 if signers are on the K8s node
+            role: "Correctness"
+          - network: "testnet"
+            uri: "https://scrvfsmdei.us-east-1.awsapprunner.com" # Or 127.0.0.1:4001 if signers are on the K8s node
+            role: "Correctness"
+          - network: "testnet"
+            uri: "https://ishs2sgycn.us-east-1.awsapprunner.com" # Or 127.0.0.1:4001 if signers are on the K8s node
+            role: "Correctness"
+          - network: "testnet"
+            uri: "http://cubesigner-signer-0:3000" 
+            role: "Attestation"
+          - network: "testnet"
+            uri: "http://cubesigner-signer-1:3000" 
+            role: "Attestation"
+          - network: "testnet"
+            uri: "http://cubesigner-signer-2:3000" 
+            role: "Attestation"
+        */
+      }
+
+      if (chartName == "cubesigner-signer") {
+        if (!productionYaml.env) {
+          this.error(`${chartName}: env not found in config`);
+        }
+        /*
+        env:
+        - name: "DOGEOS_CUBESIGNER_SIGNER_PORT"
+          value: "3000"
+        - name: "DOGEOS_CUBESIGNER_SIGNER_NETWORK"
+          value: "testnet"
+        */
+        const envVarName = 'DOGEOS_CUBESIGNER_SIGNER_NETWORK';
+        const configValue = this.dogeConfig.network;
+
+        // Find existing environment variable
+        let envVar = productionYaml.env.find((item: any) => item.name === envVarName);
+
+        if (envVar) {
+          // Update existing value
+          if (envVar.value !== configValue) {
+            const oldValue = envVar.value;
+            envVar.value = configValue;
+            updated = true;
+            changes.push({ key: `env.${envVarName}`, oldValue, newValue: configValue });
+          }
+        } else {
+          // Add new environment variable
+          productionYaml.env.push({ name: envVarName, value: configValue });
+          updated = true;
+          changes.push({ key: `env.${envVarName}`, oldValue: 'undefined', newValue: configValue });
+        }
+      }
+      if (chartName == "da") {
+        //TODO env.CELESTIA_URL
+      }
+
+      if (chartName == "deposit-processor" || chartName == "dogeos-deposit-processor") {
+        // Check and ensure configMaps.env.data exists
+        if (!productionYaml.configMaps?.env?.data) {
+          this.warn(`${chartName}: configMaps.env.data not found, skipping configuration update`);
+          continue;
+        }
+        const depositProcessorMappings = {
+          // 'DOGEOS_DEPOSIT_PROCESSOR_NOWNODES_API_KEY': this.dogeConfig.rpc.apiKey, //this is a secret
+          'DOGEOS_DEPOSIT_PROCESSOR_DEPOSIT_DOGE_ADDRESS': this.dogeConfig.defaults?.recipient,
+          'DOGEOS_DEPOSIT_PROCESSOR_MOAT_ADDRESS': this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
+          'DOGEOS_DEPOSIT_PROCESSOR_ANVIL_RPC_URL': this.getConfigValue("general.L1_RPC_ENDPOINT"),
+          'DOGEOS_DEPOSIT_PROCESSOR_L1_MESSENGER_ADDRESS': this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
+        };
+
+        for (const [envKey, newValue] of Object.entries(depositProcessorMappings)) {
+          if (newValue !== undefined && productionYaml.configMaps.env.data[envKey] !== newValue) {
+            const oldValue = productionYaml.configMaps.env.data[envKey];
+            productionYaml.configMaps.env.data[envKey] = newValue;
+            updated = true;
+            changes.push({ key: `configMaps.env.data["${envKey}"]`, oldValue, newValue });
+          }
+        }
+      }
+
+      if (chartName == "tso-service") {
+        if (!productionYaml.env) {
+          this.error(`${chartName}: env not found in config`);
+        }
+
+        const envVarName = 'DOGE_NETWORK';
+        const configValue = this.dogeConfig.network;
+
+        // Find existing environment variable
+        let envVar = productionYaml.env.find((item: any) => item.name === envVarName);
+
+        if (envVar) {
+          // Update existing value
+          if (envVar.value !== configValue) {
+            const oldValue = envVar.value;
+            envVar.value = configValue;
+            updated = true;
+            changes.push({ key: `env.${envVarName}`, oldValue, newValue: configValue });
+          }
+        } else {
+          // Add new environment variable
+          productionYaml.env.push({ name: envVarName, value: configValue });
+          updated = true;
+          changes.push({ key: `env.${envVarName}`, oldValue: 'undefined', newValue: configValue });
+        }
+      }
+
+      if (chartName == "metrics-exporter") {
+        if (!productionYaml.metricsConfig) {
+          productionYaml.metricsConfig = {
+            l1Network: {
+              url: this.getConfigValue("general.L1_RPC_ENDPOINT"),
+              L1_MESSAGE_QUEUE_PROXY_ADDR: this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
+            },
+            dogecoin: {
+              url: "http://dogecoin-testnet:44555"
+            }
+          };
+          updated = true;
+          changes.push({
+            key: `metricsConfig`, oldValue: "undefined",
+            newValue: JSON.stringify(productionYaml.metricsConfig)
+          });
+        } else {
+          const valuesToCheck = {
+            "l1Network.url": this.getConfigValue("general.L1_RPC_ENDPOINT"),
+            "l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR": this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR"),
+            "dogecoin.url": "http://dogecoin-testnet:44555"
+          }
+          for (const [key, newValue] of Object.entries(valuesToCheck)) {
+            const oldValue = productionYaml.metricsConfig[key];
+            if (oldValue !== newValue) {
+              productionYaml.metricsConfig[key] = newValue;
+              updated = true;
+              changes.push({ key, oldValue, newValue });
+            }
+          }
+        }
+      }
+      if (chartName == "dogecoin") {
+        const isTestnet = this.dogeConfig.network === "testnet";
+
+        // Define network-specific configurations (excluding sensitive data)
+        const networkConfig = {
+          rpcPort: isTestnet ? 44555 : 22555,
+          port: isTestnet ? 44556 : 22556,
+          testnet: isTestnet ? 1 : 0
+        };
+
+        // Apply configuration updates
+        for (const [key, expectedValue] of Object.entries(networkConfig)) {
+          const targetPath = key === 'testnet' ? 'dogecoinConf' : 'service';
+          const currentValue = productionYaml[targetPath][key];
+
+          if (currentValue !== expectedValue) {
+            productionYaml[targetPath][key] = expectedValue;
+
+            const fullKey = `${targetPath}.${key}`;
+            changes.push({
+              key: fullKey,
+              oldValue: String(currentValue || "undefined"),
+              newValue: String(expectedValue)
+            });
+            updated = true;
+          }
+        }
+
+        // Handle rpcPassword - remove from production yaml if exists (should be in secrets)
+        if (productionYaml.rpcPassword !== undefined) {
+          delete productionYaml.rpcPassword;
+          changes.push({
+            key: 'rpcPassword',
+            oldValue: 'password (moved to secrets)',
+            newValue: 'removed (use secrets instead)'
+          });
+          updated = true;
+          this.log(chalk.yellow(`${chartName}: rpcPassword should be configured via Kubernetes secrets, not in production yaml`));
         }
       }
 
@@ -697,79 +846,128 @@ export default class SetupPrepCharts extends Command {
       }
     }
 
+
     return { updated: updatedCharts, skipped: skippedCharts }
   }
 
-  private async processDogeConfigYaml(file: string): Promise<{ updated: number, skipped: number }> {
+  private async processConfigYaml(valuesDir: string): Promise<{ updated: number, skipped: number }> {
     let updatedCharts = 0
     let skippedCharts = 0
-    let yamlContent = fs.readFileSync(file, "utf-8");
-    let chartName = file.replace(/-config\.yaml$/, '');
-    let yamlData = yaml.load(yamlContent) as any;
-    let changes: Array<{ key: string; oldValue: string; newValue: string }> = []
+    const configFiles = fs.readdirSync(valuesDir)
+      .filter(file => file.endsWith('-config.yaml'))
 
-    if (chartName == "frontends") {
-      let scrollConfig = yamlData["scrollConfig"];
-      let configObj: any = {};
-      try {
-        configObj = toml.parse(scrollConfig);
-      } catch (e: any) {
-        this.log(chalk.red("scrollConfig failed: " + e.message));
-      }
-      const configUpdates = {
-        REACT_APP_EXTERNAL_DOCS_URI: "https://docs.dogeos.com/en/home",
-        REACT_APP_FAUCET_URI: "https://faucet." + this.getConfigValue("ingress.FRONTEND_HOST"),
-        REACT_APP_DOGE_NETWORK: this.dogeConfig.network,
-        REACT_APP_DOGE_BRIDGE_ADDRESS: this.dogeConfig.defaults.recipient,
-        REACT_APP_MOAT_ADDRESS: this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
-        REACT_APP_L1_STANDARD_ERC20_GATEWAY_PROXY_ADDR: "",
-        REACT_APP_L1_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
-        REACT_APP_L2_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: ""
-      };
-
-      let updated = false;
-      for (const [key, newValue] of Object.entries(configUpdates)) {
-        const oldValue = configObj[key];
-        if (oldValue !== newValue) {
-          changes.push({ key, oldValue: String(oldValue || ''), newValue: String(newValue) });
-          configObj[key] = newValue;
-          updated = true;
+    for (const file of configFiles) {
+      const yamlPath = path.join(valuesDir, file)
+      this.log(chalk.cyan(`Processing ${yamlPath}`));
+      let chartName = file.replace(/-config\.yaml$/, '');
+      let yamlData = yaml.load(fs.readFileSync(yamlPath, "utf-8")) as any;
+      let changes: Array<{ key: string; oldValue: string; newValue: string }> = [];
+      if (chartName == "frontends") {
+        let scrollConfig = yamlData["scrollConfig"];
+        let scrollConfigToml: any = {};
+        try {
+          scrollConfigToml = toml.parse(scrollConfig);
+        } catch (e: any) {
+          this.log(chalk.red("scrollConfig failed: " + e.message));
         }
-      }
+        const configUpdates = {
+          REACT_APP_EXTERNAL_DOCS_URI: "https://docs.dogeos.com/en/home",
+          REACT_APP_FAUCET_URI: "https://faucet." + this.getConfigValue("ingress.FRONTEND_HOST"),
+          REACT_APP_DOGE_NETWORK: this.dogeConfig.network,
+          REACT_APP_DOGE_BRIDGE_ADDRESS: this.dogeConfig.defaults?.recipient,
+          REACT_APP_MOAT_ADDRESS: this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
+          REACT_APP_L1_STANDARD_ERC20_GATEWAY_PROXY_ADDR: "",
+          REACT_APP_L1_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
+          REACT_APP_L2_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: ""
+        };
 
-      if (updated) {
-        this.log(`\nFor ${chalk.cyan(file)}:`);
-        this.log(chalk.green('Changes:'));
-        for (const change of changes) {
-          this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`);
+        let updated = false;
+        for (const [key, newValue] of Object.entries(configUpdates)) {
+          const oldValue = scrollConfigToml[key];
+          if (oldValue !== newValue) {
+            changes.push({ key, oldValue: String(oldValue || ''), newValue: String(newValue) });
+            scrollConfigToml[key] = newValue;
+            updated = true;
+          }
         }
 
-        const shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` });
-        if (shouldUpdate) {
-          yamlData["scrollConfig"] = toml.stringify(configObj);
-          const yamlString = yaml.dump(yamlData, {
-            lineWidth: -1,
-            noRefs: true,
-            quotingType: '"',
-            forceQuotes: true,
-          });
-          fs.writeFileSync(file, yamlString);
-          this.log(chalk.green(`Updated ${file}`));
-          updatedCharts++;
+        if (updated) {
+          this.log(`\nFor ${chalk.cyan(file)}:`);
+          this.log(chalk.green('Changes:'));
+          for (const change of changes) {
+            this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`);
+          }
+
+          const shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` });
+          if (shouldUpdate) {
+            // Preserve the literal block scalar format for scrollConfig
+            const tomlConfigString = toml.stringify(scrollConfigToml);
+
+            // Manually construct to get exact "scrollConfig: |" format (not "scrollConfig: |-")
+            const indentedToml = tomlConfigString
+              .trim()
+              .split('\n')
+              .map(line => `  ${line}`)
+              .join('\n');
+
+            const yamlContent = `scrollConfig: |\n${indentedToml}\n`;
+
+            fs.writeFileSync(yamlPath, yamlContent);
+            this.log(chalk.green(`Updated ${file}`));
+            updatedCharts++;
+          } else {
+            this.log(chalk.yellow(`Skipped updating ${file}`));
+            skippedCharts++;
+          }
         } else {
-          this.log(chalk.yellow(`Skipped updating ${file}`));
+          this.log(chalk.yellow(`No changes needed in ${file}`));
           skippedCharts++;
         }
-      } else {
-        this.log(chalk.yellow(`No changes needed in ${file}`));
-        skippedCharts++;
       }
     }
     return { updated: updatedCharts, skipped: skippedCharts };
   }
 
+
   private getNestedValue(obj: any, path: string): any {
     return path.split('.').reduce((prev, curr) => prev && prev[curr], obj)
+  }
+
+  private findDogeConfigFiles(): Array<{ name: string; value: string }> {
+    const possiblePaths = [
+      '.data/doge-config-testnet.toml',
+      '.data/doge-config-mainnet.toml',
+      '.data/doge-config.toml',
+    ]
+
+    const foundFiles: Array<{ name: string; value: string }> = []
+
+    for (const filePath of possiblePaths) {
+      if (fs.existsSync(filePath)) {
+        const resolvedPath = path.resolve(filePath)
+        let displayName = filePath
+
+        // Add network info to display name if we can determine it
+        if (filePath.includes('testnet')) {
+          displayName = `${filePath} (Testnet)`
+        } else if (filePath.includes('mainnet')) {
+          displayName = `${filePath} (Mainnet)`
+        }
+
+        foundFiles.push({
+          name: displayName,
+          value: filePath
+        })
+      }
+    }
+
+    // Add option to enter custom path
+    foundFiles.push({
+      name: 'Enter custom path...',
+      value: 'custom'
+    })
+
+    return foundFiles
   }
 
   private async validateMakefile(skipAuthCheck: boolean): Promise<void> {
@@ -832,7 +1030,7 @@ export default class SetupPrepCharts extends Command {
     this.log('Starting chart preparation...')
 
     // Load configs before processing yaml files
-    this.loadConfigs(flags)
+    await this.loadConfigs(flags)
 
     if (flags['github-username'] && flags['github-token']) {
       try {
@@ -853,14 +1051,14 @@ export default class SetupPrepCharts extends Command {
     // Process production.yaml files
     const valuesDir = flags['values-dir']
 
-    const { updated, skipped } = await this.processProductionYaml(valuesDir)
-    const { updated: dogeUpdated, skipped: dogeSkipped } = await this.processDogeProductionYaml(valuesDir)
+    const { updated, skipped } = await this.processProductionYaml(valuesDir);
+    const { updated: updatedConfig, skipped: skippedConfig } = await this.processConfigYaml(valuesDir);
 
     this.log(chalk.green(`\nUpdated production YAML files for ${updated} chart(s).`))
     this.log(chalk.yellow(`Skipped ${skipped} chart(s).`))
 
-    this.log(chalk.green(`\nUpdated doge production YAML files for ${dogeUpdated} chart(s).`))
-    this.log(chalk.yellow(`Skipped doge${dogeSkipped} chart(s).`))
+    this.log(chalk.green(`\nUpdated config YAML files for ${updatedConfig} chart(s).`))
+    this.log(chalk.yellow(`Skipped ${skippedConfig} chart(s).`))
 
     this.log('Chart preparation completed.')
   }
