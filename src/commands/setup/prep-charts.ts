@@ -327,6 +327,7 @@ export default class SetupPrepCharts extends Command {
                     // Check for direct mapping first
                     const directMappingKey = `ingress.${chartName.toUpperCase().replace(/-/g, '_')}_HOST`;
                     configValue = this.getConfigValue(directMappingKey);
+                    this.log(chalk.yellow(`${chartName}: ${directMappingKey} -> ${configValue}`));
 
                     // If direct mapping doesn't exist, try alternative mappings
                     if (!configValue) {
@@ -339,11 +340,15 @@ export default class SetupPrepCharts extends Command {
                         'l1-devnet': 'L1_DEVNET_HOST',
                         'blockscout': 'BLOCKSCOUT_HOST',
                         'admin-system-dashboard': 'ADMIN_SYSTEM_DASHBOARD_HOST',
+                        'tso': 'TSO_HOST',
+                        'celestia': 'CELESTIA_HOST',
                       };
 
                       const alternativeKey = alternativeMappings[chartName];
                       if (alternativeKey) {
                         configValue = this.getConfigValue(`ingress.${alternativeKey}`);
+                      } else {
+                        this.error(`${chartName}: ${alternativeKey} not found in config`);
                       }
                     }
                   }
@@ -615,7 +620,53 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
+      if (chartName == "celestia") {
+        let ingressUpdated = false;
+        if (!productionYaml.ingress) {
+          productionYaml.ingress = {
+            enabled: true,
+            className: "nginx",
+            annotations: {
+              "cert-manager.io/cluster-issuer": "letsencrypt-prod",
+              "nginx.ingress.kubernetes.io/ssl-redirect": "true"
+            },
+            hosts: [
+              {
+                host: this.getConfigValue("ingress.CELESTIA_HOST"),
+                paths: [{ path: "/", pathType: "Prefix" }]
+              }
+            ],
+          };
+          changes.push({ key: `ingress`, oldValue: "undefined", newValue: JSON.stringify(productionYaml.ingress) });
+          ingressUpdated = true;
+        } else {
+          let ingressValue = productionYaml.ingress;
+          ingressValue.enabled = true;
+          if (ingressValue && typeof ingressValue === 'object' && 'hosts' in ingressValue) {
+            const hosts = ingressValue.hosts as Array<{ host: string; paths: any[] }>;
+            if (Array.isArray(hosts)) {
+              for (let i = 0; i < hosts.length; i++) {
+                if (typeof hosts[i] === 'object' && 'host' in hosts[i]) {
+                  let configValue = this.getConfigValue('ingress.CELESTIA_HOST');
+                  if (configValue && configValue !== hosts[i].host) {
+                    changes.push({ key: `ingress.hosts[${i}].host`, oldValue: hosts[i].host, newValue: configValue });
+                    hosts[i].host = configValue;
+                    ingressUpdated = true;
+                  }
+                }
+              }
+            } else {
+              this.error(`${chartName}: ingress.hosts not found in config`);
+            }
+          }
+        }
 
+
+
+        if (ingressUpdated) {
+          updated = true;
+        }
+      }
 
       if (updated) {
         this.log(`\nFor ${chalk.cyan(file)}:`)

@@ -327,6 +327,8 @@ export default class SetupDomains extends Command {
         ROLLUP_EXPLORER_API_HOST: `rollup-explorer-backend.${urlEnding}`,
         RPC_GATEWAY_HOST: `l2-rpc.${urlEnding}`,
         ...(usesAnvil ? {L1_DEVNET_HOST: `l1-devnet.${urlEnding}`, L1_EXPLORER_HOST: `l1-explorer.${urlEnding}`} : {}),
+        TSO_HOST: `tso.${urlEnding}`,
+        CELESTIA_HOST: `celestia.${urlEnding}`,
       }
     } else {
       protocol = await select({
@@ -374,6 +376,14 @@ export default class SetupDomains extends Command {
         RPC_GATEWAY_HOST: await input({
           default: existingConfig.ingress?.RPC_GATEWAY_HOST || 'l2-rpc.scrollsdk',
           message: 'Enter RPC_GATEWAY_HOST:',
+        }),
+        TSO_HOST: await input({
+          default: existingConfig.ingress?.TSO_HOST || 'tso.scrollsdk',
+          message: 'Enter TSO_HOST:',
+        }),
+        CELESTIA_HOST: await input({
+          default: existingConfig.ingress?.CELESTIA_HOST || 'celestia.scrollsdk',
+          message: 'Enter CELESTIA_HOST:',
         }),
       }
 

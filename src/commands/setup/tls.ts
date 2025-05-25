@@ -211,13 +211,35 @@ spec:
 
       if (yamlContent["blockscout-stack"]) {
 
-        let blockscoutStack=yamlContent["blockscout-stack"];
+        let blockscoutStack = yamlContent["blockscout-stack"];
         let items = ["blockscout", "frontend"];
         for (const item of items) {
           if (blockscoutStack[item]?.ingress?.tls) {
             blockscoutStack[item].ingress.tls.enabled = true;
             updated = true;
           }
+        }
+      } else if (chart == "celestia") {
+        let ingress = yamlContent.ingress;
+        if (ingress.tls && ingress.tls.length > 0) {
+          ingress.tls.forEach((tlsConfig: any) => {
+            for (let i = 0; i < ingress.hosts.length; i++) {
+              if (tlsConfig.hosts[i] != ingress.hosts[i].host) {
+                tlsConfig.hosts[i] = ingress.hosts[i].host;
+                updated = true;
+              }
+            }
+          })
+        } else {
+          ingress.tls = [{
+            secretName: "celestia-tls",
+            hosts: []
+          }];
+          for (let i = 0; i < ingress.hosts.length; i++) {
+            ingress.tls[0].hosts.push(ingress.hosts[i].host);
+          }
+
+          updated = true;
         }
       }
 
@@ -363,7 +385,10 @@ spec:
         'rollup-explorer-backend',
         'l2-rpc',
         'l1-devnet',
-        'scroll-monitor'
+        'scroll-monitor',
+        'tso',
+        'celestia',
+        //'withdrawal-processor' //no ingress in withdrawal-processor  
       ]
 
       for (const chart of chartsToUpdate) {
