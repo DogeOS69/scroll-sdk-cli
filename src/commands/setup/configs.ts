@@ -9,6 +9,7 @@ import * as childProcess from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { DogeConfig } from '../../types/doge-config.js'
+import { loadDogeConfig } from '../../utils/doge-config.js'
 
 export default class SetupConfigs extends Command {
   static override description = 'Generate configuration files and create environment files for services'
@@ -29,7 +30,6 @@ export default class SetupConfigs extends Command {
       required: false,
     }),
     'doge-config': Flags.string({
-      default: '.data/doge-config-testnet.toml',
       description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
       required: false,
     }),
@@ -46,9 +46,22 @@ export default class SetupConfigs extends Command {
     const configsDir = flags['configs-dir']
     this.log(chalk.blue(`Using configuration directory: ${configsDir}`))
 
-    const dogeConfigFile = flags['doge-config']
+    let dogeConfigFile = flags['doge-config']
+    if (!dogeConfigFile) {
+      const files = fs.readdirSync('.data')
+      const configFiles = files.filter(file => file.endsWith('.toml'))
+      const configFileChoices = configFiles.map(file => ({ name: file, value: file }))
+
+      const fileSelection = await select({
+        choices: [
+          ...configFileChoices,
+        ],
+        message: 'Select config file to configure:',
+      })
+      dogeConfigFile = path.resolve('.data/' + fileSelection)
+    }
     this.log(chalk.blue(`Using Dogecoin config file: ${dogeConfigFile}`))
-    this.dogeConfig = toml.parse(fs.readFileSync(dogeConfigFile, 'utf8')) as DogeConfig;
+    this.dogeConfig = await loadDogeConfig(dogeConfigFile);
 
 
     this.log(chalk.blue('Checking L1_CONTRACT_DEPLOYMENT_BLOCK...'))

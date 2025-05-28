@@ -164,7 +164,7 @@ export class DogeConfigCommand extends Command {
     this.log(chalk.blue(`Doge Bridge Address: ${newConfig.defaults!.recipient}`))
 
     await this.generateSetupDefaultsToml(newConfig)
-    await this.runGenerateTestKeys('latest')
+    await this.runGenerateTestKeys()
   }
 
 
@@ -208,10 +208,9 @@ export class DogeConfigCommand extends Command {
     fs.writeFileSync(setupDefaultsPath, toml.stringify(newConfig));
   }
 
-  async runGenerateTestKeys(imageTag: string): Promise<void> {
+  async runGenerateTestKeys(): Promise<void> {
     const docker = new Docker();
-    //TODO: change to dogeos69/dogeos-generate-test-keys:${imageTag}
-    const image = `shuunifra/dogeos-generate-test-keys:${imageTag}`;
+    const image = `docker.io/dogeos69/generate-test-keys:v0.1.1-test`;
     try {
       this.log(chalk.cyan('Pulling Docker Image...'))
       // Pull the image if it doesn't exist locally
