@@ -152,7 +152,18 @@ export default class SetupPrepCharts extends Command {
       return false
     }
   }
-
+  private getBaseUrl(url?: string) {
+    if (!url) return url;
+    try {
+      const urlObj = new URL(url);
+      if (urlObj.pathname.endsWith('/api/v2')) {
+        urlObj.pathname = urlObj.pathname.slice(0, -7);
+      }
+      return urlObj.toString();
+    } catch {
+      return url;
+    }
+  };
   private async processProductionYaml(valuesDir: string): Promise<{ updated: number; skipped: number }> {
     const productionFiles = fs.readdirSync(valuesDir)
       .filter(file => file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
@@ -582,6 +593,7 @@ export default class SetupPrepCharts extends Command {
         }
 
         const todoMappings = {
+          "DOGEOS_WITHDRAWAL_DATABASE_URL": "sqlite:///app/data/withdrawal_processor.db",
           "DOGEOS_WITHDRAWAL_NETWORK_STR": this.withdrawalProcessorConfig["network_str"],
           "DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS": this.withdrawalProcessorConfig["bridge_address"],
           "DOGEOS_WITHDRAWAL_BRIDGE_SCRIPT_HEX": this.withdrawalProcessorConfig["bridge_script_hex"],
@@ -589,12 +601,12 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSAGE_QUEUE_ADDRESS": this.getConfigValue("contractsFile.L2_MESSAGE_QUEUE_ADDR"),
 
           "DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL": this.dogeConfig.rpc?.url,
-          "DOGEOS_WITHDRAWAL_BLOCKBOOK_URL": this.dogeConfig.rpc?.blockbookAPIUrl,
+          "DOGEOS_WITHDRAWAL_BLOCKBOOK_URL": this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl),
           "DOGEOS_WITHDRAWAL_TSO_URL": "http://tso-service:3000",
           "DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__START_BLOCK": "0",
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
-          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL": "http://l2-rpc:8545",
+          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT"),
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.da?.rpcUrl,
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL": this.dogeConfig.da?.tendermintRpcUrl,
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE": this.dogeConfig.da?.daNamespace,
@@ -685,7 +697,7 @@ export default class SetupPrepCharts extends Command {
         }
         const depositProcessorMappings = {
           // 'DOGEOS_DEPOSIT_PROCESSOR_NOWNODES_API_KEY': this.dogeConfig.rpc.apiKey, //this is a secret
-          'DOGEOS_DEPOSIT_PROCESSOR_DOGE_RPC_URL': this.dogeConfig.rpc?.blockbookAPIUrl?.replace('/api/v2', ''),
+          'DOGEOS_DEPOSIT_PROCESSOR_DOGE_RPC_URL': this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl),
           'DOGEOS_DEPOSIT_PROCESSOR_DEPOSIT_DOGE_ADDRESS': this.withdrawalProcessorConfig["bridge_address"],
           'DOGEOS_DEPOSIT_PROCESSOR_MOAT_ADDRESS': this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
           'DOGEOS_DEPOSIT_PROCESSOR_ANVIL_RPC_URL': this.getConfigValue("general.L1_RPC_ENDPOINT"),
@@ -706,26 +718,24 @@ export default class SetupPrepCharts extends Command {
         if (!productionYaml.env) {
           this.error(`${chartName}: env not found in config`);
         }
+        const todoMappings = {
+          "DOGE_NETWORK": this.dogeConfig.network
+        }
 
-        const envVarName = 'DOGE_NETWORK';
-        const configValue = this.dogeConfig.network;
-
-        // Find existing environment variable
-        let envVar = productionYaml.env.find((item: any) => item.name === envVarName);
-
-        if (envVar) {
-          // Update existing value
-          if (envVar.value !== configValue) {
-            const oldValue = envVar.value;
-            envVar.value = configValue;
+        for (const [envKey, newValue] of Object.entries(todoMappings)) {
+          let envVar = productionYaml.env.find((item: any) => item.name === envKey);
+          if (envVar) {
+            if (envVar.value !== newValue) {
+              const oldValue = envVar.value;
+              envVar.value = newValue;
+              updated = true;
+              changes.push({ key: `env.${envKey}`, oldValue, newValue });
+            }
+          } else {
+            productionYaml.env.push({ name: envKey, value: newValue });
             updated = true;
-            changes.push({ key: `env.${envVarName}`, oldValue, newValue: configValue });
+            changes.push({ key: `env.${envKey}`, oldValue: 'undefined', newValue });
           }
-        } else {
-          // Add new environment variable
-          productionYaml.env.push({ name: envVarName, value: configValue });
-          updated = true;
-          changes.push({ key: `env.${envVarName}`, oldValue: 'undefined', newValue: configValue });
         }
       }
 
