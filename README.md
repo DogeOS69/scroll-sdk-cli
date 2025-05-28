@@ -67,6 +67,7 @@ USAGE
   - [`scrollsdk plugins unlink [PLUGIN]`](#scrollsdk-plugins-unlink-plugin)
   - [`scrollsdk plugins update`](#scrollsdk-plugins-update)
   - [`scrollsdk setup configs`](#scrollsdk-setup-configs)
+  - [`scrollsdk setup cubesigner`](#scrollsdk-setup-cubesigner)
   - [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
   - [`scrollsdk setup domains [FILE]`](#scrollsdk-setup-domains-file)
   - [`scrollsdk setup gas-token`](#scrollsdk-setup-gas-token)
@@ -541,6 +542,23 @@ EXAMPLES
 ```
 
 _See code: [src/commands/setup/configs.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.2/src/commands/setup/configs.ts)_
+
+## `scrollsdk setup cubesigner`
+
+Refresh cubesigner session secrets
+
+```
+USAGE
+  $ scrollsdk setup cubesigner
+
+DESCRIPTION
+  Refresh cubesigner session secrets
+
+EXAMPLES
+  $ scrollsdk setup cubesigner
+```
+
+_See code: [src/commands/setup/cubesigner.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.2/src/commands/setup/cubesigner.ts)_
 
 ## `scrollsdk setup db-init`
 
