@@ -7,7 +7,7 @@ export interface DogeConfig {
     chainId?: string
     evmAddress?: string
     recipient?: string
-    dogecoinIndexerStartHeight?: number
+    dogecoinIndexerStartHeight?: string
   }
   frontend?: {
     bridgeUrl?: string
@@ -31,7 +31,7 @@ export interface DogeConfig {
     path: string
   }
   da?: {
-    celestiaIndexerStartBlock: number,
+    celestiaIndexerStartBlock: string,
     rpcUrl: string,
     tendermintRpcUrl: string,
     daNamespace: string,

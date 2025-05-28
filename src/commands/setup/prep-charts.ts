@@ -1,7 +1,7 @@
 import { Command, Flags } from '@oclif/core'
 import * as fs from 'fs'
 import * as path from 'path'
-import { exec } from 'child_process'
+import { ChildProcess, exec } from 'child_process'
 import { promisify } from 'util'
 import * as yaml from 'js-yaml'
 import * as toml from '@iarna/toml'
@@ -630,27 +630,28 @@ export default class SetupPrepCharts extends Command {
           }
         }
 
-        /*
-        tsoSigners:
-          - network: "testnet"
-            uri: "https://sisbgbj3tv.us-east-1.awsapprunner.com" # Or 127.0.0.1:4001 if signers are on the K8s node
-            role: "Correctness"
-          - network: "testnet"
-            uri: "https://scrvfsmdei.us-east-1.awsapprunner.com" # Or 127.0.0.1:4001 if signers are on the K8s node
-            role: "Correctness"
-          - network: "testnet"
-            uri: "https://ishs2sgycn.us-east-1.awsapprunner.com" # Or 127.0.0.1:4001 if signers are on the K8s node
-            role: "Correctness"
-          - network: "testnet"
-            uri: "http://cubesigner-signer-0:3000" 
-            role: "Attestation"
-          - network: "testnet"
-            uri: "http://cubesigner-signer-1:3000" 
-            role: "Attestation"
-          - network: "testnet"
-            uri: "http://cubesigner-signer-2:3000" 
-            role: "Attestation"
-        */
+        const deployType = await select({
+          message: 'where did you deploy the tso signers?',
+          choices: [
+            { name: 'AWS', value: 'AWS' },
+            { name: 'local', value: 'local' }
+          ]
+        });
+
+        for (let i = 0; i < productionYaml.tsoSigners.length; i++) {
+          if (productionYaml.tsoSigners[i].role == 'Correctness') {
+            if (deployType == 'local') {
+              productionYaml.tsoSigners[i].uri = "http://127.0.0.1:4001";
+              updated = true;
+              changes.push({ key: `tsoSigners[${i}].uri`, oldValue: productionYaml.tsoSigners[i].uri, newValue: "http://127.0.0.1:4001" });
+            }
+          }
+          if (productionYaml.tsoSigners[i].network != this.dogeConfig.network) {
+            productionYaml.tsoSigners[i].network = this.dogeConfig.network;
+            updated = true;
+            changes.push({ key: `tsoSigners[${i}].network`, oldValue: productionYaml.tsoSigners[i].network, newValue: this.dogeConfig.network });
+          }
+        }
       }
 
       if (chartName == "cubesigner-signer") {
@@ -685,7 +686,7 @@ export default class SetupPrepCharts extends Command {
           changes.push({ key: `env.${envVarName}`, oldValue: 'undefined', newValue: configValue });
         }
       }
-      if (chartName == "da") {
+      if (chartName == "dogeos-da") {
         //TODO env.CELESTIA_URL
         //env.CELESTIA_NAMESPACE
         const todoMappings = {
@@ -700,7 +701,7 @@ export default class SetupPrepCharts extends Command {
               const oldValue = envVar.value;
               envVar.value = newValue;
               updated = true;
-              changes.push({ key: `env.${envKey}`, oldValue: String(oldValue), newValue: String(newValue) }); 
+              changes.push({ key: `env.${envKey}`, oldValue: String(oldValue), newValue: String(newValue) });
             }
           } else {
             productionYaml.env.push({ name: envKey, value: newValue });
@@ -768,7 +769,8 @@ export default class SetupPrepCharts extends Command {
               L1_MESSAGE_QUEUE_PROXY_ADDR: this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
             },
             dogecoin: {
-              url: "http://dogecoin-testnet:44555"
+              url: "http://dogecoin-testnet:44555",
+              basicAuth: "dXNlcjpwYXNzd29yZA=="
             }
           };
           updated = true;
@@ -777,18 +779,29 @@ export default class SetupPrepCharts extends Command {
             newValue: JSON.stringify(productionYaml.metricsConfig)
           });
         } else {
-          const valuesToCheck = {
-            "l1Network.url": this.getConfigValue("general.L1_RPC_ENDPOINT"),
-            "l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR": this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR"),
-            "dogecoin.url": "http://dogecoin-testnet:44555"
+          if (productionYaml.metricsConfig.l1Network.url != this.getConfigValue("general.L1_RPC_ENDPOINT")) {
+            productionYaml.metricsConfig.l1Network.url = this.getConfigValue("general.L1_RPC_ENDPOINT");
+            updated = true;
+            changes.push({
+              key: `metricsConfig.l1Network.url`, oldValue: productionYaml.metricsConfig.l1Network.url,
+              newValue: this.getConfigValue("general.L1_RPC_ENDPOINT")
+            });
           }
-          for (const [key, newValue] of Object.entries(valuesToCheck)) {
-            const oldValue = productionYaml.metricsConfig[key];
-            if (oldValue !== newValue) {
-              productionYaml.metricsConfig[key] = newValue;
-              updated = true;
-              changes.push({ key, oldValue, newValue });
-            }
+          if (productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR != this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")) {
+            productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR = this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR");
+            updated = true;
+            changes.push({
+              key: `metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR`, oldValue: productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR,
+              newValue: this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
+            });
+          }
+          if (productionYaml.metricsConfig.dogecoin.url != "http://dogecoin-testnet:44555") {
+            productionYaml.metricsConfig.dogecoin.url = "http://dogecoin-testnet:44555";
+            updated = true;
+            changes.push({
+              key: `metricsConfig.dogecoin.url`, oldValue: productionYaml.metricsConfig.dogecoin.url,
+              newValue: "http://dogecoin-testnet:44555"
+            });
           }
         }
       }

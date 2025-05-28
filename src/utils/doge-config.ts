@@ -39,7 +39,7 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
         chainId: '0x221122',
         evmAddress: '0x151a64570e4997739458455ba4ab5A535FD2E306',
         recipient: '',
-        dogecoinIndexerStartHeight: 4000000,
+        dogecoinIndexerStartHeight: '4000000',
       },
       frontend: {},
       network,
@@ -56,7 +56,7 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
         path: network === 'mainnet' ? '.data/doge-wallet-mainnet.json' : '.data/doge-wallet-testnet.json',
       },
       da: {
-        celestiaIndexerStartBlock: network === 'mainnet' ? 0 : 6338800,
+        celestiaIndexerStartBlock: network === 'mainnet' ? '0' : '6338800',
         rpcUrl: network === 'mainnet' ? 'http://celestia-mainnet:26658' : 'http://celestia-testnet-mocha:26658',
         tendermintRpcUrl: '',
         daNamespace: network === 'mainnet' ? '' : '98E6DED48612C0B8E4FA',

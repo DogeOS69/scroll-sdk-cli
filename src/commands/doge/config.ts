@@ -133,13 +133,13 @@ export class DogeConfigCommand extends Command {
       message: `Enter the Celestia Genesis Blob Commitment:`,
     });
 
-    newConfig.da!.celestiaIndexerStartBlock = Number(await input({
+    newConfig.da!.celestiaIndexerStartBlock = String(await input({
       default: String(existingConfig.da?.celestiaIndexerStartBlock || 0),
       message: `Enter the Celestia Indexer Start Block:`,
       validate: (value) => !isNaN(Number(value)) ? true : 'Must be a valid number',
     }));
 
-    newConfig.defaults!.dogecoinIndexerStartHeight = Number(await input({
+    newConfig.defaults!.dogecoinIndexerStartHeight = String(await input({
       default: String(existingConfig.defaults?.dogecoinIndexerStartHeight || 4000000),
       message: `Enter the Dogecoin Indexer Start Height:`,
       validate: (value) => !isNaN(Number(value)) ? true : 'Must be a valid number',

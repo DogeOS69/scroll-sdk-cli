@@ -54,7 +54,7 @@ export default class SetupCubesigner extends Command {
         } catch (error) {
             this.log(chalk.yellow('Not logged in, proceeding with login'))
             const orgId = await input({
-                message: chalk.cyan('Enter your organization ID:'),
+                message: chalk.cyan('Enter your cubesigner organization ID:'),
                 default: 'Org#14b38f70-9f97-4e39-b2ce-a54ce6045b08',
                 validate: (value: string) => {
                     if (!value || value.trim() === '') {
@@ -64,7 +64,7 @@ export default class SetupCubesigner extends Command {
                 }
             })
             const email = await input({
-                message: chalk.cyan('Enter your Account(email):'),
+                message: chalk.cyan('Enter your cubesigner account(email):'),
                 validate: (value: string) => {
                     if (!value || value.trim() === '') {
                         return 'Email cannot be empty'
