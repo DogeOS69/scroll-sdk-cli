@@ -408,9 +408,8 @@ export default class SetupConfigs extends Command {
       envFiles[`${service}-secret.env`] = content
     }
 
-    if (service === 'deposit-processor') {
-      //service deposit-processor DOGEOS_DEPOSIT_PROCESSOR_NOWNODES_API_KEY not from config.toml from doge-config.toml
-      envFiles['deposit-processor-secret.env'] = `DOGEOS_DEPOSIT_PROCESSOR_NOWNODES_API_KEY="${this.dogeConfig.rpc?.apiKey}"\n`
+    if (service === 'dogeos-deposit-processor') {
+      envFiles['dogeos-deposit-processor-secret.env'] = `DOGEOS_DEPOSIT_PROCESSOR_NOWNODES_API_KEY="${this.dogeConfig.rpc?.apiKey}"\n`
     }
 
     if (service === 'dogecoin') {

@@ -69,6 +69,7 @@ export default class SetupPrepCharts extends Command {
   private configData: any = {}
   private contractsConfig: any = {}
   private dogeConfig: DogeConfig = {} as DogeConfig
+  private withdrawalProcessorConfig: toml.JsonMap = {}
 
   private async loadConfigs(flags: any): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
@@ -115,6 +116,12 @@ export default class SetupPrepCharts extends Command {
       this.log(chalk.blue(`Using doge config: ${resolvedPath}`));
     } else {
       this.error(`${resolvedPath} not found. Some values may not be populated correctly.`);
+    }
+
+    if (fs.existsSync("output-withdrawal-processor.toml")) {
+      this.withdrawalProcessorConfig = toml.parse(fs.readFileSync("output-withdrawal-processor.toml", "utf-8"));
+    } else {
+      this.warn('output-withdrawal-processor.toml not found. Some values may not be populated correctly.');
     }
     return;
   }
@@ -574,27 +581,30 @@ export default class SetupPrepCharts extends Command {
           this.error(`${chartName}: env not found in config`);
         }
 
-        const mappings = {
-          "DOGEOS_WITHDRAWAL_NETWORK_STR": "network_str",
-          "DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS": "bridge_address",
-          "DOGEOS_WITHDRAWAL_BRIDGE_SCRIPT_HEX": "bridge_script_hex",
-          //"DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY": "fee_signer_key", // it's a secret
-          //"DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY": "sequencer_signer_key" // it's a secret
-        }
-        if (!fs.existsSync("output-withdrawal-processor.toml")) {
-          this.warn(`${chartName}: output-withdrawal-processor.toml not found, skipping configuration update`);
-          skippedCharts++;
-          continue;
-        }
-        let withdrawalProcessorConfig = toml.parse(fs.readFileSync("output-withdrawal-processor.toml", "utf-8"));
-        for (const [envKey, tomlKey] of Object.entries(mappings)) {
-          const newVal = withdrawalProcessorConfig[tomlKey] as string;
+        const todoMappings = {
+          "DOGEOS_WITHDRAWAL_NETWORK_STR": this.withdrawalProcessorConfig["network_str"],
+          "DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS": this.withdrawalProcessorConfig["bridge_address"],
+          "DOGEOS_WITHDRAWAL_BRIDGE_SCRIPT_HEX": this.withdrawalProcessorConfig["bridge_script_hex"],
+          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
+          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSAGE_QUEUE_ADDRESS": this.getConfigValue("contractsFile.L2_MESSAGE_QUEUE_ADDR"),
 
-          // Find existing environment variable
+          "DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL": this.dogeConfig.rpc?.url,
+          "DOGEOS_WITHDRAWAL_BLOCKBOOK_URL": this.dogeConfig.rpc?.blockbookAPIUrl,
+          "DOGEOS_WITHDRAWAL_TSO_URL": "http://tso-service:3000",
+          "DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
+          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__START_BLOCK": "0",
+          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
+          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL": "http://l2-rpc:8545",
+          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.da?.rpcUrl,
+          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL": this.dogeConfig.da?.tendermintRpcUrl,
+          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE": this.dogeConfig.da?.daNamespace,
+          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__SIGNER_ADDRESS": this.dogeConfig.da?.signerAddress,
+          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__GENESIS_BLOB_COMMITMENT": this.dogeConfig.da?.genesisBlobCommitment
+        }
+
+        for (const [envKey, newVal] of Object.entries(todoMappings)) {
           let envVar = productionYaml.env.find((item: any) => item.name === envKey);
-
           if (envVar) {
-            // Update existing value
             if (envVar.value !== newVal) {
               const oldValue = envVar.value;
               envVar.value = newVal;
@@ -602,32 +612,6 @@ export default class SetupPrepCharts extends Command {
               changes.push({ key: `env.${envKey}`, oldValue, newValue: newVal });
             }
           } else {
-            // Add new environment variable
-            productionYaml.env.push({ name: envKey, value: newVal });
-            updated = true;
-            changes.push({ key: `env.${envKey}`, oldValue: 'undefined', newValue: newVal });
-          }
-        }
-        const indexerMappings = {
-          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSENGER_ADDRESS": "contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR",
-          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSAGE_QUEUE_ADDRESS": "contractsFile.L2_MESSAGE_QUEUE_ADDR"
-        }
-        for (const [envKey, tomlKey] of Object.entries(indexerMappings)) {
-          const newVal = this.getConfigValue(tomlKey);
-
-          // Find existing environment variable
-          let envVar = productionYaml.env.find((item: any) => item.name === envKey);
-
-          if (envVar) {
-            // Update existing value
-            if (envVar.value !== newVal) {
-              const oldValue = envVar.value;
-              envVar.value = newVal;
-              updated = true;
-              changes.push({ key: `env.${envKey}`, oldValue, newValue: newVal });
-            }
-          } else {
-            // Add new environment variable
             productionYaml.env.push({ name: envKey, value: newVal });
             updated = true;
             changes.push({ key: `env.${envKey}`, oldValue: 'undefined', newValue: newVal });
@@ -693,7 +677,7 @@ export default class SetupPrepCharts extends Command {
         //TODO env.CELESTIA_URL
       }
 
-      if (chartName == "deposit-processor" || chartName == "dogeos-deposit-processor") {
+      if (chartName == "dogeos-deposit-processor") {
         // Check and ensure configMaps.env.data exists
         if (!productionYaml.configMaps?.env?.data) {
           this.warn(`${chartName}: configMaps.env.data not found, skipping configuration update`);
@@ -701,7 +685,8 @@ export default class SetupPrepCharts extends Command {
         }
         const depositProcessorMappings = {
           // 'DOGEOS_DEPOSIT_PROCESSOR_NOWNODES_API_KEY': this.dogeConfig.rpc.apiKey, //this is a secret
-          'DOGEOS_DEPOSIT_PROCESSOR_DEPOSIT_DOGE_ADDRESS': this.dogeConfig.defaults?.recipient,
+          'DOGEOS_DEPOSIT_PROCESSOR_DOGE_RPC_URL': this.dogeConfig.rpc?.blockbookAPIUrl?.replace('/api/v2', ''),
+          'DOGEOS_DEPOSIT_PROCESSOR_DEPOSIT_DOGE_ADDRESS': this.withdrawalProcessorConfig["bridge_address"],
           'DOGEOS_DEPOSIT_PROCESSOR_MOAT_ADDRESS': this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
           'DOGEOS_DEPOSIT_PROCESSOR_ANVIL_RPC_URL': this.getConfigValue("general.L1_RPC_ENDPOINT"),
           'DOGEOS_DEPOSIT_PROCESSOR_L1_MESSENGER_ADDRESS': this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
@@ -874,7 +859,7 @@ export default class SetupPrepCharts extends Command {
           REACT_APP_EXTERNAL_DOCS_URI: "https://docs.dogeos.com/en/home",
           REACT_APP_FAUCET_URI: "https://faucet." + this.getConfigValue("ingress.FRONTEND_HOST"),
           REACT_APP_DOGE_NETWORK: this.dogeConfig.network,
-          REACT_APP_DOGE_BRIDGE_ADDRESS: this.dogeConfig.defaults?.recipient,
+          REACT_APP_DOGE_BRIDGE_ADDRESS: this.withdrawalProcessorConfig["bridge_address"],
           REACT_APP_MOAT_ADDRESS: this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
           REACT_APP_L1_STANDARD_ERC20_GATEWAY_PROXY_ADDR: "",
           REACT_APP_L1_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",

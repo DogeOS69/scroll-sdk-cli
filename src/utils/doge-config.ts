@@ -1,9 +1,9 @@
 import * as toml from '@iarna/toml'
-import {confirm, input, select} from '@inquirer/prompts'
+import { confirm, input, select } from '@inquirer/prompts'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import {DogeConfig, Network} from '../types/doge-config.js'
+import { DogeConfig, Network } from '../types/doge-config.js'
 
 export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
   const resolvedPath = path.resolve(configPath)
@@ -22,8 +22,8 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
 
     const network = (await select({
       choices: [
-        {name: 'mainnet', value: 'mainnet' as const},
-        {name: 'testnet', value: 'testnet' as const},
+        { name: 'mainnet', value: 'mainnet' as const },
+        { name: 'testnet', value: 'testnet' as const },
       ],
       default: 'mainnet',
       message: 'Select network for the new default config:',
@@ -38,7 +38,8 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
       defaults: {
         chainId: '0x221122',
         evmAddress: '0x151a64570e4997739458455ba4ab5A535FD2E306',
-        recipient: network === 'mainnet' ? 'DARn34TPXXQZgcVo5nZ7iqvJJRsm2PkjSC' : 'nZVA3ysLh4LsmDog9hg1kkXMhzAT8DbnTT',
+        recipient: '',
+        dogecoinIndexerStartHeight: 4000000,
       },
       frontend: {},
       network,
@@ -52,11 +53,19 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
       wallet: {
         path: network === 'mainnet' ? '.data/doge-wallet-mainnet.json' : '.data/doge-wallet-testnet.json',
       },
+      da: {
+        celestiaIndexerStartBlock: network === 'mainnet' ? 0 : 6338800,
+        rpcUrl: network === 'mainnet' ? 'http://celestia-mainnet:26658' : 'http://celestia-testnet-mocha:26658',
+        tendermintRpcUrl: '',
+        daNamespace: '',
+        signerAddress: '',
+        genesisBlobCommitment: network === 'mainnet' ? '' : 'Pnw/8OJ8jGtL3P8Kihs1IIpouOS6yPbLF40GFJ91XBg=',
+      }
     }
 
     const configDir = path.dirname(resolvedPath)
     if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, {recursive: true})
+      fs.mkdirSync(configDir, { recursive: true })
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -89,8 +98,7 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Config file')) throw error
     throw new Error(
-      `Failed to load or parse Dogecoin config from ${resolvedPath}: ${
-        error instanceof Error ? error.message : String(error)
+      `Failed to load or parse Dogecoin config from ${resolvedPath}: ${error instanceof Error ? error.message : String(error)
       }. Try running 'scrollsdk doge:config' to regenerate it.`,
     )
   }
