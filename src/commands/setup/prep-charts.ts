@@ -461,9 +461,6 @@ export default class SetupPrepCharts extends Command {
             this.log(chalk.yellow(`No value found for ${key}`));
           }
         });
-
-
-
         if (ingressUpdated) {
           updated = true;
         }
@@ -587,7 +584,7 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
-      if (chartName == 'withdrawal-processor') {
+      else if (chartName == 'withdrawal-processor') {
         if (!productionYaml.env) {
           this.error(`${chartName}: env not found in config`);
         }
@@ -641,9 +638,11 @@ export default class SetupPrepCharts extends Command {
         for (let i = 0; i < productionYaml.tsoSigners.length; i++) {
           if (productionYaml.tsoSigners[i].role == 'Correctness') {
             if (deployType == 'local') {
-              productionYaml.tsoSigners[i].uri = "http://127.0.0.1:4001";
-              updated = true;
-              changes.push({ key: `tsoSigners[${i}].uri`, oldValue: productionYaml.tsoSigners[i].uri, newValue: "http://127.0.0.1:4001" });
+              if (productionYaml.tsoSigners[i].uri != "http://127.0.0.1:4001") {
+                productionYaml.tsoSigners[i].uri = "http://127.0.0.1:4001";
+                updated = true;
+                changes.push({ key: `tsoSigners[${i}].uri`, oldValue: productionYaml.tsoSigners[i].uri, newValue: "http://127.0.0.1:4001" });
+              }
             }
           }
           if (productionYaml.tsoSigners[i].network != this.dogeConfig.network) {
@@ -654,7 +653,7 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
-      if (chartName == "cubesigner-signer") {
+      else if (chartName == "cubesigner-signer") {
         if (!productionYaml.env) {
           this.error(`${chartName}: env not found in config`);
         }
@@ -686,7 +685,7 @@ export default class SetupPrepCharts extends Command {
           changes.push({ key: `env.${envVarName}`, oldValue: 'undefined', newValue: configValue });
         }
       }
-      if (chartName == "dogeos-da") {
+      else if (chartName == "dogeos-da") {
         //TODO env.CELESTIA_URL
         //env.CELESTIA_NAMESPACE
         const todoMappings = {
@@ -710,8 +709,7 @@ export default class SetupPrepCharts extends Command {
           }
         }
       }
-
-      if (chartName == "dogeos-deposit-processor") {
+      else if (chartName == "dogeos-deposit-processor") {
         // Check and ensure configMaps.env.data exists
         if (!productionYaml.configMaps?.env?.data) {
           this.warn(`${chartName}: configMaps.env.data not found, skipping configuration update`);
@@ -735,8 +733,7 @@ export default class SetupPrepCharts extends Command {
           }
         }
       }
-
-      if (chartName == "tso-service") {
+      else if (chartName == "tso-service") {
         if (!productionYaml.env) {
           this.error(`${chartName}: env not found in config`);
         }
@@ -760,8 +757,7 @@ export default class SetupPrepCharts extends Command {
           }
         }
       }
-
-      if (chartName == "metrics-exporter") {
+      else if (chartName == "metrics-exporter") {
         if (!productionYaml.metricsConfig) {
           productionYaml.metricsConfig = {
             l1Network: {
@@ -805,44 +801,39 @@ export default class SetupPrepCharts extends Command {
           }
         }
       }
-      if (chartName == "dogecoin") {
+      else if (chartName == "dogecoin") {
         const isTestnet = this.dogeConfig.network === "testnet";
 
-        // Define network-specific configurations (excluding sensitive data)
-        const networkConfig = {
-          rpcPort: isTestnet ? 44555 : 22555,
-          port: isTestnet ? 44556 : 22556,
-          testnet: isTestnet ? 1 : 0
-        };
-
-        // Apply configuration updates
-        for (const [key, expectedValue] of Object.entries(networkConfig)) {
-          const targetPath = key === 'testnet' ? 'dogecoinConf' : 'service';
-          const currentValue = productionYaml[targetPath][key];
-
-          if (currentValue !== expectedValue) {
-            productionYaml[targetPath][key] = expectedValue;
-
-            const fullKey = `${targetPath}.${key}`;
-            changes.push({
-              key: fullKey,
-              oldValue: String(currentValue || "undefined"),
-              newValue: String(expectedValue)
-            });
-            updated = true;
-          }
+        let dogecoinConf_testnet = productionYaml.dogecoinConf?.testnet;
+        const expected_testnet = isTestnet ? 1 : 0;
+        if (dogecoinConf_testnet != expected_testnet) {
+          productionYaml.dogecoinConf.testnet = expected_testnet;
+          updated = true;
+          changes.push({ key: `dogecoinConf.testnet`, oldValue: String(dogecoinConf_testnet), newValue: "1" });
         }
 
-        // Handle rpcPassword - remove from production yaml if exists (should be in secrets)
-        if (productionYaml.rpcPassword !== undefined) {
-          delete productionYaml.rpcPassword;
-          changes.push({
-            key: 'rpcPassword',
-            oldValue: 'password (moved to secrets)',
-            newValue: 'removed (use secrets instead)'
-          });
+        let service_port = productionYaml.service?.port;
+        const expected_service_port = isTestnet ? 44556 : 22556;
+        if (service_port != expected_service_port) {
+          productionYaml.service.port = expected_service_port;
           updated = true;
-          this.log(chalk.yellow(`${chartName}: rpcPassword should be configured via Kubernetes secrets, not in production yaml`));
+          changes.push({ key: `service.port`, oldValue: String(service_port), newValue: String(expected_service_port) });
+        }
+
+        let service_rpcPort = productionYaml.service?.rpcPort;
+        const expected_service_rpcPort = isTestnet ? 44555 : 22555;
+        if (service_rpcPort != expected_service_rpcPort) {
+          productionYaml.service.rpcPort = expected_service_rpcPort;
+          updated = true;
+          changes.push({ key: `service.rpcPort`, oldValue: String(service_rpcPort), newValue: String(expected_service_rpcPort) });
+        }
+
+        let storage_size = productionYaml.storage?.size;
+        const expected_storage_size = isTestnet ? "50Gi" : "250Gi";
+        if (storage_size != expected_storage_size) {
+          productionYaml.storage.size = expected_storage_size;
+          updated = true;
+          changes.push({ key: `storage.size`, oldValue: String(storage_size), newValue: String(expected_storage_size) });
         }
       }
 
