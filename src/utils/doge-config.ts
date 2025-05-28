@@ -45,11 +45,11 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
       network,
       rpc: {
         username: network === 'mainnet' ? '' : 'user',
-        password: network === 'mainnet' ? '' : 'password',
+        password: network === 'mainnet' ? '' : 'password_test',
         apiKey,
         blockbookAPIUrl:
           network === 'mainnet' ? 'https://dogebook.nownodes.io/api/v2' : 'https://dogebook-testnet.nownodes.io/api/v2',
-        url: network === 'mainnet' ? 'https://doge.nownodes.io' : 'https://doge-testnet.nownodes.io',
+        url: network === 'mainnet' ? '' : 'https://testnet.doge.xyz/',
       },
       test: {},
       wallet: {

@@ -388,6 +388,7 @@ spec:
         'scroll-monitor',
         'tso-service',
         'celestia',
+        'dogecoin',
         //'withdrawal-processor' //no ingress in withdrawal-processor  
       ]
 

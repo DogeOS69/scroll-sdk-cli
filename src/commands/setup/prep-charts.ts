@@ -259,6 +259,7 @@ export default class SetupPrepCharts extends Command {
                         'admin-system-dashboard': 'ADMIN_SYSTEM_DASHBOARD_HOST',
                         'tso-service': 'TSO_HOST',
                         'celestia': 'CELESTIA_HOST',
+                        'dogecoin': 'DOGECOIN_RPC_HOST',
                       };
 
                       const alternativeKey = alternativeMappings[chartName];
@@ -597,7 +598,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSAGE_QUEUE_ADDRESS": this.getConfigValue("contractsFile.L2_MESSAGE_QUEUE_ADDR"),
 
-          "DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL": this.dogeConfig.rpc?.url,
+          "DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL": "https://" + this.getConfigValue("ingress.DOGECOIN_RPC_HOST"),
           "DOGEOS_WITHDRAWAL_BLOCKBOOK_URL": this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl),
           "DOGEOS_WITHDRAWAL_TSO_URL": "http://tso-service:3000",
           "DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
@@ -758,6 +759,8 @@ export default class SetupPrepCharts extends Command {
         }
       }
       else if (chartName == "metrics-exporter") {
+        const isTestnet = this.dogeConfig.network == "testnet";
+        const dogecoinUrl = "http://dogecoin:" + (isTestnet ? "44555" : "22555");
         if (!productionYaml.metricsConfig) {
           productionYaml.metricsConfig = {
             l1Network: {
@@ -765,8 +768,8 @@ export default class SetupPrepCharts extends Command {
               L1_MESSAGE_QUEUE_PROXY_ADDR: this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
             },
             dogecoin: {
-              url: "http://dogecoin-testnet:44555",
-              basicAuth: "dXNlcjpwYXNzd29yZA=="
+              url: dogecoinUrl,
+              basicAuth: this.dogeConfig.rpc?.password ? Buffer.from(this.dogeConfig.rpc?.username + ":" + this.dogeConfig.rpc?.password).toString('base64') : ""
             }
           };
           updated = true;
@@ -791,18 +794,28 @@ export default class SetupPrepCharts extends Command {
               newValue: this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
             });
           }
-          if (productionYaml.metricsConfig.dogecoin.url != "http://dogecoin-testnet:44555") {
-            productionYaml.metricsConfig.dogecoin.url = "http://dogecoin-testnet:44555";
+          if (productionYaml.metricsConfig.dogecoin.url != dogecoinUrl) {
+            productionYaml.metricsConfig.dogecoin.url = dogecoinUrl;
             updated = true;
             changes.push({
               key: `metricsConfig.dogecoin.url`, oldValue: productionYaml.metricsConfig.dogecoin.url,
-              newValue: "http://dogecoin-testnet:44555"
+              newValue: dogecoinUrl
+            });
+          }
+
+          const expected_basicAuth = this.dogeConfig.rpc?.password ? Buffer.from(this.dogeConfig.rpc?.username + ":" + this.dogeConfig.rpc?.password).toString('base64') : "";
+          if (productionYaml.metricsConfig.dogecoin.basicAuth != expected_basicAuth) {
+            productionYaml.metricsConfig.dogecoin.basicAuth = expected_basicAuth;
+            updated = true;
+            changes.push({
+              key: `metricsConfig.dogecoin.basicAuth`, oldValue: productionYaml.metricsConfig.dogecoin.basicAuth,
+              newValue: expected_basicAuth
             });
           }
         }
       }
       else if (chartName == "dogecoin") {
-        const isTestnet = this.dogeConfig.network === "testnet";
+        const isTestnet = this.dogeConfig.network == "testnet";
 
         let dogecoinConf_testnet = productionYaml.dogecoinConf?.testnet;
         const expected_testnet = isTestnet ? 1 : 0;
@@ -834,6 +847,20 @@ export default class SetupPrepCharts extends Command {
           productionYaml.storage.size = expected_storage_size;
           updated = true;
           changes.push({ key: `storage.size`, oldValue: String(storage_size), newValue: String(expected_storage_size) });
+        }
+
+        let rpcPassword = productionYaml.rpcPassword;
+        if (rpcPassword != this.dogeConfig.rpc?.password) {
+          productionYaml.rpcPassword = this.dogeConfig.rpc?.password;
+          updated = true;
+          changes.push({ key: `rpcPassword`, oldValue: String(rpcPassword), newValue: String(this.dogeConfig.rpc?.password) });
+        }
+
+        let rpcUser = productionYaml.dogecoinConf?.rpcuser;
+        if (rpcUser != this.dogeConfig.rpc?.username) {
+          productionYaml.dogecoinConf.rpcuser = this.dogeConfig.rpc?.username;
+          updated = true;
+          changes.push({ key: `dogecoinConf.rpcuser`, oldValue: String(rpcUser), newValue: String(productionYaml.dogecoinConf.rpcuser) });
         }
       }
 
