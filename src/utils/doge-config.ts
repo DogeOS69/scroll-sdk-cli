@@ -44,6 +44,8 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
       frontend: {},
       network,
       rpc: {
+        username: network === 'mainnet' ? '' : 'user',
+        password: network === 'mainnet' ? '' : 'password',
         apiKey,
         blockbookAPIUrl:
           network === 'mainnet' ? 'https://dogebook.nownodes.io/api/v2' : 'https://dogebook-testnet.nownodes.io/api/v2',
@@ -57,8 +59,8 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
         celestiaIndexerStartBlock: network === 'mainnet' ? 0 : 6338800,
         rpcUrl: network === 'mainnet' ? 'http://celestia-mainnet:26658' : 'http://celestia-testnet-mocha:26658',
         tendermintRpcUrl: '',
-        daNamespace: '',
-        signerAddress: '',
+        daNamespace: network === 'mainnet' ? '' : '98E6DED48612C0B8E4FA',
+        signerAddress: network === 'mainnet' ? '' : 'celestia1ps9llfyvul24z2l74m9x7xgs7gcc2taplan5r5',
         genesisBlobCommitment: network === 'mainnet' ? '' : 'Pnw/8OJ8jGtL3P8Kihs1IIpouOS6yPbLF40GFJ91XBg=',
       }
     }

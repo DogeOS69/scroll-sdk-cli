@@ -687,6 +687,27 @@ export default class SetupPrepCharts extends Command {
       }
       if (chartName == "da") {
         //TODO env.CELESTIA_URL
+        //env.CELESTIA_NAMESPACE
+        const todoMappings = {
+          "CELESTIA_URL": this.dogeConfig.da?.rpcUrl,
+          "CELESTIA_NAMESPACE": this.dogeConfig.da?.daNamespace
+        }
+
+        for (const [envKey, newValue] of Object.entries(todoMappings)) {
+          let envVar = productionYaml.env.find((item: any) => item.name === envKey);
+          if (envVar) {
+            if (envVar.value !== newValue) {
+              const oldValue = envVar.value;
+              envVar.value = newValue;
+              updated = true;
+              changes.push({ key: `env.${envKey}`, oldValue: String(oldValue), newValue: String(newValue) }); 
+            }
+          } else {
+            productionYaml.env.push({ name: envKey, value: newValue });
+            updated = true;
+            changes.push({ key: `env.${envKey}`, oldValue: 'undefined', newValue: String(newValue) });
+          }
+        }
       }
 
       if (chartName == "dogeos-deposit-processor") {
@@ -696,7 +717,7 @@ export default class SetupPrepCharts extends Command {
           continue;
         }
         const depositProcessorMappings = {
-          // 'DOGEOS_DEPOSIT_PROCESSOR_NOWNODES_API_KEY': this.dogeConfig.rpc.apiKey, //this is a secret
+          'DOGEOS_DEPOSIT_PROCESSOR_NOWNODES_API_KEY': this.dogeConfig.rpc?.apiKey, //TODO this is a secret
           'DOGEOS_DEPOSIT_PROCESSOR_DOGE_RPC_URL': this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl),
           'DOGEOS_DEPOSIT_PROCESSOR_DEPOSIT_DOGE_ADDRESS': this.withdrawalProcessorConfig["bridge_address"],
           'DOGEOS_DEPOSIT_PROCESSOR_MOAT_ADDRESS': this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),

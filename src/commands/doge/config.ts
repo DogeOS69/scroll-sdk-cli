@@ -89,8 +89,8 @@ export class DogeConfigCommand extends Command {
     })
 
     newConfig.defaults!.recipient = await input({
-      default: existingConfig.defaults?.recipient || '',
-      message: `Enter the Doge Bridge Address:`,
+      default: existingConfig.defaults?.recipient || 'nmNf4f5kyvCFrfyUBoQU3TKN3Dyc5kcMoH',
+      message: `Enter the Doge recipient Address:`,
       validate: (value) =>
         /^(D[1-9A-HJ-NP-Za-km-z]{33}|[mn][1-9A-HJ-NP-Za-km-z]{33})$/.test(value)
           ? true
@@ -196,43 +196,12 @@ export class DogeConfigCommand extends Command {
     });
     newConfig.seed_string = seedString;
 
-    // const rpcUrl = await input({
-    //   message: 'Enter Dogecoin RPC URL:',
-    //   default: String(newConfig.dogecoin_rpc_url || (network === 'testnet' ? 'https://testnet.doge.xyz' : 'https://doge.xyz')),
-    //   validate: (value) => value.startsWith('http') ? true : 'URL must start with http or https'
-    // });
-    //newConfig.dogecoin_rpc_url = newDogeConfig.rpc?.url || '';
-
-    // const rpcUser = await input({
-    //   message: 'Enter Dogecoin RPC username:',
-    //   default: String(newConfig.dogecoin_rpc_user || 'user')
-    // });
-    //newConfig.dogecoin_rpc_user = newDogeConfig.rpc?.username || '';
-
-    // const rpcPass = await input({
-    //   message: 'Enter Dogecoin RPC password:',
-    //   default: String(newConfig.dogecoin_rpc_pass || 'password_test')
-    // });
-    //newConfig.dogecoin_rpc_pass = newDogeConfig.rpc?.password || '';
-
-    // const blockbookUrl = await input({
-    //   message: 'Enter Blockbook API URL (optional):',
-    //   default: String(newConfig.dogecoin_blockbook_url || (network === 'testnet' ? 'https://dogebook-testnet.nownodes.io' : 'https://dogebook.nownodes.io'))
-    // });
+    newConfig.dogecoin_rpc_url = 'https://testnet.doge.xyz'; //TODO: change to newDogeConfig.rpc?.url
+    newConfig.dogecoin_rpc_user = 'user';                   //TODO newDogeConfig.rpc?.username || '';
+    newConfig.dogecoin_rpc_pass = 'password_test';          //TODO newDogeConfig.rpc?.password || '';
     const blockbookUrl = newDogeConfig.rpc?.blockbookAPIUrl?.replace('/api/v2', '') || '';
     newConfig.dogecoin_blockbook_url = blockbookUrl;
-
-    // const apiKey = await input({
-    //   message: 'Enter Blockbook API key (if required):',
-    //   default: String(newConfig.dogecoin_blockbook_api_key || '')
-    // });
     newConfig.dogecoin_blockbook_api_key = newDogeConfig.rpc?.apiKey || '';
-
-    // const ethAddress = await input({
-    //   message: 'Enter Ethereum recipient address (20 bytes hex):',
-    //   default: String(newConfig.deposit_eth_recipient_address_hex || "null"),
-    //   validate: (value) => /^0x[a-fA-F0-9]{40}$/.test(value) ? true : 'Must be a valid 20-byte hex address starting with 0x'
-    // });
     newConfig.deposit_eth_recipient_address_hex = newDogeConfig.defaults?.evmAddress || '';
 
     //write to crates/test_utils/config/setup_defaults.toml
@@ -241,7 +210,8 @@ export class DogeConfigCommand extends Command {
 
   async runGenerateTestKeys(imageTag: string): Promise<void> {
     const docker = new Docker();
-    const image = `ghcr.io/dogeos69/dogeos-core/generate-test-keys:${imageTag}`;
+    //TODO: change to dogeos69/dogeos-generate-test-keys:${imageTag}
+    const image = `shuunifra/dogeos-generate-test-keys:${imageTag}`;
     try {
       this.log(chalk.cyan('Pulling Docker Image...'))
       // Pull the image if it doesn't exist locally
@@ -262,7 +232,7 @@ export class DogeConfigCommand extends Command {
       const container = await docker.createContainer({
         Cmd: [], // Add any command if needed
         HostConfig: {
-          Binds: [`${process.cwd()}:/contracts/volume`],
+          Binds: [`${process.cwd()}:/app`],
         },
         Image: image,
       })
