@@ -130,7 +130,7 @@ export default class SetupConfigs extends Command {
       'l2-sequencer',
       'rollup-node',
       'dogecoin',
-      'deposit-processor',
+      'dogeos-deposit-processor',
       'withdrawal-processor',
       'metrics-exporter',
     ]
