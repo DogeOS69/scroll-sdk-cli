@@ -746,7 +746,7 @@ export default class SetupPrepCharts extends Command {
           continue;
         }
         const depositProcessorMappings = {
-          'DOGEOS_DEPOSIT_PROCESSOR_NOWNODES_API_KEY': this.dogeConfig.rpc?.apiKey, //TODO this is a secret
+          //'DOGEOS_DEPOSIT_PROCESSOR_NOWNODES_API_KEY': this.dogeConfig.rpc?.apiKey, //TODO this is a secret
           'DOGEOS_DEPOSIT_PROCESSOR_DOGE_RPC_URL': this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl),
           'DOGEOS_DEPOSIT_PROCESSOR_DEPOSIT_DOGE_ADDRESS': this.withdrawalProcessorConfig["bridge_address"],
           'DOGEOS_DEPOSIT_PROCESSOR_MOAT_ADDRESS': this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
