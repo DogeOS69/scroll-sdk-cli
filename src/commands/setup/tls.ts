@@ -34,6 +34,44 @@ export default class SetupTls extends Command {
   private debugMode: boolean = false
   private valuesDir: string = 'values'
 
+  // Handle celestia and dogecoin TLS processing
+  private processStandardTls(yamlContent: any, chart: string, issuer: string): boolean {
+    let ingress = yamlContent.ingress;
+    let updated = false;
+
+    // Add cert-manager annotation
+    if (!ingress.annotations) {
+      ingress.annotations = {};
+    }
+    if (ingress.annotations['cert-manager.io/cluster-issuer'] !== issuer) {
+      ingress.annotations['cert-manager.io/cluster-issuer'] = issuer;
+      updated = true;
+    }
+
+    // Handle TLS configuration
+    if (ingress.tls && ingress.tls.length > 0) {
+      ingress.tls.forEach((tlsConfig: any) => {
+        for (let i = 0; i < ingress.hosts.length; i++) {
+          if (tlsConfig.hosts[i] != ingress.hosts[i].host) {
+            tlsConfig.hosts[i] = ingress.hosts[i].host;
+            updated = true;
+          }
+        }
+      });
+    } else {
+      ingress.tls = [{
+        secretName: `${chart}-tls`,
+        hosts: []
+      }];
+      for (let i = 0; i < ingress.hosts.length; i++) {
+        ingress.tls[0].hosts.push(ingress.hosts[i].host);
+      }
+      updated = true;
+    }
+
+    return updated;
+  }
+
   private async checkClusterIssuer(): Promise<boolean> {
     try {
       const { stdout } = await execAsync('kubectl get clusterissuer -o jsonpath="{.items[*].metadata.name}"')
@@ -220,26 +258,18 @@ spec:
           }
         }
       } else if (chart == "celestia") {
-        let ingress = yamlContent.ingress;
-        if (ingress.tls && ingress.tls.length > 0) {
-          ingress.tls.forEach((tlsConfig: any) => {
-            for (let i = 0; i < ingress.hosts.length; i++) {
-              if (tlsConfig.hosts[i] != ingress.hosts[i].host) {
-                tlsConfig.hosts[i] = ingress.hosts[i].host;
-                updated = true;
-              }
-            }
-          })
-        } else {
-          ingress.tls = [{
-            secretName: "celestia-tls",
-            hosts: []
-          }];
-          for (let i = 0; i < ingress.hosts.length; i++) {
-            ingress.tls[0].hosts.push(ingress.hosts[i].host);
+        if (yamlContent.ingress) {
+          const celestiaUpdated = this.processStandardTls(yamlContent, chart, issuer);
+          if (celestiaUpdated) {
+            updated = true;
           }
-
-          updated = true;
+        }
+      } else if (chart == "dogecoin") {
+        if (yamlContent.ingress) {
+          const dogecoinUpdated = this.processStandardTls(yamlContent, chart, issuer);
+          if (dogecoinUpdated) {
+            updated = true;
+          }
         }
       }
 

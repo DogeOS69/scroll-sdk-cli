@@ -329,7 +329,7 @@ export default class SetupDomains extends Command {
         ...(usesAnvil ? {L1_DEVNET_HOST: `l1-devnet.${urlEnding}`, L1_EXPLORER_HOST: `l1-explorer.${urlEnding}`} : {}),
         TSO_HOST: `tso.${urlEnding}`,
         CELESTIA_HOST: `celestia.${urlEnding}`,
-        DOGECOIN_RPC_HOST: `dogecoin.${urlEnding}`,
+        DOGECOIN_HOST: `dogecoin.${urlEnding}`,
       }
     } else {
       protocol = await select({
@@ -386,9 +386,9 @@ export default class SetupDomains extends Command {
           default: existingConfig.ingress?.CELESTIA_HOST || 'celestia.scrollsdk',
           message: 'Enter CELESTIA_HOST:',
         }),
-        DOGECOIN_RPC_HOST: await input({
-          default: existingConfig.ingress?.DOGECOIN_RPC_HOST || 'dogecoin.scrollsdk',
-          message: 'Enter DOGECOIN_RPC_HOST:',
+        DOGECOIN_HOST: await input({
+          default: existingConfig.ingress?.DOGECOIN_HOST || 'dogecoin.scrollsdk',
+          message: 'Enter DOGECOIN_HOST:',
         }),
       }
 

@@ -63,6 +63,7 @@ export default class SetupPrepCharts extends Command {
     'L1_EXPLORER_HOST': 'ingress.L1_EXPLORER_HOST',
     'RPC_GATEWAY_WS_HOST': 'ingress.RPC_GATEWAY_WS_HOST',
     'GRAFANA_HOST': 'ingress.GRAFANA_HOST',
+    
     // Add more mappings as needed
   }
 
@@ -70,6 +71,49 @@ export default class SetupPrepCharts extends Command {
   private contractsConfig: any = {}
   private dogeConfig: DogeConfig = {} as DogeConfig
   private withdrawalProcessorConfig: toml.JsonMap = {}
+
+  // Generic ingress processing function
+  private processIngressHosts(
+    ingressConfig: any,
+    hostConfigValue: string,
+    changes: Array<{ key: string; oldValue: string; newValue: string }>,
+    keyPrefix: string = 'ingress'
+  ): boolean {
+    let ingressUpdated = false;
+
+    if (ingressConfig && typeof ingressConfig === 'object' && 'hosts' in ingressConfig) {
+      const hosts = ingressConfig.hosts as Array<{ host: string; paths?: any[] }>;
+      if (Array.isArray(hosts)) {
+        for (let i = 0; i < hosts.length; i++) {
+          if (typeof hosts[i] === 'object' && 'host' in hosts[i]) {
+            if (hostConfigValue && hostConfigValue !== hosts[i].host) {
+              changes.push({ 
+                key: `${keyPrefix}.hosts[${i}].host`, 
+                oldValue: hosts[i].host, 
+                newValue: hostConfigValue 
+              });
+              hosts[i].host = hostConfigValue;
+              ingressUpdated = true;
+            }
+          }
+        }
+      }
+
+      // Update TLS section if it exists and ingress was updated
+      if (ingressUpdated && ingressConfig.tls) {
+        const tlsEntries = ingressConfig.tls as Array<{ hosts: string[] }>;
+        if (Array.isArray(tlsEntries)) {
+          tlsEntries.forEach((tlsEntry) => {
+            if (Array.isArray(tlsEntry.hosts)) {
+              tlsEntry.hosts = hosts.map((host) => host.host);
+            }
+          });
+        }
+      }
+    }
+
+    return ingressUpdated;
+  }
 
   private async loadConfigs(flags: any): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
@@ -259,7 +303,7 @@ export default class SetupPrepCharts extends Command {
                         'admin-system-dashboard': 'ADMIN_SYSTEM_DASHBOARD_HOST',
                         'tso-service': 'TSO_HOST',
                         'celestia': 'CELESTIA_HOST',
-                        'dogecoin': 'DOGECOIN_RPC_HOST',
+                        'dogecoin': 'DOGECOIN_HOST',
                       };
 
                       const alternativeKey = alternativeMappings[chartName];
@@ -561,23 +605,8 @@ export default class SetupPrepCharts extends Command {
         } else {
           let ingressValue = productionYaml.ingress;
           ingressValue.enabled = true;
-          if (ingressValue && typeof ingressValue === 'object' && 'hosts' in ingressValue) {
-            const hosts = ingressValue.hosts as Array<{ host: string; paths: any[] }>;
-            if (Array.isArray(hosts)) {
-              for (let i = 0; i < hosts.length; i++) {
-                if (typeof hosts[i] === 'object' && 'host' in hosts[i]) {
-                  let configValue = this.getConfigValue('ingress.CELESTIA_HOST');
-                  if (configValue && configValue !== hosts[i].host) {
-                    changes.push({ key: `ingress.hosts[${i}].host`, oldValue: hosts[i].host, newValue: configValue });
-                    hosts[i].host = configValue;
-                    ingressUpdated = true;
-                  }
-                }
-              }
-            } else {
-              this.error(`${chartName}: ingress.hosts not found in config`);
-            }
-          }
+          const configValue = this.getConfigValue('ingress.CELESTIA_HOST');
+          ingressUpdated = this.processIngressHosts(ingressValue, configValue, changes);
         }
 
         if (ingressUpdated) {
@@ -598,7 +627,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSAGE_QUEUE_ADDRESS": this.getConfigValue("contractsFile.L2_MESSAGE_QUEUE_ADDR"),
 
-          "DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL": "https://" + this.getConfigValue("ingress.DOGECOIN_RPC_HOST"),
+          "DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL": "https://" + this.getConfigValue("ingress.DOGECOIN_HOST"),
           "DOGEOS_WITHDRAWAL_BLOCKBOOK_URL": this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl),
           "DOGEOS_WITHDRAWAL_TSO_URL": "http://tso-service:3000",
           "DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
@@ -861,6 +890,17 @@ export default class SetupPrepCharts extends Command {
           productionYaml.dogecoinConf.rpcuser = this.dogeConfig.rpc?.username;
           updated = true;
           changes.push({ key: `dogecoinConf.rpcuser`, oldValue: String(rpcUser), newValue: String(productionYaml.dogecoinConf.rpcuser) });
+        }
+
+        // Process dogecoin ingress (similar to celestia)
+        let ingressUpdated = false;
+        if (productionYaml.ingress) {
+          const configValue = this.getConfigValue('ingress.DOGECOIN_HOST');
+          ingressUpdated = this.processIngressHosts(productionYaml.ingress, configValue, changes);
+        }
+
+        if (ingressUpdated) {
+          updated = true;
         }
       }
 
