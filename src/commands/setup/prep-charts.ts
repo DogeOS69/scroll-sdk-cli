@@ -70,7 +70,7 @@ export default class SetupPrepCharts extends Command {
   private contractsConfig: any = {}
   private dogeConfig: DogeConfig = {} as DogeConfig
   private withdrawalProcessorConfig: toml.JsonMap = {}
-
+  private deployType: string = 'local'
   // Generic ingress processing function
   private processIngressHosts(
     ingressConfig: any,
@@ -152,6 +152,14 @@ export default class SetupPrepCharts extends Command {
     else {
       resolvedPath = path.resolve(flags.config)
     }
+
+    this.deployType = await select({
+      message: 'where did you deploy the tso signers?',
+      choices: [
+        { name: 'AWS', value: 'AWS' },
+        { name: 'local', value: 'local' }
+      ]
+    });
 
     if (fs.existsSync(resolvedPath)) {
       const dogeConfigContent = fs.readFileSync(resolvedPath, 'utf-8')
@@ -656,18 +664,9 @@ export default class SetupPrepCharts extends Command {
           }
         }
 
-        const deployType = await select({
-          message: 'where did you deploy the tso signers?',
-          choices: [
-            { name: 'AWS', value: 'AWS' },
-            { name: 'local', value: 'local' }
-          ]
-        });
-
-
         for (let i = 0; i < productionYaml.tsoSigners.length; i++) {
           if (productionYaml.tsoSigners[i].role == 'Correctness') {
-            if (deployType == 'local') {
+            if (this.deployType == 'local') {
               if (productionYaml.tsoSigners[i].uri != "http://127.0.0.1:4001") {
                 productionYaml.tsoSigners[i].uri = "http://127.0.0.1:4001";
                 updated = true;
@@ -833,7 +832,7 @@ export default class SetupPrepCharts extends Command {
               newValue: dogecoinUrl
             });
           }
-          
+
           if (productionYaml.metricsConfig.dogecoin.basicAuth != expected_basicAuth) {
             productionYaml.metricsConfig.dogecoin.basicAuth = expected_basicAuth;
             updated = true;
