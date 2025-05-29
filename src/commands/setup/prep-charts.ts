@@ -63,7 +63,7 @@ export default class SetupPrepCharts extends Command {
     'L1_EXPLORER_HOST': 'ingress.L1_EXPLORER_HOST',
     'RPC_GATEWAY_WS_HOST': 'ingress.RPC_GATEWAY_WS_HOST',
     'GRAFANA_HOST': 'ingress.GRAFANA_HOST',
-    
+
     // Add more mappings as needed
   }
 
@@ -87,10 +87,10 @@ export default class SetupPrepCharts extends Command {
         for (let i = 0; i < hosts.length; i++) {
           if (typeof hosts[i] === 'object' && 'host' in hosts[i]) {
             if (hostConfigValue && hostConfigValue !== hosts[i].host) {
-              changes.push({ 
-                key: `${keyPrefix}.hosts[${i}].host`, 
-                oldValue: hosts[i].host, 
-                newValue: hostConfigValue 
+              changes.push({
+                key: `${keyPrefix}.hosts[${i}].host`,
+                oldValue: hosts[i].host,
+                newValue: hostConfigValue
               });
               hosts[i].host = hostConfigValue;
               ingressUpdated = true;
@@ -664,6 +664,7 @@ export default class SetupPrepCharts extends Command {
             { name: 'local', value: 'local' }
           ]
         });
+        
 
         for (let i = 0; i < productionYaml.tsoSigners.length; i++) {
           if (productionYaml.tsoSigners[i].role == 'Correctness') {
@@ -794,7 +795,7 @@ export default class SetupPrepCharts extends Command {
           productionYaml.metricsConfig = {
             l1Network: {
               url: this.getConfigValue("general.L1_RPC_ENDPOINT"),
-              L1_MESSAGE_QUEUE_PROXY_ADDR: this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
+              L1_MESSAGE_QUEUE_PROXY_ADDR: this.getConfigValue("contractsFile.L1_MESSAGE_QUEUE_V2_PROXY_ADDR")
             },
             dogecoin: {
               url: dogecoinUrl,
