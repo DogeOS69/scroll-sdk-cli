@@ -569,10 +569,10 @@ export default class SetupPushSecrets extends Command {
               let updatedKey = ''
               if (/^l2-sequencer-secret-\d+-env$/.test(secretName)) {
                 updatedKey = prefixName ? `${prefixName}/l2-sequencer-secret-env` : 'l2-sequencer-secret-env'
-              } else if (secretName === 'cubesigner-signer-0-env') {
-                updatedKey = prefixName ? `${prefixName}/cubesigner-signer-0-env` : 'cubesigner-signer-0-env'
-              } else if (secretName === 'cubesigner-signer-0-session') {
-                updatedKey = prefixName ? `${prefixName}/cubesigner-signer-0-session` : 'cubesigner-signer-0-session'
+              } else if (/^cubesigner-signer-\d+-env$/.test(secretName)) {
+                updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
+              } else if (/^cubesigner-signer-\d+-session$/.test(secretName)) {
+                updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
                 if (data.secretKey === 'session.json') {
                   data.remoteRef.property = 'session.json'
                   updated = true

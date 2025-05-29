@@ -3,6 +3,7 @@ import { exec, spawn } from 'child_process'
 import { promisify } from 'util'
 import { input } from '@inquirer/prompts'
 import chalk from 'chalk'
+import * as fs from 'fs'
 const execAsync = promisify(exec)
 
 export default class SetupCubesigner extends Command {
@@ -14,6 +15,7 @@ export default class SetupCubesigner extends Command {
 
     public async run(): Promise<void> {
         await this.runCsCommand()
+        
     }
 
     private executeInteractiveCommand(command: string, args: string[]): Promise<boolean> {
@@ -100,6 +102,11 @@ export default class SetupCubesigner extends Command {
                 const assignRoleCommand = `cs session create --role-id=${role.role_id} > ./secrets/cubesigner-signer-${i}-session.json`
                 this.log(chalk.yellow(`Executing: ${assignRoleCommand}`))
                 await execAsync(assignRoleCommand)
+
+                let secret = `DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID="${role.keys[0].key_id}"\n`
+                let envFile = `./secrets/cubesigner-signer-${i}.env`
+                fs.writeFileSync(envFile, secret)
+                this.log(chalk.green(`write ${envFile} success`))
             }
         } catch (error) {
             this.error(chalk.red(`Role assignment failed: ${error}`))
