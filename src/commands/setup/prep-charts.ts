@@ -664,7 +664,7 @@ export default class SetupPrepCharts extends Command {
             { name: 'local', value: 'local' }
           ]
         });
-        
+
 
         for (let i = 0; i < productionYaml.tsoSigners.length; i++) {
           if (productionYaml.tsoSigners[i].role == 'Correctness') {
@@ -790,7 +790,7 @@ export default class SetupPrepCharts extends Command {
       }
       else if (chartName == "metrics-exporter") {
         const isTestnet = this.dogeConfig.network == "testnet";
-        const dogecoinUrl = "http://dogecoin:" + (isTestnet ? "44555" : "22555");
+        const dogecoinUrl = "http://dogecoin-" + (isTestnet ? "testnet:44555" : "mainnet:22555");
         if (!productionYaml.metricsConfig) {
           productionYaml.metricsConfig = {
             l1Network: {

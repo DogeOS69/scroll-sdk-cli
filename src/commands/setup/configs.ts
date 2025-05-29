@@ -423,6 +423,9 @@ export default class SetupConfigs extends Command {
 
     if (service === 'dogeos-deposit-processor') {
       envFiles['dogeos-deposit-processor-secret.env'] = `DOGEOS_DEPOSIT_PROCESSOR_NOWNODES_API_KEY="${this.dogeConfig.rpc?.apiKey}"\n`
+      //not used for now
+      // envFiles['dogeos-deposit-processor-secret.env']+=`username="${this.dogeConfig.rpc?.username}"\n`
+      // envFiles['dogeos-deposit-processor-secret.env']+=`password="${this.dogeConfig.rpc?.password}"\n`
     }
 
     if (service === 'dogecoin') {
