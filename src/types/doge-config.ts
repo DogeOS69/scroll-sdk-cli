@@ -32,7 +32,7 @@ export interface DogeConfig {
   }
   da?: {
     celestiaIndexerStartBlock: string,
-    rpcUrl: string,
+    //rpcUrl: string,
     tendermintRpcUrl: string,
     daNamespace: string,
     signerAddress: string,

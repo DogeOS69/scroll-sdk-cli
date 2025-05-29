@@ -112,10 +112,10 @@ export class DogeConfigCommand extends Command {
       message: `Enter the dogecoin RPC password of user (for ${existingConfig.network} network):`,
     });
 
-    newConfig.da!.rpcUrl = await input({
-      default: existingConfig.da?.rpcUrl,
-      message: `Enter the Celestia RPC URL:`,
-    });
+    // newConfig.da!.rpcUrl = await input({
+    //   default: existingConfig.da?.rpcUrl,
+    //   message: `Enter the Celestia RPC URL:`,
+    // });
     newConfig.da!.tendermintRpcUrl = await input({
       default: existingConfig.da?.tendermintRpcUrl,
       message: `Enter the Celestia Tendermint RPC URL:`,

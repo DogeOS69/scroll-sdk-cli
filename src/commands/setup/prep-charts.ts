@@ -634,7 +634,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__START_BLOCK": "0",
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT"),
-          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.da?.rpcUrl,
+          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "http://celestia-testnet-mocha:26658",
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL": this.dogeConfig.da?.tendermintRpcUrl,
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE": this.dogeConfig.da?.daNamespace,
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__SIGNER_ADDRESS": this.dogeConfig.da?.signerAddress,
@@ -717,10 +717,10 @@ export default class SetupPrepCharts extends Command {
         }
       }
       else if (chartName == "dogeos-da") {
-        //TODO env.CELESTIA_URL
-        //env.CELESTIA_NAMESPACE
         const todoMappings = {
-          "CELESTIA_URL": this.dogeConfig.da?.rpcUrl,
+          //TODO what if mainnet ?
+          "CELESTIA_URL": this.dogeConfig.network == "mainnet" ? "" : "celestia-testnet-mocha:26658",
+
           "CELESTIA_NAMESPACE": this.dogeConfig.da?.daNamespace
         }
 
