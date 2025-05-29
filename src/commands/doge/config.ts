@@ -1,13 +1,11 @@
 import * as toml from '@iarna/toml'
-import { confirm, input, select } from '@inquirer/prompts'
+import { input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
-import Docker from 'dockerode'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-
-import type { DogeConfig, Network } from '../../types/doge-config.js'
+import type { DogeConfig } from '../../types/doge-config.js'
 import { loadDogeConfig } from '../../utils/doge-config.js'
 
 export class DogeConfigCommand extends Command {
@@ -25,6 +23,8 @@ export class DogeConfigCommand extends Command {
       description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
     }),
   }
+
+
 
   async run(): Promise<void> {
     const { flags } = await this.parse(DogeConfigCommand)
@@ -102,6 +102,11 @@ export class DogeConfigCommand extends Command {
       message: `Enter the wallet file path:`,
     })
 
+    newConfig.rpc!.url = await input({
+      default: existingConfig.rpc?.url,
+      message: `Enter the dogecoin RPC URL:`,
+    });
+
     newConfig.rpc!.username = await input({
       default: existingConfig.rpc?.username,
       message: `Enter the dogecoin RPC user:`,
@@ -112,10 +117,6 @@ export class DogeConfigCommand extends Command {
       message: `Enter the dogecoin RPC password of user (for ${existingConfig.network} network):`,
     });
 
-    // newConfig.da!.rpcUrl = await input({
-    //   default: existingConfig.da?.rpcUrl,
-    //   message: `Enter the Celestia RPC URL:`,
-    // });
     newConfig.da!.tendermintRpcUrl = await input({
       default: existingConfig.da?.tendermintRpcUrl,
       message: `Enter the Celestia Tendermint RPC URL:`,
@@ -164,7 +165,7 @@ export class DogeConfigCommand extends Command {
     this.log(chalk.blue(`Doge Bridge Address: ${newConfig.defaults!.recipient}`))
 
     await this.generateSetupDefaultsToml(newConfig)
-    await this.runGenerateTestKeys()
+    // await this.runGenerateTestKeys()
   }
 
 
@@ -196,9 +197,9 @@ export class DogeConfigCommand extends Command {
     });
     newConfig.seed_string = seedString;
 
-    newConfig.dogecoin_rpc_url = 'https://testnet.doge.xyz'; //TODO: change to newDogeConfig.rpc?.url
-    newConfig.dogecoin_rpc_user = 'user';                   //TODO newDogeConfig.rpc?.username || '';
-    newConfig.dogecoin_rpc_pass = 'password_test';          //TODO newDogeConfig.rpc?.password || '';
+    newConfig.dogecoin_rpc_url = newDogeConfig.rpc?.url || 'https://testnet.doge.xyz';
+    newConfig.dogecoin_rpc_user = newDogeConfig.rpc?.username || '';
+    newConfig.dogecoin_rpc_pass = newDogeConfig.rpc?.password || '';
     const blockbookUrl = newDogeConfig.rpc?.blockbookAPIUrl?.replace('/api/v2', '') || '';
     newConfig.dogecoin_blockbook_url = blockbookUrl;
     newConfig.dogecoin_blockbook_api_key = newDogeConfig.rpc?.apiKey || '';
@@ -208,67 +209,7 @@ export class DogeConfigCommand extends Command {
     fs.writeFileSync(setupDefaultsPath, toml.stringify(newConfig));
   }
 
-  async runGenerateTestKeys(): Promise<void> {
-    const docker = new Docker();
-    const image = `docker.io/dogeos69/generate-test-keys:v0.1.1-test`;
-    try {
-      this.log(chalk.cyan('Pulling Docker Image...'))
-      // Pull the image if it doesn't exist locally
-      const pullStream = await docker.pull(image)
-      await new Promise((resolve, reject) => {
-        docker.modem.followProgress(pullStream, (err, res) => {
-          if (err) {
-            reject(err)
-          } else {
-            this.log(chalk.green('Image pulled successfully'))
-            resolve(res)
-          }
-        })
-      })
 
-      this.log(chalk.cyan('Creating Docker Container...'))
-      // Create and run the container
-      const container = await docker.createContainer({
-        Cmd: [], // Add any command if needed
-        HostConfig: {
-          Binds: [`${process.cwd()}:/app`],
-        },
-        Image: image,
-      })
-
-      this.log(chalk.cyan('Starting Container'))
-      await container.start()
-
-      // Wait for the container to finish and get the logs
-      const stream = await container.logs({
-        follow: true,
-        stderr: true,
-        stdout: true,
-      })
-
-      // Print the logs
-      stream.pipe(process.stdout)
-
-      // Wait for the container to finish
-      await new Promise((resolve) => {
-        container.wait((err, data) => {
-          if (err) {
-            this.error(`Container exited with error: ${err}`)
-          } else if (data.StatusCode !== 0) {
-            this.error(`Container exited with status code: ${data.StatusCode}`)
-          }
-
-          resolve(null)
-        })
-      })
-
-      // Remove the container
-      await container.remove()
-    } catch (error) {
-      this.error(`Failed to run Docker command: ${error}`)
-    }
-
-  }
 }
 
 export default DogeConfigCommand

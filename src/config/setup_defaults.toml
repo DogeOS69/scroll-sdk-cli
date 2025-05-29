@@ -6,18 +6,18 @@ network = "testnet"
 # --- Base Identity --- 
 # Seed string used to derive the base private key.
 # Recommend using environment variable TESTNET_SETUP_SEED_STRING instead.
-seed_string = "initial_tests-eeeejjj-05"
+seed_string = ""
 
 # --- Dogecoin RPC --- 
 dogecoin_rpc_url = "https://testnet.doge.xyz"
 dogecoin_rpc_user = "user"
-dogecoin_rpc_pass = "password_test"
+dogecoin_rpc_pass = ""
 # Recommend using environment variables DOGECOIN_RPC_USER and DOGECOIN_RPC_PASS
 
 # Optional: Blockbook URL for faster UTXO fetching (highly recommended)
 # If not provided, UTXO fetching might be slower or require manual input.
 dogecoin_blockbook_url = "https://dogebook-testnet.nownodes.io"
-dogecoin_blockbook_api_key = "7ef0af1d-43c2-45e5-9b96-76421a9f2f95" # If required
+dogecoin_blockbook_api_key = "" # If required
 
 # --- Bridge Script Generation Parameters --- 
 # Thresholds for the complex bridge script roles

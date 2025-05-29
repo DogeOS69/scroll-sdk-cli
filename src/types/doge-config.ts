@@ -19,10 +19,15 @@ export interface DogeConfig {
     apiKey?: string
     blockbookAPIUrl?: string
     l2Url?: string
-    password?: string
-    url?: string
-    username?: string
+    password?: string // for send/sync on dogocoin
+    url?: string // for send/sync on dogocoin like: https://testnet.doge.xyz/
+    username?: string // for send/sync on dogocoin
   }
+  dogecoinClusterRpc?: {
+    username?: string // for dogecoin that deploy on cluster
+    password?: string // for dogecoin that deploy on cluster
+  }
+
   test?: {
     mockFinalizeEnabled?: boolean
     mockFinalizeTimeout?: number

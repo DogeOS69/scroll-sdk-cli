@@ -8,7 +8,6 @@ import * as toml from '@iarna/toml'
 import { confirm, input, select } from '@inquirer/prompts'
 import chalk from 'chalk'
 import type { DogeConfig } from '../../types/doge-config.js'
-import { encodeBase64 } from 'ethers'
 
 const execAsync = promisify(exec)
 
@@ -791,15 +790,17 @@ export default class SetupPrepCharts extends Command {
       else if (chartName == "metrics-exporter") {
         const isTestnet = this.dogeConfig.network == "testnet";
         const dogecoinUrl = "http://dogecoin-" + (isTestnet ? "testnet:44555" : "mainnet:22555");
+        const l1MessageQueueProxyAddr = this.getConfigValue("contractsFile.L1_MESSAGE_QUEUE_V2_PROXY_ADDR");
+        const expected_basicAuth = this.dogeConfig.dogecoinClusterRpc?.password ? Buffer.from(this.dogeConfig.dogecoinClusterRpc?.username + ":" + this.dogeConfig.dogecoinClusterRpc?.password).toString('base64') : "";
         if (!productionYaml.metricsConfig) {
           productionYaml.metricsConfig = {
             l1Network: {
               url: this.getConfigValue("general.L1_RPC_ENDPOINT"),
-              L1_MESSAGE_QUEUE_PROXY_ADDR: this.getConfigValue("contractsFile.L1_MESSAGE_QUEUE_V2_PROXY_ADDR")
+              L1_MESSAGE_QUEUE_PROXY_ADDR: l1MessageQueueProxyAddr
             },
             dogecoin: {
               url: dogecoinUrl,
-              basicAuth: this.dogeConfig.rpc?.password ? Buffer.from(this.dogeConfig.rpc?.username + ":" + this.dogeConfig.rpc?.password).toString('base64') : ""
+              basicAuth: expected_basicAuth
             }
           };
           updated = true;
@@ -816,12 +817,12 @@ export default class SetupPrepCharts extends Command {
               newValue: this.getConfigValue("general.L1_RPC_ENDPOINT")
             });
           }
-          if (productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR != this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")) {
-            productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR = this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR");
+          if (productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR != l1MessageQueueProxyAddr) {
+            productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR = l1MessageQueueProxyAddr;
             updated = true;
             changes.push({
               key: `metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR`, oldValue: productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR,
-              newValue: this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
+              newValue: l1MessageQueueProxyAddr
             });
           }
           if (productionYaml.metricsConfig.dogecoin.url != dogecoinUrl) {
@@ -832,8 +833,7 @@ export default class SetupPrepCharts extends Command {
               newValue: dogecoinUrl
             });
           }
-
-          const expected_basicAuth = this.dogeConfig.rpc?.password ? Buffer.from(this.dogeConfig.rpc?.username + ":" + this.dogeConfig.rpc?.password).toString('base64') : "";
+          
           if (productionYaml.metricsConfig.dogecoin.basicAuth != expected_basicAuth) {
             productionYaml.metricsConfig.dogecoin.basicAuth = expected_basicAuth;
             updated = true;
@@ -852,7 +852,7 @@ export default class SetupPrepCharts extends Command {
         if (dogecoinConf_testnet != expected_testnet) {
           productionYaml.dogecoinConf.testnet = expected_testnet;
           updated = true;
-          changes.push({ key: `dogecoinConf.testnet`, oldValue: String(dogecoinConf_testnet), newValue: "1" });
+          changes.push({ key: `dogecoinConf.testnet`, oldValue: String(dogecoinConf_testnet), newValue: String(expected_testnet) });
         }
 
         let service_port = productionYaml.service?.port;
@@ -880,17 +880,19 @@ export default class SetupPrepCharts extends Command {
         }
 
         let rpcPassword = productionYaml.rpcPassword;
-        if (rpcPassword != this.dogeConfig.rpc?.password) {
-          productionYaml.rpcPassword = this.dogeConfig.rpc?.password;
+        let expectedRpcPassword = this.dogeConfig.dogecoinClusterRpc?.password;
+        if (rpcPassword != expectedRpcPassword) {
+          productionYaml.rpcPassword = expectedRpcPassword;
           updated = true;
-          changes.push({ key: `rpcPassword`, oldValue: String(rpcPassword), newValue: String(this.dogeConfig.rpc?.password) });
+          changes.push({ key: `rpcPassword`, oldValue: String(rpcPassword), newValue: String(expectedRpcPassword) });
         }
 
         let rpcUser = productionYaml.dogecoinConf?.rpcuser;
-        if (rpcUser != this.dogeConfig.rpc?.username) {
-          productionYaml.dogecoinConf.rpcuser = this.dogeConfig.rpc?.username;
+        let expectedRpcUser = this.dogeConfig.dogecoinClusterRpc?.username;
+        if (rpcUser != expectedRpcUser) {
+          productionYaml.dogecoinConf.rpcuser = expectedRpcUser;
           updated = true;
-          changes.push({ key: `dogecoinConf.rpcuser`, oldValue: String(rpcUser), newValue: String(productionYaml.dogecoinConf.rpcuser) });
+          changes.push({ key: `dogecoinConf.rpcuser`, oldValue: String(rpcUser), newValue: String(expectedRpcUser) });
         }
 
         // Process dogecoin ingress (similar to celestia)

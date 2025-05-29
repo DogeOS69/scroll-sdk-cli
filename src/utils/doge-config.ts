@@ -4,7 +4,19 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { DogeConfig, Network } from '../types/doge-config.js'
+import crypto from 'node:crypto'
 
+function generateSecureRandomString(length: number): string {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  let result = ''
+  const randomBytes = crypto.randomBytes(length)
+  
+  for (let i = 0; i < length; i++) {
+    result += chars[randomBytes[i] % chars.length]
+  }
+  
+  return result
+}
 export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
   const resolvedPath = path.resolve(configPath)
 
@@ -34,6 +46,7 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
       validate: (value) => (value ? true : 'API key is required'),
     })
 
+
     const defaultConfig: DogeConfig = {
       defaults: {
         chainId: '0x221122',
@@ -44,12 +57,16 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
       frontend: {},
       network,
       rpc: {
-        username: network === 'mainnet' ? '' : 'user',
-        password: network === 'mainnet' ? '' : 'password_test',
+        username: '',
+        password: '',
         apiKey,
         blockbookAPIUrl:
           network === 'mainnet' ? 'https://dogebook.nownodes.io/api/v2' : 'https://dogebook-testnet.nownodes.io/api/v2',
         url: network === 'mainnet' ? '' : 'https://testnet.doge.xyz/',
+      },
+      dogecoinClusterRpc: {
+        username: generateSecureRandomString(8),
+        password: generateSecureRandomString(16),
       },
       test: {},
       wallet: {

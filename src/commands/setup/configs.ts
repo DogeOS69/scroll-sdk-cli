@@ -429,11 +429,11 @@ export default class SetupConfigs extends Command {
     }
 
     if (service === 'dogecoin') {
-      envFiles['dogecoin-secret.env'] = `DOGECOIN_RPC_USER="${this.dogeConfig.rpc?.username}"\nDOGECOIN_RPC_PASSWORD="${this.dogeConfig.rpc?.password}"\n`
+      envFiles['dogecoin-secret.env'] = `DOGECOIN_RPC_USER="${this.dogeConfig.dogecoinClusterRpc?.username}"\nDOGECOIN_RPC_PASSWORD="${this.dogeConfig.dogecoinClusterRpc?.password}"\n`
     }
 
     if (service === 'metrics-exporter') {
-      const credentials = Buffer.from(`${this.dogeConfig.rpc?.username}:${this.dogeConfig.rpc?.password}`).toString('base64')
+      const credentials = Buffer.from(`${this.dogeConfig.dogecoinClusterRpc?.username}:${this.dogeConfig.dogecoinClusterRpc?.password}`).toString('base64')
       envFiles['metrics-exporter-secret.env'] = `METRICS_EXPORTER_DOGECOIN_BASIC_AUTH="${credentials}"\n`
     }
     if (service === 'withdrawal-processor') {
@@ -441,8 +441,8 @@ export default class SetupConfigs extends Command {
       let content = ''
       //content += `DOGEOS_WITHDRAWAL_DATABASE_URL="${this.dogeConfig.rpc?.databaseUrl || ''}"\n`
       // Add Dogecoin RPC credentials from doge-config
-      content += `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER="${this.dogeConfig.rpc?.username || ''}"\n`
-      content += `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS="${this.dogeConfig.rpc?.password || ''}"\n`
+      content += `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
+      content += `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
 
       // Add blockbook API key from doge-config if available
       if (this.dogeConfig.rpc?.apiKey) {

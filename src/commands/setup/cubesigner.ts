@@ -75,10 +75,21 @@ export default class SetupCubesigner extends Command {
                 }
             })
 
+            const environment = await input({
+                message: chalk.cyan('Enter cubesigner environment:'),
+                default: 'gamma',
+                validate: (value: string) => {
+                    if (!value || value.trim() === '') {
+                        return 'Environment cannot be empty'
+                    }
+                    return true
+                }
+            })
+
             const loginSuccess = await this.executeInteractiveCommand('cs', [
                 'login',
                 '--env',
-                'gamma',
+                environment,
                 '--org-id',
                 orgId,
                 email
