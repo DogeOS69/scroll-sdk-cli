@@ -8,6 +8,8 @@
   },
   "bugs": "https://github.com/scroll-tech/scroll-sdk-cli/issues",
   "dependencies": {
+    "@cubist-labs/cubesigner-sdk": "^0.4.152-0",
+    "@cubist-labs/cubesigner-sdk-fs-storage": "^0.4.152-0",
     "@iarna/toml": "^2.2.5",
     "@inquirer/prompts": "^5.3.8",
     "@kubernetes/client-node": "^0.21.0",

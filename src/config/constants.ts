@@ -1,4 +1,7 @@
 import * as path from 'path'
+import * as fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname } from 'node:path'
 
 /**
  * Common file paths used across the application
@@ -12,5 +15,29 @@ export const getSetupDefaultsPath = (): string => {
   return path.resolve(process.cwd(), SETUP_DEFAULTS_TOML_PATH)
 }
 
-// Template setup defaults TOML path (relative to src/config)
-export const SETUP_DEFAULTS_TEMPLATE_PATH = 'src/config/setup_defaults.toml' 
+/**
+ * Template content readers
+ */
+
+// Get project root directory from this file location
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+// Calculate project root and source config directory
+const projectRoot = path.resolve(__dirname, '../../')
+const srcConfigDir = path.join(projectRoot, 'src/config')
+
+// Read setup defaults template from file
+export const getSetupDefaultsTemplate = (): string => {
+  const templatePath = path.join(srcConfigDir, 'setup_defaults.toml')
+  return fs.readFileSync(templatePath, 'utf-8')
+}
+
+// Read doge config template from file
+export const getDogeConfigTemplate = (): string => {
+  const templatePath = path.join(srcConfigDir, 'doge-config.toml')
+  return fs.readFileSync(templatePath, 'utf-8')
+}
+
+// For backward compatibility, export as constants
+export const SETUP_DEFAULTS_TEMPLATE = getSetupDefaultsTemplate()
+export const DOGE_CONFIG_TEMPLATE = getDogeConfigTemplate() 

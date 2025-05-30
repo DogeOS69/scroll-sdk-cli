@@ -47,9 +47,17 @@ export interface DogeConfig {
     region?: string
     networkAlias?: string
     accountId?: string
-    tsoUrl?: string
     suffixes?: string
   }
+  localSigners?: {
+    network?: string
+    signers?: Array<{
+      index: number
+      port: number
+    }>
+  }
+  deploymentType?: 'local' | 'aws'
+  signerUrls?: string[]
 }
 
 export interface DogeWallet {

@@ -19,9 +19,56 @@ A tool for configuring, managing, and testing [Scroll SDK](https://docs.scroll.i
 <!-- toc -->
 
 - [Scroll SDK CLI](#scroll-sdk-cli)
+- [Installation](#installation)
 - [Usage](#usage)
 - [Commands](#commands)
 <!-- tocstop -->
+
+# Installation
+
+<!-- installation -->
+
+1. ```bash
+   scrollsdk setup domains
+   ```
+
+2. ```bash
+   scrollsdk setup db-init
+   ```
+
+3. ```bash
+   scrollsdk setup gen-keystore
+   ```
+
+4. ```bash
+   scrollsdk doge config
+   ```
+
+5. ```bash
+   scrollsdk doge dummy-signers
+   ```
+
+6. ```bash
+   scrollsdk doge bridge-init
+   ```
+
+7. ```bash
+   scrollsdk setup configs
+   ```
+
+8. ```bash
+   scrollsdk setup prep-charts
+   ```
+
+9. ```bash
+   scrollsdk setup push-secrets
+   ```
+
+10. ```bash
+    scrollsdk setup tls
+    ```
+
+<!-- installationstop -->
 
 # Usage
 
@@ -48,6 +95,7 @@ USAGE
 - [Scroll SDK CLI](#scroll-sdk-cli)
   - [Introduction](#introduction)
     - [Other Scroll SDK Repos](#other-scroll-sdk-repos)
+- [Installation](#installation)
 - [Usage](#usage)
 - [Commands](#commands)
   - [`scrollsdk help [COMMAND]`](#scrollsdk-help-command)

@@ -70,7 +70,7 @@ export default class SetupPrepCharts extends Command {
   private contractsConfig: any = {}
   private dogeConfig: DogeConfig = {} as DogeConfig
   private withdrawalProcessorConfig: toml.JsonMap = {}
-  private deployType: string = 'local'
+
   // Generic ingress processing function
   private processIngressHosts(
     ingressConfig: any,
@@ -153,13 +153,6 @@ export default class SetupPrepCharts extends Command {
       resolvedPath = path.resolve(flags.config)
     }
 
-    this.deployType = await select({
-      message: 'where did you deploy the tso signers?',
-      choices: [
-        { name: 'AWS', value: 'AWS' },
-        { name: 'local', value: 'local' }
-      ]
-    });
 
     if (fs.existsSync(resolvedPath)) {
       const dogeConfigContent = fs.readFileSync(resolvedPath, 'utf-8')
@@ -241,9 +234,6 @@ export default class SetupPrepCharts extends Command {
           if (configMapData && typeof configMapData === 'object' && 'data' in configMapData) {
             const envData = (configMapData as any).data
             for (const [key, value] of Object.entries(envData)) {
-              // if (value === '' || value === '[""]' || value === '[]' ||
-              //   (Array.isArray(value) && (value.length === 0 || (value.length === 1 && value[0] === ''))) ||
-              //   value === null || value === undefined) {
               const configPathOrResolver = this.configMapping[key]
               if (configPathOrResolver) {
                 let configKey: string
@@ -664,20 +654,50 @@ export default class SetupPrepCharts extends Command {
           }
         }
 
-        for (let i = 0; i < productionYaml.tsoSigners.length; i++) {
-          if (productionYaml.tsoSigners[i].role == 'Correctness') {
-            if (this.deployType == 'local') {
-              if (productionYaml.tsoSigners[i].uri != "http://127.0.0.1:4001") {
-                productionYaml.tsoSigners[i].uri = "http://127.0.0.1:4001";
-                updated = true;
-                changes.push({ key: `tsoSigners[${i}].uri`, oldValue: productionYaml.tsoSigners[i].uri, newValue: "http://127.0.0.1:4001" });
-              }
+        // Replace TSO signer URIs based on signerUrls array, ensuring only 'Correctness' roles are updated sequentially
+        if (productionYaml.tsoSigners && Array.isArray(productionYaml.tsoSigners)) {
+          const signerUrls = this.dogeConfig.signerUrls || [];
+
+          // extract existing Correctness signer URIs
+          const existingCorrectnessIdx: number[] = [];
+          const existingUris: string[] = [];
+          productionYaml.tsoSigners.forEach((s: any, idx: number) => {
+            if (s.role === 'Correctness') {
+              existingCorrectnessIdx.push(idx);
+              existingUris.push(s.uri);
             }
+          });
+
+          const isSame = existingUris.length === signerUrls.length && existingUris.every((u, idx) => u === signerUrls[idx]);
+
+          if (!isSame) {
+            // 1) remove all existing Correctness signers
+            for (let j = existingCorrectnessIdx.length - 1; j >= 0; j--) {
+              const idx = existingCorrectnessIdx[j];
+              const removed = productionYaml.tsoSigners.splice(idx, 1)[0];
+              updated = true;
+              changes.push({ key: `tsoSigners[${idx}]`, oldValue: JSON.stringify(removed), newValue: 'removed' });
+            }
+
+            // 2) re-insert Correctness signers based on signerUrls
+            signerUrls.forEach((url) => {
+              const newSigner = { role: 'Correctness', uri: url, network: this.dogeConfig.network } as any;
+              productionYaml.tsoSigners.push(newSigner);
+              updated = true;
+              const newIndex = productionYaml.tsoSigners.length - 1;
+              changes.push({ key: `tsoSigners[${newIndex}]`, oldValue: 'undefined', newValue: JSON.stringify(newSigner) });
+            });
           }
-          if (productionYaml.tsoSigners[i].network != this.dogeConfig.network) {
-            productionYaml.tsoSigners[i].network = this.dogeConfig.network;
-            updated = true;
-            changes.push({ key: `tsoSigners[${i}].network`, oldValue: productionYaml.tsoSigners[i].network, newValue: this.dogeConfig.network });
+
+          // 3) sync network field for all signers
+          for (let i = 0; i < productionYaml.tsoSigners.length; i++) {
+            const signer = productionYaml.tsoSigners[i];
+            if (signer.network !== this.dogeConfig.network) {
+              const oldVal = signer.network;
+              signer.network = this.dogeConfig.network;
+              updated = true;
+              changes.push({ key: `tsoSigners[${i}].network`, oldValue: oldVal, newValue: this.dogeConfig.network });
+            }
           }
         }
       }
