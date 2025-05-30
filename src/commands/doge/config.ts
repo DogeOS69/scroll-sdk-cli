@@ -319,7 +319,7 @@ export class DogeConfigCommand extends Command {
     // Ask if user wants to set up Dummy Signers
     const setupDummySigners = await confirm({
       message: 'Do you want to set up Dummy Signers (local Docker or AWS with KMS keys)?',
-      default: false
+      default: true
     })
     
     if (setupDummySigners) {
@@ -648,10 +648,10 @@ export class DogeConfigCommand extends Command {
 
   private prepareDummyImage(awsRegion: string, awsAccountId: string): void {
     const repoName = 'dogeos/dummy-signer';
-    const dockerHubImage = 'dogeos69/dummy-signer:latest';
+    const dockerHubImage = 'dogeos69/dummy-signer:v1.0.5-test';
     const ecrRegistry = `${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com`;
     const ecrImage = `${ecrRegistry}/${repoName}:latest`;
-
+    
     // 1. Check prerequisites
     this.log('Checking prerequisites...');
 
