@@ -798,8 +798,7 @@ export default class SetupPrepCharts extends Command {
               L1_MESSAGE_QUEUE_PROXY_ADDR: l1MessageQueueProxyAddr
             },
             dogecoin: {
-              url: dogecoinUrl,
-              basicAuth: expected_basicAuth
+              url: dogecoinUrl
             }
           };
           updated = true;
@@ -830,15 +829,6 @@ export default class SetupPrepCharts extends Command {
             changes.push({
               key: `metricsConfig.dogecoin.url`, oldValue: productionYaml.metricsConfig.dogecoin.url,
               newValue: dogecoinUrl
-            });
-          }
-
-          if (productionYaml.metricsConfig.dogecoin.basicAuth != expected_basicAuth) {
-            productionYaml.metricsConfig.dogecoin.basicAuth = expected_basicAuth;
-            updated = true;
-            changes.push({
-              key: `metricsConfig.dogecoin.basicAuth`, oldValue: productionYaml.metricsConfig.dogecoin.basicAuth,
-              newValue: expected_basicAuth
             });
           }
         }
