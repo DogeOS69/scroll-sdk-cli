@@ -1,10 +1,13 @@
 import * as toml from '@iarna/toml'
-import { input } from '@inquirer/prompts'
+import { input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import Docker from 'dockerode'
-import fs from 'node:fs'
-import path from 'node:path'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+import { loadDogeConfig } from '../../utils/doge-config.js'
+import type { DogeConfig } from '../../types/doge-config.js'
+import { getSetupDefaultsPath } from '../../config/constants.js'
 
 export class BridgeInitCommand extends Command {
     static description = 'Initialize bridge for mainnet or testnet'
@@ -90,7 +93,7 @@ export class BridgeInitCommand extends Command {
             })
         }
 
-        const setupDefaultsPath = path.resolve(process.cwd(), 'crates/test_utils/config/setup_defaults.toml');
+        const setupDefaultsPath = getSetupDefaultsPath();
         if (!fs.existsSync(setupDefaultsPath)) {
             this.error('setup_defaults.toml not found, please run `scrollsdk doge:config` first')
             return

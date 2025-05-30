@@ -443,6 +443,7 @@ export default class SetupConfigs extends Command {
       // Add Dogecoin RPC credentials from doge-config
       content += `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
       content += `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
+      content += `DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL="${this.dogeConfig.da?.tendermintRpcUrl || ''}"\n`
 
       // Add blockbook API key from doge-config if available
       if (this.dogeConfig.rpc?.apiKey) {

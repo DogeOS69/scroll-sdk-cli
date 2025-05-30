@@ -43,6 +43,13 @@ export interface DogeConfig {
     signerAddress: string,
     genesisBlobCommitment: string
   }
+  awsSigner?: {
+    region?: string
+    networkAlias?: string
+    accountId?: string
+    tsoUrl?: string
+    suffixes?: string
+  }
 }
 
 export interface DogeWallet {
