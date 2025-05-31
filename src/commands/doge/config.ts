@@ -53,37 +53,6 @@ export class DogeConfigCommand extends Command {
     }
   }
 
-  private saveConfigToFile(config: any, filePath: string): void {
-    this.ensureDirectoryExists(path.dirname(filePath))
-    fs.writeFileSync(filePath, toml.stringify(config))
-  }
-
-  private getDefaultSetupConfig(): any {
-    return {
-      network: 'testnet',
-      seed_string: '',
-      dogecoin_rpc_url: 'https://testnet.doge.xyz',
-      dogecoin_rpc_user: 'user',
-      dogecoin_rpc_pass: '',
-      dogecoin_blockbook_url: 'https://dogebook-testnet.nownodes.io',
-      dogecoin_blockbook_api_key: '',
-      sequencer_threshold: 1,
-      correctness_threshold: 2,
-      attestation_threshold: 2,
-      recovery_threshold: 2,
-      correctness_key_count: 3,
-      attestation_key_count: 3,
-      recovery_key_count: 3,
-      timelock_seconds: 3600,
-      fee_rate_sat_per_kvb: 2000000,
-      deposit_eth_recipient_address_hex: '0xbb8bc29695232088b1a2dbc117e8c6006478c295',
-      sequencer_target_amount: 42069000,
-      fee_wallet_target_amount: 1000000000,
-      bridge_target_amount: 5000000000,
-      confirmations_required: 1
-    }
-  }
-
   private generateSecureRandomString(length: number): string {
     const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
     let result = ''
@@ -166,24 +135,6 @@ export class DogeConfigCommand extends Command {
       this.log(chalk.green(`✓ Generated secure random credentials for Dogecoin cluster RPC`));
     }
 
-    newConfig.defaults!.chainId = existingConfig.defaults?.chainId;
-
-    newConfig.defaults!.evmAddress = await input({
-      default: existingConfig.defaults?.evmAddress || '0x151a64570e4997739458455ba4ab5A535FD2E306',
-      message: 'Enter a default EVM Address (20 bytes):',
-      validate: (value) =>
-        /^0x[\dA-Fa-f]{40}$/.test(value) ? true : 'EVM Address must be 20 bytes (40 hex chars) with 0x prefix',
-    })
-
-    newConfig.defaults!.recipient = await input({
-      default: existingConfig.defaults?.recipient || 'nmNf4f5kyvCFrfyUBoQU3TKN3Dyc5kcMoH',
-      message: `Enter a Dogecoin default recipient Address:`,
-      validate: (value) =>
-        /^(D[1-9A-HJ-NP-Za-km-z]{33}|[mn][1-9A-HJ-NP-Za-km-z]{33})$/.test(value)
-          ? true
-          : 'Invalid Dogecoin address format',
-    })
-
     newConfig.wallet!.path = await input({
       default: existingConfig.wallet?.path,
       message: `Enter the wallet file path:`,
@@ -248,9 +199,6 @@ export class DogeConfigCommand extends Command {
     this.log(chalk.blue(`RPC URL: ${newConfig.rpc!.url}`))
     this.log(chalk.blue(`Blockbook API URL: ${newConfig.rpc!.blockbookAPIUrl}`))
     this.log(chalk.blue(`Wallet Path: ${newConfig.wallet.path}`))
-    // this.log(chalk.blue(`Chain ID: ${newConfig.defaults!.chainId}`))
-    this.log(chalk.blue(`EVM Address: ${newConfig.defaults!.evmAddress}`))
-    this.log(chalk.blue(`Doge recipient Address: ${newConfig.defaults!.recipient}`))
 
     await this.generateSetupDefaultsToml(newConfig)
   }
@@ -282,7 +230,6 @@ export class DogeConfigCommand extends Command {
     const blockbookUrl = newDogeConfig.rpc?.blockbookAPIUrl?.replace('/api/v2', '') || '';
     newConfig.dogecoin_blockbook_url = blockbookUrl;
     newConfig.dogecoin_blockbook_api_key = newDogeConfig.rpc?.apiKey || '';
-    newConfig.deposit_eth_recipient_address_hex = newDogeConfig.defaults?.evmAddress || '';
 
     // Write to setup_defaults.toml
     fs.writeFileSync(setupDefaultsPath, toml.stringify(newConfig));

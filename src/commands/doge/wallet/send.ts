@@ -252,7 +252,7 @@ export default class WalletSend extends Command {
 
     // If --no-bridge is not set, create the new simplified bridge data
     if (!flags['no-bridge']) {
-      const evmAddress = flags['evm-address'] || config.defaults?.evmAddress
+      const evmAddress = flags['evm-address']
       if (!evmAddress || !/^0x[\dA-Fa-f]{40}$/.test(evmAddress)) {
         this.error(
           'Valid EVM address (20 bytes hex, 0x-prefixed) required for bridge. Provide via --evm-address or in config defaults.evmAddress',
@@ -438,7 +438,7 @@ export default class WalletSend extends Command {
     network: typeof Networks.livenet,
     configFilePath: string,
   ): string {
-    const recipient = address || config.defaults?.recipient
+    const recipient = address;
     if (!recipient) this.error(`Recipient address required via --to or config.defaults.recipient in ${configFilePath}`)
 
     const mainnetPattern = /^D[1-9A-HJ-NP-Za-km-z]{33}$/

@@ -4,9 +4,6 @@ export interface DogeConfig {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any
   defaults?: {
-    chainId?: string
-    evmAddress?: string
-    recipient?: string
     dogecoinIndexerStartHeight?: string
   }
   frontend?: {

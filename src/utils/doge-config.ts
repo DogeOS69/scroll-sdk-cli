@@ -38,9 +38,6 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
 
     const defaultConfig: DogeConfig = {
       defaults: {
-        chainId: '0x221122',
-        evmAddress: '0x151a64570e4997739458455ba4ab5A535FD2E306',
-        recipient: '',
         dogecoinIndexerStartHeight: '4000000',
       },
       frontend: {},
