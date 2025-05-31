@@ -6,7 +6,7 @@ import chalk from 'chalk'
 import * as fs from 'fs'
 const execAsync = promisify(exec)
 
-export default class SetupCubesigner extends Command {
+export default class SetupCubesignerRefresh extends Command {
     static override description = 'Refresh cubesigner session secrets'
 
     static override examples = [

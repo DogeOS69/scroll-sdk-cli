@@ -33,7 +33,7 @@ A tool for configuring, managing, and testing [Scroll SDK](https://docs.scroll.i
    ```
 
 2. ```bash
-   scrollsdk setup db-init
+   scrollsdk setup db-init --clean
    ```
 
 3. ```bash
@@ -52,6 +52,15 @@ A tool for configuring, managing, and testing [Scroll SDK](https://docs.scroll.i
    scrollsdk doge bridge-init
    ```
 
+   **Note:** If you encounter an "Insufficient base funds" error like this:
+   ```
+   2025-05-31T00:32:08.308083Z  INFO generate_test_keys: Checking funding for distribution helper address: nmCrhAu4STRor8Tmv4rNHt6JXeqUXFxeo1
+   ......
+   Error: Insufficient base funds for setup tx after selecting all UTXOs. Needed: 6049001000 sats, Have: 3950999000 sats
+   ```
+   
+   Send Dogecoin to the displayed helper address and retry the command. Please keep the same seed string, or the helper address will change.
+
 7. ```bash
    scrollsdk setup configs
    ```
@@ -60,14 +69,21 @@ A tool for configuring, managing, and testing [Scroll SDK](https://docs.scroll.i
    scrollsdk setup prep-charts
    ```
 
-9. ```bash
-   scrollsdk setup push-secrets
-   ```
+9. ```
+    scrollsdk setup cubesigner
+    ```
 
-10. ```bash
+10. ```
+    scrollsdk setup push-secrets
+    ```
+
+11. ```bash
     scrollsdk setup tls
     ```
 
+1. `scrollsdk helper fund-accounts -i -f 2 -d`
+1. `scrollsdk helper fund-accounts -l 1 -f 2 -d`
+1. `scrollsdk helper fund-accounts -l 2 -d`
 <!-- installationstop -->
 
 # Usage

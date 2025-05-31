@@ -10,19 +10,25 @@ import { promisify } from 'node:util'
 const execAsync = promisify(exec)
 
 interface SecretService {
-  pushSecrets(): Promise<void>
+  pushSecrets(cubesignerOnly?: boolean): Promise<void>
 }
 
 class AWSSecretService implements SecretService {
   constructor(private region: string, private prefixName: string, private debug: boolean) { }
 
-  async pushSecrets(): Promise<void> {
+  async pushSecrets(cubesignerOnly: boolean = false): Promise<void> {
     const secretsDir = path.join(process.cwd(), 'secrets')
 
     // Process JSON files
     const jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json'))
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
+      
+      // Filter for CubeSigner files if cubesignerOnly is true
+      if (cubesignerOnly && !secretName.includes('cubesigner-signer-')) {
+        continue
+      }
+      
       console.log(chalk.cyan(`Processing JSON secret: ${secretName}`))
       const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
 
@@ -43,6 +49,18 @@ class AWSSecretService implements SecretService {
 
     for (const file of envFiles) {
       const baseName = path.basename(file, '.env')
+
+      // Filter for CubeSigner files if cubesignerOnly is true
+      if (cubesignerOnly && !baseName.includes('cubesigner-signer-')) {
+        // Skip l2-sequencer files when cubesignerOnly is true
+        if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
+          continue
+        }
+        // Skip other non-cubesigner files
+        if (!baseName.includes('cubesigner-signer-')) {
+          continue
+        }
+      }
 
       // Special handling for l2-sequencer-N-secret.env files
       if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
@@ -70,8 +88,8 @@ class AWSSecretService implements SecretService {
       }
     }
 
-    // Push combined L2 Sequencer secrets
-    if (Object.keys(l2SequencerSecrets).length > 0) {
+    // Push combined L2 Sequencer secrets (only if not cubesignerOnly)
+    if (Object.keys(l2SequencerSecrets).length > 0 && !cubesignerOnly) {
       console.log(chalk.cyan(`Processing combined L2 Sequencer secrets: l2-sequencer-secret-env`))
       await this.createOrUpdateSecret(l2SequencerSecrets, 'l2-sequencer-secret-env')
     }
@@ -173,7 +191,7 @@ class HashicorpVaultDevService implements SecretService {
     this.pathPrefix = pathPrefix
   }
 
-  async pushSecrets(): Promise<void> {
+  async pushSecrets(cubesignerOnly: boolean = false): Promise<void> {
     if (!(await this.isVaultPodRunning())) {
       console.log(chalk.yellow('Vault pod is not running. Please install Vault using the following commands:'))
       console.log(chalk.cyan('helm repo add hashicorp https://helm.releases.hashicorp.com'))
@@ -213,6 +231,12 @@ class HashicorpVaultDevService implements SecretService {
     const jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json'))
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
+      
+      // Filter for CubeSigner files if cubesignerOnly is true
+      if (cubesignerOnly && !secretName.includes('cubesigner-signer-')) {
+        continue
+      }
+      
       console.log(chalk.cyan(`Processing JSON secret: ${this.pathPrefix}/${secretName}`))
       const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
 
@@ -233,6 +257,18 @@ class HashicorpVaultDevService implements SecretService {
 
     for (const file of envFiles) {
       const baseName = path.basename(file, '.env')
+
+      // Filter for CubeSigner files if cubesignerOnly is true
+      if (cubesignerOnly && !baseName.includes('cubesigner-signer-')) {
+        // Skip l2-sequencer files when cubesignerOnly is true
+        if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
+          continue
+        }
+        // Skip other non-cubesigner files
+        if (!baseName.includes('cubesigner-signer-')) {
+          continue
+        }
+      }
 
       // Special handling for l2-sequencer-N-secret.env files
       if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
@@ -260,8 +296,8 @@ class HashicorpVaultDevService implements SecretService {
       }
     }
 
-    // Push combined L2 Sequencer secrets for backward compatibility
-    if (Object.keys(l2SequencerSecrets).length > 0) {
+    // Push combined L2 Sequencer secrets for backward compatibility (only if not cubesignerOnly)
+    if (Object.keys(l2SequencerSecrets).length > 0 && !cubesignerOnly) {
       console.log(chalk.cyan(`Processing combined L2 Sequencer secrets: ${this.pathPrefix}/l2-sequencer-secret-env`))
       await this.pushToVault('l2-sequencer-secret-env', l2SequencerSecrets)
     }
@@ -384,6 +420,8 @@ export default class SetupPushSecrets extends Command {
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --debug',
     '<%= config.bin %> <%= command.id %> --values-dir custom-values',
+    '<%= config.bin %> <%= command.id %> --cubesigner-only',
+    '<%= config.bin %> <%= command.id %> -c --debug',
   ]
 
   static override flags = {
@@ -396,6 +434,11 @@ export default class SetupPushSecrets extends Command {
       default: 'values',
       description: 'Directory containing the values files',
     }),
+    'cubesigner-only': Flags.boolean({
+      char: 'c',
+      default: false,
+      description: 'Only push CubeSigner related secrets (cubesigner-signer-* files)',
+    }),
   }
 
   private flags: any
@@ -406,6 +449,10 @@ export default class SetupPushSecrets extends Command {
     this.flags = flags
 
     this.log(chalk.blue('Starting secret push process...'))
+
+    if (flags['cubesigner-only']) {
+      this.log(chalk.yellow('🔑 CubeSigner only mode: Will only process cubesigner-signer-* files'))
+    }
 
     const secretService = await select({
       choices: [
@@ -432,7 +479,7 @@ export default class SetupPushSecrets extends Command {
     }
 
     try {
-      await service.pushSecrets()
+      await service.pushSecrets(flags['cubesigner-only'])
       this.log(chalk.green('Secrets pushed successfully'))
 
       const shouldUpdateYaml = await confirm({

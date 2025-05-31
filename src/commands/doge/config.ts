@@ -1,5 +1,5 @@
 import * as toml from '@iarna/toml'
-import { confirm, input, select } from '@inquirer/prompts'
+import { input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import fs from 'node:fs'
@@ -7,7 +7,6 @@ import path from 'node:path'
 import type { DogeConfig } from '../../types/doge-config.js'
 import { loadDogeConfig } from '../../utils/doge-config.js'
 import { getSetupDefaultsPath, SETUP_DEFAULTS_TEMPLATE } from '../../config/constants.js'
-import { DummySignersManager } from './dummy-signers.js'
 
 export class DogeConfigCommand extends Command {
   static description = 'Configure Dogecoin settings for mainnet or testnet'
@@ -16,19 +15,12 @@ export class DogeConfigCommand extends Command {
     '$ scrollsdk doge:config',
     '$ scrollsdk doge:config --config .data/doge-config-mainnet.toml',
     '$ scrollsdk doge:config --config .data/doge-config-testnet.toml',
-    '$ scrollsdk doge:config --setup-signers-only',
-    '$ scrollsdk doge:config -s --config .data/doge-config-testnet.toml',
   ]
 
   static flags = {
     config: Flags.string({
       char: 'c',
       description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
-    }),
-    'setup-signers-only': Flags.boolean({
-      char: 's',
-      description: 'Skip config setup and go directly to dummy signers setup',
-      default: false,
     }),
   }
   
@@ -91,20 +83,6 @@ export class DogeConfigCommand extends Command {
     }
   }
 
-  private async setupDummySigners(): Promise<void> {
-    const dummySignersManager = new DummySignersManager(
-      this.dogeConfig,
-      this.configPath,
-      {
-        log: this.log.bind(this),
-        warn: this.warn.bind(this),
-        error: this.error.bind(this)
-      }
-    )
-    
-    await dummySignersManager.setupDummySigners()
-  }
-
   async run(): Promise<void> {
     const { flags } = await this.parse(DogeConfigCommand)
     let resolvedPath = "";
@@ -149,18 +127,6 @@ export class DogeConfigCommand extends Command {
     let newConfig = await loadDogeConfig(resolvedPath);
     this.dogeConfig = newConfig
 
-    // Check if user wants to skip to signers setup only
-    if (flags['setup-signers-only']) {
-      if (!fs.existsSync(resolvedPath)) {
-        this.error(`Config file ${resolvedPath} does not exist. Please run without --setup-signers-only first to create the config.`);
-        return;
-      }
-      
-      this.log(chalk.blue('Skipping config setup, going directly to dummy signers setup...'))
-      await this.setupDummySigners()
-      return;
-    }
-
     newConfig.rpc!.apiKey = await input({
       default: existingConfig.rpc?.apiKey,
       message: 'Enter your NowNodes API key (get one at nownodes.io):',
@@ -197,17 +163,21 @@ export class DogeConfigCommand extends Command {
 
     newConfig.rpc!.url = await input({
       default: existingConfig.rpc?.url,
-      message: `Enter the dogecoin RPC URL:`,
+      message: `Enter Dogecoin RPC URL for wallet operations (send/sync):
+Examples:
+  Mainnet: https://dogecoin-api.flare.network/
+  Testnet: https://testnet.doge.xyz
+URL:`,
     });
 
     newConfig.rpc!.username = await input({
       default: existingConfig.rpc?.username,
-      message: `Enter the dogecoin RPC user:`,
+      message: `Enter RPC username (leave empty for public RPC endpoints):`,
     });
 
     newConfig.rpc!.password = await input({
       default: existingConfig.rpc?.password,
-      message: `Enter the dogecoin RPC password of user (for ${existingConfig.network} network):`,
+      message: `Enter RPC password (leave empty for public RPC endpoints):`,
     });
 
     newConfig.da!.tendermintRpcUrl = await input({
@@ -255,19 +225,9 @@ export class DogeConfigCommand extends Command {
     this.log(chalk.blue(`Wallet Path: ${newConfig.wallet.path}`))
     this.log(chalk.blue(`Chain ID: ${newConfig.defaults!.chainId}`))
     this.log(chalk.blue(`EVM Address: ${newConfig.defaults!.evmAddress}`))
-    this.log(chalk.blue(`Doge Bridge Address: ${newConfig.defaults!.recipient}`))
+    this.log(chalk.blue(`Doge recipient Address: ${newConfig.defaults!.recipient}`))
 
     await this.generateSetupDefaultsToml(newConfig)
-    
-    // Ask if user wants to set up Dummy Signers
-    const setupDummySigners = await confirm({
-      message: 'Do you want to set up Dummy Signers (local Docker or AWS with KMS keys)?',
-      default: true
-    })
-    
-    if (setupDummySigners) {
-      await this.setupDummySigners()
-    }
   }
 
 
