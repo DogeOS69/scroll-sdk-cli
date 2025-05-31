@@ -4,19 +4,8 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { DogeConfig, Network } from '../types/doge-config.js'
-import crypto from 'node:crypto'
 
-function generateSecureRandomString(length: number): string {
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-  let result = ''
-  const randomBytes = crypto.randomBytes(length)
-  
-  for (let i = 0; i < length; i++) {
-    result += chars[randomBytes[i] % chars.length]
-  }
-  
-  return result
-}
+
 export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
   const resolvedPath = path.resolve(configPath)
 
@@ -65,8 +54,8 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
         url: network === 'mainnet' ? '' : 'https://testnet.doge.xyz/',
       },
       dogecoinClusterRpc: {
-        username: generateSecureRandomString(8),
-        password: generateSecureRandomString(16),
+        username: "",
+        password: "",
       },
       test: {},
       wallet: {

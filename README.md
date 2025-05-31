@@ -51,15 +51,36 @@ A tool for configuring, managing, and testing [Scroll SDK](https://docs.scroll.i
 6. ```bash
    scrollsdk doge bridge-init
    ```
-
    **Note:** If you encounter an "Insufficient base funds" error like this:
    ```
    2025-05-31T00:32:08.308083Z  INFO generate_test_keys: Checking funding for distribution helper address: nmCrhAu4STRor8Tmv4rNHt6JXeqUXFxeo1
    ......
    Error: Insufficient base funds for setup tx after selecting all UTXOs. Needed: 6049001000 sats, Have: 3950999000 sats
    ```
-   
+  or
+  ```
+  ? Enter the seed string 123456
+  Pulling Docker Image: docker.io/dogeos69/generate-test-keys:v0.1.1-test
+  Image pulled successfully
+  Creating Docker Container...
+  Starting Container
+  M--- Running Test Setup & Key Generation (with OP_RETURN bridge funding) ---
+  PLoading configuration from: "./crates/test_utils/config/setup_defaults.toml"...
+  'Starting setup for network: Testnet...
+  )Using RPC URL: https://testnet.doge.xyz/
+  :Using Blockbook URL: https://dogebook-testnet.nownodes.io
+  �2025-05-31T03:19:48.077868Z  INFO generate_test_keys: Using OP_RETURN payload (hex): 00151a64570e4997739458455ba4ab5a535fd2e306 for script (hex): 6a1500151a64570e4997739458455ba4ab5a535fd2e306
+  TDistribution Helper Address (derived from seed): nqBXoHUiH92gxgrsmFYjqcBNWZ7VMPFNJY
+  {2025-05-31T03:19:48.077948Z  INFO generate_test_keys: Initializing Dogecoin RPC client...
+  �2025-05-31T03:19:48.144522Z  INFO generate_test_keys: Checking funding for distribution helper address: nqBXoHUiH92gxgrsmFYjqcBNWZ7VMPFNJY
+  �2025-05-31T03:19:49.671868Z ERROR generate_test_keys: Distribution Helper address nqBXoHUiH92gxgrsmFYjqcBNWZ7VMPFNJY has no funds on testnet!
+
+  EPlease send some testnet DOGE to: nqBXoHUiH92gxgrsmFYjqcBNWZ7VMPFNJY
+  Then re-run this script.
+  ```   
    Send Dogecoin to the displayed helper address and retry the command. Please keep the same seed string, or the helper address will change.
+
+
 
 7. ```bash
    scrollsdk setup configs
@@ -70,7 +91,7 @@ A tool for configuring, managing, and testing [Scroll SDK](https://docs.scroll.i
    ```
 
 9. ```
-    scrollsdk setup cubesigner
+    scrollsdk setup cubesigner-refresh
     ```
 
 10. ```

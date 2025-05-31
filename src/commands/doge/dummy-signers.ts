@@ -5,13 +5,14 @@ import chalk from 'chalk'
 import fs from 'node:fs'
 import path from 'node:path'
 import { execSync } from 'child_process'
-import * as crypto from 'node:crypto'
 import * as os from 'node:os'
-import { fileURLToPath } from 'node:url'
-import { dirname } from 'node:path'
+import bitcore from 'bitcore-lib-doge'
 import type { DogeConfig } from '../../types/doge-config.js'
 import { loadDogeConfig } from '../../utils/doge-config.js'
 import { getSetupDefaultsPath } from '../../config/constants.js'
+import { fileURLToPath } from 'node:url'
+import { dirname } from 'node:path'
+const { Networks, PrivateKey } = bitcore
 
 export class DummySignersManager {
   private dogeConfig: DogeConfig
@@ -94,8 +95,8 @@ export class DummySignersManager {
       config = toml.parse(tomlContent);
       this.log(`Loaded existing TOML config from ${tomlPath}`);
     } else {
-      config = this.getDefaultSetupConfig();
-      this.log('Created new TOML config with defaults');
+      this.error('setup_defaults.toml not found. Please run "scrollsdk doge:config" first.')
+      
     }
 
     config.correctness_pubkeys = publicKeys;
@@ -105,32 +106,6 @@ export class DummySignersManager {
 
     this.log(`✅ Updated ${tomlPath} with ${publicKeys.length} public keys`);
     this.log(`Public keys: ${publicKeys.join(', ')}`);
-  }
-
-  private getDefaultSetupConfig(): any {
-    return {
-      network: 'testnet',
-      seed_string: '',
-      dogecoin_rpc_url: 'https://testnet.doge.xyz',
-      dogecoin_rpc_user: 'user',
-      dogecoin_rpc_pass: '',
-      dogecoin_blockbook_url: 'https://dogebook-testnet.nownodes.io',
-      dogecoin_blockbook_api_key: '',
-      sequencer_threshold: 1,
-      correctness_threshold: 2,
-      attestation_threshold: 2,
-      recovery_threshold: 2,
-      correctness_key_count: 3,
-      attestation_key_count: 3,
-      recovery_key_count: 3,
-      timelock_seconds: 3600,
-      fee_rate_sat_per_kvb: 2000000,
-      deposit_eth_recipient_address_hex: '0xbb8bc29695232088b1a2dbc117e8c6006478c295',
-      sequencer_target_amount: 42069000,
-      fee_wallet_target_amount: 1000000000,
-      bridge_target_amount: 5000000000,
-      confirmations_required: 1
-    }
   }
 
   private async stopAndRemoveContainers(numSigners: number): Promise<void> {
@@ -214,7 +189,7 @@ export class DummySignersManager {
     
     const TSO_URL = this.readTsoHostFromConfig()
     if (!TSO_URL) {
-      this.error('TSO_HOST not found in config.toml. Please add TSO_HOST to your config.toml file.')
+      this.error('TSO_HOST not found in config.toml. Please run "scrollsdk setup domains" first.')
       return
     }
     
@@ -245,22 +220,90 @@ export class DummySignersManager {
   private async collectSignerConfigs(numSigners: number, generateWifKeys: boolean): Promise<Array<{wif: string, port: number, publicKey?: string}>> {
     const signerConfigs: Array<{wif: string, port: number, publicKey?: string}> = []
     
+    // Let user choose network type if generating WIF keys
+    let selectedNetwork = 'testnet'
+    if (generateWifKeys) {
+      selectedNetwork = await select({
+        message: 'Choose network type for WIF generation',
+        choices: [
+          { 
+            name: 'Regtest (Local development)', 
+            value: 'regtest',
+            description: 'Local regression test network for development'
+          },
+          { 
+            name: 'Testnet (Public test network)', 
+            value: 'testnet',
+            description: 'Public Dogecoin test network'
+          },
+          { 
+            name: 'Mainnet (Production network)', 
+            value: 'mainnet',
+            description: 'Production Dogecoin network'
+          }
+        ],
+        default: 'regtest'
+      })
+    }
+    
     for (let i = 0; i < numSigners; i++) {
-      const port = 8080 + i
+      const port = 4000 + i
+      
+      let wif: string
       
       if (generateWifKeys) {
-        this.log(chalk.yellow(`Note: You need to generate WIF key for signer ${i}`))
+        wif = this.generateWIF(selectedNetwork)
+        this.log(chalk.green(`Generated WIF for signer ${i}: ${wif}`))
+      } else {
+        wif = await input({
+          message: `Enter WIF private key for signer ${i}`,
+          validate: this.validators.required
+        })
       }
-      
-      const wif = await input({
-        message: `Enter WIF private key for signer ${i}`,
-        validate: this.validators.required
-      })
       
       signerConfigs.push({ wif, port })
     }
     
     return signerConfigs
+  }
+
+  private generateWIF(network: string): string {
+    // Use bitcore-lib-doge for consistent WIF generation
+    let bitcoreNetwork
+    
+    if (network === 'regtest') {
+      // Check if regtest is available in Networks object
+      const networksObj = Networks as any
+      if (networksObj.regtest) {
+        bitcoreNetwork = networksObj.regtest
+        this.log(chalk.blue(`Using regtest network`))
+      } else {
+        // Create regtest network based on testnet but with regtest version byte
+        const testnetNetwork = Networks.testnet as any
+        bitcoreNetwork = {
+          ...testnetNetwork,
+          name: 'regtest',
+          privatekey: 0xef  // regtest WIF version byte
+        }
+        this.log(chalk.blue(`Using custom regtest network configuration`))
+      }
+    } else if (network === 'mainnet') {
+      bitcoreNetwork = Networks.livenet
+      this.log(chalk.blue(`Using mainnet network`))
+    } else {
+      // Default to testnet
+      bitcoreNetwork = Networks.testnet
+      this.log(chalk.blue(`Using testnet network`))
+    }
+    
+    // Generate private key using bitcore with selected network
+    const privateKey = new PrivateKey(null, bitcoreNetwork)
+    const wif = privateKey.toWIF()
+    
+    this.log(chalk.blue(`Generated private key: ${privateKey.toString()}`))
+    this.log(chalk.blue(`Generated WIF (${network}): ${wif}`))
+    
+    return wif
   }
 
   private async pullDockerImage(imageName: string): Promise<void> {
@@ -322,16 +365,135 @@ export class DummySignersManager {
       }))
     }
     
-    // Generate and save local signer URLs
+    // Auto-detect the best host for the current environment
+    const detectedHost = this.detectOptimalHost()
+    
+    // Generate signer URLs with the detected host
     this.dogeConfig.signerUrls = signerConfigs.map((config, i) => 
-      `http://localhost:${config.port}`
+      `http://${detectedHost}:${config.port}`
     )
     
     this.saveConfigToFile(this.dogeConfig, this.configPath)
     
-    this.log(chalk.green(`Local signer URLs saved: ${this.dogeConfig.signerUrls.join(', ')}`))
+    this.log(chalk.green(`\n📍 Signer URLs saved: ${this.dogeConfig.signerUrls.join(', ')}`))
+    this.log(chalk.blue(`   Using detected host: ${detectedHost}`))
+    
+    if (detectedHost !== 'localhost') {
+      this.log(chalk.yellow(`💡 Note: Make sure ports ${signerConfigs.map(c => c.port).join(', ')} are accessible from your Kubernetes cluster to ${detectedHost}`))
+    }
   }
   
+  private detectOptimalHost(): string {
+    try {
+      // Method 1: Check if we're in a Kubernetes environment and get node IP
+      const k8sNodeIP = this.getKubernetesNodeIP()
+      if (k8sNodeIP) {
+        this.log(chalk.blue(`🔍 Detected Kubernetes node IP: ${k8sNodeIP}`))
+        return k8sNodeIP
+      }
+
+      // Method 2: Get Docker bridge gateway IP (the host IP from container perspective)
+      const dockerGatewayIP = this.getDockerGatewayIP()
+      if (dockerGatewayIP) {
+        this.log(chalk.blue(`🔍 Detected Docker gateway IP: ${dockerGatewayIP}`))
+        return dockerGatewayIP
+      }
+
+      // Method 3: Get the primary network interface IP
+      const hostIP = this.getHostNetworkIP()
+      if (hostIP) {
+        this.log(chalk.blue(`🔍 Detected host network IP: ${hostIP}`))
+        return hostIP
+      }
+
+    } catch (error) {
+      this.warn(`Failed to detect optimal host: ${error}`)
+    }
+
+    // Fallback to localhost
+    this.log(chalk.yellow(`🔍 Using fallback: localhost`))
+    return 'localhost'
+  }
+
+  private getKubernetesNodeIP(): string | null {
+    try {
+      // Check if kubectl is available and we can get node info
+      const nodeIP = execSync('kubectl get nodes -o jsonpath="{.items[0].status.addresses[?(@.type==\'InternalIP\')].address}" 2>/dev/null', 
+        { encoding: 'utf8', timeout: 3000 }).trim()
+      
+      if (nodeIP && this.isValidIP(nodeIP)) {
+        return nodeIP
+      }
+    } catch (error) {
+      // kubectl not available or not in K8s environment
+    }
+    return null
+  }
+
+  private getDockerGatewayIP(): string | null {
+    try {
+      // Get Docker bridge network gateway IP
+      const gatewayIP = execSync('docker network inspect bridge -f "{{range .IPAM.Config}}{{.Gateway}}{{end}}" 2>/dev/null', 
+        { encoding: 'utf8', timeout: 3000 }).trim()
+      
+      if (gatewayIP && this.isValidIP(gatewayIP)) {
+        return gatewayIP
+      }
+    } catch (error) {
+      // Docker not available
+    }
+    return null
+  }
+
+  private getHostNetworkIP(): string | null {
+    try {
+      const networkInterfaces = os.networkInterfaces()
+      
+      // Prefer common private network ranges in order of preference
+      const preferredRanges = ['192.168.', '10.', '172.']
+      
+      for (const range of preferredRanges) {
+        for (const [name, interfaces] of Object.entries(networkInterfaces)) {
+          if (!interfaces) continue
+          
+          for (const iface of interfaces) {
+            if (!iface.internal && 
+                iface.family === 'IPv4' && 
+                iface.address.startsWith(range)) {
+              return iface.address
+            }
+          }
+        }
+      }
+      
+      // If no preferred range found, get any non-internal IPv4
+      for (const [name, interfaces] of Object.entries(networkInterfaces)) {
+        if (!interfaces) continue
+        
+        for (const iface of interfaces) {
+          if (!iface.internal && iface.family === 'IPv4') {
+            return iface.address
+          }
+        }
+      }
+      
+    } catch (error) {
+      // Network interface detection failed
+    }
+    return null
+  }
+
+  private isValidIP(ip: string): boolean {
+    const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/
+    if (!ipRegex.test(ip)) return false
+    
+    const parts = ip.split('.')
+    return parts.every(part => {
+      const num = parseInt(part, 10)
+      return num >= 0 && num <= 255
+    })
+  }
+
   private async setupAwsSigners(): Promise<void> {
     this.log(chalk.blue('\nSetting up AWS Dummy Signers...'))
     
@@ -357,12 +519,18 @@ export class DummySignersManager {
 
     const TSO_URL = this.readTsoHostFromConfig()
     if (!TSO_URL) {
-      this.error('TSO_HOST not found in config.toml. Please add TSO_HOST to your config.toml file.')
+      this.error('TSO_HOST not found in config.toml. Please run "scrollsdk setup domains" first.')
       return
     }
 
     const SUFFIXES = await input({
-      message: 'Suffixes for dummy signers (space-separated)',
+      message: `Enter suffixes for dummy signer instances (space-separated)
+  Each suffix creates a complete AWS service set:
+    • App Runner service: ${NETWORK_ALIAS}-dummy-signer-{suffix}
+    • KMS key with alias: alias/${NETWORK_ALIAS}-dummy-signer-{suffix}-key
+    • IAM role: ${NETWORK_ALIAS}-dummy-signer-{suffix}-role
+  
+  Examples: "00 01 02" = 3 signers, "00" = 1 signer, "a b c" = 3 signers with custom suffixes`,
       default: this.dogeConfig.awsSigner?.suffixes || '00 01 02',
       required: false,
     })
@@ -650,80 +818,18 @@ export class DummySignersManager {
   
   private extractPublicKeyFromWIF(wif: string): string {
     try {
-      const base58Alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+      // Use bitcore-lib-doge for consistent WIF handling
+      const privateKey = PrivateKey.fromWIF(wif)
+      const publicKey = privateKey.toPublicKey()
       
-      const decoded = this.base58Decode(wif, base58Alphabet);
+      // Get compressed public key in hex format
+      const compressedPublicKey = publicKey.toString()
       
-      if (decoded.length < 37) {
-        throw new Error('Invalid WIF length');
-      }
+      this.log(chalk.blue(`Extracted public key from WIF: ${compressedPublicKey}`))
       
-      const payload = Buffer.from(decoded.subarray(0, -4));
-      const checksum = Buffer.from(decoded.subarray(-4));
-      const hash1 = crypto.createHash('sha256').update(payload).digest();
-      const hash2 = crypto.createHash('sha256').update(hash1).digest();
-      const expectedChecksum = Buffer.from(hash2.subarray(0, 4));
-      
-      if (!checksum.equals(expectedChecksum)) {
-        throw new Error('Invalid WIF checksum');
-      }
-      
-      const privateKey = Buffer.from(payload.subarray(1, 33));
-      
-      const isCompressed = payload.length === 34;
-      
-      const publicKey = this.generatePublicKeyFromPrivate(privateKey, isCompressed);
-      
-      return publicKey;
+      return compressedPublicKey
     } catch (error) {
-      throw new Error(`Failed to extract public key from WIF: ${error}`);
-    }
-  }
-  
-  private base58Decode(input: string, alphabet: string): Buffer {
-    const base = alphabet.length;
-    let decoded = BigInt(0);
-    let multi = BigInt(1);
-    
-    for (let i = input.length - 1; i >= 0; i--) {
-      const char = input[i];
-      const index = alphabet.indexOf(char);
-      if (index === -1) {
-        throw new Error(`Invalid character in base58 string: ${char}`);
-      }
-      decoded += BigInt(index) * multi;
-      multi *= BigInt(base);
-    }
-    
-    const hex = decoded.toString(16);
-    const paddedHex = hex.length % 2 === 0 ? hex : '0' + hex;
-    let buffer = Buffer.from(paddedHex, 'hex');
-    
-    for (let i = 0; i < input.length && input[i] === alphabet[0]; i++) {
-      buffer = Buffer.concat([Buffer.from([0]), buffer]);
-    }
-    
-    return buffer;
-  }
-  
-  private generatePublicKeyFromPrivate(privateKey: Buffer, compressed: boolean = true): string {
-    try {
-      const ecdh = crypto.createECDH('secp256k1');
-      ecdh.setPrivateKey(privateKey);
-      
-      const publicKey = ecdh.getPublicKey();
-      
-      if (compressed) {
-        const x = Buffer.from(publicKey.subarray(1, 33));
-        const y = Buffer.from(publicKey.subarray(33, 65));
-        const prefix = (y[31] & 1) === 0 ? 0x02 : 0x03;
-        const compressedKey = Buffer.concat([Buffer.from([prefix]), x]);
-        return compressedKey.toString('hex');
-      } else {
-        return publicKey.toString('hex');
-      }
-    } catch (error) {
-      throw new Error(`Failed to generate public key: ${error}`);
+      throw new Error(`Failed to extract public key from WIF: ${error}`)
     }
   }
 

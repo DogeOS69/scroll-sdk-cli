@@ -1,5 +1,5 @@
 import * as toml from '@iarna/toml'
-import { input, select } from '@inquirer/prompts'
+import { input, select, confirm } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import fs from 'node:fs'
@@ -7,6 +7,7 @@ import path from 'node:path'
 import type { DogeConfig } from '../../types/doge-config.js'
 import { loadDogeConfig } from '../../utils/doge-config.js'
 import { getSetupDefaultsPath, SETUP_DEFAULTS_TEMPLATE } from '../../config/constants.js'
+import crypto from 'node:crypto'
 
 export class DogeConfigCommand extends Command {
   static description = 'Configure Dogecoin settings for mainnet or testnet'
@@ -23,7 +24,7 @@ export class DogeConfigCommand extends Command {
       description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
     }),
   }
-  
+
   private dogeConfig: DogeConfig = {} as DogeConfig
   private configPath: string = ''
 
@@ -83,6 +84,18 @@ export class DogeConfigCommand extends Command {
     }
   }
 
+  private generateSecureRandomString(length: number): string {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    let result = ''
+    const randomBytes = crypto.randomBytes(length)
+
+    for (let i = 0; i < length; i++) {
+      result += chars[randomBytes[i] % chars.length]
+    }
+
+    return result
+  }
+
   async run(): Promise<void> {
     const { flags } = await this.parse(DogeConfigCommand)
     let resolvedPath = "";
@@ -133,6 +146,26 @@ export class DogeConfigCommand extends Command {
       validate: (value) => (value ? true : 'API key is required'),
     })
 
+    let generateClusterRpc = await confirm({
+      message: `Do you want to automatically generate secure credentials for your Dogecoin RPC service that will be deployed?\n  (These will be used to authenticate access to your Dogecoin nodes)\n  Choose 'Yes' to auto-generate, 'No' to set manually`,
+      default: true,
+    })
+    if (!generateClusterRpc) {
+      newConfig.dogecoinClusterRpc!.username = await input({
+        default: existingConfig.dogecoinClusterRpc?.username,
+        message: `Enter the username for your Dogecoin RPC service (will be used for authentication):`,
+      });
+
+      newConfig.dogecoinClusterRpc!.password = await input({
+        default: existingConfig.dogecoinClusterRpc?.password,
+        message: `Enter the password for your Dogecoin RPC service (will be used for authentication):`,
+      });
+    } else {
+      newConfig.dogecoinClusterRpc!.username = this.generateSecureRandomString(8);
+      newConfig.dogecoinClusterRpc!.password = this.generateSecureRandomString(16);
+      this.log(chalk.green(`✓ Generated secure random credentials for Dogecoin cluster RPC`));
+    }
+
     newConfig.defaults!.chainId = await input({
       default: existingConfig.defaults?.chainId,
       message: 'Enter the Chain ID (hex with 0x prefix or decimal):',
@@ -163,11 +196,8 @@ export class DogeConfigCommand extends Command {
 
     newConfig.rpc!.url = await input({
       default: existingConfig.rpc?.url,
-      message: `Enter Dogecoin RPC URL for wallet operations (send/sync):
-Examples:
-  Mainnet: https://dogecoin-api.flare.network/
-  Testnet: https://testnet.doge.xyz
-URL:`,
+      message: `Enter an external dogecoin RPC URL for wallet operations (send/sync):
+      `,
     });
 
     newConfig.rpc!.username = await input({
@@ -241,7 +271,7 @@ URL:`,
       if (!fs.existsSync(targetDir)) {
         fs.mkdirSync(targetDir, { recursive: true });
       }
-      
+
       this.log(chalk.blue(`Creating setup defaults from embedded template at ${setupDefaultsPath}`));
       fs.writeFileSync(setupDefaultsPath, SETUP_DEFAULTS_TEMPLATE);
     }
