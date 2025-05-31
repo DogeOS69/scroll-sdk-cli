@@ -166,23 +166,18 @@ export class DogeConfigCommand extends Command {
       this.log(chalk.green(`✓ Generated secure random credentials for Dogecoin cluster RPC`));
     }
 
-    newConfig.defaults!.chainId = await input({
-      default: existingConfig.defaults?.chainId,
-      message: 'Enter the Chain ID (hex with 0x prefix or decimal):',
-      validate: (value) =>
-        /^(0x[\dA-Fa-f]+|\d+)$/.test(value) ? true : 'Chain ID must be decimal or hex with 0x prefix',
-    })
+    newConfig.defaults!.chainId = existingConfig.defaults?.chainId;
 
     newConfig.defaults!.evmAddress = await input({
       default: existingConfig.defaults?.evmAddress || '0x151a64570e4997739458455ba4ab5A535FD2E306',
-      message: 'Enter the EVM Address (20 bytes):',
+      message: 'Enter a default EVM Address (20 bytes):',
       validate: (value) =>
         /^0x[\dA-Fa-f]{40}$/.test(value) ? true : 'EVM Address must be 20 bytes (40 hex chars) with 0x prefix',
     })
 
     newConfig.defaults!.recipient = await input({
       default: existingConfig.defaults?.recipient || 'nmNf4f5kyvCFrfyUBoQU3TKN3Dyc5kcMoH',
-      message: `Enter the Doge recipient Address:`,
+      message: `Enter a Dogecoin default recipient Address:`,
       validate: (value) =>
         /^(D[1-9A-HJ-NP-Za-km-z]{33}|[mn][1-9A-HJ-NP-Za-km-z]{33})$/.test(value)
           ? true
@@ -253,7 +248,7 @@ export class DogeConfigCommand extends Command {
     this.log(chalk.blue(`RPC URL: ${newConfig.rpc!.url}`))
     this.log(chalk.blue(`Blockbook API URL: ${newConfig.rpc!.blockbookAPIUrl}`))
     this.log(chalk.blue(`Wallet Path: ${newConfig.wallet.path}`))
-    this.log(chalk.blue(`Chain ID: ${newConfig.defaults!.chainId}`))
+    // this.log(chalk.blue(`Chain ID: ${newConfig.defaults!.chainId}`))
     this.log(chalk.blue(`EVM Address: ${newConfig.defaults!.evmAddress}`))
     this.log(chalk.blue(`Doge recipient Address: ${newConfig.defaults!.recipient}`))
 
