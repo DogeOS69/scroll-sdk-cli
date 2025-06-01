@@ -8,6 +8,7 @@ import * as toml from '@iarna/toml'
 import { confirm, input, select } from '@inquirer/prompts'
 import chalk from 'chalk'
 import type { DogeConfig } from '../../types/doge-config.js'
+import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
 
 const execAsync = promisify(exec)
 
@@ -214,6 +215,8 @@ export default class SetupPrepCharts extends Command {
 
     let updatedCharts = 0
     let skippedCharts = 0
+    const isTestnet = this.dogeConfig.network == "testnet";
+    const dogecoinInternalUrl = "http://dogecoin-" + (isTestnet ? "testnet:44555" : "mainnet:22555");
 
     for (const file of productionFiles) {
       const yamlPath = path.join(valuesDir, file)
@@ -624,7 +627,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSAGE_QUEUE_ADDRESS": this.getConfigValue("contractsFile.L2_MESSAGE_QUEUE_ADDR"),
 
-          "DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL": "https://" + this.getConfigValue("ingress.DOGECOIN_HOST"),
+          "DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL": dogecoinInternalUrl,
           "DOGEOS_WITHDRAWAL_BLOCKBOOK_URL": this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl),
           "DOGEOS_WITHDRAWAL_TSO_URL": "http://tso-service:3000",
           "DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
@@ -807,8 +810,7 @@ export default class SetupPrepCharts extends Command {
         }
       }
       else if (chartName == "metrics-exporter") {
-        const isTestnet = this.dogeConfig.network == "testnet";
-        const dogecoinUrl = "http://dogecoin-" + (isTestnet ? "testnet:44555" : "mainnet:22555");
+
         const l1MessageQueueProxyAddr = this.getConfigValue("contractsFile.L1_MESSAGE_QUEUE_V2_PROXY_ADDR");
         const expected_basicAuth = this.dogeConfig.dogecoinClusterRpc?.password ? Buffer.from(this.dogeConfig.dogecoinClusterRpc?.username + ":" + this.dogeConfig.dogecoinClusterRpc?.password).toString('base64') : "";
         if (!productionYaml.metricsConfig) {
@@ -818,7 +820,7 @@ export default class SetupPrepCharts extends Command {
               L1_MESSAGE_QUEUE_PROXY_ADDR: l1MessageQueueProxyAddr
             },
             dogecoin: {
-              url: dogecoinUrl
+              url: dogecoinInternalUrl
             }
           };
           updated = true;
@@ -843,12 +845,12 @@ export default class SetupPrepCharts extends Command {
               newValue: l1MessageQueueProxyAddr
             });
           }
-          if (productionYaml.metricsConfig.dogecoin.url != dogecoinUrl) {
-            productionYaml.metricsConfig.dogecoin.url = dogecoinUrl;
+          if (productionYaml.metricsConfig.dogecoin.url != dogecoinInternalUrl) {
+            productionYaml.metricsConfig.dogecoin.url = dogecoinInternalUrl;
             updated = true;
             changes.push({
               key: `metricsConfig.dogecoin.url`, oldValue: productionYaml.metricsConfig.dogecoin.url,
-              newValue: dogecoinUrl
+              newValue: dogecoinInternalUrl
             });
           }
         }
@@ -925,12 +927,7 @@ export default class SetupPrepCharts extends Command {
 
         const shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` })
         if (shouldUpdate) {
-          const yamlString = yaml.dump(productionYaml, {
-            lineWidth: -1,
-            noRefs: true,
-            quotingType: '"',
-            forceQuotes: true,
-          })
+          const yamlString = yaml.dump(productionYaml, YAML_DUMP_OPTIONS)
 
           fs.writeFileSync(yamlPath, yamlString)
           this.log(chalk.green(`Updated ${file}`))

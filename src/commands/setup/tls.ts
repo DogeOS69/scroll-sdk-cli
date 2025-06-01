@@ -6,6 +6,7 @@ import chalk from 'chalk'
 import { exec } from 'child_process'
 import { promisify } from 'util'
 import { confirm, input, select } from '@inquirer/prompts'
+import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
 
 const execAsync = promisify(exec)
 
@@ -171,7 +172,7 @@ spec:
             - grafana.scsdk.unifra.xyz
       */
       if (yamlContent.grafana && yamlContent.grafana.ingress) {
-        const originalContent = yaml.dump(yamlContent.grafana.ingress, { lineWidth: -1, noRefs: true })
+        const originalContent = yaml.dump(yamlContent.grafana.ingress, YAML_DUMP_OPTIONS)
         let ingressUpdated = false;
         let ingress = yamlContent.grafana.ingress;
         if (!ingress.annotations) {
@@ -222,7 +223,7 @@ spec:
 
         if (ingressUpdated) {
           updated = true
-          const updatedContent = yaml.dump(ingress, { lineWidth: -1, noRefs: true })
+          const updatedContent = yaml.dump(ingress, YAML_DUMP_OPTIONS)
 
           if (this.debugMode) {
             this.log(chalk.yellow(`\nProposed changes for ${chart} :`))
@@ -275,7 +276,7 @@ spec:
 
       for (const ingressType of ingressTypes) {
         if (yamlContent.ingress?.[ingressType]) {
-          const originalContent = yaml.dump(yamlContent.ingress[ingressType], { lineWidth: -1, noRefs: true })
+          const originalContent = yaml.dump(yamlContent.ingress[ingressType], YAML_DUMP_OPTIONS)
           let ingressUpdated = false
 
           // Add or update annotation
@@ -324,7 +325,7 @@ spec:
 
           if (ingressUpdated) {
             updated = true
-            const updatedContent = yaml.dump(yamlContent.ingress[ingressType], { lineWidth: -1, noRefs: true })
+            const updatedContent = yaml.dump(yamlContent.ingress[ingressType], YAML_DUMP_OPTIONS)
 
             if (this.debugMode) {
               this.log(chalk.yellow(`\nProposed changes for ${chart} (${ingressType}):`))
@@ -352,12 +353,7 @@ spec:
 
       if (updated) {
         // Write updated YAML back to file
-        const updatedYamlContent = yaml.dump(yamlContent, {
-          lineWidth: -1,
-          noRefs: true,
-          quotingType: '"',
-          forceQuotes: false
-        })
+        const updatedYamlContent = yaml.dump(yamlContent, YAML_DUMP_OPTIONS)
         fs.writeFileSync(yamlPath, updatedYamlContent)
       }
     } catch (error) {

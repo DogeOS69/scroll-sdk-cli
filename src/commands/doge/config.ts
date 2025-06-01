@@ -87,8 +87,9 @@ export class DogeConfigCommand extends Command {
 
       if (fileSelection === 'new') {
         const newConfigName = await input({
-          default: "doge-config.toml",
+          default: "doge-config-testnet.toml",
           message: 'Enter the name of the new config file:',
+          required: true,
         })
         resolvedPath = path.resolve('.data/' + newConfigName);
       } else {

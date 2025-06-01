@@ -2,6 +2,7 @@ import * as path from 'path'
 import * as fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
+import { DumpOptions } from 'js-yaml'
 
 /**
  * Common file paths used across the application
@@ -40,4 +41,19 @@ export const getDogeConfigTemplate = (): string => {
 
 // For backward compatibility, export as constants
 export const SETUP_DEFAULTS_TEMPLATE = getSetupDefaultsTemplate()
-export const DOGE_CONFIG_TEMPLATE = getDogeConfigTemplate() 
+export const DOGE_CONFIG_TEMPLATE = getDogeConfigTemplate()
+
+/**
+ * YAML formatting options
+ */
+
+/**
+ * Standard YAML dump options for consistent formatting across all commands
+ * This ensures all production.yaml files have the same format
+ */
+export const YAML_DUMP_OPTIONS: DumpOptions = {
+  lineWidth: -1,        // No line width limit
+  noRefs: true,         // No references/anchors
+  quotingType: '"',     // Use double quotes
+  forceQuotes: true,    // Force quotes on all strings
+} 
