@@ -413,7 +413,7 @@ spec:
         'l1-devnet',
         'scroll-monitor',
         'tso-service',
-        'celestia',
+        'celestia-node',
         'dogecoin',
         //'withdrawal-processor' //no ingress in withdrawal-processor  
       ]

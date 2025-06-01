@@ -59,12 +59,12 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
         path: network === 'mainnet' ? '.data/doge-wallet-mainnet.json' : '.data/doge-wallet-testnet.json',
       },
       da: {
-        celestiaIndexerStartBlock: network === 'mainnet' ? '0' : '6338800',
+        celestiaIndexerStartBlock: network === 'mainnet' ? '0' : '6175746',
         //rpcUrl: network === 'mainnet' ? 'http://celestia-mainnet:26658' : 'http://celestia-testnet-mocha:26658',
         tendermintRpcUrl: '',
-        daNamespace: network === 'mainnet' ? '' : '98E6DED48612C0B8E4FA',
-        signerAddress: network === 'mainnet' ? '' : 'celestia1ps9llfyvul24z2l74m9x7xgs7gcc2taplan5r5',
-        genesisBlobCommitment: network === 'mainnet' ? '' : 'Pnw/8OJ8jGtL3P8Kihs1IIpouOS6yPbLF40GFJ91XBg=',
+        daNamespace: network === 'mainnet' ? '' : 'D06305735700',
+        signerAddress: network === 'mainnet' ? '' : 'celestia1y2yeln5dt4chaezx59fyjm477gw5x4vl6du6u7',
+        genesisBlobCommitment: network === 'mainnet' ? '' : 'VTYXiL6DKEhFBGB7kXORCC8uNu/UOR20mUyzMICmnkk=',
       }
     }
 
