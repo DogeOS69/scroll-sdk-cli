@@ -133,6 +133,7 @@ export default class SetupConfigs extends Command {
       'dogeos-deposit-processor',
       'withdrawal-processor',
       'metrics-exporter',
+      'celestia-node',
     ]
 
     for (const service of services) {
@@ -463,6 +464,12 @@ export default class SetupConfigs extends Command {
       }
 
       envFiles['withdrawal-processor-secret.env'] = content
+    }
+
+    if (service === 'celestia-node') {
+      // Create an empty celestia-node-secret.env file
+      // envFiles['celestia-node-secret.env'] = ''
+      // this.log(chalk.green('Created empty celestia-node-secret.env file'))
     }
 
     return envFiles

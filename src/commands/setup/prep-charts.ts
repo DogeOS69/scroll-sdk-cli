@@ -302,7 +302,7 @@ export default class SetupPrepCharts extends Command {
                         'blockscout': 'BLOCKSCOUT_HOST',
                         'admin-system-dashboard': 'ADMIN_SYSTEM_DASHBOARD_HOST',
                         'tso-service': 'TSO_HOST',
-                        'celestia': 'CELESTIA_HOST',
+                        'celestia-node': 'CELESTIA_HOST',
                         'dogecoin': 'DOGECOIN_HOST',
                       };
 

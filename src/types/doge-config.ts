@@ -38,7 +38,7 @@ export interface DogeConfig {
     tendermintRpcUrl: string,
     daNamespace: string,
     signerAddress: string,
-    genesisBlobCommitment: string
+    genesisBlobCommitment: string,
   }
   awsSigner?: {
     region?: string
