@@ -583,7 +583,7 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
-      if (chartName == "celestia") {
+      if (chartName == "celestia-node") {
         let ingressUpdated = false;
         if (!productionYaml.ingress) {
           productionYaml.ingress = {

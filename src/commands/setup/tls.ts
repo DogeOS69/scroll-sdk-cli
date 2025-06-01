@@ -258,7 +258,7 @@ spec:
             updated = true;
           }
         }
-      } else if (chart == "celestia") {
+      } else if (chart == "celestia-node") {
         if (yamlContent.ingress) {
           const celestiaUpdated = this.processStandardTls(yamlContent, chart, issuer);
           if (celestiaUpdated) {
