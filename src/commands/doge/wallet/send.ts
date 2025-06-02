@@ -1,16 +1,16 @@
-import type {Transaction as BitcoreTransactionType} from 'bitcore-lib-doge'
+import type { Transaction as BitcoreTransactionType } from 'bitcore-lib-doge'
 
-import {confirm} from '@inquirer/prompts'
-import {Command, Flags} from '@oclif/core'
+import { confirm } from '@inquirer/prompts'
+import { Command, Flags } from '@oclif/core'
 import bitcore from 'bitcore-lib-doge'
 import chalk from 'chalk'
 import fs from 'node:fs'
 import path from 'node:path'
+import { base58 } from '@scure/base';
+import { Network as DogeBackboneNetwork, DogeConfig, DogeWallet } from '../../../types/doge-config.js'
 
-const {Address, Networks, PrivateKey, Transaction} = bitcore
-
-import {Network as DogeBackboneNetwork, DogeConfig, DogeWallet} from '../../../types/doge-config.js'
-import {loadDogeConfig} from '../../../utils/doge-config.js'
+const { Address, Networks, PrivateKey, Transaction } = bitcore
+import { loadDogeConfig } from '../../../utils/doge-config.js'
 
 interface TransactionFlags {
   amount: string
@@ -88,7 +88,7 @@ export default class WalletSend extends Command {
   }
 
   async run(): Promise<void> {
-    const {flags} = await this.parse(WalletSend)
+    const { flags } = await this.parse(WalletSend)
 
     try {
       this.log(chalk.cyan('Loading configuration and wallet...'))
@@ -177,7 +177,7 @@ export default class WalletSend extends Command {
       )
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
-      this.error(chalk.red(`Error: ${error.message}`), {exit: 1, suggestions: ['Check balance, sync, address.']})
+      this.error(chalk.red(`Error: ${error.message}`), { exit: 1, suggestions: ['Check balance, sync, address.'] })
     }
   }
 
@@ -199,7 +199,7 @@ export default class WalletSend extends Command {
         headers['api-key'] = rpcConfig.apiKey
       }
 
-      const response = await fetch(sendTxUrl, {headers, method: 'GET'})
+      const response = await fetch(sendTxUrl, { headers, method: 'GET' })
       if (!response.ok) {
         const errorBody = await response.text()
         throw new Error(
@@ -208,7 +208,7 @@ export default class WalletSend extends Command {
       }
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = (await response.json()) as {error?: any; result?: string}
+      const result = (await response.json()) as { error?: any; result?: string }
       if (result.error || !result.result) {
         throw new Error(`Broadcast error from NowNodes API: ${JSON.stringify(result.error || result)}`)
       }
@@ -228,14 +228,14 @@ export default class WalletSend extends Command {
       params: [txHex],
     })
 
-    const response = await fetch(urlToBroadcast, {body, headers, method: 'POST'})
+    const response = await fetch(urlToBroadcast, { body, headers, method: 'POST' })
     if (!response.ok) {
       const errorBody = await response.text()
       throw new Error(`Broadcast failed: ${response.status} ${response.statusText}. Response: ${errorBody}`)
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = (await response.json()) as {error?: any; result?: string}
+    const result = (await response.json()) as { error?: any; result?: string }
     if (result.error) {
       throw new Error(`RPC error: ${result.error.message || JSON.stringify(result.error)} (Code: ${result.error.code})`)
     }
@@ -389,8 +389,7 @@ export default class WalletSend extends Command {
 
     if (totalInputValueFromSelected < amountSatoshis + finalEstimatedFee) {
       this.error(
-        `Insufficient funds after coin selection. Needed: ${
-          Number(amountSatoshis + finalEstimatedFee) / 1e8
+        `Insufficient funds after coin selection. Needed: ${Number(amountSatoshis + finalEstimatedFee) / 1e8
         } DOGE (incl. fee), Have: ${totalInputValueFromSelected / 1e8} DOGE from ${selectedUtxoObjects.length} UTXOs.`,
       )
     }
@@ -398,8 +397,7 @@ export default class WalletSend extends Command {
     finalTx.sign(privateKey)
     this.log(
       chalk.dim(
-        `Transaction built with ${selectedUtxoObjects.length} inputs. Estimated fee: ${
-          Number(finalEstimatedFee) / 1e8
+        `Transaction built with ${selectedUtxoObjects.length} inputs. Estimated fee: ${Number(finalEstimatedFee) / 1e8
         } DOGE.`,
       ),
     )
@@ -440,17 +438,29 @@ export default class WalletSend extends Command {
   ): string {
     const recipient = address;
     if (!recipient) this.error(`Recipient address required via --to or config.defaults.recipient in ${configFilePath}`)
-
-    const mainnetPattern = /^D[1-9A-HJ-NP-Za-km-z]{33}$/
-    const testnetPattern = /^[mn][1-9A-HJ-NP-Za-km-z]{33}$/
     let isValid = false
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const networkName = (network as any).name as string
 
+    let decodedAddress = base58.decode(address);
+    if (decodedAddress.length !== 25) {
+      this.error(`Invalid Dogecoin address format for ${networkName} network: ${recipient}.`)
+    }
+
+    let versionByte = decodedAddress[0];
+
     if (networkName === 'livenet') {
-      isValid = mainnetPattern.test(recipient)
+      // isValid = mainnetPattern.test(recipient)
+      if (versionByte === 0x1E) {
+        isValid = true
+      }
+      else if (versionByte === 0x16) {
+        isValid = true
+      }
     } else if (networkName === 'testnet') {
-      isValid = testnetPattern.test(recipient) || mainnetPattern.test(recipient)
+      if (versionByte === 0xC4 || versionByte === 0x71) {
+        isValid = true
+      }
     } else {
       this.warn(`Unknown network name: ${networkName} for address validation. Attempting generic validation.`)
       try {
