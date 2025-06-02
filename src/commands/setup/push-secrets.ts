@@ -15,6 +15,8 @@ interface SecretService {
 }
 
 class AWSSecretService implements SecretService {
+  private overrideAll: boolean = false
+
   constructor(private region: string, private prefixName: string, private debug: boolean) { }
 
   async pushSecrets(cubesignerOnly: boolean = false): Promise<void> {
@@ -124,14 +126,27 @@ class AWSSecretService implements SecretService {
     }
 
     if (await this.secretExists(secretName)) {
-      const shouldOverride = await confirm({
-        default: false,
-        message: chalk.yellow(`Secret ${fullSecretName} already exists. Do you want to override it?`),
-      })
+      if (this.overrideAll) {
+        console.log(chalk.yellow(`Overriding existing secret: ${fullSecretName} (ALL mode)`))
+      } else {
+        const shouldOverride = await select({
+          choices: [
+            { name: 'Yes', value: 'yes' },
+            { name: 'No', value: 'no' },
+            { name: 'Yes to ALL', value: 'all' },
+          ],
+          message: chalk.yellow(`Secret ${fullSecretName} already exists. Do you want to override it?`),
+        })
 
-      if (!shouldOverride) {
-        console.log(chalk.yellow(`Skipping secret: ${fullSecretName}`))
-        return
+        if (shouldOverride === 'no') {
+          console.log(chalk.yellow(`Skipping secret: ${fullSecretName}`))
+          return
+        }
+
+        if (shouldOverride === 'all') {
+          this.overrideAll = true
+          console.log(chalk.yellow('Will override all existing secrets from now on.'))
+        }
       }
 
       const command = `aws secretsmanager put-secret-value --secret-id "${fullSecretName}" --secret-string '${escapedJsonContent}' --region ${this.region}`
@@ -186,6 +201,7 @@ class AWSSecretService implements SecretService {
 class HashicorpVaultDevService implements SecretService {
   private debug: boolean
   private pathPrefix: string
+  private overrideAll: boolean = false
 
   constructor(debug: boolean, pathPrefix: string = 'scroll') {
     this.debug = debug
@@ -365,6 +381,36 @@ class HashicorpVaultDevService implements SecretService {
         return
       }
 
+      // Check if secret exists
+      try {
+        await this.runCommand(`vault kv get ${this.pathPrefix}/${secretName}`)
+        // Secret exists, ask for override
+        if (this.overrideAll) {
+          console.log(chalk.yellow(`Overriding existing secret: ${this.pathPrefix}/${secretName} (ALL mode)`))
+        } else {
+          const shouldOverride = await select({
+            choices: [
+              { name: 'Yes', value: 'yes' },
+              { name: 'No', value: 'no' },
+              { name: 'Yes to ALL', value: 'all' },
+            ],
+            message: chalk.yellow(`Secret ${this.pathPrefix}/${secretName} already exists. Do you want to override it?`),
+          })
+
+          if (shouldOverride === 'no') {
+            console.log(chalk.yellow(`Skipping secret: ${this.pathPrefix}/${secretName}`))
+            return
+          }
+
+          if (shouldOverride === 'all') {
+            this.overrideAll = true
+            console.log(chalk.yellow('Will override all existing secrets from now on.'))
+          }
+        }
+      } catch {
+        // Secret doesn't exist, continue with creation
+      }
+
       await this.runCommand(command)
       console.log(
         chalk.green(`Successfully pushed JSON secret: ${this.pathPrefix}/${secretName} with property ${propertyName}`),
@@ -395,6 +441,36 @@ class HashicorpVaultDevService implements SecretService {
     }
 
     try {
+      // Check if secret exists
+      try {
+        await this.runCommand(`vault kv get ${this.pathPrefix}/${secretName}`)
+        // Secret exists, ask for override
+        if (this.overrideAll) {
+          console.log(chalk.yellow(`Overriding existing secret: ${this.pathPrefix}/${secretName} (ALL mode)`))
+        } else {
+          const shouldOverride = await select({
+            choices: [
+              { name: 'Yes', value: 'yes' },
+              { name: 'No', value: 'no' },
+              { name: 'Yes to ALL', value: 'all' },
+            ],
+            message: chalk.yellow(`Secret ${this.pathPrefix}/${secretName} already exists. Do you want to override it?`),
+          })
+
+          if (shouldOverride === 'no') {
+            console.log(chalk.yellow(`Skipping secret: ${this.pathPrefix}/${secretName}`))
+            return
+          }
+
+          if (shouldOverride === 'all') {
+            this.overrideAll = true
+            console.log(chalk.yellow('Will override all existing secrets from now on.'))
+          }
+        }
+      } catch {
+        // Secret doesn't exist, continue with creation
+      }
+
       await this.runCommand(command)
       console.log(chalk.green(`Successfully pushed secret: ${this.pathPrefix}/${secretName}`))
     } catch (error) {

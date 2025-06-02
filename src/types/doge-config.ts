@@ -39,6 +39,7 @@ export interface DogeConfig {
     daNamespace: string,
     signerAddress: string,
     genesisBlobCommitment: string,
+    celestiaMnemonic: string,
   }
   awsSigner?: {
     region?: string
