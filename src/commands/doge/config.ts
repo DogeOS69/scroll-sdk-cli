@@ -174,6 +174,11 @@ export class DogeConfigCommand extends Command {
       message: `Enter the Celestia Genesis Blob Commitment:`,
     });
 
+    newConfig.da!.celestiaMnemonic = await input({
+      default: existingConfig.da?.celestiaMnemonic,
+      message: `Enter the Celestia Mnemonic:`,
+    });
+
     newConfig.da!.celestiaIndexerStartBlock = String(await input({
       default: String(existingConfig.da?.celestiaIndexerStartBlock || 0),
       message: `Enter the Celestia Indexer Start Block:`,

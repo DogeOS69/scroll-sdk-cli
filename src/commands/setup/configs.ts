@@ -467,9 +467,7 @@ export default class SetupConfigs extends Command {
     }
 
     if (service === 'celestia-node') {
-      // Create an empty celestia-node-secret.env file
-      // envFiles['celestia-node-secret.env'] = ''
-      // this.log(chalk.green('Created empty celestia-node-secret.env file'))
+      envFiles['celestia-node-secret.env'] = `mnemonic="${this.dogeConfig.da?.celestiaMnemonic}"\n`
     }
 
     return envFiles
