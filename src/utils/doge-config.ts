@@ -1,9 +1,10 @@
 import * as toml from '@iarna/toml'
-import {confirm, input, select} from '@inquirer/prompts'
+import { confirm, input, select } from '@inquirer/prompts'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import {DogeConfig, Network} from '../types/doge-config.js'
+import { DogeConfig, Network } from '../types/doge-config.js'
+
 
 export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
   const resolvedPath = path.resolve(configPath)
@@ -22,8 +23,8 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
 
     const network = (await select({
       choices: [
-        {name: 'mainnet', value: 'mainnet' as const},
-        {name: 'testnet', value: 'testnet' as const},
+        { name: 'mainnet', value: 'mainnet' as const },
+        { name: 'testnet', value: 'testnet' as const },
       ],
       default: 'mainnet',
       message: 'Select network for the new default config:',
@@ -34,29 +35,42 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
       validate: (value) => (value ? true : 'API key is required'),
     })
 
+
     const defaultConfig: DogeConfig = {
       defaults: {
-        chainId: '0x221122',
-        evmAddress: '0x151a64570e4997739458455ba4ab5A535FD2E306',
-        recipient: network === 'mainnet' ? 'DARn34TPXXQZgcVo5nZ7iqvJJRsm2PkjSC' : 'nZVA3ysLh4LsmDog9hg1kkXMhzAT8DbnTT',
+        dogecoinIndexerStartHeight: '4000000',
       },
       frontend: {},
       network,
       rpc: {
+        username: '',
+        password: '',
         apiKey,
         blockbookAPIUrl:
           network === 'mainnet' ? 'https://dogebook.nownodes.io/api/v2' : 'https://dogebook-testnet.nownodes.io/api/v2',
-        url: network === 'mainnet' ? 'https://doge.nownodes.io' : 'https://doge-testnet.nownodes.io',
+        url: network === 'mainnet' ? '' : 'https://testnet.doge.xyz/',
+      },
+      dogecoinClusterRpc: {
+        username: "",
+        password: "",
       },
       test: {},
       wallet: {
         path: network === 'mainnet' ? '.data/doge-wallet-mainnet.json' : '.data/doge-wallet-testnet.json',
       },
+      da: {
+        celestiaIndexerStartBlock: network === 'mainnet' ? '0' : '6175746',
+        //rpcUrl: network === 'mainnet' ? 'http://celestia-mainnet:26658' : 'http://celestia-testnet-mocha:26658',
+        tendermintRpcUrl: '',
+        daNamespace: network === 'mainnet' ? '' : 'D06305735700',
+        signerAddress: network === 'mainnet' ? '' : 'celestia1y2yeln5dt4chaezx59fyjm477gw5x4vl6du6u7',
+        genesisBlobCommitment: network === 'mainnet' ? '' : 'VTYXiL6DKEhFBGB7kXORCC8uNu/UOR20mUyzMICmnkk=',
+      }
     }
 
     const configDir = path.dirname(resolvedPath)
     if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, {recursive: true})
+      fs.mkdirSync(configDir, { recursive: true })
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -89,8 +103,7 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Config file')) throw error
     throw new Error(
-      `Failed to load or parse Dogecoin config from ${resolvedPath}: ${
-        error instanceof Error ? error.message : String(error)
+      `Failed to load or parse Dogecoin config from ${resolvedPath}: ${error instanceof Error ? error.message : String(error)
       }. Try running 'scrollsdk doge:config' to regenerate it.`,
     )
   }

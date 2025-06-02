@@ -19,9 +19,93 @@ A tool for configuring, managing, and testing [Scroll SDK](https://docs.scroll.i
 <!-- toc -->
 
 - [Scroll SDK CLI](#scroll-sdk-cli)
+- [Installation](#installation)
 - [Usage](#usage)
 - [Commands](#commands)
 <!-- tocstop -->
+
+# Installation
+
+<!-- installation -->
+
+1. ```bash
+   scrollsdk setup domains
+   ```
+
+2. ```bash
+   scrollsdk setup db-init --clean
+   ```
+
+3. ```bash
+   scrollsdk setup gen-keystore
+   ```
+
+4. ```bash
+   scrollsdk doge config
+   ```
+
+5. ```bash
+   scrollsdk doge dummy-signers
+   ```
+
+6. ```bash
+   scrollsdk doge bridge-init
+   ```
+   **Note:** If you encounter an "Insufficient base funds" error like this:
+   ```
+   2025-05-31T00:32:08.308083Z  INFO generate_test_keys: Checking funding for distribution helper address: nmCrhAu4STRor8Tmv4rNHt6JXeqUXFxeo1
+   ......
+   Error: Insufficient base funds for setup tx after selecting all UTXOs. Needed: 6049001000 sats, Have: 3950999000 sats
+   ```
+  or
+  ```
+  ? Enter the seed string 123456
+  Pulling Docker Image: docker.io/dogeos69/generate-test-keys:v0.1.1-test
+  Image pulled successfully
+  Creating Docker Container...
+  Starting Container
+  M--- Running Test Setup & Key Generation (with OP_RETURN bridge funding) ---
+  PLoading configuration from: "./crates/test_utils/config/setup_defaults.toml"...
+  'Starting setup for network: Testnet...
+  )Using RPC URL: https://testnet.doge.xyz/
+  :Using Blockbook URL: https://dogebook-testnet.nownodes.io
+  �2025-05-31T03:19:48.077868Z  INFO generate_test_keys: Using OP_RETURN payload (hex): 00151a64570e4997739458455ba4ab5a535fd2e306 for script (hex): 6a1500151a64570e4997739458455ba4ab5a535fd2e306
+  TDistribution Helper Address (derived from seed): nqBXoHUiH92gxgrsmFYjqcBNWZ7VMPFNJY
+  {2025-05-31T03:19:48.077948Z  INFO generate_test_keys: Initializing Dogecoin RPC client...
+  �2025-05-31T03:19:48.144522Z  INFO generate_test_keys: Checking funding for distribution helper address: nqBXoHUiH92gxgrsmFYjqcBNWZ7VMPFNJY
+  �2025-05-31T03:19:49.671868Z ERROR generate_test_keys: Distribution Helper address nqBXoHUiH92gxgrsmFYjqcBNWZ7VMPFNJY has no funds on testnet!
+
+  EPlease send some testnet DOGE to: nqBXoHUiH92gxgrsmFYjqcBNWZ7VMPFNJY
+  Then re-run this script.
+  ```   
+   Send Dogecoin to the displayed helper address and retry the command. Please keep the same seed string, or the helper address will change.
+
+
+
+7. ```bash
+   scrollsdk setup configs
+   ```
+
+8. ```bash
+   scrollsdk setup prep-charts
+   ```
+
+9. ```
+    scrollsdk setup cubesigner-refresh
+    ```
+
+10. ```
+    scrollsdk setup push-secrets
+    ```
+
+11. ```bash
+    scrollsdk setup tls
+    ```
+
+1. `scrollsdk helper fund-accounts -i -f 2 -d`
+1. `scrollsdk helper fund-accounts -l 1 -f 2 -d`
+1. `scrollsdk helper fund-accounts -l 2 -d`
+<!-- installationstop -->
 
 # Usage
 
@@ -48,6 +132,7 @@ USAGE
 - [Scroll SDK CLI](#scroll-sdk-cli)
   - [Introduction](#introduction)
     - [Other Scroll SDK Repos](#other-scroll-sdk-repos)
+- [Installation](#installation)
 - [Usage](#usage)
 - [Commands](#commands)
   - [`scrollsdk help [COMMAND]`](#scrollsdk-help-command)
@@ -67,6 +152,7 @@ USAGE
   - [`scrollsdk plugins unlink [PLUGIN]`](#scrollsdk-plugins-unlink-plugin)
   - [`scrollsdk plugins update`](#scrollsdk-plugins-update)
   - [`scrollsdk setup configs`](#scrollsdk-setup-configs)
+  - [`scrollsdk setup cubesigner`](#scrollsdk-setup-cubesigner)
   - [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
   - [`scrollsdk setup domains [FILE]`](#scrollsdk-setup-domains-file)
   - [`scrollsdk setup gas-token`](#scrollsdk-setup-gas-token)
@@ -535,12 +621,29 @@ DESCRIPTION
 EXAMPLES
   $ scrollsdk setup configs
 
-  $ scrollsdk setup configs --image-tag gen-configs-de732bfee2c6afdebb6a860ab6c79bd8da47832d
+  $ scrollsdk setup configs --image-tag gen-configs-0f04f9b71dccc3a1647fb6473f414d6de5020c3d
 
   $ scrollsdk setup configs --configs-dir custom-configs
 ```
 
 _See code: [src/commands/setup/configs.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.2/src/commands/setup/configs.ts)_
+
+## `scrollsdk setup cubesigner`
+
+Refresh cubesigner session secrets
+
+```
+USAGE
+  $ scrollsdk setup cubesigner
+
+DESCRIPTION
+  Refresh cubesigner session secrets
+
+EXAMPLES
+  $ scrollsdk setup cubesigner
+```
+
+_See code: [src/commands/setup/cubesigner.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.2/src/commands/setup/cubesigner.ts)_
 
 ## `scrollsdk setup db-init`
 
@@ -733,7 +836,7 @@ DESCRIPTION
 EXAMPLES
   $ scrollsdk setup verify-contracts
 
-  $ scrollsdk setup verify-contracts --image-tag verify-de732bfee2c6afdebb6a860ab6c79bd8da47832d
+  $ scrollsdk setup verify-contracts --image-tag verify-0f04f9b71dccc3a1647fb6473f414d6de5020c3d
 ```
 
 _See code: [src/commands/setup/verify-contracts.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.2/src/commands/setup/verify-contracts.ts)_

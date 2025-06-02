@@ -16,3 +16,4 @@ path = ".data/doge-wallet.json"
 chainId = "221122"                                           # Optional: integer or hex with 0x prefix
 evmAddress = "0x151a64570e4997739458455ba4ab5A535FD2E306"    # Optional: 20 bytes for 27-byte format
 recipient = "DARn34TPXXQZgcVo5nZ7iqvJJRsm2PkjSC"             # Optional: Default recipient address
+dogecoinIndexerStartHeight = 4000000

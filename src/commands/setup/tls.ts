@@ -6,6 +6,7 @@ import chalk from 'chalk'
 import { exec } from 'child_process'
 import { promisify } from 'util'
 import { confirm, input, select } from '@inquirer/prompts'
+import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
 
 const execAsync = promisify(exec)
 
@@ -33,6 +34,44 @@ export default class SetupTls extends Command {
   private selectedIssuer: string | null = null
   private debugMode: boolean = false
   private valuesDir: string = 'values'
+
+  // Handle celestia and dogecoin TLS processing
+  private processStandardTls(yamlContent: any, chart: string, issuer: string): boolean {
+    let ingress = yamlContent.ingress;
+    let updated = false;
+
+    // Add cert-manager annotation
+    if (!ingress.annotations) {
+      ingress.annotations = {};
+    }
+    if (ingress.annotations['cert-manager.io/cluster-issuer'] !== issuer) {
+      ingress.annotations['cert-manager.io/cluster-issuer'] = issuer;
+      updated = true;
+    }
+
+    // Handle TLS configuration
+    if (ingress.tls && ingress.tls.length > 0) {
+      ingress.tls.forEach((tlsConfig: any) => {
+        for (let i = 0; i < ingress.hosts.length; i++) {
+          if (tlsConfig.hosts[i] != ingress.hosts[i].host) {
+            tlsConfig.hosts[i] = ingress.hosts[i].host;
+            updated = true;
+          }
+        }
+      });
+    } else {
+      ingress.tls = [{
+        secretName: `${chart}-tls`,
+        hosts: []
+      }];
+      for (let i = 0; i < ingress.hosts.length; i++) {
+        ingress.tls[0].hosts.push(ingress.hosts[i].host);
+      }
+      updated = true;
+    }
+
+    return updated;
+  }
 
   private async checkClusterIssuer(): Promise<boolean> {
     try {
@@ -133,7 +172,7 @@ spec:
             - grafana.scsdk.unifra.xyz
       */
       if (yamlContent.grafana && yamlContent.grafana.ingress) {
-        const originalContent = yaml.dump(yamlContent.grafana.ingress, { lineWidth: -1, noRefs: true })
+        const originalContent = yaml.dump(yamlContent.grafana.ingress, YAML_DUMP_OPTIONS)
         let ingressUpdated = false;
         let ingress = yamlContent.grafana.ingress;
         if (!ingress.annotations) {
@@ -184,7 +223,7 @@ spec:
 
         if (ingressUpdated) {
           updated = true
-          const updatedContent = yaml.dump(ingress, { lineWidth: -1, noRefs: true })
+          const updatedContent = yaml.dump(ingress, YAML_DUMP_OPTIONS)
 
           if (this.debugMode) {
             this.log(chalk.yellow(`\nProposed changes for ${chart} :`))
@@ -211,7 +250,7 @@ spec:
 
       if (yamlContent["blockscout-stack"]) {
 
-        let blockscoutStack=yamlContent["blockscout-stack"];
+        let blockscoutStack = yamlContent["blockscout-stack"];
         let items = ["blockscout", "frontend"];
         for (const item of items) {
           if (blockscoutStack[item]?.ingress?.tls) {
@@ -219,11 +258,25 @@ spec:
             updated = true;
           }
         }
+      } else if (chart == "celestia-node") {
+        if (yamlContent.ingress) {
+          const celestiaUpdated = this.processStandardTls(yamlContent, chart, issuer);
+          if (celestiaUpdated) {
+            updated = true;
+          }
+        }
+      } else if (chart == "dogecoin") {
+        if (yamlContent.ingress) {
+          const dogecoinUpdated = this.processStandardTls(yamlContent, chart, issuer);
+          if (dogecoinUpdated) {
+            updated = true;
+          }
+        }
       }
 
       for (const ingressType of ingressTypes) {
         if (yamlContent.ingress?.[ingressType]) {
-          const originalContent = yaml.dump(yamlContent.ingress[ingressType], { lineWidth: -1, noRefs: true })
+          const originalContent = yaml.dump(yamlContent.ingress[ingressType], YAML_DUMP_OPTIONS)
           let ingressUpdated = false
 
           // Add or update annotation
@@ -272,7 +325,7 @@ spec:
 
           if (ingressUpdated) {
             updated = true
-            const updatedContent = yaml.dump(yamlContent.ingress[ingressType], { lineWidth: -1, noRefs: true })
+            const updatedContent = yaml.dump(yamlContent.ingress[ingressType], YAML_DUMP_OPTIONS)
 
             if (this.debugMode) {
               this.log(chalk.yellow(`\nProposed changes for ${chart} (${ingressType}):`))
@@ -300,12 +353,7 @@ spec:
 
       if (updated) {
         // Write updated YAML back to file
-        const updatedYamlContent = yaml.dump(yamlContent, {
-          lineWidth: -1,
-          noRefs: true,
-          quotingType: '"',
-          forceQuotes: false
-        })
+        const updatedYamlContent = yaml.dump(yamlContent, YAML_DUMP_OPTIONS)
         fs.writeFileSync(yamlPath, updatedYamlContent)
       }
     } catch (error) {
@@ -363,7 +411,11 @@ spec:
         'rollup-explorer-backend',
         'l2-rpc',
         'l1-devnet',
-        'scroll-monitor'
+        'scroll-monitor',
+        'tso-service',
+        'celestia-node',
+        'dogecoin',
+        //'withdrawal-processor' //no ingress in withdrawal-processor  
       ]
 
       for (const chart of chartsToUpdate) {

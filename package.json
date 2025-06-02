@@ -8,6 +8,8 @@
   },
   "bugs": "https://github.com/scroll-tech/scroll-sdk-cli/issues",
   "dependencies": {
+    "@cubist-labs/cubesigner-sdk": "^0.4.152-0",
+    "@cubist-labs/cubesigner-sdk-fs-storage": "^0.4.152-0",
     "@iarna/toml": "^2.2.5",
     "@inquirer/prompts": "^5.3.8",
     "@kubernetes/client-node": "^0.21.0",
@@ -17,6 +19,7 @@
     "bitcore-lib-doge": "^10.7.0",
     "chalk": "^5.3.0",
     "cli-progress": "^3.12.0",
+    "cli-table3": "^0.6.5",
     "dockerode": "^4.0.2",
     "doge-sdk": "^0.5.0-beta.4",
     "ethers": "^6.13.2",
@@ -92,6 +95,8 @@
   },
   "scripts": {
     "build": "shx rm -rf dist && tsc -b",
+    "watch": "tsc -b --watch",
+    "dev": "tsc -b --watch",
     "lint": "eslint . --ext .ts",
     "postpack": "shx rm -f oclif.manifest.json",
     "posttest": "yarn lint",

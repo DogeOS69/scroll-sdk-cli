@@ -1,11 +1,13 @@
 import * as toml from '@iarna/toml'
-import {input, select} from '@inquirer/prompts'
-import {Command, Flags} from '@oclif/core'
+import { input, select, confirm } from '@inquirer/prompts'
+import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import fs from 'node:fs'
 import path from 'node:path'
-
-import type {DogeConfig, Network} from '../../types/doge-config.js'
+import type { DogeConfig } from '../../types/doge-config.js'
+import { loadDogeConfig } from '../../utils/doge-config.js'
+import { getSetupDefaultsPath, SETUP_DEFAULTS_TEMPLATE } from '../../config/constants.js'
+import crypto from 'node:crypto'
 
 export class DogeConfigCommand extends Command {
   static description = 'Configure Dogecoin settings for mainnet or testnet'
@@ -23,123 +25,170 @@ export class DogeConfigCommand extends Command {
     }),
   }
 
+  private dogeConfig: DogeConfig = {} as DogeConfig
+  private configPath: string = ''
+
+  // Helper methods for common operations
+  private async promptForInput(message: string, defaultValue?: string, validator?: (value: string) => boolean | string, required: boolean = false): Promise<string> {
+    return await input({
+      message,
+      default: defaultValue,
+      validate: validator || (() => true),
+      required
+    })
+  }
+
+  // Common validators
+  private validators = {
+    required: (value: string) => value.length > 0 ? true : 'This field is required',
+    chainId: (value: string) => /^(0x[\dA-Fa-f]+|\d+)$/.test(value) ? true : 'Chain ID must be decimal or hex with 0x prefix',
+    evmAddress: (value: string) => /^0x[\dA-Fa-f]{40}$/.test(value) ? true : 'EVM Address must be 20 bytes (40 hex chars) with 0x prefix',
+    dogeAddress: (value: string) => /^(D[1-9A-HJ-NP-Za-km-z]{33}|[mn][1-9A-HJ-NP-Za-km-z]{33})$/.test(value) ? true : 'Invalid Dogecoin address format',
+    number: (value: string) => !isNaN(Number(value)) ? true : 'Must be a valid number',
+  }
+
+  private ensureDirectoryExists(dirPath: string): void {
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true })
+    }
+  }
+
+  private generateSecureRandomString(length: number): string {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    let result = ''
+    const randomBytes = crypto.randomBytes(length)
+
+    for (let i = 0; i < length; i++) {
+      result += chars[randomBytes[i] % chars.length]
+    }
+
+    return result
+  }
+
   async run(): Promise<void> {
-    const {flags} = await this.parse(DogeConfigCommand)
+    const { flags } = await this.parse(DogeConfigCommand)
+    let resolvedPath = "";
 
-    const networkSelection = (await select({
-      choices: [
-        {name: 'mainnet', value: 'mainnet' as const},
-        {name: 'testnet', value: 'testnet' as const},
-      ],
-      default: 'mainnet',
-      message: 'Select network type to configure:',
-    })) as Network
+    if (!flags.config) {
+      if (!fs.existsSync('.data')) {
+        fs.mkdirSync('.data', { recursive: true });
+      }
+      const files = fs.readdirSync('.data')
+      const configFiles = files.filter(file => file.endsWith('.toml'))
+      const configFileChoices = configFiles.map(file => ({ name: file, value: file }))
 
-    const defaultConfigFilename = networkSelection === 'mainnet' ? 'doge-config.toml' : 'doge-config-testnet.toml'
-    const configPath = flags.config || path.join('.data', defaultConfigFilename)
-    const resolvedPath = path.resolve(configPath)
+      const fileSelection = await select({
+        choices: [
+          ...configFileChoices,
+          { name: 'Create New Config', value: 'new' as const },
+        ],
+        message: 'Select config file to configure:',
+      })
 
-    this.log(chalk.blue(`Configuring for ${networkSelection} network. Target config file: ${resolvedPath}`))
+      if (fileSelection === 'new') {
+        const newConfigName = await input({
+          default: "doge-config-testnet.toml",
+          message: 'Enter the name of the new config file:',
+          required: true,
+        })
+        resolvedPath = path.resolve('.data/' + newConfigName);
+      } else {
+        const configPath = path.join('.data', fileSelection)
+        resolvedPath = path.resolve(configPath)
+      }
 
-    let existingConfig: Partial<DogeConfig> = {}
-    if (fs.existsSync(resolvedPath)) {
-      try {
-        const configContent = fs.readFileSync(resolvedPath, 'utf8')
-        existingConfig = toml.parse(configContent) as unknown as Partial<DogeConfig>
-        if (existingConfig.network && existingConfig.network !== networkSelection) {
-          this.log(
-            chalk.yellow(
-              `Warning: Selected network (${networkSelection}) differs from existing config's network (${existingConfig.network}) in ${resolvedPath}. Proceeding will overwrite with ${networkSelection} settings.`,
-            ),
-          )
-        }
-      } catch (error) {
-        this.log(
-          chalk.yellow(
-            `Warning: Failed to parse existing config at ${resolvedPath}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          ),
-        )
+    } else {
+      resolvedPath = path.resolve(flags.config);
+      if (!fs.existsSync(resolvedPath)) {
+        this.error(`Config file ${resolvedPath} does not exist`);
+        return;
       }
     }
 
-    const networkDefaults = {
-      mainnet: {
-        blockbookAPIUrl: 'https://dogebook.nownodes.io/api/v2',
-        recipient: 'DARn34TPXXQZgcVo5nZ7iqvJJRsm2PkjSC',
-        rpcUrl: 'https://doge.nownodes.io',
-        walletPath: '.data/doge-wallet-mainnet.json',
-      },
-      testnet: {
-        blockbookAPIUrl: 'https://dogebook-testnet.nownodes.io/api/v2',
-        recipient: 'nZVA3ysLh4LsmDog9hg1kkXMhzAT8DbnTT',
-        rpcUrl: 'https://doge-testnet.nownodes.io',
-        walletPath: '.data/doge-wallet-testnet.json',
-      },
-    }
-    const currentDefaults = networkDefaults[networkSelection]
+    this.configPath = resolvedPath
+    const existingConfig = await loadDogeConfig(resolvedPath)
+    let newConfig = await loadDogeConfig(resolvedPath);
+    this.dogeConfig = newConfig
 
-    const apiKey = await input({
+    newConfig.rpc!.apiKey = await input({
       default: existingConfig.rpc?.apiKey,
       message: 'Enter your NowNodes API key (get one at nownodes.io):',
       validate: (value) => (value ? true : 'API key is required'),
     })
 
-    const chainId = await input({
-      default: existingConfig.defaults?.chainId || '0x221122',
-      message: 'Enter the Chain ID (hex with 0x prefix or decimal):',
-      validate: (value) =>
-        /^(0x[\dA-Fa-f]+|\d+)$/.test(value) ? true : 'Chain ID must be decimal or hex with 0x prefix',
+    let generateClusterRpc = await confirm({
+      message: `Do you want to automatically generate secure credentials for your Dogecoin RPC service that will be deployed?\n  (These will be used to authenticate access to your Dogecoin nodes)\n  Choose 'Yes' to auto-generate, 'No' to set manually`,
+      default: true,
     })
+    if (!generateClusterRpc) {
+      newConfig.dogecoinClusterRpc!.username = await input({
+        default: existingConfig.dogecoinClusterRpc?.username,
+        message: `Enter the username for your Dogecoin RPC service (will be used for authentication):`,
+      });
 
-    const evmAddress = await input({
-      default: existingConfig.defaults?.evmAddress || '0x151a64570e4997739458455ba4ab5A535FD2E306',
-      message: 'Enter the EVM Address (20 bytes):',
-      validate: (value) =>
-        /^0x[\dA-Fa-f]{40}$/.test(value) ? true : 'EVM Address must be 20 bytes (40 hex chars) with 0x prefix',
-    })
-
-    const recipient = await input({
-      default: existingConfig.defaults?.recipient || currentDefaults.recipient,
-      message: `Enter the Doge Bridge Address (for ${networkSelection} network):`,
-      validate: (value) =>
-        /^(D[1-9A-HJ-NP-Za-km-z]{33}|[mn][1-9A-HJ-NP-Za-km-z]{33})$/.test(value)
-          ? true
-          : 'Invalid Dogecoin address format',
-    })
-
-    const walletPathInput = await input({
-      default: existingConfig.wallet?.path || currentDefaults.walletPath,
-      message: `Enter the wallet file path (for ${networkSelection} network):`,
-    })
-
-    const newConfig: DogeConfig = {
-      ...(existingConfig as DogeConfig),
-      defaults: {
-        ...existingConfig.defaults,
-        chainId,
-        evmAddress,
-        recipient,
-      },
-      frontend: existingConfig.frontend ? {...existingConfig.frontend} : undefined,
-      network: networkSelection,
-      rpc: {
-        ...existingConfig.rpc,
-        apiKey,
-        blockbookAPIUrl: currentDefaults.blockbookAPIUrl,
-        url: currentDefaults.rpcUrl,
-      },
-      test: existingConfig.test ? {...existingConfig.test} : undefined,
-      wallet: {
-        ...existingConfig.wallet,
-        path: walletPathInput,
-      },
+      newConfig.dogecoinClusterRpc!.password = await input({
+        default: existingConfig.dogecoinClusterRpc?.password,
+        message: `Enter the password for your Dogecoin RPC service (will be used for authentication):`,
+      });
+    } else {
+      newConfig.dogecoinClusterRpc!.username = this.generateSecureRandomString(8);
+      newConfig.dogecoinClusterRpc!.password = this.generateSecureRandomString(16);
+      this.log(chalk.green(`✓ Generated secure random credentials for Dogecoin cluster RPC`));
     }
+
+    newConfig.wallet!.path = await input({
+      default: existingConfig.wallet?.path,
+      message: `Enter the wallet file path:`,
+    })
+
+    newConfig.rpc!.url = await input({
+      default: existingConfig.rpc?.url,
+      message: `Enter an external dogecoin RPC URL for wallet operations (send/sync):
+      `,
+    });
+
+    newConfig.rpc!.username = await input({
+      default: existingConfig.rpc?.username,
+      message: `Enter RPC username (leave empty for public RPC endpoints):`,
+    });
+
+    newConfig.rpc!.password = await input({
+      default: existingConfig.rpc?.password,
+      message: `Enter RPC password (leave empty for public RPC endpoints):`,
+    });
+
+    newConfig.da!.tendermintRpcUrl = await input({
+      default: existingConfig.da?.tendermintRpcUrl,
+      message: `Enter the Celestia Tendermint RPC URL:`,
+    });
+    newConfig.da!.daNamespace = await input({
+      default: existingConfig.da?.daNamespace,
+      message: `Enter the Celestia DA Namespace:`,
+    });
+    newConfig.da!.signerAddress = await input({
+      default: existingConfig.da?.signerAddress,
+      message: `Enter the Celestia Signer Address:`,
+    });
+    newConfig.da!.genesisBlobCommitment = await input({
+      default: existingConfig.da?.genesisBlobCommitment,
+      message: `Enter the Celestia Genesis Blob Commitment:`,
+    });
+
+    newConfig.da!.celestiaIndexerStartBlock = String(await input({
+      default: String(existingConfig.da?.celestiaIndexerStartBlock || 0),
+      message: `Enter the Celestia Indexer Start Block:`,
+      validate: (value) => !isNaN(Number(value)) ? true : 'Must be a valid number',
+    }));
+
+    newConfig.defaults!.dogecoinIndexerStartHeight = String(await input({
+      default: String(existingConfig.defaults?.dogecoinIndexerStartHeight || 4000000),
+      message: `Enter the Dogecoin Indexer Start Height:`,
+      validate: (value) => !isNaN(Number(value)) ? true : 'Must be a valid number',
+    }));
 
     const configDir = path.dirname(resolvedPath)
     if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, {recursive: true})
+      fs.mkdirSync(configDir, { recursive: true })
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -151,9 +200,40 @@ export class DogeConfigCommand extends Command {
     this.log(chalk.blue(`RPC URL: ${newConfig.rpc!.url}`))
     this.log(chalk.blue(`Blockbook API URL: ${newConfig.rpc!.blockbookAPIUrl}`))
     this.log(chalk.blue(`Wallet Path: ${newConfig.wallet.path}`))
-    this.log(chalk.blue(`Chain ID: ${newConfig.defaults!.chainId}`))
-    this.log(chalk.blue(`EVM Address: ${newConfig.defaults!.evmAddress}`))
-    this.log(chalk.blue(`Doge Bridge Address: ${newConfig.defaults!.recipient}`))
+
+    await this.generateSetupDefaultsToml(newConfig)
+  }
+
+
+  async generateSetupDefaultsToml(newDogeConfig: DogeConfig): Promise<void> {
+    // Create setup_defaults.toml in user's current working directory
+    const setupDefaultsPath = getSetupDefaultsPath();
+
+    if (!fs.existsSync(setupDefaultsPath)) {
+      // Ensure the target directory exists
+      const targetDir = path.dirname(setupDefaultsPath);
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+
+      this.log(chalk.blue(`Creating setup defaults from embedded template at ${setupDefaultsPath}`));
+      fs.writeFileSync(setupDefaultsPath, SETUP_DEFAULTS_TEMPLATE);
+    }
+    //read existing config file from user's working directory
+    const existingConfigStr = fs.readFileSync(setupDefaultsPath, 'utf-8');
+    let newConfig = toml.parse(existingConfigStr);
+
+    newConfig.network = newDogeConfig.network;
+
+    newConfig.dogecoin_rpc_url = newDogeConfig.rpc?.url || 'https://testnet.doge.xyz';
+    newConfig.dogecoin_rpc_user = newDogeConfig.rpc?.username || '';
+    newConfig.dogecoin_rpc_pass = newDogeConfig.rpc?.password || '';
+    const blockbookUrl = newDogeConfig.rpc?.blockbookAPIUrl?.replace('/api/v2', '') || '';
+    newConfig.dogecoin_blockbook_url = blockbookUrl;
+    newConfig.dogecoin_blockbook_api_key = newDogeConfig.rpc?.apiKey || '';
+
+    // Write to setup_defaults.toml
+    fs.writeFileSync(setupDefaultsPath, toml.stringify(newConfig));
   }
 }
 

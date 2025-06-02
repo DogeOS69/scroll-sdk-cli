@@ -1,28 +1,35 @@
-import {confirm, input, select} from '@inquirer/prompts'
-import {Command, Flags} from '@oclif/core'
+import { confirm, input, select } from '@inquirer/prompts'
+import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import * as yaml from 'js-yaml'
-import {exec} from 'node:child_process'
+import { exec, spawn } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import {promisify} from 'node:util'
+import { promisify } from 'node:util'
+import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
 
 const execAsync = promisify(exec)
 
 interface SecretService {
-  pushSecrets(): Promise<void>
+  pushSecrets(cubesignerOnly?: boolean): Promise<void>
 }
 
 class AWSSecretService implements SecretService {
-  constructor(private region: string, private prefixName: string, private debug: boolean) {}
+  constructor(private region: string, private prefixName: string, private debug: boolean) { }
 
-  async pushSecrets(): Promise<void> {
+  async pushSecrets(cubesignerOnly: boolean = false): Promise<void> {
     const secretsDir = path.join(process.cwd(), 'secrets')
 
     // Process JSON files
     const jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json'))
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
+      
+      // Filter for CubeSigner files if cubesignerOnly is true
+      if (cubesignerOnly && !secretName.includes('cubesigner-signer-')) {
+        continue
+      }
+      
       console.log(chalk.cyan(`Processing JSON secret: ${secretName}`))
       const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
 
@@ -34,7 +41,7 @@ class AWSSecretService implements SecretService {
       }
       // Add more specific cases if other JSON types arise with different property needs
 
-      await this.createOrUpdateSecret({[propertyName]: content}, secretName)
+      await this.createOrUpdateSecret({ [propertyName]: content }, secretName)
     }
 
     // Process ENV files
@@ -43,6 +50,18 @@ class AWSSecretService implements SecretService {
 
     for (const file of envFiles) {
       const baseName = path.basename(file, '.env')
+
+      // Filter for CubeSigner files if cubesignerOnly is true
+      if (cubesignerOnly && !baseName.includes('cubesigner-signer-')) {
+        // Skip l2-sequencer files when cubesignerOnly is true
+        if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
+          continue
+        }
+        // Skip other non-cubesigner files
+        if (!baseName.includes('cubesigner-signer-')) {
+          continue
+        }
+      }
 
       // Special handling for l2-sequencer-N-secret.env files
       if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
@@ -70,8 +89,8 @@ class AWSSecretService implements SecretService {
       }
     }
 
-    // Push combined L2 Sequencer secrets
-    if (Object.keys(l2SequencerSecrets).length > 0) {
+    // Push combined L2 Sequencer secrets (only if not cubesignerOnly)
+    if (Object.keys(l2SequencerSecrets).length > 0 && !cubesignerOnly) {
       console.log(chalk.cyan(`Processing combined L2 Sequencer secrets: l2-sequencer-secret-env`))
       await this.createOrUpdateSecret(l2SequencerSecrets, 'l2-sequencer-secret-env')
     }
@@ -173,7 +192,7 @@ class HashicorpVaultDevService implements SecretService {
     this.pathPrefix = pathPrefix
   }
 
-  async pushSecrets(): Promise<void> {
+  async pushSecrets(cubesignerOnly: boolean = false): Promise<void> {
     if (!(await this.isVaultPodRunning())) {
       console.log(chalk.yellow('Vault pod is not running. Please install Vault using the following commands:'))
       console.log(chalk.cyan('helm repo add hashicorp https://helm.releases.hashicorp.com'))
@@ -213,6 +232,12 @@ class HashicorpVaultDevService implements SecretService {
     const jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json'))
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
+      
+      // Filter for CubeSigner files if cubesignerOnly is true
+      if (cubesignerOnly && !secretName.includes('cubesigner-signer-')) {
+        continue
+      }
+      
       console.log(chalk.cyan(`Processing JSON secret: ${this.pathPrefix}/${secretName}`))
       const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
 
@@ -233,6 +258,18 @@ class HashicorpVaultDevService implements SecretService {
 
     for (const file of envFiles) {
       const baseName = path.basename(file, '.env')
+
+      // Filter for CubeSigner files if cubesignerOnly is true
+      if (cubesignerOnly && !baseName.includes('cubesigner-signer-')) {
+        // Skip l2-sequencer files when cubesignerOnly is true
+        if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
+          continue
+        }
+        // Skip other non-cubesigner files
+        if (!baseName.includes('cubesigner-signer-')) {
+          continue
+        }
+      }
 
       // Special handling for l2-sequencer-N-secret.env files
       if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
@@ -260,8 +297,8 @@ class HashicorpVaultDevService implements SecretService {
       }
     }
 
-    // Push combined L2 Sequencer secrets for backward compatibility
-    if (Object.keys(l2SequencerSecrets).length > 0) {
+    // Push combined L2 Sequencer secrets for backward compatibility (only if not cubesignerOnly)
+    if (Object.keys(l2SequencerSecrets).length > 0 && !cubesignerOnly) {
       console.log(chalk.cyan(`Processing combined L2 Sequencer secrets: ${this.pathPrefix}/l2-sequencer-secret-env`))
       await this.pushToVault('l2-sequencer-secret-env', l2SequencerSecrets)
     }
@@ -368,7 +405,7 @@ class HashicorpVaultDevService implements SecretService {
 
   private async runCommand(command: string): Promise<string> {
     try {
-      const {stdout} = await execAsync(`kubectl exec vault-0 -- ${command}`)
+      const { stdout } = await execAsync(`kubectl exec vault-0 -- ${command}`)
       return stdout.trim()
     } catch (error) {
       console.error(chalk.red(`Error: ${error}`))
@@ -384,6 +421,8 @@ export default class SetupPushSecrets extends Command {
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --debug',
     '<%= config.bin %> <%= command.id %> --values-dir custom-values',
+    '<%= config.bin %> <%= command.id %> --cubesigner-only',
+    '<%= config.bin %> <%= command.id %> -c --debug',
   ]
 
   static override flags = {
@@ -396,20 +435,30 @@ export default class SetupPushSecrets extends Command {
       default: 'values',
       description: 'Directory containing the values files',
     }),
+    'cubesigner-only': Flags.boolean({
+      char: 'c',
+      default: false,
+      description: 'Only push CubeSigner related secrets (cubesigner-signer-* files)',
+    }),
   }
 
   private flags: any
 
+
   public async run(): Promise<void> {
-    const {flags} = await this.parse(SetupPushSecrets)
+    const { flags } = await this.parse(SetupPushSecrets)
     this.flags = flags
 
     this.log(chalk.blue('Starting secret push process...'))
 
+    if (flags['cubesigner-only']) {
+      this.log(chalk.yellow('🔑 CubeSigner only mode: Will only process cubesigner-signer-* files'))
+    }
+
     const secretService = await select({
       choices: [
-        {name: 'AWS', value: 'aws'},
-        {name: 'Hashicorp Vault - Dev', value: 'vault'},
+        { name: 'AWS', value: 'aws' },
+        { name: 'Hashicorp Vault - Dev', value: 'vault' },
       ],
       message: chalk.cyan('Select a secret service:'),
     })
@@ -431,7 +480,7 @@ export default class SetupPushSecrets extends Command {
     }
 
     try {
-      await service.pushSecrets()
+      await service.pushSecrets(flags['cubesigner-only'])
       this.log(chalk.green('Secrets pushed successfully'))
 
       const shouldUpdateYaml = await confirm({
@@ -568,10 +617,10 @@ export default class SetupPushSecrets extends Command {
               let updatedKey = ''
               if (/^l2-sequencer-secret-\d+-env$/.test(secretName)) {
                 updatedKey = prefixName ? `${prefixName}/l2-sequencer-secret-env` : 'l2-sequencer-secret-env'
-              } else if (secretName === 'cubesigner-signer-0-env') {
-                updatedKey = prefixName ? `${prefixName}/cubesigner-signer-0-env` : 'cubesigner-signer-0-env'
-              } else if (secretName === 'cubesigner-signer-0-session') {
-                updatedKey = prefixName ? `${prefixName}/cubesigner-signer-0-session` : 'cubesigner-signer-0-session'
+              } else if (/^cubesigner-signer-\d+-env$/.test(secretName)) {
+                updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
+              } else if (/^cubesigner-signer-\d+-session$/.test(secretName)) {
+                updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
                 if (data.secretKey === 'session.json') {
                   data.remoteRef.property = 'session.json'
                   updated = true
@@ -591,7 +640,7 @@ export default class SetupPushSecrets extends Command {
       }
 
       if (updated) {
-        const newContent = yaml.dump(yamlContent, {forceQuotes: true, lineWidth: -1, noRefs: true, quotingType: '"'})
+        const newContent = yaml.dump(yamlContent, YAML_DUMP_OPTIONS)
         fs.writeFileSync(yamlPath, newContent)
         this.log(chalk.green(`Updated externalSecrets provider in ${chalk.cyan(yamlFile)}`))
       } else {

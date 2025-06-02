@@ -1,20 +1,22 @@
 import * as toml from '@iarna/toml'
-import {confirm, input, select} from '@inquirer/prompts'
-import {Command, Flags} from '@oclif/core'
+import { confirm, input, select } from '@inquirer/prompts'
+import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import Docker from 'dockerode'
-import {ethers} from 'ethers'
+import { ethers } from 'ethers'
 import * as yaml from 'js-yaml'
 import * as childProcess from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import type { DogeConfig } from '../../types/doge-config.js'
+import { loadDogeConfig } from '../../utils/doge-config.js'
 
 export default class SetupConfigs extends Command {
   static override description = 'Generate configuration files and create environment files for services'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --image-tag gen-configs-de732bfee2c6afdebb6a860ab6c79bd8da47832d',
+    '<%= config.bin %> <%= command.id %> --image-tag gen-configs-0f04f9b71dccc3a1647fb6473f414d6de5020c3d',
     '<%= config.bin %> <%= command.id %> --configs-dir custom-configs',
   ]
 
@@ -27,16 +29,40 @@ export default class SetupConfigs extends Command {
       description: 'Specify the Docker image tag to use',
       required: false,
     }),
+    'doge-config': Flags.string({
+      description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
+      required: false,
+    }),
   }
 
+  private dogeConfig: DogeConfig = {} as DogeConfig
+
   public async run(): Promise<void> {
-    const {flags} = await this.parse(SetupConfigs)
+    const { flags } = await this.parse(SetupConfigs)
 
     const imageTag = await this.getDockerImageTag(flags['image-tag'])
     this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
 
     const configsDir = flags['configs-dir']
     this.log(chalk.blue(`Using configuration directory: ${configsDir}`))
+
+    let dogeConfigFile = flags['doge-config']
+    if (!dogeConfigFile) {
+      const files = fs.readdirSync('.data')
+      const configFiles = files.filter(file => file.endsWith('.toml'))
+      const configFileChoices = configFiles.map(file => ({ name: file, value: file }))
+
+      const fileSelection = await select({
+        choices: [
+          ...configFileChoices,
+        ],
+        message: 'Select config file to configure:',
+      })
+      dogeConfigFile = path.resolve('.data/' + fileSelection)
+    }
+    this.log(chalk.blue(`Using Dogecoin config file: ${dogeConfigFile}`))
+    this.dogeConfig = await loadDogeConfig(dogeConfigFile);
+
 
     this.log(chalk.blue('Checking L1_CONTRACT_DEPLOYMENT_BLOCK...'))
     await this.updateL1ContractDeploymentBlock()
@@ -103,6 +129,11 @@ export default class SetupConfigs extends Command {
       'l1-explorer',
       'l2-sequencer',
       'rollup-node',
+      'dogecoin',
+      'dogeos-deposit-processor',
+      'withdrawal-processor',
+      'metrics-exporter',
+      'celestia-node',
     ]
 
     for (const service of services) {
@@ -120,9 +151,9 @@ export default class SetupConfigs extends Command {
 
   private createMigrateDbFiles(config: any): void {
     const migrateDbFiles = [
-      {key: 'BRIDGE_HISTORY_DB_CONNECTION_STRING', service: 'bridge-history-fetcher'},
-      {key: 'GAS_ORACLE_DB_CONNECTION_STRING', service: 'gas-oracle'},
-      {key: 'ROLLUP_NODE_DB_CONNECTION_STRING', service: 'rollup-node'},
+      { key: 'BRIDGE_HISTORY_DB_CONNECTION_STRING', service: 'bridge-history-fetcher' },
+      { key: 'GAS_ORACLE_DB_CONNECTION_STRING', service: 'gas-oracle' },
+      { key: 'ROLLUP_NODE_DB_CONNECTION_STRING', service: 'rollup-node' },
     ]
 
     for (const file of migrateDbFiles) {
@@ -132,19 +163,19 @@ export default class SetupConfigs extends Command {
       content =
         file.service === 'bridge-history-fetcher'
           ? {
-              db: {
-                driver_name: 'postgres',
-                dsn: config.db[file.key],
-                maxIdleNume: 5,
-                maxOpenNum: 50,
-              },
-              l1: {},
-              l2: {},
-            }
-          : {
+            db: {
               driver_name: 'postgres',
               dsn: config.db[file.key],
-            }
+              maxIdleNume: 5,
+              maxOpenNum: 50,
+            },
+            l1: {},
+            l2: {},
+          }
+          : {
+            driver_name: 'postgres',
+            dsn: config.db[file.key],
+          }
 
       fs.writeFileSync(filePath, JSON.stringify(content, null, 2))
       this.log(chalk.green(`Created ${file.service}-migrate-db.json`))
@@ -205,7 +236,7 @@ export default class SetupConfigs extends Command {
     const yamlContent = fs.readFileSync(sourcePath, 'utf8')
     const parsedYaml = yaml.load(yamlContent) as any
     const jsonConfig = JSON.parse(parsedYaml.scrollConfig)
-    const {addresses} = jsonConfig
+    const { addresses } = jsonConfig
 
     const alertRules = [
       {
@@ -213,7 +244,7 @@ export default class SetupConfigs extends Command {
           {
             name: 'balance-cheker-group',
             rules: addresses.map(
-              (item: {address: string; min_balance_ether: string; name: string; rpc_url: string}) => ({
+              (item: { address: string; min_balance_ether: string; name: string; rpc_url: string }) => ({
                 alert: `ether_balance_of_${item.name}`,
                 annotations: {
                   description: `Balance of ${item.name} (${item.address}) is less than threshold ${item.min_balance_ether}`,
@@ -302,7 +333,7 @@ export default class SetupConfigs extends Command {
   // }
 
   // TODO: check privatekey secrets once integrated
-  private generateEnvContent(service: string, config: any): {[key: string]: string} {
+  private generateEnvContent(service: string, config: any): { [key: string]: string } {
     const mapping: Record<string, string[]> = {
       'admin-system-backend': [
         'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_AUTH_DB_CONFIG_DSN',
@@ -342,9 +373,16 @@ export default class SetupConfigs extends Command {
         'L1_COMMIT_SENDER_PRIVATE_KEY:SCROLL_ROLLUP_L2_CONFIG_RELAYER_CONFIG_COMMIT_SENDER_SIGNER_CONFIG_PRIVATE_KEY_SIGNER_CONFIG_PRIVATE_KEY',
         'L1_FINALIZE_SENDER_PRIVATE_KEY:SCROLL_ROLLUP_L2_CONFIG_RELAYER_CONFIG_FINALIZE_SENDER_SIGNER_CONFIG_PRIVATE_KEY_SIGNER_CONFIG_PRIVATE_KEY',
       ],
+      'dogecoin': [
+        'DOGECOIN_RPC_USER:DOGECOIN_RPC_USER',
+        'DOGECOIN_RPC_PASSWORD:DOGECOIN_RPC_PASSWORD',
+      ],
+      'withdrawal-processor': [
+      ],
+
     }
 
-    const envFiles: {[key: string]: string} = {}
+    const envFiles: { [key: string]: string } = {}
 
     if (service === 'l2-sequencer') {
       // Handle all sequencers (primary and backups)
@@ -384,11 +422,61 @@ export default class SetupConfigs extends Command {
       envFiles[`${service}-secret.env`] = content
     }
 
+    if (service === 'dogeos-deposit-processor') {
+      envFiles['dogeos-deposit-processor-secret.env'] = `DOGEOS_DEPOSIT_PROCESSOR_NOWNODES_API_KEY="${this.dogeConfig.rpc?.apiKey}"\n`
+      //not used for now
+      // envFiles['dogeos-deposit-processor-secret.env']+=`username="${this.dogeConfig.rpc?.username}"\n`
+      // envFiles['dogeos-deposit-processor-secret.env']+=`password="${this.dogeConfig.rpc?.password}"\n`
+    }
+
+    if (service === 'dogecoin') {
+      envFiles['dogecoin-secret.env'] = `DOGECOIN_RPC_USER="${this.dogeConfig.dogecoinClusterRpc?.username}"\nDOGECOIN_RPC_PASSWORD="${this.dogeConfig.dogecoinClusterRpc?.password}"\n`
+    }
+
+    if (service === 'metrics-exporter') {
+      const credentials = Buffer.from(`${this.dogeConfig.dogecoinClusterRpc?.username}:${this.dogeConfig.dogecoinClusterRpc?.password}`).toString('base64')
+      envFiles['metrics-exporter-secret.env'] = `METRICS_EXPORTER_DOGECOIN_BASIC_AUTH="${credentials}"\n`
+    }
+    if (service === 'withdrawal-processor') {
+      // Handle regular config mappings first
+      let content = ''
+      //content += `DOGEOS_WITHDRAWAL_DATABASE_URL="${this.dogeConfig.rpc?.databaseUrl || ''}"\n`
+      // Add Dogecoin RPC credentials from doge-config
+      content += `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
+      content += `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
+      content += `DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL="${this.dogeConfig.da?.tendermintRpcUrl || ''}"\n`
+
+      // Add blockbook API key from doge-config if available
+      if (this.dogeConfig.rpc?.apiKey) {
+        content += `DOGEOS_WITHDRAWAL_BLOCKBOOK_API_KEY="${this.dogeConfig.rpc?.apiKey}"\n`
+      } else {
+        this.error(`dogeConfig.rpc?.apiKey is null`)
+      }
+
+      // Add values from output-withdrawal-processor.toml
+      const withdrawal_processor_toml_path = path.join(process.cwd(), "output-withdrawal-processor.toml");
+      if (fs.existsSync(withdrawal_processor_toml_path)) {
+        let withdrawal_processor_toml = toml.parse(fs.readFileSync(withdrawal_processor_toml_path, "utf-8"));
+        content += `DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY="${withdrawal_processor_toml.fee_signer_key}"\n`
+        content += `DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY="${withdrawal_processor_toml.sequencer_signer_key}"\n`
+      } else {
+        this.error(`${withdrawal_processor_toml_path} not found`)
+      }
+
+      envFiles['withdrawal-processor-secret.env'] = content
+    }
+
+    if (service === 'celestia-node') {
+      // Create an empty celestia-node-secret.env file
+      // envFiles['celestia-node-secret.env'] = ''
+      // this.log(chalk.green('Created empty celestia-node-secret.env file'))
+    }
+
     return envFiles
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'gen-configs-de732bfee2c6afdebb6a860ab6c79bd8da47832d'
+    const defaultTag = 'gen-configs-0f04f9b71dccc3a1647fb6473f414d6de5020c3d'
 
     if (!providedTag) {
       return defaultTag
@@ -409,7 +497,7 @@ export default class SetupConfigs extends Command {
     }
 
     const selectedTag = await select({
-      choices: tags.map((tag) => ({name: tag, value: tag})),
+      choices: tags.map((tag) => ({ name: tag, value: tag })),
       message: 'Select a Docker image tag:',
     })
 
@@ -422,7 +510,7 @@ export default class SetupConfigs extends Command {
 
     // Ensure the target directory exists
     if (!fs.existsSync(targetDir)) {
-      fs.mkdirSync(targetDir, {recursive: true})
+      fs.mkdirSync(targetDir, { recursive: true })
     }
 
     // Check permissions and potentially change ownership before processing
@@ -436,7 +524,7 @@ export default class SetupConfigs extends Command {
       if (changeOwnership) {
         try {
           const command = `sudo find ${sourceDir} -name "*.yaml" -user root -exec sudo chown -R $USER: {} \\;`
-          childProcess.execSync(command, {stdio: 'inherit'})
+          childProcess.execSync(command, { stdio: 'inherit' })
           this.log(chalk.green('File ownership changed successfully.'))
         } catch (error) {
           this.error(`Failed to change file ownership: ${error}`)
@@ -449,19 +537,19 @@ export default class SetupConfigs extends Command {
     }
 
     const fileMappings = [
-      {source: 'admin-system-backend-config.yaml', target: 'admin-system-backend-config.yaml'},
-      {source: 'admin-system-backend-config.yaml', target: 'admin-system-cron-config.yaml'},
-      {source: 'balance-checker-config.yaml', target: 'balance-checker-config.yaml'},
-      {source: 'bridge-history-config.yaml', target: 'bridge-history-api-config.yaml'},
-      {source: 'bridge-history-config.yaml', target: 'bridge-history-fetcher-config.yaml'},
-      {source: 'chain-monitor-config.yaml', target: 'chain-monitor-config.yaml'},
-      {source: 'coordinator-config.yaml', target: 'coordinator-api-config.yaml'},
-      {source: 'coordinator-config.yaml', target: 'coordinator-cron-config.yaml'},
-      {source: 'frontend-config.yaml', target: 'frontends-config.yaml'},
-      {source: 'genesis.yaml', target: 'genesis.yaml'},
-      {source: 'rollup-config.yaml', target: 'gas-oracle-config.yaml'},
-      {source: 'rollup-config.yaml', target: 'rollup-node-config.yaml'},
-      {source: 'rollup-explorer-backend-config.yaml', target: 'rollup-explorer-backend-config.yaml'},
+      { source: 'admin-system-backend-config.yaml', target: 'admin-system-backend-config.yaml' },
+      { source: 'admin-system-backend-config.yaml', target: 'admin-system-cron-config.yaml' },
+      { source: 'balance-checker-config.yaml', target: 'balance-checker-config.yaml' },
+      { source: 'bridge-history-config.yaml', target: 'bridge-history-api-config.yaml' },
+      { source: 'bridge-history-config.yaml', target: 'bridge-history-fetcher-config.yaml' },
+      { source: 'chain-monitor-config.yaml', target: 'chain-monitor-config.yaml' },
+      { source: 'coordinator-config.yaml', target: 'coordinator-api-config.yaml' },
+      { source: 'coordinator-config.yaml', target: 'coordinator-cron-config.yaml' },
+      { source: 'frontend-config.yaml', target: 'frontends-config.yaml' },
+      { source: 'genesis.yaml', target: 'genesis.yaml' },
+      { source: 'rollup-config.yaml', target: 'gas-oracle-config.yaml' },
+      { source: 'rollup-config.yaml', target: 'rollup-node-config.yaml' },
+      { source: 'rollup-explorer-backend-config.yaml', target: 'rollup-explorer-backend-config.yaml' },
     ]
 
     // Process all mappings
@@ -493,7 +581,7 @@ export default class SetupConfigs extends Command {
       const existingContent = fs.readFileSync(scrollMonitorProductionFilePath, 'utf8')
       const existingYaml = yaml.load(existingContent) as any
       existingYaml['kube-prometheus-stack'].additionalPrometheusRules = addedAlertRules
-      fs.writeFileSync(scrollMonitorProductionFilePath, yaml.dump(existingYaml, {indent: 2}))
+      fs.writeFileSync(scrollMonitorProductionFilePath, yaml.dump(existingYaml, { indent: 2 }))
     } catch {
       this.error(`generating balance-checker alert rules file failed`)
     }
@@ -517,8 +605,8 @@ export default class SetupConfigs extends Command {
 
     // Process config.toml and config-contracts.toml
     const configFiles = [
-      {key: 'scrollConfig', source: 'config.toml', target: 'scroll-common-config.yaml'},
-      {key: 'scrollConfigContracts', source: 'config-contracts.toml', target: 'scroll-common-config-contracts.yaml'},
+      { key: 'scrollConfig', source: 'config.toml', target: 'scroll-common-config.yaml' },
+      { key: 'scrollConfigContracts', source: 'config-contracts.toml', target: 'scroll-common-config-contracts.yaml' },
     ]
 
     for (const file of configFiles) {
@@ -530,7 +618,7 @@ export default class SetupConfigs extends Command {
         const yamlContent = {
           [file.key]: content,
         }
-        const yamlString = yaml.dump(yamlContent, {indent: 2})
+        const yamlString = yaml.dump(yamlContent, { indent: 2 })
         fs.writeFileSync(targetPath, yamlString)
         this.log(chalk.green(`Processed file: ${file.target}`))
       } else {
@@ -640,7 +728,7 @@ export default class SetupConfigs extends Command {
         config.contracts = {}
       }
 
-      ;(config.contracts as any).DEPLOYMENT_SALT = newSalt
+      ; (config.contracts as any).DEPLOYMENT_SALT = newSalt
 
       fs.writeFileSync(configPath, toml.stringify(config as any))
       this.log(chalk.green(`Deployment salt updated in config.toml from "${currentSalt}" to "${newSalt}"`))
@@ -698,7 +786,7 @@ export default class SetupConfigs extends Command {
         config.general = {}
       }
 
-      ;(config.general as any).L1_CONTRACT_DEPLOYMENT_BLOCK = newBlock
+      ; (config.general as any).L1_CONTRACT_DEPLOYMENT_BLOCK = newBlock
 
       fs.writeFileSync(configPath, toml.stringify(config as any))
       this.log(
@@ -748,7 +836,7 @@ export default class SetupConfigs extends Command {
         config.contracts = {}
       }
 
-      ;(config.contracts as any).L1_FEE_VAULT_ADDR = newAddr
+      ; (config.contracts as any).L1_FEE_VAULT_ADDR = newAddr
 
       fs.writeFileSync(configPath, toml.stringify(config as any))
       this.log(chalk.green(`L1_FEE_VAULT_ADDR updated in config.toml to "${newAddr}"`))
@@ -798,7 +886,7 @@ export default class SetupConfigs extends Command {
         config.contracts = {}
       }
 
-      ;(config.contracts as any).L1_PLONK_VERIFIER_ADDR = newAddr
+      ; (config.contracts as any).L1_PLONK_VERIFIER_ADDR = newAddr
 
       fs.writeFileSync(configPath, toml.stringify(config as any))
       this.log(chalk.green(`L1_PLONK_VERIFIER_ADDR updated in config.toml to "${newAddr}"`))
