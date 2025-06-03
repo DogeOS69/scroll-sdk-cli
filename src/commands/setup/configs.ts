@@ -133,7 +133,9 @@ export default class SetupConfigs extends Command {
       'contracts',
       'l2-bootnode',
       'dogecoin',
+      'testnet-activity-helper',
       'dogeos-deposit-processor',
+      'dogecoin',
       'withdrawal-processor',
       'metrics-exporter',
       'celestia-node',
@@ -327,6 +329,9 @@ export default class SetupConfigs extends Command {
         'L2_GAS_ORACLE_SENDER_PRIVATE_KEY:L2_GAS_ORACLE_SENDER_PRIVATE_KEY',
         'ROLLUP_EXPLORER_DB_CONNECTION_STRING:ROLLUP_EXPLORER_DB_CONNECTION_STRING',
         'COORDINATOR_JWT_SECRET_KEY:COORDINATOR_JWT_SECRET_KEY'
+      ],
+      'testnet-activity-helper': [
+        'L2_TESTNET_ACTIVITY_HELPER_PRIVATE_KEY:private-key',
       ],
     }
 

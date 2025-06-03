@@ -1,12 +1,12 @@
-import {confirm, input, select} from '@inquirer/prompts'
-import {Command, Flags} from '@oclif/core'
+import { confirm, input, select } from '@inquirer/prompts'
+import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
-import {Contract, ethers} from 'ethers'
+import { Contract, ethers } from 'ethers'
 import path from 'node:path'
-import {toString as qrCodeToString} from 'qrcode'
+import { toString as qrCodeToString } from 'qrcode'
 
-import {parseTomlConfig} from '../../utils/config-parser.js'
-import {addressLink, txLink} from '../../utils/onchain/index.js'
+import { parseTomlConfig } from '../../utils/config-parser.js'
+import { addressLink, txLink } from '../../utils/onchain/index.js'
 
 enum Layer {
   L1 = 'l1',
@@ -79,9 +79,9 @@ export default class HelperFundAccounts extends Command {
   private altGasTokenDecimals!: number
   private altGasTokenEnabled: boolean = false
   private altGasTokenSymbol!: string
-  private blockExplorers: Record<Layer, {blockExplorerURI: string}> = {
-    [Layer.L1]: {blockExplorerURI: ''},
-    [Layer.L2]: {blockExplorerURI: ''},
+  private blockExplorers: Record<Layer, { blockExplorerURI: string }> = {
+    [Layer.L1]: { blockExplorerURI: '' },
+    [Layer.L2]: { blockExplorerURI: '' },
   }
 
   private fundingWallet!: ethers.Wallet
@@ -95,7 +95,7 @@ export default class HelperFundAccounts extends Command {
   private l2Rpc!: string
 
   public async run(): Promise<void> {
-    const {flags} = await this.parse(HelperFundAccounts)
+    const { flags } = await this.parse(HelperFundAccounts)
 
     const configPath = path.resolve(flags.config)
     const config = parseTomlConfig(configPath)
@@ -167,11 +167,12 @@ export default class HelperFundAccounts extends Command {
         L1_COMMIT_SENDER: config.accounts.L1_COMMIT_SENDER_ADDR,
         L1_FINALIZE_SENDER: config.accounts.L1_FINALIZE_SENDER_ADDR,
         L1_GAS_ORACLE_SENDER: config.accounts.L1_GAS_ORACLE_SENDER_ADDR,
+
       }
 
       const l2Addresses: Record<string, string> = {
-        
         L2_GAS_ORACLE_SENDER: config.accounts.L2_GAS_ORACLE_SENDER_ADDR,
+        L2_TESTNET_ACTIVITY_HELPER: config.accounts.L2_TESTNET_ACTIVITY_HELPER_ADDR,
       }
 
       if (flags.account) {
@@ -215,7 +216,7 @@ export default class HelperFundAccounts extends Command {
         recipient,
         tokenAmount,
         gasLimit,
-        {value: ethers.parseEther('0.01')}, // Small amount of ETH for L2 gas
+        { value: ethers.parseEther('0.01') }, // Small amount of ETH for L2 gas
       )
 
       await this.logTx(depositTx.hash, 'Bridge transaction sent', Layer.L1)
@@ -230,8 +231,7 @@ export default class HelperFundAccounts extends Command {
       )
     } catch (error) {
       this.error(
-        `Error bridging alternative gas token from L1 to L2: ${
-          error instanceof Error ? error.message : 'Unknown error'
+        `Error bridging alternative gas token from L1 to L2: ${error instanceof Error ? error.message : 'Unknown error'
         }`,
       )
     }
@@ -264,7 +264,7 @@ export default class HelperFundAccounts extends Command {
         Layer.L1,
       )
 
-      const tx = await l1ETHGateway.depositETH(recipient, ethers.parseEther(amount.toString()), gasLimit, {value})
+      const tx = await l1ETHGateway.depositETH(recipient, ethers.parseEther(amount.toString()), gasLimit, { value })
       await this.logTx(tx.hash, 'Bridge transaction sent', Layer.L1)
 
       const receipt = await tx.wait()
@@ -352,17 +352,17 @@ export default class HelperFundAccounts extends Command {
     try {
       const amount = await select({
         choices: [
-          {name: '100', value: ethers.parseUnits('100', this.altGasTokenDecimals)},
-          {name: '1000', value: ethers.parseUnits('1000', this.altGasTokenDecimals)},
-          {name: '10000', value: ethers.parseUnits('10000', this.altGasTokenDecimals)},
-          {name: 'Custom', value: -1n},
+          { name: '100', value: ethers.parseUnits('100', this.altGasTokenDecimals) },
+          { name: '1000', value: ethers.parseUnits('1000', this.altGasTokenDecimals) },
+          { name: '10000', value: ethers.parseUnits('10000', this.altGasTokenDecimals) },
+          { name: 'Custom', value: -1n },
         ],
         message: `How many ${this.altGasTokenSymbol} tokens do you want to transfer?`,
       })
 
       let tokenAmount: bigint
       if (amount === -1n) {
-        const customAmount = await input({message: `Enter the amount of ${this.altGasTokenSymbol} tokens:`})
+        const customAmount = await input({ message: `Enter the amount of ${this.altGasTokenSymbol} tokens:` })
         tokenAmount = ethers.parseUnits(customAmount, this.altGasTokenDecimals)
       } else {
         tokenAmount = amount
@@ -497,12 +497,12 @@ export default class HelperFundAccounts extends Command {
     this.log('\n')
     this.log('Scan this QR code to fund the address:')
 
-    this.log(await qrCodeToString(qrString, {small: true, type: 'terminal'}))
+    this.log(await qrCodeToString(qrString, { small: true, type: 'terminal' }))
 
     let funded = false
     while (!funded) {
       // eslint-disable-next-line no-await-in-loop
-      await confirm({message: 'Press Enter when ready...'})
+      await confirm({ message: 'Press Enter when ready...' })
       this.log(`Checking...`)
       // eslint-disable-next-line no-await-in-loop
       const balance = await (layer === Layer.L1 ? this.l1Provider : this.l2Provider).getBalance(address)
@@ -518,7 +518,7 @@ export default class HelperFundAccounts extends Command {
   }
 
   private async promptManualFundingERC20(address: string, amount: bigint, tokenAddress: string, symbol: string) {
-    const {chainId} = await this.l1Provider.getNetwork()
+    const { chainId } = await this.l1Provider.getNetwork()
 
     const formattedAmount = ethers.formatUnits(
       amount,
@@ -535,12 +535,12 @@ export default class HelperFundAccounts extends Command {
     this.log('\n')
     this.log('Scan this QR code to initiate the transfer:')
 
-    this.log(await qrCodeToString(qrString, {small: true, type: 'terminal'}))
+    this.log(await qrCodeToString(qrString, { small: true, type: 'terminal' }))
 
     let funded = false
     while (!funded) {
       // eslint-disable-next-line no-await-in-loop
-      await confirm({message: 'Press Enter when ready...'})
+      await confirm({ message: 'Press Enter when ready...' })
       this.log(`Checking...`)
       // eslint-disable-next-line no-await-in-loop
       const balance = await new Contract(
@@ -566,9 +566,9 @@ export default class HelperFundAccounts extends Command {
   private async promptUserForL2Funding(): Promise<string> {
     const answer = await select({
       choices: [
-        {name: 'Bridge funds from L1', value: 'bridge'},
-        {name: 'Directly fund L2 wallet', value: 'direct'},
-        {name: 'Manual funding', value: 'manual'},
+        { name: 'Bridge funds from L1', value: 'bridge' },
+        { name: 'Directly fund L2 wallet', value: 'direct' },
+        { name: 'Manual funding', value: 'manual' },
       ],
       message: 'How would you like to fund the L2 address?',
     })

@@ -981,6 +981,14 @@ export default class SetupPrepCharts extends Command {
           updated = true;
         }
       }
+      else if (chartName == "testnet-activity-helper") {
+        let l2RpcEndpoint = this.getConfigValue("general.L2_RPC_ENDPOINT");
+        if (productionYaml.config?.externalRpcUriL2 != l2RpcEndpoint) {
+          productionYaml.config.externalRpcUriL2 = l2RpcEndpoint;
+          updated = true;
+          changes.push({ key: `config.externalRpcUriL2`, oldValue: productionYaml.config?.externalRpcUriL2, newValue: l2RpcEndpoint });
+        }
+      }
 
       if (updated) {
         this.log(`\nFor ${chalk.cyan(file)}:`)

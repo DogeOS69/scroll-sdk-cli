@@ -465,6 +465,15 @@ export default class SetupGenKeystore extends Command {
         this.log(chalk.blue('Generating account key pairs...'))
         const accountTypes = ['DEPLOYER', 'L1_COMMIT_SENDER', 'L1_FINALIZE_SENDER', 'L1_GAS_ORACLE_SENDER', 'L2_GAS_ORACLE_SENDER']
 
+        let isTestnetActivityHelper = await confirm({
+          message: 'Do you want to generate a private key for the Testnet Activity Helper?',
+          default: true,
+        }) as boolean
+
+        if (isTestnetActivityHelper) {
+          accountTypes.push('L2_TESTNET_ACTIVITY_HELPER')
+        }
+
         for (const accountType of accountTypes) {
           if (!existingConfig.accounts?.[`${accountType}_PRIVATE_KEY`]) {
             accounts[accountType] = this.generateKeyPair()
