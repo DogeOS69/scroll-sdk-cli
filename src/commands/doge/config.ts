@@ -159,25 +159,38 @@ export class DogeConfigCommand extends Command {
 
     newConfig.da!.tendermintRpcUrl = await input({
       default: existingConfig.da?.tendermintRpcUrl,
-      message: `Enter the Celestia Tendermint RPC URL:`,
+      message: `Enter the Celestia Tendermint RPC URL (if known):`,
+      required: false
     });
+
     newConfig.da!.daNamespace = await input({
       default: existingConfig.da?.daNamespace,
-      message: `Enter the Celestia DA Namespace:`,
-    });
-    newConfig.da!.signerAddress = await input({
-      default: existingConfig.da?.signerAddress,
-      message: `Enter the Celestia Signer Address:`,
-    });
-    newConfig.da!.genesisBlobCommitment = await input({
-      default: existingConfig.da?.genesisBlobCommitment,
-      message: `Enter the Celestia Genesis Blob Commitment:`,
+      message: `Enter the Celestia DA Namespace (hex identifier for your rollup):`,
+      required: false
     });
 
     newConfig.da!.celestiaMnemonic = await input({
       default: existingConfig.da?.celestiaMnemonic,
-      message: `Enter the Celestia Mnemonic:`,
+      message: `Enter the Celestia Mnemonic (leave empty if you don't have a Celestia wallet yet):`,
+      required: false
     });
+
+    // TODO: Implement automatic address generation from mnemonic using Celestia SDK
+    // For now, ask user to provide the address manually
+    if (newConfig.da!.celestiaMnemonic && newConfig.da!.celestiaMnemonic.trim()) {
+      this.log(chalk.yellow('💡 Tip: Since you provided a mnemonic, the signer address should be derived from it.'));
+      this.log(chalk.yellow('   For now, please provide the corresponding address manually.'));
+      this.log(chalk.yellow('   Future versions will generate this automatically.'));
+    }
+
+    newConfig.da!.signerAddress = await input({
+      default: existingConfig.da?.signerAddress,
+      message: `Enter the Celestia Signer Address${newConfig.da!.celestiaMnemonic ? ' (should match the mnemonic above)' : ''}:`,
+      required: newConfig.da!.celestiaMnemonic ? true : false
+    });
+
+    this.log(chalk.blue('\nNote: The following Celestia values will be configured during network deployment:'));
+    this.log(chalk.blue('- Genesis Blob Commitment (generated during network deployment)'));
 
     newConfig.da!.celestiaIndexerStartBlock = String(await input({
       default: String(existingConfig.da?.celestiaIndexerStartBlock || 0),
