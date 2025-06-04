@@ -377,7 +377,7 @@ export default class SetupDbInit extends Command {
     this.log(chalk.blue('First, provide connection information for the database instance. This will only be used for creating users and databases. This information will not be persisted in your configuration repo.'));
     const publicHost = await input({ message: 'Enter public PostgreSQL host:', default: 'localhost' })
     const publicPort = await input({ message: 'Enter public PostgreSQL port:', default: '5432' })
-    const pgUser = await input({ message: 'Enter PostgreSQL admin username:', default: 'scrolladmin' })
+    const pgUser = await input({ message: 'Enter PostgreSQL admin username:', default: 'dogeosadmin' })
     const pgPassword = await password({ message: 'Enter PostgreSQL admin password:' })
     const pgDatabase = await input({ message: 'Enter PostgreSQL database name:', default: 'postgres' })
 
