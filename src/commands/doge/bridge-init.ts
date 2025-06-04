@@ -23,7 +23,7 @@ export class BridgeInitCommand extends Command {
     }
     async runGenerateTestKeys(): Promise<void> {
         const docker = new Docker();
-        const image = `docker.io/dogeos69/generate-test-keys:v0.1.1-test`;
+        const image = `docker.io/dogeos69/generate-test-keys:v1.0.6-test`;
         try {
             this.log(chalk.cyan(`Pulling Docker Image: ${image}`))
             // Pull the image if it doesn't exist locally

@@ -202,7 +202,7 @@ export class DummySignersManager {
     
     const signerConfigs = await this.collectSignerConfigs(parseInt(NUM_SIGNERS), generateWifKeys)
     
-    const imageName = 'dogeos69/dummy-signer:1.0.5-test-local'
+    const imageName = 'dogeos69/dummy-signer:1.0.6-test-local'
     await this.pullDockerImage(imageName)
     await this.stopAndRemoveContainers(parseInt(NUM_SIGNERS))
     await this.startSignerContainers(signerConfigs, NETWORK, TSO_URL, imageName)
@@ -607,7 +607,7 @@ export class DummySignersManager {
 
   private prepareDummyImage(awsRegion: string, awsAccountId: string): void {
     const repoName = 'dogeos/dummy-signer';
-    const dockerHubImage = 'dogeos69/dummy-signer:v1.0.5-test';
+    const dockerHubImage = 'dogeos69/dummy-signer:v1.0.6-test';
     const ecrRegistry = `${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com`;
     const ecrImage = `${ecrRegistry}/${repoName}:latest`;
     
