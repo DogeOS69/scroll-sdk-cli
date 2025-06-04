@@ -17,6 +17,7 @@ const { Networks, PrivateKey } = bitcore
 export class DummySignersManager {
   private dogeConfig: DogeConfig
   private configPath: string
+  private imageTag: string
   private log: (message: string) => void
   private warn: (message: string) => void
   private error: (message: string) => void
@@ -24,6 +25,7 @@ export class DummySignersManager {
   constructor(
     dogeConfig: DogeConfig,
     configPath: string,
+    imageTag: string,
     logger: {
       log: (message: string) => void
       warn: (message: string) => void
@@ -32,6 +34,7 @@ export class DummySignersManager {
   ) {
     this.dogeConfig = dogeConfig
     this.configPath = configPath
+    this.imageTag = imageTag
     this.log = logger.log
     this.warn = logger.warn
     this.error = logger.error
@@ -142,7 +145,7 @@ export class DummySignersManager {
     ].join(' ')
   }
 
-  async setupDummySigners(): Promise<void> {
+  async setupDummySigners(availableTags: string[]): Promise<void> {
     this.log(chalk.blue('\nSetting up Dummy Signers...'))
     
     const deploymentType = await select({
@@ -165,13 +168,60 @@ export class DummySignersManager {
     this.dogeConfig.deploymentType = deploymentType as 'local' | 'aws'
     
     if (deploymentType === 'local') {
-      await this.setupLocalSigners()
+      await this.setupLocalSigners(availableTags)
     } else {
-      await this.setupAwsSigners()
+      await this.setupAwsSigners(availableTags)
     }
   }
   
-  private async setupLocalSigners(): Promise<void> {
+  private async getLocalImageTag(availableTags: string[]): Promise<string> {
+    // For local deployment, try to use -local suffix if available
+    const baseTag = this.imageTag
+    
+    // If the user already specified a -local tag, use it
+    if (baseTag.includes('-local')) {
+      return baseTag
+    }
+    
+    // Try different -local variants
+    const localVariants = [
+      `${baseTag}-local`,           // v1.0.6-test → v1.0.6-test-local
+      baseTag.replace('-test', '-test-local'), // v1.0.6-test → v1.0.6-test-local
+    ]
+    
+    // Remove duplicates
+    const uniqueVariants = [...new Set(localVariants)]
+    
+    for (const variant of uniqueVariants) {
+      if (availableTags.includes(variant)) {
+        this.log(chalk.blue(`Found local variant: ${variant}, using it instead of ${baseTag}`))
+        return variant
+      }
+    }
+    
+    // If no -local variant found, use the original tag
+    this.log(chalk.yellow(`No -local variant found for ${baseTag}, using original tag`))
+    return baseTag
+  }
+
+  private async fetchDockerTags(): Promise<string[]> {
+    try {
+      const response = await fetch(
+        'https://registry.hub.docker.com/v2/repositories/dogeos69/dummy-signer/tags?page_size=100',
+      )
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const data = await response.json()
+      return data.results.map((tag: any) => tag.name)
+    } catch (error) {
+      this.error(`Failed to fetch Docker tags: ${error}`)
+      return []
+    }
+  }
+
+  private async setupLocalSigners(availableTags: string[]): Promise<void> {
     this.log(chalk.blue('\nSetting up Local Dummy Signers...'))
     
     try {
@@ -202,7 +252,8 @@ export class DummySignersManager {
     
     const signerConfigs = await this.collectSignerConfigs(parseInt(NUM_SIGNERS), generateWifKeys)
     
-    const imageName = 'dogeos69/dummy-signer:1.0.6-test-local'
+    const localImageTag = await this.getLocalImageTag(availableTags)
+    const imageName = `dogeos69/dummy-signer:${localImageTag}`
     await this.pullDockerImage(imageName)
     await this.stopAndRemoveContainers(parseInt(NUM_SIGNERS))
     await this.startSignerContainers(signerConfigs, NETWORK, TSO_URL, imageName)
@@ -494,8 +545,26 @@ export class DummySignersManager {
     })
   }
 
-  private async setupAwsSigners(): Promise<void> {
+  private async setupAwsSigners(availableTags: string[]): Promise<void> {
     this.log(chalk.blue('\nSetting up AWS Dummy Signers...'))
+    
+    // Validate that the specified image tag exists in the registry
+    if (!availableTags.includes(this.imageTag)) {
+      this.warn(chalk.yellow(`⚠️  Warning: Image tag '${this.imageTag}' not found in Docker registry.`))
+      this.log(chalk.blue(`Available tags: ${availableTags.slice(0, 10).join(', ')}${availableTags.length > 10 ? '...' : ''}`))
+      
+      const proceedAnyway = await confirm({
+        message: 'The specified image tag was not found in the registry. Do you want to proceed anyway?',
+        default: false
+      })
+      
+      if (!proceedAnyway) {
+        this.log(chalk.yellow('AWS deployment cancelled.'))
+        return
+      }
+    } else {
+      this.log(chalk.green(`✅ Verified image tag '${this.imageTag}' exists in registry.`))
+    }
     
     const AWS_REGION = await input({
       message: 'AWS_REGION',
@@ -607,7 +676,7 @@ export class DummySignersManager {
 
   private prepareDummyImage(awsRegion: string, awsAccountId: string): void {
     const repoName = 'dogeos/dummy-signer';
-    const dockerHubImage = 'dogeos69/dummy-signer:v1.0.6-test';
+    const dockerHubImage = `dogeos69/dummy-signer:${this.imageTag}`;
     const ecrRegistry = `${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com`;
     const ecrImage = `${ecrRegistry}/${repoName}:latest`;
     
@@ -906,6 +975,7 @@ export class DummySignersCommand extends Command {
     '$ scrollsdk doge:dummy-signers --config .data/doge-config-testnet.toml',
     '$ scrollsdk doge:dummy-signers --local-only',
     '$ scrollsdk doge:dummy-signers --aws-only',
+    '$ scrollsdk doge:dummy-signers --image-tag v1.0.6-test',
   ]
 
   static flags = {
@@ -923,10 +993,71 @@ export class DummySignersCommand extends Command {
       description: 'Set up AWS KMS signers only',
       default: false,
     }),
+    'image-tag': Flags.string({
+      description: 'Specify the Docker image tag to use',
+      required: false,
+    }),
   }
 
   private dogeConfig: DogeConfig = {} as DogeConfig
   private configPath: string = ''
+
+  private async fetchDockerTags(): Promise<string[]> {
+    try {
+      const response = await fetch(
+        'https://registry.hub.docker.com/v2/repositories/dogeos69/dummy-signer/tags?page_size=100',
+      )
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const data = await response.json()
+      return data.results.map((tag: any) => tag.name)
+    } catch (error) {
+      this.error(`Failed to fetch Docker tags: ${error}`)
+      return []
+    }
+  }
+
+  private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
+    const defaultTag = 'v1.0.6-test'
+
+    if (!providedTag) {
+      return defaultTag
+    }
+
+    const tags = await this.fetchDockerTags()
+
+    if (tags.includes(providedTag)) {
+      return providedTag
+    }
+
+    if (providedTag.startsWith('v') && tags.includes(providedTag)) {
+      return providedTag
+    }
+
+    if (/^\d+\.\d+\.\d+(-test)?(-local)?$/.test(providedTag)) {
+      const variants = [
+        `v${providedTag}`,
+        `${providedTag}-test`,
+        `${providedTag}-test-local`,
+        `v${providedTag}-test`,
+        `v${providedTag}-test-local`
+      ]
+      for (const variant of variants) {
+        if (tags.includes(variant)) {
+          return variant
+        }
+      }
+    }
+
+    const selectedTag = await select({
+      choices: tags.map((tag: string) => ({ name: tag, value: tag })),
+      message: 'Select a Docker image tag:',
+    })
+
+    return selectedTag
+  }
 
   async run(): Promise<void> {
     const { flags } = await this.parse(DummySignersCommand)
@@ -986,10 +1117,15 @@ export class DummySignersCommand extends Command {
       this.dogeConfig.deploymentType = 'aws'
     }
 
+    // Get image tag
+    const imageTag = await this.getDockerImageTag(flags['image-tag'])
+    this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
+
     // Set up dummy signers
     const dummySignersManager = new DummySignersManager(
       this.dogeConfig,
       this.configPath,
+      imageTag,
       {
         log: this.log.bind(this),
         warn: this.warn.bind(this),
@@ -998,7 +1134,7 @@ export class DummySignersCommand extends Command {
     )
     
     try {
-      await dummySignersManager.setupDummySigners()
+      await dummySignersManager.setupDummySigners(await this.fetchDockerTags())
     } catch (error) {
       this.error(`Dummy signers setup failed: ${error}`)
     }
