@@ -8,8 +8,8 @@ import { execSync } from 'child_process'
 import * as os from 'node:os'
 import bitcore from 'bitcore-lib-doge'
 import type { DogeConfig } from '../../types/doge-config.js'
-import { loadDogeConfig } from '../../utils/doge-config.js'
-import { getSetupDefaultsPath } from '../../config/constants.js'
+import { loadDogeConfig, selectDogeConfigFile } from '../../utils/doge-config.js'
+import { getSetupDefaultsPath, SETUP_DEFAULTS_TEMPLATE } from '../../config/constants.js'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
 const { Networks, PrivateKey } = bitcore
@@ -1062,42 +1062,17 @@ export class DummySignersCommand extends Command {
   async run(): Promise<void> {
     const { flags } = await this.parse(DummySignersCommand)
 
-    // Resolve config path
-    let resolvedPath = ""
-    if (!flags.config) {
-      // Auto-detect config file
-      if (!fs.existsSync('.data')) {
-        this.error('No .data directory found. Please run `scrollsdk doge:config` first to create a configuration.')
-        return
-      }
-      
-      const files = fs.readdirSync('.data')
-      const configFiles = files.filter(file => file.endsWith('.toml'))
-      
-      if (configFiles.length === 0) {
-        this.error('No config files found in .data directory. Please run `scrollsdk doge:config` first.')
-        return
-      }
-      
-      if (configFiles.length === 1) {
-        resolvedPath = path.resolve('.data', configFiles[0])
-        this.log(chalk.blue(`Using config file: ${resolvedPath}`))
-      } else {
-        this.error(`Multiple config files found: ${configFiles.join(', ')}. Please specify one with --config flag.`)
-        return
-      }
-    } else {
-      resolvedPath = path.resolve(flags.config)
-      if (!fs.existsSync(resolvedPath)) {
-        this.error(`Config file ${resolvedPath} does not exist`)
-        return
-      }
+    // Use the new common function to resolve config path
+    try {
+      this.configPath = await selectDogeConfigFile(flags.config, 'scrollsdk doge:config')
+    } catch (error) {
+      this.error(error instanceof Error ? error.message : String(error))
+      return
     }
 
     // Load config
-    this.configPath = resolvedPath
     try {
-      this.dogeConfig = await loadDogeConfig(resolvedPath)
+      this.dogeConfig = await loadDogeConfig(this.configPath)
       this.log(chalk.blue(`Loaded configuration for ${this.dogeConfig.network} network`))
     } catch (error) {
       this.error(`Failed to load config: ${error}`)
