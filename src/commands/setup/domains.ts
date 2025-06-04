@@ -280,7 +280,7 @@ export default class SetupDomains extends Command {
     if (sharedEnding) {
       const existingFrontendHost = existingConfig.ingress?.FRONTEND_HOST || ''
       const defaultUrlEnding =
-        existingFrontendHost.startsWith('frontend.') || existingFrontendHost.startsWith('frontends.')
+        existingFrontendHost.startsWith('frontend.') || existingFrontendHost.startsWith('frontends.') || existingFrontendHost.startsWith('portal.')
           ? existingFrontendHost.split('.').slice(1).join('.')
           : existingFrontendHost || 'scrollsdk'
 
@@ -299,14 +299,14 @@ export default class SetupDomains extends Command {
       })
 
       const frontendAtRoot = await confirm({
-        message: 'Do you want the frontends to be hosted at the root domain? (No will use a "frontends" subdomain)',
+        message: 'Do you want the frontends to be hosted at the root domain? (No will use a "portal" subdomain)',
       })
 
       domainConfig = {
         ADMIN_SYSTEM_DASHBOARD_URI: `${protocol}://admin-system-dashboard.${urlEnding}`,
         BRIDGE_API_URI: `${protocol}://bridge-history-api.${urlEnding}/api`,
         EXTERNAL_EXPLORER_URI_L2: `${protocol}://blockscout.${urlEnding}`,
-        EXTERNAL_RPC_URI_L2: `${protocol}://l2-rpc.${urlEnding}`,
+        EXTERNAL_RPC_URI_L2: `${protocol}://rpc.${urlEnding}`,
         GRAFANA_URI: `${protocol}://grafana.${urlEnding}`,
         ROLLUPSCAN_API_URI: `${protocol}://rollup-explorer-backend.${urlEnding}/api`,
       }
@@ -322,10 +322,10 @@ export default class SetupDomains extends Command {
         BLOCKSCOUT_HOST: `blockscout.${urlEnding}`,
         BRIDGE_HISTORY_API_HOST: `bridge-history-api.${urlEnding}`,
         COORDINATOR_API_HOST: `coordinator-api.${urlEnding}`,
-        FRONTEND_HOST: frontendAtRoot ? urlEnding : `frontends.${urlEnding}`,
+        FRONTEND_HOST: frontendAtRoot ? urlEnding : `portal.${urlEnding}`,
         GRAFANA_HOST: `grafana.${urlEnding}`,
         ROLLUP_EXPLORER_API_HOST: `rollup-explorer-backend.${urlEnding}`,
-        RPC_GATEWAY_HOST: `l2-rpc.${urlEnding}`,
+        RPC_GATEWAY_HOST: `rpc.${urlEnding}`,
         ...(usesAnvil ? {L1_DEVNET_HOST: `l1-devnet.${urlEnding}`, L1_EXPLORER_HOST: `l1-explorer.${urlEnding}`} : {}),
         TSO_HOST: `tso.${urlEnding}`,
         CELESTIA_HOST: `celestia.${urlEnding}`,
@@ -363,7 +363,7 @@ export default class SetupDomains extends Command {
           message: 'Enter COORDINATOR_API_HOST:',
         }),
         FRONTEND_HOST: await input({
-          default: existingConfig.ingress?.FRONTEND_HOST || 'frontends.scrollsdk',
+          default: existingConfig.ingress?.FRONTEND_HOST || 'portal.scrollsdk',
           message: 'Enter FRONTEND_HOST:',
         }),
         GRAFANA_HOST: await input({
@@ -375,7 +375,7 @@ export default class SetupDomains extends Command {
           message: 'Enter ROLLUP_EXPLORER_API_HOST:',
         }),
         RPC_GATEWAY_HOST: await input({
-          default: existingConfig.ingress?.RPC_GATEWAY_HOST || 'l2-rpc.scrollsdk',
+          default: existingConfig.ingress?.RPC_GATEWAY_HOST || 'rpc.scrollsdk',
           message: 'Enter RPC_GATEWAY_HOST:',
         }),
         TSO_HOST: await input({
@@ -487,17 +487,6 @@ export default class SetupDomains extends Command {
       delete existingConfig.ingress.L1_EXPLORER_HOST
     }
 
-    /*
-    [contracts.verification]
-    VERIFIER_TYPE_L1 = "blockscout"
-    VERIFIER_TYPE_L2 = "blockscout"
-    EXPLORER_URI_L1 = "http://l1-explorer.scrollsdk"
-    EXPLORER_URI_L2 = "http://blockscout.scrollsdk"
-    RPC_URI_L1 = "http://l1-devnet.scrollsdk"
-    RPC_URI_L2 = "http://l2-rpc.scrollsdk"
-    EXPLORER_API_KEY_L1 = ""
-    EXPLORER_API_KEY_L2 = ""
-    */
     existingConfig.contracts.verification.EXPLORER_URI_L1 = domainConfig.EXTERNAL_EXPLORER_URI_L1;
     existingConfig.contracts.verification.EXPLORER_URI_L2 = domainConfig.EXTERNAL_EXPLORER_URI_L2;
     existingConfig.contracts.verification.RPC_URI_L1 = domainConfig.EXTERNAL_RPC_URI_L1;
