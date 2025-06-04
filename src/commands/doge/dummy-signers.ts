@@ -83,7 +83,7 @@ export class DummySignersManager {
     fs.writeFileSync(filePath, toml.stringify(config))
   }
 
-  private async updateSetupDefaultsWithPublicKeys(publicKeys: string[]): Promise<void> {
+  private async updateSetupDefaultsWithPublicKeys(publicKeys: string[], threshold: number): Promise<void> {
     if (publicKeys.length === 0) {
       this.warn('No public keys were provided');
       return;
@@ -103,11 +103,21 @@ export class DummySignersManager {
     }
 
     config.correctness_pubkeys = publicKeys;
+    
+    // Update correctness_key_count
+    config.correctness_key_count = publicKeys.length;
+    
+    // Ask user to choose correctness_threshold
+    const keyCount = publicKeys.length;
+    this.log(chalk.cyan(`You have configured ${keyCount} correctness keys.`));
+    
+    config.correctness_threshold = threshold;
 
     const updatedToml = toml.stringify(config);
     fs.writeFileSync(tomlPath, updatedToml);
 
-    this.log(`✅ Updated ${tomlPath} with ${publicKeys.length} public keys`);
+    this.log(`✅ Updated ${tomlPath} with ${publicKeys.length} correctness public keys`);
+    this.log(`Updated correctness_key_count to ${keyCount} and correctness_threshold to ${threshold}`);
     this.log(`Public keys: ${publicKeys.join(', ')}`);
   }
 
@@ -237,6 +247,33 @@ export class DummySignersManager {
       validate: this.validators.signerCount
     })
     
+    const numSigners = parseInt(NUM_SIGNERS)
+    
+    // Ask user to choose correctness_threshold right after number of signers
+    this.log(chalk.cyan(`You will have ${numSigners} correctness signers.`))
+    
+    let defaultThreshold: number
+    if (numSigners === 1) {
+      defaultThreshold = 1
+    } else if (numSigners === 2) {
+      defaultThreshold = 2
+    } else {
+      defaultThreshold = Math.ceil(numSigners * 2 / 3) // 2/3 majority
+    }
+    
+    const thresholdStr = await input({
+      message: chalk.cyan(`Enter correctness threshold (how many signatures required, 1-${numSigners}):`),
+      default: defaultThreshold.toString(),
+      validate: (value: string) => {
+        const num = parseInt(value)
+        if (isNaN(num) || num < 1 || num > numSigners) {
+          return `Please enter a number between 1 and ${numSigners}`
+        }
+        return true
+      }
+    })
+    const threshold = parseInt(thresholdStr)
+    
     const TSO_URL = this.readTsoHostFromConfig()
     if (!TSO_URL) {
       this.error('TSO_HOST not found in config.toml. Please run "scrollsdk setup domains" first.')
@@ -250,18 +287,18 @@ export class DummySignersManager {
       default: true
     })
     
-    const signerConfigs = await this.collectSignerConfigs(parseInt(NUM_SIGNERS), generateWifKeys)
+    const signerConfigs = await this.collectSignerConfigs(numSigners, generateWifKeys)
     
     const localImageTag = await this.getLocalImageTag(availableTags)
     const imageName = `dogeos69/dummy-signer:${localImageTag}`
     await this.pullDockerImage(imageName)
-    await this.stopAndRemoveContainers(parseInt(NUM_SIGNERS))
+    await this.stopAndRemoveContainers(numSigners)
     await this.startSignerContainers(signerConfigs, NETWORK, TSO_URL, imageName)
     
     this.showContainerStatus(signerConfigs)
     
     this.saveLocalSignerConfig(NETWORK, signerConfigs)
-    await this.updateSetupDefaultsWithLocalPublicKeys(signerConfigs)
+    await this.updateSetupDefaultsWithLocalPublicKeys(signerConfigs, threshold)
     
     this.showSignerUrlsSummary()
     
@@ -604,6 +641,34 @@ export class DummySignersManager {
       required: false,
     })
     
+    const suffixes = SUFFIXES.split(' ').filter(s => s.trim())
+    const numSigners = suffixes.length
+    
+    // Ask user to choose correctness_threshold right after suffixes
+    this.log(chalk.cyan(`You will have ${numSigners} correctness signers.`))
+    
+    let defaultThreshold: number
+    if (numSigners === 1) {
+      defaultThreshold = 1
+    } else if (numSigners === 2) {
+      defaultThreshold = 2
+    } else {
+      defaultThreshold = Math.ceil(numSigners * 2 / 3) // 2/3 majority
+    }
+    
+    const thresholdStr = await input({
+      message: chalk.cyan(`Enter correctness threshold (how many signatures required, 1-${numSigners}):`),
+      default: defaultThreshold.toString(),
+      validate: (value: string) => {
+        const num = parseInt(value)
+        if (isNaN(num) || num < 1 || num > numSigners) {
+          return `Please enter a number between 1 and ${numSigners}`
+        }
+        return true
+      }
+    })
+    const threshold = parseInt(thresholdStr)
+    
     await this.saveAwsSignerConfig({
       region: AWS_REGION,
       networkAlias: NETWORK_ALIAS,
@@ -635,7 +700,7 @@ export class DummySignersManager {
       
       this.log('Setup dummy signer completed successfully!');
       
-      await this.updateSetupDefaultsWithKMSPublicKeys(NETWORK_ALIAS, AWS_REGION, SUFFIXES);
+      await this.updateSetupDefaultsWithKMSPublicKeys(NETWORK_ALIAS, AWS_REGION, SUFFIXES, threshold);
       
       // Get AWS service URLs
       await this.getAwsServiceUrls(NETWORK_ALIAS, AWS_REGION, SUFFIXES);
@@ -775,7 +840,7 @@ export class DummySignersManager {
     this.log('Dummy signer image preparation completed successfully!');
   }
 
-  private async updateSetupDefaultsWithKMSPublicKeys(networkAlias: string, awsRegion: string, suffixesStr: string): Promise<void> {
+  private async updateSetupDefaultsWithKMSPublicKeys(networkAlias: string, awsRegion: string, suffixesStr: string, threshold: number): Promise<void> {
     try {
       this.log('Fetching KMS public keys...');
       
@@ -805,7 +870,7 @@ export class DummySignersManager {
         }
       }
       
-      await this.updateSetupDefaultsWithPublicKeys(publicKeys);
+      await this.updateSetupDefaultsWithPublicKeys(publicKeys, threshold);
       
     } catch (error) {
       this.error(`Failed to update setup defaults: ${error}`);
@@ -867,7 +932,7 @@ export class DummySignersManager {
     return compressedKey.toString('hex');
   }
 
-  private async updateSetupDefaultsWithLocalPublicKeys(signerConfigs: Array<{wif: string, port: number, publicKey?: string}>): Promise<void> {
+  private async updateSetupDefaultsWithLocalPublicKeys(signerConfigs: Array<{wif: string, port: number, publicKey?: string}>, threshold: number): Promise<void> {
     try {
       this.log('Fetching public keys from WIF...');
       
@@ -878,7 +943,7 @@ export class DummySignersManager {
         publicKeys.push(publicKey);
       }
       
-      await this.updateSetupDefaultsWithPublicKeys(publicKeys);
+      await this.updateSetupDefaultsWithPublicKeys(publicKeys, threshold);
       
     } catch (error) {
       this.error(`Failed to update setup defaults: ${error}`);

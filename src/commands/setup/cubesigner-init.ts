@@ -118,12 +118,69 @@ export default class SetupCubesignerSetup extends Command {
                 })
             }
             
-            await this.createNewRolesAndKeys(count, rolePrefix)
+            // Ask user to choose attestation_threshold right after count and rolePrefix
+            this.log(chalk.cyan(`You will have ${count} attestation keys.`))
+            
+            let defaultThreshold: number
+            if (count === 1) {
+                defaultThreshold = 1
+            } else if (count === 2) {
+                defaultThreshold = 2
+            } else {
+                defaultThreshold = Math.ceil(count * 2 / 3) // 2/3 majority
+            }
+            
+            const thresholdStr = await input({
+                message: chalk.cyan(`Enter attestation threshold (how many signatures required, 1-${count}):`),
+                default: defaultThreshold.toString(),
+                validate: (value: string) => {
+                    const num = parseInt(value)
+                    if (isNaN(num) || num < 1 || num > count) {
+                        return `Please enter a number between 1 and ${count}`
+                    }
+                    return true
+                }
+            })
+            const threshold = parseInt(thresholdStr)
+            
+            await this.createNewRolesAndKeys(count, rolePrefix, threshold)
         } else {
             if (!useExistingRoles || useExistingRoles.length === 0) {
                 useExistingRoles = await this.selectExistingRoles()
             }
-            await this.useExistingRoles(useExistingRoles)
+            
+            // Ensure useExistingRoles is not undefined
+            if (!useExistingRoles) {
+                this.error('No roles selected')
+                return
+            }
+            
+            // Ask user to choose attestation_threshold for existing roles
+            this.log(chalk.cyan(`You will have ${useExistingRoles.length} attestation keys.`))
+            
+            let defaultThreshold: number
+            if (useExistingRoles.length === 1) {
+                defaultThreshold = 1
+            } else if (useExistingRoles.length === 2) {
+                defaultThreshold = 2
+            } else {
+                defaultThreshold = Math.ceil(useExistingRoles.length * 2 / 3) // 2/3 majority
+            }
+            
+            const thresholdStr = await input({
+                message: chalk.cyan(`Enter attestation threshold (how many signatures required, 1-${useExistingRoles.length}):`),
+                default: defaultThreshold.toString(),
+                validate: (value: string) => {
+                    const num = parseInt(value)
+                    if (isNaN(num) || num < 1 || num > useExistingRoles!.length) {
+                        return `Please enter a number between 1 and ${useExistingRoles!.length}`
+                    }
+                    return true
+                }
+            })
+            const threshold = parseInt(thresholdStr)
+            
+            await this.useExistingRoles(useExistingRoles, threshold)
         }
     }
 
@@ -176,7 +233,7 @@ export default class SetupCubesignerSetup extends Command {
         }
     }
 
-    private async createNewRolesAndKeys(count: number, rolePrefix: string): Promise<void> {
+    private async createNewRolesAndKeys(count: number, rolePrefix: string, threshold: number): Promise<void> {
         this.log(chalk.blue(`Creating ${count} new roles and keys with prefix "${rolePrefix}"`))
         
         try {
@@ -210,14 +267,14 @@ export default class SetupCubesignerSetup extends Command {
             }
             
             this.log(chalk.green(`Successfully created ${selectedRoles.length} roles`))
-            await this.saveRolesToConfig(selectedRoles)
+            await this.saveRolesToConfig(selectedRoles, threshold)
             
         } catch (error) {
             this.error(chalk.red(`Failed to create roles and keys: ${error}`))
         }
     }
 
-    private async useExistingRoles(roleNames: string[]): Promise<void> {
+    private async useExistingRoles(roleNames: string[], threshold: number): Promise<void> {
         this.log(chalk.blue(`Using existing roles: ${roleNames.join(', ')}`))
         
         try {
@@ -259,14 +316,14 @@ export default class SetupCubesignerSetup extends Command {
             }
             
             this.log(chalk.green(`Found ${selectedRoles.length} existing roles`))
-            await this.saveRolesToConfig(selectedRoles)
+            await this.saveRolesToConfig(selectedRoles, threshold)
             
         } catch (error) {
             this.error(chalk.red(`Failed to use existing roles: ${error}`))
         }
     }
 
-    private async saveRolesToConfig(selectedRoles: any[]) {
+    private async saveRolesToConfig(selectedRoles: any[], threshold: number) {
         try {
             this.log(chalk.blue('Saving roles to DogeConfig...'))
             
@@ -293,14 +350,14 @@ export default class SetupCubesignerSetup extends Command {
             this.log(chalk.green(`Successfully saved ${cubesignerRoles.length} roles to ${this.dogeConfigFile}`))
             
             // Update setup_defaults.toml with attestation public keys
-            await this.updateSetupDefaultsWithKeys(selectedRoles)
+            await this.updateSetupDefaultsWithKeys(selectedRoles, threshold)
             
         } catch (error) {
             this.error(chalk.red(`Failed to save roles to config: ${error}`))
         }
     }
 
-    private async updateSetupDefaultsWithKeys(selectedRoles: any[]) {
+    private async updateSetupDefaultsWithKeys(selectedRoles: any[], threshold: number) {
         try {
             this.log(chalk.blue('Updating setup_defaults.toml with attestation public keys...'))
             
@@ -334,9 +391,19 @@ export default class SetupCubesignerSetup extends Command {
             // Update attestation_pubkeys array
             setupConfig.attestation_pubkeys = attestationPubkeys
             
+            // Update attestation_key_count
+            setupConfig.attestation_key_count = attestationPubkeys.length
+            
+            // Ask user to choose attestation_threshold
+            const keyCount = attestationPubkeys.length
+            this.log(chalk.cyan(`You have configured ${keyCount} attestation keys.`))
+            
+            setupConfig.attestation_threshold = threshold
+            
             // Write to setup_defaults.toml
             fs.writeFileSync(setupDefaultsPath, toml.stringify(setupConfig))
             this.log(chalk.green(`Successfully updated ${setupDefaultsPath} with ${attestationPubkeys.length} attestation public keys`))
+            this.log(chalk.green(`Updated attestation_key_count to ${keyCount} and attestation_threshold to ${threshold}`))
             
         } catch (error) {
             this.error(chalk.red(`Failed to update setup_defaults.toml: ${error}`))
