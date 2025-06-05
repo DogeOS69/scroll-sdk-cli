@@ -638,7 +638,9 @@ export default class SetupPrepCharts extends Command {
           // "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL": this.dogeConfig.da?.tendermintRpcUrl,
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE": this.dogeConfig.da?.daNamespace,
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__SIGNER_ADDRESS": this.dogeConfig.da?.signerAddress,
-          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__GENESIS_BLOB_COMMITMENT": this.dogeConfig.da?.genesisBlobCommitment
+          //"DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__GENESIS_BLOB_COMMITMENT": this.dogeConfig.da?.genesisBlobCommitment,
+          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_VOUT" : this.withdrawalProcessorConfig["genesis_sequencer_vout"],
+          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_TXID":this.withdrawalProcessorConfig['genesis_sequencer_txid']
         }
 
         for (const [envKey, newVal] of Object.entries(todoMappings)) {
