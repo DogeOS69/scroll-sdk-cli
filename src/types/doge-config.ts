@@ -52,7 +52,6 @@ export interface DogeConfig {
     tendermintRpcUrl: string,
     daNamespace: string,
     signerAddress: string,
-    genesisBlobCommitment?: string,
     celestiaMnemonic: string,
   }
   awsSigner?: {

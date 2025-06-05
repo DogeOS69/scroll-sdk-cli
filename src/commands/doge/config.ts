@@ -8,6 +8,7 @@ import type { DogeConfig } from '../../types/doge-config.js'
 import { loadDogeConfig } from '../../utils/doge-config.js'
 import { getSetupDefaultsPath, SETUP_DEFAULTS_TEMPLATE } from '../../config/constants.js'
 import crypto from 'node:crypto'
+import { DirectSecp256k1HdWallet } from '@cosmjs/proto-signing'
 
 export class DogeConfigCommand extends Command {
   static description = 'Configure Dogecoin settings for mainnet or testnet'
@@ -63,6 +64,37 @@ export class DogeConfigCommand extends Command {
     }
 
     return result
+  }
+
+  private async generateCelestiaAddressFromMnemonic(mnemonic: string): Promise<string> {
+    try {
+      const wallet = await DirectSecp256k1HdWallet.fromMnemonic(mnemonic, {
+        prefix: 'celestia'
+      })
+      const accounts = await wallet.getAccounts()
+      return accounts[0].address
+    } catch (error) {
+      throw new Error(`Failed to generate Celestia address from mnemonic: ${error}`)
+    }
+  }
+
+  private generateCelestiaNamespace(projectName?: string): string {
+    // Generate a namespace following Celestia format:
+    // Version 0 (1 byte) + 18 zero bytes + 10 custom bytes
+    const version = '00'
+    const leadingZeros = '0'.repeat(36) // 18 bytes = 36 hex chars
+    
+    let customBytes = ''
+    if (projectName) {
+      // Use project name as base for custom bytes
+      const hash = crypto.createHash('sha256').update(projectName).digest('hex')
+      customBytes = hash.substring(0, 20) // Take first 10 bytes (20 hex chars)
+    } else {
+      // Generate random 10 bytes
+      customBytes = crypto.randomBytes(10).toString('hex').toLowerCase()
+    }
+    
+    return version + leadingZeros + customBytes
   }
 
   async run(): Promise<void> {
@@ -163,34 +195,173 @@ export class DogeConfigCommand extends Command {
       required: false
     });
 
-    newConfig.da!.daNamespace = await input({
-      default: existingConfig.da?.daNamespace,
-      message: `Enter the Celestia DA Namespace (hex identifier for your rollup):`,
-      required: false
-    });
-
-    newConfig.da!.celestiaMnemonic = await input({
-      default: existingConfig.da?.celestiaMnemonic,
-      message: `Enter the Celestia Mnemonic (leave empty if you don't have a Celestia wallet yet):`,
-      required: false
-    });
-
-    // TODO: Implement automatic address generation from mnemonic using Celestia SDK
-    // For now, ask user to provide the address manually
-    if (newConfig.da!.celestiaMnemonic && newConfig.da!.celestiaMnemonic.trim()) {
-      this.log(chalk.yellow('💡 Tip: Since you provided a mnemonic, the signer address should be derived from it.'));
-      this.log(chalk.yellow('   For now, please provide the corresponding address manually.'));
-      this.log(chalk.yellow('   Future versions will generate this automatically.'));
+    // Handle Celestia namespace - auto-generate and show to user
+    let suggestedNamespace = existingConfig.da?.daNamespace
+    
+    if (!suggestedNamespace) {
+      // No existing namespace, generate new one
+      const configFileName = path.basename(this.configPath, '.toml')
+      const projectName = configFileName.replace(/^doge-config-/, '')
+      suggestedNamespace = this.generateCelestiaNamespace(projectName !== configFileName ? projectName : undefined)
+      
+      this.log(chalk.blue('\n📋 Celestia DA Namespace:'))
+      this.log(chalk.yellow('Format: 00 (version) + 000...000 (18 zero bytes) + custom (10 bytes)'))
+      this.log(chalk.green(`Auto-generated: ${suggestedNamespace}`))
+    } else {
+      // Existing namespace found, ask if user wants to generate new one
+      this.log(chalk.blue('\n📋 Celestia DA Namespace:'))
+      this.log(chalk.yellow('Format: 00 (version) + 000...000 (18 zero bytes) + custom (10 bytes)'))
+      this.log(chalk.cyan(`Current: ${suggestedNamespace}`))
+      
+      const generateNew = await confirm({
+        message: 'Generate a new random namespace?',
+        default: false
+      })
+      
+      if (generateNew) {
+        const configFileName = path.basename(this.configPath, '.toml')
+        const projectName = configFileName.replace(/^doge-config-/, '')
+        suggestedNamespace = this.generateCelestiaNamespace(projectName !== configFileName ? projectName : undefined)
+        this.log(chalk.green(`New generated: ${suggestedNamespace}`))
+      }
     }
 
-    newConfig.da!.signerAddress = await input({
-      default: existingConfig.da?.signerAddress,
-      message: `Enter the Celestia Signer Address${newConfig.da!.celestiaMnemonic ? ' (should match the mnemonic above)' : ''}:`,
-      required: newConfig.da!.celestiaMnemonic ? true : false
+    // Ensure we always have a valid namespace
+    if (!suggestedNamespace) {
+      suggestedNamespace = this.generateCelestiaNamespace()
+      this.log(chalk.green(`Fallback generated: ${suggestedNamespace}`))
+    }
+
+    const inputNamespace = await input({
+      default: suggestedNamespace,
+      message: `Celestia DA Namespace (press Enter to use auto-generated value):`,
+      required: true,
+      validate: (value) => {
+        if (!value.trim()) {
+          return 'Namespace is required'
+        }
+        
+        // Remove any spaces and convert to lowercase for validation
+        const cleanValue = value.replace(/\s+/g, '').toLowerCase()
+        
+        // Check if it's valid hex
+        if (!/^[0-9a-f]*$/.test(cleanValue)) {
+          return 'Namespace must be a valid hex string'
+        }
+        
+        // Check length (58 hex chars = 29 bytes)
+        if (cleanValue.length !== 58) {
+          return 'Namespace must be exactly 58 hex characters (29 bytes)'
+        }
+        
+        // Check version byte (first byte must be 00)
+        if (!cleanValue.startsWith('00')) {
+          return 'Namespace must start with 00 (version 0)'
+        }
+        
+        // Check 18 leading zero bytes after version
+        const expectedPrefix = '00' + '0'.repeat(36) // version + 18 zero bytes
+        if (!cleanValue.startsWith(expectedPrefix)) {
+          return 'Namespace must have 18 zero bytes after version byte'
+        }
+        
+        // Check not reserved namespace
+        const lastByte = cleanValue.slice(-2)
+        if (lastByte === 'ff' || parseInt(cleanValue.slice(2), 16) <= 0xFF) {
+          return 'Cannot use reserved namespace ranges'
+        }
+        
+        return true
+      }
     });
 
-    this.log(chalk.blue('\nNote: The following Celestia values will be configured during network deployment:'));
-    this.log(chalk.blue('- Genesis Blob Commitment (generated during network deployment)'));
+    // Process and validate the input namespace value
+    // Clean and normalize the input value
+    const finalNamespace = inputNamespace.replace(/\s+/g, '').toLowerCase()
+    
+    // Double-check validity (should already be validated by the input validator)
+    if (finalNamespace.length === 58 && /^[0-9a-f]*$/.test(finalNamespace)) {
+      this.log(chalk.green(`✓ Using namespace: ${finalNamespace}`))
+      newConfig.da!.daNamespace = finalNamespace
+    } else {
+      this.error('Invalid namespace format after processing')
+      return
+    }
+
+    // Handle Celestia mnemonic and signer address
+    let celestiaMnemonic = ''
+    let celestiaSignerAddress = ''
+    
+    const mnemonicChoice = await select({
+      message: 'Celestia mnemonic setup:',
+      choices: [
+        { name: 'Generate new mnemonic', value: 'generate' },
+        { name: 'Input existing mnemonic', value: 'input' }
+      ],
+      default: existingConfig.da?.celestiaMnemonic ? 'input' : 'generate'
+    })
+
+    if (mnemonicChoice === 'generate') {
+      // Generate new mnemonic
+      const wallet = await DirectSecp256k1HdWallet.generate(24, {
+        prefix: 'celestia'
+      })
+      celestiaMnemonic = wallet.mnemonic
+      const accounts = await wallet.getAccounts()
+      celestiaSignerAddress = accounts[0].address
+      
+      this.log(chalk.green('✓ Generated new Celestia mnemonic and address'))
+      this.log(chalk.yellow('Please save the following mnemonic securely:'))
+      this.log(chalk.cyan(celestiaMnemonic))
+      this.log(chalk.yellow(`Generated address: ${celestiaSignerAddress}`))
+      
+      const confirmSave = await confirm({
+        message: 'Confirm to use this mnemonic and address?',
+        default: true
+      })
+      
+      if (!confirmSave) {
+        celestiaMnemonic = ''
+        celestiaSignerAddress = ''
+      }
+    } else if (mnemonicChoice === 'input') {
+      // Input existing mnemonic
+      celestiaMnemonic = await input({
+        message: 'Enter your existing Celestia mnemonic:',
+        default: existingConfig.da?.celestiaMnemonic,
+        validate: (value) => {
+          if (!value.trim()) return 'Mnemonic cannot be empty'
+          const words = value.trim().split(/\s+/)
+          if (words.length !== 12 && words.length !== 24) {
+            return 'Mnemonic must be 12 or 24 words'
+          }
+          return true
+        }
+      })
+      
+      if (celestiaMnemonic.trim()) {
+        try {
+          celestiaSignerAddress = await this.generateCelestiaAddressFromMnemonic(celestiaMnemonic)
+          this.log(chalk.green(`✓ Auto-generated address from mnemonic: ${celestiaSignerAddress}`))
+        } catch (error) {
+          this.log(chalk.red(`Failed to generate address from mnemonic: ${error}`))
+          celestiaSignerAddress = await input({
+            message: 'Please manually enter Celestia Signer address:',
+            default: existingConfig.da?.signerAddress,
+            validate: (value) => {
+              if (!value.trim()) return 'Address cannot be empty'
+              if (!value.startsWith('celestia1')) return 'Address must start with celestia1'
+              return true
+            }
+          })
+        }
+      }
+    }
+
+    newConfig.da!.celestiaMnemonic = celestiaMnemonic
+    newConfig.da!.signerAddress = celestiaSignerAddress
+
+
 
     newConfig.da!.celestiaIndexerStartBlock = String(await input({
       default: String(existingConfig.da?.celestiaIndexerStartBlock || 0),
