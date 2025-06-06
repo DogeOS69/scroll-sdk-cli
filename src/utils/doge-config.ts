@@ -30,7 +30,7 @@ export async function selectDogeConfigFile(
 
   // Look for .toml config files in .data directory
   const files = fs.readdirSync('.data')
-  const configFiles = files.filter(file => file.endsWith('.toml'))
+  const configFiles = files.filter(file => file.startsWith('doge') && file.endsWith('.toml'))
   
   if (configFiles.length === 0) {
     throw new Error(
