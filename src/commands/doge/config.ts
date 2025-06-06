@@ -78,23 +78,23 @@ export class DogeConfigCommand extends Command {
     }
   }
 
-  private generateCelestiaNamespace(projectName?: string): string {
-    // Generate a namespace following Celestia format:
-    // Version 0 (1 byte) + 18 zero bytes + 10 custom bytes
-    const version = '00'
-    const leadingZeros = '0'.repeat(36) // 18 bytes = 36 hex chars
+  private generateCelestiaNamespace(projectName?: string, byteLength: number = 8): string {
+    // Generate a namespace with custom bytes (2-10 bytes allowed)
+    if (byteLength < 2 || byteLength > 10) {
+      byteLength = 8 // Default to 8 bytes if invalid
+    }
 
     let customBytes = ''
     if (projectName) {
       // Use project name as base for custom bytes
       const hash = crypto.createHash('sha256').update(projectName).digest('hex')
-      customBytes = hash.substring(0, 20) // Take first 10 bytes (20 hex chars)
+      customBytes = hash.substring(0, byteLength * 2) // Take specified bytes (hex chars = bytes * 2)
     } else {
-      // Generate random 10 bytes
-      customBytes = crypto.randomBytes(10).toString('hex').toLowerCase()
+      // Generate random bytes
+      customBytes = crypto.randomBytes(byteLength).toString('hex').toLowerCase()
     }
 
-    return version + leadingZeros + customBytes
+    return customBytes
   }
 
   async run(): Promise<void> {
@@ -205,12 +205,12 @@ export class DogeConfigCommand extends Command {
       suggestedNamespace = this.generateCelestiaNamespace(projectName !== configFileName ? projectName : undefined)
 
       this.log(chalk.blue('\n📋 Celestia DA Namespace:'))
-      this.log(chalk.yellow('Format: 00 (version) + 000...000 (18 zero bytes) + custom (10 bytes)'))
+      this.log(chalk.yellow('Format: Any valid hex string (2-10 bytes allowed)'))
       this.log(chalk.green(`Auto-generated: ${suggestedNamespace}`))
     } else {
       // Existing namespace found, ask if user wants to generate new one
       this.log(chalk.blue('\n📋 Celestia DA Namespace:'))
-      this.log(chalk.yellow('Format: 00 (version) + 000...000 (18 zero bytes) + custom (10 bytes)'))
+      this.log(chalk.yellow('Format: Any valid hex string (2-10 bytes allowed)'))
       this.log(chalk.cyan(`Current: ${suggestedNamespace}`))
 
       const generateNew = await confirm({
@@ -234,7 +234,7 @@ export class DogeConfigCommand extends Command {
 
     const inputNamespace = await input({
       default: suggestedNamespace,
-      message: `Celestia DA Namespace (press Enter to use default value):`,
+      message: `Celestia DA Namespace (2-10 bytes, press Enter to use default value):`,
       required: true,
       validate: (value) => {
         if (!value.trim()) {
@@ -249,26 +249,15 @@ export class DogeConfigCommand extends Command {
           return 'Namespace must be a valid hex string'
         }
 
-        // Check length (58 hex chars = 29 bytes)
-        if (cleanValue.length !== 58) {
-          return 'Namespace must be exactly 58 hex characters (29 bytes)'
+        // Check if length is even (must be valid bytes)
+        if (cleanValue.length % 2 !== 0) {
+          return 'Namespace must have even number of hex characters'
         }
 
-        // Check version byte (first byte must be 00)
-        if (!cleanValue.startsWith('00')) {
-          return 'Namespace must start with 00 (version 0)'
-        }
-
-        // Check 18 leading zero bytes after version
-        const expectedPrefix = '00' + '0'.repeat(36) // version + 18 zero bytes
-        if (!cleanValue.startsWith(expectedPrefix)) {
-          return 'Namespace must have 18 zero bytes after version byte'
-        }
-
-        // Check not reserved namespace
-        const lastByte = cleanValue.slice(-2)
-        if (lastByte === 'ff' || parseInt(cleanValue.slice(2), 16) <= 0xFF) {
-          return 'Cannot use reserved namespace ranges'
+        // Check byte length (2-10 bytes = 4-20 hex characters)
+        const byteLength = cleanValue.length / 2
+        if (byteLength < 2 || byteLength > 10) {
+          return 'Namespace must be between 2-10 bytes (4-20 hex characters)'
         }
 
         return true
@@ -280,9 +269,15 @@ export class DogeConfigCommand extends Command {
     const finalNamespace = inputNamespace.replace(/\s+/g, '').toLowerCase()
 
     // Double-check validity (should already be validated by the input validator)
-    if (finalNamespace.length === 58 && /^[0-9a-f]*$/.test(finalNamespace)) {
-      this.log(chalk.green(`✓ Using namespace: ${finalNamespace}`))
-      newConfig.da!.daNamespace = finalNamespace
+    if (finalNamespace.length % 2 === 0 && /^[0-9a-f]*$/.test(finalNamespace)) {
+      const byteLength = finalNamespace.length / 2
+      if (byteLength >= 2 && byteLength <= 10) {
+        this.log(chalk.green(`✓ Using namespace: ${finalNamespace} (${byteLength} bytes)`))
+        newConfig.da!.daNamespace = finalNamespace
+      } else {
+        this.error('Namespace must be between 2-10 bytes')
+        return
+      }
     } else {
       this.error('Invalid namespace format after processing')
       return
