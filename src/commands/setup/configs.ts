@@ -450,7 +450,7 @@ export default class SetupConfigs extends Command {
       }
 
       // Add values from output-withdrawal-processor.toml
-      const withdrawal_processor_toml_path = path.join(process.cwd(), "output-withdrawal-processor.toml");
+      const withdrawal_processor_toml_path = path.join(process.cwd(), ".data", "output-withdrawal-processor.toml");
       if (fs.existsSync(withdrawal_processor_toml_path)) {
         let withdrawal_processor_toml = toml.parse(fs.readFileSync(withdrawal_processor_toml_path, "utf-8"));
         content += `DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY="${withdrawal_processor_toml.fee_signer_key}"\n`

@@ -4,6 +4,7 @@ import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import Docker from 'dockerode'
 import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { getSetupDefaultsPath } from '../../config/constants.js'
 
 export class BridgeInitCommand extends Command {
@@ -161,6 +162,29 @@ export class BridgeInitCommand extends Command {
         imageTag = await this.getDockerImageTag(imageTag)
         this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
         await this.runGenerateTestKeys(imageTag);
+        
+        // Move output files to .data directory
+        const dataDir = path.join(process.cwd(), '.data');
+        const outputFiles = [
+            'output-withdrawal-processor.toml',
+            'output-dummy-signer-keys.json',
+            'output-test-data.json'
+        ];
+        
+        // Create .data directory if it doesn't exist
+        if (!fs.existsSync(dataDir)) {
+            fs.mkdirSync(dataDir, { recursive: true });
+        }
+        
+        for (const fileName of outputFiles) {
+            const sourceFile = path.join(process.cwd(), fileName);
+            const targetFile = path.join(dataDir, fileName);
+            
+            if (fs.existsSync(sourceFile)) {
+                fs.renameSync(sourceFile, targetFile);
+                this.log(chalk.green(`Moved ${fileName} to .data directory`));
+            }
+        }
     }
 }
 export default BridgeInitCommand

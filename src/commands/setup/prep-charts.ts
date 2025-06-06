@@ -163,10 +163,11 @@ export default class SetupPrepCharts extends Command {
       this.error(`${resolvedPath} not found. Some values may not be populated correctly.`);
     }
 
-    if (fs.existsSync("output-withdrawal-processor.toml")) {
-      this.withdrawalProcessorConfig = toml.parse(fs.readFileSync("output-withdrawal-processor.toml", "utf-8"));
+    const withdrawalProcessorTomlPath = path.join(process.cwd(), ".data", "output-withdrawal-processor.toml");
+    if (fs.existsSync(withdrawalProcessorTomlPath)) {
+      this.withdrawalProcessorConfig = toml.parse(fs.readFileSync(withdrawalProcessorTomlPath, "utf-8"));
     } else {
-      this.warn('output-withdrawal-processor.toml not found. Some values may not be populated correctly.');
+      this.error('output-withdrawal-processor.toml not found in .data directory. Please run `scrollsdk doge bridge-init` first to generate the required configuration files.');
     }
     return;
   }
