@@ -195,8 +195,8 @@ export class DummySignersManager {
     
     // Try different -local variants
     const localVariants = [
-      `${baseTag}-local`,           // v1.0.6-test → v1.0.6-test-local
-      baseTag.replace('-test', '-test-local'), // v1.0.6-test → v1.0.6-test-local
+      `${baseTag}-local`,           // shu-test-0605 → shu-test-0605-local
+      baseTag.replace('-test', '-test-local'), // shu-test-0605 → shu-test-0605-local
     ]
     
     // Remove duplicates
@@ -1040,7 +1040,7 @@ export class DummySignersCommand extends Command {
     '$ scrollsdk doge:dummy-signers --config .data/doge-config-testnet.toml',
     '$ scrollsdk doge:dummy-signers --local-only',
     '$ scrollsdk doge:dummy-signers --aws-only',
-    '$ scrollsdk doge:dummy-signers --image-tag v1.0.6-test',
+    '$ scrollsdk doge:dummy-signers --image-tag shu-test-0605',
   ]
 
   static flags = {
@@ -1085,7 +1085,7 @@ export class DummySignersCommand extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'v1.0.6-test'
+    const defaultTag = 'shu-test-0605'
 
     if (!providedTag) {
       return defaultTag

@@ -14,7 +14,7 @@ export class BridgeInitCommand extends Command {
         '$ scrollsdk doge:bridge-init',
         '$ scrollsdk doge:bridge-init -s 123456',
         '$ scrollsdk doge:bridge-init --seed 123456',
-        '$ scrollsdk doge:bridge-init --image-tag v1.0.6-test',
+        '$ scrollsdk doge:bridge-init --image-tag shu-test-0605',
     ]
 
     static flags = {
@@ -45,7 +45,7 @@ export class BridgeInitCommand extends Command {
     }
 
     private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-        const defaultTag = 'v1.0.6-test'
+        const defaultTag = 'shu-test-0605'
 
         if (!providedTag) {
             return defaultTag
