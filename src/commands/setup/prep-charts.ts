@@ -892,13 +892,13 @@ export default class SetupPrepCharts extends Command {
           changes.push({ key: `storage.size`, oldValue: String(storage_size), newValue: String(expected_storage_size) });
         }
 
-        let rpcPassword = productionYaml.rpcPassword;
-        let expectedRpcPassword = this.dogeConfig.dogecoinClusterRpc?.password;
-        if (rpcPassword != expectedRpcPassword) {
-          productionYaml.rpcPassword = expectedRpcPassword;
-          updated = true;
-          changes.push({ key: `rpcPassword`, oldValue: String(rpcPassword), newValue: String(expectedRpcPassword) });
-        }
+        // let rpcPassword = productionYaml.rpcPassword;
+        // let expectedRpcPassword = this.dogeConfig.dogecoinClusterRpc?.password;
+        // if (rpcPassword != expectedRpcPassword) {
+        //   productionYaml.rpcPassword = expectedRpcPassword;
+        //   updated = true;
+        //   changes.push({ key: `rpcPassword`, oldValue: String(rpcPassword), newValue: String(expectedRpcPassword) });
+        // }
 
         let rpcUser = productionYaml.dogecoinConf?.rpcuser;
         let expectedRpcUser = this.dogeConfig.dogecoinClusterRpc?.username;
