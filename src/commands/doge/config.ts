@@ -200,9 +200,7 @@ export class DogeConfigCommand extends Command {
 
     if (!suggestedNamespace) {
       // No existing namespace, generate new one
-      const configFileName = path.basename(this.configPath, '.toml')
-      const projectName = configFileName.replace(/^doge-config-/, '')
-      suggestedNamespace = this.generateCelestiaNamespace(projectName !== configFileName ? projectName : undefined)
+      suggestedNamespace = this.generateCelestiaNamespace()
 
       this.log(chalk.blue('\n📋 Celestia DA Namespace:'))
       this.log(chalk.yellow('Format: Any valid hex string (2-10 bytes allowed)'))
@@ -219,9 +217,8 @@ export class DogeConfigCommand extends Command {
       })
 
       if (generateNew) {
-        const configFileName = path.basename(this.configPath, '.toml')
-        const projectName = configFileName.replace(/^doge-config-/, '')
-        suggestedNamespace = this.generateCelestiaNamespace(projectName !== configFileName ? projectName : undefined)
+        //randomly generate a namespace
+        suggestedNamespace = this.generateCelestiaNamespace()
         this.log(chalk.green(`New generated: ${suggestedNamespace}`))
       }
     }
