@@ -126,7 +126,7 @@ export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
         celestiaIndexerStartBlock: network === 'mainnet' ? '0' : '6175746',
         //rpcUrl: network === 'mainnet' ? 'http://celestia-mainnet:26658' : 'http://celestia-testnet-mocha:26658',
         tendermintRpcUrl: '',
-        daNamespace: network === 'mainnet' ? '' : '000000000000000000000000000000000000000000000000000000000d06305735700',
+        daNamespace: network === 'mainnet' ? '' : '',
         signerAddress: '',
         celestiaMnemonic: '',
       }
