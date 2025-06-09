@@ -8,6 +8,8 @@
   },
   "bugs": "https://github.com/scroll-tech/scroll-sdk-cli/issues",
   "dependencies": {
+    "@cosmjs/proto-signing": "^0.33.1",
+    "@cosmjs/stargate": "^0.33.1",
     "@cubist-labs/cubesigner-sdk": "^0.4.152-0",
     "@cubist-labs/cubesigner-sdk-fs-storage": "^0.4.152-0",
     "@iarna/toml": "^2.2.5",
@@ -16,6 +18,7 @@
     "@oclif/core": "^4",
     "@oclif/plugin-help": "^6",
     "@oclif/plugin-plugins": "^5",
+    "@scure/base": "^1.1.0",
     "bitcore-lib-doge": "^10.7.0",
     "chalk": "^5.3.0",
     "cli-progress": "^3.12.0",
@@ -29,8 +32,7 @@
     "qrcode": "^1.5.4",
     "terminal-link": "^3.0.0",
     "toml": "^3.0.0",
-    "ws": "^8.18.0",
-    "@scure/base": "^1.1.0"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@oclif/prettier-config": "^0.2.1",

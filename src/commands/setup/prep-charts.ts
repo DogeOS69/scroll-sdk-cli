@@ -163,10 +163,11 @@ export default class SetupPrepCharts extends Command {
       this.error(`${resolvedPath} not found. Some values may not be populated correctly.`);
     }
 
-    if (fs.existsSync("output-withdrawal-processor.toml")) {
-      this.withdrawalProcessorConfig = toml.parse(fs.readFileSync("output-withdrawal-processor.toml", "utf-8"));
+    const withdrawalProcessorTomlPath = path.join(process.cwd(), ".data", "output-withdrawal-processor.toml");
+    if (fs.existsSync(withdrawalProcessorTomlPath)) {
+      this.withdrawalProcessorConfig = toml.parse(fs.readFileSync(withdrawalProcessorTomlPath, "utf-8"));
     } else {
-      this.warn('output-withdrawal-processor.toml not found. Some values may not be populated correctly.');
+      this.error('output-withdrawal-processor.toml not found in .data directory. Please run `scrollsdk doge bridge-init` first to generate the required configuration files.');
     }
     return;
   }
@@ -638,7 +639,8 @@ export default class SetupPrepCharts extends Command {
           // "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL": this.dogeConfig.da?.tendermintRpcUrl,
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE": this.dogeConfig.da?.daNamespace,
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__SIGNER_ADDRESS": this.dogeConfig.da?.signerAddress,
-          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__GENESIS_BLOB_COMMITMENT": this.dogeConfig.da?.genesisBlobCommitment
+          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_VOUT" : this.withdrawalProcessorConfig["genesis_sequencer_vout"],
+          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_TXID":this.withdrawalProcessorConfig['genesis_sequencer_txid']
         }
 
         for (const [envKey, newVal] of Object.entries(todoMappings)) {
@@ -890,13 +892,13 @@ export default class SetupPrepCharts extends Command {
           changes.push({ key: `storage.size`, oldValue: String(storage_size), newValue: String(expected_storage_size) });
         }
 
-        let rpcPassword = productionYaml.rpcPassword;
-        let expectedRpcPassword = this.dogeConfig.dogecoinClusterRpc?.password;
-        if (rpcPassword != expectedRpcPassword) {
-          productionYaml.rpcPassword = expectedRpcPassword;
-          updated = true;
-          changes.push({ key: `rpcPassword`, oldValue: String(rpcPassword), newValue: String(expectedRpcPassword) });
-        }
+        // let rpcPassword = productionYaml.rpcPassword;
+        // let expectedRpcPassword = this.dogeConfig.dogecoinClusterRpc?.password;
+        // if (rpcPassword != expectedRpcPassword) {
+        //   productionYaml.rpcPassword = expectedRpcPassword;
+        //   updated = true;
+        //   changes.push({ key: `rpcPassword`, oldValue: String(rpcPassword), newValue: String(expectedRpcPassword) });
+        // }
 
         let rpcUser = productionYaml.dogecoinConf?.rpcuser;
         let expectedRpcUser = this.dogeConfig.dogecoinClusterRpc?.username;

@@ -36,7 +36,7 @@ export default class TestIngress extends Command {
       'bridge-history-api',
       'frontends',
       'grafana',
-      'l2-rpc',
+      'rpc',
       'rollup-explorer-backend',
     ]
 
@@ -89,7 +89,7 @@ export default class TestIngress extends Command {
       let wsSuccess = false
       let wssSuccess = false
 
-      if (name === 'l2-rpc-websocket') {
+      if (name === 'rpc-websocket') {
         // WebSocket checks
         wsSuccess = await this.checkWebSocket(`ws://${host}`)
         wssSuccess = await this.checkWebSocket(`wss://${host}`)
@@ -202,7 +202,7 @@ export default class TestIngress extends Command {
       EXTERNAL_EXPLORER_URI_L1: 'l1-explorer',
       EXTERNAL_EXPLORER_URI_L2: 'blockscout',
       EXTERNAL_RPC_URI_L1: 'l1-devnet',
-      EXTERNAL_RPC_URI_L2: 'l2-rpc',
+      EXTERNAL_RPC_URI_L2: 'rpc',
       ROLLUPSCAN_API_URI: 'rollup-explorer-backend',
     }
 

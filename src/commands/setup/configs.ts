@@ -9,28 +9,33 @@ import * as childProcess from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { DogeConfig } from '../../types/doge-config.js'
-import { loadDogeConfig } from '../../utils/doge-config.js'
+import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import { execSync } from 'child_process'
+import { promisify } from 'util'
+
+const execAsync = promisify(childProcess.exec)
 
 export default class SetupConfigs extends Command {
   static override description = 'Generate configuration files and create environment files for services'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --image-tag gen-configs-0f04f9b71dccc3a1647fb6473f414d6de5020c3d',
-    '<%= config.bin %> <%= command.id %> --configs-dir custom-configs',
+    '<%= config.bin %> <%= command.id %> --image-tag gen-configs-v0.1.0',
+    '<%= config.bin %> <%= command.id %> --configs-dir ./configs-override',
   ]
 
   static override flags = {
-    'configs-dir': Flags.string({
-      default: 'values',
-      description: 'Directory to store configuration files',
+    'doge-config': Flags.string({
+      description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
+      required: false,
     }),
     'image-tag': Flags.string({
       description: 'Specify the Docker image tag to use',
       required: false,
     }),
-    'doge-config': Flags.string({
-      description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
+    'configs-dir': Flags.string({
+      description: 'Directory name to copy configs to',
+      default: 'values',
       required: false,
     }),
   }
@@ -46,23 +51,14 @@ export default class SetupConfigs extends Command {
     const configsDir = flags['configs-dir']
     this.log(chalk.blue(`Using configuration directory: ${configsDir}`))
 
-    let dogeConfigFile = flags['doge-config']
-    if (!dogeConfigFile) {
-      const files = fs.readdirSync('.data')
-      const configFiles = files.filter(file => file.endsWith('.toml'))
-      const configFileChoices = configFiles.map(file => ({ name: file, value: file }))
-
-      const fileSelection = await select({
-        choices: [
-          ...configFileChoices,
-        ],
-        message: 'Select config file to configure:',
-      })
-      dogeConfigFile = path.resolve('.data/' + fileSelection)
-    }
-    this.log(chalk.blue(`Using Dogecoin config file: ${dogeConfigFile}`))
-    this.dogeConfig = await loadDogeConfig(dogeConfigFile);
-
+    // Use the new common function to load config
+    const { config, configPath } = await loadDogeConfigWithSelection(
+      flags['doge-config'],
+      'scrollsdk doge:config'
+    )
+    
+    this.dogeConfig = config
+    this.log(chalk.blue(`Using Dogecoin config file: ${configPath}`))
 
     this.log(chalk.blue('Checking L1_CONTRACT_DEPLOYMENT_BLOCK...'))
     await this.updateL1ContractDeploymentBlock()
@@ -454,7 +450,7 @@ export default class SetupConfigs extends Command {
       }
 
       // Add values from output-withdrawal-processor.toml
-      const withdrawal_processor_toml_path = path.join(process.cwd(), "output-withdrawal-processor.toml");
+      const withdrawal_processor_toml_path = path.join(process.cwd(), ".data", "output-withdrawal-processor.toml");
       if (fs.existsSync(withdrawal_processor_toml_path)) {
         let withdrawal_processor_toml = toml.parse(fs.readFileSync(withdrawal_processor_toml_path, "utf-8"));
         content += `DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY="${withdrawal_processor_toml.fee_signer_key}"\n`

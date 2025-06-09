@@ -1,5 +1,19 @@
 export type Network = 'mainnet' | 'testnet'
 
+export interface CubesignerKey {
+  key_id: string
+  key_type: string
+  public_key: string
+  material_id: string
+  purpose: string
+}
+
+export interface CubesignerRole {
+  role_id: string
+  name: string
+  keys: CubesignerKey[]
+}
+
 export interface DogeConfig {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any
@@ -38,7 +52,6 @@ export interface DogeConfig {
     tendermintRpcUrl: string,
     daNamespace: string,
     signerAddress: string,
-    genesisBlobCommitment: string,
     celestiaMnemonic: string,
   }
   awsSigner?: {
@@ -56,6 +69,9 @@ export interface DogeConfig {
   }
   deploymentType?: 'local' | 'aws'
   signerUrls?: string[]
+  cubesigner?: {
+    roles: CubesignerRole[]
+  }
 }
 
 export interface DogeWallet {

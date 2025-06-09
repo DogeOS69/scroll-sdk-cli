@@ -1,9 +1,10 @@
 import * as toml from '@iarna/toml'
-import { input } from '@inquirer/prompts'
+import { input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import Docker from 'dockerode'
 import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { getSetupDefaultsPath } from '../../config/constants.js'
 
 export class BridgeInitCommand extends Command {
@@ -13,6 +14,7 @@ export class BridgeInitCommand extends Command {
         '$ scrollsdk doge:bridge-init',
         '$ scrollsdk doge:bridge-init -s 123456',
         '$ scrollsdk doge:bridge-init --seed 123456',
+        '$ scrollsdk doge:bridge-init --image-tag shu-test-0605',
     ]
 
     static flags = {
@@ -20,10 +22,60 @@ export class BridgeInitCommand extends Command {
             char: 's',
             description: 'seed which will regenerate the sequencer and fee wallet',
         }),
+        'image-tag': Flags.string({
+            description: 'Specify the Docker image tag to use',
+            required: false,
+        }),
     }
-    async runGenerateTestKeys(): Promise<void> {
+
+    private async fetchDockerTags(): Promise<string[]> {
+        try {
+            const response = await fetch(
+                'https://registry.hub.docker.com/v2/repositories/dogeos69/generate-test-keys/tags?page_size=100',
+            )
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`)
+            }
+
+            const data = await response.json()
+            return data.results.map((tag: any) => tag.name)
+        } catch (error) {
+            this.error(`Failed to fetch Docker tags: ${error}`)
+        }
+    }
+
+    private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
+        const defaultTag = 'shu-test-0605'
+
+        if (!providedTag) {
+            return defaultTag
+        }
+
+        const tags = await this.fetchDockerTags()
+
+        if (tags.includes(providedTag)) {
+            return providedTag
+        }
+
+        if (providedTag.startsWith('v') && tags.includes(providedTag)) {
+            return providedTag
+        }
+
+        if (/^\d+\.\d+\.\d+(-test)?$/.test(providedTag) && tags.includes(`v${providedTag}`)) {
+            return `v${providedTag}`
+        }
+
+        const selectedTag = await select({
+            choices: tags.map((tag) => ({ name: tag, value: tag })),
+            message: 'Select a Docker image tag:',
+        })
+
+        return selectedTag
+    }
+
+    async runGenerateTestKeys(imageTag: string): Promise<void> {
         const docker = new Docker();
-        const image = `docker.io/dogeos69/generate-test-keys:v0.1.1-test`;
+        const image = `docker.io/dogeos69/generate-test-keys:${imageTag}`;
         try {
             this.log(chalk.cyan(`Pulling Docker Image: ${image}`))
             // Pull the image if it doesn't exist locally
@@ -84,6 +136,7 @@ export class BridgeInitCommand extends Command {
     async run(): Promise<void> {
         const { flags } = await this.parse(BridgeInitCommand)
         let seed = flags.seed
+        let imageTag = flags['image-tag']
 
         // Read existing seed from setup_defaults.toml
         const setupDefaultsPath = getSetupDefaultsPath();
@@ -105,7 +158,33 @@ export class BridgeInitCommand extends Command {
         let newConfig = toml.parse(existingConfigStr);
         newConfig.seed_string = seed;
         fs.writeFileSync(setupDefaultsPath, toml.stringify(newConfig));
-        await this.runGenerateTestKeys();
+
+        imageTag = await this.getDockerImageTag(imageTag)
+        this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
+        await this.runGenerateTestKeys(imageTag);
+        
+        // Move output files to .data directory
+        const dataDir = path.join(process.cwd(), '.data');
+        const outputFiles = [
+            'output-withdrawal-processor.toml',
+            'output-dummy-signer-keys.json',
+            'output-test-data.json'
+        ];
+        
+        // Create .data directory if it doesn't exist
+        if (!fs.existsSync(dataDir)) {
+            fs.mkdirSync(dataDir, { recursive: true });
+        }
+        
+        for (const fileName of outputFiles) {
+            const sourceFile = path.join(process.cwd(), fileName);
+            const targetFile = path.join(dataDir, fileName);
+            
+            if (fs.existsSync(sourceFile)) {
+                fs.renameSync(sourceFile, targetFile);
+                this.log(chalk.green(`Moved ${fileName} to .data directory`));
+            }
+        }
     }
 }
 export default BridgeInitCommand

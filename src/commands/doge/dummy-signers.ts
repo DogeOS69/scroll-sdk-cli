@@ -8,8 +8,8 @@ import { execSync } from 'child_process'
 import * as os from 'node:os'
 import bitcore from 'bitcore-lib-doge'
 import type { DogeConfig } from '../../types/doge-config.js'
-import { loadDogeConfig } from '../../utils/doge-config.js'
-import { getSetupDefaultsPath } from '../../config/constants.js'
+import { loadDogeConfig, selectDogeConfigFile } from '../../utils/doge-config.js'
+import { getSetupDefaultsPath, SETUP_DEFAULTS_TEMPLATE } from '../../config/constants.js'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
 const { Networks, PrivateKey } = bitcore
@@ -17,6 +17,7 @@ const { Networks, PrivateKey } = bitcore
 export class DummySignersManager {
   private dogeConfig: DogeConfig
   private configPath: string
+  private imageTag: string
   private log: (message: string) => void
   private warn: (message: string) => void
   private error: (message: string) => void
@@ -24,6 +25,7 @@ export class DummySignersManager {
   constructor(
     dogeConfig: DogeConfig,
     configPath: string,
+    imageTag: string,
     logger: {
       log: (message: string) => void
       warn: (message: string) => void
@@ -32,6 +34,7 @@ export class DummySignersManager {
   ) {
     this.dogeConfig = dogeConfig
     this.configPath = configPath
+    this.imageTag = imageTag
     this.log = logger.log
     this.warn = logger.warn
     this.error = logger.error
@@ -80,7 +83,7 @@ export class DummySignersManager {
     fs.writeFileSync(filePath, toml.stringify(config))
   }
 
-  private async updateSetupDefaultsWithPublicKeys(publicKeys: string[]): Promise<void> {
+  private async updateSetupDefaultsWithPublicKeys(publicKeys: string[], threshold: number): Promise<void> {
     if (publicKeys.length === 0) {
       this.warn('No public keys were provided');
       return;
@@ -100,11 +103,21 @@ export class DummySignersManager {
     }
 
     config.correctness_pubkeys = publicKeys;
+    
+    // Update correctness_key_count
+    config.correctness_key_count = publicKeys.length;
+    
+    // Ask user to choose correctness_threshold
+    const keyCount = publicKeys.length;
+    this.log(chalk.cyan(`You have configured ${keyCount} correctness keys.`));
+    
+    config.correctness_threshold = threshold;
 
     const updatedToml = toml.stringify(config);
     fs.writeFileSync(tomlPath, updatedToml);
 
-    this.log(`✅ Updated ${tomlPath} with ${publicKeys.length} public keys`);
+    this.log(`✅ Updated ${tomlPath} with ${publicKeys.length} correctness public keys`);
+    this.log(`Updated correctness_key_count to ${keyCount} and correctness_threshold to ${threshold}`);
     this.log(`Public keys: ${publicKeys.join(', ')}`);
   }
 
@@ -142,7 +155,7 @@ export class DummySignersManager {
     ].join(' ')
   }
 
-  async setupDummySigners(): Promise<void> {
+  async setupDummySigners(availableTags: string[]): Promise<void> {
     this.log(chalk.blue('\nSetting up Dummy Signers...'))
     
     const deploymentType = await select({
@@ -165,13 +178,60 @@ export class DummySignersManager {
     this.dogeConfig.deploymentType = deploymentType as 'local' | 'aws'
     
     if (deploymentType === 'local') {
-      await this.setupLocalSigners()
+      await this.setupLocalSigners(availableTags)
     } else {
-      await this.setupAwsSigners()
+      await this.setupAwsSigners(availableTags)
     }
   }
   
-  private async setupLocalSigners(): Promise<void> {
+  private async getLocalImageTag(availableTags: string[]): Promise<string> {
+    // For local deployment, try to use -local suffix if available
+    const baseTag = this.imageTag
+    
+    // If the user already specified a -local tag, use it
+    if (baseTag.includes('-local')) {
+      return baseTag
+    }
+    
+    // Try different -local variants
+    const localVariants = [
+      `${baseTag}-local`,           // shu-test-0605 → shu-test-0605-local
+      baseTag.replace('-test', '-test-local'), // shu-test-0605 → shu-test-0605-local
+    ]
+    
+    // Remove duplicates
+    const uniqueVariants = [...new Set(localVariants)]
+    
+    for (const variant of uniqueVariants) {
+      if (availableTags.includes(variant)) {
+        this.log(chalk.blue(`Found local variant: ${variant}, using it instead of ${baseTag}`))
+        return variant
+      }
+    }
+    
+    // If no -local variant found, use the original tag
+    this.log(chalk.yellow(`No -local variant found for ${baseTag}, using original tag`))
+    return baseTag
+  }
+
+  private async fetchDockerTags(): Promise<string[]> {
+    try {
+      const response = await fetch(
+        'https://registry.hub.docker.com/v2/repositories/dogeos69/dummy-signer/tags?page_size=100',
+      )
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const data = await response.json()
+      return data.results.map((tag: any) => tag.name)
+    } catch (error) {
+      this.error(`Failed to fetch Docker tags: ${error}`)
+      return []
+    }
+  }
+
+  private async setupLocalSigners(availableTags: string[]): Promise<void> {
     this.log(chalk.blue('\nSetting up Local Dummy Signers...'))
     
     try {
@@ -187,6 +247,33 @@ export class DummySignersManager {
       validate: this.validators.signerCount
     })
     
+    const numSigners = parseInt(NUM_SIGNERS)
+    
+    // Ask user to choose correctness_threshold right after number of signers
+    this.log(chalk.cyan(`You will have ${numSigners} correctness signers.`))
+    
+    let defaultThreshold: number
+    if (numSigners === 1) {
+      defaultThreshold = 1
+    } else if (numSigners === 2) {
+      defaultThreshold = 2
+    } else {
+      defaultThreshold = Math.ceil(numSigners * 2 / 3) // 2/3 majority
+    }
+    
+    const thresholdStr = await input({
+      message: chalk.cyan(`Enter correctness threshold (how many signatures required, 1-${numSigners}):`),
+      default: defaultThreshold.toString(),
+      validate: (value: string) => {
+        const num = parseInt(value)
+        if (isNaN(num) || num < 1 || num > numSigners) {
+          return `Please enter a number between 1 and ${numSigners}`
+        }
+        return true
+      }
+    })
+    const threshold = parseInt(thresholdStr)
+    
     const TSO_URL = this.readTsoHostFromConfig()
     if (!TSO_URL) {
       this.error('TSO_HOST not found in config.toml. Please run "scrollsdk setup domains" first.')
@@ -200,17 +287,18 @@ export class DummySignersManager {
       default: true
     })
     
-    const signerConfigs = await this.collectSignerConfigs(parseInt(NUM_SIGNERS), generateWifKeys)
+    const signerConfigs = await this.collectSignerConfigs(numSigners, generateWifKeys)
     
-    const imageName = 'dogeos69/dummy-signer:1.0.5-test-local'
+    const localImageTag = await this.getLocalImageTag(availableTags)
+    const imageName = `dogeos69/dummy-signer:${localImageTag}`
     await this.pullDockerImage(imageName)
-    await this.stopAndRemoveContainers(parseInt(NUM_SIGNERS))
+    await this.stopAndRemoveContainers(numSigners)
     await this.startSignerContainers(signerConfigs, NETWORK, TSO_URL, imageName)
     
     this.showContainerStatus(signerConfigs)
     
     this.saveLocalSignerConfig(NETWORK, signerConfigs)
-    await this.updateSetupDefaultsWithLocalPublicKeys(signerConfigs)
+    await this.updateSetupDefaultsWithLocalPublicKeys(signerConfigs, threshold)
     
     this.showSignerUrlsSummary()
     
@@ -494,8 +582,26 @@ export class DummySignersManager {
     })
   }
 
-  private async setupAwsSigners(): Promise<void> {
+  private async setupAwsSigners(availableTags: string[]): Promise<void> {
     this.log(chalk.blue('\nSetting up AWS Dummy Signers...'))
+    
+    // Validate that the specified image tag exists in the registry
+    if (!availableTags.includes(this.imageTag)) {
+      this.warn(chalk.yellow(`⚠️  Warning: Image tag '${this.imageTag}' not found in Docker registry.`))
+      this.log(chalk.blue(`Available tags: ${availableTags.slice(0, 10).join(', ')}${availableTags.length > 10 ? '...' : ''}`))
+      
+      const proceedAnyway = await confirm({
+        message: 'The specified image tag was not found in the registry. Do you want to proceed anyway?',
+        default: false
+      })
+      
+      if (!proceedAnyway) {
+        this.log(chalk.yellow('AWS deployment cancelled.'))
+        return
+      }
+    } else {
+      this.log(chalk.green(`✅ Verified image tag '${this.imageTag}' exists in registry.`))
+    }
     
     const AWS_REGION = await input({
       message: 'AWS_REGION',
@@ -535,6 +641,34 @@ export class DummySignersManager {
       required: false,
     })
     
+    const suffixes = SUFFIXES.split(' ').filter(s => s.trim())
+    const numSigners = suffixes.length
+    
+    // Ask user to choose correctness_threshold right after suffixes
+    this.log(chalk.cyan(`You will have ${numSigners} correctness signers.`))
+    
+    let defaultThreshold: number
+    if (numSigners === 1) {
+      defaultThreshold = 1
+    } else if (numSigners === 2) {
+      defaultThreshold = 2
+    } else {
+      defaultThreshold = Math.ceil(numSigners * 2 / 3) // 2/3 majority
+    }
+    
+    const thresholdStr = await input({
+      message: chalk.cyan(`Enter correctness threshold (how many signatures required, 1-${numSigners}):`),
+      default: defaultThreshold.toString(),
+      validate: (value: string) => {
+        const num = parseInt(value)
+        if (isNaN(num) || num < 1 || num > numSigners) {
+          return `Please enter a number between 1 and ${numSigners}`
+        }
+        return true
+      }
+    })
+    const threshold = parseInt(thresholdStr)
+    
     await this.saveAwsSignerConfig({
       region: AWS_REGION,
       networkAlias: NETWORK_ALIAS,
@@ -566,7 +700,7 @@ export class DummySignersManager {
       
       this.log('Setup dummy signer completed successfully!');
       
-      await this.updateSetupDefaultsWithKMSPublicKeys(NETWORK_ALIAS, AWS_REGION, SUFFIXES);
+      await this.updateSetupDefaultsWithKMSPublicKeys(NETWORK_ALIAS, AWS_REGION, SUFFIXES, threshold);
       
       // Get AWS service URLs
       await this.getAwsServiceUrls(NETWORK_ALIAS, AWS_REGION, SUFFIXES);
@@ -607,7 +741,7 @@ export class DummySignersManager {
 
   private prepareDummyImage(awsRegion: string, awsAccountId: string): void {
     const repoName = 'dogeos/dummy-signer';
-    const dockerHubImage = 'dogeos69/dummy-signer:v1.0.5-test';
+    const dockerHubImage = `dogeos69/dummy-signer:${this.imageTag}`;
     const ecrRegistry = `${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com`;
     const ecrImage = `${ecrRegistry}/${repoName}:latest`;
     
@@ -706,7 +840,7 @@ export class DummySignersManager {
     this.log('Dummy signer image preparation completed successfully!');
   }
 
-  private async updateSetupDefaultsWithKMSPublicKeys(networkAlias: string, awsRegion: string, suffixesStr: string): Promise<void> {
+  private async updateSetupDefaultsWithKMSPublicKeys(networkAlias: string, awsRegion: string, suffixesStr: string, threshold: number): Promise<void> {
     try {
       this.log('Fetching KMS public keys...');
       
@@ -736,7 +870,7 @@ export class DummySignersManager {
         }
       }
       
-      await this.updateSetupDefaultsWithPublicKeys(publicKeys);
+      await this.updateSetupDefaultsWithPublicKeys(publicKeys, threshold);
       
     } catch (error) {
       this.error(`Failed to update setup defaults: ${error}`);
@@ -798,7 +932,7 @@ export class DummySignersManager {
     return compressedKey.toString('hex');
   }
 
-  private async updateSetupDefaultsWithLocalPublicKeys(signerConfigs: Array<{wif: string, port: number, publicKey?: string}>): Promise<void> {
+  private async updateSetupDefaultsWithLocalPublicKeys(signerConfigs: Array<{wif: string, port: number, publicKey?: string}>, threshold: number): Promise<void> {
     try {
       this.log('Fetching public keys from WIF...');
       
@@ -809,7 +943,7 @@ export class DummySignersManager {
         publicKeys.push(publicKey);
       }
       
-      await this.updateSetupDefaultsWithPublicKeys(publicKeys);
+      await this.updateSetupDefaultsWithPublicKeys(publicKeys, threshold);
       
     } catch (error) {
       this.error(`Failed to update setup defaults: ${error}`);
@@ -906,6 +1040,7 @@ export class DummySignersCommand extends Command {
     '$ scrollsdk doge:dummy-signers --config .data/doge-config-testnet.toml',
     '$ scrollsdk doge:dummy-signers --local-only',
     '$ scrollsdk doge:dummy-signers --aws-only',
+    '$ scrollsdk doge:dummy-signers --image-tag shu-test-0605',
   ]
 
   static flags = {
@@ -923,50 +1058,86 @@ export class DummySignersCommand extends Command {
       description: 'Set up AWS KMS signers only',
       default: false,
     }),
+    'image-tag': Flags.string({
+      description: 'Specify the Docker image tag to use',
+      required: false,
+    }),
   }
 
   private dogeConfig: DogeConfig = {} as DogeConfig
   private configPath: string = ''
 
-  async run(): Promise<void> {
-    const { flags } = await this.parse(DummySignersCommand)
+  private async fetchDockerTags(): Promise<string[]> {
+    try {
+      const response = await fetch(
+        'https://registry.hub.docker.com/v2/repositories/dogeos69/dummy-signer/tags?page_size=100',
+      )
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
 
-    // Resolve config path
-    let resolvedPath = ""
-    if (!flags.config) {
-      // Auto-detect config file
-      if (!fs.existsSync('.data')) {
-        this.error('No .data directory found. Please run `scrollsdk doge:config` first to create a configuration.')
-        return
-      }
-      
-      const files = fs.readdirSync('.data')
-      const configFiles = files.filter(file => file.endsWith('.toml'))
-      
-      if (configFiles.length === 0) {
-        this.error('No config files found in .data directory. Please run `scrollsdk doge:config` first.')
-        return
-      }
-      
-      if (configFiles.length === 1) {
-        resolvedPath = path.resolve('.data', configFiles[0])
-        this.log(chalk.blue(`Using config file: ${resolvedPath}`))
-      } else {
-        this.error(`Multiple config files found: ${configFiles.join(', ')}. Please specify one with --config flag.`)
-        return
-      }
-    } else {
-      resolvedPath = path.resolve(flags.config)
-      if (!fs.existsSync(resolvedPath)) {
-        this.error(`Config file ${resolvedPath} does not exist`)
-        return
+      const data = await response.json()
+      return data.results.map((tag: any) => tag.name)
+    } catch (error) {
+      this.error(`Failed to fetch Docker tags: ${error}`)
+      return []
+    }
+  }
+
+  private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
+    const defaultTag = 'shu-test-0605'
+
+    if (!providedTag) {
+      return defaultTag
+    }
+
+    const tags = await this.fetchDockerTags()
+
+    if (tags.includes(providedTag)) {
+      return providedTag
+    }
+
+    if (providedTag.startsWith('v') && tags.includes(providedTag)) {
+      return providedTag
+    }
+
+    if (/^\d+\.\d+\.\d+(-test)?(-local)?$/.test(providedTag)) {
+      const variants = [
+        `v${providedTag}`,
+        `${providedTag}-test`,
+        `${providedTag}-test-local`,
+        `v${providedTag}-test`,
+        `v${providedTag}-test-local`
+      ]
+      for (const variant of variants) {
+        if (tags.includes(variant)) {
+          return variant
+        }
       }
     }
 
-    // Load config
-    this.configPath = resolvedPath
+    const selectedTag = await select({
+      choices: tags.map((tag: string) => ({ name: tag, value: tag })),
+      message: 'Select a Docker image tag:',
+    })
+
+    return selectedTag
+  }
+
+  async run(): Promise<void> {
+    const { flags } = await this.parse(DummySignersCommand)
+
+    // Use the new common function to resolve config path
     try {
-      this.dogeConfig = await loadDogeConfig(resolvedPath)
+      this.configPath = await selectDogeConfigFile(flags.config, 'scrollsdk doge:config')
+    } catch (error) {
+      this.error(error instanceof Error ? error.message : String(error))
+      return
+    }
+
+    // Load config
+    try {
+      this.dogeConfig = await loadDogeConfig(this.configPath)
       this.log(chalk.blue(`Loaded configuration for ${this.dogeConfig.network} network`))
     } catch (error) {
       this.error(`Failed to load config: ${error}`)
@@ -986,10 +1157,15 @@ export class DummySignersCommand extends Command {
       this.dogeConfig.deploymentType = 'aws'
     }
 
+    // Get image tag
+    const imageTag = await this.getDockerImageTag(flags['image-tag'])
+    this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
+
     // Set up dummy signers
     const dummySignersManager = new DummySignersManager(
       this.dogeConfig,
       this.configPath,
+      imageTag,
       {
         log: this.log.bind(this),
         warn: this.warn.bind(this),
@@ -998,7 +1174,7 @@ export class DummySignersCommand extends Command {
     )
     
     try {
-      await dummySignersManager.setupDummySigners()
+      await dummySignersManager.setupDummySigners(await this.fetchDockerTags())
     } catch (error) {
       this.error(`Dummy signers setup failed: ${error}`)
     }
