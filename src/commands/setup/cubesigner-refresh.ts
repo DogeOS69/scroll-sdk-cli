@@ -28,17 +28,17 @@ export default class SetupCubesignerRefresh extends Command {
 
     public async run(): Promise<void> {
         const { flags } = await this.parse(SetupCubesignerRefresh)
-        
+
         // Use the new common function to load config
         const { config, configPath } = await loadDogeConfigWithSelection(
             flags['doge-config'],
             'scrollsdk doge:config'
         )
-        
+
         this.dogeConfig = config
         this.dogeConfigFile = configPath
         this.log(chalk.blue(`Using Dogecoin config file: ${configPath}`))
-        
+
         await this.refreshSessions()
     }
 
@@ -130,7 +130,7 @@ export default class SetupCubesignerRefresh extends Command {
         // Read roles from DogeConfig instead of calling API
         try {
             if (!this.dogeConfig.cubesigner || !this.dogeConfig.cubesigner.roles || this.dogeConfig.cubesigner.roles.length === 0) {
-                this.error(chalk.red('No cubesigner roles found in config. Please run setup:cubesigner-setup first to create and configure keys and roles.'))
+                this.error(chalk.red('No cubesigner roles found in config. Please run setup:cubesigner-init first to create and configure keys and roles.'))
                 return false
             }
 
