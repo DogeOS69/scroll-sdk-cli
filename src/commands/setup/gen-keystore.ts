@@ -7,6 +7,7 @@ import * as toml from '@iarna/toml'
 import chalk from 'chalk'
 import { isAddress } from 'ethers'
 import crypto from 'crypto'
+import { writeConfigs } from '../../utils/config-writer.js'
 
 interface KeyPair {
   privateKey: string
@@ -59,7 +60,7 @@ export default class SetupGenKeystore extends Command {
         console.log('Password cannot be empty. Please try again.')
       }
     }
-    
+
     const wallet = Wallet.createRandom()
     const encryptedJson = await wallet.encrypt(password)
     return {
@@ -106,10 +107,11 @@ export default class SetupGenKeystore extends Command {
     overwriteSequencers: boolean = false,
     overwriteBootnodes: boolean = false
   ): Promise<void> {
-    const configPath = path.join(process.cwd(), 'config.toml')
+    const mainConfigPath = path.join(process.cwd(), 'config.toml')
+    const publicConfigPath = path.join(process.cwd(), 'config.public.toml')
     const existingConfig = await this.getExistingConfig()
 
-    // Create a new object to store the updated config
+    // Create a new object to store the updated config in memory
     let updatedConfig: Record<string, any> = {}
 
     // Helper function to add or update a section
@@ -200,8 +202,14 @@ export default class SetupGenKeystore extends Command {
     if (!updatedConfig.accounts) addOrUpdateSection('accounts', null)
     if (coordinatorJwtSecretKey && !updatedConfig.coordinator) addOrUpdateSection('coordinator', null)
 
-    fs.writeFileSync(configPath, toml.stringify(updatedConfig))
-    this.log(chalk.green('config.toml updated successfully'))
+    // Use the atomic sync function to write both files
+    const success = writeConfigs(updatedConfig);
+
+    if (success) {
+      this.log(chalk.green('config.toml and config.public.toml updated successfully.'))
+    } else {
+      this.error(chalk.red('Configuration update failed. Check logs for details.'));
+    }
   }
 
   private async getOwnerAddress(existingOwnerAddr: string | undefined): Promise<string | undefined> {
@@ -521,9 +529,6 @@ export default class SetupGenKeystore extends Command {
         overwrite,
         overwriteBootnodes
       )
-      this.log(chalk.green('config.toml updated successfully'))
     }
-
-    this.log(chalk.blue('Keystore, bootnode, and account key generation completed.'))
   }
 }

@@ -5,6 +5,7 @@ import * as path from 'path'
 import * as toml from '@iarna/toml'
 import chalk from 'chalk'
 import { ethers } from 'ethers'
+import { writeConfigs } from '../../utils/config-writer.js'
 
 export default class SetupGasToken extends Command {
   static override description = 'Set up gas token configurations'
@@ -37,8 +38,10 @@ export default class SetupGasToken extends Command {
       existingConfig['gas-token'][key] = value
     })
 
-    const updatedContent = toml.stringify(existingConfig)
-    fs.writeFileSync(configPath, updatedContent)
+    //const updatedContent = toml.stringify(existingConfig)
+    //fs.writeFileSync(configPath, updatedContent)
+    writeConfigs(existingConfig);
+
     this.log(chalk.green('config.toml has been updated with the new gas token configurations.'))
   }
 

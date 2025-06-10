@@ -14,18 +14,18 @@
  * - Dry run preview mode
  */
 
-import {confirm} from '@inquirer/prompts'
-import {Command, Flags} from '@oclif/core'
+import { confirm } from '@inquirer/prompts'
+import { Command, Flags } from '@oclif/core'
 import bitcore from 'bitcore-lib-doge'
 import chalk from 'chalk'
 import fs from 'node:fs'
 import path from 'node:path'
 
 // Assuming loadDogeConfig and DogeConfig types are available and updated
-import type {DogeConfig, DogeWallet} from '../../../types/doge-config.js' // Adjusted path
-import {loadDogeConfig} from '../../../utils/doge-config.js' // Adjusted path
+import type { DogeConfig, DogeWallet } from '../../../types/doge-config.js' // Adjusted path
+import { loadDogeConfigWithSelection } from '../../../utils/doge-config.js' // Adjusted path
 
-const {Networks, PrivateKey} = bitcore
+const { Networks, PrivateKey } = bitcore
 
 export default class WalletNew extends Command {
   static default = false
@@ -63,19 +63,12 @@ export default class WalletNew extends Command {
   }
 
   async run(): Promise<void> {
-    const {flags} = await this.parse(WalletNew)
+    const { flags } = await this.parse(WalletNew)
 
-    let config: DogeConfig
-    try {
-      config = await loadDogeConfig(flags.config)
-    } catch (error) {
-      this.error(
-        `Failed to load Dogecoin config from ${flags.config}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      )
-      return
-    }
+    const { config, configPath } = await loadDogeConfigWithSelection(
+      flags['doge-config'],
+      'scrollsdk doge:config'
+    )
 
     this.log(chalk.blue(`Using network: ${config.network} (from config file: ${flags.config})`))
 
@@ -103,8 +96,7 @@ export default class WalletNew extends Command {
     this.log(`Network: ${chalk.yellow(config.network)}`)
     this.log(`Address: ${chalk.yellow(address.toString())}`)
     this.log(
-      `Private Key (WIF): ${
-        flags['dry-run'] ? chalk.grey('[hidden during dry run]') : chalk.yellow(privateKey.toWIF())
+      `Private Key (WIF): ${flags['dry-run'] ? chalk.grey('[hidden during dry run]') : chalk.yellow(privateKey.toWIF())
       }`,
     )
     if (flags['dry-run']) {
@@ -116,9 +108,9 @@ export default class WalletNew extends Command {
     const confirmed = flags.force
       ? true
       : await confirm({
-          default: true,
-          message: `Create wallet with these details and save to ${resolvedWalletPath}?`,
-        })
+        default: true,
+        message: `Create wallet with these details and save to ${resolvedWalletPath}?`,
+      })
 
     if (!confirmed) {
       this.log(chalk.dim('Wallet creation cancelled'))
@@ -127,7 +119,7 @@ export default class WalletNew extends Command {
 
     const walletDir = path.dirname(resolvedWalletPath)
     if (!fs.existsSync(walletDir)) {
-      fs.mkdirSync(walletDir, {recursive: true})
+      fs.mkdirSync(walletDir, { recursive: true })
     }
 
     const walletData: DogeWallet = {
@@ -137,7 +129,7 @@ export default class WalletNew extends Command {
       utxos: [],
     }
 
-    fs.writeFileSync(resolvedWalletPath, JSON.stringify(walletData, null, 2), {mode: 0o600})
+    fs.writeFileSync(resolvedWalletPath, JSON.stringify(walletData, null, 2), { mode: 0o600 })
     this.log(chalk.green('\n✓ Wallet created successfully'))
     this.log(`Saved to: ${chalk.cyan(resolvedWalletPath)}`)
     this.log(chalk.yellow('Important: Backup your wallet file and keep your private key secret!'))

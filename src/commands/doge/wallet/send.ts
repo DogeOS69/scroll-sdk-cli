@@ -10,7 +10,7 @@ import { base58 } from '@scure/base';
 import { Network as DogeBackboneNetwork, DogeConfig, DogeWallet } from '../../../types/doge-config.js'
 
 const { Address, Networks, PrivateKey, Transaction } = bitcore
-import { loadDogeConfig } from '../../../utils/doge-config.js'
+import { loadDogeConfigWithSelection } from '../../../utils/doge-config.js'
 
 interface TransactionFlags {
   amount: string
@@ -92,7 +92,13 @@ export default class WalletSend extends Command {
 
     try {
       this.log(chalk.cyan('Loading configuration and wallet...'))
-      const config = await loadDogeConfig(flags.config)
+      //const config = await loadDogeConfig(flags.config)
+
+      const { config, configPath } = await loadDogeConfigWithSelection(
+        flags['doge-config'],
+        'scrollsdk doge:config'
+      )
+
       this.log(chalk.blue(`Using network: ${config.network} (from ${flags.config})`))
 
       const currentBitcoreNetwork: typeof Networks.livenet = this.getBitcoreNetwork(config.network)

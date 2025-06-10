@@ -16,13 +16,13 @@
  * - Multiple API key sources (flag, env, config)
  */
 
-import {Command, Flags} from '@oclif/core'
+import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import {DogeConfig, DogeUTXO, DogeWallet} from '../../../types/doge-config.js'
-import {loadDogeConfig} from '../../../utils/doge-config.js'
+import { DogeConfig, DogeUTXO, DogeWallet } from '../../../types/doge-config.js'
+import { loadDogeConfigWithSelection } from '../../../utils/doge-config.js'
 
 interface AddressTransactionVout {
   addresses: string[]
@@ -75,7 +75,7 @@ export default class WalletSync extends Command {
     }),
     config: Flags.string({
       char: 'c',
-      default: '.data/doge-config.toml',
+
       description: 'Path to Dogecoin config file',
     }),
     path: Flags.string({
@@ -85,10 +85,15 @@ export default class WalletSync extends Command {
   }
 
   async run(): Promise<void> {
-    const {flags} = await this.parse(WalletSync)
+    const { flags } = await this.parse(WalletSync)
 
     try {
-      const config: DogeConfig = await loadDogeConfig(flags.config)
+
+      const { config, configPath } = await loadDogeConfigWithSelection(
+        flags.config,
+        'scrollsdk doge:config',
+      )
+
       this.log(chalk.blue(`Syncing wallet for network: ${config.network} (from ${flags.config})`))
 
       const apiKey = flags['api-key'] || process.env.NOWNODES_API_KEY || config.rpc?.apiKey
@@ -131,7 +136,7 @@ export default class WalletSync extends Command {
       const rpcCall = async <T>(endpoint: string, queryParams: string = ''): Promise<T> => {
         const url = `${blockbookBaseUrl.replace(/\/$/, '')}${endpoint}${queryParams}`
         this.log(chalk.dim(`API: ${url}`))
-        const response = await fetch(url, {headers: {'api-key': apiKey}, method: 'GET'})
+        const response = await fetch(url, { headers: { 'api-key': apiKey }, method: 'GET' })
         if (!response.ok) {
           const errorBody = await response.text()
           throw new Error(`API call to ${url} failed: ${response.status} ${response.statusText}. Body: ${errorBody}`)
@@ -150,8 +155,7 @@ export default class WalletSync extends Command {
       do {
         this.log(
           chalk.dim(
-            `Fetching address details page ${currentPage} of ${
-              totalPages === 1 && currentPage === 1 ? '?' : totalPages
+            `Fetching address details page ${currentPage} of ${totalPages === 1 && currentPage === 1 ? '?' : totalPages
             }...`,
           ),
         )
@@ -233,7 +237,7 @@ export default class WalletSync extends Command {
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
-      this.error(chalk.red(`Sync Error: ${error.message}`), {exit: 1})
+      this.error(chalk.red(`Sync Error: ${error.message}`), { exit: 1 })
     }
   }
 }
