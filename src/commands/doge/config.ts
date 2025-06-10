@@ -5,7 +5,7 @@ import chalk from 'chalk'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { DogeConfig } from '../../types/doge-config.js'
-import { loadDogeConfig } from '../../utils/doge-config.js'
+import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { getSetupDefaultsPath, SETUP_DEFAULTS_TEMPLATE } from '../../config/constants.js'
 import crypto from 'node:crypto'
 import { DirectSecp256k1HdWallet } from '@cosmjs/proto-signing'
@@ -138,9 +138,8 @@ export class DogeConfigCommand extends Command {
     }
 
     this.configPath = resolvedPath
-    const existingConfig = await loadDogeConfig(resolvedPath)
-    let newConfig = await loadDogeConfig(resolvedPath);
-    this.dogeConfig = newConfig
+    const { config: existingConfig } = await loadDogeConfigWithSelection(resolvedPath, 'scrollsdk doge:config')
+    let newConfig = existingConfig;
 
     newConfig.rpc!.apiKey = await input({
       default: existingConfig.rpc?.apiKey,

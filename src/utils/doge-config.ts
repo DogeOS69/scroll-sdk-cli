@@ -70,7 +70,7 @@ export async function loadDogeConfigWithSelection(
   return { config, configPath }
 }
 
-export async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
+async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
   const resolvedPath = path.resolve(configPath)
 
   if (!fs.existsSync(resolvedPath)) {

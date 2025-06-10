@@ -9,6 +9,8 @@ import { confirm, input, select } from '@inquirer/prompts'
 import chalk from 'chalk'
 import type { DogeConfig } from '../../types/doge-config.js'
 import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
+import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
+import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 
 const execAsync = promisify(exec)
 
@@ -27,7 +29,7 @@ export default class SetupPrepCharts extends Command {
     'github-token': Flags.string({ description: 'GitHub Personal Access Token', required: false }),
     'values-dir': Flags.string({ description: 'Directory containing values files', default: './values' }),
     'skip-auth-check': Flags.boolean({ description: 'Skip authentication check for individual charts', default: false }),
-    'doge-config': Flags.string({ description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)', default: '.data/doge-config-testnet.toml' })
+    'doge-config': Flags.string({ description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)' })
   }
 
   private configMapping: Record<string, string | ((chartName: string, productionNumber: string) => string)> = {
@@ -133,42 +135,9 @@ export default class SetupPrepCharts extends Command {
       this.warn('config-contracts.toml not found. Some values may not be populated correctly.')
     }
 
-    let resolvedPath = '';
-    if (!flags.config) {
-      const dogeConfigPath = await select({
-        message: 'Select the doge-config.toml file to use:',
-        choices: this.findDogeConfigFiles(),
-      }) as string;
+    const { config, configPath: resolvedPath } = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk doge:config')
+    this.dogeConfig = config as DogeConfigType;
 
-      if (dogeConfigPath === 'custom') {
-        const customPath = await input({
-          message: 'Enter the path to the doge-config.toml file:',
-          default: '.data/doge-config-testnet.toml'
-        });
-        resolvedPath = path.resolve(customPath);
-      } else {
-        resolvedPath = path.resolve(dogeConfigPath);
-      }
-    }
-    else {
-      resolvedPath = path.resolve(flags.config)
-    }
-
-
-    if (fs.existsSync(resolvedPath)) {
-      const dogeConfigContent = fs.readFileSync(resolvedPath, 'utf-8')
-      this.dogeConfig = toml.parse(dogeConfigContent) as unknown as DogeConfig
-      this.log(chalk.blue(`Using doge config: ${resolvedPath}`));
-    } else {
-      this.error(`${resolvedPath} not found. Some values may not be populated correctly.`);
-    }
-
-    const withdrawalProcessorTomlPath = path.join(process.cwd(), ".data", "output-withdrawal-processor.toml");
-    if (fs.existsSync(withdrawalProcessorTomlPath)) {
-      this.withdrawalProcessorConfig = toml.parse(fs.readFileSync(withdrawalProcessorTomlPath, "utf-8"));
-    } else {
-      this.error('output-withdrawal-processor.toml not found in .data directory. Please run `scrollsdk doge bridge-init` first to generate the required configuration files.');
-    }
     return;
   }
 
@@ -639,8 +608,8 @@ export default class SetupPrepCharts extends Command {
           // "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL": this.dogeConfig.da?.tendermintRpcUrl,
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE": this.dogeConfig.da?.daNamespace,
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__SIGNER_ADDRESS": this.dogeConfig.da?.signerAddress,
-          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_VOUT" : this.withdrawalProcessorConfig["genesis_sequencer_vout"],
-          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_TXID":this.withdrawalProcessorConfig['genesis_sequencer_txid']
+          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_VOUT": this.withdrawalProcessorConfig["genesis_sequencer_vout"],
+          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_TXID": this.withdrawalProcessorConfig['genesis_sequencer_txid']
         }
 
         for (const [envKey, newVal] of Object.entries(todoMappings)) {
@@ -1031,42 +1000,6 @@ export default class SetupPrepCharts extends Command {
     return path.split('.').reduce((prev, curr) => prev && prev[curr], obj)
   }
 
-  private findDogeConfigFiles(): Array<{ name: string; value: string }> {
-    const possiblePaths = [
-      '.data/doge-config-testnet.toml',
-      '.data/doge-config-mainnet.toml',
-      '.data/doge-config.toml',
-    ]
-
-    const foundFiles: Array<{ name: string; value: string }> = []
-
-    for (const filePath of possiblePaths) {
-      if (fs.existsSync(filePath)) {
-        const resolvedPath = path.resolve(filePath)
-        let displayName = filePath
-
-        // Add network info to display name if we can determine it
-        if (filePath.includes('testnet')) {
-          displayName = `${filePath} (Testnet)`
-        } else if (filePath.includes('mainnet')) {
-          displayName = `${filePath} (Mainnet)`
-        }
-
-        foundFiles.push({
-          name: displayName,
-          value: filePath
-        })
-      }
-    }
-
-    // Add option to enter custom path
-    foundFiles.push({
-      name: 'Enter custom path...',
-      value: 'custom'
-    })
-
-    return foundFiles
-  }
 
   private async validateMakefile(skipAuthCheck: boolean): Promise<void> {
     const makefilePath = path.join(process.cwd(), 'Makefile')
