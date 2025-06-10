@@ -138,6 +138,15 @@ export default class SetupPrepCharts extends Command {
     const { config, configPath: resolvedPath } = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk doge:config')
     this.dogeConfig = config as DogeConfigType;
 
+
+    const withdrawalProcessorConfigPath = path.join(process.cwd(), ".data/output-withdrawal-processor.toml")
+    if(!fs.existsSync(withdrawalProcessorConfigPath))
+    {
+        this.error("run scrollsdk doge:bridge-init first");
+        return
+    }
+    const withdrawalProcessorConfigContent = fs.readFileSync(withdrawalProcessorConfigPath, 'utf-8');
+    this.withdrawalProcessorConfig = toml.parse(withdrawalProcessorConfigContent);
     return;
   }
 

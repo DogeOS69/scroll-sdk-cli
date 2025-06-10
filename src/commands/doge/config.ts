@@ -9,6 +9,7 @@ import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { getSetupDefaultsPath, SETUP_DEFAULTS_TEMPLATE } from '../../config/constants.js'
 import crypto from 'node:crypto'
 import { DirectSecp256k1HdWallet } from '@cosmjs/proto-signing'
+import { Network } from '../../types/doge-config.js'
 
 export class DogeConfigCommand extends Command {
   static description = 'Configure Dogecoin settings for mainnet or testnet'
@@ -37,21 +38,6 @@ export class DogeConfigCommand extends Command {
       validate: validator || (() => true),
       required
     })
-  }
-
-  // Common validators
-  private validators = {
-    required: (value: string) => value.length > 0 ? true : 'This field is required',
-    chainId: (value: string) => /^(0x[\dA-Fa-f]+|\d+)$/.test(value) ? true : 'Chain ID must be decimal or hex with 0x prefix',
-    evmAddress: (value: string) => /^0x[\dA-Fa-f]{40}$/.test(value) ? true : 'EVM Address must be 20 bytes (40 hex chars) with 0x prefix',
-    dogeAddress: (value: string) => /^(D[1-9A-HJ-NP-Za-km-z]{33}|[mn][1-9A-HJ-NP-Za-km-z]{33})$/.test(value) ? true : 'Invalid Dogecoin address format',
-    number: (value: string) => !isNaN(Number(value)) ? true : 'Must be a valid number',
-  }
-
-  private ensureDirectoryExists(dirPath: string): void {
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true })
-    }
   }
 
   private generateSecureRandomString(length: number): string {
@@ -99,46 +85,109 @@ export class DogeConfigCommand extends Command {
 
   async run(): Promise<void> {
     const { flags } = await this.parse(DogeConfigCommand)
-    let resolvedPath = "";
 
-    if (!flags.config) {
-      if (!fs.existsSync('.data')) {
-        fs.mkdirSync('.data', { recursive: true });
-      }
-      const files = fs.readdirSync('.data')
-      const configFiles = files.filter(file => file.endsWith('.toml'))
-      const configFileChoices = configFiles.map(file => ({ name: file, value: file }))
-
-      const fileSelection = await select({
-        choices: [
-          ...configFileChoices,
-          { name: 'Create New Config', value: 'new' as const },
-        ],
-        message: 'Select config file to configure:',
-      })
-
-      if (fileSelection === 'new') {
-        const newConfigName = await input({
-          default: "doge-config-testnet.toml",
-          message: 'Enter the name of the new config file:',
-          required: true,
-        })
-        resolvedPath = path.resolve('.data/' + newConfigName);
-      } else {
-        const configPath = path.join('.data', fileSelection)
-        resolvedPath = path.resolve(configPath)
-      }
-
-    } else {
-      resolvedPath = path.resolve(flags.config);
-      if (!fs.existsSync(resolvedPath)) {
-        this.error(`Config file ${resolvedPath} does not exist`);
-        return;
-      }
+    if (!fs.existsSync('.data')) {
+      fs.mkdirSync('.data', { recursive: true })
     }
 
-    this.configPath = resolvedPath
-    const { config: existingConfig } = await loadDogeConfigWithSelection(resolvedPath, 'scrollsdk doge:config')
+    const files = fs.readdirSync('.data')
+    const configFiles = files.filter(file => file.startsWith('doge') && file.endsWith('.toml'))
+    const configFileChoices = configFiles.map(file => ({ name: file, value: file }))
+    
+    let resolvedPath = flags.config as string
+    let network = ""
+
+    let fileSelected=""
+    if (!flags.config) {
+      fileSelected = await select({
+        choices: [...configFileChoices, {
+          value: "New Config",
+          name: "New Config"
+        }],
+        message: 'Select please:',
+      })
+
+      if (fileSelected === "New Config") {
+        network = await select({
+          choices: [
+            { name: 'mainnet', value: 'mainnet' },
+            { name: 'testnet', value: 'testnet' }
+          ],
+          message: 'select network:',
+          default: 'testnet'
+        });
+
+        if (network === 'mainnet') {
+          fileSelected = 'doge-config-mainnet.toml'
+        } else {
+          fileSelected = 'doge-config-testnet.toml'
+        }
+      }
+      resolvedPath = path.resolve('.data', fileSelected)
+    }
+
+    // let resolvedPath = path.resolve(".data", fileSelected)
+    let existingConfig: DogeConfig = {} as DogeConfig;
+
+    if (!fs.existsSync(resolvedPath)) {
+      const shouldCreate = await confirm({
+        default: true,
+        message: `Config file not found at ${resolvedPath}. Would you like to create a default one now?`,
+      })
+
+      if (!shouldCreate) {
+        throw new Error(`Config file not found at ${resolvedPath}, and not created.`)
+      }
+
+      console.log('Creating a new default Dogecoin configuration file...')
+
+      const defaultConfig: DogeConfig = {
+        defaults: {
+          dogecoinIndexerStartHeight: '4000000',
+        },
+        frontend: {},
+        network: network as Network,
+        rpc: {
+          username: '',
+          password: '',
+          apiKey: '',
+          blockbookAPIUrl:
+            network === 'mainnet' ? 'https://dogebook.nownodes.io/api/v2' : 'https://dogebook-testnet.nownodes.io/api/v2',
+          url: network === 'mainnet' ? '' : 'https://testnet.doge.xyz/',
+        },
+        dogecoinClusterRpc: {
+          username: "",
+          password: "",
+        },
+        test: {},
+        wallet: {
+          path: network === 'mainnet' ? '.data/doge-wallet-mainnet.json' : '.data/doge-wallet-testnet.json',
+        },
+        da: {
+          celestiaIndexerStartBlock: network === 'mainnet' ? '0' : '6175746',
+          //rpcUrl: network === 'mainnet' ? 'http://celestia-mainnet:26658' : 'http://celestia-testnet-mocha:26658',
+          tendermintRpcUrl: '',
+          daNamespace: network === 'mainnet' ? '' : '',
+          signerAddress: '',
+          celestiaMnemonic: '',
+        }
+      }
+
+      // const configDir = path.dirname(resolvedPath)
+      // if (!fs.existsSync(configDir)) {
+      //   fs.mkdirSync(configDir, { recursive: true })
+      // }
+      existingConfig = defaultConfig;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      fs.writeFileSync(resolvedPath, toml.stringify(existingConfig as any))
+
+      console.log(
+        `Created new default ${network} config file at ${resolvedPath}. You can further customize it with 'scrollsdk doge:config'.`,
+      )
+    } else {
+      ({ config: existingConfig, configPath: resolvedPath } = await loadDogeConfigWithSelection(resolvedPath));
+    }
+
     let newConfig = existingConfig;
 
     newConfig.rpc!.apiKey = await input({
