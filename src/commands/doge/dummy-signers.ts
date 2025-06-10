@@ -48,7 +48,7 @@ export class DummySignersManager {
     }
   }
 
-  private readTsoHostFromConfig(): string | undefined {
+  private readTsoUrlFromConfig(): string | undefined {
     try {
       const configPath = path.resolve(process.cwd(), 'config.toml')
       if (!fs.existsSync(configPath)) {
@@ -62,7 +62,7 @@ export class DummySignersManager {
       
       if (tsoHost && typeof tsoHost === 'string') {
         this.log(chalk.blue(`Found TSO_HOST in config.toml: ${tsoHost}`))
-        return tsoHost
+        return "https://" + tsoHost;
       }
       
       return undefined
@@ -274,7 +274,7 @@ export class DummySignersManager {
     })
     const threshold = parseInt(thresholdStr)
     
-    const TSO_URL = this.readTsoHostFromConfig()
+    const TSO_URL = this.readTsoUrlFromConfig()
     if (!TSO_URL) {
       this.error('TSO_HOST not found in config.toml. Please run "scrollsdk setup domains" first.')
       return
@@ -623,7 +623,7 @@ export class DummySignersManager {
 
     const IMAGE_URI = `${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/dogeos/dummy-signer:latest`
 
-    const TSO_URL = this.readTsoHostFromConfig()
+    const TSO_URL = this.readTsoUrlFromConfig()
     if (!TSO_URL) {
       this.error('TSO_HOST not found in config.toml. Please run "scrollsdk setup domains" first.')
       return
@@ -1085,7 +1085,7 @@ export class DummySignersCommand extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'shu-test-0605'
+    const defaultTag = '060925-00'
 
     if (!providedTag) {
       return defaultTag
