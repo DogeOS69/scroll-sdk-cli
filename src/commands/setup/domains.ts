@@ -1,14 +1,15 @@
 /* eslint-disable complexity */
 import * as toml from '@iarna/toml'
-import {confirm, input, select} from '@inquirer/prompts'
-import {Args, Command, Flags} from '@oclif/core'
+import { confirm, input, select } from '@inquirer/prompts'
+import { Args, Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { writeConfigs } from '../../utils/config-writer.js'
 
 export default class SetupDomains extends Command {
   static override args = {
-    file: Args.string({description: 'file to read'}),
+    file: Args.string({ description: 'file to read' }),
   }
 
   static override description = 'Set up domain configurations for external services'
@@ -16,8 +17,8 @@ export default class SetupDomains extends Command {
   static override examples = ['<%= config.bin %> <%= command.id %>']
 
   static override flags = {
-    force: Flags.boolean({char: 'f'}),
-    name: Flags.string({char: 'n', description: 'name to print'}),
+    force: Flags.boolean({ char: 'f' }),
+    name: Flags.string({ char: 'n', description: 'name to print' }),
   }
 
   public async run(): Promise<void> {
@@ -39,11 +40,11 @@ export default class SetupDomains extends Command {
 
     const l1Network = (await select({
       choices: [
-        {name: 'Ethereum Mainnet', value: 'mainnet'},
-        {name: 'Ethereum Sepolia Testnet', value: 'sepolia'},
-        {name: 'Ethereum Holesky Testnet', value: 'holesky'},
-        {name: 'Other...', value: 'other'},
-        {name: 'Anvil (Local)', value: 'anvil'},
+        { name: 'Ethereum Mainnet', value: 'mainnet' },
+        { name: 'Ethereum Sepolia Testnet', value: 'sepolia' },
+        { name: 'Ethereum Holesky Testnet', value: 'holesky' },
+        { name: 'Other...', value: 'other' },
+        { name: 'Anvil (Local)', value: 'anvil' },
       ],
       default: existingConfig.general?.CHAIN_NAME_L1?.toLowerCase() || 'mainnet',
       message: 'Select the L1 network:',
@@ -135,10 +136,10 @@ export default class SetupDomains extends Command {
     this.logSuccess(`Updated [general] L1_RPC_ENDPOINT = "${generalConfig.L1_RPC_ENDPOINT}"`)
     this.logSuccess(`Updated [general] L1_RPC_ENDPOINT_WEBSOCKET = "${generalConfig.L1_RPC_ENDPOINT_WEBSOCKET}"`)
 
-    const {domainConfig: sharedDomainConfig, ingressConfig} = await this.setupSharedConfigs(existingConfig, usesAnvil)
+    const { domainConfig: sharedDomainConfig, ingressConfig } = await this.setupSharedConfigs(existingConfig, usesAnvil)
 
     // Merge the domainConfig from setupSharedConfigs with the one we've created here
-    domainConfig = {...domainConfig, ...sharedDomainConfig}
+    domainConfig = { ...domainConfig, ...sharedDomainConfig }
 
     this.logSection('New domain configurations:')
     for (const [key, value] of Object.entries(domainConfig)) {
@@ -155,7 +156,7 @@ export default class SetupDomains extends Command {
       this.logKeyValue(key, value)
     }
 
-    ingressConfig.RPC_GATEWAY_WS_HOST = "ws."+ ingressConfig.RPC_GATEWAY_HOST
+    ingressConfig.RPC_GATEWAY_WS_HOST = "ws." + ingressConfig.RPC_GATEWAY_HOST
     const needRpcGateWay = await confirm({
       default: false,
       message: `Do you want to use another RPC gateway for websocket host(${ingressConfig.RPC_GATEWAY_WS_HOST})`,
@@ -167,9 +168,9 @@ export default class SetupDomains extends Command {
       })
     } else {
       // Use the same domain as RPC_GATEWAY_HOST
-      
+
     }
-    
+
     const confirmUpdate = await confirm({
       message: 'Do you want to update the config.toml file with these new configurations?',
     })
@@ -291,8 +292,8 @@ export default class SetupDomains extends Command {
 
       protocol = await select({
         choices: [
-          {name: 'HTTP', value: 'http'},
-          {name: 'HTTPS', value: 'https'},
+          { name: 'HTTP', value: 'http' },
+          { name: 'HTTPS', value: 'https' },
         ],
         default: existingConfig.frontend?.EXTERNAL_RPC_URI_L1?.startsWith('https') ? 'https' : 'http',
         message: 'Choose the protocol for the shared URLs:',
@@ -326,7 +327,7 @@ export default class SetupDomains extends Command {
         GRAFANA_HOST: `grafana.${urlEnding}`,
         ROLLUP_EXPLORER_API_HOST: `rollup-explorer-backend.${urlEnding}`,
         RPC_GATEWAY_HOST: `rpc.${urlEnding}`,
-        ...(usesAnvil ? {L1_DEVNET_HOST: `l1-devnet.${urlEnding}`, L1_EXPLORER_HOST: `l1-explorer.${urlEnding}`} : {}),
+        ...(usesAnvil ? { L1_DEVNET_HOST: `l1-devnet.${urlEnding}`, L1_EXPLORER_HOST: `l1-explorer.${urlEnding}` } : {}),
         TSO_HOST: `tso.${urlEnding}`,
         CELESTIA_HOST: `celestia.${urlEnding}`,
         DOGECOIN_HOST: `dogecoin.${urlEnding}`,
@@ -334,8 +335,8 @@ export default class SetupDomains extends Command {
     } else {
       protocol = await select({
         choices: [
-          {name: 'HTTP', value: 'http'},
-          {name: 'HTTPS', value: 'https'},
+          { name: 'HTTP', value: 'http' },
+          { name: 'HTTPS', value: 'https' },
         ],
         default: existingConfig.frontend?.EXTERNAL_RPC_URI_L1?.startsWith('https') ? 'https' : 'http',
         message: 'Choose the protocol for the URLs:',
@@ -448,7 +449,7 @@ export default class SetupDomains extends Command {
       }
     }
 
-    return {domainConfig, generalConfig, ingressConfig, protocol}
+    return { domainConfig, generalConfig, ingressConfig, protocol }
   }
 
   private async updateConfigFile(
@@ -491,7 +492,7 @@ export default class SetupDomains extends Command {
     existingConfig.contracts.verification.EXPLORER_URI_L2 = domainConfig.EXTERNAL_EXPLORER_URI_L2;
     existingConfig.contracts.verification.RPC_URI_L1 = domainConfig.EXTERNAL_RPC_URI_L1;
     existingConfig.contracts.verification.RPC_URI_L2 = domainConfig.EXTERNAL_RPC_URI_L2;
-    
+
 
     // Convert the updated config back to TOML string
     const updatedContent = toml.stringify(existingConfig)
@@ -499,7 +500,9 @@ export default class SetupDomains extends Command {
     // Merge the updated content with the original content to preserve comments
     const mergedContent = this.mergeTomlContent(fs.readFileSync(configPath, 'utf8'), updatedContent)
 
-    fs.writeFileSync(configPath, mergedContent)
-    this.logSuccess('config.toml has been updated with the new domain configurations.')
+    //fs.writeFileSync(configPath, mergedContent)
+    if (writeConfigs(mergedContent)) {
+      this.logSuccess('config.toml has been updated with the new domain configurations.')
+    }
   }
 }

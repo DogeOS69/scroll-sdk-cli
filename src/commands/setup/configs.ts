@@ -12,6 +12,7 @@ import type { DogeConfig } from '../../types/doge-config.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { execSync } from 'child_process'
 import { promisify } from 'util'
+import { writeConfigs } from '../../utils/config-writer.js'
 
 const execAsync = promisify(childProcess.exec)
 
@@ -56,7 +57,7 @@ export default class SetupConfigs extends Command {
       flags['doge-config'],
       'scrollsdk doge:config'
     )
-    
+
     this.dogeConfig = config
     this.log(chalk.blue(`Using Dogecoin config file: ${configPath}`))
 
@@ -265,68 +266,6 @@ export default class SetupConfigs extends Command {
     return alertRules
   }
 
-  // private nodeKeyToEnodeId(nodeKey: string): string {
-  //   // Remove '0x' prefix if present
-  //   nodeKey = nodeKey.startsWith('0x') ? nodeKey.slice(2) : nodeKey;
-
-  //   // Create a Wallet instance from the private key
-  //   const wallet = new ethers.Wallet(nodeKey);
-
-  //   // Get the public key
-  //   const publicKey = wallet.signingKey.publicKey;
-
-  //   // Remove '0x04' prefix from public key
-  //   const publicKeyNoPrefix = publicKey.slice(4);
-
-  //   // The enode ID is the uncompressed public key without the '04' prefix
-  //   return publicKeyNoPrefix;
-  // }
-
-  // private async updateSequencerEnode(): Promise<void> {
-  //   const configPath = path.join(process.cwd(), 'config.toml')
-  //   if (!fs.existsSync(configPath)) {
-  //     this.log(chalk.yellow('config.toml not found. Skipping sequencer enode update.'))
-  //     return
-  //   }
-
-  //   const configContent = fs.readFileSync(configPath, 'utf-8')
-  //   const config = toml.parse(configContent)
-
-  //   const nodeKey = (config.sequencer as any)?.L2GETH_NODEKEY
-  //   if (!nodeKey) {
-  //     this.log(chalk.yellow('L2GETH_NODEKEY not found in [sequencer] section. Skipping sequencer enode update.'))
-  //     return
-  //   }
-
-  // const updateEnode = await confirm({
-  //   message: 'Would you like to update the L2_GETH_STATIC_PEERS in config.toml using the L2GETH_NODEKEY?'
-  // })
-
-  // if (updateEnode) {
-  //   const enodeId = this.nodeKeyToEnodeId(nodeKey)
-  //   const host = await input({
-  //     message: 'Enter the host for the enode:',
-  //     default: 'l2-sequencer-1'
-  //   })
-  //   const port = await input({
-  //     message: 'Enter the port for the enode:',
-  //     default: '30303'
-  //   })
-
-  //   const enode = `enode://${enodeId}@${host}:${port}`
-  //   const enodeList = `["${enode}"]`
-
-  //   if (!config.sequencer) {
-  //     config.sequencer = {}
-  //   }
-  //   (config.sequencer as any).L2_GETH_STATIC_PEERS = enodeList
-
-  //   fs.writeFileSync(configPath, toml.stringify(config as any))
-  //   this.log(chalk.green(`L2_GETH_STATIC_PEERS updated in config.toml: ${enodeList}`))
-  // } else {
-  //   this.log(chalk.yellow('L2_GETH_STATIC_PEERS not updated'))
-  // }
-  // }
 
   // TODO: check privatekey secrets once integrated
   private generateEnvContent(service: string, config: any): { [key: string]: string } {
@@ -724,8 +663,11 @@ export default class SetupConfigs extends Command {
 
       ; (config.contracts as any).DEPLOYMENT_SALT = newSalt
 
-      fs.writeFileSync(configPath, toml.stringify(config as any))
-      this.log(chalk.green(`Deployment salt updated in config.toml from "${currentSalt}" to "${newSalt}"`))
+      //fs.writeFileSync(configPath, toml.stringify(config as any))
+      if (writeConfigs(config)) {
+        this.log(chalk.green(`Deployment salt updated in config.toml from "${currentSalt}" to "${newSalt}"`))
+      }
+
     } else {
       this.log(chalk.yellow('Deployment salt not updated'))
     }
@@ -782,10 +724,13 @@ export default class SetupConfigs extends Command {
 
       ; (config.general as any).L1_CONTRACT_DEPLOYMENT_BLOCK = newBlock
 
-      fs.writeFileSync(configPath, toml.stringify(config as any))
-      this.log(
-        chalk.green(`L1_CONTRACT_DEPLOYMENT_BLOCK updated in config.toml from "${currentBlock}" to "${newBlock}"`),
-      )
+      //fs.writeFileSync(configPath, toml.stringify(config as any))
+      if (writeConfigs(config)) {
+        this.log(
+          chalk.green(`L1_CONTRACT_DEPLOYMENT_BLOCK updated in config.toml from "${currentBlock}" to "${newBlock}"`),
+        )
+      }
+
     } else {
       this.log(chalk.yellow('L1_CONTRACT_DEPLOYMENT_BLOCK not updated'))
     }
@@ -832,8 +777,10 @@ export default class SetupConfigs extends Command {
 
       ; (config.contracts as any).L1_FEE_VAULT_ADDR = newAddr
 
-      fs.writeFileSync(configPath, toml.stringify(config as any))
-      this.log(chalk.green(`L1_FEE_VAULT_ADDR updated in config.toml to "${newAddr}"`))
+      //fs.writeFileSync(configPath, toml.stringify(config as any))
+      if (writeConfigs(config)) {
+        this.log(chalk.green(`L1_FEE_VAULT_ADDR updated in config.toml to "${newAddr}"`))
+      }
     } else {
       this.log(chalk.yellow('L1_FEE_VAULT_ADDR not updated'))
     }
@@ -882,8 +829,11 @@ export default class SetupConfigs extends Command {
 
       ; (config.contracts as any).L1_PLONK_VERIFIER_ADDR = newAddr
 
-      fs.writeFileSync(configPath, toml.stringify(config as any))
-      this.log(chalk.green(`L1_PLONK_VERIFIER_ADDR updated in config.toml to "${newAddr}"`))
+      //fs.writeFileSync(configPath, toml.stringify(config as any))
+      if (writeConfigs(config)) {
+        this.log(chalk.green(`L1_PLONK_VERIFIER_ADDR updated in config.toml to "${newAddr}"`))
+      }
+
     } else {
       this.log(chalk.yellow('L1_PLONK_VERIFIER_ADDR not updated'))
     }

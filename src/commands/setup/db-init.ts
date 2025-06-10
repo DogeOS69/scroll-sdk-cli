@@ -5,6 +5,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as toml from '@iarna/toml'
 import chalk from 'chalk'
+import { writeConfigs } from '../../utils/config-writer.js';
 
 export default class SetupDbInit extends Command {
   static override description = 'Initialize databases with new users and passwords interactively or update permissions'
@@ -129,8 +130,10 @@ export default class SetupDbInit extends Command {
       }
     }
 
-    fs.writeFileSync(configPath, toml.stringify(config as any))
-    this.log(chalk.green('config.toml has been updated with the new database connection strings.'))
+    //fs.writeFileSync(configPath, toml.stringify(config as any))
+    if (writeConfigs(config)) {
+      this.log(chalk.green('config.toml has been updated with the new database connection strings.'))
+    }
   }
 
   private async updatePermissions(conn: pg.Client, dbName: string, dbUser: string, debug: boolean): Promise<void> {
@@ -235,8 +238,11 @@ export default class SetupDbInit extends Command {
       })
 
       if (confirmUpdate) {
-        fs.writeFileSync(path.join(process.cwd(), 'config.toml'), toml.stringify(existingConfig as any))
-        this.log(chalk.green('config.toml has been updated with the new database port.'))
+        //fs.writeFileSync(path.join(process.cwd(), 'config.toml'), toml.stringify(existingConfig as any))
+        if (writeConfigs(existingConfig)) {
+          this.log(chalk.green('config.toml has been updated with the new database port.'))
+        }
+
       } else {
         this.log(chalk.yellow('Configuration update cancelled.'))
       }
