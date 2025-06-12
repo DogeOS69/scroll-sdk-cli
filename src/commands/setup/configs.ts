@@ -538,7 +538,7 @@ export default class SetupConfigs extends Command {
 
     // Process config.toml and config-contracts.toml
     const configFiles = [
-      { key: 'scrollConfig', source: 'config.toml', target: 'scroll-common-config.yaml' },
+      { key: 'scrollConfig', source: 'config.public.toml', target: 'scroll-common-config.yaml' },
       { key: 'scrollConfigContracts', source: 'config-contracts.toml', target: 'scroll-common-config-contracts.yaml' },
     ]
 
