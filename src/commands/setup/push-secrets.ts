@@ -26,12 +26,12 @@ class AWSSecretService implements SecretService {
     const jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json'))
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
-      
+
       // Filter for CubeSigner files if cubesignerOnly is true
       if (cubesignerOnly && !secretName.includes('cubesigner-signer-')) {
         continue
       }
-      
+
       console.log(chalk.cyan(`Processing JSON secret: ${secretName}`))
       const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
 
@@ -84,6 +84,12 @@ class AWSSecretService implements SecretService {
           }
         }
       } else {
+
+        //`secretName` is env file name. And the path of this secret is prefix/secretName
+        // foo.env
+        // prefix: hello
+        // external manager file path: hello/foo-env
+
         const secretName = `${baseName}-env`
         console.log(chalk.cyan(`Processing ENV secret: ${secretName}`))
         const data = await this.convertEnvToDict(path.join(secretsDir, file))
@@ -248,12 +254,12 @@ class HashicorpVaultDevService implements SecretService {
     const jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json'))
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
-      
+
       // Filter for CubeSigner files if cubesignerOnly is true
       if (cubesignerOnly && !secretName.includes('cubesigner-signer-')) {
         continue
       }
-      
+
       console.log(chalk.cyan(`Processing JSON secret: ${this.pathPrefix}/${secretName}`))
       const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
 
@@ -579,15 +585,16 @@ export default class SetupPushSecrets extends Command {
   private async getAWSCredentials(): Promise<Record<string, string>> {
     return {
       prefixName: await input({
-        default: 'scroll',
-        message: chalk.cyan('Enter secret prefix name:'),
+        default: 'dogeos',
+        message: chalk.cyan('Enter a path prefix for AWS Secrets Manager (e.g., my-app/staging or dogeos/testnet):'),
       }),
       secretRegion: await input({
         default: 'us-west-2',
         message: chalk.cyan('Enter AWS secret region:'),
       }),
       serviceAccount: await input({
-        message: chalk.cyan('Enter AWS service account:'),
+        message: chalk.cyan('Enter AWS iam service account:'),
+        default: 'external-secrets'
       }),
     }
   }
@@ -687,8 +694,8 @@ export default class SetupPushSecrets extends Command {
           }
 
           // Update remoteRef.key
-          for (const data of secret.data) {
-            if (data.remoteRef && data.remoteRef.key) {
+          for (const dataItem of secret.data) {
+            if (dataItem.remoteRef && dataItem.remoteRef.key) {
               // Keep the standard combined path format
               let updatedKey = ''
               if (/^l2-sequencer-secret-\d+-env$/.test(secretName)) {
@@ -697,17 +704,37 @@ export default class SetupPushSecrets extends Command {
                 updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
               } else if (/^cubesigner-signer-\d+-session$/.test(secretName)) {
                 updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
-                if (data.secretKey === 'session.json') {
-                  data.remoteRef.property = 'session.json'
+                if (dataItem.secretKey === 'session.json') {
+                  dataItem.remoteRef.property = 'session.json'
                   updated = true
                 }
-              } else {
-                updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
+              }
+              else {
+                /*
+                externalSecrets:
+                  YOUR_SECRET_NAME:
+                    provider: "aws"
+                    data:
+                      - remoteRef:
+                          key: "prefix/SECRET_PATH_OF_EXTERNAL_MANAGER"
+                          property: "property_KEY"
+                        secretKey: "SECRET_KEY"
+                */
+                /**
+                It will rename data.remoteRef.key to `secretName`, and `secretName` is YOUR_SECRET_NAME
+                I don't think it's necessary to update the key path to the secret name. 
+                The key path should be a combination of the file name and the business logic identifier.
+                */
+
+                //updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
+                const remoteRefKeyBasename = path.basename(dataItem.remoteRef.key)
+                updatedKey = prefixName ? `${prefixName}/${remoteRefKeyBasename}` : remoteRefKeyBasename
               }
 
+
               // Only update if the key has changed
-              if (data.remoteRef.key !== updatedKey) {
-                data.remoteRef.key = updatedKey
+              if (dataItem.remoteRef.key !== updatedKey) {
+                dataItem.remoteRef.key = updatedKey
                 updated = true
               }
             }

@@ -126,12 +126,13 @@ export default class SetupConfigs extends Command {
       'l1-explorer',
       'l2-sequencer',
       'rollup-node',
+      'contracts',
+      'l2-bootnode',
       'dogecoin',
       'dogeos-deposit-processor',
       'withdrawal-processor',
       'metrics-exporter',
       'celestia-node',
-      'contracts'
     ]
 
     for (const service of services) {
@@ -347,7 +348,31 @@ export default class SetupConfigs extends Command {
         envFiles[`l2-sequencer-${sequencerIndex}-secret.env`] = content
         sequencerIndex++
       }
-    } else {
+    } else if (service === 'l2-bootnode') {
+      // Handle L2 bootnode secrets
+      if (config.bootnode) {
+        let bootnodeIndex = 0
+        while (true) {
+          const bootnodeInstanceKey = `bootnode-${bootnodeIndex}`
+          const bootnodeConfig = config.bootnode[bootnodeInstanceKey]
+
+          if (!bootnodeConfig) {
+            // No more bootnode instances defined
+            break
+          }
+
+          // L2GETH_NODEKEY is expected.
+          // If it's missing for a defined bootnode instance in config.toml, default to an empty string.
+          // config.toml.example shows L2GETH_NODEKEY="", so it should typically exist.
+          const nodeKey = bootnodeConfig.L2GETH_NODEKEY !== undefined ? bootnodeConfig.L2GETH_NODEKEY : ''
+          envFiles[`l2-bootnode-${bootnodeIndex}-secret.env`] = `L2GETH_NODEKEY="${nodeKey}"\n`
+          bootnodeIndex++
+        }
+      } else {
+        this.log(chalk.yellow('No [bootnode] configuration found in config.toml. Skipping l2-bootnode secret generation.'))
+      }
+    }
+    else {
       // Handle other services
       let content = ''
       for (const pair of mapping[service] || []) {
