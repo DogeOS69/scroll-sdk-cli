@@ -131,6 +131,7 @@ export default class SetupConfigs extends Command {
       'withdrawal-processor',
       'metrics-exporter',
       'celestia-node',
+      'contracts'
     ]
 
     for (const service of services) {
@@ -314,7 +315,13 @@ export default class SetupConfigs extends Command {
       ],
       'withdrawal-processor': [
       ],
-
+      'contracts': [
+        'DEPLOYER_PRIVATE_KEY:DEPLOYER_PRIVATE_KEY',
+        'L1_COMMIT_SENDER_PRIVATE_KEY:L1_COMMIT_SENDER_PRIVATE_KEY',
+        'L1_FINALIZE_SENDER_PRIVATE_KEY:L1_FINALIZE_SENDER_PRIVATE_KEY',
+        'L1_GAS_ORACLE_SENDER_PRIVATE_KEY:L1_GAS_ORACLE_SENDER_PRIVATE_KEY',
+        'L2_GAS_ORACLE_SENDER_PRIVATE_KEY:L2_GAS_ORACLE_SENDER_PRIVATE_KEY',
+      ],
     }
 
     const envFiles: { [key: string]: string } = {}
@@ -409,7 +416,7 @@ export default class SetupConfigs extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'gen-configs-0f04f9b71dccc3a1647fb6473f414d6de5020c3d'
+    const defaultTag = 'gen-configs-190ae316a799df2a4b7e48784eefd84c21304205'
 
     if (!providedTag) {
       return defaultTag
