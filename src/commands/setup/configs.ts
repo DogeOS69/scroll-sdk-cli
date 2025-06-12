@@ -321,6 +321,8 @@ export default class SetupConfigs extends Command {
         'L1_FINALIZE_SENDER_PRIVATE_KEY:L1_FINALIZE_SENDER_PRIVATE_KEY',
         'L1_GAS_ORACLE_SENDER_PRIVATE_KEY:L1_GAS_ORACLE_SENDER_PRIVATE_KEY',
         'L2_GAS_ORACLE_SENDER_PRIVATE_KEY:L2_GAS_ORACLE_SENDER_PRIVATE_KEY',
+        'ROLLUP_EXPLORER_DB_CONNECTION_STRING:ROLLUP_EXPLORER_DB_CONNECTION_STRING',
+        'COORDINATOR_JWT_SECRET_KEY:COORDINATOR_JWT_SECRET_KEY'
       ],
     }
 
@@ -416,7 +418,7 @@ export default class SetupConfigs extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'gen-configs-190ae316a799df2a4b7e48784eefd84c21304205'
+    const defaultTag = 'gen-configs-ceb73197462fb6a3af9ded14c056ba37b028ed4b'
 
     if (!providedTag) {
       return defaultTag
