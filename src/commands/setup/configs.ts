@@ -443,7 +443,7 @@ export default class SetupConfigs extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'gen-configs-ceb73197462fb6a3af9ded14c056ba37b028ed4b'
+    const defaultTag = 'gen-configs-ae647993c907ff52824d8dc3cb27f5d0c38e4a7a'
 
     if (!providedTag) {
       return defaultTag
