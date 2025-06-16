@@ -20,29 +20,35 @@ class AWSSecretService implements SecretService {
   constructor(private region: string, private prefixName: string, private debug: boolean) { }
 
   async pushSecrets(cubesignerOnly: boolean = false): Promise<void> {
-    const secretsDir = path.join(process.cwd(), 'secrets')
+    const secretsDir = path.join(process.cwd(), 'secrets');
 
     // Process JSON files
-    const jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json'))
+    const jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json'));
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
-      
+
       // Filter for CubeSigner files if cubesignerOnly is true
       if (cubesignerOnly && !secretName.includes('cubesigner-signer-')) {
         continue
       }
-      
+
       console.log(chalk.cyan(`Processing JSON secret: ${secretName}`))
       const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
 
-      let propertyName = 'migrate-db.json' // Default for existing behavior
+      let propertyName: string;
       if (secretName.endsWith('-session')) {
         propertyName = 'session.json'
       } else if (secretName.endsWith('-migrate-db')) {
         propertyName = 'migrate-db.json'
+      } else if (secretName == 'rollup-explorer-backend-secret') {
+        propertyName = "config.json";
       }
-      // Add more specific cases if other JSON types arise with different property needs
-
+      else {
+        // Fallback or error for unknown JSON file types if necessary
+        // For now, we assume other JSONs might not follow this specific property naming
+        console.warn(chalk.yellow(`Unknown JSON file type for property naming: ${secretName}. Using file name as property.`));
+        propertyName = file; // Or handle as an error
+      }
       await this.createOrUpdateSecret({ [propertyName]: content }, secretName)
     }
 
@@ -84,6 +90,12 @@ class AWSSecretService implements SecretService {
           }
         }
       } else {
+
+        //`secretName` is env file name. And the path of this secret is prefix/secretName
+        // foo.env
+        // prefix: hello
+        // external manager file path: hello/foo-env
+
         const secretName = `${baseName}-env`
         console.log(chalk.cyan(`Processing ENV secret: ${secretName}`))
         const data = await this.convertEnvToDict(path.join(secretsDir, file))
@@ -196,6 +208,28 @@ class AWSSecretService implements SecretService {
       throw error
     }
   }
+
+  // private async processRollupExplorerBackendConfigSecret(secretsDir: string): Promise<void> {
+  //   const fileName = 'rollup-explorer-backend.json';
+  //   const filePath = path.join(secretsDir, fileName);
+
+  //   if (fs.existsSync(filePath)) {
+  //     const propertyKey = 'config.json';
+  //     const secretManagerName = 'rollup-explorer-backend';
+  //     console.log(chalk.cyan(`Processing special JSON secret: ${this.prefixName}/${secretManagerName} from ${fileName}`));
+  //     const contentString = await fs.promises.readFile(filePath, 'utf8');
+
+  //     if (!contentString.trim()) {
+  //       console.log(chalk.red(`Skipping secret: ${secretManagerName} from ${fileName} because it is empty`));
+  //       return;
+  //     }
+  //     await this.createOrUpdateSecret({ [propertyKey]: contentString }, secretManagerName);
+  //   } else {
+  //     if (this.debug) {
+  //       console.log(chalk.yellow(`File ${fileName} not found in secrets directory. Skipping its specific processing.`));
+  //     }
+  //   }
+  // }
 }
 
 class HashicorpVaultDevService implements SecretService {
@@ -242,29 +276,35 @@ class HashicorpVaultDevService implements SecretService {
       }
     }
 
-    const secretsDir = path.join(process.cwd(), 'secrets')
+    const secretsDir = path.join(process.cwd(), 'secrets');
+
+    if (!cubesignerOnly) {
+      await this.processRollupExplorerBackendConfigSecret(secretsDir);
+    }
 
     // Process JSON files
-    const jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json'))
+    const jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json') && file !== 'rollup-explorer-backend-secret.json');
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
-      
+
       // Filter for CubeSigner files if cubesignerOnly is true
       if (cubesignerOnly && !secretName.includes('cubesigner-signer-')) {
         continue
       }
-      
+
       console.log(chalk.cyan(`Processing JSON secret: ${this.pathPrefix}/${secretName}`))
       const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
 
-      let propertyName = 'migrate-db.json' // Default for existing behavior
+      let propertyName: string;
       if (secretName.endsWith('-session')) {
         propertyName = 'session.json'
       } else if (secretName.endsWith('-migrate-db')) {
         propertyName = 'migrate-db.json'
+      } else {
+        // Fallback or error for unknown JSON file types if necessary
+        console.warn(chalk.yellow(`Unknown JSON file type for property naming: ${secretName}. Using file name as property.`));
+        propertyName = file; // Or handle as an error
       }
-      // Add more specific cases if other JSON types arise
-
       await this.pushJsonToVault(secretName, content, propertyName)
     }
 
@@ -360,6 +400,28 @@ class HashicorpVaultDevService implements SecretService {
       return true
     } catch {
       return false
+    }
+  }
+
+  private async processRollupExplorerBackendConfigSecret(secretsDir: string): Promise<void> {
+    const fileName = 'rollup-explorer-backend-secret.json';
+    const filePath = path.join(secretsDir, fileName);
+
+    if (fs.existsSync(filePath)) {
+      const secretManagerName = 'rollup-explorer-backend-secret';
+      const propertyKey = 'config.json';
+      console.log(chalk.cyan(`Processing special JSON secret: ${this.pathPrefix}/${secretManagerName} from ${fileName}`));
+      const contentString = await fs.promises.readFile(filePath, 'utf8');
+
+      if (!contentString.trim()) {
+        console.log(chalk.red(`Skipping secret: ${secretManagerName} from ${fileName} because it is empty`));
+        return;
+      }
+      await this.pushJsonToVault(secretManagerName, contentString, propertyKey);
+    } else {
+      if (this.debug) {
+        console.log(chalk.yellow(`File ${fileName} not found in secrets directory. Skipping its specific processing.`));
+      }
     }
   }
 
@@ -579,15 +641,16 @@ export default class SetupPushSecrets extends Command {
   private async getAWSCredentials(): Promise<Record<string, string>> {
     return {
       prefixName: await input({
-        default: 'scroll',
-        message: chalk.cyan('Enter secret prefix name:'),
+        default: 'dogeos',
+        message: chalk.cyan('Enter a path prefix for AWS Secrets Manager (e.g., my-app/staging or dogeos/testnet):'),
       }),
       secretRegion: await input({
         default: 'us-west-2',
         message: chalk.cyan('Enter AWS secret region:'),
       }),
       serviceAccount: await input({
-        message: chalk.cyan('Enter AWS service account:'),
+        message: chalk.cyan('Enter AWS iam service account:'),
+        default: 'external-secrets'
       }),
     }
   }
@@ -687,8 +750,8 @@ export default class SetupPushSecrets extends Command {
           }
 
           // Update remoteRef.key
-          for (const data of secret.data) {
-            if (data.remoteRef && data.remoteRef.key) {
+          for (const dataItem of secret.data) {
+            if (dataItem.remoteRef && dataItem.remoteRef.key) {
               // Keep the standard combined path format
               let updatedKey = ''
               if (/^l2-sequencer-secret-\d+-env$/.test(secretName)) {
@@ -697,17 +760,27 @@ export default class SetupPushSecrets extends Command {
                 updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
               } else if (/^cubesigner-signer-\d+-session$/.test(secretName)) {
                 updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
-                if (data.secretKey === 'session.json') {
-                  data.remoteRef.property = 'session.json'
+                if (dataItem.secretKey === 'session.json') {
+                  dataItem.remoteRef.property = 'session.json'
                   updated = true
                 }
-              } else {
+              }
+              else {
+                /*
+                externalSecrets:
+                  YOUR_SECRET_NAME:
+                    provider: "aws"
+                    data:
+                      - remoteRef:
+                          key: "prefix/SECRET_PATH_OF_EXTERNAL_MANAGER"
+                          property: "property_KEY"
+                        secretKey: "SECRET_KEY"
+                */
                 updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
               }
-
               // Only update if the key has changed
-              if (data.remoteRef.key !== updatedKey) {
-                data.remoteRef.key = updatedKey
+              if (dataItem.remoteRef.key !== updatedKey) {
+                dataItem.remoteRef.key = updatedKey
                 updated = true
               }
             }

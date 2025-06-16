@@ -50,9 +50,9 @@ export default class SetupPrepCharts extends Command {
       productionNumber === '0' ? 'sequencer.L2GETH_KEYSTORE' : `sequencer.sequencer-${productionNumber}.L2GETH_KEYSTORE`,
     'L2GETH_PASSWORD': (chartName, productionNumber) =>
       productionNumber === '0' ? 'sequencer.L2GETH_PASSWORD' : `sequencer.sequencer-${productionNumber}.L2GETH_PASSWORD`,
-    'L2GETH_NODEKEY': (chartName, productionNumber) =>
-      chartName.startsWith('l2-bootnode') ? `bootnode.bootnode-${productionNumber}.L2GETH_NODEKEY` :
-        (productionNumber === '0' ? 'sequencer.L2GETH_NODEKEY' : `sequencer.sequencer-${productionNumber}.L2GETH_NODEKEY`),
+    // 'L2GETH_NODEKEY': (chartName, productionNumber) =>
+    //   chartName.startsWith('l2-bootnode') ? `bootnode.bootnode-${productionNumber}.L2GETH_NODEKEY` :
+    //     (productionNumber === '0' ? 'sequencer.L2GETH_NODEKEY' : `sequencer.sequencer-${productionNumber}.L2GETH_NODEKEY`),
     // Add ingress host mappings
     'FRONTEND_HOST': 'ingress.FRONTEND_HOST',
     'BRIDGE_HISTORY_API_HOST': 'ingress.BRIDGE_HISTORY_API_HOST',
@@ -72,6 +72,7 @@ export default class SetupPrepCharts extends Command {
   private configData: any = {}
   private contractsConfig: any = {}
   private dogeConfig: DogeConfig = {} as DogeConfig
+  private flags: any; // To store parsed flags
   private withdrawalProcessorConfig: toml.JsonMap = {}
 
   // Generic ingress processing function
@@ -138,6 +139,14 @@ export default class SetupPrepCharts extends Command {
     const { config, configPath: resolvedPath } = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk doge:config')
     this.dogeConfig = config as DogeConfigType;
 
+
+    const withdrawalProcessorConfigPath = path.join(process.cwd(), ".data/output-withdrawal-processor.toml")
+    if (!fs.existsSync(withdrawalProcessorConfigPath)) {
+      this.error("run scrollsdk doge:bridge-init first");
+      return
+    }
+    const withdrawalProcessorConfigContent = fs.readFileSync(withdrawalProcessorConfigPath, 'utf-8');
+    this.withdrawalProcessorConfig = toml.parse(withdrawalProcessorConfigContent);
     return;
   }
 
@@ -178,7 +187,47 @@ export default class SetupPrepCharts extends Command {
     } catch {
       return url;
     }
-  };
+  }
+
+
+  private async processMutipleInstance(valuesDir: string): Promise<{ updated: number; skipped: number }> {
+
+    if (!this.configData.bootnode) {
+      this.error(`bootnode not found in config.toml`);
+      return { updated: 0, skipped: 0 };
+    }
+    let updatedCharts = 0;
+    let skippedCharts = 0;
+    let bootnodeIndex = 0;
+    const templateFilePath = path.join(valuesDir, "l2-bootnode-production.yaml");
+    if (!fs.existsSync(templateFilePath)) {
+      this.warn(chalk.yellow(`Source file not found: ${templateFilePath}, skipping l2-bootnode charts`));
+      skippedCharts++;
+      return { updated: updatedCharts, skipped: skippedCharts };
+    }
+
+    const templateContent = fs.readFileSync(templateFilePath, 'utf8');
+
+    while (true) {
+      const changesForThisFile: Array<{ keyPath: string; oldValue: string | undefined; newValue: string }> = [];
+      const bootnodeInstanceKey = `bootnode-${bootnodeIndex}`
+      const bootnodeConfig = this.configData.bootnode[bootnodeInstanceKey]
+
+      if (!bootnodeConfig) {
+        // No more bootnode instances defined
+        break
+      }
+      const destFilePath = path.join(valuesDir, `l2-bootnode-production-${bootnodeIndex}.yaml`);
+
+      const newYamlContent = templateContent.replace(/__INSTANCE_INDEX__/g, bootnodeIndex.toString());
+
+      fs.writeFileSync(destFilePath, newYamlContent);
+      updatedCharts++;
+      bootnodeIndex++
+    }
+    return { updated: updatedCharts, skipped: skippedCharts };
+  }
+
   private async processProductionYaml(valuesDir: string): Promise<{ updated: number; skipped: number }> {
     const productionFiles = fs.readdirSync(valuesDir)
       .filter(file => file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
@@ -1055,6 +1104,7 @@ export default class SetupPrepCharts extends Command {
     }
   }
 
+
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupPrepCharts)
 
@@ -1082,14 +1132,18 @@ export default class SetupPrepCharts extends Command {
     // Process production.yaml files
     const valuesDir = flags['values-dir']
 
-    const { updated, skipped } = await this.processProductionYaml(valuesDir);
+    const { updated: updatedInstances, skipped: skippedInstances } = await this.processMutipleInstance(valuesDir);
+    const { updated: updatedProduction, skipped: skippedProduction } = await this.processProductionYaml(valuesDir);
     const { updated: updatedConfig, skipped: skippedConfig } = await this.processConfigYaml(valuesDir);
 
-    this.log(chalk.green(`\nUpdated production YAML files for ${updated} chart(s).`))
-    this.log(chalk.yellow(`Skipped ${skipped} chart(s).`))
+    this.log(chalk.green(`\nUpdated instance-specific YAML files for ${updatedInstances} chart(s).`));
+    this.log(chalk.yellow(`Skipped ${skippedInstances} instance-specific chart(s).`));
 
-    this.log(chalk.green(`\nUpdated config YAML files for ${updatedConfig} chart(s).`))
-    this.log(chalk.yellow(`Skipped ${skippedConfig} chart(s).`))
+    this.log(chalk.green(`\nUpdated production YAML files for ${updatedProduction} chart(s).`))
+    this.log(chalk.yellow(`Skipped ${skippedProduction} chart(s).`))
+
+    this.log(chalk.green(`\nUpdated config YAML files for ${updatedConfig} chart(s).`));
+    this.log(chalk.yellow(`Skipped ${skippedConfig} chart(s).`));
 
     this.log('Chart preparation completed.')
   }

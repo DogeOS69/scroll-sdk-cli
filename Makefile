@@ -1,0 +1,16 @@
+NAMESPACE ?= default
+CHARTS=~/github/dogeos/scroll-sdk/charts
+
+install-a:
+	kubectl upgrade -i ....
+	ls....
+install-b:
+	...
+	...
+#user comments
+	...
+
+
+delete-a:
+	command1
+	command2

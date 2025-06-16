@@ -15,6 +15,7 @@ import { promisify } from 'util'
 import { writeConfigs } from '../../utils/config-writer.js'
 
 const execAsync = promisify(childProcess.exec)
+const SECRETS_PATH = path.join(process.cwd(), 'secrets')
 
 export default class SetupConfigs extends Command {
   static override description = 'Generate configuration files and create environment files for services'
@@ -126,6 +127,8 @@ export default class SetupConfigs extends Command {
       'l1-explorer',
       'l2-sequencer',
       'rollup-node',
+      'contracts',
+      'l2-bootnode',
       'dogecoin',
       'dogeos-deposit-processor',
       'withdrawal-processor',
@@ -136,7 +139,7 @@ export default class SetupConfigs extends Command {
     for (const service of services) {
       const envFiles = this.generateEnvContent(service, config)
       for (const [filename, content] of Object.entries(envFiles)) {
-        const envFile = path.join(process.cwd(), 'secrets', filename)
+        const envFile = path.join(SECRETS_PATH, filename)
         fs.writeFileSync(envFile, content)
         this.log(chalk.green(`Created ${filename}`))
       }
@@ -154,7 +157,7 @@ export default class SetupConfigs extends Command {
     ]
 
     for (const file of migrateDbFiles) {
-      const filePath = path.join(process.cwd(), 'secrets', `${file.service}-migrate-db.json`)
+      const filePath = path.join(SECRETS_PATH, `${file.service}-migrate-db.json`)
       let content: any
 
       content =
@@ -180,11 +183,10 @@ export default class SetupConfigs extends Command {
   }
 
   private createSecretsFolder(): void {
-    const secretsPath = path.join(process.cwd(), 'secrets')
-    if (fs.existsSync(secretsPath)) {
+    if (fs.existsSync(SECRETS_PATH)) {
       this.log(chalk.yellow('Secrets folder already exists'))
     } else {
-      fs.mkdirSync(secretsPath)
+      fs.mkdirSync(SECRETS_PATH)
       this.log(chalk.green('Created secrets folder'))
     }
   }
@@ -314,7 +316,15 @@ export default class SetupConfigs extends Command {
       ],
       'withdrawal-processor': [
       ],
-
+      'contracts': [
+        'DEPLOYER_PRIVATE_KEY:DEPLOYER_PRIVATE_KEY',
+        'L1_COMMIT_SENDER_PRIVATE_KEY:L1_COMMIT_SENDER_PRIVATE_KEY',
+        'L1_FINALIZE_SENDER_PRIVATE_KEY:L1_FINALIZE_SENDER_PRIVATE_KEY',
+        'L1_GAS_ORACLE_SENDER_PRIVATE_KEY:L1_GAS_ORACLE_SENDER_PRIVATE_KEY',
+        'L2_GAS_ORACLE_SENDER_PRIVATE_KEY:L2_GAS_ORACLE_SENDER_PRIVATE_KEY',
+        'ROLLUP_EXPLORER_DB_CONNECTION_STRING:ROLLUP_EXPLORER_DB_CONNECTION_STRING',
+        'COORDINATOR_JWT_SECRET_KEY:COORDINATOR_JWT_SECRET_KEY'
+      ],
     }
 
     const envFiles: { [key: string]: string } = {}
@@ -338,7 +348,31 @@ export default class SetupConfigs extends Command {
         envFiles[`l2-sequencer-${sequencerIndex}-secret.env`] = content
         sequencerIndex++
       }
-    } else {
+    } else if (service === 'l2-bootnode') {
+      // Handle L2 bootnode secrets
+      if (config.bootnode) {
+        let bootnodeIndex = 0
+        while (true) {
+          const bootnodeInstanceKey = `bootnode-${bootnodeIndex}`
+          const bootnodeConfig = config.bootnode[bootnodeInstanceKey]
+
+          if (!bootnodeConfig) {
+            // No more bootnode instances defined
+            break
+          }
+
+          // L2GETH_NODEKEY is expected.
+          // If it's missing for a defined bootnode instance in config.toml, default to an empty string.
+          // config.toml.example shows L2GETH_NODEKEY="", so it should typically exist.
+          const nodeKey = bootnodeConfig.L2GETH_NODEKEY !== undefined ? bootnodeConfig.L2GETH_NODEKEY : ''
+          envFiles[`l2-bootnode-${bootnodeIndex}-secret.env`] = `L2GETH_NODEKEY="${nodeKey}"\n`
+          bootnodeIndex++
+        }
+      } else {
+        this.log(chalk.yellow('No [bootnode] configuration found in config.toml. Skipping l2-bootnode secret generation.'))
+      }
+    }
+    else {
       // Handle other services
       let content = ''
       for (const pair of mapping[service] || []) {
@@ -409,7 +443,7 @@ export default class SetupConfigs extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'gen-configs-0f04f9b71dccc3a1647fb6473f414d6de5020c3d'
+    const defaultTag = 'gen-configs-ae647993c907ff52824d8dc3cb27f5d0c38e4a7a'
 
     if (!providedTag) {
       return defaultTag
@@ -494,6 +528,26 @@ export default class SetupConfigs extends Command {
         try {
           fs.copyFileSync(sourcePath, targetPath)
           this.log(chalk.green(`Processed file: ${mapping.source} -> ${mapping.target}`))
+
+          if (mapping.target === 'rollup-explorer-backend-config.yaml') {
+            const yamlFileContent = fs.readFileSync(targetPath, 'utf8')
+            const parsedYaml = yaml.load(yamlFileContent) as any
+            if (parsedYaml && parsedYaml.scrollConfig && typeof parsedYaml.scrollConfig === 'string') {
+              try {
+                const scrollConfigObject = JSON.parse(parsedYaml.scrollConfig)
+                const prettyJsonString = JSON.stringify(scrollConfigObject, null, 2)
+                const secretsDir = SECRETS_PATH
+                const jsonOutputPath = path.join(secretsDir, 'rollup-explorer-backend-secret.json')
+                fs.writeFileSync(jsonOutputPath, prettyJsonString)
+                this.log(chalk.green(`Extracted scrollConfig to ${jsonOutputPath}`))
+                fs.unlinkSync(targetPath)
+              } catch (jsonError) {
+                this.log(chalk.red(`Failed to parse scrollConfig JSON from ${targetPath}: ${jsonError}`))
+              }
+            } else {
+              this.log(chalk.yellow(`Could not find or parse scrollConfig in ${targetPath}`))
+            }
+          }
         } catch (error: unknown) {
           if (error instanceof Error) {
             this.log(chalk.red(`Error processing file ${mapping.source}: ${error.message}`))
@@ -538,7 +592,7 @@ export default class SetupConfigs extends Command {
 
     // Process config.toml and config-contracts.toml
     const configFiles = [
-      { key: 'scrollConfig', source: 'config.toml', target: 'scroll-common-config.yaml' },
+      { key: 'scrollConfig', source: 'config.public.toml', target: 'scroll-common-config.yaml' },
       { key: 'scrollConfigContracts', source: 'config-contracts.toml', target: 'scroll-common-config-contracts.yaml' },
     ]
 

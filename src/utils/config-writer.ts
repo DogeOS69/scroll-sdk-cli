@@ -120,6 +120,19 @@ export function writeConfigs(
             delete (publicConfig.contracts as any).verification.EXPLORER_API_KEY_L2
         }
 
+        // 6. Remove node private keys (L2GETH_NODEKEY) from all sections
+        const removeNodeKeys = (obj: any) => {
+            if (obj && typeof obj === 'object') {
+                delete obj.L2GETH_NODEKEY
+                for (const key in obj) {
+                    if (typeof obj[key] === 'object') {
+                        removeNodeKeys(obj[key])
+                    }
+                }
+            }
+        }
+        removeNodeKeys(publicConfig)
+
         // --- Atomic Write Logic ---
         const tempConfigPath = mainConfigPath + '.tmp';
 
