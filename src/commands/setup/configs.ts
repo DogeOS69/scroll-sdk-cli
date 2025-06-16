@@ -15,6 +15,7 @@ import { promisify } from 'util'
 import { writeConfigs } from '../../utils/config-writer.js'
 
 const execAsync = promisify(childProcess.exec)
+const SECRETS_PATH = path.join(process.cwd(), 'secrets')
 
 export default class SetupConfigs extends Command {
   static override description = 'Generate configuration files and create environment files for services'
@@ -138,7 +139,7 @@ export default class SetupConfigs extends Command {
     for (const service of services) {
       const envFiles = this.generateEnvContent(service, config)
       for (const [filename, content] of Object.entries(envFiles)) {
-        const envFile = path.join(process.cwd(), 'secrets', filename)
+        const envFile = path.join(SECRETS_PATH, filename)
         fs.writeFileSync(envFile, content)
         this.log(chalk.green(`Created ${filename}`))
       }
@@ -156,7 +157,7 @@ export default class SetupConfigs extends Command {
     ]
 
     for (const file of migrateDbFiles) {
-      const filePath = path.join(process.cwd(), 'secrets', `${file.service}-migrate-db.json`)
+      const filePath = path.join(SECRETS_PATH, `${file.service}-migrate-db.json`)
       let content: any
 
       content =
@@ -182,11 +183,10 @@ export default class SetupConfigs extends Command {
   }
 
   private createSecretsFolder(): void {
-    const secretsPath = path.join(process.cwd(), 'secrets')
-    if (fs.existsSync(secretsPath)) {
+    if (fs.existsSync(SECRETS_PATH)) {
       this.log(chalk.yellow('Secrets folder already exists'))
     } else {
-      fs.mkdirSync(secretsPath)
+      fs.mkdirSync(SECRETS_PATH)
       this.log(chalk.green('Created secrets folder'))
     }
   }
@@ -528,6 +528,26 @@ export default class SetupConfigs extends Command {
         try {
           fs.copyFileSync(sourcePath, targetPath)
           this.log(chalk.green(`Processed file: ${mapping.source} -> ${mapping.target}`))
+
+          if (mapping.target === 'rollup-explorer-backend-config.yaml') {
+            const yamlFileContent = fs.readFileSync(targetPath, 'utf8')
+            const parsedYaml = yaml.load(yamlFileContent) as any
+            if (parsedYaml && parsedYaml.scrollConfig && typeof parsedYaml.scrollConfig === 'string') {
+              try {
+                const scrollConfigObject = JSON.parse(parsedYaml.scrollConfig)
+                const prettyJsonString = JSON.stringify(scrollConfigObject, null, 2)
+                const secretsDir = SECRETS_PATH
+                const jsonOutputPath = path.join(secretsDir, 'rollup-explorer-backend-secret.json')
+                fs.writeFileSync(jsonOutputPath, prettyJsonString)
+                this.log(chalk.green(`Extracted scrollConfig to ${jsonOutputPath}`))
+                fs.unlinkSync(targetPath)
+              } catch (jsonError) {
+                this.log(chalk.red(`Failed to parse scrollConfig JSON from ${targetPath}: ${jsonError}`))
+              }
+            } else {
+              this.log(chalk.yellow(`Could not find or parse scrollConfig in ${targetPath}`))
+            }
+          }
         } catch (error: unknown) {
           if (error instanceof Error) {
             this.log(chalk.red(`Error processing file ${mapping.source}: ${error.message}`))
