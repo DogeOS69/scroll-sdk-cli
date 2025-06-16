@@ -47,7 +47,6 @@ export default class WalletSend extends Command {
     }),
     config: Flags.string({
       char: 'c',
-      default: '.data/doge-config.toml',
       description: 'Path to Dogecoin config file',
     }),
     'dry-run': Flags.boolean({
@@ -98,12 +97,12 @@ export default class WalletSend extends Command {
         flags['doge-config'],
         'scrollsdk doge:config'
       )
-
+ 
       this.log(chalk.blue(`Using network: ${config.network} (from ${flags.config})`))
 
       const currentBitcoreNetwork: typeof Networks.livenet = this.getBitcoreNetwork(config.network)
 
-      const recipientAddress = this.validateRecipient(flags.to, config, currentBitcoreNetwork, flags.config)
+      const recipientAddress = this.validateRecipient(flags.to, config, currentBitcoreNetwork, configPath)
       const amountSatoshis = this.validateAmount(flags.amount)
 
       const walletPath = flags.path ? path.resolve(flags.path) : path.resolve(config.wallet.path)
@@ -121,7 +120,7 @@ export default class WalletSend extends Command {
         if (shouldSync) {
           await this.config.runCommand('doge:wallet:sync', [
             '--config',
-            flags.config,
+            configPath,
             ...(flags.path ? ['--path', flags.path] : []),
           ])
           walletData = this.loadWallet(walletPath)
