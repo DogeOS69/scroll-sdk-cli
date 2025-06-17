@@ -93,11 +93,11 @@ export class DogeConfigCommand extends Command {
     const files = fs.readdirSync('.data')
     const configFiles = files.filter(file => file.startsWith('doge') && file.endsWith('.toml'))
     const configFileChoices = configFiles.map(file => ({ name: file, value: file }))
-    
+
     let resolvedPath = flags.config as string
     let network = ""
 
-    let fileSelected=""
+    let fileSelected = ""
     if (!flags.config) {
       fileSelected = await select({
         choices: [...configFileChoices, {
@@ -129,6 +129,37 @@ export class DogeConfigCommand extends Command {
     // let resolvedPath = path.resolve(".data", fileSelected)
     let existingConfig: DogeConfig = {} as DogeConfig;
 
+    const defaultConfig: DogeConfig = {
+      defaults: {
+        dogecoinIndexerStartHeight: '4000000',
+      },
+      frontend: {},
+      network: network as Network,
+      rpc: {
+        username: '',
+        password: '',
+        apiKey: '',
+        blockbookAPIUrl:
+          network === 'mainnet' ? 'https://dogebook.nownodes.io/api/v2' : 'https://dogebook-testnet.nownodes.io/api/v2',
+        url: network === 'mainnet' ? 'https://dogecoin.mainnet.dogeos.com' : 'https://dogecoin.testnet.dogeos.com',
+      },
+      dogecoinClusterRpc: {
+        username: "",
+        password: "",
+      },
+      test: {},
+      wallet: {
+        path: network === 'mainnet' ? '.data/doge-wallet-mainnet.json' : '.data/doge-wallet-testnet.json',
+      },
+      da: {
+        celestiaIndexerStartBlock: network === 'mainnet' ? '0' : '6175746',
+        //rpcUrl: network === 'mainnet' ? 'http://celestia-mainnet:26658' : 'http://celestia-testnet-mocha:26658',
+        tendermintRpcUrl: '',
+        daNamespace: network === 'mainnet' ? '' : '',
+        signerAddress: '',
+        celestiaMnemonic: '',
+      }
+    }
     if (!fs.existsSync(resolvedPath)) {
       const shouldCreate = await confirm({
         default: true,
@@ -141,37 +172,7 @@ export class DogeConfigCommand extends Command {
 
       console.log('Creating a new default Dogecoin configuration file...')
 
-      const defaultConfig: DogeConfig = {
-        defaults: {
-          dogecoinIndexerStartHeight: '4000000',
-        },
-        frontend: {},
-        network: network as Network,
-        rpc: {
-          username: '',
-          password: '',
-          apiKey: '',
-          blockbookAPIUrl:
-            network === 'mainnet' ? 'https://dogebook.nownodes.io/api/v2' : 'https://dogebook-testnet.nownodes.io/api/v2',
-          url: network === 'mainnet' ? '' : 'https://testnet.doge.xyz/',
-        },
-        dogecoinClusterRpc: {
-          username: "",
-          password: "",
-        },
-        test: {},
-        wallet: {
-          path: network === 'mainnet' ? '.data/doge-wallet-mainnet.json' : '.data/doge-wallet-testnet.json',
-        },
-        da: {
-          celestiaIndexerStartBlock: network === 'mainnet' ? '0' : '6175746',
-          //rpcUrl: network === 'mainnet' ? 'http://celestia-mainnet:26658' : 'http://celestia-testnet-mocha:26658',
-          tendermintRpcUrl: '',
-          daNamespace: network === 'mainnet' ? '' : '',
-          signerAddress: '',
-          celestiaMnemonic: '',
-        }
-      }
+
 
       // const configDir = path.dirname(resolvedPath)
       // if (!fs.existsSync(configDir)) {
@@ -222,7 +223,7 @@ export class DogeConfigCommand extends Command {
     })
 
     newConfig.rpc!.url = await input({
-      default: existingConfig.rpc?.url,
+      default: existingConfig.rpc?.url || defaultConfig.rpc?.url || '',
       message: `Enter an external dogecoin RPC URL for wallet operations (send/sync):
       `,
     });
@@ -468,7 +469,7 @@ export class DogeConfigCommand extends Command {
 
     newConfig.network = newDogeConfig.network;
 
-    newConfig.dogecoin_rpc_url = newDogeConfig.rpc?.url || 'https://testnet.doge.xyz';
+    newConfig.dogecoin_rpc_url = newDogeConfig.rpc?.url || '';
     newConfig.dogecoin_rpc_user = newDogeConfig.rpc?.username || '';
     newConfig.dogecoin_rpc_pass = newDogeConfig.rpc?.password || '';
     const blockbookUrl = newDogeConfig.rpc?.blockbookAPIUrl?.replace('/api/v2', '') || '';

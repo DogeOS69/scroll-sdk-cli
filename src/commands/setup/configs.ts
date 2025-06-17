@@ -83,6 +83,21 @@ export default class SetupConfigs extends Command {
     this.log(chalk.blue('Running docker command to generate configs...'))
     await this.runDockerCommand(imageTag)
 
+    let parsedPublicConfig: any = {}
+    const publicConfigPath = path.join(process.cwd(), 'config.public.toml')
+    if (fs.existsSync(publicConfigPath)) {
+      try {
+        const publicConfigContent = fs.readFileSync(publicConfigPath, 'utf8')
+        parsedPublicConfig = toml.parse(publicConfigContent)
+        this.log(chalk.green('Successfully parsed config.public.toml'))
+      } catch (error: any) {
+        this.error(chalk.red(`Failed to parse config.public.toml: ${error.message}`))
+        // Optionally, decide if we should exit if parsing fails
+      }
+    } else {
+      this.log(chalk.yellow('config.public.toml not found after docker command. Skipping .env generation for docker-compose.'))
+    }
+
     this.log(chalk.blue('Creating secrets folder...'))
     this.createSecretsFolder()
 
