@@ -87,6 +87,22 @@ export default class SetupGenKeystore extends Command {
     return `enode://${publicKeyNoPrefix}@l2-sequencer-${index}:30303`
   }
 
+  private getBootnodeEnodeUrl(nodekey: string, index: number): string {
+    // Remove '0x' prefix if present
+    nodekey = nodekey.startsWith('0x') ? nodekey.slice(2) : nodekey;
+
+    // Create a Wallet instance from the private key
+    const wallet = new ethers.Wallet(nodekey);
+
+    // Get the public key
+    const publicKey = wallet.signingKey.publicKey;
+
+    // Remove '0x04' prefix from public key
+    const publicKeyNoPrefix = publicKey.slice(4);
+
+    return `enode://${publicKeyNoPrefix}@l2-bootnode-${index}:30303`
+  }
+
   private generateKeyPair(): KeyPair {
     const wallet = Wallet.createRandom()
     return {
@@ -153,6 +169,9 @@ export default class SetupGenKeystore extends Command {
         })
       } else if (key === 'bootnode') {
         updatedConfig[key] = value || {}
+        
+        const bootnodeEnodeUrls = bootnodeData.map((data, index) => this.getBootnodeEnodeUrl(data.nodekey, index))
+        updatedConfig[key].L2_GETH_PUBLIC_PEERS = bootnodeEnodeUrls
 
         // If overwriting, remove all existing bootnode subsections
         if (overwriteBootnodes) {

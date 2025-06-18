@@ -364,7 +364,7 @@ export default class SetupConfigs extends Command {
         for (const pair of mapping[service] || []) {
           const [envKey, configKey] = pair.split(':')
           if (sequencerConfig[configKey]) {
-            content += `${envKey}_${sequencerIndex}="${sequencerConfig[configKey]}"\n`
+            content += `${envKey}="${sequencerConfig[configKey]}"\n`
           }
         }
 
@@ -410,8 +410,9 @@ export default class SetupConfigs extends Command {
           content += `${envKey}="${config.sequencer[configKey]}"\n`
         }
       }
-
-      envFiles[`${service}-secret.env`] = content
+      if (content.length > 0) {
+        envFiles[`${service}-secret.env`] = content
+      }
     }
 
     if (service === 'dogeos-deposit-processor') {

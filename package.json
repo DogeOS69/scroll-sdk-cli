@@ -8,6 +8,10 @@
   },
   "bugs": "https://github.com/scroll-tech/scroll-sdk-cli/issues",
   "dependencies": {
+    "@aws-sdk/client-ec2": "^3.830.0",
+    "@aws-sdk/client-eks": "^3.830.0",
+    "@aws-sdk/client-iam": "^3.830.0",
+    "@aws-sdk/client-sts": "^3.830.0",
     "@cosmjs/proto-signing": "^0.33.1",
     "@cosmjs/stargate": "^0.33.1",
     "@cubist-labs/cubesigner-sdk": "^0.4.152-0",

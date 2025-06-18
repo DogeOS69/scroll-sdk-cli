@@ -14,6 +14,9 @@ import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 
 const execAsync = promisify(exec)
 
+
+
+
 export default class SetupPrepCharts extends Command {
   static override description = 'Validate Makefile and prepare Helm charts for Scroll SDK'
 
@@ -191,44 +194,60 @@ export default class SetupPrepCharts extends Command {
 
 
   private async processMutipleInstance(valuesDir: string): Promise<{ updated: number; skipped: number }> {
-
-    if (!this.configData.bootnode) {
-      this.error(`bootnode not found in config.toml`);
-      return { updated: 0, skipped: 0 };
-    }
+    let names = [{
+      chartName: "l2-bootnode",
+      configKey: "bootnode"
+    }, {
+      chartName: "l2-sequencer",
+      configKey: "sequencer"
+    }];
     let updatedCharts = 0;
     let skippedCharts = 0;
-    let bootnodeIndex = 0;
-    const templateFilePath = path.join(valuesDir, "l2-bootnode-production.yaml");
-    if (!fs.existsSync(templateFilePath)) {
-      this.warn(chalk.yellow(`Source file not found: ${templateFilePath}, skipping l2-bootnode charts`));
-      skippedCharts++;
-      return { updated: updatedCharts, skipped: skippedCharts };
-    }
 
-    const templateContent = fs.readFileSync(templateFilePath, 'utf8');
+    for (const item of names) {
+      const { chartName, configKey } = item;
 
-    while (true) {
-      const changesForThisFile: Array<{ keyPath: string; oldValue: string | undefined; newValue: string }> = [];
-      const bootnodeInstanceKey = `bootnode-${bootnodeIndex}`
-      const bootnodeConfig = this.configData.bootnode[bootnodeInstanceKey]
-
-      if (!bootnodeConfig) {
-        // No more bootnode instances defined
-        break
+      if (!this.configData[configKey]) {
+        this.error(`${configKey} not found in config.toml`);
       }
-      const destFilePath = path.join(valuesDir, `l2-bootnode-production-${bootnodeIndex}.yaml`);
 
-      const newYamlContent = templateContent.replace(/__INSTANCE_INDEX__/g, bootnodeIndex.toString());
+      let releaseIndex = 0;
+      const templateFilePath = path.join(valuesDir, `${chartName}-production.yaml`);
+      if (!fs.existsSync(templateFilePath)) {
+        this.warn(chalk.yellow(`Source file not found: ${templateFilePath}, skipping ${chartName} charts`));
+        skippedCharts++;
+        continue;
+      }
 
-      fs.writeFileSync(destFilePath, newYamlContent);
-      updatedCharts++;
-      bootnodeIndex++
+      const templateContent = fs.readFileSync(templateFilePath, 'utf8');
+
+      while (true) {
+        const changesForThisFile: Array<{ keyPath: string; oldValue: string | undefined; newValue: string }> = [];
+        let instanceKey = `${configKey}-${releaseIndex}`
+
+        // instanceConfig is like this.configData.bootnode.bootnode-0, or this.configData.sequencer.sequencer-0
+        const instanceConfig = this.configData[configKey][instanceKey]
+
+        if (!instanceConfig && instanceKey != "sequencer-0") {
+          // No more bootnode instances defined
+          this.log(chalk.yellow(`No more ${instanceKey} instances defined.`));
+          break
+        }
+        const destFilePath = path.join(valuesDir, `${chartName}-production-${releaseIndex}.yaml`);
+
+        const newYamlContent = templateContent.replace(/__INSTANCE_INDEX__/g, releaseIndex.toString());
+
+        fs.writeFileSync(destFilePath, newYamlContent);
+        updatedCharts++;
+        releaseIndex++
+      }
     }
     return { updated: updatedCharts, skipped: skippedCharts };
   }
 
-  private async processProductionYaml(valuesDir: string): Promise<{ updated: number; skipped: number }> {
+  private async processProductionYaml(
+    valuesDir: string
+  ): Promise<{ updated: number; skipped: number }> {
     const productionFiles = fs.readdirSync(valuesDir)
       .filter(file => file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
 
@@ -364,6 +383,8 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
+
+
       if (productionYaml["blockscout-stack"]) {
         let ingressUpdated = false;
         const blockscout = productionYaml["blockscout-stack"].blockscout;
@@ -390,14 +411,17 @@ export default class SetupPrepCharts extends Command {
         }
 
         //only enable tls if use command scrollsdk setup tls
-        if (blockscout?.ingress?.tls?.enabled) {
-          if (blockscout.ingress.tls.enabled !== false) {
-            const oldValue = blockscout.ingress.tls.enabled;
-            blockscout.ingress.tls.enabled = false; // Ensure it's boolean false
-            changes.push({ key: `ingress.blockscout.tls.enabled`, oldValue: String(oldValue), newValue: "false" });
-            ingressUpdated = true;
-          }
-        }
+        // if setup:tls was executed, all http protocol will be updated to https
+        // so we don't support disable tls for now
+
+        // if (blockscout?.ingress?.tls?.enabled) {
+        //   if (blockscout.ingress.tls.enabled !== false) {
+        //     const oldValue = blockscout.ingress.tls.enabled;
+        //     blockscout.ingress.tls.enabled = false; // Ensure it's boolean false
+        //     changes.push({ key: `ingress.blockscout.tls.enabled`, oldValue: String(oldValue), newValue: "false" });
+        //     ingressUpdated = true;
+        //   }
+        // }
 
         if (frontend?.env?.NEXT_PUBLIC_API_HOST) {
           const oldValue = frontend.env.NEXT_PUBLIC_API_HOST;
@@ -452,14 +476,14 @@ export default class SetupPrepCharts extends Command {
         }
 
         //only enable tls if use command scrollsdk setup tls
-        if (frontend?.ingress?.tls?.enabled) {
-          if (frontend.ingress.tls.enabled !== false) {
-            const oldValue = frontend.ingress.tls.enabled;
-            changes.push({ key: `frontend.ingress.tls.enabled`, oldValue: String(oldValue), newValue: "false" });
-            frontend.ingress.tls.enabled = false;
-            ingressUpdated = true;
-          }
-        }
+        // if (frontend?.ingress?.tls?.enabled) {
+        //   if (frontend.ingress.tls.enabled !== false) {
+        //     const oldValue = frontend.ingress.tls.enabled;
+        //     changes.push({ key: `frontend.ingress.tls.enabled`, oldValue: String(oldValue), newValue: "false" });
+        //     frontend.ingress.tls.enabled = false;
+        //     ingressUpdated = true;
+        //   }
+        // }
 
         interface BlockscoutEnvMapping {
           key: string;
@@ -1103,6 +1127,7 @@ export default class SetupPrepCharts extends Command {
 
 
   private async validateMakefile(skipAuthCheck: boolean): Promise<void> {
+    this.log(chalk.blue('Validating Makefile...'))
     const makefilePath = path.join(process.cwd(), 'Makefile')
     if (!fs.existsSync(makefilePath)) {
       this.error('Makefile not found in the current directory.')
@@ -1156,7 +1181,6 @@ export default class SetupPrepCharts extends Command {
     }
   }
 
-
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupPrepCharts)
 
@@ -1183,7 +1207,6 @@ export default class SetupPrepCharts extends Command {
 
     // Process production.yaml files
     const valuesDir = flags['values-dir']
-
     const { updated: updatedInstances, skipped: skippedInstances } = await this.processMutipleInstance(valuesDir);
     const { updated: updatedProduction, skipped: skippedProduction } = await this.processProductionYaml(valuesDir);
     const { updated: updatedConfig, skipped: skippedConfig } = await this.processConfigYaml(valuesDir);
