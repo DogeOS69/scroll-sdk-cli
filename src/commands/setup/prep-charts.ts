@@ -831,16 +831,28 @@ export default class SetupPrepCharts extends Command {
       }
       else if (chartName == "metrics-exporter") {
 
+        const rollupExplorerBackendUrl = "http://rollup-explorer-backend";
         const l1MessageQueueProxyAddr = this.getConfigValue("contractsFile.L1_MESSAGE_QUEUE_V2_PROXY_ADDR");
-        const expected_basicAuth = this.dogeConfig.dogecoinClusterRpc?.password ? Buffer.from(this.dogeConfig.dogecoinClusterRpc?.username + ":" + this.dogeConfig.dogecoinClusterRpc?.password).toString('base64') : "";
+        const l2RpcEndpoint = this.getConfigValue("general.L2_RPC_ENDPOINT");
+        const l2TxFeeVaultAddr = this.getConfigValue("contracts.overrides.L2_TX_FEE_VAULT");
+        const l2BridgeFeeRecipientAddr = this.getConfigValue("contracts.L2_BRIDGE_FEE_RECIPIENT_ADDR");
+
         if (!productionYaml.metricsConfig) {
           productionYaml.metricsConfig = {
+            rollup: {
+              url: rollupExplorerBackendUrl
+            },
             l1Network: {
               url: this.getConfigValue("general.L1_RPC_ENDPOINT"),
               L1_MESSAGE_QUEUE_PROXY_ADDR: l1MessageQueueProxyAddr
             },
             dogecoin: {
               url: dogecoinInternalUrl
+            },
+            dogeos: {
+              url: this.getConfigValue("general.L2_RPC_ENDPOINT"),
+              L2_TX_FEE_VAULT_ADDR: l2TxFeeVaultAddr,
+              L2_BRIDGE_FEE_RECIPIENT_ADDR: l2BridgeFeeRecipientAddr
             }
           };
           updated = true;
@@ -849,29 +861,61 @@ export default class SetupPrepCharts extends Command {
             newValue: JSON.stringify(productionYaml.metricsConfig)
           });
         } else {
+          if (productionYaml.metricsConfig.rollup.url != rollupExplorerBackendUrl) {
+            updated = true;
+            changes.push({
+              key: `metricsConfig.rollup.url`, oldValue: productionYaml.metricsConfig.rollup.url,
+              newValue: rollupExplorerBackendUrl
+            });
+            productionYaml.metricsConfig.rollup.url = rollupExplorerBackendUrl;
+          }
           if (productionYaml.metricsConfig.l1Network.url != this.getConfigValue("general.L1_RPC_ENDPOINT")) {
-            productionYaml.metricsConfig.l1Network.url = this.getConfigValue("general.L1_RPC_ENDPOINT");
             updated = true;
             changes.push({
               key: `metricsConfig.l1Network.url`, oldValue: productionYaml.metricsConfig.l1Network.url,
               newValue: this.getConfigValue("general.L1_RPC_ENDPOINT")
             });
+            productionYaml.metricsConfig.l1Network.url = this.getConfigValue("general.L1_RPC_ENDPOINT");
           }
           if (productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR != l1MessageQueueProxyAddr) {
-            productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR = l1MessageQueueProxyAddr;
             updated = true;
             changes.push({
               key: `metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR`, oldValue: productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR,
               newValue: l1MessageQueueProxyAddr
             });
+            productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR = l1MessageQueueProxyAddr;
           }
           if (productionYaml.metricsConfig.dogecoin.url != dogecoinInternalUrl) {
-            productionYaml.metricsConfig.dogecoin.url = dogecoinInternalUrl;
             updated = true;
             changes.push({
               key: `metricsConfig.dogecoin.url`, oldValue: productionYaml.metricsConfig.dogecoin.url,
               newValue: dogecoinInternalUrl
             });
+            productionYaml.metricsConfig.dogecoin.url = dogecoinInternalUrl;
+          }
+          if (productionYaml.metricsConfig.dogeos.url != l2RpcEndpoint) {
+            updated = true;
+            changes.push({
+              key: `metricsConfig.dogeos.url`, oldValue: productionYaml.metricsConfig.dogeos.url,
+              newValue: l2RpcEndpoint
+            });
+            productionYaml.metricsConfig.dogeos.url = l2RpcEndpoint;
+          }
+          if (productionYaml.metricsConfig.dogeos.L2_TX_FEE_VAULT_ADDR != l2TxFeeVaultAddr) {
+            updated = true;
+            changes.push({
+              key: `metricsConfig.dogeos.L2_TX_FEE_VAULT_ADDR`, oldValue: productionYaml.metricsConfig.dogeos.L2_TX_FEE_VAULT_ADDR,
+              newValue: l2TxFeeVaultAddr
+            });
+            productionYaml.metricsConfig.dogeos.L2_TX_FEE_VAULT_ADDR = l2TxFeeVaultAddr;
+          }
+          if (productionYaml.metricsConfig.dogeos.L2_BRIDGE_FEE_RECIPIENT_ADDR != l2BridgeFeeRecipientAddr) {
+            updated = true;
+            changes.push({
+              key: `metricsConfig.dogeos.L2_BRIDGE_FEE_RECIPIENT_ADDR`, oldValue: productionYaml.metricsConfig.dogeos.L2_BRIDGE_FEE_RECIPIENT_ADDR,
+              newValue: l2BridgeFeeRecipientAddr
+            });
+            productionYaml.metricsConfig.dogeos.L2_BRIDGE_FEE_RECIPIENT_ADDR = l2BridgeFeeRecipientAddr;
           }
         }
       }
