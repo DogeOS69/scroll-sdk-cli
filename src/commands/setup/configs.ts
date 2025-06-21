@@ -22,7 +22,7 @@ export default class SetupConfigs extends Command {
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --image-tag gen-configs-v0.1.0',
+    '<%= config.bin %> <%= command.id %> --image-tag gen-configs-c94e1a901a9e4e98d83828bb1b2eda3c76d42333',
     '<%= config.bin %> <%= command.id %> --configs-dir ./configs-override',
   ]
 
@@ -70,6 +70,9 @@ export default class SetupConfigs extends Command {
 
     this.log(chalk.blue('Checking L1_FEE_VAULT_ADDR...'))
     await this.updateL1FeeVaultAddr()
+
+    this.log(chalk.blue('Checking L2_BRIDGE_FEE_RECIPIENT_ADDR...'))
+    await this.updateL2BridgeFeeRecipientAddr()
 
     this.log(chalk.blue('Checking L1_PLONK_VERIFIER_ADDR...'))
     await this.updateL1PlonkVerifierAddr()
@@ -443,7 +446,7 @@ export default class SetupConfigs extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'gen-configs-ae647993c907ff52824d8dc3cb27f5d0c38e4a7a'
+    const defaultTag = 'gen-configs-c94e1a901a9e4e98d83828bb1b2eda3c76d42333'
 
     if (!providedTag) {
       return defaultTag
@@ -837,6 +840,45 @@ export default class SetupConfigs extends Command {
       }
     } else {
       this.log(chalk.yellow('L1_FEE_VAULT_ADDR not updated'))
+    }
+  }
+
+  private async updateL2BridgeFeeRecipientAddr(): Promise<void> {
+    const configPath = path.join(process.cwd(), 'config.toml')
+    if (!fs.existsSync(configPath)) {
+      this.log(chalk.yellow('config.toml not found. Skipping L2_BRIDGE_FEE_RECIPIENT_ADDR update.'))
+      return
+    }
+
+    const configContent = fs.readFileSync(configPath, 'utf8')
+    const config = toml.parse(configContent)
+
+    const defaultAddr = (config.contracts as any)?.L2_BRIDGE_FEE_RECIPIENT_ADDR || "0x0000000000000000000000000000000000000000"
+
+    let isValidAddress = false
+    let newAddr = ''
+
+    while (!isValidAddress) {
+      newAddr = await input({
+        default: defaultAddr,
+        message: 'Please enter the L2_BRIDGE_FEE_RECIPIENT_ADDR:',
+      })
+
+      if (ethers.isAddress(newAddr)) {
+        isValidAddress = true
+      } else {
+        this.log(chalk.red('Invalid Ethereum address. Please try again.'))
+      }
+    }
+
+    if (!config.contracts) {
+      config.contracts = {}
+    }
+
+    ; (config.contracts as any).L2_BRIDGE_FEE_RECIPIENT_ADDR = newAddr
+
+    if (writeConfigs(config)) {
+      this.log(chalk.green(`L2_BRIDGE_FEE_RECIPIENT_ADDR updated in config.toml to "${newAddr}"`))
     }
   }
 
