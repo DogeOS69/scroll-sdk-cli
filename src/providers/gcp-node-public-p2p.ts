@@ -1,14 +1,14 @@
 import chalk from 'chalk'
-import type { NodeStaticIPProvider } from './aws-node-public-p2p.js'
+import type { NodeLBProvider } from './aws-node-public-p2p.js'
 
-export class GCPNodeStaticIPProvider implements NodeStaticIPProvider {
+export class GCPNodeStaticIPProvider implements NodeLBProvider {
   async checkPrerequisites(): Promise<boolean> {
     console.log(chalk.blue('Checking GCP prerequisites...'));
     console.log(chalk.red('GCP provider is not yet implemented'));
     return false;
   }
 
-  async setupStaticIP(flags: any, bootnodeCount: number): Promise<string[]> {
+  async setupLb(flags: any, bootnodeCount: number): Promise<string[]> {
     console.log(chalk.blue('Starting GCP Node Static IP Setup...'));
     console.log(chalk.blue(`Will setup static IPs for ${bootnodeCount} bootnode(s)`));
     console.log(chalk.red('GCP provider is not yet implemented'));

@@ -5,7 +5,7 @@ import * as path from 'node:path'
 import * as toml from '@iarna/toml'
 import chalk from 'chalk'
 import {
-  AWSNodeStaticIPProvider,
+  AWSNodeLBProvider,
   GCPNodeStaticIPProvider,
   SUPPORTED_PROVIDERS,
   PROVIDER_DISPLAY_NAMES,
@@ -57,17 +57,15 @@ export default class SetupBootnodeStaticIP extends Command {
     this.log('It configures static IPs and LoadBalancer services to ensure consistent peer discovery from outside the cluster.')
     this.log('')
 
-    const confirmation = await confirm({
-      message: `This command is intended for development use only. 
-Production environments may require more complex network configuration.
-Do you want to continue?`,
-      default: false
-    })
+    // const confirmation = await confirm({
+    //   message: `Do you want to continue?`,
+    //   default: false
+    // })
     
-    if (!confirmation) {
-      this.log(chalk.yellow('Exiting...'))
-      return;
-    }
+    // if (!confirmation) {
+    //   this.log(chalk.yellow('Exiting...'))
+    //   return;
+    // }
 
     // Provider selection
     let provider = flags.provider as SupportedProvider
@@ -114,7 +112,7 @@ Do you want to continue?`,
       }
 
       // Actually perform the static IP setup
-      const bootnodeDomains = await providerInstance.setupStaticIP(flags, bootnodeCount)
+      await providerInstance.setupLb(flags, bootnodeCount)
     } catch (error) {
       this.log('')
       this.log(chalk.red('❌ Bootnode P2P network setup failed:'))
@@ -126,7 +124,7 @@ Do you want to continue?`,
   private getProviderInstance(provider: SupportedProvider) {
     switch (provider) {
       case 'aws':
-        return new AWSNodeStaticIPProvider()
+        return new AWSNodeLBProvider()
       case 'gcp':
         return new GCPNodeStaticIPProvider()
       default:
