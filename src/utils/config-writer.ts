@@ -133,22 +133,14 @@ export function writeConfigs(
         }
         removeNodeKeys(publicConfig)
 
-        // --- Atomic Write Logic ---
-        const tempConfigPath = mainConfigPath + '.tmp';
-
-        // 1. Write the updated main config to a temporary file
-        fs.writeFileSync(tempConfigPath, mainConfigStringToWrite);
-        console.log(chalk.green(`Main config written to temporary file: ${tempConfigPath}`));
+        fs.writeFileSync(mainConfigPath, mainConfigStringToWrite);
+        console.log(chalk.green(`Main config updated: ${mainConfigPath}`));
 
         // 2. Write the public config
         fs.writeFileSync(publicConfigPath, toml.stringify(publicConfig as any))
-        console.log(chalk.green(`Public configuration synced to ${publicConfigPath}`))
+        console.log(chalk.green(`Public configuration synced to ${publicConfigPath}`));
 
-        // 3. If public sync is successful, rename temp file to actual config file
-        fs.renameSync(tempConfigPath, mainConfigPath);
-        console.log(chalk.green(`Main config file renamed from ${tempConfigPath} to ${mainConfigPath}`));
-
-        return true // Both writes and rename succeeded
+        return true
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error)
         console.error(chalk.red(`Error syncing public config: ${errorMessage}`))

@@ -22,15 +22,30 @@ class AWSSecretService implements SecretService {
   async pushSecrets(cubesignerOnly: boolean = false): Promise<void> {
     const secretsDir = path.join(process.cwd(), 'secrets');
 
+    if (cubesignerOnly) {
+      // Only process cubesigner-signer-N-session.json files
+      const sessionFiles = fs.readdirSync(secretsDir).filter((file) =>
+        file.match(/^cubesigner-signer-\d+-session\.json$/)
+      );
+
+      if (sessionFiles.length === 0) {
+        console.log(chalk.yellow('No cubesigner-signer-N-session.json files found in secrets directory'))
+        return
+      }
+
+      for (const file of sessionFiles) {
+        const secretName = path.basename(file, '.json')
+        console.log(chalk.cyan(`Processing CubeSigner session secret: ${secretName}`))
+        const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
+        await this.createOrUpdateSecret({ 'session.json': content }, secretName)
+      }
+      return
+    }
+
     // Process JSON files
     const jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json'));
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
-
-      // Filter for CubeSigner files if cubesignerOnly is true
-      if (cubesignerOnly && !secretName.includes('cubesigner-signer-')) {
-        continue
-      }
 
       console.log(chalk.cyan(`Processing JSON secret: ${secretName}`))
       const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
@@ -58,56 +73,51 @@ class AWSSecretService implements SecretService {
 
     for (const file of envFiles) {
       const baseName = path.basename(file, '.env')
-
-      // Filter for CubeSigner files if cubesignerOnly is true
-      if (cubesignerOnly && !baseName.includes('cubesigner-signer-')) {
-        // Skip l2-sequencer files when cubesignerOnly is true
-        if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
-          continue
-        }
-        // Skip other non-cubesigner files
-        if (!baseName.includes('cubesigner-signer-')) {
-          continue
-        }
-      }
+      const secretName = `${baseName}-env`
+      console.log(chalk.cyan(`Processing ENV secret: ${secretName}`))
+      const data = await this.convertEnvToDict(path.join(secretsDir, file))
+      await this.createOrUpdateSecret(data, secretName)
 
       // Special handling for l2-sequencer-N-secret.env files
-      if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
-        const sequencerIndex = baseName.match(/l2-sequencer-(\d+)-secret/)?.[1] || '0'
-        const secretName = `l2-sequencer-secret-${sequencerIndex}-env`
+      // if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
+      //   const sequencerIndex = baseName.match(/l2-sequencer-(\d+)-secret/)?.[1] || '0'
 
-        console.log(chalk.cyan(`Processing L2 Sequencer secret: ${secretName}`))
-        const data = await this.convertEnvToDict(path.join(secretsDir, file))
-        await this.createOrUpdateSecret(data, secretName)
+      //   // we should use unified secret name for all sequencer instances like CHARTNAME-N-SECRET-ENV for mutilple instances
+      //   const secretName = `l2-sequencer-${sequencerIndex}-secret-env`
 
-        // Also add to combined secret with index suffix for backward compatibility
-        for (const [key, value] of Object.entries(data)) {
-          // If key already has index suffix, use it as is, otherwise add index suffix
-          if (key.endsWith(`_${sequencerIndex}`)) {
-            l2SequencerSecrets[key] = value
-          } else {
-            l2SequencerSecrets[`${key}_${sequencerIndex}`] = value
-          }
-        }
-      } else {
+      //   console.log(chalk.cyan(`Processing L2 Sequencer secret: ${secretName}`))
+      //   const data = await this.convertEnvToDict(path.join(secretsDir, file))
+      //   await this.createOrUpdateSecret(data, secretName)
 
-        //`secretName` is env file name. And the path of this secret is prefix/secretName
-        // foo.env
-        // prefix: hello
-        // external manager file path: hello/foo-env
+      //   // Also add to combined secret with index suffix for backward compatibility
+      //   for (const [key, value] of Object.entries(data)) {
+      //     // If key already has index suffix, use it as is, otherwise add index suffix
+      //     if (key.endsWith(`_${sequencerIndex}`)) {
+      //       l2SequencerSecrets[key] = value
+      //     } else {
+      //       l2SequencerSecrets[`${key}_${sequencerIndex}`] = value
+      //     }
+      //   }
+      // } else 
+      // {
+      //   //`secretName` is env file name. And the path of this secret is prefix/secretName
+      //   // foo.env
+      //   // prefix: hello
+      //   // external manager file path: hello/foo-env
 
-        const secretName = `${baseName}-env`
-        console.log(chalk.cyan(`Processing ENV secret: ${secretName}`))
-        const data = await this.convertEnvToDict(path.join(secretsDir, file))
-        await this.createOrUpdateSecret(data, secretName)
-      }
+      //   const secretName = `${baseName}-env`
+      //   console.log(chalk.cyan(`Processing ENV secret: ${secretName}`))
+      //   const data = await this.convertEnvToDict(path.join(secretsDir, file))
+      //   await this.createOrUpdateSecret(data, secretName)
+      // }
+
     }
 
-    // Push combined L2 Sequencer secrets (only if not cubesignerOnly)
-    if (Object.keys(l2SequencerSecrets).length > 0 && !cubesignerOnly) {
-      console.log(chalk.cyan(`Processing combined L2 Sequencer secrets: l2-sequencer-secret-env`))
-      await this.createOrUpdateSecret(l2SequencerSecrets, 'l2-sequencer-secret-env')
-    }
+    // Push combined L2 Sequencer secrets
+    // if (Object.keys(l2SequencerSecrets).length > 0) {
+    //   console.log(chalk.cyan(`Processing combined L2 Sequencer secrets: l2-sequencer-secret-env`))
+    //   await this.createOrUpdateSecret(l2SequencerSecrets, 'l2-sequencer-secret-env')
+    // }
   }
 
   private async convertEnvToDict(filePath: string): Promise<Record<string, string>> {
@@ -278,19 +288,34 @@ class HashicorpVaultDevService implements SecretService {
 
     const secretsDir = path.join(process.cwd(), 'secrets');
 
-    if (!cubesignerOnly) {
-      await this.processRollupExplorerBackendConfigSecret(secretsDir);
+    if (cubesignerOnly) {
+      // Only process cubesigner-signer-N-session.json files
+      const sessionFiles = fs.readdirSync(secretsDir).filter((file) =>
+        file.match(/^cubesigner-signer-\d+-session\.json$/)
+      );
+
+      if (sessionFiles.length === 0) {
+        console.log(chalk.yellow('No cubesigner-signer-N-session.json files found in secrets directory'))
+        return
+      }
+
+      for (const file of sessionFiles) {
+        const secretName = path.basename(file, '.json')
+        console.log(chalk.cyan(`Processing CubeSigner session secret: ${this.pathPrefix}/${secretName}`))
+        const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
+        await this.pushJsonToVault(secretName, content, 'session.json')
+      }
+
+      console.log(chalk.green('All CubeSigner session secrets have been processed and populated in Vault.'))
+      return
     }
+
+    await this.processRollupExplorerBackendConfigSecret(secretsDir);
 
     // Process JSON files
     const jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json') && file !== 'rollup-explorer-backend-secret.json');
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
-
-      // Filter for CubeSigner files if cubesignerOnly is true
-      if (cubesignerOnly && !secretName.includes('cubesigner-signer-')) {
-        continue
-      }
 
       console.log(chalk.cyan(`Processing JSON secret: ${this.pathPrefix}/${secretName}`))
       const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
@@ -310,54 +335,47 @@ class HashicorpVaultDevService implements SecretService {
 
     // Process ENV files
     const envFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.env'))
-    const l2SequencerSecrets: Record<string, string> = {}
+    // const l2SequencerSecrets: Record<string, string> = {}
 
     for (const file of envFiles) {
       const baseName = path.basename(file, '.env')
+      const secretName = `${baseName}-env`
+      console.log(chalk.cyan(`Processing ENV secret: ${this.pathPrefix}/${secretName}`))
+      const data = await this.convertEnvToDict(path.join(secretsDir, file))
+      await this.pushToVault(secretName, data)
 
-      // Filter for CubeSigner files if cubesignerOnly is true
-      if (cubesignerOnly && !baseName.includes('cubesigner-signer-')) {
-        // Skip l2-sequencer files when cubesignerOnly is true
-        if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
-          continue
-        }
-        // Skip other non-cubesigner files
-        if (!baseName.includes('cubesigner-signer-')) {
-          continue
-        }
-      }
-
+      // I don't know why combine all sequencer secrets, but it is not safe to do so, so I just comment it out
       // Special handling for l2-sequencer-N-secret.env files
-      if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
-        const sequencerIndex = baseName.match(/l2-sequencer-(\d+)-secret/)?.[1] || '0'
-        const secretName = `l2-sequencer-secret-${sequencerIndex}-env`
+      // if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
+      //   const sequencerIndex = baseName.match(/l2-sequencer-(\d+)-secret/)?.[1] || '0'
+      //   const secretName = `l2-sequencer-${sequencerIndex}-secret-env`
 
-        console.log(chalk.cyan(`Processing L2 Sequencer secret: ${this.pathPrefix}/${secretName}`))
-        const data = await this.convertEnvToDict(path.join(secretsDir, file))
-        await this.pushToVault(secretName, data)
+      //   console.log(chalk.cyan(`Processing L2 Sequencer secret: ${this.pathPrefix}/${secretName}`))
+      //   const data = await this.convertEnvToDict(path.join(secretsDir, file))
+      //   await this.pushToVault(secretName, data)
 
-        // Also add to combined secret with index suffix for backward compatibility
-        for (const [key, value] of Object.entries(data)) {
-          // If key already has index suffix, use it as is, otherwise add index suffix
-          if (key.endsWith(`_${sequencerIndex}`)) {
-            l2SequencerSecrets[key] = value
-          } else {
-            l2SequencerSecrets[`${key}_${sequencerIndex}`] = value
-          }
-        }
-      } else {
-        const secretName = `${baseName}-env`
-        console.log(chalk.cyan(`Processing ENV secret: ${this.pathPrefix}/${secretName}`))
-        const data = await this.convertEnvToDict(path.join(secretsDir, file))
-        await this.pushToVault(secretName, data)
-      }
+      //   // Also add to combined secret with index suffix for backward compatibility
+      //   for (const [key, value] of Object.entries(data)) {
+      //     // If key already has index suffix, use it as is, otherwise add index suffix
+      //     if (key.endsWith(`_${sequencerIndex}`)) {
+      //       l2SequencerSecrets[key] = value
+      //     } else {
+      //       l2SequencerSecrets[`${key}_${sequencerIndex}`] = value
+      //     }
+      //   }
+      // } else {
+      //   const secretName = `${baseName}-env`
+      //   console.log(chalk.cyan(`Processing ENV secret: ${this.pathPrefix}/${secretName}`))
+      //   const data = await this.convertEnvToDict(path.join(secretsDir, file))
+      //   await this.pushToVault(secretName, data)
+      // }
     }
 
-    // Push combined L2 Sequencer secrets for backward compatibility (only if not cubesignerOnly)
-    if (Object.keys(l2SequencerSecrets).length > 0 && !cubesignerOnly) {
-      console.log(chalk.cyan(`Processing combined L2 Sequencer secrets: ${this.pathPrefix}/l2-sequencer-secret-env`))
-      await this.pushToVault('l2-sequencer-secret-env', l2SequencerSecrets)
-    }
+    // Push combined L2 Sequencer secrets for backward compatibility
+    // if (Object.keys(l2SequencerSecrets).length > 0) {
+    //   console.log(chalk.cyan(`Processing combined L2 Sequencer secrets: ${this.pathPrefix}/l2-sequencer-secret-env`))
+    //   await this.pushToVault('l2-sequencer-secret-env', l2SequencerSecrets)
+    // }
 
     console.log(chalk.green('All secrets have been processed and populated in Vault.'))
   }
@@ -621,6 +639,11 @@ export default class SetupPushSecrets extends Command {
       await service.pushSecrets(flags['cubesigner-only'])
       this.log(chalk.green('Secrets pushed successfully'))
 
+      if (flags['cubesigner-only']) {
+        this.log(chalk.blue('CubeSigner secret push process completed.'))
+        return;
+      }
+
       const shouldUpdateYaml = await confirm({
         message: chalk.cyan('Do you want to update the production YAML files with the new secret provider?'),
       })
@@ -645,8 +668,8 @@ export default class SetupPushSecrets extends Command {
         message: chalk.cyan('Enter a path prefix for AWS Secrets Manager (e.g., my-app/staging or dogeos/testnet):'),
       }),
       secretRegion: await input({
-        default: 'us-west-2',
-        message: chalk.cyan('Enter AWS secret region:'),
+        default: '',
+        message: chalk.cyan('Enter AWS secret region(e.g.,us-east-1):'),
       }),
       serviceAccount: await input({
         message: chalk.cyan('Enter AWS iam service account:'),
@@ -687,6 +710,76 @@ export default class SetupPushSecrets extends Command {
     }
   }
 
+  private async readCubeSignerConfigFromYaml(): Promise<Record<string, string>> {
+    const valuesDir = path.join(process.cwd(), 'values', 'values')
+    if (!fs.existsSync(valuesDir)) {
+      this.error(chalk.red(`Values directory not found at ${valuesDir}`))
+    }
+
+    // Find cubesigner-signer-production-N.yaml files
+    const cubesignerFiles = fs
+      .readdirSync(valuesDir)
+      .filter((file) => file.match(/^cubesigner-signer-production-\d+\.yaml$/))
+
+    if (cubesignerFiles.length === 0) {
+      this.error(chalk.red('No cubesigner-signer-production-N.yaml files found in values/values directory'))
+    }
+
+    // Read the first found file
+    const yamlFile = cubesignerFiles[0]
+    const yamlPath = path.join(valuesDir, yamlFile)
+    this.log(chalk.cyan(`Reading configuration from ${yamlFile}`))
+
+    const content = fs.readFileSync(yamlPath, 'utf8')
+    const yamlContent = yaml.load(content) as any
+
+    if (!yamlContent.externalSecrets) {
+      this.error(chalk.red(`No externalSecrets found in ${yamlFile}`))
+    }
+
+    // Find cubesigner-signer-N-session configuration
+    const sessionSecretKey = Object.keys(yamlContent.externalSecrets).find(key =>
+      key.match(/^cubesigner-signer-\d+-session$/)
+    )
+
+    if (!sessionSecretKey) {
+      this.error(chalk.red(`No cubesigner-signer-N-session found in externalSecrets of ${yamlFile}`))
+    }
+
+    const sessionSecret = yamlContent.externalSecrets[sessionSecretKey]
+
+    // Parse configuration
+    const config: Record<string, string> = {
+      provider: sessionSecret.provider
+    }
+
+    if (sessionSecret.provider === 'aws') {
+      config.serviceAccount = sessionSecret.serviceAccount || 'external-secrets'
+      config.secretRegion = sessionSecret.secretRegion || 'us-west-2'
+
+      // Parse prefixName from remoteRef.key
+      const data = sessionSecret.data?.[0]
+      if (data?.remoteRef?.key) {
+        const keyParts = data.remoteRef.key.split('/')
+        if (keyParts.length > 1) {
+          config.prefixName = keyParts[0]
+        } else {
+          config.prefixName = 'dogeos'
+        }
+      } else {
+        config.prefixName = 'dogeos'
+      }
+    } else if (sessionSecret.provider === 'vault') {
+      config.server = sessionSecret.server || 'http://vault.default.svc.cluster.local:8200'
+      config.path = sessionSecret.path || 'scroll'
+      config.version = sessionSecret.version || 'v2'
+      config.tokenSecretName = sessionSecret.tokenSecretName || 'vault-token'
+      config.tokenSecretKey = sessionSecret.tokenSecretKey || 'token'
+    }
+
+    return config
+  }
+
   private async updateProductionYaml(provider: string, credentials: Record<string, string>): Promise<void> {
     const valuesDir = path.join(process.cwd(), this.flags['values-dir'])
     if (!fs.existsSync(valuesDir)) {
@@ -705,8 +798,8 @@ export default class SetupPushSecrets extends Command {
       this.log(chalk.cyan(`Processing ${yamlFile}`))
 
       // Extract sequencer index from filename if it matches the pattern
-      const sequencerMatch = yamlFile.match(/l2-sequencer-production-(\d+)\.yaml$/)
-      const sequencerIndex = sequencerMatch ? sequencerMatch[1] : null
+      // const sequencerMatch = yamlFile.match(/l2-sequencer-production-(\d+)\.yaml$/)
+      // const sequencerIndex = sequencerMatch ? sequencerMatch[1] : null
 
       const content = fs.readFileSync(yamlPath, 'utf8')
       const yamlContent = yaml.load(content) as any
@@ -752,21 +845,8 @@ export default class SetupPushSecrets extends Command {
           // Update remoteRef.key
           for (const dataItem of secret.data) {
             if (dataItem.remoteRef && dataItem.remoteRef.key) {
-              // Keep the standard combined path format
-              let updatedKey = ''
-              if (/^l2-sequencer-secret-\d+-env$/.test(secretName)) {
-                updatedKey = prefixName ? `${prefixName}/l2-sequencer-secret-env` : 'l2-sequencer-secret-env'
-              } else if (/^cubesigner-signer-\d+-env$/.test(secretName)) {
-                updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
-              } else if (/^cubesigner-signer-\d+-session$/.test(secretName)) {
-                updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
-                if (dataItem.secretKey === 'session.json') {
-                  dataItem.remoteRef.property = 'session.json'
-                  updated = true
-                }
-              }
-              else {
-                /*
+              const updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
+              /*
                 externalSecrets:
                   YOUR_SECRET_NAME:
                     provider: "aws"
@@ -775,9 +855,14 @@ export default class SetupPushSecrets extends Command {
                           key: "prefix/SECRET_PATH_OF_EXTERNAL_MANAGER"
                           property: "property_KEY"
                         secretKey: "SECRET_KEY"
-                */
-                updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
+            */
+              if (/^cubesigner-signer-\d+-session$/.test(secretName)) {
+                if (dataItem.secretKey === 'session.json') {
+                  dataItem.remoteRef.property = 'session.json'
+                  updated = true
+                }
               }
+
               // Only update if the key has changed
               if (dataItem.remoteRef.key !== updatedKey) {
                 dataItem.remoteRef.key = updatedKey

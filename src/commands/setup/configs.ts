@@ -83,6 +83,21 @@ export default class SetupConfigs extends Command {
     this.log(chalk.blue('Running docker command to generate configs...'))
     await this.runDockerCommand(imageTag)
 
+    let parsedPublicConfig: any = {}
+    const publicConfigPath = path.join(process.cwd(), 'config.public.toml')
+    if (fs.existsSync(publicConfigPath)) {
+      try {
+        const publicConfigContent = fs.readFileSync(publicConfigPath, 'utf8')
+        parsedPublicConfig = toml.parse(publicConfigContent)
+        this.log(chalk.green('Successfully parsed config.public.toml'))
+      } catch (error: any) {
+        this.error(chalk.red(`Failed to parse config.public.toml: ${error.message}`))
+        // Optionally, decide if we should exit if parsing fails
+      }
+    } else {
+      this.log(chalk.yellow('config.public.toml not found after docker command. Skipping .env generation for docker-compose.'))
+    }
+
     this.log(chalk.blue('Creating secrets folder...'))
     this.createSecretsFolder()
 
@@ -133,7 +148,9 @@ export default class SetupConfigs extends Command {
       'contracts',
       'l2-bootnode',
       'dogecoin',
+      'testnet-activity-helper',
       'dogeos-deposit-processor',
+      'dogecoin',
       'withdrawal-processor',
       'metrics-exporter',
       'celestia-node',
@@ -328,6 +345,9 @@ export default class SetupConfigs extends Command {
         'ROLLUP_EXPLORER_DB_CONNECTION_STRING:ROLLUP_EXPLORER_DB_CONNECTION_STRING',
         'COORDINATOR_JWT_SECRET_KEY:COORDINATOR_JWT_SECRET_KEY'
       ],
+      'testnet-activity-helper': [
+        'L2_TESTNET_ACTIVITY_HELPER_PRIVATE_KEY:private-key',
+      ],
     }
 
     const envFiles: { [key: string]: string } = {}
@@ -344,7 +364,7 @@ export default class SetupConfigs extends Command {
         for (const pair of mapping[service] || []) {
           const [envKey, configKey] = pair.split(':')
           if (sequencerConfig[configKey]) {
-            content += `${envKey}_${sequencerIndex}="${sequencerConfig[configKey]}"\n`
+            content += `${envKey}="${sequencerConfig[configKey]}"\n`
           }
         }
 
@@ -390,8 +410,9 @@ export default class SetupConfigs extends Command {
           content += `${envKey}="${config.sequencer[configKey]}"\n`
         }
       }
-
-      envFiles[`${service}-secret.env`] = content
+      if (content.length > 0) {
+        envFiles[`${service}-secret.env`] = content
+      }
     }
 
     if (service === 'dogeos-deposit-processor') {

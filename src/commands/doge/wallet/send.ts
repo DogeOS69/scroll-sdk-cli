@@ -97,7 +97,7 @@ export default class WalletSend extends Command {
         flags['doge-config'],
         'scrollsdk doge:config'
       )
- 
+
       this.log(chalk.blue(`Using network: ${config.network} (from ${flags.config})`))
 
       const currentBitcoreNetwork: typeof Networks.livenet = this.getBitcoreNetwork(config.network)

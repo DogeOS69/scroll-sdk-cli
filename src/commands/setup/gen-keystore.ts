@@ -87,6 +87,22 @@ export default class SetupGenKeystore extends Command {
     return `enode://${publicKeyNoPrefix}@l2-sequencer-${index}:30303`
   }
 
+  private getBootnodeEnodeUrl(nodekey: string, index: number): string {
+    // Remove '0x' prefix if present
+    nodekey = nodekey.startsWith('0x') ? nodekey.slice(2) : nodekey;
+
+    // Create a Wallet instance from the private key
+    const wallet = new ethers.Wallet(nodekey);
+
+    // Get the public key
+    const publicKey = wallet.signingKey.publicKey;
+
+    // Remove '0x04' prefix from public key
+    const publicKeyNoPrefix = publicKey.slice(4);
+
+    return `enode://${publicKeyNoPrefix}@l2-bootnode-${index}:30303`
+  }
+
   private generateKeyPair(): KeyPair {
     const wallet = Wallet.createRandom()
     return {
@@ -153,6 +169,9 @@ export default class SetupGenKeystore extends Command {
         })
       } else if (key === 'bootnode') {
         updatedConfig[key] = value || {}
+        
+        const bootnodeEnodeUrls = bootnodeData.map((data, index) => this.getBootnodeEnodeUrl(data.nodekey, index))
+        updatedConfig[key].L2_GETH_PUBLIC_PEERS = bootnodeEnodeUrls
 
         // If overwriting, remove all existing bootnode subsections
         if (overwriteBootnodes) {
@@ -453,48 +472,59 @@ export default class SetupGenKeystore extends Command {
         })
       }
     }
-
+    
     let accounts: Record<string, KeyPair> = {}
+
     if (flags.accounts) {
+      
+      const accountTypes = [];
       const generateAccounts = await confirm({
         message: 'Do you want to generate account key pairs?',
         default: true,
       })
+      let isTestnetActivityHelper = await confirm({
+        message: 'Do you want to generate a private key for the Testnet Activity Helper?',
+        default: true,
+      }) as boolean
+
+      if (isTestnetActivityHelper) {
+        accountTypes.push('L2_TESTNET_ACTIVITY_HELPER')
+      }
 
       if (generateAccounts) {
         this.log(chalk.blue('Generating account key pairs...'))
-        const accountTypes = ['DEPLOYER', 'L1_COMMIT_SENDER', 'L1_FINALIZE_SENDER', 'L1_GAS_ORACLE_SENDER', 'L2_GAS_ORACLE_SENDER']
-
-        for (const accountType of accountTypes) {
-          if (!existingConfig.accounts?.[`${accountType}_PRIVATE_KEY`]) {
-            accounts[accountType] = this.generateKeyPair()
-          } else {
-            accounts[accountType] = {
-              privateKey: existingConfig.accounts[`${accountType}_PRIVATE_KEY`],
-              address: existingConfig.accounts[`${accountType}_ADDR`],
-            }
-          }
-        }
-
-        const ownerAddress = await this.getOwnerAddress(existingConfig.accounts?.OWNER_ADDR)
-        if (ownerAddress) {
-          accounts.OWNER = { privateKey: '', address: ownerAddress }
-        } else {
-          accounts.OWNER = this.generateKeyPair()
-          this.log(chalk.yellow('\n⚠️  IMPORTANT: Randomly generated Owner wallet'))
-          this.log(chalk.yellow('Owner private key will not be stored in config.toml'))
-          this.log(chalk.yellow('Please store this private key in a secure place:'))
-          this.log(chalk.red(`OWNER_PRIVATE_KEY: ${accounts.OWNER.privateKey}`))
-          this.log(chalk.yellow('You will need this key for future operations!\n'))
-        }
-
-        // Display public addresses
-        this.log(chalk.cyan('\nGenerated public addresses:'))
-        for (const [key, value] of Object.entries(accounts)) {
-          this.log(chalk.cyan(`${key}_ADDR: ${value.address}`))
-        }
+        accountTypes.push('DEPLOYER', 'L1_COMMIT_SENDER', 'L1_FINALIZE_SENDER', 'L1_GAS_ORACLE_SENDER', 'L2_GAS_ORACLE_SENDER')
       } else {
         this.log(chalk.yellow('Skipping account key pair generation...'))
+      }
+
+      for (const accountType of accountTypes) {
+        if (!existingConfig.accounts?.[`${accountType}_PRIVATE_KEY`]) {
+          accounts[accountType] = this.generateKeyPair()
+        } else {
+          accounts[accountType] = {
+            privateKey: existingConfig.accounts[`${accountType}_PRIVATE_KEY`],
+            address: existingConfig.accounts[`${accountType}_ADDR`],
+          }
+        }
+      }
+
+      const ownerAddress = await this.getOwnerAddress(existingConfig.accounts?.OWNER_ADDR)
+      if (ownerAddress) {
+        accounts.OWNER = { privateKey: '', address: ownerAddress }
+      } else {
+        accounts.OWNER = this.generateKeyPair()
+        this.log(chalk.yellow('\n⚠️  IMPORTANT: Randomly generated Owner wallet'))
+        this.log(chalk.yellow('Owner private key will not be stored in config.toml'))
+        this.log(chalk.yellow('Please store this private key in a secure place:'))
+        this.log(chalk.red(`OWNER_PRIVATE_KEY: ${accounts.OWNER.privateKey}`))
+        this.log(chalk.yellow('You will need this key for future operations!\n'))
+      }
+
+      // Display public addresses
+      this.log(chalk.cyan('\nGenerated public addresses:'))
+      for (const [key, value] of Object.entries(accounts)) {
+        this.log(chalk.cyan(`${key}_ADDR: ${value.address}`))
       }
     }
 
