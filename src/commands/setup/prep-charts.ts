@@ -784,9 +784,8 @@ export default class SetupPrepCharts extends Command {
       else if (chartName == "dogeos-da") {
         const todoMappings = {
           //TODO what if mainnet ?
-          "CELESTIA_URL": this.dogeConfig.network == "mainnet" ? "" : "celestia-testnet-mocha:26658",
-
-          "CELESTIA_NAMESPACE": this.dogeConfig.da?.daNamespace
+          "DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "celestia-testnet-mocha:26658",
+          "DOGEOS_DA_PUBLISHER_CELESTIA_NAMESPACE": this.dogeConfig.da?.daNamespace
         }
 
         for (const [envKey, newValue] of Object.entries(todoMappings)) {
