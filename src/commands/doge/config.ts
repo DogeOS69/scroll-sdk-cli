@@ -83,6 +83,101 @@ export class DogeConfigCommand extends Command {
     return customBytes
   }
 
+  private async testRpcConnection(rpcUrl: string, username?: string, password?: string): Promise<number> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+
+    // Handle different RPC URL formats
+    if (rpcUrl.includes('nownodes.io')) {
+      // NowNodes API format - use getblock API
+      const infoUrl = `${rpcUrl.replace(/\/$/, '')}/`
+      
+      const response = await fetch(infoUrl, {
+        headers,
+        method: 'GET'
+      })
+      
+      if (!response.ok) {
+        throw new Error(`NowNodes API connection failed: ${response.status} ${response.statusText}`)
+      }
+      
+      const result = await response.json() as { blockbook: { bestHeight: number } }
+      if (result.blockbook && typeof result.blockbook.bestHeight === 'number') {
+        return result.blockbook.bestHeight
+      } else {
+        throw new Error('Unable to get block height from NowNodes API')
+      }
+    } else {
+      // Standard Dogecoin RPC format
+      if (username && password) {
+        const credentials = Buffer.from(`${username}:${password}`).toString('base64')
+        headers.Authorization = `Basic ${credentials}`
+      }
+
+      const body = JSON.stringify({
+        id: 'test',
+        jsonrpc: '1.0',
+        method: 'getblockcount',
+        params: [],
+      })
+
+      const response = await fetch(rpcUrl, {
+        body,
+        headers,
+        method: 'POST',
+      })
+
+      if (!response.ok) {
+        throw new Error(`RPC connection failed: ${response.status} ${response.statusText}`)
+      }
+
+      const result = await response.json() as { error?: { message: string; code: number }; result?: number }
+      
+      if (result.error) {
+        throw new Error(`RPC error: ${result.error.message} (Code: ${result.error.code})`)
+      }
+
+      if (typeof result.result === 'number') {
+        return result.result
+      }
+
+      throw new Error('RPC response did not contain valid block height')
+    }
+  }
+
+  private async getCelestiaLatestHeight(tendermintRpcUrl: string): Promise<number> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+
+    const response = await fetch(`${tendermintRpcUrl.replace(/\/$/, '')}/status`, {
+      headers,
+      method: 'GET'
+    })
+
+    if (!response.ok) {
+      throw new Error(`Celestia RPC connection failed: ${response.status} ${response.statusText}`)
+    }
+
+    const result = await response.json() as {
+      result?: {
+        sync_info?: {
+          latest_block_height?: string
+        }
+      }
+    }
+
+    if (result.result?.sync_info?.latest_block_height) {
+      const height = parseInt(result.result.sync_info.latest_block_height, 10)
+      if (!isNaN(height)) {
+        return height
+      }
+    }
+
+    throw new Error('Unable to get latest block height from Celestia RPC')
+  }
+
   async run(): Promise<void> {
     const { flags } = await this.parse(DogeConfigCommand)
 
@@ -199,7 +294,7 @@ export class DogeConfigCommand extends Command {
 
     let generateClusterRpc = await confirm({
       message: `Do you want to automatically generate secure credentials for your Dogecoin RPC service that will be deployed?\n  (These will be used to authenticate access to your Dogecoin nodes)\n  Choose 'Yes' to auto-generate, 'No' to set manually`,
-      default: true,
+      default: false,
     })
     if (!generateClusterRpc) {
       newConfig.dogecoinClusterRpc!.username = await input({
@@ -238,11 +333,43 @@ export class DogeConfigCommand extends Command {
       message: `Enter RPC password (leave empty for public RPC endpoints):`,
     });
 
+    this.log("testing external dogecoin rpc...")
+    
+    // Test RPC connection and get latest block height
+    let dogecoinCurrentHeight = 5000000;
+    try {
+      dogecoinCurrentHeight = await this.testRpcConnection(newConfig.rpc!.url!, newConfig.rpc!.username, newConfig.rpc!.password)
+      this.log(chalk.green(`✓ RPC connection test successful! Current block height: ${dogecoinCurrentHeight}`))
+    } catch (error) {
+      this.log(chalk.red(`✗ RPC connection test failed: ${error instanceof Error ? error.message : String(error)}`))
+      
+      const continueAnyway = await confirm({
+        message: 'RPC connection failed, continue with configuration anyway?',
+        default: false
+      })
+      
+      if (!continueAnyway) {
+        this.error('RPC connection failed, configuration cancelled')
+        return
+      }
+    }
+
     newConfig.da!.tendermintRpcUrl = await input({
       default: existingConfig.da?.tendermintRpcUrl,
       message: `Enter the Celestia Tendermint RPC URL (if known):`,
       required: false
     });
+
+    // Test Celestia RPC connection and get latest height
+    let celestiaCurrentHeight = parseInt(existingConfig.da?.celestiaIndexerStartBlock || '6158500')
+    if (newConfig.da!.tendermintRpcUrl) {
+      try {
+        celestiaCurrentHeight = await this.getCelestiaLatestHeight(newConfig.da!.tendermintRpcUrl)
+        this.log(chalk.green(`✓ Celestia RPC connection test successful! Current block height: ${celestiaCurrentHeight}`))
+      } catch (error) {
+        this.error(chalk.red(`✗ Celestia RPC connection test failed: ${error instanceof Error ? error.message : String(error)}`))
+      }
+    }
 
     // Handle Celestia namespace - auto-generate and show to user
     let suggestedNamespace = existingConfig.da?.daNamespace
@@ -418,14 +545,15 @@ export class DogeConfigCommand extends Command {
       this.log(chalk.cyan(`\n📝 Note: This address ${mnemonicChoice === 'generate' ? 'was just generated' : 'comes from your existing configuration'}`))
     }
 
+    
     newConfig.da!.celestiaIndexerStartBlock = String(await input({
-      default: String(existingConfig.da?.celestiaIndexerStartBlock || 0),
+      default: String(celestiaCurrentHeight),
       message: `Enter the Celestia Indexer Start Block:`,
       validate: (value) => !isNaN(Number(value)) ? true : 'Must be a valid number',
     }));
 
     newConfig.defaults!.dogecoinIndexerStartHeight = String(await input({
-      default: String(existingConfig.defaults?.dogecoinIndexerStartHeight || 4000000),
+      default: String(dogecoinCurrentHeight),
       message: `Enter the Dogecoin Indexer Start Height:`,
       validate: (value) => !isNaN(Number(value)) ? true : 'Must be a valid number',
     }));
