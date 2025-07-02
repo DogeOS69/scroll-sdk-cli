@@ -1088,7 +1088,7 @@ export default class SetupPrepCharts extends Command {
           
           //new config
           REACT_APP_ETH_SYMBOL: this.getConfigValue("frontend.ETH_SYMBOL"),
-          REACT_APP_BASE_CHAIN: this.getConfigValue("general.CHAIN_NAME_L1 "),
+          REACT_APP_BASE_CHAIN: this.getConfigValue("general.CHAIN_NAME_L1"),
           REACT_APP_CONNECT_WALLET_PROJECT_ID: this.getConfigValue("frontend.CONNECT_WALLET_PROJECT_ID"),
           REACT_APP_EXTERNAL_RPC_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_RPC_URI_L1"),
           REACT_APP_EXTERNAL_EXPLORER_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_EXPLORER_URI_L1"),
@@ -1097,7 +1097,7 @@ export default class SetupPrepCharts extends Command {
         let updated = false;
         for (const [key, newValue] of Object.entries(configUpdates)) {
           const oldValue = scrollConfigToml[key];
-          if (oldValue !== newValue) {
+          if (!oldValue || oldValue !== newValue) {
             changes.push({ key, oldValue: String(oldValue || ''), newValue: String(newValue) });
             scrollConfigToml[key] = newValue;
             updated = true;
