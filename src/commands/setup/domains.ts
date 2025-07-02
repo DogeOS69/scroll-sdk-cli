@@ -71,26 +71,20 @@ export default class SetupDomains extends Command {
 
     const generalConfig: Record<string, string> = {}
     let domainConfig: Record<string, string> = {}
+    let frontendConfig: Record<string, string> = {}
+
     const usesAnvil = l1Network === 'anvil'
 
     if (l1Network === 'other' || l1Network === 'anvil') {
       generalConfig.CHAIN_NAME_L1 = await input({
-        default: l1Network === 'anvil' ? 'Anvil L1' : existingConfig.general?.CHAIN_NAME_L1 || 'Custom L1',
+        default: existingConfig.general?.CHAIN_NAME_L1 || 'Custom L1',
         message: 'Enter the L1 Chain Name:',
       })
       generalConfig.CHAIN_ID_L1 = await input({
-        default: l1Network === 'anvil' ? '111111' : existingConfig.general?.CHAIN_ID_L1 || '',
+        default: existingConfig.general?.CHAIN_ID_L1 || '',
         message: 'Enter the L1 Chain ID:',
       })
       if (l1Network !== 'anvil') {
-        domainConfig.EXTERNAL_EXPLORER_URI_L1 = await input({
-          default: existingConfig.frontend?.EXTERNAL_EXPLORER_URI_L1 || '',
-          message: 'Enter the L1 Explorer URL:',
-        })
-        domainConfig.EXTERNAL_RPC_URI_L1 = await input({
-          default: existingConfig.frontend?.EXTERNAL_RPC_URI_L1 || '',
-          message: 'Enter the L1 Public RPC URL:',
-        })
       }
     } else {
       generalConfig.CHAIN_NAME_L1 = l1Network.charAt(0).toUpperCase() + l1Network.slice(1)
@@ -98,6 +92,13 @@ export default class SetupDomains extends Command {
       domainConfig.EXTERNAL_EXPLORER_URI_L1 = l1ExplorerUrls[l1Network]!
       domainConfig.EXTERNAL_RPC_URI_L1 = l1RpcUrls[l1Network]!
     }
+
+    generalConfig.CHAIN_NAME_L2 = await (input({
+      default: existingConfig.general?.CHAIN_NAME_L2 || 'Custom L2',
+      message: 'Enter the L2 Chain Name:',
+    }));
+
+
 
     this.logInfo(`Using ${chalk.bold(generalConfig.CHAIN_NAME_L1)} network:`)
     if (l1Network !== 'anvil') {
@@ -171,11 +172,33 @@ export default class SetupDomains extends Command {
 
     }
 
+    //forntendConfig setup
+    frontendConfig.ETH_SYMBOL = await input({
+      default: existingConfig.frontend?.ETH_SYMBOL || 'DOGE',
+      message: 'Enter the L1 Chain Symbol:',
+    });
+
+    frontendConfig.CONNECT_WALLET_PROJECT_ID = await input({
+      default: existingConfig.frontend?.CONNECT_WALLET_PROJECT_ID || "14efbaafcf5232a47d93a68229b71028",
+      message: 'Enter wallet project ID:',
+    });
+
+    // EXTERNAL_RPC_URI_L1 is an anvil public rpc . too many code depends on it
+    frontendConfig.DOGE_EXTERNAL_RPC_URI_L1 = await input({
+      default: existingConfig.frontend?.DOGE_EXTERNAL_RPC_URI_L1 || "https://sochain.com/DOGETEST",
+      message: 'Enter the L1 Public RPC URL:',
+    });
+
+    frontendConfig.DOGE_EXTERNAL_EXPLORER_URI_L1 = await input({
+      default: existingConfig.frontend?.DOGE_EXTERNAL_EXPLORER_URI_L1 || "https://sochain.com/DOGETEST",
+      message: 'Enter the L1 Explorer URL:',
+    });
+
     const confirmUpdate = await confirm({
       message: 'Do you want to update the config.toml file with these new configurations?',
     })
     if (confirmUpdate) {
-      await this.updateConfigFile(domainConfig, ingressConfig, generalConfig)
+      await this.updateConfigFile(domainConfig, ingressConfig, generalConfig, frontendConfig)
     } else {
       this.logWarning('Configuration update cancelled.')
     }
@@ -301,6 +324,7 @@ export default class SetupDomains extends Command {
 
       const frontendAtRoot = await confirm({
         message: 'Do you want the frontends to be hosted at the root domain? (No will use a "portal" subdomain)',
+        default: false,
       })
 
       domainConfig = {
@@ -456,6 +480,7 @@ export default class SetupDomains extends Command {
     domainConfig: Record<string, string>,
     ingressConfig: Record<string, string>,
     generalConfig: Record<string, string>,
+    frontendConfig: Record<string, string>,
   ): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
     const existingConfig = await this.getExistingConfig()
@@ -476,6 +501,10 @@ export default class SetupDomains extends Command {
 
     for (const [key, value] of Object.entries(ingressConfig)) {
       existingConfig.ingress[key] = value
+    }
+
+    for (const [key, value] of Object.entries(frontendConfig)) {
+      existingConfig.frontend[key] = value
     }
 
     // Remove L1_DEVNET_HOST from ingress if not using Anvil
