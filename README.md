@@ -621,7 +621,7 @@ DESCRIPTION
 EXAMPLES
   $ scrollsdk setup configs
 
-  $ scrollsdk setup configs --image-tag gen-configs-c94e1a901a9e4e98d83828bb1b2eda3c76d42333
+  $ scrollsdk setup configs --image-tag gen-configs-68493b496b21d98bdf432395b817d026a2a41e79
 
   $ scrollsdk setup configs --configs-dir custom-configs
 ```
@@ -836,7 +836,7 @@ DESCRIPTION
 EXAMPLES
   $ scrollsdk setup verify-contracts
 
-  $ scrollsdk setup verify-contracts --image-tag verify-c94e1a901a9e4e98d83828bb1b2eda3c76d42333
+  $ scrollsdk setup verify-contracts --image-tag verify-68493b496b21d98bdf432395b817d026a2a41e79
 ```
 
 _See code: [src/commands/setup/verify-contracts.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.2/src/commands/setup/verify-contracts.ts)_

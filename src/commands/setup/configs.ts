@@ -22,7 +22,7 @@ export default class SetupConfigs extends Command {
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --image-tag gen-configs-c94e1a901a9e4e98d83828bb1b2eda3c76d42333',
+    '<%= config.bin %> <%= command.id %> --image-tag gen-configs-68493b496b21d98bdf432395b817d026a2a41e79',
     '<%= config.bin %> <%= command.id %> --configs-dir ./configs-override',
   ]
 
@@ -54,13 +54,20 @@ export default class SetupConfigs extends Command {
     this.log(chalk.blue(`Using configuration directory: ${configsDir}`))
 
     // Use the new common function to load config
-    const { config, configPath } = await loadDogeConfigWithSelection(
+    // const { config, configPath } = await loadDogeConfigWithSelection(
+    //   flags['doge-config'],
+    //   'scrollsdk doge:config'
+    // )
+
+    // this.dogeConfig = config
+
+    const dogeConfigResult = await loadDogeConfigWithSelection(
       flags['doge-config'],
       'scrollsdk doge:config'
     )
-
-    this.dogeConfig = config
-    this.log(chalk.blue(`Using Dogecoin config file: ${configPath}`))
+    
+    this.dogeConfig = dogeConfigResult.config
+    this.log(chalk.blue(`Using Dogecoin config file: ${dogeConfigResult.configPath}`))
 
     this.log(chalk.blue('Checking L1_CONTRACT_DEPLOYMENT_BLOCK...'))
     await this.updateL1ContractDeploymentBlock()
@@ -77,6 +84,7 @@ export default class SetupConfigs extends Command {
     this.log(chalk.blue('Checking L1_PLONK_VERIFIER_ADDR...'))
     await this.updateL1PlonkVerifierAddr()
 
+    await this.updateBaseFeePerGas();    
     // this.log(chalk.blue('Checking sequencer enode...'))
     // await this.updateSequencerEnode()
 
@@ -467,7 +475,7 @@ export default class SetupConfigs extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'gen-configs-c94e1a901a9e4e98d83828bb1b2eda3c76d42333'
+    const defaultTag = 'gen-configs-68493b496b21d98bdf432395b817d026a2a41e79'
 
     if (!providedTag) {
       return defaultTag
@@ -954,5 +962,26 @@ export default class SetupConfigs extends Command {
     } else {
       this.log(chalk.yellow('L1_PLONK_VERIFIER_ADDR not updated'))
     }
+  }
+
+  private async updateBaseFeePerGas(): Promise<void> {
+    const configPath = path.join(process.cwd(), 'config.toml')
+    if (!fs.existsSync(configPath)) {
+      this.log(chalk.yellow('config.toml not found. Skipping L1_PLONK_VERIFIER_ADDR update.'))
+      return
+    }
+    const configContent = fs.readFileSync(configPath, 'utf8')
+    const config = toml.parse(configContent)
+    
+    const newBaseFeePerGas = await input({
+      default: (config.genesis as any)?.BASE_FEE_PER_GAS,
+      message: "Enter baseFeePerGas"
+    })
+    
+    if (!config.genesis) {
+      config.genesis = {}
+    }
+    
+    ;(config.genesis as any).BASE_FEE_PER_GAS = newBaseFeePerGas
   }
 }

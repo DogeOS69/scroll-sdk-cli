@@ -192,6 +192,14 @@ export default class SetupPrepCharts extends Command {
     }
   }
 
+  private formatUrl(baseUrl: string, path: string = ''): string {
+    // Remove trailing slash from baseUrl
+    const cleanBase = baseUrl.replace(/\/+$/, '');
+    // Remove leading slash from path and ensure it starts with a single slash if not empty
+    const cleanPath = path ? '/' + path.replace(/^\/+/, '') : '';
+    return cleanBase + cleanPath;
+  }
+
 
   private async processMutipleInstance(valuesDir: string): Promise<{ updated: number; skipped: number }> {
     let names = [{
@@ -237,8 +245,10 @@ export default class SetupPrepCharts extends Command {
 
         const newYamlContent = templateContent.replace(/__INSTANCE_INDEX__/g, releaseIndex.toString());
 
-        fs.writeFileSync(destFilePath, newYamlContent);
-        updatedCharts++;
+        if (!fs.existsSync(destFilePath)) {
+          fs.writeFileSync(destFilePath, newYamlContent);
+          updatedCharts++;
+        }
         releaseIndex++
       }
     }
@@ -274,7 +284,7 @@ export default class SetupPrepCharts extends Command {
         for (const [configMapName, configMapData] of Object.entries(productionYaml.configMaps)) {
           if (configMapData && typeof configMapData === 'object' && 'data' in configMapData) {
             const envData = (configMapData as any).data
-            for (const [key, value] of Object.entries(envData)) {
+            for (const [key, oldValue] of Object.entries(envData)) {
               const configPathOrResolver = this.configMapping[key]
               if (configPathOrResolver) {
                 let configKey: string
@@ -295,8 +305,8 @@ export default class SetupPrepCharts extends Command {
                   } else {
                     newValue = String(configValue)
                   }
-                  if (newValue != value) {
-                    changes.push({ key, oldValue: JSON.stringify(value), newValue: newValue })
+                  if (newValue != oldValue) {
+                    changes.push({ key, oldValue: JSON.stringify(oldValue), newValue: newValue })
                     envData[key] = newValue
                     updated = true
                   }
@@ -475,15 +485,25 @@ export default class SetupPrepCharts extends Command {
           }
         }
 
-        //only enable tls if use command scrollsdk setup tls
-        // if (frontend?.ingress?.tls?.enabled) {
-        //   if (frontend.ingress.tls.enabled !== false) {
-        //     const oldValue = frontend.ingress.tls.enabled;
-        //     changes.push({ key: `frontend.ingress.tls.enabled`, oldValue: String(oldValue), newValue: "false" });
-        //     frontend.ingress.tls.enabled = false;
-        //     ingressUpdated = true;
-        //   }
-        // }
+        /*
+        NEXT_PUBLIC_NETWORK_ID: "221122420"
+        */
+        let oldNetworkName = frontend?.env?.NEXT_PUBLIC_NETWORK_NAME;
+        let newNetworkName = this.getConfigValue("general.CHAIN_NAME_L2");
+        if (!oldNetworkName || oldNetworkName != newNetworkName) {
+          changes.push({ key: `frontend.env.NEXT_PUBLIC_NETWORK_NAME`, oldValue: oldNetworkName, newValue: newNetworkName });
+          frontend.env.NEXT_PUBLIC_NETWORK_NAME = newNetworkName;
+          ingressUpdated = true;
+        }
+
+        let oldValue = frontend?.env?.NEXT_PUBLIC_NETWORK_ID;
+        let newValue = this.getConfigValue("general.CHAIN_ID_L2");
+        if (!oldValue || oldValue != this.getConfigValue("general.CHAIN_ID_L2")) {
+          changes.push({ key: `frontend.env.NEXT_PUBLIC_NETWORK_ID`, oldValue, newValue: newValue });
+          frontend.env.NEXT_PUBLIC_NETWORK_ID = newValue;
+          ingressUpdated = true;
+        }
+
 
         interface BlockscoutEnvMapping {
           key: string;
@@ -1059,23 +1079,37 @@ export default class SetupPrepCharts extends Command {
         try {
           scrollConfigToml = toml.parse(scrollConfig);
         } catch (e: any) {
-          this.log(chalk.red("scrollConfig failed: " + e.message));
+          this.error(chalk.red("scrollConfig failed: " + e.message));
+        }
+
+        let sharedHost = this.getConfigValue("ingress.FRONTEND_HOST")
+        if (sharedHost && sharedHost.startsWith("portal.")) {
+          sharedHost = sharedHost.substring(7)
         }
         const configUpdates = {
-          REACT_APP_EXTERNAL_DOCS_URI: "https://docs.dogeos.com/en/home",
-          REACT_APP_FAUCET_URI: "https://faucet." + this.getConfigValue("ingress.FRONTEND_HOST"),
+
+          REACT_APP_EXTERNAL_DOCS_URI: this.formatUrl("https://docs." + sharedHost, "/en/home"),
+          REACT_APP_FAUCET_URI: this.formatUrl("https://faucet." + sharedHost),
           REACT_APP_DOGE_NETWORK: this.dogeConfig.network,
           REACT_APP_DOGE_BRIDGE_ADDRESS: this.withdrawalProcessorConfig["bridge_address"],
           REACT_APP_MOAT_ADDRESS: this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
           REACT_APP_L1_STANDARD_ERC20_GATEWAY_PROXY_ADDR: "",
           REACT_APP_L1_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
-          REACT_APP_L2_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: ""
+          REACT_APP_L2_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
+          REACT_APP_ROLLUP: this.getConfigValue("general.CHAIN_NAME_L2"),
+
+          //new config
+          REACT_APP_ETH_SYMBOL: this.getConfigValue("frontend.ETH_SYMBOL"),
+          REACT_APP_BASE_CHAIN: this.getConfigValue("general.CHAIN_NAME_L1"),
+          REACT_APP_CONNECT_WALLET_PROJECT_ID: this.getConfigValue("frontend.CONNECT_WALLET_PROJECT_ID"),
+          REACT_APP_EXTERNAL_RPC_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_RPC_URI_L1"),
+          REACT_APP_EXTERNAL_EXPLORER_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_EXPLORER_URI_L1"),
         };
 
         let updated = false;
         for (const [key, newValue] of Object.entries(configUpdates)) {
           const oldValue = scrollConfigToml[key];
-          if (oldValue !== newValue) {
+          if (!oldValue || oldValue !== newValue) {
             changes.push({ key, oldValue: String(oldValue || ''), newValue: String(newValue) });
             scrollConfigToml[key] = newValue;
             updated = true;
