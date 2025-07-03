@@ -1071,13 +1071,17 @@ export default class SetupPrepCharts extends Command {
         try {
           scrollConfigToml = toml.parse(scrollConfig);
         } catch (e: any) {
-          this.log(chalk.red("scrollConfig failed: " + e.message));
+          this.error(chalk.red("scrollConfig failed: " + e.message));
         }
 
-     
+        let sharedHost = this.getConfigValue("ingress.FRONTEND_HOST")
+        if (sharedHost && sharedHost.startsWith("portal.")) {
+          sharedHost = sharedHost.substring(7)
+        }
         const configUpdates = {
-          REACT_APP_EXTERNAL_DOCS_URI: "https://docs." + this.getConfigValue("ingress.FRONTEND_HOST"),
-          REACT_APP_FAUCET_URI: "https://faucet." + this.getConfigValue("ingress.FRONTEND_HOST"),
+
+          REACT_APP_EXTERNAL_DOCS_URI: "https://docs." + sharedHost,
+          REACT_APP_FAUCET_URI: "https://faucet." + sharedHost,
           REACT_APP_DOGE_NETWORK: this.dogeConfig.network,
           REACT_APP_DOGE_BRIDGE_ADDRESS: this.withdrawalProcessorConfig["bridge_address"],
           REACT_APP_MOAT_ADDRESS: this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
@@ -1085,7 +1089,7 @@ export default class SetupPrepCharts extends Command {
           REACT_APP_L1_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
           REACT_APP_L2_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
           REACT_APP_ROLLUP: this.getConfigValue("general.CHAIN_NAME_L2"),
-          
+
           //new config
           REACT_APP_ETH_SYMBOL: this.getConfigValue("frontend.ETH_SYMBOL"),
           REACT_APP_BASE_CHAIN: this.getConfigValue("general.CHAIN_NAME_L1"),
