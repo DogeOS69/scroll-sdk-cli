@@ -192,6 +192,14 @@ export default class SetupPrepCharts extends Command {
     }
   }
 
+  private formatUrl(baseUrl: string, path: string = ''): string {
+    // Remove trailing slash from baseUrl
+    const cleanBase = baseUrl.replace(/\/+$/, '');
+    // Remove leading slash from path and ensure it starts with a single slash if not empty
+    const cleanPath = path ? '/' + path.replace(/^\/+/, '') : '';
+    return cleanBase + cleanPath;
+  }
+
 
   private async processMutipleInstance(valuesDir: string): Promise<{ updated: number; skipped: number }> {
     let names = [{
@@ -1080,8 +1088,8 @@ export default class SetupPrepCharts extends Command {
         }
         const configUpdates = {
 
-          REACT_APP_EXTERNAL_DOCS_URI: "https://docs." + sharedHost,
-          REACT_APP_FAUCET_URI: "https://faucet." + sharedHost,
+          REACT_APP_EXTERNAL_DOCS_URI: this.formatUrl("https://docs." + sharedHost, "/en/home"),
+          REACT_APP_FAUCET_URI: this.formatUrl("https://faucet." + sharedHost),
           REACT_APP_DOGE_NETWORK: this.dogeConfig.network,
           REACT_APP_DOGE_BRIDGE_ADDRESS: this.withdrawalProcessorConfig["bridge_address"],
           REACT_APP_MOAT_ADDRESS: this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
