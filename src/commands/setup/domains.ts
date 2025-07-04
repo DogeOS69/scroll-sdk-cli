@@ -508,14 +508,15 @@ export default class SetupDomains extends Command {
     }
 
     // Remove L1_DEVNET_HOST from ingress if not using Anvil
-    if (generalConfig.CHAIN_NAME_L1 !== 'Anvil L1' && existingConfig.ingress.L1_DEVNET_HOST) {
-      delete existingConfig.ingress.L1_DEVNET_HOST
-    }
+    // if (generalConfig.CHAIN_NAME_L1 !== 'Anvil L1' && existingConfig.ingress.L1_DEVNET_HOST) {
+    //   delete existingConfig.ingress.L1_DEVNET_HOST
+    // }
 
-    // Remove L1_EXPLORER_HOST from ingress if not using Anvil
-    if (generalConfig.CHAIN_NAME_L1 !== 'Anvil L1' && existingConfig.ingress.L1_EXPLORER_HOST) {
-      delete existingConfig.ingress.L1_EXPLORER_HOST
-    }
+    // // Remove L1_EXPLORER_HOST from ingress if not using Anvil
+    // if (generalConfig.CHAIN_NAME_L1 !== 'Anvil L1' && existingConfig.ingress.L1_EXPLORER_HOST) {
+    //   delete existingConfig.ingress.L1_EXPLORER_HOST
+    // }
+
 
     existingConfig.contracts.verification.EXPLORER_URI_L1 = domainConfig.EXTERNAL_EXPLORER_URI_L1;
     existingConfig.contracts.verification.EXPLORER_URI_L2 = domainConfig.EXTERNAL_EXPLORER_URI_L2;
