@@ -677,6 +677,57 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
+      else if (chartName == 'l1-interface') {
+        if (!productionYaml.configMaps?.env?.data) {
+          this.error(`${chartName}: configMaps.env.data not found in config`);
+        }
+
+        const todoMappings = {
+          "DOGEOS_L1_INTERFACE_NETWORK_STR": this.withdrawalProcessorConfig["network_str"],
+          "DOGEOS_L1_INTERFACE_L1_CHAIN_ID": this.getConfigValue("general.CHAIN_ID_L1"),
+          "DOGEOS_L1_INTERFACE_CHAIN_ID": this.getConfigValue("general.CHAIN_ID_L2").toString(),
+          "DOGEOS_L1_INTERFACE_SCROLL_CHAIN_ADDRESS": this.getConfigValue("contractsFile.L1_SCROLL_CHAIN_PROXY_ADDR"),
+          "DOGEOS_L1_INTERFACE_SCROLL_MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR"),
+          "DOGEOS_L1_INTERFACE_L1_MESSAGE_QUEUE_ADDRESS": this.getConfigValue("contractsFile.L1_MESSAGE_QUEUE_V1_PROXY_ADDR"),
+          "DOGEOS_L1_INTERFACE_L1_MESSAGE_QUEUE_V2_ADDRESS": this.getConfigValue("contractsFile.L1_MESSAGE_QUEUE_V2_PROXY_ADDR"),
+          "DOGEOS_L1_INTERFACE_L1_MESSAGE_QUEUE_V2_DEPLOYMENT_BLOCK": "0",
+          "DOGEOS_L1_INTERFACE_NUM_L1_MESSAGES_PER_BLOCK": "10",
+          "DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
+          "DOGEOS_L1_INTERFACE_L2_MOAT_CONTRACT_ADDRESS": this.getConfigValue("contractsFile.L2_MOAT_IMPLEMENTATION_ADDR"),
+          "DOGEOS_L1_INTERFACE_L2_MOAT_PROXY_ADDRESS": this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
+          "DOGEOS_L1_INTERFACE_DEPOSIT_GAS_LIMIT": "500000",
+          "DOGEOS_L1_INTERFACE_L1_GAS_LIMIT": "30000000",
+          "DOGEOS_L1_INTERFACE_L1_BASE_FEE_PER_GAS": this.getConfigValue("genesis.BASE_FEE_PER_GAS").toString(),
+          "DOGEOS_L1_INTERFACE_RUN_MIGRATIONS": "true",
+          "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL": dogecoinInternalUrl,
+          "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_URL": this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl),
+          "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
+          "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__CONFIRMATIONS": "6",
+          "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__INDEX_UTXOS": "true",
+          "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__INDEX_WITHDRAWALS": "true",
+          "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__INDEX_DEPOSITS": "true",
+          "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__POLL_INTERVAL_MS": "1000",
+          "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__BRIDGE_ADDRESS": this.withdrawalProcessorConfig["bridge_address"],
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "http://celestia-testnet-mocha:26658",
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_NAMESPACE": this.dogeConfig.da?.daNamespace,
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__SIGNER_ADDRESS": this.dogeConfig.da?.signerAddress,
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__CONFIRMATIONS": "6",
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__POLL_INTERVAL_MS": "1000",
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__STORE_RAW_BLOB_DATA": "true",
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__GENESIS_BLOB_COMMITMENT": this.withdrawalProcessorConfig['genesis_sequencer_txid'],
+        }
+
+        for (const [envKey, newVal] of Object.entries(todoMappings)) {
+          const oldValue = productionYaml.configMaps.env.data[envKey];
+          if (oldValue !== newVal) {
+            productionYaml.configMaps.env.data[envKey] = newVal;
+            updated = true;
+            changes.push({ key: `configMaps.env.data.${envKey}`, oldValue: oldValue || 'undefined', newValue: newVal });
+          }
+        }
+      }
+
       else if (chartName == 'withdrawal-processor') {
         if (!productionYaml.env) {
           this.error(`${chartName}: env not found in config`);
