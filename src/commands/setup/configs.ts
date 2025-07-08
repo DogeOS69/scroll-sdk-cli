@@ -65,7 +65,7 @@ export default class SetupConfigs extends Command {
       flags['doge-config'],
       'scrollsdk doge:config'
     )
-    
+
     this.dogeConfig = dogeConfigResult.config
     this.log(chalk.blue(`Using Dogecoin config file: ${dogeConfigResult.configPath}`))
 
@@ -84,7 +84,7 @@ export default class SetupConfigs extends Command {
     this.log(chalk.blue('Checking L1_PLONK_VERIFIER_ADDR...'))
     await this.updateL1PlonkVerifierAddr()
 
-    await this.updateBaseFeePerGas();    
+    await this.updateBaseFeePerGas();
     // this.log(chalk.blue('Checking sequencer enode...'))
     // await this.updateSequencerEnode()
 
@@ -972,16 +972,20 @@ export default class SetupConfigs extends Command {
     }
     const configContent = fs.readFileSync(configPath, 'utf8')
     const config = toml.parse(configContent)
-    
+
     const newBaseFeePerGas = await input({
       default: (config.genesis as any)?.BASE_FEE_PER_GAS,
       message: "Enter baseFeePerGas"
     })
-    
+
     if (!config.genesis) {
       config.genesis = {}
     }
-    
-    ;(config.genesis as any).BASE_FEE_PER_GAS = newBaseFeePerGas
+
+    ; (config.genesis as any).BASE_FEE_PER_GAS = newBaseFeePerGas
+
+    if (writeConfigs(config)) {
+      this.log(chalk.green(`BASE_FEE_PER_GAS updated in config.toml to "${newBaseFeePerGas}"`))
+    }
   }
 }
