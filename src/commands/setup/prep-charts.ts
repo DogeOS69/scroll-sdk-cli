@@ -690,7 +690,6 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_L1_INTERFACE_L2_MOAT_PROXY_ADDRESS": this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
           "DOGEOS_L1_INTERFACE_L1_BASE_FEE_PER_GAS": this.getConfigValue("genesis.BASE_FEE_PER_GAS").toString(),
           "DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER": this.getConfigValue("sequencer.L2GETH_SIGNER_ADDRESS"),
-          "DOGEOS_L1_INTERFACE_RUN_MIGRATIONS": "true",
           "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL": dogecoinInternalUrl,
           "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_URL": this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl),
           "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
