@@ -425,8 +425,7 @@ export default class SetupConfigs extends Command {
     }
 
     if (service === 'l1-interface') {
-      let content = `DOGEOS_L1_INTERFACE_DATABASE_URL="sqlite:///data/l1-interface.sqlite"\n`
-      content += `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
+      let content = `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
       content += `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
       content += `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_API_KEY="${this.dogeConfig.rpc?.apiKey || ''}"\n`
       envFiles['l1-interface-secret.env'] = content
