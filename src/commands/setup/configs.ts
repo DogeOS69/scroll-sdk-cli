@@ -157,6 +157,7 @@ export default class SetupConfigs extends Command {
       'l2-bootnode',
       'dogecoin',
       'testnet-activity-helper',
+      'l1-interface',
       'dogeos-deposit-processor',
       'dogecoin',
       'withdrawal-processor',
@@ -421,6 +422,13 @@ export default class SetupConfigs extends Command {
       if (content.length > 0) {
         envFiles[`${service}-secret.env`] = content
       }
+    }
+
+    if (service === 'l1-interface') {
+      let content = `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
+      content += `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
+      content += `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_API_KEY="${this.dogeConfig.rpc?.apiKey || ''}"\n`
+      envFiles['l1-interface-secret.env'] = content
     }
 
     if (service === 'dogeos-deposit-processor') {

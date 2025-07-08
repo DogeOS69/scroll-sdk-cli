@@ -677,6 +677,37 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
+      else if (chartName == 'l1-interface') {
+        if (!productionYaml.configMaps?.env?.data) {
+          this.error(`${chartName}: configMaps.env.data not found in config`);
+        }
+
+        const todoMappings = {
+          "DOGEOS_L1_INTERFACE_NETWORK_STR": this.withdrawalProcessorConfig["network_str"],
+          "DOGEOS_L1_INTERFACE_SCROLL_MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR"),
+          "DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
+          "DOGEOS_L1_INTERFACE_L2_MOAT_CONTRACT_ADDRESS": this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
+          "DOGEOS_L1_INTERFACE_L1_BASE_FEE_PER_GAS": this.getConfigValue("genesis.BASE_FEE_PER_GAS").toString(),
+          "DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER": this.getConfigValue("sequencer.L2GETH_SIGNER_ADDRESS"),
+          "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL": dogecoinInternalUrl,
+          "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_URL": this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl),
+          "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
+          "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__BRIDGE_ADDRESS": this.withdrawalProcessorConfig["bridge_address"],
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "http://celestia-testnet-mocha:26658",
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_NAMESPACE": this.dogeConfig.da?.daNamespace,
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
+        }
+
+        for (const [envKey, newVal] of Object.entries(todoMappings)) {
+          const oldValue = productionYaml.configMaps.env.data[envKey];
+          if (oldValue !== newVal) {
+            productionYaml.configMaps.env.data[envKey] = newVal;
+            updated = true;
+            changes.push({ key: `configMaps.env.data.${envKey}`, oldValue: oldValue || 'undefined', newValue: newVal });
+          }
+        }
+      }
+
       else if (chartName == 'withdrawal-processor') {
         if (!productionYaml.env) {
           this.error(`${chartName}: env not found in config`);
