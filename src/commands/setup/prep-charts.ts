@@ -202,12 +202,20 @@ export default class SetupPrepCharts extends Command {
 
 
   private async processMutipleInstance(valuesDir: string): Promise<{ updated: number; skipped: number }> {
-    let names = [{
+    interface ChartConfig {
+      chartName: string;
+      configKey: string | null;
+    }
+    
+    let names: ChartConfig[] = [{
       chartName: "l2-bootnode",
       configKey: "bootnode"
     }, {
       chartName: "l2-sequencer",
       configKey: "sequencer"
+    }, {
+      chartName: "cubesigner-signer",
+      configKey: null
     }];
     let updatedCharts = 0;
     let skippedCharts = 0;
@@ -215,7 +223,8 @@ export default class SetupPrepCharts extends Command {
     for (const item of names) {
       const { chartName, configKey } = item;
 
-      if (!this.configData[configKey]) {
+      // Skip config validation for charts that don't need configKey (like cubesigner-signer)
+      if (configKey && !this.configData[configKey]) {
         this.error(`${configKey} not found in config.toml`);
       }
 
@@ -231,19 +240,32 @@ export default class SetupPrepCharts extends Command {
 
       while (true) {
         const changesForThisFile: Array<{ keyPath: string; oldValue: string | undefined; newValue: string }> = [];
-        let instanceKey = `${configKey}-${releaseIndex}`
+        
+        // For charts without configKey, we generate a fixed number of instances (e.g., 6 for cubesigner-signer)
+        if (!configKey) {
+          // Determine the number of instances dynamically for cubesigner-signer based on dogeConfig.cubesigner.roles
+          const maxInstances = chartName === "cubesigner-signer"
+            ? (this.dogeConfig.cubesigner?.roles?.length ?? 1)
+            : 1;
+          if (releaseIndex >= maxInstances) {
+            break;
+          }
+        } else {
+          let instanceKey = `${configKey}-${releaseIndex}`
 
-        // instanceConfig is like this.configData.bootnode.bootnode-0, or this.configData.sequencer.sequencer-0
-        const instanceConfig = this.configData[configKey][instanceKey]
+          // instanceConfig is like this.configData.bootnode.bootnode-0, or this.configData.sequencer.sequencer-0
+          const instanceConfig = this.configData[configKey][instanceKey]
 
-        if (!instanceConfig && instanceKey != "sequencer-0") {
-          // No more bootnode instances defined
-          this.log(chalk.yellow(`No more ${instanceKey} instances defined.`));
-          break
+          if (!instanceConfig && instanceKey != "sequencer-0") {
+            // No more bootnode instances defined
+            this.log(chalk.yellow(`No more ${instanceKey} instances defined.`));
+            break
+          }
         }
+        
         const destFilePath = path.join(valuesDir, `${chartName}-production-${releaseIndex}.yaml`);
 
-        const newYamlContent = templateContent.replace(/__INSTANCE_INDEX__/g, releaseIndex.toString());
+        const newYamlContent = templateContent.replaceAll('__INSTANCE_INDEX__', releaseIndex.toString());
 
         if (!fs.existsSync(destFilePath)) {
           fs.writeFileSync(destFilePath, newYamlContent);
