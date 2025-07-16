@@ -184,7 +184,7 @@ export default class SetupPrepCharts extends Command {
     try {
       const urlObj = new URL(url);
       if (urlObj.pathname.endsWith('/api/v2')) {
-        urlObj.pathname = urlObj.pathname.slice(0, -7);
+        urlObj.pathname = urlObj.pathname.slice(0, -7) + '/api';
       }
       return urlObj.toString();
     } catch {
@@ -694,7 +694,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
           "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__BRIDGE_ADDRESS": this.withdrawalProcessorConfig["bridge_address"],
           "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "http://celestia-testnet-mocha:26658",
-          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_NAMESPACE": this.dogeConfig.da?.daNamespace,
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__NAMESPACE_ID": this.dogeConfig.da?.daNamespace,
           "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
         }
 
