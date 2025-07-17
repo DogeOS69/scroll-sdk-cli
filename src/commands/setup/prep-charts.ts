@@ -277,6 +277,10 @@ export default class SetupPrepCharts extends Command {
     return { updated: updatedCharts, skipped: skippedCharts };
   }
 
+  private isL2Node(chartName: string): boolean {
+    return chartName.startsWith("l2-bootnode") || chartName.startsWith("l2-rpc") || chartName.startsWith("l2-sequencer");
+  }
+
   private async processProductionYaml(
     valuesDir: string
   ): Promise<{ updated: number; skipped: number }> {
@@ -319,7 +323,12 @@ export default class SetupPrepCharts extends Command {
                   configKey = "general.CHAIN_ID_L1";
                 }
 
-                const configValue = this.getConfigValue(configKey)
+                let configValue = this.getConfigValue(configKey)
+                if (this.isL2Node(chartName)) {
+                  if (key === "L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK") {
+                    configValue = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
+                  }
+                }
                 if (configValue !== undefined && configValue !== null) {
                   let newValue: string | string[]
                   if (Array.isArray(configValue)) {
@@ -883,9 +892,12 @@ export default class SetupPrepCharts extends Command {
           this.warn(`${chartName}: configMaps.env.data not found, skipping configuration update`);
           continue;
         }
+        let blockbookUrl = this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl);
+        if (blockbookUrl?.endsWith('/api')) {
+          blockbookUrl = blockbookUrl.slice(0, -4);
+        }
         const depositProcessorMappings = {
-          //'DOGEOS_DEPOSIT_PROCESSOR_NOWNODES_API_KEY': this.dogeConfig.rpc?.apiKey, //TODO this is a secret
-          'DOGEOS_DEPOSIT_PROCESSOR_DOGE_RPC_URL': this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl),
+          'DOGEOS_DEPOSIT_PROCESSOR_DOGE_RPC_URL': blockbookUrl,
           'DOGEOS_DEPOSIT_PROCESSOR_DEPOSIT_DOGE_ADDRESS': this.withdrawalProcessorConfig["bridge_address"],
           'DOGEOS_DEPOSIT_PROCESSOR_MOAT_ADDRESS': this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
           'DOGEOS_DEPOSIT_PROCESSOR_ANVIL_RPC_URL': this.getConfigValue("general.L1_RPC_ENDPOINT"),
