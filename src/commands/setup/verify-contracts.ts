@@ -2,6 +2,7 @@ import {select} from '@inquirer/prompts'
 import {Command, Flags} from '@oclif/core'
 import chalk from 'chalk'
 import Docker from 'dockerode'
+import { DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
 
 export default class ContractsVerification extends Command {
   static override description = 'Set up contracts verification'
@@ -32,21 +33,21 @@ export default class ContractsVerification extends Command {
   private async fetchDockerTags(): Promise<string[]> {
     try {
       const response = await fetch(
-        'https://registry.hub.docker.com/v2/repositories/dogeos69/scroll-stack-contracts/tags?page_size=100',
+        `${DOCKER_TAGS_URL}?page_size=100`,
       )
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`)
       }
 
       const data = await response.json()
-      return data.results.map((tag: any) => tag.name).filter((tag: string) => tag.startsWith('verify'))
+      return data.results.map((tag: any) => tag.name).filter((tag: string) => tag.startsWith('verify-'))
     } catch (error) {
       this.error(`Failed to fetch Docker tags: ${error}`)
     }
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'verify-v0.2.0-debug'
+    const defaultTag = `verify-${DOCKER_DEFAULT_TAG}`
 
     if (!providedTag) {
       return defaultTag
@@ -54,14 +55,17 @@ export default class ContractsVerification extends Command {
 
     const tags = await this.fetchDockerTags()
 
-    if (providedTag.startsWith('gen-configs-v') && tags.includes(providedTag)) {
+    // If user gives full tag starting with "verify-", use it directly if it exists
+    if (providedTag.startsWith('verify-') && tags.includes(providedTag)) {
       return providedTag
     }
 
+    // If the user passes version without prefix, prepend "verify-" and check
     if (providedTag.startsWith('v') && tags.includes(`verify-${providedTag}`)) {
       return `verify-${providedTag}`
     }
 
+    // If the user passes pure semantic version (e.g. 0.2.0), prepend "verify-v"
     if (/^\d+\.\d+\.\d+$/.test(providedTag) && tags.includes(`verify-v${providedTag}`)) {
       return `verify-v${providedTag}`
     }
@@ -76,7 +80,7 @@ export default class ContractsVerification extends Command {
 
   private async runDockerCommand(imageTag: string): Promise<void> {
     const docker = new Docker()
-    const image = `dogeos69/scroll-stack-contracts:${imageTag}`
+    const image = `${DOCKER_REPOSITORY}:${imageTag}`
 
     try {
       this.log(chalk.cyan('Pulling Docker Image...'))
