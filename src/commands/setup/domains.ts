@@ -36,17 +36,18 @@ export default class SetupDomains extends Command {
       this.logKeyValue(key, value as string)
     }
 
-    type L1Network = 'anvil' | 'holesky' | 'mainnet' | 'other' | 'sepolia'
+    type L1Network = 'dogeos' | 'anvil' | 'holesky' | 'mainnet' | 'other' | 'sepolia'
 
     const l1Network = (await select({
       choices: [
+        { name: 'DogeOS Testnet', value: 'dogeos' },
         { name: 'Ethereum Mainnet', value: 'mainnet' },
         { name: 'Ethereum Sepolia Testnet', value: 'sepolia' },
         { name: 'Ethereum Holesky Testnet', value: 'holesky' },
         { name: 'Other...', value: 'other' },
         { name: 'Anvil (Local)', value: 'anvil' },
       ],
-      default: existingConfig.general?.CHAIN_NAME_L1?.toLowerCase() || 'mainnet',
+      default: existingConfig.general?.CHAIN_NAME_L1?.toLowerCase() || 'dogeos',
       message: 'Select the L1 network:',
     })) as L1Network
 
@@ -63,6 +64,7 @@ export default class SetupDomains extends Command {
     }
 
     const l1ChainIds: Partial<Record<L1Network, string>> = {
+      dogeos: '111111',
       anvil: '111111',
       holesky: '17000',
       mainnet: '1',
@@ -74,18 +76,17 @@ export default class SetupDomains extends Command {
     let frontendConfig: Record<string, string> = {}
 
     const usesAnvil = l1Network === 'anvil'
+    const usesDogeos = l1Network === 'dogeos'
 
-    if (l1Network === 'other' || l1Network === 'anvil') {
+    if (l1Network === 'other' || l1Network === 'anvil' || l1Network === 'dogeos') {
       generalConfig.CHAIN_NAME_L1 = await input({
-        default: existingConfig.general?.CHAIN_NAME_L1 || 'Custom L1',
+        default: existingConfig.general?.CHAIN_NAME_L1 || usesDogeos ? 'DOGE L1' : 'Custom L1',
         message: 'Enter the L1 Chain Name:',
       })
       generalConfig.CHAIN_ID_L1 = await input({
-        default: existingConfig.general?.CHAIN_ID_L1 || '',
+        default: existingConfig.general?.CHAIN_ID_L1 || l1ChainIds[l1Network] || '',
         message: 'Enter the L1 Chain ID:',
       })
-      if (l1Network !== 'anvil') {
-      }
     } else {
       generalConfig.CHAIN_NAME_L1 = l1Network.charAt(0).toUpperCase() + l1Network.slice(1)
       generalConfig.CHAIN_ID_L1 = l1ChainIds[l1Network]!
@@ -94,14 +95,14 @@ export default class SetupDomains extends Command {
     }
 
     generalConfig.CHAIN_NAME_L2 = await (input({
-      default: existingConfig.general?.CHAIN_NAME_L2 || 'Custom L2',
+      default: existingConfig.general?.CHAIN_NAME_L2 || usesDogeos ? 'DogeOS Testnet' : 'Custom L2',
       message: 'Enter the L2 Chain Name:',
     }));
 
 
 
     this.logInfo(`Using ${chalk.bold(generalConfig.CHAIN_NAME_L1)} network:`)
-    if (l1Network !== 'anvil') {
+    if (l1Network !== 'anvil' && !usesDogeos) {
       this.logKeyValue('L1 Explorer URL', domainConfig.EXTERNAL_EXPLORER_URI_L1)
       this.logKeyValue('L1 Public RPC URL', domainConfig.EXTERNAL_RPC_URI_L1)
     }
@@ -109,7 +110,11 @@ export default class SetupDomains extends Command {
     this.logKeyValue('L1 Chain Name', generalConfig.CHAIN_NAME_L1)
     this.logKeyValue('L1 Chain ID', generalConfig.CHAIN_ID_L1)
 
-    if (l1Network === 'anvil') {
+    if (usesDogeos) {
+      generalConfig.DOGEOS_L1_RPC_ENDPOINT = 'http://l1-interface:8545'
+    }
+
+    if (l1Network === 'anvil' || usesDogeos) {
       generalConfig.L1_RPC_ENDPOINT = 'http://l1-devnet:8545'
       generalConfig.L1_RPC_ENDPOINT_WEBSOCKET = 'ws://l1-devnet:8546'
     } else {
@@ -134,6 +139,9 @@ export default class SetupDomains extends Command {
       }
     }
 
+    if (usesDogeos) {
+      this.logSuccess(`Updated [general] DOGEOS_L1_RPC_ENDPOINT = "${generalConfig.DOGEOS_L1_RPC_ENDPOINT}"`)
+    }
     this.logSuccess(`Updated [general] L1_RPC_ENDPOINT = "${generalConfig.L1_RPC_ENDPOINT}"`)
     this.logSuccess(`Updated [general] L1_RPC_ENDPOINT_WEBSOCKET = "${generalConfig.L1_RPC_ENDPOINT_WEBSOCKET}"`)
 
