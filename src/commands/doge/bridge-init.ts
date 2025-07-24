@@ -133,6 +133,9 @@ export class BridgeInitCommand extends Command {
         }
     }
 
+    private getNestedValue(obj: any, path: string): any {
+        return path.split('.').reduce((prev, curr) => prev && prev[curr], obj)
+    }
     async run(): Promise<void> {
         const { flags } = await this.parse(BridgeInitCommand)
         let seed = flags.seed
@@ -155,8 +158,18 @@ export class BridgeInitCommand extends Command {
             })
         }
 
+        const configPath = path.join(process.cwd(), 'config.toml')
+        let configData: any;
+        if (fs.existsSync(configPath)) {
+            const configContent = fs.readFileSync(configPath, 'utf-8')
+            configData = toml.parse(configContent)
+        } else {
+            this.warn('config.toml not found. Some values may not be populated correctly.')
+        }
+
         let newConfig = toml.parse(existingConfigStr);
         newConfig.seed_string = seed;
+        newConfig.deposit_eth_recipient_address_hex=this.getNestedValue(configData,"accounts.DEPLOYER_ADDR")
         fs.writeFileSync(setupDefaultsPath, toml.stringify(newConfig));
 
         imageTag = await this.getDockerImageTag(imageTag)

@@ -1,4 +1,5 @@
 import { Command, Flags } from '@oclif/core'
+import { input } from '@inquirer/prompts'
 import chalk from 'chalk'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -14,11 +15,11 @@ export default class SetupGenRpcPackage extends Command {
     '# Generate RPC package (dogeos-rpc-package directory is required)',
     '<%= config.bin %> <%= command.id %> -d ~/github/dogeos-rpc-package/',
     '',
-    '# Generate mainnet RPC package with specific config',
-    '<%= config.bin %> <%= command.id %> --doge-config .data/doge-config-mainnet.toml -d ~/github/dogeos-rpc-package/',
+    '# Generate mainnet RPC package with specific config and namespace',
+    '<%= config.bin %> <%= command.id %> --doge-config .data/doge-config-mainnet.toml -d ~/github/dogeos-rpc-package/ -n scroll-mainnet',
     '',
     '# First clone the project: git clone https://github.com/dogeos69/dogeos-rpc-package',
-    '<%= config.bin %> <%= command.id %> -d ./dogeos-rpc-package/',
+    '<%= config.bin %> <%= command.id %> -d ./dogeos-rpc-package/ --namespace default',
   ]
 
   static override flags = {
@@ -41,6 +42,10 @@ export default class SetupGenRpcPackage extends Command {
       default: './values',
       required: false,
     }),
+    namespace: Flags.string({
+      description: 'Kubernetes namespace',
+      char: 'n',
+    }),
   }
 
   public async run(): Promise<void> {
@@ -49,6 +54,21 @@ export default class SetupGenRpcPackage extends Command {
     try {
       this.log(chalk.blue('🚀 Starting RPC package generation...'))
       this.log('')
+
+      // Get namespace interactively if not provided
+      let namespace = flags.namespace
+      if (!namespace) {
+        namespace = await input({
+          message: 'Enter Kubernetes namespace:',
+          default: 'default',
+          validate: (value: string) => {
+            if (!value || value.trim() === '') {
+              return 'Namespace cannot be empty'
+            }
+            return true
+          }
+        })
+      }
 
       // Verify dogeos-rpc-package directory exists
       const rpcPackageDir = path.resolve(flags['dogeos-rpc-package-dir'])
@@ -86,7 +106,7 @@ export default class SetupGenRpcPackage extends Command {
 
       // Step 5: Get LoadBalancer domains
       this.log(chalk.blue('Step 1: Getting LoadBalancer domains...'))
-      const loadBalancerDomains = await this.getLoadBalancerDomains()
+      const loadBalancerDomains = await this.getLoadBalancerDomains(namespace)
       if (Object.keys(loadBalancerDomains).length > 0) {
         this.log(chalk.green(`✓ Found ${Object.keys(loadBalancerDomains).length} LoadBalancer domains`))
         for (const [service, domain] of Object.entries(loadBalancerDomains)) {
@@ -109,7 +129,7 @@ export default class SetupGenRpcPackage extends Command {
         this.log(chalk.red(`  Warning: No L1 RPC endpoint found in config`))
       }
 
-      const envFilePath = this.generateL2GethEnvFile(config, dogeConfig, rpcPackageDir, loadBalancerDomains)
+      const envFilePath = this.generateL2GethEnvFile(config, dogeConfig, rpcPackageDir, loadBalancerDomains, namespace)
       this.log(chalk.green(`✓ Generated l2geth.env at: ${envFilePath}`))
 
       // Step 7: Extract genesis.json from genesis.yaml
@@ -130,7 +150,7 @@ export default class SetupGenRpcPackage extends Command {
         this.log(chalk.yellow('⚠️  LoadBalancer domains could not be automatically resolved.'))
         this.log(chalk.yellow('The generated l2geth.env contains placeholder domains that need to be replaced.'))
         this.log(chalk.yellow('Run the following command to get the actual LoadBalancer domains:'))
-        this.log(chalk.cyan('kubectl get svc | grep p2p'))
+        this.log(chalk.cyan(`kubectl get svc -n ${namespace} | grep p2p`))
         this.log('')
         this.log(chalk.yellow('Then replace the placeholders in l2geth.env with the actual EXTERNAL-IP domains.'))
       }
@@ -163,12 +183,12 @@ export default class SetupGenRpcPackage extends Command {
     return str.charAt(0).toUpperCase() + str.slice(1)
   }
 
-  private async getLoadBalancerDomains(): Promise<Record<string, string>> {
+  private async getLoadBalancerDomains(namespace: string): Promise<Record<string, string>> {
     try {
       const { execSync } = await import('node:child_process')
 
       // Run kubectl command to get LoadBalancer services
-      const output = execSync('kubectl get svc -o json', {
+      const output = execSync(`kubectl get svc -n ${namespace} -o json`, {
         encoding: 'utf-8',
         timeout: 10000 // 10 second timeout
       })
@@ -228,6 +248,7 @@ export default class SetupGenRpcPackage extends Command {
     dogeConfig: DogeConfig,
     rpcPackageDir: string,
     loadBalancerDomains: Record<string, string> = {},
+    namespace: string,
   ): string {
     const network = dogeConfig.network
     const networkTitleCase = this.capitalize(network)
@@ -261,7 +282,7 @@ export default class SetupGenRpcPackage extends Command {
       envLines.push(`# LoadBalancer domains have been automatically resolved`)
     } else {
       envLines.push(`# NOTE: Placeholder domains need to be replaced with actual LoadBalancer domains`)
-      envLines.push(`# Run: kubectl get svc | grep p2p`)
+      envLines.push(`# Run: kubectl get svc -n ${namespace} | grep p2p`)
       envLines.push(`# Replace <LoadBalancer-Domain-For-l2-bootnode-X> with actual EXTERNAL-IP domains`)
     }
 

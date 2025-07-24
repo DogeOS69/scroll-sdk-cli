@@ -13,6 +13,7 @@ import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { execSync } from 'child_process'
 import { promisify } from 'util'
 import { writeConfigs } from '../../utils/config-writer.js'
+import { DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
 
 const execAsync = promisify(childProcess.exec)
 const SECRETS_PATH = path.join(process.cwd(), 'secrets')
@@ -220,41 +221,17 @@ export default class SetupConfigs extends Command {
     }
   }
 
-  // private copyContractsConfigs(): void {
-  //   const sourceDir = process.cwd()
-  //   const targetDir = path.join(sourceDir, 'contracts', 'configs')
-
-  //   // Ensure the target directory exists
-  //   if (!fs.existsSync(targetDir)) {
-  //     fs.mkdirSync(targetDir, { recursive: true })
-  //   }
-
-  //   const filesToCopy = ['config.toml', 'config-contracts.toml']
-
-  //   for (const file of filesToCopy) {
-  //     const sourcePath = path.join(sourceDir, file)
-  //     const targetPath = path.join(targetDir, file)
-
-  //     if (fs.existsSync(sourcePath)) {
-  //       fs.copyFileSync(sourcePath, targetPath)
-  //       this.log(chalk.green(`Copied ${file} to contracts/configs/`))
-  //     } else {
-  //       this.log(chalk.yellow(`${file} not found in the current directory, skipping.`))
-  //     }
-  //   }
-  // }
-
   private async fetchDockerTags(): Promise<string[]> {
     try {
       const response = await fetch(
-        'https://registry.hub.docker.com/v2/repositories/dogeos69/scroll-stack-contracts/tags?page_size=100',
+        `${DOCKER_TAGS_URL}?page_size=100`,
       )
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`)
       }
 
       const data = await response.json()
-      return data.results.map((tag: any) => tag.name).filter((tag: string) => tag.startsWith('gen-configs'))
+      return data.results.map((tag: any) => tag.name).filter((tag: string) => tag.startsWith('gen-configs-'))
     } catch (error) {
       this.error(`Failed to fetch Docker tags: ${error}`)
     }
@@ -483,7 +460,7 @@ export default class SetupConfigs extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'gen-configs-v0.2.0-debug'
+    const defaultTag = `gen-configs-${DOCKER_DEFAULT_TAG}`
 
     if (!providedTag) {
       return defaultTag
@@ -491,7 +468,7 @@ export default class SetupConfigs extends Command {
 
     const tags = await this.fetchDockerTags()
 
-    if (providedTag.startsWith('gen-configs-v') && tags.includes(providedTag)) {
+    if (providedTag.startsWith('gen-configs-') && tags.includes(providedTag)) {
       return providedTag
     }
 
@@ -599,7 +576,7 @@ export default class SetupConfigs extends Command {
         this.log(chalk.yellow(`Source file not found: ${mapping.source}`))
       }
     }
-
+/*
     try {
       this.log(chalk.blue(`generating balance-checker alert rules file...`))
       const scrollMonitorProductionFilePath = path.join(targetDir, 'scroll-monitor-production.yaml')
@@ -612,7 +589,7 @@ export default class SetupConfigs extends Command {
     } catch {
       this.error(`generating balance-checker alert rules file failed`)
     }
-
+*/
     // Remove source files after all processing is complete
     for (const mapping of fileMappings) {
       const sourcePath = path.join(sourceDir, mapping.source)
@@ -656,7 +633,8 @@ export default class SetupConfigs extends Command {
 
   private async runDockerCommand(imageTag: string): Promise<void> {
     const docker = new Docker()
-    const image = `dogeos69/scroll-stack-contracts:${imageTag}`
+    //const image = `dogeos69/scroll-stack-contracts:${imageTag}`
+    const image = `${DOCKER_REPOSITORY}:${imageTag}`
 
     try {
       this.log(chalk.cyan('Pulling Docker Image...'))
