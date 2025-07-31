@@ -36,14 +36,14 @@ export default class SetupPrepCharts extends Command {
   }
 
   private configMapping: Record<string, string | ((chartName: string, productionNumber: string) => string)> = {
-    'SCROLL_L1_RPC': 'general.L1_RPC_ENDPOINT',
+    'SCROLL_L1_RPC': 'general.DOGEOS_L1_RPC_ENDPOINT',
     'SCROLL_L2_RPC': 'general.L2_RPC_ENDPOINT',
     'CHAIN_ID': 'general.CHAIN_ID_L2',
     'CHAIN_ID_L1': 'general.CHAIN_ID_L1',
     'CHAIN_ID_L2': 'general.CHAIN_ID_L2',
-    'L2GETH_L1_ENDPOINT': 'general.L1_RPC_ENDPOINT',
+    'L2GETH_L1_ENDPOINT': 'general.DOGEOS_L1_RPC_ENDPOINT',
     'L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK': 'general.L1_CONTRACT_DEPLOYMENT_BLOCK',
-    'L1_RPC_ENDPOINT': 'general.L1_RPC_ENDPOINT',
+    'L1_RPC_ENDPOINT': 'general.DOGEOS_L1_RPC_ENDPOINT',
     'L2_RPC_ENDPOINT': 'general.L2_RPC_ENDPOINT',
     'L1_SCROLL_CHAIN_PROXY_ADDR': 'contractsFile.L1_SCROLL_CHAIN_PROXY_ADDR',
     'L2GETH_SIGNER_ADDRESS': (chartName, productionNumber) =>
@@ -324,10 +324,11 @@ export default class SetupPrepCharts extends Command {
                 }
 
                 let configValue = this.getConfigValue(configKey)
-                if (this.isL2Node(chartName)) {
-                  if (key === "L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK") {
-                    configValue = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
-                  }
+                if (this.isL2Node(chartName) && key === "L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK") {
+                  configValue = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
+                }
+                if ((chartName === "rollup-node" || chartName === "contracts") && key === "L1_RPC_ENDPOINT") {
+                  configValue = this.getConfigValue("general.L1_RPC_ENDPOINT");
                 }
                 if (configValue !== undefined && configValue !== null) {
                   let newValue: string | string[]
@@ -571,7 +572,7 @@ export default class SetupPrepCharts extends Command {
           },
           {
             key: 'INDEXER_SCROLL_L1_RPC',
-            configKey: 'general.L1_RPC_ENDPOINT'
+            configKey: 'general.DOGEOS_L1_RPC_ENDPOINT'
           }
 
 
@@ -718,6 +719,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_L1_INTERFACE_SCROLL_MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR"),
           "DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
           "DOGEOS_L1_INTERFACE_L2_MOAT_CONTRACT_ADDRESS": this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
+          "DOGEOS_L1_INTERFACE_L2_MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
           "DOGEOS_L1_INTERFACE_L1_BASE_FEE_PER_GAS": this.getConfigValue("genesis.BASE_FEE_PER_GAS").toString(),
           "DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER": this.getConfigValue("sequencer.L2GETH_SIGNER_ADDRESS"),
           "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL": dogecoinInternalUrl,
@@ -940,10 +942,12 @@ export default class SetupPrepCharts extends Command {
       else if (chartName == "metrics-exporter") {
 
         const rollupExplorerBackendUrl = "http://rollup-explorer-backend";
-        const l1MessageQueueProxyAddr = this.getConfigValue("contractsFile.L1_MESSAGE_QUEUE_V2_PROXY_ADDR");
         const l2RpcEndpoint = this.getConfigValue("general.L2_RPC_ENDPOINT");
         const l2TxFeeVaultAddr = this.getConfigValue("contracts.overrides.L2_TX_FEE_VAULT");
         const l2BridgeFeeRecipientAddr = this.getConfigValue("contracts.L2_BRIDGE_FEE_RECIPIENT_ADDR");
+        const isDogeos = this.getConfigValue("general.DOGEOS_L1_RPC_ENDPOINT") === "http://l1-interface:8545";
+        const l1MessageQueueProxyAddr = isDogeos ? "" : this.getConfigValue("contractsFile.L1_MESSAGE_QUEUE_V2_PROXY_ADDR");
+        const l1RpcEndpoint = this.getConfigValue(isDogeos ? "general.DOGEOS_L1_RPC_ENDPOINT" : "general.L1_RPC_ENDPOINT");
 
         if (!productionYaml.metricsConfig) {
           productionYaml.metricsConfig = {
@@ -951,7 +955,7 @@ export default class SetupPrepCharts extends Command {
               url: rollupExplorerBackendUrl
             },
             l1Network: {
-              url: this.getConfigValue("general.L1_RPC_ENDPOINT"),
+              url: l1RpcEndpoint,
               L1_MESSAGE_QUEUE_PROXY_ADDR: l1MessageQueueProxyAddr
             },
             dogecoin: {
@@ -977,13 +981,13 @@ export default class SetupPrepCharts extends Command {
             });
             productionYaml.metricsConfig.rollup.url = rollupExplorerBackendUrl;
           }
-          if (productionYaml.metricsConfig.l1Network.url != this.getConfigValue("general.L1_RPC_ENDPOINT")) {
+          if (productionYaml.metricsConfig.l1Network.url != l1RpcEndpoint) {
             updated = true;
             changes.push({
               key: `metricsConfig.l1Network.url`, oldValue: productionYaml.metricsConfig.l1Network.url,
-              newValue: this.getConfigValue("general.L1_RPC_ENDPOINT")
+              newValue: l1RpcEndpoint
             });
-            productionYaml.metricsConfig.l1Network.url = this.getConfigValue("general.L1_RPC_ENDPOINT");
+            productionYaml.metricsConfig.l1Network.url = l1RpcEndpoint;
           }
           if (productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR != l1MessageQueueProxyAddr) {
             updated = true;
