@@ -865,7 +865,7 @@ export default class SetupPrepCharts extends Command {
           changes.push({ key: `env.${envVarName}`, oldValue: 'undefined', newValue: configValue });
         }
       }
-      else if (chartName == "dogeos-da") {
+      else if (chartName == "da-publisher") {
         const todoMappings = {
           //TODO what if mainnet ?
           "DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "celestia-testnet-mocha:26658",
