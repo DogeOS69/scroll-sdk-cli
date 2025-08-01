@@ -333,7 +333,7 @@ export default class SetupPrepCharts extends Command {
                   configValue = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
                 }
                 if ((chartName === "rollup-node" || chartName === "contracts") && key === "L1_RPC_ENDPOINT") {
-                  configValue = this.getConfigValue("general.L1_RPC_ENDPOINT");
+                  //configValue = this.getConfigValue("general.L1_RPC_ENDPOINT");
                   configValue = DA_PUBLISHER_URL;
                 }
                 if (configValue !== undefined && configValue !== null) {
@@ -874,21 +874,21 @@ export default class SetupPrepCharts extends Command {
       else if (chartName == "da-publisher") {
         const todoMappings = {
           //TODO what if mainnet ?
-          "DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : CELESTIA_TESTNET_URL,
+          "DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "celestia-testnet-mocha:26658",
           "DOGEOS_DA_PUBLISHER_CELESTIA_NAMESPACE": this.dogeConfig.da?.daNamespace
         }
 
         for (const [envKey, newValue] of Object.entries(todoMappings)) {
-          let envVar = productionYaml.env.find((item: any) => item.name === envKey);
+          let envVar = productionYaml.configMaps.env.data[envKey];
           if (envVar) {
             if (envVar.value !== newValue) {
               const oldValue = envVar.value;
-              envVar.value = newValue;
+              productionYaml.configMaps.env.data[envKey] = newValue;
               updated = true;
               changes.push({ key: `env.${envKey}`, oldValue: String(oldValue), newValue: String(newValue) });
             }
           } else {
-            productionYaml.env.push({ name: envKey, value: newValue });
+            productionYaml.configMaps.env.data[envKey] = newValue;
             updated = true;
             changes.push({ key: `env.${envKey}`, oldValue: 'undefined', newValue: String(newValue) });
           }

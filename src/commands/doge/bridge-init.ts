@@ -45,7 +45,7 @@ export class BridgeInitCommand extends Command {
     }
 
     private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-        const defaultTag = '0.2.0-debug'
+        const defaultTag = '080125-00'
 
         if (!providedTag) {
             return defaultTag
