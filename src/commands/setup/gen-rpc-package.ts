@@ -137,12 +137,18 @@ export default class SetupGenRpcPackage extends Command {
       const genesisJsonPath = this.extractGenesisJson(flags['values-dir'], rpcPackageDir, network)
       this.log(chalk.green(`✓ Extracted genesis.json at: ${genesisJsonPath}`))
 
+      // Step 8: Generate l1-interface.env file
+      this.log(chalk.blue('Step 4: Generating l1-interface.env file...'))
+      const l1InterfaceEnvPath = this.generateL1InterfaceEnvFile(flags['values-dir'], rpcPackageDir, network, config)
+      this.log(chalk.green(`✓ Generated l1-interface.env at: ${l1InterfaceEnvPath}`))
+
       this.log('')
       this.log(chalk.green('🎉 RPC package generation completed successfully!'))
       this.log('')
       this.log(chalk.blue('Generated files:'))
       this.log(chalk.cyan(`  - ${envFilePath}`))
       this.log(chalk.cyan(`  - ${genesisJsonPath}`))
+      this.log(chalk.cyan(`  - ${l1InterfaceEnvPath}`))
       this.log('')
       if (Object.keys(loadBalancerDomains).length > 0) {
         this.log(chalk.green('✅ LoadBalancer domains have been automatically resolved and applied.'))
@@ -252,58 +258,157 @@ export default class SetupGenRpcPackage extends Command {
   ): string {
     const network = dogeConfig.network
     const networkTitleCase = this.capitalize(network)
-    const envLines: string[] = []
-
-    envLines.push(`# L2Geth ${networkTitleCase} Configuration`)
-    envLines.push(`# Generated for external RPC package usage`)
-    envLines.push('')
-    envLines.push(`# Network specific settings`)
-
-    if (config?.general?.CHAIN_ID_L2 !== undefined) {
-      envLines.push(`CHAIN_ID=${config.general.CHAIN_ID_L2}`)
-    }
-
-    // Use external L1 RPC URL instead of cluster internal URL
-    if (config?.frontend?.EXTERNAL_RPC_URI_L1) {
-      envLines.push(`L2GETH_L1_ENDPOINT=${config.frontend.EXTERNAL_RPC_URI_L1}`)
-    } else if (config?.general?.L1_RPC_ENDPOINT) {
-      this.error('No L1 RPC endpoint found in config')
-    }
-
-    if (config?.general?.L1_CONTRACT_DEPLOYMENT_BLOCK !== undefined) {
-      envLines.push(`L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK=${config.general.L1_CONTRACT_DEPLOYMENT_BLOCK}`)
-    }
-
-    envLines.push('')
-    envLines.push(`# ${networkTitleCase} bootnode peer list`)
-
-    const hasRealDomains = Object.keys(loadBalancerDomains).length > 0
-    if (hasRealDomains) {
-      envLines.push(`# LoadBalancer domains have been automatically resolved`)
-    } else {
-      envLines.push(`# NOTE: Placeholder domains need to be replaced with actual LoadBalancer domains`)
-      envLines.push(`# Run: kubectl get svc -n ${namespace} | grep p2p`)
-      envLines.push(`# Replace <LoadBalancer-Domain-For-l2-bootnode-X> with actual EXTERNAL-IP domains`)
-    }
-
-    if (config?.bootnode?.L2_GETH_PUBLIC_PEERS && Array.isArray(config.bootnode.L2_GETH_PUBLIC_PEERS)) {
-      const externalPeers = this.convertPeersToExternalDomains(config.bootnode.L2_GETH_PUBLIC_PEERS, loadBalancerDomains)
-      envLines.push(`L2GETH_PEER_LIST=${JSON.stringify(externalPeers)}`)
-    } else if (config?.sequencer?.L2_GETH_PUB_PEERS && Array.isArray(config.sequencer.L2_GETH_PUB_PEERS)) {
-      // Fallback to sequencer peers if bootnode peers not found
-      const externalPeers = this.convertPeersToExternalDomains(config.sequencer.L2_GETH_PUB_PEERS, loadBalancerDomains)
-      envLines.push(`L2GETH_PEER_LIST=${JSON.stringify(externalPeers)}`)
-    }
-
-    const envContent = envLines.join('\n') + '\n'
     const targetDirectory = path.resolve(rpcPackageDir, 'envs', network)
     const envFilePath = path.join(targetDirectory, 'l2geth.env')
 
     // Create directory structure
     fs.mkdirSync(targetDirectory, { recursive: true })
 
-    // Write env file
+    // Check if file exists and load existing content
+    let existingLines: string[] = []
+    let existingVars: Record<string, string> = {}
+    let fileExists = false
+
+    if (fs.existsSync(envFilePath)) {
+      fileExists = true
+      const existingContent = fs.readFileSync(envFilePath, 'utf-8')
+      existingLines = existingContent.split('\n')
+      
+      // Parse existing variables
+      for (const line of existingLines) {
+        const trimmedLine = line.trim()
+        if (trimmedLine && !trimmedLine.startsWith('#') && trimmedLine.includes('=')) {
+          const [key, ...valueParts] = trimmedLine.split('=')
+          if (key && valueParts.length > 0) {
+            existingVars[key.trim()] = valueParts.join('=').trim()
+          }
+        }
+      }
+    }
+
+    // Prepare new variables to update
+    const newVars: Record<string, string> = {}
+    const updatedVars: string[] = []
+
+    // Network specific settings
+    if (config?.general?.CHAIN_ID_L2 !== undefined) {
+      const newValue = config.general.CHAIN_ID_L2.toString()
+      if (existingVars.CHAIN_ID !== newValue) {
+        newVars.CHAIN_ID = newValue
+        updatedVars.push('CHAIN_ID')
+      }
+    }
+
+    if (config?.general?.L1_CONTRACT_DEPLOYMENT_BLOCK !== undefined) {
+      const newValue = config.general.L1_CONTRACT_DEPLOYMENT_BLOCK.toString()
+      if (existingVars.L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK !== newValue) {
+        newVars.L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK = newValue
+        updatedVars.push('L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK')
+      }
+    }
+
+    // Peer list
+    let peerListValue: string | undefined
+    if (config?.bootnode?.L2_GETH_PUBLIC_PEERS && Array.isArray(config.bootnode.L2_GETH_PUBLIC_PEERS)) {
+      const externalPeers = this.convertPeersToExternalDomains(config.bootnode.L2_GETH_PUBLIC_PEERS, loadBalancerDomains)
+      peerListValue = JSON.stringify(externalPeers)
+    } else if (config?.sequencer?.L2_GETH_PUB_PEERS && Array.isArray(config.sequencer.L2_GETH_PUB_PEERS)) {
+      const externalPeers = this.convertPeersToExternalDomains(config.sequencer.L2_GETH_PUB_PEERS, loadBalancerDomains)
+      peerListValue = JSON.stringify(externalPeers)
+    }
+
+    if (peerListValue && existingVars.L2GETH_PEER_LIST !== peerListValue) {
+      newVars.L2GETH_PEER_LIST = peerListValue
+      updatedVars.push('L2GETH_PEER_LIST')
+    }
+
+    // If no updates needed, return early
+    if (Object.keys(newVars).length === 0) {
+      this.log(chalk.green('✓ No changes detected in l2geth.env - file is up to date'))
+      return envFilePath
+    }
+
+    // Generate new content
+    let newLines: string[] = []
+    
+    if (!fileExists) {
+      // Create new file with header
+      newLines.push(`# L2Geth ${networkTitleCase} Configuration`)
+      newLines.push(`# Generated for external RPC package usage`)
+      newLines.push('')
+      newLines.push(`# Network specific settings`)
+    } else {
+      // Start with existing content
+      newLines = [...existingLines]
+    }
+
+    // Update or add variables
+    for (const [key, value] of Object.entries(newVars)) {
+      let updated = false
+      
+      // Try to update existing line
+      for (let i = 0; i < newLines.length; i++) {
+        const line = newLines[i].trim()
+        if (line.startsWith(key + '=')) {
+          newLines[i] = `${key}=${value}`
+          updated = true
+          break
+        }
+      }
+      
+      // If not found, add new line
+      if (!updated) {
+        // Find appropriate place to insert
+        let insertIndex = newLines.length
+        
+        // Try to insert after network specific settings section
+        for (let i = 0; i < newLines.length; i++) {
+          if (newLines[i].includes('# Network specific settings')) {
+            insertIndex = i + 1
+            break
+          }
+        }
+        
+        // If no section found, insert at the end
+        if (insertIndex === newLines.length) {
+          newLines.push('')
+          newLines.push(`# ${networkTitleCase} bootnode peer list`)
+        }
+        
+        newLines.splice(insertIndex, 0, `${key}=${value}`)
+      }
+    }
+
+    // Add LoadBalancer domain comments if needed
+    const hasRealDomains = Object.keys(loadBalancerDomains).length > 0
+    let commentAdded = false
+    
+    for (let i = 0; i < newLines.length; i++) {
+      if (newLines[i].includes('# bootnode peer list')) {
+        if (hasRealDomains) {
+          if (!newLines.some(line => line.includes('LoadBalancer domains have been automatically resolved'))) {
+            newLines.splice(i + 1, 0, `# LoadBalancer domains have been automatically resolved`)
+            commentAdded = true
+          }
+        } else {
+          if (!newLines.some(line => line.includes('Placeholder domains need to be replaced'))) {
+            newLines.splice(i + 1, 0, `# NOTE: Placeholder domains need to be replaced with actual LoadBalancer domains`)
+            newLines.splice(i + 2, 0, `# Run: kubectl get svc -n ${namespace} | grep p2p`)
+            newLines.splice(i + 3, 0, `# Replace <LoadBalancer-Domain-For-l2-bootnode-X> with actual EXTERNAL-IP domains`)
+            commentAdded = true
+          }
+        }
+        break
+      }
+    }
+
+    const envContent = newLines.join('\n') + '\n'
     fs.writeFileSync(envFilePath, envContent)
+
+    // Log what was updated
+    if (updatedVars.length > 0) {
+      this.log(chalk.green(`✓ Updated variables in l2geth.env: ${updatedVars.join(', ')}`))
+    }
 
     return envFilePath
   }
@@ -363,6 +468,139 @@ export default class SetupGenRpcPackage extends Command {
         throw error
       }
       throw new Error(`Failed to extract genesis.json: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private generateL1InterfaceEnvFile(
+    valuesDir: string,
+    rpcPackageDir: string,
+    network: string,
+    config: any,
+  ): string {
+    const l1InterfaceYamlPath = path.resolve(valuesDir, 'l1-interface-production.yaml')
+
+    if (!fs.existsSync(l1InterfaceYamlPath)) {
+      throw new Error(`l1-interface-production.yaml not found at: ${l1InterfaceYamlPath}`)
+    }
+
+    try {
+      // Read and parse l1-interface-production.yaml
+      const l1InterfaceYamlContent = fs.readFileSync(l1InterfaceYamlPath, 'utf-8')
+      const l1InterfaceYaml = yaml.load(l1InterfaceYamlContent) as any
+
+      if (!l1InterfaceYaml) {
+        throw new Error('Failed to parse l1-interface-production.yaml - file appears to be empty or invalid')
+      }
+
+      // Extract environment variables from configMaps.env.data
+      const envData = l1InterfaceYaml.configMaps?.env?.data || {}
+      
+      // Create target directory
+      const targetDirectory = path.resolve(rpcPackageDir, 'envs', network)
+      fs.mkdirSync(targetDirectory, { recursive: true })
+
+      // Generate env file path
+      const envFilePath = path.join(targetDirectory, 'l1-interface.env')
+
+      // Check if file exists and load existing content
+      let existingLines: string[] = []
+      let existingVars: Record<string, string> = {}
+      let fileExists = false
+
+      if (fs.existsSync(envFilePath)) {
+        fileExists = true
+        const existingContent = fs.readFileSync(envFilePath, 'utf-8')
+        existingLines = existingContent.split('\n')
+        
+        // Parse existing variables
+        for (const line of existingLines) {
+          const trimmedLine = line.trim()
+          if (trimmedLine && !trimmedLine.startsWith('#') && trimmedLine.includes('=')) {
+            const [key, ...valueParts] = trimmedLine.split('=')
+            if (key && valueParts.length > 0) {
+              existingVars[key.trim()] = valueParts.join('=').trim()
+            }
+          }
+        }
+      }
+
+      // Prepare new variables to update
+      const newVars: Record<string, string> = {}
+      const updatedVars: string[] = []
+
+      // Define fields that should not be updated (keep existing values)
+      const excludeFields = [
+        'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL',
+        'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER',
+        'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS',
+        'DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_RPC_URL'
+      ]
+
+      // Process each environment variable from the YAML
+      for (const [key, value] of Object.entries(envData)) {
+        // Skip excluded fields
+        if (excludeFields.includes(key)) {
+          continue
+        }
+        
+        const newValue = String(value)
+        if (existingVars[key] !== newValue) {
+          newVars[key] = newValue
+          updatedVars.push(key)
+        }
+      }
+
+      // If no updates needed, return early
+      if (Object.keys(newVars).length === 0) {
+        this.log(chalk.green('✓ No changes detected in l1-interface.env - file is up to date'))
+        return envFilePath
+      }
+
+      // Generate new content
+      let newLines: string[] = []
+      
+      if (!fileExists) {
+        // Create new file with header
+        newLines.push(`# L1 Interface ${this.capitalize(network)} Configuration`)
+        newLines.push('')
+      } else {
+        // Start with existing content
+        newLines = [...existingLines]
+      }
+
+      // Update or add variables
+      for (const [key, value] of Object.entries(newVars)) {
+        let updated = false
+        
+        // Try to update existing line
+        for (let i = 0; i < newLines.length; i++) {
+          const line = newLines[i].trim()
+          if (line.startsWith(key + '=')) {
+            newLines[i] = `${key}=${value}`
+            updated = true
+            break
+          }
+        }
+        
+        // If not found, add new line
+        if (!updated) {
+          // Find appropriate place to insert (at the end for new variables)
+          newLines.push(`${key}=${value}`)
+        }
+      }
+
+      const envContent = newLines.join('\n') + '\n'
+      fs.writeFileSync(envFilePath, envContent)
+
+      // Log what was updated
+      if (updatedVars.length > 0) {
+        this.log(chalk.green(`✓ Updated variables in l1-interface.env: ${updatedVars.join(', ')}`))
+      }
+
+      return envFilePath
+
+    } catch (error) {
+      throw new Error(`Failed to generate l1-interface.env: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 } 
