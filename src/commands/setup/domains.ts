@@ -111,10 +111,10 @@ export default class SetupDomains extends Command {
     this.logKeyValue('L1 Chain ID', generalConfig.CHAIN_ID_L1)
 
     if (usesDogeos) {
-      generalConfig.DOGEOS_L1_RPC_ENDPOINT = 'http://l1-interface:8545'
-    }
-
-    if (l1Network === 'anvil' || usesDogeos) {
+      generalConfig.DA_PUBLISHER_ENDPOINT = 'http://da-publisher:8545'
+      generalConfig.L1_RPC_ENDPOINT = 'http://l1-interface:8545'
+      generalConfig.L1_RPC_ENDPOINT_WEBSOCKET = ''
+    } else if (l1Network === 'anvil') {
       generalConfig.L1_RPC_ENDPOINT = 'http://l1-devnet:8545'
       generalConfig.L1_RPC_ENDPOINT_WEBSOCKET = 'ws://l1-devnet:8546'
     } else {
@@ -140,7 +140,7 @@ export default class SetupDomains extends Command {
     }
 
     if (usesDogeos) {
-      this.logSuccess(`Updated [general] DOGEOS_L1_RPC_ENDPOINT = "${generalConfig.DOGEOS_L1_RPC_ENDPOINT}"`)
+      this.logSuccess(`Updated [general] DA_PUBLISHER_ENDPOINT = "${generalConfig.DA_PUBLISHER_ENDPOINT}"`)
     }
     this.logSuccess(`Updated [general] L1_RPC_ENDPOINT = "${generalConfig.L1_RPC_ENDPOINT}"`)
     this.logSuccess(`Updated [general] L1_RPC_ENDPOINT_WEBSOCKET = "${generalConfig.L1_RPC_ENDPOINT_WEBSOCKET}"`)
