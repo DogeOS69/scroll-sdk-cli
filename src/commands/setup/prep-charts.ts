@@ -15,8 +15,12 @@ import { json } from 'stream/consumers'
 
 const execAsync = promisify(exec)
 
-
-
+// Internal service URLs constants
+const DA_PUBLISHER_URL = "http://da-publisher:8545"
+const TSO_SERVICE_URL = "http://tso-service:3000"
+const CELESTIA_TESTNET_URL = "http://celestia-testnet-mocha:26658"
+const ROLLUP_EXPLORER_BACKEND_URL = "http://rollup-explorer-backend"
+const L1_INTERFACE_URL = "http://l1-interface:8545"
 
 export default class SetupPrepCharts extends Command {
   static override description = 'Validate Makefile and prepare Helm charts for Scroll SDK'
@@ -330,6 +334,7 @@ export default class SetupPrepCharts extends Command {
                 }
                 if ((chartName === "rollup-node" || chartName === "contracts") && key === "L1_RPC_ENDPOINT") {
                   configValue = this.getConfigValue("general.L1_RPC_ENDPOINT");
+                  configValue = DA_PUBLISHER_URL;
                 }
                 if (configValue !== undefined && configValue !== null) {
                   let newValue: string | string[]
@@ -727,7 +732,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_URL": this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl),
           "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
           "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__BRIDGE_ADDRESS": this.withdrawalProcessorConfig["bridge_address"],
-          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "http://celestia-testnet-mocha:26658",
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : CELESTIA_TESTNET_URL,
           "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__NAMESPACE_ID": this.dogeConfig.da?.daNamespace,
           "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
         }
@@ -757,12 +762,12 @@ export default class SetupPrepCharts extends Command {
 
           "DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL": dogecoinInternalUrl,
           "DOGEOS_WITHDRAWAL_BLOCKBOOK_URL": this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl),
-          "DOGEOS_WITHDRAWAL_TSO_URL": "http://tso-service:3000",
+          "DOGEOS_WITHDRAWAL_TSO_URL": TSO_SERVICE_URL,
           "DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__START_BLOCK": "0",
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT"),
-          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "http://celestia-testnet-mocha:26658",
+          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : CELESTIA_TESTNET_URL,
           // "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL": this.dogeConfig.da?.tendermintRpcUrl,
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE": this.dogeConfig.da?.daNamespace,
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__SIGNER_ADDRESS": this.dogeConfig.da?.signerAddress,
@@ -869,7 +874,7 @@ export default class SetupPrepCharts extends Command {
       else if (chartName == "da-publisher") {
         const todoMappings = {
           //TODO what if mainnet ?
-          "DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "celestia-testnet-mocha:26658",
+          "DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : CELESTIA_TESTNET_URL,
           "DOGEOS_DA_PUBLISHER_CELESTIA_NAMESPACE": this.dogeConfig.da?.daNamespace
         }
 
@@ -942,11 +947,11 @@ export default class SetupPrepCharts extends Command {
       }
       else if (chartName == "metrics-exporter") {
 
-        const rollupExplorerBackendUrl = "http://rollup-explorer-backend";
+        const rollupExplorerBackendUrl = ROLLUP_EXPLORER_BACKEND_URL;
         const l2RpcEndpoint = this.getConfigValue("general.L2_RPC_ENDPOINT");
         const l2TxFeeVaultAddr = this.getConfigValue("contracts.overrides.L2_TX_FEE_VAULT");
         const l2BridgeFeeRecipientAddr = this.getConfigValue("contracts.L2_BRIDGE_FEE_RECIPIENT_ADDR");
-        const isDogeos = this.getConfigValue("general.DOGEOS_L1_RPC_ENDPOINT") === "http://l1-interface:8545";
+        const isDogeos = this.getConfigValue("general.DOGEOS_L1_RPC_ENDPOINT") === L1_INTERFACE_URL;
         const l1MessageQueueProxyAddr = isDogeos ? "" : this.getConfigValue("contractsFile.L1_MESSAGE_QUEUE_V2_PROXY_ADDR");
         const l1RpcEndpoint = this.getConfigValue(isDogeos ? "general.DOGEOS_L1_RPC_ENDPOINT" : "general.L1_RPC_ENDPOINT");
 
@@ -1193,8 +1198,8 @@ export default class SetupPrepCharts extends Command {
       else if (chartName == "rollup-node") {
         let scrollConfig = yamlData["scrollConfig"];
         let rollupNodeConfig = JSON.parse(scrollConfig);
-        rollupNodeConfig.l1_config.endpoint = "http://da-publisher:8545";
-        rollupNodeConfig.l2_config.relayer_config.sender_config.endpoint = "http://da-publisher:8545";
+        rollupNodeConfig.l1_config.endpoint = DA_PUBLISHER_URL;
+        rollupNodeConfig.l2_config.relayer_config.sender_config.endpoint = DA_PUBLISHER_URL;
         newContent = JSON.stringify(rollupNodeConfig, null, 2);
         updated = true;
       }
