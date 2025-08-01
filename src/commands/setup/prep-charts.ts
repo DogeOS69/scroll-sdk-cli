@@ -11,6 +11,7 @@ import type { DogeConfig } from '../../types/doge-config.js'
 import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import { json } from 'stream/consumers'
 
 const execAsync = promisify(exec)
 
@@ -206,7 +207,7 @@ export default class SetupPrepCharts extends Command {
       chartName: string;
       configKey: string | null;
     }
-    
+
     let names: ChartConfig[] = [{
       chartName: "l2-bootnode",
       configKey: "bootnode"
@@ -240,7 +241,7 @@ export default class SetupPrepCharts extends Command {
 
       while (true) {
         const changesForThisFile: Array<{ keyPath: string; oldValue: string | undefined; newValue: string }> = [];
-        
+
         // For charts without configKey, we generate a fixed number of instances (e.g., 6 for cubesigner-signer)
         if (!configKey) {
           // Determine the number of instances dynamically for cubesigner-signer based on dogeConfig.cubesigner.roles
@@ -262,7 +263,7 @@ export default class SetupPrepCharts extends Command {
             break
           }
         }
-        
+
         const destFilePath = path.join(valuesDir, `${chartName}-production-${releaseIndex}.yaml`);
 
         const newYamlContent = templateContent.replaceAll('__INSTANCE_INDEX__', releaseIndex.toString());
@@ -1142,6 +1143,9 @@ export default class SetupPrepCharts extends Command {
       let chartName = file.replace(/-config\.yaml$/, '');
       let yamlData = yaml.load(fs.readFileSync(yamlPath, "utf-8")) as any;
       let changes: Array<{ key: string; oldValue: string; newValue: string }> = [];
+      let updated = false;
+      let newContent = "";
+
       if (chartName == "frontends") {
         let scrollConfig = yamlData["scrollConfig"];
         let scrollConfigToml: any = {};
@@ -1175,7 +1179,7 @@ export default class SetupPrepCharts extends Command {
           REACT_APP_EXTERNAL_EXPLORER_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_EXPLORER_URI_L1"),
         };
 
-        let updated = false;
+
         for (const [key, newValue] of Object.entries(configUpdates)) {
           const oldValue = scrollConfigToml[key];
           if (!oldValue || oldValue !== newValue) {
@@ -1184,39 +1188,46 @@ export default class SetupPrepCharts extends Command {
             updated = true;
           }
         }
+        newContent = toml.stringify(scrollConfigToml);
+      }
+      else if (chartName == "rollup-node") {
+        let scrollConfig = yamlData["scrollConfig"];
+        let rollupNodeConfig = JSON.parse(scrollConfig);
+        rollupNodeConfig.l1_config.endpoint = "http://da-publisher:8545";
+        rollupNodeConfig.l2_config.relayer_config.sender_config.endpoint = "http://da-publisher:8545";
+        newContent = JSON.stringify(rollupNodeConfig, null, 2);
+        updated = true;
+      }
 
-        if (updated) {
-          this.log(`\nFor ${chalk.cyan(file)}:`);
-          this.log(chalk.green('Changes:'));
-          for (const change of changes) {
-            this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`);
-          }
 
-          const shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` });
-          if (shouldUpdate) {
-            // Preserve the literal block scalar format for scrollConfig
-            const tomlConfigString = toml.stringify(scrollConfigToml);
+      if (updated) {
+        this.log(`\nFor ${chalk.cyan(file)}:`);
+        this.log(chalk.green('Changes:'));
+        for (const change of changes) {
+          this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`);
+        }
 
-            // Manually construct to get exact "scrollConfig: |" format (not "scrollConfig: |-")
-            const indentedToml = tomlConfigString
-              .trim()
-              .split('\n')
-              .map(line => `  ${line}`)
-              .join('\n');
+        const shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` });
+        if (shouldUpdate) {
+          // Manually construct to get exact "scrollConfig: |" format (not "scrollConfig: |-")
+          const indentedToml = newContent
+            .trim()
+            .split('\n')
+            .map(line => `  ${line}`)
+            .join('\n');
 
-            const yamlContent = `scrollConfig: |\n${indentedToml}\n`;
+          const yamlContent = `scrollConfig: |\n${indentedToml}\n`;
 
-            fs.writeFileSync(yamlPath, yamlContent);
-            this.log(chalk.green(`Updated ${file}`));
-            updatedCharts++;
-          } else {
-            this.log(chalk.yellow(`Skipped updating ${file}`));
-            skippedCharts++;
-          }
+          fs.writeFileSync(yamlPath, yamlContent);
+          this.log(chalk.green(`Updated ${file}`));
+          updatedCharts++;
         } else {
-          this.log(chalk.yellow(`No changes needed in ${file}`));
+          this.log(chalk.yellow(`Skipped updating ${file}`));
           skippedCharts++;
         }
+      } else {
+        this.log(chalk.yellow(`No changes needed in ${file}`));
+        skippedCharts++;
       }
     }
     return { updated: updatedCharts, skipped: skippedCharts };
