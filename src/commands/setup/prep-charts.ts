@@ -1143,6 +1143,60 @@ export default class SetupPrepCharts extends Command {
       let chartName = file.replace(/-config\.yaml$/, '');
       let yamlData = yaml.load(fs.readFileSync(yamlPath, "utf-8")) as any;
       let changes: Array<{ key: string; oldValue: string; newValue: string }> = [];
+
+      if (chartName == "rollup-node" || chartName == "gas-oracle") {
+        let updated = false;
+        let daPublisherEndpoint = this.getConfigValue("general.DA_PUBLISHER_ENDPOINT");
+        
+        // Parse the JSON string from scrollConfig
+        let scrollConfigJson: any = {};
+        try {
+          scrollConfigJson = JSON.parse(yamlData["scrollConfig"]);
+        } catch (e: any) {
+          this.error(chalk.red(`Failed to parse scrollConfig JSON in ${file}: ` + e.message));
+        }
+        
+        const currentEndpoint = scrollConfigJson["l2_config"]["relayer_config"]["sender_config"]["endpoint"];
+        if (currentEndpoint != daPublisherEndpoint) {
+          scrollConfigJson["l2_config"]["relayer_config"]["sender_config"]["endpoint"] = daPublisherEndpoint;
+          updated = true;
+          changes.push({ key: `l2_config.relayer_config.sender_config.endpoint`, oldValue: currentEndpoint, newValue: daPublisherEndpoint });
+        }
+
+        if (updated) {
+          this.log(`\nFor ${chalk.cyan(file)}:`)
+          this.log(chalk.green('Changes:'))
+          for (const change of changes) {
+            this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`)
+          }
+
+          const shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` })
+          if (shouldUpdate) {
+            // Preserve the literal block scalar format for scrollConfig
+            const jsonConfigString = JSON.stringify(scrollConfigJson, null, 2);
+
+            // Manually construct to get exact "scrollConfig: |" format
+            const indentedJson = jsonConfigString
+              .trim()
+              .split('\n')
+              .map(line => `  ${line}`)
+              .join('\n');
+
+            const yamlContent = `scrollConfig: |\n${indentedJson}\n`;
+
+            fs.writeFileSync(yamlPath, yamlContent);
+            this.log(chalk.green(`Updated ${file}`))
+            updatedCharts++;
+          } else {
+            this.log(chalk.yellow(`Skipped updating ${file}`));
+            skippedCharts++;
+          }
+        } else {
+          this.log(chalk.yellow(`No changes needed in ${file}`));
+          skippedCharts++;
+        }
+      }
+  
       if (chartName == "frontends") {
         let scrollConfig = yamlData["scrollConfig"];
         let scrollConfigToml: any = {};
