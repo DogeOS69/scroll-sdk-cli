@@ -866,26 +866,36 @@ export default class SetupPrepCharts extends Command {
           changes.push({ key: `env.${envVarName}`, oldValue: 'undefined', newValue: configValue });
         }
       }
-      else if (chartName == "dogeos-da") {
+      else if (chartName == "da-publisher") {
         const todoMappings = {
           //TODO what if mainnet ?
           "DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "celestia-testnet-mocha:26658",
           "DOGEOS_DA_PUBLISHER_CELESTIA_NAMESPACE": this.dogeConfig.da?.daNamespace
         }
+/*
+configMaps:
+  env:
+    enabled: true
+    data:
+      DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL: "celestia-testnet-mocha:26658"
+      DOGEOS_DA_PUBLISHER_CELESTIA_NAMESPACE: ""
+      DOGEOS_DA_PUBLISHER_DOGEOS_L2_RPC_URL: "http://l2-rpc:8545"
+      DOGEOS_DA_PUBLISHER_ENABLE_WITHDRAWAL_ROOT_FETCHING: "true"
 
+*/
+        const envData = productionYaml.configMaps.env.data;
         for (const [envKey, newValue] of Object.entries(todoMappings)) {
-          let envVar = productionYaml.env.find((item: any) => item.name === envKey);
-          if (envVar) {
-            if (envVar.value !== newValue) {
-              const oldValue = envVar.value;
-              envVar.value = newValue;
+          if (Object.prototype.hasOwnProperty.call(envData, envKey)) {
+            if (envData[envKey] !== newValue) {
+              const oldValue = envData[envKey];
+              envData[envKey] = newValue;
               updated = true;
-              changes.push({ key: `env.${envKey}`, oldValue: String(oldValue), newValue: String(newValue) });
+              changes.push({ key: `configMaps.env.data.${envKey}`, oldValue: String(oldValue), newValue: String(newValue) });
             }
           } else {
-            productionYaml.env.push({ name: envKey, value: newValue });
+            envData[envKey] = newValue;
             updated = true;
-            changes.push({ key: `env.${envKey}`, oldValue: 'undefined', newValue: String(newValue) });
+            changes.push({ key: `configMaps.env.data.${envKey}`, oldValue: 'undefined', newValue: String(newValue) });
           }
         }
       }
@@ -1191,10 +1201,10 @@ export default class SetupPrepCharts extends Command {
             this.log(chalk.yellow(`Skipped updating ${file}`));
             skippedCharts++;
           }
-        } else {
-          this.log(chalk.yellow(`No changes needed in ${file}`));
-          skippedCharts++;
         }
+      } else {
+        this.log(chalk.yellow(`No changes needed in ${file}`));
+        skippedCharts++;
       }
   
       if (chartName == "frontends") {
