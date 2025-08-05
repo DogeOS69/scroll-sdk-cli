@@ -70,8 +70,9 @@ export default class SetupConfigs extends Command {
     this.dogeConfig = dogeConfigResult.config
     this.log(chalk.blue(`Using Dogecoin config file: ${dogeConfigResult.configPath}`))
 
-    this.log(chalk.blue('Checking L1_CONTRACT_DEPLOYMENT_BLOCK...'))
-    await this.updateL1ContractDeploymentBlock()
+    // Skip L1_CONTRACT_DEPLOYMENT_BLOCK for DogeOS network
+    // this.log(chalk.blue('Checking L1_CONTRACT_DEPLOYMENT_BLOCK...'))
+    // await this.updateL1ContractDeploymentBlock()
 
     this.log(chalk.blue('Checking deployment salt...'))
     await this.updateDeploymentSalt()
