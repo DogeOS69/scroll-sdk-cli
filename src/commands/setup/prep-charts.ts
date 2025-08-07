@@ -42,6 +42,7 @@ export default class SetupPrepCharts extends Command {
     'CHAIN_ID_L1': 'general.CHAIN_ID_L1',
     'CHAIN_ID_L2': 'general.CHAIN_ID_L2',
     'L2GETH_L1_ENDPOINT': 'general.L1_RPC_ENDPOINT',
+    'L2GETH_DA_BLOB_BEACON_NODE': 'general.BEACON_RPC_ENDPOINT',
     'L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK': 'general.L1_CONTRACT_DEPLOYMENT_BLOCK',
     'L1_RPC_ENDPOINT': 'general.L1_RPC_ENDPOINT',
     'L2_RPC_ENDPOINT': 'general.L2_RPC_ENDPOINT',
