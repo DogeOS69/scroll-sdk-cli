@@ -711,6 +711,30 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
+      else if (chartName == 'fee-oracle') {
+        if (!productionYaml.configMaps?.env?.data) {
+          this.error(`${chartName}: configMaps.env.data not found in config`);
+        }
+
+        const todoMappings = {
+          "DOGEOS_FEE_ORACLE_L2__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT"),
+          "DOGEOS_FEE_ORACLE_L2__CHAIN_ID": String(this.getConfigValue("general.CHAIN_ID_L2")),
+          "DOGEOS_FEE_ORACLE_DOGECOIN__NETWORK_STR": this.withdrawalProcessorConfig["network_str"],
+          "DOGEOS_FEE_ORACLE_L2__GAS_ORACLE_CONTRACT": this.getConfigValue("contractsFile.L1_GAS_PRICE_ORACLE_ADDR"),
+          "DOGEOS_FEE_ORACLE_DOGECOIN__RPC_URL": dogecoinInternalUrl,
+          "DOGEOS_FEE_ORACLE_CELESTIA__NAMESPACE_ID": this.dogeConfig.da?.daNamespace,
+        }
+
+        for (const [envKey, newVal] of Object.entries(todoMappings)) {
+          const oldValue = productionYaml.configMaps.env.data[envKey];
+          if (oldValue !== newVal) {
+            productionYaml.configMaps.env.data[envKey] = newVal;
+            updated = true;
+            changes.push({ key: `configMaps.env.data.${envKey}`, oldValue: oldValue || 'undefined', newValue: newVal });
+          }
+        }
+      }
+
       else if (chartName == 'l1-interface') {
         if (!productionYaml.configMaps?.env?.data) {
           this.error(`${chartName}: configMaps.env.data not found in config`);
@@ -1155,7 +1179,7 @@ configMaps:
       let yamlData = yaml.load(fs.readFileSync(yamlPath, "utf-8")) as any;
       let changes: Array<{ key: string; oldValue: string; newValue: string }> = [];
 
-      if (chartName == "rollup-node" || chartName == "gas-oracle") {
+      if (chartName == "rollup-node") {
         let updated = false;
         let daPublisherEndpoint = this.getConfigValue("general.DA_PUBLISHER_ENDPOINT");
         

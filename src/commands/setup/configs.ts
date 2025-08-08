@@ -143,16 +143,17 @@ export default class SetupConfigs extends Command {
     const config = toml.parse(configContent)
 
     const services = [
-      'admin-system-backend',
-      'admin-system-cron',
+      // 'admin-system-backend',
+      // 'admin-system-cron',
       'blockscout',
-      'bridge-history-api',
-      'bridge-history-fetcher',
-      'chain-monitor',
-      'coordinator-api',
-      'coordinator-cron',
-      'gas-oracle',
-      'l1-explorer',
+      // 'bridge-history-api',
+      // 'bridge-history-fetcher',
+      // 'chain-monitor',
+      // 'coordinator-api',
+      // 'coordinator-cron',
+      // 'gas-oracle',
+      'fee-oracle',
+      // 'l1-explorer',
       'l2-sequencer',
       'rollup-node',
       'contracts',
@@ -160,7 +161,7 @@ export default class SetupConfigs extends Command {
       'dogecoin',
       'testnet-activity-helper',
       'l1-interface',
-      'dogeos-deposit-processor',
+      // 'dogeos-deposit-processor',
       'dogecoin',
       'withdrawal-processor',
       'metrics-exporter',
@@ -182,8 +183,8 @@ export default class SetupConfigs extends Command {
 
   private createMigrateDbFiles(config: any): void {
     const migrateDbFiles = [
-      { key: 'BRIDGE_HISTORY_DB_CONNECTION_STRING', service: 'bridge-history-fetcher' },
-      { key: 'GAS_ORACLE_DB_CONNECTION_STRING', service: 'gas-oracle' },
+      // { key: 'BRIDGE_HISTORY_DB_CONNECTION_STRING', service: 'bridge-history-fetcher' },
+      // { key: 'GAS_ORACLE_DB_CONNECTION_STRING', service: 'gas-oracle' },
       { key: 'ROLLUP_NODE_DB_CONNECTION_STRING', service: 'rollup-node' },
     ]
 
@@ -402,6 +403,14 @@ export default class SetupConfigs extends Command {
       }
     }
 
+    if (service === 'fee-oracle') {
+      let content = `DOGEOS_FEE_ORACLE_DOGECOIN__RPC_USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
+      content += `DOGEOS_FEE_ORACLE_DOGECOIN__RPC_PASSWORD="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
+      content += `DOGEOS_FEE_ORACLE_CELESTIA__TENDERMINT_RPC_URL="${this.dogeConfig.da?.tendermintRpcUrl || ''}"\n`
+      content += `DOGEOS_FEE_ORACLE_PRIVATE_KEY="${config.accounts['L2_GAS_ORACLE_SENDER_PRIVATE_KEY'] || ''}"\n`
+      envFiles['fee-oracle-secret.env'] = content
+    }
+
     if (service === 'l1-interface') {
       let content = `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
       content += `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
@@ -532,7 +541,7 @@ export default class SetupConfigs extends Command {
       { source: 'coordinator-config.yaml', target: 'coordinator-cron-config.yaml' },
       { source: 'frontend-config.yaml', target: 'frontends-config.yaml' },
       { source: 'genesis.yaml', target: 'genesis.yaml' },
-      { source: 'rollup-config.yaml', target: 'gas-oracle-config.yaml' },
+      { source: 'gas-oracle-config.yaml', target: 'gas-oracle-config.yaml' },
       { source: 'rollup-config.yaml', target: 'rollup-node-config.yaml' },
       { source: 'rollup-explorer-backend-config.yaml', target: 'rollup-explorer-backend-config.yaml' },
     ]
@@ -544,6 +553,10 @@ export default class SetupConfigs extends Command {
 
       if (fs.existsSync(sourcePath)) {
         try {
+          if (mapping.source == "gas-oracle-config.yaml") {
+            // gas-oracle-config.yaml no longer used. 
+            continue;
+          }
           fs.copyFileSync(sourcePath, targetPath)
           this.log(chalk.green(`Processed file: ${mapping.source} -> ${mapping.target}`))
 
