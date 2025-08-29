@@ -272,6 +272,13 @@ spec:
             updated = true;
           }
         }
+      } else if (chart == "blockbook") {
+        if (yamlContent.ingress) {
+          const blockbookUpdated = this.processStandardTls(yamlContent, chart, issuer);
+          if (blockbookUpdated) {
+            updated = true;
+          }
+        }
       }
 
       for (const ingressType of ingressTypes) {
@@ -415,7 +422,7 @@ spec:
         'tso-service',
         'celestia-node',
         'dogecoin',
-        //'withdrawal-processor' //no ingress in withdrawal-processor  
+        'blockbook'
       ]
 
       for (const chart of chartsToUpdate) {

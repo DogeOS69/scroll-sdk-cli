@@ -235,7 +235,7 @@ export class DogeConfigCommand extends Command {
         password: '',
         apiKey: '',
         blockbookAPIUrl:
-          network === 'mainnet' ? 'https://dogebook.nownodes.io/api/v2' : 'https://dogebook-testnet.nownodes.io/api/v2',
+          network === 'mainnet' ? 'http://blockbook-mainnet:19139' : 'http://blockbook-testnet:19139',
         url: network === 'mainnet' ? 'https://dogecoin.mainnet.dogeos.com' : 'https://dogecoin.testnet.dogeos.com',
       },
       dogecoinClusterRpc: {
@@ -286,9 +286,18 @@ export class DogeConfigCommand extends Command {
 
     let newConfig = existingConfig;
 
+    // Handle blockbook API URL with confirmation if different from default
+    const defaultBlockbookUrl = network === 'mainnet' ? 'http://blockbook-mainnet:19139' : 'http://blockbook-testnet:19139'
+    const currentBlockbookUrl = existingConfig.rpc?.blockbookAPIUrl || defaultBlockbookUrl
+    
+    newConfig.rpc!.blockbookAPIUrl = await input({
+      default: currentBlockbookUrl,
+      message: `Enter Internal Blockbook API URL:`,
+    });
+
     newConfig.rpc!.apiKey = await input({
       default: existingConfig.rpc?.apiKey,
-      message: 'Enter your NowNodes API key (get one at nownodes.io):',
+      message: 'Enter your NowNodes API key (deployment only, get one at nownodes.io):',
       validate: (value) => (value ? true : 'API key is required'),
     })
 
@@ -600,8 +609,7 @@ export class DogeConfigCommand extends Command {
     newConfig.dogecoin_rpc_url = newDogeConfig.rpc?.url || '';
     newConfig.dogecoin_rpc_user = newDogeConfig.rpc?.username || '';
     newConfig.dogecoin_rpc_pass = newDogeConfig.rpc?.password || '';
-    const blockbookUrl = newDogeConfig.rpc?.blockbookAPIUrl?.replace('/api/v2', '') || '';
-    newConfig.dogecoin_blockbook_url = blockbookUrl;
+    newConfig.dogecoin_blockbook_url = newConfig.network === 'mainnet' ? 'https://dogebook.nownodes.io' : 'https://dogebook-testnet.nownodes.io';
     newConfig.dogecoin_blockbook_api_key = newDogeConfig.rpc?.apiKey || '';
 
     // Write to setup_defaults.toml

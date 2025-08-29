@@ -161,7 +161,7 @@ export default class SetupConfigs extends Command {
       'dogecoin',
       'testnet-activity-helper',
       'l1-interface',
-      // 'dogeos-deposit-processor',
+      'blockbook',
       'dogecoin',
       'withdrawal-processor',
       'metrics-exporter',
@@ -322,6 +322,10 @@ export default class SetupConfigs extends Command {
         'DOGECOIN_RPC_USER:DOGECOIN_RPC_USER',
         'DOGECOIN_RPC_PASSWORD:DOGECOIN_RPC_PASSWORD',
       ],
+      'blockbook': [
+        'DOGECOIN_RPC_USER:DOGECOIN_RPC_USER',
+        'DOGECOIN_RPC_PASSWORD:DOGECOIN_RPC_PASSWORD',
+      ],
       'withdrawal-processor': [
       ],
       'contracts': [
@@ -414,15 +418,13 @@ export default class SetupConfigs extends Command {
     if (service === 'l1-interface') {
       let content = `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
       content += `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
-      content += `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_API_KEY="${this.dogeConfig.rpc?.apiKey || ''}"\n`
+      content += `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_API_KEY=""\n`
       envFiles['l1-interface-secret.env'] = content
     }
 
-    if (service === 'dogeos-deposit-processor') {
-      envFiles['dogeos-deposit-processor-secret.env'] = `DOGEOS_DEPOSIT_PROCESSOR_NOWNODES_API_KEY="${this.dogeConfig.rpc?.apiKey}"\n`
-      //not used for now
-      // envFiles['dogeos-deposit-processor-secret.env']+=`username="${this.dogeConfig.rpc?.username}"\n`
-      // envFiles['dogeos-deposit-processor-secret.env']+=`password="${this.dogeConfig.rpc?.password}"\n`
+    if (service === 'blockbook') {
+      envFiles['blockbook-secret.env'] = `DOGECOIN_RPC_USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
+      envFiles['blockbook-secret.env'] += `DOGECOIN_RPC_PASSWORD="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
     }
 
     if (service === 'dogecoin') {
@@ -443,11 +445,11 @@ export default class SetupConfigs extends Command {
       content += `DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL="${this.dogeConfig.da?.tendermintRpcUrl || ''}"\n`
 
       // Add blockbook API key from doge-config if available
-      if (this.dogeConfig.rpc?.apiKey) {
-        content += `DOGEOS_WITHDRAWAL_BLOCKBOOK_API_KEY="${this.dogeConfig.rpc?.apiKey}"\n`
-      } else {
-        this.error(`dogeConfig.rpc?.apiKey is null`)
-      }
+      // if (this.dogeConfig.rpc?.apiKey) {
+      //   content += `DOGEOS_WITHDRAWAL_BLOCKBOOK_API_KEY="${this.dogeConfig.rpc?.apiKey}"\n`
+      // } else {
+      //   this.error(`dogeConfig.rpc?.apiKey is null`)
+      // }
 
       // Add values from output-withdrawal-processor.toml
       const withdrawal_processor_toml_path = path.join(process.cwd(), ".data", "output-withdrawal-processor.toml");
