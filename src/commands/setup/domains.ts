@@ -365,6 +365,7 @@ export default class SetupDomains extends Command {
         TSO_HOST: `tso.${urlEnding}`,
         CELESTIA_HOST: `celestia.${urlEnding}`,
         DOGECOIN_HOST: `dogecoin.${urlEnding}`,
+        BLOCKBOOK_HOST: `blockbook.${urlEnding}`,
       }
     } else {
       protocol = await select({
@@ -424,6 +425,10 @@ export default class SetupDomains extends Command {
         DOGECOIN_HOST: await input({
           default: existingConfig.ingress?.DOGECOIN_HOST || 'dogecoin.scrollsdk',
           message: 'Enter DOGECOIN_HOST:',
+        }),
+        BLOCKBOOK_HOST: await input({
+          default: existingConfig.ingress?.BLOCKBOOK_HOST || 'blockbook.scrollsdk',
+          message: 'Enter BLOCKBOOK_HOST:',
         }),
       }
 

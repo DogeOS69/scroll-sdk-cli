@@ -187,7 +187,12 @@ export default class SetupPrepCharts extends Command {
       if (urlObj.pathname.endsWith('/api/v2')) {
         urlObj.pathname = urlObj.pathname.slice(0, -7) + '/api';
       }
-      return urlObj.toString();
+      let urlString = urlObj.toString();
+      // Remove trailing slash if it exists
+      if (urlString.endsWith('/')) {
+        urlString = urlString.slice(0, -1);
+      }
+      return urlString;
     } catch {
       return url;
     }
@@ -386,6 +391,7 @@ export default class SetupPrepCharts extends Command {
                         'tso-service': 'TSO_HOST',
                         'celestia-node': 'CELESTIA_HOST',
                         'dogecoin': 'DOGECOIN_HOST',
+                        'blockbook': 'BLOCKBOOK_HOST',
                       };
 
                       const alternativeKey = alternativeMappings[chartName];
@@ -709,6 +715,43 @@ export default class SetupPrepCharts extends Command {
         if (ingressUpdated) {
           updated = true;
         }
+      } else if (chartName == 'blockbook') {
+        let ingressUpdated = false;
+        if (!productionYaml.ingress) {
+          productionYaml.ingress = {
+            enabled: true,
+            className: "nginx",
+            annotations: {
+              "cert-manager.io/cluster-issuer": "letsencrypt-prod",
+              "nginx.ingress.kubernetes.io/ssl-redirect": "true"
+            },
+            hosts: [
+              {
+                host: this.getConfigValue("ingress.BLOCKBOOK_HOST"),
+                paths: [{ path: "/", pathType: "Prefix" }]
+              }
+            ],
+          };
+          changes.push({ key: `ingress`, oldValue: "undefined", newValue: JSON.stringify(productionYaml.ingress) });
+          ingressUpdated = true;
+        } else {
+          let ingressValue = productionYaml.ingress;
+          ingressValue.enabled = true;
+          const configValue = this.getConfigValue('ingress.BLOCKBOOK_HOST');
+          ingressUpdated = this.processIngressHosts(ingressValue, configValue, changes);
+        }
+
+        if (ingressUpdated) {
+          updated = true;
+        }
+
+        const oldValue = productionYaml.blockbook.blockHeight;
+        const newValue = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
+        if (oldValue !== newValue) {
+          productionYaml.blockbook.blockHeight = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
+          updated = true;
+          changes.push({ key: `blockbook.blockHeight`, oldValue: oldValue || 'undefined', newValue: newValue || 'undefined' });
+        }
       }
 
       else if (chartName == 'fee-oracle') {
@@ -924,33 +967,33 @@ configMaps:
           }
         }
       }
-      else if (chartName == "dogeos-deposit-processor") {
-        // Check and ensure configMaps.env.data exists
-        if (!productionYaml.configMaps?.env?.data) {
-          this.warn(`${chartName}: configMaps.env.data not found, skipping configuration update`);
-          continue;
-        }
-        let blockbookUrl = this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl);
-        if (blockbookUrl?.endsWith('/api')) {
-          blockbookUrl = blockbookUrl.slice(0, -4);
-        }
-        const depositProcessorMappings = {
-          'DOGEOS_DEPOSIT_PROCESSOR_DOGE_RPC_URL': blockbookUrl,
-          'DOGEOS_DEPOSIT_PROCESSOR_DEPOSIT_DOGE_ADDRESS': this.withdrawalProcessorConfig["bridge_address"],
-          'DOGEOS_DEPOSIT_PROCESSOR_MOAT_ADDRESS': this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
-          'DOGEOS_DEPOSIT_PROCESSOR_ANVIL_RPC_URL': this.getConfigValue("general.L1_RPC_ENDPOINT"),
-          'DOGEOS_DEPOSIT_PROCESSOR_L1_MESSENGER_ADDRESS': this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
-        };
+      // else if (chartName == "dogeos-deposit-processor") {
+      //   // Check and ensure configMaps.env.data exists
+      //   if (!productionYaml.configMaps?.env?.data) {
+      //     this.warn(`${chartName}: configMaps.env.data not found, skipping configuration update`);
+      //     continue;
+      //   }
+      //   let blockbookUrl = this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl);
+      //   if (blockbookUrl?.endsWith('/api')) {
+      //     blockbookUrl = blockbookUrl.slice(0, -4);
+      //   }
+      //   const depositProcessorMappings = {
+      //     'DOGEOS_DEPOSIT_PROCESSOR_DOGE_RPC_URL': blockbookUrl,
+      //     'DOGEOS_DEPOSIT_PROCESSOR_DEPOSIT_DOGE_ADDRESS': this.withdrawalProcessorConfig["bridge_address"],
+      //     'DOGEOS_DEPOSIT_PROCESSOR_MOAT_ADDRESS': this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
+      //     'DOGEOS_DEPOSIT_PROCESSOR_ANVIL_RPC_URL': this.getConfigValue("general.L1_RPC_ENDPOINT"),
+      //     'DOGEOS_DEPOSIT_PROCESSOR_L1_MESSENGER_ADDRESS': this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
+      //   };
 
-        for (const [envKey, newValue] of Object.entries(depositProcessorMappings)) {
-          if (newValue !== undefined && productionYaml.configMaps.env.data[envKey] !== newValue) {
-            const oldValue = productionYaml.configMaps.env.data[envKey];
-            productionYaml.configMaps.env.data[envKey] = newValue;
-            updated = true;
-            changes.push({ key: `configMaps.env.data["${envKey}"]`, oldValue, newValue });
-          }
-        }
-      }
+      //   for (const [envKey, newValue] of Object.entries(depositProcessorMappings)) {
+      //     if (newValue !== undefined && productionYaml.configMaps.env.data[envKey] !== newValue) {
+      //       const oldValue = productionYaml.configMaps.env.data[envKey];
+      //       productionYaml.configMaps.env.data[envKey] = newValue;
+      //       updated = true;
+      //       changes.push({ key: `configMaps.env.data["${envKey}"]`, oldValue, newValue });
+      //     }
+      //   }
+      // }
       else if (chartName == "tso-service") {
         if (!productionYaml.env) {
           this.error(`${chartName}: env not found in config`);
@@ -1191,12 +1234,27 @@ configMaps:
           this.error(chalk.red(`Failed to parse scrollConfig JSON in ${file}: ` + e.message));
         }
         
+        const currentL1Endpoint = scrollConfigJson["l1_config"]["endpoint"];
+        if (currentL1Endpoint != "") {
+          scrollConfigJson["l1_config"]["endpoint"] = "";
+          updated = true;
+          changes.push({ key: `l1_config.endpoint`, oldValue: currentL1Endpoint, newValue: "" });
+        }
         const currentEndpoint = scrollConfigJson["l2_config"]["relayer_config"]["sender_config"]["endpoint"];
         if (currentEndpoint != daPublisherEndpoint) {
           scrollConfigJson["l2_config"]["relayer_config"]["sender_config"]["endpoint"] = daPublisherEndpoint;
           updated = true;
           changes.push({ key: `l2_config.relayer_config.sender_config.endpoint`, oldValue: currentEndpoint, newValue: daPublisherEndpoint });
         }
+        
+        // Remove celestia_submit_endpoint if it exists
+        if (scrollConfigJson["l2_config"]?.["relayer_config"]?.["celestia_submit_endpoint"] !== undefined) {
+          const currentCelestiaEndpoint = scrollConfigJson["l2_config"]["relayer_config"]["celestia_submit_endpoint"];
+          delete scrollConfigJson["l2_config"]["relayer_config"]["celestia_submit_endpoint"];
+          updated = true;
+          changes.push({ key: `l2_config.relayer_config.celestia_submit_endpoint`, oldValue: currentCelestiaEndpoint, newValue: "removed" });
+        }
+        
 
         if (updated) {
           this.log(`\nFor ${chalk.cyan(file)}:`)
