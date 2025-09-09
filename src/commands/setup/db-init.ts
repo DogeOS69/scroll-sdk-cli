@@ -53,7 +53,7 @@ export default class SetupDbInit extends Command {
   private pgPassword: string = "";
   private pgDatabase: string = "";
 
-  private async initializeDatabase(conn: pg.Client, dbName: string, dbUser: string, dbPassword: string, clean: boolean): Promise<void> {
+  private async initializeDatabase(conn: pg.Client, dbName: string, dbUser: string, dbPassword: string, clean: boolean, noSsl: boolean = false): Promise<void> {
     try {
       // Check if the database exists
       const dbExistsResult = await conn.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [dbName])
@@ -98,7 +98,7 @@ export default class SetupDbInit extends Command {
       }
 
       // Update permissions
-      await this.updatePermissions(conn, dbName, dbUser, false, false) // Pass false for debug and noSsl flags
+      await this.updatePermissions(conn, dbName, dbUser, false, noSsl) // Pass noSsl flag
 
     } catch (error) {
       this.error(chalk.red(`Failed to initialize database: ${error}`))
@@ -169,7 +169,7 @@ export default class SetupDbInit extends Command {
       }
 
       // Create a new connection to the specific database
-      const dbConn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, dbName, false);
+      const dbConn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, dbName, noSsl);
 
       // Execute schema-specific queries on the new connection
       for (const query of schemaQueries) {
@@ -357,7 +357,7 @@ export default class SetupDbInit extends Command {
             }
           }
 
-          await this.initializeDatabase(this.conn, db.name, db.user.toLowerCase(), dbPassword, flags.clean)
+          await this.initializeDatabase(this.conn, db.name, db.user.toLowerCase(), dbPassword, flags.clean, flags['no-ssl'])
 
           const sslMode = flags['no-ssl'] ? 'disable' : 'require'
           const dsn = `postgres://${db.user.toLowerCase()}:${dbPassword}@${this.vpcHost}:${this.vpcPort}/${db.name}?sslmode=${sslMode}`
