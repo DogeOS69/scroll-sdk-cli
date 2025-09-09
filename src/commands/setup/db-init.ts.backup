@@ -38,10 +38,6 @@ export default class SetupDbInit extends Command {
       description: 'Update the port of current database values',
       required: false,
     }),
-    'no-ssl': Flags.boolean({
-      description: 'Disable SSL for database connections (useful for local development)',
-      default: false,
-    }),
   }
 
   private conn: pg.Client | undefined;
@@ -98,7 +94,7 @@ export default class SetupDbInit extends Command {
       }
 
       // Update permissions
-      await this.updatePermissions(conn, dbName, dbUser, false, false) // Pass false for debug and noSsl flags
+      await this.updatePermissions(conn, dbName, dbUser, false) // Pass false for debug flag
 
     } catch (error) {
       this.error(chalk.red(`Failed to initialize database: ${error}`))
@@ -140,7 +136,7 @@ export default class SetupDbInit extends Command {
     }
   }
 
-  private async updatePermissions(conn: pg.Client, dbName: string, dbUser: string, debug: boolean, noSsl: boolean = false): Promise<void> {
+  private async updatePermissions(conn: pg.Client, dbName: string, dbUser: string, debug: boolean): Promise<void> {
     const queries = [
       `GRANT CONNECT ON DATABASE ${dbName} TO ${dbUser}`,
       `GRANT ALL PRIVILEGES ON DATABASE ${dbName} TO ${dbUser}`,
@@ -169,7 +165,7 @@ export default class SetupDbInit extends Command {
       }
 
       // Create a new connection to the specific database
-      const dbConn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, dbName, false);
+      const dbConn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, dbName);
 
       // Execute schema-specific queries on the new connection
       for (const query of schemaQueries) {
@@ -291,7 +287,7 @@ export default class SetupDbInit extends Command {
       // If updating permissions, we only need to connect once
       if (flags['update-permissions']) {
         [this.publicHost, this.publicPort, this.pgUser, this.pgPassword, this.pgDatabase] = await this.promptForPublicConnectionDetails(existingConfig);
-        this.conn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, this.pgDatabase, flags['no-ssl']);
+        this.conn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, this.pgDatabase);
       }
 
       for (const db of databases) {
@@ -301,12 +297,12 @@ export default class SetupDbInit extends Command {
           // First iteration or if the user chose to connect to a different cluster
           if (!this.conn) {
             [this.publicHost, this.publicPort, this.vpcHost, this.vpcPort, this.pgUser, this.pgPassword, this.pgDatabase] = await this.promptForConnectionDetails(existingConfig);
-            this.conn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, this.pgDatabase, flags['no-ssl']);
+            this.conn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, this.pgDatabase);
           } else if (await confirm({ message: 'Do you want to connect to a different database cluster for this database?', default: false })) {
             // User chose to connect to a different cluster
             await this.conn.end();
             [this.publicHost, this.publicPort, this.vpcHost, this.vpcPort, this.pgUser, this.pgPassword, this.pgDatabase] = await this.promptForConnectionDetails(existingConfig);
-            this.conn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, this.pgDatabase, flags['no-ssl']);
+            this.conn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, this.pgDatabase);
           }
         }
 
@@ -318,7 +314,7 @@ export default class SetupDbInit extends Command {
           if (flags.debug) {
             this.log(chalk.yellow('Debug mode: Showing SQL queries'));
           }
-          await this.updatePermissions(this.conn, db.name, db.user.toLowerCase(), flags.debug, flags['no-ssl'])
+          await this.updatePermissions(this.conn, db.name, db.user.toLowerCase(), flags.debug)
         } else {
           this.log(chalk.blue(`Setting up database: ${db.name} for user: ${db.user}`))
 
@@ -359,8 +355,7 @@ export default class SetupDbInit extends Command {
 
           await this.initializeDatabase(this.conn, db.name, db.user.toLowerCase(), dbPassword, flags.clean)
 
-          const sslMode = flags['no-ssl'] ? 'disable' : 'require'
-          const dsn = `postgres://${db.user.toLowerCase()}:${dbPassword}@${this.vpcHost}:${this.vpcPort}/${db.name}?sslmode=${sslMode}`
+          const dsn = `postgres://${db.user.toLowerCase()}:${dbPassword}@${this.vpcHost}:${this.vpcPort}/${db.name}?sslmode=require`
           this.log(chalk.cyan(`DSN for ${db.user}:\n${dsn}`))
 
           dsnMap[db.user] = dsn
@@ -436,22 +431,17 @@ export default class SetupDbInit extends Command {
     return [publicHost, publicPort, pgUser, pgPassword, pgDatabase]
   }
 
-  private async createConnection(host: string, port: string, user: string, password: string, database: string, noSsl: boolean = false): Promise<pg.Client> {
-    const connConfig: any = {
+  private async createConnection(host: string, port: string, user: string, password: string, database: string): Promise<pg.Client> {
+    const conn = new pg.Client({
       host,
       port: parseInt(port),
       user,
       password,
       database,
-    }
-
-    if (!noSsl) {
-      connConfig.ssl = {
+      ssl: {
         rejectUnauthorized: false // Note: This is not secure for production use
       }
-    }
-
-    const conn = new pg.Client(connConfig)
+    })
 
     await conn.connect()
     return conn
