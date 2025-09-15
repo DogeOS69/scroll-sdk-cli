@@ -304,7 +304,7 @@ export default class SetupCubesignerSetup extends Command {
                 // Get detailed information for each key in this specific role
                 const detailedKeys: any[] = []
                 for (const keyRef of roleDetail.keys || []) {
-                    const keyDetailCommand = `cs key get --key-id="${keyRef.key_id}"`
+                    const keyDetailCommand = `cs key get --key-id="${keyRef.key_id}" --role-id="${role.role_id}"`
                     const keyDetailOutput = (await execAsync(keyDetailCommand)).stdout
                     const keyDetail = JSON.parse(keyDetailOutput)
                     detailedKeys.push(keyDetail)
