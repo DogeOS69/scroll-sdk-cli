@@ -86,11 +86,6 @@ async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
     if (!parsedConfig.wallet || !parsedConfig.wallet.path) {
       throw new Error(`Config file ${resolvedPath} is missing 'wallet.path'.`)
     }
-
-    if (!parsedConfig.rpc || !parsedConfig.rpc.blockbookAPIUrl) {
-      throw new Error(`Config file ${resolvedPath} is missing 'rpc.blockbookAPIUrl'. Run 'doge:config' to set it.`)
-    }
-
     return parsedConfig
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Config file')) throw error

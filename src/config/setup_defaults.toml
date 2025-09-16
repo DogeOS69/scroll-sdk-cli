@@ -14,10 +14,6 @@ dogecoin_rpc_user = "user"
 dogecoin_rpc_pass = ""
 # Recommend using environment variables DOGECOIN_RPC_USER and DOGECOIN_RPC_PASS
 
-# Optional: Blockbook URL for faster UTXO fetching (highly recommended)
-# If not provided, UTXO fetching might be slower or require manual input.
-dogecoin_blockbook_url = "https://dogebook-testnet.nownodes.io"
-dogecoin_blockbook_api_key = "" # If required
 
 # --- Bridge Script Generation Parameters --- 
 # Thresholds for the complex bridge script roles

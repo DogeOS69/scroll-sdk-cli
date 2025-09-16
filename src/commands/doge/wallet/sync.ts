@@ -102,12 +102,6 @@ export default class WalletSync extends Command {
         return
       }
 
-      const blockbookBaseUrl = config.rpc?.blockbookAPIUrl
-      if (!blockbookBaseUrl) {
-        this.error('Config rpc.blockbookAPIUrl not found. Required for sync.')
-        return
-      }
-
       const walletConfigPath = flags.path || config.wallet?.path
       if (!walletConfigPath) {
         this.error(`Wallet path not defined. Specify with --path or ensure 'wallet.path' is set in ${flags.config}`)
@@ -134,7 +128,8 @@ export default class WalletSync extends Command {
       }
 
       const rpcCall = async <T>(endpoint: string, queryParams: string = ''): Promise<T> => {
-        const url = `${blockbookBaseUrl.replace(/\/$/, '')}${endpoint}${queryParams}`
+        //        const url = `${blockbookBaseUrl.replace(/\/$/, '')}${endpoint}${queryParams}`
+        const url = "";
         this.log(chalk.dim(`API: ${url}`))
         const response = await fetch(url, { headers: { 'api-key': apiKey }, method: 'GET' })
         if (!response.ok) {

@@ -28,7 +28,6 @@ export interface DogeConfig {
   network: Network
   rpc?: {
     apiKey?: string
-    blockbookAPIUrl?: string
     l2Url?: string
     password?: string // for send/sync on dogocoin
     url?: string // for send/sync on dogocoin like: https://testnet.doge.xyz/

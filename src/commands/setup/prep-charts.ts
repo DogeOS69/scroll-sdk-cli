@@ -391,7 +391,6 @@ export default class SetupPrepCharts extends Command {
                         'tso-service': 'TSO_HOST',
                         'celestia-node': 'CELESTIA_HOST',
                         'dogecoin': 'DOGECOIN_HOST',
-                        'blockbook': 'BLOCKBOOK_HOST',
                       };
 
                       const alternativeKey = alternativeMappings[chartName];
@@ -715,45 +714,7 @@ export default class SetupPrepCharts extends Command {
         if (ingressUpdated) {
           updated = true;
         }
-      } else if (chartName == 'blockbook') {
-        let ingressUpdated = false;
-        if (!productionYaml.ingress) {
-          productionYaml.ingress = {
-            enabled: true,
-            className: "nginx",
-            annotations: {
-              "cert-manager.io/cluster-issuer": "letsencrypt-prod",
-              "nginx.ingress.kubernetes.io/ssl-redirect": "true"
-            },
-            hosts: [
-              {
-                host: this.getConfigValue("ingress.BLOCKBOOK_HOST"),
-                paths: [{ path: "/", pathType: "Prefix" }]
-              }
-            ],
-          };
-          changes.push({ key: `ingress`, oldValue: "undefined", newValue: JSON.stringify(productionYaml.ingress) });
-          ingressUpdated = true;
-        } else {
-          let ingressValue = productionYaml.ingress;
-          ingressValue.enabled = true;
-          const configValue = this.getConfigValue('ingress.BLOCKBOOK_HOST');
-          ingressUpdated = this.processIngressHosts(ingressValue, configValue, changes);
-        }
-
-        if (ingressUpdated) {
-          updated = true;
-        }
-
-        const oldValue = productionYaml.blockbook.blockHeight;
-        const newValue = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
-        if (oldValue !== newValue) {
-          productionYaml.blockbook.blockHeight = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
-          updated = true;
-          changes.push({ key: `blockbook.blockHeight`, oldValue: oldValue || 'undefined', newValue: newValue || 'undefined' });
-        }
       }
-
       else if (chartName == 'fee-oracle') {
         if (!productionYaml.configMaps?.env?.data) {
           this.error(`${chartName}: configMaps.env.data not found in config`);
@@ -792,7 +753,6 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_L1_INTERFACE_L1_BASE_FEE_PER_GAS": this.getConfigValue("genesis.BASE_FEE_PER_GAS").toString(),
           "DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER": this.getConfigValue("sequencer.L2GETH_SIGNER_ADDRESS"),
           "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL": dogecoinInternalUrl,
-          "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_URL": this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl),
           "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
           "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__BRIDGE_ADDRESS": this.withdrawalProcessorConfig["bridge_address"],
           "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "http://celestia-testnet-mocha:26658",
@@ -824,7 +784,6 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSAGE_QUEUE_ADDRESS": this.getConfigValue("contractsFile.L2_MESSAGE_QUEUE_ADDR"),
 
           "DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL": dogecoinInternalUrl,
-          "DOGEOS_WITHDRAWAL_BLOCKBOOK_URL": this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl),
           "DOGEOS_WITHDRAWAL_TSO_URL": "http://tso-service:3000",
           "DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__START_BLOCK": "0",
@@ -967,33 +926,6 @@ configMaps:
           }
         }
       }
-      // else if (chartName == "dogeos-deposit-processor") {
-      //   // Check and ensure configMaps.env.data exists
-      //   if (!productionYaml.configMaps?.env?.data) {
-      //     this.warn(`${chartName}: configMaps.env.data not found, skipping configuration update`);
-      //     continue;
-      //   }
-      //   let blockbookUrl = this.getBaseUrl(this.dogeConfig.rpc?.blockbookAPIUrl);
-      //   if (blockbookUrl?.endsWith('/api')) {
-      //     blockbookUrl = blockbookUrl.slice(0, -4);
-      //   }
-      //   const depositProcessorMappings = {
-      //     'DOGEOS_DEPOSIT_PROCESSOR_DOGE_RPC_URL': blockbookUrl,
-      //     'DOGEOS_DEPOSIT_PROCESSOR_DEPOSIT_DOGE_ADDRESS': this.withdrawalProcessorConfig["bridge_address"],
-      //     'DOGEOS_DEPOSIT_PROCESSOR_MOAT_ADDRESS': this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
-      //     'DOGEOS_DEPOSIT_PROCESSOR_ANVIL_RPC_URL': this.getConfigValue("general.L1_RPC_ENDPOINT"),
-      //     'DOGEOS_DEPOSIT_PROCESSOR_L1_MESSENGER_ADDRESS': this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
-      //   };
-
-      //   for (const [envKey, newValue] of Object.entries(depositProcessorMappings)) {
-      //     if (newValue !== undefined && productionYaml.configMaps.env.data[envKey] !== newValue) {
-      //       const oldValue = productionYaml.configMaps.env.data[envKey];
-      //       productionYaml.configMaps.env.data[envKey] = newValue;
-      //       updated = true;
-      //       changes.push({ key: `configMaps.env.data["${envKey}"]`, oldValue, newValue });
-      //     }
-      //   }
-      // }
       else if (chartName == "tso-service") {
         if (!productionYaml.env) {
           this.error(`${chartName}: env not found in config`);
