@@ -203,7 +203,6 @@ export class BridgeInitCommand extends Command {
             '--height', startHeight,
             '--rescan',
         ]
-        console.log(args);
         await this.runImage(imageTag, args);
 
     }

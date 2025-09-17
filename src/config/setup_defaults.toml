@@ -6,14 +6,42 @@ network = "testnet"
 # --- Base Identity --- 
 # Seed string used to derive the base private key.
 # Recommend using environment variable TESTNET_SETUP_SEED_STRING instead.
-seed_string = ""
+seed_string = "random-seed-string-00"
+
+# Optional: Provide a specific public key for the P2PKH Sequencer role.
+# If commented out, the keypair will be derived from seed_string.
+# sequencer_pubkey = "02xxxxxxx..."
+
+# Optional: Provide a specific public key for the P2PKH Fee Wallet role.
+# If commented out, the keypair will be derived from seed_string.
+# fee_wallet_pubkey = "03yyyyyyy..."
 
 # --- Dogecoin RPC --- 
-dogecoin_rpc_url = "https://testnet.doge.xyz"
+dogecoin_rpc_url = "https://testnet.doge-rpc.io"
 dogecoin_rpc_user = "user"
-dogecoin_rpc_pass = ""
+dogecoin_rpc_pass = "password"
 # Recommend using environment variables DOGECOIN_RPC_USER and DOGECOIN_RPC_PASS
 
+## Note: Blockbook has been removed. RPC-only mode is used.
+
+# Optional wallet behavior:
+# If set, the tool will request a wallet rescan starting from this height
+# after importing addresses (helps discover historical UTXOs for the base address).
+# wallet_rescan_from_height = 0
+
+# If true, import derived addresses (sequencer/fee/bridge) into the node wallet
+# as watch-only for visibility. Not required for funding logic. Default: false
+# watch_derived_addresses_in_wallet = false
+
+# Wallet-less mode block is at the bottom to avoid scoping root keys
+# into the array-of-tables in TOML.
+
+# Optional REST getutxos batch check (no wallet required). If enabled, the tool can use a REST
+# query to check multiple outpoints at once. If rest_base_url is not provided, it attempts to
+# derive from dogecoin_rpc_url (same host:port + "/rest").
+# [rest]
+# enable_rest_getutxos_batch = true
+# rest_base_url = "http://127.0.0.1:44555/rest"
 
 # --- Bridge Script Generation Parameters --- 
 # Thresholds for the complex bridge script roles
@@ -26,39 +54,50 @@ recovery_threshold = 2
 correctness_key_count = 3
 attestation_key_count = 3
 recovery_key_count = 3
-
 # Timelock (in seconds) for the recovery path
-timelock_seconds = 3600 # 1 hour example 
+timelock_seconds = 3600 # 1 hour example
 
-correctness_pubkeys = [
-  "0218576973c01906af7026c8e00153e1795da9c0c3531157960a751c4d2292c3f2",
-  "020218746c547b6ac226b42e22469c67443cfab6a6e54267f9d0e0b344e9b7ad28",
-  "02533869b4035b46d0e8e0e616432b8a773fa02dedf978bd5de075cd182088b378"
-]
+# Fee rate used for transaction construction (satoshis per kvB)
+fee_rate_sat_per_kvb = 1000000
 
-attestation_pubkeys = [
-  "04a0fac7d83e0e6bd8bd9c12c3e7de4ec75f7d6bf43e50a68ab2626c773e3a13915960d4ff73b3fc739ec02bbd2bdec7f1ea15285f54fddfb497d37e904c5e1baa",
-  "04a27d6571d40e8cb3f711776c1c1e3eae6d780d1674c3d547b3334a3db2b617b1b07783b91ace392adab2396a0b501fcf765c46c972b1ceb9c201afff6b3a4757",
-  "047d5fa6585c3c4a65764044a46c31217e4b5f8dfd2617dd16a74ae933dc7f4804c898980c5514bff786a7de8e418ca0ed304bec7fce2c03ce695041ab4826b756"
-]
+# Optional: Ethereum address (hex string, 20 bytes, e.g., "0x...") for OP_RETURN data in bridge funding transactions.
+# If not provided or empty, a default address (0123...6789) will be used.
+# deposit_eth_recipient_address_hex = "0x1234567890123456789012345678901234567890"
 
-# recovery_pubkeys = [] # Example if you want to provide recovery keys
+# Optional: Provide specific public keys for correctness roles.
+# If commented out or empty, 'correctness_key_count' keys will be derived from seed_string.
+# correctness_pubkeys = [
+#   "02xxxxxxxx...",
+#   "03yyyyyyyy..."
+# ]
 
+# Optional: Provide specific public keys for attestation roles.
+# If commented out or empty, 'attestation_key_count' keys will be derived from seed_string.
+# attestation_pubkeys = [
+#   "02zzzzzzzz...",
+#   "03wwwwwwww..."
+# ]
 
-
-# Fee rate for transactions created by this script (in satoshis per kilovirtualbyte)
-# 1_000_000 = 0.01 DOGE/kvB (Common minimum)
-# 2_000_000 = 0.02 DOGE/kvB
-fee_rate_sat_per_kvb = 2000000
-
-# Ethereum address (hex string, 20 bytes, e.g., "0x...") for OP_RETURN data in bridge funding transactions.
-deposit_eth_recipient_address_hex = ""
+# Optional: Provide specific public keys for recovery roles.
+# If commented out or empty, 'recovery_key_count' keys will be derived from seed_string.
+# recovery_pubkeys = [
+#   "02aaaaaa...",
+#   "03bbbbbb..."
+# ]
 
 # --- Target Amounts (in Satoshis) ---
-sequencer_target_amount = 42069000    # 0.42069 DOGE
-fee_wallet_target_amount = 1000000000 # 10 DOGE
+sequencer_target_amount = 420690000    # 4.2069 DOGE
+fee_wallet_target_amount = 500000000 # 5 DOGE
 bridge_target_amount = 5000000000    # 50 DOGE
 
 # --- Optional Settings ---
 confirmations_required = 1 # How many confirmations to wait for after sending
 
+# ---------------- Wallet-less mode (array of tables) ----------------
+# Place this block AFTER all root-level fields to avoid scoping them
+# into this table. Repeat for multiple inputs.
+[[base_funding_utxos]]
+txid = "<txid>"
+vout = 1
+amount_sats = 123456789
+# prev_tx_hex = "<raw tx hex of the funding tx>"
