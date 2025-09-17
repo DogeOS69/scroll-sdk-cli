@@ -260,11 +260,11 @@ export class DogeConfigCommand extends Command {
     }
 
     let newConfig = existingConfig;
-    newConfig.rpc!.apiKey = await input({
-      default: existingConfig.rpc?.apiKey,
-      message: 'Enter your NowNodes API key (deployment only, get one at nownodes.io):',
-      validate: (value) => (value ? true : 'API key is required'),
-    })
+    // newConfig.rpc!.apiKey = await input({
+    //   default: existingConfig.rpc?.apiKey,
+    //   message: 'Enter your NowNodes API key (deployment only, get one at nownodes.io):',
+    //   validate: (value) => (value ? true : 'API key is required'),
+    // })
 
     let generateClusterRpc = await confirm({
       message: `Do you want to automatically generate secure credentials for your Dogecoin RPC service that will be deployed?\n  (These will be used to authenticate access to your Dogecoin nodes)\n  Choose 'Yes' to auto-generate, 'No' to set manually`,
