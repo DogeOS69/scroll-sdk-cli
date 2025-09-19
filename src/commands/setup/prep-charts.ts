@@ -391,6 +391,7 @@ export default class SetupPrepCharts extends Command {
                         'tso-service': 'TSO_HOST',
                         'celestia-node': 'CELESTIA_HOST',
                         'dogecoin': 'DOGECOIN_HOST',
+                        'blockbook': 'BLOCKBOOK_HOST',
                       };
 
                       const alternativeKey = alternativeMappings[chartName];
@@ -714,7 +715,45 @@ export default class SetupPrepCharts extends Command {
         if (ingressUpdated) {
           updated = true;
         }
+      } else if (chartName == 'blockbook') {
+        let ingressUpdated = false;
+        if (!productionYaml.ingress) {
+          productionYaml.ingress = {
+            enabled: true,
+            className: "nginx",
+            annotations: {
+              "cert-manager.io/cluster-issuer": "letsencrypt-prod",
+              "nginx.ingress.kubernetes.io/ssl-redirect": "true"
+            },
+            hosts: [
+              {
+                host: this.getConfigValue("ingress.BLOCKBOOK_HOST"),
+                paths: [{ path: "/", pathType: "Prefix" }]
+              }
+            ],
+          };
+          changes.push({ key: `ingress`, oldValue: "undefined", newValue: JSON.stringify(productionYaml.ingress) });
+          ingressUpdated = true;
+        } else {
+          let ingressValue = productionYaml.ingress;
+          ingressValue.enabled = true;
+          const configValue = this.getConfigValue('ingress.BLOCKBOOK_HOST');
+          ingressUpdated = this.processIngressHosts(ingressValue, configValue, changes);
+        }
+
+        if (ingressUpdated) {
+          updated = true;
+        }
+
+        const oldValue = productionYaml.blockbook.blockHeight;
+        const newValue = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
+        if (oldValue !== newValue) {
+          productionYaml.blockbook.blockHeight = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
+          updated = true;
+          changes.push({ key: `blockbook.blockHeight`, oldValue: oldValue || 'undefined', newValue: newValue || 'undefined' });
+        }
       }
+
       else if (chartName == 'fee-oracle') {
         if (!productionYaml.configMaps?.env?.data) {
           this.error(`${chartName}: configMaps.env.data not found in config`);

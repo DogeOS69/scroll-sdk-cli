@@ -96,9 +96,21 @@ export default class WalletSync extends Command {
 
       this.log(chalk.blue(`Syncing wallet for network: ${config.network} (from ${flags.config})`))
 
-      const apiKey = flags['api-key'] || process.env.NOWNODES_API_KEY || config.rpc?.apiKey
+      let apiKey = flags['api-key'] || process.env.NOWNODES_API_KEY || config.rpc?.apiKey
       if (!apiKey) {
-        this.error('API key required. Provide via --api-key, NOWNODES_API_KEY, or rpc.apiKey in config.')
+        // this.error('API key required. Provide via --api-key, NOWNODES_API_KEY, or rpc.apiKey in config.')
+        // return
+        apiKey="";
+      }
+
+      let blockbookBaseUrl = config.rpc?.blockbookAPIUrl
+      //if not endiwith "/api/" or "/api" then add it
+      if (blockbookBaseUrl && !blockbookBaseUrl.endsWith('/api/') && !blockbookBaseUrl.endsWith('/api')){
+        blockbookBaseUrl += '/api'
+      }
+
+      if (!blockbookBaseUrl) {
+        this.error('Config rpc.blockbookAPIUrl not found. Required for sync.')
         return
       }
 
@@ -128,8 +140,7 @@ export default class WalletSync extends Command {
       }
 
       const rpcCall = async <T>(endpoint: string, queryParams: string = ''): Promise<T> => {
-        //        const url = `${blockbookBaseUrl.replace(/\/$/, '')}${endpoint}${queryParams}`
-        const url = "";
+        const url = `${blockbookBaseUrl.replace(/\/$/, '')}${endpoint}${queryParams}`
         this.log(chalk.dim(`API: ${url}`))
         const response = await fetch(url, { headers: { 'api-key': apiKey }, method: 'GET' })
         if (!response.ok) {
