@@ -550,18 +550,6 @@ export default class SetupGenRpcPackage extends Command {
         }
       }
 
-      // Add BLOCKBOOK_HOST from config.toml if it exists
-      if (config.ingress?.BLOCKBOOK_HOST) {
-        const blockbookUrl = `https://${config.ingress.BLOCKBOOK_HOST}`
-        const key = 'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_URL'
-        if (existingVars[key] !== blockbookUrl) {
-          newVars[key] = blockbookUrl
-          if (!updatedVars.includes(key)) {
-            updatedVars.push(key)
-          }
-        }
-      }
-
       // If no updates needed, return early
       if (Object.keys(newVars).length === 0) {
         this.log(chalk.green('✓ No changes detected in l1-interface.env - file is up to date'))

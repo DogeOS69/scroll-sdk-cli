@@ -99,14 +99,14 @@ export class DogeConfigCommand extends Command {
       })
       
       if (!response.ok) {
-        throw new Error(`NowNodes API connection failed: ${response.status} ${response.statusText}`)
+        throw new Error(`blockbook API connection failed: ${response.status} ${response.statusText}`)
       }
       
       const result = await response.json() as { blockbook: { bestHeight: number } }
       if (result.blockbook && typeof result.blockbook.bestHeight === 'number') {
         return result.blockbook.bestHeight
       } else {
-        throw new Error('Unable to get block height from NowNodes API')
+        throw new Error('Unable to get block height from blockbook API')
       }
     } else {
       // Standard Dogecoin RPC format
@@ -287,7 +287,7 @@ export class DogeConfigCommand extends Command {
     let newConfig = existingConfig;
 
     // Handle blockbook API URL with confirmation if different from default
-    const defaultBlockbookUrl = network === 'mainnet' ? 'http://blockbook-mainnet:19139' : 'http://blockbook-testnet:19139'
+    const defaultBlockbookUrl = network === 'mainnet' ? 'https://blockbook.mainnet.dogeos.com/' : 'https://blockbook.testnet.dogeos.com/'
     const currentBlockbookUrl = existingConfig.rpc?.blockbookAPIUrl || defaultBlockbookUrl
     
     newConfig.rpc!.blockbookAPIUrl = await input({
@@ -297,8 +297,7 @@ export class DogeConfigCommand extends Command {
 
     newConfig.rpc!.apiKey = await input({
       default: existingConfig.rpc?.apiKey,
-      message: 'Enter your NowNodes API key (deployment only, get one at nownodes.io):',
-      validate: (value) => (value ? true : 'API key is required'),
+      message: 'Enter your blockbook API key:',
     })
 
     let generateClusterRpc = await confirm({

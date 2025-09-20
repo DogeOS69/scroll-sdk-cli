@@ -444,13 +444,6 @@ export default class SetupConfigs extends Command {
       content += `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
       content += `DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL="${this.dogeConfig.da?.tendermintRpcUrl || ''}"\n`
 
-      // Add blockbook API key from doge-config if available
-      // if (this.dogeConfig.rpc?.apiKey) {
-      //   content += `DOGEOS_WITHDRAWAL_BLOCKBOOK_API_KEY="${this.dogeConfig.rpc?.apiKey}"\n`
-      // } else {
-      //   this.error(`dogeConfig.rpc?.apiKey is null`)
-      // }
-
       // Add values from output-withdrawal-processor.toml
       const withdrawal_processor_toml_path = path.join(process.cwd(), ".data", "output-withdrawal-processor.toml");
       if (fs.existsSync(withdrawal_processor_toml_path)) {

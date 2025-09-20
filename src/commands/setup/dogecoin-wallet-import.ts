@@ -6,32 +6,43 @@ import Docker from 'dockerode'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { getSetupDefaultsPath } from '../../config/constants.js'
+import { DogeConfig } from '../../types/doge-config.js'
+import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 
 export class BridgeInitCommand extends Command {
-    static description = 'Initialize bridge for mainnet or testnet'
+    static description = 'Dogecoin wallet import'
 
     static examples = [
-        '$ scrollsdk doge:bridge-init',
-        '$ scrollsdk doge:bridge-init -s 123456',
-        '$ scrollsdk doge:bridge-init --seed 123456',
-        '$ scrollsdk doge:bridge-init --image-tag 0.2.0-debug',
+
     ]
 
     static flags = {
-        seed: Flags.string({
-            char: 's',
-            description: 'seed which will regenerate the sequencer and fee wallet',
-        }),
-        'image-tag': Flags.string({
-            description: 'Specify the Docker image tag to use',
-            required: false,
-        }),
+        'image-tag': Flags.string({ description: 'Docker image tag', required: false }),
+        'doge-config': Flags.string({ description: 'Path to doge-config toml (e.g., .data/doge-config-testnet.toml)', required: false }),
+    }
+
+    private configData: any = {}
+    private dogeConfig: DogeConfig = {} as DogeConfig
+    private flags: any; // To store parsed flags
+
+    private async loadConfigs(flags: any): Promise<void> {
+        const configPath = path.join(process.cwd(), 'config.toml')
+        const contractsConfigPath = path.join(process.cwd(), 'config-contracts.toml')
+
+        if (fs.existsSync(configPath)) {
+            const configContent = fs.readFileSync(configPath, 'utf-8')
+            this.configData = toml.parse(configContent)
+        } else {
+            this.warn('config.toml not found. Some values may not be populated correctly.')
+        }
+        const { config } = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk doge:config')
+        this.dogeConfig = config as DogeConfig
     }
 
     private async fetchDockerTags(): Promise<string[]> {
         try {
             const response = await fetch(
-                'https://registry.hub.docker.com/v2/repositories/dogeos69/generate-test-keys/tags?page_size=100',
+                'https://registry.hub.docker.com/v2/repositories/dogeos69/dogecoin-wallet-import/tags?page_size=100',
             )
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`)
@@ -45,8 +56,7 @@ export class BridgeInitCommand extends Command {
     }
 
     private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-        const defaultTag = '091725-00-dev'
-
+        const defaultTag = '091625-00'
         if (!providedTag) {
             return defaultTag
         }
@@ -73,9 +83,9 @@ export class BridgeInitCommand extends Command {
         return selectedTag
     }
 
-    async runGenerateTestKeys(imageTag: string): Promise<void> {
+    async runImage(imageTag: string, args: string[]): Promise<void> {
         const docker = new Docker();
-        const image = `docker.io/dogeos69/generate-test-keys:${imageTag}`;
+        const image = `docker.io/dogeos69/dogecoin-wallet-import:${imageTag}`;
         try {
             this.log(chalk.cyan(`Pulling Docker Image: ${image}`))
             // Pull the image if it doesn't exist locally
@@ -92,13 +102,12 @@ export class BridgeInitCommand extends Command {
             })
 
             this.log(chalk.cyan('Creating Docker Container...'))
-            // Create and run the container
             const container = await docker.createContainer({
-                Cmd: [], // Add any command if needed
+                Cmd: args,
+                Env: ['RUST_LOG=trace'],
                 HostConfig: {
                     Binds: [`${process.cwd()}:/app`],
                 },
-                WorkingDir: '/app',
                 Image: image,
             })
 
@@ -139,10 +148,9 @@ export class BridgeInitCommand extends Command {
     }
     async run(): Promise<void> {
         const { flags } = await this.parse(BridgeInitCommand)
-        let seed = flags.seed
+        this.flags = flags
         let imageTag = flags['image-tag']
 
-        // Read existing seed from setup_defaults.toml
         const setupDefaultsPath = getSetupDefaultsPath();
         if (!fs.existsSync(setupDefaultsPath)) {
             this.error('setup_defaults.toml not found, please run `scrollsdk doge:config` first')
@@ -150,15 +158,6 @@ export class BridgeInitCommand extends Command {
         }
         const existingConfigStr = fs.readFileSync(setupDefaultsPath, 'utf-8');
         const existingConfig = toml.parse(existingConfigStr) as any;
-        const existingSeed = existingConfig.seed_string || '';
-
-        if (!seed) {
-            seed = await input({
-                message: 'Enter the seed string',
-                default: existingSeed,
-            })
-        }
-
         const configPath = path.join(process.cwd(), 'config.toml')
         let configData: any;
         if (fs.existsSync(configPath)) {
@@ -169,36 +168,43 @@ export class BridgeInitCommand extends Command {
         }
 
         let newConfig = toml.parse(existingConfigStr);
-        newConfig.seed_string = seed;
-        newConfig.deposit_eth_recipient_address_hex=this.getNestedValue(configData,"accounts.DEPLOYER_ADDR")
+        newConfig.deposit_eth_recipient_address_hex = this.getNestedValue(configData, "accounts.DEPLOYER_ADDR")
         fs.writeFileSync(setupDefaultsPath, toml.stringify(newConfig));
+
+        // Load config files (config.toml, config-contracts.toml, doge-config, withdrawal-processor)
+        await this.loadConfigs(flags)
 
         imageTag = await this.getDockerImageTag(imageTag)
         this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
-        await this.runGenerateTestKeys(imageTag);
-        
-        // Move output files to .data directory
-        const dataDir = path.join(process.cwd(), '.data');
-        const outputFiles = [
-            'output-withdrawal-processor.toml',
-            'output-dummy-signer-keys.json',
-            'output-test-data.json'
-        ];
-        
-        // Create .data directory if it doesn't exist
-        if (!fs.existsSync(dataDir)) {
-            fs.mkdirSync(dataDir, { recursive: true });
-        }
-        
-        for (const fileName of outputFiles) {
-            const sourceFile = path.join(process.cwd(), fileName);
-            const targetFile = path.join(dataDir, fileName);
-            
-            if (fs.existsSync(sourceFile)) {
-                fs.renameSync(sourceFile, targetFile);
-                this.log(chalk.green(`Moved ${fileName} to .data directory`));
-            }
-        }
+        // Build CLI args from configs
+        const isTestnet = this.dogeConfig?.network === 'testnet'
+        const internalRpc = `http://dogecoin-${isTestnet ? 'testnet:44555' : 'mainnet:22555'}`
+        const ingressHost = this.getNestedValue(this.configData, 'ingress.DOGECOIN_HOST')
+        const rpcUrl = ingressHost ? `https://${ingressHost}` : internalRpc
+        const rpcUser = this.dogeConfig?.dogecoinClusterRpc?.username || 'user'
+        const rpcPassword = this.dogeConfig?.dogecoinClusterRpc?.password || 'password_test'
+        const network = this.dogeConfig?.network || 'testnet'
+        const startHeight = String(this.dogeConfig?.defaults?.dogecoinIndexerStartHeight ?? '0')
+
+        const output_test_data = fs.readFileSync("./.data/output-test-data.json", 'utf8');
+        let output_test_data_json = JSON.parse(output_test_data);
+
+        const { sequencer_address, fee_wallet_address, bridge_address } = output_test_data_json;
+
+        const args = [
+            '--rpc-url', rpcUrl,
+            '--network', network,
+            '--rpc-user', rpcUser,
+            '--rpc-password', rpcPassword,
+            '--address', bridge_address,
+            '--address', sequencer_address,
+            '--address', fee_wallet_address,
+            '--label', 'watch',
+            '--height', startHeight,
+            '--rescan',
+        ]
+        await this.runImage(imageTag, args);
+
     }
 }
 export default BridgeInitCommand
