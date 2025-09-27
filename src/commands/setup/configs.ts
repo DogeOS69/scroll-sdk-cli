@@ -646,7 +646,7 @@ export default class SetupConfigs extends Command {
     const image = `${DOCKER_REPOSITORY}:${imageTag}`
 
     try {
-      this.log(chalk.cyan('Pulling Docker Image...'))
+      this.log(chalk.cyan(`Pulling Docker Image: ${image}`))
       // Pull the image if it doesn't exist locally
       const pullStream = await docker.pull(image)
       await new Promise((resolve, reject) => {
