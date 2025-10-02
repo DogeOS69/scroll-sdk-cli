@@ -328,7 +328,7 @@ export default class SetupPrepCharts extends Command {
                 if (chartName === "l1-devnet" && key === "CHAIN_ID") {
                   configKey = "general.CHAIN_ID_L1";
                 }
-                if (chartName === "rollup-node" && key === "L1_RPC_ENDPOINT") {
+                if (chartName === "rollup-relayer" && key === "L1_RPC_ENDPOINT") {
                   configKey = "general.DA_PUBLISHER_ENDPOINT";
                 }
 
@@ -1193,7 +1193,7 @@ configMaps:
       let yamlData = yaml.load(fs.readFileSync(yamlPath, "utf-8")) as any;
       let changes: Array<{ key: string; oldValue: string; newValue: string }> = [];
 
-      if (chartName == "rollup-node") {
+      if (chartName == "rollup-relayer") {
         let updated = false;
         let daPublisherEndpoint = this.getConfigValue("general.DA_PUBLISHER_ENDPOINT");
         
