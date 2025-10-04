@@ -155,7 +155,7 @@ export default class SetupConfigs extends Command {
       'fee-oracle',
       // 'l1-explorer',
       'l2-sequencer',
-      'rollup-node',
+      'rollup-relayer',
       'contracts',
       'l2-bootnode',
       'dogecoin',
@@ -185,7 +185,7 @@ export default class SetupConfigs extends Command {
     const migrateDbFiles = [
       // { key: 'BRIDGE_HISTORY_DB_CONNECTION_STRING', service: 'bridge-history-fetcher' },
       // { key: 'GAS_ORACLE_DB_CONNECTION_STRING', service: 'gas-oracle' },
-      { key: 'ROLLUP_NODE_DB_CONNECTION_STRING', service: 'rollup-node' },
+      { key: 'ROLLUP_NODE_DB_CONNECTION_STRING', service: 'rollup-relayer' },
     ]
 
     for (const file of migrateDbFiles) {
@@ -313,7 +313,7 @@ export default class SetupConfigs extends Command {
         'L2GETH_PASSWORD:L2GETH_PASSWORD',
         'L2GETH_NODEKEY:L2GETH_NODEKEY',
       ],
-      'rollup-node': [
+      'rollup-relayer': [
         'ROLLUP_NODE_DB_CONNECTION_STRING:SCROLL_ROLLUP_DB_CONFIG_DSN',
         'L1_COMMIT_SENDER_PRIVATE_KEY:SCROLL_ROLLUP_L2_CONFIG_RELAYER_CONFIG_COMMIT_SENDER_SIGNER_CONFIG_PRIVATE_KEY_SIGNER_CONFIG_PRIVATE_KEY',
         'L1_FINALIZE_SENDER_PRIVATE_KEY:SCROLL_ROLLUP_L2_CONFIG_RELAYER_CONFIG_FINALIZE_SENDER_SIGNER_CONFIG_PRIVATE_KEY_SIGNER_CONFIG_PRIVATE_KEY',
@@ -537,7 +537,7 @@ export default class SetupConfigs extends Command {
       { source: 'frontend-config.yaml', target: 'frontends-config.yaml' },
       { source: 'genesis.yaml', target: 'genesis.yaml' },
       { source: 'gas-oracle-config.yaml', target: 'gas-oracle-config.yaml' },
-      { source: 'rollup-config.yaml', target: 'rollup-node-config.yaml' },
+      { source: 'rollup-config.yaml', target: 'rollup-relayer-config.yaml' },
       { source: 'rollup-explorer-backend-config.yaml', target: 'rollup-explorer-backend-config.yaml' },
     ]
 

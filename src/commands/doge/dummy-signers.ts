@@ -1085,7 +1085,7 @@ export class DummySignersCommand extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = '060925-00'
+    const defaultTag = '100125-00'
 
     if (!providedTag) {
       return defaultTag
