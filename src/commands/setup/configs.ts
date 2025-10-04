@@ -458,7 +458,11 @@ export default class SetupConfigs extends Command {
     }
 
     if (service === 'celestia-node') {
-      envFiles['celestia-node-secret.env'] = `mnemonic="${this.dogeConfig.da?.celestiaMnemonic}"\n`
+      let content = `mnemonic="${this.dogeConfig.da?.celestiaMnemonic}"\n`
+      const url = this.dogeConfig.da?.tendermintRpcUrl || '';
+      const lastPart = url.split('/').filter(Boolean).pop() || '';
+      content += `x-token="${lastPart}"\n`;
+      envFiles['celestia-node-secret.env'] = content
     }
 
     return envFiles
@@ -585,20 +589,20 @@ export default class SetupConfigs extends Command {
         this.log(chalk.yellow(`Source file not found: ${mapping.source}`))
       }
     }
-/*
-    try {
-      this.log(chalk.blue(`generating balance-checker alert rules file...`))
-      const scrollMonitorProductionFilePath = path.join(targetDir, 'scroll-monitor-production.yaml')
-      const balanceCheckerConfigFilePath = path.join(targetDir, 'balance-checker-config.yaml')
-      const addedAlertRules = this.generateAlertRules(balanceCheckerConfigFilePath)
-      const existingContent = fs.readFileSync(scrollMonitorProductionFilePath, 'utf8')
-      const existingYaml = yaml.load(existingContent) as any
-      existingYaml['kube-prometheus-stack'].additionalPrometheusRules = addedAlertRules
-      fs.writeFileSync(scrollMonitorProductionFilePath, yaml.dump(existingYaml, { indent: 2 }))
-    } catch {
-      this.error(`generating balance-checker alert rules file failed`)
-    }
-*/
+    /*
+        try {
+          this.log(chalk.blue(`generating balance-checker alert rules file...`))
+          const scrollMonitorProductionFilePath = path.join(targetDir, 'scroll-monitor-production.yaml')
+          const balanceCheckerConfigFilePath = path.join(targetDir, 'balance-checker-config.yaml')
+          const addedAlertRules = this.generateAlertRules(balanceCheckerConfigFilePath)
+          const existingContent = fs.readFileSync(scrollMonitorProductionFilePath, 'utf8')
+          const existingYaml = yaml.load(existingContent) as any
+          existingYaml['kube-prometheus-stack'].additionalPrometheusRules = addedAlertRules
+          fs.writeFileSync(scrollMonitorProductionFilePath, yaml.dump(existingYaml, { indent: 2 }))
+        } catch {
+          this.error(`generating balance-checker alert rules file failed`)
+        }
+    */
     // Remove source files after all processing is complete
     for (const mapping of fileMappings) {
       const sourcePath = path.join(sourceDir, mapping.source)
