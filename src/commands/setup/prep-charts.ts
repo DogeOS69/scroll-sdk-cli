@@ -212,7 +212,7 @@ export default class SetupPrepCharts extends Command {
       chartName: string;
       configKey: string | null;
     }
-    
+
     let names: ChartConfig[] = [{
       chartName: "l2-bootnode",
       configKey: "bootnode"
@@ -246,7 +246,7 @@ export default class SetupPrepCharts extends Command {
 
       while (true) {
         const changesForThisFile: Array<{ keyPath: string; oldValue: string | undefined; newValue: string }> = [];
-        
+
         // For charts without configKey, we generate a fixed number of instances (e.g., 6 for cubesigner-signer)
         if (!configKey) {
           // Determine the number of instances dynamically for cubesigner-signer based on dogeConfig.cubesigner.roles
@@ -268,7 +268,7 @@ export default class SetupPrepCharts extends Command {
             break
           }
         }
-        
+
         const destFilePath = path.join(valuesDir, `${chartName}-production-${releaseIndex}.yaml`);
 
         const newYamlContent = templateContent.replaceAll('__INSTANCE_INDEX__', releaseIndex.toString());
@@ -715,6 +715,32 @@ export default class SetupPrepCharts extends Command {
         if (ingressUpdated) {
           updated = true;
         }
+
+        if(!productionYaml.core || !productionYaml.core.rpc_url){
+          if (!productionYaml.core) {
+            productionYaml.core = {
+              rpc_url: ""
+            };
+          }
+        }
+        const oldCoreRpcUrl = productionYaml.core.rpc_url;
+
+        let newCoreRpcUrl = this.dogeConfig.da?.tendermintRpcUrl;
+        if (!newCoreRpcUrl) {
+          this.error(`Invalid tendermintRpcUrl URL: ${newCoreRpcUrl}`)
+        }
+
+        try {
+          const urlObj = new URL(newCoreRpcUrl);
+          newCoreRpcUrl = urlObj.hostname;
+        } catch (e) {
+          this.error(`Invalid tendermintRpcUrl URL: ${newCoreRpcUrl}`);
+        }
+        if (oldCoreRpcUrl !== newCoreRpcUrl) {
+          productionYaml.core.rpc_url = newCoreRpcUrl;
+          updated = true;
+          changes.push({ key: "core.rpc_url", oldValue: oldCoreRpcUrl, "newValue": newCoreRpcUrl });
+        }
       } else if (chartName == 'blockbook') {
         let ingressUpdated = false;
         if (!productionYaml.ingress) {
@@ -938,17 +964,17 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "celestia-testnet-mocha:26658",
           "DOGEOS_DA_PUBLISHER_CELESTIA_NAMESPACE": this.dogeConfig.da?.daNamespace
         }
-/*
-configMaps:
-  env:
-    enabled: true
-    data:
-      DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL: "celestia-testnet-mocha:26658"
-      DOGEOS_DA_PUBLISHER_CELESTIA_NAMESPACE: ""
-      DOGEOS_DA_PUBLISHER_DOGEOS_L2_RPC_URL: "http://l2-rpc:8545"
-      DOGEOS_DA_PUBLISHER_ENABLE_WITHDRAWAL_ROOT_FETCHING: "true"
-
-*/
+        /*
+        configMaps:
+          env:
+            enabled: true
+            data:
+              DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL: "celestia-testnet-mocha:26658"
+              DOGEOS_DA_PUBLISHER_CELESTIA_NAMESPACE: ""
+              DOGEOS_DA_PUBLISHER_DOGEOS_L2_RPC_URL: "http://l2-rpc:8545"
+              DOGEOS_DA_PUBLISHER_ENABLE_WITHDRAWAL_ROOT_FETCHING: "true"
+        
+        */
         const envData = productionYaml.configMaps.env.data;
         for (const [envKey, newValue] of Object.entries(todoMappings)) {
           if (Object.prototype.hasOwnProperty.call(envData, envKey)) {
@@ -1196,7 +1222,7 @@ configMaps:
       if (chartName == "rollup-relayer") {
         let updated = false;
         let daPublisherEndpoint = this.getConfigValue("general.DA_PUBLISHER_ENDPOINT");
-        
+
         // Parse the JSON string from scrollConfig
         let scrollConfigJson: any = {};
         try {
@@ -1204,7 +1230,7 @@ configMaps:
         } catch (e: any) {
           this.error(chalk.red(`Failed to parse scrollConfig JSON in ${file}: ` + e.message));
         }
-        
+
         const currentL1Endpoint = scrollConfigJson["l1_config"]["endpoint"];
         if (currentL1Endpoint != "") {
           scrollConfigJson["l1_config"]["endpoint"] = "";
@@ -1217,7 +1243,7 @@ configMaps:
           updated = true;
           changes.push({ key: `l2_config.relayer_config.sender_config.endpoint`, oldValue: currentEndpoint, newValue: daPublisherEndpoint });
         }
-        
+
         // Remove celestia_submit_endpoint if it exists
         if (scrollConfigJson["l2_config"]?.["relayer_config"]?.["celestia_submit_endpoint"] !== undefined) {
           const currentCelestiaEndpoint = scrollConfigJson["l2_config"]["relayer_config"]["celestia_submit_endpoint"];
@@ -1225,7 +1251,7 @@ configMaps:
           updated = true;
           changes.push({ key: `l2_config.relayer_config.celestia_submit_endpoint`, oldValue: currentCelestiaEndpoint, newValue: "removed" });
         }
-        
+
 
         if (updated) {
           this.log(`\nFor ${chalk.cyan(file)}:`)
@@ -1260,7 +1286,7 @@ configMaps:
         this.log(chalk.yellow(`No changes needed in ${file}`));
         skippedCharts++;
       }
-  
+
       if (chartName == "frontends") {
         let scrollConfig = yamlData["scrollConfig"];
         let scrollConfigToml: any = {};
