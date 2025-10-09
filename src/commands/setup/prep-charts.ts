@@ -716,7 +716,7 @@ export default class SetupPrepCharts extends Command {
           updated = true;
         }
 
-        if(!productionYaml.core || !productionYaml.core.rpc_url){
+        if (!productionYaml.core || !productionYaml.core.rpc_url) {
           if (!productionYaml.core) {
             productionYaml.core = {
               rpc_url: ""
@@ -823,6 +823,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "http://celestia-testnet-mocha:26658",
           "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__NAMESPACE_ID": this.dogeConfig.da?.daNamespace,
           "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
+          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_URL": new URL(this.dogeConfig.da?.tendermintRpcUrl || "").origin
         }
 
         for (const [envKey, newVal] of Object.entries(todoMappings)) {
@@ -859,7 +860,8 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE": this.dogeConfig.da?.daNamespace,
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__SIGNER_ADDRESS": this.dogeConfig.da?.signerAddress,
           "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_VOUT": this.withdrawalProcessorConfig["genesis_sequencer_vout"],
-          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_TXID": this.withdrawalProcessorConfig['genesis_sequencer_txid']
+          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_TXID": this.withdrawalProcessorConfig['genesis_sequencer_txid'],
+          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_URL": new URL(this.dogeConfig.da?.tendermintRpcUrl || "").origin
         }
 
         for (const [envKey, newVal] of Object.entries(todoMappings)) {
