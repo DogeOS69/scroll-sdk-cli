@@ -13,6 +13,7 @@ import { getSetupDefaultsPath, SETUP_DEFAULTS_TEMPLATE } from '../../config/cons
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
 const { Networks, PrivateKey } = bitcore
+const defaultTag = '100725-02'
 
 export class DummySignersManager {
   private dogeConfig: DogeConfig
@@ -1085,7 +1086,7 @@ export class DummySignersCommand extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = '100125-00'
+    
 
     if (!providedTag) {
       return defaultTag

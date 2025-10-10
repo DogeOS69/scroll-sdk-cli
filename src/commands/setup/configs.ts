@@ -419,6 +419,10 @@ export default class SetupConfigs extends Command {
       let content = `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
       content += `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
       content += `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_API_KEY=""\n`
+
+      const url = this.dogeConfig.da?.tendermintRpcUrl || '';
+      const lastPart = url.split('/').filter(Boolean).pop() || '';
+      content += `DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_TOKEN=${lastPart}\n`
       envFiles['l1-interface-secret.env'] = content
     }
 
@@ -453,6 +457,10 @@ export default class SetupConfigs extends Command {
       } else {
         this.error(`${withdrawal_processor_toml_path} not found`)
       }
+
+      const url = this.dogeConfig.da?.tendermintRpcUrl || '';
+      const lastPart = url.split('/').filter(Boolean).pop() || '';
+      content += `DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_TOKEN=${lastPart}\n`;
 
       envFiles['withdrawal-processor-secret.env'] = content
     }

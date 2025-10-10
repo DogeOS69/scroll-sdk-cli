@@ -536,6 +536,8 @@ export default class SetupGenRpcPackage extends Command {
         'DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_RPC_URL'
       ]
 
+      // this token is private, keep it empty as a place holder
+      
       // Process each environment variable from the YAML
       for (const [key, value] of Object.entries(envData)) {
         // Skip excluded fields
@@ -549,6 +551,9 @@ export default class SetupGenRpcPackage extends Command {
           updatedVars.push(key)
         }
       }
+
+      newVars["DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_TOKEN"] = "";
+      newVars["DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_URL"] = "";
 
       // If no updates needed, return early
       if (Object.keys(newVars).length === 0) {
