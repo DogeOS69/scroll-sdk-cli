@@ -553,7 +553,7 @@ export default class SetupGenRpcPackage extends Command {
       }
 
       newVars["DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_TOKEN"] = "";
-      newVars["DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_URL"] = "https://rpc-mocha.pops.one";
+      newVars["DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_URL"] = "";
 
       // If no updates needed, return early
       if (Object.keys(newVars).length === 0) {
