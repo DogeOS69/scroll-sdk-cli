@@ -7,6 +7,7 @@ import {ethers} from 'ethers'
 import path from 'node:path'
 
 import {parseTomlConfig} from '../../utils/config-parser.js'
+import {randomBytes} from 'node:crypto'
 // import { BlockExplorerParams } from '../../utils/onchain/constructBlockExplorerUrl.js';
 // import { txLink } from '../../utils/onchain/txLink.js'
 
@@ -61,6 +62,11 @@ export default class HelperActivity extends Command {
     rpc: Flags.string({
       char: 'r',
       description: 'RPC URL (overrides config for both layers)',
+    }),
+    spam: Flags.boolean({
+      char: 's',
+      description: 'with 110KB input while sending transaction',
+      default: false,
     }),
   }
 
@@ -130,9 +136,42 @@ export default class HelperActivity extends Command {
           chalk.red(`${pendingTxCount} pending transactions detected for ${publicKey} on ${layer.toUpperCase()}.`),
         )
 
-        const replacePending = await confirm({
-          message: `Do you want to replace the ${pendingTxCount} pending transactions with higher gas prices?`,
+        const countdownSeconds = 5
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+        let countdownHandle: ReturnType<typeof setInterval> | undefined
+        const timeoutPromise = new Promise<boolean>((resolve) => {
+          let secondsLeft = countdownSeconds
+          const logCountdown = () => {
+            this.log(chalk.yellow(`Auto-confirming in ${secondsLeft}s...`))
+          }
+
+          logCountdown()
+          countdownHandle = setInterval(() => {
+            secondsLeft -= 1
+            if (secondsLeft > 0) {
+              logCountdown()
+            } else {
+              if (countdownHandle) clearInterval(countdownHandle)
+            }
+          }, 1_000)
+
+          timeoutHandle = setTimeout(() => {
+            if (countdownHandle) clearInterval(countdownHandle)
+            this.log(chalk.yellow('No response in 5s, defaulting to "Yes".'))
+            resolve(true)
+          }, countdownSeconds * 1_000)
         })
+
+        const replacePending = await Promise.race([
+          confirm({
+            default: true,
+            message: `Do you want to replace the ${pendingTxCount} pending transactions with higher gas prices?`,
+          }),
+          timeoutPromise,
+        ])
+
+        if (timeoutHandle) clearTimeout(timeoutHandle)
+        if (countdownHandle) clearInterval(countdownHandle)
 
         if (replacePending) {
           this.log('Replacing pending txs...')
@@ -156,10 +195,7 @@ export default class HelperActivity extends Command {
 
     layers.map(async (layer) => {
       while (true) {
-        // for (const layer of layers) {
-        await this.sendTransaction(wallets[layer], recipientAddr, layer)
-        // }
-
+        await this.sendTransaction(wallets[layer], recipientAddr, layer, flags.spam)
         await new Promise((resolve) => setTimeout(resolve, flags.interval * 1000))
       }
     })
@@ -234,7 +270,7 @@ export default class HelperActivity extends Command {
     }
   }
 
-  private async sendTransaction(wallet: ethers.Wallet, recipient: string, layer: Layer) {
+  private async sendTransaction(wallet: ethers.Wallet, recipient: string, layer: Layer, spam: boolean = false) {
     try {
       this.debugLog(`Preparing transaction for ${layer.toUpperCase()}`)
       this.debugLog(`Sender: ${wallet.address}, Recipient: ${recipient}`)
@@ -246,9 +282,10 @@ export default class HelperActivity extends Command {
         nonce: currentNonce,
         to: recipient,
         value: ethers.parseUnits('0.1', 'gwei'),
+        data: spam ? `0x${randomBytes(110 * 1024).toString('hex')}` : null,
       })
 
-      this.debugLog(`Transaction created: ${JSON.stringify(tx, null, 2)}`)
+      //this.debugLog(`Transaction created: ${JSON.stringify(tx, null, 2)}`)
 
       // Increment the nonce tracker immediately after sending the transaction
       this.nonceTrackers[layer]++
@@ -283,7 +320,7 @@ export default class HelperActivity extends Command {
         if ('code' in error) {
           this.debugLog(`Error code: ${(error as any).code}`)
           if ((error as any).code === 'NONCE_EXPIRED') {
-            this.nonceTrackers[layer] = await wallet.getNonce();
+            this.nonceTrackers[layer] = await wallet.getNonce()
             this.log(chalk.blue(`Nonce expired. Trying use the latest nonce. ${this.nonceTrackers[layer]}`))
             return
           }
