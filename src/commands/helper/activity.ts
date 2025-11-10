@@ -130,9 +130,42 @@ export default class HelperActivity extends Command {
           chalk.red(`${pendingTxCount} pending transactions detected for ${publicKey} on ${layer.toUpperCase()}.`),
         )
 
-        const replacePending = await confirm({
-          message: `Do you want to replace the ${pendingTxCount} pending transactions with higher gas prices?`,
+        const countdownSeconds = 5
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+        let countdownHandle: ReturnType<typeof setInterval> | undefined
+        const timeoutPromise = new Promise<boolean>((resolve) => {
+          let secondsLeft = countdownSeconds
+          const logCountdown = () => {
+            this.log(chalk.yellow(`Auto-confirming in ${secondsLeft}s...`))
+          }
+
+          logCountdown()
+          countdownHandle = setInterval(() => {
+            secondsLeft -= 1
+            if (secondsLeft > 0) {
+              logCountdown()
+            } else {
+              if (countdownHandle) clearInterval(countdownHandle)
+            }
+          }, 1_000)
+
+          timeoutHandle = setTimeout(() => {
+            if (countdownHandle) clearInterval(countdownHandle)
+            this.log(chalk.yellow('No response in 5s, defaulting to "Yes".'))
+            resolve(true)
+          }, countdownSeconds * 1_000)
         })
+
+        const replacePending = await Promise.race([
+          confirm({
+            default: true,
+            message: `Do you want to replace the ${pendingTxCount} pending transactions with higher gas prices?`,
+          }),
+          timeoutPromise,
+        ])
+
+        if (timeoutHandle) clearTimeout(timeoutHandle)
+        if (countdownHandle) clearInterval(countdownHandle)
 
         if (replacePending) {
           this.log('Replacing pending txs...')
