@@ -13,7 +13,7 @@ import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { execSync } from 'child_process'
 import { promisify } from 'util'
 import { writeConfigs } from '../../utils/config-writer.js'
-import { DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
+import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
 
 const execAsync = promisify(childProcess.exec)
 const SECRETS_PATH = path.join(process.cwd(), 'secrets')
@@ -149,8 +149,8 @@ export default class SetupConfigs extends Command {
       // 'bridge-history-api',
       // 'bridge-history-fetcher',
       // 'chain-monitor',
-      // 'coordinator-api',
-      // 'coordinator-cron',
+      'coordinator-api',
+      'coordinator-cron',
       // 'gas-oracle',
       'fee-oracle',
       // 'l1-explorer',
@@ -477,7 +477,7 @@ export default class SetupConfigs extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = `gen-configs-${DOCKER_DEFAULT_TAG}`
+    const defaultTag = `gen-configs-${CONTRACTS_DOCKER_DEFAULT_TAG}`
 
     if (!providedTag) {
       return defaultTag
@@ -544,8 +544,8 @@ export default class SetupConfigs extends Command {
       { source: 'bridge-history-config.yaml', target: 'bridge-history-api-config.yaml' },
       { source: 'bridge-history-config.yaml', target: 'bridge-history-fetcher-config.yaml' },
       { source: 'chain-monitor-config.yaml', target: 'chain-monitor-config.yaml' },
-      { source: 'coordinator-config.yaml', target: 'coordinator-api-config.yaml' },
-      { source: 'coordinator-config.yaml', target: 'coordinator-cron-config.yaml' },
+      { source: 'coordinator-api-config.yaml', target: 'coordinator-api-config.yaml' },
+      { source: 'coordinator-cron-config.yaml', target: 'coordinator-cron-config.yaml' },
       { source: 'frontend-config.yaml', target: 'frontends-config.yaml' },
       { source: 'genesis.yaml', target: 'genesis.yaml' },
       { source: 'gas-oracle-config.yaml', target: 'gas-oracle-config.yaml' },

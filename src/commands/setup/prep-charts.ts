@@ -966,17 +966,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "celestia-testnet-mocha:26658",
           "DOGEOS_DA_PUBLISHER_CELESTIA_NAMESPACE": this.dogeConfig.da?.daNamespace
         }
-        /*
-        configMaps:
-          env:
-            enabled: true
-            data:
-              DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL: "celestia-testnet-mocha:26658"
-              DOGEOS_DA_PUBLISHER_CELESTIA_NAMESPACE: ""
-              DOGEOS_DA_PUBLISHER_DOGEOS_L2_RPC_URL: "http://l2-rpc:8545"
-              DOGEOS_DA_PUBLISHER_ENABLE_WITHDRAWAL_ROOT_FETCHING: "true"
-
-        */
+       
         const envData = productionYaml.configMaps.env.data;
         for (const [envKey, newValue] of Object.entries(todoMappings)) {
           if (Object.prototype.hasOwnProperty.call(envData, envKey)) {
