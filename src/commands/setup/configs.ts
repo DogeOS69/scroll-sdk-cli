@@ -585,6 +585,64 @@ export default class SetupConfigs extends Command {
             } else {
               this.log(chalk.yellow(`Could not find or parse scrollConfig in ${targetPath}`))
             }
+          } else if (
+            mapping.target === 'coordinator-api-config.yaml' ||
+            mapping.target === 'coordinator-cron-config.yaml'
+          ) {
+            //remove auth.secret
+            try {
+              const yamlFileContent = fs.readFileSync(targetPath, 'utf8')
+              const parsedYaml = yaml.load(yamlFileContent) as any
+
+              if (!parsedYaml || parsedYaml.scrollConfig === undefined) {
+                this.log(chalk.yellow(`scrollConfig not found in ${mapping.target}`))
+                continue
+              }
+
+              let scrollConfigObject: any
+              const originalScrollConfig = parsedYaml.scrollConfig
+
+              if (typeof originalScrollConfig === 'string') {
+                scrollConfigObject = JSON.parse(originalScrollConfig)
+              } else if (typeof originalScrollConfig === 'object' && originalScrollConfig !== null) {
+                scrollConfigObject = originalScrollConfig
+              } else {
+                this.log(chalk.yellow(`Unsupported scrollConfig format in ${mapping.target}`))
+                continue
+              }
+
+              if (!scrollConfigObject || typeof scrollConfigObject !== 'object') {
+                this.log(chalk.yellow(`scrollConfig is not an object in ${mapping.target}`))
+                continue
+              }
+
+              if (!scrollConfigObject.auth || typeof scrollConfigObject.auth !== 'object') {
+                scrollConfigObject.auth = {}
+                this.log(chalk.yellow(`auth field missing; created auth object in ${mapping.target}`))
+              }
+
+              const hadSecretKey = Object.prototype.hasOwnProperty.call(scrollConfigObject.auth, 'secret')
+              scrollConfigObject.auth.secret = null
+              if (hadSecretKey) {
+                this.log(chalk.green(`Sanitized auth.secret in ${mapping.target}`))
+              } else {
+                this.log(chalk.yellow(`auth.secret key missing; initialized to null in ${mapping.target}`))
+              }
+
+              parsedYaml.scrollConfig =
+                typeof originalScrollConfig === 'string'
+                  ? JSON.stringify(scrollConfigObject, null, 2)
+                  : scrollConfigObject
+
+              const updatedYaml = yaml.dump(parsedYaml, {indent: 2})
+              fs.writeFileSync(targetPath, updatedYaml)
+            } catch (error) {
+              if (error instanceof Error) {
+                this.log(chalk.red(`Failed to remove auth.secret in ${mapping.target}: ${error.message}`))
+              } else {
+                this.log(chalk.red(`Unknown error updating ${mapping.target}`))
+              }
+            }
           }
         } catch (error: unknown) {
           if (error instanceof Error) {
