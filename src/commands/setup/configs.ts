@@ -13,7 +13,7 @@ import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { execSync } from 'child_process'
 import { promisify } from 'util'
 import { writeConfigs } from '../../utils/config-writer.js'
-import { DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
+import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
 
 const execAsync = promisify(childProcess.exec)
 const SECRETS_PATH = path.join(process.cwd(), 'secrets')
@@ -149,8 +149,8 @@ export default class SetupConfigs extends Command {
       // 'bridge-history-api',
       // 'bridge-history-fetcher',
       // 'chain-monitor',
-      // 'coordinator-api',
-      // 'coordinator-cron',
+      'coordinator-api',
+      'coordinator-cron',
       // 'gas-oracle',
       'fee-oracle',
       // 'l1-explorer',
@@ -477,7 +477,7 @@ export default class SetupConfigs extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = `gen-configs-${DOCKER_DEFAULT_TAG}`
+    const defaultTag = `gen-configs-${CONTRACTS_DOCKER_DEFAULT_TAG}`
 
     if (!providedTag) {
       return defaultTag
@@ -544,8 +544,8 @@ export default class SetupConfigs extends Command {
       { source: 'bridge-history-config.yaml', target: 'bridge-history-api-config.yaml' },
       { source: 'bridge-history-config.yaml', target: 'bridge-history-fetcher-config.yaml' },
       { source: 'chain-monitor-config.yaml', target: 'chain-monitor-config.yaml' },
-      { source: 'coordinator-config.yaml', target: 'coordinator-api-config.yaml' },
-      { source: 'coordinator-config.yaml', target: 'coordinator-cron-config.yaml' },
+      { source: 'coordinator-api-config.yaml', target: 'coordinator-api-config.yaml' },
+      { source: 'coordinator-cron-config.yaml', target: 'coordinator-cron-config.yaml' },
       { source: 'frontend-config.yaml', target: 'frontends-config.yaml' },
       { source: 'genesis.yaml', target: 'genesis.yaml' },
       { source: 'gas-oracle-config.yaml', target: 'gas-oracle-config.yaml' },
@@ -584,6 +584,64 @@ export default class SetupConfigs extends Command {
               }
             } else {
               this.log(chalk.yellow(`Could not find or parse scrollConfig in ${targetPath}`))
+            }
+          } else if (
+            mapping.target === 'coordinator-api-config.yaml' ||
+            mapping.target === 'coordinator-cron-config.yaml'
+          ) {
+            //remove auth.secret
+            try {
+              const yamlFileContent = fs.readFileSync(targetPath, 'utf8')
+              const parsedYaml = yaml.load(yamlFileContent) as any
+
+              if (!parsedYaml || parsedYaml.scrollConfig === undefined) {
+                this.log(chalk.yellow(`scrollConfig not found in ${mapping.target}`))
+                continue
+              }
+
+              let scrollConfigObject: any
+              const originalScrollConfig = parsedYaml.scrollConfig
+
+              if (typeof originalScrollConfig === 'string') {
+                scrollConfigObject = JSON.parse(originalScrollConfig)
+              } else if (typeof originalScrollConfig === 'object' && originalScrollConfig !== null) {
+                scrollConfigObject = originalScrollConfig
+              } else {
+                this.log(chalk.yellow(`Unsupported scrollConfig format in ${mapping.target}`))
+                continue
+              }
+
+              if (!scrollConfigObject || typeof scrollConfigObject !== 'object') {
+                this.log(chalk.yellow(`scrollConfig is not an object in ${mapping.target}`))
+                continue
+              }
+
+              if (!scrollConfigObject.auth || typeof scrollConfigObject.auth !== 'object') {
+                scrollConfigObject.auth = {}
+                this.log(chalk.yellow(`auth field missing; created auth object in ${mapping.target}`))
+              }
+
+              const hadSecretKey = Object.prototype.hasOwnProperty.call(scrollConfigObject.auth, 'secret')
+              scrollConfigObject.auth.secret = null
+              if (hadSecretKey) {
+                this.log(chalk.green(`Sanitized auth.secret in ${mapping.target}`))
+              } else {
+                this.log(chalk.yellow(`auth.secret key missing; initialized to null in ${mapping.target}`))
+              }
+
+              parsedYaml.scrollConfig =
+                typeof originalScrollConfig === 'string'
+                  ? JSON.stringify(scrollConfigObject, null, 2)
+                  : scrollConfigObject
+
+              const updatedYaml = yaml.dump(parsedYaml, {indent: 2})
+              fs.writeFileSync(targetPath, updatedYaml)
+            } catch (error) {
+              if (error instanceof Error) {
+                this.log(chalk.red(`Failed to remove auth.secret in ${mapping.target}: ${error.message}`))
+              } else {
+                this.log(chalk.red(`Unknown error updating ${mapping.target}`))
+              }
             }
           }
         } catch (error: unknown) {

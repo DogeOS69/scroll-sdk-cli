@@ -2,7 +2,7 @@ import {select} from '@inquirer/prompts'
 import {Command, Flags} from '@oclif/core'
 import chalk from 'chalk'
 import Docker from 'dockerode'
-import { DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
+import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
 
 export default class ContractsVerification extends Command {
   static override description = 'Set up contracts verification'
@@ -47,7 +47,7 @@ export default class ContractsVerification extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = `verify-${DOCKER_DEFAULT_TAG}`
+    const defaultTag = `verify-${CONTRACTS_DOCKER_DEFAULT_TAG}`
 
     if (!providedTag) {
       return defaultTag
