@@ -1,18 +1,18 @@
 import * as k8s from '@kubernetes/client-node'
-import {Command, Flags} from '@oclif/core'
+import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import terminalLink from 'terminal-link'
 import WebSocket from 'ws'
 
-import {parseTomlConfig} from '../../utils/config-parser.js'
+import { parseTomlConfig } from '../../utils/config-parser.js'
 
 export default class TestIngress extends Command {
   static override description = 'Check for required ingress hosts and validate frontend URLs'
 
   static override flags = {
-    config: Flags.string({char: 'c', description: 'Path to config.toml file'}),
-    dev: Flags.boolean({char: 'd', description: 'Include development ingresses'}),
-    namespace: Flags.string({char: 'n', default: 'default', description: 'Kubernetes namespace'}),
+    config: Flags.string({ char: 'c', description: 'Path to config.toml file' }),
+    dev: Flags.boolean({ char: 'd', description: 'Include development ingresses' }),
+    namespace: Flags.string({ char: 'n', default: 'default', description: 'Kubernetes namespace' }),
   }
 
   private configValues: Record<string, string> = {}
@@ -25,7 +25,7 @@ export default class TestIngress extends Command {
   }
 
   public async run(): Promise<void> {
-    const {flags} = await this.parse(TestIngress)
+    const { flags } = await this.parse(TestIngress)
 
     if (flags.config) {
       this.loadConfig(flags.config)
@@ -232,10 +232,10 @@ export default class TestIngress extends Command {
     kc.loadFromDefault()
     const k8sApi = kc.makeApiClient(k8s.NetworkingV1Api)
 
-    const response = await k8sApi.listNamespacedIngress(namespace)
+    const response = await k8sApi.listNamespacedIngress({ namespace })
     const ingresses: Record<string, string> = {}
 
-    for (const ingress of response.body.items) {
+    for (const ingress of response.items) {
       if (ingress.metadata?.name && ingress.spec?.rules && ingress.spec.rules.length > 0) {
         const rule = ingress.spec.rules[0]
         if (rule.host) {

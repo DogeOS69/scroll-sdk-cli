@@ -3,18 +3,59 @@ import chalk from 'chalk'
 import yaml from 'js-yaml'
 import fs from 'node:fs'
 import path from 'node:path'
-import { dogecoinMainnet, dogecoinTestnet, reverseHex } from '../../types/dogecoin.js'
-import { parseTomlConfig } from '../../utils/config-parser.js'
-
+import { dogecoinMainnet, dogecoinTestnet } from '../../types/dogecoin.js'
 import * as bitcoin from 'bitcoinjs-lib'
 import { ECPairFactory, ECPairAPI, ECPairInterface } from 'ecpair'
 import * as tinysecp from 'tiny-secp256k1'
-import { randomBytes } from 'node:crypto'
-import { execFile, ExecFileException } from 'node:child_process'
-import { promisify } from 'node:util'
-import { Contract, ContractFactory, FunctionFragment, Interface, InterfaceAbi, JsonRpcProvider, Wallet } from 'ethers'
+import { randomBytes, randomInt } from 'node:crypto'
+import { Contract, FunctionFragment, InterfaceAbi, JsonRpcProvider, Wallet } from 'ethers'
+import {
+  broadcastTx,
+  deriveAddressFromKey,
+  ensureHexKey,
+  getTx,
+  getUtxos,
+  loadJson,
+  loadToml,
+  maskSensitive,
+  toString,
+  waitForConfirmations,
+} from '../../utils/dogeos-utils.js'
+import { FoundryService, HelperContractConfig, HelperVerificationConfig } from '../../services/foundry-service.js'
+import { select } from '@inquirer/prompts'
 
-const execFileAsync = promisify(execFile)
+const TEST_CASES = [
+  {
+    id: '1',
+    name: 'Multiple OP_RETURN',
+    description: 'Send a transaction with multiple OP_RETURN outputs',
+  },
+  {
+    id: '2',
+    name: 'Multiple Output',
+    description: 'Send a transaction with many P2PKH outputs',
+  },
+  {
+    id: '3',
+    name: 'Bridge UTXO Attack',
+    description: 'Simulate a UTXO fan-out attack on the bridge',
+  },
+  {
+    id: '4',
+    name: 'Multiple Withdrawal Per Tx',
+    description: 'Test multiple withdrawals in a single L2 transaction',
+  },
+  {
+    id: '5',
+    name: 'Large PSBT',
+    description: 'Construct and broadcast a large transaction with many inputs',
+  },
+  {
+    id: '0',
+    name: 'Run All Cases',
+    description: 'Execute all test cases sequentially',
+  },
+]
 
 const DEFAULT_HELPER_ABI: InterfaceAbi = [
   {
@@ -53,18 +94,6 @@ const DEFAULT_HELPER_ABI: InterfaceAbi = [
   },
 ]
 
-export interface Utxo {
-  txid: string
-  vout: number
-  value: string // Value in dogetoshis as a string
-  confirmations: number
-}
-
-export interface Tx {
-  hex: string
-  confirmations?: number
-}
-
 type ConfigToml = {
   frontend?: Record<string, unknown>
   general?: Record<string, unknown>
@@ -75,100 +104,29 @@ type ConfigToml = {
   [key: string]: unknown
 }
 
-/**
- * Fetches UTXOs for a given address from a blockbook API.
- * @param address The Dogecoin address.
- * @param blockbookUrl The base URL of the blockbook API.
- * @returns A promise that resolves to an array of UTXOs.
- */
-export async function getUtxos(address: string, blockbookUrl: string): Promise<Utxo[]> {
-  const response = await fetch(`${blockbookUrl}/api/v2/utxo/${address}`)
-  if (!response.ok) {
-    throw new Error(`Failed to fetch UTXOs: ${response.statusText}`)
-  }
-  return response.json()
-}
-
-/**
- * Fetches the raw transaction hex for a given transaction ID.
- * @param txid The transaction ID.
- * @param blockbookUrl The base URL of the blockbook API.
- * @returns A promise that resolves to the transaction object containing the hex.
- */
-export async function getTx(txid: string, blockbookUrl: string): Promise<Tx> {
-  const response = await fetch(`${blockbookUrl}/api/v2/tx/${txid}`)
-  if (!response.ok) {
-    throw new Error(`Failed to fetch transaction: ${response.statusText}`)
-  }
-  return response.json()
-}
-
-/**
- * Broadcasts a raw transaction to the network via a blockbook API.
- * @param txHex The raw transaction hex string.
- * @param blockbookUrl The base URL of the blockbook API.
- * @returns A promise that resolves to the broadcast result, typically containing the txid.
- */
-export async function broadcastTx(txHex: string, blockbookUrl: string): Promise<{ result: string }> {
-  const response = await fetch(`${blockbookUrl}/api/v2/sendtx/`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'text/plain',
-    },
-    body: txHex,
-  })
-
-  if (!response.ok) {
-    const errorBody = await response.text()
-    throw new Error(`Failed to broadcast transaction: ${response.statusText} - ${errorBody}`)
-  }
-
-  return response.json()
-}
-
-interface BlockbookUtxo {
-  confirmations?: number
-  height?: number
-  scriptPubKey?: string
-  txid: string
-  value: string
-  vout: number
-}
-
 const ECPair: ECPairAPI = ECPairFactory(tinysecp)
 type PsbtOutputParam = Parameters<bitcoin.Psbt['addOutput']>[0]
-const DUST_LIMIT = 1n // 0.01 DOGE
-
-interface HelperVerificationConfig {
-  enabled: boolean
-  apiKey?: string
-  chainId?: string
-}
-
-interface HelperContractConfig {
-  file?: string
-  name?: string
-  root?: string
-  redeploy?: boolean
-  verification: HelperVerificationConfig
-}
+const DUST_LIMIT = 1000000n // 0.01 DOGE
 
 export default class Case extends Command {
-  static override description = 'describe the command here'
+  static override description = `Run DogeOS integration tests.
+  
+Available Test Cases:
+${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}`
 
   static override examples = [
+    '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> multiple-opreturn',
     '<%= config.bin %> <%= command.id %> multiple-output --bridge=n...',
   ]
 
-  moatAddress: string = '' //
+  moatAddress: string = ''
   bridgeAddress: string = ''
   l2RPC: string = ''
   l2ExplorerUrl: string = ''
   l2ExplorerApiUrl: string = ''
   l2VerifierType: string = ''
   l2ChainId: string = ''
-  // l1RPC: string = ''
   blockbookURL: string = ''
   masterWif: string = ''
   masterAddress: string = ''
@@ -176,6 +134,17 @@ export default class Case extends Command {
   network: bitcoin.Network = dogecoinTestnet
   l2AddressPrivateKey = ''
   l2Address = ''
+
+  // Services
+  foundryService: FoundryService
+
+  constructor(argv: string[], config: any) {
+    super(argv, config)
+    this.foundryService = new FoundryService(
+      (msg) => this.log(msg),
+      (msg) => this.warn(msg)
+    )
+  }
 
   static override flags = {
     masterwif: Flags.string({
@@ -186,7 +155,7 @@ export default class Case extends Command {
     blockbookurl: Flags.string({
       char: 'b',
       description: 'blockbook url',
-      default: 'https://blockbook.qiaoxiaorui.org', // Sets a default URL
+      default: 'https://blockbook.qiaoxiaorui.org',
     }),
     outputcount: Flags.integer({
       char: 'c',
@@ -211,83 +180,21 @@ export default class Case extends Command {
   static override args = {
     caseName: Args.string({
       description: 'The name of the case to run',
-      required: true,
-      default: 'all',
+      required: false,
     }),
   }
 
   public async loadConfig() {
     const { flags } = await this.parse(Case)
-    const toString = (value: unknown): string => {
-      if (typeof value === 'string') {
-        return value.trim()
-      }
-      if (typeof value === 'number' && Number.isFinite(value)) {
-        return value.toString()
-      }
-      return ''
-    }
-    const loadToml = (filePath: string, label: string): Record<string, unknown> | undefined => {
-      if (!fs.existsSync(filePath)) {
-        this.warn(`${label} not found at ${filePath}`)
-        return undefined
-      }
-
-      try {
-        return parseTomlConfig(filePath)
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error)
-        this.warn(`Failed to parse ${label}: ${reason}`)
-        return undefined
-      }
-    }
-
-    const ensureHexKey = (value: string) => {
-      if (!value) return value
-      return value.startsWith('0x') ? value : `0x${value}`
-    }
-
-    const deriveAddressFromKey = (privateKey: string, fallbackAddress: string): string => {
-      if (privateKey) {
-        try {
-          return new Wallet(privateKey).address
-        } catch (error) {
-          const reason = error instanceof Error ? error.message : String(error)
-          this.warn(`Failed to derive L2 sender address from private key: ${reason}`)
-        }
-      }
-      return fallbackAddress
-    }
-
-    const loadJson = (filePath: string, label: string): Record<string, unknown> | undefined => {
-      if (!fs.existsSync(filePath)) {
-        this.warn(`${label} not found at ${filePath}`)
-        return undefined
-      }
-
-      try {
-        const contents = fs.readFileSync(filePath, 'utf8')
-        return JSON.parse(contents)
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error)
-        this.warn(`Failed to parse ${label}: ${reason}`)
-        return undefined
-      }
-    }
-
-    const maskSensitive = (value: string) => {
-      if (!value) return ''
-      if (value.length <= 12) return value
-      return `${value.slice(0, 6)}...${value.slice(-4)}`
-    }
+    const warn = (msg: string) => this.warn(msg)
 
     const configPath = path.resolve('config.toml')
     const contractsPath = path.resolve('config-contracts.toml')
     const testDataPath = path.resolve('.data', 'output-test-data.json')
 
-    const config = loadToml(configPath, 'config.toml') as ConfigToml | undefined
-    const contractsConfig = loadToml(contractsPath, 'config-contracts.toml')
-    const outputTestData = loadJson(testDataPath, '.data/output-test-data.json')
+    const config = loadToml(configPath, 'config.toml', warn) as ConfigToml | undefined
+    const contractsConfig = loadToml(contractsPath, 'config-contracts.toml', warn)
+    const outputTestData = loadJson(testDataPath, '.data/output-test-data.json', warn)
     const frontendSection = config?.frontend
     const generalSection = config?.general
     const verificationSection = config?.contracts?.verification as Record<string, unknown> | undefined
@@ -301,7 +208,7 @@ export default class Case extends Command {
     this.l2ChainId = toString(generalSection?.CHAIN_ID_L2)
 
     this.l2AddressPrivateKey = ensureHexKey(flags.l2PrivateKey || randomBytes(32).toString('hex'))
-    this.l2Address = deriveAddressFromKey(this.l2AddressPrivateKey, '')
+    this.l2Address = deriveAddressFromKey(this.l2AddressPrivateKey, '', warn)
 
     this.blockbookURL = flags.blockbookurl
     this.masterWif = flags.masterwif
@@ -351,15 +258,29 @@ export default class Case extends Command {
   public async run(): Promise<void> {
     const { args } = await this.parse(Case)
     await this.loadConfig()
-    this.log(chalk.bold.cyan(`\n🚀 Running test case: ${args.caseName}`))
+
+    let selectedCase = args.caseName
+
+    if (!selectedCase) {
+      selectedCase = await select({
+        message: 'Select a test case to run:',
+        choices: TEST_CASES.map((c) => ({
+          name: `${c.id}: ${c.name}`,
+          value: c.id,
+          description: c.description,
+        })),
+      })
+    }
+
+    this.log(chalk.bold.cyan(`\n🚀 Running test case: ${selectedCase}`))
 
     try {
-      switch (args.caseName) {
-        case 'multiple-opreturn': {
+      switch (selectedCase) {
+        case '1': {
           await this.caseMultipleOpReturn()
           break
         }
-        case 'multiple-output': {
+        case '2': {
           await this.caseMultipleOutput()
           break
         }
@@ -371,15 +292,20 @@ export default class Case extends Command {
           await this.caseMutipleWithdrawalPerTx()
           break
         }
-        case 'all': {
+        case '5': {
+          await this.caseLargePsbt()
+          break
+        }
+        case '0': {
           await this.caseMultipleOpReturn()
           await this.caseMultipleOutput()
           await this.caseBridgeUtxoAttack()
           await this.caseMutipleWithdrawalPerTx()
+          await this.caseLargePsbt()
           break
         }
         default: {
-          this.error(`Unknown case: ${args.caseName}`)
+          this.error(`Unknown case: ${selectedCase}`)
         }
       }
     } catch (error: any) {
@@ -392,29 +318,6 @@ export default class Case extends Command {
     }
   }
 
-  private readDeploymentCache(): Record<string, string> {
-    const cachePath = path.resolve('.deployment-cache.json')
-    if (!fs.existsSync(cachePath)) {
-      return {}
-    }
-    try {
-      const contents = fs.readFileSync(cachePath, 'utf8')
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-      return JSON.parse(contents)
-    } catch (error) {
-      this.warn('Could not read or parse deployment cache file.')
-      return {}
-    }
-  }
-
-  private writeDeploymentCache(cache: Record<string, string>): void {
-    const cachePath = path.resolve('.deployment-cache.json')
-    try {
-      fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2))
-    } catch (error) {
-      this.warn('Could not write to deployment cache file.')
-    }
-  }
 
   private async caseMutipleWithdrawalPerTx() {
     this.log(chalk.bold.cyan('\n✨ Starting: Multiple Withdrawal Per Tx Case'))
@@ -433,7 +336,7 @@ export default class Case extends Command {
         }
         try {
           this.log(chalk.gray('-> Compiling helper contract with Forge...'))
-          const artifacts = await this.compileHelperContract(helperConfig.file, helperConfig.name, helperConfig.root)
+          const artifacts = await this.foundryService.compileHelperContract(helperConfig.file, helperConfig.name, helperConfig.root)
           helperAbi = artifacts.abi
           deploymentBytecode = artifacts.bytecode
           helperConstructorArgs = [this.moatAddress]
@@ -449,58 +352,43 @@ export default class Case extends Command {
       const provider = new JsonRpcProvider(this.l2RPC)
       const wallet = new Wallet(this.l2AddressPrivateKey, provider)
 
-      const { deploymentData, encodedConstructorArgs } = await this.buildHelperDeploymentArtifacts(
+      const { deploymentData, encodedConstructorArgs } = await this.foundryService.buildHelperDeploymentArtifacts(
         helperAbi,
         deploymentBytecode,
         helperConstructorArgs,
         wallet,
       )
 
+
       const txRequest = { data: deploymentData }
 
-      const cache = this.readDeploymentCache()
-      const helperDiscriminator = helperConfig.file
-        ? `${path.resolve(helperConfig.file)}:${helperConfig.name ?? 'unknown'}:${encodedConstructorArgs ?? 'noargs'}`
-        : `builtin:${encodedConstructorArgs ?? 'noargs'}`
-      const cacheKey = `mutiWithdrawal-${this.networkName || 'unknown'}-${helperDiscriminator}`
-      let contractAddress = cache[cacheKey]?.trim() ?? ''
-      let deployedThisRun = false
+      this.log(chalk.gray('-> Deploying multi-withdrawal helper contract...'))
+      const gasEstimate = await wallet.estimateGas(txRequest)
+      const bufferedGas = (gasEstimate * 12n) / 10n // add 20% buffer
+      const tx = await wallet.sendTransaction({ ...txRequest, gasLimit: bufferedGas })
 
-      if (helperConfig.redeploy) {
-        this.log(chalk.yellow('⚠️ Helper redeploy requested; ignoring cached helper contract.'))
-        contractAddress = ''
-      }
+      this.log(chalk.green(`✅ Deployment transaction submitted!`))
+      this.log(`   ${chalk.blue('Transaction Hash:')} ${chalk.bold(tx.hash)}\n`)
 
-      if (contractAddress) {
-        this.log(chalk.green(`✅ Using cached multi-withdrawal helper contract at ${contractAddress}`))
+      let contractAddress = ''
+      const receipt = await tx.wait()
+      if (receipt?.contractAddress) {
+        contractAddress = receipt.contractAddress
+        this.log(chalk.green(`✅ Contract deployed at ${contractAddress}`))
       } else {
-        this.log(chalk.gray('-> Deploying multi-withdrawal helper contract...'))
-        const gasEstimate = await wallet.estimateGas(txRequest)
-        const bufferedGas = (gasEstimate * 12n) / 10n // add 20% buffer
-        const tx = await wallet.sendTransaction({ ...txRequest, gasLimit: bufferedGas })
-
-        this.log(chalk.green(`✅ Deployment transaction submitted!`))
-        this.log(`   ${chalk.blue('Transaction Hash:')} ${chalk.bold(tx.hash)}
-`)
-
-        const receipt = await tx.wait()
-        if (receipt?.contractAddress) {
-          contractAddress = receipt.contractAddress
-          cache[cacheKey] = contractAddress
-          this.writeDeploymentCache(cache)
-          this.log(chalk.green(`✅ Contract deployed at ${contractAddress}`))
-          deployedThisRun = true
-        } else {
-          this.log(chalk.yellow('⚠️ Deployment transaction mined, but contract address is missing in the receipt.'))
-        }
+        this.log(chalk.yellow('⚠️ Deployment transaction mined, but contract address is missing in the receipt.'))
       }
 
-      if (deployedThisRun && verificationConfig.enabled) {
+      if (contractAddress && verificationConfig.enabled) {
         this.log(chalk.gray('-> Waiting 30 seconds for block explorer to index contract...'))
-        await new Promise((resolve) => setTimeout(resolve, 30000))
-        await this.verifyHelperContract(contractAddress, helperConfig, encodedConstructorArgs)
-      } else if (verificationConfig.enabled && !deployedThisRun) {
-        this.log(chalk.yellow('ℹ️ Helper verification skipped because cached deployment was reused.'))
+        await new Promise((resolve) => setTimeout(resolve, 10000))
+        await this.foundryService.verifyHelperContract(
+          contractAddress,
+          helperConfig,
+          encodedConstructorArgs,
+          this.l2VerifierType,
+          this.l2ExplorerApiUrl
+        )
       }
 
       const targetContract = contractAddress?.trim()
@@ -533,12 +421,17 @@ export default class Case extends Command {
         withdrawalTargetAddress,
       )
 
+      const balance = await wallet.provider!.getBalance(wallet.address)
+      if (balance < txValue) {
+        await this.rechargeL2Wallet(txValue, balance)
+      }
+
       this.log(chalk.gray('-> Invoking mutiWithdrawal...'))
-      const tx = await mutiContract.mutiWithdrawal(...mutiArgs, { value: txValue })
+      const withdrawalTx = await mutiContract.mutiWithdrawal(...mutiArgs, { value: txValue })
       this.log(chalk.green(`✅ mutiWithdrawal tx sent!`))
-      this.log(`   ${chalk.blue('Transaction Hash:')} ${chalk.bold(tx.hash)}
+      this.log(`   ${chalk.blue('Transaction Hash:')} ${chalk.bold(withdrawalTx.hash)}
 `)
-      await tx.wait()
+      await withdrawalTx.wait()
       this.log(chalk.green('✅ mutiWithdrawal transaction confirmed.'))
       this.log(chalk.green.bold('\n✨ Case Finished Successfully.'));
     } catch (error: any) {
@@ -551,87 +444,6 @@ export default class Case extends Command {
     }
   }
 
-  private async compileHelperContract(
-    contractFile: string,
-    contractName: string,
-    foundryRoot?: string,
-  ): Promise<{
-    bytecode: string
-    abi: InterfaceAbi
-  }> {
-    const resolvedFile = path.resolve(contractFile)
-    const rootCandidate =
-      (foundryRoot && path.resolve(foundryRoot)) ||
-      this.findFoundryProjectRoot(path.dirname(resolvedFile)) ||
-      path.dirname(resolvedFile)
-
-    const relativeContractPathRaw = path.relative(rootCandidate, resolvedFile) || path.basename(resolvedFile)
-    const relativeContractPath = this.normalizeForFoundryPath(relativeContractPathRaw)
-    const contractSpecifier = `${relativeContractPath}:${contractName}`
-
-    const bytecodeStdout = await this.runForgeInspect(contractSpecifier, 'bytecode', rootCandidate)
-    const abiStdout = await this.runForgeInspect(contractSpecifier, 'abi', rootCandidate, true)
-
-    let abi: InterfaceAbi
-    try {
-      abi = JSON.parse(abiStdout) as InterfaceAbi
-    } catch {
-      throw new Error(`Unable to parse ABI JSON emitted by forge for ${contractSpecifier}`)
-    }
-
-    const normalizedBytecode = bytecodeStdout.startsWith('0x') ? bytecodeStdout : `0x${bytecodeStdout}`
-    if (normalizedBytecode.length <= 2) {
-      throw new Error(`Forge produced empty bytecode for ${contractSpecifier}`)
-    }
-
-    return { abi, bytecode: normalizedBytecode }
-  }
-
-  private async runForgeInspect(
-    contractSpecifier: string,
-    field: 'abi' | 'bytecode',
-    cwd: string,
-    jsonOutput = false,
-  ): Promise<string> {
-    try {
-      const args = ['inspect', contractSpecifier, field]
-      if (jsonOutput) {
-        args.unshift('--json')
-      }
-      const { stdout } = await execFileAsync('forge', args, {
-        cwd,
-        maxBuffer: 10 * 1024 * 1024,
-      })
-      return stdout.toString().trim()
-    } catch (error) {
-      const execError = error as ExecFileException & { stderr?: string }
-      const stderr = execError?.stderr ? execError.stderr.toString().trim() : ''
-      throw new Error(`forge inspect ${field} failed for ${contractSpecifier}${stderr ? `: ${stderr}` : ''}`)
-    }
-  }
-
-  private findFoundryProjectRoot(startDir: string): string | undefined {
-    let currentDir = path.resolve(startDir)
-    while (true) {
-      if (fs.existsSync(path.join(currentDir, 'foundry.toml'))) {
-        return currentDir
-      }
-      const parent = path.dirname(currentDir)
-      if (parent === currentDir) {
-        return undefined
-      }
-      currentDir = parent
-    }
-  }
-
-  private normalizeForFoundryPath(filePath: string): string {
-    if (!filePath) {
-      return ''
-    }
-    const normalized = filePath.split(path.sep).join(path.posix.sep)
-    return normalized.startsWith('./') ? normalized.slice(2) : normalized
-  }
-
   private getHelperContractConfig(): HelperContractConfig {
     const chainId = this.l2ChainId
     const verification: HelperVerificationConfig = {
@@ -642,13 +454,19 @@ export default class Case extends Command {
 
     const searchRoots = new Set<string>()
     searchRoots.add(process.cwd())
+    // @ts-ignore
     if (this.config?.root) {
+      // @ts-ignore
       searchRoots.add(path.resolve(this.config.root))
     }
+    // @ts-ignore
     if (this.config?.configDir) {
+      // @ts-ignore
       searchRoots.add(path.resolve(this.config.configDir, '..'))
     }
+    // @ts-ignore
     if (this.config?.cacheDir) {
+      // @ts-ignore
       searchRoots.add(path.resolve(this.config.cacheDir, '..'))
     }
 
@@ -663,7 +481,7 @@ export default class Case extends Command {
           return {
             file: absolutePath,
             name: candidate.name,
-            root: this.findFoundryProjectRoot(path.dirname(absolutePath)) ?? path.dirname(absolutePath),
+            root: this.foundryService.findFoundryProjectRoot(path.dirname(absolutePath)) ?? path.dirname(absolutePath),
             redeploy: false,
             verification,
           }
@@ -672,39 +490,6 @@ export default class Case extends Command {
     }
 
     return { redeploy: false, verification }
-  }
-
-  private async buildHelperDeploymentArtifacts(
-    abi: InterfaceAbi,
-    bytecode: string,
-    constructorArgs: unknown[],
-    wallet: Wallet,
-  ): Promise<{ deploymentData: string; encodedConstructorArgs?: string }> {
-    const normalizedBytecode = bytecode.startsWith('0x') ? bytecode : `0x${bytecode}`
-
-    if (constructorArgs.length === 0) {
-      return { deploymentData: normalizedBytecode }
-    }
-
-    const factory = new ContractFactory(abi, normalizedBytecode, wallet)
-    const deployTx = await factory.getDeployTransaction(...constructorArgs)
-    const data = deployTx.data
-    if (!data) {
-      this.error('Failed to encode helper deployment data.')
-    }
-
-    let encodedConstructorArgs: string | undefined
-    try {
-      const iface = new Interface(abi)
-      encodedConstructorArgs = iface.encodeDeploy(constructorArgs)
-    } catch {
-      encodedConstructorArgs = undefined
-    }
-
-    return {
-      deploymentData: data,
-      encodedConstructorArgs,
-    }
   }
 
   private async prepareMutiWithdrawalCall(
@@ -790,71 +575,6 @@ export default class Case extends Command {
     return `${sanitized}/api`;
   }
 
-  private async verifyHelperContract(
-    address: string | undefined,
-    helperConfig: HelperContractConfig,
-    encodedConstructorArgs?: string,
-  ): Promise<void> {
-    const verification = helperConfig.verification
-    if (!verification.enabled) return
-
-    if (!address) {
-      this.warn('Verification requested but no contract address was produced.')
-      return
-    }
-
-    if (!helperConfig.file || !helperConfig.name) {
-      this.warn('Verification requested but helper contract source file or name is missing.')
-      return
-    }
-
-    const chainId = verification.chainId
-    if (!chainId) {
-      this.warn('Verification requested but could not determine chain ID; skipping.')
-      return
-    }
-
-    const projectRoot =
-      helperConfig.root ||
-      this.findFoundryProjectRoot(path.dirname(helperConfig.file)) ||
-      path.dirname(helperConfig.file)
-
-    const relativeContractPathRaw = path.relative(projectRoot, helperConfig.file) || path.basename(helperConfig.file)
-    const contractSpecifier = `${this.normalizeForFoundryPath(relativeContractPathRaw)}:${helperConfig.name}`
-
-    const args = ['verify-contract', '--chain', chainId, address, contractSpecifier]
-    if (verification.apiKey) {
-      args.push('--etherscan-api-key', verification.apiKey)
-    }
-    if (encodedConstructorArgs) {
-      args.push('--constructor-args', encodedConstructorArgs)
-    }
-    if (this.l2VerifierType) {
-      args.push('--verifier', this.l2VerifierType)
-    }
-    if (this.l2ExplorerApiUrl) {
-      args.push('--verifier-url', this.l2ExplorerApiUrl)
-    }
-    this.log(chalk.gray(`-> Submitting helper contract verification (${contractSpecifier}) on chain ${chainId}...`))
-    this.log(chalk.dim(`   Running command: forge ${args.join(' ')}`))
-    try {
-      const { stdout } = await execFileAsync('forge', args, {
-        cwd: projectRoot,
-        maxBuffer: 10 * 1024 * 1024,
-      })
-      if (stdout?.toString().trim()) {
-        this.log(stdout.toString().trim())
-      }
-      this.log(chalk.green('✅ Helper contract verification submitted to explorer.'))
-    } catch (error) {
-      const execError = error as ExecFileException & { stderr?: string }
-      const stderr = execError?.stderr?.toString().trim()
-      this.warn(
-        `Helper contract verification failed: ${stderr || (error instanceof Error ? error.message : String(error))}`,
-      )
-    }
-  }
-
   private async caseMultipleOpReturn() {
     this.log(chalk.bold.cyan('\n✨ Starting: Multiple OP_RETURN Case'))
     const { flags } = await this.parse(Case)
@@ -873,7 +593,7 @@ export default class Case extends Command {
       ]
 
       const txid = await this.buildAndBroadcastTx(masterKeyPair, outputs, flags.verbose)
-      await this.waitForConfirmations(txid, this.blockbookURL)
+      await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
       this.log(chalk.green.bold('\n✨ Case Finished Successfully.'));
     } catch (error: any) {
       this.log(chalk.red.bold('\n❌ Case Failed: Multiple OP_RETURN'))
@@ -905,7 +625,7 @@ export default class Case extends Command {
       }
       const outputValue = BigInt(sanitizedOutputValue)
       if (outputValue < DUST_LIMIT) {
-        this.error(`outputvalue must be at least ${DUST_LIMIT.toString()} dogetoshis.`) 
+        this.error(`outputvalue must be at least ${DUST_LIMIT.toString()} dogetoshis.`)
       }
 
       const outputs: PsbtOutputParam[] = [
@@ -917,7 +637,7 @@ export default class Case extends Command {
       }
 
       const txid = await this.buildAndBroadcastTx(masterKeyPair, outputs, flags.verbose)
-      await this.waitForConfirmations(txid, this.blockbookURL)
+      await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
       this.log(chalk.green.bold('\n✨ Case Finished Successfully.'));
     } catch (error: any) {
       this.log(chalk.red.bold('\n❌ Case Failed: Multiple Output'))
@@ -959,9 +679,9 @@ export default class Case extends Command {
       this.log(chalk.green('✅ Master transaction sent!'))
       this.log(`   ${chalk.blue('SoChain Link:')} https://sochain.com/tx/DOGETEST/${txid}`)
 
-      const masterConfirmed = await this.waitForConfirmations(txid, this.blockbookURL)
+      const masterConfirmed = await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
       if (!masterConfirmed) {
-        this.error(`Master transaction ${txid} did not confirm within the expected time.`) 
+        this.error(`Master transaction ${txid} did not confirm within the expected time.`)
       }
 
       this.log(chalk.gray('-> Phase 2: Broadcasting agent attack transactions...'))
@@ -1004,37 +724,6 @@ export default class Case extends Command {
       }
       throw error
     }
-  }
-
-  private async waitForConfirmations(
-    txid: string,
-    blockbookUrl: string,
-    minConfirmations = 2,
-    pollIntervalMs = 30_000,
-    timeoutMs = 10 * 60_000,
-  ): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs
-    this.log(chalk.gray(`-> Waiting for ${minConfirmations} confirmations for tx ${txid}...`))
-
-    while (Date.now() <= deadline) {
-      try {
-        const tx = await getTx(txid, blockbookUrl)
-        const confirmations = tx.confirmations ?? 0
-        if (confirmations >= minConfirmations) {
-          this.log(chalk.green(`✅ Transaction ${txid} confirmed.`))
-          return true
-        }
-        this.log(chalk.gray(`   Current: ${confirmations}/${minConfirmations}...`))
-      } catch (error) {
-        this.warn(`   ${chalk.yellow('⚠️ Failed to fetch confirmation status:')} ${(error as Error).message}`)
-      }
-
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, pollIntervalMs)
-      })
-    }
-    this.log(chalk.red(`   Timeout reached waiting for confirmations for ${txid}.`))
-    return false
   }
 
   private async buildAndBroadcastTx(keyPair: ECPairInterface, outputs: PsbtOutputParam[], verbose = false) {
@@ -1126,5 +815,217 @@ export default class Case extends Command {
     } catch (error) {
       this.error(error as Error)
     }
+  }
+
+  private async rechargeL2Wallet(requiredWei: bigint, currentWei: bigint) {
+    this.log(chalk.yellow('⚠️ Insufficient L2 balance. Initiating auto-recharge...'))
+    const deficitWei = requiredWei - currentWei
+    // Convert Wei to Dogetoshis. 1 Doge (10^8 sat) = 1 ETH (10^18 wei)
+    // 1 sat = 10^10 wei
+    // dogetoshis = ceil(wei / 10^10)
+    const conversionRate = 10_000_000_000n
+    let deficitDogetoshis = deficitWei / conversionRate
+    if (deficitWei % conversionRate > 0n) deficitDogetoshis += 1n
+
+    // Add buffer and fee. User mentioned 1 coin fee.
+    // Let's add 50 Doge buffer to be safe + 1 Doge fee.
+    const bufferDoges = 50n
+    const feeDoges = 1n
+    const amountDogetoshis = (deficitDogetoshis + (bufferDoges + feeDoges) * 100_000_000n)
+
+    this.log(chalk.gray(`-> Calculated recharge amount: ${Number(amountDogetoshis) / 1e8} DOGE`))
+
+    const masterKeyPair: ECPairInterface = ECPair.fromWIF(this.masterWif, this.network)
+    const opReturnData = new Uint8Array(Buffer.from(this.l2Address.toLowerCase().replace('0x', '00'), 'hex'))
+    const opReturnOutput = bitcoin.payments.embed({ data: [opReturnData] })
+
+    const outputs: PsbtOutputParam[] = [
+      { address: this.bridgeAddress, value: amountDogetoshis },
+      { script: opReturnOutput.output!, value: 0n },
+    ]
+
+    const txid = await this.buildAndBroadcastTx(masterKeyPair, outputs, true)
+    if (!txid) throw new Error('Recharge transaction failed to broadcast.')
+
+    this.log(chalk.gray('-> Waiting for recharge confirmation...'))
+    await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
+    this.log(chalk.green('✅ Recharge confirmed. Waiting for L2 balance update...'))
+
+    // Wait for L2 balance to reflect (bridge delay)
+    const provider = new JsonRpcProvider(this.l2RPC)
+    const wallet = new Wallet(this.l2AddressPrivateKey, provider)
+
+    let retries = 0
+    const maxRetries = 60 // 5 minutes
+    while (retries < maxRetries) {
+      const newBalance = await wallet.provider!.getBalance(wallet.address)
+      if (newBalance >= requiredWei) {
+        this.log(chalk.green(`\n✅ L2 Balance updated: ${newBalance.toString()}`))
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5000))
+      retries++
+      process.stdout.write('.')
+    }
+    throw new Error('Recharge timed out waiting for L2 balance update.')
+  }
+
+  private async caseLargePsbt() {
+    this.log(chalk.bold.cyan('\n✨ Starting: Large PSBT Case'))
+    const { flags } = await this.parse(Case)
+
+    const inputCount = 1000
+    //0.01~2.01
+    const fundingAmount = BigInt(Math.round(Math.random() * 1_000_000));
+    const feePerInput = 500_000n // Generous fee for consolidation
+    const totalFundingNeeded = BigInt(inputCount) * (fundingAmount + feePerInput)
+
+    this.log(chalk.gray(`-> Generating ${inputCount} random keypairs...`))
+    const keyPairs: ECPairInterface[] = []
+    const addresses: string[] = []
+    for (let i = 0; i < inputCount; i++) {
+      const keyPair = ECPair.fromPrivateKey(new Uint8Array(randomBytes(32)), { network: this.network })
+      keyPairs.push(keyPair)
+      const { address } = bitcoin.payments.p2pkh({ pubkey: keyPair.publicKey, network: this.network })
+      if (!address) throw new Error('Failed to generate address')
+      addresses.push(address)
+    }
+
+    // Phase 1: Fund the addresses
+    this.log(chalk.gray('-> Phase 1: Funding random addresses...'))
+    const masterKeyPair: ECPairInterface = ECPair.fromWIF(this.masterWif, this.network)
+    const fundingOutputs: PsbtOutputParam[] = addresses.map(addr => ({
+      address: addr,
+      value: fundingAmount + feePerInput
+    }))
+
+    const fundingTxid = await this.buildAndBroadcastTx(masterKeyPair, fundingOutputs, flags.verbose)
+    if (!fundingTxid) throw new Error('Funding transaction failed')
+
+    this.log(chalk.gray('-> Waiting for funding confirmation...'))
+    await waitForConfirmations(fundingTxid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
+    this.log(chalk.green('✅ Funding confirmed.'))
+
+    // Phase 2: Construct Large PSBT
+    this.log(chalk.gray('-> Phase 2: Constructing Large PSBT...'))
+    const psbt = new bitcoin.Psbt({ network: this.network })
+
+    // Add inputs
+    const fundingTxHex = (await getTx(fundingTxid, this.blockbookURL)).hex
+    for (let i = 0; i < inputCount; i++) {
+      psbt.addInput({
+        hash: fundingTxid,
+        index: i,
+        nonWitnessUtxo: new Uint8Array(Buffer.from(fundingTxHex, 'hex')),
+      })
+    }
+
+    // Add outputs: Bridge + OP_RETURN
+    const opReturnData = new Uint8Array(Buffer.from(this.l2Address.toLowerCase().replace('0x', '00'), 'hex'))
+    const opReturnOutput = bitcoin.payments.embed({ data: [opReturnData] })
+
+    const totalInput = BigInt(inputCount) * (fundingAmount + feePerInput)
+    // Calculate fee roughly: 100 inputs * ~148 bytes + 2 outputs * ~34 bytes + overhead ~10 bytes
+    // ~14800 + 68 + 10 = ~14878 vBytes. @ 1000 sats/vB = ~14,878,000 sats.
+    // We allocated 500,000 * 100 = 50,000,000 sats for fees, so plenty.
+
+    const estimatedVSize = 10 + psbt.txInputs.length * 148 + 2 * 34
+    const fee = BigInt(estimatedVSize * 1000)
+    const bridgeValue = totalInput - fee
+
+    psbt.addOutput({ address: this.bridgeAddress, value: bridgeValue })
+    psbt.addOutput({ script: opReturnOutput.output!, value: 0n })
+
+    // Sign all inputs
+    this.log(chalk.gray('-> Signing inputs...'))
+    for (let i = 0; i < inputCount; i++) {
+      psbt.signInput(i, keyPairs[i])
+    }
+    psbt.finalizeAllInputs()
+
+    const finalTxHex = psbt.extractTransaction().toHex()
+    this.log(chalk.gray(`-> Broadcasting large transaction (${finalTxHex.length / 2} bytes)...`))
+
+    const { result: largeTxid } = await broadcastTx(finalTxHex, this.blockbookURL)
+    this.log(chalk.green(`✅ Large transaction broadcasted successfully!`))
+    this.log(`   ${chalk.blue('SoChain Link:')} https://sochain.com/tx/DOGETEST/${largeTxid}`)
+
+    await waitForConfirmations(largeTxid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
+
+    //在这里做一次提现，提现金额是 bridgeValue-0.1coin 
+    this.log(chalk.gray('-> Waiting for L2 balance update...'))
+    const provider = new JsonRpcProvider(this.l2RPC)
+    const wallet = new Wallet(this.l2AddressPrivateKey, provider)
+
+    // Convert bridgeValue (sats) to Wei (1 sat = 10^10 wei)
+    const bridgeValueWei = bridgeValue * 10_000_000_000n
+    const withdrawAmount = bridgeValueWei - 100_000_000_000_000_000n // -0.1 ETH (10^17 wei)
+
+    if (withdrawAmount <= 0n) {
+      this.warn('Calculated withdrawal amount is too low. Skipping withdrawal.')
+    } else {
+      let retries = 0
+      const maxRetries = 60 // 5 minutes
+      while (retries < maxRetries) {
+        const balance = await wallet.provider!.getBalance(wallet.address)
+        if (balance >= withdrawAmount) { // Wait for the full bridge amount to arrive
+          this.log(chalk.green(`✅ L2 Balance updated: ${balance.toString()}`))
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5000))
+        retries++
+        process.stdout.write('.')
+        this.log(`   Current: ${retries}/${maxRetries}. balance: ${balance.toString()} withdrawAmount: ${withdrawAmount.toString()}`)
+      }
+
+      if (retries >= maxRetries) {
+        this.warn('Timed out waiting for L2 balance update. Proceeding with available balance check...')
+      }
+
+      const currentBalance = await wallet.provider!.getBalance(wallet.address)
+      if (currentBalance < withdrawAmount) {
+        this.error(`Insufficient L2 balance for withdrawal. Have ${currentBalance}, need ${withdrawAmount}`)
+      }
+
+      this.log(chalk.gray(`-> Withdrawing ${Number(withdrawAmount) / 1e18} ETH to L1...`))
+
+      if (!this.moatAddress) {
+        this.error('Moat address (L2 Messenger) is not configured.')
+      }
+
+      const moat = new Contract(
+        this.moatAddress,
+        ['function withdrawToL1(address _target) external payable'],
+        wallet
+      )
+
+      // Withdraw to masterAddress on L1
+      // target: L1 address (but sendMessage expects an L1 address format? standard address string works)
+      // value: amount to transfer on L1
+      // message: empty for ETH transfer
+      // gasLimit: 0 for default
+      // The function is payable, so we send the ETH value with the call.
+      // Wait, sendMessage(target, value, message, gasLimit)
+      // The 'value' param in sendMessage is the amount to be deposited/transferred on L1?
+      // Usually for ETH withdrawal: msg.value is the amount burned/locked on L2.
+      // The '_value' arg is often the value passed to the L1 call.
+      // For simple ETH withdrawal, msg.value = amount, _value = amount.
+
+      // withdrawToL1 的输入参数是 eth 地址。但是这个地址应该是 dogecoin 地址解码后的 20 字节公钥 hash
+      const decoded = bitcoin.address.fromBase58Check(this.masterAddress)
+      const targetPkh = '0x' + Buffer.from(decoded.hash).toString('hex')
+
+      const tx = await moat.withdrawToL1(
+        targetPkh,
+        { value: withdrawAmount }
+      )
+
+      this.log(chalk.green(`✅ Withdrawal transaction sent!`))
+      this.log(`   ${chalk.blue('Transaction Hash:')} ${chalk.bold(tx.hash)}`)
+      await tx.wait()
+      this.log(chalk.green('✅ Withdrawal confirmed.'))
+    }
+
+    this.log(chalk.green.bold('\n✨ Case Finished Successfully.'))
   }
 }
