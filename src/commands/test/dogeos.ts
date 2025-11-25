@@ -51,6 +51,11 @@ const TEST_CASES = [
     description: 'Construct and broadcast a large transaction with many inputs',
   },
   {
+    id: '6',
+    name: 'Fee Wallet 2000 Inputs',
+    description: 'Send M+1 to the fee wallet using 2000 inputs via an agent',
+  },
+  {
     id: '0',
     name: 'Run All Cases',
     description: 'Execute all test cases sequentially',
@@ -107,6 +112,7 @@ type ConfigToml = {
 const ECPair: ECPairAPI = ECPairFactory(tinysecp)
 type PsbtOutputParam = Parameters<bitcoin.Psbt['addOutput']>[0]
 const DUST_LIMIT = 1000000n // 0.01 DOGE
+const RBF_SEQUENCE = 0xfffffffd
 
 export default class Case extends Command {
   static override description = `Run DogeOS integration tests.
@@ -134,6 +140,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
   network: bitcoin.Network = dogecoinTestnet
   l2AddressPrivateKey = ''
   l2Address = ''
+  feeWalletAddress = ''
 
   // Services
   foundryService: FoundryService
@@ -201,6 +208,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
     this.moatAddress = toString(contractsConfig?.L2_MOAT_PROXY_ADDR)
     this.bridgeAddress = toString(outputTestData?.bridge_address)
+    this.feeWalletAddress = toString(outputTestData?.fee_wallet_address)
     this.l2RPC = toString(frontendSection?.EXTERNAL_RPC_URI_L2)
     this.l2ExplorerUrl = toString(verificationSection?.EXPLORER_URI_L2)
     this.l2ExplorerApiUrl = this.deriveExplorerApiUrl(this.l2ExplorerUrl)
@@ -278,30 +286,47 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       switch (selectedCase) {
         case '1': {
           await this.caseMultipleOpReturn()
+          await this.sendL2SelfTxWithRandomData()
           break
         }
         case '2': {
           await this.caseMultipleOutput()
+          await this.sendL2SelfTxWithRandomData()
           break
         }
         case '3': {
           await this.caseBridgeUtxoAttack()
+          await this.sendL2SelfTxWithRandomData()
           break
         }
         case '4': {
           await this.caseMutipleWithdrawalPerTx()
+          await this.sendL2SelfTxWithRandomData()
           break
         }
         case '5': {
           await this.caseLargePsbt()
+          await this.sendL2SelfTxWithRandomData()
+          break
+        }
+        case '6': {
+          await this.caseFeeWalletAgentConsolidation()
+          await this.sendL2SelfTxWithRandomData()
           break
         }
         case '0': {
           await this.caseMultipleOpReturn()
+          await this.sendL2SelfTxWithRandomData()
           await this.caseMultipleOutput()
+          await this.sendL2SelfTxWithRandomData()
           await this.caseBridgeUtxoAttack()
+          await this.sendL2SelfTxWithRandomData()
           await this.caseMutipleWithdrawalPerTx()
+          await this.sendL2SelfTxWithRandomData()
           await this.caseLargePsbt()
+          await this.sendL2SelfTxWithRandomData()
+          await this.caseFeeWalletAgentConsolidation()
+          await this.sendL2SelfTxWithRandomData()
           break
         }
         default: {
@@ -698,6 +723,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
         psbt.addInput({
           hash: txid,
           index: i,
+          sequence: RBF_SEQUENCE,
           nonWitnessUtxo: new Uint8Array(Buffer.from(txHex, 'hex')),
         })
 
@@ -724,6 +750,171 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       }
       throw error
     }
+  }
+
+  private async caseFeeWalletAgentConsolidation() {
+    this.log(chalk.bold.cyan('\n✨ Starting: Fee Wallet 2000 Inputs Case'))
+    const { flags } = await this.parse(Case)
+    try {
+      if (!this.feeWalletAddress) this.error('feeWalletAddress is not configured.')
+      this.log(chalk.gray(`-> Fetching UTXOs for fee wallet ${this.feeWalletAddress}...`))
+      const feeWalletUtxos = await getUtxos(this.feeWalletAddress, this.blockbookURL)
+      const confirmedUtxos = feeWalletUtxos.filter((utxo) => utxo.confirmations > 0)
+      if (confirmedUtxos.length === 0) this.error('No confirmed UTXOs found for the fee wallet.')
+
+      let largestValue = 0n
+      for (const utxo of confirmedUtxos) {
+        const value = BigInt(utxo.value)
+        if (value > largestValue) largestValue = value
+      }
+      if (largestValue <= 0n) this.error('Unable to determine the largest UTXO value for the fee wallet.')
+      const targetValue = largestValue + 1n
+      this.log(chalk.green(`✅ Largest UTXO: ${largestValue.toString()} dogetoshis. Target send value: ${targetValue.toString()} dogetoshis.`))
+
+      const agentKeyPair: ECPairInterface = ECPair.fromPrivateKey(new Uint8Array(randomBytes(32)), { network: this.network })
+      const agentAddress = bitcoin.payments.p2pkh({ pubkey: agentKeyPair.publicKey, network: this.network }).address
+      if (!agentAddress) this.error('Agent address generation failed.')
+
+      const inputCount = 2000
+      const FEE_RATE = 1000n // dogetoshis per vB
+      const estimatedVSize = 10n + BigInt(inputCount) * 148n + 2n * 34n
+      const estimatedFee = estimatedVSize * FEE_RATE
+      const totalNeeded = targetValue + estimatedFee + DUST_LIMIT
+      let perOutputValue = totalNeeded / BigInt(inputCount)
+      if (totalNeeded % BigInt(inputCount) !== 0n) perOutputValue += 1n
+      if (perOutputValue < DUST_LIMIT) perOutputValue = DUST_LIMIT
+      const totalFunding = perOutputValue * BigInt(inputCount)
+
+      if (flags.verbose) {
+        this.log(chalk.dim(`   Funding per UTXO: ${perOutputValue.toString()} dogetoshis`))
+        this.log(chalk.dim(`   Total funding to agent: ${totalFunding.toString()} dogetoshis`))
+      }
+
+      const masterKeyPair: ECPairInterface = ECPair.fromWIF(this.masterWif, this.network)
+      const fundingOutputs: PsbtOutputParam[] = Array.from({ length: inputCount }, () => ({
+        address: agentAddress,
+        value: perOutputValue,
+      }))
+
+      this.log(chalk.gray(`-> Funding agent with ${inputCount} outputs...`))
+      const fundingTxid = await this.buildAndBroadcastTx(masterKeyPair, fundingOutputs, flags.verbose)
+      if (!fundingTxid) this.error('Funding transaction failed to broadcast.')
+
+      this.log(chalk.gray('-> Waiting for funding confirmation...'))
+      const fundingConfirmed = await waitForConfirmations(fundingTxid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
+      if (!fundingConfirmed) this.error(`Funding transaction ${fundingTxid} did not confirm within the expected time.`)
+
+      const fundingTxHex = (await getTx(fundingTxid, this.blockbookURL)).hex
+      const fundingTxBuffer = new Uint8Array(Buffer.from(fundingTxHex, 'hex'))
+
+      this.log(chalk.gray('-> Building 2000-input agent transaction...'))
+      const psbt = new bitcoin.Psbt({ network: this.network })
+      const logEvery = 200
+      for (let i = 0; i < inputCount; i++) {
+        psbt.addInput({
+          hash: fundingTxid,
+          index: i,
+          sequence: RBF_SEQUENCE,
+          nonWitnessUtxo: fundingTxBuffer,
+        })
+        if ((i + 1) % logEvery === 0) {
+          this.log(chalk.dim(`   Added inputs: ${i + 1}/${inputCount}`))
+        }
+      }
+      this.log(chalk.dim('   Finished adding all inputs.'))
+      psbt.addOutput({ address: this.feeWalletAddress, value: targetValue })
+      this.log(chalk.dim('   Added primary output to fee wallet.'))
+
+      const totalInput = totalFunding
+      const estimatedVSizeWithChange = 10n + BigInt(psbt.txInputs.length) * 148n + (BigInt(psbt.txOutputs.length) + 1n) * 34n
+      let fee = estimatedVSizeWithChange * FEE_RATE
+      let change = totalInput - targetValue - fee
+      this.log(
+        chalk.dim(
+          `   Fee estimation -> estVSizeWithChange: ${estimatedVSizeWithChange} vbytes, estFee: ${fee.toString()}, initial change: ${change.toString()}`,
+        ),
+      )
+      if (change < 0n) {
+        this.error('Insufficient funding to cover target amount and fees for the agent transaction.')
+      }
+
+      let includeChange = false
+      if (change >= DUST_LIMIT) {
+        includeChange = true
+        psbt.addOutput({ address: agentAddress, value: change })
+        // Avoid re-signing 2000 inputs for fee estimation; use rough vsize with change output.
+        const estVSizeWithChange = 10n + BigInt(psbt.txInputs.length) * 148n + BigInt(psbt.txOutputs.length) * 34n
+        fee = estVSizeWithChange * FEE_RATE
+        change = totalInput - targetValue - fee
+        if (change >= DUST_LIMIT) {
+          psbt.txOutputs[psbt.txOutputs.length - 1].value = change
+        } else {
+          includeChange = false
+          psbt.txOutputs.pop()
+          fee = totalInput - targetValue
+          change = 0n
+        }
+      } else {
+        fee = totalInput - targetValue
+      }
+
+      this.log(chalk.gray('-> Signing inputs...'))
+      for (let i = 0; i < inputCount; i++) {
+        psbt.signInput(i, agentKeyPair)
+        if ((i + 1) % logEvery === 0) {
+          this.log(chalk.dim(`   Signed inputs: ${i + 1}/${inputCount}`))
+        }
+      }
+      this.log(chalk.dim('   Finished signing all inputs. Finalizing...'))
+      psbt.finalizeAllInputs()
+      const finalTx = psbt.extractTransaction()
+      this.log(chalk.dim(`   Final tx virtual size: ${finalTx.virtualSize()} vbytes`))
+      const outputsTotal = finalTx.outs.reduce((sum, out) => sum + BigInt(out.value), 0n)
+      const finalFee = totalInput - outputsTotal
+
+      if (flags.verbose) {
+        this.log(chalk.dim(`   Final fee: ${finalFee.toString()} dogetoshis`))
+        this.log(chalk.dim(`   Change to agent: ${includeChange ? change.toString() : '0'}`))
+      }
+
+      const finalTxHex = finalTx.toHex()
+      this.log(chalk.gray('-> Broadcasting agent consolidation transaction...'))
+      const { result: txid } = await broadcastTx(finalTxHex, this.blockbookURL)
+      this.log(chalk.green(`✅ Agent consolidation transaction broadcasted!`))
+      this.log(`   ${chalk.blue('SoChain Link:')} https://sochain.com/tx/DOGETEST/${txid}`)
+      await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
+      this.log(chalk.green.bold('\n✨ Case Finished Successfully.'));
+    } catch (error: any) {
+      this.log(chalk.red.bold('\n❌ Case Failed: Fee Wallet 2000 Inputs'))
+      this.log(chalk.red(`   Error: ${error.message}`))
+      if (flags.verbose) {
+        this.log(chalk.dim(error.stack))
+      }
+      throw error
+    }
+  }
+
+  private async sendL2SelfTxWithRandomData(sizeBytes = 110 * 1024) {
+    if (!this.l2RPC || !this.l2AddressPrivateKey) {
+      this.warn('L2 RPC or L2 private key is missing; skipping L2 self-transfer.')
+      return
+    }
+
+    const provider = new JsonRpcProvider(this.l2RPC)
+    const wallet = new Wallet(this.l2AddressPrivateKey, provider)
+
+    const payload = randomBytes(sizeBytes)
+    const dataHex = `0x${payload.toString('hex')}`
+
+    this.log(chalk.gray(`-> Sending L2 self-transfer with ${sizeBytes} bytes of data...`))
+    const txRequest = { to: wallet.address, value: 0, data: dataHex }
+    const gasEstimate = await wallet.estimateGas(txRequest)
+    const gasLimit = (gasEstimate * 12n) / 10n
+    const tx = await wallet.sendTransaction({ ...txRequest, gasLimit })
+
+    this.log(chalk.green(`✅ L2 self-transfer submitted: ${tx.hash}`))
+    await tx.wait()
+    this.log(chalk.green('✅ L2 self-transfer confirmed.'))
   }
 
   private async buildAndBroadcastTx(keyPair: ECPairInterface, outputs: PsbtOutputParam[], verbose = false) {
@@ -758,6 +949,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       psbt.addInput({
         hash: utxo.txid,
         index: utxo.vout,
+        sequence: RBF_SEQUENCE,
         nonWitnessUtxo: new Uint8Array(Buffer.from(txHex, 'hex')),
       })
     }
@@ -874,10 +1066,10 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     this.log(chalk.bold.cyan('\n✨ Starting: Large PSBT Case'))
     const { flags } = await this.parse(Case)
 
-    const inputCount = 1000
+    const inputCount = 3000
     //0.01~2.01
     const fundingAmount = BigInt(Math.round(Math.random() * 1_000_000));
-    const feePerInput = 500_000n // Generous fee for consolidation
+    const feePerInput = 1000_000n // Generous fee for consolidation
     const totalFundingNeeded = BigInt(inputCount) * (fundingAmount + feePerInput)
 
     this.log(chalk.gray(`-> Generating ${inputCount} random keypairs...`))
@@ -916,6 +1108,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       psbt.addInput({
         hash: fundingTxid,
         index: i,
+        sequence: RBF_SEQUENCE,
         nonWitnessUtxo: new Uint8Array(Buffer.from(fundingTxHex, 'hex')),
       })
     }
@@ -940,6 +1133,9 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     this.log(chalk.gray('-> Signing inputs...'))
     for (let i = 0; i < inputCount; i++) {
       psbt.signInput(i, keyPairs[i])
+      if (i % 100 == 0) {
+        this.log(`sign input ${i} ...`)
+      }
     }
     psbt.finalizeAllInputs()
 
@@ -952,7 +1148,6 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
     await waitForConfirmations(largeTxid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
 
-    //在这里做一次提现，提现金额是 bridgeValue-0.1coin 
     this.log(chalk.gray('-> Waiting for L2 balance update...'))
     const provider = new JsonRpcProvider(this.l2RPC)
     const wallet = new Wallet(this.l2AddressPrivateKey, provider)

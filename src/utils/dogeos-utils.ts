@@ -15,6 +15,40 @@ export interface Tx {
   confirmations?: number
 }
 
+type ElectrsUtxo = {
+  txid: string
+  vout: number
+  value: number | string
+  status: {
+    confirmed: boolean
+    block_height?: number
+  }
+}
+
+type ElectrsTx = {
+  status?: {
+    confirmed: boolean
+    block_height?: number
+  }
+}
+
+const ELECTRS_FALLBACK_BASE = 'https://doge-electrs-testnet-demo.qed.me'
+
+const normalizeBaseUrl = (url: string) => (url || '').replace(/\/+$/, '')
+
+const resolveBaseUrls = (blockbookUrl: string): string[] => {
+  const primary = normalizeBaseUrl(blockbookUrl)
+  const electrsBase = ELECTRS_FALLBACK_BASE
+  const isElectrsHost = primary.includes('doge-electrs-testnet-demo.qed.me')
+
+  if (isElectrsHost) {
+    return [electrsBase]
+  }
+
+  const bases = [primary, electrsBase].filter(Boolean)
+  return Array.from(new Set(bases))
+}
+
 export const toString = (value: unknown): string => {
   if (typeof value === 'string') {
     return value.trim()
@@ -86,11 +120,76 @@ export const maskSensitive = (value: string) => {
  * @returns A promise that resolves to an array of UTXOs.
  */
 export async function getUtxos(address: string, blockbookUrl: string): Promise<Utxo[]> {
-  const response = await fetch(`${blockbookUrl}/api/v2/utxo/${address}`)
-  if (!response.ok) {
-    throw new Error(`Failed to fetch UTXOs: ${response.statusText}`)
+  const bases = resolveBaseUrls(blockbookUrl)
+  const errors: string[] = []
+
+  for (const baseUrl of bases) {
+    const isElectrsOnly = baseUrl.includes('doge-electrs-testnet-demo.qed.me')
+    let lastError: unknown
+
+    // Try Blockbook first (skip for electrs-only base)
+    if (!isElectrsOnly) {
+      try {
+        const response = await fetch(`${baseUrl}/api/v2/utxo/${address}`)
+        if (!response.ok) {
+          throw new Error(`Blockbook request failed: ${response.status} ${response.statusText}`)
+        }
+        return response.json()
+      } catch (error) {
+        lastError = error
+      }
+    }
+
+    // Fallback to Electrs/Esplora-style API
+    try {
+      const utxoRes = await fetch(`${baseUrl}/address/${address}/utxo`)
+      if (!utxoRes.ok) {
+        throw new Error(`Electrs request failed: ${utxoRes.status} ${utxoRes.statusText}`)
+      }
+      const electrsUtxos: ElectrsUtxo[] = await utxoRes.json()
+
+      let tipHeight = 0
+      const needsTipHeight = electrsUtxos.some((u) => u.status.confirmed && Number.isFinite(u.status.block_height))
+      if (needsTipHeight) {
+        try {
+          const tipRes = await fetch(`${baseUrl}/blocks/tip/height`)
+          if (tipRes.ok) {
+            const text = await tipRes.text()
+            const parsed = Number.parseInt(text, 10)
+            if (Number.isFinite(parsed)) {
+              tipHeight = parsed
+            }
+          }
+        } catch {
+          // ignore tip height fetch errors; we fall back to minimum confirmations
+        }
+      }
+
+      return electrsUtxos.map((u) => {
+        const valueStr = typeof u.value === 'string' ? u.value : BigInt(u.value).toString()
+        const height = u.status.block_height
+        let confirmations = 0
+        if (u.status.confirmed) {
+          confirmations = height && tipHeight ? Math.max(0, tipHeight - height + 1) : 1
+        }
+        return {
+          txid: u.txid,
+          vout: u.vout,
+          value: valueStr,
+          confirmations,
+        }
+      })
+    } catch (error) {
+      const reason =
+        lastError instanceof Error
+          ? `Last blockbook error: ${lastError.message}`
+          : `Last blockbook error: ${String(lastError)}`
+      const electrsMsg = error instanceof Error ? error.message : String(error)
+      errors.push(`[base ${baseUrl}] ${reason}. Electrs error: ${electrsMsg}`)
+    }
   }
-  return response.json()
+
+  throw new Error(`Failed to fetch UTXOs from all configured endpoints. ${errors.join(' | ')}`)
 }
 
 /**
@@ -100,11 +199,75 @@ export async function getUtxos(address: string, blockbookUrl: string): Promise<U
  * @returns A promise that resolves to the transaction object containing the hex.
  */
 export async function getTx(txid: string, blockbookUrl: string): Promise<Tx> {
-  const response = await fetch(`${blockbookUrl}/api/v2/tx/${txid}`)
-  if (!response.ok) {
-    throw new Error(`Failed to fetch transaction: ${response.statusText}`)
+  const bases = resolveBaseUrls(blockbookUrl)
+  const errors: string[] = []
+
+  for (const baseUrl of bases) {
+    const isElectrsOnly = baseUrl.includes('doge-electrs-testnet-demo.qed.me')
+    let lastError: unknown
+
+    // Try Blockbook first (skip for electrs-only base)
+    if (!isElectrsOnly) {
+      try {
+        const response = await fetch(`${baseUrl}/api/v2/tx/${txid}`)
+        if (!response.ok) {
+          throw new Error(`Blockbook request failed: ${response.status} ${response.statusText}`)
+        }
+        return response.json()
+      } catch (error) {
+        lastError = error
+      }
+    }
+
+    // Fallback to Electrs/Esplora
+    try {
+      const [txRes, hexRes] = await Promise.all([
+        fetch(`${baseUrl}/tx/${txid}`),
+        fetch(`${baseUrl}/tx/${txid}/hex`),
+      ])
+
+      if (!txRes.ok) {
+        throw new Error(`Electrs tx request failed: ${txRes.status} ${txRes.statusText}`)
+      }
+      if (!hexRes.ok) {
+        throw new Error(`Electrs hex request failed: ${hexRes.status} ${hexRes.statusText}`)
+      }
+
+      const tx: ElectrsTx = await txRes.json()
+      const hex = await hexRes.text()
+
+      let confirmations = 0
+      const height = tx.status?.block_height
+      if (tx.status?.confirmed) {
+        confirmations = 1
+        if (height && Number.isFinite(height)) {
+          try {
+            const tipRes = await fetch(`${baseUrl}/blocks/tip/height`)
+            if (tipRes.ok) {
+              const tipText = await tipRes.text()
+              const tipHeight = Number.parseInt(tipText, 10)
+              if (Number.isFinite(tipHeight)) {
+                confirmations = Math.max(1, tipHeight - Number(height) + 1)
+              }
+            }
+          } catch {
+            // ignore tip fetch errors; fall back to minimum confirmation
+          }
+        }
+      }
+
+      return { hex, confirmations }
+    } catch (error) {
+      const reason =
+        lastError instanceof Error
+          ? `Last blockbook error: ${lastError.message}`
+          : `Last blockbook error: ${String(lastError)}`
+      const electrsMsg = error instanceof Error ? error.message : String(error)
+      errors.push(`[base ${baseUrl}] ${reason}. Electrs error: ${electrsMsg}`)
+    }
   }
-  return response.json()
+
+  throw new Error(`Failed to fetch transaction from all configured endpoints. ${errors.join(' | ')}`)
 }
 
 /**
@@ -114,20 +277,66 @@ export async function getTx(txid: string, blockbookUrl: string): Promise<Tx> {
  * @returns A promise that resolves to the broadcast result, typically containing the txid.
  */
 export async function broadcastTx(txHex: string, blockbookUrl: string): Promise<{ result: string }> {
-  const response = await fetch(`${blockbookUrl}/api/v2/sendtx/`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'text/plain',
-    },
-    body: txHex,
-  })
+  const bases = resolveBaseUrls(blockbookUrl)
+  const errors: string[] = []
 
-  if (!response.ok) {
-    const errorBody = await response.text()
-    throw new Error(`Failed to broadcast transaction: ${response.statusText} - ${errorBody}`)
+  for (const baseUrl of bases) {
+    const isElectrsOnly = baseUrl.includes('doge-electrs-testnet-demo.qed.me')
+    let lastError: unknown
+
+    // Try Blockbook first (skip for electrs-only base)
+    if (!isElectrsOnly) {
+      try {
+        const response = await fetch(`${baseUrl}/api/v2/sendtx/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'text/plain',
+          },
+          body: txHex,
+        })
+
+        if (!response.ok) {
+          const errorBody = await response.text()
+          throw new Error(`Blockbook broadcast failed: ${response.status} ${response.statusText} - ${errorBody}`)
+        }
+
+        return response.json()
+      } catch (error) {
+        lastError = error
+      }
+    }
+
+    // Fallback to Electrs/Esplora
+    try {
+      const response = await fetch(`${baseUrl}/tx`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain',
+        },
+        body: txHex,
+      })
+
+      if (!response.ok) {
+        const errorBody = await response.text()
+        throw new Error(`Electrs broadcast failed: ${response.status} ${response.statusText} - ${errorBody}`)
+      }
+
+      const txid = (await response.text()).trim()
+      if (!txid) {
+        throw new Error('Electrs broadcast returned empty txid')
+      }
+      return { result: txid }
+    } catch (error) {
+      const reason =
+        lastError instanceof Error
+          ? `Last blockbook error: ${lastError.message}`
+          : `Last blockbook error: ${String(lastError)}`
+      const electrsMsg = error instanceof Error ? error.message : String(error)
+      errors.push(`[base ${baseUrl}] ${reason}. Electrs error: ${electrsMsg}`)
+    }
   }
 
-  return response.json()
+  throw new Error(`Failed to broadcast transaction via all configured endpoints. ${errors.join(' | ')}`)
 }
 
 export async function waitForConfirmations(
@@ -136,7 +345,7 @@ export async function waitForConfirmations(
   log: (msg: string) => void,
   warn: (msg: string) => void,
   minConfirmations = 1,
-  pollIntervalMs = 30_000,
+  pollIntervalMs = 3_000,
   timeoutMs = 10 * 60_000,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
