@@ -197,7 +197,7 @@ Generate transactions on the specified network(s) to produce more blocks
 
 ```
 USAGE
-  $ scrollsdk helper activity [-c <value>] [-d] [-i <value>] [-o] [-t] [-p] [-k <value>] [-x <value>] [-r <value>]
+  $ scrollsdk helper activity [-c <value>] [-d] [-i <value>] [-o] [-t] [-p] [-k <value>] [-x <value>] [-r <value>] [-s]
 
 FLAGS
   -c, --config=<value>      [default: ./config.toml] Path to config.toml file
@@ -207,6 +207,7 @@ FLAGS
   -o, --layer1              Generate activity on Layer 1
   -p, --pod                 Run inside Kubernetes pod
   -r, --rpc=<value>         RPC URL (overrides config for both layers)
+  -s, --spam                with 110KB input while sending transaction (helps rollup-relayer produce batches)
   -t, --[no-]layer2         Generate activity on Layer 2
   -x, --recipient=<value>   Recipient address (overrides config)
 
