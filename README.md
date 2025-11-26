@@ -885,18 +885,22 @@ Run DogeOS integration tests.
 
 ```
 USAGE
-  $ scrollsdk test dogeos [CASENAME] [-m <value>] [-b <value>] [-c <value>] [-v <value>] [--l2PrivateKey <value>] [--verbose]
+  $ scrollsdk test dogeos [CASENAME] [-m <value>] [-b <value>] [--l1rpcurl <value>] [--l1rpcuser <value>] [--l1rpcpassword <value>] [-c <value>] [-v <value>]
+    [--l2PrivateKey <value>] [--verbose]
 
 ARGUMENTS
   CASENAME  The name of the case to run
 
 FLAGS
-  -b, --blockbookurl=<value>  [default: https://blockbook.qiaoxiaorui.org] blockbook url
-  -c, --outputcount=<value>   [default: 24] Number of P2PKH outputs when running the multiple-output scenario
-  -m, --masterwif=<value>     [default: cftTTdqFUYi3Njx4VLZGATAFCuX8wetJddD71FGmC91wKJ2XidVY] master wif key, 
-                              provide test dogecoin
-  -v, --outputvalue=<value>   [default: 1000000] Value per P2PKH output (in dogetoshis) when running the 
-                              multiple-output scenario
+  -b, --blockbookurl=<value>   [default: https://doge-electrs-testnet-demo.qed.me] blockbook url
+  -c, --outputcount=<value>    [default: 24] Number of P2PKH outputs when running the multiple-output scenario
+  -m, --masterwif=<value>      [default: cftTTdqFUYi3Njx4VLZGATAFCuX8wetJddD71FGmC91wKJ2XidVY] master wif key, 
+                               provide test dogecoin
+  -v, --outputvalue=<value>    [default: 1000000] Value per P2PKH output (in dogetoshis) when running the 
+                               multiple-output scenario
+      --l1rpcpassword=<value>  [default: password] Dogecoin node RPC password
+      --l1rpcurl=<value>       [default: http://100.88.43.45:44555] Dogecoin node RPC URL (e.g., http://host:port)
+      --l1rpcuser=<value>      [default: doge] Dogecoin node RPC username
       --l2PrivateKey=<value>  [default: 0x713137ab6bfaf197200b4f1e033bb3abadaf76564f6b2ca4f00aaa90c3c8efe5]
       --verbose               Enable detailed verbose logging
 
@@ -909,6 +913,9 @@ DESCRIPTION
   - 3: Bridge UTXO Attack - Simulate a UTXO fan-out attack on the bridge
   - 4: Multiple Withdrawal Per Tx - Test multiple withdrawals in a single L2 transaction
   - 5: Large PSBT - Construct and broadcast a large transaction with many inputs
+  - 6: Fee Wallet 2000 Inputs - Send M+1 to the fee wallet using 2000 inputs via an agent
+  - 7: Replace Mempool TXs (Master) - Bump-fee replace masterAddress mempool transactions with self-spends
+  - 8: CPFP Master Mempool - Use CPFP to bump-fee unconfirmed masterAddress transactions
   - 0: Run All Cases - Execute all test cases sequentially
 
 EXAMPLES
