@@ -56,6 +56,16 @@ const TEST_CASES = [
     description: 'Send M+1 to the fee wallet using 2000 inputs via an agent',
   },
   {
+    id: '7',
+    name: 'Replace Mempool TXs (Master)',
+    description: 'Bump-fee replace masterAddress mempool transactions with self-spends',
+  },
+  {
+    id: '8',
+    name: 'CPFP Master Mempool',
+    description: 'Use CPFP to bump-fee unconfirmed masterAddress transactions',
+  },
+  {
     id: '0',
     name: 'Run All Cases',
     description: 'Execute all test cases sequentially',
@@ -114,6 +124,24 @@ type PsbtOutputParam = Parameters<bitcoin.Psbt['addOutput']>[0]
 const DUST_LIMIT = 1000000n // 0.01 DOGE
 const RBF_SEQUENCE = 0xfffffffd
 
+type ElectrsTxVin = {
+  txid: string
+  vout: number
+  sequence: number
+  prevout?: {
+    value: number | string
+    scriptpubkey_address?: string
+  }
+}
+
+type ElectrsTxDetail = {
+  txid: string
+  vin: ElectrsTxVin[]
+  vout: { value: number | string; scriptpubkey_address?: string }[]
+  fee?: number | string
+  hex?: string
+}
+
 export default class Case extends Command {
   static override description = `Run DogeOS integration tests.
   
@@ -134,6 +162,9 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
   l2VerifierType: string = ''
   l2ChainId: string = ''
   blockbookURL: string = ''
+  l1RpcUrl: string = ''
+  l1RpcUser: string = ''
+  l1RpcPassword: string = ''
   masterWif: string = ''
   masterAddress: string = ''
   networkName: string = ''
@@ -162,7 +193,19 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     blockbookurl: Flags.string({
       char: 'b',
       description: 'blockbook url',
-      default: 'https://blockbook.qiaoxiaorui.org',
+      default: 'https://doge-electrs-testnet-demo.qed.me',
+    }),
+    l1rpcurl: Flags.string({
+      description: 'Dogecoin node RPC URL (e.g., http://host:port)',
+      default: 'http://10.142.0.16:44555',
+    }),
+    l1rpcuser: Flags.string({
+      description: 'Dogecoin node RPC username',
+      default: 'doge',
+    }),
+    l1rpcpassword: Flags.string({
+      description: 'Dogecoin node RPC password',
+      default: 'password',
     }),
     outputcount: Flags.integer({
       char: 'c',
@@ -219,6 +262,9 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     this.l2Address = deriveAddressFromKey(this.l2AddressPrivateKey, '', warn)
 
     this.blockbookURL = flags.blockbookurl
+    this.l1RpcUrl = toString(flags.l1rpcurl)
+    this.l1RpcUser = toString(flags.l1rpcuser)
+    this.l1RpcPassword = toString(flags.l1rpcpassword)
     this.masterWif = flags.masterwif
 
     const valuesPath = path.resolve('values', 'l1-interface-production.yaml')
@@ -312,6 +358,14 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
         case '6': {
           await this.caseFeeWalletAgentConsolidation()
           await this.sendL2SelfTxWithRandomData()
+          break
+        }
+        case '7': {
+          await this.caseReplaceMempoolTxs()
+          break
+        }
+        case '8': {
+          await this.caseCpfpMempoolTxs()
           break
         }
         case '0': {
@@ -467,6 +521,348 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       }
       throw error // Re-throw to be caught by the main handler
     }
+  }
+
+  private async caseReplaceMempoolTxs() {
+    this.log(chalk.bold.cyan('\n✨ Starting: Replace Master Mempool TXs'))
+    const keyPair = ECPair.fromWIF(this.masterWif, this.network)
+
+    const electrsBases = this.getElectrsBases()
+    const mempoolTxs = await this.fetchAddressMempoolTxs(this.masterAddress, electrsBases)
+    if (mempoolTxs.length === 0) {
+      this.log(chalk.yellow('No mempool transactions found for masterAddress; nothing to replace.'))
+      return
+    }
+
+    this.log(chalk.gray(`-> Found ${mempoolTxs.length} mempool transaction(s) affecting masterAddress.`))
+    const prevHexCache = new Map<string, string>()
+    const spentInputs = new Set<string>()
+    let replaced = 0
+
+    for (const entry of mempoolTxs) {
+      const txid = (entry as ElectrsTxDetail)?.txid || (entry as { txid?: string })?.txid
+    if (!txid) {
+      this.warn('Encountered mempool entry without txid; skipping.')
+      continue
+    }
+
+      try {
+        const txDetail = 'vin' in entry ? (entry as ElectrsTxDetail) : await this.fetchTxDetail(txid, electrsBases)
+        // const hasRbfOptIn = txDetail.vin.some((vin) => typeof vin.sequence === 'number' && vin.sequence < 0xfffffffe)
+        // if (!hasRbfOptIn) {
+        //   this.warn(`Skipping ${txid}: original tx does not signal RBF.`)
+        //   continue
+        // }
+
+        const allInputsFromMaster = txDetail.vin.every(
+          (vin) => vin.prevout?.scriptpubkey_address && vin.prevout.scriptpubkey_address === this.masterAddress,
+        )
+        if (!allInputsFromMaster) {
+          this.warn(`Skipping ${txid}: contains inputs not owned by masterAddress.`)
+          continue
+        }
+
+        const hasSeenInput = txDetail.vin.some((vin) => {
+          const key = `${vin.txid}:${vin.vout}`
+          return spentInputs.has(key)
+        })
+        if (hasSeenInput) {
+          this.warn(`Skipping ${txid}: inputs already used in a replacement attempt.`)
+          continue
+        }
+
+        const originalFee =
+          txDetail.fee !== undefined ? BigInt(typeof txDetail.fee === 'string' ? txDetail.fee : txDetail.fee) : 0n
+        const { txid: replacementId, finalFee } = await this.buildAndBroadcastReplacementTx(
+          txDetail,
+          keyPair,
+          originalFee,
+          prevHexCache,
+        )
+
+        for (const vin of txDetail.vin) {
+          spentInputs.add(`${vin.txid}:${vin.vout}`)
+        }
+
+        replaced++
+        this.log(chalk.green(`✅ Replaced ${txid} with ${replacementId} (fee bumped to ${finalFee.toString()} sat).`))
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        this.warn(`Failed to replace ${txid}: ${reason}`)
+      }
+    }
+
+    if (replaced === 0) {
+      this.log(chalk.yellow('No transactions were replaced.'))
+    } else {
+      this.log(chalk.green.bold(`\n✨ Finished. Replaced ${replaced} transaction(s).`))
+    }
+  }
+
+  private async caseCpfpMempoolTxs() {
+    this.log(chalk.bold.cyan('\n✨ Starting: CPFP Master Mempool TXs'))
+    const keyPair = ECPair.fromWIF(this.masterWif, this.network)
+
+    const electrsBases = this.getElectrsBases()
+    const mempoolTxs = await this.fetchAddressMempoolTxs(this.masterAddress, electrsBases)
+    if (mempoolTxs.length === 0) {
+      this.log(chalk.yellow('No mempool transactions found for masterAddress; nothing to CPFP.'))
+      return
+    }
+
+    const prevHexCache = new Map<string, string>()
+    let childCount = 0
+    let skipped = 0
+
+    for (const entry of mempoolTxs) {
+      const txid = (entry as ElectrsTxDetail)?.txid || (entry as { txid?: string })?.txid
+      if (!txid) continue
+
+      try {
+        const txDetail = 'vin' in entry ? (entry as ElectrsTxDetail) : await this.fetchTxDetail(txid, electrsBases)
+        const parentHex = txDetail.hex ?? (await this.loadPrevTxHex(txid, prevHexCache))
+        const masterOutputs = txDetail.vout
+          .map((v, idx) => ({ ...v, index: idx }))
+          .filter((v) => v.scriptpubkey_address === this.masterAddress)
+
+        if (masterOutputs.length === 0) {
+          skipped++
+          continue
+        }
+
+        for (const out of masterOutputs) {
+          const value = BigInt(typeof out.value === 'string' ? out.value : out.value)
+          if (value <= DUST_LIMIT * 2n) {
+            this.warn(`Skipping output ${txid}:${out.index} - value too small for CPFP.`)
+            skipped++
+            continue
+          }
+
+          try {
+            const { txid: childTxid, finalFee } = await this.buildAndBroadcastCpfpTx(
+              txid,
+              out.index,
+              value,
+              parentHex,
+              keyPair,
+            )
+            childCount++
+            this.log(chalk.green(`✅ CPFP child broadcasted for ${txid}:${out.index} -> ${childTxid} (fee ${finalFee})`))
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error)
+            this.warn(`Failed CPFP for ${txid}:${out.index}: ${reason}`)
+            skipped++
+          }
+        }
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        this.warn(`Failed to process ${txid}: ${reason}`)
+        skipped++
+      }
+    }
+
+    if (childCount === 0) {
+      this.log(chalk.yellow(`No CPFP children broadcasted. Skipped: ${skipped}`))
+    } else {
+      this.log(chalk.green.bold(`\n✨ Finished. Broadcasted ${childCount} CPFP child transaction(s).`))
+    }
+  }
+
+  private getElectrsBases(): string[] {
+    const primary = (this.blockbookURL || '').replace(/\/+$/, '')
+    const fallback = 'https://doge-electrs-testnet-demo.qed.me'
+    const bases = new Set<string>()
+    bases.add(fallback)
+    if (primary) bases.add(primary)
+    return Array.from(bases)
+  }
+
+  private async fetchAddressMempoolTxs(address: string, bases: string[]): Promise<ElectrsTxDetail[]> {
+    const errors: string[] = []
+    for (const base of bases) {
+      try {
+        const res = await fetch(`${base}/address/${address}/txs/mempool`)
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status} ${res.statusText}`)
+        }
+        const data = await res.json()
+        if (Array.isArray(data)) return data as ElectrsTxDetail[]
+        throw new Error('Unexpected response shape')
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        errors.push(`[${base}] ${reason}`)
+      }
+    }
+    throw new Error(`Failed to fetch mempool txs for ${address}. ${errors.join(' | ')}`)
+  }
+
+  private async fetchTxDetail(txid: string, bases: string[]): Promise<ElectrsTxDetail> {
+    const errors: string[] = []
+    for (const base of bases) {
+      try {
+        const res = await fetch(`${base}/tx/${txid}`)
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status} ${res.statusText}`)
+        }
+        const data = (await res.json()) as ElectrsTxDetail
+        if (data && data.vin && data.vout) return data
+        throw new Error('Unexpected response shape')
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        errors.push(`[${base}] ${reason}`)
+      }
+    }
+    throw new Error(`Failed to fetch tx ${txid}. ${errors.join(' | ')}`)
+  }
+
+  private async loadPrevTxHex(txid: string, cache: Map<string, string>): Promise<string> {
+    const cached = cache.get(txid)
+    if (cached) return cached
+    const tx = await getTx(txid, this.blockbookURL)
+    cache.set(txid, tx.hex)
+    return tx.hex
+  }
+
+  private async buildAndBroadcastReplacementTx(
+    txDetail: ElectrsTxDetail,
+    keyPair: ECPairInterface,
+    originalFee: bigint,
+    prevHexCache: Map<string, string>,
+  ): Promise<{ txid: string; finalFee: bigint }> {
+    // Ensure parents are seen by the RPC node to avoid "Missing inputs"
+    const parentTxids = Array.from(new Set(txDetail.vin.map((v) => v.txid)))
+    for (const pid of parentTxids) {
+      try {
+        const phex = await this.loadPrevTxHex(pid, prevHexCache)
+        await this.broadcastRawTx(phex)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        this.warn(`Best-effort parent broadcast failed for ${pid}: ${reason}`)
+      }
+    }
+
+    const psbt = new bitcoin.Psbt({ network: this.network })
+    let totalInput = 0n
+
+    for (const vin of txDetail.vin) {
+      const prevHex = await this.loadPrevTxHex(vin.txid, prevHexCache)
+      const valueRaw = vin.prevout?.value ?? 0
+      const value = BigInt(typeof valueRaw === 'string' ? valueRaw : valueRaw)
+      totalInput += value
+      psbt.addInput({
+        hash: vin.txid,
+        index: vin.vout,
+        sequence: RBF_SEQUENCE,
+        nonWitnessUtxo: new Uint8Array(Buffer.from(prevHex, 'hex')),
+      })
+    }
+
+    // Aim for a solid bump: at least 2x original fee and a min feerate
+    const estimatedVsize = 10 + psbt.txInputs.length * 148 + (psbt.txOutputs.length + 1) * 34
+    const minFeeRate = 5000 // dogetoshis per vB
+    const minFeeByRate = BigInt(estimatedVsize * minFeeRate)
+    const bumpedFee = originalFee > 0n ? (originalFee * 2n) + 2000n : minFeeByRate
+    const targetFee = bumpedFee > minFeeByRate ? bumpedFee : minFeeByRate
+    const maxAllowedFee = totalInput > DUST_LIMIT ? totalInput - DUST_LIMIT : 0n
+    const useFee = targetFee < maxAllowedFee ? targetFee : maxAllowedFee
+    const sendValue = totalInput - useFee
+
+    if (sendValue < DUST_LIMIT) {
+      throw new Error('Insufficient value after fee bump to create a spendable output.')
+    }
+
+    psbt.addOutput({ address: this.masterAddress, value: sendValue })
+    psbt.setMaximumFeeRate(1_000_000_000) // allow aggressive fee bumping without safety abort
+    psbt.signAllInputs(keyPair)
+    psbt.finalizeAllInputs()
+
+    const finalTx = psbt.extractTransaction(true)
+    const outputsTotal = finalTx.outs.reduce((sum, out) => sum + BigInt(out.value), 0n)
+    const finalFee = totalInput - outputsTotal
+
+    if (finalFee <= originalFee) {
+      this.warn(`Fee bump may be insufficient: original ${originalFee.toString()}, replacement ${finalFee.toString()}.`)
+    }
+
+    const txid = await this.broadcastRawTx(finalTx.toHex())
+    return { txid, finalFee }
+  }
+
+  private async buildAndBroadcastCpfpTx(
+    parentTxid: string,
+    voutIndex: number,
+    value: bigint,
+    parentHex: string,
+    keyPair: ECPairInterface,
+  ): Promise<{ txid: string; finalFee: bigint }> {
+    const psbt = new bitcoin.Psbt({ network: this.network })
+    psbt.addInput({
+      hash: parentTxid,
+      index: voutIndex,
+      nonWitnessUtxo: new Uint8Array(Buffer.from(parentHex, 'hex')),
+      sequence: RBF_SEQUENCE,
+    })
+
+    // Aim for a strong fee rate for small child txs.
+    const estimatedVsize = 10 + 148 + 34 // single P2PKH in/out
+    const targetFee = BigInt(estimatedVsize * 5000) // 5000 dogetoshis per vB
+    const maxSpendable = value - DUST_LIMIT
+    if (maxSpendable <= 0) {
+      throw new Error('Output value too low after dust reservation.')
+    }
+    const fee = targetFee < maxSpendable ? targetFee : maxSpendable - DUST_LIMIT
+    const sendValue = value - fee
+    if (sendValue < DUST_LIMIT) {
+      throw new Error('Insufficient value after fee to keep output above dust.')
+    }
+
+    psbt.addOutput({ address: this.masterAddress, value: sendValue })
+    psbt.setMaximumFeeRate(1_000_000_000)
+    psbt.signAllInputs(keyPair)
+    psbt.finalizeAllInputs()
+    const finalTx = psbt.extractTransaction(true)
+
+    const outputsTotal = finalTx.outs.reduce((sum, out) => sum + BigInt(out.value), 0n)
+    const finalFee = value - outputsTotal
+
+    const txid = await this.broadcastRawTx(finalTx.toHex())
+    return { txid, finalFee }
+  }
+
+  private async broadcastRawTx(txHex: string): Promise<string> {
+    // Prefer direct node RPC if configured
+    if (this.l1RpcUrl && this.l1RpcUser && this.l1RpcPassword) {
+      try {
+        const auth = Buffer.from(`${this.l1RpcUser}:${this.l1RpcPassword}`).toString('base64')
+        const res = await fetch(this.l1RpcUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Basic ${auth}`,
+          },
+          body: JSON.stringify({
+            jsonrpc: '1.0',
+            id: 'cpfp',
+            method: 'sendrawtransaction',
+            params: [txHex],
+          }),
+        })
+        if (res.ok) {
+          const body = (await res.json()) as { result?: string; error?: { message?: string } }
+          if (body?.result) return body.result
+          const errMsg = body?.error?.message ? `RPC error: ${body.error.message}` : 'Unknown RPC response'
+          throw new Error(errMsg)
+        }
+        const text = await res.text()
+        throw new Error(`RPC HTTP ${res.status} ${res.statusText}: ${text}`)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        this.warn(`RPC broadcast failed; falling back to blockbook/electrs. Reason: ${reason}`)
+      }
+    }
+
+    const { result } = await broadcastTx(txHex, this.blockbookURL)
+    return result
   }
 
   private getHelperContractConfig(): HelperContractConfig {
@@ -903,18 +1299,20 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     const provider = new JsonRpcProvider(this.l2RPC)
     const wallet = new Wallet(this.l2AddressPrivateKey, provider)
 
-    const payload = randomBytes(sizeBytes)
-    const dataHex = `0x${payload.toString('hex')}`
+    for (let i = 1; i <= 3; i++) {
+      const payload = randomBytes(sizeBytes)
+      const dataHex = `0x${payload.toString('hex')}`
 
-    this.log(chalk.gray(`-> Sending L2 self-transfer with ${sizeBytes} bytes of data...`))
-    const txRequest = { to: wallet.address, value: 0, data: dataHex }
-    const gasEstimate = await wallet.estimateGas(txRequest)
-    const gasLimit = (gasEstimate * 12n) / 10n
-    const tx = await wallet.sendTransaction({ ...txRequest, gasLimit })
+      this.log(chalk.gray(`-> Sending L2 self-transfer #${i} with ${sizeBytes} bytes of data...`))
+      const txRequest = { to: wallet.address, value: 0, data: dataHex }
+      const gasEstimate = await wallet.estimateGas(txRequest)
+      const gasLimit = (gasEstimate * 12n) / 10n
+      const tx = await wallet.sendTransaction({ ...txRequest, gasLimit })
 
-    this.log(chalk.green(`✅ L2 self-transfer submitted: ${tx.hash}`))
-    await tx.wait()
-    this.log(chalk.green('✅ L2 self-transfer confirmed.'))
+      this.log(chalk.green(`✅ L2 self-transfer #${i} submitted: ${tx.hash}`))
+      await tx.wait()
+      this.log(chalk.green(`✅ L2 self-transfer #${i} confirmed.`))
+    }
   }
 
   private async buildAndBroadcastTx(keyPair: ECPairInterface, outputs: PsbtOutputParam[], verbose = false) {
@@ -1068,7 +1466,8 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
     const inputCount = 3000
     //0.01~2.01
-    const fundingAmount = BigInt(Math.round(Math.random() * 1_000_000));
+    //const fundingAmount = BigInt(Math.round(Math.random() * 1_000_000));
+    const fundingAmount =   BigInt(10_000_000);
     const feePerInput = 1000_000n // Generous fee for consolidation
     const totalFundingNeeded = BigInt(inputCount) * (fundingAmount + feePerInput)
 

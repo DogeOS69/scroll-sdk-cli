@@ -45,7 +45,8 @@ const resolveBaseUrls = (blockbookUrl: string): string[] => {
     return [electrsBase]
   }
 
-  const bases = [primary, electrsBase].filter(Boolean)
+  // Prefer electrs first, then optional blockbook primary as fallback.
+  const bases = [electrsBase, primary].filter(Boolean)
   return Array.from(new Set(bases))
 }
 
