@@ -163,6 +163,7 @@ USAGE
   - [`scrollsdk setup verify-contracts`](#scrollsdk-setup-verify-contracts)
   - [`scrollsdk test contracts`](#scrollsdk-test-contracts)
   - [`scrollsdk test dependencies`](#scrollsdk-test-dependencies)
+  - [`scrollsdk test dogeos`](#scrollsdk-test-dogeos)
   - [`scrollsdk test e2e`](#scrollsdk-test-e2e)
   - [`scrollsdk test ingress`](#scrollsdk-test-ingress)
   - [`scrollsdk doge config`](#scrollsdk-doge-config)
@@ -196,7 +197,7 @@ Generate transactions on the specified network(s) to produce more blocks
 
 ```
 USAGE
-  $ scrollsdk helper activity [-c <value>] [-d] [-i <value>] [-o] [-t] [-p] [-k <value>] [-x <value>] [-r <value>]
+  $ scrollsdk helper activity [-c <value>] [-d] [-i <value>] [-o] [-t] [-p] [-k <value>] [-x <value>] [-r <value>] [-s]
 
 FLAGS
   -c, --config=<value>      [default: ./config.toml] Path to config.toml file
@@ -206,6 +207,7 @@ FLAGS
   -o, --layer1              Generate activity on Layer 1
   -p, --pod                 Run inside Kubernetes pod
   -r, --rpc=<value>         RPC URL (overrides config for both layers)
+  -s, --spam                with 110KB input while sending transaction (helps rollup-relayer produce batches)
   -t, --[no-]layer2         Generate activity on Layer 2
   -x, --recipient=<value>   Recipient address (overrides config)
 
@@ -876,6 +878,53 @@ DESCRIPTION
 ```
 
 _See code: [src/commands/test/dependencies.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.2/src/commands/test/dependencies.ts)_
+
+## `scrollsdk test dogeos`
+
+Run DogeOS integration tests.
+
+```
+USAGE
+  $ scrollsdk test dogeos [CASENAME] [-m <value>] [-b <value>] [-c <value>] [-v <value>]
+    [--l2PrivateKey <value>] [--verbose]
+
+ARGUMENTS
+  CASENAME  The name of the case to run
+
+FLAGS
+  -b, --blockbookurl=<value>   [default: https://doge-electrs-testnet-demo.qed.me] blockbook url
+  -c, --outputcount=<value>    [default: 24] Number of P2PKH outputs when running the multiple-output scenario
+  -m, --masterwif=<value>      [default: cftTTdqFUYi3Njx4VLZGATAFCuX8wetJddD71FGmC91wKJ2XidVY] master wif key, 
+                               provide test dogecoin
+  -v, --outputvalue=<value>    [default: 1000000] Value per P2PKH output (in dogetoshis) when running the 
+                               multiple-output scenario
+
+      --l2PrivateKey=<value>  [default: 0x713137ab6bfaf197200b4f1e033bb3abadaf76564f6b2ca4f00aaa90c3c8efe5]
+      --verbose               Enable detailed verbose logging
+
+DESCRIPTION
+  Run DogeOS integration tests.
+
+  Available Test Cases:
+  - 1: Multiple OP_RETURN - Send a transaction with multiple OP_RETURN outputs
+  - 2: Multiple Output - Send a transaction with many P2PKH outputs
+  - 3: Bridge UTXO Attack - Simulate a UTXO fan-out attack on the bridge
+  - 4: Multiple Withdrawal Per Tx - Test multiple withdrawals in a single L2 transaction
+  - 5: Large PSBT - Construct and broadcast a large transaction with many inputs
+  - 6: Fee Wallet 2000 Inputs - Send M+1 to the fee wallet using 2000 inputs via an agent
+  - 7: Replace Mempool TXs (Master) - Bump-fee replace masterAddress mempool transactions with self-spends
+  - 8: CPFP Master Mempool - Use CPFP to bump-fee unconfirmed masterAddress transactions
+  - 0: Run All Cases - Execute all test cases sequentially
+
+EXAMPLES
+  $ scrollsdk test dogeos
+
+  $ scrollsdk test dogeos multiple-opreturn
+
+  $ scrollsdk test dogeos multiple-output --bridge=n...
+```
+
+_See code: [src/commands/test/dogeos.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.2/src/commands/test/dogeos.ts)_
 
 ## `scrollsdk test e2e`
 

@@ -10,7 +10,12 @@ declare module 'bitcore-lib-doge' {
   }
 
   export class PrivateKey {
+    network: {
+      name?: string
+    }
+
     constructor(data?: null | string, network?: unknown)
+
     static fromWIF(str: string): PrivateKey
     toAddress(): Address
     toPublicKey(): PublicKey
@@ -56,6 +61,8 @@ declare module 'bitcore-lib-doge' {
   }
 
   export class Input {
+    sequenceNumber: number
+
     constructor(params: {
       output: {
         satoshis: number
@@ -87,6 +94,7 @@ declare module 'bitcore-lib-doge' {
   }
 
   export class UnspentOutput {
+    satoshis: number
     constructor(params: {address: string; outputIndex: number; satoshis: number; script: string; txId: string})
   }
 

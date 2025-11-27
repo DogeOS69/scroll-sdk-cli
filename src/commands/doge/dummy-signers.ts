@@ -13,7 +13,7 @@ import { getSetupDefaultsPath, SETUP_DEFAULTS_TEMPLATE } from '../../config/cons
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
 const { Networks, PrivateKey } = bitcore
-const defaultTag = '0.2.0-rc.1'
+const defaultTag = '0.2.0-rc.3'
 
 export class DummySignersManager {
   private dogeConfig: DogeConfig

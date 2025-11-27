@@ -361,7 +361,9 @@ export default class WalletSend extends Command {
 
       // Construct tempTx step-by-step for fee estimation
       const tempTx = new Transaction()
-      tempTx.from(selectedUtxoObjects)
+      for (const selected of selectedUtxoObjects) {
+        tempTx.from(selected)
+      }
       tempTx.to(recipientAddrStr, amountSatoshis)
       if (opReturnData) tempTx.addData(opReturnData)
       tempTx.change(wallet.address)
@@ -381,7 +383,9 @@ export default class WalletSend extends Command {
 
     // Build the final transaction with exactly the selected UTXOs
     const finalTx = new Transaction()
-    finalTx.from(selectedUtxoObjects)
+    for (const selected of selectedUtxoObjects) {
+      finalTx.from(selected)
+    }
     finalTx.to(recipientAddrStr, amountSatoshis)
     if (opReturnData) finalTx.addData(opReturnData)
     finalTx.change(wallet.address)
