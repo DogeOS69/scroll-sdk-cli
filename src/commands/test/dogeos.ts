@@ -195,18 +195,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       description: 'blockbook url',
       default: 'https://doge-electrs-testnet-demo.qed.me',
     }),
-    l1rpcurl: Flags.string({
-      description: 'Dogecoin node RPC URL (e.g., http://host:port)',
-      default: 'http://10.142.0.16:44555',
-    }),
-    l1rpcuser: Flags.string({
-      description: 'Dogecoin node RPC username',
-      default: 'doge',
-    }),
-    l1rpcpassword: Flags.string({
-      description: 'Dogecoin node RPC password',
-      default: 'password',
-    }),
+
     outputcount: Flags.integer({
       char: 'c',
       description: 'Number of P2PKH outputs when running the multiple-output scenario',
@@ -216,6 +205,10 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       char: 'v',
       description: 'Value per P2PKH output (in dogetoshis) when running the multiple-output scenario',
       default: '1000000',
+    }),
+    attackValue: Flags.string({
+      description: 'Output value in dogetoshis for bridge UTXO attack scenario',
+      default: "100000000000",
     }),
     l2PrivateKey: Flags.string({
       description: '',
@@ -262,9 +255,31 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     this.l2Address = deriveAddressFromKey(this.l2AddressPrivateKey, '', warn)
 
     this.blockbookURL = flags.blockbookurl
-    this.l1RpcUrl = toString(flags.l1rpcurl)
-    this.l1RpcUser = toString(flags.l1rpcuser)
-    this.l1RpcPassword = toString(flags.l1rpcpassword)
+
+    // Read L1 RPC config from files
+    const dogecoinHost = toString(config?.DOGECOIN_HOST || config?.general?.DOGECOIN_HOST)
+    if (dogecoinHost) {
+      this.l1RpcUrl = dogecoinHost.startsWith('http') ? dogecoinHost : `https://${dogecoinHost}`
+    } else {
+      this.warn('DOGECOIN_HOST not found in config.toml')
+    }
+
+    const secretsPath = path.resolve('secrets', 'dogecoin-secret.env')
+    if (fs.existsSync(secretsPath)) {
+      try {
+        const secretsContent = fs.readFileSync(secretsPath, 'utf-8')
+        const userMatch = secretsContent.match(/DOGECOIN_RPC_USER=["']?([^"'\n]+)["']?/)
+        const passMatch = secretsContent.match(/DOGECOIN_RPC_PASSWORD=["']?([^"'\n]+)["']?/)
+
+        if (userMatch) this.l1RpcUser = userMatch[1]
+        if (passMatch) this.l1RpcPassword = passMatch[1]
+      } catch (error) {
+        this.warn(`Failed to read secrets file: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    } else {
+      this.warn(`Secrets file not found at ${secretsPath}`)
+    }
+
     this.masterWif = flags.masterwif
 
     const valuesPath = path.resolve('values', 'l1-interface-production.yaml')
@@ -304,7 +319,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     this.log(`  Bridge address: ${this.bridgeAddress || 'N/A'}`)
     this.log(`  Moat contract: ${this.moatAddress || 'N/A'}`)
     this.log(`  Master WIF: ${maskSensitive(this.masterWif) || 'N/A'}`)
-    this.log(`  Master address:${this.masterAddress}`)
+    this.log(`  Master address: ${this.masterAddress}`)
     this.log(`  l2Address: ${this.l2Address || 'N/A'}`)
     this.log(`  l2AddressPrivateKey: ${this.l2AddressPrivateKey || 'N/A'}`)
   }
@@ -332,32 +347,31 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       switch (selectedCase) {
         case '1': {
           await this.caseMultipleOpReturn()
-          await this.sendL2SelfTxWithRandomData()
+
           break
         }
         case '2': {
           await this.caseMultipleOutput()
-          await this.sendL2SelfTxWithRandomData()
+
           break
         }
         case '3': {
           await this.caseBridgeUtxoAttack()
-          await this.sendL2SelfTxWithRandomData()
+
           break
         }
         case '4': {
           await this.caseMutipleWithdrawalPerTx()
-          await this.sendL2SelfTxWithRandomData()
+
           break
         }
         case '5': {
           await this.caseLargePsbt()
-          await this.sendL2SelfTxWithRandomData()
+
           break
         }
         case '6': {
           await this.caseFeeWalletAgentConsolidation()
-          await this.sendL2SelfTxWithRandomData()
           break
         }
         case '7': {
@@ -370,17 +384,11 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
         }
         case '0': {
           await this.caseMultipleOpReturn()
-          await this.sendL2SelfTxWithRandomData()
           await this.caseMultipleOutput()
-          await this.sendL2SelfTxWithRandomData()
           await this.caseBridgeUtxoAttack()
-          await this.sendL2SelfTxWithRandomData()
           await this.caseMutipleWithdrawalPerTx()
-          await this.sendL2SelfTxWithRandomData()
           await this.caseLargePsbt()
-          await this.sendL2SelfTxWithRandomData()
           await this.caseFeeWalletAgentConsolidation()
-          await this.sendL2SelfTxWithRandomData()
           break
         }
         default: {
@@ -431,13 +439,19 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       const provider = new JsonRpcProvider(this.l2RPC)
       const wallet = new Wallet(this.l2AddressPrivateKey, provider)
 
+      const balance = await wallet.provider!.getBalance(wallet.address)
+      const requiredBalance = BigInt(3e18)
+      if (balance < requiredBalance) {
+        //this.error(`L2 balance is too low. Please recharge L2 wallet ${wallet.address} with at least 3 DOGE.`);
+        await this.rechargeL2Wallet(requiredBalance, balance);
+      }
+
       const { deploymentData, encodedConstructorArgs } = await this.foundryService.buildHelperDeploymentArtifacts(
         helperAbi,
         deploymentBytecode,
         helperConstructorArgs,
         wallet,
       )
-
 
       const txRequest = { data: deploymentData }
 
@@ -446,40 +460,43 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       const bufferedGas = (gasEstimate * 12n) / 10n // add 20% buffer
       const tx = await wallet.sendTransaction({ ...txRequest, gasLimit: bufferedGas })
 
-      this.log(chalk.green(`✅ Deployment transaction submitted!`))
-      this.log(`   ${chalk.blue('Transaction Hash:')} ${chalk.bold(tx.hash)}\n`)
+      this.log(chalk.green(`✅ Deployment transaction submitted! ${chalk.blue('Transaction Hash:')} ${chalk.bold(tx.hash)}`))
 
       let contractAddress = ''
       const receipt = await tx.wait()
       if (receipt?.contractAddress) {
         contractAddress = receipt.contractAddress
-        this.log(chalk.green(`✅ Contract deployed at ${contractAddress}`))
+        this.log(chalk.green(`✅ multi-withdrawal helper contract deployed at ${contractAddress}`))
       } else {
         this.log(chalk.yellow('⚠️ Deployment transaction mined, but contract address is missing in the receipt.'))
       }
 
-      if (contractAddress && verificationConfig.enabled) {
-        this.log(chalk.gray('-> Waiting 30 seconds for block explorer to index contract...'))
-        await new Promise((resolve) => setTimeout(resolve, 10000))
-        await this.foundryService.verifyHelperContract(
-          contractAddress,
-          helperConfig,
-          encodedConstructorArgs,
-          this.l2VerifierType,
-          this.l2ExplorerApiUrl
-        )
-      }
+      // if (contractAddress && verificationConfig.enabled) {
+      //   this.log(chalk.gray('-> Waiting 30 seconds for block explorer to index contract...'))
+      //   await new Promise((resolve) => setTimeout(resolve, 10000))
+      //   await this.foundryService.verifyHelperContract(
+      //     contractAddress,
+      //     helperConfig,
+      //     encodedConstructorArgs,
+      //     this.l2VerifierType,
+      //     this.l2ExplorerApiUrl
+      //   )
+      // }
 
       const targetContract = contractAddress?.trim()
       if (!targetContract) this.error('Unable to determine helper contract address.')
 
       const amount = BigInt('1100000000000000000')
 
-      let withdrawalTargetAddress = ''
-      if (!this.masterAddress) this.error('masterAddress is not set; cannot derive targetAddress.')
+      let withdrawalTargetEthAddress = ''
+      const keyPair = ECPair.fromPrivateKey(new Uint8Array(randomBytes(32)), { network: this.network })
+      const { address: withdrawalTargetDogeAddress } = bitcoin.payments.p2pkh({ pubkey: keyPair.publicKey, network: this.network })
+      if (!withdrawalTargetDogeAddress) {
+        this.error('Failed to generate withdrawal target address.');
+      }
       try {
-        const decoded = bitcoin.address.fromBase58Check(this.masterAddress)
-        withdrawalTargetAddress = `0x${Buffer.from(decoded.hash).toString('hex')}`
+        const decoded = bitcoin.address.fromBase58Check(withdrawalTargetDogeAddress)
+        withdrawalTargetEthAddress = `0x${Buffer.from(decoded.hash).toString('hex')}`
       } catch (error) {
         throw new Error(`Failed to decode masterAddress: ${error instanceof Error ? error.message : String(error)}`)
       }
@@ -487,7 +504,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       const mutiContract = new Contract(targetContract, helperAbi, wallet)
 
       if (flags.verbose) {
-        this.log(chalk.dim(`   Withdrawal Target: ${withdrawalTargetAddress}`))
+        this.log(chalk.dim(`   Withdrawal Target: ${withdrawalTargetEthAddress}`))
         this.log(chalk.dim(`   Moat Address: ${this.moatAddress}`))
       }
 
@@ -497,22 +514,39 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
         count,
         amount,
         this.moatAddress,
-        withdrawalTargetAddress,
+        withdrawalTargetEthAddress,
       )
-
-      const balance = await wallet.provider!.getBalance(wallet.address)
-      if (balance < txValue) {
-        await this.rechargeL2Wallet(txValue, balance)
-      }
 
       this.log(chalk.gray('-> Invoking mutiWithdrawal...'))
       const withdrawalTx = await mutiContract.mutiWithdrawal(...mutiArgs, { value: txValue })
-      this.log(chalk.green(`✅ mutiWithdrawal tx sent!`))
-      this.log(`   ${chalk.blue('Transaction Hash:')} ${chalk.bold(withdrawalTx.hash)}
-`)
+      this.log(chalk.green(`✅ mutiWithdrawal tx sent! ${withdrawalTx.hash}`))
       await withdrawalTx.wait()
-      this.log(chalk.green('✅ mutiWithdrawal transaction confirmed.'))
-      this.log(chalk.green.bold('\n✨ Case Finished Successfully.'));
+      this.log(chalk.green(`✅ mutiWithdrawal transaction confirmed on L2. ${withdrawalTx.hash}`))
+      this.log(chalk.gray(`-> Waiting for withdrawal to ${withdrawalTargetDogeAddress}...`))
+      const maxRetries = 120
+      let withdrawalReceived = false
+      await this.sendL2SelfTxWithRandomData(5)
+      this.log(`waiting for withdrawal to https://doge-testnet-explorer.qed.me/address/${withdrawalTargetDogeAddress}`)
+      for (let i = 0; i < maxRetries; i++) {
+        try {
+          const balance = await this.getDogeAddressBalance(withdrawalTargetDogeAddress)
+          if (balance > 0) {
+            withdrawalReceived = true
+            this.log(chalk.green(`\n✅ Withdrawal received! https://doge-testnet-explorer.qed.me/address/${withdrawalTargetDogeAddress}`))
+            break
+          } else {
+            this.log(`  waiting for withdrawal to ${withdrawalTargetDogeAddress} ${i}/${maxRetries}...`)
+            await new Promise((resolve) => setTimeout(resolve, 5000))
+          }
+        } catch (error) {
+          this.warn(`Failed to check balance: ${error instanceof Error ? error.message : String(error)}`)
+          await new Promise((resolve) => setTimeout(resolve, 5000))
+        }
+      }
+      if (!withdrawalReceived) {
+        this.warn(`Withdrawal to ${withdrawalTargetDogeAddress} not received within 10 minutes.`)
+      }
+      this.log(chalk.green.bold('\n✨ Case Finished Successfully.'))
     } catch (error: any) {
       this.log(chalk.red.bold('\n❌ Case Failed: Multiple Withdrawal Per Tx'))
       this.log(chalk.red(`   Error: ${error.message}`))
@@ -541,10 +575,10 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
     for (const entry of mempoolTxs) {
       const txid = (entry as ElectrsTxDetail)?.txid || (entry as { txid?: string })?.txid
-    if (!txid) {
-      this.warn('Encountered mempool entry without txid; skipping.')
-      continue
-    }
+      if (!txid) {
+        this.warn('Encountered mempool entry without txid; skipping.')
+        continue
+      }
 
       try {
         const txDetail = 'vin' in entry ? (entry as ElectrsTxDetail) : await this.fetchTxDetail(txid, electrsBases)
@@ -1013,7 +1047,9 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
         { script: opReturnOutput2.output!, value: 0n },
       ]
 
-      const txid = await this.buildAndBroadcastTx(masterKeyPair, outputs, flags.verbose)
+      const result = await this.buildAndBroadcastTx(masterKeyPair, outputs, flags.verbose)
+      if (!result) throw new Error('Transaction build failed')
+      const { txid } = result
       await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
       this.log(chalk.green.bold('\n✨ Case Finished Successfully.'));
     } catch (error: any) {
@@ -1057,7 +1093,9 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
         outputs.push({ address: this.bridgeAddress, value: outputValue })
       }
 
-      const txid = await this.buildAndBroadcastTx(masterKeyPair, outputs, flags.verbose)
+      const result = await this.buildAndBroadcastTx(masterKeyPair, outputs, flags.verbose)
+      if (!result) throw new Error('Transaction build failed')
+      const { txid } = result
       await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
       this.log(chalk.green.bold('\n✨ Case Finished Successfully.'));
     } catch (error: any) {
@@ -1078,8 +1116,9 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       const agentKeyPair: ECPairInterface = ECPair.fromPrivateKey(new Uint8Array(randomBytes(32)))
 
       const outputs: PsbtOutputParam[] = []
-      const outputValue = BigInt(1_000_000)
-      const attackCount = 10
+      const totalValue = BigInt(flags.attackValue)
+      const attackCount = 100
+      let outputValue = totalValue / (24n * BigInt(attackCount))
       const feeForDogeOs = 100_000_000n
       const feeForMiner = 1_000_000n
 
@@ -1094,11 +1133,12 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       }
 
       this.log(chalk.gray('-> Phase 1: Broadcasting master transaction to fund agent...'))
-      const txid = await this.buildAndBroadcastTx(masterKeyPair, outputs, flags.verbose)
-      if (!txid) this.error(`Build and broadcast master->agent transaction failed.`)
+      const result = await this.buildAndBroadcastTx(masterKeyPair, outputs, flags.verbose)
+      if (!result) this.error(`Build and broadcast master->agent transaction failed.`)
+      const { txid } = result
 
       this.log(chalk.green('✅ Master transaction sent!'))
-      this.log(`   ${chalk.blue('SoChain Link:')} https://sochain.com/tx/DOGETEST/${txid}`)
+      this.log(`   ${chalk.blue('Link:')} https://doge-testnet-explorer.qed.me/tx/${txid}`)
 
       const masterConfirmed = await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
       if (!masterConfirmed) {
@@ -1134,10 +1174,92 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
         const finalTxHex = psbt.extractTransaction().toHex()
         const { result: txid2 } = await broadcastTx(finalTxHex, flags.blockbookurl)
-        this.log(chalk.green(`✅ Agent tx ${i + 1}/${attackCount} sent!`))
-        this.log(`   ${chalk.blue('SoChain Link:')} https://sochain.com/tx/DOGETEST/${txid2}`)
+        this.log(chalk.green(`✅ Agent deposit tx ${i + 1}/${attackCount} sent: https://doge-testnet-explorer.qed.me/tx/${txid2}`))
       }
-      this.log(chalk.green.bold('\n✨ Case Finished Successfully.'));
+
+      this.log(chalk.gray(`\n-> Waiting for deposit received by ${this.l2Address} ...`))
+
+      // 1 Doge (10^8 dogetoshis) = 1 ETH (10^18 wei)
+      // 1 dogetoshi = 10^10 wei
+      const conversionRate = 10_000_000_000n
+      const requiredWei = outputValue * 24n * BigInt(attackCount) * conversionRate
+
+      if (!this.l2RPC || !this.l2AddressPrivateKey) {
+        this.error('L2 RPC or L2 private key is missing; skipping balance check.')
+        return
+      }
+
+      const provider = new JsonRpcProvider(this.l2RPC)
+      const wallet = new Wallet(this.l2AddressPrivateKey, provider)
+
+      let retries = 0
+      const maxRetries = 120 // 10 minutes (5s interval)
+      let lastBalance = 0n
+
+      while (retries < maxRetries) {
+        try {
+          const currentBalance = await wallet.provider!.getBalance(wallet.address)
+          if (currentBalance >= requiredWei) {
+            this.log(chalk.green(`\n✅ L2 Balance reached target!`))
+            this.log(chalk.dim(`   Current balance: ${currentBalance.toString()} wei`))
+            this.log(chalk.dim(`   Required: ${requiredWei.toString()} wei`))
+            break
+          }
+
+          if (currentBalance !== lastBalance) {
+            const progress = Number((currentBalance * 10000n) / requiredWei) / 100
+            this.log(chalk.gray(`   Progress: ${progress.toFixed(2)}% (${currentBalance.toString()} / ${requiredWei.toString()} wei)`))
+            lastBalance = currentBalance
+          }
+        } catch (error: any) {
+          // ignore error and retry
+          if (flags.verbose) {
+            this.warn(`Balance check error: ${error.message}`)
+          }
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 5000))
+        retries++
+        process.stdout.write('.')
+      }
+
+      if (retries >= maxRetries) {
+        this.error(`\nL2 balance did not reach target within ${maxRetries * 5 / 60} minutes.`)
+        return;
+      }
+      // Withdraw all balance to L1 via Moat contract
+      this.log(chalk.gray(`\n-> Withdrawing ${Number(requiredWei) / 1e18} ETH to L1 (${this.masterAddress})...`))
+
+      if (!this.moatAddress) {
+        this.error('Moat address is not configured.')
+        return
+      }
+
+      const moat = new Contract(
+        this.moatAddress,
+        ['function withdrawToL1(address _target) external payable'],
+        wallet
+      )
+
+      // Convert masterAddress to ETH format address
+      const decoded = bitcoin.address.fromBase58Check(this.masterAddress)
+      const targetPkh = '0x' + Buffer.from(decoded.hash).toString('hex')
+
+      this.log(chalk.dim(`   Withdrawal target: ${this.masterAddress} (${targetPkh})`))
+      this.log(chalk.dim(`   Amount: ${requiredWei.toString()} wei (${Number(requiredWei) / 1e18} ETH)`))
+
+      const withdrawalTx = await moat.withdrawToL1(targetPkh, { value: requiredWei })
+      this.log(chalk.green(`✅ Withdrawal transaction sent!`))
+      this.log(`   ${chalk.blue('Transaction Hash:')} ${chalk.bold(withdrawalTx.hash)}`)
+      await withdrawalTx.wait()
+      this.log(chalk.green('✅ Withdrawal transaction confirmed on L2.'))
+      if (this.l2ExplorerUrl) {
+        this.log(`   ${chalk.blue('Explorer:')} ${this.l2ExplorerUrl}/tx/${withdrawalTx.hash}`)
+      }
+
+      this.log("sending some large input l2 transactions to generate batch...")
+      this.sendL2SelfTxWithRandomData(5);
+      this.log(`\nWaiting withdrawal to be confirmed on L1 https://doge-testnet-explorer.qed.me/address/${this.masterAddress}`);
     } catch (error: any) {
       this.log(chalk.red.bold('\n❌ Case Failed: Bridge UTXO Attack'))
       this.log(chalk.red(`   Error: ${error.message}`))
@@ -1193,8 +1315,9 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       }))
 
       this.log(chalk.gray(`-> Funding agent with ${inputCount} outputs...`))
-      const fundingTxid = await this.buildAndBroadcastTx(masterKeyPair, fundingOutputs, flags.verbose)
-      if (!fundingTxid) this.error('Funding transaction failed to broadcast.')
+      const result = await this.buildAndBroadcastTx(masterKeyPair, fundingOutputs, flags.verbose)
+      if (!result) this.error('Funding transaction failed to broadcast.')
+      const { txid: fundingTxid } = result
 
       this.log(chalk.gray('-> Waiting for funding confirmation...'))
       const fundingConfirmed = await waitForConfirmations(fundingTxid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
@@ -1277,7 +1400,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       this.log(chalk.gray('-> Broadcasting agent consolidation transaction...'))
       const { result: txid } = await broadcastTx(finalTxHex, this.blockbookURL)
       this.log(chalk.green(`✅ Agent consolidation transaction broadcasted!`))
-      this.log(`   ${chalk.blue('SoChain Link:')} https://sochain.com/tx/DOGETEST/${txid}`)
+      this.log(`   ${chalk.blue('Link:')} https://doge-testnet-explorer.qed.me/tx/${txid}`)
       await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
       this.log(chalk.green.bold('\n✨ Case Finished Successfully.'));
     } catch (error: any) {
@@ -1290,7 +1413,8 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     }
   }
 
-  private async sendL2SelfTxWithRandomData(sizeBytes = 110 * 1024) {
+  private async sendL2SelfTxWithRandomData(count = 3) {
+    const sizeBytes = 110 * 1024
     if (!this.l2RPC || !this.l2AddressPrivateKey) {
       this.warn('L2 RPC or L2 private key is missing; skipping L2 self-transfer.')
       return
@@ -1299,19 +1423,15 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     const provider = new JsonRpcProvider(this.l2RPC)
     const wallet = new Wallet(this.l2AddressPrivateKey, provider)
 
-    for (let i = 1; i <= 3; i++) {
+    for (let i = 1; i <= count; i++) {
       const payload = randomBytes(sizeBytes)
       const dataHex = `0x${payload.toString('hex')}`
-
-      this.log(chalk.gray(`-> Sending L2 self-transfer #${i} with ${sizeBytes} bytes of data...`))
       const txRequest = { to: wallet.address, value: 0, data: dataHex }
       const gasEstimate = await wallet.estimateGas(txRequest)
       const gasLimit = (gasEstimate * 12n) / 10n
       const tx = await wallet.sendTransaction({ ...txRequest, gasLimit })
-
-      this.log(chalk.green(`✅ L2 self-transfer #${i} submitted: ${tx.hash}`))
+      this.log(chalk.green(`  ->✅ L2 self-transfer #${i} submitted: ${tx.hash}`))
       await tx.wait()
-      this.log(chalk.green(`✅ L2 self-transfer #${i} confirmed.`))
     }
   }
 
@@ -1394,18 +1514,18 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
     psbt.signAllInputs(keyPair)
     psbt.finalizeAllInputs()
-
     const finalTxHex = psbt.extractTransaction().toHex()
     this.log(chalk.gray('-> Broadcasting transaction...'))
     try {
       const { result: txid } = await broadcastTx(finalTxHex, this.blockbookURL)
       this.log(chalk.green(`✅ Transaction broadcasted successfully!`))
-      this.log(`   ${chalk.blue('SoChain Link:')} https://sochain.com/tx/DOGETEST/${txid}`)
-      return txid
+      this.log(`   ${chalk.blue('Link:')} https://doge-testnet-explorer.qed.me/tx/${txid}`)
+      return { txid, hex: finalTxHex }
     } catch (error) {
       this.error(error as Error)
     }
   }
+
 
   private async rechargeL2Wallet(requiredWei: bigint, currentWei: bigint) {
     this.log(chalk.yellow('⚠️ Insufficient L2 balance. Initiating auto-recharge...'))
@@ -1434,8 +1554,9 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       { script: opReturnOutput.output!, value: 0n },
     ]
 
-    const txid = await this.buildAndBroadcastTx(masterKeyPair, outputs, true)
-    if (!txid) throw new Error('Recharge transaction failed to broadcast.')
+    const result = await this.buildAndBroadcastTx(masterKeyPair, outputs, true)
+    if (!result) throw new Error('Recharge transaction failed to broadcast.')
+    const { txid } = result
 
     this.log(chalk.gray('-> Waiting for recharge confirmation...'))
     await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
@@ -1448,10 +1569,14 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     let retries = 0
     const maxRetries = 60 // 5 minutes
     while (retries < maxRetries) {
-      const newBalance = await wallet.provider!.getBalance(wallet.address)
-      if (newBalance >= requiredWei) {
-        this.log(chalk.green(`\n✅ L2 Balance updated: ${newBalance.toString()}`))
-        return
+      try {
+        const newBalance = await wallet.provider!.getBalance(wallet.address)
+        if (newBalance >= requiredWei) {
+          this.log(chalk.green(`\n✅ L2 Balance updated: ${newBalance.toString()}`))
+          return
+        }
+      } catch (error: any) {
+        // ignore error and retry
       }
       await new Promise((resolve) => setTimeout(resolve, 5000))
       retries++
@@ -1464,10 +1589,10 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     this.log(chalk.bold.cyan('\n✨ Starting: Large PSBT Case'))
     const { flags } = await this.parse(Case)
 
-    const inputCount = 3000
-    //0.01~2.01
+    const inputCount = 1000
+
     //const fundingAmount = BigInt(Math.round(Math.random() * 1_000_000));
-    const fundingAmount =   BigInt(10_000_000);
+    const fundingAmount = BigInt(1_000_000);
     const feePerInput = 1000_000n // Generous fee for consolidation
     const totalFundingNeeded = BigInt(inputCount) * (fundingAmount + feePerInput)
 
@@ -1490,8 +1615,9 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       value: fundingAmount + feePerInput
     }))
 
-    const fundingTxid = await this.buildAndBroadcastTx(masterKeyPair, fundingOutputs, flags.verbose)
-    if (!fundingTxid) throw new Error('Funding transaction failed')
+    const fundingResult = await this.buildAndBroadcastTx(masterKeyPair, fundingOutputs, flags.verbose)
+    if (!fundingResult) throw new Error('Funding transaction failed')
+    const { txid: fundingTxid, hex: fundingTxHex } = fundingResult
 
     this.log(chalk.gray('-> Waiting for funding confirmation...'))
     await waitForConfirmations(fundingTxid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
@@ -1502,15 +1628,26 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     const psbt = new bitcoin.Psbt({ network: this.network })
 
     // Add inputs
-    const fundingTxHex = (await getTx(fundingTxid, this.blockbookURL)).hex
+    // const fundingTxHex = (await getTx(fundingTxid, this.blockbookURL)).hex
+    const fundingTxBuffer = Buffer.from(fundingTxHex, 'hex')
+    const fundingTxUint8Array = new Uint8Array(fundingTxBuffer)
+
+    const inputs = []
     for (let i = 0; i < inputCount; i++) {
-      psbt.addInput({
+      inputs.push({
         hash: fundingTxid,
         index: i,
         sequence: RBF_SEQUENCE,
-        nonWitnessUtxo: new Uint8Array(Buffer.from(fundingTxHex, 'hex')),
+        nonWitnessUtxo: fundingTxUint8Array,
       })
+      if (i % 100 == 0) {
+        // this.log(` ${new Date().toISOString()}  Added input ${i}...`)
+      }
     }
+    this.log(`${new Date().toISOString()} Calling psbt.addInputs...`)
+    psbt.addInputs(inputs)
+    this.log(`${new Date().toISOString()} Finished psbt.addInputs...`)
+    this.log(`   Added ${inputCount} inputs...`)
 
     // Add outputs: Bridge + OP_RETURN
     const opReturnData = new Uint8Array(Buffer.from(this.l2Address.toLowerCase().replace('0x', '00'), 'hex'))
@@ -1529,13 +1666,18 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     psbt.addOutput({ script: opReturnOutput.output!, value: 0n })
 
     // Sign all inputs
-    this.log(chalk.gray('-> Signing inputs...'))
+    console.log(chalk.gray('-> Signing inputs...'))
     for (let i = 0; i < inputCount; i++) {
-      psbt.signInput(i, keyPairs[i])
+      try {
+        psbt.signInput(i, keyPairs[i])
+      } catch (e) {
+        this.error(`Failed to sign input ${i}: ${e instanceof Error ? e.message : String(e)}`)
+      }
       if (i % 100 == 0) {
         this.log(`sign input ${i} ...`)
       }
     }
+    this.log(chalk.gray('-> Finalizing inputs...'))
     psbt.finalizeAllInputs()
 
     const finalTxHex = psbt.extractTransaction().toHex()
@@ -1543,7 +1685,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
     const { result: largeTxid } = await broadcastTx(finalTxHex, this.blockbookURL)
     this.log(chalk.green(`✅ Large transaction broadcasted successfully!`))
-    this.log(`   ${chalk.blue('SoChain Link:')} https://sochain.com/tx/DOGETEST/${largeTxid}`)
+    this.log(`   ${chalk.blue('Link:')} https://doge-testnet-explorer.qed.me/tx/${largeTxid}`)
 
     await waitForConfirmations(largeTxid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
 
@@ -1553,30 +1695,33 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
     // Convert bridgeValue (sats) to Wei (1 sat = 10^10 wei)
     const bridgeValueWei = bridgeValue * 10_000_000_000n
-    const withdrawAmount = bridgeValueWei - 100_000_000_000_000_000n // -0.1 ETH (10^17 wei)
+    const withdrawAmount = bridgeValueWei - 200_000_000_000_000_000n // -0.2 ETH (10^17 wei)
 
     if (withdrawAmount <= 0n) {
       this.warn('Calculated withdrawal amount is too low. Skipping withdrawal.')
     } else {
+      let currentBalance = 0n
       let retries = 0
-      const maxRetries = 60 // 5 minutes
+      const maxRetries = 120 // 10 minutes
       while (retries < maxRetries) {
-        const balance = await wallet.provider!.getBalance(wallet.address)
-        if (balance >= withdrawAmount) { // Wait for the full bridge amount to arrive
-          this.log(chalk.green(`✅ L2 Balance updated: ${balance.toString()}`))
-          break
+        try {
+          currentBalance = await wallet.provider!.getBalance(wallet.address)
+          if (currentBalance >= withdrawAmount) { // Wait for the full bridge amount to arrive
+            this.log(chalk.green(`✅ L2 Balance updated: ${currentBalance.toString()}`))
+            break
+          }
+          this.log(`   Current: ${retries + 1}/${maxRetries}. balance: ${currentBalance.toString()} withdrawAmount: ${withdrawAmount.toString()}`)
+        } catch (error: any) {
+          this.log(chalk.yellow(`   [${retries + 1}/${maxRetries}] Balance check failed: ${error.message}. Retrying...`))
         }
         await new Promise((resolve) => setTimeout(resolve, 5000))
         retries++
-        process.stdout.write('.')
-        this.log(`   Current: ${retries}/${maxRetries}. balance: ${balance.toString()} withdrawAmount: ${withdrawAmount.toString()}`)
       }
 
       if (retries >= maxRetries) {
         this.warn('Timed out waiting for L2 balance update. Proceeding with available balance check...')
       }
 
-      const currentBalance = await wallet.provider!.getBalance(wallet.address)
       if (currentBalance < withdrawAmount) {
         this.error(`Insufficient L2 balance for withdrawal. Have ${currentBalance}, need ${withdrawAmount}`)
       }
@@ -1605,7 +1750,6 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       // The '_value' arg is often the value passed to the L1 call.
       // For simple ETH withdrawal, msg.value = amount, _value = amount.
 
-      // withdrawToL1 的输入参数是 eth 地址。但是这个地址应该是 dogecoin 地址解码后的 20 字节公钥 hash
       const decoded = bitcoin.address.fromBase58Check(this.masterAddress)
       const targetPkh = '0x' + Buffer.from(decoded.hash).toString('hex')
 
@@ -1619,7 +1763,90 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       await tx.wait()
       this.log(chalk.green('✅ Withdrawal confirmed.'))
     }
+    // Wait for the bridge deposit UTXO to be consumed
+    this.log(chalk.gray(`-> Sending L2 self transaction for batch generate...`))
 
-    this.log(chalk.green.bold('\n✨ Case Finished Successfully.'))
+    this.log(chalk.gray(`-> Waiting for bridge deposit UTXO (${largeTxid}:0) to be consumed...`))
+    let isConsumed = false
+    const maxRetries = 600
+    for (let i = 0; i < maxRetries; i++) {
+      const isSpent = await this.checkUtxoSpentViaRpc(largeTxid, 0)
+      if (isSpent) {
+        isConsumed = true
+        break
+      }
+      await this.sendL2SelfTxWithRandomData(1)
+      process.stdout.write('.')
+    }
+    if (!isConsumed) {
+      this.warn(
+        `Bridge deposit UTXO (${largeTxid}:0) was not consumed within 5 minutes (60 retries).`
+      )
+      this.warn(`largePsbt test failed.`)
+    } else {
+      this.log(chalk.green(`✅ Bridge deposit UTXO (${largeTxid}:0) was successfully consumed by batch processor.`))
+      this.log(chalk.green.bold('\n✨ largePsbt test passed.'))
+    }
+  }
+
+  private async checkUtxoSpentViaRpc(txid: string, vout: number): Promise<boolean> {
+    const electrsUrl = 'https://doge-electrs-testnet-demo.qed.me'
+
+    try {
+      const response = await fetch(`${electrsUrl}/tx/${txid}/outspend/${vout}`)
+
+      if (!response.ok) {
+        throw new Error(`Electrs API request failed: ${response.status} ${response.statusText}`)
+      }
+
+      const data = await response.json() as { spent: boolean }
+      return data.spent
+    } catch (error) {
+      throw new Error(`Failed to check UTXO status via Electrs API: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private async getDogeAddressBalance(address: string): Promise<number> {
+    const electrsUrl = 'https://doge-electrs-testnet-demo.qed.me'
+
+    try {
+      const response = await fetch(`${electrsUrl}/address/${address}`)
+
+      if (!response.ok) {
+        throw new Error(`Electrs API request failed: ${response.status} ${response.statusText}`)
+      }
+
+      /*
+      {
+        "address": "2N8JEfa3BCAqaHQYqz92YcARZFJ8fxxkThJ",
+        "chain_stats": {
+          "funded_txo_count": 717,
+          "funded_txo_sum": 237145165200,
+          "spent_txo_count": 561,
+          "spent_txo_sum": 226315060118,
+          "tx_count": 198
+        },
+        "mempool_stats": {
+          "funded_txo_count": 0,
+          "funded_txo_sum": 0,
+          "spent_txo_count": 0,
+          "spent_txo_sum": 0,
+          "tx_count": 0
+        }
+      }
+      */
+      const data = await response.json() as {
+        chain_stats: { funded_txo_sum: number; spent_txo_sum: number }
+        mempool_stats: { funded_txo_sum: number; spent_txo_sum: number }
+      }
+
+      const chainBalance = data.chain_stats.funded_txo_sum - data.chain_stats.spent_txo_sum
+      const mempoolBalance = data.mempool_stats.funded_txo_sum - data.mempool_stats.spent_txo_sum
+
+      return chainBalance + mempoolBalance
+    } catch (error) {
+      throw new Error(`Failed to get address balance via Electrs API: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 }
+
