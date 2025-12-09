@@ -134,7 +134,7 @@ export default class SetupGenRpcPackage extends Command {
 
       // Step 7: Extract genesis.json from genesis.yaml
       this.log(chalk.blue('Step 3: Extracting genesis.json from genesis.yaml...'))
-      const genesisJsonPath = this.extractGenesisJson(flags['values-dir'], rpcPackageDir, network)
+      const genesisJsonPath = this.extractGenesisJson(flags['values-dir'], rpcPackageDir, network, dogeConfig)
       this.log(chalk.green(`✓ Extracted genesis.json at: ${genesisJsonPath}`))
 
       // Step 8: Generate l1-interface.env file
@@ -423,7 +423,7 @@ export default class SetupGenRpcPackage extends Command {
     return [envFilePath, envFilePathReth]
   }
 
-  private extractGenesisJson(valuesDir: string, rpcPackageDir: string, network: string): string {
+  private extractGenesisJson(valuesDir: string, rpcPackageDir: string, network: string, dogeConfig: DogeConfig): string {
     const genesisYamlPath = path.resolve(valuesDir, 'genesis.yaml')
 
     if (!fs.existsSync(genesisYamlPath)) {
@@ -466,10 +466,17 @@ export default class SetupGenRpcPackage extends Command {
       const targetDirectory = path.resolve(rpcPackageDir, 'configs', network)
       fs.mkdirSync(targetDirectory, { recursive: true })
 
+
       // Write genesis.json
-      const genesisJsonPath = path.join(targetDirectory, 'genesis.json')
+      const genesisJsonPath = path.join(targetDirectory, 'l2geth-genesis.json')
       const genesisJsonContent = JSON.stringify(genesisJson, null, 2)
       fs.writeFileSync(genesisJsonPath, genesisJsonContent)
+
+      //genesisJson for reth
+      let genesisJsonForReth = JSON.parse(JSON.stringify(genesisJson));
+      genesisJsonForReth.config.scroll.l1Config["startL1Block"] = dogeConfig.defaults?.dogecoinIndexerStartHeight;
+      genesisJsonForReth.config.scroll.l1Config["systemContractAddress"] = genesisJsonForReth.config.systemContract.system_contract_address;
+      fs.writeFileSync(path.join(targetDirectory, 'l2reth-genesis.json'), JSON.stringify(genesisJsonForReth, null, 2))
 
       return genesisJsonPath
 
