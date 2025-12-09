@@ -130,7 +130,7 @@ export default class SetupGenRpcPackage extends Command {
       }
 
       const envFilePath = this.generateL2GethEnvFile(config, dogeConfig, rpcPackageDir, loadBalancerDomains, namespace)
-      this.log(chalk.green(`✓ Generated l2geth.env at: ${envFilePath}`))
+      this.log(chalk.green(`✓ Generated .env at: ${envFilePath}`))
 
       // Step 7: Extract genesis.json from genesis.yaml
       this.log(chalk.blue('Step 3: Extracting genesis.json from genesis.yaml...'))
@@ -159,6 +159,7 @@ export default class SetupGenRpcPackage extends Command {
         this.log(chalk.cyan(`kubectl get svc -n ${namespace} | grep p2p`))
         this.log('')
         this.log(chalk.yellow('Then replace the placeholders in l2geth.env with the actual EXTERNAL-IP domains.'))
+        this.error(`LoadBalancer domains generate fail`);
       }
 
     } catch (error) {
@@ -255,11 +256,12 @@ export default class SetupGenRpcPackage extends Command {
     rpcPackageDir: string,
     loadBalancerDomains: Record<string, string> = {},
     namespace: string,
-  ): string {
+  ): string[] {
     const network = dogeConfig.network
     const networkTitleCase = this.capitalize(network)
     const targetDirectory = path.resolve(rpcPackageDir, 'envs', network)
     const envFilePath = path.join(targetDirectory, 'l2geth.env')
+    const envFilePathReth = path.join(targetDirectory, 'l2reth.env')
 
     // Create directory structure
     fs.mkdirSync(targetDirectory, { recursive: true })
@@ -273,7 +275,7 @@ export default class SetupGenRpcPackage extends Command {
       fileExists = true
       const existingContent = fs.readFileSync(envFilePath, 'utf-8')
       existingLines = existingContent.split('\n')
-      
+
       // Parse existing variables
       for (const line of existingLines) {
         const trimmedLine = line.trim()
@@ -322,15 +324,22 @@ export default class SetupGenRpcPackage extends Command {
       updatedVars.push('L2GETH_PEER_LIST')
     }
 
+    if (config?.sequencer?.L2GETH_SIGNER_ADDRESS) {
+      newVars.L2RETH_VALID_SIGNER = config.sequencer.L2GETH_SIGNER_ADDRESS;
+      updatedVars.push('L2RETH_VALID_SIGNER')
+    } else {
+      this.error('Missing required configuration: sequencer.L2GETH_SIGNER_ADDRESS in config.toml');
+    }
+
     // If no updates needed, return early
     if (Object.keys(newVars).length === 0) {
       this.log(chalk.green('✓ No changes detected in l2geth.env - file is up to date'))
-      return envFilePath
+      return [envFilePath, envFilePathReth]
     }
 
     // Generate new content
     let newLines: string[] = []
-    
+
     if (!fileExists) {
       // Create new file with header
       newLines.push(`# L2Geth ${networkTitleCase} Configuration`)
@@ -345,7 +354,7 @@ export default class SetupGenRpcPackage extends Command {
     // Update or add variables
     for (const [key, value] of Object.entries(newVars)) {
       let updated = false
-      
+
       // Try to update existing line
       for (let i = 0; i < newLines.length; i++) {
         const line = newLines[i].trim()
@@ -355,12 +364,12 @@ export default class SetupGenRpcPackage extends Command {
           break
         }
       }
-      
+
       // If not found, add new line
       if (!updated) {
         // Find appropriate place to insert
         let insertIndex = newLines.length
-        
+
         // Try to insert after network specific settings section
         for (let i = 0; i < newLines.length; i++) {
           if (newLines[i].includes('# Network specific settings')) {
@@ -368,13 +377,13 @@ export default class SetupGenRpcPackage extends Command {
             break
           }
         }
-        
+
         // If no section found, insert at the end
         if (insertIndex === newLines.length) {
           newLines.push('')
           newLines.push(`# ${networkTitleCase} bootnode peer list`)
         }
-        
+
         newLines.splice(insertIndex, 0, `${key}=${value}`)
       }
     }
@@ -382,7 +391,7 @@ export default class SetupGenRpcPackage extends Command {
     // Add LoadBalancer domain comments if needed
     const hasRealDomains = Object.keys(loadBalancerDomains).length > 0
     let commentAdded = false
-    
+
     for (let i = 0; i < newLines.length; i++) {
       if (newLines[i].includes('# bootnode peer list')) {
         if (hasRealDomains) {
@@ -404,13 +413,14 @@ export default class SetupGenRpcPackage extends Command {
 
     const envContent = newLines.join('\n') + '\n'
     fs.writeFileSync(envFilePath, envContent)
+    fs.writeFileSync(envFilePathReth, envContent)
 
     // Log what was updated
     if (updatedVars.length > 0) {
       this.log(chalk.green(`✓ Updated variables in l2geth.env: ${updatedVars.join(', ')}`))
     }
 
-    return envFilePath
+    return [envFilePath, envFilePathReth]
   }
 
   private extractGenesisJson(valuesDir: string, rpcPackageDir: string, network: string): string {
@@ -494,7 +504,7 @@ export default class SetupGenRpcPackage extends Command {
 
       // Extract environment variables from configMaps.env.data
       const envData = l1InterfaceYaml.configMaps?.env?.data || {}
-      
+
       // Create target directory
       const targetDirectory = path.resolve(rpcPackageDir, 'envs', network)
       fs.mkdirSync(targetDirectory, { recursive: true })
@@ -511,7 +521,7 @@ export default class SetupGenRpcPackage extends Command {
         fileExists = true
         const existingContent = fs.readFileSync(envFilePath, 'utf-8')
         existingLines = existingContent.split('\n')
-        
+
         // Parse existing variables
         for (const line of existingLines) {
           const trimmedLine = line.trim()
@@ -537,14 +547,14 @@ export default class SetupGenRpcPackage extends Command {
       ]
 
       // this token is private, keep it empty as a place holder
-      
+
       // Process each environment variable from the YAML
       for (const [key, value] of Object.entries(envData)) {
         // Skip excluded fields
         if (excludeFields.includes(key)) {
           continue
         }
-        
+
         const newValue = String(value)
         if (existingVars[key] !== newValue) {
           newVars[key] = newValue
@@ -563,7 +573,7 @@ export default class SetupGenRpcPackage extends Command {
 
       // Generate new content
       let newLines: string[] = []
-      
+
       if (!fileExists) {
         // Create new file with header
         newLines.push(`# L1 Interface ${this.capitalize(network)} Configuration`)
@@ -576,7 +586,7 @@ export default class SetupGenRpcPackage extends Command {
       // Update or add variables
       for (const [key, value] of Object.entries(newVars)) {
         let updated = false
-        
+
         // Try to update existing line
         for (let i = 0; i < newLines.length; i++) {
           const line = newLines[i].trim()
@@ -586,7 +596,7 @@ export default class SetupGenRpcPackage extends Command {
             break
           }
         }
-        
+
         // If not found, add new line
         if (!updated) {
           // Find appropriate place to insert (at the end for new variables)
