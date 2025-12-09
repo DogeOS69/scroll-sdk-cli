@@ -299,8 +299,8 @@ export default class SetupGenRpcPackage extends Command {
       }
     }
 
-    if (config?.general?.L1_CONTRACT_DEPLOYMENT_BLOCK !== undefined) {
-      const newValue = config.general.L1_CONTRACT_DEPLOYMENT_BLOCK.toString()
+    if (dogeConfig?.defaults?.dogecoinIndexerStartHeight) {
+      const newValue = dogeConfig.defaults.dogecoinIndexerStartHeight
       if (existingVars.L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK !== newValue) {
         newVars.L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK = newValue
         updatedVars.push('L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK')

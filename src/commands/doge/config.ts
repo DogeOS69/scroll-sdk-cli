@@ -10,6 +10,7 @@ import { getSetupDefaultsPath, SETUP_DEFAULTS_TEMPLATE } from '../../config/cons
 import crypto from 'node:crypto'
 import { DirectSecp256k1HdWallet } from '@cosmjs/proto-signing'
 import { Network } from '../../types/doge-config.js'
+import { writeConfigs } from '../../utils/config-writer.js'
 
 export class DogeConfigCommand extends Command {
   static description = 'Configure Dogecoin settings for mainnet or testnet'
@@ -92,16 +93,16 @@ export class DogeConfigCommand extends Command {
     if (rpcUrl.includes('nownodes.io')) {
       // NowNodes API format - use getblock API
       const infoUrl = `${rpcUrl.replace(/\/$/, '')}/`
-      
+
       const response = await fetch(infoUrl, {
         headers,
         method: 'GET'
       })
-      
+
       if (!response.ok) {
         throw new Error(`blockbook API connection failed: ${response.status} ${response.statusText}`)
       }
-      
+
       const result = await response.json() as { blockbook: { bestHeight: number } }
       if (result.blockbook && typeof result.blockbook.bestHeight === 'number') {
         return result.blockbook.bestHeight
@@ -133,7 +134,7 @@ export class DogeConfigCommand extends Command {
       }
 
       const result = await response.json() as { error?: { message: string; code: number }; result?: number }
-      
+
       if (result.error) {
         throw new Error(`RPC error: ${result.error.message} (Code: ${result.error.code})`)
       }
@@ -288,7 +289,7 @@ export class DogeConfigCommand extends Command {
     // Handle blockbook API URL with confirmation if different from default
     const defaultBlockbookUrl = network === 'mainnet' ? 'https://blockbook.mainnet.dogeos.com/' : 'https://blockbook.testnet.dogeos.com/'
     const currentBlockbookUrl = existingConfig.rpc?.blockbookAPIUrl || defaultBlockbookUrl
-    
+
     newConfig.rpc!.blockbookAPIUrl = await input({
       default: currentBlockbookUrl,
       message: `Enter Internal Blockbook API URL:`,
@@ -341,7 +342,7 @@ export class DogeConfigCommand extends Command {
     });
 
     this.log("testing external dogecoin rpc...")
-    
+
     // Test RPC connection and get latest block height
     let dogecoinCurrentHeight = 5000000;
     try {
@@ -349,12 +350,12 @@ export class DogeConfigCommand extends Command {
       this.log(chalk.green(`✓ RPC connection test successful! Current block height: ${dogecoinCurrentHeight}`))
     } catch (error) {
       this.log(chalk.red(`✗ RPC connection test failed: ${error instanceof Error ? error.message : String(error)}`))
-      
+
       const continueAnyway = await confirm({
         message: 'RPC connection failed, continue with configuration anyway?',
         default: false
       })
-      
+
       if (!continueAnyway) {
         this.error('RPC connection failed, configuration cancelled')
         return
@@ -552,7 +553,7 @@ export class DogeConfigCommand extends Command {
       this.log(chalk.cyan(`\n📝 Note: This address ${mnemonicChoice === 'generate' ? 'was just generated' : 'comes from your existing configuration'}`))
     }
 
-    
+
     newConfig.da!.celestiaIndexerStartBlock = String(await input({
       default: String(celestiaCurrentHeight),
       message: `Enter the Celestia Indexer Start Block:`,
@@ -564,6 +565,22 @@ export class DogeConfigCommand extends Command {
       message: `Enter the Dogecoin Indexer Start Height:`,
       validate: (value) => !isNaN(Number(value)) ? true : 'Must be a valid number',
     }));
+
+    const configPath = path.join(process.cwd(), 'config.toml')
+    if (!fs.existsSync(configPath)) {
+      this.log(chalk.yellow('config.toml not found. Skipping L1_CONTRACT_DEPLOYMENT_BLOCK update.'))
+      return
+    }
+    const configContent = fs.readFileSync(configPath, 'utf8')
+    const config = toml.parse(configContent) as {
+      general: { L1_CONTRACT_DEPLOYMENT_BLOCK: string }
+    }
+    config.general.L1_CONTRACT_DEPLOYMENT_BLOCK = newConfig.defaults!.dogecoinIndexerStartHeight
+    if (writeConfigs(config)) {
+      this.log(
+        chalk.green(`L1_CONTRACT_DEPLOYMENT_BLOCK updated in config.toml`),
+      )
+    }
 
     const configDir = path.dirname(resolvedPath)
     if (!fs.existsSync(configDir)) {
