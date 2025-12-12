@@ -1,0 +1,172 @@
+# DogeOS Minimal Deployment Specification
+# This is a minimal example for local/devnet deployments.
+# See deployment-spec.example.yaml for full options.
+
+version: "1.0"
+
+metadata:
+  name: dogeos-devnet
+  environment: devnet
+
+infrastructure:
+  provider: local
+  local:
+    useK8sSecrets: true   # Use native K8s secrets instead of external-secrets
+  namespace: default
+  sequencerCount: 1
+  bootnodeCount: 1
+  # Note: sequencers/bootnodes sections are populated by `scrollsdk setup gen-keystore`
+
+network:
+  l1ChainName: "Dogecoin Testnet"
+  l2ChainName: "DogeOS Devnet"
+  l1ChainId: 111111
+  l2ChainId: 534352        # Use Scroll chain ID for compatibility
+  tokenSymbol: DOGE
+  l1RpcEndpoint: "http://l1-interface:8545"
+  l2RpcEndpoint: "http://l2-rpc:8545"
+  daPublisherEndpoint: "http://da-publisher:8545"
+
+database:
+  admin:
+    host: localhost
+    port: 5432
+    username: postgres
+    password: "$ENV:DB_ADMIN_PASSWORD"
+    database: postgres
+  databases:
+    rollupNode: rollup_node
+    bridgeHistory: bridge_history
+    gasOracle: gas_oracle
+    coordinator: coordinator
+    chainMonitor: chain_monitor
+    rollupExplorer: rollup_explorer
+    blockscout: blockscout
+    adminSystem: admin_system
+  credentials:
+    # For devnet, you can use a single password for all databases
+    rollupNodePassword: "$ENV:DB_PASSWORD"
+    bridgeHistoryPassword: "$ENV:DB_PASSWORD"
+    gasOraclePassword: "$ENV:DB_PASSWORD"
+    coordinatorPassword: "$ENV:DB_PASSWORD"
+    chainMonitorPassword: "$ENV:DB_PASSWORD"
+    rollupExplorerPassword: "$ENV:DB_PASSWORD"
+    blockscoutPassword: "$ENV:DB_PASSWORD"
+    adminSystemPassword: "$ENV:DB_PASSWORD"
+
+accounts:
+  # Generate these with: cast wallet new
+  deployer:
+    address: "$ENV:DEPLOYER_ADDRESS"
+    privateKey: "$ENV:DEPLOYER_PRIVATE_KEY"
+  owner:
+    address: "$ENV:OWNER_ADDRESS"
+  l1CommitSender:
+    address: "$ENV:L1_COMMIT_SENDER_ADDRESS"
+    privateKey: "$ENV:L1_COMMIT_SENDER_PRIVATE_KEY"
+  l1FinalizeSender:
+    address: "$ENV:L1_FINALIZE_SENDER_ADDRESS"
+    privateKey: "$ENV:L1_FINALIZE_SENDER_PRIVATE_KEY"
+  l1GasOracleSender:
+    address: "$ENV:L1_GAS_ORACLE_SENDER_ADDRESS"
+    privateKey: "$ENV:L1_GAS_ORACLE_SENDER_PRIVATE_KEY"
+  l2GasOracleSender:
+    address: "$ENV:L2_GAS_ORACLE_SENDER_ADDRESS"
+    privateKey: "$ENV:L2_GAS_ORACLE_SENDER_PRIVATE_KEY"
+
+dogecoin:
+  network: testnet
+  rpc:
+    url: "http://dogecoin:22555"
+    username: dogerpc
+    password: "$ENV:DOGECOIN_RPC_PASSWORD"
+  indexerStartHeight: 0
+  walletPath: ".data/doge-wallet.json"
+
+celestia:
+  tendermintRpcUrl: "http://celestia-node:26657"
+  namespace: "0000000000000000000000000000000000000000646f67656f73"
+  signerAddress: "$ENV:CELESTIA_SIGNER_ADDRESS"
+  mnemonic: "$ENV:CELESTIA_MNEMONIC"
+  indexerStartBlock: 0
+
+bridge:
+  seedString: "dogeos-devnet-v1"
+  thresholds:
+    sequencer: 1
+    correctness: 1
+    attestation: 1
+    recovery: 1
+  keyCounts:
+    correctness: 1
+    attestation: 1
+    recovery: 1
+  timelockSeconds: 60          # 1 minute for devnet
+  feeRateSatPerKvb: 1000000
+  targetAmounts:
+    sequencer: 100000000       # 1 DOGE
+    feeWallet: 100000000       # 1 DOGE
+    bridge: 1000000000         # 10 DOGE
+  confirmationsRequired: 1
+  fees:
+    deposit: "100000000000000"
+    withdrawal: "100000000000000"
+    minWithdrawalAmount: "1000000000000000"
+  feeRecipient: "$ENV:BRIDGE_FEE_RECIPIENT"
+
+signing:
+  method: local              # Use local signers for devnet (simpler than cubesigner)
+  local:
+    signers:
+      - "$ENV:LOCAL_SIGNER_1"
+
+frontend:
+  baseDomain: localhost
+  hosts:
+    frontend: localhost:3000
+    bridgeHistoryApi: localhost:3001
+    rollupExplorerApi: localhost:3002
+    coordinatorApi: localhost:3003
+    rpcGateway: localhost:8545
+    blockscout: localhost:4000
+    adminDashboard: localhost:3004
+    grafana: localhost:3005
+  externalUrls:
+    l1Rpc: "http://localhost:8545"
+    l2Rpc: "http://localhost:8546"
+    l1Explorer: "http://localhost:4001"
+    l2Explorer: "http://localhost:4000"
+    bridgeApi: "http://localhost:3001"
+    rollupScanApi: "http://localhost:3002"
+
+rollup:
+  maxTxInChunk: 100
+  maxBlockInChunk: 100
+  maxBatchInBundle: 20
+  maxL1MessageGasLimit: 10000000
+  coordinator:
+    chunkCollectionTimeSec: 30    # Faster for devnet
+    batchCollectionTimeSec: 60
+    bundleCollectionTimeSec: 180
+    jwtSecretKey: "$ENV:COORDINATOR_JWT_SECRET"
+  finalization:
+    batchDeadlineSec: 3600
+    relayMessageDeadlineSec: 3600
+
+contracts:
+  deploymentSalt: "dogeos-devnet-v1"
+  l1FeeVaultAddr: "$ENV:L1_FEE_VAULT_ADDRESS"
+  gasOracle:
+    blobScalar: 1
+    scalar: 1
+    penaltyThreshold: 100
+    penaltyFactor: 10
+
+genesis:
+  maxEthSupply: "100000000000000000000000000000"
+  deployerInitialBalance: "1000000000000000000000000"
+  baseFeePerGas: 1000000000
+
+test:
+  mockFinalizeEnabled: true     # Enable mock finalization for devnet
+  mockFinalizeTimeoutSec: 30
