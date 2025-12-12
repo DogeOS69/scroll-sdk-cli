@@ -51,48 +51,44 @@ export interface CounterpartChainTx {
 export async function getWithdrawals(address: string, apiUri: string): Promise<Withdrawal[]> {
 	const url = `${apiUri}/l2/withdrawals?address=${address}&page=1&page_size=100`;
 
-	try {
-		const response = await fetch(url);
-		if (!response.ok) {
-			throw new Error(`HTTP error! status: ${response.status}`);
-		}
-
-		const data = await response.json();
-
-		if (data.errcode !== 0) {
-			throw new Error(`API error: ${data.errmsg}`);
-		}
-
-		const withdrawals: Withdrawal[] = data.data.results.map((result: any) => ({
-			batch_deposit_fee: result.batch_deposit_fee,
-			block_number: result.block_number,
-			block_timestamp: result.block_timestamp,
-			claim_info: result.claim_info ? {
-				claimable: result.claim_info.claimable,
-				from: result.claim_info.from,
-				message: result.claim_info.message,
-				nonce: result.claim_info.nonce,
-				proof: {
-					batch_index: result.claim_info.proof.batch_index,
-					merkle_proof: result.claim_info.proof.merkle_proof
-				},
-				to: result.claim_info.to,
-				value: result.claim_info.value
-			} : null,
-			counterpart_chain_tx: {
-				block_number: result.counterpart_chain_tx.block_number,
-				hash: result.counterpart_chain_tx.hash
-			},
-			from: result.from,
-			hash: result.hash,
-			nonce: result.nonce,
-			to: result.to,
-			tx_status: result.tx_status,
-			value: result.value
-		}));
-
-		return withdrawals;
-	} catch (error) {
-		throw error;
+	const response = await fetch(url);
+	if (!response.ok) {
+		throw new Error(`HTTP error! status: ${response.status}`);
 	}
+
+	const data = await response.json();
+
+	if (data.errcode !== 0) {
+		throw new Error(`API error: ${data.errmsg}`);
+	}
+
+	const withdrawals: Withdrawal[] = data.data.results.map((result: any) => ({
+		batch_deposit_fee: result.batch_deposit_fee,
+		block_number: result.block_number,
+		block_timestamp: result.block_timestamp,
+		claim_info: result.claim_info ? {
+			claimable: result.claim_info.claimable,
+			from: result.claim_info.from,
+			message: result.claim_info.message,
+			nonce: result.claim_info.nonce,
+			proof: {
+				batch_index: result.claim_info.proof.batch_index,
+				merkle_proof: result.claim_info.proof.merkle_proof
+			},
+			to: result.claim_info.to,
+			value: result.claim_info.value
+		} : null,
+		counterpart_chain_tx: {
+			block_number: result.counterpart_chain_tx.block_number,
+			hash: result.counterpart_chain_tx.hash
+		},
+		from: result.from,
+		hash: result.hash,
+		nonce: result.nonce,
+		to: result.to,
+		tx_status: result.tx_status,
+		value: result.value
+	}));
+
+	return withdrawals;
 }

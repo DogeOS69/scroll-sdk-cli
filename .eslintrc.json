@@ -4,21 +4,21 @@
     "no-await-in-loop": "off",
     "camelcase": "off",
     "unicorn/filename-case": "off",
-    "complexity": "off",
+    "complexity": "warn",
     "@typescript-eslint/no-explicit-any": "warn",
     "unicorn/consistent-destructuring": "off",
-    "no-promise-executor-return": "off",
+    "no-promise-executor-return": "warn",
     "unicorn/no-array-for-each": "off",
     "unicorn/no-array-reduce": "off",
-    "unicorn/consistent-function-scoping": "off",
+    "unicorn/consistent-function-scoping": "warn",
     "n/no-process-exit": "off",
     "unicorn/no-process-exit": "off",
     "@typescript-eslint/ban-ts-comment": "warn",
     "new-cap": "off",
     "unicorn/prefer-add-event-listener": "off",
     "unicorn/prefer-top-level-await": "off",
-    "guard-for-in": "off",
-    "no-useless-catch": "off",
-    "unicorn/no-useless-switch-case": "off"
+    "guard-for-in": "error",
+    "no-useless-catch": "error",
+    "unicorn/no-useless-switch-case": "warn"
   }
 }

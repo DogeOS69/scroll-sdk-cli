@@ -84,7 +84,7 @@ export function writeConfigs(
         
         // 2. Remove private keys from [accounts]
         if (publicConfig.accounts && typeof publicConfig.accounts === 'object') {
-            for (const key in publicConfig.accounts) {
+            for (const key of Object.keys(publicConfig.accounts)) {
                 if (key.endsWith('_PRIVATE_KEY')) {
                     delete (publicConfig.accounts as any)[key]
                 }
