@@ -4,7 +4,7 @@ import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import pg from 'pg';
+import { Client } from 'pg'
 
 import { writeConfigs } from '../../utils/config-writer.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
@@ -61,7 +61,7 @@ export default class SetupDbInit extends Command {
     }),
   }
 
-  private conn: pg.Client | undefined;
+  private conn: Client | undefined;
   private pgDatabase: string = "";
   private pgPassword: string = "";
   private pgUser: string = "";
@@ -346,8 +346,8 @@ export default class SetupDbInit extends Command {
     }
   }
 
-  private async createConnection(host: string, port: string, user: string, password: string, database: string): Promise<pg.Client> {
-    const conn = new pg.Client({
+  private async createConnection(host: string, port: string, user: string, password: string, database: string): Promise<Client> {
+    const conn = new Client({
       database,
       host,
       password,
@@ -373,7 +373,7 @@ export default class SetupDbInit extends Command {
     return toml.parse(configContent) as any
   }
 
-  private async initializeDatabase(conn: pg.Client, dbName: string, dbUser: string, dbPassword: string, clean: boolean, niCtx?: NonInteractiveContext): Promise<void> {
+  private async initializeDatabase(conn: Client, dbName: string, dbUser: string, dbPassword: string, clean: boolean, niCtx?: NonInteractiveContext): Promise<void> {
     try {
       // Check if the database exists
       const dbExistsResult = await conn.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [dbName])
@@ -685,7 +685,7 @@ export default class SetupDbInit extends Command {
     }
   }
 
-  private async updatePermissions(conn: pg.Client, dbName: string, dbUser: string, debug: boolean): Promise<void> {
+  private async updatePermissions(conn: Client, dbName: string, dbUser: string, debug: boolean): Promise<void> {
     const queries = [
       `GRANT CONNECT ON DATABASE ${dbName} TO ${dbUser}`,
       `GRANT ALL PRIVILEGES ON DATABASE ${dbName} TO ${dbUser}`,

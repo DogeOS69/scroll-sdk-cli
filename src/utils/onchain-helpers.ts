@@ -26,7 +26,7 @@ export class OnchainHelpers {
       }
 
       if (!receipt) {
-        await new Promise(resolve => setTimeout(resolve, timeout));
+        await new Promise(resolve => { setTimeout(resolve, timeout) });
       }
     }
 

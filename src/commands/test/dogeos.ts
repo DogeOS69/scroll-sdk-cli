@@ -232,6 +232,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
   public async loadConfig() {
     const { flags } = await this.parse(Case)
+    // eslint-disable-next-line unicorn/consistent-function-scoping -- wrapper needed for callback
     const warn = (msg: string) => this.warn(msg)
 
     const configPath = path.resolve('config.toml')
@@ -764,7 +765,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
           }
         }
 
-        await new Promise((resolve) => setTimeout(resolve, 5000))
+        await new Promise((resolve) => { setTimeout(resolve, 5000) })
         retries++
         process.stdout.write('.')
       }
@@ -1167,7 +1168,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
           this.log(chalk.yellow(`   [${retries + 1}/${maxRetries}] Balance check failed: ${error.message}. Retrying...`))
         }
 
-        await new Promise((resolve) => setTimeout(resolve, 5000))
+        await new Promise((resolve) => { setTimeout(resolve, 5000) })
         retries++
       }
 
@@ -1456,11 +1457,11 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
             break
           } else {
             this.log(`  waiting for withdrawal to ${withdrawalTargetDogeAddress} ${i}/${maxRetries}...`)
-            await new Promise((resolve) => setTimeout(resolve, 5000))
+            await new Promise((resolve) => { setTimeout(resolve, 5000) })
           }
         } catch (error) {
           this.warn(`Failed to check balance: ${error instanceof Error ? error.message : String(error)}`)
-          await new Promise((resolve) => setTimeout(resolve, 5000))
+          await new Promise((resolve) => { setTimeout(resolve, 5000) })
         }
       }
 
@@ -1585,6 +1586,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       this.error('Moat address is required but missing; cannot configure helper contract.')
     }
 
+    // eslint-disable-next-line unicorn/consistent-function-scoping -- helper only used for comparison below
     const normalize = (value: string) => value.toLowerCase()
     let currentMoat = ''
     const contractWithMoat = contract as { moat?: () => Promise<string> } & Contract
@@ -1730,21 +1732,15 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
     const searchRoots = new Set<string>()
     searchRoots.add(process.cwd())
-    // @ts-ignore
     if (this.config?.root) {
-      // @ts-ignore
       searchRoots.add(path.resolve(this.config.root))
     }
 
-    // @ts-ignore
     if (this.config?.configDir) {
-      // @ts-ignore
       searchRoots.add(path.resolve(this.config.configDir, '..'))
     }
 
-    // @ts-ignore
     if (this.config?.cacheDir) {
-      // @ts-ignore
       searchRoots.add(path.resolve(this.config.cacheDir, '..'))
     }
 
@@ -1857,7 +1853,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
         // ignore error and retry
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 5000))
+      await new Promise((resolve) => { setTimeout(resolve, 5000) })
       retries++
       process.stdout.write('.')
     }

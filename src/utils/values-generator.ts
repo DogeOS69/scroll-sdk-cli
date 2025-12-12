@@ -51,7 +51,6 @@ function getSecretProviderConfig(spec: DeploymentSpec): SecretProviderConfig {
       }
     }
 
-    case 'local':
     default: {
       return {
         prefix: 'scroll',

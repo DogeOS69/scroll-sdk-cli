@@ -461,8 +461,8 @@ export default class TestE2e extends Command {
 
         // attempts++
         this.logResult(`Waiting for token balance...`, 'info')
-         
-        await new Promise((resolve) => setTimeout(resolve, delay))
+
+        await new Promise((resolve) => { setTimeout(resolve, delay) })
       }
 
       const halfBalance = balance / 2n
@@ -889,12 +889,12 @@ export default class TestE2e extends Command {
 
         if (!unclaimedWithdrawal) {
           this.logResult(`Withdrawal not found yet. Waiting...`, 'info')
-           
-          await new Promise((resolve) => setTimeout(resolve, 60_000)) // Wait for 20 seconds before checking again
+
+          await new Promise((resolve) => { setTimeout(resolve, 60_000) }) // Wait for 20 seconds before checking again
         } else if (!unclaimedWithdrawal?.claim_info) {
           this.logResult(`Withdrawal seen, but waiting for finalization. Waiting...`, 'info')
-           
-          await new Promise((resolve) => setTimeout(resolve, 60_000)) // Wait for 20 seconds before checking again
+
+          await new Promise((resolve) => { setTimeout(resolve, 60_000) }) // Wait for 20 seconds before checking again
         }
       }
 
@@ -1489,7 +1489,7 @@ export default class TestE2e extends Command {
       this.resumeFilePath = 'e2e_resume.json'
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, unicorn/consistent-function-scoping -- JSON replacer used only here
     const serializeBigInt = (key: string, value: any) => {
       if (typeof value === 'bigint') {
         return value.toString()
@@ -1514,7 +1514,7 @@ export default class TestE2e extends Command {
 
   private async shortPause() {
     // Sleep for 0.5 second
-     
-    await new Promise((resolve) => setTimeout(resolve, 500))
+
+    await new Promise((resolve) => { setTimeout(resolve, 500) })
   }
 }

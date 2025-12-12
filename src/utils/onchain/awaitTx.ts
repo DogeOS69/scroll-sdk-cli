@@ -24,7 +24,7 @@ export async function awaitTx(txHash: string, rpc: RpcSource, timeout: number = 
     }
 
     if (!receipt) {
-      await new Promise(resolve => setTimeout(resolve, timeout));
+      await new Promise(resolve => { setTimeout(resolve, timeout) });
     }
   }
 

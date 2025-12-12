@@ -1,7 +1,7 @@
 import { confirm, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
-import cliProgress from 'cli-progress'
+import { SingleBar } from 'cli-progress'
 import { ethers } from 'ethers'
 import path from 'node:path'
 
@@ -125,7 +125,7 @@ export default class HelperClearAccounts extends Command {
       this.log(chalk.cyan(`Replacing transactions from nonce ${startNonce} to ${endNonce - 1}`));
     }
 
-    const progressBar = new cliProgress.SingleBar({
+    const progressBar = new SingleBar({
       barCompleteChar: '\u2588',
       barIncompleteChar: '\u2591',
       format: 'Replacing transactions |' + chalk.cyan('{bar}') + '| {percentage}% || {value}/{total} Transactions',

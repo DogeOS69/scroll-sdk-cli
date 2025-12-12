@@ -24,7 +24,7 @@ export async function awaitERC20Balance(
 
 			attempts++;
 			console.log(`Attempt ${attempts}: Waiting for token balance...`);
-			await new Promise(resolve => setTimeout(resolve, delay));
+			await new Promise(resolve => { setTimeout(resolve, delay) });
 		}
 
 		return balance.toString();

@@ -1,6 +1,7 @@
 import { confirm } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
+// eslint-disable-next-line import/no-named-as-default -- cli-table3 uses default export pattern
 import Table from 'cli-table3'
 import * as yaml from 'js-yaml'
 import { exec } from 'node:child_process'

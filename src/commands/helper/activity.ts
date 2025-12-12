@@ -195,7 +195,7 @@ export default class HelperActivity extends Command {
       // eslint-disable-next-line no-constant-condition
       while (true) {
         await this.sendTransaction(wallets[layer], recipientAddr, layer, flags.spam)
-        await new Promise((resolve) => setTimeout(resolve, flags.interval * 1000))
+        await new Promise((resolve) => { setTimeout(resolve, flags.interval * 1000) })
       }
     })
   }
@@ -290,9 +290,9 @@ export default class HelperActivity extends Command {
       this.nonceTrackers[layer]++
       this.debugLog(`Updated nonce for ${layer}: ${this.nonceTrackers[layer]}`)
 
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Transaction taking longer than expected')), 5000),
-      )
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => { reject(new Error('Transaction taking longer than expected')) }, 5000)
+      })
 
       try {
         const receipt = (await Promise.race([tx.wait(), timeoutPromise])) as ethers.TransactionReceipt | null

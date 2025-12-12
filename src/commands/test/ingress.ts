@@ -2,6 +2,7 @@ import * as k8s from '@kubernetes/client-node'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import terminalLink from 'terminal-link'
+// eslint-disable-next-line import/no-named-as-default -- ws uses default export pattern
 import WebSocket from 'ws'
 
 import { parseTomlConfig } from '../../utils/config-parser.js'
