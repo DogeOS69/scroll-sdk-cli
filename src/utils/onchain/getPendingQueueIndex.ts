@@ -1,4 +1,5 @@
 import { Contract } from 'ethers';
+
 import { RpcSource, generateProvider } from './index.js';
 
 /**
@@ -15,5 +16,5 @@ export async function getPendingQueueIndex(rpc: RpcSource, l1MessageQueueProxyAd
   ];
   const l1MessageQueue = new Contract(l1MessageQueueProxyAddress, l1MessageQueueABI, provider);
 
-  return await l1MessageQueue.pendingQueueIndex();
+  return l1MessageQueue.pendingQueueIndex();
 }

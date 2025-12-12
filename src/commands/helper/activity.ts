@@ -1,13 +1,13 @@
-/* eslint-disable no-await-in-loop */
+ 
 import {confirm} from '@inquirer/prompts'
 import {Command, Flags} from '@oclif/core'
 import chalk from 'chalk'
 import {SingleBar} from 'cli-progress'
 import {ethers} from 'ethers'
+import {randomBytes} from 'node:crypto'
 import path from 'node:path'
 
 import {parseTomlConfig} from '../../utils/config-parser.js'
-import {randomBytes} from 'node:crypto'
 // import { BlockExplorerParams } from '../../utils/onchain/constructBlockExplorerUrl.js';
 // import { txLink } from '../../utils/onchain/txLink.js'
 
@@ -65,8 +65,8 @@ export default class HelperActivity extends Command {
     }),
     spam: Flags.boolean({
       char: 's',
-      description: 'with 110KB input while sending transaction',
       default: false,
+      description: 'with 110KB input while sending transaction',
     }),
   }
 
@@ -150,16 +150,14 @@ export default class HelperActivity extends Command {
             secondsLeft -= 1
             if (secondsLeft > 0) {
               logCountdown()
-            } else {
-              if (countdownHandle) clearInterval(countdownHandle)
-            }
-          }, 1_000)
+            } else if (countdownHandle) clearInterval(countdownHandle)
+          }, 1000)
 
           timeoutHandle = setTimeout(() => {
             if (countdownHandle) clearInterval(countdownHandle)
             this.log(chalk.yellow('No response in 5s, defaulting to "Yes".'))
             resolve(true)
-          }, countdownSeconds * 1_000)
+          }, countdownSeconds * 1000)
         })
 
         const replacePending = await Promise.race([
@@ -194,6 +192,7 @@ export default class HelperActivity extends Command {
     await this.initializeNonceTrackers(wallets)
 
     layers.map(async (layer) => {
+      // eslint-disable-next-line no-constant-condition
       while (true) {
         await this.sendTransaction(wallets[layer], recipientAddr, layer, flags.spam)
         await new Promise((resolve) => setTimeout(resolve, flags.interval * 1000))
@@ -279,13 +278,13 @@ export default class HelperActivity extends Command {
       this.debugLog(`Current nonce for ${layer}: ${currentNonce}`)
 
       const tx = await wallet.sendTransaction({
+        data: spam ? `0x${randomBytes(110 * 1024).toString('hex')}` : null,
         nonce: currentNonce,
         to: recipient,
         value: ethers.parseUnits('0.1', 'gwei'),
-        data: spam ? `0x${randomBytes(110 * 1024).toString('hex')}` : null,
       })
 
-      //this.debugLog(`Transaction created: ${JSON.stringify(tx, null, 2)}`)
+      // this.debugLog(`Transaction created: ${JSON.stringify(tx, null, 2)}`)
 
       // Increment the nonce tracker immediately after sending the transaction
       this.nonceTrackers[layer]++

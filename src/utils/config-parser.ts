@@ -1,5 +1,5 @@
-import fs from 'fs'
 import yaml from 'js-yaml'
+import fs from 'node:fs'
 import toml from 'toml'
 
 export function parseYamlConfig(filePath: string): any {

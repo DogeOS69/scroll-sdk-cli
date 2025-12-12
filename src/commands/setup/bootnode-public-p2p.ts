@@ -1,14 +1,14 @@
+import * as toml from '@iarna/toml'
+import { select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
-import { select, confirm } from '@inquirer/prompts'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import * as toml from '@iarna/toml'
-import chalk from 'chalk'
+
 import {
   AWSNodeLBProvider,
   GCPNodeStaticIPProvider,
-  SUPPORTED_PROVIDERS,
   PROVIDER_DISPLAY_NAMES,
+  SUPPORTED_PROVIDERS,
   type SupportedProvider
 } from '../../providers/index.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
@@ -34,13 +34,22 @@ export default class SetupBootnodeStaticIP extends Command {
   ]
 
   static override flags = {
+    'cluster-name': Flags.string({
+      description: 'Kubernetes cluster name for resource tagging and identification',
+      required: false
+    }),
+    'json': Flags.boolean({
+      default: false,
+      description: 'Output in JSON format (stdout for data, stderr for logs)'
+    }),
+    'non-interactive': Flags.boolean({
+      char: 'N',
+      default: false,
+      description: 'Run without prompts. Requires --provider flag.'
+    }),
     provider: Flags.string({
       description: 'Cloud provider for static IP allocation (aws, gcp)',
       options: [...SUPPORTED_PROVIDERS],
-      required: false
-    }),
-    'cluster-name': Flags.string({
-      description: 'Kubernetes cluster name for resource tagging and identification',
       required: false
     }),
     region: Flags.string({
@@ -48,23 +57,14 @@ export default class SetupBootnodeStaticIP extends Command {
       required: false
     }),
     'values-dir': Flags.string({
-      description: 'Directory containing Helm values files for configuration',
-      default: './values'
-    }),
-    'non-interactive': Flags.boolean({
-      char: 'N',
-      description: 'Run without prompts. Requires --provider flag.',
-      default: false
-    }),
-    'json': Flags.boolean({
-      description: 'Output in JSON format (stdout for data, stderr for logs)',
-      default: false
+      default: './values',
+      description: 'Directory containing Helm values files for configuration'
     })
   }
 
-  private nonInteractive: boolean = false
-  private jsonMode: boolean = false
   private jsonCtx!: JsonOutputContext
+  private jsonMode: boolean = false
+  private nonInteractive: boolean = false
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupBootnodeStaticIP)
@@ -93,11 +93,11 @@ export default class SetupBootnodeStaticIP extends Command {
     let provider = flags.provider as SupportedProvider
     if (!provider) {
       provider = await select({
-        message: 'Select your cloud provider:',
         choices: SUPPORTED_PROVIDERS.map(p => ({
           name: PROVIDER_DISPLAY_NAMES[p],
           value: p
-        }))
+        })),
+        message: 'Select your cloud provider:'
       })
     }
 
@@ -141,11 +141,11 @@ export default class SetupBootnodeStaticIP extends Command {
 
       // JSON success output
       this.jsonCtx.success({
-        provider,
         bootnodeCount,
-        valuesDir: flags['values-dir'],
         clusterName: flags['cluster-name'],
-        region: flags.region
+        provider,
+        region: flags.region,
+        valuesDir: flags['values-dir']
       })
     } catch (error) {
       this.jsonCtx.error(
@@ -158,36 +158,6 @@ export default class SetupBootnodeStaticIP extends Command {
     }
   }
 
-  private getProviderInstance(provider: SupportedProvider) {
-    switch (provider) {
-      case 'aws':
-        return new AWSNodeLBProvider()
-      case 'gcp':
-        return new GCPNodeStaticIPProvider()
-      default:
-        throw new Error(`Unsupported provider: ${provider}`)
-    }
-  }
-
-  private capitalize(str: string): string {
-    if (!str) return ''
-    return str.charAt(0).toUpperCase() + str.slice(1)
-  }
-
-  private loadConfig(): any {
-    const configPath = path.join(process.cwd(), 'config.toml')
-
-    if (!fs.existsSync(configPath)) {
-      throw new Error(`config.toml not found in current directory: ${process.cwd()}`)
-    }
-
-    try {
-      const configContent = fs.readFileSync(configPath, 'utf-8')
-      return toml.parse(configContent) as any
-    } catch (error) {
-      throw new Error(`Failed to parse config.toml: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
 
   private getBootnodeCountFromConfig(config: any): number {
     if (!config.bootnode) {
@@ -199,13 +169,13 @@ export default class SetupBootnodeStaticIP extends Command {
     let count = 0
 
     if (config.bootnode && typeof config.bootnode === 'object') {
-      Object.keys(config.bootnode).forEach(key => {
+      for (const key of Object.keys(config.bootnode)) {
         if (key.startsWith('bootnode-') && config.bootnode[key] &&
           typeof config.bootnode[key] === 'object' &&
           Object.values(config.bootnode[key]).some(value => value !== '')) {
           count++
         }
-      })
+      }
     }
 
     // If no bootnode subsections found, default to 2
@@ -215,5 +185,36 @@ export default class SetupBootnodeStaticIP extends Command {
 
     this.jsonCtx.info(`Found ${count} bootnode(s) in config.toml`)
     return count
+  }
+
+  private getProviderInstance(provider: SupportedProvider) {
+    switch (provider) {
+      case 'aws': {
+        return new AWSNodeLBProvider()
+      }
+
+      case 'gcp': {
+        return new GCPNodeStaticIPProvider()
+      }
+
+      default: {
+        throw new Error(`Unsupported provider: ${provider}`)
+      }
+    }
+  }
+
+  private loadConfig(): any {
+    const configPath = path.join(process.cwd(), 'config.toml')
+
+    if (!fs.existsSync(configPath)) {
+      throw new Error(`config.toml not found in current directory: ${process.cwd()}`)
+    }
+
+    try {
+      const configContent = fs.readFileSync(configPath, 'utf8')
+      return toml.parse(configContent) as any
+    } catch (error) {
+      throw new Error(`Failed to parse config.toml: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 } 

@@ -18,10 +18,10 @@ export default class TestIngress extends Command {
   private configValues: Record<string, string> = {}
 
   private frontendToIngressMapping: Record<string, string> = {
-    EXTERNAL_RPC_URI_L2: 'RPC_GATEWAY_HOST',
     BRIDGE_API_URI: 'BRIDGE_HISTORY_API_HOST',
-    ROLLUPSCAN_API_URI: 'ROLLUP_EXPLORER_API_HOST',
     EXTERNAL_EXPLORER_URI_L2: 'BLOCKSCOUT_HOST',
+    EXTERNAL_RPC_URI_L2: 'RPC_GATEWAY_HOST',
+    ROLLUPSCAN_API_URI: 'ROLLUP_EXPLORER_API_HOST',
   }
 
   public async run(): Promise<void> {
@@ -64,7 +64,7 @@ export default class TestIngress extends Command {
 
       this.log(chalk.cyan('\nChecking connectivity to ingress hosts:'))
       for (const [name, host] of Object.entries(actualIngresses)) {
-        // eslint-disable-next-line no-await-in-loop
+         
         const isReachable = await this.checkHost(host, name)
         if (isReachable) {
           this.log(chalk.green(`- ${name} is reachable`))
@@ -100,9 +100,14 @@ export default class TestIngress extends Command {
       } else {
         // HTTP check
         try {
-          if (name === 'bridge-history-api') {
+          switch (name) {
+          case 'bridge-history-api': {
             httpResponse = await fetch(`http://${host}/api/txs`)
-          } else if (name === 'l1-devnet') {
+          
+          break;
+          }
+
+          case 'l1-devnet': {
             httpResponse = await fetch(`http://${host}`, {
               body: JSON.stringify({
                 id: 1,
@@ -115,22 +120,36 @@ export default class TestIngress extends Command {
               },
               method: 'POST',
             })
-          } else if (name === 'coordinator-api') {
+          
+          break;
+          }
+
+          case 'coordinator-api': {
             httpResponse = await fetch(`http://${host}/coordinator/v1/challenge/`, {
               method: 'GET',
             })
-          } else {
+          
+          break;
+          }
+
+          default: {
             httpResponse = await fetch(`http://${host}`)
           }
-        } catch (error) {
+          }
+        } catch {
           // HTTP request failed, but we'll still try HTTPS
         }
 
         // HTTPS check
         try {
-          if (name === 'bridge-history-api') {
+          switch (name) {
+          case 'bridge-history-api': {
             httpsResponse = await fetch(`https://${host}/api/txs`)
-          } else if (name === 'l1-devnet') {
+          
+          break;
+          }
+
+          case 'l1-devnet': {
             httpsResponse = await fetch(`https://${host}`, {
               body: JSON.stringify({
                 id: 1,
@@ -143,14 +162,23 @@ export default class TestIngress extends Command {
               },
               method: 'POST',
             })
-          } else if (name === 'coordinator-api') {
+          
+          break;
+          }
+
+          case 'coordinator-api': {
             httpsResponse = await fetch(`https://${host}/coordinator/v1/challenge/`, {
               method: 'GET',
             })
-          } else {
+          
+          break;
+          }
+
+          default: {
             httpsResponse = await fetch(`https://${host}`)
           }
-        } catch (error) {
+          }
+        } catch {
           // HTTPS request failed
         }
 
@@ -179,13 +207,14 @@ export default class TestIngress extends Command {
   private async checkWebSocket(url: string): Promise<boolean> {
     return new Promise((resolve) => {
       const ws = new WebSocket(url)
-      ws.onopen = () => {
+      ws.addEventListener('open', () => {
         ws.close()
         resolve(true)
-      }
+      })
       ws.onerror = () => {
         resolve(false)
       }
+
       // Set a timeout in case the connection hangs
       setTimeout(() => {
         ws.close()
@@ -271,15 +300,15 @@ export default class TestIngress extends Command {
       if (frontendValue && ingressValue) {
         try {
           const frontendHost = new URL(frontendValue).host
-          if (frontendHost !== ingressValue) {
+          if (frontendHost === ingressValue) {
+            this.log(chalk.green(`${frontendKey} matches ${ingressKey}: ${frontendHost}`))
+          } else {
             this.log(chalk.red(`Discrepancy found for ${frontendKey}:`))
             this.log(chalk.red(`  Frontend value: ${frontendHost}`))
             this.log(chalk.red(`  Ingress value: ${ingressValue}`))
             hasDiscrepancy = true
-          } else {
-            this.log(chalk.green(`${frontendKey} matches ${ingressKey}: ${frontendHost}`))
           }
-        } catch (error) {
+        } catch {
           this.log(chalk.yellow(`Invalid URL for ${frontendKey}: ${frontendValue}`))
         }
       } else {

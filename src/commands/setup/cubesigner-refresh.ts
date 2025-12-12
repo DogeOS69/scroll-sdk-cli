@@ -1,12 +1,13 @@
+import { input } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
-import { exec, spawn } from 'child_process'
-import { promisify } from 'util'
-import { input, select } from '@inquirer/prompts'
 import chalk from 'chalk'
-import * as fs from 'fs'
+import { exec, spawn } from 'node:child_process'
+import * as fs from 'node:fs'
+import { promisify } from 'node:util'
+
 import type { DogeConfig } from '../../types/doge-config.js'
+
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
-import * as path from 'path'
 import { JsonOutputContext } from '../../utils/json-output.js'
 const execAsync = promisify(exec)
 
@@ -25,35 +26,35 @@ export default class SetupCubesignerRefresh extends Command {
             description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
             required: false,
         }),
-        'org-id': Flags.string({
-            description: 'CubeSigner organization ID (for non-interactive login if not already logged in)',
-            required: false,
-        }),
         'email': Flags.string({
             description: 'CubeSigner account email (for non-interactive login if not already logged in)',
             required: false,
         }),
         'environment': Flags.string({
+            default: 'gamma',
             description: 'CubeSigner environment (default: gamma)',
             required: false,
-            default: 'gamma',
+        }),
+        'json': Flags.boolean({
+            default: false,
+            description: 'Output in JSON format (stdout for data, stderr for logs)',
         }),
         'non-interactive': Flags.boolean({
             char: 'N',
+            default: false,
             description: 'Run without prompts. Requires --doge-config. If not logged in, also requires --org-id and --email.',
-            default: false,
         }),
-        'json': Flags.boolean({
-            description: 'Output in JSON format (stdout for data, stderr for logs)',
-            default: false,
+        'org-id': Flags.string({
+            description: 'CubeSigner organization ID (for non-interactive login if not already logged in)',
+            required: false,
         }),
     }
 
     private dogeConfig: DogeConfig = {} as DogeConfig
     private dogeConfigFile: string = ''
-    private nonInteractive: boolean = false
-    private jsonMode: boolean = false
     private jsonCtx!: JsonOutputContext
+    private jsonMode: boolean = false
+    private nonInteractive: boolean = false
 
     public async run(): Promise<void> {
         const { flags } = await this.parse(SetupCubesignerRefresh)
@@ -96,9 +97,9 @@ export default class SetupCubesignerRefresh extends Command {
             const stdioOption = this.jsonMode ? 'pipe' : 'inherit'
 
             const child = spawn(command, args, {
-                stdio: stdioOption,
+                cwd: process.cwd(),
                 shell: true,
-                cwd: process.cwd()
+                stdio: stdioOption
             })
 
             // In JSON mode, pipe output to stderr
@@ -124,9 +125,9 @@ export default class SetupCubesignerRefresh extends Command {
     }
 
     private async refreshSessions(flags: {
-        'org-id'?: string
         'email'?: string
         'environment': string
+        'org-id'?: string
     }) {
         this.jsonCtx.info(`Current working directory: ${process.cwd()}`)
 
@@ -140,15 +141,15 @@ export default class SetupCubesignerRefresh extends Command {
                 this.jsonCtx.info('No active session found, proceeding with login')
                 needsLogin = true
             }
-        } catch (error) {
+        } catch {
             this.jsonCtx.info('Not logged in, proceeding with login')
             needsLogin = true
         }
 
         if (needsLogin) {
             let orgId = flags['org-id']
-            let email = flags['email']
-            const environment = flags['environment']
+            let {email} = flags
+            const {environment} = flags
 
             // In non-interactive mode, require org-id and email if not logged in
             if (this.nonInteractive) {
@@ -161,6 +162,7 @@ export default class SetupCubesignerRefresh extends Command {
                         { flag: '--org-id' }
                     )
                 }
+
                 if (!email) {
                     this.jsonCtx.error(
                         'E601_MISSING_FIELD',
@@ -174,23 +176,26 @@ export default class SetupCubesignerRefresh extends Command {
                 // Interactive prompts
                 if (!orgId) {
                     orgId = await input({
-                        message: chalk.cyan('Enter your cubesigner organization ID:'),
                         default: 'Org#14b38f70-9f97-4e39-b2ce-a54ce6045b08',
-                        validate: (value: string) => {
+                        message: chalk.cyan('Enter your cubesigner organization ID:'),
+                        validate(value: string) {
                             if (!value || value.trim() === '') {
                                 return 'Organization ID cannot be empty'
                             }
+
                             return true
                         }
                     })
                 }
+
                 if (!email) {
                     email = await input({
                         message: chalk.cyan('Enter your cubesigner account(email):'),
-                        validate: (value: string) => {
+                        validate(value: string) {
                             if (!value || value.trim() === '') {
                                 return 'Email cannot be empty'
                             }
+
                             return true
                         }
                     })
@@ -212,7 +217,7 @@ export default class SetupCubesignerRefresh extends Command {
                     'CubeSigner login failed',
                     'PREREQUISITE',
                     true,
-                    { orgId, email, environment }
+                    { email, environment, orgId }
                 )
                 return false
             }
@@ -232,22 +237,21 @@ export default class SetupCubesignerRefresh extends Command {
                 return false
             }
 
-            const roles = this.dogeConfig.cubesigner.roles
+            const {roles} = this.dogeConfig.cubesigner
             this.jsonCtx.info(`Found ${roles.length} roles in config, creating session files...`)
 
             const sessionFiles: string[] = []
             const envFiles: string[] = []
 
-            for (let i = 0; i < roles.length; i++) {
-                let role = roles[i]
+            for (const [i, role] of roles.entries()) {
                 const sessionFile = `./secrets/cubesigner-signer-${i}-session.json`
                 const assignRoleCommand = `cs session create --role-id=${role.role_id} > ${sessionFile}`
                 this.jsonCtx.info(`Executing: ${assignRoleCommand}`)
                 await execAsync(assignRoleCommand)
                 sessionFiles.push(sessionFile)
 
-                let secret = `DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID="${role.keys[0].key_id}"\n`
-                let envFile = `./secrets/cubesigner-signer-${i}.env`
+                const secret = `DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID="${role.keys[0].key_id}"\n`
+                const envFile = `./secrets/cubesigner-signer-${i}.env`
                 fs.writeFileSync(envFile, secret)
                 this.jsonCtx.info(`write ${envFile} success`)
                 envFiles.push(envFile)
@@ -257,15 +261,15 @@ export default class SetupCubesignerRefresh extends Command {
 
             // JSON success output
             this.jsonCtx.success({
-                rolesCount: roles.length,
-                sessionFiles,
                 envFiles,
                 roles: roles.map((r, i) => ({
                     index: i,
-                    role_id: r.role_id,
+                    keyId: r.keys[0]?.key_id,
                     name: r.name,
-                    keyId: r.keys[0]?.key_id
-                }))
+                    role_id: r.role_id
+                })),
+                rolesCount: roles.length,
+                sessionFiles
             })
         } catch (error) {
             this.jsonCtx.error(

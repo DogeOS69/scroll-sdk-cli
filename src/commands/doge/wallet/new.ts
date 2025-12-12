@@ -22,7 +22,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 // Assuming loadDogeConfig and DogeConfig types are available and updated
-import type { DogeConfig, DogeWallet } from '../../../types/doge-config.js' // Adjusted path
+import type { DogeWallet } from '../../../types/doge-config.js' // Adjusted path
 import { loadDogeConfigWithSelection } from '../../../utils/doge-config.js' // Adjusted path
 import { JsonOutputContext } from '../../../utils/json-output.js'
 
@@ -57,18 +57,18 @@ export default class WalletNew extends Command {
       default: false,
       description: 'Skip confirmation prompt',
     }),
-    path: Flags.string({
-      char: 'p',
-      description: 'Path to save the wallet file (overrides path from config file)',
+    json: Flags.boolean({
+      default: false,
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
     }),
     'non-interactive': Flags.boolean({
       char: 'N',
+      default: false,
       description: 'Run without prompts (implies --force)',
-      default: false,
     }),
-    json: Flags.boolean({
-      description: 'Output in JSON format (stdout for data, stderr for logs)',
-      default: false,
+    path: Flags.string({
+      char: 'p',
+      description: 'Path to save the wallet file (overrides path from config file)',
     }),
   }
 
@@ -131,14 +131,16 @@ export default class WalletNew extends Command {
         this.log(chalk.dim('(To view WIF in dry run, a flag like --show-private-key would typically be added)'))
         this.log(chalk.dim('\nDry run - no wallet created'))
       }
+
       if (jsonMode) {
         jsonCtx.success({
+          address: address.toString(),
           dryRun: true,
           network: config.network,
-          address: address.toString(),
           walletPath: resolvedWalletPath,
         })
       }
+
       return
     }
 
@@ -178,8 +180,8 @@ export default class WalletNew extends Command {
     // JSON output
     if (jsonMode) {
       jsonCtx.success({
-        network: config.network,
         address: address.toString(),
+        network: config.network,
         privateKey: privateKey.toWIF(),
         walletPath: resolvedWalletPath,
       })

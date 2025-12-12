@@ -1,16 +1,16 @@
-import { spawn } from 'child_process';
 import { confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
+import { spawn } from 'node:child_process';
 
 export interface CommandResult {
-  stdout: string;
   stderr: string;
+  stdout: string;
 }
 
 export interface CommandError extends Error {
-  stdout?: string;
+  code?: null | number;
   stderr?: string;
-  code?: number | null;
+  stdout?: string;
 }
 
 /**
@@ -25,8 +25,8 @@ export async function executeCommand(
 ): Promise<CommandResult> {
   if (prompt) {
     const confirmation = await confirm({
-      message: `\n${command}\nThis will execute the command: `,
-      default: true
+      default: true,
+      message: `\n${command}\nThis will execute the command: `
     });
     if (!confirmation) {
       throw new Error('Command execution cancelled by user');
@@ -40,8 +40,8 @@ export async function executeCommand(
   
   return new Promise((resolve, reject) => {
     const process = spawn(command, [], { 
-      stdio: ['inherit', 'pipe', 'pipe'],
-      shell: true
+      shell: true,
+      stdio: ['inherit', 'pipe', 'pipe']
     });
     
     let stdout = '';
@@ -59,11 +59,11 @@ export async function executeCommand(
       console.log(chalk.yellow(text.trim()));
     });
     
-    process.on('close', (code: number | null) => {
+    process.on('close', (code: null | number) => {
       if (code === 0) {
         console.log(chalk.green(`✓ Command completed successfully`));
         console.log(topLine);
-        resolve({ stdout: stdout.trim(), stderr: stderr.trim() });
+        resolve({ stderr: stderr.trim(), stdout: stdout.trim() });
       } else {
         console.log(chalk.red(`✗ Command failed with exit code ${code}`));
         console.log(topLine);

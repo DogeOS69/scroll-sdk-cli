@@ -1,4 +1,4 @@
-import { Separator, confirm, select, input } from '@inquirer/prompts'
+import { Separator, confirm, input, select } from '@inquirer/prompts'
 import {
   // Args,
   Command,
@@ -97,23 +97,25 @@ export default class TestE2e extends Command {
       default: './config-contracts.toml',
       description: 'Path to configs-contracts.toml file',
     }),
-    // eslint-disable-next-line camelcase
+     
     manual: Flags.boolean({ char: 'm', description: 'Manually fund the test wallet.' }),
     pod: Flags.boolean({
       char: 'p',
       default: false,
       description: 'Run inside Kubernetes pod',
     }),
-    // eslint-disable-next-line camelcase
+     
     'private-key': Flags.string({ char: 'k', description: 'Private key for funder wallet initialization' }),
     resume: Flags.boolean({
       char: 'r',
       default: false,
       description: 'Uses e2e_resume.json to continue last run.',
     }),
-    // eslint-disable-next-line camelcase
+     
     'skip-wallet-generation': Flags.boolean({ char: 's', description: 'Manually fund the test wallet.' }),
   }
+
+  private altGasTokenEnabled: boolean = false
 
   private blockExplorers: Record<Layer, BlockExplorerParams> = {
     [Layer.L1]: { blockExplorerURI: '' },
@@ -123,6 +125,8 @@ export default class TestE2e extends Command {
   private bridgeApiUrl!: string
   private fundingWallet!: ethers.Wallet
   private l1ETHGateway!: string
+  private l1GasTokenAddress: string = ''
+  private l1GasTokenGateway: string = ''
   private l1GatewayRouter!: string
   private l1MessegeQueueProxyAddress!: string
   private l1Messenger!: string
@@ -132,8 +136,11 @@ export default class TestE2e extends Command {
   private l2GatewayRouter!: string
   private l2Provider!: ethers.JsonRpcProvider
   private l2Rpc!: string
+
   private manualFunding: boolean = false
+
   private mockFinalizeEnabled!: boolean
+
   private mockFinalizeTimeout!: number
 
   private results: {
@@ -198,14 +205,8 @@ export default class TestE2e extends Command {
     }
 
   private resumeFilePath: string | undefined
-
   private skipWalletGen: boolean = false
-
   private wallet!: ethers.Wallet
-
-  private altGasTokenEnabled: boolean = false
-  private l1GasTokenAddress: string = ''
-  private l1GasTokenGateway: string = ''
 
   public async run(): Promise<void> {
     try {
@@ -316,6 +317,124 @@ export default class TestE2e extends Command {
     }
   }
 
+  private async bridgeAltTokenL1ToL2(): Promise<void> {
+    try {
+      this.logResult('Bridging Alternative Gas Token from L1 to L2', 'info')
+
+      const tokenContract = new ethers.Contract(this.l1GasTokenAddress, [
+        'function balanceOf(address account) view returns (uint256)',
+        'function approve(address spender, uint256 amount) returns (bool)',
+        'function decimals() view returns (uint8)',
+        'function symbol() view returns (string)'
+      ], this.wallet.connect(this.l1Provider))
+
+      const balance = await tokenContract.balanceOf(this.wallet.address)
+      const decimals = await tokenContract.decimals()
+      const symbol = await tokenContract.symbol()
+
+      if (balance === BigInt(0)) {
+        throw new Error('No Alternative Gas Token balance found. Make sure the wallet is funded.')
+      }
+
+      const halfBalance = balance / 2n
+
+      this.logResult(`Token balance found: ${ethers.formatUnits(balance, decimals)} ${symbol}`, 'success')
+      this.logResult(`Bridging ${ethers.formatUnits(halfBalance, decimals)} ${symbol}`, 'info')
+
+      // Approve the L1 Gas Token Gateway to spend tokens
+      const approveTx = await tokenContract.approve(this.l1GasTokenGateway, halfBalance)
+      await approveTx.wait()
+
+      this.logResult(`Approved ${ethers.formatUnits(halfBalance, decimals)} ${symbol} for L1 Gas Token Gateway`, 'success')
+
+      // Create L1 Gas Token Gateway contract instance
+      const l1GasTokenGateway = new ethers.Contract(
+        this.l1GasTokenGateway,
+        ['function depositETH(uint256 _amount, uint256 _gasLimit) payable'],
+        this.wallet.connect(this.l1Provider)
+      )
+
+      const gasLimit = BigInt(300_000) // Adjust as needed
+      const depositTx = await l1GasTokenGateway.depositETH(
+        halfBalance,
+        gasLimit,
+        { value: ethers.parseEther('0.007') } // Small amount of ETH for L2 gas
+      )
+
+      await this.logTx(depositTx.hash, 'Bridge transaction sent', Layer.L1)
+
+      const receipt = await depositTx.wait()
+      this.logResult(`Transaction mined in block: ${receipt.blockNumber}`, 'success')
+
+      const { l2TxHash, queueIndex } = await getCrossDomainMessageFromTx(
+        depositTx.hash,
+        this.l1Rpc,
+        this.l1MessegeQueueProxyAddress,
+      )
+
+      this.logTx(l2TxHash, `L2 Messenger Tx`, Layer.L2)
+
+      this.results.bridgeERC20L1ToL2 = {
+        complete: false,
+        l1DepositTx: depositTx.hash,
+        l2MessengerTx: l2TxHash,
+        l2TokenAddress: this.l1GasTokenAddress, // In this case, the L2 token address is the same as L1
+        queueIndex,
+      }
+
+      this.logResult(`Alternative gas tokens are being bridged. Please wait for the transaction to be processed on L2.`, 'info')
+    } catch (error) {
+      throw new BridgingError(
+        `Error bridging Alternative Gas Token from L1 to L2: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      )
+    }
+  }
+
+  private async bridgeAltTokenL2ToL1(): Promise<void> {
+    try {
+      this.logResult('Bridging Alternative Gas Token from L2 to L1', 'info')
+
+      const balance = await this.l2Provider.getBalance(this.wallet.address)
+
+      if (balance === BigInt(0)) {
+        throw new Error('No Alternative Gas Token balance found on L2. Make sure the wallet is funded.')
+      }
+
+      const halfBalance = balance / 2n
+
+      const symbol = 'GasToken' // We can use a generic name since it's the native token on L2
+
+      this.logResult(`Token balance found: ${ethers.formatEther(balance)} ${symbol}`, 'success')
+      this.logResult(`Bridging ${ethers.formatEther(halfBalance)} ${symbol}`, 'info')
+
+      // Create L2ETHGateway contract instance
+      const l2ETHGateway = new ethers.Contract(
+        this.l2ETHGateway,
+        l2ETHGatewayABI,
+        this.wallet.connect(this.l2Provider)
+      )
+
+      // Call withdrawETH
+      const gasLimit = BigInt(300_000) // Adjust as needed
+      const withdrawTx = await l2ETHGateway.withdrawETH(halfBalance, gasLimit, {
+        value: halfBalance // The value is the amount we're withdrawing
+      })
+      await withdrawTx.wait()
+
+      this.logResult(`Withdrawal transaction sent: ${withdrawTx.hash}`, 'success')
+      this.results.bridgeERC20L2ToL1 = {
+        complete: true,
+        l2WithdrawTx: withdrawTx.hash,
+      }
+
+      this.logResult(`Alternative gas tokens are being withdrawn to L1. Please wait for the transaction to be processed.`, 'info')
+    } catch (error) {
+      throw new BridgingError(
+        `Error bridging Alternative Gas Token from L2 to L1: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      )
+    }
+  }
+
   private async bridgeERC20L1ToL2(): Promise<void> {
     try {
       // Implement bridging ERC20 from L1 to L2
@@ -333,7 +452,7 @@ export default class TestE2e extends Command {
       const delay = 15_000 // 15 seconds
 
       while (balance === BigInt(0)) {
-        // eslint-disable-next-line no-await-in-loop
+         
         balance = await erc20Contract.balanceOf(this.wallet.address)
         if (balance > BigInt(0)) {
           this.logResult(`Token balance found: ${balance.toString()}`, 'success')
@@ -342,7 +461,7 @@ export default class TestE2e extends Command {
 
         // attempts++
         this.logResult(`Waiting for token balance...`, 'info')
-        // eslint-disable-next-line no-await-in-loop, no-promise-executor-return
+         
         await new Promise((resolve) => setTimeout(resolve, delay))
       }
 
@@ -640,6 +759,7 @@ export default class TestE2e extends Command {
       if (!this.results.bridgeFundsL1ToL2.l2MessengerTx) {
         throw new BridgingError('L2 destination transaction hash is missing.')
       }
+
       const spinner = ora('Waiting for L2 transaction to be mined...').start()
 
       try {
@@ -740,7 +860,7 @@ export default class TestE2e extends Command {
         let withdrawals: Withdrawal[] = []
 
         try {
-          // eslint-disable-next-line no-await-in-loop
+           
           withdrawals = await getWithdrawals(this.wallet.address, this.bridgeApiUrl)
         } catch (error) {
           const url = `${this.bridgeApiUrl}/withdrawals?address=${this.wallet.address}`
@@ -769,11 +889,11 @@ export default class TestE2e extends Command {
 
         if (!unclaimedWithdrawal) {
           this.logResult(`Withdrawal not found yet. Waiting...`, 'info')
-          // eslint-disable-next-line no-await-in-loop, no-promise-executor-return
+           
           await new Promise((resolve) => setTimeout(resolve, 60_000)) // Wait for 20 seconds before checking again
         } else if (!unclaimedWithdrawal?.claim_info) {
           this.logResult(`Withdrawal seen, but waiting for finalization. Waiting...`, 'info')
-          // eslint-disable-next-line no-await-in-loop, no-promise-executor-return
+           
           await new Promise((resolve) => setTimeout(resolve, 60_000)) // Wait for 20 seconds before checking again
         }
       }
@@ -842,8 +962,8 @@ export default class TestE2e extends Command {
       }
 
       const shouldFund = await confirm({
-        message: `Do you want to fund this wallet with ${FUNDING_AMOUNT} ETH?`,
-        default: false
+        default: false,
+        message: `Do you want to fund this wallet with ${FUNDING_AMOUNT} ETH?`
       })
 
       if (!shouldFund) {
@@ -874,96 +994,6 @@ export default class TestE2e extends Command {
       throw new WalletFundingError(
         `Failed to fund wallet on L1: ${error instanceof Error ? error.message : 'Unknown error'}`,
       )
-    }
-  }
-
-  private async promptForGasTokenAmount(): Promise<bigint> {
-    const erc20ABI = [
-      'function symbol() view returns (string)',
-      'function decimals() view returns (uint8)'
-    ]
-    const gasToken = new ethers.Contract(this.l1GasTokenAddress, erc20ABI, this.l1Provider)
-    const symbol = await gasToken.symbol()
-    const decimals = await gasToken.decimals()
-
-    const amount = await select({
-      message: `How many ${symbol} tokens do you want to fund?`,
-      choices: [
-        { name: '100', value: ethers.parseUnits('100', decimals) },
-        { name: '1000', value: ethers.parseUnits('1000', decimals) },
-        { name: '10000', value: ethers.parseUnits('10000', decimals) },
-        { name: 'Custom', value: -1n },
-      ],
-    })
-
-    if (amount === -1n) {
-      const customAmount = await input({ message: `Enter the amount of ${symbol} tokens:` })
-      return ethers.parseUnits(customAmount, decimals)
-    }
-
-    return amount
-  }
-
-  private async fundWalletWithGasToken(amount: bigint, layer: Layer): Promise<void> {
-    const erc20ABI = [
-      'function transfer(address to, uint256 amount) returns (bool)',
-      'function balanceOf(address account) view returns (uint256)',
-      'function symbol() view returns (string)',
-      'function decimals() view returns (uint8)'
-    ]
-    const gasToken = new ethers.Contract(this.l1GasTokenAddress, erc20ABI, this.fundingWallet)
-
-    const symbol = await gasToken.symbol()
-    const decimals = await gasToken.decimals()
-
-    const tx = await gasToken.transfer(this.wallet.address, amount)
-    await tx.wait()
-
-    const balance = await gasToken.balanceOf(this.wallet.address)
-    const formattedBalance = ethers.formatUnits(balance, decimals)
-
-    await this.logTx(tx.hash, `Funded wallet with ${ethers.formatUnits(amount, decimals)} ${symbol}`, layer)
-    this.logResult(`New wallet balance: ${formattedBalance} ${symbol}`, 'success')
-  }
-
-  private async promptManualFundingGasToken(address: string, amount: bigint, layer: Layer): Promise<void> {
-    const erc20ABI = [
-      'function symbol() view returns (string)',
-      'function decimals() view returns (uint8)',
-      'function balanceOf(address account) view returns (uint256)'
-    ]
-    const gasToken = new ethers.Contract(this.l1GasTokenAddress, erc20ABI, this.l1Provider)
-
-    const symbol = await gasToken.symbol()
-    const decimals = await gasToken.decimals()
-    const chainId = (await this.l1Provider.getNetwork()).chainId
-
-    const formattedAmount = ethers.formatUnits(amount, decimals)
-    const qrString = `ethereum:${this.l1GasTokenAddress}/transfer?address=${address}&uint256=${amount.toString()}&chainId=${chainId}`
-
-    await this.logAddress(address, `Please transfer ${chalk.yellow(formattedAmount)} ${symbol} to`, layer)
-    this.log('\n')
-    this.log(`ChainID: ${chalk.cyan(Number(chainId))}`)
-    this.log(`Chain RPC: ${chalk.cyan(this.l1Rpc)}`)
-    this.log(`Token Address: ${chalk.cyan(this.l1GasTokenAddress)}`)
-    this.log('\n')
-    this.log('Scan this QR code to initiate the transfer:')
-
-    this.log(await qrCodeToString(qrString, { small: true, type: 'terminal' }))
-
-    let funded = false
-    while (!funded) {
-      await confirm({ message: 'Press Enter when ready...' })
-      this.log(`Checking...`)
-      const balance = await gasToken.balanceOf(address)
-      const formattedBalance = ethers.formatUnits(balance, decimals)
-
-      if (balance >= amount) {
-        this.log(chalk.green(`Wallet Balance: ${formattedBalance} ${symbol}`))
-        funded = true
-      } else {
-        this.log(chalk.yellow(`Balance is only ${formattedBalance} ${symbol}. Please complete the transfer.`))
-      }
     }
   }
 
@@ -1005,6 +1035,28 @@ export default class TestE2e extends Command {
     })
     await tx.wait()
     await this.logTx(tx.hash, `Funded wallet with ${amount} ETH`, layer)
+  }
+
+  private async fundWalletWithGasToken(amount: bigint, layer: Layer): Promise<void> {
+    const erc20ABI = [
+      'function transfer(address to, uint256 amount) returns (bool)',
+      'function balanceOf(address account) view returns (uint256)',
+      'function symbol() view returns (string)',
+      'function decimals() view returns (uint8)'
+    ]
+    const gasToken = new ethers.Contract(this.l1GasTokenAddress, erc20ABI, this.fundingWallet)
+
+    const symbol = await gasToken.symbol()
+    const decimals = await gasToken.decimals()
+
+    const tx = await gasToken.transfer(this.wallet.address, amount)
+    await tx.wait()
+
+    const balance = await gasToken.balanceOf(this.wallet.address)
+    const formattedBalance = ethers.formatUnits(balance, decimals)
+
+    await this.logTx(tx.hash, `Funded wallet with ${ethers.formatUnits(amount, decimals)} ${symbol}`, layer)
+    this.logResult(`New wallet balance: ${formattedBalance} ${symbol}`, 'success')
   }
 
   // Generate a new random wallet to run all tests.
@@ -1139,6 +1191,33 @@ export default class TestE2e extends Command {
     this.logResult(`${description}: ${chalk.cyan(link)}`, 'info')
   }
 
+  private async promptForGasTokenAmount(): Promise<bigint> {
+    const erc20ABI = [
+      'function symbol() view returns (string)',
+      'function decimals() view returns (uint8)'
+    ]
+    const gasToken = new ethers.Contract(this.l1GasTokenAddress, erc20ABI, this.l1Provider)
+    const symbol = await gasToken.symbol()
+    const decimals = await gasToken.decimals()
+
+    const amount = await select({
+      choices: [
+        { name: '100', value: ethers.parseUnits('100', decimals) },
+        { name: '1000', value: ethers.parseUnits('1000', decimals) },
+        { name: '10000', value: ethers.parseUnits('10000', decimals) },
+        { name: 'Custom', value: -1n },
+      ],
+      message: `How many ${symbol} tokens do you want to fund?`,
+    })
+
+    if (amount === -1n) {
+      const customAmount = await input({ message: `Enter the amount of ${symbol} tokens:` })
+      return ethers.parseUnits(customAmount, decimals)
+    }
+
+    return amount
+  }
+
   private async promptManualFunding(address: string, amount: number, layer: Layer) {
     const chainId =
       layer === Layer.L1 ? (await this.l1Provider.getNetwork()).chainId : (await this.l2Provider.getNetwork()).chainId
@@ -1162,14 +1241,14 @@ export default class TestE2e extends Command {
     let funded = false
 
     while (!funded) {
-      // eslint-disable-next-line no-await-in-loop
+       
       await confirm({ message: 'Press Enter when ready...' })
 
       this.logResult(`Checking...`, 'info')
       // Check if wallet is actually funded -- if not, we'll loop.
 
       const balance =
-        // eslint-disable-next-line no-await-in-loop
+         
         layer === Layer.L1 ? await this.l1Provider.getBalance(address) : await this.l2Provider.getBalance(address)
       const formattedBalance = ethers.formatEther(balance)
 
@@ -1178,6 +1257,47 @@ export default class TestE2e extends Command {
         funded = true
       } else {
         this.logResult(`Balance is only ${chalk.red(formattedBalance)}. Please fund the wallet.`, 'warning')
+      }
+    }
+  }
+
+  private async promptManualFundingGasToken(address: string, amount: bigint, layer: Layer): Promise<void> {
+    const erc20ABI = [
+      'function symbol() view returns (string)',
+      'function decimals() view returns (uint8)',
+      'function balanceOf(address account) view returns (uint256)'
+    ]
+    const gasToken = new ethers.Contract(this.l1GasTokenAddress, erc20ABI, this.l1Provider)
+
+    const symbol = await gasToken.symbol()
+    const decimals = await gasToken.decimals()
+    const {chainId} = await this.l1Provider.getNetwork()
+
+    const formattedAmount = ethers.formatUnits(amount, decimals)
+    const qrString = `ethereum:${this.l1GasTokenAddress}/transfer?address=${address}&uint256=${amount.toString()}&chainId=${chainId}`
+
+    await this.logAddress(address, `Please transfer ${chalk.yellow(formattedAmount)} ${symbol} to`, layer)
+    this.log('\n')
+    this.log(`ChainID: ${chalk.cyan(Number(chainId))}`)
+    this.log(`Chain RPC: ${chalk.cyan(this.l1Rpc)}`)
+    this.log(`Token Address: ${chalk.cyan(this.l1GasTokenAddress)}`)
+    this.log('\n')
+    this.log('Scan this QR code to initiate the transfer:')
+
+    this.log(await qrCodeToString(qrString, { small: true, type: 'terminal' }))
+
+    let funded = false
+    while (!funded) {
+      await confirm({ message: 'Press Enter when ready...' })
+      this.log(`Checking...`)
+      const balance = await gasToken.balanceOf(address)
+      const formattedBalance = ethers.formatUnits(balance, decimals)
+
+      if (balance >= amount) {
+        this.log(chalk.green(`Wallet Balance: ${formattedBalance} ${symbol}`))
+        funded = true
+      } else {
+        this.log(chalk.yellow(`Balance is only ${formattedBalance} ${symbol}. Please complete the transfer.`))
       }
     }
   }
@@ -1364,131 +1484,12 @@ export default class TestE2e extends Command {
     }
   }
 
-  private async bridgeAltTokenL1ToL2(): Promise<void> {
-    try {
-      this.logResult('Bridging Alternative Gas Token from L1 to L2', 'info')
-
-      const tokenContract = new ethers.Contract(this.l1GasTokenAddress, [
-        'function balanceOf(address account) view returns (uint256)',
-        'function approve(address spender, uint256 amount) returns (bool)',
-        'function decimals() view returns (uint8)',
-        'function symbol() view returns (string)'
-      ], this.wallet.connect(this.l1Provider))
-
-      const balance = await tokenContract.balanceOf(this.wallet.address)
-      const decimals = await tokenContract.decimals()
-      const symbol = await tokenContract.symbol()
-
-      if (balance === BigInt(0)) {
-        throw new Error('No Alternative Gas Token balance found. Make sure the wallet is funded.')
-      }
-
-      const halfBalance = balance / 2n
-
-      this.logResult(`Token balance found: ${ethers.formatUnits(balance, decimals)} ${symbol}`, 'success')
-      this.logResult(`Bridging ${ethers.formatUnits(halfBalance, decimals)} ${symbol}`, 'info')
-
-      // Approve the L1 Gas Token Gateway to spend tokens
-      const approveTx = await tokenContract.approve(this.l1GasTokenGateway, halfBalance)
-      await approveTx.wait()
-
-      this.logResult(`Approved ${ethers.formatUnits(halfBalance, decimals)} ${symbol} for L1 Gas Token Gateway`, 'success')
-
-      // Create L1 Gas Token Gateway contract instance
-      const l1GasTokenGateway = new ethers.Contract(
-        this.l1GasTokenGateway,
-        ['function depositETH(uint256 _amount, uint256 _gasLimit) payable'],
-        this.wallet.connect(this.l1Provider)
-      )
-
-      const gasLimit = BigInt(300_000) // Adjust as needed
-      const depositTx = await l1GasTokenGateway.depositETH(
-        halfBalance,
-        gasLimit,
-        { value: ethers.parseEther('0.007') } // Small amount of ETH for L2 gas
-      )
-
-      await this.logTx(depositTx.hash, 'Bridge transaction sent', Layer.L1)
-
-      const receipt = await depositTx.wait()
-      this.logResult(`Transaction mined in block: ${receipt.blockNumber}`, 'success')
-
-      const { l2TxHash, queueIndex } = await getCrossDomainMessageFromTx(
-        depositTx.hash,
-        this.l1Rpc,
-        this.l1MessegeQueueProxyAddress,
-      )
-
-      this.logTx(l2TxHash, `L2 Messenger Tx`, Layer.L2)
-
-      this.results.bridgeERC20L1ToL2 = {
-        complete: false,
-        l1DepositTx: depositTx.hash,
-        l2MessengerTx: l2TxHash,
-        l2TokenAddress: this.l1GasTokenAddress, // In this case, the L2 token address is the same as L1
-        queueIndex,
-      }
-
-      this.logResult(`Alternative gas tokens are being bridged. Please wait for the transaction to be processed on L2.`, 'info')
-    } catch (error) {
-      throw new BridgingError(
-        `Error bridging Alternative Gas Token from L1 to L2: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      )
-    }
-  }
-
-  private async bridgeAltTokenL2ToL1(): Promise<void> {
-    try {
-      this.logResult('Bridging Alternative Gas Token from L2 to L1', 'info')
-
-      const balance = await this.l2Provider.getBalance(this.wallet.address)
-
-      if (balance === BigInt(0)) {
-        throw new Error('No Alternative Gas Token balance found on L2. Make sure the wallet is funded.')
-      }
-
-      const halfBalance = balance / 2n
-
-      const symbol = 'GasToken' // We can use a generic name since it's the native token on L2
-      const decimals = 18 // Native tokens typically use 18 decimals
-
-      this.logResult(`Token balance found: ${ethers.formatEther(balance)} ${symbol}`, 'success')
-      this.logResult(`Bridging ${ethers.formatEther(halfBalance)} ${symbol}`, 'info')
-
-      // Create L2ETHGateway contract instance
-      const l2ETHGateway = new ethers.Contract(
-        this.l2ETHGateway,
-        l2ETHGatewayABI,
-        this.wallet.connect(this.l2Provider)
-      )
-
-      // Call withdrawETH
-      const gasLimit = BigInt(300_000) // Adjust as needed
-      const withdrawTx = await l2ETHGateway.withdrawETH(halfBalance, gasLimit, {
-        value: halfBalance // The value is the amount we're withdrawing
-      })
-      await withdrawTx.wait()
-
-      this.logResult(`Withdrawal transaction sent: ${withdrawTx.hash}`, 'success')
-      this.results.bridgeERC20L2ToL1 = {
-        complete: true,
-        l2WithdrawTx: withdrawTx.hash,
-      }
-
-      this.logResult(`Alternative gas tokens are being withdrawn to L1. Please wait for the transaction to be processed.`, 'info')
-    } catch (error) {
-      throw new BridgingError(
-        `Error bridging Alternative Gas Token from L2 to L1: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      )
-    }
-  }
-
   private async saveProgress(): Promise<void> {
     if (!this.resumeFilePath) {
       this.resumeFilePath = 'e2e_resume.json'
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, unicorn/consistent-function-scoping
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const serializeBigInt = (key: string, value: any) => {
       if (typeof value === 'bigint') {
         return value.toString()
@@ -1513,7 +1514,7 @@ export default class TestE2e extends Command {
 
   private async shortPause() {
     // Sleep for 0.5 second
-    // eslint-disable-next-line no-promise-executor-return
+     
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
 }

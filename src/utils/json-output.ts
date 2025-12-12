@@ -11,24 +11,24 @@ import chalk from 'chalk'
  * Error categories for agent recovery strategies
  */
 export type ErrorCategory =
-  | 'PREREQUISITE'   // Missing dependency (docker, kubectl, etc.)
   | 'CONFIGURATION'  // Config file issue
-  | 'NETWORK'        // RPC/API unreachable
-  | 'FUNDING'        // Insufficient funds
   | 'DOCKER'         // Container issues
-  | 'KUBERNETES'     // K8s issues
-  | 'VALIDATION'     // Input validation failed
+  | 'FUNDING'        // Insufficient funds
   | 'INTERNAL'       // Unexpected error
+  | 'KUBERNETES'     // K8s issues
+  | 'NETWORK'        // RPC/API unreachable
+  | 'PREREQUISITE'   // Missing dependency (docker, kubectl, etc.)
+  | 'VALIDATION'     // Input validation failed
 
 /**
  * Standard success response envelope
  */
 export interface SuccessResponse<T> {
-  success: true
   command: string
-  timestamp: string
-  duration_ms: number
   data: T
+  duration_ms: number
+  success: true
+  timestamp: string
   warnings?: string[]
 }
 
@@ -36,32 +36,32 @@ export interface SuccessResponse<T> {
  * Standard error response envelope
  */
 export interface ErrorResponse {
-  success: false
   command: string
-  timestamp: string
   duration_ms?: number
   error: {
-    code: string
-    message: string
     category: ErrorCategory
-    recoverable: boolean
+    code: string
     context?: Record<string, unknown>
+    message: string
+    recoverable: boolean
   }
+  success: false
+  timestamp: string
 }
 
 /**
  * Combined response type
  */
-export type CommandResponse<T> = SuccessResponse<T> | ErrorResponse
+export type CommandResponse<T> = ErrorResponse | SuccessResponse<T>
 
 /**
  * Context for tracking command execution and building responses
  */
 export class JsonOutputContext {
-  private startTime: number
-  private warnings: string[] = []
   private command: string
   private jsonEnabled: boolean
+  private startTime: number
+  private warnings: string[] = []
 
   constructor(command: string, jsonEnabled: boolean = false) {
     this.command = command
@@ -88,30 +88,6 @@ export class JsonOutputContext {
   }
 
   /**
-   * Calculate duration since context creation
-   */
-  private getDuration(): number {
-    return Date.now() - this.startTime
-  }
-
-  /**
-   * Output a success response
-   */
-  success<T>(data: T): void {
-    if (this.jsonEnabled) {
-      const response: SuccessResponse<T> = {
-        success: true,
-        command: this.command,
-        timestamp: new Date().toISOString(),
-        duration_ms: this.getDuration(),
-        data,
-        ...(this.warnings.length > 0 && { warnings: this.warnings }),
-      }
-      console.log(JSON.stringify(response, null, 2))
-    }
-  }
-
-  /**
    * Output an error response and exit
    */
   error(
@@ -123,17 +99,17 @@ export class JsonOutputContext {
   ): never {
     if (this.jsonEnabled) {
       const response: ErrorResponse = {
-        success: false,
         command: this.command,
-        timestamp: new Date().toISOString(),
         duration_ms: this.getDuration(),
         error: {
+          category,
           code,
           message,
-          category,
           recoverable,
           ...(context && { context }),
         },
+        success: false,
+        timestamp: new Date().toISOString(),
       }
       console.log(JSON.stringify(response, null, 2))
     } else {
@@ -145,18 +121,8 @@ export class JsonOutputContext {
         console.error(chalk.gray(`  Context: ${JSON.stringify(context)}`))
       }
     }
-    process.exit(1)
-  }
 
-  /**
-   * Log a message (to stderr if JSON mode, to stdout otherwise)
-   */
-  log(message: string): void {
-    if (this.jsonEnabled) {
-      console.error(message)
-    } else {
-      console.log(message)
-    }
+    process.exit(1)
   }
 
   /**
@@ -171,13 +137,13 @@ export class JsonOutputContext {
   }
 
   /**
-   * Log a success message (human-readable, not part of JSON response)
+   * Log a message (to stderr if JSON mode, to stdout otherwise)
    */
-  logSuccess(message: string): void {
+  log(message: string): void {
     if (this.jsonEnabled) {
-      console.error(chalk.green(message))
+      console.error(message)
     } else {
-      console.log(chalk.green(message))
+      console.log(message)
     }
   }
 
@@ -203,6 +169,41 @@ export class JsonOutputContext {
     } else {
       console.log(formatted)
     }
+  }
+
+  /**
+   * Log a success message (human-readable, not part of JSON response)
+   */
+  logSuccess(message: string): void {
+    if (this.jsonEnabled) {
+      console.error(chalk.green(message))
+    } else {
+      console.log(chalk.green(message))
+    }
+  }
+
+  /**
+   * Output a success response
+   */
+  success<T>(data: T): void {
+    if (this.jsonEnabled) {
+      const response: SuccessResponse<T> = {
+        command: this.command,
+        data,
+        duration_ms: this.getDuration(),
+        success: true,
+        timestamp: new Date().toISOString(),
+        ...(this.warnings.length > 0 && { warnings: this.warnings }),
+      }
+      console.log(JSON.stringify(response, null, 2))
+    }
+  }
+
+  /**
+   * Calculate duration since context creation
+   */
+  private getDuration(): number {
+    return Date.now() - this.startTime
   }
 }
 
@@ -270,16 +271,16 @@ export function createErrorResponse(
   context?: Record<string, unknown>
 ): ErrorResponse {
   return {
-    success: false,
     command,
-    timestamp: new Date().toISOString(),
     error: {
+      category,
       code,
       message,
-      category,
       recoverable,
       ...(context && { context }),
     },
+    success: false,
+    timestamp: new Date().toISOString(),
   }
 }
 
@@ -293,11 +294,11 @@ export function createSuccessResponse<T>(
   warnings?: string[]
 ): SuccessResponse<T> {
   return {
-    success: true,
     command,
-    timestamp: new Date().toISOString(),
-    duration_ms: durationMs,
     data,
+    duration_ms: durationMs,
+    success: true,
+    timestamp: new Date().toISOString(),
     ...(warnings && warnings.length > 0 && { warnings }),
   }
 }

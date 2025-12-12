@@ -1,14 +1,16 @@
-import { Command, Flags } from '@oclif/core'
-import { exec } from 'child_process'
-import { promisify } from 'util'
-import { input, select, checkbox } from '@inquirer/prompts'
-import chalk from 'chalk'
-import * as fs from 'fs'
 import * as toml from '@iarna/toml'
-import type { DogeConfig, CubesignerRole } from '../../types/doge-config.js'
+import { checkbox, input, select } from '@inquirer/prompts'
+import { Command, Flags } from '@oclif/core'
+import chalk from 'chalk'
+import { exec } from 'node:child_process'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+import { promisify } from 'node:util'
+
+import type { CubesignerRole, DogeConfig } from '../../types/doge-config.js'
+
+import { SETUP_DEFAULTS_TEMPLATE, getSetupDefaultsPath } from '../../config/constants.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
-import { getSetupDefaultsPath, SETUP_DEFAULTS_TEMPLATE } from '../../config/constants.js'
-import * as path from 'path'
 import { JsonOutputContext } from '../../utils/json-output.js'
 const execAsync = promisify(exec)
 
@@ -26,48 +28,48 @@ export default class SetupCubesignerSetup extends Command {
     ]
 
     static override flags = {
-        'doge-config': Flags.string({
-            description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
-            required: false,
-        }),
-        'roles': Flags.string({
-            description: 'Comma-separated list of existing role names to use',
-            required: false,
-            multiple: true,
-        }),
-        'new': Flags.boolean({
-            description: 'Create new roles and keys',
-            required: false,
-            default: false,
-        }),
         'count': Flags.integer({
             description: 'Number of keys/roles to create (when using --new)',
             required: false,
         }),
+        'doge-config': Flags.string({
+            description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
+            required: false,
+        }),
+        'json': Flags.boolean({
+            default: false,
+            description: 'Output in JSON format (stdout for data, stderr for logs)',
+        }),
+        'new': Flags.boolean({
+            default: false,
+            description: 'Create new roles and keys',
+            required: false,
+        }),
+        'non-interactive': Flags.boolean({
+            char: 'N',
+            default: false,
+            description: 'Run without prompts. Requires --doge-config and either --new (with --count, --role-prefix) or --roles.',
+        }),
         'role-prefix': Flags.string({
             description: 'Prefix for role names (when using --new)',
+            required: false,
+        }),
+        'roles': Flags.string({
+            description: 'Comma-separated list of existing role names to use',
+            multiple: true,
             required: false,
         }),
         'threshold': Flags.integer({
             description: 'Attestation threshold (how many signatures required). Defaults to 2/3 majority.',
             required: false,
         }),
-        'non-interactive': Flags.boolean({
-            char: 'N',
-            description: 'Run without prompts. Requires --doge-config and either --new (with --count, --role-prefix) or --roles.',
-            default: false,
-        }),
-        'json': Flags.boolean({
-            description: 'Output in JSON format (stdout for data, stderr for logs)',
-            default: false,
-        }),
     }
 
     private dogeConfig: DogeConfig = {} as DogeConfig
     private dogeConfigFile: string = ''
-    private nonInteractive: boolean = false
-    private jsonMode: boolean = false
     private jsonCtx!: JsonOutputContext
+    private jsonMode: boolean = false
+    private nonInteractive: boolean = false
 
     public async run(): Promise<void> {
         const { flags } = await this.parse(SetupCubesignerSetup)
@@ -129,17 +131,17 @@ export default class SetupCubesignerSetup extends Command {
         if (!useNew && !useExistingRoles) {
             // This path should not be reached in non-interactive mode due to earlier validation
             const operationMode = await select({
-                message: chalk.cyan('Do you want to create new roles or use existing ones?'),
                 choices: [
                     { name: 'Create new roles and keys', value: 'new' },
                     { name: 'Use existing roles', value: 'existing' }
-                ]
+                ],
+                message: chalk.cyan('Do you want to create new roles or use existing ones?')
             })
             useNew = operationMode === 'new'
         }
 
         if (useNew) {
-            let count = flags.count
+            let {count} = flags
             let rolePrefix = flags['role-prefix']
 
             // In non-interactive mode, require count and role-prefix
@@ -153,6 +155,7 @@ export default class SetupCubesignerSetup extends Command {
                         { flag: '--count' }
                     )
                 }
+
                 if (!rolePrefix) {
                     this.jsonCtx.error(
                         'E601_MISSING_FIELD',
@@ -166,27 +169,29 @@ export default class SetupCubesignerSetup extends Command {
 
             if (!count) {
                 const countStr = await input({
-                    message: chalk.cyan('How many roles/keys do you want to create?'),
                     default: '3',
-                    validate: (value: string) => {
-                        const num = parseInt(value)
-                        if (isNaN(num) || num <= 0) {
+                    message: chalk.cyan('How many roles/keys do you want to create?'),
+                    validate(value: string) {
+                        const num = Number.parseInt(value, 10)
+                        if (Number.isNaN(num) || num <= 0) {
                             return 'Please enter a valid positive number'
                         }
+
                         return true
                     }
                 })
-                count = parseInt(countStr)
+                count = Number.parseInt(countStr, 10)
             }
 
             if (!rolePrefix) {
                 rolePrefix = await input({
-                    message: chalk.cyan('Enter role name prefix:'),
                     default: 'devnet',
-                    validate: (value: string) => {
+                    message: chalk.cyan('Enter role name prefix:'),
+                    validate(value: string) {
                         if (!value || value.trim() === '') {
                             return 'Role prefix cannot be empty'
                         }
+
                         return true
                     }
                 })
@@ -203,7 +208,7 @@ export default class SetupCubesignerSetup extends Command {
             }
 
             // Get threshold from flag or prompt
-            let threshold = flags.threshold
+            let {threshold} = flags
             if (threshold !== undefined) {
                 // Validate threshold
                 if (threshold < 1 || threshold > count) {
@@ -212,7 +217,7 @@ export default class SetupCubesignerSetup extends Command {
                         `Threshold must be between 1 and ${count}`,
                         'VALIDATION',
                         true,
-                        { threshold, count }
+                        { count, threshold }
                     )
                 }
             } else if (this.nonInteractive) {
@@ -223,17 +228,18 @@ export default class SetupCubesignerSetup extends Command {
                 this.jsonCtx.info(`You will have ${count} attestation keys.`)
 
                 const thresholdStr = await input({
-                    message: chalk.cyan(`Enter attestation threshold (how many signatures required, 1-${count}):`),
                     default: defaultThreshold.toString(),
-                    validate: (value: string) => {
-                        const num = parseInt(value)
-                        if (isNaN(num) || num < 1 || num > count!) {
+                    message: chalk.cyan(`Enter attestation threshold (how many signatures required, 1-${count}):`),
+                    validate(value: string) {
+                        const num = Number.parseInt(value, 10)
+                        if (Number.isNaN(num) || num < 1 || num > count!) {
                             return `Please enter a number between 1 and ${count}`
                         }
+
                         return true
                     }
                 })
-                threshold = parseInt(thresholdStr)
+                threshold = Number.parseInt(thresholdStr, 10)
             }
 
             await this.createNewRolesAndKeys(count, rolePrefix, threshold)
@@ -248,6 +254,7 @@ export default class SetupCubesignerSetup extends Command {
                         { flag: '--roles' }
                     )
                 }
+
                 useExistingRoles = await this.selectExistingRoles()
             }
 
@@ -273,7 +280,7 @@ export default class SetupCubesignerSetup extends Command {
             }
 
             // Get threshold from flag or prompt
-            let threshold = flags.threshold
+            let {threshold} = flags
             if (threshold !== undefined) {
                 // Validate threshold
                 if (threshold < 1 || threshold > useExistingRoles.length) {
@@ -282,7 +289,7 @@ export default class SetupCubesignerSetup extends Command {
                         `Threshold must be between 1 and ${useExistingRoles.length}`,
                         'VALIDATION',
                         true,
-                        { threshold, roleCount: useExistingRoles.length }
+                        { roleCount: useExistingRoles.length, threshold }
                     )
                 }
             } else if (this.nonInteractive) {
@@ -293,17 +300,18 @@ export default class SetupCubesignerSetup extends Command {
                 this.jsonCtx.info(`You will have ${useExistingRoles.length} attestation keys.`)
 
                 const thresholdStr = await input({
-                    message: chalk.cyan(`Enter attestation threshold (how many signatures required, 1-${useExistingRoles.length}):`),
                     default: defaultThreshold.toString(),
-                    validate: (value: string) => {
-                        const num = parseInt(value)
-                        if (isNaN(num) || num < 1 || num > useExistingRoles!.length) {
+                    message: chalk.cyan(`Enter attestation threshold (how many signatures required, 1-${useExistingRoles.length}):`),
+                    validate(value: string) {
+                        const num = Number.parseInt(value, 10)
+                        if (Number.isNaN(num) || num < 1 || num > useExistingRoles!.length) {
                             return `Please enter a number between 1 and ${useExistingRoles!.length}`
                         }
+
                         return true
                     }
                 })
-                threshold = parseInt(thresholdStr)
+                threshold = Number.parseInt(thresholdStr, 10)
             }
 
             await this.useExistingRoles(useExistingRoles, threshold)
@@ -324,7 +332,7 @@ export default class SetupCubesignerSetup extends Command {
                     { hint: 'CubeSigner requires OIDC authentication which cannot be automated. Login once, then use --non-interactive for this command.' }
                 )
             }
-        } catch (error) {
+        } catch {
             this.jsonCtx.error(
                 'E101_CUBESIGNER_NOT_LOGGED_IN',
                 'Not logged in to cubesigner. Please run "cs login" interactively first, then re-run this command.',
@@ -332,53 +340,6 @@ export default class SetupCubesignerSetup extends Command {
                 true,
                 { hint: 'CubeSigner requires OIDC authentication which cannot be automated. Login once, then use --non-interactive for this command.' }
             )
-        }
-    }
-
-    private async selectExistingRoles(): Promise<string[]> {
-        try {
-            // List all available roles
-            const listRoleCommand = `cs role list`
-            const listRoleOutput = (await execAsync(listRoleCommand)).stdout
-            const roleResult = JSON.parse(listRoleOutput)
-            const availableRoles = roleResult.roles || []
-
-            if (availableRoles.length === 0) {
-                this.jsonCtx.error(
-                    'E602_NO_ROLES_FOUND',
-                    'No existing cubesigner roles found',
-                    'CONFIGURATION',
-                    true
-                )
-            }
-
-            const roleChoices = availableRoles.map((role: any) => ({
-                name: `${role.name} (${role.role_id}) - ${role.keys?.length || 0} keys`,
-                value: role.name
-            }))
-
-            const selectedRoleNames = await checkbox({
-                message: chalk.cyan('Select roles to use:'),
-                choices: roleChoices,
-                validate: (answer: readonly any[]) => {
-                    if (answer.length === 0) {
-                        return 'Please select at least one role'
-                    }
-                    return true
-                }
-            }) as string[]
-
-            return selectedRoleNames
-
-        } catch (error) {
-            this.jsonCtx.error(
-                'E900_CUBESIGNER_ERROR',
-                `Failed to list roles: ${error}`,
-                'INTERNAL',
-                false,
-                { error: String(error) }
-            )
-            return []
         }
     }
 
@@ -422,6 +383,167 @@ export default class SetupCubesignerSetup extends Command {
             this.jsonCtx.error(
                 'E900_CUBESIGNER_ERROR',
                 `Failed to create roles and keys: ${error}`,
+                'INTERNAL',
+                false,
+                { error: String(error) }
+            )
+        }
+    }
+
+    private async saveRolesToConfig(selectedRoles: any[], threshold: number) {
+        try {
+            this.jsonCtx.info('Saving roles to DogeConfig...')
+
+            // Convert selectedRoles to CubesignerRole format
+            const cubesignerRoles: CubesignerRole[] = selectedRoles.map(role => ({
+                keys: role.keys.map((key: any) => ({
+                    key_id: key.key_id,
+                    key_type: key.key_type,
+                    material_id: key.material_id,
+                    public_key: key.public_key,
+                    purpose: key.purpose
+                })),
+                name: role.name,
+                role_id: role.role_id
+            }))
+
+            // Update DogeConfig
+            this.dogeConfig.cubesigner = {
+                roles: cubesignerRoles
+            }
+
+            // Write to file
+            fs.writeFileSync(this.dogeConfigFile, toml.stringify(this.dogeConfig as any))
+            this.jsonCtx.info(`Successfully saved ${cubesignerRoles.length} roles to ${this.dogeConfigFile}`)
+
+            // Update setup_defaults.toml with attestation public keys
+            await this.updateSetupDefaultsWithKeys(selectedRoles, threshold)
+
+        } catch (error) {
+            this.jsonCtx.error(
+                'E900_CONFIG_SAVE_ERROR',
+                `Failed to save roles to config: ${error}`,
+                'INTERNAL',
+                false,
+                { error: String(error) }
+            )
+        }
+    }
+
+    private async selectExistingRoles(): Promise<string[]> {
+        try {
+            // List all available roles
+            const listRoleCommand = `cs role list`
+            const listRoleOutput = (await execAsync(listRoleCommand)).stdout
+            const roleResult = JSON.parse(listRoleOutput)
+            const availableRoles = roleResult.roles || []
+
+            if (availableRoles.length === 0) {
+                this.jsonCtx.error(
+                    'E602_NO_ROLES_FOUND',
+                    'No existing cubesigner roles found',
+                    'CONFIGURATION',
+                    true
+                )
+            }
+
+            const roleChoices = availableRoles.map((role: any) => ({
+                name: `${role.name} (${role.role_id}) - ${role.keys?.length || 0} keys`,
+                value: role.name
+            }))
+
+            const selectedRoleNames = await checkbox({
+                choices: roleChoices,
+                message: chalk.cyan('Select roles to use:'),
+                validate(answer: readonly any[]) {
+                    if (answer.length === 0) {
+                        return 'Please select at least one role'
+                    }
+
+                    return true
+                }
+            }) as string[]
+
+            return selectedRoleNames
+
+        } catch (error) {
+            this.jsonCtx.error(
+                'E900_CUBESIGNER_ERROR',
+                `Failed to list roles: ${error}`,
+                'INTERNAL',
+                false,
+                { error: String(error) }
+            )
+            return []
+        }
+    }
+
+    private async updateSetupDefaultsWithKeys(selectedRoles: any[], threshold: number) {
+        try {
+            this.jsonCtx.info('Updating setup_defaults.toml with attestation public keys...')
+
+            const setupDefaultsPath = getSetupDefaultsPath()
+
+            if (!fs.existsSync(setupDefaultsPath)) {
+                // Ensure the target directory exists
+                const targetDir = path.dirname(setupDefaultsPath)
+                if (!fs.existsSync(targetDir)) {
+                    fs.mkdirSync(targetDir, { recursive: true })
+                }
+
+                this.jsonCtx.info(`Creating setup defaults from embedded template at ${setupDefaultsPath}`)
+                fs.writeFileSync(setupDefaultsPath, SETUP_DEFAULTS_TEMPLATE)
+            }
+
+            // Read existing config file from user's working directory
+            const existingConfigStr = fs.readFileSync(setupDefaultsPath, 'utf8')
+            const setupConfig = toml.parse(existingConfigStr)
+
+            // Collect public keys from selected roles
+            const attestationPubkeys: string[] = []
+            for (const role of selectedRoles) {
+                if (role.keys && role.keys.length > 0) {
+                    const key = role.keys[0] // Use first key of each role
+                    attestationPubkeys.push(key.public_key.replace(/^0x/, ''))
+                }
+            }
+
+            // Update attestation_pubkeys array
+            setupConfig.attestation_pubkeys = attestationPubkeys
+
+            // Update attestation_key_count
+            setupConfig.attestation_key_count = attestationPubkeys.length
+
+            // Set attestation_threshold
+            const keyCount = attestationPubkeys.length
+            this.jsonCtx.info(`Configured ${keyCount} attestation keys.`)
+
+            setupConfig.attestation_threshold = threshold
+
+            // Write to setup_defaults.toml
+            fs.writeFileSync(setupDefaultsPath, toml.stringify(setupConfig))
+            this.jsonCtx.info(`Successfully updated ${setupDefaultsPath} with ${attestationPubkeys.length} attestation public keys`)
+            this.jsonCtx.info(`Updated attestation_key_count to ${keyCount} and attestation_threshold to ${threshold}`)
+
+            // Output JSON success response
+            this.jsonCtx.success({
+                attestationKeyCount: keyCount,
+                attestationPubkeys,
+                attestationThreshold: threshold,
+                dogeConfigFile: this.dogeConfigFile,
+                roles: selectedRoles.map(role => ({
+                    keyCount: role.keys?.length || 0,
+                    name: role.name,
+                    role_id: role.role_id
+                })),
+                rolesCount: selectedRoles.length,
+                setupDefaultsFile: setupDefaultsPath
+            })
+
+        } catch (error) {
+            this.jsonCtx.error(
+                'E900_CONFIG_UPDATE_ERROR',
+                `Failed to update setup_defaults.toml: ${error}`,
                 'INTERNAL',
                 false,
                 { error: String(error) }
@@ -488,120 +610,6 @@ export default class SetupCubesignerSetup extends Command {
             this.jsonCtx.error(
                 'E900_CUBESIGNER_ERROR',
                 `Failed to use existing roles: ${error}`,
-                'INTERNAL',
-                false,
-                { error: String(error) }
-            )
-        }
-    }
-
-    private async saveRolesToConfig(selectedRoles: any[], threshold: number) {
-        try {
-            this.jsonCtx.info('Saving roles to DogeConfig...')
-
-            // Convert selectedRoles to CubesignerRole format
-            const cubesignerRoles: CubesignerRole[] = selectedRoles.map(role => ({
-                role_id: role.role_id,
-                name: role.name,
-                keys: role.keys.map((key: any) => ({
-                    key_id: key.key_id,
-                    key_type: key.key_type,
-                    public_key: key.public_key,
-                    material_id: key.material_id,
-                    purpose: key.purpose
-                }))
-            }))
-
-            // Update DogeConfig
-            this.dogeConfig.cubesigner = {
-                roles: cubesignerRoles
-            }
-
-            // Write to file
-            fs.writeFileSync(this.dogeConfigFile, toml.stringify(this.dogeConfig as any))
-            this.jsonCtx.info(`Successfully saved ${cubesignerRoles.length} roles to ${this.dogeConfigFile}`)
-
-            // Update setup_defaults.toml with attestation public keys
-            await this.updateSetupDefaultsWithKeys(selectedRoles, threshold)
-
-        } catch (error) {
-            this.jsonCtx.error(
-                'E900_CONFIG_SAVE_ERROR',
-                `Failed to save roles to config: ${error}`,
-                'INTERNAL',
-                false,
-                { error: String(error) }
-            )
-        }
-    }
-
-    private async updateSetupDefaultsWithKeys(selectedRoles: any[], threshold: number) {
-        try {
-            this.jsonCtx.info('Updating setup_defaults.toml with attestation public keys...')
-
-            const setupDefaultsPath = getSetupDefaultsPath()
-
-            if (!fs.existsSync(setupDefaultsPath)) {
-                // Ensure the target directory exists
-                const targetDir = path.dirname(setupDefaultsPath)
-                if (!fs.existsSync(targetDir)) {
-                    fs.mkdirSync(targetDir, { recursive: true })
-                }
-
-                this.jsonCtx.info(`Creating setup defaults from embedded template at ${setupDefaultsPath}`)
-                fs.writeFileSync(setupDefaultsPath, SETUP_DEFAULTS_TEMPLATE)
-            }
-
-            // Read existing config file from user's working directory
-            const existingConfigStr = fs.readFileSync(setupDefaultsPath, 'utf-8')
-            let setupConfig = toml.parse(existingConfigStr)
-
-            // Collect public keys from selected roles
-            const attestationPubkeys: string[] = []
-            for (let i = 0; i < selectedRoles.length; i++) {
-                const role = selectedRoles[i]
-                if (role.keys && role.keys.length > 0) {
-                    const key = role.keys[0] // Use first key of each role
-                    attestationPubkeys.push(key.public_key.replace(/^0x/, ''))
-                }
-            }
-
-            // Update attestation_pubkeys array
-            setupConfig.attestation_pubkeys = attestationPubkeys
-
-            // Update attestation_key_count
-            setupConfig.attestation_key_count = attestationPubkeys.length
-
-            // Set attestation_threshold
-            const keyCount = attestationPubkeys.length
-            this.jsonCtx.info(`Configured ${keyCount} attestation keys.`)
-
-            setupConfig.attestation_threshold = threshold
-
-            // Write to setup_defaults.toml
-            fs.writeFileSync(setupDefaultsPath, toml.stringify(setupConfig))
-            this.jsonCtx.info(`Successfully updated ${setupDefaultsPath} with ${attestationPubkeys.length} attestation public keys`)
-            this.jsonCtx.info(`Updated attestation_key_count to ${keyCount} and attestation_threshold to ${threshold}`)
-
-            // Output JSON success response
-            this.jsonCtx.success({
-                dogeConfigFile: this.dogeConfigFile,
-                setupDefaultsFile: setupDefaultsPath,
-                rolesCount: selectedRoles.length,
-                attestationPubkeys,
-                attestationKeyCount: keyCount,
-                attestationThreshold: threshold,
-                roles: selectedRoles.map(role => ({
-                    role_id: role.role_id,
-                    name: role.name,
-                    keyCount: role.keys?.length || 0
-                }))
-            })
-
-        } catch (error) {
-            this.jsonCtx.error(
-                'E900_CONFIG_UPDATE_ERROR',
-                `Failed to update setup_defaults.toml: ${error}`,
                 'INTERNAL',
                 false,
                 { error: String(error) }

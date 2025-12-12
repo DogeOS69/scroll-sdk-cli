@@ -1,6 +1,6 @@
 /* eslint-disable max-depth */
-/* eslint-disable no-await-in-loop */
-/* eslint-disable complexity */
+ 
+ 
 /**
  * Wallet Sync Implementation
  *
@@ -21,7 +21,7 @@ import chalk from 'chalk'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { DogeConfig, DogeUTXO, DogeWallet } from '../../../types/doge-config.js'
+import { DogeUTXO, DogeWallet } from '../../../types/doge-config.js'
 import { loadDogeConfigWithSelection } from '../../../utils/doge-config.js'
 
 interface AddressTransactionVout {
@@ -89,7 +89,7 @@ export default class WalletSync extends Command {
 
     try {
 
-      const { config, configPath } = await loadDogeConfigWithSelection(
+      const { config } = await loadDogeConfigWithSelection(
         flags.config,
         'scrollsdk doge:config',
       )
@@ -104,7 +104,7 @@ export default class WalletSync extends Command {
       }
 
       let blockbookBaseUrl = config.rpc?.blockbookAPIUrl
-      //if not endiwith "/api/" or "/api" then add it
+      // if not endiwith "/api/" or "/api" then add it
       if (blockbookBaseUrl && !blockbookBaseUrl.endsWith('/api/') && !blockbookBaseUrl.endsWith('/api')){
         blockbookBaseUrl += '/api'
       }

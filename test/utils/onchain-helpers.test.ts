@@ -1,6 +1,6 @@
 import { expect } from 'chai';
-import sinon from 'sinon';
 import { JsonRpcProvider } from 'ethers';
+import sinon from 'sinon';
 
 import * as onchainHelpers from '../../src/utils/onchain/index.js';
 
@@ -61,7 +61,7 @@ describe('Onchain Helpers', () => {
       const result = await onchainHelpers.constructBlockExplorerUrl(
         '0x2e5166ad15b3d71bc4d489b25336e3d35c339d85ed905247b220d320bfe781c9',
         onchainHelpers.LookupType.TX,
-        { chainId: 11155111 }
+        { chainId: 11_155_111 }
       );
       expect(result).to.equal('https://sepolia.etherscan.io/tx/0x2e5166ad15b3d71bc4d489b25336e3d35c339d85ed905247b220d320bfe781c9');
     });
@@ -70,7 +70,7 @@ describe('Onchain Helpers', () => {
       const result = await onchainHelpers.constructBlockExplorerUrl(
         '0x1234567890abcdef',
         onchainHelpers.LookupType.ADDRESS,
-        { chainId: 534351 }
+        { chainId: 534_351 }
       );
       expect(result).to.equal('https://sepolia.scrollscan.com/address/0x1234567890abcdef');
     });

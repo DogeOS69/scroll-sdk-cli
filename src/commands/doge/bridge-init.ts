@@ -1,10 +1,10 @@
 import * as toml from '@iarna/toml'
 import { input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
-import chalk from 'chalk'
 import Docker from 'dockerode'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+
 import { getSetupDefaultsPath } from '../../config/constants.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 
@@ -21,28 +21,209 @@ export class BridgeInitCommand extends Command {
     ]
 
     static flags = {
-        seed: Flags.string({
-            char: 's',
-            description: 'seed which will regenerate the sequencer and fee wallet',
-        }),
         'image-tag': Flags.string({
             description: 'Specify the Docker image tag to use (defaults to 0.2.0-rc.3)',
             required: false,
         }),
+        'json': Flags.boolean({
+            default: false,
+            description: 'Output in JSON format (stdout for data, stderr for logs)',
+        }),
         'non-interactive': Flags.boolean({
             char: 'N',
+            default: false,
             description: 'Run without prompts. Requires --seed flag.',
-            default: false,
         }),
-        'json': Flags.boolean({
-            description: 'Output in JSON format (stdout for data, stderr for logs)',
-            default: false,
+        seed: Flags.string({
+            char: 's',
+            description: 'seed which will regenerate the sequencer and fee wallet',
         }),
     }
 
-    private nonInteractive: boolean = false
-    private jsonMode: boolean = false
     private jsonCtx!: JsonOutputContext
+    private jsonMode: boolean = false
+    private nonInteractive: boolean = false
+
+    async run(): Promise<void> {
+        const { flags } = await this.parse(BridgeInitCommand)
+
+        this.nonInteractive = flags['non-interactive']
+        this.jsonMode = flags.json
+        this.jsonCtx = new JsonOutputContext('doge bridge-init', this.jsonMode)
+
+        let {seed} = flags
+        let imageTag = flags['image-tag']
+
+        // In non-interactive mode, require seed
+        if (this.nonInteractive && !seed) {
+            this.jsonCtx.error(
+                'E601_MISSING_FIELD',
+                '--seed flag is required in non-interactive mode',
+                'CONFIGURATION',
+                true,
+                { flag: '--seed' }
+            )
+        }
+
+        // Read existing seed from setup_defaults.toml
+        const setupDefaultsPath = getSetupDefaultsPath();
+        if (!fs.existsSync(setupDefaultsPath)) {
+            this.jsonCtx.error(
+                'E103_DOGE_CONFIG_MISSING',
+                'setup_defaults.toml not found, please run `scrollsdk doge:config` first',
+                'CONFIGURATION',
+                true,
+                { path: setupDefaultsPath }
+            )
+            return
+        }
+
+        const existingConfigStr = fs.readFileSync(setupDefaultsPath, 'utf8');
+        const existingConfig = toml.parse(existingConfigStr) as any;
+        const existingSeed = existingConfig.seed_string || '';
+
+        if (!seed) {
+            seed = await input({
+                default: existingSeed,
+                message: 'Enter the seed string',
+            })
+        }
+
+        const configPath = path.join(process.cwd(), 'config.toml')
+        let configData: any;
+        if (fs.existsSync(configPath)) {
+            const configContent = fs.readFileSync(configPath, 'utf8')
+            configData = toml.parse(configContent)
+        } else {
+            this.jsonCtx.addWarning('config.toml not found. Some values may not be populated correctly.')
+        }
+
+        const newConfig = toml.parse(existingConfigStr);
+        newConfig.seed_string = seed;
+        newConfig.deposit_eth_recipient_address_hex = this.getNestedValue(configData, "accounts.DEPLOYER_ADDR")
+        fs.writeFileSync(setupDefaultsPath, toml.stringify(newConfig));
+
+        imageTag = await this.getDockerImageTag(imageTag)
+        this.jsonCtx.info(`Using Docker image tag: ${imageTag}`)
+        await this.runGenerateTestKeys(imageTag);
+
+        // Move output files to .data directory
+        const dataDir = path.join(process.cwd(), '.data');
+        const outputFiles = [
+            'output-withdrawal-processor.toml',
+            'output-dummy-signer-keys.json',
+            'output-test-data.json'
+        ];
+
+        // Create .data directory if it doesn't exist
+        if (!fs.existsSync(dataDir)) {
+            fs.mkdirSync(dataDir, { recursive: true });
+        }
+
+        const movedFiles: string[] = []
+        for (const fileName of outputFiles) {
+            const sourceFile = path.join(process.cwd(), fileName);
+            const targetFile = path.join(dataDir, fileName);
+
+            if (fs.existsSync(sourceFile)) {
+                fs.renameSync(sourceFile, targetFile);
+                this.jsonCtx.info(`Moved ${fileName} to .data directory`);
+                movedFiles.push(targetFile)
+            }
+        }
+
+        // JSON success output
+        this.jsonCtx.success({
+            imageTag,
+            outputFiles: movedFiles,
+            seed,
+            setupDefaultsPath
+        })
+    }
+
+    async runGenerateTestKeys(imageTag: string): Promise<void> {
+        const docker = new Docker();
+        const image = `docker.io/dogeos69/generate-test-keys:${imageTag}`;
+        try {
+            this.jsonCtx.info(`Pulling Docker Image: ${image}`)
+            // Pull the image if it doesn't exist locally
+            const pullStream = await docker.pull(image)
+            await new Promise((resolve, reject) => {
+                docker.modem.followProgress(pullStream, (err, res) => {
+                    if (err) {
+                        reject(err)
+                    } else {
+                        this.jsonCtx.info('Image pulled successfully')
+                        resolve(res)
+                    }
+                })
+            })
+
+            this.jsonCtx.info('Creating Docker Container...')
+            // Create and run the container
+            const container = await docker.createContainer({
+                Cmd: [], // Add any command if needed
+                HostConfig: {
+                    Binds: [`${process.cwd()}:/app`],
+                },
+                Image: image,
+                WorkingDir: '/app',
+            })
+
+            this.jsonCtx.info('Starting Container')
+            await container.start()
+
+            // Wait for the container to finish and get the logs
+            const stream = await container.logs({
+                follow: true,
+                stderr: true,
+                stdout: true,
+            })
+
+            // Print logs to stderr in JSON mode, stdout otherwise
+            if (this.jsonMode) {
+                stream.pipe(process.stderr)
+            } else {
+                stream.pipe(process.stdout)
+            }
+
+            // Wait for the container to finish
+            await new Promise((resolve) => {
+                container.wait((err, data) => {
+                    if (err) {
+                        this.jsonCtx.error(
+                            'E401_DOCKER_CONTAINER_FAILED',
+                            `Container exited with error: ${err}`,
+                            'DOCKER',
+                            false,
+                            { error: String(err) }
+                        )
+                    } else if (data.StatusCode !== 0) {
+                        this.jsonCtx.error(
+                            'E401_DOCKER_CONTAINER_FAILED',
+                            `Container exited with status code: ${data.StatusCode}`,
+                            'DOCKER',
+                            false,
+                            { statusCode: data.StatusCode }
+                        )
+                    }
+
+                    resolve(null)
+                })
+            })
+
+            // Remove the container
+            await container.remove()
+        } catch (error) {
+            this.jsonCtx.error(
+                'E401_DOCKER_CONTAINER_FAILED',
+                `Failed to run Docker command: ${error}`,
+                'DOCKER',
+                false,
+                { error: String(error) }
+            )
+        }
+    }
 
     private async fetchDockerTags(): Promise<string[]> {
         try {
@@ -94,7 +275,7 @@ export class BridgeInitCommand extends Command {
                 `Docker image tag "${providedTag}" not found. Available tags include: ${tags.slice(0, 5).join(', ')}...`,
                 'DOCKER',
                 true,
-                { providedTag, availableTags: tags }
+                { availableTags: tags, providedTag }
             )
         }
 
@@ -106,187 +287,8 @@ export class BridgeInitCommand extends Command {
         return selectedTag
     }
 
-    async runGenerateTestKeys(imageTag: string): Promise<void> {
-        const docker = new Docker();
-        const image = `docker.io/dogeos69/generate-test-keys:${imageTag}`;
-        try {
-            this.jsonCtx.info(`Pulling Docker Image: ${image}`)
-            // Pull the image if it doesn't exist locally
-            const pullStream = await docker.pull(image)
-            await new Promise((resolve, reject) => {
-                docker.modem.followProgress(pullStream, (err, res) => {
-                    if (err) {
-                        reject(err)
-                    } else {
-                        this.jsonCtx.info('Image pulled successfully')
-                        resolve(res)
-                    }
-                })
-            })
-
-            this.jsonCtx.info('Creating Docker Container...')
-            // Create and run the container
-            const container = await docker.createContainer({
-                Cmd: [], // Add any command if needed
-                HostConfig: {
-                    Binds: [`${process.cwd()}:/app`],
-                },
-                WorkingDir: '/app',
-                Image: image,
-            })
-
-            this.jsonCtx.info('Starting Container')
-            await container.start()
-
-            // Wait for the container to finish and get the logs
-            const stream = await container.logs({
-                follow: true,
-                stderr: true,
-                stdout: true,
-            })
-
-            // Print logs to stderr in JSON mode, stdout otherwise
-            if (this.jsonMode) {
-                stream.pipe(process.stderr)
-            } else {
-                stream.pipe(process.stdout)
-            }
-
-            // Wait for the container to finish
-            await new Promise((resolve) => {
-                container.wait((err, data) => {
-                    if (err) {
-                        this.jsonCtx.error(
-                            'E401_DOCKER_CONTAINER_FAILED',
-                            `Container exited with error: ${err}`,
-                            'DOCKER',
-                            false,
-                            { error: String(err) }
-                        )
-                    } else if (data.StatusCode !== 0) {
-                        this.jsonCtx.error(
-                            'E401_DOCKER_CONTAINER_FAILED',
-                            `Container exited with status code: ${data.StatusCode}`,
-                            'DOCKER',
-                            false,
-                            { statusCode: data.StatusCode }
-                        )
-                    }
-                    resolve(null)
-                })
-            })
-
-            // Remove the container
-            await container.remove()
-        } catch (error) {
-            this.jsonCtx.error(
-                'E401_DOCKER_CONTAINER_FAILED',
-                `Failed to run Docker command: ${error}`,
-                'DOCKER',
-                false,
-                { error: String(error) }
-            )
-        }
-    }
-
     private getNestedValue(obj: any, path: string): any {
         return path.split('.').reduce((prev, curr) => prev && prev[curr], obj)
-    }
-
-    async run(): Promise<void> {
-        const { flags } = await this.parse(BridgeInitCommand)
-
-        this.nonInteractive = flags['non-interactive']
-        this.jsonMode = flags.json
-        this.jsonCtx = new JsonOutputContext('doge bridge-init', this.jsonMode)
-
-        let seed = flags.seed
-        let imageTag = flags['image-tag']
-
-        // In non-interactive mode, require seed
-        if (this.nonInteractive && !seed) {
-            this.jsonCtx.error(
-                'E601_MISSING_FIELD',
-                '--seed flag is required in non-interactive mode',
-                'CONFIGURATION',
-                true,
-                { flag: '--seed' }
-            )
-        }
-
-        // Read existing seed from setup_defaults.toml
-        const setupDefaultsPath = getSetupDefaultsPath();
-        if (!fs.existsSync(setupDefaultsPath)) {
-            this.jsonCtx.error(
-                'E103_DOGE_CONFIG_MISSING',
-                'setup_defaults.toml not found, please run `scrollsdk doge:config` first',
-                'CONFIGURATION',
-                true,
-                { path: setupDefaultsPath }
-            )
-            return
-        }
-        const existingConfigStr = fs.readFileSync(setupDefaultsPath, 'utf-8');
-        const existingConfig = toml.parse(existingConfigStr) as any;
-        const existingSeed = existingConfig.seed_string || '';
-
-        if (!seed) {
-            seed = await input({
-                message: 'Enter the seed string',
-                default: existingSeed,
-            })
-        }
-
-        const configPath = path.join(process.cwd(), 'config.toml')
-        let configData: any;
-        if (fs.existsSync(configPath)) {
-            const configContent = fs.readFileSync(configPath, 'utf-8')
-            configData = toml.parse(configContent)
-        } else {
-            this.jsonCtx.addWarning('config.toml not found. Some values may not be populated correctly.')
-        }
-
-        let newConfig = toml.parse(existingConfigStr);
-        newConfig.seed_string = seed;
-        newConfig.deposit_eth_recipient_address_hex = this.getNestedValue(configData, "accounts.DEPLOYER_ADDR")
-        fs.writeFileSync(setupDefaultsPath, toml.stringify(newConfig));
-
-        imageTag = await this.getDockerImageTag(imageTag)
-        this.jsonCtx.info(`Using Docker image tag: ${imageTag}`)
-        await this.runGenerateTestKeys(imageTag);
-
-        // Move output files to .data directory
-        const dataDir = path.join(process.cwd(), '.data');
-        const outputFiles = [
-            'output-withdrawal-processor.toml',
-            'output-dummy-signer-keys.json',
-            'output-test-data.json'
-        ];
-
-        // Create .data directory if it doesn't exist
-        if (!fs.existsSync(dataDir)) {
-            fs.mkdirSync(dataDir, { recursive: true });
-        }
-
-        const movedFiles: string[] = []
-        for (const fileName of outputFiles) {
-            const sourceFile = path.join(process.cwd(), fileName);
-            const targetFile = path.join(dataDir, fileName);
-
-            if (fs.existsSync(sourceFile)) {
-                fs.renameSync(sourceFile, targetFile);
-                this.jsonCtx.info(`Moved ${fileName} to .data directory`);
-                movedFiles.push(targetFile)
-            }
-        }
-
-        // JSON success output
-        this.jsonCtx.success({
-            seed,
-            imageTag,
-            setupDefaultsPath,
-            outputFiles: movedFiles
-        })
     }
 }
 export default BridgeInitCommand

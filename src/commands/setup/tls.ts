@@ -1,11 +1,12 @@
-import { Command, Flags } from '@oclif/core'
-import * as fs from 'fs'
-import * as path from 'path'
-import * as yaml from 'js-yaml'
-import chalk from 'chalk'
-import { exec } from 'child_process'
-import { promisify } from 'util'
 import { confirm, input, select } from '@inquirer/prompts'
+import { Command, Flags } from '@oclif/core'
+import chalk from 'chalk'
+import * as yaml from 'js-yaml'
+import { exec } from 'node:child_process'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+import { promisify } from 'node:util'
+
 import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 
@@ -24,407 +25,44 @@ export default class SetupTls extends Command {
   ]
 
   static override flags = {
-    debug: Flags.boolean({
-      char: 'd',
-      description: 'Show debug output and confirm before making changes',
-      default: false,
-    }),
-    'values-dir': Flags.string({
-      description: 'Directory containing the values files',
-      default: 'values',
-    }),
     'cluster-issuer': Flags.string({
       description: 'Specify the ClusterIssuer to use (for non-interactive mode)',
       required: false,
     }),
     'create-issuer': Flags.boolean({
-      description: 'Create a letsencrypt-prod ClusterIssuer if none exists (for non-interactive mode)',
       default: false,
+      description: 'Create a letsencrypt-prod ClusterIssuer if none exists (for non-interactive mode)',
+    }),
+    debug: Flags.boolean({
+      char: 'd',
+      default: false,
+      description: 'Show debug output and confirm before making changes',
     }),
     'issuer-email': Flags.string({
       description: 'Email address for the ClusterIssuer (required with --create-issuer)',
       required: false,
     }),
+    'json': Flags.boolean({
+      default: false,
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
+    }),
     'non-interactive': Flags.boolean({
       char: 'N',
+      default: false,
       description: 'Run without prompts. Requires --cluster-issuer or (--create-issuer with --issuer-email)',
-      default: false,
     }),
-    'json': Flags.boolean({
-      description: 'Output in JSON format (stdout for data, stderr for logs)',
-      default: false,
+    'values-dir': Flags.string({
+      default: 'values',
+      description: 'Directory containing the values files',
     }),
   }
 
-  private selectedIssuer: string | null = null
   private debugMode: boolean = false
-  private valuesDir: string = 'values'
-  private nonInteractive: boolean = false
-  private jsonMode: boolean = false
   private jsonCtx!: JsonOutputContext
-
-  // Handle celestia and dogecoin TLS processing
-  private processStandardTls(yamlContent: any, chart: string, issuer: string): boolean {
-    let ingress = yamlContent.ingress;
-    let updated = false;
-
-    // Add cert-manager annotation
-    if (!ingress.annotations) {
-      ingress.annotations = {};
-    }
-    if (ingress.annotations['cert-manager.io/cluster-issuer'] !== issuer) {
-      ingress.annotations['cert-manager.io/cluster-issuer'] = issuer;
-      updated = true;
-    }
-
-    // Handle TLS configuration
-    if (ingress.tls && ingress.tls.length > 0) {
-      ingress.tls.forEach((tlsConfig: any) => {
-        for (let i = 0; i < ingress.hosts.length; i++) {
-          if (tlsConfig.hosts[i] != ingress.hosts[i].host) {
-            tlsConfig.hosts[i] = ingress.hosts[i].host;
-            updated = true;
-          }
-        }
-      });
-    } else {
-      ingress.tls = [{
-        secretName: `${chart}-tls`,
-        hosts: []
-      }];
-      for (let i = 0; i < ingress.hosts.length; i++) {
-        ingress.tls[0].hosts.push(ingress.hosts[i].host);
-      }
-      updated = true;
-    }
-
-    return updated;
-  }
-
-  private async checkClusterIssuer(specifiedIssuer?: string): Promise<boolean> {
-    try {
-      const { stdout } = await execAsync('kubectl get clusterissuer -o jsonpath="{.items[*].metadata.name}"')
-      const clusterIssuers = stdout.trim().split(' ').filter(Boolean)
-
-      if (clusterIssuers.length > 0) {
-        this.jsonCtx.info('Found ClusterIssuer(s):')
-        clusterIssuers.forEach(issuer => this.jsonCtx.info(`  - ${issuer}`))
-
-        // If a specific issuer was specified via flag, use it
-        if (specifiedIssuer) {
-          if (clusterIssuers.includes(specifiedIssuer)) {
-            this.selectedIssuer = specifiedIssuer
-            return true
-          } else {
-            this.jsonCtx.error(
-              'E501_CLUSTER_ISSUER_NOT_FOUND',
-              `Specified ClusterIssuer "${specifiedIssuer}" not found. Available: ${clusterIssuers.join(', ')}`,
-              'KUBERNETES',
-              true,
-              { specifiedIssuer, available: clusterIssuers }
-            )
-          }
-        }
-
-        // Non-interactive mode without specified issuer - use first one
-        if (this.nonInteractive) {
-          this.selectedIssuer = clusterIssuers[0]
-          this.jsonCtx.info(`Using first available ClusterIssuer: ${this.selectedIssuer}`)
-          return true
-        }
-
-        if (clusterIssuers.length === 1) {
-          const useExisting = await confirm({
-            message: chalk.yellow(`Do you want to use the existing ClusterIssuer "${clusterIssuers[0]}"?`),
-          })
-          if (useExisting) {
-            this.selectedIssuer = clusterIssuers[0]
-            return true
-          }
-          return false
-        } else {
-          this.selectedIssuer = await select({
-            message: chalk.yellow('Select which ClusterIssuer you want to use:'),
-            choices: clusterIssuers.map(issuer => ({ name: issuer, value: issuer })),
-          })
-          return true
-        }
-      } else {
-        this.jsonCtx.info('No ClusterIssuer found in the cluster.')
-        return false
-      }
-    } catch (error) {
-      this.jsonCtx.info(`Error checking for ClusterIssuer: ${error}`)
-      return false
-    }
-  }
-
-  private async createClusterIssuer(email: string): Promise<void> {
-    const clusterIssuerYaml = `
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-prod
-spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: ${email}
-    privateKeySecretRef:
-      name: letsencrypt-prod
-    solvers:
-      - http01:
-          ingress:
-            class: nginx
-`
-
-    try {
-      await fs.promises.writeFile('cluster-issuer.yaml', clusterIssuerYaml)
-      await execAsync('kubectl apply -f cluster-issuer.yaml')
-      await fs.promises.unlink('cluster-issuer.yaml')
-      this.jsonCtx.info('ClusterIssuer created successfully.')
-    } catch (error) {
-      this.jsonCtx.error(
-        'E502_CLUSTER_ISSUER_CREATE_FAILED',
-        `Failed to create ClusterIssuer: ${error}`,
-        'KUBERNETES',
-        false,
-        { error: String(error) }
-      )
-    }
-  }
-
-  private async loadConfig(): Promise<any> {
-    // TODO: Implement loading of config.yaml
-  }
-
-  private async updateChartIngress(chart: string, issuer: string): Promise<boolean> {
-    const yamlPath = path.join(process.cwd(), this.valuesDir, `${chart}-production.yaml`)
-
-    if (!fs.existsSync(yamlPath)) {
-      this.jsonCtx.info(`${chart}-production.yaml not found in ${this.valuesDir} directory`)
-      return false
-    }
-
-    try {
-      const content = fs.readFileSync(yamlPath, 'utf8')
-      const yamlContent: any = yaml.load(content)
-
-      const ingressTypes = ['main', 'websocket']
-      let updated = false
-
-
-      /*
-      grafana:
-        ingress:
-          enabled: true
-          annotations:
-            kubernetes.io/ingress.class: "nginx"
-            nginx.ingress.kubernetes.io/ssl-redirect: "true"
-          tls:
-            - secretName: admin-system-dashboard-tls
-              hosts:
-                - grafana.scsdk.unifra.xyz
-          hosts:
-            - grafana.scsdk.unifra.xyz
-      */
-      if (yamlContent.grafana && yamlContent.grafana.ingress) {
-        const originalContent = yaml.dump(yamlContent.grafana.ingress, YAML_DUMP_OPTIONS)
-        let ingressUpdated = false;
-        let ingress = yamlContent.grafana.ingress;
-        if (!ingress.annotations) {
-          ingress.annotations = {};
-        }
-
-        if (ingress.annotations['cert-manager.io/cluster-issuer'] !== issuer) {
-          ingress.annotations['cert-manager.io/cluster-issuer'] = issuer
-          ingressUpdated = true
-        }
-
-
-        // Update or add TLS configuration
-        if (ingress.hosts && ingress.hosts.length > 0) {
-          const firstHost = ingress.hosts[0];
-          if (typeof firstHost === 'string') {
-            const hostname = firstHost
-            const secretName = `${chart}-grafana-tls`;
-            //const secretName = ingressType === 'main' ? `${chart}-tls` : `${chart}-${ingressType}-tls`
-
-            if (!ingress.tls) {
-              ingress.tls = [{
-                secretName: secretName,
-                hosts: [hostname],
-              }]
-              ingressUpdated = true
-            } else if (ingress.tls.length === 0) {
-              ingress.tls.push({
-                secretName: secretName,
-                hosts: [hostname],
-              })
-              ingressUpdated = true
-            } else {
-              // Update existing TLS configuration
-              ingress.tls.forEach((tlsConfig: any) => {
-                if (!tlsConfig.secretName || tlsConfig.secretName !== secretName) {
-                  tlsConfig.secretName = secretName
-                  ingressUpdated = true
-                }
-                if (!tlsConfig.hosts || !tlsConfig.hosts.includes(hostname)) {
-                  tlsConfig.hosts = [hostname]
-                  ingressUpdated = true
-                }
-              })
-            }
-          }
-        }
-
-        if (ingressUpdated) {
-          updated = true
-          const updatedContent = yaml.dump(ingress, YAML_DUMP_OPTIONS)
-
-          if (this.debugMode && !this.nonInteractive) {
-            this.jsonCtx.info(`\nProposed changes for ${chart} :`)
-            this.jsonCtx.info('- Original content:')
-            this.jsonCtx.info(originalContent)
-            this.jsonCtx.info('+ Updated content:')
-            this.jsonCtx.info(updatedContent)
-
-            const confirmUpdate = await confirm({
-              message: chalk.cyan(`Do you want to apply these changes to ${chart}?`),
-            })
-
-            if (!confirmUpdate) {
-              this.jsonCtx.info(`Skipped updating ${chart}`);
-            }
-          }
-
-          this.jsonCtx.info(`Updated TLS configuration for ${chart} `)
-        } else {
-          this.jsonCtx.info(`No changes needed for ${chart} ()`)
-        }
-
-      }
-
-      if (yamlContent["blockscout-stack"]) {
-
-        let blockscoutStack = yamlContent["blockscout-stack"];
-        let items = ["blockscout", "frontend"];
-        for (const item of items) {
-          if (blockscoutStack[item]?.ingress?.tls) {
-            blockscoutStack[item].ingress.tls.enabled = true;
-            updated = true;
-          }
-        }
-      } else if (chart == "celestia-node") {
-        if (yamlContent.ingress) {
-          const celestiaUpdated = this.processStandardTls(yamlContent, chart, issuer);
-          if (celestiaUpdated) {
-            updated = true;
-          }
-        }
-      } else if (chart == "dogecoin") {
-        if (yamlContent.ingress) {
-          const dogecoinUpdated = this.processStandardTls(yamlContent, chart, issuer);
-          if (dogecoinUpdated) {
-            updated = true;
-          }
-        }
-      } else if (chart == "blockbook") {
-        if (yamlContent.ingress) {
-          const blockbookUpdated = this.processStandardTls(yamlContent, chart, issuer);
-          if (blockbookUpdated) {
-            updated = true;
-          }
-        }
-      }
-
-      for (const ingressType of ingressTypes) {
-        if (yamlContent.ingress?.[ingressType]) {
-          const originalContent = yaml.dump(yamlContent.ingress[ingressType], YAML_DUMP_OPTIONS)
-          let ingressUpdated = false
-
-          // Add or update annotation
-          if (!yamlContent.ingress[ingressType].annotations) {
-            yamlContent.ingress[ingressType].annotations = {}
-          }
-          if (yamlContent.ingress[ingressType].annotations['cert-manager.io/cluster-issuer'] !== issuer) {
-            yamlContent.ingress[ingressType].annotations['cert-manager.io/cluster-issuer'] = issuer
-            ingressUpdated = true
-          }
-
-          // Update or add TLS configuration
-          if (yamlContent.ingress[ingressType].hosts && yamlContent.ingress[ingressType].hosts.length > 0) {
-            const firstHost = yamlContent.ingress[ingressType].hosts[0]
-            if (typeof firstHost === 'object' && firstHost.host) {
-              const hostname = firstHost.host
-              const secretName = ingressType === 'main' ? `${chart}-tls` : `${chart}-${ingressType}-tls`
-
-              if (!yamlContent.ingress[ingressType].tls) {
-                yamlContent.ingress[ingressType].tls = [{
-                  secretName: secretName,
-                  hosts: [hostname],
-                }]
-                ingressUpdated = true
-              } else if (yamlContent.ingress[ingressType].tls.length === 0) {
-                yamlContent.ingress[ingressType].tls.push({
-                  secretName: secretName,
-                  hosts: [hostname],
-                })
-                ingressUpdated = true
-              } else {
-                // Update existing TLS configuration
-                yamlContent.ingress[ingressType].tls.forEach((tlsConfig: any) => {
-                  if (!tlsConfig.secretName || tlsConfig.secretName !== secretName) {
-                    tlsConfig.secretName = secretName
-                    ingressUpdated = true
-                  }
-                  if (!tlsConfig.hosts || !tlsConfig.hosts.includes(hostname)) {
-                    tlsConfig.hosts = [hostname]
-                    ingressUpdated = true
-                  }
-                })
-              }
-            }
-          }
-
-          if (ingressUpdated) {
-            updated = true
-            const updatedContent = yaml.dump(yamlContent.ingress[ingressType], YAML_DUMP_OPTIONS)
-
-            if (this.debugMode && !this.nonInteractive) {
-              this.jsonCtx.info(`\nProposed changes for ${chart} (${ingressType}):`)
-              this.jsonCtx.info('- Original content:')
-              this.jsonCtx.info(originalContent)
-              this.jsonCtx.info('+ Updated content:')
-              this.jsonCtx.info(updatedContent)
-
-              const confirmUpdate = await confirm({
-                message: chalk.cyan(`Do you want to apply these changes to ${chart} (${ingressType})?`),
-              })
-
-              if (!confirmUpdate) {
-                this.jsonCtx.info(`Skipped updating ${chart} (${ingressType})`)
-                continue
-              }
-            }
-
-            this.jsonCtx.info(`Updated TLS configuration for ${chart} (${ingressType})`)
-          } else {
-            this.jsonCtx.info(`No changes needed for ${chart} (${ingressType})`)
-          }
-        }
-      }
-
-      if (updated) {
-        // Write updated YAML back to file
-        const updatedYamlContent = yaml.dump(yamlContent, YAML_DUMP_OPTIONS)
-        fs.writeFileSync(yamlPath, updatedYamlContent)
-      }
-      return updated
-    } catch (error) {
-      this.jsonCtx.info(`Failed to update ${chart}: ${error}`)
-      return false
-    }
-  }
+  private jsonMode: boolean = false
+  private nonInteractive: boolean = false
+  private selectedIssuer: null | string = null
+  private valuesDir: string = 'values'
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupTls)
@@ -447,6 +85,7 @@ spec:
           { requiredFlags: ['--cluster-issuer', '--create-issuer'] }
         )
       }
+
       if (flags['create-issuer'] && !flags['issuer-email']) {
         this.jsonCtx.error(
           'E601_MISSING_FIELD',
@@ -486,10 +125,11 @@ spec:
           if (createIssuer) {
             const email = await input({
               message: chalk.cyan('Enter your email address for the ClusterIssuer:'),
-              validate: (value) => {
+              validate(value) {
                 if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
                   return 'Please enter a valid email address.'
                 }
+
                 return true
               },
             })
@@ -548,9 +188,9 @@ spec:
       // JSON success output
       this.jsonCtx.success({
         clusterIssuer: this.selectedIssuer,
-        valuesDir: this.valuesDir,
+        skippedCharts,
         updatedCharts,
-        skippedCharts
+        valuesDir: this.valuesDir
       })
     } catch (error) {
       this.jsonCtx.error(
@@ -560,6 +200,377 @@ spec:
         false,
         { error: String(error) }
       )
+    }
+  }
+
+  private async checkClusterIssuer(specifiedIssuer?: string): Promise<boolean> {
+    try {
+      const { stdout } = await execAsync('kubectl get clusterissuer -o jsonpath="{.items[*].metadata.name}"')
+      const clusterIssuers = stdout.trim().split(' ').filter(Boolean)
+
+      if (clusterIssuers.length > 0) {
+        this.jsonCtx.info('Found ClusterIssuer(s):')
+        for (const issuer of clusterIssuers) this.jsonCtx.info(`  - ${issuer}`)
+
+        // If a specific issuer was specified via flag, use it
+        if (specifiedIssuer) {
+          if (clusterIssuers.includes(specifiedIssuer)) {
+            this.selectedIssuer = specifiedIssuer
+            return true
+          }
+ 
+            this.jsonCtx.error(
+              'E501_CLUSTER_ISSUER_NOT_FOUND',
+              `Specified ClusterIssuer "${specifiedIssuer}" not found. Available: ${clusterIssuers.join(', ')}`,
+              'KUBERNETES',
+              true,
+              { available: clusterIssuers, specifiedIssuer }
+            )
+          
+        }
+
+        // Non-interactive mode without specified issuer - use first one
+        if (this.nonInteractive) {
+          this.selectedIssuer = clusterIssuers[0]
+          this.jsonCtx.info(`Using first available ClusterIssuer: ${this.selectedIssuer}`)
+          return true
+        }
+
+        if (clusterIssuers.length === 1) {
+          const useExisting = await confirm({
+            message: chalk.yellow(`Do you want to use the existing ClusterIssuer "${clusterIssuers[0]}"?`),
+          })
+          if (useExisting) {
+            this.selectedIssuer = clusterIssuers[0]
+            return true
+          }
+
+          return false
+        }
+ 
+          this.selectedIssuer = await select({
+            choices: clusterIssuers.map(issuer => ({ name: issuer, value: issuer })),
+            message: chalk.yellow('Select which ClusterIssuer you want to use:'),
+          })
+          return true
+        
+      }
+ 
+        this.jsonCtx.info('No ClusterIssuer found in the cluster.')
+        return false
+      
+    } catch (error) {
+      this.jsonCtx.info(`Error checking for ClusterIssuer: ${error}`)
+      return false
+    }
+  }
+
+  private async createClusterIssuer(email: string): Promise<void> {
+    const clusterIssuerYaml = `
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: ${email}
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    solvers:
+      - http01:
+          ingress:
+            class: nginx
+`
+
+    try {
+      await fs.promises.writeFile('cluster-issuer.yaml', clusterIssuerYaml)
+      await execAsync('kubectl apply -f cluster-issuer.yaml')
+      await fs.promises.unlink('cluster-issuer.yaml')
+      this.jsonCtx.info('ClusterIssuer created successfully.')
+    } catch (error) {
+      this.jsonCtx.error(
+        'E502_CLUSTER_ISSUER_CREATE_FAILED',
+        `Failed to create ClusterIssuer: ${error}`,
+        'KUBERNETES',
+        false,
+        { error: String(error) }
+      )
+    }
+  }
+
+  private async loadConfig(): Promise<any> {
+    // TODO: Implement loading of config.yaml
+  }
+
+  // Handle celestia and dogecoin TLS processing
+  private processStandardTls(yamlContent: any, chart: string, issuer: string): boolean {
+    const {ingress} = yamlContent;
+    let updated = false;
+
+    // Add cert-manager annotation
+    if (!ingress.annotations) {
+      ingress.annotations = {};
+    }
+
+    if (ingress.annotations['cert-manager.io/cluster-issuer'] !== issuer) {
+      ingress.annotations['cert-manager.io/cluster-issuer'] = issuer;
+      updated = true;
+    }
+
+    // Handle TLS configuration
+    if (ingress.tls && ingress.tls.length > 0) {
+      ingress.tls.forEach((tlsConfig: any) => {
+        for (let i = 0; i < ingress.hosts.length; i++) {
+          if (tlsConfig.hosts[i] !== ingress.hosts[i].host) {
+            tlsConfig.hosts[i] = ingress.hosts[i].host;
+            updated = true;
+          }
+        }
+      });
+    } else {
+      ingress.tls = [{
+        hosts: [],
+        secretName: `${chart}-tls`
+      }];
+      for (let i = 0; i < ingress.hosts.length; i++) {
+        ingress.tls[0].hosts.push(ingress.hosts[i].host);
+      }
+
+      updated = true;
+    }
+
+    return updated;
+  }
+
+  private async updateChartIngress(chart: string, issuer: string): Promise<boolean> {
+    const yamlPath = path.join(process.cwd(), this.valuesDir, `${chart}-production.yaml`)
+
+    if (!fs.existsSync(yamlPath)) {
+      this.jsonCtx.info(`${chart}-production.yaml not found in ${this.valuesDir} directory`)
+      return false
+    }
+
+    try {
+      const content = fs.readFileSync(yamlPath, 'utf8')
+      const yamlContent: any = yaml.load(content)
+
+      const ingressTypes = ['main', 'websocket']
+      let updated = false
+
+
+      /*
+      grafana:
+        ingress:
+          enabled: true
+          annotations:
+            kubernetes.io/ingress.class: "nginx"
+            nginx.ingress.kubernetes.io/ssl-redirect: "true"
+          tls:
+            - secretName: admin-system-dashboard-tls
+              hosts:
+                - grafana.scsdk.unifra.xyz
+          hosts:
+            - grafana.scsdk.unifra.xyz
+      */
+      if (yamlContent.grafana && yamlContent.grafana.ingress) {
+        const originalContent = yaml.dump(yamlContent.grafana.ingress, YAML_DUMP_OPTIONS)
+        let ingressUpdated = false;
+        const {ingress} = yamlContent.grafana;
+        if (!ingress.annotations) {
+          ingress.annotations = {};
+        }
+
+        if (ingress.annotations['cert-manager.io/cluster-issuer'] !== issuer) {
+          ingress.annotations['cert-manager.io/cluster-issuer'] = issuer
+          ingressUpdated = true
+        }
+
+
+        // Update or add TLS configuration
+        if (ingress.hosts && ingress.hosts.length > 0) {
+          const firstHost = ingress.hosts[0];
+          if (typeof firstHost === 'string') {
+            const hostname = firstHost
+            const secretName = `${chart}-grafana-tls`;
+            // const secretName = ingressType === 'main' ? `${chart}-tls` : `${chart}-${ingressType}-tls`
+
+            if (!ingress.tls) {
+              ingress.tls = [{
+                hosts: [hostname],
+                secretName,
+              }]
+              ingressUpdated = true
+            } else if (ingress.tls.length === 0) {
+              ingress.tls.push({
+                hosts: [hostname],
+                secretName,
+              })
+              ingressUpdated = true
+            } else {
+              // Update existing TLS configuration
+              ingress.tls.forEach((tlsConfig: any) => {
+                if (!tlsConfig.secretName || tlsConfig.secretName !== secretName) {
+                  tlsConfig.secretName = secretName
+                  ingressUpdated = true
+                }
+
+                if (!tlsConfig.hosts || !tlsConfig.hosts.includes(hostname)) {
+                  tlsConfig.hosts = [hostname]
+                  ingressUpdated = true
+                }
+              })
+            }
+          }
+        }
+
+        if (ingressUpdated) {
+          updated = true
+          const updatedContent = yaml.dump(ingress, YAML_DUMP_OPTIONS)
+
+          if (this.debugMode && !this.nonInteractive) {
+            this.jsonCtx.info(`\nProposed changes for ${chart} :`)
+            this.jsonCtx.info('- Original content:')
+            this.jsonCtx.info(originalContent)
+            this.jsonCtx.info('+ Updated content:')
+            this.jsonCtx.info(updatedContent)
+
+            const confirmUpdate = await confirm({
+              message: chalk.cyan(`Do you want to apply these changes to ${chart}?`),
+            })
+
+            if (!confirmUpdate) {
+              this.jsonCtx.info(`Skipped updating ${chart}`);
+            }
+          }
+
+          this.jsonCtx.info(`Updated TLS configuration for ${chart} `)
+        } else {
+          this.jsonCtx.info(`No changes needed for ${chart} ()`)
+        }
+
+      }
+
+      if (yamlContent["blockscout-stack"]) {
+
+        const blockscoutStack = yamlContent["blockscout-stack"];
+        const items = ["blockscout", "frontend"];
+        for (const item of items) {
+          if (blockscoutStack[item]?.ingress?.tls) {
+            blockscoutStack[item].ingress.tls.enabled = true;
+            updated = true;
+          }
+        }
+      } else if (chart === "celestia-node") {
+        if (yamlContent.ingress) {
+          const celestiaUpdated = this.processStandardTls(yamlContent, chart, issuer);
+          if (celestiaUpdated) {
+            updated = true;
+          }
+        }
+      } else if (chart === "dogecoin") {
+        if (yamlContent.ingress) {
+          const dogecoinUpdated = this.processStandardTls(yamlContent, chart, issuer);
+          if (dogecoinUpdated) {
+            updated = true;
+          }
+        }
+      } else if (chart === "blockbook" && yamlContent.ingress) {
+          const blockbookUpdated = this.processStandardTls(yamlContent, chart, issuer);
+          if (blockbookUpdated) {
+            updated = true;
+          }
+        }
+
+      for (const ingressType of ingressTypes) {
+        if (yamlContent.ingress?.[ingressType]) {
+          const originalContent = yaml.dump(yamlContent.ingress[ingressType], YAML_DUMP_OPTIONS)
+          let ingressUpdated = false
+
+          // Add or update annotation
+          if (!yamlContent.ingress[ingressType].annotations) {
+            yamlContent.ingress[ingressType].annotations = {}
+          }
+
+          if (yamlContent.ingress[ingressType].annotations['cert-manager.io/cluster-issuer'] !== issuer) {
+            yamlContent.ingress[ingressType].annotations['cert-manager.io/cluster-issuer'] = issuer
+            ingressUpdated = true
+          }
+
+          // Update or add TLS configuration
+          if (yamlContent.ingress[ingressType].hosts && yamlContent.ingress[ingressType].hosts.length > 0) {
+            const firstHost = yamlContent.ingress[ingressType].hosts[0]
+            if (typeof firstHost === 'object' && firstHost.host) {
+              const hostname = firstHost.host
+              const secretName = ingressType === 'main' ? `${chart}-tls` : `${chart}-${ingressType}-tls`
+
+              if (!yamlContent.ingress[ingressType].tls) {
+                yamlContent.ingress[ingressType].tls = [{
+                  hosts: [hostname],
+                  secretName,
+                }]
+                ingressUpdated = true
+              } else if (yamlContent.ingress[ingressType].tls.length === 0) {
+                yamlContent.ingress[ingressType].tls.push({
+                  hosts: [hostname],
+                  secretName,
+                })
+                ingressUpdated = true
+              } else {
+                // Update existing TLS configuration
+                yamlContent.ingress[ingressType].tls.forEach((tlsConfig: any) => {
+                  if (!tlsConfig.secretName || tlsConfig.secretName !== secretName) {
+                    tlsConfig.secretName = secretName
+                    ingressUpdated = true
+                  }
+
+                  if (!tlsConfig.hosts || !tlsConfig.hosts.includes(hostname)) {
+                    tlsConfig.hosts = [hostname]
+                    ingressUpdated = true
+                  }
+                })
+              }
+            }
+          }
+
+          if (ingressUpdated) {
+            updated = true
+            const updatedContent = yaml.dump(yamlContent.ingress[ingressType], YAML_DUMP_OPTIONS)
+
+            if (this.debugMode && !this.nonInteractive) {
+              this.jsonCtx.info(`\nProposed changes for ${chart} (${ingressType}):`)
+              this.jsonCtx.info('- Original content:')
+              this.jsonCtx.info(originalContent)
+              this.jsonCtx.info('+ Updated content:')
+              this.jsonCtx.info(updatedContent)
+
+              const confirmUpdate = await confirm({
+                message: chalk.cyan(`Do you want to apply these changes to ${chart} (${ingressType})?`),
+              })
+
+              if (!confirmUpdate) {
+                this.jsonCtx.info(`Skipped updating ${chart} (${ingressType})`)
+                continue
+              }
+            }
+
+            this.jsonCtx.info(`Updated TLS configuration for ${chart} (${ingressType})`)
+          } else {
+            this.jsonCtx.info(`No changes needed for ${chart} (${ingressType})`)
+          }
+        }
+      }
+
+      if (updated) {
+        // Write updated YAML back to file
+        const updatedYamlContent = yaml.dump(yamlContent, YAML_DUMP_OPTIONS)
+        fs.writeFileSync(yamlPath, updatedYamlContent)
+      }
+
+      return updated
+    } catch (error) {
+      this.jsonCtx.info(`Failed to update ${chart}: ${error}`)
+      return false
     }
   }
 }

@@ -1,24 +1,27 @@
-import * as fs from 'node:fs'
-import * as path from 'node:path'
 import * as toml from '@iarna/toml'
 import chalk from 'chalk'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 
 function convertBigIntsToStringsRecursive(obj: any): any {
     if (obj === null || typeof obj !== 'object') {
         return obj;
     }
+
     if (Array.isArray(obj)) {
         return obj.map(item => convertBigIntsToStringsRecursive(item));
     }
+
     const newObj: { [key: string]: any } = {};
     for (const key in obj) {
-        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+        if (Object.hasOwn(obj, key)) {
             const value = obj[key];
             newObj[key] = typeof value === 'bigint' ? value.toString() :
                 typeof value === 'object' ? convertBigIntsToStringsRecursive(value) :
                     value;
         }
     }
+
     return newObj;
 }
 
@@ -85,12 +88,14 @@ export function writeConfigs(
                 if (key.endsWith('_PRIVATE_KEY')) {
                     delete (publicConfig.accounts as any)[key]
                 }
+
                 // Also remove OWNER_PRIVATE_KEY (if it exists)
                 if (key === 'OWNER_PRIVATE_KEY') {
                     delete (publicConfig.accounts as any)[key];
                 }
             }
         }
+
         // 3. Remove sensitive info from [sequencer] and [sequencer.sequencer-X]
         if (publicConfig.sequencer && typeof publicConfig.sequencer === 'object') {
             // Main sequencer section
@@ -133,6 +138,7 @@ export function writeConfigs(
                 }
             }
         }
+
         removeNodeKeys(publicConfig)
 
         fs.writeFileSync(mainConfigPath, mainConfigStringToWrite);

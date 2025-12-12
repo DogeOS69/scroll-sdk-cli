@@ -1,15 +1,16 @@
 import { Command, Flags } from '@oclif/core'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { JsonOutputContext } from '../../utils/json-output.js'
+
 import {
+  type GeneratedConfigs,
+  generateAllConfigs,
   loadDeploymentSpec,
   validateDeploymentSpec,
-  generateAllConfigs,
-  writeGeneratedConfigs,
-  type GeneratedConfigs
+  writeGeneratedConfigs
 } from '../../utils/deployment-spec-generator.js'
-import { generateValuesFiles, type GeneratedValuesFiles } from '../../utils/values-generator.js'
+import { JsonOutputContext } from '../../utils/json-output.js'
+import { type GeneratedValuesFiles, generateValuesFiles } from '../../utils/values-generator.js'
 
 export default class GenerateFromSpec extends Command {
   static override description = 'Generate all configuration files from a DeploymentSpec YAML file'
@@ -33,36 +34,36 @@ export default class GenerateFromSpec extends Command {
   ]
 
   static override flags = {
+    'config-only': Flags.boolean({
+      default: false,
+      description: 'Only generate config.toml, doge-config.toml, setup_defaults.toml',
+    }),
+    'dry-run': Flags.boolean({
+      default: false,
+      description: 'Validate spec and show what would be generated without writing files',
+    }),
+    force: Flags.boolean({
+      char: 'f',
+      default: false,
+      description: 'Overwrite existing files without warning',
+    }),
+    json: Flags.boolean({
+      default: false,
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
+    }),
+    output: Flags.string({
+      char: 'o',
+      default: '.',
+      description: 'Output directory for generated files',
+    }),
     spec: Flags.string({
       char: 's',
       description: 'Path to DeploymentSpec YAML file',
       required: true,
     }),
-    output: Flags.string({
-      char: 'o',
-      description: 'Output directory for generated files',
-      default: '.',
-    }),
-    'dry-run': Flags.boolean({
-      description: 'Validate spec and show what would be generated without writing files',
-      default: false,
-    }),
-    'config-only': Flags.boolean({
-      description: 'Only generate config.toml, doge-config.toml, setup_defaults.toml',
-      default: false,
-    }),
     'values-only': Flags.boolean({
+      default: false,
       description: 'Only generate values/*.yaml Helm files',
-      default: false,
-    }),
-    json: Flags.boolean({
-      description: 'Output in JSON format (stdout for data, stderr for logs)',
-      default: false,
-    }),
-    force: Flags.boolean({
-      char: 'f',
-      description: 'Overwrite existing files without warning',
-      default: false,
     }),
   }
 
@@ -106,7 +107,7 @@ export default class GenerateFromSpec extends Command {
         `Failed to load DeploymentSpec: ${error instanceof Error ? error.message : String(error)}`,
         'CONFIGURATION',
         true,
-        { path: specPath, error: String(error) }
+        { error: String(error), path: specPath }
       )
       return // TypeScript flow control
     }
@@ -134,6 +135,7 @@ export default class GenerateFromSpec extends Command {
       for (const error of validation.errors) {
         jsonCtx.info(`  [${error.code}] ${error.path}: ${error.message}`)
       }
+
       jsonCtx.error(
         'E603_VALIDATION_FAILED',
         `DeploymentSpec validation failed with ${validation.errors.length} error(s)`,
@@ -188,15 +190,15 @@ export default class GenerateFromSpec extends Command {
       }
 
       jsonCtx.success({
-        dryRun: true,
-        specPath,
-        outputDir,
         configFiles: configs ? ['config.toml', 'doge-config.toml', 'setup_defaults.toml'] : [],
-        valuesFiles: valuesFiles ? Object.keys(valuesFiles) : [],
+        dryRun: true,
+        outputDir,
+        specPath,
         validation: {
           valid: true,
           warningCount: validation.warnings.length
-        }
+        },
+        valuesFiles: valuesFiles ? Object.keys(valuesFiles) : []
       })
       return
     }
@@ -208,9 +210,11 @@ export default class GenerateFromSpec extends Command {
         if (fs.existsSync(path.join(outputDir, 'config.toml'))) {
           existingFiles.push('config.toml')
         }
+
         if (fs.existsSync(path.join(dataDir, 'doge-config.toml'))) {
           existingFiles.push('.data/doge-config.toml')
         }
+
         if (fs.existsSync(path.join(dataDir, 'setup_defaults.toml'))) {
           existingFiles.push('.data/setup_defaults.toml')
         }
@@ -240,9 +244,11 @@ export default class GenerateFromSpec extends Command {
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true })
     }
+
     if (generateConfigs && !fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true })
     }
+
     if (generateValues && !fs.existsSync(valuesDir)) {
       fs.mkdirSync(valuesDir, { recursive: true })
     }
@@ -272,9 +278,9 @@ export default class GenerateFromSpec extends Command {
     jsonCtx.logKeyValue('Files generated', String(writtenFiles.length))
 
     jsonCtx.success({
-      specPath,
-      outputDir,
       filesWritten: writtenFiles,
+      outputDir,
+      specPath,
       validation: {
         valid: true,
         warningCount: validation.warnings.length

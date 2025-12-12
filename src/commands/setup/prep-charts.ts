@@ -1,13 +1,15 @@
-import { Command, Flags } from '@oclif/core'
-import * as fs from 'fs'
-import * as path from 'path'
-import { ChildProcess, exec } from 'child_process'
-import { promisify } from 'util'
-import * as yaml from 'js-yaml'
 import * as toml from '@iarna/toml'
-import { confirm, input, select } from '@inquirer/prompts'
+import { confirm } from '@inquirer/prompts'
+import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
+import * as yaml from 'js-yaml'
+import { exec } from 'node:child_process'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+import { promisify } from 'node:util'
+
 import type { DogeConfig } from '../../types/doge-config.js'
+
 import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
@@ -29,152 +31,130 @@ export default class SetupPrepCharts extends Command {
   ]
 
   static override flags = {
-    'github-username': Flags.string({ description: 'GitHub username', required: false }),
-    'github-token': Flags.string({ description: 'GitHub Personal Access Token', required: false }),
-    'values-dir': Flags.string({ description: 'Directory containing values files', default: './values' }),
-    'skip-auth-check': Flags.boolean({ description: 'Skip authentication check for individual charts', default: false }),
     'doge-config': Flags.string({ description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)' }),
+    'github-token': Flags.string({ description: 'GitHub Personal Access Token', required: false }),
+    'github-username': Flags.string({ description: 'GitHub username', required: false }),
+    json: Flags.boolean({
+      default: false,
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
+    }),
     'non-interactive': Flags.boolean({
       char: 'N',
+      default: false,
       description: 'Run without prompts. Auto-applies all detected changes.',
-      default: false,
     }),
-    json: Flags.boolean({
-      description: 'Output in JSON format (stdout for data, stderr for logs)',
-      default: false,
-    }),
+    'skip-auth-check': Flags.boolean({ default: false, description: 'Skip authentication check for individual charts' }),
+    'values-dir': Flags.string({ default: './values', description: 'Directory containing values files' }),
   }
 
-  private configMapping: Record<string, string | ((chartName: string, productionNumber: string) => string)> = {
-    'SCROLL_L1_RPC': 'general.L1_RPC_ENDPOINT',
-    'SCROLL_L2_RPC': 'general.L2_RPC_ENDPOINT',
+  private configData: any = {}
+
+  private configMapping: Record<string, ((chartName: string, productionNumber: string) => string) | string> = {
+    'ADMIN_SYSTEM_DASHBOARD_HOST': 'ingress.ADMIN_SYSTEM_DASHBOARD_HOST',
+    'BLOCKSCOUT_HOST': 'ingress.BLOCKSCOUT_HOST',
+    'BRIDGE_HISTORY_API_HOST': 'ingress.BRIDGE_HISTORY_API_HOST',
     'CHAIN_ID': 'general.CHAIN_ID_L2',
     'CHAIN_ID_L1': 'general.CHAIN_ID_L1',
     'CHAIN_ID_L2': 'general.CHAIN_ID_L2',
-    'L2GETH_L1_ENDPOINT': 'general.L1_RPC_ENDPOINT',
-    'L2GETH_DA_BLOB_BEACON_NODE': 'general.BEACON_RPC_ENDPOINT',
-    'L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK': 'general.L1_CONTRACT_DEPLOYMENT_BLOCK',
+    'COORDINATOR_API_HOST': 'ingress.COORDINATOR_API_HOST',
+    // Add ingress host mappings
+    'FRONTEND_HOST': 'ingress.FRONTEND_HOST',
+    'GRAFANA_HOST': 'ingress.GRAFANA_HOST',
+    'L1_DEVNET_HOST': 'ingress.L1_DEVNET_HOST',
+    'L1_EXPLORER_HOST': 'ingress.L1_EXPLORER_HOST',
     'L1_RPC_ENDPOINT': 'general.L1_RPC_ENDPOINT',
-    'L2_RPC_ENDPOINT': 'general.L2_RPC_ENDPOINT',
     'L1_SCROLL_CHAIN_PROXY_ADDR': 'contractsFile.L1_SCROLL_CHAIN_PROXY_ADDR',
-    'L2GETH_SIGNER_ADDRESS': (chartName, productionNumber) =>
-      productionNumber === '0' ? 'sequencer.L2GETH_SIGNER_ADDRESS' : `sequencer.sequencer-${productionNumber}.L2GETH_SIGNER_ADDRESS`,
-    'L2GETH_PEER_LIST': 'sequencer.L2_GETH_STATIC_PEERS',
-    'L2GETH_KEYSTORE': (chartName, productionNumber) =>
-      productionNumber === '0' ? 'sequencer.L2GETH_KEYSTORE' : `sequencer.sequencer-${productionNumber}.L2GETH_KEYSTORE`,
-    'L2GETH_PASSWORD': (chartName, productionNumber) =>
-      productionNumber === '0' ? 'sequencer.L2GETH_PASSWORD' : `sequencer.sequencer-${productionNumber}.L2GETH_PASSWORD`,
+    'L2_RPC_ENDPOINT': 'general.L2_RPC_ENDPOINT',
+    'L2GETH_DA_BLOB_BEACON_NODE': 'general.BEACON_RPC_ENDPOINT',
     // 'L2GETH_NODEKEY': (chartName, productionNumber) =>
     //   chartName.startsWith('l2-bootnode') ? `bootnode.bootnode-${productionNumber}.L2GETH_NODEKEY` :
     //     (productionNumber === '0' ? 'sequencer.L2GETH_NODEKEY' : `sequencer.sequencer-${productionNumber}.L2GETH_NODEKEY`),
-    // Add ingress host mappings
-    'FRONTEND_HOST': 'ingress.FRONTEND_HOST',
-    'BRIDGE_HISTORY_API_HOST': 'ingress.BRIDGE_HISTORY_API_HOST',
+    'L2GETH_KEYSTORE': (chartName, productionNumber) =>
+      productionNumber === '0' ? 'sequencer.L2GETH_KEYSTORE' : `sequencer.sequencer-${productionNumber}.L2GETH_KEYSTORE`,
+    'L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK': 'general.L1_CONTRACT_DEPLOYMENT_BLOCK',
+    'L2GETH_L1_ENDPOINT': 'general.L1_RPC_ENDPOINT',
+    'L2GETH_PASSWORD': (chartName, productionNumber) =>
+      productionNumber === '0' ? 'sequencer.L2GETH_PASSWORD' : `sequencer.sequencer-${productionNumber}.L2GETH_PASSWORD`,
+    'L2GETH_PEER_LIST': 'sequencer.L2_GETH_STATIC_PEERS',
+    'L2GETH_SIGNER_ADDRESS': (chartName, productionNumber) =>
+      productionNumber === '0' ? 'sequencer.L2GETH_SIGNER_ADDRESS' : `sequencer.sequencer-${productionNumber}.L2GETH_SIGNER_ADDRESS`,
     'ROLLUP_EXPLORER_API_HOST': 'ingress.ROLLUP_EXPLORER_API_HOST',
-    'COORDINATOR_API_HOST': 'ingress.COORDINATOR_API_HOST',
     'RPC_GATEWAY_HOST': 'ingress.RPC_GATEWAY_HOST',
-    'BLOCKSCOUT_HOST': 'ingress.BLOCKSCOUT_HOST',
-    'ADMIN_SYSTEM_DASHBOARD_HOST': 'ingress.ADMIN_SYSTEM_DASHBOARD_HOST',
-    'L1_DEVNET_HOST': 'ingress.L1_DEVNET_HOST',
-    'L1_EXPLORER_HOST': 'ingress.L1_EXPLORER_HOST',
     'RPC_GATEWAY_WS_HOST': 'ingress.RPC_GATEWAY_WS_HOST',
-    'GRAFANA_HOST': 'ingress.GRAFANA_HOST',
+    'SCROLL_L1_RPC': 'general.L1_RPC_ENDPOINT',
+    'SCROLL_L2_RPC': 'general.L2_RPC_ENDPOINT',
 
     // Add more mappings as needed
   }
 
-  private configData: any = {}
   private contractsConfig: any = {}
   private dogeConfig: DogeConfig = {} as DogeConfig
   private flags: any; // To store parsed flags
-  private withdrawalProcessorConfig: toml.JsonMap = {}
-  private nonInteractive: boolean = false
-  private jsonMode: boolean = false
   private jsonCtx!: JsonOutputContext
+  private jsonMode: boolean = false
+  private nonInteractive: boolean = false
+  private withdrawalProcessorConfig: toml.JsonMap = {}
 
-  // Generic ingress processing function
-  private processIngressHosts(
-    ingressConfig: any,
-    hostConfigValue: string,
-    changes: Array<{ key: string; oldValue: string; newValue: string }>,
-    keyPrefix: string = 'ingress'
-  ): boolean {
-    let ingressUpdated = false;
+  public async run(): Promise<void> {
+    const { flags } = await this.parse(SetupPrepCharts)
 
-    if (ingressConfig && typeof ingressConfig === 'object' && 'hosts' in ingressConfig) {
-      const hosts = ingressConfig.hosts as Array<{ host: string; paths?: any[] }>;
-      if (Array.isArray(hosts)) {
-        for (let i = 0; i < hosts.length; i++) {
-          if (typeof hosts[i] === 'object' && 'host' in hosts[i]) {
-            if (hostConfigValue && hostConfigValue !== hosts[i].host) {
-              changes.push({
-                key: `${keyPrefix}.hosts[${i}].host`,
-                oldValue: hosts[i].host,
-                newValue: hostConfigValue
-              });
-              hosts[i].host = hostConfigValue;
-              ingressUpdated = true;
-            }
-          }
-        }
-      }
+    // Setup non-interactive/JSON mode
+    this.nonInteractive = flags['non-interactive']
+    this.jsonMode = flags.json
+    this.jsonCtx = new JsonOutputContext('setup prep-charts', this.jsonMode)
 
-      // Update TLS section if it exists and ingress was updated
-      if (ingressUpdated && ingressConfig.tls) {
-        const tlsEntries = ingressConfig.tls as Array<{ hosts: string[] }>;
-        if (Array.isArray(tlsEntries)) {
-          tlsEntries.forEach((tlsEntry) => {
-            if (Array.isArray(tlsEntry.hosts)) {
-              tlsEntry.hosts = hosts.map((host) => host.host);
-            }
-          });
-        }
+    this.jsonCtx.info('Starting chart preparation...')
+
+    // Load configs before processing yaml files
+    await this.loadConfigs(flags)
+
+    if (flags['github-username'] && flags['github-token']) {
+      try {
+        await this.authenticateGHCR(flags['github-username'], flags['github-token'])
+      } catch {
+        this.jsonCtx.addWarning('Failed to authenticate with GitHub Container Registry')
       }
     }
 
-    return ingressUpdated;
-  }
-
-  private async loadConfigs(flags: any): Promise<void> {
-    const configPath = path.join(process.cwd(), 'config.toml')
-    const contractsConfigPath = path.join(process.cwd(), 'config-contracts.toml')
-
-    if (fs.existsSync(configPath)) {
-      const configContent = fs.readFileSync(configPath, 'utf-8')
-      this.configData = toml.parse(configContent)
-    } else {
-      this.warn('config.toml not found. Some values may not be populated correctly.')
+    let skipAuthCheck = flags['skip-auth-check']
+    if (!skipAuthCheck && !this.nonInteractive) {
+      skipAuthCheck = !(await confirm({ message: 'Do you want to perform authentication checks for individual charts?' }))
+    } else if (this.nonInteractive && !skipAuthCheck) {
+      // In non-interactive mode, default to skipping auth check unless explicitly configured
+      skipAuthCheck = true
+      this.jsonCtx.info('Non-interactive mode: Skipping authentication checks')
     }
 
-    if (fs.existsSync(contractsConfigPath)) {
-      const contractsConfigContent = fs.readFileSync(contractsConfigPath, 'utf-8')
-      this.contractsConfig = toml.parse(contractsConfigContent)
-    } else {
-      this.warn('config-contracts.toml not found. Some values may not be populated correctly.')
-    }
+    // Validate Makefile
+    await this.validateMakefile(skipAuthCheck)
 
-    const { config, configPath: resolvedPath } = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk doge:config')
-    this.dogeConfig = config as DogeConfigType;
+    // Process production.yaml files
+    const valuesDir = flags['values-dir']
+    const { skipped: skippedInstances, updated: updatedInstances } = await this.processMutipleInstance(valuesDir);
+    const { skipped: skippedProduction, updated: updatedProduction } = await this.processProductionYaml(valuesDir);
+    const { skipped: skippedConfig, updated: updatedConfig } = await this.processConfigYaml(valuesDir);
 
+    this.jsonCtx.logSuccess(`Updated instance-specific YAML files for ${updatedInstances} chart(s).`);
+    this.jsonCtx.info(`Skipped ${skippedInstances} instance-specific chart(s).`);
 
-    const withdrawalProcessorConfigPath = path.join(process.cwd(), ".data/output-withdrawal-processor.toml")
-    if (!fs.existsSync(withdrawalProcessorConfigPath)) {
-      this.error("run scrollsdk doge:bridge-init first");
-      return
-    }
-    const withdrawalProcessorConfigContent = fs.readFileSync(withdrawalProcessorConfigPath, 'utf-8');
-    this.withdrawalProcessorConfig = toml.parse(withdrawalProcessorConfigContent);
-    return;
-  }
+    this.jsonCtx.logSuccess(`Updated production YAML files for ${updatedProduction} chart(s).`)
+    this.jsonCtx.info(`Skipped ${skippedProduction} chart(s).`)
 
-  private getConfigValue(key: string): any {
-    const [configType, ...rest] = key.split('.')
-    const configKey = rest.join('.')
+    this.jsonCtx.logSuccess(`Updated config YAML files for ${updatedConfig} chart(s).`);
+    this.jsonCtx.info(`Skipped ${skippedConfig} chart(s).`);
 
-    if (configType === 'contractsFile') {
-      return this.getNestedValue(this.contractsConfig, configKey)
-    } else {
-      return this.getNestedValue(this.configData, key)
+    this.jsonCtx.logSuccess('Chart preparation completed.')
+
+    // JSON output
+    if (this.jsonMode) {
+      this.jsonCtx.success({
+        configCharts: { skipped: skippedConfig, updated: updatedConfig },
+        instanceCharts: { skipped: skippedInstances, updated: updatedInstances },
+        productionCharts: { skipped: skippedProduction, updated: updatedProduction },
+        totalSkipped: skippedInstances + skippedProduction + skippedConfig,
+        totalUpdated: updatedInstances + updatedProduction + updatedConfig,
+        valuesDir,
+      })
     }
   }
 
@@ -182,33 +162,6 @@ export default class SetupPrepCharts extends Command {
     const command = `echo ${token} | docker login ghcr.io -u ${username} --password-stdin`
     await execAsync(command)
     this.log('Authenticated with GitHub Container Registry')
-  }
-
-  private async validateOCIAccess(ociUrl: string, ociVersion: string): Promise<boolean> {
-    try {
-      const versionArgument = ociVersion ? ` --version ${ociVersion}` : "";
-      await execAsync(`helm show chart ${ociUrl}${versionArgument}`)
-      return true
-    } catch (error) {
-      return false
-    }
-  }
-  private getBaseUrl(url?: string) {
-    if (!url) return url;
-    try {
-      const urlObj = new URL(url);
-      if (urlObj.pathname.endsWith('/api/v2')) {
-        urlObj.pathname = urlObj.pathname.slice(0, -7) + '/api';
-      }
-      let urlString = urlObj.toString();
-      // Remove trailing slash if it exists
-      if (urlString.endsWith('/')) {
-        urlString = urlString.slice(0, -1);
-      }
-      return urlString;
-    } catch {
-      return url;
-    }
   }
 
   private formatUrl(baseUrl: string, path: string = ''): string {
@@ -219,1005 +172,81 @@ export default class SetupPrepCharts extends Command {
     return cleanBase + cleanPath;
   }
 
+  private getBaseUrl(url?: string) {
+    if (!url) return url;
+    try {
+      const urlObj = new URL(url);
+      if (urlObj.pathname.endsWith('/api/v2')) {
+        urlObj.pathname = urlObj.pathname.slice(0, -7) + '/api';
+      }
 
-  private async processMutipleInstance(valuesDir: string): Promise<{ updated: number; skipped: number }> {
-    interface ChartConfig {
-      chartName: string;
-      configKey: string | null;
+      let urlString = urlObj.toString();
+      // Remove trailing slash if it exists
+      if (urlString.endsWith('/')) {
+        urlString = urlString.slice(0, -1);
+      }
+
+      return urlString;
+    } catch {
+      return url;
     }
+  }
 
-    let names: ChartConfig[] = [{
-      chartName: "l2-bootnode",
-      configKey: "bootnode"
-    }, {
-      chartName: "l2-sequencer",
-      configKey: "sequencer"
-    }, {
-      chartName: "cubesigner-signer",
-      configKey: null
-    }];
-    let updatedCharts = 0;
-    let skippedCharts = 0;
+  private getConfigValue(key: string): any {
+    const [configType, ...rest] = key.split('.')
+    const configKey = rest.join('.')
 
-    for (const item of names) {
-      const { chartName, configKey } = item;
-
-      // Skip config validation for charts that don't need configKey (like cubesigner-signer)
-      if (configKey && !this.configData[configKey]) {
-        this.error(`${configKey} not found in config.toml`);
-      }
-
-      let releaseIndex = 0;
-      const templateFilePath = path.join(valuesDir, `${chartName}-production.yaml`);
-      if (!fs.existsSync(templateFilePath)) {
-        this.warn(chalk.yellow(`Source file not found: ${templateFilePath}, skipping ${chartName} charts`));
-        skippedCharts++;
-        continue;
-      }
-
-      const templateContent = fs.readFileSync(templateFilePath, 'utf8');
-
-      while (true) {
-        const changesForThisFile: Array<{ keyPath: string; oldValue: string | undefined; newValue: string }> = [];
-
-        // For charts without configKey, we generate a fixed number of instances (e.g., 6 for cubesigner-signer)
-        if (!configKey) {
-          // Determine the number of instances dynamically for cubesigner-signer based on dogeConfig.cubesigner.roles
-          const maxInstances = chartName === "cubesigner-signer"
-            ? (this.dogeConfig.cubesigner?.roles?.length ?? 1)
-            : 1;
-          if (releaseIndex >= maxInstances) {
-            break;
-          }
-        } else {
-          let instanceKey = `${configKey}-${releaseIndex}`
-
-          // instanceConfig is like this.configData.bootnode.bootnode-0, or this.configData.sequencer.sequencer-0
-          const instanceConfig = this.configData[configKey][instanceKey]
-
-          if (!instanceConfig && instanceKey != "sequencer-0") {
-            // No more bootnode instances defined
-            this.log(chalk.yellow(`No more ${instanceKey} instances defined.`));
-            break
-          }
-        }
-
-        const destFilePath = path.join(valuesDir, `${chartName}-production-${releaseIndex}.yaml`);
-
-        const newYamlContent = templateContent.replaceAll('__INSTANCE_INDEX__', releaseIndex.toString());
-
-        if (!fs.existsSync(destFilePath)) {
-          fs.writeFileSync(destFilePath, newYamlContent);
-          updatedCharts++;
-        }
-        releaseIndex++
-      }
+    if (configType === 'contractsFile') {
+      return this.getNestedValue(this.contractsConfig, configKey)
     }
-    return { updated: updatedCharts, skipped: skippedCharts };
+ 
+      return this.getNestedValue(this.configData, key)
+    
+  }
+
+  private getNestedValue(obj: any, path: string): any {
+    return path.split('.').reduce((prev, curr) => prev && prev[curr], obj)
   }
 
   private isL2Node(chartName: string): boolean {
     return chartName.startsWith("l2-bootnode") || chartName.startsWith("l2-rpc") || chartName.startsWith("l2-sequencer");
   }
 
-  private async processProductionYaml(
-    valuesDir: string
-  ): Promise<{ updated: number; skipped: number }> {
-    const productionFiles = fs.readdirSync(valuesDir)
-      .filter(file => file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
 
-    let updatedCharts = 0
-    let skippedCharts = 0
-    const isTestnet = this.dogeConfig.network == "testnet";
-    const dogecoinInternalUrl = "http://dogecoin-" + (isTestnet ? "testnet:44555" : "mainnet:22555");
-
-    for (const file of productionFiles) {
-      const yamlPath = path.join(valuesDir, file)
-      const chartName = file.replace(/-production(-\d+)?\.yaml$/, '')
-      const productionNumber = file.match(/-production-(\d+)\.yaml$/)?.[1] || '0'
-
-      this.log(`Processing ${file} for chart ${chartName}...`)
-
-      const productionYamlContent = fs.readFileSync(yamlPath, 'utf8')
-      let productionYaml = yaml.load(productionYamlContent) as any
-
-      let updated = false
-      const changes: Array<{ key: string; oldValue: string; newValue: string }> = []
-
-      // Process configMaps
-      if (productionYaml.configMaps) {
-        for (const [configMapName, configMapData] of Object.entries(productionYaml.configMaps)) {
-          if (configMapData && typeof configMapData === 'object' && 'data' in configMapData) {
-            const envData = (configMapData as any).data
-            for (const [key, oldValue] of Object.entries(envData)) {
-              const configPathOrResolver = this.configMapping[key]
-              if (configPathOrResolver) {
-                let configKey: string
-                if (typeof configPathOrResolver === 'function') {
-                  configKey = configPathOrResolver(chartName, productionNumber)
-                } else {
-                  configKey = configPathOrResolver
-                }
-                if (chartName === "l1-devnet" && key === "CHAIN_ID") {
-                  configKey = "general.CHAIN_ID_L1";
-                }
-                if (chartName === "rollup-relayer" && key === "L1_RPC_ENDPOINT") {
-                  configKey = "general.DA_PUBLISHER_ENDPOINT";
-                }
-
-                let configValue = this.getConfigValue(configKey)
-                if (this.isL2Node(chartName) && key === "L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK") {
-                  configValue = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
-                }
-
-                if (configValue !== undefined && configValue !== null) {
-                  let newValue: string | string[]
-                  if (Array.isArray(configValue)) {
-                    newValue = JSON.stringify(configValue)
-                  } else {
-                    newValue = String(configValue)
-                  }
-                  if (newValue != oldValue) {
-                    changes.push({ key, oldValue: JSON.stringify(oldValue), newValue: newValue })
-                    envData[key] = newValue
-                    updated = true
-                  }
-                } else {
-                  this.log(chalk.yellow(`${chartName}: No value found for ${configKey}`))
-                }
-              }
-            }
-          }
-        }
-      }
-
-      // Process ingress
-      if (productionYaml.ingress) {
-        let ingressUpdated = false;
-        for (const [ingressKey, ingressValue] of Object.entries(productionYaml.ingress)) {
-          if (ingressValue && typeof ingressValue === 'object' && 'hosts' in ingressValue) {
-            const hosts = ingressValue.hosts as Array<{ host: string }>;
-            if (Array.isArray(hosts)) {
-              for (let i = 0; i < hosts.length; i++) {
-                if (typeof hosts[i] === 'object' && 'host' in hosts[i]) {
-                  let configValue: string | undefined;
-
-                  if (chartName === 'l2-rpc' && ingressKey === 'websocket') {
-                    configValue = this.getConfigValue('ingress.RPC_GATEWAY_WS_HOST');
-                  } else {
-                    // Check for direct mapping first
-                    const directMappingKey = `ingress.${chartName.toUpperCase().replace(/-/g, '_')}_HOST`;
-                    configValue = this.getConfigValue(directMappingKey);
-                    this.log(chalk.yellow(`${chartName}: ${directMappingKey} -> ${configValue}`));
-
-                    // If direct mapping doesn't exist, try alternative mappings
-                    if (!configValue) {
-                      const alternativeMappings: Record<string, string> = {
-                        'frontends': 'FRONTEND_HOST',
-                        'bridge-history-api': 'BRIDGE_HISTORY_API_HOST',
-                        'rollup-explorer-backend': 'ROLLUP_EXPLORER_API_HOST',
-                        'coordinator-api': 'COORDINATOR_API_HOST',
-                        'l2-rpc': 'RPC_GATEWAY_HOST',
-                        'l1-devnet': 'L1_DEVNET_HOST',
-                        'blockscout': 'BLOCKSCOUT_HOST',
-                        'admin-system-dashboard': 'ADMIN_SYSTEM_DASHBOARD_HOST',
-                        'tso-service': 'TSO_HOST',
-                        'celestia-node': 'CELESTIA_HOST',
-                        'dogecoin': 'DOGECOIN_HOST',
-                        'blockbook': 'BLOCKBOOK_HOST',
-                      };
-
-                      const alternativeKey = alternativeMappings[chartName];
-                      if (alternativeKey) {
-                        configValue = this.getConfigValue(`ingress.${alternativeKey}`);
-                      } else {
-                        this.error(`${chartName}: ${alternativeKey} not found in config`);
-                      }
-                    }
-                  }
-
-                  if (configValue && configValue !== hosts[i].host) {
-                    changes.push({ key: `ingress.${ingressKey}.hosts[${i}].host`, oldValue: hosts[i].host, newValue: configValue });
-                    hosts[i].host = configValue;
-                    ingressUpdated = true;
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        if (ingressUpdated) {
-          updated = true;
-          // Update the tls section if it exists
-          for (const [ingressKey, ingressValue] of Object.entries(productionYaml.ingress)) {
-            if (ingressValue && typeof ingressValue === 'object' && 'tls' in ingressValue && 'hosts' in ingressValue) {
-              const tlsEntries = ingressValue.tls as Array<{ hosts: string[] }>;
-              const hosts = ingressValue.hosts as Array<{ host: string }>;
-              if (Array.isArray(tlsEntries) && Array.isArray(hosts)) {
-                tlsEntries.forEach((tlsEntry) => {
-                  if (Array.isArray(tlsEntry.hosts)) {
-                    tlsEntry.hosts = hosts.map((host) => host.host);
-                  }
-                });
-              }
-            }
-          }
-        }
-      }
-
-
-
-      if (productionYaml["blockscout-stack"]) {
-        let ingressUpdated = false;
-        const blockscout = productionYaml["blockscout-stack"].blockscout;
-        const frontend = productionYaml["blockscout-stack"].frontend;
-        let blockscout_host = this.getConfigValue("ingress.BLOCKSCOUT_HOST");
-        let blockscout_url = this.getConfigValue("frontend.EXTERNAL_EXPLORER_URI_L2");
-
-        if (blockscout?.ingress?.annotations?.["nginx.ingress.kubernetes.io/cors-allow-origin"]) {
-          const oldValue = blockscout.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"];
-          if (oldValue !== blockscout_url) {
-            changes.push({ key: `ingress.blockscout.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"]`, oldValue, newValue: blockscout_url });
-            blockscout.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"] = blockscout_url;
-            ingressUpdated = true;
-          }
-        }
-
-        if (blockscout?.ingress?.hostname) {
-          const oldValue = blockscout.ingress.hostname;
-          if (oldValue !== blockscout_host) {
-            changes.push({ key: `ingress.blockscout.hostname`, oldValue, newValue: blockscout_host });
-            blockscout.ingress.hostname = blockscout_host;
-            ingressUpdated = true;
-          }
-        }
-
-        //only enable tls if use command scrollsdk setup tls
-        // if setup:tls was executed, all http protocol will be updated to https
-        // so we don't support disable tls for now
-
-        // if (blockscout?.ingress?.tls?.enabled) {
-        //   if (blockscout.ingress.tls.enabled !== false) {
-        //     const oldValue = blockscout.ingress.tls.enabled;
-        //     blockscout.ingress.tls.enabled = false; // Ensure it's boolean false
-        //     changes.push({ key: `ingress.blockscout.tls.enabled`, oldValue: String(oldValue), newValue: "false" });
-        //     ingressUpdated = true;
-        //   }
-        // }
-
-        if (frontend?.env?.NEXT_PUBLIC_API_HOST) {
-          const oldValue = frontend.env.NEXT_PUBLIC_API_HOST;
-          if (oldValue !== blockscout_host) {
-            changes.push({ key: `frontend.env.NEXT_PUBLIC_API_HOST`, oldValue, newValue: blockscout_host });
-            frontend.env.NEXT_PUBLIC_API_HOST = blockscout_host;
-            ingressUpdated = true;
-          }
-        }
-
-        let protocol = blockscout_url.startsWith("https") ? "https" : "http";
-        if (frontend?.env?.NEXT_PUBLIC_API_PROTOCOL) {
-          const oldValue = frontend.env.NEXT_PUBLIC_API_PROTOCOL;
-          if (oldValue !== protocol) {
-            changes.push({
-              key: `frontend.env.NEXT_PUBLIC_API_PROTOCOL`,
-              oldValue,
-              newValue: protocol
-            });
-            frontend.env.NEXT_PUBLIC_API_PROTOCOL = protocol;
-            ingressUpdated = true;
-          }
-        }
-        if (frontend?.env?.NEXT_PUBLIC_APP_PROTOCOL) {
-          const oldValue = frontend.env.NEXT_PUBLIC_APP_PROTOCOL;
-          if (oldValue !== protocol) {
-            changes.push({
-              key: `frontend.env.NEXT_PUBLIC_APP_PROTOCOL`,
-              oldValue,
-              newValue: protocol
-            });
-            frontend.env.NEXT_PUBLIC_APP_PROTOCOL = protocol;
-            ingressUpdated = true;
-          }
-        }
-
-        if (frontend?.ingress?.annotations?.["nginx.ingress.kubernetes.io/cors-allow-origin"]) {
-          const oldValue = frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"];
-          if (oldValue !== blockscout_url) {
-            changes.push({ key: `frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"]`, oldValue, newValue: blockscout_url });
-            frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"] = blockscout_url;
-            ingressUpdated = true;
-          }
-        }
-        if (frontend?.ingress?.hostname) {
-          const oldValue = frontend.ingress.hostname;
-          if (oldValue !== blockscout_host) {
-            changes.push({ key: `frontend.ingress.hostname`, oldValue, newValue: blockscout_host });
-            frontend.ingress.hostname = blockscout_host;
-            ingressUpdated = true;
-          }
-        }
-
-        /*
-        NEXT_PUBLIC_NETWORK_ID: "221122420"
-        */
-        let oldNetworkName = frontend?.env?.NEXT_PUBLIC_NETWORK_NAME;
-        let newNetworkName = this.getConfigValue("general.CHAIN_NAME_L2");
-        if (!oldNetworkName || oldNetworkName != newNetworkName) {
-          changes.push({ key: `frontend.env.NEXT_PUBLIC_NETWORK_NAME`, oldValue: oldNetworkName, newValue: newNetworkName });
-          frontend.env.NEXT_PUBLIC_NETWORK_NAME = newNetworkName;
-          ingressUpdated = true;
-        }
-
-        let oldValue = frontend?.env?.NEXT_PUBLIC_NETWORK_ID;
-        let newValue = this.getConfigValue("general.CHAIN_ID_L2");
-        if (!oldValue || oldValue != this.getConfigValue("general.CHAIN_ID_L2")) {
-          changes.push({ key: `frontend.env.NEXT_PUBLIC_NETWORK_ID`, oldValue, newValue: newValue });
-          frontend.env.NEXT_PUBLIC_NETWORK_ID = newValue;
-          ingressUpdated = true;
-        }
-
-
-        interface BlockscoutEnvMapping {
-          key: string;
-          configKey: string;
-          defaultValue?: string;
-        }
-
-        const BLOCKSCOUT_ENV_MAPPINGS: BlockscoutEnvMapping[] = [
-          {
-            key: 'INDEXER_SCROLL_L1_BATCH_START_BLOCK',
-            configKey: '',
-            defaultValue: '0'
-          },
-          {
-            key: 'INDEXER_SCROLL_L1_MESSENGER_START_BLOCK',
-            configKey: '',
-            defaultValue: '0'
-          },
-          {
-            key: 'INDEXER_SCROLL_L1_CHAIN_CONTRACT',
-            configKey: 'contractsFile.L1_SCROLL_CHAIN_PROXY_ADDR'
-          },
-          {
-            key: 'INDEXER_SCROLL_L1_MESSENGER_CONTRACT',
-            configKey: 'L1_SCROLL_MESSENGER_PROXY_ADDR'
-          },
-          {
-            key: 'INDEXER_SCROLL_L2_MESSENGER_CONTRACT',
-            configKey: 'L2_DOGEOS_MESSENGER_PROXY_ADDR'
-          },
-          {
-            key: 'INDEXER_SCROLL_L2_GAS_ORACLE_CONTRACT',
-            configKey: 'L1_GAS_PRICE_ORACLE_ADDR'
-          },
-          {
-            key: 'INDEXER_SCROLL_L1_RPC',
-            configKey: 'general.L1_RPC_ENDPOINT'
-          }
-
-
-        ];
-        const benv = productionYaml["blockscout-stack"].blockscout.env;
-
-        BLOCKSCOUT_ENV_MAPPINGS.forEach(mapping => {
-          const { key, configKey, defaultValue } = mapping;
-
-          let newValue = this.getConfigValue(configKey);
-          if (!newValue) {
-            newValue = configKey ? this.contractsConfig[configKey] : defaultValue;
-          }
-
-          let oldValue = benv[key];
-
-          if (newValue !== oldValue) {
-            changes.push({
-              key: `blockscout.env.${key}`,
-              oldValue: benv[key],
-              newValue: newValue
-            });
-            benv[key] = newValue;
-            updated = true;
-          } else {
-            this.log(chalk.yellow(`No value found for ${key}`));
-          }
-        });
-        if (ingressUpdated) {
-          updated = true;
-        }
-      }
-
-      if (productionYaml.grafana) {
-        /*
-          grafana.ini:
-            server:
-              domain: grafana.scrollsdk
-              root_url: "https://grafana.scrollsdk""
-        */
-        if (!productionYaml.grafana["grafana.ini"]) {
-          productionYaml.grafana["grafana.ini"] = { server: {} };
-        }
-        if (!productionYaml.grafana["grafana.ini"].server) {
-          productionYaml.grafana["grafana.ini"].server = {};
-        }
-
-        let existingDomain = productionYaml.grafana?.["grafana.ini"]?.server?.domain ?? null;
-        let existingRootUrl = productionYaml.grafana?.["grafana.ini"]?.server?.root_url ?? null;
-
-        let newDomain = this.getConfigValue("ingress.GRAFANA_HOST");
-        if (existingDomain != newDomain) {
-          changes.push({ key: `grafana["grafana.ini"].server.domain`, oldValue: existingDomain, newValue: newDomain });
-          productionYaml.grafana["grafana.ini"].server.domain = newDomain;
-          updated = true;
-        }
-
-        let newRootUrl = this.getConfigValue("frontend.GRAFANA_URI");
-        if (existingRootUrl != newRootUrl) {
-          changes.push({ key: `grafana["grafana.ini"].server.root_url`, oldValue: existingRootUrl, newValue: newRootUrl });
-          productionYaml.grafana["grafana.ini"].server.root_url = newRootUrl;
-          updated = true;
-        }
-
-
-
-        let ingressUpdated = false;
-        let ingressValue = productionYaml.grafana.ingress;
-        if (ingressValue && typeof ingressValue === 'object' && 'hosts' in ingressValue) {
-          const hosts = ingressValue.hosts as Array<string>;
-          if (Array.isArray(hosts)) {
-            for (let i = 0; i < hosts.length; i++) {
-              if (typeof (hosts[i]) === 'string') {
-                let configValue: string | undefined;
-                configValue = this.getConfigValue("ingress.GRAFANA_HOST");
-
-                if (configValue && (configValue !== hosts[i])) {
-                  changes.push({ key: `ingress.hosts[${i}]`, oldValue: hosts[i], newValue: configValue });
-                  hosts[i] = configValue;
-                  ingressUpdated = true;
-                }
-              }
-            }
-          }
-        }
-
-        if (ingressUpdated) {
-          updated = true;
-          // Update the tls section if it exists
-          for (const [ingressKey, ingressValue] of Object.entries(productionYaml.grafana.ingress)) {
-            if (ingressValue && typeof ingressValue === 'object' && 'tls' in ingressValue && 'hosts' in ingressValue) {
-              const tlsEntries = ingressValue.tls as Array<{ hosts: string[] }>;
-              const hosts = ingressValue.hosts as Array<{ host: string }>;
-              if (Array.isArray(tlsEntries) && Array.isArray(hosts)) {
-                tlsEntries.forEach((tlsEntry) => {
-                  if (Array.isArray(tlsEntry.hosts)) {
-                    tlsEntry.hosts = hosts.map((host) => host.host);
-                  }
-                });
-              }
-            }
-          }
-        }
-      }
-
-      if (chartName == "celestia-node") {
-        let ingressUpdated = false;
-        if (!productionYaml.ingress) {
-          productionYaml.ingress = {
-            enabled: true,
-            className: "nginx",
-            annotations: {
-              "cert-manager.io/cluster-issuer": "letsencrypt-prod",
-              "nginx.ingress.kubernetes.io/ssl-redirect": "true"
-            },
-            hosts: [
-              {
-                host: this.getConfigValue("ingress.CELESTIA_HOST"),
-                paths: [{ path: "/", pathType: "Prefix" }]
-              }
-            ],
-          };
-          changes.push({ key: `ingress`, oldValue: "undefined", newValue: JSON.stringify(productionYaml.ingress) });
-          ingressUpdated = true;
-        } else {
-          let ingressValue = productionYaml.ingress;
-          ingressValue.enabled = true;
-          const configValue = this.getConfigValue('ingress.CELESTIA_HOST');
-          ingressUpdated = this.processIngressHosts(ingressValue, configValue, changes);
-        }
-
-        if (ingressUpdated) {
-          updated = true;
-        }
-
-        if (!productionYaml.core || !productionYaml.core.rpc_url) {
-          if (!productionYaml.core) {
-            productionYaml.core = {
-              rpc_url: ""
-            };
-          }
-        }
-        const oldCoreRpcUrl = productionYaml.core.rpc_url;
-
-        let newCoreRpcUrl = this.dogeConfig.da?.tendermintRpcUrl;
-        if (!newCoreRpcUrl) {
-          this.error(`Invalid tendermintRpcUrl URL: ${newCoreRpcUrl}`)
-        }
-
-        try {
-          const urlObj = new URL(newCoreRpcUrl);
-          newCoreRpcUrl = urlObj.hostname;
-        } catch (e) {
-          this.error(`Invalid tendermintRpcUrl URL: ${newCoreRpcUrl}`);
-        }
-        if (oldCoreRpcUrl !== newCoreRpcUrl) {
-          productionYaml.core.rpc_url = newCoreRpcUrl;
-          updated = true;
-          changes.push({ key: "core.rpc_url", oldValue: oldCoreRpcUrl, "newValue": newCoreRpcUrl });
-        }
-      } else if (chartName == 'blockbook') {
-        let ingressUpdated = false;
-        if (!productionYaml.ingress) {
-          productionYaml.ingress = {
-            enabled: true,
-            className: "nginx",
-            annotations: {
-              "cert-manager.io/cluster-issuer": "letsencrypt-prod",
-              "nginx.ingress.kubernetes.io/ssl-redirect": "true"
-            },
-            hosts: [
-              {
-                host: this.getConfigValue("ingress.BLOCKBOOK_HOST"),
-                paths: [{ path: "/", pathType: "Prefix" }]
-              }
-            ],
-          };
-          changes.push({ key: `ingress`, oldValue: "undefined", newValue: JSON.stringify(productionYaml.ingress) });
-          ingressUpdated = true;
-        } else {
-          let ingressValue = productionYaml.ingress;
-          ingressValue.enabled = true;
-          const configValue = this.getConfigValue('ingress.BLOCKBOOK_HOST');
-          ingressUpdated = this.processIngressHosts(ingressValue, configValue, changes);
-        }
-
-        if (ingressUpdated) {
-          updated = true;
-        }
-
-        const oldValue = productionYaml.blockbook.blockHeight;
-        const newValue = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
-        if (oldValue !== newValue) {
-          productionYaml.blockbook.blockHeight = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
-          updated = true;
-          changes.push({ key: `blockbook.blockHeight`, oldValue: oldValue || 'undefined', newValue: newValue || 'undefined' });
-        }
-      }
-
-      else if (chartName == 'fee-oracle') {
-        if (!productionYaml.configMaps?.env?.data) {
-          this.error(`${chartName}: configMaps.env.data not found in config`);
-        }
-
-        const todoMappings = {
-          "DOGEOS_FEE_ORACLE_L2__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT"),
-          "DOGEOS_FEE_ORACLE_L2__CHAIN_ID": String(this.getConfigValue("general.CHAIN_ID_L2")),
-          "DOGEOS_FEE_ORACLE_DOGECOIN__NETWORK_STR": this.withdrawalProcessorConfig["network_str"],
-          "DOGEOS_FEE_ORACLE_L2__GAS_ORACLE_CONTRACT": this.getConfigValue("contractsFile.L1_GAS_PRICE_ORACLE_ADDR"),
-          "DOGEOS_FEE_ORACLE_DOGECOIN__RPC_URL": dogecoinInternalUrl,
-          "DOGEOS_FEE_ORACLE_CELESTIA__NAMESPACE_ID": this.dogeConfig.da?.daNamespace,
-        }
-
-        for (const [envKey, newVal] of Object.entries(todoMappings)) {
-          const oldValue = productionYaml.configMaps.env.data[envKey];
-          if (oldValue !== newVal) {
-            productionYaml.configMaps.env.data[envKey] = newVal;
-            updated = true;
-            changes.push({ key: `configMaps.env.data.${envKey}`, oldValue: oldValue || 'undefined', newValue: newVal });
-          }
-        }
-      }
-
-      else if (chartName == 'l1-interface') {
-        if (!productionYaml.configMaps?.env?.data) {
-          this.error(`${chartName}: configMaps.env.data not found in config`);
-        }
-
-        const todoMappings = {
-          "DOGEOS_L1_INTERFACE_NETWORK_STR": this.withdrawalProcessorConfig["network_str"],
-          "DOGEOS_L1_INTERFACE_SCROLL_MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR"),
-          "DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
-          "DOGEOS_L1_INTERFACE_L2_MOAT_CONTRACT_ADDRESS": this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
-          "DOGEOS_L1_INTERFACE_L2_MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
-          "DOGEOS_L1_INTERFACE_L1_BASE_FEE_PER_GAS": this.getConfigValue("genesis.BASE_FEE_PER_GAS").toString(),
-          "DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER": this.getConfigValue("sequencer.L2GETH_SIGNER_ADDRESS"),
-          "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL": dogecoinInternalUrl,
-          "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
-          "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__BRIDGE_ADDRESS": this.withdrawalProcessorConfig["bridge_address"],
-          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "http://celestia-testnet-mocha:26658",
-          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__NAMESPACE_ID": this.dogeConfig.da?.daNamespace,
-          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
-          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_URL": new URL(this.dogeConfig.da?.tendermintRpcUrl || "").origin
-        }
-
-        for (const [envKey, newVal] of Object.entries(todoMappings)) {
-          const oldValue = productionYaml.configMaps.env.data[envKey];
-          if (oldValue !== newVal) {
-            productionYaml.configMaps.env.data[envKey] = newVal;
-            updated = true;
-            changes.push({ key: `configMaps.env.data.${envKey}`, oldValue: oldValue || 'undefined', newValue: newVal });
-          }
-        }
-      }
-
-      else if (chartName == 'withdrawal-processor') {
-        if (!productionYaml.env) {
-          this.error(`${chartName}: env not found in config`);
-        }
-
-        const todoMappings = {
-          "DOGEOS_WITHDRAWAL_DATABASE_URL": "sqlite:///app/data/withdrawal_processor.db",
-          "DOGEOS_WITHDRAWAL_NETWORK_STR": this.withdrawalProcessorConfig["network_str"],
-          "DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS": this.withdrawalProcessorConfig["bridge_address"],
-          "DOGEOS_WITHDRAWAL_BRIDGE_SCRIPT_HEX": this.withdrawalProcessorConfig["bridge_script_hex"],
-          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
-          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSAGE_QUEUE_ADDRESS": this.getConfigValue("contractsFile.L2_MESSAGE_QUEUE_ADDR"),
-
-          "DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL": dogecoinInternalUrl,
-          "DOGEOS_WITHDRAWAL_TSO_URL": "http://tso-service:3000",
-          "DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
-          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__START_BLOCK": "0",
-          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
-          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT"),
-          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "http://celestia-testnet-mocha:26658",
-          // "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL": this.dogeConfig.da?.tendermintRpcUrl,
-          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE": this.dogeConfig.da?.daNamespace,
-          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__SIGNER_ADDRESS": this.dogeConfig.da?.signerAddress,
-          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_VOUT": this.withdrawalProcessorConfig["genesis_sequencer_vout"],
-          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_TXID": this.withdrawalProcessorConfig['genesis_sequencer_txid'],
-          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_URL": new URL(this.dogeConfig.da?.tendermintRpcUrl || "").origin
-        }
-
-        for (const [envKey, newVal] of Object.entries(todoMappings)) {
-          let envVar = productionYaml.env.find((item: any) => item.name === envKey);
-          if (envVar) {
-            if (envVar.value !== newVal) {
-              const oldValue = envVar.value;
-              envVar.value = newVal;
-              updated = true;
-              changes.push({ key: `env.${envKey}`, oldValue, newValue: newVal });
-            }
-          } else {
-            productionYaml.env.push({ name: envKey, value: newVal });
-            updated = true;
-            changes.push({ key: `env.${envKey}`, oldValue: 'undefined', newValue: newVal });
-          }
-        }
-
-        // Replace TSO signer URIs based on signerUrls array, ensuring only 'Correctness' roles are updated sequentially
-        if (productionYaml.tsoSigners && Array.isArray(productionYaml.tsoSigners)) {
-          const signerUrls = this.dogeConfig.signerUrls || [];
-
-          // extract existing Correctness signer URIs
-          const existingCorrectnessIdx: number[] = [];
-          const existingUris: string[] = [];
-          productionYaml.tsoSigners.forEach((s: any, idx: number) => {
-            if (s.role === 'Correctness') {
-              existingCorrectnessIdx.push(idx);
-              existingUris.push(s.uri);
-            }
-          });
-
-          const isSame = existingUris.length === signerUrls.length && existingUris.every((u, idx) => u === signerUrls[idx]);
-
-          if (!isSame) {
-            // 1) remove all existing Correctness signers
-            for (let j = existingCorrectnessIdx.length - 1; j >= 0; j--) {
-              const idx = existingCorrectnessIdx[j];
-              const removed = productionYaml.tsoSigners.splice(idx, 1)[0];
-              updated = true;
-              changes.push({ key: `tsoSigners[${idx}]`, oldValue: JSON.stringify(removed), newValue: 'removed' });
-            }
-
-            // 2) re-insert Correctness signers based on signerUrls
-            signerUrls.forEach((url) => {
-              const newSigner = { role: 'Correctness', uri: url, network: this.dogeConfig.network } as any;
-              productionYaml.tsoSigners.push(newSigner);
-              updated = true;
-              const newIndex = productionYaml.tsoSigners.length - 1;
-              changes.push({ key: `tsoSigners[${newIndex}]`, oldValue: 'undefined', newValue: JSON.stringify(newSigner) });
-            });
-          }
-
-          // 3) sync network field for all signers
-          for (let i = 0; i < productionYaml.tsoSigners.length; i++) {
-            const signer = productionYaml.tsoSigners[i];
-            if (signer.network !== this.dogeConfig.network) {
-              const oldVal = signer.network;
-              signer.network = this.dogeConfig.network;
-              updated = true;
-              changes.push({ key: `tsoSigners[${i}].network`, oldValue: oldVal, newValue: this.dogeConfig.network });
-            }
-          }
-        }
-      }
-
-      else if (chartName == "cubesigner-signer") {
-        if (!productionYaml.env) {
-          this.error(`${chartName}: env not found in config`);
-        }
-        /*
-        env:
-        - name: "DOGEOS_CUBESIGNER_SIGNER_PORT"
-          value: "3000"
-        - name: "DOGEOS_CUBESIGNER_SIGNER_NETWORK"
-          value: "testnet"
-        */
-        const envVarName = 'DOGEOS_CUBESIGNER_SIGNER_NETWORK';
-        const configValue = this.dogeConfig.network;
-
-        // Find existing environment variable
-        let envVar = productionYaml.env.find((item: any) => item.name === envVarName);
-
-        if (envVar) {
-          // Update existing value
-          if (envVar.value !== configValue) {
-            const oldValue = envVar.value;
-            envVar.value = configValue;
-            updated = true;
-            changes.push({ key: `env.${envVarName}`, oldValue, newValue: configValue });
-          }
-        } else {
-          // Add new environment variable
-          productionYaml.env.push({ name: envVarName, value: configValue });
-          updated = true;
-          changes.push({ key: `env.${envVarName}`, oldValue: 'undefined', newValue: configValue });
-        }
-      }
-      else if (chartName == "da-publisher") {
-        const todoMappings = {
-          //TODO what if mainnet ?
-          "DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL": this.dogeConfig.network == "mainnet" ? "" : "celestia-testnet-mocha:26658",
-          "DOGEOS_DA_PUBLISHER_CELESTIA_NAMESPACE": this.dogeConfig.da?.daNamespace
-        }
-       
-        const envData = productionYaml.configMaps.env.data;
-        for (const [envKey, newValue] of Object.entries(todoMappings)) {
-          if (Object.prototype.hasOwnProperty.call(envData, envKey)) {
-            if (envData[envKey] !== newValue) {
-              const oldValue = envData[envKey];
-              envData[envKey] = newValue;
-              updated = true;
-              changes.push({ key: `configMaps.env.data.${envKey}`, oldValue: String(oldValue), newValue: String(newValue) });
-            }
-          } else {
-            envData[envKey] = newValue;
-            updated = true;
-            changes.push({ key: `configMaps.env.data.${envKey}`, oldValue: 'undefined', newValue: String(newValue) });
-          }
-        }
-      }
-      else if (chartName == "tso-service") {
-        if (!productionYaml.env) {
-          this.error(`${chartName}: env not found in config`);
-        }
-        const todoMappings = {
-          "DOGE_NETWORK": this.dogeConfig.network
-        }
-
-        for (const [envKey, newValue] of Object.entries(todoMappings)) {
-          let envVar = productionYaml.env.find((item: any) => item.name === envKey);
-          if (envVar) {
-            if (envVar.value !== newValue) {
-              const oldValue = envVar.value;
-              envVar.value = newValue;
-              updated = true;
-              changes.push({ key: `env.${envKey}`, oldValue, newValue });
-            }
-          } else {
-            productionYaml.env.push({ name: envKey, value: newValue });
-            updated = true;
-            changes.push({ key: `env.${envKey}`, oldValue: 'undefined', newValue });
-          }
-        }
-      }
-      else if (chartName == "metrics-exporter") {
-
-        const rollupExplorerBackendUrl = "http://rollup-explorer-backend";
-        const l2RpcEndpoint = this.getConfigValue("general.L2_RPC_ENDPOINT");
-        const l2TxFeeVaultAddr = this.getConfigValue("contracts.overrides.L2_TX_FEE_VAULT");
-        const l2BridgeFeeRecipientAddr = this.getConfigValue("contracts.L2_BRIDGE_FEE_RECIPIENT_ADDR");
-        const isDogeos = this.getConfigValue("general.L1_RPC_ENDPOINT") === "http://l1-interface:8545";
-        const l1MessageQueueProxyAddr = isDogeos ? "" : this.getConfigValue("contractsFile.L1_MESSAGE_QUEUE_V2_PROXY_ADDR");
-        const l1RpcEndpoint = this.getConfigValue("general.L1_RPC_ENDPOINT");
-
-        if (!productionYaml.metricsConfig) {
-          productionYaml.metricsConfig = {
-            rollup: {
-              url: rollupExplorerBackendUrl
-            },
-            l1Network: {
-              url: l1RpcEndpoint,
-              L1_MESSAGE_QUEUE_PROXY_ADDR: l1MessageQueueProxyAddr
-            },
-            dogecoin: {
-              url: dogecoinInternalUrl
-            },
-            dogeos: {
-              url: this.getConfigValue("general.L2_RPC_ENDPOINT"),
-              L2_TX_FEE_VAULT_ADDR: l2TxFeeVaultAddr,
-              L2_BRIDGE_FEE_RECIPIENT_ADDR: l2BridgeFeeRecipientAddr
-            }
-          };
-          updated = true;
-          changes.push({
-            key: `metricsConfig`, oldValue: "undefined",
-            newValue: JSON.stringify(productionYaml.metricsConfig)
-          });
-        } else {
-          if (productionYaml.metricsConfig.rollup.url != rollupExplorerBackendUrl) {
-            updated = true;
-            changes.push({
-              key: `metricsConfig.rollup.url`, oldValue: productionYaml.metricsConfig.rollup.url,
-              newValue: rollupExplorerBackendUrl
-            });
-            productionYaml.metricsConfig.rollup.url = rollupExplorerBackendUrl;
-          }
-          if (productionYaml.metricsConfig.l1Network.url != l1RpcEndpoint) {
-            updated = true;
-            changes.push({
-              key: `metricsConfig.l1Network.url`, oldValue: productionYaml.metricsConfig.l1Network.url,
-              newValue: l1RpcEndpoint
-            });
-            productionYaml.metricsConfig.l1Network.url = l1RpcEndpoint;
-          }
-          if (productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR != l1MessageQueueProxyAddr) {
-            updated = true;
-            changes.push({
-              key: `metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR`, oldValue: productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR,
-              newValue: l1MessageQueueProxyAddr
-            });
-            productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR = l1MessageQueueProxyAddr;
-          }
-          if (productionYaml.metricsConfig.dogecoin.url != dogecoinInternalUrl) {
-            updated = true;
-            changes.push({
-              key: `metricsConfig.dogecoin.url`, oldValue: productionYaml.metricsConfig.dogecoin.url,
-              newValue: dogecoinInternalUrl
-            });
-            productionYaml.metricsConfig.dogecoin.url = dogecoinInternalUrl;
-          }
-          if (productionYaml.metricsConfig.dogeos.url != l2RpcEndpoint) {
-            updated = true;
-            changes.push({
-              key: `metricsConfig.dogeos.url`, oldValue: productionYaml.metricsConfig.dogeos.url,
-              newValue: l2RpcEndpoint
-            });
-            productionYaml.metricsConfig.dogeos.url = l2RpcEndpoint;
-          }
-          if (productionYaml.metricsConfig.dogeos.L2_TX_FEE_VAULT_ADDR != l2TxFeeVaultAddr) {
-            updated = true;
-            changes.push({
-              key: `metricsConfig.dogeos.L2_TX_FEE_VAULT_ADDR`, oldValue: productionYaml.metricsConfig.dogeos.L2_TX_FEE_VAULT_ADDR,
-              newValue: l2TxFeeVaultAddr
-            });
-            productionYaml.metricsConfig.dogeos.L2_TX_FEE_VAULT_ADDR = l2TxFeeVaultAddr;
-          }
-          if (productionYaml.metricsConfig.dogeos.L2_BRIDGE_FEE_RECIPIENT_ADDR != l2BridgeFeeRecipientAddr) {
-            updated = true;
-            changes.push({
-              key: `metricsConfig.dogeos.L2_BRIDGE_FEE_RECIPIENT_ADDR`, oldValue: productionYaml.metricsConfig.dogeos.L2_BRIDGE_FEE_RECIPIENT_ADDR,
-              newValue: l2BridgeFeeRecipientAddr
-            });
-            productionYaml.metricsConfig.dogeos.L2_BRIDGE_FEE_RECIPIENT_ADDR = l2BridgeFeeRecipientAddr;
-          }
-        }
-      }
-      else if (chartName == "dogecoin") {
-        const isTestnet = this.dogeConfig.network == "testnet";
-
-        let dogecoinConf_testnet = productionYaml.dogecoinConf?.testnet;
-        const expected_testnet = isTestnet ? 1 : 0;
-        if (dogecoinConf_testnet != expected_testnet) {
-          productionYaml.dogecoinConf.testnet = expected_testnet;
-          updated = true;
-          changes.push({ key: `dogecoinConf.testnet`, oldValue: String(dogecoinConf_testnet), newValue: String(expected_testnet) });
-        }
-
-        let service_port = productionYaml.service?.port;
-        const expected_service_port = isTestnet ? 44556 : 22556;
-        if (service_port != expected_service_port) {
-          productionYaml.service.port = expected_service_port;
-          updated = true;
-          changes.push({ key: `service.port`, oldValue: String(service_port), newValue: String(expected_service_port) });
-        }
-
-        let service_rpcPort = productionYaml.service?.rpcPort;
-        const expected_service_rpcPort = isTestnet ? 44555 : 22555;
-        if (service_rpcPort != expected_service_rpcPort) {
-          productionYaml.service.rpcPort = expected_service_rpcPort;
-          updated = true;
-          changes.push({ key: `service.rpcPort`, oldValue: String(service_rpcPort), newValue: String(expected_service_rpcPort) });
-        }
-
-        let storage_size = productionYaml.storage?.size;
-        const expected_storage_size = isTestnet ? "50Gi" : "250Gi";
-        if (storage_size != expected_storage_size) {
-          productionYaml.storage.size = expected_storage_size;
-          updated = true;
-          changes.push({ key: `storage.size`, oldValue: String(storage_size), newValue: String(expected_storage_size) });
-        }
-
-        // let rpcPassword = productionYaml.rpcPassword;
-        // let expectedRpcPassword = this.dogeConfig.dogecoinClusterRpc?.password;
-        // if (rpcPassword != expectedRpcPassword) {
-        //   productionYaml.rpcPassword = expectedRpcPassword;
-        //   updated = true;
-        //   changes.push({ key: `rpcPassword`, oldValue: String(rpcPassword), newValue: String(expectedRpcPassword) });
-        // }
-
-        let rpcUser = productionYaml.dogecoinConf?.rpcuser;
-        let expectedRpcUser = this.dogeConfig.dogecoinClusterRpc?.username;
-        if (rpcUser != expectedRpcUser) {
-          productionYaml.dogecoinConf.rpcuser = expectedRpcUser;
-          updated = true;
-          changes.push({ key: `dogecoinConf.rpcuser`, oldValue: String(rpcUser), newValue: String(expectedRpcUser) });
-        }
-
-        // Process dogecoin ingress (similar to celestia)
-        let ingressUpdated = false;
-        if (productionYaml.ingress) {
-          const configValue = this.getConfigValue('ingress.DOGECOIN_HOST');
-          ingressUpdated = this.processIngressHosts(productionYaml.ingress, configValue, changes);
-        }
-
-        if (ingressUpdated) {
-          updated = true;
-        }
-      }
-      else if (chartName == "testnet-activity-helper") {
-        let l2RpcEndpoint = this.getConfigValue("general.L2_RPC_ENDPOINT");
-        if (productionYaml.config?.externalRpcUriL2 != l2RpcEndpoint) {
-          productionYaml.config.externalRpcUriL2 = l2RpcEndpoint;
-          updated = true;
-          changes.push({ key: `config.externalRpcUriL2`, oldValue: productionYaml.config?.externalRpcUriL2, newValue: l2RpcEndpoint });
-        }
-      }
-
-      if (updated) {
-        if (!this.jsonMode) {
-          this.log(`\nFor ${chalk.cyan(file)}:`)
-          this.log(chalk.green('Changes:'))
-          for (const change of changes) {
-            this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`)
-          }
-        }
-
-        let shouldUpdate = this.nonInteractive
-        if (!this.nonInteractive) {
-          shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` })
-        }
-
-        if (shouldUpdate) {
-          const yamlString = yaml.dump(productionYaml, YAML_DUMP_OPTIONS)
-
-          fs.writeFileSync(yamlPath, yamlString)
-          this.jsonCtx.logSuccess(`Updated ${file}`)
-          updatedCharts++
-        } else {
-          this.jsonCtx.info(`Skipped updating ${file}`)
-          skippedCharts++
-        }
-      } else {
-        this.jsonCtx.info(`No changes needed in ${file}`)
-        skippedCharts++
-      }
+  private async loadConfigs(flags: any): Promise<void> {
+    const configPath = path.join(process.cwd(), 'config.toml')
+    const contractsConfigPath = path.join(process.cwd(), 'config-contracts.toml')
+
+    if (fs.existsSync(configPath)) {
+      const configContent = fs.readFileSync(configPath, 'utf8')
+      this.configData = toml.parse(configContent)
+    } else {
+      this.warn('config.toml not found. Some values may not be populated correctly.')
     }
 
+    if (fs.existsSync(contractsConfigPath)) {
+      const contractsConfigContent = fs.readFileSync(contractsConfigPath, 'utf8')
+      this.contractsConfig = toml.parse(contractsConfigContent)
+    } else {
+      this.warn('config-contracts.toml not found. Some values may not be populated correctly.')
+    }
 
-    return { updated: updatedCharts, skipped: skippedCharts }
+    const { config } = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk doge:config')
+    this.dogeConfig = config as DogeConfigType;
+
+
+    const withdrawalProcessorConfigPath = path.join(process.cwd(), ".data/output-withdrawal-processor.toml")
+    if (!fs.existsSync(withdrawalProcessorConfigPath)) {
+      this.error("run scrollsdk doge:bridge-init first");
+      return
+    }
+
+    const withdrawalProcessorConfigContent = fs.readFileSync(withdrawalProcessorConfigPath, 'utf8');
+    this.withdrawalProcessorConfig = toml.parse(withdrawalProcessorConfigContent);
+    
   }
 
-  private async processConfigYaml(valuesDir: string): Promise<{ updated: number, skipped: number }> {
+  private async processConfigYaml(valuesDir: string): Promise<{ skipped: number, updated: number }> {
     let updatedCharts = 0
     let skippedCharts = 0
     const configFiles = fs.readdirSync(valuesDir)
@@ -1226,41 +255,42 @@ export default class SetupPrepCharts extends Command {
     for (const file of configFiles) {
       const yamlPath = path.join(valuesDir, file)
       this.log(chalk.cyan(`Processing ${yamlPath}`));
-      let chartName = file.replace(/-config\.yaml$/, '');
-      let yamlData = yaml.load(fs.readFileSync(yamlPath, "utf-8")) as any;
-      let changes: Array<{ key: string; oldValue: string; newValue: string }> = [];
+      const chartName = file.replace(/-config\.yaml$/, '');
+      const yamlData = yaml.load(fs.readFileSync(yamlPath, "utf8")) as any;
+      const changes: Array<{ key: string; newValue: string; oldValue: string }> = [];
 
-      if (chartName == "rollup-relayer") {
+      if (chartName === "rollup-relayer") {
         let updated = false;
-        let daPublisherEndpoint = this.getConfigValue("general.DA_PUBLISHER_ENDPOINT");
+        const daPublisherEndpoint = this.getConfigValue("general.DA_PUBLISHER_ENDPOINT");
 
         // Parse the JSON string from scrollConfig
         let scrollConfigJson: any = {};
         try {
-          scrollConfigJson = JSON.parse(yamlData["scrollConfig"]);
-        } catch (e: any) {
-          this.error(chalk.red(`Failed to parse scrollConfig JSON in ${file}: ` + e.message));
+          scrollConfigJson = JSON.parse(yamlData.scrollConfig);
+        } catch (error: any) {
+          this.error(chalk.red(`Failed to parse scrollConfig JSON in ${file}: ` + error.message));
         }
 
-        const currentL1Endpoint = scrollConfigJson["l1_config"]["endpoint"];
-        if (currentL1Endpoint != "") {
-          scrollConfigJson["l1_config"]["endpoint"] = "";
+        const currentL1Endpoint = scrollConfigJson.l1_config.endpoint;
+        if (currentL1Endpoint !== "") {
+          scrollConfigJson.l1_config.endpoint = "";
           updated = true;
-          changes.push({ key: `l1_config.endpoint`, oldValue: currentL1Endpoint, newValue: "" });
+          changes.push({ key: `l1_config.endpoint`, newValue: "", oldValue: currentL1Endpoint });
         }
-        const currentEndpoint = scrollConfigJson["l2_config"]["relayer_config"]["sender_config"]["endpoint"];
-        if (currentEndpoint != daPublisherEndpoint) {
-          scrollConfigJson["l2_config"]["relayer_config"]["sender_config"]["endpoint"] = daPublisherEndpoint;
+
+        const currentEndpoint = scrollConfigJson.l2_config.relayer_config.sender_config.endpoint;
+        if (currentEndpoint !== daPublisherEndpoint) {
+          scrollConfigJson.l2_config.relayer_config.sender_config.endpoint = daPublisherEndpoint;
           updated = true;
-          changes.push({ key: `l2_config.relayer_config.sender_config.endpoint`, oldValue: currentEndpoint, newValue: daPublisherEndpoint });
+          changes.push({ key: `l2_config.relayer_config.sender_config.endpoint`, newValue: daPublisherEndpoint, oldValue: currentEndpoint });
         }
 
         // Remove celestia_submit_endpoint if it exists
-        if (scrollConfigJson["l2_config"]?.["relayer_config"]?.["celestia_submit_endpoint"] !== undefined) {
-          const currentCelestiaEndpoint = scrollConfigJson["l2_config"]["relayer_config"]["celestia_submit_endpoint"];
-          delete scrollConfigJson["l2_config"]["relayer_config"]["celestia_submit_endpoint"];
+        if (scrollConfigJson.l2_config?.relayer_config?.celestia_submit_endpoint !== undefined) {
+          const currentCelestiaEndpoint = scrollConfigJson.l2_config.relayer_config.celestia_submit_endpoint;
+          delete scrollConfigJson.l2_config.relayer_config.celestia_submit_endpoint;
           updated = true;
-          changes.push({ key: `l2_config.relayer_config.celestia_submit_endpoint`, oldValue: currentCelestiaEndpoint, newValue: "removed" });
+          changes.push({ key: `l2_config.relayer_config.celestia_submit_endpoint`, newValue: "removed", oldValue: currentCelestiaEndpoint });
         }
 
 
@@ -1304,44 +334,45 @@ export default class SetupPrepCharts extends Command {
         skippedCharts++;
       }
 
-      if (chartName == "frontends") {
-        let scrollConfig = yamlData["scrollConfig"];
+      if (chartName === "frontends") {
+        const {scrollConfig} = yamlData;
         let scrollConfigToml: any = {};
         try {
           scrollConfigToml = toml.parse(scrollConfig);
-        } catch (e: any) {
-          this.error(chalk.red("scrollConfig failed: " + e.message));
+        } catch (error: any) {
+          this.error(chalk.red("scrollConfig failed: " + error.message));
         }
 
         let sharedHost = this.getConfigValue("ingress.FRONTEND_HOST")
         if (sharedHost && sharedHost.startsWith("portal.")) {
-          sharedHost = sharedHost.substring(7)
+          sharedHost = sharedHost.slice(7)
         }
+
         const configUpdates = {
 
-          REACT_APP_EXTERNAL_DOCS_URI: this.formatUrl("https://docs." + sharedHost, "/en/home"),
-          REACT_APP_FAUCET_URI: this.formatUrl("https://faucet." + sharedHost),
-          REACT_APP_DOGE_NETWORK: this.dogeConfig.network,
-          REACT_APP_DOGE_BRIDGE_ADDRESS: this.withdrawalProcessorConfig["bridge_address"],
-          REACT_APP_MOAT_ADDRESS: this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
-          REACT_APP_L1_STANDARD_ERC20_GATEWAY_PROXY_ADDR: "",
-          REACT_APP_L1_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
-          REACT_APP_L2_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
-          REACT_APP_ROLLUP: this.getConfigValue("general.CHAIN_NAME_L2"),
-
-          //new config
-          REACT_APP_ETH_SYMBOL: this.getConfigValue("frontend.ETH_SYMBOL"),
           REACT_APP_BASE_CHAIN: this.getConfigValue("general.CHAIN_NAME_L1"),
           REACT_APP_CONNECT_WALLET_PROJECT_ID: this.getConfigValue("frontend.CONNECT_WALLET_PROJECT_ID"),
-          REACT_APP_EXTERNAL_RPC_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_RPC_URI_L1"),
+          REACT_APP_DOGE_BRIDGE_ADDRESS: this.withdrawalProcessorConfig.bridge_address,
+          REACT_APP_DOGE_NETWORK: this.dogeConfig.network,
+          // new config
+          REACT_APP_ETH_SYMBOL: this.getConfigValue("frontend.ETH_SYMBOL"),
+          REACT_APP_EXTERNAL_DOCS_URI: this.formatUrl("https://docs." + sharedHost, "/en/home"),
           REACT_APP_EXTERNAL_EXPLORER_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_EXPLORER_URI_L1"),
+          REACT_APP_EXTERNAL_RPC_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_RPC_URI_L1"),
+          REACT_APP_FAUCET_URI: this.formatUrl("https://faucet." + sharedHost),
+
+          REACT_APP_L1_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
+          REACT_APP_L1_STANDARD_ERC20_GATEWAY_PROXY_ADDR: "",
+          REACT_APP_L2_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
+          REACT_APP_MOAT_ADDRESS: this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
+          REACT_APP_ROLLUP: this.getConfigValue("general.CHAIN_NAME_L2"),
         };
 
         let updated = false;
         for (const [key, newValue] of Object.entries(configUpdates)) {
           const oldValue = scrollConfigToml[key];
           if (!oldValue || oldValue !== newValue) {
-            changes.push({ key, oldValue: String(oldValue || ''), newValue: String(newValue) });
+            changes.push({ key, newValue: String(newValue), oldValue: String(oldValue || '') });
             scrollConfigToml[key] = newValue;
             updated = true;
           }
@@ -1387,12 +418,1051 @@ export default class SetupPrepCharts extends Command {
         }
       }
     }
-    return { updated: updatedCharts, skipped: skippedCharts };
+
+    return { skipped: skippedCharts, updated: updatedCharts };
+  }
+
+  // Generic ingress processing function
+  private processIngressHosts(
+    ingressConfig: any,
+    hostConfigValue: string,
+    changes: Array<{ key: string; newValue: string; oldValue: string }>,
+    keyPrefix: string = 'ingress'
+  ): boolean {
+    let ingressUpdated = false;
+
+    if (ingressConfig && typeof ingressConfig === 'object' && 'hosts' in ingressConfig) {
+      const hosts = ingressConfig.hosts as Array<{ host: string; paths?: any[] }>;
+      if (Array.isArray(hosts)) {
+        for (const [i, host] of hosts.entries()) {
+          if (typeof host === 'object' && 'host' in host && hostConfigValue && hostConfigValue !== host.host) {
+              changes.push({
+                key: `${keyPrefix}.hosts[${i}].host`,
+                newValue: hostConfigValue,
+                oldValue: host.host
+              });
+              host.host = hostConfigValue;
+              ingressUpdated = true;
+            }
+        }
+      }
+
+      // Update TLS section if it exists and ingress was updated
+      if (ingressUpdated && ingressConfig.tls) {
+        const tlsEntries = ingressConfig.tls as Array<{ hosts: string[] }>;
+        if (Array.isArray(tlsEntries)) {
+          for (const tlsEntry of tlsEntries) {
+            if (Array.isArray(tlsEntry.hosts)) {
+              tlsEntry.hosts = hosts.map((host) => host.host);
+            }
+          }
+        }
+      }
+    }
+
+    return ingressUpdated;
+  }
+
+  private async processMutipleInstance(valuesDir: string): Promise<{ skipped: number; updated: number }> {
+    interface ChartConfig {
+      chartName: string;
+      configKey: null | string;
+    }
+
+    const names: ChartConfig[] = [{
+      chartName: "l2-bootnode",
+      configKey: "bootnode"
+    }, {
+      chartName: "l2-sequencer",
+      configKey: "sequencer"
+    }, {
+      chartName: "cubesigner-signer",
+      configKey: null
+    }];
+    let updatedCharts = 0;
+    let skippedCharts = 0;
+
+    for (const item of names) {
+      const { chartName, configKey } = item;
+
+      // Skip config validation for charts that don't need configKey (like cubesigner-signer)
+      if (configKey && !this.configData[configKey]) {
+        this.error(`${configKey} not found in config.toml`);
+      }
+
+      let releaseIndex = 0;
+      const templateFilePath = path.join(valuesDir, `${chartName}-production.yaml`);
+      if (!fs.existsSync(templateFilePath)) {
+        this.warn(chalk.yellow(`Source file not found: ${templateFilePath}, skipping ${chartName} charts`));
+        skippedCharts++;
+        continue;
+      }
+
+      const templateContent = fs.readFileSync(templateFilePath, 'utf8');
+
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        // For charts without configKey, we generate a fixed number of instances (e.g., 6 for cubesigner-signer)
+        if (configKey) {
+          const instanceKey = `${configKey}-${releaseIndex}`
+
+          // instanceConfig is like this.configData.bootnode.bootnode-0, or this.configData.sequencer.sequencer-0
+          const instanceConfig = this.configData[configKey][instanceKey]
+
+          if (!instanceConfig && instanceKey !== "sequencer-0") {
+            // No more bootnode instances defined
+            this.log(chalk.yellow(`No more ${instanceKey} instances defined.`));
+            break
+          }
+        } else {
+          // Determine the number of instances dynamically for cubesigner-signer based on dogeConfig.cubesigner.roles
+          const maxInstances = chartName === "cubesigner-signer"
+            ? (this.dogeConfig.cubesigner?.roles?.length ?? 1)
+            : 1;
+          if (releaseIndex >= maxInstances) {
+            break;
+          }
+        }
+
+        const destFilePath = path.join(valuesDir, `${chartName}-production-${releaseIndex}.yaml`);
+
+        const newYamlContent = templateContent.replaceAll('__INSTANCE_INDEX__', releaseIndex.toString());
+
+        if (!fs.existsSync(destFilePath)) {
+          fs.writeFileSync(destFilePath, newYamlContent);
+          updatedCharts++;
+        }
+
+        releaseIndex++
+      }
+    }
+
+    return { skipped: skippedCharts, updated: updatedCharts };
   }
 
 
-  private getNestedValue(obj: any, path: string): any {
-    return path.split('.').reduce((prev, curr) => prev && prev[curr], obj)
+  private async processProductionYaml(
+    valuesDir: string
+  ): Promise<{ skipped: number; updated: number }> {
+    const productionFiles = fs.readdirSync(valuesDir)
+      .filter(file => file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
+
+    let updatedCharts = 0
+    let skippedCharts = 0
+    const isTestnet = this.dogeConfig.network === "testnet";
+    const dogecoinInternalUrl = "http://dogecoin-" + (isTestnet ? "testnet:44555" : "mainnet:22555");
+
+    for (const file of productionFiles) {
+      const yamlPath = path.join(valuesDir, file)
+      const chartName = file.replace(/-production(-\d+)?\.yaml$/, '')
+      const productionNumber = file.match(/-production-(\d+)\.yaml$/)?.[1] || '0'
+
+      this.log(`Processing ${file} for chart ${chartName}...`)
+
+      const productionYamlContent = fs.readFileSync(yamlPath, 'utf8')
+      const productionYaml = yaml.load(productionYamlContent) as any
+
+      let updated = false
+      const changes: Array<{ key: string; newValue: string; oldValue: string }> = []
+
+      // Process configMaps
+      if (productionYaml.configMaps) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        for (const [_configMapName, configMapData] of Object.entries(productionYaml.configMaps)) {
+          if (configMapData && typeof configMapData === 'object' && 'data' in configMapData) {
+            const envData = (configMapData as any).data
+            for (const [key, oldValue] of Object.entries(envData)) {
+              const configPathOrResolver = this.configMapping[key]
+              if (configPathOrResolver) {
+                let configKey: string
+                configKey = typeof configPathOrResolver === 'function' ? configPathOrResolver(chartName, productionNumber) : configPathOrResolver;
+                if (chartName === "l1-devnet" && key === "CHAIN_ID") {
+                  configKey = "general.CHAIN_ID_L1";
+                }
+
+                if (chartName === "rollup-relayer" && key === "L1_RPC_ENDPOINT") {
+                  configKey = "general.DA_PUBLISHER_ENDPOINT";
+                }
+
+                let configValue = this.getConfigValue(configKey)
+                if (this.isL2Node(chartName) && key === "L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK") {
+                  configValue = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
+                }
+
+                if (configValue !== undefined && configValue !== null) {
+                  const newValue: string | string[] = Array.isArray(configValue) ? JSON.stringify(configValue) : String(configValue);
+                  if (newValue !== oldValue) {
+                    changes.push({ key, newValue, oldValue: JSON.stringify(oldValue) })
+                    envData[key] = newValue
+                    updated = true
+                  }
+                } else {
+                  this.log(chalk.yellow(`${chartName}: No value found for ${configKey}`))
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Process ingress
+      if (productionYaml.ingress) {
+        let ingressUpdated = false;
+        for (const [ingressKey, ingressValue] of Object.entries(productionYaml.ingress)) {
+          if (ingressValue && typeof ingressValue === 'object' && 'hosts' in ingressValue) {
+            const hosts = ingressValue.hosts as Array<{ host: string }>;
+            if (Array.isArray(hosts)) {
+              for (const [i, host] of hosts.entries()) {
+                if (typeof host === 'object' && 'host' in host) {
+                  let configValue: string | undefined;
+
+                  if (chartName === 'l2-rpc' && ingressKey === 'websocket') {
+                    configValue = this.getConfigValue('ingress.RPC_GATEWAY_WS_HOST');
+                  } else {
+                    // Check for direct mapping first
+                    const directMappingKey = `ingress.${chartName.toUpperCase().replaceAll('-', '_')}_HOST`;
+                    configValue = this.getConfigValue(directMappingKey);
+                    this.log(chalk.yellow(`${chartName}: ${directMappingKey} -> ${configValue}`));
+
+                    // If direct mapping doesn't exist, try alternative mappings
+                    if (!configValue) {
+                      const alternativeMappings: Record<string, string> = {
+                        'admin-system-dashboard': 'ADMIN_SYSTEM_DASHBOARD_HOST',
+                        'blockbook': 'BLOCKBOOK_HOST',
+                        'blockscout': 'BLOCKSCOUT_HOST',
+                        'bridge-history-api': 'BRIDGE_HISTORY_API_HOST',
+                        'celestia-node': 'CELESTIA_HOST',
+                        'coordinator-api': 'COORDINATOR_API_HOST',
+                        'dogecoin': 'DOGECOIN_HOST',
+                        'frontends': 'FRONTEND_HOST',
+                        'l1-devnet': 'L1_DEVNET_HOST',
+                        'l2-rpc': 'RPC_GATEWAY_HOST',
+                        'rollup-explorer-backend': 'ROLLUP_EXPLORER_API_HOST',
+                        'tso-service': 'TSO_HOST',
+                      };
+
+                      const alternativeKey = alternativeMappings[chartName];
+                      if (alternativeKey) {
+                        configValue = this.getConfigValue(`ingress.${alternativeKey}`);
+                      } else {
+                        this.error(`${chartName}: ${alternativeKey} not found in config`);
+                      }
+                    }
+                  }
+
+                  if (configValue && configValue !== host.host) {
+                    changes.push({ key: `ingress.${ingressKey}.hosts[${i}].host`, newValue: configValue, oldValue: host.host });
+                    host.host = configValue;
+                    ingressUpdated = true;
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        if (ingressUpdated) {
+          updated = true;
+          // Update the tls section if it exists
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          for (const [_ingressKey, ingressValue] of Object.entries(productionYaml.ingress)) {
+            if (ingressValue && typeof ingressValue === 'object' && 'tls' in ingressValue && 'hosts' in ingressValue) {
+              const tlsEntries = ingressValue.tls as Array<{ hosts: string[] }>;
+              const hosts = ingressValue.hosts as Array<{ host: string }>;
+              if (Array.isArray(tlsEntries) && Array.isArray(hosts)) {
+                for (const tlsEntry of tlsEntries) {
+                  if (Array.isArray(tlsEntry.hosts)) {
+                    tlsEntry.hosts = hosts.map((host) => host.host);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+
+
+      if (productionYaml["blockscout-stack"]) {
+        let ingressUpdated = false;
+        const {blockscout} = productionYaml["blockscout-stack"];
+        const {frontend} = productionYaml["blockscout-stack"];
+        const blockscout_host = this.getConfigValue("ingress.BLOCKSCOUT_HOST");
+        const blockscout_url = this.getConfigValue("frontend.EXTERNAL_EXPLORER_URI_L2");
+
+        if (blockscout?.ingress?.annotations?.["nginx.ingress.kubernetes.io/cors-allow-origin"]) {
+          const oldValue = blockscout.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"];
+          if (oldValue !== blockscout_url) {
+            changes.push({ key: `ingress.blockscout.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"]`, newValue: blockscout_url, oldValue });
+            blockscout.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"] = blockscout_url;
+            ingressUpdated = true;
+          }
+        }
+
+        if (blockscout?.ingress?.hostname) {
+          const oldValue = blockscout.ingress.hostname;
+          if (oldValue !== blockscout_host) {
+            changes.push({ key: `ingress.blockscout.hostname`, newValue: blockscout_host, oldValue });
+            blockscout.ingress.hostname = blockscout_host;
+            ingressUpdated = true;
+          }
+        }
+
+        // only enable tls if use command scrollsdk setup tls
+        // if setup:tls was executed, all http protocol will be updated to https
+        // so we don't support disable tls for now
+
+        // if (blockscout?.ingress?.tls?.enabled) {
+        //   if (blockscout.ingress.tls.enabled !== false) {
+        //     const oldValue = blockscout.ingress.tls.enabled;
+        //     blockscout.ingress.tls.enabled = false; // Ensure it's boolean false
+        //     changes.push({ key: `ingress.blockscout.tls.enabled`, oldValue: String(oldValue), newValue: "false" });
+        //     ingressUpdated = true;
+        //   }
+        // }
+
+        if (frontend?.env?.NEXT_PUBLIC_API_HOST) {
+          const oldValue = frontend.env.NEXT_PUBLIC_API_HOST;
+          if (oldValue !== blockscout_host) {
+            changes.push({ key: `frontend.env.NEXT_PUBLIC_API_HOST`, newValue: blockscout_host, oldValue });
+            frontend.env.NEXT_PUBLIC_API_HOST = blockscout_host;
+            ingressUpdated = true;
+          }
+        }
+
+        const protocol = blockscout_url.startsWith("https") ? "https" : "http";
+        if (frontend?.env?.NEXT_PUBLIC_API_PROTOCOL) {
+          const oldValue = frontend.env.NEXT_PUBLIC_API_PROTOCOL;
+          if (oldValue !== protocol) {
+            changes.push({
+              key: `frontend.env.NEXT_PUBLIC_API_PROTOCOL`,
+              newValue: protocol,
+              oldValue
+            });
+            frontend.env.NEXT_PUBLIC_API_PROTOCOL = protocol;
+            ingressUpdated = true;
+          }
+        }
+
+        if (frontend?.env?.NEXT_PUBLIC_APP_PROTOCOL) {
+          const oldValue = frontend.env.NEXT_PUBLIC_APP_PROTOCOL;
+          if (oldValue !== protocol) {
+            changes.push({
+              key: `frontend.env.NEXT_PUBLIC_APP_PROTOCOL`,
+              newValue: protocol,
+              oldValue
+            });
+            frontend.env.NEXT_PUBLIC_APP_PROTOCOL = protocol;
+            ingressUpdated = true;
+          }
+        }
+
+        if (frontend?.ingress?.annotations?.["nginx.ingress.kubernetes.io/cors-allow-origin"]) {
+          const oldValue = frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"];
+          if (oldValue !== blockscout_url) {
+            changes.push({ key: `frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"]`, newValue: blockscout_url, oldValue });
+            frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"] = blockscout_url;
+            ingressUpdated = true;
+          }
+        }
+
+        if (frontend?.ingress?.hostname) {
+          const oldValue = frontend.ingress.hostname;
+          if (oldValue !== blockscout_host) {
+            changes.push({ key: `frontend.ingress.hostname`, newValue: blockscout_host, oldValue });
+            frontend.ingress.hostname = blockscout_host;
+            ingressUpdated = true;
+          }
+        }
+
+        /*
+        NEXT_PUBLIC_NETWORK_ID: "221122420"
+        */
+        const oldNetworkName = frontend?.env?.NEXT_PUBLIC_NETWORK_NAME;
+        const newNetworkName = this.getConfigValue("general.CHAIN_NAME_L2");
+        if (!oldNetworkName || oldNetworkName !== newNetworkName) {
+          changes.push({ key: `frontend.env.NEXT_PUBLIC_NETWORK_NAME`, newValue: newNetworkName, oldValue: oldNetworkName });
+          frontend.env.NEXT_PUBLIC_NETWORK_NAME = newNetworkName;
+          ingressUpdated = true;
+        }
+
+        const oldValue = frontend?.env?.NEXT_PUBLIC_NETWORK_ID;
+        const newValue = this.getConfigValue("general.CHAIN_ID_L2");
+        if (!oldValue || oldValue !== this.getConfigValue("general.CHAIN_ID_L2")) {
+          changes.push({ key: `frontend.env.NEXT_PUBLIC_NETWORK_ID`, newValue, oldValue });
+          frontend.env.NEXT_PUBLIC_NETWORK_ID = newValue;
+          ingressUpdated = true;
+        }
+
+
+        interface BlockscoutEnvMapping {
+          configKey: string;
+          defaultValue?: string;
+          key: string;
+        }
+
+        const BLOCKSCOUT_ENV_MAPPINGS: BlockscoutEnvMapping[] = [
+          {
+            configKey: '',
+            defaultValue: '0',
+            key: 'INDEXER_SCROLL_L1_BATCH_START_BLOCK'
+          },
+          {
+            configKey: '',
+            defaultValue: '0',
+            key: 'INDEXER_SCROLL_L1_MESSENGER_START_BLOCK'
+          },
+          {
+            configKey: 'contractsFile.L1_SCROLL_CHAIN_PROXY_ADDR',
+            key: 'INDEXER_SCROLL_L1_CHAIN_CONTRACT'
+          },
+          {
+            configKey: 'L1_SCROLL_MESSENGER_PROXY_ADDR',
+            key: 'INDEXER_SCROLL_L1_MESSENGER_CONTRACT'
+          },
+          {
+            configKey: 'L2_DOGEOS_MESSENGER_PROXY_ADDR',
+            key: 'INDEXER_SCROLL_L2_MESSENGER_CONTRACT'
+          },
+          {
+            configKey: 'L1_GAS_PRICE_ORACLE_ADDR',
+            key: 'INDEXER_SCROLL_L2_GAS_ORACLE_CONTRACT'
+          },
+          {
+            configKey: 'general.L1_RPC_ENDPOINT',
+            key: 'INDEXER_SCROLL_L1_RPC'
+          }
+
+
+        ];
+        const benv = productionYaml["blockscout-stack"].blockscout.env;
+
+        for (const mapping of BLOCKSCOUT_ENV_MAPPINGS) {
+          const { configKey, defaultValue, key } = mapping;
+
+          let newValue = this.getConfigValue(configKey);
+          if (!newValue) {
+            newValue = configKey ? this.contractsConfig[configKey] : defaultValue;
+          }
+
+          const oldValue = benv[key];
+
+          if (newValue === oldValue) {
+            this.log(chalk.yellow(`No value found for ${key}`));
+          } else {
+            changes.push({
+              key: `blockscout.env.${key}`,
+              newValue,
+              oldValue: benv[key]
+            });
+            benv[key] = newValue;
+            updated = true;
+          }
+        }
+
+        if (ingressUpdated) {
+          updated = true;
+        }
+      }
+
+      if (productionYaml.grafana) {
+        /*
+          grafana.ini:
+            server:
+              domain: grafana.scrollsdk
+              root_url: "https://grafana.scrollsdk""
+        */
+        if (!productionYaml.grafana["grafana.ini"]) {
+          productionYaml.grafana["grafana.ini"] = { server: {} };
+        }
+
+        if (!productionYaml.grafana["grafana.ini"].server) {
+          productionYaml.grafana["grafana.ini"].server = {};
+        }
+
+        const existingDomain = productionYaml.grafana?.["grafana.ini"]?.server?.domain ?? null;
+        const existingRootUrl = productionYaml.grafana?.["grafana.ini"]?.server?.root_url ?? null;
+
+        const newDomain = this.getConfigValue("ingress.GRAFANA_HOST");
+        if (existingDomain !== newDomain) {
+          changes.push({ key: `grafana["grafana.ini"].server.domain`, newValue: newDomain, oldValue: existingDomain });
+          productionYaml.grafana["grafana.ini"].server.domain = newDomain;
+          updated = true;
+        }
+
+        const newRootUrl = this.getConfigValue("frontend.GRAFANA_URI");
+        if (existingRootUrl !== newRootUrl) {
+          changes.push({ key: `grafana["grafana.ini"].server.root_url`, newValue: newRootUrl, oldValue: existingRootUrl });
+          productionYaml.grafana["grafana.ini"].server.root_url = newRootUrl;
+          updated = true;
+        }
+
+
+
+        let ingressUpdated = false;
+        const ingressValue = productionYaml.grafana.ingress;
+        if (ingressValue && typeof ingressValue === 'object' && 'hosts' in ingressValue) {
+          const hosts = ingressValue.hosts as Array<string>;
+          if (Array.isArray(hosts)) {
+            for (let i = 0; i < hosts.length; i++) {
+              if (typeof (hosts[i]) === 'string') {
+                const configValue: string | undefined = this.getConfigValue("ingress.GRAFANA_HOST");
+
+                if (configValue && (configValue !== hosts[i])) {
+                  changes.push({ key: `ingress.hosts[${i}]`, newValue: configValue, oldValue: hosts[i] });
+                  hosts[i] = configValue;
+                  ingressUpdated = true;
+                }
+              }
+            }
+          }
+        }
+
+        if (ingressUpdated) {
+          updated = true;
+          // Update the tls section if it exists
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          for (const [_ingressKey, ingressValue] of Object.entries(productionYaml.grafana.ingress)) {
+            if (ingressValue && typeof ingressValue === 'object' && 'tls' in ingressValue && 'hosts' in ingressValue) {
+              const tlsEntries = ingressValue.tls as Array<{ hosts: string[] }>;
+              const hosts = ingressValue.hosts as Array<{ host: string }>;
+              if (Array.isArray(tlsEntries) && Array.isArray(hosts)) {
+                for (const tlsEntry of tlsEntries) {
+                  if (Array.isArray(tlsEntry.hosts)) {
+                    tlsEntry.hosts = hosts.map((host) => host.host);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // eslint-disable-next-line unicorn/prefer-switch
+      if (chartName === "celestia-node") {
+        let ingressUpdated = false;
+        if (productionYaml.ingress) {
+          const ingressValue = productionYaml.ingress;
+          ingressValue.enabled = true;
+          const configValue = this.getConfigValue('ingress.CELESTIA_HOST');
+          ingressUpdated = this.processIngressHosts(ingressValue, configValue, changes);
+        } else {
+          productionYaml.ingress = {
+            annotations: {
+              "cert-manager.io/cluster-issuer": "letsencrypt-prod",
+              "nginx.ingress.kubernetes.io/ssl-redirect": "true"
+            },
+            className: "nginx",
+            enabled: true,
+            hosts: [
+              {
+                host: this.getConfigValue("ingress.CELESTIA_HOST"),
+                paths: [{ path: "/", pathType: "Prefix" }]
+              }
+            ],
+          };
+          changes.push({ key: `ingress`, newValue: JSON.stringify(productionYaml.ingress), oldValue: "undefined" });
+          ingressUpdated = true;
+        }
+
+        if (ingressUpdated) {
+          updated = true;
+        }
+
+        if ((!productionYaml.core || !productionYaml.core.rpc_url) && !productionYaml.core) {
+            productionYaml.core = {
+              rpc_url: ""
+            };
+          }
+
+        const oldCoreRpcUrl = productionYaml.core.rpc_url;
+
+        let newCoreRpcUrl = this.dogeConfig.da?.tendermintRpcUrl;
+        if (!newCoreRpcUrl) {
+          this.error(`Invalid tendermintRpcUrl URL: ${newCoreRpcUrl}`)
+        }
+
+        try {
+          const urlObj = new URL(newCoreRpcUrl);
+          newCoreRpcUrl = urlObj.hostname;
+        } catch {
+          this.error(`Invalid tendermintRpcUrl URL: ${newCoreRpcUrl}`);
+        }
+
+        if (oldCoreRpcUrl !== newCoreRpcUrl) {
+          productionYaml.core.rpc_url = newCoreRpcUrl;
+          updated = true;
+          changes.push({ key: "core.rpc_url", "newValue": newCoreRpcUrl, oldValue: oldCoreRpcUrl });
+        }
+      } else if (chartName === 'blockbook') {
+        let ingressUpdated = false;
+        if (productionYaml.ingress) {
+          const ingressValue = productionYaml.ingress;
+          ingressValue.enabled = true;
+          const configValue = this.getConfigValue('ingress.BLOCKBOOK_HOST');
+          ingressUpdated = this.processIngressHosts(ingressValue, configValue, changes);
+        } else {
+          productionYaml.ingress = {
+            annotations: {
+              "cert-manager.io/cluster-issuer": "letsencrypt-prod",
+              "nginx.ingress.kubernetes.io/ssl-redirect": "true"
+            },
+            className: "nginx",
+            enabled: true,
+            hosts: [
+              {
+                host: this.getConfigValue("ingress.BLOCKBOOK_HOST"),
+                paths: [{ path: "/", pathType: "Prefix" }]
+              }
+            ],
+          };
+          changes.push({ key: `ingress`, newValue: JSON.stringify(productionYaml.ingress), oldValue: "undefined" });
+          ingressUpdated = true;
+        }
+
+        if (ingressUpdated) {
+          updated = true;
+        }
+
+        const oldValue = productionYaml.blockbook.blockHeight;
+        const newValue = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
+        if (oldValue !== newValue) {
+          productionYaml.blockbook.blockHeight = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
+          updated = true;
+          changes.push({ key: `blockbook.blockHeight`, newValue: newValue || 'undefined', oldValue: oldValue || 'undefined' });
+        }
+      }
+
+      else if (chartName === 'fee-oracle') {
+        if (!productionYaml.configMaps?.env?.data) {
+          this.error(`${chartName}: configMaps.env.data not found in config`);
+        }
+
+        const todoMappings = {
+          "DOGEOS_FEE_ORACLE_CELESTIA__NAMESPACE_ID": this.dogeConfig.da?.daNamespace,
+          "DOGEOS_FEE_ORACLE_DOGECOIN__NETWORK_STR": this.withdrawalProcessorConfig.network_str,
+          "DOGEOS_FEE_ORACLE_DOGECOIN__RPC_URL": dogecoinInternalUrl,
+          "DOGEOS_FEE_ORACLE_L2__CHAIN_ID": String(this.getConfigValue("general.CHAIN_ID_L2")),
+          "DOGEOS_FEE_ORACLE_L2__GAS_ORACLE_CONTRACT": this.getConfigValue("contractsFile.L1_GAS_PRICE_ORACLE_ADDR"),
+          "DOGEOS_FEE_ORACLE_L2__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT"),
+        }
+
+        for (const [envKey, newVal] of Object.entries(todoMappings)) {
+          const oldValue = productionYaml.configMaps.env.data[envKey];
+          if (oldValue !== newVal) {
+            productionYaml.configMaps.env.data[envKey] = newVal;
+            updated = true;
+            changes.push({ key: `configMaps.env.data.${envKey}`, newValue: newVal, oldValue: oldValue || 'undefined' });
+          }
+        }
+      }
+
+      else if (chartName === 'l1-interface') {
+        if (!productionYaml.configMaps?.env?.data) {
+          this.error(`${chartName}: configMaps.env.data not found in config`);
+        }
+
+        const todoMappings = {
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_URL": new URL(this.dogeConfig.da?.tendermintRpcUrl || "").origin,
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network === "mainnet" ? "" : "http://celestia-testnet-mocha:26658",
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__NAMESPACE_ID": this.dogeConfig.da?.daNamespace,
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
+          "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__BRIDGE_ADDRESS": this.withdrawalProcessorConfig.bridge_address,
+          "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
+          "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL": dogecoinInternalUrl,
+          "DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER": this.getConfigValue("sequencer.L2GETH_SIGNER_ADDRESS"),
+          "DOGEOS_L1_INTERFACE_L1_BASE_FEE_PER_GAS": this.getConfigValue("genesis.BASE_FEE_PER_GAS").toString(),
+          "DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
+          "DOGEOS_L1_INTERFACE_L2_MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
+          "DOGEOS_L1_INTERFACE_L2_MOAT_CONTRACT_ADDRESS": this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
+          "DOGEOS_L1_INTERFACE_NETWORK_STR": this.withdrawalProcessorConfig.network_str,
+          "DOGEOS_L1_INTERFACE_SCROLL_MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
+        }
+
+        for (const [envKey, newVal] of Object.entries(todoMappings)) {
+          const oldValue = productionYaml.configMaps.env.data[envKey];
+          if (oldValue !== newVal) {
+            productionYaml.configMaps.env.data[envKey] = newVal;
+            updated = true;
+            changes.push({ key: `configMaps.env.data.${envKey}`, newValue: newVal, oldValue: oldValue || 'undefined' });
+          }
+        }
+      }
+
+      else if (chartName === 'withdrawal-processor') {
+        if (!productionYaml.env) {
+          this.error(`${chartName}: env not found in config`);
+        }
+
+        const todoMappings = {
+          "DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS": this.withdrawalProcessorConfig.bridge_address,
+          "DOGEOS_WITHDRAWAL_BRIDGE_SCRIPT_HEX": this.withdrawalProcessorConfig.bridge_script_hex,
+          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_URL": new URL(this.dogeConfig.da?.tendermintRpcUrl || "").origin,
+          // "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL": this.dogeConfig.da?.tendermintRpcUrl,
+          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE": this.dogeConfig.da?.daNamespace,
+          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network === "mainnet" ? "" : "http://celestia-testnet-mocha:26658",
+          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__SIGNER_ADDRESS": this.dogeConfig.da?.signerAddress,
+
+          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
+          "DOGEOS_WITHDRAWAL_DATABASE_URL": "sqlite:///app/data/withdrawal_processor.db",
+          "DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT": this.dogeConfig.defaults?.dogecoinIndexerStartHeight,
+          "DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL": dogecoinInternalUrl,
+          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSAGE_QUEUE_ADDRESS": this.getConfigValue("contractsFile.L2_MESSAGE_QUEUE_ADDR"),
+          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
+          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT"),
+          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__START_BLOCK": "0",
+          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_TXID": this.withdrawalProcessorConfig.genesis_sequencer_txid,
+          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_VOUT": this.withdrawalProcessorConfig.genesis_sequencer_vout,
+          "DOGEOS_WITHDRAWAL_NETWORK_STR": this.withdrawalProcessorConfig.network_str,
+          "DOGEOS_WITHDRAWAL_TSO_URL": "http://tso-service:3000"
+        }
+
+        for (const [envKey, newVal] of Object.entries(todoMappings)) {
+          const envVar = productionYaml.env.find((item: any) => item.name === envKey);
+          if (envVar) {
+            if (envVar.value !== newVal) {
+              const oldValue = envVar.value;
+              envVar.value = newVal;
+              updated = true;
+              changes.push({ key: `env.${envKey}`, newValue: newVal, oldValue });
+            }
+          } else {
+            productionYaml.env.push({ name: envKey, value: newVal });
+            updated = true;
+            changes.push({ key: `env.${envKey}`, newValue: newVal, oldValue: 'undefined' });
+          }
+        }
+
+        // Replace TSO signer URIs based on signerUrls array, ensuring only 'Correctness' roles are updated sequentially
+        if (productionYaml.tsoSigners && Array.isArray(productionYaml.tsoSigners)) {
+          const signerUrls = this.dogeConfig.signerUrls || [];
+
+          // extract existing Correctness signer URIs
+          const existingCorrectnessIdx: number[] = [];
+          const existingUris: string[] = [];
+          productionYaml.tsoSigners.forEach((s: any, idx: number) => {
+            if (s.role === 'Correctness') {
+              existingCorrectnessIdx.push(idx);
+              existingUris.push(s.uri);
+            }
+          });
+
+          const isSame = existingUris.length === signerUrls.length && existingUris.every((u, idx) => u === signerUrls[idx]);
+
+          if (!isSame) {
+            // 1) remove all existing Correctness signers
+            for (let j = existingCorrectnessIdx.length - 1; j >= 0; j--) {
+              const idx = existingCorrectnessIdx[j];
+              const removed = productionYaml.tsoSigners.splice(idx, 1)[0];
+              updated = true;
+              changes.push({ key: `tsoSigners[${idx}]`, newValue: 'removed', oldValue: JSON.stringify(removed) });
+            }
+
+            // 2) re-insert Correctness signers based on signerUrls
+            for (const url of signerUrls) {
+              const newSigner = { network: this.dogeConfig.network, role: 'Correctness', uri: url } as any;
+              productionYaml.tsoSigners.push(newSigner);
+              updated = true;
+              const newIndex = productionYaml.tsoSigners.length - 1;
+              changes.push({ key: `tsoSigners[${newIndex}]`, newValue: JSON.stringify(newSigner), oldValue: 'undefined' });
+            }
+          }
+
+          // 3) sync network field for all signers
+          for (let i = 0; i < productionYaml.tsoSigners.length; i++) {
+            const signer = productionYaml.tsoSigners[i];
+            if (signer.network !== this.dogeConfig.network) {
+              const oldVal = signer.network;
+              signer.network = this.dogeConfig.network;
+              updated = true;
+              changes.push({ key: `tsoSigners[${i}].network`, newValue: this.dogeConfig.network, oldValue: oldVal });
+            }
+          }
+        }
+      }
+
+      else if (chartName === "cubesigner-signer") {
+        if (!productionYaml.env) {
+          this.error(`${chartName}: env not found in config`);
+        }
+
+        /*
+        env:
+        - name: "DOGEOS_CUBESIGNER_SIGNER_PORT"
+          value: "3000"
+        - name: "DOGEOS_CUBESIGNER_SIGNER_NETWORK"
+          value: "testnet"
+        */
+        const envVarName = 'DOGEOS_CUBESIGNER_SIGNER_NETWORK';
+        const configValue = this.dogeConfig.network;
+
+        // Find existing environment variable
+        const envVar = productionYaml.env.find((item: any) => item.name === envVarName);
+
+        if (envVar) {
+          // Update existing value
+          if (envVar.value !== configValue) {
+            const oldValue = envVar.value;
+            envVar.value = configValue;
+            updated = true;
+            changes.push({ key: `env.${envVarName}`, newValue: configValue, oldValue });
+          }
+        } else {
+          // Add new environment variable
+          productionYaml.env.push({ name: envVarName, value: configValue });
+          updated = true;
+          changes.push({ key: `env.${envVarName}`, newValue: configValue, oldValue: 'undefined' });
+        }
+      }
+      else if (chartName === "da-publisher") {
+        const todoMappings = {
+          "DOGEOS_DA_PUBLISHER_CELESTIA_NAMESPACE": this.dogeConfig.da?.daNamespace,
+          // TODO what if mainnet ?
+          "DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL": this.dogeConfig.network === "mainnet" ? "" : "celestia-testnet-mocha:26658"
+        }
+       
+        const envData = productionYaml.configMaps.env.data;
+        for (const [envKey, newValue] of Object.entries(todoMappings)) {
+          if (Object.hasOwn(envData, envKey)) {
+            if (envData[envKey] !== newValue) {
+              const oldValue = envData[envKey];
+              envData[envKey] = newValue;
+              updated = true;
+              changes.push({ key: `configMaps.env.data.${envKey}`, newValue: String(newValue), oldValue: String(oldValue) });
+            }
+          } else {
+            envData[envKey] = newValue;
+            updated = true;
+            changes.push({ key: `configMaps.env.data.${envKey}`, newValue: String(newValue), oldValue: 'undefined' });
+          }
+        }
+      }
+      else if (chartName === "tso-service") {
+        if (!productionYaml.env) {
+          this.error(`${chartName}: env not found in config`);
+        }
+
+        const todoMappings = {
+          "DOGE_NETWORK": this.dogeConfig.network
+        }
+
+        for (const [envKey, newValue] of Object.entries(todoMappings)) {
+          const envVar = productionYaml.env.find((item: any) => item.name === envKey);
+          if (envVar) {
+            if (envVar.value !== newValue) {
+              const oldValue = envVar.value;
+              envVar.value = newValue;
+              updated = true;
+              changes.push({ key: `env.${envKey}`, newValue, oldValue });
+            }
+          } else {
+            productionYaml.env.push({ name: envKey, value: newValue });
+            updated = true;
+            changes.push({ key: `env.${envKey}`, newValue, oldValue: 'undefined' });
+          }
+        }
+      }
+      else if (chartName === "metrics-exporter") {
+
+        const rollupExplorerBackendUrl = "http://rollup-explorer-backend";
+        const l2RpcEndpoint = this.getConfigValue("general.L2_RPC_ENDPOINT");
+        const l2TxFeeVaultAddr = this.getConfigValue("contracts.overrides.L2_TX_FEE_VAULT");
+        const l2BridgeFeeRecipientAddr = this.getConfigValue("contracts.L2_BRIDGE_FEE_RECIPIENT_ADDR");
+        const isDogeos = this.getConfigValue("general.L1_RPC_ENDPOINT") === "http://l1-interface:8545";
+        const l1MessageQueueProxyAddr = isDogeos ? "" : this.getConfigValue("contractsFile.L1_MESSAGE_QUEUE_V2_PROXY_ADDR");
+        const l1RpcEndpoint = this.getConfigValue("general.L1_RPC_ENDPOINT");
+
+        if (productionYaml.metricsConfig) {
+          if (productionYaml.metricsConfig.rollup.url !== rollupExplorerBackendUrl) {
+            updated = true;
+            changes.push({
+              key: `metricsConfig.rollup.url`, newValue: rollupExplorerBackendUrl,
+              oldValue: productionYaml.metricsConfig.rollup.url
+            });
+            productionYaml.metricsConfig.rollup.url = rollupExplorerBackendUrl;
+          }
+
+          if (productionYaml.metricsConfig.l1Network.url !== l1RpcEndpoint) {
+            updated = true;
+            changes.push({
+              key: `metricsConfig.l1Network.url`, newValue: l1RpcEndpoint,
+              oldValue: productionYaml.metricsConfig.l1Network.url
+            });
+            productionYaml.metricsConfig.l1Network.url = l1RpcEndpoint;
+          }
+
+          if (productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR !== l1MessageQueueProxyAddr) {
+            updated = true;
+            changes.push({
+              key: `metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR`, newValue: l1MessageQueueProxyAddr,
+              oldValue: productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR
+            });
+            productionYaml.metricsConfig.l1Network.L1_MESSAGE_QUEUE_PROXY_ADDR = l1MessageQueueProxyAddr;
+          }
+
+          if (productionYaml.metricsConfig.dogecoin.url !== dogecoinInternalUrl) {
+            updated = true;
+            changes.push({
+              key: `metricsConfig.dogecoin.url`, newValue: dogecoinInternalUrl,
+              oldValue: productionYaml.metricsConfig.dogecoin.url
+            });
+            productionYaml.metricsConfig.dogecoin.url = dogecoinInternalUrl;
+          }
+
+          if (productionYaml.metricsConfig.dogeos.url !== l2RpcEndpoint) {
+            updated = true;
+            changes.push({
+              key: `metricsConfig.dogeos.url`, newValue: l2RpcEndpoint,
+              oldValue: productionYaml.metricsConfig.dogeos.url
+            });
+            productionYaml.metricsConfig.dogeos.url = l2RpcEndpoint;
+          }
+
+          if (productionYaml.metricsConfig.dogeos.L2_TX_FEE_VAULT_ADDR !== l2TxFeeVaultAddr) {
+            updated = true;
+            changes.push({
+              key: `metricsConfig.dogeos.L2_TX_FEE_VAULT_ADDR`, newValue: l2TxFeeVaultAddr,
+              oldValue: productionYaml.metricsConfig.dogeos.L2_TX_FEE_VAULT_ADDR
+            });
+            productionYaml.metricsConfig.dogeos.L2_TX_FEE_VAULT_ADDR = l2TxFeeVaultAddr;
+          }
+
+          if (productionYaml.metricsConfig.dogeos.L2_BRIDGE_FEE_RECIPIENT_ADDR !== l2BridgeFeeRecipientAddr) {
+            updated = true;
+            changes.push({
+              key: `metricsConfig.dogeos.L2_BRIDGE_FEE_RECIPIENT_ADDR`, newValue: l2BridgeFeeRecipientAddr,
+              oldValue: productionYaml.metricsConfig.dogeos.L2_BRIDGE_FEE_RECIPIENT_ADDR
+            });
+            productionYaml.metricsConfig.dogeos.L2_BRIDGE_FEE_RECIPIENT_ADDR = l2BridgeFeeRecipientAddr;
+          }
+        } else {
+          productionYaml.metricsConfig = {
+            dogecoin: {
+              url: dogecoinInternalUrl
+            },
+            dogeos: {
+              L2_BRIDGE_FEE_RECIPIENT_ADDR: l2BridgeFeeRecipientAddr,
+              L2_TX_FEE_VAULT_ADDR: l2TxFeeVaultAddr,
+              url: this.getConfigValue("general.L2_RPC_ENDPOINT")
+            },
+            l1Network: {
+              L1_MESSAGE_QUEUE_PROXY_ADDR: l1MessageQueueProxyAddr,
+              url: l1RpcEndpoint
+            },
+            rollup: {
+              url: rollupExplorerBackendUrl
+            }
+          };
+          updated = true;
+          changes.push({
+            key: `metricsConfig`, newValue: JSON.stringify(productionYaml.metricsConfig),
+            oldValue: "undefined"
+          });
+        }
+      }
+      else if (chartName === "dogecoin") {
+        const isTestnet = this.dogeConfig.network === "testnet";
+
+        const dogecoinConf_testnet = productionYaml.dogecoinConf?.testnet;
+        const expected_testnet = isTestnet ? 1 : 0;
+        if (dogecoinConf_testnet !== expected_testnet) {
+          productionYaml.dogecoinConf.testnet = expected_testnet;
+          updated = true;
+          changes.push({ key: `dogecoinConf.testnet`, newValue: String(expected_testnet), oldValue: String(dogecoinConf_testnet) });
+        }
+
+        const service_port = productionYaml.service?.port;
+        const expected_service_port = isTestnet ? 44_556 : 22_556;
+        if (service_port !== expected_service_port) {
+          productionYaml.service.port = expected_service_port;
+          updated = true;
+          changes.push({ key: `service.port`, newValue: String(expected_service_port), oldValue: String(service_port) });
+        }
+
+        const service_rpcPort = productionYaml.service?.rpcPort;
+        const expected_service_rpcPort = isTestnet ? 44_555 : 22_555;
+        if (service_rpcPort !== expected_service_rpcPort) {
+          productionYaml.service.rpcPort = expected_service_rpcPort;
+          updated = true;
+          changes.push({ key: `service.rpcPort`, newValue: String(expected_service_rpcPort), oldValue: String(service_rpcPort) });
+        }
+
+        const storage_size = productionYaml.storage?.size;
+        const expected_storage_size = isTestnet ? "50Gi" : "250Gi";
+        if (storage_size !== expected_storage_size) {
+          productionYaml.storage.size = expected_storage_size;
+          updated = true;
+          changes.push({ key: `storage.size`, newValue: String(expected_storage_size), oldValue: String(storage_size) });
+        }
+
+        // let rpcPassword = productionYaml.rpcPassword;
+        // let expectedRpcPassword = this.dogeConfig.dogecoinClusterRpc?.password;
+        // if (rpcPassword !== expectedRpcPassword) {
+        //   productionYaml.rpcPassword = expectedRpcPassword;
+        //   updated = true;
+        //   changes.push({ key: `rpcPassword`, oldValue: String(rpcPassword), newValue: String(expectedRpcPassword) });
+        // }
+
+        const rpcUser = productionYaml.dogecoinConf?.rpcuser;
+        const expectedRpcUser = this.dogeConfig.dogecoinClusterRpc?.username;
+        if (rpcUser !== expectedRpcUser) {
+          productionYaml.dogecoinConf.rpcuser = expectedRpcUser;
+          updated = true;
+          changes.push({ key: `dogecoinConf.rpcuser`, newValue: String(expectedRpcUser), oldValue: String(rpcUser) });
+        }
+
+        // Process dogecoin ingress (similar to celestia)
+        let ingressUpdated = false;
+        if (productionYaml.ingress) {
+          const configValue = this.getConfigValue('ingress.DOGECOIN_HOST');
+          ingressUpdated = this.processIngressHosts(productionYaml.ingress, configValue, changes);
+        }
+
+        if (ingressUpdated) {
+          updated = true;
+        }
+      }
+      else if (chartName === "testnet-activity-helper") {
+        const l2RpcEndpoint = this.getConfigValue("general.L2_RPC_ENDPOINT");
+        if (productionYaml.config?.externalRpcUriL2 !== l2RpcEndpoint) {
+          productionYaml.config.externalRpcUriL2 = l2RpcEndpoint;
+          updated = true;
+          changes.push({ key: `config.externalRpcUriL2`, newValue: l2RpcEndpoint, oldValue: productionYaml.config?.externalRpcUriL2 });
+        }
+      }
+
+      if (updated) {
+        if (!this.jsonMode) {
+          this.log(`\nFor ${chalk.cyan(file)}:`)
+          this.log(chalk.green('Changes:'))
+          for (const change of changes) {
+            this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`)
+          }
+        }
+
+        let shouldUpdate = this.nonInteractive
+        if (!this.nonInteractive) {
+          shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` })
+        }
+
+        if (shouldUpdate) {
+          const yamlString = yaml.dump(productionYaml, YAML_DUMP_OPTIONS)
+
+          fs.writeFileSync(yamlPath, yamlString)
+          this.jsonCtx.logSuccess(`Updated ${file}`)
+          updatedCharts++
+        } else {
+          this.jsonCtx.info(`Skipped updating ${file}`)
+          skippedCharts++
+        }
+      } else {
+        this.jsonCtx.info(`No changes needed in ${file}`)
+        skippedCharts++
+      }
+    }
+
+
+    return { skipped: skippedCharts, updated: updatedCharts }
   }
 
 
@@ -1403,8 +1473,8 @@ export default class SetupPrepCharts extends Command {
       this.error('Makefile not found in the current directory.')
     }
 
-    const makefileContent = fs.readFileSync(makefilePath, 'utf-8')
-    const installCommands = makefileContent.match(/helm\s+upgrade\s+-i.*?(?=\n\n|\Z)/gs)
+    const makefileContent = fs.readFileSync(makefilePath, 'utf8')
+    const installCommands = makefileContent.match(/helm\s+upgrade\s+-i.*?(?=\n\n|Z)/gs)
 
     if (!installCommands) {
       this.warn('No Helm upgrade commands found in the Makefile.')
@@ -1413,7 +1483,7 @@ export default class SetupPrepCharts extends Command {
 
     for (const command of installCommands) {
       const chartNameMatch = command.match(/upgrade\s+-i\s+(\S+)/)
-      const ociMatch = command.match(/oci:\/\/([^\s]+)/)
+      const ociMatch = command.match(/oci:\/\/(\S+)/)
       const ociVersionMatch = command.match(/--version\s*=\s*(\S+)\s+/);
 
       if (chartNameMatch && ociMatch) {
@@ -1436,7 +1506,7 @@ export default class SetupPrepCharts extends Command {
           }
         }
 
-        const valuesFileMatches = command.match(/-f\s+([^\s]+)/g)
+        const valuesFileMatches = command.match(/-f\s+(\S+)/g)
         if (valuesFileMatches) {
           for (const match of valuesFileMatches) {
             const valuesFile = match.split(' ')[1]
@@ -1451,66 +1521,13 @@ export default class SetupPrepCharts extends Command {
     }
   }
 
-  public async run(): Promise<void> {
-    const { flags } = await this.parse(SetupPrepCharts)
-
-    // Setup non-interactive/JSON mode
-    this.nonInteractive = flags['non-interactive']
-    this.jsonMode = flags.json
-    this.jsonCtx = new JsonOutputContext('setup prep-charts', this.jsonMode)
-
-    this.jsonCtx.info('Starting chart preparation...')
-
-    // Load configs before processing yaml files
-    await this.loadConfigs(flags)
-
-    if (flags['github-username'] && flags['github-token']) {
-      try {
-        await this.authenticateGHCR(flags['github-username'], flags['github-token'])
-      } catch (error) {
-        this.jsonCtx.addWarning('Failed to authenticate with GitHub Container Registry')
-      }
-    }
-
-    let skipAuthCheck = flags['skip-auth-check']
-    if (!skipAuthCheck && !this.nonInteractive) {
-      skipAuthCheck = !(await confirm({ message: 'Do you want to perform authentication checks for individual charts?' }))
-    } else if (this.nonInteractive && !skipAuthCheck) {
-      // In non-interactive mode, default to skipping auth check unless explicitly configured
-      skipAuthCheck = true
-      this.jsonCtx.info('Non-interactive mode: Skipping authentication checks')
-    }
-
-    // Validate Makefile
-    await this.validateMakefile(skipAuthCheck)
-
-    // Process production.yaml files
-    const valuesDir = flags['values-dir']
-    const { updated: updatedInstances, skipped: skippedInstances } = await this.processMutipleInstance(valuesDir);
-    const { updated: updatedProduction, skipped: skippedProduction } = await this.processProductionYaml(valuesDir);
-    const { updated: updatedConfig, skipped: skippedConfig } = await this.processConfigYaml(valuesDir);
-
-    this.jsonCtx.logSuccess(`Updated instance-specific YAML files for ${updatedInstances} chart(s).`);
-    this.jsonCtx.info(`Skipped ${skippedInstances} instance-specific chart(s).`);
-
-    this.jsonCtx.logSuccess(`Updated production YAML files for ${updatedProduction} chart(s).`)
-    this.jsonCtx.info(`Skipped ${skippedProduction} chart(s).`)
-
-    this.jsonCtx.logSuccess(`Updated config YAML files for ${updatedConfig} chart(s).`);
-    this.jsonCtx.info(`Skipped ${skippedConfig} chart(s).`);
-
-    this.jsonCtx.logSuccess('Chart preparation completed.')
-
-    // JSON output
-    if (this.jsonMode) {
-      this.jsonCtx.success({
-        valuesDir,
-        instanceCharts: { updated: updatedInstances, skipped: skippedInstances },
-        productionCharts: { updated: updatedProduction, skipped: skippedProduction },
-        configCharts: { updated: updatedConfig, skipped: skippedConfig },
-        totalUpdated: updatedInstances + updatedProduction + updatedConfig,
-        totalSkipped: skippedInstances + skippedProduction + skippedConfig,
-      })
+  private async validateOCIAccess(ociUrl: string, ociVersion: string): Promise<boolean> {
+    try {
+      const versionArgument = ociVersion ? ` --version ${ociVersion}` : "";
+      await execAsync(`helm show chart ${ociUrl}${versionArgument}`)
+      return true
+    } catch {
+      return false
     }
   }
 }

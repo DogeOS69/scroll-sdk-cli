@@ -11,26 +11,26 @@ import chalk from 'chalk'
  * Represents a missing field that was required but not found in config
  */
 export interface MissingField {
-  /** The field/key name that was missing */
-  field: string
   /** The config path where this field should be defined (e.g., "[db.admin].PUBLIC_HOST") */
   configPath: string
   /** Human-readable description of what this field is for */
   description: string
+  /** The field/key name that was missing */
+  field: string
 }
 
 /**
  * Context object for tracking non-interactive mode state during command execution
  */
 export interface NonInteractiveContext {
-  /** Whether non-interactive mode is enabled */
-  enabled: boolean
-  /** List of required fields that were missing */
-  missingFields: MissingField[]
   /** The command being executed (for error reporting) */
   command: string
+  /** Whether non-interactive mode is enabled */
+  enabled: boolean
   /** Whether JSON output mode is enabled */
   jsonOutput: boolean
+  /** List of required fields that were missing */
+  missingFields: MissingField[]
 }
 
 /**
@@ -42,10 +42,10 @@ export function createNonInteractiveContext(
   jsonOutput: boolean = false
 ): NonInteractiveContext {
   return {
-    enabled: nonInteractive,
-    missingFields: [],
     command,
+    enabled: nonInteractive,
     jsonOutput,
+    missingFields: [],
   }
 }
 
@@ -153,6 +153,7 @@ export async function resolveOrSelect<T extends string>(
     if (validChoices.includes(resolved)) {
       return resolved
     }
+
     // Invalid value - record as missing with details
     ctx.missingFields.push({
       ...fieldMeta,
@@ -208,6 +209,7 @@ export async function resolveConfirm(
   if (strValue === 'true' || strValue === 'yes' || strValue === '1') {
     return true
   }
+
   if (strValue === 'false' || strValue === 'no' || strValue === '0') {
     return false
   }
@@ -231,18 +233,18 @@ export function validateAndExit(ctx: NonInteractiveContext): void {
   if (ctx.jsonOutput) {
     // JSON error output
     const errorResponse = {
-      success: false,
       command: ctx.command,
-      timestamp: new Date().toISOString(),
       error: {
-        code: 'E601_MISSING_FIELD',
-        message: `Missing ${ctx.missingFields.length} required configuration value(s) for non-interactive mode`,
         category: 'CONFIGURATION',
-        recoverable: true,
+        code: 'E601_MISSING_FIELD',
         context: {
           missingFields: ctx.missingFields,
         },
+        message: `Missing ${ctx.missingFields.length} required configuration value(s) for non-interactive mode`,
+        recoverable: true,
       },
+      success: false,
+      timestamp: new Date().toISOString(),
     }
     console.log(JSON.stringify(errorResponse, null, 2))
   } else {

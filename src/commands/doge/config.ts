@@ -1,26 +1,26 @@
+import { DirectSecp256k1HdWallet } from '@cosmjs/proto-signing'
 import * as toml from '@iarna/toml'
-import { input, select, confirm } from '@inquirer/prompts'
+import { confirm, input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+
 import type { DogeConfig } from '../../types/doge-config.js'
-import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
-import { getSetupDefaultsPath, SETUP_DEFAULTS_TEMPLATE } from '../../config/constants.js'
-import crypto from 'node:crypto'
-import { DirectSecp256k1HdWallet } from '@cosmjs/proto-signing'
+
+import { SETUP_DEFAULTS_TEMPLATE, getSetupDefaultsPath } from '../../config/constants.js'
 import { Network } from '../../types/doge-config.js'
 import { writeConfigs } from '../../utils/config-writer.js'
+import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import { JsonOutputContext } from '../../utils/json-output.js'
 import {
   createNonInteractiveContext,
-  resolveOrPrompt,
-  resolveOrSelect,
   resolveConfirm,
   resolveEnvValue,
+  resolveOrPrompt,
   validateAndExit,
-  type NonInteractiveContext,
 } from '../../utils/non-interactive.js'
-import { JsonOutputContext } from '../../utils/json-output.js'
 
 export class DogeConfigCommand extends Command {
   static description = 'Configure Dogecoin settings for mainnet or testnet'
@@ -38,171 +38,54 @@ export class DogeConfigCommand extends Command {
       char: 'c',
       description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
     }),
-    'non-interactive': Flags.boolean({
-      char: 'N',
-      description: 'Run without prompts, using existing config values',
-      default: false,
-    }),
     json: Flags.boolean({
-      description: 'Output in JSON format (stdout for data, stderr for logs)',
       default: false,
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
     }),
     network: Flags.string({
       char: 'n',
       description: 'Network to configure (mainnet or testnet) - required for non-interactive mode with new config',
       options: ['mainnet', 'testnet'],
     }),
+    'non-interactive': Flags.boolean({
+      char: 'N',
+      default: false,
+      description: 'Run without prompts, using existing config values',
+    }),
   }
 
-  private dogeConfig: DogeConfig = {} as DogeConfig
   private configPath: string = ''
+  private dogeConfig: DogeConfig = {} as DogeConfig
 
-  // Helper methods for common operations
-  private async promptForInput(message: string, defaultValue?: string, validator?: (value: string) => boolean | string, required: boolean = false): Promise<string> {
-    return await input({
-      message,
-      default: defaultValue,
-      validate: validator || (() => true),
-      required
-    })
-  }
+  async generateSetupDefaultsToml(newDogeConfig: DogeConfig): Promise<void> {
+    // Create setup_defaults.toml in user's current working directory
+    const setupDefaultsPath = getSetupDefaultsPath();
 
-  private generateSecureRandomString(length: number): string {
-    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-    let result = ''
-    const randomBytes = crypto.randomBytes(length)
-
-    for (let i = 0; i < length; i++) {
-      result += chars[randomBytes[i] % chars.length]
-    }
-
-    return result
-  }
-
-  private async generateCelestiaAddressFromMnemonic(mnemonic: string): Promise<string> {
-    try {
-      const wallet = await DirectSecp256k1HdWallet.fromMnemonic(mnemonic, {
-        prefix: 'celestia'
-      })
-      const accounts = await wallet.getAccounts()
-      return accounts[0].address
-    } catch (error) {
-      throw new Error(`Failed to generate Celestia address from mnemonic: ${error}`)
-    }
-  }
-
-  private generateCelestiaNamespace(projectName?: string, byteLength: number = 8): string {
-    // Generate a namespace with custom bytes (2-10 bytes allowed)
-    if (byteLength < 2 || byteLength > 10) {
-      byteLength = 8 // Default to 8 bytes if invalid
-    }
-
-    let customBytes = ''
-    if (projectName) {
-      // Use project name as base for custom bytes
-      const hash = crypto.createHash('sha256').update(projectName).digest('hex')
-      customBytes = hash.substring(0, byteLength * 2) // Take specified bytes (hex chars = bytes * 2)
-    } else {
-      // Generate random bytes
-      customBytes = crypto.randomBytes(byteLength).toString('hex').toLowerCase()
-    }
-
-    return customBytes
-  }
-
-  private async testRpcConnection(rpcUrl: string, username?: string, password?: string): Promise<number> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    }
-
-    // Handle different RPC URL formats
-    if (rpcUrl.includes('nownodes.io')) {
-      // NowNodes API format - use getblock API
-      const infoUrl = `${rpcUrl.replace(/\/$/, '')}/`
-
-      const response = await fetch(infoUrl, {
-        headers,
-        method: 'GET'
-      })
-
-      if (!response.ok) {
-        throw new Error(`blockbook API connection failed: ${response.status} ${response.statusText}`)
+    if (!fs.existsSync(setupDefaultsPath)) {
+      // Ensure the target directory exists
+      const targetDir = path.dirname(setupDefaultsPath);
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
       }
 
-      const result = await response.json() as { blockbook: { bestHeight: number } }
-      if (result.blockbook && typeof result.blockbook.bestHeight === 'number') {
-        return result.blockbook.bestHeight
-      } else {
-        throw new Error('Unable to get block height from blockbook API')
-      }
-    } else {
-      // Standard Dogecoin RPC format
-      if (username && password) {
-        const credentials = Buffer.from(`${username}:${password}`).toString('base64')
-        headers.Authorization = `Basic ${credentials}`
-      }
-
-      const body = JSON.stringify({
-        id: 'test',
-        jsonrpc: '1.0',
-        method: 'getblockcount',
-        params: [],
-      })
-
-      const response = await fetch(rpcUrl, {
-        body,
-        headers,
-        method: 'POST',
-      })
-
-      if (!response.ok) {
-        throw new Error(`RPC connection failed: ${response.status} ${response.statusText}`)
-      }
-
-      const result = await response.json() as { error?: { message: string; code: number }; result?: number }
-
-      if (result.error) {
-        throw new Error(`RPC error: ${result.error.message} (Code: ${result.error.code})`)
-      }
-
-      if (typeof result.result === 'number') {
-        return result.result
-      }
-
-      throw new Error('RPC response did not contain valid block height')
-    }
-  }
-
-  private async getCelestiaLatestHeight(tendermintRpcUrl: string): Promise<number> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
+      this.log(chalk.blue(`Creating setup defaults from embedded template at ${setupDefaultsPath}`));
+      fs.writeFileSync(setupDefaultsPath, SETUP_DEFAULTS_TEMPLATE);
     }
 
-    const response = await fetch(`${tendermintRpcUrl.replace(/\/$/, '')}/status`, {
-      headers,
-      method: 'GET'
-    })
+    // read existing config file from user's working directory
+    const existingConfigStr = fs.readFileSync(setupDefaultsPath, 'utf8');
+    const newConfig = toml.parse(existingConfigStr);
 
-    if (!response.ok) {
-      throw new Error(`Celestia RPC connection failed: ${response.status} ${response.statusText}`)
-    }
+    newConfig.network = newDogeConfig.network;
 
-    const result = await response.json() as {
-      result?: {
-        sync_info?: {
-          latest_block_height?: string
-        }
-      }
-    }
+    newConfig.dogecoin_rpc_url = newDogeConfig.rpc?.url || '';
+    newConfig.dogecoin_rpc_user = newDogeConfig.rpc?.username || '';
+    newConfig.dogecoin_rpc_pass = newDogeConfig.rpc?.password || '';
+    newConfig.dogecoin_blockbook_url = newConfig.network === 'mainnet' ? 'https://dogebook.nownodes.io' : 'https://dogebook-testnet.nownodes.io';
+    newConfig.dogecoin_blockbook_api_key = newDogeConfig.rpc?.apiKey || '';
 
-    if (result.result?.sync_info?.latest_block_height) {
-      const height = parseInt(result.result.sync_info.latest_block_height, 10)
-      if (!isNaN(height)) {
-        return height
-      }
-    }
-
-    throw new Error('Unable to get latest block height from Celestia RPC')
+    // Write to setup_defaults.toml
+    fs.writeFileSync(setupDefaultsPath, toml.stringify(newConfig));
   }
 
   async run(): Promise<void> {
@@ -245,9 +128,9 @@ export class DogeConfigCommand extends Command {
         } else {
           // No config files and no network specified - error
           niCtx.missingFields.push({
-            field: 'network',
             configPath: '--network flag',
             description: 'Network (mainnet or testnet) must be specified in non-interactive mode when creating new config',
+            field: 'network',
           })
           validateAndExit(niCtx)
           return
@@ -255,8 +138,8 @@ export class DogeConfigCommand extends Command {
       } else {
         fileSelected = await select({
           choices: [...configFileChoices, {
-            value: "New Config",
-            name: "New Config"
+            name: "New Config",
+            value: "New Config"
           }],
           message: 'Select please:',
         })
@@ -267,17 +150,14 @@ export class DogeConfigCommand extends Command {
               { name: 'mainnet', value: 'mainnet' },
               { name: 'testnet', value: 'testnet' }
             ],
-            message: 'select network:',
-            default: 'testnet'
+            default: 'testnet',
+            message: 'select network:'
           });
 
-          if (network === 'mainnet') {
-            fileSelected = 'doge-config-mainnet.toml'
-          } else {
-            fileSelected = 'doge-config-testnet.toml'
-          }
+          fileSelected = network === 'mainnet' ? 'doge-config-mainnet.toml' : 'doge-config-testnet.toml';
         }
       }
+
       resolvedPath = path.resolve('.data', fileSelected)
     }
 
@@ -285,36 +165,38 @@ export class DogeConfigCommand extends Command {
     let existingConfig: DogeConfig = {} as DogeConfig;
 
     const defaultConfig: DogeConfig = {
+      da: {
+        celestiaIndexerStartBlock: network === 'mainnet' ? '0' : '6175746',
+        celestiaMnemonic: '',
+        daNamespace: network === 'mainnet' ? '' : '',
+        signerAddress: '',
+        tendermintRpcUrl: '',
+      },
       defaults: {
         dogecoinIndexerStartHeight: '4000000',
+      },
+      dogecoinClusterRpc: {
+        password: "",
+        username: "",
       },
       frontend: {},
       network: network as Network,
       rpc: {
-        username: '',
-        password: '',
         apiKey: '',
         blockbookAPIUrl:
           network === 'mainnet' ? 'http://blockbook-mainnet:19139' : 'http://blockbook-testnet:19139',
+        password: '',
         url: network === 'mainnet' ? 'https://dogecoin.mainnet.dogeos.com' : 'https://dogecoin.testnet.dogeos.com',
-      },
-      dogecoinClusterRpc: {
-        username: "",
-        password: "",
+        username: '',
       },
       test: {},
       wallet: {
         path: network === 'mainnet' ? '.data/doge-wallet-mainnet.json' : '.data/doge-wallet-testnet.json',
-      },
-      da: {
-        celestiaIndexerStartBlock: network === 'mainnet' ? '0' : '6175746',
-        tendermintRpcUrl: '',
-        daNamespace: network === 'mainnet' ? '' : '',
-        signerAddress: '',
-        celestiaMnemonic: '',
       }
     }
-    if (!fs.existsSync(resolvedPath)) {
+    if (fs.existsSync(resolvedPath)) {
+      ({ config: existingConfig, configPath: resolvedPath } = await loadDogeConfigWithSelection(resolvedPath));
+    } else {
       // In non-interactive mode, always create default config
       const shouldCreate = await resolveConfirm(
         niCtx,
@@ -339,11 +221,9 @@ export class DogeConfigCommand extends Command {
       log(
         `Created new default ${network} config file at ${resolvedPath}. You can further customize it with 'scrollsdk doge:config'.`,
       )
-    } else {
-      ({ config: existingConfig, configPath: resolvedPath } = await loadDogeConfigWithSelection(resolvedPath));
     }
 
-    let newConfig = existingConfig;
+    const newConfig = existingConfig;
 
     // Handle blockbook API URL with confirmation if different from default
     const defaultBlockbookUrl = network === 'mainnet' ? 'https://blockbook.mainnet.dogeos.com/' : 'https://blockbook.testnet.dogeos.com/'
@@ -357,9 +237,9 @@ export class DogeConfigCommand extends Command {
       }),
       existingConfig.rpc?.blockbookAPIUrl || currentBlockbookUrl,
       {
-        field: 'blockbookAPIUrl',
         configPath: '[rpc].blockbookAPIUrl',
         description: 'Internal Blockbook API URL',
+        field: 'blockbookAPIUrl',
       },
       false
     ) || currentBlockbookUrl
@@ -372,26 +252,24 @@ export class DogeConfigCommand extends Command {
       }),
       resolveEnvValue(existingConfig.rpc?.apiKey),
       {
-        field: 'apiKey',
         configPath: '[rpc].apiKey',
         description: 'Blockbook API key',
+        field: 'apiKey',
       },
       false
     ) || ''
 
     // In non-interactive mode, auto-generate cluster RPC credentials if not set
-    let generateClusterRpc: boolean
-    if (niCtx.enabled) {
-      // Auto-generate if credentials are not already set
-      generateClusterRpc = !existingConfig.dogecoinClusterRpc?.username || !existingConfig.dogecoinClusterRpc?.password
-    } else {
-      generateClusterRpc = await confirm({
-        message: `Do you want to automatically generate secure credentials for your Dogecoin RPC service that will be deployed?\n  (These will be used to authenticate access to your Dogecoin nodes)\n  Choose 'Yes' to auto-generate, 'No' to set manually`,
+    const generateClusterRpc: boolean = niCtx.enabled ? (!existingConfig.dogecoinClusterRpc?.username || !existingConfig.dogecoinClusterRpc?.password) : await confirm({
         default: false,
+        message: `Do you want to automatically generate secure credentials for your Dogecoin RPC service that will be deployed?\n  (These will be used to authenticate access to your Dogecoin nodes)\n  Choose 'Yes' to auto-generate, 'No' to set manually`,
       })
-    }
 
-    if (!generateClusterRpc) {
+    if (generateClusterRpc) {
+      newConfig.dogecoinClusterRpc!.username = this.generateSecureRandomString(8);
+      newConfig.dogecoinClusterRpc!.password = this.generateSecureRandomString(16);
+      log(chalk.green(`✓ Generated secure random credentials for Dogecoin cluster RPC`));
+    } else {
       newConfig.dogecoinClusterRpc!.username = await resolveOrPrompt(
         niCtx,
         () => input({
@@ -400,9 +278,9 @@ export class DogeConfigCommand extends Command {
         }),
         existingConfig.dogecoinClusterRpc?.username,
         {
-          field: 'username',
           configPath: '[dogecoinClusterRpc].username',
           description: 'Dogecoin RPC service username',
+          field: 'username',
         },
         false
       ) || ''
@@ -415,16 +293,12 @@ export class DogeConfigCommand extends Command {
         }),
         resolveEnvValue(existingConfig.dogecoinClusterRpc?.password),
         {
-          field: 'password',
           configPath: '[dogecoinClusterRpc].password',
           description: 'Dogecoin RPC service password (use $ENV:VAR_NAME for secrets)',
+          field: 'password',
         },
         false
       ) || ''
-    } else {
-      newConfig.dogecoinClusterRpc!.username = this.generateSecureRandomString(8);
-      newConfig.dogecoinClusterRpc!.password = this.generateSecureRandomString(16);
-      log(chalk.green(`✓ Generated secure random credentials for Dogecoin cluster RPC`));
     }
 
     newConfig.wallet!.path = await resolveOrPrompt(
@@ -435,9 +309,9 @@ export class DogeConfigCommand extends Command {
       }),
       existingConfig.wallet?.path,
       {
-        field: 'path',
         configPath: '[wallet].path',
         description: 'Wallet file path',
+        field: 'path',
       },
       false
     ) || existingConfig.wallet?.path || ''
@@ -451,9 +325,9 @@ export class DogeConfigCommand extends Command {
       }),
       existingConfig.rpc?.url || defaultConfig.rpc?.url,
       {
-        field: 'url',
         configPath: '[rpc].url',
         description: 'External Dogecoin RPC URL for wallet operations',
+        field: 'url',
       },
       false
     ) || existingConfig.rpc?.url || ''
@@ -466,9 +340,9 @@ export class DogeConfigCommand extends Command {
       }),
       existingConfig.rpc?.username,
       {
-        field: 'username',
         configPath: '[rpc].username',
         description: 'RPC username (optional for public endpoints)',
+        field: 'username',
       },
       false
     ) || ''
@@ -481,9 +355,9 @@ export class DogeConfigCommand extends Command {
       }),
       resolveEnvValue(existingConfig.rpc?.password),
       {
-        field: 'password',
         configPath: '[rpc].password',
         description: 'RPC password (optional, use $ENV:VAR_NAME for secrets)',
+        field: 'password',
       },
       false
     ) || ''
@@ -491,7 +365,7 @@ export class DogeConfigCommand extends Command {
     log("testing external dogecoin rpc...")
 
     // Test RPC connection and get latest block height
-    let dogecoinCurrentHeight = 5000000;
+    let dogecoinCurrentHeight = 5_000_000;
     try {
       dogecoinCurrentHeight = await this.testRpcConnection(newConfig.rpc!.url!, newConfig.rpc!.username, newConfig.rpc!.password)
       log(chalk.green(`✓ RPC connection test successful! Current block height: ${dogecoinCurrentHeight}`))
@@ -502,8 +376,8 @@ export class DogeConfigCommand extends Command {
       const continueAnyway = await resolveConfirm(
         niCtx,
         () => confirm({
-          message: 'RPC connection failed, continue with configuration anyway?',
-          default: false
+          default: false,
+          message: 'RPC connection failed, continue with configuration anyway?'
         }),
         true, // In non-interactive mode, continue with warning
         false
@@ -513,6 +387,7 @@ export class DogeConfigCommand extends Command {
         this.error('RPC connection failed, configuration cancelled')
         return
       }
+
       if (niCtx.enabled) {
         jsonCtx.addWarning('Dogecoin RPC connection test failed - configuration continued with warning')
       }
@@ -527,15 +402,15 @@ export class DogeConfigCommand extends Command {
       }),
       existingConfig.da?.tendermintRpcUrl,
       {
-        field: 'tendermintRpcUrl',
         configPath: '[da].tendermintRpcUrl',
         description: 'Celestia Tendermint RPC URL',
+        field: 'tendermintRpcUrl',
       },
       false
     ) || ''
 
     // Test Celestia RPC connection and get latest height
-    let celestiaCurrentHeight = parseInt(existingConfig.da?.celestiaIndexerStartBlock || '6158500')
+    let celestiaCurrentHeight = Number.parseInt(existingConfig.da?.celestiaIndexerStartBlock || '6158500', 10)
     if (newConfig.da!.tendermintRpcUrl) {
       try {
         celestiaCurrentHeight = await this.getCelestiaLatestHeight(newConfig.da!.tendermintRpcUrl)
@@ -551,14 +426,7 @@ export class DogeConfigCommand extends Command {
     // Handle Celestia namespace - auto-generate and show to user
     let suggestedNamespace = existingConfig.da?.daNamespace
 
-    if (!suggestedNamespace) {
-      // No existing namespace, generate new one
-      suggestedNamespace = this.generateCelestiaNamespace()
-
-      log(chalk.blue('\n📋 Celestia DA Namespace:'))
-      log(chalk.yellow('Format: Any valid hex string (2-10 bytes allowed)'))
-      log(chalk.green(`Auto-generated: ${suggestedNamespace}`))
-    } else {
+    if (suggestedNamespace) {
       // Existing namespace found, ask if user wants to generate new one
       log(chalk.blue('\n📋 Celestia DA Namespace:'))
       log(chalk.yellow('Format: Any valid hex string (2-10 bytes allowed)'))
@@ -568,18 +436,25 @@ export class DogeConfigCommand extends Command {
       const generateNew = await resolveConfirm(
         niCtx,
         () => confirm({
-          message: 'Generate a new random namespace?',
-          default: false
+          default: false,
+          message: 'Generate a new random namespace?'
         }),
         false, // In non-interactive, keep existing
         false
       )
 
       if (generateNew) {
-        //randomly generate a namespace
+        // randomly generate a namespace
         suggestedNamespace = this.generateCelestiaNamespace()
         log(chalk.green(`New generated: ${suggestedNamespace}`))
       }
+    } else {
+      // No existing namespace, generate new one
+      suggestedNamespace = this.generateCelestiaNamespace()
+
+      log(chalk.blue('\n📋 Celestia DA Namespace:'))
+      log(chalk.yellow('Format: Any valid hex string (2-10 bytes allowed)'))
+      log(chalk.green(`Auto-generated: ${suggestedNamespace}`))
     }
 
     // Ensure we always have a valid namespace
@@ -594,16 +469,16 @@ export class DogeConfigCommand extends Command {
         default: suggestedNamespace,
         message: `Celestia DA Namespace (2-10 bytes, press Enter to use default value):`,
         required: true,
-        validate: (value) => {
+        validate(value) {
           if (!value.trim()) {
             return 'Namespace is required'
           }
 
           // Remove any spaces and convert to lowercase for validation
-          const cleanValue = value.replace(/\s+/g, '').toLowerCase()
+          const cleanValue = value.replaceAll(/\s+/g, '').toLowerCase()
 
           // Check if it's valid hex
-          if (!/^[0-9a-f]*$/.test(cleanValue)) {
+          if (!/^[\da-f]*$/.test(cleanValue)) {
             return 'Namespace must be a valid hex string'
           }
 
@@ -623,18 +498,18 @@ export class DogeConfigCommand extends Command {
       }),
       suggestedNamespace,
       {
-        field: 'daNamespace',
         configPath: '[da].daNamespace',
         description: 'Celestia DA Namespace (2-10 bytes hex string)',
+        field: 'daNamespace',
       }
     ) || suggestedNamespace
 
     // Process and validate the input namespace value
     // Clean and normalize the input value
-    const finalNamespace = inputNamespace.replace(/\s+/g, '').toLowerCase()
+    const finalNamespace = inputNamespace.replaceAll(/\s+/g, '').toLowerCase()
 
     // Double-check validity (should already be validated by the input validator)
-    if (finalNamespace.length % 2 === 0 && /^[0-9a-f]*$/.test(finalNamespace)) {
+    if (finalNamespace.length % 2 === 0 && /^[\da-f]*$/.test(finalNamespace)) {
       const byteLength = finalNamespace.length / 2
       if (byteLength >= 2 && byteLength <= 10) {
         log(chalk.green(`✓ Using namespace: ${finalNamespace} (${byteLength} bytes)`))
@@ -659,12 +534,12 @@ export class DogeConfigCommand extends Command {
       mnemonicChoice = existingConfig.da?.celestiaMnemonic ? 'input' : 'generate'
     } else {
       mnemonicChoice = await select({
-        message: 'Celestia mnemonic setup:',
         choices: [
           { name: 'Generate new mnemonic', value: 'generate' },
           { name: 'Input existing mnemonic', value: 'input' }
         ],
-        default: existingConfig.da?.celestiaMnemonic ? 'input' : 'generate'
+        default: existingConfig.da?.celestiaMnemonic ? 'input' : 'generate',
+        message: 'Celestia mnemonic setup:'
       }) as 'generate' | 'input'
     }
 
@@ -683,14 +558,15 @@ export class DogeConfigCommand extends Command {
         log(chalk.yellow('Please save the following mnemonic securely:'))
         log(chalk.cyan(celestiaMnemonic))
       }
+
       log(chalk.yellow(`Generated address: ${celestiaSignerAddress}`))
 
       // In non-interactive mode, always use the generated mnemonic
       const confirmSave = await resolveConfirm(
         niCtx,
         () => confirm({
-          message: 'Confirm to use this mnemonic and address?',
-          default: true
+          default: true,
+          message: 'Confirm to use this mnemonic and address?'
         }),
         true, // In non-interactive, always confirm
         true
@@ -702,22 +578,19 @@ export class DogeConfigCommand extends Command {
       }
     } else if (mnemonicChoice === 'input') {
       // Input existing mnemonic - in non-interactive mode, use existing config value
-      if (niCtx.enabled) {
-        celestiaMnemonic = resolveEnvValue(existingConfig.da?.celestiaMnemonic) || ''
-      } else {
-        celestiaMnemonic = await input({
-          message: 'Enter your existing Celestia mnemonic:',
+      celestiaMnemonic = niCtx.enabled ? resolveEnvValue(existingConfig.da?.celestiaMnemonic) || '' : (await input({
           default: existingConfig.da?.celestiaMnemonic,
-          validate: (value) => {
+          message: 'Enter your existing Celestia mnemonic:',
+          validate(value) {
             if (!value.trim()) return 'Mnemonic cannot be empty'
             const words = value.trim().split(/\s+/)
             if (words.length !== 12 && words.length !== 24) {
               return 'Mnemonic must be 12 or 24 words'
             }
+
             return true
           }
-        })
-      }
+        }));
 
       if (celestiaMnemonic.trim()) {
         try {
@@ -730,16 +603,16 @@ export class DogeConfigCommand extends Command {
             celestiaSignerAddress = existingConfig.da?.signerAddress || ''
             if (!celestiaSignerAddress) {
               niCtx.missingFields.push({
-                field: 'signerAddress',
                 configPath: '[da].signerAddress',
                 description: 'Celestia signer address (could not derive from mnemonic)',
+                field: 'signerAddress',
               })
             }
           } else {
             celestiaSignerAddress = await input({
-              message: 'Please manually enter Celestia Signer address:',
               default: existingConfig.da?.signerAddress,
-              validate: (value) => {
+              message: 'Please manually enter Celestia Signer address:',
+              validate(value) {
                 if (!value.trim()) return 'Address cannot be empty'
                 if (!value.startsWith('celestia1')) return 'Address must start with celestia1'
                 return true
@@ -753,7 +626,7 @@ export class DogeConfigCommand extends Command {
     newConfig.da!.celestiaMnemonic = celestiaMnemonic
     newConfig.da!.signerAddress = celestiaSignerAddress
 
-    //show url of a faucet (skip in non-interactive mode)
+    // show url of a faucet (skip in non-interactive mode)
     if (!niCtx.enabled) {
       if (newConfig.network === 'testnet') {
         log(chalk.yellow(`\n⚠️  IMPORTANT: Please fund your Celestia signer address with test TIA tokens`))
@@ -777,13 +650,13 @@ export class DogeConfigCommand extends Command {
       () => input({
         default: String(celestiaCurrentHeight),
         message: `Enter the Celestia Indexer Start Block:`,
-        validate: (value) => !isNaN(Number(value)) ? true : 'Must be a valid number',
+        validate: (value) => Number.isNaN(Number(value)) ? 'Must be a valid number' : true,
       }),
       existingConfig.da?.celestiaIndexerStartBlock || String(celestiaCurrentHeight),
       {
-        field: 'celestiaIndexerStartBlock',
         configPath: '[da].celestiaIndexerStartBlock',
         description: 'Celestia indexer start block height',
+        field: 'celestiaIndexerStartBlock',
       },
       false
     ) || String(celestiaCurrentHeight))
@@ -793,13 +666,13 @@ export class DogeConfigCommand extends Command {
       () => input({
         default: String(dogecoinCurrentHeight),
         message: `Enter the Dogecoin Indexer Start Height:`,
-        validate: (value) => !isNaN(Number(value)) ? true : 'Must be a valid number',
+        validate: (value) => Number.isNaN(Number(value)) ? 'Must be a valid number' : true,
       }),
       existingConfig.defaults?.dogecoinIndexerStartHeight || String(dogecoinCurrentHeight),
       {
-        field: 'dogecoinIndexerStartHeight',
         configPath: '[defaults].dogecoinIndexerStartHeight',
         description: 'Dogecoin indexer start block height',
+        field: 'dogecoinIndexerStartHeight',
       },
       false
     ) || String(dogecoinCurrentHeight))
@@ -808,9 +681,7 @@ export class DogeConfigCommand extends Command {
     validateAndExit(niCtx)
 
     const configPath = path.join(process.cwd(), 'config.toml')
-    if (!fs.existsSync(configPath)) {
-      log(chalk.yellow('config.toml not found. Skipping L1_CONTRACT_DEPLOYMENT_BLOCK update.'))
-    } else {
+    if (fs.existsSync(configPath)) {
       const configContent = fs.readFileSync(configPath, 'utf8')
       const config = toml.parse(configContent) as {
         general: { L1_CONTRACT_DEPLOYMENT_BLOCK: string }
@@ -821,6 +692,8 @@ export class DogeConfigCommand extends Command {
           chalk.green(`L1_CONTRACT_DEPLOYMENT_BLOCK updated in config.toml`),
         )
       }
+    } else {
+      log(chalk.yellow('config.toml not found. Skipping L1_CONTRACT_DEPLOYMENT_BLOCK update.'))
     }
 
     const configDir = path.dirname(resolvedPath)
@@ -844,55 +717,166 @@ export class DogeConfigCommand extends Command {
     if (flags.json) {
       jsonCtx.success({
         configPath: resolvedPath,
-        network: newConfig.network,
-        rpc: {
-          url: newConfig.rpc!.url,
-          blockbookAPIUrl: newConfig.rpc!.blockbookAPIUrl,
-        },
-        wallet: {
-          path: newConfig.wallet.path,
-        },
         da: {
+          celestiaIndexerStartBlock: newConfig.da!.celestiaIndexerStartBlock,
           namespace: newConfig.da!.daNamespace,
           signerAddress: newConfig.da!.signerAddress,
-          celestiaIndexerStartBlock: newConfig.da!.celestiaIndexerStartBlock,
         },
         defaults: {
           dogecoinIndexerStartHeight: newConfig.defaults!.dogecoinIndexerStartHeight,
+        },
+        network: newConfig.network,
+        rpc: {
+          blockbookAPIUrl: newConfig.rpc!.blockbookAPIUrl,
+          url: newConfig.rpc!.url,
+        },
+        wallet: {
+          path: newConfig.wallet.path,
         },
       })
     }
   }
 
+  private async generateCelestiaAddressFromMnemonic(mnemonic: string): Promise<string> {
+    try {
+      const wallet = await DirectSecp256k1HdWallet.fromMnemonic(mnemonic, {
+        prefix: 'celestia'
+      })
+      const accounts = await wallet.getAccounts()
+      return accounts[0].address
+    } catch (error) {
+      throw new Error(`Failed to generate Celestia address from mnemonic: ${error}`)
+    }
+  }
 
-  async generateSetupDefaultsToml(newDogeConfig: DogeConfig): Promise<void> {
-    // Create setup_defaults.toml in user's current working directory
-    const setupDefaultsPath = getSetupDefaultsPath();
+  private generateCelestiaNamespace(projectName?: string, byteLength: number = 8): string {
+    // Generate a namespace with custom bytes (2-10 bytes allowed)
+    if (byteLength < 2 || byteLength > 10) {
+      byteLength = 8 // Default to 8 bytes if invalid
+    }
 
-    if (!fs.existsSync(setupDefaultsPath)) {
-      // Ensure the target directory exists
-      const targetDir = path.dirname(setupDefaultsPath);
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
+    let customBytes = ''
+    if (projectName) {
+      // Use project name as base for custom bytes
+      const hash = crypto.createHash('sha256').update(projectName).digest('hex')
+      customBytes = hash.slice(0, Math.max(0, byteLength * 2)) // Take specified bytes (hex chars = bytes * 2)
+    } else {
+      // Generate random bytes
+      customBytes = crypto.randomBytes(byteLength).toString('hex').toLowerCase()
+    }
+
+    return customBytes
+  }
+
+  private generateSecureRandomString(length: number): string {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    let result = ''
+    const randomBytes = crypto.randomBytes(length)
+
+    for (let i = 0; i < length; i++) {
+      result += chars[randomBytes[i] % chars.length]
+    }
+
+    return result
+  }
+
+  private async getCelestiaLatestHeight(tendermintRpcUrl: string): Promise<number> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+
+    const response = await fetch(`${tendermintRpcUrl.replace(/\/$/, '')}/status`, {
+      headers,
+      method: 'GET'
+    })
+
+    if (!response.ok) {
+      throw new Error(`Celestia RPC connection failed: ${response.status} ${response.statusText}`)
+    }
+
+    const result = await response.json() as {
+      result?: {
+        sync_info?: {
+          latest_block_height?: string
+        }
+      }
+    }
+
+    if (result.result?.sync_info?.latest_block_height) {
+      const height = Number.parseInt(result.result.sync_info.latest_block_height, 10)
+      if (!Number.isNaN(height)) {
+        return height
+      }
+    }
+
+    throw new Error('Unable to get latest block height from Celestia RPC')
+  }
+
+  // Helper methods for common operations
+
+
+  private async testRpcConnection(rpcUrl: string, username?: string, password?: string): Promise<number> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+
+    // Handle different RPC URL formats
+    if (rpcUrl.includes('nownodes.io')) {
+      // NowNodes API format - use getblock API
+      const infoUrl = `${rpcUrl.replace(/\/$/, '')}/`
+
+      const response = await fetch(infoUrl, {
+        headers,
+        method: 'GET'
+      })
+
+      if (!response.ok) {
+        throw new Error(`blockbook API connection failed: ${response.status} ${response.statusText}`)
       }
 
-      this.log(chalk.blue(`Creating setup defaults from embedded template at ${setupDefaultsPath}`));
-      fs.writeFileSync(setupDefaultsPath, SETUP_DEFAULTS_TEMPLATE);
+      const result = await response.json() as { blockbook: { bestHeight: number } }
+      if (result.blockbook && typeof result.blockbook.bestHeight === 'number') {
+        return result.blockbook.bestHeight
+      }
+ 
+        throw new Error('Unable to get block height from blockbook API')
+      
+    } else {
+      // Standard Dogecoin RPC format
+      if (username && password) {
+        const credentials = Buffer.from(`${username}:${password}`).toString('base64')
+        headers.Authorization = `Basic ${credentials}`
+      }
+
+      const body = JSON.stringify({
+        id: 'test',
+        jsonrpc: '1.0',
+        method: 'getblockcount',
+        params: [],
+      })
+
+      const response = await fetch(rpcUrl, {
+        body,
+        headers,
+        method: 'POST',
+      })
+
+      if (!response.ok) {
+        throw new Error(`RPC connection failed: ${response.status} ${response.statusText}`)
+      }
+
+      const result = await response.json() as { error?: { code: number; message: string }; result?: number }
+
+      if (result.error) {
+        throw new Error(`RPC error: ${result.error.message} (Code: ${result.error.code})`)
+      }
+
+      if (typeof result.result === 'number') {
+        return result.result
+      }
+
+      throw new Error('RPC response did not contain valid block height')
     }
-    //read existing config file from user's working directory
-    const existingConfigStr = fs.readFileSync(setupDefaultsPath, 'utf-8');
-    let newConfig = toml.parse(existingConfigStr);
-
-    newConfig.network = newDogeConfig.network;
-
-    newConfig.dogecoin_rpc_url = newDogeConfig.rpc?.url || '';
-    newConfig.dogecoin_rpc_user = newDogeConfig.rpc?.username || '';
-    newConfig.dogecoin_rpc_pass = newDogeConfig.rpc?.password || '';
-    newConfig.dogecoin_blockbook_url = newConfig.network === 'mainnet' ? 'https://dogebook.nownodes.io' : 'https://dogebook-testnet.nownodes.io';
-    newConfig.dogecoin_blockbook_api_key = newDogeConfig.rpc?.apiKey || '';
-
-    // Write to setup_defaults.toml
-    fs.writeFileSync(setupDefaultsPath, toml.stringify(newConfig));
   }
 }
 

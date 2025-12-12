@@ -2,6 +2,7 @@ import {select} from '@inquirer/prompts'
 import {Command, Flags} from '@oclif/core'
 import chalk from 'chalk'
 import Docker from 'dockerode'
+
 import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
 
 export default class ContractsVerification extends Command {

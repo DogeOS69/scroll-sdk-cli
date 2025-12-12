@@ -1,5 +1,5 @@
-import {expect} from 'chai'
 import {runCommand} from '@oclif/test'
+import {expect} from 'chai'
 
 // Note: These are integration tests that check actual system dependencies.
 // They will pass/fail based on what's installed on the machine.

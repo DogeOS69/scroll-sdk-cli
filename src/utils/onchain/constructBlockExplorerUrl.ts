@@ -1,21 +1,21 @@
-import { RpcSource } from './index.js';
 import { generateProvider } from './generateProvider.js';
+import { RpcSource } from './index.js';
 
 /**
  * Enum representing the type of lookup to perform on the block explorer.
  */
 export enum LookupType {
-  TX = "tx",
   ADDRESS = "address",
-  BLOCK = "block"
+  BLOCK = "block",
+  TX = "tx"
 }
 
 /**
  * Interface for parameters used in constructing a block explorer URL.
  */
 export interface BlockExplorerParams {
-  chainId?: number;
   blockExplorerURI?: string;
+  chainId?: number;
   rpc?: RpcSource;
 }
 
@@ -23,8 +23,8 @@ export interface BlockExplorerParams {
  * A record of known block explorer URLs for different chain IDs.
  */
 const blockExplorerList: Record<number, string> = {
-  11155111: "https://sepolia.etherscan.io/",
-  534351: "https://sepolia.scrollscan.com/"
+  534_351: "https://sepolia.scrollscan.com/",
+  11_155_111: "https://sepolia.etherscan.io/"
 };
 
 /**

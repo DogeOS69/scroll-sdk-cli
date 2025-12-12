@@ -8,20 +8,17 @@ import * as yaml from 'js-yaml'
 import * as childProcess from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import type { DogeConfig } from '../../types/doge-config.js'
-import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
-import { execSync } from 'child_process'
-import { promisify } from 'util'
-import { writeConfigs } from '../../utils/config-writer.js'
-import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
-import {
-  createNonInteractiveContext,
-  resolveEnvValue,
-  type NonInteractiveContext,
-} from '../../utils/non-interactive.js'
-import { JsonOutputContext } from '../../utils/json-output.js'
 
-const execAsync = promisify(childProcess.exec)
+import type { DogeConfig } from '../../types/doge-config.js'
+
+import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
+import { writeConfigs } from '../../utils/config-writer.js'
+import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import { JsonOutputContext } from '../../utils/json-output.js'
+import {
+  resolveEnvValue,
+} from '../../utils/non-interactive.js'
+
 const SECRETS_PATH = path.join(process.cwd(), 'secrets')
 
 export default class SetupConfigs extends Command {
@@ -34,6 +31,17 @@ export default class SetupConfigs extends Command {
   ]
 
   static override flags = {
+    'base-fee-per-gas': Flags.string({
+      description: 'Base fee per gas (non-interactive mode). Uses existing config value if not provided.',
+    }),
+    'configs-dir': Flags.string({
+      default: 'values',
+      description: 'Directory name to copy configs to',
+      required: false,
+    }),
+    'deployment-salt': Flags.string({
+      description: 'Deployment salt value (non-interactive mode). If not provided, keeps existing or auto-increments.',
+    }),
     'doge-config': Flags.string({
       description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
       required: false,
@@ -42,53 +50,42 @@ export default class SetupConfigs extends Command {
       description: 'Specify the Docker image tag to use',
       required: false,
     }),
-    'configs-dir': Flags.string({
-      description: 'Directory name to copy configs to',
-      default: 'values',
-      required: false,
-    }),
-    'non-interactive': Flags.boolean({
-      char: 'N',
-      description: 'Run without prompts. Uses config values or sensible defaults.',
-      default: false,
-    }),
     json: Flags.boolean({
-      description: 'Output in JSON format (stdout for data, stderr for logs)',
       default: false,
-    }),
-    'deployment-salt': Flags.string({
-      description: 'Deployment salt value (non-interactive mode). If not provided, keeps existing or auto-increments.',
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
     }),
     'l1-fee-vault-addr': Flags.string({
       description: 'L1 fee vault address (non-interactive mode). Defaults to OWNER_ADDR.',
     }),
-    'l2-bridge-fee-recipient-addr': Flags.string({
-      description: 'L2 bridge fee recipient address (non-interactive mode). Defaults to zero address.',
-    }),
     'l1-plonk-verifier-addr': Flags.string({
       description: 'L1 plonk verifier address (non-interactive mode). If not provided, one will be deployed.',
     }),
-    'base-fee-per-gas': Flags.string({
-      description: 'Base fee per gas (non-interactive mode). Uses existing config value if not provided.',
+    'l2-bridge-fee-recipient-addr': Flags.string({
+      description: 'L2 bridge fee recipient address (non-interactive mode). Defaults to zero address.',
+    }),
+    'non-interactive': Flags.boolean({
+      char: 'N',
+      default: false,
+      description: 'Run without prompts. Uses config values or sensible defaults.',
     }),
     'skip-deployment-salt-update': Flags.boolean({
-      description: 'Skip deployment salt update (non-interactive mode)',
       default: false,
+      description: 'Skip deployment salt update (non-interactive mode)',
     }),
     'skip-l1-fee-vault-update': Flags.boolean({
-      description: 'Skip L1 fee vault address update (non-interactive mode)',
       default: false,
+      description: 'Skip L1 fee vault address update (non-interactive mode)',
     }),
     'skip-l1-plonk-verifier-update': Flags.boolean({
-      description: 'Skip L1 plonk verifier address update (non-interactive mode)',
       default: true,
+      description: 'Skip L1 plonk verifier address update (non-interactive mode)',
     }),
   }
 
   private dogeConfig: DogeConfig = {} as DogeConfig
-  private nonInteractive: boolean = false
-  private jsonMode: boolean = false
   private jsonCtx!: JsonOutputContext
+  private jsonMode: boolean = false
+  private nonInteractive: boolean = false
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupConfigs)
@@ -133,12 +130,11 @@ export default class SetupConfigs extends Command {
     this.jsonCtx.info('Running docker command to generate configs...')
     await this.runDockerCommand(imageTag)
 
-    let parsedPublicConfig: any = {}
     const publicConfigPath = path.join(process.cwd(), 'config.public.toml')
     if (fs.existsSync(publicConfigPath)) {
       try {
         const publicConfigContent = fs.readFileSync(publicConfigPath, 'utf8')
-        parsedPublicConfig = toml.parse(publicConfigContent)
+        toml.parse(publicConfigContent)
         this.jsonCtx.logSuccess('Successfully parsed config.public.toml')
       } catch (error: any) {
         this.jsonCtx.error(
@@ -166,9 +162,9 @@ export default class SetupConfigs extends Command {
     // JSON output
     if (this.jsonMode) {
       this.jsonCtx.success({
-        imageTag,
         configsDir,
         dogeConfigPath: dogeConfigResult.configPath,
+        imageTag,
         secretsCreated: true,
         yamlFilesProcessed: true,
       })
@@ -177,6 +173,7 @@ export default class SetupConfigs extends Command {
 
   private canAccessFile(filePath: string): boolean {
     try {
+      // eslint-disable-next-line no-bitwise
       fs.accessSync(filePath, fs.constants.R_OK | fs.constants.W_OK)
       return true
     } catch {
@@ -242,9 +239,7 @@ export default class SetupConfigs extends Command {
 
     for (const file of migrateDbFiles) {
       const filePath = path.join(SECRETS_PATH, `${file.service}-migrate-db.json`)
-      let content: any
-
-      content =
+      const content: any =
         file.service === 'bridge-history-fetcher'
           ? {
             db: {
@@ -291,42 +286,6 @@ export default class SetupConfigs extends Command {
     }
   }
 
-  private generateAlertRules(sourcePath: string): any {
-    const yamlContent = fs.readFileSync(sourcePath, 'utf8')
-    const parsedYaml = yaml.load(yamlContent) as any
-    const jsonConfig = JSON.parse(parsedYaml.scrollConfig)
-    const { addresses } = jsonConfig
-
-    const alertRules = [
-      {
-        groups: [
-          {
-            name: 'balance-cheker-group',
-            rules: addresses.map(
-              (item: { address: string; min_balance_ether: string; name: string; rpc_url: string }) => ({
-                alert: `ether_balance_of_${item.name}`,
-                annotations: {
-                  description: `Balance of ${item.name} (${item.address}) is less than threshold ${item.min_balance_ether}`,
-                  summary: `Balance of ${item.name} is less than threshold ${item.min_balance_ether}`,
-                },
-                expr: `ether_balance_of_${item.name} < ${item.min_balance_ether}`,
-                for: '5m',
-                labels: {
-                  severity: 'critical',
-                },
-              }),
-            ),
-          },
-        ],
-        labels: {
-          release: 'scroll-monitor',
-          role: 'alert-rules',
-        },
-        name: 'balance-cheker',
-      },
-    ]
-    return alertRules
-  }
 
 
   // TODO: check privatekey secrets once integrated
@@ -342,10 +301,23 @@ export default class SetupConfigs extends Command {
         'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_DB_CONFIG_DSN',
         'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_READ_ONLY_DB_CONFIG_DSN',
       ],
+      'blockbook': [
+        'DOGECOIN_RPC_USER:DOGECOIN_RPC_USER',
+        'DOGECOIN_RPC_PASSWORD:DOGECOIN_RPC_PASSWORD',
+      ],
       blockscout: ['BLOCKSCOUT_DB_CONNECTION_STRING:DATABASE_URL'],
       'bridge-history-api': ['BRIDGE_HISTORY_DB_CONNECTION_STRING:SCROLL_BRIDGE_HISTORY_DB_DSN'],
       'bridge-history-fetcher': ['BRIDGE_HISTORY_DB_CONNECTION_STRING:SCROLL_BRIDGE_HISTORY_DB_DSN'],
       'chain-monitor': ['CHAIN_MONITOR_DB_CONNECTION_STRING:SCROLL_CHAIN_MONITOR_DB_CONFIG_DSN'],
+      'contracts': [
+        'DEPLOYER_PRIVATE_KEY:DEPLOYER_PRIVATE_KEY',
+        'L1_COMMIT_SENDER_PRIVATE_KEY:L1_COMMIT_SENDER_PRIVATE_KEY',
+        'L1_FINALIZE_SENDER_PRIVATE_KEY:L1_FINALIZE_SENDER_PRIVATE_KEY',
+        'L1_GAS_ORACLE_SENDER_PRIVATE_KEY:L1_GAS_ORACLE_SENDER_PRIVATE_KEY',
+        'L2_GAS_ORACLE_SENDER_PRIVATE_KEY:L2_GAS_ORACLE_SENDER_PRIVATE_KEY',
+        'ROLLUP_EXPLORER_DB_CONNECTION_STRING:ROLLUP_EXPLORER_DB_CONNECTION_STRING',
+        'COORDINATOR_JWT_SECRET_KEY:COORDINATOR_JWT_SECRET_KEY'
+      ],
       'coordinator-api': [
         'COORDINATOR_DB_CONNECTION_STRING:SCROLL_COORDINATOR_DB_DSN',
         'COORDINATOR_JWT_SECRET_KEY:SCROLL_COORDINATOR_AUTH_SECRET',
@@ -353,6 +325,10 @@ export default class SetupConfigs extends Command {
       'coordinator-cron': [
         'COORDINATOR_DB_CONNECTION_STRING:SCROLL_COORDINATOR_DB_DSN',
         'COORDINATOR_JWT_SECRET_KEY:SCROLL_COORDINATOR_AUTH_SECRET',
+      ],
+      'dogecoin': [
+        'DOGECOIN_RPC_USER:DOGECOIN_RPC_USER',
+        'DOGECOIN_RPC_PASSWORD:DOGECOIN_RPC_PASSWORD',
       ],
       'gas-oracle': [
         'GAS_ORACLE_DB_CONNECTION_STRING:SCROLL_ROLLUP_DB_CONFIG_DSN',
@@ -370,27 +346,10 @@ export default class SetupConfigs extends Command {
         'L1_COMMIT_SENDER_PRIVATE_KEY:SCROLL_ROLLUP_L2_CONFIG_RELAYER_CONFIG_COMMIT_SENDER_SIGNER_CONFIG_PRIVATE_KEY_SIGNER_CONFIG_PRIVATE_KEY',
         'L1_FINALIZE_SENDER_PRIVATE_KEY:SCROLL_ROLLUP_L2_CONFIG_RELAYER_CONFIG_FINALIZE_SENDER_SIGNER_CONFIG_PRIVATE_KEY_SIGNER_CONFIG_PRIVATE_KEY',
       ],
-      'dogecoin': [
-        'DOGECOIN_RPC_USER:DOGECOIN_RPC_USER',
-        'DOGECOIN_RPC_PASSWORD:DOGECOIN_RPC_PASSWORD',
-      ],
-      'blockbook': [
-        'DOGECOIN_RPC_USER:DOGECOIN_RPC_USER',
-        'DOGECOIN_RPC_PASSWORD:DOGECOIN_RPC_PASSWORD',
-      ],
-      'withdrawal-processor': [
-      ],
-      'contracts': [
-        'DEPLOYER_PRIVATE_KEY:DEPLOYER_PRIVATE_KEY',
-        'L1_COMMIT_SENDER_PRIVATE_KEY:L1_COMMIT_SENDER_PRIVATE_KEY',
-        'L1_FINALIZE_SENDER_PRIVATE_KEY:L1_FINALIZE_SENDER_PRIVATE_KEY',
-        'L1_GAS_ORACLE_SENDER_PRIVATE_KEY:L1_GAS_ORACLE_SENDER_PRIVATE_KEY',
-        'L2_GAS_ORACLE_SENDER_PRIVATE_KEY:L2_GAS_ORACLE_SENDER_PRIVATE_KEY',
-        'ROLLUP_EXPLORER_DB_CONNECTION_STRING:ROLLUP_EXPLORER_DB_CONNECTION_STRING',
-        'COORDINATOR_JWT_SECRET_KEY:COORDINATOR_JWT_SECRET_KEY'
-      ],
       'testnet-activity-helper': [
         'L2_TESTNET_ACTIVITY_HELPER_PRIVATE_KEY:private-key',
+      ],
+      'withdrawal-processor': [
       ],
     }
 
@@ -399,6 +358,7 @@ export default class SetupConfigs extends Command {
     if (service === 'l2-sequencer') {
       // Handle all sequencers (primary and backups)
       let sequencerIndex = 0
+      // eslint-disable-next-line no-constant-condition
       while (true) {
         const sequencerConfig =
           sequencerIndex === 0 ? config.sequencer : config.sequencer[`sequencer-${sequencerIndex}`]
@@ -419,6 +379,7 @@ export default class SetupConfigs extends Command {
       // Handle L2 bootnode secrets
       if (config.bootnode) {
         let bootnodeIndex = 0
+        // eslint-disable-next-line no-constant-condition
         while (true) {
           const bootnodeInstanceKey = `bootnode-${bootnodeIndex}`
           const bootnodeConfig = config.bootnode[bootnodeInstanceKey]
@@ -431,7 +392,7 @@ export default class SetupConfigs extends Command {
           // L2GETH_NODEKEY is expected.
           // If it's missing for a defined bootnode instance in config.toml, default to an empty string.
           // config.toml.example shows L2GETH_NODEKEY="", so it should typically exist.
-          const nodeKey = bootnodeConfig.L2GETH_NODEKEY !== undefined ? bootnodeConfig.L2GETH_NODEKEY : ''
+          const nodeKey = bootnodeConfig.L2GETH_NODEKEY === undefined ? '' : bootnodeConfig.L2GETH_NODEKEY
           envFiles[`l2-bootnode-${bootnodeIndex}-secret.env`] = `L2GETH_NODEKEY="${nodeKey}"\n`
           bootnodeIndex++
         }
@@ -454,6 +415,7 @@ export default class SetupConfigs extends Command {
           content += `${envKey}="${config.sequencer[configKey]}"\n`
         }
       }
+
       if (content.length > 0) {
         envFiles[`${service}-secret.env`] = content
       }
@@ -463,7 +425,7 @@ export default class SetupConfigs extends Command {
       let content = `DOGEOS_FEE_ORACLE_DOGECOIN__RPC_USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
       content += `DOGEOS_FEE_ORACLE_DOGECOIN__RPC_PASSWORD="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
       content += `DOGEOS_FEE_ORACLE_CELESTIA__TENDERMINT_RPC_URL="${this.dogeConfig.da?.tendermintRpcUrl || ''}"\n`
-      content += `DOGEOS_FEE_ORACLE_PRIVATE_KEY="${config.accounts['L2_GAS_ORACLE_SENDER_PRIVATE_KEY'] || ''}"\n`
+      content += `DOGEOS_FEE_ORACLE_PRIVATE_KEY="${config.accounts.L2_GAS_ORACLE_SENDER_PRIVATE_KEY || ''}"\n`
       envFiles['fee-oracle-secret.env'] = content
     }
 
@@ -491,10 +453,11 @@ export default class SetupConfigs extends Command {
       const credentials = Buffer.from(`${this.dogeConfig.dogecoinClusterRpc?.username}:${this.dogeConfig.dogecoinClusterRpc?.password}`).toString('base64')
       envFiles['metrics-exporter-secret.env'] = `METRICS_EXPORTER_DOGECOIN_BASIC_AUTH="${credentials}"\n`
     }
+
     if (service === 'withdrawal-processor') {
       // Handle regular config mappings first
       let content = ''
-      //content += `DOGEOS_WITHDRAWAL_DATABASE_URL="${this.dogeConfig.rpc?.databaseUrl || ''}"\n`
+      // content += `DOGEOS_WITHDRAWAL_DATABASE_URL="${this.dogeConfig.rpc?.databaseUrl || ''}"\n`
       // Add Dogecoin RPC credentials from doge-config
       content += `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
       content += `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
@@ -503,7 +466,7 @@ export default class SetupConfigs extends Command {
       // Add values from output-withdrawal-processor.toml
       const withdrawal_processor_toml_path = path.join(process.cwd(), ".data", "output-withdrawal-processor.toml");
       if (fs.existsSync(withdrawal_processor_toml_path)) {
-        let withdrawal_processor_toml = toml.parse(fs.readFileSync(withdrawal_processor_toml_path, "utf-8"));
+        const withdrawal_processor_toml = toml.parse(fs.readFileSync(withdrawal_processor_toml_path, "utf8"));
         content += `DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY="${withdrawal_processor_toml.fee_signer_key}"\n`
         content += `DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY="${withdrawal_processor_toml.sequencer_signer_key}"\n`
       } else {
@@ -576,13 +539,13 @@ export default class SetupConfigs extends Command {
     const yamlFiles = fs.readdirSync(sourceDir).filter((file) => file.endsWith('.yaml'))
     if (yamlFiles.some((file) => !this.canAccessFile(path.join(sourceDir, file)))) {
       let changeOwnership = true
-      if (!this.nonInteractive) {
+      if (this.nonInteractive) {
+        this.jsonCtx.info('Non-interactive mode: Attempting to change ownership of YAML files with permission issues...')
+      } else {
         changeOwnership = await confirm({
           message:
             'Some YAML files have permission issues. Would you like to change their ownership to the current user?',
         })
-      } else {
-        this.jsonCtx.info('Non-interactive mode: Attempting to change ownership of YAML files with permission issues...')
       }
 
       if (changeOwnership) {
@@ -599,6 +562,7 @@ export default class SetupConfigs extends Command {
               false
             )
           }
+
           this.error(`Failed to change file ownership: ${error}`)
           return // Exit the method if we can't change permissions
         }
@@ -631,10 +595,11 @@ export default class SetupConfigs extends Command {
 
       if (fs.existsSync(sourcePath)) {
         try {
-          if (mapping.source == "gas-oracle-config.yaml") {
-            // gas-oracle-config.yaml no longer used. 
+          if (mapping.source === "gas-oracle-config.yaml") {
+            // gas-oracle-config.yaml no longer used.
             continue;
           }
+
           fs.copyFileSync(sourcePath, targetPath)
           this.log(chalk.green(`Processed file: ${mapping.source} -> ${mapping.target}`))
 
@@ -660,7 +625,7 @@ export default class SetupConfigs extends Command {
             mapping.target === 'coordinator-api-config.yaml' ||
             mapping.target === 'coordinator-cron-config.yaml'
           ) {
-            //remove auth.secret
+            // remove auth.secret
             try {
               const yamlFileContent = fs.readFileSync(targetPath, 'utf8')
               const parsedYaml = yaml.load(yamlFileContent) as any
@@ -692,7 +657,7 @@ export default class SetupConfigs extends Command {
                 this.log(chalk.yellow(`auth field missing; created auth object in ${mapping.target}`))
               }
 
-              const hadSecretKey = Object.prototype.hasOwnProperty.call(scrollConfigObject.auth, 'secret')
+              const hadSecretKey = Object.hasOwn(scrollConfigObject.auth, 'secret')
               scrollConfigObject.auth.secret = null
               if (hadSecretKey) {
                 this.log(chalk.green(`Sanitized auth.secret in ${mapping.target}`))
@@ -726,6 +691,7 @@ export default class SetupConfigs extends Command {
         this.log(chalk.yellow(`Source file not found: ${mapping.source}`))
       }
     }
+
     /*
         try {
           this.log(chalk.blue(`generating balance-checker alert rules file...`))
@@ -783,7 +749,7 @@ export default class SetupConfigs extends Command {
 
   private async runDockerCommand(imageTag: string): Promise<void> {
     const docker = new Docker()
-    //const image = `dogeos69/scroll-stack-contracts:${imageTag}`
+    // const image = `dogeos69/scroll-stack-contracts:${imageTag}`
     const image = `${DOCKER_REPOSITORY}:${imageTag}`
 
     try {
@@ -841,6 +807,54 @@ export default class SetupConfigs extends Command {
       await container.remove()
     } catch (error) {
       this.error(`Failed to run Docker command: ${error}`)
+    }
+  }
+
+  private async updateBaseFeePerGas(flags: any): Promise<void> {
+    const configPath = path.join(process.cwd(), 'config.toml')
+    if (!fs.existsSync(configPath)) {
+      this.jsonCtx.addWarning('config.toml not found. Skipping BASE_FEE_PER_GAS update.')
+      return
+    }
+
+    const configContent = fs.readFileSync(configPath, 'utf8')
+    const config = toml.parse(configContent)
+
+    const currentBaseFee = (config.genesis as any)?.BASE_FEE_PER_GAS || ''
+
+    if (this.nonInteractive) {
+      // Non-interactive mode: use flag value or keep existing
+      const newBaseFeePerGas = resolveEnvValue(flags['base-fee-per-gas']) || currentBaseFee
+
+      if (!newBaseFeePerGas) {
+        this.jsonCtx.addWarning('BASE_FEE_PER_GAS not provided and not in config. Skipping.')
+        return
+      }
+
+      if (!config.genesis) {
+        config.genesis = {}
+      }
+
+      ;(config.genesis as any).BASE_FEE_PER_GAS = newBaseFeePerGas
+
+      if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
+        this.jsonCtx.logSuccess(`BASE_FEE_PER_GAS updated in config.toml to "${newBaseFeePerGas}"`)
+      }
+    } else {
+      const newBaseFeePerGas = await input({
+        default: currentBaseFee,
+        message: "Enter baseFeePerGas"
+      })
+
+      if (!config.genesis) {
+        config.genesis = {}
+      }
+
+      ;(config.genesis as any).BASE_FEE_PER_GAS = newBaseFeePerGas
+
+      if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
+        this.log(chalk.green(`BASE_FEE_PER_GAS updated in config.toml to "${newBaseFeePerGas}"`))
+      }
     }
   }
 
@@ -950,7 +964,7 @@ export default class SetupConfigs extends Command {
         this.log(chalk.yellow(`Failed to retrieve current L1 block height: ${error}`))
       }
 
-      if (!defaultNewBlock || isNaN(Number(defaultNewBlock))) {
+      if (!defaultNewBlock || Number.isNaN(Number(defaultNewBlock))) {
         defaultNewBlock = '0'
       }
 
@@ -965,7 +979,7 @@ export default class SetupConfigs extends Command {
 
       ; (config.general as any).L1_CONTRACT_DEPLOYMENT_BLOCK = newBlock
 
-      //fs.writeFileSync(configPath, toml.stringify(config as any))
+      // fs.writeFileSync(configPath, toml.stringify(config as any))
       if (writeConfigs(config)) {
         this.log(
           chalk.green(`L1_CONTRACT_DEPLOYMENT_BLOCK updated in config.toml from "${currentBlock}" to "${newBlock}"`),
@@ -1059,70 +1073,6 @@ export default class SetupConfigs extends Command {
     }
   }
 
-  private async updateL2BridgeFeeRecipientAddr(flags: any): Promise<void> {
-    const configPath = path.join(process.cwd(), 'config.toml')
-    if (!fs.existsSync(configPath)) {
-      this.jsonCtx.addWarning('config.toml not found. Skipping L2_BRIDGE_FEE_RECIPIENT_ADDR update.')
-      return
-    }
-
-    const configContent = fs.readFileSync(configPath, 'utf8')
-    const config = toml.parse(configContent)
-
-    const defaultAddr = (config.contracts as any)?.L2_BRIDGE_FEE_RECIPIENT_ADDR || "0x0000000000000000000000000000000000000000"
-
-    if (this.nonInteractive) {
-      // Non-interactive mode: use flag value or existing config value or zero address
-      const newAddr = resolveEnvValue(flags['l2-bridge-fee-recipient-addr']) || defaultAddr
-
-      if (!ethers.isAddress(newAddr)) {
-        this.jsonCtx.error(
-          'E600_INVALID_ADDRESS',
-          `Invalid L2_BRIDGE_FEE_RECIPIENT_ADDR: ${newAddr}`,
-          'VALIDATION',
-          true,
-          { address: newAddr }
-        )
-      }
-
-      if (!config.contracts) {
-        config.contracts = {}
-      }
-
-      ;(config.contracts as any).L2_BRIDGE_FEE_RECIPIENT_ADDR = newAddr
-
-      if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
-        this.jsonCtx.logSuccess(`L2_BRIDGE_FEE_RECIPIENT_ADDR updated in config.toml to "${newAddr}"`)
-      }
-    } else {
-      let isValidAddress = false
-      let newAddr = ''
-
-      while (!isValidAddress) {
-        newAddr = await input({
-          default: defaultAddr,
-          message: 'Please enter the L2_BRIDGE_FEE_RECIPIENT_ADDR:',
-        })
-
-        if (ethers.isAddress(newAddr)) {
-          isValidAddress = true
-        } else {
-          this.log(chalk.red('Invalid Ethereum address. Please try again.'))
-        }
-      }
-
-      if (!config.contracts) {
-        config.contracts = {}
-      }
-
-      ;(config.contracts as any).L2_BRIDGE_FEE_RECIPIENT_ADDR = newAddr
-
-      if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
-        this.log(chalk.green(`L2_BRIDGE_FEE_RECIPIENT_ADDR updated in config.toml to "${newAddr}"`))
-      }
-    }
-  }
-
   private async updateL1PlonkVerifierAddr(flags: any): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
     if (!fs.existsSync(configPath)) {
@@ -1209,49 +1159,66 @@ export default class SetupConfigs extends Command {
     }
   }
 
-  private async updateBaseFeePerGas(flags: any): Promise<void> {
+  private async updateL2BridgeFeeRecipientAddr(flags: any): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
     if (!fs.existsSync(configPath)) {
-      this.jsonCtx.addWarning('config.toml not found. Skipping BASE_FEE_PER_GAS update.')
+      this.jsonCtx.addWarning('config.toml not found. Skipping L2_BRIDGE_FEE_RECIPIENT_ADDR update.')
       return
     }
+
     const configContent = fs.readFileSync(configPath, 'utf8')
     const config = toml.parse(configContent)
 
-    const currentBaseFee = (config.genesis as any)?.BASE_FEE_PER_GAS || ''
+    const defaultAddr = (config.contracts as any)?.L2_BRIDGE_FEE_RECIPIENT_ADDR || "0x0000000000000000000000000000000000000000"
 
     if (this.nonInteractive) {
-      // Non-interactive mode: use flag value or keep existing
-      const newBaseFeePerGas = resolveEnvValue(flags['base-fee-per-gas']) || currentBaseFee
+      // Non-interactive mode: use flag value or existing config value or zero address
+      const newAddr = resolveEnvValue(flags['l2-bridge-fee-recipient-addr']) || defaultAddr
 
-      if (!newBaseFeePerGas) {
-        this.jsonCtx.addWarning('BASE_FEE_PER_GAS not provided and not in config. Skipping.')
-        return
+      if (!ethers.isAddress(newAddr)) {
+        this.jsonCtx.error(
+          'E600_INVALID_ADDRESS',
+          `Invalid L2_BRIDGE_FEE_RECIPIENT_ADDR: ${newAddr}`,
+          'VALIDATION',
+          true,
+          { address: newAddr }
+        )
       }
 
-      if (!config.genesis) {
-        config.genesis = {}
+      if (!config.contracts) {
+        config.contracts = {}
       }
 
-      ;(config.genesis as any).BASE_FEE_PER_GAS = newBaseFeePerGas
+      ;(config.contracts as any).L2_BRIDGE_FEE_RECIPIENT_ADDR = newAddr
 
       if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
-        this.jsonCtx.logSuccess(`BASE_FEE_PER_GAS updated in config.toml to "${newBaseFeePerGas}"`)
+        this.jsonCtx.logSuccess(`L2_BRIDGE_FEE_RECIPIENT_ADDR updated in config.toml to "${newAddr}"`)
       }
     } else {
-      const newBaseFeePerGas = await input({
-        default: currentBaseFee,
-        message: "Enter baseFeePerGas"
-      })
+      let isValidAddress = false
+      let newAddr = ''
 
-      if (!config.genesis) {
-        config.genesis = {}
+      while (!isValidAddress) {
+        newAddr = await input({
+          default: defaultAddr,
+          message: 'Please enter the L2_BRIDGE_FEE_RECIPIENT_ADDR:',
+        })
+
+        if (ethers.isAddress(newAddr)) {
+          isValidAddress = true
+        } else {
+          this.log(chalk.red('Invalid Ethereum address. Please try again.'))
+        }
       }
 
-      ;(config.genesis as any).BASE_FEE_PER_GAS = newBaseFeePerGas
+      if (!config.contracts) {
+        config.contracts = {}
+      }
+
+      ;(config.contracts as any).L2_BRIDGE_FEE_RECIPIENT_ADDR = newAddr
 
       if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
-        this.log(chalk.green(`BASE_FEE_PER_GAS updated in config.toml to "${newBaseFeePerGas}"`))
+        this.log(chalk.green(`L2_BRIDGE_FEE_RECIPIENT_ADDR updated in config.toml to "${newAddr}"`))
       }
     }
   }

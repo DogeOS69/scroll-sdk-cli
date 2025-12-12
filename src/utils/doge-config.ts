@@ -1,10 +1,10 @@
 import * as toml from '@iarna/toml'
-import { confirm, input, select } from '@inquirer/prompts'
+import { select } from '@inquirer/prompts'
+import chalk from 'chalk'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import chalk from 'chalk'
 
-import { DogeConfig, Network } from '../types/doge-config.js'
+import { DogeConfig } from '../types/doge-config.js'
 
 /**
  * Select and return the path to a doge config file
@@ -86,6 +86,7 @@ async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
     if (!parsedConfig.wallet || !parsedConfig.wallet.path) {
       throw new Error(`Config file ${resolvedPath} is missing 'wallet.path'.`)
     }
+
     return parsedConfig
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Config file')) throw error

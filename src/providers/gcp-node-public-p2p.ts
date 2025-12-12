@@ -1,4 +1,5 @@
 import chalk from 'chalk'
+
 import type { NodeLBProvider } from './aws-node-public-p2p.js'
 
 export class GCPNodeStaticIPProvider implements NodeLBProvider {

@@ -1,34 +1,35 @@
-import fs from 'node:fs'
-import { Wallet } from 'ethers'
-import { parseTomlConfig } from './config-parser.js'
 import chalk from 'chalk'
+import { Wallet } from 'ethers'
+import fs from 'node:fs'
+
+import { parseTomlConfig } from './config-parser.js'
 
 export interface Utxo {
-  txid: string
-  vout: number
-  value: string // Value in dogetoshis as a string
   confirmations: number
+  txid: string
+  value: string // Value in dogetoshis as a string
+  vout: number
 }
 
 export interface Tx {
-  hex: string
   confirmations?: number
+  hex: string
 }
 
 type ElectrsUtxo = {
-  txid: string
-  vout: number
-  value: number | string
   status: {
-    confirmed: boolean
     block_height?: number
+    confirmed: boolean
   }
+  txid: string
+  value: number | string
+  vout: number
 }
 
 type ElectrsTx = {
   status?: {
-    confirmed: boolean
     block_height?: number
+    confirmed: boolean
   }
 }
 
@@ -47,16 +48,18 @@ const resolveBaseUrls = (blockbookUrl: string): string[] => {
 
   // Prefer electrs first, then optional blockbook primary as fallback.
   const bases = [electrsBase, primary].filter(Boolean)
-  return Array.from(new Set(bases))
+  return [...new Set(bases)]
 }
 
 export const toString = (value: unknown): string => {
   if (typeof value === 'string') {
     return value.trim()
   }
+
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value.toString()
   }
+
   return ''
 }
 
@@ -89,6 +92,7 @@ export const deriveAddressFromKey = (privateKey: string, fallbackAddress: string
       warn(`Failed to derive L2 sender address from private key: ${reason}`)
     }
   }
+
   return fallbackAddress
 }
 
@@ -135,6 +139,7 @@ export async function getUtxos(address: string, blockbookUrl: string): Promise<U
         if (!response.ok) {
           throw new Error(`Blockbook request failed: ${response.status} ${response.statusText}`)
         }
+
         return response.json()
       } catch (error) {
         lastError = error
@@ -147,6 +152,7 @@ export async function getUtxos(address: string, blockbookUrl: string): Promise<U
       if (!utxoRes.ok) {
         throw new Error(`Electrs request failed: ${utxoRes.status} ${utxoRes.statusText}`)
       }
+
       const electrsUtxos: ElectrsUtxo[] = await utxoRes.json()
 
       let tipHeight = 0
@@ -173,11 +179,12 @@ export async function getUtxos(address: string, blockbookUrl: string): Promise<U
         if (u.status.confirmed) {
           confirmations = height && tipHeight ? Math.max(0, tipHeight - height + 1) : 1
         }
+
         return {
-          txid: u.txid,
-          vout: u.vout,
-          value: valueStr,
           confirmations,
+          txid: u.txid,
+          value: valueStr,
+          vout: u.vout,
         }
       })
     } catch (error) {
@@ -214,6 +221,7 @@ export async function getTx(txid: string, blockbookUrl: string): Promise<Tx> {
         if (!response.ok) {
           throw new Error(`Blockbook request failed: ${response.status} ${response.statusText}`)
         }
+
         return response.json()
       } catch (error) {
         lastError = error
@@ -230,6 +238,7 @@ export async function getTx(txid: string, blockbookUrl: string): Promise<Tx> {
       if (!txRes.ok) {
         throw new Error(`Electrs tx request failed: ${txRes.status} ${txRes.statusText}`)
       }
+
       if (!hexRes.ok) {
         throw new Error(`Electrs hex request failed: ${hexRes.status} ${hexRes.statusText}`)
       }
@@ -257,7 +266,7 @@ export async function getTx(txid: string, blockbookUrl: string): Promise<Tx> {
         }
       }
 
-      return { hex, confirmations }
+      return { confirmations, hex }
     } catch (error) {
       const reason =
         lastError instanceof Error
@@ -289,11 +298,11 @@ export async function broadcastTx(txHex: string, blockbookUrl: string): Promise<
     if (!isElectrsOnly) {
       try {
         const response = await fetch(`${baseUrl}/api/v2/sendtx/`, {
-          method: 'POST',
+          body: txHex,
           headers: {
             'Content-Type': 'text/plain',
           },
-          body: txHex,
+          method: 'POST',
         })
 
         if (!response.ok) {
@@ -310,11 +319,11 @@ export async function broadcastTx(txHex: string, blockbookUrl: string): Promise<
     // Fallback to Electrs/Esplora
     try {
       const response = await fetch(`${baseUrl}/tx`, {
-        method: 'POST',
+        body: txHex,
         headers: {
           'Content-Type': 'text/plain',
         },
-        body: txHex,
+        method: 'POST',
       })
 
       if (!response.ok) {
@@ -326,6 +335,7 @@ export async function broadcastTx(txHex: string, blockbookUrl: string): Promise<
       if (!txid) {
         throw new Error('Electrs broadcast returned empty txid')
       }
+
       return { result: txid }
     } catch (error) {
       const reason =
@@ -346,7 +356,7 @@ export async function waitForConfirmations(
   log: (msg: string) => void,
   warn: (msg: string) => void,
   minConfirmations = 1,
-  pollIntervalMs = 3_000,
+  pollIntervalMs = 3000,
   timeoutMs = 10 * 60_000,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
@@ -360,6 +370,7 @@ export async function waitForConfirmations(
         log(chalk.green(`✅ Transaction ${txid} confirmed.`))
         return true
       }
+
       log(chalk.gray(`   Current: ${confirmations}/${minConfirmations}...`))
     } catch (error) {
       warn(`   ${chalk.yellow('⚠️ Failed to fetch confirmation status:')} ${(error as Error).message}`)
@@ -369,6 +380,7 @@ export async function waitForConfirmations(
       setTimeout(resolve, pollIntervalMs)
     })
   }
+
   log(chalk.red(`   Timeout reached waiting for confirmations for ${txid}.`))
   return false
 }

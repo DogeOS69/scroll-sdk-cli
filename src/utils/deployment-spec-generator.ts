@@ -5,24 +5,23 @@
  * other configuration files from a DeploymentSpec.
  */
 
-import * as fs from 'fs'
-import * as path from 'path'
-import * as yaml from 'js-yaml'
 import * as toml from '@iarna/toml'
+import * as yaml from 'js-yaml'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+
 import type {
   DeploymentSpec,
-  ValidationResult,
   ValidationError,
-  ValidationWarning,
-  SequencerConfig,
-  BootnodeConfig
+  ValidationResult,
+  ValidationWarning
 } from '../types/deployment-spec.js'
 
 /**
  * Load and parse a DeploymentSpec from a YAML file
  */
 export function loadDeploymentSpec(filePath: string): DeploymentSpec {
-  const content = fs.readFileSync(filePath, 'utf-8')
+  const content = fs.readFileSync(filePath, 'utf8')
   const spec = yaml.load(content) as DeploymentSpec
 
   if (!spec.version) {
@@ -38,12 +37,13 @@ export function loadDeploymentSpec(filePath: string): DeploymentSpec {
 export function resolveEnvValue(value: string): string {
   if (typeof value !== 'string') return value
 
-  const envPattern = /\$ENV:([A-Z0-9_]+)/g
-  return value.replace(envPattern, (match, varName) => {
+  const envPattern = /\$ENV:([\dA-Z_]+)/g
+  return value.replaceAll(envPattern, (match, varName) => {
     const envValue = process.env[varName]
     if (envValue === undefined) {
       throw new Error(`Environment variable ${varName} is not set`)
     }
+
     return envValue
   })
 }
@@ -53,7 +53,7 @@ export function resolveEnvValue(value: string): string {
  */
 export function hasEnvRef(value: string): boolean {
   if (typeof value !== 'string') return false
-  return /\$ENV:[A-Z0-9_]+/.test(value)
+  return /\$ENV:[\dA-Z_]+/.test(value)
 }
 
 /**
@@ -66,66 +66,66 @@ export function validateDeploymentSpec(spec: DeploymentSpec): ValidationResult {
   // Version check
   if (spec.version !== '1.0') {
     errors.push({
-      path: 'version',
+      code: 'E001_UNSUPPORTED_VERSION',
       message: `Unsupported version: ${spec.version}. Expected: 1.0`,
-      code: 'E001_UNSUPPORTED_VERSION'
+      path: 'version'
     })
   }
 
   // Metadata validation
   if (!spec.metadata?.name) {
     errors.push({
-      path: 'metadata.name',
+      code: 'E002_MISSING_REQUIRED_FIELD',
       message: 'Deployment name is required',
-      code: 'E002_MISSING_REQUIRED_FIELD'
+      path: 'metadata.name'
     })
   }
 
   if (!spec.metadata?.environment) {
     errors.push({
-      path: 'metadata.environment',
+      code: 'E002_MISSING_REQUIRED_FIELD',
       message: 'Environment is required (mainnet, testnet, devnet)',
-      code: 'E002_MISSING_REQUIRED_FIELD'
+      path: 'metadata.environment'
     })
   }
 
   // Infrastructure validation
   if (!spec.infrastructure?.provider) {
     errors.push({
-      path: 'infrastructure.provider',
+      code: 'E002_MISSING_REQUIRED_FIELD',
       message: 'Infrastructure provider is required',
-      code: 'E002_MISSING_REQUIRED_FIELD'
+      path: 'infrastructure.provider'
     })
   }
 
   if (spec.infrastructure?.provider === 'aws' && !spec.infrastructure.aws) {
     errors.push({
-      path: 'infrastructure.aws',
+      code: 'E003_MISSING_PROVIDER_CONFIG',
       message: 'AWS configuration is required when provider is aws',
-      code: 'E003_MISSING_PROVIDER_CONFIG'
+      path: 'infrastructure.aws'
     })
   }
 
   // Network validation
   if (!spec.network?.l1ChainId || !spec.network?.l2ChainId) {
     errors.push({
-      path: 'network',
+      code: 'E002_MISSING_REQUIRED_FIELD',
       message: 'L1 and L2 chain IDs are required',
-      code: 'E002_MISSING_REQUIRED_FIELD'
+      path: 'network'
     })
   }
 
   // Accounts validation
   if (!spec.accounts?.deployer?.address) {
     errors.push({
-      path: 'accounts.deployer.address',
+      code: 'E002_MISSING_REQUIRED_FIELD',
       message: 'Deployer address is required',
-      code: 'E002_MISSING_REQUIRED_FIELD'
+      path: 'accounts.deployer.address'
     })
   }
 
   // Validate Ethereum addresses
-  const ethAddressPattern = /^0x[a-fA-F0-9]{40}$/
+  const ethAddressPattern = /^0x[\dA-Fa-f]{40}$/
   const addressFields = [
     { path: 'accounts.deployer.address', value: spec.accounts?.deployer?.address },
     { path: 'accounts.owner.address', value: spec.accounts?.owner?.address },
@@ -136,38 +136,36 @@ export function validateDeploymentSpec(spec: DeploymentSpec): ValidationResult {
   for (const field of addressFields) {
     if (field.value && !ethAddressPattern.test(field.value)) {
       errors.push({
-        path: field.path,
+        code: 'E004_INVALID_ADDRESS',
         message: `Invalid Ethereum address: ${field.value}`,
-        code: 'E004_INVALID_ADDRESS'
+        path: field.path
       })
     }
   }
 
   // Dogecoin network validation
-  if (spec.dogecoin?.network) {
-    if (spec.metadata.environment === 'mainnet' && spec.dogecoin.network !== 'mainnet') {
+  if (spec.dogecoin?.network && spec.metadata.environment === 'mainnet' && spec.dogecoin.network !== 'mainnet') {
       warnings.push({
-        path: 'dogecoin.network',
         message: 'Deployment environment is mainnet but dogecoin network is not mainnet',
+        path: 'dogecoin.network',
         suggestion: 'Ensure this is intentional'
       })
     }
-  }
 
   // Signing validation
   if (!spec.signing?.method) {
     errors.push({
-      path: 'signing.method',
+      code: 'E002_MISSING_REQUIRED_FIELD',
       message: 'Signing method is required (local, cubesigner, aws-kms)',
-      code: 'E002_MISSING_REQUIRED_FIELD'
+      path: 'signing.method'
     })
   }
 
   if (spec.signing?.method === 'cubesigner' && (!spec.signing.cubesigner?.roles || spec.signing.cubesigner.roles.length === 0)) {
     errors.push({
-      path: 'signing.cubesigner.roles',
+      code: 'E003_MISSING_PROVIDER_CONFIG',
       message: 'CubeSigner roles are required when using cubesigner signing method',
-      code: 'E003_MISSING_PROVIDER_CONFIG'
+      path: 'signing.cubesigner.roles'
     })
   }
 
@@ -177,9 +175,9 @@ export function validateDeploymentSpec(spec: DeploymentSpec): ValidationResult {
     const attestationKeyCount = spec.bridge.keyCounts?.attestation || 0
     if (attestation > attestationKeyCount) {
       errors.push({
-        path: 'bridge.thresholds.attestation',
+        code: 'E005_INVALID_THRESHOLD',
         message: `Attestation threshold (${attestation}) cannot exceed key count (${attestationKeyCount})`,
-        code: 'E005_INVALID_THRESHOLD'
+        path: 'bridge.thresholds.attestation'
       })
     }
   }
@@ -191,9 +189,9 @@ export function validateDeploymentSpec(spec: DeploymentSpec): ValidationResult {
     // Validate default pullPolicy if specified
     if (spec.images.defaults?.pullPolicy && !validPullPolicies.includes(spec.images.defaults.pullPolicy)) {
       errors.push({
-        path: 'images.defaults.pullPolicy',
+        code: 'E006_INVALID_IMAGE_CONFIG',
         message: `Invalid default pullPolicy: ${spec.images.defaults.pullPolicy}. Must be one of: ${validPullPolicies.join(', ')}`,
-        code: 'E006_INVALID_IMAGE_CONFIG'
+        path: 'images.defaults.pullPolicy'
       })
     }
 
@@ -208,32 +206,32 @@ export function validateDeploymentSpec(spec: DeploymentSpec): ValidationResult {
         // Validate pullPolicy if specified
         if (imageConfig.pullPolicy && !validPullPolicies.includes(imageConfig.pullPolicy)) {
           errors.push({
-            path: `images.services.${serviceName}.pullPolicy`,
+            code: 'E006_INVALID_IMAGE_CONFIG',
             message: `Invalid pullPolicy: ${imageConfig.pullPolicy}. Must be one of: ${validPullPolicies.join(', ')}`,
-            code: 'E006_INVALID_IMAGE_CONFIG'
+            path: `images.services.${serviceName}.pullPolicy`
           })
         }
 
         // Validate tag format (should not contain spaces or invalid characters)
         if (imageConfig.tag && !hasEnvRef(imageConfig.tag)) {
-          const tagPattern = /^[a-zA-Z0-9._-]+$/
+          const tagPattern = /^[\w.-]+$/
           if (!tagPattern.test(imageConfig.tag)) {
             errors.push({
-              path: `images.services.${serviceName}.tag`,
+              code: 'E006_INVALID_IMAGE_CONFIG',
               message: `Invalid image tag format: ${imageConfig.tag}. Tags should contain only alphanumeric characters, dots, underscores, and hyphens`,
-              code: 'E006_INVALID_IMAGE_CONFIG'
+              path: `images.services.${serviceName}.tag`
             })
           }
         }
 
         // Validate repository format (basic check for container image reference)
         if (imageConfig.repository) {
-          const repoPattern = /^[a-z0-9][a-z0-9._/-]*$/
+          const repoPattern = /^[\da-z][\d./_a-z-]*$/
           if (!repoPattern.test(imageConfig.repository)) {
             errors.push({
-              path: `images.services.${serviceName}.repository`,
+              code: 'E006_INVALID_IMAGE_CONFIG',
               message: `Invalid repository format: ${imageConfig.repository}`,
-              code: 'E006_INVALID_IMAGE_CONFIG'
+              path: `images.services.${serviceName}.repository`
             })
           }
         }
@@ -241,8 +239,8 @@ export function validateDeploymentSpec(spec: DeploymentSpec): ValidationResult {
         // Warn if only tag is specified without repository (might be intentional to just override tag)
         if (imageConfig.tag && !imageConfig.repository) {
           warnings.push({
-            path: `images.services.${serviceName}`,
             message: `Image tag specified without repository for ${serviceName}`,
+            path: `images.services.${serviceName}`,
             suggestion: 'This will only override the tag while keeping the default repository'
           })
         }
@@ -251,8 +249,8 @@ export function validateDeploymentSpec(spec: DeploymentSpec): ValidationResult {
   }
 
   return {
-    valid: errors.length === 0,
     errors,
+    valid: errors.length === 0,
     warnings
   }
 }
@@ -265,16 +263,16 @@ export function generateConfigToml(spec: DeploymentSpec): string {
 
   // [general] section
   config.general = {
-    DA_PUBLISHER_ENDPOINT: spec.network.daPublisherEndpoint,
-    L1_RPC_ENDPOINT: spec.network.l1RpcEndpoint,
-    L1_RPC_ENDPOINT_WEBSOCKET: spec.network.l1RpcEndpointWebsocket || '',
     BEACON_RPC_ENDPOINT: spec.network.beaconRpcEndpoint || '',
-    L2_RPC_ENDPOINT: spec.network.l2RpcEndpoint,
-    CHAIN_NAME_L1: spec.network.l1ChainName,
-    CHAIN_NAME_L2: spec.network.l2ChainName,
     CHAIN_ID_L1: spec.network.l1ChainId,
     CHAIN_ID_L2: spec.network.l2ChainId,
+    CHAIN_NAME_L1: spec.network.l1ChainName,
+    CHAIN_NAME_L2: spec.network.l2ChainName,
+    DA_PUBLISHER_ENDPOINT: spec.network.daPublisherEndpoint,
     L1_CONTRACT_DEPLOYMENT_BLOCK: spec.contracts.l1DeploymentBlock || 0,
+    L1_RPC_ENDPOINT: spec.network.l1RpcEndpoint,
+    L1_RPC_ENDPOINT_WEBSOCKET: spec.network.l1RpcEndpointWebsocket || '',
+    L2_RPC_ENDPOINT: spec.network.l2RpcEndpoint,
   }
 
   if (spec.rollup.verifierDigests) {
@@ -284,17 +282,17 @@ export function generateConfigToml(spec: DeploymentSpec): string {
 
   // [accounts] section
   config.accounts = {
-    DEPLOYER_PRIVATE_KEY: spec.accounts.deployer.privateKey,
     DEPLOYER_ADDR: spec.accounts.deployer.address,
-    OWNER_ADDR: spec.accounts.owner.address,
-    L1_COMMIT_SENDER_PRIVATE_KEY: spec.accounts.l1CommitSender.privateKey,
+    DEPLOYER_PRIVATE_KEY: spec.accounts.deployer.privateKey,
     L1_COMMIT_SENDER_ADDR: spec.accounts.l1CommitSender.address,
-    L1_FINALIZE_SENDER_PRIVATE_KEY: spec.accounts.l1FinalizeSender.privateKey,
+    L1_COMMIT_SENDER_PRIVATE_KEY: spec.accounts.l1CommitSender.privateKey,
     L1_FINALIZE_SENDER_ADDR: spec.accounts.l1FinalizeSender.address,
-    L1_GAS_ORACLE_SENDER_PRIVATE_KEY: spec.accounts.l1GasOracleSender.privateKey,
+    L1_FINALIZE_SENDER_PRIVATE_KEY: spec.accounts.l1FinalizeSender.privateKey,
     L1_GAS_ORACLE_SENDER_ADDR: spec.accounts.l1GasOracleSender.address,
-    L2_GAS_ORACLE_SENDER_PRIVATE_KEY: spec.accounts.l2GasOracleSender.privateKey,
+    L1_GAS_ORACLE_SENDER_PRIVATE_KEY: spec.accounts.l1GasOracleSender.privateKey,
     L2_GAS_ORACLE_SENDER_ADDR: spec.accounts.l2GasOracleSender.address,
+    L2_GAS_ORACLE_SENDER_PRIVATE_KEY: spec.accounts.l2GasOracleSender.privateKey,
+    OWNER_ADDR: spec.accounts.owner.address,
   }
 
   // [db] section
@@ -303,37 +301,37 @@ export function generateConfigToml(spec: DeploymentSpec): string {
   const dbPort = dbAdmin?.vpcPort || dbAdmin?.port || 5432
 
   config.db = {
-    ROLLUP_NODE_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, spec.database.databases.rollupNode,
-      'rollup_node', spec.database.credentials.rollupNodePassword
-    ),
-    BRIDGE_HISTORY_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, spec.database.databases.bridgeHistory,
-      'bridge_history', spec.database.credentials.bridgeHistoryPassword
-    ),
-    GAS_ORACLE_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, spec.database.databases.gasOracle,
-      'gas_oracle', spec.database.credentials.gasOraclePassword
-    ),
-    COORDINATOR_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, spec.database.databases.coordinator,
-      'coordinator', spec.database.credentials.coordinatorPassword
-    ),
-    CHAIN_MONITOR_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, spec.database.databases.chainMonitor,
-      'chain_monitor', spec.database.credentials.chainMonitorPassword
-    ),
-    ROLLUP_EXPLORER_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, spec.database.databases.rollupExplorer,
-      'rollup_explorer', spec.database.credentials.rollupExplorerPassword
+    ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING: buildDbConnectionString(
+      dbHost, dbPort, spec.database.databases.adminSystem,
+      'admin_system', spec.database.credentials.adminSystemPassword
     ),
     BLOCKSCOUT_DB_CONNECTION_STRING: buildDbConnectionString(
       dbHost, dbPort, spec.database.databases.blockscout,
       'blockscout', spec.database.credentials.blockscoutPassword
     ),
-    ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, spec.database.databases.adminSystem,
-      'admin_system', spec.database.credentials.adminSystemPassword
+    BRIDGE_HISTORY_DB_CONNECTION_STRING: buildDbConnectionString(
+      dbHost, dbPort, spec.database.databases.bridgeHistory,
+      'bridge_history', spec.database.credentials.bridgeHistoryPassword
+    ),
+    CHAIN_MONITOR_DB_CONNECTION_STRING: buildDbConnectionString(
+      dbHost, dbPort, spec.database.databases.chainMonitor,
+      'chain_monitor', spec.database.credentials.chainMonitorPassword
+    ),
+    COORDINATOR_DB_CONNECTION_STRING: buildDbConnectionString(
+      dbHost, dbPort, spec.database.databases.coordinator,
+      'coordinator', spec.database.credentials.coordinatorPassword
+    ),
+    GAS_ORACLE_DB_CONNECTION_STRING: buildDbConnectionString(
+      dbHost, dbPort, spec.database.databases.gasOracle,
+      'gas_oracle', spec.database.credentials.gasOraclePassword
+    ),
+    ROLLUP_EXPLORER_DB_CONNECTION_STRING: buildDbConnectionString(
+      dbHost, dbPort, spec.database.databases.rollupExplorer,
+      'rollup_explorer', spec.database.credentials.rollupExplorerPassword
+    ),
+    ROLLUP_NODE_DB_CONNECTION_STRING: buildDbConnectionString(
+      dbHost, dbPort, spec.database.databases.rollupNode,
+      'rollup_node', spec.database.credentials.rollupNodePassword
     ),
   }
 
@@ -343,9 +341,9 @@ export function generateConfigToml(spec: DeploymentSpec): string {
   // [gas-token] section
   config['gas-token'] = {
     ALTERNATIVE_GAS_TOKEN_ENABLED: spec.contracts.alternativeGasToken?.enabled || false,
-    GAS_ORACLE_INCORPORATE_TOKEN_EXCHANGE_RATE_ENANBLED: false,
     EXCHANGE_RATE_UPDATE_MODE: spec.contracts.alternativeGasToken?.exchangeRateMode || 'Fixed',
     FIXED_EXCHANGE_RATE: spec.contracts.alternativeGasToken?.fixedExchangeRate || '1',
+    GAS_ORACLE_INCORPORATE_TOKEN_EXCHANGE_RATE_ENANBLED: false,
     TOKEN_SYMBOL_PAIR: spec.contracts.alternativeGasToken?.tokenSymbolPair || '',
   }
 
@@ -355,48 +353,48 @@ export function generateConfigToml(spec: DeploymentSpec): string {
 
   // [rollup] section
   config.rollup = {
-    MAX_TX_IN_CHUNK: spec.rollup.maxTxInChunk,
-    MAX_BLOCK_IN_CHUNK: spec.rollup.maxBlockInChunk,
+    FINALIZE_BATCH_DEADLINE_SEC: spec.rollup.finalization.batchDeadlineSec,
     MAX_BATCH_IN_BUNDLE: spec.rollup.maxBatchInBundle,
+    MAX_BLOCK_IN_CHUNK: spec.rollup.maxBlockInChunk,
     MAX_L1_MESSAGE_GAS_LIMIT: spec.rollup.maxL1MessageGasLimit,
+    MAX_TX_IN_CHUNK: spec.rollup.maxTxInChunk,
+    RELAY_MESSAGE_DEADLINE_SEC: spec.rollup.finalization.relayMessageDeadlineSec,
     TEST_ENV_MOCK_FINALIZE_ENABLED: spec.test?.mockFinalizeEnabled || false,
     TEST_ENV_MOCK_FINALIZE_TIMEOUT_SEC: spec.test?.mockFinalizeTimeoutSec || 0,
-    FINALIZE_BATCH_DEADLINE_SEC: spec.rollup.finalization.batchDeadlineSec,
-    RELAY_MESSAGE_DEADLINE_SEC: spec.rollup.finalization.relayMessageDeadlineSec,
   }
 
   // [frontend] section
   config.frontend = {
-    EXTERNAL_RPC_URI_L1: spec.frontend.externalUrls.l1Rpc,
-    EXTERNAL_RPC_URI_L2: spec.frontend.externalUrls.l2Rpc,
+    BASE_CHAIN: spec.network.tokenSymbol,
     BRIDGE_API_URI: spec.frontend.externalUrls.bridgeApi,
-    ROLLUPSCAN_API_URI: spec.frontend.externalUrls.rollupScanApi,
+    CONNECT_WALLET_PROJECT_ID: spec.frontend.walletConnectProjectId || '',
+    ETH_SYMBOL: spec.network.tokenSymbol,
     EXTERNAL_EXPLORER_URI_L1: spec.frontend.externalUrls.l1Explorer,
     EXTERNAL_EXPLORER_URI_L2: spec.frontend.externalUrls.l2Explorer,
-    ETH_SYMBOL: spec.network.tokenSymbol,
-    BASE_CHAIN: spec.network.tokenSymbol,
-    CONNECT_WALLET_PROJECT_ID: spec.frontend.walletConnectProjectId || '',
+    EXTERNAL_RPC_URI_L1: spec.frontend.externalUrls.l1Rpc,
+    EXTERNAL_RPC_URI_L2: spec.frontend.externalUrls.l2Rpc,
+    ROLLUPSCAN_API_URI: spec.frontend.externalUrls.rollupScanApi,
   }
 
   // [genesis] section
   config.genesis = {
-    L2_MAX_ETH_SUPPLY: spec.genesis.maxEthSupply,
-    L2_DEPLOYER_INITIAL_BALANCE: spec.genesis.deployerInitialBalance,
     BASE_FEE_PER_GAS: spec.genesis.baseFeePerGas,
+    L2_DEPLOYER_INITIAL_BALANCE: spec.genesis.deployerInitialBalance,
+    L2_MAX_ETH_SUPPLY: spec.genesis.maxEthSupply,
   }
 
   // [contracts] section
   config.contracts = {
+    BLOB_SCALAR: spec.contracts.gasOracle.blobScalar,
     DEPLOYMENT_SALT: spec.contracts.deploymentSalt,
+    DEPOSIT_FEE: spec.bridge.fees.deposit,
     L1_FEE_VAULT_ADDR: spec.contracts.l1FeeVaultAddr,
     L2_BRIDGE_FEE_RECIPIENT_ADDR: spec.bridge.feeRecipient,
-    DEPOSIT_FEE: spec.bridge.fees.deposit,
-    WITHDRAWAL_FEE: spec.bridge.fees.withdrawal,
     MIN_WITHDRAWAL_AMOUNT: spec.bridge.fees.minWithdrawalAmount,
-    BLOB_SCALAR: spec.contracts.gasOracle.blobScalar,
-    SCALAR: spec.contracts.gasOracle.scalar,
-    PENALTY_THRESHOLD: spec.contracts.gasOracle.penaltyThreshold,
     PENALTY_FACTOR: spec.contracts.gasOracle.penaltyFactor,
+    PENALTY_THRESHOLD: spec.contracts.gasOracle.penaltyThreshold,
+    SCALAR: spec.contracts.gasOracle.scalar,
+    WITHDRAWAL_FEE: spec.bridge.fees.withdrawal,
   }
 
   if (spec.contracts.overrides) {
@@ -404,15 +402,19 @@ export function generateConfigToml(spec: DeploymentSpec): string {
     if (spec.contracts.overrides.l2MessageQueue) {
       config.contracts.overrides.L2_MESSAGE_QUEUE = spec.contracts.overrides.l2MessageQueue
     }
+
     if (spec.contracts.overrides.l1GasPriceOracle) {
       config.contracts.overrides.L1_GAS_PRICE_ORACLE = spec.contracts.overrides.l1GasPriceOracle
     }
+
     if (spec.contracts.overrides.l2Whitelist) {
       config.contracts.overrides.L2_WHITELIST = spec.contracts.overrides.l2Whitelist
     }
+
     if (spec.contracts.overrides.l2Weth) {
       config.contracts.overrides.L2_WETH = spec.contracts.overrides.l2Weth
     }
+
     if (spec.contracts.overrides.l2TxFeeVault) {
       config.contracts.overrides.L2_TX_FEE_VAULT = spec.contracts.overrides.l2TxFeeVault
     }
@@ -420,58 +422,65 @@ export function generateConfigToml(spec: DeploymentSpec): string {
 
   if (spec.contracts.verification) {
     config.contracts.verification = {
-      VERIFIER_TYPE_L1: spec.contracts.verification.l1VerifierType,
-      VERIFIER_TYPE_L2: spec.contracts.verification.l2VerifierType,
+      EXPLORER_API_KEY_L1: spec.contracts.verification.l1ApiKey || '',
+      EXPLORER_API_KEY_L2: spec.contracts.verification.l2ApiKey || '',
       EXPLORER_URI_L1: spec.contracts.verification.l1ExplorerUri,
       EXPLORER_URI_L2: spec.contracts.verification.l2ExplorerUri,
       RPC_URI_L1: spec.frontend.externalUrls.l1Rpc,
       RPC_URI_L2: spec.frontend.externalUrls.l2Rpc,
-      EXPLORER_API_KEY_L1: spec.contracts.verification.l1ApiKey || '',
-      EXPLORER_API_KEY_L2: spec.contracts.verification.l2ApiKey || '',
+      VERIFIER_TYPE_L1: spec.contracts.verification.l1VerifierType,
+      VERIFIER_TYPE_L2: spec.contracts.verification.l2VerifierType,
     }
   }
 
   // [coordinator] section
   config.coordinator = {
-    CHUNK_COLLECTION_TIME_SEC: spec.rollup.coordinator.chunkCollectionTimeSec,
     BATCH_COLLECTION_TIME_SEC: spec.rollup.coordinator.batchCollectionTimeSec,
     BUNDLE_COLLECTION_TIME_SEC: spec.rollup.coordinator.bundleCollectionTimeSec,
+    CHUNK_COLLECTION_TIME_SEC: spec.rollup.coordinator.chunkCollectionTimeSec,
     COORDINATOR_JWT_SECRET_KEY: spec.rollup.coordinator.jwtSecretKey,
   }
 
   // [ingress] section
   config.ingress = {
-    FRONTEND_HOST: spec.frontend.hosts.frontend,
-    BRIDGE_HISTORY_API_HOST: spec.frontend.hosts.bridgeHistoryApi,
-    ROLLUP_EXPLORER_API_HOST: spec.frontend.hosts.rollupExplorerApi,
-    COORDINATOR_API_HOST: spec.frontend.hosts.coordinatorApi,
-    RPC_GATEWAY_HOST: spec.frontend.hosts.rpcGateway,
-    BLOCKSCOUT_HOST: spec.frontend.hosts.blockscout,
     ADMIN_SYSTEM_DASHBOARD_HOST: spec.frontend.hosts.adminDashboard,
+    BLOCKSCOUT_HOST: spec.frontend.hosts.blockscout,
+    BRIDGE_HISTORY_API_HOST: spec.frontend.hosts.bridgeHistoryApi,
+    COORDINATOR_API_HOST: spec.frontend.hosts.coordinatorApi,
+    FRONTEND_HOST: spec.frontend.hosts.frontend,
     GRAFANA_HOST: spec.frontend.hosts.grafana,
+    ROLLUP_EXPLORER_API_HOST: spec.frontend.hosts.rollupExplorerApi,
+    RPC_GATEWAY_HOST: spec.frontend.hosts.rpcGateway,
   }
 
   if (spec.frontend.hosts.rpcGatewayWs) {
     config.ingress.RPC_GATEWAY_WS_HOST = spec.frontend.hosts.rpcGatewayWs
   }
+
   if (spec.frontend.hosts.blockscoutBackend) {
     config.ingress.BLOCKSCOUT_BACKEND_HOST = spec.frontend.hosts.blockscoutBackend
   }
+
   if (spec.frontend.hosts.l1Explorer) {
     config.ingress.L1_EXPLORER_HOST = spec.frontend.hosts.l1Explorer
   }
+
   if (spec.frontend.hosts.l1Devnet) {
     config.ingress.L1_DEVNET_HOST = spec.frontend.hosts.l1Devnet
   }
+
   if (spec.frontend.hosts.tso) {
     config.ingress.TSO_HOST = spec.frontend.hosts.tso
   }
+
   if (spec.frontend.hosts.celestia) {
     config.ingress.CELESTIA_HOST = spec.frontend.hosts.celestia
   }
+
   if (spec.frontend.hosts.dogecoin) {
     config.ingress.DOGECOIN_HOST = spec.frontend.hosts.dogecoin
   }
+
   if (spec.frontend.hosts.blockbook) {
     config.ingress.BLOCKBOOK_HOST = spec.frontend.hosts.blockbook
   }
@@ -488,9 +497,9 @@ export function generateDogeConfigToml(spec: DeploymentSpec): string {
   }
 
   config.rpc = {
+    password: spec.dogecoin.rpc.password,
     url: spec.dogecoin.rpc.url,
     username: spec.dogecoin.rpc.username,
-    password: spec.dogecoin.rpc.password,
   }
 
   if (spec.dogecoin.blockbook) {
@@ -510,10 +519,10 @@ export function generateDogeConfigToml(spec: DeploymentSpec): string {
 
   config.da = {
     celestiaIndexerStartBlock: String(spec.celestia.indexerStartBlock),
-    tendermintRpcUrl: spec.celestia.tendermintRpcUrl,
+    celestiaMnemonic: spec.celestia.mnemonic,
     daNamespace: spec.celestia.namespace,
     signerAddress: spec.celestia.signerAddress,
-    celestiaMnemonic: spec.celestia.mnemonic,
+    tendermintRpcUrl: spec.celestia.tendermintRpcUrl,
   }
 
   config.frontend = {
@@ -526,23 +535,23 @@ export function generateDogeConfigToml(spec: DeploymentSpec): string {
   if (spec.signing.method === 'cubesigner' && spec.signing.cubesigner) {
     config.cubesigner = {
       roles: spec.signing.cubesigner.roles.map(role => ({
-        role_id: role.roleId,
-        name: role.name,
         keys: role.keys.map(key => ({
           key_id: key.keyId,
           key_type: key.keyType,
-          public_key: key.publicKey,
           material_id: key.materialId,
-        }))
+          public_key: key.publicKey,
+        })),
+        name: role.name,
+        role_id: role.roleId
       }))
     }
   }
 
   if (spec.signing.method === 'aws-kms' && spec.signing.awsKms) {
     config.awsSigner = {
-      region: spec.signing.awsKms.region,
       accountId: spec.signing.awsKms.accountId,
       networkAlias: spec.signing.awsKms.networkAlias,
+      region: spec.signing.awsKms.region,
       suffixes: spec.signing.awsKms.suffixes.join(','),
     }
   }
@@ -575,25 +584,25 @@ export function generateDogeConfigToml(spec: DeploymentSpec): string {
  */
 export function generateSetupDefaultsToml(spec: DeploymentSpec): string {
   const config: Record<string, any> = {
-    network: spec.dogecoin.network,
-    seed_string: spec.bridge.seedString,
-    dogecoin_rpc_url: spec.dogecoin.rpc.url,
-    dogecoin_rpc_user: spec.dogecoin.rpc.username,
-    dogecoin_rpc_pass: spec.dogecoin.rpc.password,
-    sequencer_threshold: spec.bridge.thresholds.sequencer,
-    correctness_threshold: spec.bridge.thresholds.correctness,
-    attestation_threshold: spec.bridge.thresholds.attestation,
-    recovery_threshold: spec.bridge.thresholds.recovery,
-    correctness_key_count: spec.bridge.keyCounts.correctness,
     attestation_key_count: spec.bridge.keyCounts.attestation,
-    recovery_key_count: spec.bridge.keyCounts.recovery,
-    timelock_seconds: spec.bridge.timelockSeconds,
-    fee_rate_sat_per_kvb: spec.bridge.feeRateSatPerKvb,
-    deposit_eth_recipient_address_hex: spec.accounts.deployer.address,
-    sequencer_target_amount: spec.bridge.targetAmounts.sequencer,
-    fee_wallet_target_amount: spec.bridge.targetAmounts.feeWallet,
+    attestation_threshold: spec.bridge.thresholds.attestation,
     bridge_target_amount: spec.bridge.targetAmounts.bridge,
     confirmations_required: spec.bridge.confirmationsRequired,
+    correctness_key_count: spec.bridge.keyCounts.correctness,
+    correctness_threshold: spec.bridge.thresholds.correctness,
+    deposit_eth_recipient_address_hex: spec.accounts.deployer.address,
+    dogecoin_rpc_pass: spec.dogecoin.rpc.password,
+    dogecoin_rpc_url: spec.dogecoin.rpc.url,
+    dogecoin_rpc_user: spec.dogecoin.rpc.username,
+    fee_rate_sat_per_kvb: spec.bridge.feeRateSatPerKvb,
+    fee_wallet_target_amount: spec.bridge.targetAmounts.feeWallet,
+    network: spec.dogecoin.network,
+    recovery_key_count: spec.bridge.keyCounts.recovery,
+    recovery_threshold: spec.bridge.thresholds.recovery,
+    seed_string: spec.bridge.seedString,
+    sequencer_target_amount: spec.bridge.targetAmounts.sequencer,
+    sequencer_threshold: spec.bridge.thresholds.sequencer,
+    timelock_seconds: spec.bridge.timelockSeconds,
   }
 
   // Add attestation public keys from cubesigner roles
@@ -601,7 +610,7 @@ export function generateSetupDefaultsToml(spec: DeploymentSpec): string {
     config.attestation_pubkeys = spec.signing.cubesigner.roles.map(role => {
       const key = role.keys[0]
       return key?.publicKey?.replace(/^0x/, '') || ''
-    }).filter(k => k)
+    }).filter(Boolean)
   }
 
   return toml.stringify(config as any)
@@ -621,6 +630,7 @@ function buildDbConnectionString(
   if (hasEnvRef(password)) {
     return `postgres://${username}:${password}@${host}:${port}/${database}?sslmode=disable`
   }
+
   return `postgres://${username}:${encodeURIComponent(password)}@${host}:${port}/${database}?sslmode=disable`
 }
 
@@ -662,6 +672,7 @@ export function writeGeneratedConfigs(
   if (!fs.existsSync(dogeConfigDir)) {
     fs.mkdirSync(dogeConfigDir, { recursive: true })
   }
+
   fs.writeFileSync(path.join(dogeConfigDir, 'doge-config.toml'), configs['doge-config.toml'])
 
   // Write setup_defaults.toml to .data directory

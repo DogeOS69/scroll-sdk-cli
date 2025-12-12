@@ -1,26 +1,22 @@
-/* eslint-disable complexity */
 import * as toml from '@iarna/toml'
 import { confirm, input, select } from '@inquirer/prompts'
-import { Args, Command, Flags } from '@oclif/core'
+import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+
 import { writeConfigs } from '../../utils/config-writer.js'
+import { JsonOutputContext } from '../../utils/json-output.js'
 import {
+  type NonInteractiveContext,
   createNonInteractiveContext,
+  resolveConfirm,
   resolveOrPrompt,
   resolveOrSelect,
-  resolveConfirm,
   validateAndExit,
-  type NonInteractiveContext,
 } from '../../utils/non-interactive.js'
-import { JsonOutputContext } from '../../utils/json-output.js'
 
 export default class SetupDomains extends Command {
-  static override args = {
-    file: Args.string({ description: 'file to read' }),
-  }
-
   static override description = 'Set up domain configurations for external services'
 
   static override examples = [
@@ -30,16 +26,14 @@ export default class SetupDomains extends Command {
   ]
 
   static override flags = {
-    force: Flags.boolean({ char: 'f' }),
-    name: Flags.string({ char: 'n', description: 'name to print' }),
+    json: Flags.boolean({
+      default: false,
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
+    }),
     'non-interactive': Flags.boolean({
       char: 'N',
+      default: false,
       description: 'Run without prompts, using config.toml values',
-      default: false,
-    }),
-    json: Flags.boolean({
-      description: 'Output in JSON format (stdout for data, stderr for logs)',
-      default: false,
     }),
   }
 
@@ -56,7 +50,6 @@ export default class SetupDomains extends Command {
     const jsonCtx = new JsonOutputContext('setup domains', flags.json)
 
     // In non-interactive mode, log to stderr to keep stdout clean for JSON
-    const log = (msg: string) => jsonCtx.log(msg)
     const logSection = (title: string) => jsonCtx.logSection(title)
     const logKeyValue = (key: string, value: string) => jsonCtx.logKeyValue(key, value)
     const logSuccess = (msg: string) => jsonCtx.logSuccess(msg)
@@ -73,7 +66,7 @@ export default class SetupDomains extends Command {
       logKeyValue(key, value as string)
     }
 
-    type L1Network = 'dogeos' | 'anvil' | 'holesky' | 'mainnet' | 'other' | 'sepolia'
+    type L1Network = 'anvil' | 'dogeos' | 'holesky' | 'mainnet' | 'other' | 'sepolia'
     const validL1Networks: L1Network[] = ['dogeos', 'anvil', 'holesky', 'mainnet', 'other', 'sepolia']
 
     // Infer L1 network from existing config for non-interactive mode
@@ -105,9 +98,9 @@ export default class SetupDomains extends Command {
       inferL1Network(existingConfig),
       validL1Networks,
       {
-        field: 'L1 Network',
         configPath: '[general].CHAIN_NAME_L1',
         description: 'L1 network type (inferred from CHAIN_NAME_L1)',
+        field: 'L1 Network',
       }
     ) as L1Network
 
@@ -124,8 +117,8 @@ export default class SetupDomains extends Command {
     }
 
     const l1ChainIds: Partial<Record<L1Network, string>> = {
-      dogeos: '111111',
       anvil: '111111',
+      dogeos: '111111',
       holesky: '17000',
       mainnet: '1',
       sepolia: '11155111',
@@ -133,7 +126,7 @@ export default class SetupDomains extends Command {
 
     const generalConfig: Record<string, string> = {}
     let domainConfig: Record<string, string> = {}
-    let frontendConfig: Record<string, string> = {}
+    const frontendConfig: Record<string, string> = {}
 
     const usesAnvil = l1Network === 'anvil'
     const usesDogeos = l1Network === 'dogeos'
@@ -147,9 +140,9 @@ export default class SetupDomains extends Command {
         }),
         existingConfig.general?.CHAIN_NAME_L1 || (usesDogeos ? 'DOGE L1' : undefined),
         {
-          field: 'CHAIN_NAME_L1',
           configPath: '[general].CHAIN_NAME_L1',
           description: 'L1 chain name (e.g., "DOGE L1")',
+          field: 'CHAIN_NAME_L1',
         }
       )
       generalConfig.CHAIN_NAME_L1 = chainNameL1 || ''
@@ -162,9 +155,9 @@ export default class SetupDomains extends Command {
         }),
         existingConfig.general?.CHAIN_ID_L1 || l1ChainIds[l1Network],
         {
-          field: 'CHAIN_ID_L1',
           configPath: '[general].CHAIN_ID_L1',
           description: 'L1 chain ID (e.g., 111111 for DogeOS)',
+          field: 'CHAIN_ID_L1',
         }
       )
       generalConfig.CHAIN_ID_L1 = chainIdL1 || ''
@@ -183,9 +176,9 @@ export default class SetupDomains extends Command {
       }),
       existingConfig.general?.CHAIN_NAME_L2 || (usesDogeos ? 'DogeOS Testnet' : undefined),
       {
-        field: 'CHAIN_NAME_L2',
         configPath: '[general].CHAIN_NAME_L2',
         description: 'L2 chain name (e.g., "DogeOS Testnet")',
+        field: 'CHAIN_NAME_L2',
       }
     )
     generalConfig.CHAIN_NAME_L2 = chainNameL2 || ''
@@ -230,9 +223,9 @@ export default class SetupDomains extends Command {
           }),
           existingConfig.general?.L1_RPC_ENDPOINT || domainConfig.EXTERNAL_RPC_URI_L1,
           {
-            field: 'L1_RPC_ENDPOINT',
             configPath: '[general].L1_RPC_ENDPOINT',
             description: 'L1 RPC HTTP endpoint for SDK backend',
+            field: 'L1_RPC_ENDPOINT',
           }
         )
         generalConfig.L1_RPC_ENDPOINT = l1RpcEndpoint || ''
@@ -246,9 +239,9 @@ export default class SetupDomains extends Command {
           }),
           existingConfig.general?.L1_RPC_ENDPOINT_WEBSOCKET || domainConfig.EXTERNAL_RPC_URI_L1?.replace('http', 'ws'),
           {
-            field: 'L1_RPC_ENDPOINT_WEBSOCKET',
             configPath: '[general].L1_RPC_ENDPOINT_WEBSOCKET',
             description: 'L1 RPC WebSocket endpoint for SDK backend',
+            field: 'L1_RPC_ENDPOINT_WEBSOCKET',
           },
           false // Not strictly required
         )
@@ -263,6 +256,7 @@ export default class SetupDomains extends Command {
       logSuccess(`Updated [general] DA_PUBLISHER_ENDPOINT = "${generalConfig.DA_PUBLISHER_ENDPOINT}"`)
       logSuccess(`Updated [general] BEACON_RPC_ENDPOINT = "${generalConfig.BEACON_RPC_ENDPOINT}"`)
     }
+
     logSuccess(`Updated [general] L1_RPC_ENDPOINT = "${generalConfig.L1_RPC_ENDPOINT}"`)
     logSuccess(`Updated [general] L1_RPC_ENDPOINT_WEBSOCKET = "${generalConfig.L1_RPC_ENDPOINT_WEBSOCKET}"`)
 
@@ -306,9 +300,9 @@ export default class SetupDomains extends Command {
         }),
         existingConfig.ingress?.RPC_GATEWAY_WS_HOST,
         {
-          field: 'RPC_GATEWAY_WS_HOST',
           configPath: '[ingress].RPC_GATEWAY_WS_HOST',
           description: 'WebSocket RPC gateway host',
+          field: 'RPC_GATEWAY_WS_HOST',
         },
         false
       )
@@ -326,9 +320,9 @@ export default class SetupDomains extends Command {
       }),
       existingConfig.frontend?.ETH_SYMBOL || 'DOGE',
       {
-        field: 'ETH_SYMBOL',
         configPath: '[frontend].ETH_SYMBOL',
         description: 'L1 chain symbol (e.g., DOGE)',
+        field: 'ETH_SYMBOL',
       },
       false
     )
@@ -342,9 +336,9 @@ export default class SetupDomains extends Command {
       }),
       existingConfig.frontend?.CONNECT_WALLET_PROJECT_ID || "14efbaafcf5232a47d93a68229b71028",
       {
-        field: 'CONNECT_WALLET_PROJECT_ID',
         configPath: '[frontend].CONNECT_WALLET_PROJECT_ID',
         description: 'WalletConnect project ID',
+        field: 'CONNECT_WALLET_PROJECT_ID',
       },
       false
     )
@@ -358,9 +352,9 @@ export default class SetupDomains extends Command {
       }),
       existingConfig.frontend?.DOGE_EXTERNAL_RPC_URI_L1 || "https://sochain.com/DOGETEST",
       {
-        field: 'DOGE_EXTERNAL_RPC_URI_L1',
         configPath: '[frontend].DOGE_EXTERNAL_RPC_URI_L1',
         description: 'L1 public RPC URL',
+        field: 'DOGE_EXTERNAL_RPC_URI_L1',
       },
       false
     )
@@ -374,9 +368,9 @@ export default class SetupDomains extends Command {
       }),
       existingConfig.frontend?.DOGE_EXTERNAL_EXPLORER_URI_L1 || "https://sochain.com/DOGETEST",
       {
-        field: 'DOGE_EXTERNAL_EXPLORER_URI_L1',
         configPath: '[frontend].DOGE_EXTERNAL_EXPLORER_URI_L1',
         description: 'L1 explorer URL',
+        field: 'DOGE_EXTERNAL_EXPLORER_URI_L1',
       },
       false
     )
@@ -398,11 +392,11 @@ export default class SetupDomains extends Command {
       // Output JSON response on success
       if (flags.json) {
         jsonCtx.success({
-          updated: true,
-          general: generalConfig,
-          frontend: frontendConfig,
-          ingress: ingressConfig,
           domain: domainConfig,
+          frontend: frontendConfig,
+          general: generalConfig,
+          ingress: ingressConfig,
+          updated: true,
         })
       }
     } else {
@@ -421,25 +415,6 @@ export default class SetupDomains extends Command {
     return toml.parse(configContent) as any
   }
 
-  private logInfo(message: string) {
-    this.log(chalk.blue(message))
-  }
-
-  private logKeyValue(key: string, value: string) {
-    this.log(`${chalk.cyan(key)} = ${chalk.green(`"${value}"`)}`)
-  }
-
-  private logSection(title: string) {
-    this.log(chalk.bold.underline(`\n${title}`))
-  }
-
-  private logSuccess(message: string) {
-    this.log(chalk.green(message))
-  }
-
-  private logWarning(message: string) {
-    this.log(chalk.yellow(message))
-  }
 
   private mergeTomlContent(original: string, updated: string): string {
     const originalLines = original.split('\n')
@@ -508,15 +483,10 @@ export default class SetupDomains extends Command {
     const hasSharedEnding = Boolean(existingFrontendHost)
 
     // For non-interactive, infer shared ending if frontend host exists
-    let sharedEnding: boolean
-    if (niCtx?.enabled) {
-      sharedEnding = hasSharedEnding
-    } else {
-      sharedEnding = await confirm({
+    const sharedEnding: boolean = niCtx?.enabled ? hasSharedEnding : (await confirm({
         default: hasSharedEnding,
         message: 'Do you want all external URLs to share a URL ending?',
-      })
-    }
+      }));
 
     if (sharedEnding) {
       const defaultUrlEnding =
@@ -524,41 +494,28 @@ export default class SetupDomains extends Command {
           ? existingFrontendHost.split('.').slice(1).join('.')
           : existingFrontendHost || 'scrollsdk'
 
-      if (niCtx?.enabled) {
-        urlEnding = defaultUrlEnding
-      } else {
-        urlEnding = await input({
+      urlEnding = niCtx?.enabled ? defaultUrlEnding : (await input({
           default: defaultUrlEnding,
           message: 'Enter the shared URL ending:',
-        })
-      }
+        }));
 
       // Infer protocol from existing config
       const existingProtocol = existingConfig.frontend?.EXTERNAL_RPC_URI_L2?.startsWith('https') ? 'https' : 'http'
-      if (niCtx?.enabled) {
-        protocol = existingProtocol
-      } else {
-        protocol = await select({
+      protocol = niCtx?.enabled ? existingProtocol : (await select({
           choices: [
             { name: 'HTTP', value: 'http' },
             { name: 'HTTPS', value: 'https' },
           ],
           default: existingProtocol,
           message: 'Choose the protocol for the shared URLs:',
-        })
-      }
+        }));
 
       // Infer frontend at root from existing config
       const existingFrontendAtRoot = existingFrontendHost && !existingFrontendHost.startsWith('portal.')
-      let frontendAtRoot: boolean
-      if (niCtx?.enabled) {
-        frontendAtRoot = existingFrontendAtRoot
-      } else {
-        frontendAtRoot = await confirm({
-          message: 'Do you want the frontends to be hosted at the root domain? (No will use a "portal" subdomain)',
+      const frontendAtRoot: boolean = niCtx?.enabled ? existingFrontendAtRoot : (await confirm({
           default: existingFrontendAtRoot,
-        })
-      }
+          message: 'Do you want the frontends to be hosted at the root domain? (No will use a "portal" subdomain)',
+        }));
 
       domainConfig = {
         ADMIN_SYSTEM_DASHBOARD_URI: `${protocol}://admin-system-dashboard.${urlEnding}`,
@@ -585,28 +542,24 @@ export default class SetupDomains extends Command {
         ROLLUP_EXPLORER_API_HOST: `rollup-explorer-backend.${urlEnding}`,
         RPC_GATEWAY_HOST: `rpc.${urlEnding}`,
         ...(usesAnvil ? { L1_DEVNET_HOST: `l1-devnet.${urlEnding}`, L1_EXPLORER_HOST: `l1-explorer.${urlEnding}` } : {}),
-        TSO_HOST: `tso.${urlEnding}`,
+        BLOCKBOOK_HOST: `blockbook.${urlEnding}`,
         CELESTIA_HOST: `celestia.${urlEnding}`,
         DOGECOIN_HOST: `dogecoin.${urlEnding}`,
-        BLOCKBOOK_HOST: `blockbook.${urlEnding}`,
+        TSO_HOST: `tso.${urlEnding}`,
       }
     } else {
       // Non-shared URL ending path - each host configured individually
       // In non-interactive mode, use existing config values
       const existingProtocol = existingConfig.frontend?.EXTERNAL_RPC_URI_L1?.startsWith('https') ? 'https' : 'http'
 
-      if (niCtx?.enabled) {
-        protocol = existingProtocol
-      } else {
-        protocol = await select({
+      protocol = niCtx?.enabled ? existingProtocol : (await select({
           choices: [
             { name: 'HTTP', value: 'http' },
             { name: 'HTTPS', value: 'https' },
           ],
           default: existingProtocol,
           message: 'Choose the protocol for the URLs:',
-        })
-      }
+        }));
 
       // Helper to resolve ingress hosts - uses existing config in non-interactive mode
       const resolveIngressHost = async (
@@ -622,9 +575,9 @@ export default class SetupDomains extends Command {
           }),
           existingConfig.ingress?.[key] || defaultValue,
           {
-            field: key,
             configPath: `[ingress].${key}`,
             description,
+            field: key,
           },
           false // Not strictly required - has defaults
         )
@@ -636,6 +589,11 @@ export default class SetupDomains extends Command {
           'ADMIN_SYSTEM_DASHBOARD_HOST',
           'admin-system-dashboard.scrollsdk',
           'Admin system dashboard host'
+        ),
+        BLOCKBOOK_HOST: await resolveIngressHost(
+          'BLOCKBOOK_HOST',
+          'blockbook.scrollsdk',
+          'Blockbook indexer host'
         ),
         BLOCKSCOUT_BACKEND_HOST: await resolveIngressHost(
           'BLOCKSCOUT_BACKEND_HOST',
@@ -652,10 +610,20 @@ export default class SetupDomains extends Command {
           'bridge-history-api.scrollsdk',
           'Bridge history API host'
         ),
+        CELESTIA_HOST: await resolveIngressHost(
+          'CELESTIA_HOST',
+          'celestia.scrollsdk',
+          'Celestia node host'
+        ),
         COORDINATOR_API_HOST: await resolveIngressHost(
           'COORDINATOR_API_HOST',
           'coordinator-api.scrollsdk',
           'Coordinator API host'
+        ),
+        DOGECOIN_HOST: await resolveIngressHost(
+          'DOGECOIN_HOST',
+          'dogecoin.scrollsdk',
+          'Dogecoin node host'
         ),
         FRONTEND_HOST: await resolveIngressHost(
           'FRONTEND_HOST',
@@ -681,21 +649,6 @@ export default class SetupDomains extends Command {
           'TSO_HOST',
           'tso.scrollsdk',
           'TSO service host'
-        ),
-        CELESTIA_HOST: await resolveIngressHost(
-          'CELESTIA_HOST',
-          'celestia.scrollsdk',
-          'Celestia node host'
-        ),
-        DOGECOIN_HOST: await resolveIngressHost(
-          'DOGECOIN_HOST',
-          'dogecoin.scrollsdk',
-          'Dogecoin node host'
-        ),
-        BLOCKBOOK_HOST: await resolveIngressHost(
-          'BLOCKBOOK_HOST',
-          'blockbook.scrollsdk',
-          'Blockbook indexer host'
         ),
       }
 
@@ -726,9 +679,9 @@ export default class SetupDomains extends Command {
           }),
           existingConfig.frontend?.[key] || defaultValue,
           {
-            field: key,
             configPath: `[frontend].${key}`,
             description,
+            field: key,
           },
           false
         )
@@ -841,11 +794,9 @@ export default class SetupDomains extends Command {
     const mergedContent = this.mergeTomlContent(fs.readFileSync(configPath, 'utf8'), updatedContent)
 
     // Pass silent=true when in JSON mode to avoid stdout pollution
-    if (writeConfigs(mergedContent, undefined, undefined, jsonMode)) {
-      // Only log to stdout in non-JSON mode (writeConfigs handles its own logging when not silent)
-      if (!jsonMode) {
-        this.logSuccess('config.toml has been updated with the new domain configurations.')
+    if (writeConfigs(mergedContent, undefined, undefined, jsonMode) && // Only log to stdout in non-JSON mode (writeConfigs handles its own logging when not silent)
+      !jsonMode) {
+        this.log(chalk.green('config.toml has been updated with the new domain configurations.'))
       }
-    }
   }
 }

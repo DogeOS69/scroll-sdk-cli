@@ -1,10 +1,11 @@
-import { Command } from '@oclif/core'
-import { confirm, input, select } from '@inquirer/prompts'
-import * as fs from 'fs'
-import * as path from 'path'
 import * as toml from '@iarna/toml'
+import { confirm, input, select } from '@inquirer/prompts'
+import { Command } from '@oclif/core'
 import chalk from 'chalk'
 import { ethers } from 'ethers'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+
 import { writeConfigs } from '../../utils/config-writer.js'
 
 export default class SetupGasToken extends Command {
@@ -14,35 +15,81 @@ export default class SetupGasToken extends Command {
     '<%= config.bin %> <%= command.id %>',
   ]
 
-  private async getExistingConfig(): Promise<any> {
-    const configPath = path.join(process.cwd(), 'config.toml')
-    if (!fs.existsSync(configPath)) {
-      this.error('config.toml not found in the current directory.')
-      return {}
-    }
+  public async run(): Promise<void> {
+    this.log(chalk.blue('Setting up gas token configurations...'))
 
-    const configContent = fs.readFileSync(configPath, 'utf-8')
-    return toml.parse(configContent) as any
-  }
-
-  private async updateConfigFile(gasConfig: Record<string, string | boolean | number>): Promise<void> {
-    const configPath = path.join(process.cwd(), 'config.toml')
     const existingConfig = await this.getExistingConfig()
+    const existingGasToken = existingConfig['gas-token'] || {}
 
-    if (!existingConfig['gas-token']) {
-      existingConfig['gas-token'] = {}
-    }
-
-    // Update gas-token configurations
-    Object.entries(gasConfig).forEach(([key, value]) => {
-      existingConfig['gas-token'][key] = value
+    const useAlternativeToken = await confirm({
+      default: existingGasToken.ALTERNATIVE_GAS_TOKEN_ENABLED || false,
+      message: chalk.cyan('Do you want to use an alternative gas token?')
     })
 
-    //const updatedContent = toml.stringify(existingConfig)
-    //fs.writeFileSync(configPath, updatedContent)
-    writeConfigs(existingConfig);
+    const gasConfig: Record<string, boolean | number | string> = {
+      ALTERNATIVE_GAS_TOKEN_ENABLED: useAlternativeToken,
+    }
 
-    this.log(chalk.green('config.toml has been updated with the new gas token configurations.'))
+    if (useAlternativeToken) {
+      const deploymentChoice = await select({
+        choices: [
+          { name: 'Use an existing L1 ERC20 token', value: 'existing' },
+          { name: 'Auto-deploy a new ERC20 token', value: 'autodeploy' },
+        ],
+        default: existingGasToken.L1_GAS_TOKEN ? 'existing' : 'autodeploy',
+        message: chalk.cyan('How do you want to set up the gas token?')
+      })
+
+      if (deploymentChoice === 'existing') {
+        let tokenAddress: string
+        let isValidAddress = false
+        let continueAnyway = false
+
+        do {
+          tokenAddress = await input({
+            default: existingGasToken.L1_GAS_TOKEN || '',
+            message: chalk.cyan('Enter the L1 ERC20 token address:'),
+            validate: (value) => ethers.isAddress(value) || 'Please enter a valid Ethereum address',
+          })
+
+          isValidAddress = await this.checkL1TokenExists(tokenAddress)
+          if (!isValidAddress) {
+            this.log(chalk.yellow('The provided address does not contain a contract.'))
+            continueAnyway = await confirm({
+              default: false,
+              message: chalk.cyan('Do you want to continue anyway?')
+            })
+          }
+        } while (!isValidAddress && !continueAnyway)
+
+        gasConfig.L1_GAS_TOKEN = tokenAddress
+      } else {
+        const tokenDecimals = await input({
+          default: existingGasToken.EXAMPLE_GAS_TOKEN_DECIMAL?.toString() || '18',
+          message: chalk.cyan('Enter the number of decimals for the example gas token:'),
+          validate(value) {
+            const num = Number.parseInt(value, 10)
+            return (!Number.isNaN(num) && num >= 0 && num <= 256) || 'Please enter a valid number between 0 and 256'
+          },
+        })
+
+        gasConfig.EXAMPLE_GAS_TOKEN_DECIMAL = Number.parseInt(tokenDecimals, 10)
+      }
+    }
+
+    await this.displayChanges(gasConfig)
+
+    const confirmChanges = await confirm({
+      default: true,
+      message: chalk.cyan('Do you want to apply these changes?')
+    })
+
+    if (confirmChanges) {
+      await this.updateConfigFile(gasConfig)
+      this.log(chalk.green('Gas token configuration completed successfully.'))
+    } else {
+      this.log(chalk.yellow('Gas token configuration cancelled.'))
+    }
   }
 
   private async checkL1TokenExists(tokenAddress: string): Promise<boolean> {
@@ -69,10 +116,10 @@ export default class SetupGasToken extends Command {
     }
   }
 
-  private async displayChanges(gasConfig: Record<string, string | boolean | number>): Promise<void> {
+  private async displayChanges(gasConfig: Record<string, boolean | number | string>): Promise<void> {
     this.log(chalk.cyan('\nThe following changes will be made to the [gas-token] section in config.toml:'))
 
-    Object.entries(gasConfig).forEach(([key, value]) => {
+    for (const [key, value] of Object.entries(gasConfig)) {
       if (typeof value === 'boolean') {
         this.log(`${key} = ${chalk.green(value.toString())}`)
       } else if (typeof value === 'number') {
@@ -80,83 +127,36 @@ export default class SetupGasToken extends Command {
       } else {
         this.log(`${key} = ${chalk.green(`"${value}"`)}`)
       }
-    })
+    }
   }
 
-  public async run(): Promise<void> {
-    this.log(chalk.blue('Setting up gas token configurations...'))
+  private async getExistingConfig(): Promise<any> {
+    const configPath = path.join(process.cwd(), 'config.toml')
+    if (!fs.existsSync(configPath)) {
+      this.error('config.toml not found in the current directory.')
+      return {}
+    }
 
+    const configContent = fs.readFileSync(configPath, 'utf8')
+    return toml.parse(configContent) as any
+  }
+
+  private async updateConfigFile(gasConfig: Record<string, boolean | number | string>): Promise<void> {
     const existingConfig = await this.getExistingConfig()
-    const existingGasToken = existingConfig['gas-token'] || {}
 
-    const useAlternativeToken = await confirm({
-      message: chalk.cyan('Do you want to use an alternative gas token?'),
-      default: existingGasToken.ALTERNATIVE_GAS_TOKEN_ENABLED || false
-    })
-
-    let gasConfig: Record<string, string | boolean | number> = {
-      ALTERNATIVE_GAS_TOKEN_ENABLED: useAlternativeToken,
+    if (!existingConfig['gas-token']) {
+      existingConfig['gas-token'] = {}
     }
 
-    if (useAlternativeToken) {
-      const deploymentChoice = await select({
-        message: chalk.cyan('How do you want to set up the gas token?'),
-        choices: [
-          { name: 'Use an existing L1 ERC20 token', value: 'existing' },
-          { name: 'Auto-deploy a new ERC20 token', value: 'autodeploy' },
-        ],
-        default: existingGasToken.L1_GAS_TOKEN ? 'existing' : 'autodeploy'
-      })
-
-      if (deploymentChoice === 'existing') {
-        let tokenAddress: string
-        let isValidAddress = false
-        let continueAnyway = false
-
-        do {
-          tokenAddress = await input({
-            message: chalk.cyan('Enter the L1 ERC20 token address:'),
-            default: existingGasToken.L1_GAS_TOKEN || '',
-            validate: (value) => ethers.isAddress(value) || 'Please enter a valid Ethereum address',
-          })
-
-          isValidAddress = await this.checkL1TokenExists(tokenAddress)
-          if (!isValidAddress) {
-            this.log(chalk.yellow('The provided address does not contain a contract.'))
-            continueAnyway = await confirm({
-              message: chalk.cyan('Do you want to continue anyway?'),
-              default: false
-            })
-          }
-        } while (!isValidAddress && !continueAnyway)
-
-        gasConfig.L1_GAS_TOKEN = tokenAddress
-      } else {
-        const tokenDecimals = await input({
-          message: chalk.cyan('Enter the number of decimals for the example gas token:'),
-          default: existingGasToken.EXAMPLE_GAS_TOKEN_DECIMAL?.toString() || '18',
-          validate: (value) => {
-            const num = parseInt(value, 10)
-            return (!isNaN(num) && num >= 0 && num <= 256) || 'Please enter a valid number between 0 and 256'
-          },
-        })
-
-        gasConfig.EXAMPLE_GAS_TOKEN_DECIMAL = parseInt(tokenDecimals, 10)
-      }
+    // Update gas-token configurations
+    for (const [key, value] of Object.entries(gasConfig)) {
+      existingConfig['gas-token'][key] = value
     }
 
-    await this.displayChanges(gasConfig)
+    // const updatedContent = toml.stringify(existingConfig)
+    // fs.writeFileSync(configPath, updatedContent)
+    writeConfigs(existingConfig);
 
-    const confirmChanges = await confirm({
-      message: chalk.cyan('Do you want to apply these changes?'),
-      default: true
-    })
-
-    if (confirmChanges) {
-      await this.updateConfigFile(gasConfig)
-      this.log(chalk.green('Gas token configuration completed successfully.'))
-    } else {
-      this.log(chalk.yellow('Gas token configuration cancelled.'))
-    }
+    this.log(chalk.green('config.toml has been updated with the new gas token configurations.'))
   }
 }

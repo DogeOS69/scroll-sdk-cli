@@ -2,10 +2,11 @@ import { confirm, input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import * as yaml from 'js-yaml'
-import { exec, spawn } from 'node:child_process'
+import { exec } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { promisify } from 'node:util'
+
 import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { resolveEnvValue } from '../../utils/non-interactive.js'
@@ -51,6 +52,7 @@ class AWSSecretService implements SecretService {
         const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
         await this.createOrUpdateSecret({ 'session.json': content }, secretName)
       }
+
       return
     }
 
@@ -67,7 +69,7 @@ class AWSSecretService implements SecretService {
         propertyName = 'session.json'
       } else if (secretName.endsWith('-migrate-db')) {
         propertyName = 'migrate-db.json'
-      } else if (secretName == 'rollup-explorer-backend-secret') {
+      } else if (secretName === 'rollup-explorer-backend-secret') {
         propertyName = "config.json";
       }
       else {
@@ -76,12 +78,12 @@ class AWSSecretService implements SecretService {
         console.warn(chalk.yellow(`Unknown JSON file type for property naming: ${secretName}. Using file name as property.`));
         propertyName = file; // Or handle as an error
       }
+
       await this.createOrUpdateSecret({ [propertyName]: content }, secretName)
     }
 
     // Process ENV files
     const envFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.env'))
-    const l2SequencerSecrets: Record<string, string> = {}
 
     for (const file of envFiles) {
       const baseName = path.basename(file, '.env')
@@ -256,9 +258,9 @@ class AWSSecretService implements SecretService {
 
 class HashicorpVaultDevService implements SecretService {
   private debug: boolean
-  private pathPrefix: string
-  private overrideAll: boolean = false
   private nonInteractive: boolean = false
+  private overrideAll: boolean = false
+  private pathPrefix: string
 
   constructor(debug: boolean, pathPrefix: string = 'scroll', nonInteractive: boolean = false) {
     this.debug = debug
@@ -348,6 +350,7 @@ class HashicorpVaultDevService implements SecretService {
         console.warn(chalk.yellow(`Unknown JSON file type for property naming: ${secretName}. Using file name as property.`));
         propertyName = file; // Or handle as an error
       }
+
       await this.pushJsonToVault(secretName, content, propertyName)
     }
 
@@ -453,12 +456,11 @@ class HashicorpVaultDevService implements SecretService {
         console.log(chalk.red(`Skipping secret: ${secretManagerName} from ${fileName} because it is empty`));
         return;
       }
+
       await this.pushJsonToVault(secretManagerName, contentString, propertyKey);
-    } else {
-      if (this.debug) {
+    } else if (this.debug) {
         console.log(chalk.yellow(`File ${fileName} not found in secrets directory. Skipping its specific processing.`));
       }
-    }
   }
 
   private async pushJsonToVault(secretName: string, content: string, propertyName: string): Promise<void> {
@@ -600,78 +602,78 @@ export default class SetupPushSecrets extends Command {
   ]
 
   static override flags = {
-    debug: Flags.boolean({
-      char: 'd',
-      default: false,
-      description: 'Show debug output',
+    // AWS specific flags
+    'aws-prefix': Flags.string({
+      default: 'dogeos',
+      description: 'AWS Secrets Manager path prefix (e.g., dogeos/testnet)',
     }),
-    'values-dir': Flags.string({
-      default: 'values',
-      description: 'Directory containing the values files',
+    'aws-region': Flags.string({
+      description: 'AWS region for secrets (e.g., us-east-1)',
+    }),
+    'aws-service-account': Flags.string({
+      default: 'external-secrets',
+      description: 'AWS IAM service account',
     }),
     'cubesigner-only': Flags.boolean({
       char: 'c',
       default: false,
       description: 'Only push CubeSigner related secrets (cubesigner-signer-* files)',
     }),
-    'non-interactive': Flags.boolean({
-      char: 'N',
-      description: 'Run without prompts. Auto-overrides existing secrets.',
+    debug: Flags.boolean({
+      char: 'd',
       default: false,
+      description: 'Show debug output',
     }),
     json: Flags.boolean({
-      description: 'Output in JSON format (stdout for data, stderr for logs)',
       default: false,
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
+    }),
+    'non-interactive': Flags.boolean({
+      char: 'N',
+      default: false,
+      description: 'Run without prompts. Auto-overrides existing secrets.',
     }),
     // Secret service provider
     provider: Flags.string({
       description: 'Secret service provider (aws or vault). Required for non-interactive mode.',
       options: ['aws', 'vault'],
     }),
-    // AWS specific flags
-    'aws-prefix': Flags.string({
-      description: 'AWS Secrets Manager path prefix (e.g., dogeos/testnet)',
-      default: 'dogeos',
+    // Skip updating YAML files
+    'skip-yaml-update': Flags.boolean({
+      default: false,
+      description: 'Skip updating production YAML files with new secret provider',
     }),
-    'aws-region': Flags.string({
-      description: 'AWS region for secrets (e.g., us-east-1)',
-    }),
-    'aws-service-account': Flags.string({
-      description: 'AWS IAM service account',
-      default: 'external-secrets',
+    'values-dir': Flags.string({
+      default: 'values',
+      description: 'Directory containing the values files',
     }),
     // Vault specific flags
     'vault-path': Flags.string({
-      description: 'Vault path prefix',
       default: 'scroll',
+      description: 'Vault path prefix',
     }),
     'vault-server': Flags.string({
-      description: 'Vault server URL',
       default: 'http://vault.default.svc.cluster.local:8200',
-    }),
-    'vault-token-secret-name': Flags.string({
-      description: 'Vault token secret name',
-      default: 'vault-token',
+      description: 'Vault server URL',
     }),
     'vault-token-secret-key': Flags.string({
-      description: 'Vault token secret key',
       default: 'token',
+      description: 'Vault token secret key',
+    }),
+    'vault-token-secret-name': Flags.string({
+      default: 'vault-token',
+      description: 'Vault token secret name',
     }),
     'vault-version': Flags.string({
-      description: 'Vault version',
       default: 'v2',
-    }),
-    // Skip updating YAML files
-    'skip-yaml-update': Flags.boolean({
-      description: 'Skip updating production YAML files with new secret provider',
-      default: false,
+      description: 'Vault version',
     }),
   }
 
   private flags: any
-  private nonInteractive: boolean = false
-  private jsonMode: boolean = false
   private jsonCtx!: JsonOutputContext
+  private jsonMode: boolean = false
+  private nonInteractive: boolean = false
 
 
   public async run(): Promise<void> {
@@ -701,6 +703,7 @@ export default class SetupPushSecrets extends Command {
           { flag: '--provider' }
         )
       }
+
       secretService = flags.provider
     } else {
       secretService = await select({
@@ -742,11 +745,12 @@ export default class SetupPushSecrets extends Command {
         this.jsonCtx.logSuccess('CubeSigner secret push process completed.')
         if (this.jsonMode) {
           this.jsonCtx.success({
-            provider,
             cubesignerOnly: true,
+            provider,
             secretsPushed: true,
           })
         }
+
         return;
       }
 
@@ -774,11 +778,11 @@ export default class SetupPushSecrets extends Command {
       // JSON output
       if (this.jsonMode) {
         this.jsonCtx.success({
-          provider,
           credentials: {
             prefixName: credentials.prefixName || credentials.path,
             region: credentials.secretRegion,
           },
+          provider,
           secretsPushed: true,
           yamlUpdated: shouldUpdateYaml,
         })
@@ -792,35 +796,8 @@ export default class SetupPushSecrets extends Command {
           false
         )
       }
+
       this.error(chalk.red(`Failed to push secrets: ${error}`))
-    }
-  }
-
-  private getAWSCredentialsFromFlags(flags: any): Record<string, string> {
-    const region = resolveEnvValue(flags['aws-region'])
-    if (!region) {
-      this.jsonCtx.error(
-        'E601_MISSING_FIELD',
-        '--aws-region is required for AWS provider in non-interactive mode',
-        'CONFIGURATION',
-        true,
-        { flag: '--aws-region' }
-      )
-    }
-    return {
-      prefixName: resolveEnvValue(flags['aws-prefix']) || 'dogeos',
-      secretRegion: region!,
-      serviceAccount: resolveEnvValue(flags['aws-service-account']) || 'external-secrets',
-    }
-  }
-
-  private getVaultCredentialsFromFlags(flags: any): Record<string, string> {
-    return {
-      path: resolveEnvValue(flags['vault-path']) || 'scroll',
-      server: resolveEnvValue(flags['vault-server']) || 'http://vault.default.svc.cluster.local:8200',
-      tokenSecretKey: resolveEnvValue(flags['vault-token-secret-key']) || 'token',
-      tokenSecretName: resolveEnvValue(flags['vault-token-secret-name']) || 'vault-token',
-      version: resolveEnvValue(flags['vault-version']) || 'v2',
     }
   }
 
@@ -835,9 +812,28 @@ export default class SetupPushSecrets extends Command {
         message: chalk.cyan('Enter AWS secret region(e.g.,us-east-1):'),
       }),
       serviceAccount: await input({
-        message: chalk.cyan('Enter AWS iam service account:'),
-        default: 'external-secrets'
+        default: 'external-secrets',
+        message: chalk.cyan('Enter AWS iam service account:')
       }),
+    }
+  }
+
+  private getAWSCredentialsFromFlags(flags: any): Record<string, string> {
+    const region = resolveEnvValue(flags['aws-region'])
+    if (!region) {
+      this.jsonCtx.error(
+        'E601_MISSING_FIELD',
+        '--aws-region is required for AWS provider in non-interactive mode',
+        'CONFIGURATION',
+        true,
+        { flag: '--aws-region' }
+      )
+    }
+
+    return {
+      prefixName: resolveEnvValue(flags['aws-prefix']) || 'dogeos',
+      secretRegion: region!,
+      serviceAccount: resolveEnvValue(flags['aws-service-account']) || 'external-secrets',
     }
   }
 
@@ -873,6 +869,16 @@ export default class SetupPushSecrets extends Command {
     }
   }
 
+  private getVaultCredentialsFromFlags(flags: any): Record<string, string> {
+    return {
+      path: resolveEnvValue(flags['vault-path']) || 'scroll',
+      server: resolveEnvValue(flags['vault-server']) || 'http://vault.default.svc.cluster.local:8200',
+      tokenSecretKey: resolveEnvValue(flags['vault-token-secret-key']) || 'token',
+      tokenSecretName: resolveEnvValue(flags['vault-token-secret-name']) || 'vault-token',
+      version: resolveEnvValue(flags['vault-version']) || 'v2',
+    }
+  }
+
   private async readCubeSignerConfigFromYaml(): Promise<Record<string, string>> {
     const valuesDir = path.join(process.cwd(), 'values', 'values')
     if (!fs.existsSync(valuesDir)) {
@@ -882,7 +888,7 @@ export default class SetupPushSecrets extends Command {
     // Find cubesigner-signer-production-N.yaml files
     const cubesignerFiles = fs
       .readdirSync(valuesDir)
-      .filter((file) => file.match(/^cubesigner-signer-production-\d+\.yaml$/))
+      .filter((file) => file.match(/^cube(?:signer-){2}production-\d+\.yaml$/))
 
     if (cubesignerFiles.length === 0) {
       this.error(chalk.red('No cubesigner-signer-production-N.yaml files found in values/values directory'))
@@ -924,11 +930,7 @@ export default class SetupPushSecrets extends Command {
       const data = sessionSecret.data?.[0]
       if (data?.remoteRef?.key) {
         const keyParts = data.remoteRef.key.split('/')
-        if (keyParts.length > 1) {
-          config.prefixName = keyParts[0]
-        } else {
-          config.prefixName = 'dogeos'
-        }
+        config.prefixName = keyParts.length > 1 ? keyParts[0] : 'dogeos';
       } else {
         config.prefixName = 'dogeos'
       }
@@ -949,8 +951,7 @@ export default class SetupPushSecrets extends Command {
       this.error(chalk.red(`Values directory not found at ${valuesDir}`))
     }
 
-    let prefixName: string | undefined
-    prefixName = provider === 'vault' ? credentials.path : credentials.prefixName
+    const prefixName: string | undefined = provider === 'vault' ? credentials.path : credentials.prefixName
 
     const yamlFiles = fs
       .readdirSync(valuesDir)
@@ -1019,12 +1020,10 @@ export default class SetupPushSecrets extends Command {
                           property: "property_KEY"
                         secretKey: "SECRET_KEY"
             */
-              if (/^cubesigner-signer-\d+-session$/.test(secretName)) {
-                if (dataItem.secretKey === 'session.json') {
+              if (/^cubesigner-signer-\d+-session$/.test(secretName) && dataItem.secretKey === 'session.json') {
                   dataItem.remoteRef.property = 'session.json'
                   updated = true
                 }
-              }
 
               // Only update if the key has changed
               if (dataItem.remoteRef.key !== updatedKey) {

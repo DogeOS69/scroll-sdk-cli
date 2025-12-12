@@ -1,32 +1,33 @@
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
+import { execSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { execSync } from 'node:child_process'
-import { JsonOutputContext, ERROR_CODES } from '../../utils/json-output.js'
+
+import { JsonOutputContext } from '../../utils/json-output.js'
 
 interface PrerequisiteCheck {
-  name: string
-  description: string
-  required: boolean
   check: () => Promise<CheckResult>
+  description: string
+  name: string
+  required: boolean
 }
 
 interface CheckResult {
+  error?: string
+  message?: string
   passed: boolean
   version?: string
-  message?: string
-  error?: string
 }
 
 interface PrerequisiteResult {
-  name: string
   description: string
-  required: boolean
-  passed: boolean
-  version?: string
-  message?: string
   error?: string
+  message?: string
+  name: string
+  passed: boolean
+  required: boolean
+  version?: string
 }
 
 export default class CheckPrerequisites extends Command {
@@ -40,168 +41,14 @@ export default class CheckPrerequisites extends Command {
 
   static override flags = {
     json: Flags.boolean({
-      description: 'Output in JSON format (stdout for data, stderr for logs)',
       default: false,
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
     }),
     verbose: Flags.boolean({
       char: 'v',
-      description: 'Show detailed output for each check',
       default: false,
+      description: 'Show detailed output for each check',
     }),
-  }
-
-  private async checkCommand(command: string, versionFlag: string = '--version'): Promise<CheckResult> {
-    try {
-      const output = execSync(`${command} ${versionFlag}`, {
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 10000,
-      }).trim()
-
-      // Extract version from output (first line, first version-like match)
-      const versionMatch = output.match(/v?(\d+\.\d+\.?\d*)/i)
-      const version = versionMatch ? versionMatch[1] : output.split('\n')[0].trim()
-
-      return { passed: true, version }
-    } catch (error) {
-      return {
-        passed: false,
-        error: `Command '${command}' not found or failed`,
-      }
-    }
-  }
-
-  private async checkDockerRunning(): Promise<CheckResult> {
-    try {
-      execSync('docker info', {
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 10000,
-      })
-      return { passed: true, message: 'Docker daemon is running' }
-    } catch {
-      return {
-        passed: false,
-        error: 'Docker daemon is not running. Start Docker and try again.',
-      }
-    }
-  }
-
-  private async checkKubectlConnected(): Promise<CheckResult> {
-    try {
-      const output = execSync('kubectl cluster-info', {
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 15000,
-      })
-      const clusterMatch = output.match(/Kubernetes.*is running at\s+(https?:\/\/[^\s]+)/i)
-      return {
-        passed: true,
-        message: clusterMatch ? `Connected to ${clusterMatch[1]}` : 'Connected to cluster',
-      }
-    } catch {
-      return {
-        passed: false,
-        error: 'kubectl is not connected to a cluster. Configure your kubeconfig.',
-      }
-    }
-  }
-
-  private async checkHelmRepos(): Promise<CheckResult> {
-    try {
-      const output = execSync('helm repo list', {
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 10000,
-      })
-
-      // Check for expected repos
-      const hasScrollSdk = output.includes('scroll-sdk')
-      const hasBitnami = output.includes('bitnami')
-
-      if (!hasScrollSdk && !hasBitnami) {
-        return {
-          passed: false,
-          error: 'No Helm repositories configured. Run `helm repo add` to add required repos.',
-        }
-      }
-
-      const repos: string[] = []
-      if (hasScrollSdk) repos.push('scroll-sdk')
-      if (hasBitnami) repos.push('bitnami')
-
-      return {
-        passed: true,
-        message: `Repos configured: ${repos.join(', ')}`,
-      }
-    } catch {
-      return {
-        passed: false,
-        error: 'No Helm repositories configured',
-      }
-    }
-  }
-
-  private async checkConfigFile(): Promise<CheckResult> {
-    const configPath = path.join(process.cwd(), 'config.toml')
-    if (fs.existsSync(configPath)) {
-      const stats = fs.statSync(configPath)
-      return {
-        passed: true,
-        message: `Found (${Math.round(stats.size / 1024)}KB)`,
-      }
-    }
-    return {
-      passed: false,
-      error: 'config.toml not found in current directory',
-    }
-  }
-
-  private async checkDataDir(): Promise<CheckResult> {
-    const dataDir = path.join(process.cwd(), '.data')
-    if (fs.existsSync(dataDir)) {
-      const files = fs.readdirSync(dataDir)
-      return {
-        passed: true,
-        message: `Found with ${files.length} files`,
-      }
-    }
-    return {
-      passed: false,
-      error: '.data directory not found. Run scrollsdk commands to create it.',
-    }
-  }
-
-  private async checkDogeConfig(): Promise<CheckResult> {
-    const dataDir = path.join(process.cwd(), '.data')
-    if (!fs.existsSync(dataDir)) {
-      return { passed: false, error: '.data directory not found' }
-    }
-
-    const files = fs.readdirSync(dataDir)
-    const dogeConfigs = files.filter(f => f.startsWith('doge') && f.endsWith('.toml'))
-
-    if (dogeConfigs.length > 0) {
-      return {
-        passed: true,
-        message: `Found: ${dogeConfigs.join(', ')}`,
-      }
-    }
-    return {
-      passed: false,
-      error: 'No doge config files found. Run `scrollsdk doge:config` first.',
-    }
-  }
-
-  private async checkNodeModules(): Promise<CheckResult> {
-    const nodeModulesPath = path.join(process.cwd(), 'node_modules')
-    if (fs.existsSync(nodeModulesPath)) {
-      return { passed: true, message: 'node_modules present' }
-    }
-    return {
-      passed: false,
-      error: 'node_modules not found. Run `npm install` first.',
-    }
   }
 
   public async run(): Promise<void> {
@@ -214,90 +61,90 @@ export default class CheckPrerequisites extends Command {
     const prerequisites: PrerequisiteCheck[] = [
       // Required CLI tools
       {
-        name: 'docker',
-        description: 'Docker CLI',
-        required: true,
         check: () => this.checkCommand('docker'),
+        description: 'Docker CLI',
+        name: 'docker',
+        required: true,
       },
       {
-        name: 'docker-daemon',
-        description: 'Docker daemon running',
-        required: true,
         check: () => this.checkDockerRunning(),
+        description: 'Docker daemon running',
+        name: 'docker-daemon',
+        required: true,
       },
       {
-        name: 'kubectl',
-        description: 'Kubernetes CLI',
-        required: true,
         check: () => this.checkCommand('kubectl'),
+        description: 'Kubernetes CLI',
+        name: 'kubectl',
+        required: true,
       },
       {
-        name: 'kubectl-connected',
-        description: 'kubectl cluster connection',
-        required: false,
         check: () => this.checkKubectlConnected(),
-      },
-      {
-        name: 'helm',
-        description: 'Helm package manager',
-        required: true,
-        check: () => this.checkCommand('helm'),
-      },
-      {
-        name: 'helm-repos',
-        description: 'Helm repositories',
+        description: 'kubectl cluster connection',
+        name: 'kubectl-connected',
         required: false,
+      },
+      {
+        check: () => this.checkCommand('helm'),
+        description: 'Helm package manager',
+        name: 'helm',
+        required: true,
+      },
+      {
         check: () => this.checkHelmRepos(),
+        description: 'Helm repositories',
+        name: 'helm-repos',
+        required: false,
       },
       {
-        name: 'node',
-        description: 'Node.js runtime',
-        required: true,
         check: () => this.checkCommand('node'),
+        description: 'Node.js runtime',
+        name: 'node',
+        required: true,
       },
       {
-        name: 'npm',
-        description: 'NPM package manager',
-        required: true,
         check: () => this.checkCommand('npm'),
+        description: 'NPM package manager',
+        name: 'npm',
+        required: true,
       },
       {
-        name: 'git',
-        description: 'Git version control',
-        required: true,
         check: () => this.checkCommand('git'),
+        description: 'Git version control',
+        name: 'git',
+        required: true,
       },
       // Optional but useful
       {
-        name: 'jq',
-        description: 'JSON processor',
-        required: false,
         check: () => this.checkCommand('jq'),
+        description: 'JSON processor',
+        name: 'jq',
+        required: false,
       },
       {
-        name: 'aws',
-        description: 'AWS CLI',
-        required: false,
         check: () => this.checkCommand('aws'),
+        description: 'AWS CLI',
+        name: 'aws',
+        required: false,
       },
       // Configuration checks
       {
-        name: 'config.toml',
-        description: 'Main configuration file',
-        required: true,
         check: () => this.checkConfigFile(),
+        description: 'Main configuration file',
+        name: 'config.toml',
+        required: true,
       },
       {
-        name: '.data',
-        description: 'Data directory',
-        required: false,
         check: () => this.checkDataDir(),
+        description: 'Data directory',
+        name: '.data',
+        required: false,
       },
       {
-        name: 'doge-config',
-        description: 'Doge configuration',
-        required: false,
         check: () => this.checkDogeConfig(),
+        description: 'Doge configuration',
+        name: 'doge-config',
+        required: false,
       },
     ]
 
@@ -311,8 +158,8 @@ export default class CheckPrerequisites extends Command {
     for (const prereq of prerequisites) {
       const result = await prereq.check()
       const resultObj: PrerequisiteResult = {
-        name: prereq.name,
         description: prereq.description,
+        name: prereq.name,
         required: prereq.required,
         ...result,
       }
@@ -359,10 +206,10 @@ export default class CheckPrerequisites extends Command {
       if (allRequiredPassed) {
         jsonCtx.success({
           allRequiredPassed,
-          totalChecks: results.length,
-          passed: totalPassed,
           failed: totalFailed,
+          passed: totalPassed,
           results,
+          totalChecks: results.length,
         })
       } else {
         // Use error() which outputs JSON and exits with code 1
@@ -374,15 +221,15 @@ export default class CheckPrerequisites extends Command {
           true,
           {
             allRequiredPassed,
-            totalChecks: results.length,
-            passed: totalPassed,
             failed: totalFailed,
             failedRequired: failedRequired.map(r => ({
-              name: r.name,
               description: r.description,
               error: r.error,
+              name: r.name,
             })),
+            passed: totalPassed,
             results,
+            totalChecks: results.length,
           }
         )
       }
@@ -393,4 +240,151 @@ export default class CheckPrerequisites extends Command {
       this.exit(1)
     }
   }
+
+  private async checkCommand(command: string, versionFlag: string = '--version'): Promise<CheckResult> {
+    try {
+      const output = execSync(`${command} ${versionFlag}`, {
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 10_000,
+      }).trim()
+
+      // Extract version from output (first line, first version-like match)
+      const versionMatch = output.match(/v?(\d+\.\d+\.?\d*)/i)
+      const version = versionMatch ? versionMatch[1] : output.split('\n')[0].trim()
+
+      return { passed: true, version }
+    } catch {
+      return {
+        error: `Command '${command}' not found or failed`,
+        passed: false,
+      }
+    }
+  }
+
+  private async checkConfigFile(): Promise<CheckResult> {
+    const configPath = path.join(process.cwd(), 'config.toml')
+    if (fs.existsSync(configPath)) {
+      const stats = fs.statSync(configPath)
+      return {
+        message: `Found (${Math.round(stats.size / 1024)}KB)`,
+        passed: true,
+      }
+    }
+
+    return {
+      error: 'config.toml not found in current directory',
+      passed: false,
+    }
+  }
+
+  private async checkDataDir(): Promise<CheckResult> {
+    const dataDir = path.join(process.cwd(), '.data')
+    if (fs.existsSync(dataDir)) {
+      const files = fs.readdirSync(dataDir)
+      return {
+        message: `Found with ${files.length} files`,
+        passed: true,
+      }
+    }
+
+    return {
+      error: '.data directory not found. Run scrollsdk commands to create it.',
+      passed: false,
+    }
+  }
+
+  private async checkDockerRunning(): Promise<CheckResult> {
+    try {
+      execSync('docker info', {
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 10_000,
+      })
+      return { message: 'Docker daemon is running', passed: true }
+    } catch {
+      return {
+        error: 'Docker daemon is not running. Start Docker and try again.',
+        passed: false,
+      }
+    }
+  }
+
+  private async checkDogeConfig(): Promise<CheckResult> {
+    const dataDir = path.join(process.cwd(), '.data')
+    if (!fs.existsSync(dataDir)) {
+      return { error: '.data directory not found', passed: false }
+    }
+
+    const files = fs.readdirSync(dataDir)
+    const dogeConfigs = files.filter(f => f.startsWith('doge') && f.endsWith('.toml'))
+
+    if (dogeConfigs.length > 0) {
+      return {
+        message: `Found: ${dogeConfigs.join(', ')}`,
+        passed: true,
+      }
+    }
+
+    return {
+      error: 'No doge config files found. Run `scrollsdk doge:config` first.',
+      passed: false,
+    }
+  }
+
+  private async checkHelmRepos(): Promise<CheckResult> {
+    try {
+      const output = execSync('helm repo list', {
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 10_000,
+      })
+
+      // Check for expected repos
+      const hasScrollSdk = output.includes('scroll-sdk')
+      const hasBitnami = output.includes('bitnami')
+
+      if (!hasScrollSdk && !hasBitnami) {
+        return {
+          error: 'No Helm repositories configured. Run `helm repo add` to add required repos.',
+          passed: false,
+        }
+      }
+
+      const repos: string[] = []
+      if (hasScrollSdk) repos.push('scroll-sdk')
+      if (hasBitnami) repos.push('bitnami')
+
+      return {
+        message: `Repos configured: ${repos.join(', ')}`,
+        passed: true,
+      }
+    } catch {
+      return {
+        error: 'No Helm repositories configured',
+        passed: false,
+      }
+    }
+  }
+
+  private async checkKubectlConnected(): Promise<CheckResult> {
+    try {
+      const output = execSync('kubectl cluster-info', {
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 15_000,
+      })
+      const clusterMatch = output.match(/kubernetes.*is running at\s+(https?:\/\/\S+)/i)
+      return {
+        message: clusterMatch ? `Connected to ${clusterMatch[1]}` : 'Connected to cluster',
+        passed: true,
+      }
+    } catch {
+      return {
+        error: 'kubectl is not connected to a cluster. Configure your kubeconfig.',
+        passed: false,
+      }
+    }
+  }
+
 }
