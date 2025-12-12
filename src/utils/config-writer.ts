@@ -38,8 +38,9 @@ function deepClone<T>(obj: T): T {
  * and finally renames the temporary file to the main config path if both succeed.
  *
  * @param updatedMainConfig The updated main config data to be written. Can be a parsed TOML object or a TOML string.
- * @param mainConfigPath Path to the main config.toml file. Defaults to ./config.toml.
  * @param publicConfigPath Path where the config.public.toml file will be written.
+ * @param mainConfigPath Path to the main config.toml file. Defaults to ./config.toml.
+ * @param silent If true, suppresses console output (for JSON mode). Defaults to false.
  * @returns `true` if both files were written successfully, `false` on error.
  * Returns `void` if the `mainConfigPath` does not exist and the function exits early.
  */
@@ -47,6 +48,7 @@ export function writeConfigs(
     updatedMainConfigOrString: any | string,
     publicConfigPath: string = path.join(process.cwd(), 'config.public.toml'),
     mainConfigPath: string = path.join(process.cwd(), 'config.toml'),
+    silent: boolean = false,
 ): boolean | void {
     try {
         if (!fs.existsSync(mainConfigPath)) {
@@ -134,15 +136,20 @@ export function writeConfigs(
         removeNodeKeys(publicConfig)
 
         fs.writeFileSync(mainConfigPath, mainConfigStringToWrite);
-        console.log(chalk.green(`Main config updated: ${mainConfigPath}`));
+        if (!silent) {
+            console.log(chalk.green(`Main config updated: ${mainConfigPath}`));
+        }
 
         // 2. Write the public config
         fs.writeFileSync(publicConfigPath, toml.stringify(publicConfig as any))
-        console.log(chalk.green(`Public configuration synced to ${publicConfigPath}`));
+        if (!silent) {
+            console.log(chalk.green(`Public configuration synced to ${publicConfigPath}`));
+        }
 
         return true
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error)
+        // Always log errors to stderr
         console.error(chalk.red(`Error syncing public config: ${errorMessage}`))
         return false // Operation failed
     }

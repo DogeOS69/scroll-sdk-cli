@@ -1,0 +1,321 @@
+# DogeOS Deployment Specification
+# This file is the single source of truth for a DogeOS deployment.
+# Use $ENV:VAR_NAME to reference environment variables for secrets.
+
+version: "1.0"
+
+metadata:
+  name: dogeos-testnet
+  environment: testnet
+  description: "DogeOS Testnet Deployment on AWS EKS"
+  owner: "team@example.com"
+  tags:
+    project: dogeos
+    team: infrastructure
+
+infrastructure:
+  provider: aws
+  aws:
+    region: us-west-2
+    accountId: "123456789012"
+    eksClusterName: dogeos-testnet-cluster
+    secretsPrefix: dogeos-testnet
+    # Cluster creation settings (used when --create-cluster is specified)
+    nodeType: m5.2xlarge        # EC2 instance type for worker nodes
+    nodeCount: 3                # Number of worker nodes
+    kubernetesVersion: "1.29"   # Kubernetes version
+  # For GCP deployments:
+  # provider: gcp
+  # gcp:
+  #   project: my-gcp-project
+  #   region: us-central1
+  #   gkeClusterName: dogeos-testnet-cluster
+  #   secretsProject: my-gcp-project  # optional, defaults to project
+  #   # Cluster creation settings (used when --create-cluster is specified)
+  #   machineType: e2-standard-8  # GCE machine type for nodes
+  #   nodeCount: 3                # Number of nodes
+  #   kubernetesVersion: latest   # GKE version (or specific like "1.29")
+  # For local/Kind deployments:
+  # provider: local
+  # local:
+  #   useK8sSecrets: true  # use native K8s secrets instead of external-secrets
+  namespace: default
+  sequencerCount: 2
+  bootnodeCount: 2
+  # Sequencer instances (populated by gen-keystore command, or specify manually)
+  sequencers:
+    - index: 0
+      signerAddress: "0x1234567890123456789012345678901234567890"
+      enodeUrl: "enode://abc123...@l2-sequencer-0:30303"
+    - index: 1
+      signerAddress: "0x0987654321098765432109876543210987654321"
+      enodeUrl: "enode://def456...@l2-sequencer-1:30303"
+  # Bootnode instances (populated by gen-keystore command, or specify manually)
+  bootnodes:
+    - index: 0
+      enodeUrl: "enode://ghi789...@l2-bootnode-0:30303"
+      publicEndpoint: "bootnode-0.testnet.dogeos.io:30303"
+    - index: 1
+      enodeUrl: "enode://jkl012...@l2-bootnode-1:30303"
+      publicEndpoint: "bootnode-1.testnet.dogeos.io:30303"
+
+network:
+  l1ChainName: "Dogecoin Testnet"
+  l2ChainName: "DogeOS Testnet"
+  l1ChainId: 111111
+  l2ChainId: 221122
+  tokenSymbol: DOGE
+  l1RpcEndpoint: "http://l1-interface:8545"
+  l1RpcEndpointWebsocket: "ws://l1-interface:8546"
+  l2RpcEndpoint: "http://l2-rpc:8545"
+  daPublisherEndpoint: "http://da-publisher:8545"
+  beaconRpcEndpoint: "http://celestia-node:26658"
+
+database:
+  admin:
+    host: db.example.com
+    port: 5432
+    username: admin
+    password: "$ENV:DB_ADMIN_PASSWORD"
+    database: postgres
+    vpcHost: 10.0.0.5
+    vpcPort: 5432
+  databases:
+    rollupNode: rollup_node
+    bridgeHistory: bridge_history
+    gasOracle: gas_oracle
+    coordinator: coordinator
+    chainMonitor: chain_monitor
+    rollupExplorer: rollup_explorer
+    blockscout: blockscout
+    adminSystem: admin_system
+  credentials:
+    rollupNodePassword: "$ENV:ROLLUP_NODE_DB_PASSWORD"
+    bridgeHistoryPassword: "$ENV:BRIDGE_HISTORY_DB_PASSWORD"
+    gasOraclePassword: "$ENV:GAS_ORACLE_DB_PASSWORD"
+    coordinatorPassword: "$ENV:COORDINATOR_DB_PASSWORD"
+    chainMonitorPassword: "$ENV:CHAIN_MONITOR_DB_PASSWORD"
+    rollupExplorerPassword: "$ENV:ROLLUP_EXPLORER_DB_PASSWORD"
+    blockscoutPassword: "$ENV:BLOCKSCOUT_DB_PASSWORD"
+    adminSystemPassword: "$ENV:ADMIN_SYSTEM_DB_PASSWORD"
+
+accounts:
+  deployer:
+    address: "0x1234567890123456789012345678901234567890"
+    privateKey: "$ENV:DEPLOYER_PRIVATE_KEY"
+  owner:
+    address: "0x1234567890123456789012345678901234567891"
+  l1CommitSender:
+    address: "0x1234567890123456789012345678901234567892"
+    privateKey: "$ENV:L1_COMMIT_SENDER_PRIVATE_KEY"
+  l1FinalizeSender:
+    address: "0x1234567890123456789012345678901234567893"
+    privateKey: "$ENV:L1_FINALIZE_SENDER_PRIVATE_KEY"
+  l1GasOracleSender:
+    address: "0x1234567890123456789012345678901234567894"
+    privateKey: "$ENV:L1_GAS_ORACLE_SENDER_PRIVATE_KEY"
+  l2GasOracleSender:
+    address: "0x1234567890123456789012345678901234567895"
+    privateKey: "$ENV:L2_GAS_ORACLE_SENDER_PRIVATE_KEY"
+
+dogecoin:
+  network: testnet
+  rpc:
+    url: "https://testnet.doge-rpc.io"
+    username: rpcuser
+    password: "$ENV:DOGECOIN_RPC_PASSWORD"
+  blockbook:
+    apiUrl: "https://blockbook.testnet.doge.io/api/v2"
+  indexerStartHeight: 4000000
+  walletPath: ".data/doge-wallet.json"
+
+celestia:
+  tendermintRpcUrl: "https://rpc-mocha.pops.one:443"
+  namespace: "0000000000000000000000000000000000000000646f67656f73"
+  signerAddress: "celestia1..."
+  mnemonic: "$ENV:CELESTIA_MNEMONIC"
+  indexerStartBlock: 1000000
+  authToken: "$ENV:CELESTIA_AUTH_TOKEN"
+
+bridge:
+  seedString: "dogeos-testnet-seed-v1"
+  thresholds:
+    sequencer: 1
+    correctness: 2
+    attestation: 2
+    recovery: 2
+  keyCounts:
+    correctness: 3
+    attestation: 3
+    recovery: 3
+  timelockSeconds: 3600
+  feeRateSatPerKvb: 1000000
+  targetAmounts:
+    sequencer: 420690000
+    feeWallet: 500000000
+    bridge: 5000000000
+  confirmationsRequired: 1
+  fees:
+    deposit: "100000000000000"
+    withdrawal: "100000000000000"
+    minWithdrawalAmount: "1000000000000000"
+  feeRecipient: "0x1234567890123456789012345678901234567896"
+
+signing:
+  method: cubesigner
+  cubesigner:
+    roles:
+      - roleId: "Role#abc123"
+        name: "attestor0"
+        keys:
+          - keyId: "Key#def456"
+            keyType: "secp-doge-test"
+            publicKey: "0x02..."
+            materialId: "material123"
+      - roleId: "Role#abc124"
+        name: "attestor1"
+        keys:
+          - keyId: "Key#def457"
+            keyType: "secp-doge-test"
+            publicKey: "0x03..."
+            materialId: "material124"
+      - roleId: "Role#abc125"
+        name: "attestor2"
+        keys:
+          - keyId: "Key#def458"
+            keyType: "secp-doge-test"
+            publicKey: "0x02..."
+            materialId: "material125"
+  tsoServiceUrl: "http://tso-service:8080"
+
+frontend:
+  baseDomain: testnet.dogeos.io
+  hosts:
+    frontend: bridge.testnet.dogeos.io
+    bridgeHistoryApi: bridge-api.testnet.dogeos.io
+    rollupExplorerApi: rollup-api.testnet.dogeos.io
+    coordinatorApi: coordinator.testnet.dogeos.io
+    rpcGateway: rpc.testnet.dogeos.io
+    rpcGatewayWs: ws-rpc.testnet.dogeos.io
+    blockscout: explorer.testnet.dogeos.io
+    adminDashboard: admin.testnet.dogeos.io
+    grafana: grafana.testnet.dogeos.io
+    tso: tso.testnet.dogeos.io
+    celestia: celestia.testnet.dogeos.io
+    dogecoin: dogecoin.testnet.dogeos.io
+    blockbook: blockbook.testnet.dogeos.io
+  externalUrls:
+    l1Rpc: "https://rpc.testnet.dogeos.io"
+    l2Rpc: "https://rpc.testnet.dogeos.io"
+    l1Explorer: "https://blockbook.testnet.dogeos.io"
+    l2Explorer: "https://explorer.testnet.dogeos.io"
+    bridgeApi: "https://bridge-api.testnet.dogeos.io"
+    rollupScanApi: "https://rollup-api.testnet.dogeos.io"
+  walletConnectProjectId: "your-walletconnect-project-id"
+
+rollup:
+  maxTxInChunk: 100
+  maxBlockInChunk: 100
+  maxBatchInBundle: 20
+  maxL1MessageGasLimit: 10000000
+  coordinator:
+    chunkCollectionTimeSec: 60
+    batchCollectionTimeSec: 300
+    bundleCollectionTimeSec: 1800
+    jwtSecretKey: "$ENV:COORDINATOR_JWT_SECRET"
+  finalization:
+    batchDeadlineSec: 86400
+    relayMessageDeadlineSec: 86400
+
+contracts:
+  deploymentSalt: "dogeos-testnet-v1"
+  l1FeeVaultAddr: "0x1234567890123456789012345678901234567897"
+  gasOracle:
+    blobScalar: 1
+    scalar: 1
+    penaltyThreshold: 100
+    penaltyFactor: 10
+  alternativeGasToken:
+    enabled: false
+  verification:
+    l1VerifierType: blockscout
+    l2VerifierType: blockscout
+    l1ExplorerUri: "https://blockbook.testnet.dogeos.io"
+    l2ExplorerUri: "https://explorer.testnet.dogeos.io"
+
+genesis:
+  maxEthSupply: "100000000000000000000000000000"
+  deployerInitialBalance: "1000000000000000000000000"
+  baseFeePerGas: 1000000000
+
+test:
+  mockFinalizeEnabled: false
+
+# Container image overrides (optional)
+# Use this section to customize images for testing, development, or custom builds.
+# All fields are optional - omit a service to use Helm chart defaults.
+images:
+  defaults:
+    pullPolicy: IfNotPresent    # Default pull policy for all services
+
+  services:
+    # L2 Execution Layer (Geth-based)
+    l2Sequencer:
+      repository: scrolltech/l2geth
+      tag: "$ENV:L2_IMAGE_TAG"                # Use env var for dynamic tags
+    l2Rpc:
+      repository: scrolltech/l2geth
+      tag: "$ENV:L2_IMAGE_TAG"
+    l2Bootnode:
+      repository: scrolltech/l2geth
+      tag: "$ENV:L2_IMAGE_TAG"
+
+    # Rollup Services
+    rollupRelayer:
+      repository: scrolltech/rollup-relayer
+      tag: v4.4.91
+    coordinator:
+      repository: scrolltech/coordinator
+      tag: v4.4.91
+    daPublisher:
+      repository: scrolltech/da-publisher
+      tag: v4.4.91
+    gasOracle:
+      repository: scrolltech/gas-oracle
+      tag: v4.4.91
+    chainMonitor:
+      repository: scrolltech/chain-monitor
+      tag: chain-monitor-v4.4.91
+
+    # Bridge Services
+    bridgeHistoryApi:
+      repository: scrolltech/bridge-history-api
+      tag: v4.4.91
+    bridgeHistoryFetcher:
+      repository: scrolltech/bridge-history-fetcher
+      tag: v4.4.91
+    withdrawalProcessor:
+      repository: scrolltech/withdrawal-processor
+      tag: v4.4.91
+    tsoService:
+      repository: scrolltech/tso-service
+      tag: v4.4.91
+    cubesignerSigner:
+      repository: scrolltech/cubesigner-signer
+      tag: v4.4.91
+
+    # Frontend & Explorers
+    frontends:
+      repository: scrolltech/frontends
+      tag: latest
+    rollupExplorerBackend:
+      repository: scrolltech/rollup-explorer-backend
+      tag: v4.4.91
+    # blockscout:
+    #   repository: blockscout/blockscout
+    #   tag: 6.3.0
+
+    # Infrastructure
+    # l1Interface:
+    #   repository: scrolltech/l1-devnet
+    #   tag: latest

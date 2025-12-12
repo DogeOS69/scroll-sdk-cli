@@ -24,6 +24,7 @@ import path from 'node:path'
 // Assuming loadDogeConfig and DogeConfig types are available and updated
 import type { DogeConfig, DogeWallet } from '../../../types/doge-config.js' // Adjusted path
 import { loadDogeConfigWithSelection } from '../../../utils/doge-config.js' // Adjusted path
+import { JsonOutputContext } from '../../../utils/json-output.js'
 
 const { Networks, PrivateKey } = bitcore
 
@@ -60,31 +61,54 @@ export default class WalletNew extends Command {
       char: 'p',
       description: 'Path to save the wallet file (overrides path from config file)',
     }),
+    'non-interactive': Flags.boolean({
+      char: 'N',
+      description: 'Run without prompts (implies --force)',
+      default: false,
+    }),
+    json: Flags.boolean({
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
+      default: false,
+    }),
   }
 
   async run(): Promise<void> {
     const { flags } = await this.parse(WalletNew)
 
+    const nonInteractive = flags['non-interactive']
+    const jsonMode = flags.json
+    const jsonCtx = new JsonOutputContext('doge wallet new', jsonMode)
+
+    // In non-interactive mode, we must have a config path to avoid prompts in loadDogeConfigWithSelection
+    // The --config flag has a default value, so this will always be set
     const { config, configPath } = await loadDogeConfigWithSelection(
-      flags['doge-config'],
+      flags.config,
       'scrollsdk doge:config'
     )
 
-    this.log(chalk.blue(`Using network: ${config.network} (from config file: ${flags.config})`))
+    jsonCtx.info(`Using network: ${config.network} (from config file: ${configPath})`)
 
     const walletPathFromConfig = config.wallet?.path
     if (!flags.path && !walletPathFromConfig) {
-      this.error(`Wallet path not defined. Specify with --path, or ensure 'wallet.path' is set in ${flags.config}`)
-      return
+      jsonCtx.error(
+        'E601_MISSING_FIELD',
+        `Wallet path not defined. Specify with --path, or ensure 'wallet.path' is set in ${configPath}`,
+        'CONFIGURATION',
+        true,
+        { configFile: configPath }
+      )
     }
 
     const resolvedWalletPath = path.resolve(flags.path || walletPathFromConfig!)
 
     if (fs.existsSync(resolvedWalletPath)) {
-      this.error(
+      jsonCtx.error(
+        'E602_FILE_EXISTS',
         `Wallet already exists at ${resolvedWalletPath}. To use this wallet, consider 'doge:wallet:sync' or 'doge:wallet:send'. To create a new one, use a different path or delete the existing file.`,
+        'CONFIGURATION',
+        true,
+        { walletPath: resolvedWalletPath }
       )
-      return
     }
 
     const bitcoreNetwork = config.network === 'testnet' ? Networks.testnet : Networks.livenet
@@ -92,20 +116,34 @@ export default class WalletNew extends Command {
     const privateKey = new PrivateKey(null, bitcoreNetwork)
     const address = privateKey.toAddress()
 
-    this.log(chalk.cyan('\nNew wallet details:'))
-    this.log(`Network: ${chalk.yellow(config.network)}`)
-    this.log(`Address: ${chalk.yellow(address.toString())}`)
-    this.log(
-      `Private Key (WIF): ${flags['dry-run'] ? chalk.grey('[hidden during dry run]') : chalk.yellow(privateKey.toWIF())
-      }`,
-    )
+    if (!jsonMode) {
+      this.log(chalk.cyan('\nNew wallet details:'))
+      this.log(`Network: ${chalk.yellow(config.network)}`)
+      this.log(`Address: ${chalk.yellow(address.toString())}`)
+      this.log(
+        `Private Key (WIF): ${flags['dry-run'] ? chalk.grey('[hidden during dry run]') : chalk.yellow(privateKey.toWIF())
+        }`,
+      )
+    }
+
     if (flags['dry-run']) {
-      this.log(chalk.dim('(To view WIF in dry run, a flag like --show-private-key would typically be added)'))
-      this.log(chalk.dim('\nDry run - no wallet created'))
+      if (!jsonMode) {
+        this.log(chalk.dim('(To view WIF in dry run, a flag like --show-private-key would typically be added)'))
+        this.log(chalk.dim('\nDry run - no wallet created'))
+      }
+      if (jsonMode) {
+        jsonCtx.success({
+          dryRun: true,
+          network: config.network,
+          address: address.toString(),
+          walletPath: resolvedWalletPath,
+        })
+      }
       return
     }
 
-    const confirmed = flags.force
+    // In non-interactive mode, always skip confirmation (like --force)
+    const confirmed = flags.force || nonInteractive
       ? true
       : await confirm({
         default: true,
@@ -113,7 +151,7 @@ export default class WalletNew extends Command {
       })
 
     if (!confirmed) {
-      this.log(chalk.dim('Wallet creation cancelled'))
+      jsonCtx.info('Wallet creation cancelled')
       return
     }
 
@@ -130,8 +168,21 @@ export default class WalletNew extends Command {
     }
 
     fs.writeFileSync(resolvedWalletPath, JSON.stringify(walletData, null, 2), { mode: 0o600 })
-    this.log(chalk.green('\n✓ Wallet created successfully'))
-    this.log(`Saved to: ${chalk.cyan(resolvedWalletPath)}`)
-    this.log(chalk.yellow('Important: Backup your wallet file and keep your private key secret!'))
+
+    jsonCtx.logSuccess('Wallet created successfully')
+    if (!jsonMode) {
+      this.log(`Saved to: ${chalk.cyan(resolvedWalletPath)}`)
+      this.log(chalk.yellow('Important: Backup your wallet file and keep your private key secret!'))
+    }
+
+    // JSON output
+    if (jsonMode) {
+      jsonCtx.success({
+        network: config.network,
+        address: address.toString(),
+        privateKey: privateKey.toWIF(),
+        walletPath: resolvedWalletPath,
+      })
+    }
   }
 }

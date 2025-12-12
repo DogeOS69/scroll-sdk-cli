@@ -7,6 +7,7 @@ import { exec } from 'child_process'
 import { promisify } from 'util'
 import { confirm, input, select } from '@inquirer/prompts'
 import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
+import { JsonOutputContext } from '../../utils/json-output.js'
 
 const execAsync = promisify(exec)
 
@@ -17,6 +18,9 @@ export default class SetupTls extends Command {
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --debug',
     '<%= config.bin %> <%= command.id %> --values-dir custom-values',
+    '<%= config.bin %> <%= command.id %> --non-interactive --cluster-issuer letsencrypt-prod',
+    '<%= config.bin %> <%= command.id %> --non-interactive --json --cluster-issuer letsencrypt-prod',
+    '<%= config.bin %> <%= command.id %> --non-interactive --create-issuer --issuer-email admin@example.com',
   ]
 
   static override flags = {
@@ -29,11 +33,35 @@ export default class SetupTls extends Command {
       description: 'Directory containing the values files',
       default: 'values',
     }),
+    'cluster-issuer': Flags.string({
+      description: 'Specify the ClusterIssuer to use (for non-interactive mode)',
+      required: false,
+    }),
+    'create-issuer': Flags.boolean({
+      description: 'Create a letsencrypt-prod ClusterIssuer if none exists (for non-interactive mode)',
+      default: false,
+    }),
+    'issuer-email': Flags.string({
+      description: 'Email address for the ClusterIssuer (required with --create-issuer)',
+      required: false,
+    }),
+    'non-interactive': Flags.boolean({
+      char: 'N',
+      description: 'Run without prompts. Requires --cluster-issuer or (--create-issuer with --issuer-email)',
+      default: false,
+    }),
+    'json': Flags.boolean({
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
+      default: false,
+    }),
   }
 
   private selectedIssuer: string | null = null
   private debugMode: boolean = false
   private valuesDir: string = 'values'
+  private nonInteractive: boolean = false
+  private jsonMode: boolean = false
+  private jsonCtx!: JsonOutputContext
 
   // Handle celestia and dogecoin TLS processing
   private processStandardTls(yamlContent: any, chart: string, issuer: string): boolean {
@@ -73,14 +101,37 @@ export default class SetupTls extends Command {
     return updated;
   }
 
-  private async checkClusterIssuer(): Promise<boolean> {
+  private async checkClusterIssuer(specifiedIssuer?: string): Promise<boolean> {
     try {
       const { stdout } = await execAsync('kubectl get clusterissuer -o jsonpath="{.items[*].metadata.name}"')
       const clusterIssuers = stdout.trim().split(' ').filter(Boolean)
 
       if (clusterIssuers.length > 0) {
-        this.log(chalk.green('Found ClusterIssuer(s):'))
-        clusterIssuers.forEach(issuer => this.log(chalk.cyan(`  - ${issuer}`)))
+        this.jsonCtx.info('Found ClusterIssuer(s):')
+        clusterIssuers.forEach(issuer => this.jsonCtx.info(`  - ${issuer}`))
+
+        // If a specific issuer was specified via flag, use it
+        if (specifiedIssuer) {
+          if (clusterIssuers.includes(specifiedIssuer)) {
+            this.selectedIssuer = specifiedIssuer
+            return true
+          } else {
+            this.jsonCtx.error(
+              'E501_CLUSTER_ISSUER_NOT_FOUND',
+              `Specified ClusterIssuer "${specifiedIssuer}" not found. Available: ${clusterIssuers.join(', ')}`,
+              'KUBERNETES',
+              true,
+              { specifiedIssuer, available: clusterIssuers }
+            )
+          }
+        }
+
+        // Non-interactive mode without specified issuer - use first one
+        if (this.nonInteractive) {
+          this.selectedIssuer = clusterIssuers[0]
+          this.jsonCtx.info(`Using first available ClusterIssuer: ${this.selectedIssuer}`)
+          return true
+        }
 
         if (clusterIssuers.length === 1) {
           const useExisting = await confirm({
@@ -99,12 +150,11 @@ export default class SetupTls extends Command {
           return true
         }
       } else {
-        this.log(chalk.yellow('No ClusterIssuer found in the cluster.'))
+        this.jsonCtx.info('No ClusterIssuer found in the cluster.')
         return false
       }
     } catch (error) {
-      this.log(chalk.red('Error checking for ClusterIssuer:'))
-      this.log(chalk.red(error as string))
+      this.jsonCtx.info(`Error checking for ClusterIssuer: ${error}`)
       return false
     }
   }
@@ -131,9 +181,15 @@ spec:
       await fs.promises.writeFile('cluster-issuer.yaml', clusterIssuerYaml)
       await execAsync('kubectl apply -f cluster-issuer.yaml')
       await fs.promises.unlink('cluster-issuer.yaml')
-      this.log(chalk.green('ClusterIssuer created successfully.'))
+      this.jsonCtx.info('ClusterIssuer created successfully.')
     } catch (error) {
-      this.error(chalk.red(`Failed to create ClusterIssuer: ${error}`))
+      this.jsonCtx.error(
+        'E502_CLUSTER_ISSUER_CREATE_FAILED',
+        `Failed to create ClusterIssuer: ${error}`,
+        'KUBERNETES',
+        false,
+        { error: String(error) }
+      )
     }
   }
 
@@ -141,12 +197,12 @@ spec:
     // TODO: Implement loading of config.yaml
   }
 
-  private async updateChartIngress(chart: string, issuer: string): Promise<void> {
+  private async updateChartIngress(chart: string, issuer: string): Promise<boolean> {
     const yamlPath = path.join(process.cwd(), this.valuesDir, `${chart}-production.yaml`)
 
     if (!fs.existsSync(yamlPath)) {
-      this.log(chalk.yellow(`${chart}-production.yaml not found in ${this.valuesDir} directory`))
-      return
+      this.jsonCtx.info(`${chart}-production.yaml not found in ${this.valuesDir} directory`)
+      return false
     }
 
     try {
@@ -225,25 +281,25 @@ spec:
           updated = true
           const updatedContent = yaml.dump(ingress, YAML_DUMP_OPTIONS)
 
-          if (this.debugMode) {
-            this.log(chalk.yellow(`\nProposed changes for ${chart} :`))
-            this.log(chalk.red('- Original content:'))
-            this.log(originalContent)
-            this.log(chalk.green('+ Updated content:'))
-            this.log(updatedContent)
+          if (this.debugMode && !this.nonInteractive) {
+            this.jsonCtx.info(`\nProposed changes for ${chart} :`)
+            this.jsonCtx.info('- Original content:')
+            this.jsonCtx.info(originalContent)
+            this.jsonCtx.info('+ Updated content:')
+            this.jsonCtx.info(updatedContent)
 
             const confirmUpdate = await confirm({
               message: chalk.cyan(`Do you want to apply these changes to ${chart}?`),
             })
 
             if (!confirmUpdate) {
-              this.log(chalk.yellow(`Skipped updating ${chart}`));
+              this.jsonCtx.info(`Skipped updating ${chart}`);
             }
           }
 
-          this.log(chalk.green(`Updated TLS configuration for ${chart} `))
+          this.jsonCtx.info(`Updated TLS configuration for ${chart} `)
         } else {
-          this.log(chalk.green(`No changes needed for ${chart} ()`))
+          this.jsonCtx.info(`No changes needed for ${chart} ()`)
         }
 
       }
@@ -334,26 +390,26 @@ spec:
             updated = true
             const updatedContent = yaml.dump(yamlContent.ingress[ingressType], YAML_DUMP_OPTIONS)
 
-            if (this.debugMode) {
-              this.log(chalk.yellow(`\nProposed changes for ${chart} (${ingressType}):`))
-              this.log(chalk.red('- Original content:'))
-              this.log(originalContent)
-              this.log(chalk.green('+ Updated content:'))
-              this.log(updatedContent)
+            if (this.debugMode && !this.nonInteractive) {
+              this.jsonCtx.info(`\nProposed changes for ${chart} (${ingressType}):`)
+              this.jsonCtx.info('- Original content:')
+              this.jsonCtx.info(originalContent)
+              this.jsonCtx.info('+ Updated content:')
+              this.jsonCtx.info(updatedContent)
 
               const confirmUpdate = await confirm({
                 message: chalk.cyan(`Do you want to apply these changes to ${chart} (${ingressType})?`),
               })
 
               if (!confirmUpdate) {
-                this.log(chalk.yellow(`Skipped updating ${chart} (${ingressType})`))
+                this.jsonCtx.info(`Skipped updating ${chart} (${ingressType})`)
                 continue
               }
             }
 
-            this.log(chalk.green(`Updated TLS configuration for ${chart} (${ingressType})`))
+            this.jsonCtx.info(`Updated TLS configuration for ${chart} (${ingressType})`)
           } else {
-            this.log(chalk.green(`No changes needed for ${chart} (${ingressType})`))
+            this.jsonCtx.info(`No changes needed for ${chart} (${ingressType})`)
           }
         }
       }
@@ -363,51 +419,101 @@ spec:
         const updatedYamlContent = yaml.dump(yamlContent, YAML_DUMP_OPTIONS)
         fs.writeFileSync(yamlPath, updatedYamlContent)
       }
+      return updated
     } catch (error) {
-      this.error(chalk.red(`Failed to update ${chart}: ${error}`))
+      this.jsonCtx.info(`Failed to update ${chart}: ${error}`)
+      return false
     }
   }
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupTls)
+
+    this.nonInteractive = flags['non-interactive']
+    this.jsonMode = flags.json
+    this.jsonCtx = new JsonOutputContext('setup tls', this.jsonMode)
+
     this.debugMode = flags.debug
     this.valuesDir = flags['values-dir']
 
-    try {
-      this.log(chalk.blue('Starting TLS configuration update...'))
+    // In non-interactive mode, validate required flags
+    if (this.nonInteractive) {
+      if (!flags['cluster-issuer'] && !flags['create-issuer']) {
+        this.jsonCtx.error(
+          'E601_MISSING_FIELD',
+          'Either --cluster-issuer or --create-issuer flag is required in non-interactive mode',
+          'CONFIGURATION',
+          true,
+          { requiredFlags: ['--cluster-issuer', '--create-issuer'] }
+        )
+      }
+      if (flags['create-issuer'] && !flags['issuer-email']) {
+        this.jsonCtx.error(
+          'E601_MISSING_FIELD',
+          '--issuer-email flag is required when using --create-issuer',
+          'CONFIGURATION',
+          true,
+          { flag: '--issuer-email' }
+        )
+      }
+    }
 
-      let clusterIssuerExists = await this.checkClusterIssuer()
+    try {
+      this.jsonCtx.info('Starting TLS configuration update...')
+
+      let clusterIssuerExists = await this.checkClusterIssuer(flags['cluster-issuer'])
 
       while (!clusterIssuerExists) {
-        const createIssuer = await confirm({
-          message: chalk.yellow('No suitable ClusterIssuer found. Do you want to create one?'),
-        })
-
-        if (createIssuer) {
-          const email = await input({
-            message: chalk.cyan('Enter your email address for the ClusterIssuer:'),
-            validate: (value) => {
-              if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-                return 'Please enter a valid email address.'
-              }
-              return true
-            },
+        if (this.nonInteractive) {
+          // In non-interactive mode with --create-issuer flag
+          if (flags['create-issuer']) {
+            await this.createClusterIssuer(flags['issuer-email']!)
+            this.selectedIssuer = 'letsencrypt-prod'
+            clusterIssuerExists = true
+          } else {
+            this.jsonCtx.error(
+              'E501_NO_CLUSTER_ISSUER',
+              'No ClusterIssuer found and --create-issuer was not specified',
+              'KUBERNETES',
+              true
+            )
+          }
+        } else {
+          const createIssuer = await confirm({
+            message: chalk.yellow('No suitable ClusterIssuer found. Do you want to create one?'),
           })
 
-          await this.createClusterIssuer(email)
-          clusterIssuerExists = await this.checkClusterIssuer()
-        } else {
-          this.log(chalk.yellow('ClusterIssuer is required for TLS configuration. Exiting.'))
-          return
+          if (createIssuer) {
+            const email = await input({
+              message: chalk.cyan('Enter your email address for the ClusterIssuer:'),
+              validate: (value) => {
+                if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+                  return 'Please enter a valid email address.'
+                }
+                return true
+              },
+            })
+
+            await this.createClusterIssuer(email)
+            clusterIssuerExists = await this.checkClusterIssuer()
+          } else {
+            this.jsonCtx.info('ClusterIssuer is required for TLS configuration. Exiting.')
+            return
+          }
         }
       }
 
       if (!this.selectedIssuer) {
-        this.error(chalk.red('No ClusterIssuer selected. Exiting.'))
+        this.jsonCtx.error(
+          'E501_NO_CLUSTER_ISSUER',
+          'No ClusterIssuer selected. Exiting.',
+          'KUBERNETES',
+          true
+        )
         return
       }
 
-      this.log(chalk.green(`Using ClusterIssuer: ${this.selectedIssuer}`))
+      this.jsonCtx.info(`Using ClusterIssuer: ${this.selectedIssuer}`)
 
       const chartsToUpdate = [
         'admin-system-dashboard',
@@ -425,13 +531,35 @@ spec:
         'blockbook'
       ]
 
+      const updatedCharts: string[] = []
+      const skippedCharts: string[] = []
+
       for (const chart of chartsToUpdate) {
-        await this.updateChartIngress(chart, this.selectedIssuer)
+        const updated = await this.updateChartIngress(chart, this.selectedIssuer)
+        if (updated) {
+          updatedCharts.push(chart)
+        } else {
+          skippedCharts.push(chart)
+        }
       }
 
-      this.log(chalk.green('TLS configuration update completed.'))
+      this.jsonCtx.info('TLS configuration update completed.')
+
+      // JSON success output
+      this.jsonCtx.success({
+        clusterIssuer: this.selectedIssuer,
+        valuesDir: this.valuesDir,
+        updatedCharts,
+        skippedCharts
+      })
     } catch (error) {
-      this.error(chalk.red(`Failed to update TLS configuration: ${error}`))
+      this.jsonCtx.error(
+        'E900_TLS_UPDATE_FAILED',
+        `Failed to update TLS configuration: ${error}`,
+        'INTERNAL',
+        false,
+        { error: String(error) }
+      )
     }
   }
 }

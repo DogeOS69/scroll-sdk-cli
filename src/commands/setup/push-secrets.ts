@@ -7,6 +7,8 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { promisify } from 'node:util'
 import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
+import { JsonOutputContext } from '../../utils/json-output.js'
+import { resolveEnvValue } from '../../utils/non-interactive.js'
 
 const execAsync = promisify(exec)
 
@@ -17,7 +19,17 @@ interface SecretService {
 class AWSSecretService implements SecretService {
   private overrideAll: boolean = false
 
-  constructor(private region: string, private prefixName: string, private debug: boolean) { }
+  constructor(
+    private region: string,
+    private prefixName: string,
+    private debug: boolean,
+    private nonInteractive: boolean = false
+  ) {
+    // In non-interactive mode, always override all by default
+    if (nonInteractive) {
+      this.overrideAll = true
+    }
+  }
 
   async pushSecrets(cubesignerOnly: boolean = false): Promise<void> {
     const secretsDir = path.join(process.cwd(), 'secrets');
@@ -246,10 +258,16 @@ class HashicorpVaultDevService implements SecretService {
   private debug: boolean
   private pathPrefix: string
   private overrideAll: boolean = false
+  private nonInteractive: boolean = false
 
-  constructor(debug: boolean, pathPrefix: string = 'scroll') {
+  constructor(debug: boolean, pathPrefix: string = 'scroll', nonInteractive: boolean = false) {
     this.debug = debug
     this.pathPrefix = pathPrefix
+    this.nonInteractive = nonInteractive
+    // In non-interactive mode, always override all by default
+    if (nonInteractive) {
+      this.overrideAll = true
+    }
   }
 
   async pushSecrets(cubesignerOnly: boolean = false): Promise<void> {
@@ -596,68 +614,213 @@ export default class SetupPushSecrets extends Command {
       default: false,
       description: 'Only push CubeSigner related secrets (cubesigner-signer-* files)',
     }),
+    'non-interactive': Flags.boolean({
+      char: 'N',
+      description: 'Run without prompts. Auto-overrides existing secrets.',
+      default: false,
+    }),
+    json: Flags.boolean({
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
+      default: false,
+    }),
+    // Secret service provider
+    provider: Flags.string({
+      description: 'Secret service provider (aws or vault). Required for non-interactive mode.',
+      options: ['aws', 'vault'],
+    }),
+    // AWS specific flags
+    'aws-prefix': Flags.string({
+      description: 'AWS Secrets Manager path prefix (e.g., dogeos/testnet)',
+      default: 'dogeos',
+    }),
+    'aws-region': Flags.string({
+      description: 'AWS region for secrets (e.g., us-east-1)',
+    }),
+    'aws-service-account': Flags.string({
+      description: 'AWS IAM service account',
+      default: 'external-secrets',
+    }),
+    // Vault specific flags
+    'vault-path': Flags.string({
+      description: 'Vault path prefix',
+      default: 'scroll',
+    }),
+    'vault-server': Flags.string({
+      description: 'Vault server URL',
+      default: 'http://vault.default.svc.cluster.local:8200',
+    }),
+    'vault-token-secret-name': Flags.string({
+      description: 'Vault token secret name',
+      default: 'vault-token',
+    }),
+    'vault-token-secret-key': Flags.string({
+      description: 'Vault token secret key',
+      default: 'token',
+    }),
+    'vault-version': Flags.string({
+      description: 'Vault version',
+      default: 'v2',
+    }),
+    // Skip updating YAML files
+    'skip-yaml-update': Flags.boolean({
+      description: 'Skip updating production YAML files with new secret provider',
+      default: false,
+    }),
   }
 
   private flags: any
+  private nonInteractive: boolean = false
+  private jsonMode: boolean = false
+  private jsonCtx!: JsonOutputContext
 
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupPushSecrets)
     this.flags = flags
 
-    this.log(chalk.blue('Starting secret push process...'))
+    // Setup non-interactive/JSON mode
+    this.nonInteractive = flags['non-interactive']
+    this.jsonMode = flags.json
+    this.jsonCtx = new JsonOutputContext('setup push-secrets', this.jsonMode)
+
+    this.jsonCtx.info('Starting secret push process...')
 
     if (flags['cubesigner-only']) {
-      this.log(chalk.yellow('🔑 CubeSigner only mode: Will only process cubesigner-signer-* files'))
+      this.jsonCtx.info('CubeSigner only mode: Will only process cubesigner-signer-* files')
     }
 
-    const secretService = await select({
-      choices: [
-        { name: 'AWS', value: 'aws' },
-        { name: 'Hashicorp Vault - Dev', value: 'vault' },
-      ],
-      message: chalk.cyan('Select a secret service:'),
-    })
+    let secretService: string
+    if (this.nonInteractive) {
+      // Non-interactive mode: require --provider flag
+      if (!flags.provider) {
+        this.jsonCtx.error(
+          'E601_MISSING_FIELD',
+          '--provider flag is required in non-interactive mode (aws or vault)',
+          'CONFIGURATION',
+          true,
+          { flag: '--provider' }
+        )
+      }
+      secretService = flags.provider
+    } else {
+      secretService = await select({
+        choices: [
+          { name: 'AWS', value: 'aws' },
+          { name: 'Hashicorp Vault - Dev', value: 'vault' },
+        ],
+        message: chalk.cyan('Select a secret service:'),
+      })
+    }
 
     let service: SecretService
     let provider: string
     let credentials: Record<string, string>
 
     if (secretService === 'aws') {
-      credentials = await this.getAWSCredentials()
-      service = new AWSSecretService(credentials.secretRegion, credentials.prefixName, flags.debug)
+      credentials = this.nonInteractive ? this.getAWSCredentialsFromFlags(flags) : await this.getAWSCredentials()
+      service = new AWSSecretService(credentials.secretRegion, credentials.prefixName, flags.debug, this.nonInteractive)
       provider = 'aws'
     } else if (secretService === 'vault') {
-      credentials = await this.getVaultCredentials()
-      service = new HashicorpVaultDevService(flags.debug, credentials.path)
+      credentials = this.nonInteractive ? this.getVaultCredentialsFromFlags(flags) : await this.getVaultCredentials()
+      service = new HashicorpVaultDevService(flags.debug, credentials.path, this.nonInteractive)
       provider = 'vault'
     } else {
+      this.jsonCtx.error(
+        'E601_INVALID_VALUE',
+        'Invalid secret service selected',
+        'CONFIGURATION',
+        false
+      )
       this.error(chalk.red('Invalid secret service selected'))
     }
 
     try {
       await service.pushSecrets(flags['cubesigner-only'])
-      this.log(chalk.green('Secrets pushed successfully'))
+      this.jsonCtx.logSuccess('Secrets pushed successfully')
 
       if (flags['cubesigner-only']) {
-        this.log(chalk.blue('CubeSigner secret push process completed.'))
+        this.jsonCtx.logSuccess('CubeSigner secret push process completed.')
+        if (this.jsonMode) {
+          this.jsonCtx.success({
+            provider,
+            cubesignerOnly: true,
+            secretsPushed: true,
+          })
+        }
         return;
       }
 
-      const shouldUpdateYaml = await confirm({
-        message: chalk.cyan('Do you want to update the production YAML files with the new secret provider?'),
-      })
+      let shouldUpdateYaml: boolean
+      if (this.nonInteractive) {
+        shouldUpdateYaml = !flags['skip-yaml-update']
+        if (!shouldUpdateYaml) {
+          this.jsonCtx.info('Skipping YAML update (--skip-yaml-update)')
+        }
+      } else {
+        shouldUpdateYaml = await confirm({
+          message: chalk.cyan('Do you want to update the production YAML files with the new secret provider?'),
+        })
+      }
 
       if (shouldUpdateYaml) {
         await this.updateProductionYaml(provider, credentials)
-        this.log(chalk.green('Production YAML files updated successfully'))
+        this.jsonCtx.logSuccess('Production YAML files updated successfully')
       } else {
-        this.log(chalk.yellow('Skipped updating production YAML files'))
+        this.jsonCtx.info('Skipped updating production YAML files')
       }
 
-      this.log(chalk.blue('Secret push process completed.'))
+      this.jsonCtx.logSuccess('Secret push process completed.')
+
+      // JSON output
+      if (this.jsonMode) {
+        this.jsonCtx.success({
+          provider,
+          credentials: {
+            prefixName: credentials.prefixName || credentials.path,
+            region: credentials.secretRegion,
+          },
+          secretsPushed: true,
+          yamlUpdated: shouldUpdateYaml,
+        })
+      }
     } catch (error) {
+      if (this.jsonMode) {
+        this.jsonCtx.error(
+          'E900_UNEXPECTED_ERROR',
+          `Failed to push secrets: ${error}`,
+          'INTERNAL',
+          false
+        )
+      }
       this.error(chalk.red(`Failed to push secrets: ${error}`))
+    }
+  }
+
+  private getAWSCredentialsFromFlags(flags: any): Record<string, string> {
+    const region = resolveEnvValue(flags['aws-region'])
+    if (!region) {
+      this.jsonCtx.error(
+        'E601_MISSING_FIELD',
+        '--aws-region is required for AWS provider in non-interactive mode',
+        'CONFIGURATION',
+        true,
+        { flag: '--aws-region' }
+      )
+    }
+    return {
+      prefixName: resolveEnvValue(flags['aws-prefix']) || 'dogeos',
+      secretRegion: region!,
+      serviceAccount: resolveEnvValue(flags['aws-service-account']) || 'external-secrets',
+    }
+  }
+
+  private getVaultCredentialsFromFlags(flags: any): Record<string, string> {
+    return {
+      path: resolveEnvValue(flags['vault-path']) || 'scroll',
+      server: resolveEnvValue(flags['vault-server']) || 'http://vault.default.svc.cluster.local:8200',
+      tokenSecretKey: resolveEnvValue(flags['vault-token-secret-key']) || 'token',
+      tokenSecretName: resolveEnvValue(flags['vault-token-secret-name']) || 'vault-token',
+      version: resolveEnvValue(flags['vault-version']) || 'v2',
     }
   }
 

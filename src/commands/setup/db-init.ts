@@ -5,7 +5,16 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as toml from '@iarna/toml'
 import chalk from 'chalk'
-import { writeConfigs } from '../../utils/config-writer.js';
+import { writeConfigs } from '../../utils/config-writer.js'
+import {
+  createNonInteractiveContext,
+  resolveOrPrompt,
+  resolveConfirm,
+  resolveEnvValue,
+  validateAndExit,
+  type NonInteractiveContext,
+} from '../../utils/non-interactive.js'
+import { JsonOutputContext, ERROR_CODES, getErrorMeta } from '../../utils/json-output.js'
 
 export default class SetupDbInit extends Command {
   static override description = 'Initialize databases with new users and passwords interactively or update permissions'
@@ -16,6 +25,8 @@ export default class SetupDbInit extends Command {
     '<%= config.bin %> <%= command.id %> --update-permissions --debug',
     '<%= config.bin %> <%= command.id %> --clean',
     '<%= config.bin %> <%= command.id %> --update-db-port=25061',
+    '<%= config.bin %> <%= command.id %> --non-interactive',
+    '<%= config.bin %> <%= command.id %> --non-interactive --json --clean',
   ]
 
   static override flags = {
@@ -38,6 +49,15 @@ export default class SetupDbInit extends Command {
       description: 'Update the port of current database values',
       required: false,
     }),
+    'non-interactive': Flags.boolean({
+      char: 'N',
+      description: 'Run without prompts, using config.toml values. Requires [db.admin] section with PUBLIC_HOST, PUBLIC_PORT, USERNAME, PASSWORD (or $ENV: refs)',
+      default: false,
+    }),
+    json: Flags.boolean({
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
+      default: false,
+    }),
   }
 
   private conn: pg.Client | undefined;
@@ -49,7 +69,7 @@ export default class SetupDbInit extends Command {
   private pgPassword: string = "";
   private pgDatabase: string = "";
 
-  private async initializeDatabase(conn: pg.Client, dbName: string, dbUser: string, dbPassword: string, clean: boolean): Promise<void> {
+  private async initializeDatabase(conn: pg.Client, dbName: string, dbUser: string, dbPassword: string, clean: boolean, niCtx?: NonInteractiveContext): Promise<void> {
     try {
       // Check if the database exists
       const dbExistsResult = await conn.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [dbName])
@@ -79,7 +99,13 @@ export default class SetupDbInit extends Command {
           await conn.query(`ALTER USER ${dbUser} WITH PASSWORD '${dbPassword.replace(/'/g, "''")}'`)
           this.log(chalk.green(`Password updated for ${dbUser}.`))
         } else {
-          const changePassword = await confirm({ message: `User ${dbUser} already exists. Do you want to change the password?` })
+          // In non-interactive mode, update password if one was provided
+          const changePassword = await resolveConfirm(
+            niCtx!,
+            () => confirm({ message: `User ${dbUser} already exists. Do you want to change the password?` }),
+            true, // In non-interactive, update password if provided
+            true
+          )
           if (changePassword) {
             await conn.query(`ALTER USER ${dbUser} WITH PASSWORD '${dbPassword.replace(/'/g, "''")}'`)
             this.log(chalk.green(`Password updated for ${dbUser}.`))
@@ -101,10 +127,11 @@ export default class SetupDbInit extends Command {
     }
   }
 
-  private async updateConfigFile(dsnMap: Record<string, string>): Promise<void> {
+  private async updateConfigFile(dsnMap: Record<string, string>, jsonMode: boolean = false): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
     if (!fs.existsSync(configPath)) {
-      this.log(chalk.yellow('config.toml not found in the current directory. Skipping update.'))
+      // Log to stderr in JSON mode
+      console.error(chalk.yellow('config.toml not found in the current directory. Skipping update.'))
       return
     }
 
@@ -130,9 +157,11 @@ export default class SetupDbInit extends Command {
       }
     }
 
-    //fs.writeFileSync(configPath, toml.stringify(config as any))
-    if (writeConfigs(config)) {
-      this.log(chalk.green('config.toml has been updated with the new database connection strings.'))
+    // Pass silent=true when in JSON mode to avoid stdout pollution
+    if (writeConfigs(config, undefined, undefined, jsonMode)) {
+      if (!jsonMode) {
+        this.log(chalk.green('config.toml has been updated with the new database connection strings.'))
+      }
     }
   }
 
@@ -229,32 +258,55 @@ export default class SetupDbInit extends Command {
     const { flags } = await this.parse(SetupDbInit)
     const existingConfig = await this.getExistingConfig()
 
+    // Create non-interactive and JSON output contexts
+    const niCtx = createNonInteractiveContext(
+      'setup db-init',
+      flags['non-interactive'],
+      flags.json
+    )
+    const jsonCtx = new JsonOutputContext('setup db-init', flags.json)
+
+    // Helper for logging
+    const log = (msg: string) => jsonCtx.log(msg)
+
     if (flags['update-port']) {
-      this.log(chalk.blue('Updating database port...'))
+      log(chalk.blue('Updating database port...'))
       this.updateDatabasePort(existingConfig, flags['update-port'])
 
-      const confirmUpdate = await confirm({
-        message: 'Do you want to update the config.toml file with these changes?'
-      })
+      const confirmUpdate = await resolveConfirm(
+        niCtx,
+        () => confirm({
+          message: 'Do you want to update the config.toml file with these changes?'
+        }),
+        true, // In non-interactive mode, always update
+        true
+      )
 
       if (confirmUpdate) {
-        //fs.writeFileSync(path.join(process.cwd(), 'config.toml'), toml.stringify(existingConfig as any))
         if (writeConfigs(existingConfig)) {
-          this.log(chalk.green('config.toml has been updated with the new database port.'))
+          log(chalk.green('config.toml has been updated with the new database port.'))
+          if (flags.json) {
+            jsonCtx.success({ updated: true, action: 'update-port', port: flags['update-port'] })
+          }
         }
-
       } else {
-        this.log(chalk.yellow('Configuration update cancelled.'))
+        log(chalk.yellow('Configuration update cancelled.'))
       }
       return
     }
 
     if (flags.clean) {
-      const confirmClean = await confirm({
-        message: chalk.red('WARNING: This will erase existing databases and overwrite user passwords. Do you want to continue?'),
-      })
+      // In non-interactive mode with --clean, proceed without confirmation
+      const confirmClean = await resolveConfirm(
+        niCtx,
+        () => confirm({
+          message: chalk.red('WARNING: This will erase existing databases and overwrite user passwords. Do you want to continue?'),
+        }),
+        true, // In non-interactive mode with --clean flag, proceed
+        true
+      )
       if (!confirmClean) {
-        this.log(chalk.yellow('Operation aborted.'))
+        log(chalk.yellow('Operation aborted.'))
         return
       }
     }
@@ -265,113 +317,210 @@ export default class SetupDbInit extends Command {
       { name: 'scroll_bridge_history', user: 'BRIDGE_HISTORY' },
     ]
 
-    const createBlockscout = await confirm({
-      message: chalk.cyan('Do you want to create a database for Blockscout?'),
-      default: !!existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING
-    })
+    // In non-interactive mode, check if Blockscout DB string exists in config
+    const createBlockscout = await resolveConfirm(
+      niCtx,
+      () => confirm({
+        message: chalk.cyan('Do you want to create a database for Blockscout?'),
+        default: !!existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING
+      }),
+      existingConfig.db?.CREATE_BLOCKSCOUT_DB ?? !!existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING,
+      !!existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING
+    )
     if (createBlockscout) {
       databases.push({ name: 'scroll_blockscout', user: 'BLOCKSCOUT' })
     }
 
-    const createL1Explorer = await confirm({
-      message: chalk.cyan('Do you want to create a database for L1 Explorer?'),
-      default: !!existingConfig.db?.L1_EXPLORER_DB_CONNECTION_STRING
-    })
+    // In non-interactive mode, check if L1 Explorer DB string exists in config
+    const createL1Explorer = await resolveConfirm(
+      niCtx,
+      () => confirm({
+        message: chalk.cyan('Do you want to create a database for L1 Explorer?'),
+        default: !!existingConfig.db?.L1_EXPLORER_DB_CONNECTION_STRING
+      }),
+      existingConfig.db?.CREATE_L1_EXPLORER_DB ?? !!existingConfig.db?.L1_EXPLORER_DB_CONNECTION_STRING,
+      !!existingConfig.db?.L1_EXPLORER_DB_CONNECTION_STRING
+    )
     if (createL1Explorer) {
       databases.push({ name: 'scroll_l1explorer', user: 'L1_EXPLORER' })
     }
 
     const dsnMap: Record<string, string> = {}
+    const createdDatabases: string[] = []
 
     try {
       // If updating permissions, we only need to connect once
       if (flags['update-permissions']) {
-        [this.publicHost, this.publicPort, this.pgUser, this.pgPassword, this.pgDatabase] = await this.promptForPublicConnectionDetails(existingConfig);
+        [this.publicHost, this.publicPort, this.pgUser, this.pgPassword, this.pgDatabase] = await this.promptForPublicConnectionDetails(existingConfig, niCtx);
+
+        // Validate required fields were resolved
+        validateAndExit(niCtx)
+
         this.conn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, this.pgDatabase);
       }
 
       for (const db of databases) {
-        this.log(chalk.blue(`Setting up db for ${db.name}`));
+        log(chalk.blue(`Setting up db for ${db.name}`));
 
         if (!flags['update-permissions']) {
           // First iteration or if the user chose to connect to a different cluster
           if (!this.conn) {
-            [this.publicHost, this.publicPort, this.vpcHost, this.vpcPort, this.pgUser, this.pgPassword, this.pgDatabase] = await this.promptForConnectionDetails(existingConfig);
+            [this.publicHost, this.publicPort, this.vpcHost, this.vpcPort, this.pgUser, this.pgPassword, this.pgDatabase] = await this.promptForConnectionDetails(existingConfig, niCtx);
+
+            // Validate required fields were resolved
+            validateAndExit(niCtx)
+
             this.conn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, this.pgDatabase);
-          } else if (await confirm({ message: 'Do you want to connect to a different database cluster for this database?', default: false })) {
-            // User chose to connect to a different cluster
-            await this.conn.end();
-            [this.publicHost, this.publicPort, this.vpcHost, this.vpcPort, this.pgUser, this.pgPassword, this.pgDatabase] = await this.promptForConnectionDetails(existingConfig);
-            this.conn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, this.pgDatabase);
+          } else {
+            // In non-interactive mode, never prompt to switch clusters
+            const switchCluster = await resolveConfirm(
+              niCtx,
+              () => confirm({ message: 'Do you want to connect to a different database cluster for this database?', default: false }),
+              false, // In non-interactive, don't switch clusters
+              false
+            )
+            if (switchCluster) {
+              // User chose to connect to a different cluster
+              await this.conn.end();
+              [this.publicHost, this.publicPort, this.vpcHost, this.vpcPort, this.pgUser, this.pgPassword, this.pgDatabase] = await this.promptForConnectionDetails(existingConfig, niCtx);
+              validateAndExit(niCtx)
+              this.conn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, this.pgDatabase);
+            }
           }
         }
 
         if (!this.conn) {
+          if (flags.json) {
+            jsonCtx.error(
+              'E304_DATABASE_UNREACHABLE',
+              'Database connection not established',
+              'NETWORK',
+              true,
+              { host: this.publicHost, port: this.publicPort }
+            )
+          }
           throw new Error('Database connection not established');
         }
 
         if (flags['update-permissions']) {
           if (flags.debug) {
-            this.log(chalk.yellow('Debug mode: Showing SQL queries'));
+            log(chalk.yellow('Debug mode: Showing SQL queries'));
           }
           await this.updatePermissions(this.conn, db.name, db.user.toLowerCase(), flags.debug)
         } else {
-          this.log(chalk.blue(`Setting up database: ${db.name} for user: ${db.user}`))
+          log(chalk.blue(`Setting up database: ${db.name} for user: ${db.user}`))
 
           let dbPassword: string;
           const existingDsn = existingConfig.db?.[`${db.user}_DB_CONNECTION_STRING`];
-          if (existingDsn) {
-            const keepExistingPassword = await confirm({
-              message: `An existing password was found for ${db.user}. Do you want to keep it?`,
-              default: true
-            });
-            if (keepExistingPassword) {
+
+          // Check for password in config (supports $ENV: pattern)
+          const configPassword = resolveEnvValue(existingConfig.db?.[`${db.user}_PASSWORD`])
+
+          if (niCtx.enabled) {
+            // Non-interactive mode: use config password, existing DSN password, or generate random
+            if (configPassword) {
+              dbPassword = configPassword
+              log(chalk.green(`Using configured password for ${db.user}`))
+            } else if (existingDsn) {
               dbPassword = existingDsn.match(/postgres:\/\/.*:(.*)@/)?.[1] || '';
-              this.log(chalk.green(`Using existing password for ${db.user}`));
+              if (dbPassword) {
+                log(chalk.green(`Using existing password from DSN for ${db.user}`))
+              } else {
+                dbPassword = Math.random().toString(36).slice(-12);
+                log(chalk.green(`Generated random password for ${db.user}`))
+              }
+            } else {
+              dbPassword = Math.random().toString(36).slice(-12);
+              log(chalk.green(`Generated random password for ${db.user}`))
+            }
+          } else {
+            // Interactive mode - original logic
+            if (existingDsn) {
+              const keepExistingPassword = await confirm({
+                message: `An existing password was found for ${db.user}. Do you want to keep it?`,
+                default: true
+              });
+              if (keepExistingPassword) {
+                dbPassword = existingDsn.match(/postgres:\/\/.*:(.*)@/)?.[1] || '';
+                log(chalk.green(`Using existing password for ${db.user}`));
+              } else {
+                const useRandomPassword = await confirm({
+                  message: `Do you want to use a random password for ${db.user}?`,
+                  default: true
+                });
+                if (useRandomPassword) {
+                  dbPassword = Math.random().toString(36).slice(-12);
+                  log(chalk.green(`Generated random password for ${db.user}`));
+                } else {
+                  dbPassword = await password({ message: `Enter new password for ${db.user}:` });
+                }
+              }
             } else {
               const useRandomPassword = await confirm({
                 message: `Do you want to use a random password for ${db.user}?`,
                 default: true
               });
               if (useRandomPassword) {
-                dbPassword = Math.random().toString(36).slice(-12); // Generate a random 12-character password
-                this.log(chalk.green(`Generated random password for ${db.user}`));
+                dbPassword = Math.random().toString(36).slice(-12);
+                log(chalk.green(`Generated random password for ${db.user}`));
               } else {
-                dbPassword = await password({ message: `Enter new password for ${db.user}:` });
+                dbPassword = await password({ message: `Enter password for ${db.user}:` });
               }
-            }
-          } else {
-            const useRandomPassword = await confirm({
-              message: `Do you want to use a random password for ${db.user}?`,
-              default: true
-            });
-            if (useRandomPassword) {
-              dbPassword = Math.random().toString(36).slice(-12); // Generate a random 12-character password
-              this.log(chalk.green(`Generated random password for ${db.user}`));
-            } else {
-              dbPassword = await password({ message: `Enter password for ${db.user}:` });
             }
           }
 
-          await this.initializeDatabase(this.conn, db.name, db.user.toLowerCase(), dbPassword, flags.clean)
+          await this.initializeDatabase(this.conn, db.name, db.user.toLowerCase(), dbPassword, flags.clean, niCtx)
 
           const dsn = `postgres://${db.user.toLowerCase()}:${dbPassword}@${this.vpcHost}:${this.vpcPort}/${db.name}?sslmode=require`
-          this.log(chalk.cyan(`DSN for ${db.user}:\n${dsn}`))
+          log(chalk.cyan(`DSN for ${db.user}:\n${dsn}`))
 
           dsnMap[db.user] = dsn
+          createdDatabases.push(db.name)
         }
       }
 
       if (!flags['update-permissions']) {
-        this.log(chalk.green('All databases initialized successfully.'))
+        log(chalk.green('All databases initialized successfully.'))
 
-        const updateConfig = await confirm({ message: 'Do you want to update the config.toml file with the new DSNs?' })
+        const updateConfig = await resolveConfirm(
+          niCtx,
+          () => confirm({ message: 'Do you want to update the config.toml file with the new DSNs?' }),
+          true, // In non-interactive, always update config
+          true
+        )
         if (updateConfig) {
-          await this.updateConfigFile(dsnMap)
+          await this.updateConfigFile(dsnMap, flags.json)
+        }
+
+        // Output JSON response on success
+        if (flags.json) {
+          jsonCtx.success({
+            action: 'db-init',
+            databases: createdDatabases,
+            configUpdated: updateConfig,
+          })
         }
       } else {
-        this.log(chalk.green('Permissions updated for all databases.'))
+        log(chalk.green('Permissions updated for all databases.'))
+        if (flags.json) {
+          jsonCtx.success({
+            action: 'update-permissions',
+            databases: databases.map(d => d.name),
+          })
+        }
       }
+    } catch (error) {
+      if (flags.json) {
+        const errorMsg = error instanceof Error ? error.message : String(error)
+        jsonCtx.error(
+          'E304_DATABASE_UNREACHABLE',
+          `Database operation failed: ${errorMsg}`,
+          'NETWORK',
+          true,
+          { error: errorMsg }
+        )
+      }
+      throw error
     } finally {
       if (this.conn) {
         await this.conn.end()
@@ -379,13 +528,74 @@ export default class SetupDbInit extends Command {
     }
   }
 
-  private async promptForConnectionDetails(existingConfig: any): Promise<[string, string, string, string, string, string, string]> {
+  private async promptForConnectionDetails(existingConfig: any, niCtx?: NonInteractiveContext): Promise<[string, string, string, string, string, string, string]> {
     this.log(chalk.blue('First, provide connection information for the database instance. This will only be used for creating users and databases. This information will not be persisted in your configuration repo.'));
-    const publicHost = await input({ message: 'Enter public PostgreSQL host:', default: 'localhost' })
-    const publicPort = await input({ message: 'Enter public PostgreSQL port:', default: '5432' })
-    const pgUser = await input({ message: 'Enter PostgreSQL admin username:', default: 'dogeosadmin' })
-    const pgPassword = await password({ message: 'Enter PostgreSQL admin password:' })
-    const pgDatabase = await input({ message: 'Enter PostgreSQL database name:', default: 'postgres' })
+
+    // For non-interactive mode, look for [db.admin] section in config
+    const adminConfig = existingConfig.db?.admin || {}
+
+    const publicHost = await resolveOrPrompt(
+      niCtx!,
+      () => input({ message: 'Enter public PostgreSQL host:', default: 'localhost' }),
+      resolveEnvValue(adminConfig.PUBLIC_HOST) || 'localhost',
+      {
+        field: 'PUBLIC_HOST',
+        configPath: '[db.admin].PUBLIC_HOST',
+        description: 'Public PostgreSQL host for admin connections',
+      }
+    ) || 'localhost'
+
+    const publicPort = await resolveOrPrompt(
+      niCtx!,
+      () => input({ message: 'Enter public PostgreSQL port:', default: '5432' }),
+      resolveEnvValue(adminConfig.PUBLIC_PORT) || '5432',
+      {
+        field: 'PUBLIC_PORT',
+        configPath: '[db.admin].PUBLIC_PORT',
+        description: 'Public PostgreSQL port for admin connections',
+      }
+    ) || '5432'
+
+    const pgUser = await resolveOrPrompt(
+      niCtx!,
+      () => input({ message: 'Enter PostgreSQL admin username:', default: 'dogeosadmin' }),
+      resolveEnvValue(adminConfig.USERNAME) || 'dogeosadmin',
+      {
+        field: 'USERNAME',
+        configPath: '[db.admin].USERNAME',
+        description: 'PostgreSQL admin username',
+      }
+    ) || 'dogeosadmin'
+
+    // Password is required - in non-interactive mode, must come from config or $ENV:
+    let pgPassword: string
+    if (niCtx?.enabled) {
+      const configPassword = resolveEnvValue(adminConfig.PASSWORD)
+      if (!configPassword) {
+        niCtx.missingFields.push({
+          field: 'PASSWORD',
+          configPath: '[db.admin].PASSWORD',
+          description: 'PostgreSQL admin password (use $ENV:VAR_NAME for secrets)',
+        })
+        pgPassword = ''
+      } else {
+        pgPassword = configPassword
+      }
+    } else {
+      pgPassword = await password({ message: 'Enter PostgreSQL admin password:' })
+    }
+
+    const pgDatabase = await resolveOrPrompt(
+      niCtx!,
+      () => input({ message: 'Enter PostgreSQL database name:', default: 'postgres' }),
+      resolveEnvValue(adminConfig.DATABASE) || 'postgres',
+      {
+        field: 'DATABASE',
+        configPath: '[db.admin].DATABASE',
+        description: 'PostgreSQL database name for admin connection',
+      },
+      false
+    ) || 'postgres'
 
     this.log(chalk.blue('Now, provide connection information for pods. This will often be use localhost or a private IP. This information is stored in DSN strings in your configuration file and used in Secrets.'));
 
@@ -401,14 +611,36 @@ export default class SetupDbInit extends Command {
       }
     }
 
-    const privateHost = await input({ message: 'Enter PostgreSQL host:', default: defaultPrivateHost })
-    const privatePort = await input({ message: 'Enter PostgreSQL port:', default: defaultPrivatePort })
+    const privateHost = await resolveOrPrompt(
+      niCtx!,
+      () => input({ message: 'Enter PostgreSQL host:', default: defaultPrivateHost }),
+      resolveEnvValue(adminConfig.VPC_HOST) || defaultPrivateHost,
+      {
+        field: 'VPC_HOST',
+        configPath: '[db.admin].VPC_HOST',
+        description: 'PostgreSQL VPC/private host for pod connections',
+      }
+    ) || defaultPrivateHost
+
+    const privatePort = await resolveOrPrompt(
+      niCtx!,
+      () => input({ message: 'Enter PostgreSQL port:', default: defaultPrivatePort }),
+      resolveEnvValue(adminConfig.VPC_PORT) || defaultPrivatePort,
+      {
+        field: 'VPC_PORT',
+        configPath: '[db.admin].VPC_PORT',
+        description: 'PostgreSQL VPC/private port for pod connections',
+      }
+    ) || defaultPrivatePort
 
     return [publicHost, publicPort, privateHost, privatePort, pgUser, pgPassword, pgDatabase]
   }
 
-  private async promptForPublicConnectionDetails(existingConfig: any): Promise<[string, string, string, string, string]> {
+  private async promptForPublicConnectionDetails(existingConfig: any, niCtx?: NonInteractiveContext): Promise<[string, string, string, string, string]> {
     this.log(chalk.blue('Provide connection information for the database instance. This will only be used for updating permissions.'));
+
+    // For non-interactive mode, look for [db.admin] section in config
+    const adminConfig = existingConfig.db?.admin || {}
 
     // Extract host and port from an existing DSN if available
     let defaultHost = 'localhost'
@@ -422,11 +654,68 @@ export default class SetupDbInit extends Command {
       }
     }
 
-    const publicHost = await input({ message: 'Enter public PostgreSQL host:', default: defaultHost })
-    const publicPort = await input({ message: 'Enter public PostgreSQL port:', default: defaultPort })
-    const pgUser = await input({ message: 'Enter PostgreSQL admin username:', default: 'admin' })
-    const pgPassword = await password({ message: 'Enter PostgreSQL admin password:' })
-    const pgDatabase = await input({ message: 'Enter PostgreSQL database name:', default: 'postgres' })
+    const publicHost = await resolveOrPrompt(
+      niCtx!,
+      () => input({ message: 'Enter public PostgreSQL host:', default: defaultHost }),
+      resolveEnvValue(adminConfig.PUBLIC_HOST) || defaultHost,
+      {
+        field: 'PUBLIC_HOST',
+        configPath: '[db.admin].PUBLIC_HOST',
+        description: 'Public PostgreSQL host for admin connections',
+      }
+    ) || defaultHost
+
+    const publicPort = await resolveOrPrompt(
+      niCtx!,
+      () => input({ message: 'Enter public PostgreSQL port:', default: defaultPort }),
+      resolveEnvValue(adminConfig.PUBLIC_PORT) || defaultPort,
+      {
+        field: 'PUBLIC_PORT',
+        configPath: '[db.admin].PUBLIC_PORT',
+        description: 'Public PostgreSQL port for admin connections',
+      }
+    ) || defaultPort
+
+    const pgUser = await resolveOrPrompt(
+      niCtx!,
+      () => input({ message: 'Enter PostgreSQL admin username:', default: 'admin' }),
+      resolveEnvValue(adminConfig.USERNAME) || 'admin',
+      {
+        field: 'USERNAME',
+        configPath: '[db.admin].USERNAME',
+        description: 'PostgreSQL admin username',
+      }
+    ) || 'admin'
+
+    // Password is required - in non-interactive mode, must come from config or $ENV:
+    let pgPassword: string
+    if (niCtx?.enabled) {
+      const configPassword = resolveEnvValue(adminConfig.PASSWORD)
+      if (!configPassword) {
+        niCtx.missingFields.push({
+          field: 'PASSWORD',
+          configPath: '[db.admin].PASSWORD',
+          description: 'PostgreSQL admin password (use $ENV:VAR_NAME for secrets)',
+        })
+        pgPassword = ''
+      } else {
+        pgPassword = configPassword
+      }
+    } else {
+      pgPassword = await password({ message: 'Enter PostgreSQL admin password:' })
+    }
+
+    const pgDatabase = await resolveOrPrompt(
+      niCtx!,
+      () => input({ message: 'Enter PostgreSQL database name:', default: 'postgres' }),
+      resolveEnvValue(adminConfig.DATABASE) || 'postgres',
+      {
+        field: 'DATABASE',
+        configPath: '[db.admin].DATABASE',
+        description: 'PostgreSQL database name for admin connection',
+      },
+      false
+    ) || 'postgres'
 
     return [publicHost, publicPort, pgUser, pgPassword, pgDatabase]
   }

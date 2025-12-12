@@ -12,16 +12,33 @@ import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { getSetupDefaultsPath, SETUP_DEFAULTS_TEMPLATE } from '../../config/constants.js'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
+import { JsonOutputContext } from '../../utils/json-output.js'
+import { resolveEnvValue } from '../../utils/non-interactive.js'
 const { Networks, PrivateKey } = bitcore
 const defaultTag = '0.2.0-rc.3'
+
+export interface NonInteractiveOptions {
+  numSigners?: number
+  threshold?: number
+  generateWifKeys?: boolean
+  wifNetwork?: 'regtest' | 'testnet' | 'mainnet'
+  awsRegion?: string
+  awsNetworkAlias?: string
+  awsAccountId?: string
+  awsSuffixes?: string
+}
 
 export class DummySignersManager {
   private dogeConfig: DogeConfig
   private configPath: string
   private imageTag: string
-  private log: (message: string) => void
-  private warn: (message: string) => void
-  private error: (message: string) => void
+  private _log: (message: string) => void
+  private _warn: (message: string) => void
+  private _error: (message: string) => void
+  private nonInteractive: boolean
+  private nonInteractiveOptions: NonInteractiveOptions
+  private jsonMode: boolean
+  private jsonCtx?: JsonOutputContext
 
   constructor(
     dogeConfig: DogeConfig,
@@ -31,14 +48,48 @@ export class DummySignersManager {
       log: (message: string) => void
       warn: (message: string) => void
       error: (message: string) => void
-    }
+    },
+    nonInteractive: boolean = false,
+    nonInteractiveOptions: NonInteractiveOptions = {},
+    jsonMode: boolean = false,
+    jsonCtx?: JsonOutputContext
   ) {
     this.dogeConfig = dogeConfig
     this.configPath = configPath
     this.imageTag = imageTag
-    this.log = logger.log
-    this.warn = logger.warn
-    this.error = logger.error
+    this._log = logger.log
+    this._warn = logger.warn
+    this._error = logger.error
+    this.nonInteractive = nonInteractive
+    this.nonInteractiveOptions = nonInteractiveOptions
+    this.jsonMode = jsonMode
+    this.jsonCtx = jsonCtx
+  }
+
+  // JSON-aware logging methods - route to stderr in JSON mode
+  private log(message: string): void {
+    if (this.jsonMode && this.jsonCtx) {
+      this.jsonCtx.info(message)
+    } else {
+      this._log(message)
+    }
+  }
+
+  private warn(message: string): void {
+    if (this.jsonMode && this.jsonCtx) {
+      this.jsonCtx.addWarning(message)
+    } else {
+      this._warn(message)
+    }
+  }
+
+  private error(message: string): void {
+    if (this.jsonMode && this.jsonCtx) {
+      // For errors, we still need to throw/exit, so use the original error
+      // but also log to stderr
+      console.error(message)
+    }
+    this._error(message)
   }
 
   private validators = {
@@ -159,22 +210,29 @@ export class DummySignersManager {
   async setupDummySigners(availableTags: string[]): Promise<void> {
     this.log(chalk.blue('\nSetting up Dummy Signers...'))
 
-    const deploymentType = await select({
-      message: 'How would you like to run the dummy signers?',
-      choices: [
-        {
-          name: 'Local (Docker) - For development/testing',
-          value: 'local',
-          description: 'Run signers locally using Docker with WIF keys'
-        },
-        {
-          name: 'AWS (App Runner + KMS)',
-          value: 'aws',
-          description: 'Deploy signers to AWS App Runner with KMS key management'
-        }
-      ],
-      default: this.dogeConfig.deploymentType || 'local'
-    })
+    let deploymentType: string
+    if (this.nonInteractive) {
+      // In non-interactive mode, use existing deploymentType from config or default to 'local'
+      deploymentType = this.dogeConfig.deploymentType || 'local'
+      this.log(chalk.blue(`Non-interactive mode: Using deployment type '${deploymentType}'`))
+    } else {
+      deploymentType = await select({
+        message: 'How would you like to run the dummy signers?',
+        choices: [
+          {
+            name: 'Local (Docker) - For development/testing',
+            value: 'local',
+            description: 'Run signers locally using Docker with WIF keys'
+          },
+          {
+            name: 'AWS (App Runner + KMS)',
+            value: 'aws',
+            description: 'Deploy signers to AWS App Runner with KMS key management'
+          }
+        ],
+        default: this.dogeConfig.deploymentType || 'local'
+      })
+    }
 
     this.dogeConfig.deploymentType = deploymentType as 'local' | 'aws'
 
@@ -242,13 +300,18 @@ export class DummySignersManager {
       return
     }
 
-    const NUM_SIGNERS = await input({
-      message: 'Number of signers to run locally',
-      default: '3',
-      validate: this.validators.signerCount
-    })
-
-    const numSigners = parseInt(NUM_SIGNERS)
+    let numSigners: number
+    if (this.nonInteractive) {
+      numSigners = this.nonInteractiveOptions.numSigners || 3
+      this.log(chalk.blue(`Non-interactive mode: Using ${numSigners} signers`))
+    } else {
+      const NUM_SIGNERS = await input({
+        message: 'Number of signers to run locally',
+        default: '3',
+        validate: this.validators.signerCount
+      })
+      numSigners = parseInt(NUM_SIGNERS)
+    }
 
     // Ask user to choose correctness_threshold right after number of signers
     this.log(chalk.cyan(`You will have ${numSigners} correctness signers.`))
@@ -262,18 +325,24 @@ export class DummySignersManager {
       defaultThreshold = Math.ceil(numSigners * 2 / 3) // 2/3 majority
     }
 
-    const thresholdStr = await input({
-      message: chalk.cyan(`Enter correctness threshold (how many signatures required, 1-${numSigners}):`),
-      default: defaultThreshold.toString(),
-      validate: (value: string) => {
-        const num = parseInt(value)
-        if (isNaN(num) || num < 1 || num > numSigners) {
-          return `Please enter a number between 1 and ${numSigners}`
+    let threshold: number
+    if (this.nonInteractive) {
+      threshold = this.nonInteractiveOptions.threshold || defaultThreshold
+      this.log(chalk.blue(`Non-interactive mode: Using threshold ${threshold}`))
+    } else {
+      const thresholdStr = await input({
+        message: chalk.cyan(`Enter correctness threshold (how many signatures required, 1-${numSigners}):`),
+        default: defaultThreshold.toString(),
+        validate: (value: string) => {
+          const num = parseInt(value)
+          if (isNaN(num) || num < 1 || num > numSigners) {
+            return `Please enter a number between 1 and ${numSigners}`
+          }
+          return true
         }
-        return true
-      }
-    })
-    const threshold = parseInt(thresholdStr)
+      })
+      threshold = parseInt(thresholdStr)
+    }
 
     const TSO_URL = this.readTsoUrlFromConfig()
     if (!TSO_URL) {
@@ -283,10 +352,16 @@ export class DummySignersManager {
 
     const NETWORK = this.dogeConfig.network
 
-    const generateWifKeys = await confirm({
-      message: 'Would you like to generate new WIF keys for the signers?',
-      default: true
-    })
+    let generateWifKeys: boolean
+    if (this.nonInteractive) {
+      generateWifKeys = this.nonInteractiveOptions.generateWifKeys !== false // default true
+      this.log(chalk.blue(`Non-interactive mode: Generate WIF keys = ${generateWifKeys}`))
+    } else {
+      generateWifKeys = await confirm({
+        message: 'Would you like to generate new WIF keys for the signers?',
+        default: true
+      })
+    }
 
     const signerConfigs = await this.collectSignerConfigs(numSigners, generateWifKeys)
 
@@ -312,27 +387,32 @@ export class DummySignersManager {
     // Let user choose network type if generating WIF keys
     let selectedNetwork = 'testnet'
     if (generateWifKeys) {
-      selectedNetwork = await select({
-        message: 'Choose network type for WIF generation',
-        choices: [
-          {
-            name: 'Regtest (Local development)',
-            value: 'regtest',
-            description: 'Local regression test network for development'
-          },
-          {
-            name: 'Testnet (Public test network)',
-            value: 'testnet',
-            description: 'Public Dogecoin test network'
-          },
-          {
-            name: 'Mainnet (Production network)',
-            value: 'mainnet',
-            description: 'Production Dogecoin network'
-          }
-        ],
-        default: 'regtest'
-      })
+      if (this.nonInteractive) {
+        selectedNetwork = this.nonInteractiveOptions.wifNetwork || 'regtest'
+        this.log(chalk.blue(`Non-interactive mode: Using WIF network '${selectedNetwork}'`))
+      } else {
+        selectedNetwork = await select({
+          message: 'Choose network type for WIF generation',
+          choices: [
+            {
+              name: 'Regtest (Local development)',
+              value: 'regtest',
+              description: 'Local regression test network for development'
+            },
+            {
+              name: 'Testnet (Public test network)',
+              value: 'testnet',
+              description: 'Public Dogecoin test network'
+            },
+            {
+              name: 'Mainnet (Production network)',
+              value: 'mainnet',
+              description: 'Production Dogecoin network'
+            }
+          ],
+          default: 'regtest'
+        })
+      }
     }
 
     for (let i = 0; i < numSigners; i++) {
@@ -344,10 +424,15 @@ export class DummySignersManager {
         wif = this.generateWIF(selectedNetwork)
         this.log(chalk.green(`Generated WIF for signer ${i}: ${wif}`))
       } else {
-        wif = await input({
-          message: `Enter WIF private key for signer ${i}`,
-          validate: this.validators.required
-        })
+        if (this.nonInteractive) {
+          this.error(`WIF key for signer ${i} required when not generating keys in non-interactive mode`)
+          wif = '' // Will fail but we need to continue for type safety
+        } else {
+          wif = await input({
+            message: `Enter WIF private key for signer ${i}`,
+            validate: this.validators.required
+          })
+        }
       }
 
       signerConfigs.push({ wif, port })
@@ -591,36 +676,71 @@ export class DummySignersManager {
       this.warn(chalk.yellow(`⚠️  Warning: Image tag '${this.imageTag}' not found in Docker registry.`))
       this.log(chalk.blue(`Available tags: ${availableTags.slice(0, 10).join(', ')}${availableTags.length > 10 ? '...' : ''}`))
 
-      const proceedAnyway = await confirm({
-        message: 'The specified image tag was not found in the registry. Do you want to proceed anyway?',
-        default: false
-      })
+      if (this.nonInteractive) {
+        this.warn(chalk.yellow('Non-interactive mode: Proceeding with unverified image tag'))
+      } else {
+        const proceedAnyway = await confirm({
+          message: 'The specified image tag was not found in the registry. Do you want to proceed anyway?',
+          default: false
+        })
 
-      if (!proceedAnyway) {
-        this.log(chalk.yellow('AWS deployment cancelled.'))
-        return
+        if (!proceedAnyway) {
+          this.log(chalk.yellow('AWS deployment cancelled.'))
+          return
+        }
       }
     } else {
       this.log(chalk.green(`✅ Verified image tag '${this.imageTag}' exists in registry.`))
     }
 
-    const AWS_REGION = await input({
-      message: 'AWS_REGION',
-      default: this.dogeConfig.awsSigner?.region || 'us-east-1',
-      required: true,
-    })
+    let AWS_REGION: string
+    let NETWORK_ALIAS: string
+    let AWS_ACCOUNT_ID: string
+    let SUFFIXES: string
 
-    const NETWORK_ALIAS = await input({
-      message: 'NETWORK_ALIAS',
-      default: this.dogeConfig.awsSigner?.networkAlias || 'devnet',
-      required: true,
-    })
+    if (this.nonInteractive) {
+      AWS_REGION = this.nonInteractiveOptions.awsRegion || this.dogeConfig.awsSigner?.region || 'us-east-1'
+      NETWORK_ALIAS = this.nonInteractiveOptions.awsNetworkAlias || this.dogeConfig.awsSigner?.networkAlias || 'devnet'
+      AWS_ACCOUNT_ID = this.nonInteractiveOptions.awsAccountId || this.dogeConfig.awsSigner?.accountId || ''
+      SUFFIXES = this.nonInteractiveOptions.awsSuffixes || this.dogeConfig.awsSigner?.suffixes || '00 01 02'
 
-    const AWS_ACCOUNT_ID = await input({
-      message: 'AWS_ACCOUNT_ID',
-      required: true,
-      default: this.dogeConfig.awsSigner?.accountId || '',
-    })
+      if (!AWS_ACCOUNT_ID) {
+        this.error('AWS_ACCOUNT_ID is required for AWS deployment in non-interactive mode. Use --aws-account-id flag.')
+        return
+      }
+
+      this.log(chalk.blue(`Non-interactive mode: AWS_REGION=${AWS_REGION}, NETWORK_ALIAS=${NETWORK_ALIAS}, AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}, SUFFIXES=${SUFFIXES}`))
+    } else {
+      AWS_REGION = await input({
+        message: 'AWS_REGION',
+        default: this.dogeConfig.awsSigner?.region || 'us-east-1',
+        required: true,
+      })
+
+      NETWORK_ALIAS = await input({
+        message: 'NETWORK_ALIAS',
+        default: this.dogeConfig.awsSigner?.networkAlias || 'devnet',
+        required: true,
+      })
+
+      AWS_ACCOUNT_ID = await input({
+        message: 'AWS_ACCOUNT_ID',
+        required: true,
+        default: this.dogeConfig.awsSigner?.accountId || '',
+      })
+
+      SUFFIXES = await input({
+        message: `Enter suffixes for dummy signer instances (space-separated)
+  Each suffix creates a complete AWS service set:
+    • App Runner service: ${NETWORK_ALIAS}-dummy-signer-{suffix}
+    • KMS key with alias: alias/${NETWORK_ALIAS}-dummy-signer-{suffix}-key
+    • IAM role: ${NETWORK_ALIAS}-dummy-signer-{suffix}-role
+
+  Examples: "00 01 02" = 3 signers, "00" = 1 signer, "a b c" = 3 signers with custom suffixes`,
+        default: this.dogeConfig.awsSigner?.suffixes || '00 01 02',
+        required: false,
+      })
+    }
 
     const IMAGE_URI = `${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/dogeos/dummy-signer:latest`
 
@@ -629,18 +749,6 @@ export class DummySignersManager {
       this.error('TSO_HOST not found in config.toml. Please run "scrollsdk setup domains" first.')
       return
     }
-
-    const SUFFIXES = await input({
-      message: `Enter suffixes for dummy signer instances (space-separated)
-  Each suffix creates a complete AWS service set:
-    • App Runner service: ${NETWORK_ALIAS}-dummy-signer-{suffix}
-    • KMS key with alias: alias/${NETWORK_ALIAS}-dummy-signer-{suffix}-key
-    • IAM role: ${NETWORK_ALIAS}-dummy-signer-{suffix}-role
-  
-  Examples: "00 01 02" = 3 signers, "00" = 1 signer, "a b c" = 3 signers with custom suffixes`,
-      default: this.dogeConfig.awsSigner?.suffixes || '00 01 02',
-      required: false,
-    })
 
     const suffixes = SUFFIXES.split(' ').filter(s => s.trim())
     const numSigners = suffixes.length
@@ -657,18 +765,24 @@ export class DummySignersManager {
       defaultThreshold = Math.ceil(numSigners * 2 / 3) // 2/3 majority
     }
 
-    const thresholdStr = await input({
-      message: chalk.cyan(`Enter correctness threshold (how many signatures required, 1-${numSigners}):`),
-      default: defaultThreshold.toString(),
-      validate: (value: string) => {
-        const num = parseInt(value)
-        if (isNaN(num) || num < 1 || num > numSigners) {
-          return `Please enter a number between 1 and ${numSigners}`
+    let threshold: number
+    if (this.nonInteractive) {
+      threshold = this.nonInteractiveOptions.threshold || defaultThreshold
+      this.log(chalk.blue(`Non-interactive mode: Using threshold ${threshold}`))
+    } else {
+      const thresholdStr = await input({
+        message: chalk.cyan(`Enter correctness threshold (how many signatures required, 1-${numSigners}):`),
+        default: defaultThreshold.toString(),
+        validate: (value: string) => {
+          const num = parseInt(value)
+          if (isNaN(num) || num < 1 || num > numSigners) {
+            return `Please enter a number between 1 and ${numSigners}`
+          }
+          return true
         }
-        return true
-      }
-    })
-    const threshold = parseInt(thresholdStr)
+      })
+      threshold = parseInt(thresholdStr)
+    }
 
     await this.saveAwsSignerConfig({
       region: AWS_REGION,
@@ -1063,10 +1177,53 @@ export class DummySignersCommand extends Command {
       description: 'Specify the Docker image tag to use',
       required: false,
     }),
+    'non-interactive': Flags.boolean({
+      char: 'N',
+      description: 'Run without prompts. Uses config values or sensible defaults.',
+      default: false,
+    }),
+    json: Flags.boolean({
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
+      default: false,
+    }),
+    // Local signer options
+    'num-signers': Flags.integer({
+      description: 'Number of signers (non-interactive mode)',
+      default: 3,
+    }),
+    threshold: Flags.integer({
+      description: 'Correctness threshold (non-interactive mode). Defaults to 2/3 majority.',
+    }),
+    'wif-network': Flags.string({
+      description: 'Network for WIF generation: regtest, testnet, or mainnet',
+      options: ['regtest', 'testnet', 'mainnet'],
+      default: 'regtest',
+    }),
+    'generate-wif-keys': Flags.boolean({
+      description: 'Generate new WIF keys (non-interactive mode)',
+      default: true,
+      allowNo: true,
+    }),
+    // AWS signer options
+    'aws-region': Flags.string({
+      description: 'AWS region for KMS signers',
+    }),
+    'aws-network-alias': Flags.string({
+      description: 'Network alias for AWS resources',
+    }),
+    'aws-account-id': Flags.string({
+      description: 'AWS account ID',
+    }),
+    'aws-suffixes': Flags.string({
+      description: 'Space-separated suffixes for AWS signers (e.g., "00 01 02")',
+    }),
   }
 
   private dogeConfig: DogeConfig = {} as DogeConfig
   private configPath: string = ''
+  private nonInteractive: boolean = false
+  private jsonMode: boolean = false
+  private jsonCtx!: JsonOutputContext
 
   private async fetchDockerTags(): Promise<string[]> {
     try {
@@ -1086,8 +1243,6 @@ export class DummySignersCommand extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    
-
     if (!providedTag) {
       return defaultTag
     }
@@ -1117,6 +1272,12 @@ export class DummySignersCommand extends Command {
       }
     }
 
+    // In non-interactive mode, use the provided tag or default
+    if (this.nonInteractive) {
+      this.jsonCtx.addWarning(`Provided tag "${providedTag}" not found, using default: ${defaultTag}`)
+      return defaultTag
+    }
+
     const selectedTag = await select({
       choices: tags.map((tag: string) => ({ name: tag, value: tag })),
       message: 'Select a Docker image tag:',
@@ -1128,24 +1289,50 @@ export class DummySignersCommand extends Command {
   async run(): Promise<void> {
     const { flags } = await this.parse(DummySignersCommand)
 
-    // Load config
+    // Setup non-interactive/JSON mode
+    this.nonInteractive = flags['non-interactive']
+    this.jsonMode = flags.json
+    this.jsonCtx = new JsonOutputContext('doge dummy-signers', this.jsonMode)
+
+    // In non-interactive mode, --config is required to avoid prompts in loadDogeConfigWithSelection
+    if (this.nonInteractive && !flags.config) {
+      this.jsonCtx.error(
+        'E601_MISSING_FIELD',
+        '--config flag is required in non-interactive mode to specify the doge config file path',
+        'CONFIGURATION',
+        true,
+        { flag: '--config' }
+      )
+    }
+
+    // Load config - use flags.config (not flags['doge-config'])
     const { config, configPath } = await loadDogeConfigWithSelection(
-      flags['doge-config'],
+      flags.config,
       'scrollsdk doge:config'
     )
 
     try {
       this.dogeConfig = config;
       this.configPath = configPath;
-      this.log(chalk.blue(`Loaded configuration for ${this.dogeConfig.network} network`))
+      this.jsonCtx.info(`Loaded configuration for ${this.dogeConfig.network} network from ${configPath}`)
     } catch (error) {
-      this.error(`Failed to load config: ${error}`)
+      this.jsonCtx.error(
+        'E602_INVALID_CONFIG_FORMAT',
+        `Failed to load config: ${error}`,
+        'CONFIGURATION',
+        false
+      )
       return
     }
 
     // Validate flags
     if (flags['local-only'] && flags['aws-only']) {
-      this.error('Cannot use both --local-only and --aws-only flags together')
+      this.jsonCtx.error(
+        'E601_INVALID_VALUE',
+        'Cannot use both --local-only and --aws-only flags together',
+        'CONFIGURATION',
+        true
+      )
       return
     }
 
@@ -1158,7 +1345,19 @@ export class DummySignersCommand extends Command {
 
     // Get image tag
     const imageTag = await this.getDockerImageTag(flags['image-tag'])
-    this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
+    this.jsonCtx.info(`Using Docker image tag: ${imageTag}`)
+
+    // Build non-interactive options from flags
+    const nonInteractiveOptions: NonInteractiveOptions = {
+      numSigners: flags['num-signers'],
+      threshold: flags.threshold,
+      generateWifKeys: flags['generate-wif-keys'],
+      wifNetwork: flags['wif-network'] as 'regtest' | 'testnet' | 'mainnet',
+      awsRegion: resolveEnvValue(flags['aws-region']),
+      awsNetworkAlias: resolveEnvValue(flags['aws-network-alias']),
+      awsAccountId: resolveEnvValue(flags['aws-account-id']),
+      awsSuffixes: resolveEnvValue(flags['aws-suffixes']),
+    }
 
     // Set up dummy signers
     const dummySignersManager = new DummySignersManager(
@@ -1169,12 +1368,34 @@ export class DummySignersCommand extends Command {
         log: this.log.bind(this),
         warn: this.warn.bind(this),
         error: this.error.bind(this)
-      }
+      },
+      this.nonInteractive,
+      nonInteractiveOptions,
+      this.jsonMode,
+      this.jsonCtx
     )
 
     try {
       await dummySignersManager.setupDummySigners(await this.fetchDockerTags())
+
+      // JSON output
+      if (this.jsonMode) {
+        this.jsonCtx.success({
+          deploymentType: this.dogeConfig.deploymentType,
+          imageTag,
+          signerUrls: this.dogeConfig.signerUrls,
+          network: this.dogeConfig.network,
+        })
+      }
     } catch (error) {
+      if (this.jsonMode) {
+        this.jsonCtx.error(
+          'E900_UNEXPECTED_ERROR',
+          `Dummy signers setup failed: ${error}`,
+          'INTERNAL',
+          false
+        )
+      }
       this.error(`Dummy signers setup failed: ${error}`)
     }
   }

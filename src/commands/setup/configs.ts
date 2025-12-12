@@ -14,6 +14,12 @@ import { execSync } from 'child_process'
 import { promisify } from 'util'
 import { writeConfigs } from '../../utils/config-writer.js'
 import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
+import {
+  createNonInteractiveContext,
+  resolveEnvValue,
+  type NonInteractiveContext,
+} from '../../utils/non-interactive.js'
+import { JsonOutputContext } from '../../utils/json-output.js'
 
 const execAsync = promisify(childProcess.exec)
 const SECRETS_PATH = path.join(process.cwd(), 'secrets')
@@ -41,26 +47,62 @@ export default class SetupConfigs extends Command {
       default: 'values',
       required: false,
     }),
+    'non-interactive': Flags.boolean({
+      char: 'N',
+      description: 'Run without prompts. Uses config values or sensible defaults.',
+      default: false,
+    }),
+    json: Flags.boolean({
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
+      default: false,
+    }),
+    'deployment-salt': Flags.string({
+      description: 'Deployment salt value (non-interactive mode). If not provided, keeps existing or auto-increments.',
+    }),
+    'l1-fee-vault-addr': Flags.string({
+      description: 'L1 fee vault address (non-interactive mode). Defaults to OWNER_ADDR.',
+    }),
+    'l2-bridge-fee-recipient-addr': Flags.string({
+      description: 'L2 bridge fee recipient address (non-interactive mode). Defaults to zero address.',
+    }),
+    'l1-plonk-verifier-addr': Flags.string({
+      description: 'L1 plonk verifier address (non-interactive mode). If not provided, one will be deployed.',
+    }),
+    'base-fee-per-gas': Flags.string({
+      description: 'Base fee per gas (non-interactive mode). Uses existing config value if not provided.',
+    }),
+    'skip-deployment-salt-update': Flags.boolean({
+      description: 'Skip deployment salt update (non-interactive mode)',
+      default: false,
+    }),
+    'skip-l1-fee-vault-update': Flags.boolean({
+      description: 'Skip L1 fee vault address update (non-interactive mode)',
+      default: false,
+    }),
+    'skip-l1-plonk-verifier-update': Flags.boolean({
+      description: 'Skip L1 plonk verifier address update (non-interactive mode)',
+      default: true,
+    }),
   }
 
   private dogeConfig: DogeConfig = {} as DogeConfig
+  private nonInteractive: boolean = false
+  private jsonMode: boolean = false
+  private jsonCtx!: JsonOutputContext
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupConfigs)
 
+    // Setup non-interactive/JSON mode
+    this.nonInteractive = flags['non-interactive']
+    this.jsonMode = flags.json
+    this.jsonCtx = new JsonOutputContext('setup configs', this.jsonMode)
+
     const imageTag = await this.getDockerImageTag(flags['image-tag'])
-    this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
+    this.jsonCtx.info(`Using Docker image tag: ${imageTag}`)
 
     const configsDir = flags['configs-dir']
-    this.log(chalk.blue(`Using configuration directory: ${configsDir}`))
-
-    // Use the new common function to load config
-    // const { config, configPath } = await loadDogeConfigWithSelection(
-    //   flags['doge-config'],
-    //   'scrollsdk doge:config'
-    // )
-
-    // this.dogeConfig = config
+    this.jsonCtx.info(`Using configuration directory: ${configsDir}`)
 
     const dogeConfigResult = await loadDogeConfigWithSelection(
       flags['doge-config'],
@@ -68,29 +110,27 @@ export default class SetupConfigs extends Command {
     )
 
     this.dogeConfig = dogeConfigResult.config
-    this.log(chalk.blue(`Using Dogecoin config file: ${dogeConfigResult.configPath}`))
+    this.jsonCtx.info(`Using Dogecoin config file: ${dogeConfigResult.configPath}`)
 
     // Skip L1_CONTRACT_DEPLOYMENT_BLOCK for DogeOS network
-    // this.log(chalk.blue('Checking L1_CONTRACT_DEPLOYMENT_BLOCK...'))
+    // this.jsonCtx.info('Checking L1_CONTRACT_DEPLOYMENT_BLOCK...')
     // await this.updateL1ContractDeploymentBlock()
 
-    this.log(chalk.blue('Checking deployment salt...'))
-    await this.updateDeploymentSalt()
+    this.jsonCtx.info('Checking deployment salt...')
+    await this.updateDeploymentSalt(flags)
 
-    this.log(chalk.blue('Checking L1_FEE_VAULT_ADDR...'))
-    await this.updateL1FeeVaultAddr()
+    this.jsonCtx.info('Checking L1_FEE_VAULT_ADDR...')
+    await this.updateL1FeeVaultAddr(flags)
 
-    this.log(chalk.blue('Checking L2_BRIDGE_FEE_RECIPIENT_ADDR...'))
-    await this.updateL2BridgeFeeRecipientAddr()
+    this.jsonCtx.info('Checking L2_BRIDGE_FEE_RECIPIENT_ADDR...')
+    await this.updateL2BridgeFeeRecipientAddr(flags)
 
-    this.log(chalk.blue('Checking L1_PLONK_VERIFIER_ADDR...'))
-    await this.updateL1PlonkVerifierAddr()
+    this.jsonCtx.info('Checking L1_PLONK_VERIFIER_ADDR...')
+    await this.updateL1PlonkVerifierAddr(flags)
 
-    await this.updateBaseFeePerGas();
-    // this.log(chalk.blue('Checking sequencer enode...'))
-    // await this.updateSequencerEnode()
+    await this.updateBaseFeePerGas(flags)
 
-    this.log(chalk.blue('Running docker command to generate configs...'))
+    this.jsonCtx.info('Running docker command to generate configs...')
     await this.runDockerCommand(imageTag)
 
     let parsedPublicConfig: any = {}
@@ -99,28 +139,40 @@ export default class SetupConfigs extends Command {
       try {
         const publicConfigContent = fs.readFileSync(publicConfigPath, 'utf8')
         parsedPublicConfig = toml.parse(publicConfigContent)
-        this.log(chalk.green('Successfully parsed config.public.toml'))
+        this.jsonCtx.logSuccess('Successfully parsed config.public.toml')
       } catch (error: any) {
-        this.error(chalk.red(`Failed to parse config.public.toml: ${error.message}`))
-        // Optionally, decide if we should exit if parsing fails
+        this.jsonCtx.error(
+          'E602_INVALID_CONFIG_FORMAT',
+          `Failed to parse config.public.toml: ${error.message}`,
+          'CONFIGURATION',
+          false
+        )
       }
     } else {
-      this.log(chalk.yellow('config.public.toml not found after docker command. Skipping .env generation for docker-compose.'))
+      this.jsonCtx.addWarning('config.public.toml not found after docker command. Skipping .env generation for docker-compose.')
     }
 
-    this.log(chalk.blue('Creating secrets folder...'))
+    this.jsonCtx.info('Creating secrets folder...')
     this.createSecretsFolder()
 
-    // this.log(chalk.blue('Copying contract configs...'))
-    // this.copyContractsConfigs()
-
-    this.log(chalk.blue('Creating secrets environment files...'))
+    this.jsonCtx.info('Creating secrets environment files...')
     await this.createEnvFiles()
 
-    this.log(chalk.blue('Processing YAML files...'))
+    this.jsonCtx.info('Processing YAML files...')
     await this.processYamlFiles(configsDir)
 
-    this.log(chalk.green('Configuration setup completed.'))
+    this.jsonCtx.logSuccess('Configuration setup completed.')
+
+    // JSON output
+    if (this.jsonMode) {
+      this.jsonCtx.success({
+        imageTag,
+        configsDir,
+        dogeConfigPath: dogeConfigResult.configPath,
+        secretsCreated: true,
+        yamlFilesProcessed: true,
+      })
+    }
   }
 
   private canAccessFile(filePath: string): boolean {
@@ -497,6 +549,12 @@ export default class SetupConfigs extends Command {
       return `gen-configs-v${providedTag}`
     }
 
+    // In non-interactive mode, use default tag if provided tag is invalid
+    if (this.nonInteractive) {
+      this.jsonCtx.addWarning(`Provided tag "${providedTag}" not found, using default: ${defaultTag}`)
+      return defaultTag
+    }
+
     const selectedTag = await select({
       choices: tags.map((tag) => ({ name: tag, value: tag })),
       message: 'Select a Docker image tag:',
@@ -517,22 +575,35 @@ export default class SetupConfigs extends Command {
     // Check permissions and potentially change ownership before processing
     const yamlFiles = fs.readdirSync(sourceDir).filter((file) => file.endsWith('.yaml'))
     if (yamlFiles.some((file) => !this.canAccessFile(path.join(sourceDir, file)))) {
-      const changeOwnership = await confirm({
-        message:
-          'Some YAML files have permission issues. Would you like to change their ownership to the current user?',
-      })
+      let changeOwnership = true
+      if (!this.nonInteractive) {
+        changeOwnership = await confirm({
+          message:
+            'Some YAML files have permission issues. Would you like to change their ownership to the current user?',
+        })
+      } else {
+        this.jsonCtx.info('Non-interactive mode: Attempting to change ownership of YAML files with permission issues...')
+      }
 
       if (changeOwnership) {
         try {
           const command = `sudo find ${sourceDir} -name "*.yaml" -user root -exec sudo chown -R $USER: {} \\;`
           childProcess.execSync(command, { stdio: 'inherit' })
-          this.log(chalk.green('File ownership changed successfully.'))
+          this.jsonCtx.logSuccess('File ownership changed successfully.')
         } catch (error) {
+          if (this.nonInteractive) {
+            this.jsonCtx.error(
+              'E900_UNEXPECTED_ERROR',
+              `Failed to change file ownership: ${error}`,
+              'INTERNAL',
+              false
+            )
+          }
           this.error(`Failed to change file ownership: ${error}`)
           return // Exit the method if we can't change permissions
         }
       } else {
-        this.log(chalk.yellow('File ownership not changed. Some files may not be accessible.'))
+        this.jsonCtx.addWarning('File ownership not changed. Some files may not be accessible.')
         return // Exit the method if user chooses not to change permissions
       }
     }
@@ -773,10 +844,10 @@ export default class SetupConfigs extends Command {
     }
   }
 
-  private async updateDeploymentSalt(): Promise<void> {
+  private async updateDeploymentSalt(flags: any): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
     if (!fs.existsSync(configPath)) {
-      this.log(chalk.yellow('config.toml not found. Skipping deployment salt update.'))
+      this.jsonCtx.addWarning('config.toml not found. Skipping deployment salt update.')
       return
     }
 
@@ -797,30 +868,49 @@ export default class SetupConfigs extends Command {
       defaultNewSalt = `${baseSalt}-${randomString}`
     }
 
-    this.log(chalk.cyan(`Current deployment salt: ${currentSalt}`))
-    const updateSalt = await confirm({
-      message: 'Would you like to update the deployment salt in config.toml?',
-    })
+    this.jsonCtx.info(`Current deployment salt: ${currentSalt}`)
 
-    if (updateSalt) {
-      const newSalt = await input({
-        default: defaultNewSalt,
-        message: 'Enter new deployment salt:',
-      })
+    if (this.nonInteractive) {
+      // Non-interactive mode: use flag value or skip if --skip-deployment-salt-update
+      if (flags['skip-deployment-salt-update']) {
+        this.jsonCtx.info('Skipping deployment salt update (--skip-deployment-salt-update)')
+        return
+      }
+
+      const newSalt = resolveEnvValue(flags['deployment-salt']) || defaultNewSalt
 
       if (!config.contracts) {
         config.contracts = {}
       }
 
-      ; (config.contracts as any).DEPLOYMENT_SALT = newSalt
+      ;(config.contracts as any).DEPLOYMENT_SALT = newSalt
 
-      //fs.writeFileSync(configPath, toml.stringify(config as any))
-      if (writeConfigs(config)) {
-        this.log(chalk.green(`Deployment salt updated in config.toml from "${currentSalt}" to "${newSalt}"`))
+      if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
+        this.jsonCtx.logSuccess(`Deployment salt updated in config.toml from "${currentSalt}" to "${newSalt}"`)
       }
-
     } else {
-      this.log(chalk.yellow('Deployment salt not updated'))
+      const updateSalt = await confirm({
+        message: 'Would you like to update the deployment salt in config.toml?',
+      })
+
+      if (updateSalt) {
+        const newSalt = await input({
+          default: defaultNewSalt,
+          message: 'Enter new deployment salt:',
+        })
+
+        if (!config.contracts) {
+          config.contracts = {}
+        }
+
+        ;(config.contracts as any).DEPLOYMENT_SALT = newSalt
+
+        if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
+          this.log(chalk.green(`Deployment salt updated in config.toml from "${currentSalt}" to "${newSalt}"`))
+        }
+      } else {
+        this.log(chalk.yellow('Deployment salt not updated'))
+      }
     }
   }
 
@@ -887,60 +977,92 @@ export default class SetupConfigs extends Command {
     }
   }
 
-  private async updateL1FeeVaultAddr(): Promise<void> {
+  private async updateL1FeeVaultAddr(flags: any): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
     if (!fs.existsSync(configPath)) {
-      this.log(chalk.yellow('config.toml not found. Skipping L1_FEE_VAULT_ADDR update.'))
+      this.jsonCtx.addWarning('config.toml not found. Skipping L1_FEE_VAULT_ADDR update.')
       return
     }
 
     const configContent = fs.readFileSync(configPath, 'utf8')
     const config = toml.parse(configContent)
 
-    const updateFeeVault = await confirm({
-      message: 'Would you like to set a value for L1_FEE_VAULT_ADDR?',
-    })
+    const defaultAddr = (config.accounts as any)?.OWNER_ADDR || ''
 
-    if (updateFeeVault) {
-      this.log(chalk.yellow('It is recommended to use a Safe for the L1_FEE_VAULT_ADDR.'))
-      const defaultAddr = (config.accounts as any)?.OWNER_ADDR || ''
-      this.log(chalk.cyan(`The Owner address (${defaultAddr}) is the default value.`))
+    if (this.nonInteractive) {
+      // Non-interactive mode: use flag value, existing config value, or OWNER_ADDR
+      if (flags['skip-l1-fee-vault-update']) {
+        this.jsonCtx.info('Skipping L1_FEE_VAULT_ADDR update (--skip-l1-fee-vault-update)')
+        return
+      }
 
-      let isValidAddress = false
-      let newAddr = ''
+      const newAddr = resolveEnvValue(flags['l1-fee-vault-addr']) ||
+                      (config.contracts as any)?.L1_FEE_VAULT_ADDR ||
+                      defaultAddr
 
-      while (!isValidAddress) {
-        newAddr = await input({
-          default: defaultAddr,
-          message: 'Enter the L1_FEE_VAULT_ADDR:',
-        })
-
-        if (ethers.isAddress(newAddr)) {
-          isValidAddress = true
-        } else {
-          this.log(chalk.red('Invalid Ethereum address. Please try again.'))
-        }
+      if (!ethers.isAddress(newAddr)) {
+        this.jsonCtx.error(
+          'E600_INVALID_ADDRESS',
+          `Invalid L1_FEE_VAULT_ADDR: ${newAddr}`,
+          'VALIDATION',
+          true,
+          { address: newAddr }
+        )
       }
 
       if (!config.contracts) {
         config.contracts = {}
       }
 
-      ; (config.contracts as any).L1_FEE_VAULT_ADDR = newAddr
+      ;(config.contracts as any).L1_FEE_VAULT_ADDR = newAddr
 
-      //fs.writeFileSync(configPath, toml.stringify(config as any))
-      if (writeConfigs(config)) {
-        this.log(chalk.green(`L1_FEE_VAULT_ADDR updated in config.toml to "${newAddr}"`))
+      if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
+        this.jsonCtx.logSuccess(`L1_FEE_VAULT_ADDR updated in config.toml to "${newAddr}"`)
       }
     } else {
-      this.log(chalk.yellow('L1_FEE_VAULT_ADDR not updated'))
+      const updateFeeVault = await confirm({
+        message: 'Would you like to set a value for L1_FEE_VAULT_ADDR?',
+      })
+
+      if (updateFeeVault) {
+        this.log(chalk.yellow('It is recommended to use a Safe for the L1_FEE_VAULT_ADDR.'))
+        this.log(chalk.cyan(`The Owner address (${defaultAddr}) is the default value.`))
+
+        let isValidAddress = false
+        let newAddr = ''
+
+        while (!isValidAddress) {
+          newAddr = await input({
+            default: defaultAddr,
+            message: 'Enter the L1_FEE_VAULT_ADDR:',
+          })
+
+          if (ethers.isAddress(newAddr)) {
+            isValidAddress = true
+          } else {
+            this.log(chalk.red('Invalid Ethereum address. Please try again.'))
+          }
+        }
+
+        if (!config.contracts) {
+          config.contracts = {}
+        }
+
+        ;(config.contracts as any).L1_FEE_VAULT_ADDR = newAddr
+
+        if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
+          this.log(chalk.green(`L1_FEE_VAULT_ADDR updated in config.toml to "${newAddr}"`))
+        }
+      } else {
+        this.log(chalk.yellow('L1_FEE_VAULT_ADDR not updated'))
+      }
     }
   }
 
-  private async updateL2BridgeFeeRecipientAddr(): Promise<void> {
+  private async updateL2BridgeFeeRecipientAddr(flags: any): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
     if (!fs.existsSync(configPath)) {
-      this.log(chalk.yellow('config.toml not found. Skipping L2_BRIDGE_FEE_RECIPIENT_ADDR update.'))
+      this.jsonCtx.addWarning('config.toml not found. Skipping L2_BRIDGE_FEE_RECIPIENT_ADDR update.')
       return
     }
 
@@ -949,61 +1071,37 @@ export default class SetupConfigs extends Command {
 
     const defaultAddr = (config.contracts as any)?.L2_BRIDGE_FEE_RECIPIENT_ADDR || "0x0000000000000000000000000000000000000000"
 
-    let isValidAddress = false
-    let newAddr = ''
+    if (this.nonInteractive) {
+      // Non-interactive mode: use flag value or existing config value or zero address
+      const newAddr = resolveEnvValue(flags['l2-bridge-fee-recipient-addr']) || defaultAddr
 
-    while (!isValidAddress) {
-      newAddr = await input({
-        default: defaultAddr,
-        message: 'Please enter the L2_BRIDGE_FEE_RECIPIENT_ADDR:',
-      })
-
-      if (ethers.isAddress(newAddr)) {
-        isValidAddress = true
-      } else {
-        this.log(chalk.red('Invalid Ethereum address. Please try again.'))
+      if (!ethers.isAddress(newAddr)) {
+        this.jsonCtx.error(
+          'E600_INVALID_ADDRESS',
+          `Invalid L2_BRIDGE_FEE_RECIPIENT_ADDR: ${newAddr}`,
+          'VALIDATION',
+          true,
+          { address: newAddr }
+        )
       }
-    }
 
-    if (!config.contracts) {
-      config.contracts = {}
-    }
+      if (!config.contracts) {
+        config.contracts = {}
+      }
 
-    ; (config.contracts as any).L2_BRIDGE_FEE_RECIPIENT_ADDR = newAddr
+      ;(config.contracts as any).L2_BRIDGE_FEE_RECIPIENT_ADDR = newAddr
 
-    if (writeConfigs(config)) {
-      this.log(chalk.green(`L2_BRIDGE_FEE_RECIPIENT_ADDR updated in config.toml to "${newAddr}"`))
-    }
-  }
-
-  private async updateL1PlonkVerifierAddr(): Promise<void> {
-    const configPath = path.join(process.cwd(), 'config.toml')
-    if (!fs.existsSync(configPath)) {
-      this.log(chalk.yellow('config.toml not found. Skipping L1_PLONK_VERIFIER_ADDR update.'))
-      return
-    }
-
-    const configContent = fs.readFileSync(configPath, 'utf8')
-    const config = toml.parse(configContent)
-
-    this.log(chalk.yellow('Note: If you do not set L1_PLONK_VERIFIER_ADDR, one will be automatically deployed.'))
-
-    const updatePlonkVerifier = await confirm({
-      default: false,
-      message: 'Would you like to set a value for L1_PLONK_VERIFIER_ADDR?',
-    })
-
-    if (updatePlonkVerifier) {
-      const currentAddr = (config.contracts as any)?.L1_PLONK_VERIFIER_ADDR || ''
-      this.log(chalk.cyan(`The current L1_PLONK_VERIFIER_ADDR is: ${currentAddr}`))
-
+      if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
+        this.jsonCtx.logSuccess(`L2_BRIDGE_FEE_RECIPIENT_ADDR updated in config.toml to "${newAddr}"`)
+      }
+    } else {
       let isValidAddress = false
       let newAddr = ''
 
       while (!isValidAddress) {
         newAddr = await input({
-          default: currentAddr,
-          message: 'Enter the L1_PLONK_VERIFIER_ADDR:',
+          default: defaultAddr,
+          message: 'Please enter the L2_BRIDGE_FEE_RECIPIENT_ADDR:',
         })
 
         if (ethers.isAddress(newAddr)) {
@@ -1017,40 +1115,144 @@ export default class SetupConfigs extends Command {
         config.contracts = {}
       }
 
-      ; (config.contracts as any).L1_PLONK_VERIFIER_ADDR = newAddr
+      ;(config.contracts as any).L2_BRIDGE_FEE_RECIPIENT_ADDR = newAddr
 
-      //fs.writeFileSync(configPath, toml.stringify(config as any))
-      if (writeConfigs(config)) {
-        this.log(chalk.green(`L1_PLONK_VERIFIER_ADDR updated in config.toml to "${newAddr}"`))
+      if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
+        this.log(chalk.green(`L2_BRIDGE_FEE_RECIPIENT_ADDR updated in config.toml to "${newAddr}"`))
       }
-
-    } else {
-      this.log(chalk.yellow('L1_PLONK_VERIFIER_ADDR not updated'))
     }
   }
 
-  private async updateBaseFeePerGas(): Promise<void> {
+  private async updateL1PlonkVerifierAddr(flags: any): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
     if (!fs.existsSync(configPath)) {
-      this.log(chalk.yellow('config.toml not found. Skipping L1_PLONK_VERIFIER_ADDR update.'))
+      this.jsonCtx.addWarning('config.toml not found. Skipping L1_PLONK_VERIFIER_ADDR update.')
+      return
+    }
+
+    const configContent = fs.readFileSync(configPath, 'utf8')
+    const config = toml.parse(configContent)
+
+    const currentAddr = (config.contracts as any)?.L1_PLONK_VERIFIER_ADDR || ''
+
+    if (this.nonInteractive) {
+      // Non-interactive mode: skip by default (--skip-l1-plonk-verifier-update is true by default)
+      // Only update if explicitly provided via flag
+      if (flags['skip-l1-plonk-verifier-update'] && !flags['l1-plonk-verifier-addr']) {
+        this.jsonCtx.info('Skipping L1_PLONK_VERIFIER_ADDR update (will be auto-deployed)')
+        return
+      }
+
+      const newAddr = resolveEnvValue(flags['l1-plonk-verifier-addr'])
+      if (newAddr) {
+        if (!ethers.isAddress(newAddr)) {
+          this.jsonCtx.error(
+            'E600_INVALID_ADDRESS',
+            `Invalid L1_PLONK_VERIFIER_ADDR: ${newAddr}`,
+            'VALIDATION',
+            true,
+            { address: newAddr }
+          )
+        }
+
+        if (!config.contracts) {
+          config.contracts = {}
+        }
+
+        ;(config.contracts as any).L1_PLONK_VERIFIER_ADDR = newAddr
+
+        if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
+          this.jsonCtx.logSuccess(`L1_PLONK_VERIFIER_ADDR updated in config.toml to "${newAddr}"`)
+        }
+      } else {
+        this.jsonCtx.info('L1_PLONK_VERIFIER_ADDR not provided, will be auto-deployed')
+      }
+    } else {
+      this.log(chalk.yellow('Note: If you do not set L1_PLONK_VERIFIER_ADDR, one will be automatically deployed.'))
+
+      const updatePlonkVerifier = await confirm({
+        default: false,
+        message: 'Would you like to set a value for L1_PLONK_VERIFIER_ADDR?',
+      })
+
+      if (updatePlonkVerifier) {
+        this.log(chalk.cyan(`The current L1_PLONK_VERIFIER_ADDR is: ${currentAddr}`))
+
+        let isValidAddress = false
+        let newAddr = ''
+
+        while (!isValidAddress) {
+          newAddr = await input({
+            default: currentAddr,
+            message: 'Enter the L1_PLONK_VERIFIER_ADDR:',
+          })
+
+          if (ethers.isAddress(newAddr)) {
+            isValidAddress = true
+          } else {
+            this.log(chalk.red('Invalid Ethereum address. Please try again.'))
+          }
+        }
+
+        if (!config.contracts) {
+          config.contracts = {}
+        }
+
+        ;(config.contracts as any).L1_PLONK_VERIFIER_ADDR = newAddr
+
+        if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
+          this.log(chalk.green(`L1_PLONK_VERIFIER_ADDR updated in config.toml to "${newAddr}"`))
+        }
+      } else {
+        this.log(chalk.yellow('L1_PLONK_VERIFIER_ADDR not updated'))
+      }
+    }
+  }
+
+  private async updateBaseFeePerGas(flags: any): Promise<void> {
+    const configPath = path.join(process.cwd(), 'config.toml')
+    if (!fs.existsSync(configPath)) {
+      this.jsonCtx.addWarning('config.toml not found. Skipping BASE_FEE_PER_GAS update.')
       return
     }
     const configContent = fs.readFileSync(configPath, 'utf8')
     const config = toml.parse(configContent)
 
-    const newBaseFeePerGas = await input({
-      default: (config.genesis as any)?.BASE_FEE_PER_GAS,
-      message: "Enter baseFeePerGas"
-    })
+    const currentBaseFee = (config.genesis as any)?.BASE_FEE_PER_GAS || ''
 
-    if (!config.genesis) {
-      config.genesis = {}
-    }
+    if (this.nonInteractive) {
+      // Non-interactive mode: use flag value or keep existing
+      const newBaseFeePerGas = resolveEnvValue(flags['base-fee-per-gas']) || currentBaseFee
 
-    ; (config.genesis as any).BASE_FEE_PER_GAS = newBaseFeePerGas
+      if (!newBaseFeePerGas) {
+        this.jsonCtx.addWarning('BASE_FEE_PER_GAS not provided and not in config. Skipping.')
+        return
+      }
 
-    if (writeConfigs(config)) {
-      this.log(chalk.green(`BASE_FEE_PER_GAS updated in config.toml to "${newBaseFeePerGas}"`))
+      if (!config.genesis) {
+        config.genesis = {}
+      }
+
+      ;(config.genesis as any).BASE_FEE_PER_GAS = newBaseFeePerGas
+
+      if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
+        this.jsonCtx.logSuccess(`BASE_FEE_PER_GAS updated in config.toml to "${newBaseFeePerGas}"`)
+      }
+    } else {
+      const newBaseFeePerGas = await input({
+        default: currentBaseFee,
+        message: "Enter baseFeePerGas"
+      })
+
+      if (!config.genesis) {
+        config.genesis = {}
+      }
+
+      ;(config.genesis as any).BASE_FEE_PER_GAS = newBaseFeePerGas
+
+      if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
+        this.log(chalk.green(`BASE_FEE_PER_GAS updated in config.toml to "${newBaseFeePerGas}"`))
+      }
     }
   }
 }

@@ -6,6 +6,15 @@ import chalk from 'chalk'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { writeConfigs } from '../../utils/config-writer.js'
+import {
+  createNonInteractiveContext,
+  resolveOrPrompt,
+  resolveOrSelect,
+  resolveConfirm,
+  validateAndExit,
+  type NonInteractiveContext,
+} from '../../utils/non-interactive.js'
+import { JsonOutputContext } from '../../utils/json-output.js'
 
 export default class SetupDomains extends Command {
   static override args = {
@@ -14,42 +23,93 @@ export default class SetupDomains extends Command {
 
   static override description = 'Set up domain configurations for external services'
 
-  static override examples = ['<%= config.bin %> <%= command.id %>']
+  static override examples = [
+    '<%= config.bin %> <%= command.id %>',
+    '<%= config.bin %> <%= command.id %> --non-interactive',
+    '<%= config.bin %> <%= command.id %> --non-interactive --json',
+  ]
 
   static override flags = {
     force: Flags.boolean({ char: 'f' }),
     name: Flags.string({ char: 'n', description: 'name to print' }),
+    'non-interactive': Flags.boolean({
+      char: 'N',
+      description: 'Run without prompts, using config.toml values',
+      default: false,
+    }),
+    json: Flags.boolean({
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
+      default: false,
+    }),
   }
 
   public async run(): Promise<void> {
+    const { flags } = await this.parse(SetupDomains)
     const existingConfig = await this.getExistingConfig()
 
-    this.logSection('Current domain configurations:')
+    // Create non-interactive and JSON output contexts
+    const niCtx = createNonInteractiveContext(
+      'setup domains',
+      flags['non-interactive'],
+      flags.json
+    )
+    const jsonCtx = new JsonOutputContext('setup domains', flags.json)
+
+    // In non-interactive mode, log to stderr to keep stdout clean for JSON
+    const log = (msg: string) => jsonCtx.log(msg)
+    const logSection = (title: string) => jsonCtx.logSection(title)
+    const logKeyValue = (key: string, value: string) => jsonCtx.logKeyValue(key, value)
+    const logSuccess = (msg: string) => jsonCtx.logSuccess(msg)
+
+    logSection('Current domain configurations:')
     for (const [key, value] of Object.entries(existingConfig.frontend || {})) {
       if (key.includes('URI')) {
-        this.logKeyValue(key, value as string)
+        logKeyValue(key, value as string)
       }
     }
 
-    this.logSection('Current ingress configurations:')
+    logSection('Current ingress configurations:')
     for (const [key, value] of Object.entries(existingConfig.ingress || {})) {
-      this.logKeyValue(key, value as string)
+      logKeyValue(key, value as string)
     }
 
     type L1Network = 'dogeos' | 'anvil' | 'holesky' | 'mainnet' | 'other' | 'sepolia'
+    const validL1Networks: L1Network[] = ['dogeos', 'anvil', 'holesky', 'mainnet', 'other', 'sepolia']
 
-    const l1Network = (await select({
-      choices: [
-        { name: 'DogeOS Testnet', value: 'dogeos' },
-        { name: 'Ethereum Mainnet', value: 'mainnet' },
-        { name: 'Ethereum Sepolia Testnet', value: 'sepolia' },
-        { name: 'Ethereum Holesky Testnet', value: 'holesky' },
-        { name: 'Other...', value: 'other' },
-        { name: 'Anvil (Local)', value: 'anvil' },
-      ],
-      default: existingConfig.general?.CHAIN_NAME_L1?.toLowerCase() || 'dogeos',
-      message: 'Select the L1 network:',
-    })) as L1Network
+    // Infer L1 network from existing config for non-interactive mode
+    const inferL1Network = (config: any): L1Network | undefined => {
+      const chainName = config.general?.CHAIN_NAME_L1?.toLowerCase()
+      if (!chainName) return undefined
+      if (chainName.includes('doge')) return 'dogeos'
+      if (chainName === 'mainnet' || chainName === 'ethereum') return 'mainnet'
+      if (chainName === 'sepolia') return 'sepolia'
+      if (chainName === 'holesky') return 'holesky'
+      if (chainName === 'anvil' || chainName.includes('anvil')) return 'anvil'
+      return 'other'
+    }
+
+    const l1Network = await resolveOrSelect<L1Network>(
+      niCtx,
+      () => select({
+        choices: [
+          { name: 'DogeOS Testnet', value: 'dogeos' },
+          { name: 'Ethereum Mainnet', value: 'mainnet' },
+          { name: 'Ethereum Sepolia Testnet', value: 'sepolia' },
+          { name: 'Ethereum Holesky Testnet', value: 'holesky' },
+          { name: 'Other...', value: 'other' },
+          { name: 'Anvil (Local)', value: 'anvil' },
+        ],
+        default: existingConfig.general?.CHAIN_NAME_L1?.toLowerCase() || 'dogeos',
+        message: 'Select the L1 network:',
+      }) as Promise<L1Network>,
+      inferL1Network(existingConfig),
+      validL1Networks,
+      {
+        field: 'L1 Network',
+        configPath: '[general].CHAIN_NAME_L1',
+        description: 'L1 network type (inferred from CHAIN_NAME_L1)',
+      }
+    ) as L1Network
 
     const l1ExplorerUrls: Partial<Record<L1Network, string>> = {
       holesky: 'https://holesky.etherscan.io',
@@ -79,14 +139,35 @@ export default class SetupDomains extends Command {
     const usesDogeos = l1Network === 'dogeos'
 
     if (l1Network === 'other' || l1Network === 'anvil' || l1Network === 'dogeos') {
-      generalConfig.CHAIN_NAME_L1 = await input({
-        default: existingConfig.general?.CHAIN_NAME_L1 || usesDogeos ? 'DOGE L1' : 'Custom L1',
-        message: 'Enter the L1 Chain Name:',
-      })
-      generalConfig.CHAIN_ID_L1 = await input({
-        default: existingConfig.general?.CHAIN_ID_L1 || l1ChainIds[l1Network] || '',
-        message: 'Enter the L1 Chain ID:',
-      })
+      const chainNameL1 = await resolveOrPrompt(
+        niCtx,
+        () => input({
+          default: existingConfig.general?.CHAIN_NAME_L1 || (usesDogeos ? 'DOGE L1' : 'Custom L1'),
+          message: 'Enter the L1 Chain Name:',
+        }),
+        existingConfig.general?.CHAIN_NAME_L1 || (usesDogeos ? 'DOGE L1' : undefined),
+        {
+          field: 'CHAIN_NAME_L1',
+          configPath: '[general].CHAIN_NAME_L1',
+          description: 'L1 chain name (e.g., "DOGE L1")',
+        }
+      )
+      generalConfig.CHAIN_NAME_L1 = chainNameL1 || ''
+
+      const chainIdL1 = await resolveOrPrompt(
+        niCtx,
+        () => input({
+          default: existingConfig.general?.CHAIN_ID_L1 || l1ChainIds[l1Network] || '',
+          message: 'Enter the L1 Chain ID:',
+        }),
+        existingConfig.general?.CHAIN_ID_L1 || l1ChainIds[l1Network],
+        {
+          field: 'CHAIN_ID_L1',
+          configPath: '[general].CHAIN_ID_L1',
+          description: 'L1 chain ID (e.g., 111111 for DogeOS)',
+        }
+      )
+      generalConfig.CHAIN_ID_L1 = chainIdL1 || ''
     } else {
       generalConfig.CHAIN_NAME_L1 = l1Network.charAt(0).toUpperCase() + l1Network.slice(1)
       generalConfig.CHAIN_ID_L1 = l1ChainIds[l1Network]!
@@ -94,21 +175,32 @@ export default class SetupDomains extends Command {
       domainConfig.EXTERNAL_RPC_URI_L1 = l1RpcUrls[l1Network]!
     }
 
-    generalConfig.CHAIN_NAME_L2 = await (input({
-      default: existingConfig.general?.CHAIN_NAME_L2 || usesDogeos ? 'DogeOS Testnet' : 'Custom L2',
-      message: 'Enter the L2 Chain Name:',
-    }));
+    const chainNameL2 = await resolveOrPrompt(
+      niCtx,
+      () => input({
+        default: existingConfig.general?.CHAIN_NAME_L2 || (usesDogeos ? 'DogeOS Testnet' : 'Custom L2'),
+        message: 'Enter the L2 Chain Name:',
+      }),
+      existingConfig.general?.CHAIN_NAME_L2 || (usesDogeos ? 'DogeOS Testnet' : undefined),
+      {
+        field: 'CHAIN_NAME_L2',
+        configPath: '[general].CHAIN_NAME_L2',
+        description: 'L2 chain name (e.g., "DogeOS Testnet")',
+      }
+    )
+    generalConfig.CHAIN_NAME_L2 = chainNameL2 || ''
 
+    // Validate required fields before proceeding
+    validateAndExit(niCtx)
 
-
-    this.logInfo(`Using ${chalk.bold(generalConfig.CHAIN_NAME_L1)} network:`)
+    jsonCtx.info(`Using ${chalk.bold(generalConfig.CHAIN_NAME_L1)} network:`)
     if (l1Network !== 'anvil' && !usesDogeos) {
-      this.logKeyValue('L1 Explorer URL', domainConfig.EXTERNAL_EXPLORER_URI_L1)
-      this.logKeyValue('L1 Public RPC URL', domainConfig.EXTERNAL_RPC_URI_L1)
+      logKeyValue('L1 Explorer URL', domainConfig.EXTERNAL_EXPLORER_URI_L1)
+      logKeyValue('L1 Public RPC URL', domainConfig.EXTERNAL_RPC_URI_L1)
     }
 
-    this.logKeyValue('L1 Chain Name', generalConfig.CHAIN_NAME_L1)
-    this.logKeyValue('L1 Chain ID', generalConfig.CHAIN_ID_L1)
+    logKeyValue('L1 Chain Name', generalConfig.CHAIN_NAME_L1)
+    logKeyValue('L1 Chain ID', generalConfig.CHAIN_ID_L1)
 
     if (usesDogeos) {
       generalConfig.DA_PUBLISHER_ENDPOINT = 'http://da-publisher:8545'
@@ -119,21 +211,48 @@ export default class SetupDomains extends Command {
       generalConfig.L1_RPC_ENDPOINT = 'http://l1-devnet:8545'
       generalConfig.L1_RPC_ENDPOINT_WEBSOCKET = 'ws://l1-devnet:8546'
     } else {
-      const setL1RpcEndpoint = await confirm({
-        message: 'Do you want to set custom (private) L1 RPC endpoints for the SDK backend?',
-      })
+      // In non-interactive mode, use existing config values or defaults
+      const setL1RpcEndpoint = await resolveConfirm(
+        niCtx,
+        () => confirm({
+          message: 'Do you want to set custom (private) L1 RPC endpoints for the SDK backend?',
+        }),
+        existingConfig.general?.L1_RPC_ENDPOINT ? true : undefined,
+        false // Default to not setting custom endpoints
+      )
 
       if (setL1RpcEndpoint) {
-        generalConfig.L1_RPC_ENDPOINT = await input({
-          default: existingConfig.general?.L1_RPC_ENDPOINT || domainConfig.EXTERNAL_RPC_URI_L1,
-          message: 'Enter the L1 RPC HTTP endpoint for SDK backend:',
-        })
+        const l1RpcEndpoint = await resolveOrPrompt(
+          niCtx,
+          () => input({
+            default: existingConfig.general?.L1_RPC_ENDPOINT || domainConfig.EXTERNAL_RPC_URI_L1,
+            message: 'Enter the L1 RPC HTTP endpoint for SDK backend:',
+          }),
+          existingConfig.general?.L1_RPC_ENDPOINT || domainConfig.EXTERNAL_RPC_URI_L1,
+          {
+            field: 'L1_RPC_ENDPOINT',
+            configPath: '[general].L1_RPC_ENDPOINT',
+            description: 'L1 RPC HTTP endpoint for SDK backend',
+          }
+        )
+        generalConfig.L1_RPC_ENDPOINT = l1RpcEndpoint || ''
 
-        generalConfig.L1_RPC_ENDPOINT_WEBSOCKET = await input({
-          default:
-            existingConfig.general?.L1_RPC_ENDPOINT_WEBSOCKET || domainConfig.EXTERNAL_RPC_URI_L1.replace('http', 'ws'),
-          message: 'Enter the L1 RPC WebSocket endpoint for SDK backend:',
-        })
+        const l1RpcWs = await resolveOrPrompt(
+          niCtx,
+          () => input({
+            default:
+              existingConfig.general?.L1_RPC_ENDPOINT_WEBSOCKET || domainConfig.EXTERNAL_RPC_URI_L1.replace('http', 'ws'),
+            message: 'Enter the L1 RPC WebSocket endpoint for SDK backend:',
+          }),
+          existingConfig.general?.L1_RPC_ENDPOINT_WEBSOCKET || domainConfig.EXTERNAL_RPC_URI_L1?.replace('http', 'ws'),
+          {
+            field: 'L1_RPC_ENDPOINT_WEBSOCKET',
+            configPath: '[general].L1_RPC_ENDPOINT_WEBSOCKET',
+            description: 'L1 RPC WebSocket endpoint for SDK backend',
+          },
+          false // Not strictly required
+        )
+        generalConfig.L1_RPC_ENDPOINT_WEBSOCKET = l1RpcWs || ''
       } else {
         generalConfig.L1_RPC_ENDPOINT = domainConfig.EXTERNAL_RPC_URI_L1
         generalConfig.L1_RPC_ENDPOINT_WEBSOCKET = domainConfig.EXTERNAL_RPC_URI_L1.replace('http', 'ws')
@@ -141,76 +260,153 @@ export default class SetupDomains extends Command {
     }
 
     if (usesDogeos) {
-      this.logSuccess(`Updated [general] DA_PUBLISHER_ENDPOINT = "${generalConfig.DA_PUBLISHER_ENDPOINT}"`)
-      this.logSuccess(`Updated [general] BEACON_RPC_ENDPOINT = "${generalConfig.BEACON_RPC_ENDPOINT}"`)
+      logSuccess(`Updated [general] DA_PUBLISHER_ENDPOINT = "${generalConfig.DA_PUBLISHER_ENDPOINT}"`)
+      logSuccess(`Updated [general] BEACON_RPC_ENDPOINT = "${generalConfig.BEACON_RPC_ENDPOINT}"`)
     }
-    this.logSuccess(`Updated [general] L1_RPC_ENDPOINT = "${generalConfig.L1_RPC_ENDPOINT}"`)
-    this.logSuccess(`Updated [general] L1_RPC_ENDPOINT_WEBSOCKET = "${generalConfig.L1_RPC_ENDPOINT_WEBSOCKET}"`)
+    logSuccess(`Updated [general] L1_RPC_ENDPOINT = "${generalConfig.L1_RPC_ENDPOINT}"`)
+    logSuccess(`Updated [general] L1_RPC_ENDPOINT_WEBSOCKET = "${generalConfig.L1_RPC_ENDPOINT_WEBSOCKET}"`)
 
-    const { domainConfig: sharedDomainConfig, ingressConfig } = await this.setupSharedConfigs(existingConfig, usesAnvil)
+    const { domainConfig: sharedDomainConfig, ingressConfig } = await this.setupSharedConfigs(existingConfig, usesAnvil, niCtx)
 
     // Merge the domainConfig from setupSharedConfigs with the one we've created here
     domainConfig = { ...domainConfig, ...sharedDomainConfig }
 
-    this.logSection('New domain configurations:')
+    logSection('New domain configurations:')
     for (const [key, value] of Object.entries(domainConfig)) {
-      this.logKeyValue(key, value)
+      logKeyValue(key, value)
     }
 
-    this.logSection('New ingress configurations:')
+    logSection('New ingress configurations:')
     for (const [key, value] of Object.entries(ingressConfig)) {
-      this.logKeyValue(key, value)
+      logKeyValue(key, value)
     }
 
-    this.logSection('New general configurations:')
+    logSection('New general configurations:')
     for (const [key, value] of Object.entries(generalConfig)) {
-      this.logKeyValue(key, value)
+      logKeyValue(key, value)
     }
 
+    // RPC Gateway WebSocket host
     ingressConfig.RPC_GATEWAY_WS_HOST = "ws." + ingressConfig.RPC_GATEWAY_HOST
-    const needRpcGateWay = await confirm({
-      default: false,
-      message: `Do you want to use another RPC gateway for websocket host(${ingressConfig.RPC_GATEWAY_WS_HOST})`,
-    })
+    const needRpcGateWay = await resolveConfirm(
+      niCtx,
+      () => confirm({
+        default: false,
+        message: `Do you want to use another RPC gateway for websocket host(${ingressConfig.RPC_GATEWAY_WS_HOST})`,
+      }),
+      existingConfig.ingress?.RPC_GATEWAY_WS_HOST !== `ws.${existingConfig.ingress?.RPC_GATEWAY_HOST}`,
+      false
+    )
 
     if (needRpcGateWay) {
-      ingressConfig.RPC_GATEWAY_WS_HOST = await input({
-        message: 'Enter the WebSocket RPC gateway URL (RPC_GATEWAY_WS_HOST) for the SDK backend:',
-      })
-    } else {
-      // Use the same domain as RPC_GATEWAY_HOST
-
+      const wsHost = await resolveOrPrompt(
+        niCtx,
+        () => input({
+          message: 'Enter the WebSocket RPC gateway URL (RPC_GATEWAY_WS_HOST) for the SDK backend:',
+        }),
+        existingConfig.ingress?.RPC_GATEWAY_WS_HOST,
+        {
+          field: 'RPC_GATEWAY_WS_HOST',
+          configPath: '[ingress].RPC_GATEWAY_WS_HOST',
+          description: 'WebSocket RPC gateway host',
+        },
+        false
+      )
+      if (wsHost) {
+        ingressConfig.RPC_GATEWAY_WS_HOST = wsHost
+      }
     }
 
-    //forntendConfig setup
-    frontendConfig.ETH_SYMBOL = await input({
-      default: existingConfig.frontend?.ETH_SYMBOL || 'DOGE',
-      message: 'Enter the L1 Chain Symbol:',
-    });
+    // Frontend config setup
+    const ethSymbol = await resolveOrPrompt(
+      niCtx,
+      () => input({
+        default: existingConfig.frontend?.ETH_SYMBOL || 'DOGE',
+        message: 'Enter the L1 Chain Symbol:',
+      }),
+      existingConfig.frontend?.ETH_SYMBOL || 'DOGE',
+      {
+        field: 'ETH_SYMBOL',
+        configPath: '[frontend].ETH_SYMBOL',
+        description: 'L1 chain symbol (e.g., DOGE)',
+      },
+      false
+    )
+    frontendConfig.ETH_SYMBOL = ethSymbol || 'DOGE'
 
-    frontendConfig.CONNECT_WALLET_PROJECT_ID = await input({
-      default: existingConfig.frontend?.CONNECT_WALLET_PROJECT_ID || "14efbaafcf5232a47d93a68229b71028",
-      message: 'Enter wallet project ID:',
-    });
+    const walletProjectId = await resolveOrPrompt(
+      niCtx,
+      () => input({
+        default: existingConfig.frontend?.CONNECT_WALLET_PROJECT_ID || "14efbaafcf5232a47d93a68229b71028",
+        message: 'Enter wallet project ID:',
+      }),
+      existingConfig.frontend?.CONNECT_WALLET_PROJECT_ID || "14efbaafcf5232a47d93a68229b71028",
+      {
+        field: 'CONNECT_WALLET_PROJECT_ID',
+        configPath: '[frontend].CONNECT_WALLET_PROJECT_ID',
+        description: 'WalletConnect project ID',
+      },
+      false
+    )
+    frontendConfig.CONNECT_WALLET_PROJECT_ID = walletProjectId || "14efbaafcf5232a47d93a68229b71028"
 
-    // EXTERNAL_RPC_URI_L1 is an anvil public rpc . too many code depends on it
-    frontendConfig.DOGE_EXTERNAL_RPC_URI_L1 = await input({
-      default: existingConfig.frontend?.DOGE_EXTERNAL_RPC_URI_L1 || "https://sochain.com/DOGETEST",
-      message: 'Enter the L1 Public RPC URL:',
-    });
+    const dogeRpcL1 = await resolveOrPrompt(
+      niCtx,
+      () => input({
+        default: existingConfig.frontend?.DOGE_EXTERNAL_RPC_URI_L1 || "https://sochain.com/DOGETEST",
+        message: 'Enter the L1 Public RPC URL:',
+      }),
+      existingConfig.frontend?.DOGE_EXTERNAL_RPC_URI_L1 || "https://sochain.com/DOGETEST",
+      {
+        field: 'DOGE_EXTERNAL_RPC_URI_L1',
+        configPath: '[frontend].DOGE_EXTERNAL_RPC_URI_L1',
+        description: 'L1 public RPC URL',
+      },
+      false
+    )
+    frontendConfig.DOGE_EXTERNAL_RPC_URI_L1 = dogeRpcL1 || "https://sochain.com/DOGETEST"
 
-    frontendConfig.DOGE_EXTERNAL_EXPLORER_URI_L1 = await input({
-      default: existingConfig.frontend?.DOGE_EXTERNAL_EXPLORER_URI_L1 || "https://sochain.com/DOGETEST",
-      message: 'Enter the L1 Explorer URL:',
-    });
+    const dogeExplorerL1 = await resolveOrPrompt(
+      niCtx,
+      () => input({
+        default: existingConfig.frontend?.DOGE_EXTERNAL_EXPLORER_URI_L1 || "https://sochain.com/DOGETEST",
+        message: 'Enter the L1 Explorer URL:',
+      }),
+      existingConfig.frontend?.DOGE_EXTERNAL_EXPLORER_URI_L1 || "https://sochain.com/DOGETEST",
+      {
+        field: 'DOGE_EXTERNAL_EXPLORER_URI_L1',
+        configPath: '[frontend].DOGE_EXTERNAL_EXPLORER_URI_L1',
+        description: 'L1 explorer URL',
+      },
+      false
+    )
+    frontendConfig.DOGE_EXTERNAL_EXPLORER_URI_L1 = dogeExplorerL1 || "https://sochain.com/DOGETEST"
 
-    const confirmUpdate = await confirm({
-      message: 'Do you want to update the config.toml file with these new configurations?',
-    })
+    // Final confirmation - in non-interactive mode, always proceed
+    const confirmUpdate = await resolveConfirm(
+      niCtx,
+      () => confirm({
+        message: 'Do you want to update the config.toml file with these new configurations?',
+      }),
+      true, // In non-interactive, we always want to update
+      true
+    )
+
     if (confirmUpdate) {
-      await this.updateConfigFile(domainConfig, ingressConfig, generalConfig, frontendConfig)
+      await this.updateConfigFile(domainConfig, ingressConfig, generalConfig, frontendConfig, flags.json)
+
+      // Output JSON response on success
+      if (flags.json) {
+        jsonCtx.success({
+          updated: true,
+          general: generalConfig,
+          frontend: frontendConfig,
+          ingress: ingressConfig,
+          domain: domainConfig,
+        })
+      }
     } else {
-      this.logWarning('Configuration update cancelled.')
+      jsonCtx.log(chalk.yellow('Configuration update cancelled.'))
     }
   }
 
@@ -293,6 +489,7 @@ export default class SetupDomains extends Command {
   private async setupSharedConfigs(
     existingConfig: any,
     usesAnvil: boolean,
+    niCtx?: NonInteractiveContext,
   ): Promise<{
     domainConfig: Record<string, string>
     generalConfig: Record<string, string>
@@ -302,40 +499,66 @@ export default class SetupDomains extends Command {
     let domainConfig: Record<string, string> = {}
     let ingressConfig: Record<string, string> = {}
     const generalConfig: Record<string, string> = {}
-    let sharedEnding = false
     let urlEnding = ''
     let protocol = ''
 
-    sharedEnding = await confirm({
-      default: Boolean(existingConfig.ingress?.FRONTEND_HOST),
-      message: 'Do you want all external URLs to share a URL ending?',
-    })
+    // In non-interactive mode, determine shared ending from existing config
+    // If FRONTEND_HOST exists, we infer shared URL ending from it
+    const existingFrontendHost = existingConfig.ingress?.FRONTEND_HOST || ''
+    const hasSharedEnding = Boolean(existingFrontendHost)
+
+    // For non-interactive, infer shared ending if frontend host exists
+    let sharedEnding: boolean
+    if (niCtx?.enabled) {
+      sharedEnding = hasSharedEnding
+    } else {
+      sharedEnding = await confirm({
+        default: hasSharedEnding,
+        message: 'Do you want all external URLs to share a URL ending?',
+      })
+    }
 
     if (sharedEnding) {
-      const existingFrontendHost = existingConfig.ingress?.FRONTEND_HOST || ''
       const defaultUrlEnding =
         existingFrontendHost.startsWith('frontend.') || existingFrontendHost.startsWith('frontends.') || existingFrontendHost.startsWith('portal.')
           ? existingFrontendHost.split('.').slice(1).join('.')
           : existingFrontendHost || 'scrollsdk'
 
-      urlEnding = await input({
-        default: defaultUrlEnding,
-        message: 'Enter the shared URL ending:',
-      })
+      if (niCtx?.enabled) {
+        urlEnding = defaultUrlEnding
+      } else {
+        urlEnding = await input({
+          default: defaultUrlEnding,
+          message: 'Enter the shared URL ending:',
+        })
+      }
 
-      protocol = await select({
-        choices: [
-          { name: 'HTTP', value: 'http' },
-          { name: 'HTTPS', value: 'https' },
-        ],
-        default: existingConfig.frontend?.EXTERNAL_RPC_URI_L1?.startsWith('https') ? 'https' : 'http',
-        message: 'Choose the protocol for the shared URLs:',
-      })
+      // Infer protocol from existing config
+      const existingProtocol = existingConfig.frontend?.EXTERNAL_RPC_URI_L2?.startsWith('https') ? 'https' : 'http'
+      if (niCtx?.enabled) {
+        protocol = existingProtocol
+      } else {
+        protocol = await select({
+          choices: [
+            { name: 'HTTP', value: 'http' },
+            { name: 'HTTPS', value: 'https' },
+          ],
+          default: existingProtocol,
+          message: 'Choose the protocol for the shared URLs:',
+        })
+      }
 
-      const frontendAtRoot = await confirm({
-        message: 'Do you want the frontends to be hosted at the root domain? (No will use a "portal" subdomain)',
-        default: false,
-      })
+      // Infer frontend at root from existing config
+      const existingFrontendAtRoot = existingFrontendHost && !existingFrontendHost.startsWith('portal.')
+      let frontendAtRoot: boolean
+      if (niCtx?.enabled) {
+        frontendAtRoot = existingFrontendAtRoot
+      } else {
+        frontendAtRoot = await confirm({
+          message: 'Do you want the frontends to be hosted at the root domain? (No will use a "portal" subdomain)',
+          default: existingFrontendAtRoot,
+        })
+      }
 
       domainConfig = {
         ADMIN_SYSTEM_DASHBOARD_URI: `${protocol}://admin-system-dashboard.${urlEnding}`,
@@ -368,123 +591,194 @@ export default class SetupDomains extends Command {
         BLOCKBOOK_HOST: `blockbook.${urlEnding}`,
       }
     } else {
-      protocol = await select({
-        choices: [
-          { name: 'HTTP', value: 'http' },
-          { name: 'HTTPS', value: 'https' },
-        ],
-        default: existingConfig.frontend?.EXTERNAL_RPC_URI_L1?.startsWith('https') ? 'https' : 'http',
-        message: 'Choose the protocol for the URLs:',
-      })
+      // Non-shared URL ending path - each host configured individually
+      // In non-interactive mode, use existing config values
+      const existingProtocol = existingConfig.frontend?.EXTERNAL_RPC_URI_L1?.startsWith('https') ? 'https' : 'http'
+
+      if (niCtx?.enabled) {
+        protocol = existingProtocol
+      } else {
+        protocol = await select({
+          choices: [
+            { name: 'HTTP', value: 'http' },
+            { name: 'HTTPS', value: 'https' },
+          ],
+          default: existingProtocol,
+          message: 'Choose the protocol for the URLs:',
+        })
+      }
+
+      // Helper to resolve ingress hosts - uses existing config in non-interactive mode
+      const resolveIngressHost = async (
+        key: string,
+        defaultValue: string,
+        description: string
+      ): Promise<string> => {
+        const result = await resolveOrPrompt(
+          niCtx!,
+          () => input({
+            default: existingConfig.ingress?.[key] || defaultValue,
+            message: `Enter ${key}:`,
+          }),
+          existingConfig.ingress?.[key] || defaultValue,
+          {
+            field: key,
+            configPath: `[ingress].${key}`,
+            description,
+          },
+          false // Not strictly required - has defaults
+        )
+        return result || defaultValue
+      }
 
       ingressConfig = {
-        ADMIN_SYSTEM_DASHBOARD_HOST: await input({
-          default: existingConfig.ingress?.ADMIN_SYSTEM_DASHBOARD_HOST || 'admin-system-dashboard.scrollsdk',
-          message: 'Enter ADMIN_SYSTEM_DASHBOARD_HOST:',
-        }),
-        BLOCKSCOUT_BACKEND_HOST: await input({
-          default: existingConfig.ingress?.BLOCKSCOUT_BACKEND_HOST || 'blockscout-backend.scrollsdk',
-          message: 'Enter BLOCKSCOUT_BACKEND_HOST:',
-        }),
-        BLOCKSCOUT_HOST: await input({
-          default: existingConfig.ingress?.BLOCKSCOUT_HOST || 'blockscout.scrollsdk',
-          message: 'Enter BLOCKSCOUT_HOST:',
-        }),
-        BRIDGE_HISTORY_API_HOST: await input({
-          default: existingConfig.ingress?.BRIDGE_HISTORY_API_HOST || 'bridge-history-api.scrollsdk',
-          message: 'Enter BRIDGE_HISTORY_API_HOST:',
-        }),
-        COORDINATOR_API_HOST: await input({
-          default: existingConfig.ingress?.COORDINATOR_API_HOST || 'coordinator-api.scrollsdk',
-          message: 'Enter COORDINATOR_API_HOST:',
-        }),
-        FRONTEND_HOST: await input({
-          default: existingConfig.ingress?.FRONTEND_HOST || 'portal.scrollsdk',
-          message: 'Enter FRONTEND_HOST:',
-        }),
-        GRAFANA_HOST: await input({
-          default: existingConfig.ingress?.GRAFANA_HOST || 'grafana.scrollsdk',
-          message: 'Enter GRAFANA_HOST:',
-        }),
-        ROLLUP_EXPLORER_API_HOST: await input({
-          default: existingConfig.ingress?.ROLLUP_EXPLORER_API_HOST || 'rollup-explorer-backend.scrollsdk',
-          message: 'Enter ROLLUP_EXPLORER_API_HOST:',
-        }),
-        RPC_GATEWAY_HOST: await input({
-          default: existingConfig.ingress?.RPC_GATEWAY_HOST || 'rpc.scrollsdk',
-          message: 'Enter RPC_GATEWAY_HOST:',
-        }),
-        TSO_HOST: await input({
-          default: existingConfig.ingress?.TSO_HOST || 'tso.scrollsdk',
-          message: 'Enter TSO_HOST:',
-        }),
-        CELESTIA_HOST: await input({
-          default: existingConfig.ingress?.CELESTIA_HOST || 'celestia.scrollsdk',
-          message: 'Enter CELESTIA_HOST:',
-        }),
-        DOGECOIN_HOST: await input({
-          default: existingConfig.ingress?.DOGECOIN_HOST || 'dogecoin.scrollsdk',
-          message: 'Enter DOGECOIN_HOST:',
-        }),
-        BLOCKBOOK_HOST: await input({
-          default: existingConfig.ingress?.BLOCKBOOK_HOST || 'blockbook.scrollsdk',
-          message: 'Enter BLOCKBOOK_HOST:',
-        }),
+        ADMIN_SYSTEM_DASHBOARD_HOST: await resolveIngressHost(
+          'ADMIN_SYSTEM_DASHBOARD_HOST',
+          'admin-system-dashboard.scrollsdk',
+          'Admin system dashboard host'
+        ),
+        BLOCKSCOUT_BACKEND_HOST: await resolveIngressHost(
+          'BLOCKSCOUT_BACKEND_HOST',
+          'blockscout-backend.scrollsdk',
+          'Blockscout backend host'
+        ),
+        BLOCKSCOUT_HOST: await resolveIngressHost(
+          'BLOCKSCOUT_HOST',
+          'blockscout.scrollsdk',
+          'Blockscout explorer host'
+        ),
+        BRIDGE_HISTORY_API_HOST: await resolveIngressHost(
+          'BRIDGE_HISTORY_API_HOST',
+          'bridge-history-api.scrollsdk',
+          'Bridge history API host'
+        ),
+        COORDINATOR_API_HOST: await resolveIngressHost(
+          'COORDINATOR_API_HOST',
+          'coordinator-api.scrollsdk',
+          'Coordinator API host'
+        ),
+        FRONTEND_HOST: await resolveIngressHost(
+          'FRONTEND_HOST',
+          'portal.scrollsdk',
+          'Frontend/portal host'
+        ),
+        GRAFANA_HOST: await resolveIngressHost(
+          'GRAFANA_HOST',
+          'grafana.scrollsdk',
+          'Grafana monitoring host'
+        ),
+        ROLLUP_EXPLORER_API_HOST: await resolveIngressHost(
+          'ROLLUP_EXPLORER_API_HOST',
+          'rollup-explorer-backend.scrollsdk',
+          'Rollup explorer API host'
+        ),
+        RPC_GATEWAY_HOST: await resolveIngressHost(
+          'RPC_GATEWAY_HOST',
+          'rpc.scrollsdk',
+          'RPC gateway host'
+        ),
+        TSO_HOST: await resolveIngressHost(
+          'TSO_HOST',
+          'tso.scrollsdk',
+          'TSO service host'
+        ),
+        CELESTIA_HOST: await resolveIngressHost(
+          'CELESTIA_HOST',
+          'celestia.scrollsdk',
+          'Celestia node host'
+        ),
+        DOGECOIN_HOST: await resolveIngressHost(
+          'DOGECOIN_HOST',
+          'dogecoin.scrollsdk',
+          'Dogecoin node host'
+        ),
+        BLOCKBOOK_HOST: await resolveIngressHost(
+          'BLOCKBOOK_HOST',
+          'blockbook.scrollsdk',
+          'Blockbook indexer host'
+        ),
       }
 
       if (usesAnvil) {
-        ingressConfig.L1_DEVNET_HOST = await input({
-          default: existingConfig.ingress?.L1_DEVNET_HOST || 'l1-devnet.scrollsdk',
-          message: 'Enter L1_DEVNET_HOST:',
-        })
-        ingressConfig.L1_EXPLORER_HOST = await input({
-          default: existingConfig.ingress?.L1_EXPLORER_HOST || 'l1-explorer.scrollsdk',
-          message: 'Enter L1_EXPLORER_HOST:',
-        })
+        ingressConfig.L1_DEVNET_HOST = await resolveIngressHost(
+          'L1_DEVNET_HOST',
+          'l1-devnet.scrollsdk',
+          'L1 devnet host (Anvil)'
+        )
+        ingressConfig.L1_EXPLORER_HOST = await resolveIngressHost(
+          'L1_EXPLORER_HOST',
+          'l1-explorer.scrollsdk',
+          'L1 explorer host (Anvil)'
+        )
+      }
+
+      // Helper to resolve domain URIs
+      const resolveDomainUri = async (
+        key: string,
+        defaultValue: string,
+        description: string
+      ): Promise<string> => {
+        const result = await resolveOrPrompt(
+          niCtx!,
+          () => input({
+            default: existingConfig.frontend?.[key] || defaultValue,
+            message: `Enter ${key}:`,
+          }),
+          existingConfig.frontend?.[key] || defaultValue,
+          {
+            field: key,
+            configPath: `[frontend].${key}`,
+            description,
+          },
+          false
+        )
+        return result || defaultValue
       }
 
       domainConfig = {
-        ADMIN_SYSTEM_DASHBOARD_URI: await input({
-          default:
-            existingConfig.frontend?.ADMIN_SYSTEM_DASHBOARD_URI ||
-            `${protocol}://${ingressConfig.ADMIN_SYSTEM_DASHBOARD_HOST}`,
-          message: 'Enter ADMIN_SYSTEM_DASHBOARD_URI:',
-        }),
-        BRIDGE_API_URI: await input({
-          default:
-            existingConfig.frontend?.BRIDGE_API_URI || `${protocol}://${ingressConfig.BRIDGE_HISTORY_API_HOST}/api`,
-          message: 'Enter BRIDGE_API_URI:',
-        }),
-        EXTERNAL_EXPLORER_URI_L2: await input({
-          default:
-            existingConfig.frontend?.EXTERNAL_EXPLORER_URI_L2 || `${protocol}://${ingressConfig.BLOCKSCOUT_HOST}`,
-          message: 'Enter EXTERNAL_EXPLORER_URI_L2:',
-        }),
-        EXTERNAL_RPC_URI_L2: await input({
-          default: existingConfig.frontend?.EXTERNAL_RPC_URI_L2 || `${protocol}://${ingressConfig.RPC_GATEWAY_HOST}`,
-          message: 'Enter EXTERNAL_RPC_URI_L2:',
-        }),
-        GRAFANA_URI: await input({
-          default: existingConfig.frontend?.GRAFANA_URI || `${protocol}://${ingressConfig.GRAFANA_HOST}`,
-          message: 'Enter GRAFANA_URI:',
-        }),
-        ROLLUPSCAN_API_URI: await input({
-          default:
-            existingConfig.frontend?.ROLLUPSCAN_API_URI ||
-            `${protocol}://${ingressConfig.ROLLUP_EXPLORER_API_HOST}/api`,
-          message: 'Enter ROLLUPSCAN_API_URI:',
-        }),
+        ADMIN_SYSTEM_DASHBOARD_URI: await resolveDomainUri(
+          'ADMIN_SYSTEM_DASHBOARD_URI',
+          `${protocol}://${ingressConfig.ADMIN_SYSTEM_DASHBOARD_HOST}`,
+          'Admin system dashboard URI'
+        ),
+        BRIDGE_API_URI: await resolveDomainUri(
+          'BRIDGE_API_URI',
+          `${protocol}://${ingressConfig.BRIDGE_HISTORY_API_HOST}/api`,
+          'Bridge history API URI'
+        ),
+        EXTERNAL_EXPLORER_URI_L2: await resolveDomainUri(
+          'EXTERNAL_EXPLORER_URI_L2',
+          `${protocol}://${ingressConfig.BLOCKSCOUT_HOST}`,
+          'L2 block explorer URI'
+        ),
+        EXTERNAL_RPC_URI_L2: await resolveDomainUri(
+          'EXTERNAL_RPC_URI_L2',
+          `${protocol}://${ingressConfig.RPC_GATEWAY_HOST}`,
+          'L2 RPC endpoint URI'
+        ),
+        GRAFANA_URI: await resolveDomainUri(
+          'GRAFANA_URI',
+          `${protocol}://${ingressConfig.GRAFANA_HOST}`,
+          'Grafana monitoring URI'
+        ),
+        ROLLUPSCAN_API_URI: await resolveDomainUri(
+          'ROLLUPSCAN_API_URI',
+          `${protocol}://${ingressConfig.ROLLUP_EXPLORER_API_HOST}/api`,
+          'Rollup explorer API URI'
+        ),
       }
 
       if (usesAnvil) {
-        domainConfig.EXTERNAL_RPC_URI_L1 = await input({
-          default: existingConfig.frontend?.EXTERNAL_RPC_URI_L1 || `${protocol}://l1-devnet.scrollsdk`,
-          message: 'Enter EXTERNAL_RPC_URI_L1:',
-        })
-        domainConfig.EXTERNAL_EXPLORER_URI_L1 = await input({
-          default: existingConfig.frontend?.EXTERNAL_EXPLORER_URI_L1 || `${protocol}://l1-explorer.scrollsdk`,
-          message: 'Enter EXTERNAL_EXPLORER_URI_L1:',
-        })
+        domainConfig.EXTERNAL_RPC_URI_L1 = await resolveDomainUri(
+          'EXTERNAL_RPC_URI_L1',
+          `${protocol}://l1-devnet.scrollsdk`,
+          'L1 RPC endpoint URI (Anvil)'
+        )
+        domainConfig.EXTERNAL_EXPLORER_URI_L1 = await resolveDomainUri(
+          'EXTERNAL_EXPLORER_URI_L1',
+          `${protocol}://l1-explorer.scrollsdk`,
+          'L1 block explorer URI (Anvil)'
+        )
       }
     }
 
@@ -496,6 +790,7 @@ export default class SetupDomains extends Command {
     ingressConfig: Record<string, string>,
     generalConfig: Record<string, string>,
     frontendConfig: Record<string, string>,
+    jsonMode: boolean = false,
   ): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
     const existingConfig = await this.getExistingConfig()
@@ -545,9 +840,12 @@ export default class SetupDomains extends Command {
     // Merge the updated content with the original content to preserve comments
     const mergedContent = this.mergeTomlContent(fs.readFileSync(configPath, 'utf8'), updatedContent)
 
-    //fs.writeFileSync(configPath, mergedContent)
-    if (writeConfigs(mergedContent)) {
-      this.logSuccess('config.toml has been updated with the new domain configurations.')
+    // Pass silent=true when in JSON mode to avoid stdout pollution
+    if (writeConfigs(mergedContent, undefined, undefined, jsonMode)) {
+      // Only log to stdout in non-JSON mode (writeConfigs handles its own logging when not silent)
+      if (!jsonMode) {
+        this.logSuccess('config.toml has been updated with the new domain configurations.')
+      }
     }
   }
 }

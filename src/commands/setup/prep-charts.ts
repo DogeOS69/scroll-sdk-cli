@@ -11,6 +11,7 @@ import type { DogeConfig } from '../../types/doge-config.js'
 import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import { JsonOutputContext } from '../../utils/json-output.js'
 
 const execAsync = promisify(exec)
 
@@ -32,7 +33,16 @@ export default class SetupPrepCharts extends Command {
     'github-token': Flags.string({ description: 'GitHub Personal Access Token', required: false }),
     'values-dir': Flags.string({ description: 'Directory containing values files', default: './values' }),
     'skip-auth-check': Flags.boolean({ description: 'Skip authentication check for individual charts', default: false }),
-    'doge-config': Flags.string({ description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)' })
+    'doge-config': Flags.string({ description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)' }),
+    'non-interactive': Flags.boolean({
+      char: 'N',
+      description: 'Run without prompts. Auto-applies all detected changes.',
+      default: false,
+    }),
+    json: Flags.boolean({
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
+      default: false,
+    }),
   }
 
   private configMapping: Record<string, string | ((chartName: string, productionNumber: string) => string)> = {
@@ -78,6 +88,9 @@ export default class SetupPrepCharts extends Command {
   private dogeConfig: DogeConfig = {} as DogeConfig
   private flags: any; // To store parsed flags
   private withdrawalProcessorConfig: toml.JsonMap = {}
+  private nonInteractive: boolean = false
+  private jsonMode: boolean = false
+  private jsonCtx!: JsonOutputContext
 
   // Generic ingress processing function
   private processIngressHosts(
@@ -1171,25 +1184,31 @@ export default class SetupPrepCharts extends Command {
       }
 
       if (updated) {
-        this.log(`\nFor ${chalk.cyan(file)}:`)
-        this.log(chalk.green('Changes:'))
-        for (const change of changes) {
-          this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`)
+        if (!this.jsonMode) {
+          this.log(`\nFor ${chalk.cyan(file)}:`)
+          this.log(chalk.green('Changes:'))
+          for (const change of changes) {
+            this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`)
+          }
         }
 
-        const shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` })
+        let shouldUpdate = this.nonInteractive
+        if (!this.nonInteractive) {
+          shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` })
+        }
+
         if (shouldUpdate) {
           const yamlString = yaml.dump(productionYaml, YAML_DUMP_OPTIONS)
 
           fs.writeFileSync(yamlPath, yamlString)
-          this.log(chalk.green(`Updated ${file}`))
+          this.jsonCtx.logSuccess(`Updated ${file}`)
           updatedCharts++
         } else {
-          this.log(chalk.yellow(`Skipped updating ${file}`))
+          this.jsonCtx.info(`Skipped updating ${file}`)
           skippedCharts++
         }
       } else {
-        this.log(chalk.yellow(`No changes needed in ${file}`))
+        this.jsonCtx.info(`No changes needed in ${file}`)
         skippedCharts++
       }
     }
@@ -1246,13 +1265,19 @@ export default class SetupPrepCharts extends Command {
 
 
         if (updated) {
-          this.log(`\nFor ${chalk.cyan(file)}:`)
-          this.log(chalk.green('Changes:'))
-          for (const change of changes) {
-            this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`)
+          if (!this.jsonMode) {
+            this.log(`\nFor ${chalk.cyan(file)}:`)
+            this.log(chalk.green('Changes:'))
+            for (const change of changes) {
+              this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`)
+            }
           }
 
-          const shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` })
+          let shouldUpdate = this.nonInteractive
+          if (!this.nonInteractive) {
+            shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` })
+          }
+
           if (shouldUpdate) {
             // Preserve the literal block scalar format for scrollConfig
             const jsonConfigString = JSON.stringify(scrollConfigJson, null, 2);
@@ -1267,15 +1292,15 @@ export default class SetupPrepCharts extends Command {
             const yamlContent = `scrollConfig: |\n${indentedJson}\n`;
 
             fs.writeFileSync(yamlPath, yamlContent);
-            this.log(chalk.green(`Updated ${file}`))
+            this.jsonCtx.logSuccess(`Updated ${file}`)
             updatedCharts++;
           } else {
-            this.log(chalk.yellow(`Skipped updating ${file}`));
+            this.jsonCtx.info(`Skipped updating ${file}`);
             skippedCharts++;
           }
         }
       } else {
-        this.log(chalk.yellow(`No changes needed in ${file}`));
+        this.jsonCtx.info(`No changes needed in ${file}`);
         skippedCharts++;
       }
 
@@ -1323,13 +1348,19 @@ export default class SetupPrepCharts extends Command {
         }
 
         if (updated) {
-          this.log(`\nFor ${chalk.cyan(file)}:`);
-          this.log(chalk.green('Changes:'));
-          for (const change of changes) {
-            this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`);
+          if (!this.jsonMode) {
+            this.log(`\nFor ${chalk.cyan(file)}:`);
+            this.log(chalk.green('Changes:'));
+            for (const change of changes) {
+              this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`);
+            }
           }
 
-          const shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` });
+          let shouldUpdate = this.nonInteractive
+          if (!this.nonInteractive) {
+            shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` });
+          }
+
           if (shouldUpdate) {
             // Preserve the literal block scalar format for scrollConfig
             const tomlConfigString = toml.stringify(scrollConfigToml);
@@ -1344,14 +1375,14 @@ export default class SetupPrepCharts extends Command {
             const yamlContent = `scrollConfig: |\n${indentedToml}\n`;
 
             fs.writeFileSync(yamlPath, yamlContent);
-            this.log(chalk.green(`Updated ${file}`));
+            this.jsonCtx.logSuccess(`Updated ${file}`);
             updatedCharts++;
           } else {
-            this.log(chalk.yellow(`Skipped updating ${file}`));
+            this.jsonCtx.info(`Skipped updating ${file}`);
             skippedCharts++;
           }
         } else {
-          this.log(chalk.yellow(`No changes needed in ${file}`));
+          this.jsonCtx.info(`No changes needed in ${file}`);
           skippedCharts++;
         }
       }
@@ -1423,7 +1454,12 @@ export default class SetupPrepCharts extends Command {
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupPrepCharts)
 
-    this.log('Starting chart preparation...')
+    // Setup non-interactive/JSON mode
+    this.nonInteractive = flags['non-interactive']
+    this.jsonMode = flags.json
+    this.jsonCtx = new JsonOutputContext('setup prep-charts', this.jsonMode)
+
+    this.jsonCtx.info('Starting chart preparation...')
 
     // Load configs before processing yaml files
     await this.loadConfigs(flags)
@@ -1432,13 +1468,17 @@ export default class SetupPrepCharts extends Command {
       try {
         await this.authenticateGHCR(flags['github-username'], flags['github-token'])
       } catch (error) {
-        this.log('Failed to authenticate with GitHub Container Registry')
+        this.jsonCtx.addWarning('Failed to authenticate with GitHub Container Registry')
       }
     }
 
     let skipAuthCheck = flags['skip-auth-check']
-    if (!skipAuthCheck) {
+    if (!skipAuthCheck && !this.nonInteractive) {
       skipAuthCheck = !(await confirm({ message: 'Do you want to perform authentication checks for individual charts?' }))
+    } else if (this.nonInteractive && !skipAuthCheck) {
+      // In non-interactive mode, default to skipping auth check unless explicitly configured
+      skipAuthCheck = true
+      this.jsonCtx.info('Non-interactive mode: Skipping authentication checks')
     }
 
     // Validate Makefile
@@ -1450,15 +1490,27 @@ export default class SetupPrepCharts extends Command {
     const { updated: updatedProduction, skipped: skippedProduction } = await this.processProductionYaml(valuesDir);
     const { updated: updatedConfig, skipped: skippedConfig } = await this.processConfigYaml(valuesDir);
 
-    this.log(chalk.green(`\nUpdated instance-specific YAML files for ${updatedInstances} chart(s).`));
-    this.log(chalk.yellow(`Skipped ${skippedInstances} instance-specific chart(s).`));
+    this.jsonCtx.logSuccess(`Updated instance-specific YAML files for ${updatedInstances} chart(s).`);
+    this.jsonCtx.info(`Skipped ${skippedInstances} instance-specific chart(s).`);
 
-    this.log(chalk.green(`\nUpdated production YAML files for ${updatedProduction} chart(s).`))
-    this.log(chalk.yellow(`Skipped ${skippedProduction} chart(s).`))
+    this.jsonCtx.logSuccess(`Updated production YAML files for ${updatedProduction} chart(s).`)
+    this.jsonCtx.info(`Skipped ${skippedProduction} chart(s).`)
 
-    this.log(chalk.green(`\nUpdated config YAML files for ${updatedConfig} chart(s).`));
-    this.log(chalk.yellow(`Skipped ${skippedConfig} chart(s).`));
+    this.jsonCtx.logSuccess(`Updated config YAML files for ${updatedConfig} chart(s).`);
+    this.jsonCtx.info(`Skipped ${skippedConfig} chart(s).`);
 
-    this.log('Chart preparation completed.')
+    this.jsonCtx.logSuccess('Chart preparation completed.')
+
+    // JSON output
+    if (this.jsonMode) {
+      this.jsonCtx.success({
+        valuesDir,
+        instanceCharts: { updated: updatedInstances, skipped: skippedInstances },
+        productionCharts: { updated: updatedProduction, skipped: skippedProduction },
+        configCharts: { updated: updatedConfig, skipped: skippedConfig },
+        totalUpdated: updatedInstances + updatedProduction + updatedConfig,
+        totalSkipped: skippedInstances + skippedProduction + skippedConfig,
+      })
+    }
   }
 }
