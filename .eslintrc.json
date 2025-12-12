@@ -19,6 +19,10 @@
     "unicorn/prefer-top-level-await": "off",
     "guard-for-in": "error",
     "no-useless-catch": "error",
-    "unicorn/no-useless-switch-case": "warn"
+    "unicorn/no-useless-switch-case": "warn",
+    "valid-jsdoc": "off",
+    "max-depth": "off",
+    "max-params": "off",
+    "no-warning-comments": "off"
   }
 }
