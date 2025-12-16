@@ -132,8 +132,57 @@ export class BridgeInitCommand extends Command {
             }
         }
 
+        // Parse confirmed block height from output-test-data.json and update doge-config
+        let confirmedBlockHeight: number | undefined
+        let confirmedBlockHash: string | undefined
+        const testDataPath = path.join(dataDir, 'output-test-data.json')
+        if (fs.existsSync(testDataPath)) {
+            try {
+                const testData = JSON.parse(fs.readFileSync(testDataPath, 'utf-8'))
+                confirmedBlockHeight = testData.confirmed_block_height
+                confirmedBlockHash = testData.confirmed_block_hash
+
+                if (confirmedBlockHeight && confirmedBlockHeight > 0) {
+                    this.jsonCtx.info(`Bridge transactions confirmed at block height: ${confirmedBlockHeight}`)
+
+                    // Get network from setup_defaults.toml or config.toml
+                    const setupDefaults = toml.parse(fs.readFileSync(setupDefaultsPath, 'utf-8'))
+                    const network = (setupDefaults as any).network || 'testnet'
+
+                    // Update doge-config-{network}.toml with the confirmed height
+                    const dogeConfigPath = path.join(dataDir, `doge-config-${network}.toml`)
+                    if (fs.existsSync(dogeConfigPath)) {
+                        let dogeConfigStr = fs.readFileSync(dogeConfigPath, 'utf-8')
+                        // Update dogecoinIndexerStartHeight
+                        dogeConfigStr = dogeConfigStr.replace(
+                            /dogecoinIndexerStartHeight\s*=\s*["']?\d*["']?/,
+                            `dogecoinIndexerStartHeight = "${confirmedBlockHeight}"`
+                        )
+                        fs.writeFileSync(dogeConfigPath, dogeConfigStr)
+                        this.jsonCtx.info(`Updated ${dogeConfigPath} with dogecoinIndexerStartHeight = ${confirmedBlockHeight}`)
+                    } else {
+                        // Try the generic doge-config.toml
+                        const genericConfigPath = path.join(dataDir, 'doge-config.toml')
+                        if (fs.existsSync(genericConfigPath)) {
+                            let dogeConfigStr = fs.readFileSync(genericConfigPath, 'utf-8')
+                            dogeConfigStr = dogeConfigStr.replace(
+                                /dogecoinIndexerStartHeight\s*=\s*["']?\d*["']?/,
+                                `dogecoinIndexerStartHeight = "${confirmedBlockHeight}"`
+                            )
+                            fs.writeFileSync(genericConfigPath, dogeConfigStr)
+                            this.jsonCtx.info(`Updated ${genericConfigPath} with dogecoinIndexerStartHeight = ${confirmedBlockHeight}`)
+                        }
+                    }
+                }
+            } catch (e) {
+                this.jsonCtx.info(`Note: Could not parse output-test-data.json: ${e}`)
+            }
+        }
+
         // JSON success output
         this.jsonCtx.success({
+            confirmedBlockHash,
+            confirmedBlockHeight,
             imageTag,
             outputFiles: movedFiles,
             seed,
