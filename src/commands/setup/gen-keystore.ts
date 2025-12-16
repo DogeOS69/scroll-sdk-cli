@@ -503,7 +503,7 @@ export default class SetupGenKeystore extends Command {
   private async generateSequencerKeystore(index: number, providedPassword: string = ''): Promise<SequencerData> {
     let password = providedPassword
     if (!password) {
-      // eslint-disable-next-line no-constant-condition
+       
       while (!password) {
         password = await input({ message: `Enter a password for sequencer-${index} keystore:` })
         if (!password) {

@@ -307,7 +307,7 @@ export default class WalletSend extends Command {
     return undefined // No OP_RETURN data if no flags are set
   }
 
-  // eslint-disable-next-line max-params
+   
   private createTransaction(
     wallet: DogeWallet,
     amountSatoshis: number,

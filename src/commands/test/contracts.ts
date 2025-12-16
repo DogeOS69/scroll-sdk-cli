@@ -321,7 +321,7 @@ export default class TestContracts extends Command {
     }
   }
 
-  // eslint-disable-next-line max-params
+   
   private async checkContractOwner(
     provider: ethers.Provider,
     contracts: DeployedContract[],
