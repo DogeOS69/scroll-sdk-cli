@@ -41,6 +41,11 @@ export default class SetupConfigs extends Command {
       default: 'values',
       required: false,
     }),
+    'skip-genesis': Flags.boolean({
+      description: 'Skip genesis file generation (Docker step)',
+      default: false,
+      required: false,
+    }),
   }
 
   private dogeConfig: DogeConfig = {} as DogeConfig
@@ -73,39 +78,43 @@ export default class SetupConfigs extends Command {
     // Skip L1_CONTRACT_DEPLOYMENT_BLOCK for DogeOS network
     // this.log(chalk.blue('Checking L1_CONTRACT_DEPLOYMENT_BLOCK...'))
     // await this.updateL1ContractDeploymentBlock()
+    if (!flags['skip-genesis']) {
+      this.log(chalk.blue('Checking deployment salt...'))
+      await this.updateDeploymentSalt()
 
-    this.log(chalk.blue('Checking deployment salt...'))
-    await this.updateDeploymentSalt()
+      this.log(chalk.blue('Checking L1_FEE_VAULT_ADDR...'))
+      await this.updateL1FeeVaultAddr()
 
-    this.log(chalk.blue('Checking L1_FEE_VAULT_ADDR...'))
-    await this.updateL1FeeVaultAddr()
+      this.log(chalk.blue('Checking L2_BRIDGE_FEE_RECIPIENT_ADDR...'))
+      await this.updateL2BridgeFeeRecipientAddr()
 
-    this.log(chalk.blue('Checking L2_BRIDGE_FEE_RECIPIENT_ADDR...'))
-    await this.updateL2BridgeFeeRecipientAddr()
+      this.log(chalk.blue('Checking L1_PLONK_VERIFIER_ADDR...'))
+      await this.updateL1PlonkVerifierAddr()
 
-    this.log(chalk.blue('Checking L1_PLONK_VERIFIER_ADDR...'))
-    await this.updateL1PlonkVerifierAddr()
+      await this.updateBaseFeePerGas();
+      // this.log(chalk.blue('Checking sequencer enode...'))
+      // await this.updateSequencerEnode()
 
-    await this.updateBaseFeePerGas();
-    // this.log(chalk.blue('Checking sequencer enode...'))
-    // await this.updateSequencerEnode()
 
-    this.log(chalk.blue('Running docker command to generate configs...'))
-    await this.runDockerCommand(imageTag)
+      this.log(chalk.blue('Running docker command to generate configs...'))
+      await this.runDockerCommand(imageTag)
 
-    let parsedPublicConfig: any = {}
-    const publicConfigPath = path.join(process.cwd(), 'config.public.toml')
-    if (fs.existsSync(publicConfigPath)) {
-      try {
-        const publicConfigContent = fs.readFileSync(publicConfigPath, 'utf8')
-        parsedPublicConfig = toml.parse(publicConfigContent)
-        this.log(chalk.green('Successfully parsed config.public.toml'))
-      } catch (error: any) {
-        this.error(chalk.red(`Failed to parse config.public.toml: ${error.message}`))
-        // Optionally, decide if we should exit if parsing fails
+      let parsedPublicConfig: any = {}
+      const publicConfigPath = path.join(process.cwd(), 'config.public.toml')
+      if (fs.existsSync(publicConfigPath)) {
+        try {
+          const publicConfigContent = fs.readFileSync(publicConfigPath, 'utf8')
+          parsedPublicConfig = toml.parse(publicConfigContent)
+          this.log(chalk.green('Successfully parsed config.public.toml'))
+        } catch (error: any) {
+          this.error(chalk.red(`Failed to parse config.public.toml: ${error.message}`))
+          // Optionally, decide if we should exit if parsing fails
+        }
+      } else {
+        this.log(chalk.yellow('config.public.toml not found after docker command. Skipping .env generation for docker-compose.'))
       }
     } else {
-      this.log(chalk.yellow('config.public.toml not found after docker command. Skipping .env generation for docker-compose.'))
+      this.log(chalk.yellow('Skipping genesis generation (Docker command) and YAML processing.'))
     }
 
     this.log(chalk.blue('Creating secrets folder...'))
@@ -117,8 +126,10 @@ export default class SetupConfigs extends Command {
     this.log(chalk.blue('Creating secrets environment files...'))
     await this.createEnvFiles()
 
-    this.log(chalk.blue('Processing YAML files...'))
-    await this.processYamlFiles(configsDir)
+    if (!flags['skip-genesis']) {
+      this.log(chalk.blue('Processing YAML files...'))
+      await this.processYamlFiles(configsDir)
+    }
 
     this.log(chalk.green('Configuration setup completed.'))
   }
@@ -634,7 +645,7 @@ export default class SetupConfigs extends Command {
                   ? JSON.stringify(scrollConfigObject, null, 2)
                   : scrollConfigObject
 
-              const updatedYaml = yaml.dump(parsedYaml, {indent: 2})
+              const updatedYaml = yaml.dump(parsedYaml, { indent: 2 })
               fs.writeFileSync(targetPath, updatedYaml)
             } catch (error) {
               if (error instanceof Error) {

@@ -474,8 +474,11 @@ export default class SetupGenRpcPackage extends Command {
 
       //genesisJson for reth
       let genesisJsonForReth = JSON.parse(JSON.stringify(genesisJson));
-      genesisJsonForReth.config.scroll.l1Config["startL1Block"] = dogeConfig.defaults?.dogecoinIndexerStartHeight;
-      genesisJsonForReth.config.scroll.l1Config["systemContractAddress"] = genesisJsonForReth.config.systemContract.system_contract_address;
+      const l1Config = genesisJsonForReth.config.scroll.l1Config
+      l1Config.startL1Block = parseInt(dogeConfig.defaults?.dogecoinIndexerStartHeight || '')
+      l1Config.systemContractAddress = genesisJsonForReth.config.systemContract.system_contract_address
+      l1Config.l1ChainId = parseInt(l1Config.l1ChainId)
+      l1Config.numL1MessagesPerBlock = parseInt(l1Config.numL1MessagesPerBlock)
       fs.writeFileSync(path.join(targetDirectory, 'l2reth-genesis.json'), JSON.stringify(genesisJsonForReth, null, 2))
 
       return genesisJsonPath

@@ -11,7 +11,7 @@ import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
 const execAsync = promisify(exec)
 
 interface SecretService {
-  pushSecrets(cubesignerOnly?: boolean): Promise<void>
+  pushSecrets(cubesignerOnly?: boolean, filename?: string): Promise<string[]>
 }
 
 class AWSSecretService implements SecretService {
@@ -19,18 +19,39 @@ class AWSSecretService implements SecretService {
 
   constructor(private region: string, private prefixName: string, private debug: boolean) { }
 
-  async pushSecrets(cubesignerOnly: boolean = false): Promise<void> {
-    const secretsDir = path.join(process.cwd(), 'secrets');
+  async pushSecrets(cubesignerOnly: boolean = false, filename?: string): Promise<string[]> {
+    const pushedSecrets: string[] = []
+    let secretsDir = path.join(process.cwd(), 'secrets');
+
+    if (filename) {
+      const resolvedPath = path.resolve(process.cwd(), filename);
+      if (fs.existsSync(resolvedPath)) {
+        secretsDir = path.dirname(resolvedPath);
+        filename = path.basename(resolvedPath);
+      } else if (fs.existsSync(path.join(secretsDir, filename))) {
+        // Exists in default secrets dir
+      } else {
+        throw new Error(`Secret file not found: ${filename} (checked ${resolvedPath} and ${path.join(secretsDir, filename)})`)
+      }
+    }
 
     if (cubesignerOnly) {
       // Only process cubesigner-signer-N-session.json files
-      const sessionFiles = fs.readdirSync(secretsDir).filter((file) =>
+      let sessionFiles = fs.readdirSync(secretsDir).filter((file) =>
         file.match(/^cubesigner-signer-\d+-session\.json$/)
       );
 
+      if (filename) {
+        if (!filename.match(/^cubesigner-signer-\d+-session\.json$/)) {
+          console.warn(chalk.yellow(`File ${filename} is not a valid cubesigner session file. Ignoring.`));
+          throw new Error(`File ${filename} is not a valid cubesigner session file`)
+        }
+        sessionFiles = sessionFiles.filter(f => f === filename);
+      }
+
       if (sessionFiles.length === 0) {
         console.log(chalk.yellow('No cubesigner-signer-N-session.json files found in secrets directory'))
-        return
+        return []
       }
 
       for (const file of sessionFiles) {
@@ -38,12 +59,18 @@ class AWSSecretService implements SecretService {
         console.log(chalk.cyan(`Processing CubeSigner session secret: ${secretName}`))
         const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
         await this.createOrUpdateSecret({ 'session.json': content }, secretName)
+        pushedSecrets.push(secretName)
       }
-      return
+      return pushedSecrets
     }
 
     // Process JSON files
-    const jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json'));
+    let jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json'));
+    if (filename && filename.endsWith('.json')) {
+      jsonFiles = jsonFiles.filter((f) => f === filename)
+    } else if (filename) {
+      jsonFiles = []
+    }
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
 
@@ -65,10 +92,16 @@ class AWSSecretService implements SecretService {
         propertyName = file; // Or handle as an error
       }
       await this.createOrUpdateSecret({ [propertyName]: content }, secretName)
+      pushedSecrets.push(secretName)
     }
 
     // Process ENV files
-    const envFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.env'))
+    let envFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.env'))
+    if (filename && filename.endsWith('.env')) {
+      envFiles = envFiles.filter((f) => f === filename)
+    } else if (filename) {
+      envFiles = []
+    }
     const l2SequencerSecrets: Record<string, string> = {}
 
     for (const file of envFiles) {
@@ -77,6 +110,7 @@ class AWSSecretService implements SecretService {
       console.log(chalk.cyan(`Processing ENV secret: ${secretName}`))
       const data = await this.convertEnvToDict(path.join(secretsDir, file))
       await this.createOrUpdateSecret(data, secretName)
+      pushedSecrets.push(secretName)
 
       // Special handling for l2-sequencer-N-secret.env files
       // if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
@@ -118,6 +152,7 @@ class AWSSecretService implements SecretService {
     //   console.log(chalk.cyan(`Processing combined L2 Sequencer secrets: l2-sequencer-secret-env`))
     //   await this.createOrUpdateSecret(l2SequencerSecrets, 'l2-sequencer-secret-env')
     // }
+    return pushedSecrets
   }
 
   private async convertEnvToDict(filePath: string): Promise<Record<string, string>> {
@@ -252,14 +287,15 @@ class HashicorpVaultDevService implements SecretService {
     this.pathPrefix = pathPrefix
   }
 
-  async pushSecrets(cubesignerOnly: boolean = false): Promise<void> {
+  async pushSecrets(cubesignerOnly: boolean = false, filename?: string): Promise<string[]> {
+    const pushedSecrets: string[] = []
     if (!(await this.isVaultPodRunning())) {
       console.log(chalk.yellow('Vault pod is not running. Please install Vault using the following commands:'))
       console.log(chalk.cyan('helm repo add hashicorp https://helm.releases.hashicorp.com'))
       console.log(chalk.cyan('helm repo update'))
       console.log(chalk.cyan('helm install vault hashicorp/vault --set "server.dev.enabled=true"'))
       console.log(chalk.yellow('After installing Vault, please run this command again.'))
-      return
+      return []
     }
 
     // Check if the KV secrets engine is already enabled
@@ -286,17 +322,37 @@ class HashicorpVaultDevService implements SecretService {
       }
     }
 
-    const secretsDir = path.join(process.cwd(), 'secrets');
+    let secretsDir = path.join(process.cwd(), 'secrets');
+
+    if (filename) {
+      const resolvedPath = path.resolve(process.cwd(), filename);
+      if (fs.existsSync(resolvedPath)) {
+        secretsDir = path.dirname(resolvedPath);
+        filename = path.basename(resolvedPath);
+      } else if (fs.existsSync(path.join(secretsDir, filename))) {
+        // Exists in default secrets dir, keep defaults
+      } else {
+        throw new Error(`Secret file not found: ${filename} (checked ${resolvedPath} and ${path.join(secretsDir, filename)})`)
+      }
+    }
 
     if (cubesignerOnly) {
       // Only process cubesigner-signer-N-session.json files
-      const sessionFiles = fs.readdirSync(secretsDir).filter((file) =>
+      let sessionFiles = fs.readdirSync(secretsDir).filter((file) =>
         file.match(/^cubesigner-signer-\d+-session\.json$/)
       );
 
+      if (filename) {
+        if (!filename.match(/^cubesigner-signer-\d+-session\.json$/)) {
+          console.warn(chalk.yellow(`File ${filename} is not a valid cubesigner session file. Ignoring.`));
+          throw new Error(`File ${filename} is not a valid cubesigner session file`)
+        }
+        sessionFiles = sessionFiles.filter(f => f === filename);
+      }
+
       if (sessionFiles.length === 0) {
         console.log(chalk.yellow('No cubesigner-signer-N-session.json files found in secrets directory'))
-        return
+        return []
       }
 
       for (const file of sessionFiles) {
@@ -304,16 +360,31 @@ class HashicorpVaultDevService implements SecretService {
         console.log(chalk.cyan(`Processing CubeSigner session secret: ${this.pathPrefix}/${secretName}`))
         const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
         await this.pushJsonToVault(secretName, content, 'session.json')
+        pushedSecrets.push(secretName)
       }
 
       console.log(chalk.green('All CubeSigner session secrets have been processed and populated in Vault.'))
-      return
+      return pushedSecrets
     }
 
-    await this.processRollupExplorerBackendConfigSecret(secretsDir);
+    if (!filename || filename === 'rollup-explorer-backend-secret.json') {
+      const processed = await this.processRollupExplorerBackendConfigSecret(secretsDir);
+      if (processed) pushedSecrets.push('rollup-explorer-backend-secret')
+    }
 
     // Process JSON files
-    const jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json') && file !== 'rollup-explorer-backend-secret.json');
+    let jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json') && file !== 'rollup-explorer-backend-secret.json');
+
+    if (filename && filename.endsWith('.json')) {
+      // If specific file requested (and not special one handled above)
+      if (filename !== 'rollup-explorer-backend-secret.json') {
+        jsonFiles = jsonFiles.filter(f => f === filename);
+      } else {
+        jsonFiles = []; // Already handled above
+      }
+    } else if (filename) {
+      jsonFiles = []; // Not a json file requested
+    }
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
 
@@ -331,10 +402,17 @@ class HashicorpVaultDevService implements SecretService {
         propertyName = file; // Or handle as an error
       }
       await this.pushJsonToVault(secretName, content, propertyName)
+      pushedSecrets.push(secretName)
     }
 
     // Process ENV files
-    const envFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.env'))
+    let envFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.env'))
+
+    if (filename && filename.endsWith('.env')) {
+      envFiles = envFiles.filter(f => f === filename);
+    } else if (filename) {
+      envFiles = [];
+    }
     // const l2SequencerSecrets: Record<string, string> = {}
 
     for (const file of envFiles) {
@@ -343,6 +421,7 @@ class HashicorpVaultDevService implements SecretService {
       console.log(chalk.cyan(`Processing ENV secret: ${this.pathPrefix}/${secretName}`))
       const data = await this.convertEnvToDict(path.join(secretsDir, file))
       await this.pushToVault(secretName, data)
+      pushedSecrets.push(secretName)
 
       // I don't know why combine all sequencer secrets, but it is not safe to do so, so I just comment it out
       // Special handling for l2-sequencer-N-secret.env files
@@ -378,6 +457,7 @@ class HashicorpVaultDevService implements SecretService {
     // }
 
     console.log(chalk.green('All secrets have been processed and populated in Vault.'))
+    return pushedSecrets
   }
 
   private async convertEnvToDict(filePath: string): Promise<Record<string, string>> {
@@ -421,7 +501,7 @@ class HashicorpVaultDevService implements SecretService {
     }
   }
 
-  private async processRollupExplorerBackendConfigSecret(secretsDir: string): Promise<void> {
+  private async processRollupExplorerBackendConfigSecret(secretsDir: string): Promise<boolean> {
     const fileName = 'rollup-explorer-backend-secret.json';
     const filePath = path.join(secretsDir, fileName);
 
@@ -433,13 +513,15 @@ class HashicorpVaultDevService implements SecretService {
 
       if (!contentString.trim()) {
         console.log(chalk.red(`Skipping secret: ${secretManagerName} from ${fileName} because it is empty`));
-        return;
+        return false;
       }
       await this.pushJsonToVault(secretManagerName, contentString, propertyKey);
+      return true
     } else {
       if (this.debug) {
         console.log(chalk.yellow(`File ${fileName} not found in secrets directory. Skipping its specific processing.`));
       }
+      return false
     }
   }
 
@@ -596,6 +678,10 @@ export default class SetupPushSecrets extends Command {
       default: false,
       description: 'Only push CubeSigner related secrets (cubesigner-signer-* files)',
     }),
+    file: Flags.string({
+      char: 'f',
+      description: 'Specific secret file to push (e.g., my-secret.json)',
+    }),
   }
 
   private flags: any
@@ -636,7 +722,7 @@ export default class SetupPushSecrets extends Command {
     }
 
     try {
-      await service.pushSecrets(flags['cubesigner-only'])
+      const pushedSecrets = await service.pushSecrets(flags['cubesigner-only'], flags.file)
       this.log(chalk.green('Secrets pushed successfully'))
 
       if (flags['cubesigner-only']) {
@@ -649,7 +735,7 @@ export default class SetupPushSecrets extends Command {
       })
 
       if (shouldUpdateYaml) {
-        await this.updateProductionYaml(provider, credentials)
+        await this.updateProductionYaml(provider, credentials, pushedSecrets)
         this.log(chalk.green('Production YAML files updated successfully'))
       } else {
         this.log(chalk.yellow('Skipped updating production YAML files'))
@@ -780,7 +866,7 @@ export default class SetupPushSecrets extends Command {
     return config
   }
 
-  private async updateProductionYaml(provider: string, credentials: Record<string, string>): Promise<void> {
+  private async updateProductionYaml(provider: string, credentials: Record<string, string>, pushedSecrets: string[]): Promise<void> {
     const valuesDir = path.join(process.cwd(), this.flags['values-dir'])
     if (!fs.existsSync(valuesDir)) {
       this.error(chalk.red(`Values directory not found at ${valuesDir}`))
@@ -807,6 +893,7 @@ export default class SetupPushSecrets extends Command {
       let updated = false
       if (yamlContent.externalSecrets) {
         for (const [secretName, secret] of Object.entries(yamlContent.externalSecrets) as [string, any][]) {
+
           if (secret.provider !== provider) {
             secret.provider = provider
             updated = true
