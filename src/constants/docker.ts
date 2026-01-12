@@ -2,4 +2,4 @@ export const DOCKER_REPOSITORY = 'dogeos69/scroll-stack-contracts'
 
 // Base URL for Docker Hub v2 API for the above repository
 export const DOCKER_TAGS_URL = `https://registry.hub.docker.com/v2/repositories/${DOCKER_REPOSITORY}/tags`; 
-export const CONTRACTS_DOCKER_DEFAULT_TAG = '0.2.0-rc.1'
+export const CONTRACTS_DOCKER_DEFAULT_TAG = 'ad832a001b7c18dcd5d7c757f276187f83be3833'
