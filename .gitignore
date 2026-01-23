@@ -25,5 +25,6 @@ charts
 e2e_resume*
 .local-docs/
 .data/
+/.claude/
 
 

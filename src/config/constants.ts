@@ -9,7 +9,7 @@ import {fileURLToPath} from 'node:url'
  */
 
 // Setup defaults TOML file path relative to working directory
-export const SETUP_DEFAULTS_TOML_PATH = 'crates/test_utils/config/setup_defaults.toml'
+export const SETUP_DEFAULTS_TOML_PATH = '.data/setup_defaults.toml'
 
 // Get absolute path for setup defaults TOML
 export const getSetupDefaultsPath = (): string => path.resolve(process.cwd(), SETUP_DEFAULTS_TOML_PATH)
