@@ -4,7 +4,10 @@ import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { Client } from 'pg'
+import pg from 'pg'
+
+const { Client } = pg
+type PgClient = InstanceType<typeof Client>
 
 import { writeConfigs } from '../../utils/config-writer.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
@@ -61,7 +64,7 @@ export default class SetupDbInit extends Command {
     }),
   }
 
-  private conn: Client | undefined;
+  private conn: PgClient | undefined;
   private pgDatabase: string = "";
   private pgPassword: string = "";
   private pgUser: string = "";
@@ -346,20 +349,45 @@ export default class SetupDbInit extends Command {
     }
   }
 
-  private async createConnection(host: string, port: string, user: string, password: string, database: string): Promise<Client> {
-    const conn = new Client({
-      database,
-      host,
-      password,
-      port: Number.parseInt(port, 10),
-      ssl: {
-        rejectUnauthorized: false // Note: This is not secure for production use
-      },
-      user
-    })
+  private async createConnection(host: string, port: string, user: string, password: string, database: string): Promise<PgClient> {
+    const portNum = Number.parseInt(port, 10)
 
-    await conn.connect()
-    return conn
+    // Try with SSL first (required for production databases)
+    try {
+      const sslConn = new Client({
+        database,
+        host,
+        password,
+        port: portNum,
+        ssl: {
+          rejectUnauthorized: false // Note: This is not secure for production use
+        },
+        user
+      })
+      await sslConn.connect()
+      return sslConn
+    } catch (sslError) {
+      // Check if the error is specifically about SSL not being supported
+      const errorMsg = sslError instanceof Error ? sslError.message : String(sslError)
+      if (errorMsg.includes('does not support SSL') || errorMsg.includes('SSL connection')) {
+        this.log(chalk.yellow('SSL not supported by server, connecting without SSL...'))
+
+        // Retry without SSL (for local development databases)
+        const noSslConn = new Client({
+          database,
+          host,
+          password,
+          port: portNum,
+          ssl: false,
+          user
+        })
+        await noSslConn.connect()
+        return noSslConn
+      }
+
+      // Re-throw if it's a different error
+      throw sslError
+    }
   }
 
   private async getExistingConfig(): Promise<any> {
@@ -373,7 +401,7 @@ export default class SetupDbInit extends Command {
     return toml.parse(configContent) as any
   }
 
-  private async initializeDatabase(conn: Client, dbName: string, dbUser: string, dbPassword: string, clean: boolean, niCtx?: NonInteractiveContext): Promise<void> {
+  private async initializeDatabase(conn: PgClient, dbName: string, dbUser: string, dbPassword: string, clean: boolean, niCtx?: NonInteractiveContext): Promise<void> {
     try {
       // Check if the database exists
       const dbExistsResult = await conn.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [dbName])
@@ -685,7 +713,7 @@ export default class SetupDbInit extends Command {
     }
   }
 
-  private async updatePermissions(conn: Client, dbName: string, dbUser: string, debug: boolean): Promise<void> {
+  private async updatePermissions(conn: PgClient, dbName: string, dbUser: string, debug: boolean): Promise<void> {
     const queries = [
       `GRANT CONNECT ON DATABASE ${dbName} TO ${dbUser}`,
       `GRANT ALL PRIVILEGES ON DATABASE ${dbName} TO ${dbUser}`,
