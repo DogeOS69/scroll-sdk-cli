@@ -17,8 +17,32 @@ import { JsonOutputContext } from '../../utils/json-output.js'
 
 const execAsync = promisify(exec)
 
-
-
+/**
+ * Strip port from hostname for Kubernetes Ingress
+ * Kubernetes Ingress hosts cannot contain port numbers
+ * e.g., "localhost:8545" -> "localhost"
+ */
+function stripPortFromHost(host: string): string {
+  if (!host) return host
+  // Handle IPv6 addresses like [::1]:8545
+  if (host.includes('[')) {
+    const bracketEnd = host.indexOf(']')
+    if (bracketEnd !== -1 && host[bracketEnd + 1] === ':') {
+      return host.substring(0, bracketEnd + 1)
+    }
+    return host
+  }
+  // Handle regular hostname:port
+  const colonIndex = host.lastIndexOf(':')
+  if (colonIndex !== -1) {
+    // Check if what's after the colon is a number (port)
+    const potentialPort = host.substring(colonIndex + 1)
+    if (/^\d+$/.test(potentialPort)) {
+      return host.substring(0, colonIndex)
+    }
+  }
+  return host
+}
 
 export default class SetupPrepCharts extends Command {
   static override description = 'Validate Makefile and prepare Helm charts for Scroll SDK'
@@ -434,14 +458,16 @@ export default class SetupPrepCharts extends Command {
     if (ingressConfig && typeof ingressConfig === 'object' && 'hosts' in ingressConfig) {
       const hosts = ingressConfig.hosts as Array<{ host: string; paths?: any[] }>;
       if (Array.isArray(hosts)) {
+        // Strip port from hostname - Kubernetes Ingress hosts cannot contain ports
+        const sanitizedHost = hostConfigValue ? stripPortFromHost(hostConfigValue) : hostConfigValue;
         for (const [i, host] of hosts.entries()) {
-          if (typeof host === 'object' && 'host' in host && hostConfigValue && hostConfigValue !== host.host) {
+          if (typeof host === 'object' && 'host' in host && sanitizedHost && sanitizedHost !== host.host) {
               changes.push({
                 key: `${keyPrefix}.hosts[${i}].host`,
-                newValue: hostConfigValue,
+                newValue: sanitizedHost,
                 oldValue: host.host
               });
-              host.host = hostConfigValue;
+              host.host = sanitizedHost;
               ingressUpdated = true;
             }
         }
@@ -650,10 +676,14 @@ export default class SetupPrepCharts extends Command {
                     }
                   }
 
-                  if (configValue && configValue !== host.host) {
-                    changes.push({ key: `ingress.${ingressKey}.hosts[${i}].host`, newValue: configValue, oldValue: host.host });
-                    host.host = configValue;
-                    ingressUpdated = true;
+                  if (configValue) {
+                    // Strip port from hostname - Kubernetes Ingress hosts cannot contain ports
+                    const sanitizedHost = stripPortFromHost(configValue);
+                    if (sanitizedHost !== host.host) {
+                      changes.push({ key: `ingress.${ingressKey}.hosts[${i}].host`, newValue: sanitizedHost, oldValue: host.host });
+                      host.host = sanitizedHost;
+                      ingressUpdated = true;
+                    }
                   }
                 }
               }
@@ -907,10 +937,12 @@ export default class SetupPrepCharts extends Command {
             for (let i = 0; i < hosts.length; i++) {
               if (typeof (hosts[i]) === 'string') {
                 const configValue: string | undefined = this.getConfigValue("ingress.GRAFANA_HOST");
+                // Strip port from hostname - Kubernetes Ingress hosts cannot contain ports
+                const sanitizedHost = configValue ? stripPortFromHost(configValue) : configValue;
 
-                if (configValue && (configValue !== hosts[i])) {
-                  changes.push({ key: `ingress.hosts[${i}]`, newValue: configValue, oldValue: hosts[i] });
-                  hosts[i] = configValue;
+                if (sanitizedHost && (sanitizedHost !== hosts[i])) {
+                  changes.push({ key: `ingress.hosts[${i}]`, newValue: sanitizedHost, oldValue: hosts[i] });
+                  hosts[i] = sanitizedHost;
                   ingressUpdated = true;
                 }
               }
