@@ -169,6 +169,7 @@ export default class SetupConfigs extends Command {
         yamlFilesProcessed: true,
       })
     }
+
   }
 
   private canAccessFile(filePath: string): boolean {
@@ -805,6 +806,12 @@ export default class SetupConfigs extends Command {
         })
       })
 
+      // Clean up the log stream to prevent hanging
+      stream.unpipe(process.stdout)
+      if ('destroy' in stream && typeof stream.destroy === 'function') {
+        stream.destroy()
+      }
+
       // Remove the container
       await container.remove()
 
@@ -841,6 +848,12 @@ export default class SetupConfigs extends Command {
       }
     } catch (error) {
       this.error(`Failed to run Docker command: ${error}`)
+    } finally {
+      // Close Docker HTTP agent to release event loop
+      const agent = (docker.modem as any).agent
+      if (agent && typeof agent.destroy === 'function') {
+        agent.destroy()
+      }
     }
   }
 
