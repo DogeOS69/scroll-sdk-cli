@@ -3,10 +3,9 @@ import { confirm } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import * as yaml from 'js-yaml'
-import { exec } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { promisify } from 'node:util'
 
 import type { DogeConfig } from '../../types/doge-config.js'
 
@@ -14,8 +13,6 @@ import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
-
-const execAsync = promisify(exec)
 
 /**
  * Strip port from hostname for Kubernetes Ingress
@@ -183,8 +180,18 @@ export default class SetupPrepCharts extends Command {
   }
 
   private async authenticateGHCR(username: string, token: string): Promise<void> {
-    const command = `echo ${token} | docker login ghcr.io -u ${username} --password-stdin`
-    await execAsync(command)
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn('docker', ['login', 'ghcr.io', '-u', username, '--password-stdin'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+      child.stdin.write(token)
+      child.stdin.end()
+      child.on('close', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(`docker login exited with code ${code}`))
+      })
+      child.on('error', reject)
+    })
     this.log('Authenticated with GitHub Container Registry')
   }
 
@@ -1524,7 +1531,7 @@ export default class SetupPrepCharts extends Command {
         const ociVersion = ociVersionMatch && ociVersionMatch.length > 1 ? ociVersionMatch[1] : "";
 
         if (!skipAuthCheck) {
-          const hasAccess = await this.validateOCIAccess(ociUrl, ociVersion)
+          const hasAccess = this.validateOCIAccess(ociUrl, ociVersion)
 
           if (hasAccess) {
             this.log(chalk.green(`Access verified for chart: ${chartName}`))
@@ -1553,10 +1560,13 @@ export default class SetupPrepCharts extends Command {
     }
   }
 
-  private async validateOCIAccess(ociUrl: string, ociVersion: string): Promise<boolean> {
+  private validateOCIAccess(ociUrl: string, ociVersion: string): boolean {
     try {
-      const versionArgument = ociVersion ? ` --version ${ociVersion}` : "";
-      await execAsync(`helm show chart ${ociUrl}${versionArgument}`)
+      const args = ['show', 'chart', ociUrl]
+      if (ociVersion) {
+        args.push('--version', ociVersion)
+      }
+      execFileSync('helm', args, { stdio: 'pipe' })
       return true
     } catch {
       return false

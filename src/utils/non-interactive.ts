@@ -7,6 +7,8 @@
 
 import chalk from 'chalk'
 
+import { CliExitError, type ErrorResponse } from './json-output.js'
+
 /**
  * Represents a missing field that was required but not found in config
  */
@@ -69,7 +71,17 @@ export function resolveEnvValue(value: string | undefined): string | undefined {
   if (match) {
     const envVarName = match[1]
     const envValue = process.env[envVarName]
-    return envValue || undefined
+    if (envValue === undefined) {
+      console.error(chalk.yellow(`Warning: Environment variable ${envVarName} referenced via $ENV: is not set`))
+      return undefined
+    }
+
+    if (envValue === '') {
+      console.error(chalk.yellow(`Warning: Environment variable ${envVarName} is set but empty`))
+      return undefined
+    }
+
+    return envValue
   }
 
   return value
@@ -218,37 +230,38 @@ export async function resolveConfirm(
 }
 
 /**
- * Validate that all required fields were found and exit if not.
+ * Validate that all required fields were found. If any are missing, outputs
+ * a structured error and throws CliExitError (allowing finally blocks to run).
  *
  * Call this after all resolveOrPrompt calls to ensure the command can proceed.
- * In non-interactive mode, this will exit with code 1 if any required fields are missing.
  *
  * @param ctx - The non-interactive context
+ * @throws {CliExitError} if required fields are missing
  */
 export function validateAndExit(ctx: NonInteractiveContext): void {
   if (ctx.missingFields.length === 0) {
     return
   }
 
-  if (ctx.jsonOutput) {
-    // JSON error output
-    const errorResponse = {
-      command: ctx.command,
-      error: {
-        category: 'CONFIGURATION',
-        code: 'E601_MISSING_FIELD',
-        context: {
-          missingFields: ctx.missingFields,
-        },
-        message: `Missing ${ctx.missingFields.length} required configuration value(s) for non-interactive mode`,
-        recoverable: true,
+  const message = `Missing ${ctx.missingFields.length} required configuration value(s) for non-interactive mode`
+  const response: ErrorResponse = {
+    command: ctx.command,
+    error: {
+      category: 'CONFIGURATION',
+      code: 'E601_MISSING_FIELD',
+      context: {
+        missingFields: ctx.missingFields,
       },
-      success: false,
-      timestamp: new Date().toISOString(),
-    }
-    console.log(JSON.stringify(errorResponse, null, 2))
+      message,
+      recoverable: true,
+    },
+    success: false,
+    timestamp: new Date().toISOString(),
+  }
+
+  if (ctx.jsonOutput) {
+    console.log(JSON.stringify(response, null, 2))
   } else {
-    // Human-readable error output (to stderr)
     console.error(chalk.red(`\n✖ Non-interactive mode failed for command: ${ctx.command}`))
     console.error(chalk.red(`\nMissing ${ctx.missingFields.length} required configuration value(s):\n`))
 
@@ -263,7 +276,7 @@ export function validateAndExit(ctx: NonInteractiveContext): void {
     console.error(chalk.gray('Tip: Use $ENV:VARIABLE_NAME syntax in config.toml for secrets'))
   }
 
-  process.exit(1)
+  throw new CliExitError(response)
 }
 
 /**

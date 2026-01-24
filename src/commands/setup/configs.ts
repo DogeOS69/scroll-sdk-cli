@@ -14,7 +14,7 @@ import type { DogeConfig } from '../../types/doge-config.js'
 import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
 import { writeConfigs } from '../../utils/config-writer.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
-import { JsonOutputContext } from '../../utils/json-output.js'
+import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import {
   resolveEnvValue,
 } from '../../utils/non-interactive.js'
@@ -185,8 +185,13 @@ export default class SetupConfigs extends Command {
   private async createEnvFiles(): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
     if (!fs.existsSync(configPath)) {
-      this.error(chalk.red('config.toml not found in the current directory.'))
-      return
+      this.jsonCtx.error(
+        'E101_CONFIG_NOT_FOUND',
+        'config.toml not found in the current directory.',
+        'CONFIGURATION',
+        true,
+        { path: configPath }
+      )
     }
 
     const configContent = fs.readFileSync(configPath, 'utf8')
@@ -283,7 +288,13 @@ export default class SetupConfigs extends Command {
       const data = await response.json()
       return data.results.map((tag: any) => tag.name).filter((tag: string) => tag.startsWith('gen-configs-'))
     } catch (error) {
-      this.error(`Failed to fetch Docker tags: ${error}`)
+      this.jsonCtx.error(
+        'E400_DOCKER_IMAGE_PULL_FAILED',
+        `Failed to fetch Docker tags: ${error}`,
+        'DOCKER',
+        true,
+        { error: String(error) }
+      )
     }
   }
 
@@ -471,7 +482,13 @@ export default class SetupConfigs extends Command {
         content += `DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY="${withdrawal_processor_toml.fee_signer_key}"\n`
         content += `DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY="${withdrawal_processor_toml.sequencer_signer_key}"\n`
       } else {
-        this.error(`${withdrawal_processor_toml_path} not found`)
+        this.jsonCtx.error(
+          'E101_CONFIG_NOT_FOUND',
+          `${withdrawal_processor_toml_path} not found`,
+          'CONFIGURATION',
+          true,
+          { path: withdrawal_processor_toml_path }
+        )
       }
 
       const url = this.dogeConfig.da?.tendermintRpcUrl || '';
@@ -551,20 +568,16 @@ export default class SetupConfigs extends Command {
 
       if (changeOwnership) {
         try {
-          const command = `sudo find ${sourceDir} -name "*.yaml" -user root -exec sudo chown -R $USER: {} \\;`
-          childProcess.execSync(command, { stdio: 'inherit' })
+          childProcess.execFileSync('sudo', ['find', sourceDir, '-name', '*.yaml', '-user', 'root', '-exec', 'sudo', 'chown', '-R', `${process.env.USER || 'root'}:`, '{}', ';'], { stdio: 'inherit' })
           this.jsonCtx.logSuccess('File ownership changed successfully.')
         } catch (error) {
-          if (this.nonInteractive) {
-            this.jsonCtx.error(
-              'E900_UNEXPECTED_ERROR',
-              `Failed to change file ownership: ${error}`,
-              'INTERNAL',
-              false
-            )
-          }
-
-          this.error(`Failed to change file ownership: ${error}`)
+          this.jsonCtx.error(
+            'E900_UNEXPECTED_ERROR',
+            `Failed to change file ownership: ${error}`,
+            'INTERNAL',
+            false,
+            { error: String(error) }
+          )
           return // Exit the method if we can't change permissions
         }
       } else {
@@ -794,17 +807,22 @@ export default class SetupConfigs extends Command {
       stream.pipe(this.jsonMode ? process.stderr : process.stdout)
 
       // Wait for the container to finish
-      await new Promise((resolve) => {
-        container.wait((err, data) => {
-          if (err) {
-            this.error(`Container exited with error: ${err}`)
-          } else if (data.StatusCode !== 0) {
-            this.error(`Container exited with status code: ${data.StatusCode}`)
-          }
-
-          resolve(null)
+      const { StatusCode } = await new Promise<{ StatusCode: number }>((resolve, reject) => {
+        container.wait((err: Error | null, data: { StatusCode: number }) => {
+          if (err) reject(err)
+          else resolve(data)
         })
       })
+
+      if (StatusCode !== 0) {
+        this.jsonCtx.error(
+          'E401_DOCKER_CONTAINER_FAILED',
+          `Container exited with status code: ${StatusCode}`,
+          'DOCKER',
+          false,
+          { statusCode: StatusCode }
+        )
+      }
 
       // Clean up the log stream to prevent hanging
       stream.unpipe(this.jsonMode ? process.stderr : process.stdout)
@@ -847,7 +865,14 @@ export default class SetupConfigs extends Command {
         }
       }
     } catch (error) {
-      this.error(`Failed to run Docker command: ${error}`)
+      if (error instanceof CliExitError) throw error
+      this.jsonCtx.error(
+        'E401_DOCKER_CONTAINER_FAILED',
+        `Failed to run Docker command: ${error}`,
+        'DOCKER',
+        false,
+        { error: String(error) }
+      )
     } finally {
       // Close Docker HTTP agent to release event loop
       const agent = (docker.modem as any).agent

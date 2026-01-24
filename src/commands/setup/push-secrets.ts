@@ -8,7 +8,7 @@ import * as path from 'node:path'
 import { promisify } from 'node:util'
 
 import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
-import { JsonOutputContext } from '../../utils/json-output.js'
+import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import { resolveEnvValue } from '../../utils/non-interactive.js'
 
 const execAsync = promisify(exec)
@@ -788,6 +788,7 @@ export default class SetupPushSecrets extends Command {
         })
       }
     } catch (error) {
+      if (error instanceof CliExitError) throw error
       if (this.jsonMode) {
         this.jsonCtx.error(
           'E900_UNEXPECTED_ERROR',

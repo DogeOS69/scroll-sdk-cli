@@ -3,7 +3,7 @@ import { confirm, input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import bitcore from 'bitcore-lib-doge'
 import chalk from 'chalk'
-import { execSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import * as os from 'node:os'
 import path, { dirname } from 'node:path'
@@ -107,19 +107,19 @@ export class DummySignersManager {
     await (deploymentType === 'local' ? this.setupLocalSigners(availableTags) : this.setupAwsSigners(availableTags));
   }
 
-  private buildDockerCommand(index: number, config: any, network: string, tsoUrl: string, imageName: string): string {
+  private buildDockerArgs(index: number, config: any, network: string, tsoUrl: string, imageName: string): string[] {
     return [
-      'docker run -d',
-      `--name dummy-signer-${index}`,
-      `-p ${config.port}:8080`,
-      `-e DUMMY_SIGNER_WIF="${config.wif}"`,
-      `-e DUMMY_SIGNER_NETWORK="${network}"`,
-      `-e DUMMY_SIGNER_TSO_URL="${tsoUrl}"`,
-      `-e PORT="8080"`,
-      `-e RUST_LOG="info"`,
-      `-e RUST_BACKTRACE="1"`,
+      'run', '-d',
+      '--name', `dummy-signer-${index}`,
+      '-p', `${config.port}:8080`,
+      '-e', `DUMMY_SIGNER_WIF=${config.wif}`,
+      '-e', `DUMMY_SIGNER_NETWORK=${network}`,
+      '-e', `DUMMY_SIGNER_TSO_URL=${tsoUrl}`,
+      '-e', 'PORT=8080',
+      '-e', 'RUST_LOG=info',
+      '-e', 'RUST_BACKTRACE=1',
       imageName
-    ].join(' ')
+    ]
   }
 
   private async collectSignerConfigs(numSigners: number, generateWifKeys: boolean): Promise<Array<{ port: number, publicKey?: string, wif: string }>> {
@@ -370,17 +370,22 @@ export class DummySignersManager {
 
         try {
           // Get the service ARN first
-          const serviceListOutput = execSync(
-            `aws apprunner list-services --region ${awsRegion} --query "ServiceSummaryList[?ServiceName=='${serviceName}'].ServiceArn" --output text`,
-            { encoding: 'utf8' }
-          ).trim();
+          const serviceListOutput = execFileSync('aws', [
+            'apprunner', 'list-services',
+            '--region', awsRegion,
+            '--query', `ServiceSummaryList[?ServiceName=='${serviceName}'].ServiceArn`,
+            '--output', 'text'
+          ], { encoding: 'utf8' }).trim();
 
           if (serviceListOutput) {
             // Get the service URL using the ARN
-            const serviceUrlOutput = execSync(
-              `aws apprunner describe-service --service-arn "${serviceListOutput}" --region ${awsRegion} --query "Service.ServiceUrl" --output text`,
-              { encoding: 'utf8' }
-            ).trim();
+            const serviceUrlOutput = execFileSync('aws', [
+              'apprunner', 'describe-service',
+              '--service-arn', serviceListOutput,
+              '--region', awsRegion,
+              '--query', 'Service.ServiceUrl',
+              '--output', 'text'
+            ], { encoding: 'utf8' }).trim();
 
             if (serviceUrlOutput && serviceUrlOutput !== 'None') {
               const fullUrl = serviceUrlOutput.startsWith('https://') ? serviceUrlOutput : `https://${serviceUrlOutput}`;
@@ -413,8 +418,10 @@ export class DummySignersManager {
   private getDockerGatewayIP(): null | string {
     try {
       // Get Docker bridge network gateway IP
-      const gatewayIP = execSync('docker network inspect bridge -f "{{range .IPAM.Config}}{{.Gateway}}{{end}}" 2>/dev/null',
-        { encoding: 'utf8', timeout: 3000 }).trim()
+      const gatewayIP = execFileSync('docker', [
+        'network', 'inspect', 'bridge',
+        '-f', '{{range .IPAM.Config}}{{.Gateway}}{{end}}'
+      ], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 3000 }).trim()
 
       if (gatewayIP && this.isValidIP(gatewayIP)) {
         return gatewayIP
@@ -468,8 +475,10 @@ export class DummySignersManager {
   private getKubernetesNodeIP(): null | string {
     try {
       // Check if kubectl is available and we can get node info
-      const nodeIP = execSync('kubectl get nodes -o jsonpath="{.items[0].status.addresses[?(@.type==\'InternalIP\')].address}" 2>/dev/null',
-        { encoding: 'utf8', timeout: 3000 }).trim()
+      const nodeIP = execFileSync('kubectl', [
+        'get', 'nodes',
+        '-o', 'jsonpath={.items[0].status.addresses[?(@.type==\'InternalIP\')].address}'
+      ], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 3000 }).trim()
 
       if (nodeIP && this.isValidIP(nodeIP)) {
         return nodeIP
@@ -540,26 +549,26 @@ export class DummySignersManager {
     this.log('Checking prerequisites...');
 
     try {
-      execSync('which aws', { stdio: 'pipe' });
-      execSync('aws sts get-caller-identity', { stdio: 'pipe' });
+      execFileSync('which', ['aws'], { stdio: 'pipe' });
+      execFileSync('aws', ['sts', 'get-caller-identity'], { stdio: 'pipe' });
     } catch {
       throw new Error('AWS CLI is not installed or not configured. Please install and configure AWS CLI first.');
     }
 
     try {
-      execSync('docker info', { stdio: 'pipe' });
+      execFileSync('docker', ['info'], { stdio: 'pipe' });
     } catch {
       throw new Error('Docker is not installed or not running. Please install and start Docker first.');
     }
 
     this.log('Checking ECR repository...');
     try {
-      execSync(`aws ecr describe-repositories --repository-names ${repoName} --region ${awsRegion}`, { stdio: 'pipe' });
+      execFileSync('aws', ['ecr', 'describe-repositories', '--repository-names', repoName, '--region', awsRegion], { stdio: 'pipe' });
       this.log(`Repository ${repoName} already exists.`);
     } catch {
       this.log(`Repository ${repoName} does not exist. Creating...`);
       try {
-        execSync(`aws ecr create-repository --repository-name ${repoName} --region ${awsRegion}`, { stdio: 'pipe' });
+        execFileSync('aws', ['ecr', 'create-repository', '--repository-name', repoName, '--region', awsRegion], { stdio: 'pipe' });
         this.log(`Repository ${repoName} created successfully.`);
       } catch (createError) {
         throw new Error(`Failed to create ECR repository: ${createError}`);
@@ -568,7 +577,14 @@ export class DummySignersManager {
 
     this.log('Logging in to ECR...');
     try {
-      execSync(`aws ecr get-login-password --region ${awsRegion} | docker login --username AWS --password-stdin ${ecrRegistry}`, { stdio: 'pipe' });
+      const loginPassword = execFileSync('aws', ['ecr', 'get-login-password', '--region', awsRegion], { encoding: 'utf8' }).trim();
+      const child = spawnSync('docker', ['login', '--username', 'AWS', '--password-stdin', ecrRegistry], {
+        input: loginPassword,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      if (child.status !== 0) {
+        throw new Error(child.stderr?.toString() || 'docker login failed');
+      }
       this.log('Successfully logged in to ECR.');
     } catch (error) {
       throw new Error(`Failed to log in to ECR: ${error}`);
@@ -577,7 +593,7 @@ export class DummySignersManager {
     this.log('Checking if image exists in ECR...');
     let imageExistsInECR = false;
     try {
-      execSync(`aws ecr describe-images --repository-name ${repoName} --image-ids imageTag=latest --region ${awsRegion}`, { stdio: 'pipe' });
+      execFileSync('aws', ['ecr', 'describe-images', '--repository-name', repoName, '--image-ids', 'imageTag=latest', '--region', awsRegion], { stdio: 'pipe' });
       imageExistsInECR = true;
       this.log('Image already exists in ECR.');
     } catch {
@@ -588,7 +604,7 @@ export class DummySignersManager {
       this.log('Checking local Docker images...');
       let localImageExists = false;
       try {
-        const result = execSync(`docker images ${dockerHubImage} --format "{{.Repository}}:{{.Tag}}"`, { encoding: 'utf8' });
+        const result = execFileSync('docker', ['images', dockerHubImage, '--format', '{{.Repository}}:{{.Tag}}'], { encoding: 'utf8' });
         localImageExists = result.trim() === dockerHubImage;
       } catch {
         localImageExists = false;
@@ -599,7 +615,7 @@ export class DummySignersManager {
       } else {
         this.log(`Pulling ${dockerHubImage} from Docker Hub...`);
         try {
-          execSync(`docker pull ${dockerHubImage}`, { stdio: 'inherit' });
+          execFileSync('docker', ['pull', dockerHubImage], { stdio: 'inherit' });
         } catch (error) {
           throw new Error(`Failed to pull image from Docker Hub: ${error}`);
         }
@@ -607,14 +623,14 @@ export class DummySignersManager {
 
       this.log(`Tagging image for ECR...`);
       try {
-        execSync(`docker tag ${dockerHubImage} ${ecrImage}`, { stdio: 'pipe' });
+        execFileSync('docker', ['tag', dockerHubImage, ecrImage], { stdio: 'pipe' });
       } catch (error) {
         throw new Error(`Failed to tag image: ${error}`);
       }
 
       this.log(`Pushing image to ECR...`);
       try {
-        execSync(`docker push ${ecrImage}`, { stdio: 'inherit' });
+        execFileSync('docker', ['push', ecrImage], { stdio: 'inherit' });
         this.log('Successfully pushed image to ECR.');
       } catch (error) {
         throw new Error(`Failed to push image to ECR: ${error}`);
@@ -623,8 +639,8 @@ export class DummySignersManager {
 
     this.log('Verifying image in ECR...');
     try {
-      execSync(`aws ecr describe-images --repository-name ${repoName} --image-ids imageTag=latest --region ${awsRegion}`, { stdio: 'pipe' });
-      this.log('✅ Image successfully verified in ECR.');
+      execFileSync('aws', ['ecr', 'describe-images', '--repository-name', repoName, '--image-ids', 'imageTag=latest', '--region', awsRegion], { stdio: 'pipe' });
+      this.log('Image successfully verified in ECR.');
     } catch {
       throw new Error('Failed to verify image in ECR after push.');
     }
@@ -635,7 +651,7 @@ export class DummySignersManager {
   private async pullDockerImage(imageName: string): Promise<void> {
     this.log(chalk.blue('Pulling dummy-signer image...'))
     try {
-      execSync(`docker pull ${imageName}`, { stdio: 'inherit' })
+      execFileSync('docker', ['pull', imageName], { stdio: 'inherit' })
       this.log(chalk.green('Successfully pulled image'))
     } catch (error) {
       this.warn(`Warning: Could not pull image, will try to use local image: ${error}`)
@@ -867,11 +883,12 @@ export class DummySignersManager {
 
       this.log(chalk.blue(`Using setup script: ${scriptPath}`));
 
-      // Execute the script directly with environment variables
-      const cmd = `AWS_REGION=${AWS_REGION} NETWORK_ALIAS=${NETWORK_ALIAS} AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID} IMAGE_URI=${IMAGE_URI} TSO_URL=${TSO_URL} SUFFIXES="${SUFFIXES}" bash ${scriptPath}`;
-
+      // Execute the script with environment variables passed via env option (avoids shell injection)
       this.log(chalk.blue('Executing AWS setup script...'));
-      execSync(cmd, { stdio: 'inherit' });
+      execFileSync('bash', [scriptPath], {
+        env: { ...process.env, AWS_REGION, NETWORK_ALIAS, AWS_ACCOUNT_ID, IMAGE_URI, TSO_URL, SUFFIXES },
+        stdio: 'inherit',
+      });
 
       this.log('Setup dummy signer completed successfully!');
 
@@ -893,7 +910,7 @@ export class DummySignersManager {
     this.log(chalk.blue('\nSetting up Local Dummy Signers...'))
 
     try {
-      execSync('docker info', { stdio: 'pipe' })
+      execFileSync('docker', ['info'], { stdio: 'pipe' })
     } catch {
       this.error('Docker is not installed or not running. Please install Docker first.')
       return
@@ -984,7 +1001,10 @@ export class DummySignersManager {
   private showContainerStatus(signerConfigs: any[]): void {
     this.log(chalk.blue('\n📊 Status Summary:'))
     try {
-      const runningContainers = execSync('docker ps --filter name=dummy-signer --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}"', { encoding: 'utf8' })
+      const runningContainers = execFileSync('docker', [
+        'ps', '--filter', 'name=dummy-signer',
+        '--format', 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}'
+      ], { encoding: 'utf8' })
       this.log(runningContainers)
     } catch {
       this.warn('Could not get container status')
@@ -1016,10 +1036,10 @@ export class DummySignersManager {
     this.log(chalk.blue(`Starting ${signerConfigs.length} dummy signers...`))
 
     for (const [i, config] of signerConfigs.entries()) {
-      const dockerCmd = this.buildDockerCommand(i, config, network, tsoUrl, imageName)
+      const dockerArgs = this.buildDockerArgs(i, config, network, tsoUrl, imageName)
 
       try {
-        const containerId = execSync(dockerCmd, { encoding: 'utf8' }).trim()
+        const containerId = execFileSync('docker', dockerArgs, { encoding: 'utf8' }).trim()
         this.log(chalk.green(`✅ Started dummy-signer-${i} on port ${config.port} (container: ${containerId.slice(0, 12)})`))
       } catch (error) {
         this.error(`Failed to start dummy-signer-${i}: ${error}`)
@@ -1031,14 +1051,14 @@ export class DummySignersManager {
     this.log(chalk.blue('Cleaning up existing containers...'))
     for (let i = 0; i < numSigners; i++) {
       try {
-        execSync(`docker stop dummy-signer-${i}`, { stdio: 'pipe' })
+        execFileSync('docker', ['stop', `dummy-signer-${i}`], { stdio: 'pipe' })
         this.log(`Stopped dummy-signer-${i}`)
       } catch {
         // Container might not exist, ignore
       }
 
       try {
-        execSync(`docker rm dummy-signer-${i}`, { stdio: 'pipe' })
+        execFileSync('docker', ['rm', `dummy-signer-${i}`], { stdio: 'pipe' })
         this.log(`Removed dummy-signer-${i}`)
       } catch {
         // Container might not exist, ignore
@@ -1057,15 +1077,21 @@ export class DummySignersManager {
         const aliasName = `alias/${networkAlias}-dummy-signer-${suffix}-key`;
 
         try {
-          const keyIdOutput = execSync(
-            `aws kms describe-key --key-id "${aliasName}" --region ${awsRegion} --query KeyMetadata.KeyId --output text`,
-            { encoding: 'utf8' }
-          ).trim();
+          const keyIdOutput = execFileSync('aws', [
+            'kms', 'describe-key',
+            '--key-id', aliasName,
+            '--region', awsRegion,
+            '--query', 'KeyMetadata.KeyId',
+            '--output', 'text'
+          ], { encoding: 'utf8' }).trim();
 
-          const publicKeyOutput = execSync(
-            `aws kms get-public-key --key-id "${keyIdOutput}" --region ${awsRegion} --query PublicKey --output text`,
-            { encoding: 'utf8' }
-          ).trim();
+          const publicKeyOutput = execFileSync('aws', [
+            'kms', 'get-public-key',
+            '--key-id', keyIdOutput,
+            '--region', awsRegion,
+            '--query', 'PublicKey',
+            '--output', 'text'
+          ], { encoding: 'utf8' }).trim();
 
           const publicKeyHex = this.convertKMSPublicKeyToHex(publicKeyOutput);
           publicKeys.push(publicKeyHex);

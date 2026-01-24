@@ -149,7 +149,7 @@ Creates PostgreSQL databases and roles. Attempts SSL connection first, falls bac
 
 **Required config fields:**
 - `[db.admin].PUBLIC_HOST` - Database host
-- `[db.admin].PORT` - Database port
+- `[db.admin].PUBLIC_PORT` - Database port
 - `[db.admin].USERNAME` - Admin username
 - `[db.admin].PASSWORD` - Admin password (use `$ENV:` for secrets)
 - `[db.*]` sections for each service database
@@ -283,7 +283,7 @@ Configures TLS certificates for ingress.
 
 ### Steps 12-14: Fund accounts
 
-`helper fund-accounts` does not use `--non-interactive`/`--json` flags because it's already fully flag-driven (no prompts):
+`helper fund-accounts` does not yet support `--non-interactive`/`--json` flags. Some funding paths may prompt for user confirmation (e.g., manual funding instructions). Use the `-d` (dev mode) flag to enable automated dev faucet funding where possible:
 
 ```bash
 # Fund deployer on L1 (dev mode)

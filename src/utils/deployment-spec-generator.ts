@@ -32,13 +32,18 @@ export function loadDeploymentSpec(filePath: string): DeploymentSpec {
 }
 
 /**
- * Resolve environment variable references ($ENV:VAR_NAME) in a string
+ * Resolve inline environment variable references within a string.
+ * Unlike resolveEnvValue() in non-interactive.ts (which requires the entire
+ * value to be a $ENV:VAR reference), this function supports multiple inline
+ * references within a single string, e.g. "prefix_$ENV:VAR_suffix".
+ *
+ * @throws {Error} if any referenced environment variable is not set
  */
-export function resolveEnvValue(value: string): string {
+export function resolveInlineEnvRefs(value: string): string {
   if (typeof value !== 'string') return value
 
-  const envPattern = /\$ENV:([\dA-Z_]+)/g
-  return value.replaceAll(envPattern, (match, varName) => {
+  const envPattern = /\$ENV:([\w]+)/g
+  return value.replaceAll(envPattern, (_match, varName) => {
     const envValue = process.env[varName]
     if (envValue === undefined) {
       throw new Error(`Environment variable ${varName} is not set`)

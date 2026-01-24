@@ -8,6 +8,32 @@
 import chalk from 'chalk'
 
 /**
+ * Custom error class for structured CLI errors.
+ * Thrown instead of calling process.exit(1) so that finally blocks and
+ * resource cleanup can run before the process terminates.
+ *
+ * Commands using oclif's `this.catch()` or top-level try/catch should
+ * check for this error type and output the response before exiting.
+ */
+export class CliExitError extends Error {
+  readonly code: string
+  readonly category: ErrorCategory
+  readonly recoverable: boolean
+  readonly context?: Record<string, unknown>
+  readonly response: ErrorResponse
+
+  constructor(response: ErrorResponse) {
+    super(response.error.message)
+    this.name = 'CliExitError'
+    this.code = response.error.code
+    this.category = response.error.category
+    this.recoverable = response.error.recoverable
+    this.context = response.error.context
+    this.response = response
+  }
+}
+
+/**
  * Error categories for agent recovery strategies
  */
 export type ErrorCategory =
@@ -88,7 +114,9 @@ export class JsonOutputContext {
   }
 
   /**
-   * Output an error response and exit
+   * Build and throw a structured error (as CliExitError).
+   * Callers should let this propagate to the command's catch handler
+   * which will output the response and exit cleanly after resource cleanup.
    */
   error(
     code: string,
@@ -97,20 +125,21 @@ export class JsonOutputContext {
     recoverable: boolean = false,
     context?: Record<string, unknown>
   ): never {
+    const response: ErrorResponse = {
+      command: this.command,
+      duration_ms: this.getDuration(),
+      error: {
+        category,
+        code,
+        message,
+        recoverable,
+        ...(context && { context }),
+      },
+      success: false,
+      timestamp: new Date().toISOString(),
+    }
+
     if (this.jsonEnabled) {
-      const response: ErrorResponse = {
-        command: this.command,
-        duration_ms: this.getDuration(),
-        error: {
-          category,
-          code,
-          message,
-          recoverable,
-          ...(context && { context }),
-        },
-        success: false,
-        timestamp: new Date().toISOString(),
-      }
       console.log(JSON.stringify(response, null, 2))
     } else {
       console.error(chalk.red(`\n✖ Error: ${message}`))
@@ -122,7 +151,7 @@ export class JsonOutputContext {
       }
     }
 
-    process.exit(1)
+    throw new CliExitError(response)
   }
 
   /**
@@ -240,7 +269,7 @@ export const ERROR_CODES = {
   E501_INGRESS_NOT_FOUND: { category: 'KUBERNETES' as ErrorCategory, recoverable: false },
   E502_SECRET_PUSH_FAILED: { category: 'KUBERNETES' as ErrorCategory, recoverable: true },
 
-  // Validation (E6xx)
+  // Validation & Configuration (E6xx)
   E600_INVALID_ADDRESS: { category: 'VALIDATION' as ErrorCategory, recoverable: false },
   E601_MISSING_FIELD: { category: 'CONFIGURATION' as ErrorCategory, recoverable: true },
   E602_INVALID_CONFIG_FORMAT: { category: 'VALIDATION' as ErrorCategory, recoverable: false },

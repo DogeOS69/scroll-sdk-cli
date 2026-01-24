@@ -2,6 +2,7 @@ import * as toml from '@iarna/toml'
 import { confirm, input, password } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
+import { randomBytes } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import pg from 'pg'
@@ -10,7 +11,7 @@ const { Client } = pg
 type PgClient = InstanceType<typeof Client>
 
 import { writeConfigs } from '../../utils/config-writer.js'
-import { JsonOutputContext } from '../../utils/json-output.js'
+import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import {
   type NonInteractiveContext,
   createNonInteractiveContext,
@@ -19,6 +20,28 @@ import {
   resolveOrPrompt,
   validateAndExit,
 } from '../../utils/non-interactive.js'
+
+/**
+ * Quote a PostgreSQL identifier (database name, role name) to prevent injection.
+ * Doubles any embedded double-quotes and wraps in double-quotes.
+ */
+function quoteIdent(identifier: string): string {
+  return `"${identifier.replaceAll('"', '""')}"`
+}
+
+/**
+ * Quote a PostgreSQL string literal (e.g. password).
+ * Doubles any embedded single-quotes and wraps in single-quotes.
+ * Uses E'' syntax if backslashes are present (standard_conforming_strings safety).
+ */
+function quoteLiteral(value: string): string {
+  const escaped = value.replaceAll("'", "''")
+  if (value.includes('\\')) {
+    return `E'${escaped.replaceAll('\\', '\\\\')}'`
+  }
+
+  return `'${escaped}'`
+}
 
 export default class SetupDbInit extends Command {
   static override description = 'Initialize databases with new users and passwords interactively or update permissions'
@@ -248,11 +271,11 @@ export default class SetupDbInit extends Command {
               if (dbPassword) {
                 log(chalk.green(`Using existing password from DSN for ${db.user}`))
               } else {
-                dbPassword = Math.random().toString(36).slice(-12);
+                dbPassword = randomBytes(18).toString('base64url');
                 log(chalk.green(`Generated random password for ${db.user}`))
               }
             } else {
-              dbPassword = Math.random().toString(36).slice(-12);
+              dbPassword = randomBytes(18).toString('base64url');
               log(chalk.green(`Generated random password for ${db.user}`))
             }
           } else if (existingDsn) {
@@ -270,7 +293,7 @@ export default class SetupDbInit extends Command {
                 message: `Do you want to use a random password for ${db.user}?`
               });
               if (useRandomPassword) {
-                dbPassword = Math.random().toString(36).slice(-12);
+                dbPassword = randomBytes(18).toString('base64url');
                 log(chalk.green(`Generated random password for ${db.user}`));
               } else {
                 dbPassword = await password({ message: `Enter new password for ${db.user}:` });
@@ -282,7 +305,7 @@ export default class SetupDbInit extends Command {
               message: `Do you want to use a random password for ${db.user}?`
             });
             if (useRandomPassword) {
-              dbPassword = Math.random().toString(36).slice(-12);
+              dbPassword = randomBytes(18).toString('base64url');
               log(chalk.green(`Generated random password for ${db.user}`));
             } else {
               dbPassword = await password({ message: `Enter password for ${db.user}:` });
@@ -330,6 +353,7 @@ export default class SetupDbInit extends Command {
         }
       }
     } catch (error) {
+      if (error instanceof CliExitError) throw error
       if (flags.json) {
         const errorMsg = error instanceof Error ? error.message : String(error)
         jsonCtx.error(
@@ -410,7 +434,7 @@ export default class SetupDbInit extends Command {
           this.log(chalk.yellow(`Deleting existing database ${dbName}...`))
           // Terminate all connections to the database
           await conn.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1`, [dbName])
-          await conn.query(`DROP DATABASE IF EXISTS ${dbName}`)
+          await conn.query(`DROP DATABASE IF EXISTS ${quoteIdent(dbName)}`)
           this.log(chalk.green(`Database ${dbName} deleted successfully.`))
         } else {
           this.log(chalk.yellow(`Database ${dbName} already exists.`))
@@ -419,7 +443,7 @@ export default class SetupDbInit extends Command {
 
       if (clean || dbExistsResult.rows.length === 0) {
         this.log(chalk.blue(`Creating database ${dbName}...`))
-        await conn.query(`CREATE DATABASE ${dbName}`)
+        await conn.query(`CREATE DATABASE ${quoteIdent(dbName)}`)
         this.log(chalk.green(`Database ${dbName} created successfully.`))
       }
 
@@ -428,7 +452,7 @@ export default class SetupDbInit extends Command {
       if (userExistsResult.rows.length > 0) {
         if (clean) {
           this.log(chalk.yellow(`User ${dbUser} already exists. Updating password...`))
-          await conn.query(`ALTER USER ${dbUser} WITH PASSWORD '${dbPassword.replaceAll('\'', "''")}'`)
+          await conn.query(`ALTER USER ${quoteIdent(dbUser)} WITH PASSWORD ${quoteLiteral(dbPassword)}`)
           this.log(chalk.green(`Password updated for ${dbUser}.`))
         } else {
           // In non-interactive mode, update password if one was provided
@@ -439,7 +463,7 @@ export default class SetupDbInit extends Command {
             true
           )
           if (changePassword) {
-            await conn.query(`ALTER USER ${dbUser} WITH PASSWORD '${dbPassword.replaceAll('\'', "''")}'`)
+            await conn.query(`ALTER USER ${quoteIdent(dbUser)} WITH PASSWORD ${quoteLiteral(dbPassword)}`)
             this.log(chalk.green(`Password updated for ${dbUser}.`))
           } else {
             this.log(chalk.yellow(`Password not changed for ${dbUser}. Please manually check the user's password in config.toml.`))
@@ -447,7 +471,7 @@ export default class SetupDbInit extends Command {
         }
       } else {
         this.log(chalk.blue(`Creating user ${dbUser}...`))
-        await conn.query(`CREATE USER ${dbUser} WITH PASSWORD '${dbPassword.replaceAll('\'', "''")}'`)
+        await conn.query(`CREATE USER ${quoteIdent(dbUser)} WITH PASSWORD ${quoteLiteral(dbPassword)}`)
         this.log(chalk.green(`User ${dbUser} created successfully.`))
       }
 
@@ -714,18 +738,20 @@ export default class SetupDbInit extends Command {
   }
 
   private async updatePermissions(conn: PgClient, dbName: string, dbUser: string, debug: boolean): Promise<void> {
+    const quotedDb = quoteIdent(dbName)
+    const quotedUser = quoteIdent(dbUser)
     const queries = [
-      `GRANT CONNECT ON DATABASE ${dbName} TO ${dbUser}`,
-      `GRANT ALL PRIVILEGES ON DATABASE ${dbName} TO ${dbUser}`,
+      `GRANT CONNECT ON DATABASE ${quotedDb} TO ${quotedUser}`,
+      `GRANT ALL PRIVILEGES ON DATABASE ${quotedDb} TO ${quotedUser}`,
     ];
 
     const schemaQueries = [
       `CREATE SCHEMA IF NOT EXISTS public`,
-      `GRANT ALL PRIVILEGES ON SCHEMA public TO ${dbUser}`,
-      `GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO ${dbUser}`,
-      `GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO ${dbUser}`,
-      `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO ${dbUser}`,
-      `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO ${dbUser}`
+      `GRANT ALL PRIVILEGES ON SCHEMA public TO ${quotedUser}`,
+      `GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO ${quotedUser}`,
+      `GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO ${quotedUser}`,
+      `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO ${quotedUser}`,
+      `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO ${quotedUser}`
     ];
 
     try {

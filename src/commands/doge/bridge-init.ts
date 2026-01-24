@@ -6,7 +6,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
-import { JsonOutputContext } from '../../utils/json-output.js'
+import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 
 export class BridgeInitCommand extends Command {
     static description = 'Initialize bridge for mainnet or testnet'
@@ -175,7 +175,7 @@ export class BridgeInitCommand extends Command {
                     }
                 }
             } catch (e) {
-                this.jsonCtx.info(`Note: Could not parse output-test-data.json: ${e}`)
+                this.jsonCtx.addWarning(`Failed to parse output-test-data.json: ${e}. dogecoinIndexerStartHeight was NOT updated.`)
             }
         }
 
@@ -229,41 +229,39 @@ export class BridgeInitCommand extends Command {
                 stdout: true,
             })
 
-            // Print logs to stderr in JSON mode, stdout otherwise
-            if (this.jsonMode) {
-                stream.pipe(process.stderr)
-            } else {
-                stream.pipe(process.stdout)
-            }
+            const logTarget = this.jsonMode ? process.stderr : process.stdout
+            stream.pipe(logTarget)
 
-            // Wait for the container to finish
-            await new Promise((resolve) => {
-                container.wait((err, data) => {
-                    if (err) {
-                        this.jsonCtx.error(
-                            'E401_DOCKER_CONTAINER_FAILED',
-                            `Container exited with error: ${err}`,
-                            'DOCKER',
-                            false,
-                            { error: String(err) }
-                        )
-                    } else if (data.StatusCode !== 0) {
-                        this.jsonCtx.error(
-                            'E401_DOCKER_CONTAINER_FAILED',
-                            `Container exited with status code: ${data.StatusCode}`,
-                            'DOCKER',
-                            false,
-                            { statusCode: data.StatusCode }
-                        )
-                    }
-
-                    resolve(null)
+            try {
+                // Wait for the container to finish
+                const { StatusCode } = await new Promise<{ StatusCode: number }>((resolve, reject) => {
+                    container.wait((err: Error | null, data: { StatusCode: number }) => {
+                        if (err) reject(err)
+                        else resolve(data)
+                    })
                 })
-            })
 
-            // Remove the container
-            await container.remove()
+                if (StatusCode !== 0) {
+                    this.jsonCtx.error(
+                        'E401_DOCKER_CONTAINER_FAILED',
+                        `Container exited with status code: ${StatusCode}`,
+                        'DOCKER',
+                        false,
+                        { statusCode: StatusCode }
+                    )
+                }
+            } finally {
+                // Clean up stream to prevent process hang
+                stream.unpipe(logTarget)
+                if ('destroy' in stream && typeof stream.destroy === 'function') {
+                    stream.destroy()
+                }
+
+                // Remove container
+                try { await container.remove() } catch { /* already removed */ }
+            }
         } catch (error) {
+            if (error instanceof CliExitError) throw error
             this.jsonCtx.error(
                 'E401_DOCKER_CONTAINER_FAILED',
                 `Failed to run Docker command: ${error}`,
@@ -271,6 +269,12 @@ export class BridgeInitCommand extends Command {
                 false,
                 { error: String(error) }
             )
+        } finally {
+            // Close Docker HTTP agent to release event loop
+            const agent = (docker.modem as any).agent
+            if (agent && typeof agent.destroy === 'function') {
+                agent.destroy()
+            }
         }
     }
 
