@@ -354,18 +354,14 @@ export default class SetupDbInit extends Command {
       }
     } catch (error) {
       if (error instanceof CliExitError) throw error
-      if (flags.json) {
-        const errorMsg = error instanceof Error ? error.message : String(error)
-        jsonCtx.error(
-          'E304_DATABASE_UNREACHABLE',
-          `Database operation failed: ${errorMsg}`,
-          'NETWORK',
-          true,
-          { error: errorMsg }
-        )
-      }
-
-      throw error
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      jsonCtx.error(
+        'E304_DATABASE_UNREACHABLE',
+        `Database operation failed: ${errorMsg}`,
+        'NETWORK',
+        true,
+        { error: errorMsg }
+      )
     } finally {
       if (this.conn) {
         await this.conn.end()

@@ -804,34 +804,37 @@ export default class SetupConfigs extends Command {
       })
 
       // Print the logs (stderr in JSON mode to keep stdout clean for JSON response)
-      stream.pipe(this.jsonMode ? process.stderr : process.stdout)
+      const logTarget = this.jsonMode ? process.stderr : process.stdout
+      stream.pipe(logTarget)
 
-      // Wait for the container to finish
-      const { StatusCode } = await new Promise<{ StatusCode: number }>((resolve, reject) => {
-        container.wait((err: Error | null, data: { StatusCode: number }) => {
-          if (err) reject(err)
-          else resolve(data)
+      try {
+        // Wait for the container to finish
+        const { StatusCode } = await new Promise<{ StatusCode: number }>((resolve, reject) => {
+          container.wait((err: Error | null, data: { StatusCode: number }) => {
+            if (err) reject(err)
+            else resolve(data)
+          })
         })
-      })
 
-      if (StatusCode !== 0) {
-        this.jsonCtx.error(
-          'E401_DOCKER_CONTAINER_FAILED',
-          `Container exited with status code: ${StatusCode}`,
-          'DOCKER',
-          false,
-          { statusCode: StatusCode }
-        )
+        if (StatusCode !== 0) {
+          this.jsonCtx.error(
+            'E401_DOCKER_CONTAINER_FAILED',
+            `Container exited with status code: ${StatusCode}`,
+            'DOCKER',
+            false,
+            { statusCode: StatusCode }
+          )
+        }
+      } finally {
+        // Clean up the log stream to prevent hanging
+        stream.unpipe(logTarget)
+        if ('destroy' in stream && typeof stream.destroy === 'function') {
+          stream.destroy()
+        }
+
+        // Remove container (ignore errors if already removed)
+        try { await container.remove() } catch { /* container may already be removed */ }
       }
-
-      // Clean up the log stream to prevent hanging
-      stream.unpipe(this.jsonMode ? process.stderr : process.stdout)
-      if ('destroy' in stream && typeof stream.destroy === 'function') {
-        stream.destroy()
-      }
-
-      // Remove the container
-      await container.remove()
 
       // Fix file ownership on POSIX systems (Docker runs as root, creates root-owned files)
       // Use a lightweight container to chown files since non-root can't chown root-owned files
@@ -841,11 +844,17 @@ export default class SetupConfigs extends Command {
         if (uid !== 0) {
           this.jsonCtx.info('Fixing file ownership...')
           try {
-            // Pull alpine if not available
+            // Pull alpine if not available (ignore errors if image already exists locally)
             try {
               await docker.pull('alpine:latest')
-            } catch {
-              // Ignore pull errors - image might already exist
+            } catch (pullError) {
+              // Check if image exists locally before proceeding
+              try {
+                await docker.getImage('alpine:latest').inspect()
+              } catch {
+                this.jsonCtx.addWarning(`Could not pull alpine:latest and image not found locally: ${pullError}`)
+                throw pullError
+              }
             }
 
             const chownContainer = await docker.createContainer({
@@ -875,7 +884,7 @@ export default class SetupConfigs extends Command {
       )
     } finally {
       // Close Docker HTTP agent to release event loop
-      const agent = (docker.modem as any).agent
+      const { agent } = docker.modem as any
       if (agent && typeof agent.destroy === 'function') {
         agent.destroy()
       }

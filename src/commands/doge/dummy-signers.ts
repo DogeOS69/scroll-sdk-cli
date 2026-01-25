@@ -585,6 +585,7 @@ export class DummySignersManager {
       if (child.status !== 0) {
         throw new Error(child.stderr?.toString() || 'docker login failed');
       }
+
       this.log('Successfully logged in to ECR.');
     } catch (error) {
       throw new Error(`Failed to log in to ECR: ${error}`);
@@ -653,8 +654,15 @@ export class DummySignersManager {
     try {
       execFileSync('docker', ['pull', imageName], { stdio: 'inherit' })
       this.log(chalk.green('Successfully pulled image'))
-    } catch (error) {
-      this.warn(`Warning: Could not pull image, will try to use local image: ${error}`)
+    } catch (pullError) {
+      this.warn(`Warning: Could not pull image: ${pullError}`)
+      // Verify local image exists before proceeding
+      try {
+        execFileSync('docker', ['image', 'inspect', imageName], { stdio: 'pipe' })
+        this.log(chalk.yellow('Using existing local image'))
+      } catch {
+        throw new Error(`Image ${imageName} not available: pull failed and image not found locally`)
+      }
     }
   }
 
@@ -1289,7 +1297,7 @@ export class DummySignersCommand extends Command {
         'CONFIGURATION',
         false
       )
-      return
+      // jsonCtx.error throws, so this is unreachable
     }
 
     // Validate flags
@@ -1300,7 +1308,7 @@ export class DummySignersCommand extends Command {
         'CONFIGURATION',
         true
       )
-      return
+      // jsonCtx.error throws, so this is unreachable
     }
 
     // Override deployment type if flags are specified

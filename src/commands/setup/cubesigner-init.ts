@@ -266,7 +266,7 @@ export default class SetupCubesignerSetup extends Command {
                     'CONFIGURATION',
                     true
                 )
-                return
+                // jsonCtx.error throws, so this is unreachable
             }
 
             // Calculate default threshold for existing roles

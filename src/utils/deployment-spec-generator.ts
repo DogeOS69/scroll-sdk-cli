@@ -35,7 +35,13 @@ export function loadDeploymentSpec(filePath: string): DeploymentSpec {
  * Resolve inline environment variable references within a string.
  * Unlike resolveEnvValue() in non-interactive.ts (which requires the entire
  * value to be a $ENV:VAR reference), this function supports multiple inline
- * references within a single string, e.g. "prefix_$ENV:VAR_suffix".
+ * references within a single string.
+ *
+ * Note: Variable names match word characters (a-z, A-Z, 0-9, _), so use a
+ * non-word delimiter after the variable name. Examples:
+ * - "prefix-$ENV:VAR-suffix" → works (hyphen is non-word)
+ * - "prefix/$ENV:VAR/suffix" → works (slash is non-word)
+ * - "prefix_$ENV:VAR_suffix" → VAR_suffix is captured (underscore is word char)
  *
  * @throws {Error} if any referenced environment variable is not set
  */
@@ -54,11 +60,12 @@ export function resolveInlineEnvRefs(value: string): string {
 }
 
 /**
- * Check if a value contains an environment variable reference
+ * Check if a value contains an environment variable reference.
+ * Matches $ENV: followed by word characters (alphanumeric plus underscore).
  */
 export function hasEnvRef(value: string): boolean {
   if (typeof value !== 'string') return false
-  return /\$ENV:[\dA-Z_]+/.test(value)
+  return /\$ENV:[\w]+/.test(value)
 }
 
 /**

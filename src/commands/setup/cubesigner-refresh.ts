@@ -219,7 +219,7 @@ export default class SetupCubesignerRefresh extends Command {
                     true,
                     { email, environment, orgId }
                 )
-                return false
+                // jsonCtx.error throws, so this is unreachable
             }
 
             this.jsonCtx.info('Login successful')
@@ -234,7 +234,7 @@ export default class SetupCubesignerRefresh extends Command {
                     'CONFIGURATION',
                     true
                 )
-                return false
+                // jsonCtx.error throws, so this is unreachable
             }
 
             const {roles} = this.dogeConfig.cubesigner

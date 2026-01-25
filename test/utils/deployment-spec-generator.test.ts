@@ -1,4 +1,7 @@
 import { expect } from 'chai';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import sinon from 'sinon';
 
 import type { DeploymentSpec } from '../../src/types/deployment-spec.js';
@@ -9,8 +12,10 @@ import {
   generateDogeConfigToml,
   generateSetupDefaultsToml,
   hasEnvRef,
+  loadDeploymentSpec,
   resolveInlineEnvRefs,
   validateDeploymentSpec,
+  writeGeneratedConfigs,
 } from '../../src/utils/deployment-spec-generator.js';
 
 /**
@@ -203,9 +208,13 @@ describe('deployment-spec-generator', () => {
       expect(hasEnvRef(123 as any)).to.be.false;
     });
 
-    it('returns false for lowercase env refs', () => {
-      // Pattern requires uppercase + digits + underscore
-      expect(hasEnvRef('$ENV:lowercase')).to.be.false;
+    it('returns true for lowercase env refs', () => {
+      // Pattern now uses \w+ which matches lowercase letters too
+      expect(hasEnvRef('$ENV:lowercase')).to.be.true;
+    });
+
+    it('returns true for mixed case env refs', () => {
+      expect(hasEnvRef('$ENV:My_Var_123')).to.be.true;
     });
   });
 
@@ -621,6 +630,101 @@ describe('deployment-spec-generator', () => {
       expect(configs['config.toml']).to.be.a('string').and.not.be.empty;
       expect(configs['doge-config.toml']).to.be.a('string').and.not.be.empty;
       expect(configs['setup_defaults.toml']).to.be.a('string').and.not.be.empty;
+    });
+  });
+
+  describe('loadDeploymentSpec', () => {
+    let tempDir: string;
+
+    beforeEach(() => {
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deployment-spec-test-'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    });
+
+    it('loads and parses a valid YAML spec', () => {
+      const specPath = path.join(tempDir, 'spec.yaml');
+      const yamlContent = `
+version: "1.0"
+metadata:
+  name: test
+  environment: testnet
+`;
+      fs.writeFileSync(specPath, yamlContent);
+
+      const spec = loadDeploymentSpec(specPath);
+      expect(spec.version).to.equal('1.0');
+      expect(spec.metadata?.name).to.equal('test');
+    });
+
+    it('throws when version field is missing', () => {
+      const specPath = path.join(tempDir, 'spec.yaml');
+      fs.writeFileSync(specPath, 'metadata:\n  name: test\n');
+
+      expect(() => loadDeploymentSpec(specPath)).to.throw('DeploymentSpec must have a version field');
+    });
+
+    it('throws when file does not exist', () => {
+      expect(() => loadDeploymentSpec('/nonexistent/path.yaml')).to.throw();
+    });
+  });
+
+  describe('writeGeneratedConfigs', () => {
+    let tempDir: string;
+
+    beforeEach(() => {
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'write-configs-test-'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    });
+
+    it('writes all config files to output directory', () => {
+      const configs = {
+        'config.toml': '[general]\nkey = "value"\n',
+        'doge-config.toml': 'network = "testnet"\n',
+        'setup_defaults.toml': 'seed_string = "test"\n',
+      };
+
+      writeGeneratedConfigs(configs, tempDir);
+
+      expect(fs.existsSync(path.join(tempDir, 'config.toml'))).to.be.true;
+      expect(fs.existsSync(path.join(tempDir, '.data', 'doge-config.toml'))).to.be.true;
+      expect(fs.existsSync(path.join(tempDir, '.data', 'setup_defaults.toml'))).to.be.true;
+
+      const configContent = fs.readFileSync(path.join(tempDir, 'config.toml'), 'utf8');
+      expect(configContent).to.include('key = "value"');
+    });
+
+    it('creates output directory if it does not exist', () => {
+      const newDir = path.join(tempDir, 'nested', 'dir');
+      const configs = {
+        'config.toml': 'content',
+        'doge-config.toml': 'content',
+        'setup_defaults.toml': 'content',
+      };
+
+      writeGeneratedConfigs(configs, newDir);
+
+      expect(fs.existsSync(newDir)).to.be.true;
+      expect(fs.existsSync(path.join(newDir, 'config.toml'))).to.be.true;
+    });
+
+    it('uses custom doge config path when specified', () => {
+      const customDogeDir = path.join(tempDir, 'custom-doge');
+      const configs = {
+        'config.toml': 'content',
+        'doge-config.toml': 'doge content',
+        'setup_defaults.toml': 'setup content',
+      };
+
+      writeGeneratedConfigs(configs, tempDir, customDogeDir);
+
+      expect(fs.existsSync(path.join(customDogeDir, 'doge-config.toml'))).to.be.true;
+      expect(fs.existsSync(path.join(customDogeDir, 'setup_defaults.toml'))).to.be.true;
     });
   });
 });

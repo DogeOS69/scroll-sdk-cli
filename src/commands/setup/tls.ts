@@ -150,7 +150,7 @@ export default class SetupTls extends Command {
           'KUBERNETES',
           true
         )
-        return
+        // jsonCtx.error throws, so this is unreachable
       }
 
       this.jsonCtx.info(`Using ClusterIssuer: ${this.selectedIssuer}`)

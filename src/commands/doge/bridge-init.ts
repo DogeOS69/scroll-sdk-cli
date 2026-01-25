@@ -75,7 +75,7 @@ export class BridgeInitCommand extends Command {
                 true,
                 { path: setupDefaultsPath }
             )
-            return
+            // jsonCtx.error throws, so this is unreachable
         }
 
         const existingConfigStr = fs.readFileSync(setupDefaultsPath, 'utf8');
@@ -137,45 +137,23 @@ export class BridgeInitCommand extends Command {
         let confirmedBlockHash: string | undefined
         const testDataPath = path.join(dataDir, 'output-test-data.json')
         if (fs.existsSync(testDataPath)) {
+            // Parse the JSON file
+            let testData: any
             try {
-                const testData = JSON.parse(fs.readFileSync(testDataPath, 'utf-8'))
+                testData = JSON.parse(fs.readFileSync(testDataPath, 'utf8'))
+            } catch (parseError) {
+                this.jsonCtx.addWarning(`Failed to parse output-test-data.json: ${parseError}. dogecoinIndexerStartHeight was NOT updated.`)
+                testData = null
+            }
+
+            if (testData) {
                 confirmedBlockHeight = testData.confirmed_block_height
                 confirmedBlockHash = testData.confirmed_block_hash
 
                 if (confirmedBlockHeight && confirmedBlockHeight > 0) {
                     this.jsonCtx.info(`Bridge transactions confirmed at block height: ${confirmedBlockHeight}`)
-
-                    // Get network from setup_defaults.toml or config.toml
-                    const setupDefaults = toml.parse(fs.readFileSync(setupDefaultsPath, 'utf-8'))
-                    const network = (setupDefaults as any).network || 'testnet'
-
-                    // Update doge-config-{network}.toml with the confirmed height
-                    const dogeConfigPath = path.join(dataDir, `doge-config-${network}.toml`)
-                    if (fs.existsSync(dogeConfigPath)) {
-                        let dogeConfigStr = fs.readFileSync(dogeConfigPath, 'utf-8')
-                        // Update dogecoinIndexerStartHeight
-                        dogeConfigStr = dogeConfigStr.replace(
-                            /dogecoinIndexerStartHeight\s*=\s*["']?\d*["']?/,
-                            `dogecoinIndexerStartHeight = "${confirmedBlockHeight}"`
-                        )
-                        fs.writeFileSync(dogeConfigPath, dogeConfigStr)
-                        this.jsonCtx.info(`Updated ${dogeConfigPath} with dogecoinIndexerStartHeight = ${confirmedBlockHeight}`)
-                    } else {
-                        // Try the generic doge-config.toml
-                        const genericConfigPath = path.join(dataDir, 'doge-config.toml')
-                        if (fs.existsSync(genericConfigPath)) {
-                            let dogeConfigStr = fs.readFileSync(genericConfigPath, 'utf-8')
-                            dogeConfigStr = dogeConfigStr.replace(
-                                /dogecoinIndexerStartHeight\s*=\s*["']?\d*["']?/,
-                                `dogecoinIndexerStartHeight = "${confirmedBlockHeight}"`
-                            )
-                            fs.writeFileSync(genericConfigPath, dogeConfigStr)
-                            this.jsonCtx.info(`Updated ${genericConfigPath} with dogecoinIndexerStartHeight = ${confirmedBlockHeight}`)
-                        }
-                    }
+                    this.updateDogeConfigBlockHeight(setupDefaultsPath, dataDir, confirmedBlockHeight)
                 }
-            } catch (e) {
-                this.jsonCtx.addWarning(`Failed to parse output-test-data.json: ${e}. dogecoinIndexerStartHeight was NOT updated.`)
             }
         }
 
@@ -257,8 +235,15 @@ export class BridgeInitCommand extends Command {
                     stream.destroy()
                 }
 
-                // Remove container
-                try { await container.remove() } catch { /* already removed */ }
+                // Remove container (suppress 404/409 if already removed or in use)
+                try {
+                    await container.remove()
+                } catch (removeError: any) {
+                    const statusCode = removeError?.statusCode
+                    if (statusCode !== 404 && statusCode !== 409) {
+                        this.jsonCtx.addWarning(`Failed to remove container: ${removeError}`)
+                    }
+                }
             }
         } catch (error) {
             if (error instanceof CliExitError) throw error
@@ -271,7 +256,7 @@ export class BridgeInitCommand extends Command {
             )
         } finally {
             // Close Docker HTTP agent to release event loop
-            const agent = (docker.modem as any).agent
+            const { agent } = docker.modem as any
             if (agent && typeof agent.destroy === 'function') {
                 agent.destroy()
             }
@@ -342,6 +327,41 @@ export class BridgeInitCommand extends Command {
 
     private getNestedValue(obj: any, path: string): any {
         return path.split('.').reduce((prev, curr) => prev && prev[curr], obj)
+    }
+
+    /**
+     * Update dogecoinIndexerStartHeight in the appropriate doge-config file.
+     * Tries network-specific config first, then falls back to generic config.
+     */
+    private updateDogeConfigBlockHeight(
+        setupDefaultsPath: string,
+        dataDir: string,
+        blockHeight: number
+    ): void {
+        try {
+            const setupDefaults = toml.parse(fs.readFileSync(setupDefaultsPath, 'utf8'))
+            const network = (setupDefaults as any).network || 'testnet'
+
+            const configPaths = [
+                path.join(dataDir, `doge-config-${network}.toml`),
+                path.join(dataDir, 'doge-config.toml'),
+            ]
+
+            for (const configPath of configPaths) {
+                if (fs.existsSync(configPath)) {
+                    let content = fs.readFileSync(configPath, 'utf8')
+                    content = content.replace(
+                        /dogecoinIndexerStartHeight\s*=\s*["']?\d*["']?/,
+                        `dogecoinIndexerStartHeight = "${blockHeight}"`
+                    )
+                    fs.writeFileSync(configPath, content)
+                    this.jsonCtx.info(`Updated ${configPath} with dogecoinIndexerStartHeight = ${blockHeight}`)
+                    return
+                }
+            }
+        } catch (configError) {
+            this.jsonCtx.addWarning(`Failed to update doge-config with block height: ${configError}`)
+        }
     }
 }
 export default BridgeInitCommand
