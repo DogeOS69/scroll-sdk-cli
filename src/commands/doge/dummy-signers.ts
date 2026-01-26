@@ -895,7 +895,7 @@ export class DummySignersManager {
       // Execute the script with environment variables passed via env option (avoids shell injection)
       this.log(chalk.blue('Executing AWS setup script...'));
       execFileSync('bash', [scriptPath], {
-        env: { ...process.env, AWS_REGION, NETWORK_ALIAS, AWS_ACCOUNT_ID, IMAGE_URI, TSO_URL, SUFFIXES },
+        env: { ...process.env, AWS_ACCOUNT_ID, AWS_REGION, IMAGE_URI, NETWORK_ALIAS, SUFFIXES, TSO_URL },
         stdio: 'inherit',
       });
 

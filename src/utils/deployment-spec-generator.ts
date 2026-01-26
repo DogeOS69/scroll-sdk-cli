@@ -48,7 +48,7 @@ export function loadDeploymentSpec(filePath: string): DeploymentSpec {
 export function resolveInlineEnvRefs(value: string): string {
   if (typeof value !== 'string') return value
 
-  const envPattern = /\$ENV:([\w]+)/g
+  const envPattern = /\$ENV:(\w+)/g
   return value.replaceAll(envPattern, (_match, varName) => {
     const envValue = process.env[varName]
     if (envValue === undefined) {
@@ -65,7 +65,7 @@ export function resolveInlineEnvRefs(value: string): string {
  */
 export function hasEnvRef(value: string): boolean {
   if (typeof value !== 'string') return false
-  return /\$ENV:[\w]+/.test(value)
+  return /\$ENV:\w+/.test(value)
 }
 
 /**

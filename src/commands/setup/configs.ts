@@ -74,6 +74,11 @@ export default class SetupConfigs extends Command {
       default: false,
       description: 'Skip deployment salt update (non-interactive mode)',
     }),
+    'skip-genesis': Flags.boolean({
+      default: false,
+      description: 'Skip genesis file generation (Docker step)',
+      required: false,
+    }),
     'skip-l1-fee-vault-update': Flags.boolean({
       default: false,
       description: 'Skip L1 fee vault address update (non-interactive mode)',
@@ -81,11 +86,6 @@ export default class SetupConfigs extends Command {
     'skip-l1-plonk-verifier-update': Flags.boolean({
       default: true,
       description: 'Skip L1 plonk verifier address update (non-interactive mode)',
-    }),
-    'skip-genesis': Flags.boolean({
-      description: 'Skip genesis file generation (Docker step)',
-      default: false,
-      required: false,
     }),
   }
 
@@ -119,7 +119,9 @@ export default class SetupConfigs extends Command {
     // Skip L1_CONTRACT_DEPLOYMENT_BLOCK for DogeOS network
     // this.jsonCtx.info('Checking L1_CONTRACT_DEPLOYMENT_BLOCK...')
     // await this.updateL1ContractDeploymentBlock()
-    if (!flags['skip-genesis']) {
+    if (flags['skip-genesis']) {
+      this.jsonCtx.info('Skipping genesis generation (Docker command).')
+    } else {
       this.jsonCtx.info('Checking deployment salt...')
       await this.updateDeploymentSalt(flags)
 
@@ -154,8 +156,6 @@ export default class SetupConfigs extends Command {
       } else {
         this.jsonCtx.addWarning('config.public.toml not found after docker command. Skipping .env generation for docker-compose.')
       }
-    } else {
-      this.jsonCtx.info('Skipping genesis generation (Docker command).')
     }
 
     this.jsonCtx.info('Creating secrets folder...')

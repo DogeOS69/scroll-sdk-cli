@@ -26,19 +26,22 @@ function stripPortFromHost(host: string): string {
   if (host.includes('[')) {
     const bracketEnd = host.indexOf(']')
     if (bracketEnd !== -1 && host[bracketEnd + 1] === ':') {
-      return host.substring(0, bracketEnd + 1)
+      return host.slice(0, Math.max(0, bracketEnd + 1))
     }
+
     return host
   }
+
   // Handle regular hostname:port
   const colonIndex = host.lastIndexOf(':')
   if (colonIndex !== -1) {
     // Check if what's after the colon is a number (port)
-    const potentialPort = host.substring(colonIndex + 1)
+    const potentialPort = host.slice(Math.max(0, colonIndex + 1))
     if (/^\d+$/.test(potentialPort)) {
-      return host.substring(0, colonIndex)
+      return host.slice(0, Math.max(0, colonIndex))
     }
   }
+
   return host
 }
 
@@ -1567,6 +1570,7 @@ export default class SetupPrepCharts extends Command {
       if (ociVersion) {
         args.push('--version', ociVersion)
       }
+
       execFileSync('helm', args, { stdio: 'pipe' })
       return true
     } catch {

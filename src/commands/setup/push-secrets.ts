@@ -56,10 +56,11 @@ class AWSSecretService implements SecretService {
       );
 
       if (filename) {
-        if (!filename.match(/^cubesigner-signer-\d+-session\.json$/)) {
+        if (!/^cubesigner-signer-\d+-session\.json$/.test(filename)) {
           console.warn(chalk.yellow(`File ${filename} is not a valid cubesigner session file. Ignoring.`));
           throw new Error(`File ${filename} is not a valid cubesigner session file`)
         }
+
         sessionFiles = sessionFiles.filter(f => f === filename);
       }
 
@@ -75,6 +76,7 @@ class AWSSecretService implements SecretService {
         await this.createOrUpdateSecret({ 'session.json': content }, secretName)
         pushedSecrets.push(secretName)
       }
+
       return pushedSecrets
     }
 
@@ -85,6 +87,7 @@ class AWSSecretService implements SecretService {
     } else if (filename) {
       jsonFiles = []
     }
+
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
 
@@ -117,7 +120,6 @@ class AWSSecretService implements SecretService {
     } else if (filename) {
       envFiles = []
     }
-    const l2SequencerSecrets: Record<string, string> = {}
 
     for (const file of envFiles) {
       const baseName = path.basename(file, '.env')
@@ -364,10 +366,11 @@ class HashicorpVaultDevService implements SecretService {
       );
 
       if (filename) {
-        if (!filename.match(/^cubesigner-signer-\d+-session\.json$/)) {
+        if (!/^cubesigner-signer-\d+-session\.json$/.test(filename)) {
           console.warn(chalk.yellow(`File ${filename} is not a valid cubesigner session file. Ignoring.`));
           throw new Error(`File ${filename} is not a valid cubesigner session file`)
         }
+
         sessionFiles = sessionFiles.filter(f => f === filename);
       }
 
@@ -398,14 +401,13 @@ class HashicorpVaultDevService implements SecretService {
 
     if (filename && filename.endsWith('.json')) {
       // If specific file requested (and not special one handled above)
-      if (filename !== 'rollup-explorer-backend-secret.json') {
-        jsonFiles = jsonFiles.filter(f => f === filename);
-      } else {
-        jsonFiles = []; // Already handled above
-      }
+      jsonFiles = filename === 'rollup-explorer-backend-secret.json'
+        ? [] // Already handled above
+        : jsonFiles.filter(f => f === filename);
     } else if (filename) {
       jsonFiles = []; // Not a json file requested
     }
+
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
 
@@ -540,12 +542,14 @@ class HashicorpVaultDevService implements SecretService {
 
       await this.pushJsonToVault(secretManagerName, contentString, propertyKey);
       return true
-    } else {
+    }
+ 
       if (this.debug) {
         console.log(chalk.yellow(`File ${fileName} not found in secrets directory. Skipping its specific processing.`));
       }
+
       return false
-    }
+    
   }
 
   private async pushJsonToVault(secretName: string, content: string, propertyName: string): Promise<void> {
@@ -1035,7 +1039,7 @@ await this.updateProductionYaml(provider, credentials, pushedSecrets)
     return config
   }
 
-  private async updateProductionYaml(provider: string, credentials: Record<string, string>, pushedSecrets: string[]): Promise<void> {
+  private async updateProductionYaml(provider: string, credentials: Record<string, string>, _pushedSecrets: string[]): Promise<void> {
     const valuesDir = path.join(process.cwd(), this.flags['values-dir'])
     if (!fs.existsSync(valuesDir)) {
       this.error(chalk.red(`Values directory not found at ${valuesDir}`))

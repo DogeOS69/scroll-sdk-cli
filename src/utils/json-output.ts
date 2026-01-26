@@ -16,10 +16,10 @@ import chalk from 'chalk'
  * check for this error type and output the response before exiting.
  */
 export class CliExitError extends Error {
-  readonly code: string
   readonly category: ErrorCategory
-  readonly recoverable: boolean
+  readonly code: string
   readonly context?: Record<string, unknown>
+  readonly recoverable: boolean
   readonly response: ErrorResponse
 
   constructor(response: ErrorResponse) {

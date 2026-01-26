@@ -3,7 +3,7 @@ import chalk from 'chalk'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-type TomlPrimitive = bigint | Date | boolean | null | number | string
+type TomlPrimitive = Date | bigint | boolean | null | number | string
 type TomlValue = TomlObject | TomlPrimitive | TomlValue[]
 interface TomlObject { [key: string]: TomlValue }
 
