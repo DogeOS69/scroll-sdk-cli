@@ -80,6 +80,11 @@ export default class SetupConfigs extends Command {
       default: true,
       description: 'Skip L1 plonk verifier address update (non-interactive mode)',
     }),
+    'skip-genesis': Flags.boolean({
+      description: 'Skip genesis file generation (Docker step)',
+      default: false,
+      required: false,
+    }),
   }
 
   private dogeConfig: DogeConfig = {} as DogeConfig
@@ -112,40 +117,43 @@ export default class SetupConfigs extends Command {
     // Skip L1_CONTRACT_DEPLOYMENT_BLOCK for DogeOS network
     // this.jsonCtx.info('Checking L1_CONTRACT_DEPLOYMENT_BLOCK...')
     // await this.updateL1ContractDeploymentBlock()
+    if (!flags['skip-genesis']) {
+      this.jsonCtx.info('Checking deployment salt...')
+      await this.updateDeploymentSalt(flags)
 
-    this.jsonCtx.info('Checking deployment salt...')
-    await this.updateDeploymentSalt(flags)
+      this.jsonCtx.info('Checking L1_FEE_VAULT_ADDR...')
+      await this.updateL1FeeVaultAddr(flags)
 
-    this.jsonCtx.info('Checking L1_FEE_VAULT_ADDR...')
-    await this.updateL1FeeVaultAddr(flags)
+      this.jsonCtx.info('Checking L2_BRIDGE_FEE_RECIPIENT_ADDR...')
+      await this.updateL2BridgeFeeRecipientAddr(flags)
 
-    this.jsonCtx.info('Checking L2_BRIDGE_FEE_RECIPIENT_ADDR...')
-    await this.updateL2BridgeFeeRecipientAddr(flags)
+      this.jsonCtx.info('Checking L1_PLONK_VERIFIER_ADDR...')
+      await this.updateL1PlonkVerifierAddr(flags)
 
-    this.jsonCtx.info('Checking L1_PLONK_VERIFIER_ADDR...')
-    await this.updateL1PlonkVerifierAddr(flags)
+      await this.updateBaseFeePerGas(flags)
 
-    await this.updateBaseFeePerGas(flags)
+      this.jsonCtx.info('Running docker command to generate configs...')
+      await this.runDockerCommand(imageTag)
 
-    this.jsonCtx.info('Running docker command to generate configs...')
-    await this.runDockerCommand(imageTag)
-
-    const publicConfigPath = path.join(process.cwd(), 'config.public.toml')
-    if (fs.existsSync(publicConfigPath)) {
-      try {
-        const publicConfigContent = fs.readFileSync(publicConfigPath, 'utf8')
-        toml.parse(publicConfigContent)
-        this.jsonCtx.logSuccess('Successfully parsed config.public.toml')
-      } catch (error: any) {
-        this.jsonCtx.error(
-          'E602_INVALID_CONFIG_FORMAT',
-          `Failed to parse config.public.toml: ${error.message}`,
-          'CONFIGURATION',
-          false
-        )
+      const publicConfigPath = path.join(process.cwd(), 'config.public.toml')
+      if (fs.existsSync(publicConfigPath)) {
+        try {
+          const publicConfigContent = fs.readFileSync(publicConfigPath, 'utf8')
+          toml.parse(publicConfigContent)
+          this.jsonCtx.logSuccess('Successfully parsed config.public.toml')
+        } catch (error: any) {
+          this.jsonCtx.error(
+            'E602_INVALID_CONFIG_FORMAT',
+            `Failed to parse config.public.toml: ${error.message}`,
+            'CONFIGURATION',
+            false
+          )
+        }
+      } else {
+        this.jsonCtx.addWarning('config.public.toml not found after docker command. Skipping .env generation for docker-compose.')
       }
     } else {
-      this.jsonCtx.addWarning('config.public.toml not found after docker command. Skipping .env generation for docker-compose.')
+      this.jsonCtx.info('Skipping genesis generation (Docker command).')
     }
 
     this.jsonCtx.info('Creating secrets folder...')
@@ -154,8 +162,10 @@ export default class SetupConfigs extends Command {
     this.jsonCtx.info('Creating secrets environment files...')
     await this.createEnvFiles()
 
-    this.jsonCtx.info('Processing YAML files...')
-    await this.processYamlFiles(configsDir)
+    if (!flags['skip-genesis']) {
+      this.jsonCtx.info('Processing YAML files...')
+      await this.processYamlFiles(configsDir)
+    }
 
     this.jsonCtx.logSuccess('Configuration setup completed.')
 
@@ -684,7 +694,7 @@ export default class SetupConfigs extends Command {
                   ? JSON.stringify(scrollConfigObject, null, 2)
                   : scrollConfigObject
 
-              const updatedYaml = yaml.dump(parsedYaml, {indent: 2})
+              const updatedYaml = yaml.dump(parsedYaml, { indent: 2 })
               fs.writeFileSync(targetPath, updatedYaml)
             } catch (error) {
               if (error instanceof Error) {
