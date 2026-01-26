@@ -3,8 +3,16 @@ import chalk from 'chalk'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-function convertBigIntsToStringsRecursive(obj: any): any {
+type TomlPrimitive = bigint | Date | boolean | null | number | string
+type TomlValue = TomlObject | TomlPrimitive | TomlValue[]
+interface TomlObject { [key: string]: TomlValue }
+
+function convertBigIntsToStringsRecursive(obj: TomlValue): TomlValue {
     if (obj === null || typeof obj !== 'object') {
+        if (typeof obj === 'bigint') {
+            return obj.toString()
+        }
+
         return obj;
     }
 
@@ -12,10 +20,10 @@ function convertBigIntsToStringsRecursive(obj: any): any {
         return obj.map(item => convertBigIntsToStringsRecursive(item));
     }
 
-    const newObj: { [key: string]: any } = {};
+    const newObj: TomlObject = {};
     for (const key in obj) {
         if (Object.hasOwn(obj, key)) {
-            const value = obj[key];
+            const value = (obj as TomlObject)[key];
             newObj[key] = typeof value === 'bigint' ? value.toString() :
                 typeof value === 'object' ? convertBigIntsToStringsRecursive(value) :
                     value;
@@ -48,7 +56,7 @@ function deepClone<T>(obj: T): T {
  * Returns `void` if the `mainConfigPath` does not exist and the function exits early.
  */
 export function writeConfigs(
-    updatedMainConfigOrString: any | string,
+    updatedMainConfigOrString: TomlObject | string,
     publicConfigPath: string = path.join(process.cwd(), 'config.public.toml'),
     mainConfigPath: string = path.join(process.cwd(), 'config.toml'),
     silent: boolean = false,
@@ -59,19 +67,19 @@ export function writeConfigs(
             return;
         }
 
-        let mainConfigObjectForProcessing: any;
+        let mainConfigObjectForProcessing: TomlObject;
         let mainConfigStringToWrite: string;
 
         if (typeof updatedMainConfigOrString === 'string') {
             mainConfigStringToWrite = updatedMainConfigOrString;
             // Parse the string, then convert BigInts for public config generation
             const parsedObject = toml.parse(mainConfigStringToWrite);
-            mainConfigObjectForProcessing = convertBigIntsToStringsRecursive(parsedObject);
+            mainConfigObjectForProcessing = convertBigIntsToStringsRecursive(parsedObject) as TomlObject;
         } else {
             // updatedMainConfigOrString is an object. Convert BigInts first.
-            mainConfigObjectForProcessing = convertBigIntsToStringsRecursive(updatedMainConfigOrString);
+            mainConfigObjectForProcessing = convertBigIntsToStringsRecursive(updatedMainConfigOrString) as TomlObject;
             // Then stringify the processed object for writing.
-            mainConfigStringToWrite = toml.stringify(mainConfigObjectForProcessing);
+            mainConfigStringToWrite = toml.stringify(mainConfigObjectForProcessing as toml.JsonMap);
         }
 
         const publicConfig = deepClone(mainConfigObjectForProcessing);
@@ -79,62 +87,63 @@ export function writeConfigs(
         // 1. Remove entire [db] section as all connection strings are sensitive
         //    Alternatively, iterate and delete keys if the [db] section itself must exist but be empty.
         if (publicConfig.db) {
-            delete (publicConfig as any).db
+            delete publicConfig.db
         }
         
         // 2. Remove private keys from [accounts]
         if (publicConfig.accounts && typeof publicConfig.accounts === 'object') {
-            for (const key of Object.keys(publicConfig.accounts)) {
+            const accounts = publicConfig.accounts as TomlObject
+            for (const key of Object.keys(accounts)) {
                 if (key.endsWith('_PRIVATE_KEY')) {
-                    delete (publicConfig.accounts as any)[key]
+                    delete accounts[key]
                 }
 
                 // Also remove OWNER_PRIVATE_KEY (if it exists)
                 if (key === 'OWNER_PRIVATE_KEY') {
-                    delete (publicConfig.accounts as any)[key];
+                    delete accounts[key];
                 }
             }
         }
 
         // 3. Remove sensitive info from [sequencer] and [sequencer.sequencer-X]
         if (publicConfig.sequencer && typeof publicConfig.sequencer === 'object') {
+            const sequencer = publicConfig.sequencer as TomlObject
             // Main sequencer section
-            delete (publicConfig.sequencer as any).L2GETH_PASSWORD
-            delete (publicConfig.sequencer as any).L2GETH_KEYSTORE
+            delete sequencer.L2GETH_PASSWORD
+            delete sequencer.L2GETH_KEYSTORE
 
             // Sequencer sub-sections (sequencer-1, sequencer-2, etc.)
-            for (const key in publicConfig.sequencer) {
-                if (key.startsWith('sequencer-') && typeof (publicConfig.sequencer as any)[key] === 'object') {
-                    delete (publicConfig.sequencer as any)[key].L2GETH_PASSWORD
-                    delete (publicConfig.sequencer as any)[key].L2GETH_KEYSTORE
+            for (const key in sequencer) {
+                if (key.startsWith('sequencer-') && typeof sequencer[key] === 'object') {
+                    const subSequencer = sequencer[key] as TomlObject
+                    delete subSequencer.L2GETH_PASSWORD
+                    delete subSequencer.L2GETH_KEYSTORE
                 }
             }
         }
 
         // 4. Remove JWT secret from [coordinator]
         if (publicConfig.coordinator && typeof publicConfig.coordinator === 'object') {
-            delete (publicConfig.coordinator as any).COORDINATOR_JWT_SECRET_KEY
+            const coordinator = publicConfig.coordinator as TomlObject
+            delete coordinator.COORDINATOR_JWT_SECRET_KEY
         }
 
         // 5. Remove API keys from [contracts.verification]
-        if (
-            publicConfig.contracts &&
-            typeof publicConfig.contracts === 'object' &&
-            (publicConfig.contracts as any).verification &&
-            typeof (publicConfig.contracts as any).verification === 'object'
-        ) {
-            delete (publicConfig.contracts as any).verification.EXPLORER_API_KEY_L1
-            delete (publicConfig.contracts as any).verification.EXPLORER_API_KEY_L2
+        if (publicConfig.contracts && typeof publicConfig.contracts === 'object') {
+            const contracts = publicConfig.contracts as TomlObject
+            if (contracts.verification && typeof contracts.verification === 'object') {
+                const verification = contracts.verification as TomlObject
+                delete verification.EXPLORER_API_KEY_L1
+                delete verification.EXPLORER_API_KEY_L2
+            }
         }
 
         // 6. Remove node private keys (L2GETH_NODEKEY) from all sections
-        const removeNodeKeys = (obj: any) => {
-            if (obj && typeof obj === 'object') {
-                delete obj.L2GETH_NODEKEY
-                for (const key in obj) {
-                    if (typeof obj[key] === 'object') {
-                        removeNodeKeys(obj[key])
-                    }
+        const removeNodeKeys = (obj: TomlObject) => {
+            delete obj.L2GETH_NODEKEY
+            for (const key in obj) {
+                if (obj[key] && typeof obj[key] === 'object' && !Array.isArray(obj[key])) {
+                    removeNodeKeys(obj[key] as TomlObject)
                 }
             }
         }
@@ -147,7 +156,7 @@ export function writeConfigs(
         }
 
         // 2. Write the public config
-        fs.writeFileSync(publicConfigPath, toml.stringify(publicConfig as any))
+        fs.writeFileSync(publicConfigPath, toml.stringify(publicConfig as toml.JsonMap))
         if (!silent) {
             console.log(chalk.green(`Public configuration synced to ${publicConfigPath}`));
         }

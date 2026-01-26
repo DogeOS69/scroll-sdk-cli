@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Test mocking */
 import { expect } from 'chai';
 import * as fs from 'node:fs';
 import * as os from 'node:os';

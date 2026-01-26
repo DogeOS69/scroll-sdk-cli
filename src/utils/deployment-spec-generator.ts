@@ -271,6 +271,7 @@ export function validateDeploymentSpec(spec: DeploymentSpec): ValidationResult {
  * Generate config.toml content from DeploymentSpec
  */
 export function generateConfigToml(spec: DeploymentSpec): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
   const config: Record<string, any> = {}
 
   // [general] section
@@ -497,13 +498,14 @@ export function generateConfigToml(spec: DeploymentSpec): string {
     config.ingress.BLOCKBOOK_HOST = spec.frontend.hosts.blockbook
   }
 
-  return toml.stringify(config as any)
+  return toml.stringify(config as toml.JsonMap)
 }
 
 /**
  * Generate doge-config.toml content from DeploymentSpec
  */
 export function generateDogeConfigToml(spec: DeploymentSpec): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
   const config: Record<string, any> = {
     network: spec.dogecoin.network,
   }
@@ -588,13 +590,14 @@ export function generateDogeConfigToml(spec: DeploymentSpec): string {
     }
   }
 
-  return toml.stringify(config as any)
+  return toml.stringify(config as toml.JsonMap)
 }
 
 /**
  * Generate setup_defaults.toml content from DeploymentSpec
  */
 export function generateSetupDefaultsToml(spec: DeploymentSpec): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
   const config: Record<string, any> = {
     attestation_key_count: spec.bridge.keyCounts.attestation,
     attestation_threshold: spec.bridge.thresholds.attestation,
@@ -625,7 +628,7 @@ export function generateSetupDefaultsToml(spec: DeploymentSpec): string {
     }).filter(Boolean)
   }
 
-  return toml.stringify(config as any)
+  return toml.stringify(config as toml.JsonMap)
 }
 
 /**

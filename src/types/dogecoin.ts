@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Bitcoin library types */
 import * as bitcoin from 'bitcoinjs-lib'
 
 // 1. Define Dogecoin testnet network parameters

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Test mocking */
 import { expect } from 'chai';
 import sinon from 'sinon';
 

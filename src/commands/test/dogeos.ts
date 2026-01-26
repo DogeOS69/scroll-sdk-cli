@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic config and wallet operations */
 import { select } from '@inquirer/prompts'
 import { Args, Command, Flags } from '@oclif/core'
 import * as bitcoin from 'bitcoinjs-lib'

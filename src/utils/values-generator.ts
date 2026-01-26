@@ -10,6 +10,8 @@
  * - Kubernetes Secrets directly (provider: 'local')
  */
 
+/* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic YAML/JSON config building requires any */
+
 import * as yaml from 'js-yaml'
 
 import type { DeploymentSpec, ImagesConfig } from '../types/deployment-spec.js'

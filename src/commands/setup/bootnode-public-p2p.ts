@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic TOML config operations */
 import * as toml from '@iarna/toml'
 import { select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'

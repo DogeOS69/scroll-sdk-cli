@@ -21,6 +21,8 @@ import {
 
 const SECRETS_PATH = path.join(process.cwd(), 'secrets')
 
+/* eslint-disable @typescript-eslint/no-explicit-any -- TOML configs have dynamic structure */
+
 export default class SetupConfigs extends Command {
   static override description = 'Generate configuration files and create environment files for services'
 
@@ -141,10 +143,10 @@ export default class SetupConfigs extends Command {
           const publicConfigContent = fs.readFileSync(publicConfigPath, 'utf8')
           toml.parse(publicConfigContent)
           this.jsonCtx.logSuccess('Successfully parsed config.public.toml')
-        } catch (error: any) {
+        } catch (error) {
           this.jsonCtx.error(
             'E602_INVALID_CONFIG_FORMAT',
-            `Failed to parse config.public.toml: ${error.message}`,
+            `Failed to parse config.public.toml: ${error instanceof Error ? error.message : String(error)}`,
             'CONFIGURATION',
             false
           )
@@ -255,7 +257,7 @@ export default class SetupConfigs extends Command {
 
     for (const file of migrateDbFiles) {
       const filePath = path.join(SECRETS_PATH, `${file.service}-migrate-db.json`)
-      const content: any =
+      const content =
         file.service === 'bridge-history-fetcher'
           ? {
             db: {
@@ -296,7 +298,7 @@ export default class SetupConfigs extends Command {
       }
 
       const data = await response.json()
-      return data.results.map((tag: any) => tag.name).filter((tag: string) => tag.startsWith('gen-configs-'))
+      return data.results.map((tag: { name: string }) => tag.name).filter((tag: string) => tag.startsWith('gen-configs-'))
     } catch (error) {
       this.jsonCtx.error(
         'E400_DOCKER_IMAGE_PULL_FAILED',
@@ -629,7 +631,7 @@ export default class SetupConfigs extends Command {
 
           if (mapping.target === 'rollup-explorer-backend-config.yaml') {
             const yamlFileContent = fs.readFileSync(targetPath, 'utf8')
-            const parsedYaml = yaml.load(yamlFileContent) as any
+            const parsedYaml = yaml.load(yamlFileContent) as any | null
             if (parsedYaml && parsedYaml.scrollConfig && typeof parsedYaml.scrollConfig === 'string') {
               try {
                 const scrollConfigObject = JSON.parse(parsedYaml.scrollConfig)
@@ -652,7 +654,7 @@ export default class SetupConfigs extends Command {
             // remove auth.secret
             try {
               const yamlFileContent = fs.readFileSync(targetPath, 'utf8')
-              const parsedYaml = yaml.load(yamlFileContent) as any
+              const parsedYaml = yaml.load(yamlFileContent) as any | null
 
               if (!parsedYaml || parsedYaml.scrollConfig === undefined) {
                 this.jsonCtx.log(chalk.yellow(`scrollConfig not found in ${mapping.target}`))
@@ -894,10 +896,8 @@ export default class SetupConfigs extends Command {
       )
     } finally {
       // Close Docker HTTP agent to release event loop
-      const { agent } = docker.modem as any
-      if (agent && typeof agent.destroy === 'function') {
-        agent.destroy()
-      }
+      const { agent } = docker.modem as { agent?: { destroy?: () => void } }
+      agent?.destroy?.()
     }
   }
 
@@ -910,8 +910,7 @@ export default class SetupConfigs extends Command {
 
     const configContent = fs.readFileSync(configPath, 'utf8')
     const config = toml.parse(configContent)
-
-    const currentBaseFee = (config.genesis as any)?.BASE_FEE_PER_GAS || ''
+    const currentBaseFee = String((config.genesis as any)?.BASE_FEE_PER_GAS || '')
 
     if (this.nonInteractive) {
       // Non-interactive mode: use flag value or keep existing
@@ -958,13 +957,13 @@ export default class SetupConfigs extends Command {
 
     const configContent = fs.readFileSync(configPath, 'utf8')
     const config = toml.parse(configContent)
-
-    const currentSalt = (config.contracts as any)?.DEPLOYMENT_SALT || ''
+    const currentSalt = String((config.contracts as any)?.DEPLOYMENT_SALT || '')
     let defaultNewSalt = currentSalt
 
     if (/\d+$/.test(currentSalt)) {
       // If the current salt ends with a number, increment it
-      const number = Number.parseInt(currentSalt.match(/\d+$/)[0], 10)
+      const match = currentSalt.match(/\d+$/)
+      const number = Number.parseInt(match![0], 10)
       defaultNewSalt = currentSalt.replace(/\d+$/, (number + 1).toString())
     } else {
       // Generate a new random 6 char string and append it to the base
@@ -982,7 +981,7 @@ export default class SetupConfigs extends Command {
         return
       }
 
-      const newSalt = resolveEnvValue(flags['deployment-salt']) || defaultNewSalt
+      const newSalt = resolveEnvValue(flags['deployment-salt'] as string | undefined) || defaultNewSalt
 
       if (!config.contracts) {
         config.contracts = {}
@@ -1028,8 +1027,7 @@ export default class SetupConfigs extends Command {
 
     const configContent = fs.readFileSync(configPath, 'utf8')
     const config = toml.parse(configContent)
-
-    const currentBlock = (config.general as any)?.L1_CONTRACT_DEPLOYMENT_BLOCK || ''
+    const currentBlock = String((config.general as any)?.L1_CONTRACT_DEPLOYMENT_BLOCK || '')
     let defaultNewBlock = currentBlock
 
     const updateBlock = await confirm({
@@ -1038,7 +1036,7 @@ export default class SetupConfigs extends Command {
 
     if (updateBlock) {
       try {
-        const l1RpcUri = (config.frontend as any)?.EXTERNAL_RPC_URI_L1
+        const l1RpcUri = (config.frontend as any)?.EXTERNAL_RPC_URI_L1 as string | undefined
         const isDevnet = (config.general as any)?.L1_RPC_ENDPOINT === 'http://l1-devnet:8545'
 
         if (isDevnet) {
@@ -1068,9 +1066,7 @@ export default class SetupConfigs extends Command {
         config.general = {}
       }
 
-      ; (config.general as any).L1_CONTRACT_DEPLOYMENT_BLOCK = newBlock
-
-      // fs.writeFileSync(configPath, toml.stringify(config as any))
+      ;(config.general as any).L1_CONTRACT_DEPLOYMENT_BLOCK = newBlock
       if (writeConfigs(config)) {
         this.jsonCtx.logSuccess(`L1_CONTRACT_DEPLOYMENT_BLOCK updated in config.toml from "${currentBlock}" to "${newBlock}"`)
       }
@@ -1089,8 +1085,7 @@ export default class SetupConfigs extends Command {
 
     const configContent = fs.readFileSync(configPath, 'utf8')
     const config = toml.parse(configContent)
-
-    const defaultAddr = (config.accounts as any)?.OWNER_ADDR || ''
+    const defaultAddr = String((config.accounts as any)?.OWNER_ADDR || '')
 
     if (this.nonInteractive) {
       // Non-interactive mode: use flag value, existing config value, or OWNER_ADDR
@@ -1100,7 +1095,7 @@ export default class SetupConfigs extends Command {
       }
 
       const newAddr = resolveEnvValue(flags['l1-fee-vault-addr']) ||
-                      (config.contracts as any)?.L1_FEE_VAULT_ADDR ||
+                      String((config.contracts as any)?.L1_FEE_VAULT_ADDR || '') ||
                       defaultAddr
 
       if (!ethers.isAddress(newAddr)) {

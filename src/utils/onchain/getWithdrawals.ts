@@ -15,7 +15,7 @@ export type Withdrawal = {
 	refund_tx_hash: string;
 	replay_tx_hash: string;
 	token_amounts: string[];
-	token_ids: any[];
+	token_ids: string[];
 	token_type: number;
 	tx_status: number;
 };
@@ -40,6 +40,38 @@ export interface CounterpartChainTx {
 	hash: string;
 }
 
+/** API response structure for withdrawal results */
+interface WithdrawalApiResult {
+	batch_deposit_fee: string;
+	block_number: number;
+	block_timestamp: number;
+	claim_info: {
+		claimable: boolean;
+		from: string;
+		message: string;
+		nonce: string;
+		proof: { batch_index: string; merkle_proof: string };
+		to: string;
+		value: string;
+	} | null;
+	counterpart_chain_tx: { block_number: number; hash: string };
+	from: string;
+	hash: string;
+	l1_token_address: string;
+	l2_token_address: string;
+	message_hash: string;
+	message_type: number;
+	nonce: string;
+	refund_tx_hash: string;
+	replay_tx_hash: string;
+	to: string;
+	token_amounts: string[];
+	token_ids: string[];
+	token_type: number;
+	tx_status: number;
+	value: string;
+}
+
 /**
  * Retrieves unclaimed withdrawals for a given address.
  * 
@@ -62,7 +94,7 @@ export async function getWithdrawals(address: string, apiUri: string): Promise<W
 		throw new Error(`API error: ${data.errmsg}`);
 	}
 
-	const withdrawals: Withdrawal[] = data.data.results.map((result: any) => ({
+	const withdrawals: Withdrawal[] = (data.data.results as WithdrawalApiResult[]).map((result) => ({
 		batch_deposit_fee: result.batch_deposit_fee,
 		block_number: result.block_number,
 		block_timestamp: result.block_timestamp,
@@ -82,12 +114,17 @@ export async function getWithdrawals(address: string, apiUri: string): Promise<W
 			block_number: result.counterpart_chain_tx.block_number,
 			hash: result.counterpart_chain_tx.hash
 		},
-		from: result.from,
 		hash: result.hash,
-		nonce: result.nonce,
-		to: result.to,
+		l1_token_address: result.l1_token_address,
+		l2_token_address: result.l2_token_address,
+		message_hash: result.message_hash,
+		message_type: result.message_type,
+		refund_tx_hash: result.refund_tx_hash,
+		replay_tx_hash: result.replay_tx_hash,
+		token_amounts: result.token_amounts,
+		token_ids: result.token_ids,
+		token_type: result.token_type,
 		tx_status: result.tx_status,
-		value: result.value
 	}));
 
 	return withdrawals;

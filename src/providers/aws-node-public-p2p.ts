@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic YAML config operations */
 import { input } from '@inquirer/prompts'
 import chalk from 'chalk'
 import * as yaml from 'js-yaml'

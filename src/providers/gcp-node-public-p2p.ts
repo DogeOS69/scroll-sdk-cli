@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic YAML config operations */
 import chalk from 'chalk'
 
 import type { NodeLBProvider } from './aws-node-public-p2p.js'
