@@ -1,5 +1,6 @@
 import { Contract, ethers } from 'ethers';
-import { generateProvider, RpcSource } from './index.js';
+
+import { RpcSource, generateProvider } from './index.js';
 
 /**
  * Retrieves cross-domain message information from a transaction.
@@ -14,7 +15,7 @@ export async function getCrossDomainMessageFromTx(
   tx: string,
   rpc: RpcSource,
   l1MessageQueueProxyAddress: string
-): Promise<{ queueIndex: number; l2TxHash: string }> {
+): Promise<{ l2TxHash: string; queueIndex: number }> {
   const provider = generateProvider(rpc)
   const receipt = await provider.getTransactionReceipt(tx);
   if (!receipt) throw new Error('Transaction not found');
@@ -47,7 +48,7 @@ export async function getCrossDomainMessageFromTx(
    const sender = ethers.AbiCoder.defaultAbiCoder().decode(['address'], queueTransactionLog.topics[1])[0]
    const target = ethers.AbiCoder.defaultAbiCoder().decode(['address'], queueTransactionLog.topics[2])[0]
   const l1MessageQueueABI = [
-    //"function getCrossDomainMessage(uint256) view returns (bytes32)",
+    // "function getCrossDomainMessage(uint256) view returns (bytes32)",
     "function getMessageRollingHash(uint256 queueIndex) external view returns (bytes32 hash)",
     /*
     https://github.com/scroll-tech/scroll-contracts/blob/8e6a02b120d3a997f7c8e948b62bfb0e5b3ac185/src/L1/rollup/L1MessageQueueV2.sol#L190

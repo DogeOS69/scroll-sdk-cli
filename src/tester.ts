@@ -1,12 +1,12 @@
 import {
-	getFinalizedBlockHeight,
-	getCrossDomainMessageFromTx,
-	getPendingQueueIndex,
-	getGasOracleL2BaseFee,
+	awaitERC20Balance,
 	awaitTx,
-	txLink,
+	getCrossDomainMessageFromTx,
+	getFinalizedBlockHeight,
+	getGasOracleL2BaseFee,
+	getPendingQueueIndex,
 	getWithdrawals,
-	awaitERC20Balance
+	txLink
 } from './utils/onchain/index.js';
 
 const EXTERNAL_RPC_URI_L1 = "https://alien-flashy-arm.ethereum-sepolia.quiknode.pro/2aeb75414e5ee0e930b64c2e7feff59efb537f30"

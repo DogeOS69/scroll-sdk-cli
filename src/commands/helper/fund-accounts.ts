@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic config operations */
 import { confirm, input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
@@ -391,13 +392,13 @@ export default class HelperFundAccounts extends Command {
       this.log(chalk.blue(`Funding ${contractName}:`))
 
       if (flags.dev) {
-        // eslint-disable-next-line no-await-in-loop
+         
         await this.fundAddressAnvil(this.l1Provider, address, Number(flags.amount), Layer.L1)
       } else if (flags.manual) {
-        // eslint-disable-next-line no-await-in-loop
+         
         await this.promptManualFunding(address, Number(flags.amount), Layer.L1)
       } else {
-        // eslint-disable-next-line no-await-in-loop
+         
         await this.fundAddressNetwork(address, Number(flags.amount), Layer.L1)
       }
     }
@@ -413,19 +414,19 @@ export default class HelperFundAccounts extends Command {
 
       this.log(chalk.blue(`Funding ${contractName}:`))
 
-      // eslint-disable-next-line no-await-in-loop
+       
       const fundingMethod = await this.promptUserForL2Funding()
 
       if (fundingMethod === 'bridge') {
-        // eslint-disable-next-line no-await-in-loop
+         
         await (this.altGasTokenEnabled
           ? this.bridgeAltTokenL1ToL2(address, Number(flags.amount))
           : this.bridgeFundsL1ToL2(address, Number(flags.amount)))
       } else if (fundingMethod === 'direct') {
-        // eslint-disable-next-line no-await-in-loop
+         
         await this.fundAddressNetwork(address, Number(flags.amount), Layer.L2)
       } else {
-        // eslint-disable-next-line no-await-in-loop
+         
         await this.promptManualFunding(address, Number(flags.amount), Layer.L2)
       }
     }
@@ -501,10 +502,10 @@ export default class HelperFundAccounts extends Command {
 
     let funded = false
     while (!funded) {
-      // eslint-disable-next-line no-await-in-loop
+       
       await confirm({ message: 'Press Enter when ready...' })
       this.log(`Checking...`)
-      // eslint-disable-next-line no-await-in-loop
+       
       const balance = await (layer === Layer.L1 ? this.l1Provider : this.l2Provider).getBalance(address)
       const formattedBalance = ethers.formatEther(balance)
 
@@ -539,16 +540,16 @@ export default class HelperFundAccounts extends Command {
 
     let funded = false
     while (!funded) {
-      // eslint-disable-next-line no-await-in-loop
+       
       await confirm({ message: 'Press Enter when ready...' })
       this.log(`Checking...`)
-      // eslint-disable-next-line no-await-in-loop
+       
       const balance = await new Contract(
         tokenAddress,
         ['function balanceOf(address) view returns (uint256)'],
         this.l1Provider,
       ).balanceOf(address)
-      // eslint-disable-next-line no-await-in-loop
+       
       const formattedBalance = ethers.formatUnits(
         balance,
         await new Contract(tokenAddress, ['function decimals() view returns (uint8)'], this.l1Provider).decimals(),

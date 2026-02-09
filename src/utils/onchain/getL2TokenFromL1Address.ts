@@ -1,5 +1,6 @@
-import { Contract, ethers } from 'ethers';
-import { generateProvider, l1GatewayRouterABI, RpcSource } from './index.js';
+import { Contract } from 'ethers';
+
+import { RpcSource, generateProvider, l1GatewayRouterABI } from './index.js';
 
 /**
  * Retrieves the L2 token address corresponding to an L1 token address.

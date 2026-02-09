@@ -1,12 +1,14 @@
-import { Command, Flags } from '@oclif/core'
-import * as fs from 'fs'
-import * as path from 'path'
-import * as yaml from 'js-yaml'
-import { exec } from 'child_process'
-import { promisify } from 'util'
-import chalk from 'chalk'
-import Table from 'cli-table3'
+/* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic YAML config operations */
 import { confirm } from '@inquirer/prompts'
+import { Command, Flags } from '@oclif/core'
+import chalk from 'chalk'
+// eslint-disable-next-line import/no-named-as-default -- cli-table3 uses default export pattern
+import Table from 'cli-table3'
+import * as yaml from 'js-yaml'
+import { exec } from 'node:child_process'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+import { promisify } from 'node:util'
 
 const execAsync = promisify(exec)
 
@@ -24,6 +26,28 @@ export default class SetupDisableInternal extends Command {
   ]
 
   static override flags = {
+    disable: Flags.string({
+      description: 'Disable ingress for a service',
+      exclusive: ['list', 'enable', 'disable-internal']
+    }),
+    'disable-internal': Flags.boolean({
+      default: false,
+      description: 'Disable all internal services (Celestia, Dogecoin, Anvil L1) using kubectl',
+      exclusive: ['list', 'enable', 'disable']
+    }),
+    'dry-run': Flags.boolean({
+      default: false,
+      description: 'Show what would be deleted without actually deleting'
+    }),
+    enable: Flags.string({
+      description: 'Enable ingress for a service',
+      exclusive: ['list', 'disable', 'disable-internal']
+    }),
+    force: Flags.boolean({
+      char: 'f',
+      default: false,
+      description: 'Skip confirmation prompts'
+    }),
     list: Flags.boolean({
       description: 'List current ingress status from local values files',
       exclusive: ['enable', 'disable', 'disable-internal', 'list-k8s']
@@ -32,40 +56,18 @@ export default class SetupDisableInternal extends Command {
       description: 'List current ingress status from Kubernetes cluster',
       exclusive: ['enable', 'disable', 'disable-internal', 'list']
     }),
-    enable: Flags.string({
-      description: 'Enable ingress for a service',
-      exclusive: ['list', 'disable', 'disable-internal']
-    }),
-    disable: Flags.string({
-      description: 'Disable ingress for a service',
-      exclusive: ['list', 'enable', 'disable-internal']
-    }),
-    'disable-internal': Flags.boolean({
-      description: 'Disable all internal services (Celestia, Dogecoin, Anvil L1) using kubectl',
-      exclusive: ['list', 'enable', 'disable'],
-      default: false
-    }),
     namespace: Flags.string({
-      description: 'Kubernetes namespace',
       char: 'n',
-      default: 'default'
-    }),
-    'dry-run': Flags.boolean({
-      description: 'Show what would be deleted without actually deleting',
-      default: false
-    }),
-    force: Flags.boolean({
-      description: 'Skip confirmation prompts',
-      char: 'f',
-      default: false
-    }),
-    'values-dir': Flags.string({
-      description: 'Directory containing values files',
-      default: './values'
+      default: 'default',
+      description: 'Kubernetes namespace'
     }),
     'skip-helm': Flags.boolean({
-      description: 'Skip helm upgrade',
-      default: false
+      default: false,
+      description: 'Skip helm upgrade'
+    }),
+    'values-dir': Flags.string({
+      default: './values',
+      description: 'Directory containing values files'
     })
   }
 
@@ -77,6 +79,54 @@ export default class SetupDisableInternal extends Command {
     'dogecoin',
     'l1-devnet'
   ]
+
+  public async run(): Promise<void> {
+    const { flags } = await this.parse(SetupDisableInternal)
+
+    // Handle list-k8s flag
+    if (flags['list-k8s']) {
+      await this.listK8sIngresses(flags.namespace)
+      return
+    }
+
+    // Handle disable-internal flag (new default behavior)
+    if (flags['disable-internal'] || (!flags.list && !flags.enable && !flags.disable)) {
+      await this.disableInternalWithKubectl(flags.namespace, flags['dry-run'], flags.force)
+      return
+    }
+
+    if (flags.list) {
+      await this.listStatus(flags['values-dir'])
+      return
+    }
+
+    if (flags.enable) {
+      const services = flags.enable.split(',').map(s => s.trim())
+      for (const service of services) {
+        await this.toggleIngress(
+          service, 
+          true, 
+          flags['values-dir'],
+          flags['skip-helm']
+        )
+      }
+
+      return
+    }
+
+    if (flags.disable) {
+      const services = flags.disable.split(',').map(s => s.trim())
+      for (const service of services) {
+        await this.toggleIngress(
+          service, 
+          false, 
+          flags['values-dir'],
+          flags['skip-helm']
+        )
+      }
+      
+    }
+  }
 
   private async disableInternalWithKubectl(namespace: string, dryRun: boolean, force: boolean = false): Promise<void> {
     this.log(chalk.bold(`Disabling ingress for internal services in namespace: ${namespace}`))
@@ -115,9 +165,10 @@ export default class SetupDisableInternal extends Command {
 
       if (dryRun) {
         this.log(chalk.yellow('\nDry run mode - would execute:'))
-        deleteCommands.forEach(cmd => {
+        for (const cmd of deleteCommands) {
           this.log(chalk.gray(`  $ ${cmd}`))
-        })
+        }
+
         return
       }
 
@@ -130,8 +181,8 @@ export default class SetupDisableInternal extends Command {
         this.log(chalk.gray(`  $ ${cmd}`))
         
         const confirmed = force || await confirm({
-          message: `Delete ingress '${name}'?`,
-          default: true
+          default: true,
+          message: `Delete ingress '${name}'?`
         })
 
         if (confirmed) {
@@ -146,7 +197,7 @@ export default class SetupDisableInternal extends Command {
         }
       }
 
-    } catch (error: any) {
+    } catch {
       // Try alternative approach with predefined service names
       this.log(chalk.yellow('Using predefined service names...'))
       
@@ -156,7 +207,7 @@ export default class SetupDisableInternal extends Command {
 
       if (dryRun) {
         this.log(chalk.yellow('\nDry run - would execute:'))
-        deleteCommands.forEach(cmd => this.log(chalk.gray(`  $ ${cmd}`)))
+        for (const cmd of deleteCommands) this.log(chalk.gray(`  $ ${cmd}`))
         return
       }
 
@@ -168,8 +219,8 @@ export default class SetupDisableInternal extends Command {
         this.log(chalk.gray(`  $ ${cmd}`))
         
         const confirmed = force || await confirm({
-          message: `Attempt to delete ingress '${serviceName}'?`,
-          default: true
+          default: true,
+          message: `Attempt to delete ingress '${serviceName}'?`
         })
 
         if (confirmed) {
@@ -202,7 +253,7 @@ export default class SetupDisableInternal extends Command {
       } else {
         this.log(chalk.green('\n✅ All internal service ingresses have been disabled'))
       }
-    } catch (error) {
+    } catch {
       // Ignore errors in verification
     }
   }
@@ -222,11 +273,11 @@ export default class SetupDisableInternal extends Command {
         const data = yaml.load(content) as any
         
         services.set(serviceName, {
-          file,
           data,
+          file,
           ingressEnabled: this.isIngressEnabled(data)
         })
-      } catch (error) {
+      } catch {
         this.warn(`Failed to read ${file}`)
       }
     }
@@ -254,100 +305,6 @@ export default class SetupDisableInternal extends Command {
     return false
   }
 
-  private async listStatus(valuesDir: string): Promise<void> {
-    const services = await this.getServices(valuesDir)
-
-    const table = new Table({
-      head: ['Service', 'Ingress Status'],
-      style: { head: ['cyan'] }
-    })
-
-    for (const [name, info] of services) {
-      const status = info.ingressEnabled 
-        ? chalk.green('✓ Enabled') 
-        : chalk.gray('✗ Disabled')
-      table.push([name, status])
-    }
-
-    this.log('\n' + chalk.bold('Ingress Status:'))
-    this.log(table.toString())
-  }
-
-  private async toggleIngress(
-    serviceName: string, 
-    enable: boolean, 
-    valuesDir: string,
-    skipHelm: boolean
-  ): Promise<void> {
-    const services = await this.getServices(valuesDir)
-    const service = services.get(serviceName)
-
-    if (!service) {
-      this.error(`Service '${serviceName}' not found`)
-    }
-
-    const filePath = path.join(valuesDir, service.file)
-    const data = service.data
-
-    // Update ingress configuration
-    if (serviceName === 'blockscout' && data['blockscout-stack']) {
-      // Special handling for blockscout
-      if (data['blockscout-stack'].blockscout?.ingress) {
-        data['blockscout-stack'].blockscout.ingress.enabled = enable
-      }
-      if (data['blockscout-stack'].frontend?.ingress) {
-        data['blockscout-stack'].frontend.ingress.enabled = enable
-      }
-    } else if (serviceName === 'grafana' && data.grafana) {
-      // Special handling for grafana
-      if (!data.grafana.ingress) {
-        data.grafana.ingress = {}
-      }
-      data.grafana.ingress.enabled = enable
-    } else {
-      // Regular services
-      if (!data.ingress) {
-        data.ingress = {}
-      }
-      data.ingress.enabled = enable
-    }
-
-    // Save the file
-    const yamlStr = yaml.dump(data, { 
-      indent: 2,
-      lineWidth: -1,
-      noRefs: true
-    })
-    fs.writeFileSync(filePath, yamlStr)
-
-    this.log(chalk.green(`✓ Updated ${service.file}`))
-    this.log(chalk.gray(`  Ingress ${enable ? 'enabled' : 'disabled'} for ${serviceName}`))
-
-    // Run helm upgrade if not skipped
-    if (!skipHelm) {
-      await this.runHelmUpgrade(serviceName)
-    }
-  }
-
-  private async runHelmUpgrade(serviceName: string): Promise<void> {
-    this.log(chalk.cyan(`Running helm upgrade for ${serviceName}...`))
-    
-    try {
-      // Try to run make install command
-      const makeCommand = `make install-${serviceName}`
-      const { stdout, stderr } = await execAsync(makeCommand)
-      
-      if (stderr) {
-        this.warn(chalk.yellow(stderr))
-      }
-      
-      this.log(chalk.green(`✓ Helm upgrade completed for ${serviceName}`))
-    } catch (error: any) {
-      this.warn(chalk.yellow(`Failed to run helm upgrade: ${error.message}`))
-      this.log(chalk.gray(`Run manually: make install-${serviceName}`))
-    }
-  }
-
   private async listK8sIngresses(namespace: string): Promise<void> {
     this.log(chalk.bold(`Ingress Status in Kubernetes (namespace: ${namespace}):`))
     
@@ -367,7 +324,7 @@ export default class SetupDisableInternal extends Command {
       })
 
       for (const ingress of ingressData.items) {
-        const name = ingress.metadata.name
+        const {name} = ingress.metadata
         const hosts = ingress.spec.rules?.map((r: any) => r.host).filter(Boolean).join(', ') || '-'
         const className = ingress.spec.ingressClassName || 'default'
         const addresses = ingress.status.loadBalancer?.ingress?.map((i: any) => 
@@ -391,7 +348,7 @@ export default class SetupDisableInternal extends Command {
       
       // Count internal services
       const internalCount = ingressData.items.filter((ingress: any) => {
-        const name = ingress.metadata.name
+        const {name} = ingress.metadata
         return this.INTERNAL_SERVICES.some(service => 
           name.includes(service) || 
           name.includes('celestia') || 
@@ -408,54 +365,105 @@ export default class SetupDisableInternal extends Command {
       if (error.message.includes('command not found')) {
         this.error('kubectl is not installed or not in PATH')
       }
+
       this.error(`Failed to get ingresses: ${error.message}`)
     }
   }
 
-  public async run(): Promise<void> {
-    const { flags } = await this.parse(SetupDisableInternal)
+  private async listStatus(valuesDir: string): Promise<void> {
+    const services = await this.getServices(valuesDir)
 
-    // Handle list-k8s flag
-    if (flags['list-k8s']) {
-      await this.listK8sIngresses(flags.namespace)
-      return
+    const table = new Table({
+      head: ['Service', 'Ingress Status'],
+      style: { head: ['cyan'] }
+    })
+
+    for (const [name, info] of services) {
+      const status = info.ingressEnabled 
+        ? chalk.green('✓ Enabled') 
+        : chalk.gray('✗ Disabled')
+      table.push([name, status])
     }
 
-    // Handle disable-internal flag (new default behavior)
-    if (flags['disable-internal'] || (!flags.list && !flags.enable && !flags.disable)) {
-      await this.disableInternalWithKubectl(flags.namespace, flags['dry-run'], flags.force)
-      return
-    }
+    this.log('\n' + chalk.bold('Ingress Status:'))
+    this.log(table.toString())
+  }
 
-    if (flags.list) {
-      await this.listStatus(flags['values-dir'])
-      return
-    }
-
-    if (flags.enable) {
-      const services = flags.enable.split(',').map(s => s.trim())
-      for (const service of services) {
-        await this.toggleIngress(
-          service, 
-          true, 
-          flags['values-dir'],
-          flags['skip-helm']
-        )
+  private async runHelmUpgrade(serviceName: string): Promise<void> {
+    this.log(chalk.cyan(`Running helm upgrade for ${serviceName}...`))
+    
+    try {
+      // Try to run make install command
+      const makeCommand = `make install-${serviceName}`
+      const { stderr } = await execAsync(makeCommand)
+      
+      if (stderr) {
+        this.warn(chalk.yellow(stderr))
       }
-      return
+      
+      this.log(chalk.green(`✓ Helm upgrade completed for ${serviceName}`))
+    } catch (error: any) {
+      this.warn(chalk.yellow(`Failed to run helm upgrade: ${error.message}`))
+      this.log(chalk.gray(`Run manually: make install-${serviceName}`))
+    }
+  }
+
+  private async toggleIngress(
+    serviceName: string, 
+    enable: boolean, 
+    valuesDir: string,
+    skipHelm: boolean
+  ): Promise<void> {
+    const services = await this.getServices(valuesDir)
+    const service = services.get(serviceName)
+
+    if (!service) {
+      this.error(`Service '${serviceName}' not found`)
     }
 
-    if (flags.disable) {
-      const services = flags.disable.split(',').map(s => s.trim())
-      for (const service of services) {
-        await this.toggleIngress(
-          service, 
-          false, 
-          flags['values-dir'],
-          flags['skip-helm']
-        )
+    const filePath = path.join(valuesDir, service.file)
+    const {data} = service
+
+    // Update ingress configuration
+    if (serviceName === 'blockscout' && data['blockscout-stack']) {
+      // Special handling for blockscout
+      if (data['blockscout-stack'].blockscout?.ingress) {
+        data['blockscout-stack'].blockscout.ingress.enabled = enable
       }
-      return
+
+      if (data['blockscout-stack'].frontend?.ingress) {
+        data['blockscout-stack'].frontend.ingress.enabled = enable
+      }
+    } else if (serviceName === 'grafana' && data.grafana) {
+      // Special handling for grafana
+      if (!data.grafana.ingress) {
+        data.grafana.ingress = {}
+      }
+
+      data.grafana.ingress.enabled = enable
+    } else {
+      // Regular services
+      if (!data.ingress) {
+        data.ingress = {}
+      }
+
+      data.ingress.enabled = enable
+    }
+
+    // Save the file
+    const yamlStr = yaml.dump(data, { 
+      indent: 2,
+      lineWidth: -1,
+      noRefs: true
+    })
+    fs.writeFileSync(filePath, yamlStr)
+
+    this.log(chalk.green(`✓ Updated ${service.file}`))
+    this.log(chalk.gray(`  Ingress ${enable ? 'enabled' : 'disabled'} for ${serviceName}`))
+
+    // Run helm upgrade if not skipped
+    if (!skipHelm) {
+      await this.runHelmUpgrade(serviceName)
     }
   }
 }

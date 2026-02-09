@@ -1,5 +1,6 @@
-import { BlockExplorerParams, LookupType, constructBlockExplorerUrl } from "./index.js";
 import terminalLink from "terminal-link";
+
+import { BlockExplorerParams, LookupType, constructBlockExplorerUrl } from "./index.js";
 
 /**
  * Creates a terminal-friendly link to a transaction on a block explorer.

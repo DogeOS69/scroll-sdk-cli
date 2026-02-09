@@ -1,14 +1,12 @@
-import * as fs from 'fs'
-import * as path from 'path'
-import { promisify } from 'util'
-import { exec } from 'child_process'
-import * as yaml from 'js-yaml'
+/* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic YAML config operations */
 import { input } from '@inquirer/prompts'
 import chalk from 'chalk'
+import * as yaml from 'js-yaml'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+
 import { YAML_DUMP_OPTIONS } from '../config/constants.js'
 import { executeCommand } from '../utils/command-executor.js'
-
-const execAsync = promisify(exec)
 
 export interface NodeLBProvider {
   checkPrerequisites(): Promise<boolean>
@@ -16,9 +14,9 @@ export interface NodeLBProvider {
 }
 
 export class AWSNodeLBProvider implements NodeLBProvider {
-  private region: string;
-  private clusterName: string;
   private accountId: string;
+  private clusterName: string;
+  private region: string;
 
   constructor() {
     this.region = '';
@@ -40,7 +38,7 @@ export class AWSNodeLBProvider implements NodeLBProvider {
       try {
         await executeCommand(cmd, false);
         console.log(chalk.green(`✓ ${name} is installed`));
-      } catch (error) {
+      } catch {
         console.log(chalk.red(`✗ ${name} is not installed or not in PATH`));
         return false;
       }
@@ -49,7 +47,7 @@ export class AWSNodeLBProvider implements NodeLBProvider {
     try {
       await executeCommand('aws sts get-caller-identity', false);
       console.log(chalk.green('✓ AWS credentials configured'));
-    } catch (error) {
+    } catch {
       console.log(chalk.red('✗ AWS credentials not configured, please run "aws configure"'));
       return false;
     }
@@ -62,22 +60,22 @@ export class AWSNodeLBProvider implements NodeLBProvider {
     console.log(chalk.blue('Starting AWS P2P Loadbalancer...'));
     console.log('====================================');
 
-    if (!flags['cluster-name']) {
+    if (flags['cluster-name']) {
+      this.clusterName = flags['cluster-name'];
+    } else {
       this.clusterName = await input({ message: 'Enter your EKS cluster name:' });
       if (!this.clusterName) {
         throw new Error('Cluster name cannot be empty');
       }
-    } else {
-      this.clusterName = flags['cluster-name'];
     }
 
-    if (!flags.region) {
+    if (flags.region) {
+      this.region = flags.region;
+    } else {
       this.region = await input({ message: 'Enter your AWS region (e.g., us-east-2):' });
       if (!this.region) {
         throw new Error('AWS region cannot be empty');
       }
-    } else {
-      this.region = flags.region;
     }
 
     console.log('Verifying cluster exists...');
@@ -116,6 +114,7 @@ export class AWSNodeLBProvider implements NodeLBProvider {
       for (let i = 0; i < bootnodeCount; i++) {
         console.log(chalk.blue(`  kubectl get service l2-bootnode-${i}-p2p -n ${ns} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{\\"\\n\\"}'`));
       }
+
       return [];
     } catch (error) {
       console.log(chalk.red('Error occurred during AWS setup:'));
@@ -124,18 +123,26 @@ export class AWSNodeLBProvider implements NodeLBProvider {
     }
   }
 
-  private async verifyClusterExists(clusterName: string, region: string): Promise<boolean> {
-    try {
-      await executeCommand(`aws eks describe-cluster --name "${clusterName}" --region "${region}"`, false);
-      return true;
-    } catch (error) {
-      return false;
-    }
-  }
+  private async configL2BootnodeP2p(doc: any, index: number, region?: string, clusterName?: string) {
 
-  private async getAwsAccountId(): Promise<string> {
-    const { stdout } = await executeCommand('aws sts get-caller-identity --query "Account" --output text', false);
-    return stdout.trim();
+    if (!doc.service) doc.service = {};
+    if (!doc.service.p2p) doc.service.p2p = {};
+
+    const p2pCfg = doc.service.p2p;
+    p2pCfg.enabled = true;
+
+    if (!p2pCfg.annotations || typeof p2pCfg.annotations !== 'object') {
+      p2pCfg.annotations = {};
+    }
+
+    const {annotations} = p2pCfg;
+
+    annotations['service.beta.kubernetes.io/aws-load-balancer-type'] ||= 'nlb';
+    annotations['service.beta.kubernetes.io/aws-load-balancer-scheme'] ||= 'internet-facing';
+    annotations['service.beta.kubernetes.io/aws-load-balancer-nlb-target-type'] ||= 'ip';
+    annotations['service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled'] = 'true';
+    const lbNamePrefix = clusterName ? `${clusterName}-` : '';
+    annotations['service.beta.kubernetes.io/aws-load-balancer-name'] = `${lbNamePrefix}b-${index}`;
   }
 
   private async configureIamPermissions(accountId: string): Promise<void> {
@@ -146,7 +153,7 @@ export class AWSNodeLBProvider implements NodeLBProvider {
     try {
       await executeCommand(`eksctl utils associate-iam-oidc-provider --region "${this.region}" --cluster "${this.clusterName}" --approve`);
       console.log(chalk.green('✓ IAM OIDC provider associated'));
-    } catch (error) {
+    } catch {
       console.log(chalk.yellow('⚠️  IAM OIDC provider may already be associated'));
     }
 
@@ -156,24 +163,24 @@ export class AWSNodeLBProvider implements NodeLBProvider {
     try {
       await executeCommand(`curl -o ${policyFile} https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/main/docs/install/iam_policy.json`);
       console.log(chalk.green(`✓ IAM policy downloaded to ${policyFile}`));
-    } catch (error) {
+    } catch {
       throw new Error('Failed to download IAM policy file');
     }
 
     // 3. Get policy name from user or use default
-    let policyName = 'AWSLoadBalancerControllerIAMPolicy';
+    const policyName = 'AWSLoadBalancerControllerIAMPolicy';
     
     // 4. Create IAM policy
     console.log(`Creating IAM policy: ${policyName}...`);
     try {
       await executeCommand(`aws iam create-policy --policy-name "${policyName}" --policy-document file://${policyFile}`);
       console.log(chalk.green(`✓ IAM policy ${policyName} created`));
-    } catch (error) {
+    } catch {
       console.log(chalk.yellow(`⚠️  IAM policy ${policyName} may already exist`));
     }
 
     // 5. Get service account name from user or use default
-    let serviceAccountName = 'aws-load-balancer-controller';
+    const serviceAccountName = 'aws-load-balancer-controller';
    
     // 6. Create IAM service account
     console.log(`Creating IAM service account: ${serviceAccountName}...`);
@@ -199,11 +206,16 @@ export class AWSNodeLBProvider implements NodeLBProvider {
         fs.unlinkSync(policyFile);
         console.log(chalk.green(`✓ Cleaned up ${policyFile}`));
       }
-    } catch (error) {
+    } catch {
       console.log(chalk.yellow(`⚠️  Could not clean up ${policyFile}`));
     }
 
     console.log(chalk.green('IAM permissions configured successfully!'));
+  }
+
+  private async getAwsAccountId(): Promise<string> {
+    const { stdout } = await executeCommand('aws sts get-caller-identity --query "Account" --output text', false);
+    return stdout.trim();
   }
 
   private async installLoadBalancerController(clusterName: string, region: string): Promise<void> {
@@ -229,7 +241,7 @@ export class AWSNodeLBProvider implements NodeLBProvider {
 
     try {
       await executeCommand('kubectl wait --for=condition=available --timeout=180s deployment/aws-load-balancer-controller -n kube-system', false);
-    } catch (error) {
+    } catch {
       console.log(chalk.yellow('Deployment not ready within timeout, checking pod status...'));
 
       try {
@@ -238,17 +250,17 @@ export class AWSNodeLBProvider implements NodeLBProvider {
 
         console.log(`Pod statuses: ${stdout}`);
 
-        const pods = podNames.split(' ').filter(name => name);
+        const pods = podNames.split(' ').filter(Boolean);
         for (const pod of pods) {
           try {
             const { stdout: logs } = await executeCommand(`kubectl logs ${pod} -n kube-system --tail=5`, false);
             if (logs.includes('Unauthorized') || logs.includes('unable to create controller')) {
               throw new Error(`AWS Load Balancer Controller pod ${pod} has permission issues. This usually indicates the IAM service account was not created properly.`);
             }
-          } catch (logError) {
+          } catch {
           }
         }
-      } catch (debugError) {
+      } catch {
       }
 
       throw new Error('AWS Load Balancer Controller failed to become ready within timeout');
@@ -256,12 +268,13 @@ export class AWSNodeLBProvider implements NodeLBProvider {
 
     try {
       const { stdout } = await executeCommand('kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller --field-selector=status.phase=Running --no-headers | wc -l', false);
-      const runningPods = parseInt(stdout.trim());
+      const runningPods = Number.parseInt(stdout.trim(), 10);
       if (runningPods === 0) {
         throw new Error('No AWS Load Balancer Controller pods are running');
       }
+
       console.log(chalk.green(`✓ ${runningPods} AWS Load Balancer Controller pod(s) running`));
-    } catch (error) {
+    } catch {
       throw new Error('Failed to verify AWS Load Balancer Controller pod status');
     }
 
@@ -280,31 +293,11 @@ export class AWSNodeLBProvider implements NodeLBProvider {
       if (!trimmed || trimmed === 'None' || trimmed === 'null') {
         return null;
       }
+
       return JSON.parse(trimmed);
     } catch {
       return null;
     }
-  }
-
-  private async configL2BootnodeP2p(doc: any, index: number, region?: string, clusterName?: string) {
-
-    if (!doc.service) doc.service = {};
-    if (!doc.service.p2p) doc.service.p2p = {};
-
-    const p2pCfg = doc.service.p2p;
-    p2pCfg.enabled = true;
-
-    if (!p2pCfg.annotations || typeof p2pCfg.annotations !== 'object') {
-      p2pCfg.annotations = {};
-    }
-    const annotations: Record<string, string> = p2pCfg.annotations;
-
-    annotations['service.beta.kubernetes.io/aws-load-balancer-type'] ||= 'nlb';
-    annotations['service.beta.kubernetes.io/aws-load-balancer-scheme'] ||= 'internet-facing';
-    annotations['service.beta.kubernetes.io/aws-load-balancer-nlb-target-type'] ||= 'ip';
-    annotations['service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled'] = 'true';
-    const lbNamePrefix = clusterName ? `${clusterName}-` : '';
-    annotations['service.beta.kubernetes.io/aws-load-balancer-name'] = `${lbNamePrefix}b-${index}`;
   }
 
   private async updateProductionFiles(valuesDir: string, bootnodeCount: number, region: string, clusterName: string): Promise<void> {
@@ -325,14 +318,14 @@ export class AWSNodeLBProvider implements NodeLBProvider {
         content = yaml.dump(yamlData, YAML_DUMP_OPTIONS);
         fs.writeFileSync(prodFile, content);
 
-        //console.log(chalk.green(`Updated ${prodFile} with allocation ID: ${allocationIds[i]}`));
+        // console.log(chalk.green(`Updated ${prodFile} with allocation ID: ${allocationIds[i]}`));
       } else {
         console.log(chalk.yellow(`Production file ${prodFile} not found, skipping...`));
       }
     }
   }
 
-  private async verifyAwsSetup(accountId: string, region: string, bootnodeCount: number): Promise<boolean> {
+  private async verifyAwsSetup(_accountId: string, _region: string, _bootnodeCount: number): Promise<boolean> {
     console.log(chalk.blue('Verifying setup...'));
 
     let allChecksPass = true;
@@ -345,11 +338,20 @@ export class AWSNodeLBProvider implements NodeLBProvider {
         console.log(chalk.red('✗ AWS Load Balancer Controller is not ready'));
         allChecksPass = false;
       }
-    } catch (error) {
+    } catch {
       console.log(chalk.red('✗ AWS Load Balancer Controller not found'));
       allChecksPass = false;
     }
 
     return allChecksPass;
+  }
+
+  private async verifyClusterExists(clusterName: string, region: string): Promise<boolean> {
+    try {
+      await executeCommand(`aws eks describe-cluster --name "${clusterName}" --region "${region}"`, false);
+      return true;
+    } catch {
+      return false;
+    }
   }
 } 

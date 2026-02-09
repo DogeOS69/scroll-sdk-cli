@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
-import { RpcSource, scrollERC20ABI, generateProvider } from './index.js';
+
+import { RpcSource, generateProvider, scrollERC20ABI } from './index.js';
 
 export async function awaitERC20Balance(
 	walletAddress: string,
@@ -13,16 +14,17 @@ export async function awaitERC20Balance(
 		let balance = BigInt(0);
 		let attempts = 0;
 		const maxAttempts = 5;
-		const delay = 15000; // 15 seconds
+		const delay = 15_000; // 15 seconds
 
 		while (balance === BigInt(0) && attempts < maxAttempts) {
 			balance = await erc20Contract.balanceOf(walletAddress);
 			if (balance > BigInt(0)) {
 				return balance.toString();
 			}
+
 			attempts++;
 			console.log(`Attempt ${attempts}: Waiting for token balance...`);
-			await new Promise(resolve => setTimeout(resolve, delay));
+			await new Promise(resolve => { setTimeout(resolve, delay) });
 		}
 
 		return balance.toString();

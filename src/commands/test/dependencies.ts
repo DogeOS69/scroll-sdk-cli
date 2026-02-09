@@ -33,7 +33,7 @@ export default class TestDependencies extends Command {
     const missingDependencies: string[] = []
 
     for (const dep of dependencies) {
-      // eslint-disable-next-line no-await-in-loop
+       
       const found = await this.checkDependency(dep.command)
       if (found) {
         foundDependencies.push(dep.name)

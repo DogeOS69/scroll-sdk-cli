@@ -1,27 +1,28 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Bitcoin library types */
 import * as bitcoin from 'bitcoinjs-lib'
 
 // 1. Define Dogecoin testnet network parameters
 export const dogecoinTestnet: bitcoin.Network = {
-  messagePrefix: '\x19Dogecoin Testnet Signed Message:\n',
+  bech32: '', // Dogecoin does not support bech32, but the library requires this property
   bip32: {
-    public: 0x04_35_87_CF, // tpub
     private: 0x04_35_83_94, // tprv
+    public: 0x04_35_87_CF, // tpub
   },
+  messagePrefix: '\u0019Dogecoin Testnet Signed Message:\n',
   pubKeyHash: 0x71, // Addresses start with 'n' or 'm'
   scriptHash: 0xC4, // P2SH addresses start with '2'
   wif: 0xF1, // WIF private key prefix
-  bech32: '', // Dogecoin does not support bech32, but the library requires this property
 }
 export const dogecoinMainnet: bitcoin.Network = {
-  messagePrefix: '\x19Dogecoin Signed Message:\n',
+  bech32: '', // Dogecoin does not support bech32, but the library requires this property
   bip32: {
-    public: 0x02_fa_ca_fd, // dgub
     private: 0x02_fa_c3_98, // dgpv
+    public: 0x02_fa_ca_fd, // dgub
   },
+  messagePrefix: '\u0019Dogecoin Signed Message:\n',
   pubKeyHash: 0x1e, // Addresses start with 'D'
   scriptHash: 0x16, // P2SH addresses start with '9' or 'A'
   wif: 0x9e, // WIF private key prefix
-  bech32: '', // Dogecoin does not support bech32, but the library requires this property
 }
 
 /**
@@ -70,8 +71,8 @@ export function printPsbtDetails(psbt: bitcoin.Psbt, id?: number | string): void
     if (input.bip32Derivation)
       details.bip32Derivation = input.bip32Derivation.map(d => ({
         ...d,
-        pubkey: Buffer.from(d.pubkey).toString('hex'),
         masterFingerprint: Buffer.from(d.masterFingerprint).toString('hex'),
+        pubkey: Buffer.from(d.pubkey).toString('hex'),
       }))
     if (input.finalScriptSig) details.finalScriptSig = Buffer.from(input.finalScriptSig).toString('hex')
     if (input.finalScriptWitness) details.finalScriptWitness = Buffer.from(input.finalScriptWitness).toString('hex')
@@ -90,8 +91,8 @@ export function printPsbtDetails(psbt: bitcoin.Psbt, id?: number | string): void
 
     const details: any = {
       address,
-      value: txOutput.value,
       script: Buffer.from(txOutput.script).toString('hex'),
+      value: txOutput.value,
     }
 
     if (output.redeemScript) details.redeemScript = Buffer.from(output.redeemScript).toString('hex')
@@ -99,8 +100,8 @@ export function printPsbtDetails(psbt: bitcoin.Psbt, id?: number | string): void
     if (output.bip32Derivation)
       details.bip32Derivation = output.bip32Derivation.map(d => ({
         ...d,
-        pubkey: Buffer.from(d.pubkey).toString('hex'),
         masterFingerprint: Buffer.from(d.masterFingerprint).toString('hex'),
+        pubkey: Buffer.from(d.pubkey).toString('hex'),
       }))
 
     return details

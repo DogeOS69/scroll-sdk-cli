@@ -1,27 +1,28 @@
-import { Command, Flags } from '@oclif/core'
-import { ethers } from 'ethers'
-import chalk from 'chalk'
-import cliProgress from 'cli-progress'
 import { confirm, select } from '@inquirer/prompts'
+import { Command, Flags } from '@oclif/core'
+import chalk from 'chalk'
+import { SingleBar } from 'cli-progress'
+import { ethers } from 'ethers'
 import path from 'node:path'
+
 import { parseTomlConfig } from '../../utils/config-parser.js'
 
 export default class HelperClearAccounts extends Command {
   static description = 'Clear pending transactions and optionally transfer remaining funds on Layer 2'
 
   static flags = {
-    privateKey: Flags.string({ char: 'k', description: 'Private key to clear pending transactions' }),
+    accounts: Flags.integer({ char: 'a', default: 10, description: 'Number of accounts to generate from mnemonic' }),
+    config: Flags.string({ char: 'c', default: './config.toml', description: 'Path to config.toml file' }),
+    debug: Flags.boolean({ char: 'd', default: false, description: 'Run in debug mode' }),
     mnemonic: Flags.string({ char: 'm', description: 'Mnemonic to generate wallets' }),
-    accounts: Flags.integer({ char: 'a', description: 'Number of accounts to generate from mnemonic', default: 10 }),
+    pod: Flags.boolean({ char: 'p', default: false, description: 'Run in pod mode' }),
+    privateKey: Flags.string({ char: 'k', description: 'Private key to clear pending transactions' }),
     recipient: Flags.string({ char: 'x', description: 'Recipient address for remaining funds' }),
     rpc: Flags.string({ char: 'r', description: 'Layer 2 RPC URL' }),
-    config: Flags.string({ char: 'c', description: 'Path to config.toml file', default: './config.toml' }),
-    pod: Flags.boolean({ char: 'p', description: 'Run in pod mode', default: false }),
-    debug: Flags.boolean({ char: 'd', description: 'Run in debug mode', default: false }),
   }
 
-  private provider!: ethers.JsonRpcProvider;
   private debugMode: boolean = false;
+  private provider!: ethers.JsonRpcProvider;
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(HelperClearAccounts)
@@ -34,11 +35,7 @@ export default class HelperClearAccounts extends Command {
       const configPath = path.resolve(flags.config)
       const config = parseTomlConfig(configPath)
 
-      if (flags.pod) {
-        rpcUrl = config.general.L2_RPC_ENDPOINT;
-      } else {
-        rpcUrl = config.frontend.EXTERNAL_RPC_URI_L2;
-      }
+      rpcUrl = flags.pod ? config.general.L2_RPC_ENDPOINT : config.frontend.EXTERNAL_RPC_URI_L2;
     }
 
     if (!rpcUrl) {
@@ -58,7 +55,7 @@ export default class HelperClearAccounts extends Command {
 
   private async clearAccount(privateKey: string, recipient?: string, autoReplace?: boolean): Promise<void> {
     const wallet = new ethers.Wallet(privateKey, this.provider);
-    const address = wallet.address;
+    const {address} = wallet;
 
     this.log(chalk.cyan(`Clearing account: ${address}`));
 
@@ -95,12 +92,12 @@ export default class HelperClearAccounts extends Command {
     const rootWallet = ethers.HDNodeWallet.fromMnemonic(mnemonic).address
 
     const replaceOption = await select({
-      message: 'How would you like to handle pending transactions?',
       choices: [
         { name: 'Ask for each account', value: 'ask' },
         { name: 'Yes to all', value: 'all' },
         { name: 'Skip all', value: 'skip' }
-      ]
+      ],
+      message: 'How would you like to handle pending transactions?'
     });
 
     for (let i = 0; i < accountCount; i++) {
@@ -128,10 +125,10 @@ export default class HelperClearAccounts extends Command {
       this.log(chalk.cyan(`Replacing transactions from nonce ${startNonce} to ${endNonce - 1}`));
     }
 
-    const progressBar = new cliProgress.SingleBar({
-      format: 'Replacing transactions |' + chalk.cyan('{bar}') + '| {percentage}% || {value}/{total} Transactions',
+    const progressBar = new SingleBar({
       barCompleteChar: '\u2588',
       barIncompleteChar: '\u2591',
+      format: 'Replacing transactions |' + chalk.cyan('{bar}') + '| {percentage}% || {value}/{total} Transactions',
       hideCursor: true
     });
 
@@ -143,12 +140,12 @@ export default class HelperClearAccounts extends Command {
       const promises = [];
       for (let j = i; j < Math.min(i + batchSize, endNonce); j++) {
         const newTx = {
-          to: wallet.address,
-          value: 0,
-          nonce: j,
+          gasLimit: 21_000,
           maxFeePerGas: currentGasPrice.maxFeePerGas ? currentGasPrice.maxFeePerGas * 3n : undefined,
           maxPriorityFeePerGas: currentGasPrice.maxPriorityFeePerGas ? currentGasPrice.maxPriorityFeePerGas * 3n : undefined,
-          gasLimit: 21000,
+          nonce: j,
+          to: wallet.address,
+          value: 0,
         };
 
         promises.push(this.sendReplacementTransaction(wallet, newTx, currentGasPrice));
@@ -167,6 +164,7 @@ export default class HelperClearAccounts extends Command {
     if (!this.debugMode) {
       progressBar.stop();
     }
+
     this.log(chalk.green(`Replacement of transactions completed.`));
   }
 
@@ -181,10 +179,12 @@ export default class HelperClearAccounts extends Command {
       if (this.debugMode) {
         this.log(chalk.yellow(`Transaction sent: ${sentTx.hash} (Nonce: ${tx.nonce})`));
       }
+
       const receipt = await sentTx.wait();
       if (this.debugMode) {
         this.log(chalk.green(`Transaction ${sentTx.hash} confirmed in block ${receipt?.blockNumber}`));
       }
+
       return true;
     } catch (error) {
       if (error instanceof Error && error.message.includes('replacement fee too low') && retryCount < 3) {
@@ -206,6 +206,7 @@ export default class HelperClearAccounts extends Command {
       if (this.debugMode) {
         this.log(chalk.red(`Failed to send transaction (Nonce: ${tx.nonce}): ${error instanceof Error ? error.message : 'Unknown error'}`));
       }
+
       return false;
     }
   }
@@ -218,7 +219,7 @@ export default class HelperClearAccounts extends Command {
     }
 
     const gasPrice = await this.provider.getFeeData();
-    const gasLimit = 21000n;
+    const gasLimit = 21_000n;
     const gasCost = gasLimit * (gasPrice.maxFeePerGas || 0n);
     const amountToSend = balance - gasCost;
 
@@ -229,9 +230,9 @@ export default class HelperClearAccounts extends Command {
 
     try {
       const tx = await wallet.sendTransaction({
+        gasLimit,
         to: recipient,
         value: amountToSend,
-        gasLimit: gasLimit,
       });
 
       const receipt = await tx.wait();

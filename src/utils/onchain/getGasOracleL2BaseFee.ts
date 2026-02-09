@@ -1,4 +1,5 @@
 import { Contract } from 'ethers';
+
 import { RpcSource, generateProvider } from './index.js';
 
 /**
@@ -15,5 +16,5 @@ export async function getGasOracleL2BaseFee(rpc: RpcSource, l1MessageQueueProxyA
   ];
   const gasOracle = new Contract(l1MessageQueueProxyAddress, l2BaseFeeABI, provider);
 
-  return await gasOracle.l2BaseFee();
+  return gasOracle.l2BaseFee();
 }

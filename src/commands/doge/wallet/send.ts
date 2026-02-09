@@ -2,12 +2,13 @@ import type { Transaction as BitcoreTransactionType } from 'bitcore-lib-doge'
 
 import { confirm } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
+import { base58 } from '@scure/base';
 import bitcore from 'bitcore-lib-doge'
 import chalk from 'chalk'
 import fs from 'node:fs'
 import path from 'node:path'
-import { base58 } from '@scure/base';
-import { Network as DogeBackboneNetwork, DogeConfig, DogeWallet } from '../../../types/doge-config.js'
+
+import { DogeConfig, DogeWallet } from '../../../types/doge-config.js'
 
 const { Address, Networks, PrivateKey, Transaction } = bitcore
 import { loadDogeConfigWithSelection } from '../../../utils/doge-config.js'
@@ -91,7 +92,7 @@ export default class WalletSend extends Command {
 
     try {
       this.log(chalk.cyan('Loading configuration and wallet...'))
-      //const config = await loadDogeConfig(flags.config)
+      // const config = await loadDogeConfig(flags.config)
 
       const { config, configPath } = await loadDogeConfigWithSelection(
         flags['doge-config'],
@@ -102,7 +103,7 @@ export default class WalletSend extends Command {
 
       const currentBitcoreNetwork: typeof Networks.livenet = this.getBitcoreNetwork(config.network)
 
-      const recipientAddress = this.validateRecipient(flags.to, config, currentBitcoreNetwork, configPath)
+      const recipientAddress = this.validateRecipient(flags.to, currentBitcoreNetwork, configPath)
       const amountSatoshis = this.validateAmount(flags.amount)
 
       const walletPath = flags.path ? path.resolve(flags.path) : path.resolve(config.wallet.path)
@@ -252,7 +253,7 @@ export default class WalletSend extends Command {
     throw new Error('Broadcast response did not contain a valid transaction ID string in result.')
   }
 
-  private createOpReturnData(flags: TransactionFlags, config: DogeConfig): Buffer | undefined {
+  private createOpReturnData(flags: TransactionFlags, _config: DogeConfig): Buffer | undefined {
     const MAX_OP_RETURN_SIZE = 80 // Max size for OP_RETURN data
 
     // If --no-bridge is not set, create the new simplified bridge data
@@ -306,7 +307,7 @@ export default class WalletSend extends Command {
     return undefined // No OP_RETURN data if no flags are set
   }
 
-  // eslint-disable-next-line max-params
+   
   private createTransaction(
     wallet: DogeWallet,
     amountSatoshis: number,
@@ -364,6 +365,7 @@ export default class WalletSend extends Command {
       for (const selected of selectedUtxoObjects) {
         tempTx.from(selected)
       }
+
       tempTx.to(recipientAddrStr, amountSatoshis)
       if (opReturnData) tempTx.addData(opReturnData)
       tempTx.change(wallet.address)
@@ -386,6 +388,7 @@ export default class WalletSend extends Command {
     for (const selected of selectedUtxoObjects) {
       finalTx.from(selected)
     }
+
     finalTx.to(recipientAddrStr, amountSatoshis)
     if (opReturnData) finalTx.addData(opReturnData)
     finalTx.change(wallet.address)
@@ -413,7 +416,7 @@ export default class WalletSend extends Command {
     return finalTx
   }
 
-  private getBitcoreNetwork(configNetwork: DogeBackboneNetwork): typeof Networks.livenet {
+  private getBitcoreNetwork(configNetwork: string): typeof Networks.livenet {
     return configNetwork === 'testnet' ? Networks.testnet : Networks.livenet
   }
 
@@ -441,7 +444,6 @@ export default class WalletSend extends Command {
 
   private validateRecipient(
     address: string | undefined,
-    config: DogeConfig,
     network: typeof Networks.livenet,
     configFilePath: string,
   ): string {
@@ -451,12 +453,12 @@ export default class WalletSend extends Command {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const networkName = (network as any).name as string
 
-    let decodedAddress = base58.decode(address);
+    const decodedAddress = base58.decode(address);
     if (decodedAddress.length !== 25) {
       this.error(`Invalid Dogecoin address format for ${networkName} network: ${recipient}.`)
     }
 
-    let versionByte = decodedAddress[0];
+    const versionByte = decodedAddress[0];
 
     if (networkName === 'livenet') {
       // isValid = mainnetPattern.test(recipient)

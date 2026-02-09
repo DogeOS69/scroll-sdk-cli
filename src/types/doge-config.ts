@@ -3,27 +3,57 @@ export type Network = 'mainnet' | 'testnet'
 export interface CubesignerKey {
   key_id: string
   key_type: string
-  public_key: string
   material_id: string
+  public_key: string
   purpose: string
 }
 
 export interface CubesignerRole {
-  role_id: string
-  name: string
   keys: CubesignerKey[]
+  name: string
+  role_id: string
 }
 
 export interface DogeConfig {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any
+  awsSigner?: {
+    accountId?: string
+    networkAlias?: string
+    region?: string
+    suffixes?: string
+  }
+  cubesigner?: {
+    roles: CubesignerRole[]
+  }
+  da?: {
+    celestiaIndexerStartBlock: string,
+    celestiaMnemonic: string,
+    daNamespace: string,
+    signerAddress: string,
+    // rpcUrl: string,
+    tendermintRpcUrl: string,
+  }
   defaults?: {
     dogecoinIndexerStartHeight?: string
+  }
+  deploymentType?: 'aws' | 'local'
+
+  dogecoinClusterRpc?: {
+    password?: string // for dogecoin that deploy on cluster
+    username?: string // for dogecoin that deploy on cluster
   }
   frontend?: {
     bridgeUrl?: string
     l2Explorer?: string
     l2Url?: string
+  }
+  localSigners?: {
+    network?: string
+    signers?: Array<{
+      index: number
+      port: number
+    }>
   }
   network: Network
   rpc?: {
@@ -34,43 +64,13 @@ export interface DogeConfig {
     url?: string // for send/sync on dogocoin like: https://testnet.doge.xyz/
     username?: string // for send/sync on dogocoin
   }
-  dogecoinClusterRpc?: {
-    username?: string // for dogecoin that deploy on cluster
-    password?: string // for dogecoin that deploy on cluster
-  }
-
+  signerUrls?: string[]
   test?: {
     mockFinalizeEnabled?: boolean
     mockFinalizeTimeout?: number
   }
   wallet: {
     path: string
-  }
-  da?: {
-    celestiaIndexerStartBlock: string,
-    //rpcUrl: string,
-    tendermintRpcUrl: string,
-    daNamespace: string,
-    signerAddress: string,
-    celestiaMnemonic: string,
-  }
-  awsSigner?: {
-    region?: string
-    networkAlias?: string
-    accountId?: string
-    suffixes?: string
-  }
-  localSigners?: {
-    network?: string
-    signers?: Array<{
-      index: number
-      port: number
-    }>
-  }
-  deploymentType?: 'local' | 'aws'
-  signerUrls?: string[]
-  cubesigner?: {
-    roles: CubesignerRole[]
   }
 }
 

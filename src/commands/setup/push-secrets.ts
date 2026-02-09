@@ -1,12 +1,16 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic secret config operations */
 import { confirm, input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import * as yaml from 'js-yaml'
-import { exec, spawn } from 'node:child_process'
+import { exec } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { promisify } from 'node:util'
+
 import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
+import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
+import { resolveEnvValue } from '../../utils/non-interactive.js'
 
 const execAsync = promisify(exec)
 
@@ -17,7 +21,17 @@ interface SecretService {
 class AWSSecretService implements SecretService {
   private overrideAll: boolean = false
 
-  constructor(private region: string, private prefixName: string, private debug: boolean) { }
+  constructor(
+    private region: string,
+    private prefixName: string,
+    private debug: boolean,
+    private nonInteractive: boolean = false
+  ) {
+    // In non-interactive mode, always override all by default
+    if (nonInteractive) {
+      this.overrideAll = true
+    }
+  }
 
   async pushSecrets(cubesignerOnly: boolean = false, filename?: string): Promise<string[]> {
     const pushedSecrets: string[] = []
@@ -42,10 +56,11 @@ class AWSSecretService implements SecretService {
       );
 
       if (filename) {
-        if (!filename.match(/^cubesigner-signer-\d+-session\.json$/)) {
+        if (!/^cubesigner-signer-\d+-session\.json$/.test(filename)) {
           console.warn(chalk.yellow(`File ${filename} is not a valid cubesigner session file. Ignoring.`));
           throw new Error(`File ${filename} is not a valid cubesigner session file`)
         }
+
         sessionFiles = sessionFiles.filter(f => f === filename);
       }
 
@@ -61,6 +76,7 @@ class AWSSecretService implements SecretService {
         await this.createOrUpdateSecret({ 'session.json': content }, secretName)
         pushedSecrets.push(secretName)
       }
+
       return pushedSecrets
     }
 
@@ -71,6 +87,7 @@ class AWSSecretService implements SecretService {
     } else if (filename) {
       jsonFiles = []
     }
+
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
 
@@ -82,7 +99,7 @@ class AWSSecretService implements SecretService {
         propertyName = 'session.json'
       } else if (secretName.endsWith('-migrate-db')) {
         propertyName = 'migrate-db.json'
-      } else if (secretName == 'rollup-explorer-backend-secret') {
+      } else if (secretName === 'rollup-explorer-backend-secret') {
         propertyName = "config.json";
       }
       else {
@@ -91,6 +108,7 @@ class AWSSecretService implements SecretService {
         console.warn(chalk.yellow(`Unknown JSON file type for property naming: ${secretName}. Using file name as property.`));
         propertyName = file; // Or handle as an error
       }
+
       await this.createOrUpdateSecret({ [propertyName]: content }, secretName)
       pushedSecrets.push(secretName)
     }
@@ -102,7 +120,6 @@ class AWSSecretService implements SecretService {
     } else if (filename) {
       envFiles = []
     }
-    const l2SequencerSecrets: Record<string, string> = {}
 
     for (const file of envFiles) {
       const baseName = path.basename(file, '.env')
@@ -279,12 +296,18 @@ class AWSSecretService implements SecretService {
 
 class HashicorpVaultDevService implements SecretService {
   private debug: boolean
-  private pathPrefix: string
+  private nonInteractive: boolean = false
   private overrideAll: boolean = false
+  private pathPrefix: string
 
-  constructor(debug: boolean, pathPrefix: string = 'scroll') {
+  constructor(debug: boolean, pathPrefix: string = 'scroll', nonInteractive: boolean = false) {
     this.debug = debug
     this.pathPrefix = pathPrefix
+    this.nonInteractive = nonInteractive
+    // In non-interactive mode, always override all by default
+    if (nonInteractive) {
+      this.overrideAll = true
+    }
   }
 
   async pushSecrets(cubesignerOnly: boolean = false, filename?: string): Promise<string[]> {
@@ -343,10 +366,11 @@ class HashicorpVaultDevService implements SecretService {
       );
 
       if (filename) {
-        if (!filename.match(/^cubesigner-signer-\d+-session\.json$/)) {
+        if (!/^cubesigner-signer-\d+-session\.json$/.test(filename)) {
           console.warn(chalk.yellow(`File ${filename} is not a valid cubesigner session file. Ignoring.`));
           throw new Error(`File ${filename} is not a valid cubesigner session file`)
         }
+
         sessionFiles = sessionFiles.filter(f => f === filename);
       }
 
@@ -377,14 +401,13 @@ class HashicorpVaultDevService implements SecretService {
 
     if (filename && filename.endsWith('.json')) {
       // If specific file requested (and not special one handled above)
-      if (filename !== 'rollup-explorer-backend-secret.json') {
-        jsonFiles = jsonFiles.filter(f => f === filename);
-      } else {
-        jsonFiles = []; // Already handled above
-      }
+      jsonFiles = filename === 'rollup-explorer-backend-secret.json'
+        ? [] // Already handled above
+        : jsonFiles.filter(f => f === filename);
     } else if (filename) {
       jsonFiles = []; // Not a json file requested
     }
+
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
 
@@ -401,6 +424,7 @@ class HashicorpVaultDevService implements SecretService {
         console.warn(chalk.yellow(`Unknown JSON file type for property naming: ${secretName}. Using file name as property.`));
         propertyName = file; // Or handle as an error
       }
+
       await this.pushJsonToVault(secretName, content, propertyName)
       pushedSecrets.push(secretName)
     }
@@ -515,14 +539,17 @@ class HashicorpVaultDevService implements SecretService {
         console.log(chalk.red(`Skipping secret: ${secretManagerName} from ${fileName} because it is empty`));
         return false;
       }
+
       await this.pushJsonToVault(secretManagerName, contentString, propertyKey);
       return true
-    } else {
+    }
+ 
       if (this.debug) {
         console.log(chalk.yellow(`File ${fileName} not found in secrets directory. Skipping its specific processing.`));
       }
+
       return false
-    }
+    
   }
 
   private async pushJsonToVault(secretName: string, content: string, propertyName: string): Promise<void> {
@@ -664,85 +691,206 @@ export default class SetupPushSecrets extends Command {
   ]
 
   static override flags = {
-    debug: Flags.boolean({
-      char: 'd',
-      default: false,
-      description: 'Show debug output',
+    // AWS specific flags
+    'aws-prefix': Flags.string({
+      default: 'dogeos',
+      description: 'AWS Secrets Manager path prefix (e.g., dogeos/testnet)',
     }),
-    'values-dir': Flags.string({
-      default: 'values',
-      description: 'Directory containing the values files',
+    'aws-region': Flags.string({
+      description: 'AWS region for secrets (e.g., us-east-1)',
+    }),
+    'aws-service-account': Flags.string({
+      default: 'external-secrets',
+      description: 'AWS IAM service account',
     }),
     'cubesigner-only': Flags.boolean({
       char: 'c',
       default: false,
       description: 'Only push CubeSigner related secrets (cubesigner-signer-* files)',
     }),
+debug: Flags.boolean({
+      char: 'd',
+      default: false,
+      description: 'Show debug output',
+    }),
     file: Flags.string({
       char: 'f',
       description: 'Specific secret file to push (e.g., my-secret.json)',
     }),
+    json: Flags.boolean({
+      default: false,
+      description: 'Output in JSON format (stdout for data, stderr for logs)',
+    }),
+    'non-interactive': Flags.boolean({
+      char: 'N',
+      default: false,
+      description: 'Run without prompts. Auto-overrides existing secrets.',
+    }),
+    // Secret service provider
+    provider: Flags.string({
+      description: 'Secret service provider (aws or vault). Required for non-interactive mode.',
+      options: ['aws', 'vault'],
+    }),
+    // Skip updating YAML files
+    'skip-yaml-update': Flags.boolean({
+      default: false,
+      description: 'Skip updating production YAML files with new secret provider',
+    }),
+    'values-dir': Flags.string({
+      default: 'values',
+      description: 'Directory containing the values files',
+    }),
+    // Vault specific flags
+    'vault-path': Flags.string({
+      default: 'scroll',
+      description: 'Vault path prefix',
+    }),
+    'vault-server': Flags.string({
+      default: 'http://vault.default.svc.cluster.local:8200',
+      description: 'Vault server URL',
+    }),
+    'vault-token-secret-key': Flags.string({
+      default: 'token',
+      description: 'Vault token secret key',
+    }),
+    'vault-token-secret-name': Flags.string({
+      default: 'vault-token',
+      description: 'Vault token secret name',
+    }),
+    'vault-version': Flags.string({
+      default: 'v2',
+      description: 'Vault version',
+    }),
   }
 
   private flags: any
+  private jsonCtx!: JsonOutputContext
+  private jsonMode: boolean = false
+  private nonInteractive: boolean = false
 
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupPushSecrets)
     this.flags = flags
 
-    this.log(chalk.blue('Starting secret push process...'))
+    // Setup non-interactive/JSON mode
+    this.nonInteractive = flags['non-interactive']
+    this.jsonMode = flags.json
+    this.jsonCtx = new JsonOutputContext('setup push-secrets', this.jsonMode)
+
+    this.jsonCtx.info('Starting secret push process...')
 
     if (flags['cubesigner-only']) {
-      this.log(chalk.yellow('🔑 CubeSigner only mode: Will only process cubesigner-signer-* files'))
+      this.jsonCtx.info('CubeSigner only mode: Will only process cubesigner-signer-* files')
     }
 
-    const secretService = await select({
-      choices: [
-        { name: 'AWS', value: 'aws' },
-        { name: 'Hashicorp Vault - Dev', value: 'vault' },
-      ],
-      message: chalk.cyan('Select a secret service:'),
-    })
+    let secretService: string
+    if (this.nonInteractive) {
+      // Non-interactive mode: require --provider flag
+      if (!flags.provider) {
+        this.jsonCtx.error(
+          'E601_MISSING_FIELD',
+          '--provider flag is required in non-interactive mode (aws or vault)',
+          'CONFIGURATION',
+          true,
+          { flag: '--provider' }
+        )
+      }
+
+      secretService = flags.provider
+    } else {
+      secretService = await select({
+        choices: [
+          { name: 'AWS', value: 'aws' },
+          { name: 'Hashicorp Vault - Dev', value: 'vault' },
+        ],
+        message: chalk.cyan('Select a secret service:'),
+      })
+    }
 
     let service: SecretService
     let provider: string
     let credentials: Record<string, string>
 
     if (secretService === 'aws') {
-      credentials = await this.getAWSCredentials()
-      service = new AWSSecretService(credentials.secretRegion, credentials.prefixName, flags.debug)
+      credentials = this.nonInteractive ? this.getAWSCredentialsFromFlags(flags) : await this.getAWSCredentials()
+      service = new AWSSecretService(credentials.secretRegion, credentials.prefixName, flags.debug, this.nonInteractive)
       provider = 'aws'
     } else if (secretService === 'vault') {
-      credentials = await this.getVaultCredentials()
-      service = new HashicorpVaultDevService(flags.debug, credentials.path)
+      credentials = this.nonInteractive ? this.getVaultCredentialsFromFlags(flags) : await this.getVaultCredentials()
+      service = new HashicorpVaultDevService(flags.debug, credentials.path, this.nonInteractive)
       provider = 'vault'
     } else {
+      this.jsonCtx.error(
+        'E601_INVALID_VALUE',
+        'Invalid secret service selected',
+        'CONFIGURATION',
+        false
+      )
       this.error(chalk.red('Invalid secret service selected'))
     }
 
     try {
-      const pushedSecrets = await service.pushSecrets(flags['cubesigner-only'], flags.file)
-      this.log(chalk.green('Secrets pushed successfully'))
+const pushedSecrets = await service.pushSecrets(flags['cubesigner-only'], flags.file)
+      this.jsonCtx.logSuccess('Secrets pushed successfully')
 
       if (flags['cubesigner-only']) {
-        this.log(chalk.blue('CubeSigner secret push process completed.'))
+        this.jsonCtx.logSuccess('CubeSigner secret push process completed.')
+        if (this.jsonMode) {
+          this.jsonCtx.success({
+            cubesignerOnly: true,
+            provider,
+            secretsPushed: true,
+          })
+        }
+
         return;
       }
 
-      const shouldUpdateYaml = await confirm({
-        message: chalk.cyan('Do you want to update the production YAML files with the new secret provider?'),
-      })
-
-      if (shouldUpdateYaml) {
-        await this.updateProductionYaml(provider, credentials, pushedSecrets)
-        this.log(chalk.green('Production YAML files updated successfully'))
+      let shouldUpdateYaml: boolean
+      if (this.nonInteractive) {
+        shouldUpdateYaml = !flags['skip-yaml-update']
+        if (!shouldUpdateYaml) {
+          this.jsonCtx.info('Skipping YAML update (--skip-yaml-update)')
+        }
       } else {
-        this.log(chalk.yellow('Skipped updating production YAML files'))
+        shouldUpdateYaml = await confirm({
+          message: chalk.cyan('Do you want to update the production YAML files with the new secret provider?'),
+        })
       }
 
-      this.log(chalk.blue('Secret push process completed.'))
+      if (shouldUpdateYaml) {
+await this.updateProductionYaml(provider, credentials, pushedSecrets)
+        this.jsonCtx.logSuccess('Production YAML files updated successfully')
+      } else {
+        this.jsonCtx.info('Skipped updating production YAML files')
+      }
+
+      this.jsonCtx.logSuccess('Secret push process completed.')
+
+      // JSON output
+      if (this.jsonMode) {
+        this.jsonCtx.success({
+          credentials: {
+            prefixName: credentials.prefixName || credentials.path,
+            region: credentials.secretRegion,
+          },
+          provider,
+          secretsPushed: true,
+          yamlUpdated: shouldUpdateYaml,
+        })
+      }
     } catch (error) {
+      if (error instanceof CliExitError) throw error
+      if (this.jsonMode) {
+        this.jsonCtx.error(
+          'E900_UNEXPECTED_ERROR',
+          `Failed to push secrets: ${error}`,
+          'INTERNAL',
+          false
+        )
+      }
+
       this.error(chalk.red(`Failed to push secrets: ${error}`))
     }
   }
@@ -758,9 +906,28 @@ export default class SetupPushSecrets extends Command {
         message: chalk.cyan('Enter AWS secret region(e.g.,us-east-1):'),
       }),
       serviceAccount: await input({
-        message: chalk.cyan('Enter AWS iam service account:'),
-        default: 'external-secrets'
+        default: 'external-secrets',
+        message: chalk.cyan('Enter AWS iam service account:')
       }),
+    }
+  }
+
+  private getAWSCredentialsFromFlags(flags: any): Record<string, string> {
+    const region = resolveEnvValue(flags['aws-region'])
+    if (!region) {
+      this.jsonCtx.error(
+        'E601_MISSING_FIELD',
+        '--aws-region is required for AWS provider in non-interactive mode',
+        'CONFIGURATION',
+        true,
+        { flag: '--aws-region' }
+      )
+    }
+
+    return {
+      prefixName: resolveEnvValue(flags['aws-prefix']) || 'dogeos',
+      secretRegion: region!,
+      serviceAccount: resolveEnvValue(flags['aws-service-account']) || 'external-secrets',
     }
   }
 
@@ -796,6 +963,16 @@ export default class SetupPushSecrets extends Command {
     }
   }
 
+  private getVaultCredentialsFromFlags(flags: any): Record<string, string> {
+    return {
+      path: resolveEnvValue(flags['vault-path']) || 'scroll',
+      server: resolveEnvValue(flags['vault-server']) || 'http://vault.default.svc.cluster.local:8200',
+      tokenSecretKey: resolveEnvValue(flags['vault-token-secret-key']) || 'token',
+      tokenSecretName: resolveEnvValue(flags['vault-token-secret-name']) || 'vault-token',
+      version: resolveEnvValue(flags['vault-version']) || 'v2',
+    }
+  }
+
   private async readCubeSignerConfigFromYaml(): Promise<Record<string, string>> {
     const valuesDir = path.join(process.cwd(), 'values', 'values')
     if (!fs.existsSync(valuesDir)) {
@@ -805,7 +982,7 @@ export default class SetupPushSecrets extends Command {
     // Find cubesigner-signer-production-N.yaml files
     const cubesignerFiles = fs
       .readdirSync(valuesDir)
-      .filter((file) => file.match(/^cubesigner-signer-production-\d+\.yaml$/))
+      .filter((file) => file.match(/^cube(?:signer-){2}production-\d+\.yaml$/))
 
     if (cubesignerFiles.length === 0) {
       this.error(chalk.red('No cubesigner-signer-production-N.yaml files found in values/values directory'))
@@ -847,11 +1024,7 @@ export default class SetupPushSecrets extends Command {
       const data = sessionSecret.data?.[0]
       if (data?.remoteRef?.key) {
         const keyParts = data.remoteRef.key.split('/')
-        if (keyParts.length > 1) {
-          config.prefixName = keyParts[0]
-        } else {
-          config.prefixName = 'dogeos'
-        }
+        config.prefixName = keyParts.length > 1 ? keyParts[0] : 'dogeos';
       } else {
         config.prefixName = 'dogeos'
       }
@@ -866,14 +1039,13 @@ export default class SetupPushSecrets extends Command {
     return config
   }
 
-  private async updateProductionYaml(provider: string, credentials: Record<string, string>, pushedSecrets: string[]): Promise<void> {
+  private async updateProductionYaml(provider: string, credentials: Record<string, string>, _pushedSecrets: string[]): Promise<void> {
     const valuesDir = path.join(process.cwd(), this.flags['values-dir'])
     if (!fs.existsSync(valuesDir)) {
       this.error(chalk.red(`Values directory not found at ${valuesDir}`))
     }
 
-    let prefixName: string | undefined
-    prefixName = provider === 'vault' ? credentials.path : credentials.prefixName
+    const prefixName: string | undefined = provider === 'vault' ? credentials.path : credentials.prefixName
 
     const yamlFiles = fs
       .readdirSync(valuesDir)
@@ -943,12 +1115,10 @@ export default class SetupPushSecrets extends Command {
                           property: "property_KEY"
                         secretKey: "SECRET_KEY"
             */
-              if (/^cubesigner-signer-\d+-session$/.test(secretName)) {
-                if (dataItem.secretKey === 'session.json') {
+              if (/^cubesigner-signer-\d+-session$/.test(secretName) && dataItem.secretKey === 'session.json') {
                   dataItem.remoteRef.property = 'session.json'
                   updated = true
                 }
-              }
 
               // Only update if the key has changed
               if (dataItem.remoteRef.key !== updatedKey) {

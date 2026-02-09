@@ -1,7 +1,9 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic config operations */
 import {select} from '@inquirer/prompts'
 import {Command, Flags} from '@oclif/core'
 import chalk from 'chalk'
 import Docker from 'dockerode'
+
 import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
 
 export default class ContractsVerification extends Command {
@@ -99,6 +101,8 @@ export default class ContractsVerification extends Command {
 
       this.log(chalk.cyan('Creating Docker Container...'))
       // Create and run the container
+      // Note: Container must run as root because forge is installed in /root/.foundry/
+      // We fix file ownership after the container exits
       const container = await docker.createContainer({
         Cmd: [], // Add any command if needed
         HostConfig: {
@@ -135,6 +139,38 @@ export default class ContractsVerification extends Command {
 
       // Remove the container
       await container.remove()
+
+      // Fix file ownership on POSIX systems (Docker runs as root, creates root-owned files)
+      // Use a lightweight container to chown files since non-root can't chown root-owned files
+      if (typeof process.getuid === 'function' && typeof process.getgid === 'function') {
+        const uid = process.getuid()
+        const gid = process.getgid()
+        if (uid !== 0) {
+          this.log(chalk.cyan('Fixing file ownership...'))
+          try {
+            // Pull alpine if not available
+            try {
+              await docker.pull('alpine:latest')
+            } catch {
+              // Ignore pull errors - image might already exist
+            }
+
+            const chownContainer = await docker.createContainer({
+              Cmd: ['chown', '-R', `${uid}:${gid}`, '/volume'],
+              HostConfig: {
+                AutoRemove: true,
+                Binds: [`${process.cwd()}:/volume`],
+              },
+              Image: 'alpine:latest',
+            })
+            await chownContainer.start()
+            await chownContainer.wait()
+          } catch (chownError) {
+            this.log(chalk.yellow(`Warning: Could not fix file ownership: ${chownError}`))
+            this.log(chalk.yellow('Files may be owned by root. Run: sudo chown -R $(id -u):$(id -g) .'))
+          }
+        }
+      }
     } catch (error) {
       this.error(`Failed to run Docker command: ${error}`)
     }

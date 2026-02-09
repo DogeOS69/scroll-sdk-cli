@@ -1,17 +1,18 @@
-import { Args, Command, Flags } from '@oclif/core'
-import * as fs from 'fs'
-import * as toml from 'toml'
-import { input, confirm } from '@inquirer/prompts'
+import { confirm, input } from '@inquirer/prompts'
+import { Command, Flags } from '@oclif/core'
+import chalk from 'chalk'
 import { ethers } from 'ethers'
 import path from 'node:path'
+
 import { parseTomlConfig } from '../../utils/config-parser.js'
-import chalk from 'chalk'
 import { BlockExplorerParams, addressLink, txLink } from '../../utils/onchain/index.js'
 
 export default class HelperSetScalars extends Command {
   static override description = 'Set commit and blob scalars for Scroll SDK'
 
   static override flags = {
+    blobScalar: Flags.integer({ default: 0, description: 'Value for setBlobScalar' }),
+    commitScalar: Flags.integer({ default: 0, description: 'Value for setCommitScalar' }),
     config: Flags.string({
       char: 'c',
       default: './config.toml',
@@ -22,14 +23,12 @@ export default class HelperSetScalars extends Command {
       default: './config-contracts.toml',
       description: 'Path to configs-contracts.toml file',
     }),
+    k: Flags.string({ char: 'k', description: 'Private key of the Owner' }),
     pod: Flags.boolean({
       char: 'p',
       default: false,
       description: 'Run inside Kubernetes pod',
     }),
-    k: Flags.string({ char: 'k', description: 'Private key of the Owner' }),
-    blobScalar: Flags.integer({ description: 'Value for setBlobScalar', default: 0 }),
-    commitScalar: Flags.integer({ description: 'Value for setCommitScalar', default: 0 }),
     rpc: Flags.string({
       char: 'r',
       description: 'RPC URL (overrides config)',
@@ -50,13 +49,13 @@ export default class HelperSetScalars extends Command {
     const contractsPath = path.resolve(flags.contracts)
     const contractsConfig = parseTomlConfig(contractsPath)
 
-    let rpcUrl = flags.rpc || (flags.pod ? config.general.L2_RPC_ENDPOINT : config.frontend.EXTERNAL_RPC_URI_L2)
+    const rpcUrl = flags.rpc || (flags.pod ? config.general.L2_RPC_ENDPOINT : config.frontend.EXTERNAL_RPC_URI_L2)
 
     if (!rpcUrl) {
       this.error(`${chalk.red('Missing RPC URL.')} Please check your config file or provide --rpc flag.`)
     }
 
-    let contractAddress = contractsConfig?.L1_GAS_PRICE_ORACLE_ADDR || '0x5300000000000000000000000000000000000002'
+    const contractAddress = contractsConfig?.L1_GAS_PRICE_ORACLE_ADDR || '0x5300000000000000000000000000000000000002'
 
     const provider = new ethers.JsonRpcProvider(rpcUrl)
 
