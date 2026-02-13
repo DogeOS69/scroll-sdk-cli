@@ -1,4 +1,8 @@
 #!/bin/sh
+# Deploys scroll bridge contracts to L1 (Anvil) and L2 (geth).
+# L1 deployment is required for deterministic address generation even though
+# DogeOS uses a virtual L1 (l1-interface) at runtime. Anvil is used as a
+# throwaway L1 during this build step only.
 export PS4='$(date "+%Y-%m-%dT%H:%M:%S%z") ${0##*/}:${LINENO}: '
 echo "=== LOCAL DEPLOY START ==="
 export FOUNDRY_EVM_VERSION="cancun"

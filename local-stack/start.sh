@@ -280,12 +280,14 @@ show_status() {
   log "=== Stack is running (Phase ${PHASE}) ==="
   log ""
 
-  # Anvil
-  if curl -sf "http://localhost:${ANVIL_PORT}" -X POST -H 'Content-Type: application/json' \
-    -d '{"method":"eth_blockNumber","params":[],"id":1,"jsonrpc":"2.0"}' >/dev/null 2>&1; then
-    local anvil_block=$(curl -sf "http://localhost:${ANVIL_PORT}" -X POST -H 'Content-Type: application/json' \
-      -d '{"method":"eth_blockNumber","params":[],"id":1,"jsonrpc":"2.0"}' | python3 -c "import sys,json; print(int(json.load(sys.stdin)['result'],16))")
-    log "  Anvil (L1):        http://localhost:${ANVIL_PORT}  block=${anvil_block}"
+  # Anvil (only for Phase 1/2)
+  if [ "${PHASE}" -lt 3 ]; then
+    if curl -sf "http://localhost:${ANVIL_PORT}" -X POST -H 'Content-Type: application/json' \
+      -d '{"method":"eth_blockNumber","params":[],"id":1,"jsonrpc":"2.0"}' >/dev/null 2>&1; then
+      local anvil_block=$(curl -sf "http://localhost:${ANVIL_PORT}" -X POST -H 'Content-Type: application/json' \
+        -d '{"method":"eth_blockNumber","params":[],"id":1,"jsonrpc":"2.0"}' | python3 -c "import sys,json; print(int(json.load(sys.stdin)['result'],16))")
+      log "  Anvil (build-time): http://localhost:${ANVIL_PORT}  block=${anvil_block}"
+    fi
   fi
 
   # L2 geth
@@ -321,7 +323,7 @@ show_status() {
 
   log ""
   log "Logs:"
-  log "  Anvil:          ${SCRIPT_DIR}/anvil.log"
+  [ "${PHASE}" -lt 3 ] && log "  Anvil:          ${SCRIPT_DIR}/anvil.log"
   log "  L2 geth:        docker logs dogeos-l2geth"
   [ "${PHASE}" -ge 3 ] && log "  Dogecoin:        docker logs dogeos-dogecoin"
   [ "${PHASE}" -ge 3 ] && log "  l1-interface:    ${SCRIPT_DIR}/l1-interface.log"
@@ -334,15 +336,20 @@ section "DogeOS Local Stack - Phase ${PHASE}"
 
 cleanup_existing
 
-# Phase 1: Anvil + L2 geth
-section "Phase 1: Starting Anvil + L2 geth"
-start_anvil
-wait_for_rpc "http://localhost:${ANVIL_PORT}" "Anvil"
-set_anvil_signer
+# Phase 1/2: Anvil is needed temporarily for contract deployment (L1 address generation).
+# Phase 3: L2 geth connects to l1-interface; Anvil is not started.
+if [ "${PHASE}" -lt 3 ]; then
+  section "Phase 1: Starting Anvil (build-time) + L2 geth"
+  start_anvil
+  wait_for_rpc "http://localhost:${ANVIL_PORT}" "Anvil"
+  set_anvil_signer
+else
+  section "Phase 1: Starting L2 geth (l1-interface mode)"
+fi
+
 init_l2geth
 
 if [ "${PHASE}" -ge 3 ]; then
-  # Phase 3: L2 geth reads from l1-interface instead of Anvil
   start_l2geth "http://host.docker.internal:${L1_INTERFACE_PORT}"
 else
   start_l2geth "http://host.docker.internal:${ANVIL_PORT}"
@@ -350,7 +357,7 @@ fi
 
 wait_for_rpc "http://localhost:${L2_HTTP_PORT}" "L2 geth"
 
-# Phase 2: Deploy contracts
+# Phase 2: Deploy contracts (L1 + L2 via forge; L1 is needed for deterministic address generation)
 if [ "${PHASE}" -ge 2 ]; then
   # Only deploy if config-contracts.toml is missing or empty
   if [ ! -s "${SCRIPT_DIR}/contracts-volume/config-contracts.toml" ] || \

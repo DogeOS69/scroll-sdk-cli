@@ -27,6 +27,8 @@ e2e_resume*
 .data/
 /.claude/
 /docs/reviews/
+agent-handoff*.md
+testing_improvements.md
 
 # Local stack runtime data
 /local-stack/data/
