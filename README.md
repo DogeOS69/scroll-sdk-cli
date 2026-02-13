@@ -118,7 +118,7 @@ $ npm install -g @scroll-tech/scroll-sdk-cli
 $ scrollsdk COMMAND
 running command...
 $ scrollsdk (--version)
-@scroll-tech/scroll-sdk-cli/0.1.3 linux-x64 node-v24.11.1
+@scroll-tech/scroll-sdk-cli/0.1.3 linux-x64 node-v22.19.0
 $ scrollsdk --help [COMMAND]
 USAGE
   $ scrollsdk COMMAND
@@ -143,11 +143,14 @@ USAGE
 * [`scrollsdk helper fund-accounts`](#scrollsdk-helper-fund-accounts)
 * [`scrollsdk helper set-scalars`](#scrollsdk-helper-set-scalars)
 * [`scrollsdk plugins`](#scrollsdk-plugins)
+* [`scrollsdk plugins add PLUGIN`](#scrollsdk-plugins-add-plugin)
 * [`scrollsdk plugins:inspect PLUGIN...`](#scrollsdk-pluginsinspect-plugin)
 * [`scrollsdk plugins install PLUGIN`](#scrollsdk-plugins-install-plugin)
 * [`scrollsdk plugins link PATH`](#scrollsdk-plugins-link-path)
+* [`scrollsdk plugins remove [PLUGIN]`](#scrollsdk-plugins-remove-plugin)
 * [`scrollsdk plugins reset`](#scrollsdk-plugins-reset)
 * [`scrollsdk plugins uninstall [PLUGIN]`](#scrollsdk-plugins-uninstall-plugin)
+* [`scrollsdk plugins unlink [PLUGIN]`](#scrollsdk-plugins-unlink-plugin)
 * [`scrollsdk plugins update`](#scrollsdk-plugins-update)
 * [`scrollsdk setup bootnode-public-p2p`](#scrollsdk-setup-bootnode-public-p2p)
 * [`scrollsdk setup configs`](#scrollsdk-setup-configs)
@@ -389,7 +392,7 @@ USAGE
 
 FLAGS
   -c, --config=<value>   Path to Dogecoin config file
-  -k, --api-key=<value>  NowNodes API key (overrides API key from config)
+  -k, --api-key=<value>  [env: NOWNODES_API_KEY] NowNodes API key (overrides API key from config)
   -p, --path=<value>     Custom path for the wallet file (overrides path from config)
 
 DESCRIPTION
@@ -412,7 +415,7 @@ USAGE
   $ scrollsdk help [COMMAND...] [-n]
 
 ARGUMENTS
-  COMMAND...  Command to show help for.
+  [COMMAND...]  Command to show help for.
 
 FLAGS
   -n, --nested-commands  Include all nested commands in the output.
@@ -421,7 +424,7 @@ DESCRIPTION
   Display help for scrollsdk.
 ```
 
-_See code: [@oclif/plugin-help](https://github.com/oclif/plugin-help/blob/v6.2.15/src/commands/help.ts)_
+_See code: [@oclif/plugin-help](https://github.com/oclif/plugin-help/blob/v6.2.37/src/commands/help.ts)_
 
 ## `scrollsdk helper activity`
 
@@ -570,7 +573,54 @@ EXAMPLES
   $ scrollsdk plugins
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/index.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/index.ts)_
+
+## `scrollsdk plugins add PLUGIN`
+
+Installs a plugin into scrollsdk.
+
+```
+USAGE
+  $ scrollsdk plugins add PLUGIN... [--json] [-f] [-h] [-s | -v]
+
+ARGUMENTS
+  PLUGIN...  Plugin to install.
+
+FLAGS
+  -f, --force    Force npm to fetch remote resources even if a local copy exists on disk.
+  -h, --help     Show CLI help.
+  -s, --silent   Silences npm output.
+  -v, --verbose  Show verbose npm output.
+
+GLOBAL FLAGS
+  --json  Format output as json.
+
+DESCRIPTION
+  Installs a plugin into scrollsdk.
+
+  Uses npm to install plugins.
+
+  Installation of a user-installed plugin will override a core plugin.
+
+  Use the SCROLLSDK_NPM_LOG_LEVEL environment variable to set the npm loglevel.
+  Use the SCROLLSDK_NPM_REGISTRY environment variable to set the npm registry.
+
+ALIASES
+  $ scrollsdk plugins add
+
+EXAMPLES
+  Install a plugin from npm registry.
+
+    $ scrollsdk plugins add myplugin
+
+  Install a plugin from a github url.
+
+    $ scrollsdk plugins add https://github.com/someuser/someplugin
+
+  Install a plugin from a github slug.
+
+    $ scrollsdk plugins add someuser/someplugin
+```
 
 ## `scrollsdk plugins:inspect PLUGIN...`
 
@@ -597,7 +647,7 @@ EXAMPLES
   $ scrollsdk plugins inspect myplugin
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/inspect.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/inspect.ts)_
 
 ## `scrollsdk plugins install PLUGIN`
 
@@ -646,7 +696,7 @@ EXAMPLES
     $ scrollsdk plugins install someuser/someplugin
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/install.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/install.ts)_
 
 ## `scrollsdk plugins link PATH`
 
@@ -666,6 +716,7 @@ FLAGS
 
 DESCRIPTION
   Links a plugin into the CLI for development.
+
   Installation of a linked plugin will override a user-installed or core plugin.
 
   e.g. If you have a user-installed or core plugin that has a 'hello' command, installing a linked plugin with a 'hello'
@@ -676,7 +727,33 @@ EXAMPLES
   $ scrollsdk plugins link myplugin
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/link.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/link.ts)_
+
+## `scrollsdk plugins remove [PLUGIN]`
+
+Removes a plugin from the CLI.
+
+```
+USAGE
+  $ scrollsdk plugins remove [PLUGIN...] [-h] [-v]
+
+ARGUMENTS
+  [PLUGIN...]  plugin to uninstall
+
+FLAGS
+  -h, --help     Show CLI help.
+  -v, --verbose
+
+DESCRIPTION
+  Removes a plugin from the CLI.
+
+ALIASES
+  $ scrollsdk plugins unlink
+  $ scrollsdk plugins remove
+
+EXAMPLES
+  $ scrollsdk plugins remove myplugin
+```
 
 ## `scrollsdk plugins reset`
 
@@ -691,7 +768,7 @@ FLAGS
   --reinstall  Reinstall all plugins after uninstalling.
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/reset.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/reset.ts)_
 
 ## `scrollsdk plugins uninstall [PLUGIN]`
 
@@ -702,7 +779,7 @@ USAGE
   $ scrollsdk plugins uninstall [PLUGIN...] [-h] [-v]
 
 ARGUMENTS
-  PLUGIN...  plugin to uninstall
+  [PLUGIN...]  plugin to uninstall
 
 FLAGS
   -h, --help     Show CLI help.
@@ -719,7 +796,33 @@ EXAMPLES
   $ scrollsdk plugins uninstall myplugin
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/uninstall.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/uninstall.ts)_
+
+## `scrollsdk plugins unlink [PLUGIN]`
+
+Removes a plugin from the CLI.
+
+```
+USAGE
+  $ scrollsdk plugins unlink [PLUGIN...] [-h] [-v]
+
+ARGUMENTS
+  [PLUGIN...]  plugin to uninstall
+
+FLAGS
+  -h, --help     Show CLI help.
+  -v, --verbose
+
+DESCRIPTION
+  Removes a plugin from the CLI.
+
+ALIASES
+  $ scrollsdk plugins unlink
+  $ scrollsdk plugins remove
+
+EXAMPLES
+  $ scrollsdk plugins unlink myplugin
+```
 
 ## `scrollsdk plugins update`
 
@@ -737,7 +840,7 @@ DESCRIPTION
   Update installed plugins.
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/update.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/update.ts)_
 
 ## `scrollsdk setup bootnode-public-p2p`
 
@@ -800,8 +903,8 @@ Generate configuration files and create environment files for services
 USAGE
   $ scrollsdk setup configs [--base-fee-per-gas <value>] [--configs-dir <value>] [--deployment-salt <value>]
     [--doge-config <value>] [--image-tag <value>] [--json] [--l1-fee-vault-addr <value>] [--l1-plonk-verifier-addr
-    <value>] [--l2-bridge-fee-recipient-addr <value>] [-N] [--skip-deployment-salt-update] [--skip-l1-fee-vault-update]
-    [--skip-l1-plonk-verifier-update]
+    <value>] [--l2-bridge-fee-recipient-addr <value>] [-N] [--skip-deployment-salt-update] [--skip-genesis]
+    [--skip-l1-fee-vault-update] [--skip-l1-plonk-verifier-update]
 
 FLAGS
   -N, --non-interactive                       Run without prompts. Uses config values or sensible defaults.
@@ -820,6 +923,7 @@ FLAGS
       --l2-bridge-fee-recipient-addr=<value>  L2 bridge fee recipient address (non-interactive mode). Defaults to zero
                                               address.
       --skip-deployment-salt-update           Skip deployment salt update (non-interactive mode)
+      --skip-genesis                          Skip genesis file generation (Docker step)
       --skip-l1-fee-vault-update              Skip L1 fee vault address update (non-interactive mode)
       --skip-l1-plonk-verifier-update         Skip L1 plonk verifier address update (non-interactive mode)
 
@@ -1226,7 +1330,7 @@ Push secrets to the selected secret service
 ```
 USAGE
   $ scrollsdk setup push-secrets [--aws-prefix <value>] [--aws-region <value>] [--aws-service-account <value>] [-c] [-d]
-    [--json] [-N] [--provider aws|vault] [--skip-yaml-update] [--values-dir <value>] [--vault-path <value>]
+    [-f <value>] [--json] [-N] [--provider aws|vault] [--skip-yaml-update] [--values-dir <value>] [--vault-path <value>]
     [--vault-server <value>] [--vault-token-secret-key <value>] [--vault-token-secret-name <value>] [--vault-version
     <value>]
 
@@ -1234,6 +1338,7 @@ FLAGS
   -N, --non-interactive                  Run without prompts. Auto-overrides existing secrets.
   -c, --cubesigner-only                  Only push CubeSigner related secrets (cubesigner-signer-* files)
   -d, --debug                            Show debug output
+  -f, --file=<value>                     Specific secret file to push (e.g., my-secret.json)
       --aws-prefix=<value>               [default: dogeos] AWS Secrets Manager path prefix (e.g., dogeos/testnet)
       --aws-region=<value>               AWS region for secrets (e.g., us-east-1)
       --aws-service-account=<value>      [default: external-secrets] AWS IAM service account
@@ -1370,7 +1475,7 @@ USAGE
     [-c <value>] [-v <value>] [--verbose]
 
 ARGUMENTS
-  CASENAME  The name of the case to run
+  [CASENAME]  The name of the case to run
 
 FLAGS
   -b, --blockbookurl=<value>  [default: https://doge-electrs-testnet-demo.qed.me] blockbook url
