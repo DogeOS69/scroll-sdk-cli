@@ -39,7 +39,7 @@ export interface DogeRpcConfig {
   user: string
 }
 
-async function dogeRpc(config: DogeRpcConfig, method: string, params: unknown[] = []): Promise<unknown> {
+export async function dogeRpc(config: DogeRpcConfig, method: string, params: unknown[] = []): Promise<unknown> {
   const auth = Buffer.from(`${config.user}:${config.password}`).toString('base64')
   const response = await fetch(config.url, {
     body: JSON.stringify({ id: 1, jsonrpc: '1.0', method, params }),
@@ -53,6 +53,7 @@ async function dogeRpc(config: DogeRpcConfig, method: string, params: unknown[] 
   if (body.error) {
     throw new Error(`Dogecoin RPC error (${method}): ${body.error.message ?? JSON.stringify(body.error)}`)
   }
+
   return body.result
 }
 
@@ -436,6 +437,15 @@ export async function waitForConfirmations(
       log(chalk.gray(`   Current: ${confirmations}/${minConfirmations}...`))
     } catch (error) {
       warn(`   ${chalk.yellow('⚠️ Failed to fetch confirmation status:')} ${(error as Error).message}`)
+    }
+
+    // Auto-mine on regtest to advance confirmations
+    if (rpcConfig) {
+      try {
+        await dogeRpc(rpcConfig, 'generate', [1])
+      } catch {
+        // ignore mining errors
+      }
     }
 
     await new Promise<void>((resolve) => {

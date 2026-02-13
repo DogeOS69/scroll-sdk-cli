@@ -17,6 +17,7 @@ import {
   type DogeRpcConfig,
   broadcastTx,
   deriveAddressFromKey,
+  dogeRpc,
   ensureHexKey,
   getTx,
   getUtxos,
@@ -335,6 +336,11 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     this.network = this.networkName === 'mainnet' ? dogecoinMainnet : dogecoinTestnet
     const mKeyPair: ECPairInterface = ECPair.fromWIF(this.masterWif, this.network)
     this.masterAddress = bitcoin.payments.p2pkh({ network: this.network, pubkey: mKeyPair.publicKey }).address || ''
+
+    // On regtest: set defaults and fund master address
+    if (this.dogeRpcConfig) {
+      await this.setupRegtest()
+    }
 
     this.log(chalk.cyan('\nLoaded DogeOS test configuration:'))
     this.log(`  Network (${networkSource}): ${this.networkName}`)
@@ -1799,6 +1805,13 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     return tx.hex
   }
 
+  private async mineRegtestFinality(blocks = 200): Promise<void> {
+    if (!this.dogeRpcConfig) return
+    this.log(chalk.gray(`-> Mining ${blocks} regtest blocks for l1-interface finality...`))
+    await dogeRpc(this.dogeRpcConfig, 'generate', [blocks])
+    this.log(chalk.green(`✅ Mined ${blocks} blocks`))
+  }
+
   private async prepareMutiWithdrawalCall(
     contract: Contract,
     count: number,
@@ -1904,6 +1917,27 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       const tx = await wallet.sendTransaction({ ...txRequest, gasLimit })
       this.log(chalk.green(`  ->✅ L2 self-transfer #${i} submitted: ${tx.hash}`))
       await tx.wait()
+    }
+  }
+
+  private async setupRegtest(): Promise<void> {
+    if (!this.dogeRpcConfig) return
+
+    // Set bridge address for regtest if not configured
+    if (!this.bridgeAddress) {
+      this.bridgeAddress = '2MwBbwpBBNH93rzeo2vBSJ7tFTewYjtXj6c'
+    }
+
+    // Check if master address has funds
+    const utxos = await getUtxos(this.masterAddress, this.blockbookURL, this.dogeRpcConfig)
+    const balance = utxos.reduce((sum, u) => sum + BigInt(u.value), 0n)
+
+    if (balance < 100_000_000_000n) { // < 1000 DOGE
+      this.log(chalk.gray('-> Funding master address on regtest...'))
+      await dogeRpc(this.dogeRpcConfig, 'generate', [101])
+      await dogeRpc(this.dogeRpcConfig, 'sendtoaddress', [this.masterAddress, 500_000])
+      await dogeRpc(this.dogeRpcConfig, 'generate', [1])
+      this.log(chalk.green(`✅ Funded ${this.masterAddress} on regtest`))
     }
   }
 }
