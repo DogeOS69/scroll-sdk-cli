@@ -1,0 +1,57 @@
+# DogeOS L1 Interface - Local Stack Configuration
+
+network_str = "testnet"
+
+# SQLite database for l1-interface state
+database_url = "local-stack/l1_interface.sqlite"
+
+# Genesis configuration (matches L2 geth genesis)
+genesis_json_path = "local-stack/genesis.json"
+
+# API endpoints
+api_bind_address = "127.0.0.1:8548"
+beacon_api_listen_address = "127.0.0.1:3500"
+health_listen_address = "127.0.0.1:9091"
+
+# Contract addresses (from deployed contracts)
+scroll_messenger_address = "0xFaF5Fb29de81735a7c48B3aE7Df5646B9f01714f"
+l2_moat_contract_address = "0xC486ae5107517EA9CD80924D59463AA089FbBe15"
+l2_messenger_address = "0x98185147ac03eDe6C9D3809395D095D4d19b0860"
+
+# L1 deployment config
+l1_genesis_block = 1
+
+# L1 simulation parameters
+l1_gas_limit = 30000000
+l1_base_fee_per_gas = 100000000
+l1_miner_address = "0x0000000000000000000000000000000000000001"
+l1_extra_data = "DogeOS Local Stack"
+
+# System configuration
+initial_system_signer = "0xa7CdA54170FFD9F9C7A6DC72f8a5E6E15ca32fA3"
+deposit_gas_limit = 500000
+
+# Dogecoin RPC (local regtest node)
+[dogecoin_rpc]
+url = "http://127.0.0.1:44556"
+user = "doge"
+pass = "doge_pass"
+
+# Dogecoin indexer
+[dogecoin_indexer]
+start_height = 1
+confirmations = 1
+index_utxos = false
+index_withdrawals = true
+index_deposits = true
+poll_interval_ms = 5000
+bridge_address = "2MwBbwpBBNH93rzeo2vBSJ7tFTewYjtXj6c"
+
+# Celestia indexer (placeholder - will fail to connect but deposits still work)
+[celestia_indexer]
+da_rpc_url = "http://localhost:26658"
+namespace_id = "51ecb07563949bf4"
+start_block = 1
+confirmations = 3
+poll_interval_ms = 30000
+store_raw_blob_data = false

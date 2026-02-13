@@ -1,0 +1,18 @@
+# DogeOS DA Publisher - Local Stack Configuration
+
+[default]
+# Celestia configuration (placeholder - needs real Celestia node for withdrawals)
+celestia_rpc_url = "localhost:26658"
+celestia_namespace = "51ecb07563949bf4"
+
+# L2 RPC for withdrawal root fetching
+dogeos_l2_rpc_url = "http://localhost:8546"
+
+# Server configuration
+listen_address = "0.0.0.0"
+listen_port = 3000
+json_rpc_address = "0.0.0.0"
+json_rpc_port = 3001
+
+# Feature flags
+blob_version = 1
