@@ -14,6 +14,7 @@ import * as tinysecp from 'tiny-secp256k1'
 import { FoundryService, HelperContractConfig } from '../../services/foundry-service.js'
 import { dogecoinMainnet, dogecoinTestnet } from '../../types/dogecoin.js'
 import {
+  type DogeRpcConfig,
   broadcastTx,
   deriveAddressFromKey,
   ensureHexKey,
@@ -201,6 +202,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
   blockbookURL: string = ''
   bridgeAddress: string = ''
+  dogeRpcConfig?: DogeRpcConfig
   feeWalletAddress = ''
   // Services
   foundryService: FoundryService
@@ -285,6 +287,26 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       this.warn(`Secrets file not found at ${secretsPath}`)
     }
 
+    // Auto-detect regtest and enable direct RPC when available
+    if (this.l1RpcUrl && this.l1RpcUser && this.l1RpcPassword) {
+      try {
+        const auth = Buffer.from(`${this.l1RpcUser}:${this.l1RpcPassword}`).toString('base64')
+        const res = await fetch(this.l1RpcUrl, {
+          body: JSON.stringify({ id: 1, jsonrpc: '1.0', method: 'getblockchaininfo', params: [] }),
+          headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
+          method: 'POST',
+        })
+        if (res.ok) {
+          const body = await res.json() as { result?: { chain?: string } }
+          if (body.result?.chain === 'regtest') {
+            this.dogeRpcConfig = { password: this.l1RpcPassword, url: this.l1RpcUrl, user: this.l1RpcUser }
+          }
+        }
+      } catch {
+        // Can't reach Dogecoin RPC; will use Electrs/Blockbook
+      }
+    }
+
     this.masterWif = flags.masterwif
 
     const valuesPath = path.resolve('values', 'l1-interface-production.yaml')
@@ -316,6 +338,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
     this.log(chalk.cyan('\nLoaded DogeOS test configuration:'))
     this.log(`  Network (${networkSource}): ${this.networkName}`)
+    this.log(`  UTXO backend: ${this.dogeRpcConfig ? 'direct RPC (regtest)' : 'Electrs/Blockbook'}`)
     this.log(`  Blockbook URL: ${this.blockbookURL || 'N/A'}`)
     this.log(`  L2 RPC: ${this.l2RPC || 'N/A'}`)
     this.log(`  L2 Explorer: ${this.l2ExplorerUrl || 'N/A'}`)
@@ -453,7 +476,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       }
     }
 
-    const { result } = await broadcastTx(txHex, this.blockbookURL)
+    const { result } = await broadcastTx(txHex, this.blockbookURL, this.dogeRpcConfig)
     return result
   }
 
@@ -576,7 +599,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     if (verbose) this.log(chalk.dim(`   Sender address: ${senderAddress}`))
 
     this.log(chalk.gray('-> Fetching UTXOs...'))
-    let utxos = await getUtxos(senderAddress, this.blockbookURL)
+    let utxos = await getUtxos(senderAddress, this.blockbookURL, this.dogeRpcConfig)
     if (utxos.length === 0) this.error(`No UTXOs found for address: ${senderAddress}`)
 
     utxos = utxos.filter((utxo) => utxo.confirmations > 1)
@@ -592,7 +615,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     for (const utxo of utxos) {
       if (totalInput >= targetValue) break
       totalInput += BigInt(utxo.value)
-      const txHex = (await getTx(utxo.txid, this.blockbookURL)).hex
+      const txHex = (await getTx(utxo.txid, this.blockbookURL, this.dogeRpcConfig)).hex
       psbt.addInput({
         hash: utxo.txid,
         index: utxo.vout,
@@ -647,7 +670,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     const finalTxHex = psbt.extractTransaction().toHex()
     this.log(chalk.gray('-> Broadcasting transaction...'))
     try {
-      const { result: txid } = await broadcastTx(finalTxHex, this.blockbookURL)
+      const { result: txid } = await broadcastTx(finalTxHex, this.blockbookURL, this.dogeRpcConfig)
       this.log(chalk.green(`✅ Transaction broadcasted successfully!`))
       this.log(`   ${chalk.blue('Link:')} https://doge-testnet-explorer.qed.me/tx/${txid}`)
       return { hex: finalTxHex, txid }
@@ -688,7 +711,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       this.log(chalk.green('✅ Master transaction sent!'))
       this.log(`   ${chalk.blue('Link:')} https://doge-testnet-explorer.qed.me/tx/${txid}`)
 
-      const masterConfirmed = await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
+      const masterConfirmed = await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg), this.dogeRpcConfig)
       if (!masterConfirmed) {
         this.error(`Master transaction ${txid} did not confirm within the expected time.`)
       }
@@ -701,7 +724,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
         this.error('outputcount must be a positive safe integer.')
       }
 
-      const txHex = (await getTx(txid, this.blockbookURL)).hex
+      const txHex = (await getTx(txid, this.blockbookURL, this.dogeRpcConfig)).hex
       for (let i = 0; i < attackCount; i++) {
         const psbt = new bitcoin.Psbt({ network: this.network })
         psbt.addInput({
@@ -721,7 +744,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
         psbt.finalizeAllInputs()
 
         const finalTxHex = psbt.extractTransaction().toHex()
-        const { result: txid2 } = await broadcastTx(finalTxHex, flags.blockbookurl)
+        const { result: txid2 } = await broadcastTx(finalTxHex, flags.blockbookurl, this.dogeRpcConfig)
         this.log(chalk.green(`✅ Agent deposit tx ${i + 1}/${attackCount} sent: https://doge-testnet-explorer.qed.me/tx/${txid2}`))
       }
 
@@ -895,7 +918,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     try {
       if (!this.feeWalletAddress) this.error('feeWalletAddress is not configured.')
       this.log(chalk.gray(`-> Fetching UTXOs for fee wallet ${this.feeWalletAddress}...`))
-      const feeWalletUtxos = await getUtxos(this.feeWalletAddress, this.blockbookURL)
+      const feeWalletUtxos = await getUtxos(this.feeWalletAddress, this.blockbookURL, this.dogeRpcConfig)
       const confirmedUtxos = feeWalletUtxos.filter((utxo) => utxo.confirmations > 0)
       if (confirmedUtxos.length === 0) this.error('No confirmed UTXOs found for the fee wallet.')
 
@@ -940,10 +963,10 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       const { txid: fundingTxid } = result
 
       this.log(chalk.gray('-> Waiting for funding confirmation...'))
-      const fundingConfirmed = await waitForConfirmations(fundingTxid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
+      const fundingConfirmed = await waitForConfirmations(fundingTxid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg), this.dogeRpcConfig)
       if (!fundingConfirmed) this.error(`Funding transaction ${fundingTxid} did not confirm within the expected time.`)
 
-      const fundingTxHex = (await getTx(fundingTxid, this.blockbookURL)).hex
+      const fundingTxHex = (await getTx(fundingTxid, this.blockbookURL, this.dogeRpcConfig)).hex
       const fundingTxBuffer = new Uint8Array(Buffer.from(fundingTxHex, 'hex'))
 
       this.log(chalk.gray('-> Building 2000-input agent transaction...'))
@@ -1020,10 +1043,10 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
       const finalTxHex = finalTx.toHex()
       this.log(chalk.gray('-> Broadcasting agent consolidation transaction...'))
-      const { result: txid } = await broadcastTx(finalTxHex, this.blockbookURL)
+      const { result: txid } = await broadcastTx(finalTxHex, this.blockbookURL, this.dogeRpcConfig)
       this.log(chalk.green(`✅ Agent consolidation transaction broadcasted!`))
       this.log(`   ${chalk.blue('Link:')} https://doge-testnet-explorer.qed.me/tx/${txid}`)
-      await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
+      await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg), this.dogeRpcConfig)
       this.log(chalk.green.bold('\n✨ Case Finished Successfully.'));
     } catch (error: any) {
       this.log(chalk.red.bold('\n❌ Case Failed: Fee Wallet 2000 Inputs'))
@@ -1070,7 +1093,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     const { hex: fundingTxHex, txid: fundingTxid } = fundingResult
 
     this.log(chalk.gray('-> Waiting for funding confirmation...'))
-    await waitForConfirmations(fundingTxid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
+    await waitForConfirmations(fundingTxid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg), this.dogeRpcConfig)
     this.log(chalk.green('✅ Funding confirmed.'))
 
     // Phase 2: Construct Large PSBT
@@ -1136,11 +1159,11 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     const finalTxHex = psbt.extractTransaction().toHex()
     this.log(chalk.gray(`-> Broadcasting large transaction (${finalTxHex.length / 2} bytes)...`))
 
-    const { result: largeTxid } = await broadcastTx(finalTxHex, this.blockbookURL)
+    const { result: largeTxid } = await broadcastTx(finalTxHex, this.blockbookURL, this.dogeRpcConfig)
     this.log(chalk.green(`✅ Large transaction broadcasted successfully!`))
     this.log(`   ${chalk.blue('Link:')} https://doge-testnet-explorer.qed.me/tx/${largeTxid}`)
 
-    await waitForConfirmations(largeTxid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
+    await waitForConfirmations(largeTxid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg), this.dogeRpcConfig)
 
     this.log(chalk.gray('-> Waiting for L2 balance update...'))
     const provider = new JsonRpcProvider(this.l2RPC)
@@ -1267,7 +1290,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       const result = await this.buildAndBroadcastTx(masterKeyPair, outputs, flags.verbose)
       if (!result) throw new Error('Transaction build failed')
       const { txid } = result
-      await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
+      await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg), this.dogeRpcConfig)
       this.log(chalk.green.bold('\n✨ Case Finished Successfully.'));
     } catch (error: any) {
       this.log(chalk.red.bold('\n❌ Case Failed: Multiple OP_RETURN'))
@@ -1315,7 +1338,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       const result = await this.buildAndBroadcastTx(masterKeyPair, outputs, flags.verbose)
       if (!result) throw new Error('Transaction build failed')
       const { txid } = result
-      await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
+      await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg), this.dogeRpcConfig)
       this.log(chalk.green.bold('\n✨ Case Finished Successfully.'));
     } catch (error: any) {
       this.log(chalk.red.bold('\n❌ Case Failed: Multiple Output'))
@@ -1771,7 +1794,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
   private async loadPrevTxHex(txid: string, cache: Map<string, string>): Promise<string> {
     const cached = cache.get(txid)
     if (cached) return cached
-    const tx = await getTx(txid, this.blockbookURL)
+    const tx = await getTx(txid, this.blockbookURL, this.dogeRpcConfig)
     cache.set(txid, tx.hex)
     return tx.hex
   }
@@ -1834,7 +1857,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     const { txid } = result
 
     this.log(chalk.gray('-> Waiting for recharge confirmation...'))
-    await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg))
+    await waitForConfirmations(txid, this.blockbookURL, (msg) => this.log(msg), (msg) => this.warn(msg), this.dogeRpcConfig)
     this.log(chalk.green('✅ Recharge confirmed. Waiting for L2 balance update...'))
 
     // Wait for L2 balance to reflect (bridge delay)
