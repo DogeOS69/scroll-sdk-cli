@@ -12,7 +12,7 @@ import path from 'node:path'
 import * as tinysecp from 'tiny-secp256k1'
 
 import { FoundryService, HelperContractConfig } from '../../services/foundry-service.js'
-import { dogecoinMainnet, dogecoinTestnet } from '../../types/dogecoin.js'
+import { dogecoinMainnet, dogecoinRegtest, dogecoinTestnet } from '../../types/dogecoin.js'
 import {
   type DogeRpcConfig,
   broadcastTx,
@@ -218,6 +218,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
   l2RPC: string = ''
   l2VerifierType: string = ''
   masterAddress: string = ''
+  masterKeyPair!: ECPairInterface
   masterWif: string = ''
 
   moatAddress: string = ''
@@ -334,7 +335,25 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     this.networkName = networkFromValues || 'testnet'
     const networkSource = networkFromValues ? 'values/l1-interface-production.yaml' : 'default'
     this.network = this.networkName === 'mainnet' ? dogecoinMainnet : dogecoinTestnet
-    const mKeyPair: ECPairInterface = ECPair.fromWIF(this.masterWif, this.network)
+
+    // On regtest: override network to use Bitcoin testnet address/WIF prefixes
+    if (this.dogeRpcConfig) {
+      this.network = dogecoinRegtest
+      this.networkName = 'regtest'
+    }
+
+    // Decode the WIF — try the active network first, then fall back to testnet
+    // (needed when a Dogecoin-testnet WIF is used on regtest, which has Bitcoin-testnet WIF prefix)
+    let mKeyPair: ECPairInterface
+    try {
+      mKeyPair = ECPair.fromWIF(this.masterWif, this.network)
+    } catch {
+      const fallback = this.network === dogecoinRegtest ? dogecoinTestnet : dogecoinRegtest
+      const decoded = ECPair.fromWIF(this.masterWif, fallback)
+      mKeyPair = ECPair.fromPrivateKey(decoded.privateKey!, { network: this.network })
+    }
+
+    this.masterKeyPair = mKeyPair
     this.masterAddress = bitcoin.payments.p2pkh({ network: this.network, pubkey: mKeyPair.publicKey }).address || ''
 
     // On regtest: set defaults and fund master address
@@ -608,8 +627,9 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     let utxos = await getUtxos(senderAddress, this.blockbookURL, this.dogeRpcConfig)
     if (utxos.length === 0) this.error(`No UTXOs found for address: ${senderAddress}`)
 
-    utxos = utxos.filter((utxo) => utxo.confirmations > 1)
-    if (utxos.length === 0) this.error('No UTXOs with more than 1 confirmation found.')
+    const minConf = this.dogeRpcConfig ? 1 : 2
+    utxos = utxos.filter((utxo) => utxo.confirmations >= minConf)
+    if (utxos.length === 0) this.error(`No UTXOs with >= ${minConf} confirmations found.`)
     this.log(chalk.green(`✅ Found ${utxos.length} spendable UTXOs.`))
 
     const totalOutputValue = outputs.reduce((sum, output) => sum + output.value, 0n)
@@ -689,7 +709,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     this.log(chalk.bold.cyan('\n✨ Starting: Bridge UTXO Attack Case'))
     const { flags } = await this.parse(Case)
     try {
-      const masterKeyPair: ECPairInterface = ECPair.fromWIF(this.masterWif, this.network)
+      const { masterKeyPair } = this
       const agentKeyPair: ECPairInterface = ECPair.fromPrivateKey(new Uint8Array(randomBytes(32)))
 
       const outputs: PsbtOutputParam[] = []
@@ -851,7 +871,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
   private async caseCpfpMempoolTxs() {
     this.log(chalk.bold.cyan('\n✨ Starting: CPFP Master Mempool TXs'))
-    const keyPair = ECPair.fromWIF(this.masterWif, this.network)
+    const { masterKeyPair: keyPair } = this
 
     const electrsBases = this.getElectrsBases()
     const mempoolTxs = await this.fetchAddressMempoolTxs(this.masterAddress, electrsBases)
@@ -957,7 +977,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
         this.log(chalk.dim(`   Total funding to agent: ${totalFunding.toString()} dogetoshis`))
       }
 
-      const masterKeyPair: ECPairInterface = ECPair.fromWIF(this.masterWif, this.network)
+      const { masterKeyPair } = this
       const fundingOutputs: PsbtOutputParam[] = Array.from({ length: inputCount }, () => ({
         address: agentAddress,
         value: perOutputValue,
@@ -1088,7 +1108,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
     // Phase 1: Fund the addresses
     this.log(chalk.gray('-> Phase 1: Funding random addresses...'))
-    const masterKeyPair: ECPairInterface = ECPair.fromWIF(this.masterWif, this.network)
+    const { masterKeyPair } = this
     const fundingOutputs: PsbtOutputParam[] = addresses.map(addr => ({
       address: addr,
       value: fundingAmount + feePerInput
@@ -1280,7 +1300,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     this.log(chalk.bold.cyan('\n✨ Starting: Multiple OP_RETURN Case'))
     const { flags } = await this.parse(Case)
     try {
-      const masterKeyPair: ECPairInterface = ECPair.fromWIF(this.masterWif, this.network)
+      const { masterKeyPair } = this
 
       const opReturnData1 = new Uint8Array(Buffer.from('00d98f41da0f5b229729ed7bf469ea55d98d11f467', 'hex'))
       const opReturnData2 = new Uint8Array(Buffer.from('002eaf5e9022f7c99937ecba7925f1baa9d1bf75b2', 'hex'))
@@ -1313,7 +1333,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
     this.log(chalk.bold.cyan('\n✨ Starting: Multiple Output Case'))
     const { flags } = await this.parse(Case)
     try {
-      const masterKeyPair: ECPairInterface = ECPair.fromWIF(this.masterWif, this.network)
+      const { masterKeyPair } = this
       const opReturnData1 = new Uint8Array(Buffer.from(this.l2Address.toLowerCase().replace('0x', '00'), 'hex'))
       const opReturnOutput1 = bitcoin.payments.embed({ data: [opReturnData1] })
 
@@ -1513,7 +1533,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
   private async caseReplaceMempoolTxs() {
     this.log(chalk.bold.cyan('\n✨ Starting: Replace Master Mempool TXs'))
-    const keyPair = ECPair.fromWIF(this.masterWif, this.network)
+    const { masterKeyPair: keyPair } = this
 
     const electrsBases = this.getElectrsBases()
     const mempoolTxs = await this.fetchAddressMempoolTxs(this.masterAddress, electrsBases)
@@ -1856,7 +1876,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
 
     this.log(chalk.gray(`-> Calculated recharge amount: ${Number(amountDogetoshis) / 1e8} DOGE`))
 
-    const masterKeyPair: ECPairInterface = ECPair.fromWIF(this.masterWif, this.network)
+    const { masterKeyPair } = this
     const opReturnData = new Uint8Array(Buffer.from(this.l2Address.toLowerCase().replace('0x', '00'), 'hex'))
     const opReturnOutput = bitcoin.payments.embed({ data: [opReturnData] })
 
@@ -1936,7 +1956,7 @@ ${TEST_CASES.map((c) => `  - ${c.id}: ${c.name} - ${c.description}`).join('\n')}
       this.log(chalk.gray('-> Funding master address on regtest...'))
       await dogeRpc(this.dogeRpcConfig, 'generate', [101])
       await dogeRpc(this.dogeRpcConfig, 'sendtoaddress', [this.masterAddress, 500_000])
-      await dogeRpc(this.dogeRpcConfig, 'generate', [1])
+      await dogeRpc(this.dogeRpcConfig, 'generate', [6])
       this.log(chalk.green(`✅ Funded ${this.masterAddress} on regtest`))
     }
   }
