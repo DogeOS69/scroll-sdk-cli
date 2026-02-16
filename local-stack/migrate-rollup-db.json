@@ -1,0 +1,4 @@
+{
+  "driver_name": "postgres",
+  "dsn": "postgres://rollup_node:localdev@dogeos-postgres:5432/scroll_rollup?sslmode=disable"
+}

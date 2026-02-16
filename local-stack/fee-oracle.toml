@@ -1,0 +1,63 @@
+# Fee Oracle Configuration - Local Stack
+
+[l2]
+rpc_url = "http://localhost:8546"
+chain_id = 221122
+gas_oracle_contract = "0x5300000000000000000000000000000000000002"
+confirmations = 1
+max_gas_price = 1000000000000
+priority_fee = 1000000000
+
+[dogecoin]
+rpc_url = "http://localhost:18445"
+rpc_user = "doge"
+rpc_password = "doge_pass"
+network_str = "regtest"
+poll_interval = 30
+fee_lookback_blocks = 10
+mempool_sample_size = 1000
+base_fee_rate = 1000000
+empty_mempool_fee_rate = 1500000
+
+[celestia]
+grpc_url = "http://localhost:26657"
+poll_interval = 60
+namespace_id = "0x0000000000000000000000000000000000000000000000000000ffff"
+base_fee_per_blob = 100000
+catchup_fee_per_blob = 200000
+fallback_fee_per_blob = 150000
+
+[wallet]
+private_key_env = "DOGEOS_FEE_ORACLE_PRIVATE_KEY"
+
+[thresholds]
+dogecoin_fee_change_percent = 5.0
+celestia_fee_change_percent = 10.0
+min_update_interval = 60
+high_gas_mode_threshold = 1000000000000
+default_dogecoin_fee = 1000000
+default_celestia_fee = 100000000
+
+[database]
+sqlite_path = "./fee_oracle.db"
+connection_pool_size = 10
+
+[price_oracle]
+update_on_each_cycle = false
+cache_duration = 300
+kraken_enabled = true
+coinbase_enabled = true
+coingecko_enabled = false
+gateio_enabled = true
+request_timeout = 30
+max_retries = 3
+
+[monitoring]
+metrics_port = 9090
+health_check_port = 8080
+health_bind_address = "0.0.0.0"
+
+[deployment]
+# dry_run: Set to true in isolated environments without internet access for price feeds.
+# When false, fee-oracle will attempt L2 contract updates (requires funded + whitelisted sender).
+dry_run = false

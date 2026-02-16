@@ -10,6 +10,16 @@ L2GETH_IMAGE="scrolltech/l2geth:scroll-v5.9.6"
 DOGECOIN_IMAGE="dogeos69/dogecoin:latest"
 SIGNER_ADDR="0xa7CdA54170FFD9F9C7A6DC72f8a5E6E15ca32fA3"
 
+# Rollup pipeline images
+ROLLUP_RELAYER_IMAGE="scrolltech/rollup-relayer:v4.7.5"
+COORDINATOR_IMAGE="scrolltech/coordinator-api:v4.7.5"
+GAS_ORACLE_IMAGE="scrolltech/gas-oracle:v4.7.5"
+ROLLUP_DB_CLI_IMAGE="scrolltech/rollup-db-cli:v4.7.5"
+BRIDGE_HISTORY_FETCHER_IMAGE="scrolltech/bridgehistoryapi-fetcher:latest"
+BRIDGE_HISTORY_API_IMAGE="scrolltech/bridgehistoryapi-api:latest"
+BRIDGE_HISTORY_DB_CLI_IMAGE="scrolltech/bridgehistoryapi-db-cli:latest"
+DOCKER_NETWORK="dogeos-net"
+
 # Use OrbStack for amd64 emulation (Rosetta) - Docker Desktop QEMU crashes Go runtime
 ORBSTACK_SOCK="${HOME}/.orbstack/run/docker.sock"
 if [ -S "${ORBSTACK_SOCK}" ]; then
@@ -25,8 +35,13 @@ L2_HTTP_PORT=8546
 L2_WS_PORT=8547
 L1_INTERFACE_PORT=8548
 DA_PUBLISHER_PORT=3001
-DOGECOIN_RPC_PORT=44556
+DOGECOIN_RPC_PORT=18445
 POSTGRES_PORT=5432
+COORDINATOR_PORT=8390
+BRIDGE_HISTORY_API_PORT=8530
+WITHDRAWAL_PROCESSOR_PORT=3000
+FEE_ORACLE_HEALTH_PORT=8080
+BEACON_API_PORT=3500
 
 # Colors
 RED='\033[0;31m'
@@ -52,6 +67,20 @@ cleanup_existing() {
   ${DOCKER_CMD} rm -f dogeos-l2geth 2>/dev/null || true
   ${DOCKER_CMD} rm -f dogeos-dogecoin 2>/dev/null || true
   ${DOCKER_CMD} rm -f dogeos-postgres 2>/dev/null || true
+  ${DOCKER_CMD} rm -f dogeos-rollup-relayer 2>/dev/null || true
+  ${DOCKER_CMD} rm -f dogeos-coordinator 2>/dev/null || true
+  ${DOCKER_CMD} rm -f dogeos-gas-oracle 2>/dev/null || true
+  ${DOCKER_CMD} rm -f dogeos-bridge-history-fetcher 2>/dev/null || true
+  ${DOCKER_CMD} rm -f dogeos-bridge-history-api 2>/dev/null || true
+  ${DOCKER_CMD} rm -f dogeos-redis 2>/dev/null || true
+  ${DOCKER_CMD} rm -f dogeos-celestia 2>/dev/null || true
+
+  # Clean up persistent state for fresh start
+  rm -rf "${SCRIPT_DIR}/dogecoin-data"
+  rm -f "${SCRIPT_DIR}/l1_interface.sqlite"
+
+  # Ensure shared Docker network exists for inter-container communication
+  ${DOCKER_CMD} network create "${DOCKER_NETWORK}" 2>/dev/null || true
 
   if lsof -ti:${ANVIL_PORT} >/dev/null 2>&1; then
     warn "Killing existing process on port ${ANVIL_PORT}"
@@ -60,7 +89,7 @@ cleanup_existing() {
   fi
 
   # Kill l1-interface and da-publisher if running
-  for pidfile in "${SCRIPT_DIR}/l1-interface.pid" "${SCRIPT_DIR}/da-publisher.pid"; do
+  for pidfile in "${SCRIPT_DIR}/l1-interface.pid" "${SCRIPT_DIR}/da-publisher.pid" "${SCRIPT_DIR}/dogecoin-miner.pid" "${SCRIPT_DIR}/l2-txgen.pid" "${SCRIPT_DIR}/withdrawal-processor.pid" "${SCRIPT_DIR}/fee-oracle.pid"; do
     if [ -f "${pidfile}" ]; then
       PID=$(cat "${pidfile}")
       if kill -0 "${PID}" 2>/dev/null; then
@@ -138,6 +167,7 @@ start_l2geth() {
 
   log "Starting L2 geth on ports ${L2_HTTP_PORT}/${L2_WS_PORT} (L1: ${l1_endpoint})..."
   ${DOCKER_CMD} run -d --name dogeos-l2geth --platform linux/amd64 --entrypoint="" \
+    --network "${DOCKER_NETWORK}" \
     -v "${SCRIPT_DIR}:/l2geth" \
     -p "${L2_HTTP_PORT}:8545" \
     -p "${L2_WS_PORT}:8546" \
@@ -148,7 +178,7 @@ start_l2geth() {
       --http.api 'eth,scroll,net,web3,debug' \
       --ws --ws.port 8546 --ws.addr 0.0.0.0 --ws.api 'eth,scroll,net,web3,debug' \
       --unlock "${SIGNER_ADDR}" --password /l2geth/password --allow-insecure-unlock --mine \
-      --scroll-mpt --gcmode archive \
+      --gcmode archive \
       --cache.noprefetch --cache.snapshot=0 --snapshot=false \
       --miner.gasprice 1000000 --miner.gaslimit 10000000 --rpc.gascap 0 \
       --l1.endpoint "${l1_endpoint}" --l1.confirmations 0x6 --l1.sync.startblock 0 \
@@ -193,17 +223,18 @@ deploy_contracts() {
 }
 
 start_dogecoin() {
-  log "Starting Dogecoin testnet node (v1.14.9) on port ${DOGECOIN_RPC_PORT}..."
+  log "Starting Dogecoin regtest node (v1.14.9) on port ${DOGECOIN_RPC_PORT}..."
 
   # Create persistent volume directory
   mkdir -p "${SCRIPT_DIR}/dogecoin-data"
 
   ${DOCKER_CMD} run -d --name dogeos-dogecoin --platform linux/amd64 --entrypoint="" \
+    --network "${DOCKER_NETWORK}" \
     -v "${SCRIPT_DIR}/dogecoin-data:/data" \
     -p "${DOGECOIN_RPC_PORT}:44555" \
     "${DOGECOIN_IMAGE}" \
     /dogecoin/bin/dogecoind \
-      -testnet \
+      -regtest \
       -datadir=/data \
       -server=1 \
       -txindex=1 \
@@ -213,18 +244,52 @@ start_dogecoin() {
       -rpcbind=0.0.0.0 \
       -rpcallowip=0.0.0.0/0 \
       -printtoconsole=1 \
-      -maxconnections=32
+      -maxconnections=0 \
+      -listen=0
 
   log "Dogecoin container: dogeos-dogecoin"
+}
+
+start_dogecoin_mining() {
+  local DOGE_RPC="http://localhost:${DOGECOIN_RPC_PORT}"
+  local DOGE_AUTH="doge:doge_pass"
+
+  # Generate a mining address
+  local addr
+  addr=$(curl -sf --user "${DOGE_AUTH}" --data-binary \
+    '{"jsonrpc":"1.0","method":"getnewaddress","params":[],"id":1}' \
+    -H 'content-type: text/plain;' "${DOGE_RPC}" | python3 -c "import sys,json; print(json.load(sys.stdin)['result'])")
+  log "Dogecoin mining address: ${addr}"
+
+  # Mine initial blocks (need 101+ for coinbase maturity)
+  log "Mining initial 110 blocks..."
+  curl -sf --user "${DOGE_AUTH}" --data-binary \
+    "{\"jsonrpc\":\"1.0\",\"method\":\"generatetoaddress\",\"params\":[110,\"${addr}\"],\"id\":1}" \
+    -H 'content-type: text/plain;' "${DOGE_RPC}" > /dev/null
+
+  # Start background auto-miner (1 block every 10 seconds)
+  log "Starting auto-miner (1 block / 10s)..."
+  (
+    while true; do
+      curl -sf --user "${DOGE_AUTH}" --data-binary \
+        "{\"jsonrpc\":\"1.0\",\"method\":\"generatetoaddress\",\"params\":[1,\"${addr}\"],\"id\":1}" \
+        -H 'content-type: text/plain;' "${DOGE_RPC}" > /dev/null 2>&1
+      sleep 10
+    done
+  ) &
+  echo $! > "${SCRIPT_DIR}/dogecoin-miner.pid"
+  log "Auto-miner PID: $(cat "${SCRIPT_DIR}/dogecoin-miner.pid")"
 }
 
 start_postgres() {
   log "Starting PostgreSQL on port ${POSTGRES_PORT}..."
   ${DOCKER_CMD} run -d --name dogeos-postgres \
+    --network "${DOCKER_NETWORK}" \
     -p "${POSTGRES_PORT}:5432" \
     -e POSTGRES_USER=rollup_node \
     -e POSTGRES_PASSWORD=localdev \
     -e POSTGRES_DB=scroll_rollup \
+    -e POSTGRES_HOST_AUTH_METHOD=trust \
     postgres:16-alpine
 
   # Wait for PostgreSQL
@@ -283,6 +348,252 @@ start_da_publisher() {
   log "da-publisher PID: $(cat "${SCRIPT_DIR}/da-publisher.pid")"
 }
 
+start_celestia() {
+  log "Building Celestia devnet image..."
+  ${DOCKER_CMD} build -t dogeos-celestia-devnet:latest "${SCRIPT_DIR}/celestia-devnet/" > /dev/null 2>&1
+
+  log "Starting Celestia devnet (consensus + bridge) on ports 26657/26658..."
+  ${DOCKER_CMD} run -d --name dogeos-celestia \
+    --network "${DOCKER_NETWORK}" \
+    -p 26657:26657 \
+    -p 26658:26658 \
+    -p 9090:9090 \
+    dogeos-celestia-devnet:latest
+
+  log "Celestia container: dogeos-celestia"
+
+  # Wait for bridge RPC to respond
+  local attempt=0
+  while [ $attempt -lt 60 ]; do
+    if curl -sf -X POST -H "Content-Type: application/json" \
+      -d '{"id":1,"jsonrpc":"2.0","method":"header.LocalHead","params":[]}' \
+      http://localhost:26658 2>/dev/null | grep -q "height"; then
+      log "Celestia bridge node is ready"
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+  warn "Celestia bridge node not ready after 120s (da-publisher may fail)"
+}
+
+create_service_databases() {
+  log "Creating additional databases for rollup services..."
+  for db in coordinator gas_oracle bridge_history; do
+    if ${DOCKER_CMD} exec dogeos-postgres psql -U rollup_node -d scroll_rollup -tAc \
+      "SELECT 1 FROM pg_database WHERE datname='${db}'" | grep -q 1; then
+      log "  Database '${db}' already exists"
+    else
+      ${DOCKER_CMD} exec dogeos-postgres createdb -U rollup_node "${db}"
+      log "  Created database '${db}'"
+    fi
+  done
+}
+
+migrate_rollup_databases() {
+  log "Running DB migrations for rollup services..."
+  for config_file in migrate-rollup-db.json migrate-gas-oracle-db.json migrate-coordinator-db.json; do
+    local name="${config_file%.json}"
+    log "  Migrating ${name}..."
+    ${DOCKER_CMD} run --rm --platform linux/amd64 \
+      --network "${DOCKER_NETWORK}" \
+      -v "${SCRIPT_DIR}/${config_file}:/app/conf/config.json" \
+      -v "${SCRIPT_DIR}/genesis.json:/app/conf/genesis.json" \
+      "${ROLLUP_DB_CLI_IMAGE}" \
+      --genesis /app/conf/genesis.json migrate --config /app/conf/config.json \
+      || warn "  ${name} migration failed (may need different schema)"
+  done
+  log "DB migrations complete"
+}
+
+start_gas_oracle() {
+  log "Starting gas-oracle..."
+  ${DOCKER_CMD} run -d --name dogeos-gas-oracle --platform linux/amd64 \
+    --network "${DOCKER_NETWORK}" \
+    -v "${SCRIPT_DIR}/gas-oracle-config.json:/app/conf/rollup-config.json" \
+    -v "${SCRIPT_DIR}/genesis.json:/app/genesis/genesis.json" \
+    --entrypoint="" "${GAS_ORACLE_IMAGE}" \
+    gas_oracle --config /app/conf/rollup-config.json \
+      --genesis /app/genesis/genesis.json \
+      --verbosity 3
+
+  log "gas-oracle container: dogeos-gas-oracle"
+}
+
+start_coordinator() {
+  log "Starting coordinator-api on port ${COORDINATOR_PORT}..."
+  ${DOCKER_CMD} run -d --name dogeos-coordinator --platform linux/amd64 \
+    --network "${DOCKER_NETWORK}" \
+    -p "${COORDINATOR_PORT}:8390" \
+    -v "${SCRIPT_DIR}/coordinator-config.json:/coordinator/conf/coordinator-config.json" \
+    -v "${SCRIPT_DIR}/genesis.json:/app/genesis/genesis.json" \
+    --entrypoint="" "${COORDINATOR_IMAGE}" \
+    coordinator_api --config /coordinator/conf/coordinator-config.json \
+      --genesis /app/genesis/genesis.json \
+      --http --http.addr 0.0.0.0 --http.port 8390 \
+      --verbosity 3
+
+  log "coordinator container: dogeos-coordinator"
+}
+
+start_rollup_relayer() {
+  log "Starting rollup-relayer..."
+  ${DOCKER_CMD} run -d --name dogeos-rollup-relayer --platform linux/amd64 \
+    --network "${DOCKER_NETWORK}" \
+    -v "${SCRIPT_DIR}/rollup-config.json:/app/conf/rollup-config.json" \
+    -v "${SCRIPT_DIR}/genesis.json:/app/genesis/genesis.json" \
+    --entrypoint="" "${ROLLUP_RELAYER_IMAGE}" \
+    rollup_relayer --config /app/conf/rollup-config.json \
+      --genesis /app/genesis/genesis.json \
+      --min-codec-version 7 \
+      --verbosity 3
+
+  # Check if it stays alive for a few seconds
+  sleep 3
+  if ${DOCKER_CMD} ps -q -f name=dogeos-rollup-relayer 2>/dev/null | grep -q .; then
+    log "rollup-relayer container: dogeos-rollup-relayer"
+  else
+    warn "rollup-relayer exited (check: docker logs dogeos-rollup-relayer)"
+    return 1
+  fi
+}
+
+setup_l2_accounts() {
+  log "Setting up L2 accounts (funding senders, whitelisting)..."
+  local cast_bin="${HOME}/.foundry/bin/cast"
+  local rpc="http://localhost:${L2_HTTP_PORT}"
+  local deployer_key="0x76273b5b6fc7eb6e931ee8f1e74a88d1fdd7ae225a4c8a664858b4cccb083827"
+
+  # Gas oracle sender addresses (derived from private keys in config)
+  local l1_gas_oracle_addr="0x44Db8ad83dA0605Eb27FE26804CEAE1eEbbcAaB1"
+  local fee_oracle_addr="0x29E2f3B76662134404cEA5A8f12E0d4B6e6fdE5a"
+
+  # Fund oracle senders on L2
+  "${cast_bin}" send --rpc-url "${rpc}" --private-key "${deployer_key}" \
+    --value 0.1ether "${l1_gas_oracle_addr}" > /dev/null 2>&1
+  log "  Funded gas oracle sender ${l1_gas_oracle_addr}"
+  "${cast_bin}" send --rpc-url "${rpc}" --private-key "${deployer_key}" \
+    --value 0.1ether "${fee_oracle_addr}" > /dev/null 2>&1
+  log "  Funded fee oracle sender ${fee_oracle_addr}"
+
+  # Whitelist both oracle senders in the Whitelist contract
+  "${cast_bin}" send --rpc-url "${rpc}" --private-key "${deployer_key}" \
+    0x5300000000000000000000000000000000000003 \
+    "updateWhitelistStatus(address[],bool)" "[${l1_gas_oracle_addr},${fee_oracle_addr}]" true > /dev/null 2>&1
+  log "  Whitelisted oracle senders"
+
+  # Set whitelist address on L1GasPriceOracle
+  "${cast_bin}" send --rpc-url "${rpc}" --private-key "${deployer_key}" \
+    0x5300000000000000000000000000000000000002 \
+    "updateWhitelist(address)" 0x5300000000000000000000000000000000000003 > /dev/null 2>&1
+  log "  Configured L1GasPriceOracle whitelist"
+}
+
+start_l2_txgen() {
+  log "Starting L2 tx generator (1 tx / 5s for continuous block production)..."
+  local deployer_key="0x76273b5b6fc7eb6e931ee8f1e74a88d1fdd7ae225a4c8a664858b4cccb083827"
+  local cast_bin="${HOME}/.foundry/bin/cast"
+  (
+    while true; do
+      "${cast_bin}" send --rpc-url "http://localhost:${L2_HTTP_PORT}" \
+        --private-key "${deployer_key}" \
+        --value 0 \
+        0x0000000000000000000000000000000000000001 > /dev/null 2>&1
+      sleep 5
+    done
+  ) &
+  echo $! > "${SCRIPT_DIR}/l2-txgen.pid"
+  log "L2 tx generator PID: $(cat "${SCRIPT_DIR}/l2-txgen.pid")"
+}
+
+start_redis() {
+  log "Starting Redis..."
+  ${DOCKER_CMD} run -d --name dogeos-redis \
+    --network "${DOCKER_NETWORK}" \
+    -p 6379:6379 \
+    redis:7-alpine
+
+  log "Redis container: dogeos-redis"
+}
+
+start_bridge_history_fetcher() {
+  log "Starting bridge-history-fetcher..."
+  ${DOCKER_CMD} run -d --name dogeos-bridge-history-fetcher --platform linux/amd64 \
+    --network "${DOCKER_NETWORK}" \
+    -v "${SCRIPT_DIR}/bridge-history-config.json:/app/conf/config.json" \
+    -v "${SCRIPT_DIR}/genesis.json:/app/conf/genesis.json" \
+    --entrypoint="" "${BRIDGE_HISTORY_FETCHER_IMAGE}" \
+    bridgehistoryapi-fetcher --config /app/conf/config.json \
+      --genesis /app/conf/genesis.json \
+      --verbosity 3
+
+  log "bridge-history-fetcher container: dogeos-bridge-history-fetcher"
+}
+
+start_bridge_history_api() {
+  log "Starting bridge-history-api on port ${BRIDGE_HISTORY_API_PORT}..."
+  ${DOCKER_CMD} run -d --name dogeos-bridge-history-api --platform linux/amd64 \
+    --network "${DOCKER_NETWORK}" \
+    -p "${BRIDGE_HISTORY_API_PORT}:8080" \
+    -v "${SCRIPT_DIR}/bridge-history-config.json:/app/conf/config.json" \
+    -v "${SCRIPT_DIR}/genesis.json:/app/conf/genesis.json" \
+    --entrypoint="" "${BRIDGE_HISTORY_API_IMAGE}" \
+    bridgehistoryapi-api --config /app/conf/config.json \
+      --genesis /app/conf/genesis.json \
+      --service.port 8080 \
+      --verbosity 3
+
+  log "bridge-history-api container: dogeos-bridge-history-api"
+}
+
+migrate_bridge_history_db() {
+  log "Running bridge-history DB migration..."
+  ${DOCKER_CMD} run --rm --platform linux/amd64 \
+    --network "${DOCKER_NETWORK}" \
+    -v "${SCRIPT_DIR}/bridge-history-config.json:/app/conf/config.json" \
+    -v "${SCRIPT_DIR}/genesis.json:/app/conf/genesis.json" \
+    --entrypoint="" "${BRIDGE_HISTORY_DB_CLI_IMAGE}" \
+    db_cli --config /app/conf/config.json migrate \
+    || warn "  bridge-history DB migration failed"
+  log "bridge-history DB migration complete"
+}
+
+start_withdrawal_processor() {
+  local binary="${DOGEOS_CORE_DIR}/target/debug/withdrawal_processor"
+  local config="${SCRIPT_DIR}/withdrawal-processor.toml"
+
+  if [ ! -f "${binary}" ]; then
+    err "withdrawal-processor binary not found at ${binary}"
+    err "Build it: cargo build --manifest-path ${DOGEOS_CORE_DIR}/Cargo.toml -p withdrawal_processor"
+    return 1
+  fi
+
+  log "Starting withdrawal-processor on port ${WITHDRAWAL_PROCESSOR_PORT} (config: ${config})..."
+  RUST_LOG=info "${binary}" -c "${config}" \
+    > "${SCRIPT_DIR}/withdrawal-processor.log" 2>&1 &
+  echo $! > "${SCRIPT_DIR}/withdrawal-processor.pid"
+  log "withdrawal-processor PID: $(cat "${SCRIPT_DIR}/withdrawal-processor.pid")"
+}
+
+start_fee_oracle() {
+  local binary="${DOGEOS_CORE_DIR}/target/debug/fee_oracle"
+  local config="${SCRIPT_DIR}/fee-oracle.toml"
+
+  if [ ! -f "${binary}" ]; then
+    err "fee-oracle binary not found at ${binary}"
+    err "Build it: cargo build --manifest-path ${DOGEOS_CORE_DIR}/Cargo.toml -p fee_oracle"
+    return 1
+  fi
+
+  log "Starting fee-oracle (config: ${config})..."
+  # The fee-oracle needs the L2 gas oracle sender private key
+  RUST_LOG=info DOGEOS_FEE_ORACLE_PRIVATE_KEY="0x96cba5a694704477d6186aebc79a7ff50ba7ed95caacfe62a085a2d78be57597" \
+    "${binary}" -c "${config}" \
+    > "${SCRIPT_DIR}/fee-oracle.log" 2>&1 &
+  echo $! > "${SCRIPT_DIR}/fee-oracle.pid"
+  log "fee-oracle PID: $(cat "${SCRIPT_DIR}/fee-oracle.pid")"
+}
+
 show_status() {
   echo ""
   log "=== Stack is running (Phase ${PHASE}) ==="
@@ -327,6 +638,39 @@ show_status() {
     if ${DOCKER_CMD} ps -q -f name=dogeos-postgres 2>/dev/null | grep -q .; then
       log "  PostgreSQL:        localhost:${POSTGRES_PORT}"
     fi
+
+    # Rollup pipeline services
+    if ${DOCKER_CMD} ps -q -f name=dogeos-gas-oracle 2>/dev/null | grep -q .; then
+      log "  gas-oracle:        running"
+    fi
+
+    if ${DOCKER_CMD} ps -q -f name=dogeos-coordinator 2>/dev/null | grep -q .; then
+      log "  coordinator-api:   http://localhost:${COORDINATOR_PORT}"
+    fi
+
+    if ${DOCKER_CMD} ps -q -f name=dogeos-rollup-relayer 2>/dev/null | grep -q .; then
+      log "  rollup-relayer:    running"
+    fi
+
+    if ${DOCKER_CMD} ps -q -f name=dogeos-bridge-history-fetcher 2>/dev/null | grep -q .; then
+      log "  bridge-fetcher:    running"
+    fi
+
+    if ${DOCKER_CMD} ps -q -f name=dogeos-bridge-history-api 2>/dev/null | grep -q .; then
+      log "  bridge-api:        http://localhost:${BRIDGE_HISTORY_API_PORT}"
+    fi
+
+    if [ -f "${SCRIPT_DIR}/withdrawal-processor.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/withdrawal-processor.pid")" 2>/dev/null; then
+      log "  withdrawal-proc:   http://localhost:${WITHDRAWAL_PROCESSOR_PORT}"
+    fi
+
+    if [ -f "${SCRIPT_DIR}/fee-oracle.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/fee-oracle.pid")" 2>/dev/null; then
+      log "  fee-oracle:        running (health: http://localhost:${FEE_ORACLE_HEALTH_PORT})"
+    fi
+
+    if [ -f "${SCRIPT_DIR}/l2-txgen.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/l2-txgen.pid")" 2>/dev/null; then
+      log "  l2-txgen:          running (block production)"
+    fi
   fi
 
   log ""
@@ -336,6 +680,13 @@ show_status() {
   [ "${PHASE}" -ge 3 ] && log "  Dogecoin:        docker logs dogeos-dogecoin"
   [ "${PHASE}" -ge 3 ] && log "  l1-interface:    ${SCRIPT_DIR}/l1-interface.log"
   [ "${PHASE}" -ge 3 ] && log "  da-publisher:    ${SCRIPT_DIR}/da-publisher.log"
+  [ "${PHASE}" -ge 3 ] && log "  gas-oracle:      docker logs dogeos-gas-oracle"
+  [ "${PHASE}" -ge 3 ] && log "  coordinator:     docker logs dogeos-coordinator"
+  [ "${PHASE}" -ge 3 ] && log "  rollup-relayer:  docker logs dogeos-rollup-relayer"
+  [ "${PHASE}" -ge 3 ] && log "  bridge-fetcher:  docker logs dogeos-bridge-history-fetcher"
+  [ "${PHASE}" -ge 3 ] && log "  bridge-api:      docker logs dogeos-bridge-history-api"
+  [ "${PHASE}" -ge 3 ] && log "  withdrawal-proc: ${SCRIPT_DIR}/withdrawal-processor.log"
+  [ "${PHASE}" -ge 3 ] && log "  fee-oracle:      ${SCRIPT_DIR}/fee-oracle.log"
 }
 
 # --- Main ---
@@ -344,64 +695,94 @@ section "DogeOS Local Stack - Phase ${PHASE}"
 
 cleanup_existing
 
-# Phase 1/2: Anvil is needed temporarily for contract deployment (L1 address generation).
-# Phase 3: L2 geth connects to l1-interface; Anvil is not started.
-if [ "${PHASE}" -lt 3 ]; then
-  section "Phase 1: Starting Anvil (build-time) + L2 geth"
+if [ "${PHASE}" -le 2 ]; then
+  # --- Phase 1/2: Anvil (temporary EVM L1) + L2 geth + contract deployment ---
+  # Anvil provides a deterministic EVM L1 for deploying ScrollChain contracts.
+  # Only needed for build-time contract deployment; Phase 3 uses Dogecoin via l1-interface.
+
+  section "Phase 1: Starting Anvil + L2 geth"
   start_anvil
   wait_for_rpc "http://localhost:${ANVIL_PORT}" "Anvil"
   set_anvil_signer
-else
-  section "Phase 1: Starting L2 geth (l1-interface mode)"
-fi
 
-init_l2geth
-
-if [ "${PHASE}" -ge 3 ]; then
-  start_l2geth "http://host.docker.internal:${L1_INTERFACE_PORT}"
-else
+  init_l2geth
   start_l2geth "http://host.docker.internal:${ANVIL_PORT}"
-fi
+  wait_for_rpc "http://localhost:${L2_HTTP_PORT}" "L2 geth"
 
-wait_for_rpc "http://localhost:${L2_HTTP_PORT}" "L2 geth"
+  if [ "${PHASE}" -ge 2 ]; then
+    if [ ! -s "${SCRIPT_DIR}/contracts-volume/config-contracts.toml" ] || \
+       grep -q 'L1_SCROLL_CHAIN_PROXY_ADDR = ""' "${SCRIPT_DIR}/contracts-volume/config-contracts.toml" 2>/dev/null; then
+      section "Phase 2: Deploying contracts"
+      deploy_contracts
+    else
+      log "Contracts already deployed (config-contracts.toml exists)"
+    fi
+  fi
 
-# Phase 2: Deploy contracts (L1 + L2 via forge; L1 is needed for deterministic address generation)
-if [ "${PHASE}" -ge 2 ]; then
-  # Only deploy if config-contracts.toml is missing or empty
+else
+  # --- Phase 3: Full DogeOS stack (Dogecoin L1, no Anvil) ---
+
+  # Require contracts to be deployed already
   if [ ! -s "${SCRIPT_DIR}/contracts-volume/config-contracts.toml" ] || \
      grep -q 'L1_SCROLL_CHAIN_PROXY_ADDR = ""' "${SCRIPT_DIR}/contracts-volume/config-contracts.toml" 2>/dev/null; then
-    section "Phase 2: Deploying contracts"
-    deploy_contracts
-  else
-    log "Contracts already deployed (config-contracts.toml exists)"
-  fi
-fi
-
-# Phase 3: DogeOS services
-if [ "${PHASE}" -ge 3 ]; then
-  section "Phase 3: Starting DogeOS services"
-
-  # Start Dogecoin (v1.14.9 with integer verbosity support)
-  # Check if existing compatible node is available on the port
-  if curl -sf --user doge:doge_pass --data-binary '{"jsonrpc":"1.0","method":"getblockcount","params":[],"id":1}' \
-    -H 'content-type: text/plain;' http://localhost:${DOGECOIN_RPC_PORT}/ >/dev/null 2>&1; then
-    warn "Dogecoin node already running on port ${DOGECOIN_RPC_PORT} - using existing node"
-    warn "Note: If RPC errors occur, replace with dogeos69/dogecoin:latest (v1.14.9+)"
-  else
-    start_dogecoin
-    wait_for_dogecoin
+    err "Contracts not deployed. Run './start.sh 2' first to deploy contracts."
+    exit 1
   fi
 
-  # Start PostgreSQL
+  section "Phase 3: Starting DogeOS stack"
+
+  # Dogecoin regtest (L1)
+  start_dogecoin
+  wait_for_dogecoin
+  start_dogecoin_mining
+
+  # PostgreSQL (rollup service databases)
   start_postgres
 
-  # Start l1-interface
+  # l1-interface (Dogecoin → EVM block translation)
   start_l1_interface
   sleep 2
 
-  # Start da-publisher
+  # L2 geth (points directly to l1-interface, no Anvil)
+  init_l2geth
+  start_l2geth "http://host.docker.internal:${L1_INTERFACE_PORT}"
+  wait_for_rpc "http://localhost:${L2_HTTP_PORT}" "L2 geth"
+
+  # Celestia devnet (DA layer)
+  start_celestia
+  sleep 5
+
+  # da-publisher (L2 blobs → Celestia)
   start_da_publisher
   sleep 1
+
+  # L2 tx generator (relaxed_period mode only mines blocks with pending txs)
+  start_l2_txgen
+  sleep 5
+
+  # Fund service accounts and set up whitelist on L2 system contracts
+  setup_l2_accounts
+
+  # Rollup pipeline services
+  create_service_databases
+  migrate_rollup_databases
+  start_gas_oracle
+
+  # Coordinator requires verifier assets — skip for now (proofless mode)
+  # start_coordinator
+
+  # Rollup relayer (chunk → batch → commit → finalize)
+  start_rollup_relayer || warn "rollup-relayer failed to start (check da-publisher)"
+
+  # Bridge history services (L1/L2 bridge event indexing + API)
+  start_redis
+  migrate_bridge_history_db
+  start_bridge_history_fetcher
+  start_bridge_history_api
+
+  # DogeOS withdrawal pipeline
+  start_withdrawal_processor || warn "withdrawal-processor not available (build from dogeos-core)"
+  start_fee_oracle || warn "fee-oracle not available (build from dogeos-core)"
 fi
 
 show_status

@@ -1,0 +1,59 @@
+{
+  "L1": {
+    "confirmation": 0,
+    "endpoint": "http://host.docker.internal:8548",
+    "startHeight": 0,
+    "blockTime": 12,
+    "fetchLimit": 16,
+    "MessageQueueAddr": "0xe0FF161D1a68DbED9404bD34bD7f93198Fc33f45",
+    "MessengerAddr": "0xFaF5Fb29de81735a7c48B3aE7Df5646B9f01714f",
+    "ScrollChainAddr": "0xB272Bb21B7B6e23Ec079A2DF90Adb52000768B4d",
+    "GatewayRouterAddr": "0x5dd23D9e459cCa46cde5117e5Eccc2E0c455E527",
+    "ETHGatewayAddr": "0x6c92a022D04158b542125e95d718c219864Bd7a4",
+    "WETHGatewayAddr": "0x4C8074Ea5C866b9bBD6d3f5f04e0e6d49A0DF7a6",
+    "StandardERC20GatewayAddr": "0x85adA91cc7D75A99700E7dc32d08C67Df0f0F417",
+    "CustomERC20GatewayAddr": "0x09a6515Ce5E0a50662F2E97b226DA09B6de28508",
+    "ERC721GatewayAddr": "0x8dE5f5775116002f3ff5dcB7BeEB287AffC592f6",
+    "ERC1155GatewayAddr": "0xC8d17af738F5686A4d29319b604d9D8f33B09C74",
+    "USDCGatewayAddr": "0x0000000000000000000000000000000000000000",
+    "LIDOGatewayAddr": "0x0000000000000000000000000000000000000000",
+    "DAIGatewayAddr": "0x0000000000000000000000000000000000000000",
+    "PufferGatewayAddr": "0x0000000000000000000000000000000000000000",
+    "GasTokenGatewayAddr": "0x0000000000000000000000000000000000000000",
+    "WrappedTokenGatewayAddr": "0x0000000000000000000000000000000000000000",
+    "BeaconNodeAPIEndpoint": "http://host.docker.internal:3500"
+  },
+  "L2": {
+    "confirmation": 0,
+    "endpoint": "http://dogeos-l2geth:8545",
+    "blockTime": 3,
+    "fetchLimit": 64,
+    "MessageQueueAddr": "0x5300000000000000000000000000000000000000",
+    "MessengerAddr": "0x98185147ac03eDe6C9D3809395D095D4d19b0860",
+    "GatewayRouterAddr": "0x0084896cd4826d4779490795105Ad7226Eb6F032",
+    "ETHGatewayAddr": "0x9a2A27A43BBA08B0616b7d6eE99DDC2eB499D1Ae",
+    "WETHGatewayAddr": "0xDB98eFEf195a566F2E862fBe4f165D05561CC981",
+    "StandardERC20GatewayAddr": "0x913DDC418e1b805B74e3F1cF58d6a10192629B57",
+    "CustomERC20GatewayAddr": "0x12944c48318a02e0ff9aA770b25b43687638a6f5",
+    "ERC721GatewayAddr": "0xA5b1027BAB486fE871eb336e2332390D6f9518bD",
+    "ERC1155GatewayAddr": "0xbca4f9D2bae1D2A4f1Dc51B039f3475467710b11",
+    "USDCGatewayAddr": "0x0000000000000000000000000000000000000000",
+    "LIDOGatewayAddr": "0x0000000000000000000000000000000000000000",
+    "DAIGatewayAddr": "0x0000000000000000000000000000000000000000",
+    "PufferGatewayAddr": "0x0000000000000000000000000000000000000000"
+  },
+  "db": {
+    "dsn": "postgres://rollup_node:localdev@dogeos-postgres:5432/bridge_history?sslmode=disable",
+    "driverName": "postgres",
+    "maxOpenNum": 200,
+    "maxIdleNum": 20
+  },
+  "redis": {
+    "address": "dogeos-redis:6379",
+    "username": "default",
+    "password": "",
+    "local": true,
+    "minIdleConns": 10,
+    "readTimeoutMs": 500
+  }
+}

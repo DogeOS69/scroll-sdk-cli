@@ -1,0 +1,50 @@
+# Withdrawal Processor Configuration - Local Stack
+
+network_str = "regtest"
+fee_rate_sat_per_kvb = 1000
+database_url = "/tmp/dogeos-withdrawal-processor.sqlite"
+dogecoin_rpc_url = "http://localhost:18445"
+dogecoin_rpc_user = "doge"
+dogecoin_rpc_pass = "doge_pass"
+tso_url = "http://127.0.0.1:3001"
+bridge_script_hex = "0000"
+bridge_address = "2N1dummy"
+max_withdrawal_outputs_per_tx = 85
+api_port = 3000
+debug_skip_broadcast = true
+debug_skip_tso_polling = true
+
+# Signer keys (local dev only - WIF format for regtest)
+fee_signer_key = "cNqM3Bz7u7Y5gFhQrVTxb2KjDKTPbWGpiBLVCZFhcGUSmgiw1tpS"
+sequencer_signer_key = "cNqM3Bz7u7Y5gFhQrVTxb2KjDKTPbWGpiBLVCZFhcGUSmgiw1tpS"
+
+# Genesis sequencer UTXO (placeholder - will be set up by deposit pipeline)
+genesis_sequencer_txid = "0000000000000000000000000000000000000000000000000000000000000000"
+genesis_sequencer_vout = 0
+
+[dogecoin_indexer]
+start_height = 1
+confirmations = 1
+poll_interval_ms = 10000
+
+[dogeos_indexer]
+rpc_url = "http://localhost:8546"
+start_block = 1
+confirmations = 1
+poll_interval_ms = 5000
+messenger_address = "0x98185147ac03eDe6C9D3809395D095D4d19b0860"
+message_queue_address = "0x5300000000000000000000000000000000000000"
+log_query_batch_size = 1000
+
+[celestia_indexer]
+da_rpc_url = "http://localhost:26658"
+tendermint_rpc_url = "http://localhost:26657"
+da_namespace = "0000000000000000000000000000000000000000000000000000ffff"
+start_block = 1
+confirmations = 1
+poll_interval_ms = 15000
+fetch_and_decode_blobs = false
+
+[utxo_manager]
+high_thresh_sats = 1000000000
+bridge_min_confirmations = 1
