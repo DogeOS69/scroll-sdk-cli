@@ -3,6 +3,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import {
+  type ContractAddresses,
   type GeneratedConfigs,
   generateAllConfigs,
   loadDeploymentSpec,
@@ -37,6 +38,10 @@ export default class GenerateFromSpec extends Command {
     'config-only': Flags.boolean({
       default: false,
       description: 'Only generate config.toml, doge-config.toml, setup_defaults.toml',
+    }),
+    'contract-addresses': Flags.string({
+      char: 'c',
+      description: 'Path to config-contracts.toml (for l1-interface contract addresses)',
     }),
     'dry-run': Flags.boolean({
       default: false,
@@ -162,7 +167,28 @@ export default class GenerateFromSpec extends Command {
 
     if (generateConfigs) {
       jsonCtx.info('Generating configuration files...')
-      configs = generateAllConfigs(spec)
+
+      // Load contract addresses if provided or auto-detect
+      let contractAddresses: ContractAddresses | undefined
+      const contractsPath = flags['contract-addresses']
+        ? path.resolve(flags['contract-addresses'])
+        : path.join(outputDir, 'config-contracts.toml')
+
+      if (fs.existsSync(contractsPath)) {
+        try {
+          const contractsContent = fs.readFileSync(contractsPath, 'utf8')
+          const tomlModule = await import('@iarna/toml')
+          const parsed = tomlModule.parse(contractsContent) as Record<string, string>
+          contractAddresses = parsed as ContractAddresses
+          jsonCtx.logKeyValue('Contract addresses', contractsPath)
+        } catch {
+          jsonCtx.addWarning(`Failed to parse contract addresses from ${contractsPath}`)
+        }
+      } else if (flags['contract-addresses']) {
+        jsonCtx.addWarning(`Contract addresses file not found: ${contractsPath}`)
+      }
+
+      configs = generateAllConfigs(spec, contractAddresses)
     }
 
     if (generateValues) {
@@ -180,6 +206,13 @@ export default class GenerateFromSpec extends Command {
         jsonCtx.logKeyValue('  config.toml', path.join(outputDir, 'config.toml'))
         jsonCtx.logKeyValue('  doge-config.toml', path.join(dataDir, 'doge-config.toml'))
         jsonCtx.logKeyValue('  setup_defaults.toml', path.join(dataDir, 'setup_defaults.toml'))
+        if (configs['l1-interface.toml']) {
+          jsonCtx.logKeyValue('  l1-interface.toml', path.join(dataDir, 'l1-interface.toml'))
+        }
+
+        if (configs['da-publisher.toml']) {
+          jsonCtx.logKeyValue('  da-publisher.toml', path.join(dataDir, 'da-publisher.toml'))
+        }
       }
 
       if (valuesFiles) {
@@ -189,8 +222,13 @@ export default class GenerateFromSpec extends Command {
         }
       }
 
+      const configFileList = configs
+        ? ['config.toml', 'doge-config.toml', 'setup_defaults.toml',
+            ...(configs['l1-interface.toml'] ? ['l1-interface.toml'] : []),
+            ...(configs['da-publisher.toml'] ? ['da-publisher.toml'] : [])]
+        : []
       jsonCtx.success({
-        configFiles: configs ? ['config.toml', 'doge-config.toml', 'setup_defaults.toml'] : [],
+        configFiles: configFileList,
         dryRun: true,
         outputDir,
         specPath,
@@ -217,6 +255,14 @@ export default class GenerateFromSpec extends Command {
 
         if (fs.existsSync(path.join(dataDir, 'setup_defaults.toml'))) {
           existingFiles.push('.data/setup_defaults.toml')
+        }
+
+        if (configs['l1-interface.toml'] && fs.existsSync(path.join(dataDir, 'l1-interface.toml'))) {
+          existingFiles.push('.data/l1-interface.toml')
+        }
+
+        if (configs['da-publisher.toml'] && fs.existsSync(path.join(dataDir, 'da-publisher.toml'))) {
+          existingFiles.push('.data/da-publisher.toml')
         }
       }
 
@@ -257,11 +303,11 @@ export default class GenerateFromSpec extends Command {
     const writtenFiles: string[] = []
 
     if (configs) {
-      writeGeneratedConfigs(configs, outputDir, dataDir)
-      writtenFiles.push('config.toml', '.data/doge-config.toml', '.data/setup_defaults.toml')
-      jsonCtx.logSuccess('Generated config.toml')
-      jsonCtx.logSuccess('Generated .data/doge-config.toml')
-      jsonCtx.logSuccess('Generated .data/setup_defaults.toml')
+      const configFiles = writeGeneratedConfigs(configs, outputDir, dataDir)
+      writtenFiles.push(...configFiles)
+      for (const f of configFiles) {
+        jsonCtx.logSuccess(`Generated ${f}`)
+      }
     }
 
     if (valuesFiles) {

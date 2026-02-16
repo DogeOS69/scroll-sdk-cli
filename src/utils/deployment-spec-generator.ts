@@ -650,20 +650,150 @@ function buildDbConnectionString(
 }
 
 /**
+ * Contract addresses typically loaded from config-contracts.toml.
+ * Used by l1-interface generator to embed contract addresses.
+ */
+export interface ContractAddresses {
+  [key: string]: string | undefined
+  L1_SCROLL_MESSENGER_PROXY_ADDR?: string
+  L2_DOGEOS_MESSENGER_PROXY_ADDR?: string
+  L2_MOAT_PROXY_ADDR?: string
+}
+
+/**
+ * Generate l1-interface.toml content from DeploymentSpec
+ */
+export function generateL1InterfaceToml(
+  spec: DeploymentSpec,
+  contractAddresses?: ContractAddresses,
+): string {
+  const l1 = spec.l1Interface
+  const sim = l1?.l1Simulation
+  const dogeIdx = l1?.dogecoinIndexer
+  const celIdx = l1?.celestiaIndexer
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
+  const config: Record<string, any> = {
+    api_bind_address: l1?.apiBindAddress ?? '127.0.0.1:8548',
+    beacon_api_listen_address: l1?.beaconApiListenAddress ?? '127.0.0.1:3500',
+    database_url: l1?.databaseUrl ?? '.data/l1_interface.sqlite',
+    deposit_gas_limit: l1?.depositGasLimit ?? 500_000,
+    genesis_json_path: l1?.genesisJsonPath ?? 'local-stack/genesis.json',
+    health_listen_address: l1?.healthListenAddress ?? '127.0.0.1:9091',
+    initial_system_signer: l1?.initialSystemSigner ?? '',
+    l1_base_fee_per_gas: sim?.baseFeePerGas ?? 100_000_000,
+    l1_extra_data: sim?.extraData ?? 'DogeOS',
+    l1_gas_limit: sim?.gasLimit ?? 30_000_000,
+    l1_genesis_block: sim?.genesisBlock ?? 1,
+    l1_miner_address: sim?.minerAddress ?? '0x0000000000000000000000000000000000000001',
+    network_str: spec.dogecoin.network,
+  }
+
+  // Contract addresses from config-contracts.toml
+  if (contractAddresses?.L1_SCROLL_MESSENGER_PROXY_ADDR) {
+    config.scroll_messenger_address = contractAddresses.L1_SCROLL_MESSENGER_PROXY_ADDR
+  }
+
+  if (contractAddresses?.L2_MOAT_PROXY_ADDR) {
+    config.l2_moat_contract_address = contractAddresses.L2_MOAT_PROXY_ADDR
+  }
+
+  if (contractAddresses?.L2_DOGEOS_MESSENGER_PROXY_ADDR) {
+    config.l2_messenger_address = contractAddresses.L2_DOGEOS_MESSENGER_PROXY_ADDR
+  }
+
+  // [dogecoin_rpc] — reuse spec.dogecoin.rpc
+  config.dogecoin_rpc = {
+    pass: spec.dogecoin.rpc.password,
+    url: spec.dogecoin.rpc.url,
+    user: spec.dogecoin.rpc.username,
+  }
+
+  // [dogecoin_indexer]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
+  const dogecoinIndexer: Record<string, any> = {
+    bridge_address: '',
+    confirmations: dogeIdx?.confirmations ?? 1,
+    index_deposits: dogeIdx?.indexDeposits ?? true,
+    index_utxos: dogeIdx?.indexUtxos ?? false,
+    index_withdrawals: dogeIdx?.indexWithdrawals ?? true,
+    poll_interval_ms: dogeIdx?.pollIntervalMs ?? 5000,
+    start_height: spec.dogecoin.indexerStartHeight,
+  }
+
+  // Try to get bridge address from contract addresses
+  if (contractAddresses?.DOGE_BRIDGE_ADDR) {
+    dogecoinIndexer.bridge_address = contractAddresses.DOGE_BRIDGE_ADDR
+  }
+
+  config.dogecoin_indexer = dogecoinIndexer
+
+  // [celestia_indexer] — reuse spec.celestia
+  config.celestia_indexer = {
+    confirmations: celIdx?.confirmations ?? 3,
+    da_rpc_url: spec.celestia.tendermintRpcUrl,
+    namespace_id: spec.celestia.namespace,
+    poll_interval_ms: celIdx?.pollIntervalMs ?? 30_000,
+    start_block: spec.celestia.indexerStartBlock,
+    store_raw_blob_data: celIdx?.storeRawBlobData ?? false,
+  }
+
+  return toml.stringify(config as toml.JsonMap)
+}
+
+/**
+ * Generate da-publisher.toml content from DeploymentSpec
+ */
+export function generateDaPublisherToml(spec: DeploymentSpec): string {
+  const dap = spec.daPublisher
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
+  const config: Record<string, any> = {
+    default: {
+      blob_version: dap?.blobVersion ?? 1,
+      celestia_namespace: spec.celestia.namespace,
+      celestia_rpc_url: spec.celestia.tendermintRpcUrl,
+      dogeos_l2_rpc_url: spec.frontend?.externalUrls?.l2Rpc ?? 'http://localhost:8546',
+      json_rpc_address: dap?.jsonRpcAddress ?? '0.0.0.0',
+      json_rpc_port: dap?.jsonRpcPort ?? 3001,
+      listen_address: dap?.listenAddress ?? '0.0.0.0',
+      listen_port: dap?.listenPort ?? 3000,
+    },
+  }
+
+  return toml.stringify(config as toml.JsonMap)
+}
+
+/**
  * Generate all configuration files from a DeploymentSpec
  */
 export interface GeneratedConfigs {
   'config.toml': string
+  'da-publisher.toml'?: string
   'doge-config.toml': string
+  'l1-interface.toml'?: string
   'setup_defaults.toml': string
 }
 
-export function generateAllConfigs(spec: DeploymentSpec): GeneratedConfigs {
-  return {
+export function generateAllConfigs(
+  spec: DeploymentSpec,
+  contractAddresses?: ContractAddresses,
+): GeneratedConfigs {
+  const configs: GeneratedConfigs = {
     'config.toml': generateConfigToml(spec),
     'doge-config.toml': generateDogeConfigToml(spec),
     'setup_defaults.toml': generateSetupDefaultsToml(spec),
   }
+
+  if (spec.l1Interface) {
+    configs['l1-interface.toml'] = generateL1InterfaceToml(spec, contractAddresses)
+  }
+
+  if (spec.daPublisher) {
+    configs['da-publisher.toml'] = generateDaPublisherToml(spec)
+  }
+
+  return configs
 }
 
 /**
@@ -673,7 +803,7 @@ export function writeGeneratedConfigs(
   configs: GeneratedConfigs,
   outputDir: string,
   dogeConfigPath?: string
-): void {
+): string[] {
   // Ensure output directory exists
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true })
@@ -683,13 +813,29 @@ export function writeGeneratedConfigs(
   fs.writeFileSync(path.join(outputDir, 'config.toml'), configs['config.toml'])
 
   // Write doge-config to .data directory or specified path
-  const dogeConfigDir = dogeConfigPath || path.join(outputDir, '.data')
-  if (!fs.existsSync(dogeConfigDir)) {
-    fs.mkdirSync(dogeConfigDir, { recursive: true })
+  const dataDir = dogeConfigPath || path.join(outputDir, '.data')
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true })
   }
 
-  fs.writeFileSync(path.join(dogeConfigDir, 'doge-config.toml'), configs['doge-config.toml'])
+  fs.writeFileSync(path.join(dataDir, 'doge-config.toml'), configs['doge-config.toml'])
 
   // Write setup_defaults.toml to .data directory
-  fs.writeFileSync(path.join(dogeConfigDir, 'setup_defaults.toml'), configs['setup_defaults.toml'])
+  fs.writeFileSync(path.join(dataDir, 'setup_defaults.toml'), configs['setup_defaults.toml'])
+
+  const written = ['config.toml', '.data/doge-config.toml', '.data/setup_defaults.toml']
+
+  // Write optional l1-interface.toml to .data directory
+  if (configs['l1-interface.toml']) {
+    fs.writeFileSync(path.join(dataDir, 'l1-interface.toml'), configs['l1-interface.toml'])
+    written.push('.data/l1-interface.toml')
+  }
+
+  // Write optional da-publisher.toml to .data directory
+  if (configs['da-publisher.toml']) {
+    fs.writeFileSync(path.join(dataDir, 'da-publisher.toml'), configs['da-publisher.toml'])
+    written.push('.data/da-publisher.toml')
+  }
+
+  return written
 }

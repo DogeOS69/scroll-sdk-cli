@@ -1,0 +1,205 @@
+# DogeOS Local Stack Deployment Specification
+# Generates l1-interface.toml and da-publisher.toml into .data/
+# Usage: scrollsdk setup generate-from-spec --spec src/config/deployment-spec.local.yaml -f
+
+version: "1.0"
+
+metadata:
+  name: dogeos-local
+  environment: devnet
+  description: Local development stack (regtest Dogecoin, Anvil L1, local Celestia)
+
+infrastructure:
+  provider: local
+  local:
+    useK8sSecrets: true
+  namespace: default
+  sequencerCount: 1
+  bootnodeCount: 1
+
+network:
+  l1ChainName: "Dogecoin Testnet"
+  l2ChainName: "DogeOS Local"
+  l1ChainId: 111111
+  l2ChainId: 221122
+  tokenSymbol: DOGE
+  l1RpcEndpoint: "http://127.0.0.1:8548"
+  l2RpcEndpoint: "http://127.0.0.1:8546"
+  daPublisherEndpoint: "http://127.0.0.1:3001"
+
+database:
+  admin:
+    host: localhost
+    port: 5432
+    username: rollup_node
+    password: localdev
+    database: scroll_rollup
+  databases:
+    rollupNode: scroll_rollup
+    bridgeHistory: bridge_history
+    gasOracle: gas_oracle
+    coordinator: coordinator
+    chainMonitor: chain_monitor
+    rollupExplorer: rollup_explorer
+    blockscout: blockscout
+    adminSystem: admin_system
+  credentials:
+    rollupNodePassword: localdev
+    bridgeHistoryPassword: localdev
+    gasOraclePassword: localdev
+    coordinatorPassword: localdev
+    chainMonitorPassword: localdev
+    rollupExplorerPassword: localdev
+    blockscoutPassword: localdev
+    adminSystemPassword: localdev
+
+accounts:
+  deployer:
+    address: "0xdED06046416d6bA20c1e2baD51B3A3e2f267d33F"
+    privateKey: "0x76273b5b6fc7eb6e931ee8f1e74a88d1fdd7ae225a4c8a664858b4cccb083827"
+  owner:
+    address: "0xdED06046416d6bA20c1e2baD51B3A3e2f267d33F"
+  l1CommitSender:
+    address: "0xB03F8276E8D085F67D4A04457B3EEd5A7E7a5Af5"
+    privateKey: "0x3f37a3239c8c909c23f6a2ec01c9c26485b9d2a2cd47b089876d2be5c38f328f"
+  l1FinalizeSender:
+    address: "0x66a6ef38c9E64BfFcD2a5e0AEd370DD6c4ee7502"
+    privateKey: "0x8a6d51138c05463e0c9b4501f5bb99d4774aa5ddeb46042832ac4e38aef02fdc"
+  l1GasOracleSender:
+    address: "0x79BF96a51a1B24fc1B88D1f3F2b5c3b243b2a3b0"
+    privateKey: "0x1805b8b581a4710cf29881fb3eb80ceaf1d5a395a5ace8012d01953a2c1795db"
+  l2GasOracleSender:
+    address: "0xd8BA1C4526A3a8A3B4e9e0937E8D1A78D94e5310"
+    privateKey: "0x96cba5a694704477d6186aebc79a7ff50ba7ed95caacfe62a085a2d78be57597"
+
+dogecoin:
+  network: testnet
+  rpc:
+    url: "http://127.0.0.1:44556"
+    username: doge
+    password: doge_pass
+  indexerStartHeight: 1
+  walletPath: ".data/doge-wallet.json"
+
+celestia:
+  tendermintRpcUrl: "http://localhost:26658"
+  namespace: "51ecb07563949bf4"
+  signerAddress: "celestia1local"
+  mnemonic: "local-dev-mnemonic-placeholder"
+  indexerStartBlock: 1
+
+bridge:
+  seedString: "dogeos-local-v1"
+  thresholds:
+    sequencer: 1
+    correctness: 1
+    attestation: 1
+    recovery: 1
+  keyCounts:
+    correctness: 1
+    attestation: 1
+    recovery: 1
+  timelockSeconds: 60
+  feeRateSatPerKvb: 1000000
+  targetAmounts:
+    sequencer: 100000000
+    feeWallet: 100000000
+    bridge: 1000000000
+  confirmationsRequired: 1
+  fees:
+    deposit: "100000000000000"
+    withdrawal: "100000000000000"
+    minWithdrawalAmount: "1000000000000000"
+  feeRecipient: "0xdED06046416d6bA20c1e2baD51B3A3e2f267d33F"
+
+signing:
+  method: local
+  local:
+    signers:
+      - index: 0
+        port: 9100
+
+frontend:
+  baseDomain: localhost
+  hosts:
+    frontend: localhost:3000
+    bridgeHistoryApi: localhost:3001
+    rollupExplorerApi: localhost:3002
+    coordinatorApi: localhost:3003
+    rpcGateway: localhost:8545
+    blockscout: localhost:4000
+    adminDashboard: localhost:3004
+    grafana: localhost:3005
+  externalUrls:
+    l1Rpc: "http://localhost:8548"
+    l2Rpc: "http://localhost:8546"
+    l1Explorer: "http://localhost:4001"
+    l2Explorer: "http://localhost:4000"
+    bridgeApi: "http://localhost:3001"
+    rollupScanApi: "http://localhost:3002"
+
+rollup:
+  maxTxInChunk: 100
+  maxBlockInChunk: 100
+  maxBatchInBundle: 20
+  maxL1MessageGasLimit: 10000000
+  coordinator:
+    chunkCollectionTimeSec: 30
+    batchCollectionTimeSec: 60
+    bundleCollectionTimeSec: 180
+    jwtSecretKey: "local-jwt-secret"
+  finalization:
+    batchDeadlineSec: 3600
+    relayMessageDeadlineSec: 3600
+
+contracts:
+  deploymentSalt: "dogeos-local-v1"
+  l1FeeVaultAddr: "0xdED06046416d6bA20c1e2baD51B3A3e2f267d33F"
+  gasOracle:
+    blobScalar: 1
+    scalar: 1
+    penaltyThreshold: 100
+    penaltyFactor: 10
+
+genesis:
+  maxEthSupply: "100000000000000000000000000000"
+  deployerInitialBalance: "1000000000000000000000000"
+  baseFeePerGas: 1000000000
+
+test:
+  mockFinalizeEnabled: true
+  mockFinalizeTimeoutSec: 30
+
+# --- New sections for l1-interface and da-publisher generation ---
+
+l1Interface:
+  databaseUrl: "local-stack/l1_interface.sqlite"
+  genesisJsonPath: "local-stack/genesis.json"
+  apiBindAddress: "127.0.0.1:8548"
+  beaconApiListenAddress: "127.0.0.1:3500"
+  healthListenAddress: "127.0.0.1:9091"
+  depositGasLimit: 500000
+  initialSystemSigner: "0xa7CdA54170FFD9F9C7A6DC72f8a5E6E15ca32fA3"
+  l1Simulation:
+    genesisBlock: 1
+    gasLimit: 30000000
+    baseFeePerGas: 100000000
+    minerAddress: "0x0000000000000000000000000000000000000001"
+    extraData: "DogeOS Local Stack"
+  dogecoinIndexer:
+    confirmations: 1
+    indexUtxos: false
+    indexWithdrawals: true
+    indexDeposits: true
+    pollIntervalMs: 5000
+  celestiaIndexer:
+    confirmations: 3
+    pollIntervalMs: 30000
+    storeRawBlobData: false
+
+daPublisher:
+  blobVersion: 1
+  listenAddress: "0.0.0.0"
+  listenPort: 3000
+  jsonRpcAddress: "0.0.0.0"
+  jsonRpcPort: 3001

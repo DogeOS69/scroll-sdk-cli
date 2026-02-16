@@ -22,6 +22,9 @@ export interface DeploymentSpec {
   /** Contract deployment configuration */
   contracts: ContractsConfig
 
+  /** Optional da-publisher service configuration */
+  daPublisher?: DaPublisherConfig
+
   /** Database configuration */
   database: DatabaseConfig
 
@@ -39,6 +42,9 @@ export interface DeploymentSpec {
 
   /** Infrastructure configuration */
   infrastructure: InfrastructureConfig
+
+  /** Optional l1-interface service configuration */
+  l1Interface?: L1InterfaceConfig
 
   /** Deployment metadata */
   metadata: DeploymentMetadata
@@ -528,6 +534,58 @@ export interface TestConfig {
 
   /** Skip certain validations */
   skipValidation?: boolean
+}
+
+export interface L1InterfaceConfig {
+  /** API bind address (default: "127.0.0.1:8548") */
+  apiBindAddress?: string
+  /** Beacon API listen address (default: "127.0.0.1:3500") */
+  beaconApiListenAddress?: string
+  /** Celestia indexer tuning */
+  celestiaIndexer?: {
+    confirmations?: number       // default: 3
+    pollIntervalMs?: number      // default: 30000
+    storeRawBlobData?: boolean   // default: false
+  }
+  /** Database URL — SQLite path (default: ".data/l1_interface.sqlite") */
+  databaseUrl?: string
+  /** Deposit gas limit (default: 500000) */
+  depositGasLimit?: number
+  /** Dogecoin indexer tuning */
+  dogecoinIndexer?: {
+    confirmations?: number       // default: 1
+    indexDeposits?: boolean       // default: true
+    indexUtxos?: boolean          // default: false
+    indexWithdrawals?: boolean    // default: true
+    pollIntervalMs?: number      // default: 5000
+  }
+  /** Genesis JSON path (default: "local-stack/genesis.json") */
+  genesisJsonPath?: string
+  /** Health check listen address (default: "127.0.0.1:9091") */
+  healthListenAddress?: string
+  /** Initial system signer address */
+  initialSystemSigner?: string
+  /** L1 simulation parameters */
+  l1Simulation?: {
+    baseFeePerGas?: number       // default: 100000000
+    extraData?: string           // default: "DogeOS"
+    gasLimit?: number            // default: 30000000
+    genesisBlock?: number        // default: 1
+    minerAddress?: string        // default: "0x...0001"
+  }
+}
+
+export interface DaPublisherConfig {
+  /** Blob version (default: 1) */
+  blobVersion?: number
+  /** JSON-RPC address (default: "0.0.0.0") */
+  jsonRpcAddress?: string
+  /** JSON-RPC port (default: 3001) */
+  jsonRpcPort?: number
+  /** Listen address (default: "0.0.0.0") */
+  listenAddress?: string
+  /** Listen port (default: 3000) */
+  listenPort?: number
 }
 
 /**

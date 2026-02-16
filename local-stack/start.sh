@@ -243,7 +243,11 @@ start_postgres() {
 
 start_l1_interface() {
   local binary="${DOGEOS_CORE_DIR}/target/debug/l1_interface"
-  local config="${SCRIPT_DIR}/l1-interface.toml"
+  local config="${PROJECT_DIR}/.data/l1-interface.toml"
+  if [ ! -f "${config}" ]; then
+    config="${SCRIPT_DIR}/l1-interface.toml"
+    warn "Using fallback config: ${config}"
+  fi
 
   if [ ! -f "${binary}" ]; then
     err "l1-interface binary not found at ${binary}"
@@ -251,7 +255,7 @@ start_l1_interface() {
     return 1
   fi
 
-  log "Starting l1-interface on port ${L1_INTERFACE_PORT}..."
+  log "Starting l1-interface on port ${L1_INTERFACE_PORT} (config: ${config})..."
   RUST_LOG=info "${binary}" -c "${config}" \
     > "${SCRIPT_DIR}/l1-interface.log" 2>&1 &
   echo $! > "${SCRIPT_DIR}/l1-interface.pid"
@@ -260,7 +264,11 @@ start_l1_interface() {
 
 start_da_publisher() {
   local binary="${DOGEOS_CORE_DIR}/target/debug/da_publisher"
-  local config="${SCRIPT_DIR}/da-publisher.toml"
+  local config="${PROJECT_DIR}/.data/da-publisher.toml"
+  if [ ! -f "${config}" ]; then
+    config="${SCRIPT_DIR}/da-publisher.toml"
+    warn "Using fallback config: ${config}"
+  fi
 
   if [ ! -f "${binary}" ]; then
     err "da-publisher binary not found at ${binary}"
@@ -268,7 +276,7 @@ start_da_publisher() {
     return 1
   fi
 
-  log "Starting da-publisher on port ${DA_PUBLISHER_PORT}..."
+  log "Starting da-publisher on port ${DA_PUBLISHER_PORT} (config: ${config})..."
   RUST_LOG=info "${binary}" -c "${config}" \
     > "${SCRIPT_DIR}/da-publisher.log" 2>&1 &
   echo $! > "${SCRIPT_DIR}/da-publisher.pid"
