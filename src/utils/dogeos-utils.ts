@@ -33,6 +33,30 @@ type ElectrsTx = {
   }
 }
 
+export interface DogeRpcConfig {
+  password: string
+  url: string
+  user: string
+}
+
+export async function dogeRpc(config: DogeRpcConfig, method: string, params: unknown[] = []): Promise<unknown> {
+  const auth = Buffer.from(`${config.user}:${config.password}`).toString('base64')
+  const response = await fetch(config.url, {
+    body: JSON.stringify({ id: 1, jsonrpc: '1.0', method, params }),
+    headers: {
+      Authorization: `Basic ${auth}`,
+      'Content-Type': 'application/json',
+    },
+    method: 'POST',
+  })
+  const body = await response.json() as { error?: { message?: string }; result: unknown }
+  if (body.error) {
+    throw new Error(`Dogecoin RPC error (${method}): ${body.error.message ?? JSON.stringify(body.error)}`)
+  }
+
+  return body.result
+}
+
 const ELECTRS_FALLBACK_BASE = 'https://doge-electrs-testnet-demo.qed.me'
 
 const normalizeBaseUrl = (url: string) => (url || '').replace(/\/+$/, '')
@@ -124,7 +148,29 @@ export const maskSensitive = (value: string) => {
  * @param blockbookUrl The base URL of the blockbook API.
  * @returns A promise that resolves to an array of UTXOs.
  */
-export async function getUtxos(address: string, blockbookUrl: string): Promise<Utxo[]> {
+export async function getUtxos(address: string, blockbookUrl: string, rpcConfig?: DogeRpcConfig): Promise<Utxo[]> {
+  if (rpcConfig) {
+    // Import address without rescan (safe for regtest)
+    try {
+      await dogeRpc(rpcConfig, 'importaddress', [address, '', false])
+    } catch {
+      // ignore - address may already be imported
+    }
+
+    const utxos = await dogeRpc(rpcConfig, 'listunspent', [0, 9_999_999, [address]]) as Array<{
+      amount: number
+      confirmations: number
+      txid: string
+      vout: number
+    }>
+    return utxos.map((u) => ({
+      confirmations: u.confirmations,
+      txid: u.txid,
+      value: Math.round(u.amount * 1e8).toString(),
+      vout: u.vout,
+    }))
+  }
+
   const bases = resolveBaseUrls(blockbookUrl)
   const errors: string[] = []
 
@@ -206,7 +252,18 @@ export async function getUtxos(address: string, blockbookUrl: string): Promise<U
  * @param blockbookUrl The base URL of the blockbook API.
  * @returns A promise that resolves to the transaction object containing the hex.
  */
-export async function getTx(txid: string, blockbookUrl: string): Promise<Tx> {
+export async function getTx(txid: string, blockbookUrl: string, rpcConfig?: DogeRpcConfig): Promise<Tx> {
+  if (rpcConfig) {
+    const verbose = await dogeRpc(rpcConfig, 'getrawtransaction', [txid, true]) as {
+      confirmations?: number
+      hex: string
+    }
+    return {
+      confirmations: verbose.confirmations ?? 0,
+      hex: verbose.hex,
+    }
+  }
+
   const bases = resolveBaseUrls(blockbookUrl)
   const errors: string[] = []
 
@@ -286,7 +343,12 @@ export async function getTx(txid: string, blockbookUrl: string): Promise<Tx> {
  * @param blockbookUrl The base URL of the blockbook API.
  * @returns A promise that resolves to the broadcast result, typically containing the txid.
  */
-export async function broadcastTx(txHex: string, blockbookUrl: string): Promise<{ result: string }> {
+export async function broadcastTx(txHex: string, blockbookUrl: string, rpcConfig?: DogeRpcConfig): Promise<{ result: string }> {
+  if (rpcConfig) {
+    const txid = await dogeRpc(rpcConfig, 'sendrawtransaction', [txHex]) as string
+    return { result: txid }
+  }
+
   const bases = resolveBaseUrls(blockbookUrl)
   const errors: string[] = []
 
@@ -355,6 +417,7 @@ export async function waitForConfirmations(
   blockbookUrl: string,
   log: (msg: string) => void,
   warn: (msg: string) => void,
+  rpcConfig?: DogeRpcConfig,
   minConfirmations = 1,
   pollIntervalMs = 3000,
   timeoutMs = 10 * 60_000,
@@ -364,7 +427,7 @@ export async function waitForConfirmations(
 
   while (Date.now() <= deadline) {
     try {
-      const tx = await getTx(txid, blockbookUrl)
+      const tx = await getTx(txid, blockbookUrl, rpcConfig)
       const confirmations = tx.confirmations ?? 0
       if (confirmations >= minConfirmations) {
         log(chalk.green(`✅ Transaction ${txid} confirmed.`))
@@ -374,6 +437,15 @@ export async function waitForConfirmations(
       log(chalk.gray(`   Current: ${confirmations}/${minConfirmations}...`))
     } catch (error) {
       warn(`   ${chalk.yellow('⚠️ Failed to fetch confirmation status:')} ${(error as Error).message}`)
+    }
+
+    // Auto-mine on regtest to advance confirmations
+    if (rpcConfig) {
+      try {
+        await dogeRpc(rpcConfig, 'generate', [1])
+      } catch {
+        // ignore mining errors
+      }
     }
 
     await new Promise<void>((resolve) => {

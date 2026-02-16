@@ -13,6 +13,19 @@ export const dogecoinTestnet: bitcoin.Network = {
   scriptHash: 0xC4, // P2SH addresses start with '2'
   wif: 0xF1, // WIF private key prefix
 }
+// Dogecoin regtest uses Bitcoin testnet address/WIF prefixes (0x6f / 0xEF)
+export const dogecoinRegtest: bitcoin.Network = {
+  bech32: '',
+  bip32: {
+    private: 0x04_35_83_94,
+    public: 0x04_35_87_CF,
+  },
+  messagePrefix: '\u0019Dogecoin Regtest Signed Message:\n',
+  pubKeyHash: 0x6F, // Bitcoin testnet — addresses start with 'm' or 'n'
+  scriptHash: 0xC4, // P2SH addresses start with '2'
+  wif: 0xEF, // Bitcoin testnet WIF prefix
+}
+
 export const dogecoinMainnet: bitcoin.Network = {
   bech32: '', // Dogecoin does not support bech32, but the library requires this property
   bip32: {
