@@ -11,13 +11,9 @@ DOGECOIN_IMAGE="dogeos69/dogecoin:latest"
 SIGNER_ADDR="0xa7CdA54170FFD9F9C7A6DC72f8a5E6E15ca32fA3"
 
 # Rollup pipeline images
+# Scroll SDK: only rollup-relayer retained (gas-oracle replaced by DogeOS fee-oracle)
 ROLLUP_RELAYER_IMAGE="scrolltech/rollup-relayer:v4.7.5"
-COORDINATOR_IMAGE="scrolltech/coordinator-api:v4.7.5"
-GAS_ORACLE_IMAGE="scrolltech/gas-oracle:v4.7.5"
 ROLLUP_DB_CLI_IMAGE="scrolltech/rollup-db-cli:v4.7.5"
-BRIDGE_HISTORY_FETCHER_IMAGE="scrolltech/bridgehistoryapi-fetcher:latest"
-BRIDGE_HISTORY_API_IMAGE="scrolltech/bridgehistoryapi-api:latest"
-BRIDGE_HISTORY_DB_CLI_IMAGE="scrolltech/bridgehistoryapi-db-cli:latest"
 DOCKER_NETWORK="dogeos-net"
 
 # Use OrbStack for amd64 emulation (Rosetta) - Docker Desktop QEMU crashes Go runtime
@@ -37,11 +33,8 @@ L1_INTERFACE_PORT=8548
 DA_PUBLISHER_PORT=3001
 DOGECOIN_RPC_PORT=18445
 POSTGRES_PORT=5432
-COORDINATOR_PORT=8390
-BRIDGE_HISTORY_API_PORT=8530
 WITHDRAWAL_PROCESSOR_PORT=3000
 FEE_ORACLE_HEALTH_PORT=8080
-BEACON_API_PORT=3500
 
 # Colors
 RED='\033[0;31m'
@@ -68,11 +61,6 @@ cleanup_existing() {
   ${DOCKER_CMD} rm -f dogeos-dogecoin 2>/dev/null || true
   ${DOCKER_CMD} rm -f dogeos-postgres 2>/dev/null || true
   ${DOCKER_CMD} rm -f dogeos-rollup-relayer 2>/dev/null || true
-  ${DOCKER_CMD} rm -f dogeos-coordinator 2>/dev/null || true
-  ${DOCKER_CMD} rm -f dogeos-gas-oracle 2>/dev/null || true
-  ${DOCKER_CMD} rm -f dogeos-bridge-history-fetcher 2>/dev/null || true
-  ${DOCKER_CMD} rm -f dogeos-bridge-history-api 2>/dev/null || true
-  ${DOCKER_CMD} rm -f dogeos-redis 2>/dev/null || true
   ${DOCKER_CMD} rm -f dogeos-celestia 2>/dev/null || true
 
   # Clean up persistent state for fresh start
@@ -378,62 +366,19 @@ start_celestia() {
 }
 
 create_service_databases() {
-  log "Creating additional databases for rollup services..."
-  for db in coordinator gas_oracle bridge_history; do
-    if ${DOCKER_CMD} exec dogeos-postgres psql -U rollup_node -d scroll_rollup -tAc \
-      "SELECT 1 FROM pg_database WHERE datname='${db}'" | grep -q 1; then
-      log "  Database '${db}' already exists"
-    else
-      ${DOCKER_CMD} exec dogeos-postgres createdb -U rollup_node "${db}"
-      log "  Created database '${db}'"
-    fi
-  done
+  log "Rollup-relayer uses the default scroll_rollup database (no extra DBs needed)"
 }
 
 migrate_rollup_databases() {
-  log "Running DB migrations for rollup services..."
-  for config_file in migrate-rollup-db.json migrate-gas-oracle-db.json migrate-coordinator-db.json; do
-    local name="${config_file%.json}"
-    log "  Migrating ${name}..."
-    ${DOCKER_CMD} run --rm --platform linux/amd64 \
-      --network "${DOCKER_NETWORK}" \
-      -v "${SCRIPT_DIR}/${config_file}:/app/conf/config.json" \
-      -v "${SCRIPT_DIR}/genesis.json:/app/conf/genesis.json" \
-      "${ROLLUP_DB_CLI_IMAGE}" \
-      --genesis /app/conf/genesis.json migrate --config /app/conf/config.json \
-      || warn "  ${name} migration failed (may need different schema)"
-  done
-  log "DB migrations complete"
-}
-
-start_gas_oracle() {
-  log "Starting gas-oracle..."
-  ${DOCKER_CMD} run -d --name dogeos-gas-oracle --platform linux/amd64 \
+  log "Running rollup DB migration..."
+  ${DOCKER_CMD} run --rm --platform linux/amd64 \
     --network "${DOCKER_NETWORK}" \
-    -v "${SCRIPT_DIR}/gas-oracle-config.json:/app/conf/rollup-config.json" \
-    -v "${SCRIPT_DIR}/genesis.json:/app/genesis/genesis.json" \
-    --entrypoint="" "${GAS_ORACLE_IMAGE}" \
-    gas_oracle --config /app/conf/rollup-config.json \
-      --genesis /app/genesis/genesis.json \
-      --verbosity 3
-
-  log "gas-oracle container: dogeos-gas-oracle"
-}
-
-start_coordinator() {
-  log "Starting coordinator-api on port ${COORDINATOR_PORT}..."
-  ${DOCKER_CMD} run -d --name dogeos-coordinator --platform linux/amd64 \
-    --network "${DOCKER_NETWORK}" \
-    -p "${COORDINATOR_PORT}:8390" \
-    -v "${SCRIPT_DIR}/coordinator-config.json:/coordinator/conf/coordinator-config.json" \
-    -v "${SCRIPT_DIR}/genesis.json:/app/genesis/genesis.json" \
-    --entrypoint="" "${COORDINATOR_IMAGE}" \
-    coordinator_api --config /coordinator/conf/coordinator-config.json \
-      --genesis /app/genesis/genesis.json \
-      --http --http.addr 0.0.0.0 --http.port 8390 \
-      --verbosity 3
-
-  log "coordinator container: dogeos-coordinator"
+    -v "${SCRIPT_DIR}/migrate-rollup-db.json:/app/conf/config.json" \
+    -v "${SCRIPT_DIR}/genesis.json:/app/conf/genesis.json" \
+    "${ROLLUP_DB_CLI_IMAGE}" \
+    --genesis /app/conf/genesis.json migrate --config /app/conf/config.json \
+    || warn "  rollup DB migration failed"
+  log "DB migration complete"
 }
 
 start_rollup_relayer() {
@@ -459,28 +404,24 @@ start_rollup_relayer() {
 }
 
 setup_l2_accounts() {
-  log "Setting up L2 accounts (funding senders, whitelisting)..."
+  log "Setting up L2 accounts (funding fee-oracle sender, whitelisting)..."
   local cast_bin="${HOME}/.foundry/bin/cast"
   local rpc="http://localhost:${L2_HTTP_PORT}"
   local deployer_key="0x76273b5b6fc7eb6e931ee8f1e74a88d1fdd7ae225a4c8a664858b4cccb083827"
 
-  # Gas oracle sender addresses (derived from private keys in config)
-  local l1_gas_oracle_addr="0x44Db8ad83dA0605Eb27FE26804CEAE1eEbbcAaB1"
+  # Fee oracle sender (derived from DOGEOS_FEE_ORACLE_PRIVATE_KEY)
   local fee_oracle_addr="0x29E2f3B76662134404cEA5A8f12E0d4B6e6fdE5a"
 
-  # Fund oracle senders on L2
-  "${cast_bin}" send --rpc-url "${rpc}" --private-key "${deployer_key}" \
-    --value 0.1ether "${l1_gas_oracle_addr}" > /dev/null 2>&1
-  log "  Funded gas oracle sender ${l1_gas_oracle_addr}"
+  # Fund fee-oracle sender on L2
   "${cast_bin}" send --rpc-url "${rpc}" --private-key "${deployer_key}" \
     --value 0.1ether "${fee_oracle_addr}" > /dev/null 2>&1
-  log "  Funded fee oracle sender ${fee_oracle_addr}"
+  log "  Funded fee-oracle sender ${fee_oracle_addr}"
 
-  # Whitelist both oracle senders in the Whitelist contract
+  # Whitelist fee-oracle sender in the Whitelist contract
   "${cast_bin}" send --rpc-url "${rpc}" --private-key "${deployer_key}" \
     0x5300000000000000000000000000000000000003 \
-    "updateWhitelistStatus(address[],bool)" "[${l1_gas_oracle_addr},${fee_oracle_addr}]" true > /dev/null 2>&1
-  log "  Whitelisted oracle senders"
+    "updateWhitelistStatus(address[],bool)" "[${fee_oracle_addr}]" true > /dev/null 2>&1
+  log "  Whitelisted fee-oracle sender"
 
   # Set whitelist address on L1GasPriceOracle
   "${cast_bin}" send --rpc-url "${rpc}" --private-key "${deployer_key}" \
@@ -504,58 +445,6 @@ start_l2_txgen() {
   ) &
   echo $! > "${SCRIPT_DIR}/l2-txgen.pid"
   log "L2 tx generator PID: $(cat "${SCRIPT_DIR}/l2-txgen.pid")"
-}
-
-start_redis() {
-  log "Starting Redis..."
-  ${DOCKER_CMD} run -d --name dogeos-redis \
-    --network "${DOCKER_NETWORK}" \
-    -p 6379:6379 \
-    redis:7-alpine
-
-  log "Redis container: dogeos-redis"
-}
-
-start_bridge_history_fetcher() {
-  log "Starting bridge-history-fetcher..."
-  ${DOCKER_CMD} run -d --name dogeos-bridge-history-fetcher --platform linux/amd64 \
-    --network "${DOCKER_NETWORK}" \
-    -v "${SCRIPT_DIR}/bridge-history-config.json:/app/conf/config.json" \
-    -v "${SCRIPT_DIR}/genesis.json:/app/conf/genesis.json" \
-    --entrypoint="" "${BRIDGE_HISTORY_FETCHER_IMAGE}" \
-    bridgehistoryapi-fetcher --config /app/conf/config.json \
-      --genesis /app/conf/genesis.json \
-      --verbosity 3
-
-  log "bridge-history-fetcher container: dogeos-bridge-history-fetcher"
-}
-
-start_bridge_history_api() {
-  log "Starting bridge-history-api on port ${BRIDGE_HISTORY_API_PORT}..."
-  ${DOCKER_CMD} run -d --name dogeos-bridge-history-api --platform linux/amd64 \
-    --network "${DOCKER_NETWORK}" \
-    -p "${BRIDGE_HISTORY_API_PORT}:8080" \
-    -v "${SCRIPT_DIR}/bridge-history-config.json:/app/conf/config.json" \
-    -v "${SCRIPT_DIR}/genesis.json:/app/conf/genesis.json" \
-    --entrypoint="" "${BRIDGE_HISTORY_API_IMAGE}" \
-    bridgehistoryapi-api --config /app/conf/config.json \
-      --genesis /app/conf/genesis.json \
-      --service.port 8080 \
-      --verbosity 3
-
-  log "bridge-history-api container: dogeos-bridge-history-api"
-}
-
-migrate_bridge_history_db() {
-  log "Running bridge-history DB migration..."
-  ${DOCKER_CMD} run --rm --platform linux/amd64 \
-    --network "${DOCKER_NETWORK}" \
-    -v "${SCRIPT_DIR}/bridge-history-config.json:/app/conf/config.json" \
-    -v "${SCRIPT_DIR}/genesis.json:/app/conf/genesis.json" \
-    --entrypoint="" "${BRIDGE_HISTORY_DB_CLI_IMAGE}" \
-    db_cli --config /app/conf/config.json migrate \
-    || warn "  bridge-history DB migration failed"
-  log "bridge-history DB migration complete"
 }
 
 start_withdrawal_processor() {
@@ -639,33 +528,18 @@ show_status() {
       log "  PostgreSQL:        localhost:${POSTGRES_PORT}"
     fi
 
-    # Rollup pipeline services
-    if ${DOCKER_CMD} ps -q -f name=dogeos-gas-oracle 2>/dev/null | grep -q .; then
-      log "  gas-oracle:        running"
-    fi
-
-    if ${DOCKER_CMD} ps -q -f name=dogeos-coordinator 2>/dev/null | grep -q .; then
-      log "  coordinator-api:   http://localhost:${COORDINATOR_PORT}"
-    fi
-
+    # Rollup pipeline
     if ${DOCKER_CMD} ps -q -f name=dogeos-rollup-relayer 2>/dev/null | grep -q .; then
       log "  rollup-relayer:    running"
     fi
 
-    if ${DOCKER_CMD} ps -q -f name=dogeos-bridge-history-fetcher 2>/dev/null | grep -q .; then
-      log "  bridge-fetcher:    running"
-    fi
-
-    if ${DOCKER_CMD} ps -q -f name=dogeos-bridge-history-api 2>/dev/null | grep -q .; then
-      log "  bridge-api:        http://localhost:${BRIDGE_HISTORY_API_PORT}"
+    # DogeOS native services
+    if [ -f "${SCRIPT_DIR}/fee-oracle.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/fee-oracle.pid")" 2>/dev/null; then
+      log "  fee-oracle:        running (health: http://localhost:${FEE_ORACLE_HEALTH_PORT})"
     fi
 
     if [ -f "${SCRIPT_DIR}/withdrawal-processor.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/withdrawal-processor.pid")" 2>/dev/null; then
       log "  withdrawal-proc:   http://localhost:${WITHDRAWAL_PROCESSOR_PORT}"
-    fi
-
-    if [ -f "${SCRIPT_DIR}/fee-oracle.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/fee-oracle.pid")" 2>/dev/null; then
-      log "  fee-oracle:        running (health: http://localhost:${FEE_ORACLE_HEALTH_PORT})"
     fi
 
     if [ -f "${SCRIPT_DIR}/l2-txgen.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/l2-txgen.pid")" 2>/dev/null; then
@@ -680,13 +554,9 @@ show_status() {
   [ "${PHASE}" -ge 3 ] && log "  Dogecoin:        docker logs dogeos-dogecoin"
   [ "${PHASE}" -ge 3 ] && log "  l1-interface:    ${SCRIPT_DIR}/l1-interface.log"
   [ "${PHASE}" -ge 3 ] && log "  da-publisher:    ${SCRIPT_DIR}/da-publisher.log"
-  [ "${PHASE}" -ge 3 ] && log "  gas-oracle:      docker logs dogeos-gas-oracle"
-  [ "${PHASE}" -ge 3 ] && log "  coordinator:     docker logs dogeos-coordinator"
   [ "${PHASE}" -ge 3 ] && log "  rollup-relayer:  docker logs dogeos-rollup-relayer"
-  [ "${PHASE}" -ge 3 ] && log "  bridge-fetcher:  docker logs dogeos-bridge-history-fetcher"
-  [ "${PHASE}" -ge 3 ] && log "  bridge-api:      docker logs dogeos-bridge-history-api"
-  [ "${PHASE}" -ge 3 ] && log "  withdrawal-proc: ${SCRIPT_DIR}/withdrawal-processor.log"
   [ "${PHASE}" -ge 3 ] && log "  fee-oracle:      ${SCRIPT_DIR}/fee-oracle.log"
+  [ "${PHASE}" -ge 3 ] && log "  withdrawal-proc: ${SCRIPT_DIR}/withdrawal-processor.log"
 }
 
 # --- Main ---
@@ -763,26 +633,16 @@ else
   # Fund service accounts and set up whitelist on L2 system contracts
   setup_l2_accounts
 
-  # Rollup pipeline services
+  # Rollup pipeline services (rollup-relayer only — gas-oracle replaced by DogeOS fee-oracle)
   create_service_databases
   migrate_rollup_databases
-  start_gas_oracle
-
-  # Coordinator requires verifier assets — skip for now (proofless mode)
-  # start_coordinator
 
   # Rollup relayer (chunk → batch → commit → finalize)
   start_rollup_relayer || warn "rollup-relayer failed to start (check da-publisher)"
 
-  # Bridge history services (L1/L2 bridge event indexing + API)
-  start_redis
-  migrate_bridge_history_db
-  start_bridge_history_fetcher
-  start_bridge_history_api
-
-  # DogeOS withdrawal pipeline
-  start_withdrawal_processor || warn "withdrawal-processor not available (build from dogeos-core)"
+  # DogeOS native services
   start_fee_oracle || warn "fee-oracle not available (build from dogeos-core)"
+  start_withdrawal_processor || warn "withdrawal-processor not available (build from dogeos-core)"
 fi
 
 show_status

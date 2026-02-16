@@ -1,6 +1,0 @@
-{
-  "dsn": "postgres://rollup_node:localdev@dogeos-postgres:5432/bridge_history?sslmode=disable",
-  "driverName": "postgres",
-  "maxOpenNum": 200,
-  "maxIdleNum": 20
-}
