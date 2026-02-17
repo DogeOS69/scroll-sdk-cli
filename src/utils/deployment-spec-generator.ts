@@ -765,14 +765,182 @@ export function generateDaPublisherToml(spec: DeploymentSpec): string {
 }
 
 /**
+ * Generate fee-oracle.toml content from DeploymentSpec
+ */
+export function generateFeeOracleToml(
+  spec: DeploymentSpec,
+  _contractAddresses?: ContractAddresses,
+): string {
+  const fo = spec.feeOracle
+
+  // Map dogecoin network: "testnet" in spec → "regtest" for local/devnet
+  const networkStr = spec.dogecoin.network === 'testnet' &&
+    (spec.metadata.environment === 'devnet' || spec.infrastructure.provider === 'local')
+    ? 'regtest'
+    : spec.dogecoin.network
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
+  const config: Record<string, any> = {
+    celestia: {
+      base_fee_per_blob: fo?.baseFeePerBlob ?? 100_000,
+      catchup_fee_per_blob: 200_000,
+      fallback_fee_per_blob: 150_000,
+      grpc_url: spec.celestia.tendermintRpcUrl,
+      namespace_id: spec.celestia.namespace,
+      poll_interval: fo?.celestiaPollInterval ?? 60,
+    },
+    database: {
+      connection_pool_size: 10,
+      sqlite_path: fo?.sqlitePath ?? './fee_oracle.db',
+    },
+    deployment: {
+      dry_run: fo?.dryRun ?? false,
+    },
+    dogecoin: {
+      base_fee_rate: 1_000_000,
+      empty_mempool_fee_rate: 1_500_000,
+      fee_lookback_blocks: fo?.feeLookbackBlocks ?? 10,
+      mempool_sample_size: 1000,
+      network_str: networkStr,
+      poll_interval: fo?.dogecoinPollInterval ?? 30,
+      rpc_password: spec.dogecoin.rpc.password,
+      rpc_url: spec.dogecoin.rpc.url,
+      rpc_user: spec.dogecoin.rpc.username,
+    },
+    l2: {
+      chain_id: spec.network.l2ChainId,
+      confirmations: fo?.confirmations ?? 1,
+      gas_oracle_contract: fo?.gasOracleContract ?? '0x5300000000000000000000000000000000000002',
+      max_gas_price: fo?.maxGasPrice ?? 1_000_000_000_000,
+      priority_fee: fo?.priorityFee ?? 1_000_000_000,
+      rpc_url: spec.network.l2RpcEndpoint,
+    },
+    monitoring: {
+      health_bind_address: '0.0.0.0',
+      health_check_port: fo?.healthCheckPort ?? 8080,
+      metrics_port: fo?.metricsPort ?? 9090,
+    },
+    price_oracle: {
+      cache_duration: fo?.priceOracle?.cacheDuration ?? 300,
+      coinbase_enabled: fo?.priceOracle?.coinbaseEnabled ?? true,
+      coingecko_enabled: fo?.priceOracle?.coingeckoEnabled ?? false,
+      gateio_enabled: fo?.priceOracle?.gateioEnabled ?? true,
+      kraken_enabled: fo?.priceOracle?.krakenEnabled ?? true,
+      max_retries: 3,
+      request_timeout: 30,
+      update_on_each_cycle: false,
+    },
+    thresholds: {
+      celestia_fee_change_percent: 10,
+      default_celestia_fee: 100_000_000,
+      default_dogecoin_fee: 1_000_000,
+      dogecoin_fee_change_percent: 5,
+      high_gas_mode_threshold: 1_000_000_000_000,
+      min_update_interval: 60,
+    },
+    wallet: {
+      private_key_env: 'DOGEOS_FEE_ORACLE_PRIVATE_KEY',
+    },
+  }
+
+  return toml.stringify(config as toml.JsonMap)
+}
+
+/**
+ * Generate withdrawal-processor.toml content from DeploymentSpec
+ */
+export function generateWithdrawalProcessorToml(
+  spec: DeploymentSpec,
+  contractAddresses?: ContractAddresses,
+): string {
+  const wp = spec.withdrawalProcessor
+
+  // Map dogecoin network: "testnet" in spec → "regtest" for local/devnet
+  const networkStr = spec.dogecoin.network === 'testnet' &&
+    (spec.metadata.environment === 'devnet' || spec.infrastructure.provider === 'local')
+    ? 'regtest'
+    : spec.dogecoin.network
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
+  const config: Record<string, any> = {
+    api_port: wp?.apiPort ?? 3000,
+    bridge_address: '2N1dummy',
+    bridge_script_hex: '0000',
+    database_url: wp?.databaseUrl ?? '/tmp/dogeos-withdrawal-processor.sqlite',
+    debug_skip_broadcast: wp?.debugSkipBroadcast ?? false,
+    debug_skip_tso_polling: wp?.debugSkipTsoPolling ?? false,
+    dogecoin_rpc_pass: spec.dogecoin.rpc.password,
+    dogecoin_rpc_url: spec.dogecoin.rpc.url,
+    dogecoin_rpc_user: spec.dogecoin.rpc.username,
+    fee_rate_sat_per_kvb: spec.bridge.feeRateSatPerKvb,
+    genesis_sequencer_txid: '0000000000000000000000000000000000000000000000000000000000000000',
+    genesis_sequencer_vout: 0,
+    max_withdrawal_outputs_per_tx: wp?.maxWithdrawalOutputsPerTx ?? 85,
+    network_str: networkStr,
+    tso_url: wp?.tsoUrl ?? spec.signing.tsoServiceUrl ?? 'http://127.0.0.1:3001',
+  }
+
+  // Signer keys (only for local/dev)
+  if (wp?.feeSignerKey) {
+    config.fee_signer_key = wp.feeSignerKey
+  }
+
+  if (wp?.sequencerSignerKey) {
+    config.sequencer_signer_key = wp.sequencerSignerKey
+  }
+
+  // [dogecoin_indexer]
+  config.dogecoin_indexer = {
+    confirmations: wp?.dogecoinIndexer?.confirmations ?? 1,
+    poll_interval_ms: wp?.dogecoinIndexer?.pollIntervalMs ?? 10_000,
+    start_height: spec.dogecoin.indexerStartHeight,
+  }
+
+  // [dogeos_indexer]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
+  const dogeosIndexer: Record<string, any> = {
+    confirmations: wp?.dogeosIndexer?.confirmations ?? 1,
+    log_query_batch_size: wp?.dogeosIndexer?.logQueryBatchSize ?? 1000,
+    message_queue_address: '0x5300000000000000000000000000000000000000',
+    messenger_address: contractAddresses?.L2_DOGEOS_MESSENGER_PROXY_ADDR ?? '0x0000000000000000000000000000000000000000',
+    poll_interval_ms: wp?.dogeosIndexer?.pollIntervalMs ?? 5000,
+    rpc_url: spec.network.l2RpcEndpoint,
+    start_block: 1,
+  }
+
+  config.dogeos_indexer = dogeosIndexer
+
+  // [celestia_indexer]
+  config.celestia_indexer = {
+    confirmations: wp?.celestiaIndexer?.confirmations ?? 1,
+    da_namespace: spec.celestia.namespace,
+    da_rpc_url: spec.celestia.tendermintRpcUrl,
+    fetch_and_decode_blobs: wp?.celestiaIndexer?.fetchAndDecodeBlobs ?? false,
+    poll_interval_ms: wp?.celestiaIndexer?.pollIntervalMs ?? 15_000,
+    start_block: spec.celestia.indexerStartBlock,
+    tendermint_rpc_url: spec.celestia.tendermintRpcUrl,
+  }
+
+  // [utxo_manager]
+  config.utxo_manager = {
+    bridge_min_confirmations: wp?.utxoManager?.bridgeMinConfirmations ?? 1,
+    high_thresh_sats: wp?.utxoManager?.highThreshSats ?? 1_000_000_000,
+  }
+
+  return toml.stringify(config as toml.JsonMap)
+}
+
+/**
  * Generate all configuration files from a DeploymentSpec
  */
 export interface GeneratedConfigs {
   'config.toml': string
   'da-publisher.toml'?: string
   'doge-config.toml': string
+  'fee-oracle.toml'?: string
   'l1-interface.toml'?: string
   'setup_defaults.toml': string
+  'withdrawal-processor.toml'?: string
 }
 
 export function generateAllConfigs(
@@ -791,6 +959,14 @@ export function generateAllConfigs(
 
   if (spec.daPublisher) {
     configs['da-publisher.toml'] = generateDaPublisherToml(spec)
+  }
+
+  if (spec.feeOracle) {
+    configs['fee-oracle.toml'] = generateFeeOracleToml(spec, contractAddresses)
+  }
+
+  if (spec.withdrawalProcessor) {
+    configs['withdrawal-processor.toml'] = generateWithdrawalProcessorToml(spec, contractAddresses)
   }
 
   return configs
@@ -835,6 +1011,18 @@ export function writeGeneratedConfigs(
   if (configs['da-publisher.toml']) {
     fs.writeFileSync(path.join(dataDir, 'da-publisher.toml'), configs['da-publisher.toml'])
     written.push('.data/da-publisher.toml')
+  }
+
+  // Write optional fee-oracle.toml to .data directory
+  if (configs['fee-oracle.toml']) {
+    fs.writeFileSync(path.join(dataDir, 'fee-oracle.toml'), configs['fee-oracle.toml'])
+    written.push('.data/fee-oracle.toml')
+  }
+
+  // Write optional withdrawal-processor.toml to .data directory
+  if (configs['withdrawal-processor.toml']) {
+    fs.writeFileSync(path.join(dataDir, 'withdrawal-processor.toml'), configs['withdrawal-processor.toml'])
+    written.push('.data/withdrawal-processor.toml')
   }
 
   return written

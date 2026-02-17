@@ -40,6 +40,12 @@ testing_improvements.md
 /local-stack/*.sqlite*
 /local-stack/password
 
+# Generated values files
+/values/
+
+# Generated SQLite databases
+fee_oracle.db*
+
 # Build artifacts
 /cache/
 /foundry-out/

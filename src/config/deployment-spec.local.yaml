@@ -203,3 +203,34 @@ daPublisher:
   listenPort: 3000
   jsonRpcAddress: "0.0.0.0"
   jsonRpcPort: 3001
+
+feeOracle:
+  dogecoinPollInterval: 30
+  celestiaPollInterval: 60
+  baseFeePerBlob: 100000
+  sqlitePath: "./fee_oracle.db"
+  priceOracle:
+    krakenEnabled: true
+    coinbaseEnabled: true
+    gateioEnabled: true
+    coingeckoEnabled: false
+  healthCheckPort: 8080
+  dryRun: false
+
+withdrawalProcessor:
+  databaseUrl: "/tmp/dogeos-withdrawal-processor.sqlite"
+  tsoUrl: "http://127.0.0.1:3001"
+  apiPort: 3000
+  debugSkipBroadcast: true
+  debugSkipTsoPolling: true
+  feeSignerKey: "cNqM3Bz7u7Y5gFhQrVTxb2KjDKTPbWGpiBLVCZFhcGUSmgiw1tpS"
+  sequencerSignerKey: "cNqM3Bz7u7Y5gFhQrVTxb2KjDKTPbWGpiBLVCZFhcGUSmgiw1tpS"
+  dogecoinIndexer:
+    pollIntervalMs: 10000
+  dogeosIndexer:
+    pollIntervalMs: 5000
+  celestiaIndexer:
+    pollIntervalMs: 15000
+    fetchAndDecodeBlobs: false
+  utxoManager:
+    highThreshSats: 1000000000

@@ -449,7 +449,11 @@ start_l2_txgen() {
 
 start_withdrawal_processor() {
   local binary="${DOGEOS_CORE_DIR}/target/debug/withdrawal_processor"
-  local config="${SCRIPT_DIR}/withdrawal-processor.toml"
+  local config="${PROJECT_DIR}/.data/withdrawal-processor.toml"
+  if [ ! -f "${config}" ]; then
+    config="${SCRIPT_DIR}/withdrawal-processor.toml"
+    warn "Using fallback config: ${config}"
+  fi
 
   if [ ! -f "${binary}" ]; then
     err "withdrawal-processor binary not found at ${binary}"
@@ -466,7 +470,11 @@ start_withdrawal_processor() {
 
 start_fee_oracle() {
   local binary="${DOGEOS_CORE_DIR}/target/debug/fee_oracle"
-  local config="${SCRIPT_DIR}/fee-oracle.toml"
+  local config="${PROJECT_DIR}/.data/fee-oracle.toml"
+  if [ ! -f "${config}" ]; then
+    config="${SCRIPT_DIR}/fee-oracle.toml"
+    warn "Using fallback config: ${config}"
+  fi
 
   if [ ! -f "${binary}" ]; then
     err "fee-oracle binary not found at ${binary}"
