@@ -75,7 +75,7 @@ accounts:
 dogecoin:
   network: testnet
   rpc:
-    url: "http://127.0.0.1:44556"
+    url: "http://127.0.0.1:18445"
     username: doge
     password: doge_pass
   indexerStartHeight: 1
@@ -220,7 +220,7 @@ feeOracle:
 withdrawalProcessor:
   databaseUrl: "/tmp/dogeos-withdrawal-processor.sqlite"
   tsoUrl: "http://127.0.0.1:3001"
-  apiPort: 3000
+  apiPort: 3002
   debugSkipBroadcast: true
   debugSkipTsoPolling: true
   feeSignerKey: "cNqM3Bz7u7Y5gFhQrVTxb2KjDKTPbWGpiBLVCZFhcGUSmgiw1tpS"

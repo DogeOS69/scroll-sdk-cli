@@ -661,11 +661,26 @@ export interface ContractAddresses {
 }
 
 /**
+ * Values from bridge-init output (output-withdrawal-processor.toml).
+ * These are runtime artifacts that can't be computed at spec time.
+ */
+export interface BridgeInitValues {
+  bridge_address?: string
+  bridge_script_hex?: string
+  fee_signer_key?: string
+  genesis_sequencer_txid?: string
+  genesis_sequencer_vout?: number
+  network_str?: string
+  sequencer_signer_key?: string
+}
+
+/**
  * Generate l1-interface.toml content from DeploymentSpec
  */
 export function generateL1InterfaceToml(
   spec: DeploymentSpec,
   contractAddresses?: ContractAddresses,
+  bridgeInitValues?: BridgeInitValues,
 ): string {
   const l1 = spec.l1Interface
   const sim = l1?.l1Simulation
@@ -721,10 +736,10 @@ export function generateL1InterfaceToml(
     start_height: spec.dogecoin.indexerStartHeight,
   }
 
-  // Try to get bridge address from contract addresses
-  if (contractAddresses?.DOGE_BRIDGE_ADDR) {
-    dogecoinIndexer.bridge_address = contractAddresses.DOGE_BRIDGE_ADDR
-  }
+  // Try to get bridge address: prefer bridge-init output, then contract addresses
+  dogecoinIndexer.bridge_address = bridgeInitValues?.bridge_address
+    ?? contractAddresses?.DOGE_BRIDGE_ADDR
+    ?? ''
 
   config.dogecoin_indexer = dogecoinIndexer
 
@@ -852,6 +867,7 @@ export function generateFeeOracleToml(
 export function generateWithdrawalProcessorToml(
   spec: DeploymentSpec,
   contractAddresses?: ContractAddresses,
+  bridgeInitValues?: BridgeInitValues,
 ): string {
   const wp = spec.withdrawalProcessor
 
@@ -864,8 +880,8 @@ export function generateWithdrawalProcessorToml(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
   const config: Record<string, any> = {
     api_port: wp?.apiPort ?? 3000,
-    bridge_address: '2N1dummy',
-    bridge_script_hex: '0000',
+    bridge_address: bridgeInitValues?.bridge_address ?? '2N1dummy',
+    bridge_script_hex: bridgeInitValues?.bridge_script_hex ?? '0000',
     database_url: wp?.databaseUrl ?? '/tmp/dogeos-withdrawal-processor.sqlite',
     debug_skip_broadcast: wp?.debugSkipBroadcast ?? false,
     debug_skip_tso_polling: wp?.debugSkipTsoPolling ?? false,
@@ -873,20 +889,20 @@ export function generateWithdrawalProcessorToml(
     dogecoin_rpc_url: spec.dogecoin.rpc.url,
     dogecoin_rpc_user: spec.dogecoin.rpc.username,
     fee_rate_sat_per_kvb: spec.bridge.feeRateSatPerKvb,
-    genesis_sequencer_txid: '0000000000000000000000000000000000000000000000000000000000000000',
-    genesis_sequencer_vout: 0,
+    genesis_sequencer_txid: bridgeInitValues?.genesis_sequencer_txid ?? '0000000000000000000000000000000000000000000000000000000000000000',
+    genesis_sequencer_vout: bridgeInitValues?.genesis_sequencer_vout ?? 0,
     max_withdrawal_outputs_per_tx: wp?.maxWithdrawalOutputsPerTx ?? 85,
-    network_str: networkStr,
+    network_str: bridgeInitValues?.network_str ?? networkStr,
     tso_url: wp?.tsoUrl ?? spec.signing.tsoServiceUrl ?? 'http://127.0.0.1:3001',
   }
 
-  // Signer keys (only for local/dev)
-  if (wp?.feeSignerKey) {
-    config.fee_signer_key = wp.feeSignerKey
+  // Signer keys: prefer bridge-init values, then fall back to spec
+  if (bridgeInitValues?.fee_signer_key ?? wp?.feeSignerKey) {
+    config.fee_signer_key = bridgeInitValues?.fee_signer_key ?? wp?.feeSignerKey
   }
 
-  if (wp?.sequencerSignerKey) {
-    config.sequencer_signer_key = wp.sequencerSignerKey
+  if (bridgeInitValues?.sequencer_signer_key ?? wp?.sequencerSignerKey) {
+    config.sequencer_signer_key = bridgeInitValues?.sequencer_signer_key ?? wp?.sequencerSignerKey
   }
 
   // [dogecoin_indexer]
@@ -946,6 +962,7 @@ export interface GeneratedConfigs {
 export function generateAllConfigs(
   spec: DeploymentSpec,
   contractAddresses?: ContractAddresses,
+  bridgeInitValues?: BridgeInitValues,
 ): GeneratedConfigs {
   const configs: GeneratedConfigs = {
     'config.toml': generateConfigToml(spec),
@@ -954,7 +971,7 @@ export function generateAllConfigs(
   }
 
   if (spec.l1Interface) {
-    configs['l1-interface.toml'] = generateL1InterfaceToml(spec, contractAddresses)
+    configs['l1-interface.toml'] = generateL1InterfaceToml(spec, contractAddresses, bridgeInitValues)
   }
 
   if (spec.daPublisher) {
@@ -966,7 +983,7 @@ export function generateAllConfigs(
   }
 
   if (spec.withdrawalProcessor) {
-    configs['withdrawal-processor.toml'] = generateWithdrawalProcessorToml(spec, contractAddresses)
+    configs['withdrawal-processor.toml'] = generateWithdrawalProcessorToml(spec, contractAddresses, bridgeInitValues)
   }
 
   return configs

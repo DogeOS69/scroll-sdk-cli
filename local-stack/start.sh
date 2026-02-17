@@ -33,7 +33,7 @@ L1_INTERFACE_PORT=8548
 DA_PUBLISHER_PORT=3001
 DOGECOIN_RPC_PORT=18445
 POSTGRES_PORT=5432
-WITHDRAWAL_PROCESSOR_PORT=3000
+WITHDRAWAL_PROCESSOR_PORT=3002
 FEE_ORACLE_HEALTH_PORT=8080
 
 # Colors
@@ -366,10 +366,23 @@ start_celestia() {
 }
 
 create_service_databases() {
-  log "Rollup-relayer uses the default scroll_rollup database (no extra DBs needed)"
+  log "Creating service databases..."
+  # scroll_rollup already exists (Postgres default DB). Create others that the
+  # deployment spec defines, so no service crashes on missing DB.
+  for db in bridge_history gas_oracle coordinator chain_monitor rollup_explorer blockscout admin_system; do
+    ${DOCKER_CMD} exec dogeos-postgres psql -U rollup_node -d scroll_rollup \
+      -tc "SELECT 1 FROM pg_database WHERE datname = '${db}'" | grep -q 1 \
+      || ${DOCKER_CMD} exec dogeos-postgres psql -U rollup_node -d scroll_rollup \
+           -c "CREATE DATABASE ${db} OWNER rollup_node" 2>/dev/null \
+      || true
+  done
+  log "Service databases ready"
 }
 
 migrate_rollup_databases() {
+  # NOTE: rollup-config.json and migrate-rollup-db.json are static files with
+  # hardcoded endpoints and credentials. They must be kept in sync with
+  # deployment-spec.local.yaml if accounts or ports change.
   log "Running rollup DB migration..."
   ${DOCKER_CMD} run --rm --platform linux/amd64 \
     --network "${DOCKER_NETWORK}" \
@@ -447,35 +460,31 @@ start_l2_txgen() {
   log "L2 tx generator PID: $(cat "${SCRIPT_DIR}/l2-txgen.pid")"
 }
 
-patch_withdrawal_processor_bridge_values() {
-  local config="$1"
+# Regenerate configs with bridge-init values if they still have placeholders.
+# The generator reads .data/output-withdrawal-processor.toml directly,
+# so we just re-run generate-from-spec when bridge-init output exists.
+regenerate_withdrawal_processor_config() {
   local bridge_output="${PROJECT_DIR}/.data/output-withdrawal-processor.toml"
+  local wp_config="${PROJECT_DIR}/.data/withdrawal-processor.toml"
 
   if [ ! -f "${bridge_output}" ]; then
-    warn "No bridge-init output found at ${bridge_output} — bridge_address/bridge_script_hex will be placeholders"
-    warn "Run 'scrollsdk doge bridge-init' to generate real bridge values"
+    warn "No bridge-init output found — withdrawal-processor will have placeholder bridge values"
+    warn "Run 'scrollsdk doge bridge-init' and regenerate configs"
     return 0
   fi
 
-  # Extract bridge_address and bridge_script_hex from bridge-init output
-  local real_bridge_address real_bridge_script_hex
-  real_bridge_address=$(grep -m1 '^bridge_address' "${bridge_output}" | sed 's/^bridge_address *= *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
-  real_bridge_script_hex=$(grep -m1 '^bridge_script_hex' "${bridge_output}" | sed 's/^bridge_script_hex *= *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
-
-  if [ -z "${real_bridge_address}" ] || [ -z "${real_bridge_script_hex}" ]; then
-    warn "Could not extract bridge_address/bridge_script_hex from ${bridge_output}"
-    return 0
+  if [ ! -f "${wp_config}" ]; then
+    return 0  # No config to check
   fi
 
-  log "Patching withdrawal-processor config with bridge values from bridge-init output"
-  log "  bridge_address = ${real_bridge_address}"
-  log "  bridge_script_hex = ${real_bridge_script_hex:0:20}..."
-
-  # Replace placeholder values in the generated config (sed -i '' for macOS compat)
-  sed -i '' \
-    -e "s|^bridge_address = .*|bridge_address = \"${real_bridge_address}\"|" \
-    -e "s|^bridge_script_hex = .*|bridge_script_hex = \"${real_bridge_script_hex}\"|" \
-    "${config}"
+  # Check if config still has placeholder values
+  if grep -q '2N1dummy' "${wp_config}" 2>/dev/null; then
+    log "Regenerating configs to pick up bridge-init values..."
+    (cd "${PROJECT_DIR}" && ./bin/run.js setup generate-from-spec \
+      --spec src/config/deployment-spec.local.yaml -f --config-only) || {
+      warn "Config regeneration failed — falling back to existing config"
+    }
+  fi
 }
 
 start_withdrawal_processor() {
@@ -485,9 +494,6 @@ start_withdrawal_processor() {
     config="${SCRIPT_DIR}/withdrawal-processor.toml"
     warn "Using fallback config: ${config}"
   fi
-
-  # Patch in real bridge_address/bridge_script_hex from bridge-init output
-  patch_withdrawal_processor_bridge_values "${config}"
 
   if [ ! -f "${binary}" ]; then
     err "withdrawal-processor binary not found at ${binary}"
@@ -517,7 +523,8 @@ start_fee_oracle() {
   fi
 
   log "Starting fee-oracle (config: ${config})..."
-  # The fee-oracle needs the L2 gas oracle sender private key
+  # The fee-oracle needs the L2 gas oracle sender private key.
+  # This must match accounts.l2GasOracleSender.privateKey in deployment-spec.local.yaml.
   RUST_LOG=info DOGEOS_FEE_ORACLE_PRIVATE_KEY="0x96cba5a694704477d6186aebc79a7ff50ba7ed95caacfe62a085a2d78be57597" \
     "${binary}" -c "${config}" \
     > "${SCRIPT_DIR}/fee-oracle.log" 2>&1 &
@@ -680,10 +687,15 @@ else
   migrate_rollup_databases
 
   # Rollup relayer (chunk → batch → commit → finalize)
+  # NOTE: rollup-config.json has enable_test_env_bypass_features=true and
+  # finalize_*_without_proof_timeout_sec=300. These are required because
+  # DogeOS doesn't use ZK proofs — l1_interface handles finalization natively.
+  # Without bypass, rollup-relayer would wait forever for proofs.
   start_rollup_relayer || warn "rollup-relayer failed to start (check da-publisher)"
 
   # DogeOS native services
   start_fee_oracle || warn "fee-oracle not available (build from dogeos-core)"
+  regenerate_withdrawal_processor_config
   start_withdrawal_processor || warn "withdrawal-processor not available (build from dogeos-core)"
 fi
 
