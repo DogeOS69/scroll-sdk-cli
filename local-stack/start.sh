@@ -447,6 +447,37 @@ start_l2_txgen() {
   log "L2 tx generator PID: $(cat "${SCRIPT_DIR}/l2-txgen.pid")"
 }
 
+patch_withdrawal_processor_bridge_values() {
+  local config="$1"
+  local bridge_output="${PROJECT_DIR}/.data/output-withdrawal-processor.toml"
+
+  if [ ! -f "${bridge_output}" ]; then
+    warn "No bridge-init output found at ${bridge_output} — bridge_address/bridge_script_hex will be placeholders"
+    warn "Run 'scrollsdk doge bridge-init' to generate real bridge values"
+    return 0
+  fi
+
+  # Extract bridge_address and bridge_script_hex from bridge-init output
+  local real_bridge_address real_bridge_script_hex
+  real_bridge_address=$(grep -m1 '^bridge_address' "${bridge_output}" | sed 's/^bridge_address *= *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
+  real_bridge_script_hex=$(grep -m1 '^bridge_script_hex' "${bridge_output}" | sed 's/^bridge_script_hex *= *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
+
+  if [ -z "${real_bridge_address}" ] || [ -z "${real_bridge_script_hex}" ]; then
+    warn "Could not extract bridge_address/bridge_script_hex from ${bridge_output}"
+    return 0
+  fi
+
+  log "Patching withdrawal-processor config with bridge values from bridge-init output"
+  log "  bridge_address = ${real_bridge_address}"
+  log "  bridge_script_hex = ${real_bridge_script_hex:0:20}..."
+
+  # Replace placeholder values in the generated config (sed -i '' for macOS compat)
+  sed -i '' \
+    -e "s|^bridge_address = .*|bridge_address = \"${real_bridge_address}\"|" \
+    -e "s|^bridge_script_hex = .*|bridge_script_hex = \"${real_bridge_script_hex}\"|" \
+    "${config}"
+}
+
 start_withdrawal_processor() {
   local binary="${DOGEOS_CORE_DIR}/target/debug/withdrawal_processor"
   local config="${PROJECT_DIR}/.data/withdrawal-processor.toml"
@@ -454,6 +485,9 @@ start_withdrawal_processor() {
     config="${SCRIPT_DIR}/withdrawal-processor.toml"
     warn "Using fallback config: ${config}"
   fi
+
+  # Patch in real bridge_address/bridge_script_hex from bridge-init output
+  patch_withdrawal_processor_bridge_values "${config}"
 
   if [ ! -f "${binary}" ]; then
     err "withdrawal-processor binary not found at ${binary}"
