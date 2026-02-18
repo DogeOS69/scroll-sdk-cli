@@ -14,6 +14,8 @@ SIGNER_ADDR="0xa7CdA54170FFD9F9C7A6DC72f8a5E6E15ca32fA3"
 # Scroll SDK: only rollup-relayer retained (gas-oracle replaced by DogeOS fee-oracle)
 ROLLUP_RELAYER_IMAGE="scrolltech/rollup-relayer:v4.7.5"
 ROLLUP_DB_CLI_IMAGE="scrolltech/rollup-db-cli:v4.7.5"
+TSO_IMAGE="dogeos69/tso-service:0.2.0-rc.4"
+DUMMY_SIGNER_IMAGE="dogeos69/dummy-signer:0.2.0-rc.3"
 DOCKER_NETWORK="dogeos-net"
 
 # Use OrbStack for amd64 emulation (Rosetta) - Docker Desktop QEMU crashes Go runtime
@@ -34,6 +36,8 @@ DA_PUBLISHER_PORT=3001
 DOGECOIN_RPC_PORT=18445
 POSTGRES_PORT=5432
 WITHDRAWAL_PROCESSOR_PORT=3002
+TSO_PORT=3003
+DUMMY_SIGNER_PORT=4000
 FEE_ORACLE_HEALTH_PORT=8080
 
 # Colors
@@ -62,6 +66,8 @@ cleanup_existing() {
   ${DOCKER_CMD} rm -f dogeos-postgres 2>/dev/null || true
   ${DOCKER_CMD} rm -f dogeos-rollup-relayer 2>/dev/null || true
   ${DOCKER_CMD} rm -f dogeos-celestia 2>/dev/null || true
+  ${DOCKER_CMD} rm -f dogeos-tso 2>/dev/null || true
+  ${DOCKER_CMD} rm -f dummy-signer-0 2>/dev/null || true
 
   # Clean up persistent state for fresh start
   rm -rf "${SCRIPT_DIR}/dogecoin-data"
@@ -532,6 +538,39 @@ start_fee_oracle() {
   log "fee-oracle PID: $(cat "${SCRIPT_DIR}/fee-oracle.pid")"
 }
 
+start_tso() {
+  log "Starting TSO (Transaction Signing Oracle) on port ${TSO_PORT}..."
+  ${DOCKER_CMD} run -d --name dogeos-tso --platform linux/amd64 \
+    --network "${DOCKER_NETWORK}" \
+    -p "${TSO_PORT}:3000" \
+    -e PORT=3000 \
+    -e DOGE_NETWORK=testnet \
+    -e WITHDRAWAL_PROCESSOR_URL="http://host.docker.internal:${WITHDRAWAL_PROCESSOR_PORT}" \
+    -e RUST_LOG=info \
+    "${TSO_IMAGE}"
+
+  log "TSO container: dogeos-tso"
+}
+
+start_dummy_signers() {
+  # Dummy signer WIF key — must match a key known to bridge-init.
+  # This is the same regtest key as withdrawalProcessor.feeSignerKey in the spec.
+  local SIGNER_WIF="cNqM3Bz7u7Y5gFhQrVTxb2KjDKTPbWGpiBLVCZFhcGUSmgiw1tpS"
+
+  log "Starting dummy signer on port ${DUMMY_SIGNER_PORT}..."
+  ${DOCKER_CMD} run -d --name dummy-signer-0 --platform linux/amd64 \
+    --network "${DOCKER_NETWORK}" \
+    -p "${DUMMY_SIGNER_PORT}:8080" \
+    -e DUMMY_SIGNER_WIF="${SIGNER_WIF}" \
+    -e DUMMY_SIGNER_NETWORK=testnet \
+    -e DUMMY_SIGNER_TSO_URL="http://host.docker.internal:${TSO_PORT}" \
+    -e PORT=8080 \
+    -e RUST_LOG=info \
+    "${DUMMY_SIGNER_IMAGE}"
+
+  log "Dummy signer container: dummy-signer-0"
+}
+
 show_status() {
   echo ""
   log "=== Stack is running (Phase ${PHASE}) ==="
@@ -582,6 +621,14 @@ show_status() {
       log "  rollup-relayer:    running"
     fi
 
+    # Transaction signing services
+    if ${DOCKER_CMD} ps -q -f name=dogeos-tso 2>/dev/null | grep -q .; then
+      log "  TSO:               http://localhost:${TSO_PORT}"
+    fi
+    if ${DOCKER_CMD} ps -q -f name=dummy-signer-0 2>/dev/null | grep -q .; then
+      log "  dummy-signer-0:    http://localhost:${DUMMY_SIGNER_PORT}"
+    fi
+
     # DogeOS native services
     if [ -f "${SCRIPT_DIR}/fee-oracle.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/fee-oracle.pid")" 2>/dev/null; then
       log "  fee-oracle:        running (health: http://localhost:${FEE_ORACLE_HEALTH_PORT})"
@@ -604,6 +651,8 @@ show_status() {
   [ "${PHASE}" -ge 3 ] && log "  l1-interface:    ${SCRIPT_DIR}/l1-interface.log"
   [ "${PHASE}" -ge 3 ] && log "  da-publisher:    ${SCRIPT_DIR}/da-publisher.log"
   [ "${PHASE}" -ge 3 ] && log "  rollup-relayer:  docker logs dogeos-rollup-relayer"
+  [ "${PHASE}" -ge 3 ] && log "  TSO:             docker logs dogeos-tso"
+  [ "${PHASE}" -ge 3 ] && log "  dummy-signer-0:  docker logs dummy-signer-0"
   [ "${PHASE}" -ge 3 ] && log "  fee-oracle:      ${SCRIPT_DIR}/fee-oracle.log"
   [ "${PHASE}" -ge 3 ] && log "  withdrawal-proc: ${SCRIPT_DIR}/withdrawal-processor.log"
 }
@@ -692,6 +741,11 @@ else
   # DogeOS doesn't use ZK proofs — l1_interface handles finalization natively.
   # Without bypass, rollup-relayer would wait forever for proofs.
   start_rollup_relayer || warn "rollup-relayer failed to start (check da-publisher)"
+
+  # Transaction signing services
+  start_tso
+  sleep 2
+  start_dummy_signers
 
   # DogeOS native services
   start_fee_oracle || warn "fee-oracle not available (build from dogeos-core)"

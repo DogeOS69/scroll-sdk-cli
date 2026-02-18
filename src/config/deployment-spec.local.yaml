@@ -219,10 +219,10 @@ feeOracle:
 
 withdrawalProcessor:
   databaseUrl: "/tmp/dogeos-withdrawal-processor.sqlite"
-  tsoUrl: "http://127.0.0.1:3001"
+  tsoUrl: "http://127.0.0.1:3003"
   apiPort: 3002
   debugSkipBroadcast: true
-  debugSkipTsoPolling: true
+  debugSkipTsoPolling: false
   feeSignerKey: "cNqM3Bz7u7Y5gFhQrVTxb2KjDKTPbWGpiBLVCZFhcGUSmgiw1tpS"
   sequencerSignerKey: "cNqM3Bz7u7Y5gFhQrVTxb2KjDKTPbWGpiBLVCZFhcGUSmgiw1tpS"
   dogecoinIndexer:
