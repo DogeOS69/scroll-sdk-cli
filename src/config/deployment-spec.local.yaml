@@ -175,9 +175,9 @@ test:
 l1Interface:
   databaseUrl: "local-stack/l1_interface.sqlite"
   genesisJsonPath: "local-stack/genesis.json"
-  apiBindAddress: "127.0.0.1:8548"
-  beaconApiListenAddress: "127.0.0.1:3500"
-  healthListenAddress: "127.0.0.1:9091"
+  apiBindAddress: "0.0.0.0:8548"
+  beaconApiListenAddress: "0.0.0.0:3500"
+  healthListenAddress: "0.0.0.0:9091"
   depositGasLimit: 500000
   initialSystemSigner: "0xa7CdA54170FFD9F9C7A6DC72f8a5E6E15ca32fA3"
   l1Simulation:

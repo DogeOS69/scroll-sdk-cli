@@ -389,21 +389,21 @@ setup_l2_accounts() {
   # Fee oracle sender (derived from DOGEOS_FEE_ORACLE_PRIVATE_KEY)
   local fee_oracle_addr="0x29E2f3B76662134404cEA5A8f12E0d4B6e6fdE5a"
 
-  # Fund fee-oracle sender on L2
+  # Fund fee-oracle sender on L2 (|| true: tolerates replays from previous runs)
   "${cast_bin}" send --rpc-url "${rpc}" --private-key "${deployer_key}" \
-    --value 0.1ether "${fee_oracle_addr}" > /dev/null 2>&1
+    --value 0.1ether "${fee_oracle_addr}" > /dev/null 2>&1 || true
   log "  Funded fee-oracle sender ${fee_oracle_addr}"
 
   # Whitelist fee-oracle sender in the Whitelist contract
   "${cast_bin}" send --rpc-url "${rpc}" --private-key "${deployer_key}" \
     0x5300000000000000000000000000000000000003 \
-    "updateWhitelistStatus(address[],bool)" "[${fee_oracle_addr}]" true > /dev/null 2>&1
+    "updateWhitelistStatus(address[],bool)" "[${fee_oracle_addr}]" true > /dev/null 2>&1 || true
   log "  Whitelisted fee-oracle sender"
 
   # Set whitelist address on L1GasPriceOracle
   "${cast_bin}" send --rpc-url "${rpc}" --private-key "${deployer_key}" \
     0x5300000000000000000000000000000000000002 \
-    "updateWhitelist(address)" 0x5300000000000000000000000000000000000003 > /dev/null 2>&1
+    "updateWhitelist(address)" 0x5300000000000000000000000000000000000003 > /dev/null 2>&1 || true
   log "  Configured L1GasPriceOracle whitelist"
 }
 
@@ -618,7 +618,7 @@ start_postgres
 
 # l1-interface (Dogecoin → EVM block translation)
 start_l1_interface
-sleep 2
+wait_for_rpc "http://localhost:${L1_INTERFACE_PORT}" "l1-interface"
 
 # L2 geth (points to l1-interface as its L1 endpoint)
 init_l2geth
@@ -633,12 +633,13 @@ sleep 5
 start_da_publisher
 sleep 1
 
+# Fund service accounts and set up whitelist on L2 system contracts
+# (must run BEFORE tx-gen which uses the same deployer key — avoids nonce races)
+setup_l2_accounts
+
 # L2 tx generator (relaxed_period mode only mines blocks with pending txs)
 start_l2_txgen
 sleep 5
-
-# Fund service accounts and set up whitelist on L2 system contracts
-setup_l2_accounts
 
 # Deploy contracts to L2 geth (if not already deployed)
 # L1 contract addresses are computed via simulation (deterministic CREATE2) — no L1 deployment needed.

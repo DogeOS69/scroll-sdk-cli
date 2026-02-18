@@ -727,7 +727,6 @@ export function generateL1InterfaceToml(
   // [dogecoin_indexer]
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
   const dogecoinIndexer: Record<string, any> = {
-    bridge_address: '',
     confirmations: dogeIdx?.confirmations ?? 1,
     index_deposits: dogeIdx?.indexDeposits ?? true,
     index_utxos: dogeIdx?.indexUtxos ?? false,
@@ -736,10 +735,12 @@ export function generateL1InterfaceToml(
     start_height: spec.dogecoin.indexerStartHeight,
   }
 
-  // Try to get bridge address: prefer bridge-init output, then contract addresses
-  dogecoinIndexer.bridge_address = bridgeInitValues?.bridge_address
-    ?? contractAddresses?.DOGE_BRIDGE_ADDR
-    ?? ''
+  // Try to get bridge address: prefer bridge-init output, then contract addresses.
+  // Omit if empty — l1-interface treats missing as None, but empty string fails address parsing.
+  const bridgeAddr = bridgeInitValues?.bridge_address ?? contractAddresses?.DOGE_BRIDGE_ADDR
+  if (bridgeAddr) {
+    dogecoinIndexer.bridge_address = bridgeAddr
+  }
 
   config.dogecoin_indexer = dogecoinIndexer
 
