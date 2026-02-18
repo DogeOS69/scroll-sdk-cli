@@ -5,7 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DOGEOS_CORE_DIR="${HOME}/work/DogeOS69/dogeos-core"
 
-ANVIL_BIN="${HOME}/.foundry/bin/anvil"
 L2GETH_IMAGE="scrolltech/l2geth:scroll-v5.9.6"
 DOGECOIN_IMAGE="dogeos69/dogecoin:latest"
 SIGNER_ADDR="0xa7CdA54170FFD9F9C7A6DC72f8a5E6E15ca32fA3"
@@ -28,7 +27,6 @@ else
 fi
 
 # Ports
-ANVIL_PORT=8545
 L2_HTTP_PORT=8546
 L2_WS_PORT=8547
 L1_INTERFACE_PORT=8548
@@ -52,13 +50,6 @@ warn() { echo -e "${YELLOW}[local-stack]${NC} $*"; }
 err() { echo -e "${RED}[local-stack]${NC} $*" >&2; }
 section() { echo -e "\n${CYAN}=== $* ===${NC}"; }
 
-# Parse args
-PHASE="${1:-1}"
-case "${PHASE}" in
-  1|2|3) ;;
-  *) err "Usage: $0 [1|2|3]  (phase number, default=1)"; exit 1 ;;
-esac
-
 cleanup_existing() {
   log "Cleaning up existing containers..."
   ${DOCKER_CMD} rm -f dogeos-l2geth 2>/dev/null || true
@@ -76,13 +67,7 @@ cleanup_existing() {
   # Ensure shared Docker network exists for inter-container communication
   ${DOCKER_CMD} network create "${DOCKER_NETWORK}" 2>/dev/null || true
 
-  if lsof -ti:${ANVIL_PORT} >/dev/null 2>&1; then
-    warn "Killing existing process on port ${ANVIL_PORT}"
-    kill $(lsof -ti:${ANVIL_PORT}) 2>/dev/null || true
-    sleep 1
-  fi
-
-  # Kill l1-interface and da-publisher if running
+  # Kill native processes if running
   for pidfile in "${SCRIPT_DIR}/l1-interface.pid" "${SCRIPT_DIR}/da-publisher.pid" "${SCRIPT_DIR}/dogecoin-miner.pid" "${SCRIPT_DIR}/l2-txgen.pid" "${SCRIPT_DIR}/withdrawal-processor.pid" "${SCRIPT_DIR}/fee-oracle.pid"; do
     if [ -f "${pidfile}" ]; then
       PID=$(cat "${pidfile}")
@@ -93,19 +78,6 @@ cleanup_existing() {
       rm -f "${pidfile}"
     fi
   done
-}
-
-start_anvil() {
-  log "Starting Anvil (L1) on port ${ANVIL_PORT}..."
-  "${ANVIL_BIN}" \
-    --host 0.0.0.0 \
-    --port "${ANVIL_PORT}" \
-    --chain-id 111111 \
-    --slots-in-an-epoch 3 \
-    --hardfork cancun \
-    > "${SCRIPT_DIR}/anvil.log" 2>&1 &
-  echo $! > "${SCRIPT_DIR}/anvil.pid"
-  log "Anvil PID: $(cat "${SCRIPT_DIR}/anvil.pid")"
 }
 
 wait_for_rpc() {
@@ -157,7 +129,7 @@ init_l2geth() {
 }
 
 start_l2geth() {
-  local l1_endpoint="${1:-http://host.docker.internal:${ANVIL_PORT}}"
+  local l1_endpoint="http://host.docker.internal:${L1_INTERFACE_PORT}"
 
   log "Starting L2 geth on ports ${L2_HTTP_PORT}/${L2_WS_PORT} (L1: ${l1_endpoint})..."
   ${DOCKER_CMD} run -d --name dogeos-l2geth --platform linux/amd64 --entrypoint="" \
@@ -181,25 +153,10 @@ start_l2geth() {
   log "L2 geth container: dogeos-l2geth"
 }
 
-set_anvil_signer() {
-  SYSTEM_CONTRACT="0xB38EB8335F32e681163e404Fe52d80398bb5F8c2"
-  SIGNER_SLOT="0x0000000000000000000000000000000000000000000000000000000000000067"
-  SIGNER_VALUE="0x000000000000000000000000a7CdA54170FFD9F9C7A6DC72f8a5E6E15ca32fA3"
-  log "Setting system contract signer on Anvil..."
-  curl -sf "http://localhost:${ANVIL_PORT}" -X POST -H 'Content-Type: application/json' \
-    -d "{\"method\":\"anvil_setStorageAt\",\"params\":[\"${SYSTEM_CONTRACT}\",\"${SIGNER_SLOT}\",\"${SIGNER_VALUE}\"],\"id\":1,\"jsonrpc\":\"2.0\"}" >/dev/null
-}
-
 deploy_contracts() {
-  log "Deploying contracts to Anvil + L2 geth..."
-
-  # Fund deployer on Anvil
-  DEPLOYER="0xdED06046416d6bA20c1e2baD51B3A3e2f267d33F"
-  curl -sf "http://localhost:${ANVIL_PORT}" -X POST -H 'Content-Type: application/json' \
-    -d "{\"method\":\"anvil_setBalance\",\"params\":[\"${DEPLOYER}\",\"0x56BC75E2D63100000\"],\"id\":1,\"jsonrpc\":\"2.0\"}" >/dev/null
+  log "Deploying contracts to L2 geth (L1 addresses computed via simulation only)..."
 
   ${DOCKER_CMD} run --rm --platform linux/amd64 --entrypoint="/bin/sh" \
-    -e L1_RPC_ENDPOINT=http://host.docker.internal:${ANVIL_PORT} \
     -e L2_RPC_ENDPOINT=http://host.docker.internal:${L2_HTTP_PORT} \
     -e DEPLOYER_PRIVATE_KEY=0x76273b5b6fc7eb6e931ee8f1e74a88d1fdd7ae225a4c8a664858b4cccb083827 \
     -e L1_COMMIT_SENDER_PRIVATE_KEY=0x3f37a3239c8c909c23f6a2ec01c9c26485b9d2a2cd47b089876d2be5c38f328f \
@@ -315,8 +272,9 @@ start_l1_interface() {
   fi
 
   log "Starting l1-interface on port ${L1_INTERFACE_PORT} (config: ${config})..."
-  RUST_LOG=info "${binary}" -c "${config}" \
-    > "${SCRIPT_DIR}/l1-interface.log" 2>&1 &
+  # Run from PROJECT_DIR because config uses relative paths (e.g. local-stack/genesis.json)
+  (cd "${PROJECT_DIR}" && RUST_LOG=info "${binary}" -c "${config}" \
+    > "${SCRIPT_DIR}/l1-interface.log" 2>&1) &
   echo $! > "${SCRIPT_DIR}/l1-interface.pid"
   log "l1-interface PID: $(cat "${SCRIPT_DIR}/l1-interface.pid")"
 }
@@ -336,8 +294,8 @@ start_da_publisher() {
   fi
 
   log "Starting da-publisher on port ${DA_PUBLISHER_PORT} (config: ${config})..."
-  RUST_LOG=info "${binary}" -c "${config}" \
-    > "${SCRIPT_DIR}/da-publisher.log" 2>&1 &
+  (cd "${PROJECT_DIR}" && RUST_LOG=info "${binary}" -c "${config}" \
+    > "${SCRIPT_DIR}/da-publisher.log" 2>&1) &
   echo $! > "${SCRIPT_DIR}/da-publisher.pid"
   log "da-publisher PID: $(cat "${SCRIPT_DIR}/da-publisher.pid")"
 }
@@ -508,8 +466,8 @@ start_withdrawal_processor() {
   fi
 
   log "Starting withdrawal-processor on port ${WITHDRAWAL_PROCESSOR_PORT} (config: ${config})..."
-  RUST_LOG=info "${binary}" -c "${config}" \
-    > "${SCRIPT_DIR}/withdrawal-processor.log" 2>&1 &
+  (cd "${PROJECT_DIR}" && RUST_LOG=info "${binary}" -c "${config}" \
+    > "${SCRIPT_DIR}/withdrawal-processor.log" 2>&1) &
   echo $! > "${SCRIPT_DIR}/withdrawal-processor.pid"
   log "withdrawal-processor PID: $(cat "${SCRIPT_DIR}/withdrawal-processor.pid")"
 }
@@ -531,9 +489,9 @@ start_fee_oracle() {
   log "Starting fee-oracle (config: ${config})..."
   # The fee-oracle needs the L2 gas oracle sender private key.
   # This must match accounts.l2GasOracleSender.privateKey in deployment-spec.local.yaml.
-  RUST_LOG=info DOGEOS_FEE_ORACLE_PRIVATE_KEY="0x96cba5a694704477d6186aebc79a7ff50ba7ed95caacfe62a085a2d78be57597" \
+  (cd "${PROJECT_DIR}" && RUST_LOG=info DOGEOS_FEE_ORACLE_PRIVATE_KEY="0x96cba5a694704477d6186aebc79a7ff50ba7ed95caacfe62a085a2d78be57597" \
     "${binary}" -c "${config}" \
-    > "${SCRIPT_DIR}/fee-oracle.log" 2>&1 &
+    > "${SCRIPT_DIR}/fee-oracle.log" 2>&1) &
   echo $! > "${SCRIPT_DIR}/fee-oracle.pid"
   log "fee-oracle PID: $(cat "${SCRIPT_DIR}/fee-oracle.pid")"
 }
@@ -573,18 +531,8 @@ start_dummy_signers() {
 
 show_status() {
   echo ""
-  log "=== Stack is running (Phase ${PHASE}) ==="
+  log "=== Stack is running ==="
   log ""
-
-  # Anvil (only for Phase 1/2)
-  if [ "${PHASE}" -lt 3 ]; then
-    if curl -sf "http://localhost:${ANVIL_PORT}" -X POST -H 'Content-Type: application/json' \
-      -d '{"method":"eth_blockNumber","params":[],"id":1,"jsonrpc":"2.0"}' >/dev/null 2>&1; then
-      local anvil_block=$(curl -sf "http://localhost:${ANVIL_PORT}" -X POST -H 'Content-Type: application/json' \
-        -d '{"method":"eth_blockNumber","params":[],"id":1,"jsonrpc":"2.0"}' | python3 -c "import sys,json; print(int(json.load(sys.stdin)['result'],16))")
-      log "  Anvil (build-time): http://localhost:${ANVIL_PORT}  block=${anvil_block}"
-    fi
-  fi
 
   # L2 geth
   if curl -sf "http://localhost:${L2_HTTP_PORT}" -X POST -H 'Content-Type: application/json' \
@@ -595,162 +543,133 @@ show_status() {
     log "  L2 geth WS:        ws://localhost:${L2_WS_PORT}"
   fi
 
-  # Dogecoin (Phase 3)
-  if [ "${PHASE}" -ge 3 ]; then
-    if curl -sf --user doge:doge_pass --data-binary '{"jsonrpc":"1.0","method":"getblockcount","params":[],"id":1}' \
-      -H 'content-type: text/plain;' http://localhost:${DOGECOIN_RPC_PORT}/ >/dev/null 2>&1; then
-      local doge_block=$(curl -sf --user doge:doge_pass --data-binary '{"jsonrpc":"1.0","method":"getblockcount","params":[],"id":1}' \
-        -H 'content-type: text/plain;' http://localhost:${DOGECOIN_RPC_PORT}/ | python3 -c "import sys,json; print(json.load(sys.stdin)['result'])")
-      log "  Dogecoin:          http://localhost:${DOGECOIN_RPC_PORT}  block=${doge_block}"
-    fi
+  # Dogecoin
+  if curl -sf --user doge:doge_pass --data-binary '{"jsonrpc":"1.0","method":"getblockcount","params":[],"id":1}' \
+    -H 'content-type: text/plain;' http://localhost:${DOGECOIN_RPC_PORT}/ >/dev/null 2>&1; then
+    local doge_block=$(curl -sf --user doge:doge_pass --data-binary '{"jsonrpc":"1.0","method":"getblockcount","params":[],"id":1}' \
+      -H 'content-type: text/plain;' http://localhost:${DOGECOIN_RPC_PORT}/ | python3 -c "import sys,json; print(json.load(sys.stdin)['result'])")
+    log "  Dogecoin:          http://localhost:${DOGECOIN_RPC_PORT}  block=${doge_block}"
+  fi
 
-    if [ -f "${SCRIPT_DIR}/l1-interface.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/l1-interface.pid")" 2>/dev/null; then
-      log "  l1-interface:      http://localhost:${L1_INTERFACE_PORT}"
-    fi
+  if [ -f "${SCRIPT_DIR}/l1-interface.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/l1-interface.pid")" 2>/dev/null; then
+    log "  l1-interface:      http://localhost:${L1_INTERFACE_PORT}"
+  fi
 
-    if [ -f "${SCRIPT_DIR}/da-publisher.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/da-publisher.pid")" 2>/dev/null; then
-      log "  da-publisher:      http://localhost:${DA_PUBLISHER_PORT}"
-    fi
+  if [ -f "${SCRIPT_DIR}/da-publisher.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/da-publisher.pid")" 2>/dev/null; then
+    log "  da-publisher:      http://localhost:${DA_PUBLISHER_PORT}"
+  fi
 
-    if ${DOCKER_CMD} ps -q -f name=dogeos-postgres 2>/dev/null | grep -q .; then
-      log "  PostgreSQL:        localhost:${POSTGRES_PORT}"
-    fi
+  if ${DOCKER_CMD} ps -q -f name=dogeos-postgres 2>/dev/null | grep -q .; then
+    log "  PostgreSQL:        localhost:${POSTGRES_PORT}"
+  fi
 
-    # Rollup pipeline
-    if ${DOCKER_CMD} ps -q -f name=dogeos-rollup-relayer 2>/dev/null | grep -q .; then
-      log "  rollup-relayer:    running"
-    fi
+  # Rollup pipeline
+  if ${DOCKER_CMD} ps -q -f name=dogeos-rollup-relayer 2>/dev/null | grep -q .; then
+    log "  rollup-relayer:    running"
+  fi
 
-    # Transaction signing services
-    if ${DOCKER_CMD} ps -q -f name=dogeos-tso 2>/dev/null | grep -q .; then
-      log "  TSO:               http://localhost:${TSO_PORT}"
-    fi
-    if ${DOCKER_CMD} ps -q -f name=dummy-signer-0 2>/dev/null | grep -q .; then
-      log "  dummy-signer-0:    http://localhost:${DUMMY_SIGNER_PORT}"
-    fi
+  # Transaction signing services
+  if ${DOCKER_CMD} ps -q -f name=dogeos-tso 2>/dev/null | grep -q .; then
+    log "  TSO:               http://localhost:${TSO_PORT}"
+  fi
+  if ${DOCKER_CMD} ps -q -f name=dummy-signer-0 2>/dev/null | grep -q .; then
+    log "  dummy-signer-0:    http://localhost:${DUMMY_SIGNER_PORT}"
+  fi
 
-    # DogeOS native services
-    if [ -f "${SCRIPT_DIR}/fee-oracle.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/fee-oracle.pid")" 2>/dev/null; then
-      log "  fee-oracle:        running (health: http://localhost:${FEE_ORACLE_HEALTH_PORT})"
-    fi
+  # DogeOS native services
+  if [ -f "${SCRIPT_DIR}/fee-oracle.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/fee-oracle.pid")" 2>/dev/null; then
+    log "  fee-oracle:        running (health: http://localhost:${FEE_ORACLE_HEALTH_PORT})"
+  fi
 
-    if [ -f "${SCRIPT_DIR}/withdrawal-processor.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/withdrawal-processor.pid")" 2>/dev/null; then
-      log "  withdrawal-proc:   http://localhost:${WITHDRAWAL_PROCESSOR_PORT}"
-    fi
+  if [ -f "${SCRIPT_DIR}/withdrawal-processor.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/withdrawal-processor.pid")" 2>/dev/null; then
+    log "  withdrawal-proc:   http://localhost:${WITHDRAWAL_PROCESSOR_PORT}"
+  fi
 
-    if [ -f "${SCRIPT_DIR}/l2-txgen.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/l2-txgen.pid")" 2>/dev/null; then
-      log "  l2-txgen:          running (block production)"
-    fi
+  if [ -f "${SCRIPT_DIR}/l2-txgen.pid" ] && kill -0 "$(cat "${SCRIPT_DIR}/l2-txgen.pid")" 2>/dev/null; then
+    log "  l2-txgen:          running (block production)"
   fi
 
   log ""
   log "Logs:"
-  [ "${PHASE}" -lt 3 ] && log "  Anvil:          ${SCRIPT_DIR}/anvil.log"
-  log "  L2 geth:        docker logs dogeos-l2geth"
-  [ "${PHASE}" -ge 3 ] && log "  Dogecoin:        docker logs dogeos-dogecoin"
-  [ "${PHASE}" -ge 3 ] && log "  l1-interface:    ${SCRIPT_DIR}/l1-interface.log"
-  [ "${PHASE}" -ge 3 ] && log "  da-publisher:    ${SCRIPT_DIR}/da-publisher.log"
-  [ "${PHASE}" -ge 3 ] && log "  rollup-relayer:  docker logs dogeos-rollup-relayer"
-  [ "${PHASE}" -ge 3 ] && log "  TSO:             docker logs dogeos-tso"
-  [ "${PHASE}" -ge 3 ] && log "  dummy-signer-0:  docker logs dummy-signer-0"
-  [ "${PHASE}" -ge 3 ] && log "  fee-oracle:      ${SCRIPT_DIR}/fee-oracle.log"
-  [ "${PHASE}" -ge 3 ] && log "  withdrawal-proc: ${SCRIPT_DIR}/withdrawal-processor.log"
+  log "  L2 geth:           docker logs dogeos-l2geth"
+  log "  Dogecoin:          docker logs dogeos-dogecoin"
+  log "  l1-interface:      ${SCRIPT_DIR}/l1-interface.log"
+  log "  da-publisher:      ${SCRIPT_DIR}/da-publisher.log"
+  log "  rollup-relayer:    docker logs dogeos-rollup-relayer"
+  log "  TSO:               docker logs dogeos-tso"
+  log "  dummy-signer-0:    docker logs dummy-signer-0"
+  log "  fee-oracle:        ${SCRIPT_DIR}/fee-oracle.log"
+  log "  withdrawal-proc:   ${SCRIPT_DIR}/withdrawal-processor.log"
 }
 
 # --- Main ---
 
-section "DogeOS Local Stack - Phase ${PHASE}"
+section "DogeOS Local Stack"
 
 cleanup_existing
 
-if [ "${PHASE}" -le 2 ]; then
-  # --- Phase 1/2: Anvil (temporary EVM L1) + L2 geth + contract deployment ---
-  # Anvil provides a deterministic EVM L1 for deploying ScrollChain contracts.
-  # Only needed for build-time contract deployment; Phase 3 uses Dogecoin via l1-interface.
+# Dogecoin regtest (L1)
+start_dogecoin
+wait_for_dogecoin
+start_dogecoin_mining
 
-  section "Phase 1: Starting Anvil + L2 geth"
-  start_anvil
-  wait_for_rpc "http://localhost:${ANVIL_PORT}" "Anvil"
-  set_anvil_signer
+# PostgreSQL (rollup service databases)
+start_postgres
 
-  init_l2geth
-  start_l2geth "http://host.docker.internal:${ANVIL_PORT}"
-  wait_for_rpc "http://localhost:${L2_HTTP_PORT}" "L2 geth"
+# l1-interface (Dogecoin → EVM block translation)
+start_l1_interface
+sleep 2
 
-  if [ "${PHASE}" -ge 2 ]; then
-    if [ ! -s "${SCRIPT_DIR}/contracts-volume/config-contracts.toml" ] || \
-       grep -q 'L1_SCROLL_CHAIN_PROXY_ADDR = ""' "${SCRIPT_DIR}/contracts-volume/config-contracts.toml" 2>/dev/null; then
-      section "Phase 2: Deploying contracts"
-      deploy_contracts
-    else
-      log "Contracts already deployed (config-contracts.toml exists)"
-    fi
-  fi
+# L2 geth (points to l1-interface as its L1 endpoint)
+init_l2geth
+start_l2geth
+wait_for_rpc "http://localhost:${L2_HTTP_PORT}" "L2 geth"
 
+# Celestia devnet (DA layer)
+start_celestia
+sleep 5
+
+# da-publisher (L2 blobs → Celestia)
+start_da_publisher
+sleep 1
+
+# L2 tx generator (relaxed_period mode only mines blocks with pending txs)
+start_l2_txgen
+sleep 5
+
+# Fund service accounts and set up whitelist on L2 system contracts
+setup_l2_accounts
+
+# Deploy contracts to L2 geth (if not already deployed)
+# L1 contract addresses are computed via simulation (deterministic CREATE2) — no L1 deployment needed.
+# l1-interface uses these addresses as identifiers only, without executing EVM bytecode.
+if [ ! -s "${SCRIPT_DIR}/contracts-volume/config-contracts.toml" ] || \
+   grep -q 'L1_SCROLL_CHAIN_PROXY_ADDR = ""' "${SCRIPT_DIR}/contracts-volume/config-contracts.toml" 2>/dev/null; then
+  section "Deploying contracts"
+  deploy_contracts
 else
-  # --- Phase 3: Full DogeOS stack (Dogecoin L1, no Anvil) ---
-
-  # Require contracts to be deployed already
-  if [ ! -s "${SCRIPT_DIR}/contracts-volume/config-contracts.toml" ] || \
-     grep -q 'L1_SCROLL_CHAIN_PROXY_ADDR = ""' "${SCRIPT_DIR}/contracts-volume/config-contracts.toml" 2>/dev/null; then
-    err "Contracts not deployed. Run './start.sh 2' first to deploy contracts."
-    exit 1
-  fi
-
-  section "Phase 3: Starting DogeOS stack"
-
-  # Dogecoin regtest (L1)
-  start_dogecoin
-  wait_for_dogecoin
-  start_dogecoin_mining
-
-  # PostgreSQL (rollup service databases)
-  start_postgres
-
-  # l1-interface (Dogecoin → EVM block translation)
-  start_l1_interface
-  sleep 2
-
-  # L2 geth (points directly to l1-interface, no Anvil)
-  init_l2geth
-  start_l2geth "http://host.docker.internal:${L1_INTERFACE_PORT}"
-  wait_for_rpc "http://localhost:${L2_HTTP_PORT}" "L2 geth"
-
-  # Celestia devnet (DA layer)
-  start_celestia
-  sleep 5
-
-  # da-publisher (L2 blobs → Celestia)
-  start_da_publisher
-  sleep 1
-
-  # L2 tx generator (relaxed_period mode only mines blocks with pending txs)
-  start_l2_txgen
-  sleep 5
-
-  # Fund service accounts and set up whitelist on L2 system contracts
-  setup_l2_accounts
-
-  # Rollup pipeline services (rollup-relayer only — gas-oracle replaced by DogeOS fee-oracle)
-  create_service_databases
-  migrate_rollup_databases
-
-  # Rollup relayer (chunk → batch → commit → finalize)
-  # NOTE: rollup-config.json has enable_test_env_bypass_features=true and
-  # finalize_*_without_proof_timeout_sec=300. These are required because
-  # DogeOS doesn't use ZK proofs — l1_interface handles finalization natively.
-  # Without bypass, rollup-relayer would wait forever for proofs.
-  start_rollup_relayer || warn "rollup-relayer failed to start (check da-publisher)"
-
-  # Transaction signing services
-  start_tso
-  sleep 2
-  start_dummy_signers
-
-  # DogeOS native services
-  start_fee_oracle || warn "fee-oracle not available (build from dogeos-core)"
-  regenerate_withdrawal_processor_config
-  start_withdrawal_processor || warn "withdrawal-processor not available (build from dogeos-core)"
+  log "Contracts already deployed (config-contracts.toml exists)"
 fi
+
+# Rollup pipeline services (rollup-relayer only — gas-oracle replaced by DogeOS fee-oracle)
+create_service_databases
+migrate_rollup_databases
+
+# Rollup relayer (chunk → batch → commit → finalize)
+# NOTE: rollup-config.json has enable_test_env_bypass_features=true and
+# finalize_*_without_proof_timeout_sec=300. These are required because
+# DogeOS doesn't use ZK proofs — l1_interface handles finalization natively.
+# Without bypass, rollup-relayer would wait forever for proofs.
+start_rollup_relayer || warn "rollup-relayer failed to start (check da-publisher)"
+
+# Transaction signing services
+start_tso
+sleep 2
+start_dummy_signers
+
+# DogeOS native services
+start_fee_oracle || warn "fee-oracle not available (build from dogeos-core)"
+regenerate_withdrawal_processor_config
+start_withdrawal_processor || warn "withdrawal-processor not available (build from dogeos-core)"
 
 show_status
