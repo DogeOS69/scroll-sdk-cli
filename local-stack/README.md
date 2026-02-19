@@ -78,19 +78,21 @@ The stack starts all services in a single linear sequence — no phases or manua
 
 ## Startup Sequence
 
-1. Dogecoin regtest node + auto-miner (110 initial blocks)
-2. PostgreSQL
-3. l1-interface (Dogecoin → EVM block translation)
-4. L2 geth (initialized with genesis.json, points to l1-interface)
-5. Celestia devnet (consensus + bridge node)
-6. da-publisher (L2 blobs → Celestia)
-7. L2 tx generator (continuous block production)
-8. L2 account setup (fund fee-oracle sender, whitelist)
-9. Contract deployment to L2 (if not already deployed)
-10. Service databases + rollup DB migration
-11. rollup-relayer
-12. TSO + dummy-signer
-13. fee-oracle + withdrawal-processor
+1. **Generate deterministic addresses** (forge simulation, no RPC needed)
+2. **Regenerate service configs** (writes addresses into l1-interface.toml, etc.)
+3. Dogecoin regtest node + auto-miner (110 initial blocks)
+4. PostgreSQL
+5. l1-interface (Dogecoin → EVM block translation, now has correct addresses)
+6. L2 geth (initialized with genesis.json, points to l1-interface)
+7. Celestia devnet (consensus + bridge node)
+8. da-publisher (L2 blobs → Celestia)
+9. **Deploy L2 contracts** (forge broadcast to L2 geth, if not already deployed)
+10. L2 account setup (fund fee-oracle sender, whitelist)
+11. L2 tx generator (continuous block production)
+12. Service databases + rollup DB migration
+13. rollup-relayer
+14. TSO + dummy-signer
+15. fee-oracle + withdrawal-processor
 
 ## Logs
 

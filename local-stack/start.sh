@@ -63,6 +63,7 @@ cleanup_existing() {
   # Clean up persistent state for fresh start
   rm -rf "${SCRIPT_DIR}/dogecoin-data"
   rm -f "${SCRIPT_DIR}/l1_interface.sqlite"
+  rm -f "${SCRIPT_DIR}/.l2-contracts-deployed"
 
   # Ensure shared Docker network exists for inter-container communication
   ${DOCKER_CMD} network create "${DOCKER_NETWORK}" 2>/dev/null || true
@@ -153,8 +154,35 @@ start_l2geth() {
   log "L2 geth container: dogeos-l2geth"
 }
 
-deploy_contracts() {
-  log "Deploying contracts to L2 geth (L1 addresses computed via simulation only)..."
+generate_contract_addresses() {
+  log "Generating deterministic contract addresses (no RPC needed)..."
+
+  ${DOCKER_CMD} run --rm --platform linux/amd64 --entrypoint="/bin/sh" \
+    -e DEPLOYER_PRIVATE_KEY=0x76273b5b6fc7eb6e931ee8f1e74a88d1fdd7ae225a4c8a664858b4cccb083827 \
+    -e L1_COMMIT_SENDER_PRIVATE_KEY=0x3f37a3239c8c909c23f6a2ec01c9c26485b9d2a2cd47b089876d2be5c38f328f \
+    -e L1_FINALIZE_SENDER_PRIVATE_KEY=0x8a6d51138c05463e0c9b4501f5bb99d4774aa5ddeb46042832ac4e38aef02fdc \
+    -e L1_GAS_ORACLE_SENDER_PRIVATE_KEY=0x1805b8b581a4710cf29881fb3eb80ceaf1d5a395a5ace8012d01953a2c1795db \
+    -e L2_GAS_ORACLE_SENDER_PRIVATE_KEY=0x96cba5a694704477d6186aebc79a7ff50ba7ed95caacfe62a085a2d78be57597 \
+    -v "${SCRIPT_DIR}/contracts-volume:/contracts/volume" \
+    -v "${SCRIPT_DIR}/generate-addresses.sh:/contracts/docker/scripts/local-deploy.sh" \
+    dogeos69/scroll-stack-contracts:deploy-20251010 \
+    /contracts/docker/scripts/local-deploy.sh
+
+  # Copy generated config-contracts.toml to project root
+  cp "${SCRIPT_DIR}/contracts-volume/config-contracts.toml" "${PROJECT_DIR}/config-contracts.toml"
+  log "Contract addresses generated and config-contracts.toml updated"
+}
+
+regenerate_service_configs() {
+  log "Regenerating service configs from deployment spec..."
+  (cd "${PROJECT_DIR}" && ./bin/run.js setup generate-from-spec \
+    --spec src/config/deployment-spec.local.yaml -f --config-only) || {
+    warn "Config regeneration failed — falling back to existing configs"
+  }
+}
+
+deploy_l2_contracts() {
+  log "Deploying contracts to L2 geth..."
 
   ${DOCKER_CMD} run --rm --platform linux/amd64 --entrypoint="/bin/sh" \
     -e L2_RPC_ENDPOINT=http://host.docker.internal:${L2_HTTP_PORT} \
@@ -168,9 +196,7 @@ deploy_contracts() {
     dogeos69/scroll-stack-contracts:deploy-20251010 \
     /contracts/docker/scripts/local-deploy.sh
 
-  # Copy generated config-contracts.toml to project root
-  cp "${SCRIPT_DIR}/contracts-volume/config-contracts.toml" "${PROJECT_DIR}/config-contracts.toml"
-  log "Contracts deployed and config-contracts.toml updated"
+  log "L2 contracts deployed"
 }
 
 start_dogecoin() {
@@ -608,6 +634,16 @@ section "DogeOS Local Stack"
 
 cleanup_existing
 
+# Step 1: Generate deterministic contract addresses (pure computation, no RPC needed).
+# This writes config-contracts.toml which l1-interface and other services need at startup.
+section "Generating contract addresses"
+generate_contract_addresses
+
+# Step 2: Regenerate service configs with the fresh contract addresses.
+# This reads config-contracts.toml and writes l1-interface.toml, fee-oracle.toml, etc.
+regenerate_service_configs
+
+# Step 3: Start infrastructure services
 # Dogecoin regtest (L1)
 start_dogecoin
 wait_for_dogecoin
@@ -616,7 +652,7 @@ start_dogecoin_mining
 # PostgreSQL (rollup service databases)
 start_postgres
 
-# l1-interface (Dogecoin → EVM block translation)
+# l1-interface (Dogecoin → EVM block translation) — now has correct contract addresses
 start_l1_interface
 wait_for_rpc "http://localhost:${L1_INTERFACE_PORT}" "l1-interface"
 
@@ -633,24 +669,25 @@ sleep 5
 start_da_publisher
 sleep 1
 
+# Step 4: Deploy L2 contracts (needs L2 geth running).
+# Addresses were already computed in step 1; this deploys bytecode to L2 only.
+# NOTE: No other deployer-key transactions (setup_l2_accounts, tx-gen) must run
+# before this — they advance the nonce and cause forge "nonce too low" errors.
+if [ ! -f "${SCRIPT_DIR}/.l2-contracts-deployed" ]; then
+  section "Deploying L2 contracts"
+  deploy_l2_contracts
+  touch "${SCRIPT_DIR}/.l2-contracts-deployed"
+else
+  log "L2 contracts already deployed (marker file exists)"
+fi
+
 # Fund service accounts and set up whitelist on L2 system contracts
-# (must run BEFORE tx-gen which uses the same deployer key — avoids nonce races)
+# (runs AFTER forge deployment to avoid nonce conflicts on the deployer key)
 setup_l2_accounts
 
-# L2 tx generator (relaxed_period mode only mines blocks with pending txs)
+# L2 tx generator (continuous block production via periodic txs)
 start_l2_txgen
-sleep 5
-
-# Deploy contracts to L2 geth (if not already deployed)
-# L1 contract addresses are computed via simulation (deterministic CREATE2) — no L1 deployment needed.
-# l1-interface uses these addresses as identifiers only, without executing EVM bytecode.
-if [ ! -s "${SCRIPT_DIR}/contracts-volume/config-contracts.toml" ] || \
-   grep -q 'L1_SCROLL_CHAIN_PROXY_ADDR = ""' "${SCRIPT_DIR}/contracts-volume/config-contracts.toml" 2>/dev/null; then
-  section "Deploying contracts"
-  deploy_contracts
-else
-  log "Contracts already deployed (config-contracts.toml exists)"
-fi
+sleep 3
 
 # Rollup pipeline services (rollup-relayer only — gas-oracle replaced by DogeOS fee-oracle)
 create_service_databases
