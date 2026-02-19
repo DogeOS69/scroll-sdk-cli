@@ -129,8 +129,8 @@ init_l2geth() {
   # Create password file and signer keystore for geth --unlock.
   # These are dev-only values for the local stack sequencer signer.
   echo -n "P99taya6bf8bV9oNhVz9" > "${SCRIPT_DIR}/password"
-  mkdir -p "${SCRIPT_DIR}/data/geth/keystore"
-  cat > "${SCRIPT_DIR}/data/geth/keystore/UTC--2025-10-23T21-11-35.0Z--a7cda54170ffd9f9c7a6dc72f8a5e6e15ca32fa3" <<'KEYSTORE'
+  mkdir -p "${SCRIPT_DIR}/data/keystore"
+  cat > "${SCRIPT_DIR}/data/keystore/UTC--2025-10-23T21-11-35.0Z--a7cda54170ffd9f9c7a6dc72f8a5e6e15ca32fa3" <<'KEYSTORE'
 {"address":"a7cda54170ffd9f9c7a6dc72f8a5e6e15ca32fa3","id":"605cd701-66fc-41ea-85c5-d1a4a14f8172","version":3,"crypto":{"cipher":"aes-128-ctr","cipherparams":{"iv":"1ae69a3f82a547efbb7db94150ccd907"},"ciphertext":"66f205470186c17bbeed8078dceabe70f270115c60dd3361fdaeba3b1863d9b4","kdf":"scrypt","kdfparams":{"salt":"ec79e5d4ac41fa9443b566a5d2e75806f7f61e9b80d0c91112432d0e5e6de731","n":131072,"dklen":32,"p":1,"r":8},"mac":"8ea486830bf257d1933ab53e397f72fb22a0a2443e72f49da7f0768007912bb7"}}
 KEYSTORE
 
