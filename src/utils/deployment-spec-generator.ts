@@ -378,6 +378,9 @@ export function generateConfigToml(spec: DeploymentSpec): string {
 
   // [frontend] section
   config.frontend = {
+    ADMIN_SYSTEM_DASHBOARD_URI: spec.frontend.hosts.adminDashboard
+      ? `http://${spec.frontend.hosts.adminDashboard}`
+      : '',
     BASE_CHAIN: spec.network.tokenSymbol,
     BRIDGE_API_URI: spec.frontend.externalUrls.bridgeApi,
     CONNECT_WALLET_PROJECT_ID: spec.frontend.walletConnectProjectId || '',
@@ -386,6 +389,9 @@ export function generateConfigToml(spec: DeploymentSpec): string {
     EXTERNAL_EXPLORER_URI_L2: spec.frontend.externalUrls.l2Explorer,
     EXTERNAL_RPC_URI_L1: spec.frontend.externalUrls.l1Rpc,
     EXTERNAL_RPC_URI_L2: spec.frontend.externalUrls.l2Rpc,
+    GRAFANA_URI: spec.frontend.hosts.grafana
+      ? `http://${spec.frontend.hosts.grafana}`
+      : '',
     ROLLUPSCAN_API_URI: spec.frontend.externalUrls.rollupScanApi,
   }
 
@@ -661,11 +667,26 @@ export interface ContractAddresses {
 }
 
 /**
+ * Values from bridge-init output (output-withdrawal-processor.toml).
+ * These are runtime artifacts that can't be computed at spec time.
+ */
+export interface BridgeInitValues {
+  bridge_address?: string
+  bridge_script_hex?: string
+  fee_signer_key?: string
+  genesis_sequencer_txid?: string
+  genesis_sequencer_vout?: number
+  network_str?: string
+  sequencer_signer_key?: string
+}
+
+/**
  * Generate l1-interface.toml content from DeploymentSpec
  */
 export function generateL1InterfaceToml(
   spec: DeploymentSpec,
   contractAddresses?: ContractAddresses,
+  bridgeInitValues?: BridgeInitValues,
 ): string {
   const l1 = spec.l1Interface
   const sim = l1?.l1Simulation
@@ -712,7 +733,6 @@ export function generateL1InterfaceToml(
   // [dogecoin_indexer]
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
   const dogecoinIndexer: Record<string, any> = {
-    bridge_address: '',
     confirmations: dogeIdx?.confirmations ?? 1,
     index_deposits: dogeIdx?.indexDeposits ?? true,
     index_utxos: dogeIdx?.indexUtxos ?? false,
@@ -721,9 +741,11 @@ export function generateL1InterfaceToml(
     start_height: spec.dogecoin.indexerStartHeight,
   }
 
-  // Try to get bridge address from contract addresses
-  if (contractAddresses?.DOGE_BRIDGE_ADDR) {
-    dogecoinIndexer.bridge_address = contractAddresses.DOGE_BRIDGE_ADDR
+  // Try to get bridge address: prefer bridge-init output, then contract addresses.
+  // Omit if empty — l1-interface treats missing as None, but empty string fails address parsing.
+  const bridgeAddr = bridgeInitValues?.bridge_address ?? contractAddresses?.DOGE_BRIDGE_ADDR
+  if (bridgeAddr) {
+    dogecoinIndexer.bridge_address = bridgeAddr
   }
 
   config.dogecoin_indexer = dogecoinIndexer
@@ -765,19 +787,189 @@ export function generateDaPublisherToml(spec: DeploymentSpec): string {
 }
 
 /**
+ * Generate fee-oracle.toml content from DeploymentSpec
+ */
+export function generateFeeOracleToml(
+  spec: DeploymentSpec,
+  _contractAddresses?: ContractAddresses,
+): string {
+  const fo = spec.feeOracle
+
+  // Map dogecoin network: "testnet" in spec → "regtest" for local/devnet
+  const networkStr = spec.dogecoin.network === 'testnet' &&
+    (spec.metadata.environment === 'devnet' || spec.infrastructure.provider === 'local')
+    ? 'regtest'
+    : spec.dogecoin.network
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
+  const config: Record<string, any> = {
+    celestia: {
+      base_fee_per_blob: fo?.baseFeePerBlob ?? 100_000,
+      catchup_fee_per_blob: 200_000,
+      fallback_fee_per_blob: 150_000,
+      grpc_url: spec.celestia.tendermintRpcUrl,
+      namespace_id: spec.celestia.namespace,
+      poll_interval: fo?.celestiaPollInterval ?? 60,
+    },
+    database: {
+      connection_pool_size: 10,
+      sqlite_path: fo?.sqlitePath ?? './fee_oracle.db',
+    },
+    deployment: {
+      dry_run: fo?.dryRun ?? false,
+    },
+    dogecoin: {
+      base_fee_rate: 1_000_000,
+      empty_mempool_fee_rate: 1_500_000,
+      fee_lookback_blocks: fo?.feeLookbackBlocks ?? 10,
+      mempool_sample_size: 1000,
+      network_str: networkStr,
+      poll_interval: fo?.dogecoinPollInterval ?? 30,
+      rpc_password: spec.dogecoin.rpc.password,
+      rpc_url: spec.dogecoin.rpc.url,
+      rpc_user: spec.dogecoin.rpc.username,
+    },
+    l2: {
+      chain_id: spec.network.l2ChainId,
+      confirmations: fo?.confirmations ?? 1,
+      gas_oracle_contract: fo?.gasOracleContract ?? '0x5300000000000000000000000000000000000002',
+      max_gas_price: fo?.maxGasPrice ?? 1_000_000_000_000,
+      priority_fee: fo?.priorityFee ?? 1_000_000_000,
+      rpc_url: spec.network.l2RpcEndpoint,
+    },
+    monitoring: {
+      health_bind_address: '0.0.0.0',
+      health_check_port: fo?.healthCheckPort ?? 8080,
+      metrics_port: fo?.metricsPort ?? 9090,
+    },
+    price_oracle: {
+      cache_duration: fo?.priceOracle?.cacheDuration ?? 300,
+      coinbase_enabled: fo?.priceOracle?.coinbaseEnabled ?? true,
+      coingecko_enabled: fo?.priceOracle?.coingeckoEnabled ?? false,
+      gateio_enabled: fo?.priceOracle?.gateioEnabled ?? true,
+      kraken_enabled: fo?.priceOracle?.krakenEnabled ?? true,
+      max_retries: 3,
+      request_timeout: 30,
+      update_on_each_cycle: false,
+    },
+    thresholds: {
+      celestia_fee_change_percent: 10,
+      default_celestia_fee: 100_000_000,
+      default_dogecoin_fee: 1_000_000,
+      dogecoin_fee_change_percent: 5,
+      high_gas_mode_threshold: 1_000_000_000_000,
+      min_update_interval: 60,
+    },
+    wallet: {
+      private_key_env: 'DOGEOS_FEE_ORACLE_PRIVATE_KEY',
+    },
+  }
+
+  return toml.stringify(config as toml.JsonMap)
+}
+
+/**
+ * Generate withdrawal-processor.toml content from DeploymentSpec
+ */
+export function generateWithdrawalProcessorToml(
+  spec: DeploymentSpec,
+  contractAddresses?: ContractAddresses,
+  bridgeInitValues?: BridgeInitValues,
+): string {
+  const wp = spec.withdrawalProcessor
+
+  // Map dogecoin network: "testnet" in spec → "regtest" for local/devnet
+  const networkStr = spec.dogecoin.network === 'testnet' &&
+    (spec.metadata.environment === 'devnet' || spec.infrastructure.provider === 'local')
+    ? 'regtest'
+    : spec.dogecoin.network
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
+  const config: Record<string, any> = {
+    api_port: wp?.apiPort ?? 3000,
+    bridge_address: bridgeInitValues?.bridge_address ?? '2N1dummy',
+    bridge_script_hex: bridgeInitValues?.bridge_script_hex ?? '0000',
+    database_url: wp?.databaseUrl ?? '/tmp/dogeos-withdrawal-processor.sqlite',
+    debug_skip_broadcast: wp?.debugSkipBroadcast ?? false,
+    debug_skip_tso_polling: wp?.debugSkipTsoPolling ?? false,
+    dogecoin_rpc_pass: spec.dogecoin.rpc.password,
+    dogecoin_rpc_url: spec.dogecoin.rpc.url,
+    dogecoin_rpc_user: spec.dogecoin.rpc.username,
+    fee_rate_sat_per_kvb: spec.bridge.feeRateSatPerKvb,
+    genesis_sequencer_txid: bridgeInitValues?.genesis_sequencer_txid ?? '0000000000000000000000000000000000000000000000000000000000000000',
+    genesis_sequencer_vout: bridgeInitValues?.genesis_sequencer_vout ?? 0,
+    max_withdrawal_outputs_per_tx: wp?.maxWithdrawalOutputsPerTx ?? 85,
+    network_str: bridgeInitValues?.network_str ?? networkStr,
+    tso_url: wp?.tsoUrl ?? spec.signing.tsoServiceUrl ?? 'http://127.0.0.1:3001',
+  }
+
+  // Signer keys: prefer bridge-init values, then fall back to spec
+  if (bridgeInitValues?.fee_signer_key ?? wp?.feeSignerKey) {
+    config.fee_signer_key = bridgeInitValues?.fee_signer_key ?? wp?.feeSignerKey
+  }
+
+  if (bridgeInitValues?.sequencer_signer_key ?? wp?.sequencerSignerKey) {
+    config.sequencer_signer_key = bridgeInitValues?.sequencer_signer_key ?? wp?.sequencerSignerKey
+  }
+
+  // [dogecoin_indexer]
+  config.dogecoin_indexer = {
+    confirmations: wp?.dogecoinIndexer?.confirmations ?? 1,
+    poll_interval_ms: wp?.dogecoinIndexer?.pollIntervalMs ?? 10_000,
+    start_height: spec.dogecoin.indexerStartHeight,
+  }
+
+  // [dogeos_indexer]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
+  const dogeosIndexer: Record<string, any> = {
+    confirmations: wp?.dogeosIndexer?.confirmations ?? 1,
+    log_query_batch_size: wp?.dogeosIndexer?.logQueryBatchSize ?? 1000,
+    message_queue_address: '0x5300000000000000000000000000000000000000',
+    messenger_address: contractAddresses?.L2_DOGEOS_MESSENGER_PROXY_ADDR ?? '0x0000000000000000000000000000000000000000',
+    poll_interval_ms: wp?.dogeosIndexer?.pollIntervalMs ?? 5000,
+    rpc_url: spec.network.l2RpcEndpoint,
+    start_block: 1,
+  }
+
+  config.dogeos_indexer = dogeosIndexer
+
+  // [celestia_indexer]
+  config.celestia_indexer = {
+    confirmations: wp?.celestiaIndexer?.confirmations ?? 1,
+    da_namespace: spec.celestia.namespace,
+    da_rpc_url: spec.celestia.tendermintRpcUrl,
+    fetch_and_decode_blobs: wp?.celestiaIndexer?.fetchAndDecodeBlobs ?? false,
+    poll_interval_ms: wp?.celestiaIndexer?.pollIntervalMs ?? 15_000,
+    start_block: spec.celestia.indexerStartBlock,
+    tendermint_rpc_url: spec.celestia.tendermintRpcUrl,
+  }
+
+  // [utxo_manager]
+  config.utxo_manager = {
+    bridge_min_confirmations: wp?.utxoManager?.bridgeMinConfirmations ?? 1,
+    high_thresh_sats: wp?.utxoManager?.highThreshSats ?? 1_000_000_000,
+  }
+
+  return toml.stringify(config as toml.JsonMap)
+}
+
+/**
  * Generate all configuration files from a DeploymentSpec
  */
 export interface GeneratedConfigs {
   'config.toml': string
   'da-publisher.toml'?: string
   'doge-config.toml': string
+  'fee-oracle.toml'?: string
   'l1-interface.toml'?: string
   'setup_defaults.toml': string
+  'withdrawal-processor.toml'?: string
 }
 
 export function generateAllConfigs(
   spec: DeploymentSpec,
   contractAddresses?: ContractAddresses,
+  bridgeInitValues?: BridgeInitValues,
 ): GeneratedConfigs {
   const configs: GeneratedConfigs = {
     'config.toml': generateConfigToml(spec),
@@ -786,11 +978,19 @@ export function generateAllConfigs(
   }
 
   if (spec.l1Interface) {
-    configs['l1-interface.toml'] = generateL1InterfaceToml(spec, contractAddresses)
+    configs['l1-interface.toml'] = generateL1InterfaceToml(spec, contractAddresses, bridgeInitValues)
   }
 
   if (spec.daPublisher) {
     configs['da-publisher.toml'] = generateDaPublisherToml(spec)
+  }
+
+  if (spec.feeOracle) {
+    configs['fee-oracle.toml'] = generateFeeOracleToml(spec, contractAddresses)
+  }
+
+  if (spec.withdrawalProcessor) {
+    configs['withdrawal-processor.toml'] = generateWithdrawalProcessorToml(spec, contractAddresses, bridgeInitValues)
   }
 
   return configs
@@ -835,6 +1035,18 @@ export function writeGeneratedConfigs(
   if (configs['da-publisher.toml']) {
     fs.writeFileSync(path.join(dataDir, 'da-publisher.toml'), configs['da-publisher.toml'])
     written.push('.data/da-publisher.toml')
+  }
+
+  // Write optional fee-oracle.toml to .data directory
+  if (configs['fee-oracle.toml']) {
+    fs.writeFileSync(path.join(dataDir, 'fee-oracle.toml'), configs['fee-oracle.toml'])
+    written.push('.data/fee-oracle.toml')
+  }
+
+  // Write optional withdrawal-processor.toml to .data directory
+  if (configs['withdrawal-processor.toml']) {
+    fs.writeFileSync(path.join(dataDir, 'withdrawal-processor.toml'), configs['withdrawal-processor.toml'])
+    written.push('.data/withdrawal-processor.toml')
   }
 
   return written

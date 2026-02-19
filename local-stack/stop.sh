@@ -17,8 +17,10 @@ fi
 
 log "=== Stopping DogeOS Local Stack ==="
 
-# Stop native processes (l1-interface, da-publisher)
-for pidfile in "${SCRIPT_DIR}/l1-interface.pid" "${SCRIPT_DIR}/da-publisher.pid"; do
+# Stop native processes
+for pidfile in "${SCRIPT_DIR}/l1-interface.pid" "${SCRIPT_DIR}/da-publisher.pid" \
+               "${SCRIPT_DIR}/fee-oracle.pid" "${SCRIPT_DIR}/withdrawal-processor.pid" \
+               "${SCRIPT_DIR}/l2-txgen.pid" "${SCRIPT_DIR}/dogecoin-miner.pid"; do
   if [ -f "${pidfile}" ]; then
     svc="$(basename "${pidfile}" .pid)"
     PID=$(cat "${pidfile}")
@@ -31,7 +33,9 @@ for pidfile in "${SCRIPT_DIR}/l1-interface.pid" "${SCRIPT_DIR}/da-publisher.pid"
 done
 
 # Stop Docker containers
-for container in dogeos-l2geth dogeos-dogecoin dogeos-postgres; do
+for container in dogeos-l2geth dogeos-dogecoin dogeos-postgres \
+                 dogeos-rollup-relayer dogeos-celestia \
+                 dogeos-tso dummy-signer-0; do
   if docker ps -q -f name="${container}" 2>/dev/null | grep -q .; then
     log "Stopping ${container}..."
     docker stop "${container}" && docker rm "${container}"
@@ -40,18 +44,8 @@ for container in dogeos-l2geth dogeos-dogecoin dogeos-postgres; do
   fi
 done
 
-# Stop Anvil
-if [ -f "${SCRIPT_DIR}/anvil.pid" ]; then
-  ANVIL_PID=$(cat "${SCRIPT_DIR}/anvil.pid")
-  if kill -0 "${ANVIL_PID}" 2>/dev/null; then
-    log "Stopping Anvil (PID ${ANVIL_PID})..."
-    kill "${ANVIL_PID}"
-  fi
-  rm -f "${SCRIPT_DIR}/anvil.pid"
-fi
-
 # Kill anything still on the ports
-for port in 8545 8546 8547 8548 3001 9091; do
+for port in 8546 8547 8548 3000 3001 3002 3003 3500 4000 8080 9091 18445; do
   if lsof -ti:${port} >/dev/null 2>&1; then
     log "Killing remaining process on port ${port}"
     kill $(lsof -ti:${port}) 2>/dev/null || true

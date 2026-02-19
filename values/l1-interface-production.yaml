@@ -1,4 +1,0 @@
-configMaps:
-  env:
-    data:
-      DOGEOS_L1_INTERFACE_NETWORK_STR: testnet

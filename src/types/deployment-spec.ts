@@ -31,6 +31,9 @@ export interface DeploymentSpec {
   /** Dogecoin L1 configuration */
   dogecoin: DogecoinConfig
 
+  /** Optional fee-oracle service configuration */
+  feeOracle?: FeeOracleConfig
+
   /** Frontend and ingress configuration */
   frontend: FrontendConfig
 
@@ -63,6 +66,9 @@ export interface DeploymentSpec {
 
   /** Schema version for forward compatibility */
   version: '1.0'
+
+  /** Optional withdrawal-processor service configuration */
+  withdrawalProcessor?: WithdrawalProcessorConfig
 }
 
 export interface DeploymentMetadata {
@@ -586,6 +592,82 @@ export interface DaPublisherConfig {
   listenAddress?: string
   /** Listen port (default: 3000) */
   listenPort?: number
+}
+
+export interface FeeOracleConfig {
+  /** Celestia base fee per blob in utia (default: 100000) */
+  baseFeePerBlob?: number
+  /** Celestia poll interval seconds (default: 60) */
+  celestiaPollInterval?: number
+  /** L2 confirmations (default: 1) */
+  confirmations?: number
+  /** Dogecoin poll interval seconds (default: 30) */
+  dogecoinPollInterval?: number
+  /** Dry run mode (default: false) */
+  dryRun?: boolean
+  /** Dogecoin fee lookback blocks (default: 10) */
+  feeLookbackBlocks?: number
+  /** L2 gas oracle contract (default: "0x5300000000000000000000000000000000000002") */
+  gasOracleContract?: string
+  /** Health check port (default: 8080) */
+  healthCheckPort?: number
+  /** Max gas price in wei (default: 1000000000000) */
+  maxGasPrice?: number
+  /** Metrics port (default: 9090) */
+  metricsPort?: number
+  /** Price oracle config */
+  priceOracle?: {
+    cacheDuration?: number     // default: 300
+    coinbaseEnabled?: boolean  // default: true
+    coingeckoEnabled?: boolean // default: false
+    gateioEnabled?: boolean    // default: true
+    krakenEnabled?: boolean    // default: true
+  }
+  /** Priority fee in wei (default: 1000000000) */
+  priorityFee?: number
+  /** SQLite database path (default: ".data/fee_oracle.db") */
+  sqlitePath?: string
+}
+
+export interface WithdrawalProcessorConfig {
+  /** API port (default: 3000) */
+  apiPort?: number
+  /** Celestia indexer tuning */
+  celestiaIndexer?: {
+    confirmations?: number       // default: 1
+    fetchAndDecodeBlobs?: boolean // default: false
+    pollIntervalMs?: number      // default: 15000
+  }
+  /** SQLite database path (default: ".data/withdrawal-processor.sqlite") */
+  databaseUrl?: string
+  /** Skip broadcast for testing (default: false) */
+  debugSkipBroadcast?: boolean
+  /** Skip TSO polling for testing (default: false) */
+  debugSkipTsoPolling?: boolean
+  /** Dogecoin indexer tuning */
+  dogecoinIndexer?: {
+    confirmations?: number    // default: 1
+    pollIntervalMs?: number   // default: 10000
+  }
+  /** DogeOS L2 indexer tuning */
+  dogeosIndexer?: {
+    confirmations?: number       // default: 1
+    logQueryBatchSize?: number   // default: 1000
+    pollIntervalMs?: number      // default: 5000
+  }
+  /** Fee signer key (WIF format) */
+  feeSignerKey?: string
+  /** Max withdrawal outputs per tx (default: 85) */
+  maxWithdrawalOutputsPerTx?: number
+  /** Sequencer signer key (WIF format) */
+  sequencerSignerKey?: string
+  /** TSO service URL */
+  tsoUrl?: string
+  /** UTXO manager */
+  utxoManager?: {
+    bridgeMinConfirmations?: number  // default: 1
+    highThreshSats?: number          // default: 1000000000
+  }
 }
 
 /**

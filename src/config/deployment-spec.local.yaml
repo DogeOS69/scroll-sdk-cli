@@ -60,22 +60,22 @@ accounts:
   owner:
     address: "0xdED06046416d6bA20c1e2baD51B3A3e2f267d33F"
   l1CommitSender:
-    address: "0xB03F8276E8D085F67D4A04457B3EEd5A7E7a5Af5"
+    address: "0xd48CBDd33d9d24851488dA361Aed5311d6760a60"
     privateKey: "0x3f37a3239c8c909c23f6a2ec01c9c26485b9d2a2cd47b089876d2be5c38f328f"
   l1FinalizeSender:
-    address: "0x66a6ef38c9E64BfFcD2a5e0AEd370DD6c4ee7502"
+    address: "0x09a5d7Ed515865CCE698fcDC7329aBCdc472cc4c"
     privateKey: "0x8a6d51138c05463e0c9b4501f5bb99d4774aa5ddeb46042832ac4e38aef02fdc"
   l1GasOracleSender:
-    address: "0x79BF96a51a1B24fc1B88D1f3F2b5c3b243b2a3b0"
+    address: "0x44Db8ad83dA0605Eb27FE26804CEAE1eEbbcAaB1"
     privateKey: "0x1805b8b581a4710cf29881fb3eb80ceaf1d5a395a5ace8012d01953a2c1795db"
   l2GasOracleSender:
-    address: "0xd8BA1C4526A3a8A3B4e9e0937E8D1A78D94e5310"
+    address: "0x29E2f3B76662134404cEA5A8f12E0d4B6e6fdE5a"
     privateKey: "0x96cba5a694704477d6186aebc79a7ff50ba7ed95caacfe62a085a2d78be57597"
 
 dogecoin:
   network: testnet
   rpc:
-    url: "http://127.0.0.1:44556"
+    url: "http://127.0.0.1:18445"
     username: doge
     password: doge_pass
   indexerStartHeight: 1
@@ -158,8 +158,8 @@ contracts:
   gasOracle:
     blobScalar: 1
     scalar: 1
-    penaltyThreshold: 100
-    penaltyFactor: 10
+    penaltyThreshold: 1000000000
+    penaltyFactor: 1000000000
 
 genesis:
   maxEthSupply: "100000000000000000000000000000"
@@ -175,9 +175,9 @@ test:
 l1Interface:
   databaseUrl: "local-stack/l1_interface.sqlite"
   genesisJsonPath: "local-stack/genesis.json"
-  apiBindAddress: "127.0.0.1:8548"
-  beaconApiListenAddress: "127.0.0.1:3500"
-  healthListenAddress: "127.0.0.1:9091"
+  apiBindAddress: "0.0.0.0:8548"
+  beaconApiListenAddress: "0.0.0.0:3500"
+  healthListenAddress: "0.0.0.0:9091"
   depositGasLimit: 500000
   initialSystemSigner: "0xa7CdA54170FFD9F9C7A6DC72f8a5E6E15ca32fA3"
   l1Simulation:
@@ -203,3 +203,34 @@ daPublisher:
   listenPort: 3000
   jsonRpcAddress: "0.0.0.0"
   jsonRpcPort: 3001
+
+feeOracle:
+  dogecoinPollInterval: 30
+  celestiaPollInterval: 60
+  baseFeePerBlob: 100000
+  sqlitePath: "./fee_oracle.db"
+  priceOracle:
+    krakenEnabled: true
+    coinbaseEnabled: true
+    gateioEnabled: true
+    coingeckoEnabled: false
+  healthCheckPort: 8080
+  dryRun: false
+
+withdrawalProcessor:
+  databaseUrl: "/tmp/dogeos-withdrawal-processor.sqlite"
+  tsoUrl: "http://127.0.0.1:3003"
+  apiPort: 3002
+  debugSkipBroadcast: true
+  debugSkipTsoPolling: false
+  feeSignerKey: "cNqM3Bz7u7Y5gFhQrVTxb2KjDKTPbWGpiBLVCZFhcGUSmgiw1tpS"
+  sequencerSignerKey: "cNqM3Bz7u7Y5gFhQrVTxb2KjDKTPbWGpiBLVCZFhcGUSmgiw1tpS"
+  dogecoinIndexer:
+    pollIntervalMs: 10000
+  dogeosIndexer:
+    pollIntervalMs: 5000
+  celestiaIndexer:
+    pollIntervalMs: 15000
+    fetchAndDecodeBlobs: false
+  utxoManager:
+    highThreshSats: 1000000000

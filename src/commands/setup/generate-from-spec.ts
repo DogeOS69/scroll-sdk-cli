@@ -3,6 +3,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import {
+  type BridgeInitValues,
   type ContractAddresses,
   type GeneratedConfigs,
   generateAllConfigs,
@@ -188,7 +189,23 @@ export default class GenerateFromSpec extends Command {
         jsonCtx.addWarning(`Contract addresses file not found: ${contractsPath}`)
       }
 
-      configs = generateAllConfigs(spec, contractAddresses)
+      // Load bridge-init output if available (output-withdrawal-processor.toml)
+      let bridgeInitValues: BridgeInitValues | undefined
+      const bridgeInitPath = path.join(outputDir, '.data', 'output-withdrawal-processor.toml')
+      if (fs.existsSync(bridgeInitPath)) {
+        try {
+          const bridgeContent = fs.readFileSync(bridgeInitPath, 'utf8')
+          const tomlModule = await import('@iarna/toml')
+          bridgeInitValues = tomlModule.parse(bridgeContent) as BridgeInitValues
+          jsonCtx.logKeyValue('Bridge-init values', bridgeInitPath)
+        } catch {
+          jsonCtx.addWarning(`Failed to parse bridge-init output from ${bridgeInitPath}`)
+        }
+      } else {
+        jsonCtx.addWarning('No bridge-init output found — withdrawal-processor will have placeholder bridge values. Run "scrollsdk doge bridge-init" first.')
+      }
+
+      configs = generateAllConfigs(spec, contractAddresses, bridgeInitValues)
     }
 
     if (generateValues) {
@@ -213,6 +230,14 @@ export default class GenerateFromSpec extends Command {
         if (configs['da-publisher.toml']) {
           jsonCtx.logKeyValue('  da-publisher.toml', path.join(dataDir, 'da-publisher.toml'))
         }
+
+        if (configs['fee-oracle.toml']) {
+          jsonCtx.logKeyValue('  fee-oracle.toml', path.join(dataDir, 'fee-oracle.toml'))
+        }
+
+        if (configs['withdrawal-processor.toml']) {
+          jsonCtx.logKeyValue('  withdrawal-processor.toml', path.join(dataDir, 'withdrawal-processor.toml'))
+        }
       }
 
       if (valuesFiles) {
@@ -225,7 +250,9 @@ export default class GenerateFromSpec extends Command {
       const configFileList = configs
         ? ['config.toml', 'doge-config.toml', 'setup_defaults.toml',
             ...(configs['l1-interface.toml'] ? ['l1-interface.toml'] : []),
-            ...(configs['da-publisher.toml'] ? ['da-publisher.toml'] : [])]
+            ...(configs['da-publisher.toml'] ? ['da-publisher.toml'] : []),
+            ...(configs['fee-oracle.toml'] ? ['fee-oracle.toml'] : []),
+            ...(configs['withdrawal-processor.toml'] ? ['withdrawal-processor.toml'] : [])]
         : []
       jsonCtx.success({
         configFiles: configFileList,
@@ -263,6 +290,14 @@ export default class GenerateFromSpec extends Command {
 
         if (configs['da-publisher.toml'] && fs.existsSync(path.join(dataDir, 'da-publisher.toml'))) {
           existingFiles.push('.data/da-publisher.toml')
+        }
+
+        if (configs['fee-oracle.toml'] && fs.existsSync(path.join(dataDir, 'fee-oracle.toml'))) {
+          existingFiles.push('.data/fee-oracle.toml')
+        }
+
+        if (configs['withdrawal-processor.toml'] && fs.existsSync(path.join(dataDir, 'withdrawal-processor.toml'))) {
+          existingFiles.push('.data/withdrawal-processor.toml')
         }
       }
 
