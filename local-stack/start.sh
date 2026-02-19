@@ -181,6 +181,34 @@ regenerate_service_configs() {
   }
 }
 
+prepare_contracts_volume_config() {
+  # The forge contract scripts read ./volume/config.toml inside the container.
+  # This maps to contracts-volume/config.toml on the host.
+  # generate-from-spec produces the project root config.toml but omits [sequencer]
+  # (that section is normally created by gen-keystore for k8s deployments).
+  # We copy the generated config and append the [sequencer] section that forge needs.
+  mkdir -p "${SCRIPT_DIR}/contracts-volume"
+  if [ ! -f "${PROJECT_DIR}/config.toml" ]; then
+    err "config.toml not found — regenerate_service_configs must run first"
+    return 1
+  fi
+  cp "${PROJECT_DIR}/config.toml" "${SCRIPT_DIR}/contracts-volume/config.toml"
+
+  # Append [sequencer] if not already present
+  if ! grep -q '^\[sequencer\]' "${SCRIPT_DIR}/contracts-volume/config.toml"; then
+    cat >> "${SCRIPT_DIR}/contracts-volume/config.toml" <<EOF
+
+[sequencer]
+L2GETH_SIGNER_ADDRESS = "${SIGNER_ADDR}"
+L2GETH_KEYSTORE = ""
+L2GETH_PASSWORD = ""
+L2GETH_NODEKEY = ""
+L2_GETH_STATIC_PEERS = []
+EOF
+  fi
+  log "Prepared contracts-volume/config.toml (with [sequencer] section)"
+}
+
 deploy_l2_contracts() {
   log "Deploying contracts to L2 geth..."
 
@@ -634,16 +662,24 @@ section "DogeOS Local Stack"
 
 cleanup_existing
 
-# Step 1: Generate deterministic contract addresses (pure computation, no RPC needed).
+# Step 1: Generate config.toml from deployment spec (first pass — without contract addresses).
+# This is needed so forge has a valid config.toml to read during address generation.
+regenerate_service_configs
+
+# Step 2: Prepare contracts-volume/config.toml (copy from project root + add [sequencer]).
+# Forge reads this file inside the container; generate-from-spec doesn't produce [sequencer].
+prepare_contracts_volume_config
+
+# Step 3: Generate deterministic contract addresses (pure computation, no RPC needed).
 # This writes config-contracts.toml which l1-interface and other services need at startup.
 section "Generating contract addresses"
 generate_contract_addresses
 
-# Step 2: Regenerate service configs with the fresh contract addresses.
+# Step 4: Regenerate service configs with the fresh contract addresses (second pass).
 # This reads config-contracts.toml and writes l1-interface.toml, fee-oracle.toml, etc.
 regenerate_service_configs
 
-# Step 3: Start infrastructure services
+# Step 5: Start infrastructure services
 # Dogecoin regtest (L1)
 start_dogecoin
 wait_for_dogecoin
@@ -669,7 +705,7 @@ sleep 5
 start_da_publisher
 sleep 1
 
-# Step 4: Deploy L2 contracts (needs L2 geth running).
+# Step 6: Deploy L2 contracts (needs L2 geth running).
 # Addresses were already computed in step 1; this deploys bytecode to L2 only.
 # NOTE: No other deployer-key transactions (setup_l2_accounts, tx-gen) must run
 # before this — they advance the nonce and cause forge "nonce too low" errors.

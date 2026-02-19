@@ -31,13 +31,15 @@ L2 contracts (L2ScrollMessenger, gateways, etc.) ARE deployed to L2 geth via for
 
 ### Contract deployment
 
-The `deploy-contracts.sh` script runs inside the `scroll-stack-contracts` Docker image:
+Address generation and L2 deployment are separate steps, run by different scripts inside the `scroll-stack-contracts` Docker image:
 
-1. **Simulate** (`"None"` mode) — computes all deterministic CREATE2 addresses, writes `config-contracts.toml`
-2. **Simulate L2** — dry-run against L2 geth to verify deployment will succeed
-3. **Deploy L2** — broadcasts real transactions to L2 geth
+1. **Generate addresses** (`generate-addresses.sh`, `"None"` mode) — computes all deterministic CREATE2 addresses, writes `config-contracts.toml`. No RPC needed.
+2. **Simulate L2** (`deploy-contracts.sh`) — dry-run against L2 geth to verify deployment will succeed
+3. **Deploy L2** (`deploy-contracts.sh`) — broadcasts real transactions to L2 geth
 
 L1 deployment is skipped entirely. The simulation step produces the same deterministic addresses regardless.
+
+**Note on `contracts-volume/config.toml`**: The forge scripts read `./volume/config.toml` inside the container, which maps to `contracts-volume/config.toml` on the host. This file must include a `[sequencer]` section with `L2GETH_SIGNER_ADDRESS` — `start.sh` generates it automatically from the project root config.toml.
 
 ## Prerequisites
 
@@ -78,21 +80,23 @@ The stack starts all services in a single linear sequence — no phases or manua
 
 ## Startup Sequence
 
-1. **Generate deterministic addresses** (forge simulation, no RPC needed)
-2. **Regenerate service configs** (writes addresses into l1-interface.toml, etc.)
-3. Dogecoin regtest node + auto-miner (110 initial blocks)
-4. PostgreSQL
-5. l1-interface (Dogecoin → EVM block translation, now has correct addresses)
-6. L2 geth (initialized with genesis.json, points to l1-interface)
-7. Celestia devnet (consensus + bridge node)
-8. da-publisher (L2 blobs → Celestia)
-9. **Deploy L2 contracts** (forge broadcast to L2 geth, if not already deployed)
-10. L2 account setup (fund fee-oracle sender, whitelist)
-11. L2 tx generator (continuous block production)
-12. Service databases + rollup DB migration
-13. rollup-relayer
-14. TSO + dummy-signer
-15. fee-oracle + withdrawal-processor
+1. **Generate config.toml** from deployment spec (first pass, without contract addresses)
+2. **Prepare contracts-volume/config.toml** (copy config + add `[sequencer]` section for forge)
+3. **Generate deterministic addresses** (forge simulation, no RPC needed)
+4. **Regenerate service configs** (second pass — writes real contract addresses into l1-interface.toml, etc.)
+5. Dogecoin regtest node + auto-miner (110 initial blocks)
+6. PostgreSQL
+7. l1-interface (Dogecoin → EVM block translation, now has correct addresses)
+8. L2 geth (initialized with genesis.json, points to l1-interface)
+9. Celestia devnet (consensus + bridge node)
+10. da-publisher (L2 blobs → Celestia)
+11. **Deploy L2 contracts** (forge broadcast to L2 geth, if not already deployed)
+12. L2 account setup (fund fee-oracle sender, whitelist)
+13. L2 tx generator (continuous block production)
+14. Service databases + rollup DB migration
+15. rollup-relayer
+16. TSO + dummy-signer
+17. fee-oracle + withdrawal-processor
 
 ## Logs
 
