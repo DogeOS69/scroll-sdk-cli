@@ -158,7 +158,7 @@ contracts:
   gasOracle:
     blobScalar: 1
     scalar: 1
-    penaltyThreshold: 100
+    penaltyThreshold: 1000000000
     penaltyFactor: 10
 
 genesis:
