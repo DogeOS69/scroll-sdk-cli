@@ -60,16 +60,16 @@ accounts:
   owner:
     address: "0xdED06046416d6bA20c1e2baD51B3A3e2f267d33F"
   l1CommitSender:
-    address: "0xB03F8276E8D085F67D4A04457B3EEd5A7E7a5Af5"
+    address: "0xd48CBDd33d9d24851488dA361Aed5311d6760a60"
     privateKey: "0x3f37a3239c8c909c23f6a2ec01c9c26485b9d2a2cd47b089876d2be5c38f328f"
   l1FinalizeSender:
-    address: "0x66a6ef38c9E64BfFcD2a5e0AEd370DD6c4ee7502"
+    address: "0x09a5d7Ed515865CCE698fcDC7329aBCdc472cc4c"
     privateKey: "0x8a6d51138c05463e0c9b4501f5bb99d4774aa5ddeb46042832ac4e38aef02fdc"
   l1GasOracleSender:
-    address: "0x79BF96a51a1B24fc1B88D1f3F2b5c3b243b2a3b0"
+    address: "0x44Db8ad83dA0605Eb27FE26804CEAE1eEbbcAaB1"
     privateKey: "0x1805b8b581a4710cf29881fb3eb80ceaf1d5a395a5ace8012d01953a2c1795db"
   l2GasOracleSender:
-    address: "0xd8BA1C4526A3a8A3B4e9e0937E8D1A78D94e5310"
+    address: "0x29E2f3B76662134404cEA5A8f12E0d4B6e6fdE5a"
     privateKey: "0x96cba5a694704477d6186aebc79a7ff50ba7ed95caacfe62a085a2d78be57597"
 
 dogecoin:
