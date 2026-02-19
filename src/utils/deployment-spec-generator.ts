@@ -378,6 +378,9 @@ export function generateConfigToml(spec: DeploymentSpec): string {
 
   // [frontend] section
   config.frontend = {
+    ADMIN_SYSTEM_DASHBOARD_URI: spec.frontend.hosts.adminDashboard
+      ? `http://${spec.frontend.hosts.adminDashboard}`
+      : '',
     BASE_CHAIN: spec.network.tokenSymbol,
     BRIDGE_API_URI: spec.frontend.externalUrls.bridgeApi,
     CONNECT_WALLET_PROJECT_ID: spec.frontend.walletConnectProjectId || '',
@@ -386,6 +389,9 @@ export function generateConfigToml(spec: DeploymentSpec): string {
     EXTERNAL_EXPLORER_URI_L2: spec.frontend.externalUrls.l2Explorer,
     EXTERNAL_RPC_URI_L1: spec.frontend.externalUrls.l1Rpc,
     EXTERNAL_RPC_URI_L2: spec.frontend.externalUrls.l2Rpc,
+    GRAFANA_URI: spec.frontend.hosts.grafana
+      ? `http://${spec.frontend.hosts.grafana}`
+      : '',
     ROLLUPSCAN_API_URI: spec.frontend.externalUrls.rollupScanApi,
   }
 
