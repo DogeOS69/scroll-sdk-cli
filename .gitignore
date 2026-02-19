@@ -34,11 +34,13 @@ testing_improvements.md
 /local-stack/data/
 /local-stack/dogecoin-data/
 /local-stack/dogecoin-regtest-data/
+/local-stack/celestia-devnet/
 /local-stack/contracts-volume/
 /local-stack/*.pid
 /local-stack/*.log
 /local-stack/*.sqlite*
 /local-stack/password
+/local-stack/.l2-contracts-deployed
 
 # Generated values files
 /values/
