@@ -159,7 +159,7 @@ contracts:
     blobScalar: 1
     scalar: 1
     penaltyThreshold: 1000000000
-    penaltyFactor: 10
+    penaltyFactor: 1000000000
 
 genesis:
   maxEthSupply: "100000000000000000000000000000"
