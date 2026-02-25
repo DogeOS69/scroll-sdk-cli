@@ -309,7 +309,21 @@ export interface CelestiaConfig {
   tendermintRpcUrl: string
 }
 
+export interface BaseFundingUtxo {
+  /** Amount in satoshis */
+  amount_sats: number
+  /** Previous transaction hex (optional) */
+  prev_tx_hex?: string
+  /** Transaction ID */
+  txid: string
+  /** Output index */
+  vout: number
+}
+
 export interface BridgeConfig {
+  /** Optional base funding UTXOs for bridge initialization */
+  baseFundingUtxos?: BaseFundingUtxo[]
+
   /** Required confirmations for deposits */
   confirmationsRequired: number
 

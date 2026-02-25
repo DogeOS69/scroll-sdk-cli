@@ -188,11 +188,17 @@ export class BridgeInitCommand extends Command {
             })
 
             this.jsonCtx.info('Creating Docker Container...')
+            const setupDefaultsPath = getSetupDefaultsPath();
+            const absoluteSetupDefaultsPath = path.resolve(setupDefaultsPath);
+
             // Create and run the container
             const container = await docker.createContainer({
                 Cmd: [], // Add any command if needed
                 HostConfig: {
-                    Binds: [`${process.cwd()}:/app`],
+                    Binds: [
+                        `${process.cwd()}:/app`,
+                        `${absoluteSetupDefaultsPath}:/app/crates/test_utils/config/setup_defaults.toml`
+                    ],
                 },
                 Image: image,
                 WorkingDir: '/app',

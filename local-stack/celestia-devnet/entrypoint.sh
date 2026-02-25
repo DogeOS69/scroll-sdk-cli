@@ -12,12 +12,16 @@ rm -rf "$APP_PATH" "$NODE_PATH"
 coins="1000000000000000utia"
 celestia-appd init "$CHAINID" --chain-id "$CHAINID" 2>&1
 celestia-appd keys add validator --keyring-backend="test" 2>&1
-celestia-appd add-genesis-account "$(celestia-appd keys show validator -a --keyring-backend="test")" "$coins" 2>&1
-celestia-appd gentx validator 5000000000utia \
+celestia-appd genesis add-genesis-account "$(celestia-appd keys show validator -a --keyring-backend="test")" "$coins" 2>&1
+celestia-appd genesis gentx validator 5000000000utia \
   --keyring-backend="test" \
   --chain-id "$CHAINID" \
   --fees 210000utia 2>&1
-celestia-appd collect-gentxs 2>&1
+celestia-appd genesis collect-gentxs 2>&1
+
+# Increase max square size and max blob size to accommodate wrapped 128KB blobs
+# GENESIS_FILE="$APP_PATH/config/genesis.json"
+# jq '.app_state.blob.params.max_square_size = "64" | .app_state.blob.params.max_blob_size = "2097152"' "$GENESIS_FILE" > "$GENESIS_FILE.tmp" && mv "$GENESIS_FILE.tmp" "$GENESIS_FILE"
 
 # Configure for local dev
 sed -i 's#"tcp://127.0.0.1:26657"#"tcp://0.0.0.0:26657"#g' ~/.celestia-app/config/config.toml
@@ -26,25 +30,36 @@ sed -i 's/^timeout_propose\s*=.*/timeout_propose = "2s"/g' ~/.celestia-app/confi
 
 # Copy keyring for bridge node
 mkdir -p "$NODE_PATH/keys"
-cp -r "$APP_PATH/keyring-test/" "$NODE_PATH/keys/keyring-test/"
+cp -r "$APP_PATH/keyring-test" "$NODE_PATH/keys/"
 
 # Start celestia-appd in background
 echo "Starting celestia-appd..."
 celestia-appd start --grpc.enable --force-no-bbr &
 
-# Wait for first block
-echo "Waiting for first block..."
-GENESIS=""
+# Wait for block 2 to ensure genesis and state are fully committed
+# This prevents bridge initialization from crashing with 'nil commit for block hash'
+echo "Waiting for block 2..."
+HEIGHT=0
 CNT=0
 MAX=60
-while [ "${#GENESIS}" -le 4 ] && [ "$CNT" -ne "$MAX" ]; do
-  GENESIS=$(curl -s http://127.0.0.1:26657/block?height=1 | jq '.result.block_id.hash' | tr -d '"')
+while [ "$HEIGHT" -lt 2 ] && [ "$CNT" -ne "$MAX" ]; do
+  RES=$(curl -s http://127.0.0.1:26657/status || true)
+  if [ -n "$RES" ]; then
+    HEIGHT=$(echo "$RES" | jq -r '.result.sync_info.latest_block_height' 2>/dev/null)
+    if [ -z "$HEIGHT" ] || [ "$HEIGHT" = "null" ]; then
+      HEIGHT=0
+    fi
+  else
+    HEIGHT=0
+  fi
   CNT=$((CNT + 1))
   sleep 1
 done
 
-if [ "${#GENESIS}" -le 4 ]; then
-  echo "ERROR: Failed to get genesis hash after ${MAX}s"
+GENESIS=$(curl -s http://127.0.0.1:26657/block?height=1 | jq '.result.block_id.hash' | tr -d '"')
+
+if [ "$HEIGHT" -lt 2 ] || [ "${#GENESIS}" -le 4 ]; then
+  echo "ERROR: Failed to reach block 2 or get genesis hash after ${MAX}s"
   exit 1
 fi
 

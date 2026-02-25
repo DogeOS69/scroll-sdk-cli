@@ -73,7 +73,7 @@ accounts:
     privateKey: "0x96cba5a694704477d6186aebc79a7ff50ba7ed95caacfe62a085a2d78be57597"
 
 dogecoin:
-  network: testnet
+  network: regtest
   rpc:
     url: "http://127.0.0.1:18445"
     username: doge
@@ -89,6 +89,10 @@ celestia:
   indexerStartBlock: 1
 
 bridge:
+  baseFundingUtxos:
+    - txid: "c59e066b39228a7e6a2d0e7967dbaf80659fd63d473155349cedbc0a5a55fd7c"
+      vout: 0
+      amount_sats: 7000000000
   seedString: "dogeos-local-v1"
   thresholds:
     sequencer: 1
@@ -173,8 +177,8 @@ test:
 # --- New sections for l1-interface and da-publisher generation ---
 
 l1Interface:
-  databaseUrl: "local-stack/l1_interface.sqlite"
-  genesisJsonPath: "local-stack/genesis.json"
+  databaseUrl: "./l1_interface.sqlite"
+  genesisJsonPath: "./genesis.json"
   apiBindAddress: "0.0.0.0:8548"
   beaconApiListenAddress: "0.0.0.0:3500"
   healthListenAddress: "0.0.0.0:9091"
@@ -188,14 +192,14 @@ l1Interface:
     extraData: "DogeOS Local Stack"
   dogecoinIndexer:
     confirmations: 1
-    indexUtxos: false
+    indexUtxos: true
     indexWithdrawals: true
     indexDeposits: true
     pollIntervalMs: 5000
   celestiaIndexer:
     confirmations: 3
     pollIntervalMs: 30000
-    storeRawBlobData: false
+    storeRawBlobData: true
 
 daPublisher:
   blobVersion: 1
@@ -218,10 +222,10 @@ feeOracle:
   dryRun: false
 
 withdrawalProcessor:
-  databaseUrl: "/tmp/dogeos-withdrawal-processor.sqlite"
+  databaseUrl: "./dogeos-withdrawal-processor.sqlite"
   tsoUrl: "http://127.0.0.1:3003"
   apiPort: 3002
-  debugSkipBroadcast: true
+  debugSkipBroadcast: false
   debugSkipTsoPolling: false
   feeSignerKey: "cNqM3Bz7u7Y5gFhQrVTxb2KjDKTPbWGpiBLVCZFhcGUSmgiw1tpS"
   sequencerSignerKey: "cNqM3Bz7u7Y5gFhQrVTxb2KjDKTPbWGpiBLVCZFhcGUSmgiw1tpS"

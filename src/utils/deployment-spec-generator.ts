@@ -157,12 +157,12 @@ export function validateDeploymentSpec(spec: DeploymentSpec): ValidationResult {
 
   // Dogecoin network validation
   if (spec.dogecoin?.network && spec.metadata.environment === 'mainnet' && spec.dogecoin.network !== 'mainnet') {
-      warnings.push({
-        message: 'Deployment environment is mainnet but dogecoin network is not mainnet',
-        path: 'dogecoin.network',
-        suggestion: 'Ensure this is intentional'
-      })
-    }
+    warnings.push({
+      message: 'Deployment environment is mainnet but dogecoin network is not mainnet',
+      path: 'dogecoin.network',
+      suggestion: 'Ensure this is intentional'
+    })
+  }
 
   // Signing validation
   if (!spec.signing?.method) {
@@ -634,6 +634,11 @@ export function generateSetupDefaultsToml(spec: DeploymentSpec): string {
     }).filter(Boolean)
   }
 
+  // Add base funding UTXOs if provided
+  if (spec.bridge.baseFundingUtxos && spec.bridge.baseFundingUtxos.length > 0) {
+    config.base_funding_utxos = spec.bridge.baseFundingUtxos
+  }
+
   return toml.stringify(config as toml.JsonMap)
 }
 
@@ -889,7 +894,7 @@ export function generateWithdrawalProcessorToml(
     api_port: wp?.apiPort ?? 3000,
     bridge_address: bridgeInitValues?.bridge_address ?? '2N1dummy',
     bridge_script_hex: bridgeInitValues?.bridge_script_hex ?? '0000',
-    database_url: wp?.databaseUrl ?? '/tmp/dogeos-withdrawal-processor.sqlite',
+    database_url: wp?.databaseUrl ?? '.data/dogeos-withdrawal-processor.sqlite',
     debug_skip_broadcast: wp?.debugSkipBroadcast ?? false,
     debug_skip_tso_polling: wp?.debugSkipTsoPolling ?? false,
     dogecoin_rpc_pass: spec.dogecoin.rpc.password,
