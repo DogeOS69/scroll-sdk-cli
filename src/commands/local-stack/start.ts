@@ -3,6 +3,7 @@ import { execa } from 'execa'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import toml from '@iarna/toml'
+import * as yaml from 'js-yaml'
 
 export default class LocalStackStart extends Command {
   static description = 'Start the DogeOS local stack (integrating components properly without Bash script issues)'
@@ -25,6 +26,7 @@ export default class LocalStackStart extends Command {
   private DUMMY_SIGNER_IMAGE = "dogeos69/dummy-signer:0.2.0-rc.3"
   private DOCKER_NETWORK = "dogeos-net"
   private DOCKER_CMD = "docker" // Assume docker handles everything for now
+  private contractsDir = ""
 
   // Ports
   private L2_HTTP_PORT = 8546
@@ -46,6 +48,7 @@ export default class LocalStackStart extends Command {
     const specPath = path.resolve(this.config.root, flags.spec)
     const dogeosCoreDir = path.resolve(this.config.root, flags['core-path'])
     const contractsDir = path.resolve(this.config.root, flags['contracts-path'])
+    this.contractsDir = contractsDir
     const dataDir = path.join(scriptDir, '.data')
 
     this.log('=== DogeOS Local Stack (TS Setup) ===')
@@ -364,22 +367,58 @@ L2_GETH_STATIC_PEERS = []
   }
 
   private async generateContractAddresses(scriptDir: string) {
-    this.log('Generating deterministic contract addresses (no RPC needed)...')
-    await execa(this.DOCKER_CMD, [
-      'run', '--rm', '--platform', 'linux/amd64', '--entrypoint=/bin/sh',
-      '-e', 'DEPLOYER_PRIVATE_KEY=0x76273b5b6fc7eb6e931ee8f1e74a88d1fdd7ae225a4c8a664858b4cccb083827',
-      '-e', 'L1_COMMIT_SENDER_PRIVATE_KEY=0x3f37a3239c8c909c23f6a2ec01c9c26485b9d2a2cd47b089876d2be5c38f328f',
-      '-e', 'L1_FINALIZE_SENDER_PRIVATE_KEY=0x8a6d51138c05463e0c9b4501f5bb99d4774aa5ddeb46042832ac4e38aef02fdc',
-      '-e', 'L1_GAS_ORACLE_SENDER_PRIVATE_KEY=0x1805b8b581a4710cf29881fb3eb80ceaf1d5a395a5ace8012d01953a2c1795db',
-      '-e', 'L2_GAS_ORACLE_SENDER_PRIVATE_KEY=0x96cba5a694704477d6186aebc79a7ff50ba7ed95caacfe62a085a2d78be57597',
-      '-v', `${scriptDir}/contracts-volume:/contracts/volume`,
-      '-v', `${scriptDir}/generate-addresses.sh:/contracts/docker/scripts/local-deploy.sh`,
-      'dogeos69/scroll-stack-contracts:deploy-20251010',
-      '/contracts/docker/scripts/local-deploy.sh'
-    ], { stdio: 'inherit' })
+    this.log('Generating deterministic contracts configs via scroll-contracts/docker/scripts/gen-configs.sh...')
+    await this.syncContractsVolumeToContractsRepo(scriptDir)
+    await this.ensureForgeAvailable()
+    await execa('bash', [path.join(this.contractsDir, 'docker/scripts/gen-configs.sh')], {
+      cwd: this.contractsDir,
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        DEPLOYER_PRIVATE_KEY: '0x76273b5b6fc7eb6e931ee8f1e74a88d1fdd7ae225a4c8a664858b4cccb083827',
+        L1_COMMIT_SENDER_PRIVATE_KEY: '0x3f37a3239c8c909c23f6a2ec01c9c26485b9d2a2cd47b089876d2be5c38f328f',
+        L1_FINALIZE_SENDER_PRIVATE_KEY: '0x8a6d51138c05463e0c9b4501f5bb99d4774aa5ddeb46042832ac4e38aef02fdc',
+        L1_GAS_ORACLE_SENDER_PRIVATE_KEY: '0x1805b8b581a4710cf29881fb3eb80ceaf1d5a395a5ace8012d01953a2c1795db',
+        L2_GAS_ORACLE_SENDER_PRIVATE_KEY: '0x96cba5a694704477d6186aebc79a7ff50ba7ed95caacfe62a085a2d78be57597'
+      }
+    })
 
-    const generated = path.join(scriptDir, 'contracts-volume', 'config-contracts.toml')
+    await this.syncContractsVolumeFromContractsRepo(scriptDir)
+    await this.extractGenesisJsonFromContractsYaml(scriptDir)
+    const generated = path.join(this.contractsDir, 'volume', 'config-contracts.toml')
     await fs.copyFile(generated, path.join(this.config.root, 'config-contracts.toml'))
+  }
+
+  private async extractGenesisJsonFromContractsYaml(scriptDir: string) {
+    const genesisYamlPath = path.join(this.contractsDir, 'volume', 'genesis.yaml')
+    const localGenesisJsonPath = path.join(scriptDir, 'genesis.json')
+
+    if (!await this.fileExists(genesisYamlPath)) {
+      throw new Error(`genesis.yaml not found: ${genesisYamlPath}`)
+    }
+
+    const genesisYamlContent = await fs.readFile(genesisYamlPath, 'utf8')
+    const parsedYaml = yaml.load(genesisYamlContent) as any
+
+    if (!parsedYaml) {
+      throw new Error(`Failed to parse genesis.yaml: ${genesisYamlPath}`)
+    }
+
+    let genesisJson: any
+    if (parsedYaml.scrollConfig) {
+      if (typeof parsedYaml.scrollConfig === 'string') {
+        genesisJson = JSON.parse(parsedYaml.scrollConfig)
+      } else if (typeof parsedYaml.scrollConfig === 'object') {
+        genesisJson = parsedYaml.scrollConfig
+      } else {
+        throw new Error(`Invalid scrollConfig format in genesis.yaml: ${genesisYamlPath}`)
+      }
+    } else {
+      genesisJson = parsedYaml
+    }
+
+    await fs.writeFile(localGenesisJsonPath, `${JSON.stringify(genesisJson, null, 2)}\n`)
+    this.log(`Updated local-stack genesis.json from ${genesisYamlPath}`)
   }
 
   // L1 Node
@@ -546,11 +585,27 @@ L2_GETH_STATIC_PEERS = []
       throw new Error(`l1-interface binary not found. Build it: cargo build -p l1_interface`)
     }
 
+    // Ensure da-codec-cli is available
+    const daCodecPath = path.join(dogeosCoreDir, 'bin', 'da-codec-cli')
+    if (!await this.fileExists(daCodecPath)) {
+      this.log('da-codec-cli not found, attempting to build it in dogeos-core...')
+      try {
+        await execa('make', ['build-go'], { cwd: dogeosCoreDir, stdio: 'inherit' })
+      } catch (err: any) {
+        this.warn(`Failed to build da-codec-cli: ${err.message}. L1-interface might fail to start.`)
+      }
+    }
+
     this.log(`Starting l1-interface on port ${this.L1_INTERFACE_PORT}...`)
+    this.log(`Using da-codec-cli at: ${daCodecPath}`)
     const logFile = await fs.open(path.join(scriptDir, 'l1-interface.log'), 'a')
     const subprocess = (execa as any)(binary, ['-c', config], {
       cwd: scriptDir,
-      env: { RUST_LOG: 'info' },
+      env: {
+        ...process.env,
+        RUST_LOG: 'info',
+        DA_CODEC_CLI_PATH: daCodecPath
+      },
       detached: true,
       stdio: ['ignore', logFile.fd, logFile.fd]
     })
@@ -658,9 +713,14 @@ L2_GETH_STATIC_PEERS = []
 
     this.log(`Starting da-publisher on port ${this.DA_PUBLISHER_PORT}...`)
     const logFile = await fs.open(path.join(scriptDir, 'da-publisher.log'), 'a')
+    const daCodecPath = path.join(dogeosCoreDir, 'bin/da-codec-cli')
     const subprocess = (execa as any)(binary, ['-c', config], {
       cwd: scriptDir,
-      env: { RUST_LOG: 'info' },
+      env: {
+        ...process.env,
+        RUST_LOG: 'debug',
+        DA_CODEC_CLI_PATH: daCodecPath
+      },
       detached: true,
       stdio: ['ignore', logFile.fd, logFile.fd]
     })
@@ -669,21 +729,71 @@ L2_GETH_STATIC_PEERS = []
   }
 
   private async deployL2Contracts(scriptDir: string) {
-    await execa(this.DOCKER_CMD, [
-      'run', '--rm', '--platform', 'linux/amd64', '--entrypoint=/bin/sh',
-      '--network', this.DOCKER_NETWORK,
-      '--add-host', 'host.docker.internal:host-gateway',
-      '-e', `L2_RPC_ENDPOINT=http://host.docker.internal:${this.L2_HTTP_PORT}`,
-      '-e', 'DEPLOYER_PRIVATE_KEY=0x76273b5b6fc7eb6e931ee8f1e74a88d1fdd7ae225a4c8a664858b4cccb083827',
-      '-e', 'L1_COMMIT_SENDER_PRIVATE_KEY=0x3f37a3239c8c909c23f6a2ec01c9c26485b9d2a2cd47b089876d2be5c38f328f',
-      '-e', 'L1_FINALIZE_SENDER_PRIVATE_KEY=0x8a6d51138c05463e0c9b4501f5bb99d4774aa5ddeb46042832ac4e38aef02fdc',
-      '-e', 'L1_GAS_ORACLE_SENDER_PRIVATE_KEY=0x1805b8b581a4710cf29881fb3eb80ceaf1d5a395a5ace8012d01953a2c1795db',
-      '-e', 'L2_GAS_ORACLE_SENDER_PRIVATE_KEY=0x96cba5a694704477d6186aebc79a7ff50ba7ed95caacfe62a085a2d78be57597',
-      '-v', `${scriptDir}/contracts-volume:/contracts/volume`,
-      '-v', `${scriptDir}/deploy-contracts.sh:/contracts/docker/scripts/local-deploy.sh`,
-      'dogeos69/scroll-stack-contracts:deploy-20251010',
-      '/contracts/docker/scripts/local-deploy.sh'
-    ], { stdio: 'inherit' })
+    await this.syncContractsVolumeToContractsRepo(scriptDir)
+    await this.ensureForgeAvailable()
+    const deployScript = path.join(this.contractsDir, 'docker', 'scripts', 'deploy.sh')
+    if (!await this.fileExists(deployScript)) {
+      throw new Error(`deploy script not found: ${deployScript}`)
+    }
+    await execa('bash', [deployScript], {
+      cwd: this.contractsDir,
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        L2_RPC_ENDPOINT: `http://127.0.0.1:${this.L2_HTTP_PORT}`,
+        DEPLOYER_PRIVATE_KEY: '0x76273b5b6fc7eb6e931ee8f1e74a88d1fdd7ae225a4c8a664858b4cccb083827',
+        L1_COMMIT_SENDER_PRIVATE_KEY: '0x3f37a3239c8c909c23f6a2ec01c9c26485b9d2a2cd47b089876d2be5c38f328f',
+        L1_FINALIZE_SENDER_PRIVATE_KEY: '0x8a6d51138c05463e0c9b4501f5bb99d4774aa5ddeb46042832ac4e38aef02fdc',
+        L1_GAS_ORACLE_SENDER_PRIVATE_KEY: '0x1805b8b581a4710cf29881fb3eb80ceaf1d5a395a5ace8012d01953a2c1795db',
+        L2_GAS_ORACLE_SENDER_PRIVATE_KEY: '0x96cba5a694704477d6186aebc79a7ff50ba7ed95caacfe62a085a2d78be57597'
+      }
+    })
+    await this.syncContractsVolumeFromContractsRepo(scriptDir)
+  }
+
+  private async ensureForgeAvailable() {
+    await execa('forge', ['--version']).catch(() => {
+      throw new Error('forge not found in PATH. Install Foundry before running local contract steps.')
+    })
+  }
+
+  private async syncContractsVolumeToContractsRepo(scriptDir: string) {
+    const fromDir = path.join(scriptDir, 'contracts-volume')
+    const toDir = path.join(this.contractsDir, 'volume')
+    await this.ensureDir(toDir)
+
+    const files = ['config.toml', 'config-contracts.toml']
+    for (const file of files) {
+      const from = path.join(fromDir, file)
+      const to = path.join(toDir, file)
+      if (await this.fileExists(from)) {
+        await fs.copyFile(from, to)
+      }
+    }
+  }
+
+  private async syncContractsVolumeFromContractsRepo(scriptDir: string) {
+    const fromDir = path.join(this.contractsDir, 'volume')
+    const toDir = path.join(scriptDir, 'contracts-volume')
+    await this.ensureDir(toDir)
+
+    const files = [
+      'config-contracts.toml',
+      'genesis.yaml',
+      'rollup-config.yaml',
+      'coordinator-cron-config.yaml',
+      'coordinator-api-config.yaml',
+      'chain-monitor-config.yaml',
+      'frontend-config.yaml',
+      'rollup-explorer-backend-config.yaml'
+    ]
+    for (const file of files) {
+      const from = path.join(fromDir, file)
+      const to = path.join(toDir, file)
+      if (await this.fileExists(from)) {
+        await fs.copyFile(from, to)
+      }
+    }
   }
 
   private async setupL2Accounts() {

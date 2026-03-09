@@ -82,7 +82,7 @@ dogecoin:
   walletPath: ".data/doge-wallet.json"
 
 celestia:
-  tendermintRpcUrl: "http://localhost:26658"
+  tendermintRpcUrl: "http://127.0.0.1:26658"
   namespace: "51ecb07563949bf4"
   signerAddress: "celestia1local"
   mnemonic: "local-dev-mnemonic-placeholder"
@@ -90,7 +90,7 @@ celestia:
 
 bridge:
   baseFundingUtxos:
-    - txid: "c59e066b39228a7e6a2d0e7967dbaf80659fd63d473155349cedbc0a5a55fd7c"
+    - txid: "b858cdd22c1caa155e02b3c8dd9fc887e9f3b9edfd6eb02fbecaa67e7d53779d"
       vout: 0
       amount_sats: 7000000000
   seedString: "dogeos-local-v1"

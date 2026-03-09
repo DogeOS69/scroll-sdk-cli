@@ -6,7 +6,7 @@ USER root
 
 RUN apk --no-cache add curl jq bash \
     && mkdir -p /bridge \
-    && chown celestia:celestia /bridge
+    && chown -R celestia:celestia /bridge /home/celestia
 
 USER celestia
 

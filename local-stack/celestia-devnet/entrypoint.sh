@@ -6,10 +6,17 @@ APP_PATH="/home/celestia/.celestia-app"
 NODE_PATH="/home/celestia/bridge/"
 
 # Clean previous state
+echo "Cleaning existing state in $APP_PATH and $NODE_PATH..."
 rm -rf "$APP_PATH" "$NODE_PATH"
+mkdir -p "$APP_PATH" "$NODE_PATH"
+
+echo "Current user: $(whoami)"
+echo "Permissions for /home/celestia:"
+ls -ld /home/celestia
 
 # Initialize celestia-appd
 coins="1000000000000000utia"
+echo "Initializing celestia-appd..."
 celestia-appd init "$CHAINID" --chain-id "$CHAINID" 2>&1
 celestia-appd keys add validator --keyring-backend="test" 2>&1
 celestia-appd genesis add-genesis-account "$(celestia-appd keys show validator -a --keyring-backend="test")" "$coins" 2>&1
