@@ -17,7 +17,7 @@ import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { resolveEnvValue } from '../../utils/non-interactive.js'
 const { Networks, PrivateKey } = bitcore
-const defaultTag = '0.2.0-rc.3'
+const defaultTag = '0.2.0-rc.7'
 
 export interface NonInteractiveOptions {
   awsAccountId?: string
@@ -814,7 +814,7 @@ export class DummySignersManager {
       })
 
       SUFFIXES = await input({
-        default: this.dogeConfig.awsSigner?.suffixes || '00 01 02',
+        default: this.dogeConfig.awsSigner?.suffixes || '00',
         message: `Enter suffixes for dummy signer instances (space-separated)
   Each suffix creates a complete AWS service set:
     • App Runner service: ${NETWORK_ALIAS}-dummy-signer-{suffix}

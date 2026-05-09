@@ -925,7 +925,7 @@ export default class SetupConfigs extends Command {
         config.genesis = {}
       }
 
-      ;(config.genesis as any).BASE_FEE_PER_GAS = newBaseFeePerGas
+      ; (config.genesis as any).BASE_FEE_PER_GAS = newBaseFeePerGas
 
       if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
         this.jsonCtx.logSuccess(`BASE_FEE_PER_GAS updated in config.toml to "${newBaseFeePerGas}"`)
@@ -940,7 +940,7 @@ export default class SetupConfigs extends Command {
         config.genesis = {}
       }
 
-      ;(config.genesis as any).BASE_FEE_PER_GAS = newBaseFeePerGas
+      ; (config.genesis as any).BASE_FEE_PER_GAS = newBaseFeePerGas
 
       if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
         this.jsonCtx.log(chalk.green(`BASE_FEE_PER_GAS updated in config.toml to "${newBaseFeePerGas}"`))
@@ -987,7 +987,7 @@ export default class SetupConfigs extends Command {
         config.contracts = {}
       }
 
-      ;(config.contracts as any).DEPLOYMENT_SALT = newSalt
+      ; (config.contracts as any).DEPLOYMENT_SALT = newSalt
 
       if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
         this.jsonCtx.logSuccess(`Deployment salt updated in config.toml from "${currentSalt}" to "${newSalt}"`)
@@ -1007,7 +1007,7 @@ export default class SetupConfigs extends Command {
           config.contracts = {}
         }
 
-        ;(config.contracts as any).DEPLOYMENT_SALT = newSalt
+        ; (config.contracts as any).DEPLOYMENT_SALT = newSalt
 
         if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
           this.jsonCtx.log(chalk.green(`Deployment salt updated in config.toml from "${currentSalt}" to "${newSalt}"`))
@@ -1066,7 +1066,7 @@ export default class SetupConfigs extends Command {
         config.general = {}
       }
 
-      ;(config.general as any).L1_CONTRACT_DEPLOYMENT_BLOCK = newBlock
+      ; (config.general as any).L1_CONTRACT_DEPLOYMENT_BLOCK = newBlock
       if (writeConfigs(config)) {
         this.jsonCtx.logSuccess(`L1_CONTRACT_DEPLOYMENT_BLOCK updated in config.toml from "${currentBlock}" to "${newBlock}"`)
       }
@@ -1095,8 +1095,8 @@ export default class SetupConfigs extends Command {
       }
 
       const newAddr = resolveEnvValue(flags['l1-fee-vault-addr']) ||
-                      String((config.contracts as any)?.L1_FEE_VAULT_ADDR || '') ||
-                      defaultAddr
+        String((config.contracts as any)?.L1_FEE_VAULT_ADDR || '') ||
+        defaultAddr
 
       if (!ethers.isAddress(newAddr)) {
         this.jsonCtx.error(
@@ -1112,7 +1112,7 @@ export default class SetupConfigs extends Command {
         config.contracts = {}
       }
 
-      ;(config.contracts as any).L1_FEE_VAULT_ADDR = newAddr
+      ; (config.contracts as any).L1_FEE_VAULT_ADDR = newAddr
 
       if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
         this.jsonCtx.logSuccess(`L1_FEE_VAULT_ADDR updated in config.toml to "${newAddr}"`)
@@ -1146,7 +1146,7 @@ export default class SetupConfigs extends Command {
           config.contracts = {}
         }
 
-        ;(config.contracts as any).L1_FEE_VAULT_ADDR = newAddr
+        ; (config.contracts as any).L1_FEE_VAULT_ADDR = newAddr
 
         if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
           this.jsonCtx.log(chalk.green(`L1_FEE_VAULT_ADDR updated in config.toml to "${newAddr}"`))
@@ -1193,7 +1193,7 @@ export default class SetupConfigs extends Command {
           config.contracts = {}
         }
 
-        ;(config.contracts as any).L1_PLONK_VERIFIER_ADDR = newAddr
+        ; (config.contracts as any).L1_PLONK_VERIFIER_ADDR = newAddr
 
         if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
           this.jsonCtx.logSuccess(`L1_PLONK_VERIFIER_ADDR updated in config.toml to "${newAddr}"`)
@@ -1232,7 +1232,7 @@ export default class SetupConfigs extends Command {
           config.contracts = {}
         }
 
-        ;(config.contracts as any).L1_PLONK_VERIFIER_ADDR = newAddr
+        ; (config.contracts as any).L1_PLONK_VERIFIER_ADDR = newAddr
 
         if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
           this.jsonCtx.log(chalk.green(`L1_PLONK_VERIFIER_ADDR updated in config.toml to "${newAddr}"`))
@@ -1273,7 +1273,7 @@ export default class SetupConfigs extends Command {
         config.contracts = {}
       }
 
-      ;(config.contracts as any).L2_BRIDGE_FEE_RECIPIENT_ADDR = newAddr
+      ; (config.contracts as any).L2_BRIDGE_FEE_RECIPIENT_ADDR = newAddr
 
       if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
         this.jsonCtx.logSuccess(`L2_BRIDGE_FEE_RECIPIENT_ADDR updated in config.toml to "${newAddr}"`)
@@ -1299,7 +1299,7 @@ export default class SetupConfigs extends Command {
         config.contracts = {}
       }
 
-      ;(config.contracts as any).L2_BRIDGE_FEE_RECIPIENT_ADDR = newAddr
+      ; (config.contracts as any).L2_BRIDGE_FEE_RECIPIENT_ADDR = newAddr
 
       if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
         this.jsonCtx.log(chalk.green(`L2_BRIDGE_FEE_RECIPIENT_ADDR updated in config.toml to "${newAddr}"`))

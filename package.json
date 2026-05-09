@@ -78,7 +78,7 @@
     "/dist",
     "/oclif.manifest.json"
   ],
-  "homepage": "https://github.com/scroll-tech/scroll-sdk-cli",
+  "homepage": "https://github.com/dogeos69/scroll-sdk-cli",
   "keywords": [
     "oclif"
   ],
@@ -105,7 +105,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/scroll-tech/scroll-sdk-cli.git"
+    "url": "git+https://github.com/dogeos69/scroll-sdk-cli.git"
   },
   "scripts": {
     "build": "shx rm -rf dist && tsc -b",
