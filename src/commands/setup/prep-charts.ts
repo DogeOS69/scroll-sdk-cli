@@ -1176,51 +1176,27 @@ export default class SetupPrepCharts extends Command {
           }
         }
 
-        // Replace TSO signer URIs based on signerUrls array, ensuring only 'Correctness' roles are updated sequentially
+        // Rebuild all TSO signers so stale roles do not remain.
         if (productionYaml.tsoSigners && Array.isArray(productionYaml.tsoSigners)) {
-          const signerUrls = this.dogeConfig.signerUrls || [];
-
-          // extract existing Correctness signer URIs
-          const existingCorrectnessIdx: number[] = [];
-          const existingUris: string[] = [];
-          productionYaml.tsoSigners.forEach((s: any, idx: number) => {
-            if (s.role === 'Correctness') {
-              existingCorrectnessIdx.push(idx);
-              existingUris.push(s.uri);
-            }
+          const attestationSigners = (this.dogeConfig.cubesigner?.roles || []).map((_role, index) => ({
+            network: this.dogeConfig.network,
+            role: 'Attestation',
+            uri: `http://cubesigner-signer-${index}:3000`,
+          }) as any);
+          const teeSigners = (this.dogeConfig.signerUrls || []).map((url) => ({
+            network: this.dogeConfig.network,
+            role: 'Tee',
+            uri: url,
+          }) as any);
+          const newSigners = [...attestationSigners, ...teeSigners];
+          const existingSigners = productionYaml.tsoSigners;
+          productionYaml.tsoSigners = newSigners;
+          updated = true;
+          changes.push({
+            key: 'tsoSigners',
+            newValue: JSON.stringify(newSigners),
+            oldValue: JSON.stringify(existingSigners),
           });
-
-          const isSame = existingUris.length === signerUrls.length && existingUris.every((u, idx) => u === signerUrls[idx]);
-
-          if (!isSame) {
-            // 1) remove all existing Correctness signers
-            for (let j = existingCorrectnessIdx.length - 1; j >= 0; j--) {
-              const idx = existingCorrectnessIdx[j];
-              const removed = productionYaml.tsoSigners.splice(idx, 1)[0];
-              updated = true;
-              changes.push({ key: `tsoSigners[${idx}]`, newValue: 'removed', oldValue: JSON.stringify(removed) });
-            }
-
-            // 2) re-insert Correctness signers based on signerUrls
-            for (const url of signerUrls) {
-              const newSigner = { network: this.dogeConfig.network, role: 'Correctness', uri: url } as any;
-              productionYaml.tsoSigners.push(newSigner);
-              updated = true;
-              const newIndex = productionYaml.tsoSigners.length - 1;
-              changes.push({ key: `tsoSigners[${newIndex}]`, newValue: JSON.stringify(newSigner), oldValue: 'undefined' });
-            }
-          }
-
-          // 3) sync network field for all signers
-          for (let i = 0; i < productionYaml.tsoSigners.length; i++) {
-            const signer = productionYaml.tsoSigners[i];
-            if (signer.network !== this.dogeConfig.network) {
-              const oldVal = signer.network;
-              signer.network = this.dogeConfig.network;
-              updated = true;
-              changes.push({ key: `tsoSigners[${i}].network`, newValue: this.dogeConfig.network, oldValue: oldVal });
-            }
-          }
         }
       }
 

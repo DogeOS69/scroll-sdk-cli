@@ -1,0 +1,45 @@
+# DogeOS bridge signer policy.
+# Loaded by `generate-bridge-info-cli` from the current working directory.
+# Each field can be overridden via BRIDGE_INFO_<FIELD> env vars (nested with `__`).
+#
+# NOTE: the loader uses `figment::Toml::file(...).nested()`, which treats every
+# top-level table as a profile. All real config must therefore live under
+# `[default]` (or another profile name selected via FIGMENT_PROFILE).
+
+[default]
+# "dogecoin" (mainnet) | "testnet" | "signet" | "regtest"  — lowercase only.
+network = "testnet"
+
+# Recovery branch CLTV — must be a block height (< 500_000_000).
+timelock = 525600
+
+# TEE single-signer pubkey (hex, compressed = 33 bytes / 66 hex chars).
+tee_pubkey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+
+# 20-byte bridge namespace id. In production: derived from the genesis sequencer
+# outpoint via `bridge_script_utils::compute_bridge_namespace_id`. Here we use a
+# placeholder of 20 × 0xAA bytes for local testing.
+namespace_id = [
+  0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
+  0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
+]
+
+# Optional. If set, JSON output is written here instead of stdout.
+# Overridden by the CLI flag `--output-file`.
+# output_file = "bridge.json"
+
+# Attestation cohort — m-of-n multisig (IF branch).
+[default.attestation]
+threshold = 2
+pubkeys = [
+  "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+  "03fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+]
+
+# Recovery cohort — m-of-n multisig behind the timelock (ELSE branch).
+[default.recovery]
+threshold = 2
+pubkeys = [
+  "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+  "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+]

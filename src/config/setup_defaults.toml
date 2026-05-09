@@ -1,103 +1,123 @@
 # Configuration for the Testnet Setup Tool
+#
+# This file is consumed by `test_utils::setup::generate_keys_from_config` and the
+# `generate_test_keys` binary. Field names must match `TestnetSetupConfig` in
+# `crates/test_utils/src/setup.rs`.
+#
+# See `docs/bridge-genesis-deployment.md` for the production deployment ordering.
+# The setup helpers in this crate are TEST-ONLY scaffolding; they do not replace
+# that flow.
+#
+# Any field below can be overridden at runtime with `TESTNET_SETUP_<FIELD>`
+# environment variables (figment uses the `TESTNET_SETUP_` prefix and maps `__`
+# to nested-table separators — flat fields like `dogecoin_rpc_user` use a single
+# underscore: `TESTNET_SETUP_DOGECOIN_RPC_USER`).
 
 # General network identifier
 network = "testnet"
 
-# --- Base Identity --- 
-# Seed string used to derive the base private key.
-# Recommend using environment variable TESTNET_SETUP_SEED_STRING instead.
+# --- Base Identity ---
+# Seed string used to derive the base private key for all roles below.
+# Recommend overriding via `TESTNET_SETUP_SEED_STRING`.
 seed_string = "random-seed-string-00"
 
 # Optional: Provide a specific public key for the P2PKH Sequencer role.
-# If commented out, the keypair will be derived from seed_string.
+# When set, the binary uses the supplied pubkey directly and does NOT emit a
+# WIF for the sequencer (you keep the private key out-of-band).
+# If commented out, the keypair is derived from `seed_string`.
 # sequencer_pubkey = "02xxxxxxx..."
 
 # Optional: Provide a specific public key for the P2PKH Fee Wallet role.
-# If commented out, the keypair will be derived from seed_string.
+# Same out-of-band-key semantics as `sequencer_pubkey`.
 # fee_wallet_pubkey = "03yyyyyyy..."
 
-# --- Dogecoin RPC --- 
+# --- Dogecoin RPC ---
 dogecoin_rpc_url = "https://testnet.doge-rpc.io"
 dogecoin_rpc_user = "user"
 dogecoin_rpc_pass = "password"
-# Recommend using environment variables DOGECOIN_RPC_USER and DOGECOIN_RPC_PASS
+# Recommend overriding credentials via env, e.g.:
+#   TESTNET_SETUP_DOGECOIN_RPC_USER=... TESTNET_SETUP_DOGECOIN_RPC_PASS=...
 
-## Note: Blockbook has been removed. RPC-only mode is used.
-
-# Optional wallet behavior:
-# If set, the tool will request a wallet rescan starting from this height
-# after importing addresses (helps discover historical UTXOs for the base address).
-# wallet_rescan_from_height = 0
-
-# If true, import derived addresses (sequencer/fee/bridge) into the node wallet
-# as watch-only for visibility. Not required for funding logic. Default: false
+# Optional: import sequencer/fee/bridge addresses into the node wallet as
+# watch-only after derivation. Not required for funding (the binary spends
+# `[[base_funding_utxos]]` directly via PSBT); only useful so an operator can
+# `getreceivedbyaddress` etc. against the same node. Default: false.
 # watch_derived_addresses_in_wallet = false
 
-# Wallet-less mode block is at the bottom to avoid scoping root keys
-# into the array-of-tables in TOML.
-
-# Optional REST getutxos batch check (no wallet required). If enabled, the tool can use a REST
-# query to check multiple outpoints at once. If rest_base_url is not provided, it attempts to
-# derive from dogecoin_rpc_url (same host:port + "/rest").
-# [rest]
-# enable_rest_getutxos_batch = true
-# rest_base_url = "http://127.0.0.1:44555/rest"
-
-# --- Bridge Script Generation Parameters --- 
-# Thresholds for the complex bridge script roles
-# The public keys themselves will be derived from the seed_string.
-sequencer_threshold = 1   # Must be 1
-correctness_threshold = 2
+# --- Bridge Script Generation Parameters ---
+# Bridge roles (matches `generate_bridge_info::BridgeInfoConfig`):
+#   - TEE         : 1-of-1 CHECKSIGVERIFY (no threshold field; one keypair derived)
+#   - Attestation : M-of-N
+#   - Recovery    : M-of-N (gated by `timelock`)
 attestation_threshold = 2
-recovery_threshold = 2
-# Number of keys to generate per role (adjust if needed)
-correctness_key_count = 3
+recovery_threshold    = 2
 attestation_key_count = 3
-recovery_key_count = 3
-# Timelock (in seconds) for the recovery path
-timelock_seconds = 3600 # 1 hour example
+recovery_key_count    = 3
 
-# Fee rate used for transaction construction (satoshis per kvB)
+# Recovery CLTV timelock (block-height semantics).
+# IMPORTANT: must be < 500_000_000; values >= 500_000_000 use timestamp
+# semantics and are rejected by `generate_bridge_info`.
+timelock = 100
+
+# Fee rate used for transaction construction (satoshis per kvB).
 fee_rate_sat_per_kvb = 1000000
 
-# Optional: Ethereum address (hex string, 20 bytes, e.g., "0x...") for OP_RETURN data in bridge funding transactions.
-# If not provided or empty, a default address (0123...6789) will be used.
+# Optional: 20-byte ETH recipient hex used in the OP_RETURN of every bridge
+# funding tx (Tx2..Tx11). If empty/omitted the binary uses a built-in
+# placeholder (`01020304…1920`).
 # deposit_eth_recipient_address_hex = "0x1234567890123456789012345678901234567890"
 
-# Optional: Provide specific public keys for correctness roles.
-# If commented out or empty, 'correctness_key_count' keys will be derived from seed_string.
-# correctness_pubkeys = [
-#   "02xxxxxxxx...",
-#   "03yyyyyyyy..."
-# ]
+# Optional: Provide a specific TEE public key (single key, 1-of-1).
+# When set, the binary does not emit a WIF for the TEE role.
+# If commented out or empty the TEE keypair is derived from `seed_string`.
+# tee_pubkey = "02tttttttttt..."
 
 # Optional: Provide specific public keys for attestation roles.
-# If commented out or empty, 'attestation_key_count' keys will be derived from seed_string.
+# If commented out or empty, `attestation_key_count` keys are derived.
 # attestation_pubkeys = [
 #   "02zzzzzzzz...",
 #   "03wwwwwwww..."
 # ]
 
 # Optional: Provide specific public keys for recovery roles.
-# If commented out or empty, 'recovery_key_count' keys will be derived from seed_string.
+# If commented out or empty, `recovery_key_count` keys are derived.
 # recovery_pubkeys = [
 #   "02aaaaaa...",
 #   "03bbbbbb..."
 # ]
 
 # --- Target Amounts (in Satoshis) ---
-sequencer_target_amount = 420690000    # 4.2069 DOGE
-fee_wallet_target_amount = 500000000 # 5 DOGE
-bridge_target_amount = 5000000000    # 50 DOGE
+sequencer_target_amount  = 420690000     # 4.2069 DOGE (single sequencer outpoint, vout 0)
+fee_wallet_target_amount = 500000000     # 5  DOGE (split across 10 outputs)
+bridge_target_amount     = 5000000000    # 50 DOGE (split across 10 bridge funding txs)
 
 # --- Optional Settings ---
-confirmations_required = 1 # How many confirmations to wait for after sending
+# Number of L1 confirmations to wait for after broadcasting setup tx + bridge
+# funding txs. MUST be > 0 if you intend to feed `output-test-data.json` into
+# `generate_protocol_context` — the latter needs the `confirmed_block_hash` /
+# `confirmed_block_height` fields to fill `genesis.initial_confirmed_block_*`,
+# and those fields stay empty when this is 0/unset.
+confirmations_required = 1
 
-# ---------------- Wallet-less mode (array of tables) ----------------
-# Place this block AFTER all root-level fields to avoid scoping them
-# into this table. Repeat for multiple inputs.
-[[base_funding_utxos]]
-txid = "<txid>"
-vout = 1
-amount_sats = 123456789
+# ---------------- Sub-tables (must come last) ----------------
+# TOML scoping rule: any [section] or [[array_of_tables]] block "absorbs" all
+# subsequent root-level keys into itself. Place every flat field above and
+# every block below to avoid surprises.
+
+# Optional REST getutxos batch check (no wallet required). If enabled, the
+# tool can validate multiple base outpoints at once via the Dogecoin REST
+# gateway. If `rest_base_url` is omitted it is derived from `dogecoin_rpc_url`
+# (same host:port + "/rest").
+# [rest]
+# enable_rest_getutxos_batch = true
+# rest_base_url = "http://127.0.0.1:44555/rest"
+
+# Wallet-less funding: explicit base UTXOs the distribution helper will spend
+# in the setup tx (Tx1). Repeat the block for each input. `prev_tx_hex` is
+# optional — if absent, the tool fetches the prev tx via RPC, which requires
+# the node to have `txindex=1` for non-mempool history.
+# [[base_funding_utxos]]
+# txid        = "<txid>"
+# vout        = 1
+# amount_sats = 123456789
 # prev_tx_hex = "<raw tx hex of the funding tx>"

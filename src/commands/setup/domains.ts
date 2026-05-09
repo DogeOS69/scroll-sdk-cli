@@ -67,33 +67,28 @@ export default class SetupDomains extends Command {
       logKeyValue(key, value as string)
     }
 
-    type L1Network = 'anvil' | 'dogeos' | 'holesky' | 'mainnet' | 'other' | 'sepolia'
-    const validL1Networks: L1Network[] = ['dogeos', 'anvil', 'holesky', 'mainnet', 'other', 'sepolia']
+    type L1Network = 'dogecoin-mainnet' | 'dogecoin-regtest' | 'dogecoin-testnet'
+    const validL1Networks: L1Network[] = ['dogecoin-testnet', 'dogecoin-mainnet', 'dogecoin-regtest']
 
     // Infer L1 network from existing config for non-interactive mode
     const inferL1Network = (config: any): L1Network | undefined => {
       const chainName = config.general?.CHAIN_NAME_L1?.toLowerCase()
-      if (!chainName) return undefined
-      if (chainName.includes('doge')) return 'dogeos'
-      if (chainName === 'mainnet' || chainName === 'ethereum') return 'mainnet'
-      if (chainName === 'sepolia') return 'sepolia'
-      if (chainName === 'holesky') return 'holesky'
-      if (chainName === 'anvil' || chainName.includes('anvil')) return 'anvil'
-      return 'other'
+      const chainId = String(config.general?.CHAIN_ID_L1 || '')
+      if (chainName?.includes('regtest') || chainId === '5555555') return 'dogecoin-regtest'
+      if (chainName?.includes('mainnet') || chainId === '1') return 'dogecoin-mainnet'
+      if (chainName?.includes('doge') || chainId === '111111') return 'dogecoin-testnet'
+      return undefined
     }
 
     const l1Network = await resolveOrSelect<L1Network>(
       niCtx,
       () => select({
         choices: [
-          { name: 'DogeOS Testnet', value: 'dogeos' },
-          { name: 'Ethereum Mainnet', value: 'mainnet' },
-          { name: 'Ethereum Sepolia Testnet', value: 'sepolia' },
-          { name: 'Ethereum Holesky Testnet', value: 'holesky' },
-          { name: 'Other...', value: 'other' },
-          { name: 'Anvil (Local)', value: 'anvil' },
+          { name: 'Dogecoin Testnet', value: 'dogecoin-testnet' },
+          { name: 'Dogecoin Mainnet', value: 'dogecoin-mainnet' },
+          { name: 'Dogecoin Regtest', value: 'dogecoin-regtest' },
         ],
-        default: existingConfig.general?.CHAIN_NAME_L1?.toLowerCase() || 'dogeos',
+        default: inferL1Network(existingConfig) || 'dogecoin-testnet',
         message: 'Select the L1 network:',
       }) as Promise<L1Network>,
       inferL1Network(existingConfig),
@@ -105,69 +100,40 @@ export default class SetupDomains extends Command {
       }
     ) as L1Network
 
-    const l1ExplorerUrls: Partial<Record<L1Network, string>> = {
-      holesky: 'https://holesky.etherscan.io',
-      mainnet: 'https://etherscan.io',
-      sepolia: 'https://sepolia.etherscan.io',
+    const l1ChainNames: Record<L1Network, string> = {
+      'dogecoin-mainnet': 'Dogecoin Mainnet',
+      'dogecoin-regtest': 'Dogecoin Regtest',
+      'dogecoin-testnet': 'Dogecoin Testnet',
     }
 
-    const l1RpcUrls: Partial<Record<L1Network, string>> = {
-      holesky: 'https://rpc.ankr.com/eth_holesky',
-      mainnet: 'https://rpc.ankr.com/eth',
-      sepolia: 'https://rpc.ankr.com/eth_sepolia',
-    }
-
-    const l1ChainIds: Partial<Record<L1Network, string>> = {
-      anvil: '111111',
-      dogeos: '111111',
-      holesky: '17000',
-      mainnet: '1',
-      sepolia: '11155111',
+    const l1ChainIds: Record<L1Network, string> = {
+      'dogecoin-mainnet': '1',
+      'dogecoin-regtest': '5555555',
+      'dogecoin-testnet': '111111',
     }
 
     const generalConfig: Record<string, string> = {}
     let domainConfig: Record<string, string> = {}
     const frontendConfig: Record<string, string> = {}
 
-    const usesAnvil = l1Network === 'anvil'
-    const usesDogeos = l1Network === 'dogeos'
+    const usesAnvil = false
+    const usesDogeos = true
+    generalConfig.CHAIN_ID_L1 = l1ChainIds[l1Network]
 
-    if (l1Network === 'other' || l1Network === 'anvil' || l1Network === 'dogeos') {
-      const chainNameL1 = await resolveOrPrompt(
-        niCtx,
-        () => input({
-          default: existingConfig.general?.CHAIN_NAME_L1 || (usesDogeos ? 'DOGE L1' : 'Custom L1'),
-          message: 'Enter the L1 Chain Name:',
-        }),
-        existingConfig.general?.CHAIN_NAME_L1 || (usesDogeos ? 'DOGE L1' : undefined),
-        {
-          configPath: '[general].CHAIN_NAME_L1',
-          description: 'L1 chain name (e.g., "DOGE L1")',
-          field: 'CHAIN_NAME_L1',
-        }
-      )
-      generalConfig.CHAIN_NAME_L1 = chainNameL1 || ''
-
-      const chainIdL1 = await resolveOrPrompt(
-        niCtx,
-        () => input({
-          default: existingConfig.general?.CHAIN_ID_L1 || l1ChainIds[l1Network] || '',
-          message: 'Enter the L1 Chain ID:',
-        }),
-        existingConfig.general?.CHAIN_ID_L1 || l1ChainIds[l1Network],
-        {
-          configPath: '[general].CHAIN_ID_L1',
-          description: 'L1 chain ID (e.g., 111111 for DogeOS)',
-          field: 'CHAIN_ID_L1',
-        }
-      )
-      generalConfig.CHAIN_ID_L1 = chainIdL1 || ''
-    } else {
-      generalConfig.CHAIN_NAME_L1 = l1Network.charAt(0).toUpperCase() + l1Network.slice(1)
-      generalConfig.CHAIN_ID_L1 = l1ChainIds[l1Network]!
-      domainConfig.EXTERNAL_EXPLORER_URI_L1 = l1ExplorerUrls[l1Network]!
-      domainConfig.EXTERNAL_RPC_URI_L1 = l1RpcUrls[l1Network]!
-    }
+    const chainNameL1 = await resolveOrPrompt(
+      niCtx,
+      () => input({
+        default: existingConfig.general?.CHAIN_NAME_L1 || l1ChainNames[l1Network],
+        message: 'Enter the L1 Chain Name:',
+      }),
+      existingConfig.general?.CHAIN_NAME_L1 || l1ChainNames[l1Network],
+      {
+        configPath: '[general].CHAIN_NAME_L1',
+        description: 'L1 chain name (e.g., "Dogecoin Testnet")',
+        field: 'CHAIN_NAME_L1',
+      }
+    )
+    generalConfig.CHAIN_NAME_L1 = chainNameL1 || l1ChainNames[l1Network]
 
     const chainNameL2 = await resolveOrPrompt(
       niCtx,
@@ -188,11 +154,6 @@ export default class SetupDomains extends Command {
     validateAndExit(niCtx)
 
     jsonCtx.info(`Using ${chalk.bold(generalConfig.CHAIN_NAME_L1)} network:`)
-    if (l1Network !== 'anvil' && !usesDogeos) {
-      logKeyValue('L1 Explorer URL', domainConfig.EXTERNAL_EXPLORER_URI_L1)
-      logKeyValue('L1 Public RPC URL', domainConfig.EXTERNAL_RPC_URI_L1)
-    }
-
     logKeyValue('L1 Chain Name', generalConfig.CHAIN_NAME_L1)
     logKeyValue('L1 Chain ID', generalConfig.CHAIN_ID_L1)
 
@@ -201,56 +162,6 @@ export default class SetupDomains extends Command {
       generalConfig.L1_RPC_ENDPOINT = 'http://l1-interface:8545'
       generalConfig.L1_RPC_ENDPOINT_WEBSOCKET = ''
       generalConfig.BEACON_RPC_ENDPOINT = 'http://l1-interface:5052'
-    } else if (l1Network === 'anvil') {
-      generalConfig.L1_RPC_ENDPOINT = 'http://l1-devnet:8545'
-      generalConfig.L1_RPC_ENDPOINT_WEBSOCKET = 'ws://l1-devnet:8546'
-    } else {
-      // In non-interactive mode, use existing config values or defaults
-      const setL1RpcEndpoint = await resolveConfirm(
-        niCtx,
-        () => confirm({
-          message: 'Do you want to set custom (private) L1 RPC endpoints for the SDK backend?',
-        }),
-        existingConfig.general?.L1_RPC_ENDPOINT ? true : undefined,
-        false // Default to not setting custom endpoints
-      )
-
-      if (setL1RpcEndpoint) {
-        const l1RpcEndpoint = await resolveOrPrompt(
-          niCtx,
-          () => input({
-            default: existingConfig.general?.L1_RPC_ENDPOINT || domainConfig.EXTERNAL_RPC_URI_L1,
-            message: 'Enter the L1 RPC HTTP endpoint for SDK backend:',
-          }),
-          existingConfig.general?.L1_RPC_ENDPOINT || domainConfig.EXTERNAL_RPC_URI_L1,
-          {
-            configPath: '[general].L1_RPC_ENDPOINT',
-            description: 'L1 RPC HTTP endpoint for SDK backend',
-            field: 'L1_RPC_ENDPOINT',
-          }
-        )
-        generalConfig.L1_RPC_ENDPOINT = l1RpcEndpoint || ''
-
-        const l1RpcWs = await resolveOrPrompt(
-          niCtx,
-          () => input({
-            default:
-              existingConfig.general?.L1_RPC_ENDPOINT_WEBSOCKET || domainConfig.EXTERNAL_RPC_URI_L1.replace('http', 'ws'),
-            message: 'Enter the L1 RPC WebSocket endpoint for SDK backend:',
-          }),
-          existingConfig.general?.L1_RPC_ENDPOINT_WEBSOCKET || domainConfig.EXTERNAL_RPC_URI_L1?.replace('http', 'ws'),
-          {
-            configPath: '[general].L1_RPC_ENDPOINT_WEBSOCKET',
-            description: 'L1 RPC WebSocket endpoint for SDK backend',
-            field: 'L1_RPC_ENDPOINT_WEBSOCKET',
-          },
-          false // Not strictly required
-        )
-        generalConfig.L1_RPC_ENDPOINT_WEBSOCKET = l1RpcWs || ''
-      } else {
-        generalConfig.L1_RPC_ENDPOINT = domainConfig.EXTERNAL_RPC_URI_L1
-        generalConfig.L1_RPC_ENDPOINT_WEBSOCKET = domainConfig.EXTERNAL_RPC_URI_L1.replace('http', 'ws')
-      }
     }
 
     if (usesDogeos) {
@@ -345,13 +256,15 @@ export default class SetupDomains extends Command {
     )
     frontendConfig.CONNECT_WALLET_PROJECT_ID = walletProjectId || "14efbaafcf5232a47d93a68229b71028"
 
+    const defaultDogeExternalUrl = l1Network === 'dogecoin-mainnet' ? 'https://sochain.com/DOGE' : 'https://sochain.com/DOGETEST'
+
     const dogeRpcL1 = await resolveOrPrompt(
       niCtx,
       () => input({
-        default: existingConfig.frontend?.DOGE_EXTERNAL_RPC_URI_L1 || "https://sochain.com/DOGETEST",
+        default: existingConfig.frontend?.DOGE_EXTERNAL_RPC_URI_L1 || defaultDogeExternalUrl,
         message: 'Enter the L1 Public RPC URL:',
       }),
-      existingConfig.frontend?.DOGE_EXTERNAL_RPC_URI_L1 || "https://sochain.com/DOGETEST",
+      existingConfig.frontend?.DOGE_EXTERNAL_RPC_URI_L1 || defaultDogeExternalUrl,
       {
         configPath: '[frontend].DOGE_EXTERNAL_RPC_URI_L1',
         description: 'L1 public RPC URL',
@@ -359,15 +272,15 @@ export default class SetupDomains extends Command {
       },
       false
     )
-    frontendConfig.DOGE_EXTERNAL_RPC_URI_L1 = dogeRpcL1 || "https://sochain.com/DOGETEST"
+    frontendConfig.DOGE_EXTERNAL_RPC_URI_L1 = dogeRpcL1 || defaultDogeExternalUrl
 
     const dogeExplorerL1 = await resolveOrPrompt(
       niCtx,
       () => input({
-        default: existingConfig.frontend?.DOGE_EXTERNAL_EXPLORER_URI_L1 || "https://sochain.com/DOGETEST",
+        default: existingConfig.frontend?.DOGE_EXTERNAL_EXPLORER_URI_L1 || defaultDogeExternalUrl,
         message: 'Enter the L1 Explorer URL:',
       }),
-      existingConfig.frontend?.DOGE_EXTERNAL_EXPLORER_URI_L1 || "https://sochain.com/DOGETEST",
+      existingConfig.frontend?.DOGE_EXTERNAL_EXPLORER_URI_L1 || defaultDogeExternalUrl,
       {
         configPath: '[frontend].DOGE_EXTERNAL_EXPLORER_URI_L1',
         description: 'L1 explorer URL',
@@ -375,7 +288,7 @@ export default class SetupDomains extends Command {
       },
       false
     )
-    frontendConfig.DOGE_EXTERNAL_EXPLORER_URI_L1 = dogeExplorerL1 || "https://sochain.com/DOGETEST"
+    frontendConfig.DOGE_EXTERNAL_EXPLORER_URI_L1 = dogeExplorerL1 || defaultDogeExternalUrl
 
     // Final confirmation - in non-interactive mode, always proceed
     const confirmUpdate = await resolveConfirm(
@@ -782,9 +695,15 @@ export default class SetupDomains extends Command {
     // }
 
 
-    existingConfig.contracts.verification.EXPLORER_URI_L1 = domainConfig.EXTERNAL_EXPLORER_URI_L1;
+    if (domainConfig.EXTERNAL_EXPLORER_URI_L1) {
+      existingConfig.contracts.verification.EXPLORER_URI_L1 = domainConfig.EXTERNAL_EXPLORER_URI_L1;
+    }
+
     existingConfig.contracts.verification.EXPLORER_URI_L2 = domainConfig.EXTERNAL_EXPLORER_URI_L2;
-    existingConfig.contracts.verification.RPC_URI_L1 = domainConfig.EXTERNAL_RPC_URI_L1;
+    if (domainConfig.EXTERNAL_RPC_URI_L1) {
+      existingConfig.contracts.verification.RPC_URI_L1 = domainConfig.EXTERNAL_RPC_URI_L1;
+    }
+
     existingConfig.contracts.verification.RPC_URI_L2 = domainConfig.EXTERNAL_RPC_URI_L2;
 
 

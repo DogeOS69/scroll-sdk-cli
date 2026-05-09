@@ -514,13 +514,10 @@ export default class SetupCubesignerSetup extends Command {
 
             // Update attestation_key_count
             setupConfig.attestation_key_count = attestationPubkeys.length
-
-            // Set attestation_threshold
-            const keyCount = attestationPubkeys.length
-            this.jsonCtx.info(`Configured ${keyCount} attestation keys.`)
-
             setupConfig.attestation_threshold = threshold
 
+            const keyCount = attestationPubkeys.length
+            this.jsonCtx.info(`Configured ${keyCount} attestation keys.`)
             // Write to setup_defaults.toml
             fs.writeFileSync(setupDefaultsPath, toml.stringify(setupConfig))
             this.jsonCtx.info(`Successfully updated ${setupDefaultsPath} with ${attestationPubkeys.length} attestation public keys`)

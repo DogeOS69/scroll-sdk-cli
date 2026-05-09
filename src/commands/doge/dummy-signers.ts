@@ -166,14 +166,14 @@ export class DummySignersManager {
         wif = this.generateWIF(selectedNetwork)
         this.log(chalk.green(`Generated WIF for signer ${i}: ${wif}`))
       } else if (this.nonInteractive) {
-          this.error(`WIF key for signer ${i} required when not generating keys in non-interactive mode`)
-          wif = '' // Will fail but we need to continue for type safety
-        } else {
-          wif = await input({
-            message: `Enter WIF private key for signer ${i}`,
-            validate: this.validators.required
-          })
-        }
+        this.error(`WIF key for signer ${i} required when not generating keys in non-interactive mode`)
+        wif = '' // Will fail but we need to continue for type safety
+      } else {
+        wif = await input({
+          message: `Enter WIF private key for signer ${i}`,
+          validate: this.validators.required
+        })
+      }
 
       signerConfigs.push({ port, wif })
     }
@@ -925,50 +925,47 @@ export class DummySignersManager {
       return
     }
 
-    let numSigners: number
-    if (this.nonInteractive) {
-      numSigners = this.nonInteractiveOptions.numSigners || 3
-      this.log(chalk.blue(`Non-interactive mode: Using ${numSigners} signers`))
-    } else {
-      const NUM_SIGNERS = await input({
-        default: '3',
-        message: 'Number of signers to run locally',
-        validate: this.validators.signerCount
-      })
-      numSigners = Number.parseInt(NUM_SIGNERS, 10)
-    }
+    // let numSigners: number =1;
+    // if (this.nonInteractive) {
+    //   numSigners = this.nonInteractiveOptions.numSigners || 3
+    //   this.log(chalk.blue(`Non-interactive mode: Using ${numSigners} signers`))
+    // } else {
+    //   numSigners=1;
+    // }
 
-    // Ask user to choose correctness_threshold right after number of signers
-    this.log(chalk.cyan(`You will have ${numSigners} correctness signers.`))
+    // // Ask user to choose correctness_threshold right after number of signers
+    // this.log(chalk.cyan(`You will have ${numSigners} correctness signers.`))
 
-    let defaultThreshold: number
-    if (numSigners === 1) {
-      defaultThreshold = 1
-    } else if (numSigners === 2) {
-      defaultThreshold = 2
-    } else {
-      defaultThreshold = Math.ceil(numSigners * 2 / 3) // 2/3 majority
-    }
+    // let defaultThreshold: number
+    // if (numSigners === 1) {
+    //   defaultThreshold = 1
+    // } else if (numSigners === 2) {
+    //   defaultThreshold = 2
+    // } else {
+    //   defaultThreshold = Math.ceil(numSigners * 2 / 3) // 2/3 majority
+    // }
 
-    let threshold: number
-    if (this.nonInteractive) {
-      threshold = this.nonInteractiveOptions.threshold || defaultThreshold
-      this.log(chalk.blue(`Non-interactive mode: Using threshold ${threshold}`))
-    } else {
-      const thresholdStr = await input({
-        default: defaultThreshold.toString(),
-        message: chalk.cyan(`Enter correctness threshold (how many signatures required, 1-${numSigners}):`),
-        validate(value: string) {
-          const num = Number.parseInt(value, 10)
-          if (Number.isNaN(num) || num < 1 || num > numSigners) {
-            return `Please enter a number between 1 and ${numSigners}`
-          }
+    // let threshold: number
+    // if (this.nonInteractive) {
+    //   threshold = this.nonInteractiveOptions.threshold || defaultThreshold
+    //   this.log(chalk.blue(`Non-interactive mode: Using threshold ${threshold}`))
+    // } else {
+    //   const thresholdStr = await input({
+    //     default: defaultThreshold.toString(),
+    //     message: chalk.cyan(`Enter correctness threshold (how many signatures required, 1-${numSigners}):`),
+    //     validate(value: string) {
+    //       const num = Number.parseInt(value, 10)
+    //       if (Number.isNaN(num) || num < 1 || num > numSigners) {
+    //         return `Please enter a number between 1 and ${numSigners}`
+    //       }
 
-          return true
-        }
-      })
-      threshold = Number.parseInt(thresholdStr, 10)
-    }
+    //       return true
+    //     }
+    //   })
+    //   threshold = Number.parseInt(thresholdStr, 10)
+    // }
+    const numSigners: number = 1;
+    const threshold: number = 1;
 
     const TSO_URL = this.readTsoUrlFromConfig()
     if (!TSO_URL) {
@@ -1152,25 +1149,13 @@ export class DummySignersManager {
       this.log(`Loaded existing TOML config from ${tomlPath}`);
     } else {
       this.error('setup_defaults.toml not found. Please run "scrollsdk doge:config" first.')
-
     }
 
-    config.correctness_pubkeys = publicKeys;
-
-    // Update correctness_key_count
-    config.correctness_key_count = publicKeys.length;
-
-    // Ask user to choose correctness_threshold
-    const keyCount = publicKeys.length;
-    this.log(chalk.cyan(`You have configured ${keyCount} correctness keys.`));
-
-    config.correctness_threshold = threshold;
-
+    config.tee_pubkey = publicKeys[0];
     const updatedToml = toml.stringify(config);
     fs.writeFileSync(tomlPath, updatedToml);
 
     this.log(`✅ Updated ${tomlPath} with ${publicKeys.length} correctness public keys`);
-    this.log(`Updated correctness_key_count to ${keyCount} and correctness_threshold to ${threshold}`);
     this.log(`Public keys: ${publicKeys.join(', ')}`);
   }
 
@@ -1212,7 +1197,7 @@ export class DummySignersCommand extends Command {
       description: 'AWS region for KMS signers',
     }),
     'aws-suffixes': Flags.string({
-      description: 'Space-separated suffixes for AWS signers (e.g., "00 01 02")',
+      description: 'Space-separated suffixes for AWS signers (e.g., "00")',
     }),
     config: Flags.string({
       char: 'c',
@@ -1243,7 +1228,7 @@ export class DummySignersCommand extends Command {
     }),
     // Local signer options
     'num-signers': Flags.integer({
-      default: 3,
+      default: 1,
       description: 'Number of signers (non-interactive mode)',
     }),
     threshold: Flags.integer({
