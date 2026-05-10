@@ -1119,6 +1119,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_L1_INTERFACE_L2_MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
           "DOGEOS_L1_INTERFACE_L2_MOAT_CONTRACT_ADDRESS": this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
           "DOGEOS_L1_INTERFACE_NETWORK_STR": this.withdrawalProcessorConfig.network_str,
+          "DOGEOS_L1_INTERFACE_SCROLL_CHAIN_ADDRESS": this.getConfigValue("contractsFile.L1_SCROLL_CHAIN_PROXY_ADDR"),
           "DOGEOS_L1_INTERFACE_SCROLL_MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
         }
 
