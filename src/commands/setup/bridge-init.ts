@@ -696,17 +696,17 @@ export class BridgeInitCommand extends Command {
     }
 
     const byteLength = cleanNamespace.length / 2
-    if (byteLength < 2 || byteLength > 28) {
+    if (byteLength < 2 || byteLength > 29) {
       this.jsonCtx.error(
         'E602_INVALID_CONFIG_VALUE',
-        `daNamespace must be between 2 and 28 bytes in ${sourcePath}`,
+        `daNamespace must be between 2 and 29 bytes in ${sourcePath}`,
         'CONFIGURATION',
         true,
         { namespace, path: sourcePath }
       )
     }
 
-    return `0x${cleanNamespace.padStart(56, '0')}`
+    return `0x${cleanNamespace.padStart(58, '0')}`
   }
 
   private normalizeStep(step: string | undefined): BridgeInitStep {
