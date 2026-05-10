@@ -839,14 +839,22 @@ export default class SetupGenL2Artifacts extends Command {
         if (uid !== 0) {
           this.jsonCtx.info('Fixing file ownership...')
           try {
-            // Pull alpine if not available (ignore errors if image already exists locally)
+            // Ensure alpine:latest is available. Inspect first; only pull if missing.
+            // The pull stream MUST be fully consumed via followProgress, otherwise
+            // an unfinished keep-alive connection lingers on dockerode's HTTP agent
+            // and prevents the Node event loop from draining (process hangs at exit).
             try {
-              await docker.pull('alpine:latest')
-            } catch (pullError) {
-              // Check if image exists locally before proceeding
+              await docker.getImage('alpine:latest').inspect()
+            } catch {
               try {
-                await docker.getImage('alpine:latest').inspect()
-              } catch {
+                const alpinePullStream = await docker.pull('alpine:latest')
+                await new Promise((resolve, reject) => {
+                  docker.modem.followProgress(alpinePullStream, (err, res) => {
+                    if (err) reject(err)
+                    else resolve(res)
+                  })
+                })
+              } catch (pullError) {
                 this.jsonCtx.addWarning(`Could not pull alpine:latest and image not found locally: ${pullError}`)
                 throw pullError
               }
