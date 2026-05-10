@@ -91,7 +91,7 @@ export default class WalletSync extends Command {
 
       const { config } = await loadDogeConfigWithSelection(
         flags.config,
-        'scrollsdk doge:config',
+        'scrollsdk setup doge-config',
       )
 
       this.log(chalk.blue(`Syncing wallet for network: ${config.network} (from ${flags.config})`))

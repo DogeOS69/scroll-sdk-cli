@@ -23,14 +23,14 @@ import {
 } from '../../utils/non-interactive.js'
 
 export class DogeConfigCommand extends Command {
-  static description = 'Configure Dogecoin settings for mainnet or testnet'
+  static description = 'Configure Dogecoin settings and bridge setup defaults for deployment'
 
   static examples = [
-    '$ scrollsdk doge:config',
-    '$ scrollsdk doge:config --config .data/doge-config-mainnet.toml',
-    '$ scrollsdk doge:config --config .data/doge-config-testnet.toml',
-    '$ scrollsdk doge:config --non-interactive --network testnet',
-    '$ scrollsdk doge:config --non-interactive --json --network mainnet',
+    '$ scrollsdk setup doge-config',
+    '$ scrollsdk setup doge-config --config .data/doge-config-mainnet.toml',
+    '$ scrollsdk setup doge-config --config .data/doge-config-testnet.toml',
+    '$ scrollsdk setup doge-config --non-interactive --network testnet',
+    '$ scrollsdk setup doge-config --non-interactive --json --network mainnet',
   ]
 
   static flags = {
@@ -93,11 +93,11 @@ export class DogeConfigCommand extends Command {
 
     // Create non-interactive and JSON output contexts
     const niCtx = createNonInteractiveContext(
-      'doge:config',
+      'setup doge-config',
       flags['non-interactive'],
       flags.json
     )
-    const jsonCtx = new JsonOutputContext('doge:config', flags.json)
+    const jsonCtx = new JsonOutputContext('setup doge-config', flags.json)
 
     // Helper for logging
     const log = (msg: string) => jsonCtx.log(msg)
@@ -219,7 +219,7 @@ export class DogeConfigCommand extends Command {
       fs.writeFileSync(resolvedPath, toml.stringify(existingConfig as any))
 
       log(
-        `Created new default ${network} config file at ${resolvedPath}. You can further customize it with 'scrollsdk doge:config'.`,
+        `Created new default ${network} config file at ${resolvedPath}. You can further customize it with 'scrollsdk setup doge-config'.`,
       )
     }
 

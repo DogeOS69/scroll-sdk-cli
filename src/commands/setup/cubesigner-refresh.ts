@@ -77,7 +77,7 @@ export default class SetupCubesignerRefresh extends Command {
         // Use the new common function to load config
         const { config, configPath } = await loadDogeConfigWithSelection(
             flags['doge-config'],
-            'scrollsdk doge:config'
+            'scrollsdk setup doge-config'
         )
 
         this.dogeConfig = config

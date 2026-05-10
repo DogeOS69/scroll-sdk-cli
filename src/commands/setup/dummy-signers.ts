@@ -1133,7 +1133,7 @@ export class DummySignersManager {
     }
   }
 
-  private async updateSetupDefaultsWithPublicKeys(publicKeys: string[], threshold: number): Promise<void> {
+  private async updateSetupDefaultsWithPublicKeys(publicKeys: string[], _threshold: number): Promise<void> {
     if (publicKeys.length === 0) {
       this.warn('No public keys were provided');
       return;
@@ -1148,7 +1148,7 @@ export class DummySignersManager {
       config = toml.parse(tomlContent);
       this.log(`Loaded existing TOML config from ${tomlPath}`);
     } else {
-      this.error('setup_defaults.toml not found. Please run "scrollsdk doge:config" first.')
+      this.error('setup_defaults.toml not found. Please run "scrollsdk setup doge-config" first.')
     }
 
     config.tee_pubkey = publicKeys[0];
@@ -1173,11 +1173,11 @@ export class DummySignersCommand extends Command {
   static description = 'Set up dummy signers (local Docker or AWS with KMS keys)'
 
   static examples = [
-    '$ scrollsdk doge:dummy-signers',
-    '$ scrollsdk doge:dummy-signers --config .data/doge-config-testnet.toml',
-    '$ scrollsdk doge:dummy-signers --local-only',
-    '$ scrollsdk doge:dummy-signers --aws-only',
-    '$ scrollsdk doge:dummy-signers --image-tag shu-test-0605',
+    '$ scrollsdk setup dummy-signers',
+    '$ scrollsdk setup dummy-signers --config .data/doge-config-testnet.toml',
+    '$ scrollsdk setup dummy-signers --local-only',
+    '$ scrollsdk setup dummy-signers --aws-only',
+    '$ scrollsdk setup dummy-signers --image-tag shu-test-0605',
   ]
 
   static flags = {
@@ -1253,7 +1253,7 @@ export class DummySignersCommand extends Command {
     // Setup non-interactive/JSON mode
     this.nonInteractive = flags['non-interactive']
     this.jsonMode = flags.json
-    this.jsonCtx = new JsonOutputContext('doge dummy-signers', this.jsonMode)
+    this.jsonCtx = new JsonOutputContext('setup dummy-signers', this.jsonMode)
 
     // In non-interactive mode, --config is required to avoid prompts in loadDogeConfigWithSelection
     if (this.nonInteractive && !flags.config) {
@@ -1269,7 +1269,7 @@ export class DummySignersCommand extends Command {
     // Load config - use flags.config (not flags['doge-config'])
     const { config, configPath } = await loadDogeConfigWithSelection(
       flags.config,
-      'scrollsdk doge:config'
+      'scrollsdk setup doge-config'
     )
 
     try {

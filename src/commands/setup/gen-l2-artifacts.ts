@@ -23,8 +23,8 @@ const SECRETS_PATH = path.join(process.cwd(), 'secrets')
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- TOML configs have dynamic structure */
 
-export default class SetupConfigs extends Command {
-  static override description = 'Generate configuration files and create environment files for services'
+export default class SetupGenL2Artifacts extends Command {
+  static override description = 'Generate L2 deployment artifacts, including genesis, public config, contract config, and Helm config values'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
@@ -32,7 +32,7 @@ export default class SetupConfigs extends Command {
     '<%= config.bin %> <%= command.id %> --configs-dir ./configs-override',
   ]
 
-  static override flags = {
+  static override flags: any = {
     'base-fee-per-gas': Flags.string({
       description: 'Base fee per gas (non-interactive mode). Uses existing config value if not provided.',
     }),
@@ -74,11 +74,6 @@ export default class SetupConfigs extends Command {
       default: false,
       description: 'Skip deployment salt update (non-interactive mode)',
     }),
-    'skip-genesis': Flags.boolean({
-      default: false,
-      description: 'Skip genesis file generation (Docker step)',
-      required: false,
-    }),
     'skip-l1-fee-vault-update': Flags.boolean({
       default: false,
       description: 'Skip L1 fee vault address update (non-interactive mode)',
@@ -89,112 +84,12 @@ export default class SetupConfigs extends Command {
     }),
   }
 
-  private dogeConfig: DogeConfig = {} as DogeConfig
-  private jsonCtx!: JsonOutputContext
-  private jsonMode: boolean = false
-  private nonInteractive: boolean = false
+  protected dogeConfig: DogeConfig = {} as DogeConfig
+  protected jsonCtx!: JsonOutputContext
+  protected jsonMode: boolean = false
+  protected nonInteractive: boolean = false
 
-  public async run(): Promise<void> {
-    const { flags } = await this.parse(SetupConfigs)
-
-    // Setup non-interactive/JSON mode
-    this.nonInteractive = flags['non-interactive']
-    this.jsonMode = flags.json
-    this.jsonCtx = new JsonOutputContext('setup configs', this.jsonMode)
-
-    const imageTag = await this.getDockerImageTag(flags['image-tag'])
-    this.jsonCtx.info(`Using Docker image tag: ${imageTag}`)
-
-    const configsDir = flags['configs-dir']
-    this.jsonCtx.info(`Using configuration directory: ${configsDir}`)
-
-    const dogeConfigResult = await loadDogeConfigWithSelection(
-      flags['doge-config'],
-      'scrollsdk doge:config'
-    )
-
-    this.dogeConfig = dogeConfigResult.config
-    this.jsonCtx.info(`Using Dogecoin config file: ${dogeConfigResult.configPath}`)
-
-    // Skip L1_CONTRACT_DEPLOYMENT_BLOCK for DogeOS network
-    // this.jsonCtx.info('Checking L1_CONTRACT_DEPLOYMENT_BLOCK...')
-    // await this.updateL1ContractDeploymentBlock()
-    if (flags['skip-genesis']) {
-      this.jsonCtx.info('Skipping genesis generation (Docker command).')
-    } else {
-      this.jsonCtx.info('Checking deployment salt...')
-      await this.updateDeploymentSalt(flags)
-
-      this.jsonCtx.info('Checking L1_FEE_VAULT_ADDR...')
-      await this.updateL1FeeVaultAddr(flags)
-
-      this.jsonCtx.info('Checking L2_BRIDGE_FEE_RECIPIENT_ADDR...')
-      await this.updateL2BridgeFeeRecipientAddr(flags)
-
-      this.jsonCtx.info('Checking L1_PLONK_VERIFIER_ADDR...')
-      await this.updateL1PlonkVerifierAddr(flags)
-
-      await this.updateBaseFeePerGas(flags)
-
-      this.jsonCtx.info('Running docker command to generate configs...')
-      await this.runDockerCommand(imageTag)
-
-      const publicConfigPath = path.join(process.cwd(), 'config.public.toml')
-      if (fs.existsSync(publicConfigPath)) {
-        try {
-          const publicConfigContent = fs.readFileSync(publicConfigPath, 'utf8')
-          toml.parse(publicConfigContent)
-          this.jsonCtx.logSuccess('Successfully parsed config.public.toml')
-        } catch (error) {
-          this.jsonCtx.error(
-            'E602_INVALID_CONFIG_FORMAT',
-            `Failed to parse config.public.toml: ${error instanceof Error ? error.message : String(error)}`,
-            'CONFIGURATION',
-            false
-          )
-        }
-      } else {
-        this.jsonCtx.addWarning('config.public.toml not found after docker command. Skipping .env generation for docker-compose.')
-      }
-    }
-
-    this.jsonCtx.info('Creating secrets folder...')
-    this.createSecretsFolder()
-
-    this.jsonCtx.info('Creating secrets environment files...')
-    await this.createEnvFiles()
-
-    if (!flags['skip-genesis']) {
-      this.jsonCtx.info('Processing YAML files...')
-      await this.processYamlFiles(configsDir)
-    }
-
-    this.jsonCtx.logSuccess('Configuration setup completed.')
-
-    // JSON output
-    if (this.jsonMode) {
-      this.jsonCtx.success({
-        configsDir,
-        dogeConfigPath: dogeConfigResult.configPath,
-        imageTag,
-        secretsCreated: true,
-        yamlFilesProcessed: true,
-      })
-    }
-
-  }
-
-  private canAccessFile(filePath: string): boolean {
-    try {
-      // eslint-disable-next-line no-bitwise
-      fs.accessSync(filePath, fs.constants.R_OK | fs.constants.W_OK)
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  private async createEnvFiles(): Promise<void> {
+  protected async createEnvFiles(): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
     if (!fs.existsSync(configPath)) {
       this.jsonCtx.error(
@@ -248,7 +143,7 @@ export default class SetupConfigs extends Command {
     this.createMigrateDbFiles(config)
   }
 
-  private createMigrateDbFiles(config: any): void {
+  protected createMigrateDbFiles(config: any): void {
     const migrateDbFiles = [
       // { key: 'BRIDGE_HISTORY_DB_CONNECTION_STRING', service: 'bridge-history-fetcher' },
       // { key: 'GAS_ORACLE_DB_CONNECTION_STRING', service: 'gas-oracle' },
@@ -279,7 +174,7 @@ export default class SetupConfigs extends Command {
     }
   }
 
-  private createSecretsFolder(): void {
+  protected createSecretsFolder(): void {
     if (fs.existsSync(SECRETS_PATH)) {
       this.jsonCtx.log(chalk.yellow('Secrets folder already exists'))
     } else {
@@ -288,32 +183,8 @@ export default class SetupConfigs extends Command {
     }
   }
 
-  private async fetchDockerTags(): Promise<string[]> {
-    try {
-      const response = await fetch(
-        `${DOCKER_TAGS_URL}?page_size=100`,
-      )
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-
-      const data = await response.json()
-      return data.results.map((tag: { name: string }) => tag.name).filter((tag: string) => tag.startsWith('gen-configs-'))
-    } catch (error) {
-      this.jsonCtx.error(
-        'E400_DOCKER_IMAGE_PULL_FAILED',
-        `Failed to fetch Docker tags: ${error}`,
-        'DOCKER',
-        true,
-        { error: String(error) }
-      )
-    }
-  }
-
-
-
   // TODO: check privatekey secrets once integrated
-  private generateEnvContent(service: string, config: any): { [key: string]: string } {
+  protected generateEnvContent(service: string, config: any): { [key: string]: string } {
     const mapping: Record<string, string[]> = {
       'admin-system-backend': [
         'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_AUTH_DB_CONFIG_DSN',
@@ -519,6 +390,118 @@ export default class SetupConfigs extends Command {
     }
 
     return envFiles
+  }
+
+  public async run(): Promise<void> {
+    const { flags } = await this.parse(SetupGenL2Artifacts) as any
+
+    // Setup non-interactive/JSON mode
+    this.nonInteractive = flags['non-interactive']
+    this.jsonMode = flags.json
+    this.jsonCtx = new JsonOutputContext('setup gen-l2-artifacts', this.jsonMode)
+
+    const imageTag = await this.getDockerImageTag(flags['image-tag'])
+    this.jsonCtx.info(`Using Docker image tag: ${imageTag}`)
+
+    const configsDir = flags['configs-dir']
+    this.jsonCtx.info(`Using configuration directory: ${configsDir}`)
+
+    const dogeConfigResult = await loadDogeConfigWithSelection(
+      flags['doge-config'],
+      'scrollsdk setup doge-config'
+    )
+
+    this.dogeConfig = dogeConfigResult.config
+    this.jsonCtx.info(`Using Dogecoin config file: ${dogeConfigResult.configPath}`)
+
+    // Skip L1_CONTRACT_DEPLOYMENT_BLOCK for DogeOS network
+    // this.jsonCtx.info('Checking L1_CONTRACT_DEPLOYMENT_BLOCK...')
+    // await this.updateL1ContractDeploymentBlock()
+    this.jsonCtx.info('Checking deployment salt...')
+    await this.updateDeploymentSalt(flags)
+
+    this.jsonCtx.info('Checking L1_FEE_VAULT_ADDR...')
+    await this.updateL1FeeVaultAddr(flags)
+
+    this.jsonCtx.info('Checking L2_BRIDGE_FEE_RECIPIENT_ADDR...')
+    await this.updateL2BridgeFeeRecipientAddr(flags)
+
+    this.jsonCtx.info('Checking L1_PLONK_VERIFIER_ADDR...')
+    await this.updateL1PlonkVerifierAddr(flags)
+
+    await this.updateBaseFeePerGas(flags)
+
+    this.jsonCtx.info('Running docker command to generate L2 artifacts...')
+    await this.runDockerCommand(imageTag)
+
+    const publicConfigPath = path.join(process.cwd(), 'config.public.toml')
+    if (fs.existsSync(publicConfigPath)) {
+      try {
+        const publicConfigContent = fs.readFileSync(publicConfigPath, 'utf8')
+        toml.parse(publicConfigContent)
+        this.jsonCtx.logSuccess('Successfully parsed config.public.toml')
+      } catch (error) {
+        this.jsonCtx.error(
+          'E602_INVALID_CONFIG_FORMAT',
+          `Failed to parse config.public.toml: ${error instanceof Error ? error.message : String(error)}`,
+          'CONFIGURATION',
+          false
+        )
+      }
+    } else {
+      this.jsonCtx.addWarning('config.public.toml not found after docker command.')
+    }
+
+    this.jsonCtx.info('Processing generated YAML files...')
+    await this.processYamlFiles(configsDir)
+
+    this.jsonCtx.logSuccess('L2 artifact generation completed.')
+
+    // JSON output
+    if (this.jsonMode) {
+      this.jsonCtx.success({
+        configsDir,
+        dogeConfigPath: dogeConfigResult.configPath,
+        genesisPath: path.join(path.resolve(configsDir), 'genesis.yaml'),
+        imageTag,
+        yamlFilesProcessed: true,
+      })
+    }
+
+  }
+
+  private canAccessFile(filePath: string): boolean {
+    try {
+      // eslint-disable-next-line no-bitwise
+      fs.accessSync(filePath, fs.constants.R_OK | fs.constants.W_OK)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+
+
+  private async fetchDockerTags(): Promise<string[]> {
+    try {
+      const response = await fetch(
+        `${DOCKER_TAGS_URL}?page_size=100`,
+      )
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const data = await response.json()
+      return data.results.map((tag: { name: string }) => tag.name).filter((tag: string) => tag.startsWith('gen-configs-'))
+    } catch (error) {
+      this.jsonCtx.error(
+        'E400_DOCKER_IMAGE_PULL_FAILED',
+        `Failed to fetch Docker tags: ${error}`,
+        'DOCKER',
+        true,
+        { error: String(error) }
+      )
+    }
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {

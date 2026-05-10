@@ -29,8 +29,8 @@ describe('non-interactive utilities', () => {
     });
 
     it('creates context with all options', () => {
-      const ctx = createNonInteractiveContext('setup:configs', true, true);
-      expect(ctx.command).to.equal('setup:configs');
+      const ctx = createNonInteractiveContext('setup gen-l2-artifacts', true, true);
+      expect(ctx.command).to.equal('setup gen-l2-artifacts');
       expect(ctx.enabled).to.be.true;
       expect(ctx.jsonOutput).to.be.true;
     });

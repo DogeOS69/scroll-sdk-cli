@@ -32,7 +32,7 @@ export class BridgeInitCommand extends Command {
 
         const setupDefaultsPath = getSetupDefaultsPath();
         if (!fs.existsSync(setupDefaultsPath)) {
-            this.error('setup_defaults.toml not found, please run `scrollsdk doge:config` first')
+            this.error('setup_defaults.toml not found, please run `scrollsdk setup doge-config` first')
             return
         }
 
@@ -205,7 +205,7 @@ export class BridgeInitCommand extends Command {
             this.warn('config.toml not found. Some values may not be populated correctly.')
         }
 
-        const { config } = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk doge:config')
+        const { config } = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk setup doge-config')
         this.dogeConfig = config as DogeConfig
     }
 }

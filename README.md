@@ -40,15 +40,19 @@ A tool for configuring, managing, and testing [Scroll SDK](https://docs.scroll.i
    ```
 
 4. ```bash
-   scrollsdk doge config
+   scrollsdk setup doge-config
    ```
 
 5. ```bash
-   scrollsdk doge dummy-signers
+   scrollsdk setup gen-l2-artifacts
    ```
 
 6. ```bash
-   scrollsdk doge bridge-init
+   scrollsdk setup cubesigner-init
+   ```
+
+7. ```bash
+   scrollsdk setup bridge-init
    ```
    **Note:** If you encounter an "Insufficient base funds" error like this:
    ```
@@ -81,15 +85,15 @@ A tool for configuring, managing, and testing [Scroll SDK](https://docs.scroll.i
 
 
 
-7. ```bash
-   scrollsdk setup configs
+8. ```bash
+   scrollsdk setup gen-secrets
    ```
 
-8. ```bash
+9. ```bash
    scrollsdk setup prep-charts
    ```
 
-9. ```
+10. ```
     scrollsdk setup cubesigner-refresh
     ```
 
@@ -118,7 +122,7 @@ $ npm install -g @scroll-tech/scroll-sdk-cli
 $ scrollsdk COMMAND
 running command...
 $ scrollsdk (--version)
-@scroll-tech/scroll-sdk-cli/0.1.3 linux-x64 node-v22.19.0
+@scroll-tech/scroll-sdk-cli/0.1.3 darwin-arm64 node-v22.19.0
 $ scrollsdk --help [COMMAND]
 USAGE
   $ scrollsdk COMMAND
@@ -130,9 +134,6 @@ USAGE
 
 <!-- commands -->
 * [`scrollsdk check prerequisites`](#scrollsdk-check-prerequisites)
-* [`scrollsdk doge bridge-init`](#scrollsdk-doge-bridge-init)
-* [`scrollsdk doge config`](#scrollsdk-doge-config)
-* [`scrollsdk doge dummy-signers`](#scrollsdk-doge-dummy-signers)
 * [`scrollsdk doge wallet new`](#scrollsdk-doge-wallet-new)
 * [`scrollsdk doge wallet send`](#scrollsdk-doge-wallet-send)
 * [`scrollsdk doge wallet sync`](#scrollsdk-doge-wallet-sync)
@@ -153,16 +154,20 @@ USAGE
 * [`scrollsdk plugins unlink [PLUGIN]`](#scrollsdk-plugins-unlink-plugin)
 * [`scrollsdk plugins update`](#scrollsdk-plugins-update)
 * [`scrollsdk setup bootnode-public-p2p`](#scrollsdk-setup-bootnode-public-p2p)
-* [`scrollsdk setup configs`](#scrollsdk-setup-configs)
+* [`scrollsdk setup bridge-init`](#scrollsdk-setup-bridge-init)
 * [`scrollsdk setup cubesigner-init`](#scrollsdk-setup-cubesigner-init)
 * [`scrollsdk setup cubesigner-refresh`](#scrollsdk-setup-cubesigner-refresh)
 * [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
 * [`scrollsdk setup disable-internal`](#scrollsdk-setup-disable-internal)
+* [`scrollsdk setup doge-config`](#scrollsdk-setup-doge-config)
 * [`scrollsdk setup dogecoin-wallet-import`](#scrollsdk-setup-dogecoin-wallet-import)
 * [`scrollsdk setup domains`](#scrollsdk-setup-domains)
+* [`scrollsdk setup dummy-signers`](#scrollsdk-setup-dummy-signers)
 * [`scrollsdk setup gas-token`](#scrollsdk-setup-gas-token)
 * [`scrollsdk setup gen-keystore`](#scrollsdk-setup-gen-keystore)
+* [`scrollsdk setup gen-l2-artifacts`](#scrollsdk-setup-gen-l2-artifacts)
 * [`scrollsdk setup gen-rpc-package`](#scrollsdk-setup-gen-rpc-package)
+* [`scrollsdk setup gen-secrets`](#scrollsdk-setup-gen-secrets)
 * [`scrollsdk setup generate-from-spec`](#scrollsdk-setup-generate-from-spec)
 * [`scrollsdk setup prep-charts`](#scrollsdk-setup-prep-charts)
 * [`scrollsdk setup push-secrets`](#scrollsdk-setup-push-secrets)
@@ -197,117 +202,7 @@ EXAMPLES
   $ scrollsdk check prerequisites --verbose
 ```
 
-_See code: [src/commands/check/prerequisites.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/check/prerequisites.ts)_
-
-## `scrollsdk doge bridge-init`
-
-Initialize bridge for mainnet or testnet
-
-```
-USAGE
-  $ scrollsdk doge bridge-init [--image-tag <value>] [--json] [-N] [-s <value>]
-
-FLAGS
-  -N, --non-interactive    Run without prompts. Requires --seed flag.
-  -s, --seed=<value>       seed which will regenerate the sequencer and fee wallet
-      --image-tag=<value>  Specify the Docker image tag to use (defaults to 0.2.0-rc.3)
-      --json               Output in JSON format (stdout for data, stderr for logs)
-
-DESCRIPTION
-  Initialize bridge for mainnet or testnet
-
-EXAMPLES
-  $ scrollsdk doge:bridge-init
-
-  $ scrollsdk doge:bridge-init -s 123456
-
-  $ scrollsdk doge:bridge-init --seed 123456
-
-  $ scrollsdk doge:bridge-init --image-tag 0.2.0-debug
-
-  $ scrollsdk doge:bridge-init --non-interactive --seed 123456 --image-tag 0.2.0-rc.3
-
-  $ scrollsdk doge:bridge-init --non-interactive --json --seed 123456
-```
-
-_See code: [src/commands/doge/bridge-init.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/doge/bridge-init.ts)_
-
-## `scrollsdk doge config`
-
-Configure Dogecoin settings for mainnet or testnet
-
-```
-USAGE
-  $ scrollsdk doge config [-c <value>] [--json] [-n mainnet|testnet] [-N]
-
-FLAGS
-  -N, --non-interactive   Run without prompts, using existing config values
-  -c, --config=<value>    Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)
-  -n, --network=<option>  Network to configure (mainnet or testnet) - required for non-interactive mode with new config
-                          <options: mainnet|testnet>
-      --json              Output in JSON format (stdout for data, stderr for logs)
-
-DESCRIPTION
-  Configure Dogecoin settings for mainnet or testnet
-
-EXAMPLES
-  $ scrollsdk doge:config
-
-  $ scrollsdk doge:config --config .data/doge-config-mainnet.toml
-
-  $ scrollsdk doge:config --config .data/doge-config-testnet.toml
-
-  $ scrollsdk doge:config --non-interactive --network testnet
-
-  $ scrollsdk doge:config --non-interactive --json --network mainnet
-```
-
-_See code: [src/commands/doge/config.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/doge/config.ts)_
-
-## `scrollsdk doge dummy-signers`
-
-Set up dummy signers (local Docker or AWS with KMS keys)
-
-```
-USAGE
-  $ scrollsdk doge dummy-signers [--aws-account-id <value>] [--aws-network-alias <value>] [-a] [--aws-region <value>]
-    [--aws-suffixes <value>] [-c <value>] [--generate-wif-keys] [--image-tag <value>] [--json] [-l] [-N] [--num-signers
-    <value>] [--threshold <value>] [--wif-network regtest|testnet|mainnet]
-
-FLAGS
-  -N, --non-interactive            Run without prompts. Uses config values or sensible defaults.
-  -a, --aws-only                   Set up AWS KMS signers only
-  -c, --config=<value>             Path to config file (e.g., .data/doge-config-mainnet.toml or
-                                   .data/doge-config-testnet.toml)
-  -l, --local-only                 Set up local Docker signers only
-      --aws-account-id=<value>     AWS account ID
-      --aws-network-alias=<value>  Network alias for AWS resources
-      --aws-region=<value>         AWS region for KMS signers
-      --aws-suffixes=<value>       Space-separated suffixes for AWS signers (e.g., "00 01 02")
-      --[no-]generate-wif-keys     Generate new WIF keys (non-interactive mode)
-      --image-tag=<value>          Specify the Docker image tag to use
-      --json                       Output in JSON format (stdout for data, stderr for logs)
-      --num-signers=<value>        [default: 3] Number of signers (non-interactive mode)
-      --threshold=<value>          Correctness threshold (non-interactive mode). Defaults to 2/3 majority.
-      --wif-network=<option>       [default: regtest] Network for WIF generation: regtest, testnet, or mainnet
-                                   <options: regtest|testnet|mainnet>
-
-DESCRIPTION
-  Set up dummy signers (local Docker or AWS with KMS keys)
-
-EXAMPLES
-  $ scrollsdk doge:dummy-signers
-
-  $ scrollsdk doge:dummy-signers --config .data/doge-config-testnet.toml
-
-  $ scrollsdk doge:dummy-signers --local-only
-
-  $ scrollsdk doge:dummy-signers --aws-only
-
-  $ scrollsdk doge:dummy-signers --image-tag shu-test-0605
-```
-
-_See code: [src/commands/doge/dummy-signers.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/doge/dummy-signers.ts)_
+_See code: [src/commands/check/prerequisites.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/check/prerequisites.ts)_
 
 ## `scrollsdk doge wallet new`
 
@@ -341,7 +236,7 @@ EXAMPLES
   $ scrollsdk doge:wallet new --force
 ```
 
-_See code: [src/commands/doge/wallet/new.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/doge/wallet/new.ts)_
+_See code: [src/commands/doge/wallet/new.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/doge/wallet/new.ts)_
 
 ## `scrollsdk doge wallet send`
 
@@ -380,7 +275,7 @@ EXAMPLES
   $ scrollsdk doge:wallet send --amount 1.0 --force
 ```
 
-_See code: [src/commands/doge/wallet/send.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/doge/wallet/send.ts)_
+_See code: [src/commands/doge/wallet/send.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/doge/wallet/send.ts)_
 
 ## `scrollsdk doge wallet sync`
 
@@ -392,7 +287,7 @@ USAGE
 
 FLAGS
   -c, --config=<value>   Path to Dogecoin config file
-  -k, --api-key=<value>  [env: NOWNODES_API_KEY] NowNodes API key (overrides API key from config)
+  -k, --api-key=<value>  NowNodes API key (overrides API key from config)
   -p, --path=<value>     Custom path for the wallet file (overrides path from config)
 
 DESCRIPTION
@@ -404,7 +299,7 @@ EXAMPLES
   $ scrollsdk doge:wallet sync --config .data/doge-config-testnet.toml
 ```
 
-_See code: [src/commands/doge/wallet/sync.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/doge/wallet/sync.ts)_
+_See code: [src/commands/doge/wallet/sync.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/doge/wallet/sync.ts)_
 
 ## `scrollsdk help [COMMAND]`
 
@@ -415,7 +310,7 @@ USAGE
   $ scrollsdk help [COMMAND...] [-n]
 
 ARGUMENTS
-  [COMMAND...]  Command to show help for.
+  COMMAND...  Command to show help for.
 
 FLAGS
   -n, --nested-commands  Include all nested commands in the output.
@@ -424,7 +319,7 @@ DESCRIPTION
   Display help for scrollsdk.
 ```
 
-_See code: [@oclif/plugin-help](https://github.com/oclif/plugin-help/blob/v6.2.37/src/commands/help.ts)_
+_See code: [@oclif/plugin-help](https://github.com/oclif/plugin-help/blob/v6.2.15/src/commands/help.ts)_
 
 ## `scrollsdk helper activity`
 
@@ -451,7 +346,7 @@ DESCRIPTION
   Generate transactions on the specified network(s) to produce more blocks
 ```
 
-_See code: [src/commands/helper/activity.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/activity.ts)_
+_See code: [src/commands/helper/activity.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/activity.ts)_
 
 ## `scrollsdk helper clear-accounts`
 
@@ -476,7 +371,7 @@ DESCRIPTION
   Clear pending transactions and optionally transfer remaining funds on Layer 2
 ```
 
-_See code: [src/commands/helper/clear-accounts.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/clear-accounts.ts)_
+_See code: [src/commands/helper/clear-accounts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/clear-accounts.ts)_
 
 ## `scrollsdk helper derive-enode NODEKEY`
 
@@ -496,7 +391,7 @@ EXAMPLES
   $ scrollsdk helper derive-enode 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 ```
 
-_See code: [src/commands/helper/derive-enode.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/derive-enode.ts)_
+_See code: [src/commands/helper/derive-enode.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/derive-enode.ts)_
 
 ## `scrollsdk helper fund-accounts`
 
@@ -526,7 +421,7 @@ DESCRIPTION
   Fund L1 and L2 accounts for contracts
 ```
 
-_See code: [src/commands/helper/fund-accounts.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/fund-accounts.ts)_
+_See code: [src/commands/helper/fund-accounts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/fund-accounts.ts)_
 
 ## `scrollsdk helper set-scalars`
 
@@ -550,7 +445,7 @@ DESCRIPTION
   Set commit and blob scalars for Scroll SDK
 ```
 
-_See code: [src/commands/helper/set-scalars.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/set-scalars.ts)_
+_See code: [src/commands/helper/set-scalars.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/set-scalars.ts)_
 
 ## `scrollsdk plugins`
 
@@ -573,7 +468,7 @@ EXAMPLES
   $ scrollsdk plugins
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/index.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/index.ts)_
 
 ## `scrollsdk plugins add PLUGIN`
 
@@ -647,7 +542,7 @@ EXAMPLES
   $ scrollsdk plugins inspect myplugin
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/inspect.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/inspect.ts)_
 
 ## `scrollsdk plugins install PLUGIN`
 
@@ -696,7 +591,7 @@ EXAMPLES
     $ scrollsdk plugins install someuser/someplugin
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/install.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/install.ts)_
 
 ## `scrollsdk plugins link PATH`
 
@@ -716,7 +611,6 @@ FLAGS
 
 DESCRIPTION
   Links a plugin into the CLI for development.
-
   Installation of a linked plugin will override a user-installed or core plugin.
 
   e.g. If you have a user-installed or core plugin that has a 'hello' command, installing a linked plugin with a 'hello'
@@ -727,7 +621,7 @@ EXAMPLES
   $ scrollsdk plugins link myplugin
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/link.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/link.ts)_
 
 ## `scrollsdk plugins remove [PLUGIN]`
 
@@ -738,7 +632,7 @@ USAGE
   $ scrollsdk plugins remove [PLUGIN...] [-h] [-v]
 
 ARGUMENTS
-  [PLUGIN...]  plugin to uninstall
+  PLUGIN...  plugin to uninstall
 
 FLAGS
   -h, --help     Show CLI help.
@@ -768,7 +662,7 @@ FLAGS
   --reinstall  Reinstall all plugins after uninstalling.
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/reset.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/reset.ts)_
 
 ## `scrollsdk plugins uninstall [PLUGIN]`
 
@@ -779,7 +673,7 @@ USAGE
   $ scrollsdk plugins uninstall [PLUGIN...] [-h] [-v]
 
 ARGUMENTS
-  [PLUGIN...]  plugin to uninstall
+  PLUGIN...  plugin to uninstall
 
 FLAGS
   -h, --help     Show CLI help.
@@ -796,7 +690,7 @@ EXAMPLES
   $ scrollsdk plugins uninstall myplugin
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/uninstall.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/uninstall.ts)_
 
 ## `scrollsdk plugins unlink [PLUGIN]`
 
@@ -807,7 +701,7 @@ USAGE
   $ scrollsdk plugins unlink [PLUGIN...] [-h] [-v]
 
 ARGUMENTS
-  [PLUGIN...]  plugin to uninstall
+  PLUGIN...  plugin to uninstall
 
 FLAGS
   -h, --help     Show CLI help.
@@ -840,7 +734,7 @@ DESCRIPTION
   Update installed plugins.
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/update.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/update.ts)_
 
 ## `scrollsdk setup bootnode-public-p2p`
 
@@ -893,52 +787,64 @@ EXAMPLES
   $ scrollsdk setup bootnode-public-p2p --non-interactive --json --provider=aws --cluster-name=my-cluster --region=us-west-2
 ```
 
-_See code: [src/commands/setup/bootnode-public-p2p.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/bootnode-public-p2p.ts)_
+_See code: [src/commands/setup/bootnode-public-p2p.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/bootnode-public-p2p.ts)_
 
-## `scrollsdk setup configs`
+## `scrollsdk setup bridge-init`
 
-Generate configuration files and create environment files for services
+Initialize DogeOS bridge after L2 artifacts and CubeSigner keys are ready
 
 ```
 USAGE
-  $ scrollsdk setup configs [--base-fee-per-gas <value>] [--configs-dir <value>] [--deployment-salt <value>]
-    [--doge-config <value>] [--image-tag <value>] [--json] [--l1-fee-vault-addr <value>] [--l1-plonk-verifier-addr
-    <value>] [--l2-bridge-fee-recipient-addr <value>] [-N] [--skip-deployment-salt-update] [--skip-genesis]
-    [--skip-l1-fee-vault-update] [--skip-l1-plonk-verifier-update]
+  $ scrollsdk setup bridge-init [--image-tag <value>] [--json] [-N] [-s <value>] [--step <value>]
 
 FLAGS
-  -N, --non-interactive                       Run without prompts. Uses config values or sensible defaults.
-      --base-fee-per-gas=<value>              Base fee per gas (non-interactive mode). Uses existing config value if not
-                                              provided.
-      --configs-dir=<value>                   [default: values] Directory name to copy configs to
-      --deployment-salt=<value>               Deployment salt value (non-interactive mode). If not provided, keeps
-                                              existing or auto-increments.
-      --doge-config=<value>                   Path to config file (e.g., .data/doge-config-mainnet.toml or
-                                              .data/doge-config-testnet.toml)
-      --image-tag=<value>                     Specify the Docker image tag to use
-      --json                                  Output in JSON format (stdout for data, stderr for logs)
-      --l1-fee-vault-addr=<value>             L1 fee vault address (non-interactive mode). Defaults to OWNER_ADDR.
-      --l1-plonk-verifier-addr=<value>        L1 plonk verifier address (non-interactive mode). If not provided, one
-                                              will be deployed.
-      --l2-bridge-fee-recipient-addr=<value>  L2 bridge fee recipient address (non-interactive mode). Defaults to zero
-                                              address.
-      --skip-deployment-salt-update           Skip deployment salt update (non-interactive mode)
-      --skip-genesis                          Skip genesis file generation (Docker step)
-      --skip-l1-fee-vault-update              Skip L1 fee vault address update (non-interactive mode)
-      --skip-l1-plonk-verifier-update         Skip L1 plonk verifier address update (non-interactive mode)
+  -N, --non-interactive
+      Run without prompts. Requires --seed for --step all or --step 1-prepare.
+
+  -s, --seed=<value>
+      seed which will regenerate the sequencer and fee wallet
+
+  --image-tag=<value>
+      Specify the Docker image tag to use (defaults to 0.2.0-rc.3)
+
+  --json
+      Output in JSON format (stdout for data, stderr for logs)
+
+  --step=<value>
+      [default: all] Bridge init step to run. all runs 1-prepare, 2-setup, 3-generate, and 4-fund. 1-prepare requires
+      values/genesis.yaml, extracts .data/genesis.json, and prepares protocol_seed.toml. 2-setup is NOT idempotent:
+      generate test keys and broadcast the setup transaction. 3-generate is idempotent: generate namespace, bridge.json,
+      and protocol_context.json. 4-fund is NOT idempotent: broadcast 10 initial bridge funding transactions. Numeric
+      aliases 1, 2, 3, and 4 are accepted.
 
 DESCRIPTION
-  Generate configuration files and create environment files for services
+  Initialize DogeOS bridge after L2 artifacts and CubeSigner keys are ready
 
 EXAMPLES
-  $ scrollsdk setup configs
+  $ scrollsdk setup bridge-init
 
-  $ scrollsdk setup configs --image-tag gen-configs-v0.2.0-debug
+  $ scrollsdk setup bridge-init --step 1-prepare
 
-  $ scrollsdk setup configs --configs-dir ./configs-override
+  $ scrollsdk setup bridge-init --step 2-setup
+
+  $ scrollsdk setup bridge-init --step 3-generate
+
+  $ scrollsdk setup bridge-init --step 4-fund
+
+  $ scrollsdk setup bridge-init --step 2
+
+  $ scrollsdk setup bridge-init -s 123456
+
+  $ scrollsdk setup bridge-init --seed 123456
+
+  $ scrollsdk setup bridge-init --image-tag 0.2.0-debug
+
+  $ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag 0.2.0-rc.3
+
+  $ scrollsdk setup bridge-init --non-interactive --json --seed 123456
 ```
 
-_See code: [src/commands/setup/configs.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/configs.ts)_
+_See code: [src/commands/setup/bridge-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/bridge-init.ts)_
 
 ## `scrollsdk setup cubesigner-init`
 
@@ -980,7 +886,7 @@ EXAMPLES
   $ scrollsdk setup cubesigner-init --non-interactive --json --roles role_a role_b --threshold 2 --doge-config .data/doge-config-testnet.toml
 ```
 
-_See code: [src/commands/setup/cubesigner-init.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-init.ts)_
+_See code: [src/commands/setup/cubesigner-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-init.ts)_
 
 ## `scrollsdk setup cubesigner-refresh`
 
@@ -1014,7 +920,7 @@ EXAMPLES
   $ scrollsdk setup cubesigner-refresh --non-interactive --json --doge-config .data/doge-config-testnet.toml --org-id Org#xxx --email user@example.com
 ```
 
-_See code: [src/commands/setup/cubesigner-refresh.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-refresh.ts)_
+_See code: [src/commands/setup/cubesigner-refresh.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-refresh.ts)_
 
 ## `scrollsdk setup db-init`
 
@@ -1052,7 +958,7 @@ EXAMPLES
   $ scrollsdk setup db-init --non-interactive --json --clean
 ```
 
-_See code: [src/commands/setup/db-init.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/db-init.ts)_
+_See code: [src/commands/setup/db-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/db-init.ts)_
 
 ## `scrollsdk setup disable-internal`
 
@@ -1094,7 +1000,39 @@ EXAMPLES
   $ scrollsdk setup disable-internal --disable frontends
 ```
 
-_See code: [src/commands/setup/disable-internal.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/disable-internal.ts)_
+_See code: [src/commands/setup/disable-internal.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/disable-internal.ts)_
+
+## `scrollsdk setup doge-config`
+
+Configure Dogecoin settings and bridge setup defaults for deployment
+
+```
+USAGE
+  $ scrollsdk setup doge-config [-c <value>] [--json] [-n mainnet|testnet] [-N]
+
+FLAGS
+  -N, --non-interactive   Run without prompts, using existing config values
+  -c, --config=<value>    Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)
+  -n, --network=<option>  Network to configure (mainnet or testnet) - required for non-interactive mode with new config
+                          <options: mainnet|testnet>
+      --json              Output in JSON format (stdout for data, stderr for logs)
+
+DESCRIPTION
+  Configure Dogecoin settings and bridge setup defaults for deployment
+
+EXAMPLES
+  $ scrollsdk setup doge-config
+
+  $ scrollsdk setup doge-config --config .data/doge-config-mainnet.toml
+
+  $ scrollsdk setup doge-config --config .data/doge-config-testnet.toml
+
+  $ scrollsdk setup doge-config --non-interactive --network testnet
+
+  $ scrollsdk setup doge-config --non-interactive --json --network mainnet
+```
+
+_See code: [src/commands/setup/doge-config.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/doge-config.ts)_
 
 ## `scrollsdk setup dogecoin-wallet-import`
 
@@ -1112,7 +1050,7 @@ DESCRIPTION
   Dogecoin wallet import
 ```
 
-_See code: [src/commands/setup/dogecoin-wallet-import.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/dogecoin-wallet-import.ts)_
+_See code: [src/commands/setup/dogecoin-wallet-import.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/dogecoin-wallet-import.ts)_
 
 ## `scrollsdk setup domains`
 
@@ -1137,7 +1075,52 @@ EXAMPLES
   $ scrollsdk setup domains --non-interactive --json
 ```
 
-_See code: [src/commands/setup/domains.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/domains.ts)_
+_See code: [src/commands/setup/domains.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/domains.ts)_
+
+## `scrollsdk setup dummy-signers`
+
+Set up dummy signers (local Docker or AWS with KMS keys)
+
+```
+USAGE
+  $ scrollsdk setup dummy-signers [--aws-account-id <value>] [--aws-network-alias <value>] [-a] [--aws-region <value>]
+    [--aws-suffixes <value>] [-c <value>] [--generate-wif-keys] [--image-tag <value>] [--json] [-l] [-N] [--num-signers
+    <value>] [--threshold <value>] [--wif-network regtest|testnet|mainnet]
+
+FLAGS
+  -N, --non-interactive            Run without prompts. Uses config values or sensible defaults.
+  -a, --aws-only                   Set up AWS KMS signers only
+  -c, --config=<value>             Path to config file (e.g., .data/doge-config-mainnet.toml or
+                                   .data/doge-config-testnet.toml)
+  -l, --local-only                 Set up local Docker signers only
+      --aws-account-id=<value>     AWS account ID
+      --aws-network-alias=<value>  Network alias for AWS resources
+      --aws-region=<value>         AWS region for KMS signers
+      --aws-suffixes=<value>       Space-separated suffixes for AWS signers (e.g., "00")
+      --[no-]generate-wif-keys     Generate new WIF keys (non-interactive mode)
+      --image-tag=<value>          Specify the Docker image tag to use
+      --json                       Output in JSON format (stdout for data, stderr for logs)
+      --num-signers=<value>        [default: 1] Number of signers (non-interactive mode)
+      --threshold=<value>          Correctness threshold (non-interactive mode). Defaults to 2/3 majority.
+      --wif-network=<option>       [default: regtest] Network for WIF generation: regtest, testnet, or mainnet
+                                   <options: regtest|testnet|mainnet>
+
+DESCRIPTION
+  Set up dummy signers (local Docker or AWS with KMS keys)
+
+EXAMPLES
+  $ scrollsdk setup dummy-signers
+
+  $ scrollsdk setup dummy-signers --config .data/doge-config-testnet.toml
+
+  $ scrollsdk setup dummy-signers --local-only
+
+  $ scrollsdk setup dummy-signers --aws-only
+
+  $ scrollsdk setup dummy-signers --image-tag shu-test-0605
+```
+
+_See code: [src/commands/setup/dummy-signers.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/dummy-signers.ts)_
 
 ## `scrollsdk setup gas-token`
 
@@ -1154,7 +1137,7 @@ EXAMPLES
   $ scrollsdk setup gas-token
 ```
 
-_See code: [src/commands/setup/gas-token.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gas-token.ts)_
+_See code: [src/commands/setup/gas-token.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gas-token.ts)_
 
 ## `scrollsdk setup gen-keystore`
 
@@ -1191,7 +1174,51 @@ EXAMPLES
   $ scrollsdk setup gen-keystore --non-interactive --json --sequencer-count 2 --bootnode-count 2
 ```
 
-_See code: [src/commands/setup/gen-keystore.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-keystore.ts)_
+_See code: [src/commands/setup/gen-keystore.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-keystore.ts)_
+
+## `scrollsdk setup gen-l2-artifacts`
+
+Generate L2 deployment artifacts, including genesis, public config, contract config, and Helm config values
+
+```
+USAGE
+  $ scrollsdk setup gen-l2-artifacts [--base-fee-per-gas <value>] [--configs-dir <value>] [--deployment-salt <value>]
+    [--doge-config <value>] [--image-tag <value>] [--json] [--l1-fee-vault-addr <value>] [--l1-plonk-verifier-addr
+    <value>] [--l2-bridge-fee-recipient-addr <value>] [-N] [--skip-deployment-salt-update] [--skip-l1-fee-vault-update]
+    [--skip-l1-plonk-verifier-update]
+
+FLAGS
+  -N, --non-interactive                       Run without prompts. Uses config values or sensible defaults.
+      --base-fee-per-gas=<value>              Base fee per gas (non-interactive mode). Uses existing config value if not
+                                              provided.
+      --configs-dir=<value>                   [default: values] Directory name to copy configs to
+      --deployment-salt=<value>               Deployment salt value (non-interactive mode). If not provided, keeps
+                                              existing or auto-increments.
+      --doge-config=<value>                   Path to config file (e.g., .data/doge-config-mainnet.toml or
+                                              .data/doge-config-testnet.toml)
+      --image-tag=<value>                     Specify the Docker image tag to use
+      --json                                  Output in JSON format (stdout for data, stderr for logs)
+      --l1-fee-vault-addr=<value>             L1 fee vault address (non-interactive mode). Defaults to OWNER_ADDR.
+      --l1-plonk-verifier-addr=<value>        L1 plonk verifier address (non-interactive mode). If not provided, one
+                                              will be deployed.
+      --l2-bridge-fee-recipient-addr=<value>  L2 bridge fee recipient address (non-interactive mode). Defaults to zero
+                                              address.
+      --skip-deployment-salt-update           Skip deployment salt update (non-interactive mode)
+      --skip-l1-fee-vault-update              Skip L1 fee vault address update (non-interactive mode)
+      --skip-l1-plonk-verifier-update         Skip L1 plonk verifier address update (non-interactive mode)
+
+DESCRIPTION
+  Generate L2 deployment artifacts, including genesis, public config, contract config, and Helm config values
+
+EXAMPLES
+  $ scrollsdk setup gen-l2-artifacts
+
+  $ scrollsdk setup gen-l2-artifacts --image-tag gen-configs-v0.2.0-debug
+
+  $ scrollsdk setup gen-l2-artifacts --configs-dir ./configs-override
+```
+
+_See code: [src/commands/setup/gen-l2-artifacts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-l2-artifacts.ts)_
 
 ## `scrollsdk setup gen-rpc-package`
 
@@ -1233,7 +1260,34 @@ EXAMPLES
   $ scrollsdk setup gen-rpc-package -d ./dogeos-rpc-package/ --namespace default
 ```
 
-_See code: [src/commands/setup/gen-rpc-package.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-rpc-package.ts)_
+_See code: [src/commands/setup/gen-rpc-package.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-rpc-package.ts)_
+
+## `scrollsdk setup gen-secrets`
+
+Generate local secret files from config.toml, Dogecoin config, and bridge initialization outputs
+
+```
+USAGE
+  $ scrollsdk setup gen-secrets [--doge-config <value>] [--json] [-N]
+
+FLAGS
+  -N, --non-interactive      Run without prompts. Uses config values or sensible defaults.
+      --doge-config=<value>  Path to config file (e.g., .data/doge-config-mainnet.toml or
+                             .data/doge-config-testnet.toml)
+      --json                 Output in JSON format (stdout for data, stderr for logs)
+
+DESCRIPTION
+  Generate local secret files from config.toml, Dogecoin config, and bridge initialization outputs
+
+EXAMPLES
+  $ scrollsdk setup gen-secrets
+
+  $ scrollsdk setup gen-secrets --doge-config .data/doge-config-testnet.toml
+
+  $ scrollsdk setup gen-secrets --non-interactive --json --doge-config .data/doge-config-testnet.toml
+```
+
+_See code: [src/commands/setup/gen-secrets.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-secrets.ts)_
 
 ## `scrollsdk setup generate-from-spec`
 
@@ -1287,7 +1341,7 @@ EXAMPLES
   $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --values-only
 ```
 
-_See code: [src/commands/setup/generate-from-spec.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/generate-from-spec.ts)_
+_See code: [src/commands/setup/generate-from-spec.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/generate-from-spec.ts)_
 
 ## `scrollsdk setup prep-charts`
 
@@ -1321,7 +1375,7 @@ EXAMPLES
   $ scrollsdk setup prep-charts --skip-auth-check
 ```
 
-_See code: [src/commands/setup/prep-charts.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/prep-charts.ts)_
+_See code: [src/commands/setup/prep-charts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/prep-charts.ts)_
 
 ## `scrollsdk setup push-secrets`
 
@@ -1368,7 +1422,7 @@ EXAMPLES
   $ scrollsdk setup push-secrets -c --debug
 ```
 
-_See code: [src/commands/setup/push-secrets.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/push-secrets.ts)_
+_See code: [src/commands/setup/push-secrets.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/push-secrets.ts)_
 
 ## `scrollsdk setup tls`
 
@@ -1405,7 +1459,7 @@ EXAMPLES
   $ scrollsdk setup tls --non-interactive --create-issuer --issuer-email admin@example.com
 ```
 
-_See code: [src/commands/setup/tls.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/tls.ts)_
+_See code: [src/commands/setup/tls.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/tls.ts)_
 
 ## `scrollsdk setup verify-contracts`
 
@@ -1427,7 +1481,7 @@ EXAMPLES
   $ scrollsdk setup verify-contracts --image-tag verify-v0.2.0-debug
 ```
 
-_See code: [src/commands/setup/verify-contracts.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/verify-contracts.ts)_
+_See code: [src/commands/setup/verify-contracts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/verify-contracts.ts)_
 
 ## `scrollsdk test contracts`
 
@@ -1446,7 +1500,7 @@ DESCRIPTION
   Test contracts by checking deployment and initialization
 ```
 
-_See code: [src/commands/test/contracts.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/test/contracts.ts)_
+_See code: [src/commands/test/contracts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/test/contracts.ts)_
 
 ## `scrollsdk test dependencies`
 
@@ -1463,7 +1517,7 @@ DESCRIPTION
   Check for required dependencies
 ```
 
-_See code: [src/commands/test/dependencies.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/test/dependencies.ts)_
+_See code: [src/commands/test/dependencies.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/test/dependencies.ts)_
 
 ## `scrollsdk test dogeos [CASENAME]`
 
@@ -1475,7 +1529,7 @@ USAGE
     [-c <value>] [-v <value>] [--verbose]
 
 ARGUMENTS
-  [CASENAME]  The name of the case to run
+  CASENAME  The name of the case to run
 
 FLAGS
   -b, --blockbookurl=<value>  [default: https://doge-electrs-testnet-demo.qed.me] blockbook url
@@ -1510,7 +1564,7 @@ EXAMPLES
   $ scrollsdk test dogeos multiple-output --bridge=n...
 ```
 
-_See code: [src/commands/test/dogeos.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/test/dogeos.ts)_
+_See code: [src/commands/test/dogeos.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/test/dogeos.ts)_
 
 ## `scrollsdk test e2e`
 
@@ -1533,7 +1587,7 @@ DESCRIPTION
   Test contracts by checking deployment and initialization
 ```
 
-_See code: [src/commands/test/e2e.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/test/e2e.ts)_
+_See code: [src/commands/test/e2e.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/test/e2e.ts)_
 
 ## `scrollsdk test ingress`
 
@@ -1552,5 +1606,5 @@ DESCRIPTION
   Check for required ingress hosts and validate frontend URLs
 ```
 
-_See code: [src/commands/test/ingress.ts](https://github.com/scroll-tech/scroll-sdk-cli/blob/v0.1.3/src/commands/test/ingress.ts)_
+_See code: [src/commands/test/ingress.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/test/ingress.ts)_
 <!-- commandsstop -->

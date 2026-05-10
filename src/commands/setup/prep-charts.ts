@@ -266,13 +266,13 @@ export default class SetupPrepCharts extends Command {
       this.warn('config-contracts.toml not found. Some values may not be populated correctly.')
     }
 
-    const { config } = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk doge:config')
+    const { config } = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk setup doge-config')
     this.dogeConfig = config as DogeConfigType;
 
 
     const withdrawalProcessorConfigPath = path.join(process.cwd(), ".data/output-withdrawal-processor.toml")
     if (!fs.existsSync(withdrawalProcessorConfigPath)) {
-      this.error("run scrollsdk doge:bridge-init first");
+      this.error("run scrollsdk setup bridge-init first");
       return
     }
 

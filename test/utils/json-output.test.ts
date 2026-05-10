@@ -307,10 +307,10 @@ describe('json-output utilities', () => {
 
   describe('createSuccessResponse', () => {
     it('builds a well-formed success response', () => {
-      const response = createSuccessResponse('setup:configs', { generated: true }, 1234);
+      const response = createSuccessResponse('setup gen-l2-artifacts', { generated: true }, 1234);
 
       expect(response.success).to.be.true;
-      expect(response.command).to.equal('setup:configs');
+      expect(response.command).to.equal('setup gen-l2-artifacts');
       expect(response.data).to.deep.equal({ generated: true });
       expect(response.duration_ms).to.equal(1234);
       expect(response.timestamp).to.be.a('string');

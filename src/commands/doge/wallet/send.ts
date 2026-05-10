@@ -96,7 +96,7 @@ export default class WalletSend extends Command {
 
       const { config, configPath } = await loadDogeConfigWithSelection(
         flags['doge-config'],
-        'scrollsdk doge:config'
+        'scrollsdk setup doge-config'
       )
 
       this.log(chalk.blue(`Using network: ${config.network} (from ${flags.config})`))

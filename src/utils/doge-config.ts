@@ -14,7 +14,7 @@ import { DogeConfig } from '../types/doge-config.js'
  */
 export async function selectDogeConfigFile(
   providedConfigPath?: string,
-  suggestedCommand: string = 'scrollsdk doge:config'
+  suggestedCommand: string = 'scrollsdk setup doge-config'
 ): Promise<string> {
   // If user provided a specific config path, use it directly
   if (providedConfigPath) {
@@ -63,7 +63,7 @@ export async function selectDogeConfigFile(
  */
 export async function loadDogeConfigWithSelection(
   providedConfigPath?: string,
-  suggestedCommand: string = 'scrollsdk doge:config'
+  suggestedCommand: string = 'scrollsdk setup doge-config'
 ): Promise<{ config: DogeConfig; configPath: string }> {
   const configPath = await selectDogeConfigFile(providedConfigPath, suggestedCommand)
   const config = await loadDogeConfig(configPath)
@@ -92,7 +92,7 @@ async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
     if (error instanceof Error && error.message.startsWith('Config file')) throw error
     throw new Error(
       `Failed to load or parse Dogecoin config from ${resolvedPath}: ${error instanceof Error ? error.message : String(error)
-      }. Try running 'scrollsdk doge:config' to regenerate it.`,
+      }. Try running 'scrollsdk setup doge-config' to regenerate it.`,
     )
   }
 }

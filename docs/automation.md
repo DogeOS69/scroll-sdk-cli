@@ -20,7 +20,7 @@ scrollsdk <command> --non-interactive --json
 Before running non-interactively, you need:
 
 1. A populated `config.toml` in the working directory
-2. Docker running (for `setup configs`, `doge bridge-init`)
+2. Docker running (for `setup gen-l2-artifacts`, `setup bridge-init`)
 3. kubectl connected to the target cluster (for `setup push-secrets`, `setup prep-charts`)
 4. Environment variables set for any `$ENV:VAR_NAME` references in config
 
@@ -175,7 +175,7 @@ Generates keystores for validator/sequencer accounts.
 ### Step 4: Configure Dogecoin
 
 ```bash
-scrollsdk doge config -N --json --network testnet
+scrollsdk setup doge-config -N --json --network testnet
 ```
 
 Generates `.data/doge-config.toml` from config values.
@@ -186,13 +186,44 @@ Generates `.data/doge-config.toml` from config values.
 **Required config fields:**
 - `[dogecoin]` section (network, RPC URLs, blockbook URL)
 
-### Step 5: Generate dummy signers
+### Step 5: Generate L2 artifacts
 
 ```bash
-scrollsdk doge dummy-signers -N --json --config .data/doge-config-testnet.toml
+scrollsdk setup gen-l2-artifacts -N --json
 ```
 
-Creates dummy signer keys for development.
+Runs the L2 config generation Docker container and prepares deployment artifacts.
+
+**Generated files:**
+- `values/genesis.yaml` - Required by `setup bridge-init`
+- `config.public.toml`
+- `config-contracts.toml`
+- `values/scroll-common-config.yaml`
+- `values/scroll-common-config-contracts.yaml`
+- `values/*-config.yaml`
+
+**Required config fields:**
+- `config.toml` fully populated
+
+### Step 6: Initialize CubeSigner attestation keys
+
+```bash
+scrollsdk setup cubesigner-init -N --json --new --count 3 --role-prefix attestor --threshold 2 --doge-config .data/doge-config-testnet.toml
+```
+
+Creates or selects CubeSigner roles and writes attestation public keys to `.data/setup_defaults.toml`. This must run before bridge initialization.
+
+**Required flags (non-interactive):**
+- `--doge-config <path>` - Path to doge-config file
+- Either `--new --count <n> --role-prefix <prefix>` or `--roles <role...>`
+
+### Optional: Generate dummy signers
+
+```bash
+scrollsdk setup dummy-signers -N --json --config .data/doge-config-testnet.toml
+```
+
+Creates dummy signer keys for development. Production bridge initialization should use CubeSigner attestation keys from step 6.
 
 **Required flags (non-interactive):**
 - `--config <path>` - Path to doge-config file (required to avoid config selection prompt)
@@ -202,10 +233,10 @@ Creates dummy signer keys for development.
 **Required config fields:**
 - `.data/doge-config.toml` must exist (run step 4 first)
 
-### Step 6: Initialize bridge
+### Step 7: Initialize bridge
 
 ```bash
-scrollsdk doge bridge-init -N --json --seed 123456
+scrollsdk setup bridge-init -N --json --seed 123456
 ```
 
 Runs the bridge initialization Docker container. Requires Docker.
@@ -215,24 +246,24 @@ Runs the bridge initialization Docker container. Requires Docker.
 - `--image-tag <tag>` - Docker image tag (optional, has default)
 
 **Required config fields:**
+- `values/genesis.yaml` from `setup gen-l2-artifacts`
+- `.data/setup_defaults.toml` with CubeSigner `attestation_pubkeys`
 - `.data/doge-config.toml` with bridge parameters
-- `.data/setup_defaults.toml` with bridge setup defaults
 
 **Note:** This step may require funding. If you receive error `E200_HELPER_UNFUNDED`, send Dogecoin to the address in the error context and retry.
 
-### Step 7: Generate service configs
+### Step 8: Generate local secrets
 
 ```bash
-scrollsdk setup configs -N --json
+scrollsdk setup gen-secrets -N --json
 ```
 
-Runs the config generation Docker container. Requires Docker.
+Generates local `secrets/*.env` files from `config.toml`, Dogecoin config, and bridge initialization outputs.
 
 **Required config fields:**
-- `config.toml` fully populated
-- `config-contracts.toml` with deployed contract addresses
+- `.data/output-withdrawal-processor.toml` from `setup bridge-init`
 
-### Step 8: Prepare Helm charts
+### Step 9: Prepare Helm charts
 
 ```bash
 scrollsdk setup prep-charts -N --json
@@ -341,17 +372,16 @@ run_step "setup db-init" setup db-init --clean -N --json
 run_step "setup gen-keystore" setup gen-keystore -N --json \
   --sequencer-password '$ENV:SEQUENCER_KEYSTORE_PASSWORD'
 
-# Steps 4-6: Dogecoin configuration
-run_step "doge config" doge config -N --json --network "$NETWORK"
-run_step "doge dummy-signers" doge dummy-signers -N --json \
-  --config "$DOGE_CONFIG" --generate-wif-keys
-run_step "doge bridge-init" doge bridge-init -N --json --seed "$SEED"
-
-# Steps 7-8: Generate service configs and Helm charts
-run_step "setup configs" setup configs -N --json
+# Steps 4-9: Dogecoin, L2 artifacts, CubeSigner, bridge, secrets, Helm charts
+run_step "setup doge-config" setup doge-config -N --json --network "$NETWORK"
+run_step "setup gen-l2-artifacts" setup gen-l2-artifacts -N --json
+run_step "setup cubesigner-init" setup cubesigner-init -N --json \
+  --new --count 3 --role-prefix attestor --threshold 2 --doge-config "$DOGE_CONFIG"
+run_step "setup bridge-init" setup bridge-init -N --json --seed "$SEED"
+run_step "setup gen-secrets" setup gen-secrets -N --json
 run_step "setup prep-charts" setup prep-charts -N --json
 
-# Step 9: CubeSigner (requires prior login or --org-id/--email)
+# Step 10: CubeSigner sessions (requires prior login or --org-id/--email)
 run_step "setup cubesigner-refresh" setup cubesigner-refresh -N --json \
   --doge-config "$DOGE_CONFIG"
 
@@ -378,7 +408,7 @@ For fully declarative deployments, use a `deployment-spec.yaml` file:
 scrollsdk setup generate-from-spec --spec deployment-spec.yaml --json
 ```
 
-This generates all config files (`config.toml`, `doge-config.toml`, `setup_defaults.toml`, `values/*.yaml`) from a single YAML specification. See `src/types/deployment-spec.ts` for the full schema.
+This generates base config files (`config.toml`, `doge-config.toml`, `setup_defaults.toml`, `values/*.yaml`) from a single YAML specification. Run `setup gen-l2-artifacts`, `setup cubesigner-init`, `setup bridge-init`, and `setup gen-secrets` afterward to produce the runtime L2 genesis, CubeSigner attestation keys, bridge outputs, and local secrets. See `src/types/deployment-spec.ts` for the full schema.
 
 ## Parsing JSON Output Programmatically
 
@@ -448,7 +478,7 @@ Errors with `"recoverable": true` can be retried after addressing the root cause
 |-----------|-----|------|
 | `E100_DOCKER_NOT_RUNNING` | Start Docker daemon | Retry same command |
 | `E101_CONFIG_NOT_FOUND` | Create/place config.toml | Retry same command |
-| `E200_HELPER_UNFUNDED` | Send DOGE to address in context | Retry `doge bridge-init` |
+| `E200_HELPER_UNFUNDED` | Send DOGE to address in context | Retry `setup bridge-init` |
 | `E300_*` | Check network/DNS | Retry after delay |
 | `E304_DATABASE_UNREACHABLE` | Check DB is running, SSL settings | Retry `setup db-init` |
 | `E502_SECRET_PUSH_FAILED` | Check kubectl auth | Retry `setup push-secrets` |

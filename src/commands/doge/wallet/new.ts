@@ -83,7 +83,7 @@ export default class WalletNew extends Command {
     // The --config flag has a default value, so this will always be set
     const { config, configPath } = await loadDogeConfigWithSelection(
       flags.config,
-      'scrollsdk doge:config'
+      'scrollsdk setup doge-config'
     )
 
     jsonCtx.info(`Using network: ${config.network} (from config file: ${configPath})`)

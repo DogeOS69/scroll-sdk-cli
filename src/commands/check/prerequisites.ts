@@ -327,7 +327,7 @@ export default class CheckPrerequisites extends Command {
     }
 
     return {
-      error: 'No doge config files found. Run `scrollsdk doge:config` first.',
+      error: 'No doge config files found. Run `scrollsdk setup doge-config` first.',
       passed: false,
     }
   }

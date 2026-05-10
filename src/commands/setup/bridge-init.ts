@@ -32,21 +32,26 @@ interface BridgeInitPostprocessResult {
   outputFiles: string[]
 }
 
+function isValidSecp256k1PublicKey(publicKey: string): boolean {
+  const normalized = publicKey.replace(/^0x/, '')
+  return /^[\dA-Fa-f]{66}$/.test(normalized) || /^04[\dA-Fa-f]{128}$/.test(normalized)
+}
+
 export class BridgeInitCommand extends Command {
-  static description = 'Initialize bridge for mainnet or testnet'
+  static description = 'Initialize DogeOS bridge after L2 artifacts and CubeSigner keys are ready'
 
   static examples = [
-    '$ scrollsdk doge:bridge-init',
-    '$ scrollsdk doge:bridge-init --step 1-prepare',
-    '$ scrollsdk doge:bridge-init --step 2-setup',
-    '$ scrollsdk doge:bridge-init --step 3-generate',
-    '$ scrollsdk doge:bridge-init --step 4-fund',
-    '$ scrollsdk doge:bridge-init --step 2',
-    '$ scrollsdk doge:bridge-init -s 123456',
-    '$ scrollsdk doge:bridge-init --seed 123456',
-    '$ scrollsdk doge:bridge-init --image-tag 0.2.0-debug',
-    '$ scrollsdk doge:bridge-init --non-interactive --seed 123456 --image-tag 0.2.0-rc.3',
-    '$ scrollsdk doge:bridge-init --non-interactive --json --seed 123456',
+    '$ scrollsdk setup bridge-init',
+    '$ scrollsdk setup bridge-init --step 1-prepare',
+    '$ scrollsdk setup bridge-init --step 2-setup',
+    '$ scrollsdk setup bridge-init --step 3-generate',
+    '$ scrollsdk setup bridge-init --step 4-fund',
+    '$ scrollsdk setup bridge-init --step 2',
+    '$ scrollsdk setup bridge-init -s 123456',
+    '$ scrollsdk setup bridge-init --seed 123456',
+    '$ scrollsdk setup bridge-init --image-tag 0.2.0-debug',
+    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag 0.2.0-rc.3',
+    '$ scrollsdk setup bridge-init --non-interactive --json --seed 123456',
   ]
 
   static flags = {
@@ -72,7 +77,7 @@ export class BridgeInitCommand extends Command {
       description: [
         'Bridge init step to run.',
         'all runs 1-prepare, 2-setup, 3-generate, and 4-fund.',
-        '1-prepare is idempotent: prepare config, genesis.json, and protocol_seed.toml.',
+        '1-prepare requires values/genesis.yaml, extracts .data/genesis.json, and prepares protocol_seed.toml.',
         '2-setup is NOT idempotent: generate test keys and broadcast the setup transaction.',
         '3-generate is idempotent: generate namespace, bridge.json, and protocol_context.json.',
         '4-fund is NOT idempotent: broadcast 10 initial bridge funding transactions.',
@@ -90,7 +95,7 @@ export class BridgeInitCommand extends Command {
 
     this.nonInteractive = flags['non-interactive']
     this.jsonMode = flags.json
-    this.jsonCtx = new JsonOutputContext('doge bridge-init', this.jsonMode)
+    this.jsonCtx = new JsonOutputContext('setup bridge-init', this.jsonMode)
 
     let { seed } = flags
     let imageTag = flags['image-tag']
@@ -288,6 +293,72 @@ export class BridgeInitCommand extends Command {
     }
   }
 
+  private assertAttestationPubkeysReady(setupDefaultsPath: string): void {
+    this.assertFileExists(
+      setupDefaultsPath,
+      'E103_DOGE_CONFIG_MISSING',
+      'Run `scrollsdk setup doge-config`, then `scrollsdk setup cubesigner-init` first.'
+    )
+
+    const setupDefaults = toml.parse(fs.readFileSync(setupDefaultsPath, 'utf8')) as any
+    const attestationPubkeys = setupDefaults.attestation_pubkeys
+    const attestationKeyCount = Number(setupDefaults.attestation_key_count)
+    const attestationThreshold = Number(setupDefaults.attestation_threshold)
+
+    if (!Array.isArray(attestationPubkeys) || attestationPubkeys.length === 0) {
+      this.jsonCtx.error(
+        'E103_CUBESIGNER_PUBKEYS_MISSING',
+        'CubeSigner attestation public keys are missing from .data/setup_defaults.toml. Run `scrollsdk setup cubesigner-init` before `scrollsdk setup bridge-init`.',
+        'CONFIGURATION',
+        true,
+        { path: setupDefaultsPath }
+      )
+    }
+
+    const invalidPubkey = attestationPubkeys.find((pubkey: unknown) =>
+      typeof pubkey !== 'string' || !isValidSecp256k1PublicKey(pubkey)
+    )
+    if (invalidPubkey) {
+      this.jsonCtx.error(
+        'E602_INVALID_CUBESIGNER_PUBKEY',
+        'attestation_pubkeys must contain secp256k1 public keys encoded as compressed 33-byte hex or uncompressed 65-byte hex.',
+        'CONFIGURATION',
+        true,
+        { invalidPubkey, path: setupDefaultsPath }
+      )
+    }
+
+    if (!Number.isInteger(attestationKeyCount) || attestationKeyCount !== attestationPubkeys.length) {
+      this.jsonCtx.error(
+        'E602_INVALID_CUBESIGNER_PUBKEYS',
+        `attestation_key_count (${setupDefaults.attestation_key_count}) must match attestation_pubkeys length (${attestationPubkeys.length}). Run \`scrollsdk setup cubesigner-init\` again.`,
+        'CONFIGURATION',
+        true,
+        {
+          attestationKeyCount: setupDefaults.attestation_key_count,
+          pubkeyCount: attestationPubkeys.length,
+        }
+      )
+    }
+
+    if (
+      !Number.isInteger(attestationThreshold) ||
+      attestationThreshold < 1 ||
+      attestationThreshold > attestationPubkeys.length
+    ) {
+      this.jsonCtx.error(
+        'E602_INVALID_CUBESIGNER_THRESHOLD',
+        `attestation_threshold must be between 1 and ${attestationPubkeys.length}. Run \`scrollsdk setup cubesigner-init\` again.`,
+        'CONFIGURATION',
+        true,
+        {
+          attestationThreshold: setupDefaults.attestation_threshold,
+          pubkeyCount: attestationPubkeys.length,
+        }
+      )
+    }
+  }
+
   private assertFileExists(filePath: string, code: string, hint: string): void {
     if (fs.existsSync(filePath)) {
       return
@@ -309,7 +380,7 @@ export class BridgeInitCommand extends Command {
     if (!fs.existsSync(genesisYamlPath)) {
       this.jsonCtx.error(
         'E103_GENESIS_CONFIG_MISSING',
-        `genesis.yaml not found at: ${genesisYamlPath}`,
+        `genesis.yaml not found at: ${genesisYamlPath}. Run \`scrollsdk setup gen-l2-artifacts\` before \`scrollsdk setup bridge-init\`.`,
         'CONFIGURATION',
         true,
         { path: genesisYamlPath }
@@ -482,33 +553,6 @@ export class BridgeInitCommand extends Command {
     )
   }
 
-  private normalizeCelestiaNamespace(namespace: string, sourcePath: string): string {
-    const cleanNamespace = namespace.replace(/^0x/i, '').replaceAll(/\s+/g, '').toLowerCase()
-
-    if (!/^[\da-f]+$/.test(cleanNamespace) || cleanNamespace.length % 2 !== 0) {
-      this.jsonCtx.error(
-        'E602_INVALID_CONFIG_VALUE',
-        `daNamespace must be an even-length hex string in ${sourcePath}`,
-        'CONFIGURATION',
-        true,
-        { namespace, path: sourcePath }
-      )
-    }
-
-    const byteLength = cleanNamespace.length / 2
-    if (byteLength < 2 || byteLength > 28) {
-      this.jsonCtx.error(
-        'E602_INVALID_CONFIG_VALUE',
-        `daNamespace must be between 2 and 28 bytes in ${sourcePath}`,
-        'CONFIGURATION',
-        true,
-        { namespace, path: sourcePath }
-      )
-    }
-
-    return `0x${cleanNamespace.padStart(56, '0')}`
-  }
-
   private getRequiredNumberValue(source: any, key: string, sourcePath: string): number {
     const value = source?.[key]
 
@@ -563,7 +607,7 @@ export class BridgeInitCommand extends Command {
     this.assertFileExists(
       paths.protocolContextPath,
       'E103_PROTOCOL_CONTEXT_MISSING',
-      'Run `scrollsdk doge:bridge-init --step 3-generate` first.'
+        'Run `scrollsdk setup bridge-init --step 3-generate` first.'
     )
 
     const protocolContextJson = fs.readFileSync(paths.protocolContextPath, 'utf8').trimEnd()
@@ -584,7 +628,7 @@ export class BridgeInitCommand extends Command {
     this.assertFileExists(
       paths.withdrawalProcessorTomlPath,
       'E103_WITHDRAWAL_PROCESSOR_OUTPUT_MISSING',
-      'Run `scrollsdk doge:bridge-init --step 2-setup` first.'
+        'Run `scrollsdk setup bridge-init --step 2-setup` first.'
     )
 
     const withdrawalProcessorToml = toml.parse(fs.readFileSync(paths.withdrawalProcessorTomlPath, 'utf8')) as any
@@ -636,6 +680,33 @@ export class BridgeInitCommand extends Command {
     }
 
     return outputPaths
+  }
+
+  private normalizeCelestiaNamespace(namespace: string, sourcePath: string): string {
+    const cleanNamespace = namespace.replace(/^0x/i, '').replaceAll(/\s+/g, '').toLowerCase()
+
+    if (!/^[\da-f]+$/.test(cleanNamespace) || cleanNamespace.length % 2 !== 0) {
+      this.jsonCtx.error(
+        'E602_INVALID_CONFIG_VALUE',
+        `daNamespace must be an even-length hex string in ${sourcePath}`,
+        'CONFIGURATION',
+        true,
+        { namespace, path: sourcePath }
+      )
+    }
+
+    const byteLength = cleanNamespace.length / 2
+    if (byteLength < 2 || byteLength > 28) {
+      this.jsonCtx.error(
+        'E602_INVALID_CONFIG_VALUE',
+        `daNamespace must be between 2 and 28 bytes in ${sourcePath}`,
+        'CONFIGURATION',
+        true,
+        { namespace, path: sourcePath }
+      )
+    }
+
+    return `0x${cleanNamespace.padStart(56, '0')}`
   }
 
   private normalizeStep(step: string | undefined): BridgeInitStep {
@@ -716,7 +787,7 @@ export class BridgeInitCommand extends Command {
     if (!fs.existsSync(paths.setupDefaultsPath)) {
       this.jsonCtx.error(
         'E103_DOGE_CONFIG_MISSING',
-        'setup_defaults.toml not found, please run `scrollsdk doge:config` first',
+        'setup_defaults.toml not found, please run `scrollsdk setup doge-config` first',
         'CONFIGURATION',
         true,
         { path: paths.setupDefaultsPath }
@@ -755,6 +826,7 @@ export class BridgeInitCommand extends Command {
 
     // copy ./values/genesis.yaml to .data/genesis.json, cause bridge init need genesis.json now
     this.copyGenesisYamlToData(paths.dataDir)
+    this.assertAttestationPubkeysReady(paths.setupDefaultsPath)
 
     return seed
   }
@@ -793,12 +865,12 @@ export class BridgeInitCommand extends Command {
     this.assertFileExists(
       paths.setupDefaultsPath,
       'E103_DOGE_CONFIG_MISSING',
-      'Run `scrollsdk doge:bridge-init --step 1-prepare` first.'
+      'Run `scrollsdk setup bridge-init --step 1-prepare` first.'
     )
     this.assertFileExists(
       path.join(paths.dataDir, 'bridge.json'),
       'E103_BRIDGE_JSON_MISSING',
-      'Run `scrollsdk doge:bridge-init --step 3-generate` first.'
+      'Run `scrollsdk setup bridge-init --step 3-generate` first.'
     )
 
     this.warnNonIdempotentStep(
@@ -824,27 +896,27 @@ export class BridgeInitCommand extends Command {
     this.assertFileExists(
       path.join(paths.dataDir, 'output-withdrawal-processor.toml'),
       'E103_BRIDGE_SETUP_OUTPUT_MISSING',
-      'Run `scrollsdk doge:bridge-init --step 2-setup` first.'
+      'Run `scrollsdk setup bridge-init --step 2-setup` first.'
     )
     this.assertFileExists(
       path.join(paths.dataDir, 'output-test-data.json'),
       'E103_BRIDGE_SETUP_OUTPUT_MISSING',
-      'Run `scrollsdk doge:bridge-init --step 2-setup` first.'
+      'Run `scrollsdk setup bridge-init --step 2-setup` first.'
     )
     this.assertFileExists(
       path.join(paths.dataDir, 'GenerateBridgeInfo.toml'),
       'E103_BRIDGE_SETUP_OUTPUT_MISSING',
-      'Run `scrollsdk doge:bridge-init --step 2-setup` first.'
+      'Run `scrollsdk setup bridge-init --step 2-setup` first.'
     )
     this.assertFileExists(
       paths.protocolSeedPath,
       'E103_PROTOCOL_SEED_MISSING',
-      'Run `scrollsdk doge:bridge-init --step 1-prepare` first.'
+      'Run `scrollsdk setup bridge-init --step 1-prepare` first.'
     )
     this.assertFileExists(
       paths.setupDefaultsPath,
       'E103_DOGE_CONFIG_MISSING',
-      'Run `scrollsdk doge:bridge-init --step 1-prepare` first.'
+      'Run `scrollsdk setup bridge-init --step 1-prepare` first.'
     )
 
     const setupDefaults = toml.parse(fs.readFileSync(paths.setupDefaultsPath, 'utf8')) as any
@@ -888,12 +960,12 @@ export class BridgeInitCommand extends Command {
     this.assertFileExists(
       paths.genesisJsonPath,
       'E103_GENESIS_CONFIG_MISSING',
-      'Run `scrollsdk doge:bridge-init --step 1-prepare` after values/genesis.yaml exists.'
+      'Run `scrollsdk setup gen-l2-artifacts`, then `scrollsdk setup bridge-init --step 1-prepare`.'
     )
     this.assertFileExists(
       paths.protocolSeedPath,
       'E103_PROTOCOL_SEED_MISSING',
-      'Run `scrollsdk doge:bridge-init --step 1-prepare` to create .data/protocol_seed.toml.'
+      'Run `scrollsdk setup bridge-init --step 1-prepare` to create .data/protocol_seed.toml.'
     )
 
     this.jsonCtx.info('Running step 1-prepare: genesis.json -> protocol_seed.toml')
@@ -913,7 +985,7 @@ export class BridgeInitCommand extends Command {
     this.assertFileExists(
       paths.setupDefaultsPath,
       'E103_DOGE_CONFIG_MISSING',
-      'Run `scrollsdk doge:bridge-init --step 1-prepare` first.'
+      'Run `scrollsdk setup bridge-init --step 1-prepare` first.'
     )
 
     this.warnNonIdempotentStep(
