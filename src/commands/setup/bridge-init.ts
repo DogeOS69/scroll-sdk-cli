@@ -10,7 +10,7 @@ import * as path from 'node:path'
 import { getSetupDefaultsPath } from '../../config/constants.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 
-type BridgeInitStep = '1-prepare' | '2-setup' | '3-generate' | '4-fund' | 'all'
+type BridgeInitStep = '1-prepare' | '2-setup' | '3-bridge-info' | '4-fund' | '5-protocol-context' | 'all'
 
 interface BridgeInitPaths {
   dataDir: string
@@ -44,8 +44,9 @@ export class BridgeInitCommand extends Command {
     '$ scrollsdk setup bridge-init',
     '$ scrollsdk setup bridge-init --step 1-prepare',
     '$ scrollsdk setup bridge-init --step 2-setup',
-    '$ scrollsdk setup bridge-init --step 3-generate',
+    '$ scrollsdk setup bridge-init --step 3-bridge-info',
     '$ scrollsdk setup bridge-init --step 4-fund',
+    '$ scrollsdk setup bridge-init --step 5-protocol-context',
     '$ scrollsdk setup bridge-init --step 2',
     '$ scrollsdk setup bridge-init -s 123456',
     '$ scrollsdk setup bridge-init --seed 123456',
@@ -76,12 +77,13 @@ export class BridgeInitCommand extends Command {
       default: 'all',
       description: [
         'Bridge init step to run.',
-        'all runs 1-prepare, 2-setup, 3-generate, and 4-fund.',
+        'all runs 1-prepare, 2-setup, 3-bridge-info, 4-fund, and 5-protocol-context.',
         '1-prepare requires values/genesis.yaml, extracts .data/genesis.json, and prepares protocol_seed.toml.',
         '2-setup is NOT idempotent: generate test keys and broadcast the setup transaction.',
-        '3-generate is idempotent: generate namespace, bridge.json, and protocol_context.json.',
+        '3-bridge-info is idempotent: generate namespace and bridge.json.',
         '4-fund is NOT idempotent: broadcast 10 initial bridge funding transactions.',
-        'Numeric aliases 1, 2, 3, and 4 are accepted.',
+        '5-protocol-context is idempotent: generate protocol_context.json.',
+        'Numeric aliases 1, 2, 3, 4, and 5 are accepted.',
       ].join(' '),
     }),
   }
@@ -143,8 +145,9 @@ export class BridgeInitCommand extends Command {
         await this.runPrepareStep(imageTag, paths)
         await this.runSetupStep(imageTag, paths)
         postprocessResult = this.postprocessBridgeInit(paths)
-        await this.runGenerateStep(imageTag, paths)
+        await this.runBridgeInfoStep(imageTag, paths)
         await this.runFundStep(imageTag, paths)
+        await this.runProtocolContextStep(imageTag, paths)
         postprocessResult = this.postprocessBridgeInit(paths)
         break
       }
@@ -160,14 +163,19 @@ export class BridgeInitCommand extends Command {
         break
       }
 
-      case '3-generate': {
-        await this.runGenerateStep(imageTag, paths)
+      case '3-bridge-info': {
+        await this.runBridgeInfoStep(imageTag, paths)
         break
       }
 
       case '4-fund': {
         await this.runFundStep(imageTag, paths)
         postprocessResult = this.postprocessBridgeInit(paths)
+        break
+      }
+
+      case '5-protocol-context': {
+        await this.runProtocolContextStep(imageTag, paths)
         break
       }
     }
@@ -459,6 +467,31 @@ export class BridgeInitCommand extends Command {
     }
   }
 
+  private async getCelestiaLatestHeight(tendermintRpcUrl: string): Promise<number> {
+    const response = await fetch(`${tendermintRpcUrl.replace(/\/$/, '')}/status`, {
+      headers: { 'Content-Type': 'application/json' },
+      method: 'GET',
+    })
+
+    if (!response.ok) {
+      throw new Error(`Celestia RPC connection failed: ${response.status} ${response.statusText}`)
+    }
+
+    const result = await response.json() as {
+      result?: { sync_info?: { latest_block_height?: string } }
+    }
+
+    const heightStr = result.result?.sync_info?.latest_block_height
+    if (heightStr) {
+      const height = Number.parseInt(heightStr, 10)
+      if (!Number.isNaN(height)) {
+        return height
+      }
+    }
+
+    throw new Error('Unable to get latest block height from Celestia RPC')
+  }
+
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
     const defaultTag = 'latest'
 
@@ -728,8 +761,8 @@ export class BridgeInitCommand extends Command {
       }
 
       case '3':
-      case '3-generate': {
-        return '3-generate'
+      case '3-bridge-info': {
+        return '3-bridge-info'
       }
 
       case '4':
@@ -737,10 +770,15 @@ export class BridgeInitCommand extends Command {
         return '4-fund'
       }
 
+      case '5':
+      case '5-protocol-context': {
+        return '5-protocol-context'
+      }
+
       default: {
         this.jsonCtx.error(
           'E602_INVALID_BRIDGE_INIT_STEP',
-          `Invalid --step "${step}". Expected all, 1-prepare, 2-setup, 3-generate, 4-fund, or numeric aliases 1, 2, 3, 4.`,
+          `Invalid --step "${step}". Expected all, 1-prepare, 2-setup, 3-bridge-info, 4-fund, 5-protocol-context, or numeric aliases 1, 2, 3, 4, 5.`,
           'VALIDATION',
           true,
           { step }
@@ -861,6 +899,43 @@ export class BridgeInitCommand extends Command {
     }
   }
 
+  private async runBridgeInfoStep(imageTag: string, paths: BridgeInitPaths): Promise<void> {
+    this.assertFileExists(
+      path.join(paths.dataDir, 'output-withdrawal-processor.toml'),
+      'E103_BRIDGE_SETUP_OUTPUT_MISSING',
+      'Run `scrollsdk setup bridge-init --step 2-setup` first.'
+    )
+    this.assertFileExists(
+      path.join(paths.dataDir, 'GenerateBridgeInfo.toml'),
+      'E103_BRIDGE_SETUP_OUTPUT_MISSING',
+      'Run `scrollsdk setup bridge-init --step 2-setup` first.'
+    )
+    this.assertFileExists(
+      paths.setupDefaultsPath,
+      'E103_DOGE_CONFIG_MISSING',
+      'Run `scrollsdk setup bridge-init --step 1-prepare` first.'
+    )
+
+    this.jsonCtx.info('Running step 3-bridge-info: generate namespace and bridge.json')
+
+    await this.runDockerCommand(imageTag, [
+      'compute-bridge-namespace-cli',
+      '--withdrawal-processor-toml',
+      '.data/output-withdrawal-processor.toml',
+      '--write-back',
+      '.data/GenerateBridgeInfo.toml',
+      '--format',
+      'hex',
+    ])
+    await this.runDockerCommand(imageTag, [
+      'generate-bridge-info-cli',
+      '--config-file',
+      '.data/GenerateBridgeInfo.toml',
+      '--output-file',
+      '.data/bridge.json',
+    ])
+  }
+
   private async runFundStep(imageTag: string, paths: BridgeInitPaths): Promise<void> {
     this.assertFileExists(
       paths.setupDefaultsPath,
@@ -870,7 +945,7 @@ export class BridgeInitCommand extends Command {
     this.assertFileExists(
       path.join(paths.dataDir, 'bridge.json'),
       'E103_BRIDGE_JSON_MISSING',
-      'Run `scrollsdk setup bridge-init --step 3-generate` first.'
+      'Run `scrollsdk setup bridge-init --step 3-bridge-info` first.'
     )
 
     this.warnNonIdempotentStep(
@@ -890,70 +965,7 @@ export class BridgeInitCommand extends Command {
       '.data/bridge.json',
     ])
     this.moveLegacyOutputFiles(paths.dataDir)
-  }
-
-  private async runGenerateStep(imageTag: string, paths: BridgeInitPaths): Promise<void> {
-    this.assertFileExists(
-      path.join(paths.dataDir, 'output-withdrawal-processor.toml'),
-      'E103_BRIDGE_SETUP_OUTPUT_MISSING',
-      'Run `scrollsdk setup bridge-init --step 2-setup` first.'
-    )
-    this.assertFileExists(
-      path.join(paths.dataDir, 'output-test-data.json'),
-      'E103_BRIDGE_SETUP_OUTPUT_MISSING',
-      'Run `scrollsdk setup bridge-init --step 2-setup` first.'
-    )
-    this.assertFileExists(
-      path.join(paths.dataDir, 'GenerateBridgeInfo.toml'),
-      'E103_BRIDGE_SETUP_OUTPUT_MISSING',
-      'Run `scrollsdk setup bridge-init --step 2-setup` first.'
-    )
-    this.assertFileExists(
-      paths.protocolSeedPath,
-      'E103_PROTOCOL_SEED_MISSING',
-      'Run `scrollsdk setup bridge-init --step 1-prepare` first.'
-    )
-    this.assertFileExists(
-      paths.setupDefaultsPath,
-      'E103_DOGE_CONFIG_MISSING',
-      'Run `scrollsdk setup bridge-init --step 1-prepare` first.'
-    )
-
-    const setupDefaults = toml.parse(fs.readFileSync(paths.setupDefaultsPath, 'utf8')) as any
-    this.updateProtocolSeed(paths.dataDir, setupDefaults.network || 'testnet', path.join(process.cwd(), 'config.toml'))
-
-    this.jsonCtx.info('Running step 3-generate: generate namespace, bridge.json, and protocol_context.json')
-
-    await this.runDockerCommand(imageTag, [
-      'compute-bridge-namespace-cli',
-      '--withdrawal-processor-toml',
-      '.data/output-withdrawal-processor.toml',
-      '--write-back',
-      '.data/GenerateBridgeInfo.toml',
-      '--format',
-      'hex',
-    ])
-    await this.runDockerCommand(imageTag, [
-      'generate-bridge-info-cli',
-      '--config-file',
-      '.data/GenerateBridgeInfo.toml',
-      '--output-file',
-      '.data/bridge.json',
-    ])
-    await this.runDockerCommand(imageTag, [
-      'generate_protocol_context',
-      '--bridge-info',
-      '.data/output-withdrawal-processor.toml',
-      '--test-data',
-      '.data/output-test-data.json',
-      '--protocol-seed',
-      '.data/protocol_seed.toml',
-      '--bridge-json',
-      '.data/bridge.json',
-      '--output',
-      '.data/protocol_context.json',
-    ])
-    this.materializeProtocolContextYaml(paths)
+    await this.updateInitialCelestiaHeight(paths)
   }
 
   private async runPrepareStep(imageTag: string, paths: BridgeInitPaths): Promise<void> {
@@ -979,6 +991,54 @@ export class BridgeInitCommand extends Command {
 
     const setupDefaults = toml.parse(fs.readFileSync(paths.setupDefaultsPath, 'utf8')) as any
     this.updateProtocolSeed(paths.dataDir, setupDefaults.network || 'testnet', path.join(process.cwd(), 'config.toml'))
+  }
+
+  private async runProtocolContextStep(imageTag: string, paths: BridgeInitPaths): Promise<void> {
+    this.assertFileExists(
+      path.join(paths.dataDir, 'output-withdrawal-processor.toml'),
+      'E103_BRIDGE_SETUP_OUTPUT_MISSING',
+      'Run `scrollsdk setup bridge-init --step 2-setup` first.'
+    )
+    this.assertFileExists(
+      path.join(paths.dataDir, 'output-test-data.json'),
+      'E103_BRIDGE_SETUP_OUTPUT_MISSING',
+      'Run `scrollsdk setup bridge-init --step 2-setup` first.'
+    )
+    this.assertFileExists(
+      path.join(paths.dataDir, 'bridge.json'),
+      'E103_BRIDGE_JSON_MISSING',
+      'Run `scrollsdk setup bridge-init --step 3-bridge-info` first.'
+    )
+    this.assertFileExists(
+      paths.protocolSeedPath,
+      'E103_PROTOCOL_SEED_MISSING',
+      'Run `scrollsdk setup bridge-init --step 1-prepare` first.'
+    )
+    this.assertFileExists(
+      paths.setupDefaultsPath,
+      'E103_DOGE_CONFIG_MISSING',
+      'Run `scrollsdk setup bridge-init --step 1-prepare` first.'
+    )
+
+    const setupDefaults = toml.parse(fs.readFileSync(paths.setupDefaultsPath, 'utf8')) as any
+    this.updateProtocolSeed(paths.dataDir, setupDefaults.network || 'testnet', path.join(process.cwd(), 'config.toml'))
+
+    this.jsonCtx.info('Running step 5-protocol-context: generate protocol_context.json')
+
+    await this.runDockerCommand(imageTag, [
+      'generate_protocol_context',
+      '--bridge-info',
+      '.data/output-withdrawal-processor.toml',
+      '--test-data',
+      '.data/output-test-data.json',
+      '--protocol-seed',
+      '.data/protocol_seed.toml',
+      '--bridge-json',
+      '.data/bridge.json',
+      '--output',
+      '.data/protocol_context.json',
+    ])
+    this.materializeProtocolContextYaml(paths)
   }
 
   private async runSetupStep(imageTag: string, paths: BridgeInitPaths): Promise<void> {
@@ -1067,6 +1127,60 @@ export class BridgeInitCommand extends Command {
 
     fs.writeFileSync(generateBridgeInfoPath, toml.stringify(bridgeInfoConfig))
     this.jsonCtx.info(`Updated ${generateBridgeInfoPath} with network = ${network}`)
+  }
+
+  private async updateInitialCelestiaHeight(paths: BridgeInitPaths): Promise<void> {
+    const setupDefaults = toml.parse(fs.readFileSync(paths.setupDefaultsPath, 'utf8')) as any
+    const network = setupDefaults.network || 'testnet'
+    const { config: dogeConfig, path: dogeConfigPath } = this.getRequiredDogeConfig(paths.dataDir, network)
+    const tendermintRpcUrl = dogeConfig?.da?.tendermintRpcUrl
+
+    if (typeof tendermintRpcUrl !== 'string' || tendermintRpcUrl.trim() === '') {
+      this.jsonCtx.addWarning(
+        `Skipped updating initial_celestia_height: da.tendermintRpcUrl missing in ${dogeConfigPath}`
+      )
+      return
+    }
+
+    let height: number
+    try {
+      height = await this.getCelestiaLatestHeight(tendermintRpcUrl)
+    } catch (error) {
+      this.jsonCtx.addWarning(
+        `Failed to query Celestia height from ${tendermintRpcUrl}: ${error}. Update [chain_anchors].initial_celestia_height in ${paths.protocolSeedPath} manually.`
+      )
+      return
+    }
+
+    this.assertFileExists(
+      paths.protocolSeedPath,
+      'E103_PROTOCOL_SEED_MISSING',
+      'Run `scrollsdk setup bridge-init --step 1-prepare` first.'
+    )
+
+    const protocolSeedConfig = toml.parse(fs.readFileSync(paths.protocolSeedPath, 'utf8')) as any
+    protocolSeedConfig.chain_anchors ??= {}
+    protocolSeedConfig.chain_anchors.initial_celestia_height = height
+    fs.writeFileSync(paths.protocolSeedPath, toml.stringify(protocolSeedConfig))
+    this.jsonCtx.info(
+      `Updated ${paths.protocolSeedPath} chain_anchors.initial_celestia_height = ${height}`
+    )
+
+    try {
+      const dogeConfigContent = fs.readFileSync(dogeConfigPath, 'utf8')
+      const updated = dogeConfigContent.replace(
+        /celestiaIndexerStartBlock\s*=\s*["']?\d*["']?/,
+        `celestiaIndexerStartBlock = "${height}"`
+      )
+      fs.writeFileSync(dogeConfigPath, updated)
+      this.jsonCtx.info(
+        `Updated ${dogeConfigPath} da.celestiaIndexerStartBlock = ${height}`
+      )
+    } catch (configError) {
+      this.jsonCtx.addWarning(
+        `Failed to update da.celestiaIndexerStartBlock in ${dogeConfigPath}: ${configError}`
+      )
+    }
   }
 
   private updateProtocolSeed(dataDir: string, network: string, configPath: string): string {
