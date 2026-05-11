@@ -21,6 +21,9 @@ export class BridgeInitCommand extends Command {
     static flags = {
         'doge-config': Flags.string({ description: 'Path to doge-config toml (e.g., .data/doge-config-testnet.toml)', required: false }),
         'image-tag': Flags.string({ description: 'Docker image tag', required: false }),
+        'network': Flags.string({ description: 'Dogecoin network (e.g., testnet, mainnet)', required: false }),
+        'rpc-url': Flags.string({ description: 'Dogecoin RPC URL', required: false }),
+        'rpc-user': Flags.string({ description: 'Dogecoin RPC username', required: false }),
     }
 
     private configData: any = {}
@@ -56,13 +59,13 @@ export class BridgeInitCommand extends Command {
         imageTag = await this.getDockerImageTag(imageTag)
         this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
         // Build CLI args from configs
-        const isTestnet = this.dogeConfig?.network === 'testnet'
+        const network = flags.network || this.dogeConfig?.network || 'testnet'
+        const isTestnet = network === 'testnet'
         const internalRpc = `http://dogecoin-${isTestnet ? 'testnet:44555' : 'mainnet:22555'}`
         const ingressHost = this.getNestedValue(this.configData, 'ingress.DOGECOIN_HOST')
-        const rpcUrl = ingressHost ? `https://${ingressHost}` : internalRpc
-        const rpcUser = this.dogeConfig?.dogecoinClusterRpc?.username || 'user'
+        const rpcUrl = flags['rpc-url'] || (ingressHost ? `https://${ingressHost}` : internalRpc)
+        const rpcUser = flags['rpc-user'] || this.dogeConfig?.dogecoinClusterRpc?.username || 'user'
         const rpcPassword = this.dogeConfig?.dogecoinClusterRpc?.password || 'password_test'
-        const network = this.dogeConfig?.network || 'testnet'
         const startHeight = String(this.dogeConfig?.defaults?.dogecoinIndexerStartHeight ?? '0')
 
         const output_test_data = fs.readFileSync("./.data/output-test-data.json", 'utf8');
