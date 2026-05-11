@@ -118,6 +118,7 @@ export default class SetupPrepCharts extends Command {
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
+  private bridgeConfig: any = {}
   private withdrawalProcessorConfig: toml.JsonMap = {}
 
   public async run(): Promise<void> {
@@ -278,6 +279,18 @@ export default class SetupPrepCharts extends Command {
 
     const withdrawalProcessorConfigContent = fs.readFileSync(withdrawalProcessorConfigPath, 'utf8');
     this.withdrawalProcessorConfig = toml.parse(withdrawalProcessorConfigContent);
+
+    const bridgeConfigPath = path.join(process.cwd(), ".data/bridge.json")
+    if (!fs.existsSync(bridgeConfigPath)) {
+      this.error("run scrollsdk setup bridge-init --step 3-bridge-info first");
+      return
+    }
+
+    this.bridgeConfig = JSON.parse(fs.readFileSync(bridgeConfigPath, 'utf8'));
+    if (!this.bridgeConfig.redeem_script_hex) {
+      this.error(`${bridgeConfigPath} missing redeem_script_hex. Run scrollsdk setup bridge-init --step 3-bridge-info first`);
+      return
+    }
     
   }
 
@@ -1141,6 +1154,7 @@ export default class SetupPrepCharts extends Command {
         const todoMappings = {
           "DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS": this.withdrawalProcessorConfig.bridge_address,
           "DOGEOS_WITHDRAWAL_BRIDGE_SCRIPT_HEX": this.withdrawalProcessorConfig.bridge_script_hex,
+          "DOGEOS_WITHDRAWAL_INITIAL_BRIDGE_REDEEM_SCRIPT_HEX": this.bridgeConfig.redeem_script_hex,
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_URL": new URL(this.dogeConfig.da?.tendermintRpcUrl || "").origin,
           // "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL": this.dogeConfig.da?.tendermintRpcUrl,
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE": this.dogeConfig.da?.daNamespace,
