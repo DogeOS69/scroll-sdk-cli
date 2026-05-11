@@ -22,6 +22,7 @@ export class BridgeInitCommand extends Command {
         'doge-config': Flags.string({ description: 'Path to doge-config toml (e.g., .data/doge-config-testnet.toml)', required: false }),
         'image-tag': Flags.string({ description: 'Docker image tag', required: false }),
         'network': Flags.string({ description: 'Dogecoin network (e.g., testnet, mainnet)', required: false }),
+        'rpc-password': Flags.string({ description: 'Dogecoin RPC password', required: false }),
         'rpc-url': Flags.string({ description: 'Dogecoin RPC URL', required: false }),
         'rpc-user': Flags.string({ description: 'Dogecoin RPC username', required: false }),
     }
@@ -65,7 +66,7 @@ export class BridgeInitCommand extends Command {
         const ingressHost = this.getNestedValue(this.configData, 'ingress.DOGECOIN_HOST')
         const rpcUrl = flags['rpc-url'] || (ingressHost ? `https://${ingressHost}` : internalRpc)
         const rpcUser = flags['rpc-user'] || this.dogeConfig?.dogecoinClusterRpc?.username || 'user'
-        const rpcPassword = this.dogeConfig?.dogecoinClusterRpc?.password || 'password_test'
+        const rpcPassword = flags['rpc-password'] || this.dogeConfig?.dogecoinClusterRpc?.password || 'password_test'
         const startHeight = String(this.dogeConfig?.defaults?.dogecoinIndexerStartHeight ?? '0')
 
         const output_test_data = fs.readFileSync("./.data/output-test-data.json", 'utf8');
