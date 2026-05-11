@@ -1088,12 +1088,10 @@ export class BridgeInitCommand extends Command {
 
       for (const configPath of configPaths) {
         if (fs.existsSync(configPath)) {
-          let content = fs.readFileSync(configPath, 'utf8')
-          content = content.replace(
-            /dogecoinIndexerStartHeight\s*=\s*["']?\d*["']?/,
-            `dogecoinIndexerStartHeight = "${blockHeight}"`
-          )
-          fs.writeFileSync(configPath, content)
+          const dogeConfigForUpdate = toml.parse(fs.readFileSync(configPath, 'utf8')) as any
+          dogeConfigForUpdate.defaults ??= {}
+          dogeConfigForUpdate.defaults.dogecoinIndexerStartHeight = String(blockHeight)
+          fs.writeFileSync(configPath, toml.stringify(dogeConfigForUpdate))
           this.jsonCtx.info(`Updated ${configPath} with dogecoinIndexerStartHeight = ${blockHeight}`)
           return
         }
@@ -1167,12 +1165,10 @@ export class BridgeInitCommand extends Command {
     )
 
     try {
-      const dogeConfigContent = fs.readFileSync(dogeConfigPath, 'utf8')
-      const updated = dogeConfigContent.replace(
-        /celestiaIndexerStartBlock\s*=\s*["']?\d*["']?/,
-        `celestiaIndexerStartBlock = "${height}"`
-      )
-      fs.writeFileSync(dogeConfigPath, updated)
+      const dogeConfigForUpdate = toml.parse(fs.readFileSync(dogeConfigPath, 'utf8')) as any
+      dogeConfigForUpdate.da ??= {}
+      dogeConfigForUpdate.da.celestiaIndexerStartBlock = String(height)
+      fs.writeFileSync(dogeConfigPath, toml.stringify(dogeConfigForUpdate))
       this.jsonCtx.info(
         `Updated ${dogeConfigPath} da.celestiaIndexerStartBlock = ${height}`
       )
