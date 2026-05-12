@@ -200,6 +200,10 @@ export class BridgeInitCommand extends Command {
   async runDockerCommand(imageTag: string, command: string[]): Promise<void> {
     const docker = new Docker();
     const image = `docker.io/dogeos69/bridge-genesis-tools:${imageTag}`;
+    const hostUser =
+      typeof process.getuid === 'function' && typeof process.getgid === 'function'
+        ? `${process.getuid()}:${process.getgid()}`
+        : undefined
     try {
       try {
         await docker.getImage(image).inspect()
@@ -232,6 +236,7 @@ export class BridgeInitCommand extends Command {
           Binds: [`${process.cwd()}:/app`],
         },
         Image: image,
+        User: hostUser,
         WorkingDir: '/app',
       })
 

@@ -93,6 +93,10 @@ export class BridgeInitCommand extends Command {
     async runImage(imageTag: string, args: string[]): Promise<void> {
         const docker = new Docker();
         const image = `docker.io/dogeos69/dogecoin-wallet-import:${imageTag}`;
+        const hostUser =
+            typeof process.getuid === 'function' && typeof process.getgid === 'function'
+                ? `${process.getuid()}:${process.getgid()}`
+                : undefined
         try {
             this.log(chalk.cyan(`Pulling Docker Image: ${image}`))
             // Pull the image if it doesn't exist locally
@@ -116,6 +120,7 @@ export class BridgeInitCommand extends Command {
                     Binds: [`${process.cwd()}:/app`],
                 },
                 Image: image,
+                User: hostUser,
             })
 
             this.log(chalk.cyan('Starting Container'))
