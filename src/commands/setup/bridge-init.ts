@@ -199,7 +199,7 @@ export class BridgeInitCommand extends Command {
 
   async runDockerCommand(imageTag: string, command: string[]): Promise<void> {
     const docker = new Docker();
-    const image = `docker.io/dogeos69/generate-test-keys:${imageTag}`;
+    const image = `docker.io/dogeos69/gbridge-genesis-tools:${imageTag}`;
     try {
       try {
         await docker.getImage(image).inspect()
@@ -448,7 +448,7 @@ export class BridgeInitCommand extends Command {
   private async fetchDockerTags(): Promise<string[]> {
     try {
       const response = await fetch(
-        'https://registry.hub.docker.com/v2/repositories/dogeos69/generate-test-keys/tags?page_size=100',
+        'https://registry.hub.docker.com/v2/repositories/dogeos69/gbridge-genesis-tools/tags?page_size=100',
       )
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`)
@@ -490,6 +490,87 @@ export class BridgeInitCommand extends Command {
     }
 
     throw new Error('Unable to get latest block height from Celestia RPC')
+  }
+
+  private async getDogecoinCurrentHeight(setupDefaultsPath: string): Promise<number> {
+    let setupDefaults: any
+    try {
+      setupDefaults = toml.parse(fs.readFileSync(setupDefaultsPath, 'utf8'))
+    } catch (error) {
+      this.jsonCtx.error(
+        'E103_DOGE_CONFIG_MISSING',
+        `Failed to read setup_defaults.toml before setup transaction: ${error}`,
+        'CONFIGURATION',
+        true,
+        { error: String(error), path: setupDefaultsPath }
+      )
+    }
+
+    const rpcUrl = setupDefaults.dogecoin_rpc_url
+    if (typeof rpcUrl !== 'string' || rpcUrl.length === 0) {
+      this.jsonCtx.error(
+        'E103_DOGE_CONFIG_MISSING',
+        'dogecoin_rpc_url is required in setup_defaults.toml before running bridge setup.',
+        'CONFIGURATION',
+        true,
+        { path: setupDefaultsPath }
+      )
+    }
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+    const rpcUser = setupDefaults.dogecoin_rpc_user
+    const rpcPassword = setupDefaults.dogecoin_rpc_pass
+    if (typeof rpcUser === 'string' && rpcUser.length > 0 && typeof rpcPassword === 'string' && rpcPassword.length > 0) {
+      headers.Authorization = `Basic ${Buffer.from(`${rpcUser}:${rpcPassword}`).toString('base64')}`
+    }
+
+    const response = await fetch(rpcUrl, {
+      body: JSON.stringify({
+        id: 'bridge-init-pre-setup-height',
+        jsonrpc: '1.0',
+        method: 'getblockcount',
+        params: [],
+      }),
+      headers,
+      method: 'POST',
+    })
+
+    if (!response.ok) {
+      const errorBody = await response.text()
+      this.jsonCtx.error(
+        'E400_DOGECOIN_RPC_FAILED',
+        `Failed to read Dogecoin height before setup transaction: ${response.status} ${response.statusText}`,
+        'NETWORK',
+        true,
+        { body: errorBody, rpcUrl }
+      )
+    }
+
+    const result = await response.json() as { error?: { code?: number; message?: string }; result?: unknown }
+    if (result.error) {
+      this.jsonCtx.error(
+        'E400_DOGECOIN_RPC_FAILED',
+        `Dogecoin RPC getblockcount failed: ${result.error.message || JSON.stringify(result.error)}`,
+        'NETWORK',
+        true,
+        { code: result.error.code, rpcUrl }
+      )
+    }
+
+    const height = result.result
+    if (typeof height !== 'number' || !Number.isInteger(height)) {
+      this.jsonCtx.error(
+        'E400_DOGECOIN_RPC_FAILED',
+        `Dogecoin RPC getblockcount returned an invalid height: ${JSON.stringify(height)}`,
+        'NETWORK',
+        true,
+        { rpcUrl }
+      )
+    }
+
+    return height
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
@@ -798,7 +879,7 @@ export class BridgeInitCommand extends Command {
       try {
         testData = JSON.parse(fs.readFileSync(testDataPath, 'utf8'))
       } catch (parseError) {
-        this.jsonCtx.addWarning(`Failed to parse output-test-data.json: ${parseError}. dogecoinIndexerStartHeight was NOT updated.`)
+        this.jsonCtx.addWarning(`Failed to parse output-test-data.json: ${parseError}.`)
         testData = null
       }
 
@@ -808,7 +889,6 @@ export class BridgeInitCommand extends Command {
 
         if (confirmedBlockHeight && confirmedBlockHeight > 0) {
           this.jsonCtx.info(`Bridge transactions confirmed at block height: ${confirmedBlockHeight}`)
-          this.updateDogeConfigBlockHeight(paths.setupDefaultsPath, paths.dataDir, confirmedBlockHeight)
         }
       }
     }
@@ -1053,6 +1133,10 @@ export class BridgeInitCommand extends Command {
       'This step is NOT idempotent. It consumes funding UTXOs and broadcasts the setup transaction.'
     )
 
+    const dogecoinHeightBeforeSetup = await this.getDogecoinCurrentHeight(paths.setupDefaultsPath)
+    const indexerStartHeight = Math.max(0, dogecoinHeightBeforeSetup - 1)
+    this.jsonCtx.info(`Dogecoin height before setup transaction: ${dogecoinHeightBeforeSetup}`)
+
     this.jsonCtx.info('Running step 2-setup: generate test keys and broadcast setup transaction')
     await this.runDockerCommand(imageTag, [
       'generate_test_keys',
@@ -1062,6 +1146,7 @@ export class BridgeInitCommand extends Command {
       '--output-dir',
       '.data',
     ])
+    this.updateDogeConfigBlockHeight(paths.setupDefaultsPath, paths.dataDir, indexerStartHeight)
     this.moveLegacyOutputFiles(paths.dataDir)
     const setupDefaults = toml.parse(fs.readFileSync(paths.setupDefaultsPath, 'utf8')) as any
     this.updateGenerateBridgeInfoNetwork(paths.generateBridgeInfoPath, setupDefaults.network || 'testnet', true)
