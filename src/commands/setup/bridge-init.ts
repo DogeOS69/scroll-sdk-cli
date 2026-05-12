@@ -199,7 +199,7 @@ export class BridgeInitCommand extends Command {
 
   async runDockerCommand(imageTag: string, command: string[]): Promise<void> {
     const docker = new Docker();
-    const image = `docker.io/dogeos69/gbridge-genesis-tools:${imageTag}`;
+    const image = `docker.io/dogeos69/bridge-genesis-tools:${imageTag}`;
     try {
       try {
         await docker.getImage(image).inspect()
@@ -448,7 +448,7 @@ export class BridgeInitCommand extends Command {
   private async fetchDockerTags(): Promise<string[]> {
     try {
       const response = await fetch(
-        'https://registry.hub.docker.com/v2/repositories/dogeos69/gbridge-genesis-tools/tags?page_size=100',
+        'https://registry.hub.docker.com/v2/repositories/dogeos69/bridge-genesis-tools/tags?page_size=100',
       )
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`)
