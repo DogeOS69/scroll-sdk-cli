@@ -14,6 +14,16 @@ import { resolveEnvValue } from '../../utils/non-interactive.js'
 
 const execAsync = promisify(exec)
 
+const DEFAULT_SECRET_PROVIDER = 'aws'
+const DEFAULT_AWS_PREFIX = 'dogeos'
+const DEFAULT_AWS_REGION = 'us-west-2'
+const DEFAULT_AWS_SERVICE_ACCOUNT = 'external-secrets'
+const DEFAULT_VAULT_PATH = 'scroll'
+const DEFAULT_VAULT_SERVER = 'http://vault.default.svc.cluster.local:8200'
+const DEFAULT_VAULT_TOKEN_SECRET_KEY = 'token'
+const DEFAULT_VAULT_TOKEN_SECRET_NAME = 'vault-token'
+const DEFAULT_VAULT_VERSION = 'v2'
+
 interface SecretService {
   pushSecrets(cubesignerOnly?: boolean, filename?: string): Promise<string[]>
 }
@@ -693,14 +703,15 @@ export default class SetupPushSecrets extends Command {
   static override flags = {
     // AWS specific flags
     'aws-prefix': Flags.string({
-      default: 'dogeos',
+      default: DEFAULT_AWS_PREFIX,
       description: 'AWS Secrets Manager path prefix (e.g., dogeos/testnet)',
     }),
     'aws-region': Flags.string({
+      default: DEFAULT_AWS_REGION,
       description: 'AWS region for secrets (e.g., us-east-1)',
     }),
     'aws-service-account': Flags.string({
-      default: 'external-secrets',
+      default: DEFAULT_AWS_SERVICE_ACCOUNT,
       description: 'AWS IAM service account',
     }),
     'cubesigner-only': Flags.boolean({
@@ -728,7 +739,8 @@ debug: Flags.boolean({
     }),
     // Secret service provider
     provider: Flags.string({
-      description: 'Secret service provider (aws or vault). Required for non-interactive mode.',
+      default: DEFAULT_SECRET_PROVIDER,
+      description: 'Secret service provider (aws or vault)',
       options: ['aws', 'vault'],
     }),
     // Skip updating YAML files
@@ -742,23 +754,23 @@ debug: Flags.boolean({
     }),
     // Vault specific flags
     'vault-path': Flags.string({
-      default: 'scroll',
+      default: DEFAULT_VAULT_PATH,
       description: 'Vault path prefix',
     }),
     'vault-server': Flags.string({
-      default: 'http://vault.default.svc.cluster.local:8200',
+      default: DEFAULT_VAULT_SERVER,
       description: 'Vault server URL',
     }),
     'vault-token-secret-key': Flags.string({
-      default: 'token',
+      default: DEFAULT_VAULT_TOKEN_SECRET_KEY,
       description: 'Vault token secret key',
     }),
     'vault-token-secret-name': Flags.string({
-      default: 'vault-token',
+      default: DEFAULT_VAULT_TOKEN_SECRET_NAME,
       description: 'Vault token secret name',
     }),
     'vault-version': Flags.string({
-      default: 'v2',
+      default: DEFAULT_VAULT_VERSION,
       description: 'Vault version',
     }),
   }
@@ -786,18 +798,7 @@ debug: Flags.boolean({
 
     let secretService: string
     if (this.nonInteractive) {
-      // Non-interactive mode: require --provider flag
-      if (!flags.provider) {
-        this.jsonCtx.error(
-          'E601_MISSING_FIELD',
-          '--provider flag is required in non-interactive mode (aws or vault)',
-          'CONFIGURATION',
-          true,
-          { flag: '--provider' }
-        )
-      }
-
-      secretService = flags.provider
+      secretService = flags.provider || DEFAULT_SECRET_PROVIDER
     } else {
       secretService = await select({
         choices: [
@@ -898,43 +899,32 @@ await this.updateProductionYaml(provider, credentials, pushedSecrets)
   private async getAWSCredentials(): Promise<Record<string, string>> {
     return {
       prefixName: await input({
-        default: 'dogeos',
+        default: DEFAULT_AWS_PREFIX,
         message: chalk.cyan('Enter a path prefix for AWS Secrets Manager (e.g., my-app/staging or dogeos/testnet):'),
       }),
       secretRegion: await input({
-        default: '',
+        default: DEFAULT_AWS_REGION,
         message: chalk.cyan('Enter AWS secret region(e.g.,us-east-1):'),
       }),
       serviceAccount: await input({
-        default: 'external-secrets',
+        default: DEFAULT_AWS_SERVICE_ACCOUNT,
         message: chalk.cyan('Enter AWS iam service account:')
       }),
     }
   }
 
   private getAWSCredentialsFromFlags(flags: any): Record<string, string> {
-    const region = resolveEnvValue(flags['aws-region'])
-    if (!region) {
-      this.jsonCtx.error(
-        'E601_MISSING_FIELD',
-        '--aws-region is required for AWS provider in non-interactive mode',
-        'CONFIGURATION',
-        true,
-        { flag: '--aws-region' }
-      )
-    }
-
     return {
-      prefixName: resolveEnvValue(flags['aws-prefix']) || 'dogeos',
-      secretRegion: region!,
-      serviceAccount: resolveEnvValue(flags['aws-service-account']) || 'external-secrets',
+      prefixName: resolveEnvValue(flags['aws-prefix']) || DEFAULT_AWS_PREFIX,
+      secretRegion: resolveEnvValue(flags['aws-region']) || DEFAULT_AWS_REGION,
+      serviceAccount: resolveEnvValue(flags['aws-service-account']) || DEFAULT_AWS_SERVICE_ACCOUNT,
     }
   }
 
   private async getVaultCredentials(): Promise<Record<string, string>> {
     return {
       path: await input({
-        default: 'scroll',
+        default: DEFAULT_VAULT_PATH,
         message: chalk.cyan('Enter Vault path:'),
         validate(value: string) {
           if (/^\d+$/.test(value)) {
@@ -945,19 +935,19 @@ await this.updateProductionYaml(provider, credentials, pushedSecrets)
         },
       }),
       server: await input({
-        default: 'http://vault.default.svc.cluster.local:8200',
+        default: DEFAULT_VAULT_SERVER,
         message: chalk.cyan('Enter Vault server URL:'),
       }),
       tokenSecretKey: await input({
-        default: 'token',
+        default: DEFAULT_VAULT_TOKEN_SECRET_KEY,
         message: chalk.cyan('Enter Vault token secret key:'),
       }),
       tokenSecretName: await input({
-        default: 'vault-token',
+        default: DEFAULT_VAULT_TOKEN_SECRET_NAME,
         message: chalk.cyan('Enter Vault token secret name:'),
       }),
       version: await input({
-        default: 'v2',
+        default: DEFAULT_VAULT_VERSION,
         message: chalk.cyan('Enter Vault version:'),
       }),
     }
@@ -965,11 +955,11 @@ await this.updateProductionYaml(provider, credentials, pushedSecrets)
 
   private getVaultCredentialsFromFlags(flags: any): Record<string, string> {
     return {
-      path: resolveEnvValue(flags['vault-path']) || 'scroll',
-      server: resolveEnvValue(flags['vault-server']) || 'http://vault.default.svc.cluster.local:8200',
-      tokenSecretKey: resolveEnvValue(flags['vault-token-secret-key']) || 'token',
-      tokenSecretName: resolveEnvValue(flags['vault-token-secret-name']) || 'vault-token',
-      version: resolveEnvValue(flags['vault-version']) || 'v2',
+      path: resolveEnvValue(flags['vault-path']) || DEFAULT_VAULT_PATH,
+      server: resolveEnvValue(flags['vault-server']) || DEFAULT_VAULT_SERVER,
+      tokenSecretKey: resolveEnvValue(flags['vault-token-secret-key']) || DEFAULT_VAULT_TOKEN_SECRET_KEY,
+      tokenSecretName: resolveEnvValue(flags['vault-token-secret-name']) || DEFAULT_VAULT_TOKEN_SECRET_NAME,
+      version: resolveEnvValue(flags['vault-version']) || DEFAULT_VAULT_VERSION,
     }
   }
 

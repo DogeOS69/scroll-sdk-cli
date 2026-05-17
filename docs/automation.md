@@ -291,14 +291,16 @@ Refreshes CubeSigner authentication tokens.
 ### Step 10: Push secrets to Kubernetes
 
 ```bash
-scrollsdk setup push-secrets -N --json --provider aws --aws-region us-east-1
+scrollsdk setup push-secrets -N --json
 ```
 
 Pushes generated secrets to the Kubernetes cluster. Requires kubectl.
 
-**Required flags (non-interactive):**
-- `--provider aws|vault` - Secret service provider (required)
-- `--aws-region <region>` - AWS region (required when provider is `aws`)
+**Optional flags (non-interactive):**
+- `--provider aws|vault` - Secret service provider (default: `aws`)
+- `--aws-region <region>` - AWS region for Secrets Manager (default: `us-west-2`)
+- `--aws-prefix <prefix>` - AWS Secrets Manager path prefix (default: `dogeos`)
+- `--aws-service-account <name>` - AWS IAM service account (default: `external-secrets`)
 
 ### Step 11: Set up TLS
 
@@ -386,8 +388,7 @@ run_step "setup cubesigner-refresh" setup cubesigner-refresh -N --json \
   --doge-config "$DOGE_CONFIG"
 
 # Step 10: Push secrets to K8s
-run_step "setup push-secrets" setup push-secrets -N --json \
-  --provider aws --aws-region us-east-1
+run_step "setup push-secrets" setup push-secrets -N --json
 
 # Step 11: TLS certificates
 run_step "setup tls" setup tls -N --json --cluster-issuer letsencrypt-prod
