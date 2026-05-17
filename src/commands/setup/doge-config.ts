@@ -423,105 +423,7 @@ export class DogeConfigCommand extends Command {
       }
     }
 
-    // Handle Celestia namespace - auto-generate and show to user
-    let suggestedNamespace = existingConfig.da?.daNamespace
-
-    if (suggestedNamespace) {
-      // Existing namespace found, ask if user wants to generate new one
-      log(chalk.blue('\n📋 Celestia DA Namespace:'))
-      log(chalk.yellow('Format: Any valid hex string (2-10 bytes allowed)'))
-      log(chalk.cyan(`Current: ${suggestedNamespace}`))
-
-      // In non-interactive mode, keep existing namespace
-      const generateNew = await resolveConfirm(
-        niCtx,
-        () => confirm({
-          default: false,
-          message: 'Generate a new random namespace?'
-        }),
-        false, // In non-interactive, keep existing
-        false
-      )
-
-      if (generateNew) {
-        // randomly generate a namespace
-        suggestedNamespace = this.generateCelestiaNamespace()
-        log(chalk.green(`New generated: ${suggestedNamespace}`))
-      }
-    } else {
-      // No existing namespace, generate new one
-      suggestedNamespace = this.generateCelestiaNamespace()
-
-      log(chalk.blue('\n📋 Celestia DA Namespace:'))
-      log(chalk.yellow('Format: Any valid hex string (2-10 bytes allowed)'))
-      log(chalk.green(`Auto-generated: ${suggestedNamespace}`))
-    }
-
-    // Ensure we always have a valid namespace
-    if (!suggestedNamespace) {
-      suggestedNamespace = this.generateCelestiaNamespace()
-      log(chalk.green(`Fallback generated: ${suggestedNamespace}`))
-    }
-
-    const inputNamespace = await resolveOrPrompt(
-      niCtx,
-      () => input({
-        default: suggestedNamespace,
-        message: `Celestia DA Namespace (2-10 bytes, press Enter to use default value):`,
-        required: true,
-        validate(value) {
-          if (!value.trim()) {
-            return 'Namespace is required'
-          }
-
-          // Remove any spaces and convert to lowercase for validation
-          const cleanValue = value.replaceAll(/\s+/g, '').toLowerCase()
-
-          // Check if it's valid hex
-          if (!/^[\da-f]*$/.test(cleanValue)) {
-            return 'Namespace must be a valid hex string'
-          }
-
-          // Check if length is even (must be valid bytes)
-          if (cleanValue.length % 2 !== 0) {
-            return 'Namespace must have even number of hex characters'
-          }
-
-          // Check byte length (2-10 bytes = 4-20 hex characters)
-          const byteLength = cleanValue.length / 2
-          if (byteLength < 2 || byteLength > 10) {
-            return 'Namespace must be between 2-10 bytes (4-20 hex characters)'
-          }
-
-          return true
-        }
-      }),
-      suggestedNamespace,
-      {
-        configPath: '[da].daNamespace',
-        description: 'Celestia DA Namespace (2-10 bytes hex string)',
-        field: 'daNamespace',
-      }
-    ) || suggestedNamespace
-
-    // Process and validate the input namespace value
-    // Clean and normalize the input value
-    const finalNamespace = inputNamespace.replaceAll(/\s+/g, '').toLowerCase()
-
-    // Double-check validity (should already be validated by the input validator)
-    if (finalNamespace.length % 2 === 0 && /^[\da-f]*$/.test(finalNamespace)) {
-      const byteLength = finalNamespace.length / 2
-      if (byteLength >= 2 && byteLength <= 10) {
-        log(chalk.green(`✓ Using namespace: ${finalNamespace} (${byteLength} bytes)`))
-        newConfig.da!.daNamespace = finalNamespace
-      } else {
-        this.error('Namespace must be between 2-10 bytes')
-        return
-      }
-    } else {
-      this.error('Invalid namespace format after processing')
-      return
-    }
+    newConfig.da!.daNamespace = existingConfig.da?.daNamespace || ''
 
     // Handle Celestia mnemonic and signer address
     let celestiaMnemonic = ''
@@ -747,25 +649,6 @@ export class DogeConfigCommand extends Command {
     } catch (error) {
       throw new Error(`Failed to generate Celestia address from mnemonic: ${error}`)
     }
-  }
-
-  private generateCelestiaNamespace(projectName?: string, byteLength: number = 8): string {
-    // Generate a namespace with custom bytes (2-10 bytes allowed)
-    if (byteLength < 2 || byteLength > 10) {
-      byteLength = 8 // Default to 8 bytes if invalid
-    }
-
-    let customBytes = ''
-    if (projectName) {
-      // Use project name as base for custom bytes
-      const hash = crypto.createHash('sha256').update(projectName).digest('hex')
-      customBytes = hash.slice(0, Math.max(0, byteLength * 2)) // Take specified bytes (hex chars = bytes * 2)
-    } else {
-      // Generate random bytes
-      customBytes = crypto.randomBytes(byteLength).toString('hex').toLowerCase()
-    }
-
-    return customBytes
   }
 
   private generateSecureRandomString(length: number): string {
