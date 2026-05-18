@@ -54,9 +54,12 @@ recovery_threshold    = 2
 attestation_key_count = 3
 recovery_key_count    = 3
 
-# Recovery CLTV timelock (block-height semantics).
+# Recovery CLTV timelock (Dogecoin absolute block-height semantics).
 # IMPORTANT: must be < 500_000_000; values >= 500_000_000 use timestamp
 # semantics and are rejected by `generate_bridge_info`.
+# This template value is only a placeholder. `scrollsdk setup bridge-init`
+# rewrites it before broadcasting setup when it is missing, expired, or still
+# set to this placeholder.
 timelock = 100
 
 # Fee rate used for transaction construction (satoshis per kvB).

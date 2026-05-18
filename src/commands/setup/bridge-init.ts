@@ -32,6 +32,60 @@ interface BridgeInitPostprocessResult {
   outputFiles: string[]
 }
 
+export const BRIDGE_TIMELOCK_PLACEHOLDER = 100
+export const BRIDGE_TIMELOCK_RELATIVE_BLOCKS = 259_200
+export const BRIDGE_TIMELOCK_MARGIN_BLOCKS = 100
+export const BRIDGE_TIMELOCK_MAX_BLOCK_HEIGHT = 500_000_000
+
+export interface BridgeTimelockResolution {
+  reason?: 'expired' | 'invalid' | 'missing' | 'placeholder'
+  shouldUpdate: boolean
+  timelock: number
+}
+
+export function resolveBridgeTimelock(
+  existingTimelock: unknown,
+  currentHeight: number
+): BridgeTimelockResolution {
+  const desiredTimelock = currentHeight + BRIDGE_TIMELOCK_RELATIVE_BLOCKS + BRIDGE_TIMELOCK_MARGIN_BLOCKS
+
+  if (desiredTimelock >= BRIDGE_TIMELOCK_MAX_BLOCK_HEIGHT) {
+    throw new Error(
+      `Calculated timelock ${desiredTimelock} is not a Dogecoin block-height CLTV value; it must be < ${BRIDGE_TIMELOCK_MAX_BLOCK_HEIGHT}.`
+    )
+  }
+
+  const normalizedTimelock = typeof existingTimelock === 'string' && /^\d+$/.test(existingTimelock)
+    ? Number(existingTimelock)
+    : existingTimelock
+
+  if (normalizedTimelock === undefined || normalizedTimelock === null || normalizedTimelock === '') {
+    return { reason: 'missing', shouldUpdate: true, timelock: desiredTimelock }
+  }
+
+  if (!Number.isInteger(normalizedTimelock)) {
+    return { reason: 'invalid', shouldUpdate: true, timelock: desiredTimelock }
+  }
+
+  const timelock = normalizedTimelock as number
+
+  if (timelock === BRIDGE_TIMELOCK_PLACEHOLDER) {
+    return { reason: 'placeholder', shouldUpdate: true, timelock: desiredTimelock }
+  }
+
+  if (timelock <= currentHeight) {
+    return { reason: 'expired', shouldUpdate: true, timelock: desiredTimelock }
+  }
+
+  if (timelock >= BRIDGE_TIMELOCK_MAX_BLOCK_HEIGHT) {
+    throw new Error(
+      `Existing timelock ${timelock} is not a Dogecoin block-height CLTV value; it must be < ${BRIDGE_TIMELOCK_MAX_BLOCK_HEIGHT}.`
+    )
+  }
+
+  return { shouldUpdate: false, timelock }
+}
+
 function isValidSecp256k1PublicKey(publicKey: string): boolean {
   const normalized = publicKey.replace(/^0x/, '')
   return /^[\dA-Fa-f]{66}$/.test(normalized) || /^04[\dA-Fa-f]{128}$/.test(normalized)
@@ -451,6 +505,41 @@ export class BridgeInitCommand extends Command {
         { error: String(error), path: genesisYamlPath }
       )
     }
+  }
+
+  private ensureBridgeTimelock(setupDefaultsPath: string, currentHeight: number): void {
+    const setupDefaults = toml.parse(fs.readFileSync(setupDefaultsPath, 'utf8')) as any
+
+    let resolution: BridgeTimelockResolution
+    try {
+      resolution = resolveBridgeTimelock(setupDefaults.timelock, currentHeight)
+    } catch (error) {
+      this.jsonCtx.error(
+        'E602_INVALID_CONFIG_VALUE',
+        error instanceof Error ? error.message : String(error),
+        'CONFIGURATION',
+        true,
+        { currentHeight, path: setupDefaultsPath, timelock: setupDefaults.timelock }
+      )
+    }
+
+    if (!resolution.shouldUpdate) {
+      this.jsonCtx.info(`Keeping existing timelock = ${resolution.timelock} in ${setupDefaultsPath}`)
+      return
+    }
+
+    if (resolution.reason === 'expired') {
+      this.jsonCtx.addWarning(
+        `Existing timelock = ${setupDefaults.timelock} is not a future Dogecoin absolute height; updating it.`
+      )
+    }
+
+    setupDefaults.timelock = resolution.timelock
+    fs.writeFileSync(setupDefaultsPath, toml.stringify(setupDefaults))
+    this.jsonCtx.info(
+      `Updated ${setupDefaultsPath} timelock = ${resolution.timelock} ` +
+      `(Dogecoin absolute height; current height = ${currentHeight})`
+    )
   }
 
   private escapeEnvValue(value: string): string {
@@ -1147,6 +1236,7 @@ export class BridgeInitCommand extends Command {
     const dogecoinHeightBeforeSetup = await this.getDogecoinCurrentHeight(paths.setupDefaultsPath)
     const indexerStartHeight = Math.max(0, dogecoinHeightBeforeSetup - 1)
     this.jsonCtx.info(`Dogecoin height before setup transaction: ${dogecoinHeightBeforeSetup}`)
+    this.ensureBridgeTimelock(paths.setupDefaultsPath, dogecoinHeightBeforeSetup)
 
     this.jsonCtx.info('Running step 2-setup: generate test keys and broadcast setup transaction')
     await this.runDockerCommand(imageTag, [
