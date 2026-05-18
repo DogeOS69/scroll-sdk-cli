@@ -1170,7 +1170,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__SIGNER_ADDRESS": this.dogeConfig.da?.signerAddress,
 
           "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
-          "DOGEOS_WITHDRAWAL_DATABASE_URL": "sqlite:///app/data/withdrawal_processor.db",
+          // "DOGEOS_WITHDRAWAL_DATABASE_URL": "sqlite:///app/data/withdrawal_processor.db",
           "DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT": String(Math.max(0, dogecoinIndexerStartHeight)),
           "DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL": dogecoinInternalUrl,
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSAGE_QUEUE_ADDRESS": this.getConfigValue("contractsFile.L2_MESSAGE_QUEUE_ADDR"),
