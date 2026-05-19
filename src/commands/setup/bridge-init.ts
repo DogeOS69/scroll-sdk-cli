@@ -43,6 +43,13 @@ export interface BridgeTimelockResolution {
   timelock: number
 }
 
+export interface ProtocolSeedConfigInputs {
+  configToml: any
+  contractsConfig: any
+  existingProtocolSeedConfig?: any
+  network: string
+}
+
 export function resolveBridgeTimelock(
   existingTimelock: unknown,
   currentHeight: number
@@ -86,6 +93,66 @@ export function resolveBridgeTimelock(
   return { shouldUpdate: false, timelock }
 }
 
+export function buildEthereumDaProtocolSeedConfig(
+  inputs: ProtocolSeedConfigInputs,
+  helpers: {
+    getContractAddress: (contractsConfig: any, contractName: string) => string
+    getNumberValue: (source: any, key: string) => number
+    resolveDogecoinChainId: (network: string) => number
+  }
+): any {
+  const protocolSeedConfig = inputs.existingProtocolSeedConfig ?? {}
+  const dogecoinChainId = helpers.resolveDogecoinChainId(inputs.network)
+  const ethChainId = helpers.getNumberValue(inputs.configToml?.general, 'CHAIN_ID_L1')
+  const l2ChainId = helpers.getNumberValue(inputs.configToml?.general, 'CHAIN_ID_L2')
+
+  protocolSeedConfig.protocol ??= {}
+  delete protocolSeedConfig.protocol.celestia_namespace
+  protocolSeedConfig.protocol.protocol_version = 2
+  protocolSeedConfig.protocol.dogecoin_chain_id = dogecoinChainId
+  protocolSeedConfig.protocol.l2_chain_id = l2ChainId
+  protocolSeedConfig.protocol.eth_chain_id = ethChainId
+
+  protocolSeedConfig.chain_anchors ??= {}
+  delete protocolSeedConfig.chain_anchors.initial_celestia_height
+  protocolSeedConfig.chain_anchors.initial_ethereum_block_hash ??=
+    '0x0000000000000000000000000000000000000000000000000000000000000000'
+  protocolSeedConfig.chain_anchors.initial_tx_index ??= 0
+  protocolSeedConfig.chain_anchors.initial_tx_blob_index ??= 0
+  protocolSeedConfig.chain_anchors.genesis_batch_hash ??=
+    '0x0000000000000000000000000000000000000000000000000000000000000000'
+  protocolSeedConfig.chain_anchors.genesis_state_root ??=
+    '0x0000000000000000000000000000000000000000000000000000000000000000'
+
+  protocolSeedConfig.protocol_config_seed ??= {}
+  protocolSeedConfig.protocol_config_seed.protocol_config ??= {}
+  const protocolConfig = protocolSeedConfig.protocol_config_seed.protocol_config
+  delete protocolConfig.celestia_namespace
+  protocolConfig.l2_chain_id = l2ChainId
+  protocolConfig.eth_chain_id = ethChainId
+  protocolConfig.key_rotation_min_grace_wf_txs ??= 100
+  protocolConfig.min_deposit_sats ??= 100_000
+  protocolConfig.deposit_queue_transform ??= {}
+  protocolConfig.deposit_queue_transform.l1_scroll_messenger_address = helpers.getContractAddress(
+    inputs.contractsConfig,
+    'L1_SCROLL_MESSENGER_PROXY_ADDR'
+  ).toLowerCase()
+  protocolConfig.deposit_queue_transform.l2_messenger_address = helpers.getContractAddress(
+    inputs.contractsConfig,
+    'L2_DOGEOS_MESSENGER_PROXY_ADDR'
+  ).toLowerCase()
+  protocolConfig.deposit_queue_transform.moat_address = helpers.getContractAddress(
+    inputs.contractsConfig,
+    'L2_MOAT_PROXY_ADDR'
+  ).toLowerCase()
+  protocolConfig.deposit_queue_transform.message_queue_gas_limit = helpers.getNumberValue(
+    inputs.configToml?.rollup,
+    'MAX_L1_MESSAGE_GAS_LIMIT'
+  )
+
+  return protocolSeedConfig
+}
+
 function isValidSecp256k1PublicKey(publicKey: string): boolean {
   const normalized = publicKey.replace(/^0x/, '')
   return /^[\dA-Fa-f]{66}$/.test(normalized) || /^04[\dA-Fa-f]{128}$/.test(normalized)
@@ -104,17 +171,12 @@ export class BridgeInitCommand extends Command {
     '$ scrollsdk setup bridge-init --step 2',
     '$ scrollsdk setup bridge-init -s 123456',
     '$ scrollsdk setup bridge-init --seed 123456',
-    '$ scrollsdk setup bridge-init --celestia-namespace 0a0b0c0d',
     '$ scrollsdk setup bridge-init --image-tag 0.2.0-debug',
     '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag 0.2.0-rc.3',
     '$ scrollsdk setup bridge-init --non-interactive --json --seed 123456',
   ]
 
   static flags = {
-    'celestia-namespace': Flags.string({
-      description: 'Celestia DA namespace hex string to write into the explicit doge config before bridge initialization',
-      required: false,
-    }),
     'image-tag': Flags.string({
       description: 'Specify the Docker image tag to use (defaults to 0.2.0-rc.3)',
       required: false,
@@ -147,7 +209,6 @@ export class BridgeInitCommand extends Command {
     }),
   }
 
-  private celestiaNamespace: string | undefined
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
@@ -157,7 +218,6 @@ export class BridgeInitCommand extends Command {
 
     this.nonInteractive = flags['non-interactive']
     this.jsonMode = flags.json
-    this.celestiaNamespace = flags['celestia-namespace']
     this.jsonCtx = new JsonOutputContext('setup bridge-init', this.jsonMode)
 
     let { seed } = flags
@@ -568,31 +628,6 @@ export class BridgeInitCommand extends Command {
     }
   }
 
-  private async getCelestiaLatestHeight(tendermintRpcUrl: string): Promise<number> {
-    const response = await fetch(`${tendermintRpcUrl.replace(/\/$/, '')}/status`, {
-      headers: { 'Content-Type': 'application/json' },
-      method: 'GET',
-    })
-
-    if (!response.ok) {
-      throw new Error(`Celestia RPC connection failed: ${response.status} ${response.statusText}`)
-    }
-
-    const result = await response.json() as {
-      result?: { sync_info?: { latest_block_height?: string } }
-    }
-
-    const heightStr = result.result?.sync_info?.latest_block_height
-    if (heightStr) {
-      const height = Number.parseInt(heightStr, 10)
-      if (!Number.isNaN(height)) {
-        return height
-      }
-    }
-
-    throw new Error('Unable to get latest block height from Celestia RPC')
-  }
-
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
     const defaultTag = 'latest'
 
@@ -890,37 +925,6 @@ export class BridgeInitCommand extends Command {
     }
 
     return outputPaths
-  }
-
-  private normalizeCelestiaNamespaceId(namespace: string, sourcePath: string): string {
-    const cleanNamespace = namespace.replace(/^0x/i, '').replaceAll(/\s+/g, '').toLowerCase()
-
-    if (!/^[\da-f]+$/.test(cleanNamespace) || cleanNamespace.length % 2 !== 0) {
-      this.jsonCtx.error(
-        'E602_INVALID_CONFIG_VALUE',
-        `daNamespace must be an even-length hex string in ${sourcePath}`,
-        'CONFIGURATION',
-        true,
-        { namespace, path: sourcePath }
-      )
-    }
-
-    const byteLength = cleanNamespace.length / 2
-    if (byteLength !== 10) {
-      this.jsonCtx.error(
-        'E602_INVALID_CONFIG_VALUE',
-        `daNamespace must be exactly 10 bytes in ${sourcePath}`,
-        'CONFIGURATION',
-        true,
-        { namespace, path: sourcePath }
-      )
-    }
-
-    return `0x${cleanNamespace}`
-  }
-
-  private normalizeProtocolCelestiaNamespace(namespace: string, sourcePath: string): string {
-    return `0x${this.normalizeCelestiaNamespaceId(namespace, sourcePath).replace(/^0x/i, '').padStart(58, '0')}`
   }
 
   private normalizeStep(step: string | undefined): BridgeInitStep {
@@ -1249,8 +1253,6 @@ export class BridgeInitCommand extends Command {
     ])
     this.moveLegacyOutputFiles(paths.dataDir)
     this.updateDogeConfigBlockHeight(paths.setupDefaultsPath, paths.dataDir, indexerStartHeight)
-    this.jsonCtx.info('Bridge setup transaction succeeded; updating Celestia indexer start block for the new bridge')
-    await this.updateInitialCelestiaHeight(paths)
     const setupDefaults = toml.parse(fs.readFileSync(paths.setupDefaultsPath, 'utf8')) as any
     this.updateGenerateBridgeInfoNetwork(paths.generateBridgeInfoPath, setupDefaults.network || 'testnet', true)
     this.materializeWithdrawalProcessorSecrets(paths)
@@ -1279,36 +1281,6 @@ export class BridgeInitCommand extends Command {
     }
   }
 
-  private updateDogeConfigCelestiaIndexerStartBlock(dogeConfigPath: string, height: number): void {
-    try {
-      const dogeConfigForUpdate = toml.parse(fs.readFileSync(dogeConfigPath, 'utf8')) as any
-      dogeConfigForUpdate.da ??= {}
-      dogeConfigForUpdate.da.celestiaIndexerStartBlock = String(height)
-      fs.writeFileSync(dogeConfigPath, toml.stringify(dogeConfigForUpdate))
-      this.jsonCtx.info(
-        `Updated ${dogeConfigPath} da.celestiaIndexerStartBlock = ${height}`
-      )
-    } catch (configError) {
-      this.jsonCtx.addWarning(
-        `Failed to update da.celestiaIndexerStartBlock in ${dogeConfigPath}: ${configError}`
-      )
-    }
-  }
-
-  private updateDogeConfigCelestiaNamespace(dataDir: string, network: string, namespace: string | undefined): void {
-    if (!namespace) {
-      return
-    }
-
-    const { path: dogeConfigPath } = this.getRequiredDogeConfig(dataDir, network)
-    const normalizedNamespace = this.normalizeCelestiaNamespaceId(namespace, '--celestia-namespace')
-    const dogeConfigForUpdate = toml.parse(fs.readFileSync(dogeConfigPath, 'utf8')) as any
-    dogeConfigForUpdate.da ??= {}
-    dogeConfigForUpdate.da.daNamespace = normalizedNamespace.replace(/^0x/i, '')
-    fs.writeFileSync(dogeConfigPath, toml.stringify(dogeConfigForUpdate))
-    this.jsonCtx.info(`Updated ${dogeConfigPath} da.daNamespace = ${dogeConfigForUpdate.da.daNamespace}`)
-  }
-
   private updateGenerateBridgeInfoNetwork(generateBridgeInfoPath: string, network: string, required: boolean): void {
     if (!fs.existsSync(generateBridgeInfoPath)) {
       if (required) {
@@ -1335,56 +1307,8 @@ export class BridgeInitCommand extends Command {
     this.jsonCtx.info(`Updated ${generateBridgeInfoPath} with network = ${network}`)
   }
 
-  private async updateInitialCelestiaHeight(paths: BridgeInitPaths): Promise<void> {
-    const setupDefaults = toml.parse(fs.readFileSync(paths.setupDefaultsPath, 'utf8')) as any
-    const network = setupDefaults.network || 'testnet'
-    const { config: dogeConfig, path: dogeConfigPath } = this.getRequiredDogeConfig(paths.dataDir, network)
-    const tendermintRpcUrl = dogeConfig?.da?.tendermintRpcUrl
-
-    if (typeof tendermintRpcUrl !== 'string' || tendermintRpcUrl.trim() === '') {
-      this.jsonCtx.error(
-        'E103_CELESTIA_RPC_MISSING',
-        `da.tendermintRpcUrl missing in ${dogeConfigPath}; cannot update da.celestiaIndexerStartBlock after bridge setup.`,
-        'CONFIGURATION',
-        true,
-        { path: dogeConfigPath }
-      )
-    }
-
-    let height: number
-    try {
-      height = await this.getCelestiaLatestHeight(tendermintRpcUrl)
-    } catch (error) {
-      this.jsonCtx.error(
-        'E400_CELESTIA_RPC_FAILED',
-        `Failed to query Celestia height from ${tendermintRpcUrl}: ${error}`,
-        'NETWORK',
-        true,
-        { rpcUrl: tendermintRpcUrl }
-      )
-    }
-
-    this.assertFileExists(
-      paths.protocolSeedPath,
-      'E103_PROTOCOL_SEED_MISSING',
-      'Run `scrollsdk setup bridge-init --step 1-prepare` first.'
-    )
-
-    const protocolSeedConfig = toml.parse(fs.readFileSync(paths.protocolSeedPath, 'utf8')) as any
-    protocolSeedConfig.chain_anchors ??= {}
-    protocolSeedConfig.chain_anchors.initial_celestia_height = height
-    fs.writeFileSync(paths.protocolSeedPath, toml.stringify(protocolSeedConfig))
-    this.jsonCtx.info(
-      `Updated ${paths.protocolSeedPath} chain_anchors.initial_celestia_height = ${height}`
-    )
-
-    this.updateDogeConfigCelestiaIndexerStartBlock(dogeConfigPath, height)
-  }
-
   private updateProtocolSeed(dataDir: string, network: string, configPath: string): string {
     const configToml = this.getRequiredTomlConfig(configPath)
-    this.updateDogeConfigCelestiaNamespace(dataDir, network, this.celestiaNamespace)
-    const { config: dogeConfig, path: dogeConfigPath } = this.getRequiredDogeConfig(dataDir, network)
     const contractsPath = path.join(process.cwd(), 'config-contracts.toml')
     const contractsConfig = this.getRequiredTomlConfig(contractsPath)
 
@@ -1396,41 +1320,14 @@ export class BridgeInitCommand extends Command {
       protocolSeedConfig = toml.parse(fs.readFileSync(protocolSeedPath, 'utf8'))
     }
 
-    const dogecoinChainId = this.resolveDogecoinChainId(network)
-    const l2ChainId = this.getRequiredNumberValue(configToml?.general, 'CHAIN_ID_L2', configPath)
-    const celestiaNamespace = this.normalizeProtocolCelestiaNamespace(
-      this.getRequiredStringValue(dogeConfig?.da, 'daNamespace', dogeConfigPath),
-      dogeConfigPath
-    )
-    protocolSeedConfig.protocol ??= {}
-    protocolSeedConfig.protocol.dogecoin_chain_id = dogecoinChainId
-    protocolSeedConfig.protocol.l2_chain_id = l2ChainId
-    protocolSeedConfig.protocol.celestia_namespace = celestiaNamespace
-    protocolSeedConfig.protocol_config_seed ??= {}
-    protocolSeedConfig.protocol_config_seed.protocol_config ??= {}
-    const protocolConfig = protocolSeedConfig.protocol_config_seed.protocol_config
-    protocolConfig.l2_chain_id = l2ChainId
-    protocolConfig.celestia_namespace = celestiaNamespace
-    protocolConfig.deposit_queue_transform ??= {}
-    protocolConfig.deposit_queue_transform.l1_scroll_messenger_address = this.getRequiredContractAddress(
-      contractsConfig,
-      'L1_SCROLL_MESSENGER_PROXY_ADDR',
-      contractsPath
-    ).toLowerCase()
-    protocolConfig.deposit_queue_transform.l2_messenger_address = this.getRequiredContractAddress(
-      contractsConfig,
-      'L2_DOGEOS_MESSENGER_PROXY_ADDR',
-      contractsPath
-    ).toLowerCase()
-    protocolConfig.deposit_queue_transform.moat_address = this.getRequiredContractAddress(
-      contractsConfig,
-      'L2_MOAT_PROXY_ADDR',
-      contractsPath
-    ).toLowerCase()
-    protocolConfig.deposit_queue_transform.message_queue_gas_limit = this.getRequiredNumberValue(
-      configToml?.rollup,
-      'MAX_L1_MESSAGE_GAS_LIMIT',
-      configPath
+    protocolSeedConfig = buildEthereumDaProtocolSeedConfig(
+      { configToml, contractsConfig, existingProtocolSeedConfig: protocolSeedConfig, network },
+      {
+        getContractAddress: (config, contractName) =>
+          this.getRequiredContractAddress(config, contractName, contractsPath),
+        getNumberValue: (source, key) => this.getRequiredNumberValue(source, key, configPath),
+        resolveDogecoinChainId: (dogecoinNetwork) => this.resolveDogecoinChainId(dogecoinNetwork),
+      }
     )
 
     fs.writeFileSync(protocolSeedPath, toml.stringify(protocolSeedConfig))
