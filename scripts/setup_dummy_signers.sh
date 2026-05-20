@@ -2,15 +2,15 @@
 #
 # setup_dummy_signers.sh
 #
-# Creates per-service App Runner IAM roles, KMS keys & aliases, grants, and
-# App Runner services for ${NETWORK_ALIAS:-devnet00}-dummy-signer-{SUFFIXES}.
+# Creates ECS Express Mode IAM roles, per-service KMS keys & aliases, grants,
+# and ECS Express services for ${NETWORK_ALIAS:-devnet00}-dummy-signer-{SUFFIXES}.
 #
 # Usage:
 #   NETWORK_ALIAS=devnet00 \                  # prefix for service names and KMS alias
 #   DOGECOIN_NETWORK=testnet \               # network to use for the signer
 #   SUFFIXES="00 01 02" \                     # list of service suffixes
 #   AWS_ACCOUNT_ID=012345678901 \             # your AWS account
-#   AWS_REGION=us-east-1 \                     # region for ECR, KMS, and App Runner
+#   AWS_REGION=us-east-1 \                     # region for ECR, KMS, and ECS
 #   IMAGE_URI=012345678901.dkr.ecr.us-east-1.amazonaws.com/dogeos-dummy-signer:latest \
 #   TSO_URL=https://tso.example.com \
 #   ./setup_dummy_signers.sh
@@ -41,44 +41,121 @@ IMAGE_URI="${IMAGE_URI:?Need to set IMAGE_URI}"
 # Initial environment vars for the container
 DUMMY_SIGNER_TSO_URL="${TSO_URL:?Need to set TSO_URL}"
 
-# App port and health path
+# App port, health path, and optional ECS Express Mode sizing
 APP_PORT="${APP_PORT:-8080}"
 HEALTH_PATH="${HEALTH_PATH:-/health}"
+ECS_CLUSTER="${ECS_CLUSTER:-default}"
+ECS_CPU="${ECS_CPU:-}"
+ECS_MEMORY="${ECS_MEMORY:-}"
+ECS_MIN_TASKS="${ECS_MIN_TASKS:-1}"
+ECS_MAX_TASKS="${ECS_MAX_TASKS:-1}"
 # Optional Rust logging settings
 RUST_LOG="${RUST_LOG:-info}"
 RUST_BACKTRACE="${RUST_BACKTRACE:-1}"
 ### ────────────────────────────────────────────────────── ###
 
-#  — ECR pull role — 
-ECR_ROLE_NAME="apprunner-dummy-signer-ecr-access-role"
-
-# 1. Create the role if missing
-if ! aws iam get-role --role-name "$ECR_ROLE_NAME" &>/dev/null; then
-  aws iam create-role \
-    --role-name "$ECR_ROLE_NAME" \
-    --assume-role-policy-document '{
-      "Version":"2012-10-17",
-      "Statement":[
-        {
-          "Effect":"Allow",
-          "Principal":{"Service":"build.apprunner.amazonaws.com"},
-          "Action":"sts:AssumeRole"
-        }
-      ]
-    }'
-  echo " • Created ECR-access build role $ECR_ROLE_NAME"
-else
-  echo " • ECR-access build role already exists: $ECR_ROLE_NAME"
+if (( ECS_MAX_TASKS < ECS_MIN_TASKS )); then
+  ECS_MAX_TASKS="$ECS_MIN_TASKS"
 fi
 
-# 2. Attach ECR read-only
+if ! aws ecs create-express-gateway-service help &>/dev/null; then
+  echo "AWS CLI does not support ECS Express Mode commands. Please upgrade AWS CLI v2."
+  exit 1
+fi
+
+update_assume_role_policy() {
+  local ROLE_NAME="$1"
+  local POLICY_FILE="$2"
+
+  aws iam update-assume-role-policy \
+    --role-name "$ROLE_NAME" \
+    --policy-document file://"$POLICY_FILE" \
+    --no-cli-pager
+}
+
+#  — ECS Express Mode shared roles — 
+ECS_EXECUTION_ROLE_NAME="ecs-dummy-signer-task-execution-role"
+ECS_INFRASTRUCTURE_ROLE_NAME="ecs-dummy-signer-express-infrastructure-role"
+ECS_TASK_ASSUME_ROLE_POLICY_FILE="/tmp/ecs-task-assume-role-policy.json"
+ECS_INFRASTRUCTURE_ASSUME_ROLE_POLICY_FILE="/tmp/ecs-infrastructure-assume-role-policy.json"
+
+cat > "$ECS_TASK_ASSUME_ROLE_POLICY_FILE" <<EOF
+{
+  "Version":"2012-10-17",
+  "Statement":[
+    {
+      "Effect":"Allow",
+      "Principal":{"Service":"ecs-tasks.amazonaws.com"},
+      "Action":"sts:AssumeRole"
+    }
+  ]
+}
+EOF
+
+cat > "$ECS_INFRASTRUCTURE_ASSUME_ROLE_POLICY_FILE" <<EOF
+{
+  "Version":"2012-10-17",
+  "Statement":[
+    {
+      "Sid":"AllowAccessInfrastructureForECSExpressServices",
+      "Effect":"Allow",
+      "Principal":{"Service":"ecs.amazonaws.com"},
+      "Action":"sts:AssumeRole"
+    }
+  ]
+}
+EOF
+
+if ! aws iam get-role --role-name "$ECS_EXECUTION_ROLE_NAME" &>/dev/null; then
+  aws iam create-role \
+    --role-name "$ECS_EXECUTION_ROLE_NAME" \
+    --assume-role-policy-document file://"$ECS_TASK_ASSUME_ROLE_POLICY_FILE"
+  echo " • Created ECS task execution role $ECS_EXECUTION_ROLE_NAME"
+else
+  echo " • ECS task execution role already exists: $ECS_EXECUTION_ROLE_NAME"
+  update_assume_role_policy "$ECS_EXECUTION_ROLE_NAME" "$ECS_TASK_ASSUME_ROLE_POLICY_FILE"
+  echo " • Updated trust policy for $ECS_EXECUTION_ROLE_NAME"
+fi
+
 aws iam attach-role-policy \
-  --role-name "$ECR_ROLE_NAME" \
-  --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly \
+  --role-name "$ECS_EXECUTION_ROLE_NAME" \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy \
   --no-cli-pager
 
-ECR_ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ECR_ROLE_NAME}"
-echo " • ECR-access role ARN is $ECR_ROLE_ARN"
+if ! aws iam get-role --role-name "$ECS_INFRASTRUCTURE_ROLE_NAME" &>/dev/null; then
+  aws iam create-role \
+    --role-name "$ECS_INFRASTRUCTURE_ROLE_NAME" \
+    --assume-role-policy-document file://"$ECS_INFRASTRUCTURE_ASSUME_ROLE_POLICY_FILE"
+  echo " • Created ECS Express infrastructure role $ECS_INFRASTRUCTURE_ROLE_NAME"
+else
+  echo " • ECS Express infrastructure role already exists: $ECS_INFRASTRUCTURE_ROLE_NAME"
+  update_assume_role_policy "$ECS_INFRASTRUCTURE_ROLE_NAME" "$ECS_INFRASTRUCTURE_ASSUME_ROLE_POLICY_FILE"
+  echo " • Updated trust policy for $ECS_INFRASTRUCTURE_ROLE_NAME"
+fi
+
+aws iam attach-role-policy \
+  --role-name "$ECS_INFRASTRUCTURE_ROLE_NAME" \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRoleforExpressGatewayServices \
+  --no-cli-pager
+
+ECS_EXECUTION_ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ECS_EXECUTION_ROLE_NAME}"
+ECS_INFRASTRUCTURE_ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ECS_INFRASTRUCTURE_ROLE_NAME}"
+echo " • ECS task execution role ARN is $ECS_EXECUTION_ROLE_ARN"
+echo " • ECS Express infrastructure role ARN is $ECS_INFRASTRUCTURE_ROLE_ARN"
+
+if ! aws ecs describe-clusters \
+  --clusters "$ECS_CLUSTER" \
+  --region "$AWS_REGION" \
+  --query "clusters[?status=='ACTIVE'].clusterName" \
+  --output text | grep -q "^${ECS_CLUSTER}$"; then
+  aws ecs create-cluster \
+    --cluster-name "$ECS_CLUSTER" \
+    --region "$AWS_REGION" \
+    --no-cli-pager >/dev/null
+  echo " • Created ECS cluster $ECS_CLUSTER"
+else
+  echo " • ECS cluster already exists: $ECS_CLUSTER"
+fi
 
 #############################################
 # Step A: Per-service IAM roles & policies  #
@@ -88,40 +165,36 @@ for SUFFIX in "${SUFFIXES[@]}"; do
   SERVICE="${NETWORK_ALIAS}-dummy-signer-${SUFFIX}"
   ROLE_NAME="${SERVICE}-role"
   ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ROLE_NAME}"
+  SERVICE_TASK_ASSUME_ROLE_POLICY_FILE="/tmp/${SERVICE}-task-assume-role-policy.json"
 
   echo "🔧 [${SERVICE}] Ensuring IAM role exists..."
+
+  cat > "$SERVICE_TASK_ASSUME_ROLE_POLICY_FILE" <<EOF
+{
+  "Version":"2012-10-17",
+  "Statement":[
+    {
+      "Effect":"Allow",
+      "Principal":{"Service":"ecs-tasks.amazonaws.com"},
+      "Action":"sts:AssumeRole"
+    }
+  ]
+}
+EOF
 
   # 1. Create the IAM role if missing
   if ! aws iam get-role --role-name "${ROLE_NAME}" &>/dev/null; then
     aws iam create-role \
       --role-name "${ROLE_NAME}" \
-      --assume-role-policy-document '{
-        "Version":"2012-10-17",
-        "Statement":[
-          {
-            "Effect":"Allow",
-            "Principal":{"Service":"tasks.apprunner.amazonaws.com"},
-            "Action":"sts:AssumeRole"
-          }
-        ]
-      }'
+      --assume-role-policy-document file://"$SERVICE_TASK_ASSUME_ROLE_POLICY_FILE"
     echo "  • Created role ${ROLE_NAME}"
   else
     echo "  • Role already exists: ${ROLE_NAME}"
+    update_assume_role_policy "$ROLE_NAME" "$SERVICE_TASK_ASSUME_ROLE_POLICY_FILE"
+    echo "  • Updated trust policy for ${ROLE_NAME}"
   fi
 
-  # 2. Attach managed policies for ECR pull & CloudWatch Logs
-  aws iam attach-role-policy \
-    --role-name "${ROLE_NAME}" \
-    --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly \
-    --no-cli-pager || true
-
-  aws iam attach-role-policy \
-    --role-name "${ROLE_NAME}" \
-    --policy-arn arn:aws:iam::aws:policy/CloudWatchLogsFullAccess \
-    --no-cli-pager || true
-
-  echo "  • Attached ECR & CloudWatch policies to ${ROLE_NAME}"
+  echo "  • ${ROLE_NAME} is ready for ECS tasks"
 done
 
 
@@ -212,7 +285,7 @@ EOF
 done
 
 #############################################
-# Step C: Create or update App Runner services #
+# Step C: Create or update ECS Express services #
 #############################################
 
 for SUFFIX in "${SUFFIXES[@]}"; do
@@ -220,54 +293,84 @@ for SUFFIX in "${SUFFIXES[@]}"; do
   ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${SERVICE}-role"
   ALIAS_NAME="alias/${SERVICE}-key"
 
-  echo "🚀 [$SERVICE] Creating/updating App Runner…"
+  echo "🚀 [$SERVICE] Creating/updating ECS Express Mode service…"
 
-  SERVICE_ARN=$(aws apprunner list-services \
+  SERVICE_ARN=$(aws ecs list-services \
+    --cluster "$ECS_CLUSTER" \
     --region "$AWS_REGION" \
-    --query "ServiceSummaryList[?ServiceName=='$SERVICE'].ServiceArn" \
-    --output text)
+    --query "serviceArns[?ends_with(@, '/${SERVICE}')]" \
+    --output text || true)
 
-  # Write the JSON for source-configuration
-  SRC_CFG_FILE="/tmp/${SERVICE}-source-config.json"
-  cat > "$SRC_CFG_FILE" <<EOF
+  PRIMARY_CONTAINER_FILE="/tmp/${SERVICE}-primary-container.json"
+  SCALING_TARGET_FILE="/tmp/${SERVICE}-scaling-target.json"
+
+  cat > "$PRIMARY_CONTAINER_FILE" <<EOF
 {
-  "ImageRepository": {
-    "ImageIdentifier": "${IMAGE_URI}",
-    "ImageRepositoryType": "ECR",
-    "ImageConfiguration": {
-      "Port": "${APP_PORT}",
-      "RuntimeEnvironmentVariables": {
-        "DUMMY_SIGNER_TSO_URL": "${DUMMY_SIGNER_TSO_URL}",
-        "DUMMY_SIGNER_KMS_KEY_ID": "${ALIAS_NAME}",
-        "DUMMY_SIGNER_AWS_REGION": "${AWS_REGION}",
-        "DUMMY_SIGNER_NETWORK": "${DOGECOIN_NETWORK}",
-        "RUST_LOG": "${RUST_LOG}",
-        "RUST_BACKTRACE": "${RUST_BACKTRACE}"
-      }
-    }
-  },
-  "AuthenticationConfiguration": {
-    "AccessRoleArn": "${ECR_ROLE_ARN}"
-  },
-  "AutoDeploymentsEnabled": true
+  "image": "${IMAGE_URI}",
+  "containerPort": ${APP_PORT},
+  "command": [
+    "--port",
+    "${APP_PORT}",
+    "--tso-url",
+    "${DUMMY_SIGNER_TSO_URL}",
+    "--aws-region",
+    "${AWS_REGION}",
+    "--network",
+    "${DOGECOIN_NETWORK}",
+    "--kms-key-id",
+    "${ALIAS_NAME}"
+  ],
+  "environment": [
+    { "name": "DUMMY_SIGNER_TSO_URL", "value": "${DUMMY_SIGNER_TSO_URL}" },
+    { "name": "DUMMY_SIGNER_KMS_KEY_ID", "value": "${ALIAS_NAME}" },
+    { "name": "DUMMY_SIGNER_AWS_REGION", "value": "${AWS_REGION}" },
+    { "name": "DUMMY_SIGNER_NETWORK", "value": "${DOGECOIN_NETWORK}" },
+    { "name": "RUST_LOG", "value": "${RUST_LOG}" },
+    { "name": "RUST_BACKTRACE", "value": "${RUST_BACKTRACE}" }
+  ]
 }
 EOF
 
+  cat > "$SCALING_TARGET_FILE" <<EOF
+{
+  "minTaskCount": ${ECS_MIN_TASKS},
+  "maxTaskCount": ${ECS_MAX_TASKS}
+}
+EOF
+
+  CPU_MEMORY_ARGS=()
+  if [ -n "$ECS_CPU" ]; then
+    CPU_MEMORY_ARGS+=(--cpu "$ECS_CPU")
+  fi
+
+  if [ -n "$ECS_MEMORY" ]; then
+    CPU_MEMORY_ARGS+=(--memory "$ECS_MEMORY")
+  fi
+
   if [ -z "$SERVICE_ARN" ]; then
-	aws apprunner create-service \
-	--region "$AWS_REGION" \
-	--service-name "$SERVICE" \
-	--source-configuration file://"/tmp/${SERVICE}-source-config.json" \
-	--instance-configuration InstanceRoleArn="$ROLE_ARN" \
-	--health-check-configuration Protocol=HTTP,Path="$HEALTH_PATH",Interval=10,Timeout=5,HealthyThreshold=1,UnhealthyThreshold=3
+    aws ecs create-express-gateway-service \
+      --region "$AWS_REGION" \
+      --cluster "$ECS_CLUSTER" \
+      --service-name "$SERVICE" \
+      --execution-role-arn "$ECS_EXECUTION_ROLE_ARN" \
+      --infrastructure-role-arn "$ECS_INFRASTRUCTURE_ROLE_ARN" \
+      --task-role-arn "$ROLE_ARN" \
+      --primary-container file://"$PRIMARY_CONTAINER_FILE" \
+      "${CPU_MEMORY_ARGS[@]}" \
+      --health-check-path "$HEALTH_PATH" \
+      --scaling-target file://"$SCALING_TARGET_FILE"
 
     echo "  • Created $SERVICE"
   else
-	aws apprunner update-service \
-	--region "$AWS_REGION" \
-	--service-arn "$SERVICE_ARN" \
-	--source-configuration file://"/tmp/${SERVICE}-source-config.json" \
-	--instance-configuration InstanceRoleArn="$ROLE_ARN"
+    aws ecs update-express-gateway-service \
+      --region "$AWS_REGION" \
+      --service-arn "$SERVICE_ARN" \
+      --execution-role-arn "$ECS_EXECUTION_ROLE_ARN" \
+      --task-role-arn "$ROLE_ARN" \
+      --primary-container file://"$PRIMARY_CONTAINER_FILE" \
+      "${CPU_MEMORY_ARGS[@]}" \
+      --health-check-path "$HEALTH_PATH" \
+      --scaling-target file://"$SCALING_TARGET_FILE"
 
     echo "  • Updated $SERVICE"
   fi

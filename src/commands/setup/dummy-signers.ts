@@ -93,8 +93,8 @@ export class DummySignersManager {
             value: 'local'
           },
           {
-            description: 'Deploy signers to AWS App Runner with KMS key management',
-            name: 'AWS (App Runner + KMS)',
+            description: 'Deploy signers to AWS ECS Express Mode with KMS key management',
+            name: 'AWS (ECS Express + KMS)',
             value: 'aws'
           }
         ],
@@ -361,45 +361,63 @@ export class DummySignersManager {
 
   private async getAwsServiceUrls(networkAlias: string, awsRegion: string, suffixesStr: string): Promise<void> {
     try {
-      this.log('Fetching AWS App Runner service URLs...');
+      this.log('Fetching AWS ECS Express Mode service URLs...');
 
       const suffixes = suffixesStr.split(' ').filter(s => s.trim());
       const urls: string[] = [];
+      const ecsCluster = process.env.ECS_CLUSTER || 'default';
 
       for (const suffix of suffixes) {
         const serviceName = `${networkAlias}-dummy-signer-${suffix}`;
+        const maxAttempts = 60;
 
-        try {
-          // Get the service ARN first
-          const serviceListOutput = execFileSync('aws', [
-            'apprunner', 'list-services',
-            '--region', awsRegion,
-            '--query', `ServiceSummaryList[?ServiceName=='${serviceName}'].ServiceArn`,
-            '--output', 'text'
-          ], { encoding: 'utf8' }).trim();
-
-          if (serviceListOutput) {
-            // Get the service URL using the ARN
-            const serviceUrlOutput = execFileSync('aws', [
-              'apprunner', 'describe-service',
-              '--service-arn', serviceListOutput,
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          try {
+            // Get the service ARN first
+            const serviceListOutput = execFileSync('aws', [
+              'ecs', 'list-services',
+              '--cluster', ecsCluster,
               '--region', awsRegion,
-              '--query', 'Service.ServiceUrl',
+              '--query', `serviceArns[?ends_with(@, '/${serviceName}')]`,
               '--output', 'text'
             ], { encoding: 'utf8' }).trim();
 
-            if (serviceUrlOutput && serviceUrlOutput !== 'None') {
-              const fullUrl = serviceUrlOutput.startsWith('https://') ? serviceUrlOutput : `https://${serviceUrlOutput}`;
-              urls.push(fullUrl);
-              this.log(`✅ Got service URL for ${serviceName}: ${fullUrl}`);
+            if (serviceListOutput) {
+              // Get the service URL using the ARN
+              const serviceUrlOutput = execFileSync('aws', [
+                'ecs', 'describe-express-gateway-service',
+                '--service-arn', serviceListOutput,
+                '--region', awsRegion,
+                '--query', 'service.activeConfigurations[-1].ingressPaths[?accessType==`PUBLIC`].endpoint | [0]',
+                '--output', 'text'
+              ], { encoding: 'utf8' }).trim();
+
+              if (serviceUrlOutput && serviceUrlOutput !== 'None') {
+                const fullUrl = serviceUrlOutput.startsWith('https://') ? serviceUrlOutput : `https://${serviceUrlOutput}`;
+                urls.push(fullUrl);
+                this.log(`✅ Got service URL for ${serviceName}: ${fullUrl}`);
+                break;
+              }
+            }
+
+            if (attempt < maxAttempts) {
+              this.log(`Waiting for ECS Express endpoint for ${serviceName} (${attempt}/${maxAttempts})...`);
+              await new Promise(resolve => {
+                setTimeout(resolve, 10_000);
+              });
             } else {
               this.warn(`Service URL not found for ${serviceName}`);
             }
-          } else {
-            this.warn(`Service ${serviceName} not found`);
+          } catch (error) {
+            if (attempt < maxAttempts) {
+              this.warn(`Failed to get service URL for ${serviceName}: ${error}`);
+              await new Promise(resolve => {
+                setTimeout(resolve, 10_000);
+              });
+            } else {
+              this.warn(`Failed to get service URL for ${serviceName}: ${error}`);
+            }
           }
-        } catch (error) {
-          this.warn(`Failed to get service URL for ${serviceName}: ${error}`);
         }
       }
 
@@ -817,7 +835,7 @@ export class DummySignersManager {
         default: this.dogeConfig.awsSigner?.suffixes || '00',
         message: `Enter suffixes for dummy signer instances (space-separated)
   Each suffix creates a complete AWS service set:
-    • App Runner service: ${NETWORK_ALIAS}-dummy-signer-{suffix}
+    • ECS Express Mode service: ${NETWORK_ALIAS}-dummy-signer-{suffix}
     • KMS key with alias: alias/${NETWORK_ALIAS}-dummy-signer-{suffix}-key
     • IAM role: ${NETWORK_ALIAS}-dummy-signer-{suffix}-role
 
