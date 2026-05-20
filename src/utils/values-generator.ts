@@ -153,7 +153,7 @@ const ETHEREUM_DA_DEFAULTS = {
   devnet: {
     chainId: 32_382,
     minFinality: 'safe',
-    submitterRpcUrl: 'http://eth-devnet-geth:8545',
+    submitterRpcUrl: 'http://l1-devnet:8545',
   },
   mainnet: {
     chainId: 1,
@@ -674,7 +674,6 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
           DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_STATE_ROOT: batch.genesisStateRoot || ZERO_HASH,
           DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_BLOCKS_PER_CHUNK: String(batch.maxBlocksPerChunk ?? 128),
           DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_CHUNKS_PER_BATCH: String(batch.maxChunksPerBatch ?? 1),
-          DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: String(batch.maxL2GasPerChunk ?? 6_000_000),
           DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_BATCH_BYTES_SIZE: String(batch.maxUncompressedBatchBytesSize ?? 131_072),
           DOGEOS_ETH_DA_SUBMITTER_BATCH__MIN_CODEC_VERSION: String(batch.minCodecVersion ?? 10),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMATION_DEPTH: String(ethereumDa.confirmationDepth ?? 1),

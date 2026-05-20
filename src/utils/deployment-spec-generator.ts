@@ -19,10 +19,10 @@ import type {
 
 const ETHEREUM_DA_DEFAULTS = {
   devnet: {
-    beaconRpcUrl: 'http://eth-devnet-beacon:5052',
+    beaconRpcUrl: 'http://l1-devnet-lighthouse:5052',
     chainId: 32_382,
     minFinality: 'safe',
-    submitterRpcUrl: 'http://eth-devnet-geth:8545',
+    submitterRpcUrl: 'http://l1-devnet:8545',
   },
   mainnet: {
     beaconRpcUrl: 'https://eth-beacon-chain.drpc.org/rest',

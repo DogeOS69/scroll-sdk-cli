@@ -85,8 +85,8 @@ dogecoin:
 ethereumDa:
   chain: devnet
   chainId: 32382
-  l1RpcUrl: "http://eth-devnet-geth:8545"
-  beaconRpcUrl: "http://eth-devnet-beacon:5052"
+  l1RpcUrl: "http://l1-devnet:8545"
+  beaconRpcUrl: "http://l1-devnet-lighthouse:5052"
   l2RpcUrl: "http://l2-rpc:8545"
   confirmationDepth: 1
   finalizationDepth: 1

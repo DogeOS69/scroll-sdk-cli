@@ -17,7 +17,7 @@ import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { resolveEnvValue } from '../../utils/non-interactive.js'
 const { Networks, PrivateKey } = bitcore
-const defaultTag = '0.2.0-rc.7'
+const defaultTag = 'newda'
 
 export interface NonInteractiveOptions {
   awsAccountId?: string
