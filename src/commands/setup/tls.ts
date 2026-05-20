@@ -167,7 +167,6 @@ export default class SetupTls extends Command {
         'l1-devnet',
         'scroll-monitor',
         'tso-service',
-        'celestia-node',
         'dogecoin',
         'blockbook'
       ]
@@ -304,7 +303,7 @@ spec:
     // TODO: Implement loading of config.yaml
   }
 
-  // Handle celestia and dogecoin TLS processing
+  // Handle charts that use the standard ingress TLS shape.
   private processStandardTls(yamlContent: any, chart: string, issuer: string): boolean {
     const {ingress} = yamlContent;
     let updated = false;
@@ -459,13 +458,6 @@ spec:
         for (const item of items) {
           if (blockscoutStack[item]?.ingress?.tls) {
             blockscoutStack[item].ingress.tls.enabled = true;
-            updated = true;
-          }
-        }
-      } else if (chart === "celestia-node") {
-        if (yamlContent.ingress) {
-          const celestiaUpdated = this.processStandardTls(yamlContent, chart, issuer);
-          if (celestiaUpdated) {
             updated = true;
           }
         }

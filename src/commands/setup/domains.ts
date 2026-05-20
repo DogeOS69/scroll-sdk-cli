@@ -6,6 +6,7 @@ import chalk from 'chalk'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import { L1_INTERFACE_RPC_ENDPOINT } from '../../config/constants.js'
 import { writeConfigs } from '../../utils/config-writer.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {
@@ -16,6 +17,34 @@ import {
   resolveOrSelect,
   validateAndExit,
 } from '../../utils/non-interactive.js'
+
+type EthereumDaChain = 'devnet' | 'mainnet' | 'sepolia'
+
+const ETHEREUM_DA_DEFAULTS: Record<EthereumDaChain, {
+  beaconRpcUrl: string
+  chainId: string
+  minFinality: 'finalized' | 'safe'
+  submitterRpcUrl: string
+}> = {
+  devnet: {
+    beaconRpcUrl: 'http://eth-devnet-beacon:5052',
+    chainId: '32382',
+    minFinality: 'safe',
+    submitterRpcUrl: 'http://eth-devnet-geth:8545',
+  },
+  mainnet: {
+    beaconRpcUrl: 'https://eth-beacon-chain.drpc.org/rest',
+    chainId: '1',
+    minFinality: 'finalized',
+    submitterRpcUrl: 'https://eth.drpc.org',
+  },
+  sepolia: {
+    beaconRpcUrl: 'https://eth-beacon-chain-sepolia.drpc.org/rest',
+    chainId: '11155111',
+    minFinality: 'safe',
+    submitterRpcUrl: 'https://sepolia.drpc.org',
+  },
+}
 
 export default class SetupDomains extends Command {
   static override description = 'Set up domain configurations for external services'
@@ -112,6 +141,12 @@ export default class SetupDomains extends Command {
       'dogecoin-testnet': '111111',
     }
 
+    const defaultEthereumDaChains: Record<L1Network, EthereumDaChain> = {
+      'dogecoin-mainnet': 'mainnet',
+      'dogecoin-regtest': 'devnet',
+      'dogecoin-testnet': 'sepolia',
+    }
+
     const generalConfig: Record<string, string> = {}
     let domainConfig: Record<string, string> = {}
     const frontendConfig: Record<string, string> = {}
@@ -158,19 +193,12 @@ export default class SetupDomains extends Command {
     logKeyValue('L1 Chain ID', generalConfig.CHAIN_ID_L1)
 
     if (usesDogeos) {
-      generalConfig.DA_PUBLISHER_ENDPOINT = 'http://da-publisher:8545'
-      generalConfig.L1_RPC_ENDPOINT = 'http://l1-interface:8545'
+      generalConfig.L1_RPC_ENDPOINT = L1_INTERFACE_RPC_ENDPOINT
       generalConfig.L1_RPC_ENDPOINT_WEBSOCKET = ''
-      generalConfig.BEACON_RPC_ENDPOINT = 'http://l1-interface:5052'
     }
 
-    if (usesDogeos) {
-      logSuccess(`Updated [general] DA_PUBLISHER_ENDPOINT = "${generalConfig.DA_PUBLISHER_ENDPOINT}"`)
-      logSuccess(`Updated [general] BEACON_RPC_ENDPOINT = "${generalConfig.BEACON_RPC_ENDPOINT}"`)
-    }
-
-    logSuccess(`Updated [general] L1_RPC_ENDPOINT = "${generalConfig.L1_RPC_ENDPOINT}"`)
-    logSuccess(`Updated [general] L1_RPC_ENDPOINT_WEBSOCKET = "${generalConfig.L1_RPC_ENDPOINT_WEBSOCKET}"`)
+    logSuccess(`Using internal l1-interface JSON-RPC endpoint [general].L1_RPC_ENDPOINT = "${generalConfig.L1_RPC_ENDPOINT}"`)
+    logSuccess(`Using no internal L1 WebSocket endpoint [general].L1_RPC_ENDPOINT_WEBSOCKET = "${generalConfig.L1_RPC_ENDPOINT_WEBSOCKET}"`)
 
     const { domainConfig: sharedDomainConfig, ingressConfig } = await this.setupSharedConfigs(existingConfig, usesAnvil, niCtx)
 
@@ -198,7 +226,7 @@ export default class SetupDomains extends Command {
       niCtx,
       () => confirm({
         default: false,
-        message: `Do you want to use another RPC gateway for websocket host(${ingressConfig.RPC_GATEWAY_WS_HOST})`,
+        message: `Use a separate public WebSocket RPC gateway host for [ingress].RPC_GATEWAY_WS_HOST? Default: ${ingressConfig.RPC_GATEWAY_WS_HOST}`,
       }),
       existingConfig.ingress?.RPC_GATEWAY_WS_HOST !== `ws.${existingConfig.ingress?.RPC_GATEWAY_HOST}`,
       false
@@ -208,7 +236,7 @@ export default class SetupDomains extends Command {
       const wsHost = await resolveOrPrompt(
         niCtx,
         () => input({
-          message: 'Enter the WebSocket RPC gateway URL (RPC_GATEWAY_WS_HOST) for the SDK backend:',
+          message: 'Enter [ingress].RPC_GATEWAY_WS_HOST (host only, for example ws.rpc.example.com):',
         }),
         existingConfig.ingress?.RPC_GATEWAY_WS_HOST,
         {
@@ -228,12 +256,12 @@ export default class SetupDomains extends Command {
       niCtx,
       () => input({
         default: existingConfig.frontend?.ETH_SYMBOL || 'DOGE',
-        message: 'Enter the L1 Chain Symbol:',
+        message: 'Enter the native token symbol displayed by the frontend ([frontend].ETH_SYMBOL):',
       }),
       existingConfig.frontend?.ETH_SYMBOL || 'DOGE',
       {
         configPath: '[frontend].ETH_SYMBOL',
-        description: 'L1 chain symbol (e.g., DOGE)',
+        description: 'Native token symbol displayed by the frontend',
         field: 'ETH_SYMBOL',
       },
       false
@@ -244,7 +272,7 @@ export default class SetupDomains extends Command {
       niCtx,
       () => input({
         default: existingConfig.frontend?.CONNECT_WALLET_PROJECT_ID || "14efbaafcf5232a47d93a68229b71028",
-        message: 'Enter wallet project ID:',
+        message: 'Enter the WalletConnect Project ID for the frontend ([frontend].CONNECT_WALLET_PROJECT_ID):',
       }),
       existingConfig.frontend?.CONNECT_WALLET_PROJECT_ID || "14efbaafcf5232a47d93a68229b71028",
       {
@@ -262,12 +290,12 @@ export default class SetupDomains extends Command {
       niCtx,
       () => input({
         default: existingConfig.frontend?.DOGE_EXTERNAL_RPC_URI_L1 || defaultDogeExternalUrl,
-        message: 'Enter the L1 Public RPC URL:',
+        message: 'Enter the public Dogecoin L1 API URL used by the frontend ([frontend].DOGE_EXTERNAL_RPC_URI_L1):',
       }),
       existingConfig.frontend?.DOGE_EXTERNAL_RPC_URI_L1 || defaultDogeExternalUrl,
       {
         configPath: '[frontend].DOGE_EXTERNAL_RPC_URI_L1',
-        description: 'L1 public RPC URL',
+        description: 'Public Dogecoin L1 API URL used by frontend wallet/deposit flows',
         field: 'DOGE_EXTERNAL_RPC_URI_L1',
       },
       false
@@ -278,35 +306,117 @@ export default class SetupDomains extends Command {
       niCtx,
       () => input({
         default: existingConfig.frontend?.DOGE_EXTERNAL_EXPLORER_URI_L1 || defaultDogeExternalUrl,
-        message: 'Enter the L1 Explorer URL:',
+        message: 'Enter the public Dogecoin L1 explorer base URL for links ([frontend].DOGE_EXTERNAL_EXPLORER_URI_L1):',
       }),
       existingConfig.frontend?.DOGE_EXTERNAL_EXPLORER_URI_L1 || defaultDogeExternalUrl,
       {
         configPath: '[frontend].DOGE_EXTERNAL_EXPLORER_URI_L1',
-        description: 'L1 explorer URL',
+        description: 'Public Dogecoin L1 explorer base URL for transaction/address links',
         field: 'DOGE_EXTERNAL_EXPLORER_URI_L1',
       },
       false
     )
     frontendConfig.DOGE_EXTERNAL_EXPLORER_URI_L1 = dogeExplorerL1 || defaultDogeExternalUrl
 
+    const existingEthereumDa = existingConfig.ethereumDa as Record<string, string> | undefined
+    const existingEthereumDaChain = existingEthereumDa?.chain as EthereumDaChain | undefined
+    const defaultEthereumDaChain = existingEthereumDaChain || defaultEthereumDaChains[l1Network]
+    const ethereumDaChain = await resolveOrSelect(
+      niCtx,
+      () => select({
+        choices: [
+          { name: 'Sepolia testnet', value: 'sepolia' },
+          { name: 'Ethereum mainnet', value: 'mainnet' },
+          { name: 'Devnet / private Ethereum chain', value: 'devnet' },
+        ],
+        default: defaultEthereumDaChain,
+        message: 'Select the Ethereum chain used as the DA layer ([ethereumDa].chain):',
+      }),
+      existingEthereumDa?.chain || defaultEthereumDaChain,
+      ['mainnet', 'sepolia', 'devnet'],
+      {
+        configPath: '[ethereumDa].chain',
+        description: 'Ethereum DA chain',
+        field: 'chain',
+      },
+    ) || defaultEthereumDaChain
+    const ethereumDaDefaults = ETHEREUM_DA_DEFAULTS[ethereumDaChain]
+
+    const ethereumDaSubmitterRpcUrl = await resolveOrPrompt(
+      niCtx,
+      () => input({
+        default: existingEthereumDa?.submitterRpcUrl || ethereumDaDefaults.submitterRpcUrl,
+        message: 'Enter the real Ethereum execution JSON-RPC endpoint used by eth-da-submitter ([ethereumDa].submitterRpcUrl):',
+      }),
+      existingEthereumDa?.submitterRpcUrl || ethereumDaDefaults.submitterRpcUrl,
+      {
+        configPath: '[ethereumDa].submitterRpcUrl',
+        description: 'Real Ethereum execution JSON-RPC endpoint used by eth-da-submitter',
+        field: 'submitterRpcUrl',
+      },
+    ) || ethereumDaDefaults.submitterRpcUrl
+
+    const ethereumDaBeaconRpcUrl = await resolveOrPrompt(
+      niCtx,
+      () => input({
+        default: existingEthereumDa?.beaconRpcUrl || ethereumDaDefaults.beaconRpcUrl,
+        message: 'Enter the real Ethereum beacon API endpoint used as the DA data source ([ethereumDa].beaconRpcUrl):',
+      }),
+      existingEthereumDa?.beaconRpcUrl || ethereumDaDefaults.beaconRpcUrl,
+      {
+        configPath: '[ethereumDa].beaconRpcUrl',
+        description: 'Real Ethereum beacon API endpoint used as the DA data source',
+        field: 'beaconRpcUrl',
+      },
+    ) || ethereumDaDefaults.beaconRpcUrl
+
+    const ethereumDaChainId = await resolveOrPrompt(
+      niCtx,
+      () => input({
+        default: existingEthereumDa?.chainId || ethereumDaDefaults.chainId,
+        message: 'Enter the real Ethereum DA execution chain ID ([ethereumDa].chainId):',
+      }),
+      existingEthereumDa?.chainId || ethereumDaDefaults.chainId,
+      {
+        configPath: '[ethereumDa].chainId',
+        description: 'Real Ethereum DA execution chain ID. This is separate from [general].CHAIN_ID_L1 used by l1-interface/Dogecoin.',
+        field: 'chainId',
+      },
+    ) || ethereumDaDefaults.chainId
+
+    const ethereumDaConfig = {
+      beaconRpcUrl: ethereumDaBeaconRpcUrl,
+      chain: ethereumDaChain,
+      chainId: ethereumDaChainId,
+      minFinality: existingEthereumDa?.minFinality || ethereumDaDefaults.minFinality,
+      submitterRpcUrl: ethereumDaSubmitterRpcUrl,
+    }
+
+    logSection('New Ethereum DA configurations:')
+    logKeyValue('chain', ethereumDaConfig.chain)
+    logKeyValue('chainId', ethereumDaConfig.chainId)
+    logKeyValue('submitterRpcUrl', ethereumDaConfig.submitterRpcUrl)
+    logKeyValue('beaconRpcUrl', ethereumDaConfig.beaconRpcUrl)
+    logKeyValue('minFinality', ethereumDaConfig.minFinality)
+
     // Final confirmation - in non-interactive mode, always proceed
     const confirmUpdate = await resolveConfirm(
       niCtx,
       () => confirm({
-        message: 'Do you want to update the config.toml file with these new configurations?',
+        message: 'Write these domain/frontend/internal endpoint/Ethereum DA settings to config.toml and sync config.public.toml?',
       }),
       true, // In non-interactive, we always want to update
       true
     )
 
     if (confirmUpdate) {
-      await this.updateConfigFile(domainConfig, ingressConfig, generalConfig, frontendConfig, flags.json)
+      await this.updateConfigFile(domainConfig, ingressConfig, generalConfig, frontendConfig, ethereumDaConfig, flags.json)
 
       // Output JSON response on success
       if (flags.json) {
         jsonCtx.success({
           domain: domainConfig,
+          ethereumDa: ethereumDaConfig,
           frontend: frontendConfig,
           general: generalConfig,
           ingress: ingressConfig,
@@ -316,6 +426,58 @@ export default class SetupDomains extends Command {
     } else {
       jsonCtx.log(chalk.yellow('Configuration update cancelled.'))
     }
+  }
+
+  private collapseRepeatedBlankLines(content: string): string {
+    return content.replaceAll(/\n{3,}/g, '\n\n')
+  }
+
+  private escapeRegExp(value: string): string {
+    return value.replaceAll(/[$()*+.?[\\\]^{|}]/g, '\\$&')
+  }
+
+  private findInlineCommentIndex(line: string): number {
+    let quote: "'" | '"' | undefined
+    let escaping = false
+    let index = 0
+
+    for (const char of line) {
+      if (escaping) {
+        escaping = false
+        index++
+        continue
+      }
+
+      if (quote === '"' && char === '\\') {
+        escaping = true
+        index++
+        continue
+      }
+
+      if ((char === '"' || char === "'") && !quote) {
+        quote = char
+        index++
+        continue
+      }
+
+      if (char === quote) {
+        quote = undefined
+        index++
+        continue
+      }
+
+      if (char === '#' && !quote) {
+        return index
+      }
+
+      index++
+    }
+
+    return -1
+  }
+
+  private formatTomlAssignment(key: string, value: string): string {
+    return toml.stringify({ [key]: value }).trim()
   }
 
   private async getExistingConfig(): Promise<any> {
@@ -329,50 +491,13 @@ export default class SetupDomains extends Command {
     return toml.parse(configContent) as any
   }
 
+  private replaceTomlAssignmentLine(line: string, key: string, value: string): string {
+    const indentation = line.match(/^\s*/)?.[0] || ''
+    const assignment = this.formatTomlAssignment(key, value)
+    const commentIndex = this.findInlineCommentIndex(line)
+    const comment = commentIndex >= 0 ? line.slice(commentIndex).trimEnd() : ''
 
-  private mergeTomlContent(original: string, updated: string): string {
-    const originalLines = original.split('\n')
-    const updatedLines = updated.split('\n')
-    const mergedLines: string[] = []
-
-    let originalIndex = 0
-    let updatedIndex = 0
-
-    while (originalIndex < originalLines.length && updatedIndex < updatedLines.length) {
-      const originalLine = originalLines[originalIndex]
-      const updatedLine = updatedLines[updatedIndex]
-
-      if (originalLine.trim().startsWith('#') || originalLine.trim() === '') {
-        // Preserve comments and empty lines from the original file
-        mergedLines.push(originalLine)
-        originalIndex++
-      } else if (originalLine === updatedLine) {
-        // Lines are identical, keep either one
-        mergedLines.push(originalLine)
-        originalIndex++
-        updatedIndex++
-      } else {
-        // Lines differ, use the updated line
-        mergedLines.push(updatedLine)
-        updatedIndex++
-        // Skip original lines until we find a match or reach a new section
-        while (
-          originalIndex < originalLines.length &&
-          !originalLines[originalIndex].includes('=') &&
-          !originalLines[originalIndex].trim().startsWith('[')
-        ) {
-          originalIndex++
-        }
-      }
-    }
-
-    // Add any remaining lines from the updated content
-    while (updatedIndex < updatedLines.length) {
-      mergedLines.push(updatedLines[updatedIndex])
-      updatedIndex++
-    }
-
-    return mergedLines.join('\n')
+    return `${indentation}${assignment}${comment ? ` ${comment}` : ''}`
   }
 
   private async setupSharedConfigs(
@@ -457,7 +582,6 @@ export default class SetupDomains extends Command {
         RPC_GATEWAY_HOST: `rpc.${urlEnding}`,
         ...(usesAnvil ? { L1_DEVNET_HOST: `l1-devnet.${urlEnding}`, L1_EXPLORER_HOST: `l1-explorer.${urlEnding}` } : {}),
         BLOCKBOOK_HOST: `blockbook.${urlEnding}`,
-        CELESTIA_HOST: `celestia.${urlEnding}`,
         DOGECOIN_HOST: `dogecoin.${urlEnding}`,
         TSO_HOST: `tso.${urlEnding}`,
       }
@@ -523,11 +647,6 @@ export default class SetupDomains extends Command {
           'BRIDGE_HISTORY_API_HOST',
           'bridge-history-api.scrollsdk',
           'Bridge history API host'
-        ),
-        CELESTIA_HOST: await resolveIngressHost(
-          'CELESTIA_HOST',
-          'celestia.scrollsdk',
-          'Celestia node host'
         ),
         COORDINATOR_API_HOST: await resolveIngressHost(
           'COORDINATOR_API_HOST',
@@ -657,6 +776,7 @@ export default class SetupDomains extends Command {
     ingressConfig: Record<string, string>,
     generalConfig: Record<string, string>,
     frontendConfig: Record<string, string>,
+    ethereumDaConfig: Record<string, string>,
     jsonMode: boolean = false,
   ): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
@@ -666,6 +786,9 @@ export default class SetupDomains extends Command {
     if (!existingConfig.frontend) existingConfig.frontend = {}
     if (!existingConfig.ingress) existingConfig.ingress = {}
     if (!existingConfig.general) existingConfig.general = {}
+    if (!existingConfig.ethereumDa) existingConfig.ethereumDa = {}
+    if (!existingConfig.contracts) existingConfig.contracts = {}
+    if (!existingConfig.contracts.verification) existingConfig.contracts.verification = {}
 
     // Update only the specified keys
     for (const [key, value] of Object.entries(generalConfig)) {
@@ -682,6 +805,10 @@ export default class SetupDomains extends Command {
 
     for (const [key, value] of Object.entries(frontendConfig)) {
       existingConfig.frontend[key] = value
+    }
+
+    for (const [key, value] of Object.entries(ethereumDaConfig)) {
+      existingConfig.ethereumDa[key] = value
     }
 
     // Remove L1_DEVNET_HOST from ingress if not using Anvil
@@ -707,16 +834,73 @@ export default class SetupDomains extends Command {
     existingConfig.contracts.verification.RPC_URI_L2 = domainConfig.EXTERNAL_RPC_URI_L2;
 
 
-    // Convert the updated config back to TOML string
-    const updatedContent = toml.stringify(existingConfig)
-
-    // Merge the updated content with the original content to preserve comments
-    const mergedContent = this.mergeTomlContent(fs.readFileSync(configPath, 'utf8'), updatedContent)
+    const configText = this.updateTomlText(fs.readFileSync(configPath, 'utf8'), {
+      'contracts.verification': {
+        ...(domainConfig.EXTERNAL_EXPLORER_URI_L1 ? { EXPLORER_URI_L1: domainConfig.EXTERNAL_EXPLORER_URI_L1 } : {}),
+        EXPLORER_URI_L2: domainConfig.EXTERNAL_EXPLORER_URI_L2,
+        ...(domainConfig.EXTERNAL_RPC_URI_L1 ? { RPC_URI_L1: domainConfig.EXTERNAL_RPC_URI_L1 } : {}),
+        RPC_URI_L2: domainConfig.EXTERNAL_RPC_URI_L2,
+      },
+      ethereumDa: ethereumDaConfig,
+      frontend: {
+        ...domainConfig,
+        ...frontendConfig,
+      },
+      general: generalConfig,
+      ingress: ingressConfig,
+    })
 
     // Pass silent=true when in JSON mode to avoid stdout pollution
-    if (writeConfigs(mergedContent, undefined, undefined, jsonMode) && // Only log to stdout in non-JSON mode (writeConfigs handles its own logging when not silent)
+    if (writeConfigs(configText, undefined, undefined, jsonMode) && // Only log to stdout in non-JSON mode (writeConfigs handles its own logging when not silent)
       !jsonMode) {
         this.log(chalk.green('config.toml has been updated with the new domain configurations.'))
       }
+  }
+
+  private updateTomlText(
+    content: string,
+    updates: Record<string, Record<string, string>>,
+  ): string {
+    let updatedContent = content
+
+    for (const [section, values] of Object.entries(updates)) {
+      for (const [key, value] of Object.entries(values)) {
+        updatedContent = this.upsertTomlValue(updatedContent, section, key, value)
+      }
+    }
+
+    return this.collapseRepeatedBlankLines(updatedContent)
+  }
+
+  private upsertTomlValue(content: string, section: string, key: string, value: string): string {
+    const lines = content.split('\n')
+    const sectionPattern = new RegExp(`^\\s*\\[${this.escapeRegExp(section)}\\]\\s*(?:#.*)?$`)
+    const nextSectionPattern = /^\s*\[.+]\s*(?:#.*)?$/
+    const keyPattern = new RegExp(`^\\s*${this.escapeRegExp(key)}\\s*=`)
+    const sectionStart = lines.findIndex(line => sectionPattern.test(line))
+
+    if (sectionStart < 0) {
+      const needsBlankLine = lines.length > 0 && lines.at(-1)?.trim() !== ''
+      lines.push(...(needsBlankLine ? [''] : []), `[${section}]`, this.formatTomlAssignment(key, value))
+      return this.collapseRepeatedBlankLines(lines.join('\n'))
+    }
+
+    let insertAt = lines.length
+    for (let index = sectionStart + 1; index < lines.length; index++) {
+      if (nextSectionPattern.test(lines[index])) {
+        insertAt = index
+        break
+      }
+
+      if (keyPattern.test(lines[index])) {
+        lines[index] = this.replaceTomlAssignmentLine(lines[index], key, value)
+        return this.collapseRepeatedBlankLines(lines.join('\n'))
+      }
+    }
+
+    const assignment = this.formatTomlAssignment(key, value)
+    const insertLine = insertAt > sectionStart + 1 && lines[insertAt - 1]?.trim() === '' ? insertAt - 1 : insertAt
+    lines.splice(insertLine, 0, assignment)
+    return this.collapseRepeatedBlankLines(lines.join('\n'))
   }
 }

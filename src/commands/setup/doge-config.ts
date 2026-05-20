@@ -1,4 +1,5 @@
-import { DirectSecp256k1HdWallet } from '@cosmjs/proto-signing'
+import type { JsonMap } from '@iarna/toml'
+
 import * as toml from '@iarna/toml'
 import { confirm, input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
@@ -165,13 +166,6 @@ export class DogeConfigCommand extends Command {
     let existingConfig: DogeConfig = {} as DogeConfig;
 
     const defaultConfig: DogeConfig = {
-      da: {
-        celestiaIndexerStartBlock: network === 'mainnet' ? '0' : '6175746',
-        celestiaMnemonic: '',
-        daNamespace: network === 'mainnet' ? '' : '',
-        signerAddress: '',
-        tendermintRpcUrl: '',
-      },
       defaults: {
         dogecoinIndexerStartHeight: '4000000',
       },
@@ -224,6 +218,9 @@ export class DogeConfigCommand extends Command {
     }
 
     const newConfig = existingConfig;
+    if (!newConfig.rpc) {
+      newConfig.rpc = {}
+    }
 
     // Handle blockbook API URL with confirmation if different from default
     const defaultBlockbookUrl = network === 'mainnet' ? 'https://blockbook.mainnet.dogeos.com/' : 'https://blockbook.testnet.dogeos.com/'
@@ -393,202 +390,25 @@ export class DogeConfigCommand extends Command {
       }
     }
 
-    newConfig.da!.tendermintRpcUrl = await resolveOrPrompt(
-      niCtx,
-      () => input({
-        default: existingConfig.da?.tendermintRpcUrl,
-        message: `Enter the Celestia Tendermint RPC URL (if known):`,
-        required: false
-      }),
-      existingConfig.da?.tendermintRpcUrl,
-      {
-        configPath: '[da].tendermintRpcUrl',
-        description: 'Celestia Tendermint RPC URL',
-        field: 'tendermintRpcUrl',
-      },
-      false
-    ) || ''
+    delete (newConfig as Record<string, unknown>).ethereumDa
 
-    // Test Celestia RPC connection and get latest height
-    let celestiaCurrentHeight = Number.parseInt(existingConfig.da?.celestiaIndexerStartBlock || '6158500', 10)
-    if (newConfig.da!.tendermintRpcUrl) {
-      try {
-        celestiaCurrentHeight = await this.getCelestiaLatestHeight(newConfig.da!.tendermintRpcUrl)
-        log(chalk.green(`✓ Celestia RPC connection test successful! Current block height: ${celestiaCurrentHeight}`))
-      } catch (error) {
-        log(chalk.red(`✗ Celestia RPC connection test failed: ${error instanceof Error ? error.message : String(error)}`))
-        if (niCtx.enabled) {
-          jsonCtx.addWarning('Celestia RPC connection test failed')
-        }
-      }
+    newConfig.defaults!.dogecoinIndexerStartHeight = existingConfig.defaults?.dogecoinIndexerStartHeight || String(dogecoinCurrentHeight)
+    log(chalk.blue(`Dogecoin Indexer Start Height: ${newConfig.defaults!.dogecoinIndexerStartHeight}`))
+
+    const configPath = path.join(process.cwd(), 'config.toml')
+    let config: JsonMap | undefined
+    if (fs.existsSync(configPath)) {
+      const configContent = fs.readFileSync(configPath, 'utf8')
+      config = toml.parse(configContent)
     }
-
-    newConfig.da!.daNamespace = existingConfig.da?.daNamespace || ''
-
-    // Handle Celestia mnemonic and signer address
-    let celestiaMnemonic = ''
-    let celestiaSignerAddress = ''
-
-    // In non-interactive mode, use existing mnemonic or generate new one
-    let mnemonicChoice: 'generate' | 'input'
-    if (niCtx.enabled) {
-      // Use existing mnemonic if available, otherwise generate new
-      mnemonicChoice = existingConfig.da?.celestiaMnemonic ? 'input' : 'generate'
-    } else {
-      mnemonicChoice = await select({
-        choices: [
-          { name: 'Generate new mnemonic', value: 'generate' },
-          { name: 'Input existing mnemonic', value: 'input' }
-        ],
-        default: existingConfig.da?.celestiaMnemonic ? 'input' : 'generate',
-        message: 'Celestia mnemonic setup:'
-      }) as 'generate' | 'input'
-    }
-
-    if (mnemonicChoice === 'generate') {
-      // Generate new mnemonic
-      const wallet = await DirectSecp256k1HdWallet.generate(24, {
-        prefix: 'celestia'
-      })
-      celestiaMnemonic = wallet.mnemonic
-      const accounts = await wallet.getAccounts()
-      celestiaSignerAddress = accounts[0].address
-
-      log(chalk.green('✓ Generated new Celestia mnemonic and address'))
-
-      if (!niCtx.enabled) {
-        log(chalk.yellow('Please save the following mnemonic securely:'))
-        log(chalk.cyan(celestiaMnemonic))
-      }
-
-      log(chalk.yellow(`Generated address: ${celestiaSignerAddress}`))
-
-      // In non-interactive mode, always use the generated mnemonic
-      const confirmSave = await resolveConfirm(
-        niCtx,
-        () => confirm({
-          default: true,
-          message: 'Confirm to use this mnemonic and address?'
-        }),
-        true, // In non-interactive, always confirm
-        true
-      )
-
-      if (!confirmSave) {
-        celestiaMnemonic = ''
-        celestiaSignerAddress = ''
-      }
-    } else if (mnemonicChoice === 'input') {
-      // Input existing mnemonic - in non-interactive mode, use existing config value
-      celestiaMnemonic = niCtx.enabled ? resolveEnvValue(existingConfig.da?.celestiaMnemonic) || '' : (await input({
-          default: existingConfig.da?.celestiaMnemonic,
-          message: 'Enter your existing Celestia mnemonic:',
-          validate(value) {
-            if (!value.trim()) return 'Mnemonic cannot be empty'
-            const words = value.trim().split(/\s+/)
-            if (words.length !== 12 && words.length !== 24) {
-              return 'Mnemonic must be 12 or 24 words'
-            }
-
-            return true
-          }
-        }));
-
-      if (celestiaMnemonic.trim()) {
-        try {
-          celestiaSignerAddress = await this.generateCelestiaAddressFromMnemonic(celestiaMnemonic)
-          log(chalk.green(`✓ Auto-generated address from mnemonic: ${celestiaSignerAddress}`))
-        } catch (error) {
-          log(chalk.red(`Failed to generate address from mnemonic: ${error}`))
-          if (niCtx.enabled) {
-            // In non-interactive mode, use existing signer address
-            celestiaSignerAddress = existingConfig.da?.signerAddress || ''
-            if (!celestiaSignerAddress) {
-              niCtx.missingFields.push({
-                configPath: '[da].signerAddress',
-                description: 'Celestia signer address (could not derive from mnemonic)',
-                field: 'signerAddress',
-              })
-            }
-          } else {
-            celestiaSignerAddress = await input({
-              default: existingConfig.da?.signerAddress,
-              message: 'Please manually enter Celestia Signer address:',
-              validate(value) {
-                if (!value.trim()) return 'Address cannot be empty'
-                if (!value.startsWith('celestia1')) return 'Address must start with celestia1'
-                return true
-              }
-            })
-          }
-        }
-      }
-    }
-
-    newConfig.da!.celestiaMnemonic = celestiaMnemonic
-    newConfig.da!.signerAddress = celestiaSignerAddress
-
-    // show url of a faucet (skip in non-interactive mode)
-    if (!niCtx.enabled) {
-      if (newConfig.network === 'testnet') {
-        log(chalk.yellow(`\n⚠️  IMPORTANT: Please fund your Celestia signer address with test TIA tokens`))
-        log(chalk.blue(`\nYour Celestia Address: ${newConfig.da!.signerAddress}`))
-        log(chalk.green(`\n💰 Option 1: Use the faucet (recommended for testing)`))
-        log(chalk.blue(`   Faucet URL: https://mocha-4.celenium.io/faucet`))
-        log(chalk.red(`   🔴 CRITICAL: Make sure to select "Mocha" network on the faucet website!`))
-        log(chalk.green(`\n💳 Option 2: Purchase test TIA tokens from exchanges`))
-        log(chalk.cyan(`\n📝 Note: This address ${mnemonicChoice === 'generate' ? 'was just generated' : 'comes from your existing configuration'}`))
-      } else {
-        log(chalk.yellow(`\n⚠️  IMPORTANT: Please fund your Celestia signer address with TIA tokens`))
-        log(chalk.blue(`\nYour Celestia Address: ${newConfig.da!.signerAddress}`))
-        log(chalk.green(`\n💡 You need TIA tokens to pay for data availability on Celestia mainnet`))
-        log(chalk.cyan(`\n📝 Note: This address ${mnemonicChoice === 'generate' ? 'was just generated' : 'comes from your existing configuration'}`))
-      }
-    }
-
-
-    newConfig.da!.celestiaIndexerStartBlock = String(await resolveOrPrompt(
-      niCtx,
-      () => input({
-        default: String(celestiaCurrentHeight),
-        message: `Enter the Celestia Indexer Start Block:`,
-        validate: (value) => Number.isNaN(Number(value)) ? 'Must be a valid number' : true,
-      }),
-      existingConfig.da?.celestiaIndexerStartBlock || String(celestiaCurrentHeight),
-      {
-        configPath: '[da].celestiaIndexerStartBlock',
-        description: 'Celestia indexer start block height',
-        field: 'celestiaIndexerStartBlock',
-      },
-      false
-    ) || String(celestiaCurrentHeight))
-
-    newConfig.defaults!.dogecoinIndexerStartHeight = String(await resolveOrPrompt(
-      niCtx,
-      () => input({
-        default: String(dogecoinCurrentHeight),
-        message: `Enter the Dogecoin Indexer Start Height:`,
-        validate: (value) => Number.isNaN(Number(value)) ? 'Must be a valid number' : true,
-      }),
-      existingConfig.defaults?.dogecoinIndexerStartHeight || String(dogecoinCurrentHeight),
-      {
-        configPath: '[defaults].dogecoinIndexerStartHeight',
-        description: 'Dogecoin indexer start block height',
-        field: 'dogecoinIndexerStartHeight',
-      },
-      false
-    ) || String(dogecoinCurrentHeight))
 
     // Validate any missing required fields before proceeding
     validateAndExit(niCtx)
 
-    const configPath = path.join(process.cwd(), 'config.toml')
-    if (fs.existsSync(configPath)) {
-      const configContent = fs.readFileSync(configPath, 'utf8')
-      const config = toml.parse(configContent) as {
-        general: { L1_CONTRACT_DEPLOYMENT_BLOCK: string }
-      }
-      config.general.L1_CONTRACT_DEPLOYMENT_BLOCK = newConfig.defaults!.dogecoinIndexerStartHeight
+    if (config) {
+      if (!config.general) config.general = {}
+      const generalConfig = config.general as JsonMap
+      generalConfig.L1_CONTRACT_DEPLOYMENT_BLOCK = newConfig.defaults!.dogecoinIndexerStartHeight
       if (writeConfigs(config)) {
         log(
           chalk.green(`L1_CONTRACT_DEPLOYMENT_BLOCK updated in config.toml`),
@@ -619,11 +439,6 @@ export class DogeConfigCommand extends Command {
     if (flags.json) {
       jsonCtx.success({
         configPath: resolvedPath,
-        da: {
-          celestiaIndexerStartBlock: newConfig.da!.celestiaIndexerStartBlock,
-          namespace: newConfig.da!.daNamespace,
-          signerAddress: newConfig.da!.signerAddress,
-        },
         defaults: {
           dogecoinIndexerStartHeight: newConfig.defaults!.dogecoinIndexerStartHeight,
         },
@@ -639,18 +454,6 @@ export class DogeConfigCommand extends Command {
     }
   }
 
-  private async generateCelestiaAddressFromMnemonic(mnemonic: string): Promise<string> {
-    try {
-      const wallet = await DirectSecp256k1HdWallet.fromMnemonic(mnemonic, {
-        prefix: 'celestia'
-      })
-      const accounts = await wallet.getAccounts()
-      return accounts[0].address
-    } catch (error) {
-      throw new Error(`Failed to generate Celestia address from mnemonic: ${error}`)
-    }
-  }
-
   private generateSecureRandomString(length: number): string {
     const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
     let result = ''
@@ -661,38 +464,6 @@ export class DogeConfigCommand extends Command {
     }
 
     return result
-  }
-
-  private async getCelestiaLatestHeight(tendermintRpcUrl: string): Promise<number> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    }
-
-    const response = await fetch(`${tendermintRpcUrl.replace(/\/$/, '')}/status`, {
-      headers,
-      method: 'GET'
-    })
-
-    if (!response.ok) {
-      throw new Error(`Celestia RPC connection failed: ${response.status} ${response.statusText}`)
-    }
-
-    const result = await response.json() as {
-      result?: {
-        sync_info?: {
-          latest_block_height?: string
-        }
-      }
-    }
-
-    if (result.result?.sync_info?.latest_block_height) {
-      const height = Number.parseInt(result.result.sync_info.latest_block_height, 10)
-      if (!Number.isNaN(height)) {
-        return height
-      }
-    }
-
-    throw new Error('Unable to get latest block height from Celestia RPC')
   }
 
   // Helper methods for common operations

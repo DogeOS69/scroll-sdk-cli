@@ -335,7 +335,6 @@ export default class SetupGenRpcPackage extends Command {
         'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL',
         'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER',
         'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS',
-        'DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_RPC_URL'
       ])
 
       // this token is private, keep it empty as a place holder
@@ -354,8 +353,8 @@ export default class SetupGenRpcPackage extends Command {
         }
       }
 
-      newVars.DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_TOKEN = "";
-      newVars.DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_URL = "";
+      newVars.DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DISCOVERY_MODE = "on_demand";
+      newVars.DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__STORE_RAW_BLOB_DATA = "true";
 
       // If no updates needed, return early
       if (Object.keys(newVars).length === 0) {
@@ -623,4 +622,4 @@ export default class SetupGenRpcPackage extends Command {
       throw new Error(`Failed to parse config.toml: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
-} 
+}

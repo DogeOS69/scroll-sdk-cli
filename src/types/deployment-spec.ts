@@ -16,8 +16,8 @@ export interface DeploymentSpec {
   /** Bridge configuration */
   bridge: BridgeConfig
 
-  /** Celestia DA configuration */
-  celestia: CelestiaConfig
+  /** Deprecated Celestia DA configuration retained for legacy specs only. */
+  celestia?: CelestiaConfig
 
   /** Contract deployment configuration */
   contracts: ContractsConfig
@@ -27,6 +27,9 @@ export interface DeploymentSpec {
 
   /** Dogecoin L1 configuration */
   dogecoin: DogecoinConfig
+
+  /** Ethereum DA configuration */
+  ethereumDa?: EthereumDaConfig
 
   /** Frontend and ingress configuration */
   frontend: FrontendConfig
@@ -141,11 +144,11 @@ export interface BootnodeInstanceConfig {
 }
 
 export interface NetworkConfig {
-  /** Beacon RPC endpoint (for Celestia) */
+  /** Deprecated l1-interface beacon facade endpoint retained for legacy specs only. */
   beaconRpcEndpoint?: string
 
-  /** DA Publisher endpoint */
-  daPublisherEndpoint: string
+  /** Deprecated DA Publisher endpoint for Celestia-backed deployments. */
+  daPublisherEndpoint?: string
 
   /** L1 chain ID */
   l1ChainId: number
@@ -153,7 +156,7 @@ export interface NetworkConfig {
   /** L1 chain name (displayed in UIs) */
   l1ChainName: string
 
-  /** Internal L1 RPC endpoint (cluster-internal) */
+  /** Legacy internal l1-interface RPC endpoint (cluster-internal). */
   l1RpcEndpoint: string
 
   /** Internal L1 WebSocket endpoint */
@@ -295,6 +298,59 @@ export interface CelestiaConfig {
 
   /** Tendermint RPC URL */
   tendermintRpcUrl: string
+}
+
+export interface EthereumDaConfig {
+  /** Genesis frontier used by eth_da_submitter before the first published batch. */
+  batch?: {
+    compression?: 'none'
+    genesisBatchHash?: string
+    genesisNextRelayedDepositIndex?: number
+    genesisNextWithdrawIndex?: number
+    genesisRelayedDepositQueueHash?: string
+    genesisStateRoot?: string
+    genesisWithdrawRoot?: string
+    maxBlocksPerChunk?: number
+    maxChunksPerBatch?: number
+    maxL2GasPerChunk?: number
+    maxUncompressedBatchBytesSize?: number
+    minCodecVersion?: number
+  }
+
+  /** Ethereum consensus/beacon API endpoint used as the real DA source by l1-interface. */
+  beaconRpcUrl?: string
+
+  /** Ethereum DA source chain. */
+  chain?: 'devnet' | 'mainnet' | 'sepolia'
+
+  /** Real Ethereum DA execution chain ID. This is separate from DogeOS l1-interface/Dogecoin chain ID. */
+  chainId?: number
+
+  /** EIP-4844 blob confirmation/finality policy. */
+  confirmationDepth?: number
+
+  confirmerPollIntervalMs?: number
+
+  fetchLimit?: number
+
+  finalizationDepth?: number
+
+  /** Real Ethereum DA execution RPC used by eth-da-submitter and L1 funding. */
+  l1RpcUrl?: string
+
+  l2Confirmations?: number
+
+  /** DogeOS L2 execution RPC. Defaults to network.l2RpcEndpoint. */
+  l2RpcUrl?: string
+  lifecycleDbPath?: string
+  /** Fee policy for EIP-4844 submissions. */
+  maxBlobBaseFeeWei?: string
+  maxFeePerGasWei?: string
+
+  minFinality?: 'finalized' | 'pending' | 'safe'
+  minPriorityFeeWei?: string
+  /** eth_da_submitter lifecycle/store settings. */
+  submitterDbPath?: string
 }
 
 export interface BridgeConfig {
@@ -564,7 +620,12 @@ export interface ImagesConfig {
     chainMonitor?: ImageConfig
     coordinator?: ImageConfig
     cubesignerSigner?: ImageConfig
+    /** Deprecated Celestia DA publisher image override. */
     daPublisher?: ImageConfig
+    ethDaSubmitter?: ImageConfig
+    ethereumGenesisGenerator?: ImageConfig
+    ethereumGeth?: ImageConfig
+    ethereumLighthouse?: ImageConfig
     feeOracle?: ImageConfig
     // Frontend & Explorers
     frontends?: ImageConfig
@@ -579,6 +640,7 @@ export interface ImagesConfig {
 
     rollupExplorerBackend?: ImageConfig
     // Rollup Services
+    /** Deprecated in Ethereum DA mode. */
     rollupRelayer?: ImageConfig
     tsoService?: ImageConfig
 

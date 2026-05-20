@@ -17,6 +17,27 @@ import type {
   ValidationWarning
 } from '../types/deployment-spec.js'
 
+const ETHEREUM_DA_DEFAULTS = {
+  devnet: {
+    beaconRpcUrl: 'http://eth-devnet-beacon:5052',
+    chainId: 32_382,
+    minFinality: 'safe',
+    submitterRpcUrl: 'http://eth-devnet-geth:8545',
+  },
+  mainnet: {
+    beaconRpcUrl: 'https://eth-beacon-chain.drpc.org/rest',
+    chainId: 1,
+    minFinality: 'finalized',
+    submitterRpcUrl: 'https://eth.drpc.org',
+  },
+  sepolia: {
+    beaconRpcUrl: 'https://eth-beacon-chain-sepolia.drpc.org/rest',
+    chainId: 11_155_111,
+    minFinality: 'safe',
+    submitterRpcUrl: 'https://sepolia.drpc.org',
+  },
+} as const
+
 /**
  * Load and parse a DeploymentSpec from a YAML file
  */
@@ -276,12 +297,10 @@ export function generateConfigToml(spec: DeploymentSpec): string {
 
   // [general] section
   config.general = {
-    BEACON_RPC_ENDPOINT: spec.network.beaconRpcEndpoint || '',
     CHAIN_ID_L1: spec.network.l1ChainId,
     CHAIN_ID_L2: spec.network.l2ChainId,
     CHAIN_NAME_L1: spec.network.l1ChainName,
     CHAIN_NAME_L2: spec.network.l2ChainName,
-    DA_PUBLISHER_ENDPOINT: spec.network.daPublisherEndpoint,
     L1_CONTRACT_DEPLOYMENT_BLOCK: spec.contracts.l1DeploymentBlock || 0,
     L1_RPC_ENDPOINT: spec.network.l1RpcEndpoint,
     L1_RPC_ENDPOINT_WEBSOCKET: spec.network.l1RpcEndpointWebsocket || '',
@@ -291,6 +310,16 @@ export function generateConfigToml(spec: DeploymentSpec): string {
   if (spec.rollup.verifierDigests) {
     config.general.VERIFIER_DIGEST_1 = spec.rollup.verifierDigests.digest1
     config.general.VERIFIER_DIGEST_2 = spec.rollup.verifierDigests.digest2
+  }
+
+  const ethereumDaChain = spec.ethereumDa?.chain || (spec.metadata.environment === 'mainnet' ? 'mainnet' : 'sepolia')
+  const ethereumDaDefaults = ETHEREUM_DA_DEFAULTS[ethereumDaChain]
+  config.ethereumDa = {
+    beaconRpcUrl: spec.ethereumDa?.beaconRpcUrl || ethereumDaDefaults.beaconRpcUrl,
+    chain: ethereumDaChain,
+    chainId: spec.ethereumDa?.chainId || ethereumDaDefaults.chainId,
+    minFinality: spec.ethereumDa?.minFinality || ethereumDaDefaults.minFinality,
+    submitterRpcUrl: spec.ethereumDa?.l1RpcUrl || ethereumDaDefaults.submitterRpcUrl,
   }
 
   // [accounts] section
@@ -486,10 +515,6 @@ export function generateConfigToml(spec: DeploymentSpec): string {
     config.ingress.TSO_HOST = spec.frontend.hosts.tso
   }
 
-  if (spec.frontend.hosts.celestia) {
-    config.ingress.CELESTIA_HOST = spec.frontend.hosts.celestia
-  }
-
   if (spec.frontend.hosts.dogecoin) {
     config.ingress.DOGECOIN_HOST = spec.frontend.hosts.dogecoin
   }
@@ -529,14 +554,6 @@ export function generateDogeConfigToml(spec: DeploymentSpec): string {
 
   config.defaults = {
     dogecoinIndexerStartHeight: String(spec.dogecoin.indexerStartHeight),
-  }
-
-  config.da = {
-    celestiaIndexerStartBlock: String(spec.celestia.indexerStartBlock),
-    celestiaMnemonic: spec.celestia.mnemonic,
-    daNamespace: spec.celestia.namespace,
-    signerAddress: spec.celestia.signerAddress,
-    tendermintRpcUrl: spec.celestia.tendermintRpcUrl,
   }
 
   config.frontend = {

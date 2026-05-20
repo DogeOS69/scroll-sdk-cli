@@ -13,7 +13,7 @@ import { promisify } from 'node:util'
 const execAsync = promisify(exec)
 
 export default class SetupDisableInternal extends Command {
-  static override description = 'Disable ingress for internal services (Celestia, Dogecoin, Anvil L1)'
+  static override description = 'Disable ingress for internal services (Dogecoin, Anvil L1)'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
@@ -32,7 +32,7 @@ export default class SetupDisableInternal extends Command {
     }),
     'disable-internal': Flags.boolean({
       default: false,
-      description: 'Disable all internal services (Celestia, Dogecoin, Anvil L1) using kubectl',
+      description: 'Disable all internal services (Dogecoin, Anvil L1) using kubectl',
       exclusive: ['list', 'enable', 'disable']
     }),
     'dry-run': Flags.boolean({
@@ -73,9 +73,6 @@ export default class SetupDisableInternal extends Command {
 
   // Internal services that should not be exposed
   private readonly INTERNAL_SERVICES = [
-    'celestia-node',
-    'celestia-testnet',
-    'celestia-mainnet',
     'dogecoin',
     'l1-devnet'
   ]
@@ -130,7 +127,7 @@ export default class SetupDisableInternal extends Command {
 
   private async disableInternalWithKubectl(namespace: string, dryRun: boolean, force: boolean = false): Promise<void> {
     this.log(chalk.bold(`Disabling ingress for internal services in namespace: ${namespace}`))
-    this.log(chalk.gray('Internal services: Celestia, Dogecoin, Anvil L1\n'))
+    this.log(chalk.gray('Internal services: Dogecoin, Anvil L1\n'))
 
     // First, list current ingresses
     try {
@@ -141,7 +138,6 @@ export default class SetupDisableInternal extends Command {
         const name = ingress.replace('ingress.networking.k8s.io/', '')
         return this.INTERNAL_SERVICES.some(service => 
           name.includes(service) || 
-          name.includes('celestia') || 
           name.includes('dogecoin') || 
           name.includes('l1-devnet')
         )
@@ -242,7 +238,7 @@ export default class SetupDisableInternal extends Command {
 
     // Verify deletion
     try {
-      const verifyCmd = `kubectl get ingress -n ${namespace} -o name | grep -E "(celestia|dogecoin|l1-devnet)" || true`
+      const verifyCmd = `kubectl get ingress -n ${namespace} -o name | grep -E "(dogecoin|l1-devnet)" || true`
       this.log(chalk.cyan('\nVerifying deletion...'))
       this.log(chalk.gray(`  $ ${verifyCmd}`))
       
@@ -334,7 +330,6 @@ export default class SetupDisableInternal extends Command {
         // Highlight internal services
         const isInternal = this.INTERNAL_SERVICES.some(service => 
           name.includes(service) || 
-          name.includes('celestia') || 
           name.includes('dogecoin') || 
           name.includes('l1-devnet')
         )
@@ -351,7 +346,6 @@ export default class SetupDisableInternal extends Command {
         const {name} = ingress.metadata
         return this.INTERNAL_SERVICES.some(service => 
           name.includes(service) || 
-          name.includes('celestia') || 
           name.includes('dogecoin') || 
           name.includes('l1-devnet')
         )

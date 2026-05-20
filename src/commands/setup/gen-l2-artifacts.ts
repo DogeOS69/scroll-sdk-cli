@@ -117,7 +117,6 @@ export default class SetupGenL2Artifacts extends Command {
       'fee-oracle',
       // 'l1-explorer',
       'l2-sequencer',
-      'rollup-relayer',
       'contracts',
       'l2-bootnode',
       'dogecoin',
@@ -127,7 +126,7 @@ export default class SetupGenL2Artifacts extends Command {
       'dogecoin',
       'withdrawal-processor',
       'metrics-exporter',
-      'celestia-node',
+      'eth-da-submitter',
     ]
 
     for (const service of services) {
@@ -143,35 +142,9 @@ export default class SetupGenL2Artifacts extends Command {
     this.createMigrateDbFiles(config)
   }
 
-  protected createMigrateDbFiles(config: any): void {
-    const migrateDbFiles = [
-      // { key: 'BRIDGE_HISTORY_DB_CONNECTION_STRING', service: 'bridge-history-fetcher' },
-      // { key: 'GAS_ORACLE_DB_CONNECTION_STRING', service: 'gas-oracle' },
-      { key: 'ROLLUP_NODE_DB_CONNECTION_STRING', service: 'rollup-relayer' },
-    ]
-
-    for (const file of migrateDbFiles) {
-      const filePath = path.join(SECRETS_PATH, `${file.service}-migrate-db.json`)
-      const content =
-        file.service === 'bridge-history-fetcher'
-          ? {
-            db: {
-              driver_name: 'postgres',
-              dsn: config.db[file.key],
-              maxIdleNume: 5,
-              maxOpenNum: 50,
-            },
-            l1: {},
-            l2: {},
-          }
-          : {
-            driver_name: 'postgres',
-            dsn: config.db[file.key],
-          }
-
-      fs.writeFileSync(filePath, JSON.stringify(content, null, 2))
-      this.jsonCtx.log(chalk.green(`Created ${file.service}-migrate-db.json`))
-    }
+  protected createMigrateDbFiles(_config: any): void {
+    // Ethereum DA mode no longer runs rollup-relayer, so there is no
+    // rollup-relayer migrate-db secret to generate.
   }
 
   protected createSecretsFolder(): void {
@@ -235,11 +208,6 @@ export default class SetupGenL2Artifacts extends Command {
         'L2GETH_KEYSTORE:L2GETH_KEYSTORE',
         'L2GETH_PASSWORD:L2GETH_PASSWORD',
         'L2GETH_NODEKEY:L2GETH_NODEKEY',
-      ],
-      'rollup-relayer': [
-        'ROLLUP_NODE_DB_CONNECTION_STRING:SCROLL_ROLLUP_DB_CONFIG_DSN',
-        'L1_COMMIT_SENDER_PRIVATE_KEY:SCROLL_ROLLUP_L2_CONFIG_RELAYER_CONFIG_COMMIT_SENDER_SIGNER_CONFIG_PRIVATE_KEY_SIGNER_CONFIG_PRIVATE_KEY',
-        'L1_FINALIZE_SENDER_PRIVATE_KEY:SCROLL_ROLLUP_L2_CONFIG_RELAYER_CONFIG_FINALIZE_SENDER_SIGNER_CONFIG_PRIVATE_KEY_SIGNER_CONFIG_PRIVATE_KEY',
       ],
       'testnet-activity-helper': [
         'L2_TESTNET_ACTIVITY_HELPER_PRIVATE_KEY:private-key',
@@ -319,7 +287,6 @@ export default class SetupGenL2Artifacts extends Command {
     if (service === 'fee-oracle') {
       let content = `DOGEOS_FEE_ORACLE_DOGECOIN__RPC_USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
       content += `DOGEOS_FEE_ORACLE_DOGECOIN__RPC_PASSWORD="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
-      content += `DOGEOS_FEE_ORACLE_CELESTIA__TENDERMINT_RPC_URL="${this.dogeConfig.da?.tendermintRpcUrl || ''}"\n`
       content += `DOGEOS_FEE_ORACLE_PRIVATE_KEY="${config.accounts.L2_GAS_ORACLE_SENDER_PRIVATE_KEY || ''}"\n`
       envFiles['fee-oracle-secret.env'] = content
     }
@@ -328,10 +295,6 @@ export default class SetupGenL2Artifacts extends Command {
       let content = `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
       content += `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
       content += `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_API_KEY=""\n`
-
-      const url = this.dogeConfig.da?.tendermintRpcUrl || '';
-      const lastPart = url.split('/').filter(Boolean).pop() || '';
-      content += `DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_TOKEN=${lastPart}\n`
       envFiles['l1-interface-secret.env'] = content
     }
 
@@ -356,7 +319,6 @@ export default class SetupGenL2Artifacts extends Command {
       // Add Dogecoin RPC credentials from doge-config
       content += `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
       content += `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
-      content += `DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL="${this.dogeConfig.da?.tendermintRpcUrl || ''}"\n`
 
       // Add values from output-withdrawal-processor.toml
       const withdrawal_processor_toml_path = path.join(process.cwd(), ".data", "output-withdrawal-processor.toml");
@@ -374,19 +336,13 @@ export default class SetupGenL2Artifacts extends Command {
         )
       }
 
-      const url = this.dogeConfig.da?.tendermintRpcUrl || '';
-      const lastPart = url.split('/').filter(Boolean).pop() || '';
-      content += `DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_TOKEN=${lastPart}\n`;
-
       envFiles['withdrawal-processor-secret.env'] = content
     }
 
-    if (service === 'celestia-node') {
-      let content = `mnemonic="${this.dogeConfig.da?.celestiaMnemonic}"\n`
-      const url = this.dogeConfig.da?.tendermintRpcUrl || '';
-      const lastPart = url.split('/').filter(Boolean).pop() || '';
-      content += `x-token="${lastPart}"\n`;
-      envFiles['celestia-node-secret.env'] = content
+    if (service === 'eth-da-submitter') {
+      const submitterPrivateKey = config.accounts?.L1_COMMIT_SENDER_PRIVATE_KEY || ''
+      envFiles['eth-da-submitter-secret.env'] =
+        `DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY="${submitterPrivateKey}"\n`
     }
 
     return envFiles

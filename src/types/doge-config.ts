@@ -38,11 +38,11 @@ export interface DogeConfig {
     dogecoinIndexerStartHeight?: string
   }
   deploymentType?: 'aws' | 'local'
-
   dogecoinClusterRpc?: {
     password?: string // for dogecoin that deploy on cluster
     username?: string // for dogecoin that deploy on cluster
   }
+
   frontend?: {
     bridgeUrl?: string
     l2Explorer?: string

@@ -16,6 +16,11 @@ import * as yaml from 'js-yaml'
 
 import type { DeploymentSpec, ImagesConfig } from '../types/deployment-spec.js'
 
+import {
+  L1_INTERFACE_BEACON_API_ENDPOINT,
+  L1_INTERFACE_RPC_ENDPOINT,
+} from '../config/constants.js'
+
 export interface GeneratedValuesFiles {
   [filename: string]: string
 }
@@ -142,6 +147,51 @@ function buildPeerList(spec: DeploymentSpec): string[] {
  */
 type ServiceImageKey = keyof NonNullable<ImagesConfig['services']>
 
+const ZERO_HASH = '0x0000000000000000000000000000000000000000000000000000000000000000'
+
+const ETHEREUM_DA_DEFAULTS = {
+  devnet: {
+    chainId: 32_382,
+    minFinality: 'safe',
+    submitterRpcUrl: 'http://eth-devnet-geth:8545',
+  },
+  mainnet: {
+    chainId: 1,
+    minFinality: 'finalized',
+    submitterRpcUrl: 'https://eth.drpc.org',
+  },
+  sepolia: {
+    chainId: 11_155_111,
+    minFinality: 'safe',
+    submitterRpcUrl: 'https://sepolia.drpc.org',
+  },
+} as const
+
+function getEthereumDaConfig(spec: DeploymentSpec): NonNullable<DeploymentSpec['ethereumDa']> {
+  return spec.ethereumDa ?? {}
+}
+
+function getEthereumDaChain(spec: DeploymentSpec): keyof typeof ETHEREUM_DA_DEFAULTS {
+  return getEthereumDaConfig(spec).chain || (spec.metadata.environment === 'mainnet' ? 'mainnet' : 'sepolia')
+}
+
+function getEthereumDaChainId(spec: DeploymentSpec): number {
+  return getEthereumDaConfig(spec).chainId || ETHEREUM_DA_DEFAULTS[getEthereumDaChain(spec)].chainId
+}
+
+function getEthereumDaSubmitterRpcUrl(spec: DeploymentSpec): string {
+  const ethereumDa = getEthereumDaConfig(spec)
+  return ethereumDa.l1RpcUrl || ETHEREUM_DA_DEFAULTS[getEthereumDaChain(spec)].submitterRpcUrl
+}
+
+function getEthereumDaMinFinality(spec: DeploymentSpec): string {
+  return getEthereumDaConfig(spec).minFinality || ETHEREUM_DA_DEFAULTS[getEthereumDaChain(spec)].minFinality
+}
+
+function getEthereumDaBatchConfig(spec: DeploymentSpec): NonNullable<NonNullable<DeploymentSpec['ethereumDa']>['batch']> {
+  return getEthereumDaConfig(spec).batch ?? {}
+}
+
 /**
  * Resolve image configuration for a service
  *
@@ -182,13 +232,13 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
   files['l2-bootnode-production.yaml'] = generateL2BootnodeValues(spec)
   files['l2-rpc-production.yaml'] = generateL2RpcValues(spec)
 
-  // L1 interface
+  // L1 interface and private Ethereum DA devnet
+  files['l1-devnet-production.yaml'] = generateL1DevnetValues(spec)
   files['l1-interface-production.yaml'] = generateL1InterfaceValues(spec)
 
   // DA and Dogecoin
-  files['celestia-node-production.yaml'] = generateCelestiaNodeValues(spec)
+  files['eth-da-submitter-production.yaml'] = generateEthDaSubmitterValues(spec)
   files['dogecoin-production.yaml'] = generateDogecoinValues(spec)
-  files['da-publisher-production.yaml'] = generateDaPublisherValues(spec)
 
   // Bridge and signing
   files['tso-service-production.yaml'] = generateTsoServiceValues(spec)
@@ -200,7 +250,6 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
   }
 
   // Rollup services
-  files['rollup-relayer-production.yaml'] = generateRollupRelayerValues(spec)
   files['coordinator-api-production.yaml'] = generateCoordinatorApiValues(spec)
   files['coordinator-cron-production.yaml'] = generateCoordinatorCronValues(spec)
   files['gas-oracle-production.yaml'] = generateGasOracleValues(spec)
@@ -257,7 +306,7 @@ function generateL2SequencerValues(spec: DeploymentSpec): string {
         data: {
           CHAIN_ID: String(spec.network.l2ChainId),
           L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK: String(spec.contracts.l1DeploymentBlock || 0),
-          L2GETH_L1_ENDPOINT: spec.network.l1RpcEndpoint,
+          L2GETH_L1_ENDPOINT: L1_INTERFACE_RPC_ENDPOINT,
           L2GETH_PEER_LIST: JSON.stringify(peerList.length > 0 ? peerList : []),
           L2GETH_SIGNER_ADDRESS: getSignerAddress()
         },
@@ -346,9 +395,9 @@ function generateL2BootnodeValues(spec: DeploymentSpec): string {
       env: {
         data: {
           CHAIN_ID: String(spec.network.l2ChainId),
-          L2GETH_DA_BLOB_BEACON_NODE: spec.network.beaconRpcEndpoint || '',
+          L2GETH_DA_BLOB_BEACON_NODE: L1_INTERFACE_BEACON_API_ENDPOINT,
           L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK: String(spec.contracts.l1DeploymentBlock || 0),
-          L2GETH_L1_ENDPOINT: spec.network.l1RpcEndpoint,
+          L2GETH_L1_ENDPOINT: L1_INTERFACE_RPC_ENDPOINT,
           L2GETH_PEER_LIST: JSON.stringify(peerList.length > 0 ? peerList : [])
         },
         enabled: true
@@ -433,9 +482,9 @@ function generateL2RpcValues(spec: DeploymentSpec): string {
       env: {
         data: {
           CHAIN_ID: String(spec.network.l2ChainId),
-          L2GETH_DA_BLOB_BEACON_NODE: spec.network.beaconRpcEndpoint || '',
+          L2GETH_DA_BLOB_BEACON_NODE: L1_INTERFACE_BEACON_API_ENDPOINT,
           L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK: String(spec.contracts.l1DeploymentBlock || 0),
-          L2GETH_L1_ENDPOINT: spec.network.l1RpcEndpoint,
+          L2GETH_L1_ENDPOINT: L1_INTERFACE_RPC_ENDPOINT,
           L2GETH_PEER_LIST: JSON.stringify(peerList.length > 0 ? peerList : [])
         },
         enabled: true
@@ -485,16 +534,40 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
   })
 
   const values: Record<string, any> = {
+    configMaps: {
+      env: {
+        data: {
+          DOGEOS_L1_INTERFACE_API_BIND_ADDRESS: '0.0.0.0:8545',
+          DOGEOS_L1_INTERFACE_BEACON_API_LISTEN_ADDRESS: '0.0.0.0:5052',
+          // Ethereum DA mode: keep the legacy Celestia indexer inert.
+          DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DISCOVERY_MODE: 'on_demand',
+          DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__STORE_RAW_BLOB_DATA: 'true',
+          DOGEOS_L1_INTERFACE_CHAIN_ID: String(spec.network.l2ChainId),
+          DOGEOS_L1_INTERFACE_DATABASE_URL: 'sqlite:///data/l1-interface.sqlite',
+          DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__CONFIRMATIONS: String(spec.bridge.confirmationsRequired),
+          DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__INDEX_DEPOSITS: 'false',
+          DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__INDEX_UTXOS: 'false',
+          DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__INDEX_WITHDRAWALS: 'false',
+          DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__POLL_INTERVAL_MS: '10000',
+          DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT: String(spec.dogecoin.indexerStartHeight),
+          DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL: 'http://dogecoin:22555',
+          DOGEOS_L1_INTERFACE_GENESIS_JSON_PATH: '/app/genesis/genesis.json',
+          DOGEOS_L1_INTERFACE_HEALTH_LISTEN_ADDRESS: '0.0.0.0:9090',
+          DOGEOS_L1_INTERFACE_L1_CHAIN_ID: String(spec.network.l1ChainId),
+          DOGEOS_L1_INTERFACE_NETWORK_STR: spec.dogecoin.network,
+          DOGEOS_L1_INTERFACE_REPLAY_READ__ENABLED: 'true',
+          DOGEOS_L1_INTERFACE_REPLAY_READ__PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
+          DOGEOS_L1_INTERFACE_REPLAY_READ__SQLITE_PATH: '/data/replay.sqlite'
+        },
+        enabled: true
+      }
+    },
     env: [
-      { name: 'L1_INTERFACE_DOGECOIN_RPC', value: 'http://dogecoin:22555' },
-      { name: 'L1_INTERFACE_DOGECOIN_RPC_USER', value: spec.dogecoin.rpc.username },
-      { name: 'L1_INTERFACE_DOGECOIN_RPC_PASS', valueFrom: { secretKeyRef: { key: 'L1_INTERFACE_DOGECOIN_RPC_PASS', name: 'l1-interface-secret-env' } } },
-      { name: 'L1_INTERFACE_CELESTIA_DA_RPC', value: 'http://celestia-node:26658' },
-      { name: 'L1_INTERFACE_CELESTIA_AUTH_TOKEN', valueFrom: { secretKeyRef: { key: 'L1_INTERFACE_CELESTIA_AUTH_TOKEN', name: 'l1-interface-secret-env' } } },
-      { name: 'L1_INTERFACE_CELESTIA_NAMESPACE', value: spec.celestia.namespace },
-      { name: 'L1_INTERFACE_CHAIN_ID', value: String(spec.network.l1ChainId) },
-      { name: 'L1_INTERFACE_PORT', value: '8545' },
       { name: 'RUST_LOG', value: 'info' }
+    ],
+    envFrom: [
+      { secretRef: { name: 'l1-interface-secret-env' } },
+      { configMapRef: { name: 'l1-interface-env' } }
     ],
     image,
     resources: {
@@ -507,8 +580,8 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
     'l1-interface-secret-env',
     secretConfig,
     [
-      { property: 'L1_INTERFACE_DOGECOIN_RPC_PASS', remoteKey: 'l1-interface-secret-env', secretKey: 'L1_INTERFACE_DOGECOIN_RPC_PASS' },
-      { property: 'L1_INTERFACE_CELESTIA_AUTH_TOKEN', remoteKey: 'l1-interface-secret-env', secretKey: 'L1_INTERFACE_CELESTIA_AUTH_TOKEN' }
+      { property: 'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER', remoteKey: 'l1-interface-secret-env', secretKey: 'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER' },
+      { property: 'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS', remoteKey: 'l1-interface-secret-env', secretKey: 'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS' }
     ]
   )
 
@@ -520,29 +593,148 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
 }
 
 /**
- * Generate Celestia Node values
+ * Generate private Ethereum DA devnet values.
+ *
+ * The Ethereum PoS devnet was folded into the l1-devnet Helm chart. Keep the
+ * image override keys stable for existing DeploymentSpec files, but emit values
+ * for l1-devnet-production.yaml.
  */
-function generateCelestiaNodeValues(spec: DeploymentSpec): string {
+function generateL1DevnetValues(spec: DeploymentSpec): string {
+  const imageGenesisGenerator = resolveImage(spec, 'ethereumGenesisGenerator', {
+    pullPolicy: 'IfNotPresent',
+    repository: 'ethpandaops/ethereum-genesis-generator',
+    tag: '3.4.1'
+  })
+  const imageGeth = resolveImage(spec, 'ethereumGeth', {
+    pullPolicy: 'IfNotPresent',
+    repository: 'ethereum/client-go',
+    tag: 'v1.14.13'
+  })
+  const imageLighthouse = resolveImage(spec, 'ethereumLighthouse', {
+    pullPolicy: 'IfNotPresent',
+    repository: 'sigp/lighthouse',
+    tag: 'latest'
+  })
+
+  const chainId = getEthereumDaChainId(spec)
   const values = {
-    env: [
-      { name: 'CELESTIA_NETWORK', value: spec.dogecoin.network === 'mainnet' ? 'celestia' : 'mocha' },
-      { name: 'CELESTIA_NODE_TYPE', value: 'light' }
-    ],
-    image: {
-      pullPolicy: 'IfNotPresent',
-      repository: 'ghcr.io/celestiaorg/celestia-node',
-      tag: 'v0.15.0'
+    global: {
+      fullnameOverride: 'l1-devnet',
     },
+    images: {
+      genesisGenerator: imageGenesisGenerator,
+      geth: imageGeth,
+      lighthouse: imageLighthouse,
+    },
+    network: {
+      chainId,
+      networkId: chainId,
+    },
+  }
+
+  if (spec.frontend.hosts.l1Devnet) {
+    Object.assign(values, {
+      ingress: {
+        main: {
+          hosts: [{
+            host: spec.frontend.hosts.l1Devnet,
+            paths: [{ path: '/', pathType: 'Prefix' }],
+          }],
+          ingressClassName: 'nginx',
+        },
+      },
+    })
+  }
+
+  return yaml.dump(values)
+}
+
+/**
+ * Generate Ethereum DA Submitter values
+ */
+function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
+  const secretConfig = getSecretProviderConfig(spec)
+  const ethereumDa = getEthereumDaConfig(spec)
+  const batch = getEthereumDaBatchConfig(spec)
+
+  const image = resolveImage(spec, 'ethDaSubmitter', {
+    pullPolicy: 'IfNotPresent',
+    repository: 'dogeos69/eth-da-submitter',
+    tag: 'latest'
+  })
+
+  const values: Record<string, any> = {
+    configMaps: {
+      env: {
+        data: {
+          DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION: batch.compression || 'none',
+          DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_BATCH_HASH: batch.genesisBatchHash || ZERO_HASH,
+          DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_RELAYED_DEPOSIT_INDEX: String(batch.genesisNextRelayedDepositIndex ?? 0),
+          DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_WITHDRAW_INDEX: String(batch.genesisNextWithdrawIndex ?? 0),
+          DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_STATE_ROOT: batch.genesisStateRoot || ZERO_HASH,
+          DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_BLOCKS_PER_CHUNK: String(batch.maxBlocksPerChunk ?? 128),
+          DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_CHUNKS_PER_BATCH: String(batch.maxChunksPerBatch ?? 1),
+          DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: String(batch.maxL2GasPerChunk ?? 6_000_000),
+          DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_BATCH_BYTES_SIZE: String(batch.maxUncompressedBatchBytesSize ?? 131_072),
+          DOGEOS_ETH_DA_SUBMITTER_BATCH__MIN_CODEC_VERSION: String(batch.minCodecVersion ?? 10),
+          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMATION_DEPTH: String(ethereumDa.confirmationDepth ?? 1),
+          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMER_POLL_INTERVAL_MS: String(ethereumDa.confirmerPollIntervalMs ?? 12_000),
+          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__ETH_CHAIN_ID: String(getEthereumDaChainId(spec)),
+          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__FINALIZATION_DEPTH: String(ethereumDa.finalizationDepth ?? 64),
+          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__L2_CHAIN_ID: String(spec.network.l2ChainId),
+          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_BLOB_BASE_FEE_WEI: ethereumDa.maxBlobBaseFeeWei || '50000000000',
+          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_FEE_PER_GAS_WEI: ethereumDa.maxFeePerGasWei || '',
+          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MIN_PRIORITY_FEE_WEI: ethereumDa.minPriorityFeeWei || '2000000000',
+          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
+          DOGEOS_ETH_DA_SUBMITTER_L2__CONFIRMATIONS: String(ethereumDa.l2Confirmations ?? 0),
+          DOGEOS_ETH_DA_SUBMITTER_L2__FETCH_LIMIT: String(ethereumDa.fetchLimit ?? 128),
+          DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: ethereumDa.l2RpcUrl || spec.network.l2RpcEndpoint,
+          DOGEOS_ETH_DA_SUBMITTER_S3__ENABLED: 'false',
+          DOGEOS_ETH_DA_SUBMITTER_SERVICE__CYCLE_INTERVAL_MS: '1000',
+          DOGEOS_ETH_DA_SUBMITTER_SERVICE__LISTEN_ADDRESS: '0.0.0.0',
+          DOGEOS_ETH_DA_SUBMITTER_SERVICE__LISTEN_PORT: '3004',
+          DOGEOS_ETH_DA_SUBMITTER_SERVICE__SHUTDOWN_GRACE_PERIOD_SEC: '30',
+          DOGEOS_ETH_DA_SUBMITTER_SERVICE__STATUS_POLL_INTERVAL_MS: '5000',
+          DOGEOS_ETH_DA_SUBMITTER_STORE__LIFECYCLE_DB_PATH: ethereumDa.lifecycleDbPath || ethereumDa.submitterDbPath || '/app/data/submitter.sqlite',
+          DOGEOS_ETH_DA_SUBMITTER_STORE__SUBMITTER_DB_PATH: ethereumDa.submitterDbPath || '/app/data/submitter.sqlite'
+        },
+        enabled: true
+      }
+    },
+    env: [
+      { name: 'RUST_LOG', value: 'info,eth_da_submitter=info' }
+    ],
+    envFrom: [
+      { configMapRef: { name: 'eth-da-submitter-env' } },
+      { secretRef: { name: 'eth-da-submitter-secret-env' } }
+    ],
+    image,
     persistence: {
       data: {
         retain: true,
-        size: '100Gi'
+        size: '10Gi'
       }
     },
     resources: {
-      limits: { cpu: '2000m', memory: '8Gi' },
-      requests: { cpu: '500m', memory: '2Gi' }
+      limits: { cpu: '1000m', memory: '1Gi' },
+      requests: { cpu: '200m', memory: '256Mi' }
     }
+  }
+
+  const externalSecrets = generateExternalSecrets(
+    'eth-da-submitter-secret-env',
+    secretConfig,
+    [
+      {
+        property: 'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY',
+        remoteKey: 'eth-da-submitter-secret-env',
+        secretKey: 'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY'
+      }
+    ]
+  )
+
+  if (externalSecrets) {
+    values.externalSecrets = externalSecrets
   }
 
   return yaml.dump(values)
@@ -589,32 +781,6 @@ function generateDogecoinValues(spec: DeploymentSpec): string {
 
   if (externalSecrets) {
     values.externalSecrets = externalSecrets
-  }
-
-  return yaml.dump(values)
-}
-
-/**
- * Generate DA Publisher values
- */
-function generateDaPublisherValues(spec: DeploymentSpec): string {
-  const image = resolveImage(spec, 'daPublisher', {
-    pullPolicy: 'IfNotPresent',
-    repository: 'scrolltech/da-codec',
-    tag: 'da-codec-v0.0.8'
-  })
-
-  const values = {
-    env: [
-      { name: 'DA_CODEC_HTTP_PORT', value: '8545' },
-      { name: 'DA_CODEC_L2_RPC_URL', value: spec.network.l2RpcEndpoint },
-      { name: 'DA_CODEC_SCROLL_CHAIN_URL', value: spec.network.l1RpcEndpoint }
-    ],
-    image,
-    resources: {
-      limits: { cpu: '1000m', memory: '2Gi' },
-      requests: { cpu: '100m', memory: '256Mi' }
-    }
   }
 
   return yaml.dump(values)
@@ -689,6 +855,11 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_FEE_RATE_SAT_PER_KVB', value: String(spec.bridge.feeRateSatPerKvb) },
       { name: 'DOGEOS_WITHDRAWAL_COORDINATOR_POLL_INTERVAL_SECS', value: '10' },
       { name: 'DOGEOS_WITHDRAWAL_DEBUG_SKIP_BROADCAST', value: 'false' },
+      { name: 'DOGEOS_WITHDRAWAL_ROTATE_KEY_V2', value: 'true' },
+      { name: 'DOGEOS_WITHDRAWAL_ADVANCE_L1_BUILDER_V2', value: 'true' },
+      { name: 'DOGEOS_WITHDRAWAL_ADVANCE_L2_BUILDER_V2', value: 'true' },
+      { name: 'DOGEOS_WITHDRAWAL_REPLAY_SQLITE_PATH', value: '/app/data/replay.sqlite' },
+      { name: 'DOGEOS_WITHDRAWAL_PROTOCOL_CONTEXT_JSON', value: '/app/protocol_context.json' },
       // Dogecoin Indexer
       { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT', value: String(spec.dogecoin.indexerStartHeight) },
       { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__CONFIRMATIONS', value: String(spec.bridge.confirmationsRequired) },
@@ -699,14 +870,11 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__CONFIRMATIONS', value: '12' },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__POLL_INTERVAL_MS', value: '60000' },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__LOG_QUERY_BATCH_SIZE', value: '10000' },
-      // Celestia Indexer
-      { name: 'DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_RPC_URL', value: spec.network.beaconRpcEndpoint || '' },
-      { name: 'DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE', value: spec.celestia.namespace },
-      { name: 'DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__START_BLOCK', value: String(spec.celestia.indexerStartBlock) },
-      { name: 'DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__CONFIRMATIONS', value: '6' },
-      { name: 'DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__POLL_INTERVAL_MS', value: '60000' },
-      { name: 'DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__SIGNER_ADDRESS', value: spec.celestia.signerAddress },
-      { name: 'DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__FETCH_AND_DECODE_BLOBS', value: 'true' },
+      // Ethereum DA resolver/indexer inputs for AdvanceL2 builder v2.
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL', value: getEthereumDaSubmitterRpcUrl(spec) },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID', value: String(getEthereumDaChainId(spec)) },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID', value: String(spec.network.l2ChainId) },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__MIN_FINALITY', value: getEthereumDaMinFinality(spec) },
       { name: 'RUST_LOG', value: 'info,withdrawal_processor=info' }
     ],
     envFrom: [
@@ -810,59 +978,6 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
       ...envSecrets,
       ...sessionSecrets
     }
-  }
-
-  return yaml.dump(values)
-}
-
-/**
- * Generate Rollup Relayer values
- */
-function generateRollupRelayerValues(spec: DeploymentSpec): string {
-  const secretConfig = getSecretProviderConfig(spec)
-
-  const image = resolveImage(spec, 'rollupRelayer', {
-    pullPolicy: 'IfNotPresent',
-    repository: 'scrolltech/rollup-relayer',
-    tag: 'v4.4.83'
-  })
-
-  const values: Record<string, any> = {
-    configMaps: {
-      env: {
-        data: {
-          SCROLL_ROLLUP_BATCH_COLLECTION_TIME_SEC: String(spec.rollup.coordinator.batchCollectionTimeSec),
-          SCROLL_ROLLUP_BUNDLE_COLLECTION_TIME_SEC: String(spec.rollup.coordinator.bundleCollectionTimeSec),
-          SCROLL_ROLLUP_CHUNK_COLLECTION_TIME_SEC: String(spec.rollup.coordinator.chunkCollectionTimeSec),
-          SCROLL_ROLLUP_L1_RPC_URL: spec.network.l1RpcEndpoint,
-          SCROLL_ROLLUP_L2_RPC_URL: spec.network.l2RpcEndpoint
-        },
-        enabled: true
-      }
-    },
-    envFrom: [
-      { configMapRef: { name: 'rollup-relayer-env' } },
-      { secretRef: { name: 'rollup-relayer-secret-env' } }
-    ],
-    image,
-    resources: {
-      limits: { cpu: '1000m', memory: '4Gi' },
-      requests: { cpu: '100m', memory: '512Mi' }
-    }
-  }
-
-  const externalSecrets = generateExternalSecrets(
-    'rollup-relayer-secret-env',
-    secretConfig,
-    [
-      { property: 'SCROLL_ROLLUP_DB_DSN', remoteKey: 'rollup-relayer-secret-env', secretKey: 'SCROLL_ROLLUP_DB_DSN' },
-      { property: 'SCROLL_ROLLUP_L1_COMMIT_SENDER_PRIVATE_KEY', remoteKey: 'rollup-relayer-secret-env', secretKey: 'SCROLL_ROLLUP_L1_COMMIT_SENDER_PRIVATE_KEY' },
-      { property: 'SCROLL_ROLLUP_L1_FINALIZE_SENDER_PRIVATE_KEY', remoteKey: 'rollup-relayer-secret-env', secretKey: 'SCROLL_ROLLUP_L1_FINALIZE_SENDER_PRIVATE_KEY' }
-    ]
-  )
-
-  if (externalSecrets) {
-    values.externalSecrets = externalSecrets
   }
 
   return yaml.dump(values)

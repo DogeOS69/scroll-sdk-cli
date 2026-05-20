@@ -12,8 +12,6 @@
     "@aws-sdk/client-eks": "^3.830.0",
     "@aws-sdk/client-iam": "^3.830.0",
     "@aws-sdk/client-sts": "^3.830.0",
-    "@cosmjs/proto-signing": "^0.33.1",
-    "@cosmjs/stargate": "^0.33.1",
     "@cubist-labs/cubesigner-sdk": "^0.4.152-0",
     "@cubist-labs/cubesigner-sdk-fs-storage": "^0.4.152-0",
     "@iarna/toml": "^2.2.5",

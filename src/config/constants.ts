@@ -43,6 +43,13 @@ export const SETUP_DEFAULTS_TEMPLATE = getSetupDefaultsTemplate()
 export const DOGE_CONFIG_TEMPLATE = getDogeConfigTemplate()
 
 /**
+ * Internal l1-interface service endpoints consumed by L2 geth nodes.
+ * These are cluster-local service names, not real Ethereum DA endpoints.
+ */
+export const L1_INTERFACE_RPC_ENDPOINT = 'http://l1-interface:8545'
+export const L1_INTERFACE_BEACON_API_ENDPOINT = 'http://l1-interface:5052'
+
+/**
  * YAML formatting options
  */
 

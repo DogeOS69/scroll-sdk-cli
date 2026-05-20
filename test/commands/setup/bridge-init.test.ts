@@ -54,6 +54,9 @@ describe('setup bridge-init protocol seed generation', () => {
     L2_MOAT_PROXY_ADDR: '0x0000000000000000000000000000000000000003',
   }
   const configToml = {
+    ethereumDa: {
+      chainId: 32_382,
+    },
     general: {
       CHAIN_ID_L1: 31_337,
       CHAIN_ID_L2: 412_346,
@@ -82,7 +85,7 @@ describe('setup bridge-init protocol seed generation', () => {
 
     expect(result.protocol).to.deep.equal({
       dogecoin_chain_id: 111_111,
-      eth_chain_id: 31_337,
+      eth_chain_id: 32_382,
       l2_chain_id: 412_346,
       protocol_version: 2,
     })
@@ -98,7 +101,7 @@ describe('setup bridge-init protocol seed generation', () => {
         message_queue_gas_limit: 1_000_000,
         moat_address: '0x0000000000000000000000000000000000000003',
       },
-      eth_chain_id: 31_337,
+      eth_chain_id: 32_382,
       key_rotation_min_grace_wf_txs: 100,
       l2_chain_id: 412_346,
       min_deposit_sats: 100_000,

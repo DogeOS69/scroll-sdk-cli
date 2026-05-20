@@ -18,6 +18,7 @@ import {
   validateDeploymentSpec,
   writeGeneratedConfigs,
 } from '../../src/utils/deployment-spec-generator.js';
+import { generateValuesFiles } from '../../src/utils/values-generator.js';
 
 /**
  * Minimal valid DeploymentSpec fixture for testing generators.
@@ -43,13 +44,6 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       targetAmounts: { bridge: 10_000_000, feeWallet: 5_000_000, sequencer: 8_000_000 },
       thresholds: { attestation: 2, correctness: 1, recovery: 1, sequencer: 1 },
       timelockSeconds: 86_400,
-    },
-    celestia: {
-      indexerStartBlock: 100,
-      mnemonic: '$ENV:CELESTIA_MNEMONIC',
-      namespace: '0x0102030405060708',
-      signerAddress: 'celestia1abc...',
-      tendermintRpcUrl: 'http://celestia-rpc:26657',
     },
     contracts: {
       deploymentSalt: '0xabcdef',
@@ -85,6 +79,13 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       rpc: { password: 'rpcpass', url: 'http://dogecoin-rpc:22555', username: 'rpcuser' },
       walletPath: '/data/wallet.dat',
     },
+    ethereumDa: {
+      beaconRpcUrl: 'https://eth-beacon-chain-sepolia.drpc.org/rest',
+      chain: 'sepolia',
+      finalizationDepth: 64,
+      l1RpcUrl: 'https://sepolia.drpc.org',
+      minFinality: 'finalized',
+    },
     frontend: {
       baseDomain: 'example.com',
       externalUrls: {
@@ -114,7 +115,6 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
     infrastructure: { bootnodeCount: 1, provider: 'local', sequencerCount: 1 },
     metadata: { environment: 'testnet', name: 'test-deployment' },
     network: {
-      daPublisherEndpoint: 'http://da-publisher:8080',
       l1ChainId: 11_155_111,
       l1ChainName: 'Sepolia',
       l1RpcEndpoint: 'http://l1-rpc:8545',
@@ -363,6 +363,11 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('CHAIN_ID_L2');
       expect(output).to.include('L1_RPC_ENDPOINT');
       expect(output).to.include('http://l1-rpc:8545');
+      expect(output).not.to.include('BEACON_RPC_ENDPOINT');
+      expect(output).to.include('[ethereumDa]');
+      expect(output).to.include('chain = "sepolia"');
+      expect(output).to.include('submitterRpcUrl = "https://sepolia.drpc.org"');
+      expect(output).to.include('beaconRpcUrl = "https://eth-beacon-chain-sepolia.drpc.org/rest"');
     });
 
     it('includes database connection strings', () => {
@@ -467,13 +472,15 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('/data/wallet.dat');
     });
 
-    it('includes celestia DA config', () => {
+    it('includes Ethereum DA config', () => {
       const spec = createMinimalSpec();
       const output = generateDogeConfigToml(spec);
 
-      expect(output).to.include('celestiaIndexerStartBlock');
-      expect(output).to.include('0x0102030405060708');
-      expect(output).to.include('http://celestia-rpc:26657');
+      expect(output).not.to.include('ethereumDa');
+      expect(output).not.to.include('submitterPrivateKey');
+      expect(output).not.to.include('eth-da-indexer.sqlite');
+      expect(output).not.to.include('eth-da-artifacts');
+      expect(output).not.to.include('celestiaIndexerStartBlock');
     });
 
     it('includes blockbook config when present', () => {
@@ -631,6 +638,42 @@ describe('deployment-spec-generator', () => {
       expect(configs['config.toml']).to.be.a('string').and.not.be.empty;
       expect(configs['doge-config.toml']).to.be.a('string').and.not.be.empty;
       expect(configs['setup_defaults.toml']).to.be.a('string').and.not.be.empty;
+    });
+  });
+
+  describe('generateValuesFiles', () => {
+    it('generates Ethereum DA submitter values instead of legacy Celestia DA services', () => {
+      const spec = createMinimalSpec();
+      spec.infrastructure = {
+        aws: { accountId: '1', eksClusterName: 'cluster', region: 'us-west-2', secretsPrefix: 'dogeos-test' },
+        bootnodeCount: 1,
+        provider: 'aws',
+        sequencerCount: 1,
+      };
+      const files = generateValuesFiles(spec);
+
+      expect(files).to.have.property('eth-da-submitter-production.yaml');
+      expect(files).to.have.property('l1-devnet-production.yaml');
+      expect(files).to.have.property('withdrawal-processor-production.yaml');
+      expect(files).not.to.have.property('ethereum-production.yaml');
+      expect(files).not.to.have.property('celestia-node-production.yaml');
+      expect(files).not.to.have.property('da-publisher-production.yaml');
+      expect(files).not.to.have.property('rollup-relayer-production.yaml');
+
+      expect(files['eth-da-submitter-production.yaml']).to.include('DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY');
+      expect(files['eth-da-submitter-production.yaml']).to.include('dogeos-test/eth-da-submitter-secret-env');
+      expect(files['eth-da-submitter-production.yaml']).to.include('DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL');
+      expect(files['l1-devnet-production.yaml']).to.include('chainId: 11155111');
+      expect(files['l1-devnet-production.yaml']).to.include('networkId: 11155111');
+      expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__INDEXER_SQLITE_PATH');
+      expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_STORE_ROOT');
+      expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_METADATA_SQLITE_PATH');
+      expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE');
+      expect(files['l2-rpc-production.yaml']).to.include('L2GETH_DA_BLOB_BEACON_NODE: http://l1-interface:5052');
+      expect(files['l2-rpc-production.yaml']).to.include('L2GETH_L1_ENDPOINT: http://l1-interface:8545');
+      expect(files['l2-bootnode-production.yaml']).to.include('L2GETH_DA_BLOB_BEACON_NODE: http://l1-interface:5052');
+      expect(files['l2-bootnode-production.yaml']).to.include('L2GETH_L1_ENDPOINT: http://l1-interface:8545');
+      expect(files['l2-sequencer-production.yaml']).to.include('L2GETH_L1_ENDPOINT: http://l1-interface:8545');
     });
   });
 

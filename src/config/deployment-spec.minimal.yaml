@@ -25,7 +25,6 @@ network:
   tokenSymbol: DOGE
   l1RpcEndpoint: "http://l1-interface:8545"
   l2RpcEndpoint: "http://l2-rpc:8545"
-  daPublisherEndpoint: "http://da-publisher:8545"
 
 database:
   admin:
@@ -83,12 +82,15 @@ dogecoin:
   indexerStartHeight: 0
   walletPath: ".data/doge-wallet.json"
 
-celestia:
-  tendermintRpcUrl: "http://celestia-node:26657"
-  namespace: "0000000000000000000000000000000000000000646f67656f73"
-  signerAddress: "$ENV:CELESTIA_SIGNER_ADDRESS"
-  mnemonic: "$ENV:CELESTIA_MNEMONIC"
-  indexerStartBlock: 0
+ethereumDa:
+  chain: devnet
+  chainId: 32382
+  l1RpcUrl: "http://eth-devnet-geth:8545"
+  beaconRpcUrl: "http://eth-devnet-beacon:5052"
+  l2RpcUrl: "http://l2-rpc:8545"
+  confirmationDepth: 1
+  finalizationDepth: 1
+  minFinality: safe
 
 bridge:
   seedString: "dogeos-devnet-v1"

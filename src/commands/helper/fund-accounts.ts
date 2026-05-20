@@ -101,20 +101,14 @@ export default class HelperFundAccounts extends Command {
     const configPath = path.resolve(flags.config)
     const config = parseTomlConfig(configPath)
 
-    let l1RpcUrl: string
-    let l2RpcUrl: string
-
-    if (flags.pod) {
-      l1RpcUrl = config?.general?.L1_RPC_ENDPOINT
-      l2RpcUrl = config?.general?.L2_RPC_ENDPOINT
-    } else {
-      l1RpcUrl = flags.l1rpc ?? config.frontend.EXTERNAL_RPC_URI_L1
-      l2RpcUrl = flags.l2rpc ?? config.frontend.EXTERNAL_RPC_URI_L2
-    }
+    const l1RpcUrl = flags.l1rpc ?? config?.ethereumDa?.submitterRpcUrl
+    const l2RpcUrl = flags.pod
+      ? config?.general?.L2_RPC_ENDPOINT
+      : flags.l2rpc ?? config.frontend.EXTERNAL_RPC_URI_L2
 
     if (!l1RpcUrl || !l2RpcUrl) {
       this.error(
-        `Missing RPC URL(s) in ${configPath}. Please ensure L1_RPC_ENDPOINT and L2_RPC_ENDPOINT (for pod mode) or EXTERNAL_RPC_URI_L1 and EXTERNAL_EXPLORER_URI_L2 (for non-pod mode) are defined or use the '-o' and '-t' flags.`,
+        `Missing RPC URL(s) in ${configPath}. Please ensure ethereumDa.submitterRpcUrl is defined for L1 funding and L2_RPC_ENDPOINT (for pod mode) or EXTERNAL_RPC_URI_L2 (for non-pod mode) is defined, or use the '-o' and '-t' flags.`,
       )
     }
 

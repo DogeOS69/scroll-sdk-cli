@@ -10,7 +10,11 @@ import * as path from 'node:path'
 
 import type { DogeConfig } from '../../types/doge-config.js'
 
-import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
+import {
+  L1_INTERFACE_BEACON_API_ENDPOINT,
+  L1_INTERFACE_RPC_ENDPOINT,
+  YAML_DUMP_OPTIONS,
+} from '../../config/constants.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
@@ -72,6 +76,8 @@ export default class SetupPrepCharts extends Command {
     'values-dir': Flags.string({ default: './values', description: 'Directory containing values files' }),
   }
 
+  private bridgeConfig: any = {}
+
   private configData: any = {}
 
   private configMapping: Record<string, ((chartName: string, productionNumber: string) => string) | string> = {
@@ -82,6 +88,13 @@ export default class SetupPrepCharts extends Command {
     'CHAIN_ID_L1': 'general.CHAIN_ID_L1',
     'CHAIN_ID_L2': 'general.CHAIN_ID_L2',
     'COORDINATOR_API_HOST': 'ingress.COORDINATOR_API_HOST',
+    'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__ETH_CHAIN_ID': 'ethereumDa.chainId',
+    'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__L2_CHAIN_ID': 'general.CHAIN_ID_L2',
+    'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL': 'ethereumDa.submitterRpcUrl',
+    'DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL': 'general.L2_RPC_ENDPOINT',
+    'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID': 'ethereumDa.chainId',
+    'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL': 'ethereumDa.submitterRpcUrl',
+    'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID': 'general.CHAIN_ID_L2',
     // Add ingress host mappings
     'FRONTEND_HOST': 'ingress.FRONTEND_HOST',
     'GRAFANA_HOST': 'ingress.GRAFANA_HOST',
@@ -90,14 +103,12 @@ export default class SetupPrepCharts extends Command {
     'L1_RPC_ENDPOINT': 'general.L1_RPC_ENDPOINT',
     'L1_SCROLL_CHAIN_PROXY_ADDR': 'contractsFile.L1_SCROLL_CHAIN_PROXY_ADDR',
     'L2_RPC_ENDPOINT': 'general.L2_RPC_ENDPOINT',
-    'L2GETH_DA_BLOB_BEACON_NODE': 'general.BEACON_RPC_ENDPOINT',
     // 'L2GETH_NODEKEY': (chartName, productionNumber) =>
     //   chartName.startsWith('l2-bootnode') ? `bootnode.bootnode-${productionNumber}.L2GETH_NODEKEY` :
     //     (productionNumber === '0' ? 'sequencer.L2GETH_NODEKEY' : `sequencer.sequencer-${productionNumber}.L2GETH_NODEKEY`),
     'L2GETH_KEYSTORE': (chartName, productionNumber) =>
       productionNumber === '0' ? 'sequencer.L2GETH_KEYSTORE' : `sequencer.sequencer-${productionNumber}.L2GETH_KEYSTORE`,
     'L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK': 'general.L1_CONTRACT_DEPLOYMENT_BLOCK',
-    'L2GETH_L1_ENDPOINT': 'general.L1_RPC_ENDPOINT',
     'L2GETH_PASSWORD': (chartName, productionNumber) =>
       productionNumber === '0' ? 'sequencer.L2GETH_PASSWORD' : `sequencer.sequencer-${productionNumber}.L2GETH_PASSWORD`,
     'L2GETH_PEER_LIST': 'sequencer.L2_GETH_STATIC_PEERS',
@@ -114,11 +125,11 @@ export default class SetupPrepCharts extends Command {
 
   private contractsConfig: any = {}
   private dogeConfig: DogeConfig = {} as DogeConfig
-  private flags: any; // To store parsed flags
+  private flags: any
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
-  private bridgeConfig: any = {}
+  private protocolSeedConfig: toml.JsonMap = {}
   private withdrawalProcessorConfig: toml.JsonMap = {}
 
   public async run(): Promise<void> {
@@ -240,6 +251,38 @@ export default class SetupPrepCharts extends Command {
     
   }
 
+  private getEthDaGenesisFrontierEnv(): Record<string, string> {
+    const chainAnchors = this.protocolSeedConfig.chain_anchors as Record<string, unknown> | undefined
+
+    const requireAnchor = (key: string, description: string): string => {
+      const value = chainAnchors?.[key]
+      if (typeof value === 'string' && value) {
+        return value
+      }
+
+      this.error(
+        `.data/protocol_seed.toml is missing [chain_anchors].${key}. ${description}. ` +
+        'Run `scrollsdk setup bridge-init --step 1-prepare` against the target L2 genesis.json first.'
+      )
+    }
+
+    return {
+      DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_BATCH_HASH: requireAnchor(
+        'genesis_batch_hash',
+        'This must be computed from the target L2 genesis.json.'
+      ),
+      DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_STATE_ROOT: requireAnchor(
+        'genesis_state_root',
+        'This must be computed from the target L2 genesis.json.'
+      ),
+    }
+  }
+
+  private getFixedL2NodeEnvValue(key: string): string | undefined {
+    if (key === 'L2GETH_L1_ENDPOINT') return L1_INTERFACE_RPC_ENDPOINT
+    if (key === 'L2GETH_DA_BLOB_BEACON_NODE') return L1_INTERFACE_BEACON_API_ENDPOINT
+  }
+
   private getNestedValue(obj: any, path: string): any {
     return path.split('.').reduce((prev, curr) => prev && prev[curr], obj)
   }
@@ -289,9 +332,16 @@ export default class SetupPrepCharts extends Command {
     this.bridgeConfig = JSON.parse(fs.readFileSync(bridgeConfigPath, 'utf8'));
     if (!this.bridgeConfig.redeem_script_hex) {
       this.error(`${bridgeConfigPath} missing redeem_script_hex. Run scrollsdk setup bridge-init --step 3-bridge-info first`);
+    }
+
+    const protocolSeedPath = path.join(process.cwd(), ".data/protocol_seed.toml")
+    if (!fs.existsSync(protocolSeedPath)) {
+      this.error("run scrollsdk setup bridge-init --step 1-prepare first");
       return
     }
-    
+
+    const protocolSeedContent = fs.readFileSync(protocolSeedPath, 'utf8')
+    this.protocolSeedConfig = toml.parse(protocolSeedContent)
   }
 
   private async processConfigYaml(valuesDir: string): Promise<{ skipped: number, updated: number }> {
@@ -309,8 +359,6 @@ export default class SetupPrepCharts extends Command {
 
       if (chartName === "rollup-relayer") {
         let updated = false;
-        const daPublisherEndpoint = this.getConfigValue("general.DA_PUBLISHER_ENDPOINT");
-
         // Parse the JSON string from scrollConfig
         let scrollConfigJson: any = {};
         try {
@@ -324,13 +372,6 @@ export default class SetupPrepCharts extends Command {
           scrollConfigJson.l1_config.endpoint = "";
           updated = true;
           changes.push({ key: `l1_config.endpoint`, newValue: "", oldValue: currentL1Endpoint });
-        }
-
-        const currentEndpoint = scrollConfigJson.l2_config.relayer_config.sender_config.endpoint;
-        if (currentEndpoint !== daPublisherEndpoint) {
-          scrollConfigJson.l2_config.relayer_config.sender_config.endpoint = daPublisherEndpoint;
-          updated = true;
-          changes.push({ key: `l2_config.relayer_config.sender_config.endpoint`, newValue: daPublisherEndpoint, oldValue: currentEndpoint });
         }
 
         // Remove celestia_submit_endpoint if it exists
@@ -622,16 +663,25 @@ export default class SetupPrepCharts extends Command {
           if (configMapData && typeof configMapData === 'object' && 'data' in configMapData) {
             const envData = (configMapData as any).data
             for (const [key, oldValue] of Object.entries(envData)) {
+              if (this.isL2Node(chartName)) {
+                const fixedValue = this.getFixedL2NodeEnvValue(key)
+                if (fixedValue !== undefined) {
+                  if (fixedValue !== oldValue) {
+                    changes.push({ key, newValue: fixedValue, oldValue: JSON.stringify(oldValue) })
+                    envData[key] = fixedValue
+                    updated = true
+                  }
+
+                  continue
+                }
+              }
+
               const configPathOrResolver = this.configMapping[key]
               if (configPathOrResolver) {
                 let configKey: string
                 configKey = typeof configPathOrResolver === 'function' ? configPathOrResolver(chartName, productionNumber) : configPathOrResolver;
                 if (chartName === "l1-devnet" && key === "CHAIN_ID") {
-                  configKey = "general.CHAIN_ID_L1";
-                }
-
-                if (chartName === "rollup-relayer" && key === "L1_RPC_ENDPOINT") {
-                  configKey = "general.DA_PUBLISHER_ENDPOINT";
+                  configKey = "ethereumDa.chainId";
                 }
 
                 let configValue = this.getConfigValue(configKey)
@@ -681,7 +731,6 @@ export default class SetupPrepCharts extends Command {
                         'blockbook': 'BLOCKBOOK_HOST',
                         'blockscout': 'BLOCKSCOUT_HOST',
                         'bridge-history-api': 'BRIDGE_HISTORY_API_HOST',
-                        'celestia-node': 'CELESTIA_HOST',
                         'coordinator-api': 'COORDINATOR_API_HOST',
                         'dogecoin': 'DOGECOIN_HOST',
                         'frontends': 'FRONTEND_HOST',
@@ -995,62 +1044,7 @@ export default class SetupPrepCharts extends Command {
       }
 
       // eslint-disable-next-line unicorn/prefer-switch
-      if (chartName === "celestia-node") {
-        let ingressUpdated = false;
-        if (productionYaml.ingress) {
-          const ingressValue = productionYaml.ingress;
-          ingressValue.enabled = true;
-          const configValue = this.getConfigValue('ingress.CELESTIA_HOST');
-          ingressUpdated = this.processIngressHosts(ingressValue, configValue, changes);
-        } else {
-          productionYaml.ingress = {
-            annotations: {
-              "cert-manager.io/cluster-issuer": "letsencrypt-prod",
-              "nginx.ingress.kubernetes.io/ssl-redirect": "true"
-            },
-            className: "nginx",
-            enabled: true,
-            hosts: [
-              {
-                host: this.getConfigValue("ingress.CELESTIA_HOST"),
-                paths: [{ path: "/", pathType: "Prefix" }]
-              }
-            ],
-          };
-          changes.push({ key: `ingress`, newValue: JSON.stringify(productionYaml.ingress), oldValue: "undefined" });
-          ingressUpdated = true;
-        }
-
-        if (ingressUpdated) {
-          updated = true;
-        }
-
-        if ((!productionYaml.core || !productionYaml.core.rpc_url) && !productionYaml.core) {
-            productionYaml.core = {
-              rpc_url: ""
-            };
-          }
-
-        const oldCoreRpcUrl = productionYaml.core.rpc_url;
-
-        let newCoreRpcUrl = this.dogeConfig.da?.tendermintRpcUrl;
-        if (!newCoreRpcUrl) {
-          this.error(`Invalid tendermintRpcUrl URL: ${newCoreRpcUrl}`)
-        }
-
-        try {
-          const urlObj = new URL(newCoreRpcUrl);
-          newCoreRpcUrl = urlObj.hostname;
-        } catch {
-          this.error(`Invalid tendermintRpcUrl URL: ${newCoreRpcUrl}`);
-        }
-
-        if (oldCoreRpcUrl !== newCoreRpcUrl) {
-          productionYaml.core.rpc_url = newCoreRpcUrl;
-          updated = true;
-          changes.push({ key: "core.rpc_url", "newValue": newCoreRpcUrl, oldValue: oldCoreRpcUrl });
-        }
-      } else if (chartName === 'blockbook') {
+      if (chartName === 'blockbook') {
         let ingressUpdated = false;
         if (productionYaml.ingress) {
           const ingressValue = productionYaml.ingress;
@@ -1089,13 +1083,36 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
+      else if (chartName === "l1-devnet") {
+        if (!productionYaml.network || typeof productionYaml.network !== 'object') {
+          productionYaml.network = {}
+        }
+
+        const ethereumDaChainId = Number(this.getConfigValue("ethereumDa.chainId"))
+        if (!Number.isInteger(ethereumDaChainId) || ethereumDaChainId <= 0) {
+          this.error('ethereumDa.chainId must be set to the real Ethereum DA execution chain ID before preparing the l1-devnet chart.')
+        }
+
+        const networkConfig = productionYaml.network
+        if (networkConfig.chainId !== ethereumDaChainId) {
+          changes.push({ key: 'network.chainId', newValue: String(ethereumDaChainId), oldValue: String(networkConfig.chainId || 'undefined') })
+          networkConfig.chainId = ethereumDaChainId
+          updated = true
+        }
+
+        if (networkConfig.networkId !== ethereumDaChainId) {
+          changes.push({ key: 'network.networkId', newValue: String(ethereumDaChainId), oldValue: String(networkConfig.networkId || 'undefined') })
+          networkConfig.networkId = ethereumDaChainId
+          updated = true
+        }
+      }
+
       else if (chartName === 'fee-oracle') {
         if (!productionYaml.configMaps?.env?.data) {
           this.error(`${chartName}: configMaps.env.data not found in config`);
         }
 
         const todoMappings = {
-          "DOGEOS_FEE_ORACLE_CELESTIA__NAMESPACE_ID": this.dogeConfig.da?.daNamespace,
           "DOGEOS_FEE_ORACLE_DOGECOIN__NETWORK_STR": this.withdrawalProcessorConfig.network_str,
           "DOGEOS_FEE_ORACLE_DOGECOIN__RPC_URL": dogecoinInternalUrl,
           "DOGEOS_FEE_ORACLE_L2__CHAIN_ID": String(this.getConfigValue("general.CHAIN_ID_L2")),
@@ -1124,10 +1141,8 @@ export default class SetupPrepCharts extends Command {
         }
 
         const todoMappings = {
-          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_URL": new URL(this.dogeConfig.da?.tendermintRpcUrl || "").origin,
-          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network === "mainnet" ? "" : "http://celestia-testnet-mocha:26658",
-          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__NAMESPACE_ID": this.dogeConfig.da?.daNamespace,
-          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DISCOVERY_MODE": "on_demand",
+          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__STORE_RAW_BLOB_DATA": "true",
           "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__BRIDGE_ADDRESS": this.withdrawalProcessorConfig.bridge_address,
           "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT": String(Math.max(0, dogecoinIndexerStartHeight)),
           "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL": dogecoinInternalUrl,
@@ -1162,14 +1177,6 @@ export default class SetupPrepCharts extends Command {
 
         const todoMappings = {
           "DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS": this.withdrawalProcessorConfig.bridge_address,
-          "DOGEOS_WITHDRAWAL_INITIAL_BRIDGE_REDEEM_SCRIPT_HEX": this.bridgeConfig.redeem_script_hex,
-          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__BLOB_GET_ALL_FALLBACK_URL": new URL(this.dogeConfig.da?.tendermintRpcUrl || "").origin,
-          // "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__TENDERMINT_RPC_URL": this.dogeConfig.da?.tendermintRpcUrl,
-          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE": this.dogeConfig.da?.daNamespace,
-          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_RPC_URL": this.dogeConfig.network === "mainnet" ? "" : "http://celestia-testnet-mocha:26658",
-          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__SIGNER_ADDRESS": this.dogeConfig.da?.signerAddress,
-
-          "DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__START_BLOCK": this.dogeConfig.da?.celestiaIndexerStartBlock,
           // "DOGEOS_WITHDRAWAL_DATABASE_URL": "sqlite:///app/data/withdrawal_processor.db",
           "DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT": String(Math.max(0, dogecoinIndexerStartHeight)),
           "DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL": dogecoinInternalUrl,
@@ -1177,8 +1184,13 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT"),
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__START_BLOCK": "0",
+          "DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID": String(this.getConfigValue("ethereumDa.chainId")),
+          "DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL": this.getConfigValue("ethereumDa.submitterRpcUrl"),
+          "DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID": String(this.getConfigValue("general.CHAIN_ID_L2")),
+          "DOGEOS_WITHDRAWAL_ETHEREUM_DA__MIN_FINALITY": this.getConfigValue("ethereumDa.minFinality"),
           "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_TXID": this.withdrawalProcessorConfig.genesis_sequencer_txid,
           "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_VOUT": this.withdrawalProcessorConfig.genesis_sequencer_vout,
+          "DOGEOS_WITHDRAWAL_INITIAL_BRIDGE_REDEEM_SCRIPT_HEX": this.bridgeConfig.redeem_script_hex,
           "DOGEOS_WITHDRAWAL_NETWORK_STR": this.withdrawalProcessorConfig.network_str,
           "DOGEOS_WITHDRAWAL_TSO_URL": "http://tso-service:3000"
         }
@@ -1256,26 +1268,26 @@ export default class SetupPrepCharts extends Command {
           changes.push({ key: `env.${envVarName}`, newValue: configValue, oldValue: 'undefined' });
         }
       }
-      else if (chartName === "da-publisher") {
-        const todoMappings = {
-          "DOGEOS_DA_PUBLISHER_CELESTIA_NAMESPACE": this.dogeConfig.da?.daNamespace,
-          // TODO what if mainnet ?
-          "DOGEOS_DA_PUBLISHER_CELESTIA_RPC_URL": this.dogeConfig.network === "mainnet" ? "" : "celestia-testnet-mocha:26658"
+      else if (chartName === "eth-da-submitter") {
+        if (!productionYaml.configMaps?.env?.data) {
+          this.error(`${chartName}: configMaps.env.data not found in config`);
         }
-       
+
+        const todoMappings = {
+          ...this.getEthDaGenesisFrontierEnv(),
+          "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__ETH_CHAIN_ID": String(this.getConfigValue("ethereumDa.chainId")),
+          "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__L2_CHAIN_ID": String(this.getConfigValue("general.CHAIN_ID_L2")),
+          "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL": this.getConfigValue("ethereumDa.submitterRpcUrl"),
+          "DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT")
+        }
+
         const envData = productionYaml.configMaps.env.data;
         for (const [envKey, newValue] of Object.entries(todoMappings)) {
-          if (Object.hasOwn(envData, envKey)) {
-            if (envData[envKey] !== newValue) {
-              const oldValue = envData[envKey];
-              envData[envKey] = newValue;
-              updated = true;
-              changes.push({ key: `configMaps.env.data.${envKey}`, newValue: String(newValue), oldValue: String(oldValue) });
-            }
-          } else {
+          if (envData[envKey] !== newValue) {
+            const oldValue = envData[envKey];
             envData[envKey] = newValue;
             updated = true;
-            changes.push({ key: `configMaps.env.data.${envKey}`, newValue: String(newValue), oldValue: 'undefined' });
+            changes.push({ key: `configMaps.env.data.${envKey}`, newValue: String(newValue), oldValue: String(oldValue || 'undefined') });
           }
         }
       }
@@ -1310,7 +1322,7 @@ export default class SetupPrepCharts extends Command {
         const l2RpcEndpoint = this.getConfigValue("general.L2_RPC_ENDPOINT");
         const l2TxFeeVaultAddr = this.getConfigValue("contracts.overrides.L2_TX_FEE_VAULT");
         const l2BridgeFeeRecipientAddr = this.getConfigValue("contracts.L2_BRIDGE_FEE_RECIPIENT_ADDR");
-        const isDogeos = this.getConfigValue("general.L1_RPC_ENDPOINT") === "http://l1-interface:8545";
+        const isDogeos = this.getConfigValue("general.L1_RPC_ENDPOINT") === L1_INTERFACE_RPC_ENDPOINT;
         const l1MessageQueueProxyAddr = isDogeos ? "" : this.getConfigValue("contractsFile.L1_MESSAGE_QUEUE_V2_PROXY_ADDR");
         const l1RpcEndpoint = this.getConfigValue("general.L1_RPC_ENDPOINT");
 
@@ -1453,7 +1465,7 @@ export default class SetupPrepCharts extends Command {
           changes.push({ key: `dogecoinConf.rpcuser`, newValue: String(expectedRpcUser), oldValue: String(rpcUser) });
         }
 
-        // Process dogecoin ingress (similar to celestia)
+        // Process dogecoin ingress.
         let ingressUpdated = false;
         if (productionYaml.ingress) {
           const configValue = this.getConfigValue('ingress.DOGECOIN_HOST');

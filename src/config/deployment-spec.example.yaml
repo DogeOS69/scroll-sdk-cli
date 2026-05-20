@@ -68,8 +68,6 @@ network:
   l1RpcEndpoint: "http://l1-interface:8545"
   l1RpcEndpointWebsocket: "ws://l1-interface:8546"
   l2RpcEndpoint: "http://l2-rpc:8545"
-  daPublisherEndpoint: "http://da-publisher:8545"
-  beaconRpcEndpoint: "http://celestia-node:26658"
 
 database:
   admin:
@@ -129,13 +127,20 @@ dogecoin:
   indexerStartHeight: 4000000
   walletPath: ".data/doge-wallet.json"
 
-celestia:
-  tendermintRpcUrl: "https://rpc-mocha.pops.one:443"
-  namespace: "0000000000000000000000000000000000000000646f67656f73"
-  signerAddress: "celestia1..."
-  mnemonic: "$ENV:CELESTIA_MNEMONIC"
-  indexerStartBlock: 1000000
-  authToken: "$ENV:CELESTIA_AUTH_TOKEN"
+ethereumDa:
+  chain: sepolia
+  chainId: 11155111
+  l1RpcUrl: "https://sepolia.drpc.org"
+  beaconRpcUrl: "https://eth-beacon-chain-sepolia.drpc.org/rest"
+  l2RpcUrl: "http://l2-rpc:8545"
+  confirmationDepth: 1
+  finalizationDepth: 64
+  minFinality: safe
+  batch:
+    genesisBatchHash: "0x0000000000000000000000000000000000000000000000000000000000000000"
+    genesisStateRoot: "0x0000000000000000000000000000000000000000000000000000000000000000"
+    genesisWithdrawRoot: "0x0000000000000000000000000000000000000000000000000000000000000000"
+    genesisRelayedDepositQueueHash: "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 bridge:
   seedString: "dogeos-testnet-seed-v1"
@@ -201,7 +206,6 @@ frontend:
     adminDashboard: admin.testnet.dogeos.io
     grafana: grafana.testnet.dogeos.io
     tso: tso.testnet.dogeos.io
-    celestia: celestia.testnet.dogeos.io
     dogecoin: dogecoin.testnet.dogeos.io
     blockbook: blockbook.testnet.dogeos.io
   externalUrls:
@@ -271,15 +275,12 @@ images:
       tag: "$ENV:L2_IMAGE_TAG"
 
     # Rollup Services
-    rollupRelayer:
-      repository: scrolltech/rollup-relayer
-      tag: v4.4.91
     coordinator:
       repository: scrolltech/coordinator
       tag: v4.4.91
-    daPublisher:
-      repository: scrolltech/da-publisher
-      tag: v4.4.91
+    ethDaSubmitter:
+      repository: dogeos69/eth-da-submitter
+      tag: latest
     gasOracle:
       repository: scrolltech/gas-oracle
       tag: v4.4.91

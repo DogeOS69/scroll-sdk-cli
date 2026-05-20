@@ -103,7 +103,7 @@ export function buildEthereumDaProtocolSeedConfig(
 ): any {
   const protocolSeedConfig = inputs.existingProtocolSeedConfig ?? {}
   const dogecoinChainId = helpers.resolveDogecoinChainId(inputs.network)
-  const ethChainId = helpers.getNumberValue(inputs.configToml?.general, 'CHAIN_ID_L1')
+  const ethChainId = helpers.getNumberValue(inputs.configToml?.ethereumDa, 'chainId')
   const l2ChainId = helpers.getNumberValue(inputs.configToml?.general, 'CHAIN_ID_L2')
 
   protocolSeedConfig.protocol ??= {}
