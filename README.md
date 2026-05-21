@@ -1117,7 +1117,7 @@ EXAMPLES
 
   $ scrollsdk setup dummy-signers --aws-only
 
-  $ scrollsdk setup dummy-signers --image-tag shu-test-0605
+  $ scrollsdk setup dummy-signers --image-tag newda
 ```
 
 _See code: [src/commands/setup/dummy-signers.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/dummy-signers.ts)_

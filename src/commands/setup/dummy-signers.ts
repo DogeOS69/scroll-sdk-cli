@@ -520,8 +520,8 @@ export class DummySignersManager {
 
     // Try different -local variants
     const localVariants = [
-      `${baseTag}-local`,           // shu-test-0605 → shu-test-0605-local
-      baseTag.replace('-test', '-test-local'), // shu-test-0605 → shu-test-0605-local
+      `${baseTag}-local`,
+      baseTag.replace('-test', '-test-local'),
     ]
 
     // Remove duplicates
@@ -563,7 +563,7 @@ export class DummySignersManager {
     const repoName = 'dogeos/dummy-signer';
     const dockerHubImage = `dogeos69/dummy-signer:${this.imageTag}`;
     const ecrRegistry = `${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com`;
-    const ecrImage = `${ecrRegistry}/${repoName}:latest`;
+    const ecrImage = `${ecrRegistry}/${repoName}:${this.imageTag}`;
 
     this.log('Checking prerequisites...');
 
@@ -613,11 +613,11 @@ export class DummySignersManager {
     this.log('Checking if image exists in ECR...');
     let imageExistsInECR = false;
     try {
-      execFileSync('aws', ['ecr', 'describe-images', '--repository-name', repoName, '--image-ids', 'imageTag=latest', '--region', awsRegion], { stdio: 'pipe' });
+      execFileSync('aws', ['ecr', 'describe-images', '--repository-name', repoName, '--image-ids', `imageTag=${this.imageTag}`, '--region', awsRegion], { stdio: 'pipe' });
       imageExistsInECR = true;
-      this.log('Image already exists in ECR.');
+      this.log(`Image ${ecrImage} already exists in ECR.`);
     } catch {
-      this.log('Image does not exist in ECR. Will proceed to push.');
+      this.log(`Image ${ecrImage} does not exist in ECR. Will proceed to push.`);
     }
 
     if (!imageExistsInECR) {
@@ -659,7 +659,7 @@ export class DummySignersManager {
 
     this.log('Verifying image in ECR...');
     try {
-      execFileSync('aws', ['ecr', 'describe-images', '--repository-name', repoName, '--image-ids', 'imageTag=latest', '--region', awsRegion], { stdio: 'pipe' });
+      execFileSync('aws', ['ecr', 'describe-images', '--repository-name', repoName, '--image-ids', `imageTag=${this.imageTag}`, '--region', awsRegion], { stdio: 'pipe' });
       this.log('Image successfully verified in ECR.');
     } catch {
       throw new Error('Failed to verify image in ECR after push.');
@@ -844,7 +844,7 @@ export class DummySignersManager {
       })
     }
 
-    const IMAGE_URI = `${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/dogeos/dummy-signer:latest`
+    const IMAGE_URI = `${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/dogeos/dummy-signer:${this.imageTag}`
 
     const TSO_URL = this.readTsoUrlFromConfig()
     if (!TSO_URL) {
@@ -1195,7 +1195,7 @@ export class DummySignersCommand extends Command {
     '$ scrollsdk setup dummy-signers --config .data/doge-config-testnet.toml',
     '$ scrollsdk setup dummy-signers --local-only',
     '$ scrollsdk setup dummy-signers --aws-only',
-    '$ scrollsdk setup dummy-signers --image-tag shu-test-0605',
+    '$ scrollsdk setup dummy-signers --image-tag newda',
   ]
 
   static flags = {
