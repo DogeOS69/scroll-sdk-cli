@@ -64,7 +64,7 @@ export default class SetupPrepCharts extends Command {
   ]
 
   static override flags = {
-    'doge-config': Flags.string({ description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)' }),
+    'doge-config': Flags.string({ description: 'Path to Dogecoin config file' }),
     'github-token': Flags.string({ description: 'GitHub Personal Access Token', required: false }),
     'github-username': Flags.string({ description: 'GitHub username', required: false }),
     json: Flags.boolean({
@@ -1441,6 +1441,7 @@ export default class SetupPrepCharts extends Command {
         }
       }
       else if (chartName === "dogecoin") {
+        const isRegtest = this.dogeConfig.network === "regtest";
         const isTestnet = this.dogeConfig.network === "testnet";
         if (!productionYaml.dogecoinConf || typeof productionYaml.dogecoinConf !== 'object') {
           productionYaml.dogecoinConf = {}
@@ -1459,6 +1460,14 @@ export default class SetupPrepCharts extends Command {
           productionYaml.fullnameOverride = dogecoinEndpoints.serviceName;
           updated = true;
           changes.push({ key: `fullnameOverride`, newValue: dogecoinEndpoints.serviceName, oldValue: String(oldValue || 'undefined') });
+        }
+
+        const dogecoinConf_regtest = productionYaml.dogecoinConf?.regtest;
+        const expected_regtest = isRegtest ? 1 : 0;
+        if (dogecoinConf_regtest !== expected_regtest) {
+          productionYaml.dogecoinConf.regtest = expected_regtest;
+          updated = true;
+          changes.push({ key: `dogecoinConf.regtest`, newValue: String(expected_regtest), oldValue: String(dogecoinConf_regtest) });
         }
 
         const dogecoinConf_testnet = productionYaml.dogecoinConf?.testnet;
@@ -1486,7 +1495,7 @@ export default class SetupPrepCharts extends Command {
         }
 
         const storage_size = productionYaml.storage?.size;
-        const expected_storage_size = isTestnet ? "50Gi" : "250Gi";
+        const expected_storage_size = isRegtest || isTestnet ? "50Gi" : "250Gi";
         if (storage_size !== expected_storage_size) {
           productionYaml.storage.size = expected_storage_size;
           updated = true;

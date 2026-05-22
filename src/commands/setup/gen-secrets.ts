@@ -12,8 +12,8 @@ export default class SetupGenSecrets extends SetupGenL2Artifacts {
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --doge-config .data/doge-config-testnet.toml',
-    '<%= config.bin %> <%= command.id %> --non-interactive --json --doge-config .data/doge-config-testnet.toml',
+    '<%= config.bin %> <%= command.id %> --doge-config .data/doge-config.toml',
+    '<%= config.bin %> <%= command.id %> --non-interactive --json --doge-config .data/doge-config.toml',
   ]
 
   static override flags = {

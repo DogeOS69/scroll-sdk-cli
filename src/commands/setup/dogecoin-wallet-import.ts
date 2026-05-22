@@ -22,10 +22,10 @@ export class BridgeInitCommand extends Command {
 
     static flags = {
         'all-replicas': Flags.boolean({ description: 'Import watch-only addresses into every Dogecoin StatefulSet replica using in-cluster pod DNS', required: false }),
-        'doge-config': Flags.string({ description: 'Path to doge-config toml (e.g., .data/doge-config-testnet.toml)', required: false }),
+        'doge-config': Flags.string({ description: 'Path to Dogecoin config file', required: false }),
         'image-tag': Flags.string({ description: 'Docker image tag', required: false }),
         'namespace': Flags.string({ default: 'default', description: 'Kubernetes namespace for --all-replicas mode', required: false }),
-        'network': Flags.string({ description: 'Dogecoin network (e.g., testnet, mainnet)', required: false }),
+        'network': Flags.string({ description: 'Dogecoin network (mainnet, testnet, or regtest)', required: false }),
         'replicas': Flags.integer({ description: 'Dogecoin replica count for --all-replicas mode. Defaults to the StatefulSet replica count.', required: false }),
         'rpc-password': Flags.string({ description: 'Dogecoin RPC password', required: false }),
         'rpc-port': Flags.integer({ description: 'Dogecoin RPC port for --all-replicas mode', required: false }),
@@ -70,7 +70,7 @@ export class BridgeInitCommand extends Command {
         const network = flags.network || this.dogeConfig?.network || 'testnet'
         const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints({
             kubernetes: this.dogeConfig?.kubernetes,
-            network: network as 'mainnet' | 'testnet',
+            network: network as 'mainnet' | 'regtest' | 'testnet',
         })
         const serviceName = flags['service-name'] || dogecoinEndpoints.serviceName
         const rpcPort = flags['rpc-port'] || dogecoinEndpoints.rpcPort

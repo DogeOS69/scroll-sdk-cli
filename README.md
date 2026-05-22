@@ -133,51 +133,56 @@ USAGE
 # Commands
 
 <!-- commands -->
-* [`scrollsdk check prerequisites`](#scrollsdk-check-prerequisites)
-* [`scrollsdk doge wallet new`](#scrollsdk-doge-wallet-new)
-* [`scrollsdk doge wallet send`](#scrollsdk-doge-wallet-send)
-* [`scrollsdk doge wallet sync`](#scrollsdk-doge-wallet-sync)
-* [`scrollsdk help [COMMAND]`](#scrollsdk-help-command)
-* [`scrollsdk helper activity`](#scrollsdk-helper-activity)
-* [`scrollsdk helper clear-accounts`](#scrollsdk-helper-clear-accounts)
-* [`scrollsdk helper derive-enode NODEKEY`](#scrollsdk-helper-derive-enode-nodekey)
-* [`scrollsdk helper fund-accounts`](#scrollsdk-helper-fund-accounts)
-* [`scrollsdk helper set-scalars`](#scrollsdk-helper-set-scalars)
-* [`scrollsdk plugins`](#scrollsdk-plugins)
-* [`scrollsdk plugins add PLUGIN`](#scrollsdk-plugins-add-plugin)
-* [`scrollsdk plugins:inspect PLUGIN...`](#scrollsdk-pluginsinspect-plugin)
-* [`scrollsdk plugins install PLUGIN`](#scrollsdk-plugins-install-plugin)
-* [`scrollsdk plugins link PATH`](#scrollsdk-plugins-link-path)
-* [`scrollsdk plugins remove [PLUGIN]`](#scrollsdk-plugins-remove-plugin)
-* [`scrollsdk plugins reset`](#scrollsdk-plugins-reset)
-* [`scrollsdk plugins uninstall [PLUGIN]`](#scrollsdk-plugins-uninstall-plugin)
-* [`scrollsdk plugins unlink [PLUGIN]`](#scrollsdk-plugins-unlink-plugin)
-* [`scrollsdk plugins update`](#scrollsdk-plugins-update)
-* [`scrollsdk setup bootnode-public-p2p`](#scrollsdk-setup-bootnode-public-p2p)
-* [`scrollsdk setup bridge-init`](#scrollsdk-setup-bridge-init)
-* [`scrollsdk setup cubesigner-init`](#scrollsdk-setup-cubesigner-init)
-* [`scrollsdk setup cubesigner-refresh`](#scrollsdk-setup-cubesigner-refresh)
-* [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
-* [`scrollsdk setup disable-internal`](#scrollsdk-setup-disable-internal)
-* [`scrollsdk setup doge-config`](#scrollsdk-setup-doge-config)
-* [`scrollsdk setup dogecoin-wallet-import`](#scrollsdk-setup-dogecoin-wallet-import)
-* [`scrollsdk setup domains`](#scrollsdk-setup-domains)
-* [`scrollsdk setup dummy-signers`](#scrollsdk-setup-dummy-signers)
-* [`scrollsdk setup gas-token`](#scrollsdk-setup-gas-token)
-* [`scrollsdk setup gen-keystore`](#scrollsdk-setup-gen-keystore)
-* [`scrollsdk setup gen-l2-artifacts`](#scrollsdk-setup-gen-l2-artifacts)
-* [`scrollsdk setup gen-rpc-package`](#scrollsdk-setup-gen-rpc-package)
-* [`scrollsdk setup gen-secrets`](#scrollsdk-setup-gen-secrets)
-* [`scrollsdk setup generate-from-spec`](#scrollsdk-setup-generate-from-spec)
-* [`scrollsdk setup prep-charts`](#scrollsdk-setup-prep-charts)
-* [`scrollsdk setup push-secrets`](#scrollsdk-setup-push-secrets)
-* [`scrollsdk setup tls`](#scrollsdk-setup-tls)
-* [`scrollsdk setup verify-contracts`](#scrollsdk-setup-verify-contracts)
-* [`scrollsdk test contracts`](#scrollsdk-test-contracts)
-* [`scrollsdk test dependencies`](#scrollsdk-test-dependencies)
-* [`scrollsdk test dogeos [CASENAME]`](#scrollsdk-test-dogeos-casename)
-* [`scrollsdk test e2e`](#scrollsdk-test-e2e)
-* [`scrollsdk test ingress`](#scrollsdk-test-ingress)
+- [Scroll SDK CLI](#scroll-sdk-cli)
+  - [Introduction](#introduction)
+    - [Other Scroll SDK Repos](#other-scroll-sdk-repos)
+- [Installation](#installation)
+- [Commands](#commands)
+  - [`scrollsdk check prerequisites`](#scrollsdk-check-prerequisites)
+  - [`scrollsdk doge wallet new`](#scrollsdk-doge-wallet-new)
+  - [`scrollsdk doge wallet send`](#scrollsdk-doge-wallet-send)
+  - [`scrollsdk doge wallet sync`](#scrollsdk-doge-wallet-sync)
+  - [`scrollsdk help [COMMAND]`](#scrollsdk-help-command)
+  - [`scrollsdk helper activity`](#scrollsdk-helper-activity)
+  - [`scrollsdk helper clear-accounts`](#scrollsdk-helper-clear-accounts)
+  - [`scrollsdk helper derive-enode NODEKEY`](#scrollsdk-helper-derive-enode-nodekey)
+  - [`scrollsdk helper fund-accounts`](#scrollsdk-helper-fund-accounts)
+  - [`scrollsdk helper set-scalars`](#scrollsdk-helper-set-scalars)
+  - [`scrollsdk plugins`](#scrollsdk-plugins)
+  - [`scrollsdk plugins add PLUGIN`](#scrollsdk-plugins-add-plugin)
+  - [`scrollsdk plugins:inspect PLUGIN...`](#scrollsdk-pluginsinspect-plugin)
+  - [`scrollsdk plugins install PLUGIN`](#scrollsdk-plugins-install-plugin)
+  - [`scrollsdk plugins link PATH`](#scrollsdk-plugins-link-path)
+  - [`scrollsdk plugins remove [PLUGIN]`](#scrollsdk-plugins-remove-plugin)
+  - [`scrollsdk plugins reset`](#scrollsdk-plugins-reset)
+  - [`scrollsdk plugins uninstall [PLUGIN]`](#scrollsdk-plugins-uninstall-plugin)
+  - [`scrollsdk plugins unlink [PLUGIN]`](#scrollsdk-plugins-unlink-plugin)
+  - [`scrollsdk plugins update`](#scrollsdk-plugins-update)
+  - [`scrollsdk setup bootnode-public-p2p`](#scrollsdk-setup-bootnode-public-p2p)
+  - [`scrollsdk setup bridge-init`](#scrollsdk-setup-bridge-init)
+  - [`scrollsdk setup cubesigner-init`](#scrollsdk-setup-cubesigner-init)
+  - [`scrollsdk setup cubesigner-refresh`](#scrollsdk-setup-cubesigner-refresh)
+  - [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
+  - [`scrollsdk setup disable-internal`](#scrollsdk-setup-disable-internal)
+  - [`scrollsdk setup doge-config`](#scrollsdk-setup-doge-config)
+  - [`scrollsdk setup dogecoin-wallet-import`](#scrollsdk-setup-dogecoin-wallet-import)
+  - [`scrollsdk setup domains`](#scrollsdk-setup-domains)
+  - [`scrollsdk setup dummy-signers`](#scrollsdk-setup-dummy-signers)
+  - [`scrollsdk setup gas-token`](#scrollsdk-setup-gas-token)
+  - [`scrollsdk setup gen-keystore`](#scrollsdk-setup-gen-keystore)
+  - [`scrollsdk setup gen-l2-artifacts`](#scrollsdk-setup-gen-l2-artifacts)
+  - [`scrollsdk setup gen-rpc-package`](#scrollsdk-setup-gen-rpc-package)
+  - [`scrollsdk setup gen-secrets`](#scrollsdk-setup-gen-secrets)
+  - [`scrollsdk setup generate-from-spec`](#scrollsdk-setup-generate-from-spec)
+  - [`scrollsdk setup prep-charts`](#scrollsdk-setup-prep-charts)
+  - [`scrollsdk setup push-secrets`](#scrollsdk-setup-push-secrets)
+  - [`scrollsdk setup tls`](#scrollsdk-setup-tls)
+  - [`scrollsdk setup verify-contracts`](#scrollsdk-setup-verify-contracts)
+  - [`scrollsdk test contracts`](#scrollsdk-test-contracts)
+  - [`scrollsdk test dependencies`](#scrollsdk-test-dependencies)
+  - [`scrollsdk test dogeos [CASENAME]`](#scrollsdk-test-dogeos-casename)
+  - [`scrollsdk test e2e`](#scrollsdk-test-e2e)
+  - [`scrollsdk test ingress`](#scrollsdk-test-ingress)
 
 ## `scrollsdk check prerequisites`
 
@@ -206,7 +211,7 @@ _See code: [src/commands/check/prerequisites.ts](https://github.com/dogeos69/scr
 
 ## `scrollsdk doge wallet new`
 
-Create a new Dogecoin wallet (mainnet or testnet)
+Create a new Dogecoin wallet (mainnet, testnet, or regtest)
 
 ```
 USAGE
@@ -222,14 +227,12 @@ FLAGS
       --json             Output in JSON format (stdout for data, stderr for logs)
 
 DESCRIPTION
-  Create a new Dogecoin wallet (mainnet or testnet)
+  Create a new Dogecoin wallet (mainnet, testnet, or regtest)
 
 EXAMPLES
-  $ scrollsdk doge:wallet new --config .data/doge-config-mainnet.toml
+  $ scrollsdk doge:wallet new --config .data/doge-config.toml
 
-  $ scrollsdk doge:wallet new --config .data/doge-config-testnet.toml
-
-  $ scrollsdk doge:wallet new --path ./my-custom-wallet.json --config .data/doge-config-testnet.toml
+  $ scrollsdk doge:wallet new --path ./my-custom-wallet.json --config .data/doge-config.toml
 
   $ scrollsdk doge:wallet new --dry-run
 
@@ -240,7 +243,7 @@ _See code: [src/commands/doge/wallet/new.ts](https://github.com/dogeos69/scroll-
 
 ## `scrollsdk doge wallet send`
 
-Send DOGE to an address or the bridge with cross-chain data (mainnet/testnet aware)
+Send DOGE to an address or the bridge with cross-chain data (mainnet/testnet/regtest aware)
 
 ```
 USAGE
@@ -261,12 +264,12 @@ FLAGS
       --text-data=<value>    Text data for OP_RETURN (requires --no-bridge)
 
 DESCRIPTION
-  Send DOGE to an address or the bridge with cross-chain data (mainnet/testnet aware)
+  Send DOGE to an address or the bridge with cross-chain data (mainnet/testnet/regtest aware)
 
 EXAMPLES
   $ scrollsdk doge:wallet send --amount 1.0
 
-  $ scrollsdk doge:wallet send --amount 1.0 --evm-address 0xabc... --config .data/doge-config-testnet.toml
+  $ scrollsdk doge:wallet send --amount 1.0 --evm-address 0xabc... --config .data/doge-config.toml
 
   $ scrollsdk doge:wallet send --amount 1.0 --no-bridge --to અનન્ય_ADDRESS
 
@@ -279,7 +282,7 @@ _See code: [src/commands/doge/wallet/send.ts](https://github.com/dogeos69/scroll
 
 ## `scrollsdk doge wallet sync`
 
-Sync wallet UTXOs and balance (mainnet/testnet aware)
+Sync wallet UTXOs and balance (mainnet/testnet/regtest aware)
 
 ```
 USAGE
@@ -291,12 +294,10 @@ FLAGS
   -p, --path=<value>     Custom path for the wallet file (overrides path from config)
 
 DESCRIPTION
-  Sync wallet UTXOs and balance (mainnet/testnet aware)
+  Sync wallet UTXOs and balance (mainnet/testnet/regtest aware)
 
 EXAMPLES
-  $ scrollsdk doge:wallet sync --config .data/doge-config-mainnet.toml
-
-  $ scrollsdk doge:wallet sync --config .data/doge-config-testnet.toml
+  $ scrollsdk doge:wallet sync --config .data/doge-config.toml
 ```
 
 _See code: [src/commands/doge/wallet/sync.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/doge/wallet/sync.ts)_
@@ -811,11 +812,11 @@ FLAGS
       Output in JSON format (stdout for data, stderr for logs)
 
   --step=<value>
-      [default: all] Bridge init step to run. all runs 1-prepare, 2-setup, 3-generate, and 4-fund. 1-prepare requires
-      values/genesis.yaml, extracts .data/genesis.json, and prepares protocol_seed.toml. 2-setup is NOT idempotent:
-      generate test keys and broadcast the setup transaction. 3-generate is idempotent: generate namespace, bridge.json,
-      and protocol_context.json. 4-fund is NOT idempotent: broadcast 10 initial bridge funding transactions. Numeric
-      aliases 1, 2, 3, and 4 are accepted.
+      [default: all] Bridge init step to run. all runs 1-prepare, 2-setup, 3-bridge-info, 4-fund, and 5-protocol-context.
+      1-prepare requires values/genesis.yaml, extracts .data/genesis.json, and prepares protocol_seed.toml. 2-setup is NOT
+      idempotent: generate test keys and broadcast the setup transaction. 3-bridge-info is idempotent: generate namespace
+      and bridge.json. 4-fund is NOT idempotent: broadcast 10 initial bridge funding transactions. 5-protocol-context is
+      idempotent: generate protocol_context.json. Numeric aliases 1, 2, 3, 4, and 5 are accepted.
 
 DESCRIPTION
   Initialize DogeOS bridge after L2 artifacts and CubeSigner keys are ready
@@ -827,9 +828,11 @@ EXAMPLES
 
   $ scrollsdk setup bridge-init --step 2-setup
 
-  $ scrollsdk setup bridge-init --step 3-generate
+  $ scrollsdk setup bridge-init --step 3-bridge-info
 
   $ scrollsdk setup bridge-init --step 4-fund
+
+  $ scrollsdk setup bridge-init --step 5-protocol-context
 
   $ scrollsdk setup bridge-init --step 2
 
@@ -859,8 +862,7 @@ FLAGS
   -N, --non-interactive      Run without prompts. Requires --doge-config and either --new (with --count, --role-prefix)
                              or --roles.
       --count=<value>        Number of keys/roles to create (when using --new)
-      --doge-config=<value>  Path to config file (e.g., .data/doge-config-mainnet.toml or
-                             .data/doge-config-testnet.toml)
+      --doge-config=<value>  Path to Dogecoin config file
       --json                 Output in JSON format (stdout for data, stderr for logs)
       --new                  Create new roles and keys
       --role-prefix=<value>  Prefix for role names (when using --new)
@@ -877,13 +879,13 @@ EXAMPLES
 
   $ scrollsdk setup cubesigner-init --new --count 3 --role-prefix validator
 
-  $ scrollsdk setup cubesigner-init --roles role_a role_b --doge-config .data/doge-config-testnet.toml
+  $ scrollsdk setup cubesigner-init --roles role_a role_b --doge-config .data/doge-config.toml
 
   $ scrollsdk setup cubesigner-init
 
-  $ scrollsdk setup cubesigner-init --non-interactive --new --count 3 --role-prefix validator --threshold 2 --doge-config .data/doge-config-testnet.toml
+  $ scrollsdk setup cubesigner-init --non-interactive --new --count 3 --role-prefix validator --threshold 2 --doge-config .data/doge-config.toml
 
-  $ scrollsdk setup cubesigner-init --non-interactive --json --roles role_a role_b --threshold 2 --doge-config .data/doge-config-testnet.toml
+  $ scrollsdk setup cubesigner-init --non-interactive --json --roles role_a role_b --threshold 2 --doge-config .data/doge-config.toml
 ```
 
 _See code: [src/commands/setup/cubesigner-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-init.ts)_
@@ -900,8 +902,7 @@ USAGE
 FLAGS
   -N, --non-interactive      Run without prompts. Requires --doge-config. If not logged in, also requires --org-id and
                              --email.
-      --doge-config=<value>  Path to config file (e.g., .data/doge-config-mainnet.toml or
-                             .data/doge-config-testnet.toml)
+      --doge-config=<value>  Path to Dogecoin config file
       --email=<value>        CubeSigner account email (for non-interactive login if not already logged in)
       --environment=<value>  [default: gamma] CubeSigner environment (default: gamma)
       --json                 Output in JSON format (stdout for data, stderr for logs)
@@ -913,11 +914,11 @@ DESCRIPTION
 EXAMPLES
   $ scrollsdk setup cubesigner-refresh
 
-  $ scrollsdk setup cubesigner-refresh --doge-config .data/doge-config-testnet.toml
+  $ scrollsdk setup cubesigner-refresh --doge-config .data/doge-config.toml
 
-  $ scrollsdk setup cubesigner-refresh --non-interactive --doge-config .data/doge-config-testnet.toml
+  $ scrollsdk setup cubesigner-refresh --non-interactive --doge-config .data/doge-config.toml
 
-  $ scrollsdk setup cubesigner-refresh --non-interactive --json --doge-config .data/doge-config-testnet.toml --org-id Org#xxx --email user@example.com
+  $ scrollsdk setup cubesigner-refresh --non-interactive --json --doge-config .data/doge-config.toml --org-id Org#xxx --email user@example.com
 ```
 
 _See code: [src/commands/setup/cubesigner-refresh.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-refresh.ts)_
@@ -962,7 +963,7 @@ _See code: [src/commands/setup/db-init.ts](https://github.com/dogeos69/scroll-sd
 
 ## `scrollsdk setup disable-internal`
 
-Disable ingress for internal services (Celestia, Dogecoin, Anvil L1)
+Disable ingress for internal services (Dogecoin, Anvil L1)
 
 ```
 USAGE
@@ -973,7 +974,7 @@ FLAGS
   -f, --force               Skip confirmation prompts
   -n, --namespace=<value>   [default: default] Kubernetes namespace
       --disable=<value>     Disable ingress for a service
-      --disable-internal    Disable all internal services (Celestia, Dogecoin, Anvil L1) using kubectl
+      --disable-internal    Disable all internal services (Dogecoin, Anvil L1) using kubectl
       --dry-run             Show what would be deleted without actually deleting
       --enable=<value>      Enable ingress for a service
       --list                List current ingress status from local values files
@@ -982,7 +983,7 @@ FLAGS
       --values-dir=<value>  [default: ./values] Directory containing values files
 
 DESCRIPTION
-  Disable ingress for internal services (Celestia, Dogecoin, Anvil L1)
+  Disable ingress for internal services (Dogecoin, Anvil L1)
 
 EXAMPLES
   $ scrollsdk setup disable-internal
@@ -1008,13 +1009,14 @@ Configure Dogecoin settings and bridge setup defaults for deployment
 
 ```
 USAGE
-  $ scrollsdk setup doge-config [-c <value>] [--json] [-n mainnet|testnet] [-N]
+  $ scrollsdk setup doge-config [-c <value>] [--json] [-n mainnet|testnet|regtest] [-N]
 
 FLAGS
   -N, --non-interactive   Run without prompts, using existing config values
-  -c, --config=<value>    Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)
-  -n, --network=<option>  Network to configure (mainnet or testnet) - required for non-interactive mode with new config
-                          <options: mainnet|testnet>
+  -c, --config=<value>    Path to config file
+  -n, --network=<option>  Network to configure (mainnet, testnet, or regtest) - required for non-interactive mode with
+                          new config
+                          <options: mainnet|testnet|regtest>
       --json              Output in JSON format (stdout for data, stderr for logs)
 
 DESCRIPTION
@@ -1023,11 +1025,11 @@ DESCRIPTION
 EXAMPLES
   $ scrollsdk setup doge-config
 
-  $ scrollsdk setup doge-config --config .data/doge-config-mainnet.toml
-
-  $ scrollsdk setup doge-config --config .data/doge-config-testnet.toml
+  $ scrollsdk setup doge-config --config .data/doge-config.toml
 
   $ scrollsdk setup doge-config --non-interactive --network testnet
+
+  $ scrollsdk setup doge-config --non-interactive --network regtest
 
   $ scrollsdk setup doge-config --non-interactive --json --network mainnet
 ```
@@ -1040,11 +1042,22 @@ Dogecoin wallet import
 
 ```
 USAGE
-  $ scrollsdk setup dogecoin-wallet-import [--doge-config <value>] [--image-tag <value>]
+  $ scrollsdk setup dogecoin-wallet-import [--all-replicas] [--doge-config <value>] [--image-tag <value>] [--namespace <value>]
+    [--network <value>] [--replicas <value>] [--rpc-password <value>] [--rpc-port <value>] [--rpc-url <value>]
+    [--rpc-user <value>] [--service-name <value>]
 
 FLAGS
-  --doge-config=<value>  Path to doge-config toml (e.g., .data/doge-config-testnet.toml)
-  --image-tag=<value>    Docker image tag
+  --all-replicas          Import watch-only addresses into every Dogecoin StatefulSet replica using in-cluster pod DNS
+  --doge-config=<value>   Path to Dogecoin config file
+  --image-tag=<value>     Docker image tag
+  --namespace=<value>     [default: default] Kubernetes namespace for --all-replicas mode
+  --network=<value>       Dogecoin network (mainnet, testnet, or regtest)
+  --replicas=<value>      Dogecoin replica count for --all-replicas mode. Defaults to the StatefulSet replica count.
+  --rpc-password=<value>  Dogecoin RPC password
+  --rpc-port=<value>      Dogecoin RPC port for --all-replicas mode
+  --rpc-url=<value>       Dogecoin RPC URL
+  --rpc-user=<value>      Dogecoin RPC username
+  --service-name=<value>  Stable Dogecoin Kubernetes service name for --all-replicas mode
 
 DESCRIPTION
   Dogecoin wallet import
@@ -1090,8 +1103,7 @@ USAGE
 FLAGS
   -N, --non-interactive            Run without prompts. Uses config values or sensible defaults.
   -a, --aws-only                   Set up AWS KMS signers only
-  -c, --config=<value>             Path to config file (e.g., .data/doge-config-mainnet.toml or
-                                   .data/doge-config-testnet.toml)
+  -c, --config=<value>             Path to Dogecoin config file
   -l, --local-only                 Set up local Docker signers only
       --aws-account-id=<value>     AWS account ID
       --aws-network-alias=<value>  Network alias for AWS resources
@@ -1111,7 +1123,7 @@ DESCRIPTION
 EXAMPLES
   $ scrollsdk setup dummy-signers
 
-  $ scrollsdk setup dummy-signers --config .data/doge-config-testnet.toml
+  $ scrollsdk setup dummy-signers --config .data/doge-config.toml
 
   $ scrollsdk setup dummy-signers --local-only
 
@@ -1233,7 +1245,7 @@ FLAGS
   -n, --namespace=<value>               Kubernetes namespace
       --config-path=<value>             [default: ./config.toml] Path to config.toml file containing cluster
                                         configuration
-      --doge-config=<value>             Path to doge config file to determine network type (mainnet/testnet)
+      --doge-config=<value>             Path to Dogecoin config file to determine network type
       --values-dir=<value>              [default: ./values] Directory containing Helm values files (must include
                                         genesis.yaml)
 
@@ -1249,7 +1261,7 @@ EXAMPLES
 
   # Generate mainnet RPC package with specific config and namespace
 
-  $ scrollsdk setup gen-rpc-package --doge-config .data/doge-config-mainnet.toml -d ~/github/dogeos-rpc-package/ -n scroll-mainnet
+  $ scrollsdk setup gen-rpc-package --doge-config .data/doge-config.toml -d ~/github/dogeos-rpc-package/ -n scroll-mainnet
 
 
 
@@ -1281,9 +1293,9 @@ DESCRIPTION
 EXAMPLES
   $ scrollsdk setup gen-secrets
 
-  $ scrollsdk setup gen-secrets --doge-config .data/doge-config-testnet.toml
+  $ scrollsdk setup gen-secrets --doge-config .data/doge-config.toml
 
-  $ scrollsdk setup gen-secrets --non-interactive --json --doge-config .data/doge-config-testnet.toml
+  $ scrollsdk setup gen-secrets --non-interactive --json --doge-config .data/doge-config.toml
 ```
 
 _See code: [src/commands/setup/gen-secrets.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-secrets.ts)_
@@ -1353,8 +1365,7 @@ USAGE
 
 FLAGS
   -N, --non-interactive          Run without prompts. Auto-applies all detected changes.
-      --doge-config=<value>      Path to config file (e.g., .data/doge-config-mainnet.toml or
-                                 .data/doge-config-testnet.toml)
+      --doge-config=<value>      Path to Dogecoin config file
       --github-token=<value>     GitHub Personal Access Token
       --github-username=<value>  GitHub username
       --json                     Output in JSON format (stdout for data, stderr for logs)
@@ -1393,10 +1404,10 @@ FLAGS
   -d, --debug                            Show debug output
   -f, --file=<value>                     Specific secret file to push (e.g., my-secret.json)
       --aws-prefix=<value>               [default: dogeos] AWS Secrets Manager path prefix (e.g., dogeos/testnet)
-      --aws-region=<value>               AWS region for secrets (e.g., us-east-1)
+      --aws-region=<value>               [default: us-west-2] AWS region for secrets (e.g., us-east-1)
       --aws-service-account=<value>      [default: external-secrets] AWS IAM service account
       --json                             Output in JSON format (stdout for data, stderr for logs)
-      --provider=<option>                Secret service provider (aws or vault). Required for non-interactive mode.
+      --provider=<option>                [default: aws] Secret service provider (aws or vault)
                                          <options: aws|vault>
       --skip-yaml-update                 Skip updating production YAML files with new secret provider
       --values-dir=<value>               [default: values] Directory containing the values files

@@ -1,4 +1,4 @@
-export type Network = 'mainnet' | 'testnet'
+export type Network = 'mainnet' | 'regtest' | 'testnet'
 
 export interface CubesignerKey {
   key_id: string

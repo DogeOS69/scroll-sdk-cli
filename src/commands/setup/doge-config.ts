@@ -29,16 +29,16 @@ export class DogeConfigCommand extends Command {
 
   static examples = [
     '$ scrollsdk setup doge-config',
-    '$ scrollsdk setup doge-config --config .data/doge-config-mainnet.toml',
-    '$ scrollsdk setup doge-config --config .data/doge-config-testnet.toml',
+    '$ scrollsdk setup doge-config --config .data/doge-config.toml',
     '$ scrollsdk setup doge-config --non-interactive --network testnet',
+    '$ scrollsdk setup doge-config --non-interactive --network regtest',
     '$ scrollsdk setup doge-config --non-interactive --json --network mainnet',
   ]
 
   static flags = {
     config: Flags.string({
       char: 'c',
-      description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
+      description: 'Path to config file',
     }),
     json: Flags.boolean({
       default: false,
@@ -46,8 +46,8 @@ export class DogeConfigCommand extends Command {
     }),
     network: Flags.string({
       char: 'n',
-      description: 'Network to configure (mainnet or testnet) - required for non-interactive mode with new config',
-      options: ['mainnet', 'testnet'],
+      description: 'Network to configure (mainnet, testnet, or regtest) - required for non-interactive mode with new config',
+      options: ['mainnet', 'testnet', 'regtest'],
     }),
     'non-interactive': Flags.boolean({
       char: 'N',
@@ -83,7 +83,9 @@ export class DogeConfigCommand extends Command {
     newConfig.dogecoin_rpc_url = newDogeConfig.rpc?.url || '';
     newConfig.dogecoin_rpc_user = newDogeConfig.rpc?.username || '';
     newConfig.dogecoin_rpc_pass = newDogeConfig.rpc?.password || '';
-    newConfig.dogecoin_blockbook_url = newConfig.network === 'mainnet' ? 'https://dogebook.nownodes.io' : 'https://dogebook-testnet.nownodes.io';
+    newConfig.dogecoin_blockbook_url = newDogeConfig.rpc?.blockbookAPIUrl ||
+      (newConfig.network === 'mainnet' ? 'https://dogebook.nownodes.io' :
+        newConfig.network === 'testnet' ? 'https://dogebook-testnet.nownodes.io' : 'http://blockbook:19139');
     newConfig.dogecoin_blockbook_api_key = newDogeConfig.rpc?.apiKey || '';
 
     // Write to setup_defaults.toml
@@ -108,63 +110,45 @@ export class DogeConfigCommand extends Command {
       fs.mkdirSync('.data', { recursive: true })
     }
 
-    const files = fs.readdirSync('.data')
-    const configFiles = files.filter(file => file.startsWith('doge') && file.endsWith('.toml'))
-    const configFileChoices = configFiles.map(file => ({ name: file, value: file }))
-
-    let resolvedPath = flags.config as string
+    let resolvedPath = flags.config ? path.resolve(flags.config as string) : path.resolve('.data/doge-config.toml')
     let network = flags.network || ""
 
-    let fileSelected = ""
-    if (!flags.config) {
-      if (niCtx.enabled) {
-        // Non-interactive mode: use network flag or first existing config file
-        if (flags.network) {
-          fileSelected = flags.network === 'mainnet' ? 'doge-config-mainnet.toml' : 'doge-config-testnet.toml'
-          network = flags.network
-        } else if (configFiles.length > 0) {
-          // Use first existing config file
-          fileSelected = configFiles[0]
-          // Infer network from filename
-          network = fileSelected.includes('mainnet') ? 'mainnet' : 'testnet'
-        } else {
-          // No config files and no network specified - error
-          niCtx.missingFields.push({
-            configPath: '--network flag',
-            description: 'Network (mainnet or testnet) must be specified in non-interactive mode when creating new config',
-            field: 'network',
-          })
-          validateAndExit(niCtx)
-          return
-        }
-      } else {
-        fileSelected = await select({
-          choices: [...configFileChoices, {
-            name: "New Config",
-            value: "New Config"
-          }],
-          message: 'Select please:',
-        })
+    const configExists = fs.existsSync(resolvedPath)
+    let existingConfig: DogeConfig = {} as DogeConfig;
 
-        if (fileSelected === "New Config") {
-          network = await select({
-            choices: [
-              { name: 'mainnet', value: 'mainnet' },
-              { name: 'testnet', value: 'testnet' }
-            ],
-            default: 'testnet',
-            message: 'select network:'
-          });
-
-          fileSelected = network === 'mainnet' ? 'doge-config-mainnet.toml' : 'doge-config-testnet.toml';
-        }
+    if (configExists) {
+      ({ config: existingConfig, configPath: resolvedPath } = await loadDogeConfigWithSelection(resolvedPath));
+      if (flags.network && existingConfig.network !== flags.network) {
+        this.error(
+          `Existing config at ${resolvedPath} is for ${existingConfig.network}, but --network ${flags.network} was provided. ` +
+          'Use the existing network, remove the config, or pass --config to a different file.'
+        )
       }
 
-      resolvedPath = path.resolve('.data', fileSelected)
+      network = existingConfig.network
     }
 
-    // let resolvedPath = path.resolve(".data", fileSelected)
-    let existingConfig: DogeConfig = {} as DogeConfig;
+    if (!configExists && !network) {
+      if (niCtx.enabled) {
+        niCtx.missingFields.push({
+          configPath: '--network flag',
+          description: 'Network (mainnet, testnet, or regtest) must be specified in non-interactive mode when creating new config',
+          field: 'network',
+        })
+        validateAndExit(niCtx)
+        return
+      }
+
+      network = await select({
+        choices: [
+          { name: 'mainnet', value: 'mainnet' },
+          { name: 'testnet', value: 'testnet' },
+          { name: 'regtest', value: 'regtest' }
+        ],
+        default: 'testnet',
+        message: 'select network:'
+      });
+    }
 
     const defaultConfig: DogeConfig = {
       defaults: {
@@ -183,17 +167,16 @@ export class DogeConfigCommand extends Command {
           network: network as Network,
         }).apiUrl,
         password: '',
-        url: network === 'mainnet' ? 'https://dogecoin.mainnet.dogeos.com' : 'https://dogecoin.testnet.dogeos.com',
+        url: network === 'mainnet' ? 'https://dogecoin.mainnet.dogeos.com' :
+          network === 'testnet' ? 'https://dogecoin.testnet.dogeos.com' : 'http://localhost:18443',
         username: '',
       },
       test: {},
       wallet: {
-        path: network === 'mainnet' ? '.data/doge-wallet-mainnet.json' : '.data/doge-wallet-testnet.json',
+        path: `.data/doge-wallet-${network}.json`,
       }
     }
-    if (fs.existsSync(resolvedPath)) {
-      ({ config: existingConfig, configPath: resolvedPath } = await loadDogeConfigWithSelection(resolvedPath));
-    } else {
+    if (!configExists) {
       // In non-interactive mode, always create default config
       const shouldCreate = await resolveConfirm(
         niCtx,
@@ -226,7 +209,8 @@ export class DogeConfigCommand extends Command {
     }
 
     // Handle blockbook API URL with confirmation if different from default
-    const defaultBlockbookUrl = network === 'mainnet' ? 'https://blockbook.mainnet.dogeos.com/' : 'https://blockbook.testnet.dogeos.com/'
+    const defaultBlockbookUrl = network === 'mainnet' ? 'https://blockbook.mainnet.dogeos.com/' :
+      network === 'testnet' ? 'https://blockbook.testnet.dogeos.com/' : 'http://blockbook:19139'
     const currentBlockbookUrl = existingConfig.rpc?.blockbookAPIUrl || defaultBlockbookUrl
 
     newConfig.rpc!.blockbookAPIUrl = await resolveOrPrompt(

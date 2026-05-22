@@ -31,12 +31,11 @@ const { Networks, PrivateKey } = bitcore
 export default class WalletNew extends Command {
   static default = false
 
-  static description = 'Create a new Dogecoin wallet (mainnet or testnet)'
+  static description = 'Create a new Dogecoin wallet (mainnet, testnet, or regtest)'
 
   static examples = [
-    '$ scrollsdk doge:wallet new --config .data/doge-config-mainnet.toml',
-    '$ scrollsdk doge:wallet new --config .data/doge-config-testnet.toml',
-    '$ scrollsdk doge:wallet new --path ./my-custom-wallet.json --config .data/doge-config-testnet.toml',
+    '$ scrollsdk doge:wallet new --config .data/doge-config.toml',
+    '$ scrollsdk doge:wallet new --path ./my-custom-wallet.json --config .data/doge-config.toml',
     '$ scrollsdk doge:wallet new --dry-run',
     '$ scrollsdk doge:wallet new --force',
   ]
@@ -44,7 +43,7 @@ export default class WalletNew extends Command {
   static flags = {
     config: Flags.string({
       char: 'c',
-      default: '.data/doge-config.toml', // User should point to the correct mainnet/testnet config
+      default: '.data/doge-config.toml',
       description: 'Path to Dogecoin config file (determines network and default wallet path)',
     }),
     'dry-run': Flags.boolean({
@@ -111,7 +110,7 @@ export default class WalletNew extends Command {
       )
     }
 
-    const bitcoreNetwork = config.network === 'testnet' ? Networks.testnet : Networks.livenet
+    const bitcoreNetwork = this.getBitcoreNetwork(config.network)
 
     const privateKey = new PrivateKey(null, bitcoreNetwork)
     const address = privateKey.toAddress()
@@ -186,5 +185,13 @@ export default class WalletNew extends Command {
         walletPath: resolvedWalletPath,
       })
     }
+  }
+
+  private getBitcoreNetwork(configNetwork: string): typeof Networks.livenet {
+    if (configNetwork === 'mainnet') return Networks.livenet
+    if (configNetwork === 'testnet') return Networks.testnet
+
+    const networksObj = Networks as any
+    return networksObj.regtest || { ...(Networks.testnet as any), name: 'regtest', privatekey: 0xef }
   }
 }

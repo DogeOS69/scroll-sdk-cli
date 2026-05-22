@@ -60,11 +60,10 @@ interface AddressDetailsWithTxsResponse {
 export default class WalletSync extends Command {
   static default = false
 
-  static description = 'Sync wallet UTXOs and balance (mainnet/testnet aware)'
+  static description = 'Sync wallet UTXOs and balance (mainnet/testnet/regtest aware)'
 
   static examples = [
-    '$ scrollsdk doge:wallet sync --config .data/doge-config-mainnet.toml',
-    '$ scrollsdk doge:wallet sync --config .data/doge-config-testnet.toml',
+    '$ scrollsdk doge:wallet sync --config .data/doge-config.toml',
   ]
 
   static flags = {
@@ -94,7 +93,7 @@ export default class WalletSync extends Command {
         'scrollsdk setup doge-config',
       )
 
-      this.log(chalk.blue(`Syncing wallet for network: ${config.network} (from ${flags.config})`))
+      this.log(chalk.blue(`Syncing wallet for network: ${config.network}`))
 
       let apiKey = flags['api-key'] || process.env.NOWNODES_API_KEY || config.rpc?.apiKey
       if (!apiKey) {

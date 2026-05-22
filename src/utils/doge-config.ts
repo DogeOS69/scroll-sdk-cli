@@ -1,10 +1,23 @@
 import * as toml from '@iarna/toml'
-import { select } from '@inquirer/prompts'
 import chalk from 'chalk'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import { DogeConfig } from '../types/doge-config.js'
+import { DogeConfig, Network } from '../types/doge-config.js'
+
+const NETWORK_ALIASES: Record<string, Network> = {
+  doge: 'mainnet',
+  dogeRegtest: 'regtest',
+  dogeTestnet: 'testnet',
+  dogecoin: 'mainnet',
+  mainnet: 'mainnet',
+  regtest: 'regtest',
+  testnet: 'testnet',
+}
+
+export function normalizeDogeNetwork(network: unknown): Network | undefined {
+  return typeof network === 'string' ? NETWORK_ALIASES[network] : undefined
+}
 
 /**
  * Select and return the path to a doge config file
@@ -21,38 +34,24 @@ export async function selectDogeConfigFile(
     return path.resolve(providedConfigPath)
   }
 
-  // Check if .data directory exists
+  const defaultConfigPath = path.resolve('.data/doge-config.toml')
+
+  if (fs.existsSync(defaultConfigPath)) {
+    return defaultConfigPath
+  }
+
   if (!fs.existsSync('.data')) {
     throw new Error(
       chalk.red(`No .data directory found. Please run "${suggestedCommand}" first to create the configuration.`)
     )
   }
 
-  // Look for .toml config files in .data directory
-  const files = fs.readdirSync('.data')
-  const configFiles = files.filter(file => file.startsWith('doge') && file.endsWith('.toml'))
-  
-  if (configFiles.length === 0) {
-    throw new Error(
-      chalk.red(`No .toml config files found in .data directory. Please run "${suggestedCommand}" first to create the configuration.`)
+  throw new Error(
+    chalk.red(
+      `Dogecoin config not found at ${defaultConfigPath}. ` +
+      `Please run "${suggestedCommand}" first, or pass --doge-config/--config to use a custom path.`
     )
-  }
-  
-  // If only one config file, use it automatically
-  if (configFiles.length === 1) {
-    const selectedFile = path.resolve('.data/' + configFiles[0])
-    console.log(chalk.blue(`Using config file: ${selectedFile}`))
-    return selectedFile
-  }
-  
-  // Multiple config files found, let user choose
-  const configFileChoices = configFiles.map(file => ({ name: file, value: file }))
-  const fileSelection = await select({
-    choices: configFileChoices,
-    message: 'Select config file to use:',
-  })
-  
-  return path.resolve('.data/' + fileSelection)
+  )
 }
 
 /**
@@ -77,11 +76,14 @@ async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
     const configContent = fs.readFileSync(resolvedPath, 'utf8')
     const parsedConfig = toml.parse(configContent) as unknown as DogeConfig
 
-    if (!parsedConfig.network || (parsedConfig.network !== 'mainnet' && parsedConfig.network !== 'testnet')) {
+    const normalizedNetwork = normalizeDogeNetwork(parsedConfig.network)
+    if (!normalizedNetwork) {
       throw new Error(
-        `Config file ${resolvedPath} has an invalid 'network' value: ${parsedConfig.network}. Must be 'mainnet' or 'testnet'.`,
+        `Config file ${resolvedPath} has an invalid 'network' value: ${parsedConfig.network}. Must be 'mainnet', 'testnet', or 'regtest'.`,
       )
     }
+
+    parsedConfig.network = normalizedNetwork
 
     if (!parsedConfig.wallet || !parsedConfig.wallet.path) {
       throw new Error(`Config file ${resolvedPath} is missing 'wallet.path'.`)

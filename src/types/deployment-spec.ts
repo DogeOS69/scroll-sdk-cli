@@ -279,7 +279,7 @@ export interface DogecoinConfig {
   }
 
   /** Network type */
-  network: 'mainnet' | 'testnet'
+  network: 'mainnet' | 'regtest' | 'testnet'
 
   /** RPC connection */
   rpc: {

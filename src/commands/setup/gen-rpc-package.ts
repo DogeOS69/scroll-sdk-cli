@@ -19,7 +19,7 @@ export default class SetupGenRpcPackage extends Command {
     '<%= config.bin %> <%= command.id %> -d ~/github/dogeos-rpc-package/',
     '',
     '# Generate mainnet RPC package with specific config and namespace',
-    '<%= config.bin %> <%= command.id %> --doge-config .data/doge-config-mainnet.toml -d ~/github/dogeos-rpc-package/ -n scroll-mainnet',
+    '<%= config.bin %> <%= command.id %> --doge-config .data/doge-config.toml -d ~/github/dogeos-rpc-package/ -n scroll-mainnet',
     '',
     '# First clone the project: git clone https://github.com/dogeos69/dogeos-rpc-package',
     '<%= config.bin %> <%= command.id %> -d ./dogeos-rpc-package/ --namespace default',
@@ -32,7 +32,7 @@ export default class SetupGenRpcPackage extends Command {
       required: false,
     }),
     'doge-config': Flags.string({
-      description: 'Path to doge config file to determine network type (mainnet/testnet)',
+      description: 'Path to Dogecoin config file to determine network type',
       required: false,
     }),
     'dogeos-rpc-package-dir': Flags.string({
@@ -101,8 +101,8 @@ export default class SetupGenRpcPackage extends Command {
 
       // Step 3: Determine network type
       const {network} = dogeConfig
-      if (network !== 'mainnet' && network !== 'testnet') {
-        throw new Error(`Invalid network type in dogeConfig: '${network}'. Expected 'mainnet' or 'testnet'.`)
+      if (network !== 'mainnet' && network !== 'testnet' && network !== 'regtest') {
+        throw new Error(`Invalid network type in dogeConfig: '${network}'. Expected 'mainnet', 'testnet', or 'regtest'.`)
       }
 
       this.log(chalk.blue(`Network type: ${network}`))

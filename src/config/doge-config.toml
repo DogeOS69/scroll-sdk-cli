@@ -1,5 +1,5 @@
 # Dogecoin Network Configuration
-network = "doge" # Options: "doge", "dogeRegtest", "dogeTestnet"
+network = "testnet" # Options: "mainnet", "testnet", "regtest"
 
 # RPC Configuration
 [rpc]

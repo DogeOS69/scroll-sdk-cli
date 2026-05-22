@@ -749,11 +749,13 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
 function generateDogecoinValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
   const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
+  const isRegtest = spec.dogecoin.network === 'regtest'
   const isTestnet = spec.dogecoin.network === 'testnet'
 
   const values: Record<string, any> = {
     dogecoinConf: {
       disablewallet: 0,
+      regtest: isRegtest ? 1 : 0,
       rpcallowip: ['0.0.0.0/0'],
       rpcuser: spec.dogecoin.rpc.username,
       rpcworkqueue: 128,
@@ -772,7 +774,7 @@ function generateDogecoinValues(spec: DeploymentSpec): string {
       tag: '1.14.7-alpine'
     },
     resources: {
-      limits: { cpu: '2000m', memory: isTestnet ? '30Gi' : '32Gi' },
+      limits: { cpu: '2000m', memory: isRegtest || isTestnet ? '30Gi' : '32Gi' },
       requests: { cpu: '500m', memory: isTestnet ? '16Gi' : '16Gi' }
     },
     rpcPassword: {

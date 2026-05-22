@@ -30,11 +30,11 @@ interface TransactionFlags {
 export default class WalletSend extends Command {
   static default = false
 
-  static description = 'Send DOGE to an address or the bridge with cross-chain data (mainnet/testnet aware)'
+  static description = 'Send DOGE to an address or the bridge with cross-chain data (mainnet/testnet/regtest aware)'
 
   static examples = [
     '$ scrollsdk doge:wallet send --amount 1.0',
-    '$ scrollsdk doge:wallet send --amount 1.0 --evm-address 0xabc... --config .data/doge-config-testnet.toml',
+    '$ scrollsdk doge:wallet send --amount 1.0 --evm-address 0xabc... --config .data/doge-config.toml',
     '$ scrollsdk doge:wallet send --amount 1.0 --no-bridge --to અનન્ય_ADDRESS',
     '$ scrollsdk doge:wallet send --amount 1.0 --hex-data 6a0468656c6c6f --no-bridge',
     '$ scrollsdk doge:wallet send --amount 1.0 --force',
@@ -95,11 +95,11 @@ export default class WalletSend extends Command {
       // const config = await loadDogeConfig(flags.config)
 
       const { config, configPath } = await loadDogeConfigWithSelection(
-        flags['doge-config'],
+        flags.config,
         'scrollsdk setup doge-config'
       )
 
-      this.log(chalk.blue(`Using network: ${config.network} (from ${flags.config})`))
+      this.log(chalk.blue(`Using network: ${config.network} (from ${configPath})`))
 
       const currentBitcoreNetwork: typeof Networks.livenet = this.getBitcoreNetwork(config.network)
 
@@ -178,7 +178,7 @@ export default class WalletSend extends Command {
       this.log(`ID: ${chalk.cyan(txid)}`)
       this.log(
         `Explorer: ${chalk.cyan(
-          (config.network === 'testnet' ? 'https://sochain.com/tx/DOGETEST/' : 'https://sochain.com/tx/DOGE/') + txid,
+          this.getExplorerTxUrl(config.network, txid),
         )}`,
       )
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -417,7 +417,17 @@ export default class WalletSend extends Command {
   }
 
   private getBitcoreNetwork(configNetwork: string): typeof Networks.livenet {
-    return configNetwork === 'testnet' ? Networks.testnet : Networks.livenet
+    if (configNetwork === 'mainnet') return Networks.livenet
+    if (configNetwork === 'testnet') return Networks.testnet
+
+    const networksObj = Networks as any
+    return networksObj.regtest || { ...(Networks.testnet as any), name: 'regtest', privatekey: 0xef }
+  }
+
+  private getExplorerTxUrl(configNetwork: string, txid: string): string {
+    if (configNetwork === 'mainnet') return `https://sochain.com/tx/DOGE/${txid}`
+    if (configNetwork === 'testnet') return `https://sochain.com/tx/DOGETEST/${txid}`
+    return txid
   }
 
   private loadWallet(walletPath: string): DogeWallet {

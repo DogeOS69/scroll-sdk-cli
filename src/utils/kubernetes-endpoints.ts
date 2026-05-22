@@ -1,4 +1,4 @@
-export type DogecoinNetwork = 'mainnet' | 'testnet'
+export type DogecoinNetwork = 'mainnet' | 'regtest' | 'testnet'
 
 export interface DogecoinKubernetesConfig {
   blockbookPublicPort?: number
@@ -42,8 +42,10 @@ export function resolveDogecoinKubernetesEndpoints(config: DogecoinEndpointConfi
   const network = config.network || 'testnet'
   const kubernetes = config.kubernetes || {}
   const serviceName = kubernetes.serviceName || 'dogecoin'
-  const rpcPort = kubernetes.rpcPort || (network === 'mainnet' ? 22_555 : 44_555)
-  const p2pPort = kubernetes.p2pPort || (network === 'mainnet' ? 22_556 : 44_556)
+  const defaultRpcPort = network === 'mainnet' ? 22_555 : network === 'regtest' ? 18_443 : 44_555
+  const defaultP2pPort = network === 'mainnet' ? 22_556 : network === 'regtest' ? 18_444 : 44_556
+  const rpcPort = kubernetes.rpcPort || defaultRpcPort
+  const p2pPort = kubernetes.p2pPort || defaultP2pPort
   const zmqRawBlockPort = kubernetes.zmqRawBlockPort || 28_332
   const zmqRawTxPort = kubernetes.zmqRawTxPort || 28_333
   const zmqHashTxPort = kubernetes.zmqHashTxPort || 28_334

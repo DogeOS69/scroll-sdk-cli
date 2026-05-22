@@ -181,7 +181,7 @@ scrollsdk setup doge-config -N --json --network testnet
 Generates `.data/doge-config.toml` from config values.
 
 **Required flags (non-interactive):**
-- `--network mainnet|testnet` - Required when creating a new config
+- `--network mainnet|testnet|regtest` - Required when creating a new config
 
 **Required config fields:**
 - `[dogecoin]` section (network, RPC URLs, blockbook URL)
@@ -208,7 +208,7 @@ Runs the L2 config generation Docker container and prepares deployment artifacts
 ### Step 6: Initialize CubeSigner attestation keys
 
 ```bash
-scrollsdk setup cubesigner-init -N --json --new --count 3 --role-prefix attestor --threshold 2 --doge-config .data/doge-config-testnet.toml
+scrollsdk setup cubesigner-init -N --json --new --count 3 --role-prefix attestor --threshold 2 --doge-config .data/doge-config.toml
 ```
 
 Creates or selects CubeSigner roles and writes attestation public keys to `.data/setup_defaults.toml`. This must run before bridge initialization.
@@ -220,7 +220,7 @@ Creates or selects CubeSigner roles and writes attestation public keys to `.data
 ### Optional: Generate dummy signers
 
 ```bash
-scrollsdk setup dummy-signers -N --json --config .data/doge-config-testnet.toml
+scrollsdk setup dummy-signers -N --json --config .data/doge-config.toml
 ```
 
 Creates dummy signer keys for development. Production bridge initialization should use CubeSigner attestation keys from step 6.
@@ -278,7 +278,7 @@ Generates Helm values files and prepares chart directories.
 ### Step 9: Refresh CubeSigner tokens
 
 ```bash
-scrollsdk setup cubesigner-refresh -N --json --doge-config .data/doge-config-testnet.toml
+scrollsdk setup cubesigner-refresh -N --json --doge-config .data/doge-config.toml
 ```
 
 Refreshes CubeSigner authentication tokens.
@@ -350,8 +350,8 @@ export POSTGRES_ADMIN_PASSWORD="your-password"
 export DEPLOYER_KEY="0x..."
 export SEQUENCER_KEYSTORE_PASSWORD="your-keystore-password"
 
-NETWORK="testnet"  # or "mainnet"
-DOGE_CONFIG=".data/doge-config-${NETWORK}.toml"
+NETWORK="testnet"  # mainnet, testnet, or regtest
+DOGE_CONFIG=".data/doge-config.toml"
 SEED="your-bridge-seed-string"
 
 run_step() {

@@ -16,14 +16,14 @@ export default class SetupCubesignerRefresh extends Command {
 
     static override examples = [
         '<%= config.bin %> <%= command.id %>',
-        '<%= config.bin %> <%= command.id %> --doge-config .data/doge-config-testnet.toml',
-        '<%= config.bin %> <%= command.id %> --non-interactive --doge-config .data/doge-config-testnet.toml',
-        '<%= config.bin %> <%= command.id %> --non-interactive --json --doge-config .data/doge-config-testnet.toml --org-id Org#xxx --email user@example.com',
+        '<%= config.bin %> <%= command.id %> --doge-config .data/doge-config.toml',
+        '<%= config.bin %> <%= command.id %> --non-interactive --doge-config .data/doge-config.toml',
+        '<%= config.bin %> <%= command.id %> --non-interactive --json --doge-config .data/doge-config.toml --org-id Org#xxx --email user@example.com',
     ]
 
     static override flags = {
         'doge-config': Flags.string({
-            description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
+            description: 'Path to Dogecoin config file',
             required: false,
         }),
         'email': Flags.string({

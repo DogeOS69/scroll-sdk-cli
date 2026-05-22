@@ -22,10 +22,10 @@ export default class SetupCubesignerSetup extends Command {
         '<%= config.bin %> <%= command.id %> --roles foo_role bar_role baz_role',
         '<%= config.bin %> <%= command.id %> --new --count 4 --role-prefix attestor',
         '<%= config.bin %> <%= command.id %> --new --count 3 --role-prefix validator',
-        '<%= config.bin %> <%= command.id %> --roles role_a role_b --doge-config .data/doge-config-testnet.toml',
+        '<%= config.bin %> <%= command.id %> --roles role_a role_b --doge-config .data/doge-config.toml',
         '<%= config.bin %> <%= command.id %>',
-        '<%= config.bin %> <%= command.id %> --non-interactive --new --count 3 --role-prefix validator --threshold 2 --doge-config .data/doge-config-testnet.toml',
-        '<%= config.bin %> <%= command.id %> --non-interactive --json --roles role_a role_b --threshold 2 --doge-config .data/doge-config-testnet.toml',
+        '<%= config.bin %> <%= command.id %> --non-interactive --new --count 3 --role-prefix validator --threshold 2 --doge-config .data/doge-config.toml',
+        '<%= config.bin %> <%= command.id %> --non-interactive --json --roles role_a role_b --threshold 2 --doge-config .data/doge-config.toml',
     ]
 
     static override flags = {
@@ -34,7 +34,7 @@ export default class SetupCubesignerSetup extends Command {
             required: false,
         }),
         'doge-config': Flags.string({
-            description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
+            description: 'Path to Dogecoin config file',
             required: false,
         }),
         'json': Flags.boolean({

@@ -1192,7 +1192,7 @@ export class DummySignersCommand extends Command {
 
   static examples = [
     '$ scrollsdk setup dummy-signers',
-    '$ scrollsdk setup dummy-signers --config .data/doge-config-testnet.toml',
+    '$ scrollsdk setup dummy-signers --config .data/doge-config.toml',
     '$ scrollsdk setup dummy-signers --local-only',
     '$ scrollsdk setup dummy-signers --aws-only',
     '$ scrollsdk setup dummy-signers --image-tag newda',
@@ -1219,7 +1219,7 @@ export class DummySignersCommand extends Command {
     }),
     config: Flags.string({
       char: 'c',
-      description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
+      description: 'Path to Dogecoin config file',
     }),
     'generate-wif-keys': Flags.boolean({
       allowNo: true,
