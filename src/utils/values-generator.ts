@@ -20,6 +20,9 @@ import {
   L1_INTERFACE_BEACON_API_ENDPOINT,
   L1_INTERFACE_RPC_ENDPOINT,
 } from '../config/constants.js'
+import {
+  resolveDogecoinKubernetesEndpoints,
+} from './kubernetes-endpoints.js'
 
 export interface GeneratedValuesFiles {
   [filename: string]: string
@@ -526,6 +529,7 @@ function generateL2RpcValues(spec: DeploymentSpec): string {
  */
 function generateL1InterfaceValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
+  const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
 
   const image = resolveImage(spec, 'l1Interface', {
     pullPolicy: 'Always',
@@ -550,7 +554,7 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__INDEX_WITHDRAWALS: 'false',
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__POLL_INTERVAL_MS: '10000',
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT: String(spec.dogecoin.indexerStartHeight),
-          DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL: 'http://dogecoin:22555',
+          DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL: dogecoinEndpoints.rpcUrl,
           DOGEOS_L1_INTERFACE_GENESIS_JSON_PATH: '/app/genesis/genesis.json',
           DOGEOS_L1_INTERFACE_HEALTH_LISTEN_ADDRESS: '0.0.0.0:9090',
           DOGEOS_L1_INTERFACE_L1_CHAIN_ID: String(spec.network.l1ChainId),
@@ -744,29 +748,48 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
  */
 function generateDogecoinValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
+  const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
+  const isTestnet = spec.dogecoin.network === 'testnet'
 
   const values: Record<string, any> = {
-    env: [
-      { name: 'DOGE_NETWORK', value: spec.dogecoin.network },
-      { name: 'DOGE_RPC_USER', value: spec.dogecoin.rpc.username },
-      { name: 'DOGE_RPC_PASSWORD', valueFrom: { secretKeyRef: { key: 'DOGE_RPC_PASSWORD', name: 'dogecoin-secret-env' } } },
-      { name: 'DOGE_TXINDEX', value: '1' },
-      { name: 'DOGE_RPC_ALLOW_IP', value: '0.0.0.0/0' }
-    ],
+    dogecoinConf: {
+      disablewallet: 0,
+      rpcallowip: ['0.0.0.0/0'],
+      rpcuser: spec.dogecoin.rpc.username,
+      rpcworkqueue: 128,
+      server: 1,
+      testnet: isTestnet ? 1 : 0,
+      txindex: 1,
+      zmqpubhashblock: `tcp://0.0.0.0:${dogecoinEndpoints.zmqHashBlockPort}`,
+      zmqpubhashtx: `tcp://0.0.0.0:${dogecoinEndpoints.zmqHashTxPort}`,
+      zmqpubrawblock: `tcp://0.0.0.0:${dogecoinEndpoints.zmqRawBlockPort}`,
+      zmqpubrawtx: `tcp://0.0.0.0:${dogecoinEndpoints.zmqRawTxPort}`
+    },
+    fullnameOverride: dogecoinEndpoints.serviceName,
     image: {
       pullPolicy: 'IfNotPresent',
       repository: 'dogeos69/dogecoin',
       tag: '1.14.7-alpine'
     },
-    persistence: {
-      data: {
-        retain: true,
-        size: '500Gi'
-      }
-    },
     resources: {
-      limits: { cpu: '4000m', memory: '16Gi' },
-      requests: { cpu: '1000m', memory: '4Gi' }
+      limits: { cpu: '2000m', memory: isTestnet ? '30Gi' : '32Gi' },
+      requests: { cpu: '500m', memory: isTestnet ? '16Gi' : '16Gi' }
+    },
+    rpcPassword: {
+      secretKey: 'password',
+      value: spec.dogecoin.rpc.password
+    },
+    service: {
+      port: dogecoinEndpoints.p2pPort,
+      rpcPort: dogecoinEndpoints.rpcPort,
+      zmqHashBlockPort: dogecoinEndpoints.zmqHashBlockPort,
+      zmqHashTxPort: dogecoinEndpoints.zmqHashTxPort,
+      zmqRawBlockPort: dogecoinEndpoints.zmqRawBlockPort,
+      zmqRawTxPort: dogecoinEndpoints.zmqRawTxPort
+    },
+    storage: {
+      retainPvcOnUninstall: true,
+      size: isTestnet ? '50Gi' : '250Gi'
     }
   }
 
@@ -774,7 +797,7 @@ function generateDogecoinValues(spec: DeploymentSpec): string {
     'dogecoin-secret-env',
     secretConfig,
     [
-      { property: 'DOGE_RPC_PASSWORD', remoteKey: 'dogecoin-secret-env', secretKey: 'DOGE_RPC_PASSWORD' }
+      { property: 'DOGECOIN_RPC_PASSWORD', remoteKey: 'dogecoin-secret-env', secretKey: 'password' }
     ]
   )
 
@@ -834,6 +857,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
  */
 function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
+  const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
 
   const image = resolveImage(spec, 'withdrawalProcessor', {
     pullPolicy: 'Always',
@@ -846,7 +870,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_NETWORK_STR', value: spec.dogecoin.network },
       { name: 'DOGEOS_WITHDRAWAL_DATABASE_URL', valueFrom: { secretKeyRef: { key: 'DOGEOS_WITHDRAWAL_DATABASE_URL', name: 'withdrawal-processor-secret-env' } } },
       { name: 'DOGEOS_WITHDRAWAL_API_PORT', value: '3000' },
-      { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL', value: 'http://dogecoin:22555' },
+      { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL', value: dogecoinEndpoints.rpcUrl },
       { name: 'DOGEOS_WITHDRAWAL_TSO_URL', value: 'http://tso-service:3000' },
       { name: 'DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS', value: '' },
       { name: 'DOGEOS_WITHDRAWAL_BRIDGE_SCRIPT_HEX', value: '' },
@@ -1121,6 +1145,7 @@ function generateGasOracleValues(spec: DeploymentSpec): string {
  * Generate Fee Oracle values
  */
 function generateFeeOracleValues(spec: DeploymentSpec): string {
+  const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
   const image = resolveImage(spec, 'feeOracle', {
     pullPolicy: 'Always',
     repository: 'dogeos69/fee-oracle',
@@ -1131,7 +1156,7 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
     env: [
       { name: 'FEE_ORACLE_PORT', value: '3000' },
       { name: 'FEE_ORACLE_L2_RPC_URL', value: spec.network.l2RpcEndpoint },
-      { name: 'FEE_ORACLE_DOGE_RPC_URL', value: 'http://dogecoin:22555' },
+      { name: 'FEE_ORACLE_DOGE_RPC_URL', value: dogecoinEndpoints.rpcUrl },
       { name: 'FEE_ORACLE_UPDATE_INTERVAL_SECS', value: '60' }
     ],
     image,

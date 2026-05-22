@@ -796,18 +796,15 @@ debug: Flags.boolean({
       this.jsonCtx.info('CubeSigner only mode: Will only process cubesigner-signer-* files')
     }
 
-    let secretService: string
-    if (this.nonInteractive) {
-      secretService = flags.provider || DEFAULT_SECRET_PROVIDER
-    } else {
-      secretService = await select({
+    const secretService: string = this.nonInteractive
+      ? flags.provider || DEFAULT_SECRET_PROVIDER
+      : await select({
         choices: [
           { name: 'AWS', value: 'aws' },
           { name: 'Hashicorp Vault - Dev', value: 'vault' },
         ],
         message: chalk.cyan('Select a secret service:'),
       })
-    }
 
     let service: SecretService
     let provider: string

@@ -18,6 +18,10 @@ import {
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
+import {
+  resolveBlockbookKubernetesEndpoints,
+  resolveDogecoinKubernetesEndpoints,
+} from '../../utils/kubernetes-endpoints.js'
 
 /**
  * Strip port from hostname for Kubernetes Ingress
@@ -640,8 +644,9 @@ export default class SetupPrepCharts extends Command {
 
     let updatedCharts = 0
     let skippedCharts = 0
-    const isTestnet = this.dogeConfig.network === "testnet";
-    const dogecoinInternalUrl = "http://dogecoin-" + (isTestnet ? "testnet:44555" : "mainnet:22555");
+    const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(this.dogeConfig)
+    const blockbookEndpoints = resolveBlockbookKubernetesEndpoints(this.dogeConfig)
+    const dogecoinInternalUrl = dogecoinEndpoints.rpcUrl
 
     for (const file of productionFiles) {
       const yamlPath = path.join(valuesDir, file)
@@ -1045,6 +1050,16 @@ export default class SetupPrepCharts extends Command {
 
       // eslint-disable-next-line unicorn/prefer-switch
       if (chartName === 'blockbook') {
+        if (!productionYaml.blockbook || typeof productionYaml.blockbook !== 'object') {
+          productionYaml.blockbook = {}
+        }
+
+        if (productionYaml.fullnameOverride !== blockbookEndpoints.serviceName) {
+          changes.push({ key: 'fullnameOverride', newValue: blockbookEndpoints.serviceName, oldValue: String(productionYaml.fullnameOverride || 'undefined') })
+          productionYaml.fullnameOverride = blockbookEndpoints.serviceName
+          updated = true
+        }
+
         let ingressUpdated = false;
         if (productionYaml.ingress) {
           const ingressValue = productionYaml.ingress;
@@ -1072,6 +1087,18 @@ export default class SetupPrepCharts extends Command {
 
         if (ingressUpdated) {
           updated = true;
+        }
+
+        if (productionYaml.blockbook.rpcUrl !== dogecoinEndpoints.rpcUrl) {
+          changes.push({ key: 'blockbook.rpcUrl', newValue: dogecoinEndpoints.rpcUrl, oldValue: String(productionYaml.blockbook.rpcUrl || 'undefined') })
+          productionYaml.blockbook.rpcUrl = dogecoinEndpoints.rpcUrl
+          updated = true
+        }
+
+        if (productionYaml.blockbook.messageQueueBinding !== dogecoinEndpoints.zmqRawBlockUrl) {
+          changes.push({ key: 'blockbook.messageQueueBinding', newValue: dogecoinEndpoints.zmqRawBlockUrl, oldValue: String(productionYaml.blockbook.messageQueueBinding || 'undefined') })
+          productionYaml.blockbook.messageQueueBinding = dogecoinEndpoints.zmqRawBlockUrl
+          updated = true
         }
 
         const oldValue = productionYaml.blockbook.blockHeight;
@@ -1415,6 +1442,24 @@ export default class SetupPrepCharts extends Command {
       }
       else if (chartName === "dogecoin") {
         const isTestnet = this.dogeConfig.network === "testnet";
+        if (!productionYaml.dogecoinConf || typeof productionYaml.dogecoinConf !== 'object') {
+          productionYaml.dogecoinConf = {}
+        }
+
+        if (!productionYaml.service || typeof productionYaml.service !== 'object') {
+          productionYaml.service = {}
+        }
+
+        if (!productionYaml.storage || typeof productionYaml.storage !== 'object') {
+          productionYaml.storage = {}
+        }
+
+        if (productionYaml.fullnameOverride !== dogecoinEndpoints.serviceName) {
+          const oldValue = productionYaml.fullnameOverride;
+          productionYaml.fullnameOverride = dogecoinEndpoints.serviceName;
+          updated = true;
+          changes.push({ key: `fullnameOverride`, newValue: dogecoinEndpoints.serviceName, oldValue: String(oldValue || 'undefined') });
+        }
 
         const dogecoinConf_testnet = productionYaml.dogecoinConf?.testnet;
         const expected_testnet = isTestnet ? 1 : 0;
@@ -1425,7 +1470,7 @@ export default class SetupPrepCharts extends Command {
         }
 
         const service_port = productionYaml.service?.port;
-        const expected_service_port = isTestnet ? 44_556 : 22_556;
+        const expected_service_port = dogecoinEndpoints.p2pPort;
         if (service_port !== expected_service_port) {
           productionYaml.service.port = expected_service_port;
           updated = true;
@@ -1433,7 +1478,7 @@ export default class SetupPrepCharts extends Command {
         }
 
         const service_rpcPort = productionYaml.service?.rpcPort;
-        const expected_service_rpcPort = isTestnet ? 44_555 : 22_555;
+        const expected_service_rpcPort = dogecoinEndpoints.rpcPort;
         if (service_rpcPort !== expected_service_rpcPort) {
           productionYaml.service.rpcPort = expected_service_rpcPort;
           updated = true;

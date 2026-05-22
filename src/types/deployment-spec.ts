@@ -265,6 +265,19 @@ export interface DogecoinConfig {
   /** Block height to start indexing from */
   indexerStartHeight: number
 
+  /** Cluster-local service discovery overrides. Defaults follow stable chart service names. */
+  kubernetes?: {
+    blockbookPublicPort?: number
+    blockbookServiceName?: string
+    p2pPort?: number
+    rpcPort?: number
+    serviceName?: string
+    zmqHashBlockPort?: number
+    zmqHashTxPort?: number
+    zmqRawBlockPort?: number
+    zmqRawTxPort?: number
+  }
+
   /** Network type */
   network: 'mainnet' | 'testnet'
 

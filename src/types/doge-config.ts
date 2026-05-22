@@ -48,6 +48,17 @@ export interface DogeConfig {
     l2Explorer?: string
     l2Url?: string
   }
+  kubernetes?: {
+    blockbookPublicPort?: number
+    blockbookServiceName?: string
+    p2pPort?: number
+    rpcPort?: number
+    serviceName?: string
+    zmqHashBlockPort?: number
+    zmqHashTxPort?: number
+    zmqRawBlockPort?: number
+    zmqRawTxPort?: number
+  }
   localSigners?: {
     network?: string
     signers?: Array<{

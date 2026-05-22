@@ -4,12 +4,14 @@ import { select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import Docker from 'dockerode'
+import { execFileSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
 import { DogeConfig } from '../../types/doge-config.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import { resolveDogecoinKubernetesEndpoints } from '../../utils/kubernetes-endpoints.js'
 
 export class BridgeInitCommand extends Command {
     static description = 'Dogecoin wallet import'
@@ -19,12 +21,17 @@ export class BridgeInitCommand extends Command {
     ]
 
     static flags = {
+        'all-replicas': Flags.boolean({ description: 'Import watch-only addresses into every Dogecoin StatefulSet replica using in-cluster pod DNS', required: false }),
         'doge-config': Flags.string({ description: 'Path to doge-config toml (e.g., .data/doge-config-testnet.toml)', required: false }),
         'image-tag': Flags.string({ description: 'Docker image tag', required: false }),
+        'namespace': Flags.string({ default: 'default', description: 'Kubernetes namespace for --all-replicas mode', required: false }),
         'network': Flags.string({ description: 'Dogecoin network (e.g., testnet, mainnet)', required: false }),
+        'replicas': Flags.integer({ description: 'Dogecoin replica count for --all-replicas mode. Defaults to the StatefulSet replica count.', required: false }),
         'rpc-password': Flags.string({ description: 'Dogecoin RPC password', required: false }),
+        'rpc-port': Flags.integer({ description: 'Dogecoin RPC port for --all-replicas mode', required: false }),
         'rpc-url': Flags.string({ description: 'Dogecoin RPC URL', required: false }),
         'rpc-user': Flags.string({ description: 'Dogecoin RPC username', required: false }),
+        'service-name': Flags.string({ description: 'Stable Dogecoin Kubernetes service name for --all-replicas mode', required: false }),
     }
 
     private configData: any = {}
@@ -61,8 +68,13 @@ export class BridgeInitCommand extends Command {
         this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
         // Build CLI args from configs
         const network = flags.network || this.dogeConfig?.network || 'testnet'
-        const isTestnet = network === 'testnet'
-        const internalRpc = `http://dogecoin-${isTestnet ? 'testnet:44555' : 'mainnet:22555'}`
+        const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints({
+            kubernetes: this.dogeConfig?.kubernetes,
+            network: network as 'mainnet' | 'testnet',
+        })
+        const serviceName = flags['service-name'] || dogecoinEndpoints.serviceName
+        const rpcPort = flags['rpc-port'] || dogecoinEndpoints.rpcPort
+        const internalRpc = `http://${serviceName}:${rpcPort}`
         const ingressHost = this.getNestedValue(this.configData, 'ingress.DOGECOIN_HOST')
         const rpcUrl = flags['rpc-url'] || (ingressHost ? `https://${ingressHost}` : internalRpc)
         const rpcUser = flags['rpc-user'] || this.dogeConfig?.dogecoinClusterRpc?.username || 'user'
@@ -86,7 +98,12 @@ export class BridgeInitCommand extends Command {
             '--height', startHeight,
             '--rescan',
         ]
-        await this.runImage(imageTag, args);
+        await (flags['all-replicas'] ? this.runImageForKubernetesReplicas(imageTag, args, {
+                namespace: flags.namespace,
+                replicas: flags.replicas,
+                rpcPort,
+                serviceName,
+            }) : this.runImage(imageTag, args));
 
     }
 
@@ -156,6 +173,25 @@ export class BridgeInitCommand extends Command {
         }
     }
 
+    async runImageForKubernetesReplicas(
+        imageTag: string,
+        baseArgs: string[],
+        options: { namespace: string; replicas?: number; rpcPort: number; serviceName: string }
+    ): Promise<void> {
+        const replicas = options.replicas ?? this.getStatefulSetReplicas(options.namespace, options.serviceName)
+        if (replicas < 1) {
+            this.error(`Dogecoin StatefulSet ${options.serviceName} has no replicas`)
+        }
+
+        for (let index = 0; index < replicas; index++) {
+            const rpcUrl = `http://${options.serviceName}-${index}.${options.serviceName}-headless:${options.rpcPort}`
+            const args = this.withRpcUrl(baseArgs, rpcUrl)
+            const podName = `dogecoin-wallet-import-${index}-${Date.now()}`
+            this.log(chalk.cyan(`Importing watch-only addresses into ${rpcUrl}`))
+            this.runKubernetesImage(podName, options.namespace, imageTag, args)
+        }
+    }
+
     private async fetchDockerTags(): Promise<string[]> {
         try {
             const response = await fetch(
@@ -204,6 +240,24 @@ export class BridgeInitCommand extends Command {
         return path.split('.').reduce((prev, curr) => prev && prev[curr], obj)
     }
 
+    private getStatefulSetReplicas(namespace: string, statefulSetName: string): number {
+        const output = execFileSync('kubectl', [
+            'get',
+            'statefulset',
+            statefulSetName,
+            '-n',
+            namespace,
+            '-o',
+            'jsonpath={.spec.replicas}',
+        ], { encoding: 'utf8' }).trim()
+        const replicas = Number(output || '1')
+        if (!Number.isInteger(replicas)) {
+            this.error(`Invalid replica count from StatefulSet ${statefulSetName}: ${output}`)
+        }
+
+        return replicas
+    }
+
     private async loadConfigs(flags: any): Promise<void> {
         const configPath = path.join(process.cwd(), 'config.toml')
 
@@ -216,6 +270,33 @@ export class BridgeInitCommand extends Command {
 
         const { config } = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk setup doge-config')
         this.dogeConfig = config as DogeConfig
+    }
+
+    private runKubernetesImage(podName: string, namespace: string, imageTag: string, args: string[]): void {
+        execFileSync('kubectl', [
+            'run',
+            podName,
+            '-n',
+            namespace,
+            '--rm',
+            '-i',
+            '--restart=Never',
+            '--image',
+            `docker.io/dogeos69/dogecoin-wallet-import:${imageTag}`,
+            '--',
+            ...args,
+        ], { stdio: 'inherit' })
+    }
+
+    private withRpcUrl(args: string[], rpcUrl: string): string[] {
+        const nextArgs = [...args]
+        const rpcUrlIndex = nextArgs.indexOf('--rpc-url')
+        if (rpcUrlIndex === -1) {
+            return ['--rpc-url', rpcUrl, ...nextArgs]
+        }
+
+        nextArgs[rpcUrlIndex + 1] = rpcUrl
+        return nextArgs
     }
 }
 export default BridgeInitCommand

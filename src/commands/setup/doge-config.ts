@@ -15,6 +15,7 @@ import { Network } from '../../types/doge-config.js'
 import { writeConfigs } from '../../utils/config-writer.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
+import { resolveBlockbookKubernetesEndpoints } from '../../utils/kubernetes-endpoints.js'
 import {
   createNonInteractiveContext,
   resolveConfirm,
@@ -177,8 +178,10 @@ export class DogeConfigCommand extends Command {
       network: network as Network,
       rpc: {
         apiKey: '',
-        blockbookAPIUrl:
-          network === 'mainnet' ? 'http://blockbook-mainnet:19139' : 'http://blockbook-testnet:19139',
+        blockbookAPIUrl: resolveBlockbookKubernetesEndpoints({
+          kubernetes: existingConfig.kubernetes,
+          network: network as Network,
+        }).apiUrl,
         password: '',
         url: network === 'mainnet' ? 'https://dogecoin.mainnet.dogeos.com' : 'https://dogecoin.testnet.dogeos.com',
         username: '',
