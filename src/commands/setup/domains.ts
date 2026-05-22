@@ -33,13 +33,13 @@ const ETHEREUM_DA_DEFAULTS: Record<EthereumDaChain, {
     submitterRpcUrl: 'http://l1-devnet:8545',
   },
   mainnet: {
-    beaconRpcUrl: 'https://eth-beacon-chain.drpc.org/rest',
+    beaconRpcUrl: 'https://ethereum-beacon-api.publicnode.com',
     chainId: '1',
     minFinality: 'finalized',
     submitterRpcUrl: 'https://eth.drpc.org',
   },
   sepolia: {
-    beaconRpcUrl: 'https://eth-beacon-chain-sepolia.drpc.org/rest',
+    beaconRpcUrl: 'https://ethereum-sepolia-beacon-api.publicnode.com',
     chainId: '11155111',
     minFinality: 'safe',
     submitterRpcUrl: 'https://sepolia.drpc.org',
@@ -388,7 +388,7 @@ export default class SetupDomains extends Command {
       beaconRpcUrl: ethereumDaBeaconRpcUrl,
       chain: ethereumDaChain,
       chainId: ethereumDaChainId,
-      minFinality: existingEthereumDa?.minFinality || ethereumDaDefaults.minFinality,
+      minFinality: ethereumDaDefaults.minFinality,
       submitterRpcUrl: ethereumDaSubmitterRpcUrl,
     }
 

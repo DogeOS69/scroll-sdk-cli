@@ -13,7 +13,6 @@ import type { DogeConfig } from '../../types/doge-config.js'
 
 import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
 import { writeConfigs } from '../../utils/config-writer.js'
-import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import {
   resolveEnvValue,
@@ -43,10 +42,6 @@ export default class SetupGenL2Artifacts extends Command {
     }),
     'deployment-salt': Flags.string({
       description: 'Deployment salt value (non-interactive mode). If not provided, keeps existing or auto-increments.',
-    }),
-    'doge-config': Flags.string({
-      description: 'Path to config file (e.g., .data/doge-config-mainnet.toml or .data/doge-config-testnet.toml)',
-      required: false,
     }),
     'image-tag': Flags.string({
       description: 'Specify the Docker image tag to use',
@@ -362,14 +357,6 @@ export default class SetupGenL2Artifacts extends Command {
     const configsDir = flags['configs-dir']
     this.jsonCtx.info(`Using configuration directory: ${configsDir}`)
 
-    const dogeConfigResult = await loadDogeConfigWithSelection(
-      flags['doge-config'],
-      'scrollsdk setup doge-config'
-    )
-
-    this.dogeConfig = dogeConfigResult.config
-    this.jsonCtx.info(`Using Dogecoin config file: ${dogeConfigResult.configPath}`)
-
     // Skip L1_CONTRACT_DEPLOYMENT_BLOCK for DogeOS network
     // this.jsonCtx.info('Checking L1_CONTRACT_DEPLOYMENT_BLOCK...')
     // await this.updateL1ContractDeploymentBlock()
@@ -417,7 +404,6 @@ export default class SetupGenL2Artifacts extends Command {
     if (this.jsonMode) {
       this.jsonCtx.success({
         configsDir,
-        dogeConfigPath: dogeConfigResult.configPath,
         genesisPath: path.join(path.resolve(configsDir), 'genesis.yaml'),
         imageTag,
         yamlFilesProcessed: true,
@@ -568,25 +554,7 @@ export default class SetupGenL2Artifacts extends Command {
           fs.copyFileSync(sourcePath, targetPath)
           this.jsonCtx.log(chalk.green(`Processed file: ${mapping.source} -> ${mapping.target}`))
 
-          if (mapping.target === 'rollup-explorer-backend-config.yaml') {
-            const yamlFileContent = fs.readFileSync(targetPath, 'utf8')
-            const parsedYaml = yaml.load(yamlFileContent) as any | null
-            if (parsedYaml && parsedYaml.scrollConfig && typeof parsedYaml.scrollConfig === 'string') {
-              try {
-                const scrollConfigObject = JSON.parse(parsedYaml.scrollConfig)
-                const prettyJsonString = JSON.stringify(scrollConfigObject, null, 2)
-                const secretsDir = SECRETS_PATH
-                const jsonOutputPath = path.join(secretsDir, 'rollup-explorer-backend-secret.json')
-                fs.writeFileSync(jsonOutputPath, prettyJsonString)
-                this.jsonCtx.log(chalk.green(`Extracted scrollConfig to ${jsonOutputPath}`))
-                fs.unlinkSync(targetPath)
-              } catch (jsonError) {
-                this.jsonCtx.log(chalk.red(`Failed to parse scrollConfig JSON from ${targetPath}: ${jsonError}`))
-              }
-            } else {
-              this.jsonCtx.log(chalk.yellow(`Could not find or parse scrollConfig in ${targetPath}`))
-            }
-          } else if (
+          if (
             mapping.target === 'coordinator-api-config.yaml' ||
             mapping.target === 'coordinator-cron-config.yaml'
           ) {

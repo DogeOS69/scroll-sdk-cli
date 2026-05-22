@@ -25,13 +25,13 @@ const ETHEREUM_DA_DEFAULTS = {
     submitterRpcUrl: 'http://l1-devnet:8545',
   },
   mainnet: {
-    beaconRpcUrl: 'https://eth-beacon-chain.drpc.org/rest',
+    beaconRpcUrl: 'https://ethereum-beacon-api.publicnode.com',
     chainId: 1,
     minFinality: 'finalized',
     submitterRpcUrl: 'https://eth.drpc.org',
   },
   sepolia: {
-    beaconRpcUrl: 'https://eth-beacon-chain-sepolia.drpc.org/rest',
+    beaconRpcUrl: 'https://ethereum-sepolia-beacon-api.publicnode.com',
     chainId: 11_155_111,
     minFinality: 'safe',
     submitterRpcUrl: 'https://sepolia.drpc.org',

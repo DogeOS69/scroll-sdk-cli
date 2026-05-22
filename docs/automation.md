@@ -316,7 +316,7 @@ Configures TLS certificates for ingress.
 
 ### Steps 12-14: Fund accounts
 
-`helper fund-accounts` does not yet support `--non-interactive`/`--json` flags. Some funding paths may prompt for user confirmation (e.g., manual funding instructions). Use the `-d` (dev mode) flag to enable automated dev faucet funding where possible:
+`helper fund-accounts` does not yet support `--non-interactive`/`--json` flags. Some funding paths may prompt for user confirmation (for example, L2 bridge/direct/manual selection or manual funding instructions). Use the `-d` (dev mode) flag to fund L1 accounts from the local L1 devnet prefunded wallet where possible:
 
 ```bash
 # Fund deployer on L1 (dev mode)
@@ -393,7 +393,7 @@ run_step "setup push-secrets" setup push-secrets -N --json
 # Step 11: TLS certificates
 run_step "setup tls" setup tls -N --json --cluster-issuer letsencrypt-prod
 
-# Steps 12-14: Fund accounts (already flag-driven, no -N/--json needed)
+# Steps 12-14: Fund accounts (no -N/--json support; some L2 paths may prompt)
 scrollsdk helper fund-accounts -i -f 2 -d
 scrollsdk helper fund-accounts -l 1 -f 2 -d
 scrollsdk helper fund-accounts -l 2 -d

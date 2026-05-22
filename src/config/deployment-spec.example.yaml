@@ -131,7 +131,7 @@ ethereumDa:
   chain: sepolia
   chainId: 11155111
   l1RpcUrl: "https://sepolia.drpc.org"
-  beaconRpcUrl: "https://eth-beacon-chain-sepolia.drpc.org/rest"
+  beaconRpcUrl: "https://ethereum-sepolia-beacon-api.publicnode.com"
   l2RpcUrl: "http://l2-rpc:8545"
   confirmationDepth: 1
   finalizationDepth: 64

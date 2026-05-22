@@ -49,6 +49,9 @@ ECS_CPU="${ECS_CPU:-}"
 ECS_MEMORY="${ECS_MEMORY:-}"
 ECS_MIN_TASKS="${ECS_MIN_TASKS:-1}"
 ECS_MAX_TASKS="${ECS_MAX_TASKS:-1}"
+ECS_DEPLOYMENT_MAX_PERCENT="${ECS_DEPLOYMENT_MAX_PERCENT:-100}"
+ECS_DEPLOYMENT_MIN_HEALTHY_PERCENT="${ECS_DEPLOYMENT_MIN_HEALTHY_PERCENT:-0}"
+ECS_AVAILABILITY_ZONE_REBALANCING="${ECS_AVAILABILITY_ZONE_REBALANCING:-DISABLED}"
 # Optional Rust logging settings
 RUST_LOG="${RUST_LOG:-info}"
 RUST_BACKTRACE="${RUST_BACKTRACE:-1}"
@@ -62,6 +65,19 @@ if ! aws ecs create-express-gateway-service help &>/dev/null; then
   echo "AWS CLI does not support ECS Express Mode commands. Please upgrade AWS CLI v2."
   exit 1
 fi
+
+configure_ecs_deployment_bounds() {
+  local SERVICE_NAME="$1"
+
+  aws ecs update-service \
+    --cluster "$ECS_CLUSTER" \
+    --region "$AWS_REGION" \
+    --service "$SERVICE_NAME" \
+    --availability-zone-rebalancing "$ECS_AVAILABILITY_ZONE_REBALANCING" \
+    --deployment-configuration "{\"maximumPercent\":${ECS_DEPLOYMENT_MAX_PERCENT},\"minimumHealthyPercent\":${ECS_DEPLOYMENT_MIN_HEALTHY_PERCENT},\"deploymentCircuitBreaker\":{\"enable\":true,\"rollback\":true}}" \
+    --no-cli-pager \
+    >/dev/null
+}
 
 update_assume_role_policy() {
   local ROLE_NAME="$1"
@@ -360,8 +376,11 @@ EOF
       --health-check-path "$HEALTH_PATH" \
       --scaling-target file://"$SCALING_TARGET_FILE"
 
+    configure_ecs_deployment_bounds "$SERVICE"
     echo "  • Created $SERVICE"
   else
+    configure_ecs_deployment_bounds "$SERVICE"
+
     aws ecs update-express-gateway-service \
       --region "$AWS_REGION" \
       --service-arn "$SERVICE_ARN" \
@@ -372,6 +391,7 @@ EOF
       --health-check-path "$HEALTH_PATH" \
       --scaling-target file://"$SCALING_TARGET_FILE"
 
+    configure_ecs_deployment_bounds "$SERVICE"
     echo "  • Updated $SERVICE"
   fi
 done

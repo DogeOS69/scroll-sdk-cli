@@ -112,7 +112,7 @@ A tool for configuring, managing, and testing [Scroll SDK](https://docs.scroll.i
 
 ## Non-Interactive / CI Mode
 
-Steps 1-11 support `--non-interactive` (`-N`) and `--json` flags for automated pipelines. Steps 12-14 (`helper fund-accounts`) are already fully flag-driven with no prompts. See [docs/automation.md](docs/automation.md) for the full automation guide including required flags per step, JSON output format, error codes, environment variable substitution, and example scripts.
+Steps 1-11 support `--non-interactive` (`-N`) and `--json` flags for automated pipelines. Steps 12-14 (`helper fund-accounts`) are flag-driven for L1 devnet funding, while some L2 funding paths may still prompt for bridge/direct/manual selection. See [docs/automation.md](docs/automation.md) for the full automation guide including required flags per step, JSON output format, error codes, environment variable substitution, and example scripts.
 
 # Usage
 
@@ -405,7 +405,7 @@ USAGE
 FLAGS
   -a, --account=<value>      Additional account to fund
   -c, --config=<value>       [default: ./config.toml] Path to config.toml file
-  -d, --dev                  Use Anvil devnet funding logic
+  -d, --dev                  Use local L1 devnet funding logic
   -f, --amount=<value>       [default: 0.1] Amount to fund in ETH
   -i, --fund-deployer        Fund the deployer address only
   -k, --private-key=<value>  Private key for funder wallet
@@ -1183,8 +1183,8 @@ Generate L2 deployment artifacts, including genesis, public config, contract con
 ```
 USAGE
   $ scrollsdk setup gen-l2-artifacts [--base-fee-per-gas <value>] [--configs-dir <value>] [--deployment-salt <value>]
-    [--doge-config <value>] [--image-tag <value>] [--json] [--l1-fee-vault-addr <value>] [--l1-plonk-verifier-addr
-    <value>] [--l2-bridge-fee-recipient-addr <value>] [-N] [--skip-deployment-salt-update] [--skip-l1-fee-vault-update]
+    [--image-tag <value>] [--json] [--l1-fee-vault-addr <value>] [--l1-plonk-verifier-addr <value>]
+    [--l2-bridge-fee-recipient-addr <value>] [-N] [--skip-deployment-salt-update] [--skip-l1-fee-vault-update]
     [--skip-l1-plonk-verifier-update]
 
 FLAGS
@@ -1194,8 +1194,6 @@ FLAGS
       --configs-dir=<value>                   [default: values] Directory name to copy configs to
       --deployment-salt=<value>               Deployment salt value (non-interactive mode). If not provided, keeps
                                               existing or auto-increments.
-      --doge-config=<value>                   Path to config file (e.g., .data/doge-config-mainnet.toml or
-                                              .data/doge-config-testnet.toml)
       --image-tag=<value>                     Specify the Docker image tag to use
       --json                                  Output in JSON format (stdout for data, stderr for logs)
       --l1-fee-vault-addr=<value>             L1 fee vault address (non-interactive mode). Defaults to OWNER_ADDR.
@@ -1268,10 +1266,11 @@ Generate local secret files from config.toml, Dogecoin config, and bridge initia
 
 ```
 USAGE
-  $ scrollsdk setup gen-secrets [--doge-config <value>] [--json] [-N]
+  $ scrollsdk setup gen-secrets [--configs-dir <value>] [--doge-config <value>] [--json] [-N]
 
 FLAGS
   -N, --non-interactive      Run without prompts. Uses config values or sensible defaults.
+      --configs-dir=<value>  [default: values] Directory containing generated values files
       --doge-config=<value>  Path to config file (e.g., .data/doge-config-mainnet.toml or
                              .data/doge-config-testnet.toml)
       --json                 Output in JSON format (stdout for data, stderr for logs)

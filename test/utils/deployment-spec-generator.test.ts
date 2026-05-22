@@ -80,7 +80,7 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       walletPath: '/data/wallet.dat',
     },
     ethereumDa: {
-      beaconRpcUrl: 'https://eth-beacon-chain-sepolia.drpc.org/rest',
+      beaconRpcUrl: 'https://ethereum-sepolia-beacon-api.publicnode.com',
       chain: 'sepolia',
       finalizationDepth: 64,
       l1RpcUrl: 'https://sepolia.drpc.org',
@@ -367,7 +367,7 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('[ethereumDa]');
       expect(output).to.include('chain = "sepolia"');
       expect(output).to.include('submitterRpcUrl = "https://sepolia.drpc.org"');
-      expect(output).to.include('beaconRpcUrl = "https://eth-beacon-chain-sepolia.drpc.org/rest"');
+      expect(output).to.include('beaconRpcUrl = "https://ethereum-sepolia-beacon-api.publicnode.com"');
     });
 
     it('includes database connection strings', () => {

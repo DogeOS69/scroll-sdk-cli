@@ -14,6 +14,8 @@ enum Layer {
   L2 = 'l2',
 }
 
+const L1_DEVNET_PREFUNDED_PRIVATE_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+
 export default class HelperFundAccounts extends Command {
   static description = 'Fund L1 and L2 accounts for contracts'
 
@@ -40,7 +42,7 @@ export default class HelperFundAccounts extends Command {
     dev: Flags.boolean({
       char: 'd',
       default: false,
-      description: 'Use Anvil devnet funding logic',
+      description: 'Use local L1 devnet funding logic',
     }),
     'fund-deployer': Flags.boolean({
       char: 'i',
@@ -86,6 +88,7 @@ export default class HelperFundAccounts extends Command {
   }
 
   private fundingWallet!: ethers.Wallet
+  private l1DevFundingMode?: 'anvil' | 'wallet'
   private l1ETHGateway!: string
 
   private l1GasTokenAddress!: string
@@ -101,14 +104,14 @@ export default class HelperFundAccounts extends Command {
     const configPath = path.resolve(flags.config)
     const config = parseTomlConfig(configPath)
 
-    const l1RpcUrl = flags.l1rpc ?? config?.ethereumDa?.submitterRpcUrl
+    const l1RpcUrl = flags.l1rpc ?? this.getL1RpcUrl(config)
     const l2RpcUrl = flags.pod
       ? config?.general?.L2_RPC_ENDPOINT
       : flags.l2rpc ?? config.frontend.EXTERNAL_RPC_URI_L2
 
     if (!l1RpcUrl || !l2RpcUrl) {
       this.error(
-        `Missing RPC URL(s) in ${configPath}. Please ensure ethereumDa.submitterRpcUrl is defined for L1 funding and L2_RPC_ENDPOINT (for pod mode) or EXTERNAL_RPC_URI_L2 (for non-pod mode) is defined, or use the '-o' and '-t' flags.`,
+        `Missing RPC URL(s) in ${configPath}. Please ensure ingress.L1_DEVNET_HOST or frontend.EXTERNAL_RPC_URI_L1 is defined for L1 funding, and L2_RPC_ENDPOINT (for pod mode) or EXTERNAL_RPC_URI_L2 (for non-pod mode) is defined, or use the '-o' and '-t' flags.`,
       )
     }
 
@@ -125,10 +128,12 @@ export default class HelperFundAccounts extends Command {
     const contractsConfig = parseTomlConfig(contractsConfigPath)
     this.l1ETHGateway = contractsConfig.L1_ETH_GATEWAY_PROXY_ADDR
 
-    if (flags['private-key']) {
-      this.fundingWallet = new ethers.Wallet(flags['private-key'], this.l1Provider)
+    const fundingPrivateKey = flags['private-key'] ?? (flags.dev ? L1_DEVNET_PREFUNDED_PRIVATE_KEY : undefined)
+    if (fundingPrivateKey) {
+      const privateKeySource = flags['private-key'] ? '--private-key' : 'local L1 devnet prefunded private key'
+      this.fundingWallet = this.createFundingWallet(fundingPrivateKey, privateKeySource)
     } else if (!flags.manual) {
-      this.fundingWallet = new ethers.Wallet(config.accounts.DEPLOYER_PRIVATE_KEY, this.l1Provider)
+      this.fundingWallet = this.createFundingWallet(config.accounts.DEPLOYER_PRIVATE_KEY, `DEPLOYER_PRIVATE_KEY in ${configPath}`)
     }
 
     // Check for alternative gas token
@@ -279,18 +284,54 @@ export default class HelperFundAccounts extends Command {
     }
   }
 
-  private async fundAddressAnvil(provider: ethers.JsonRpcProvider, address: string, amount: number, layer: Layer) {
+  private createFundingWallet(privateKey: unknown, source: string): ethers.Wallet {
+    if (typeof privateKey !== 'string' || privateKey.trim() === '') {
+      this.error(
+        `Missing funding wallet private key from ${source}. For local L1 devnet, use '-d'. Otherwise pass '-k <private-key>' or fix config.accounts.DEPLOYER_PRIVATE_KEY.`,
+      )
+    }
+
     try {
-      const result = await provider.send('anvil_setBalance', [address, ethers.parseEther(amount.toString()).toString()])
-      await this.logAddress(address, `Successfully funded with ${amount} ETH`, layer)
-      await provider.send('anvil_mine', [1])
-      await this.log('Minted 1 block.')
-      return result
+      return new ethers.Wallet(privateKey.trim(), this.l1Provider)
     } catch (error) {
+      this.error(
+        `Invalid funding wallet private key from ${source}: ${error instanceof Error ? error.message : 'Unknown error'}. For local L1 devnet, use '-d'. Otherwise pass '-k <private-key>' or fix config.accounts.DEPLOYER_PRIVATE_KEY.`,
+      )
+    }
+  }
+
+  private async fundAddressAnvil(
+    provider: ethers.JsonRpcProvider,
+    address: string,
+    amount: number,
+    layer: Layer,
+  ): Promise<void> {
+    const error = await this.tryFundAddressAnvil(provider, address, amount, layer)
+    if (error) {
       this.error(
         `Failed to fund ${address} (${layer} devnet): ${error instanceof Error ? error.message : 'Unknown error'}`,
       )
     }
+  }
+
+  private async fundAddressL1Devnet(address: string, amount: number): Promise<void> {
+    if (this.l1DevFundingMode === 'anvil') {
+      await this.fundAddressAnvil(this.l1Provider, address, amount, Layer.L1)
+      return
+    }
+
+    if (!this.l1DevFundingMode) {
+      const anvilError = await this.tryFundAddressAnvil(this.l1Provider, address, amount, Layer.L1)
+      if (anvilError) {
+        this.l1DevFundingMode = 'wallet'
+        this.warn('L1 dev RPC does not support anvil_setBalance; funding with the prefunded devnet wallet.')
+      } else {
+        this.l1DevFundingMode = 'anvil'
+        return
+      }
+    }
+
+    await this.fundAddressNetwork(address, amount, Layer.L1)
   }
 
   private async fundAddressNetwork(address: string, amount: number, layer: Layer) {
@@ -307,6 +348,17 @@ export default class HelperFundAccounts extends Command {
       this.log(chalk.yellow(`  Funder:    ${ethers.formatEther(initialFunderBalance)} ${unitName}`))
       this.log(chalk.yellow(`  Recipient: ${ethers.formatEther(initialRecipientBalance)} ${unitName}`))
       this.log(chalk.yellow(`Funding ${address} with ${amount} ${unitName}...`))
+
+      if (fundingWallet.address.toLowerCase() === address.toLowerCase()) {
+        if (initialRecipientBalance >= ethers.parseEther(amount.toString())) {
+          this.log(chalk.green(`Recipient is the funding wallet and already has ${ethers.formatEther(initialRecipientBalance)} ${unitName}`))
+          return
+        }
+
+        this.error(
+          `Funding wallet and recipient are the same address, but balance is below ${amount} ${unitName}: ${ethers.formatEther(initialRecipientBalance)} ${unitName}`,
+        )
+      }
 
       const tx = await fundingWallet.sendTransaction({
         to: address,
@@ -333,7 +385,7 @@ export default class HelperFundAccounts extends Command {
   private async fundDeployer(deployerAddress: string, flags: any): Promise<void> {
     this.log(chalk.cyan('\nFunding Deployer Address:'))
     await (flags.dev
-      ? this.fundAddressAnvil(this.l1Provider, deployerAddress, 100, Layer.L1)
+      ? this.fundAddressL1Devnet(deployerAddress, Number(flags.amount))
       : this.promptManualFunding(deployerAddress, Number(flags.amount), Layer.L1))
 
     if (this.altGasTokenEnabled) {
@@ -387,7 +439,7 @@ export default class HelperFundAccounts extends Command {
 
       if (flags.dev) {
          
-        await this.fundAddressAnvil(this.l1Provider, address, Number(flags.amount), Layer.L1)
+        await this.fundAddressL1Devnet(address, Number(flags.amount))
       } else if (flags.manual) {
          
         await this.promptManualFunding(address, Number(flags.amount), Layer.L1)
@@ -424,6 +476,16 @@ export default class HelperFundAccounts extends Command {
         await this.promptManualFunding(address, Number(flags.amount), Layer.L2)
       }
     }
+  }
+
+  private getL1RpcUrl(config: any): string | undefined {
+    const externalL1RpcUrl = config?.frontend?.EXTERNAL_RPC_URI_L1
+    const l1DevnetHost = config?.ingress?.L1_DEVNET_HOST
+    return (
+      this.normalizeRpcUrlFromHost(l1DevnetHost, externalL1RpcUrl)
+      ?? externalL1RpcUrl
+      ?? config?.general?.L1_RPC_ENDPOINT
+    )
   }
 
   private async initializeAltGasToken(): Promise<void> {
@@ -475,6 +537,20 @@ export default class HelperFundAccounts extends Command {
   private async logTx(txHash: string, description: string, layer: Layer): Promise<void> {
     const link = await txLink(txHash, this.blockExplorers[layer])
     this.log(`${description}: ${chalk.cyan(link)}`)
+  }
+
+  private normalizeRpcUrlFromHost(host: unknown, referenceUrl?: string): string | undefined {
+    if (typeof host !== 'string' || host.trim() === '') {
+      return undefined
+    }
+
+    const normalizedHost = host.trim()
+    if (normalizedHost.startsWith('http://') || normalizedHost.startsWith('https://')) {
+      return normalizedHost
+    }
+
+    const protocol = referenceUrl?.startsWith('https://') ? 'https' : 'http'
+    return `${protocol}://${normalizedHost}`
   }
 
   private async promptManualFunding(address: string, amount: number, layer: Layer) {
@@ -568,5 +644,22 @@ export default class HelperFundAccounts extends Command {
       message: 'How would you like to fund the L2 address?',
     })
     return answer
+  }
+
+  private async tryFundAddressAnvil(
+    provider: ethers.JsonRpcProvider,
+    address: string,
+    amount: number,
+    layer: Layer,
+  ): Promise<Error | undefined> {
+    try {
+      await provider.send('anvil_setBalance', [address, ethers.parseEther(amount.toString()).toString()])
+      await this.logAddress(address, `Successfully funded with ${amount} ETH`, layer)
+      await provider.send('anvil_mine', [1])
+      await this.log('Minted 1 block.')
+      return undefined
+    } catch (error) {
+      return error instanceof Error ? error : new Error('Unknown error')
+    }
   }
 }
