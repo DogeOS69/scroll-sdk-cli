@@ -1,126 +1,49 @@
-# Configuration for the Testnet Setup Tool
-#
-# This file is consumed by `test_utils::setup::generate_keys_from_config` and the
-# `generate_test_keys` binary. Field names must match `TestnetSetupConfig` in
-# `crates/test_utils/src/setup.rs`.
-#
-# See `docs/bridge-genesis-deployment.md` for the production deployment ordering.
-# The setup helpers in this crate are TEST-ONLY scaffolding; they do not replace
-# that flow.
-#
-# Any field below can be overridden at runtime with `TESTNET_SETUP_<FIELD>`
-# environment variables (figment uses the `TESTNET_SETUP_` prefix and maps `__`
-# to nested-table separators — flat fields like `dogecoin_rpc_user` use a single
-# underscore: `TESTNET_SETUP_DOGECOIN_RPC_USER`).
+# Configuration for the testnet setup helper.
+# Field names match TestnetSetupConfig in dogeos-core/crates/test_utils/src/setup.rs.
 
-# General network identifier
 network = "testnet"
+seed_string = "replace_me_with_your_seed"
 
-# --- Base Identity ---
-# Seed string used to derive the base private key for all roles below.
-# Recommend overriding via `TESTNET_SETUP_SEED_STRING`.
-seed_string = "random-seed-string-00"
+dogecoin_rpc_url = "https://dogecoin.testnet.dogeos.com"
+dogecoin_rpc_user = ""
+dogecoin_rpc_pass = ""
+dogecoin_blockbook_url = "https://dogebook-testnet.nownodes.io"
+dogecoin_blockbook_api_key = "00000000000000000000000000000000"
 
-# Optional: Provide a specific public key for the P2PKH Sequencer role.
-# When set, the binary uses the supplied pubkey directly and does NOT emit a
-# WIF for the sequencer (you keep the private key out-of-band).
-# If commented out, the keypair is derived from `seed_string`.
-# sequencer_pubkey = "02xxxxxxx..."
-
-# Optional: Provide a specific public key for the P2PKH Fee Wallet role.
-# Same out-of-band-key semantics as `sequencer_pubkey`.
-# fee_wallet_pubkey = "03yyyyyyy..."
-
-# --- Dogecoin RPC ---
-dogecoin_rpc_url = "https://testnet.doge-rpc.io"
-dogecoin_rpc_user = "user"
-dogecoin_rpc_pass = "password"
-# Recommend overriding credentials via env, e.g.:
-#   TESTNET_SETUP_DOGECOIN_RPC_USER=... TESTNET_SETUP_DOGECOIN_RPC_PASS=...
-
-# Optional: import sequencer/fee/bridge addresses into the node wallet as
-# watch-only after derivation. Not required for funding (the binary spends
-# `[[base_funding_utxos]]` directly via PSBT); only useful so an operator can
-# `getreceivedbyaddress` etc. against the same node. Default: false.
-# watch_derived_addresses_in_wallet = false
-
-# --- Bridge Script Generation Parameters ---
-# Bridge roles (matches `generate_bridge_info::BridgeInfoConfig`):
-#   - TEE         : 1-of-1 CHECKSIGVERIFY (no threshold field; one keypair derived)
-#   - Attestation : M-of-N
-#   - Recovery    : M-of-N (gated by `timelock`)
+# Bridge signer policy. If tee_pubkey / attestation_pubkeys / recovery_pubkeys
+# are omitted, generate_test_keys derives them deterministically from seed_string.
 attestation_threshold = 2
-recovery_threshold    = 2
+recovery_threshold = 2
 attestation_key_count = 3
-recovery_key_count    = 3
-
-# Recovery CLTV timelock (Dogecoin absolute block-height semantics).
-# IMPORTANT: must be < 500_000_000; values >= 500_000_000 use timestamp
-# semantics and are rejected by `generate_bridge_info`.
-# This template value is only a placeholder. `scrollsdk setup bridge-init`
-# rewrites it before broadcasting setup when it is missing, expired, or still
-# set to this placeholder.
+recovery_key_count = 3
 timelock = 100
 
-# Fee rate used for transaction construction (satoshis per kvB).
-fee_rate_sat_per_kvb = 1000000
-
-# Optional: 20-byte ETH recipient hex used in the OP_RETURN of every bridge
-# funding tx (Tx2..Tx11). If empty/omitted the binary uses a built-in
-# placeholder (`01020304…1920`).
-# deposit_eth_recipient_address_hex = "0x1234567890123456789012345678901234567890"
-
-# Optional: Provide a specific TEE public key (single key, 1-of-1).
-# When set, the binary does not emit a WIF for the TEE role.
-# If commented out or empty the TEE keypair is derived from `seed_string`.
-# tee_pubkey = "02tttttttttt..."
-
-# Optional: Provide specific public keys for attestation roles.
-# If commented out or empty, `attestation_key_count` keys are derived.
+# Optional: provide specific signer public keys instead of deriving them from seed_string.
+# `scrollsdk setup cubesigner-init` writes attestation_pubkeys before bridge-init.
+# tee_pubkey = "020000000000000000000000000000000000000000000000000000000000000000"
 # attestation_pubkeys = [
-#   "02zzzzzzzz...",
-#   "03wwwwwwww..."
+#   "0400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+#   "0400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002",
+#   "0400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003",
 # ]
-
-# Optional: Provide specific public keys for recovery roles.
-# If commented out or empty, `recovery_key_count` keys are derived.
 # recovery_pubkeys = [
-#   "02aaaaaa...",
-#   "03bbbbbb..."
+#   "0400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004",
+#   "0400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005",
+#   "0400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006",
 # ]
 
-# --- Target Amounts (in Satoshis) ---
-sequencer_target_amount  = 420690000     # 4.2069 DOGE (single sequencer outpoint, vout 0)
-fee_wallet_target_amount = 500000000     # 5  DOGE (split across 10 outputs)
-bridge_target_amount     = 5000000000    # 50 DOGE (split across 10 bridge funding txs)
-
-# --- Optional Settings ---
-# Number of L1 confirmations to wait for after broadcasting setup tx + bridge
-# funding txs. MUST be > 0 if you intend to feed `output-test-data.json` into
-# `generate_protocol_context` — the latter needs the `confirmed_block_hash` /
-# `confirmed_block_height` fields to fill `genesis.initial_confirmed_block_*`,
-# and those fields stay empty when this is 0/unset.
+fee_rate_sat_per_kvb = 1_000_000
+sequencer_target_amount = 420_690_000
+fee_wallet_target_amount = 500_000_000
+bridge_target_amount = 5_000_000_000
 confirmations_required = 1
 
-# ---------------- Sub-tables (must come last) ----------------
-# TOML scoping rule: any [section] or [[array_of_tables]] block "absorbs" all
-# subsequent root-level keys into itself. Place every flat field above and
-# every block below to avoid surprises.
+# Optional: 20-byte ETH recipient used in bridge funding OP_RETURNs.
+deposit_eth_recipient_address_hex = "0xdED06046416d6bA20c1e2baD51B3A3e2f267d33F"
 
-# Optional REST getutxos batch check (no wallet required). If enabled, the
-# tool can validate multiple base outpoints at once via the Dogecoin REST
-# gateway. If `rest_base_url` is omitted it is derived from `dogecoin_rpc_url`
-# (same host:port + "/rest").
-# [rest]
-# enable_rest_getutxos_batch = true
-# rest_base_url = "http://127.0.0.1:44555/rest"
-
-# Wallet-less funding: explicit base UTXOs the distribution helper will spend
-# in the setup tx (Tx1). Repeat the block for each input. `prev_tx_hex` is
-# optional — if absent, the tool fetches the prev tx via RPC, which requires
-# the node to have `txindex=1` for non-mempool history.
-# [[base_funding_utxos]]
-# txid        = "<txid>"
-# vout        = 1
-# amount_sats = 123456789
+# Wallet-less funding input that the distribution helper will spend.
+[[base_funding_utxos]]
+txid = "<txid of the DOGE sent to the helper address>"
+vout = 0
+amount_sats = 7_000_000_000
 # prev_tx_hex = "<raw tx hex of the funding tx>"

@@ -341,14 +341,19 @@ export default class SetupDomains extends Command {
       },
     ) || defaultEthereumDaChain
     const ethereumDaDefaults = ETHEREUM_DA_DEFAULTS[ethereumDaChain]
+    const shouldReuseExistingEthereumDaValues = niCtx.enabled || existingEthereumDaChain === ethereumDaChain
+    const ethereumDaFieldDefault = (field: 'beaconRpcUrl' | 'chainId' | 'submitterRpcUrl') =>
+      shouldReuseExistingEthereumDaValues
+        ? existingEthereumDa?.[field] || ethereumDaDefaults[field]
+        : ethereumDaDefaults[field]
 
     const ethereumDaSubmitterRpcUrl = await resolveOrPrompt(
       niCtx,
       () => input({
-        default: existingEthereumDa?.submitterRpcUrl || ethereumDaDefaults.submitterRpcUrl,
+        default: ethereumDaFieldDefault('submitterRpcUrl'),
         message: 'Enter the real Ethereum execution JSON-RPC endpoint used by eth-da-submitter ([ethereumDa].submitterRpcUrl):',
       }),
-      existingEthereumDa?.submitterRpcUrl || ethereumDaDefaults.submitterRpcUrl,
+      ethereumDaFieldDefault('submitterRpcUrl'),
       {
         configPath: '[ethereumDa].submitterRpcUrl',
         description: 'Real Ethereum execution JSON-RPC endpoint used by eth-da-submitter',
@@ -359,10 +364,10 @@ export default class SetupDomains extends Command {
     const ethereumDaBeaconRpcUrl = await resolveOrPrompt(
       niCtx,
       () => input({
-        default: existingEthereumDa?.beaconRpcUrl || ethereumDaDefaults.beaconRpcUrl,
+        default: ethereumDaFieldDefault('beaconRpcUrl'),
         message: 'Enter the real Ethereum beacon API endpoint used as the DA data source ([ethereumDa].beaconRpcUrl):',
       }),
-      existingEthereumDa?.beaconRpcUrl || ethereumDaDefaults.beaconRpcUrl,
+      ethereumDaFieldDefault('beaconRpcUrl'),
       {
         configPath: '[ethereumDa].beaconRpcUrl',
         description: 'Real Ethereum beacon API endpoint used as the DA data source',
@@ -373,10 +378,10 @@ export default class SetupDomains extends Command {
     const ethereumDaChainId = await resolveOrPrompt(
       niCtx,
       () => input({
-        default: existingEthereumDa?.chainId || ethereumDaDefaults.chainId,
+        default: ethereumDaFieldDefault('chainId'),
         message: 'Enter the real Ethereum DA execution chain ID ([ethereumDa].chainId):',
       }),
-      existingEthereumDa?.chainId || ethereumDaDefaults.chainId,
+      ethereumDaFieldDefault('chainId'),
       {
         configPath: '[ethereumDa].chainId',
         description: 'Real Ethereum DA execution chain ID. This is separate from [general].CHAIN_ID_L1 used by l1-interface/Dogecoin.',
