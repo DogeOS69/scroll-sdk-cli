@@ -18,9 +18,14 @@ import { JsonOutputContext } from '../../utils/json-output.js'
 import { resolveEnvValue } from '../../utils/non-interactive.js'
 const { Networks, PrivateKey } = bitcore
 const defaultTag = 'newda'
+const awsImageSources = ['dockerhub', 'ecr', 'ecr-sync'] as const
+
+type AwsImageSource = typeof awsImageSources[number]
 
 export interface NonInteractiveOptions {
   awsAccountId?: string
+  awsImageSource?: AwsImageSource
+  awsImageUri?: string
   awsNetworkAlias?: string
   awsRegion?: string
   awsSuffixes?: string
@@ -123,6 +128,26 @@ export class DummySignersManager {
     ]
   }
 
+  private buildDockerHubImage(): string {
+    return `dogeos69/dummy-signer:${this.imageTag}`
+  }
+
+  private buildEcrImage(awsRegion: string, awsAccountId: string): string {
+    const repoName = 'dogeos/dummy-signer';
+    const ecrRegistry = `${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com`;
+
+    return `${ecrRegistry}/${repoName}:${this.imageTag}`;
+  }
+
+  private checkEcrImageExists(awsRegion: string, repoName: string): boolean {
+    try {
+      execFileSync('aws', ['ecr', 'describe-images', '--repository-name', repoName, '--image-ids', `imageTag=${this.imageTag}`, '--region', awsRegion], { stdio: 'pipe' });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private async collectSignerConfigs(numSigners: number, generateWifKeys: boolean): Promise<Array<{ port: number, publicKey?: string, wif: string }>> {
     const signerConfigs: Array<{ port: number, publicKey?: string, wif: string }> = []
 
@@ -179,6 +204,35 @@ export class DummySignersManager {
     }
 
     return signerConfigs
+  }
+
+  private async confirmDockerHubTagIfKnown(availableTags: string[]): Promise<void> {
+    if (availableTags.length === 0) {
+      this.warn(chalk.yellow(`Skipping Docker Hub tag validation for '${this.imageTag}' because the tag list is unavailable.`))
+      return
+    }
+
+    if (availableTags.includes(this.imageTag)) {
+      this.log(chalk.green(`✅ Verified image tag '${this.imageTag}' exists in Docker Hub.`))
+      return
+    }
+
+    this.warn(chalk.yellow(`⚠️  Warning: Image tag '${this.imageTag}' not found in Docker Hub.`))
+    this.log(chalk.blue(`Available tags: ${availableTags.slice(0, 10).join(', ')}${availableTags.length > 10 ? '...' : ''}`))
+
+    if (this.nonInteractive) {
+      this.warn(chalk.yellow('Non-interactive mode: Proceeding with unverified image tag'))
+      return
+    }
+
+    const proceedAnyway = await confirm({
+      default: false,
+      message: 'The specified image tag was not found in Docker Hub. Do you want to proceed anyway?'
+    })
+
+    if (!proceedAnyway) {
+      throw new Error('AWS deployment cancelled.')
+    }
   }
 
   private convertKMSPublicKeyToHex(base64PublicKey: string): string {
@@ -270,9 +324,59 @@ export class DummySignersManager {
     return 'localhost'
   }
 
+  private ensureAwsCliConfigured(): void {
+    try {
+      execFileSync('which', ['aws'], { stdio: 'pipe' });
+      execFileSync('aws', ['sts', 'get-caller-identity'], { stdio: 'pipe' });
+    } catch {
+      throw new Error('AWS CLI is not installed or not configured. Please install and configure AWS CLI first.');
+    }
+  }
+
   private ensureDirectoryExists(dirPath: string): void {
     if (!fs.existsSync(dirPath)) {
       fs.mkdirSync(dirPath, { recursive: true })
+    }
+  }
+
+  private ensureDockerRunning(): void {
+    try {
+      execFileSync('docker', ['info'], { stdio: 'pipe' });
+    } catch {
+      throw new Error('Docker is not installed or not running. Please install and start Docker first.');
+    }
+  }
+
+  private ensureEcrImageAvailable(awsRegion: string, awsAccountId: string): void {
+    const repoName = 'dogeos/dummy-signer';
+    const ecrImage = this.buildEcrImage(awsRegion, awsAccountId);
+
+    this.log('Checking prerequisites...');
+    this.ensureAwsCliConfigured();
+    this.ensureEcrRepository(awsRegion, repoName);
+
+    this.log('Checking if image exists in ECR...');
+    if (this.checkEcrImageExists(awsRegion, repoName)) {
+      this.log(`Image ${ecrImage} already exists in ECR.`);
+      return;
+    }
+
+    throw new Error(`Image ${ecrImage} does not exist in ECR. Push the image first or use --aws-image-source dockerhub/ecr-sync.`);
+  }
+
+  private ensureEcrRepository(awsRegion: string, repoName: string): void {
+    this.log('Checking ECR repository...');
+    try {
+      execFileSync('aws', ['ecr', 'describe-repositories', '--repository-names', repoName, '--region', awsRegion], { stdio: 'pipe' });
+      this.log(`Repository ${repoName} already exists.`);
+    } catch {
+      this.log(`Repository ${repoName} does not exist. Creating...`);
+      try {
+        execFileSync('aws', ['ecr', 'create-repository', '--repository-name', repoName, '--region', awsRegion], { stdio: 'pipe' });
+        this.log(`Repository ${repoName} created successfully.`);
+      } catch (createError) {
+        throw new Error(`Failed to create ECR repository: ${createError}`);
+      }
     }
   }
 
@@ -315,7 +419,7 @@ export class DummySignersManager {
       const data = await response.json()
       return data.results.map((tag: any) => tag.name)
     } catch (error) {
-      this.error(`Failed to fetch Docker tags: ${error}`)
+      this.warn(`Could not fetch Docker tags, skipping tag validation: ${error}`)
       return []
     }
   }
@@ -432,6 +536,32 @@ export class DummySignersManager {
     } catch (error) {
       this.error(`Failed to get AWS service URLs: ${error}`);
     }
+  }
+
+  private getConfiguredAwsImageSource(): AwsImageSource {
+    const configuredSource = this.nonInteractiveOptions.awsImageSource || this.dogeConfig.awsSigner?.imageSource
+
+    if (configuredSource && awsImageSources.includes(configuredSource as AwsImageSource)) {
+      return configuredSource as AwsImageSource
+    }
+
+    if (configuredSource) {
+      this.warn(`Unsupported AWS image source "${configuredSource}", using dockerhub.`)
+    }
+
+    return 'dockerhub'
+  }
+
+  private getConfiguredAwsImageUri(): string | undefined {
+    if (this.nonInteractiveOptions.awsImageUri) {
+      return this.nonInteractiveOptions.awsImageUri
+    }
+
+    if (this.nonInteractiveOptions.awsImageSource) {
+      return undefined
+    }
+
+    return this.dogeConfig.awsSigner?.imageUri
   }
 
   private getDockerGatewayIP(): null | string {
@@ -561,38 +691,24 @@ export class DummySignersManager {
 
   private prepareDummyImage(awsRegion: string, awsAccountId: string): void {
     const repoName = 'dogeos/dummy-signer';
-    const dockerHubImage = `dogeos69/dummy-signer:${this.imageTag}`;
+    const dockerHubImage = this.buildDockerHubImage();
     const ecrRegistry = `${awsAccountId}.dkr.ecr.${awsRegion}.amazonaws.com`;
-    const ecrImage = `${ecrRegistry}/${repoName}:${this.imageTag}`;
+    const ecrImage = this.buildEcrImage(awsRegion, awsAccountId);
 
     this.log('Checking prerequisites...');
+    this.ensureAwsCliConfigured();
+    this.ensureEcrRepository(awsRegion, repoName);
 
-    try {
-      execFileSync('which', ['aws'], { stdio: 'pipe' });
-      execFileSync('aws', ['sts', 'get-caller-identity'], { stdio: 'pipe' });
-    } catch {
-      throw new Error('AWS CLI is not installed or not configured. Please install and configure AWS CLI first.');
+    this.log('Checking if image exists in ECR...');
+    const imageExistsInECR = this.checkEcrImageExists(awsRegion, repoName);
+    if (imageExistsInECR) {
+      this.log(`Image ${ecrImage} already exists in ECR.`);
+      this.log('Dummy signer image preparation completed successfully!');
+      return;
     }
 
-    try {
-      execFileSync('docker', ['info'], { stdio: 'pipe' });
-    } catch {
-      throw new Error('Docker is not installed or not running. Please install and start Docker first.');
-    }
-
-    this.log('Checking ECR repository...');
-    try {
-      execFileSync('aws', ['ecr', 'describe-repositories', '--repository-names', repoName, '--region', awsRegion], { stdio: 'pipe' });
-      this.log(`Repository ${repoName} already exists.`);
-    } catch {
-      this.log(`Repository ${repoName} does not exist. Creating...`);
-      try {
-        execFileSync('aws', ['ecr', 'create-repository', '--repository-name', repoName, '--region', awsRegion], { stdio: 'pipe' });
-        this.log(`Repository ${repoName} created successfully.`);
-      } catch (createError) {
-        throw new Error(`Failed to create ECR repository: ${createError}`);
-      }
-    }
+    this.log(`Image ${ecrImage} does not exist in ECR. Will proceed to push.`);
+    this.ensureDockerRunning();
 
     this.log('Logging in to ECR...');
     try {
@@ -610,58 +726,45 @@ export class DummySignersManager {
       throw new Error(`Failed to log in to ECR: ${error}`);
     }
 
-    this.log('Checking if image exists in ECR...');
-    let imageExistsInECR = false;
+    this.log('Checking local Docker images...');
+    let localImageExists = false;
     try {
-      execFileSync('aws', ['ecr', 'describe-images', '--repository-name', repoName, '--image-ids', `imageTag=${this.imageTag}`, '--region', awsRegion], { stdio: 'pipe' });
-      imageExistsInECR = true;
-      this.log(`Image ${ecrImage} already exists in ECR.`);
+      const result = execFileSync('docker', ['images', dockerHubImage, '--format', '{{.Repository}}:{{.Tag}}'], { encoding: 'utf8' });
+      localImageExists = result.trim() === dockerHubImage;
     } catch {
-      this.log(`Image ${ecrImage} does not exist in ECR. Will proceed to push.`);
+      localImageExists = false;
     }
 
-    if (!imageExistsInECR) {
-      this.log('Checking local Docker images...');
-      let localImageExists = false;
+    if (localImageExists) {
+      this.log('Image already exists locally.');
+    } else {
+      this.log(`Pulling ${dockerHubImage} from Docker Hub...`);
       try {
-        const result = execFileSync('docker', ['images', dockerHubImage, '--format', '{{.Repository}}:{{.Tag}}'], { encoding: 'utf8' });
-        localImageExists = result.trim() === dockerHubImage;
-      } catch {
-        localImageExists = false;
-      }
-
-      if (localImageExists) {
-        this.log('Image already exists locally.');
-      } else {
-        this.log(`Pulling ${dockerHubImage} from Docker Hub...`);
-        try {
-          execFileSync('docker', ['pull', dockerHubImage], { stdio: 'inherit' });
-        } catch (error) {
-          throw new Error(`Failed to pull image from Docker Hub: ${error}`);
-        }
-      }
-
-      this.log(`Tagging image for ECR...`);
-      try {
-        execFileSync('docker', ['tag', dockerHubImage, ecrImage], { stdio: 'pipe' });
+        execFileSync('docker', ['pull', dockerHubImage], { stdio: 'inherit' });
       } catch (error) {
-        throw new Error(`Failed to tag image: ${error}`);
+        throw new Error(`Failed to pull image from Docker Hub: ${error}`);
       }
+    }
 
-      this.log(`Pushing image to ECR...`);
-      try {
-        execFileSync('docker', ['push', ecrImage], { stdio: 'inherit' });
-        this.log('Successfully pushed image to ECR.');
-      } catch (error) {
-        throw new Error(`Failed to push image to ECR: ${error}`);
-      }
+    this.log(`Tagging image for ECR...`);
+    try {
+      execFileSync('docker', ['tag', dockerHubImage, ecrImage], { stdio: 'pipe' });
+    } catch (error) {
+      throw new Error(`Failed to tag image: ${error}`);
+    }
+
+    this.log(`Pushing image to ECR...`);
+    try {
+      execFileSync('docker', ['push', ecrImage], { stdio: 'inherit' });
+      this.log('Successfully pushed image to ECR.');
+    } catch (error) {
+      throw new Error(`Failed to push image to ECR: ${error}`);
     }
 
     this.log('Verifying image in ECR...');
-    try {
-      execFileSync('aws', ['ecr', 'describe-images', '--repository-name', repoName, '--image-ids', `imageTag=${this.imageTag}`, '--region', awsRegion], { stdio: 'pipe' });
+    if (this.checkEcrImageExists(awsRegion, repoName)) {
       this.log('Image successfully verified in ECR.');
-    } catch {
+    } else {
       throw new Error('Failed to verify image in ECR after push.');
     }
 
@@ -711,6 +814,8 @@ export class DummySignersManager {
 
   private async saveAwsSignerConfig(awsSignerConfig: {
     accountId: string
+    imageSource?: AwsImageSource
+    imageUri?: null | string
     networkAlias: string
     region: string
     suffixes: string
@@ -720,10 +825,19 @@ export class DummySignersManager {
         this.dogeConfig.awsSigner = {}
       }
 
-      this.dogeConfig.awsSigner = {
+      const { imageUri, ...awsSignerConfigWithoutImageUri } = awsSignerConfig
+      const updatedAwsSigner = {
         ...this.dogeConfig.awsSigner,
-        ...awsSignerConfig
+        ...awsSignerConfigWithoutImageUri
       }
+
+      if (imageUri === null) {
+        delete updatedAwsSigner.imageUri
+      } else if (imageUri !== undefined) {
+        updatedAwsSigner.imageUri = imageUri
+      }
+
+      this.dogeConfig.awsSigner = updatedAwsSigner
 
       const configContent = toml.stringify(this.dogeConfig as any)
       fs.writeFileSync(this.configPath, configContent)
@@ -772,28 +886,6 @@ export class DummySignersManager {
 
   private async setupAwsSigners(availableTags: string[]): Promise<void> {
     this.log(chalk.blue('\nSetting up AWS Dummy Signers...'))
-
-    // Validate that the specified image tag exists in the registry
-    if (availableTags.includes(this.imageTag)) {
-      this.log(chalk.green(`✅ Verified image tag '${this.imageTag}' exists in registry.`))
-    } else {
-      this.warn(chalk.yellow(`⚠️  Warning: Image tag '${this.imageTag}' not found in Docker registry.`))
-      this.log(chalk.blue(`Available tags: ${availableTags.slice(0, 10).join(', ')}${availableTags.length > 10 ? '...' : ''}`))
-
-      if (this.nonInteractive) {
-        this.warn(chalk.yellow('Non-interactive mode: Proceeding with unverified image tag'))
-      } else {
-        const proceedAnyway = await confirm({
-          default: false,
-          message: 'The specified image tag was not found in the registry. Do you want to proceed anyway?'
-        })
-
-        if (!proceedAnyway) {
-          this.log(chalk.yellow('AWS deployment cancelled.'))
-          return
-        }
-      }
-    }
 
     let AWS_REGION: string
     let NETWORK_ALIAS: string
@@ -844,7 +936,20 @@ export class DummySignersManager {
       })
     }
 
-    const IMAGE_URI = `${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/dogeos/dummy-signer:${this.imageTag}`
+    const awsImageSource = this.getConfiguredAwsImageSource()
+    const customAwsImageUri = this.getConfiguredAwsImageUri()
+    const IMAGE_URI = customAwsImageUri || (
+      awsImageSource === 'dockerhub'
+        ? this.buildDockerHubImage()
+        : this.buildEcrImage(AWS_REGION, AWS_ACCOUNT_ID)
+    )
+
+    this.log(chalk.blue(`Using AWS signer image source: ${customAwsImageUri ? 'custom' : awsImageSource}`))
+    this.log(chalk.blue(`Using AWS signer image URI: ${IMAGE_URI}`))
+
+    if (!customAwsImageUri && availableTags.length > 0 && (awsImageSource === 'dockerhub' || awsImageSource === 'ecr-sync')) {
+      await this.confirmDockerHubTagIfKnown(availableTags)
+    }
 
     const TSO_URL = this.readTsoUrlFromConfig()
     if (!TSO_URL) {
@@ -887,15 +992,39 @@ export class DummySignersManager {
       threshold = Number.parseInt(thresholdStr, 10)
     }
 
-    await this.saveAwsSignerConfig({
+    const awsSignerConfig: {
+      accountId: string
+      imageSource: AwsImageSource
+      imageUri?: null | string
+      networkAlias: string
+      region: string
+      suffixes: string
+    } = {
       accountId: AWS_ACCOUNT_ID,
+      imageSource: awsImageSource,
       networkAlias: NETWORK_ALIAS,
       region: AWS_REGION,
       suffixes: SUFFIXES
-    })
+    }
+
+    if (customAwsImageUri) {
+      awsSignerConfig.imageUri = customAwsImageUri
+    } else if (this.nonInteractiveOptions.awsImageSource) {
+      awsSignerConfig.imageUri = null
+    }
+
+    await this.saveAwsSignerConfig(awsSignerConfig)
 
     try {
-      this.prepareDummyImage(AWS_REGION, AWS_ACCOUNT_ID);
+      if (customAwsImageUri) {
+        this.log('Using custom image URI; skipping automatic ECR image preparation.');
+      } else if (awsImageSource === 'ecr-sync') {
+        this.prepareDummyImage(AWS_REGION, AWS_ACCOUNT_ID);
+      } else if (awsImageSource === 'ecr') {
+        this.ensureEcrImageAvailable(AWS_REGION, AWS_ACCOUNT_ID);
+      } else {
+        this.log('Using Docker Hub image directly; skipping ECR image preparation.');
+      }
 
       // Get project root directory from current file location
       const __filename = fileURLToPath(import.meta.url);
@@ -1202,6 +1331,13 @@ export class DummySignersCommand extends Command {
     'aws-account-id': Flags.string({
       description: 'AWS account ID',
     }),
+    'aws-image-source': Flags.string({
+      description: 'AWS signer image source: dockerhub uses the public image directly, ecr requires an existing ECR image, ecr-sync syncs Docker Hub to ECR from this machine',
+      options: [...awsImageSources],
+    }),
+    'aws-image-uri': Flags.string({
+      description: 'Full container image URI for AWS signers. Overrides --aws-image-source.',
+    }),
     'aws-network-alias': Flags.string({
       description: 'Network alias for AWS resources',
     }),
@@ -1329,6 +1465,8 @@ export class DummySignersCommand extends Command {
     // Build non-interactive options from flags
     const nonInteractiveOptions: NonInteractiveOptions = {
       awsAccountId: resolveEnvValue(flags['aws-account-id']),
+      awsImageSource: flags['aws-image-source'] as AwsImageSource | undefined,
+      awsImageUri: resolveEnvValue(flags['aws-image-uri']),
       awsNetworkAlias: resolveEnvValue(flags['aws-network-alias']),
       awsRegion: resolveEnvValue(flags['aws-region']),
       awsSuffixes: resolveEnvValue(flags['aws-suffixes']),
@@ -1355,7 +1493,9 @@ export class DummySignersCommand extends Command {
     )
 
     try {
-      await dummySignersManager.setupDummySigners(await this.fetchDockerTags())
+      const shouldFetchDockerTags = this.dogeConfig.deploymentType === 'local'
+      const availableTags = shouldFetchDockerTags ? await this.fetchDockerTags() : []
+      await dummySignersManager.setupDummySigners(availableTags)
 
       // JSON output
       if (this.jsonMode) {
@@ -1392,7 +1532,7 @@ export class DummySignersCommand extends Command {
       const data = await response.json()
       return data.results.map((tag: any) => tag.name)
     } catch (error) {
-      this.error(`Failed to fetch Docker tags: ${error}`)
+      this.warn(`Could not fetch Docker tags, skipping tag validation: ${error}`)
       return []
     }
   }
@@ -1403,6 +1543,11 @@ export class DummySignersCommand extends Command {
     }
 
     const tags = await this.fetchDockerTags()
+
+    if (tags.length === 0) {
+      this.warn(`Could not verify Docker image tag "${providedTag}", using it as provided.`)
+      return providedTag
+    }
 
     if (tags.includes(providedTag)) {
       return providedTag

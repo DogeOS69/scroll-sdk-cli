@@ -19,6 +19,8 @@ export interface DogeConfig {
   [key: string]: any
   awsSigner?: {
     accountId?: string
+    imageSource?: 'dockerhub' | 'ecr' | 'ecr-sync'
+    imageUri?: string
     networkAlias?: string
     region?: string
     suffixes?: string

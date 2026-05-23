@@ -11,7 +11,7 @@
 #   SUFFIXES="00 01 02" \                     # list of service suffixes
 #   AWS_ACCOUNT_ID=012345678901 \             # your AWS account
 #   AWS_REGION=us-east-1 \                     # region for ECR, KMS, and ECS
-#   IMAGE_URI=012345678901.dkr.ecr.us-east-1.amazonaws.com/dogeos-dummy-signer:latest \
+#   IMAGE_URI=dogeos69/dummy-signer:newda \
 #   TSO_URL=https://tso.example.com \
 #   ./setup_dummy_signers.sh
 #
@@ -35,7 +35,7 @@ SUFFIXES=( ${SUFFIXES:-00 01 02} )
 AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:?Need to set AWS_ACCOUNT_ID}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 
-# Docker image to deploy (must already exist in ECR)
+# Docker image to deploy (ECR, Docker Hub, or another registry)
 IMAGE_URI="${IMAGE_URI:?Need to set IMAGE_URI}"
 
 # Initial environment vars for the container
@@ -363,33 +363,65 @@ EOF
     CPU_MEMORY_ARGS+=(--memory "$ECS_MEMORY")
   fi
 
+  run_ecs_create_express_gateway_service() {
+    if [ ${#CPU_MEMORY_ARGS[@]} -gt 0 ]; then
+      aws ecs create-express-gateway-service \
+        --region "$AWS_REGION" \
+        --cluster "$ECS_CLUSTER" \
+        --service-name "$SERVICE" \
+        --execution-role-arn "$ECS_EXECUTION_ROLE_ARN" \
+        --infrastructure-role-arn "$ECS_INFRASTRUCTURE_ROLE_ARN" \
+        --task-role-arn "$ROLE_ARN" \
+        --primary-container file://"$PRIMARY_CONTAINER_FILE" \
+        "${CPU_MEMORY_ARGS[@]}" \
+        --health-check-path "$HEALTH_PATH" \
+        --scaling-target file://"$SCALING_TARGET_FILE"
+    else
+      aws ecs create-express-gateway-service \
+        --region "$AWS_REGION" \
+        --cluster "$ECS_CLUSTER" \
+        --service-name "$SERVICE" \
+        --execution-role-arn "$ECS_EXECUTION_ROLE_ARN" \
+        --infrastructure-role-arn "$ECS_INFRASTRUCTURE_ROLE_ARN" \
+        --task-role-arn "$ROLE_ARN" \
+        --primary-container file://"$PRIMARY_CONTAINER_FILE" \
+        --health-check-path "$HEALTH_PATH" \
+        --scaling-target file://"$SCALING_TARGET_FILE"
+    fi
+  }
+
+  run_ecs_update_express_gateway_service() {
+    if [ ${#CPU_MEMORY_ARGS[@]} -gt 0 ]; then
+      aws ecs update-express-gateway-service \
+        --region "$AWS_REGION" \
+        --service-arn "$SERVICE_ARN" \
+        --execution-role-arn "$ECS_EXECUTION_ROLE_ARN" \
+        --task-role-arn "$ROLE_ARN" \
+        --primary-container file://"$PRIMARY_CONTAINER_FILE" \
+        "${CPU_MEMORY_ARGS[@]}" \
+        --health-check-path "$HEALTH_PATH" \
+        --scaling-target file://"$SCALING_TARGET_FILE"
+    else
+      aws ecs update-express-gateway-service \
+        --region "$AWS_REGION" \
+        --service-arn "$SERVICE_ARN" \
+        --execution-role-arn "$ECS_EXECUTION_ROLE_ARN" \
+        --task-role-arn "$ROLE_ARN" \
+        --primary-container file://"$PRIMARY_CONTAINER_FILE" \
+        --health-check-path "$HEALTH_PATH" \
+        --scaling-target file://"$SCALING_TARGET_FILE"
+    fi
+  }
+
   if [ -z "$SERVICE_ARN" ]; then
-    aws ecs create-express-gateway-service \
-      --region "$AWS_REGION" \
-      --cluster "$ECS_CLUSTER" \
-      --service-name "$SERVICE" \
-      --execution-role-arn "$ECS_EXECUTION_ROLE_ARN" \
-      --infrastructure-role-arn "$ECS_INFRASTRUCTURE_ROLE_ARN" \
-      --task-role-arn "$ROLE_ARN" \
-      --primary-container file://"$PRIMARY_CONTAINER_FILE" \
-      "${CPU_MEMORY_ARGS[@]}" \
-      --health-check-path "$HEALTH_PATH" \
-      --scaling-target file://"$SCALING_TARGET_FILE"
+    run_ecs_create_express_gateway_service
 
     configure_ecs_deployment_bounds "$SERVICE"
     echo "  • Created $SERVICE"
   else
     configure_ecs_deployment_bounds "$SERVICE"
 
-    aws ecs update-express-gateway-service \
-      --region "$AWS_REGION" \
-      --service-arn "$SERVICE_ARN" \
-      --execution-role-arn "$ECS_EXECUTION_ROLE_ARN" \
-      --task-role-arn "$ROLE_ARN" \
-      --primary-container file://"$PRIMARY_CONTAINER_FILE" \
-      "${CPU_MEMORY_ARGS[@]}" \
-      --health-check-path "$HEALTH_PATH" \
-      --scaling-target file://"$SCALING_TARGET_FILE"
+    run_ecs_update_express_gateway_service
 
     configure_ecs_deployment_bounds "$SERVICE"
     echo "  • Updated $SERVICE"

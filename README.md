@@ -1098,7 +1098,8 @@ Set up dummy signers (local Docker or AWS with KMS keys)
 USAGE
   $ scrollsdk setup dummy-signers [--aws-account-id <value>] [--aws-network-alias <value>] [-a] [--aws-region <value>]
     [--aws-suffixes <value>] [-c <value>] [--generate-wif-keys] [--image-tag <value>] [--json] [-l] [-N] [--num-signers
-    <value>] [--threshold <value>] [--wif-network regtest|testnet|mainnet]
+    <value>] [--threshold <value>] [--wif-network regtest|testnet|mainnet] [--aws-image-source dockerhub|ecr|ecr-sync]
+    [--aws-image-uri <value>]
 
 FLAGS
   -N, --non-interactive            Run without prompts. Uses config values or sensible defaults.
@@ -1106,6 +1107,10 @@ FLAGS
   -c, --config=<value>             Path to Dogecoin config file
   -l, --local-only                 Set up local Docker signers only
       --aws-account-id=<value>     AWS account ID
+      --aws-image-source=<option>  AWS signer image source: dockerhub uses the public image directly, ecr requires an existing
+                                   ECR image, ecr-sync syncs Docker Hub to ECR from this machine
+                                   <options: dockerhub|ecr|ecr-sync>
+      --aws-image-uri=<value>      Full container image URI for AWS signers. Overrides --aws-image-source.
       --aws-network-alias=<value>  Network alias for AWS resources
       --aws-region=<value>         AWS region for KMS signers
       --aws-suffixes=<value>       Space-separated suffixes for AWS signers (e.g., "00")
@@ -1130,6 +1135,10 @@ EXAMPLES
   $ scrollsdk setup dummy-signers --aws-only
 
   $ scrollsdk setup dummy-signers --image-tag newda
+
+  $ scrollsdk setup dummy-signers --aws-only --aws-image-source ecr-sync
+
+  $ scrollsdk setup dummy-signers --aws-only --aws-image-uri dogeos69/dummy-signer:newda
 ```
 
 _See code: [src/commands/setup/dummy-signers.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/dummy-signers.ts)_
