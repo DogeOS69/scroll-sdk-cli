@@ -30,8 +30,6 @@ export interface NonInteractiveOptions {
   awsRegion?: string
   awsSuffixes?: string
   generateWifKeys?: boolean
-  numSigners?: number
-  threshold?: number
   wifNetwork?: 'mainnet' | 'regtest' | 'testnet'
 }
 
@@ -896,7 +894,7 @@ export class DummySignersManager {
       AWS_REGION = this.nonInteractiveOptions.awsRegion || this.dogeConfig.awsSigner?.region || 'us-east-1'
       NETWORK_ALIAS = this.nonInteractiveOptions.awsNetworkAlias || this.dogeConfig.awsSigner?.networkAlias || 'devnet'
       AWS_ACCOUNT_ID = this.nonInteractiveOptions.awsAccountId || this.dogeConfig.awsSigner?.accountId || ''
-      SUFFIXES = this.nonInteractiveOptions.awsSuffixes || this.dogeConfig.awsSigner?.suffixes || '00 01 02'
+      SUFFIXES = this.nonInteractiveOptions.awsSuffixes || this.dogeConfig.awsSigner?.suffixes || '00'
 
       if (!AWS_ACCOUNT_ID) {
         this.error('AWS_ACCOUNT_ID is required for AWS deployment in non-interactive mode. Use --aws-account-id flag.')
@@ -925,13 +923,13 @@ export class DummySignersManager {
 
       SUFFIXES = await input({
         default: this.dogeConfig.awsSigner?.suffixes || '00',
-        message: `Enter suffixes for dummy signer instances (space-separated)
-  Each suffix creates a complete AWS service set:
+        message: `Enter suffix for the TEE dummy signer instance
+  The suffix creates a complete AWS service set:
     • ECS Express Mode service: ${NETWORK_ALIAS}-dummy-signer-{suffix}
     • KMS key with alias: alias/${NETWORK_ALIAS}-dummy-signer-{suffix}-key
     • IAM role: ${NETWORK_ALIAS}-dummy-signer-{suffix}-role
 
-  Examples: "00 01 02" = 3 signers, "00" = 1 signer, "a b c" = 3 signers with custom suffixes`,
+  Example: "00" = shutest-dummy-signer-00`,
         required: false,
       })
     }
@@ -958,39 +956,12 @@ export class DummySignersManager {
     }
 
     const suffixes = SUFFIXES.split(' ').filter(s => s.trim())
-    const numSigners = suffixes.length
-
-    // Ask user to choose correctness_threshold right after suffixes
-    this.log(chalk.cyan(`You will have ${numSigners} correctness signers.`))
-
-    let defaultThreshold: number
-    if (numSigners === 1) {
-      defaultThreshold = 1
-    } else if (numSigners === 2) {
-      defaultThreshold = 2
-    } else {
-      defaultThreshold = Math.ceil(numSigners * 2 / 3) // 2/3 majority
+    if (suffixes.length !== 1) {
+      this.error(`TEE dummy signer setup requires exactly one suffix/key. Received ${suffixes.length}: ${suffixes.join(', ')}`)
+      return
     }
 
-    let threshold: number
-    if (this.nonInteractive) {
-      threshold = this.nonInteractiveOptions.threshold || defaultThreshold
-      this.log(chalk.blue(`Non-interactive mode: Using threshold ${threshold}`))
-    } else {
-      const thresholdStr = await input({
-        default: defaultThreshold.toString(),
-        message: chalk.cyan(`Enter correctness threshold (how many signatures required, 1-${numSigners}):`),
-        validate(value: string) {
-          const num = Number.parseInt(value, 10)
-          if (Number.isNaN(num) || num < 1 || num > numSigners) {
-            return `Please enter a number between 1 and ${numSigners}`
-          }
-
-          return true
-        }
-      })
-      threshold = Number.parseInt(thresholdStr, 10)
-    }
+    this.log(chalk.cyan(`You will have 1 TEE signer key.`))
 
     const awsSignerConfig: {
       accountId: string
@@ -1048,7 +1019,7 @@ export class DummySignersManager {
 
       this.log('Setup dummy signer completed successfully!');
 
-      await this.updateSetupDefaultsWithKMSPublicKeys(NETWORK_ALIAS, AWS_REGION, SUFFIXES, threshold);
+      await this.updateSetupDefaultsWithKMSPublicKeys(NETWORK_ALIAS, AWS_REGION, SUFFIXES);
 
       // Get AWS service URLs
       await this.getAwsServiceUrls(NETWORK_ALIAS, AWS_REGION, SUFFIXES);
@@ -1072,47 +1043,8 @@ export class DummySignersManager {
       return
     }
 
-    // let numSigners: number =1;
-    // if (this.nonInteractive) {
-    //   numSigners = this.nonInteractiveOptions.numSigners || 3
-    //   this.log(chalk.blue(`Non-interactive mode: Using ${numSigners} signers`))
-    // } else {
-    //   numSigners=1;
-    // }
-
-    // // Ask user to choose correctness_threshold right after number of signers
-    // this.log(chalk.cyan(`You will have ${numSigners} correctness signers.`))
-
-    // let defaultThreshold: number
-    // if (numSigners === 1) {
-    //   defaultThreshold = 1
-    // } else if (numSigners === 2) {
-    //   defaultThreshold = 2
-    // } else {
-    //   defaultThreshold = Math.ceil(numSigners * 2 / 3) // 2/3 majority
-    // }
-
-    // let threshold: number
-    // if (this.nonInteractive) {
-    //   threshold = this.nonInteractiveOptions.threshold || defaultThreshold
-    //   this.log(chalk.blue(`Non-interactive mode: Using threshold ${threshold}`))
-    // } else {
-    //   const thresholdStr = await input({
-    //     default: defaultThreshold.toString(),
-    //     message: chalk.cyan(`Enter correctness threshold (how many signatures required, 1-${numSigners}):`),
-    //     validate(value: string) {
-    //       const num = Number.parseInt(value, 10)
-    //       if (Number.isNaN(num) || num < 1 || num > numSigners) {
-    //         return `Please enter a number between 1 and ${numSigners}`
-    //       }
-
-    //       return true
-    //     }
-    //   })
-    //   threshold = Number.parseInt(thresholdStr, 10)
-    // }
     const numSigners: number = 1;
-    const threshold: number = 1;
+    this.log(chalk.cyan(`You will have 1 local TEE signer key.`))
 
     const TSO_URL = this.readTsoUrlFromConfig()
     if (!TSO_URL) {
@@ -1129,7 +1061,7 @@ export class DummySignersManager {
     } else {
       generateWifKeys = await confirm({
         default: true,
-        message: 'Would you like to generate new WIF keys for the signers?'
+        message: 'Would you like to generate a new WIF key for the TEE signer?'
       })
     }
 
@@ -1144,7 +1076,7 @@ export class DummySignersManager {
     this.showContainerStatus(signerConfigs)
 
     this.saveLocalSignerConfig(NETWORK, signerConfigs)
-    await this.updateSetupDefaultsWithLocalPublicKeys(signerConfigs, threshold)
+    await this.updateSetupDefaultsWithLocalPublicKeys(signerConfigs)
 
     this.showSignerUrlsSummary()
 
@@ -1219,9 +1151,9 @@ export class DummySignersManager {
     }
   }
 
-  private async updateSetupDefaultsWithKMSPublicKeys(networkAlias: string, awsRegion: string, suffixesStr: string, threshold: number): Promise<void> {
+  private async updateSetupDefaultsWithKMSPublicKeys(networkAlias: string, awsRegion: string, suffixesStr: string): Promise<void> {
     try {
-      this.log('Fetching KMS public keys...');
+      this.log('Fetching TEE KMS public key...');
 
       const suffixes = suffixesStr.split(' ').filter(s => s.trim());
       const publicKeys: string[] = [];
@@ -1255,16 +1187,16 @@ export class DummySignersManager {
         }
       }
 
-      await this.updateSetupDefaultsWithPublicKeys(publicKeys, threshold);
+      await this.updateSetupDefaultsWithPublicKeys(publicKeys);
 
     } catch (error) {
       this.error(`Failed to update setup defaults: ${error}`);
     }
   }
 
-  private async updateSetupDefaultsWithLocalPublicKeys(signerConfigs: Array<{ port: number, publicKey?: string, wif: string }>, threshold: number): Promise<void> {
+  private async updateSetupDefaultsWithLocalPublicKeys(signerConfigs: Array<{ port: number, publicKey?: string, wif: string }>): Promise<void> {
     try {
-      this.log('Fetching public keys from WIF...');
+      this.log('Fetching TEE public key from WIF...');
 
       const publicKeys: string[] = [];
 
@@ -1273,17 +1205,21 @@ export class DummySignersManager {
         publicKeys.push(publicKey);
       }
 
-      await this.updateSetupDefaultsWithPublicKeys(publicKeys, threshold);
+      await this.updateSetupDefaultsWithPublicKeys(publicKeys);
 
     } catch (error) {
       this.error(`Failed to update setup defaults: ${error}`);
     }
   }
 
-  private async updateSetupDefaultsWithPublicKeys(publicKeys: string[], _threshold: number): Promise<void> {
+  private async updateSetupDefaultsWithPublicKeys(publicKeys: string[]): Promise<void> {
     if (publicKeys.length === 0) {
-      this.warn('No public keys were provided');
+      this.warn('No TEE public key was provided');
       return;
+    }
+
+    if (publicKeys.length > 1) {
+      this.warn(`Received ${publicKeys.length} TEE public keys; using the first one only.`);
     }
 
     const tomlPath = getSetupDefaultsPath();
@@ -1302,8 +1238,8 @@ export class DummySignersManager {
     const updatedToml = toml.stringify(config);
     fs.writeFileSync(tomlPath, updatedToml);
 
-    this.log(`✅ Updated ${tomlPath} with ${publicKeys.length} correctness public keys`);
-    this.log(`Public keys: ${publicKeys.join(', ')}`);
+    this.log(`✅ Updated ${tomlPath} with TEE public key`);
+    this.log(`TEE public key: ${publicKeys[0]}`);
   }
 
   private warn(message: string): void {
@@ -1317,7 +1253,7 @@ export class DummySignersManager {
 
 // Command class for oclif CLI
 export class DummySignersCommand extends Command {
-  static description = 'Set up dummy signers (local Docker or AWS with KMS keys)'
+  static description = 'Set up a dummy TEE signer (local Docker or AWS with KMS)'
 
   static examples = [
     '$ scrollsdk setup dummy-signers',
@@ -1325,6 +1261,8 @@ export class DummySignersCommand extends Command {
     '$ scrollsdk setup dummy-signers --local-only',
     '$ scrollsdk setup dummy-signers --aws-only',
     '$ scrollsdk setup dummy-signers --image-tag newda',
+    '$ scrollsdk setup dummy-signers --aws-only --aws-image-source ecr-sync',
+    '$ scrollsdk setup dummy-signers --aws-only --aws-image-uri dogeos69/dummy-signer:newda',
   ]
 
   static flags = {
@@ -1351,7 +1289,7 @@ export class DummySignersCommand extends Command {
       description: 'AWS region for KMS signers',
     }),
     'aws-suffixes': Flags.string({
-      description: 'Space-separated suffixes for AWS signers (e.g., "00")',
+      description: 'Suffix for the AWS TEE signer (exactly one, e.g., "00")',
     }),
     config: Flags.string({
       char: 'c',
@@ -1379,14 +1317,6 @@ export class DummySignersCommand extends Command {
       char: 'N',
       default: false,
       description: 'Run without prompts. Uses config values or sensible defaults.',
-    }),
-    // Local signer options
-    'num-signers': Flags.integer({
-      default: 1,
-      description: 'Number of signers (non-interactive mode)',
-    }),
-    threshold: Flags.integer({
-      description: 'Correctness threshold (non-interactive mode). Defaults to 2/3 majority.',
     }),
     'wif-network': Flags.string({
       default: 'regtest',
@@ -1471,8 +1401,6 @@ export class DummySignersCommand extends Command {
       awsRegion: resolveEnvValue(flags['aws-region']),
       awsSuffixes: resolveEnvValue(flags['aws-suffixes']),
       generateWifKeys: flags['generate-wif-keys'],
-      numSigners: flags['num-signers'],
-      threshold: flags.threshold,
       wifNetwork: flags['wif-network'] as 'mainnet' | 'regtest' | 'testnet',
     }
 

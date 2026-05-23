@@ -217,18 +217,17 @@ Creates or selects CubeSigner roles and writes attestation public keys to `.data
 - `--doge-config <path>` - Path to doge-config file
 - Either `--new --count <n> --role-prefix <prefix>` or `--roles <role...>`
 
-### Optional: Generate dummy signers
+### Optional: Generate a dummy TEE signer
 
 ```bash
 scrollsdk setup dummy-signers -N --json --config .data/doge-config.toml
 ```
 
-Creates dummy signer keys for development. Production bridge initialization should use CubeSigner attestation keys from step 6.
+Creates a dummy TEE signer key for development. Production bridge initialization should use CubeSigner attestation keys from step 6.
 
 **Required flags (non-interactive):**
 - `--config <path>` - Path to doge-config file (required to avoid config selection prompt)
 - `--generate-wif-keys` - Generate new WIF keys (otherwise existing keys must be in config)
-- `--num-signers <n>` - Number of signers (default: 3)
 
 **Required config fields:**
 - `.data/doge-config.toml` must exist (run step 4 first)

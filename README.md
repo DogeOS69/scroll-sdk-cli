@@ -1092,14 +1092,13 @@ _See code: [src/commands/setup/domains.ts](https://github.com/dogeos69/scroll-sd
 
 ## `scrollsdk setup dummy-signers`
 
-Set up dummy signers (local Docker or AWS with KMS keys)
+Set up a dummy TEE signer (local Docker or AWS with KMS)
 
 ```
 USAGE
   $ scrollsdk setup dummy-signers [--aws-account-id <value>] [--aws-network-alias <value>] [-a] [--aws-region <value>]
-    [--aws-suffixes <value>] [-c <value>] [--generate-wif-keys] [--image-tag <value>] [--json] [-l] [-N] [--num-signers
-    <value>] [--threshold <value>] [--wif-network regtest|testnet|mainnet] [--aws-image-source dockerhub|ecr|ecr-sync]
-    [--aws-image-uri <value>]
+    [--aws-suffixes <value>] [-c <value>] [--generate-wif-keys] [--image-tag <value>] [--json] [-l] [-N]
+    [--wif-network regtest|testnet|mainnet] [--aws-image-source dockerhub|ecr|ecr-sync] [--aws-image-uri <value>]
 
 FLAGS
   -N, --non-interactive            Run without prompts. Uses config values or sensible defaults.
@@ -1113,17 +1112,15 @@ FLAGS
       --aws-image-uri=<value>      Full container image URI for AWS signers. Overrides --aws-image-source.
       --aws-network-alias=<value>  Network alias for AWS resources
       --aws-region=<value>         AWS region for KMS signers
-      --aws-suffixes=<value>       Space-separated suffixes for AWS signers (e.g., "00")
+      --aws-suffixes=<value>       Suffix for the AWS TEE signer (exactly one, e.g., "00")
       --[no-]generate-wif-keys     Generate new WIF keys (non-interactive mode)
       --image-tag=<value>          Specify the Docker image tag to use
       --json                       Output in JSON format (stdout for data, stderr for logs)
-      --num-signers=<value>        [default: 1] Number of signers (non-interactive mode)
-      --threshold=<value>          Correctness threshold (non-interactive mode). Defaults to 2/3 majority.
       --wif-network=<option>       [default: regtest] Network for WIF generation: regtest, testnet, or mainnet
                                    <options: regtest|testnet|mainnet>
 
 DESCRIPTION
-  Set up dummy signers (local Docker or AWS with KMS keys)
+  Set up a dummy TEE signer (local Docker or AWS with KMS)
 
 EXAMPLES
   $ scrollsdk setup dummy-signers

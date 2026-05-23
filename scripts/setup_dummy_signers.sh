@@ -2,13 +2,13 @@
 #
 # setup_dummy_signers.sh
 #
-# Creates ECS Express Mode IAM roles, per-service KMS keys & aliases, grants,
-# and ECS Express services for ${NETWORK_ALIAS:-devnet00}-dummy-signer-{SUFFIXES}.
+# Creates an ECS Express Mode IAM role, KMS key & alias, grant,
+# and ECS Express service for ${NETWORK_ALIAS:-devnet00}-dummy-signer-{SUFFIX}.
 #
 # Usage:
 #   NETWORK_ALIAS=devnet00 \                  # prefix for service names and KMS alias
 #   DOGECOIN_NETWORK=testnet \               # network to use for the signer
-#   SUFFIXES="00 01 02" \                     # list of service suffixes
+#   SUFFIXES="00" \                           # single TEE signer suffix
 #   AWS_ACCOUNT_ID=012345678901 \             # your AWS account
 #   AWS_REGION=us-east-1 \                     # region for ECR, KMS, and ECS
 #   IMAGE_URI=dogeos69/dummy-signer:newda \
@@ -28,8 +28,13 @@ NETWORK_ALIAS="${NETWORK_ALIAS:-devnet00}"
 # Network to use for the signer
 DOGECOIN_NETWORK="${DOGECOIN_NETWORK:-testnet}"
 
-# Suffixes to provision (override e.g. "00 01 02")
-SUFFIXES=( ${SUFFIXES:-00 01 02} )
+# Single TEE signer suffix to provision (override e.g. "00")
+SUFFIXES=( ${SUFFIXES:-00} )
+
+if [ ${#SUFFIXES[@]} -ne 1 ]; then
+  echo "TEE dummy signer setup requires exactly one suffix/key. Got: ${SUFFIXES[*]}"
+  exit 1
+fi
 
 # AWS account and region
 AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:?Need to set AWS_ACCOUNT_ID}"
