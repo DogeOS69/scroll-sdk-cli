@@ -8,6 +8,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
+import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 
 type BridgeInitStep = '1-prepare' | '2-setup' | '3-bridge-info' | '4-fund' | '5-protocol-context' | 'all'
@@ -158,6 +159,24 @@ function isValidSecp256k1PublicKey(publicKey: string): boolean {
   return /^[\dA-Fa-f]{66}$/.test(normalized) || /^04[\dA-Fa-f]{128}$/.test(normalized)
 }
 
+function resolveEnvRefs(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return hasEnvRef(value) ? resolveInlineEnvRefs(value) : value
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => resolveEnvRefs(item))
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, resolveEnvRefs(item)])
+    )
+  }
+
+  return value
+}
+
 export class BridgeInitCommand extends Command {
   static description = 'Initialize DogeOS bridge after L2 artifacts and CubeSigner keys are ready'
 
@@ -171,14 +190,19 @@ export class BridgeInitCommand extends Command {
     '$ scrollsdk setup bridge-init --step 2',
     '$ scrollsdk setup bridge-init -s 123456',
     '$ scrollsdk setup bridge-init --seed 123456',
-    '$ scrollsdk setup bridge-init --image-tag 0.2.0-debug',
-    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag 0.2.0-rc.3',
+    '$ scrollsdk setup bridge-init --image-tag newda',
+    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag newda',
+    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag newda --docker-platform linux/amd64',
     '$ scrollsdk setup bridge-init --non-interactive --json --seed 123456',
   ]
 
   static flags = {
+    'docker-platform': Flags.string({
+      default: 'linux/amd64',
+      description: 'Docker platform for bridge-genesis-tools image. The newda tag is amd64-only.',
+    }),
     'image-tag': Flags.string({
-      description: 'Specify the Docker image tag to use (defaults to 0.2.0-rc.3)',
+      description: 'Specify the Docker image tag to use (defaults to newda)',
       required: false,
     }),
     'json': Flags.boolean({
@@ -209,6 +233,7 @@ export class BridgeInitCommand extends Command {
     }),
   }
 
+  private dockerPlatform: string = 'linux/amd64'
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
@@ -218,6 +243,7 @@ export class BridgeInitCommand extends Command {
 
     this.nonInteractive = flags['non-interactive']
     this.jsonMode = flags.json
+    this.dockerPlatform = flags['docker-platform']
     this.jsonCtx = new JsonOutputContext('setup bridge-init', this.jsonMode)
 
     let { seed } = flags
@@ -254,6 +280,7 @@ export class BridgeInitCommand extends Command {
 
     imageTag = await this.getDockerImageTag(imageTag)
     this.jsonCtx.info(`Using Docker image tag: ${imageTag}`)
+    this.jsonCtx.info(`Using Docker platform: ${this.dockerPlatform}`)
 
     if (needsPrepare) {
       seed = await this.prepareBridgeInit(seed, paths)
@@ -327,16 +354,32 @@ export class BridgeInitCommand extends Command {
         : undefined
     try {
       try {
-        await docker.getImage(image).inspect()
-        this.jsonCtx.info(`Docker image found locally, skipping pull: ${image}`)
+        const imageInfo = await docker.getImage(image).inspect()
+        const localPlatform = `${imageInfo.Os}/${imageInfo.Architecture}`
+        if (localPlatform === this.dockerPlatform) {
+          this.jsonCtx.info(`Docker image found locally for ${this.dockerPlatform}, skipping pull: ${image}`)
+        } else {
+          this.jsonCtx.info(`Docker image found locally for ${localPlatform}; pulling ${this.dockerPlatform}: ${image}`)
+          const pullStream = await docker.pull(image, { platform: this.dockerPlatform })
+          await new Promise((resolve, reject) => {
+            docker.modem.followProgress(pullStream, (err, res) => {
+              if (err) {
+                reject(err)
+              } else {
+                this.jsonCtx.info('Image pulled successfully')
+                resolve(res)
+              }
+            })
+          })
+        }
       } catch (inspectError: any) {
         const statusCode = inspectError?.statusCode
         if (statusCode && statusCode !== 404) {
           throw inspectError
         }
 
-        this.jsonCtx.info(`Docker image not found locally. Pulling Docker Image: ${image}`)
-        const pullStream = await docker.pull(image)
+        this.jsonCtx.info(`Docker image not found locally. Pulling Docker Image: ${image} (${this.dockerPlatform})`)
+        const pullStream = await docker.pull(image, { platform: this.dockerPlatform })
         await new Promise((resolve, reject) => {
           docker.modem.followProgress(pullStream, (err, res) => {
             if (err) {
@@ -359,6 +402,7 @@ export class BridgeInitCommand extends Command {
         Image: image,
         User: hostUser,
         WorkingDir: '/app',
+        platform: this.dockerPlatform,
       })
 
       this.jsonCtx.info('Starting Container')
@@ -702,16 +746,31 @@ export class BridgeInitCommand extends Command {
       headers.Authorization = `Basic ${Buffer.from(`${rpcUser}:${rpcPassword}`).toString('base64')}`
     }
 
-    const response = await fetch(rpcUrl, {
-      body: JSON.stringify({
-        id: 'bridge-init-pre-setup-height',
-        jsonrpc: '1.0',
-        method: 'getblockcount',
-        params: [],
-      }),
-      headers,
-      method: 'POST',
-    })
+    let response: Response
+    try {
+      response = await fetch(rpcUrl, {
+        body: JSON.stringify({
+          id: 'bridge-init-pre-setup-height',
+          jsonrpc: '1.0',
+          method: 'getblockcount',
+          params: [],
+        }),
+        headers,
+        method: 'POST',
+      })
+    } catch (error) {
+      this.jsonCtx.error(
+        'E400_DOGECOIN_RPC_UNREACHABLE',
+        `Failed to connect to Dogecoin RPC before setup transaction: ${error instanceof Error ? error.message : String(error)}`,
+        'NETWORK',
+        true,
+        {
+          cause: error instanceof Error && error.cause ? String(error.cause) : undefined,
+          rpcUrl,
+          suggestion: `Check dogecoin_rpc_url in ${setupDefaultsPath}. It must be reachable from this machine before bridge-init can broadcast the setup transaction.`,
+        }
+      )
+    }
 
     if (!response.ok) {
       const errorBody = await response.text()
@@ -780,7 +839,7 @@ export class BridgeInitCommand extends Command {
   }
 
   private getRequiredDogeConfig(dataDir: string, network: string): { config: any; path: string } {
-    const configPath = path.join(dataDir, `doge-config-${network}.toml`)
+    const configPath = path.join(dataDir, 'doge-config.toml')
 
     if (fs.existsSync(configPath)) {
       return {
@@ -789,12 +848,21 @@ export class BridgeInitCommand extends Command {
       }
     }
 
+    const legacyConfigPath = path.join(dataDir, `doge-config-${network}.toml`)
+    if (fs.existsSync(legacyConfigPath)) {
+      this.jsonCtx.addWarning(`Using legacy Doge config path: ${legacyConfigPath}. Prefer ${configPath}.`)
+      return {
+        config: toml.parse(fs.readFileSync(legacyConfigPath, 'utf8')),
+        path: legacyConfigPath,
+      }
+    }
+
     this.jsonCtx.error(
       'E101_CONFIG_NOT_FOUND',
-      `Doge config not found. Expected explicit config file: ${configPath}`,
+      `Doge config not found. Expected config file: ${configPath}`,
       'CONFIGURATION',
       true,
-      { path: configPath }
+      { legacyPath: legacyConfigPath, path: configPath }
     )
   }
 
@@ -1082,6 +1150,31 @@ export class BridgeInitCommand extends Command {
     }
   }
 
+  private resolveSetupDefaultsEnvRefs(setupDefaultsPath: string): void {
+    if (!fs.existsSync(setupDefaultsPath)) {
+      return
+    }
+
+    const content = fs.readFileSync(setupDefaultsPath, 'utf8')
+    if (!hasEnvRef(content)) {
+      return
+    }
+
+    try {
+      const resolved = resolveEnvRefs(toml.parse(content)) as toml.JsonMap
+      fs.writeFileSync(setupDefaultsPath, toml.stringify(resolved))
+      this.jsonCtx.info(`Resolved $ENV references in ${setupDefaultsPath}`)
+    } catch (error) {
+      this.jsonCtx.error(
+        'E602_INVALID_CONFIG_FORMAT',
+        `Failed to resolve $ENV references in setup defaults: ${error instanceof Error ? error.message : String(error)}`,
+        'CONFIGURATION',
+        true,
+        { path: setupDefaultsPath }
+      )
+    }
+  }
+
   private async runBridgeInfoStep(imageTag: string, paths: BridgeInitPaths): Promise<void> {
     this.assertFileExists(
       path.join(paths.dataDir, 'output-withdrawal-processor.toml'),
@@ -1237,6 +1330,7 @@ export class BridgeInitCommand extends Command {
       'This step is NOT idempotent. It consumes funding UTXOs and broadcasts the setup transaction.'
     )
 
+    this.resolveSetupDefaultsEnvRefs(paths.setupDefaultsPath)
     const dogecoinHeightBeforeSetup = await this.getDogecoinCurrentHeight(paths.setupDefaultsPath)
     const indexerStartHeight = Math.max(0, dogecoinHeightBeforeSetup - 1)
     this.jsonCtx.info(`Dogecoin height before setup transaction: ${dogecoinHeightBeforeSetup}`)
@@ -1259,7 +1353,7 @@ export class BridgeInitCommand extends Command {
   }
 
   /**
-   * Update dogecoinIndexerStartHeight in the explicit network-specific doge-config file.
+   * Update dogecoinIndexerStartHeight in the unified doge-config file.
    */
   private updateDogeConfigBlockHeight(
     setupDefaultsPath: string,

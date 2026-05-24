@@ -13,22 +13,24 @@ import { fileURLToPath } from 'node:url'
 import type { DogeConfig } from '../../types/doge-config.js'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
+import { getAwsSignerConfigFromSpec, loadDeploymentSpec } from '../../utils/deployment-spec-generator.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { resolveEnvValue } from '../../utils/non-interactive.js'
 const { Networks, PrivateKey } = bitcore
 const defaultTag = 'newda'
 const awsImageSources = ['dockerhub', 'ecr', 'ecr-sync'] as const
+const TEE_SIGNER_SUFFIX = '00'
 
 type AwsImageSource = typeof awsImageSources[number]
 
 export interface NonInteractiveOptions {
   awsAccountId?: string
+  awsEcsClusterName?: string
   awsImageSource?: AwsImageSource
   awsImageUri?: string
   awsNetworkAlias?: string
   awsRegion?: string
-  awsSuffixes?: string
   generateWifKeys?: boolean
   wifNetwork?: 'mainnet' | 'regtest' | 'testnet'
 }
@@ -461,64 +463,60 @@ export class DummySignersManager {
     return wif
   }
 
-  private async getAwsServiceUrls(networkAlias: string, awsRegion: string, suffixesStr: string): Promise<void> {
+  private async getAwsServiceUrls(networkAlias: string, awsRegion: string, signerId: string, ecsCluster: string): Promise<void> {
     try {
       this.log('Fetching AWS ECS Express Mode service URLs...');
 
-      const suffixes = suffixesStr.split(' ').filter(s => s.trim());
       const urls: string[] = [];
-      const ecsCluster = process.env.ECS_CLUSTER || 'default';
 
-      for (const suffix of suffixes) {
-        const serviceName = `${networkAlias}-dummy-signer-${suffix}`;
-        const maxAttempts = 60;
+      const serviceName = `${networkAlias}-dummy-signer-${signerId}`;
+      const maxAttempts = 60;
 
-        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-          try {
-            // Get the service ARN first
-            const serviceListOutput = execFileSync('aws', [
-              'ecs', 'list-services',
-              '--cluster', ecsCluster,
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          // Get the service ARN first
+          const serviceListOutput = execFileSync('aws', [
+            'ecs', 'list-services',
+            '--cluster', ecsCluster,
+            '--region', awsRegion,
+            '--query', `serviceArns[?ends_with(@, '/${serviceName}')]`,
+            '--output', 'text'
+          ], { encoding: 'utf8' }).trim();
+
+          if (serviceListOutput) {
+            // Get the service URL using the ARN
+            const serviceUrlOutput = execFileSync('aws', [
+              'ecs', 'describe-express-gateway-service',
+              '--service-arn', serviceListOutput,
               '--region', awsRegion,
-              '--query', `serviceArns[?ends_with(@, '/${serviceName}')]`,
+              '--query', 'service.activeConfigurations[-1].ingressPaths[?accessType==`PUBLIC`].endpoint | [0]',
               '--output', 'text'
             ], { encoding: 'utf8' }).trim();
 
-            if (serviceListOutput) {
-              // Get the service URL using the ARN
-              const serviceUrlOutput = execFileSync('aws', [
-                'ecs', 'describe-express-gateway-service',
-                '--service-arn', serviceListOutput,
-                '--region', awsRegion,
-                '--query', 'service.activeConfigurations[-1].ingressPaths[?accessType==`PUBLIC`].endpoint | [0]',
-                '--output', 'text'
-              ], { encoding: 'utf8' }).trim();
+            if (serviceUrlOutput && serviceUrlOutput !== 'None') {
+              const fullUrl = serviceUrlOutput.startsWith('https://') ? serviceUrlOutput : `https://${serviceUrlOutput}`;
+              urls.push(fullUrl);
+              this.log(`✅ Got service URL for ${serviceName}: ${fullUrl}`);
+              break;
+            }
+          }
 
-              if (serviceUrlOutput && serviceUrlOutput !== 'None') {
-                const fullUrl = serviceUrlOutput.startsWith('https://') ? serviceUrlOutput : `https://${serviceUrlOutput}`;
-                urls.push(fullUrl);
-                this.log(`✅ Got service URL for ${serviceName}: ${fullUrl}`);
-                break;
-              }
-            }
-
-            if (attempt < maxAttempts) {
-              this.log(`Waiting for ECS Express endpoint for ${serviceName} (${attempt}/${maxAttempts})...`);
-              await new Promise(resolve => {
-                setTimeout(resolve, 10_000);
-              });
-            } else {
-              this.warn(`Service URL not found for ${serviceName}`);
-            }
-          } catch (error) {
-            if (attempt < maxAttempts) {
-              this.warn(`Failed to get service URL for ${serviceName}: ${error}`);
-              await new Promise(resolve => {
-                setTimeout(resolve, 10_000);
-              });
-            } else {
-              this.warn(`Failed to get service URL for ${serviceName}: ${error}`);
-            }
+          if (attempt < maxAttempts) {
+            this.log(`Waiting for ECS Express endpoint for ${serviceName} (${attempt}/${maxAttempts})...`);
+            await new Promise(resolve => {
+              setTimeout(resolve, 10_000);
+            });
+          } else {
+            this.warn(`Service URL not found for ${serviceName}`);
+          }
+        } catch (error) {
+          if (attempt < maxAttempts) {
+            this.warn(`Failed to get service URL for ${serviceName}: ${error}`);
+            await new Promise(resolve => {
+              setTimeout(resolve, 10_000);
+            });
+          } else {
+            this.warn(`Failed to get service URL for ${serviceName}: ${error}`);
           }
         }
       }
@@ -812,11 +810,11 @@ export class DummySignersManager {
 
   private async saveAwsSignerConfig(awsSignerConfig: {
     accountId: string
+    ecsClusterName: string
     imageSource?: AwsImageSource
     imageUri?: null | string
     networkAlias: string
     region: string
-    suffixes: string
   }): Promise<void> {
     try {
       if (!this.dogeConfig.awsSigner) {
@@ -888,20 +886,20 @@ export class DummySignersManager {
     let AWS_REGION: string
     let NETWORK_ALIAS: string
     let AWS_ACCOUNT_ID: string
-    let SUFFIXES: string
+    let ECS_CLUSTER: string
 
     if (this.nonInteractive) {
       AWS_REGION = this.nonInteractiveOptions.awsRegion || this.dogeConfig.awsSigner?.region || 'us-east-1'
       NETWORK_ALIAS = this.nonInteractiveOptions.awsNetworkAlias || this.dogeConfig.awsSigner?.networkAlias || 'devnet'
       AWS_ACCOUNT_ID = this.nonInteractiveOptions.awsAccountId || this.dogeConfig.awsSigner?.accountId || ''
-      SUFFIXES = this.nonInteractiveOptions.awsSuffixes || this.dogeConfig.awsSigner?.suffixes || '00'
+      ECS_CLUSTER = this.nonInteractiveOptions.awsEcsClusterName || this.dogeConfig.awsSigner?.ecsClusterName || 'default'
 
       if (!AWS_ACCOUNT_ID) {
         this.error('AWS_ACCOUNT_ID is required for AWS deployment in non-interactive mode. Use --aws-account-id flag.')
         return
       }
 
-      this.log(chalk.blue(`Non-interactive mode: AWS_REGION=${AWS_REGION}, NETWORK_ALIAS=${NETWORK_ALIAS}, AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}, SUFFIXES=${SUFFIXES}`))
+      this.log(chalk.blue(`Non-interactive mode: AWS_REGION=${AWS_REGION}, NETWORK_ALIAS=${NETWORK_ALIAS}, AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}, ECS_CLUSTER=${ECS_CLUSTER}`))
     } else {
       AWS_REGION = await input({
         default: this.dogeConfig.awsSigner?.region || 'us-east-1',
@@ -921,17 +919,7 @@ export class DummySignersManager {
         required: true,
       })
 
-      SUFFIXES = await input({
-        default: this.dogeConfig.awsSigner?.suffixes || '00',
-        message: `Enter suffix for the TEE dummy signer instance
-  The suffix creates a complete AWS service set:
-    • ECS Express Mode service: ${NETWORK_ALIAS}-dummy-signer-{suffix}
-    • KMS key with alias: alias/${NETWORK_ALIAS}-dummy-signer-{suffix}-key
-    • IAM role: ${NETWORK_ALIAS}-dummy-signer-{suffix}-role
-
-  Example: "00" = shutest-dummy-signer-00`,
-        required: false,
-      })
+      ECS_CLUSTER = this.nonInteractiveOptions.awsEcsClusterName || this.dogeConfig.awsSigner?.ecsClusterName || 'default'
     }
 
     const awsImageSource = this.getConfiguredAwsImageSource()
@@ -955,27 +943,21 @@ export class DummySignersManager {
       return
     }
 
-    const suffixes = SUFFIXES.split(' ').filter(s => s.trim())
-    if (suffixes.length !== 1) {
-      this.error(`TEE dummy signer setup requires exactly one suffix/key. Received ${suffixes.length}: ${suffixes.join(', ')}`)
-      return
-    }
-
     this.log(chalk.cyan(`You will have 1 TEE signer key.`))
 
     const awsSignerConfig: {
       accountId: string
+      ecsClusterName: string
       imageSource: AwsImageSource
       imageUri?: null | string
       networkAlias: string
       region: string
-      suffixes: string
     } = {
       accountId: AWS_ACCOUNT_ID,
+      ecsClusterName: ECS_CLUSTER,
       imageSource: awsImageSource,
       networkAlias: NETWORK_ALIAS,
       region: AWS_REGION,
-      suffixes: SUFFIXES
     }
 
     if (customAwsImageUri) {
@@ -1013,16 +995,16 @@ export class DummySignersManager {
       // Execute the script with environment variables passed via env option (avoids shell injection)
       this.log(chalk.blue('Executing AWS setup script...'));
       execFileSync('bash', [scriptPath], {
-        env: { ...process.env, AWS_ACCOUNT_ID, AWS_REGION, IMAGE_URI, NETWORK_ALIAS, SUFFIXES, TSO_URL },
+        env: { ...process.env, AWS_ACCOUNT_ID, AWS_REGION, ECS_CLUSTER, IMAGE_URI, NETWORK_ALIAS, TEE_SIGNER_ID: TEE_SIGNER_SUFFIX, TSO_URL },
         stdio: 'inherit',
       });
 
       this.log('Setup dummy signer completed successfully!');
 
-      await this.updateSetupDefaultsWithKMSPublicKeys(NETWORK_ALIAS, AWS_REGION, SUFFIXES);
+      await this.updateSetupDefaultsWithKMSPublicKeys(NETWORK_ALIAS, AWS_REGION, TEE_SIGNER_SUFFIX);
 
       // Get AWS service URLs
-      await this.getAwsServiceUrls(NETWORK_ALIAS, AWS_REGION, SUFFIXES);
+      await this.getAwsServiceUrls(NETWORK_ALIAS, AWS_REGION, TEE_SIGNER_SUFFIX, ECS_CLUSTER);
 
       this.showSignerUrlsSummary()
 
@@ -1151,40 +1133,36 @@ export class DummySignersManager {
     }
   }
 
-  private async updateSetupDefaultsWithKMSPublicKeys(networkAlias: string, awsRegion: string, suffixesStr: string): Promise<void> {
+  private async updateSetupDefaultsWithKMSPublicKeys(networkAlias: string, awsRegion: string, signerId: string): Promise<void> {
     try {
       this.log('Fetching TEE KMS public key...');
 
-      const suffixes = suffixesStr.split(' ').filter(s => s.trim());
       const publicKeys: string[] = [];
+      const aliasName = `alias/${networkAlias}-dummy-signer-${signerId}-key`;
 
-      for (const suffix of suffixes) {
-        const aliasName = `alias/${networkAlias}-dummy-signer-${suffix}-key`;
+      try {
+        const keyIdOutput = execFileSync('aws', [
+          'kms', 'describe-key',
+          '--key-id', aliasName,
+          '--region', awsRegion,
+          '--query', 'KeyMetadata.KeyId',
+          '--output', 'text'
+        ], { encoding: 'utf8' }).trim();
 
-        try {
-          const keyIdOutput = execFileSync('aws', [
-            'kms', 'describe-key',
-            '--key-id', aliasName,
-            '--region', awsRegion,
-            '--query', 'KeyMetadata.KeyId',
-            '--output', 'text'
-          ], { encoding: 'utf8' }).trim();
+        const publicKeyOutput = execFileSync('aws', [
+          'kms', 'get-public-key',
+          '--key-id', keyIdOutput,
+          '--region', awsRegion,
+          '--query', 'PublicKey',
+          '--output', 'text'
+        ], { encoding: 'utf8' }).trim();
 
-          const publicKeyOutput = execFileSync('aws', [
-            'kms', 'get-public-key',
-            '--key-id', keyIdOutput,
-            '--region', awsRegion,
-            '--query', 'PublicKey',
-            '--output', 'text'
-          ], { encoding: 'utf8' }).trim();
+        const publicKeyHex = this.convertKMSPublicKeyToHex(publicKeyOutput);
+        publicKeys.push(publicKeyHex);
 
-          const publicKeyHex = this.convertKMSPublicKeyToHex(publicKeyOutput);
-          publicKeys.push(publicKeyHex);
-
-          this.log(`✅ Got public key for ${aliasName}: ${publicKeyHex}`);
-        } catch (error) {
-          this.warn(`Failed to get public key for ${aliasName}: ${error}`);
-        }
+        this.log(`✅ Got public key for ${aliasName}: ${publicKeyHex}`);
+      } catch (error) {
+        this.warn(`Failed to get public key for ${aliasName}: ${error}`);
       }
 
       await this.updateSetupDefaultsWithPublicKeys(publicKeys);
@@ -1260,6 +1238,7 @@ export class DummySignersCommand extends Command {
     '$ scrollsdk setup dummy-signers --config .data/doge-config.toml',
     '$ scrollsdk setup dummy-signers --local-only',
     '$ scrollsdk setup dummy-signers --aws-only',
+    '$ scrollsdk setup dummy-signers --from-spec deployment-spec.yaml --aws-only --non-interactive',
     '$ scrollsdk setup dummy-signers --image-tag newda',
     '$ scrollsdk setup dummy-signers --aws-only --aws-image-source ecr-sync',
     '$ scrollsdk setup dummy-signers --aws-only --aws-image-uri dogeos69/dummy-signer:newda',
@@ -1268,6 +1247,9 @@ export class DummySignersCommand extends Command {
   static flags = {
     'aws-account-id': Flags.string({
       description: 'AWS account ID',
+    }),
+    'aws-ecs-cluster': Flags.string({
+      description: 'ECS cluster for AWS ECS Express dummy signer service. Defaults to awsSigner.ecsClusterName or "default".',
     }),
     'aws-image-source': Flags.string({
       description: 'AWS signer image source: dockerhub uses the public image directly, ecr requires an existing ECR image, ecr-sync syncs Docker Hub to ECR from this machine',
@@ -1288,12 +1270,12 @@ export class DummySignersCommand extends Command {
     'aws-region': Flags.string({
       description: 'AWS region for KMS signers',
     }),
-    'aws-suffixes': Flags.string({
-      description: 'Suffix for the AWS TEE signer (exactly one, e.g., "00")',
-    }),
     config: Flags.string({
       char: 'c',
       description: 'Path to Dogecoin config file',
+    }),
+    'from-spec': Flags.string({
+      description: 'Path to DeploymentSpec YAML. Uses AWS signer defaults from signing.awsKms or infrastructure.aws.',
     }),
     'generate-wif-keys': Flags.boolean({
       allowNo: true,
@@ -1339,15 +1321,22 @@ export class DummySignersCommand extends Command {
     this.jsonMode = flags.json
     this.jsonCtx = new JsonOutputContext('setup dummy-signers', this.jsonMode)
 
-    // In non-interactive mode, --config is required to avoid prompts in loadDogeConfigWithSelection
-    if (this.nonInteractive && !flags.config) {
-      this.jsonCtx.error(
-        'E601_MISSING_FIELD',
-        '--config flag is required in non-interactive mode to specify the doge config file path',
-        'CONFIGURATION',
-        true,
-        { flag: '--config' }
-      )
+    let specAwsSignerConfig: DogeConfig['awsSigner'] | undefined
+    if (flags['from-spec']) {
+      const specPath = path.resolve(flags['from-spec'])
+      try {
+        const spec = loadDeploymentSpec(specPath)
+        specAwsSignerConfig = getAwsSignerConfigFromSpec(spec)
+        this.jsonCtx.info(`Loaded DeploymentSpec from ${specPath}`)
+      } catch (error) {
+        this.jsonCtx.error(
+          'E602_INVALID_CONFIG_FORMAT',
+          `Failed to load DeploymentSpec: ${error instanceof Error ? error.message : String(error)}`,
+          'CONFIGURATION',
+          true,
+          { specPath }
+        )
+      }
     }
 
     // Load config - use flags.config (not flags['doge-config'])
@@ -1359,6 +1348,14 @@ export class DummySignersCommand extends Command {
     try {
       this.dogeConfig = config;
       this.configPath = configPath;
+
+      if (specAwsSignerConfig) {
+        this.dogeConfig.awsSigner = {
+          ...this.dogeConfig.awsSigner,
+          ...specAwsSignerConfig,
+        }
+      }
+
       this.jsonCtx.info(`Loaded configuration for ${this.dogeConfig.network} network from ${configPath}`)
     } catch (error) {
       this.jsonCtx.error(
@@ -1395,11 +1392,11 @@ export class DummySignersCommand extends Command {
     // Build non-interactive options from flags
     const nonInteractiveOptions: NonInteractiveOptions = {
       awsAccountId: resolveEnvValue(flags['aws-account-id']),
+      awsEcsClusterName: resolveEnvValue(flags['aws-ecs-cluster']),
       awsImageSource: flags['aws-image-source'] as AwsImageSource | undefined,
       awsImageUri: resolveEnvValue(flags['aws-image-uri']),
       awsNetworkAlias: resolveEnvValue(flags['aws-network-alias']),
       awsRegion: resolveEnvValue(flags['aws-region']),
-      awsSuffixes: resolveEnvValue(flags['aws-suffixes']),
       generateWifKeys: flags['generate-wif-keys'],
       wifNetwork: flags['wif-network'] as 'mainnet' | 'regtest' | 'testnet',
     }

@@ -12,6 +12,55 @@ import {
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { type GeneratedValuesFiles, generateValuesFiles } from '../../utils/values-generator.js'
 
+function parseEnvValue(rawValue: string): string {
+  const trimmed = rawValue.trim()
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1)
+  }
+
+  return trimmed
+}
+
+function loadEnvFile(filePath: string): string[] {
+  const loadedKeys: string[] = []
+  const content = fs.readFileSync(filePath, 'utf8')
+
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+
+    const match = trimmed.match(/^(?:export\s+)?([\w.-]+)\s*=\s*(.*)$/)
+    if (!match) continue
+
+    const key = match[1]
+    if (process.env[key] !== undefined) continue
+
+    process.env[key] = parseEnvValue(match[2])
+    loadedKeys.push(key)
+  }
+
+  return loadedKeys
+}
+
+function collectEnvRefs(content: string): string[] {
+  const refs = new Set<string>()
+  for (const line of content.split(/\r?\n/)) {
+    const searchable = line.split('#', 1)[0]
+    for (const match of searchable.matchAll(/\$ENV:([A-Z_a-z]\w*)/g)) {
+      refs.add(match[1])
+    }
+  }
+
+  return [...refs].sort()
+}
+
+function uniquePaths(paths: string[]): string[] {
+  return [...new Set(paths.map(candidate => path.resolve(candidate)))]
+}
+
 export default class GenerateFromSpec extends Command {
   static override description = 'Generate all configuration files from a DeploymentSpec YAML file'
 
@@ -24,6 +73,9 @@ export default class GenerateFromSpec extends Command {
     '',
     '# Generate with JSON output for automation',
     '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml --json',
+    '',
+    '# Load private keys/passwords from an env file before deriving account addresses',
+    '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml --env-file .env.local',
     '',
     '# Dry run - validate and show what would be generated',
     '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml --dry-run',
@@ -41,6 +93,9 @@ export default class GenerateFromSpec extends Command {
     'dry-run': Flags.boolean({
       default: false,
       description: 'Validate spec and show what would be generated without writing files',
+    }),
+    'env-file': Flags.string({
+      description: 'Load dotenv-style environment variables before parsing the spec. Defaults to .env.local/.env next to the spec and current directory when present.',
     }),
     force: Flags.boolean({
       char: 'f',
@@ -96,6 +151,44 @@ export default class GenerateFromSpec extends Command {
 
     jsonCtx.info('Loading DeploymentSpec...')
     jsonCtx.logKeyValue('Spec file', specPath)
+    const specContent = fs.readFileSync(specPath, 'utf8')
+    const envRefs = collectEnvRefs(specContent)
+
+    const envFiles = flags['env-file']
+      ? [path.resolve(flags['env-file'])]
+      : uniquePaths([
+        path.join(path.dirname(specPath), '.env.local'),
+        path.join(path.dirname(specPath), '.env'),
+        path.join(process.cwd(), '.env.local'),
+        path.join(process.cwd(), '.env'),
+      ])
+
+    const loadedEnvFiles: string[] = []
+    for (const envFile of envFiles) {
+      if (fs.existsSync(envFile)) {
+        const loadedKeys = loadEnvFile(envFile)
+        loadedEnvFiles.push(envFile)
+        jsonCtx.info(`Loaded env file: ${envFile} (${loadedKeys.length} new variable(s))`)
+      } else if (flags['env-file']) {
+        jsonCtx.error(
+          'E601_FILE_NOT_FOUND',
+          `Env file not found: ${envFile}`,
+          'CONFIGURATION',
+          true,
+          { path: envFile }
+        )
+      }
+    }
+
+    if (!flags['env-file'] && loadedEnvFiles.length === 0 && envRefs.length > 0) {
+      const exampleEnvPath = path.join(process.cwd(), '.env.example')
+      const suggestion = fs.existsSync(exampleEnvPath)
+        ? `Create .env from .env.example, fill real values, then rerun this command. Example: cp .env.example .env`
+        : `Create .env or .env.local with the required variables, or pass --env-file /path/to/env.`
+      jsonCtx.addWarning(
+        `No env file loaded. Looked for: ${envFiles.join(', ')}. Spec references ${envRefs.length} env variable(s): ${envRefs.join(', ')}. ${suggestion}`
+      )
+    }
 
     // Load and validate the spec
     let spec

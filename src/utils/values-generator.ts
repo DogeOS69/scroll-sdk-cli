@@ -21,6 +21,11 @@ import {
   L1_INTERFACE_RPC_ENDPOINT,
 } from '../config/constants.js'
 import {
+  getBridgeFeeRateSatsPerKvb,
+  getDogecoinIndexerStartHeight,
+  normalizeDeploymentSpec,
+} from './deployment-spec-generator.js'
+import {
   resolveDogecoinKubernetesEndpoints,
 } from './kubernetes-endpoints.js'
 
@@ -228,52 +233,54 @@ function resolveImage(
  * Generate all Helm values files from a DeploymentSpec
  */
 export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles {
+  const normalizedSpec = normalizeDeploymentSpec(spec)
+
   const files: GeneratedValuesFiles = {}
 
   // Core L2 infrastructure
-  files['l2-sequencer-production.yaml'] = generateL2SequencerValues(spec)
-  files['l2-bootnode-production.yaml'] = generateL2BootnodeValues(spec)
-  files['l2-rpc-production.yaml'] = generateL2RpcValues(spec)
+  files['l2-sequencer-production.yaml'] = generateL2SequencerValues(normalizedSpec)
+  files['l2-bootnode-production.yaml'] = generateL2BootnodeValues(normalizedSpec)
+  files['l2-rpc-production.yaml'] = generateL2RpcValues(normalizedSpec)
 
   // L1 interface and private Ethereum DA devnet
-  files['l1-devnet-production.yaml'] = generateL1DevnetValues(spec)
-  files['l1-interface-production.yaml'] = generateL1InterfaceValues(spec)
+  files['l1-devnet-production.yaml'] = generateL1DevnetValues(normalizedSpec)
+  files['l1-interface-production.yaml'] = generateL1InterfaceValues(normalizedSpec)
 
   // DA and Dogecoin
-  files['eth-da-submitter-production.yaml'] = generateEthDaSubmitterValues(spec)
-  files['dogecoin-production.yaml'] = generateDogecoinValues(spec)
+  files['eth-da-submitter-production.yaml'] = generateEthDaSubmitterValues(normalizedSpec)
+  files['dogecoin-production.yaml'] = generateDogecoinValues(normalizedSpec)
 
   // Bridge and signing
-  files['tso-service-production.yaml'] = generateTsoServiceValues(spec)
-  files['withdrawal-processor-production.yaml'] = generateWithdrawalProcessorValues(spec)
+  files['tso-service-production.yaml'] = generateTsoServiceValues(normalizedSpec)
+  files['withdrawal-processor-production.yaml'] = generateWithdrawalProcessorValues(normalizedSpec)
 
-  // Generate cubesigner values if using cubesigner
-  if (spec.signing.method === 'cubesigner') {
-    files['cubesigner-signer-production.yaml'] = generateCubesignerValues(spec)
+  // CubeSigner provides attestation keys. It is independent from the TEE signer.
+  if (normalizedSpec.signing.cubesigner) {
+    files['cubesigner-signer-production.yaml'] = generateCubesignerValues(normalizedSpec)
   }
 
   // Rollup services
-  files['coordinator-api-production.yaml'] = generateCoordinatorApiValues(spec)
-  files['coordinator-cron-production.yaml'] = generateCoordinatorCronValues(spec)
-  files['gas-oracle-production.yaml'] = generateGasOracleValues(spec)
-  files['fee-oracle-production.yaml'] = generateFeeOracleValues(spec)
-  files['chain-monitor-production.yaml'] = generateChainMonitorValues(spec)
+  files['coordinator-api-production.yaml'] = generateCoordinatorApiValues(normalizedSpec)
+  files['coordinator-cron-production.yaml'] = generateCoordinatorCronValues(normalizedSpec)
+  files['gas-oracle-production.yaml'] = generateGasOracleValues(normalizedSpec)
+  files['fee-oracle-production.yaml'] = generateFeeOracleValues(normalizedSpec)
+  files['chain-monitor-production.yaml'] = generateChainMonitorValues(normalizedSpec)
 
   // Frontend and explorers
-  files['frontends-production.yaml'] = generateFrontendsValues(spec)
-  files['frontends-config.yaml'] = generateFrontendsConfigValues(spec)
-  files['blockscout-production.yaml'] = generateBlockscoutValues(spec)
-  files['rollup-explorer-backend-production.yaml'] = generateRollupExplorerBackendValues(spec)
-  files['bridge-history-api-production.yaml'] = generateBridgeHistoryApiValues(spec)
-  files['bridge-history-fetcher-production.yaml'] = generateBridgeHistoryFetcherValues(spec)
+  files['frontends-production.yaml'] = generateFrontendsValues(normalizedSpec)
+  files['frontends-config.yaml'] = generateFrontendsConfigValues(normalizedSpec)
+  files['blockscout-production.yaml'] = generateBlockscoutValues(normalizedSpec)
+  files['rollup-explorer-backend-production.yaml'] = generateRollupExplorerBackendValues(normalizedSpec)
+  files['bridge-history-api-production.yaml'] = generateBridgeHistoryApiValues(normalizedSpec)
+  files['bridge-history-fetcher-production.yaml'] = generateBridgeHistoryFetcherValues(normalizedSpec)
 
   // Admin and monitoring
-  files['admin-system-backend-production.yaml'] = generateAdminSystemBackendValues(spec)
-  files['admin-system-cron-production.yaml'] = generateAdminSystemCronValues(spec)
-  files['admin-system-dashboard-production.yaml'] = generateAdminSystemDashboardValues(spec)
+  files['admin-system-backend-production.yaml'] = generateAdminSystemBackendValues(normalizedSpec)
+  files['admin-system-cron-production.yaml'] = generateAdminSystemCronValues(normalizedSpec)
+  files['admin-system-dashboard-production.yaml'] = generateAdminSystemDashboardValues(normalizedSpec)
 
   // Contracts deployment
-  files['contracts-production.yaml'] = generateContractsValues(spec)
+  files['contracts-production.yaml'] = generateContractsValues(normalizedSpec)
 
   return files
 }
@@ -553,7 +560,7 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__INDEX_UTXOS: 'false',
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__INDEX_WITHDRAWALS: 'false',
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__POLL_INTERVAL_MS: '10000',
-          DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT: String(spec.dogecoin.indexerStartHeight),
+          DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT: String(getDogecoinIndexerStartHeight(spec)),
           DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL: dogecoinEndpoints.rpcUrl,
           DOGEOS_L1_INTERFACE_GENESIS_JSON_PATH: '/app/genesis/genesis.json',
           DOGEOS_L1_INTERFACE_HEALTH_LISTEN_ADDRESS: '0.0.0.0:9090',
@@ -877,7 +884,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS', value: '' },
       { name: 'DOGEOS_WITHDRAWAL_BRIDGE_SCRIPT_HEX', value: '' },
       { name: 'DOGEOS_WITHDRAWAL_MAX_WITHDRAWAL_OUTPUTS_PER_TX', value: '1024' },
-      { name: 'DOGEOS_WITHDRAWAL_FEE_RATE_SAT_PER_KVB', value: String(spec.bridge.feeRateSatPerKvb) },
+      { name: 'DOGEOS_WITHDRAWAL_FEE_RATE_SAT_PER_KVB', value: String(getBridgeFeeRateSatsPerKvb(spec)) },
       { name: 'DOGEOS_WITHDRAWAL_COORDINATOR_POLL_INTERVAL_SECS', value: '10' },
       { name: 'DOGEOS_WITHDRAWAL_DEBUG_SKIP_BROADCAST', value: 'false' },
       { name: 'DOGEOS_WITHDRAWAL_ROTATE_KEY_V2', value: 'true' },
@@ -886,7 +893,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_REPLAY_SQLITE_PATH', value: '/app/data/replay.sqlite' },
       { name: 'DOGEOS_WITHDRAWAL_PROTOCOL_CONTEXT_JSON', value: '/app/protocol_context.json' },
       // Dogecoin Indexer
-      { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT', value: String(spec.dogecoin.indexerStartHeight) },
+      { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT', value: String(getDogecoinIndexerStartHeight(spec)) },
       { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__CONFIRMATIONS', value: String(spec.bridge.confirmationsRequired) },
       { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__POLL_INTERVAL_MS', value: '60000' },
       // DogeOS Indexer

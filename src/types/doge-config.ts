@@ -19,11 +19,11 @@ export interface DogeConfig {
   [key: string]: any
   awsSigner?: {
     accountId?: string
+    ecsClusterName?: string
     imageSource?: 'dockerhub' | 'ecr' | 'ecr-sync'
     imageUri?: string
     networkAlias?: string
     region?: string
-    suffixes?: string
   }
   cubesigner?: {
     roles: CubesignerRole[]

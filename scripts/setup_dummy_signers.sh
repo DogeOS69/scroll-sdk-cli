@@ -8,9 +8,9 @@
 # Usage:
 #   NETWORK_ALIAS=devnet00 \                  # prefix for service names and KMS alias
 #   DOGECOIN_NETWORK=testnet \               # network to use for the signer
-#   SUFFIXES="00" \                           # single TEE signer suffix
 #   AWS_ACCOUNT_ID=012345678901 \             # your AWS account
 #   AWS_REGION=us-east-1 \                     # region for ECR, KMS, and ECS
+#   ECS_CLUSTER=default \                      # ECS cluster for the Express Mode service
 #   IMAGE_URI=dogeos69/dummy-signer:newda \
 #   TSO_URL=https://tso.example.com \
 #   ./setup_dummy_signers.sh
@@ -28,13 +28,8 @@ NETWORK_ALIAS="${NETWORK_ALIAS:-devnet00}"
 # Network to use for the signer
 DOGECOIN_NETWORK="${DOGECOIN_NETWORK:-testnet}"
 
-# Single TEE signer suffix to provision (override e.g. "00")
-SUFFIXES=( ${SUFFIXES:-00} )
-
-if [ ${#SUFFIXES[@]} -ne 1 ]; then
-  echo "TEE dummy signer setup requires exactly one suffix/key. Got: ${SUFFIXES[*]}"
-  exit 1
-fi
+# Internal legacy signer id used by existing ECS/KMS resource names.
+TEE_SIGNER_ID="${TEE_SIGNER_ID:-00}"
 
 # AWS account and region
 AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:?Need to set AWS_ACCOUNT_ID}"
@@ -182,8 +177,8 @@ fi
 # Step A: Per-service IAM roles & policies  #
 #############################################
 
-for SUFFIX in "${SUFFIXES[@]}"; do
-  SERVICE="${NETWORK_ALIAS}-dummy-signer-${SUFFIX}"
+for SIGNER_ID in "$TEE_SIGNER_ID"; do
+  SERVICE="${NETWORK_ALIAS}-dummy-signer-${SIGNER_ID}"
   ROLE_NAME="${SERVICE}-role"
   ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ROLE_NAME}"
   SERVICE_TASK_ASSUME_ROLE_POLICY_FILE="/tmp/${SERVICE}-task-assume-role-policy.json"
@@ -223,8 +218,8 @@ done
 # Step B: Create per-service KMS keys & grants #
 #############################################
 
-for SUFFIX in "${SUFFIXES[@]}"; do
-  SERVICE="${NETWORK_ALIAS}-dummy-signer-${SUFFIX}"
+for SIGNER_ID in "$TEE_SIGNER_ID"; do
+  SERVICE="${NETWORK_ALIAS}-dummy-signer-${SIGNER_ID}"
   ROLE_NAME="${SERVICE}-role"
   ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ROLE_NAME}"
   ALIAS_NAME="alias/${SERVICE}-key"
@@ -309,8 +304,8 @@ done
 # Step C: Create or update ECS Express services #
 #############################################
 
-for SUFFIX in "${SUFFIXES[@]}"; do
-  SERVICE="${NETWORK_ALIAS}-dummy-signer-${SUFFIX}"
+for SIGNER_ID in "$TEE_SIGNER_ID"; do
+  SERVICE="${NETWORK_ALIAS}-dummy-signer-${SIGNER_ID}"
   ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${SERVICE}-role"
   ALIAS_NAME="alias/${SERVICE}-key"
 
@@ -433,4 +428,4 @@ EOF
   fi
 done
 
-echo "🎉 All services (${SUFFIXES[*]}) are configured and deployed."
+echo "🎉 TEE signer service is configured and deployed."

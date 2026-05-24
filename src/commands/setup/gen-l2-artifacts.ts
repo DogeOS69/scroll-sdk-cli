@@ -9,16 +9,13 @@ import * as childProcess from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import type { DogeConfig } from '../../types/doge-config.js'
-
 import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
 import { writeConfigs } from '../../utils/config-writer.js'
+import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import {
   resolveEnvValue,
 } from '../../utils/non-interactive.js'
-
-const SECRETS_PATH = path.join(process.cwd(), 'secrets')
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- TOML configs have dynamic structure */
 
@@ -79,269 +76,9 @@ export default class SetupGenL2Artifacts extends Command {
     }),
   }
 
-  protected dogeConfig: DogeConfig = {} as DogeConfig
   protected jsonCtx!: JsonOutputContext
   protected jsonMode: boolean = false
   protected nonInteractive: boolean = false
-
-  protected async createEnvFiles(): Promise<void> {
-    const configPath = path.join(process.cwd(), 'config.toml')
-    if (!fs.existsSync(configPath)) {
-      this.jsonCtx.error(
-        'E101_CONFIG_NOT_FOUND',
-        'config.toml not found in the current directory.',
-        'CONFIGURATION',
-        true,
-        { path: configPath }
-      )
-    }
-
-    const configContent = fs.readFileSync(configPath, 'utf8')
-    const config = toml.parse(configContent)
-
-    const services = [
-      // 'admin-system-backend',
-      // 'admin-system-cron',
-      'blockscout',
-      // 'bridge-history-api',
-      // 'bridge-history-fetcher',
-      // 'chain-monitor',
-      'coordinator-api',
-      'coordinator-cron',
-      // 'gas-oracle',
-      'fee-oracle',
-      // 'l1-explorer',
-      'l2-sequencer',
-      'contracts',
-      'l2-bootnode',
-      'dogecoin',
-      'testnet-activity-helper',
-      'l1-interface',
-      'blockbook',
-      'dogecoin',
-      'withdrawal-processor',
-      'metrics-exporter',
-      'eth-da-submitter',
-    ]
-
-    for (const service of services) {
-      const envFiles = this.generateEnvContent(service, config)
-      for (const [filename, content] of Object.entries(envFiles)) {
-        const envFile = path.join(SECRETS_PATH, filename)
-        fs.writeFileSync(envFile, content)
-        this.jsonCtx.log(chalk.green(`Created ${filename}`))
-      }
-    }
-
-    // Create additional files
-    this.createMigrateDbFiles(config)
-  }
-
-  protected createMigrateDbFiles(_config: any): void {
-    // Ethereum DA mode no longer runs rollup-relayer, so there is no
-    // rollup-relayer migrate-db secret to generate.
-  }
-
-  protected createSecretsFolder(): void {
-    if (fs.existsSync(SECRETS_PATH)) {
-      this.jsonCtx.log(chalk.yellow('Secrets folder already exists'))
-    } else {
-      fs.mkdirSync(SECRETS_PATH)
-      this.jsonCtx.log(chalk.green('Created secrets folder'))
-    }
-  }
-
-  // TODO: check privatekey secrets once integrated
-  protected generateEnvContent(service: string, config: any): { [key: string]: string } {
-    const mapping: Record<string, string[]> = {
-      'admin-system-backend': [
-        'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_AUTH_DB_CONFIG_DSN',
-        'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_DB_CONFIG_DSN',
-        'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_READ_ONLY_DB_CONFIG_DSN',
-      ],
-      'admin-system-cron': [
-        'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_AUTH_DB_CONFIG_DSN',
-        'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_DB_CONFIG_DSN',
-        'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_READ_ONLY_DB_CONFIG_DSN',
-      ],
-      'blockbook': [
-        'DOGECOIN_RPC_USER:DOGECOIN_RPC_USER',
-        'DOGECOIN_RPC_PASSWORD:DOGECOIN_RPC_PASSWORD',
-      ],
-      blockscout: ['BLOCKSCOUT_DB_CONNECTION_STRING:DATABASE_URL'],
-      'bridge-history-api': ['BRIDGE_HISTORY_DB_CONNECTION_STRING:SCROLL_BRIDGE_HISTORY_DB_DSN'],
-      'bridge-history-fetcher': ['BRIDGE_HISTORY_DB_CONNECTION_STRING:SCROLL_BRIDGE_HISTORY_DB_DSN'],
-      'chain-monitor': ['CHAIN_MONITOR_DB_CONNECTION_STRING:SCROLL_CHAIN_MONITOR_DB_CONFIG_DSN'],
-      'contracts': [
-        'DEPLOYER_PRIVATE_KEY:DEPLOYER_PRIVATE_KEY',
-        'L1_COMMIT_SENDER_PRIVATE_KEY:L1_COMMIT_SENDER_PRIVATE_KEY',
-        'L1_FINALIZE_SENDER_PRIVATE_KEY:L1_FINALIZE_SENDER_PRIVATE_KEY',
-        'L1_GAS_ORACLE_SENDER_PRIVATE_KEY:L1_GAS_ORACLE_SENDER_PRIVATE_KEY',
-        'L2_GAS_ORACLE_SENDER_PRIVATE_KEY:L2_GAS_ORACLE_SENDER_PRIVATE_KEY',
-        'ROLLUP_EXPLORER_DB_CONNECTION_STRING:ROLLUP_EXPLORER_DB_CONNECTION_STRING',
-        'COORDINATOR_JWT_SECRET_KEY:COORDINATOR_JWT_SECRET_KEY'
-      ],
-      'coordinator-api': [
-        'COORDINATOR_DB_CONNECTION_STRING:SCROLL_COORDINATOR_DB_DSN',
-        'COORDINATOR_JWT_SECRET_KEY:SCROLL_COORDINATOR_AUTH_SECRET',
-      ],
-      'coordinator-cron': [
-        'COORDINATOR_DB_CONNECTION_STRING:SCROLL_COORDINATOR_DB_DSN',
-        'COORDINATOR_JWT_SECRET_KEY:SCROLL_COORDINATOR_AUTH_SECRET',
-      ],
-      'dogecoin': [
-        'DOGECOIN_RPC_USER:DOGECOIN_RPC_USER',
-        'DOGECOIN_RPC_PASSWORD:DOGECOIN_RPC_PASSWORD',
-      ],
-      'gas-oracle': [
-        'GAS_ORACLE_DB_CONNECTION_STRING:SCROLL_ROLLUP_DB_CONFIG_DSN',
-        'L1_GAS_ORACLE_SENDER_PRIVATE_KEY:SCROLL_ROLLUP_L2_CONFIG_RELAYER_CONFIG_GAS_ORACLE_SENDER_SIGNER_CONFIG_PRIVATE_KEY_SIGNER_CONFIG_PRIVATE_KEY',
-        'L2_GAS_ORACLE_SENDER_PRIVATE_KEY:SCROLL_ROLLUP_L1_CONFIG_RELAYER_CONFIG_GAS_ORACLE_SENDER_SIGNER_CONFIG_PRIVATE_KEY_SIGNER_CONFIG_PRIVATE_KEY',
-      ],
-      'l1-explorer': ['L1_EXPLORER_DB_CONNECTION_STRING:DATABASE_URL'],
-      'l2-sequencer': [
-        'L2GETH_KEYSTORE:L2GETH_KEYSTORE',
-        'L2GETH_PASSWORD:L2GETH_PASSWORD',
-        'L2GETH_NODEKEY:L2GETH_NODEKEY',
-      ],
-      'testnet-activity-helper': [
-        'L2_TESTNET_ACTIVITY_HELPER_PRIVATE_KEY:private-key',
-      ],
-      'withdrawal-processor': [
-      ],
-    }
-
-    const envFiles: { [key: string]: string } = {}
-
-    if (service === 'l2-sequencer') {
-      // Handle all sequencers (primary and backups)
-      let sequencerIndex = 0
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const sequencerConfig =
-          sequencerIndex === 0 ? config.sequencer : config.sequencer[`sequencer-${sequencerIndex}`]
-        if (!sequencerConfig) break
-
-        let content = ''
-        for (const pair of mapping[service] || []) {
-          const [envKey, configKey] = pair.split(':')
-          if (sequencerConfig[configKey]) {
-            content += `${envKey}="${sequencerConfig[configKey]}"\n`
-          }
-        }
-
-        envFiles[`l2-sequencer-${sequencerIndex}-secret.env`] = content
-        sequencerIndex++
-      }
-    } else if (service === 'l2-bootnode') {
-      // Handle L2 bootnode secrets
-      if (config.bootnode) {
-        let bootnodeIndex = 0
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const bootnodeInstanceKey = `bootnode-${bootnodeIndex}`
-          const bootnodeConfig = config.bootnode[bootnodeInstanceKey]
-
-          if (!bootnodeConfig) {
-            // No more bootnode instances defined
-            break
-          }
-
-          // L2GETH_NODEKEY is expected.
-          // If it's missing for a defined bootnode instance in config.toml, default to an empty string.
-          // config.toml.example shows L2GETH_NODEKEY="", so it should typically exist.
-          const nodeKey = bootnodeConfig.L2GETH_NODEKEY === undefined ? '' : bootnodeConfig.L2GETH_NODEKEY
-          envFiles[`l2-bootnode-${bootnodeIndex}-secret.env`] = `L2GETH_NODEKEY="${nodeKey}"\n`
-          bootnodeIndex++
-        }
-      } else {
-        this.jsonCtx.log(chalk.yellow('No [bootnode] configuration found in config.toml. Skipping l2-bootnode secret generation.'))
-      }
-    }
-    else {
-      // Handle other services
-      let content = ''
-      for (const pair of mapping[service] || []) {
-        const [configKey, envKey] = pair.split(':')
-        if (config.db && config.db[configKey]) {
-          content += `${envKey}="${config.db[configKey]}"\n`
-        } else if (config.accounts && config.accounts[configKey]) {
-          content += `${envKey}="${config.accounts[configKey]}"\n`
-        } else if (config.coordinator && config.coordinator[configKey]) {
-          content += `${envKey}="${config.coordinator[configKey]}"\n`
-        } else if (config.sequencer && config.sequencer[configKey]) {
-          content += `${envKey}="${config.sequencer[configKey]}"\n`
-        }
-      }
-
-      if (content.length > 0) {
-        envFiles[`${service}-secret.env`] = content
-      }
-    }
-
-    if (service === 'fee-oracle') {
-      let content = `DOGEOS_FEE_ORACLE_DOGECOIN__RPC_USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
-      content += `DOGEOS_FEE_ORACLE_DOGECOIN__RPC_PASSWORD="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
-      content += `DOGEOS_FEE_ORACLE_PRIVATE_KEY="${config.accounts.L2_GAS_ORACLE_SENDER_PRIVATE_KEY || ''}"\n`
-      envFiles['fee-oracle-secret.env'] = content
-    }
-
-    if (service === 'l1-interface') {
-      let content = `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
-      content += `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
-      content += `DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_API_KEY=""\n`
-      envFiles['l1-interface-secret.env'] = content
-    }
-
-    if (service === 'blockbook') {
-      envFiles['blockbook-secret.env'] = `DOGECOIN_RPC_USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
-      envFiles['blockbook-secret.env'] += `DOGECOIN_RPC_PASSWORD="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
-    }
-
-    if (service === 'dogecoin') {
-      envFiles['dogecoin-secret.env'] = `DOGECOIN_RPC_USER="${this.dogeConfig.dogecoinClusterRpc?.username}"\nDOGECOIN_RPC_PASSWORD="${this.dogeConfig.dogecoinClusterRpc?.password}"\n`
-    }
-
-    if (service === 'metrics-exporter') {
-      const credentials = Buffer.from(`${this.dogeConfig.dogecoinClusterRpc?.username}:${this.dogeConfig.dogecoinClusterRpc?.password}`).toString('base64')
-      envFiles['metrics-exporter-secret.env'] = `METRICS_EXPORTER_DOGECOIN_BASIC_AUTH="${credentials}"\n`
-    }
-
-    if (service === 'withdrawal-processor') {
-      // Handle regular config mappings first
-      let content = ''
-      // content += `DOGEOS_WITHDRAWAL_DATABASE_URL="${this.dogeConfig.rpc?.databaseUrl || ''}"\n`
-      // Add Dogecoin RPC credentials from doge-config
-      content += `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER="${this.dogeConfig.dogecoinClusterRpc?.username || ''}"\n`
-      content += `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS="${this.dogeConfig.dogecoinClusterRpc?.password || ''}"\n`
-
-      // Add values from output-withdrawal-processor.toml
-      const withdrawal_processor_toml_path = path.join(process.cwd(), ".data", "output-withdrawal-processor.toml");
-      if (fs.existsSync(withdrawal_processor_toml_path)) {
-        const withdrawal_processor_toml = toml.parse(fs.readFileSync(withdrawal_processor_toml_path, "utf8"));
-        content += `DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY="${withdrawal_processor_toml.fee_signer_key}"\n`
-        content += `DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY="${withdrawal_processor_toml.sequencer_signer_key}"\n`
-      } else {
-        this.jsonCtx.error(
-          'E101_CONFIG_NOT_FOUND',
-          `${withdrawal_processor_toml_path} not found`,
-          'CONFIGURATION',
-          true,
-          { path: withdrawal_processor_toml_path }
-        )
-      }
-
-      envFiles['withdrawal-processor-secret.env'] = content
-    }
-
-    if (service === 'eth-da-submitter') {
-      const submitterPrivateKey = config.accounts?.L1_COMMIT_SENDER_PRIVATE_KEY || ''
-      envFiles['eth-da-submitter-secret.env'] =
-        `DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY="${submitterPrivateKey}"\n`
-    }
-
-    return envFiles
-  }
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupGenL2Artifacts) as any
@@ -373,6 +110,9 @@ export default class SetupGenL2Artifacts extends Command {
     await this.updateL1PlonkVerifierAddr(flags)
 
     await this.updateBaseFeePerGas(flags)
+
+    this.resolveConfigEnvRefsInPlace()
+    this.validateConfigForArtifactGeneration()
 
     this.jsonCtx.info('Running docker command to generate L2 artifacts...')
     await this.runDockerCommand(imageTag)
@@ -678,6 +418,52 @@ export default class SetupGenL2Artifacts extends Command {
         this.jsonCtx.log(chalk.yellow(`Source file not found: ${file.source}`))
       }
     }
+  }
+
+  private resolveConfigEnvRefsInPlace(): void {
+    const configPath = path.join(process.cwd(), 'config.toml')
+    if (!fs.existsSync(configPath)) {
+      this.jsonCtx.addWarning('config.toml not found. Skipping $ENV expansion.')
+      return
+    }
+
+    const configContent = fs.readFileSync(configPath, 'utf8')
+    if (!hasEnvRef(configContent)) return
+
+    try {
+      const parsed = toml.parse(configContent)
+      const resolved = this.resolveEnvRefs(parsed) as toml.JsonMap
+      writeConfigs(resolved, path.join(process.cwd(), 'config.public.toml'), configPath, this.jsonMode)
+      this.jsonCtx.info('Resolved $ENV references in config.toml.')
+    } catch (error) {
+      this.jsonCtx.error(
+        'E602_INVALID_CONFIG_FORMAT',
+        `Failed to resolve $ENV references in config.toml: ${error instanceof Error ? error.message : String(error)}`,
+        'CONFIGURATION',
+        true
+      )
+    }
+  }
+
+  private resolveEnvRefs(value: unknown): unknown {
+    if (typeof value === 'string') {
+      return hasEnvRef(value) ? resolveInlineEnvRefs(value) : value
+    }
+
+    if (Array.isArray(value)) {
+      return value.map(item => this.resolveEnvRefs(item))
+    }
+
+    if (value && typeof value === 'object') {
+      const resolved: Record<string, unknown> = {}
+      for (const [key, item] of Object.entries(value)) {
+        resolved[key] = this.resolveEnvRefs(item)
+      }
+
+      return resolved
+    }
+
+    return value
   }
 
   private async runDockerCommand(imageTag: string): Promise<void> {
@@ -1219,6 +1005,31 @@ export default class SetupGenL2Artifacts extends Command {
       if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
         this.jsonCtx.log(chalk.green(`L2_BRIDGE_FEE_RECIPIENT_ADDR updated in config.toml to "${newAddr}"`))
       }
+    }
+  }
+
+  private validateConfigForArtifactGeneration(): void {
+    const configPath = path.join(process.cwd(), 'config.toml')
+    if (!fs.existsSync(configPath)) {
+      this.jsonCtx.error(
+        'E602_CONFIG_NOT_FOUND',
+        'config.toml not found. Run setup generate-from-spec first.',
+        'CONFIGURATION',
+        true,
+        { path: configPath }
+      )
+    }
+
+    const config = toml.parse(fs.readFileSync(configPath, 'utf8')) as any
+    const signerAddress = config.sequencer?.L2GETH_SIGNER_ADDRESS
+    if (typeof signerAddress !== 'string' || !ethers.isAddress(signerAddress)) {
+      this.jsonCtx.error(
+        'E002_MISSING_REQUIRED_FIELD',
+        'sequencer.L2GETH_SIGNER_ADDRESS is required before generating L2 artifacts. Run setup gen-keystore --from-spec deployment-spec.yaml --non-interactive --sequencer-password "$ENV:SEQUENCER_KEYSTORE_PASSWORD", or set infrastructure.sequencers[0].signerAddress in the spec and regenerate config.toml.',
+        'VALIDATION',
+        true,
+        { path: 'sequencer.L2GETH_SIGNER_ADDRESS' }
+      )
     }
   }
 }
