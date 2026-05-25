@@ -25,7 +25,6 @@ export class BridgeInitCommand extends Command {
         'doge-config': Flags.string({ description: 'Path to Dogecoin config file', required: false }),
         'image-tag': Flags.string({ description: 'Docker image tag', required: false }),
         'namespace': Flags.string({ default: 'default', description: 'Kubernetes namespace for --all-replicas mode', required: false }),
-        'network': Flags.string({ description: 'Dogecoin network (mainnet, testnet, or regtest)', required: false }),
         'replicas': Flags.integer({ description: 'Dogecoin replica count for --all-replicas mode. Defaults to the StatefulSet replica count.', required: false }),
         'rpc-password': Flags.string({ description: 'Dogecoin RPC password', required: false }),
         'rpc-port': Flags.integer({ description: 'Dogecoin RPC port for --all-replicas mode', required: false }),
@@ -67,10 +66,10 @@ export class BridgeInitCommand extends Command {
         imageTag = await this.getDockerImageTag(imageTag)
         this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
         // Build CLI args from configs
-        const network = flags.network || this.dogeConfig?.network || 'testnet'
+        const { network } = this.dogeConfig
         const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints({
             kubernetes: this.dogeConfig?.kubernetes,
-            network: network as 'mainnet' | 'regtest' | 'testnet',
+            network,
         })
         const serviceName = flags['service-name'] || dogecoinEndpoints.serviceName
         const rpcPort = flags['rpc-port'] || dogecoinEndpoints.rpcPort

@@ -126,13 +126,13 @@ All commands below assume `config.toml` is fully populated. Run them in order:
 ### Step 1: Set up domains
 
 ```bash
-scrollsdk setup domains -N --json
+scrollsdk setup domains -N --json --network testnet
 ```
 
 Reads domain and ingress values from `[frontend]` and `[ingress]` sections of config.toml.
 
 **Required config fields:**
-- `[general].CHAIN_NAME_L1` - L1 network name (used to infer network type)
+- `[dogecoin].network` - Dogecoin network. In non-interactive mode, set it in config.toml before running this command.
 - `[frontend].EXTERNAL_RPC_URI_L1` - L1 RPC endpoint
 - `[frontend].EXTERNAL_RPC_URI_L2` - L2 RPC endpoint
 - `[frontend].BRIDGE_API_URI` - Bridge API endpoint
@@ -175,16 +175,13 @@ Generates keystores for validator/sequencer accounts.
 ### Step 4: Configure Dogecoin
 
 ```bash
-scrollsdk setup doge-config -N --json --network testnet
+scrollsdk setup doge-config -N --json
 ```
 
 Generates `.data/doge-config.toml` from config values.
 
-**Required flags (non-interactive):**
-- `--network mainnet|testnet|regtest` - Required when creating a new config
-
 **Required config fields:**
-- `[dogecoin]` section (network, RPC URLs, blockbook URL)
+- `[dogecoin].network` in config.toml.
 
 ### Step 5: Generate L2 artifacts
 
@@ -366,7 +363,7 @@ run_step() {
 }
 
 # Steps 1-2: Domain and database setup
-run_step "setup domains" setup domains -N --json
+run_step "setup domains" setup domains -N --json --network "$NETWORK"
 run_step "setup db-init" setup db-init --clean -N --json
 
 # Step 3: Generate keystores
@@ -374,7 +371,7 @@ run_step "setup gen-keystore" setup gen-keystore -N --json \
   --sequencer-password '$ENV:SEQUENCER_KEYSTORE_PASSWORD'
 
 # Steps 4-9: Dogecoin, L2 artifacts, CubeSigner, bridge, secrets, Helm charts
-run_step "setup doge-config" setup doge-config -N --json --network "$NETWORK"
+run_step "setup doge-config" setup doge-config -N --json
 run_step "setup gen-l2-artifacts" setup gen-l2-artifacts -N --json
 run_step "setup cubesigner-init" setup cubesigner-init -N --json \
   --new --count 3 --role-prefix attestor --threshold 2 --doge-config "$DOGE_CONFIG"
@@ -415,7 +412,7 @@ This generates base config files (`config.toml`, `doge-config.toml`, `setup_defa
 ### Bash with jq
 
 ```bash
-output=$(scrollsdk setup domains -N --json 2>/dev/null)
+output=$(scrollsdk setup domains -N --json --network testnet 2>/dev/null)
 if echo "$output" | jq -e '.success' > /dev/null 2>&1; then
   echo "Success"
   echo "$output" | jq '.data'

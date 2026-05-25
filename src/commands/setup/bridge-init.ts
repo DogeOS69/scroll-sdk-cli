@@ -9,6 +9,7 @@ import * as path from 'node:path'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
+import { loadDogeNetworkFromMainConfig } from '../../utils/doge-config.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 
 type BridgeInitStep = '1-prepare' | '2-setup' | '3-bridge-info' | '4-fund' | '5-protocol-context' | 'all'
@@ -672,6 +673,19 @@ export class BridgeInitCommand extends Command {
     }
   }
 
+  private getConfiguredDogeNetwork(): string {
+    try {
+      return loadDogeNetworkFromMainConfig(path.join(process.cwd(), 'config.toml'))
+    } catch (error) {
+      this.jsonCtx.error(
+        'E102_CONFIG_MISSING',
+        error instanceof Error ? error.message : String(error),
+        'CONFIGURATION',
+        true,
+      )
+    }
+  }
+
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
     const defaultTag = 'newda'
 
@@ -838,7 +852,7 @@ export class BridgeInitCommand extends Command {
     return value
   }
 
-  private getRequiredDogeConfig(dataDir: string, network: string): { config: any; path: string } {
+  private getRequiredDogeConfig(dataDir: string): { config: any; path: string } {
     const configPath = path.join(dataDir, 'doge-config.toml')
 
     if (fs.existsSync(configPath)) {
@@ -848,21 +862,12 @@ export class BridgeInitCommand extends Command {
       }
     }
 
-    const legacyConfigPath = path.join(dataDir, `doge-config-${network}.toml`)
-    if (fs.existsSync(legacyConfigPath)) {
-      this.jsonCtx.addWarning(`Using legacy Doge config path: ${legacyConfigPath}. Prefer ${configPath}.`)
-      return {
-        config: toml.parse(fs.readFileSync(legacyConfigPath, 'utf8')),
-        path: legacyConfigPath,
-      }
-    }
-
     this.jsonCtx.error(
       'E101_CONFIG_NOT_FOUND',
       `Doge config not found. Expected config file: ${configPath}`,
       'CONFIGURATION',
       true,
-      { legacyPath: legacyConfigPath, path: configPath }
+      { path: configPath }
     )
   }
 
@@ -1087,7 +1092,7 @@ export class BridgeInitCommand extends Command {
     const existingConfigStr = fs.readFileSync(paths.setupDefaultsPath, 'utf8')
     const existingConfig = toml.parse(existingConfigStr) as any
     const existingSeed = existingConfig.seed_string || ''
-    const network = existingConfig.network || 'testnet'
+    const network = this.getConfiguredDogeNetwork()
 
     if (!seed) {
       seed = await input({
@@ -1097,16 +1102,11 @@ export class BridgeInitCommand extends Command {
     }
 
     const configPath = path.join(process.cwd(), 'config.toml')
-    let configData: any
-    if (fs.existsSync(configPath)) {
-      const configContent = fs.readFileSync(configPath, 'utf8')
-      configData = toml.parse(configContent)
-    } else {
-      this.jsonCtx.addWarning('config.toml not found. Some values may not be populated correctly.')
-    }
+    const configData = this.getRequiredTomlConfig(configPath)
 
     const newConfig = toml.parse(existingConfigStr) as any
     newConfig.seed_string = seed
+    newConfig.network = network
     newConfig.deposit_eth_recipient_address_hex = this.getNestedValue(configData, 'accounts.DEPLOYER_ADDR')
     fs.writeFileSync(paths.setupDefaultsPath, toml.stringify(newConfig))
     this.jsonCtx.info(`Updating protocol seed for Dogecoin network ${network}`)
@@ -1122,18 +1122,14 @@ export class BridgeInitCommand extends Command {
 
   private resolveDogecoinChainId(network: string): number {
     switch (network) {
-      case 'doge':
-      case 'dogecoin':
       case 'mainnet': {
         return 1
       }
 
-      case 'dogeTestnet':
       case 'testnet': {
         return 111_111
       }
 
-      case 'dogeRegtest':
       case 'regtest': {
         return 5_555_555
       }
@@ -1141,7 +1137,7 @@ export class BridgeInitCommand extends Command {
       default: {
         this.jsonCtx.error(
           'E602_INVALID_DOGE_NETWORK',
-          `Unsupported Dogecoin network "${network}". Expected mainnet/dogecoin/doge, testnet/dogeTestnet, or regtest/dogeRegtest.`,
+          `Unsupported Dogecoin network "${network}". Expected mainnet, testnet, or regtest from config.toml [dogecoin].network.`,
           'CONFIGURATION',
           true,
           { network }
@@ -1264,8 +1260,7 @@ export class BridgeInitCommand extends Command {
       '.data/protocol_seed.toml',
     ])
 
-    const setupDefaults = toml.parse(fs.readFileSync(paths.setupDefaultsPath, 'utf8')) as any
-    const network = setupDefaults.network || 'testnet'
+    const network = this.getConfiguredDogeNetwork()
     this.updateProtocolSeed(paths.dataDir, network, path.join(process.cwd(), 'config.toml'))
   }
 
@@ -1296,8 +1291,7 @@ export class BridgeInitCommand extends Command {
       'Run `scrollsdk setup bridge-init --step 1-prepare` first.'
     )
 
-    const setupDefaults = toml.parse(fs.readFileSync(paths.setupDefaultsPath, 'utf8')) as any
-    const network = setupDefaults.network || 'testnet'
+    const network = this.getConfiguredDogeNetwork()
     this.updateProtocolSeed(paths.dataDir, network, path.join(process.cwd(), 'config.toml'))
 
     this.jsonCtx.info('Running step 5-protocol-context: generate protocol_context.json')
@@ -1330,6 +1324,8 @@ export class BridgeInitCommand extends Command {
       'This step is NOT idempotent. It consumes funding UTXOs and broadcasts the setup transaction.'
     )
 
+    const network = this.getConfiguredDogeNetwork()
+    this.syncSetupDefaultsNetwork(paths.setupDefaultsPath, network)
     this.resolveSetupDefaultsEnvRefs(paths.setupDefaultsPath)
     const dogecoinHeightBeforeSetup = await this.getDogecoinCurrentHeight(paths.setupDefaultsPath)
     const indexerStartHeight = Math.max(0, dogecoinHeightBeforeSetup - 1)
@@ -1346,27 +1342,37 @@ export class BridgeInitCommand extends Command {
       '.data',
     ])
     this.moveLegacyOutputFiles(paths.dataDir)
-    this.updateDogeConfigBlockHeight(paths.setupDefaultsPath, paths.dataDir, indexerStartHeight)
-    const setupDefaults = toml.parse(fs.readFileSync(paths.setupDefaultsPath, 'utf8')) as any
-    this.updateGenerateBridgeInfoNetwork(paths.generateBridgeInfoPath, setupDefaults.network || 'testnet', true)
+    this.updateDogeConfigBlockHeight(paths.dataDir, indexerStartHeight)
+    this.updateGenerateBridgeInfoNetwork(paths.generateBridgeInfoPath, network, true)
     this.materializeWithdrawalProcessorSecrets(paths)
+  }
+
+  private syncSetupDefaultsNetwork(setupDefaultsPath: string, network: string): void {
+    const setupDefaults = toml.parse(fs.readFileSync(setupDefaultsPath, 'utf8')) as any
+    if (setupDefaults.network === network) return
+
+    setupDefaults.network = network
+    fs.writeFileSync(setupDefaultsPath, toml.stringify(setupDefaults))
+    this.jsonCtx.info(`Updated ${setupDefaultsPath} with network = ${network} from config.toml`)
   }
 
   /**
    * Update dogecoinIndexerStartHeight in the unified doge-config file.
    */
   private updateDogeConfigBlockHeight(
-    setupDefaultsPath: string,
     dataDir: string,
     blockHeight: number
   ): void {
     try {
-      const setupDefaults = toml.parse(fs.readFileSync(setupDefaultsPath, 'utf8'))
-      const network = (setupDefaults as any).network || 'testnet'
-      const { path: dogeConfigPath } = this.getRequiredDogeConfig(dataDir, network)
+      const { path: dogeConfigPath } = this.getRequiredDogeConfig(dataDir)
       const dogeConfigForUpdate = toml.parse(fs.readFileSync(dogeConfigPath, 'utf8')) as any
       dogeConfigForUpdate.defaults ??= {}
       dogeConfigForUpdate.defaults.dogecoinIndexerStartHeight = String(blockHeight)
+      delete dogeConfigForUpdate.network
+      if (dogeConfigForUpdate.localSigners) {
+        delete dogeConfigForUpdate.localSigners.network
+      }
+
       fs.writeFileSync(dogeConfigPath, toml.stringify(dogeConfigForUpdate))
       this.jsonCtx.info(`Updated ${dogeConfigPath} with dogecoinIndexerStartHeight = ${blockHeight}`)
     } catch (configError) {

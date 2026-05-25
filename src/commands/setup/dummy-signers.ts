@@ -14,7 +14,7 @@ import type { DogeConfig } from '../../types/doge-config.js'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
 import { getAwsSignerConfigFromSpec, getDummySignerProviderFromSpec, loadDeploymentSpec } from '../../utils/deployment-spec-generator.js'
-import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import { dogeConfigToToml, loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { resolveEnvValue } from '../../utils/non-interactive.js'
 const { Networks, PrivateKey } = bitcore
@@ -26,7 +26,7 @@ type AwsImageSource = typeof awsImageSources[number]
 type DummySignerProvider = 'aws' | 'local'
 
 function getConfiguredDummySignerProvider(config: DogeConfig): DummySignerProvider | undefined {
-  return config.dummySigner?.provider || config.deploymentType
+  return config.dummySigner?.provider
 }
 
 function setConfiguredDummySignerProvider(config: DogeConfig, provider: DummySignerProvider): void {
@@ -34,7 +34,6 @@ function setConfiguredDummySignerProvider(config: DogeConfig, provider: DummySig
     ...config.dummySigner,
     provider,
   }
-  delete config.deploymentType
 }
 
 export interface NonInteractiveOptions {
@@ -45,7 +44,6 @@ export interface NonInteractiveOptions {
   awsNetworkAlias?: string
   awsRegion?: string
   generateWifKeys?: boolean
-  wifNetwork?: 'mainnet' | 'regtest' | 'testnet'
 }
 
 export class DummySignersManager {
@@ -164,35 +162,9 @@ export class DummySignersManager {
   private async collectSignerConfigs(numSigners: number, generateWifKeys: boolean): Promise<Array<{ port: number, publicKey?: string, wif: string }>> {
     const signerConfigs: Array<{ port: number, publicKey?: string, wif: string }> = []
 
-    // Let user choose network type if generating WIF keys
-    let selectedNetwork = 'testnet'
+    const selectedNetwork = this.dogeConfig.network
     if (generateWifKeys) {
-      if (this.nonInteractive) {
-        selectedNetwork = this.nonInteractiveOptions.wifNetwork || 'regtest'
-        this.log(chalk.blue(`Non-interactive mode: Using WIF network '${selectedNetwork}'`))
-      } else {
-        selectedNetwork = await select({
-          choices: [
-            {
-              description: 'Local regression test network for development',
-              name: 'Regtest (Local development)',
-              value: 'regtest'
-            },
-            {
-              description: 'Public Dogecoin test network',
-              name: 'Testnet (Public test network)',
-              value: 'testnet'
-            },
-            {
-              description: 'Production Dogecoin network',
-              name: 'Mainnet (Production network)',
-              value: 'mainnet'
-            }
-          ],
-          default: 'regtest',
-          message: 'Choose network type for WIF generation'
-        })
-      }
+      this.log(chalk.blue(`Using WIF network '${selectedNetwork}' from config.toml`))
     }
 
     for (let i = 0; i < numSigners; i++) {
@@ -848,7 +820,7 @@ export class DummySignersManager {
 
       this.dogeConfig.awsSigner = updatedAwsSigner
 
-      const configContent = toml.stringify(this.dogeConfig as any)
+      const configContent = dogeConfigToToml(this.dogeConfig)
       fs.writeFileSync(this.configPath, configContent)
 
       this.log(chalk.green(`AWS signer configuration saved to ${this.configPath}`))
@@ -859,16 +831,15 @@ export class DummySignersManager {
 
   private saveConfigToFile(config: any, filePath: string): void {
     this.ensureDirectoryExists(path.dirname(filePath))
-    fs.writeFileSync(filePath, toml.stringify(config))
+    fs.writeFileSync(filePath, dogeConfigToToml(config as DogeConfig))
   }
 
-  private saveLocalSignerConfig(network: string, signerConfigs: any[]): void {
+  private saveLocalSignerConfig(signerConfigs: any[]): void {
     if (!this.dogeConfig.localSigners) {
       this.dogeConfig.localSigners = {}
     }
 
     this.dogeConfig.localSigners = {
-      network,
       signers: signerConfigs.map((config, _i) => ({
         index: _i,
         port: config.port,
@@ -1069,7 +1040,7 @@ export class DummySignersManager {
 
     this.showContainerStatus(signerConfigs)
 
-    this.saveLocalSignerConfig(NETWORK, signerConfigs)
+    this.saveLocalSignerConfig(signerConfigs)
     await this.updateSetupDefaultsWithLocalPublicKeys(signerConfigs)
 
     this.showSignerUrlsSummary()
@@ -1311,11 +1282,6 @@ export class DummySignersCommand extends Command {
       default: false,
       description: 'Run without prompts. Uses config values or sensible defaults.',
     }),
-    'wif-network': Flags.string({
-      default: 'regtest',
-      description: 'Network for WIF generation: regtest, testnet, or mainnet',
-      options: ['regtest', 'testnet', 'mainnet'],
-    }),
   }
 
   private configPath: string = ''
@@ -1415,7 +1381,6 @@ export class DummySignersCommand extends Command {
       awsNetworkAlias: resolveEnvValue(flags['aws-network-alias']),
       awsRegion: resolveEnvValue(flags['aws-region']),
       generateWifKeys: flags['generate-wif-keys'],
-      wifNetwork: flags['wif-network'] as 'mainnet' | 'regtest' | 'testnet',
     }
 
     // Set up dummy signers

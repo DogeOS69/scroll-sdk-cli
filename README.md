@@ -219,8 +219,8 @@ USAGE
 
 FLAGS
   -N, --non-interactive  Run without prompts (implies --force)
-  -c, --config=<value>   [default: .data/doge-config.toml] Path to Dogecoin config file (determines network and default
-                         wallet path)
+  -c, --config=<value>   [default: .data/doge-config.toml] Path to Dogecoin config file (wallet path); network is read
+                         from config.toml [dogecoin].network
   -d, --dry-run          Show what would be created without actually creating the wallet
   -f, --force            Skip confirmation prompt
   -p, --path=<value>     Path to save the wallet file (overrides path from config file)
@@ -1009,14 +1009,11 @@ Configure Dogecoin settings and bridge setup defaults for deployment
 
 ```
 USAGE
-  $ scrollsdk setup doge-config [-c <value>] [--json] [-n mainnet|testnet|regtest] [-N]
+  $ scrollsdk setup doge-config [-c <value>] [--json] [-N]
 
 FLAGS
   -N, --non-interactive   Run without prompts, using existing config values
   -c, --config=<value>    Path to config file
-  -n, --network=<option>  Network to configure (mainnet, testnet, or regtest) - required for non-interactive mode with
-                          new config
-                          <options: mainnet|testnet|regtest>
       --json              Output in JSON format (stdout for data, stderr for logs)
 
 DESCRIPTION
@@ -1027,11 +1024,9 @@ EXAMPLES
 
   $ scrollsdk setup doge-config --config .data/doge-config.toml
 
-  $ scrollsdk setup doge-config --non-interactive --network testnet
+  $ scrollsdk setup doge-config --non-interactive
 
-  $ scrollsdk setup doge-config --non-interactive --network regtest
-
-  $ scrollsdk setup doge-config --non-interactive --json --network mainnet
+  $ scrollsdk setup doge-config --non-interactive --json
 ```
 
 _See code: [src/commands/setup/doge-config.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/doge-config.ts)_
@@ -1043,15 +1038,14 @@ Dogecoin wallet import
 ```
 USAGE
   $ scrollsdk setup dogecoin-wallet-import [--all-replicas] [--doge-config <value>] [--image-tag <value>] [--namespace <value>]
-    [--network <value>] [--replicas <value>] [--rpc-password <value>] [--rpc-port <value>] [--rpc-url <value>]
-    [--rpc-user <value>] [--service-name <value>]
+    [--replicas <value>] [--rpc-password <value>] [--rpc-port <value>] [--rpc-url <value>] [--rpc-user <value>]
+    [--service-name <value>]
 
 FLAGS
   --all-replicas          Import watch-only addresses into every Dogecoin StatefulSet replica using in-cluster pod DNS
   --doge-config=<value>   Path to Dogecoin config file
   --image-tag=<value>     Docker image tag
   --namespace=<value>     [default: default] Kubernetes namespace for --all-replicas mode
-  --network=<value>       Dogecoin network (mainnet, testnet, or regtest)
   --replicas=<value>      Dogecoin replica count for --all-replicas mode. Defaults to the StatefulSet replica count.
   --rpc-password=<value>  Dogecoin RPC password
   --rpc-port=<value>      Dogecoin RPC port for --all-replicas mode
@@ -1071,10 +1065,12 @@ Set up domain configurations for external services
 
 ```
 USAGE
-  $ scrollsdk setup domains [--json] [-N]
+  $ scrollsdk setup domains [--json] [-n mainnet|testnet|regtest] [-N]
 
 FLAGS
   -N, --non-interactive  Run without prompts, using config.toml values
+  -n, --network=<option> Dogecoin network to write to [dogecoin].network
+                         <options: mainnet|testnet|regtest>
       --json             Output in JSON format (stdout for data, stderr for logs)
 
 DESCRIPTION
@@ -1083,9 +1079,11 @@ DESCRIPTION
 EXAMPLES
   $ scrollsdk setup domains
 
+  $ scrollsdk setup domains --network testnet
+
   $ scrollsdk setup domains --non-interactive
 
-  $ scrollsdk setup domains --non-interactive --json
+  $ scrollsdk setup domains --non-interactive --json --network testnet
 ```
 
 _See code: [src/commands/setup/domains.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/domains.ts)_
@@ -1099,7 +1097,6 @@ USAGE
   $ scrollsdk setup dummy-signers [--aws-account-id <value>] [--aws-ecs-cluster <value>] [--aws-image-source
     dockerhub|ecr|ecr-sync] [--aws-image-uri <value>] [--aws-network-alias <value>] [-a] [--aws-region <value>] [-c <value>]
     [--from-spec <value>] [--generate-wif-keys] [--image-tag <value>] [--json] [-l] [-N]
-    [--wif-network regtest|testnet|mainnet]
 
 FLAGS
   -N, --non-interactive            Run without prompts. Uses config values or sensible defaults.
@@ -1120,9 +1117,6 @@ FLAGS
       --[no-]generate-wif-keys     Generate new WIF keys (non-interactive mode)
       --image-tag=<value>          Specify the Docker image tag to use
       --json                       Output in JSON format (stdout for data, stderr for logs)
-      --wif-network=<option>       [default: regtest] Network for WIF generation: regtest, testnet, or mainnet
-                                   <options: regtest|testnet|mainnet>
-
 DESCRIPTION
   Set up a dummy TEE signer (local Docker or AWS with KMS)
 
@@ -1255,7 +1249,8 @@ FLAGS
   -n, --namespace=<value>               Kubernetes namespace
       --config-path=<value>             [default: ./config.toml] Path to config.toml file containing cluster
                                         configuration
-      --doge-config=<value>             Path to Dogecoin config file to determine network type
+      --doge-config=<value>             Path to Dogecoin config file; network is read from config.toml
+                                        [dogecoin].network
       --values-dir=<value>              [default: ./values] Directory containing Helm values files (must include
                                         genesis.yaml)
 

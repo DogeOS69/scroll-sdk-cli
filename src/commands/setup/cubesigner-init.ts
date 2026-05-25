@@ -11,7 +11,7 @@ import { promisify } from 'node:util'
 import type { CubesignerRole, DogeConfig } from '../../types/doge-config.js'
 
 import { SETUP_DEFAULTS_TEMPLATE, getSetupDefaultsPath } from '../../config/constants.js'
-import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import { dogeConfigToToml, loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 const execAsync = promisify(exec)
 
@@ -414,7 +414,7 @@ export default class SetupCubesignerSetup extends Command {
             }
 
             // Write to file
-            fs.writeFileSync(this.dogeConfigFile, toml.stringify(this.dogeConfig as any))
+            fs.writeFileSync(this.dogeConfigFile, dogeConfigToToml(this.dogeConfig))
             this.jsonCtx.info(`Successfully saved ${cubesignerRoles.length} roles to ${this.dogeConfigFile}`)
 
             // Update setup_defaults.toml with attestation public keys

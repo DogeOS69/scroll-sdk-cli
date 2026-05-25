@@ -531,6 +531,8 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('ws://l1-devnet:8546');
       expect(output).to.include('http://l2-rpc:8545');
       expect(output).not.to.include('BEACON_RPC_ENDPOINT');
+      expect(output).to.include('[dogecoin]');
+      expect(output).to.include('network = "testnet"');
       expect(output).to.include('[ethereumDa]');
       expect(output).to.include('chain = "sepolia"');
       expect(output).to.include('submitterRpcUrl = "https://sepolia.drpc.org"');
@@ -686,11 +688,12 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateDogeConfigToml', () => {
-    it('includes dogecoin network and RPC config', () => {
+    it('includes RPC config without duplicating the Dogecoin network source', () => {
       const spec = createMinimalSpec();
       const output = generateDogeConfigToml(spec);
 
-      expect(output).to.include('testnet');
+      const parsed = toml.parse(output) as any;
+      expect(parsed).not.to.have.property('network');
       expect(output).to.include('https://dogecoin-external.example.com');
       expect(output).to.include('external-rpc-user');
       expect(output).to.include('dogecoinClusterRpc');
@@ -785,6 +788,7 @@ describe('deployment-spec-generator', () => {
       const output = generateDogeConfigToml(spec);
 
       expect(output).to.include('localSigners');
+      expect(output).not.to.include('network =');
       expect(output).to.include('dummySigner');
       expect(output).to.include('provider = "local"');
     });
@@ -806,7 +810,6 @@ describe('deployment-spec-generator', () => {
       };
       const awsOutput = toml.parse(generateDogeConfigToml(awsSpec)) as any;
       expect(awsOutput.dummySigner.provider).to.equal('aws');
-      expect(awsOutput.deploymentType).to.equal(undefined);
 
       const localSpec = createMinimalSpec();
       localSpec.infrastructure.provider = 'aws';
@@ -817,7 +820,6 @@ describe('deployment-spec-generator', () => {
       };
       const localOutput = toml.parse(generateDogeConfigToml(localSpec)) as any;
       expect(localOutput.dummySigner.provider).to.equal('local');
-      expect(localOutput.deploymentType).to.equal(undefined);
     });
 
     it('includes test config when present', () => {
@@ -943,16 +945,18 @@ describe('deployment-spec-generator', () => {
       expect(configs['protocol_seed.toml']).to.be.a('string').and.not.be.empty;
     });
 
-    it('keeps Dogecoin network values consistent across generated .data files', () => {
+    it('uses config.toml as the Dogecoin network source for generated files', () => {
       const spec = createMinimalSpec();
       spec.dogecoin.network = 'testnet';
 
       const configs = generateAllConfigs(spec);
+      const configToml = toml.parse(configs['config.toml']) as any;
       const dogeConfig = toml.parse(configs['doge-config.toml']) as any;
       const setupDefaults = toml.parse(configs['setup_defaults.toml']) as any;
       const protocolSeed = toml.parse(configs['protocol_seed.toml']) as any;
 
-      expect(dogeConfig.network).to.equal('testnet');
+      expect(configToml.dogecoin.network).to.equal('testnet');
+      expect(dogeConfig).not.to.have.property('network');
       expect(setupDefaults.network).to.equal('testnet');
       expect(protocolSeed.protocol.dogecoin_chain_id).to.equal(111_111);
     });
@@ -1102,7 +1106,7 @@ metadata:
     it('writes all config files to output directory', () => {
       const configs = {
         'config.toml': '[general]\nkey = "value"\n',
-        'doge-config.toml': 'network = "testnet"\n',
+        'doge-config.toml': '[wallet]\npath = ".data/doge-wallet-testnet.json"\n',
         'protocol_seed.toml': '[protocol]\nprotocol_version = 2\n',
         'setup_defaults.toml': 'seed_string = "test"\n',
       };

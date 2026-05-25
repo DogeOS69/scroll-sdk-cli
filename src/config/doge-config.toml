@@ -1,6 +1,3 @@
-# Dogecoin Network Configuration
-network = "testnet" # Options: "mainnet", "testnet", "regtest"
-
 # RPC Configuration
 [rpc]
 url = "http://localhost:1337/bitcoin-rpc/?network=doge"

@@ -39,7 +39,11 @@ export interface BlockbookKubernetesEndpoints {
 }
 
 export function resolveDogecoinKubernetesEndpoints(config: DogecoinEndpointConfig): DogecoinKubernetesEndpoints {
-  const network = config.network || 'testnet'
+  if (!config.network) {
+    throw new Error('Dogecoin network is required. Read it from config.toml [dogecoin].network before resolving endpoints.')
+  }
+
+  const { network } = config
   const kubernetes = config.kubernetes || {}
   const serviceName = kubernetes.serviceName || 'dogecoin'
   const defaultRpcPort = network === 'mainnet' ? 22_555 : network === 'regtest' ? 18_332 : 44_555

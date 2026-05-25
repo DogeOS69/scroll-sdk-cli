@@ -6,8 +6,11 @@ import chalk from 'chalk'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import type { Network } from '../../types/doge-config.js'
+
 import { L1_INTERFACE_RPC_ENDPOINT } from '../../config/constants.js'
 import { writeConfigs } from '../../utils/config-writer.js'
+import { getOptionalDogeNetworkFromConfig, normalizeDogeNetwork, setDogeNetworkInConfig } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {
   type NonInteractiveContext,
@@ -51,14 +54,20 @@ export default class SetupDomains extends Command {
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
+    '<%= config.bin %> <%= command.id %> --network testnet',
     '<%= config.bin %> <%= command.id %> --non-interactive',
-    '<%= config.bin %> <%= command.id %> --non-interactive --json',
+    '<%= config.bin %> <%= command.id %> --non-interactive --json --network testnet',
   ]
 
   static override flags = {
     json: Flags.boolean({
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)',
+    }),
+    network: Flags.string({
+      char: 'n',
+      description: 'Dogecoin network to write to [dogecoin].network',
+      options: ['mainnet', 'testnet', 'regtest'],
     }),
     'non-interactive': Flags.boolean({
       char: 'N',
@@ -96,55 +105,62 @@ export default class SetupDomains extends Command {
       logKeyValue(key, value as string)
     }
 
-    type L1Network = 'dogecoin-mainnet' | 'dogecoin-regtest' | 'dogecoin-testnet'
-    const validL1Networks: L1Network[] = ['dogecoin-testnet', 'dogecoin-mainnet', 'dogecoin-regtest']
-
-    // Infer L1 network from existing config for non-interactive mode
-    const inferL1Network = (config: any): L1Network | undefined => {
-      const chainName = config.general?.CHAIN_NAME_L1?.toLowerCase()
-      const chainId = String(config.general?.CHAIN_ID_L1 || '')
-      if (chainName?.includes('regtest') || chainId === '5555555') return 'dogecoin-regtest'
-      if (chainName?.includes('mainnet') || chainId === '1') return 'dogecoin-mainnet'
-      if (chainName?.includes('doge') || chainId === '111111') return 'dogecoin-testnet'
-      return undefined
+    let configuredDogeNetwork: Network | undefined
+    try {
+      configuredDogeNetwork = getOptionalDogeNetworkFromConfig(existingConfig, 'config.toml')
+    } catch (error) {
+      this.error(error instanceof Error ? error.message : String(error))
     }
 
-    const l1Network = await resolveOrSelect<L1Network>(
-      niCtx,
-      () => select({
-        choices: [
-          { name: 'Dogecoin Testnet', value: 'dogecoin-testnet' },
-          { name: 'Dogecoin Mainnet', value: 'dogecoin-mainnet' },
-          { name: 'Dogecoin Regtest', value: 'dogecoin-regtest' },
-        ],
-        default: inferL1Network(existingConfig) || 'dogecoin-testnet',
-        message: 'Select the L1 network:',
-      }) as Promise<L1Network>,
-      inferL1Network(existingConfig),
-      validL1Networks,
-      {
-        configPath: '[general].CHAIN_NAME_L1',
-        description: 'L1 network type (inferred from CHAIN_NAME_L1)',
-        field: 'L1 Network',
-      }
-    ) as L1Network
-
-    const l1ChainNames: Record<L1Network, string> = {
-      'dogecoin-mainnet': 'Dogecoin Mainnet',
-      'dogecoin-regtest': 'Dogecoin Regtest',
-      'dogecoin-testnet': 'Dogecoin Testnet',
+    const flagNetwork = flags.network ? normalizeDogeNetwork(flags.network) : undefined
+    if (flags.network && !flagNetwork) {
+      this.error(`Invalid --network value: ${flags.network}. Must be 'mainnet', 'testnet', or 'regtest'.`)
     }
 
-    const l1ChainIds: Record<L1Network, string> = {
-      'dogecoin-mainnet': '1',
-      'dogecoin-regtest': '5555555',
-      'dogecoin-testnet': '111111',
+    let dogeNetwork = flagNetwork
+
+    if (!dogeNetwork) {
+      dogeNetwork = niCtx.enabled
+        ? configuredDogeNetwork
+        : await select({
+          choices: [
+            { name: 'Dogecoin Testnet', value: 'testnet' },
+            { name: 'Dogecoin Mainnet', value: 'mainnet' },
+            { name: 'Dogecoin Regtest', value: 'regtest' },
+          ],
+          default: configuredDogeNetwork || 'testnet',
+          message: 'Select the Dogecoin network:',
+        }) as Network
     }
 
-    const defaultEthereumDaChains: Record<L1Network, EthereumDaChain> = {
-      'dogecoin-mainnet': 'mainnet',
-      'dogecoin-regtest': 'devnet',
-      'dogecoin-testnet': 'sepolia',
+    if (!dogeNetwork && niCtx.enabled) {
+      niCtx.missingFields.push({
+        configPath: '[dogecoin].network',
+        description: 'Dogecoin network (mainnet, testnet, or regtest) must be set in config.toml or provided with --network',
+        field: 'network',
+      })
+      validateAndExit(niCtx)
+      return
+    }
+
+    const selectedDogeNetwork = dogeNetwork as Network
+
+    const l1ChainNames: Record<Network, string> = {
+      mainnet: 'Dogecoin Mainnet',
+      regtest: 'Dogecoin Regtest',
+      testnet: 'Dogecoin Testnet',
+    }
+
+    const l1ChainIds: Record<Network, string> = {
+      mainnet: '1',
+      regtest: '5555555',
+      testnet: '111111',
+    }
+
+    const defaultEthereumDaChains: Record<Network, EthereumDaChain> = {
+      mainnet: 'mainnet',
+      regtest: 'devnet',
+      testnet: 'sepolia',
     }
 
     const generalConfig: Record<string, string> = {}
@@ -153,22 +169,22 @@ export default class SetupDomains extends Command {
 
     const usesAnvil = false
     const usesDogeos = true
-    generalConfig.CHAIN_ID_L1 = l1ChainIds[l1Network]
+    generalConfig.CHAIN_ID_L1 = l1ChainIds[selectedDogeNetwork]
 
     const chainNameL1 = await resolveOrPrompt(
       niCtx,
       () => input({
-        default: existingConfig.general?.CHAIN_NAME_L1 || l1ChainNames[l1Network],
+        default: existingConfig.general?.CHAIN_NAME_L1 || l1ChainNames[selectedDogeNetwork],
         message: 'Enter the L1 Chain Name:',
       }),
-      existingConfig.general?.CHAIN_NAME_L1 || l1ChainNames[l1Network],
+      existingConfig.general?.CHAIN_NAME_L1 || l1ChainNames[selectedDogeNetwork],
       {
         configPath: '[general].CHAIN_NAME_L1',
         description: 'L1 chain name (e.g., "Dogecoin Testnet")',
         field: 'CHAIN_NAME_L1',
       }
     )
-    generalConfig.CHAIN_NAME_L1 = chainNameL1 || l1ChainNames[l1Network]
+    generalConfig.CHAIN_NAME_L1 = chainNameL1 || l1ChainNames[selectedDogeNetwork]
 
     const chainNameL2 = await resolveOrPrompt(
       niCtx,
@@ -284,7 +300,7 @@ export default class SetupDomains extends Command {
     )
     frontendConfig.CONNECT_WALLET_PROJECT_ID = walletProjectId || "14efbaafcf5232a47d93a68229b71028"
 
-    const defaultDogeExternalUrl = l1Network === 'dogecoin-mainnet' ? 'https://sochain.com/DOGE' : 'https://sochain.com/DOGETEST'
+    const defaultDogeExternalUrl = selectedDogeNetwork === 'mainnet' ? 'https://sochain.com/DOGE' : 'https://sochain.com/DOGETEST'
 
     const dogeRpcL1 = await resolveOrPrompt(
       niCtx,
@@ -320,8 +336,8 @@ export default class SetupDomains extends Command {
 
     const existingEthereumDa = existingConfig.ethereumDa as Record<string, string> | undefined
     const existingEthereumDaChain = existingEthereumDa?.chain as EthereumDaChain | undefined
-    const defaultEthereumDaChain = existingEthereumDaChain || defaultEthereumDaChains[l1Network]
-    const ethereumDaChain = await resolveOrSelect(
+    const defaultEthereumDaChain = existingEthereumDaChain || defaultEthereumDaChains[selectedDogeNetwork]
+    const ethereumDaChain = await resolveOrSelect<EthereumDaChain>(
       niCtx,
       () => select({
         choices: [
@@ -415,11 +431,13 @@ export default class SetupDomains extends Command {
     )
 
     if (confirmUpdate) {
-      await this.updateConfigFile(domainConfig, ingressConfig, generalConfig, frontendConfig, ethereumDaConfig, flags.json)
+      const dogecoinConfig = { network: selectedDogeNetwork }
+      await this.updateConfigFile(domainConfig, ingressConfig, generalConfig, frontendConfig, ethereumDaConfig, dogecoinConfig, flags.json)
 
       // Output JSON response on success
       if (flags.json) {
         jsonCtx.success({
+          dogecoin: dogecoinConfig,
           domain: domainConfig,
           ethereumDa: ethereumDaConfig,
           frontend: frontendConfig,
@@ -782,6 +800,7 @@ export default class SetupDomains extends Command {
     generalConfig: Record<string, string>,
     frontendConfig: Record<string, string>,
     ethereumDaConfig: Record<string, string>,
+    dogecoinConfig: { network: Network },
     jsonMode: boolean = false,
   ): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
@@ -792,6 +811,7 @@ export default class SetupDomains extends Command {
     if (!existingConfig.ingress) existingConfig.ingress = {}
     if (!existingConfig.general) existingConfig.general = {}
     if (!existingConfig.ethereumDa) existingConfig.ethereumDa = {}
+    if (!existingConfig.dogecoin) existingConfig.dogecoin = {}
     if (!existingConfig.contracts) existingConfig.contracts = {}
     if (!existingConfig.contracts.verification) existingConfig.contracts.verification = {}
 
@@ -815,6 +835,8 @@ export default class SetupDomains extends Command {
     for (const [key, value] of Object.entries(ethereumDaConfig)) {
       existingConfig.ethereumDa[key] = value
     }
+
+    setDogeNetworkInConfig(existingConfig, dogecoinConfig.network)
 
     // Remove L1_DEVNET_HOST from ingress if not using Anvil
     // if (generalConfig.CHAIN_NAME_L1 !== 'Anvil L1' && existingConfig.ingress.L1_DEVNET_HOST) {
@@ -846,6 +868,7 @@ export default class SetupDomains extends Command {
         ...(domainConfig.EXTERNAL_RPC_URI_L1 ? { RPC_URI_L1: domainConfig.EXTERNAL_RPC_URI_L1 } : {}),
         RPC_URI_L2: domainConfig.EXTERNAL_RPC_URI_L2,
       },
+      dogecoin: dogecoinConfig,
       ethereumDa: ethereumDaConfig,
       frontend: {
         ...domainConfig,

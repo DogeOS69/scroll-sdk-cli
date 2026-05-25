@@ -1,7 +1,7 @@
 import type { JsonMap } from '@iarna/toml'
 
 import * as toml from '@iarna/toml'
-import { confirm, input, select } from '@inquirer/prompts'
+import { confirm, input } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import crypto from 'node:crypto'
@@ -13,7 +13,11 @@ import type { DogeConfig } from '../../types/doge-config.js'
 import { SETUP_DEFAULTS_TEMPLATE, getSetupDefaultsPath } from '../../config/constants.js'
 import { Network } from '../../types/doge-config.js'
 import { writeConfigs } from '../../utils/config-writer.js'
-import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import {
+  dogeConfigToToml,
+  loadDogeConfigWithSelection,
+  loadDogeNetworkFromMainConfig,
+} from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { resolveBlockbookKubernetesEndpoints } from '../../utils/kubernetes-endpoints.js'
 import {
@@ -30,9 +34,8 @@ export class DogeConfigCommand extends Command {
   static examples = [
     '$ scrollsdk setup doge-config',
     '$ scrollsdk setup doge-config --config .data/doge-config.toml',
-    '$ scrollsdk setup doge-config --non-interactive --network testnet',
-    '$ scrollsdk setup doge-config --non-interactive --network regtest',
-    '$ scrollsdk setup doge-config --non-interactive --json --network mainnet',
+    '$ scrollsdk setup doge-config --non-interactive',
+    '$ scrollsdk setup doge-config --non-interactive --json',
   ]
 
   static flags = {
@@ -43,11 +46,6 @@ export class DogeConfigCommand extends Command {
     json: Flags.boolean({
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)',
-    }),
-    network: Flags.string({
-      char: 'n',
-      description: 'Network to configure (mainnet, testnet, or regtest) - required for non-interactive mode with new config',
-      options: ['mainnet', 'testnet', 'regtest'],
     }),
     'non-interactive': Flags.boolean({
       char: 'N',
@@ -110,44 +108,22 @@ export class DogeConfigCommand extends Command {
       fs.mkdirSync('.data', { recursive: true })
     }
 
-    let resolvedPath = flags.config ? path.resolve(flags.config as string) : path.resolve('.data/doge-config.toml')
-    let network = flags.network || ""
+    const resolvedPath = flags.config ? path.resolve(flags.config as string) : path.resolve('.data/doge-config.toml')
+    const mainConfigPath = path.join(process.cwd(), 'config.toml')
+    let network: Network
+    try {
+      network = loadDogeNetworkFromMainConfig(mainConfigPath)
+    } catch (error) {
+      this.error(error instanceof Error ? error.message : String(error))
+    }
 
     const configExists = fs.existsSync(resolvedPath)
     let existingConfig: DogeConfig = {} as DogeConfig;
 
     if (configExists) {
-      ({ config: existingConfig, configPath: resolvedPath } = await loadDogeConfigWithSelection(resolvedPath));
-      if (flags.network && existingConfig.network !== flags.network) {
-        this.error(
-          `Existing config at ${resolvedPath} is for ${existingConfig.network}, but --network ${flags.network} was provided. ` +
-          'Use the existing network, remove the config, or pass --config to a different file.'
-        )
-      }
-
+      const result = await loadDogeConfigWithSelection(resolvedPath)
+      existingConfig = result.config
       network = existingConfig.network
-    }
-
-    if (!configExists && !network) {
-      if (niCtx.enabled) {
-        niCtx.missingFields.push({
-          configPath: '--network flag',
-          description: 'Network (mainnet, testnet, or regtest) must be specified in non-interactive mode when creating new config',
-          field: 'network',
-        })
-        validateAndExit(niCtx)
-        return
-      }
-
-      network = await select({
-        choices: [
-          { name: 'mainnet', value: 'mainnet' },
-          { name: 'testnet', value: 'testnet' },
-          { name: 'regtest', value: 'regtest' }
-        ],
-        default: 'testnet',
-        message: 'select network:'
-      });
     }
 
     const defaultConfig: DogeConfig = {
@@ -195,8 +171,7 @@ export class DogeConfigCommand extends Command {
       log('Creating a new default Dogecoin configuration file...')
 
       existingConfig = defaultConfig;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      fs.writeFileSync(resolvedPath, toml.stringify(existingConfig as any))
+      fs.writeFileSync(resolvedPath, dogeConfigToToml(existingConfig))
 
       log(
         `Created new default ${network} config file at ${resolvedPath}. You can further customize it with 'scrollsdk setup doge-config'.`,
@@ -382,27 +357,17 @@ export class DogeConfigCommand extends Command {
     newConfig.defaults!.dogecoinIndexerStartHeight = existingConfig.defaults?.dogecoinIndexerStartHeight || String(dogecoinCurrentHeight)
     log(chalk.blue(`Dogecoin Indexer Start Height: ${newConfig.defaults!.dogecoinIndexerStartHeight}`))
 
-    const configPath = path.join(process.cwd(), 'config.toml')
-    let config: JsonMap | undefined
-    if (fs.existsSync(configPath)) {
-      const configContent = fs.readFileSync(configPath, 'utf8')
-      config = toml.parse(configContent)
-    }
-
     // Validate any missing required fields before proceeding
     validateAndExit(niCtx)
 
-    if (config) {
-      if (!config.general) config.general = {}
-      const generalConfig = config.general as JsonMap
-      generalConfig.L1_CONTRACT_DEPLOYMENT_BLOCK = newConfig.defaults!.dogecoinIndexerStartHeight
-      if (writeConfigs(config)) {
-        log(
-          chalk.green(`L1_CONTRACT_DEPLOYMENT_BLOCK updated in config.toml`),
-        )
-      }
-    } else {
-      log(chalk.yellow('config.toml not found. Skipping L1_CONTRACT_DEPLOYMENT_BLOCK update.'))
+    const mainConfig = toml.parse(fs.readFileSync(mainConfigPath, 'utf8')) as JsonMap
+    if (!mainConfig.general) mainConfig.general = {}
+    const generalConfig = mainConfig.general as JsonMap
+    generalConfig.L1_CONTRACT_DEPLOYMENT_BLOCK = newConfig.defaults!.dogecoinIndexerStartHeight
+    if (writeConfigs(mainConfig, undefined, undefined, flags.json)) {
+      log(
+        chalk.green(`L1_CONTRACT_DEPLOYMENT_BLOCK updated in config.toml`),
+      )
     }
 
     const configDir = path.dirname(resolvedPath)
@@ -410,8 +375,7 @@ export class DogeConfigCommand extends Command {
       fs.mkdirSync(configDir, { recursive: true })
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    fs.writeFileSync(resolvedPath, toml.stringify(newConfig as any))
+    fs.writeFileSync(resolvedPath, dogeConfigToToml(newConfig))
 
     log(chalk.green(`\nConfiguration for ${newConfig.network} network saved to ${resolvedPath}`))
     log(chalk.blue('\nConfiguration Summary:'))

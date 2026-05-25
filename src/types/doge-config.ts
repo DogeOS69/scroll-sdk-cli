@@ -39,8 +39,6 @@ export interface DogeConfig {
   defaults?: {
     dogecoinIndexerStartHeight?: string
   }
-  /** @deprecated Use dummySigner.provider. This field described dummy-signer runtime, not deployment infrastructure. */
-  deploymentType?: 'aws' | 'local'
   dogecoinClusterRpc?: {
     password?: string // for dogecoin that deploy on cluster
     username?: string // for dogecoin that deploy on cluster
@@ -67,7 +65,6 @@ export interface DogeConfig {
     zmqRawTxPort?: number
   }
   localSigners?: {
-    network?: string
     signers?: Array<{
       index: number
       port: number
