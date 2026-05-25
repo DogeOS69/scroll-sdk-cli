@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import type { DogeConfig } from '../../types/doge-config.js'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
-import { getAwsSignerConfigFromSpec, loadDeploymentSpec } from '../../utils/deployment-spec-generator.js'
+import { getAwsSignerConfigFromSpec, getDummySignerProviderFromSpec, loadDeploymentSpec } from '../../utils/deployment-spec-generator.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { resolveEnvValue } from '../../utils/non-interactive.js'
@@ -23,6 +23,19 @@ const awsImageSources = ['dockerhub', 'ecr', 'ecr-sync'] as const
 const TEE_SIGNER_SUFFIX = '00'
 
 type AwsImageSource = typeof awsImageSources[number]
+type DummySignerProvider = 'aws' | 'local'
+
+function getConfiguredDummySignerProvider(config: DogeConfig): DummySignerProvider | undefined {
+  return config.dummySigner?.provider || config.deploymentType
+}
+
+function setConfiguredDummySignerProvider(config: DogeConfig, provider: DummySignerProvider): void {
+  config.dummySigner = {
+    ...config.dummySigner,
+    provider,
+  }
+  delete config.deploymentType
+}
 
 export interface NonInteractiveOptions {
   awsAccountId?: string
@@ -84,13 +97,13 @@ export class DummySignersManager {
   async setupDummySigners(availableTags: string[]): Promise<void> {
     this.log(chalk.blue('\nSetting up Dummy Signers...'))
 
-    let deploymentType: string
+    let dummySignerProvider: DummySignerProvider
+    const configuredProvider = getConfiguredDummySignerProvider(this.dogeConfig)
     if (this.nonInteractive) {
-      // In non-interactive mode, use existing deploymentType from config or default to 'local'
-      deploymentType = this.dogeConfig.deploymentType || 'local'
-      this.log(chalk.blue(`Non-interactive mode: Using deployment type '${deploymentType}'`))
+      dummySignerProvider = configuredProvider || 'local'
+      this.log(chalk.blue(`Non-interactive mode: Using dummy signer provider '${dummySignerProvider}'`))
     } else {
-      deploymentType = await select({
+      dummySignerProvider = await select({
         choices: [
           {
             description: 'Run signers locally using Docker with WIF keys',
@@ -103,14 +116,14 @@ export class DummySignersManager {
             value: 'aws'
           }
         ],
-        default: this.dogeConfig.deploymentType || 'local',
+        default: configuredProvider || 'local',
         message: 'How would you like to run the dummy signers?'
       })
     }
 
-    this.dogeConfig.deploymentType = deploymentType as 'aws' | 'local'
+    setConfiguredDummySignerProvider(this.dogeConfig, dummySignerProvider)
 
-    await (deploymentType === 'local' ? this.setupLocalSigners(availableTags) : this.setupAwsSigners(availableTags));
+    await (dummySignerProvider === 'local' ? this.setupLocalSigners(availableTags) : this.setupAwsSigners(availableTags));
   }
 
   private buildDockerArgs(index: number, config: any, network: string, tsoUrl: string, imageName: string): string[] {
@@ -901,20 +914,19 @@ export class DummySignersManager {
 
       this.log(chalk.blue(`Non-interactive mode: AWS_REGION=${AWS_REGION}, NETWORK_ALIAS=${NETWORK_ALIAS}, AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}, ECS_CLUSTER=${ECS_CLUSTER}`))
     } else {
-      AWS_REGION = await input({
-        default: this.dogeConfig.awsSigner?.region || 'us-east-1',
+      AWS_REGION = this.nonInteractiveOptions.awsRegion || this.dogeConfig.awsSigner?.region || await input({
+        default: 'us-east-1',
         message: 'AWS_REGION',
         required: true,
       })
 
-      NETWORK_ALIAS = await input({
-        default: this.dogeConfig.awsSigner?.networkAlias || 'devnet',
+      NETWORK_ALIAS = this.nonInteractiveOptions.awsNetworkAlias || this.dogeConfig.awsSigner?.networkAlias || await input({
+        default: 'devnet',
         message: 'NETWORK_ALIAS',
         required: true,
       })
 
-      AWS_ACCOUNT_ID = await input({
-        default: this.dogeConfig.awsSigner?.accountId || '',
+      AWS_ACCOUNT_ID = this.nonInteractiveOptions.awsAccountId || this.dogeConfig.awsSigner?.accountId || await input({
         message: 'AWS_ACCOUNT_ID',
         required: true,
       })
@@ -1238,7 +1250,6 @@ export class DummySignersCommand extends Command {
     '$ scrollsdk setup dummy-signers --config .data/doge-config.toml',
     '$ scrollsdk setup dummy-signers --local-only',
     '$ scrollsdk setup dummy-signers --aws-only',
-    '$ scrollsdk setup dummy-signers --from-spec deployment-spec.yaml --aws-only --non-interactive',
     '$ scrollsdk setup dummy-signers --image-tag newda',
     '$ scrollsdk setup dummy-signers --aws-only --aws-image-source ecr-sync',
     '$ scrollsdk setup dummy-signers --aws-only --aws-image-uri dogeos69/dummy-signer:newda',
@@ -1275,7 +1286,7 @@ export class DummySignersCommand extends Command {
       description: 'Path to Dogecoin config file',
     }),
     'from-spec': Flags.string({
-      description: 'Path to DeploymentSpec YAML. Uses AWS signer defaults from signing.awsKms or infrastructure.aws.',
+      description: 'Path to DeploymentSpec YAML. Uses dummy-signer defaults from signing.awsKms or signing.local.',
     }),
     'generate-wif-keys': Flags.boolean({
       allowNo: true,
@@ -1322,12 +1333,14 @@ export class DummySignersCommand extends Command {
     this.jsonCtx = new JsonOutputContext('setup dummy-signers', this.jsonMode)
 
     let specAwsSignerConfig: DogeConfig['awsSigner'] | undefined
-    if (flags['from-spec']) {
-      const specPath = path.resolve(flags['from-spec'])
+    let specDummySignerProvider: DummySignerProvider | undefined
+    const specPath = flags['from-spec'] ? path.resolve(flags['from-spec']) : undefined
+    if (specPath) {
       try {
         const spec = loadDeploymentSpec(specPath)
         specAwsSignerConfig = getAwsSignerConfigFromSpec(spec)
-        this.jsonCtx.info(`Loaded DeploymentSpec from ${specPath}`)
+        specDummySignerProvider = getDummySignerProviderFromSpec(spec)
+        this.jsonCtx.info(`Loaded DeploymentSpec defaults from ${specPath}`)
       } catch (error) {
         this.jsonCtx.error(
           'E602_INVALID_CONFIG_FORMAT',
@@ -1356,6 +1369,10 @@ export class DummySignersCommand extends Command {
         }
       }
 
+      if (specDummySignerProvider) {
+        setConfiguredDummySignerProvider(this.dogeConfig, specDummySignerProvider)
+      }
+
       this.jsonCtx.info(`Loaded configuration for ${this.dogeConfig.network} network from ${configPath}`)
     } catch (error) {
       this.jsonCtx.error(
@@ -1378,11 +1395,11 @@ export class DummySignersCommand extends Command {
       // jsonCtx.error throws, so this is unreachable
     }
 
-    // Override deployment type if flags are specified
+    // Override dummy signer provider if flags are specified
     if (flags['local-only']) {
-      this.dogeConfig.deploymentType = 'local'
+      setConfiguredDummySignerProvider(this.dogeConfig, 'local')
     } else if (flags['aws-only']) {
-      this.dogeConfig.deploymentType = 'aws'
+      setConfiguredDummySignerProvider(this.dogeConfig, 'aws')
     }
 
     // Get image tag
@@ -1418,14 +1435,15 @@ export class DummySignersCommand extends Command {
     )
 
     try {
-      const shouldFetchDockerTags = this.dogeConfig.deploymentType === 'local'
+      const dummySignerProvider = getConfiguredDummySignerProvider(this.dogeConfig)
+      const shouldFetchDockerTags = dummySignerProvider === 'local'
       const availableTags = shouldFetchDockerTags ? await this.fetchDockerTags() : []
       await dummySignersManager.setupDummySigners(availableTags)
 
       // JSON output
       if (this.jsonMode) {
         this.jsonCtx.success({
-          deploymentType: this.dogeConfig.deploymentType,
+          dummySignerProvider: getConfiguredDummySignerProvider(this.dogeConfig),
           imageTag,
           network: this.dogeConfig.network,
           signerUrls: this.dogeConfig.signerUrls,

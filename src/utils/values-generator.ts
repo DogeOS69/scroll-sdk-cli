@@ -19,6 +19,7 @@ import type { DeploymentSpec, ImagesConfig } from '../types/deployment-spec.js'
 import {
   L1_INTERFACE_BEACON_API_ENDPOINT,
   L1_INTERFACE_RPC_ENDPOINT,
+  L2_RPC_ENDPOINT,
 } from '../config/constants.js'
 import {
   getBridgeFeeRateSatsPerKvb,
@@ -156,6 +157,7 @@ function buildPeerList(spec: DeploymentSpec): string[] {
 type ServiceImageKey = keyof NonNullable<ImagesConfig['services']>
 
 const ZERO_HASH = '0x0000000000000000000000000000000000000000000000000000000000000000'
+const DEFAULT_L1_FEE_VAULT_ADDR = '0x1111111111111111111111111111111111111111'
 
 const ETHEREUM_DA_DEFAULTS = {
   devnet: {
@@ -190,6 +192,13 @@ function getEthereumDaChainId(spec: DeploymentSpec): number {
 function getEthereumDaSubmitterRpcUrl(spec: DeploymentSpec): string {
   const ethereumDa = getEthereumDaConfig(spec)
   return ethereumDa.l1RpcUrl || ETHEREUM_DA_DEFAULTS[getEthereumDaChain(spec)].submitterRpcUrl
+}
+
+function getDogecoinClusterRpc(spec: DeploymentSpec): NonNullable<DeploymentSpec['dogecoin']['clusterRpc']> {
+  return spec.dogecoin.clusterRpc ?? {
+    password: spec.dogecoin.rpc?.password ?? '',
+    username: spec.dogecoin.rpc?.username ?? '',
+  }
 }
 
 function getEthereumDaMinFinality(spec: DeploymentSpec): string {
@@ -698,7 +707,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
           DOGEOS_ETH_DA_SUBMITTER_L2__CONFIRMATIONS: String(ethereumDa.l2Confirmations ?? 0),
           DOGEOS_ETH_DA_SUBMITTER_L2__FETCH_LIMIT: String(ethereumDa.fetchLimit ?? 128),
-          DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: ethereumDa.l2RpcUrl || spec.network.l2RpcEndpoint,
+          DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: ethereumDa.l2RpcUrl || L2_RPC_ENDPOINT,
           DOGEOS_ETH_DA_SUBMITTER_S3__ENABLED: 'false',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__CYCLE_INTERVAL_MS: '1000',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__LISTEN_ADDRESS: '0.0.0.0',
@@ -756,6 +765,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
 function generateDogecoinValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
   const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
+  const clusterRpc = getDogecoinClusterRpc(spec)
   const isRegtest = spec.dogecoin.network === 'regtest'
   const isTestnet = spec.dogecoin.network === 'testnet'
 
@@ -764,7 +774,7 @@ function generateDogecoinValues(spec: DeploymentSpec): string {
       disablewallet: 0,
       regtest: isRegtest ? 1 : 0,
       rpcallowip: ['0.0.0.0/0'],
-      rpcuser: spec.dogecoin.rpc.username,
+      rpcuser: clusterRpc.username,
       rpcworkqueue: 128,
       server: 1,
       testnet: isTestnet ? 1 : 0,
@@ -786,7 +796,7 @@ function generateDogecoinValues(spec: DeploymentSpec): string {
     },
     rpcPassword: {
       secretKey: 'password',
-      value: spec.dogecoin.rpc.password
+      value: clusterRpc.password
     },
     service: {
       port: dogecoinEndpoints.p2pPort,
@@ -897,7 +907,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__CONFIRMATIONS', value: String(spec.bridge.confirmationsRequired) },
       { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__POLL_INTERVAL_MS', value: '60000' },
       // DogeOS Indexer
-      { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL', value: spec.network.l2RpcEndpoint },
+      { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL', value: L2_RPC_ENDPOINT },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__START_BLOCK', value: '0' },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__CONFIRMATIONS', value: '12' },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__POLL_INTERVAL_MS', value: '60000' },
@@ -1115,8 +1125,8 @@ function generateGasOracleValues(spec: DeploymentSpec): string {
       env: {
         data: {
           SCROLL_GAS_ORACLE_BLOB_SCALAR: String(spec.contracts.gasOracle.blobScalar),
-          SCROLL_GAS_ORACLE_L1_RPC_URL: spec.network.l1RpcEndpoint,
-          SCROLL_GAS_ORACLE_L2_RPC_URL: spec.network.l2RpcEndpoint,
+          SCROLL_GAS_ORACLE_L1_RPC_URL: L1_INTERFACE_RPC_ENDPOINT,
+          SCROLL_GAS_ORACLE_L2_RPC_URL: L2_RPC_ENDPOINT,
           SCROLL_GAS_ORACLE_SCALAR: String(spec.contracts.gasOracle.scalar)
         },
         enabled: true
@@ -1164,7 +1174,7 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
   const values = {
     env: [
       { name: 'FEE_ORACLE_PORT', value: '3000' },
-      { name: 'FEE_ORACLE_L2_RPC_URL', value: spec.network.l2RpcEndpoint },
+      { name: 'FEE_ORACLE_L2_RPC_URL', value: L2_RPC_ENDPOINT },
       { name: 'FEE_ORACLE_DOGE_RPC_URL', value: dogecoinEndpoints.rpcUrl },
       { name: 'FEE_ORACLE_UPDATE_INTERVAL_SECS', value: '60' }
     ],
@@ -1194,8 +1204,8 @@ function generateChainMonitorValues(spec: DeploymentSpec): string {
     configMaps: {
       env: {
         data: {
-          SCROLL_CHAIN_MONITOR_L1_RPC_URL: spec.network.l1RpcEndpoint,
-          SCROLL_CHAIN_MONITOR_L2_RPC_URL: spec.network.l2RpcEndpoint
+          SCROLL_CHAIN_MONITOR_L1_RPC_URL: L1_INTERFACE_RPC_ENDPOINT,
+          SCROLL_CHAIN_MONITOR_L2_RPC_URL: L2_RPC_ENDPOINT
         },
         enabled: true
       }
@@ -1328,7 +1338,7 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
           INDEXER_SCROLL_L1_ETH_GET_LOGS_RANGE_SIZE: 500,
           INDEXER_SCROLL_L1_MESSENGER_CONTRACT: '',
           INDEXER_SCROLL_L1_MESSENGER_START_BLOCK: String(spec.contracts.l1DeploymentBlock || 0),
-          INDEXER_SCROLL_L1_RPC: spec.network.l1RpcEndpoint,
+          INDEXER_SCROLL_L1_RPC: L1_INTERFACE_RPC_ENDPOINT,
           INDEXER_SCROLL_L2_ETH_GET_LOGS_RANGE_SIZE: 500,
           INDEXER_SCROLL_L2_GAS_ORACLE_CONTRACT: '',
           INDEXER_SCROLL_L2_MESSENGER_CONTRACT: '',
@@ -1518,9 +1528,9 @@ function generateBridgeHistoryFetcherValues(spec: DeploymentSpec): string {
     configMaps: {
       env: {
         data: {
-          SCROLL_BRIDGE_HISTORY_L1_RPC_URL: spec.network.l1RpcEndpoint,
+          SCROLL_BRIDGE_HISTORY_L1_RPC_URL: L1_INTERFACE_RPC_ENDPOINT,
           SCROLL_BRIDGE_HISTORY_L1_START_HEIGHT: String(spec.contracts.l1DeploymentBlock || 0),
-          SCROLL_BRIDGE_HISTORY_L2_RPC_URL: spec.network.l2RpcEndpoint
+          SCROLL_BRIDGE_HISTORY_L2_RPC_URL: L2_RPC_ENDPOINT
         },
         enabled: true
       }
@@ -1561,8 +1571,8 @@ function generateAdminSystemBackendValues(spec: DeploymentSpec): string {
     configMaps: {
       env: {
         data: {
-          SCROLL_ADMIN_L1_RPC_URL: spec.network.l1RpcEndpoint,
-          SCROLL_ADMIN_L2_RPC_URL: spec.network.l2RpcEndpoint
+          SCROLL_ADMIN_L1_RPC_URL: L1_INTERFACE_RPC_ENDPOINT,
+          SCROLL_ADMIN_L2_RPC_URL: L2_RPC_ENDPOINT
         },
         enabled: true
       }
@@ -1674,9 +1684,9 @@ function generateContractsValues(spec: DeploymentSpec): string {
           SCROLL_CHAIN_ID_L1: String(spec.network.l1ChainId),
           SCROLL_CHAIN_ID_L2: String(spec.network.l2ChainId),
           SCROLL_DEPLOYMENT_SALT: spec.contracts.deploymentSalt,
-          SCROLL_L1_FEE_VAULT_ADDR: spec.contracts.l1FeeVaultAddr,
-          SCROLL_L1_RPC: spec.network.l1RpcEndpoint,
-          SCROLL_L2_RPC: spec.network.l2RpcEndpoint,
+          SCROLL_L1_FEE_VAULT_ADDR: DEFAULT_L1_FEE_VAULT_ADDR,
+          SCROLL_L1_RPC: L1_INTERFACE_RPC_ENDPOINT,
+          SCROLL_L2_RPC: L2_RPC_ENDPOINT,
           SCROLL_OWNER_ADDR: spec.accounts.owner.address
         },
         enabled: true

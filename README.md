@@ -1096,9 +1096,10 @@ Set up a dummy TEE signer (local Docker or AWS with KMS)
 
 ```
 USAGE
-  $ scrollsdk setup dummy-signers [--aws-account-id <value>] [--aws-network-alias <value>] [-a] [--aws-region <value>]
-    [--aws-suffixes <value>] [-c <value>] [--generate-wif-keys] [--image-tag <value>] [--json] [-l] [-N]
-    [--wif-network regtest|testnet|mainnet] [--aws-image-source dockerhub|ecr|ecr-sync] [--aws-image-uri <value>]
+  $ scrollsdk setup dummy-signers [--aws-account-id <value>] [--aws-ecs-cluster <value>] [--aws-image-source
+    dockerhub|ecr|ecr-sync] [--aws-image-uri <value>] [--aws-network-alias <value>] [-a] [--aws-region <value>] [-c <value>]
+    [--from-spec <value>] [--generate-wif-keys] [--image-tag <value>] [--json] [-l] [-N]
+    [--wif-network regtest|testnet|mainnet]
 
 FLAGS
   -N, --non-interactive            Run without prompts. Uses config values or sensible defaults.
@@ -1106,13 +1107,16 @@ FLAGS
   -c, --config=<value>             Path to Dogecoin config file
   -l, --local-only                 Set up local Docker signers only
       --aws-account-id=<value>     AWS account ID
+      --aws-ecs-cluster=<value>    ECS cluster for AWS ECS Express dummy signer service. Defaults to awsSigner.ecsClusterName
+                                   or "default".
       --aws-image-source=<option>  AWS signer image source: dockerhub uses the public image directly, ecr requires an existing
                                    ECR image, ecr-sync syncs Docker Hub to ECR from this machine
                                    <options: dockerhub|ecr|ecr-sync>
       --aws-image-uri=<value>      Full container image URI for AWS signers. Overrides --aws-image-source.
       --aws-network-alias=<value>  Network alias for AWS resources
       --aws-region=<value>         AWS region for KMS signers
-      --aws-suffixes=<value>       Suffix for the AWS TEE signer (exactly one, e.g., "00")
+      --from-spec=<value>          Path to DeploymentSpec YAML. Uses dummy-signer defaults from signing.awsKms or
+                                   signing.local.
       --[no-]generate-wif-keys     Generate new WIF keys (non-interactive mode)
       --image-tag=<value>          Specify the Docker image tag to use
       --json                       Output in JSON format (stdout for data, stderr for logs)
@@ -1176,8 +1180,8 @@ FLAGS
       --regenerate-sequencers       Force regeneration of all sequencer keys (non-interactive mode)
       --sequencer-count=<value>     [default: 2] Number of sequencers (including primary). In non-interactive mode,
                                     generates if not enough exist.
-      --sequencer-password=<value>  Password for sequencer keystores (or use $ENV:VAR_NAME pattern in config). Required
-                                    for new sequencers in non-interactive mode.
+      --sequencer-password=<value>  Password for sequencer keystores (or use $ENV:VAR_NAME pattern). Defaults to a
+                                    generated random password for new sequencers in non-interactive mode.
 
 DESCRIPTION
   Generate keystore and account keys for L2 Geth
@@ -1308,23 +1312,28 @@ _See code: [src/commands/setup/gen-secrets.ts](https://github.com/dogeos69/scrol
 
 ## `scrollsdk setup generate-from-spec`
 
-Generate all configuration files from a DeploymentSpec YAML file
+Generate configuration files from a DeploymentSpec YAML file
 
 ```
 USAGE
-  $ scrollsdk setup generate-from-spec -s <value> [--config-only] [--dry-run] [-f] [--json] [-o <value>] [--values-only]
+  $ scrollsdk setup generate-from-spec -s <value> [--config-only] [--dry-run] [--env-file <value>] [-f] [--json]
+    [-o <value>] [--values-only] [--with-values]
 
 FLAGS
   -f, --force           Overwrite existing files without warning
   -o, --output=<value>  [default: .] Output directory for generated files
   -s, --spec=<value>    (required) Path to DeploymentSpec YAML file
-      --config-only     Only generate config.toml, doge-config.toml, setup_defaults.toml
+      --config-only     Only generate config.toml and .data/*.toml. This is the default.
       --dry-run         Validate spec and show what would be generated without writing files
+      --env-file=<value>
+                         Load dotenv-style environment variables before parsing the spec. Defaults to .env.local/.env next
+                         to the spec and current directory when present.
       --json            Output in JSON format (stdout for data, stderr for logs)
       --values-only     Only generate values/*.yaml Helm files
+      --with-values     Also generate values/*.yaml Helm files
 
 DESCRIPTION
-  Generate all configuration files from a DeploymentSpec YAML file
+  Generate configuration files from a DeploymentSpec YAML file
 
 EXAMPLES
   # Generate configs in current directory
@@ -1351,9 +1360,15 @@ EXAMPLES
 
 
 
-  # Generate only specific config types
+  # Load private keys/passwords from an env file before deriving account addresses
 
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --config-only
+  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --env-file .env.local
+
+
+
+  # Generate Helm values files explicitly
+
+  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --with-values
 
   $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --values-only
 ```

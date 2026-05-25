@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Test mocking */
+import * as toml from '@iarna/toml';
 import { expect } from 'chai';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -11,6 +12,7 @@ import {
   generateAllConfigs,
   generateConfigToml,
   generateDogeConfigToml,
+  generateProtocolSeedToml,
   generateSetupDefaultsToml,
   hasEnvRef,
   loadDeploymentSpec,
@@ -57,7 +59,6 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
     contracts: {
       deploymentSalt: '0xabcdef',
       gasOracle: { blobScalar: 1, penaltyFactor: 1, penaltyThreshold: 100, scalar: 1 },
-      l1FeeVaultAddr: '0x0000000000000000000000000000000000000002',
     },
     database: {
       admin: { database: 'postgres', host: 'db.local', password: 'adminpw', port: 5432, username: 'postgres' },
@@ -71,20 +72,11 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
         rollupExplorerPassword: 'pw7',
         rollupNodePassword: 'pw8',
       },
-      databases: {
-        adminSystem: 'admin_system_db',
-        blockscout: 'blockscout_db',
-        bridgeHistory: 'bridge_history_db',
-        chainMonitor: 'chain_monitor_db',
-        coordinator: 'coordinator_db',
-        gasOracle: 'gas_oracle_db',
-        rollupExplorer: 'rollup_explorer_db',
-        rollupNode: 'rollup_node_db',
-      },
     },
     dogecoin: {
+      clusterRpc: { password: 'cluster-rpc-pass', username: 'cluster-rpc-user' },
+      externalRpc: { password: 'external-rpc-pass', url: 'https://dogecoin-external.example.com', username: 'external-rpc-user' },
       network: 'testnet',
-      rpc: { password: 'rpcpass', url: 'http://dogecoin-rpc:22555', username: 'rpcuser' },
       walletPath: '/data/wallet.dat',
     },
     ethereumDa: {
@@ -125,12 +117,10 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
     infrastructure: { bootnodeCount: 1, provider: 'local', sequencerCount: 1 },
     metadata: { environment: 'testnet', name: 'test-deployment' },
     network: {
-      l1ChainId: 11_155_111,
-      l1ChainName: 'Sepolia',
-      l1RpcEndpoint: 'http://l1-rpc:8545',
+      l1ChainId: 111_111,
+      l1ChainName: 'DOGE',
       l2ChainId: 534_351,
       l2ChainName: 'DogeOS Testnet',
-      l2RpcEndpoint: 'http://l2-rpc:8545',
       tokenSymbol: 'ETH',
     },
     rollup: {
@@ -425,12 +415,40 @@ describe('deployment-spec-generator', () => {
       expect(result.warnings.some(w => w.path === 'dogecoin.network')).to.be.true;
     });
 
+    it('fails when l1 chain ID does not match dogecoin network', () => {
+      const spec = createMinimalSpec();
+      spec.dogecoin.network = 'mainnet';
+      spec.network.l1ChainId = 111_111;
+
+      const result = validateDeploymentSpec(spec);
+
+      expect(result.valid).to.be.false;
+      expect(result.errors.some(error =>
+        error.code === 'E010_DOGECOIN_NETWORK_MISMATCH' &&
+        error.path === 'network.l1ChainId'
+      )).to.be.true;
+    });
+
     it('warns when cubesigner attestation roles are not set yet', () => {
       const spec = createMinimalSpec();
       spec.signing = { cubesigner: { roles: [] }, local: { signers: [] } };
       const result = validateDeploymentSpec(spec);
       expect(result.valid).to.be.true;
       expect(result.warnings.some(w => w.path === 'signing.cubesigner.roles')).to.be.true;
+    });
+
+    it('fails when ECS Express dummy signer account or region is missing', () => {
+      const spec = createMinimalSpec();
+      spec.signing = {
+        awsKms: {},
+        cubesigner: { roles: [] },
+      };
+
+      const result = validateDeploymentSpec(spec);
+
+      expect(result.valid).to.be.false;
+      expect(result.errors.some(error => error.path === 'signing.awsKms.accountId')).to.be.true;
+      expect(result.errors.some(error => error.path === 'signing.awsKms.region')).to.be.true;
     });
 
     it('fails when attestation threshold exceeds key count', () => {
@@ -509,7 +527,9 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('CHAIN_ID_L1');
       expect(output).to.include('CHAIN_ID_L2');
       expect(output).to.include('L1_RPC_ENDPOINT');
-      expect(output).to.include('http://l1-rpc:8545');
+      expect(output).to.include('http://l1-interface:8545');
+      expect(output).to.include('ws://l1-devnet:8546');
+      expect(output).to.include('http://l2-rpc:8545');
       expect(output).not.to.include('BEACON_RPC_ENDPOINT');
       expect(output).to.include('[ethereumDa]');
       expect(output).to.include('chain = "sepolia"');
@@ -524,6 +544,8 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING');
       expect(output).to.include('postgres://');
       expect(output).to.include('db.local:5432');
+      expect(output).to.include('/admin_system?sslmode=disable');
+      expect(output).to.include('/rollup_node?sslmode=disable');
     });
 
     it('URL-encodes passwords in connection strings', () => {
@@ -550,6 +572,15 @@ describe('deployment-spec-generator', () => {
 
       expect(output).to.include('MAX_BATCH_IN_BUNDLE');
       expect(output).to.include('FINALIZE_BATCH_DEADLINE_SEC');
+    });
+
+    it('uses a fixed L1 fee vault address instead of reading it from the spec', () => {
+      const spec = createMinimalSpec() as any;
+      spec.contracts.l1FeeVaultAddr = '0x2222222222222222222222222222222222222222';
+      const output = generateConfigToml(spec);
+
+      expect(output).to.include('L1_FEE_VAULT_ADDR = "0x1111111111111111111111111111111111111111"');
+      expect(output).not.to.include('L1_FEE_VAULT_ADDR = "0x2222222222222222222222222222222222222222"');
     });
 
     it('includes admin dashboard and Grafana frontend URIs required by contract scripts', () => {
@@ -660,8 +691,10 @@ describe('deployment-spec-generator', () => {
       const output = generateDogeConfigToml(spec);
 
       expect(output).to.include('testnet');
-      expect(output).to.include('http://dogecoin-rpc:22555');
-      expect(output).to.include('rpcuser');
+      expect(output).to.include('https://dogecoin-external.example.com');
+      expect(output).to.include('external-rpc-user');
+      expect(output).to.include('dogecoinClusterRpc');
+      expect(output).to.include('cluster-rpc-user');
     });
 
     it('includes wallet path', () => {
@@ -720,10 +753,12 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('awsSigner');
       expect(output).to.include('us-east-1');
       expect(output).to.include('ecsClusterName = "default"');
+      expect(output).to.include('dummySigner');
+      expect(output).to.include('provider = "aws"');
       expect(output).not.to.include('suffixes');
     });
 
-    it('derives AWS dummy signer defaults from infrastructure.aws', () => {
+    it('does not infer AWS dummy signer config from infrastructure.aws alone', () => {
       const spec = createMinimalSpec();
       spec.infrastructure = {
         aws: { accountId: '123456789012', eksClusterName: 'dogeos-testnet-cluster', region: 'us-west-2' },
@@ -737,12 +772,8 @@ describe('deployment-spec-generator', () => {
       };
       const output = generateDogeConfigToml(spec);
 
-      expect(output).to.include('awsSigner');
-      expect(output).to.include('accountId = "123456789012"');
-      expect(output).to.include('ecsClusterName = "default"');
-      expect(output).to.include('networkAlias = "dogeos-testnet"');
-      expect(output).to.include('region = "us-west-2"');
-      expect(output).not.to.include('suffixes');
+      expect(output).not.to.include('awsSigner');
+      expect(output).not.to.include('dummySigner');
     });
 
     it('includes local signer config', () => {
@@ -754,6 +785,8 @@ describe('deployment-spec-generator', () => {
       const output = generateDogeConfigToml(spec);
 
       expect(output).to.include('localSigners');
+      expect(output).to.include('dummySigner');
+      expect(output).to.include('provider = "local"');
     });
 
     it('includes TSO service URL when present', () => {
@@ -764,15 +797,27 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('http://tso:9090');
     });
 
-    it('sets deploymentType based on provider', () => {
-      const localSpec = createMinimalSpec();
-      localSpec.infrastructure.provider = 'local';
-      expect(generateDogeConfigToml(localSpec)).to.include('local');
-
+    it('sets dummy signer provider from signing config independently from infrastructure provider', () => {
       const awsSpec = createMinimalSpec();
-      awsSpec.infrastructure.provider = 'aws';
-      awsSpec.infrastructure.aws = { accountId: '1', eksClusterName: 'c', region: 'r' };
-      expect(generateDogeConfigToml(awsSpec)).to.include('aws');
+      awsSpec.infrastructure.provider = 'local';
+      awsSpec.signing = {
+        awsKms: { accountId: '1', region: 'r' },
+        cubesigner: { roles: [] },
+      };
+      const awsOutput = toml.parse(generateDogeConfigToml(awsSpec)) as any;
+      expect(awsOutput.dummySigner.provider).to.equal('aws');
+      expect(awsOutput.deploymentType).to.equal(undefined);
+
+      const localSpec = createMinimalSpec();
+      localSpec.infrastructure.provider = 'aws';
+      localSpec.infrastructure.aws = { accountId: '1', eksClusterName: 'c', region: 'r' };
+      localSpec.signing = {
+        cubesigner: { roles: [] },
+        local: { signers: [] },
+      };
+      const localOutput = toml.parse(generateDogeConfigToml(localSpec)) as any;
+      expect(localOutput.dummySigner.provider).to.equal('local');
+      expect(localOutput.deploymentType).to.equal(undefined);
     });
 
     it('includes test config when present', () => {
@@ -825,7 +870,7 @@ describe('deployment-spec-generator', () => {
       const output = generateSetupDefaultsToml(spec);
 
       expect(output).to.include('dogecoin_rpc_url');
-      expect(output).to.include('http://dogecoin-rpc:22555');
+      expect(output).to.include('https://dogecoin-external.example.com');
     });
 
     it('includes target amounts', () => {
@@ -845,7 +890,7 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A');
     });
 
-    it('does not include base funding UTXOs from the spec', () => {
+    it('includes an editable base funding UTXO placeholder', () => {
       const spec = createMinimalSpec() as any;
       spec.bridge.baseFundingUtxos = [{
         amountSats: 7_000_000_000,
@@ -855,7 +900,11 @@ describe('deployment-spec-generator', () => {
       }];
       const output = generateSetupDefaultsToml(spec);
 
-      expect(output).not.to.include('[[base_funding_utxos]]');
+      expect(output).to.include('[[base_funding_utxos]]');
+      expect(output).to.include('txid = "<txid of the DOGE sent to the helper address>"');
+      expect(output).to.include('vout = 0');
+      expect(output).to.include('amount_sats = 7_000_000_000');
+      expect(output).to.include('prev_tx_hex = "<raw tx hex of the funding tx>"');
       expect(output).not.to.include('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     });
 
@@ -879,17 +928,84 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateAllConfigs', () => {
-    it('returns all three config files', () => {
+    it('returns all config files', () => {
       const spec = createMinimalSpec();
       const configs = generateAllConfigs(spec);
 
       expect(configs).to.have.property('config.toml');
       expect(configs).to.have.property('doge-config.toml');
       expect(configs).to.have.property('setup_defaults.toml');
+      expect(configs).to.have.property('protocol_seed.toml');
 
       expect(configs['config.toml']).to.be.a('string').and.not.be.empty;
       expect(configs['doge-config.toml']).to.be.a('string').and.not.be.empty;
       expect(configs['setup_defaults.toml']).to.be.a('string').and.not.be.empty;
+      expect(configs['protocol_seed.toml']).to.be.a('string').and.not.be.empty;
+    });
+
+    it('keeps Dogecoin network values consistent across generated .data files', () => {
+      const spec = createMinimalSpec();
+      spec.dogecoin.network = 'testnet';
+
+      const configs = generateAllConfigs(spec);
+      const dogeConfig = toml.parse(configs['doge-config.toml']) as any;
+      const setupDefaults = toml.parse(configs['setup_defaults.toml']) as any;
+      const protocolSeed = toml.parse(configs['protocol_seed.toml']) as any;
+
+      expect(dogeConfig.network).to.equal('testnet');
+      expect(setupDefaults.network).to.equal('testnet');
+      expect(protocolSeed.protocol.dogecoin_chain_id).to.equal(111_111);
+    });
+  });
+
+  describe('generateProtocolSeedToml', () => {
+    it('generates protocol seed from spec values with contract placeholders', () => {
+      const spec = createMinimalSpec();
+      spec.ethereumDa = {
+        ...spec.ethereumDa,
+        chain: 'sepolia',
+        chainId: 11_155_111,
+      };
+      spec.network.l2ChainId = 412_346;
+      spec.rollup.maxL1MessageGasLimit = 1_000_000;
+
+      const parsed = toml.parse(generateProtocolSeedToml(spec)) as any;
+
+      expect(parsed.protocol).to.deep.equal({
+        dogecoin_chain_id: 111_111,
+        eth_chain_id: 11_155_111,
+        l2_chain_id: 412_346,
+        protocol_version: 2,
+      });
+      expect(parsed.chain_anchors).to.deep.equal({
+        genesis_batch_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
+        genesis_state_root: '0x0000000000000000000000000000000000000000000000000000000000000000',
+        initial_ethereum_block_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
+        initial_tx_blob_index: 0,
+        initial_tx_index: 0,
+      });
+      expect(parsed.protocol_config_seed.protocol_config).to.deep.equal({
+        deposit_queue_transform: {
+          l1_scroll_messenger_address: '0x0000000000000000000000000000000000000001',
+          l2_messenger_address: '0x0000000000000000000000000000000000000002',
+          message_queue_gas_limit: 1_000_000,
+          moat_address: '0x0000000000000000000000000000000000000003',
+        },
+        eth_chain_id: 11_155_111,
+        key_rotation_min_grace_wf_txs: 100,
+        l2_chain_id: 412_346,
+        min_deposit_sats: 100_000,
+      });
+    });
+
+    it('uses Dogecoin mainnet and regtest protocol chain IDs', () => {
+      const mainnet = createMinimalSpec();
+      mainnet.dogecoin.network = 'mainnet';
+      const regtest = createMinimalSpec();
+      regtest.dogecoin.network = 'regtest';
+
+      expect((toml.parse(generateProtocolSeedToml(mainnet)) as any).protocol.dogecoin_chain_id).to.equal(1);
+      expect((toml.parse(generateProtocolSeedToml(regtest)) as any).protocol.dogecoin_chain_id).to.equal(5_555_555);
     });
   });
 
@@ -921,11 +1037,16 @@ describe('deployment-spec-generator', () => {
       expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_STORE_ROOT');
       expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_METADATA_SQLITE_PATH');
       expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE');
+      expect(files['dogecoin-production.yaml']).to.include('rpcuser: cluster-rpc-user');
+      expect(files['dogecoin-production.yaml']).to.include('value: cluster-rpc-pass');
+      expect(files['dogecoin-production.yaml']).not.to.include('external-rpc-user');
+      expect(files['dogecoin-production.yaml']).not.to.include('external-rpc-pass');
       expect(files['l2-rpc-production.yaml']).to.include('L2GETH_DA_BLOB_BEACON_NODE: http://l1-interface:5052');
       expect(files['l2-rpc-production.yaml']).to.include('L2GETH_L1_ENDPOINT: http://l1-interface:8545');
       expect(files['l2-bootnode-production.yaml']).to.include('L2GETH_DA_BLOB_BEACON_NODE: http://l1-interface:5052');
       expect(files['l2-bootnode-production.yaml']).to.include('L2GETH_L1_ENDPOINT: http://l1-interface:8545');
       expect(files['l2-sequencer-production.yaml']).to.include('L2GETH_L1_ENDPOINT: http://l1-interface:8545');
+      expect(files['contracts-production.yaml']).to.include('SCROLL_L1_FEE_VAULT_ADDR: \'0x1111111111111111111111111111111111111111\'');
     });
   });
 
@@ -982,6 +1103,7 @@ metadata:
       const configs = {
         'config.toml': '[general]\nkey = "value"\n',
         'doge-config.toml': 'network = "testnet"\n',
+        'protocol_seed.toml': '[protocol]\nprotocol_version = 2\n',
         'setup_defaults.toml': 'seed_string = "test"\n',
       };
 
@@ -990,6 +1112,7 @@ metadata:
       expect(fs.existsSync(path.join(tempDir, 'config.toml'))).to.be.true;
       expect(fs.existsSync(path.join(tempDir, '.data', 'doge-config.toml'))).to.be.true;
       expect(fs.existsSync(path.join(tempDir, '.data', 'setup_defaults.toml'))).to.be.true;
+      expect(fs.existsSync(path.join(tempDir, '.data', 'protocol_seed.toml'))).to.be.true;
 
       const configContent = fs.readFileSync(path.join(tempDir, 'config.toml'), 'utf8');
       expect(configContent).to.include('key = "value"');
@@ -1000,6 +1123,7 @@ metadata:
       const configs = {
         'config.toml': 'content',
         'doge-config.toml': 'content',
+        'protocol_seed.toml': 'content',
         'setup_defaults.toml': 'content',
       };
 
@@ -1014,6 +1138,7 @@ metadata:
       const configs = {
         'config.toml': 'content',
         'doge-config.toml': 'doge content',
+        'protocol_seed.toml': 'protocol content',
         'setup_defaults.toml': 'setup content',
       };
 
@@ -1021,6 +1146,7 @@ metadata:
 
       expect(fs.existsSync(path.join(customDogeDir, 'doge-config.toml'))).to.be.true;
       expect(fs.existsSync(path.join(customDogeDir, 'setup_defaults.toml'))).to.be.true;
+      expect(fs.existsSync(path.join(customDogeDir, 'protocol_seed.toml'))).to.be.true;
     });
   });
 });

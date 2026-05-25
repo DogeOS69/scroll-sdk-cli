@@ -5,8 +5,9 @@
  * 1. Generate config.toml
  * 2. Generate doge-config.toml
  * 3. Generate setup_defaults.toml
- * 4. Generate values/*.yaml for Helm charts
- * 5. Validate deployment configurations
+ * 4. Generate protocol_seed.toml
+ * 5. Generate values/*.yaml for Helm charts
+ * 6. Validate deployment configurations
  */
 
 export interface DeploymentSpec {
@@ -156,20 +157,11 @@ export interface NetworkConfig {
   /** L1 chain name (displayed in UIs) */
   l1ChainName: string
 
-  /** Legacy internal l1-interface RPC endpoint (cluster-internal). */
-  l1RpcEndpoint: string
-
-  /** Internal L1 WebSocket endpoint */
-  l1RpcEndpointWebsocket?: string
-
   /** L2 chain ID */
   l2ChainId: number
 
   /** L2 chain name (displayed in UIs) */
   l2ChainName: string
-
-  /** Internal L2 RPC endpoint */
-  l2RpcEndpoint: string
 
   /** Native token symbol */
   tokenSymbol: string
@@ -203,8 +195,8 @@ export interface DatabaseConfig {
     rollupNodePassword: string
   }
 
-  /** Individual service database names (auto-created) */
-  databases: {
+  /** @deprecated Database names are fixed by the generator and no longer need to be specified. */
+  databases?: {
     adminSystem: string
     blockscout: string
     bridgeHistory: string
@@ -267,6 +259,21 @@ export interface DogecoinConfig {
     apiUrl: string
   }
 
+  /** K8s-internal Dogecoin Core RPC credentials. The internal URL is derived from network and serviceName. */
+  clusterRpc?: {
+    /** Use $ENV:VAR_NAME for password */
+    password: string
+    username: string
+  }
+
+  /** External Dogecoin RPC used by operator-side setup commands before/around deployment. */
+  externalRpc?: {
+    /** Use $ENV:VAR_NAME for password */
+    password?: string
+    url: string
+    username?: string
+  }
+
   /** Deprecated: bridge-init derives and updates this height after setup funding is known. */
   indexerStartHeight?: number
 
@@ -286,12 +293,12 @@ export interface DogecoinConfig {
   /** Network type */
   network: 'mainnet' | 'regtest' | 'testnet'
 
-  /** RPC connection */
-  rpc: {
+  /** @deprecated Use externalRpc for operator-side RPC and clusterRpc for K8s-internal credentials. */
+  rpc?: {
     /** Use $ENV:VAR_NAME for password */
-    password: string
+    password?: string
     url: string
-    username: string
+    username?: string
   }
 
   /** Wallet file path */
@@ -358,7 +365,7 @@ export interface EthereumDaConfig {
 
   l2Confirmations?: number
 
-  /** DogeOS L2 execution RPC. Defaults to network.l2RpcEndpoint. */
+  /** DogeOS L2 execution RPC. Defaults to the fixed internal L2 RPC endpoint. */
   l2RpcUrl?: string
   lifecycleDbPath?: string
   /** Fee policy for EIP-4844 submissions. */
@@ -436,13 +443,13 @@ export interface BridgeConfig {
 export interface SigningConfig {
   /** AWS KMS-backed TEE signer configuration for dummy-signers */
   awsKms?: {
-    /** AWS account for the ECS/KMS TEE signer. Defaults to infrastructure.aws.accountId. */
+    /** AWS account for the ECS/KMS TEE signer. Independent from infrastructure.aws.accountId. */
     accountId?: string
     /** ECS cluster for the ECS Express dummy signer service. Defaults to "default". */
     ecsClusterName?: string
     /** Resource name prefix for ECS/KMS TEE signer resources. Defaults to metadata.name. */
     networkAlias?: string
-    /** AWS region for the ECS/KMS TEE signer. Defaults to infrastructure.aws.region. */
+    /** AWS region for the ECS/KMS TEE signer. Independent from infrastructure.aws.region. */
     region?: string
   }
 
@@ -502,16 +509,16 @@ export interface FrontendConfig {
   /** Base domain for all services */
   baseDomain: string
 
-  /** External URLs (for user-facing links) */
+  /** External URLs (for user-facing links). Omitted values are derived from protocol, baseDomain, and subdomains. */
   externalUrls: {
     adminDashboard?: string
-    bridgeApi: string
+    bridgeApi?: string
     grafana?: string
-    l1Explorer: string
-    l1Rpc: string
-    l2Explorer: string
-    l2Rpc: string
-    rollupScanApi: string
+    l1Explorer?: string
+    l1Rpc?: string
+    l2Explorer?: string
+    l2Rpc?: string
+    rollupScanApi?: string
   }
 
   /** Individual service hostnames (subdomain or full domain) */
@@ -603,9 +610,6 @@ export interface ContractsConfig {
   /** L1 contract deployment block (set after deployment) */
   l1DeploymentBlock?: number
 
-  /** L1 fee vault address */
-  l1FeeVaultAddr: string
-
   /** Contract address overrides (for reusing existing contracts) */
   overrides?: {
     l1GasPriceOracle?: string
@@ -613,7 +617,7 @@ export interface ContractsConfig {
     l1Weth?: string
     l2MessageQueue?: string
     l2TxFeeVault?: string
-    l2Weth?: string
+    l2Wdoge?: string
     l2Whitelist?: string
   }
 

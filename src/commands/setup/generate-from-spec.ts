@@ -62,7 +62,7 @@ function uniquePaths(paths: string[]): string[] {
 }
 
 export default class GenerateFromSpec extends Command {
-  static override description = 'Generate all configuration files from a DeploymentSpec YAML file'
+  static override description = 'Generate configuration files from a DeploymentSpec YAML file'
 
   static override examples = [
     '# Generate configs in current directory',
@@ -80,15 +80,15 @@ export default class GenerateFromSpec extends Command {
     '# Dry run - validate and show what would be generated',
     '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml --dry-run',
     '',
-    '# Generate only specific config types',
-    '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml --config-only',
+    '# Generate Helm values files explicitly',
+    '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml --with-values',
     '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml --values-only',
   ]
 
   static override flags = {
     'config-only': Flags.boolean({
       default: false,
-      description: 'Only generate config.toml, doge-config.toml, setup_defaults.toml',
+      description: 'Only generate config.toml and .data/*.toml. This is the default.',
     }),
     'dry-run': Flags.boolean({
       default: false,
@@ -120,6 +120,10 @@ export default class GenerateFromSpec extends Command {
       default: false,
       description: 'Only generate values/*.yaml Helm files',
     }),
+    'with-values': Flags.boolean({
+      default: false,
+      description: 'Also generate values/*.yaml Helm files',
+    }),
   }
 
   public async run(): Promise<void> {
@@ -134,6 +138,26 @@ export default class GenerateFromSpec extends Command {
         'CONFIGURATION',
         true,
         { flags: ['--config-only', '--values-only'] }
+      )
+    }
+
+    if (flags['config-only'] && flags['with-values']) {
+      jsonCtx.error(
+        'E601_CONFLICTING_FLAGS',
+        'Cannot use both --config-only and --with-values',
+        'CONFIGURATION',
+        true,
+        { flags: ['--config-only', '--with-values'] }
+      )
+    }
+
+    if (flags['values-only'] && flags['with-values']) {
+      jsonCtx.error(
+        'E601_CONFLICTING_FLAGS',
+        'Cannot use both --values-only and --with-values',
+        'CONFIGURATION',
+        true,
+        { flags: ['--values-only', '--with-values'] }
       )
     }
 
@@ -248,7 +272,7 @@ export default class GenerateFromSpec extends Command {
 
     // Check what files would be generated
     const generateConfigs = !flags['values-only']
-    const generateValues = !flags['config-only']
+    const generateValues = flags['with-values'] || flags['values-only']
 
     let configs: GeneratedConfigs | null = null
     let valuesFiles: GeneratedValuesFiles | null = null
@@ -273,6 +297,7 @@ export default class GenerateFromSpec extends Command {
         jsonCtx.logKeyValue('  config.toml', path.join(outputDir, 'config.toml'))
         jsonCtx.logKeyValue('  doge-config.toml', path.join(dataDir, 'doge-config.toml'))
         jsonCtx.logKeyValue('  setup_defaults.toml', path.join(dataDir, 'setup_defaults.toml'))
+        jsonCtx.logKeyValue('  protocol_seed.toml', path.join(dataDir, 'protocol_seed.toml'))
       }
 
       if (valuesFiles) {
@@ -283,7 +308,7 @@ export default class GenerateFromSpec extends Command {
       }
 
       jsonCtx.success({
-        configFiles: configs ? ['config.toml', 'doge-config.toml', 'setup_defaults.toml'] : [],
+        configFiles: configs ? ['config.toml', 'doge-config.toml', 'setup_defaults.toml', 'protocol_seed.toml'] : [],
         dryRun: true,
         outputDir,
         specPath,
@@ -310,6 +335,10 @@ export default class GenerateFromSpec extends Command {
 
         if (fs.existsSync(path.join(dataDir, 'setup_defaults.toml'))) {
           existingFiles.push('.data/setup_defaults.toml')
+        }
+
+        if (fs.existsSync(path.join(dataDir, 'protocol_seed.toml'))) {
+          existingFiles.push('.data/protocol_seed.toml')
         }
       }
 
@@ -351,10 +380,11 @@ export default class GenerateFromSpec extends Command {
 
     if (configs) {
       writeGeneratedConfigs(configs, outputDir, dataDir)
-      writtenFiles.push('config.toml', '.data/doge-config.toml', '.data/setup_defaults.toml')
+      writtenFiles.push('config.toml', '.data/doge-config.toml', '.data/setup_defaults.toml', '.data/protocol_seed.toml')
       jsonCtx.logSuccess('Generated config.toml')
       jsonCtx.logSuccess('Generated .data/doge-config.toml')
       jsonCtx.logSuccess('Generated .data/setup_defaults.toml')
+      jsonCtx.logSuccess('Generated .data/protocol_seed.toml')
     }
 
     if (valuesFiles) {

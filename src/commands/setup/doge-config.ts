@@ -168,7 +168,7 @@ export class DogeConfigCommand extends Command {
         }).apiUrl,
         password: '',
         url: network === 'mainnet' ? 'https://dogecoin.mainnet.dogeos.com' :
-          network === 'testnet' ? 'https://dogecoin.testnet.dogeos.com' : 'http://localhost:18443',
+          network === 'testnet' ? 'https://dogecoin.testnet.dogeos.com' : 'http://localhost:18332',
         username: '',
       },
       test: {},

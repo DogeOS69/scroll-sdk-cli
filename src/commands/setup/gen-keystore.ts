@@ -62,7 +62,7 @@ export default class SetupGenKeystore extends Command {
     '<%= config.bin %> <%= command.id %> --no-accounts',
     '<%= config.bin %> <%= command.id %> --non-interactive',
     '<%= config.bin %> <%= command.id %> --non-interactive --json --sequencer-count 2 --bootnode-count 2',
-    '<%= config.bin %> <%= command.id %> --from-spec deployment-spec.yaml --non-interactive --sequencer-password "$ENV:SEQUENCER_KEYSTORE_PASSWORD"',
+    '<%= config.bin %> <%= command.id %> --non-interactive --sequencer-count 2 --bootnode-count 2',
   ]
 
   static override flags = {
@@ -100,7 +100,7 @@ export default class SetupGenKeystore extends Command {
       description: 'Number of sequencers (including primary). In non-interactive mode, generates if not enough exist.',
     }),
     'sequencer-password': Flags.string({
-      description: 'Password for sequencer keystores (or use $ENV:VAR_NAME pattern in config). Required for new sequencers in non-interactive mode.',
+      description: 'Password for sequencer keystores (or use $ENV:VAR_NAME pattern). Defaults to a generated random password for new sequencers in non-interactive mode.',
     }),
   }
 
@@ -225,6 +225,14 @@ export default class SetupGenKeystore extends Command {
     let bootnodeData: BootnodeData[] = []
     let overwriteBootnodes = false
 
+    const getSequencerPassword = (index: number): string => {
+      const providedPassword = resolveEnvValue(flags['sequencer-password'])
+      if (providedPassword) return providedPassword
+
+      jsonCtx.info(`Generated random sequencer-${index} keystore password`)
+      return crypto.randomBytes(24).toString('base64url')
+    }
+
     // ============ SEQUENCER HANDLING ============
     if (nonInteractive) {
       // Non-interactive mode: use flags to determine behavior
@@ -233,37 +241,18 @@ export default class SetupGenKeystore extends Command {
 
       if (overwrite) {
         // Regenerate all sequencers
-        const password = resolveEnvValue(flags['sequencer-password'])
-        if (!password) {
-          jsonCtx.error(
-            'E601_MISSING_FIELD',
-            'Sequencer password required when regenerating sequencers in non-interactive mode. Use --sequencer-password or $ENV:VAR_NAME.',
-            'CONFIGURATION',
-            true,
-            { flag: '--sequencer-password' }
-          )
-        }
-
         jsonCtx.info(`Regenerating ${targetSequencerCount} sequencer(s)...`)
         for (let i = 0; i < targetSequencerCount; i++) {
+          const password = getSequencerPassword(i)
           sequencerData.push(await this.generateSequencerKeystore(i, password))
         }
       } else if (existingSequencers < targetSequencerCount) {
         // Keep existing, generate additional
         sequencerData = collectExistingSequencerData()
-        const password = resolveEnvValue(flags['sequencer-password'])
-        if (!password) {
-          jsonCtx.error(
-            'E601_MISSING_FIELD',
-            'Sequencer password required when generating new sequencers in non-interactive mode. Use --sequencer-password or $ENV:VAR_NAME.',
-            'CONFIGURATION',
-            true,
-            { existing: existingSequencers, flag: '--sequencer-password', target: targetSequencerCount }
-          )
-        }
 
         jsonCtx.info(`Adding ${targetSequencerCount - existingSequencers} new sequencer(s) to existing ${existingSequencers}...`)
         for (let i = existingSequencers; i < targetSequencerCount; i++) {
+          const password = getSequencerPassword(i)
           sequencerData.push(await this.generateSequencerKeystore(i, password))
         }
       } else {

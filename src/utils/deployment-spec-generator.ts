@@ -1,7 +1,8 @@
 /**
  * DeploymentSpec Generator
  *
- * Generates config.toml, doge-config.toml, setup_defaults.toml, and
+ * Generates config.toml, doge-config.toml, setup_defaults.toml,
+ * protocol_seed.toml, and
  * other configuration files from a DeploymentSpec.
  */
 
@@ -20,6 +21,12 @@ import type {
   ValidationWarning
 } from '../types/deployment-spec.js'
 import type { DogeConfig } from '../types/doge-config.js'
+
+import {
+  L1_INTERFACE_RPC_ENDPOINT,
+  L1_INTERFACE_RPC_WEBSOCKET_ENDPOINT,
+  L2_RPC_ENDPOINT,
+} from '../config/constants.js'
 
 const ETHEREUM_DA_DEFAULTS = {
   devnet: {
@@ -273,6 +280,38 @@ function getGenesisValues(spec: DeploymentSpec): { baseFeePerGasWei: number; dep
   }
 }
 
+function getDogecoinExternalRpc(spec: DeploymentSpec): NonNullable<DeploymentSpec['dogecoin']['externalRpc']> {
+  return spec.dogecoin.externalRpc ?? {
+    password: spec.dogecoin.rpc?.password ?? '',
+    url: spec.dogecoin.rpc?.url ?? '',
+    username: spec.dogecoin.rpc?.username ?? '',
+  }
+}
+
+function getDogecoinClusterRpc(spec: DeploymentSpec): NonNullable<DeploymentSpec['dogecoin']['clusterRpc']> {
+  return spec.dogecoin.clusterRpc ?? {
+    password: spec.dogecoin.rpc?.password ?? '',
+    username: spec.dogecoin.rpc?.username ?? '',
+  }
+}
+
+const DEFAULT_DATABASE_NAMES = {
+  adminSystem: 'admin_system',
+  blockscout: 'blockscout',
+  bridgeHistory: 'bridge_history',
+  chainMonitor: 'chain_monitor',
+  coordinator: 'coordinator',
+  gasOracle: 'gas_oracle',
+  rollupExplorer: 'rollup_explorer',
+  rollupNode: 'rollup_node',
+} as const
+
+const DEFAULT_L1_FEE_VAULT_ADDR = '0x1111111111111111111111111111111111111111'
+const ZERO_BYTES32 = '0x0000000000000000000000000000000000000000000000000000000000000000'
+const PLACEHOLDER_L1_SCROLL_MESSENGER_ADDRESS = '0x0000000000000000000000000000000000000001'
+const PLACEHOLDER_L2_MESSENGER_ADDRESS = '0x0000000000000000000000000000000000000002'
+const PLACEHOLDER_MOAT_ADDRESS = '0x0000000000000000000000000000000000000003'
+
 function getDbPassword(spec: DeploymentSpec, key: keyof NonNullable<DeploymentSpec['database']['credentials']>): string {
   return spec.database.credentials?.[key] || ''
 }
@@ -286,9 +325,64 @@ function deriveNetworkAlias(name: string): string {
     .replaceAll(/^-|-$/g, '') || 'devnet'
 }
 
+function resolveDogecoinChainId(network: DeploymentSpec['dogecoin']['network']): number {
+  switch (network) {
+    case 'mainnet': {
+      return 1
+    }
+
+    case 'testnet': {
+      return 111_111
+    }
+
+    case 'regtest': {
+      return 5_555_555
+    }
+  }
+}
+
+function assertGeneratedDataNetworkConsistency(configs: GeneratedConfigs): void {
+  const dogeConfig = toml.parse(configs['doge-config.toml']) as toml.JsonMap
+  const setupDefaults = toml.parse(configs['setup_defaults.toml']) as toml.JsonMap
+  const protocolSeed = toml.parse(configs['protocol_seed.toml']) as toml.JsonMap
+
+  const dogeNetwork = dogeConfig.network
+  const setupNetwork = setupDefaults.network
+  if (dogeNetwork !== setupNetwork) {
+    throw new Error(
+      `.data network mismatch: doge-config.toml network=${String(dogeNetwork)} but setup_defaults.toml network=${String(setupNetwork)}`
+    )
+  }
+
+  if (dogeNetwork !== 'mainnet' && dogeNetwork !== 'testnet' && dogeNetwork !== 'regtest') {
+    throw new Error(`.data network mismatch: unsupported doge-config.toml network=${String(dogeNetwork)}`)
+  }
+
+  const expectedDogecoinChainId = resolveDogecoinChainId(dogeNetwork)
+  const protocol = protocolSeed.protocol as toml.JsonMap | undefined
+  const actualDogecoinChainId = protocol?.dogecoin_chain_id
+  if (actualDogecoinChainId !== expectedDogecoinChainId) {
+    throw new Error(
+      `.data network mismatch: ${dogeNetwork} requires protocol_seed.toml dogecoin_chain_id=${expectedDogecoinChainId}, got ${String(actualDogecoinChainId)}`
+    )
+  }
+}
+
+function getEthereumDaChain(rawSpec: DeploymentSpec): keyof typeof ETHEREUM_DA_DEFAULTS {
+  return rawSpec.ethereumDa?.chain || (rawSpec.metadata.environment === 'mainnet' ? 'mainnet' : 'sepolia')
+}
+
+function getEthereumDaChainId(rawSpec: DeploymentSpec): number {
+  const ethereumDaChain = getEthereumDaChain(rawSpec)
+  return rawSpec.ethereumDa?.chainId || ETHEREUM_DA_DEFAULTS[ethereumDaChain].chainId
+}
+
 export function getAwsSignerConfigFromSpec(spec: DeploymentSpec): NonNullable<DogeConfig['awsSigner']> | undefined {
-  const accountId = spec.signing.awsKms?.accountId || spec.infrastructure.aws?.accountId
-  const region = spec.signing.awsKms?.region || spec.infrastructure.aws?.region
+  if (!spec.signing.awsKms) {
+    return undefined
+  }
+
+  const { accountId, region } = spec.signing.awsKms
   if (!accountId || !region) {
     return undefined
   }
@@ -299,6 +393,18 @@ export function getAwsSignerConfigFromSpec(spec: DeploymentSpec): NonNullable<Do
     networkAlias: spec.signing.awsKms?.networkAlias || deriveNetworkAlias(spec.metadata.name),
     region,
   }
+}
+
+export function getDummySignerProviderFromSpec(spec: DeploymentSpec): NonNullable<NonNullable<DogeConfig['dummySigner']>['provider']> | undefined {
+  if (spec.signing.awsKms) {
+    return 'aws'
+  }
+
+  if (spec.signing.local) {
+    return 'local'
+  }
+
+  return undefined
 }
 
 /**
@@ -455,6 +561,17 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     })
   }
 
+  if (spec.dogecoin?.network && spec.network?.l1ChainId) {
+    const expectedDogecoinChainId = resolveDogecoinChainId(spec.dogecoin.network)
+    if (spec.network.l1ChainId !== expectedDogecoinChainId) {
+      errors.push({
+        code: 'E010_DOGECOIN_NETWORK_MISMATCH',
+        message: `network.l1ChainId (${spec.network.l1ChainId}) does not match dogecoin.network ${spec.dogecoin.network} (${expectedDogecoinChainId})`,
+        path: 'network.l1ChainId',
+      })
+    }
+  }
+
   // Accounts validation
   if (!spec.accounts?.owner?.address) {
     errors.push({
@@ -544,11 +661,29 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     })
   }
 
-  if (!getAwsSignerConfigFromSpec(spec) && !spec.signing?.local) {
+  if (spec.signing?.awsKms) {
+    if (!spec.signing.awsKms.accountId) {
+      errors.push({
+        code: 'E002_MISSING_REQUIRED_FIELD',
+        message: 'AWS account ID is required for ECS Express dummy-signers',
+        path: 'signing.awsKms.accountId',
+      })
+    }
+
+    if (!spec.signing.awsKms.region) {
+      errors.push({
+        code: 'E002_MISSING_REQUIRED_FIELD',
+        message: 'AWS region is required for ECS Express dummy-signers',
+        path: 'signing.awsKms.region',
+      })
+    }
+  }
+
+  if (!getDummySignerProviderFromSpec(spec)) {
     warnings.push({
       message: 'TEE signer configuration is not set yet',
-      path: 'signing.awsKms',
-      suggestion: 'For AWS deployments, set infrastructure.aws so dummy-signers can derive defaults, or configure signing.awsKms/signing.local explicitly.',
+      path: 'signing',
+      suggestion: 'Configure signing.awsKms for ECS Express dummy-signers or signing.local for locally-run dummy-signers.',
     })
   }
 
@@ -574,6 +709,22 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       message: 'dogecoin.indexerStartHeight is deprecated',
       path: 'dogecoin.indexerStartHeight',
       suggestion: 'Omit it from the spec; bridge-init derives and writes the start height.',
+    })
+  }
+
+  if (spec.dogecoin?.rpc !== undefined) {
+    warnings.push({
+      message: 'dogecoin.rpc is deprecated because it mixed external and K8s-internal RPC semantics',
+      path: 'dogecoin.rpc',
+      suggestion: 'Use dogecoin.externalRpc for operator-side RPC and dogecoin.clusterRpc for K8s-internal credentials.',
+    })
+  }
+
+  if (!spec.dogecoin?.externalRpc && !spec.dogecoin?.rpc) {
+    errors.push({
+      code: 'E002_MISSING_REQUIRED_FIELD',
+      message: 'External Dogecoin RPC is required',
+      path: 'dogecoin.externalRpc',
     })
   }
 
@@ -715,9 +866,9 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     CHAIN_NAME_L1: spec.network.l1ChainName,
     CHAIN_NAME_L2: spec.network.l2ChainName,
     L1_CONTRACT_DEPLOYMENT_BLOCK: spec.contracts.l1DeploymentBlock || 0,
-    L1_RPC_ENDPOINT: spec.network.l1RpcEndpoint,
-    L1_RPC_ENDPOINT_WEBSOCKET: spec.network.l1RpcEndpointWebsocket || '',
-    L2_RPC_ENDPOINT: spec.network.l2RpcEndpoint,
+    L1_RPC_ENDPOINT: L1_INTERFACE_RPC_ENDPOINT,
+    L1_RPC_ENDPOINT_WEBSOCKET: L1_INTERFACE_RPC_WEBSOCKET_ENDPOINT,
+    L2_RPC_ENDPOINT,
   }
 
   if (spec.rollup.verifierDigests) {
@@ -725,7 +876,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     config.general.VERIFIER_DIGEST_2 = spec.rollup.verifierDigests.digest2
   }
 
-  const ethereumDaChain = spec.ethereumDa?.chain || (spec.metadata.environment === 'mainnet' ? 'mainnet' : 'sepolia')
+  const ethereumDaChain = getEthereumDaChain(spec)
   const ethereumDaDefaults = ETHEREUM_DA_DEFAULTS[ethereumDaChain]
   config.ethereumDa = {
     beaconRpcUrl: spec.ethereumDa?.beaconRpcUrl || ethereumDaDefaults.beaconRpcUrl,
@@ -757,35 +908,35 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
 
   config.db = {
     ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, spec.database.databases.adminSystem,
+      dbHost, dbPort, DEFAULT_DATABASE_NAMES.adminSystem,
       'admin_system', getDbPassword(spec, 'adminSystemPassword')
     ),
     BLOCKSCOUT_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, spec.database.databases.blockscout,
+      dbHost, dbPort, DEFAULT_DATABASE_NAMES.blockscout,
       'blockscout', getDbPassword(spec, 'blockscoutPassword')
     ),
     BRIDGE_HISTORY_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, spec.database.databases.bridgeHistory,
+      dbHost, dbPort, DEFAULT_DATABASE_NAMES.bridgeHistory,
       'bridge_history', getDbPassword(spec, 'bridgeHistoryPassword')
     ),
     CHAIN_MONITOR_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, spec.database.databases.chainMonitor,
+      dbHost, dbPort, DEFAULT_DATABASE_NAMES.chainMonitor,
       'chain_monitor', getDbPassword(spec, 'chainMonitorPassword')
     ),
     COORDINATOR_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, spec.database.databases.coordinator,
+      dbHost, dbPort, DEFAULT_DATABASE_NAMES.coordinator,
       'coordinator', getDbPassword(spec, 'coordinatorPassword')
     ),
     GAS_ORACLE_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, spec.database.databases.gasOracle,
+      dbHost, dbPort, DEFAULT_DATABASE_NAMES.gasOracle,
       'gas_oracle', getDbPassword(spec, 'gasOraclePassword')
     ),
     ROLLUP_EXPLORER_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, spec.database.databases.rollupExplorer,
+      dbHost, dbPort, DEFAULT_DATABASE_NAMES.rollupExplorer,
       'rollup_explorer', getDbPassword(spec, 'rollupExplorerPassword')
     ),
     ROLLUP_NODE_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, spec.database.databases.rollupNode,
+      dbHost, dbPort, DEFAULT_DATABASE_NAMES.rollupNode,
       'rollup_node', getDbPassword(spec, 'rollupNodePassword')
     ),
   }
@@ -845,7 +996,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     BLOB_SCALAR: spec.contracts.gasOracle.blobScalar,
     DEPLOYMENT_SALT: spec.contracts.deploymentSalt,
     DEPOSIT_FEE: bridgeFees.depositFeeSats,
-    L1_FEE_VAULT_ADDR: spec.contracts.l1FeeVaultAddr,
+    L1_FEE_VAULT_ADDR: DEFAULT_L1_FEE_VAULT_ADDR,
     L2_BRIDGE_FEE_RECIPIENT_ADDR: spec.bridge.feeRecipient,
     MIN_WITHDRAWAL_AMOUNT: bridgeFees.minWithdrawalAmountWei,
     PENALTY_FACTOR: spec.contracts.gasOracle.penaltyFactor,
@@ -868,8 +1019,8 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
       config.contracts.overrides.L2_WHITELIST = spec.contracts.overrides.l2Whitelist
     }
 
-    if (spec.contracts.overrides.l2Weth) {
-      config.contracts.overrides.L2_WETH = spec.contracts.overrides.l2Weth
+    if (spec.contracts.overrides.l2Wdoge) {
+      config.contracts.overrides.L2_WDOGE = spec.contracts.overrides.l2Wdoge
     }
 
     if (spec.contracts.overrides.l2TxFeeVault) {
@@ -968,15 +1119,22 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
  */
 export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   const spec = normalizeDeploymentSpec(rawSpec)
+  const externalRpc = getDogecoinExternalRpc(spec)
+  const clusterRpc = getDogecoinClusterRpc(spec)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
   const config: Record<string, any> = {
     network: spec.dogecoin.network,
   }
 
   config.rpc = {
-    password: spec.dogecoin.rpc.password,
-    url: spec.dogecoin.rpc.url,
-    username: spec.dogecoin.rpc.username,
+    password: externalRpc.password || '',
+    url: externalRpc.url,
+    username: externalRpc.username || '',
+  }
+
+  config.dogecoinClusterRpc = {
+    password: clusterRpc.password,
+    username: clusterRpc.username,
   }
 
   if (spec.dogecoin.blockbook) {
@@ -1032,7 +1190,12 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
     config.signerUrls = [spec.signing.tsoServiceUrl]
   }
 
-  config.deploymentType = spec.infrastructure.provider === 'local' ? 'local' : 'aws'
+  const dummySignerProvider = getDummySignerProviderFromSpec(spec)
+  if (dummySignerProvider) {
+    config.dummySigner = {
+      provider: dummySignerProvider,
+    }
+  }
 
   if (spec.test) {
     config.test = {
@@ -1049,6 +1212,7 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
  */
 export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
   const spec = normalizeDeploymentSpec(rawSpec)
+  const externalRpc = getDogecoinExternalRpc(spec)
   const targetAmountsSats = getBridgeTargetAmountsSats(spec)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
   const config: Record<string, any> = {
@@ -1057,9 +1221,9 @@ export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
     bridge_target_amount: targetAmountsSats.bridge,
     confirmations_required: spec.bridge.confirmationsRequired,
     deposit_eth_recipient_address_hex: optionalAccountAddress(spec, 'deployer'),
-    dogecoin_rpc_pass: spec.dogecoin.rpc.password,
-    dogecoin_rpc_url: spec.dogecoin.rpc.url,
-    dogecoin_rpc_user: spec.dogecoin.rpc.username,
+    dogecoin_rpc_pass: externalRpc.password || '',
+    dogecoin_rpc_url: externalRpc.url,
+    dogecoin_rpc_user: externalRpc.username || '',
     fee_rate_sat_per_kvb: getBridgeFeeRateSatsPerKvb(spec),
     fee_wallet_target_amount: targetAmountsSats.feeWallet,
     network: spec.dogecoin.network,
@@ -1081,6 +1245,56 @@ export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
       return key?.publicKey?.replace(/^0x/, '') || ''
     }).filter(Boolean)
   }
+
+  return `${toml.stringify(resolveEnvRefsDeep(config) as toml.JsonMap)}
+[[base_funding_utxos]]
+txid = "<txid of the DOGE sent to the helper address>"
+vout = 0
+amount_sats = 7_000_000_000
+prev_tx_hex = "<raw tx hex of the funding tx>"
+`
+}
+
+/**
+ * Generate protocol_seed.toml content from DeploymentSpec
+ */
+export function generateProtocolSeedToml(rawSpec: DeploymentSpec): string {
+  const spec = normalizeDeploymentSpec(rawSpec)
+  const ethChainId = getEthereumDaChainId(spec)
+
+  const protocol: toml.JsonMap = {}
+  protocol.protocol_version = 2
+  protocol.dogecoin_chain_id = resolveDogecoinChainId(spec.dogecoin.network)
+  protocol.l2_chain_id = spec.network.l2ChainId
+  protocol.eth_chain_id = ethChainId
+
+  const chainAnchors: toml.JsonMap = {}
+  chainAnchors.initial_ethereum_block_hash = ZERO_BYTES32
+  chainAnchors.initial_tx_index = 0
+  chainAnchors.initial_tx_blob_index = 0
+  chainAnchors.genesis_batch_hash = ZERO_BYTES32
+  chainAnchors.genesis_state_root = ZERO_BYTES32
+
+  const depositQueueTransform: toml.JsonMap = {}
+  depositQueueTransform.l1_scroll_messenger_address = PLACEHOLDER_L1_SCROLL_MESSENGER_ADDRESS
+  depositQueueTransform.l2_messenger_address = PLACEHOLDER_L2_MESSENGER_ADDRESS
+  depositQueueTransform.moat_address = PLACEHOLDER_MOAT_ADDRESS
+  depositQueueTransform.message_queue_gas_limit = spec.rollup.maxL1MessageGasLimit
+
+  const protocolConfig: toml.JsonMap = {}
+  protocolConfig.l2_chain_id = spec.network.l2ChainId
+  protocolConfig.eth_chain_id = ethChainId
+  protocolConfig.key_rotation_min_grace_wf_txs = 100
+  protocolConfig.min_deposit_sats = 100_000
+  protocolConfig.deposit_queue_transform = depositQueueTransform
+
+  const protocolConfigSeed: toml.JsonMap = {}
+  protocolConfigSeed.protocol_config = protocolConfig
+
+  const config: toml.JsonMap = {}
+  config.protocol = protocol
+  config.chain_anchors = chainAnchors
+  config.protocol_config_seed = protocolConfigSeed
 
   return toml.stringify(resolveEnvRefsDeep(config) as toml.JsonMap)
 }
@@ -1109,15 +1323,20 @@ function buildDbConnectionString(
 export interface GeneratedConfigs {
   'config.toml': string
   'doge-config.toml': string
+  'protocol_seed.toml': string
   'setup_defaults.toml': string
 }
 
 export function generateAllConfigs(spec: DeploymentSpec): GeneratedConfigs {
-  return {
+  const configs = {
     'config.toml': generateConfigToml(spec),
     'doge-config.toml': generateDogeConfigToml(spec),
+    'protocol_seed.toml': generateProtocolSeedToml(spec),
     'setup_defaults.toml': generateSetupDefaultsToml(spec),
   }
+
+  assertGeneratedDataNetworkConsistency(configs)
+  return configs
 }
 
 /**
@@ -1146,4 +1365,7 @@ export function writeGeneratedConfigs(
 
   // Write setup_defaults.toml to .data directory
   fs.writeFileSync(path.join(dogeConfigDir, 'setup_defaults.toml'), configs['setup_defaults.toml'])
+
+  // Write protocol_seed.toml to .data directory
+  fs.writeFileSync(path.join(dogeConfigDir, 'protocol_seed.toml'), configs['protocol_seed.toml'])
 }

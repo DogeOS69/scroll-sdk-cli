@@ -47,7 +47,9 @@ export const DOGE_CONFIG_TEMPLATE = getDogeConfigTemplate()
  * These are cluster-local service names, not real Ethereum DA endpoints.
  */
 export const L1_INTERFACE_RPC_ENDPOINT = 'http://l1-interface:8545'
+export const L1_INTERFACE_RPC_WEBSOCKET_ENDPOINT = 'ws://l1-devnet:8546'
 export const L1_INTERFACE_BEACON_API_ENDPOINT = 'http://l1-interface:5052'
+export const L2_RPC_ENDPOINT = 'http://l2-rpc:8545'
 
 /**
  * YAML formatting options

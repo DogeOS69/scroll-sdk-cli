@@ -39,10 +39,15 @@ export interface DogeConfig {
   defaults?: {
     dogecoinIndexerStartHeight?: string
   }
+  /** @deprecated Use dummySigner.provider. This field described dummy-signer runtime, not deployment infrastructure. */
   deploymentType?: 'aws' | 'local'
   dogecoinClusterRpc?: {
     password?: string // for dogecoin that deploy on cluster
     username?: string // for dogecoin that deploy on cluster
+  }
+  /** Dummy signer runtime provider. This is independent from the Kubernetes infrastructure provider. */
+  dummySigner?: {
+    provider?: 'aws' | 'local'
   }
 
   frontend?: {
