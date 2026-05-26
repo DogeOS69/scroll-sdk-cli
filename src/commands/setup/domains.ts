@@ -23,6 +23,8 @@ import {
 
 type EthereumDaChain = 'devnet' | 'mainnet' | 'sepolia'
 
+const PUBLIC_URL_PROTOCOL = 'https'
+
 const ETHEREUM_DA_DEFAULTS: Record<EthereumDaChain, {
   beaconRpcUrl: string
   chainId: string
@@ -537,7 +539,7 @@ export default class SetupDomains extends Command {
     let ingressConfig: Record<string, string> = {}
     const generalConfig: Record<string, string> = {}
     let urlEnding = ''
-    let protocol = ''
+    const protocol = PUBLIC_URL_PROTOCOL
 
     // In non-interactive mode, determine shared ending from existing config
     // If FRONTEND_HOST exists, we infer shared URL ending from it
@@ -559,17 +561,6 @@ export default class SetupDomains extends Command {
       urlEnding = niCtx?.enabled ? defaultUrlEnding : (await input({
           default: defaultUrlEnding,
           message: 'Enter the shared URL ending:',
-        }));
-
-      // Infer protocol from existing config
-      const existingProtocol = existingConfig.frontend?.EXTERNAL_RPC_URI_L2?.startsWith('https') ? 'https' : 'http'
-      protocol = niCtx?.enabled ? existingProtocol : (await select({
-          choices: [
-            { name: 'HTTP', value: 'http' },
-            { name: 'HTTPS', value: 'https' },
-          ],
-          default: existingProtocol,
-          message: 'Choose the protocol for the shared URLs:',
         }));
 
       // Infer frontend at root from existing config
@@ -611,17 +602,6 @@ export default class SetupDomains extends Command {
     } else {
       // Non-shared URL ending path - each host configured individually
       // In non-interactive mode, use existing config values
-      const existingProtocol = existingConfig.frontend?.EXTERNAL_RPC_URI_L1?.startsWith('https') ? 'https' : 'http'
-
-      protocol = niCtx?.enabled ? existingProtocol : (await select({
-          choices: [
-            { name: 'HTTP', value: 'http' },
-            { name: 'HTTPS', value: 'https' },
-          ],
-          default: existingProtocol,
-          message: 'Choose the protocol for the URLs:',
-        }));
-
       // Helper to resolve ingress hosts - uses existing config in non-interactive mode
       const resolveIngressHost = async (
         key: string,
@@ -727,13 +707,17 @@ export default class SetupDomains extends Command {
         defaultValue: string,
         description: string
       ): Promise<string> => {
+        const existingValue = typeof existingConfig.frontend?.[key] === 'string'
+          ? this.normalizeHttpsUrl(existingConfig.frontend[key])
+          : undefined
+        const resolvedDefault = existingValue || defaultValue
         const result = await resolveOrPrompt(
           niCtx!,
           () => input({
-            default: existingConfig.frontend?.[key] || defaultValue,
+            default: resolvedDefault,
             message: `Enter ${key}:`,
           }),
-          existingConfig.frontend?.[key] || defaultValue,
+          resolvedDefault,
           {
             configPath: `[frontend].${key}`,
             description,
@@ -741,7 +725,7 @@ export default class SetupDomains extends Command {
           },
           false
         )
-        return result || defaultValue
+        return this.normalizeHttpsUrl(result || defaultValue)
       }
 
       domainConfig = {
@@ -792,6 +776,11 @@ export default class SetupDomains extends Command {
     }
 
     return { domainConfig, generalConfig, ingressConfig, protocol }
+  }
+
+  private normalizeHttpsUrl(value: string): string {
+    const trimmed = value.trim()
+    return trimmed.replace(/^http:\/\//i, `${PUBLIC_URL_PROTOCOL}://`)
   }
 
   private async updateConfigFile(

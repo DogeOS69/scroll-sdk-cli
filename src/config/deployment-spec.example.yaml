@@ -124,7 +124,7 @@ signing:
     region: us-west-2
 
 frontend:
-  protocol: http
+  protocol: https
   baseDomain: scrollsdk
   externalUrls:
     l1Rpc: "https://sochain.com/DOGETEST"
