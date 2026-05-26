@@ -354,8 +354,6 @@ export default class SetupGenRpcPackage extends Command {
         }
       }
 
-      newVars.DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DISCOVERY_MODE = "on_demand";
-      newVars.DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__STORE_RAW_BLOB_DATA = "true";
 
       // If no updates needed, return early
       if (Object.keys(newVars).length === 0) {
