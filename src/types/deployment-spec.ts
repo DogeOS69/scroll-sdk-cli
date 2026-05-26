@@ -290,6 +290,9 @@ export interface DogecoinConfig {
     zmqRawTxPort?: number
   }
 
+  /** Dogecoin block height where the synthetic L1 chain starts using real Dogecoin block parents. */
+  l1GenesisBlock?: number
+
   /** Network type */
   network: 'mainnet' | 'regtest' | 'testnet'
 

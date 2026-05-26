@@ -43,6 +43,9 @@ accounts:
 
 dogecoin:
   network: testnet
+  # Optional: synthetic L1 starts using real Dogecoin block parents at this height.
+  # If omitted, generated values derive it as dogecoin.indexerStartHeight + 1.
+  # l1GenesisBlock: 8208200
   externalRpc:
     url: "https://dogecoin.testnet.dogeos.com"
     username: "$ENV:DOGECOIN_EXTERNAL_RPC_USERNAME"

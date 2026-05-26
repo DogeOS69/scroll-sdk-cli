@@ -129,6 +129,7 @@ export class DogeConfigCommand extends Command {
     const defaultConfig: DogeConfig = {
       defaults: {
         dogecoinIndexerStartHeight: '4000000',
+        l1GenesisBlock: '4000001',
       },
       dogecoinClusterRpc: {
         password: "",
@@ -355,7 +356,11 @@ export class DogeConfigCommand extends Command {
     delete (newConfig as Record<string, unknown>).ethereumDa
 
     newConfig.defaults!.dogecoinIndexerStartHeight = existingConfig.defaults?.dogecoinIndexerStartHeight || String(dogecoinCurrentHeight)
+    const indexerStartHeight = Number(newConfig.defaults!.dogecoinIndexerStartHeight)
+    newConfig.defaults!.l1GenesisBlock = existingConfig.defaults?.l1GenesisBlock ||
+      String(Number.isFinite(indexerStartHeight) ? Math.max(0, indexerStartHeight + 1) : 0)
     log(chalk.blue(`Dogecoin Indexer Start Height: ${newConfig.defaults!.dogecoinIndexerStartHeight}`))
+    log(chalk.blue(`L1 Genesis Block: ${newConfig.defaults!.l1GenesisBlock}`))
 
     // Validate any missing required fields before proceeding
     validateAndExit(niCtx)
@@ -392,6 +397,7 @@ export class DogeConfigCommand extends Command {
         configPath: resolvedPath,
         defaults: {
           dogecoinIndexerStartHeight: newConfig.defaults!.dogecoinIndexerStartHeight,
+          l1GenesisBlock: newConfig.defaults!.l1GenesisBlock,
         },
         network: newConfig.network,
         rpc: {

@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Test mocking */
 import * as toml from '@iarna/toml';
 import { expect } from 'chai';
+import * as yaml from 'js-yaml';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -269,20 +270,20 @@ describe('deployment-spec-generator', () => {
         subdomains: {
           blockbook: 'blockbook',
           blockscout: 'blockscout',
-          bridgeHistoryApi: 'bridge-api',
-          frontend: 'bridge',
-          rollupExplorerApi: 'rollup-api',
+          bridgeHistoryApi: 'bridge-history-api',
+          frontend: 'portal',
+          rollupExplorerApi: 'rollup-explorer-backend',
           rpcGateway: 'rpc',
         },
       };
 
       const normalized = normalizeDeploymentSpec(spec);
 
-      expect(normalized.frontend.hosts.frontend).to.equal('bridge.testnet.dogeos.io');
+      expect(normalized.frontend.hosts.frontend).to.equal('portal.testnet.dogeos.io');
       expect(normalized.frontend.hosts.blockscout).to.equal('blockscout.testnet.dogeos.io');
       expect(normalized.frontend.externalUrls.l2Explorer).to.equal('https://blockscout.testnet.dogeos.io');
-      expect(normalized.frontend.externalUrls.bridgeApi).to.equal('https://bridge-api.testnet.dogeos.io/api');
-      expect(normalized.frontend.externalUrls.rollupScanApi).to.equal('https://rollup-api.testnet.dogeos.io/api');
+      expect(normalized.frontend.externalUrls.bridgeApi).to.equal('https://bridge-history-api.testnet.dogeos.io/api');
+      expect(normalized.frontend.externalUrls.rollupScanApi).to.equal('https://rollup-explorer-backend.testnet.dogeos.io/api');
     });
 
     it('fills contract verification explorer URLs from frontend URLs', () => {
@@ -413,6 +414,20 @@ describe('deployment-spec-generator', () => {
       spec.dogecoin.network = 'testnet';
       const result = validateDeploymentSpec(spec);
       expect(result.warnings.some(w => w.path === 'dogecoin.network')).to.be.true;
+    });
+
+    it('fails when the Dogecoin indexer starts at or after the L1 genesis block', () => {
+      const spec = createMinimalSpec();
+      spec.dogecoin.indexerStartHeight = 8_208_200;
+      spec.dogecoin.l1GenesisBlock = 8_208_200;
+
+      const result = validateDeploymentSpec(spec);
+
+      expect(result.valid).to.be.false;
+      expect(result.errors.some(error =>
+        error.code === 'E011_INVALID_DOGECOIN_HEIGHT' &&
+        error.path === 'dogecoin.indexerStartHeight'
+      )).to.be.true;
     });
 
     it('fails when l1 chain ID does not match dogecoin network', () => {
@@ -648,7 +663,13 @@ describe('deployment-spec-generator', () => {
 
       const output = generateConfigToml(spec);
 
-      expect(output).to.include('FRONTEND_HOST = "bridge.testnet.dogeos.io"');
+      expect(output).to.include('FRONTEND_HOST = "portal.testnet.dogeos.io"');
+      expect(output).to.include('ADMIN_SYSTEM_DASHBOARD_HOST = "admin-system-dashboard.testnet.dogeos.io"');
+      expect(output).to.include('BRIDGE_HISTORY_API_HOST = "bridge-history-api.testnet.dogeos.io"');
+      expect(output).to.include('COORDINATOR_API_HOST = "coordinator-api.testnet.dogeos.io"');
+      expect(output).to.include('ROLLUP_EXPLORER_API_HOST = "rollup-explorer-backend.testnet.dogeos.io"');
+      expect(output).to.include('BRIDGE_API_URI = "https://bridge-history-api.testnet.dogeos.io/api"');
+      expect(output).to.include('ROLLUPSCAN_API_URI = "https://rollup-explorer-backend.testnet.dogeos.io/api"');
       expect(output).to.include('EXTERNAL_EXPLORER_URI_L2 = "https://blockscout.testnet.dogeos.io"');
       expect(output).to.include('EXPLORER_URI_L2 = "https://blockscout.testnet.dogeos.io"');
     });
@@ -705,6 +726,25 @@ describe('deployment-spec-generator', () => {
       const output = generateDogeConfigToml(spec);
 
       expect(output).to.include('/data/wallet.dat');
+    });
+
+    it('includes L1 genesis block derived from the Dogecoin indexer start height', () => {
+      const spec = createMinimalSpec();
+      spec.dogecoin.indexerStartHeight = 8_208_199;
+      const parsed = toml.parse(generateDogeConfigToml(spec)) as any;
+
+      expect(parsed.defaults.dogecoinIndexerStartHeight).to.equal('8208199');
+      expect(parsed.defaults.l1GenesisBlock).to.equal('8208200');
+    });
+
+    it('preserves explicit L1 genesis block from the spec', () => {
+      const spec = createMinimalSpec();
+      spec.dogecoin.indexerStartHeight = 8_200_000;
+      spec.dogecoin.l1GenesisBlock = 8_208_200;
+      const parsed = toml.parse(generateDogeConfigToml(spec)) as any;
+
+      expect(parsed.defaults.dogecoinIndexerStartHeight).to.equal('8200000');
+      expect(parsed.defaults.l1GenesisBlock).to.equal('8208200');
     });
 
     it('includes Ethereum DA config', () => {
@@ -1040,7 +1080,6 @@ describe('deployment-spec-generator', () => {
       expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__INDEXER_SQLITE_PATH');
       expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_STORE_ROOT');
       expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_METADATA_SQLITE_PATH');
-      expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE');
       expect(files['withdrawal-processor-production.yaml']).to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCES__BEACON__ENDPOINT');
       expect(files['withdrawal-processor-production.yaml']).to.include('https://ethereum-sepolia-beacon-api.publicnode.com');
       expect(files['dogecoin-production.yaml']).to.include('rpcuser: cluster-rpc-user');
@@ -1053,6 +1092,19 @@ describe('deployment-spec-generator', () => {
       expect(files['l2-bootnode-production.yaml']).to.include('L2GETH_L1_ENDPOINT: http://l1-interface:8545');
       expect(files['l2-sequencer-production.yaml']).to.include('L2GETH_L1_ENDPOINT: http://l1-interface:8545');
       expect(files['contracts-production.yaml']).to.include('SCROLL_L1_FEE_VAULT_ADDR: \'0x1111111111111111111111111111111111111111\'');
+    });
+
+    it('generates l1-interface genesis and indexer heights independently', () => {
+      const spec = createMinimalSpec();
+      spec.dogecoin.indexerStartHeight = 8_200_000;
+      spec.dogecoin.l1GenesisBlock = 8_208_200;
+
+      const files = generateValuesFiles(spec);
+      const l1InterfaceValues = yaml.load(files['l1-interface-production.yaml']) as any;
+      const envData = l1InterfaceValues.configMaps.env.data;
+
+      expect(envData.DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK).to.equal('8208200');
+      expect(envData.DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT).to.equal('8200000');
     });
   });
 

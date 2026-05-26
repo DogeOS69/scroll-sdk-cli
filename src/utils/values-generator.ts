@@ -24,6 +24,7 @@ import {
 import {
   getBridgeFeeRateSatsPerKvb,
   getDogecoinIndexerStartHeight,
+  getL1GenesisBlock,
   normalizeDeploymentSpec,
 } from './deployment-spec-generator.js'
 import {
@@ -567,9 +568,6 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
         data: {
           DOGEOS_L1_INTERFACE_API_BIND_ADDRESS: '0.0.0.0:8545',
           DOGEOS_L1_INTERFACE_BEACON_API_LISTEN_ADDRESS: '0.0.0.0:5052',
-          // Ethereum DA mode: keep the legacy Celestia indexer inert.
-          DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DISCOVERY_MODE: 'on_demand',
-          DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__STORE_RAW_BLOB_DATA: 'true',
           DOGEOS_L1_INTERFACE_CHAIN_ID: String(spec.network.l2ChainId),
           DOGEOS_L1_INTERFACE_DATABASE_URL: 'sqlite:///data/l1-interface.sqlite',
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__CONFIRMATIONS: String(spec.bridge.confirmationsRequired),
@@ -582,6 +580,7 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
           DOGEOS_L1_INTERFACE_GENESIS_JSON_PATH: '/app/genesis/genesis.json',
           DOGEOS_L1_INTERFACE_HEALTH_LISTEN_ADDRESS: '0.0.0.0:9090',
           DOGEOS_L1_INTERFACE_L1_CHAIN_ID: String(spec.network.l1ChainId),
+          DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK: String(getL1GenesisBlock(spec)),
           DOGEOS_L1_INTERFACE_NETWORK_STR: spec.dogecoin.network,
           DOGEOS_L1_INTERFACE_REPLAY_READ__ENABLED: 'true',
           DOGEOS_L1_INTERFACE_REPLAY_READ__PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',

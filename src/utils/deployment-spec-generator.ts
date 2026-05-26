@@ -119,15 +119,16 @@ function resolveEnvRefsDeep(value: unknown): unknown {
 }
 
 const DEFAULT_FRONTEND_SUBDOMAINS = {
-  adminDashboard: 'admin',
+  adminDashboard: 'admin-system-dashboard',
   blockbook: 'blockbook',
   blockscout: 'blockscout',
-  bridgeHistoryApi: 'bridge-api',
-  coordinatorApi: 'coordinator',
+  blockscoutBackend: 'blockscout-backend',
+  bridgeHistoryApi: 'bridge-history-api',
+  coordinatorApi: 'coordinator-api',
   dogecoin: 'dogecoin',
-  frontend: 'bridge',
+  frontend: 'portal',
   grafana: 'grafana',
-  rollupExplorerApi: 'rollup-api',
+  rollupExplorerApi: 'rollup-explorer-backend',
   rpcGateway: 'rpc',
   rpcGatewayWs: 'ws-rpc',
   tso: 'tso',
@@ -250,6 +251,10 @@ function optionalAccountPrivateKey(spec: DeploymentSpec, key: PrivateKeyAccountK
 
 export function getDogecoinIndexerStartHeight(spec: DeploymentSpec): number {
   return spec.dogecoin.indexerStartHeight ?? 0
+}
+
+export function getL1GenesisBlock(spec: DeploymentSpec): number {
+  return spec.dogecoin.l1GenesisBlock ?? Math.max(0, getDogecoinIndexerStartHeight(spec) + 1)
 }
 
 export function getBridgeFeeRateSatsPerKvb(spec: DeploymentSpec): number {
@@ -705,11 +710,39 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   }
 
   if (spec.dogecoin?.indexerStartHeight !== undefined) {
+    if (!Number.isSafeInteger(spec.dogecoin.indexerStartHeight) || spec.dogecoin.indexerStartHeight < 0) {
+      errors.push({
+        code: 'E011_INVALID_DOGECOIN_HEIGHT',
+        message: 'dogecoin.indexerStartHeight must be a non-negative integer',
+        path: 'dogecoin.indexerStartHeight',
+      })
+    }
+
     warnings.push({
       message: 'dogecoin.indexerStartHeight is deprecated',
       path: 'dogecoin.indexerStartHeight',
       suggestion: 'Omit it from the spec; bridge-init derives and writes the start height.',
     })
+  }
+
+  if (spec.dogecoin?.l1GenesisBlock !== undefined) {
+    if (!Number.isSafeInteger(spec.dogecoin.l1GenesisBlock) || spec.dogecoin.l1GenesisBlock < 0) {
+      errors.push({
+        code: 'E011_INVALID_DOGECOIN_HEIGHT',
+        message: 'dogecoin.l1GenesisBlock must be a non-negative integer',
+        path: 'dogecoin.l1GenesisBlock',
+      })
+    } else if (
+      spec.dogecoin.indexerStartHeight !== undefined &&
+      spec.dogecoin.l1GenesisBlock > 0 &&
+      spec.dogecoin.indexerStartHeight >= spec.dogecoin.l1GenesisBlock
+    ) {
+      errors.push({
+        code: 'E011_INVALID_DOGECOIN_HEIGHT',
+        message: 'dogecoin.indexerStartHeight must be lower than dogecoin.l1GenesisBlock because l1-interface starts scanning from start_height + 1',
+        path: 'dogecoin.indexerStartHeight',
+      })
+    }
   }
 
   if (spec.dogecoin?.rpc !== undefined) {
@@ -1152,6 +1185,7 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
 
   config.defaults = {
     dogecoinIndexerStartHeight: String(getDogecoinIndexerStartHeight(spec)),
+    l1GenesisBlock: String(getL1GenesisBlock(spec)),
   }
 
   config.frontend = {

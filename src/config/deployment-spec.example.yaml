@@ -69,6 +69,9 @@ accounts:
 
 dogecoin:
   network: testnet
+  # Synthetic L1 starts using real Dogecoin block parents at this height.
+  # The Dogecoin indexer start height should be lower; bridge-init derives it as H - 1.
+  l1GenesisBlock: 8208200
   externalRpc:
     url: "https://testnet.doge-rpc.io"
     username: "$ENV:DOGECOIN_EXTERNAL_RPC_USERNAME"
