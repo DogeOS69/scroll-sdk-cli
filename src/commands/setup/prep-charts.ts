@@ -1252,7 +1252,7 @@ export default class SetupPrepCharts extends Command {
 
         const ethereumDaEmbeddedIndexerStartBlock = this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock
         if (ethereumDaEmbeddedIndexerStartBlock !== undefined && String(ethereumDaEmbeddedIndexerStartBlock).trim() !== '') {
-          todoMappings["DOGEOS_WITHDRAWAL_ETHEREUM_DA__EMBEDDED_INDEXER__START_BLOCK"] = String(ethereumDaEmbeddedIndexerStartBlock)
+          todoMappings.DOGEOS_WITHDRAWAL_ETHEREUM_DA__EMBEDDED_INDEXER__START_BLOCK = String(ethereumDaEmbeddedIndexerStartBlock)
         }
 
         for (const [envKey, newVal] of Object.entries(todoMappings)) {

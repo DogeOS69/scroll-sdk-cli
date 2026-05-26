@@ -3,15 +3,18 @@ import * as toml from '@iarna/toml'
 import { confirm, input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
+import * as yaml from 'js-yaml'
+import crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import type { Network } from '../../types/doge-config.js'
+import type { DogeConfig, Network } from '../../types/doge-config.js'
 
-import { L1_INTERFACE_RPC_ENDPOINT } from '../../config/constants.js'
+import { L1_INTERFACE_RPC_ENDPOINT, L2_RPC_ENDPOINT, SETUP_DEFAULTS_TEMPLATE, YAML_DUMP_OPTIONS, getSetupDefaultsPath } from '../../config/constants.js'
 import { writeConfigs } from '../../utils/config-writer.js'
-import { getOptionalDogeNetworkFromConfig, normalizeDogeNetwork, setDogeNetworkInConfig } from '../../utils/doge-config.js'
+import { dogeConfigToToml, getOptionalDogeNetworkFromConfig, normalizeDogeNetwork, setDogeNetworkInConfig } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
+import { resolveDogecoinKubernetesEndpoints } from '../../utils/kubernetes-endpoints.js'
 import {
   type NonInteractiveContext,
   createNonInteractiveContext,
@@ -23,7 +26,49 @@ import {
 
 type EthereumDaChain = 'devnet' | 'mainnet' | 'sepolia'
 
+interface BootstrapChartResult {
+  charts: string[]
+  dataFiles: string[]
+}
+
+interface BootstrapOptions {
+  clusterIssuer: string
+  includeTls: boolean
+  valuesDir: string
+}
+
+interface EthereumDaConfig {
+  beaconRpcUrl: string
+  chain: EthereumDaChain
+  chainId: string
+  minFinality: 'finalized' | 'safe'
+  submitterRpcUrl: string
+}
+
+interface DogecoinBootstrapValuesInput {
+  clusterIssuer: string
+  clusterRpcPassword: string
+  clusterRpcUsername: string
+  host: string
+  includeTls: boolean
+  network: Network
+}
+
+interface L1DevnetBootstrapValuesInput {
+  chainId: number
+  clusterIssuer: string
+  host: string
+  includeTls: boolean
+}
+
 const PUBLIC_URL_PROTOCOL = 'https'
+const CLUSTER_LOCAL_HTTP_SERVICE_HOSTS = [
+  'l1-devnet',
+  'l1-devnet-geth',
+  'l1-devnet-lighthouse',
+  'l1-interface',
+  'l2-rpc',
+] as const
 
 const ETHEREUM_DA_DEFAULTS: Record<EthereumDaChain, {
   beaconRpcUrl: string
@@ -51,6 +96,226 @@ const ETHEREUM_DA_DEFAULTS: Record<EthereumDaChain, {
   },
 }
 
+function isClusterLocalServiceHost(hostname: string, serviceHosts: readonly string[]): boolean {
+  const normalizedHostname = hostname.toLowerCase()
+  return serviceHosts.some(serviceHost =>
+    normalizedHostname === serviceHost || normalizedHostname.startsWith(`${serviceHost}.`)
+  )
+}
+
+export function normalizeClusterLocalHttpUrl(value: string, serviceHosts: readonly string[] = CLUSTER_LOCAL_HTTP_SERVICE_HOSTS): string {
+  const trimmed = value.trim()
+  if (!trimmed.toLowerCase().startsWith('https://')) return trimmed
+
+  try {
+    const parsedUrl = new URL(trimmed)
+    if (isClusterLocalServiceHost(parsedUrl.hostname, serviceHosts)) {
+      return trimmed.replace(/^https:\/\//i, 'http://')
+    }
+  } catch {
+    return trimmed
+  }
+
+  return trimmed
+}
+
+export function buildDogecoinBootstrapValues(
+  existingValues: Record<string, any>,
+  input: DogecoinBootstrapValuesInput
+): Record<string, any> {
+  const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints({ network: input.network })
+  const isRegtest = input.network === 'regtest'
+  const isTestnet = input.network === 'testnet'
+  const values = { ...existingValues }
+  const existingResources = values.resources as Record<string, any> | undefined
+  const existingResourceLimits = existingResources?.limits as Record<string, any> | undefined
+  const existingResourceRequests = existingResources?.requests as Record<string, any> | undefined
+
+  values.fullnameOverride = dogecoinEndpoints.serviceName
+  values.dogecoinConf = {
+    ...values.dogecoinConf,
+    disablewallet: 0,
+    regtest: isRegtest ? 1 : 0,
+    rpcallowip: ['0.0.0.0/0'],
+    rpcpassword: input.clusterRpcPassword,
+    rpcuser: input.clusterRpcUsername,
+    rpcworkqueue: 128,
+    server: 1,
+    testnet: isTestnet ? 1 : 0,
+    txindex: 1,
+    zmqpubhashblock: `tcp://0.0.0.0:${dogecoinEndpoints.zmqHashBlockPort}`,
+    zmqpubhashtx: `tcp://0.0.0.0:${dogecoinEndpoints.zmqHashTxPort}`,
+    zmqpubrawblock: `tcp://0.0.0.0:${dogecoinEndpoints.zmqRawBlockPort}`,
+    zmqpubrawtx: `tcp://0.0.0.0:${dogecoinEndpoints.zmqRawTxPort}`,
+  }
+  values.service = {
+    ...values.service,
+    port: dogecoinEndpoints.p2pPort,
+    rpcPort: dogecoinEndpoints.rpcPort,
+    zmqHashBlockPort: dogecoinEndpoints.zmqHashBlockPort,
+    zmqHashTxPort: dogecoinEndpoints.zmqHashTxPort,
+    zmqRawBlockPort: dogecoinEndpoints.zmqRawBlockPort,
+    zmqRawTxPort: dogecoinEndpoints.zmqRawTxPort,
+  }
+  values.resources = {
+    ...existingResources,
+    limits: {
+      ...existingResourceLimits,
+      cpu: '2000m',
+      memory: isRegtest || isTestnet ? '30Gi' : '32Gi',
+    },
+    requests: {
+      ...existingResourceRequests,
+      cpu: '500m',
+      memory: '16Gi',
+    },
+  }
+  values.storage = {
+    ...values.storage,
+    retainPvcOnUninstall: true,
+    size: isRegtest || isTestnet ? '50Gi' : '250Gi',
+  }
+  values.ingress = buildStandardIngressValues({
+    chartName: 'dogecoin',
+    clusterIssuer: input.clusterIssuer,
+    extraAnnotations: {
+      'nginx.ingress.kubernetes.io/backend-protocol': 'TCP',
+    },
+    host: input.host,
+    includeTls: input.includeTls,
+  })
+  values.env = upsertPlainEnvValues(values.env, {
+    DOGECOIN_RPC_PASSWORD: input.clusterRpcPassword,
+    DOGECOIN_RPC_USER: input.clusterRpcUsername,
+  })
+
+  // Regtest bootstrap keeps credentials directly in chart values/env, not in
+  // external-secrets or a generated Kubernetes Secret.
+  delete values.externalSecrets
+  delete values.rpcPassword
+
+  return values
+}
+
+export function buildL1DevnetBootstrapValues(
+  existingValues: Record<string, any>,
+  input: L1DevnetBootstrapValuesInput
+): Record<string, any> {
+  const values = { ...existingValues }
+  values.global = {
+    ...values.global,
+    fullnameOverride: 'l1-devnet',
+  }
+  values.network = {
+    ...values.network,
+    chainId: input.chainId,
+    networkId: input.chainId,
+  }
+  values.ingress = {
+    ...values.ingress,
+    main: buildNestedIngressValues({
+      chartName: 'l1-devnet',
+      clusterIssuer: input.clusterIssuer,
+      host: input.host,
+      includeTls: input.includeTls,
+    }),
+  }
+
+  return values
+}
+
+function buildStandardIngressValues(input: {
+  chartName: string
+  clusterIssuer: string
+  extraAnnotations?: Record<string, string>
+  host: string
+  includeTls: boolean
+}): Record<string, any> {
+  const annotations = {
+    ...input.extraAnnotations,
+    ...(input.includeTls
+      ? {
+        'cert-manager.io/cluster-issuer': input.clusterIssuer,
+        'nginx.ingress.kubernetes.io/ssl-redirect': 'true',
+      }
+      : {}),
+  }
+  const ingress: Record<string, any> = {
+    annotations,
+    className: 'nginx',
+    enabled: true,
+    hosts: [{
+      host: input.host,
+      paths: [{ path: '/', pathType: 'Prefix' }],
+    }],
+  }
+
+  if (input.includeTls) {
+    ingress.tls = [{
+      hosts: [input.host],
+      secretName: `${input.chartName}-tls`,
+    }]
+  } else {
+    delete ingress.tls
+  }
+
+  return ingress
+}
+
+function buildNestedIngressValues(input: {
+  chartName: string
+  clusterIssuer: string
+  host: string
+  includeTls: boolean
+}): Record<string, any> {
+  const ingress: Record<string, any> = {
+    hosts: [{
+      host: input.host,
+      paths: [{ path: '/', pathType: 'Prefix' }],
+    }],
+    ingressClassName: 'nginx',
+  }
+
+  if (input.includeTls) {
+    ingress.annotations = {
+      'cert-manager.io/cluster-issuer': input.clusterIssuer,
+      'nginx.ingress.kubernetes.io/ssl-redirect': 'true',
+    }
+    ingress.tls = [{
+      hosts: [input.host],
+      secretName: `${input.chartName}-tls`,
+    }]
+  } else {
+    delete ingress.annotations
+    delete ingress.tls
+  }
+
+  return ingress
+}
+
+function upsertPlainEnvValues(
+  existingEnv: unknown,
+  values: Record<string, string>
+): Array<Record<string, string>> {
+  const env = Array.isArray(existingEnv)
+    ? existingEnv.filter((item): item is Record<string, string> => {
+      const candidate = item as { name?: unknown }
+      return Boolean(item) && typeof item === 'object' && !Array.isArray(item) && typeof candidate.name === 'string'
+    })
+    : []
+
+  for (const [name, value] of Object.entries(values)) {
+    const existing = env.find(item => item.name === name)
+    if (existing) {
+      existing.value = value
+    } else {
+      env.push({ name, value })
+    }
+  }
+
+  return env
+}
+
 export default class SetupDomains extends Command {
   static override description = 'Set up domain configurations for external services'
 
@@ -62,6 +327,10 @@ export default class SetupDomains extends Command {
   ]
 
   static override flags = {
+    'cluster-issuer': Flags.string({
+      default: 'letsencrypt-prod',
+      description: 'ClusterIssuer name to write into bootstrap chart TLS annotations',
+    }),
     json: Flags.boolean({
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)',
@@ -71,10 +340,18 @@ export default class SetupDomains extends Command {
       description: 'Dogecoin network to write to [dogecoin].network',
       options: ['mainnet', 'testnet', 'regtest'],
     }),
+    'no-bootstrap-tls': Flags.boolean({
+      default: false,
+      description: 'Do not write TLS settings into bootstrap dogecoin/l1-devnet values',
+    }),
     'non-interactive': Flags.boolean({
       char: 'N',
       default: false,
       description: 'Run without prompts, using config.toml values',
+    }),
+    'values-dir': Flags.string({
+      default: 'values',
+      description: 'Directory containing Helm values files to prepare for bootstrap charts',
     }),
   }
 
@@ -89,6 +366,11 @@ export default class SetupDomains extends Command {
       flags.json
     )
     const jsonCtx = new JsonOutputContext('setup domains', flags.json)
+    const bootstrapOptions: BootstrapOptions = {
+      clusterIssuer: flags['cluster-issuer'],
+      includeTls: !flags['no-bootstrap-tls'],
+      valuesDir: flags['values-dir'],
+    }
 
     // In non-interactive mode, log to stderr to keep stdout clean for JSON
     const logSection = (title: string) => jsonCtx.logSection(title)
@@ -213,10 +495,16 @@ export default class SetupDomains extends Command {
     if (usesDogeos) {
       generalConfig.L1_RPC_ENDPOINT = L1_INTERFACE_RPC_ENDPOINT
       generalConfig.L1_RPC_ENDPOINT_WEBSOCKET = ''
+      generalConfig.L2_RPC_ENDPOINT = normalizeClusterLocalHttpUrl(
+        typeof existingConfig.general?.L2_RPC_ENDPOINT === 'string'
+          ? existingConfig.general.L2_RPC_ENDPOINT
+          : L2_RPC_ENDPOINT
+      )
     }
 
     logSuccess(`Using internal l1-interface JSON-RPC endpoint [general].L1_RPC_ENDPOINT = "${generalConfig.L1_RPC_ENDPOINT}"`)
     logSuccess(`Using no internal L1 WebSocket endpoint [general].L1_RPC_ENDPOINT_WEBSOCKET = "${generalConfig.L1_RPC_ENDPOINT_WEBSOCKET}"`)
+    logSuccess(`Using internal L2 JSON-RPC endpoint [general].L2_RPC_ENDPOINT = "${generalConfig.L2_RPC_ENDPOINT}"`)
 
     const { domainConfig: sharedDomainConfig, ingressConfig } = await this.setupSharedConfigs(existingConfig, usesAnvil, niCtx)
 
@@ -302,15 +590,26 @@ export default class SetupDomains extends Command {
     )
     frontendConfig.CONNECT_WALLET_PROJECT_ID = walletProjectId || "14efbaafcf5232a47d93a68229b71028"
 
-    const defaultDogeExternalUrl = selectedDogeNetwork === 'mainnet' ? 'https://sochain.com/DOGE' : 'https://sochain.com/DOGETEST'
+    const regtestDogecoinUrl = `${PUBLIC_URL_PROTOCOL}://${ingressConfig.DOGECOIN_HOST}`
+    const regtestBlockbookUrl = ingressConfig.BLOCKBOOK_HOST
+      ? `${PUBLIC_URL_PROTOCOL}://${ingressConfig.BLOCKBOOK_HOST}`
+      : regtestDogecoinUrl
+    const defaultDogeExternalRpcUrl = selectedDogeNetwork === 'regtest'
+      ? regtestDogecoinUrl
+      : selectedDogeNetwork === 'mainnet'
+        ? 'https://sochain.com/DOGE'
+        : 'https://sochain.com/DOGETEST'
+    const defaultDogeExternalExplorerUrl = selectedDogeNetwork === 'regtest'
+      ? regtestBlockbookUrl
+      : defaultDogeExternalRpcUrl
 
     const dogeRpcL1 = await resolveOrPrompt(
       niCtx,
       () => input({
-        default: existingConfig.frontend?.DOGE_EXTERNAL_RPC_URI_L1 || defaultDogeExternalUrl,
+        default: existingConfig.frontend?.DOGE_EXTERNAL_RPC_URI_L1 || defaultDogeExternalRpcUrl,
         message: 'Enter the public Dogecoin L1 API URL used by the frontend ([frontend].DOGE_EXTERNAL_RPC_URI_L1):',
       }),
-      existingConfig.frontend?.DOGE_EXTERNAL_RPC_URI_L1 || defaultDogeExternalUrl,
+      existingConfig.frontend?.DOGE_EXTERNAL_RPC_URI_L1 || defaultDogeExternalRpcUrl,
       {
         configPath: '[frontend].DOGE_EXTERNAL_RPC_URI_L1',
         description: 'Public Dogecoin L1 API URL used by frontend wallet/deposit flows',
@@ -318,15 +617,15 @@ export default class SetupDomains extends Command {
       },
       false
     )
-    frontendConfig.DOGE_EXTERNAL_RPC_URI_L1 = dogeRpcL1 || defaultDogeExternalUrl
+    frontendConfig.DOGE_EXTERNAL_RPC_URI_L1 = dogeRpcL1 || defaultDogeExternalRpcUrl
 
     const dogeExplorerL1 = await resolveOrPrompt(
       niCtx,
       () => input({
-        default: existingConfig.frontend?.DOGE_EXTERNAL_EXPLORER_URI_L1 || defaultDogeExternalUrl,
+        default: existingConfig.frontend?.DOGE_EXTERNAL_EXPLORER_URI_L1 || defaultDogeExternalExplorerUrl,
         message: 'Enter the public Dogecoin L1 explorer base URL for links ([frontend].DOGE_EXTERNAL_EXPLORER_URI_L1):',
       }),
-      existingConfig.frontend?.DOGE_EXTERNAL_EXPLORER_URI_L1 || defaultDogeExternalUrl,
+      existingConfig.frontend?.DOGE_EXTERNAL_EXPLORER_URI_L1 || defaultDogeExternalExplorerUrl,
       {
         configPath: '[frontend].DOGE_EXTERNAL_EXPLORER_URI_L1',
         description: 'Public Dogecoin L1 explorer base URL for transaction/address links',
@@ -334,7 +633,7 @@ export default class SetupDomains extends Command {
       },
       false
     )
-    frontendConfig.DOGE_EXTERNAL_EXPLORER_URI_L1 = dogeExplorerL1 || defaultDogeExternalUrl
+    frontendConfig.DOGE_EXTERNAL_EXPLORER_URI_L1 = dogeExplorerL1 || defaultDogeExternalExplorerUrl
 
     const existingEthereumDa = existingConfig.ethereumDa as Record<string, string> | undefined
     const existingEthereumDaChain = existingEthereumDa?.chain as EthereumDaChain | undefined
@@ -365,7 +664,7 @@ export default class SetupDomains extends Command {
         ? existingEthereumDa?.[field] || ethereumDaDefaults[field]
         : ethereumDaDefaults[field]
 
-    const ethereumDaSubmitterRpcUrl = await resolveOrPrompt(
+    const ethereumDaSubmitterRpcUrl = normalizeClusterLocalHttpUrl(await resolveOrPrompt(
       niCtx,
       () => input({
         default: ethereumDaFieldDefault('submitterRpcUrl'),
@@ -377,9 +676,9 @@ export default class SetupDomains extends Command {
         description: 'Real Ethereum execution JSON-RPC endpoint used by eth-da-submitter',
         field: 'submitterRpcUrl',
       },
-    ) || ethereumDaDefaults.submitterRpcUrl
+    ) || ethereumDaDefaults.submitterRpcUrl)
 
-    const ethereumDaBeaconRpcUrl = await resolveOrPrompt(
+    const ethereumDaBeaconRpcUrl = normalizeClusterLocalHttpUrl(await resolveOrPrompt(
       niCtx,
       () => input({
         default: ethereumDaFieldDefault('beaconRpcUrl'),
@@ -391,7 +690,7 @@ export default class SetupDomains extends Command {
         description: 'Real Ethereum beacon API endpoint used as the DA data source',
         field: 'beaconRpcUrl',
       },
-    ) || ethereumDaDefaults.beaconRpcUrl
+    ) || ethereumDaDefaults.beaconRpcUrl)
 
     const ethereumDaChainId = await resolveOrPrompt(
       niCtx,
@@ -415,6 +714,10 @@ export default class SetupDomains extends Command {
       submitterRpcUrl: ethereumDaSubmitterRpcUrl,
     }
 
+    if (ethereumDaChain === 'devnet') {
+      this.ensureL1DevnetIngressConfig(ingressConfig, domainConfig, existingConfig)
+    }
+
     logSection('New Ethereum DA configurations:')
     logKeyValue('chain', ethereumDaConfig.chain)
     logKeyValue('chainId', ethereumDaConfig.chainId)
@@ -435,10 +738,18 @@ export default class SetupDomains extends Command {
     if (confirmUpdate) {
       const dogecoinConfig = { network: selectedDogeNetwork }
       await this.updateConfigFile(domainConfig, ingressConfig, generalConfig, frontendConfig, ethereumDaConfig, dogecoinConfig, flags.json)
+      const bootstrap = this.prepareBootstrapArtifacts(
+        selectedDogeNetwork,
+        ingressConfig,
+        ethereumDaConfig,
+        bootstrapOptions,
+        jsonCtx
+      )
 
       // Output JSON response on success
       if (flags.json) {
         jsonCtx.success({
+          bootstrap,
           dogecoin: dogecoinConfig,
           domain: domainConfig,
           ethereumDa: ethereumDaConfig,
@@ -455,6 +766,21 @@ export default class SetupDomains extends Command {
 
   private collapseRepeatedBlankLines(content: string): string {
     return content.replaceAll(/\n{3,}/g, '\n\n')
+  }
+
+  private ensureL1DevnetIngressConfig(
+    ingressConfig: Record<string, string>,
+    domainConfig: Record<string, string>,
+    existingConfig: any,
+  ): void {
+    const baseDomain = this.inferBaseDomainFromIngress(ingressConfig, existingConfig)
+    const l1DevnetHost = existingConfig.ingress?.L1_DEVNET_HOST || ingressConfig.L1_DEVNET_HOST || `l1-devnet.${baseDomain}`
+    const l1ExplorerHost = existingConfig.ingress?.L1_EXPLORER_HOST || ingressConfig.L1_EXPLORER_HOST || `l1-explorer.${baseDomain}`
+
+    ingressConfig.L1_DEVNET_HOST = l1DevnetHost
+    ingressConfig.L1_EXPLORER_HOST = l1ExplorerHost
+    domainConfig.EXTERNAL_RPC_URI_L1 = domainConfig.EXTERNAL_RPC_URI_L1 || `${PUBLIC_URL_PROTOCOL}://${l1DevnetHost}`
+    domainConfig.EXTERNAL_EXPLORER_URI_L1 = domainConfig.EXTERNAL_EXPLORER_URI_L1 || `${PUBLIC_URL_PROTOCOL}://${l1ExplorerHost}`
   }
 
   private escapeRegExp(value: string): string {
@@ -505,6 +831,18 @@ export default class SetupDomains extends Command {
     return toml.stringify({ [key]: value }).trim()
   }
 
+  private generateSecureRandomString(length: number): string {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    let result = ''
+    const randomBytes = crypto.randomBytes(length)
+
+    for (let i = 0; i < length; i++) {
+      result += chars[randomBytes[i] % chars.length]
+    }
+
+    return result
+  }
+
   private async getExistingConfig(): Promise<any> {
     const configPath = path.join(process.cwd(), 'config.toml')
     if (!fs.existsSync(configPath)) {
@@ -514,6 +852,97 @@ export default class SetupDomains extends Command {
 
     const configContent = fs.readFileSync(configPath, 'utf8')
     return toml.parse(configContent) as any
+  }
+
+  private inferBaseDomainFromIngress(ingressConfig: Record<string, string>, existingConfig: any): string {
+    const frontendHost = ingressConfig.FRONTEND_HOST || existingConfig.ingress?.FRONTEND_HOST || 'scrollsdk'
+    for (const prefix of ['portal.', 'frontend.', 'frontends.']) {
+      if (frontendHost.startsWith(prefix)) {
+        return frontendHost.slice(prefix.length) || 'scrollsdk'
+      }
+    }
+
+    return frontendHost || 'scrollsdk'
+  }
+
+  private normalizeHttpsUrl(value: string): string {
+    const trimmed = value.trim()
+    return trimmed.replace(/^http:\/\//i, `${PUBLIC_URL_PROTOCOL}://`)
+  }
+
+  private prepareBootstrapArtifacts(
+    selectedDogeNetwork: Network,
+    ingressConfig: Record<string, string>,
+    ethereumDaConfig: EthereumDaConfig,
+    options: BootstrapOptions,
+    jsonCtx: JsonOutputContext,
+  ): BootstrapChartResult {
+    const result: BootstrapChartResult = { charts: [], dataFiles: [] }
+    const valuesDir = path.resolve(options.valuesDir)
+    if (!fs.existsSync(valuesDir)) {
+      fs.mkdirSync(valuesDir, { recursive: true })
+    }
+
+    if (selectedDogeNetwork === 'regtest') {
+      const regtestConfig = this.writeRegtestDogeConfigFiles(ingressConfig)
+      result.dataFiles.push(regtestConfig.dogeConfigPath, regtestConfig.setupDefaultsPath)
+
+      const dogecoinValuesPath = path.join(valuesDir, 'dogecoin-production.yaml')
+      const dogecoinValues = buildDogecoinBootstrapValues(
+        this.readYamlObject(dogecoinValuesPath),
+        {
+          clusterIssuer: options.clusterIssuer,
+          clusterRpcPassword: regtestConfig.clusterRpcPassword,
+          clusterRpcUsername: regtestConfig.clusterRpcUsername,
+          host: ingressConfig.DOGECOIN_HOST,
+          includeTls: options.includeTls,
+          network: selectedDogeNetwork,
+        }
+      )
+      this.writeYamlObject(dogecoinValuesPath, dogecoinValues)
+      result.charts.push(dogecoinValuesPath)
+      jsonCtx.logSuccess(`Prepared bootstrap chart values: ${path.relative(process.cwd(), dogecoinValuesPath)}`)
+    }
+
+    if (ethereumDaConfig.chain === 'devnet') {
+      const ethereumDaChainId = Number(ethereumDaConfig.chainId)
+      if (!Number.isInteger(ethereumDaChainId) || ethereumDaChainId <= 0) {
+        this.error('ethereumDa.chainId must be a positive integer before preparing l1-devnet bootstrap values.')
+      }
+
+      const l1DevnetValuesPath = path.join(valuesDir, 'l1-devnet-production.yaml')
+      const l1DevnetValues = buildL1DevnetBootstrapValues(
+        this.readYamlObject(l1DevnetValuesPath),
+        {
+          chainId: ethereumDaChainId,
+          clusterIssuer: options.clusterIssuer,
+          host: ingressConfig.L1_DEVNET_HOST,
+          includeTls: options.includeTls,
+        }
+      )
+      this.writeYamlObject(l1DevnetValuesPath, l1DevnetValues)
+      result.charts.push(l1DevnetValuesPath)
+      jsonCtx.logSuccess(`Prepared bootstrap chart values: ${path.relative(process.cwd(), l1DevnetValuesPath)}`)
+    }
+
+    return result
+  }
+
+  private readDogeConfigFile(configPath: string): Partial<DogeConfig> {
+    if (!fs.existsSync(configPath)) return {}
+
+    const parsedConfig = toml.parse(fs.readFileSync(configPath, 'utf8')) as Partial<DogeConfig>
+    delete (parsedConfig as Record<string, unknown>).network
+    return parsedConfig
+  }
+
+  private readYamlObject(filePath: string): Record<string, any> {
+    if (!fs.existsSync(filePath)) return {}
+
+    const parsed = yaml.load(fs.readFileSync(filePath, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+
+    return parsed as Record<string, any>
   }
 
   private replaceTomlAssignmentLine(line: string, key: string, value: string): string {
@@ -780,11 +1209,6 @@ export default class SetupDomains extends Command {
     return { domainConfig, generalConfig, ingressConfig, protocol }
   }
 
-  private normalizeHttpsUrl(value: string): string {
-    const trimmed = value.trim()
-    return trimmed.replace(/^http:\/\//i, `${PUBLIC_URL_PROTOCOL}://`)
-  }
-
   private async updateConfigFile(
     domainConfig: Record<string, string>,
     ingressConfig: Record<string, string>,
@@ -928,5 +1352,79 @@ export default class SetupDomains extends Command {
     const insertLine = insertAt > sectionStart + 1 && lines[insertAt - 1]?.trim() === '' ? insertAt - 1 : insertAt
     lines.splice(insertLine, 0, assignment)
     return this.collapseRepeatedBlankLines(lines.join('\n'))
+  }
+
+  private writeRegtestDogeConfigFiles(ingressConfig: Record<string, string>): {
+    clusterRpcPassword: string
+    clusterRpcUsername: string
+    dogeConfigPath: string
+    setupDefaultsPath: string
+  } {
+    const dataDir = path.resolve('.data')
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true })
+    }
+
+    const dogeConfigPath = path.join(dataDir, 'doge-config.toml')
+    const existingDogeConfig = this.readDogeConfigFile(dogeConfigPath)
+    const clusterRpcUsername = existingDogeConfig.dogecoinClusterRpc?.username || this.generateSecureRandomString(8)
+    const clusterRpcPassword = existingDogeConfig.dogecoinClusterRpc?.password || this.generateSecureRandomString(16)
+    const dogecoinRpcUrl = `${PUBLIC_URL_PROTOCOL}://${ingressConfig.DOGECOIN_HOST}`
+    const blockbookApiUrl = ingressConfig.BLOCKBOOK_HOST
+      ? `${PUBLIC_URL_PROTOCOL}://${ingressConfig.BLOCKBOOK_HOST}`
+      : 'http://blockbook:19139'
+
+    const dogeConfig: DogeConfig = {
+      ...(existingDogeConfig as DogeConfig),
+      defaults: {
+        ...existingDogeConfig.defaults,
+        dogecoinIndexerStartHeight: existingDogeConfig.defaults?.dogecoinIndexerStartHeight || '0',
+        l1GenesisBlock: existingDogeConfig.defaults?.l1GenesisBlock || '1',
+      },
+      dogecoinClusterRpc: {
+        ...existingDogeConfig.dogecoinClusterRpc,
+        password: clusterRpcPassword,
+        username: clusterRpcUsername,
+      },
+      network: 'regtest',
+      rpc: {
+        ...existingDogeConfig.rpc,
+        apiKey: existingDogeConfig.rpc?.apiKey || '',
+        blockbookAPIUrl: blockbookApiUrl,
+        password: clusterRpcPassword,
+        url: dogecoinRpcUrl,
+        username: clusterRpcUsername,
+      },
+      wallet: {
+        path: existingDogeConfig.wallet?.path || '.data/doge-wallet-regtest.json',
+      },
+    }
+
+    fs.writeFileSync(dogeConfigPath, dogeConfigToToml(dogeConfig))
+
+    const setupDefaultsPath = getSetupDefaultsPath()
+    if (!fs.existsSync(setupDefaultsPath)) {
+      fs.writeFileSync(setupDefaultsPath, SETUP_DEFAULTS_TEMPLATE)
+    }
+
+    const setupDefaults = toml.parse(fs.readFileSync(setupDefaultsPath, 'utf8')) as toml.JsonMap
+    setupDefaults.network = 'regtest'
+    setupDefaults.dogecoin_rpc_url = dogecoinRpcUrl
+    setupDefaults.dogecoin_rpc_user = clusterRpcUsername
+    setupDefaults.dogecoin_rpc_pass = clusterRpcPassword
+    setupDefaults.dogecoin_blockbook_url = blockbookApiUrl
+    setupDefaults.dogecoin_blockbook_api_key = existingDogeConfig.rpc?.apiKey || ''
+    fs.writeFileSync(setupDefaultsPath, toml.stringify(setupDefaults))
+
+    return {
+      clusterRpcPassword,
+      clusterRpcUsername,
+      dogeConfigPath,
+      setupDefaultsPath,
+    }
+  }
+
+  private writeYamlObject(filePath: string, yamlObject: Record<string, any>): void {
+    fs.writeFileSync(filePath, yaml.dump(yamlObject, YAML_DUMP_OPTIONS))
   }
 }
