@@ -1041,6 +1041,8 @@ describe('deployment-spec-generator', () => {
       expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_STORE_ROOT');
       expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_METADATA_SQLITE_PATH');
       expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_CELESTIA_INDEXER__DA_NAMESPACE');
+      expect(files['withdrawal-processor-production.yaml']).to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCES__BEACON__ENDPOINT');
+      expect(files['withdrawal-processor-production.yaml']).to.include('https://ethereum-sepolia-beacon-api.publicnode.com');
       expect(files['dogecoin-production.yaml']).to.include('rpcuser: cluster-rpc-user');
       expect(files['dogecoin-production.yaml']).to.include('value: cluster-rpc-pass');
       expect(files['dogecoin-production.yaml']).not.to.include('external-rpc-user');

@@ -161,16 +161,19 @@ const DEFAULT_L1_FEE_VAULT_ADDR = '0x1111111111111111111111111111111111111111'
 
 const ETHEREUM_DA_DEFAULTS = {
   devnet: {
+    beaconRpcUrl: 'http://l1-devnet-lighthouse:5052',
     chainId: 32_382,
     minFinality: 'safe',
     submitterRpcUrl: 'http://l1-devnet:8545',
   },
   mainnet: {
+    beaconRpcUrl: 'https://ethereum-beacon-api.publicnode.com',
     chainId: 1,
     minFinality: 'finalized',
     submitterRpcUrl: 'https://eth.drpc.org',
   },
   sepolia: {
+    beaconRpcUrl: 'https://ethereum-sepolia-beacon-api.publicnode.com',
     chainId: 11_155_111,
     minFinality: 'safe',
     submitterRpcUrl: 'https://sepolia.drpc.org',
@@ -192,6 +195,11 @@ function getEthereumDaChainId(spec: DeploymentSpec): number {
 function getEthereumDaSubmitterRpcUrl(spec: DeploymentSpec): string {
   const ethereumDa = getEthereumDaConfig(spec)
   return ethereumDa.l1RpcUrl || ETHEREUM_DA_DEFAULTS[getEthereumDaChain(spec)].submitterRpcUrl
+}
+
+function getEthereumDaBeaconRpcUrl(spec: DeploymentSpec): string {
+  const ethereumDa = getEthereumDaConfig(spec)
+  return ethereumDa.beaconRpcUrl || ETHEREUM_DA_DEFAULTS[getEthereumDaChain(spec)].beaconRpcUrl
 }
 
 function getDogecoinClusterRpc(spec: DeploymentSpec): NonNullable<DeploymentSpec['dogecoin']['clusterRpc']> {
@@ -917,6 +925,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID', value: String(getEthereumDaChainId(spec)) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID', value: String(spec.network.l2ChainId) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__MIN_FINALITY', value: getEthereumDaMinFinality(spec) },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCES__BEACON__ENDPOINT', value: getEthereumDaBeaconRpcUrl(spec) },
       { name: 'RUST_LOG', value: 'info,withdrawal_processor=info' }
     ],
     envFrom: [

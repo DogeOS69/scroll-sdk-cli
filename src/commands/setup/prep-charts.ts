@@ -1210,6 +1210,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSAGE_QUEUE_ADDRESS": this.getConfigValue("contractsFile.L2_MESSAGE_QUEUE_ADDR"),
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT"),
+          "DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCES__BEACON__ENDPOINT": this.getConfigValue("ethereumDa.beaconRpcUrl"),
           "DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID": String(this.getConfigValue("ethereumDa.chainId")),
           "DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL": this.getConfigValue("ethereumDa.submitterRpcUrl"),
           "DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID": String(this.getConfigValue("general.CHAIN_ID_L2")),
