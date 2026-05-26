@@ -822,6 +822,102 @@ export class BridgeInitCommand extends Command {
     return height
   }
 
+  private async getEthereumDaCurrentHeight(configPath: string): Promise<number> {
+    const config = this.getRequiredTomlConfig(configPath)
+    const ethereumDaChain = this.getNestedValue(config, 'ethereumDa.chain')
+
+    if (ethereumDaChain === 'devnet') {
+      this.jsonCtx.info('Ethereum DA chain is devnet; using embedded indexer start block 0')
+      return 0
+    }
+
+    const rpcUrl = this.getNestedValue(config, 'ethereumDa.submitterRpcUrl') ?? this.getNestedValue(config, 'ethereumDa.l1RpcUrl')
+
+    if (typeof rpcUrl !== 'string' || rpcUrl.length === 0) {
+      this.jsonCtx.error(
+        'E103_ETHEREUM_DA_CONFIG_MISSING',
+        'ethereumDa.submitterRpcUrl is required in config.toml before running bridge setup.',
+        'CONFIGURATION',
+        true,
+        { path: configPath }
+      )
+    }
+
+    let response: Response
+    try {
+      response = await fetch(rpcUrl, {
+        body: JSON.stringify({
+          id: 'bridge-init-pre-setup-ethereum-da-height',
+          jsonrpc: '2.0',
+          method: 'eth_blockNumber',
+          params: [],
+        }),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        method: 'POST',
+      })
+    } catch (error) {
+      this.jsonCtx.error(
+        'E400_ETHEREUM_DA_RPC_UNREACHABLE',
+        `Failed to connect to Ethereum DA RPC before setup transaction: ${error instanceof Error ? error.message : String(error)}`,
+        'NETWORK',
+        true,
+        {
+          cause: error instanceof Error && error.cause ? String(error.cause) : undefined,
+          rpcUrl,
+          suggestion: `Check [ethereumDa].submitterRpcUrl in ${configPath}. It must be reachable from this machine before bridge-init can record the withdrawal processor Ethereum DA start block.`,
+        }
+      )
+    }
+
+    if (!response.ok) {
+      const errorBody = await response.text()
+      this.jsonCtx.error(
+        'E400_ETHEREUM_DA_RPC_FAILED',
+        `Failed to read Ethereum DA block height before setup transaction: ${response.status} ${response.statusText}`,
+        'NETWORK',
+        true,
+        { body: errorBody, rpcUrl }
+      )
+    }
+
+    const result = await response.json() as { error?: { code?: number; message?: string }; result?: unknown }
+    if (result.error) {
+      this.jsonCtx.error(
+        'E400_ETHEREUM_DA_RPC_FAILED',
+        `Ethereum DA RPC eth_blockNumber failed: ${result.error.message || JSON.stringify(result.error)}`,
+        'NETWORK',
+        true,
+        { code: result.error.code, rpcUrl }
+      )
+    }
+
+    const heightHex = result.result
+    if (typeof heightHex !== 'string' || !/^0x[\dA-Fa-f]+$/.test(heightHex)) {
+      this.jsonCtx.error(
+        'E400_ETHEREUM_DA_RPC_FAILED',
+        `Ethereum DA RPC eth_blockNumber returned an invalid block height: ${JSON.stringify(heightHex)}`,
+        'NETWORK',
+        true,
+        { rpcUrl }
+      )
+    }
+
+    const height = Number.parseInt(heightHex, 16)
+    if (!Number.isSafeInteger(height) || height < 0) {
+      this.jsonCtx.error(
+        'E400_ETHEREUM_DA_RPC_FAILED',
+        `Ethereum DA RPC eth_blockNumber returned an unsafe block height: ${JSON.stringify(heightHex)}`,
+        'NETWORK',
+        true,
+        { rpcUrl }
+      )
+    }
+
+    return height
+  }
+
   private getNestedValue(obj: any, path: string): any {
     return path.split('.').reduce((prev, curr) => prev && prev[curr], obj)
   }
@@ -1327,9 +1423,12 @@ export class BridgeInitCommand extends Command {
     const network = this.getConfiguredDogeNetwork()
     this.syncSetupDefaultsNetwork(paths.setupDefaultsPath, network)
     this.resolveSetupDefaultsEnvRefs(paths.setupDefaultsPath)
+    const configPath = path.join(process.cwd(), 'config.toml')
     const dogecoinHeightBeforeSetup = await this.getDogecoinCurrentHeight(paths.setupDefaultsPath)
+    const ethereumDaHeightBeforeSetup = await this.getEthereumDaCurrentHeight(configPath)
     const indexerStartHeight = Math.max(0, dogecoinHeightBeforeSetup - 1)
     this.jsonCtx.info(`Dogecoin height before setup transaction: ${dogecoinHeightBeforeSetup}`)
+    this.jsonCtx.info(`Ethereum DA height before setup transaction: ${ethereumDaHeightBeforeSetup}`)
     this.ensureBridgeTimelock(paths.setupDefaultsPath, dogecoinHeightBeforeSetup)
 
     this.jsonCtx.info('Running step 2-setup: generate test keys and broadcast setup transaction')
@@ -1342,7 +1441,7 @@ export class BridgeInitCommand extends Command {
       '.data',
     ])
     this.moveLegacyOutputFiles(paths.dataDir)
-    this.updateDogeConfigBlockHeight(paths.dataDir, indexerStartHeight)
+    this.updateDogeConfigBlockHeight(paths.dataDir, indexerStartHeight, ethereumDaHeightBeforeSetup)
     this.updateGenerateBridgeInfoNetwork(paths.generateBridgeInfoPath, network, true)
     this.materializeWithdrawalProcessorSecrets(paths)
   }
@@ -1361,20 +1460,27 @@ export class BridgeInitCommand extends Command {
    */
   private updateDogeConfigBlockHeight(
     dataDir: string,
-    blockHeight: number
+    blockHeight: number,
+    ethereumDaEmbeddedIndexerStartBlock: number
   ): void {
     try {
       const { path: dogeConfigPath } = this.getRequiredDogeConfig(dataDir)
       const dogeConfigForUpdate = toml.parse(fs.readFileSync(dogeConfigPath, 'utf8')) as any
       dogeConfigForUpdate.defaults ??= {}
       dogeConfigForUpdate.defaults.dogecoinIndexerStartHeight = String(blockHeight)
+      dogeConfigForUpdate.defaults.ethereumDaEmbeddedIndexerStartBlock = String(ethereumDaEmbeddedIndexerStartBlock)
+      dogeConfigForUpdate.defaults.l1GenesisBlock = String(Math.max(0, blockHeight + 1))
       delete dogeConfigForUpdate.network
       if (dogeConfigForUpdate.localSigners) {
         delete dogeConfigForUpdate.localSigners.network
       }
 
       fs.writeFileSync(dogeConfigPath, toml.stringify(dogeConfigForUpdate))
-      this.jsonCtx.info(`Updated ${dogeConfigPath} with dogecoinIndexerStartHeight = ${blockHeight}`)
+      this.jsonCtx.info(
+        `Updated ${dogeConfigPath} with dogecoinIndexerStartHeight = ${blockHeight}, ` +
+        `l1GenesisBlock = ${Math.max(0, blockHeight + 1)}, and ` +
+        `ethereumDaEmbeddedIndexerStartBlock = ${ethereumDaEmbeddedIndexerStartBlock}`
+      )
     } catch (configError) {
       if (configError instanceof CliExitError) throw configError
       this.jsonCtx.addWarning(`Failed to update doge-config with block height: ${configError}`)

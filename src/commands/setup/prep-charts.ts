@@ -133,6 +133,7 @@ export default class SetupPrepCharts extends Command {
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
+  private outputTestData: Record<string, any> = {}
   private protocolSeedConfig: toml.JsonMap = {}
   private withdrawalProcessorConfig: toml.JsonMap = {}
 
@@ -336,6 +337,19 @@ export default class SetupPrepCharts extends Command {
     this.bridgeConfig = JSON.parse(fs.readFileSync(bridgeConfigPath, 'utf8'));
     if (!this.bridgeConfig.redeem_script_hex) {
       this.error(`${bridgeConfigPath} missing redeem_script_hex. Run scrollsdk setup bridge-init --step 3-bridge-info first`);
+    }
+
+    const outputTestDataPath = path.join(process.cwd(), ".data/output-test-data.json")
+    if (!fs.existsSync(outputTestDataPath)) {
+      this.error("run scrollsdk setup bridge-init --step 2-setup first");
+      return
+    }
+
+    this.outputTestData = JSON.parse(fs.readFileSync(outputTestDataPath, 'utf8'));
+    for (const key of ['fee_wallet_address', 'sequencer_address']) {
+      if (typeof this.outputTestData[key] !== 'string' || this.outputTestData[key].trim() === '') {
+        this.error(`${outputTestDataPath} missing ${key}. Run scrollsdk setup bridge-init --step 2-setup first`);
+      }
     }
 
     const protocolSeedPath = path.join(process.cwd(), ".data/protocol_seed.toml")
@@ -1163,18 +1177,31 @@ export default class SetupPrepCharts extends Command {
         }
 
         const dogecoinIndexerStartHeight = Number(this.dogeConfig.defaults?.dogecoinIndexerStartHeight)
-        if (!Number.isFinite(dogecoinIndexerStartHeight)) {
-          this.error(`${chartName}: dogeConfig.defaults.dogecoinIndexerStartHeight must be configured before preparing charts`);
+        if (!Number.isSafeInteger(dogecoinIndexerStartHeight) || dogecoinIndexerStartHeight < 0) {
+          this.error(`${chartName}: dogeConfig.defaults.dogecoinIndexerStartHeight must be a non-negative integer before preparing charts`);
+        }
+
+        const configuredL1GenesisBlock = this.dogeConfig.defaults?.l1GenesisBlock
+        const l1GenesisBlock = configuredL1GenesisBlock === undefined
+          ? Math.max(0, dogecoinIndexerStartHeight + 1)
+          : Number(configuredL1GenesisBlock)
+        if (!Number.isSafeInteger(l1GenesisBlock) || l1GenesisBlock < 0) {
+          this.error(`${chartName}: dogeConfig.defaults.l1GenesisBlock must be a non-negative integer`);
+        }
+
+        if (l1GenesisBlock > 0 && dogecoinIndexerStartHeight >= l1GenesisBlock) {
+          this.log(chalk.yellow(`${chartName}: dogecoinIndexerStartHeight should be lower than l1GenesisBlock because l1-interface starts scanning from start_height + 1`))
         }
 
         const todoMappings = {
-          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DISCOVERY_MODE": "on_demand",
-          "DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__STORE_RAW_BLOB_DATA": "true",
           "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__BRIDGE_ADDRESS": this.withdrawalProcessorConfig.bridge_address,
+          "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__FEE_WALLET_ADDRESS": this.outputTestData.fee_wallet_address,
+          "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__SEQUENCER_ADDRESS": this.outputTestData.sequencer_address,
           "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT": String(Math.max(0, dogecoinIndexerStartHeight)),
           "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL": dogecoinInternalUrl,
           "DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER": this.getConfigValue("sequencer.L2GETH_SIGNER_ADDRESS"),
           "DOGEOS_L1_INTERFACE_L1_BASE_FEE_PER_GAS": this.getConfigValue("genesis.BASE_FEE_PER_GAS").toString(),
+          "DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK": String(Math.max(0, l1GenesisBlock)),
           "DOGEOS_L1_INTERFACE_L2_MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
           "DOGEOS_L1_INTERFACE_L2_MOAT_CONTRACT_ADDRESS": this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
           "DOGEOS_L1_INTERFACE_NETWORK_STR": this.withdrawalProcessorConfig.network_str,
@@ -1202,7 +1229,7 @@ export default class SetupPrepCharts extends Command {
           this.error(`${chartName}: dogeConfig.defaults.dogecoinIndexerStartHeight must be configured before preparing charts`);
         }
 
-        const todoMappings = {
+        const todoMappings: Record<string, any> = {
           "DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS": this.withdrawalProcessorConfig.bridge_address,
           // "DOGEOS_WITHDRAWAL_DATABASE_URL": "sqlite:///app/data/withdrawal_processor.db",
           "DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT": String(Math.max(0, dogecoinIndexerStartHeight)),
@@ -1210,6 +1237,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSAGE_QUEUE_ADDRESS": this.getConfigValue("contractsFile.L2_MESSAGE_QUEUE_ADDR"),
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT"),
+          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__START_BLOCK": "0",
           "DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCES__BEACON__ENDPOINT": this.getConfigValue("ethereumDa.beaconRpcUrl"),
           "DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID": String(this.getConfigValue("ethereumDa.chainId")),
           "DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL": this.getConfigValue("ethereumDa.submitterRpcUrl"),
@@ -1220,6 +1248,11 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_INITIAL_BRIDGE_REDEEM_SCRIPT_HEX": this.bridgeConfig.redeem_script_hex,
           "DOGEOS_WITHDRAWAL_NETWORK_STR": this.withdrawalProcessorConfig.network_str,
           "DOGEOS_WITHDRAWAL_TSO_URL": "http://tso-service:3000"
+        }
+
+        const ethereumDaEmbeddedIndexerStartBlock = this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock
+        if (ethereumDaEmbeddedIndexerStartBlock !== undefined && String(ethereumDaEmbeddedIndexerStartBlock).trim() !== '') {
+          todoMappings["DOGEOS_WITHDRAWAL_ETHEREUM_DA__EMBEDDED_INDEXER__START_BLOCK"] = String(ethereumDaEmbeddedIndexerStartBlock)
         }
 
         for (const [envKey, newVal] of Object.entries(todoMappings)) {

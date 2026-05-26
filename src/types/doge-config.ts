@@ -38,6 +38,8 @@ export interface DogeConfig {
   }
   defaults?: {
     dogecoinIndexerStartHeight?: string
+    ethereumDaEmbeddedIndexerStartBlock?: string
+    l1GenesisBlock?: string
   }
   dogecoinClusterRpc?: {
     password?: string // for dogecoin that deploy on cluster
