@@ -545,6 +545,8 @@ export default class SetupDomains extends Command {
     // If FRONTEND_HOST exists, we infer shared URL ending from it
     const existingFrontendHost = existingConfig.ingress?.FRONTEND_HOST || ''
     const hasSharedEnding = Boolean(existingFrontendHost)
+    const hasL1DevnetIngress = Boolean(existingConfig.ingress?.L1_DEVNET_HOST || existingConfig.ingress?.L1_EXPLORER_HOST)
+    const configureL1DevnetIngress = usesAnvil || hasL1DevnetIngress
 
     // For non-interactive, infer shared ending if frontend host exists
     const sharedEnding: boolean = niCtx?.enabled ? hasSharedEnding : (await confirm({
@@ -594,7 +596,7 @@ export default class SetupDomains extends Command {
         GRAFANA_HOST: `grafana.${urlEnding}`,
         ROLLUP_EXPLORER_API_HOST: `rollup-explorer-backend.${urlEnding}`,
         RPC_GATEWAY_HOST: `rpc.${urlEnding}`,
-        ...(usesAnvil ? { L1_DEVNET_HOST: `l1-devnet.${urlEnding}`, L1_EXPLORER_HOST: `l1-explorer.${urlEnding}` } : {}),
+        ...(configureL1DevnetIngress ? { L1_DEVNET_HOST: `l1-devnet.${urlEnding}`, L1_EXPLORER_HOST: `l1-explorer.${urlEnding}` } : {}),
         BLOCKBOOK_HOST: `blockbook.${urlEnding}`,
         DOGECOIN_HOST: `dogecoin.${urlEnding}`,
         TSO_HOST: `tso.${urlEnding}`,
@@ -688,16 +690,16 @@ export default class SetupDomains extends Command {
         ),
       }
 
-      if (usesAnvil) {
+      if (configureL1DevnetIngress) {
         ingressConfig.L1_DEVNET_HOST = await resolveIngressHost(
           'L1_DEVNET_HOST',
           'l1-devnet.scrollsdk',
-          'L1 devnet host (Anvil)'
+          'L1 devnet host'
         )
         ingressConfig.L1_EXPLORER_HOST = await resolveIngressHost(
           'L1_EXPLORER_HOST',
           'l1-explorer.scrollsdk',
-          'L1 explorer host (Anvil)'
+          'L1 explorer host'
         )
       }
 
@@ -838,13 +840,20 @@ export default class SetupDomains extends Command {
     // }
 
 
-    if (domainConfig.EXTERNAL_EXPLORER_URI_L1) {
-      existingConfig.contracts.verification.EXPLORER_URI_L1 = domainConfig.EXTERNAL_EXPLORER_URI_L1;
+    const l1ExplorerUri = ingressConfig.L1_EXPLORER_HOST
+      ? `${PUBLIC_URL_PROTOCOL}://${ingressConfig.L1_EXPLORER_HOST}`
+      : domainConfig.EXTERNAL_EXPLORER_URI_L1
+    const l1RpcUri = ingressConfig.L1_DEVNET_HOST
+      ? `${PUBLIC_URL_PROTOCOL}://${ingressConfig.L1_DEVNET_HOST}`
+      : domainConfig.EXTERNAL_RPC_URI_L1
+
+    if (l1ExplorerUri) {
+      existingConfig.contracts.verification.EXPLORER_URI_L1 = l1ExplorerUri;
     }
 
     existingConfig.contracts.verification.EXPLORER_URI_L2 = domainConfig.EXTERNAL_EXPLORER_URI_L2;
-    if (domainConfig.EXTERNAL_RPC_URI_L1) {
-      existingConfig.contracts.verification.RPC_URI_L1 = domainConfig.EXTERNAL_RPC_URI_L1;
+    if (l1RpcUri) {
+      existingConfig.contracts.verification.RPC_URI_L1 = l1RpcUri;
     }
 
     existingConfig.contracts.verification.RPC_URI_L2 = domainConfig.EXTERNAL_RPC_URI_L2;
@@ -852,9 +861,9 @@ export default class SetupDomains extends Command {
 
     const configText = this.updateTomlText(fs.readFileSync(configPath, 'utf8'), {
       'contracts.verification': {
-        ...(domainConfig.EXTERNAL_EXPLORER_URI_L1 ? { EXPLORER_URI_L1: domainConfig.EXTERNAL_EXPLORER_URI_L1 } : {}),
+        ...(l1ExplorerUri ? { EXPLORER_URI_L1: l1ExplorerUri } : {}),
         EXPLORER_URI_L2: domainConfig.EXTERNAL_EXPLORER_URI_L2,
-        ...(domainConfig.EXTERNAL_RPC_URI_L1 ? { RPC_URI_L1: domainConfig.EXTERNAL_RPC_URI_L1 } : {}),
+        ...(l1RpcUri ? { RPC_URI_L1: l1RpcUri } : {}),
         RPC_URI_L2: domainConfig.EXTERNAL_RPC_URI_L2,
       },
       dogecoin: dogecoinConfig,

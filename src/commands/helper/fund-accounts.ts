@@ -128,10 +128,8 @@ export default class HelperFundAccounts extends Command {
     const contractsConfig = parseTomlConfig(contractsConfigPath)
     this.l1ETHGateway = contractsConfig.L1_ETH_GATEWAY_PROXY_ADDR
 
-    const fundingPrivateKey = flags['private-key'] ?? (flags.dev ? L1_DEVNET_PREFUNDED_PRIVATE_KEY : undefined)
-    if (fundingPrivateKey) {
-      const privateKeySource = flags['private-key'] ? '--private-key' : 'local L1 devnet prefunded private key'
-      this.fundingWallet = this.createFundingWallet(fundingPrivateKey, privateKeySource)
+    if (flags['private-key']) {
+      this.fundingWallet = this.createFundingWallet(flags['private-key'], '--private-key')
     } else if (!flags.manual) {
       this.fundingWallet = this.createFundingWallet(config.accounts.DEPLOYER_PRIVATE_KEY, `DEPLOYER_PRIVATE_KEY in ${configPath}`)
     }
@@ -325,6 +323,10 @@ export default class HelperFundAccounts extends Command {
       if (anvilError) {
         this.l1DevFundingMode = 'wallet'
         this.warn('L1 dev RPC does not support anvil_setBalance; funding with the prefunded devnet wallet.')
+        this.fundingWallet = this.createFundingWallet(
+          L1_DEVNET_PREFUNDED_PRIVATE_KEY,
+          'local L1 devnet prefunded private key',
+        )
       } else {
         this.l1DevFundingMode = 'anvil'
         return
