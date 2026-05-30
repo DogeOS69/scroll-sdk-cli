@@ -53,6 +53,20 @@ function stripPortFromHost(host: string): string {
   return host
 }
 
+export function shouldSkipL2ContractDeploymentBlockUpdate(
+  chartName: string,
+  key: string,
+  skipL2ContractDeploymentBlock: boolean
+): boolean {
+  return skipL2ContractDeploymentBlock &&
+    key === 'L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK' &&
+    (
+      chartName.startsWith('l2-bootnode') ||
+      chartName.startsWith('l2-rpc') ||
+      chartName.startsWith('l2-sequencer')
+    )
+}
+
 export default class SetupPrepCharts extends Command {
   static override description = 'Validate Makefile and prepare Helm charts for Scroll SDK'
 
@@ -61,6 +75,7 @@ export default class SetupPrepCharts extends Command {
     '<%= config.bin %> <%= command.id %> --github-username=your-username --github-token=your-token',
     '<%= config.bin %> <%= command.id %> --values-dir=./custom-values',
     '<%= config.bin %> <%= command.id %> --skip-auth-check',
+    '<%= config.bin %> <%= command.id %> --skip-l2-contract-deployment-block',
   ]
 
   static override flags = {
@@ -77,6 +92,10 @@ export default class SetupPrepCharts extends Command {
       description: 'Run without prompts. Auto-applies all detected changes.',
     }),
     'skip-auth-check': Flags.boolean({ default: false, description: 'Skip authentication check for individual charts' }),
+    'skip-l2-contract-deployment-block': Flags.boolean({
+      default: false,
+      description: 'Do not overwrite L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK in L2 production values files',
+    }),
     'values-dir': Flags.string({ default: './values', description: 'Directory containing values files' }),
   }
 
@@ -135,6 +154,7 @@ export default class SetupPrepCharts extends Command {
   private nonInteractive: boolean = false
   private outputTestData: Record<string, any> = {}
   private protocolSeedConfig: toml.JsonMap = {}
+  private skipL2ContractDeploymentBlock: boolean = false
   private withdrawalProcessorConfig: toml.JsonMap = {}
 
   public async run(): Promise<void> {
@@ -143,6 +163,7 @@ export default class SetupPrepCharts extends Command {
     // Setup non-interactive/JSON mode
     this.nonInteractive = flags['non-interactive']
     this.jsonMode = flags.json
+    this.skipL2ContractDeploymentBlock = flags['skip-l2-contract-deployment-block']
     this.jsonCtx = new JsonOutputContext('setup prep-charts', this.jsonMode)
 
     this.jsonCtx.info('Starting chart preparation...')
@@ -682,6 +703,10 @@ export default class SetupPrepCharts extends Command {
           if (configMapData && typeof configMapData === 'object' && 'data' in configMapData) {
             const envData = (configMapData as any).data
             for (const [key, oldValue] of Object.entries(envData)) {
+              if (shouldSkipL2ContractDeploymentBlockUpdate(chartName, key, this.skipL2ContractDeploymentBlock)) {
+                continue
+              }
+
               if (this.isL2Node(chartName)) {
                 const fixedValue = this.getFixedL2NodeEnvValue(key)
                 if (fixedValue !== undefined) {
@@ -1199,6 +1224,9 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__SEQUENCER_ADDRESS": this.outputTestData.sequencer_address,
           "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT": String(Math.max(0, dogecoinIndexerStartHeight)),
           "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL": dogecoinInternalUrl,
+          "DOGEOS_L1_INTERFACE_ETHEREUM_DA__ETH_CHAIN_ID": String(this.getConfigValue("ethereumDa.chainId")),
+          "DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL": this.getConfigValue("ethereumDa.submitterRpcUrl"),
+          "DOGEOS_L1_INTERFACE_ETHEREUM_DA__L2_CHAIN_ID": String(this.getConfigValue("general.CHAIN_ID_L2")),
           "DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER": this.getConfigValue("sequencer.L2GETH_SIGNER_ADDRESS"),
           "DOGEOS_L1_INTERFACE_L1_BASE_FEE_PER_GAS": this.getConfigValue("genesis.BASE_FEE_PER_GAS").toString(),
           "DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK": String(Math.max(0, l1GenesisBlock)),
@@ -1238,7 +1266,6 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT"),
           "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__START_BLOCK": "0",
-          "DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCES__BEACON__ENDPOINT": this.getConfigValue("ethereumDa.beaconRpcUrl"),
           "DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID": String(this.getConfigValue("ethereumDa.chainId")),
           "DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL": this.getConfigValue("ethereumDa.submitterRpcUrl"),
           "DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID": String(this.getConfigValue("general.CHAIN_ID_L2")),
@@ -1252,7 +1279,7 @@ export default class SetupPrepCharts extends Command {
 
         const ethereumDaEmbeddedIndexerStartBlock = this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock
         if (ethereumDaEmbeddedIndexerStartBlock !== undefined && String(ethereumDaEmbeddedIndexerStartBlock).trim() !== '') {
-          todoMappings.DOGEOS_WITHDRAWAL_ETHEREUM_DA__EMBEDDED_INDEXER__START_BLOCK = String(ethereumDaEmbeddedIndexerStartBlock)
+          todoMappings.DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__START_BLOCK = String(ethereumDaEmbeddedIndexerStartBlock)
         }
 
         for (const [envKey, newVal] of Object.entries(todoMappings)) {
