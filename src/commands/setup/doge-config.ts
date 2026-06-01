@@ -13,7 +13,10 @@ import type { DogeConfig } from '../../types/doge-config.js'
 import { SETUP_DEFAULTS_TEMPLATE, getSetupDefaultsPath } from '../../config/constants.js'
 import { Network } from '../../types/doge-config.js'
 import { writeConfigs } from '../../utils/config-writer.js'
-import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import {
+  dogeConfigToToml,
+  normalizeDogeNetwork,
+} from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { resolveBlockbookKubernetesEndpoints } from '../../utils/kubernetes-endpoints.js'
 import {
@@ -21,8 +24,55 @@ import {
   resolveConfirm,
   resolveEnvValue,
   resolveOrPrompt,
+  resolveOrSelect,
   validateAndExit,
 } from '../../utils/non-interactive.js'
+
+type EthereumDaChain = 'devnet' | 'mainnet' | 'sepolia'
+
+const ETHEREUM_DA_DEFAULTS: Record<EthereumDaChain, {
+  beaconRpcUrl: string
+  chainId: string
+  minFinality: 'finalized' | 'safe'
+  submitterRpcUrl: string
+}> = {
+  devnet: {
+    beaconRpcUrl: 'http://l1-devnet-lighthouse:5052',
+    chainId: '32382',
+    minFinality: 'safe',
+    submitterRpcUrl: 'http://l1-devnet:8545',
+  },
+  mainnet: {
+    beaconRpcUrl: 'https://ethereum-beacon-api.publicnode.com',
+    chainId: '1',
+    minFinality: 'finalized',
+    submitterRpcUrl: 'https://eth.drpc.org',
+  },
+  sepolia: {
+    beaconRpcUrl: 'https://ethereum-sepolia-beacon-api.publicnode.com',
+    chainId: '11155111',
+    minFinality: 'safe',
+    submitterRpcUrl: 'https://sepolia.drpc.org',
+  },
+}
+
+function normalizeClusterLocalHttpUrl(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed.toLowerCase().startsWith('https://')) return trimmed
+
+  try {
+    const parsedUrl = new URL(trimmed)
+    const hostname = parsedUrl.hostname.toLowerCase()
+    const serviceHosts = ['l1-devnet', 'l1-devnet-geth', 'l1-devnet-lighthouse']
+    if (serviceHosts.some(serviceHost => hostname === serviceHost || hostname.startsWith(`${serviceHost}.`))) {
+      return trimmed.replace(/^https:\/\//i, 'http://')
+    }
+  } catch {
+    return trimmed
+  }
+
+  return trimmed
+}
 
 export class DogeConfigCommand extends Command {
   static description = 'Configure Dogecoin settings and bridge setup defaults for deployment'
@@ -30,9 +80,8 @@ export class DogeConfigCommand extends Command {
   static examples = [
     '$ scrollsdk setup doge-config',
     '$ scrollsdk setup doge-config --config .data/doge-config.toml',
-    '$ scrollsdk setup doge-config --non-interactive --network testnet',
-    '$ scrollsdk setup doge-config --non-interactive --network regtest',
-    '$ scrollsdk setup doge-config --non-interactive --json --network mainnet',
+    '$ scrollsdk setup doge-config --non-interactive',
+    '$ scrollsdk setup doge-config --non-interactive --json',
   ]
 
   static flags = {
@@ -43,11 +92,6 @@ export class DogeConfigCommand extends Command {
     json: Flags.boolean({
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)',
-    }),
-    network: Flags.string({
-      char: 'n',
-      description: 'Network to configure (mainnet, testnet, or regtest) - required for non-interactive mode with new config',
-      options: ['mainnet', 'testnet', 'regtest'],
     }),
     'non-interactive': Flags.boolean({
       char: 'N',
@@ -110,53 +154,63 @@ export class DogeConfigCommand extends Command {
       fs.mkdirSync('.data', { recursive: true })
     }
 
-    let resolvedPath = flags.config ? path.resolve(flags.config as string) : path.resolve('.data/doge-config.toml')
-    let network = flags.network || ""
+    const resolvedPath = flags.config ? path.resolve(flags.config as string) : path.resolve('.data/doge-config.toml')
+    const mainConfigPath = path.join(process.cwd(), 'config.toml')
+    const legacyMainConfig = this.getLegacyMainConfig()
+    const legacyNetwork = this.getLegacyNetwork(legacyMainConfig)
+    const legacyEthereumDa = (legacyMainConfig as Record<string, unknown>).ethereumDa as DogeConfig['ethereumDa'] | undefined
+    let network: Network = legacyNetwork || 'testnet'
 
     const configExists = fs.existsSync(resolvedPath)
     let existingConfig: DogeConfig = {} as DogeConfig;
 
     if (configExists) {
-      ({ config: existingConfig, configPath: resolvedPath } = await loadDogeConfigWithSelection(resolvedPath));
-      if (flags.network && existingConfig.network !== flags.network) {
-        this.error(
-          `Existing config at ${resolvedPath} is for ${existingConfig.network}, but --network ${flags.network} was provided. ` +
-          'Use the existing network, remove the config, or pass --config to a different file.'
-        )
+      existingConfig = toml.parse(fs.readFileSync(resolvedPath, 'utf8')) as unknown as DogeConfig
+      const existingNetwork = normalizeDogeNetwork(existingConfig.network)
+      if (existingConfig.network && !existingNetwork) {
+        this.error(`Invalid network in ${resolvedPath}: ${String(existingConfig.network)}. Must be 'mainnet', 'testnet', or 'regtest'.`)
       }
 
-      network = existingConfig.network
+      if ((existingConfig.localSigners as Record<string, unknown> | undefined)?.network) {
+        delete (existingConfig.localSigners as Record<string, unknown>).network
+      }
+
+      network = existingNetwork || legacyNetwork || network
     }
 
-    if (!configExists && !network) {
-      if (niCtx.enabled) {
-        niCtx.missingFields.push({
-          configPath: '--network flag',
-          description: 'Network (mainnet, testnet, or regtest) must be specified in non-interactive mode when creating new config',
-          field: 'network',
-        })
-        validateAndExit(niCtx)
-        return
-      }
-
-      network = await select({
+    const selectedNetwork = await resolveOrSelect<Network>(
+      niCtx,
+      () => select({
         choices: [
-          { name: 'mainnet', value: 'mainnet' },
-          { name: 'testnet', value: 'testnet' },
-          { name: 'regtest', value: 'regtest' }
+          { name: 'Dogecoin Testnet', value: 'testnet' },
+          { name: 'Dogecoin Mainnet', value: 'mainnet' },
+          { name: 'Dogecoin Regtest', value: 'regtest' },
         ],
-        default: 'testnet',
-        message: 'select network:'
-      });
-    }
+        default: network,
+        message: 'Select the Dogecoin network:',
+      }),
+      existingConfig.network || legacyNetwork || network,
+      ['mainnet', 'testnet', 'regtest'],
+      {
+        configPath: 'network',
+        description: 'Dogecoin network',
+        field: 'network',
+      },
+    ) || network
+    network = selectedNetwork
 
     const defaultConfig: DogeConfig = {
       defaults: {
         dogecoinIndexerStartHeight: '4000000',
+        l1GenesisBlock: '4000001',
       },
       dogecoinClusterRpc: {
         password: "",
         username: "",
+      },
+      ethereumDa: legacyEthereumDa || {
+        chain: this.getDefaultEthereumDaChain(network),
+        ...ETHEREUM_DA_DEFAULTS[this.getDefaultEthereumDaChain(network)],
       },
       frontend: {},
       network: network as Network,
@@ -168,7 +222,7 @@ export class DogeConfigCommand extends Command {
         }).apiUrl,
         password: '',
         url: network === 'mainnet' ? 'https://dogecoin.mainnet.dogeos.com' :
-          network === 'testnet' ? 'https://dogecoin.testnet.dogeos.com' : 'http://localhost:18443',
+          network === 'testnet' ? 'https://dogecoin.testnet.dogeos.com' : 'http://localhost:18332',
         username: '',
       },
       test: {},
@@ -195,8 +249,7 @@ export class DogeConfigCommand extends Command {
       log('Creating a new default Dogecoin configuration file...')
 
       existingConfig = defaultConfig;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      fs.writeFileSync(resolvedPath, toml.stringify(existingConfig as any))
+      fs.writeFileSync(resolvedPath, dogeConfigToToml(existingConfig))
 
       log(
         `Created new default ${network} config file at ${resolvedPath}. You can further customize it with 'scrollsdk setup doge-config'.`,
@@ -204,8 +257,21 @@ export class DogeConfigCommand extends Command {
     }
 
     const newConfig = existingConfig;
+    newConfig.network = network
     if (!newConfig.rpc) {
       newConfig.rpc = {}
+    }
+
+    if (!newConfig.defaults) {
+      newConfig.defaults = {}
+    }
+
+    if (!newConfig.dogecoinClusterRpc) {
+      newConfig.dogecoinClusterRpc = {}
+    }
+
+    if (!newConfig.wallet) {
+      newConfig.wallet = { path: `.data/doge-wallet-${network}.json` }
     }
 
     // Handle blockbook API URL with confirmation if different from default
@@ -377,32 +443,103 @@ export class DogeConfigCommand extends Command {
       }
     }
 
-    delete (newConfig as Record<string, unknown>).ethereumDa
+    const existingEthereumDa = newConfig.ethereumDa || legacyEthereumDa || {}
+    const existingEthereumDaChain = existingEthereumDa.chain as EthereumDaChain | undefined
+    const defaultEthereumDaChain = existingEthereumDaChain || this.getDefaultEthereumDaChain(network)
+    const ethereumDaChain = await resolveOrSelect<EthereumDaChain>(
+      niCtx,
+      () => select({
+        choices: [
+          { name: 'Sepolia testnet', value: 'sepolia' },
+          { name: 'Ethereum mainnet', value: 'mainnet' },
+          { name: 'Devnet / private Ethereum chain', value: 'devnet' },
+        ],
+        default: defaultEthereumDaChain,
+        message: 'Select the Ethereum chain used as the DA layer ([ethereumDa].chain):',
+      }),
+      existingEthereumDa.chain || defaultEthereumDaChain,
+      ['mainnet', 'sepolia', 'devnet'],
+      {
+        configPath: '[ethereumDa].chain',
+        description: 'Ethereum DA chain',
+        field: 'chain',
+      },
+    ) || defaultEthereumDaChain
+    const ethereumDaDefaults = ETHEREUM_DA_DEFAULTS[ethereumDaChain]
+    const shouldReuseExistingEthereumDaValues = niCtx.enabled || existingEthereumDaChain === ethereumDaChain
+    const ethereumDaFieldDefault = (field: 'beaconRpcUrl' | 'chainId' | 'submitterRpcUrl') =>
+      shouldReuseExistingEthereumDaValues
+        ? existingEthereumDa?.[field] || ethereumDaDefaults[field]
+        : ethereumDaDefaults[field]
+
+    const ethereumDaSubmitterRpcUrl = normalizeClusterLocalHttpUrl(await resolveOrPrompt(
+      niCtx,
+      () => input({
+        default: ethereumDaFieldDefault('submitterRpcUrl'),
+        message: 'Enter the real Ethereum execution JSON-RPC endpoint used by eth-da-submitter ([ethereumDa].submitterRpcUrl):',
+      }),
+      ethereumDaFieldDefault('submitterRpcUrl'),
+      {
+        configPath: '[ethereumDa].submitterRpcUrl',
+        description: 'Real Ethereum execution JSON-RPC endpoint used by eth-da-submitter',
+        field: 'submitterRpcUrl',
+      },
+    ) || ethereumDaDefaults.submitterRpcUrl)
+
+    const ethereumDaBeaconRpcUrl = normalizeClusterLocalHttpUrl(await resolveOrPrompt(
+      niCtx,
+      () => input({
+        default: ethereumDaFieldDefault('beaconRpcUrl'),
+        message: 'Enter the real Ethereum beacon API endpoint used as the DA data source ([ethereumDa].beaconRpcUrl):',
+      }),
+      ethereumDaFieldDefault('beaconRpcUrl'),
+      {
+        configPath: '[ethereumDa].beaconRpcUrl',
+        description: 'Real Ethereum beacon API endpoint used as the DA data source',
+        field: 'beaconRpcUrl',
+      },
+    ) || ethereumDaDefaults.beaconRpcUrl)
+
+    const ethereumDaChainId = await resolveOrPrompt(
+      niCtx,
+      () => input({
+        default: ethereumDaFieldDefault('chainId'),
+        message: 'Enter the real Ethereum DA execution chain ID ([ethereumDa].chainId):',
+      }),
+      ethereumDaFieldDefault('chainId'),
+      {
+        configPath: '[ethereumDa].chainId',
+        description: 'Real Ethereum DA execution chain ID',
+        field: 'chainId',
+      },
+    ) || ethereumDaDefaults.chainId
+
+    newConfig.ethereumDa = {
+      beaconRpcUrl: ethereumDaBeaconRpcUrl,
+      chain: ethereumDaChain,
+      chainId: ethereumDaChainId,
+      minFinality: ethereumDaDefaults.minFinality,
+      submitterRpcUrl: ethereumDaSubmitterRpcUrl,
+    }
 
     newConfig.defaults!.dogecoinIndexerStartHeight = existingConfig.defaults?.dogecoinIndexerStartHeight || String(dogecoinCurrentHeight)
+    const indexerStartHeight = Number(newConfig.defaults!.dogecoinIndexerStartHeight)
+    newConfig.defaults!.l1GenesisBlock = existingConfig.defaults?.l1GenesisBlock ||
+      String(Number.isFinite(indexerStartHeight) ? Math.max(0, indexerStartHeight + 1) : 0)
     log(chalk.blue(`Dogecoin Indexer Start Height: ${newConfig.defaults!.dogecoinIndexerStartHeight}`))
-
-    const configPath = path.join(process.cwd(), 'config.toml')
-    let config: JsonMap | undefined
-    if (fs.existsSync(configPath)) {
-      const configContent = fs.readFileSync(configPath, 'utf8')
-      config = toml.parse(configContent)
-    }
+    log(chalk.blue(`L1 Genesis Block: ${newConfig.defaults!.l1GenesisBlock}`))
 
     // Validate any missing required fields before proceeding
     validateAndExit(niCtx)
 
-    if (config) {
-      if (!config.general) config.general = {}
-      const generalConfig = config.general as JsonMap
-      generalConfig.L1_CONTRACT_DEPLOYMENT_BLOCK = newConfig.defaults!.dogecoinIndexerStartHeight
-      if (writeConfigs(config)) {
-        log(
-          chalk.green(`L1_CONTRACT_DEPLOYMENT_BLOCK updated in config.toml`),
-        )
-      }
-    } else {
-      log(chalk.yellow('config.toml not found. Skipping L1_CONTRACT_DEPLOYMENT_BLOCK update.'))
+    const mainConfig = toml.parse(fs.readFileSync(mainConfigPath, 'utf8')) as JsonMap
+    if (!mainConfig.general) mainConfig.general = {}
+    const generalConfig = mainConfig.general as JsonMap
+    generalConfig.L1_CONTRACT_DEPLOYMENT_BLOCK = newConfig.defaults!.dogecoinIndexerStartHeight
+    if (writeConfigs(mainConfig, undefined, undefined, flags.json)) {
+      log(
+        chalk.green(`L1_CONTRACT_DEPLOYMENT_BLOCK updated in config.toml`),
+      )
     }
 
     const configDir = path.dirname(resolvedPath)
@@ -410,8 +547,8 @@ export class DogeConfigCommand extends Command {
       fs.mkdirSync(configDir, { recursive: true })
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    fs.writeFileSync(resolvedPath, toml.stringify(newConfig as any))
+    fs.writeFileSync(resolvedPath, dogeConfigToToml(newConfig))
+    this.removeLegacyDogeConfigFromMainConfig(mainConfigPath, flags.json, log)
 
     log(chalk.green(`\nConfiguration for ${newConfig.network} network saved to ${resolvedPath}`))
     log(chalk.blue('\nConfiguration Summary:'))
@@ -428,7 +565,9 @@ export class DogeConfigCommand extends Command {
         configPath: resolvedPath,
         defaults: {
           dogecoinIndexerStartHeight: newConfig.defaults!.dogecoinIndexerStartHeight,
+          l1GenesisBlock: newConfig.defaults!.l1GenesisBlock,
         },
+        ethereumDa: newConfig.ethereumDa,
         network: newConfig.network,
         rpc: {
           blockbookAPIUrl: newConfig.rpc!.blockbookAPIUrl,
@@ -451,6 +590,45 @@ export class DogeConfigCommand extends Command {
     }
 
     return result
+  }
+
+  private getDefaultEthereumDaChain(network: Network): EthereumDaChain {
+    if (network === 'mainnet') return 'mainnet'
+    if (network === 'regtest') return 'devnet'
+    return 'sepolia'
+  }
+
+  private getLegacyMainConfig(): JsonMap {
+    const mainConfigPath = path.join(process.cwd(), 'config.toml')
+    if (!fs.existsSync(mainConfigPath)) return {} as JsonMap
+
+    return toml.parse(fs.readFileSync(mainConfigPath, 'utf8')) as JsonMap
+  }
+
+  private getLegacyNetwork(mainConfig: JsonMap): Network | undefined {
+    const { dogecoin } = mainConfig as Record<string, unknown>
+    if (!dogecoin || typeof dogecoin !== 'object' || Array.isArray(dogecoin)) return undefined
+    return normalizeDogeNetwork((dogecoin as Record<string, unknown>).network)
+  }
+
+  private removeLegacyDogeConfigFromMainConfig(mainConfigPath: string, jsonMode: boolean, log: (msg: string) => void): void {
+    if (!fs.existsSync(mainConfigPath)) return
+
+    const mainConfig = toml.parse(fs.readFileSync(mainConfigPath, 'utf8')) as JsonMap
+    let changed = false
+    if ((mainConfig as Record<string, unknown>).dogecoin !== undefined) {
+      delete (mainConfig as Record<string, unknown>).dogecoin
+      changed = true
+    }
+
+    if ((mainConfig as Record<string, unknown>).ethereumDa !== undefined) {
+      delete (mainConfig as Record<string, unknown>).ethereumDa
+      changed = true
+    }
+
+    if (changed && writeConfigs(mainConfig, undefined, undefined, jsonMode)) {
+      log(chalk.green('Moved [dogecoin] and [ethereumDa] settings out of config.toml'))
+    }
   }
 
   // Helper methods for common operations

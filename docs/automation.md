@@ -123,23 +123,34 @@ At runtime, `$ENV:POSTGRES_ADMIN_PASSWORD` resolves to `process.env.POSTGRES_ADM
 
 All commands below assume `config.toml` is fully populated. Run them in order:
 
-### Step 1: Set up domains
+### Step 1: Configure Dogecoin
+
+```bash
+scrollsdk setup doge-config -N --json
+```
+
+Creates or updates `.data/doge-config.toml`, including Dogecoin network and Ethereum DA settings. It migrates legacy `[dogecoin]` and `[ethereumDa]` values out of `config.toml` when present.
+
+**Required config fields:**
+- `network` in `.data/doge-config.toml` or legacy `[dogecoin].network` in `config.toml` for migration.
+- `[ethereumDa]` in `.data/doge-config.toml` or legacy `[ethereumDa]` in `config.toml` for migration.
+
+### Step 2: Set up domains
 
 ```bash
 scrollsdk setup domains -N --json
 ```
 
-Reads domain and ingress values from `[frontend]` and `[ingress]` sections of config.toml.
+Reads domain and ingress values from `[frontend]` and `[ingress]` sections of config.toml. Reads Dogecoin network and Ethereum DA settings from `.data/doge-config.toml`.
 
 **Required config fields:**
-- `[general].CHAIN_NAME_L1` - L1 network name (used to infer network type)
 - `[frontend].EXTERNAL_RPC_URI_L1` - L1 RPC endpoint
 - `[frontend].EXTERNAL_RPC_URI_L2` - L2 RPC endpoint
 - `[frontend].BRIDGE_API_URI` - Bridge API endpoint
 - `[frontend].ROLLUPSCAN_API_URI` - Rollupscan API endpoint
 - `[ingress].*` - Ingress hostnames
 
-### Step 2: Initialize databases
+### Step 3: Initialize databases
 
 ```bash
 scrollsdk setup db-init --clean -N --json
@@ -154,7 +165,7 @@ Creates PostgreSQL databases and roles. Attempts SSL connection first, falls bac
 - `[db.admin].PASSWORD` - Admin password (use `$ENV:` for secrets)
 - `[db.*]` sections for each service database
 
-### Step 3: Generate keystores
+### Step 4: Generate keystores
 
 ```bash
 scrollsdk setup gen-keystore -N --json --sequencer-password '$ENV:SEQUENCER_KEYSTORE_PASSWORD'
@@ -171,20 +182,6 @@ Generates keystores for validator/sequencer accounts.
 
 **Required config fields:**
 - `[accounts]` section with private keys
-
-### Step 4: Configure Dogecoin
-
-```bash
-scrollsdk setup doge-config -N --json --network testnet
-```
-
-Generates `.data/doge-config.toml` from config values.
-
-**Required flags (non-interactive):**
-- `--network mainnet|testnet|regtest` - Required when creating a new config
-
-**Required config fields:**
-- `[dogecoin]` section (network, RPC URLs, blockbook URL)
 
 ### Step 5: Generate L2 artifacts
 
@@ -366,6 +363,7 @@ run_step() {
 }
 
 # Steps 1-2: Domain and database setup
+run_step "setup doge-config" setup doge-config -N --json
 run_step "setup domains" setup domains -N --json
 run_step "setup db-init" setup db-init --clean -N --json
 
@@ -374,7 +372,7 @@ run_step "setup gen-keystore" setup gen-keystore -N --json \
   --sequencer-password '$ENV:SEQUENCER_KEYSTORE_PASSWORD'
 
 # Steps 4-9: Dogecoin, L2 artifacts, CubeSigner, bridge, secrets, Helm charts
-run_step "setup doge-config" setup doge-config -N --json --network "$NETWORK"
+run_step "setup doge-config" setup doge-config -N --json
 run_step "setup gen-l2-artifacts" setup gen-l2-artifacts -N --json
 run_step "setup cubesigner-init" setup cubesigner-init -N --json \
   --new --count 3 --role-prefix attestor --threshold 2 --doge-config "$DOGE_CONFIG"

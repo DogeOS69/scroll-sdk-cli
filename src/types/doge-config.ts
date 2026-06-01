@@ -19,11 +19,11 @@ export interface DogeConfig {
   [key: string]: any
   awsSigner?: {
     accountId?: string
+    ecsClusterName?: string
     imageSource?: 'dockerhub' | 'ecr' | 'ecr-sync'
     imageUri?: string
     networkAlias?: string
     region?: string
-    suffixes?: string
   }
   cubesigner?: {
     roles: CubesignerRole[]
@@ -38,11 +38,23 @@ export interface DogeConfig {
   }
   defaults?: {
     dogecoinIndexerStartHeight?: string
+    ethereumDaEmbeddedIndexerStartBlock?: string
+    l1GenesisBlock?: string
   }
-  deploymentType?: 'aws' | 'local'
   dogecoinClusterRpc?: {
     password?: string // for dogecoin that deploy on cluster
     username?: string // for dogecoin that deploy on cluster
+  }
+  /** Dummy signer runtime provider. This is independent from the Kubernetes infrastructure provider. */
+  dummySigner?: {
+    provider?: 'aws' | 'local'
+  }
+  ethereumDa?: {
+    beaconRpcUrl?: string
+    chain?: 'devnet' | 'mainnet' | 'sepolia'
+    chainId?: string
+    minFinality?: 'finalized' | 'safe'
+    submitterRpcUrl?: string
   }
 
   frontend?: {
@@ -62,7 +74,6 @@ export interface DogeConfig {
     zmqRawTxPort?: number
   }
   localSigners?: {
-    network?: string
     signers?: Array<{
       index: number
       port: number

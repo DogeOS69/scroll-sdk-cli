@@ -3,17 +3,21 @@ import * as toml from '@iarna/toml'
 import { confirm, password as input, input as textInput } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
-import { Wallet, ethers , isAddress } from 'ethers'
+import { Wallet, ethers, isAddress } from 'ethers'
+import * as yaml from 'js-yaml'
 import crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { writeConfigs } from '../../utils/config-writer.js'
+import { loadDeploymentSpec } from '../../utils/deployment-spec-generator.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {
   createNonInteractiveContext,
   resolveEnvValue,
 } from '../../utils/non-interactive.js'
+
+const DEPLOYMENT_STATE_PATH = path.join('.data', 'deployment-state.yaml')
 
 interface KeyPair {
   address: string
@@ -31,6 +35,25 @@ interface BootnodeData {
   nodekey: string
 }
 
+interface PublicSequencerState {
+  enodeUrl: string
+  index: number
+  signerAddress: string
+}
+
+interface PublicBootnodeState {
+  enodeUrl: string
+  index: number
+}
+
+interface DeploymentState {
+  generatedAt: string
+  l2: {
+    bootnodes: PublicBootnodeState[]
+    sequencers: PublicSequencerState[]
+  }
+}
+
 export default class SetupGenKeystore extends Command {
   static override description = 'Generate keystore and account keys for L2 Geth'
 
@@ -39,6 +62,7 @@ export default class SetupGenKeystore extends Command {
     '<%= config.bin %> <%= command.id %> --no-accounts',
     '<%= config.bin %> <%= command.id %> --non-interactive',
     '<%= config.bin %> <%= command.id %> --non-interactive --json --sequencer-count 2 --bootnode-count 2',
+    '<%= config.bin %> <%= command.id %> --non-interactive --sequencer-count 2 --bootnode-count 2',
   ]
 
   static override flags = {
@@ -50,6 +74,9 @@ export default class SetupGenKeystore extends Command {
     'bootnode-count': Flags.integer({
       default: 2,
       description: 'Number of bootnodes. In non-interactive mode, generates if not enough exist.',
+    }),
+    'from-spec': Flags.string({
+      description: 'Path to DeploymentSpec YAML. Uses infrastructure.sequencerCount and bootnodeCount as count defaults.',
     }),
     json: Flags.boolean({
       default: false,
@@ -73,7 +100,7 @@ export default class SetupGenKeystore extends Command {
       description: 'Number of sequencers (including primary). In non-interactive mode, generates if not enough exist.',
     }),
     'sequencer-password': Flags.string({
-      description: 'Password for sequencer keystores (or use $ENV:VAR_NAME pattern in config). Required for new sequencers in non-interactive mode.',
+      description: 'Password for sequencer keystores (or use $ENV:VAR_NAME pattern). Defaults to a generated random password for new sequencers in non-interactive mode.',
     }),
   }
 
@@ -89,6 +116,39 @@ export default class SetupGenKeystore extends Command {
     const existingConfig = await this.getExistingConfig()
 
     jsonCtx.info('Setting up Sequencer keystores, bootnode nodekeys, L2 account keypairs, and coordinator JWT secret key...')
+
+    const fromSpecPath = flags['from-spec'] ? path.resolve(flags['from-spec']) : undefined
+    let fromSpec: ReturnType<typeof loadDeploymentSpec> | undefined
+    if (fromSpecPath) {
+      try {
+        fromSpec = loadDeploymentSpec(fromSpecPath)
+      } catch (error) {
+        jsonCtx.error(
+          'E602_INVALID_SPEC',
+          `Failed to load DeploymentSpec: ${error instanceof Error ? error.message : String(error)}`,
+          'CONFIGURATION',
+          true,
+          { error: String(error), path: fromSpecPath }
+        )
+      }
+    }
+
+    if (fromSpecPath) {
+      jsonCtx.info(`Using DeploymentSpec counts from ${fromSpecPath}`)
+    }
+
+    const targetSequencerCount = this.validateTargetCount(
+      'sequencer',
+      this.hasFlag('sequencer-count') ? flags['sequencer-count'] : fromSpec?.infrastructure?.sequencerCount ?? flags['sequencer-count'],
+      1,
+      jsonCtx
+    )
+    const targetBootnodeCount = this.validateTargetCount(
+      'bootnode',
+      this.hasFlag('bootnode-count') ? flags['bootnode-count'] : fromSpec?.infrastructure?.bootnodeCount ?? flags['bootnode-count'],
+      0,
+      jsonCtx
+    )
 
     // Helper to count existing sequencers
     const countExistingSequencers = (): number => {
@@ -165,51 +225,43 @@ export default class SetupGenKeystore extends Command {
     let bootnodeData: BootnodeData[] = []
     let overwriteBootnodes = false
 
+    const getSequencerPassword = (index: number): string => {
+      const providedPassword = resolveEnvValue(flags['sequencer-password'])
+      if (providedPassword) return providedPassword
+
+      jsonCtx.info(`Generated random sequencer-${index} keystore password`)
+      return crypto.randomBytes(24).toString('base64url')
+    }
+
     // ============ SEQUENCER HANDLING ============
     if (nonInteractive) {
       // Non-interactive mode: use flags to determine behavior
       const existingSequencers = countExistingSequencers()
-      const targetSequencerCount = flags['sequencer-count']
       overwrite = flags['regenerate-sequencers']
 
       if (overwrite) {
         // Regenerate all sequencers
-        const password = resolveEnvValue(flags['sequencer-password'])
-        if (!password) {
-          jsonCtx.error(
-            'E601_MISSING_FIELD',
-            'Sequencer password required when regenerating sequencers in non-interactive mode. Use --sequencer-password or $ENV:VAR_NAME.',
-            'CONFIGURATION',
-            true,
-            { flag: '--sequencer-password' }
-          )
-        }
-
         jsonCtx.info(`Regenerating ${targetSequencerCount} sequencer(s)...`)
         for (let i = 0; i < targetSequencerCount; i++) {
+          const password = getSequencerPassword(i)
           sequencerData.push(await this.generateSequencerKeystore(i, password))
         }
       } else if (existingSequencers < targetSequencerCount) {
         // Keep existing, generate additional
         sequencerData = collectExistingSequencerData()
-        const password = resolveEnvValue(flags['sequencer-password'])
-        if (!password) {
-          jsonCtx.error(
-            'E601_MISSING_FIELD',
-            'Sequencer password required when generating new sequencers in non-interactive mode. Use --sequencer-password or $ENV:VAR_NAME.',
-            'CONFIGURATION',
-            true,
-            { existing: existingSequencers, flag: '--sequencer-password', target: targetSequencerCount }
-          )
-        }
 
         jsonCtx.info(`Adding ${targetSequencerCount - existingSequencers} new sequencer(s) to existing ${existingSequencers}...`)
         for (let i = existingSequencers; i < targetSequencerCount; i++) {
+          const password = getSequencerPassword(i)
           sequencerData.push(await this.generateSequencerKeystore(i, password))
         }
       } else {
         // Keep existing sequencers as-is
         sequencerData = collectExistingSequencerData()
+        if (existingSequencers > targetSequencerCount) {
+          jsonCtx.addWarning(`Found ${existingSequencers} existing sequencer(s), which is greater than target ${targetSequencerCount}; keeping existing keys. Use --regenerate-sequencers to rebuild exactly ${targetSequencerCount}.`)
+        }
+
         jsonCtx.info(`Keeping ${sequencerData.length} existing sequencer(s)`)
       }
     } else {
@@ -223,8 +275,8 @@ export default class SetupGenKeystore extends Command {
         const existingSequencers = countExistingSequencers()
 
         const backupCount = await textInput({
-          default: '1',
-          message: `How many backup sequencers do you want to run? (Current: ${Math.max(0, existingSequencers - 1)}, suggested: 1)`,
+          default: String(Math.max(0, targetSequencerCount - 1)),
+          message: `How many backup sequencers do you want to run? (Current: ${Math.max(0, existingSequencers - 1)}, suggested: ${Math.max(0, targetSequencerCount - 1)})`,
         })
         const totalSequencers = Number.parseInt(backupCount, 10) + 1
 
@@ -265,7 +317,6 @@ export default class SetupGenKeystore extends Command {
     if (nonInteractive) {
       // Non-interactive mode: use flags to determine behavior
       const existingBootnodes = countExistingBootnodes()
-      const targetBootnodeCount = flags['bootnode-count']
       overwriteBootnodes = flags['regenerate-bootnodes']
 
       if (overwriteBootnodes) {
@@ -284,6 +335,10 @@ export default class SetupGenKeystore extends Command {
       } else {
         // Keep existing bootnodes as-is
         bootnodeData = collectExistingBootnodeData()
+        if (existingBootnodes > targetBootnodeCount) {
+          jsonCtx.addWarning(`Found ${existingBootnodes} existing bootnode(s), which is greater than target ${targetBootnodeCount}; keeping existing keys. Use --regenerate-bootnodes to rebuild exactly ${targetBootnodeCount}.`)
+        }
+
         jsonCtx.info(`Keeping ${bootnodeData.length} existing bootnode(s)`)
       }
     } else {
@@ -297,8 +352,8 @@ export default class SetupGenKeystore extends Command {
         const existingBootnodes = countExistingBootnodes()
 
         const bootnodeCount = await textInput({
-          default: '2',
-          message: `How many bootnodes do you want to run? (Current: ${existingBootnodes}, suggested: 2)`,
+          default: String(targetBootnodeCount),
+          message: `How many bootnodes do you want to run? (Current: ${existingBootnodes}, suggested: ${targetBootnodeCount})`,
         })
         const totalBootnodes = Number.parseInt(bootnodeCount, 10)
 
@@ -451,6 +506,8 @@ export default class SetupGenKeystore extends Command {
         overwriteBootnodes,
         jsonMode
       )
+
+      this.writeDeploymentState(sequencerData, bootnodeData, jsonMode)
     }
 
     // ============ JSON OUTPUT ============
@@ -465,13 +522,19 @@ export default class SetupGenKeystore extends Command {
         },
         bootnodes: {
           count: bootnodeData.length,
+          enodeUrls: bootnodeData.map((data, index) => this.getBootnodeEnodeUrl(data.nodekey, index)),
+          instances: this.getPublicBootnodeState(bootnodeData),
           regenerated: overwriteBootnodes,
         },
         configUpdated: shouldUpdate,
         coordinatorJwtSecretGenerated: Boolean(coordinatorJwtSecretKey),
+        deploymentStatePath: shouldUpdate ? DEPLOYMENT_STATE_PATH : undefined,
+        fromSpec: fromSpecPath,
         sequencers: {
           addresses: sequencerData.map(s => s.address),
           count: sequencerData.length,
+          enodeUrls: sequencerData.map((data, index) => this.getEnodeUrl(data.nodekey, index)),
+          instances: this.getPublicSequencerState(sequencerData),
           regenerated: overwrite,
         },
       }
@@ -525,32 +588,32 @@ export default class SetupGenKeystore extends Command {
 
   private getBootnodeEnodeUrl(nodekey: string, index: number): string {
     // Remove '0x' prefix if present
-    nodekey = nodekey.startsWith('0x') ? nodekey.slice(2) : nodekey;
+    nodekey = nodekey.startsWith('0x') ? nodekey.slice(2) : nodekey
 
     // Create a Wallet instance from the private key
-    const wallet = new ethers.Wallet(nodekey);
+    const wallet = new ethers.Wallet(nodekey)
 
     // Get the public key
-    const {publicKey} = wallet.signingKey;
+    const { publicKey } = wallet.signingKey
 
     // Remove '0x04' prefix from public key
-    const publicKeyNoPrefix = publicKey.slice(4);
+    const publicKeyNoPrefix = publicKey.slice(4)
 
     return `enode://${publicKeyNoPrefix}@l2-bootnode-${index}:30303`
   }
 
   private getEnodeUrl(nodekey: string, index: number): string {
     // Remove '0x' prefix if present
-    nodekey = nodekey.startsWith('0x') ? nodekey.slice(2) : nodekey;
+    nodekey = nodekey.startsWith('0x') ? nodekey.slice(2) : nodekey
 
     // Create a Wallet instance from the private key
-    const wallet = new ethers.Wallet(nodekey);
+    const wallet = new ethers.Wallet(nodekey)
 
     // Get the public key
-    const {publicKey} = wallet.signingKey;
+    const { publicKey } = wallet.signingKey
 
     // Remove '0x04' prefix from public key
-    const publicKeyNoPrefix = publicKey.slice(4);
+    const publicKeyNoPrefix = publicKey.slice(4)
 
     return `enode://${publicKeyNoPrefix}@l2-sequencer-${index}:30303`
   }
@@ -589,6 +652,25 @@ export default class SetupGenKeystore extends Command {
     }
 
     return undefined
+  }
+
+  private getPublicBootnodeState(bootnodeData: BootnodeData[]): PublicBootnodeState[] {
+    return bootnodeData.map((data, index) => ({
+      enodeUrl: this.getBootnodeEnodeUrl(data.nodekey, index),
+      index,
+    }))
+  }
+
+  private getPublicSequencerState(sequencerData: SequencerData[]): PublicSequencerState[] {
+    return sequencerData.map((data, index) => ({
+      enodeUrl: this.getEnodeUrl(data.nodekey, index),
+      index,
+      signerAddress: data.address,
+    }))
+  }
+
+  private hasFlag(name: string): boolean {
+    return this.argv.some(arg => arg === `--${name}` || arg.startsWith(`--${name}=`))
   }
 
   private async updateConfigToml(
@@ -713,14 +795,60 @@ export default class SetupGenKeystore extends Command {
     if (coordinatorJwtSecretKey && !updatedConfig.coordinator) addOrUpdateSection('coordinator', null)
 
     // Use the atomic sync function to write both files
-    const success = writeConfigs(updatedConfig, undefined, undefined, jsonMode);
+    const success = writeConfigs(updatedConfig, undefined, undefined, jsonMode)
 
     if (success) {
       if (!jsonMode) {
         this.log(chalk.green('config.toml and config.public.toml updated successfully.'))
       }
     } else {
-      this.error(chalk.red('Configuration update failed. Check logs for details.'));
+      this.error(chalk.red('Configuration update failed. Check logs for details.'))
+    }
+  }
+
+  private validateTargetCount(
+    name: 'bootnode' | 'sequencer',
+    value: number,
+    minimum: number,
+    jsonCtx: JsonOutputContext
+  ): number {
+    if (!Number.isInteger(value) || value < minimum) {
+      jsonCtx.error(
+        'E602_INVALID_COUNT',
+        `${name} count must be an integer greater than or equal to ${minimum}.`,
+        'CONFIGURATION',
+        true,
+        { count: value }
+      )
+    }
+
+    return value
+  }
+
+  private writeDeploymentState(
+    sequencerData: SequencerData[],
+    bootnodeData: BootnodeData[],
+    jsonMode: boolean
+  ): void {
+    const state: DeploymentState = {
+      generatedAt: new Date().toISOString(),
+      l2: {
+        bootnodes: this.getPublicBootnodeState(bootnodeData),
+        sequencers: this.getPublicSequencerState(sequencerData),
+      },
+    }
+
+    const dataDir = path.join(process.cwd(), '.data')
+    fs.mkdirSync(dataDir, { recursive: true })
+    const statePath = path.join(process.cwd(), DEPLOYMENT_STATE_PATH)
+    fs.writeFileSync(statePath, yaml.dump(state, {
+      lineWidth: -1,
+      noRefs: true,
+      quotingType: '"',
+    }), 'utf8')
+
+    if (!jsonMode) {
+      this.log(chalk.green(`${DEPLOYMENT_STATE_PATH} updated with public L2 node metadata.`))
     }
   }
 }

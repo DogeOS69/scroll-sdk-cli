@@ -32,7 +32,7 @@ export default class SetupGenRpcPackage extends Command {
       required: false,
     }),
     'doge-config': Flags.string({
-      description: 'Path to Dogecoin config file to determine network type',
+      description: 'Path to Dogecoin config file',
       required: false,
     }),
     'dogeos-rpc-package-dir': Flags.string({
@@ -91,7 +91,7 @@ export default class SetupGenRpcPackage extends Command {
       // Step 1: Load DogeConfig
       const { config: dogeConfig, configPath: dogeConfigPath } = await loadDogeConfigWithSelection(
         flags['doge-config'],
-        `${this.config.bin} ${this.id}`
+        `${this.config.bin} ${this.id}`,
       )
       this.log(chalk.blue(`Using DogeConfig file: ${dogeConfigPath}`))
 
@@ -353,8 +353,6 @@ export default class SetupGenRpcPackage extends Command {
         }
       }
 
-      newVars.DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DISCOVERY_MODE = "on_demand";
-      newVars.DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__STORE_RAW_BLOB_DATA = "true";
 
       // If no updates needed, return early
       if (Object.keys(newVars).length === 0) {

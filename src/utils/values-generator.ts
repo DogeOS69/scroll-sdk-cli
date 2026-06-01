@@ -19,7 +19,14 @@ import type { DeploymentSpec, ImagesConfig } from '../types/deployment-spec.js'
 import {
   L1_INTERFACE_BEACON_API_ENDPOINT,
   L1_INTERFACE_RPC_ENDPOINT,
+  L2_RPC_ENDPOINT,
 } from '../config/constants.js'
+import {
+  getBridgeFeeRateSatsPerKvb,
+  getDogecoinIndexerStartHeight,
+  getL1GenesisBlock,
+  normalizeDeploymentSpec,
+} from './deployment-spec-generator.js'
 import {
   resolveDogecoinKubernetesEndpoints,
 } from './kubernetes-endpoints.js'
@@ -151,19 +158,23 @@ function buildPeerList(spec: DeploymentSpec): string[] {
 type ServiceImageKey = keyof NonNullable<ImagesConfig['services']>
 
 const ZERO_HASH = '0x0000000000000000000000000000000000000000000000000000000000000000'
+const DEFAULT_L1_FEE_VAULT_ADDR = '0x1111111111111111111111111111111111111111'
 
 const ETHEREUM_DA_DEFAULTS = {
   devnet: {
+    beaconRpcUrl: 'http://l1-devnet-lighthouse:5052',
     chainId: 32_382,
     minFinality: 'safe',
     submitterRpcUrl: 'http://l1-devnet:8545',
   },
   mainnet: {
+    beaconRpcUrl: 'https://ethereum-beacon-api.publicnode.com',
     chainId: 1,
     minFinality: 'finalized',
     submitterRpcUrl: 'https://eth.drpc.org',
   },
   sepolia: {
+    beaconRpcUrl: 'https://ethereum-sepolia-beacon-api.publicnode.com',
     chainId: 11_155_111,
     minFinality: 'safe',
     submitterRpcUrl: 'https://sepolia.drpc.org',
@@ -185,6 +196,13 @@ function getEthereumDaChainId(spec: DeploymentSpec): number {
 function getEthereumDaSubmitterRpcUrl(spec: DeploymentSpec): string {
   const ethereumDa = getEthereumDaConfig(spec)
   return ethereumDa.l1RpcUrl || ETHEREUM_DA_DEFAULTS[getEthereumDaChain(spec)].submitterRpcUrl
+}
+
+function getDogecoinClusterRpc(spec: DeploymentSpec): NonNullable<DeploymentSpec['dogecoin']['clusterRpc']> {
+  return spec.dogecoin.clusterRpc ?? {
+    password: spec.dogecoin.rpc?.password ?? '',
+    username: spec.dogecoin.rpc?.username ?? '',
+  }
 }
 
 function getEthereumDaMinFinality(spec: DeploymentSpec): string {
@@ -228,52 +246,54 @@ function resolveImage(
  * Generate all Helm values files from a DeploymentSpec
  */
 export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles {
+  const normalizedSpec = normalizeDeploymentSpec(spec)
+
   const files: GeneratedValuesFiles = {}
 
   // Core L2 infrastructure
-  files['l2-sequencer-production.yaml'] = generateL2SequencerValues(spec)
-  files['l2-bootnode-production.yaml'] = generateL2BootnodeValues(spec)
-  files['l2-rpc-production.yaml'] = generateL2RpcValues(spec)
+  files['l2-sequencer-production.yaml'] = generateL2SequencerValues(normalizedSpec)
+  files['l2-bootnode-production.yaml'] = generateL2BootnodeValues(normalizedSpec)
+  files['l2-rpc-production.yaml'] = generateL2RpcValues(normalizedSpec)
 
   // L1 interface and private Ethereum DA devnet
-  files['l1-devnet-production.yaml'] = generateL1DevnetValues(spec)
-  files['l1-interface-production.yaml'] = generateL1InterfaceValues(spec)
+  files['l1-devnet-production.yaml'] = generateL1DevnetValues(normalizedSpec)
+  files['l1-interface-production.yaml'] = generateL1InterfaceValues(normalizedSpec)
 
   // DA and Dogecoin
-  files['eth-da-submitter-production.yaml'] = generateEthDaSubmitterValues(spec)
-  files['dogecoin-production.yaml'] = generateDogecoinValues(spec)
+  files['eth-da-submitter-production.yaml'] = generateEthDaSubmitterValues(normalizedSpec)
+  files['dogecoin-production.yaml'] = generateDogecoinValues(normalizedSpec)
 
   // Bridge and signing
-  files['tso-service-production.yaml'] = generateTsoServiceValues(spec)
-  files['withdrawal-processor-production.yaml'] = generateWithdrawalProcessorValues(spec)
+  files['tso-service-production.yaml'] = generateTsoServiceValues(normalizedSpec)
+  files['withdrawal-processor-production.yaml'] = generateWithdrawalProcessorValues(normalizedSpec)
 
-  // Generate cubesigner values if using cubesigner
-  if (spec.signing.method === 'cubesigner') {
-    files['cubesigner-signer-production.yaml'] = generateCubesignerValues(spec)
+  // CubeSigner provides attestation keys. It is independent from the TEE signer.
+  if (normalizedSpec.signing.cubesigner) {
+    files['cubesigner-signer-production.yaml'] = generateCubesignerValues(normalizedSpec)
   }
 
   // Rollup services
-  files['coordinator-api-production.yaml'] = generateCoordinatorApiValues(spec)
-  files['coordinator-cron-production.yaml'] = generateCoordinatorCronValues(spec)
-  files['gas-oracle-production.yaml'] = generateGasOracleValues(spec)
-  files['fee-oracle-production.yaml'] = generateFeeOracleValues(spec)
-  files['chain-monitor-production.yaml'] = generateChainMonitorValues(spec)
+  files['coordinator-api-production.yaml'] = generateCoordinatorApiValues(normalizedSpec)
+  files['coordinator-cron-production.yaml'] = generateCoordinatorCronValues(normalizedSpec)
+  files['gas-oracle-production.yaml'] = generateGasOracleValues(normalizedSpec)
+  files['fee-oracle-production.yaml'] = generateFeeOracleValues(normalizedSpec)
+  files['chain-monitor-production.yaml'] = generateChainMonitorValues(normalizedSpec)
 
   // Frontend and explorers
-  files['frontends-production.yaml'] = generateFrontendsValues(spec)
-  files['frontends-config.yaml'] = generateFrontendsConfigValues(spec)
-  files['blockscout-production.yaml'] = generateBlockscoutValues(spec)
-  files['rollup-explorer-backend-production.yaml'] = generateRollupExplorerBackendValues(spec)
-  files['bridge-history-api-production.yaml'] = generateBridgeHistoryApiValues(spec)
-  files['bridge-history-fetcher-production.yaml'] = generateBridgeHistoryFetcherValues(spec)
+  files['frontends-production.yaml'] = generateFrontendsValues(normalizedSpec)
+  files['frontends-config.yaml'] = generateFrontendsConfigValues(normalizedSpec)
+  files['blockscout-production.yaml'] = generateBlockscoutValues(normalizedSpec)
+  files['rollup-explorer-backend-production.yaml'] = generateRollupExplorerBackendValues(normalizedSpec)
+  files['bridge-history-api-production.yaml'] = generateBridgeHistoryApiValues(normalizedSpec)
+  files['bridge-history-fetcher-production.yaml'] = generateBridgeHistoryFetcherValues(normalizedSpec)
 
   // Admin and monitoring
-  files['admin-system-backend-production.yaml'] = generateAdminSystemBackendValues(spec)
-  files['admin-system-cron-production.yaml'] = generateAdminSystemCronValues(spec)
-  files['admin-system-dashboard-production.yaml'] = generateAdminSystemDashboardValues(spec)
+  files['admin-system-backend-production.yaml'] = generateAdminSystemBackendValues(normalizedSpec)
+  files['admin-system-cron-production.yaml'] = generateAdminSystemCronValues(normalizedSpec)
+  files['admin-system-dashboard-production.yaml'] = generateAdminSystemDashboardValues(normalizedSpec)
 
   // Contracts deployment
-  files['contracts-production.yaml'] = generateContractsValues(spec)
+  files['contracts-production.yaml'] = generateContractsValues(normalizedSpec)
 
   return files
 }
@@ -543,9 +563,6 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
         data: {
           DOGEOS_L1_INTERFACE_API_BIND_ADDRESS: '0.0.0.0:8545',
           DOGEOS_L1_INTERFACE_BEACON_API_LISTEN_ADDRESS: '0.0.0.0:5052',
-          // Ethereum DA mode: keep the legacy Celestia indexer inert.
-          DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DISCOVERY_MODE: 'on_demand',
-          DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__STORE_RAW_BLOB_DATA: 'true',
           DOGEOS_L1_INTERFACE_CHAIN_ID: String(spec.network.l2ChainId),
           DOGEOS_L1_INTERFACE_DATABASE_URL: 'sqlite:///data/l1-interface.sqlite',
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__CONFIRMATIONS: String(spec.bridge.confirmationsRequired),
@@ -553,11 +570,17 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__INDEX_UTXOS: 'false',
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__INDEX_WITHDRAWALS: 'false',
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__POLL_INTERVAL_MS: '10000',
-          DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT: String(spec.dogecoin.indexerStartHeight),
+          DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT: String(getDogecoinIndexerStartHeight(spec)),
           DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL: dogecoinEndpoints.rpcUrl,
+          DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__KIND: 'anvil',
+          DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS: '10000',
+          DOGEOS_L1_INTERFACE_ETHEREUM_DA__ETH_CHAIN_ID: String(getEthereumDaChainId(spec)),
+          DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
+          DOGEOS_L1_INTERFACE_ETHEREUM_DA__L2_CHAIN_ID: String(spec.network.l2ChainId),
           DOGEOS_L1_INTERFACE_GENESIS_JSON_PATH: '/app/genesis/genesis.json',
           DOGEOS_L1_INTERFACE_HEALTH_LISTEN_ADDRESS: '0.0.0.0:9090',
           DOGEOS_L1_INTERFACE_L1_CHAIN_ID: String(spec.network.l1ChainId),
+          DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK: String(getL1GenesisBlock(spec)),
           DOGEOS_L1_INTERFACE_NETWORK_STR: spec.dogecoin.network,
           DOGEOS_L1_INTERFACE_REPLAY_READ__ENABLED: 'true',
           DOGEOS_L1_INTERFACE_REPLAY_READ__PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
@@ -691,7 +714,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
           DOGEOS_ETH_DA_SUBMITTER_L2__CONFIRMATIONS: String(ethereumDa.l2Confirmations ?? 0),
           DOGEOS_ETH_DA_SUBMITTER_L2__FETCH_LIMIT: String(ethereumDa.fetchLimit ?? 128),
-          DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: ethereumDa.l2RpcUrl || spec.network.l2RpcEndpoint,
+          DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: ethereumDa.l2RpcUrl || L2_RPC_ENDPOINT,
           DOGEOS_ETH_DA_SUBMITTER_S3__ENABLED: 'false',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__CYCLE_INTERVAL_MS: '1000',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__LISTEN_ADDRESS: '0.0.0.0',
@@ -749,6 +772,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
 function generateDogecoinValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
   const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
+  const clusterRpc = getDogecoinClusterRpc(spec)
   const isRegtest = spec.dogecoin.network === 'regtest'
   const isTestnet = spec.dogecoin.network === 'testnet'
 
@@ -757,7 +781,7 @@ function generateDogecoinValues(spec: DeploymentSpec): string {
       disablewallet: 0,
       regtest: isRegtest ? 1 : 0,
       rpcallowip: ['0.0.0.0/0'],
-      rpcuser: spec.dogecoin.rpc.username,
+      rpcuser: clusterRpc.username,
       rpcworkqueue: 128,
       server: 1,
       testnet: isTestnet ? 1 : 0,
@@ -779,7 +803,7 @@ function generateDogecoinValues(spec: DeploymentSpec): string {
     },
     rpcPassword: {
       secretKey: 'password',
-      value: spec.dogecoin.rpc.password
+      value: clusterRpc.password
     },
     service: {
       port: dogecoinEndpoints.p2pPort,
@@ -877,7 +901,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS', value: '' },
       { name: 'DOGEOS_WITHDRAWAL_BRIDGE_SCRIPT_HEX', value: '' },
       { name: 'DOGEOS_WITHDRAWAL_MAX_WITHDRAWAL_OUTPUTS_PER_TX', value: '1024' },
-      { name: 'DOGEOS_WITHDRAWAL_FEE_RATE_SAT_PER_KVB', value: String(spec.bridge.feeRateSatPerKvb) },
+      { name: 'DOGEOS_WITHDRAWAL_FEE_RATE_SAT_PER_KVB', value: String(getBridgeFeeRateSatsPerKvb(spec)) },
       { name: 'DOGEOS_WITHDRAWAL_COORDINATOR_POLL_INTERVAL_SECS', value: '10' },
       { name: 'DOGEOS_WITHDRAWAL_DEBUG_SKIP_BROADCAST', value: 'false' },
       { name: 'DOGEOS_WITHDRAWAL_ROTATE_KEY_V2', value: 'true' },
@@ -886,11 +910,11 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_REPLAY_SQLITE_PATH', value: '/app/data/replay.sqlite' },
       { name: 'DOGEOS_WITHDRAWAL_PROTOCOL_CONTEXT_JSON', value: '/app/protocol_context.json' },
       // Dogecoin Indexer
-      { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT', value: String(spec.dogecoin.indexerStartHeight) },
+      { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT', value: String(getDogecoinIndexerStartHeight(spec)) },
       { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__CONFIRMATIONS', value: String(spec.bridge.confirmationsRequired) },
       { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__POLL_INTERVAL_MS', value: '60000' },
       // DogeOS Indexer
-      { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL', value: spec.network.l2RpcEndpoint },
+      { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL', value: L2_RPC_ENDPOINT },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__START_BLOCK', value: '0' },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__CONFIRMATIONS', value: '12' },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__POLL_INTERVAL_MS', value: '60000' },
@@ -899,7 +923,23 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL', value: getEthereumDaSubmitterRpcUrl(spec) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID', value: String(getEthereumDaChainId(spec)) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID', value: String(spec.network.l2ChainId) },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INDEXER_SQLITE_PATH', value: '/app/data/eth-da-indexer.sqlite' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_STORE_ROOT', value: '/app/data/eth-da-blob-artifacts' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_METADATA_SQLITE_PATH', value: '/app/data/eth-da-artifact-metadata.sqlite' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__MIN_FINALITY', value: getEthereumDaMinFinality(spec) },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__ENABLED', value: 'true' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__WRITER_ID', value: 'withdrawal-processor' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__CURSOR_ID', value: 'eth_da_inbox' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__START_BLOCK', value: String(getDogecoinIndexerStartHeight(spec)) },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__INGEST_DEPTH', value: '1' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__SAFE_DEPTH', value: '32' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__FINALIZED_DEPTH', value: '64' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__ROLLBACK_LOOKBACK', value: '128' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__POLL_INTERVAL_MS', value: '6000' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__MAX_BLOCKS_PER_CYCLE', value: '64' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__STATUS_POLL_INTERVAL_MS', value: '5000' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__KIND', value: 'anvil' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS', value: '10000' },
       { name: 'RUST_LOG', value: 'info,withdrawal_processor=info' }
     ],
     envFrom: [
@@ -1108,8 +1148,8 @@ function generateGasOracleValues(spec: DeploymentSpec): string {
       env: {
         data: {
           SCROLL_GAS_ORACLE_BLOB_SCALAR: String(spec.contracts.gasOracle.blobScalar),
-          SCROLL_GAS_ORACLE_L1_RPC_URL: spec.network.l1RpcEndpoint,
-          SCROLL_GAS_ORACLE_L2_RPC_URL: spec.network.l2RpcEndpoint,
+          SCROLL_GAS_ORACLE_L1_RPC_URL: L1_INTERFACE_RPC_ENDPOINT,
+          SCROLL_GAS_ORACLE_L2_RPC_URL: L2_RPC_ENDPOINT,
           SCROLL_GAS_ORACLE_SCALAR: String(spec.contracts.gasOracle.scalar)
         },
         enabled: true
@@ -1157,7 +1197,7 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
   const values = {
     env: [
       { name: 'FEE_ORACLE_PORT', value: '3000' },
-      { name: 'FEE_ORACLE_L2_RPC_URL', value: spec.network.l2RpcEndpoint },
+      { name: 'FEE_ORACLE_L2_RPC_URL', value: L2_RPC_ENDPOINT },
       { name: 'FEE_ORACLE_DOGE_RPC_URL', value: dogecoinEndpoints.rpcUrl },
       { name: 'FEE_ORACLE_UPDATE_INTERVAL_SECS', value: '60' }
     ],
@@ -1187,8 +1227,8 @@ function generateChainMonitorValues(spec: DeploymentSpec): string {
     configMaps: {
       env: {
         data: {
-          SCROLL_CHAIN_MONITOR_L1_RPC_URL: spec.network.l1RpcEndpoint,
-          SCROLL_CHAIN_MONITOR_L2_RPC_URL: spec.network.l2RpcEndpoint
+          SCROLL_CHAIN_MONITOR_L1_RPC_URL: L1_INTERFACE_RPC_ENDPOINT,
+          SCROLL_CHAIN_MONITOR_L2_RPC_URL: L2_RPC_ENDPOINT
         },
         enabled: true
       }
@@ -1321,7 +1361,7 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
           INDEXER_SCROLL_L1_ETH_GET_LOGS_RANGE_SIZE: 500,
           INDEXER_SCROLL_L1_MESSENGER_CONTRACT: '',
           INDEXER_SCROLL_L1_MESSENGER_START_BLOCK: String(spec.contracts.l1DeploymentBlock || 0),
-          INDEXER_SCROLL_L1_RPC: spec.network.l1RpcEndpoint,
+          INDEXER_SCROLL_L1_RPC: L1_INTERFACE_RPC_ENDPOINT,
           INDEXER_SCROLL_L2_ETH_GET_LOGS_RANGE_SIZE: 500,
           INDEXER_SCROLL_L2_GAS_ORACLE_CONTRACT: '',
           INDEXER_SCROLL_L2_MESSENGER_CONTRACT: '',
@@ -1511,9 +1551,9 @@ function generateBridgeHistoryFetcherValues(spec: DeploymentSpec): string {
     configMaps: {
       env: {
         data: {
-          SCROLL_BRIDGE_HISTORY_L1_RPC_URL: spec.network.l1RpcEndpoint,
+          SCROLL_BRIDGE_HISTORY_L1_RPC_URL: L1_INTERFACE_RPC_ENDPOINT,
           SCROLL_BRIDGE_HISTORY_L1_START_HEIGHT: String(spec.contracts.l1DeploymentBlock || 0),
-          SCROLL_BRIDGE_HISTORY_L2_RPC_URL: spec.network.l2RpcEndpoint
+          SCROLL_BRIDGE_HISTORY_L2_RPC_URL: L2_RPC_ENDPOINT
         },
         enabled: true
       }
@@ -1554,8 +1594,8 @@ function generateAdminSystemBackendValues(spec: DeploymentSpec): string {
     configMaps: {
       env: {
         data: {
-          SCROLL_ADMIN_L1_RPC_URL: spec.network.l1RpcEndpoint,
-          SCROLL_ADMIN_L2_RPC_URL: spec.network.l2RpcEndpoint
+          SCROLL_ADMIN_L1_RPC_URL: L1_INTERFACE_RPC_ENDPOINT,
+          SCROLL_ADMIN_L2_RPC_URL: L2_RPC_ENDPOINT
         },
         enabled: true
       }
@@ -1667,9 +1707,9 @@ function generateContractsValues(spec: DeploymentSpec): string {
           SCROLL_CHAIN_ID_L1: String(spec.network.l1ChainId),
           SCROLL_CHAIN_ID_L2: String(spec.network.l2ChainId),
           SCROLL_DEPLOYMENT_SALT: spec.contracts.deploymentSalt,
-          SCROLL_L1_FEE_VAULT_ADDR: spec.contracts.l1FeeVaultAddr,
-          SCROLL_L1_RPC: spec.network.l1RpcEndpoint,
-          SCROLL_L2_RPC: spec.network.l2RpcEndpoint,
+          SCROLL_L1_FEE_VAULT_ADDR: DEFAULT_L1_FEE_VAULT_ADDR,
+          SCROLL_L1_RPC: L1_INTERFACE_RPC_ENDPOINT,
+          SCROLL_L2_RPC: L2_RPC_ENDPOINT,
           SCROLL_OWNER_ADDR: spec.accounts.owner.address
         },
         enabled: true

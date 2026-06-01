@@ -1,11 +1,17 @@
-# Dogecoin Network Configuration
-network = "testnet" # Options: "mainnet", "testnet", "regtest"
+network = "testnet"
 
 # RPC Configuration
 [rpc]
 url = "http://localhost:1337/bitcoin-rpc/?network=doge"
 username = "devnet"                                            # Optional
 password = "devnet"                                            # Optional
+
+[ethereumDa]
+beaconRpcUrl = "https://ethereum-sepolia-beacon-api.publicnode.com"
+chain = "sepolia"
+chainId = "11155111"
+minFinality = "safe"
+submitterRpcUrl = "https://sepolia.drpc.org"
 
 # Wallet Configuration
 [wallet]
@@ -17,3 +23,4 @@ chainId = "221122"                                           # Optional: integer
 evmAddress = "0x151a64570e4997739458455ba4ab5A535FD2E306"    # Optional: 20 bytes for 27-byte format
 recipient = "DARn34TPXXQZgcVo5nZ7iqvJJRsm2PkjSC"             # Optional: Default recipient address
 dogecoinIndexerStartHeight = 4000000
+l1GenesisBlock = 4000001
