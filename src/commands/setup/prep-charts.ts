@@ -338,6 +338,7 @@ export default class SetupPrepCharts extends Command {
 
     const { config } = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk setup doge-config')
     this.dogeConfig = config as DogeConfigType;
+    this.configData.ethereumDa = this.dogeConfig.ethereumDa
 
 
     const withdrawalProcessorConfigPath = path.join(process.cwd(), ".data/output-withdrawal-processor.toml")

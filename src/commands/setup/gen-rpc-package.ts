@@ -32,7 +32,7 @@ export default class SetupGenRpcPackage extends Command {
       required: false,
     }),
     'doge-config': Flags.string({
-      description: 'Path to Dogecoin config file; network is read from config.toml [dogecoin].network',
+      description: 'Path to Dogecoin config file',
       required: false,
     }),
     'dogeos-rpc-package-dir': Flags.string({
@@ -92,7 +92,6 @@ export default class SetupGenRpcPackage extends Command {
       const { config: dogeConfig, configPath: dogeConfigPath } = await loadDogeConfigWithSelection(
         flags['doge-config'],
         `${this.config.bin} ${this.id}`,
-        flags['config-path']
       )
       this.log(chalk.blue(`Using DogeConfig file: ${dogeConfigPath}`))
 

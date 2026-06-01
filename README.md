@@ -219,8 +219,7 @@ USAGE
 
 FLAGS
   -N, --non-interactive  Run without prompts (implies --force)
-  -c, --config=<value>   [default: .data/doge-config.toml] Path to Dogecoin config file (wallet path); network is read
-                         from config.toml [dogecoin].network
+  -c, --config=<value>   [default: .data/doge-config.toml] Path to Dogecoin config file
   -d, --dry-run          Show what would be created without actually creating the wallet
   -f, --force            Skip confirmation prompt
   -p, --path=<value>     Path to save the wallet file (overrides path from config file)
@@ -1065,12 +1064,10 @@ Set up domain configurations for external services
 
 ```
 USAGE
-  $ scrollsdk setup domains [--json] [-n mainnet|testnet|regtest] [-N]
+  $ scrollsdk setup domains [--json] [-N]
 
 FLAGS
   -N, --non-interactive  Run without prompts, using config.toml values
-  -n, --network=<option> Dogecoin network to write to [dogecoin].network
-                         <options: mainnet|testnet|regtest>
       --json             Output in JSON format (stdout for data, stderr for logs)
 
 DESCRIPTION
@@ -1079,11 +1076,9 @@ DESCRIPTION
 EXAMPLES
   $ scrollsdk setup domains
 
-  $ scrollsdk setup domains --network testnet
-
   $ scrollsdk setup domains --non-interactive
 
-  $ scrollsdk setup domains --non-interactive --json --network testnet
+  $ scrollsdk setup domains --non-interactive --json
 ```
 
 _See code: [src/commands/setup/domains.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/domains.ts)_
@@ -1249,8 +1244,7 @@ FLAGS
   -n, --namespace=<value>               Kubernetes namespace
       --config-path=<value>             [default: ./config.toml] Path to config.toml file containing cluster
                                         configuration
-      --doge-config=<value>             Path to Dogecoin config file; network is read from config.toml
-                                        [dogecoin].network
+      --doge-config=<value>             Path to Dogecoin config file
       --values-dir=<value>              [default: ./values] Directory containing Helm values files (must include
                                         genesis.yaml)
 

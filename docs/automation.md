@@ -123,23 +123,34 @@ At runtime, `$ENV:POSTGRES_ADMIN_PASSWORD` resolves to `process.env.POSTGRES_ADM
 
 All commands below assume `config.toml` is fully populated. Run them in order:
 
-### Step 1: Set up domains
+### Step 1: Configure Dogecoin
 
 ```bash
-scrollsdk setup domains -N --json --network testnet
+scrollsdk setup doge-config -N --json
 ```
 
-Reads domain and ingress values from `[frontend]` and `[ingress]` sections of config.toml.
+Creates or updates `.data/doge-config.toml`, including Dogecoin network and Ethereum DA settings. It migrates legacy `[dogecoin]` and `[ethereumDa]` values out of `config.toml` when present.
 
 **Required config fields:**
-- `[dogecoin].network` - Dogecoin network. In non-interactive mode, set it in config.toml before running this command.
+- `network` in `.data/doge-config.toml` or legacy `[dogecoin].network` in `config.toml` for migration.
+- `[ethereumDa]` in `.data/doge-config.toml` or legacy `[ethereumDa]` in `config.toml` for migration.
+
+### Step 2: Set up domains
+
+```bash
+scrollsdk setup domains -N --json
+```
+
+Reads domain and ingress values from `[frontend]` and `[ingress]` sections of config.toml. Reads Dogecoin network and Ethereum DA settings from `.data/doge-config.toml`.
+
+**Required config fields:**
 - `[frontend].EXTERNAL_RPC_URI_L1` - L1 RPC endpoint
 - `[frontend].EXTERNAL_RPC_URI_L2` - L2 RPC endpoint
 - `[frontend].BRIDGE_API_URI` - Bridge API endpoint
 - `[frontend].ROLLUPSCAN_API_URI` - Rollupscan API endpoint
 - `[ingress].*` - Ingress hostnames
 
-### Step 2: Initialize databases
+### Step 3: Initialize databases
 
 ```bash
 scrollsdk setup db-init --clean -N --json
@@ -154,7 +165,7 @@ Creates PostgreSQL databases and roles. Attempts SSL connection first, falls bac
 - `[db.admin].PASSWORD` - Admin password (use `$ENV:` for secrets)
 - `[db.*]` sections for each service database
 
-### Step 3: Generate keystores
+### Step 4: Generate keystores
 
 ```bash
 scrollsdk setup gen-keystore -N --json --sequencer-password '$ENV:SEQUENCER_KEYSTORE_PASSWORD'
@@ -171,17 +182,6 @@ Generates keystores for validator/sequencer accounts.
 
 **Required config fields:**
 - `[accounts]` section with private keys
-
-### Step 4: Configure Dogecoin
-
-```bash
-scrollsdk setup doge-config -N --json
-```
-
-Generates `.data/doge-config.toml` from config values.
-
-**Required config fields:**
-- `[dogecoin].network` in config.toml.
 
 ### Step 5: Generate L2 artifacts
 
@@ -363,7 +363,8 @@ run_step() {
 }
 
 # Steps 1-2: Domain and database setup
-run_step "setup domains" setup domains -N --json --network "$NETWORK"
+run_step "setup doge-config" setup doge-config -N --json
+run_step "setup domains" setup domains -N --json
 run_step "setup db-init" setup db-init --clean -N --json
 
 # Step 3: Generate keystores
@@ -412,7 +413,7 @@ This generates base config files (`config.toml`, `doge-config.toml`, `setup_defa
 ### Bash with jq
 
 ```bash
-output=$(scrollsdk setup domains -N --json --network testnet 2>/dev/null)
+output=$(scrollsdk setup domains -N --json 2>/dev/null)
 if echo "$output" | jq -e '.success' > /dev/null 2>&1; then
   echo "Success"
   echo "$output" | jq '.data'

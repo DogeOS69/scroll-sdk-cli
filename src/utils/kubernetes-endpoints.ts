@@ -40,7 +40,7 @@ export interface BlockbookKubernetesEndpoints {
 
 export function resolveDogecoinKubernetesEndpoints(config: DogecoinEndpointConfig): DogecoinKubernetesEndpoints {
   if (!config.network) {
-    throw new Error('Dogecoin network is required. Read it from config.toml [dogecoin].network before resolving endpoints.')
+    throw new Error('Dogecoin network is required. Read it from doge-config.toml network before resolving endpoints.')
   }
 
   const { network } = config

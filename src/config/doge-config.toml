@@ -1,8 +1,17 @@
+network = "testnet"
+
 # RPC Configuration
 [rpc]
 url = "http://localhost:1337/bitcoin-rpc/?network=doge"
 username = "devnet"                                            # Optional
 password = "devnet"                                            # Optional
+
+[ethereumDa]
+beaconRpcUrl = "https://ethereum-sepolia-beacon-api.publicnode.com"
+chain = "sepolia"
+chainId = "11155111"
+minFinality = "safe"
+submitterRpcUrl = "https://sepolia.drpc.org"
 
 # Wallet Configuration
 [wallet]

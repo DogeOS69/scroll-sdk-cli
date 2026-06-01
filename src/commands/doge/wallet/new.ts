@@ -44,7 +44,7 @@ export default class WalletNew extends Command {
     config: Flags.string({
       char: 'c',
       default: '.data/doge-config.toml',
-      description: 'Path to Dogecoin config file (wallet path); network is read from config.toml [dogecoin].network',
+      description: 'Path to Dogecoin config file',
     }),
     'dry-run': Flags.boolean({
       char: 'd',

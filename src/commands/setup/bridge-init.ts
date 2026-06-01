@@ -9,7 +9,7 @@ import * as path from 'node:path'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
-import { loadDogeNetworkFromMainConfig } from '../../utils/doge-config.js'
+import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 
 type BridgeInitStep = '1-prepare' | '2-setup' | '3-bridge-info' | '4-fund' | '5-protocol-context' | 'all'
@@ -675,7 +675,7 @@ export class BridgeInitCommand extends Command {
 
   private getConfiguredDogeNetwork(): string {
     try {
-      return loadDogeNetworkFromMainConfig(path.join(process.cwd(), 'config.toml'))
+      return loadDogeNetworkFromDogeConfig(path.join(process.cwd(), '.data', 'doge-config.toml'))
     } catch (error) {
       this.jsonCtx.error(
         'E102_CONFIG_MISSING',
@@ -836,7 +836,7 @@ export class BridgeInitCommand extends Command {
     if (typeof rpcUrl !== 'string' || rpcUrl.length === 0) {
       this.jsonCtx.error(
         'E103_ETHEREUM_DA_CONFIG_MISSING',
-        'ethereumDa.submitterRpcUrl is required in config.toml before running bridge setup.',
+        'ethereumDa.submitterRpcUrl is required in .data/doge-config.toml before running bridge setup.',
         'CONFIGURATION',
         true,
         { path: configPath }
@@ -1007,7 +1007,7 @@ export class BridgeInitCommand extends Command {
     if (!fs.existsSync(configPath)) {
       this.jsonCtx.error(
         'E101_CONFIG_NOT_FOUND',
-        `config.toml not found at: ${configPath}`,
+        `TOML config not found at: ${configPath}`,
         'CONFIGURATION',
         true,
         { path: configPath }
@@ -1233,7 +1233,7 @@ export class BridgeInitCommand extends Command {
       default: {
         this.jsonCtx.error(
           'E602_INVALID_DOGE_NETWORK',
-          `Unsupported Dogecoin network "${network}". Expected mainnet, testnet, or regtest from config.toml [dogecoin].network.`,
+          `Unsupported Dogecoin network "${network}". Expected mainnet, testnet, or regtest from .data/doge-config.toml network.`,
           'CONFIGURATION',
           true,
           { network }
@@ -1423,9 +1423,8 @@ export class BridgeInitCommand extends Command {
     const network = this.getConfiguredDogeNetwork()
     this.syncSetupDefaultsNetwork(paths.setupDefaultsPath, network)
     this.resolveSetupDefaultsEnvRefs(paths.setupDefaultsPath)
-    const configPath = path.join(process.cwd(), 'config.toml')
     const dogecoinHeightBeforeSetup = await this.getDogecoinCurrentHeight(paths.setupDefaultsPath)
-    const ethereumDaHeightBeforeSetup = await this.getEthereumDaCurrentHeight(configPath)
+    const ethereumDaHeightBeforeSetup = await this.getEthereumDaCurrentHeight(path.join(paths.dataDir, 'doge-config.toml'))
     const indexerStartHeight = Math.max(0, dogecoinHeightBeforeSetup - 1)
     this.jsonCtx.info(`Dogecoin height before setup transaction: ${dogecoinHeightBeforeSetup}`)
     this.jsonCtx.info(`Ethereum DA height before setup transaction: ${ethereumDaHeightBeforeSetup}`)
@@ -1452,7 +1451,7 @@ export class BridgeInitCommand extends Command {
 
     setupDefaults.network = network
     fs.writeFileSync(setupDefaultsPath, toml.stringify(setupDefaults))
-    this.jsonCtx.info(`Updated ${setupDefaultsPath} with network = ${network} from config.toml`)
+    this.jsonCtx.info(`Updated ${setupDefaultsPath} with network = ${network} from .data/doge-config.toml`)
   }
 
   /**
@@ -1470,7 +1469,6 @@ export class BridgeInitCommand extends Command {
       dogeConfigForUpdate.defaults.dogecoinIndexerStartHeight = String(blockHeight)
       dogeConfigForUpdate.defaults.ethereumDaEmbeddedIndexerStartBlock = String(ethereumDaEmbeddedIndexerStartBlock)
       dogeConfigForUpdate.defaults.l1GenesisBlock = String(Math.max(0, blockHeight + 1))
-      delete dogeConfigForUpdate.network
       if (dogeConfigForUpdate.localSigners) {
         delete dogeConfigForUpdate.localSigners.network
       }
@@ -1515,8 +1513,13 @@ export class BridgeInitCommand extends Command {
 
   private updateProtocolSeed(dataDir: string, network: string, configPath: string): string {
     const configToml = this.getRequiredTomlConfig(configPath)
+    const { config: dogeConfig, path: dogeConfigPath } = this.getRequiredDogeConfig(dataDir)
     const contractsPath = path.join(process.cwd(), 'config-contracts.toml')
     const contractsConfig = this.getRequiredTomlConfig(contractsPath)
+    const protocolInputConfig = {
+      ...configToml,
+      ethereumDa: dogeConfig.ethereumDa,
+    }
 
     fs.mkdirSync(dataDir, { recursive: true })
     const protocolSeedPath = path.join(dataDir, 'protocol_seed.toml')
@@ -1527,11 +1530,15 @@ export class BridgeInitCommand extends Command {
     }
 
     protocolSeedConfig = buildEthereumDaProtocolSeedConfig(
-      { configToml, contractsConfig, existingProtocolSeedConfig: protocolSeedConfig, network },
+      { configToml: protocolInputConfig, contractsConfig, existingProtocolSeedConfig: protocolSeedConfig, network },
       {
         getContractAddress: (config, contractName) =>
           this.getRequiredContractAddress(config, contractName, contractsPath),
-        getNumberValue: (source, key) => this.getRequiredNumberValue(source, key, configPath),
+        getNumberValue: (source, key) => this.getRequiredNumberValue(
+          source,
+          key,
+          source === protocolInputConfig.ethereumDa ? dogeConfigPath : configPath
+        ),
         resolveDogecoinChainId: (dogecoinNetwork) => this.resolveDogecoinChainId(dogecoinNetwork),
       }
     )

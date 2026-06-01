@@ -49,6 +49,13 @@ export interface DogeConfig {
   dummySigner?: {
     provider?: 'aws' | 'local'
   }
+  ethereumDa?: {
+    beaconRpcUrl?: string
+    chain?: 'devnet' | 'mainnet' | 'sepolia'
+    chainId?: string
+    minFinality?: 'finalized' | 'safe'
+    submitterRpcUrl?: string
+  }
 
   frontend?: {
     bridgeUrl?: string

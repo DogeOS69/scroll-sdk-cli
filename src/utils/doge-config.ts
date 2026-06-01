@@ -13,70 +13,47 @@ export function normalizeDogeNetwork(network: unknown): Network | undefined {
     : undefined
 }
 
-function getDogecoinSection(config: unknown): Record<string, unknown> | undefined {
-  const section = (config as { dogecoin?: unknown })?.dogecoin
-  if (section === undefined) return undefined
-  if (!section || typeof section !== 'object' || Array.isArray(section)) {
-    throw new Error('[dogecoin] must be a TOML table.')
-  }
+function getDogeConfigNetwork(config: unknown): Network | undefined {
+  const network = (config as { network?: unknown })?.network
+  if (network === undefined) return undefined
 
-  return section as Record<string, unknown>
-}
-
-export function getOptionalDogeNetworkFromConfig(config: unknown, sourceDescription = 'config.toml'): Network | undefined {
-  const dogecoinSection = getDogecoinSection(config)
-  if (!dogecoinSection || dogecoinSection.network === undefined) return undefined
-
-  const network = normalizeDogeNetwork(dogecoinSection.network)
-  if (!network) {
+  const normalizedNetwork = normalizeDogeNetwork(network)
+  if (!normalizedNetwork) {
     throw new Error(
-      `${sourceDescription} has an invalid [dogecoin].network value: ${String(dogecoinSection.network)}. ` +
+      `doge-config.toml has an invalid network value: ${String(network)}. ` +
       `Must be 'mainnet', 'testnet', or 'regtest'.`
     )
   }
 
-  return network
+  return normalizedNetwork
 }
 
-export function getDogeNetworkFromConfig(config: unknown, sourceDescription = 'config.toml'): Network {
-  const network = getOptionalDogeNetworkFromConfig(config, sourceDescription)
-  if (!network) {
-    throw new Error(
-      `${sourceDescription} must define [dogecoin].network as 'mainnet', 'testnet', or 'regtest'.`
-    )
-  }
-
-  return network
-}
-
-export function loadDogeNetworkFromMainConfig(
-  mainConfigPath: string = path.resolve('config.toml')
+export function loadDogeNetworkFromDogeConfig(
+  dogeConfigPath: string = path.resolve('.data/doge-config.toml')
 ): Network {
-  const resolvedPath = path.resolve(mainConfigPath)
+  const resolvedPath = path.resolve(dogeConfigPath)
   if (!fs.existsSync(resolvedPath)) {
     throw new Error(
-      `Main config file ${resolvedPath} not found. ` +
-      `Create config.toml and set [dogecoin].network before using Dogecoin commands.`
+      `Dogecoin config file ${resolvedPath} not found. ` +
+      `Run 'scrollsdk setup doge-config' to create it.`
     )
   }
 
   const configContent = fs.readFileSync(resolvedPath, 'utf8')
   const config = toml.parse(configContent)
-  return getDogeNetworkFromConfig(config, resolvedPath)
-}
-
-export function setDogeNetworkInConfig(config: toml.JsonMap, network: Network): void {
-  const configMap = config as Record<string, unknown>
-  if (!configMap.dogecoin || typeof configMap.dogecoin !== 'object' || Array.isArray(configMap.dogecoin)) {
-    configMap.dogecoin = {}
+  const network = getDogeConfigNetwork(config)
+  if (!network) {
+    throw new Error(
+      `${resolvedPath} must define network as 'mainnet', 'testnet', or 'regtest'. ` +
+      `Run 'scrollsdk setup doge-config' to update it.`
+    )
   }
 
-  ;(configMap.dogecoin as Record<string, unknown>).network = network
+  return network
 }
 
 export function stripDogeConfigFileOnlyFields(config: DogeConfig): Record<string, unknown> {
   const fileConfig = { ...config } as Record<string, unknown>
-  delete fileConfig.network
 
   if (fileConfig.localSigners && typeof fileConfig.localSigners === 'object' && !Array.isArray(fileConfig.localSigners)) {
     const localSigners = { ...(fileConfig.localSigners as Record<string, unknown>) }
@@ -135,38 +112,35 @@ export async function selectDogeConfigFile(
 export async function loadDogeConfigWithSelection(
   providedConfigPath?: string,
   suggestedCommand: string = 'scrollsdk setup doge-config',
-  mainConfigPath: string = path.resolve('config.toml')
 ): Promise<{ config: DogeConfig; configPath: string }> {
   const configPath = await selectDogeConfigFile(providedConfigPath, suggestedCommand)
-  const config = await loadDogeConfig(configPath, mainConfigPath)
+  const config = await loadDogeConfig(configPath)
   return { config, configPath }
 }
 
-async function loadDogeConfig(configPath: string, mainConfigPath: string): Promise<DogeConfig> {
+async function loadDogeConfig(configPath: string): Promise<DogeConfig> {
   const resolvedPath = path.resolve(configPath)
 
   try {
-    const mainConfigNetwork = loadDogeNetworkFromMainConfig(mainConfigPath)
     const configContent = fs.readFileSync(resolvedPath, 'utf8')
     const parsedConfig = toml.parse(configContent) as unknown as DogeConfig
 
-    if (parsedConfig.network !== undefined) {
+    const network = getDogeConfigNetwork(parsedConfig)
+    if (!network) {
       throw new Error(
-        `Config file ${resolvedPath} contains 'network', but Dogecoin network must only be defined in ` +
-        `config.toml [dogecoin].network. Remove the field from ${resolvedPath}.`
+        `Config file ${resolvedPath} is missing 'network'. Run 'scrollsdk setup doge-config' to update it.`
       )
     }
 
     const { localSigners } = parsedConfig as Record<string, unknown>
     if (localSigners && typeof localSigners === 'object' && !Array.isArray(localSigners) && 'network' in localSigners) {
       throw new Error(
-        `Config file ${resolvedPath} contains 'localSigners.network', but Dogecoin network must only be defined in ` +
-        `config.toml [dogecoin].network. Remove the field from ${resolvedPath}.`
+        `Config file ${resolvedPath} contains 'localSigners.network'. Move the Dogecoin network to top-level ` +
+        `'network' in ${resolvedPath}.`
       )
     }
 
-    delete (parsedConfig as Record<string, unknown>).network
-    parsedConfig.network = mainConfigNetwork
+    parsedConfig.network = network
 
     if (!parsedConfig.wallet || !parsedConfig.wallet.path) {
       throw new Error(
@@ -177,11 +151,7 @@ async function loadDogeConfig(configPath: string, mainConfigPath: string): Promi
     return parsedConfig
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Config file')) throw error
-    if (error instanceof Error && (
-      error.message.startsWith('Main config file') ||
-      error.message.includes('[dogecoin].network') ||
-      error.message === '[dogecoin] must be a TOML table.'
-    )) {
+    if (error instanceof Error && error.message.includes('doge-config.toml has an invalid network value')) {
       throw error
     }
 

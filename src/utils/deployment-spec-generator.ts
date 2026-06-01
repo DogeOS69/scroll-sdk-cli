@@ -347,20 +347,20 @@ function resolveDogecoinChainId(network: DeploymentSpec['dogecoin']['network']):
 }
 
 function assertGeneratedDataNetworkConsistency(configs: GeneratedConfigs): void {
-  const mainConfig = toml.parse(configs['config.toml']) as toml.JsonMap
+  const dogeConfig = toml.parse(configs['doge-config.toml']) as toml.JsonMap
   const setupDefaults = toml.parse(configs['setup_defaults.toml']) as toml.JsonMap
   const protocolSeed = toml.parse(configs['protocol_seed.toml']) as toml.JsonMap
 
-  const dogeNetwork = (mainConfig.dogecoin as toml.JsonMap | undefined)?.network
+  const dogeNetwork = dogeConfig.network
   const setupNetwork = setupDefaults.network
   if (dogeNetwork !== setupNetwork) {
     throw new Error(
-      `.data network mismatch: config.toml [dogecoin].network=${String(dogeNetwork)} but setup_defaults.toml network=${String(setupNetwork)}`
+      `.data network mismatch: doge-config.toml network=${String(dogeNetwork)} but setup_defaults.toml network=${String(setupNetwork)}`
     )
   }
 
   if (dogeNetwork !== 'mainnet' && dogeNetwork !== 'testnet' && dogeNetwork !== 'regtest') {
-    throw new Error(`.data network mismatch: unsupported config.toml [dogecoin].network=${String(dogeNetwork)}`)
+    throw new Error(`.data network mismatch: unsupported doge-config.toml network=${String(dogeNetwork)}`)
   }
 
   const expectedDogecoinChainId = resolveDogecoinChainId(dogeNetwork as DeploymentSpec['dogecoin']['network'])
@@ -904,23 +904,9 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     L2_RPC_ENDPOINT,
   }
 
-  config.dogecoin = {
-    network: spec.dogecoin.network,
-  }
-
   if (spec.rollup.verifierDigests) {
     config.general.VERIFIER_DIGEST_1 = spec.rollup.verifierDigests.digest1
     config.general.VERIFIER_DIGEST_2 = spec.rollup.verifierDigests.digest2
-  }
-
-  const ethereumDaChain = getEthereumDaChain(spec)
-  const ethereumDaDefaults = ETHEREUM_DA_DEFAULTS[ethereumDaChain]
-  config.ethereumDa = {
-    beaconRpcUrl: spec.ethereumDa?.beaconRpcUrl || ethereumDaDefaults.beaconRpcUrl,
-    chain: ethereumDaChain,
-    chainId: spec.ethereumDa?.chainId || ethereumDaDefaults.chainId,
-    minFinality: spec.ethereumDa?.minFinality || ethereumDaDefaults.minFinality,
-    submitterRpcUrl: spec.ethereumDa?.l1RpcUrl || ethereumDaDefaults.submitterRpcUrl,
   }
 
   // [accounts] section
@@ -1160,6 +1146,10 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   const clusterRpc = getDogecoinClusterRpc(spec)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
   const config: Record<string, any> = {}
+  const ethereumDaChain = getEthereumDaChain(spec)
+  const ethereumDaDefaults = ETHEREUM_DA_DEFAULTS[ethereumDaChain]
+
+  config.network = spec.dogecoin.network
 
   config.rpc = {
     password: externalRpc.password || '',
@@ -1170,6 +1160,14 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   config.dogecoinClusterRpc = {
     password: clusterRpc.password,
     username: clusterRpc.username,
+  }
+
+  config.ethereumDa = {
+    beaconRpcUrl: spec.ethereumDa?.beaconRpcUrl || ethereumDaDefaults.beaconRpcUrl,
+    chain: ethereumDaChain,
+    chainId: spec.ethereumDa?.chainId || ethereumDaDefaults.chainId,
+    minFinality: spec.ethereumDa?.minFinality || ethereumDaDefaults.minFinality,
+    submitterRpcUrl: spec.ethereumDa?.l1RpcUrl || ethereumDaDefaults.submitterRpcUrl,
   }
 
   if (spec.dogecoin.blockbook) {
