@@ -377,8 +377,20 @@ export interface EthereumDaConfig {
 
   minFinality?: 'finalized' | 'pending' | 'safe'
   minPriorityFeeWei?: string
+  signer?: EthereumDaSignerConfig
   /** eth_da_submitter lifecycle/store settings. */
   submitterDbPath?: string
+}
+
+export interface EthereumDaSignerConfig {
+  backend?: 'aws_kms' | 'local'
+  expectedAddress?: string
+  kmsKeyArn?: string
+  kmsKeyId?: string
+  kmsRegion?: string
+  namespace?: string
+  serviceAccountName?: string
+  serviceAccountRoleArn?: string
 }
 
 export interface BridgeConfig {

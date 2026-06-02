@@ -116,6 +116,7 @@ export default class SetupPrepCharts extends Command {
     'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL': 'ethereumDa.submitterRpcUrl',
     'DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL': 'general.L2_RPC_ENDPOINT',
     'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID': 'ethereumDa.chainId',
+    'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__EXPECTED_BATCHERS': 'ethereumDa.signer.expectedAddress',
     'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL': 'ethereumDa.submitterRpcUrl',
     'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID': 'general.CHAIN_ID_L2',
     // Add ingress host mappings
@@ -1283,6 +1284,11 @@ export default class SetupPrepCharts extends Command {
           todoMappings.DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__START_BLOCK = String(ethereumDaEmbeddedIndexerStartBlock)
         }
 
+        const expectedBatcherAddress = this.dogeConfig.ethereumDa?.signer?.expectedAddress
+        if (expectedBatcherAddress) {
+          todoMappings.DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__EXPECTED_BATCHERS = JSON.stringify([expectedBatcherAddress])
+        }
+
         for (const [envKey, newVal] of Object.entries(todoMappings)) {
           const envVar = productionYaml.env.find((item: any) => item.name === envKey);
           if (envVar) {
@@ -1369,13 +1375,60 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT")
         }
 
+        const signerConfig = this.dogeConfig.ethereumDa?.signer
+        if (signerConfig?.backend === 'aws_kms') {
+          Object.assign(todoMappings, {
+            "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_EXPECTED_ADDRESS": signerConfig.expectedAddress,
+            "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_KEY_ID": signerConfig.kmsKeyId,
+            "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_REGION": signerConfig.kmsRegion,
+            "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SIGNER_BACKEND": "aws_kms",
+          })
+        }
+
         const envData = productionYaml.configMaps.env.data;
         for (const [envKey, newValue] of Object.entries(todoMappings)) {
+          if (newValue === undefined || newValue === null || String(newValue).trim() === '') continue
+
           if (envData[envKey] !== newValue) {
             const oldValue = envData[envKey];
             envData[envKey] = newValue;
             updated = true;
             changes.push({ key: `configMaps.env.data.${envKey}`, newValue: String(newValue), oldValue: String(oldValue || 'undefined') });
+          }
+        }
+
+        if (signerConfig?.backend === 'aws_kms') {
+          delete envData.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY
+
+          if (Array.isArray(productionYaml.envFrom)) {
+            const nextEnvFrom = productionYaml.envFrom.filter((item: any) => item?.secretRef?.name !== 'eth-da-submitter-secret-env')
+            if (nextEnvFrom.length !== productionYaml.envFrom.length) {
+              productionYaml.envFrom = nextEnvFrom
+              updated = true
+              changes.push({ key: 'envFrom.eth-da-submitter-secret-env', newValue: 'removed', oldValue: 'present' })
+            }
+          }
+
+          if (productionYaml.externalSecrets?.['eth-da-submitter-secret-env']) {
+            delete productionYaml.externalSecrets['eth-da-submitter-secret-env']
+            if (Object.keys(productionYaml.externalSecrets).length === 0) delete productionYaml.externalSecrets
+            updated = true
+            changes.push({ key: 'externalSecrets.eth-da-submitter-secret-env', newValue: 'removed', oldValue: 'present' })
+          }
+
+          productionYaml.serviceAccount ||= {}
+          const previousServiceAccount = JSON.stringify(productionYaml.serviceAccount)
+          productionYaml.serviceAccount.create = true
+          productionYaml.serviceAccount.name = signerConfig.serviceAccountName || 'eth-da-submitter'
+          if (signerConfig.serviceAccountRoleArn) {
+            productionYaml.serviceAccount.annotations ||= {}
+            productionYaml.serviceAccount.annotations['eks.amazonaws.com/role-arn'] = signerConfig.serviceAccountRoleArn
+          }
+
+          const nextServiceAccount = JSON.stringify(productionYaml.serviceAccount)
+          if (previousServiceAccount !== nextServiceAccount) {
+            updated = true
+            changes.push({ key: 'serviceAccount', newValue: nextServiceAccount, oldValue: previousServiceAccount })
           }
         }
       }

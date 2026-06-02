@@ -683,6 +683,8 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
   const ethereumDa = getEthereumDaConfig(spec)
   const batch = getEthereumDaBatchConfig(spec)
+  const { signer } = ethereumDa
+  const isAwsKmsSigner = signer?.backend === 'aws_kms'
 
   const image = resolveImage(spec, 'ethDaSubmitter', {
     pullPolicy: 'IfNotPresent',
@@ -712,6 +714,14 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_FEE_PER_GAS_WEI: ethereumDa.maxFeePerGasWei || '',
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MIN_PRIORITY_FEE_WEI: ethereumDa.minPriorityFeeWei || '2000000000',
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
+          ...(isAwsKmsSigner ? {
+            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_EXPECTED_ADDRESS: signer?.expectedAddress || '',
+            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_KEY_ID: signer?.kmsKeyId || '',
+            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_REGION: signer?.kmsRegion || '',
+            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SIGNER_BACKEND: 'aws_kms',
+          } : {
+            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SIGNER_BACKEND: 'local',
+          }),
           DOGEOS_ETH_DA_SUBMITTER_L2__CONFIRMATIONS: String(ethereumDa.l2Confirmations ?? 0),
           DOGEOS_ETH_DA_SUBMITTER_L2__FETCH_LIMIT: String(ethereumDa.fetchLimit ?? 128),
           DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: ethereumDa.l2RpcUrl || L2_RPC_ENDPOINT,
@@ -732,7 +742,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
     ],
     envFrom: [
       { configMapRef: { name: 'eth-da-submitter-env' } },
-      { secretRef: { name: 'eth-da-submitter-secret-env' } }
+      ...(isAwsKmsSigner ? [] : [{ secretRef: { name: 'eth-da-submitter-secret-env' } }])
     ],
     image,
     persistence: {
@@ -747,17 +757,27 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
     }
   }
 
-  const externalSecrets = generateExternalSecrets(
-    'eth-da-submitter-secret-env',
-    secretConfig,
-    [
-      {
-        property: 'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY',
-        remoteKey: 'eth-da-submitter-secret-env',
-        secretKey: 'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY'
-      }
-    ]
-  )
+  if (isAwsKmsSigner) {
+    values.serviceAccount = {
+      annotations: signer?.serviceAccountRoleArn ? {
+        'eks.amazonaws.com/role-arn': signer.serviceAccountRoleArn,
+      } : {},
+      create: true,
+      name: signer?.serviceAccountName || 'eth-da-submitter',
+    }
+  }
+
+  const externalSecrets = isAwsKmsSigner ? undefined : generateExternalSecrets(
+      'eth-da-submitter-secret-env',
+      secretConfig,
+      [
+        {
+          property: 'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY',
+          remoteKey: 'eth-da-submitter-secret-env',
+          secretKey: 'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY'
+        }
+      ]
+    )
 
   if (externalSecrets) {
     values.externalSecrets = externalSecrets
@@ -884,6 +904,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
 function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
   const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
+  const ethereumDaSigner = getEthereumDaConfig(spec).signer
 
   const image = resolveImage(spec, 'withdrawalProcessor', {
     pullPolicy: 'Always',
@@ -938,6 +959,10 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__POLL_INTERVAL_MS', value: '6000' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__MAX_BLOCKS_PER_CYCLE', value: '64' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__STATUS_POLL_INTERVAL_MS', value: '5000' },
+      ...(ethereumDaSigner?.expectedAddress ? [{
+        name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__EXPECTED_BATCHERS',
+        value: JSON.stringify([ethereumDaSigner.expectedAddress]),
+      }] : []),
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__KIND', value: 'anvil' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS', value: '10000' },
       { name: 'RUST_LOG', value: 'info,withdrawal_processor=info' }

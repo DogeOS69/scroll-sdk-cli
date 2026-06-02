@@ -351,6 +351,10 @@ export default class SetupGenSecrets extends Command {
     }
 
     if (service === 'eth-da-submitter') {
+      if (this.dogeConfig.ethereumDa?.signer?.backend === 'aws_kms') {
+        return envFiles
+      }
+
       const submitterPrivateKey = config.accounts?.L1_COMMIT_SENDER_PRIVATE_KEY || ''
       envFiles['eth-da-submitter-secret.env'] = this.envLine(
         'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY',

@@ -54,6 +54,16 @@ export interface DogeConfig {
     chain?: 'devnet' | 'mainnet' | 'sepolia'
     chainId?: string
     minFinality?: 'finalized' | 'safe'
+    signer?: {
+      backend?: 'aws_kms' | 'local'
+      expectedAddress?: string
+      kmsKeyArn?: string
+      kmsKeyId?: string
+      kmsRegion?: string
+      namespace?: string
+      serviceAccountName?: string
+      serviceAccountRoleArn?: string
+    }
     submitterRpcUrl?: string
   }
 
