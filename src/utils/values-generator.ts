@@ -1212,24 +1212,87 @@ function generateGasOracleValues(spec: DeploymentSpec): string {
  * Generate Fee Oracle values
  */
 function generateFeeOracleValues(spec: DeploymentSpec): string {
-  const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
   const image = resolveImage(spec, 'feeOracle', {
-    pullPolicy: 'Always',
+    pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/fee-oracle',
-    tag: '0.2.0-rc.4'
+    tag: 'TODO_TAG_TO_REPLACE'
   })
 
   const values = {
+    configMaps: {
+      env: {
+        data: {
+          DOGEOS_FEE_ORACLE_DATABASE__CONNECTION_POOL_SIZE: '10',
+          DOGEOS_FEE_ORACLE_DATABASE__SQLITE_PATH: '/data/fee_oracle.db',
+          DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE: 'dry_run',
+          DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
+          DOGEOS_FEE_ORACLE_ETHEREUM_DA__MIN_PRIORITY_FEE_PER_GAS_WEI: '"0"',
+          DOGEOS_FEE_ORACLE_L2__CHAIN_ID: String(spec.network.l2ChainId),
+          DOGEOS_FEE_ORACLE_L2__CONFIRMATIONS: '3',
+          DOGEOS_FEE_ORACLE_L2__GAS_ORACLE_CONTRACT: spec.contracts.overrides?.l1GasPriceOracle || '<TODO>',
+          DOGEOS_FEE_ORACLE_L2__MAX_GAS_PRICE: '1000000000000',
+          DOGEOS_FEE_ORACLE_L2__PRIORITY_FEE: '1000000000',
+          DOGEOS_FEE_ORACLE_L2__RPC_URL: L2_RPC_ENDPOINT,
+          DOGEOS_FEE_ORACLE_MONITORING__HEALTH_BIND_ADDRESS: '0.0.0.0',
+          DOGEOS_FEE_ORACLE_MONITORING__HEALTH_CHECK_PORT: '8080',
+          DOGEOS_FEE_ORACLE_MONITORING__METRICS_PORT: '9090',
+          DOGEOS_FEE_ORACLE_PRICE_ORACLE__CACHE_DURATION: '60',
+          DOGEOS_FEE_ORACLE_PRICE_ORACLE__COINBASE_ENABLED: 'true',
+          DOGEOS_FEE_ORACLE_PRICE_ORACLE__COINGECKO_ENABLED: 'false',
+          DOGEOS_FEE_ORACLE_PRICE_ORACLE__GATEIO_ENABLED: 'true',
+          DOGEOS_FEE_ORACLE_PRICE_ORACLE__KRAKEN_ENABLED: 'true',
+          DOGEOS_FEE_ORACLE_PRICE_ORACLE__MAX_RETRIES: '3',
+          DOGEOS_FEE_ORACLE_PRICE_ORACLE__REQUEST_TIMEOUT: '30',
+          DOGEOS_FEE_ORACLE_WALLET__PRIVATE_KEY_ENV: 'DOGEOS_FEE_ORACLE_PRIVATE_KEY',
+        },
+        enabled: true
+      }
+    },
     env: [
-      { name: 'FEE_ORACLE_PORT', value: '3000' },
-      { name: 'FEE_ORACLE_L2_RPC_URL', value: L2_RPC_ENDPOINT },
-      { name: 'FEE_ORACLE_DOGE_RPC_URL', value: dogecoinEndpoints.rpcUrl },
-      { name: 'FEE_ORACLE_UPDATE_INTERVAL_SECS', value: '60' }
+      { name: 'RUST_LOG', value: 'info' }
+    ],
+    envFrom: [
+      { configMapRef: { name: 'fee-oracle-env' } }
     ],
     image,
+    probes: {
+      liveness: {
+        custom: true,
+        enabled: true,
+        spec: {
+          failureThreshold: 3,
+          httpGet: { path: '/health', port: 'http' },
+          initialDelaySeconds: 60,
+          periodSeconds: 30,
+          timeoutSeconds: 30,
+        }
+      },
+      readiness: {
+        custom: true,
+        enabled: true,
+        spec: {
+          failureThreshold: 3,
+          httpGet: { path: '/health', port: 'http' },
+          initialDelaySeconds: 30,
+          periodSeconds: 10,
+          timeoutSeconds: 30,
+        }
+      },
+      startup: {
+        custom: true,
+        enabled: true,
+        spec: {
+          failureThreshold: 12,
+          httpGet: { path: '/health', port: 'http' },
+          initialDelaySeconds: 30,
+          periodSeconds: 10,
+          timeoutSeconds: 30,
+        }
+      }
+    },
     resources: {
-      limits: { cpu: '500m', memory: '512Mi' },
-      requests: { cpu: '50m', memory: '128Mi' }
+      limits: { cpu: '1', memory: '512Mi' },
+      requests: { cpu: '50m', memory: '256Mi' }
     }
   }
 

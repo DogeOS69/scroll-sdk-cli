@@ -67,6 +67,149 @@ export function shouldSkipL2ContractDeploymentBlockUpdate(
     )
 }
 
+export interface PrepChartChange {
+  key: string
+  newValue: string
+  oldValue: string
+}
+
+const FEE_ORACLE_LEGACY_CONFIGMAP_PREFIXES = [
+  'DOGEOS_FEE_ORACLE_DOGECOIN__',
+  'DOGEOS_FEE_ORACLE_CELESTIA__',
+  'DOGEOS_FEE_ORACLE_THRESHOLDS__',
+  'DOGEOS_FEE_ORACLE_DEPLOYMENT__',
+]
+
+const FEE_ORACLE_LEGACY_CONFIGMAP_KEYS = new Set([
+  'DOGEOS_FEE_ORACLE_PRICE_ORACLE__UPDATE_ON_EACH_CYCLE',
+])
+
+function removeNamedSecretRef(productionYaml: any, secretName: string, changes: PrepChartChange[]): void {
+  if (!Array.isArray(productionYaml.envFrom)) return
+
+  const nextEnvFrom = productionYaml.envFrom.filter((item: any) => item?.secretRef?.name !== secretName)
+  if (nextEnvFrom.length === productionYaml.envFrom.length) return
+
+  if (nextEnvFrom.length > 0) {
+    productionYaml.envFrom = nextEnvFrom
+  } else {
+    delete productionYaml.envFrom
+  }
+
+  changes.push({ key: `envFrom.${secretName}`, newValue: 'removed', oldValue: 'present' })
+}
+
+function removeExternalSecret(productionYaml: any, secretName: string, changes: PrepChartChange[]): void {
+  if (!productionYaml.externalSecrets?.[secretName]) return
+
+  delete productionYaml.externalSecrets[secretName]
+  if (Object.keys(productionYaml.externalSecrets).length === 0) {
+    delete productionYaml.externalSecrets
+  }
+
+  changes.push({ key: `externalSecrets.${secretName}`, newValue: 'removed', oldValue: 'present' })
+}
+
+export function scrubFeeOracleLegacyValues(productionYaml: any): PrepChartChange[] {
+  const changes: PrepChartChange[] = []
+  const envData = productionYaml.configMaps?.env?.data
+
+  if (envData && typeof envData === 'object') {
+    for (const key of Object.keys(envData)) {
+      if (
+        FEE_ORACLE_LEGACY_CONFIGMAP_KEYS.has(key) ||
+        FEE_ORACLE_LEGACY_CONFIGMAP_PREFIXES.some(prefix => key.startsWith(prefix))
+      ) {
+        const oldValue = envData[key]
+        delete envData[key]
+        changes.push({
+          key: `configMaps.env.data.${key}`,
+          newValue: 'removed',
+          oldValue: String(oldValue ?? 'undefined'),
+        })
+      }
+    }
+  }
+
+  if (Array.isArray(productionYaml.env)) {
+    const nextEnv = productionYaml.env.filter((item: any) => typeof item?.name !== 'string' || !item.name.startsWith('FEE_ORACLE_'))
+    if (nextEnv.length !== productionYaml.env.length) {
+      for (const item of productionYaml.env) {
+        if (typeof item?.name === 'string' && item.name.startsWith('FEE_ORACLE_')) {
+          changes.push({
+            key: `env.${item.name}`,
+            newValue: 'removed',
+            oldValue: String(item.value ?? 'undefined'),
+          })
+        }
+      }
+
+      productionYaml.env = nextEnv
+    }
+  }
+
+  removeNamedSecretRef(productionYaml, 'fee-oracle-secret-env', changes)
+  removeExternalSecret(productionYaml, 'fee-oracle-secret-env', changes)
+
+  return changes
+}
+
+export function applyFeeOracleCurrentEnv(
+  productionYaml: any,
+  envValues: Record<string, string | undefined>
+): PrepChartChange[] {
+  const changes: PrepChartChange[] = []
+  const envData = productionYaml.configMaps?.env?.data
+  if (!envData || typeof envData !== 'object') return changes
+
+  for (const [envKey, newValue] of Object.entries(envValues)) {
+    if (newValue === undefined || newValue === null || String(newValue).trim() === '') continue
+
+    const oldValue = envData[envKey]
+    if (oldValue !== newValue) {
+      envData[envKey] = newValue
+      changes.push({
+        key: `configMaps.env.data.${envKey}`,
+        newValue,
+        oldValue: String(oldValue ?? 'undefined'),
+      })
+    }
+  }
+
+  return changes
+}
+
+export function buildFeeOraclePrepEnv(input: {
+  ethereumDaRpcUrl: string | undefined
+  gasOracleContract: string | undefined
+  l2ChainId: number | string | undefined
+  l2RpcUrl: string | undefined
+}): Record<string, string | undefined> {
+  return {
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE: 'dry_run',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL: input.ethereumDaRpcUrl,
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__MIN_PRIORITY_FEE_PER_GAS_WEI: '"0"',
+    DOGEOS_FEE_ORACLE_L2__CHAIN_ID: input.l2ChainId === undefined ? undefined : String(input.l2ChainId),
+    DOGEOS_FEE_ORACLE_L2__GAS_ORACLE_CONTRACT: input.gasOracleContract,
+    DOGEOS_FEE_ORACLE_L2__RPC_URL: input.l2RpcUrl,
+    DOGEOS_FEE_ORACLE_WALLET__PRIVATE_KEY_ENV: 'DOGEOS_FEE_ORACLE_PRIVATE_KEY',
+  }
+}
+
+export function buildEthDaSubmitterPrepEnv(input: {
+  ethereumChainId: number | string | undefined
+  ethereumRpcUrl: string | undefined
+  l2ChainId: number | string | undefined
+  l2RpcUrl: string | undefined
+}): Record<string, string | undefined> {
+  return {
+    DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__ETH_CHAIN_ID: input.ethereumChainId === undefined ? undefined : String(input.ethereumChainId),
+    DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__L2_CHAIN_ID: input.l2ChainId === undefined ? undefined : String(input.l2ChainId),
+    DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: input.ethereumRpcUrl,
+    DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: input.l2RpcUrl,
+  }
+}
+
 export default class SetupPrepCharts extends Command {
   static override description = 'Validate Makefile and prepare Helm charts for Scroll SDK'
 
@@ -154,7 +297,6 @@ export default class SetupPrepCharts extends Command {
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
   private outputTestData: Record<string, any> = {}
-  private protocolSeedConfig: toml.JsonMap = {}
   private skipL2ContractDeploymentBlock: boolean = false
   private withdrawalProcessorConfig: toml.JsonMap = {}
 
@@ -278,33 +420,6 @@ export default class SetupPrepCharts extends Command {
     
   }
 
-  private getEthDaGenesisFrontierEnv(): Record<string, string> {
-    const chainAnchors = this.protocolSeedConfig.chain_anchors as Record<string, unknown> | undefined
-
-    const requireAnchor = (key: string, description: string): string => {
-      const value = chainAnchors?.[key]
-      if (typeof value === 'string' && value) {
-        return value
-      }
-
-      this.error(
-        `.data/protocol_seed.toml is missing [chain_anchors].${key}. ${description}. ` +
-        'Run `scrollsdk setup bridge-init --step 1-prepare` against the target L2 genesis.json first.'
-      )
-    }
-
-    return {
-      DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_BATCH_HASH: requireAnchor(
-        'genesis_batch_hash',
-        'This must be computed from the target L2 genesis.json.'
-      ),
-      DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_STATE_ROOT: requireAnchor(
-        'genesis_state_root',
-        'This must be computed from the target L2 genesis.json.'
-      ),
-    }
-  }
-
   private getFixedL2NodeEnvValue(key: string): string | undefined {
     if (key === 'L2GETH_L1_ENDPOINT') return L1_INTERFACE_RPC_ENDPOINT
     if (key === 'L2GETH_DA_BLOB_BEACON_NODE') return L1_INTERFACE_BEACON_API_ENDPOINT
@@ -375,14 +490,6 @@ export default class SetupPrepCharts extends Command {
       }
     }
 
-    const protocolSeedPath = path.join(process.cwd(), ".data/protocol_seed.toml")
-    if (!fs.existsSync(protocolSeedPath)) {
-      this.error("run scrollsdk setup bridge-init --step 1-prepare first");
-      return
-    }
-
-    const protocolSeedContent = fs.readFileSync(protocolSeedPath, 'utf8')
-    this.protocolSeedConfig = toml.parse(protocolSeedContent)
   }
 
   private async processConfigYaml(valuesDir: string): Promise<{ skipped: number, updated: number }> {
@@ -1180,21 +1287,21 @@ export default class SetupPrepCharts extends Command {
           this.error(`${chartName}: configMaps.env.data not found in config`);
         }
 
-        const todoMappings = {
-          "DOGEOS_FEE_ORACLE_DOGECOIN__NETWORK_STR": this.withdrawalProcessorConfig.network_str,
-          "DOGEOS_FEE_ORACLE_DOGECOIN__RPC_URL": dogecoinInternalUrl,
-          "DOGEOS_FEE_ORACLE_L2__CHAIN_ID": String(this.getConfigValue("general.CHAIN_ID_L2")),
-          "DOGEOS_FEE_ORACLE_L2__GAS_ORACLE_CONTRACT": this.getConfigValue("contractsFile.L1_GAS_PRICE_ORACLE_ADDR"),
-          "DOGEOS_FEE_ORACLE_L2__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT"),
-        }
+        const todoMappings = buildFeeOraclePrepEnv({
+          ethereumDaRpcUrl: this.getConfigValue("ethereumDa.submitterRpcUrl"),
+          gasOracleContract: this.getConfigValue("contractsFile.L1_GAS_PRICE_ORACLE_ADDR"),
+          l2ChainId: this.getConfigValue("general.CHAIN_ID_L2"),
+          l2RpcUrl: this.getConfigValue("general.L2_RPC_ENDPOINT"),
+        })
 
-        for (const [envKey, newVal] of Object.entries(todoMappings)) {
-          const oldValue = productionYaml.configMaps.env.data[envKey];
-          if (oldValue !== newVal) {
-            productionYaml.configMaps.env.data[envKey] = newVal;
-            updated = true;
-            changes.push({ key: `configMaps.env.data.${envKey}`, newValue: newVal, oldValue: oldValue || 'undefined' });
-          }
+        const feeOracleChanges = [
+          ...scrubFeeOracleLegacyValues(productionYaml),
+          ...applyFeeOracleCurrentEnv(productionYaml, todoMappings),
+        ]
+
+        if (feeOracleChanges.length > 0) {
+          changes.push(...feeOracleChanges)
+          updated = true
         }
       }
 
@@ -1367,13 +1474,12 @@ export default class SetupPrepCharts extends Command {
           this.error(`${chartName}: configMaps.env.data not found in config`);
         }
 
-        const todoMappings = {
-          ...this.getEthDaGenesisFrontierEnv(),
-          "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__ETH_CHAIN_ID": String(this.getConfigValue("ethereumDa.chainId")),
-          "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__L2_CHAIN_ID": String(this.getConfigValue("general.CHAIN_ID_L2")),
-          "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL": this.getConfigValue("ethereumDa.submitterRpcUrl"),
-          "DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT")
-        }
+        const todoMappings = buildEthDaSubmitterPrepEnv({
+          ethereumChainId: this.getConfigValue("ethereumDa.chainId"),
+          ethereumRpcUrl: this.getConfigValue("ethereumDa.submitterRpcUrl"),
+          l2ChainId: this.getConfigValue("general.CHAIN_ID_L2"),
+          l2RpcUrl: this.getConfigValue("general.L2_RPC_ENDPOINT"),
+        })
 
         const signerConfig = this.dogeConfig.ethereumDa?.signer
         if (signerConfig?.backend === 'aws_kms') {

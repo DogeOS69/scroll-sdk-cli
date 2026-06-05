@@ -1064,6 +1064,7 @@ describe('deployment-spec-generator', () => {
       const files = generateValuesFiles(spec);
 
       expect(files).to.have.property('eth-da-submitter-production.yaml');
+      expect(files).to.have.property('fee-oracle-production.yaml');
       expect(files).to.have.property('l1-devnet-production.yaml');
       expect(files).to.have.property('withdrawal-processor-production.yaml');
       expect(files).not.to.have.property('ethereum-production.yaml');
@@ -1095,6 +1096,18 @@ describe('deployment-spec-generator', () => {
       expect(files['l2-bootnode-production.yaml']).to.include('L2GETH_L1_ENDPOINT: http://l1-interface:8545');
       expect(files['l2-sequencer-production.yaml']).to.include('L2GETH_L1_ENDPOINT: http://l1-interface:8545');
       expect(files['contracts-production.yaml']).to.include('SCROLL_L1_FEE_VAULT_ADDR: \'0x1111111111111111111111111111111111111111\'');
+
+      const feeOracleValues = yaml.load(files['fee-oracle-production.yaml']) as any;
+      const feeOracleEnv = feeOracleValues.configMaps.env.data;
+      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE).to.equal('dry_run');
+      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL).to.equal('https://sepolia.drpc.org');
+      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__MIN_PRIORITY_FEE_PER_GAS_WEI).to.equal('"0"');
+      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_L2__CHAIN_ID).to.equal(String(spec.network.l2ChainId));
+      expect(feeOracleValues.envFrom).to.deep.equal([{ configMapRef: { name: 'fee-oracle-env' } }]);
+      expect(files['fee-oracle-production.yaml']).not.to.include('DOGEOS_FEE_ORACLE_DOGECOIN__');
+      expect(files['fee-oracle-production.yaml']).not.to.include('DOGEOS_FEE_ORACLE_CELESTIA__');
+      expect(files['fee-oracle-production.yaml']).not.to.include('FEE_ORACLE_DOGE_RPC_URL');
+      expect(feeOracleValues).not.to.have.property('externalSecrets');
     });
 
     it('generates l1-interface genesis and indexer heights independently', () => {
