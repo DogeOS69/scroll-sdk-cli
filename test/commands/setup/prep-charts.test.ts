@@ -1,9 +1,14 @@
 import { expect } from 'chai'
 
 import {
+  applyConfigMapEnvValues,
   applyFeeOracleCurrentEnv,
   buildEthDaSubmitterPrepEnv,
   buildFeeOraclePrepEnv,
+  buildL1InterfaceBlobSourcePrepEnv,
+  buildWithdrawalBlobSourcePrepEnv,
+  removeConfigMapEnvKeys,
+  removeEnvArrayKeys,
   scrubFeeOracleLegacyValues,
   shouldSkipL2ContractDeploymentBlockUpdate,
 } from '../../../src/commands/setup/prep-charts.js'
@@ -128,5 +133,62 @@ describe('setup prep-charts eth-da-submitter updates', () => {
       expect(key).not.to.include('GENESIS')
       expect(key).not.to.include('FRONTIER')
     }
+  })
+})
+
+describe('setup prep-charts Ethereum DA blob source updates', () => {
+  it('writes beacon_node provider env for l1-interface and removes legacy kind', () => {
+    const values: { configMaps: { env: { data: Record<string, string> } } } = {
+      configMaps: {
+        env: {
+          data: {
+            DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__KIND: 'anvil',
+            DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS: '5000',
+          },
+        },
+      },
+    }
+
+    const env = buildL1InterfaceBlobSourcePrepEnv({
+      beaconRpcUrl: 'https://beacon.example',
+    })
+    const changes = [
+      ...removeConfigMapEnvKeys(values, [
+        'DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__KIND',
+      ]),
+      ...applyConfigMapEnvValues(values, env),
+    ]
+
+    expect(changes.map(change => change.key)).to.include('configMaps.env.data.DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__KIND')
+    expect(values.configMaps.env.data).not.to.have.property('DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__KIND')
+    expect(values.configMaps.env.data.DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL).to.equal('https://beacon.example')
+    expect(values.configMaps.env.data.DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS).to.equal('10000')
+  })
+
+  it('writes beacon_node provider env for withdrawal-processor and removes legacy kind', () => {
+    const values: { env: Array<{ name: string; value?: string }> } = {
+      env: [
+        { name: 'DOGEOS_WITHDRAWAL_NETWORK_STR', value: 'testnet' },
+        { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__KIND', value: 'anvil' },
+      ],
+    }
+
+    const env = buildWithdrawalBlobSourcePrepEnv({
+      beaconRpcUrl: 'https://beacon.example',
+    })
+    const changes = removeEnvArrayKeys(values, [
+      'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__KIND',
+    ])
+
+    for (const [name, value] of Object.entries(env)) {
+      values.env.push({ name, value })
+    }
+
+    expect(changes.map(change => change.key)).to.deep.equal([
+      'env.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__KIND',
+    ])
+    expect(values.env.map(item => item.name)).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__KIND')
+    expect(values.env.find(item => item.name === 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL')?.value).to.equal('https://beacon.example')
+    expect(values.env.find(item => item.name === 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS')?.value).to.equal('10000')
   })
 })

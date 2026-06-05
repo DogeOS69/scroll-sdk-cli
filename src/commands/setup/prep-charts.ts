@@ -154,7 +154,7 @@ export function scrubFeeOracleLegacyValues(productionYaml: any): PrepChartChange
   return changes
 }
 
-export function applyFeeOracleCurrentEnv(
+export function applyConfigMapEnvValues(
   productionYaml: any,
   envValues: Record<string, string | undefined>
 ): PrepChartChange[] {
@@ -177,6 +177,13 @@ export function applyFeeOracleCurrentEnv(
   }
 
   return changes
+}
+
+export function applyFeeOracleCurrentEnv(
+  productionYaml: any,
+  envValues: Record<string, string | undefined>
+): PrepChartChange[] {
+  return applyConfigMapEnvValues(productionYaml, envValues)
 }
 
 export function buildFeeOraclePrepEnv(input: {
@@ -208,6 +215,76 @@ export function buildEthDaSubmitterPrepEnv(input: {
     DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: input.ethereumRpcUrl,
     DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: input.l2RpcUrl,
   }
+}
+
+export function buildL1InterfaceBlobSourcePrepEnv(input: {
+  beaconRpcUrl: string | undefined
+}): Record<string, string | undefined> {
+  return {
+    DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL: input.beaconRpcUrl,
+    DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS: '10000',
+  }
+}
+
+export function buildWithdrawalBlobSourcePrepEnv(input: {
+  beaconRpcUrl: string | undefined
+}): Record<string, string | undefined> {
+  return {
+    DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL: input.beaconRpcUrl,
+    DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS: '10000',
+  }
+}
+
+export function removeConfigMapEnvKeys(
+  productionYaml: any,
+  envKeys: string[]
+): PrepChartChange[] {
+  const changes: PrepChartChange[] = []
+  const envData = productionYaml.configMaps?.env?.data
+  if (!envData || typeof envData !== 'object') return changes
+
+  for (const envKey of envKeys) {
+    if (!(envKey in envData)) continue
+
+    const oldValue = envData[envKey]
+    delete envData[envKey]
+    changes.push({
+      key: `configMaps.env.data.${envKey}`,
+      newValue: 'removed',
+      oldValue: String(oldValue ?? 'undefined'),
+    })
+  }
+
+  return changes
+}
+
+export function removeEnvArrayKeys(
+  productionYaml: any,
+  envKeys: string[]
+): PrepChartChange[] {
+  const changes: PrepChartChange[] = []
+  if (!Array.isArray(productionYaml.env)) return changes
+
+  const envKeySet = new Set(envKeys)
+  const nextEnv = []
+  for (const item of productionYaml.env) {
+    if (typeof item?.name === 'string' && envKeySet.has(item.name)) {
+      changes.push({
+        key: `env.${item.name}`,
+        newValue: 'removed',
+        oldValue: String(item.value ?? 'undefined'),
+      })
+      continue
+    }
+
+    nextEnv.push(item)
+  }
+
+  if (nextEnv.length !== productionYaml.env.length) {
+    productionYaml.env = nextEnv
+  }
+
+  return changes
 }
 
 export default class SetupPrepCharts extends Command {
@@ -1346,7 +1423,24 @@ export default class SetupPrepCharts extends Command {
           // "DOGEOS_L1_INTERFACE_SCROLL_MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
         }
 
-        for (const [envKey, newVal] of Object.entries(todoMappings)) {
+        const blobSourceChanges = removeConfigMapEnvKeys(productionYaml, [
+          'DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__KIND',
+        ])
+        if (blobSourceChanges.length > 0) {
+          changes.push(...blobSourceChanges)
+          updated = true
+        }
+
+        const currentMappings = {
+          ...todoMappings,
+          ...buildL1InterfaceBlobSourcePrepEnv({
+            beaconRpcUrl: this.getConfigValue("ethereumDa.beaconRpcUrl"),
+          }),
+        }
+
+        for (const [envKey, newVal] of Object.entries(currentMappings)) {
+          if (newVal === undefined || newVal === null || String(newVal).trim() === '') continue
+
           const oldValue = productionYaml.configMaps.env.data[envKey];
           if (oldValue !== newVal) {
             productionYaml.configMaps.env.data[envKey] = newVal;
@@ -1379,6 +1473,9 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL": this.getConfigValue("ethereumDa.submitterRpcUrl"),
           "DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID": String(this.getConfigValue("general.CHAIN_ID_L2")),
           "DOGEOS_WITHDRAWAL_ETHEREUM_DA__MIN_FINALITY": this.getConfigValue("ethereumDa.minFinality"),
+          ...buildWithdrawalBlobSourcePrepEnv({
+            beaconRpcUrl: this.getConfigValue("ethereumDa.beaconRpcUrl"),
+          }),
           "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_TXID": this.withdrawalProcessorConfig.genesis_sequencer_txid,
           "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_VOUT": this.withdrawalProcessorConfig.genesis_sequencer_vout,
           "DOGEOS_WITHDRAWAL_INITIAL_BRIDGE_REDEEM_SCRIPT_HEX": this.bridgeConfig.redeem_script_hex,
@@ -1396,7 +1493,17 @@ export default class SetupPrepCharts extends Command {
           todoMappings.DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__EXPECTED_BATCHERS = JSON.stringify([expectedBatcherAddress])
         }
 
+        const blobSourceChanges = removeEnvArrayKeys(productionYaml, [
+          'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__KIND',
+        ])
+        if (blobSourceChanges.length > 0) {
+          changes.push(...blobSourceChanges)
+          updated = true
+        }
+
         for (const [envKey, newVal] of Object.entries(todoMappings)) {
+          if (newVal === undefined || newVal === null || String(newVal).trim() === '') continue
+
           const envVar = productionYaml.env.find((item: any) => item.name === envKey);
           if (envVar) {
             if (envVar.value !== newVal) {

@@ -198,6 +198,10 @@ function getEthereumDaSubmitterRpcUrl(spec: DeploymentSpec): string {
   return ethereumDa.l1RpcUrl || ETHEREUM_DA_DEFAULTS[getEthereumDaChain(spec)].submitterRpcUrl
 }
 
+function getEthereumDaBeaconRpcUrl(spec: DeploymentSpec): string {
+  return getEthereumDaConfig(spec).beaconRpcUrl || ETHEREUM_DA_DEFAULTS[getEthereumDaChain(spec)].beaconRpcUrl
+}
+
 function getDogecoinClusterRpc(spec: DeploymentSpec): NonNullable<DeploymentSpec['dogecoin']['clusterRpc']> {
   return spec.dogecoin.clusterRpc ?? {
     password: spec.dogecoin.rpc?.password ?? '',
@@ -572,7 +576,7 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__POLL_INTERVAL_MS: '10000',
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT: String(getDogecoinIndexerStartHeight(spec)),
           DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL: dogecoinEndpoints.rpcUrl,
-          DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__KIND: 'anvil',
+          DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL: getEthereumDaBeaconRpcUrl(spec),
           DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS: '10000',
           DOGEOS_L1_INTERFACE_ETHEREUM_DA__ETH_CHAIN_ID: String(getEthereumDaChainId(spec)),
           DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
@@ -963,7 +967,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
         name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__EXPECTED_BATCHERS',
         value: JSON.stringify([ethereumDaSigner.expectedAddress]),
       }] : []),
-      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__KIND', value: 'anvil' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL', value: getEthereumDaBeaconRpcUrl(spec) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS', value: '10000' },
       { name: 'RUST_LOG', value: 'info,withdrawal_processor=info' }
     ],

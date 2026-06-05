@@ -1080,11 +1080,14 @@ describe('deployment-spec-generator', () => {
       expect(files['l1-interface-production.yaml']).to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL');
       expect(files['l1-interface-production.yaml']).to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__ETH_CHAIN_ID');
       expect(files['l1-interface-production.yaml']).to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__L2_CHAIN_ID');
+      expect(files['l1-interface-production.yaml']).to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL');
+      expect(files['l1-interface-production.yaml']).not.to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__KIND');
       expect(files['withdrawal-processor-production.yaml']).to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__INDEXER_SQLITE_PATH');
       expect(files['withdrawal-processor-production.yaml']).to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_STORE_ROOT');
       expect(files['withdrawal-processor-production.yaml']).to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_METADATA_SQLITE_PATH');
       expect(files['withdrawal-processor-production.yaml']).to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__START_BLOCK');
-      expect(files['withdrawal-processor-production.yaml']).to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__KIND');
+      expect(files['withdrawal-processor-production.yaml']).to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL');
+      expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__KIND');
       expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCES__BEACON__ENDPOINT');
       expect(files['dogecoin-production.yaml']).to.include('rpcuser: cluster-rpc-user');
       expect(files['dogecoin-production.yaml']).to.include('value: cluster-rpc-pass');
