@@ -430,6 +430,38 @@ describe('deployment-spec-generator', () => {
       )).to.be.true;
     });
 
+    it('fails when enabled Ethereum DA S3 archive is missing publicBaseUrl', () => {
+      const spec = createMinimalSpec();
+      spec.ethereumDa!.blobArchive = {
+        s3: {
+          bucket: 'dogeos-da',
+          enabled: true,
+          region: 'us-east-1',
+        },
+      };
+
+      const result = validateDeploymentSpec(spec);
+
+      expect(result.valid).to.be.false;
+      expect(result.errors.some(error =>
+        error.code === 'E002_MISSING_REQUIRED_FIELD' &&
+        error.path === 'ethereumDa.blobArchive.s3.publicBaseUrl'
+      )).to.be.true;
+    });
+
+    it('fails when Ethereum DA inbox worker start block is negative', () => {
+      const spec = createMinimalSpec();
+      spec.ethereumDa!.inboxWorker = { startBlock: -1 };
+
+      const result = validateDeploymentSpec(spec);
+
+      expect(result.valid).to.be.false;
+      expect(result.errors.some(error =>
+        error.code === 'E012_INVALID_ETHEREUM_DA_CONFIG' &&
+        error.path === 'ethereumDa.inboxWorker.startBlock'
+      )).to.be.true;
+    });
+
     it('fails when l1 chain ID does not match dogecoin network', () => {
       const spec = createMinimalSpec();
       spec.dogecoin.network = 'mainnet';
@@ -755,6 +787,30 @@ describe('deployment-spec-generator', () => {
       expect(output).not.to.include('eth-da-indexer.sqlite');
       expect(output).not.to.include('eth-da-artifacts');
       expect(output).not.to.include('celestiaIndexerStartBlock');
+    });
+
+    it('includes Ethereum DA S3 archive config', () => {
+      const spec = createMinimalSpec();
+      spec.ethereumDa!.blobArchive = {
+        s3: {
+          bucket: 'dogeos-da',
+          enabled: true,
+          maxRetries: 5,
+          publicBaseUrl: 'https://dogeos-da.s3.us-east-1.amazonaws.com/',
+          region: 'us-east-1',
+          timeoutMs: 15_000,
+          treatForbiddenAsMissing: false,
+        },
+      };
+
+      const parsed = toml.parse(generateDogeConfigToml(spec)) as any;
+
+      expect(parsed.ethereumDa.blobArchive.s3.enabled).to.equal(true);
+      expect(parsed.ethereumDa.blobArchive.s3.bucket).to.equal('dogeos-da');
+      expect(parsed.ethereumDa.blobArchive.s3.region).to.equal('us-east-1');
+      expect(parsed.ethereumDa.blobArchive.s3.publicBaseUrl).to.equal('https://dogeos-da.s3.us-east-1.amazonaws.com/');
+      expect(parsed.ethereumDa.blobArchive.s3.timeoutMs).to.equal(15_000);
+      expect(parsed.ethereumDa.blobArchive.s3.treatForbiddenAsMissing).to.equal(false);
     });
 
     it('includes blockbook config when present', () => {
@@ -1123,6 +1179,66 @@ describe('deployment-spec-generator', () => {
 
       expect(envData.DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK).to.equal('8208200');
       expect(envData.DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT).to.equal('8200000');
+    });
+
+    it('defaults Ethereum DA submitter batch compression to auto', () => {
+      const defaultSpec = createMinimalSpec();
+      const defaultFiles = generateValuesFiles(defaultSpec);
+      const defaultSubmitterValues = yaml.load(defaultFiles['eth-da-submitter-production.yaml']) as any;
+
+      expect(defaultSubmitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION).to.equal('auto');
+
+      const explicitSpec = createMinimalSpec();
+      explicitSpec.ethereumDa!.batch = { compression: 'none' };
+      const explicitFiles = generateValuesFiles(explicitSpec);
+      const explicitSubmitterValues = yaml.load(explicitFiles['eth-da-submitter-production.yaml']) as any;
+
+      expect(explicitSubmitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION).to.equal('none');
+    });
+
+    it('generates Ethereum DA S3 upload and readback env', () => {
+      const spec = createMinimalSpec();
+      spec.ethereumDa!.blobArchive = {
+        s3: {
+          bucket: 'dogeos-da',
+          enabled: true,
+          maxRetries: 5,
+          publicBaseUrl: 'https://dogeos-da.s3.us-east-1.amazonaws.com/',
+          region: 'us-east-1',
+          timeoutMs: 15_000,
+          treatForbiddenAsMissing: false,
+        },
+      };
+
+      const files = generateValuesFiles(spec);
+      const submitterValues = yaml.load(files['eth-da-submitter-production.yaml']) as any;
+      const l1InterfaceValues = yaml.load(files['l1-interface-production.yaml']) as any;
+      const withdrawalValues = yaml.load(files['withdrawal-processor-production.yaml']) as any;
+      const withdrawalEnv = Object.fromEntries(withdrawalValues.env.map((item: any) => [item.name, item.value]));
+
+      expect(submitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_S3__ENABLED).to.equal('true');
+      expect(submitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_S3__BUCKET).to.equal('dogeos-da');
+      expect(submitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_S3__REGION).to.equal('us-east-1');
+      expect(submitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_S3__MAX_RETRIES).to.equal('5');
+      expect(l1InterfaceValues.configMaps.env.data.DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL).to.equal('https://dogeos-da.s3.us-east-1.amazonaws.com/');
+      expect(l1InterfaceValues.configMaps.env.data.DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS).to.equal('15000');
+      expect(l1InterfaceValues.configMaps.env.data.DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING).to.equal('false');
+      expect(withdrawalEnv.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL).to.equal('https://dogeos-da.s3.us-east-1.amazonaws.com/');
+      expect(withdrawalEnv.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS).to.equal('15000');
+      expect(withdrawalEnv.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING).to.equal('false');
+    });
+
+    it('uses Ethereum DA inbox worker start block for withdrawal processor values', () => {
+      const spec = createMinimalSpec();
+      spec.dogecoin.indexerStartHeight = 8_200_000;
+      spec.ethereumDa!.inboxWorker = { startBlock: 12_345_678 };
+
+      const files = generateValuesFiles(spec);
+      const withdrawalValues = yaml.load(files['withdrawal-processor-production.yaml']) as any;
+      const withdrawalEnv = Object.fromEntries(withdrawalValues.env.map((item: any) => [item.name, item.value]));
+
+      expect(withdrawalEnv.DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT).to.equal('8200000');
+      expect(withdrawalEnv.DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__START_BLOCK).to.equal('12345678');
     });
   });
 

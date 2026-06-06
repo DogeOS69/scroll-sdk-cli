@@ -51,6 +51,23 @@ export interface DogeConfig {
   }
   ethereumDa?: {
     beaconRpcUrl?: string
+    blobArchive?: {
+      s3?: {
+        bucket?: string
+        enabled?: boolean | string
+        endpointUrl?: string
+        forcePathStyle?: boolean | string
+        initialBackoffMs?: number | string
+        maxBackoffMs?: number | string
+        maxRetries?: number | string
+        pollIntervalMs?: number | string
+        publicBaseUrl?: string
+        region?: string
+        timeoutMs?: number | string
+        treatForbiddenAsMissing?: boolean | string
+        uploadingTimeoutMs?: number | string
+      }
+    }
     chain?: 'devnet' | 'mainnet' | 'sepolia'
     chainId?: string
     minFinality?: 'finalized' | 'safe'

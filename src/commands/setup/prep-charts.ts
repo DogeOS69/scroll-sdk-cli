@@ -208,19 +208,64 @@ export function buildEthDaSubmitterPrepEnv(input: {
   ethereumRpcUrl: string | undefined
   l2ChainId: number | string | undefined
   l2RpcUrl: string | undefined
+  s3Bucket?: string | undefined
+  s3Enabled?: boolean | string | undefined
+  s3EndpointUrl?: string | undefined
+  s3ForcePathStyle?: boolean | string | undefined
+  s3InitialBackoffMs?: number | string | undefined
+  s3MaxBackoffMs?: number | string | undefined
+  s3MaxRetries?: number | string | undefined
+  s3PollIntervalMs?: number | string | undefined
+  s3Region?: string | undefined
+  s3UploadingTimeoutMs?: number | string | undefined
 }): Record<string, string | undefined> {
-  return {
+  const env: Record<string, string | undefined> = {
     DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__ETH_CHAIN_ID: input.ethereumChainId === undefined ? undefined : String(input.ethereumChainId),
     DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__L2_CHAIN_ID: input.l2ChainId === undefined ? undefined : String(input.l2ChainId),
     DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: input.ethereumRpcUrl,
     DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: input.l2RpcUrl,
   }
+
+  if (input.s3Enabled !== undefined) {
+    const s3Enabled = truthyConfigValue(input.s3Enabled)
+    env.DOGEOS_ETH_DA_SUBMITTER_S3__ENABLED = s3Enabled ? 'true' : 'false'
+
+    if (s3Enabled) {
+      env.DOGEOS_ETH_DA_SUBMITTER_S3__BUCKET = optionalConfigString(input.s3Bucket)
+      env.DOGEOS_ETH_DA_SUBMITTER_S3__REGION = optionalConfigString(input.s3Region)
+      env.DOGEOS_ETH_DA_SUBMITTER_S3__ENDPOINT_URL = optionalConfigString(input.s3EndpointUrl)
+      env.DOGEOS_ETH_DA_SUBMITTER_S3__FORCE_PATH_STYLE = optionalConfigString(input.s3ForcePathStyle)
+      env.DOGEOS_ETH_DA_SUBMITTER_S3__POLL_INTERVAL_MS = optionalConfigString(input.s3PollIntervalMs)
+      env.DOGEOS_ETH_DA_SUBMITTER_S3__INITIAL_BACKOFF_MS = optionalConfigString(input.s3InitialBackoffMs)
+      env.DOGEOS_ETH_DA_SUBMITTER_S3__MAX_BACKOFF_MS = optionalConfigString(input.s3MaxBackoffMs)
+      env.DOGEOS_ETH_DA_SUBMITTER_S3__MAX_RETRIES = optionalConfigString(input.s3MaxRetries)
+      env.DOGEOS_ETH_DA_SUBMITTER_S3__UPLOADING_TIMEOUT_MS = optionalConfigString(input.s3UploadingTimeoutMs)
+    }
+  }
+
+  return env
+}
+
+function truthyConfigValue(value: unknown): boolean {
+  return value === true || (typeof value === 'string' && value.toLowerCase() === 'true')
+}
+
+function optionalConfigString(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined
+  const stringValue = String(value)
+  return stringValue.trim() === '' ? undefined : stringValue
 }
 
 export function buildL1InterfaceBlobSourcePrepEnv(input: {
   beaconRpcUrl: string | undefined
+  s3PublicBaseUrl?: string | undefined
+  s3TimeoutMs?: boolean | number | string | undefined
+  s3TreatForbiddenAsMissing?: boolean | number | string | undefined
 }): Record<string, string | undefined> {
   return {
+    DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS: optionalConfigString(input.s3TimeoutMs),
+    DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING: optionalConfigString(input.s3TreatForbiddenAsMissing),
+    DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL: optionalConfigString(input.s3PublicBaseUrl),
     DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL: input.beaconRpcUrl,
     DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS: '10000',
   }
@@ -228,8 +273,14 @@ export function buildL1InterfaceBlobSourcePrepEnv(input: {
 
 export function buildWithdrawalBlobSourcePrepEnv(input: {
   beaconRpcUrl: string | undefined
+  s3PublicBaseUrl?: string | undefined
+  s3TimeoutMs?: boolean | number | string | undefined
+  s3TreatForbiddenAsMissing?: boolean | number | string | undefined
 }): Record<string, string | undefined> {
   return {
+    DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS: optionalConfigString(input.s3TimeoutMs),
+    DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING: optionalConfigString(input.s3TreatForbiddenAsMissing),
+    DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL: optionalConfigString(input.s3PublicBaseUrl),
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL: input.beaconRpcUrl,
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS: '10000',
   }
@@ -1431,10 +1482,15 @@ export default class SetupPrepCharts extends Command {
           updated = true
         }
 
+        const s3Archive = this.dogeConfig.ethereumDa?.blobArchive?.s3
+        const s3ArchiveEnabled = truthyConfigValue(s3Archive?.enabled)
         const currentMappings = {
           ...todoMappings,
           ...buildL1InterfaceBlobSourcePrepEnv({
             beaconRpcUrl: this.getConfigValue("ethereumDa.beaconRpcUrl"),
+            s3PublicBaseUrl: s3ArchiveEnabled ? s3Archive?.publicBaseUrl : undefined,
+            s3TimeoutMs: s3ArchiveEnabled ? s3Archive?.timeoutMs : undefined,
+            s3TreatForbiddenAsMissing: s3ArchiveEnabled ? s3Archive?.treatForbiddenAsMissing : undefined,
           }),
         }
 
@@ -1460,6 +1516,8 @@ export default class SetupPrepCharts extends Command {
           this.error(`${chartName}: dogeConfig.defaults.dogecoinIndexerStartHeight must be configured before preparing charts`);
         }
 
+        const s3Archive = this.dogeConfig.ethereumDa?.blobArchive?.s3
+        const s3ArchiveEnabled = truthyConfigValue(s3Archive?.enabled)
         const todoMappings: Record<string, any> = {
           "DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS": this.withdrawalProcessorConfig.bridge_address,
           // "DOGEOS_WITHDRAWAL_DATABASE_URL": "sqlite:///app/data/withdrawal_processor.db",
@@ -1475,6 +1533,9 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_ETHEREUM_DA__MIN_FINALITY": this.getConfigValue("ethereumDa.minFinality"),
           ...buildWithdrawalBlobSourcePrepEnv({
             beaconRpcUrl: this.getConfigValue("ethereumDa.beaconRpcUrl"),
+            s3PublicBaseUrl: s3ArchiveEnabled ? s3Archive?.publicBaseUrl : undefined,
+            s3TimeoutMs: s3ArchiveEnabled ? s3Archive?.timeoutMs : undefined,
+            s3TreatForbiddenAsMissing: s3ArchiveEnabled ? s3Archive?.treatForbiddenAsMissing : undefined,
           }),
           "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_TXID": this.withdrawalProcessorConfig.genesis_sequencer_txid,
           "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_VOUT": this.withdrawalProcessorConfig.genesis_sequencer_vout,
@@ -1581,11 +1642,22 @@ export default class SetupPrepCharts extends Command {
           this.error(`${chartName}: configMaps.env.data not found in config`);
         }
 
+        const s3Archive = this.dogeConfig.ethereumDa?.blobArchive?.s3
         const todoMappings = buildEthDaSubmitterPrepEnv({
           ethereumChainId: this.getConfigValue("ethereumDa.chainId"),
           ethereumRpcUrl: this.getConfigValue("ethereumDa.submitterRpcUrl"),
           l2ChainId: this.getConfigValue("general.CHAIN_ID_L2"),
           l2RpcUrl: this.getConfigValue("general.L2_RPC_ENDPOINT"),
+          s3Bucket: s3Archive?.bucket,
+          s3Enabled: s3Archive?.enabled,
+          s3EndpointUrl: s3Archive?.endpointUrl,
+          s3ForcePathStyle: s3Archive?.forcePathStyle,
+          s3InitialBackoffMs: s3Archive?.initialBackoffMs,
+          s3MaxBackoffMs: s3Archive?.maxBackoffMs,
+          s3MaxRetries: s3Archive?.maxRetries,
+          s3PollIntervalMs: s3Archive?.pollIntervalMs,
+          s3Region: s3Archive?.region,
+          s3UploadingTimeoutMs: s3Archive?.uploadingTimeoutMs,
         })
 
         const signerConfig = this.dogeConfig.ethereumDa?.signer

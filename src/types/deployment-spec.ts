@@ -331,7 +331,7 @@ export interface CelestiaConfig {
 export interface EthereumDaConfig {
   /** Genesis frontier used by eth_da_submitter before the first published batch. */
   batch?: {
-    compression?: 'none'
+    compression?: 'auto' | 'none'
     genesisBatchHash?: string
     genesisNextRelayedDepositIndex?: number
     genesisNextWithdrawIndex?: number
@@ -348,6 +348,9 @@ export interface EthereumDaConfig {
   /** Ethereum consensus/beacon API endpoint used as the real DA source by l1-interface. */
   beaconRpcUrl?: string
 
+  /** Optional archive/readback store for raw EIP-4844 blob artifacts. */
+  blobArchive?: EthereumDaBlobArchiveConfig
+
   /** Ethereum DA source chain. */
   chain?: 'devnet' | 'mainnet' | 'sepolia'
 
@@ -363,23 +366,51 @@ export interface EthereumDaConfig {
 
   finalizationDepth?: number
 
+  /** Embedded Ethereum DA inbox indexer settings for services that resolve blobs locally. */
+  inboxWorker?: EthereumDaInboxWorkerConfig
+
   /** Real Ethereum DA execution RPC used by eth-da-submitter and L1 funding. */
   l1RpcUrl?: string
 
   l2Confirmations?: number
-
   /** DogeOS L2 execution RPC. Defaults to the fixed internal L2 RPC endpoint. */
   l2RpcUrl?: string
   lifecycleDbPath?: string
   /** Fee policy for EIP-4844 submissions. */
   maxBlobBaseFeeWei?: string
+
   maxFeePerGasWei?: string
 
   minFinality?: 'finalized' | 'pending' | 'safe'
+
   minPriorityFeeWei?: string
   signer?: EthereumDaSignerConfig
   /** eth_da_submitter lifecycle/store settings. */
   submitterDbPath?: string
+}
+
+export interface EthereumDaBlobArchiveConfig {
+  s3?: EthereumDaS3ArchiveConfig
+}
+
+export interface EthereumDaS3ArchiveConfig {
+  bucket?: string
+  enabled?: boolean
+  endpointUrl?: string
+  forcePathStyle?: boolean
+  initialBackoffMs?: number
+  maxBackoffMs?: number
+  maxRetries?: number
+  pollIntervalMs?: number
+  publicBaseUrl?: string
+  region?: string
+  timeoutMs?: number
+  treatForbiddenAsMissing?: boolean
+  uploadingTimeoutMs?: number
+}
+
+export interface EthereumDaInboxWorkerConfig {
+  startBlock?: number
 }
 
 export interface EthereumDaSignerConfig {

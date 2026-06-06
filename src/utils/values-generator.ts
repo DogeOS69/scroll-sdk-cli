@@ -217,6 +217,58 @@ function getEthereumDaBatchConfig(spec: DeploymentSpec): NonNullable<NonNullable
   return getEthereumDaConfig(spec).batch ?? {}
 }
 
+function getEthereumDaS3ArchiveConfig(spec: DeploymentSpec): NonNullable<NonNullable<NonNullable<DeploymentSpec['ethereumDa']>['blobArchive']>['s3']> {
+  return getEthereumDaConfig(spec).blobArchive?.s3 ?? {}
+}
+
+function isEthereumDaS3ArchiveEnabled(spec: DeploymentSpec): boolean {
+  return getEthereumDaS3ArchiveConfig(spec).enabled === true
+}
+
+function getEthereumDaInboxWorkerStartBlock(spec: DeploymentSpec): number {
+  return getEthereumDaConfig(spec).inboxWorker?.startBlock ?? 0
+}
+
+function addStringEnvIfDefined(target: Record<string, string>, key: string, value: unknown): void {
+  if (value === undefined || value === null) return
+  target[key] = String(value)
+}
+
+function buildEthDaSubmitterS3Env(spec: DeploymentSpec): Record<string, string> {
+  const s3 = getEthereumDaS3ArchiveConfig(spec)
+  const env: Record<string, string> = {
+    DOGEOS_ETH_DA_SUBMITTER_S3__ENABLED: isEthereumDaS3ArchiveEnabled(spec) ? 'true' : 'false',
+  }
+
+  if (!isEthereumDaS3ArchiveEnabled(spec)) return env
+
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_S3__BUCKET', s3.bucket)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_S3__REGION', s3.region)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_S3__ENDPOINT_URL', s3.endpointUrl)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_S3__FORCE_PATH_STYLE', s3.forcePathStyle)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_S3__POLL_INTERVAL_MS', s3.pollIntervalMs)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_S3__INITIAL_BACKOFF_MS', s3.initialBackoffMs)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_S3__MAX_BACKOFF_MS', s3.maxBackoffMs)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_S3__MAX_RETRIES', s3.maxRetries)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_S3__UPLOADING_TIMEOUT_MS', s3.uploadingTimeoutMs)
+
+  return env
+}
+
+function buildEthereumDaS3BlobSourceEnv(prefix: string, spec: DeploymentSpec): Record<string, string> {
+  const s3 = getEthereumDaS3ArchiveConfig(spec)
+  if (!isEthereumDaS3ArchiveEnabled(spec) || !s3.publicBaseUrl) return {}
+
+  const env: Record<string, string> = {
+    [`${prefix}__BLOB_SOURCE__AWS_S3__URL`]: s3.publicBaseUrl,
+  }
+
+  addStringEnvIfDefined(env, `${prefix}__BLOB_SOURCE__AWS_S3__TIMEOUT_MS`, s3.timeoutMs)
+  addStringEnvIfDefined(env, `${prefix}__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING`, s3.treatForbiddenAsMissing)
+
+  return env
+}
+
 /**
  * Resolve image configuration for a service
  *
@@ -578,6 +630,7 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
           DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL: dogecoinEndpoints.rpcUrl,
           DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL: getEthereumDaBeaconRpcUrl(spec),
           DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS: '10000',
+          ...buildEthereumDaS3BlobSourceEnv('DOGEOS_L1_INTERFACE_ETHEREUM_DA', spec),
           DOGEOS_L1_INTERFACE_ETHEREUM_DA__ETH_CHAIN_ID: String(getEthereumDaChainId(spec)),
           DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
           DOGEOS_L1_INTERFACE_ETHEREUM_DA__L2_CHAIN_ID: String(spec.network.l2ChainId),
@@ -700,7 +753,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
     configMaps: {
       env: {
         data: {
-          DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION: batch.compression || 'none',
+          DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION: batch.compression || 'auto',
           DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_BATCH_HASH: batch.genesisBatchHash || ZERO_HASH,
           DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_RELAYED_DEPOSIT_INDEX: String(batch.genesisNextRelayedDepositIndex ?? 0),
           DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_WITHDRAW_INDEX: String(batch.genesisNextWithdrawIndex ?? 0),
@@ -729,7 +782,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
           DOGEOS_ETH_DA_SUBMITTER_L2__CONFIRMATIONS: String(ethereumDa.l2Confirmations ?? 0),
           DOGEOS_ETH_DA_SUBMITTER_L2__FETCH_LIMIT: String(ethereumDa.fetchLimit ?? 128),
           DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: ethereumDa.l2RpcUrl || L2_RPC_ENDPOINT,
-          DOGEOS_ETH_DA_SUBMITTER_S3__ENABLED: 'false',
+          ...buildEthDaSubmitterS3Env(spec),
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__CYCLE_INTERVAL_MS: '1000',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__LISTEN_ADDRESS: '0.0.0.0',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__LISTEN_PORT: '3004',
@@ -955,7 +1008,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__ENABLED', value: 'true' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__WRITER_ID', value: 'withdrawal-processor' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__CURSOR_ID', value: 'eth_da_inbox' },
-      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__START_BLOCK', value: String(getDogecoinIndexerStartHeight(spec)) },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__START_BLOCK', value: String(getEthereumDaInboxWorkerStartBlock(spec)) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__INGEST_DEPTH', value: '1' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__SAFE_DEPTH', value: '32' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__FINALIZED_DEPTH', value: '64' },
@@ -969,6 +1022,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       }] : []),
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL', value: getEthereumDaBeaconRpcUrl(spec) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS', value: '10000' },
+      ...Object.entries(buildEthereumDaS3BlobSourceEnv('DOGEOS_WITHDRAWAL_ETHEREUM_DA', spec)).map(([name, value]) => ({ name, value })),
       { name: 'RUST_LOG', value: 'info,withdrawal_processor=info' }
     ],
     envFrom: [

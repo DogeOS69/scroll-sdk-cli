@@ -267,6 +267,28 @@ scrollsdk setup prep-charts -N --json
 
 Generates Helm values files and prepares chart directories.
 
+If Ethereum DA S3 archive readback is enabled, prepare the bucket and update
+`.data/doge-config.toml` before this step. The CLI does not create S3 buckets,
+bucket policies, CloudFront distributions, or IAM/IRSA policies.
+
+AWS S3 direct-read example:
+
+```toml
+[ethereumDa.blobArchive.s3]
+enabled = true
+bucket = "dogeos-eth-da-archive-testnet"
+region = "us-west-2"
+publicBaseUrl = "https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/"
+timeoutMs = 15000
+treatForbiddenAsMissing = false
+```
+
+The bucket must already exist. `eth-da-submitter` needs `s3:PutObject` and
+`s3:GetObject` on the archive objects. `l1-interface` and
+`withdrawal-processor` read blobs through anonymous HTTP GET requests to
+`{publicBaseUrl}/{0x-versioned-hash}`. See the Ethereum DA S3 Archive section
+in `README.md` for AWS direct, CloudFront, and S3-compatible examples.
+
 **Required config fields:**
 - `config.toml` and generated configs from step 7
 - `[ingress]` hostnames (ports are stripped automatically)

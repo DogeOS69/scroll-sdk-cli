@@ -118,6 +118,15 @@ function resolveEnvRefsDeep(value: unknown): unknown {
   return value
 }
 
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 const DEFAULT_FRONTEND_SUBDOMAINS = {
   adminDashboard: 'admin-system-dashboard',
   blockbook: 'blockbook',
@@ -514,6 +523,28 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   const errors: ValidationError[] = []
   const warnings: ValidationWarning[] = []
 
+  const pushInvalidEthereumDaConfigError = (path: string, message: string): void => {
+    errors.push({
+      code: 'E012_INVALID_ETHEREUM_DA_CONFIG',
+      message,
+      path,
+    })
+  }
+
+  const validateOptionalHttpUrl = (path: string, value: string | undefined): void => {
+    if (value === undefined || value.trim() === '') return
+    if (!isHttpUrl(value)) {
+      pushInvalidEthereumDaConfigError(path, `${path} must be an http(s) URL`)
+    }
+  }
+
+  const validateOptionalNonNegativeSafeInteger = (path: string, value: number | undefined): void => {
+    if (value === undefined) return
+    if (!Number.isSafeInteger(value) || value < 0) {
+      pushInvalidEthereumDaConfigError(path, `${path} must be a non-negative integer`)
+    }
+  }
+
   // Version check
   if (spec.version !== '1.0') {
     errors.push({
@@ -708,6 +739,33 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       path: 'ethereumDa.l1RpcUrl',
     })
   }
+
+  const ethereumDaS3Archive = spec.ethereumDa?.blobArchive?.s3
+  if (ethereumDaS3Archive?.enabled === true) {
+    for (const field of ['bucket', 'region', 'publicBaseUrl'] as const) {
+      if (!ethereumDaS3Archive[field]) {
+        errors.push({
+          code: 'E002_MISSING_REQUIRED_FIELD',
+          message: `ethereumDa.blobArchive.s3.${field} is required when S3 blob archive is enabled`,
+          path: `ethereumDa.blobArchive.s3.${field}`,
+        })
+      }
+    }
+
+    validateOptionalHttpUrl('ethereumDa.blobArchive.s3.publicBaseUrl', ethereumDaS3Archive.publicBaseUrl)
+    validateOptionalHttpUrl('ethereumDa.blobArchive.s3.endpointUrl', ethereumDaS3Archive.endpointUrl)
+  }
+
+  if (ethereumDaS3Archive) {
+    validateOptionalNonNegativeSafeInteger('ethereumDa.blobArchive.s3.timeoutMs', ethereumDaS3Archive.timeoutMs)
+    validateOptionalNonNegativeSafeInteger('ethereumDa.blobArchive.s3.pollIntervalMs', ethereumDaS3Archive.pollIntervalMs)
+    validateOptionalNonNegativeSafeInteger('ethereumDa.blobArchive.s3.initialBackoffMs', ethereumDaS3Archive.initialBackoffMs)
+    validateOptionalNonNegativeSafeInteger('ethereumDa.blobArchive.s3.maxBackoffMs', ethereumDaS3Archive.maxBackoffMs)
+    validateOptionalNonNegativeSafeInteger('ethereumDa.blobArchive.s3.maxRetries', ethereumDaS3Archive.maxRetries)
+    validateOptionalNonNegativeSafeInteger('ethereumDa.blobArchive.s3.uploadingTimeoutMs', ethereumDaS3Archive.uploadingTimeoutMs)
+  }
+
+  validateOptionalNonNegativeSafeInteger('ethereumDa.inboxWorker.startBlock', spec.ethereumDa?.inboxWorker?.startBlock)
 
   if (spec.dogecoin?.indexerStartHeight !== undefined) {
     if (!Number.isSafeInteger(spec.dogecoin.indexerStartHeight) || spec.dogecoin.indexerStartHeight < 0) {
@@ -1168,6 +1226,15 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
     chainId: spec.ethereumDa?.chainId || ethereumDaDefaults.chainId,
     minFinality: spec.ethereumDa?.minFinality || ethereumDaDefaults.minFinality,
     submitterRpcUrl: spec.ethereumDa?.l1RpcUrl || ethereumDaDefaults.submitterRpcUrl,
+  }
+
+  const ethereumDaS3Archive = spec.ethereumDa?.blobArchive?.s3
+  if (ethereumDaS3Archive) {
+    config.ethereumDa.blobArchive = {
+      s3: Object.fromEntries(
+        Object.entries(ethereumDaS3Archive).filter(([, value]) => value !== undefined)
+      ),
+    }
   }
 
   if (spec.dogecoin.blockbook) {
