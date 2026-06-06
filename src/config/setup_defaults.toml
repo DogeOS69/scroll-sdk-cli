@@ -19,7 +19,8 @@ recovery_key_count = 3
 timelock = 100
 
 # Optional: provide specific signer public keys instead of deriving them from seed_string.
-# `scrollsdk setup cubesigner-init` writes attestation_pubkeys before bridge-init.
+# `scrollsdk setup cubesigner-init` writes tee_pubkey before bridge-init.
+# `scrollsdk setup dummy-signers` writes attestation_pubkeys before bridge-init.
 # tee_pubkey = "020000000000000000000000000000000000000000000000000000000000000000"
 # attestation_pubkeys = [
 #   "0400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",

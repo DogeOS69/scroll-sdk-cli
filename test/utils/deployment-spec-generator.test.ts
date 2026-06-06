@@ -444,7 +444,7 @@ describe('deployment-spec-generator', () => {
       )).to.be.true;
     });
 
-    it('warns when cubesigner attestation roles are not set yet', () => {
+    it('warns when cubesigner TEE role is not set yet', () => {
       const spec = createMinimalSpec();
       spec.signing = { cubesigner: { roles: [] }, local: { signers: [] } };
       const result = validateDeploymentSpec(spec);
@@ -767,7 +767,7 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('apiKey');
     });
 
-    it('includes cubesigner attestation config when present', () => {
+    it('includes cubesigner TEE config when present', () => {
       const spec = createMinimalSpec();
       spec.signing = {
         cubesigner: {
@@ -784,7 +784,7 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('role1');
     });
 
-    it('includes explicit aws-kms TEE signer config when present', () => {
+    it('includes explicit aws-kms attestation signer config when present', () => {
       const spec = createMinimalSpec();
       spec.signing = {
         awsKms: { accountId: '123456789', networkAlias: 'testnet', region: 'us-east-1' },
@@ -949,7 +949,7 @@ describe('deployment-spec-generator', () => {
       expect(output).not.to.include('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     });
 
-    it('includes attestation pubkeys from cubesigner roles', () => {
+    it('includes TEE pubkey from the cubesigner role when bridge teePubkey is omitted', () => {
       const spec = createMinimalSpec();
       spec.signing = {
         cubesigner: {
@@ -961,10 +961,9 @@ describe('deployment-spec-generator', () => {
       };
       const output = generateSetupDefaultsToml(spec);
 
-      expect(output).to.include('attestation_pubkeys');
-      // 0x prefix should be stripped
-      expect(output).to.include('abc123');
-      expect(output).to.include('def456');
+      expect(output).to.include('tee_pubkey = "abc123"');
+      expect(output).not.to.include('attestation_pubkeys');
+      expect(output).not.to.include('def456');
     });
   });
 

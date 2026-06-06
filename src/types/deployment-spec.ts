@@ -442,7 +442,7 @@ export interface BridgeConfig {
     sequencer: number
   }
 
-  /** Optional compressed TEE signer public key. If omitted, bridge setup derives one from seedString. */
+  /** Optional compressed TEE signer public key. If omitted, cubesigner-init can populate it; bridge setup can still derive one from seedString. */
   teePubkey?: string
 
   /** Threshold settings */
@@ -456,19 +456,19 @@ export interface BridgeConfig {
 }
 
 export interface SigningConfig {
-  /** AWS KMS-backed TEE signer configuration for dummy-signers */
+  /** AWS KMS-backed attestation signer configuration for dummy-signers */
   awsKms?: {
-    /** AWS account for the ECS/KMS TEE signer. Independent from infrastructure.aws.accountId. */
+    /** AWS account for the ECS/KMS attestation signers. Independent from infrastructure.aws.accountId. */
     accountId?: string
     /** ECS cluster for the ECS Express dummy signer service. Defaults to "default". */
     ecsClusterName?: string
-    /** Resource name prefix for ECS/KMS TEE signer resources. Defaults to metadata.name. */
+    /** Resource name prefix for ECS/KMS attestation signer resources. Defaults to metadata.name. */
     networkAlias?: string
-    /** AWS region for the ECS/KMS TEE signer. Independent from infrastructure.aws.region. */
+    /** AWS region for the ECS/KMS attestation signers. Independent from infrastructure.aws.region. */
     region?: string
   }
 
-  /** CubeSigner attestation key configuration */
+  /** CubeSigner TEE key configuration */
   cubesigner?: {
     /** Role configurations from cubesigner-init */
     roles?: Array<{
@@ -483,7 +483,7 @@ export interface SigningConfig {
     }>
   }
 
-  /** Local TEE signer configuration for dummy-signers */
+  /** Local attestation signer configuration for dummy-signers */
   local?: {
     /** Signer instances */
     signers: Array<{
@@ -494,7 +494,7 @@ export interface SigningConfig {
     }>
   }
 
-  /** @deprecated CubeSigner attestation and TEE signing are independent; configure cubesigner plus awsKms/local instead. */
+  /** @deprecated CubeSigner TEE signing and dummy attestation signing are independent; configure cubesigner plus awsKms/local instead. */
   method?: 'aws-kms' | 'cubesigner' | 'local'
 
   /** TSO service URL */

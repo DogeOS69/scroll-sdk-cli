@@ -100,7 +100,7 @@ bridge:
   keyCounts:
     attestation: 3
     recovery: 3
-  # TEE public key is populated by `scrollsdk setup dummy-signers`.
+  # TEE public key is populated by `scrollsdk setup cubesigner-init`.
   timelock: 100
   feeRateSatsPerKvb: 1000000
   targetAmountsSats:
@@ -115,9 +115,9 @@ bridge:
   feeRecipient: "0x0000000000000000000000000000000000000000"
 
 signing:
-  # CubeSigner provides attestation keys. Roles are populated by `scrollsdk setup cubesigner-init`.
+  # CubeSigner provides the single TEE key. Roles are populated by `scrollsdk setup cubesigner-init`.
   cubesigner: {}
-  # Dummy signer provides the TEE key. This controls where the signing service runs,
+  # Dummy signers provide attestation keys. This controls where the signing services run,
   # independently from infrastructure.provider.
   awsKms:
     accountId: "123456789012"

@@ -2,7 +2,7 @@
 #
 # setup_dummy_signers.sh
 #
-# Creates an ECS Express Mode IAM role, KMS key & alias, grant,
+# Creates ECS Express Mode IAM roles, KMS keys & aliases, grants,
 # and ECS Express service for ${NETWORK_ALIAS:-devnet00}-dummy-signer-{SUFFIX}.
 #
 # Usage:
@@ -28,8 +28,9 @@ NETWORK_ALIAS="${NETWORK_ALIAS:-devnet00}"
 # Network to use for the signer
 DOGECOIN_NETWORK="${DOGECOIN_NETWORK:-testnet}"
 
-# Internal legacy signer id used by existing ECS/KMS resource names.
-TEE_SIGNER_ID="${TEE_SIGNER_ID:-00}"
+# Internal legacy signer IDs used by existing ECS/KMS resource names.
+# TEE_SIGNER_ID is kept for CLI compatibility and may contain a space-separated list.
+SIGNER_IDS="${DUMMY_SIGNER_IDS:-${TEE_SIGNER_ID:-00}}"
 
 # AWS account and region
 AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:?Need to set AWS_ACCOUNT_ID}"
@@ -177,7 +178,7 @@ fi
 # Step A: Per-service IAM roles & policies  #
 #############################################
 
-for SIGNER_ID in "$TEE_SIGNER_ID"; do
+for SIGNER_ID in $SIGNER_IDS; do
   SERVICE="${NETWORK_ALIAS}-dummy-signer-${SIGNER_ID}"
   ROLE_NAME="${SERVICE}-role"
   ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ROLE_NAME}"
@@ -218,7 +219,7 @@ done
 # Step B: Create per-service KMS keys & grants #
 #############################################
 
-for SIGNER_ID in "$TEE_SIGNER_ID"; do
+for SIGNER_ID in $SIGNER_IDS; do
   SERVICE="${NETWORK_ALIAS}-dummy-signer-${SIGNER_ID}"
   ROLE_NAME="${SERVICE}-role"
   ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ROLE_NAME}"
@@ -304,7 +305,7 @@ done
 # Step C: Create or update ECS Express services #
 #############################################
 
-for SIGNER_ID in "$TEE_SIGNER_ID"; do
+for SIGNER_ID in $SIGNER_IDS; do
   SERVICE="${NETWORK_ALIAS}-dummy-signer-${SIGNER_ID}"
   ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${SERVICE}-role"
   ALIAS_NAME="alias/${SERVICE}-key"
@@ -428,4 +429,4 @@ EOF
   fi
 done
 
-echo "🎉 TEE signer service is configured and deployed."
+echo "🎉 Dummy attestation signer services are configured and deployed."

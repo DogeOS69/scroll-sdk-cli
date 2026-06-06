@@ -72,7 +72,7 @@ bridge:
   keyCounts:
     attestation: 1
     recovery: 1
-  # Optional compressed TEE public key. If omitted, bridge setup derives one from seedString.
+  # Optional compressed TEE public key. If omitted, `scrollsdk setup cubesigner-init` can populate it.
   # teePubkey: "020000000000000000000000000000000000000000000000000000000000000000"
   timelock: 100
   feeRateSatsPerKvb: 1000000
@@ -88,9 +88,9 @@ bridge:
   feeRecipient: "0x0000000000000000000000000000000000000000"
 
 signing:
-  # CubeSigner provides attestation keys. Roles are populated by `scrollsdk setup cubesigner-init`.
+  # CubeSigner provides the single TEE key. Roles are populated by `scrollsdk setup cubesigner-init`.
   cubesigner: {}
-  # Dummy signer provides the TEE key. This is independent from infrastructure.provider.
+  # Dummy signers provide attestation keys. This is independent from infrastructure.provider.
   awsKms:
     accountId: "123456789012"
     region: us-west-2

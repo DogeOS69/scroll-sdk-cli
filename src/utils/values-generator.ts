@@ -271,7 +271,7 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
   files['tso-service-production.yaml'] = generateTsoServiceValues(normalizedSpec)
   files['withdrawal-processor-production.yaml'] = generateWithdrawalProcessorValues(normalizedSpec)
 
-  // CubeSigner provides attestation keys. It is independent from the TEE signer.
+  // CubeSigner provides the TEE key. Dummy signers provide attestation keys.
   if (normalizedSpec.signing.cubesigner) {
     files['cubesigner-signer-production.yaml'] = generateCubesignerValues(normalizedSpec)
   }

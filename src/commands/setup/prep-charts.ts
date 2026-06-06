@@ -1521,17 +1521,17 @@ export default class SetupPrepCharts extends Command {
 
         // Rebuild all TSO signers so stale roles do not remain.
         if (productionYaml.tsoSigners && Array.isArray(productionYaml.tsoSigners)) {
-          const attestationSigners = (this.dogeConfig.cubesigner?.roles || []).map((_role, index) => ({
-            network: this.dogeConfig.network,
-            role: 'Attestation',
-            uri: `http://cubesigner-signer-${index}:3000`,
-          }) as any);
-          const teeSigners = (this.dogeConfig.signerUrls || []).map((url) => ({
+          const teeSigners = (this.dogeConfig.cubesigner?.roles || []).map((_role, index) => ({
             network: this.dogeConfig.network,
             role: 'Tee',
+            uri: `http://cubesigner-signer-${index}:3000`,
+          }) as any);
+          const attestationSigners = (this.dogeConfig.signerUrls || []).map((url) => ({
+            network: this.dogeConfig.network,
+            role: 'Attestation',
             uri: url,
           }) as any);
-          const newSigners = [...attestationSigners, ...teeSigners];
+          const newSigners = [...teeSigners, ...attestationSigners];
           const existingSigners = productionYaml.tsoSigners;
           productionYaml.tsoSigners = newSigners;
           updated = true;

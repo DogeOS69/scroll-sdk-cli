@@ -52,6 +52,10 @@ A tool for configuring, managing, and testing [Scroll SDK](https://docs.scroll.i
    ```
 
 7. ```bash
+   scrollsdk setup dummy-signers
+   ```
+
+8. ```bash
    scrollsdk setup bridge-init
    ```
    **Note:** If you encounter an "Insufficient base funds" error like this:
@@ -850,7 +854,7 @@ _See code: [src/commands/setup/bridge-init.ts](https://github.com/dogeos69/scrol
 
 ## `scrollsdk setup cubesigner-init`
 
-Setup cubesigner keys and roles
+Setup a CubeSigner TEE key and role
 
 ```
 USAGE
@@ -858,33 +862,30 @@ USAGE
     [--roles <value>...] [--threshold <value>]
 
 FLAGS
-  -N, --non-interactive      Run without prompts. Requires --doge-config and either --new (with --count, --role-prefix)
-                             or --roles.
-      --count=<value>        Number of keys/roles to create (when using --new)
+  -N, --non-interactive      Run without prompts. Requires --doge-config and either --new (with --role-prefix) or --roles.
+      --count=<value>        Number of TEE keys/roles to create (must be 1; default 1)
       --doge-config=<value>  Path to Dogecoin config file
       --json                 Output in JSON format (stdout for data, stderr for logs)
       --new                  Create new roles and keys
       --role-prefix=<value>  Prefix for role names (when using --new)
       --roles=<value>...     Comma-separated list of existing role names to use
-      --threshold=<value>    Attestation threshold (how many signatures required). Defaults to 2/3 majority.
+      --threshold=<value>    Deprecated; ignored because cubesigner-init configures the single TEE key.
 
 DESCRIPTION
-  Setup cubesigner keys and roles
+  Setup a CubeSigner TEE key and role
 
 EXAMPLES
-  $ scrollsdk setup cubesigner-init --roles foo_role bar_role baz_role
+  $ scrollsdk setup cubesigner-init --roles tee_role
 
-  $ scrollsdk setup cubesigner-init --new --count 4 --role-prefix attestor
+  $ scrollsdk setup cubesigner-init --new --role-prefix tee
 
-  $ scrollsdk setup cubesigner-init --new --count 3 --role-prefix validator
-
-  $ scrollsdk setup cubesigner-init --roles role_a role_b --doge-config .data/doge-config.toml
+  $ scrollsdk setup cubesigner-init --roles tee_role --doge-config .data/doge-config.toml
 
   $ scrollsdk setup cubesigner-init
 
-  $ scrollsdk setup cubesigner-init --non-interactive --new --count 3 --role-prefix validator --threshold 2 --doge-config .data/doge-config.toml
+  $ scrollsdk setup cubesigner-init --non-interactive --new --role-prefix tee --doge-config .data/doge-config.toml
 
-  $ scrollsdk setup cubesigner-init --non-interactive --json --roles role_a role_b --threshold 2 --doge-config .data/doge-config.toml
+  $ scrollsdk setup cubesigner-init --non-interactive --json --roles tee_role --doge-config .data/doge-config.toml
 ```
 
 _See code: [src/commands/setup/cubesigner-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-init.ts)_
@@ -1085,7 +1086,7 @@ _See code: [src/commands/setup/domains.ts](https://github.com/dogeos69/scroll-sd
 
 ## `scrollsdk setup dummy-signers`
 
-Set up a dummy TEE signer (local Docker or AWS with KMS)
+Set up three dummy attestation signers (local Docker or AWS with KMS)
 
 ```
 USAGE
@@ -1095,25 +1096,25 @@ USAGE
 
 FLAGS
   -N, --non-interactive            Run without prompts. Uses config values or sensible defaults.
-  -a, --aws-only                   Set up AWS KMS signers only
+  -a, --aws-only                   Set up AWS KMS attestation signers only
   -c, --config=<value>             Path to Dogecoin config file
-  -l, --local-only                 Set up local Docker signers only
+  -l, --local-only                 Set up local Docker attestation signers only
       --aws-account-id=<value>     AWS account ID
-      --aws-ecs-cluster=<value>    ECS cluster for AWS ECS Express dummy signer service. Defaults to awsSigner.ecsClusterName
-                                   or "default".
-      --aws-image-source=<option>  AWS signer image source: dockerhub uses the public image directly, ecr requires an existing
-                                   ECR image, ecr-sync syncs Docker Hub to ECR from this machine
+      --aws-ecs-cluster=<value>    ECS cluster for AWS ECS Express dummy attestation signer services. Defaults to
+                                   awsSigner.ecsClusterName or "default".
+      --aws-image-source=<option>  AWS attestation signer image source: dockerhub uses the public image directly, ecr requires
+                                   an existing ECR image, ecr-sync syncs Docker Hub to ECR from this machine
                                    <options: dockerhub|ecr|ecr-sync>
-      --aws-image-uri=<value>      Full container image URI for AWS signers. Overrides --aws-image-source.
+      --aws-image-uri=<value>      Full container image URI for AWS attestation signers. Overrides --aws-image-source.
       --aws-network-alias=<value>  Network alias for AWS resources
-      --aws-region=<value>         AWS region for KMS signers
-      --from-spec=<value>          Path to DeploymentSpec YAML. Uses dummy-signer defaults from signing.awsKms or
+      --aws-region=<value>         AWS region for KMS attestation signers
+      --from-spec=<value>          Path to DeploymentSpec YAML. Uses dummy attestation signer defaults from signing.awsKms or
                                    signing.local.
-      --[no-]generate-wif-keys     Generate new WIF keys (non-interactive mode)
+      --[no-]generate-wif-keys     Generate new attestation WIF keys (non-interactive mode)
       --image-tag=<value>          Specify the Docker image tag to use
       --json                       Output in JSON format (stdout for data, stderr for logs)
 DESCRIPTION
-  Set up a dummy TEE signer (local Docker or AWS with KMS)
+  Set up three dummy attestation signers (local Docker or AWS with KMS)
 
 EXAMPLES
   $ scrollsdk setup dummy-signers

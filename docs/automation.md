@@ -202,25 +202,25 @@ Runs the L2 config generation Docker container and prepares deployment artifacts
 **Required config fields:**
 - `config.toml` fully populated
 
-### Step 6: Initialize CubeSigner attestation keys
+### Step 6: Initialize the CubeSigner TEE key
 
 ```bash
-scrollsdk setup cubesigner-init -N --json --new --count 3 --role-prefix attestor --threshold 2 --doge-config .data/doge-config.toml
+scrollsdk setup cubesigner-init -N --json --new --role-prefix tee --doge-config .data/doge-config.toml
 ```
 
-Creates or selects CubeSigner roles and writes attestation public keys to `.data/setup_defaults.toml`. This must run before bridge initialization.
+Creates or selects one CubeSigner role and writes the TEE public key to `.data/setup_defaults.toml`. This must run before bridge initialization.
 
 **Required flags (non-interactive):**
 - `--doge-config <path>` - Path to doge-config file
-- Either `--new --count <n> --role-prefix <prefix>` or `--roles <role...>`
+- Either `--new --role-prefix <prefix>` or `--roles <role>`
 
-### Optional: Generate a dummy TEE signer
+### Step 7: Generate dummy attestation signers
 
 ```bash
 scrollsdk setup dummy-signers -N --json --config .data/doge-config.toml
 ```
 
-Creates a dummy TEE signer key for development. Production bridge initialization should use CubeSigner attestation keys from step 6.
+Creates three dummy attestation signer keys and writes `attestation_pubkeys`, `attestation_key_count`, and `attestation_threshold` to `.data/setup_defaults.toml`.
 
 **Required flags (non-interactive):**
 - `--config <path>` - Path to doge-config file (required to avoid config selection prompt)
@@ -229,7 +229,7 @@ Creates a dummy TEE signer key for development. Production bridge initialization
 **Required config fields:**
 - `.data/doge-config.toml` must exist (run step 4 first)
 
-### Step 7: Initialize bridge
+### Step 8: Initialize bridge
 
 ```bash
 scrollsdk setup bridge-init -N --json --seed 123456
@@ -243,12 +243,12 @@ Runs the bridge initialization Docker container. Requires Docker.
 
 **Required config fields:**
 - `values/genesis.yaml` from `setup gen-l2-artifacts`
-- `.data/setup_defaults.toml` with CubeSigner `attestation_pubkeys`
+- `.data/setup_defaults.toml` with CubeSigner `tee_pubkey` and dummy signer `attestation_pubkeys`
 - `.data/doge-config.toml` with bridge parameters
 
 **Note:** This step may require funding. If you receive error `E200_HELPER_UNFUNDED`, send Dogecoin to the address in the error context and retry.
 
-### Step 8: Generate local secrets
+### Step 9: Generate local secrets
 
 ```bash
 scrollsdk setup gen-secrets -N --json
@@ -259,7 +259,7 @@ Generates local `secrets/*.env` files from `config.toml`, Dogecoin config, and b
 **Required config fields:**
 - `.data/output-withdrawal-processor.toml` from `setup bridge-init`
 
-### Step 9: Prepare Helm charts
+### Step 10: Prepare Helm charts
 
 ```bash
 scrollsdk setup prep-charts -N --json
@@ -271,7 +271,7 @@ Generates Helm values files and prepares chart directories.
 - `config.toml` and generated configs from step 7
 - `[ingress]` hostnames (ports are stripped automatically)
 
-### Step 9: Refresh CubeSigner tokens
+### Step 11: Refresh CubeSigner tokens
 
 ```bash
 scrollsdk setup cubesigner-refresh -N --json --doge-config .data/doge-config.toml
@@ -284,7 +284,7 @@ Refreshes CubeSigner authentication tokens.
 - `--org-id <id>` - CubeSigner organization ID (required if not already logged in)
 - `--email <email>` - CubeSigner account email (required if not already logged in)
 
-### Step 10: Push secrets to Kubernetes
+### Step 12: Push secrets to Kubernetes
 
 ```bash
 scrollsdk setup push-secrets -N --json
@@ -298,7 +298,7 @@ Pushes generated secrets to the Kubernetes cluster. Requires kubectl.
 - `--aws-prefix <prefix>` - AWS Secrets Manager path prefix (default: `dogeos`)
 - `--aws-service-account <name>` - AWS IAM service account (default: `external-secrets`)
 
-### Step 11: Set up TLS
+### Step 13: Set up TLS
 
 ```bash
 scrollsdk setup tls -N --json --cluster-issuer letsencrypt-prod
@@ -310,7 +310,7 @@ Configures TLS certificates for ingress.
 - `--cluster-issuer <name>` - ClusterIssuer to use, OR:
 - `--create-issuer --issuer-email <email>` - Create a letsencrypt-prod ClusterIssuer if none exists
 
-### Steps 12-14: Fund accounts
+### Steps 14-16: Fund accounts
 
 `helper fund-accounts` does not yet support `--non-interactive`/`--json` flags. Some funding paths may prompt for user confirmation (for example, L2 bridge/direct/manual selection or manual funding instructions). Use the `-d` (dev mode) flag to fund L1 accounts from the local L1 devnet prefunded wallet where possible:
 
@@ -375,7 +375,8 @@ run_step "setup gen-keystore" setup gen-keystore -N --json \
 run_step "setup doge-config" setup doge-config -N --json
 run_step "setup gen-l2-artifacts" setup gen-l2-artifacts -N --json
 run_step "setup cubesigner-init" setup cubesigner-init -N --json \
-  --new --count 3 --role-prefix attestor --threshold 2 --doge-config "$DOGE_CONFIG"
+  --new --role-prefix tee --doge-config "$DOGE_CONFIG"
+run_step "setup dummy-signers" setup dummy-signers -N --json --config "$DOGE_CONFIG"
 run_step "setup bridge-init" setup bridge-init -N --json --seed "$SEED"
 run_step "setup gen-secrets" setup gen-secrets -N --json
 run_step "setup prep-charts" setup prep-charts -N --json
@@ -406,7 +407,7 @@ For fully declarative deployments, use a `deployment-spec.yaml` file:
 scrollsdk setup generate-from-spec --spec deployment-spec.yaml --json
 ```
 
-This generates base config files (`config.toml`, `doge-config.toml`, `setup_defaults.toml`, `values/*.yaml`) from a single YAML specification. Run `setup gen-l2-artifacts`, `setup cubesigner-init`, `setup bridge-init`, and `setup gen-secrets` afterward to produce the runtime L2 genesis, CubeSigner attestation keys, bridge outputs, and local secrets. See `src/types/deployment-spec.ts` for the full schema.
+This generates base config files (`config.toml`, `doge-config.toml`, `setup_defaults.toml`, `values/*.yaml`) from a single YAML specification. Run `setup gen-l2-artifacts`, `setup cubesigner-init`, `setup dummy-signers`, `setup bridge-init`, and `setup gen-secrets` afterward to produce the runtime L2 genesis, CubeSigner TEE key, dummy attestation keys, bridge outputs, and local secrets. See `src/types/deployment-spec.ts` for the full schema.
 
 ## Parsing JSON Output Programmatically
 

@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic TOML config operations */
 import * as toml from '@iarna/toml'
-import { checkbox, input, select } from '@inquirer/prompts'
+import { input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import { exec } from 'node:child_process'
@@ -12,25 +12,25 @@ import type { CubesignerRole, DogeConfig } from '../../types/doge-config.js'
 
 import { SETUP_DEFAULTS_TEMPLATE, getSetupDefaultsPath } from '../../config/constants.js'
 import { dogeConfigToToml, loadDogeConfigWithSelection } from '../../utils/doge-config.js'
-import { JsonOutputContext } from '../../utils/json-output.js'
+import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 const execAsync = promisify(exec)
+const TEE_KEY_COUNT = 1
 
 export default class SetupCubesignerSetup extends Command {
-    static override description = 'Setup cubesigner keys and roles'
+    static override description = 'Setup a CubeSigner TEE key and role'
 
     static override examples = [
-        '<%= config.bin %> <%= command.id %> --roles foo_role bar_role baz_role',
-        '<%= config.bin %> <%= command.id %> --new --count 4 --role-prefix attestor',
-        '<%= config.bin %> <%= command.id %> --new --count 3 --role-prefix validator',
-        '<%= config.bin %> <%= command.id %> --roles role_a role_b --doge-config .data/doge-config.toml',
+        '<%= config.bin %> <%= command.id %> --roles tee_role',
+        '<%= config.bin %> <%= command.id %> --new --role-prefix tee',
+        '<%= config.bin %> <%= command.id %> --roles tee_role --doge-config .data/doge-config.toml',
         '<%= config.bin %> <%= command.id %>',
-        '<%= config.bin %> <%= command.id %> --non-interactive --new --count 3 --role-prefix validator --threshold 2 --doge-config .data/doge-config.toml',
-        '<%= config.bin %> <%= command.id %> --non-interactive --json --roles role_a role_b --threshold 2 --doge-config .data/doge-config.toml',
+        '<%= config.bin %> <%= command.id %> --non-interactive --new --role-prefix tee --doge-config .data/doge-config.toml',
+        '<%= config.bin %> <%= command.id %> --non-interactive --json --roles tee_role --doge-config .data/doge-config.toml',
     ]
 
     static override flags = {
         'count': Flags.integer({
-            description: 'Number of keys/roles to create (when using --new)',
+            description: 'Number of TEE keys/roles to create (must be 1; default 1)',
             required: false,
         }),
         'doge-config': Flags.string({
@@ -49,7 +49,7 @@ export default class SetupCubesignerSetup extends Command {
         'non-interactive': Flags.boolean({
             char: 'N',
             default: false,
-            description: 'Run without prompts. Requires --doge-config and either --new (with --count, --role-prefix) or --roles.',
+            description: 'Run without prompts. Requires --doge-config and either --new (with --role-prefix) or --roles.',
         }),
         'role-prefix': Flags.string({
             description: 'Prefix for role names (when using --new)',
@@ -61,7 +61,7 @@ export default class SetupCubesignerSetup extends Command {
             required: false,
         }),
         'threshold': Flags.integer({
-            description: 'Attestation threshold (how many signatures required). Defaults to 2/3 majority.',
+            description: 'Deprecated; ignored because cubesigner-init configures the single TEE key.',
             required: false,
         }),
     }
@@ -112,6 +112,10 @@ export default class SetupCubesignerSetup extends Command {
             )
         }
 
+        if (flags.threshold !== undefined) {
+            this.jsonCtx.info('Ignoring deprecated --threshold flag; CubeSigner now configures the single TEE key.')
+        }
+
         // Use the new common function to load config
         const { config, configPath } = await loadDogeConfigWithSelection(
             flags['doge-config'],
@@ -144,50 +148,33 @@ export default class SetupCubesignerSetup extends Command {
         if (useNew) {
             let {count} = flags
             let rolePrefix = flags['role-prefix']
+            count = count || TEE_KEY_COUNT
 
-            // In non-interactive mode, require count and role-prefix
-            if (this.nonInteractive) {
-                if (!count) {
-                    this.jsonCtx.error(
-                        'E601_MISSING_FIELD',
-                        '--count flag is required when using --new in non-interactive mode',
-                        'CONFIGURATION',
-                        true,
-                        { flag: '--count' }
-                    )
-                }
-
-                if (!rolePrefix) {
-                    this.jsonCtx.error(
-                        'E601_MISSING_FIELD',
-                        '--role-prefix flag is required when using --new in non-interactive mode',
-                        'CONFIGURATION',
-                        true,
-                        { flag: '--role-prefix' }
-                    )
-                }
+            if (count !== TEE_KEY_COUNT) {
+                this.jsonCtx.error(
+                    'E600_INVALID_VALUE',
+                    `CubeSigner TEE setup supports exactly ${TEE_KEY_COUNT} key/role`,
+                    'VALIDATION',
+                    true,
+                    { count, expectedCount: TEE_KEY_COUNT }
+                )
             }
 
-            if (!count) {
-                const countStr = await input({
-                    default: '3',
-                    message: chalk.cyan('How many roles/keys do you want to create?'),
-                    validate(value: string) {
-                        const num = Number.parseInt(value, 10)
-                        if (Number.isNaN(num) || num <= 0) {
-                            return 'Please enter a valid positive number'
-                        }
-
-                        return true
-                    }
-                })
-                count = Number.parseInt(countStr, 10)
+            // In non-interactive mode, require role-prefix
+            if (this.nonInteractive && !rolePrefix) {
+                this.jsonCtx.error(
+                    'E601_MISSING_FIELD',
+                    '--role-prefix flag is required when using --new in non-interactive mode',
+                    'CONFIGURATION',
+                    true,
+                    { flag: '--role-prefix' }
+                )
             }
 
             if (!rolePrefix) {
                 rolePrefix = await input({
-                    default: 'devnet',
-                    message: chalk.cyan('Enter role name prefix:'),
+                    default: 'tee',
+                    message: chalk.cyan('Enter TEE role name prefix:'),
                     validate(value: string) {
                         if (!value || value.trim() === '') {
                             return 'Role prefix cannot be empty'
@@ -198,52 +185,8 @@ export default class SetupCubesignerSetup extends Command {
                 })
             }
 
-            // Calculate default threshold
-            let defaultThreshold: number
-            if (count === 1) {
-                defaultThreshold = 1
-            } else if (count === 2) {
-                defaultThreshold = 2
-            } else {
-                defaultThreshold = Math.ceil(count * 2 / 3) // 2/3 majority
-            }
-
-            // Get threshold from flag or prompt
-            let {threshold} = flags
-            if (threshold !== undefined) {
-                // Validate threshold
-                if (threshold < 1 || threshold > count) {
-                    this.jsonCtx.error(
-                        'E600_INVALID_VALUE',
-                        `Threshold must be between 1 and ${count}`,
-                        'VALIDATION',
-                        true,
-                        { count, threshold }
-                    )
-                }
-            } else if (this.nonInteractive) {
-                // Use default threshold in non-interactive mode
-                threshold = defaultThreshold
-                this.jsonCtx.info(`Using default attestation threshold: ${threshold} (2/3 majority)`)
-            } else {
-                this.jsonCtx.info(`You will have ${count} attestation keys.`)
-
-                const thresholdStr = await input({
-                    default: defaultThreshold.toString(),
-                    message: chalk.cyan(`Enter attestation threshold (how many signatures required, 1-${count}):`),
-                    validate(value: string) {
-                        const num = Number.parseInt(value, 10)
-                        if (Number.isNaN(num) || num < 1 || num > count!) {
-                            return `Please enter a number between 1 and ${count}`
-                        }
-
-                        return true
-                    }
-                })
-                threshold = Number.parseInt(thresholdStr, 10)
-            }
-
-            await this.createNewRolesAndKeys(count, rolePrefix, threshold)
+            this.jsonCtx.info(`You will have ${TEE_KEY_COUNT} CubeSigner TEE key.`)
+            await this.createNewRolesAndKeys(count, rolePrefix)
         } else {
             if (!useExistingRoles || useExistingRoles.length === 0) {
                 if (this.nonInteractive) {
@@ -259,7 +202,6 @@ export default class SetupCubesignerSetup extends Command {
                 useExistingRoles = await this.selectExistingRoles()
             }
 
-            // Ensure useExistingRoles is not undefined
             if (!useExistingRoles) {
                 this.jsonCtx.error(
                     'E601_MISSING_FIELD',
@@ -270,52 +212,18 @@ export default class SetupCubesignerSetup extends Command {
                 // jsonCtx.error throws, so this is unreachable
             }
 
-            // Calculate default threshold for existing roles
-            let defaultThreshold: number
-            if (useExistingRoles.length === 1) {
-                defaultThreshold = 1
-            } else if (useExistingRoles.length === 2) {
-                defaultThreshold = 2
-            } else {
-                defaultThreshold = Math.ceil(useExistingRoles.length * 2 / 3) // 2/3 majority
+            if (useExistingRoles.length !== TEE_KEY_COUNT) {
+                this.jsonCtx.error(
+                    'E600_INVALID_VALUE',
+                    `CubeSigner TEE setup requires exactly ${TEE_KEY_COUNT} role`,
+                    'VALIDATION',
+                    true,
+                    { expectedCount: TEE_KEY_COUNT, roleCount: useExistingRoles.length }
+                )
             }
 
-            // Get threshold from flag or prompt
-            let {threshold} = flags
-            if (threshold !== undefined) {
-                // Validate threshold
-                if (threshold < 1 || threshold > useExistingRoles.length) {
-                    this.jsonCtx.error(
-                        'E600_INVALID_VALUE',
-                        `Threshold must be between 1 and ${useExistingRoles.length}`,
-                        'VALIDATION',
-                        true,
-                        { roleCount: useExistingRoles.length, threshold }
-                    )
-                }
-            } else if (this.nonInteractive) {
-                // Use default threshold in non-interactive mode
-                threshold = defaultThreshold
-                this.jsonCtx.info(`Using default attestation threshold: ${threshold} (2/3 majority)`)
-            } else {
-                this.jsonCtx.info(`You will have ${useExistingRoles.length} attestation keys.`)
-
-                const thresholdStr = await input({
-                    default: defaultThreshold.toString(),
-                    message: chalk.cyan(`Enter attestation threshold (how many signatures required, 1-${useExistingRoles.length}):`),
-                    validate(value: string) {
-                        const num = Number.parseInt(value, 10)
-                        if (Number.isNaN(num) || num < 1 || num > useExistingRoles!.length) {
-                            return `Please enter a number between 1 and ${useExistingRoles!.length}`
-                        }
-
-                        return true
-                    }
-                })
-                threshold = Number.parseInt(thresholdStr, 10)
-            }
-
-            await this.useExistingRoles(useExistingRoles, threshold)
+            this.jsonCtx.info(`You will have ${TEE_KEY_COUNT} CubeSigner TEE key.`)
+            await this.useExistingRoles(useExistingRoles)
         }
     }
 
@@ -344,8 +252,8 @@ export default class SetupCubesignerSetup extends Command {
         }
     }
 
-    private async createNewRolesAndKeys(count: number, rolePrefix: string, threshold: number): Promise<void> {
-        this.jsonCtx.info(`Creating ${count} new roles and keys with prefix "${rolePrefix}"`)
+    private async createNewRolesAndKeys(count: number, rolePrefix: string): Promise<void> {
+        this.jsonCtx.info(`Creating ${count} new TEE role and key with prefix "${rolePrefix}"`)
 
         try {
             // Create keys
@@ -378,9 +286,10 @@ export default class SetupCubesignerSetup extends Command {
             }
 
             this.jsonCtx.info(`Successfully created ${selectedRoles.length} roles`)
-            await this.saveRolesToConfig(selectedRoles, threshold)
+            await this.saveRolesToConfig(selectedRoles)
 
         } catch (error) {
+            if (error instanceof CliExitError) throw error
             this.jsonCtx.error(
                 'E900_CUBESIGNER_ERROR',
                 `Failed to create roles and keys: ${error}`,
@@ -391,7 +300,7 @@ export default class SetupCubesignerSetup extends Command {
         }
     }
 
-    private async saveRolesToConfig(selectedRoles: any[], threshold: number) {
+    private async saveRolesToConfig(selectedRoles: any[]) {
         try {
             this.jsonCtx.info('Saving roles to DogeConfig...')
 
@@ -417,10 +326,11 @@ export default class SetupCubesignerSetup extends Command {
             fs.writeFileSync(this.dogeConfigFile, dogeConfigToToml(this.dogeConfig))
             this.jsonCtx.info(`Successfully saved ${cubesignerRoles.length} roles to ${this.dogeConfigFile}`)
 
-            // Update setup_defaults.toml with attestation public keys
-            await this.updateSetupDefaultsWithKeys(selectedRoles, threshold)
+            // Update setup_defaults.toml with the CubeSigner TEE public key
+            await this.updateSetupDefaultsWithTeeKey(selectedRoles)
 
         } catch (error) {
+            if (error instanceof CliExitError) throw error
             this.jsonCtx.error(
                 'E900_CONFIG_SAVE_ERROR',
                 `Failed to save roles to config: ${error}`,
@@ -453,21 +363,15 @@ export default class SetupCubesignerSetup extends Command {
                 value: role.name
             }))
 
-            const selectedRoleNames = await checkbox({
+            const selectedRoleName = await select({
                 choices: roleChoices,
-                message: chalk.cyan('Select roles to use:'),
-                validate(answer: readonly any[]) {
-                    if (answer.length === 0) {
-                        return 'Please select at least one role'
-                    }
+                message: chalk.cyan('Select the CubeSigner TEE role to use:'),
+            }) as string
 
-                    return true
-                }
-            }) as string[]
-
-            return selectedRoleNames
+            return [selectedRoleName]
 
         } catch (error) {
+            if (error instanceof CliExitError) throw error
             this.jsonCtx.error(
                 'E900_CUBESIGNER_ERROR',
                 `Failed to list roles: ${error}`,
@@ -479,9 +383,9 @@ export default class SetupCubesignerSetup extends Command {
         }
     }
 
-    private async updateSetupDefaultsWithKeys(selectedRoles: any[], threshold: number) {
+    private async updateSetupDefaultsWithTeeKey(selectedRoles: any[]) {
         try {
-            this.jsonCtx.info('Updating setup_defaults.toml with attestation public keys...')
+            this.jsonCtx.info('Updating setup_defaults.toml with CubeSigner TEE public key...')
 
             const setupDefaultsPath = getSetupDefaultsPath()
 
@@ -500,34 +404,33 @@ export default class SetupCubesignerSetup extends Command {
             const existingConfigStr = fs.readFileSync(setupDefaultsPath, 'utf8')
             const setupConfig = toml.parse(existingConfigStr)
 
-            // Collect public keys from selected roles
-            const attestationPubkeys: string[] = []
+            const teePubkeys: string[] = []
             for (const role of selectedRoles) {
                 if (role.keys && role.keys.length > 0) {
                     const key = role.keys[0] // Use first key of each role
-                    attestationPubkeys.push(key.public_key.replace(/^0x/, ''))
+                    teePubkeys.push(key.public_key.replace(/^0x/, ''))
                 }
             }
 
-            // Update attestation_pubkeys array
-            setupConfig.attestation_pubkeys = attestationPubkeys
+            if (teePubkeys.length !== TEE_KEY_COUNT) {
+                this.jsonCtx.error(
+                    'E602_INVALID_CUBESIGNER_TEE_KEY_COUNT',
+                    `Expected exactly ${TEE_KEY_COUNT} CubeSigner TEE public key, got ${teePubkeys.length}`,
+                    'CONFIGURATION',
+                    true,
+                    { expectedCount: TEE_KEY_COUNT, keyCount: teePubkeys.length }
+                )
+            }
 
-            // Update attestation_key_count
-            setupConfig.attestation_key_count = attestationPubkeys.length
-            setupConfig.attestation_threshold = threshold
+            setupConfig.tee_pubkey = teePubkeys[0]
 
-            const keyCount = attestationPubkeys.length
-            this.jsonCtx.info(`Configured ${keyCount} attestation keys.`)
+            this.jsonCtx.info(`Configured ${TEE_KEY_COUNT} CubeSigner TEE key.`)
             // Write to setup_defaults.toml
             fs.writeFileSync(setupDefaultsPath, toml.stringify(setupConfig))
-            this.jsonCtx.info(`Successfully updated ${setupDefaultsPath} with ${attestationPubkeys.length} attestation public keys`)
-            this.jsonCtx.info(`Updated attestation_key_count to ${keyCount} and attestation_threshold to ${threshold}`)
+            this.jsonCtx.info(`Successfully updated ${setupDefaultsPath} with CubeSigner TEE public key`)
 
             // Output JSON success response
             this.jsonCtx.success({
-                attestationKeyCount: keyCount,
-                attestationPubkeys,
-                attestationThreshold: threshold,
                 dogeConfigFile: this.dogeConfigFile,
                 roles: selectedRoles.map(role => ({
                     keyCount: role.keys?.length || 0,
@@ -535,10 +438,13 @@ export default class SetupCubesignerSetup extends Command {
                     role_id: role.role_id
                 })),
                 rolesCount: selectedRoles.length,
-                setupDefaultsFile: setupDefaultsPath
+                setupDefaultsFile: setupDefaultsPath,
+                teeKeyCount: TEE_KEY_COUNT,
+                teePubkey: teePubkeys[0],
             })
 
         } catch (error) {
+            if (error instanceof CliExitError) throw error
             this.jsonCtx.error(
                 'E900_CONFIG_UPDATE_ERROR',
                 `Failed to update setup_defaults.toml: ${error}`,
@@ -549,7 +455,7 @@ export default class SetupCubesignerSetup extends Command {
         }
     }
 
-    private async useExistingRoles(roleNames: string[], threshold: number): Promise<void> {
+    private async useExistingRoles(roleNames: string[]): Promise<void> {
         this.jsonCtx.info(`Using existing roles: ${roleNames.join(', ')}`)
 
         try {
@@ -602,9 +508,10 @@ export default class SetupCubesignerSetup extends Command {
             }
 
             this.jsonCtx.info(`Found ${selectedRoles.length} existing roles`)
-            await this.saveRolesToConfig(selectedRoles, threshold)
+            await this.saveRolesToConfig(selectedRoles)
 
         } catch (error) {
+            if (error instanceof CliExitError) throw error
             this.jsonCtx.error(
                 'E900_CUBESIGNER_ERROR',
                 `Failed to use existing roles: ${error}`,

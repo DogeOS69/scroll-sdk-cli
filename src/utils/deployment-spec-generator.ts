@@ -657,12 +657,12 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     })
   }
 
-  // Signing validation. CubeSigner provides attestation keys; dummy-signers provides the TEE key.
+  // Signing validation. CubeSigner provides the TEE key; dummy-signers provides attestation keys.
   if (!spec.signing?.cubesigner?.roles || spec.signing.cubesigner.roles.length === 0) {
     warnings.push({
-      message: 'CubeSigner roles are not set yet',
+      message: 'CubeSigner TEE role is not set yet',
       path: 'signing.cubesigner.roles',
-      suggestion: 'Run setup cubesigner-init to create or select roles before bridge/signing artifacts are finalized',
+      suggestion: 'Run setup cubesigner-init to create or select the TEE role before bridge/signing artifacts are finalized',
     })
   }
 
@@ -686,7 +686,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
 
   if (!getDummySignerProviderFromSpec(spec)) {
     warnings.push({
-      message: 'TEE signer configuration is not set yet',
+      message: 'Attestation signer configuration is not set yet',
       path: 'signing',
       suggestion: 'Configure signing.awsKms for ECS Express dummy-signers or signing.local for locally-run dummy-signers.',
     })
@@ -1269,14 +1269,12 @@ export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
 
   if (spec.bridge.teePubkey) {
     config.tee_pubkey = spec.bridge.teePubkey.replace(/^0x/, '')
-  }
-
-  // Add attestation public keys from cubesigner roles
-  if (spec.signing.cubesigner) {
-    config.attestation_pubkeys = (spec.signing.cubesigner.roles || []).map(role => {
-      const key = role.keys[0]
-      return key?.publicKey?.replace(/^0x/, '') || ''
-    }).filter(Boolean)
+  } else if (spec.signing.cubesigner?.roles?.length) {
+    const key = spec.signing.cubesigner.roles[0].keys[0]
+    const teePubkey = key?.publicKey?.replace(/^0x/, '')
+    if (teePubkey) {
+      config.tee_pubkey = teePubkey
+    }
   }
 
   return `${toml.stringify(resolveEnvRefsDeep(config) as toml.JsonMap)}
