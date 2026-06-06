@@ -245,7 +245,7 @@ export default class SetupCubesignerRefresh extends Command {
 
             for (const [i, role] of roles.entries()) {
                 const sessionFile = `./secrets/cubesigner-signer-${i}-session.json`
-                const assignRoleCommand = `cs session create --role-id=${role.role_id} > ${sessionFile}`
+                const assignRoleCommand = `cs session create --role-id=${role.role_id} --auth-lifetime 86400 > ${sessionFile}`
                 this.jsonCtx.info(`Executing: ${assignRoleCommand}`)
                 await execAsync(assignRoleCommand)
                 sessionFiles.push(sessionFile)
