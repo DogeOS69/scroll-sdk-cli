@@ -11,7 +11,7 @@
 #   AWS_ACCOUNT_ID=012345678901 \             # your AWS account
 #   AWS_REGION=us-east-1 \                     # region for ECR, KMS, and ECS
 #   ECS_CLUSTER=default \                      # ECS cluster for the Express Mode service
-#   IMAGE_URI=dogeos69/dummy-signer:newda \
+#   IMAGE_URI=dogeos69/dummy-signer:v0.3.0-develop-643e7315 \
 #   TSO_URL=https://tso.example.com \
 #   ./setup_dummy_signers.sh
 #

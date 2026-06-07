@@ -18,7 +18,7 @@ import { dogeConfigToToml, loadDogeConfigWithSelection } from '../../utils/doge-
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { resolveEnvValue } from '../../utils/non-interactive.js'
 const { Networks, PrivateKey } = bitcore
-const defaultTag = 'newda'
+const defaultTag = 'v0.3.0-develop-643e7315'
 const awsImageSources = ['dockerhub', 'ecr', 'ecr-sync'] as const
 const ATTESTATION_SIGNER_COUNT = 3
 const ATTESTATION_SIGNER_SUFFIXES = Array.from({ length: ATTESTATION_SIGNER_COUNT }, (_value, index) =>
@@ -1240,9 +1240,9 @@ export class DummySignersCommand extends Command {
     '$ scrollsdk setup dummy-signers --config .data/doge-config.toml',
     '$ scrollsdk setup dummy-signers --local-only',
     '$ scrollsdk setup dummy-signers --aws-only',
-    '$ scrollsdk setup dummy-signers --image-tag newda',
+    '$ scrollsdk setup dummy-signers --image-tag v0.3.0-develop-643e7315',
     '$ scrollsdk setup dummy-signers --aws-only --aws-image-source ecr-sync',
-    '$ scrollsdk setup dummy-signers --aws-only --aws-image-uri dogeos69/dummy-signer:newda',
+    '$ scrollsdk setup dummy-signers --aws-only --aws-image-uri dogeos69/dummy-signer:v0.3.0-develop-643e7315',
   ]
 
   static flags = {

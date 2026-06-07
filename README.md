@@ -963,7 +963,7 @@ FLAGS
       seed which will regenerate the sequencer and fee wallet
 
   --image-tag=<value>
-      Specify the Docker image tag to use (defaults to 0.2.0-rc.3)
+      Specify the Docker image tag to use (defaults to v0.3.0-develop-643e7315)
 
   --json
       Output in JSON format (stdout for data, stderr for logs)
@@ -999,7 +999,7 @@ EXAMPLES
 
   $ scrollsdk setup bridge-init --image-tag 0.2.0-debug
 
-  $ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag 0.2.0-rc.3
+  $ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag v0.3.0-develop-643e7315
 
   $ scrollsdk setup bridge-init --non-interactive --json --seed 123456
 ```
@@ -1279,11 +1279,11 @@ EXAMPLES
 
   $ scrollsdk setup dummy-signers --aws-only
 
-  $ scrollsdk setup dummy-signers --image-tag newda
+  $ scrollsdk setup dummy-signers --image-tag v0.3.0-develop-643e7315
 
   $ scrollsdk setup dummy-signers --aws-only --aws-image-source ecr-sync
 
-  $ scrollsdk setup dummy-signers --aws-only --aws-image-uri dogeos69/dummy-signer:newda
+  $ scrollsdk setup dummy-signers --aws-only --aws-image-uri dogeos69/dummy-signer:v0.3.0-develop-643e7315
 ```
 
 _See code: [src/commands/setup/dummy-signers.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/dummy-signers.ts)_

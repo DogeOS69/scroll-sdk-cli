@@ -191,19 +191,19 @@ export class BridgeInitCommand extends Command {
     '$ scrollsdk setup bridge-init --step 2',
     '$ scrollsdk setup bridge-init -s 123456',
     '$ scrollsdk setup bridge-init --seed 123456',
-    '$ scrollsdk setup bridge-init --image-tag newda',
-    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag newda',
-    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag newda --docker-platform linux/amd64',
+    '$ scrollsdk setup bridge-init --image-tag v0.3.0-develop-643e7315',
+    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag v0.3.0-develop-643e7315',
+    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag v0.3.0-develop-643e7315 --docker-platform linux/amd64',
     '$ scrollsdk setup bridge-init --non-interactive --json --seed 123456',
   ]
 
   static flags = {
     'docker-platform': Flags.string({
       default: 'linux/amd64',
-      description: 'Docker platform for bridge-genesis-tools image. The newda tag is amd64-only.',
+      description: 'Docker platform for bridge-genesis-tools image.',
     }),
     'image-tag': Flags.string({
-      description: 'Specify the Docker image tag to use (defaults to newda)',
+      description: 'Specify the Docker image tag to use (defaults to v0.3.0-develop-643e7315)',
       required: false,
     }),
     'json': Flags.boolean({
@@ -687,7 +687,7 @@ export class BridgeInitCommand extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'newda'
+    const defaultTag = 'v0.3.0-develop-643e7315'
 
     if (!providedTag) {
       return defaultTag
