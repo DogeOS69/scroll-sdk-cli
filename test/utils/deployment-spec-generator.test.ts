@@ -1206,7 +1206,7 @@ describe('deployment-spec-generator', () => {
       ];
 
       for (const output of l2Files) {
-        expect(output).to.include('ghcr.io/dogeos69/scroll-reth');
+        expect(output).to.include('vladogeos/scroll-reth');
         expect(output).to.include('dogeos-revm-c1cd6f4');
         expect(output).to.include('L2RETH_L1_ENDPOINT: http://l1-interface:8545');
         expect(output).to.include('exec dogeos-reth-entrypoint');

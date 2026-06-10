@@ -167,7 +167,7 @@ const DEFAULT_L2GETH_IMAGE = {
 }
 const DEFAULT_SCROLL_RETH_IMAGE = {
   pullPolicy: 'IfNotPresent' as const,
-  repository: 'ghcr.io/dogeos69/scroll-reth',
+  repository: 'vladogeos/scroll-reth',
   tag: 'dogeos-revm-c1cd6f4',
 }
 const SCROLL_RETH_DATADIR = '/l2reth/reth-data'
