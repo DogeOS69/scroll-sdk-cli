@@ -505,6 +505,9 @@ export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
       ...spec.contracts,
       ...(verification ? { verification } : {}),
     },
+    executionClient: {
+      backend: spec.executionClient?.backend || 'l2geth',
+    },
     frontend: {
       ...spec.frontend,
       baseDomain,
@@ -551,6 +554,14 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       code: 'E001_UNSUPPORTED_VERSION',
       message: `Unsupported version: ${spec.version}. Expected: 1.0`,
       path: 'version'
+    })
+  }
+
+  if (spec.executionClient?.backend && !['l2geth', 'scroll-reth'].includes(spec.executionClient.backend)) {
+    errors.push({
+      code: 'E013_INVALID_EXECUTION_CLIENT_BACKEND',
+      message: `Invalid execution client backend: ${String(spec.executionClient.backend)}. Must be one of: l2geth, scroll-reth`,
+      path: 'executionClient.backend',
     })
   }
 

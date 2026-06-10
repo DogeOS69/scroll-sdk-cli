@@ -32,6 +32,9 @@ export interface DeploymentSpec {
   /** Ethereum DA configuration */
   ethereumDa?: EthereumDaConfig
 
+  /** L2 execution client configuration */
+  executionClient?: ExecutionClientConfig
+
   /** Frontend and ingress configuration */
   frontend: FrontendConfig
 
@@ -422,6 +425,11 @@ export interface EthereumDaSignerConfig {
   namespace?: string
   serviceAccountName?: string
   serviceAccountRoleArn?: string
+}
+
+export interface ExecutionClientConfig {
+  /** L2 execution backend. Defaults to l2geth. */
+  backend?: 'l2geth' | 'scroll-reth'
 }
 
 export interface BridgeConfig {

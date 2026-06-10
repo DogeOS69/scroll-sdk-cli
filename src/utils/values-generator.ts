@@ -156,9 +156,54 @@ function buildPeerList(spec: DeploymentSpec): string[] {
  * Service name to DeploymentSpec image key mapping
  */
 type ServiceImageKey = keyof NonNullable<ImagesConfig['services']>
+type ExecutionClientBackend = NonNullable<NonNullable<DeploymentSpec['executionClient']>['backend']>
 
 const ZERO_HASH = '0x0000000000000000000000000000000000000000000000000000000000000000'
 const DEFAULT_L1_FEE_VAULT_ADDR = '0x1111111111111111111111111111111111111111'
+const DEFAULT_L2GETH_IMAGE = {
+  pullPolicy: 'IfNotPresent' as const,
+  repository: 'scrolltech/l2geth',
+  tag: 'scroll-v5.9.6',
+}
+const DEFAULT_SCROLL_RETH_IMAGE = {
+  pullPolicy: 'IfNotPresent' as const,
+  repository: 'ghcr.io/dogeos69/scroll-reth',
+  tag: 'dogeos-revm-c1cd6f4',
+}
+const SCROLL_RETH_DATADIR = '/l2reth/reth-data'
+const SCROLL_RETH_GENESIS_PATH = '/l2reth/genesis/genesis.json'
+const SCROLL_RETH_COMMAND = ['bash', '-c', 'exec dogeos-reth-entrypoint']
+
+function getExecutionClientBackend(spec: DeploymentSpec): ExecutionClientBackend {
+  return spec.executionClient?.backend ?? 'l2geth'
+}
+
+function isScrollRethBackend(spec: DeploymentSpec): boolean {
+  return getExecutionClientBackend(spec) === 'scroll-reth'
+}
+
+function buildScrollRethEnv(
+  spec: DeploymentSpec,
+  role: 'bootnode' | 'rpc' | 'sequencer',
+  peerList: string[],
+  signerAddress = '',
+): Record<string, string> {
+  return {
+    CHAIN_ID: String(spec.network.l2ChainId),
+    L2RETH_BEACON_ENDPOINT: L1_INTERFACE_BEACON_API_ENDPOINT,
+    L2RETH_DATADIR: SCROLL_RETH_DATADIR,
+    L2RETH_EXTRA_PARAMS: '',
+    L2RETH_GENESIS: SCROLL_RETH_GENESIS_PATH,
+    L2RETH_HTTP_PORT: '8545',
+    L2RETH_L1_CONTRACT_DEPLOYMENT_BLOCK: String(spec.contracts.l1DeploymentBlock || 0),
+    L2RETH_L1_ENDPOINT: L1_INTERFACE_RPC_ENDPOINT,
+    L2RETH_P2P_PORT: '30303',
+    L2RETH_PEER_LIST: JSON.stringify(peerList.length > 0 ? peerList : []),
+    L2RETH_ROLE: role,
+    L2RETH_VALID_SIGNER: signerAddress,
+    L2RETH_WS_PORT: '8546',
+  }
+}
 
 const ETHEREUM_DA_DEFAULTS = {
   devnet: {
@@ -373,11 +418,79 @@ function generateL2SequencerValues(spec: DeploymentSpec): string {
     return ''
   }
 
-  const image = resolveImage(spec, 'l2Sequencer', {
-    pullPolicy: 'IfNotPresent',
-    repository: 'scrolltech/l2geth',
-    tag: 'scroll-v5.9.6'
-  })
+  if (isScrollRethBackend(spec)) {
+    const image = resolveImage(spec, 'l2Sequencer', DEFAULT_SCROLL_RETH_IMAGE)
+    const values: Record<string, any> = {
+      command: SCROLL_RETH_COMMAND,
+      configMaps: {
+        env: {
+          data: buildScrollRethEnv(spec, 'sequencer', peerList, getSignerAddress()),
+          enabled: true
+        }
+      },
+      env: [
+        { name: 'RUST_LOG', value: 'sqlx=off,scroll=trace,reth=trace,rollup=trace,info' }
+      ],
+      envFrom: [
+        { configMapRef: { name: 'l2-sequencer-__INSTANCE_INDEX__-env' } }
+      ],
+      global: {
+        fullnameOverride: 'l2-sequencer-__INSTANCE_INDEX__'
+      },
+      image,
+      initContainers: {
+        'wait-for-l1': {
+          command: ['/bin/sh', '-c', '/wait-for-l1.sh $L2RETH_L1_ENDPOINT'],
+          envFrom: [{ configMapRef: { name: 'l2-sequencer-__INSTANCE_INDEX__-env' } }],
+          image: 'scrolltech/scroll-alpine:v0.0.1',
+          volumeMounts: [{
+            mountPath: '/wait-for-l1.sh',
+            name: 'wait-for-l1-script',
+            subPath: 'wait-for-l1.sh'
+          }]
+        }
+      },
+      persistence: {
+        data: {
+          accessMode: 'ReadWriteOnce',
+          enabled: true,
+          mountPath: SCROLL_RETH_DATADIR,
+          name: 'l2reth-data',
+          retain: true,
+          size: '1000Gi',
+          type: 'pvc'
+        },
+        env: {
+          enabled: true,
+          name: 'l2-sequencer-__INSTANCE_INDEX__-env',
+          type: 'configMap'
+        },
+        genesis: {
+          enabled: true,
+          mountPath: SCROLL_RETH_GENESIS_PATH,
+          name: 'genesis-config',
+          subPath: 'genesis.json',
+          type: 'configMap'
+        }
+      },
+      resources: {
+        limits: { cpu: '4', memory: '8Gi' },
+        requests: { cpu: '50m', memory: '150Mi' }
+      }
+    }
+
+    if (spec.infrastructure.sequencers && spec.infrastructure.sequencers.length > 0) {
+      values._sequencerInstances = spec.infrastructure.sequencers.map(s => ({
+        enodeUrl: s.enodeUrl || 'generated-during-deployment',
+        index: s.index,
+        signerAddress: s.signerAddress
+      }))
+    }
+
+    return yaml.dump(values)
+  }
+
+  const image = resolveImage(spec, 'l2Sequencer', DEFAULT_L2GETH_IMAGE)
 
   const values: Record<string, any> = {
     configMaps: {
@@ -463,11 +576,77 @@ function generateL2BootnodeValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
   const peerList = buildPeerList(spec)
 
-  const image = resolveImage(spec, 'l2Bootnode', {
-    pullPolicy: 'IfNotPresent',
-    repository: 'scrolltech/l2geth',
-    tag: 'scroll-v5.9.6'
-  })
+  if (isScrollRethBackend(spec)) {
+    const image = resolveImage(spec, 'l2Bootnode', DEFAULT_SCROLL_RETH_IMAGE)
+    const values: Record<string, any> = {
+      command: SCROLL_RETH_COMMAND,
+      configMaps: {
+        env: {
+          data: buildScrollRethEnv(spec, 'bootnode', peerList),
+          enabled: true
+        }
+      },
+      env: [
+        { name: 'RUST_LOG', value: 'sqlx=off,scroll=trace,reth=trace,rollup=trace,info' }
+      ],
+      envFrom: [
+        { configMapRef: { name: 'l2-bootnode-__INSTANCE_INDEX__-env' } }
+      ],
+      global: {
+        fullnameOverride: 'l2-bootnode-__INSTANCE_INDEX__'
+      },
+      image,
+      initContainers: {
+        'wait-for-l1': {
+          command: ['/bin/sh', '-c', '/wait-for-l1.sh $L2RETH_L1_ENDPOINT'],
+          envFrom: [{ configMapRef: { name: 'l2-bootnode-__INSTANCE_INDEX__-env' } }],
+          image: 'scrolltech/scroll-alpine:v0.0.1',
+          volumeMounts: [{
+            mountPath: '/wait-for-l1.sh',
+            name: 'wait-for-l1-script',
+            subPath: 'wait-for-l1.sh'
+          }]
+        }
+      },
+      persistence: {
+        data: {
+          accessMode: 'ReadWriteOnce',
+          enabled: true,
+          mountPath: SCROLL_RETH_DATADIR,
+          retain: true,
+          size: '1000Gi',
+          type: 'pvc'
+        },
+        env: {
+          enabled: true,
+          mountPath: '/config/',
+          name: 'l2-bootnode-__INSTANCE_INDEX__-env',
+          type: 'configMap'
+        },
+        genesis: {
+          enabled: true,
+          mountPath: '/l2reth/genesis/',
+          name: 'genesis-config',
+          type: 'configMap'
+        }
+      },
+      service: {
+        p2p: { enabled: true }
+      }
+    }
+
+    if (spec.infrastructure.bootnodes && spec.infrastructure.bootnodes.length > 0) {
+      values._bootnodeInstances = spec.infrastructure.bootnodes.map(b => ({
+        enodeUrl: b.enodeUrl || 'generated-during-deployment',
+        index: b.index,
+        publicEndpoint: b.publicEndpoint
+      }))
+    }
+
+    return yaml.dump(values)
+  }
+
+  const image = resolveImage(spec, 'l2Bootnode', DEFAULT_L2GETH_IMAGE)
 
   const values: Record<string, any> = {
     configMaps: {
@@ -550,11 +729,83 @@ function generateL2BootnodeValues(spec: DeploymentSpec): string {
 function generateL2RpcValues(spec: DeploymentSpec): string {
   const peerList = buildPeerList(spec)
 
-  const image = resolveImage(spec, 'l2Rpc', {
-    pullPolicy: 'IfNotPresent',
-    repository: 'scrolltech/l2geth',
-    tag: 'scroll-v5.9.6'
-  })
+  if (isScrollRethBackend(spec)) {
+    const image = resolveImage(spec, 'l2Rpc', DEFAULT_SCROLL_RETH_IMAGE)
+    const values: Record<string, any> = {
+      command: SCROLL_RETH_COMMAND,
+      configMaps: {
+        env: {
+          data: buildScrollRethEnv(spec, 'rpc', peerList),
+          enabled: true
+        }
+      },
+      env: [
+        { name: 'RUST_LOG', value: 'sqlx=off,scroll=trace,reth=trace,rollup=trace,info' }
+      ],
+      envFrom: [
+        { configMapRef: { name: 'l2-rpc-env' } }
+      ],
+      global: {
+        fullnameOverride: 'l2-rpc'
+      },
+      image,
+      ingress: {
+        main: {
+          hosts: [{
+            host: spec.frontend.hosts.rpcGateway,
+            paths: [{ path: '/', pathType: 'Prefix' }]
+          }],
+          ingressClassName: 'nginx',
+          tls: [{
+            hosts: [spec.frontend.hosts.rpcGateway],
+            secretName: 'l2-rpc-tls'
+          }]
+        }
+      },
+      initContainers: {
+        '1-wait-for-l1': {
+          command: ['/bin/sh', '-c', '/wait-for-l1.sh $L2RETH_L1_ENDPOINT'],
+          envFrom: [{ configMapRef: { name: 'l2-rpc-env' } }],
+          image: 'scrolltech/scroll-alpine:v0.0.1',
+          volumeMounts: [{
+            mountPath: '/wait-for-l1.sh',
+            name: 'wait-for-l1-script',
+            subPath: 'wait-for-l1.sh'
+          }]
+        }
+      },
+      persistence: {
+        data: {
+          retain: true,
+          size: '1000Gi'
+        },
+        env: {
+          enabled: true,
+          mountPath: '/config/',
+          name: 'l2-rpc-env',
+          type: 'configMap'
+        },
+        genesis: {
+          enabled: true,
+          mountPath: '/l2reth/genesis/',
+          name: 'genesis-config',
+          type: 'configMap'
+        }
+      },
+      volumeClaimTemplates: [
+        {
+          accessMode: 'ReadWriteOnce',
+          mountPath: SCROLL_RETH_DATADIR,
+          name: 'data',
+          size: '1000Gi'
+        }
+      ]
+    }
+
+    return yaml.dump(values)
+  }
+
+  const image = resolveImage(spec, 'l2Rpc', DEFAULT_L2GETH_IMAGE)
 
   const values = {
     configMaps: {

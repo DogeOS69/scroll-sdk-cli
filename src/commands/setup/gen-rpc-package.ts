@@ -11,6 +11,47 @@ import type { DogeConfig } from '../../types/doge-config.js'
 
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 
+export function buildL2RethEnvVars(
+  config: any,
+  dogeConfig: DogeConfig,
+  peerListValue: string | undefined,
+  validSigner: string,
+): Record<string, string> {
+  const rethVars: Record<string, string> = {
+    L2RETH_BEACON_ENDPOINT: 'http://l1-interface:5052',
+    L2RETH_L1_ENDPOINT: 'http://l1-interface:8545',
+    L2RETH_VALID_SIGNER: validSigner,
+  }
+
+  if (config?.general?.CHAIN_ID_L2 !== undefined) {
+    rethVars.CHAIN_ID = config.general.CHAIN_ID_L2.toString()
+  }
+
+  if (dogeConfig?.defaults?.dogecoinIndexerStartHeight !== undefined) {
+    rethVars.L2RETH_L1_CONTRACT_DEPLOYMENT_BLOCK = dogeConfig.defaults.dogecoinIndexerStartHeight
+  }
+
+  if (peerListValue) {
+    rethVars.L2RETH_PEER_LIST = peerListValue
+  }
+
+  return rethVars
+}
+
+export function buildL2RethEnvContent(networkTitleCase: string, rethVars: Record<string, string>): string {
+  const rethLines = [
+    `# L2Reth ${networkTitleCase} Configuration`,
+    '# Generated for external RPC package usage',
+    '',
+    '# Network specific settings',
+    ...Object.entries(rethVars)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => `${key}=${value}`),
+  ]
+
+  return rethLines.join('\n') + '\n'
+}
+
 export default class SetupGenRpcPackage extends Command {
   static override description = 'Generate configuration files for dogeos-rpc-package to enable external RPC nodes'
 
@@ -135,8 +176,8 @@ export default class SetupGenRpcPackage extends Command {
         this.log(chalk.red(`  Warning: No L1 RPC endpoint found in config`))
       }
 
-      const envFilePath = this.generateL2GethEnvFile(config, dogeConfig, rpcPackageDir, loadBalancerDomains, namespace)
-      this.log(chalk.green(`✓ Generated .env at: ${envFilePath}`))
+      const envFilePaths = this.generateL2GethEnvFile(config, dogeConfig, rpcPackageDir, loadBalancerDomains, namespace)
+      this.log(chalk.green(`✓ Generated .env files at: ${envFilePaths.join(', ')}`))
 
       // Step 7: Extract genesis.json from genesis.yaml
       this.log(chalk.blue('Step 3: Extracting genesis.json from genesis.yaml...'))
@@ -152,7 +193,9 @@ export default class SetupGenRpcPackage extends Command {
       this.log(chalk.green('🎉 RPC package generation completed successfully!'))
       this.log('')
       this.log(chalk.blue('Generated files:'))
-      this.log(chalk.cyan(`  - ${envFilePath}`))
+      for (const envFilePath of envFilePaths) {
+        this.log(chalk.cyan(`  - ${envFilePath}`))
+      }
       this.log(chalk.cyan(`  - ${genesisJsonPath}`))
       this.log(chalk.cyan(`  - ${l1InterfaceEnvPath}`))
       this.log('')
@@ -257,9 +300,24 @@ export default class SetupGenRpcPackage extends Command {
       fs.writeFileSync(genesisJsonPath, genesisJsonContent)
 
       // genesisJson for reth
-      const genesisJsonForReth = JSON.parse(JSON.stringify(genesisJson));
-      genesisJsonForReth.config.scroll.l1Config.startL1Block = dogeConfig.defaults?.dogecoinIndexerStartHeight;
-      genesisJsonForReth.config.scroll.l1Config.systemContractAddress = genesisJsonForReth.config.systemContract.system_contract_address;
+      const genesisJsonForReth = JSON.parse(JSON.stringify(genesisJson))
+      const rethL1Config = genesisJsonForReth.config?.scroll?.l1Config
+      if (!rethL1Config || typeof rethL1Config !== 'object') {
+        throw new Error('Missing required reth genesis field: config.scroll.l1Config')
+      }
+
+      const systemContractAddress = genesisJsonForReth.config?.systemContract?.system_contract_address
+      if (!systemContractAddress || typeof systemContractAddress !== 'string') {
+        throw new Error('Missing required reth genesis field: config.systemContract.system_contract_address')
+      }
+
+      const startL1Block = dogeConfig.defaults?.dogecoinIndexerStartHeight
+      if (startL1Block === undefined) {
+        throw new Error('Missing required DogeOS field: defaults.dogecoinIndexerStartHeight')
+      }
+
+      rethL1Config.startL1Block = startL1Block
+      rethL1Config.systemContractAddress = systemContractAddress
       fs.writeFileSync(path.join(targetDirectory, 'l2reth-genesis.json'), JSON.stringify(genesisJsonForReth, null, 2))
 
       return genesisJsonPath
@@ -481,14 +539,17 @@ export default class SetupGenRpcPackage extends Command {
       updatedVars.push('L2GETH_PEER_LIST')
     }
 
+    let validSigner = ''
     if (config?.sequencer?.L2GETH_SIGNER_ADDRESS) {
-      newVars.L2RETH_VALID_SIGNER = config.sequencer.L2GETH_SIGNER_ADDRESS;
-      updatedVars.push('L2RETH_VALID_SIGNER')
+      validSigner = config.sequencer.L2GETH_SIGNER_ADDRESS
     } else {
-      this.error('Missing required configuration: sequencer.L2GETH_SIGNER_ADDRESS in config.toml');
+      this.error('Missing required configuration: sequencer.L2GETH_SIGNER_ADDRESS in config.toml')
     }
 
-    // If no updates needed, return early
+    const rethVars = buildL2RethEnvVars(config, dogeConfig, peerListValue, validSigner)
+    fs.writeFileSync(envFilePathReth, buildL2RethEnvContent(networkTitleCase, rethVars))
+
+    // If no l2geth updates are needed, return after ensuring l2reth.env exists.
     if (Object.keys(newVars).length === 0) {
       this.log(chalk.green('✓ No changes detected in l2geth.env - file is up to date'))
       return [envFilePath, envFilePathReth]
@@ -562,7 +623,6 @@ export default class SetupGenRpcPackage extends Command {
 
     const envContent = newLines.join('\n') + '\n'
     fs.writeFileSync(envFilePath, envContent)
-    fs.writeFileSync(envFilePathReth, envContent)
 
     // Log what was updated
     if (updatedVars.length > 0) {

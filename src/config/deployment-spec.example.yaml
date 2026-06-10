@@ -197,6 +197,10 @@ test:
   mockFinalizeEnabled: false
   mockFinalizeTimeoutSec: 7200
 
+executionClient:
+  # Experimental opt-in backend. Use l2geth unless explicitly testing scroll-reth.
+  backend: l2geth # l2geth | scroll-reth
+
 # Container image overrides (optional)
 # Use this section to customize images for testing, development, or custom builds.
 # All fields are optional - omit a service to use Helm chart defaults.
@@ -205,7 +209,7 @@ images:
     pullPolicy: IfNotPresent    # Default pull policy for all services
 
   services:
-    # L2 Execution Layer (Geth-based)
+    # L2 Execution Layer
     l2Sequencer:
       repository: scrolltech/l2geth
       tag: scroll-v5.9.6

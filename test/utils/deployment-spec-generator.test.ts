@@ -262,6 +262,15 @@ describe('deployment-spec-generator', () => {
       }
     });
 
+    it('defaults the execution client backend to l2geth', () => {
+      const spec = createMinimalSpec();
+      delete spec.executionClient;
+
+      const normalized = normalizeDeploymentSpec(spec);
+
+      expect(normalized.executionClient?.backend).to.equal('l2geth');
+    });
+
     it('derives frontend hosts and external URLs from baseDomain', () => {
       const spec = createMinimalSpec();
       (spec.frontend as any) = {
@@ -320,6 +329,13 @@ describe('deployment-spec-generator', () => {
       const result = validateDeploymentSpec(spec);
       expect(result.valid).to.be.true;
       expect(result.errors).to.have.lengthOf(0);
+    });
+
+    it('fails on unsupported execution client backend', () => {
+      const spec = createMinimalSpec({ executionClient: { backend: 'nethermind' as any } });
+      const result = validateDeploymentSpec(spec);
+      expect(result.valid).to.be.false;
+      expect(result.errors.some(e => e.path === 'executionClient.backend')).to.be.true;
     });
 
     it('fails on unsupported version', () => {
@@ -1166,6 +1182,53 @@ describe('deployment-spec-generator', () => {
       expect(files['fee-oracle-production.yaml']).not.to.include('DOGEOS_FEE_ORACLE_CELESTIA__');
       expect(files['fee-oracle-production.yaml']).not.to.include('FEE_ORACLE_DOGE_RPC_URL');
       expect(feeOracleValues).not.to.have.property('externalSecrets');
+    });
+
+    it('generates scroll-reth L2 values when executionClient backend is scroll-reth', () => {
+      const spec = createMinimalSpec();
+      spec.executionClient = { backend: 'scroll-reth' };
+      spec.infrastructure.sequencers = [{
+        enodeUrl: 'enode://sequencer@example.com:30303',
+        index: 0,
+        signerAddress: '0x1234567890123456789012345678901234567890',
+      }];
+      spec.infrastructure.bootnodes = [{
+        enodeUrl: 'enode://bootnode@example.com:30303',
+        index: 0,
+        publicEndpoint: 'bootnode.example.com:30303',
+      }];
+
+      const files = generateValuesFiles(spec);
+      const l2Files = [
+        files['l2-sequencer-production.yaml'],
+        files['l2-bootnode-production.yaml'],
+        files['l2-rpc-production.yaml'],
+      ];
+
+      for (const output of l2Files) {
+        expect(output).to.include('ghcr.io/dogeos69/scroll-reth');
+        expect(output).to.include('dogeos-revm-c1cd6f4');
+        expect(output).to.include('L2RETH_L1_ENDPOINT: http://l1-interface:8545');
+        expect(output).to.include('exec dogeos-reth-entrypoint');
+        expect(output).not.to.include('L2GETH_');
+      }
+
+      const sequencerValues = yaml.load(files['l2-sequencer-production.yaml']) as any;
+      expect(sequencerValues.command).to.deep.equal(['bash', '-c', 'exec dogeos-reth-entrypoint']);
+      expect(sequencerValues.configMaps.env.data.L2RETH_ROLE).to.equal('sequencer');
+      expect(sequencerValues.configMaps.env.data.L2RETH_VALID_SIGNER).to.equal('__SEQUENCER_SIGNER_ADDRESS__');
+      expect(sequencerValues.envFrom).to.deep.equal([{ configMapRef: { name: 'l2-sequencer-__INSTANCE_INDEX__-env' } }]);
+      expect(sequencerValues.persistence.data.mountPath).to.equal('/l2reth/reth-data');
+      expect(sequencerValues.persistence.genesis.mountPath).to.equal('/l2reth/genesis/genesis.json');
+      expect(sequencerValues).not.to.have.property('externalSecrets');
+
+      const bootnodeValues = yaml.load(files['l2-bootnode-production.yaml']) as any;
+      expect(bootnodeValues.configMaps.env.data.L2RETH_ROLE).to.equal('bootnode');
+      expect(bootnodeValues.persistence.data.mountPath).to.equal('/l2reth/reth-data');
+
+      const rpcValues = yaml.load(files['l2-rpc-production.yaml']) as any;
+      expect(rpcValues.configMaps.env.data.L2RETH_ROLE).to.equal('rpc');
+      expect(rpcValues.volumeClaimTemplates[0].mountPath).to.equal('/l2reth/reth-data');
     });
 
     it('generates l1-interface genesis and indexer heights independently', () => {
