@@ -40,6 +40,7 @@ export interface DogeConfig {
     dogecoinIndexerStartHeight?: string
     ethereumDaEmbeddedIndexerStartBlock?: string
     l1GenesisBlock?: string
+    l2BootstrapNextStartingBlockHeight?: string
   }
   dogecoinClusterRpc?: {
     password?: string // for dogecoin that deploy on cluster
@@ -50,6 +51,30 @@ export interface DogeConfig {
     provider?: 'aws' | 'local'
   }
   ethereumDa?: {
+    batch?: {
+      compression?: 'auto' | 'none'
+      cutover?: {
+        lastBatchHash: string
+        lastBatchIndex: number | string
+        nextRelayedDepositIndex: number | string
+        nextWithdrawIndex: number | string
+        relayedDepositQueueHash: string
+        stateRoot: string
+        withdrawRoot: string
+      }
+      genesisBatchHash?: string
+      genesisNextRelayedDepositIndex?: number | string
+      genesisNextWithdrawIndex?: number | string
+      genesisRelayedDepositQueueHash?: string
+      genesisStateRoot?: string
+      genesisWithdrawRoot?: string
+      initialBatchSidecarJson?: string
+      maxBlocksPerChunk?: number | string
+      maxChunksPerBatch?: number | string
+      maxL2GasPerChunk?: number | string
+      maxUncompressedBatchBytesSize?: number | string
+      minCodecVersion?: number | string
+    }
     beaconRpcUrl?: string
     blobArchive?: {
       s3?: {
@@ -58,6 +83,7 @@ export interface DogeConfig {
         endpointUrl?: string
         forcePathStyle?: boolean | string
         initialBackoffMs?: number | string
+        keyPrefix?: string
         maxBackoffMs?: number | string
         maxRetries?: number | string
         pollIntervalMs?: number | string
@@ -70,7 +96,18 @@ export interface DogeConfig {
     }
     chain?: 'devnet' | 'mainnet' | 'sepolia'
     chainId?: string
+    l2StartBlockNumber?: number | string
     minFinality?: 'finalized' | 'safe'
+    publish?: {
+      allowLivenessBudgetOverride?: boolean | string
+      budgetWindow?: string
+      highBacklogThreshold?: number | string
+      maxBatchWait?: string
+      maxBlobsPerTx?: number | string
+      maxLivenessDelay?: string
+      maxPendingBlobTxs?: number | string
+      targetBlobsPerTx?: number | string
+    }
     signer?: {
       backend?: 'aws_kms' | 'local'
       expectedAddress?: string

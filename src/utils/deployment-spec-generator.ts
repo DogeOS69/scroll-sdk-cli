@@ -538,10 +538,58 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     }
   }
 
+  const validateOptionalBytes32Hex = (path: string, value: string | undefined): void => {
+    if (value === undefined) return
+    if (!/^0x[\dA-Fa-f]{64}$/.test(value)) {
+      pushInvalidEthereumDaConfigError(path, `${path} must be a 32-byte 0x-prefixed hex string`)
+    }
+  }
+
+  const validateRequiredBytes32Hex = (path: string, value: string | undefined): void => {
+    if (!value || !/^0x[\dA-Fa-f]{64}$/.test(value)) {
+      pushInvalidEthereumDaConfigError(path, `${path} must be a 32-byte 0x-prefixed hex string`)
+    }
+  }
+
+  const validateOptionalJsonString = (path: string, value: string | undefined): void => {
+    if (value === undefined) return
+    const trimmed = value.trim()
+    if (trimmed === '') {
+      pushInvalidEthereumDaConfigError(path, `${path} must be valid JSON when set`)
+      return
+    }
+
+    try {
+      JSON.parse(trimmed)
+    } catch {
+      pushInvalidEthereumDaConfigError(path, `${path} must be valid JSON`)
+    }
+  }
+
+  const validateOptionalNonEmptyString = (path: string, value: string | undefined): void => {
+    if (value === undefined) return
+    if (value.trim() === '') {
+      pushInvalidEthereumDaConfigError(path, `${path} must not be empty`)
+    }
+  }
+
   const validateOptionalNonNegativeSafeInteger = (path: string, value: number | undefined): void => {
     if (value === undefined) return
     if (!Number.isSafeInteger(value) || value < 0) {
       pushInvalidEthereumDaConfigError(path, `${path} must be a non-negative integer`)
+    }
+  }
+
+  const validateRequiredNonNegativeSafeInteger = (path: string, value: number | undefined): void => {
+    if (value === undefined || !Number.isSafeInteger(value) || value < 0) {
+      pushInvalidEthereumDaConfigError(path, `${path} must be a non-negative integer`)
+    }
+  }
+
+  const validateOptionalPositiveSafeInteger = (path: string, value: number | undefined): void => {
+    if (value === undefined) return
+    if (!Number.isSafeInteger(value) || value < 1) {
+      pushInvalidEthereumDaConfigError(path, `${path} must be a positive integer`)
     }
   }
 
@@ -766,6 +814,59 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   }
 
   validateOptionalNonNegativeSafeInteger('ethereumDa.inboxWorker.startBlock', spec.ethereumDa?.inboxWorker?.startBlock)
+  validateOptionalNonNegativeSafeInteger('ethereumDa.l2StartBlockNumber', spec.ethereumDa?.l2StartBlockNumber)
+
+  const ethereumDaBatch = spec.ethereumDa?.batch
+  const hasEthereumDaCutover = ethereumDaBatch?.cutover !== undefined
+  const hasEthereumDaL2StartBlockNumber = spec.ethereumDa?.l2StartBlockNumber !== undefined
+  if (hasEthereumDaCutover && !hasEthereumDaL2StartBlockNumber) {
+    pushInvalidEthereumDaConfigError('ethereumDa.l2StartBlockNumber', 'ethereumDa.l2StartBlockNumber must be set when ethereumDa.batch.cutover is set')
+  }
+
+  if (!hasEthereumDaCutover && hasEthereumDaL2StartBlockNumber) {
+    pushInvalidEthereumDaConfigError('ethereumDa.batch.cutover', 'ethereumDa.batch.cutover must be set when ethereumDa.l2StartBlockNumber is set')
+  }
+
+  if (ethereumDaBatch) {
+    if (ethereumDaBatch.compression !== undefined && !['auto', 'none'].includes(ethereumDaBatch.compression)) {
+      pushInvalidEthereumDaConfigError('ethereumDa.batch.compression', 'ethereumDa.batch.compression must be auto or none')
+    }
+
+    validateOptionalBytes32Hex('ethereumDa.batch.genesisBatchHash', ethereumDaBatch.genesisBatchHash)
+    validateOptionalBytes32Hex('ethereumDa.batch.genesisRelayedDepositQueueHash', ethereumDaBatch.genesisRelayedDepositQueueHash)
+    validateOptionalBytes32Hex('ethereumDa.batch.genesisStateRoot', ethereumDaBatch.genesisStateRoot)
+    validateOptionalBytes32Hex('ethereumDa.batch.genesisWithdrawRoot', ethereumDaBatch.genesisWithdrawRoot)
+    validateOptionalJsonString('ethereumDa.batch.initialBatchSidecarJson', ethereumDaBatch.initialBatchSidecarJson)
+    validateOptionalNonNegativeSafeInteger('ethereumDa.batch.genesisNextRelayedDepositIndex', ethereumDaBatch.genesisNextRelayedDepositIndex)
+    validateOptionalNonNegativeSafeInteger('ethereumDa.batch.genesisNextWithdrawIndex', ethereumDaBatch.genesisNextWithdrawIndex)
+    validateOptionalPositiveSafeInteger('ethereumDa.batch.maxBlocksPerChunk', ethereumDaBatch.maxBlocksPerChunk)
+    validateOptionalPositiveSafeInteger('ethereumDa.batch.maxChunksPerBatch', ethereumDaBatch.maxChunksPerBatch)
+    validateOptionalPositiveSafeInteger('ethereumDa.batch.maxL2GasPerChunk', ethereumDaBatch.maxL2GasPerChunk)
+    validateOptionalPositiveSafeInteger('ethereumDa.batch.maxUncompressedBatchBytesSize', ethereumDaBatch.maxUncompressedBatchBytesSize)
+    validateOptionalNonNegativeSafeInteger('ethereumDa.batch.minCodecVersion', ethereumDaBatch.minCodecVersion)
+
+    const { cutover } = ethereumDaBatch
+    if (cutover) {
+      validateRequiredNonNegativeSafeInteger('ethereumDa.batch.cutover.lastBatchIndex', cutover.lastBatchIndex)
+      validateRequiredNonNegativeSafeInteger('ethereumDa.batch.cutover.nextRelayedDepositIndex', cutover.nextRelayedDepositIndex)
+      validateRequiredNonNegativeSafeInteger('ethereumDa.batch.cutover.nextWithdrawIndex', cutover.nextWithdrawIndex)
+      validateRequiredBytes32Hex('ethereumDa.batch.cutover.lastBatchHash', cutover.lastBatchHash)
+      validateRequiredBytes32Hex('ethereumDa.batch.cutover.relayedDepositQueueHash', cutover.relayedDepositQueueHash)
+      validateRequiredBytes32Hex('ethereumDa.batch.cutover.stateRoot', cutover.stateRoot)
+      validateRequiredBytes32Hex('ethereumDa.batch.cutover.withdrawRoot', cutover.withdrawRoot)
+    }
+  }
+
+  const ethereumDaPublish = spec.ethereumDa?.publish
+  if (ethereumDaPublish) {
+    validateOptionalNonEmptyString('ethereumDa.publish.budgetWindow', ethereumDaPublish.budgetWindow)
+    validateOptionalPositiveSafeInteger('ethereumDa.publish.highBacklogThreshold', ethereumDaPublish.highBacklogThreshold)
+    validateOptionalNonEmptyString('ethereumDa.publish.maxBatchWait', ethereumDaPublish.maxBatchWait)
+    validateOptionalPositiveSafeInteger('ethereumDa.publish.maxBlobsPerTx', ethereumDaPublish.maxBlobsPerTx)
+    validateOptionalNonEmptyString('ethereumDa.publish.maxLivenessDelay', ethereumDaPublish.maxLivenessDelay)
+    validateOptionalPositiveSafeInteger('ethereumDa.publish.maxPendingBlobTxs', ethereumDaPublish.maxPendingBlobTxs)
+    validateOptionalPositiveSafeInteger('ethereumDa.publish.targetBlobsPerTx', ethereumDaPublish.targetBlobsPerTx)
+  }
 
   if (spec.dogecoin?.indexerStartHeight !== undefined) {
     if (!Number.isSafeInteger(spec.dogecoin.indexerStartHeight) || spec.dogecoin.indexerStartHeight < 0) {
@@ -1228,6 +1329,22 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
     submitterRpcUrl: spec.ethereumDa?.l1RpcUrl || ethereumDaDefaults.submitterRpcUrl,
   }
 
+  if (spec.ethereumDa?.l2StartBlockNumber !== undefined) {
+    config.ethereumDa.l2StartBlockNumber = spec.ethereumDa.l2StartBlockNumber
+  }
+
+  if (spec.ethereumDa?.batch) {
+    config.ethereumDa.batch = Object.fromEntries(
+      Object.entries(spec.ethereumDa.batch).filter(([, value]) => value !== undefined)
+    )
+  }
+
+  if (spec.ethereumDa?.publish) {
+    config.ethereumDa.publish = Object.fromEntries(
+      Object.entries(spec.ethereumDa.publish).filter(([, value]) => value !== undefined)
+    )
+  }
+
   const ethereumDaS3Archive = spec.ethereumDa?.blobArchive?.s3
   if (ethereumDaS3Archive) {
     config.ethereumDa.blobArchive = {
@@ -1251,6 +1368,14 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   config.defaults = {
     dogecoinIndexerStartHeight: String(getDogecoinIndexerStartHeight(spec)),
     l1GenesisBlock: String(getL1GenesisBlock(spec)),
+  }
+
+  if (spec.ethereumDa?.inboxWorker?.startBlock !== undefined) {
+    config.defaults.ethereumDaEmbeddedIndexerStartBlock = String(spec.ethereumDa.inboxWorker.startBlock)
+  }
+
+  if (spec.ethereumDa?.l2StartBlockNumber !== undefined) {
+    config.defaults.l2BootstrapNextStartingBlockHeight = String(spec.ethereumDa.l2StartBlockNumber)
   }
 
   config.frontend = {

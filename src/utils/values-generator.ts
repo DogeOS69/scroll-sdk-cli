@@ -229,9 +229,112 @@ function getEthereumDaInboxWorkerStartBlock(spec: DeploymentSpec): number {
   return getEthereumDaConfig(spec).inboxWorker?.startBlock ?? 0
 }
 
+function getEthereumDaL2StartBlockNumber(spec: DeploymentSpec): number | undefined {
+  return getEthereumDaConfig(spec).l2StartBlockNumber
+}
+
 function addStringEnvIfDefined(target: Record<string, string>, key: string, value: unknown): void {
   if (value === undefined || value === null) return
   target[key] = String(value)
+}
+
+function normalizeInitialBatchSidecarJson(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  const trimmed = value.trim()
+  if (trimmed === '') return undefined
+  try {
+    JSON.parse(trimmed)
+  } catch {
+    throw new Error('ethereumDa.batch.initialBatchSidecarJson must be valid JSON')
+  }
+
+  return trimmed
+}
+
+function buildEthDaSubmitterBatchEnv(spec: DeploymentSpec): Record<string, string> {
+  const batch = getEthereumDaBatchConfig(spec)
+  const {cutover} = batch
+  const env: Record<string, string> = {
+    DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION: batch.compression ?? 'auto',
+    DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_BATCH_HASH: batch.genesisBatchHash ?? cutover?.lastBatchHash ?? ZERO_HASH,
+    DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_RELAYED_DEPOSIT_INDEX: String(batch.genesisNextRelayedDepositIndex ?? cutover?.nextRelayedDepositIndex ?? 0),
+    DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_WITHDRAW_INDEX: String(batch.genesisNextWithdrawIndex ?? cutover?.nextWithdrawIndex ?? 0),
+    DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_RELAYED_DEPOSIT_QUEUE_HASH: batch.genesisRelayedDepositQueueHash ?? cutover?.relayedDepositQueueHash ?? ZERO_HASH,
+    DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_STATE_ROOT: batch.genesisStateRoot ?? cutover?.stateRoot ?? ZERO_HASH,
+    DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT: batch.genesisWithdrawRoot ?? cutover?.withdrawRoot ?? ZERO_HASH,
+    DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_BLOCKS_PER_CHUNK: String(batch.maxBlocksPerChunk ?? 128),
+    DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_CHUNKS_PER_BATCH: String(batch.maxChunksPerBatch ?? 1),
+    DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: String(batch.maxL2GasPerChunk ?? 6_000_000),
+    DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_BATCH_BYTES_SIZE: String(batch.maxUncompressedBatchBytesSize ?? 131_072),
+    DOGEOS_ETH_DA_SUBMITTER_BATCH__MIN_CODEC_VERSION: String(batch.minCodecVersion ?? 10),
+  }
+
+  if (cutover) {
+    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__LAST_BATCH_HASH = cutover.lastBatchHash
+    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__LAST_BATCH_INDEX = String(cutover.lastBatchIndex)
+    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__NEXT_RELAYED_DEPOSIT_INDEX = String(cutover.nextRelayedDepositIndex)
+    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__NEXT_WITHDRAW_INDEX = String(cutover.nextWithdrawIndex)
+    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__RELAYED_DEPOSIT_QUEUE_HASH = cutover.relayedDepositQueueHash
+    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__STATE_ROOT = cutover.stateRoot
+    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__WITHDRAW_ROOT = cutover.withdrawRoot
+  }
+
+  const initialBatchSidecarJson = normalizeInitialBatchSidecarJson(batch.initialBatchSidecarJson)
+  if (initialBatchSidecarJson) {
+    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON = '/app/config/initial_batch.json'
+  }
+
+  return env
+}
+
+function buildEthDaSubmitterPublishEnv(spec: DeploymentSpec): Record<string, string> {
+  const {publish} = getEthereumDaConfig(spec)
+  if (!publish) return {}
+
+  const env: Record<string, string> = {}
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__ALLOW_LIVENESS_BUDGET_OVERRIDE', publish.allowLivenessBudgetOverride)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__BUDGET_WINDOW', publish.budgetWindow)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__HIGH_BACKLOG_THRESHOLD', publish.highBacklogThreshold)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_BATCH_WAIT', publish.maxBatchWait)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_BLOBS_PER_TX', publish.maxBlobsPerTx)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_LIVENESS_DELAY', publish.maxLivenessDelay)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS', publish.maxPendingBlobTxs)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__TARGET_BLOBS_PER_TX', publish.targetBlobsPerTx)
+
+  return env
+}
+
+function buildFeeOracleEthereumDaEnv(spec: DeploymentSpec): Record<string, string> {
+  return {
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__ADVANCE_L2__MAX_L2_PAYLOAD_BYTES_PER_ADVANCE_L2: '90000',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__ADVANCE_L2__MAX_SOURCE_AGE_SECONDS: '300',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE: 'dry_run',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__EXECUTION_GAS_FLOOR: '21000',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__EXECUTION_GAS_SOURCE: 'conceptual_floor',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_LIMIT_SAFETY_MARGIN: '0',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__FORMULA: 'galileo',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__PRECISION_DEC: '1000000000',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__SCALAR_POLICY: 'static_verified',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__MAX_BLOBS_PER_TX: '6',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__MIN_PRIORITY_FEE_PER_GAS_WEI: '0',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__PRICES__MAX_QUOTE_AGE_SECONDS: '60',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__PRICES__MIN_SOURCE_QUORUM: '2',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__PRIORITY_FEE_SOURCE: 'configured_min',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__SAMPLE_INTERVAL_SECONDS: '30',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__SAMPLE_STALE_AFTER_SECONDS: '90',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__TARGET_BLOBS_PER_TX: '2',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__ADVANCE_L2_STALE_FALLBACK: 'not_ready',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__FIRST_VALID_ORACLE_VALUES: 'update',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__FORCE_UPDATE_AFTER_SECONDS: '3600',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__MAX_ORACLE_VALUE_AGE_SECONDS: '1800',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__ORACLE_VALUE_STAT: 'median',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__ORACLE_VALUE_WINDOW_SECONDS: '300',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__PRICE_UNAVAILABLE_FALLBACK: 'hold_last',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__RELATIVE_DELTA_THRESHOLD_PPM__BASE_FEE_PER_GAS: '0',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__RELATIVE_DELTA_THRESHOLD_PPM__BLOB_BASE_FEE_PER_BLOB_GAS: '0',
+    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__SUBMITTER_DEFERRED_FALLBACK: 'hold_last',
+  }
 }
 
 function buildEthDaSubmitterS3Env(spec: DeploymentSpec): Record<string, string> {
@@ -244,6 +347,7 @@ function buildEthDaSubmitterS3Env(spec: DeploymentSpec): Record<string, string> 
 
   addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_S3__BUCKET', s3.bucket)
   addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_S3__REGION', s3.region)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_S3__KEY_PREFIX', s3.keyPrefix)
   addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_S3__ENDPOINT_URL', s3.endpointUrl)
   addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_S3__FORCE_PATH_STYLE', s3.forcePathStyle)
   addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_S3__POLL_INTERVAL_MS', s3.pollIntervalMs)
@@ -606,6 +710,7 @@ function generateL2RpcValues(spec: DeploymentSpec): string {
 function generateL1InterfaceValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
   const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
+  const l2StartBlockNumber = getEthereumDaL2StartBlockNumber(spec)
 
   const image = resolveImage(spec, 'l1Interface', {
     pullPolicy: 'Always',
@@ -637,11 +742,17 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
           DOGEOS_L1_INTERFACE_GENESIS_JSON_PATH: '/app/genesis/genesis.json',
           DOGEOS_L1_INTERFACE_HEALTH_LISTEN_ADDRESS: '0.0.0.0:9090',
           DOGEOS_L1_INTERFACE_L1_CHAIN_ID: String(spec.network.l1ChainId),
+          DOGEOS_L1_INTERFACE_L1_GAS_LIMIT: '30000000',
           DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK: String(getL1GenesisBlock(spec)),
           DOGEOS_L1_INTERFACE_NETWORK_STR: spec.dogecoin.network,
           DOGEOS_L1_INTERFACE_REPLAY_READ__ENABLED: 'true',
+          DOGEOS_L1_INTERFACE_REPLAY_READ__MAINTAINER_ENABLED: 'true',
           DOGEOS_L1_INTERFACE_REPLAY_READ__PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
-          DOGEOS_L1_INTERFACE_REPLAY_READ__SQLITE_PATH: '/data/replay.sqlite'
+          DOGEOS_L1_INTERFACE_REPLAY_READ__REQUIRE_FULL_VALIDATION: 'false',
+          DOGEOS_L1_INTERFACE_REPLAY_READ__SQLITE_PATH: '/data/replay.sqlite',
+          ...(l2StartBlockNumber === undefined ? {} : {
+            DOGEOS_L1_INTERFACE_REPLAY_READ__L2_BOOTSTRAP_NEXT_STARTING_BLOCK_HEIGHT: String(l2StartBlockNumber),
+          })
         },
         enabled: true
       }
@@ -654,6 +765,30 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
       { configMapRef: { name: 'l1-interface-env' } }
     ],
     image,
+    persistence: {
+      data: {
+        enabled: true,
+        mountPath: '/data',
+        name: 'l1-interface-data-pvc',
+        retain: true,
+        size: '100Gi',
+        type: 'pvc',
+      },
+      genesis: {
+        enabled: true,
+        mountPath: '/app/genesis/genesis.json',
+        name: 'genesis-config',
+        readOnly: true,
+        type: 'configMap',
+      },
+      'protocol-context': {
+        enabled: true,
+        mountPath: '/app/protocol_context.json',
+        name: 'protocol-context-config',
+        readOnly: true,
+        type: 'configMap',
+      },
+    },
     resources: {
       limits: { cpu: '1000m', memory: '1Gi' },
       requests: { cpu: '100m', memory: '256Mi' }
@@ -742,6 +877,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
   const batch = getEthereumDaBatchConfig(spec)
   const { signer } = ethereumDa
   const isAwsKmsSigner = signer?.backend === 'aws_kms'
+  const l2StartBlockNumber = getEthereumDaL2StartBlockNumber(spec)
 
   const image = resolveImage(spec, 'ethDaSubmitter', {
     pullPolicy: 'IfNotPresent',
@@ -753,22 +889,16 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
     configMaps: {
       env: {
         data: {
-          DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION: batch.compression || 'auto',
-          DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_BATCH_HASH: batch.genesisBatchHash || ZERO_HASH,
-          DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_RELAYED_DEPOSIT_INDEX: String(batch.genesisNextRelayedDepositIndex ?? 0),
-          DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_WITHDRAW_INDEX: String(batch.genesisNextWithdrawIndex ?? 0),
-          DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_STATE_ROOT: batch.genesisStateRoot || ZERO_HASH,
-          DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_BLOCKS_PER_CHUNK: String(batch.maxBlocksPerChunk ?? 128),
-          DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_CHUNKS_PER_BATCH: String(batch.maxChunksPerBatch ?? 1),
-          DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_BATCH_BYTES_SIZE: String(batch.maxUncompressedBatchBytesSize ?? 131_072),
-          DOGEOS_ETH_DA_SUBMITTER_BATCH__MIN_CODEC_VERSION: String(batch.minCodecVersion ?? 10),
+          ...buildEthDaSubmitterBatchEnv(spec),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMATION_DEPTH: String(ethereumDa.confirmationDepth ?? 1),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMER_POLL_INTERVAL_MS: String(ethereumDa.confirmerPollIntervalMs ?? 12_000),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__ETH_CHAIN_ID: String(getEthereumDaChainId(spec)),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__FINALIZATION_DEPTH: String(ethereumDa.finalizationDepth ?? 64),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__L2_CHAIN_ID: String(spec.network.l2ChainId),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_BLOB_BASE_FEE_WEI: ethereumDa.maxBlobBaseFeeWei || '50000000000',
-          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_FEE_PER_GAS_WEI: ethereumDa.maxFeePerGasWei || '',
+          ...(ethereumDa.maxFeePerGasWei ? {
+            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_FEE_PER_GAS_WEI: ethereumDa.maxFeePerGasWei,
+          } : {}),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MIN_PRIORITY_FEE_WEI: ethereumDa.minPriorityFeeWei || '2000000000',
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
           ...(isAwsKmsSigner ? {
@@ -782,6 +912,10 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
           DOGEOS_ETH_DA_SUBMITTER_L2__CONFIRMATIONS: String(ethereumDa.l2Confirmations ?? 0),
           DOGEOS_ETH_DA_SUBMITTER_L2__FETCH_LIMIT: String(ethereumDa.fetchLimit ?? 128),
           DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: ethereumDa.l2RpcUrl || L2_RPC_ENDPOINT,
+          ...(l2StartBlockNumber === undefined ? {} : {
+            DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER: String(l2StartBlockNumber),
+          }),
+          ...buildEthDaSubmitterPublishEnv(spec),
           ...buildEthDaSubmitterS3Env(spec),
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__CYCLE_INTERVAL_MS: '1000',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__LISTEN_ADDRESS: '0.0.0.0',
@@ -821,6 +955,24 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
       } : {},
       create: true,
       name: signer?.serviceAccountName || 'eth-da-submitter',
+    }
+  }
+
+  const initialBatchSidecarJson = normalizeInitialBatchSidecarJson(batch.initialBatchSidecarJson)
+  if (initialBatchSidecarJson) {
+    values.configMaps['initial-batch'] = {
+      data: {
+        'initial_batch.json': initialBatchSidecarJson,
+      },
+      enabled: true,
+    }
+    values.persistence['initial-batch'] = {
+      enabled: true,
+      items: [{ key: 'initial_batch.json', path: 'initial_batch.json' }],
+      mountPath: '/app/config',
+      name: '{{ include "scroll.common.lib.chart.names.fullname" . }}-initial-batch',
+      readOnly: true,
+      type: 'configMap',
     }
   }
 
@@ -927,6 +1079,9 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
       { name: 'PORT', value: '3000' },
       { name: 'DOGE_NETWORK', value: spec.dogecoin.network },
       { name: 'WITHDRAWAL_PROCESSOR_URL', value: 'http://withdrawal-processor:3000' },
+      { name: 'TIMEOUT_CHECK_INTERVAL_SECONDS', value: '60' },
+      { name: 'TSO_CORRECTNESS_MAX_PSBT_BASE64_LEN', value: '130048' },
+      { name: 'TSO_CUBESIGNER_MAX_PSBT_BASE64_LEN', value: '130048' },
       { name: 'RUST_LOG', value: 'debug' }
     ],
     image,
@@ -962,6 +1117,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
   const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
   const ethereumDaSigner = getEthereumDaConfig(spec).signer
+  const l2StartBlockNumber = getEthereumDaL2StartBlockNumber(spec)
 
   const image = resolveImage(spec, 'withdrawalProcessor', {
     pullPolicy: 'Always',
@@ -972,31 +1128,68 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   const values: Record<string, any> = {
     env: [
       { name: 'DOGEOS_WITHDRAWAL_NETWORK_STR', value: spec.dogecoin.network },
-      { name: 'DOGEOS_WITHDRAWAL_DATABASE_URL', valueFrom: { secretKeyRef: { key: 'DOGEOS_WITHDRAWAL_DATABASE_URL', name: 'withdrawal-processor-secret-env' } } },
+      { name: 'DOGEOS_WITHDRAWAL_DATABASE_URL', value: 'sqlite:///app/data/withdrawal_processor.sqlite' },
       { name: 'DOGEOS_WITHDRAWAL_API_PORT', value: '3000' },
       { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL', value: dogecoinEndpoints.rpcUrl },
       { name: 'DOGEOS_WITHDRAWAL_TSO_URL', value: 'http://tso-service:3000' },
       { name: 'DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS', value: '' },
-      { name: 'DOGEOS_WITHDRAWAL_BRIDGE_SCRIPT_HEX', value: '' },
-      { name: 'DOGEOS_WITHDRAWAL_MAX_WITHDRAWAL_OUTPUTS_PER_TX', value: '1024' },
+      { name: 'DOGEOS_WITHDRAWAL_INITIAL_BRIDGE_REDEEM_SCRIPT_HEX', value: '' },
+      { name: 'DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_TXID', value: '' },
+      { name: 'DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_VOUT', value: '0' },
+      { name: 'DOGEOS_WITHDRAWAL_MAX_WITHDRAWAL_OUTPUTS_PER_TX', value: '256' },
       { name: 'DOGEOS_WITHDRAWAL_FEE_RATE_SAT_PER_KVB', value: String(getBridgeFeeRateSatsPerKvb(spec)) },
       { name: 'DOGEOS_WITHDRAWAL_COORDINATOR_POLL_INTERVAL_SECS', value: '10' },
       { name: 'DOGEOS_WITHDRAWAL_DEBUG_SKIP_BROADCAST', value: 'false' },
+      { name: 'DOGEOS_WITHDRAWAL_DEBUG_SKIP_TSO_POLLING', value: 'false' },
+      { name: 'DOGEOS_WITHDRAWAL_TSO_TIMEOUT_MINUTES', value: '30' },
+      { name: 'DOGEOS_WITHDRAWAL_CLEANUP_TIMEOUT_SECS', value: '3600' },
       { name: 'DOGEOS_WITHDRAWAL_ROTATE_KEY_V2', value: 'true' },
       { name: 'DOGEOS_WITHDRAWAL_ADVANCE_L1_BUILDER_V2', value: 'true' },
       { name: 'DOGEOS_WITHDRAWAL_ADVANCE_L2_BUILDER_V2', value: 'true' },
+      { name: 'DOGEOS_WITHDRAWAL_WF_WITHDRAWAL_PARITY_V1', value: 'true' },
+      { name: 'DOGEOS_WITHDRAWAL_REQUIRE_CHANGE_TRACKING', value: 'false' },
+      { name: 'DOGEOS_WITHDRAWAL_STRICT_L2_VALIDATION', value: 'false' },
+      { name: 'DOGEOS_WITHDRAWAL_STRICT_L1_VALIDATION', value: 'false' },
+      { name: 'DOGEOS_WITHDRAWAL_LEAF_VERIFICATION_REQUIRED', value: 'false' },
+      { name: 'DOGEOS_WITHDRAWAL_MAX_DEPOSITS_PER_ADVANCE_L1', value: '32' },
       { name: 'DOGEOS_WITHDRAWAL_REPLAY_SQLITE_PATH', value: '/app/data/replay.sqlite' },
       { name: 'DOGEOS_WITHDRAWAL_PROTOCOL_CONTEXT_JSON', value: '/app/protocol_context.json' },
+      ...(l2StartBlockNumber === undefined ? [] : [{
+        name: 'DOGEOS_WITHDRAWAL_L2_BOOTSTRAP_NEXT_STARTING_BLOCK_HEIGHT',
+        value: String(l2StartBlockNumber),
+      }]),
       // Dogecoin Indexer
       { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT', value: String(getDogecoinIndexerStartHeight(spec)) },
       { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__CONFIRMATIONS', value: String(spec.bridge.confirmationsRequired) },
-      { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__POLL_INTERVAL_MS', value: '60000' },
+      { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__POLL_INTERVAL_MS', value: '1000' },
       // DogeOS Indexer
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL', value: L2_RPC_ENDPOINT },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__START_BLOCK', value: '0' },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__CONFIRMATIONS', value: '12' },
-      { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__POLL_INTERVAL_MS', value: '60000' },
+      { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__POLL_INTERVAL_MS', value: '1000' },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__LOG_QUERY_BATCH_SIZE', value: '10000' },
+      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__HIGH_THRESH_SATS', value: '10000000000' },
+      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_MIN_CONFIRMATIONS', value: '10' },
+      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__ALLOW_INFLIGHT_BRIDGE_OUTPUTS', value: 'true' },
+      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__PREFER_INFLIGHT_BRIDGE_OUTPUTS', value: 'false' },
+      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__STRATEGY', value: 'band' },
+      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__MAX_INPUTS', value: '60' },
+      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__DUST_FLOOR_SATS', value: '1000000' },
+      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__TARGET_ACTIVE_UTXOS', value: '100' },
+      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__TARGET_SIZE_RATIO', value: '1.0' },
+      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__SWEEP_FLOOR_RATIO', value: '0.5' },
+      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__BALANCE_BAND_RATIO', value: '0.10' },
+      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__MAX_BALANCE_ADDITIONS', value: '3' },
+      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__FLOOR_ABSOLUTE_SATS', value: '1000000' },
+      { name: 'DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__SKIP_SCROLL_EXECUTION_PROOFS', value: 'true' },
+      { name: 'DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__SKIP_BRIDGE_STATE_PROOFS', value: 'true' },
+      { name: 'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__ENABLED', value: 'false' },
+      { name: 'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__LEASE_OWNER', value: 'wp-local' },
+      { name: 'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__LEASE_TTL_MS', value: '30000' },
+      { name: 'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__MAX_ITEMS_PER_TICK', value: '1' },
+      { name: 'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__POLL_INTERVAL_MS', value: '1000' },
+      { name: 'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__RETRY_BASE_MS', value: '5000' },
+      { name: 'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__RETRY_CAP_MS', value: '300000' },
       // Ethereum DA resolver/indexer inputs for AdvanceL2 builder v2.
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL', value: getEthereumDaSubmitterRpcUrl(spec) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID', value: String(getEthereumDaChainId(spec)) },
@@ -1029,6 +1222,23 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { secretRef: { name: 'withdrawal-processor-secret-env' } }
     ],
     image,
+    persistence: {
+      data: {
+        enabled: true,
+        mountPath: '/app/data',
+        name: 'withdrawal-processor-data-pvc',
+        retain: true,
+        size: '100Gi',
+        type: 'pvc',
+      },
+      'protocol-context': {
+        enabled: true,
+        mountPath: '/app/protocol_context.json',
+        name: 'protocol-context-config',
+        readOnly: true,
+        type: 'configMap',
+      },
+    },
     resources: {
       limits: { cpu: '1000m', memory: '2Gi' },
       requests: { cpu: '200m', memory: '512Mi' }
@@ -1039,9 +1249,10 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
     'withdrawal-processor-secret-env',
     secretConfig,
     [
-      { property: 'DOGEOS_WITHDRAWAL_DATABASE_URL', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_DATABASE_URL' },
       { property: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER' },
-      { property: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS' }
+      { property: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS' },
+      { property: 'DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY' },
+      { property: 'DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY' },
     ]
   )
 
@@ -1066,14 +1277,19 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
 
   const values: Record<string, any> = {
     env: [
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_LOG_LEVEL', value: 'info' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PORT', value: '3000' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_NETWORK', value: spec.dogecoin.network },
+      { name: 'NETWORK', value: spec.dogecoin.network },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_TSO_URL', value: 'http://tso-service:3000' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_SIGNATURE_DELAY', value: '0' },
-      { name: 'DOGEOS_CUBESIGNER_SIGNER_POLL_INTERVAL', value: '5000' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_POLL_INTERVAL', value: '500' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_SESSION_KEEP_ALIVE_INTERVAL', value: '3600000' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', valueFrom: { secretKeyRef: { key: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', name: 'cubesigner-signer-__INSTANCE_INDEX__-env' } } },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_CS_SESSION_PATH', value: '/etc/cubesigner/session.json' },
-      { name: 'DOGEOS_CUBESIGNER_SIGNER_BODY_LIMIT', value: '5mb' }
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_BODY_LIMIT', value: '5mb' },
+      { name: 'CUBESIGNER_MAX_PSBT_BASE64_LEN', value: '130048' },
+      { name: 'CS_SESSIONS_DIR', value: '/app/.sessions' }
     ],
     global: {
       fullnameOverride: 'cubesigner-signer-__INSTANCE_INDEX__'
@@ -1282,9 +1498,7 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
         data: {
           DOGEOS_FEE_ORACLE_DATABASE__CONNECTION_POOL_SIZE: '10',
           DOGEOS_FEE_ORACLE_DATABASE__SQLITE_PATH: '/data/fee_oracle.db',
-          DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE: 'dry_run',
-          DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
-          DOGEOS_FEE_ORACLE_ETHEREUM_DA__MIN_PRIORITY_FEE_PER_GAS_WEI: '"0"',
+          ...buildFeeOracleEthereumDaEnv(spec),
           DOGEOS_FEE_ORACLE_L2__CHAIN_ID: String(spec.network.l2ChainId),
           DOGEOS_FEE_ORACLE_L2__CONFIRMATIONS: '3',
           DOGEOS_FEE_ORACLE_L2__GAS_ORACLE_CONTRACT: spec.contracts.overrides?.l1GasPriceOracle || '<TODO>',

@@ -332,12 +332,22 @@ export interface EthereumDaConfig {
   /** Genesis frontier used by eth_da_submitter before the first published batch. */
   batch?: {
     compression?: 'auto' | 'none'
+    cutover?: {
+      lastBatchHash: string
+      lastBatchIndex: number
+      nextRelayedDepositIndex: number
+      nextWithdrawIndex: number
+      relayedDepositQueueHash: string
+      stateRoot: string
+      withdrawRoot: string
+    }
     genesisBatchHash?: string
     genesisNextRelayedDepositIndex?: number
     genesisNextWithdrawIndex?: number
     genesisRelayedDepositQueueHash?: string
     genesisStateRoot?: string
     genesisWithdrawRoot?: string
+    initialBatchSidecarJson?: string
     maxBlocksPerChunk?: number
     maxChunksPerBatch?: number
     maxL2GasPerChunk?: number
@@ -375,6 +385,8 @@ export interface EthereumDaConfig {
   l2Confirmations?: number
   /** DogeOS L2 execution RPC. Defaults to the fixed internal L2 RPC endpoint. */
   l2RpcUrl?: string
+  /** First L2 block for Ethereum DA cutover/replay-aware services. */
+  l2StartBlockNumber?: number
   lifecycleDbPath?: string
   /** Fee policy for EIP-4844 submissions. */
   maxBlobBaseFeeWei?: string
@@ -384,6 +396,16 @@ export interface EthereumDaConfig {
   minFinality?: 'finalized' | 'pending' | 'safe'
 
   minPriorityFeeWei?: string
+  publish?: {
+    allowLivenessBudgetOverride?: boolean
+    budgetWindow?: string
+    highBacklogThreshold?: number
+    maxBatchWait?: string
+    maxBlobsPerTx?: number
+    maxLivenessDelay?: string
+    maxPendingBlobTxs?: number
+    targetBlobsPerTx?: number
+  }
   signer?: EthereumDaSignerConfig
   /** eth_da_submitter lifecycle/store settings. */
   submitterDbPath?: string
@@ -399,6 +421,7 @@ export interface EthereumDaS3ArchiveConfig {
   endpointUrl?: string
   forcePathStyle?: boolean
   initialBackoffMs?: number
+  keyPrefix?: string
   maxBackoffMs?: number
   maxRetries?: number
   pollIntervalMs?: number
