@@ -27,4 +27,30 @@ describe('setup gen-rpc-package l2reth env generation', () => {
     expect(content).to.include('L2RETH_BEACON_ENDPOINT=http://l1-interface:5052')
     expect(content).not.to.include('L2GETH_')
   })
+
+  it('rejects missing L2 chain ID for l2reth.env', () => {
+    expect(() => buildL2RethEnvVars(
+      { general: {} },
+      {
+        defaults: { dogecoinIndexerStartHeight: '8200000' },
+        network: 'testnet',
+        wallet: { path: '/tmp/wallet.dat' },
+      },
+      undefined,
+      '0x1234567890123456789012345678901234567890',
+    )).to.throw('general.CHAIN_ID_L2')
+  })
+
+  it('rejects missing Dogecoin indexer start height for l2reth.env', () => {
+    expect(() => buildL2RethEnvVars(
+      { general: { CHAIN_ID_L2: 534_351 } },
+      {
+        defaults: {},
+        network: 'testnet',
+        wallet: { path: '/tmp/wallet.dat' },
+      },
+      undefined,
+      '0x1234567890123456789012345678901234567890',
+    )).to.throw('defaults.dogecoinIndexerStartHeight')
+  })
 })

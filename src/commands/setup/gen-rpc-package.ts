@@ -23,13 +23,17 @@ export function buildL2RethEnvVars(
     L2RETH_VALID_SIGNER: validSigner,
   }
 
-  if (config?.general?.CHAIN_ID_L2 !== undefined) {
-    rethVars.CHAIN_ID = config.general.CHAIN_ID_L2.toString()
+  if (config?.general?.CHAIN_ID_L2 === undefined) {
+    throw new Error('Missing required configuration: general.CHAIN_ID_L2 for l2reth.env CHAIN_ID')
   }
+  rethVars.CHAIN_ID = config.general.CHAIN_ID_L2.toString()
 
-  if (dogeConfig?.defaults?.dogecoinIndexerStartHeight !== undefined) {
-    rethVars.L2RETH_L1_CONTRACT_DEPLOYMENT_BLOCK = dogeConfig.defaults.dogecoinIndexerStartHeight
+  if (dogeConfig?.defaults?.dogecoinIndexerStartHeight === undefined) {
+    throw new Error(
+      'Missing required DogeOS field: defaults.dogecoinIndexerStartHeight for l2reth.env L2RETH_L1_CONTRACT_DEPLOYMENT_BLOCK',
+    )
   }
+  rethVars.L2RETH_L1_CONTRACT_DEPLOYMENT_BLOCK = dogeConfig.defaults.dogecoinIndexerStartHeight
 
   if (peerListValue) {
     rethVars.L2RETH_PEER_LIST = peerListValue
