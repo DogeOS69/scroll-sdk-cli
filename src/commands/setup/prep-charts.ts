@@ -409,6 +409,8 @@ export default class SetupPrepCharts extends Command {
     'L2GETH_PEER_LIST': 'sequencer.L2_GETH_STATIC_PEERS',
     'L2GETH_SIGNER_ADDRESS': (chartName, productionNumber) =>
       productionNumber === '0' ? 'sequencer.L2GETH_SIGNER_ADDRESS' : `sequencer.sequencer-${productionNumber}.L2GETH_SIGNER_ADDRESS`,
+    'L2RETH_VALID_SIGNER': (chartName, productionNumber) =>
+      productionNumber === '0' ? 'sequencer.L2GETH_SIGNER_ADDRESS' : `sequencer.sequencer-${productionNumber}.L2GETH_SIGNER_ADDRESS`,
     'ROLLUP_EXPLORER_API_HOST': 'ingress.ROLLUP_EXPLORER_API_HOST',
     'RPC_GATEWAY_HOST': 'ingress.RPC_GATEWAY_HOST',
     'RPC_GATEWAY_WS_HOST': 'ingress.RPC_GATEWAY_WS_HOST',

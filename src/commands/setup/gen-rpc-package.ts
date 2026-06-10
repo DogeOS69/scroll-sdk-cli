@@ -26,6 +26,7 @@ export function buildL2RethEnvVars(
   if (config?.general?.CHAIN_ID_L2 === undefined) {
     throw new Error('Missing required configuration: general.CHAIN_ID_L2 for l2reth.env CHAIN_ID')
   }
+
   rethVars.CHAIN_ID = config.general.CHAIN_ID_L2.toString()
 
   if (dogeConfig?.defaults?.dogecoinIndexerStartHeight === undefined) {
@@ -33,6 +34,7 @@ export function buildL2RethEnvVars(
       'Missing required DogeOS field: defaults.dogecoinIndexerStartHeight for l2reth.env L2RETH_L1_CONTRACT_DEPLOYMENT_BLOCK',
     )
   }
+
   rethVars.L2RETH_L1_CONTRACT_DEPLOYMENT_BLOCK = dogeConfig.defaults.dogecoinIndexerStartHeight
 
   if (peerListValue) {
@@ -200,6 +202,7 @@ export default class SetupGenRpcPackage extends Command {
       for (const envFilePath of envFilePaths) {
         this.log(chalk.cyan(`  - ${envFilePath}`))
       }
+
       this.log(chalk.cyan(`  - ${genesisJsonPath}`))
       this.log(chalk.cyan(`  - ${l1InterfaceEnvPath}`))
       this.log('')

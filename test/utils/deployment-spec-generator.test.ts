@@ -1187,6 +1187,15 @@ describe('deployment-spec-generator', () => {
     it('generates scroll-reth L2 values when executionClient backend is scroll-reth', () => {
       const spec = createMinimalSpec();
       spec.executionClient = { backend: 'scroll-reth' };
+      spec.contracts.l1DeploymentBlock = 123;
+      spec.dogecoin.indexerStartHeight = 8_200_000;
+      spec.images = {
+        services: {
+          l2Bootnode: { repository: 'scrolltech/l2geth', tag: 'scroll-v5.9.6' },
+          l2Rpc: { repository: 'scrolltech/l2geth', tag: 'scroll-v5.9.6' },
+          l2Sequencer: { repository: 'scrolltech/l2geth', tag: 'scroll-v5.9.6' },
+        },
+      };
       spec.infrastructure.sequencers = [{
         enodeUrl: 'enode://sequencer@example.com:30303',
         index: 0,
@@ -1216,6 +1225,7 @@ describe('deployment-spec-generator', () => {
       const sequencerValues = yaml.load(files['l2-sequencer-production.yaml']) as any;
       expect(sequencerValues.command).to.deep.equal(['bash', '-c', 'exec dogeos-reth-entrypoint']);
       expect(sequencerValues.configMaps.env.data.L2RETH_ROLE).to.equal('sequencer');
+      expect(sequencerValues.configMaps.env.data.L2RETH_L1_CONTRACT_DEPLOYMENT_BLOCK).to.equal('8200000');
       expect(sequencerValues.configMaps.env.data.L2RETH_VALID_SIGNER).to.equal('__SEQUENCER_SIGNER_ADDRESS__');
       expect(sequencerValues.envFrom).to.deep.equal([{ configMapRef: { name: 'l2-sequencer-__INSTANCE_INDEX__-env' } }]);
       expect(sequencerValues.persistence.data.mountPath).to.equal('/l2reth/reth-data');
@@ -1229,6 +1239,22 @@ describe('deployment-spec-generator', () => {
       const rpcValues = yaml.load(files['l2-rpc-production.yaml']) as any;
       expect(rpcValues.configMaps.env.data.L2RETH_ROLE).to.equal('rpc');
       expect(rpcValues.volumeClaimTemplates[0].mountPath).to.equal('/l2reth/reth-data');
+    });
+
+    it('preserves explicit scroll-reth image overrides', () => {
+      const spec = createMinimalSpec();
+      spec.executionClient = { backend: 'scroll-reth' };
+      spec.images = {
+        services: {
+          l2Rpc: { repository: 'example/scroll-reth', tag: 'custom-reth' },
+        },
+      };
+
+      const files = generateValuesFiles(spec);
+      const rpcValues = yaml.load(files['l2-rpc-production.yaml']) as any;
+
+      expect(rpcValues.image.repository).to.equal('example/scroll-reth');
+      expect(rpcValues.image.tag).to.equal('custom-reth');
     });
 
     it('generates l1-interface genesis and indexer heights independently', () => {

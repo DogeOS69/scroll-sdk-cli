@@ -195,7 +195,7 @@ function buildScrollRethEnv(
     L2RETH_EXTRA_PARAMS: '',
     L2RETH_GENESIS: SCROLL_RETH_GENESIS_PATH,
     L2RETH_HTTP_PORT: '8545',
-    L2RETH_L1_CONTRACT_DEPLOYMENT_BLOCK: String(spec.contracts.l1DeploymentBlock || 0),
+    L2RETH_L1_CONTRACT_DEPLOYMENT_BLOCK: String(getDogecoinIndexerStartHeight(spec)),
     L2RETH_L1_ENDPOINT: L1_INTERFACE_RPC_ENDPOINT,
     L2RETH_P2P_PORT: '30303',
     L2RETH_PEER_LIST: JSON.stringify(peerList.length > 0 ? peerList : []),
@@ -343,6 +343,23 @@ function resolveImage(
   }
 }
 
+function resolveScrollRethImage(
+  spec: DeploymentSpec,
+  serviceKey: ServiceImageKey
+): { pullPolicy: 'Always' | 'IfNotPresent' | 'Never'; repository: string; tag: string } {
+  const imagesConfig = spec.images
+  const serviceConfig = imagesConfig?.services?.[serviceKey]
+  const defaultPullPolicy = imagesConfig?.defaults?.pullPolicy || DEFAULT_SCROLL_RETH_IMAGE.pullPolicy
+  const hasL2GethRepository = serviceConfig?.repository === DEFAULT_L2GETH_IMAGE.repository
+  const hasL2GethTag = serviceConfig?.tag === DEFAULT_L2GETH_IMAGE.tag
+
+  return {
+    pullPolicy: serviceConfig?.pullPolicy || defaultPullPolicy,
+    repository: hasL2GethRepository ? DEFAULT_SCROLL_RETH_IMAGE.repository : serviceConfig?.repository || DEFAULT_SCROLL_RETH_IMAGE.repository,
+    tag: (hasL2GethRepository || hasL2GethTag) ? DEFAULT_SCROLL_RETH_IMAGE.tag : serviceConfig?.tag || DEFAULT_SCROLL_RETH_IMAGE.tag
+  }
+}
+
 /**
  * Generate all Helm values files from a DeploymentSpec
  */
@@ -419,7 +436,7 @@ function generateL2SequencerValues(spec: DeploymentSpec): string {
   }
 
   if (isScrollRethBackend(spec)) {
-    const image = resolveImage(spec, 'l2Sequencer', DEFAULT_SCROLL_RETH_IMAGE)
+    const image = resolveScrollRethImage(spec, 'l2Sequencer')
     const values: Record<string, any> = {
       command: SCROLL_RETH_COMMAND,
       configMaps: {
@@ -577,7 +594,7 @@ function generateL2BootnodeValues(spec: DeploymentSpec): string {
   const peerList = buildPeerList(spec)
 
   if (isScrollRethBackend(spec)) {
-    const image = resolveImage(spec, 'l2Bootnode', DEFAULT_SCROLL_RETH_IMAGE)
+    const image = resolveScrollRethImage(spec, 'l2Bootnode')
     const values: Record<string, any> = {
       command: SCROLL_RETH_COMMAND,
       configMaps: {
@@ -730,7 +747,7 @@ function generateL2RpcValues(spec: DeploymentSpec): string {
   const peerList = buildPeerList(spec)
 
   if (isScrollRethBackend(spec)) {
-    const image = resolveImage(spec, 'l2Rpc', DEFAULT_SCROLL_RETH_IMAGE)
+    const image = resolveScrollRethImage(spec, 'l2Rpc')
     const values: Record<string, any> = {
       command: SCROLL_RETH_COMMAND,
       configMaps: {
