@@ -308,6 +308,10 @@ export default class SetupGenRpcPackage extends Command {
 
       // genesisJson for reth
       const genesisJsonForReth = JSON.parse(JSON.stringify(genesisJson))
+      genesisJsonForReth.config ??= {}
+      genesisJsonForReth.config.scroll ??= {}
+      genesisJsonForReth.config.scroll.l1DataFeeBufferCheck ??= false
+
       const rethL1Config = genesisJsonForReth.config?.scroll?.l1Config
       if (!rethL1Config || typeof rethL1Config !== 'object') {
         throw new Error('Missing required reth genesis field: config.scroll.l1Config')

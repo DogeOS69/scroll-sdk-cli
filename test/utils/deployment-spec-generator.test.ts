@@ -1227,17 +1227,24 @@ describe('deployment-spec-generator', () => {
       expect(sequencerValues.configMaps.env.data.L2RETH_ROLE).to.equal('sequencer');
       expect(sequencerValues.configMaps.env.data.L2RETH_L1_CONTRACT_DEPLOYMENT_BLOCK).to.equal('8200000');
       expect(sequencerValues.configMaps.env.data.L2RETH_VALID_SIGNER).to.equal('__SEQUENCER_SIGNER_ADDRESS__');
+      expect(sequencerValues.configMaps.env.data.L2RETH_EXTRA_PARAMS).to.equal('--metrics 0.0.0.0:6060');
       expect(sequencerValues.envFrom).to.deep.equal([{ configMapRef: { name: 'l2-sequencer-__INSTANCE_INDEX__-env' } }]);
       expect(sequencerValues.persistence.data.mountPath).to.equal('/l2reth/reth-data');
       expect(sequencerValues.persistence.genesis.mountPath).to.equal('/l2reth/genesis/genesis.json');
+      expect(sequencerValues.probes.readiness.enabled).to.equal(false);
       expect(sequencerValues).not.to.have.property('externalSecrets');
 
       const bootnodeValues = yaml.load(files['l2-bootnode-production.yaml']) as any;
       expect(bootnodeValues.configMaps.env.data.L2RETH_ROLE).to.equal('bootnode');
+      expect(bootnodeValues.configMaps.env.data.L2RETH_EXTRA_PARAMS).to.equal('');
       expect(bootnodeValues.persistence.data.mountPath).to.equal('/l2reth/reth-data');
+      expect(bootnodeValues.service.main.enabled).to.equal(false);
+      expect(bootnodeValues.serviceMonitor.main.enabled).to.equal(false);
 
       const rpcValues = yaml.load(files['l2-rpc-production.yaml']) as any;
       expect(rpcValues.configMaps.env.data.L2RETH_ROLE).to.equal('rpc');
+      expect(rpcValues.configMaps.env.data.L2RETH_EXTRA_PARAMS).to.equal('--metrics 0.0.0.0:6060');
+      expect(rpcValues.probes.startup.enabled).to.equal(false);
       expect(rpcValues.volumeClaimTemplates[0].mountPath).to.equal('/l2reth/reth-data');
     });
 

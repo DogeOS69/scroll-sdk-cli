@@ -173,6 +173,7 @@ const DEFAULT_SCROLL_RETH_IMAGE = {
 const SCROLL_RETH_DATADIR = '/l2reth/reth-data'
 const SCROLL_RETH_GENESIS_PATH = '/l2reth/genesis/genesis.json'
 const SCROLL_RETH_COMMAND = ['bash', '-c', 'exec dogeos-reth-entrypoint']
+const SCROLL_RETH_METRICS_PARAMS = '--metrics 0.0.0.0:6060'
 
 function getExecutionClientBackend(spec: DeploymentSpec): ExecutionClientBackend {
   return spec.executionClient?.backend ?? 'l2geth'
@@ -188,11 +189,13 @@ function buildScrollRethEnv(
   peerList: string[],
   signerAddress = '',
 ): Record<string, string> {
+  const extraParams = role === 'bootnode' ? '' : SCROLL_RETH_METRICS_PARAMS
+
   return {
     CHAIN_ID: String(spec.network.l2ChainId),
     L2RETH_BEACON_ENDPOINT: L1_INTERFACE_BEACON_API_ENDPOINT,
     L2RETH_DATADIR: SCROLL_RETH_DATADIR,
-    L2RETH_EXTRA_PARAMS: '',
+    L2RETH_EXTRA_PARAMS: extraParams,
     L2RETH_GENESIS: SCROLL_RETH_GENESIS_PATH,
     L2RETH_HTTP_PORT: '8545',
     L2RETH_L1_CONTRACT_DEPLOYMENT_BLOCK: String(getDogecoinIndexerStartHeight(spec)),
@@ -490,6 +493,11 @@ function generateL2SequencerValues(spec: DeploymentSpec): string {
           type: 'configMap'
         }
       },
+      probes: {
+        liveness: { enabled: false },
+        readiness: { enabled: false },
+        startup: { enabled: false }
+      },
       resources: {
         limits: { cpu: '4', memory: '8Gi' },
         requests: { cpu: '50m', memory: '150Mi' }
@@ -648,7 +656,11 @@ function generateL2BootnodeValues(spec: DeploymentSpec): string {
         }
       },
       service: {
+        main: { enabled: false },
         p2p: { enabled: true }
+      },
+      serviceMonitor: {
+        main: { enabled: false }
       }
     }
 
@@ -808,6 +820,11 @@ function generateL2RpcValues(spec: DeploymentSpec): string {
           name: 'genesis-config',
           type: 'configMap'
         }
+      },
+      probes: {
+        liveness: { enabled: false },
+        readiness: { enabled: false },
+        startup: { enabled: false }
       },
       volumeClaimTemplates: [
         {
