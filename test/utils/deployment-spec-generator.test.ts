@@ -138,6 +138,18 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
   } as DeploymentSpec;
 }
 
+function createValidEthereumDaCutover(): NonNullable<NonNullable<NonNullable<DeploymentSpec['ethereumDa']>['batch']>['cutover']> {
+  return {
+    lastBatchHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
+    lastBatchIndex: 4379,
+    nextRelayedDepositIndex: 24_922,
+    nextWithdrawIndex: 13_047,
+    relayedDepositQueueHash: '0x2222222222222222222222222222222222222222222222222222222222222222',
+    stateRoot: '0x3333333333333333333333333333333333333333333333333333333333333333',
+    withdrawRoot: '0x4444444444444444444444444444444444444444444444444444444444444444',
+  };
+}
+
 describe('deployment-spec-generator', () => {
   let originalEnv: NodeJS.ProcessEnv;
 
@@ -459,6 +471,162 @@ describe('deployment-spec-generator', () => {
       expect(result.errors.some(error =>
         error.code === 'E012_INVALID_ETHEREUM_DA_CONFIG' &&
         error.path === 'ethereumDa.inboxWorker.startBlock'
+      )).to.be.true;
+    });
+
+    it('allows Ethereum DA L2 start block zero', () => {
+      const spec = createMinimalSpec();
+      spec.ethereumDa!.batch = {
+        cutover: createValidEthereumDaCutover(),
+      };
+      spec.ethereumDa!.l2StartBlockNumber = 0;
+
+      const result = validateDeploymentSpec(spec);
+
+      expect(result.valid).to.be.true;
+      expect(result.errors.some(error => error.path === 'ethereumDa.l2StartBlockNumber')).to.be.false;
+    });
+
+    it('fails when Ethereum DA batch hash fields are malformed', () => {
+      const spec = createMinimalSpec();
+      spec.ethereumDa!.batch = {
+        genesisStateRoot: '0x1234',
+      };
+
+      const result = validateDeploymentSpec(spec);
+
+      expect(result.valid).to.be.false;
+      expect(result.errors.some(error =>
+        error.code === 'E012_INVALID_ETHEREUM_DA_CONFIG' &&
+        error.path === 'ethereumDa.batch.genesisStateRoot'
+      )).to.be.true;
+    });
+
+    it('fails when Ethereum DA batch compression is invalid', () => {
+      const spec = createMinimalSpec();
+      spec.ethereumDa!.batch = {
+        compression: 'gzip' as any,
+      };
+
+      const result = validateDeploymentSpec(spec);
+
+      expect(result.valid).to.be.false;
+      expect(result.errors.some(error =>
+        error.code === 'E012_INVALID_ETHEREUM_DA_CONFIG' &&
+        error.path === 'ethereumDa.batch.compression'
+      )).to.be.true;
+    });
+
+    it('fails when Ethereum DA cutover hash fields are malformed', () => {
+      const spec = createMinimalSpec();
+      spec.ethereumDa!.l2StartBlockNumber = 0;
+      spec.ethereumDa!.batch = {
+        cutover: {
+          lastBatchHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
+          lastBatchIndex: 4379,
+          nextRelayedDepositIndex: 24_922,
+          nextWithdrawIndex: 13_047,
+          relayedDepositQueueHash: 'not-a-hash',
+          stateRoot: '0x3333333333333333333333333333333333333333333333333333333333333333',
+          withdrawRoot: '0x4444444444444444444444444444444444444444444444444444444444444444',
+        },
+      };
+
+      const result = validateDeploymentSpec(spec);
+
+      expect(result.valid).to.be.false;
+      expect(result.errors.some(error =>
+        error.code === 'E012_INVALID_ETHEREUM_DA_CONFIG' &&
+        error.path === 'ethereumDa.batch.cutover.relayedDepositQueueHash'
+      )).to.be.true;
+    });
+
+    it('fails when Ethereum DA cutover indices are missing', () => {
+      const spec = createMinimalSpec();
+      const cutover = createValidEthereumDaCutover();
+      delete (cutover as any).nextWithdrawIndex;
+      spec.ethereumDa!.l2StartBlockNumber = 0;
+      spec.ethereumDa!.batch = {
+        cutover,
+      };
+
+      const result = validateDeploymentSpec(spec);
+
+      expect(result.valid).to.be.false;
+      expect(result.errors.some(error =>
+        error.code === 'E012_INVALID_ETHEREUM_DA_CONFIG' &&
+        error.path === 'ethereumDa.batch.cutover.nextWithdrawIndex'
+      )).to.be.true;
+    });
+
+    it('fails when Ethereum DA cutover and L2 start block are not configured together', () => {
+      const cutoverOnlySpec = createMinimalSpec();
+      cutoverOnlySpec.ethereumDa!.batch = {
+        cutover: createValidEthereumDaCutover(),
+      };
+
+      const cutoverOnlyResult = validateDeploymentSpec(cutoverOnlySpec);
+      expect(cutoverOnlyResult.valid).to.be.false;
+      expect(cutoverOnlyResult.errors.some(error =>
+        error.code === 'E012_INVALID_ETHEREUM_DA_CONFIG' &&
+        error.path === 'ethereumDa.l2StartBlockNumber'
+      )).to.be.true;
+
+      const l2StartOnlySpec = createMinimalSpec();
+      l2StartOnlySpec.ethereumDa!.l2StartBlockNumber = 0;
+
+      const l2StartOnlyResult = validateDeploymentSpec(l2StartOnlySpec);
+      expect(l2StartOnlyResult.valid).to.be.false;
+      expect(l2StartOnlyResult.errors.some(error =>
+        error.code === 'E012_INVALID_ETHEREUM_DA_CONFIG' &&
+        error.path === 'ethereumDa.batch.cutover'
+      )).to.be.true;
+    });
+
+    it('fails when Ethereum DA initial batch sidecar JSON is invalid', () => {
+      const spec = createMinimalSpec();
+      spec.ethereumDa!.batch = {
+        initialBatchSidecarJson: '   ',
+      };
+
+      const blankResult = validateDeploymentSpec(spec);
+      expect(blankResult.valid).to.be.false;
+      expect(blankResult.errors.some(error =>
+        error.code === 'E012_INVALID_ETHEREUM_DA_CONFIG' &&
+        error.path === 'ethereumDa.batch.initialBatchSidecarJson'
+      )).to.be.true;
+
+      spec.ethereumDa!.batch.initialBatchSidecarJson = '{"batch":'
+      const invalidResult = validateDeploymentSpec(spec);
+      expect(invalidResult.valid).to.be.false;
+      expect(invalidResult.errors.some(error =>
+        error.code === 'E012_INVALID_ETHEREUM_DA_CONFIG' &&
+        error.path === 'ethereumDa.batch.initialBatchSidecarJson'
+      )).to.be.true;
+    });
+
+    it('fails when Ethereum DA publish fields are invalid', () => {
+      const spec = createMinimalSpec();
+      spec.ethereumDa!.publish = {
+        maxBatchWait: '',
+        maxBlobsPerTx: 0,
+        maxPendingBlobTxs: -1,
+      };
+
+      const result = validateDeploymentSpec(spec);
+
+      expect(result.valid).to.be.false;
+      expect(result.errors.some(error =>
+        error.code === 'E012_INVALID_ETHEREUM_DA_CONFIG' &&
+        error.path === 'ethereumDa.publish.maxBatchWait'
+      )).to.be.true;
+      expect(result.errors.some(error =>
+        error.code === 'E012_INVALID_ETHEREUM_DA_CONFIG' &&
+        error.path === 'ethereumDa.publish.maxBlobsPerTx'
+      )).to.be.true;
+      expect(result.errors.some(error =>
+        error.code === 'E012_INVALID_ETHEREUM_DA_CONFIG' &&
+        error.path === 'ethereumDa.publish.maxPendingBlobTxs'
       )).to.be.true;
     });
 
@@ -795,6 +963,7 @@ describe('deployment-spec-generator', () => {
         s3: {
           bucket: 'dogeos-da',
           enabled: true,
+          keyPrefix: 'devnet/eth-da/blobs/v1',
           maxRetries: 5,
           publicBaseUrl: 'https://dogeos-da.s3.us-east-1.amazonaws.com/',
           region: 'us-east-1',
@@ -808,6 +977,7 @@ describe('deployment-spec-generator', () => {
       expect(parsed.ethereumDa.blobArchive.s3.enabled).to.equal(true);
       expect(parsed.ethereumDa.blobArchive.s3.bucket).to.equal('dogeos-da');
       expect(parsed.ethereumDa.blobArchive.s3.region).to.equal('us-east-1');
+      expect(parsed.ethereumDa.blobArchive.s3.keyPrefix).to.equal('devnet/eth-da/blobs/v1');
       expect(parsed.ethereumDa.blobArchive.s3.publicBaseUrl).to.equal('https://dogeos-da.s3.us-east-1.amazonaws.com/');
       expect(parsed.ethereumDa.blobArchive.s3.timeoutMs).to.equal(15_000);
       expect(parsed.ethereumDa.blobArchive.s3.treatForbiddenAsMissing).to.equal(false);
@@ -1155,11 +1325,54 @@ describe('deployment-spec-generator', () => {
       expect(files['l2-sequencer-production.yaml']).to.include('L2GETH_L1_ENDPOINT: http://l1-interface:8545');
       expect(files['contracts-production.yaml']).to.include('SCROLL_L1_FEE_VAULT_ADDR: \'0x1111111111111111111111111111111111111111\'');
 
+      const submitterValues = yaml.load(files['eth-da-submitter-production.yaml']) as any;
+      const submitterEnv = submitterValues.configMaps.env.data;
+      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT).to.equal('0x0000000000000000000000000000000000000000000000000000000000000000');
+      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_RELAYED_DEPOSIT_QUEUE_HASH).to.equal('0x0000000000000000000000000000000000000000000000000000000000000000');
+      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK).to.equal('6000000');
+      expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_FEE_PER_GAS_WEI');
+
+      const l1InterfaceValuesForRuntime = yaml.load(files['l1-interface-production.yaml']) as any;
+      const l1InterfaceRuntimeEnv = l1InterfaceValuesForRuntime.configMaps.env.data;
+      expect(l1InterfaceRuntimeEnv.DOGEOS_L1_INTERFACE_L1_GAS_LIMIT).to.equal('30000000');
+      expect(l1InterfaceRuntimeEnv.DOGEOS_L1_INTERFACE_REPLAY_READ__MAINTAINER_ENABLED).to.equal('true');
+      expect(l1InterfaceRuntimeEnv.DOGEOS_L1_INTERFACE_REPLAY_READ__REQUIRE_FULL_VALIDATION).to.equal('false');
+
+      const withdrawalValuesForRuntime = yaml.load(files['withdrawal-processor-production.yaml']) as any;
+      const withdrawalRuntimeEnv = Object.fromEntries(withdrawalValuesForRuntime.env.map((item: any) => [item.name, item.value]));
+      expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_INITIAL_BRIDGE_REDEEM_SCRIPT_HEX).to.equal('');
+      expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_MAX_WITHDRAWAL_OUTPUTS_PER_TX).to.equal('256');
+      expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_MAX_DEPOSITS_PER_ADVANCE_L1).to.equal('32');
+      expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__SKIP_SCROLL_EXECUTION_PROOFS).to.equal('true');
+      expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__ENABLED).to.equal('false');
+      expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__STRATEGY).to.equal('band');
+      expect(withdrawalValuesForRuntime.externalSecrets['withdrawal-processor-secret-env'].data.map((item: any) => item.secretKey))
+        .to.include.members([
+          'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER',
+          'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS',
+          'DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY',
+          'DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY',
+        ]);
+
+      const tsoValues = yaml.load(files['tso-service-production.yaml']) as any;
+      const tsoEnv = Object.fromEntries(tsoValues.env.map((item: any) => [item.name, item.value]));
+      expect(tsoEnv.TIMEOUT_CHECK_INTERVAL_SECONDS).to.equal('60');
+      expect(tsoEnv.TSO_CORRECTNESS_MAX_PSBT_BASE64_LEN).to.equal('130048');
+      expect(tsoEnv.TSO_CUBESIGNER_MAX_PSBT_BASE64_LEN).to.equal('130048');
+
+      const cubesignerValues = yaml.load(files['cubesigner-signer-production.yaml']) as any;
+      const cubesignerEnv = Object.fromEntries(cubesignerValues.env.map((item: any) => [item.name, item.value]));
+      expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_LOG_LEVEL).to.equal('info');
+      expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_POLL_INTERVAL).to.equal('500');
+      expect(cubesignerEnv.CUBESIGNER_MAX_PSBT_BASE64_LEN).to.equal('130048');
+
       const feeOracleValues = yaml.load(files['fee-oracle-production.yaml']) as any;
       const feeOracleEnv = feeOracleValues.configMaps.env.data;
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE).to.equal('dry_run');
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL).to.equal('https://sepolia.drpc.org');
-      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__MIN_PRIORITY_FEE_PER_GAS_WEI).to.equal('"0"');
+      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__MIN_PRIORITY_FEE_PER_GAS_WEI).to.equal('0');
+      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__FORMULA).to.equal('galileo');
+      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__PRICE_UNAVAILABLE_FALLBACK).to.equal('hold_last');
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_L2__CHAIN_ID).to.equal(String(spec.network.l2ChainId));
       expect(feeOracleValues.envFrom).to.deep.equal([{ configMapRef: { name: 'fee-oracle-env' } }]);
       expect(files['fee-oracle-production.yaml']).not.to.include('DOGEOS_FEE_ORACLE_DOGECOIN__');
@@ -1196,12 +1409,69 @@ describe('deployment-spec-generator', () => {
       expect(explicitSubmitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION).to.equal('none');
     });
 
+    it('generates Ethereum DA cutover, publish, sidecar, and L2 bootstrap values', () => {
+      const spec = createMinimalSpec();
+      spec.ethereumDa = {
+        ...spec.ethereumDa!,
+        batch: {
+          cutover: {
+            lastBatchHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
+            lastBatchIndex: 4379,
+            nextRelayedDepositIndex: 24_922,
+            nextWithdrawIndex: 13_047,
+            relayedDepositQueueHash: '0x2222222222222222222222222222222222222222222222222222222222222222',
+            stateRoot: '0x3333333333333333333333333333333333333333333333333333333333333333',
+            withdrawRoot: '0x4444444444444444444444444444444444444444444444444444444444444444',
+          },
+          initialBatchSidecarJson: '{"batch_index":4380}',
+          maxL2GasPerChunk: 30_000_000,
+        },
+        l2StartBlockNumber: 2_898_792,
+        publish: {
+          allowLivenessBudgetOverride: true,
+          maxBatchWait: '60s',
+          maxBlobsPerTx: 6,
+          targetBlobsPerTx: 2,
+        },
+      };
+
+      const files = generateValuesFiles(spec);
+      const submitterValues = yaml.load(files['eth-da-submitter-production.yaml']) as any;
+      const submitterEnv = submitterValues.configMaps.env.data;
+
+      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER).to.equal('2898792');
+      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_BATCH_HASH).to.equal('0x1111111111111111111111111111111111111111111111111111111111111111');
+      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT).to.equal('0x4444444444444444444444444444444444444444444444444444444444444444');
+      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__LAST_BATCH_INDEX).to.equal('4379');
+      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON).to.equal('/app/config/initial_batch.json');
+      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK).to.equal('30000000');
+      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_BATCH_WAIT).to.equal('60s');
+      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__TARGET_BLOBS_PER_TX).to.equal('2');
+      expect(submitterValues.configMaps['initial-batch'].data['initial_batch.json']).to.equal('{"batch_index":4380}');
+      expect(submitterValues.persistence['initial-batch'].mountPath).to.equal('/app/config');
+
+      const l1InterfaceValues = yaml.load(files['l1-interface-production.yaml']) as any;
+      expect(l1InterfaceValues.configMaps.env.data.DOGEOS_L1_INTERFACE_REPLAY_READ__L2_BOOTSTRAP_NEXT_STARTING_BLOCK_HEIGHT).to.equal('2898792');
+
+      const withdrawalValues = yaml.load(files['withdrawal-processor-production.yaml']) as any;
+      const withdrawalEnv = Object.fromEntries(withdrawalValues.env.map((item: any) => [item.name, item.value]));
+      expect(withdrawalEnv.DOGEOS_WITHDRAWAL_L2_BOOTSTRAP_NEXT_STARTING_BLOCK_HEIGHT).to.equal('2898792');
+
+      const dogeConfig = toml.parse(generateDogeConfigToml(spec)) as any;
+      expect(dogeConfig.ethereumDa.l2StartBlockNumber).to.equal(2_898_792);
+      expect(dogeConfig.ethereumDa.batch.maxL2GasPerChunk).to.equal(30_000_000);
+      expect(dogeConfig.ethereumDa.batch.initialBatchSidecarJson).to.equal('{"batch_index":4380}');
+      expect(dogeConfig.ethereumDa.publish.targetBlobsPerTx).to.equal(2);
+      expect(dogeConfig.defaults.l2BootstrapNextStartingBlockHeight).to.equal('2898792');
+    });
+
     it('generates Ethereum DA S3 upload and readback env', () => {
       const spec = createMinimalSpec();
       spec.ethereumDa!.blobArchive = {
         s3: {
           bucket: 'dogeos-da',
           enabled: true,
+          keyPrefix: 'devnet/eth-da/blobs/v1',
           maxRetries: 5,
           publicBaseUrl: 'https://dogeos-da.s3.us-east-1.amazonaws.com/',
           region: 'us-east-1',
@@ -1219,6 +1489,7 @@ describe('deployment-spec-generator', () => {
       expect(submitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_S3__ENABLED).to.equal('true');
       expect(submitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_S3__BUCKET).to.equal('dogeos-da');
       expect(submitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_S3__REGION).to.equal('us-east-1');
+      expect(submitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_S3__KEY_PREFIX).to.equal('devnet/eth-da/blobs/v1');
       expect(submitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_S3__MAX_RETRIES).to.equal('5');
       expect(l1InterfaceValues.configMaps.env.data.DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL).to.equal('https://dogeos-da.s3.us-east-1.amazonaws.com/');
       expect(l1InterfaceValues.configMaps.env.data.DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS).to.equal('15000');
