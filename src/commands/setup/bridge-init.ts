@@ -4,6 +4,7 @@ import { input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import Docker from 'dockerode'
 import * as yaml from 'js-yaml'
+import { execFileSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
@@ -826,11 +827,6 @@ export class BridgeInitCommand extends Command {
     const config = this.getRequiredTomlConfig(configPath)
     const ethereumDaChain = this.getNestedValue(config, 'ethereumDa.chain')
 
-    if (ethereumDaChain === 'devnet') {
-      this.jsonCtx.info('Ethereum DA chain is devnet; using embedded indexer start block 0')
-      return 0
-    }
-
     const rpcUrl = this.getNestedValue(config, 'ethereumDa.submitterRpcUrl') ?? this.getNestedValue(config, 'ethereumDa.l1RpcUrl')
 
     if (typeof rpcUrl !== 'string' || rpcUrl.length === 0) {
@@ -843,46 +839,47 @@ export class BridgeInitCommand extends Command {
       )
     }
 
-    let response: Response
+    // Query eth_blockNumber from a short-lived curl pod inside the cluster.
+    // The pod can reach both cluster-internal RPC URLs (e.g. devnet's
+    // l1-devnet-geth) and external ones, so a single query path covers
+    // every environment.
+    let body: string
     try {
-      response = await fetch(rpcUrl, {
-        body: JSON.stringify({
-          id: 'bridge-init-pre-setup-ethereum-da-height',
-          jsonrpc: '2.0',
-          method: 'eth_blockNumber',
-          params: [],
-        }),
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        method: 'POST',
-      })
+      body = this.queryEthereumDaRpcViaClusterPod(rpcUrl)
     } catch (error) {
+      if (ethereumDaChain === 'devnet') {
+        this.jsonCtx.addWarning(
+          `Could not query Ethereum DA height via in-cluster curl pod (${error instanceof Error ? error.message : String(error)}); ` +
+          'falling back to embedded indexer start block 0 for the fresh devnet chain'
+        )
+        return 0
+      }
+
       this.jsonCtx.error(
         'E400_ETHEREUM_DA_RPC_UNREACHABLE',
-        `Failed to connect to Ethereum DA RPC before setup transaction: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to query Ethereum DA RPC via in-cluster curl pod: ${error instanceof Error ? error.message : String(error)}`,
         'NETWORK',
         true,
         {
-          cause: error instanceof Error && error.cause ? String(error.cause) : undefined,
           rpcUrl,
-          suggestion: `Check [ethereumDa].submitterRpcUrl in ${configPath}. It must be reachable from this machine before bridge-init can record the withdrawal processor Ethereum DA start block.`,
+          suggestion: `Check [ethereumDa].submitterRpcUrl in ${configPath} and that kubectl can reach the cluster (override the namespace with NAMESPACE=...). The RPC must be reachable from inside the cluster before bridge-init can record the withdrawal processor Ethereum DA start block.`,
         }
       )
     }
 
-    if (!response.ok) {
-      const errorBody = await response.text()
+    let result: { error?: { code?: number; message?: string }; result?: unknown }
+    try {
+      result = JSON.parse(body) as { error?: { code?: number; message?: string }; result?: unknown }
+    } catch {
       this.jsonCtx.error(
         'E400_ETHEREUM_DA_RPC_FAILED',
-        `Failed to read Ethereum DA block height before setup transaction: ${response.status} ${response.statusText}`,
+        `Ethereum DA RPC eth_blockNumber returned a non-JSON response: ${body.slice(0, 512)}`,
         'NETWORK',
         true,
-        { body: errorBody, rpcUrl }
+        { rpcUrl }
       )
     }
 
-    const result = await response.json() as { error?: { code?: number; message?: string }; result?: unknown }
     if (result.error) {
       this.jsonCtx.error(
         'E400_ETHEREUM_DA_RPC_FAILED',
@@ -916,6 +913,46 @@ export class BridgeInitCommand extends Command {
     }
 
     return height
+  }
+
+  /**
+   * Run a one-shot curl pod inside the cluster and return the raw JSON-RPC
+   * response body for eth_blockNumber. Throws on kubectl/pod/curl failure;
+   * the caller decides how to classify the error.
+   */
+  private queryEthereumDaRpcViaClusterPod(rpcUrl: string): string {
+    const namespace = process.env.NAMESPACE ?? 'default'
+    const podName = `bridge-init-eth-da-height-${Date.now()}`
+    this.jsonCtx.info(`Querying eth_blockNumber from ${rpcUrl} via curl pod ${podName} in namespace ${namespace}`)
+
+    const output = execFileSync(
+      'kubectl',
+      [
+        'run', podName,
+        '--namespace', namespace,
+        '--image', 'curlimages/curl:8.20.0',
+        '--restart', 'Never',
+        '--attach',
+        '--rm',
+        '--quiet',
+        '--env', `ETH_RPC_URL=${rpcUrl}`,
+        '--command', '--', 'sh', '-lc',
+        'curl -fsS "$ETH_RPC_URL" -H "content-type: application/json" --data \'{"jsonrpc":"2.0","id":"bridge-init-pre-setup-ethereum-da-height","method":"eth_blockNumber","params":[]}\'',
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 }
+    )
+
+    // --quiet suppresses kubectl chatter, but be defensive: keep only the
+    // line that looks like the JSON-RPC response.
+    const jsonLine = output
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.startsWith('{'))
+    if (!jsonLine) {
+      throw new Error(`curl pod produced no JSON-RPC response; output: ${output.slice(0, 512)}`)
+    }
+
+    return jsonLine
   }
 
   private getNestedValue(obj: any, path: string): any {
