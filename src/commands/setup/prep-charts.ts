@@ -542,11 +542,13 @@ export function validateDogeConfigEthereumDaForPrep(ethereumDa: DogeConfig['ethe
 
 export function buildL1InterfaceBlobSourcePrepEnv(input: {
   beaconRpcUrl: string | undefined
+  s3KeyPrefix?: string | undefined
   s3PublicBaseUrl?: string | undefined
   s3TimeoutMs?: boolean | number | string | undefined
   s3TreatForbiddenAsMissing?: boolean | number | string | undefined
 }): Record<string, string | undefined> {
   return {
+    DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__KEY_PREFIX: optionalConfigString(input.s3KeyPrefix),
     DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS: optionalConfigString(input.s3TimeoutMs),
     DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING: optionalConfigString(input.s3TreatForbiddenAsMissing),
     DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL: optionalConfigString(input.s3PublicBaseUrl),
@@ -557,11 +559,13 @@ export function buildL1InterfaceBlobSourcePrepEnv(input: {
 
 export function buildWithdrawalBlobSourcePrepEnv(input: {
   beaconRpcUrl: string | undefined
+  s3KeyPrefix?: string | undefined
   s3PublicBaseUrl?: string | undefined
   s3TimeoutMs?: boolean | number | string | undefined
   s3TreatForbiddenAsMissing?: boolean | number | string | undefined
 }): Record<string, string | undefined> {
   return {
+    DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__KEY_PREFIX: optionalConfigString(input.s3KeyPrefix),
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS: optionalConfigString(input.s3TimeoutMs),
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING: optionalConfigString(input.s3TreatForbiddenAsMissing),
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL: optionalConfigString(input.s3PublicBaseUrl),
@@ -1776,6 +1780,7 @@ export default class SetupPrepCharts extends Command {
           ...todoMappings,
           ...buildL1InterfaceBlobSourcePrepEnv({
             beaconRpcUrl: this.getConfigValue("ethereumDa.beaconRpcUrl"),
+            s3KeyPrefix: s3ArchiveEnabled ? s3Archive?.keyPrefix : undefined,
             s3PublicBaseUrl: s3ArchiveEnabled ? s3Archive?.publicBaseUrl : undefined,
             s3TimeoutMs: s3ArchiveEnabled ? s3Archive?.timeoutMs : undefined,
             s3TreatForbiddenAsMissing: s3ArchiveEnabled ? s3Archive?.treatForbiddenAsMissing : undefined,
@@ -1825,6 +1830,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_ETHEREUM_DA__MIN_FINALITY": this.getConfigValue("ethereumDa.minFinality"),
           ...buildWithdrawalBlobSourcePrepEnv({
             beaconRpcUrl: this.getConfigValue("ethereumDa.beaconRpcUrl"),
+            s3KeyPrefix: s3ArchiveEnabled ? s3Archive?.keyPrefix : undefined,
             s3PublicBaseUrl: s3ArchiveEnabled ? s3Archive?.publicBaseUrl : undefined,
             s3TimeoutMs: s3ArchiveEnabled ? s3Archive?.timeoutMs : undefined,
             s3TreatForbiddenAsMissing: s3ArchiveEnabled ? s3Archive?.treatForbiddenAsMissing : undefined,
