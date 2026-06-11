@@ -334,11 +334,13 @@ describe('setup prep-charts Ethereum DA blob source updates', () => {
   it('writes S3 blob source env for l1-interface', () => {
     const env = buildL1InterfaceBlobSourcePrepEnv({
       beaconRpcUrl: 'https://beacon.example',
+      s3KeyPrefix: 'devnet/eth-da/blobs/v1',
       s3PublicBaseUrl: 'https://dogeos-da.s3.us-east-1.amazonaws.com/',
       s3TimeoutMs: 15_000,
       s3TreatForbiddenAsMissing: false,
     })
 
+    expect(env.DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__KEY_PREFIX).to.equal('devnet/eth-da/blobs/v1')
     expect(env.DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL).to.equal('https://dogeos-da.s3.us-east-1.amazonaws.com/')
     expect(env.DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS).to.equal('15000')
     expect(env.DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING).to.equal('false')
@@ -374,11 +376,13 @@ describe('setup prep-charts Ethereum DA blob source updates', () => {
   it('writes S3 blob source env for withdrawal-processor', () => {
     const env = buildWithdrawalBlobSourcePrepEnv({
       beaconRpcUrl: 'https://beacon.example',
+      s3KeyPrefix: 'devnet/eth-da/blobs/v1',
       s3PublicBaseUrl: 'https://dogeos-da.s3.us-east-1.amazonaws.com/',
       s3TimeoutMs: '15000',
       s3TreatForbiddenAsMissing: 'false',
     })
 
+    expect(env.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__KEY_PREFIX).to.equal('devnet/eth-da/blobs/v1')
     expect(env.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL).to.equal('https://dogeos-da.s3.us-east-1.amazonaws.com/')
     expect(env.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS).to.equal('15000')
     expect(env.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING).to.equal('false')

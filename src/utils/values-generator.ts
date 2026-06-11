@@ -367,6 +367,7 @@ function buildEthereumDaS3BlobSourceEnv(prefix: string, spec: DeploymentSpec): R
     [`${prefix}__BLOB_SOURCE__AWS_S3__URL`]: s3.publicBaseUrl,
   }
 
+  addStringEnvIfDefined(env, `${prefix}__BLOB_SOURCE__AWS_S3__KEY_PREFIX`, s3.keyPrefix)
   addStringEnvIfDefined(env, `${prefix}__BLOB_SOURCE__AWS_S3__TIMEOUT_MS`, s3.timeoutMs)
   addStringEnvIfDefined(env, `${prefix}__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING`, s3.treatForbiddenAsMissing)
 
