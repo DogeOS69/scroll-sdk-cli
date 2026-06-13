@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- AWS CLI responses are dynamic */
 import * as toml from '@iarna/toml'
-import { input } from '@inquirer/prompts'
+import { confirm, input } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import { getAddress, keccak256 } from 'ethers'
 import { execFileSync } from 'node:child_process'
@@ -25,8 +25,22 @@ interface AwsCommandOptions {
   region?: string
 }
 
+interface BlobArchivePlan {
+  /** Resolved bucket name (undefined when archive is disabled). */
+  bucket?: string
+  /** True when this run created the bucket (vs. reusing an existing one). */
+  created: boolean
+  /** Whether the S3 blob archive is enabled at all. */
+  enabled: boolean
+  /** Object key prefix, if any. */
+  keyPrefix?: string
+  /** Region that owns the archive bucket (may differ from the KMS/EKS region). */
+  region?: string
+}
+
 interface KmsSetupResult {
   aliasName: string
+  archive: BlobArchivePlan
   awsRegion: string
   eksCluster: string
   expectedAddress: string
@@ -57,6 +71,18 @@ function truncateIamRoleName(value: string): string {
 
   const hash = Buffer.from(keccak256(Buffer.from(value)).slice(2), 'hex').toString('hex').slice(0, 8)
   return `${value.slice(0, 55)}-${hash}`
+}
+
+/**
+ * Accept either a bare EKS cluster name or a full cluster ARN
+ * (`arn:aws:eks:<region>:<account>:cluster/<name>`) and return the bare name.
+ * Users frequently paste the ARN from the console; without this the name would
+ * leak into the KMS alias and break `eks describe-cluster --name`.
+ */
+function normalizeEksClusterName(value: string): string {
+  const trimmed = value.trim()
+  const arnMatch = trimmed.match(/^arn:aws[\w-]*:eks:[^:]*:\d+:cluster\/(.+)$/)
+  return (arnMatch ? arnMatch[1] : trimmed).trim()
 }
 
 function base64UrlToBuffer(value: string): Buffer {
@@ -98,11 +124,29 @@ export default class SetupEthDaKms extends Command {
   ]
 
   static override flags = {
+    'archive-bucket': Flags.string({
+      description: 'S3 bucket for the EIP-4844 blob archive (defaults to ethereumDa.blobArchive.s3.bucket in doge-config)',
+    }),
+    'archive-key-prefix': Flags.string({
+      description: 'Object key prefix under the archive bucket (e.g. rehearsal/batches)',
+    }),
+    'archive-region': Flags.string({
+      description: 'Region that owns the archive bucket (defaults to --aws-region)',
+    }),
     'aws-profile': Flags.string({
       description: 'AWS CLI profile to use',
     }),
     'aws-region': Flags.string({
       description: 'AWS region that owns the KMS key and EKS cluster',
+    }),
+    'create-archive-bucket': Flags.boolean({
+      allowNo: true,
+      default: true,
+      description: 'Create the archive bucket (Block Public Access + SSE-S3) if it does not exist',
+    }),
+    'disable-archive': Flags.boolean({
+      default: false,
+      description: 'Skip S3 blob archive setup entirely',
     }),
     'doge-config': Flags.string({
       default: '.data/doge-config.toml',
@@ -154,7 +198,7 @@ export default class SetupEthDaKms extends Command {
     const niCtx = createNonInteractiveContext('setup eth-da-kms', flags['non-interactive'], flags.json)
     const awsRegion = await resolveOrPrompt(
       niCtx,
-      () => input({ message: 'AWS region:', required: true }),
+      () => input({ message: 'AWS region of the EKS cluster & KMS key (the S3 bucket region is asked separately):', required: true }),
       flags['aws-region'],
       {
         configPath: '--aws-region',
@@ -164,7 +208,7 @@ export default class SetupEthDaKms extends Command {
     )
     const eksCluster = await resolveOrPrompt(
       niCtx,
-      () => input({ message: 'EKS cluster:', required: true }),
+      () => input({ message: 'EKS cluster name or ARN:', required: true }),
       flags['eks-cluster'],
       {
         configPath: '--eks-cluster',
@@ -182,11 +226,14 @@ export default class SetupEthDaKms extends Command {
         field: 'network-alias',
       }
     )
+
+    const existingConfig = this.readExistingDogeConfig(flags['doge-config'])
+    const archiveInput = await this.resolveBlobArchive(niCtx, existingConfig, awsRegion as string | undefined)
     validateAndExit(niCtx)
 
     const identity = {
       awsRegion: String(awsRegion).trim(),
-      eksCluster: String(eksCluster).trim(),
+      eksCluster: normalizeEksClusterName(String(eksCluster)),
       networkAlias: String(networkAlias).trim(),
     }
     this.validateIdentity(identity)
@@ -198,6 +245,14 @@ export default class SetupEthDaKms extends Command {
       ? undefined
       : truncateIamRoleName(`dogeos-${safeNetworkAlias}-${safeEksCluster}-eth-da-submitter-kms`)
 
+    const archive: BlobArchivePlan = {
+      bucket: archiveInput.bucket,
+      created: false,
+      enabled: archiveInput.enabled,
+      keyPrefix: archiveInput.keyPrefix,
+      region: archiveInput.region,
+    }
+
     let keyInfo = {
       keyArn: flags['kms-key-id'] || aliasName,
       keyId: flags['kms-key-id'] || aliasName,
@@ -208,10 +263,20 @@ export default class SetupEthDaKms extends Command {
 
     if (flags['dry-run']) {
       this.jsonCtx.info('Dry run: no AWS resources or files will be changed.')
+      if (archive.enabled && archive.bucket) {
+        this.jsonCtx.info(
+          `Dry run: would ensure S3 archive bucket ${archive.bucket} (region=${archive.region}) and grant the role s3:PutObject/s3:GetObject on arn:aws:s3:::${archive.bucket}/*`
+        )
+      }
     } else {
       keyInfo = await this.ensureKmsKey(identity.awsRegion, aliasName, flags['kms-key-id'])
       expectedAddress = this.deriveKmsExpectedAddress(identity.awsRegion, keyInfo.kmsKeyIdForConfig)
+      if (archive.enabled && archive.bucket && flags['create-archive-bucket']) {
+        archive.created = this.ensureS3Bucket(archive.region as string, archive.bucket)
+      }
+
       roleArn ||= await this.ensureIamRole({
+        archiveBucket: archive.enabled ? archive.bucket : undefined,
         awsRegion: identity.awsRegion,
         eksCluster: identity.eksCluster,
         keyArn: keyInfo.keyArn,
@@ -232,11 +297,12 @@ export default class SetupEthDaKms extends Command {
         namespace: flags.namespace,
         serviceAccountName: flags['service-account'],
         serviceAccountRoleArn: roleArn,
-      })
+      }, archive)
     }
 
     const result: KmsSetupResult = {
       aliasName,
+      archive,
       awsRegion: identity.awsRegion,
       eksCluster: identity.eksCluster,
       expectedAddress,
@@ -298,6 +364,7 @@ export default class SetupEthDaKms extends Command {
   }
 
   private async ensureIamRole(options: {
+    archiveBucket?: string
     awsRegion: string
     eksCluster: string
     keyArn: string
@@ -392,6 +459,31 @@ export default class SetupEthDaKms extends Command {
     ])
     this.jsonCtx.info(`Updated IAM KMS signing policy: ${options.roleName}`)
 
+    if (options.archiveBucket) {
+      const s3Policy = {
+        Statement: [{
+          Action: [
+            's3:GetObject',
+            's3:PutObject',
+          ],
+          Effect: 'Allow',
+          Resource: `arn:aws:s3:::${options.archiveBucket}/*`,
+        }],
+        Version: '2012-10-17',
+      }
+      this.awsJson([
+        'iam',
+        'put-role-policy',
+        '--role-name',
+        options.roleName,
+        '--policy-name',
+        'eth-da-submitter-s3-archive',
+        '--policy-document',
+        JSON.stringify(s3Policy),
+      ])
+      this.jsonCtx.info(`Updated IAM S3 archive policy: ${options.roleName} -> ${options.archiveBucket}`)
+    }
+
     return roleArn
   }
 
@@ -453,6 +545,52 @@ export default class SetupEthDaKms extends Command {
     }
   }
 
+  private ensureS3Bucket(region: string, bucket: string): boolean {
+    try {
+      this.aws(['s3api', 'head-bucket', '--bucket', bucket], { region })
+      this.jsonCtx.info(`Reusing existing S3 archive bucket: ${bucket}`)
+      return false
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const notFound = message.includes('404') || /not found/i.test(message)
+      if (!notFound) {
+        this.jsonCtx.error(
+          'E705_S3_BUCKET_INACCESSIBLE',
+          `S3 bucket ${bucket} exists but is not accessible (it may be owned by another AWS account): ${message}`,
+          'CONFIGURATION',
+          true,
+          { bucket, region }
+        )
+      }
+    }
+
+    const createArgs = ['s3api', 'create-bucket', '--bucket', bucket]
+    // us-east-1 must NOT send a LocationConstraint; every other region must.
+    if (region !== 'us-east-1') {
+      createArgs.push('--create-bucket-configuration', `LocationConstraint=${region}`)
+    }
+
+    this.aws(createArgs, { region })
+    this.aws([
+      's3api',
+      'put-public-access-block',
+      '--bucket',
+      bucket,
+      '--public-access-block-configuration',
+      'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true',
+    ], { region })
+    this.aws([
+      's3api',
+      'put-bucket-encryption',
+      '--bucket',
+      bucket,
+      '--server-side-encryption-configuration',
+      JSON.stringify({ Rules: [{ ApplyServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }] }),
+    ], { region })
+    this.jsonCtx.info(`Created S3 archive bucket: ${bucket} (region=${region}, public access blocked, SSE-S3)`)
+    return true
+  }
+
   private findKmsAlias(awsRegion: string, aliasName: string): any | undefined {
     const aliases = this.awsJson(['kms', 'list-aliases'], { region: awsRegion }).Aliases || []
     return aliases.find((alias: any) => alias.AliasName === aliasName)
@@ -465,10 +603,86 @@ export default class SetupEthDaKms extends Command {
     this.jsonCtx.logKeyValue('networkAlias', result.networkAlias)
     this.jsonCtx.logKeyValue('kmsKeyId', result.kmsKeyIdForConfig)
     this.jsonCtx.logKeyValue('expectedAddress', result.expectedAddress)
+    if (result.archive.enabled && result.archive.bucket) {
+      this.jsonCtx.logKeyValue('archiveBucket', result.archive.bucket)
+      if (result.archive.region) this.jsonCtx.logKeyValue('archiveRegion', result.archive.region)
+      if (result.archive.keyPrefix) this.jsonCtx.logKeyValue('archiveKeyPrefix', result.archive.keyPrefix)
+      this.jsonCtx.logKeyValue('archiveBucketCreated', String(result.archive.created))
+    } else {
+      this.jsonCtx.logKeyValue('archive', 'disabled')
+    }
+
     if (result.roleArn) this.jsonCtx.logKeyValue('roleArn', result.roleArn)
     if (result.wroteDogeConfig) {
       this.jsonCtx.info('Run `scrollsdk setup prep-charts` to sync this signer into values/*.yaml.')
     }
+  }
+
+  private readExistingDogeConfig(filePath: string): DogeConfig {
+    const resolvedPath = path.resolve(filePath)
+    if (!fs.existsSync(resolvedPath)) {
+      return {} as DogeConfig
+    }
+
+    return toml.parse(fs.readFileSync(resolvedPath, 'utf8')) as unknown as DogeConfig
+  }
+
+  private async resolveBlobArchive(
+    niCtx: ReturnType<typeof createNonInteractiveContext>,
+    existingConfig: DogeConfig,
+    awsRegion: string | undefined
+  ): Promise<{ bucket?: string; enabled: boolean; keyPrefix?: string; region?: string }> {
+    if (this.flags['disable-archive']) {
+      return { enabled: false }
+    }
+
+    const existingS3 = existingConfig.ethereumDa?.blobArchive?.s3
+    const flagBucket = this.flags['archive-bucket'] as string | undefined
+    const configBucket = typeof existingS3?.bucket === 'string' ? existingS3.bucket : undefined
+    const defaultRegion =
+      (this.flags['archive-region'] as string | undefined)
+      || (typeof existingS3?.region === 'string' ? existingS3.region : undefined)
+      || awsRegion
+    const defaultPrefix =
+      (this.flags['archive-key-prefix'] as string | undefined)
+      || (typeof existingS3?.keyPrefix === 'string' ? existingS3.keyPrefix : undefined)
+
+    // Non-interactive: archive is optional; enable it only when a bucket is known.
+    if (niCtx.enabled) {
+      const bucket = flagBucket || configBucket
+      if (!bucket) {
+        this.jsonCtx.info(
+          'S3 blob archive not configured (no --archive-bucket and no ethereumDa.blobArchive.s3.bucket in doge-config); skipping S3 setup.'
+        )
+        return { enabled: false }
+      }
+
+      return { bucket, enabled: true, keyPrefix: defaultPrefix, region: defaultRegion }
+    }
+
+    // Interactive: prompt for anything missing from doge-config.
+    const existingEnabled = existingS3?.enabled
+    const defaultEnabled =
+      existingEnabled === undefined ? true : !(existingEnabled === false || existingEnabled === 'false')
+    const enabled = await confirm({
+      default: defaultEnabled,
+      message: 'Enable S3 blob archive for eth-da-submitter (recommended)?',
+    })
+    if (!enabled) {
+      return { enabled: false }
+    }
+
+    const bucket = (
+      await input({ default: flagBucket || configBucket, message: 'S3 archive bucket name:', required: true })
+    ).trim()
+    const region = (
+      await input({ default: defaultRegion, message: 'S3 archive bucket region:', required: true })
+    ).trim()
+    const keyPrefix = (
+      await input({ default: defaultPrefix ?? '', message: 'S3 object key prefix (optional, e.g. rehearsal/batches):' })
+    ).trim()
+
+    return { bucket, enabled: true, keyPrefix: keyPrefix || undefined, region }
   }
 
   private validateIdentity(identity: { awsRegion: string; eksCluster: string; networkAlias: string }): void {
@@ -476,6 +690,18 @@ export default class SetupEthDaKms extends Command {
       if (!value) {
         this.jsonCtx.error('E701_ETH_DA_KMS_IDENTITY_MISSING', `${key} is required`, 'CONFIGURATION', true)
       }
+    }
+
+    // Guard before any AWS resource is created: a malformed cluster name would
+    // poison the KMS alias and fail `eks describe-cluster`.
+    if (!/^[\dA-Za-z][\w-]*$/.test(identity.eksCluster)) {
+      this.jsonCtx.error(
+        'E706_INVALID_EKS_CLUSTER_NAME',
+        `eks-cluster must be a bare cluster name like "dogeos-devnet-cluster" (got "${identity.eksCluster}"). Pass the name, not an ARN.`,
+        'CONFIGURATION',
+        true,
+        { eksCluster: identity.eksCluster }
+      )
     }
   }
 
@@ -501,7 +727,11 @@ export default class SetupEthDaKms extends Command {
     }
   }
 
-  private writeDogeConfig(filePath: string, signer: NonNullable<NonNullable<DogeConfig['ethereumDa']>['signer']>): void {
+  private writeDogeConfig(
+    filePath: string,
+    signer: NonNullable<NonNullable<DogeConfig['ethereumDa']>['signer']>,
+    archive?: BlobArchivePlan
+  ): void {
     const resolvedPath = path.resolve(filePath)
     let dogeConfig: DogeConfig = {} as DogeConfig
     if (fs.existsSync(resolvedPath)) {
@@ -518,6 +748,17 @@ export default class SetupEthDaKms extends Command {
       namespace: signer.namespace,
       serviceAccountName: signer.serviceAccountName,
       serviceAccountRoleArn: signer.serviceAccountRoleArn,
+    }
+
+    if (archive?.enabled && archive.bucket) {
+      dogeConfig.ethereumDa.blobArchive ||= {}
+      dogeConfig.ethereumDa.blobArchive.s3 = {
+        ...dogeConfig.ethereumDa.blobArchive.s3,
+        bucket: archive.bucket,
+        enabled: true,
+        ...(archive.keyPrefix ? { keyPrefix: archive.keyPrefix } : {}),
+        ...(archive.region ? { region: archive.region } : {}),
+      }
     }
 
     fs.mkdirSync(path.dirname(resolvedPath), { recursive: true })
