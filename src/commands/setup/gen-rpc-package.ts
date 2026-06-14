@@ -698,6 +698,14 @@ export default class SetupGenRpcPackage extends Command {
       const genesisJsonPath = this.extractGenesisJson(flags['values-dir'], rpcPackageDir, network, dogeConfig)
       this.log(chalk.green(`✓ Extracted genesis.json at: ${genesisJsonPath}`))
 
+      // Step 7b: Extract protocol_context.json from protocol_context.yaml.
+      // l1-interface's replay reader requires this file at the path given by
+      // DOGEOS_L1_INTERFACE_REPLAY_READ__PROTOCOL_CONTEXT_JSON; docker-compose
+      // mounts configs/<network>/protocol_context.json into the container.
+      this.log(chalk.blue('Step 3b: Extracting protocol_context.json from protocol_context.yaml...'))
+      const protocolContextJsonPath = this.extractProtocolContextJson(flags['values-dir'], rpcPackageDir, network)
+      this.log(chalk.green(`✓ Extracted protocol_context.json at: ${protocolContextJsonPath}`))
+
       // Step 8: Generate l1-interface.env file
       this.log(chalk.blue('Step 4: Generating l1-interface.env file...'))
       const l1InterfaceEnvPath = this.generateL1InterfaceEnvFile(flags['values-dir'], rpcPackageDir, network, config)
@@ -724,6 +732,7 @@ export default class SetupGenRpcPackage extends Command {
       this.log(chalk.cyan(`  - ${l2NodeEnv.l2gethEnvPath}`))
       this.log(chalk.cyan(`  - ${l2NodeEnv.l2rethEnvPath}`))
       this.log(chalk.cyan(`  - ${genesisJsonPath}`))
+      this.log(chalk.cyan(`  - ${protocolContextJsonPath}`))
       this.log(chalk.cyan(`  - ${l1InterfaceEnvPath}`))
       this.log(chalk.cyan(`  - ${composeSync.composePath}`))
       this.log('')
@@ -842,6 +851,56 @@ export default class SetupGenRpcPackage extends Command {
       }
 
       throw new Error(`Failed to extract genesis.json: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private extractProtocolContextJson(valuesDir: string, rpcPackageDir: string, network: string): string {
+    const protocolContextYamlPath = path.resolve(valuesDir, 'protocol_context.yaml')
+
+    if (!fs.existsSync(protocolContextYamlPath)) {
+      throw new Error(`protocol_context.yaml not found at: ${protocolContextYamlPath}`)
+    }
+
+    try {
+      const protocolContextYamlContent = fs.readFileSync(protocolContextYamlPath, 'utf8')
+      const protocolContextYaml = yaml.load(protocolContextYamlContent) as any
+
+      if (!protocolContextYaml || protocolContextYaml.protocolContext === undefined) {
+        throw new Error('protocol_context.yaml missing top-level `protocolContext` key')
+      }
+
+      // The configMap stores protocol_context as a JSON string (helm `|` block);
+      // accept an already-parsed object too for robustness.
+      let protocolContextJson: any
+
+      if (typeof protocolContextYaml.protocolContext === 'string') {
+        try {
+          protocolContextJson = JSON.parse(protocolContextYaml.protocolContext)
+        } catch (parseError) {
+          throw new Error(`Failed to parse protocolContext JSON string: ${parseError instanceof Error ? parseError.message : String(parseError)}`)
+        }
+      } else if (typeof protocolContextYaml.protocolContext === 'object') {
+        protocolContextJson = protocolContextYaml.protocolContext
+      } else {
+        throw new TypeError('Invalid protocolContext format in protocol_context.yaml - expected string or object')
+      }
+
+      // Mirror genesis: write into configs/<network>/ so docker-compose can mount it.
+      const targetDirectory = path.resolve(rpcPackageDir, 'configs', network)
+      fs.mkdirSync(targetDirectory, { recursive: true })
+
+      const protocolContextJsonPath = path.join(targetDirectory, 'protocol_context.json')
+      fs.writeFileSync(protocolContextJsonPath, JSON.stringify(protocolContextJson, null, 2))
+
+      return protocolContextJsonPath
+
+    } catch (error) {
+      if (error instanceof Error &&
+        (error.message.includes('protocolContext') || error.message.includes('protocol_context.yaml'))) {
+        throw error
+      }
+
+      throw new Error(`Failed to extract protocol_context.json: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
