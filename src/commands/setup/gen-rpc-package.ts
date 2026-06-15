@@ -58,8 +58,50 @@ const L1_INTERFACE_ENV_ENDPOINT_KEYS = new Set([
   'DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL',
 ])
 
+// Keys removed by newer l1-interface releases. Pruned from the generated
+// file so a stale value cannot fail config validation. Example: replay-backed
+// public RPC rejects `scroll_messenger_address` (it is sourced from the
+// committed protocol context instead).
+const L1_INTERFACE_DEPRECATED_ENV_KEYS = new Set([
+  'DOGEOS_L1_INTERFACE_SCROLL_MESSENGER_ADDRESS',
+])
+
+// Operator-owned keys: local infra creds + external endpoints. These depend on
+// the third party's own infrastructure, so the generator must never bake them
+// into the deterministic generated file. They live in l1-interface.local.env,
+// which docker-compose loads last (so it overrides the generated defaults) and
+// which gen-rpc-package never overwrites.
+function isUserOwnedL1InterfaceEnvKey(key: string): boolean {
+  return L1_INTERFACE_LOCAL_ENV_KEYS.has(key) || L1_INTERFACE_ENV_ENDPOINT_KEYS.has(key)
+}
+
 const DOCKER_COMPOSE_NETWORK_ENV_DIR = `./envs/\${NETWORK}`
 const L2GETH_L1_ENDPOINT_SHELL_EXPANSION = `\${L2GETH_L1_ENDPOINT:-http://l1-interface:8545}`
+
+// RUST_LOG default for l1-interface. Network-agnostic runtime default that is
+// not derived from the values YAML; baked into the generated env file so each
+// per-network config is self-contained (no shared envs/common layer).
+const L1_INTERFACE_RUNTIME_DEFAULTS: Record<string, string> = {
+  RUST_LOG: 'info',
+}
+
+// Network-agnostic l2geth tuning defaults. Not produced by the values YAML;
+// baked into each generated l2geth.env so per-network configs are fully
+// self-contained. Values YAML / config overrides win (these only fill gaps).
+const L2GETH_TUNING_DEFAULTS: Record<string, string> = {
+  L2GETH_ACCOUNT_QUEUE: '256',
+  L2GETH_ACCOUNT_SLOTS: '128',
+  L2GETH_CCC_FLAG: '--ccc',
+  L2GETH_CCC_NUMWORKERS: '5',
+  L2GETH_EXTRA_PARAMS: '',
+  L2GETH_GLOBAL_QUEUE: '4096',
+  L2GETH_GLOBAL_SLOTS: '40960',
+  L2GETH_GPO_MAX_PRICE: '500000000',
+  L2GETH_L1_WATCHER_CONFIRMATIONS: '0x6',
+  L2GETH_MIN_GAS_PRICE: '1000000',
+  LOCALS_FLAG: '',
+  METRICS_FLAGS: '',
+}
 
 function parseEnvKey(line: string): string | undefined {
   const trimmedLine = line.trim()
@@ -91,32 +133,6 @@ function isCelestiaEnvKey(key: string): boolean {
 
 function isSecretLikeEnvKey(key: string): boolean {
   return /(?:^|_)(?:user|pass|password|token|api_key|secret)(?:_|$)/i.test(key.replaceAll('__', '_'))
-}
-
-function isInternalEndpointValue(value: string | undefined): boolean {
-  if (!value) return false
-
-  try {
-    const url = new URL(value)
-    const host = url.hostname.toLowerCase()
-    return host === 'localhost' ||
-      host === '127.0.0.1' ||
-      host === 'l1-devnet' ||
-      host === 'l1-devnet-lighthouse' ||
-      host === 'l1-interface' ||
-      host.endsWith('.svc') ||
-      host.endsWith('.svc.cluster.local')
-  } catch {
-    return false
-  }
-}
-
-function isUnsafeL1InterfaceEnvVar(key: string, value: string | undefined): boolean {
-  if (isCelestiaEnvKey(key)) return true
-  if (L1_INTERFACE_LOCAL_ENV_KEYS.has(key)) return false
-  if (isSecretLikeEnvKey(key)) return true
-
-  return L1_INTERFACE_ENV_ENDPOINT_KEYS.has(key) && isInternalEndpointValue(value)
 }
 
 function hasLoadBalancerPlaceholder(value: string | undefined): boolean {
@@ -437,7 +453,7 @@ function syncL2RpcWaitForL1InitContainer(compose: ComposeFile, valuesYaml: unkno
       'l1-interface': { condition: 'service_started' },
     },
     entrypoint: ['/bin/sh', '-c'],
-    env_file: Array.isArray(l2gethService.env_file) ? l2gethService.env_file : ['./envs/common/l2geth.env', l2gethEnvFile],
+    env_file: Array.isArray(l2gethService.env_file) ? l2gethService.env_file : [l2gethEnvFile],
     image: 'curlimages/curl:8.20.0',
     restart: 'no',
   }
@@ -706,10 +722,10 @@ export default class SetupGenRpcPackage extends Command {
       const protocolContextJsonPath = this.extractProtocolContextJson(flags['values-dir'], rpcPackageDir, network)
       this.log(chalk.green(`✓ Extracted protocol_context.json at: ${protocolContextJsonPath}`))
 
-      // Step 8: Generate l1-interface.env file
+      // Step 8: Generate l1-interface.env (generated) + l1-interface.local.env (operator)
       this.log(chalk.blue('Step 4: Generating l1-interface.env file...'))
-      const l1InterfaceEnvPath = this.generateL1InterfaceEnvFile(flags['values-dir'], rpcPackageDir, network, config)
-      this.log(chalk.green(`✓ Generated l1-interface.env at: ${l1InterfaceEnvPath}`))
+      const l1InterfaceEnv = this.generateL1InterfaceEnvFile(flags['values-dir'], rpcPackageDir, network, config)
+      this.log(chalk.green(`✓ Generated l1-interface.env at: ${l1InterfaceEnv.generatedPath}`))
 
       // Step 9: Sync initContainers to docker-compose.yml
       this.log(chalk.blue('Step 5: Syncing initContainers into docker-compose.yml...'))
@@ -733,7 +749,8 @@ export default class SetupGenRpcPackage extends Command {
       this.log(chalk.cyan(`  - ${l2NodeEnv.l2rethEnvPath}`))
       this.log(chalk.cyan(`  - ${genesisJsonPath}`))
       this.log(chalk.cyan(`  - ${protocolContextJsonPath}`))
-      this.log(chalk.cyan(`  - ${l1InterfaceEnvPath}`))
+      this.log(chalk.cyan(`  - ${l1InterfaceEnv.generatedPath}`))
+      this.log(chalk.cyan(`  - ${l1InterfaceEnv.localPath} (operator overrides; not regenerated)`))
       this.log(chalk.cyan(`  - ${composeSync.composePath}`))
       this.log('')
       if (l2NodeEnv.hasUnresolvedExternalPeers) {
@@ -909,7 +926,7 @@ export default class SetupGenRpcPackage extends Command {
     rpcPackageDir: string,
     network: string,
     _config: any,
-  ): string {
+  ): { generatedPath: string; localPath: string } {
     const l1InterfaceYamlPath = path.resolve(valuesDir, 'l1-interface-production.yaml')
 
     if (!fs.existsSync(l1InterfaceYamlPath)) {
@@ -923,37 +940,41 @@ export default class SetupGenRpcPackage extends Command {
       const targetDirectory = path.resolve(rpcPackageDir, 'envs', network)
       fs.mkdirSync(targetDirectory, { recursive: true })
 
-      // Generate env file path
       const envFilePath = path.join(targetDirectory, 'l1-interface.env')
+      const localEnvFilePath = path.join(targetDirectory, 'l1-interface.local.env')
 
-      const newVars: Record<string, string> = {}
-
-      // Process each environment variable from the YAML
+      // Generated file holds ONLY deterministic values derived from the values
+      // YAML. Operator-owned keys (local creds / external endpoints), secrets,
+      // celestia, and deprecated keys are excluded so this file can be fully
+      // overwritten on every run without losing operator input.
+      // Runtime defaults first so values-YAML keys override them on collision.
+      const generatedVars: Record<string, string> = {...L1_INTERFACE_RUNTIME_DEFAULTS}
       for (const [key, value] of Object.entries(envData)) {
-        if (L1_INTERFACE_LOCAL_ENV_KEYS.has(key)) continue
-        if (isUnsafeL1InterfaceEnvVar(key, value)) continue
-        newVars[key] = value
+        if (isUserOwnedL1InterfaceEnvKey(key)) continue
+        if (isCelestiaEnvKey(key)) continue
+        if (isSecretLikeEnvKey(key)) continue
+        if (L1_INTERFACE_DEPRECATED_ENV_KEYS.has(key)) continue
+        generatedVars[key] = value
       }
 
-      const writeResult = this.writeEnvFile(envFilePath, newVars, {
-        header: [`# L1 Interface ${this.capitalize(network)} Configuration`, ''],
-        removeKey: isUnsafeL1InterfaceEnvVar,
-      })
+      // Full overwrite: a key dropped from the source (or newly deprecated)
+      // disappears here too. This is what prevents stale keys such as
+      // SCROLL_MESSENGER_ADDRESS from surviving across regenerations.
+      this.writeFullEnvFile(envFilePath, generatedVars, [
+        `# L1 Interface ${this.capitalize(network)} Configuration`,
+        '#',
+        '# GENERATED by `scrollsdk setup gen-rpc-package` — DO NOT EDIT.',
+        '# Overwritten on every run. Put operator overrides (L1 RPC endpoint,',
+        '# beacon node, dogecoin RPC credentials) in l1-interface.local.env,',
+        '# which docker-compose loads last so it wins.',
+        '',
+      ])
+      this.log(chalk.green(`✓ Wrote generated l1-interface.env (${Object.keys(generatedVars).length} vars)`))
 
-      if (!writeResult.changed) {
-        this.log(chalk.green('✓ No changes detected in l1-interface.env - file is up to date'))
-        return envFilePath
-      }
+      // Operator overrides: scaffold once, never clobber.
+      this.scaffoldL1InterfaceLocalEnvFile(localEnvFilePath, network, envData)
 
-      if (writeResult.updatedVars.length > 0) {
-        this.log(chalk.green(`✓ Updated variables in l1-interface.env: ${writeResult.updatedVars.join(', ')}`))
-      }
-
-      if (writeResult.removedVars.length > 0) {
-        this.log(chalk.green(`✓ Removed stale variables from l1-interface.env: ${writeResult.removedVars.join(', ')}`))
-      }
-
-      return envFilePath
+      return { generatedPath: envFilePath, localPath: localEnvFilePath }
 
     } catch (error) {
       throw new Error(`Failed to generate l1-interface.env: ${error instanceof Error ? error.message : String(error)}`)
@@ -983,7 +1004,8 @@ export default class SetupGenRpcPackage extends Command {
     }
 
     const l2RpcEnvData = this.loadConfigMapEnvData(l2RpcYamlPath)
-    const l2gethVars: EnvVarMap = {...l2RpcEnvData}
+    // Tuning defaults first so values-YAML keys override them on collision.
+    const l2gethVars: EnvVarMap = {...L2GETH_TUNING_DEFAULTS, ...l2RpcEnvData}
 
     if (!l2gethVars.CHAIN_ID && config?.general?.CHAIN_ID_L2 !== undefined) {
       l2gethVars.CHAIN_ID = String(config.general.CHAIN_ID_L2)
@@ -1188,6 +1210,39 @@ export default class SetupGenRpcPackage extends Command {
     }
   }
 
+  private scaffoldL1InterfaceLocalEnvFile(localEnvFilePath: string, network: string, envData: EnvVarMap): void {
+    if (fs.existsSync(localEnvFilePath)) {
+      this.log(chalk.green('✓ Preserved operator overrides in l1-interface.local.env (never regenerated)'))
+      return
+    }
+
+    const lines: string[] = [
+      `# L1 Interface ${this.capitalize(network)} — operator overrides`,
+      '#',
+      '# This file is NEVER overwritten by gen-rpc-package. Fill in the values',
+      '# that depend on YOUR infrastructure. docker-compose loads it after',
+      '# l1-interface.env, so anything set here overrides the generated defaults.',
+      '',
+      '# --- Required: your Ethereum L1 execution RPC (Ethereum DA replay) ---',
+      '# DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL=https://your-l1-rpc:8545',
+      '',
+      '# --- Optional: your beacon node (only if blob_source uses beacon_node) ---',
+      '# DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL=http://your-beacon:5052',
+      '',
+      '# --- Dogecoin RPC (defaults target the in-compose dogecoin-node) ---',
+    ]
+
+    // Pre-fill local Dogecoin creds from the source as editable starting points.
+    for (const key of L1_INTERFACE_LOCAL_ENV_KEYS) {
+      if (envData[key] !== undefined) {
+        lines.push(`${key}=${envData[key]}`)
+      }
+    }
+
+    fs.writeFileSync(localEnvFilePath, lines.join('\n').replace(/\n*$/, '') + '\n')
+    this.log(chalk.yellow('⚠️  Scaffolded l1-interface.local.env — set DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL before starting'))
+  }
+
   private writeEnvFile(
     envFilePath: string,
     newVars: EnvVarMap,
@@ -1211,6 +1266,15 @@ export default class SetupGenRpcPackage extends Command {
       removedVars,
       updatedVars,
     }
+  }
+
+  private writeFullEnvFile(envFilePath: string, vars: EnvVarMap, header: string[]): void {
+    const lines = [...header]
+    for (const [key, value] of Object.entries(vars)) {
+      lines.push(`${key}=${value}`)
+    }
+
+    fs.writeFileSync(envFilePath, lines.join('\n').replace(/\n*$/, '') + '\n')
   }
 
 }
