@@ -85,6 +85,14 @@ const L1_INTERFACE_RUNTIME_DEFAULTS: Record<string, string> = {
   RUST_LOG: 'info',
 }
 
+// Forced overrides for the generated l1-interface.env. These keys are pinned to
+// the value below regardless of what the source values YAML contains — applied
+// AFTER the copy loop so they always win. The RPC package runs l1-interface as a
+// non-sequencer, which requires genesis mode off no matter how the cluster was set.
+const L1_INTERFACE_FORCED_ENV_OVERRIDES: Record<string, string> = {
+  DOGEOS_L1_INTERFACE_SEQUENCER_GENESIS_MODE: 'false',
+}
+
 // Network-agnostic l2geth tuning defaults. Not produced by the values YAML;
 // baked into each generated l2geth.env so per-network configs are fully
 // self-contained. Values YAML / config overrides win (these only fill gaps).
@@ -956,6 +964,9 @@ export default class SetupGenRpcPackage extends Command {
         if (L1_INTERFACE_DEPRECATED_ENV_KEYS.has(key)) continue
         generatedVars[key] = value
       }
+
+      // Forced overrides win over both runtime defaults and the source YAML.
+      Object.assign(generatedVars, L1_INTERFACE_FORCED_ENV_OVERRIDES)
 
       // Full overwrite: a key dropped from the source (or newly deprecated)
       // disappears here too. This is what prevents stale keys such as
