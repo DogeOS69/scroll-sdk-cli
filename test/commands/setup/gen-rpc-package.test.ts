@@ -178,7 +178,7 @@ describe('setup gen-rpc-package env generation', () => {
     expect(l2rethEnv).not.to.include('L2GETH_L1_ENDPOINT=http://old-l1')
   })
 
-  it('writes l1-interface env from values YAML while preserving local Dogecoin RPC settings', () => {
+  it('writes a credential-free l1-interface env, an example template, and a scaffolded local override', () => {
     const valuesDir = path.join(tmpDir, 'values')
     const rpcPackageDir = path.join(tmpDir, 'dogeos-rpc-package')
     fs.mkdirSync(valuesDir, { recursive: true })
@@ -203,21 +203,20 @@ describe('setup gen-rpc-package env generation', () => {
               DOGEOS_L1_INTERFACE_HEALTH_LISTEN_ADDRESS: '0.0.0.0:9090',
               DOGEOS_L1_INTERFACE_NETWORK_STR: 'testnet',
               DOGEOS_L1_INTERFACE_PRIVATE_TOKEN: 'do-not-copy',
+              DOGEOS_L1_INTERFACE_SEQUENCER_GENESIS_MODE: 'true',
             },
           },
         },
       }),
     )
 
+    // A stale generated file from a previous run; full overwrite must drop its keys.
     fs.writeFileSync(
       path.join(rpcPackageDir, 'envs', 'testnet', 'l1-interface.env'),
       [
         '# existing',
         'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL=http://dogecoin-node:44555',
-        'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER=doge',
-        'DOGEOS_L1_INTERFACE_CELESTIA_INDEXER__DA_RPC_URL=http://old-celestia',
-        'DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL=http://l1-devnet-lighthouse:5052',
-        'DOGEOS_L1_INTERFACE_PRIVATE_TOKEN=old-token',
+        'DOGEOS_L1_INTERFACE_SCROLL_MESSENGER_ADDRESS=0xdeadbeef',
         '',
       ].join('\n'),
     )
@@ -225,22 +224,45 @@ describe('setup gen-rpc-package env generation', () => {
     const command = createCommandHarness()
     command.generateL1InterfaceEnvFile(valuesDir, rpcPackageDir, 'testnet')
 
+    // Generated file: deterministic, non-secret config only.
     const env = fs.readFileSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l1-interface.env'), 'utf8')
-    expect(env).to.include('DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL=http://dogecoin-node:44555')
-    expect(env).to.include('DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER=doge')
+    expect(env).to.include('RUST_LOG=info')
     expect(env).to.include('DOGEOS_L1_INTERFACE_API_BIND_ADDRESS=0.0.0.0:8545')
     expect(env).to.include('DOGEOS_L1_INTERFACE_BEACON_API_LISTEN_ADDRESS=0.0.0.0:5052')
     expect(env).to.include('DOGEOS_L1_INTERFACE_CHAIN_ID=6281971')
     expect(env).to.include('DOGEOS_L1_INTERFACE_DATABASE_URL=sqlite:///data/l1-interface-vo3o.sqlite')
-    expect(env).to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL=https://sepolia.example')
     expect(env).to.include('DOGEOS_L1_INTERFACE_GENESIS_JSON_PATH=/app/genesis/genesis.json')
     expect(env).to.include('DOGEOS_L1_INTERFACE_HEALTH_LISTEN_ADDRESS=0.0.0.0:9090')
     expect(env).to.include('DOGEOS_L1_INTERFACE_NETWORK_STR=testnet')
+    // Sequencer genesis mode is forced off no matter what the source says.
+    expect(env).to.include('DOGEOS_L1_INTERFACE_SEQUENCER_GENESIS_MODE=false')
+
+    // Operator-owned endpoints/creds, secrets, Celestia, and deprecated keys are excluded.
     expect(env).not.to.include('CELESTIA')
-    expect(env).not.to.include('http://cluster-dogecoin:44555')
-    expect(env).not.to.include('cluster-user')
+    expect(env).not.to.include('DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL')
+    expect(env).not.to.include('DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER')
+    expect(env).not.to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL')
     expect(env).not.to.include('l1-devnet-lighthouse')
     expect(env).not.to.include('PRIVATE_TOKEN')
+    expect(env).not.to.include('SCROLL_MESSENGER_ADDRESS')
+    // Full overwrite: nothing from the stale prior file survives.
+    expect(env).not.to.include('# existing')
+    expect(env).not.to.include('http://dogecoin-node:44555')
+
+    // Tracked template: credential-free, deterministic, safe to commit.
+    const example = fs.readFileSync(
+      path.join(rpcPackageDir, 'envs', 'testnet', 'l1-interface.local.env.example'),
+      'utf8',
+    )
+    expect(example).to.include('# L1 Interface Testnet — operator overrides (TEMPLATE)')
+    expect(example).to.include('cp envs/testnet/l1-interface.local.env.example envs/testnet/l1-interface.local.env')
+    expect(example).to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL=https://your-ethereum-l1-rpc:8545')
+    expect(example).not.to.include('cluster-dogecoin')
+    expect(example).not.to.include('cluster-user')
+    expect(example).not.to.include('do-not-copy')
+
+    // Local override is scaffolded for the operator to fill in.
+    expect(fs.existsSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l1-interface.local.env'))).to.equal(true)
   })
 
   it('syncs values initContainers into docker-compose services', () => {

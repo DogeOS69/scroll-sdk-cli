@@ -758,6 +758,7 @@ export default class SetupGenRpcPackage extends Command {
       this.log(chalk.cyan(`  - ${genesisJsonPath}`))
       this.log(chalk.cyan(`  - ${protocolContextJsonPath}`))
       this.log(chalk.cyan(`  - ${l1InterfaceEnv.generatedPath}`))
+      this.log(chalk.cyan(`  - ${l1InterfaceEnv.exampleLocalPath} (tracked operator-override template)`))
       this.log(chalk.cyan(`  - ${l1InterfaceEnv.localPath} (operator overrides; not regenerated)`))
       this.log(chalk.cyan(`  - ${composeSync.composePath}`))
       this.log('')
@@ -806,6 +807,34 @@ export default class SetupGenRpcPackage extends Command {
     if (nextContent !== content) {
       fs.writeFileSync(envFilePath, nextContent)
     }
+  }
+
+  // Only the network name and the per-network `cp` path vary.
+  private buildL1InterfaceLocalEnvExample(network: string): string[] {
+    const networkTitle = this.capitalize(network)
+    return [
+      `# L1 Interface ${networkTitle} — operator overrides (TEMPLATE)`,
+      '#',
+      '# Copy this file to `l1-interface.local.env` and fill in the values that depend',
+      '# on YOUR infrastructure:',
+      '#',
+      `#   cp envs/${network}/l1-interface.local.env.example envs/${network}/l1-interface.local.env`,
+      '#',
+      '# The real `l1-interface.local.env` is gitignored (it holds endpoints/credentials)',
+      '# and is loaded AFTER the generated `l1-interface.env`, so anything set here wins.',
+      '# Keep secrets (RPC API keys, passwords) out of version control.',
+      '',
+      '# --- Required: your Ethereum L1 execution RPC (used for Ethereum DA replay) ---',
+      'DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL=https://your-ethereum-l1-rpc:8545',
+      '',
+      '# --- Optional: your beacon node (only if the DA blob source uses beacon_node) ---',
+      '# DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL=http://your-beacon:5052',
+      '',
+      '# --- Optional: Dogecoin RPC ---',
+      '# Defaults to the in-compose dogecoin-node. Only set this to point at an external',
+      '# Dogecoin RPC; include any credentials/API key here (this file is gitignored).',
+      '# DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL=http://user:password@your-dogecoin-rpc:44555',
+    ]
   }
 
   private capitalize(str: string): string {
@@ -934,7 +963,7 @@ export default class SetupGenRpcPackage extends Command {
     rpcPackageDir: string,
     network: string,
     _config: any,
-  ): { generatedPath: string; localPath: string } {
+  ): { exampleLocalPath: string; generatedPath: string; localPath: string } {
     const l1InterfaceYamlPath = path.resolve(valuesDir, 'l1-interface-production.yaml')
 
     if (!fs.existsSync(l1InterfaceYamlPath)) {
@@ -950,6 +979,7 @@ export default class SetupGenRpcPackage extends Command {
 
       const envFilePath = path.join(targetDirectory, 'l1-interface.env')
       const localEnvFilePath = path.join(targetDirectory, 'l1-interface.local.env')
+      const exampleLocalEnvFilePath = path.join(targetDirectory, 'l1-interface.local.env.example')
 
       // Generated file holds ONLY deterministic values derived from the values
       // YAML. Operator-owned keys (local creds / external endpoints), secrets,
@@ -982,10 +1012,14 @@ export default class SetupGenRpcPackage extends Command {
       ])
       this.log(chalk.green(`✓ Wrote generated l1-interface.env (${Object.keys(generatedVars).length} vars)`))
 
+      // Tracked template: always (re)written so it cannot drift from the CLI.
+      // Credential-free by construction, so it is safe to commit.
+      this.writeL1InterfaceLocalEnvExample(exampleLocalEnvFilePath, network)
+
       // Operator overrides: scaffold once, never clobber.
       this.scaffoldL1InterfaceLocalEnvFile(localEnvFilePath, network, envData)
 
-      return { generatedPath: envFilePath, localPath: localEnvFilePath }
+      return { exampleLocalPath: exampleLocalEnvFilePath, generatedPath: envFilePath, localPath: localEnvFilePath }
 
     } catch (error) {
       throw new Error(`Failed to generate l1-interface.env: ${error instanceof Error ? error.message : String(error)}`)
@@ -1205,6 +1239,8 @@ export default class SetupGenRpcPackage extends Command {
     return yamlPeerListValue
   }
 
+  // Canonical operator-override template. This is the git-tracked file other
+  // operators copy from, so it must stay credential-free and deterministic.
   private resolveL2RethValidSigner(config: any | undefined, valuesDir: string): string | undefined {
     if (config?.sequencer?.L2GETH_SIGNER_ADDRESS) {
       return String(config.sequencer.L2GETH_SIGNER_ADDRESS)
@@ -1286,6 +1322,18 @@ export default class SetupGenRpcPackage extends Command {
     }
 
     fs.writeFileSync(envFilePath, lines.join('\n').replace(/\n*$/, '') + '\n')
+  }
+
+  private writeL1InterfaceLocalEnvExample(exampleFilePath: string, network: string): void {
+    const content = this.buildL1InterfaceLocalEnvExample(network).join('\n').replace(/\n*$/, '') + '\n'
+    const existing = fs.existsSync(exampleFilePath) ? fs.readFileSync(exampleFilePath, 'utf8') : ''
+    if (content === existing) {
+      this.log(chalk.green('✓ l1-interface.local.env.example already up to date'))
+      return
+    }
+
+    fs.writeFileSync(exampleFilePath, content)
+    this.log(chalk.green('✓ Wrote l1-interface.local.env.example (tracked operator-override template)'))
   }
 
 }
