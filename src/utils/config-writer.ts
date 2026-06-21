@@ -122,13 +122,18 @@ export function writeConfigs(
             }
         }
 
-        // 4. Remove JWT secret from [coordinator]
+        // 4. Remove legacy JWT secret from [coordinator]
         if (publicConfig.coordinator && typeof publicConfig.coordinator === 'object') {
             const coordinator = publicConfig.coordinator as TomlObject
             delete coordinator.COORDINATOR_JWT_SECRET_KEY
         }
 
-        // 5. Remove API keys from [contracts.verification]
+        // 5. Remove signer backend metadata. KMS aliases, ARNs, and IRSA role names are infrastructure-private.
+        if (publicConfig.signers) {
+            delete publicConfig.signers
+        }
+
+        // 6. Remove API keys from [contracts.verification]
         if (publicConfig.contracts && typeof publicConfig.contracts === 'object') {
             const contracts = publicConfig.contracts as TomlObject
             if (contracts.verification && typeof contracts.verification === 'object') {
@@ -138,7 +143,7 @@ export function writeConfigs(
             }
         }
 
-        // 6. Remove node private keys (L2GETH_NODEKEY) from all sections
+        // 7. Remove node private keys (L2GETH_NODEKEY) from all sections
         const removeNodeKeys = (obj: TomlObject) => {
             delete obj.L2GETH_NODEKEY
             for (const key in obj) {

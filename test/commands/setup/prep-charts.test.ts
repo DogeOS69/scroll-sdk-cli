@@ -119,10 +119,13 @@ describe('setup prep-charts fee-oracle updates', () => {
     expect(values.configMaps.env.data.DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__FORMULA).to.equal('galileo')
     expect(values.configMaps.env.data.DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__PRICE_UNAVAILABLE_FALLBACK).to.equal('hold_last')
     expect(values.configMaps.env.data.DOGEOS_FEE_ORACLE_L2__RPC_URL).to.equal('http://l2-rpc:8545')
-    expect(values.configMaps.env.data.DOGEOS_FEE_ORACLE_WALLET__PRIVATE_KEY_ENV).to.equal('DOGEOS_FEE_ORACLE_PRIVATE_KEY')
+    expect(values.configMaps.env.data).not.to.have.property('DOGEOS_FEE_ORACLE_WALLET__PRIVATE_KEY_ENV')
     expect(values.env).to.deep.equal([{ name: 'RUST_LOG', value: 'info' }])
-    expect(values.envFrom).to.deep.equal([{ configMapRef: { name: 'fee-oracle-env' } }])
-    expect(values).not.to.have.property('externalSecrets')
+    expect(values.envFrom).to.deep.equal([
+      { secretRef: { name: 'fee-oracle-secret-env' } },
+      { configMapRef: { name: 'fee-oracle-env' } },
+    ])
+    expect(values.externalSecrets).to.have.property('fee-oracle-secret-env')
   })
 })
 

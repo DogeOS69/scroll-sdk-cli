@@ -1,6 +1,6 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic TOML config operations */
+/* eslint-disable @typescript-eslint/no-explicit-any, perfectionist/sort-classes, perfectionist/sort-objects -- Dynamic TOML config operations and lifecycle-oriented command helpers */
 import * as toml from '@iarna/toml'
-import { confirm, password as input, input as textInput } from '@inquirer/prompts'
+import { confirm, password as input, select, input as textInput } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import { Wallet, ethers, isAddress } from 'ethers'
@@ -9,19 +9,39 @@ import crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import type { DogeConfig } from '../../types/doge-config.js'
+
 import { writeConfigs } from '../../utils/config-writer.js'
 import { loadDeploymentSpec } from '../../utils/deployment-spec-generator.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {
+  type BlobArchivePlan,
+  type KmsProvisionIdentity,
+  KmsSignerProvisioner,
+  normalizeEksClusterName,
+  sanitizeName,
+  truncateIamRoleName,
+} from '../../utils/kms-signer-provisioner.js'
+import {
   createNonInteractiveContext,
   resolveEnvValue,
 } from '../../utils/non-interactive.js'
+import {
+  LEGACY_ACCOUNT_KEYS,
+  MANAGED_SIGNER_KEYS,
+  MANAGED_SIGNER_ROLES,
+  type ManagedSignerBackend,
+  type ManagedSignerConfig,
+  type ManagedSignerKey,
+  type ManagedSignerRole,
+  buildLocalSignerConfig,
+} from '../../utils/signer-roles.js'
 
 const DEPLOYMENT_STATE_PATH = path.join('.data', 'deployment-state.yaml')
 
 interface KeyPair {
   address: string
-  privateKey: string
+  privateKey?: string
 }
 
 interface SequencerData {
@@ -54,8 +74,21 @@ interface DeploymentState {
   }
 }
 
+interface KmsIdentityPromptDefaults {
+  awsRegion?: string
+  eksCluster?: string
+  namespace?: string
+  networkAlias?: string
+}
+
+interface ResolvedKmsSignerInput {
+  kmsKeyId?: string
+  roleArn?: string
+  serviceAccount: string
+}
+
 export default class SetupGenKeystore extends Command {
-  static override description = 'Generate keystore and account keys for L2 Geth'
+  static override description = 'Generate L2 node keys and deployment signer identities'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
@@ -63,6 +96,7 @@ export default class SetupGenKeystore extends Command {
     '<%= config.bin %> <%= command.id %> --non-interactive',
     '<%= config.bin %> <%= command.id %> --non-interactive --json --sequencer-count 2 --bootnode-count 2',
     '<%= config.bin %> <%= command.id %> --non-interactive --sequencer-count 2 --bootnode-count 2',
+    '<%= config.bin %> <%= command.id %> --non-interactive --l1-commit-signer-backend aws-kms --l2-gas-oracle-signer-backend aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet',
   ]
 
   static override flags = {
@@ -78,9 +112,71 @@ export default class SetupGenKeystore extends Command {
     'from-spec': Flags.string({
       description: 'Path to DeploymentSpec YAML. Uses infrastructure.sequencerCount and bootnodeCount as count defaults.',
     }),
+    'archive-bucket': Flags.string({
+      description: 'S3 bucket whose read/write permissions should be granted to the eth-da-submitter KMS IAM role.',
+    }),
+    'archive-key-prefix': Flags.string({
+      description: 'Object key prefix under the archive bucket.',
+    }),
+    'archive-region': Flags.string({
+      description: 'Region that owns the archive bucket (defaults to --aws-region).',
+    }),
+    'aws-profile': Flags.string({
+      description: 'AWS CLI profile to use for KMS signer provisioning.',
+    }),
+    'aws-region': Flags.string({
+      description: 'AWS region for the EKS cluster and KMS keys.',
+    }),
+    'create-archive-bucket': Flags.boolean({
+      allowNo: true,
+      default: true,
+      description: 'Create the archive bucket if --archive-bucket is set and the bucket does not exist.',
+    }),
+    'disable-archive': Flags.boolean({
+      default: false,
+      description: 'Skip S3 blob archive setup for eth-da-submitter KMS signer.',
+    }),
+    'eks-cluster': Flags.string({
+      description: 'EKS cluster name or ARN used for IRSA trust binding.',
+    }),
+    'eth-da-kms-key-id': Flags.string({
+      description: 'Existing KMS key id, ARN, or alias for L1_COMMIT_SENDER / eth-da-submitter.',
+    }),
+    'eth-da-role-arn': Flags.string({
+      description: 'Existing IAM role ARN to annotate on the eth-da-submitter service account.',
+    }),
+    'eth-da-service-account': Flags.string({
+      default: 'eth-da-submitter',
+      description: 'Kubernetes service account used by eth-da-submitter.',
+    }),
+    'fee-oracle-kms-key-id': Flags.string({
+      description: 'Existing KMS key id, ARN, or alias for L2_GAS_ORACLE_SENDER / fee-oracle.',
+    }),
+    'fee-oracle-role-arn': Flags.string({
+      description: 'Existing IAM role ARN to annotate on the fee-oracle service account.',
+    }),
+    'fee-oracle-service-account': Flags.string({
+      default: 'fee-oracle',
+      description: 'Kubernetes service account used by fee-oracle.',
+    }),
     json: Flags.boolean({
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)',
+    }),
+    'l1-commit-signer-backend': Flags.string({
+      description: 'Signer backend for L1_COMMIT_SENDER / eth-da-submitter.',
+      options: ['local', 'aws-kms'],
+    }),
+    'l2-gas-oracle-signer-backend': Flags.string({
+      description: 'Signer backend for L2_GAS_ORACLE_SENDER / fee-oracle.',
+      options: ['local', 'aws-kms'],
+    }),
+    namespace: Flags.string({
+      default: 'default',
+      description: 'Kubernetes namespace for KMS signer service accounts.',
+    }),
+    'network-alias': Flags.string({
+      description: 'Resource alias used to derive deterministic KMS aliases and IAM role names.',
     }),
     'non-interactive': Flags.boolean({
       char: 'N',
@@ -105,7 +201,7 @@ export default class SetupGenKeystore extends Command {
   }
 
   public async run(): Promise<void> {
-    const { flags } = await this.parse(SetupGenKeystore)
+    const { flags } = await this.parse(SetupGenKeystore) as any
     const nonInteractive = flags['non-interactive']
     const jsonMode = flags.json
 
@@ -114,8 +210,9 @@ export default class SetupGenKeystore extends Command {
     const jsonCtx = new JsonOutputContext('setup gen-keystore', jsonMode)
 
     const existingConfig = await this.getExistingConfig()
+    const dogeConfig = this.getOptionalDogeConfig(jsonCtx)
 
-    jsonCtx.info('Setting up Sequencer keystores, bootnode nodekeys, L2 account keypairs, and coordinator JWT secret key...')
+    jsonCtx.info('Setting up Sequencer keystores, bootnode nodekeys, L2 account keypairs, and signer identities...')
 
     const fromSpecPath = flags['from-spec'] ? path.resolve(flags['from-spec']) : undefined
     let fromSpec: ReturnType<typeof loadDeploymentSpec> | undefined
@@ -150,36 +247,13 @@ export default class SetupGenKeystore extends Command {
       jsonCtx
     )
 
-    // Helper to count existing sequencers
-    const countExistingSequencers = (): number => {
-      const mainSequencer = existingConfig.sequencer?.L2GETH_SIGNER_ADDRESS ? 1 : 0
-      const subSequencers = existingConfig.sequencer
-        ? Object.keys(existingConfig.sequencer)
-            .filter(key => key.startsWith('sequencer-'))
-            .filter(key => {
-              const section = existingConfig.sequencer[key]
-              return section && Object.values(section).some(value => value !== '')
-            })
-            .length
-        : 0
-      return mainSequencer + subSequencers
-    }
-
     // Helper to count existing bootnodes
-    const countExistingBootnodes = (): number => existingConfig.bootnode
-        ? Object.keys(existingConfig.bootnode)
-            .filter(key => key.startsWith('bootnode-'))
-            .filter(key => {
-              const section = existingConfig.bootnode[key]
-              return section && section.L2GETH_NODEKEY !== ''
-            })
-            .length
-        : 0
+    const countExistingBootnodes = (): number => collectExistingBootnodeData().length
 
     // Helper to collect existing sequencer data
     const collectExistingSequencerData = (): SequencerData[] => {
       const data: SequencerData[] = []
-      if (existingConfig.sequencer?.L2GETH_SIGNER_ADDRESS) {
+      if (this.isCompleteSequencerConfig(existingConfig.sequencer)) {
         data.push({
           address: existingConfig.sequencer.L2GETH_SIGNER_ADDRESS,
           keystoreJson: existingConfig.sequencer.L2GETH_KEYSTORE,
@@ -190,7 +264,7 @@ export default class SetupGenKeystore extends Command {
 
       if (existingConfig.sequencer) {
         for (const key of Object.keys(existingConfig.sequencer)) {
-          if (key.startsWith('sequencer-') && Object.values(existingConfig.sequencer[key]).some(value => value !== '')) {
+          if (key.startsWith('sequencer-') && this.isCompleteSequencerConfig(existingConfig.sequencer[key])) {
             data.push({
               address: existingConfig.sequencer[key].L2GETH_SIGNER_ADDRESS,
               keystoreJson: existingConfig.sequencer[key].L2GETH_KEYSTORE,
@@ -203,6 +277,9 @@ export default class SetupGenKeystore extends Command {
 
       return data
     }
+
+    // Helper to count existing sequencers
+    const countExistingSequencers = (): number => collectExistingSequencerData().length
 
     // Helper to collect existing bootnode data
     const collectExistingBootnodeData = (): BootnodeData[] => {
@@ -392,106 +469,127 @@ export default class SetupGenKeystore extends Command {
 
     // ============ ACCOUNT HANDLING ============
     const accounts: Record<string, KeyPair> = {}
-    let ownerPrivateKey: string | undefined
+    const signerConfigs: Partial<Record<ManagedSignerKey, ManagedSignerConfig>> = {}
 
     if (flags.accounts) {
-      const accountTypes: string[] = []
+      jsonCtx.info('Generating/collecting deployment account key pairs and signer identities...')
 
-      if (nonInteractive) {
-        // Non-interactive mode: generate all account types by default
-        accountTypes.push('L2_TESTNET_ACTIVITY_HELPER', 'DEPLOYER', 'L1_COMMIT_SENDER', 'L1_FINALIZE_SENDER', 'L1_GAS_ORACLE_SENDER', 'L2_GAS_ORACLE_SENDER')
-        jsonCtx.info('Generating/collecting account key pairs...')
-      } else {
-        // Interactive mode - original behavior
-        const generateAccounts = await confirm({
-          default: true,
-          message: 'Do you want to generate account key pairs?',
-        })
-        const isTestnetActivityHelper = await confirm({
-          default: true,
-          message: 'Do you want to generate a private key for the Testnet Activity Helper?',
-        })
+      const generateDeployerAccount = nonInteractive || await confirm({
+        default: !existingConfig.accounts?.DEPLOYER_PRIVATE_KEY,
+        message: 'Do you want to generate/update DEPLOYER_PRIVATE_KEY?',
+      })
+      const generateTestnetActivityHelper = nonInteractive || await confirm({
+        default: !existingConfig.accounts?.L2_TESTNET_ACTIVITY_HELPER_PRIVATE_KEY,
+        message: 'Do you want to generate/update L2_TESTNET_ACTIVITY_HELPER_PRIVATE_KEY?',
+      })
+      const configureManagedSigners = nonInteractive || await confirm({
+        default: !this.hasCompleteManagedSignerConfig(existingConfig),
+        message: 'Do you want to configure L1_COMMIT_SENDER and L2_GAS_ORACLE_SENDER signers?',
+      })
 
-        if (isTestnetActivityHelper) {
-          accountTypes.push('L2_TESTNET_ACTIVITY_HELPER')
-        }
-
-        if (generateAccounts) {
-          this.log(chalk.blue('Generating account key pairs...'))
-          accountTypes.push('DEPLOYER', 'L1_COMMIT_SENDER', 'L1_FINALIZE_SENDER', 'L1_GAS_ORACLE_SENDER', 'L2_GAS_ORACLE_SENDER')
-        } else {
-          this.log(chalk.yellow('Skipping account key pair generation...'))
-        }
+      if (generateTestnetActivityHelper) {
+        accounts.L2_TESTNET_ACTIVITY_HELPER = this.getOrGenerateLocalAccount(existingConfig, 'L2_TESTNET_ACTIVITY_HELPER')
       }
 
-      for (const accountType of accountTypes) {
-        accounts[accountType] = existingConfig.accounts?.[`${accountType}_PRIVATE_KEY`] ? {
-            address: existingConfig.accounts[`${accountType}_ADDR`],
-            privateKey: existingConfig.accounts[`${accountType}_PRIVATE_KEY`],
-          } : this.generateKeyPair();
+      if (generateDeployerAccount) {
+        accounts.DEPLOYER = this.getOrGenerateLocalAccount(existingConfig, 'DEPLOYER')
+      }
+
+      if (configureManagedSigners) {
+        const selectedBackends: Record<ManagedSignerKey, ManagedSignerBackend> = {
+          l1CommitSender: await this.resolveSignerBackend(flags, existingConfig, 'l1CommitSender', nonInteractive),
+          l2GasOracleSender: await this.resolveSignerBackend(flags, existingConfig, 'l2GasOracleSender', nonInteractive),
+        }
+        const existingKmsSigners: Partial<Record<ManagedSignerKey, ManagedSignerConfig>> = {}
+        const kmsProvisionDecisions: Partial<Record<ManagedSignerKey, boolean>> = {}
+        const kmsProvisionInputs: Partial<Record<ManagedSignerKey, ResolvedKmsSignerInput>> = {}
+        const kmsSignersToProvision: ManagedSignerKey[] = []
+
+        for (const signerKey of MANAGED_SIGNER_KEYS) {
+          if (selectedBackends[signerKey] !== 'aws_kms') continue
+
+          const existingSigner = this.getCompleteExistingKmsSigner(existingConfig, signerKey)
+          existingKmsSigners[signerKey] = existingSigner
+          const shouldProvision = this.shouldConfigureKmsSigner(flags, signerKey, existingSigner, nonInteractive)
+          kmsProvisionDecisions[signerKey] = shouldProvision
+          if (shouldProvision) {
+            kmsSignersToProvision.push(signerKey)
+          }
+        }
+
+        const kmsIdentityDefaults = this.getKmsIdentityPromptDefaults(kmsSignersToProvision, existingKmsSigners)
+        const kmsIdentity = kmsSignersToProvision.length > 0
+          ? await this.resolveKmsIdentity(flags, nonInteractive, jsonCtx, kmsIdentityDefaults)
+          : undefined
+        if (kmsIdentity) {
+          for (const signerKey of kmsSignersToProvision) {
+            const role = MANAGED_SIGNER_ROLES[signerKey]
+            kmsProvisionInputs[signerKey] = this.resolveKmsSignerInput(
+              flags,
+              signerKey,
+              role,
+              existingKmsSigners[signerKey]
+            )
+          }
+
+          this.logKmsProvisionPlan(kmsSignersToProvision, kmsIdentity, kmsProvisionInputs, jsonCtx)
+        }
+
+        for (const signerKey of MANAGED_SIGNER_KEYS) {
+          const role = MANAGED_SIGNER_ROLES[signerKey]
+          const backend = selectedBackends[signerKey]
+          if (backend === 'local') {
+            const account = this.getOrGenerateLocalAccount(existingConfig, role.role)
+            accounts[role.role] = account
+            signerConfigs[signerKey] = buildLocalSignerConfig(role)
+            continue
+          }
+
+          const existingSigner = existingKmsSigners[signerKey]
+          const shouldProvision = kmsProvisionDecisions[signerKey] ?? true
+          if (!shouldProvision && existingSigner) {
+            accounts[role.role] = { address: existingSigner.expectedAddress as string }
+            signerConfigs[signerKey] = existingSigner
+            jsonCtx.info(`${role.service}: keeping existing ${role.role} AWS KMS signer from config.toml (${existingSigner.expectedAddress})`)
+            continue
+          }
+
+          const identity = kmsIdentity as KmsProvisionIdentity
+          const archive = role.service === 'eth-da-submitter'
+            ? await this.resolveBlobArchive(flags, identity.awsRegion, dogeConfig, nonInteractive, jsonCtx)
+            : { created: false, enabled: false }
+          const provisionInput = kmsProvisionInputs[signerKey] as ResolvedKmsSignerInput
+          const provisioner = new KmsSignerProvisioner(jsonCtx, flags['aws-profile'])
+          const provisioned = await provisioner.provision(role, identity, {
+            archive,
+            createArchiveBucket: flags['create-archive-bucket'],
+            kmsKeyId: provisionInput.kmsKeyId,
+            roleArn: provisionInput.roleArn,
+            serviceAccount: provisionInput.serviceAccount,
+          })
+          accounts[role.role] = { address: provisioned.address }
+          signerConfigs[signerKey] = provisioned.signerConfig
+        }
       }
 
       // Handle OWNER address
-      if (nonInteractive) {
-        // Non-interactive: use existing OWNER_ADDR or generate new
-        if (existingConfig.accounts?.OWNER_ADDR) {
-          accounts.OWNER = { address: existingConfig.accounts.OWNER_ADDR, privateKey: '' }
-          jsonCtx.info(`Using existing OWNER_ADDR: ${existingConfig.accounts.OWNER_ADDR}`)
-        } else {
-          accounts.OWNER = this.generateKeyPair()
-          ownerPrivateKey = accounts.OWNER.privateKey
-          jsonCtx.addWarning('Generated new OWNER wallet. Private key included in JSON output but NOT stored in config.toml. Save it securely!')
-        }
+      const ownerAddress = await this.resolveOwnerAddress(existingConfig.accounts?.OWNER_ADDR, nonInteractive, jsonCtx)
+      if (ownerAddress) {
+        accounts.OWNER = { address: ownerAddress }
+        jsonCtx.info(`Using OWNER_ADDR: ${ownerAddress}`)
       } else {
-        // Interactive mode - original behavior
-        const ownerAddress = await this.getOwnerAddress(existingConfig.accounts?.OWNER_ADDR)
-        if (ownerAddress) {
-          accounts.OWNER = { address: ownerAddress, privateKey: '' }
-        } else {
-          accounts.OWNER = this.generateKeyPair()
-          ownerPrivateKey = accounts.OWNER.privateKey
-          this.log(chalk.yellow('\n⚠️  IMPORTANT: Randomly generated Owner wallet'))
-          this.log(chalk.yellow('Owner private key will not be stored in config.toml'))
-          this.log(chalk.yellow('Please store this private key in a secure place:'))
-          this.log(chalk.red(`OWNER_PRIVATE_KEY: ${accounts.OWNER.privateKey}`))
-          this.log(chalk.yellow('You will need this key for future operations!\n'))
-        }
+        this.log(chalk.yellow('Skipping OWNER_ADDR update.'))
       }
 
       // Display public addresses (only in interactive mode)
       if (!jsonMode) {
-        this.log(chalk.cyan('\nGenerated public addresses:'))
-        for (const [key, value] of Object.entries(accounts)) {
-          this.log(chalk.cyan(`${key}_ADDR: ${value.address}`))
-        }
-      }
-    }
-
-    // ============ COORDINATOR JWT SECRET ============
-    let coordinatorJwtSecretKey: string | undefined
-
-    if (nonInteractive) {
-      // Non-interactive: generate if not exists
-      if (existingConfig.coordinator?.COORDINATOR_JWT_SECRET_KEY) {
-        jsonCtx.info('Keeping existing COORDINATOR_JWT_SECRET_KEY')
-      } else {
-        coordinatorJwtSecretKey = this.generateRandomHex(32)
-        jsonCtx.info('Generated new COORDINATOR_JWT_SECRET_KEY')
-      }
-    } else {
-      // Interactive mode - original behavior
-      const generateJwtSecret = await confirm({
-        default: !existingConfig.coordinator?.COORDINATOR_JWT_SECRET_KEY,
-        message: 'Do you want to generate a random COORDINATOR_JWT_SECRET_KEY?',
-      })
-      if (generateJwtSecret) {
-        coordinatorJwtSecretKey = this.generateRandomHex(32)
-        this.log(chalk.green(`Generated COORDINATOR_JWT_SECRET_KEY: ${coordinatorJwtSecretKey}`))
+        this.logAccountAddresses(accounts, signerConfigs)
       }
     }
 
     // ============ UPDATE CONFIG ============
     let shouldUpdate = true
+    let deploymentStateWritten = false
     if (!nonInteractive) {
       shouldUpdate = await confirm({ message: 'Do you want to update these values in config.toml?' })
     }
@@ -501,13 +599,16 @@ export default class SetupGenKeystore extends Command {
         sequencerData,
         bootnodeData,
         accounts,
-        coordinatorJwtSecretKey,
+        signerConfigs,
         overwrite,
         overwriteBootnodes,
         jsonMode
       )
 
-      this.writeDeploymentState(sequencerData, bootnodeData, jsonMode)
+      if (sequencerData.length > 0 || bootnodeData.length > 0) {
+        this.writeDeploymentState(sequencerData, bootnodeData, jsonMode)
+        deploymentStateWritten = true
+      }
     }
 
     // ============ JSON OUTPUT ============
@@ -527,8 +628,7 @@ export default class SetupGenKeystore extends Command {
           regenerated: overwriteBootnodes,
         },
         configUpdated: shouldUpdate,
-        coordinatorJwtSecretGenerated: Boolean(coordinatorJwtSecretKey),
-        deploymentStatePath: shouldUpdate ? DEPLOYMENT_STATE_PATH : undefined,
+        deploymentStatePath: deploymentStateWritten ? DEPLOYMENT_STATE_PATH : undefined,
         fromSpec: fromSpecPath,
         sequencers: {
           addresses: sequencerData.map(s => s.address),
@@ -537,11 +637,7 @@ export default class SetupGenKeystore extends Command {
           instances: this.getPublicSequencerState(sequencerData),
           regenerated: overwrite,
         },
-      }
-
-      // Include owner private key if newly generated (critical for user to save)
-      if (ownerPrivateKey) {
-        responseData.ownerPrivateKey = ownerPrivateKey
+        signers: signerConfigs,
       }
 
       jsonCtx.success(responseData)
@@ -558,10 +654,6 @@ export default class SetupGenKeystore extends Command {
       address: wallet.address,
       privateKey: wallet.privateKey,
     }
-  }
-
-  private generateRandomHex(bytes: number): string {
-    return crypto.randomBytes(bytes).toString('hex')
   }
 
   private async generateSequencerKeystore(index: number, providedPassword: string = ''): Promise<SequencerData> {
@@ -629,29 +721,473 @@ export default class SetupGenKeystore extends Command {
     return toml.parse(configContent) as any
   }
 
-  private async getOwnerAddress(existingOwnerAddr: string | undefined): Promise<string | undefined> {
-    const useManualAddress = await confirm({
-      default: Boolean(existingOwnerAddr),
-      message: 'Do you want to manually provide an Owner wallet address?',
+  private getOptionalDogeConfig(jsonCtx: JsonOutputContext): DogeConfig | undefined {
+    const configPath = path.resolve('.data/doge-config.toml')
+    if (!fs.existsSync(configPath)) return undefined
+
+    try {
+      return toml.parse(fs.readFileSync(configPath, 'utf8')) as unknown as DogeConfig
+    } catch (error) {
+      jsonCtx.addWarning(`Could not parse ${configPath}. S3 archive IAM permissions will only use explicit --archive-bucket flags. ${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    }
+  }
+
+  private getOrGenerateLocalAccount(existingConfig: any, accountType: string): KeyPair {
+    const privateKeyKey = `${accountType}_PRIVATE_KEY`
+    const addressKey = `${accountType}_ADDR`
+    const privateKey = existingConfig.accounts?.[privateKeyKey]
+    const address = existingConfig.accounts?.[addressKey]
+    if (privateKey && address) {
+      return { address, privateKey }
+    }
+
+    return this.generateKeyPair()
+  }
+
+  private hasCompleteManagedSignerConfig(existingConfig: any): boolean {
+    return MANAGED_SIGNER_KEYS.every((signerKey) => {
+      const signer = existingConfig.signers?.[signerKey] as ManagedSignerConfig | undefined
+      if (!signer?.backend) return false
+      if (signer.backend === 'local') return true
+      return Boolean(signer.expectedAddress && signer.kmsKeyId && signer.kmsRegion)
     })
-    if (useManualAddress) {
-      let ownerAddress: string | undefined
-      while (!ownerAddress) {
-        const input = await textInput({
-          default: existingOwnerAddr,
-          message: 'Enter the Owner wallet address:',
-        })
-        if (isAddress(input)) {
-          ownerAddress = input
-        } else {
-          this.log(chalk.red('Invalid Ethereum address format. Please try again.'))
-        }
+  }
+
+  private getDefaultKmsAlias(role: ManagedSignerRole, identity: KmsProvisionIdentity): string {
+    return `alias/dogeos/${sanitizeName(identity.networkAlias)}/${sanitizeName(identity.eksCluster)}/${role.aliasSuffix}`
+  }
+
+  private getDefaultKmsRoleName(role: ManagedSignerRole, identity: KmsProvisionIdentity): string {
+    return truncateIamRoleName(`dogeos-${sanitizeName(identity.networkAlias)}-${sanitizeName(identity.eksCluster)}-${role.roleSuffix}`)
+  }
+
+  private getKmsIdentityPromptDefaults(
+    signerKeys: ManagedSignerKey[],
+    existingKmsSigners: Partial<Record<ManagedSignerKey, ManagedSignerConfig>>
+  ): KmsIdentityPromptDefaults {
+    const defaults: KmsIdentityPromptDefaults = {}
+    for (const signerKey of signerKeys) {
+      const signer = existingKmsSigners[signerKey]
+      if (!signer) continue
+
+      defaults.awsRegion ||= signer.kmsRegion
+      defaults.namespace ||= signer.namespace
+      defaults.eksCluster ||= signer.eksCluster
+      defaults.networkAlias ||= signer.networkAlias
+
+      const role = MANAGED_SIGNER_ROLES[signerKey]
+      const parsedAlias = this.parseDogeosKmsAlias(signer.kmsKeyId, role)
+      defaults.eksCluster ||= parsedAlias?.eksCluster
+      defaults.networkAlias ||= parsedAlias?.networkAlias
+    }
+
+    return defaults
+  }
+
+  private getSignerPurpose(role: ManagedSignerRole): string {
+    return role.configKey === 'l1CommitSender'
+      ? 'submits Ethereum DA transactions to L1'
+      : 'updates the L2 fee oracle contract'
+  }
+
+  private isCompleteSequencerConfig(section: any): boolean {
+    return Boolean(
+      section?.L2GETH_SIGNER_ADDRESS &&
+      section?.L2GETH_KEYSTORE &&
+      section?.L2GETH_NODEKEY &&
+      section?.L2GETH_PASSWORD
+    )
+  }
+
+  private logAccountAddresses(
+    accounts: Record<string, KeyPair>,
+    signerConfigs: Partial<Record<ManagedSignerKey, ManagedSignerConfig>>
+  ): void {
+    if (Object.keys(accounts).length === 0) return
+
+    this.log(chalk.cyan('\nSigner/account addresses to write:'))
+    for (const [key, value] of Object.entries(accounts)) {
+      this.log(chalk.cyan(`${key}_ADDR: ${value.address}${this.describeAccountAddress(key, signerConfigs)}`))
+    }
+  }
+
+  private describeAccountAddress(
+    accountKey: string,
+    signerConfigs: Partial<Record<ManagedSignerKey, ManagedSignerConfig>>
+  ): string {
+    if (accountKey === 'OWNER') return ' (external owner)'
+    if (accountKey === 'DEPLOYER') return ' (local private key, deploys L2 contracts)'
+    if (accountKey === 'L2_TESTNET_ACTIVITY_HELPER') return ' (local private key, activity helper)'
+
+    for (const signerKey of MANAGED_SIGNER_KEYS) {
+      const role = MANAGED_SIGNER_ROLES[signerKey]
+      if (accountKey !== role.role) continue
+
+      const signerConfig = signerConfigs[signerKey]
+      const backend = signerConfig?.backend === 'aws_kms' ? 'AWS KMS' : 'local private key'
+      return ` (${backend}, ${role.service})`
+    }
+
+    return ''
+  }
+
+  private parseDogeosKmsAlias(kmsKeyId: string | undefined, role: ManagedSignerRole): KmsIdentityPromptDefaults | undefined {
+    if (!kmsKeyId) return undefined
+
+    const match = kmsKeyId.match(/^alias\/dogeos\/([^/]+)\/([^/]+)\/([^/]+)$/)
+    if (!match || match[3] !== role.aliasSuffix) return undefined
+
+    return {
+      eksCluster: match[2],
+      networkAlias: match[1],
+    }
+  }
+
+  private logKmsProvisionPlan(
+    signerKeys: ManagedSignerKey[],
+    identity: KmsProvisionIdentity,
+    inputs: Partial<Record<ManagedSignerKey, ResolvedKmsSignerInput>>,
+    jsonCtx: JsonOutputContext
+  ): void {
+    jsonCtx.info('AWS KMS signer context:')
+    jsonCtx.info(`  AWS region: ${identity.awsRegion}`)
+    jsonCtx.info(`  EKS cluster: ${identity.eksCluster}`)
+    jsonCtx.info(`  Kubernetes namespace: ${identity.namespace}`)
+    jsonCtx.info(`  Resource alias: ${identity.networkAlias}`)
+
+    jsonCtx.info('KMS signer setup plan:')
+    for (const signerKey of signerKeys) {
+      const role = MANAGED_SIGNER_ROLES[signerKey]
+      const input = inputs[signerKey]
+      const kmsKeyId = input?.kmsKeyId || this.getDefaultKmsAlias(role, identity)
+      const roleArn = input?.roleArn
+      const serviceAccount = input?.serviceAccount || role.defaultServiceAccount
+      jsonCtx.info(`  ${role.service} (${role.role}):`)
+      jsonCtx.info(`    purpose: ${this.getSignerPurpose(role)}`)
+      jsonCtx.info(`    KMS key: ${kmsKeyId}`)
+      jsonCtx.info(`    service account: ${identity.namespace}/${serviceAccount}`)
+      jsonCtx.info(roleArn
+        ? `    IAM role ARN: ${roleArn}`
+        : `    IAM role name: ${this.getDefaultKmsRoleName(role, identity)}`)
+    }
+  }
+
+  private async resolveOwnerAddress(
+    existingOwnerAddr: string | undefined,
+    nonInteractive: boolean,
+    jsonCtx: JsonOutputContext
+  ): Promise<string | undefined> {
+    const resolvedExisting = resolveEnvValue(existingOwnerAddr)
+    if (resolvedExisting) {
+      if (!isAddress(resolvedExisting)) {
+        jsonCtx.error(
+          'E603_INVALID_OWNER_ADDR',
+          `OWNER_ADDR is not a valid Ethereum address: ${resolvedExisting}`,
+          'CONFIGURATION',
+          true,
+          { ownerAddr: existingOwnerAddr }
+        )
       }
 
-      return ownerAddress
+      return resolvedExisting
+    }
+
+    if (nonInteractive) {
+      jsonCtx.error(
+        'E604_OWNER_ADDR_REQUIRED',
+        'OWNER_ADDR is required. Provide accounts.OWNER_ADDR in config.toml or set the referenced environment variable before running setup gen-keystore.',
+        'CONFIGURATION',
+        true
+      )
+    }
+
+    let ownerAddress: string | undefined
+    while (!ownerAddress) {
+      const value = await textInput({
+        message: 'Enter the Owner wallet address:',
+        required: true,
+      })
+      if (isAddress(value)) {
+        ownerAddress = value
+      } else {
+        this.log(chalk.red('Invalid Ethereum address format. Please try again.'))
+      }
+    }
+
+    return ownerAddress
+  }
+
+  private async resolveSignerBackend(
+    flags: any,
+    existingConfig: any,
+    signerKey: ManagedSignerKey,
+    nonInteractive: boolean
+  ): Promise<ManagedSignerBackend> {
+    const flagName = signerKey === 'l1CommitSender'
+      ? 'l1-commit-signer-backend'
+      : 'l2-gas-oracle-signer-backend'
+    const rawBackend = flags[flagName] || existingConfig.signers?.[signerKey]?.backend || 'local'
+    const normalized = this.normalizeSignerBackend(rawBackend)
+
+    if (nonInteractive) return normalized
+
+    const role = MANAGED_SIGNER_ROLES[signerKey]
+    return select({
+      choices: [
+        { name: 'Local private key (development)', value: 'local' },
+        { name: 'AWS KMS (recommended production)', value: 'aws_kms' },
+      ],
+      default: normalized,
+      message: `${role.role} / ${role.service} signer backend (${this.getSignerPurpose(role)}):`,
+    })
+  }
+
+  private normalizeSignerBackend(value: string): ManagedSignerBackend {
+    if (value === 'aws-kms' || value === 'aws_kms') return 'aws_kms'
+    if (value === 'local') return 'local'
+
+    throw new Error(`Unsupported signer backend: ${value}`)
+  }
+
+  private getCompleteExistingKmsSigner(existingConfig: any, signerKey: ManagedSignerKey): ManagedSignerConfig | undefined {
+    const signer = existingConfig.signers?.[signerKey] as ManagedSignerConfig | undefined
+    if (
+      signer?.backend === 'aws_kms' &&
+      signer.expectedAddress &&
+      signer.kmsKeyId &&
+      signer.kmsRegion
+    ) {
+      return signer
     }
 
     return undefined
+  }
+
+  private hasKmsProvisioningInput(flags: any, signerKey: ManagedSignerKey): boolean {
+    return Boolean(
+      flags['aws-region'] ||
+      flags['eks-cluster'] ||
+      flags['network-alias'] ||
+      this.hasFlag('namespace') ||
+      this.targetKmsKeyId(flags, signerKey) ||
+      this.targetRoleArn(flags, signerKey) ||
+      this.targetServiceAccountFlag(flags, signerKey) ||
+      (
+        signerKey === 'l1CommitSender' &&
+        (
+          flags['archive-bucket'] ||
+          flags['archive-region'] ||
+          flags['archive-key-prefix'] ||
+          flags['disable-archive'] ||
+          this.hasFlag('create-archive-bucket') ||
+          this.hasFlag('no-create-archive-bucket')
+        )
+      )
+    )
+  }
+
+  private shouldConfigureKmsSigner(
+    flags: any,
+    signerKey: ManagedSignerKey,
+    existingSigner: ManagedSignerConfig | undefined,
+    nonInteractive: boolean
+  ): boolean {
+    if (this.hasKmsProvisioningInput(flags, signerKey) || !existingSigner) return true
+    return !nonInteractive
+  }
+
+  private async resolveKmsIdentity(
+    flags: any,
+    nonInteractive: boolean,
+    jsonCtx: JsonOutputContext,
+    defaults: KmsIdentityPromptDefaults = {}
+  ): Promise<KmsProvisionIdentity> {
+    const awsRegion = await this.resolveRequiredTextFlag(flags['aws-region'], defaults.awsRegion, 'AWS region for the EKS cluster and KMS keys:', '--aws-region', nonInteractive, jsonCtx)
+    const eksCluster = await this.resolveRequiredTextFlag(flags['eks-cluster'], defaults.eksCluster, 'EKS cluster name or ARN for IRSA trust:', '--eks-cluster', nonInteractive, jsonCtx)
+    const networkAlias = await this.resolveRequiredTextFlag(flags['network-alias'], defaults.networkAlias, 'Resource alias used in KMS aliases and IAM role names (for example devnet, testnet, staging):', '--network-alias', nonInteractive, jsonCtx)
+    const namespace = await this.resolveNamespace(this.hasFlag('namespace') ? flags.namespace : undefined, defaults.namespace, nonInteractive)
+
+    return {
+      awsRegion,
+      eksCluster: normalizeEksClusterName(eksCluster),
+      namespace,
+      networkAlias,
+    }
+  }
+
+  private async resolveNamespace(value: string | undefined, defaultValue: string | undefined, nonInteractive: boolean): Promise<string> {
+    const resolved = resolveEnvValue(value) || defaultValue || 'default'
+    if (nonInteractive) return resolved.trim()
+
+    return (await textInput({
+      default: resolved.trim(),
+      message: 'Kubernetes namespace for signer service accounts:',
+      required: true,
+    })).trim()
+  }
+
+  private async resolveRequiredTextFlag(
+    value: string | undefined,
+    defaultValue: string | undefined,
+    message: string,
+    flagName: string,
+    nonInteractive: boolean,
+    jsonCtx: JsonOutputContext
+  ): Promise<string> {
+    const resolved = resolveEnvValue(value)
+    if (resolved) return resolved.trim()
+    if (nonInteractive && defaultValue) return defaultValue.trim()
+
+    if (nonInteractive) {
+      jsonCtx.error(
+        'E601_MISSING_FIELD',
+        `${flagName} is required for AWS KMS signer provisioning.`,
+        'CONFIGURATION',
+        true,
+        { flag: flagName }
+      )
+    }
+
+    return (await textInput({ default: defaultValue, message, required: true })).trim()
+  }
+
+  private resolveKmsSignerInput(
+    flags: any,
+    signerKey: ManagedSignerKey,
+    role: ManagedSignerRole,
+    existingSigner: ManagedSignerConfig | undefined
+  ): ResolvedKmsSignerInput {
+    return {
+      kmsKeyId: this.targetKmsKeyId(flags, signerKey) || existingSigner?.kmsKeyId,
+      roleArn: this.targetRoleArn(flags, signerKey) || existingSigner?.serviceAccountRoleArn,
+      serviceAccount: this.targetServiceAccountFlag(flags, signerKey) || existingSigner?.serviceAccountName || role.defaultServiceAccount,
+    }
+  }
+
+  private async resolveBlobArchive(
+    flags: any,
+    awsRegion: string,
+    dogeConfig: DogeConfig | undefined,
+    nonInteractive: boolean,
+    jsonCtx: JsonOutputContext
+  ): Promise<BlobArchivePlan> {
+    if (flags['disable-archive']) {
+      return { created: false, enabled: false }
+    }
+
+    const flagBucket = resolveEnvValue(flags['archive-bucket'])
+    const flagRegion = resolveEnvValue(flags['archive-region'])
+    const flagKeyPrefix = resolveEnvValue(flags['archive-key-prefix'])
+    const configuredArchive = this.getConfiguredBlobArchive(dogeConfig)
+
+    const defaultBucket = flagBucket || configuredArchive?.bucket
+    const defaultRegion = flagRegion || configuredArchive?.region || awsRegion
+    const defaultKeyPrefix = flagKeyPrefix || configuredArchive?.keyPrefix || ''
+
+    if (nonInteractive) {
+      if (!defaultBucket) {
+        if (flagRegion || flagKeyPrefix) {
+          jsonCtx.addWarning('--archive-region and --archive-key-prefix were ignored because --archive-bucket was not provided and doge-config has no enabled S3 archive bucket.')
+        }
+
+        return { created: false, enabled: false }
+      }
+
+      return {
+        bucket: defaultBucket,
+        created: false,
+        enabled: true,
+        keyPrefix: defaultKeyPrefix || undefined,
+        region: defaultRegion,
+      }
+    }
+
+    const enabled = await confirm({
+      default: Boolean(defaultBucket),
+      message: 'Grant eth-da-submitter IAM role access to an S3 blob archive bucket?',
+    })
+    if (!enabled) return { created: false, enabled: false }
+
+    const bucket = (await textInput({
+      default: defaultBucket || '',
+      message: 'S3 archive bucket name:',
+      required: true,
+    })).trim()
+    const region = (await textInput({
+      default: defaultRegion,
+      message: 'S3 archive bucket region:',
+      required: true,
+    })).trim()
+    const keyPrefix = (await textInput({
+      default: defaultKeyPrefix,
+      message: 'S3 object key prefix (optional):',
+    })).trim()
+
+    if (
+      configuredArchive?.bucket &&
+      (
+        bucket !== configuredArchive.bucket ||
+        region !== (configuredArchive.region || awsRegion) ||
+        keyPrefix !== (configuredArchive.keyPrefix || '')
+      )
+    ) {
+      jsonCtx.addWarning('S3 archive IAM target differs from .data/doge-config.toml. Update doge-config/chart values too if the runtime archive target should change.')
+    }
+
+    return {
+      bucket,
+      created: false,
+      enabled: true,
+      keyPrefix: keyPrefix || undefined,
+      region,
+    }
+  }
+
+  private getConfiguredBlobArchive(dogeConfig: DogeConfig | undefined): BlobArchivePlan | undefined {
+    const s3 = dogeConfig?.ethereumDa?.blobArchive?.s3
+    if (!s3 || !this.isConfigTruthy(s3.enabled) || !s3.bucket) return undefined
+
+    return {
+      bucket: String(s3.bucket),
+      created: false,
+      enabled: true,
+      keyPrefix: this.optionalConfigString(s3.keyPrefix),
+      region: this.optionalConfigString(s3.region),
+    }
+  }
+
+  private isConfigTruthy(value: boolean | string | undefined): boolean {
+    return value === true || (typeof value === 'string' && value.toLowerCase() === 'true')
+  }
+
+  private optionalConfigString(value: number | string | undefined): string | undefined {
+    if (value === undefined || value === null || value === '') return undefined
+    return String(value)
+  }
+
+  private targetKmsKeyId(flags: any, signerKey: ManagedSignerKey): string | undefined {
+    return signerKey === 'l1CommitSender'
+      ? resolveEnvValue(flags['eth-da-kms-key-id'])
+      : resolveEnvValue(flags['fee-oracle-kms-key-id'])
+  }
+
+  private targetRoleArn(flags: any, signerKey: ManagedSignerKey): string | undefined {
+    return signerKey === 'l1CommitSender'
+      ? resolveEnvValue(flags['eth-da-role-arn'])
+      : resolveEnvValue(flags['fee-oracle-role-arn'])
+  }
+
+  private targetServiceAccountFlag(flags: any, signerKey: ManagedSignerKey): string | undefined {
+    if (signerKey === 'l1CommitSender') {
+      return this.hasFlag('eth-da-service-account')
+        ? resolveEnvValue(flags['eth-da-service-account'])
+        : undefined
+    }
+
+    return this.hasFlag('fee-oracle-service-account')
+      ? resolveEnvValue(flags['fee-oracle-service-account'])
+      : undefined
   }
 
   private getPublicBootnodeState(bootnodeData: BootnodeData[]): PublicBootnodeState[] {
@@ -677,7 +1213,7 @@ export default class SetupGenKeystore extends Command {
     sequencerData: SequencerData[],
     bootnodeData: BootnodeData[],
     accounts: Record<string, KeyPair>,
-    coordinatorJwtSecretKey?: string,
+    signerConfigs: Partial<Record<ManagedSignerKey, ManagedSignerConfig>>,
     overwriteSequencers: boolean = false,
     overwriteBootnodes: boolean = false,
     jsonMode: boolean = false
@@ -692,6 +1228,9 @@ export default class SetupGenKeystore extends Command {
       switch (key) {
       case 'sequencer': {
         updatedConfig[key] = value || {}
+        const shouldRewriteSequencers = overwriteSequencers || sequencerData.length > 0
+        if (!shouldRewriteSequencers) break
+
         const enodeUrls = sequencerData.map((data, index) => this.getEnodeUrl(data.nodekey, index))
         updatedConfig[key].L2_GETH_STATIC_PEERS = enodeUrls
 
@@ -729,6 +1268,8 @@ export default class SetupGenKeystore extends Command {
 
       case 'bootnode': {
         updatedConfig[key] = value || {}
+        const shouldRewriteBootnodes = overwriteBootnodes || bootnodeData.length > 0
+        if (!shouldRewriteBootnodes) break
         
         const bootnodeEnodeUrls = bootnodeData.map((data, index) => this.getBootnodeEnodeUrl(data.nodekey, index))
         updatedConfig[key].L2_GETH_PUBLIC_PEERS = bootnodeEnodeUrls
@@ -755,12 +1296,19 @@ export default class SetupGenKeystore extends Command {
 
       case 'accounts': {
         updatedConfig[key] = value || {}
+        for (const legacyKey of LEGACY_ACCOUNT_KEYS) {
+          delete updatedConfig[key][legacyKey]
+        }
+
         for (const [accountKey, accountValue] of Object.entries(accounts)) {
           if (accountKey === 'OWNER') {
             updatedConfig[key].OWNER_ADDR = accountValue.address
             delete updatedConfig[key].OWNER_PRIVATE_KEY
           } else {
-            updatedConfig[key][`${accountKey}_PRIVATE_KEY`] = accountValue.privateKey
+            if (accountValue.privateKey) {
+              updatedConfig[key][`${accountKey}_PRIVATE_KEY`] = accountValue.privateKey
+            }
+
             updatedConfig[key][`${accountKey}_ADDR`] = accountValue.address
           }
         }
@@ -768,11 +1316,20 @@ export default class SetupGenKeystore extends Command {
       break;
       }
 
+      case 'signers': {
+        updatedConfig[key] = value || {}
+        for (const [signerKey, signerConfig] of Object.entries(signerConfigs)) {
+          if (signerConfig) {
+            updatedConfig[key][signerKey] = signerConfig
+          }
+        }
+
+      break;
+      }
+
       case 'coordinator': {
         updatedConfig[key] = value || {}
-        if (coordinatorJwtSecretKey) {
-          updatedConfig[key].COORDINATOR_JWT_SECRET_KEY = coordinatorJwtSecretKey
-        }
+        delete updatedConfig[key].COORDINATOR_JWT_SECRET_KEY
       
       break;
       }
@@ -792,7 +1349,7 @@ export default class SetupGenKeystore extends Command {
     if (!updatedConfig.sequencer) addOrUpdateSection('sequencer', null)
     if (!updatedConfig.bootnode) addOrUpdateSection('bootnode', null)
     if (!updatedConfig.accounts) addOrUpdateSection('accounts', null)
-    if (coordinatorJwtSecretKey && !updatedConfig.coordinator) addOrUpdateSection('coordinator', null)
+    if (Object.keys(signerConfigs).length > 0 && !updatedConfig.signers) addOrUpdateSection('signers', null)
 
     // Use the atomic sync function to write both files
     const success = writeConfigs(updatedConfig, undefined, undefined, jsonMode)

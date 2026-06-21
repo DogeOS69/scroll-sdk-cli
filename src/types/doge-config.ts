@@ -108,16 +108,6 @@ export interface DogeConfig {
       maxPendingBlobTxs?: number | string
       targetBlobsPerTx?: number | string
     }
-    signer?: {
-      backend?: 'aws_kms' | 'local'
-      expectedAddress?: string
-      kmsKeyArn?: string
-      kmsKeyId?: string
-      kmsRegion?: string
-      namespace?: string
-      serviceAccountName?: string
-      serviceAccountRoleArn?: string
-    }
     submitterRpcUrl?: string
   }
 

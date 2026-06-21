@@ -27,6 +27,7 @@ import {
   L1_INTERFACE_RPC_WEBSOCKET_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
+import { MANAGED_SIGNER_ROLES, buildLocalSignerConfig } from './signer-roles.js'
 
 const ETHEREUM_DA_DEFAULTS = {
   devnet: {
@@ -149,15 +150,11 @@ type FrontendExternalUrls = DeploymentSpec['frontend']['externalUrls']
 type PrivateKeyAccountKey =
   | 'deployer'
   | 'l1CommitSender'
-  | 'l1FinalizeSender'
-  | 'l1GasOracleSender'
   | 'l2GasOracleSender'
 
 const PRIVATE_KEY_ACCOUNT_KEYS = [
   'deployer',
   'l1CommitSender',
-  'l1FinalizeSender',
-  'l1GasOracleSender',
   'l2GasOracleSender',
 ] as const satisfies readonly PrivateKeyAccountKey[]
 
@@ -711,8 +708,6 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     { path: 'accounts.deployer.address', value: spec.accounts?.deployer?.address },
     { path: 'accounts.owner.address', value: spec.accounts?.owner?.address },
     { path: 'accounts.l1CommitSender.address', value: spec.accounts?.l1CommitSender?.address },
-    { path: 'accounts.l1FinalizeSender.address', value: spec.accounts?.l1FinalizeSender?.address },
-    { path: 'accounts.l1GasOracleSender.address', value: spec.accounts?.l1GasOracleSender?.address },
     { path: 'accounts.l2GasOracleSender.address', value: spec.accounts?.l2GasOracleSender?.address },
   ]
 
@@ -1074,13 +1069,14 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     DEPLOYER_PRIVATE_KEY: optionalAccountPrivateKey(spec, 'deployer'),
     L1_COMMIT_SENDER_ADDR: optionalAccountAddress(spec, 'l1CommitSender'),
     L1_COMMIT_SENDER_PRIVATE_KEY: optionalAccountPrivateKey(spec, 'l1CommitSender'),
-    L1_FINALIZE_SENDER_ADDR: optionalAccountAddress(spec, 'l1FinalizeSender'),
-    L1_FINALIZE_SENDER_PRIVATE_KEY: optionalAccountPrivateKey(spec, 'l1FinalizeSender'),
-    L1_GAS_ORACLE_SENDER_ADDR: optionalAccountAddress(spec, 'l1GasOracleSender'),
-    L1_GAS_ORACLE_SENDER_PRIVATE_KEY: optionalAccountPrivateKey(spec, 'l1GasOracleSender'),
     L2_GAS_ORACLE_SENDER_ADDR: optionalAccountAddress(spec, 'l2GasOracleSender'),
     L2_GAS_ORACLE_SENDER_PRIVATE_KEY: optionalAccountPrivateKey(spec, 'l2GasOracleSender'),
     OWNER_ADDR: spec.accounts.owner.address,
+  }
+
+  config.signers = {
+    l1CommitSender: buildLocalSignerConfig(MANAGED_SIGNER_ROLES.l1CommitSender),
+    l2GasOracleSender: buildLocalSignerConfig(MANAGED_SIGNER_ROLES.l2GasOracleSender),
   }
 
   // [db] section
@@ -1250,7 +1246,6 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     BATCH_COLLECTION_TIME_SEC: spec.rollup.coordinator.batchCollectionTimeSec,
     BUNDLE_COLLECTION_TIME_SEC: spec.rollup.coordinator.bundleCollectionTimeSec,
     CHUNK_COLLECTION_TIME_SEC: spec.rollup.coordinator.chunkCollectionTimeSec,
-    COORDINATOR_JWT_SECRET_KEY: spec.rollup.coordinator.jwtSecretKey || '',
   }
 
   // [ingress] section

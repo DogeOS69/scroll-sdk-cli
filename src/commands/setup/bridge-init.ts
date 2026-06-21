@@ -192,9 +192,9 @@ export class BridgeInitCommand extends Command {
     '$ scrollsdk setup bridge-init --step 2',
     '$ scrollsdk setup bridge-init -s 123456',
     '$ scrollsdk setup bridge-init --seed 123456',
-    '$ scrollsdk setup bridge-init --image-tag v0.3.0-develop-643e7315',
-    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag v0.3.0-develop-643e7315',
-    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag v0.3.0-develop-643e7315 --docker-platform linux/amd64',
+    '$ scrollsdk setup bridge-init --image-tag dev-20260619',
+    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag dev-20260619',
+    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag dev-20260619 --docker-platform linux/amd64',
     '$ scrollsdk setup bridge-init --non-interactive --json --seed 123456',
   ]
 
@@ -204,7 +204,7 @@ export class BridgeInitCommand extends Command {
       description: 'Docker platform for bridge-genesis-tools image.',
     }),
     'image-tag': Flags.string({
-      description: 'Specify the Docker image tag to use (defaults to v0.3.0-develop-643e7315)',
+      description: 'Specify the Docker image tag to use (defaults to dev-20260619)',
       required: false,
     }),
     'json': Flags.boolean({
@@ -688,7 +688,7 @@ export class BridgeInitCommand extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'v0.3.0-develop-643e7315'
+    const defaultTag = 'dev-20260619'
 
     if (!providedTag) {
       return defaultTag
@@ -913,46 +913,6 @@ export class BridgeInitCommand extends Command {
     }
 
     return height
-  }
-
-  /**
-   * Run a one-shot curl pod inside the cluster and return the raw JSON-RPC
-   * response body for eth_blockNumber. Throws on kubectl/pod/curl failure;
-   * the caller decides how to classify the error.
-   */
-  private queryEthereumDaRpcViaClusterPod(rpcUrl: string): string {
-    const namespace = process.env.NAMESPACE ?? 'default'
-    const podName = `bridge-init-eth-da-height-${Date.now()}`
-    this.jsonCtx.info(`Querying eth_blockNumber from ${rpcUrl} via curl pod ${podName} in namespace ${namespace}`)
-
-    const output = execFileSync(
-      'kubectl',
-      [
-        'run', podName,
-        '--namespace', namespace,
-        '--image', 'curlimages/curl:8.20.0',
-        '--restart', 'Never',
-        '--attach',
-        '--rm',
-        '--quiet',
-        '--env', `ETH_RPC_URL=${rpcUrl}`,
-        '--command', '--', 'sh', '-lc',
-        'curl -fsS "$ETH_RPC_URL" -H "content-type: application/json" --data \'{"jsonrpc":"2.0","id":"bridge-init-pre-setup-ethereum-da-height","method":"eth_blockNumber","params":[]}\'',
-      ],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 }
-    )
-
-    // --quiet suppresses kubectl chatter, but be defensive: keep only the
-    // line that looks like the JSON-RPC response.
-    const jsonLine = output
-      .split('\n')
-      .map((line) => line.trim())
-      .find((line) => line.startsWith('{'))
-    if (!jsonLine) {
-      throw new Error(`curl pod produced no JSON-RPC response; output: ${output.slice(0, 512)}`)
-    }
-
-    return jsonLine
   }
 
   private getNestedValue(obj: any, path: string): any {
@@ -1251,6 +1211,46 @@ export class BridgeInitCommand extends Command {
     this.assertAttestationPubkeysReady(paths.setupDefaultsPath)
 
     return seed
+  }
+
+  /**
+   * Run a one-shot curl pod inside the cluster and return the raw JSON-RPC
+   * response body for eth_blockNumber. Throws on kubectl/pod/curl failure;
+   * the caller decides how to classify the error.
+   */
+  private queryEthereumDaRpcViaClusterPod(rpcUrl: string): string {
+    const namespace = process.env.NAMESPACE ?? 'default'
+    const podName = `bridge-init-eth-da-height-${Date.now()}`
+    this.jsonCtx.info(`Querying eth_blockNumber from ${rpcUrl} via curl pod ${podName} in namespace ${namespace}`)
+
+    const output = execFileSync(
+      'kubectl',
+      [
+        'run', podName,
+        '--namespace', namespace,
+        '--image', 'curlimages/curl:8.20.0',
+        '--restart', 'Never',
+        '--attach',
+        '--rm',
+        '--quiet',
+        '--env', `ETH_RPC_URL=${rpcUrl}`,
+        '--command', '--', 'sh', '-lc',
+        'curl -fsS "$ETH_RPC_URL" -H "content-type: application/json" --data \'{"jsonrpc":"2.0","id":"bridge-init-pre-setup-ethereum-da-height","method":"eth_blockNumber","params":[]}\'',
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 }
+    )
+
+    // --quiet suppresses kubectl chatter, but be defensive: keep only the
+    // line that looks like the JSON-RPC response.
+    const jsonLine = output
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.startsWith('{'))
+    if (!jsonLine) {
+      throw new Error(`curl pod produced no JSON-RPC response; output: ${output.slice(0, 512)}`)
+    }
+
+    return jsonLine
   }
 
   private resolveDogecoinChainId(network: string): number {

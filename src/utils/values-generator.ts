@@ -876,8 +876,6 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
   const ethereumDa = getEthereumDaConfig(spec)
   const batch = getEthereumDaBatchConfig(spec)
-  const { signer } = ethereumDa
-  const isAwsKmsSigner = signer?.backend === 'aws_kms'
   const l2StartBlockNumber = getEthereumDaL2StartBlockNumber(spec)
 
   const image = resolveImage(spec, 'ethDaSubmitter', {
@@ -902,14 +900,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
           } : {}),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MIN_PRIORITY_FEE_WEI: ethereumDa.minPriorityFeeWei || '2000000000',
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
-          ...(isAwsKmsSigner ? {
-            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_EXPECTED_ADDRESS: signer?.expectedAddress || '',
-            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_KEY_ID: signer?.kmsKeyId || '',
-            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_REGION: signer?.kmsRegion || '',
-            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SIGNER_BACKEND: 'aws_kms',
-          } : {
-            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SIGNER_BACKEND: 'local',
-          }),
+          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SIGNER_BACKEND: 'local',
           DOGEOS_ETH_DA_SUBMITTER_L2__CONFIRMATIONS: String(ethereumDa.l2Confirmations ?? 0),
           DOGEOS_ETH_DA_SUBMITTER_L2__FETCH_LIMIT: String(ethereumDa.fetchLimit ?? 128),
           DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: ethereumDa.l2RpcUrl || L2_RPC_ENDPOINT,
@@ -934,7 +925,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
     ],
     envFrom: [
       { configMapRef: { name: 'eth-da-submitter-env' } },
-      ...(isAwsKmsSigner ? [] : [{ secretRef: { name: 'eth-da-submitter-secret-env' } }])
+      { secretRef: { name: 'eth-da-submitter-secret-env' } }
     ],
     image,
     persistence: {
@@ -946,16 +937,6 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
     resources: {
       limits: { cpu: '1000m', memory: '1Gi' },
       requests: { cpu: '200m', memory: '256Mi' }
-    }
-  }
-
-  if (isAwsKmsSigner) {
-    values.serviceAccount = {
-      annotations: signer?.serviceAccountRoleArn ? {
-        'eks.amazonaws.com/role-arn': signer.serviceAccountRoleArn,
-      } : {},
-      create: true,
-      name: signer?.serviceAccountName || 'eth-da-submitter',
     }
   }
 
@@ -977,7 +958,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
     }
   }
 
-  const externalSecrets = isAwsKmsSigner ? undefined : generateExternalSecrets(
+  const externalSecrets = generateExternalSecrets(
       'eth-da-submitter-secret-env',
       secretConfig,
       [
@@ -1117,7 +1098,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
 function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
   const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
-  const ethereumDaSigner = getEthereumDaConfig(spec).signer
+  const ethereumDaSubmitterAddress = spec.accounts.l1CommitSender?.address
   const l2StartBlockNumber = getEthereumDaL2StartBlockNumber(spec)
 
   const image = resolveImage(spec, 'withdrawalProcessor', {
@@ -1210,9 +1191,9 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__POLL_INTERVAL_MS', value: '6000' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__MAX_BLOCKS_PER_CYCLE', value: '64' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__STATUS_POLL_INTERVAL_MS', value: '5000' },
-      ...(ethereumDaSigner?.expectedAddress ? [{
+      ...(ethereumDaSubmitterAddress ? [{
         name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__EXPECTED_BATCHERS',
-        value: JSON.stringify([ethereumDaSigner.expectedAddress]),
+        value: JSON.stringify([ethereumDaSubmitterAddress]),
       }] : []),
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL', value: getEthereumDaBeaconRpcUrl(spec) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS', value: '10000' },
@@ -1388,7 +1369,6 @@ function generateCoordinatorApiValues(spec: DeploymentSpec): string {
     secretConfig,
     [
       { property: 'SCROLL_COORDINATOR_DB_DSN', remoteKey: 'coordinator-api-secret-env', secretKey: 'SCROLL_COORDINATOR_DB_DSN' },
-      { property: 'SCROLL_COORDINATOR_AUTH_SECRET', remoteKey: 'coordinator-api-secret-env', secretKey: 'SCROLL_COORDINATOR_AUTH_SECRET' }
     ]
   )
 
@@ -1420,7 +1400,6 @@ function generateCoordinatorCronValues(spec: DeploymentSpec): string {
     secretConfig,
     [
       { property: 'SCROLL_COORDINATOR_DB_DSN', remoteKey: 'coordinator-cron-secret-env', secretKey: 'SCROLL_COORDINATOR_DB_DSN' },
-      { property: 'SCROLL_COORDINATOR_AUTH_SECRET', remoteKey: 'coordinator-cron-secret-env', secretKey: 'SCROLL_COORDINATOR_AUTH_SECRET' }
     ]
   )
 
@@ -1517,6 +1496,7 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
           DOGEOS_FEE_ORACLE_PRICE_ORACLE__MAX_RETRIES: '3',
           DOGEOS_FEE_ORACLE_PRICE_ORACLE__REQUEST_TIMEOUT: '30',
           DOGEOS_FEE_ORACLE_WALLET__PRIVATE_KEY_ENV: 'DOGEOS_FEE_ORACLE_PRIVATE_KEY',
+          DOGEOS_FEE_ORACLE_WALLET__SIGNER_BACKEND: 'local',
         },
         enabled: true
       }
@@ -1525,7 +1505,8 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
       { name: 'RUST_LOG', value: 'info' }
     ],
     envFrom: [
-      { configMapRef: { name: 'fee-oracle-env' } }
+      { configMapRef: { name: 'fee-oracle-env' } },
+      { secretRef: { name: 'fee-oracle-secret-env' } },
     ],
     image,
     probes: {

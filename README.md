@@ -963,7 +963,7 @@ FLAGS
       seed which will regenerate the sequencer and fee wallet
 
   --image-tag=<value>
-      Specify the Docker image tag to use (defaults to v0.3.0-develop-643e7315)
+      Specify the Docker image tag to use (defaults to dev-20260619)
 
   --json
       Output in JSON format (stdout for data, stderr for logs)
@@ -999,7 +999,7 @@ EXAMPLES
 
   $ scrollsdk setup bridge-init --image-tag 0.2.0-debug
 
-  $ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag v0.3.0-develop-643e7315
+  $ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag dev-20260619
 
   $ scrollsdk setup bridge-init --non-interactive --json --seed 123456
 ```
@@ -1307,28 +1307,64 @@ _See code: [src/commands/setup/gas-token.ts](https://github.com/dogeos69/scroll-
 
 ## `scrollsdk setup gen-keystore`
 
-Generate keystore and account keys for L2 Geth
+Generate L2 node keys and deployment signer identities
 
 ```
 USAGE
-  $ scrollsdk setup gen-keystore [--accounts] [--bootnode-count <value>] [--json] [-N] [--regenerate-bootnodes]
-    [--regenerate-sequencers] [--sequencer-count <value>] [--sequencer-password <value>]
+  $ scrollsdk setup gen-keystore [--accounts] [--bootnode-count <value>] [--from-spec <value>]
+    [--archive-bucket <value>] [--archive-key-prefix <value>] [--archive-region <value>] [--aws-profile <value>]
+    [--aws-region <value>] [--create-archive-bucket] [--disable-archive] [--eks-cluster <value>]
+    [--eth-da-kms-key-id <value>] [--eth-da-role-arn <value>] [--eth-da-service-account <value>]
+    [--fee-oracle-kms-key-id <value>] [--fee-oracle-role-arn <value>] [--fee-oracle-service-account <value>]
+    [--json] [--l1-commit-signer-backend local|aws-kms] [--l2-gas-oracle-signer-backend local|aws-kms]
+    [--namespace <value>] [--network-alias <value>] [-N] [--regenerate-bootnodes] [--regenerate-sequencers]
+    [--sequencer-count <value>] [--sequencer-password <value>]
 
 FLAGS
-  -N, --non-interactive             Run without prompts. Uses existing keys or generates new ones based on flags.
-      --[no-]accounts               Generate account key pairs
-      --bootnode-count=<value>      [default: 2] Number of bootnodes. In non-interactive mode, generates if not enough
-                                    exist.
-      --json                        Output in JSON format (stdout for data, stderr for logs)
-      --regenerate-bootnodes        Force regeneration of all bootnode keys (non-interactive mode)
-      --regenerate-sequencers       Force regeneration of all sequencer keys (non-interactive mode)
-      --sequencer-count=<value>     [default: 2] Number of sequencers (including primary). In non-interactive mode,
-                                    generates if not enough exist.
-      --sequencer-password=<value>  Password for sequencer keystores (or use $ENV:VAR_NAME pattern). Defaults to a
-                                    generated random password for new sequencers in non-interactive mode.
+  -N, --non-interactive                        Run without prompts. Uses existing keys or generates new ones based on
+                                               flags.
+      --[no-]accounts                          Generate account key pairs
+      --archive-bucket=<value>                 S3 bucket whose read/write permissions should be granted to the
+                                               eth-da-submitter KMS IAM role.
+      --archive-key-prefix=<value>             Object key prefix under the archive bucket.
+      --archive-region=<value>                 Region that owns the archive bucket (defaults to --aws-region).
+      --aws-profile=<value>                    AWS CLI profile to use for KMS signer provisioning.
+      --aws-region=<value>                     AWS region for the EKS cluster and KMS keys.
+      --bootnode-count=<value>                 [default: 2] Number of bootnodes. In non-interactive mode, generates if
+                                               not enough exist.
+      --[no-]create-archive-bucket             Create the archive bucket if --archive-bucket is set and the bucket does
+                                               not exist.
+      --disable-archive                        Skip S3 blob archive setup for eth-da-submitter KMS signer.
+      --eks-cluster=<value>                    EKS cluster name or ARN used for IRSA trust binding.
+      --eth-da-kms-key-id=<value>              Existing KMS key id, ARN, or alias for L1_COMMIT_SENDER /
+                                               eth-da-submitter.
+      --eth-da-role-arn=<value>                Existing IAM role ARN to annotate on the eth-da-submitter service
+                                               account.
+      --eth-da-service-account=<value>         [default: eth-da-submitter] Kubernetes service account used by
+                                               eth-da-submitter.
+      --fee-oracle-kms-key-id=<value>          Existing KMS key id, ARN, or alias for L2_GAS_ORACLE_SENDER /
+                                               fee-oracle.
+      --fee-oracle-role-arn=<value>            Existing IAM role ARN to annotate on the fee-oracle service account.
+      --fee-oracle-service-account=<value>     [default: fee-oracle] Kubernetes service account used by fee-oracle.
+      --from-spec=<value>                      Path to DeploymentSpec YAML. Uses infrastructure.sequencerCount and
+                                               bootnodeCount as count defaults.
+      --json                                   Output in JSON format (stdout for data, stderr for logs)
+      --l1-commit-signer-backend=<option>      Signer backend for L1_COMMIT_SENDER / eth-da-submitter.
+                                               <options: local|aws-kms>
+      --l2-gas-oracle-signer-backend=<option>  Signer backend for L2_GAS_ORACLE_SENDER / fee-oracle.
+                                               <options: local|aws-kms>
+      --namespace=<value>                      [default: default] Kubernetes namespace for KMS signer service accounts.
+      --network-alias=<value>                  Resource alias used to derive deterministic KMS aliases and IAM role
+                                               names.
+      --regenerate-bootnodes                   Force regeneration of all bootnode keys (non-interactive mode)
+      --regenerate-sequencers                  Force regeneration of all sequencer keys (non-interactive mode)
+      --sequencer-count=<value>                [default: 2] Number of sequencers (including primary). In non-interactive
+                                               mode, generates if not enough exist.
+      --sequencer-password=<value>             Password for sequencer keystores (or use $ENV:VAR_NAME pattern). Defaults
+                                               to a generated random password for new sequencers in non-interactive mode.
 
 DESCRIPTION
-  Generate keystore and account keys for L2 Geth
+  Generate L2 node keys and deployment signer identities
 
 EXAMPLES
   $ scrollsdk setup gen-keystore
@@ -1338,6 +1374,10 @@ EXAMPLES
   $ scrollsdk setup gen-keystore --non-interactive
 
   $ scrollsdk setup gen-keystore --non-interactive --json --sequencer-count 2 --bootnode-count 2
+
+  $ scrollsdk setup gen-keystore --non-interactive --sequencer-count 2 --bootnode-count 2
+
+  $ scrollsdk setup gen-keystore --non-interactive --l1-commit-signer-backend aws-kms --l2-gas-oracle-signer-backend aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet
 ```
 
 _See code: [src/commands/setup/gen-keystore.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-keystore.ts)_

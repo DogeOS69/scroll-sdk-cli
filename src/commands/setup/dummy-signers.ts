@@ -533,15 +533,7 @@ export class DummySignersManager {
   private getConfiguredAwsImageSource(): AwsImageSource {
     const configuredSource = this.nonInteractiveOptions.awsImageSource || this.dogeConfig.awsSigner?.imageSource
 
-    if (configuredSource && awsImageSources.includes(configuredSource as AwsImageSource)) {
-      return configuredSource as AwsImageSource
-    }
-
-    if (configuredSource) {
-      this.warn(`Unsupported AWS image source "${configuredSource}", using dockerhub.`)
-    }
-
-    return 'dockerhub'
+    return this.normalizeAwsImageSource(configuredSource) || 'dockerhub'
   }
 
   private getConfiguredAwsImageUri(): string | undefined {
@@ -681,6 +673,18 @@ export class DummySignersManager {
     }
   }
 
+  private normalizeAwsImageSource(configuredSource: string | undefined): AwsImageSource | undefined {
+    if (configuredSource && awsImageSources.includes(configuredSource as AwsImageSource)) {
+      return configuredSource as AwsImageSource
+    }
+
+    if (configuredSource) {
+      this.warn(`Unsupported AWS image source "${configuredSource}", using dockerhub.`)
+    }
+
+    return undefined
+  }
+
   private prepareDummyImage(awsRegion: string, awsAccountId: string): void {
     const repoName = 'dogeos/dummy-signer';
     const dockerHubImage = this.buildDockerHubImage();
@@ -804,6 +808,45 @@ export class DummySignersManager {
     }
   }
 
+  private async resolveAwsImageSource(): Promise<AwsImageSource> {
+    if (this.nonInteractive || this.nonInteractiveOptions.awsImageSource) {
+      return this.getConfiguredAwsImageSource()
+    }
+
+    const defaultSource = this.normalizeAwsImageSource(this.dogeConfig.awsSigner?.imageSource) || 'dockerhub'
+    return select<AwsImageSource>({
+      choices: [
+        { name: 'Docker Hub', value: 'dockerhub' },
+        { name: 'Existing ECR image', value: 'ecr' },
+        { name: 'Sync Docker Hub image to ECR', value: 'ecr-sync' },
+      ],
+      default: defaultSource,
+      message: 'AWS_IMAGE_SOURCE',
+    })
+  }
+
+  private async resolveAwsTextOption(options: {
+    configValue?: string
+    defaultValue?: string
+    flagValue?: string
+    message: string
+    required?: boolean
+  }): Promise<string> {
+    if (options.flagValue) {
+      return options.flagValue
+    }
+
+    if (this.nonInteractive) {
+      return options.configValue || options.defaultValue || ''
+    }
+
+    return input({
+      default: options.configValue || options.defaultValue,
+      message: options.message,
+      required: options.required,
+    })
+  }
+
   private async saveAwsSignerConfig(awsSignerConfig: {
     accountId: string
     ecsClusterName: string
@@ -878,46 +921,48 @@ export class DummySignersManager {
   private async setupAwsSigners(availableTags: string[]): Promise<void> {
     this.log(chalk.blue('\nSetting up AWS Dummy Signers...'))
 
-    let AWS_REGION: string
-    let NETWORK_ALIAS: string
-    let AWS_ACCOUNT_ID: string
-    let ECS_CLUSTER: string
+    const AWS_REGION = await this.resolveAwsTextOption({
+      configValue: this.dogeConfig.awsSigner?.region,
+      defaultValue: 'us-east-1',
+      flagValue: this.nonInteractiveOptions.awsRegion,
+      message: 'AWS_REGION',
+      required: true,
+    })
+
+    const NETWORK_ALIAS = await this.resolveAwsTextOption({
+      configValue: this.dogeConfig.awsSigner?.networkAlias,
+      defaultValue: 'devnet',
+      flagValue: this.nonInteractiveOptions.awsNetworkAlias,
+      message: 'NETWORK_ALIAS',
+      required: true,
+    })
+
+    const AWS_ACCOUNT_ID = await this.resolveAwsTextOption({
+      configValue: this.dogeConfig.awsSigner?.accountId,
+      flagValue: this.nonInteractiveOptions.awsAccountId,
+      message: 'AWS_ACCOUNT_ID',
+      required: true,
+    })
+
+    const ECS_CLUSTER = await this.resolveAwsTextOption({
+      configValue: this.dogeConfig.awsSigner?.ecsClusterName,
+      defaultValue: 'default',
+      flagValue: this.nonInteractiveOptions.awsEcsClusterName,
+      message: 'ECS_CLUSTER',
+      required: true,
+    })
 
     if (this.nonInteractive) {
-      AWS_REGION = this.nonInteractiveOptions.awsRegion || this.dogeConfig.awsSigner?.region || 'us-east-1'
-      NETWORK_ALIAS = this.nonInteractiveOptions.awsNetworkAlias || this.dogeConfig.awsSigner?.networkAlias || 'devnet'
-      AWS_ACCOUNT_ID = this.nonInteractiveOptions.awsAccountId || this.dogeConfig.awsSigner?.accountId || ''
-      ECS_CLUSTER = this.nonInteractiveOptions.awsEcsClusterName || this.dogeConfig.awsSigner?.ecsClusterName || 'default'
-
       if (!AWS_ACCOUNT_ID) {
         this.error('AWS_ACCOUNT_ID is required for AWS deployment in non-interactive mode. Use --aws-account-id flag.')
         return
       }
 
       this.log(chalk.blue(`Non-interactive mode: AWS_REGION=${AWS_REGION}, NETWORK_ALIAS=${NETWORK_ALIAS}, AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}, ECS_CLUSTER=${ECS_CLUSTER}`))
-    } else {
-      AWS_REGION = this.nonInteractiveOptions.awsRegion || this.dogeConfig.awsSigner?.region || await input({
-        default: 'us-east-1',
-        message: 'AWS_REGION',
-        required: true,
-      })
-
-      NETWORK_ALIAS = this.nonInteractiveOptions.awsNetworkAlias || this.dogeConfig.awsSigner?.networkAlias || await input({
-        default: 'devnet',
-        message: 'NETWORK_ALIAS',
-        required: true,
-      })
-
-      AWS_ACCOUNT_ID = this.nonInteractiveOptions.awsAccountId || this.dogeConfig.awsSigner?.accountId || await input({
-        message: 'AWS_ACCOUNT_ID',
-        required: true,
-      })
-
-      ECS_CLUSTER = this.nonInteractiveOptions.awsEcsClusterName || this.dogeConfig.awsSigner?.ecsClusterName || 'default'
     }
 
-    const awsImageSource = this.getConfiguredAwsImageSource()
     const customAwsImageUri = this.getConfiguredAwsImageUri()
+    const awsImageSource = customAwsImageUri ? this.getConfiguredAwsImageSource() : await this.resolveAwsImageSource()
     const IMAGE_URI = customAwsImageUri || (
       awsImageSource === 'dockerhub'
         ? this.buildDockerHubImage()

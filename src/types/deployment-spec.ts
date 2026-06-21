@@ -225,20 +225,6 @@ export interface AccountsConfig {
     privateKey?: string
   }
 
-  /** L1 finalize sender (finalizes batches) */
-  l1FinalizeSender?: {
-    /** Optional public address. Derived from privateKey when possible. */
-    address?: string
-    privateKey?: string
-  }
-
-  /** L1 gas oracle sender */
-  l1GasOracleSender?: {
-    /** Optional public address. Derived from privateKey when possible. */
-    address?: string
-    privateKey?: string
-  }
-
   /** L2 gas oracle sender */
   l2GasOracleSender?: {
     /** Optional public address. Derived from privateKey when possible. */
@@ -406,7 +392,6 @@ export interface EthereumDaConfig {
     maxPendingBlobTxs?: number
     targetBlobsPerTx?: number
   }
-  signer?: EthereumDaSignerConfig
   /** eth_da_submitter lifecycle/store settings. */
   submitterDbPath?: string
 }
@@ -434,17 +419,6 @@ export interface EthereumDaS3ArchiveConfig {
 
 export interface EthereumDaInboxWorkerConfig {
   startBlock?: number
-}
-
-export interface EthereumDaSignerConfig {
-  backend?: 'aws_kms' | 'local'
-  expectedAddress?: string
-  kmsKeyArn?: string
-  kmsKeyId?: string
-  kmsRegion?: string
-  namespace?: string
-  serviceAccountName?: string
-  serviceAccountRoleArn?: string
 }
 
 export interface BridgeConfig {
@@ -626,8 +600,6 @@ export interface RollupConfig {
     batchCollectionTimeSec: number
     bundleCollectionTimeSec: number
     chunkCollectionTimeSec: number
-    /** Deprecated for specs; setup gen-keystore generates it when absent. */
-    jwtSecretKey?: string
   }
 
   /** Finalization settings */

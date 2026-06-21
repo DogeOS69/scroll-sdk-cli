@@ -22,6 +22,11 @@ import {
   resolveBlockbookKubernetesEndpoints,
   resolveDogecoinKubernetesEndpoints,
 } from '../../utils/kubernetes-endpoints.js'
+import {
+  getRequiredManagedSignerConfig,
+  isAwsKmsSigner,
+  isLocalSigner,
+} from '../../utils/signer-roles.js'
 
 /**
  * Strip port from hostname for Kubernetes Ingress
@@ -112,6 +117,15 @@ function removeExternalSecret(productionYaml: any, secretName: string, changes: 
   changes.push({ key: `externalSecrets.${secretName}`, newValue: 'removed', oldValue: 'present' })
 }
 
+function ensureNamedSecretRef(productionYaml: any, secretName: string, changes: PrepChartChange[]): void {
+  productionYaml.envFrom ||= []
+  if (!Array.isArray(productionYaml.envFrom)) return
+  if (productionYaml.envFrom.some((item: any) => item?.secretRef?.name === secretName)) return
+
+  productionYaml.envFrom.push({ secretRef: { name: secretName } })
+  changes.push({ key: `envFrom.${secretName}`, newValue: 'present', oldValue: 'missing' })
+}
+
 export function scrubFeeOracleLegacyValues(productionYaml: any): PrepChartChange[] {
   const changes: PrepChartChange[] = []
   const envData = productionYaml.configMaps?.env?.data
@@ -149,9 +163,6 @@ export function scrubFeeOracleLegacyValues(productionYaml: any): PrepChartChange
       productionYaml.env = nextEnv
     }
   }
-
-  removeNamedSecretRef(productionYaml, 'fee-oracle-secret-env', changes)
-  removeExternalSecret(productionYaml, 'fee-oracle-secret-env', changes)
 
   return changes
 }
@@ -226,7 +237,6 @@ export function buildFeeOraclePrepEnv(input: {
     DOGEOS_FEE_ORACLE_L2__CHAIN_ID: input.l2ChainId === undefined ? undefined : String(input.l2ChainId),
     DOGEOS_FEE_ORACLE_L2__GAS_ORACLE_CONTRACT: input.gasOracleContract,
     DOGEOS_FEE_ORACLE_L2__RPC_URL: input.l2RpcUrl,
-    DOGEOS_FEE_ORACLE_WALLET__PRIVATE_KEY_ENV: 'DOGEOS_FEE_ORACLE_PRIVATE_KEY',
   }
 }
 
@@ -675,7 +685,7 @@ export default class SetupPrepCharts extends Command {
     'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL': 'ethereumDa.submitterRpcUrl',
     'DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL': 'general.L2_RPC_ENDPOINT',
     'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID': 'ethereumDa.chainId',
-    'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__EXPECTED_BATCHERS': 'ethereumDa.signer.expectedAddress',
+    'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__EXPECTED_BATCHERS': 'signers.l1CommitSender.expectedAddress',
     'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL': 'ethereumDa.submitterRpcUrl',
     'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID': 'general.CHAIN_ID_L2',
     // Add ingress host mappings
@@ -848,7 +858,6 @@ export default class SetupPrepCharts extends Command {
   private isL2Node(chartName: string): boolean {
     return chartName.startsWith("l2-bootnode") || chartName.startsWith("l2-rpc") || chartName.startsWith("l2-sequencer");
   }
-
 
   private async loadConfigs(flags: any): Promise<void> {
     const configPath = path.join(process.cwd(), 'config.toml')
@@ -1710,10 +1719,54 @@ export default class SetupPrepCharts extends Command {
           l2RpcUrl: this.getConfigValue("general.L2_RPC_ENDPOINT"),
         })
 
+        const signerConfig = this.requireSigner('l2GasOracleSender')
+        if (isAwsKmsSigner(signerConfig)) {
+          Object.assign(todoMappings, {
+            DOGEOS_FEE_ORACLE_WALLET__KMS_EXPECTED_ADDRESS: signerConfig.expectedAddress,
+            DOGEOS_FEE_ORACLE_WALLET__KMS_KEY_ID: signerConfig.kmsKeyId,
+            DOGEOS_FEE_ORACLE_WALLET__KMS_REGION: signerConfig.kmsRegion,
+            DOGEOS_FEE_ORACLE_WALLET__SIGNER_BACKEND: 'aws_kms',
+          })
+        } else {
+          Object.assign(todoMappings, {
+            DOGEOS_FEE_ORACLE_WALLET__PRIVATE_KEY_ENV: 'DOGEOS_FEE_ORACLE_PRIVATE_KEY',
+            DOGEOS_FEE_ORACLE_WALLET__SIGNER_BACKEND: 'local',
+          })
+        }
+
         const feeOracleChanges = [
           ...scrubFeeOracleLegacyValues(productionYaml),
           ...applyFeeOracleCurrentEnv(productionYaml, todoMappings),
         ]
+
+        if (isAwsKmsSigner(signerConfig)) {
+          feeOracleChanges.push(...removeConfigMapEnvKeys(productionYaml, [
+            'DOGEOS_FEE_ORACLE_WALLET__PRIVATE_KEY_ENV',
+          ]))
+          removeNamedSecretRef(productionYaml, 'fee-oracle-secret-env', feeOracleChanges)
+          removeExternalSecret(productionYaml, 'fee-oracle-secret-env', feeOracleChanges)
+
+          productionYaml.serviceAccount ||= {}
+          const previousServiceAccount = JSON.stringify(productionYaml.serviceAccount)
+          productionYaml.serviceAccount.create = true
+          productionYaml.serviceAccount.name = signerConfig.serviceAccountName || 'fee-oracle'
+          if (signerConfig.serviceAccountRoleArn) {
+            productionYaml.serviceAccount.annotations ||= {}
+            productionYaml.serviceAccount.annotations['eks.amazonaws.com/role-arn'] = signerConfig.serviceAccountRoleArn
+          }
+
+          const nextServiceAccount = JSON.stringify(productionYaml.serviceAccount)
+          if (previousServiceAccount !== nextServiceAccount) {
+            feeOracleChanges.push({ key: 'serviceAccount', newValue: nextServiceAccount, oldValue: previousServiceAccount })
+          }
+        } else if (isLocalSigner(signerConfig)) {
+          feeOracleChanges.push(...removeConfigMapEnvKeys(productionYaml, [
+            'DOGEOS_FEE_ORACLE_WALLET__KMS_EXPECTED_ADDRESS',
+            'DOGEOS_FEE_ORACLE_WALLET__KMS_KEY_ID',
+            'DOGEOS_FEE_ORACLE_WALLET__KMS_REGION',
+          ]))
+          ensureNamedSecretRef(productionYaml, 'fee-oracle-secret-env', feeOracleChanges)
+        }
 
         if (feeOracleChanges.length > 0) {
           changes.push(...feeOracleChanges)
@@ -1878,7 +1931,7 @@ export default class SetupPrepCharts extends Command {
           todoMappings.DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__START_BLOCK = String(ethereumDaEmbeddedIndexerStartBlock)
         }
 
-        const expectedBatcherAddress = this.dogeConfig.ethereumDa?.signer?.expectedAddress
+        const expectedBatcherAddress = this.getConfigValue('accounts.L1_COMMIT_SENDER_ADDR')
         if (expectedBatcherAddress) {
           todoMappings.DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__EXPECTED_BATCHERS = JSON.stringify([expectedBatcherAddress])
         }
@@ -2010,13 +2063,17 @@ export default class SetupPrepCharts extends Command {
           s3UploadingTimeoutMs: s3Archive?.uploadingTimeoutMs,
         })
 
-        const signerConfig = this.dogeConfig.ethereumDa?.signer
+        const signerConfig = this.requireSigner('l1CommitSender')
         if (signerConfig?.backend === 'aws_kms') {
           Object.assign(todoMappings, {
             "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_EXPECTED_ADDRESS": signerConfig.expectedAddress,
             "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_KEY_ID": signerConfig.kmsKeyId,
             "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_REGION": signerConfig.kmsRegion,
             "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SIGNER_BACKEND": "aws_kms",
+          })
+        } else {
+          Object.assign(todoMappings, {
+            "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SIGNER_BACKEND": "local",
           })
         }
 
@@ -2042,7 +2099,13 @@ export default class SetupPrepCharts extends Command {
         }
 
         if (signerConfig?.backend === 'aws_kms') {
-          delete envData.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY
+          const kmsSignerChanges = removeConfigMapEnvKeys(productionYaml, [
+            'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY',
+          ])
+          if (kmsSignerChanges.length > 0) {
+            changes.push(...kmsSignerChanges)
+            updated = true
+          }
 
           if (Array.isArray(productionYaml.envFrom)) {
             const nextEnvFrom = productionYaml.envFrom.filter((item: any) => item?.secretRef?.name !== 'eth-da-submitter-secret-env')
@@ -2073,6 +2136,17 @@ export default class SetupPrepCharts extends Command {
           if (previousServiceAccount !== nextServiceAccount) {
             updated = true
             changes.push({ key: 'serviceAccount', newValue: nextServiceAccount, oldValue: previousServiceAccount })
+          }
+        } else {
+          const localSignerChanges = removeConfigMapEnvKeys(productionYaml, [
+            'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_EXPECTED_ADDRESS',
+            'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_KEY_ID',
+            'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_REGION',
+          ])
+          ensureNamedSecretRef(productionYaml, 'eth-da-submitter-secret-env', localSignerChanges)
+          if (localSignerChanges.length > 0) {
+            changes.push(...localSignerChanges)
+            updated = true
           }
         }
       }
@@ -2334,6 +2408,19 @@ export default class SetupPrepCharts extends Command {
     return { skipped: skippedCharts, updated: updatedCharts }
   }
 
+  private requireSigner(signerKey: 'l1CommitSender' | 'l2GasOracleSender') {
+    try {
+      return getRequiredManagedSignerConfig(this.configData, signerKey)
+    } catch (error) {
+      this.jsonCtx.error(
+        'E610_SIGNER_CONFIG_MISSING',
+        error instanceof Error ? error.message : String(error),
+        'CONFIGURATION',
+        true,
+        { signer: signerKey }
+      )
+    }
+  }
 
   private async validateMakefile(skipAuthCheck: boolean): Promise<void> {
     this.log(chalk.blue('Validating Makefile...'))

@@ -10,6 +10,11 @@ import type { DogeConfig } from '../../types/doge-config.js'
 
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
+import {
+  getRequiredManagedSignerConfig,
+  isAwsKmsSigner,
+  isLocalSigner,
+} from '../../utils/signer-roles.js'
 
 const SECRETS_PATH = path.join(process.cwd(), 'secrets')
 
@@ -202,19 +207,14 @@ export default class SetupGenSecrets extends Command {
       'contracts': [
         'DEPLOYER_PRIVATE_KEY:DEPLOYER_PRIVATE_KEY',
         'L1_COMMIT_SENDER_PRIVATE_KEY:L1_COMMIT_SENDER_PRIVATE_KEY',
-        'L1_FINALIZE_SENDER_PRIVATE_KEY:L1_FINALIZE_SENDER_PRIVATE_KEY',
-        'L1_GAS_ORACLE_SENDER_PRIVATE_KEY:L1_GAS_ORACLE_SENDER_PRIVATE_KEY',
         'L2_GAS_ORACLE_SENDER_PRIVATE_KEY:L2_GAS_ORACLE_SENDER_PRIVATE_KEY',
         'ROLLUP_EXPLORER_DB_CONNECTION_STRING:ROLLUP_EXPLORER_DB_CONNECTION_STRING',
-        'COORDINATOR_JWT_SECRET_KEY:COORDINATOR_JWT_SECRET_KEY',
       ],
       'coordinator-api': [
         'COORDINATOR_DB_CONNECTION_STRING:SCROLL_COORDINATOR_DB_DSN',
-        'COORDINATOR_JWT_SECRET_KEY:SCROLL_COORDINATOR_AUTH_SECRET',
       ],
       'coordinator-cron': [
         'COORDINATOR_DB_CONNECTION_STRING:SCROLL_COORDINATOR_DB_DSN',
-        'COORDINATOR_JWT_SECRET_KEY:SCROLL_COORDINATOR_AUTH_SECRET',
       ],
       'dogecoin': [
         'DOGECOIN_RPC_USER:DOGECOIN_RPC_USER',
@@ -222,8 +222,6 @@ export default class SetupGenSecrets extends Command {
       ],
       'gas-oracle': [
         'GAS_ORACLE_DB_CONNECTION_STRING:SCROLL_ROLLUP_DB_CONFIG_DSN',
-        'L1_GAS_ORACLE_SENDER_PRIVATE_KEY:SCROLL_ROLLUP_L2_CONFIG_RELAYER_CONFIG_GAS_ORACLE_SENDER_SIGNER_CONFIG_PRIVATE_KEY_SIGNER_CONFIG_PRIVATE_KEY',
-        'L2_GAS_ORACLE_SENDER_PRIVATE_KEY:SCROLL_ROLLUP_L1_CONFIG_RELAYER_CONFIG_GAS_ORACLE_SENDER_SIGNER_CONFIG_PRIVATE_KEY_SIGNER_CONFIG_PRIVATE_KEY',
       ],
       'l1-explorer': ['L1_EXPLORER_DB_CONNECTION_STRING:DATABASE_URL'],
       'l2-sequencer': [
@@ -299,10 +297,18 @@ export default class SetupGenSecrets extends Command {
     }
 
     if (service === 'fee-oracle') {
-      let content = this.envLine('DOGEOS_FEE_ORACLE_DOGECOIN__RPC_USER', this.dogeConfig.dogecoinClusterRpc?.username || '', 'dogeConfig.dogecoinClusterRpc.username')
-      content += this.envLine('DOGEOS_FEE_ORACLE_DOGECOIN__RPC_PASSWORD', this.dogeConfig.dogecoinClusterRpc?.password || '', 'dogeConfig.dogecoinClusterRpc.password')
-      content += this.envLine('DOGEOS_FEE_ORACLE_PRIVATE_KEY', config.accounts?.L2_GAS_ORACLE_SENDER_PRIVATE_KEY || '', 'accounts.L2_GAS_ORACLE_SENDER_PRIVATE_KEY')
-      envFiles['fee-oracle-secret.env'] = content
+      const signer = this.requireSigner(config, 'l2GasOracleSender')
+      if (isLocalSigner(signer)) {
+        const privateKey = this.requireConfigValue(
+          config.accounts?.L2_GAS_ORACLE_SENDER_PRIVATE_KEY,
+          'accounts.L2_GAS_ORACLE_SENDER_PRIVATE_KEY'
+        )
+        envFiles['fee-oracle-secret.env'] = this.envLine(
+          'DOGEOS_FEE_ORACLE_PRIVATE_KEY',
+          privateKey,
+          'accounts.L2_GAS_ORACLE_SENDER_PRIVATE_KEY'
+        )
+      }
     }
 
     if (service === 'l1-interface') {
@@ -351,11 +357,15 @@ export default class SetupGenSecrets extends Command {
     }
 
     if (service === 'eth-da-submitter') {
-      if (this.dogeConfig.ethereumDa?.signer?.backend === 'aws_kms') {
+      const signer = this.requireSigner(config, 'l1CommitSender')
+      if (isAwsKmsSigner(signer)) {
         return envFiles
       }
 
-      const submitterPrivateKey = config.accounts?.L1_COMMIT_SENDER_PRIVATE_KEY || ''
+      const submitterPrivateKey = this.requireConfigValue(
+        config.accounts?.L1_COMMIT_SENDER_PRIVATE_KEY,
+        'accounts.L1_COMMIT_SENDER_PRIVATE_KEY'
+      )
       envFiles['eth-da-submitter-secret.env'] = this.envLine(
         'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY',
         submitterPrivateKey,
@@ -367,11 +377,47 @@ export default class SetupGenSecrets extends Command {
   }
 
   private getMappedConfigValue(config: any, configKey: string): unknown {
+    if (configKey === 'L1_COMMIT_SENDER_PRIVATE_KEY' && isAwsKmsSigner(this.requireSigner(config, 'l1CommitSender'))) {
+      return undefined
+    }
+
+    if (configKey === 'L2_GAS_ORACLE_SENDER_PRIVATE_KEY' && isAwsKmsSigner(this.requireSigner(config, 'l2GasOracleSender'))) {
+      return undefined
+    }
+
     if (config.db && config.db[configKey]) return config.db[configKey]
     if (config.accounts && config.accounts[configKey]) return config.accounts[configKey]
     if (config.coordinator && config.coordinator[configKey]) return config.coordinator[configKey]
     if (config.sequencer && config.sequencer[configKey]) return config.sequencer[configKey]
     return undefined
+  }
+
+  private requireConfigValue(value: unknown, source: string): unknown {
+    if (value === undefined || value === null || String(value).trim() === '') {
+      this.jsonCtx.error(
+        'E611_REQUIRED_SECRET_VALUE_MISSING',
+        `${source} is required for local signer secret generation. Run setup gen-keystore to recreate signer configuration.`,
+        'CONFIGURATION',
+        true,
+        { source }
+      )
+    }
+
+    return value
+  }
+
+  private requireSigner(config: any, signerKey: 'l1CommitSender' | 'l2GasOracleSender') {
+    try {
+      return getRequiredManagedSignerConfig(config, signerKey)
+    } catch (error) {
+      this.jsonCtx.error(
+        'E610_SIGNER_CONFIG_MISSING',
+        error instanceof Error ? error.message : String(error),
+        'CONFIGURATION',
+        true,
+        { signer: signerKey }
+      )
+    }
   }
 
   private resolveSecretValue(value: unknown, source: string): string {

@@ -27,8 +27,6 @@ import { generateValuesFiles } from '../../src/utils/values-generator.js';
 const TEST_PRIVATE_KEYS = {
   COMMIT_PK: '0x2222222222222222222222222222222222222222222222222222222222222222',
   DEPLOYER_PK: '0x1111111111111111111111111111111111111111111111111111111111111111',
-  FINALIZE_PK: '0x3333333333333333333333333333333333333333333333333333333333333333',
-  GAS_L1_PK: '0x4444444444444444444444444444444444444444444444444444444444444444',
   GAS_L2_PK: '0x5555555555555555555555555555555555555555555555555555555555555555',
 } as const
 
@@ -41,8 +39,6 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
     accounts: {
       deployer: { address: '0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A', privateKey: '$ENV:DEPLOYER_PK' },
       l1CommitSender: { address: '0x1563915e194D8CfBA1943570603F7606A3115508', privateKey: '$ENV:COMMIT_PK' },
-      l1FinalizeSender: { address: '0x5CbDd86a2FA8Dc4bDdd8a8f69dBa48572EeC07FB', privateKey: '$ENV:FINALIZE_PK' },
-      l1GasOracleSender: { address: '0x7564105E977516C53bE337314c7E53838967bDaC', privateKey: '$ENV:GAS_L1_PK' },
       l2GasOracleSender: { address: '0xe1fAE9b4fAB2F5726677ECfA912d96b0B683e6a9', privateKey: '$ENV:GAS_L2_PK' },
       owner: { address: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' },
     },
@@ -125,7 +121,7 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       tokenSymbol: 'ETH',
     },
     rollup: {
-      coordinator: { batchCollectionTimeSec: 60, bundleCollectionTimeSec: 120, chunkCollectionTimeSec: 30, jwtSecretKey: 'jwt-secret' },
+      coordinator: { batchCollectionTimeSec: 60, bundleCollectionTimeSec: 120, chunkCollectionTimeSec: 30 },
       finalization: { batchDeadlineSec: 3600, relayMessageDeadlineSec: 7200 },
       maxBatchInBundle: 20,
       maxBlockInChunk: 100,
@@ -712,6 +708,12 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('CHAIN_ID_L2');
       expect(output).to.include('DEPLOYER_ADDR');
       expect(output).to.include('L1_RPC_ENDPOINT');
+      expect(output).to.include('[signers.l1CommitSender]');
+      expect(output).to.include('[signers.l2GasOracleSender]');
+      expect(output).to.include('role = "L1_COMMIT_SENDER"');
+      expect(output).to.include('role = "L2_GAS_ORACLE_SENDER"');
+      expect(output).to.not.include('L1_FINALIZE_SENDER');
+      expect(output).to.not.include('L1_GAS_ORACLE_SENDER');
     });
 
     it('generates account addresses from $ENV private keys and writes expanded secrets', () => {
@@ -1374,7 +1376,10 @@ describe('deployment-spec-generator', () => {
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__FORMULA).to.equal('galileo');
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__PRICE_UNAVAILABLE_FALLBACK).to.equal('hold_last');
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_L2__CHAIN_ID).to.equal(String(spec.network.l2ChainId));
-      expect(feeOracleValues.envFrom).to.deep.equal([{ configMapRef: { name: 'fee-oracle-env' } }]);
+      expect(feeOracleValues.envFrom).to.deep.equal([
+        { configMapRef: { name: 'fee-oracle-env' } },
+        { secretRef: { name: 'fee-oracle-secret-env' } },
+      ]);
       expect(files['fee-oracle-production.yaml']).not.to.include('DOGEOS_FEE_ORACLE_DOGECOIN__');
       expect(files['fee-oracle-production.yaml']).not.to.include('DOGEOS_FEE_ORACLE_CELESTIA__');
       expect(files['fee-oracle-production.yaml']).not.to.include('FEE_ORACLE_DOGE_RPC_URL');
