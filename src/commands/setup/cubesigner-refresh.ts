@@ -1,7 +1,7 @@
 import { input } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
-import { exec, spawn } from 'node:child_process'
+import { exec, execFile, spawn } from 'node:child_process'
 import * as fs from 'node:fs'
 import { promisify } from 'node:util'
 
@@ -10,9 +10,22 @@ import type { DogeConfig } from '../../types/doge-config.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
+
+const CUBESIGNER_SESSION_LIFETIME_SECONDS = 365 * 24 * 60 * 60
+const CUBESIGNER_AUTH_LIFETIME_SECONDS = 2 * 60 * 60
+const CUBESIGNER_REFRESH_LIFETIME_SECONDS = 7 * 24 * 60 * 60
+const CUBESIGNER_GRACE_LIFETIME_SECONDS = 30
 
 export default class SetupCubesignerRefresh extends Command {
-    static override description = 'Refresh cubesigner session secrets'
+    static override description = [
+        'Refresh cubesigner session secrets',
+        '',
+        'Generated signer sessions use fixed service lifetimes:',
+        `session-lifetime=${CUBESIGNER_SESSION_LIFETIME_SECONDS}s (365 days), auth-lifetime=${CUBESIGNER_AUTH_LIFETIME_SECONDS}s (2 hours), refresh-lifetime=${CUBESIGNER_REFRESH_LIFETIME_SECONDS}s (7 days), and grace-lifetime=${CUBESIGNER_GRACE_LIFETIME_SECONDS}s.`,
+        '',
+        'This command writes local files under ./secrets. Push the refreshed secrets with setup push-secrets --cubesigner-only, then restart CubeSigner signer pods after clearing /app/.sessions/main_cs_session.json so the new Secret seed is copied into the active session cache.',
+    ].join('\n')
 
     static override examples = [
         '<%= config.bin %> <%= command.id %>',
@@ -239,15 +252,32 @@ export default class SetupCubesignerRefresh extends Command {
 
             const {roles} = this.dogeConfig.cubesigner
             this.jsonCtx.info(`Found ${roles.length} roles in config, creating session files...`)
+            this.jsonCtx.info(
+                `Using CubeSigner lifetimes: session=${CUBESIGNER_SESSION_LIFETIME_SECONDS}s, auth=${CUBESIGNER_AUTH_LIFETIME_SECONDS}s, refresh=${CUBESIGNER_REFRESH_LIFETIME_SECONDS}s, grace=${CUBESIGNER_GRACE_LIFETIME_SECONDS}s`
+            )
 
             const sessionFiles: string[] = []
             const envFiles: string[] = []
+            fs.mkdirSync('./secrets', { recursive: true })
 
             for (const [i, role] of roles.entries()) {
                 const sessionFile = `./secrets/cubesigner-signer-${i}-session.json`
-                const assignRoleCommand = `cs session create --role-id=${role.role_id} --auth-lifetime 86400 > ${sessionFile}`
-                this.jsonCtx.info(`Executing: ${assignRoleCommand}`)
-                await execAsync(assignRoleCommand)
+                const tmpSessionFile = `${sessionFile}.tmp`
+                const sessionCreateArgs = [
+                    'session',
+                    'create',
+                    `--role-id=${role.role_id}`,
+                    `--session-lifetime=${CUBESIGNER_SESSION_LIFETIME_SECONDS}`,
+                    `--auth-lifetime=${CUBESIGNER_AUTH_LIFETIME_SECONDS}`,
+                    `--refresh-lifetime=${CUBESIGNER_REFRESH_LIFETIME_SECONDS}`,
+                    `--grace-lifetime=${CUBESIGNER_GRACE_LIFETIME_SECONDS}`,
+                    '--output',
+                    'json',
+                ]
+                this.jsonCtx.info(`Executing: cs ${sessionCreateArgs.join(' ')}`)
+                const { stdout } = await execFileAsync('cs', sessionCreateArgs, { cwd: process.cwd() })
+                fs.writeFileSync(tmpSessionFile, stdout, { mode: 0o600 })
+                fs.renameSync(tmpSessionFile, sessionFile)
                 sessionFiles.push(sessionFile)
 
                 const secret = `DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID="${role.keys[0].key_id}"\n`
@@ -258,10 +288,22 @@ export default class SetupCubesignerRefresh extends Command {
             }
 
             this.jsonCtx.info(`Successfully refreshed sessions for ${roles.length} roles`)
+            this.jsonCtx.info('Run setup push-secrets --cubesigner-only and restart CubeSigner signer pods after clearing their active session cache.')
 
             // JSON success output
             this.jsonCtx.success({
                 envFiles,
+                lifetimes: {
+                    authLifetimeSeconds: CUBESIGNER_AUTH_LIFETIME_SECONDS,
+                    graceLifetimeSeconds: CUBESIGNER_GRACE_LIFETIME_SECONDS,
+                    refreshLifetimeSeconds: CUBESIGNER_REFRESH_LIFETIME_SECONDS,
+                    sessionLifetimeSeconds: CUBESIGNER_SESSION_LIFETIME_SECONDS,
+                },
+                nextSteps: [
+                    'Run setup push-secrets --cubesigner-only',
+                    'Clear /app/.sessions/main_cs_session.json in each cubesigner-signer pod',
+                    'Restart the cubesigner-signer pods so the refreshed Secret seed is copied into the active session cache',
+                ],
                 roles: roles.map((r, i) => ({
                     index: i,
                     keyId: r.keys[0]?.key_id,

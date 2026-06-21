@@ -299,7 +299,9 @@ in `README.md` for AWS direct, CloudFront, and S3-compatible examples.
 scrollsdk setup cubesigner-refresh -N --json --doge-config .data/doge-config.toml
 ```
 
-Refreshes CubeSigner authentication tokens.
+Refreshes CubeSigner session secrets under `./secrets` using fixed service
+lifetimes: 365 day session lifetime, 2 hour auth token lifetime, 7 day refresh
+token lifetime, and 30 second auth-token grace lifetime.
 
 **Required flags (non-interactive):**
 - `--doge-config <path>` - Path to doge-config file (required)

@@ -1065,6 +1065,15 @@ FLAGS
 DESCRIPTION
   Refresh cubesigner session secrets
 
+  Generated signer sessions use fixed service lifetimes:
+  session-lifetime=31536000s (365 days), auth-lifetime=7200s (2 hours),
+  refresh-lifetime=604800s (7 days), and grace-lifetime=30s.
+
+  This command writes local files under ./secrets. Push the refreshed secrets
+  with setup push-secrets --cubesigner-only, then restart CubeSigner signer pods
+  after clearing /app/.sessions/main_cs_session.json so the new Secret seed is
+  copied into the active session cache.
+
 EXAMPLES
   $ scrollsdk setup cubesigner-refresh
 
