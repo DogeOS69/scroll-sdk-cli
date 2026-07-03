@@ -321,6 +321,16 @@ Pushes generated secrets to the Kubernetes cluster. Requires kubectl.
 - `--aws-region <region>` - AWS region for Secrets Manager (default: `us-west-2`)
 - `--aws-prefix <prefix>` - AWS Secrets Manager path prefix (default: `dogeos`)
 - `--aws-service-account <name>` - AWS IAM service account (default: `external-secrets`)
+- `--secret-file <path>` - Push only one local secret file
+- `--values-file <path>` - Update only one Helm values YAML file after pushing secrets
+
+Example for a targeted secret push:
+
+```bash
+scrollsdk setup push-secrets -N --json \
+  --secret-file secrets/l2-bootnode-reth-0-secret.env \
+  --values-file values/l2-bootnode-reth-0-production.yaml
+```
 
 ### Step 13: Set up TLS
 

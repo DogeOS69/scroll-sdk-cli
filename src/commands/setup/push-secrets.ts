@@ -25,7 +25,64 @@ const DEFAULT_VAULT_TOKEN_SECRET_NAME = 'vault-token'
 const DEFAULT_VAULT_VERSION = 'v2'
 
 interface SecretService {
-  pushSecrets(cubesignerOnly?: boolean, filename?: string): Promise<string[]>
+  pushSecrets(cubesignerOnly?: boolean, secretFile?: string): Promise<PushedSecret[]>
+}
+
+interface PushedSecret {
+  name: string
+  properties: string[]
+  sourceFile: string
+}
+
+interface ResolvedSecretFile {
+  filename?: string
+  secretsDir: string
+}
+
+function resolveSecretFile(secretFile?: string): ResolvedSecretFile {
+  const secretsDir = path.join(process.cwd(), 'secrets')
+
+  if (!secretFile) {
+    return { secretsDir }
+  }
+
+  const resolvedPath = path.resolve(process.cwd(), secretFile)
+  if (fs.existsSync(resolvedPath)) {
+    const filename = path.basename(resolvedPath)
+    validateSecretFileName(filename)
+
+    return {
+      filename,
+      secretsDir: path.dirname(resolvedPath),
+    }
+  }
+
+  const defaultSecretPath = path.join(secretsDir, secretFile)
+  if (fs.existsSync(defaultSecretPath)) {
+    validateSecretFileName(secretFile)
+
+    return {
+      filename: secretFile,
+      secretsDir,
+    }
+  }
+
+  throw new Error(`Secret file not found: ${secretFile} (checked ${resolvedPath} and ${defaultSecretPath})`)
+}
+
+function validateSecretFileName(filename: string): void {
+  if (filename.endsWith('.env') || filename.endsWith('.json')) return
+
+  throw new Error(`Unsupported secret file type: ${filename}. Expected .env or .json`)
+}
+
+function getJsonPropertyName(secretName: string, file: string): string {
+  if (secretName.endsWith('-session')) return 'session.json'
+  if (secretName.endsWith('-migrate-db')) return 'migrate-db.json'
+  if (secretName === 'rollup-explorer-backend-secret') return 'config.json'
+
+  console.warn(chalk.yellow(`Unknown JSON file type for property naming: ${secretName}. Using file name as property.`))
+  return file
 }
 
 class AWSSecretService implements SecretService {
@@ -43,21 +100,9 @@ class AWSSecretService implements SecretService {
     }
   }
 
-  async pushSecrets(cubesignerOnly: boolean = false, filename?: string): Promise<string[]> {
-    const pushedSecrets: string[] = []
-    let secretsDir = path.join(process.cwd(), 'secrets');
-
-    if (filename) {
-      const resolvedPath = path.resolve(process.cwd(), filename);
-      if (fs.existsSync(resolvedPath)) {
-        secretsDir = path.dirname(resolvedPath);
-        filename = path.basename(resolvedPath);
-      } else if (fs.existsSync(path.join(secretsDir, filename))) {
-        // Exists in default secrets dir
-      } else {
-        throw new Error(`Secret file not found: ${filename} (checked ${resolvedPath} and ${path.join(secretsDir, filename)})`)
-      }
-    }
+  async pushSecrets(cubesignerOnly: boolean = false, secretFile?: string): Promise<PushedSecret[]> {
+    const pushedSecrets: PushedSecret[] = []
+    const { filename, secretsDir } = resolveSecretFile(secretFile)
 
     if (cubesignerOnly) {
       // Only process cubesigner-signer-N-session.json files
@@ -83,8 +128,9 @@ class AWSSecretService implements SecretService {
         const secretName = path.basename(file, '.json')
         console.log(chalk.cyan(`Processing CubeSigner session secret: ${secretName}`))
         const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
-        await this.createOrUpdateSecret({ 'session.json': content }, secretName)
-        pushedSecrets.push(secretName)
+        if (await this.createOrUpdateSecret({ 'session.json': content }, secretName)) {
+          pushedSecrets.push({ name: secretName, properties: ['session.json'], sourceFile: path.join(secretsDir, file) })
+        }
       }
 
       return pushedSecrets
@@ -104,23 +150,10 @@ class AWSSecretService implements SecretService {
       console.log(chalk.cyan(`Processing JSON secret: ${secretName}`))
       const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
 
-      let propertyName: string;
-      if (secretName.endsWith('-session')) {
-        propertyName = 'session.json'
-      } else if (secretName.endsWith('-migrate-db')) {
-        propertyName = 'migrate-db.json'
-      } else if (secretName === 'rollup-explorer-backend-secret') {
-        propertyName = "config.json";
+      const propertyName = getJsonPropertyName(secretName, file)
+      if (await this.createOrUpdateSecret({ [propertyName]: content }, secretName)) {
+        pushedSecrets.push({ name: secretName, properties: [propertyName], sourceFile: path.join(secretsDir, file) })
       }
-      else {
-        // Fallback or error for unknown JSON file types if necessary
-        // For now, we assume other JSONs might not follow this specific property naming
-        console.warn(chalk.yellow(`Unknown JSON file type for property naming: ${secretName}. Using file name as property.`));
-        propertyName = file; // Or handle as an error
-      }
-
-      await this.createOrUpdateSecret({ [propertyName]: content }, secretName)
-      pushedSecrets.push(secretName)
     }
 
     // Process ENV files
@@ -136,8 +169,9 @@ class AWSSecretService implements SecretService {
       const secretName = `${baseName}-env`
       console.log(chalk.cyan(`Processing ENV secret: ${secretName}`))
       const data = await this.convertEnvToDict(path.join(secretsDir, file))
-      await this.createOrUpdateSecret(data, secretName)
-      pushedSecrets.push(secretName)
+      if (await this.createOrUpdateSecret(data, secretName)) {
+        pushedSecrets.push({ name: secretName, properties: Object.keys(data), sourceFile: path.join(secretsDir, file) })
+      }
 
       // Special handling for l2-sequencer-N-secret.env files
       // if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
@@ -200,13 +234,13 @@ class AWSSecretService implements SecretService {
     return result
   }
 
-  private async createOrUpdateSecret(content: Record<string, string>, secretName: string): Promise<void> {
+  private async createOrUpdateSecret(content: Record<string, string>, secretName: string): Promise<boolean> {
     const fullSecretName = `${this.prefixName}/${secretName}`
     const jsonContent = JSON.stringify(content)
     const escapedJsonContent = jsonContent.replaceAll("'", "'\\''")
-    if (!jsonContent) {
+    if (Object.keys(content).length === 0) {
       console.log(chalk.red(`Skipping secret: ${secretName} because it is empty`))
-      return
+      return false
     }
 
     if (await this.secretExists(secretName)) {
@@ -224,7 +258,7 @@ class AWSSecretService implements SecretService {
 
         if (shouldOverride === 'no') {
           console.log(chalk.yellow(`Skipping secret: ${fullSecretName}`))
-          return
+          return false
         }
 
         if (shouldOverride === 'all') {
@@ -243,6 +277,7 @@ class AWSSecretService implements SecretService {
       try {
         await execAsync(command)
         console.log(chalk.green(`Successfully updated secret: ${fullSecretName}`))
+        return true
       } catch (error) {
         console.error(chalk.red(`Failed to update secret: ${fullSecretName}`))
         console.error(chalk.red(`Error details: ${error}`))
@@ -259,6 +294,7 @@ class AWSSecretService implements SecretService {
       try {
         await execAsync(command)
         console.log(chalk.green(`Successfully created secret: ${fullSecretName}`))
+        return true
       } catch (error) {
         console.error(chalk.red(`Failed to create secret: ${fullSecretName}`))
         console.error(chalk.red(`Error details: ${error}`))
@@ -320,8 +356,8 @@ class HashicorpVaultDevService implements SecretService {
     }
   }
 
-  async pushSecrets(cubesignerOnly: boolean = false, filename?: string): Promise<string[]> {
-    const pushedSecrets: string[] = []
+  async pushSecrets(cubesignerOnly: boolean = false, secretFile?: string): Promise<PushedSecret[]> {
+    const pushedSecrets: PushedSecret[] = []
     if (!(await this.isVaultPodRunning())) {
       console.log(chalk.yellow('Vault pod is not running. Please install Vault using the following commands:'))
       console.log(chalk.cyan('helm repo add hashicorp https://helm.releases.hashicorp.com'))
@@ -355,19 +391,7 @@ class HashicorpVaultDevService implements SecretService {
       }
     }
 
-    let secretsDir = path.join(process.cwd(), 'secrets');
-
-    if (filename) {
-      const resolvedPath = path.resolve(process.cwd(), filename);
-      if (fs.existsSync(resolvedPath)) {
-        secretsDir = path.dirname(resolvedPath);
-        filename = path.basename(resolvedPath);
-      } else if (fs.existsSync(path.join(secretsDir, filename))) {
-        // Exists in default secrets dir, keep defaults
-      } else {
-        throw new Error(`Secret file not found: ${filename} (checked ${resolvedPath} and ${path.join(secretsDir, filename)})`)
-      }
-    }
+    const { filename, secretsDir } = resolveSecretFile(secretFile)
 
     if (cubesignerOnly) {
       // Only process cubesigner-signer-N-session.json files
@@ -393,8 +417,9 @@ class HashicorpVaultDevService implements SecretService {
         const secretName = path.basename(file, '.json')
         console.log(chalk.cyan(`Processing CubeSigner session secret: ${this.pathPrefix}/${secretName}`))
         const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
-        await this.pushJsonToVault(secretName, content, 'session.json')
-        pushedSecrets.push(secretName)
+        if (await this.pushJsonToVault(secretName, content, 'session.json')) {
+          pushedSecrets.push({ name: secretName, properties: ['session.json'], sourceFile: path.join(secretsDir, file) })
+        }
       }
 
       console.log(chalk.green('All CubeSigner session secrets have been processed and populated in Vault.'))
@@ -403,7 +428,13 @@ class HashicorpVaultDevService implements SecretService {
 
     if (!filename || filename === 'rollup-explorer-backend-secret.json') {
       const processed = await this.processRollupExplorerBackendConfigSecret(secretsDir);
-      if (processed) pushedSecrets.push('rollup-explorer-backend-secret')
+      if (processed) {
+        pushedSecrets.push({
+          name: 'rollup-explorer-backend-secret',
+          properties: ['config.json'],
+          sourceFile: path.join(secretsDir, 'rollup-explorer-backend-secret.json'),
+        })
+      }
     }
 
     // Process JSON files
@@ -424,19 +455,10 @@ class HashicorpVaultDevService implements SecretService {
       console.log(chalk.cyan(`Processing JSON secret: ${this.pathPrefix}/${secretName}`))
       const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
 
-      let propertyName: string;
-      if (secretName.endsWith('-session')) {
-        propertyName = 'session.json'
-      } else if (secretName.endsWith('-migrate-db')) {
-        propertyName = 'migrate-db.json'
-      } else {
-        // Fallback or error for unknown JSON file types if necessary
-        console.warn(chalk.yellow(`Unknown JSON file type for property naming: ${secretName}. Using file name as property.`));
-        propertyName = file; // Or handle as an error
+      const propertyName = getJsonPropertyName(secretName, file)
+      if (await this.pushJsonToVault(secretName, content, propertyName)) {
+        pushedSecrets.push({ name: secretName, properties: [propertyName], sourceFile: path.join(secretsDir, file) })
       }
-
-      await this.pushJsonToVault(secretName, content, propertyName)
-      pushedSecrets.push(secretName)
     }
 
     // Process ENV files
@@ -454,8 +476,9 @@ class HashicorpVaultDevService implements SecretService {
       const secretName = `${baseName}-env`
       console.log(chalk.cyan(`Processing ENV secret: ${this.pathPrefix}/${secretName}`))
       const data = await this.convertEnvToDict(path.join(secretsDir, file))
-      await this.pushToVault(secretName, data)
-      pushedSecrets.push(secretName)
+      if (await this.pushToVault(secretName, data)) {
+        pushedSecrets.push({ name: secretName, properties: Object.keys(data), sourceFile: path.join(secretsDir, file) })
+      }
 
       // I don't know why combine all sequencer secrets, but it is not safe to do so, so I just comment it out
       // Special handling for l2-sequencer-N-secret.env files
@@ -550,8 +573,7 @@ class HashicorpVaultDevService implements SecretService {
         return false;
       }
 
-      await this.pushJsonToVault(secretManagerName, contentString, propertyKey);
-      return true
+      return this.pushJsonToVault(secretManagerName, contentString, propertyKey)
     }
  
       if (this.debug) {
@@ -562,7 +584,7 @@ class HashicorpVaultDevService implements SecretService {
     
   }
 
-  private async pushJsonToVault(secretName: string, content: string, propertyName: string): Promise<void> {
+  private async pushJsonToVault(secretName: string, content: string, propertyName: string): Promise<boolean> {
     try {
       const jsonContent = JSON.parse(content)
       const escapedJson = JSON.stringify(jsonContent).replaceAll("'", "'\\''")
@@ -577,7 +599,7 @@ class HashicorpVaultDevService implements SecretService {
 
       if (!jsonContent) {
         console.log(chalk.red(`Skipping secret: ${secretName} because it is empty`))
-        return
+        return false
       }
 
       // Check if secret exists
@@ -598,7 +620,7 @@ class HashicorpVaultDevService implements SecretService {
 
           if (shouldOverride === 'no') {
             console.log(chalk.yellow(`Skipping secret: ${this.pathPrefix}/${secretName}`))
-            return
+            return false
           }
 
           if (shouldOverride === 'all') {
@@ -614,20 +636,22 @@ class HashicorpVaultDevService implements SecretService {
       console.log(
         chalk.green(`Successfully pushed JSON secret: ${this.pathPrefix}/${secretName} with property ${propertyName}`),
       )
+      return true
     } catch (error) {
       console.error(chalk.red(`Failed to push JSON secret: ${this.pathPrefix}/${secretName}`))
       console.error(chalk.red(`Error: ${error}`))
+      throw error
     }
   }
 
-  private async pushToVault(secretName: string, data: Record<string, string>): Promise<void> {
+  private async pushToVault(secretName: string, data: Record<string, string>): Promise<boolean> {
     const kvPairs = Object.entries(data)
       .map(([key, value]) => `${key}='${value.replaceAll("'", "'\\''")}'`)
       .join(' ')
 
     if (!kvPairs) {
       console.log(chalk.red(`Skipping secret: ${secretName} because it is empty`))
-      return
+      return false
     }
 
     const command = `vault kv put ${this.pathPrefix}/${secretName} ${kvPairs}`
@@ -658,7 +682,7 @@ class HashicorpVaultDevService implements SecretService {
 
           if (shouldOverride === 'no') {
             console.log(chalk.yellow(`Skipping secret: ${this.pathPrefix}/${secretName}`))
-            return
+            return false
           }
 
           if (shouldOverride === 'all') {
@@ -672,9 +696,11 @@ class HashicorpVaultDevService implements SecretService {
 
       await this.runCommand(command)
       console.log(chalk.green(`Successfully pushed secret: ${this.pathPrefix}/${secretName}`))
+      return true
     } catch (error) {
       console.error(chalk.red(`Failed to push secret: ${this.pathPrefix}/${secretName}`))
       console.error(chalk.red(`Error: ${error}`))
+      throw error
     }
   }
 
@@ -696,6 +722,7 @@ export default class SetupPushSecrets extends Command {
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --debug',
     '<%= config.bin %> <%= command.id %> --values-dir custom-values',
+    '<%= config.bin %> <%= command.id %> --secret-file secrets/l2-bootnode-reth-0-secret.env --values-file values/l2-bootnode-reth-0-production.yaml',
     '<%= config.bin %> <%= command.id %> --cubesigner-only',
     '<%= config.bin %> <%= command.id %> -c --debug',
   ]
@@ -719,14 +746,10 @@ export default class SetupPushSecrets extends Command {
       default: false,
       description: 'Only push CubeSigner related secrets (cubesigner-signer-* files)',
     }),
-debug: Flags.boolean({
+    debug: Flags.boolean({
       char: 'd',
       default: false,
       description: 'Show debug output',
-    }),
-    file: Flags.string({
-      char: 'f',
-      description: 'Specific secret file to push (e.g., my-secret.json)',
     }),
     json: Flags.boolean({
       default: false,
@@ -743,6 +766,10 @@ debug: Flags.boolean({
       description: 'Secret service provider (aws or vault)',
       options: ['aws', 'vault'],
     }),
+    'secret-file': Flags.string({
+      char: 'f',
+      description: 'Local secret file to push (supports .env and .json files)',
+    }),
     // Skip updating YAML files
     'skip-yaml-update': Flags.boolean({
       default: false,
@@ -751,6 +778,9 @@ debug: Flags.boolean({
     'values-dir': Flags.string({
       default: 'values',
       description: 'Directory containing the values files',
+    }),
+    'values-file': Flags.string({
+      description: 'Specific Helm values YAML file to update after pushing secrets',
     }),
     // Vault specific flags
     'vault-path': Flags.string({
@@ -829,7 +859,8 @@ debug: Flags.boolean({
     }
 
     try {
-const pushedSecrets = await service.pushSecrets(flags['cubesigner-only'], flags.file)
+      const pushedSecrets = await service.pushSecrets(flags['cubesigner-only'], flags['secret-file'])
+      const pushedSecretNames = pushedSecrets.map(secret => secret.name)
       this.jsonCtx.logSuccess('Secrets pushed successfully')
 
       if (flags['cubesigner-only']) {
@@ -838,7 +869,7 @@ const pushedSecrets = await service.pushSecrets(flags['cubesigner-only'], flags.
           this.jsonCtx.success({
             cubesignerOnly: true,
             provider,
-            secretsPushed: true,
+            secretsPushed: pushedSecretNames,
           })
         }
 
@@ -858,7 +889,7 @@ const pushedSecrets = await service.pushSecrets(flags['cubesigner-only'], flags.
       }
 
       if (shouldUpdateYaml) {
-await this.updateProductionYaml(provider, credentials, pushedSecrets)
+        await this.updateProductionYaml(provider, credentials, pushedSecrets)
         this.jsonCtx.logSuccess('Production YAML files updated successfully')
       } else {
         this.jsonCtx.info('Skipped updating production YAML files')
@@ -874,7 +905,7 @@ await this.updateProductionYaml(provider, credentials, pushedSecrets)
             region: credentials.secretRegion,
           },
           provider,
-          secretsPushed: true,
+          secretsPushed: pushedSecretNames,
           yamlUpdated: shouldUpdateYaml,
         })
       }
@@ -891,6 +922,13 @@ await this.updateProductionYaml(provider, credentials, pushedSecrets)
 
       this.error(chalk.red(`Failed to push secrets: ${error}`))
     }
+  }
+
+  private deleteYamlValue(target: Record<string, any>, key: string): boolean {
+    if (!(key in target)) return false
+
+    delete target[key]
+    return true
   }
 
   private async getAWSCredentials(): Promise<Record<string, string>> {
@@ -916,6 +954,34 @@ await this.updateProductionYaml(provider, credentials, pushedSecrets)
       secretRegion: resolveEnvValue(flags['aws-region']) || DEFAULT_AWS_REGION,
       serviceAccount: resolveEnvValue(flags['aws-service-account']) || DEFAULT_AWS_SERVICE_ACCOUNT,
     }
+  }
+
+  private getProductionYamlFiles(): Array<{ displayName: string; yamlPath: string }> {
+    const valuesFile = this.flags['values-file']
+    if (valuesFile) {
+      const resolvedPath = path.resolve(process.cwd(), valuesFile)
+      const valuesDirPath = path.join(process.cwd(), this.flags['values-dir'], valuesFile)
+      const yamlPath = fs.existsSync(resolvedPath) ? resolvedPath : valuesDirPath
+
+      if (!fs.existsSync(yamlPath)) {
+        throw new Error(`Values file not found: ${valuesFile} (checked ${resolvedPath} and ${valuesDirPath})`)
+      }
+
+      return [{ displayName: path.relative(process.cwd(), yamlPath), yamlPath }]
+    }
+
+    const valuesDir = path.join(process.cwd(), this.flags['values-dir'])
+    if (!fs.existsSync(valuesDir)) {
+      throw new Error(`Values directory not found at ${valuesDir}`)
+    }
+
+    return fs
+      .readdirSync(valuesDir)
+      .filter((file) => file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
+      .map(file => ({
+        displayName: file,
+        yamlPath: path.join(valuesDir, file),
+      }))
   }
 
   private async getVaultCredentials(): Promise<Record<string, string>> {
@@ -1026,104 +1092,123 @@ await this.updateProductionYaml(provider, credentials, pushedSecrets)
     return config
   }
 
-  private async updateProductionYaml(provider: string, credentials: Record<string, string>, _pushedSecrets: string[]): Promise<void> {
-    const valuesDir = path.join(process.cwd(), this.flags['values-dir'])
-    if (!fs.existsSync(valuesDir)) {
-      this.error(chalk.red(`Values directory not found at ${valuesDir}`))
-    }
+  private setYamlValue(target: Record<string, any>, key: string, value: any): boolean {
+    if (target[key] === value) return false
 
+    target[key] = value
+    return true
+  }
+
+  private updateExternalSecretProvider(
+    secretName: string,
+    secret: any,
+    provider: string,
+    credentials: Record<string, string>,
+  ): boolean {
+    let updated = false
     const prefixName: string | undefined = provider === 'vault' ? credentials.path : credentials.prefixName
 
-    const yamlFiles = fs
-      .readdirSync(valuesDir)
-      .filter((file) => file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
+    updated = this.setYamlValue(secret, 'provider', provider) || updated
+
+    if (provider === 'vault') {
+      updated = this.setYamlValue(secret, 'server', credentials.server) || updated
+      updated = this.setYamlValue(secret, 'path', credentials.path) || updated
+      updated = this.setYamlValue(secret, 'version', credentials.version) || updated
+      updated = this.setYamlValue(secret, 'tokenSecretName', credentials.tokenSecretName) || updated
+      updated = this.setYamlValue(secret, 'tokenSecretKey', credentials.tokenSecretKey) || updated
+      updated = this.deleteYamlValue(secret, 'serviceAccount') || updated
+      updated = this.deleteYamlValue(secret, 'secretRegion') || updated
+    } else {
+      updated = this.setYamlValue(secret, 'serviceAccount', credentials.serviceAccount) || updated
+      updated = this.setYamlValue(secret, 'secretRegion', credentials.secretRegion) || updated
+      updated = this.deleteYamlValue(secret, 'server') || updated
+      updated = this.deleteYamlValue(secret, 'path') || updated
+      updated = this.deleteYamlValue(secret, 'version') || updated
+      updated = this.deleteYamlValue(secret, 'tokenSecretName') || updated
+      updated = this.deleteYamlValue(secret, 'tokenSecretKey') || updated
+    }
+
+    for (const dataItem of secret.data || []) {
+      if (dataItem.remoteRef) {
+        const updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
+        updated = this.setYamlValue(dataItem.remoteRef, 'key', updatedKey) || updated
+      }
+    }
+
+    return updated
+  }
+
+  private async updateProductionYaml(provider: string, credentials: Record<string, string>, pushedSecrets: PushedSecret[]): Promise<void> {
+    if (pushedSecrets.length === 0) {
+      this.jsonCtx.info('No secrets were pushed successfully; skipping YAML update')
+      return
+    }
+
+    const pushedSecretsByName = new Map(pushedSecrets.map(secret => [secret.name, secret]))
+    const yamlFiles = this.getProductionYamlFiles()
+    let matchedSecrets = 0
 
     for (const yamlFile of yamlFiles) {
-      const yamlPath = path.join(valuesDir, yamlFile)
-      this.log(chalk.cyan(`Processing ${yamlFile}`))
+      this.log(chalk.cyan(`Processing ${yamlFile.displayName}`))
 
       // Extract sequencer index from filename if it matches the pattern
       // const sequencerMatch = yamlFile.match(/l2-sequencer-production-(\d+)\.yaml$/)
       // const sequencerIndex = sequencerMatch ? sequencerMatch[1] : null
 
-      const content = fs.readFileSync(yamlPath, 'utf8')
+      const content = fs.readFileSync(yamlFile.yamlPath, 'utf8')
       const yamlContent = yaml.load(content) as any
 
       let updated = false
+      let matchedInFile = false
       if (yamlContent.externalSecrets) {
         for (const [secretName, secret] of Object.entries(yamlContent.externalSecrets) as [string, any][]) {
+          const pushedSecret = pushedSecretsByName.get(secretName)
+          if (!pushedSecret) continue
 
-          if (secret.provider !== provider) {
-            secret.provider = provider
-            updated = true
-          }
-
-          if (provider === 'vault') {
-            secret.server = credentials.server
-            secret.path = credentials.path
-            secret.version = credentials.version
-            secret.tokenSecretName = credentials.tokenSecretName
-            secret.tokenSecretKey = credentials.tokenSecretKey
-            delete secret.serviceAccount
-            delete secret.secretRegion
-            updated = true
-          } else {
-            secret.serviceAccount = credentials.serviceAccount
-            secret.secretRegion = credentials.secretRegion
-            delete secret.server
-            delete secret.path
-            delete secret.version
-            delete secret.tokenSecretName
-            delete secret.tokenSecretKey
-            updated = true
-          }
-
-          // Update remoteRef for migrate-db secrets
-          if (secretName.endsWith('-migrate-db')) {
-            for (const data of secret.data) {
-              if (data.remoteRef && data.remoteRef.key && data.secretKey === 'migrate-db.json') {
-                data.remoteRef.property = 'migrate-db.json'
-                updated = true
-              }
-            }
-          }
-
-          // Update remoteRef.key
-          for (const dataItem of secret.data) {
-            if (dataItem.remoteRef && dataItem.remoteRef.key) {
-              const updatedKey = prefixName ? `${prefixName}/${secretName}` : secretName
-              /*
-                externalSecrets:
-                  YOUR_SECRET_NAME:
-                    provider: "aws"
-                    data:
-                      - remoteRef:
-                          key: "prefix/SECRET_PATH_OF_EXTERNAL_MANAGER"
-                          property: "property_KEY"
-                        secretKey: "SECRET_KEY"
-            */
-              if (/^cubesigner-signer-\d+-session$/.test(secretName) && dataItem.secretKey === 'session.json') {
-                  dataItem.remoteRef.property = 'session.json'
-                  updated = true
-                }
-
-              // Only update if the key has changed
-              if (dataItem.remoteRef.key !== updatedKey) {
-                dataItem.remoteRef.key = updatedKey
-                updated = true
-              }
-            }
-          }
+          matchedSecrets++
+          matchedInFile = true
+          this.validateYamlSecretProperties(yamlFile.displayName, secretName, secret, pushedSecret)
+          updated = this.updateExternalSecretProvider(secretName, secret, provider, credentials) || updated
         }
       }
 
       if (updated) {
         const newContent = yaml.dump(yamlContent, YAML_DUMP_OPTIONS)
-        fs.writeFileSync(yamlPath, newContent)
-        this.log(chalk.green(`Updated externalSecrets provider in ${chalk.cyan(yamlFile)}`))
-      } else {
-        this.log(chalk.yellow(`No changes needed in ${chalk.cyan(yamlFile)}`))
+        fs.writeFileSync(yamlFile.yamlPath, newContent)
+        this.log(chalk.green(`Updated externalSecrets provider in ${chalk.cyan(yamlFile.displayName)}`))
+      } else if (matchedInFile) {
+        this.log(chalk.yellow(`No changes needed in ${chalk.cyan(yamlFile.displayName)}`))
       }
+    }
+
+    if (matchedSecrets === 0) {
+      const pushedNames = pushedSecrets.map(secret => secret.name).join(', ')
+      const target = this.flags['values-file'] ? ` in ${this.flags['values-file']}` : ''
+      throw new Error(`No externalSecrets entries matched pushed secret(s) ${pushedNames}${target}`)
+    }
+  }
+
+  private validateYamlSecretProperties(
+    displayName: string,
+    secretName: string,
+    secret: any,
+    pushedSecret: PushedSecret
+  ): void {
+    const availableProperties = new Set(pushedSecret.properties)
+    const missingProperties = new Set<string>()
+
+    for (const dataItem of secret.data || []) {
+      const property = dataItem?.remoteRef?.property
+      if (typeof property === 'string' && !availableProperties.has(property)) {
+        missingProperties.add(property)
+      }
+    }
+
+    if (missingProperties.size > 0) {
+      throw new Error(
+        `${displayName} expects property/properties ${[...missingProperties].join(', ')} in remote secret ${secretName}, ` +
+        `but ${path.relative(process.cwd(), pushedSecret.sourceFile)} provides ${pushedSecret.properties.join(', ') || 'no properties'}.`
+      )
     }
   }
 }

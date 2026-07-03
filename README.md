@@ -1608,15 +1608,15 @@ Push secrets to the selected secret service
 ```
 USAGE
   $ scrollsdk setup push-secrets [--aws-prefix <value>] [--aws-region <value>] [--aws-service-account <value>] [-c] [-d]
-    [-f <value>] [--json] [-N] [--provider aws|vault] [--skip-yaml-update] [--values-dir <value>] [--vault-path <value>]
-    [--vault-server <value>] [--vault-token-secret-key <value>] [--vault-token-secret-name <value>] [--vault-version
-    <value>]
+    [--json] [-N] [--provider aws|vault] [-f <value>] [--skip-yaml-update] [--values-dir <value>] [--values-file
+    <value>] [--vault-path <value>] [--vault-server <value>] [--vault-token-secret-key <value>]
+    [--vault-token-secret-name <value>] [--vault-version <value>]
 
 FLAGS
   -N, --non-interactive                  Run without prompts. Auto-overrides existing secrets.
   -c, --cubesigner-only                  Only push CubeSigner related secrets (cubesigner-signer-* files)
   -d, --debug                            Show debug output
-  -f, --file=<value>                     Specific secret file to push (e.g., my-secret.json)
+  -f, --secret-file=<value>              Local secret file to push (supports .env and .json files)
       --aws-prefix=<value>               [default: dogeos] AWS Secrets Manager path prefix (e.g., dogeos/testnet)
       --aws-region=<value>               [default: us-west-2] AWS region for secrets (e.g., us-east-1)
       --aws-service-account=<value>      [default: external-secrets] AWS IAM service account
@@ -1625,6 +1625,7 @@ FLAGS
                                          <options: aws|vault>
       --skip-yaml-update                 Skip updating production YAML files with new secret provider
       --values-dir=<value>               [default: values] Directory containing the values files
+      --values-file=<value>              Specific Helm values YAML file to update after pushing secrets
       --vault-path=<value>               [default: scroll] Vault path prefix
       --vault-server=<value>             [default: http://vault.default.svc.cluster.local:8200] Vault server URL
       --vault-token-secret-key=<value>   [default: token] Vault token secret key
@@ -1640,6 +1641,9 @@ EXAMPLES
   $ scrollsdk setup push-secrets --debug
 
   $ scrollsdk setup push-secrets --values-dir custom-values
+
+  $ scrollsdk setup push-secrets --secret-file secrets/l2-bootnode-reth-0-secret.env --values-file
+    values/l2-bootnode-reth-0-production.yaml
 
   $ scrollsdk setup push-secrets --cubesigner-only
 
