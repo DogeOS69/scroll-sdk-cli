@@ -16,7 +16,6 @@ const execAsync = promisify(exec)
 
 const DEFAULT_SECRET_PROVIDER = 'aws'
 const DEFAULT_AWS_PREFIX = 'dogeos'
-const DEFAULT_AWS_REGION = 'us-west-2'
 const DEFAULT_AWS_SERVICE_ACCOUNT = 'external-secrets'
 const DEFAULT_VAULT_PATH = 'scroll'
 const DEFAULT_VAULT_SERVER = 'http://vault.default.svc.cluster.local:8200'
@@ -722,7 +721,7 @@ export default class SetupPushSecrets extends Command {
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --debug',
     '<%= config.bin %> <%= command.id %> --values-dir custom-values',
-    '<%= config.bin %> <%= command.id %> --secret-file secrets/l2-bootnode-reth-0-secret.env --values-file values/l2-bootnode-reth-0-production.yaml',
+    '<%= config.bin %> <%= command.id %> --secret-file secrets/l2-reth-bootnode-0-secret.env --values-file values/l2-reth-bootnode-production-0.yaml',
     '<%= config.bin %> <%= command.id %> --cubesigner-only',
     '<%= config.bin %> <%= command.id %> -c --debug',
   ]
@@ -734,7 +733,6 @@ export default class SetupPushSecrets extends Command {
       description: 'AWS Secrets Manager path prefix (e.g., dogeos/testnet)',
     }),
     'aws-region': Flags.string({
-      default: DEFAULT_AWS_REGION,
       description: 'AWS region for secrets (e.g., us-east-1)',
     }),
     'aws-service-account': Flags.string({
@@ -938,8 +936,8 @@ export default class SetupPushSecrets extends Command {
         message: chalk.cyan('Enter a path prefix for AWS Secrets Manager (e.g., my-app/staging or dogeos/testnet):'),
       }),
       secretRegion: await input({
-        default: DEFAULT_AWS_REGION,
         message: chalk.cyan('Enter AWS secret region(e.g.,us-east-1):'),
+        required: true,
       }),
       serviceAccount: await input({
         default: DEFAULT_AWS_SERVICE_ACCOUNT,
@@ -949,9 +947,20 @@ export default class SetupPushSecrets extends Command {
   }
 
   private getAWSCredentialsFromFlags(flags: any): Record<string, string> {
+    const secretRegion = resolveEnvValue(flags['aws-region'])?.trim()
+    if (!secretRegion) {
+      this.jsonCtx.error(
+        'E601_MISSING_FIELD',
+        '--aws-region is required when pushing secrets to AWS in non-interactive mode.',
+        'CONFIGURATION',
+        true,
+        { flag: '--aws-region' }
+      )
+    }
+
     return {
       prefixName: resolveEnvValue(flags['aws-prefix']) || DEFAULT_AWS_PREFIX,
-      secretRegion: resolveEnvValue(flags['aws-region']) || DEFAULT_AWS_REGION,
+      secretRegion,
       serviceAccount: resolveEnvValue(flags['aws-service-account']) || DEFAULT_AWS_SERVICE_ACCOUNT,
     }
   }
@@ -1071,7 +1080,9 @@ export default class SetupPushSecrets extends Command {
 
     if (sessionSecret.provider === 'aws') {
       config.serviceAccount = sessionSecret.serviceAccount || 'external-secrets'
-      config.secretRegion = sessionSecret.secretRegion || 'us-west-2'
+      if (sessionSecret.secretRegion) {
+        config.secretRegion = sessionSecret.secretRegion
+      }
 
       // Parse prefixName from remoteRef.key
       const data = sessionSecret.data?.[0]

@@ -311,14 +311,14 @@ token lifetime, and 30 second auth-token grace lifetime.
 ### Step 12: Push secrets to Kubernetes
 
 ```bash
-scrollsdk setup push-secrets -N --json
+scrollsdk setup push-secrets -N --json --aws-region "$AWS_REGION"
 ```
 
 Pushes generated secrets to the Kubernetes cluster. Requires kubectl.
 
 **Optional flags (non-interactive):**
 - `--provider aws|vault` - Secret service provider (default: `aws`)
-- `--aws-region <region>` - AWS region for Secrets Manager (default: `us-west-2`)
+- `--aws-region <region>` - AWS region for Secrets Manager (required when `--provider aws`)
 - `--aws-prefix <prefix>` - AWS Secrets Manager path prefix (default: `dogeos`)
 - `--aws-service-account <name>` - AWS IAM service account (default: `external-secrets`)
 - `--secret-file <path>` - Push only one local secret file
@@ -328,8 +328,9 @@ Example for a targeted secret push:
 
 ```bash
 scrollsdk setup push-secrets -N --json \
-  --secret-file secrets/l2-bootnode-reth-0-secret.env \
-  --values-file values/l2-bootnode-reth-0-production.yaml
+  --aws-region "$AWS_REGION" \
+  --secret-file secrets/l2-reth-bootnode-0-secret.env \
+  --values-file values/l2-reth-bootnode-production-0.yaml
 ```
 
 ### Step 13: Set up TLS
@@ -379,6 +380,7 @@ set -euo pipefail
 export POSTGRES_ADMIN_PASSWORD="your-password"
 export DEPLOYER_KEY="0x..."
 export SEQUENCER_KEYSTORE_PASSWORD="your-keystore-password"
+export AWS_REGION="your-aws-region"
 
 NETWORK="testnet"  # mainnet, testnet, or regtest
 DOGE_CONFIG=".data/doge-config.toml"
@@ -420,7 +422,7 @@ run_step "setup cubesigner-refresh" setup cubesigner-refresh -N --json \
   --doge-config "$DOGE_CONFIG"
 
 # Step 10: Push secrets to K8s
-run_step "setup push-secrets" setup push-secrets -N --json
+run_step "setup push-secrets" setup push-secrets -N --json --aws-region "$AWS_REGION"
 
 # Step 11: TLS certificates
 run_step "setup tls" setup tls -N --json --cluster-issuer letsencrypt-prod

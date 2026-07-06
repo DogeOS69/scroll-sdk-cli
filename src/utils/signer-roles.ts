@@ -1,9 +1,9 @@
 export type ManagedSignerKey = 'l1CommitSender' | 'l2GasOracleSender'
 export type ManagedSignerBackend = 'aws_kms' | 'local'
-export type ManagedSignerService = 'eth-da-submitter' | 'fee-oracle'
+export type ManagedSignerService = 'eth-da-submitter' | 'fee-oracle' | 'sequencer-reth'
 
 export interface ManagedSignerRole {
-  accountPrefix: 'L1_COMMIT_SENDER' | 'L2_GAS_ORACLE_SENDER'
+  accountPrefix: 'L1_COMMIT_SENDER' | 'L2_GAS_ORACLE_SENDER' | 'SEQUENCER_RETH_SIGNER'
   aliasSuffix: string
   configKey: ManagedSignerKey
   defaultServiceAccount: string
@@ -102,7 +102,7 @@ export function getRequiredManagedSignerConfig(config: any, key: ManagedSignerKe
   if (!signer?.backend) {
     const role = MANAGED_SIGNER_ROLES[key]
     throw new Error(
-      `Missing [signers.${key}] in config.toml. Run setup gen-keystore to create ${role.role} signer configuration.`
+      `Missing [signers.${key}]. Run setup ${role.service} to create ${role.role} signer configuration.`
     )
   }
 

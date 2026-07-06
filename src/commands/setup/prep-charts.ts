@@ -3,6 +3,7 @@ import * as toml from '@iarna/toml'
 import { confirm } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
+import { Wallet } from 'ethers'
 import * as yaml from 'js-yaml'
 import { execFileSync, spawn } from 'node:child_process'
 import * as fs from 'node:fs'
@@ -27,6 +28,24 @@ import {
   isAwsKmsSigner,
   isLocalSigner,
 } from '../../utils/signer-roles.js'
+import {
+  RETH_BOOTNODE_NODEKEY_ENV,
+  type ResolvedBootnodeRethConfig,
+  applyBootnodeRethValues,
+  deriveBootnodeRethEnodeUrl,
+  getBootnodeRethResourceName,
+  getBootnodeRethValuesFileName,
+} from './l2-bootnode-reth.js'
+import {
+  RETH_NODEKEY_ENV,
+  RETH_SIGNER_PRIVATE_KEY_ENV,
+  type ResolvedSequencerRethConfig,
+  applySequencerRethValues,
+  deriveSequencerRethEnodeUrl,
+  getSequencerRethResourceName,
+  getSequencerRethValuesFileName,
+  normalizeRethNodekey,
+} from './sequencer-reth.js'
 
 /**
  * Strip port from hostname for Kubernetes Ingress
@@ -206,34 +225,7 @@ export function buildFeeOraclePrepEnv(input: {
   l2RpcUrl: string | undefined
 }): Record<string, string | undefined> {
   return {
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__ADVANCE_L2__MAX_L2_PAYLOAD_BYTES_PER_ADVANCE_L2: '90000',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__ADVANCE_L2__MAX_SOURCE_AGE_SECONDS: '300',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE: 'dry_run',
     DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL: input.ethereumDaRpcUrl,
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__EXECUTION_GAS_FLOOR: '21000',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__EXECUTION_GAS_SOURCE: 'conceptual_floor',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_LIMIT_SAFETY_MARGIN: '0',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__FORMULA: 'galileo',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__PRECISION_DEC: '1000000000',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__SCALAR_POLICY: 'static_verified',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__MAX_BLOBS_PER_TX: '6',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__MIN_PRIORITY_FEE_PER_GAS_WEI: '0',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__PRICES__MAX_QUOTE_AGE_SECONDS: '60',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__PRICES__MIN_SOURCE_QUORUM: '2',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__PRIORITY_FEE_SOURCE: 'configured_min',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__SAMPLE_INTERVAL_SECONDS: '30',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__SAMPLE_STALE_AFTER_SECONDS: '90',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__TARGET_BLOBS_PER_TX: '2',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__ADVANCE_L2_STALE_FALLBACK: 'not_ready',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__FIRST_VALID_ORACLE_VALUES: 'update',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__FORCE_UPDATE_AFTER_SECONDS: '3600',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__MAX_ORACLE_VALUE_AGE_SECONDS: '1800',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__ORACLE_VALUE_STAT: 'median',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__ORACLE_VALUE_WINDOW_SECONDS: '300',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__PRICE_UNAVAILABLE_FALLBACK: 'hold_last',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__RELATIVE_DELTA_THRESHOLD_PPM__BASE_FEE_PER_GAS: '0',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__RELATIVE_DELTA_THRESHOLD_PPM__BLOB_BASE_FEE_PER_BLOB_GAS: '0',
-    DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__SUBMITTER_DEFERRED_FALLBACK: 'hold_last',
     DOGEOS_FEE_ORACLE_L2__CHAIN_ID: input.l2ChainId === undefined ? undefined : String(input.l2ChainId),
     DOGEOS_FEE_ORACLE_L2__GAS_ORACLE_CONTRACT: input.gasOracleContract,
     DOGEOS_FEE_ORACLE_L2__RPC_URL: input.l2RpcUrl,
@@ -763,11 +755,13 @@ export default class SetupPrepCharts extends Command {
     // Process production.yaml files
     const valuesDir = flags['values-dir']
     const { skipped: skippedInstances, updated: updatedInstances } = await this.processMutipleInstance(valuesDir);
+    const { skipped: skippedBootnodeRethInstances, updated: updatedBootnodeRethInstances } = await this.processBootnodeRethInstanceFiles(valuesDir);
+    const { skipped: skippedRethInstances, updated: updatedRethInstances } = await this.processSequencerRethInstanceFiles(valuesDir);
     const { skipped: skippedProduction, updated: updatedProduction } = await this.processProductionYaml(valuesDir);
     const { skipped: skippedConfig, updated: updatedConfig } = await this.processConfigYaml(valuesDir);
 
-    this.jsonCtx.logSuccess(`Updated instance-specific YAML files for ${updatedInstances} chart(s).`);
-    this.jsonCtx.info(`Skipped ${skippedInstances} instance-specific chart(s).`);
+    this.jsonCtx.logSuccess(`Updated instance-specific YAML files for ${updatedInstances + updatedBootnodeRethInstances + updatedRethInstances} chart(s).`);
+    this.jsonCtx.info(`Skipped ${skippedInstances + skippedBootnodeRethInstances + skippedRethInstances} instance-specific chart(s).`);
 
     this.jsonCtx.logSuccess(`Updated production YAML files for ${updatedProduction} chart(s).`)
     this.jsonCtx.info(`Skipped ${skippedProduction} chart(s).`)
@@ -781,10 +775,13 @@ export default class SetupPrepCharts extends Command {
     if (this.jsonMode) {
       this.jsonCtx.success({
         configCharts: { skipped: skippedConfig, updated: updatedConfig },
-        instanceCharts: { skipped: skippedInstances, updated: updatedInstances },
+        instanceCharts: {
+          skipped: skippedInstances + skippedBootnodeRethInstances + skippedRethInstances,
+          updated: updatedInstances + updatedBootnodeRethInstances + updatedRethInstances,
+        },
         productionCharts: { skipped: skippedProduction, updated: updatedProduction },
-        totalSkipped: skippedInstances + skippedProduction + skippedConfig,
-        totalUpdated: updatedInstances + updatedProduction + updatedConfig,
+        totalSkipped: skippedInstances + skippedBootnodeRethInstances + skippedRethInstances + skippedProduction + skippedConfig,
+        totalUpdated: updatedInstances + updatedBootnodeRethInstances + updatedRethInstances + updatedProduction + updatedConfig,
         valuesDir,
       })
     }
@@ -804,6 +801,94 @@ export default class SetupPrepCharts extends Command {
       child.on('error', reject)
     })
     this.log('Authenticated with GitHub Container Registry')
+  }
+
+  private buildBootnodeRethResolvedConfig(index: number): ResolvedBootnodeRethConfig {
+    const instance = this.dogeConfig.bootnodeReth?.instances?.find(item => item.index === index)
+    if (!instance) {
+      this.error(`bootnodeReth.instances does not contain index ${index}. Run scrollsdk setup l2-bootnode-reth first.`)
+    }
+
+    const nodekey = instance.nodekey?.privateKey
+    if (!nodekey) {
+      this.error(`bootnodeReth.instances[index=${index}].nodekey.privateKey is missing. Run scrollsdk setup l2-bootnode-reth first.`)
+    }
+
+    return {
+      enodeUrl: instance.enodeUrl || deriveBootnodeRethEnodeUrl(nodekey, index),
+      index,
+      nodekey,
+      secretMode: instance.nodekey?.secretMode || 'external-secret',
+      secretName: `${getBootnodeRethResourceName(index)}-secret-env`,
+    }
+  }
+
+  private buildRethTrustedPeers(): string {
+    const peers = new Set<string>()
+    for (const peer of this.getLegacySequencerPeers()) {
+      peers.add(peer)
+    }
+
+    for (const instance of this.dogeConfig.sequencerReth?.instances ?? []) {
+      if (instance.nodekey?.privateKey) {
+        peers.add(deriveSequencerRethEnodeUrl(instance.nodekey.privateKey, instance.index))
+        continue
+      }
+
+      if (instance.enodeUrl) {
+        peers.add(instance.enodeUrl)
+      }
+    }
+
+    return [...peers].join(',')
+  }
+
+  private buildSequencerRethResolvedConfig(index: number): ResolvedSequencerRethConfig {
+    const instance = this.dogeConfig.sequencerReth?.instances?.find(item => item.index === index)
+    if (!instance) {
+      this.error(`sequencerReth.instances does not contain index ${index}. Run scrollsdk setup sequencer-reth --index ${index} first.`)
+    }
+
+    const nodekey = instance.nodekey?.privateKey
+    if (!nodekey) {
+      this.error(`sequencerReth.instances[index=${index}].nodekey.privateKey is missing. Run scrollsdk setup sequencer-reth --index ${index} first.`)
+    }
+
+    const {signer} = instance
+    if (!signer?.backend) {
+      this.error(`sequencerReth.instances[index=${index}].signer.backend is missing. Run scrollsdk setup sequencer-reth --index ${index} first.`)
+    }
+
+    if (signer.backend === 'local' && !signer.privateKey) {
+      this.error(`sequencerReth.instances[index=${index}].signer.privateKey is missing for local signer backend.`)
+    }
+
+    if (signer.backend === 'aws_kms' && !signer.kmsKeyId) {
+      this.error(`sequencerReth.instances[index=${index}].signer.kmsKeyId is missing for AWS KMS signer backend.`)
+    }
+
+    return {
+      index,
+      nodekey,
+      secretMode: signer.secretMode || instance.nodekey?.secretMode || 'external-secret',
+      secretName: `${getSequencerRethResourceName(index)}-secret-env`,
+      signer: {
+        address: signer.address,
+        backend: signer.backend,
+        kmsKeyArn: signer.kmsKeyArn,
+        kmsKeyId: signer.kmsKeyId,
+        kmsRegion: signer.kmsRegion,
+        privateKey: signer.privateKey,
+        serviceAccountName: signer.serviceAccountName,
+        serviceAccountRoleArn: signer.serviceAccountRoleArn,
+      },
+    }
+  }
+
+  private deriveLegacySequencerEnodeUrl(nodekey: string, index: number): string {
+    const wallet = new Wallet(`0x${normalizeRethNodekey(nodekey)}`)
+    const publicKeyNoPrefix = wallet.signingKey.publicKey.slice(4)
+    return `enode://${publicKeyNoPrefix}@l2-sequencer-${index}:30303`
   }
 
   private formatUrl(baseUrl: string, path: string = ''): string {
@@ -851,12 +936,76 @@ export default class SetupPrepCharts extends Command {
     if (key === 'L2GETH_DA_BLOB_BEACON_NODE') return L1_INTERFACE_BEACON_API_ENDPOINT
   }
 
+  private getIngressHostConfigValue(chartName: string, ingressKey: string): string | undefined {
+    if ((chartName === 'l2-rpc' || chartName === 'l2-rpc-reth' || chartName === 'l2-reth-rpc') && ingressKey === 'websocket') {
+      return this.getConfigValue('ingress.RPC_GATEWAY_WS_HOST')
+    }
+
+    const directMappingKey = `ingress.${chartName.toUpperCase().replaceAll('-', '_')}_HOST`
+    const directValue = this.getConfigValue(directMappingKey)
+    this.log(chalk.yellow(`${chartName}: ${directMappingKey} -> ${directValue}`))
+    if (directValue) return directValue
+
+    const alternativeMappings: Record<string, string> = {
+      'admin-system-dashboard': 'ADMIN_SYSTEM_DASHBOARD_HOST',
+      blockbook: 'BLOCKBOOK_HOST',
+      blockscout: 'BLOCKSCOUT_HOST',
+      'bridge-history-api': 'BRIDGE_HISTORY_API_HOST',
+      'coordinator-api': 'COORDINATOR_API_HOST',
+      dogecoin: 'DOGECOIN_HOST',
+      frontends: 'FRONTEND_HOST',
+      'l1-devnet': 'L1_DEVNET_HOST',
+      'l2-reth-rpc': 'RPC_GATEWAY_HOST',
+      'l2-rpc': 'RPC_GATEWAY_HOST',
+      'l2-rpc-reth': 'RPC_GATEWAY_HOST',
+      'rollup-explorer-backend': 'ROLLUP_EXPLORER_API_HOST',
+      'tso-service': 'TSO_HOST',
+    }
+    const alternativeKey = alternativeMappings[chartName]
+    if (!alternativeKey) {
+      this.jsonCtx.addWarning(`${chartName}: no ingress host mapping for ${directMappingKey}; leaving ingress host unchanged.`)
+      return undefined
+    }
+
+    const alternativeValue = this.getConfigValue(`ingress.${alternativeKey}`)
+    if (!alternativeValue) {
+      this.jsonCtx.addWarning(`${chartName}: ingress.${alternativeKey} is not configured; leaving ingress host unchanged.`)
+    }
+
+    return alternativeValue
+  }
+
+  private getLegacySequencerPeers(): string[] {
+    const sequencerConfig = this.configData.sequencer
+    if (!sequencerConfig || typeof sequencerConfig !== 'object') return []
+
+    const peers = this.parsePeerList(sequencerConfig.L2_GETH_STATIC_PEERS)
+    if (peers.length > 0) return peers
+
+    const derivedPeers: string[] = []
+    if (sequencerConfig.L2GETH_NODEKEY) {
+      derivedPeers.push(this.deriveLegacySequencerEnodeUrl(sequencerConfig.L2GETH_NODEKEY, 0))
+    }
+
+    for (const [key, value] of Object.entries(sequencerConfig)) {
+      const match = key.match(/^sequencer-(\d+)$/)
+      if (!match || !value || typeof value !== 'object') continue
+
+      const nodekey = (value as { L2GETH_NODEKEY?: unknown }).L2GETH_NODEKEY
+      if (typeof nodekey === 'string' && nodekey.trim() !== '') {
+        derivedPeers.push(this.deriveLegacySequencerEnodeUrl(nodekey, Number(match[1])))
+      }
+    }
+
+    return derivedPeers
+  }
+
   private getNestedValue(obj: any, path: string): any {
     return path.split('.').reduce((prev, curr) => prev && prev[curr], obj)
   }
 
   private isL2Node(chartName: string): boolean {
-    return chartName.startsWith("l2-bootnode") || chartName.startsWith("l2-rpc") || chartName.startsWith("l2-sequencer");
+    return chartName.startsWith("l2-bootnode") || chartName.startsWith("l2-rpc") || chartName.startsWith("l2-sequencer") || chartName.startsWith("l2-reth");
   }
 
   private async loadConfigs(flags: any): Promise<void> {
@@ -915,6 +1064,68 @@ export default class SetupPrepCharts extends Command {
       }
     }
 
+  }
+
+  private buildFreshRethTrustedPeers(): string {
+    return this.buildRethTrustedPeers()
+  }
+
+  private removeLegacyRethTrustedPeersEnv(productionYaml: any): boolean {
+    if (!productionYaml.configMaps?.env?.data || !('RETH_TRUSTED_PEERS' in productionYaml.configMaps.env.data)) {
+      return false
+    }
+
+    delete productionYaml.configMaps.env.data.RETH_TRUSTED_PEERS
+    return true
+  }
+
+  private parsePeerList(value: unknown): string[] {
+    if (Array.isArray(value)) return value.map(String).filter(item => item.trim() !== '')
+    if (typeof value !== 'string' || value.trim() === '') return []
+
+    const trimmed = value.trim()
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (Array.isArray(parsed)) return parsed.map(String).filter(item => item.trim() !== '')
+      } catch {
+        return [trimmed]
+      }
+    }
+
+    return trimmed.split(',').map(item => item.trim()).filter(Boolean)
+  }
+
+  private async processBootnodeRethInstanceFiles(valuesDir: string): Promise<{ skipped: number; updated: number }> {
+    const instances = this.dogeConfig.bootnodeReth?.instances ?? []
+    if (instances.length === 0) return { skipped: 0, updated: 0 }
+
+    let updatedCharts = 0
+    let skippedCharts = 0
+    const templateFilePath = path.join(valuesDir, 'l2-reth-bootnode-production.yaml')
+
+    for (const instance of instances) {
+      const destFilePath = path.join(valuesDir, getBootnodeRethValuesFileName(instance.index))
+      if (fs.existsSync(destFilePath)) {
+        skippedCharts++
+        continue
+      }
+
+      if (!fs.existsSync(templateFilePath)) {
+        this.error(
+          `${getBootnodeRethValuesFileName(instance.index)} not found and reth template ${templateFilePath} is missing. ` +
+          `Create l2-reth-bootnode-production.yaml or ${getBootnodeRethValuesFileName(instance.index)}; prep-charts will not reuse old l2-bootnode values.`
+        )
+      }
+
+      const templateContent = fs.readFileSync(templateFilePath, 'utf8')
+      const newYamlContent = templateContent.replaceAll('__INSTANCE_INDEX__', instance.index.toString())
+      fs.writeFileSync(destFilePath, newYamlContent)
+      this.jsonCtx.logSuccess(`Created ${path.relative(process.cwd(), destFilePath) || destFilePath}`)
+      updatedCharts++
+    }
+
+    return { skipped: skippedCharts, updated: updatedCharts }
   }
 
   private async processConfigYaml(valuesDir: string): Promise<{ skipped: number, updated: number }> {
@@ -1149,17 +1360,17 @@ export default class SetupPrepCharts extends Command {
     for (const item of names) {
       const { chartName, configKey } = item;
 
-      // Skip config validation for charts that don't need configKey (like cubesigner-signer)
-      if (configKey && !this.configData[configKey]) {
-        this.error(`${configKey} not found in config.toml`);
-      }
-
       let releaseIndex = 0;
       const templateFilePath = path.join(valuesDir, `${chartName}-production.yaml`);
       if (!fs.existsSync(templateFilePath)) {
         this.warn(chalk.yellow(`Source file not found: ${templateFilePath}, skipping ${chartName} charts`));
         skippedCharts++;
         continue;
+      }
+
+      // Skip config validation for charts that don't need configKey (like cubesigner-signer)
+      if (configKey && !this.configData[configKey]) {
+        this.error(`${configKey} not found in config.toml`);
       }
 
       const templateContent = fs.readFileSync(templateFilePath, 'utf8');
@@ -1204,7 +1415,6 @@ export default class SetupPrepCharts extends Command {
     return { skipped: skippedCharts, updated: updatedCharts };
   }
 
-
   private async processProductionYaml(
     valuesDir: string
   ): Promise<{ skipped: number; updated: number }> {
@@ -1218,6 +1428,18 @@ export default class SetupPrepCharts extends Command {
     const dogecoinInternalUrl = dogecoinEndpoints.rpcUrl
 
     for (const file of productionFiles) {
+      if (file === 'l2-reth-bootnode-production.yaml') {
+        this.jsonCtx.info(`Skipping reth bootnode template ${file}`)
+        skippedCharts++
+        continue
+      }
+
+      if (file === 'l2-reth-sequencer-production.yaml') {
+        this.jsonCtx.info(`Skipping reth sequencer template ${file}`)
+        skippedCharts++
+        continue
+      }
+
       const yamlPath = path.join(valuesDir, file)
       const chartName = file.replace(/-production(-\d+)?\.yaml$/, '')
       const productionNumber = file.match(/-production-(\d+)\.yaml$/)?.[1] || '0'
@@ -1283,6 +1505,84 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
+      if (chartName === 'l2-reth-bootnode') {
+        const previousRethValues = JSON.stringify(productionYaml)
+        const resolved = this.buildBootnodeRethResolvedConfig(Number(productionNumber))
+        applyBootnodeRethValues(productionYaml, resolved)
+        productionYaml.reth ||= {}
+        const trustedPeers = this.buildFreshRethTrustedPeers()
+        if (productionYaml.reth.trustedPeers !== trustedPeers) {
+          productionYaml.reth.trustedPeers = trustedPeers
+        }
+        this.removeLegacyRethTrustedPeersEnv(productionYaml)
+
+        const nextRethValues = JSON.stringify(productionYaml)
+        if (previousRethValues !== nextRethValues) {
+          changes.push({
+            key: 'bootnodeReth',
+            newValue: 'applied from doge-config.toml',
+            oldValue: 'previous values',
+          })
+          updated = true
+          if (resolved.secretMode === 'external-secret') {
+            this.jsonCtx.info(`Push ${resolved.secretName} with ${RETH_BOOTNODE_NODEKEY_ENV} before deploying.`)
+          } else {
+            this.jsonCtx.addWarning(`${file}: plain reth bootnode key material will be written into values YAML. Use only for development.`)
+          }
+        }
+      }
+
+      if (chartName === 'l2-reth-sequencer') {
+        const previousRethValues = JSON.stringify(productionYaml)
+        const resolved = this.buildSequencerRethResolvedConfig(Number(productionNumber))
+        applySequencerRethValues(productionYaml, resolved)
+        productionYaml.reth ||= {}
+        const trustedPeers = this.buildFreshRethTrustedPeers()
+        if (productionYaml.reth.trustedPeers !== trustedPeers) {
+          productionYaml.reth.trustedPeers = trustedPeers
+        }
+        this.removeLegacyRethTrustedPeersEnv(productionYaml)
+
+        const nextRethValues = JSON.stringify(productionYaml)
+        if (previousRethValues !== nextRethValues) {
+          changes.push({
+            key: 'sequencerReth',
+            newValue: 'applied from doge-config.toml',
+            oldValue: 'previous values',
+          })
+          updated = true
+          if (resolved.secretMode === 'external-secret') {
+            this.jsonCtx.info(`Push ${resolved.secretName} with ${RETH_NODEKEY_ENV}${resolved.signer.backend === 'local' ? ` and ${RETH_SIGNER_PRIVATE_KEY_ENV}` : ''} before deploying.`)
+          } else {
+            this.jsonCtx.addWarning(`${file}: plain reth key material will be written into values YAML. Use only for development.`)
+          }
+        }
+      }
+
+      if (chartName === 'l2-reth-rpc') {
+        productionYaml.reth ||= {}
+        const trustedPeers = this.buildFreshRethTrustedPeers()
+        const oldTrustedPeers = productionYaml.reth.trustedPeers
+        if (oldTrustedPeers !== trustedPeers) {
+          productionYaml.reth.trustedPeers = trustedPeers
+          changes.push({
+            key: 'reth.trustedPeers',
+            newValue: trustedPeers,
+            oldValue: String(oldTrustedPeers ?? 'undefined'),
+          })
+          updated = true
+        }
+
+        if (this.removeLegacyRethTrustedPeersEnv(productionYaml)) {
+          changes.push({
+            key: 'configMaps.env.data.RETH_TRUSTED_PEERS',
+            newValue: 'removed',
+            oldValue: 'present',
+          })
+          updated = true
+        }
+      }
+
       // Process ingress
       if (productionYaml.ingress) {
         let ingressUpdated = false;
@@ -1292,40 +1592,7 @@ export default class SetupPrepCharts extends Command {
             if (Array.isArray(hosts)) {
               for (const [i, host] of hosts.entries()) {
                 if (typeof host === 'object' && 'host' in host) {
-                  let configValue: string | undefined;
-
-                  if (chartName === 'l2-rpc' && ingressKey === 'websocket') {
-                    configValue = this.getConfigValue('ingress.RPC_GATEWAY_WS_HOST');
-                  } else {
-                    // Check for direct mapping first
-                    const directMappingKey = `ingress.${chartName.toUpperCase().replaceAll('-', '_')}_HOST`;
-                    configValue = this.getConfigValue(directMappingKey);
-                    this.log(chalk.yellow(`${chartName}: ${directMappingKey} -> ${configValue}`));
-
-                    // If direct mapping doesn't exist, try alternative mappings
-                    if (!configValue) {
-                      const alternativeMappings: Record<string, string> = {
-                        'admin-system-dashboard': 'ADMIN_SYSTEM_DASHBOARD_HOST',
-                        'blockbook': 'BLOCKBOOK_HOST',
-                        'blockscout': 'BLOCKSCOUT_HOST',
-                        'bridge-history-api': 'BRIDGE_HISTORY_API_HOST',
-                        'coordinator-api': 'COORDINATOR_API_HOST',
-                        'dogecoin': 'DOGECOIN_HOST',
-                        'frontends': 'FRONTEND_HOST',
-                        'l1-devnet': 'L1_DEVNET_HOST',
-                        'l2-rpc': 'RPC_GATEWAY_HOST',
-                        'rollup-explorer-backend': 'ROLLUP_EXPLORER_API_HOST',
-                        'tso-service': 'TSO_HOST',
-                      };
-
-                      const alternativeKey = alternativeMappings[chartName];
-                      if (alternativeKey) {
-                        configValue = this.getConfigValue(`ingress.${alternativeKey}`);
-                      } else {
-                        this.error(`${chartName}: ${alternativeKey} not found in config`);
-                      }
-                    }
-                  }
+                  const configValue = this.getIngressHostConfigValue(chartName, ingressKey)
 
                   if (configValue) {
                     // Strip port from hostname - Kubernetes Ingress hosts cannot contain ports
@@ -2408,9 +2675,42 @@ export default class SetupPrepCharts extends Command {
     return { skipped: skippedCharts, updated: updatedCharts }
   }
 
+
+  private async processSequencerRethInstanceFiles(valuesDir: string): Promise<{ skipped: number; updated: number }> {
+    const instances = this.dogeConfig.sequencerReth?.instances ?? []
+    if (instances.length === 0) return { skipped: 0, updated: 0 }
+
+    let updatedCharts = 0
+    let skippedCharts = 0
+    const templateFilePath = path.join(valuesDir, 'l2-reth-sequencer-production.yaml')
+
+    for (const instance of instances) {
+      const destFilePath = path.join(valuesDir, getSequencerRethValuesFileName(instance.index))
+      if (fs.existsSync(destFilePath)) {
+        skippedCharts++
+        continue
+      }
+
+      if (!fs.existsSync(templateFilePath)) {
+        this.error(
+          `${getSequencerRethValuesFileName(instance.index)} not found and reth template ${templateFilePath} is missing. ` +
+          `Create l2-reth-sequencer-production.yaml or ${getSequencerRethValuesFileName(instance.index)}; prep-charts will not reuse old l2-sequencer values.`
+        )
+      }
+
+      const templateContent = fs.readFileSync(templateFilePath, 'utf8')
+      const newYamlContent = templateContent.replaceAll('__INSTANCE_INDEX__', instance.index.toString())
+      fs.writeFileSync(destFilePath, newYamlContent)
+      this.jsonCtx.logSuccess(`Created ${path.relative(process.cwd(), destFilePath) || destFilePath}`)
+      updatedCharts++
+    }
+
+    return { skipped: skippedCharts, updated: updatedCharts }
+  }
+
   private requireSigner(signerKey: 'l1CommitSender' | 'l2GasOracleSender') {
     try {
-      return getRequiredManagedSignerConfig(this.configData, signerKey)
+      return getRequiredManagedSignerConfig(this.dogeConfig, signerKey)
     } catch (error) {
       this.jsonCtx.error(
         'E610_SIGNER_CONFIG_MISSING',

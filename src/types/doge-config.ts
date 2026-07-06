@@ -17,6 +17,12 @@ export interface CubesignerRole {
 export interface DogeConfig {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any
+  accounts?: {
+    L1_COMMIT_SENDER_ADDR?: string
+    L1_COMMIT_SENDER_PRIVATE_KEY?: string
+    L2_GAS_ORACLE_SENDER_ADDR?: string
+    L2_GAS_ORACLE_SENDER_PRIVATE_KEY?: string
+  }
   awsSigner?: {
     accountId?: string
     ecsClusterName?: string
@@ -142,7 +148,71 @@ export interface DogeConfig {
     url?: string // for send/sync on dogocoin like: https://testnet.doge.xyz/
     username?: string // for send/sync on dogocoin
   }
+  bootnodeReth?: {
+    instances?: Array<{
+      enodeUrl?: string
+      index: number
+      nodekey?: {
+        privateKey?: string
+        secretMode?: 'external-secret' | 'plain'
+      }
+    }>
+  }
+  sequencerReth?: {
+    instances?: Array<{
+      enodeUrl?: string
+      index: number
+      nodekey?: {
+        privateKey?: string
+        secretMode?: 'external-secret' | 'plain'
+      }
+      signer?: {
+        address?: string
+        backend?: 'aws_kms' | 'local'
+        eksCluster?: string
+        kmsKeyArn?: string
+        kmsKeyId?: string
+        kmsRegion?: string
+        namespace?: string
+        networkAlias?: string
+        privateKey?: string
+        secretMode?: 'external-secret' | 'plain'
+        serviceAccountName?: string
+        serviceAccountRoleArn?: string
+      }
+    }>
+  }
   signerUrls?: string[]
+  signers?: {
+    l1CommitSender?: {
+      backend: 'aws_kms' | 'local'
+      eksCluster?: string
+      expectedAddress?: string
+      kmsKeyArn?: string
+      kmsKeyId?: string
+      kmsRegion?: string
+      namespace?: string
+      networkAlias?: string
+      role: string
+      service: 'eth-da-submitter' | 'fee-oracle'
+      serviceAccountName?: string
+      serviceAccountRoleArn?: string
+    }
+    l2GasOracleSender?: {
+      backend: 'aws_kms' | 'local'
+      eksCluster?: string
+      expectedAddress?: string
+      kmsKeyArn?: string
+      kmsKeyId?: string
+      kmsRegion?: string
+      namespace?: string
+      networkAlias?: string
+      role: string
+      service: 'eth-da-submitter' | 'fee-oracle'
+      serviceAccountName?: string
+      serviceAccountRoleArn?: string
+    }
+  }
   test?: {
     mockFinalizeEnabled?: boolean
     mockFinalizeTimeout?: number

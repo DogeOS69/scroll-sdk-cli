@@ -1618,7 +1618,7 @@ FLAGS
   -d, --debug                            Show debug output
   -f, --secret-file=<value>              Local secret file to push (supports .env and .json files)
       --aws-prefix=<value>               [default: dogeos] AWS Secrets Manager path prefix (e.g., dogeos/testnet)
-      --aws-region=<value>               [default: us-west-2] AWS region for secrets (e.g., us-east-1)
+      --aws-region=<value>               AWS region for secrets (e.g., us-east-1)
       --aws-service-account=<value>      [default: external-secrets] AWS IAM service account
       --json                             Output in JSON format (stdout for data, stderr for logs)
       --provider=<option>                [default: aws] Secret service provider (aws or vault)
@@ -1642,8 +1642,8 @@ EXAMPLES
 
   $ scrollsdk setup push-secrets --values-dir custom-values
 
-  $ scrollsdk setup push-secrets --secret-file secrets/l2-bootnode-reth-0-secret.env --values-file
-    values/l2-bootnode-reth-0-production.yaml
+  $ scrollsdk setup push-secrets --secret-file secrets/l2-reth-bootnode-0-secret.env --values-file
+    values/l2-reth-bootnode-production-0.yaml
 
   $ scrollsdk setup push-secrets --cubesigner-only
 

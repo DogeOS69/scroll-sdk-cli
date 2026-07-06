@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, perfectionist/sort-classes, perfectionist/sort-objects -- Dynamic TOML config operations and lifecycle-oriented command helpers */
+/* eslint-disable @typescript-eslint/no-explicit-any, perfectionist/sort-classes -- Dynamic TOML config operations and lifecycle-oriented command helpers */
 import * as toml from '@iarna/toml'
 import { confirm, password as input, select, input as textInput } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
@@ -17,7 +17,6 @@ import { JsonOutputContext } from '../../utils/json-output.js'
 import {
   type BlobArchivePlan,
   type KmsProvisionIdentity,
-  KmsSignerProvisioner,
   normalizeEksClusterName,
   sanitizeName,
   truncateIamRoleName,
@@ -34,7 +33,6 @@ import {
   type ManagedSignerConfig,
   type ManagedSignerKey,
   type ManagedSignerRole,
-  buildLocalSignerConfig,
 } from '../../utils/signer-roles.js'
 
 const DEPLOYMENT_STATE_PATH = path.join('.data', 'deployment-state.yaml')
@@ -88,7 +86,7 @@ interface ResolvedKmsSignerInput {
 }
 
 export default class SetupGenKeystore extends Command {
-  static override description = 'Generate L2 node keys and deployment signer identities'
+  static override description = 'Generate L2 node keys and deployment account keypairs'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
@@ -96,7 +94,6 @@ export default class SetupGenKeystore extends Command {
     '<%= config.bin %> <%= command.id %> --non-interactive',
     '<%= config.bin %> <%= command.id %> --non-interactive --json --sequencer-count 2 --bootnode-count 2',
     '<%= config.bin %> <%= command.id %> --non-interactive --sequencer-count 2 --bootnode-count 2',
-    '<%= config.bin %> <%= command.id %> --non-interactive --l1-commit-signer-backend aws-kms --l2-gas-oracle-signer-backend aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet',
   ]
 
   static override flags = {
@@ -112,71 +109,9 @@ export default class SetupGenKeystore extends Command {
     'from-spec': Flags.string({
       description: 'Path to DeploymentSpec YAML. Uses infrastructure.sequencerCount and bootnodeCount as count defaults.',
     }),
-    'archive-bucket': Flags.string({
-      description: 'S3 bucket whose read/write permissions should be granted to the eth-da-submitter KMS IAM role.',
-    }),
-    'archive-key-prefix': Flags.string({
-      description: 'Object key prefix under the archive bucket.',
-    }),
-    'archive-region': Flags.string({
-      description: 'Region that owns the archive bucket (defaults to --aws-region).',
-    }),
-    'aws-profile': Flags.string({
-      description: 'AWS CLI profile to use for KMS signer provisioning.',
-    }),
-    'aws-region': Flags.string({
-      description: 'AWS region for the EKS cluster and KMS keys.',
-    }),
-    'create-archive-bucket': Flags.boolean({
-      allowNo: true,
-      default: true,
-      description: 'Create the archive bucket if --archive-bucket is set and the bucket does not exist.',
-    }),
-    'disable-archive': Flags.boolean({
-      default: false,
-      description: 'Skip S3 blob archive setup for eth-da-submitter KMS signer.',
-    }),
-    'eks-cluster': Flags.string({
-      description: 'EKS cluster name or ARN used for IRSA trust binding.',
-    }),
-    'eth-da-kms-key-id': Flags.string({
-      description: 'Existing KMS key id, ARN, or alias for L1_COMMIT_SENDER / eth-da-submitter.',
-    }),
-    'eth-da-role-arn': Flags.string({
-      description: 'Existing IAM role ARN to annotate on the eth-da-submitter service account.',
-    }),
-    'eth-da-service-account': Flags.string({
-      default: 'eth-da-submitter',
-      description: 'Kubernetes service account used by eth-da-submitter.',
-    }),
-    'fee-oracle-kms-key-id': Flags.string({
-      description: 'Existing KMS key id, ARN, or alias for L2_GAS_ORACLE_SENDER / fee-oracle.',
-    }),
-    'fee-oracle-role-arn': Flags.string({
-      description: 'Existing IAM role ARN to annotate on the fee-oracle service account.',
-    }),
-    'fee-oracle-service-account': Flags.string({
-      default: 'fee-oracle',
-      description: 'Kubernetes service account used by fee-oracle.',
-    }),
     json: Flags.boolean({
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)',
-    }),
-    'l1-commit-signer-backend': Flags.string({
-      description: 'Signer backend for L1_COMMIT_SENDER / eth-da-submitter.',
-      options: ['local', 'aws-kms'],
-    }),
-    'l2-gas-oracle-signer-backend': Flags.string({
-      description: 'Signer backend for L2_GAS_ORACLE_SENDER / fee-oracle.',
-      options: ['local', 'aws-kms'],
-    }),
-    namespace: Flags.string({
-      default: 'default',
-      description: 'Kubernetes namespace for KMS signer service accounts.',
-    }),
-    'network-alias': Flags.string({
-      description: 'Resource alias used to derive deterministic KMS aliases and IAM role names.',
     }),
     'non-interactive': Flags.boolean({
       char: 'N',
@@ -210,9 +145,7 @@ export default class SetupGenKeystore extends Command {
     const jsonCtx = new JsonOutputContext('setup gen-keystore', jsonMode)
 
     const existingConfig = await this.getExistingConfig()
-    const dogeConfig = this.getOptionalDogeConfig(jsonCtx)
-
-    jsonCtx.info('Setting up Sequencer keystores, bootnode nodekeys, L2 account keypairs, and signer identities...')
+    jsonCtx.info('Setting up Sequencer keystores, bootnode nodekeys, and L2 account keypairs...')
 
     const fromSpecPath = flags['from-spec'] ? path.resolve(flags['from-spec']) : undefined
     let fromSpec: ReturnType<typeof loadDeploymentSpec> | undefined
@@ -482,94 +415,12 @@ export default class SetupGenKeystore extends Command {
         default: !existingConfig.accounts?.L2_TESTNET_ACTIVITY_HELPER_PRIVATE_KEY,
         message: 'Do you want to generate/update L2_TESTNET_ACTIVITY_HELPER_PRIVATE_KEY?',
       })
-      const configureManagedSigners = nonInteractive || await confirm({
-        default: !this.hasCompleteManagedSignerConfig(existingConfig),
-        message: 'Do you want to configure L1_COMMIT_SENDER and L2_GAS_ORACLE_SENDER signers?',
-      })
-
       if (generateTestnetActivityHelper) {
         accounts.L2_TESTNET_ACTIVITY_HELPER = this.getOrGenerateLocalAccount(existingConfig, 'L2_TESTNET_ACTIVITY_HELPER')
       }
 
       if (generateDeployerAccount) {
         accounts.DEPLOYER = this.getOrGenerateLocalAccount(existingConfig, 'DEPLOYER')
-      }
-
-      if (configureManagedSigners) {
-        const selectedBackends: Record<ManagedSignerKey, ManagedSignerBackend> = {
-          l1CommitSender: await this.resolveSignerBackend(flags, existingConfig, 'l1CommitSender', nonInteractive),
-          l2GasOracleSender: await this.resolveSignerBackend(flags, existingConfig, 'l2GasOracleSender', nonInteractive),
-        }
-        const existingKmsSigners: Partial<Record<ManagedSignerKey, ManagedSignerConfig>> = {}
-        const kmsProvisionDecisions: Partial<Record<ManagedSignerKey, boolean>> = {}
-        const kmsProvisionInputs: Partial<Record<ManagedSignerKey, ResolvedKmsSignerInput>> = {}
-        const kmsSignersToProvision: ManagedSignerKey[] = []
-
-        for (const signerKey of MANAGED_SIGNER_KEYS) {
-          if (selectedBackends[signerKey] !== 'aws_kms') continue
-
-          const existingSigner = this.getCompleteExistingKmsSigner(existingConfig, signerKey)
-          existingKmsSigners[signerKey] = existingSigner
-          const shouldProvision = this.shouldConfigureKmsSigner(flags, signerKey, existingSigner, nonInteractive)
-          kmsProvisionDecisions[signerKey] = shouldProvision
-          if (shouldProvision) {
-            kmsSignersToProvision.push(signerKey)
-          }
-        }
-
-        const kmsIdentityDefaults = this.getKmsIdentityPromptDefaults(kmsSignersToProvision, existingKmsSigners)
-        const kmsIdentity = kmsSignersToProvision.length > 0
-          ? await this.resolveKmsIdentity(flags, nonInteractive, jsonCtx, kmsIdentityDefaults)
-          : undefined
-        if (kmsIdentity) {
-          for (const signerKey of kmsSignersToProvision) {
-            const role = MANAGED_SIGNER_ROLES[signerKey]
-            kmsProvisionInputs[signerKey] = this.resolveKmsSignerInput(
-              flags,
-              signerKey,
-              role,
-              existingKmsSigners[signerKey]
-            )
-          }
-
-          this.logKmsProvisionPlan(kmsSignersToProvision, kmsIdentity, kmsProvisionInputs, jsonCtx)
-        }
-
-        for (const signerKey of MANAGED_SIGNER_KEYS) {
-          const role = MANAGED_SIGNER_ROLES[signerKey]
-          const backend = selectedBackends[signerKey]
-          if (backend === 'local') {
-            const account = this.getOrGenerateLocalAccount(existingConfig, role.role)
-            accounts[role.role] = account
-            signerConfigs[signerKey] = buildLocalSignerConfig(role)
-            continue
-          }
-
-          const existingSigner = existingKmsSigners[signerKey]
-          const shouldProvision = kmsProvisionDecisions[signerKey] ?? true
-          if (!shouldProvision && existingSigner) {
-            accounts[role.role] = { address: existingSigner.expectedAddress as string }
-            signerConfigs[signerKey] = existingSigner
-            jsonCtx.info(`${role.service}: keeping existing ${role.role} AWS KMS signer from config.toml (${existingSigner.expectedAddress})`)
-            continue
-          }
-
-          const identity = kmsIdentity as KmsProvisionIdentity
-          const archive = role.service === 'eth-da-submitter'
-            ? await this.resolveBlobArchive(flags, identity.awsRegion, dogeConfig, nonInteractive, jsonCtx)
-            : { created: false, enabled: false }
-          const provisionInput = kmsProvisionInputs[signerKey] as ResolvedKmsSignerInput
-          const provisioner = new KmsSignerProvisioner(jsonCtx, flags['aws-profile'])
-          const provisioned = await provisioner.provision(role, identity, {
-            archive,
-            createArchiveBucket: flags['create-archive-bucket'],
-            kmsKeyId: provisionInput.kmsKeyId,
-            roleArn: provisionInput.roleArn,
-            serviceAccount: provisionInput.serviceAccount,
-          })
-          accounts[role.role] = { address: provisioned.address }
-          signerConfigs[signerKey] = provisioned.signerConfig
-        }
       }
 
       // Handle OWNER address

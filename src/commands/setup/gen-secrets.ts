@@ -15,6 +15,8 @@ import {
   isAwsKmsSigner,
   isLocalSigner,
 } from '../../utils/signer-roles.js'
+import { RETH_BOOTNODE_NODEKEY_ENV, getBootnodeRethResourceName } from './l2-bootnode-reth.js'
+import { RETH_NODEKEY_ENV, RETH_SIGNER_PRIVATE_KEY_ENV, getSequencerRethResourceName } from './sequencer-reth.js'
 
 const SECRETS_PATH = path.join(process.cwd(), 'secrets')
 
@@ -137,6 +139,13 @@ export default class SetupGenSecrets extends Command {
         fs.writeFileSync(envFile, content)
         this.jsonCtx.log(chalk.green(`Created ${filename}`))
       }
+    }
+
+    const rethEnvFiles = this.generateRethEnvFiles()
+    for (const [filename, content] of Object.entries(rethEnvFiles)) {
+      const envFile = path.join(SECRETS_PATH, filename)
+      fs.writeFileSync(envFile, content)
+      this.jsonCtx.log(chalk.green(`Created ${filename}`))
     }
   }
 
@@ -297,16 +306,16 @@ export default class SetupGenSecrets extends Command {
     }
 
     if (service === 'fee-oracle') {
-      const signer = this.requireSigner(config, 'l2GasOracleSender')
+      const signer = this.requireSigner('l2GasOracleSender')
       if (isLocalSigner(signer)) {
         const privateKey = this.requireConfigValue(
-          config.accounts?.L2_GAS_ORACLE_SENDER_PRIVATE_KEY,
-          'accounts.L2_GAS_ORACLE_SENDER_PRIVATE_KEY'
+          this.getDogeAccountValue('L2_GAS_ORACLE_SENDER_PRIVATE_KEY'),
+          'dogeConfig.accounts.L2_GAS_ORACLE_SENDER_PRIVATE_KEY'
         )
         envFiles['fee-oracle-secret.env'] = this.envLine(
           'DOGEOS_FEE_ORACLE_PRIVATE_KEY',
           privateKey,
-          'accounts.L2_GAS_ORACLE_SENDER_PRIVATE_KEY'
+          'dogeConfig.accounts.L2_GAS_ORACLE_SENDER_PRIVATE_KEY'
         )
       }
     }
@@ -357,32 +366,88 @@ export default class SetupGenSecrets extends Command {
     }
 
     if (service === 'eth-da-submitter') {
-      const signer = this.requireSigner(config, 'l1CommitSender')
+      const signer = this.requireSigner('l1CommitSender')
       if (isAwsKmsSigner(signer)) {
         return envFiles
       }
 
       const submitterPrivateKey = this.requireConfigValue(
-        config.accounts?.L1_COMMIT_SENDER_PRIVATE_KEY,
-        'accounts.L1_COMMIT_SENDER_PRIVATE_KEY'
+        this.getDogeAccountValue('L1_COMMIT_SENDER_PRIVATE_KEY'),
+        'dogeConfig.accounts.L1_COMMIT_SENDER_PRIVATE_KEY'
       )
       envFiles['eth-da-submitter-secret.env'] = this.envLine(
         'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY',
         submitterPrivateKey,
-        'accounts.L1_COMMIT_SENDER_PRIVATE_KEY'
+        'dogeConfig.accounts.L1_COMMIT_SENDER_PRIVATE_KEY'
       )
     }
 
     return envFiles
   }
 
-  private getMappedConfigValue(config: any, configKey: string): unknown {
-    if (configKey === 'L1_COMMIT_SENDER_PRIVATE_KEY' && isAwsKmsSigner(this.requireSigner(config, 'l1CommitSender'))) {
-      return undefined
+  private generateRethEnvFiles(): { [key: string]: string } {
+    const envFiles: { [key: string]: string } = {}
+
+    for (const instance of this.dogeConfig.bootnodeReth?.instances ?? []) {
+      if (instance.nodekey?.secretMode === 'plain') continue
+      const nodekey = this.requireConfigValue(
+        instance.nodekey?.privateKey,
+        `dogeConfig.bootnodeReth.instances[index=${instance.index}].nodekey.privateKey`
+      )
+      envFiles[`${getBootnodeRethResourceName(instance.index)}-secret.env`] = this.envLine(
+        RETH_BOOTNODE_NODEKEY_ENV,
+        nodekey,
+        `dogeConfig.bootnodeReth.instances[index=${instance.index}].nodekey.privateKey`
+      )
     }
 
-    if (configKey === 'L2_GAS_ORACLE_SENDER_PRIVATE_KEY' && isAwsKmsSigner(this.requireSigner(config, 'l2GasOracleSender'))) {
-      return undefined
+    for (const instance of this.dogeConfig.sequencerReth?.instances ?? []) {
+      const secretMode = instance.signer?.secretMode || instance.nodekey?.secretMode
+      if (secretMode === 'plain') continue
+
+      const nodekey = this.requireConfigValue(
+        instance.nodekey?.privateKey,
+        `dogeConfig.sequencerReth.instances[index=${instance.index}].nodekey.privateKey`
+      )
+      let content = this.envLine(
+        RETH_NODEKEY_ENV,
+        nodekey,
+        `dogeConfig.sequencerReth.instances[index=${instance.index}].nodekey.privateKey`
+      )
+
+      if (instance.signer?.backend === 'local') {
+        const signerPrivateKey = this.requireConfigValue(
+          instance.signer.privateKey,
+          `dogeConfig.sequencerReth.instances[index=${instance.index}].signer.privateKey`
+        )
+        content += this.envLine(
+          RETH_SIGNER_PRIVATE_KEY_ENV,
+          signerPrivateKey,
+          `dogeConfig.sequencerReth.instances[index=${instance.index}].signer.privateKey`
+        )
+      }
+
+      envFiles[`${getSequencerRethResourceName(instance.index)}-secret.env`] = content
+    }
+
+    return envFiles
+  }
+
+  private getDogeAccountValue(key: keyof NonNullable<DogeConfig['accounts']>): unknown {
+    return this.dogeConfig.accounts?.[key]
+  }
+
+  private getMappedConfigValue(config: any, configKey: string): unknown {
+    if (configKey === 'L1_COMMIT_SENDER_PRIVATE_KEY') {
+      return isAwsKmsSigner(this.requireSigner('l1CommitSender'))
+        ? undefined
+        : this.getDogeAccountValue('L1_COMMIT_SENDER_PRIVATE_KEY')
+    }
+
+    if (configKey === 'L2_GAS_ORACLE_SENDER_PRIVATE_KEY') {
+      return isAwsKmsSigner(this.requireSigner('l2GasOracleSender'))
+        ? undefined
+        : this.getDogeAccountValue('L2_GAS_ORACLE_SENDER_PRIVATE_KEY')
     }
 
     if (config.db && config.db[configKey]) return config.db[configKey]
@@ -396,7 +461,7 @@ export default class SetupGenSecrets extends Command {
     if (value === undefined || value === null || String(value).trim() === '') {
       this.jsonCtx.error(
         'E611_REQUIRED_SECRET_VALUE_MISSING',
-        `${source} is required for local signer secret generation. Run setup gen-keystore to recreate signer configuration.`,
+        `${source} is required for secret generation. Re-run the corresponding setup command to recreate key configuration.`,
         'CONFIGURATION',
         true,
         { source }
@@ -406,9 +471,9 @@ export default class SetupGenSecrets extends Command {
     return value
   }
 
-  private requireSigner(config: any, signerKey: 'l1CommitSender' | 'l2GasOracleSender') {
+  private requireSigner(signerKey: 'l1CommitSender' | 'l2GasOracleSender') {
     try {
-      return getRequiredManagedSignerConfig(config, signerKey)
+      return getRequiredManagedSignerConfig(this.dogeConfig, signerKey)
     } catch (error) {
       this.jsonCtx.error(
         'E610_SIGNER_CONFIG_MISSING',

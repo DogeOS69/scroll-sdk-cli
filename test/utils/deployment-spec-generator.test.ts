@@ -1370,12 +1370,11 @@ describe('deployment-spec-generator', () => {
 
       const feeOracleValues = yaml.load(files['fee-oracle-production.yaml']) as any;
       const feeOracleEnv = feeOracleValues.configMaps.env.data;
-      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE).to.equal('dry_run');
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL).to.equal('https://sepolia.drpc.org');
-      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__MIN_PRIORITY_FEE_PER_GAS_WEI).to.equal('0');
-      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__FORMULA).to.equal('galileo');
-      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__PRICE_UNAVAILABLE_FALLBACK).to.equal('hold_last');
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_L2__CHAIN_ID).to.equal(String(spec.network.l2ChainId));
+      expect(feeOracleEnv).not.to.have.property('DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE');
+      expect(feeOracleEnv).not.to.have.property('DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__FORMULA');
+      expect(feeOracleEnv).not.to.have.property('DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__PRICE_UNAVAILABLE_FALLBACK');
       expect(feeOracleValues.envFrom).to.deep.equal([
         { configMapRef: { name: 'fee-oracle-env' } },
         { secretRef: { name: 'fee-oracle-secret-env' } },
