@@ -2,7 +2,6 @@
 import * as toml from '@iarna/toml'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
-import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
@@ -16,7 +15,13 @@ import {
   isLocalSigner,
 } from '../../utils/signer-roles.js'
 import { RETH_BOOTNODE_NODEKEY_ENV, getBootnodeRethResourceName } from './l2-bootnode-reth.js'
-import { RETH_NODEKEY_ENV, RETH_SIGNER_PRIVATE_KEY_ENV, getSequencerRethResourceName } from './sequencer-reth.js'
+import {
+  RETH_NODEKEY_ENV,
+  RETH_SIGNER_PRIVATE_KEY_ENV,
+  getSequencerRethResourceName,
+  normalizeSignerMode,
+  signerModeToConfig,
+} from './sequencer-reth.js'
 
 const SECRETS_PATH = path.join(process.cwd(), 'secrets')
 
@@ -30,11 +35,6 @@ export default class SetupGenSecrets extends Command {
   ]
 
   static override flags = {
-    'configs-dir': Flags.string({
-      default: 'values',
-      description: 'Directory containing generated values files',
-      required: false,
-    }),
     'doge-config': Flags.string({
       description: 'Path to Dogecoin config file (defaults to .data/doge-config.toml)',
       required: false,
@@ -86,14 +86,12 @@ export default class SetupGenSecrets extends Command {
 
     this.jsonCtx.info('Creating secrets environment files...')
     await this.createEnvFiles()
-    this.extractRollupExplorerBackendSecret(flags['configs-dir'])
 
     this.jsonCtx.logSuccess('Secret generation completed.')
 
     if (this.jsonMode) {
       this.jsonCtx.success({
         bridgeOutputPath,
-        configsDir: flags['configs-dir'],
         dogeConfigPath: dogeConfigResult.configPath,
         secretsDir: path.join(process.cwd(), 'secrets'),
       })
@@ -160,37 +158,6 @@ export default class SetupGenSecrets extends Command {
 
   private envLine(envKey: string, value: unknown, source: string): string {
     return `${envKey}="${this.resolveSecretValue(value, source)}"\n`
-  }
-
-  private extractRollupExplorerBackendSecret(configsDir: string): void {
-    const sourcePath = path.join(process.cwd(), configsDir, 'rollup-explorer-backend-config.yaml')
-    if (!fs.existsSync(sourcePath)) {
-      this.jsonCtx.addWarning(`${sourcePath} not found. Skipping rollup-explorer-backend-secret.json generation.`)
-      return
-    }
-
-    try {
-      const yamlFileContent = fs.readFileSync(sourcePath, 'utf8')
-      const parsedYaml = yaml.load(yamlFileContent) as { scrollConfig?: unknown } | null
-      if (!parsedYaml || typeof parsedYaml.scrollConfig !== 'string') {
-        this.jsonCtx.addWarning(`Could not find string scrollConfig in ${sourcePath}. Skipping rollup-explorer-backend-secret.json generation.`)
-        return
-      }
-
-      const scrollConfigObject = JSON.parse(parsedYaml.scrollConfig)
-      const jsonOutputPath = path.join(process.cwd(), 'secrets', 'rollup-explorer-backend-secret.json')
-      fs.writeFileSync(jsonOutputPath, JSON.stringify(scrollConfigObject, null, 2))
-      fs.unlinkSync(sourcePath)
-      this.jsonCtx.logSuccess(`Created ${jsonOutputPath}`)
-    } catch (error) {
-      this.jsonCtx.error(
-        'E602_INVALID_CONFIG_FORMAT',
-        `Failed to generate rollup-explorer-backend-secret.json from ${sourcePath}: ${error instanceof Error ? error.message : String(error)}`,
-        'CONFIGURATION',
-        false,
-        { path: sourcePath }
-      )
-    }
   }
 
   private generateEnvContent(service: string, config: any): { [key: string]: string } {
@@ -402,8 +369,12 @@ export default class SetupGenSecrets extends Command {
     }
 
     for (const instance of this.dogeConfig.sequencerReth?.instances ?? []) {
-      const secretMode = instance.signer?.secretMode || instance.nodekey?.secretMode
-      if (secretMode === 'plain') continue
+      const {signer} = instance
+      const signerMode = signerModeToConfig(normalizeSignerMode(String(this.requireConfigValue(
+        signer?.mode,
+        `dogeConfig.sequencerReth.instances[index=${instance.index}].signer.mode`
+      ))))
+      if (signerMode.secretMode === 'plain') continue
 
       const nodekey = this.requireConfigValue(
         instance.nodekey?.privateKey,
@@ -415,9 +386,9 @@ export default class SetupGenSecrets extends Command {
         `dogeConfig.sequencerReth.instances[index=${instance.index}].nodekey.privateKey`
       )
 
-      if (instance.signer?.backend === 'local') {
+      if (signerMode.signerBackend === 'local') {
         const signerPrivateKey = this.requireConfigValue(
-          instance.signer.privateKey,
+          signer?.privateKey,
           `dogeConfig.sequencerReth.instances[index=${instance.index}].signer.privateKey`
         )
         content += this.envLine(

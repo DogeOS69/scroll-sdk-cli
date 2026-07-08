@@ -316,27 +316,6 @@ class AWSSecretService implements SecretService {
     }
   }
 
-  // private async processRollupExplorerBackendConfigSecret(secretsDir: string): Promise<void> {
-  //   const fileName = 'rollup-explorer-backend.json';
-  //   const filePath = path.join(secretsDir, fileName);
-
-  //   if (fs.existsSync(filePath)) {
-  //     const propertyKey = 'config.json';
-  //     const secretManagerName = 'rollup-explorer-backend';
-  //     console.log(chalk.cyan(`Processing special JSON secret: ${this.prefixName}/${secretManagerName} from ${fileName}`));
-  //     const contentString = await fs.promises.readFile(filePath, 'utf8');
-
-  //     if (!contentString.trim()) {
-  //       console.log(chalk.red(`Skipping secret: ${secretManagerName} from ${fileName} because it is empty`));
-  //       return;
-  //     }
-  //     await this.createOrUpdateSecret({ [propertyKey]: contentString }, secretManagerName);
-  //   } else {
-  //     if (this.debug) {
-  //       console.log(chalk.yellow(`File ${fileName} not found in secrets directory. Skipping its specific processing.`));
-  //     }
-  //   }
-  // }
 }
 
 class HashicorpVaultDevService implements SecretService {
@@ -425,25 +404,11 @@ class HashicorpVaultDevService implements SecretService {
       return pushedSecrets
     }
 
-    if (!filename || filename === 'rollup-explorer-backend-secret.json') {
-      const processed = await this.processRollupExplorerBackendConfigSecret(secretsDir);
-      if (processed) {
-        pushedSecrets.push({
-          name: 'rollup-explorer-backend-secret',
-          properties: ['config.json'],
-          sourceFile: path.join(secretsDir, 'rollup-explorer-backend-secret.json'),
-        })
-      }
-    }
-
     // Process JSON files
-    let jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json') && file !== 'rollup-explorer-backend-secret.json');
+    let jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json'));
 
     if (filename && filename.endsWith('.json')) {
-      // If specific file requested (and not special one handled above)
-      jsonFiles = filename === 'rollup-explorer-backend-secret.json'
-        ? [] // Already handled above
-        : jsonFiles.filter(f => f === filename);
+      jsonFiles = jsonFiles.filter(f => f === filename);
     } else if (filename) {
       jsonFiles = []; // Not a json file requested
     }
@@ -555,32 +520,6 @@ class HashicorpVaultDevService implements SecretService {
     } catch {
       return false
     }
-  }
-
-  private async processRollupExplorerBackendConfigSecret(secretsDir: string): Promise<boolean> {
-    const fileName = 'rollup-explorer-backend-secret.json';
-    const filePath = path.join(secretsDir, fileName);
-
-    if (fs.existsSync(filePath)) {
-      const secretManagerName = 'rollup-explorer-backend-secret';
-      const propertyKey = 'config.json';
-      console.log(chalk.cyan(`Processing special JSON secret: ${this.pathPrefix}/${secretManagerName} from ${fileName}`));
-      const contentString = await fs.promises.readFile(filePath, 'utf8');
-
-      if (!contentString.trim()) {
-        console.log(chalk.red(`Skipping secret: ${secretManagerName} from ${fileName} because it is empty`));
-        return false;
-      }
-
-      return this.pushJsonToVault(secretManagerName, contentString, propertyKey)
-    }
- 
-      if (this.debug) {
-        console.log(chalk.yellow(`File ${fileName} not found in secrets directory. Skipping its specific processing.`));
-      }
-
-      return false
-    
   }
 
   private async pushJsonToVault(secretName: string, content: string, propertyName: string): Promise<boolean> {

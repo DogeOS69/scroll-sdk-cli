@@ -50,6 +50,7 @@ export interface ProtocolSeedConfigInputs {
   configToml: any
   contractsConfig: any
   existingProtocolSeedConfig?: any
+  initialSystemSigner?: string
   network: string
 }
 
@@ -126,6 +127,9 @@ export function buildEthereumDaProtocolSeedConfig(
     '0x0000000000000000000000000000000000000000000000000000000000000000'
   protocolSeedConfig.chain_anchors.genesis_state_root ??=
     '0x0000000000000000000000000000000000000000000000000000000000000000'
+  if (inputs.initialSystemSigner) {
+    protocolSeedConfig.chain_anchors.initial_system_signer = inputs.initialSystemSigner
+  }
 
   protocolSeedConfig.protocol_config_seed ??= {}
   protocolSeedConfig.protocol_config_seed.protocol_config ??= {}
@@ -154,6 +158,25 @@ export function buildEthereumDaProtocolSeedConfig(
   )
 
   return protocolSeedConfig
+}
+
+export function resolveInitialSystemSignerFromDogeConfig(dogeConfig: any): string | undefined {
+  const instances = dogeConfig?.sequencerReth?.instances
+  if (!Array.isArray(instances) || instances.length === 0) return undefined
+
+  const sequencers = instances
+    .filter(instance => instance && typeof instance === 'object')
+    .sort((a, b) => Number(a.index) - Number(b.index))
+  const primarySequencer = sequencers.find(sequencer => Number(sequencer.index) === 0) || sequencers[0]
+  const signerAddress = primarySequencer?.signer?.address
+
+  return typeof signerAddress === 'string' && signerAddress.trim() !== ''
+    ? signerAddress.trim()
+    : undefined
+}
+
+function isValidEvmAddress(address: string): boolean {
+  return /^0x[\dA-Fa-f]{40}$/.test(address)
 }
 
 function isValidSecp256k1PublicKey(publicKey: string): boolean {
@@ -192,9 +215,9 @@ export class BridgeInitCommand extends Command {
     '$ scrollsdk setup bridge-init --step 2',
     '$ scrollsdk setup bridge-init -s 123456',
     '$ scrollsdk setup bridge-init --seed 123456',
-    '$ scrollsdk setup bridge-init --image-tag dev-20260619',
-    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag dev-20260619',
-    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag dev-20260619 --docker-platform linux/amd64',
+    '$ scrollsdk setup bridge-init --image-tag dev-20260707-043e7f3',
+    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag dev-20260707-043e7f3',
+    '$ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag dev-20260707-043e7f3 --docker-platform linux/amd64',
     '$ scrollsdk setup bridge-init --non-interactive --json --seed 123456',
   ]
 
@@ -204,7 +227,7 @@ export class BridgeInitCommand extends Command {
       description: 'Docker platform for bridge-genesis-tools image.',
     }),
     'image-tag': Flags.string({
-      description: 'Specify the Docker image tag to use (defaults to dev-20260619)',
+      description: 'Specify the Docker image tag to use (defaults to dev-20260707-043e7f3)',
       required: false,
     }),
     'json': Flags.boolean({
@@ -688,7 +711,7 @@ export class BridgeInitCommand extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'dev-20260619'
+    const defaultTag = 'dev-20260707-043e7f3'
 
     if (!providedTag) {
       return defaultTag
@@ -1551,6 +1574,7 @@ export class BridgeInitCommand extends Command {
   private updateProtocolSeed(dataDir: string, network: string, configPath: string): string {
     const configToml = this.getRequiredTomlConfig(configPath)
     const { config: dogeConfig, path: dogeConfigPath } = this.getRequiredDogeConfig(dataDir)
+    const initialSystemSigner = this.getRequiredInitialSystemSigner(dogeConfig, dogeConfigPath)
     const contractsPath = path.join(process.cwd(), 'config-contracts.toml')
     const contractsConfig = this.getRequiredTomlConfig(contractsPath)
     const protocolInputConfig = {
@@ -1567,7 +1591,13 @@ export class BridgeInitCommand extends Command {
     }
 
     protocolSeedConfig = buildEthereumDaProtocolSeedConfig(
-      { configToml: protocolInputConfig, contractsConfig, existingProtocolSeedConfig: protocolSeedConfig, network },
+      {
+        configToml: protocolInputConfig,
+        contractsConfig,
+        existingProtocolSeedConfig: protocolSeedConfig,
+        initialSystemSigner,
+        network,
+      },
       {
         getContractAddress: (config, contractName) =>
           this.getRequiredContractAddress(config, contractName, contractsPath),
@@ -1581,8 +1611,37 @@ export class BridgeInitCommand extends Command {
     )
 
     fs.writeFileSync(protocolSeedPath, toml.stringify(protocolSeedConfig))
-    this.jsonCtx.info(`Updated ${protocolSeedPath} for Dogecoin network ${network}`)
+    this.jsonCtx.info(
+      `Updated ${protocolSeedPath} for Dogecoin network ${network} ` +
+      `with initial_system_signer = ${initialSystemSigner}`
+    )
     return protocolSeedPath
+  }
+
+  private getRequiredInitialSystemSigner(dogeConfig: any, dogeConfigPath: string): string {
+    const initialSystemSigner = resolveInitialSystemSignerFromDogeConfig(dogeConfig)
+
+    if (!initialSystemSigner) {
+      this.jsonCtx.error(
+        'E602_INVALID_DOGE_CONFIG',
+        `${dogeConfigPath} must define sequencerReth.instances[index=0].signer.address before bridge-init can write protocol_seed.toml initial_system_signer.`,
+        'CONFIGURATION',
+        true,
+        { path: dogeConfigPath }
+      )
+    }
+
+    if (!isValidEvmAddress(initialSystemSigner)) {
+      this.jsonCtx.error(
+        'E602_INVALID_DOGE_CONFIG',
+        `sequencerReth.instances[index=0].signer.address must be a 20-byte EVM address in ${dogeConfigPath}`,
+        'CONFIGURATION',
+        true,
+        { initialSystemSigner, path: dogeConfigPath }
+      )
+    }
+
+    return initialSystemSigner
   }
 
   private upsertEnvValues(existingContent: string, values: Record<string, string>): string {

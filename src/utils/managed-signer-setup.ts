@@ -20,6 +20,7 @@ import {
   truncateIamRoleName,
 } from './kms-signer-provisioner.js'
 import { resolveEnvValue } from './non-interactive.js'
+import { buildS3PublicBaseUrl } from './s3-archive.js'
 import {
   MANAGED_SIGNER_ROLES,
   type ManagedSignerBackend,
@@ -84,6 +85,10 @@ export async function setupManagedSigner(options: ManagedSignerCommandOptions): 
     dogeConfig.accounts ||= {}
     dogeConfig.accounts[accountAddressKey(role) as keyof NonNullable<DogeConfig['accounts']>] = account.address
     dogeConfig.accounts[accountPrivateKeyKey(role) as keyof NonNullable<DogeConfig['accounts']>] = account.privateKey
+
+    if (signerKey === 'l1CommitSender') {
+      await resolveBlobArchive(options, resolveEnvValue(flags['aws-region']))
+    }
   } else {
     const completeExisting = getCompleteExistingKmsSigner(dogeConfig, signerKey)
     const shouldProvision = shouldConfigureKmsSigner(options, completeExisting)
@@ -94,7 +99,7 @@ export async function setupManagedSigner(options: ManagedSignerCommandOptions): 
     } else {
       const identityDefaults = getKmsIdentityPromptDefaults(role, completeExisting)
       const identity = await resolveKmsIdentity(options, identityDefaults)
-      const provisionInput = resolveKmsSignerInput(options, role, completeExisting)
+      const provisionInput = resolveKmsSignerInput(options, role, identity, completeExisting)
       logKmsProvisionPlan(role, identity, provisionInput, jsonCtx)
       const archive = role.service === 'eth-da-submitter'
         ? await resolveBlobArchive(options, identity.awsRegion)
@@ -359,26 +364,59 @@ async function resolveRequiredTextFlag(
   return (await textInput({ default: defaultValue, message, required: true })).trim()
 }
 
-function resolveKmsSignerInput(
+export function resolveKmsSignerInput(
   options: ManagedSignerCommandOptions,
   role: ManagedSignerRole,
+  identity: KmsProvisionIdentity,
   existingSigner: ManagedSignerConfig | undefined
 ): ResolvedKmsSignerInput {
+  const explicitKmsKeyId = resolveEnvValue(options.flags['kms-key-id'])
+  const explicitRoleArn = resolveEnvValue(options.flags['role-arn'])
+  const existingKmsKeyId = existingSigner?.kmsKeyId
+  const existingRoleArn = existingSigner?.serviceAccountRoleArn
+
   return {
-    kmsKeyId: resolveEnvValue(options.flags['kms-key-id']) || existingSigner?.kmsKeyId,
-    roleArn: resolveEnvValue(options.flags['role-arn']) || existingSigner?.serviceAccountRoleArn,
+    kmsKeyId: explicitKmsKeyId || (
+      shouldReuseExistingKmsKey(existingKmsKeyId, role, identity)
+        ? existingKmsKeyId
+        : undefined
+    ),
+    roleArn: explicitRoleArn || (
+      shouldReuseExistingRoleArn(existingRoleArn, role, identity)
+        ? existingRoleArn
+        : undefined
+    ),
     serviceAccount: options.hasFlag('service-account')
       ? resolveEnvValue(options.flags['service-account']) || role.defaultServiceAccount
       : existingSigner?.serviceAccountName || role.defaultServiceAccount,
   }
 }
 
-function getDefaultKmsAlias(role: ManagedSignerRole, identity: KmsProvisionIdentity): string {
+export function getDefaultKmsAlias(role: ManagedSignerRole, identity: KmsProvisionIdentity): string {
   return `alias/dogeos/${sanitizeName(identity.networkAlias)}/${sanitizeName(identity.eksCluster)}/${role.aliasSuffix}`
 }
 
-function getDefaultKmsRoleName(role: ManagedSignerRole, identity: KmsProvisionIdentity): string {
+export function getDefaultKmsRoleName(role: ManagedSignerRole, identity: KmsProvisionIdentity): string {
   return truncateIamRoleName(`dogeos-${sanitizeName(identity.networkAlias)}-${sanitizeName(identity.eksCluster)}-${role.roleSuffix}`)
+}
+
+function shouldReuseExistingKmsKey(
+  existingKmsKeyId: string | undefined,
+  role: ManagedSignerRole,
+  identity: KmsProvisionIdentity
+): boolean {
+  return existingKmsKeyId === getDefaultKmsAlias(role, identity)
+}
+
+function shouldReuseExistingRoleArn(
+  existingRoleArn: string | undefined,
+  role: ManagedSignerRole,
+  identity: KmsProvisionIdentity
+): boolean {
+  if (!existingRoleArn) return false
+
+  const expectedRoleName = getDefaultKmsRoleName(role, identity)
+  return existingRoleArn.endsWith(`:role/${expectedRoleName}`) || existingRoleArn.endsWith(`/role/${expectedRoleName}`)
 }
 
 function logKmsProvisionPlan(
@@ -405,7 +443,7 @@ function logKmsProvisionPlan(
 
 async function resolveBlobArchive(
   options: ManagedSignerCommandOptions,
-  awsRegion: string
+  awsRegion: string | undefined
 ): Promise<BlobArchivePlan> {
   const { dogeConfig, flags, jsonCtx, nonInteractive } = options
   if (flags['disable-archive']) {
@@ -419,16 +457,29 @@ async function resolveBlobArchive(
   const flagBucket = resolveEnvValue(flags['archive-bucket'])
   const flagRegion = resolveEnvValue(flags['archive-region'])
   const flagKeyPrefix = resolveEnvValue(flags['archive-key-prefix'])
+  const flagPublicBaseUrl = resolveEnvValue(flags['archive-public-base-url'])
   const configuredArchive = getConfiguredBlobArchive(dogeConfig)
+  const existingArchive = getExistingBlobArchive(dogeConfig)
+  const archiveDefaults = nonInteractive ? configuredArchive : existingArchive
 
-  const defaultBucket = flagBucket || configuredArchive?.bucket
-  const defaultRegion = flagRegion || configuredArchive?.region || awsRegion
-  const defaultKeyPrefix = flagKeyPrefix || configuredArchive?.keyPrefix || ''
+  const defaultBucket = flagBucket || archiveDefaults?.bucket
+  const defaultRegion = flagRegion || archiveDefaults?.region || awsRegion || 'us-east-1'
+  const defaultKeyPrefix = flagKeyPrefix || archiveDefaults?.keyPrefix || ''
+  const archiveLocationChanged = Boolean(flagBucket || flagRegion) && (
+    defaultBucket !== archiveDefaults?.bucket ||
+    defaultRegion !== archiveDefaults?.region
+  )
+  const defaultPublicBaseUrl = flagPublicBaseUrl || (
+    archiveLocationChanged ? undefined : archiveDefaults?.publicBaseUrl
+  ) || buildS3PublicBaseUrl({
+    bucket: defaultBucket,
+    region: defaultRegion,
+  })
 
   if (nonInteractive) {
     if (!defaultBucket) {
-      if (flagRegion || flagKeyPrefix) {
-        jsonCtx.addWarning('--archive-region and --archive-key-prefix were ignored because --archive-bucket was not provided and doge-config has no enabled S3 archive bucket.')
+      if (flagRegion || flagKeyPrefix || flagPublicBaseUrl) {
+        jsonCtx.addWarning('--archive-region, --archive-key-prefix, and --archive-public-base-url were ignored because --archive-bucket was not provided and doge-config has no enabled S3 archive bucket.')
       }
 
       return { created: false, enabled: false }
@@ -439,6 +490,7 @@ async function resolveBlobArchive(
       created: false,
       enabled: true,
       keyPrefix: defaultKeyPrefix || undefined,
+      publicBaseUrl: defaultPublicBaseUrl,
       region: defaultRegion,
     })
     return {
@@ -446,13 +498,14 @@ async function resolveBlobArchive(
       created: false,
       enabled: true,
       keyPrefix: defaultKeyPrefix || undefined,
+      publicBaseUrl: defaultPublicBaseUrl,
       region: defaultRegion,
     }
   }
 
   const enabled = await confirm({
     default: Boolean(defaultBucket),
-    message: 'Grant eth-da-submitter IAM role access to an S3 blob archive bucket?',
+    message: 'Configure an S3 blob archive bucket for eth-da-submitter?',
   })
   if (!enabled) {
     options.dogeConfig.ethereumDa ||= {}
@@ -476,12 +529,18 @@ async function resolveBlobArchive(
     default: defaultKeyPrefix,
     message: 'S3 object key prefix (optional):',
   })).trim()
+  const publicBaseUrl = flagPublicBaseUrl || (
+    bucket === existingArchive?.bucket && region === existingArchive?.region
+      ? existingArchive?.publicBaseUrl
+      : undefined
+  ) || buildS3PublicBaseUrl({ bucket, region })
 
   const archive = {
     bucket,
     created: false,
     enabled: true,
     keyPrefix: keyPrefix || undefined,
+    publicBaseUrl,
     region,
   }
   writeBlobArchiveConfig(options.dogeConfig, archive)
@@ -495,6 +554,7 @@ function writeBlobArchiveConfig(dogeConfig: DogeConfig, archive: BlobArchivePlan
   dogeConfig.ethereumDa.blobArchive.s3.enabled = archive.enabled
   if (archive.bucket) dogeConfig.ethereumDa.blobArchive.s3.bucket = archive.bucket
   if (archive.region) dogeConfig.ethereumDa.blobArchive.s3.region = archive.region
+  if (archive.publicBaseUrl) dogeConfig.ethereumDa.blobArchive.s3.publicBaseUrl = archive.publicBaseUrl
   if (archive.keyPrefix) {
     dogeConfig.ethereumDa.blobArchive.s3.keyPrefix = archive.keyPrefix
   } else {
@@ -503,14 +563,21 @@ function writeBlobArchiveConfig(dogeConfig: DogeConfig, archive: BlobArchivePlan
 }
 
 function getConfiguredBlobArchive(dogeConfig: DogeConfig): BlobArchivePlan | undefined {
+  const archive = getExistingBlobArchive(dogeConfig)
+  if (!archive?.bucket || !archive.enabled) return undefined
+  return archive
+}
+
+function getExistingBlobArchive(dogeConfig: DogeConfig): BlobArchivePlan | undefined {
   const s3 = dogeConfig.ethereumDa?.blobArchive?.s3
-  if (!s3 || !isConfigTruthy(s3.enabled) || !s3.bucket) return undefined
+  if (!s3) return undefined
 
   return {
-    bucket: String(s3.bucket),
+    bucket: optionalConfigString(s3.bucket),
     created: false,
-    enabled: true,
+    enabled: isConfigTruthy(s3.enabled),
     keyPrefix: optionalConfigString(s3.keyPrefix),
+    publicBaseUrl: optionalConfigString(s3.publicBaseUrl),
     region: optionalConfigString(s3.region),
   }
 }

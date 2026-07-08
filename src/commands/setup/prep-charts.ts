@@ -23,6 +23,7 @@ import {
   resolveBlockbookKubernetesEndpoints,
   resolveDogecoinKubernetesEndpoints,
 } from '../../utils/kubernetes-endpoints.js'
+import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {
   getRequiredManagedSignerConfig,
   isAwsKmsSigner,
@@ -45,6 +46,8 @@ import {
   getSequencerRethResourceName,
   getSequencerRethValuesFileName,
   normalizeRethNodekey,
+  normalizeSignerMode,
+  signerModeToConfig,
 } from './sequencer-reth.js'
 
 /**
@@ -537,6 +540,19 @@ export function validateDogeConfigEthereumDaForPrep(ethereumDa: DogeConfig['ethe
     validateOptionalIntegerConfig(errors, 'ethereumDa.publish.targetBlobsPerTx', publish.targetBlobsPerTx, 1, 'a positive integer')
   }
 
+  const s3Archive = ethereumDa?.blobArchive?.s3
+  if (truthyConfigValue(s3Archive?.enabled)) {
+    validateOptionalNonEmptyStringConfig(errors, 'ethereumDa.blobArchive.s3.bucket', s3Archive?.bucket)
+    validateOptionalNonEmptyStringConfig(errors, 'ethereumDa.blobArchive.s3.region', s3Archive?.region)
+    if (!isConfiguredValue(s3Archive?.bucket)) {
+      pushConfigValidationError(errors, 'ethereumDa.blobArchive.s3.bucket', 'must be set when S3 blob archive is enabled')
+    }
+
+    if (!isConfiguredValue(s3Archive?.region)) {
+      pushConfigValidationError(errors, 'ethereumDa.blobArchive.s3.region', 'must be set when S3 blob archive is enabled')
+    }
+  }
+
   if (errors.length > 0) {
     throw new Error(`Invalid doge-config Ethereum DA config:\n- ${errors.join('\n- ')}`)
   }
@@ -574,6 +590,54 @@ export function buildWithdrawalBlobSourcePrepEnv(input: {
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL: input.beaconRpcUrl,
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS: '10000',
   }
+}
+
+export function getEthereumDaS3PublicBaseUrl(s3Archive: NonNullable<NonNullable<NonNullable<DogeConfig['ethereumDa']>['blobArchive']>['s3']> | undefined): string | undefined {
+  if (!truthyConfigValue(s3Archive?.enabled)) return undefined
+  return buildS3PublicBaseUrl(s3Archive ?? {})
+}
+
+export function getEthereumDaS3PublicBlobUrl(s3Archive: NonNullable<NonNullable<NonNullable<DogeConfig['ethereumDa']>['blobArchive']>['s3']> | undefined): string | undefined {
+  if (!truthyConfigValue(s3Archive?.enabled)) return undefined
+  return buildS3PublicPrefixUrl(s3Archive ?? {})
+}
+
+export function applyRethBlobS3Url(
+  productionYaml: any,
+  blobS3Url: string | undefined = ''
+): PrepChartChange[] {
+  const changes: PrepChartChange[] = []
+  productionYaml.reth ||= {}
+  const nextValue = blobS3Url
+  const oldValue = productionYaml.reth.blobS3Url
+  if (oldValue !== nextValue) {
+    productionYaml.reth.blobS3Url = nextValue
+    changes.push({
+      key: 'reth.blobS3Url',
+      newValue: nextValue,
+      oldValue: String(oldValue ?? 'undefined'),
+    })
+  }
+
+  return changes
+}
+
+export function removeL2GethBlobS3ExtraParams(productionYaml: any): PrepChartChange[] {
+  const changes: PrepChartChange[] = []
+  const envData = productionYaml.configMaps?.env?.data
+  if (!envData || typeof envData !== 'object') return changes
+
+  if ('L2GETH_EXTRA_PARAMS' in envData) {
+    const oldValue = envData.L2GETH_EXTRA_PARAMS
+    delete envData.L2GETH_EXTRA_PARAMS
+    changes.push({
+      key: 'configMaps.env.data.L2GETH_EXTRA_PARAMS',
+      newValue: 'removed',
+      oldValue: String(oldValue),
+    })
+  }
+
+  return changes
 }
 
 export function removeConfigMapEnvKeys(
@@ -855,26 +919,28 @@ export default class SetupPrepCharts extends Command {
     }
 
     const {signer} = instance
-    if (!signer?.backend) {
-      this.error(`sequencerReth.instances[index=${index}].signer.backend is missing. Run scrollsdk setup sequencer-reth --index ${index} first.`)
+    if (!signer?.mode) {
+      this.error(`sequencerReth.instances[index=${index}].signer.mode is missing. Run scrollsdk setup sequencer-reth --index ${index} first.`)
     }
 
-    if (signer.backend === 'local' && !signer.privateKey) {
+    const signerMode = signerModeToConfig(normalizeSignerMode(signer.mode))
+
+    if (signerMode.signerBackend === 'local' && !signer.privateKey) {
       this.error(`sequencerReth.instances[index=${index}].signer.privateKey is missing for local signer backend.`)
     }
 
-    if (signer.backend === 'aws_kms' && !signer.kmsKeyId) {
+    if (signerMode.signerBackend === 'aws_kms' && !signer.kmsKeyId) {
       this.error(`sequencerReth.instances[index=${index}].signer.kmsKeyId is missing for AWS KMS signer backend.`)
     }
 
     return {
       index,
       nodekey,
-      secretMode: signer.secretMode || instance.nodekey?.secretMode || 'external-secret',
+      secretMode: signerMode.secretMode,
       secretName: `${getSequencerRethResourceName(index)}-secret-env`,
       signer: {
         address: signer.address,
-        backend: signer.backend,
+        backend: signerMode.signerBackend,
         kmsKeyArn: signer.kmsKeyArn,
         kmsKeyId: signer.kmsKeyId,
         kmsRegion: signer.kmsRegion,
@@ -882,6 +948,7 @@ export default class SetupPrepCharts extends Command {
         serviceAccountName: signer.serviceAccountName,
         serviceAccountRoleArn: signer.serviceAccountRoleArn,
       },
+      signerMode: signerMode.mode,
     }
   }
 
@@ -1426,6 +1493,9 @@ export default class SetupPrepCharts extends Command {
     const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(this.dogeConfig)
     const blockbookEndpoints = resolveBlockbookKubernetesEndpoints(this.dogeConfig)
     const dogecoinInternalUrl = dogecoinEndpoints.rpcUrl
+    const s3Archive = this.dogeConfig.ethereumDa?.blobArchive?.s3
+    const s3PublicBaseUrl = getEthereumDaS3PublicBaseUrl(s3Archive)
+    const s3PublicBlobUrl = getEthereumDaS3PublicBlobUrl(s3Archive)
 
     for (const file of productionFiles) {
       if (file === 'l2-reth-bootnode-production.yaml') {
@@ -1505,6 +1575,14 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
+      if (chartName.startsWith('l2-bootnode')) {
+        const l2GethS3Changes = removeL2GethBlobS3ExtraParams(productionYaml)
+        if (l2GethS3Changes.length > 0) {
+          changes.push(...l2GethS3Changes)
+          updated = true
+        }
+      }
+
       if (chartName === 'l2-reth-bootnode') {
         const previousRethValues = JSON.stringify(productionYaml)
         const resolved = this.buildBootnodeRethResolvedConfig(Number(productionNumber))
@@ -1514,6 +1592,8 @@ export default class SetupPrepCharts extends Command {
         if (productionYaml.reth.trustedPeers !== trustedPeers) {
           productionYaml.reth.trustedPeers = trustedPeers
         }
+
+        changes.push(...applyRethBlobS3Url(productionYaml, s3PublicBlobUrl))
         this.removeLegacyRethTrustedPeersEnv(productionYaml)
 
         const nextRethValues = JSON.stringify(productionYaml)
@@ -1541,6 +1621,8 @@ export default class SetupPrepCharts extends Command {
         if (productionYaml.reth.trustedPeers !== trustedPeers) {
           productionYaml.reth.trustedPeers = trustedPeers
         }
+
+        changes.push(...applyRethBlobS3Url(productionYaml, s3PublicBlobUrl))
         this.removeLegacyRethTrustedPeersEnv(productionYaml)
 
         const nextRethValues = JSON.stringify(productionYaml)
@@ -1570,6 +1652,12 @@ export default class SetupPrepCharts extends Command {
             newValue: trustedPeers,
             oldValue: String(oldTrustedPeers ?? 'undefined'),
           })
+          updated = true
+        }
+
+        const rethS3Changes = applyRethBlobS3Url(productionYaml, s3PublicBlobUrl)
+        if (rethS3Changes.length > 0) {
+          changes.push(...rethS3Changes)
           updated = true
         }
 
@@ -2096,12 +2184,25 @@ export default class SetupPrepCharts extends Command {
 
         const s3Archive = this.dogeConfig.ethereumDa?.blobArchive?.s3
         const s3ArchiveEnabled = truthyConfigValue(s3Archive?.enabled)
+        if (!s3ArchiveEnabled) {
+          const staleS3Changes = removeConfigMapEnvKeys(productionYaml, [
+            'DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__KEY_PREFIX',
+            'DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS',
+            'DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING',
+            'DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL',
+          ])
+          if (staleS3Changes.length > 0) {
+            changes.push(...staleS3Changes)
+            updated = true
+          }
+        }
+
         const currentMappings = {
           ...todoMappings,
           ...buildL1InterfaceBlobSourcePrepEnv({
             beaconRpcUrl: this.getConfigValue("ethereumDa.beaconRpcUrl"),
             s3KeyPrefix: s3ArchiveEnabled ? s3Archive?.keyPrefix : undefined,
-            s3PublicBaseUrl: s3ArchiveEnabled ? s3Archive?.publicBaseUrl : undefined,
+            s3PublicBaseUrl: s3ArchiveEnabled ? s3PublicBaseUrl : undefined,
             s3TimeoutMs: s3ArchiveEnabled ? s3Archive?.timeoutMs : undefined,
             s3TreatForbiddenAsMissing: s3ArchiveEnabled ? s3Archive?.treatForbiddenAsMissing : undefined,
           }),
@@ -2151,7 +2252,7 @@ export default class SetupPrepCharts extends Command {
           ...buildWithdrawalBlobSourcePrepEnv({
             beaconRpcUrl: this.getConfigValue("ethereumDa.beaconRpcUrl"),
             s3KeyPrefix: s3ArchiveEnabled ? s3Archive?.keyPrefix : undefined,
-            s3PublicBaseUrl: s3ArchiveEnabled ? s3Archive?.publicBaseUrl : undefined,
+            s3PublicBaseUrl: s3ArchiveEnabled ? s3PublicBaseUrl : undefined,
             s3TimeoutMs: s3ArchiveEnabled ? s3Archive?.timeoutMs : undefined,
             s3TreatForbiddenAsMissing: s3ArchiveEnabled ? s3Archive?.treatForbiddenAsMissing : undefined,
           }),
@@ -2210,6 +2311,19 @@ export default class SetupPrepCharts extends Command {
         if (blobSourceChanges.length > 0) {
           changes.push(...blobSourceChanges)
           updated = true
+        }
+
+        if (!s3ArchiveEnabled) {
+          const staleS3Changes = removeEnvArrayKeys(productionYaml, [
+            'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__KEY_PREFIX',
+            'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS',
+            'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING',
+            'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL',
+          ])
+          if (staleS3Changes.length > 0) {
+            changes.push(...staleS3Changes)
+            updated = true
+          }
         }
 
         for (const [envKey, newVal] of Object.entries(todoMappings)) {

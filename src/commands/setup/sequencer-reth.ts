@@ -21,6 +21,13 @@ import { createNonInteractiveContext, resolveEnvValue } from '../../utils/non-in
 
 type RethSecretMode = 'external-secret' | 'plain'
 type RethSignerBackend = 'aws_kms' | 'local'
+export type RethSignerMode = 'aws_kms' | 'external_secret' | 'plain'
+
+export interface ResolvedRethSignerMode {
+  mode: RethSignerMode
+  secretMode: RethSecretMode
+  signerBackend: RethSignerBackend
+}
 
 export interface KmsIdentityPromptDefaults {
   awsRegion?: string
@@ -34,19 +41,17 @@ export interface RethInstanceConfig {
   index: number
   nodekey?: {
     privateKey?: string
-    secretMode?: RethSecretMode
   }
   signer?: {
     address?: string
-    backend?: RethSignerBackend
     eksCluster?: string
     kmsKeyArn?: string
     kmsKeyId?: string
     kmsRegion?: string
+    mode?: RethSignerMode
     namespace?: string
     networkAlias?: string
     privateKey?: string
-    secretMode?: RethSecretMode
     serviceAccountName?: string
     serviceAccountRoleArn?: string
   }
@@ -70,6 +75,7 @@ export interface ResolvedSequencerRethConfig {
     serviceAccountName?: string
     serviceAccountRoleArn?: string
   }
+  signerMode: RethSignerMode
 }
 
 export const RETH_NODEKEY_ENV = 'RETH_NODEKEY'
@@ -77,6 +83,17 @@ export const RETH_SIGNER_PRIVATE_KEY_ENV = 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY'
 export const RETH_SIGNER_BACKEND_ENV = 'RETH_SEQUENCER_SIGNER_BACKEND'
 export const RETH_KMS_KEY_ID_ENV = 'RETH_SEQUENCER_AWS_KMS_KEY_ID'
 export const RETH_SIGNER_ADDRESS_ENV = 'RETH_SEQUENCER_SIGNER_ADDRESS'
+
+const RETH_LEGACY_SECRET_ENV_KEYS = [
+  RETH_NODEKEY_ENV,
+  RETH_SIGNER_PRIVATE_KEY_ENV,
+]
+
+const RETH_LEGACY_SIGNER_ENV_KEYS = [
+  RETH_SIGNER_BACKEND_ENV,
+  RETH_KMS_KEY_ID_ENV,
+  RETH_SIGNER_ADDRESS_ENV,
+]
 
 const SEQUENCER_RETH_ROLE = {
   accountPrefix: 'SEQUENCER_RETH_SIGNER',
@@ -186,18 +203,26 @@ export function shouldReuseExistingSequencerRethRoleArn(
 
 export function applySequencerRethValues(yamlData: any, config: ResolvedSequencerRethConfig): void {
   yamlData.reth ||= {}
+  yamlData.reth.nodeKey ||= {}
+  yamlData.reth.nodeKey.mode = 'secret'
+  yamlData.reth.nodeKey.secretName = config.secretName
+  yamlData.reth.nodeKey.secretKey = RETH_NODEKEY_ENV
   yamlData.reth.signer ||= {}
 
   if (config.signer.backend === 'aws_kms') {
     yamlData.reth.signer.type = 'awsKms'
     yamlData.reth.signer.awsKmsKeyId = config.signer.kmsKeyId
+    delete yamlData.reth.signer.localFile
   } else {
     yamlData.reth.signer.type = 'localFile'
     yamlData.reth.signer.localFile ||= {}
+    yamlData.reth.signer.localFile.secretName = config.secretName
+    yamlData.reth.signer.localFile.secretKey = RETH_SIGNER_PRIVATE_KEY_ENV
+    delete yamlData.reth.signer.awsKmsKeyId
   }
 
   yamlData.envFrom = removeSecretRef(yamlData.envFrom, config.secretName)
-  removePlainSecretEnv(yamlData.env)
+  removeLegacyRethEnv(yamlData)
 
   if (config.secretMode === 'external-secret') {
     removePlainSecret(yamlData, config.secretName)
@@ -228,9 +253,18 @@ function removeEnvValue(env: any[] | undefined, name: string): void {
   if (index >= 0) env.splice(index, 1)
 }
 
-function removePlainSecretEnv(env: any[] | undefined): void {
-  removeEnvValue(env, RETH_NODEKEY_ENV)
-  removeEnvValue(env, RETH_SIGNER_PRIVATE_KEY_ENV)
+function removeConfigMapEnvValue(yamlData: any, name: string): void {
+  const envData = yamlData.configMaps?.env?.data
+  if (!envData || typeof envData !== 'object') return
+
+  delete envData[name]
+}
+
+function removeLegacyRethEnv(yamlData: any): void {
+  for (const envKey of [...RETH_LEGACY_SECRET_ENV_KEYS, ...RETH_LEGACY_SIGNER_ENV_KEYS]) {
+    removeEnvValue(yamlData.env, envKey)
+    removeConfigMapEnvValue(yamlData, envKey)
+  }
 }
 
 function getSecretNameOverride(secretName: string, resourceName: string): string {
@@ -306,8 +340,8 @@ export default class SetupSequencerReth extends Command {
 
   static override examples = [
     '<%= config.bin %> <%= command.id %> --index 2',
-    '<%= config.bin %> <%= command.id %> --index 2 --signer-backend local --secret-mode external-secret --non-interactive',
-    '<%= config.bin %> <%= command.id %> --index 2 --signer-backend aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet',
+    '<%= config.bin %> <%= command.id %> --index 2 --signer-mode external-secret --non-interactive',
+    '<%= config.bin %> <%= command.id %> --index 2 --signer-mode aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet',
   ]
 
   static override flags = {
@@ -323,16 +357,10 @@ export default class SetupSequencerReth extends Command {
     nodekey: Flags.string({ description: 'Existing reth P2P nodekey private key as 64 hex chars, with or without 0x.' }),
     'non-interactive': Flags.boolean({ char: 'N', default: false, description: 'Run without prompts. Generates missing local keys.' }),
     'role-arn': Flags.string({ description: 'Existing IAM role ARN to annotate on the sequencer service account.' }),
-    'secret-mode': Flags.string({
-      default: 'external-secret',
-      description: 'How local key material is referenced from the values YAML.',
-      options: ['external-secret', 'plain'],
-    }),
     'service-account': Flags.string({ description: 'Kubernetes service account used by this sequencer.' }),
-    'signer-backend': Flags.string({
-      default: 'local',
-      description: 'Signer backend for the reth sequencer block signer.',
-      options: ['local', 'aws-kms'],
+    'signer-mode': Flags.string({
+      description: 'How the reth sequencer block signer is configured.',
+      options: ['aws-kms', 'external-secret', 'plain'],
     }),
     'signer-private-key': Flags.string({ description: 'Existing local sequencer signer private key, with or without 0x.' }),
   }
@@ -354,9 +382,9 @@ export default class SetupSequencerReth extends Command {
     }
 
     const existing = this.getExistingInstance(dogeConfig, index)
-    const secretMode = flags['secret-mode'] as RethSecretMode
+    const signerMode = await this.resolveSignerMode(flags, existing, nonInteractive)
+    const {mode, secretMode, signerBackend} = signerMode
     const nodekey = await this.resolveNodekey(flags, existing, nonInteractive)
-    const signerBackend = await this.resolveSignerBackend(flags, existing, nonInteractive)
     const signer = await this.resolveSigner(flags, existing, signerBackend, index, nonInteractive, jsonCtx)
     const secretName = `${getSequencerRethResourceName(index)}-secret-env`
 
@@ -366,6 +394,7 @@ export default class SetupSequencerReth extends Command {
       secretMode,
       secretName,
       signer,
+      signerMode: mode,
     }
 
     this.updateDogeConfig(dogeConfig, index, resolved)
@@ -383,6 +412,7 @@ export default class SetupSequencerReth extends Command {
           backend: signer.backend,
           kmsKeyId: signer.kmsKeyId,
         },
+        signerMode: mode,
       })
     }
   }
@@ -395,7 +425,15 @@ export default class SetupSequencerReth extends Command {
     return this.argv.some(arg => arg === `--${name}` || arg.startsWith(`--${name}=`))
   }
 
-  private async promptLocalSignerPrivateKey(): Promise<string> {
+  private async promptLocalSignerPrivateKey(existingPrivateKey?: string): Promise<string> {
+    if (existingPrivateKey) {
+      return normalizeRethSignerPrivateKey(await textInput({
+        default: normalizeRethSignerPrivateKey(existingPrivateKey),
+        message: 'Reth sequencer signer private key:',
+        required: true,
+      }))
+    }
+
     const action = await select({
       choices: [
         { name: 'Generate a random signer private key', value: 'generate' },
@@ -437,8 +475,17 @@ export default class SetupSequencerReth extends Command {
   private async resolveNodekey(flags: any, existing: RethInstanceConfig | undefined, nonInteractive: boolean): Promise<string> {
     const flagValue = resolveEnvValue(flags.nodekey)
     if (flagValue) return normalizeRethNodekey(flagValue)
-    if (existing?.nodekey?.privateKey) return normalizeRethNodekey(existing.nodekey.privateKey)
+    const existingNodekey = existing?.nodekey?.privateKey
+    if (existingNodekey && nonInteractive) return normalizeRethNodekey(existingNodekey)
     if (nonInteractive) return normalizeRethNodekey(Wallet.createRandom().privateKey)
+
+    if (existingNodekey) {
+      return normalizeRethNodekey(await textInput({
+        default: normalizeRethNodekey(existingNodekey),
+        message: 'Reth P2P nodekey:',
+        required: true,
+      }))
+    }
 
     const action = await select({
       choices: [
@@ -484,13 +531,14 @@ export default class SetupSequencerReth extends Command {
   ): Promise<ResolvedSequencerRethConfig['signer']> {
     if (backend === 'local') {
       const flagValue = resolveEnvValue(flags['signer-private-key'])
+      const existingPrivateKey = existingSignerMode(existing) === 'aws_kms' ? undefined : existing?.signer?.privateKey
       const privateKey = flagValue
         ? normalizeRethSignerPrivateKey(flagValue)
-        : existing?.signer?.backend === 'local' && existing.signer.privateKey
-          ? normalizeRethSignerPrivateKey(existing.signer.privateKey)
+        : existingPrivateKey && nonInteractive
+          ? normalizeRethSignerPrivateKey(existingPrivateKey)
           : nonInteractive
             ? Wallet.createRandom().privateKey
-            : await this.promptLocalSignerPrivateKey()
+            : await this.promptLocalSignerPrivateKey(existingPrivateKey)
       const wallet = new Wallet(privateKey)
       return {
         address: wallet.address,
@@ -540,25 +588,28 @@ export default class SetupSequencerReth extends Command {
     }
   }
 
-  private async resolveSignerBackend(
+  private async resolveSignerMode(
     flags: any,
     existing: RethInstanceConfig | undefined,
     nonInteractive: boolean
-  ): Promise<RethSignerBackend> {
-    const configured = this.hasFlag('signer-backend')
-      ? flags['signer-backend']
-      : existing?.signer?.backend || flags['signer-backend']
-    const normalized = normalizeSignerBackend(configured)
-    if (nonInteractive) return normalized
+  ): Promise<ResolvedRethSignerMode> {
+    if (this.hasFlag('signer-mode')) {
+      return signerModeToConfig(normalizeSignerMode(flags['signer-mode']))
+    }
 
-    return select({
+    const existingMode = existingSignerMode(existing)
+    if (nonInteractive) return signerModeToConfig(existingMode)
+
+    const selectedMode = await select({
       choices: [
-        { name: 'Local private key', value: 'local' },
-        { name: 'AWS KMS', value: 'aws_kms' },
+        { name: 'AWS KMS signer', value: 'aws_kms' },
+        { name: 'Local private key via ExternalSecret', value: 'external_secret' },
+        { name: 'Local private key in values YAML', value: 'plain' },
       ],
-      default: normalized,
-      message: 'Reth sequencer signer backend:',
+      default: existingMode,
+      message: 'Reth sequencer signer mode:',
     })
+    return signerModeToConfig(normalizeSignerMode(selectedMode))
   }
 
   private updateDogeConfig(
@@ -573,19 +624,17 @@ export default class SetupSequencerReth extends Command {
       index,
       nodekey: {
         privateKey: resolved.nodekey,
-        secretMode: resolved.secretMode,
       },
       signer: {
         address: resolved.signer.address,
-        backend: resolved.signer.backend,
         eksCluster: resolved.signer.eksCluster,
         kmsKeyArn: resolved.signer.kmsKeyArn,
         kmsKeyId: resolved.signer.kmsKeyId,
         kmsRegion: resolved.signer.kmsRegion,
+        mode: resolved.signerMode,
         namespace: resolved.signer.namespace,
         networkAlias: resolved.signer.networkAlias,
         privateKey: resolved.signer.privateKey,
-        secretMode: resolved.secretMode,
         serviceAccountName: resolved.signer.serviceAccountName,
         serviceAccountRoleArn: resolved.signer.serviceAccountRoleArn,
       },
@@ -602,8 +651,29 @@ export default class SetupSequencerReth extends Command {
 
 }
 
-function normalizeSignerBackend(value: string): RethSignerBackend {
-  if (value === 'aws-kms' || value === 'aws_kms') return 'aws_kms'
-  if (value === 'local') return 'local'
-  throw new Error(`Unsupported signer backend: ${value}`)
+function existingSignerMode(existing: RethInstanceConfig | undefined): RethSignerMode {
+  return normalizeSignerMode(existing?.signer?.mode || 'external-secret')
+}
+
+export function normalizeSignerMode(value: string): RethSignerMode {
+  if (value === 'aws-kms' || value === 'aws_kms' || value === 'kms') return 'aws_kms'
+  if (value === 'external-secret' || value === 'external_secret') return 'external_secret'
+  if (value === 'plain') return 'plain'
+  throw new Error(`Unsupported signer mode: ${value}`)
+}
+
+export function signerModeToConfig(signerMode: RethSignerMode): ResolvedRethSignerMode {
+  if (signerMode === 'aws_kms') {
+    return {
+      mode: signerMode,
+      secretMode: 'external-secret',
+      signerBackend: 'aws_kms',
+    }
+  }
+
+  return {
+    mode: signerMode,
+    secretMode: signerMode === 'plain' ? 'plain' : 'external-secret',
+    signerBackend: 'local',
+  }
 }

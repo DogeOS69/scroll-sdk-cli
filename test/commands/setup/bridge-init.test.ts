@@ -5,6 +5,7 @@ import {
   BRIDGE_TIMELOCK_RELATIVE_BLOCKS,
   buildEthereumDaProtocolSeedConfig,
   resolveBridgeTimelock,
+  resolveInitialSystemSignerFromDogeConfig,
 } from '../../../src/commands/setup/bridge-init.js'
 
 describe('setup bridge-init timelock resolution', () => {
@@ -78,6 +79,7 @@ describe('setup bridge-init protocol seed generation', () => {
       {
         configToml,
         contractsConfig,
+        initialSystemSigner: '0x11ef0dA913139F4EDa64792e2EaC011DD9B8D1B3',
         network: 'testnet',
       },
       helpers
@@ -94,6 +96,7 @@ describe('setup bridge-init protocol seed generation', () => {
     )
     expect(result.chain_anchors.initial_tx_index).to.equal(0)
     expect(result.chain_anchors.initial_tx_blob_index).to.equal(0)
+    expect(result.chain_anchors.initial_system_signer).to.equal('0x11ef0dA913139F4EDa64792e2EaC011DD9B8D1B3')
     expect(result.protocol_config_seed.protocol_config).to.deep.equal({
       deposit_queue_transform: {
         l1_scroll_messenger_address: '0x0000000000000000000000000000000000000001',
@@ -161,6 +164,25 @@ describe('setup bridge-init protocol seed generation', () => {
     expect(result.chain_anchors.genesis_state_root).to.equal(`0x${'22'.repeat(32)}`)
   })
 
+  it('overwrites initial_system_signer from doge-config input', () => {
+    const result = buildEthereumDaProtocolSeedConfig(
+      {
+        configToml,
+        contractsConfig,
+        existingProtocolSeedConfig: {
+          chain_anchors: {
+            initial_system_signer: '0x0000000000000000000000000000000000000001',
+          },
+        },
+        initialSystemSigner: '0xEE8dE6f473019dF6b8777252178D3cE1517694bB',
+        network: 'testnet',
+      },
+      helpers
+    )
+
+    expect(result.chain_anchors.initial_system_signer).to.equal('0xEE8dE6f473019dF6b8777252178D3cE1517694bB')
+  })
+
   it('preserves explicit protocol config policy values', () => {
     const result = buildEthereumDaProtocolSeedConfig(
       {
@@ -181,5 +203,45 @@ describe('setup bridge-init protocol seed generation', () => {
 
     expect(result.protocol_config_seed.protocol_config.key_rotation_min_grace_wf_txs).to.equal(12)
     expect(result.protocol_config_seed.protocol_config.min_deposit_sats).to.equal(34_567)
+  })
+})
+
+describe('setup bridge-init doge-config sequencer signer resolution', () => {
+  it('uses the sequencerReth instance with index 0 as initial_system_signer', () => {
+    const result = resolveInitialSystemSignerFromDogeConfig({
+      sequencerReth: {
+        instances: [
+          {
+            index: 1,
+            signer: { address: '0xEE8dE6f473019dF6b8777252178D3cE1517694bB' },
+          },
+          {
+            index: 0,
+            signer: { address: '0x11ef0dA913139F4EDa64792e2EaC011DD9B8D1B3' },
+          },
+        ],
+      },
+    })
+
+    expect(result).to.equal('0x11ef0dA913139F4EDa64792e2EaC011DD9B8D1B3')
+  })
+
+  it('falls back to the lowest-index sequencer when index 0 is absent', () => {
+    const result = resolveInitialSystemSignerFromDogeConfig({
+      sequencerReth: {
+        instances: [
+          {
+            index: 5,
+            signer: { address: '0x5555555555555555555555555555555555555555' },
+          },
+          {
+            index: 3,
+            signer: { address: '0x3333333333333333333333333333333333333333' },
+          },
+        ],
+      },
+    })
+
+    expect(result).to.equal('0x3333333333333333333333333333333333333333')
   })
 })

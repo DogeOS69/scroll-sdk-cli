@@ -18,6 +18,7 @@ export interface BlobArchivePlan {
   created: boolean
   enabled: boolean
   keyPrefix?: string
+  publicBaseUrl?: string
   region?: string
 }
 

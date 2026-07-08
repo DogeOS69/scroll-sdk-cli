@@ -164,19 +164,17 @@ export interface DogeConfig {
       index: number
       nodekey?: {
         privateKey?: string
-        secretMode?: 'external-secret' | 'plain'
       }
       signer?: {
         address?: string
-        backend?: 'aws_kms' | 'local'
         eksCluster?: string
         kmsKeyArn?: string
         kmsKeyId?: string
         kmsRegion?: string
+        mode?: 'aws_kms' | 'external_secret' | 'plain'
         namespace?: string
         networkAlias?: string
         privateKey?: string
-        secretMode?: 'external-secret' | 'plain'
         serviceAccountName?: string
         serviceAccountRoleArn?: string
       }

@@ -963,7 +963,7 @@ FLAGS
       seed which will regenerate the sequencer and fee wallet
 
   --image-tag=<value>
-      Specify the Docker image tag to use (defaults to dev-20260619)
+      Specify the Docker image tag to use (defaults to dev-20260707-043e7f3)
 
   --json
       Output in JSON format (stdout for data, stderr for logs)
@@ -999,7 +999,7 @@ EXAMPLES
 
   $ scrollsdk setup bridge-init --image-tag 0.2.0-debug
 
-  $ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag dev-20260619
+  $ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag dev-20260707-043e7f3
 
   $ scrollsdk setup bridge-init --non-interactive --json --seed 123456
 ```

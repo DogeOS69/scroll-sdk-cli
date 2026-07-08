@@ -143,7 +143,6 @@ export default class SetupL2BootnodeReth extends Command {
     }),
     'non-interactive': Flags.boolean({ char: 'N', default: false, description: 'Run without prompts. Generates missing nodekeys.' }),
     'secret-mode': Flags.string({
-      default: 'external-secret',
       description: 'How nodekey material is referenced from values YAML.',
       options: ['external-secret', 'plain'],
     }),
@@ -161,13 +160,13 @@ export default class SetupL2BootnodeReth extends Command {
       'scrollsdk setup doge-config'
     )
     const count = await this.resolveCount(flags.count, dogeConfig, nonInteractive, jsonCtx)
-    const secretMode = flags['secret-mode'] as RethBootnodeSecretMode
     const nodekeyFlags = Array.isArray(flags.nodekey) ? flags.nodekey : flags.nodekey ? [flags.nodekey] : []
     const resolvedInstances: ResolvedBootnodeRethConfig[] = []
 
     for (let index = 0; index < count; index++) {
       const existing = this.getExistingInstance(dogeConfig, index)
       const nodekey = await this.resolveNodekey(index, resolveEnvValue(nodekeyFlags[index]), existing, nonInteractive)
+      const secretMode = await this.resolveSecretMode(flags['secret-mode'], existing, index, nonInteractive)
       const enodeUrl = deriveBootnodeRethEnodeUrl(nodekey, index)
       resolvedInstances.push({
         enodeUrl,
@@ -198,6 +197,10 @@ export default class SetupL2BootnodeReth extends Command {
 
   private getExistingInstance(dogeConfig: DogeConfig, index: number): BootnodeRethInstanceConfig | undefined {
     return dogeConfig.bootnodeReth?.instances?.find(instance => instance.index === index)
+  }
+
+  private hasFlag(name: string): boolean {
+    return this.argv.some(arg => arg === `--${name}` || arg.startsWith(`--${name}=`))
   }
 
   private async resolveCount(
@@ -233,8 +236,17 @@ export default class SetupL2BootnodeReth extends Command {
     nonInteractive: boolean
   ): Promise<string> {
     if (flagValue) return normalizeRethNodekey(flagValue)
-    if (existing?.nodekey?.privateKey) return normalizeRethNodekey(existing.nodekey.privateKey)
+    const existingNodekey = existing?.nodekey?.privateKey
+    if (existingNodekey && nonInteractive) return normalizeRethNodekey(existingNodekey)
     if (nonInteractive) return normalizeRethNodekey(Wallet.createRandom().privateKey)
+
+    if (existingNodekey) {
+      return normalizeRethNodekey(await textInput({
+        default: normalizeRethNodekey(existingNodekey),
+        message: `Reth bootnode ${index} P2P nodekey:`,
+        required: true,
+      }))
+    }
 
     const action = await select({
       choices: [
@@ -250,6 +262,28 @@ export default class SetupL2BootnodeReth extends Command {
       message: `Enter reth bootnode ${index} nodekey private key (64 hex chars, 0x optional):`,
       required: true,
     }))
+  }
+
+  private async resolveSecretMode(
+    flagValue: string | undefined,
+    existing: BootnodeRethInstanceConfig | undefined,
+    index: number,
+    nonInteractive: boolean
+  ): Promise<RethBootnodeSecretMode> {
+    if (this.hasFlag('secret-mode')) return flagValue as RethBootnodeSecretMode
+
+    const existingSecretMode = existing?.nodekey?.secretMode
+    if (nonInteractive) return existingSecretMode || 'external-secret'
+    if (!existingSecretMode) return 'external-secret'
+
+    return select({
+      choices: [
+        { name: 'ExternalSecret reference', value: 'external-secret' },
+        { name: 'Plain private key in values YAML', value: 'plain' },
+      ],
+      default: existingSecretMode,
+      message: `Reth bootnode ${index} nodekey secret mode:`,
+    })
   }
 
   private updateDogeConfig(dogeConfig: DogeConfig, resolvedInstances: ResolvedBootnodeRethConfig[]): void {

@@ -39,9 +39,9 @@ describe('setup sequencer-reth', () => {
     expect(getSequencerRethKmsIdentityPromptDefaults({
       index: 1,
       signer: {
-        backend: 'aws_kms',
         kmsKeyId: 'alias/dogeos/testnet/dogeos-testnet-cluster/sequencer-reth-1',
         kmsRegion: 'us-west-2',
+        mode: 'aws_kms',
         namespace: 'rollup',
       },
     }, 1)).to.deep.equal({
@@ -54,10 +54,10 @@ describe('setup sequencer-reth', () => {
     expect(getSequencerRethKmsIdentityPromptDefaults({
       index: 1,
       signer: {
-        backend: 'aws_kms',
         eksCluster: 'configured-cluster',
         kmsKeyId: 'alias/dogeos/testnet/dogeos-testnet-cluster/sequencer-reth-1',
         kmsRegion: 'ap-northeast-1',
+        mode: 'aws_kms',
         namespace: 'configured-namespace',
         networkAlias: 'configured-alias',
       },
@@ -120,6 +120,7 @@ describe('setup sequencer-reth', () => {
         backend: 'local',
         privateKey: '0x2222222222222222222222222222222222222222222222222222222222222222',
       },
+      signerMode: 'plain',
     })
 
     expect(values.envFrom.some((item: any) => item.configMapRef)).to.equal(false)
@@ -129,12 +130,16 @@ describe('setup sequencer-reth', () => {
     expect(values.env.some((item: any) => item.name === 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY')).to.equal(false)
     expect(values.reth.nodeKey).to.deep.equal({
       generatedPath: '/data/nodekey',
+      mode: 'secret',
       path: '/keys/nodekey',
       secretKey: 'RETH_NODEKEY',
       secretName: 'l2-reth-sequencer-2-secret-env',
     })
     expect(values.reth.signer.type).to.equal('localFile')
-    expect(values.reth.signer.localFile).to.deep.equal({})
+    expect(values.reth.signer.localFile).to.deep.equal({
+      secretKey: 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY',
+      secretName: 'l2-reth-sequencer-2-secret-env',
+    })
     expect(values.secrets['secret-env'].stringData).to.deep.equal({
       RETH_NODEKEY: '1111111111111111111111111111111111111111111111111111111111111111',
       RETH_SEQUENCER_SIGNER_PRIVATE_KEY: '0x2222222222222222222222222222222222222222222222222222222222222222',
@@ -145,7 +150,28 @@ describe('setup sequencer-reth', () => {
   })
 
   it('writes externalSecret references for local signer and nodekey', () => {
-    const values: any = { env: [] }
+    const values: any = {
+      configMaps: {
+        env: {
+          data: {
+            RETH_NODEKEY: 'old-nodekey',
+            RETH_SEQUENCER_AWS_KMS_KEY_ID: 'alias/old',
+            RETH_SEQUENCER_SIGNER_ADDRESS: '0x9999999999999999999999999999999999999999',
+            RETH_SEQUENCER_SIGNER_BACKEND: 'aws_kms',
+            RETH_SEQUENCER_SIGNER_PRIVATE_KEY: 'old-private-key',
+          },
+        },
+      },
+      env: [
+        { name: 'RETH_SEQUENCER_SIGNER_BACKEND', value: 'aws_kms' },
+        { name: 'RETH_SEQUENCER_AWS_KMS_KEY_ID', value: 'alias/old' },
+      ],
+      reth: {
+        signer: {
+          awsKmsKeyId: 'alias/old',
+        },
+      },
+    }
 
     applySequencerRethValues(values, {
       index: 1,
@@ -157,13 +183,25 @@ describe('setup sequencer-reth', () => {
         backend: 'local',
         privateKey: '0x2222222222222222222222222222222222222222222222222222222222222222',
       },
+      signerMode: 'external_secret',
     })
 
     expect(values.envFrom.some((item: any) => item.secretRef)).to.equal(false)
     expect(values.env.some((item: any) => item.name === 'RETH_NODEKEY')).to.equal(false)
-    expect(values.reth.nodeKey).to.equal(undefined)
+    expect(values.env.some((item: any) => item.name === 'RETH_SEQUENCER_AWS_KMS_KEY_ID')).to.equal(false)
+    expect(values.env.some((item: any) => item.name === 'RETH_SEQUENCER_SIGNER_BACKEND')).to.equal(false)
+    expect(values.configMaps.env.data).to.deep.equal({})
+    expect(values.reth.nodeKey).to.deep.equal({
+      mode: 'secret',
+      secretKey: 'RETH_NODEKEY',
+      secretName: 'l2-reth-sequencer-1-secret-env',
+    })
     expect(values.reth.signer.type).to.equal('localFile')
-    expect(values.reth.signer.localFile).to.deep.equal({})
+    expect(values.reth.signer.localFile).to.deep.equal({
+      secretKey: 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY',
+      secretName: 'l2-reth-sequencer-1-secret-env',
+    })
+    expect(values.reth.signer.awsKmsKeyId).to.equal(undefined)
     expect(values.externalSecrets['l2-reth-sequencer-1-secret-env'].data.map((item: any) => item.secretKey)).to.deep.equal([
       'RETH_NODEKEY',
       'RETH_SEQUENCER_SIGNER_PRIVATE_KEY',
@@ -172,7 +210,17 @@ describe('setup sequencer-reth', () => {
   })
 
   it('writes KMS signer env and service account without local signer private key secret', () => {
-    const values: any = { env: [] }
+    const values: any = {
+      env: [
+        { name: 'RETH_SEQUENCER_SIGNER_BACKEND', value: 'local' },
+        { name: 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY', value: 'old-private-key' },
+      ],
+      reth: {
+        signer: {
+          localFile: {},
+        },
+      },
+    }
 
     applySequencerRethValues(values, {
       index: 3,
@@ -187,12 +235,20 @@ describe('setup sequencer-reth', () => {
         serviceAccountName: 'l2-reth-sequencer-3',
         serviceAccountRoleArn: 'arn:aws:iam::123456789012:role/l2-reth-sequencer-3',
       },
+      signerMode: 'aws_kms',
     })
 
     expect(values.configMaps).to.equal(undefined)
-    expect(values.reth.nodeKey).to.equal(undefined)
+    expect(values.reth.nodeKey).to.deep.equal({
+      mode: 'secret',
+      secretKey: 'RETH_NODEKEY',
+      secretName: 'l2-reth-sequencer-3-secret-env',
+    })
     expect(values.reth.signer.type).to.equal('awsKms')
     expect(values.reth.signer.awsKmsKeyId).to.equal('alias/dogeos/test/l2/sequencer-reth-3')
+    expect(values.reth.signer.localFile).to.equal(undefined)
+    expect(values.env.some((item: any) => item.name === 'RETH_SEQUENCER_SIGNER_BACKEND')).to.equal(false)
+    expect(values.env.some((item: any) => item.name === 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY')).to.equal(false)
     expect(values.externalSecrets['l2-reth-sequencer-3-secret-env'].data.map((item: any) => item.secretKey)).to.deep.equal([
       'RETH_NODEKEY',
     ])

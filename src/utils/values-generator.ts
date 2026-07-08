@@ -409,6 +409,10 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
   // Rollup services
   files['coordinator-api-production.yaml'] = generateCoordinatorApiValues(normalizedSpec)
   files['coordinator-cron-production.yaml'] = generateCoordinatorCronValues(normalizedSpec)
+  if (normalizedSpec.proofCoordinator && normalizedSpec.proofCoordinator.enabled !== false) {
+    files['proof-coordinator-production.yaml'] = generateProofCoordinatorValues(normalizedSpec)
+  }
+
   files['gas-oracle-production.yaml'] = generateGasOracleValues(normalizedSpec)
   files['fee-oracle-production.yaml'] = generateFeeOracleValues(normalizedSpec)
   files['chain-monitor-production.yaml'] = generateChainMonitorValues(normalizedSpec)
@@ -1373,6 +1377,231 @@ function generateCoordinatorCronValues(spec: DeploymentSpec): string {
     secretConfig,
     [
       { property: 'SCROLL_COORDINATOR_DB_DSN', remoteKey: 'coordinator-cron-secret-env', secretKey: 'SCROLL_COORDINATOR_DB_DSN' },
+    ]
+  )
+
+  if (externalSecrets) {
+    values.externalSecrets = externalSecrets
+  }
+
+  return yaml.dump(values)
+}
+
+function proofCoordinatorProductionToml(): string {
+  return `poll_interval_ms = 1000
+lease_ttl_ms = 60000
+
+[auth]
+bearer_token_file = "/run/secrets/proof-work-token"
+
+[artifact_store]
+kind = "s3"
+key_prefix = "proof-topology"
+force_path_style = true
+
+[verifier]
+verifier_import_mode = "production"
+
+[verifier.scroll_chunk_verifier_identity]
+program_manifest_path = "/app/data/manifests/scroll-chunk.json"
+expected_proof_system_id = "<TODO>"
+expected_circuit_id = "<TODO>"
+expected_circuit_version = "<TODO>"
+expected_verification_key_hash_hex = "<TODO>"
+expected_program_commitment_hash_hex = "<TODO>"
+verifier_id = "<TODO>"
+
+[verifier.scroll_batch_verifier_identity]
+program_manifest_path = "/app/data/manifests/scroll-batch.json"
+expected_proof_system_id = "<TODO>"
+expected_circuit_id = "<TODO>"
+expected_circuit_version = "<TODO>"
+expected_verification_key_hash_hex = "<TODO>"
+expected_program_commitment_hash_hex = "<TODO>"
+verifier_id = "<TODO>"
+
+# Enable when bridge proof verification/materialization is part of this
+# environment, and set bridge_program_commitment_hex below.
+# [verifier.scroll_bridge_verifier_identity]
+# program_manifest_path = "/app/data/manifests/scroll-bridge.json"
+# expected_proof_system_id = "<TODO>"
+# expected_circuit_id = "<TODO>"
+# expected_circuit_version = "<TODO>"
+# expected_verification_key_hash_hex = "<TODO>"
+# expected_program_commitment_hash_hex = "<TODO>"
+# verifier_id = "<TODO>"
+
+[verifier.scroll_real_verifier]
+agg_verifying_key_path = "/app/data/verifier/agg-vk.bin"
+chunk_program_commitment_hex = "<TODO>"
+batch_program_commitment_hex = "<TODO>"
+# bridge_program_commitment_hex = "<TODO>"
+
+# Optional materializer execution config. Leave absent for verify +
+# prover gateway only. Uncomment and fill the family blocks this
+# deployment owns.
+#
+# [materializer.scroll_chunk]
+# enabled = true
+# binary_path = "/opt/dogeos/materialize-chunk-oneshot"
+# statement_namespace_config_path = "/app/data/statement-namespace.json"
+# sidecar_scratch_root = "/app/data/chunk-scratch"
+# l2_rpc_url = "http://l2-rpc:8545"
+# subprocess_timeout_ms = 600000
+# [materializer.scroll_chunk.prove_spec]
+# backend_profile = "scroll-prod-zkvm-v1"
+#
+# [materializer.scroll_batch]
+# enabled = true
+# dev_sentinel = false
+# materializer_output_root = "/app/data/batch-output"
+# proof_mode = "Production"
+
+[prover_api]
+enabled = true
+bind_addr = "0.0.0.0:9400"
+worker_auth_token_file = "/run/secrets/prover-worker-token"
+max_lease_ttl_ms = 60000
+transport = "s3"
+
+[artifact_write]
+signed_put_expiry_ms = 3600000
+staging_prefix = "staging/proofs"
+accepted_prefix = "accepted/proofs"
+max_proof_bytes = 536870912
+max_public_output_bytes = 10485760
+`
+}
+
+function isNonLoopbackPlainHttp(rawUrl: string): boolean {
+  try {
+    const url = new URL(rawUrl)
+    if (url.protocol !== 'http:') return false
+
+    return !['[::1]', '127.0.0.1', 'localhost'].includes(url.hostname)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Generate Proof Coordinator values
+ */
+function generateProofCoordinatorValues(spec: DeploymentSpec): string {
+  const { proofCoordinator } = spec
+  if (!proofCoordinator || proofCoordinator.enabled === false) {
+    throw new Error('proofCoordinator values requested but proofCoordinator is not enabled')
+  }
+
+  const secretConfig = getSecretProviderConfig(spec)
+  const { artifactStore } = proofCoordinator
+  const proofWorkBaseUrl = proofCoordinator.proofWorkBaseUrl || 'http://withdrawal-processor:3000'
+  const secretName = proofCoordinator.secrets?.name || 'proof-coordinator-secrets'
+  const remoteSecretKey = proofCoordinator.secrets?.remoteKey || secretName
+  const serviceAccountName = proofCoordinator.serviceAccount?.name || 'proof-coordinator'
+  const forcePathStyle = artifactStore.forcePathStyle ?? Boolean(artifactStore.endpointUrl)
+
+  const image = resolveImage(spec, 'proofCoordinator', {
+    pullPolicy: 'IfNotPresent',
+    repository: 'dogeos69/proof-coordinator',
+    tag: 'latest'
+  })
+
+  const env: Array<Record<string, any>> = [
+    { name: 'DOGEOS_PROOF_COORDINATOR_PROOF_WORK_BASE_URL', value: proofWorkBaseUrl },
+    {
+      name: 'DOGEOS_PROOF_COORDINATOR_ALLOW_INSECURE_HTTP',
+      value: String(proofCoordinator.allowInsecureHttp ?? isNonLoopbackPlainHttp(proofWorkBaseUrl))
+    },
+    { name: 'DOGEOS_PROOF_COORDINATOR_COORDINATOR_ID', value: proofCoordinator.coordinatorId || 'proof-coordinator' },
+    { name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET', value: artifactStore.bucket },
+    { name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__REGION', value: artifactStore.region },
+    { name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__KEY_PREFIX', value: artifactStore.keyPrefix || 'proof-topology' },
+    { name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__FORCE_PATH_STYLE', value: String(forcePathStyle) },
+  ]
+
+  if (artifactStore.endpointUrl) {
+    env.push({
+      name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__ENDPOINT_URL',
+      value: artifactStore.endpointUrl
+    })
+  }
+
+  if (artifactStore.maxReadBodyBytes !== undefined) {
+    env.push({
+      name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__MAX_READ_BODY_BYTES',
+      value: String(artifactStore.maxReadBodyBytes)
+    })
+  }
+
+  if (artifactStore.publicS3EndpointUrl) {
+    env.push({
+      name: 'DOGEOS_PROOF_COORDINATOR_PROVER_API__PUBLIC_S3_ENDPOINT_URL',
+      value: artifactStore.publicS3EndpointUrl
+    })
+  }
+
+  const values: Record<string, any> = {
+    configMaps: {
+      config: {
+        data: {
+          'ProofCoordinator.toml': proofCoordinatorProductionToml()
+        },
+        enabled: true
+      }
+    },
+    controller: {
+      replicas: 1
+    },
+    env,
+    image,
+    persistence: {
+      secrets: {
+        enabled: true,
+        mountPath: '/run/secrets',
+        name: secretName,
+        readOnly: true,
+        type: 'secret'
+      }
+    },
+    probes: {
+      liveness: { enabled: true },
+      readiness: { enabled: true },
+      startup: { enabled: true }
+    },
+    service: {
+      main: {
+        enabled: true,
+        ports: {
+          http: {
+            enabled: true,
+            port: 9400,
+            protocol: 'TCP'
+          }
+        }
+      }
+    },
+    serviceAccount: {
+      annotations: proofCoordinator.serviceAccount?.annotations || {},
+      create: true,
+      name: serviceAccountName
+    }
+  }
+
+  const externalSecrets = generateExternalSecrets(
+    secretName,
+    secretConfig,
+    [
+      {
+        property: proofCoordinator.secrets?.proofWorkTokenProperty || 'proof-work-token',
+        remoteKey: remoteSecretKey,
+        secretKey: 'proof-work-token'
+      },
+      {
+        property: proofCoordinator.secrets?.proverWorkerTokenProperty || 'prover-worker-token',
+        remoteKey: remoteSecretKey,
+        secretKey: 'prover-worker-token'
+      },
     ]
   )
 

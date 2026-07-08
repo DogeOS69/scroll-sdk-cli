@@ -276,7 +276,6 @@ export default class SetupGenL2Artifacts extends Command {
       { source: 'genesis.yaml', target: 'genesis.yaml' },
       { source: 'gas-oracle-config.yaml', target: 'gas-oracle-config.yaml' },
       { source: 'rollup-config.yaml', target: 'rollup-relayer-config.yaml' },
-      { source: 'rollup-explorer-backend-config.yaml', target: 'rollup-explorer-backend-config.yaml' },
     ]
 
     // Process all mappings

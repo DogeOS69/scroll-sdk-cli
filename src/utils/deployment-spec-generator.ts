@@ -963,6 +963,48 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     }
   }
 
+  const { proofCoordinator } = spec
+  if (proofCoordinator && proofCoordinator.enabled !== false) {
+    const { artifactStore } = proofCoordinator
+
+    if (proofCoordinator.proofWorkBaseUrl && !isHttpUrl(proofCoordinator.proofWorkBaseUrl)) {
+      errors.push({
+        code: 'E013_INVALID_PROOF_COORDINATOR_CONFIG',
+        message: 'proofCoordinator.proofWorkBaseUrl must be an http(s) URL',
+        path: 'proofCoordinator.proofWorkBaseUrl'
+      })
+    }
+
+    if (!artifactStore?.bucket) {
+      errors.push({
+        code: 'E013_INVALID_PROOF_COORDINATOR_CONFIG',
+        message: 'proofCoordinator.artifactStore.bucket is required when proofCoordinator is enabled',
+        path: 'proofCoordinator.artifactStore.bucket'
+      })
+    }
+
+    if (!artifactStore?.region) {
+      errors.push({
+        code: 'E013_INVALID_PROOF_COORDINATOR_CONFIG',
+        message: 'proofCoordinator.artifactStore.region is required when proofCoordinator is enabled',
+        path: 'proofCoordinator.artifactStore.region'
+      })
+    }
+
+    for (const [path, value] of [
+      ['proofCoordinator.artifactStore.endpointUrl', artifactStore?.endpointUrl],
+      ['proofCoordinator.artifactStore.publicS3EndpointUrl', artifactStore?.publicS3EndpointUrl],
+    ] as Array<[string, string | undefined]>) {
+      if (value && !isHttpUrl(value)) {
+        errors.push({
+          code: 'E013_INVALID_PROOF_COORDINATOR_CONFIG',
+          message: `${path} must be an http(s) URL`,
+          path
+        })
+      }
+    }
+  }
+
   // Images validation
   if (spec.images) {
     const validPullPolicies = ['Always', 'IfNotPresent', 'Never']

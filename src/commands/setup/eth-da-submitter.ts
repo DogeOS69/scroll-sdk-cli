@@ -21,6 +21,9 @@ export default class SetupEthDaSubmitter extends Command {
     'archive-key-prefix': Flags.string({
       description: 'Object key prefix under the archive bucket.',
     }),
+    'archive-public-base-url': Flags.string({
+      description: 'Public HTTPS base URL used by blob consumers to read archived Ethereum DA blobs.',
+    }),
     'archive-region': Flags.string({
       description: 'Region that owns the archive bucket (defaults to --aws-region).',
     }),

@@ -4,12 +4,16 @@ import {
   applyConfigMapEnvValues,
   applyEthDaSubmitterInitialBatchSidecar,
   applyFeeOracleCurrentEnv,
+  applyRethBlobS3Url,
   buildEthDaSubmitterPrepEnv,
   buildFeeOraclePrepEnv,
   buildL1InterfaceBlobSourcePrepEnv,
   buildWithdrawalBlobSourcePrepEnv,
+  getEthereumDaS3PublicBaseUrl,
+  getEthereumDaS3PublicBlobUrl,
   removeConfigMapEnvKeys,
   removeEnvArrayKeys,
+  removeL2GethBlobS3ExtraParams,
   scrubFeeOracleLegacyValues,
   shouldSkipL2ContractDeploymentBlockUpdate,
   validateDogeConfigEthereumDaForPrep,
@@ -390,5 +394,41 @@ describe('setup prep-charts Ethereum DA blob source updates', () => {
     expect(env.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL).to.equal('https://dogeos-da.s3.us-east-1.amazonaws.com/')
     expect(env.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS).to.equal('15000')
     expect(env.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING).to.equal('false')
+  })
+
+  it('derives public S3 read URLs for blob consumers from bucket metadata', () => {
+    const s3Archive = {
+      bucket: 'dogeos-da',
+      enabled: true,
+      keyPrefix: 'devnet/eth-da/blobs/v1',
+      region: 'us-east-1',
+    }
+
+    expect(getEthereumDaS3PublicBaseUrl(s3Archive)).to.equal('https://dogeos-da.s3.us-east-1.amazonaws.com')
+    expect(getEthereumDaS3PublicBlobUrl(s3Archive)).to.equal('https://dogeos-da.s3.us-east-1.amazonaws.com/devnet/eth-da/blobs/v1')
+  })
+
+  it('writes reth blobS3Url with the public prefix URL', () => {
+    const values: any = { reth: { blobS3Url: '' } }
+    const changes = applyRethBlobS3Url(values, 'https://dogeos-da.s3.us-east-1.amazonaws.com/devnet/eth-da/blobs/v1')
+
+    expect(values.reth.blobS3Url).to.equal('https://dogeos-da.s3.us-east-1.amazonaws.com/devnet/eth-da/blobs/v1')
+    expect(changes.map(change => change.key)).to.deep.equal(['reth.blobS3Url'])
+  })
+
+  it('removes legacy l2geth bootnode S3 extra params', () => {
+    const values: any = {
+      configMaps: {
+        env: {
+          data: {
+            L2GETH_EXTRA_PARAMS: '--da.blob.awss3 https://dogeos-da.s3.us-east-1.amazonaws.com/devnet/eth-da/blobs/v1',
+          },
+        },
+      },
+    }
+    const removeChanges = removeL2GethBlobS3ExtraParams(values)
+
+    expect(values.configMaps.env.data).not.to.have.property('L2GETH_EXTRA_PARAMS')
+    expect(removeChanges.map(change => change.key)).to.deep.equal(['configMaps.env.data.L2GETH_EXTRA_PARAMS'])
   })
 })

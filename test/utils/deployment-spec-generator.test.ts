@@ -1385,6 +1385,73 @@ describe('deployment-spec-generator', () => {
       expect(feeOracleValues).not.to.have.property('externalSecrets');
     });
 
+    it('generates proof-coordinator production values from deployment scalars', () => {
+      const spec = createMinimalSpec();
+      spec.infrastructure = {
+        aws: { accountId: '123456789012', eksClusterName: 'cluster', region: 'us-west-2', secretsPrefix: 'dogeos-test' },
+        bootnodeCount: 1,
+        provider: 'aws',
+        sequencerCount: 1,
+      };
+      spec.proofCoordinator = {
+        artifactStore: {
+          bucket: 'dogeos-proofs',
+          endpointUrl: 'http://minio.scrollsdk:9000',
+          publicS3EndpointUrl: 'https://proof-artifacts.example.com',
+          region: 'us-west-2',
+        },
+        proofWorkBaseUrl: 'http://withdrawal-processor:3000',
+        serviceAccount: {
+          annotations: {
+            'eks.amazonaws.com/role-arn': 'arn:aws:iam::123456789012:role/proof-coordinator',
+          },
+        },
+      };
+      spec.images = {
+        services: {
+          proofCoordinator: {
+            repository: 'ghcr.io/dogeos/proof-coordinator',
+            tag: 'v1.2.3',
+          },
+        },
+      };
+
+      const files = generateValuesFiles(spec);
+      expect(files).to.have.property('proof-coordinator-production.yaml');
+
+      const values = yaml.load(files['proof-coordinator-production.yaml']) as any;
+      const env = Object.fromEntries(values.env.map((item: any) => [item.name, item.value]));
+
+      expect(values.controller.replicas).to.equal(1);
+      expect(values.image).to.deep.equal({
+        pullPolicy: 'IfNotPresent',
+        repository: 'ghcr.io/dogeos/proof-coordinator',
+        tag: 'v1.2.3',
+      });
+      expect(values.service.main.enabled).to.equal(true);
+      expect(values.persistence.secrets.name).to.equal('proof-coordinator-secrets');
+      expect(values.serviceAccount.annotations['eks.amazonaws.com/role-arn'])
+        .to.equal('arn:aws:iam::123456789012:role/proof-coordinator');
+      expect(env.DOGEOS_PROOF_COORDINATOR_PROOF_WORK_BASE_URL).to.equal('http://withdrawal-processor:3000');
+      expect(env.DOGEOS_PROOF_COORDINATOR_ALLOW_INSECURE_HTTP).to.equal('true');
+      expect(env.DOGEOS_PROOF_COORDINATOR_COORDINATOR_ID).to.equal('proof-coordinator');
+      expect(env.DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET).to.equal('dogeos-proofs');
+      expect(env.DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__REGION).to.equal('us-west-2');
+      expect(env.DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__KEY_PREFIX).to.equal('proof-topology');
+      expect(env.DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__FORCE_PATH_STYLE).to.equal('true');
+      expect(env.DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__ENDPOINT_URL).to.equal('http://minio.scrollsdk:9000');
+      expect(env.DOGEOS_PROOF_COORDINATOR_PROVER_API__PUBLIC_S3_ENDPOINT_URL).to.equal('https://proof-artifacts.example.com');
+      expect(values.externalSecrets['proof-coordinator-secrets'].secretRegion).to.equal('us-west-2');
+      expect(values.externalSecrets['proof-coordinator-secrets'].data.map((item: any) => item.secretKey))
+        .to.deep.equal(['proof-work-token', 'prover-worker-token']);
+
+      const proofCoordinatorToml = values.configMaps.config.data['ProofCoordinator.toml'];
+      expect(proofCoordinatorToml).to.include('verifier_import_mode = "production"');
+      expect(proofCoordinatorToml).to.include('expected_proof_system_id = "<TODO>"');
+      expect(proofCoordinatorToml).to.include('chunk_program_commitment_hex = "<TODO>"');
+      expect(proofCoordinatorToml).not.to.include('DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET');
+    });
+
     it('generates l1-interface genesis and indexer heights independently', () => {
       const spec = createMinimalSpec();
       spec.dogecoin.indexerStartHeight = 8_200_000;
