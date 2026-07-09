@@ -69,22 +69,25 @@ describe('setup gen-rpc-package env generation', () => {
     const peers = convertPeersToExternalDomains(
       [
         'enode://abc@l2-bootnode-0:30303',
+        'enode://jkl@l2-reth-bootnode-1.default.svc.cluster.local:30303',
         'enode://def@l2-sequencer-1.default.svc.cluster.local:30303',
         'enode://ghi@external.example.com:30303',
       ],
       {
         'l2-bootnode-0-p2p': 'bootnode-0.example.com',
+        'l2-reth-bootnode-1-p2p': 'reth-bootnode-1.example.com',
       },
     )
 
     expect(peers).to.deep.equal([
       'enode://abc@bootnode-0.example.com:30303',
+      'enode://jkl@reth-bootnode-1.example.com:30303',
       'enode://def@l2-sequencer-1.default.svc.cluster.local:30303',
       'enode://ghi@external.example.com:30303',
     ])
   })
 
-  it('writes l2geth and l2reth env files from l2-rpc values YAML and public bootnode peers', () => {
+  it('writes only l2reth env from l2-rpc values YAML and prefers reth bootnode peers', () => {
     const valuesDir = path.join(tmpDir, 'values')
     const rpcPackageDir = path.join(tmpDir, 'dogeos-rpc-package')
     fs.mkdirSync(valuesDir, { recursive: true })
@@ -116,6 +119,26 @@ describe('setup gen-rpc-package env generation', () => {
               DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER: '0x1234567890123456789012345678901234567890',
             },
           },
+        },
+      }),
+    )
+
+    fs.writeFileSync(
+      path.join(valuesDir, 'l2-reth-bootnode-production-0.yaml'),
+      yaml.dump({
+        reth: {
+          enodeUrl: 'enode://reth0@l2-reth-bootnode-0:30303',
+        },
+      }),
+    )
+    fs.writeFileSync(
+      path.join(valuesDir, 'l2-reth-bootnode-production-1.yaml'),
+      yaml.dump({
+        reth: {
+          trustedPeers: [
+            'enode://sequencer@l2-reth-sequencer-0:30303',
+            'enode://reth1@l2-reth-bootnode-1.default.svc.cluster.local:30303',
+          ].join(','),
         },
       }),
     )
@@ -153,6 +176,8 @@ describe('setup gen-rpc-package env generation', () => {
       rpcPackageDir,
       {
         'l2-bootnode-0-p2p': 'bootnode-0.example.com',
+        'l2-reth-bootnode-0-p2p': 'reth-bootnode-0.example.com',
+        'l2-reth-bootnode-1-p2p': 'reth-bootnode-1.example.com',
         'l2-sequencer-0-p2p': 'sequencer-0.example.com',
       },
       'default',
@@ -161,21 +186,96 @@ describe('setup gen-rpc-package env generation', () => {
 
     expect(result.hasUnresolvedExternalPeers).to.equal(false)
 
-    const l2gethEnv = fs.readFileSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2geth.env'), 'utf8')
-    expect(l2gethEnv).to.include('CHAIN_ID=6281971')
-    expect(l2gethEnv).to.include('L2GETH_L1_ENDPOINT=http://l1-interface:8545')
-    expect(l2gethEnv).to.include('L2GETH_DA_BLOB_BEACON_NODE=http://l1-interface:5052')
-    expect(l2gethEnv).to.include('L2GETH_PEER_LIST=["enode://bootnode@bootnode-0.example.com:30303"]')
-    expect(l2gethEnv).not.to.include('sequencer-0.example.com')
-    expect(l2gethEnv).not.to.include('L2RETH_VALID_SIGNER')
+    expect(fs.existsSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2geth.env'))).to.equal(false)
 
     const l2rethEnv = fs.readFileSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2reth.env'), 'utf8')
-    expect(l2rethEnv).to.include('L2GETH_PEER_LIST=["enode://bootnode@bootnode-0.example.com:30303"]')
+    expect(l2rethEnv).to.include('L2GETH_PEER_LIST=["enode://reth0@reth-bootnode-0.example.com:30303","enode://reth1@reth-bootnode-1.example.com:30303"]')
     expect(l2rethEnv).to.include('L2RETH_DA_BLOB_BEACON_NODE=http://l1-interface:5052')
     expect(l2rethEnv).to.include('L2RETH_L1_ENDPOINT=http://l1-interface:8545')
     expect(l2rethEnv).to.include('L2RETH_VALID_SIGNER=0x1234567890123456789012345678901234567890')
     expect(l2rethEnv).not.to.include('CHAIN_ID=1')
     expect(l2rethEnv).not.to.include('L2GETH_L1_ENDPOINT=http://old-l1')
+    expect(l2rethEnv).not.to.include('enode://bootnode@')
+    expect(l2rethEnv).not.to.include('sequencer-0.example.com')
+    expect(l2rethEnv).not.to.include('l2-reth-sequencer-0')
+  })
+
+  it('uses doge-config reth bootnode enodes instead of stale legacy bootnode config peers', () => {
+    const valuesDir = path.join(tmpDir, 'values')
+    const rpcPackageDir = path.join(tmpDir, 'dogeos-rpc-package')
+    fs.mkdirSync(valuesDir, { recursive: true })
+    fs.mkdirSync(path.join(rpcPackageDir, 'envs', 'testnet'), { recursive: true })
+
+    fs.writeFileSync(
+      path.join(valuesDir, 'l2-rpc-production.yaml'),
+      yaml.dump({
+        configMaps: {
+          env: {
+            data: {
+              CHAIN_ID: '4444444',
+              L2GETH_PEER_LIST: JSON.stringify(['enode://sequencer@l2-sequencer-0:30303']),
+            },
+          },
+        },
+      }),
+    )
+
+    fs.writeFileSync(
+      path.join(valuesDir, 'l1-interface-production.yaml'),
+      yaml.dump({
+        configMaps: {
+          env: {
+            data: {
+              DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER: '0x1234567890123456789012345678901234567890',
+            },
+          },
+        },
+      }),
+    )
+
+    const command = createCommandHarness()
+    const result = command.generateL2NodeEnvFiles(
+      {
+        bootnode: {
+          L2_GETH_PUBLIC_PEERS: [
+            'enode://legacy0@l2-bootnode-0:30303',
+            'enode://legacy1@l2-bootnode-1:30303',
+          ],
+        },
+      },
+      {
+        bootnodeReth: {
+          instances: [
+            {
+              enodeUrl: 'enode://reth0@l2-reth-bootnode-0:30303',
+              index: 0,
+            },
+            {
+              enodeUrl: 'enode://reth1@l2-reth-bootnode-1:30303',
+              index: 1,
+            },
+          ],
+        },
+        defaults: { dogecoinIndexerStartHeight: '14023282' },
+        network: 'testnet',
+      },
+      rpcPackageDir,
+      {
+        'l2-reth-bootnode-0-p2p': 'reth-bootnode-0.example.com',
+        'l2-reth-bootnode-1-p2p': 'reth-bootnode-1.example.com',
+      },
+      'default',
+      valuesDir,
+    )
+
+    expect(result.hasUnresolvedExternalPeers).to.equal(false)
+
+    expect(fs.existsSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2geth.env'))).to.equal(false)
+    const l2rethEnv = fs.readFileSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2reth.env'), 'utf8')
+    expect(l2rethEnv).to.include('L2GETH_PEER_LIST=["enode://reth0@reth-bootnode-0.example.com:30303","enode://reth1@reth-bootnode-1.example.com:30303"]')
+    expect(l2rethEnv).not.to.include('LoadBalancer-Domain-For-l2-bootnode')
+    expect(l2rethEnv).not.to.include('legacy0')
+    expect(l2rethEnv).not.to.include('l2-sequencer-0')
   })
 
   it('writes a credential-free l1-interface env, an example template, and a scaffolded local override', () => {
@@ -297,12 +397,14 @@ describe('setup gen-rpc-package env generation', () => {
           },
           'l2reth-node': {
             depends_on: ['l1-interface'],
+            env_file: [`${networkEnvDir}/l2reth.env`],
             image: 'scrolltech/rollup-node:v0.0.1-rc63',
           },
         },
         volumes: {
           celestia_data: null,
           l1_interface_data: null,
+          l2geth_data: null,
         },
       }),
     )
@@ -355,7 +457,7 @@ describe('setup gen-rpc-package env generation', () => {
     expect(result.changed).to.equal(true)
     expect(result.initServices).to.include('l1-interface-init-fetch-sqlite')
     expect(result.initServices).to.include('l2-rpc-init-wait-for-l1')
-    expect(result.removedServices).to.deep.equal(['celestia-light-node'])
+    expect(result.removedServices).to.deep.equal(['celestia-light-node', 'l2geth-node'])
 
     const compose = yaml.load(fs.readFileSync(path.join(rpcPackageDir, 'docker-compose.yml'), 'utf8')) as TestComposeFile
     const l1InitService = compose.services['l1-interface-init-fetch-sqlite'] as {
@@ -369,18 +471,19 @@ describe('setup gen-rpc-package env generation', () => {
     }
     const l2RpcWaitService = compose.services['l2-rpc-init-wait-for-l1'] as {
       command: string[]
+      env_file: string[]
       image: string
-    }
-    const l2gethService = compose.services['l2geth-node'] as {
-      depends_on: Record<string, { condition: string }>
     }
     const l2rethService = compose.services['l2reth-node'] as {
       depends_on: Record<string, { condition: string }>
     }
 
     expect(compose.services).not.to.have.property('celestia-light-node')
+    expect(compose.services).not.to.have.property('l2geth-node')
     expect(compose.volumes).not.to.have.property('celestia_data')
+    expect(compose.volumes).not.to.have.property('l2geth_data')
     expect(l1InterfaceService.depends_on).not.to.have.property('celestia-light-node')
+    expect((compose.services['l1-interface'].volumes as string[])[0]).to.equal(`./configs/\${NETWORK}/l2reth-genesis.json:/app/genesis/genesis.json:ro`)
     expect(l1InitService.image).to.equal('curlimages/curl:8.20.0')
     expect(l1InitService.environment.ARTIFACT_URL).to.equal('https://snapshots.example/artifact.sqlite')
     expect(l1InitService.volumes).to.deep.equal(['l1_interface_data:/data'])
@@ -388,7 +491,8 @@ describe('setup gen-rpc-package env generation', () => {
     expect(l1InterfaceService.depends_on['l1-interface-init-fetch-sqlite'].condition).to.equal('service_completed_successfully')
     expect(l2RpcWaitService.image).to.equal('curlimages/curl:8.20.0')
     expect(l2RpcWaitService.command[0]).to.include('eth_chainId')
-    expect(l2gethService.depends_on['l2-rpc-init-wait-for-l1'].condition).to.equal('service_completed_successfully')
+    expect(l2RpcWaitService.command[0]).to.include('L2RETH_L1_ENDPOINT')
+    expect(l2RpcWaitService.env_file).to.deep.equal([`${networkEnvDir}/l2reth.env`])
     expect(l2rethService.depends_on['l2-rpc-init-wait-for-l1'].condition).to.equal('service_completed_successfully')
   })
 })
