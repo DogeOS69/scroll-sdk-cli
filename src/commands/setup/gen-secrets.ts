@@ -21,7 +21,7 @@ import {
   getSequencerRethResourceName,
   normalizeSignerMode,
   signerModeToConfig,
-} from './sequencer-reth.js'
+} from './l2-sequencer-reth.js'
 
 const SECRETS_PATH = path.join(process.cwd(), 'secrets')
 

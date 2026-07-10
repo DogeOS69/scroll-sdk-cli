@@ -10,7 +10,7 @@ import type { DogeConfig } from '../../types/doge-config.js'
 import { dogeConfigToToml, loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { createNonInteractiveContext, resolveEnvValue } from '../../utils/non-interactive.js'
-import { normalizeRethNodekey } from './sequencer-reth.js'
+import { normalizeRethNodekey } from './l2-sequencer-reth.js'
 
 export type RethBootnodeSecretMode = 'external-secret' | 'plain'
 

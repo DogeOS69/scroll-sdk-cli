@@ -335,7 +335,7 @@ function removeExternalSecret(yamlData: any, secretName: string): void {
   if (Object.keys(yamlData.externalSecrets).length === 0) delete yamlData.externalSecrets
 }
 
-export default class SetupSequencerReth extends Command {
+export default class SetupL2SequencerReth extends Command {
   static override description = 'Configure a rollup-node reth sequencer signer key and P2P nodekey'
 
   static override examples = [
@@ -366,11 +366,11 @@ export default class SetupSequencerReth extends Command {
   }
 
   public async run(): Promise<void> {
-    const { flags } = await this.parse(SetupSequencerReth) as any
+    const { flags } = await this.parse(SetupL2SequencerReth) as any
     const nonInteractive = flags['non-interactive']
     const jsonMode = flags.json
-    createNonInteractiveContext('setup sequencer-reth', nonInteractive, jsonMode)
-    const jsonCtx = new JsonOutputContext('setup sequencer-reth', jsonMode)
+    createNonInteractiveContext('setup l2-sequencer-reth', nonInteractive, jsonMode)
+    const jsonCtx = new JsonOutputContext('setup l2-sequencer-reth', jsonMode)
 
     const { config: dogeConfig, configPath } = await loadDogeConfigWithSelection(
       flags['doge-config'],

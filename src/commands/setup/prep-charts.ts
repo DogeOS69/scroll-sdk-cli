@@ -48,7 +48,7 @@ import {
   normalizeRethNodekey,
   normalizeSignerMode,
   signerModeToConfig,
-} from './sequencer-reth.js'
+} from './l2-sequencer-reth.js'
 
 /**
  * Strip port from hostname for Kubernetes Ingress
@@ -910,17 +910,17 @@ export default class SetupPrepCharts extends Command {
   private buildSequencerRethResolvedConfig(index: number): ResolvedSequencerRethConfig {
     const instance = this.dogeConfig.sequencerReth?.instances?.find(item => item.index === index)
     if (!instance) {
-      this.error(`sequencerReth.instances does not contain index ${index}. Run scrollsdk setup sequencer-reth --index ${index} first.`)
+      this.error(`sequencerReth.instances does not contain index ${index}. Run scrollsdk setup l2-sequencer-reth --index ${index} first.`)
     }
 
     const nodekey = instance.nodekey?.privateKey
     if (!nodekey) {
-      this.error(`sequencerReth.instances[index=${index}].nodekey.privateKey is missing. Run scrollsdk setup sequencer-reth --index ${index} first.`)
+      this.error(`sequencerReth.instances[index=${index}].nodekey.privateKey is missing. Run scrollsdk setup l2-sequencer-reth --index ${index} first.`)
     }
 
     const {signer} = instance
     if (!signer?.mode) {
-      this.error(`sequencerReth.instances[index=${index}].signer.mode is missing. Run scrollsdk setup sequencer-reth --index ${index} first.`)
+      this.error(`sequencerReth.instances[index=${index}].signer.mode is missing. Run scrollsdk setup l2-sequencer-reth --index ${index} first.`)
     }
 
     const signerMode = signerModeToConfig(normalizeSignerMode(signer.mode))

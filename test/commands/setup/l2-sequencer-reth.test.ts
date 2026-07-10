@@ -13,9 +13,9 @@ import {
   parseSequencerRethKmsAlias,
   shouldReuseExistingSequencerRethKmsKey,
   shouldReuseExistingSequencerRethRoleArn,
-} from '../../../src/commands/setup/sequencer-reth.js'
+} from '../../../src/commands/setup/l2-sequencer-reth.js'
 
-describe('setup sequencer-reth', () => {
+describe('setup l2-sequencer-reth', () => {
   it('normalizes reth nodekey and signer private key formats', () => {
     expect(normalizeRethNodekey('0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD')).to.equal(
       'abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd'
