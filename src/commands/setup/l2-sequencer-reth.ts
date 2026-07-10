@@ -41,6 +41,7 @@ export interface RethInstanceConfig {
   index: number
   nodekey?: {
     privateKey?: string
+    secretMode?: RethSecretMode
   }
   signer?: {
     address?: string
@@ -219,13 +220,14 @@ export function applySequencerRethValues(yamlData: any, config: ResolvedSequence
     yamlData.reth.signer.localFile.secretName = config.secretName
     yamlData.reth.signer.localFile.secretKey = RETH_SIGNER_PRIVATE_KEY_ENV
     delete yamlData.reth.signer.awsKmsKeyId
+    delete yamlData.serviceAccount
   }
 
   yamlData.envFrom = removeSecretRef(yamlData.envFrom, config.secretName)
   removeLegacyRethEnv(yamlData)
 
   if (config.secretMode === 'external-secret') {
-    removePlainSecret(yamlData, config.secretName)
+    removePlainSecret(yamlData, config)
     ensureRethExternalSecret(yamlData, config)
   } else {
     removeExternalSecret(yamlData, config.secretName)
@@ -289,12 +291,23 @@ function ensurePlainSecret(yamlData: any, config: ResolvedSequencerRethConfig): 
   }
 }
 
-function removePlainSecret(yamlData: any, secretName: string): void {
-  const resourceName = yamlData.global?.fullnameOverride || yamlData.global?.nameOverride
-  const secretNameOverride = resourceName ? getSecretNameOverride(secretName, resourceName) : secretName
-  if (!yamlData.secrets?.[secretNameOverride]) return
+function removePlainSecret(yamlData: any, config: ResolvedSequencerRethConfig): void {
+  if (!yamlData.secrets) return
 
-  delete yamlData.secrets[secretNameOverride]
+  const configuredResourceName = yamlData.global?.fullnameOverride || yamlData.global?.nameOverride
+  const resourceNames = new Set<string>([
+    getSequencerRethResourceName(config.index),
+    ...(configuredResourceName ? [configuredResourceName] : []),
+  ])
+  const secretKeys = new Set<string>([config.secretName])
+  for (const resourceName of resourceNames) {
+    secretKeys.add(getSecretNameOverride(config.secretName, resourceName))
+  }
+
+  for (const secretKey of secretKeys) {
+    delete yamlData.secrets[secretKey]
+  }
+
   if (Object.keys(yamlData.secrets).length === 0) delete yamlData.secrets
 }
 
@@ -355,6 +368,10 @@ export default class SetupL2SequencerReth extends Command {
     namespace: Flags.string({ default: 'default', description: 'Kubernetes namespace for the KMS signer service account.' }),
     'network-alias': Flags.string({ description: 'Resource alias used to derive deterministic KMS aliases and IAM role names.' }),
     nodekey: Flags.string({ description: 'Existing reth P2P nodekey private key as 64 hex chars, with or without 0x.' }),
+    'nodekey-secret-mode': Flags.string({
+      description: 'How P2P nodekey material is referenced from values YAML. AWS KMS signer mode only; local signer mode uses --signer-mode.',
+      options: ['external-secret', 'plain'],
+    }),
     'non-interactive': Flags.boolean({ char: 'N', default: false, description: 'Run without prompts. Generates missing local keys.' }),
     'role-arn': Flags.string({ description: 'Existing IAM role ARN to annotate on the sequencer service account.' }),
     'service-account': Flags.string({ description: 'Kubernetes service account used by this sequencer.' }),
@@ -383,15 +400,16 @@ export default class SetupL2SequencerReth extends Command {
 
     const existing = this.getExistingInstance(dogeConfig, index)
     const signerMode = await this.resolveSignerMode(flags, existing, nonInteractive)
-    const {mode, secretMode, signerBackend} = signerMode
+    const {mode, signerBackend} = signerMode
     const nodekey = await this.resolveNodekey(flags, existing, nonInteractive)
+    const nodekeySecretMode = await this.resolveNodekeySecretMode(flags, existing, signerMode, index, nonInteractive, jsonCtx)
     const signer = await this.resolveSigner(flags, existing, signerBackend, index, nonInteractive, jsonCtx)
     const secretName = `${getSequencerRethResourceName(index)}-secret-env`
 
     const resolved: ResolvedSequencerRethConfig = {
       index,
       nodekey,
-      secretMode,
+      secretMode: nodekeySecretMode,
       secretName,
       signer,
       signerMode: mode,
@@ -406,7 +424,7 @@ export default class SetupL2SequencerReth extends Command {
       jsonCtx.success({
         dogeConfigPath: configPath,
         index,
-        secretMode,
+        nodekeySecretMode,
         signer: {
           address: signer.address,
           backend: signer.backend,
@@ -501,6 +519,47 @@ export default class SetupL2SequencerReth extends Command {
       message: 'Enter reth nodekey private key (64 hex chars, 0x optional):',
       required: true,
     }))
+  }
+
+  private async resolveNodekeySecretMode(
+    flags: any,
+    existing: RethInstanceConfig | undefined,
+    signerMode: ResolvedRethSignerMode,
+    index: number,
+    nonInteractive: boolean,
+    jsonCtx: JsonOutputContext
+  ): Promise<RethSecretMode> {
+    const flagValue = flags['nodekey-secret-mode'] as RethSecretMode | undefined
+    if (signerMode.signerBackend === 'local') {
+      if (this.hasFlag('nodekey-secret-mode') && flagValue !== signerMode.secretMode) {
+        jsonCtx.error(
+          'E602_INVALID_SECRET_MODE',
+          '--nodekey-secret-mode must match --signer-mode for local signer mode because nodekey and signer private key share one chart Secret.',
+          'CONFIGURATION',
+          true,
+          {
+            nodekeySecretMode: flagValue,
+            signerMode: signerMode.mode,
+          }
+        )
+      }
+
+      return signerMode.secretMode
+    }
+
+    if (this.hasFlag('nodekey-secret-mode')) return flagValue as RethSecretMode
+
+    const existingSecretMode = existing?.nodekey?.secretMode
+    if (nonInteractive) return existingSecretMode || 'external-secret'
+
+    return select({
+      choices: [
+        { name: 'ExternalSecret reference', value: 'external-secret' },
+        { name: 'Plain private key in values YAML', value: 'plain' },
+      ],
+      default: existingSecretMode || 'external-secret',
+      message: `Reth sequencer ${index} P2P nodekey secret mode:`,
+    })
   }
 
   private async resolveRequiredText(
@@ -624,6 +683,7 @@ export default class SetupL2SequencerReth extends Command {
       index,
       nodekey: {
         privateKey: resolved.nodekey,
+        secretMode: resolved.secretMode,
       },
       signer: {
         address: resolved.signer.address,

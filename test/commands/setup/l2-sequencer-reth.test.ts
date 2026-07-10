@@ -209,6 +209,38 @@ describe('setup l2-sequencer-reth', () => {
     expect(values.command).to.equal(undefined)
   })
 
+  it('removes plain Secret fields when switching back to ExternalSecret mode', () => {
+    const values: any = {
+      env: [],
+      secrets: {
+        'secret-env': {
+          enabled: true,
+          nameOverride: 'secret-env',
+          stringData: {
+            RETH_NODEKEY: '1111111111111111111111111111111111111111111111111111111111111111',
+            RETH_SEQUENCER_SIGNER_PRIVATE_KEY: '0x2222222222222222222222222222222222222222222222222222222222222222',
+          },
+        },
+      },
+    }
+
+    applySequencerRethValues(values, {
+      index: 0,
+      nodekey: '1111111111111111111111111111111111111111111111111111111111111111',
+      secretMode: 'external-secret',
+      secretName: 'l2-reth-sequencer-0-secret-env',
+      signer: {
+        address: '0x1234567890123456789012345678901234567890',
+        backend: 'local',
+        privateKey: '0x2222222222222222222222222222222222222222222222222222222222222222',
+      },
+      signerMode: 'external_secret',
+    })
+
+    expect(values.secrets).to.equal(undefined)
+    expect(values.externalSecrets).to.have.property('l2-reth-sequencer-0-secret-env')
+  })
+
   it('writes KMS signer env and service account without local signer private key secret', () => {
     const values: any = {
       env: [
@@ -255,5 +287,70 @@ describe('setup l2-sequencer-reth', () => {
     expect(values.serviceAccount.name).to.equal('l2-reth-sequencer-3')
     expect(values.serviceAccount.annotations['eks.amazonaws.com/role-arn']).to.equal('arn:aws:iam::123456789012:role/l2-reth-sequencer-3')
     expect(values.command).to.equal(undefined)
+  })
+
+  it('writes AWS KMS signer with plain nodekey material and removes external secret references', () => {
+    const values: any = {
+      env: [],
+      envFrom: [{ secretRef: { name: 'l2-reth-sequencer-5-secret-env' } }],
+      externalSecrets: {
+        'l2-reth-sequencer-5-secret-env': { provider: 'aws' },
+      },
+    }
+
+    applySequencerRethValues(values, {
+      index: 5,
+      nodekey: '1111111111111111111111111111111111111111111111111111111111111111',
+      secretMode: 'plain',
+      secretName: 'l2-reth-sequencer-5-secret-env',
+      signer: {
+        address: '0x1234567890123456789012345678901234567890',
+        backend: 'aws_kms',
+        kmsKeyId: 'alias/dogeos/test/l2/sequencer-reth-5',
+        kmsRegion: 'us-west-2',
+        serviceAccountName: 'l2-reth-sequencer-5',
+        serviceAccountRoleArn: 'arn:aws:iam::123456789012:role/l2-reth-sequencer-5',
+      },
+      signerMode: 'aws_kms',
+    })
+
+    expect(values.envFrom.some((item: any) => item.secretRef)).to.equal(false)
+    expect(values.externalSecrets).to.equal(undefined)
+    expect(values.secrets['secret-env'].stringData).to.deep.equal({
+      RETH_NODEKEY: '1111111111111111111111111111111111111111111111111111111111111111',
+    })
+    expect(values.reth.signer.type).to.equal('awsKms')
+    expect(values.reth.signer.awsKmsKeyId).to.equal('alias/dogeos/test/l2/sequencer-reth-5')
+    expect(values.reth.signer.localFile).to.equal(undefined)
+    expect(values.serviceAccount.name).to.equal('l2-reth-sequencer-5')
+  })
+
+  it('removes KMS service account fields when switching to a local signer', () => {
+    const values: any = {
+      env: [],
+      serviceAccount: {
+        annotations: {
+          'eks.amazonaws.com/role-arn': 'arn:aws:iam::123456789012:role/l2-reth-sequencer-4',
+        },
+        create: true,
+        name: 'l2-reth-sequencer-4',
+      },
+    }
+
+    applySequencerRethValues(values, {
+      index: 4,
+      nodekey: '1111111111111111111111111111111111111111111111111111111111111111',
+      secretMode: 'external-secret',
+      secretName: 'l2-reth-sequencer-4-secret-env',
+      signer: {
+        address: '0x1234567890123456789012345678901234567890',
+        backend: 'local',
+        privateKey: '0x2222222222222222222222222222222222222222222222222222222222222222',
+      },
+      signerMode: 'external_secret',
+    })
+
+    expect(values.serviceAccount).to.equal(undefined)
+    expect(values.reth.signer.type).to.equal('localFile')
   })
 })

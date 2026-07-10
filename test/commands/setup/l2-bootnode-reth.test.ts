@@ -81,4 +81,30 @@ describe('setup l2-bootnode-reth', () => {
     ])
     expect(values.command).to.equal(undefined)
   })
+
+  it('removes plain Secret fields when switching back to ExternalSecret mode', () => {
+    const values: any = {
+      env: [],
+      secrets: {
+        'secret-env': {
+          enabled: true,
+          nameOverride: 'secret-env',
+          stringData: {
+            RETH_NODEKEY: nodekey,
+          },
+        },
+      },
+    }
+
+    applyBootnodeRethValues(values, {
+      enodeUrl: deriveBootnodeRethEnodeUrl(nodekey, 0),
+      index: 0,
+      nodekey,
+      secretMode: 'external-secret',
+      secretName: 'l2-reth-bootnode-0-secret-env',
+    })
+
+    expect(values.secrets).to.equal(undefined)
+    expect(values.externalSecrets).to.have.property('l2-reth-bootnode-0-secret-env')
+  })
 })

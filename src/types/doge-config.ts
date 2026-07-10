@@ -164,6 +164,7 @@ export interface DogeConfig {
       index: number
       nodekey?: {
         privateKey?: string
+        secretMode?: 'external-secret' | 'plain'
       }
       signer?: {
         address?: string

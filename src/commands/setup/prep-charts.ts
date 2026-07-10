@@ -936,7 +936,7 @@ export default class SetupPrepCharts extends Command {
     return {
       index,
       nodekey,
-      secretMode: signerMode.secretMode,
+      secretMode: instance.nodekey?.secretMode || signerMode.secretMode,
       secretName: `${getSequencerRethResourceName(index)}-secret-env`,
       signer: {
         address: signer.address,

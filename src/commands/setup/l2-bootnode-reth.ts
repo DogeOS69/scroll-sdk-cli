@@ -52,7 +52,7 @@ export function applyBootnodeRethValues(yamlData: any, config: ResolvedBootnodeR
   removeEnvValue(yamlData.env, RETH_BOOTNODE_NODEKEY_ENV)
 
   if (config.secretMode === 'external-secret') {
-    removePlainSecret(yamlData, config.secretName)
+    removePlainSecret(yamlData, config)
     ensureBootnodeRethExternalSecret(yamlData, config)
   } else {
     removeExternalSecret(yamlData, config.secretName)
@@ -92,12 +92,23 @@ function ensurePlainSecret(yamlData: any, config: ResolvedBootnodeRethConfig): v
   }
 }
 
-function removePlainSecret(yamlData: any, secretName: string): void {
-  const resourceName = yamlData.global?.fullnameOverride || yamlData.global?.nameOverride
-  const secretNameOverride = resourceName ? getSecretNameOverride(secretName, resourceName) : secretName
-  if (!yamlData.secrets?.[secretNameOverride]) return
+function removePlainSecret(yamlData: any, config: ResolvedBootnodeRethConfig): void {
+  if (!yamlData.secrets) return
 
-  delete yamlData.secrets[secretNameOverride]
+  const configuredResourceName = yamlData.global?.fullnameOverride || yamlData.global?.nameOverride
+  const resourceNames = new Set<string>([
+    getBootnodeRethResourceName(config.index),
+    ...(configuredResourceName ? [configuredResourceName] : []),
+  ])
+  const secretKeys = new Set<string>([config.secretName])
+  for (const resourceName of resourceNames) {
+    secretKeys.add(getSecretNameOverride(config.secretName, resourceName))
+  }
+
+  for (const secretKey of secretKeys) {
+    delete yamlData.secrets[secretKey]
+  }
+
   if (Object.keys(yamlData.secrets).length === 0) delete yamlData.secrets
 }
 

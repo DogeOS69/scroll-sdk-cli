@@ -374,7 +374,8 @@ export default class SetupGenSecrets extends Command {
         signer?.mode,
         `dogeConfig.sequencerReth.instances[index=${instance.index}].signer.mode`
       ))))
-      if (signerMode.secretMode === 'plain') continue
+      const nodekeySecretMode = instance.nodekey?.secretMode || signerMode.secretMode
+      if (nodekeySecretMode === 'plain') continue
 
       const nodekey = this.requireConfigValue(
         instance.nodekey?.privateKey,
