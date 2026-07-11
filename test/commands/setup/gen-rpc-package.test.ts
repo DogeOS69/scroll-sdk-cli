@@ -7,6 +7,7 @@ import * as path from 'node:path'
 import SetupGenRpcPackage, {
   convertPeersToExternalDomains,
   normalizeConfigMapEnvData,
+  normalizeScrollGenesisConfigForReth,
   syncRpcPackageInitContainersToCompose,
 } from '../../../src/commands/setup/gen-rpc-package.js'
 
@@ -63,6 +64,40 @@ describe('setup gen-rpc-package env generation', () => {
       CHAIN_ID: '6281971',
       L2GETH_L1_ENDPOINT: 'http://l1-interface:8545',
     })
+  })
+
+  it('normalizes scroll genesis config into the shape rollup-node accepts', () => {
+    // Mirrors the real failure modes: source genesis carries u64 fields as
+    // strings and omits the required l1DataFeeBufferCheck flag.
+    const config = {
+      scroll: {
+        feeVaultAddress: '0x5300000000000000000000000000000000000005',
+        l1Config: {
+          l1ChainId: '111111',
+          l1MessageQueueV2DeploymentBlock: 0,
+          numL1MessagesPerBlock: '10',
+          startL1Block: '62934421',
+          systemContractAddress: '0x2000369731833cBf00e97146999442ADf10a4E59',
+        },
+      },
+    }
+
+    normalizeScrollGenesisConfigForReth(config)
+
+    expect(config.scroll.l1Config.l1ChainId).to.equal(111_111)
+    expect(config.scroll.l1Config.numL1MessagesPerBlock).to.equal(10)
+    expect(config.scroll.l1Config.startL1Block).to.equal(62_934_421)
+    expect(config.scroll.l1Config.l1MessageQueueV2DeploymentBlock).to.equal(0)
+    expect((config.scroll as Record<string, unknown>).l1DataFeeBufferCheck).to.equal(false)
+    // An explicitly set flag is preserved.
+    const explicit = { scroll: { l1Config: {}, l1DataFeeBufferCheck: true } }
+    normalizeScrollGenesisConfigForReth(explicit)
+    expect(explicit.scroll.l1DataFeeBufferCheck).to.equal(true)
+
+    // Non-numeric strings fail loudly instead of producing a broken genesis.
+    expect(() => normalizeScrollGenesisConfigForReth({
+      scroll: { l1Config: { l1ChainId: 'not-a-number' } },
+    })).to.throw('l1ChainId')
   })
 
   it('converts internal bootnode enodes to public p2p LoadBalancer domains', () => {
@@ -387,8 +422,17 @@ describe('setup gen-rpc-package env generation', () => {
             image: 'dogeos69/l1-interface:0.2.0-rc.7',
             volumes: [
               `./configs/\${NETWORK}/l2geth-genesis.json:/app/genesis/genesis.json:ro`,
-              'l1_interface_data:/data',
+              // The ':?' colon inside the expansion must not break mountPath
+              // matching when mapping initContainer volumeMounts.
+              `\${DATA_ROOT:?DATA_ROOT must be set}/l1-interface:/data`,
             ],
+          },
+          // Legacy client-orchestrated wait service; the wait loop now lives
+          // in scripts/l2reth_entrypoint.sh, so the sync must remove this.
+          'l2-rpc-init-wait-for-l1': {
+            container_name: 'l2-rpc-init-wait-for-l1',
+            depends_on: { 'l1-interface': { condition: 'service_started' } },
+            image: 'curlimages/curl:8.20.0',
           },
           'l2geth-node': {
             depends_on: ['l1-interface'],
@@ -396,7 +440,7 @@ describe('setup gen-rpc-package env generation', () => {
             image: 'scrolltech/l2geth:scroll-v5.9.6',
           },
           'l2reth-node': {
-            depends_on: ['l1-interface'],
+            depends_on: ['l1-interface', 'l2-rpc-init-wait-for-l1'],
             env_file: [`${networkEnvDir}/l2reth.env`],
             image: 'scrolltech/rollup-node:v0.0.1-rc63',
           },
@@ -441,23 +485,10 @@ describe('setup gen-rpc-package env generation', () => {
       }),
     )
 
-    fs.writeFileSync(
-      path.join(valuesDir, 'l2-rpc-production.yaml'),
-      yaml.dump({
-        initContainers: {
-          '1-wait-for-l1': {
-            command: ['/bin/sh', '-c', '/wait-for-l1.sh $L2GETH_L1_ENDPOINT'],
-            image: 'scrolltech/scroll-alpine:v0.0.1',
-          },
-        },
-      }),
-    )
-
     const result = syncRpcPackageInitContainersToCompose(valuesDir, rpcPackageDir)
     expect(result.changed).to.equal(true)
     expect(result.initServices).to.include('l1-interface-init-fetch-sqlite')
-    expect(result.initServices).to.include('l2-rpc-init-wait-for-l1')
-    expect(result.removedServices).to.deep.equal(['celestia-light-node', 'l2geth-node'])
+    expect(result.removedServices).to.deep.equal(['l2-rpc-init-wait-for-l1', 'celestia-light-node', 'l2geth-node'])
 
     const compose = yaml.load(fs.readFileSync(path.join(rpcPackageDir, 'docker-compose.yml'), 'utf8')) as TestComposeFile
     const l1InitService = compose.services['l1-interface-init-fetch-sqlite'] as {
@@ -469,30 +500,91 @@ describe('setup gen-rpc-package env generation', () => {
     const l1InterfaceService = compose.services['l1-interface'] as {
       depends_on: Record<string, { condition: string }>
     }
-    const l2RpcWaitService = compose.services['l2-rpc-init-wait-for-l1'] as {
-      command: string[]
-      env_file: string[]
-      image: string
-    }
     const l2rethService = compose.services['l2reth-node'] as {
-      depends_on: Record<string, { condition: string }>
+      depends_on: string[]
     }
 
     expect(compose.services).not.to.have.property('celestia-light-node')
     expect(compose.services).not.to.have.property('l2geth-node')
+    expect(compose.services).not.to.have.property('l2-rpc-init-wait-for-l1')
     expect(compose.volumes).not.to.have.property('celestia_data')
     expect(compose.volumes).not.to.have.property('l2geth_data')
     expect(l1InterfaceService.depends_on).not.to.have.property('celestia-light-node')
     expect((compose.services['l1-interface'].volumes as string[])[0]).to.equal(`./configs/\${NETWORK}/l2reth-genesis.json:/app/genesis/genesis.json:ro`)
     expect(l1InitService.image).to.equal('curlimages/curl:8.20.0')
     expect(l1InitService.environment.ARTIFACT_URL).to.equal('https://snapshots.example/artifact.sqlite')
-    expect(l1InitService.volumes).to.deep.equal(['l1_interface_data:/data'])
+    expect(l1InitService.volumes).to.deep.equal([`\${DATA_ROOT:?DATA_ROOT must be set}/l1-interface:/data`])
     expect(l1InitService.user).to.equal('0:0')
     expect(l1InterfaceService.depends_on['l1-interface-init-fetch-sqlite'].condition).to.equal('service_completed_successfully')
-    expect(l2RpcWaitService.image).to.equal('curlimages/curl:8.20.0')
-    expect(l2RpcWaitService.command[0]).to.include('eth_chainId')
-    expect(l2RpcWaitService.command[0]).to.include('L2RETH_L1_ENDPOINT')
-    expect(l2RpcWaitService.env_file).to.deep.equal([`${networkEnvDir}/l2reth.env`])
-    expect(l2rethService.depends_on['l2-rpc-init-wait-for-l1'].condition).to.equal('service_completed_successfully')
+    expect(l2rethService.depends_on).to.deep.equal(['l1-interface'])
+  })
+
+  it('removes stale l1-interface init services when values declare no initContainers', () => {
+    const valuesDir = path.join(tmpDir, 'values')
+    const rpcPackageDir = path.join(tmpDir, 'dogeos-rpc-package')
+    fs.mkdirSync(valuesDir, { recursive: true })
+    fs.mkdirSync(rpcPackageDir, { recursive: true })
+
+    // Mainnet scenario: the compose file still carries the fetch-sqlite init
+    // service generated for another network, but the current values have no
+    // initContainers, so the sync must drop the service and its dependency.
+    fs.writeFileSync(
+      path.join(rpcPackageDir, 'docker-compose.yml'),
+      yaml.dump({
+        services: {
+          'dogecoin-node': {
+            image: 'dogeos69/dogecoin:1.14.9',
+          },
+          'l1-interface': {
+            depends_on: {
+              'dogecoin-node': { condition: 'service_started' },
+              'l1-interface-init-fetch-sqlite': { condition: 'service_completed_successfully' },
+            },
+            image: 'dogeos69/l1-interface:0.2.0-rc.7',
+            volumes: ['l1_interface_data:/data'],
+          },
+          'l1-interface-init-fetch-sqlite': {
+            container_name: 'l1-interface-init-fetch-sqlite',
+            environment: { ARTIFACT_URL: 'https://testnet-snapshots.example/artifact.sqlite' },
+            image: 'curlimages/curl:8.20.0',
+            volumes: ['l1_interface_data:/data'],
+          },
+          'l2reth-node': {
+            depends_on: ['l1-interface'],
+            env_file: [`${networkEnvDir}/l2reth.env`],
+            image: 'scrolltech/rollup-node:v0.0.1-rc63',
+          },
+        },
+        volumes: {
+          l1_interface_data: null,
+        },
+      }),
+    )
+
+    fs.writeFileSync(
+      path.join(valuesDir, 'l1-interface-production.yaml'),
+      yaml.dump({
+        configMaps: {
+          env: {
+            data: {
+              DOGEOS_L1_INTERFACE_NETWORK_STR: 'mainnet',
+            },
+          },
+        },
+      }),
+    )
+
+    const result = syncRpcPackageInitContainersToCompose(valuesDir, rpcPackageDir)
+    expect(result.changed).to.equal(true)
+    expect(result.removedServices).to.include('l1-interface-init-fetch-sqlite')
+
+    const compose = yaml.load(fs.readFileSync(path.join(rpcPackageDir, 'docker-compose.yml'), 'utf8')) as TestComposeFile
+    const l1InterfaceService = compose.services['l1-interface'] as {
+      depends_on: Record<string, { condition: string }>
+    }
+
+    expect(compose.services).not.to.have.property('l1-interface-init-fetch-sqlite')
+    expect(l1InterfaceService.depends_on).not.to.have.property('l1-interface-init-fetch-sqlite')
+    expect(l1InterfaceService.depends_on).to.have.property('dogecoin-node')
   })
 })
