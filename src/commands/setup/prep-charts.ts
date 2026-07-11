@@ -12,6 +12,7 @@ import * as path from 'node:path'
 import type { DogeConfig } from '../../types/doge-config.js'
 
 import {
+  ATTESTATION_SIGNER_COUNT,
   L1_INTERFACE_BEACON_API_ENDPOINT,
   L1_INTERFACE_RPC_ENDPOINT,
   YAML_DUMP_OPTIONS,
@@ -1420,6 +1421,9 @@ export default class SetupPrepCharts extends Command {
     }, {
       chartName: "cubesigner-signer",
       configKey: null
+    }, {
+      chartName: "attestation-signer",
+      configKey: null
     }];
     let updatedCharts = 0;
     let skippedCharts = 0;
@@ -1458,9 +1462,13 @@ export default class SetupPrepCharts extends Command {
           }
         } else {
           // Determine the number of instances dynamically for cubesigner-signer based on dogeConfig.cubesigner.roles
-          const maxInstances = chartName === "cubesigner-signer"
-            ? (this.dogeConfig.cubesigner?.roles?.length ?? 1)
-            : 1;
+          let maxInstances = 1;
+          if (chartName === "cubesigner-signer") {
+            maxInstances = this.dogeConfig.cubesigner?.roles?.length ?? 1;
+          } else if (chartName === "attestation-signer") {
+            maxInstances = ATTESTATION_SIGNER_COUNT;
+          }
+
           if (releaseIndex >= maxInstances) {
             break;
           }
@@ -2408,6 +2416,25 @@ export default class SetupPrepCharts extends Command {
             productionYaml.env.push({ name: envKey, value: newValue });
             updated = true;
             changes.push({ key: `env.${envKey}`, newValue, oldValue: 'undefined' });
+          }
+        }
+      }
+      else if (chartName === "attestation-signer") {
+        // Non-secret signer config lives in an embedded TOML string; keep its
+        // network in sync with doge-config without disturbing the rest.
+        const configData = productionYaml.configMaps?.config?.data
+        const tomlKey = 'attestation-signer.toml'
+        if (configData?.[tomlKey]) {
+          const oldToml = String(configData[tomlKey])
+          const newToml = oldToml.replace(/^network = ".*"$/m, `network = "${this.dogeConfig.network}"`)
+          if (newToml !== oldToml) {
+            configData[tomlKey] = newToml
+            updated = true
+            changes.push({
+              key: `configMaps.config.data['${tomlKey}'].service.network`,
+              newValue: this.dogeConfig.network,
+              oldValue: oldToml.match(/^network = "(.*)"$/m)?.[1] ?? 'undefined',
+            })
           }
         }
       }

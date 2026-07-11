@@ -1087,6 +1087,26 @@ describe('deployment-spec-generator', () => {
       };
       const localOutput = toml.parse(generateDogeConfigToml(localSpec)) as any;
       expect(localOutput.dummySigner.provider).to.equal('local');
+
+      const k8sSpec = createMinimalSpec();
+      k8sSpec.signing = {
+        attestationSigner: {},
+        cubesigner: { roles: [] },
+      };
+      const k8sOutput = toml.parse(generateDogeConfigToml(k8sSpec)) as any;
+      expect(k8sOutput.dummySigner.provider).to.equal('k8s');
+    });
+
+    it('prefers the attestation-signer chart provider over deprecated dummy signer configs', () => {
+      const spec = createMinimalSpec();
+      spec.signing = {
+        attestationSigner: {},
+        awsKms: { accountId: '1', region: 'r' },
+        cubesigner: { roles: [] },
+        local: { signers: [] },
+      };
+      const output = toml.parse(generateDogeConfigToml(spec)) as any;
+      expect(output.dummySigner.provider).to.equal('k8s');
     });
 
     it('includes test config when present', () => {

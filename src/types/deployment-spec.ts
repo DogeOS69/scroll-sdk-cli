@@ -526,7 +526,13 @@ export interface BridgeConfig {
 }
 
 export interface SigningConfig {
-  /** AWS KMS-backed attestation signer configuration for dummy-signers */
+  /** In-cluster attestation signers deployed with the attestation-signer Helm chart (one release per key). Replaces the dummy-signer local/aws runtimes. */
+  attestationSigner?: {
+    /** Number of attestation signer instances. Defaults to 3. */
+    signerCount?: number
+  }
+
+  /** @deprecated AWS ECS/KMS dummy-signer runtime; use attestationSigner (attestation-signer Helm chart) instead. */
   awsKms?: {
     /** AWS account for the ECS/KMS attestation signers. Independent from infrastructure.aws.accountId. */
     accountId?: string
@@ -553,7 +559,7 @@ export interface SigningConfig {
     }>
   }
 
-  /** Local attestation signer configuration for dummy-signers */
+  /** @deprecated Locally-run (Docker) dummy-signer runtime; use attestationSigner (attestation-signer Helm chart) instead. */
   local?: {
     /** Signer instances */
     signers: Array<{
@@ -772,6 +778,7 @@ export interface ImagesConfig {
 
   /** Per-service image overrides */
   services?: {
+    attestationSigner?: ImageConfig
     blockscout?: ImageConfig
     // Bridge Services
     bridgeHistoryApi?: ImageConfig

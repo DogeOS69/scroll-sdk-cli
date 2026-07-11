@@ -12,7 +12,11 @@ import { fileURLToPath } from 'node:url'
 
 import type { DogeConfig } from '../../types/doge-config.js'
 
-import { getSetupDefaultsPath } from '../../config/constants.js'
+import {
+  ATTESTATION_SIGNER_COUNT,
+  getAttestationSignerServiceUrl,
+  getSetupDefaultsPath,
+} from '../../config/constants.js'
 import { getAwsSignerConfigFromSpec, getDummySignerProviderFromSpec, loadDeploymentSpec } from '../../utils/deployment-spec-generator.js'
 import { dogeConfigToToml, loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
@@ -20,13 +24,12 @@ import { resolveEnvValue } from '../../utils/non-interactive.js'
 const { Networks, PrivateKey } = bitcore
 const defaultTag = 'v0.3.0-develop-643e7315'
 const awsImageSources = ['dockerhub', 'ecr', 'ecr-sync'] as const
-const ATTESTATION_SIGNER_COUNT = 3
 const ATTESTATION_SIGNER_SUFFIXES = Array.from({ length: ATTESTATION_SIGNER_COUNT }, (_value, index) =>
   index.toString().padStart(2, '0')
 )
 
 type AwsImageSource = typeof awsImageSources[number]
-type DummySignerProvider = 'aws' | 'local'
+type DummySignerProvider = 'aws' | 'k8s' | 'local'
 
 function getConfiguredDummySignerProvider(config: DogeConfig): DummySignerProvider | undefined {
   return config.dummySigner?.provider
@@ -102,35 +105,54 @@ export class DummySignersManager {
   }
 
   async setupDummySigners(availableTags: string[]): Promise<void> {
-    this.log(chalk.blue('\nSetting up Dummy Signers...'))
+    this.log(chalk.blue('\nSetting up Attestation Signers...'))
 
     let dummySignerProvider: DummySignerProvider
     const configuredProvider = getConfiguredDummySignerProvider(this.dogeConfig)
     if (this.nonInteractive) {
-      dummySignerProvider = configuredProvider || 'local'
-      this.log(chalk.blue(`Non-interactive mode: Using dummy signer provider '${dummySignerProvider}'`))
+      dummySignerProvider = configuredProvider || 'k8s'
+      this.log(chalk.blue(`Non-interactive mode: Using attestation signer provider '${dummySignerProvider}'`))
     } else {
       dummySignerProvider = await select({
         choices: [
           {
-            description: 'Run attestation signers locally using Docker with WIF keys',
-            name: 'Local (Docker) - For development/testing',
+            description: 'Deploy attestation signers in the cluster with the attestation-signer Helm chart (one release per key)',
+            name: 'Kubernetes (attestation-signer chart) - Recommended',
+            value: 'k8s'
+          },
+          {
+            description: 'Run dummy attestation signers locally using Docker with WIF keys (deprecated, replaced by the attestation-signer chart)',
+            name: 'Local (Docker) - Deprecated',
             value: 'local'
           },
           {
-            description: 'Deploy attestation signers to AWS ECS Express Mode with KMS key management',
-            name: 'AWS (ECS Express + KMS)',
+            description: 'Deploy dummy attestation signers to AWS ECS Express Mode with KMS key management (deprecated, replaced by the attestation-signer chart)',
+            name: 'AWS (ECS Express + KMS) - Deprecated',
             value: 'aws'
           }
         ],
-        default: configuredProvider || 'local',
-        message: 'How would you like to run the dummy attestation signers?'
+        default: configuredProvider || 'k8s',
+        message: 'How would you like to run the attestation signers?'
       })
     }
 
     setConfiguredDummySignerProvider(this.dogeConfig, dummySignerProvider)
 
-    await (dummySignerProvider === 'local' ? this.setupLocalSigners(availableTags) : this.setupAwsSigners(availableTags));
+    switch (dummySignerProvider) {
+      case 'aws': {
+        await this.setupAwsSigners(availableTags)
+        break
+      }
+
+      case 'k8s': {
+        await this.setupK8sSigners()
+        break
+      }
+
+      default: {
+        await this.setupLocalSigners(availableTags)
+      }
+    }
   }
 
   private buildDockerArgs(index: number, config: any, network: string, tsoUrl: string, imageName: string): string[] {
@@ -1054,6 +1076,43 @@ export class DummySignersManager {
     }
   }
 
+  private async setupK8sSigners(): Promise<void> {
+    this.log(chalk.blue('\nSetting up in-cluster attestation signers (attestation-signer Helm chart)...'))
+
+    const numSigners = ATTESTATION_SIGNER_COUNT
+    this.log(chalk.cyan(`You will have ${numSigners} attestation signer keys, one attestation-signer release per key.`))
+
+    let generateWifKeys: boolean
+    if (this.nonInteractive) {
+      generateWifKeys = this.nonInteractiveOptions.generateWifKeys !== false // default true
+      this.log(chalk.blue(`Non-interactive mode: Generate WIF keys = ${generateWifKeys}`))
+    } else {
+      generateWifKeys = await confirm({
+        default: true,
+        message: 'Would you like to generate new WIF keys for the attestation signers?'
+      })
+    }
+
+    const signerConfigs = await this.collectSignerConfigs(numSigners, generateWifKeys)
+
+    this.writeAttestationSignerSecrets(signerConfigs)
+
+    // TSO reaches the signers through their in-cluster services.
+    this.dogeConfig.signerUrls = signerConfigs.map((_config, index) => getAttestationSignerServiceUrl(index))
+    this.saveConfigToFile(this.dogeConfig, this.configPath)
+
+    await this.updateSetupDefaultsWithLocalPublicKeys(signerConfigs)
+
+    this.showSignerUrlsSummary()
+
+    this.log(chalk.blue('\n📋 Next steps:'))
+    this.log(chalk.blue('  1. Push the WIF secrets: scrollsdk setup push-secrets'))
+    this.log(chalk.blue('  2. Prepare the chart values: scrollsdk setup prep-charts'))
+    this.log(chalk.blue(`  3. Deploy one attestation-signer release per key (attestation-signer-0..${numSigners - 1}) via Helm/Makefile`))
+
+    this.log(chalk.green('\n✅ Attestation signer setup completed!'))
+  }
+
   private async setupLocalSigners(availableTags: string[]): Promise<void> {
     this.log(chalk.blue('\nSetting up Local Dummy Signers...'))
 
@@ -1274,15 +1333,27 @@ export class DummySignersManager {
       this._warn(message)
     }
   }
+
+  private writeAttestationSignerSecrets(signerConfigs: Array<{ port: number, publicKey?: string, wif: string }>): void {
+    const secretsDir = path.join(process.cwd(), 'secrets')
+    this.ensureDirectoryExists(secretsDir)
+
+    for (const [index, config] of signerConfigs.entries()) {
+      const secretPath = path.join(secretsDir, `attestation-signer-${index}.env`)
+      fs.writeFileSync(secretPath, `ATTESTATION_SIGNER_WIF=${config.wif}\n`, { mode: 0o600 })
+      this.log(chalk.green(`✅ Wrote ${secretPath} (pushed as attestation-signer-${index}-env by push-secrets)`))
+    }
+  }
 }
 
 // Command class for oclif CLI
 export class DummySignersCommand extends Command {
-  static description = 'Set up three dummy attestation signers (local Docker or AWS with KMS)'
+  static description = 'Set up three attestation signers (in-cluster attestation-signer chart, local Docker, or AWS with KMS)'
 
   static examples = [
     '$ scrollsdk setup dummy-signers',
     '$ scrollsdk setup dummy-signers --config .data/doge-config.toml',
+    '$ scrollsdk setup dummy-signers --k8s-only',
     '$ scrollsdk setup dummy-signers --local-only',
     '$ scrollsdk setup dummy-signers --aws-only',
     '$ scrollsdk setup dummy-signers --image-tag v0.3.0-develop-643e7315',
@@ -1321,7 +1392,7 @@ export class DummySignersCommand extends Command {
       description: 'Path to Dogecoin config file',
     }),
     'from-spec': Flags.string({
-      description: 'Path to DeploymentSpec YAML. Uses dummy attestation signer defaults from signing.awsKms or signing.local.',
+      description: 'Path to DeploymentSpec YAML. Uses attestation signer defaults from signing.attestationSigner, signing.awsKms or signing.local.',
     }),
     'generate-wif-keys': Flags.boolean({
       allowNo: true,
@@ -1335,6 +1406,11 @@ export class DummySignersCommand extends Command {
     json: Flags.boolean({
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)',
+    }),
+    'k8s-only': Flags.boolean({
+      char: 'k',
+      default: false,
+      description: 'Set up in-cluster attestation signers (attestation-signer Helm chart) only',
     }),
     'local-only': Flags.boolean({
       char: 'l',
@@ -1415,18 +1491,21 @@ export class DummySignersCommand extends Command {
     }
 
     // Validate flags
-    if (flags['local-only'] && flags['aws-only']) {
+    const providerFlags = ['aws-only', 'k8s-only', 'local-only'].filter((flag) => flags[flag as keyof typeof flags])
+    if (providerFlags.length > 1) {
       this.jsonCtx.error(
         'E601_INVALID_VALUE',
-        'Cannot use both --local-only and --aws-only flags together',
+        `Cannot use ${providerFlags.map((flag) => `--${flag}`).join(' and ')} together`,
         'CONFIGURATION',
         true
       )
       // jsonCtx.error throws, so this is unreachable
     }
 
-    // Override dummy signer provider if flags are specified
-    if (flags['local-only']) {
+    // Override attestation signer provider if flags are specified
+    if (flags['k8s-only']) {
+      setConfiguredDummySignerProvider(this.dogeConfig, 'k8s')
+    } else if (flags['local-only']) {
       setConfiguredDummySignerProvider(this.dogeConfig, 'local')
     } else if (flags['aws-only']) {
       setConfiguredDummySignerProvider(this.dogeConfig, 'aws')

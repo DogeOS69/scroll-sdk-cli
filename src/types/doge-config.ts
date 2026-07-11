@@ -52,9 +52,9 @@ export interface DogeConfig {
     password?: string // for dogecoin that deploy on cluster
     username?: string // for dogecoin that deploy on cluster
   }
-  /** Dummy attestation signer runtime provider. This is independent from the Kubernetes infrastructure provider. */
+  /** Attestation signer runtime provider. This is independent from the Kubernetes infrastructure provider. */
   dummySigner?: {
-    provider?: 'aws' | 'local'
+    provider?: 'aws' | 'k8s' | 'local'
   }
   ethereumDa?: {
     batch?: {

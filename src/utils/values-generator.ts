@@ -406,6 +406,11 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
     files['cubesigner-signer-production.yaml'] = generateCubesignerValues(normalizedSpec)
   }
 
+  // In-cluster attestation signers (attestation-signer chart, one release per key)
+  if (normalizedSpec.signing.attestationSigner) {
+    files['attestation-signer-production.yaml'] = generateAttestationSignerValues(normalizedSpec)
+  }
+
   // Rollup services
   files['coordinator-api-production.yaml'] = generateCoordinatorApiValues(normalizedSpec)
   files['coordinator-cron-production.yaml'] = generateCoordinatorCronValues(normalizedSpec)
@@ -1301,6 +1306,114 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
       ...envSecrets,
       ...sessionSecrets
     }
+  }
+
+  return yaml.dump(values)
+}
+
+/**
+ * Generate attestation-signer values. Template with __INSTANCE_INDEX__
+ * placeholders; `setup prep-charts` expands it into one file per attestation
+ * key (attestation-signer-production-{0..N-1}.yaml), same pattern as
+ * cubesigner-signer. Uses the local (WIF) signer backend in staging_scaffold
+ * policy mode; the WIF is supplied via the attestation-signer-N-env secret
+ * pushed by `setup push-secrets` from secrets/attestation-signer-N.env.
+ */
+function generateAttestationSignerValues(spec: DeploymentSpec): string {
+  const secretConfig = getSecretProviderConfig(spec)
+
+  const image = resolveImage(spec, 'attestationSigner', {
+    pullPolicy: 'IfNotPresent',
+    repository: 'dogeos69/attestation-signer',
+    tag: 'latest'
+  })
+
+  const tsoUrl = spec.signing.tsoServiceUrl || 'http://tso-service:3000'
+
+  const signerToml = [
+    '[service]',
+    'port = 4040',
+    `network = "${spec.dogecoin.network}"`,
+    '',
+    '[policy]',
+    '# Audit-bridge mode: implemented checks stay enforced; NotImplemented',
+    '# checks are bypassed and recorded as BypassedScaffold.',
+    'mode = "staging_scaffold"',
+    'allow_unimplemented_checks = true',
+    '',
+    '[signer]',
+    'backend = "local"',
+    '# WIF supplied via ATTESTATION_SIGNER_WIF env (see env above).',
+    '',
+    '[tso]',
+    `url = "${tsoUrl}"`,
+    'callback_phase = "attestation"',
+    '',
+    '[database]',
+    'path = "/app/data/attestation-signer.sqlite"',
+    '',
+    '[envelope_policy]',
+    'max_proof_artifacts = 4',
+    'allowed_proof_triples = ""',
+    '',
+    '[proof_artifact_fetch]',
+    'mode = "disabled"',
+    ''
+  ].join('\n')
+
+  const values: Record<string, any> = {
+    configMaps: {
+      config: {
+        data: {
+          'attestation-signer.toml': signerToml
+        },
+        enabled: true
+      }
+    },
+    env: [
+      { name: 'RUST_LOG', value: 'info,attestation_signer=info' },
+      { name: 'ATTESTATION_SIGNER_WIF', valueFrom: { secretKeyRef: { key: 'ATTESTATION_SIGNER_WIF', name: 'attestation-signer-__INSTANCE_INDEX__-env' } } }
+    ],
+    global: {
+      fullnameOverride: 'attestation-signer-__INSTANCE_INDEX__'
+    },
+    image,
+    persistence: {
+      config: {
+        enabled: true,
+        mountPath: '/etc/dogeos/',
+        name: 'attestation-signer-__INSTANCE_INDEX__-config',
+        readOnly: true,
+        type: 'configMap'
+      },
+      data: {
+        accessMode: 'ReadWriteOnce',
+        enabled: true,
+        mountPath: '/app/data',
+        retain: true,
+        size: '1Gi',
+        type: 'pvc'
+      }
+    },
+    resources: {
+      limits: { cpu: '500m', memory: '512Mi' },
+      requests: { cpu: '50m', memory: '128Mi' }
+    },
+    serviceMonitor: {
+      main: { enabled: false }
+    }
+  }
+
+  const externalSecrets = generateExternalSecrets(
+    'attestation-signer-__INSTANCE_INDEX__-env',
+    secretConfig,
+    [
+      { property: 'ATTESTATION_SIGNER_WIF', remoteKey: 'attestation-signer-__INSTANCE_INDEX__-env', secretKey: 'ATTESTATION_SIGNER_WIF' }
+    ]
+  )
+
+  if (externalSecrets) {
+    values.externalSecrets = externalSecrets
   }
 
   return yaml.dump(values)

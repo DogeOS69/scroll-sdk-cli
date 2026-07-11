@@ -407,6 +407,10 @@ export function getAwsSignerConfigFromSpec(spec: DeploymentSpec): NonNullable<Do
 }
 
 export function getDummySignerProviderFromSpec(spec: DeploymentSpec): NonNullable<NonNullable<DogeConfig['dummySigner']>['provider']> | undefined {
+  if (spec.signing.attestationSigner) {
+    return 'k8s'
+  }
+
   if (spec.signing.awsKms) {
     return 'aws'
   }
@@ -762,7 +766,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     warnings.push({
       message: 'Attestation signer configuration is not set yet',
       path: 'signing',
-      suggestion: 'Configure signing.awsKms for ECS Express dummy-signers or signing.local for locally-run dummy-signers.',
+      suggestion: 'Configure signing.attestationSigner for the in-cluster attestation-signer Helm chart (recommended), signing.awsKms for ECS Express dummy-signers, or signing.local for locally-run dummy-signers.',
     })
   }
 
