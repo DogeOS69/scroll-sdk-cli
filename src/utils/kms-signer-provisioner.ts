@@ -6,6 +6,11 @@ import { createPublicKey } from 'node:crypto'
 import type { JsonOutputContext } from './json-output.js'
 import type { ManagedSignerConfig, ManagedSignerRole } from './signer-roles.js'
 
+export type KmsSignerProvisionRole = Pick<
+  ManagedSignerRole,
+  'aliasSuffix' | 'defaultServiceAccount' | 'description' | 'purposeTag' | 'role' | 'roleSuffix' | 'service'
+>
+
 export interface AwsCommandOptions {
   json?: boolean
   profile?: string
@@ -42,6 +47,7 @@ export interface KmsProvisionResult {
   aliasName: string
   keyArn: string
   keyId: string
+  publicKeyBase64: string
   roleArn?: string
   roleName?: string
   serviceAccount: string
@@ -107,7 +113,7 @@ export class KmsSignerProvisioner {
   ) {}
 
   async provision(
-    role: ManagedSignerRole,
+    role: KmsSignerProvisionRole,
     identity: KmsProvisionIdentity,
     input: KmsProvisionInput = {}
   ): Promise<KmsProvisionResult> {
@@ -126,7 +132,8 @@ export class KmsSignerProvisioner {
     }
 
     const keyInfo = this.ensureKmsKey(identity.awsRegion, aliasName, input.kmsKeyId, role)
-    const expectedAddress = this.deriveKmsExpectedAddress(identity.awsRegion, keyInfo.kmsKeyIdForConfig)
+    const publicKeyBase64 = this.fetchKmsPublicKey(identity.awsRegion, keyInfo.kmsKeyIdForConfig)
+    const expectedAddress = deriveEthereumAddressFromSpkiDer(publicKeyBase64)
     const roleArn = input.roleArn || this.ensureIamRole({
       archiveBucket: input.archive?.enabled ? input.archive.bucket : undefined,
       awsRegion: identity.awsRegion,
@@ -144,6 +151,7 @@ export class KmsSignerProvisioner {
       aliasName,
       keyArn: keyInfo.keyArn,
       keyId: keyInfo.keyId,
+      publicKeyBase64,
       roleArn,
       roleName,
       serviceAccount,
@@ -191,14 +199,6 @@ export class KmsSignerProvisioner {
 
   private awsText(args: string[], options: AwsCommandOptions = {}): string {
     return String(this.aws(args, options))
-  }
-
-  private deriveKmsExpectedAddress(awsRegion: string, keyId: string): string {
-    const publicKey = this.awsText(
-      ['kms', 'get-public-key', '--key-id', keyId],
-      { query: 'PublicKey', region: awsRegion }
-    )
-    return deriveEthereumAddressFromSpkiDer(publicKey)
   }
 
   private describeKey(awsRegion: string, keyId: string): any {
@@ -324,7 +324,7 @@ export class KmsSignerProvisioner {
     return roleArn
   }
 
-  private ensureKmsKey(awsRegion: string, aliasName: string, providedKeyId: string | undefined, role: ManagedSignerRole): {
+  private ensureKmsKey(awsRegion: string, aliasName: string, providedKeyId: string | undefined, role: KmsSignerProvisionRole): {
     keyArn: string
     keyId: string
     kmsKeyIdForConfig: string
@@ -426,6 +426,13 @@ export class KmsSignerProvisioner {
     ], { region })
     this.jsonCtx.info(`${service}: created S3 archive bucket: ${bucket} (region=${region}, public access blocked, SSE-S3)`)
     return true
+  }
+
+  private fetchKmsPublicKey(awsRegion: string, keyId: string): string {
+    return this.awsText(
+      ['kms', 'get-public-key', '--key-id', keyId],
+      { query: 'PublicKey', region: awsRegion }
+    )
   }
 
   private findKmsAlias(awsRegion: string, aliasName: string): any | undefined {

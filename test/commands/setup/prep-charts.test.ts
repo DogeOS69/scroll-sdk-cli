@@ -1,6 +1,8 @@
 import { expect } from 'chai'
 
 import {
+  applyAttestationSignerNetwork,
+  applyAttestationSignerRuntimeValues,
   applyConfigMapEnvValues,
   applyEthDaSubmitterInitialBatchSidecar,
   applyFeeOracleCurrentEnv,
@@ -28,6 +30,79 @@ const VALID_PREP_CUTOVER = {
   stateRoot: '0x3333333333333333333333333333333333333333333333333333333333333333',
   withdrawRoot: '0x4444444444444444444444444444444444444444444444444444444444444444',
 }
+
+describe('setup prep-charts attestation-signer updates', () => {
+  it('updates the structured network without touching other signer settings', () => {
+    const values = {
+      attestationSigner: {
+        network: 'regtest',
+        profile: 'staging-local',
+        tso: { url: 'http://tso-service:3000' },
+      },
+    }
+
+    const changes = applyAttestationSignerNetwork(values, 'testnet')
+
+    expect(values.attestationSigner.network).to.equal('testnet')
+    expect(values.attestationSigner.profile).to.equal('staging-local')
+    expect(values.attestationSigner.tso.url).to.equal('http://tso-service:3000')
+    expect(changes).to.deep.equal([{
+      key: 'attestationSigner.network',
+      newValue: 'testnet',
+      oldValue: 'regtest',
+    }])
+  })
+
+  it('does not parse or create legacy embedded TOML config', () => {
+    const values = {
+      configMaps: {
+        config: {
+          data: {
+            'attestation-signer.toml': 'network = "regtest"',
+          },
+        },
+      },
+    }
+
+    expect(applyAttestationSignerNetwork(values, 'testnet')).to.deep.equal([])
+    expect(values.configMaps.config.data['attestation-signer.toml']).to.equal('network = "regtest"')
+  })
+
+  it('writes per-instance KMS and IRSA values without an ExternalSecret', () => {
+    const values: any = {
+      attestationSigner: { network: 'testnet', profile: 'staging-local' },
+      externalSecrets: {
+        'attestation-signer-1-env': {
+          data: [{ remoteRef: { key: 'dogeos/attestation-signer-1-env', property: 'ATTESTATION_SIGNER_WIF' }, secretKey: 'ATTESTATION_SIGNER_WIF' }],
+        },
+      },
+    }
+    const signerConfig = {
+      backend: 'aws_kms' as const,
+      kms: {
+        instances: [{
+          expectedSignerId: `02${'ab'.repeat(32)}`,
+          index: 1,
+          kmsKeyId: 'alias/dogeos/attestation-1',
+          roleArn: 'arn:aws:iam::123456789012:role/attestation-1',
+          serviceAccount: 'attestation-signer-1',
+        }],
+        region: 'us-west-2',
+      },
+      profile: 'staging-kms' as const,
+    }
+
+    applyAttestationSignerRuntimeValues(values, 'testnet', signerConfig, 1)
+
+    expect(values.attestationSigner.profile).to.equal('staging-kms')
+    expect(values.attestationSigner.kms.region).to.equal('us-west-2')
+    expect(values.attestationSigner.kms.expectedSignerId).to.equal(`02${'ab'.repeat(32)}`)
+    expect(values.attestationSigner.kms.keyId).to.equal('alias/dogeos/attestation-1')
+    expect(values.attestationSigner).not.to.have.property('local')
+    expect(values).not.to.have.property('externalSecrets')
+    expect(values.serviceAccount.annotations['eks.amazonaws.com/role-arn']).to.equal('arn:aws:iam::123456789012:role/attestation-1')
+  })
+})
 
 describe('setup prep-charts L2 contract deployment block updates', () => {
   it('does not skip L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK by default', () => {

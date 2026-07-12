@@ -23,6 +23,24 @@ export interface DogeConfig {
     L2_GAS_ORACLE_SENDER_ADDR?: string
     L2_GAS_ORACLE_SENDER_PRIVATE_KEY?: string
   }
+  attestationSigner?: {
+    backend: 'aws_kms' | 'local'
+    kms?: {
+      awsProfile?: string
+      eksCluster?: string
+      instances: Array<{
+        expectedSignerId: string
+        index: number
+        kmsKeyId: string
+        roleArn: string
+        serviceAccount: string
+      }>
+      namespace?: string
+      networkAlias?: string
+      region: string
+    }
+    profile: 'staging-kms' | 'staging-local'
+  }
   awsSigner?: {
     accountId?: string
     ecsClusterName?: string

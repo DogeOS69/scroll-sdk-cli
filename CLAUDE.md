@@ -34,7 +34,7 @@ yarn mocha --forbid-only "test/path/to/file.test.ts"
 
 Commands follow oclif conventions in `src/commands/` with topic-based organization:
 - `setup/` - Infrastructure setup (domains, db-init, configs, prep-charts, push-secrets, tls)
-- `doge/` - Dogecoin-specific operations (config, wallet/, bridge-init, dummy-signers)
+- `doge/` - Dogecoin-specific operations (config, wallet/, bridge-init, attestation-signer)
 - `helper/` - Utility commands (activity, fund-accounts, set-scalars)
 - `test/` - Testing commands (contracts, e2e, dogeos, ingress, dependencies)
 - `check/` - Prerequisite checks

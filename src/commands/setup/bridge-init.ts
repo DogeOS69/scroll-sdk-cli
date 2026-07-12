@@ -500,7 +500,7 @@ export class BridgeInitCommand extends Command {
     this.assertFileExists(
       setupDefaultsPath,
       'E103_DOGE_CONFIG_MISSING',
-      'Run `scrollsdk setup doge-config`, then `scrollsdk setup dummy-signers` first.'
+      'Run `scrollsdk setup doge-config`, then `scrollsdk setup attestation-signer` first.'
     )
 
     const setupDefaults = toml.parse(fs.readFileSync(setupDefaultsPath, 'utf8')) as any
@@ -511,7 +511,7 @@ export class BridgeInitCommand extends Command {
     if (!Array.isArray(attestationPubkeys) || attestationPubkeys.length === 0) {
       this.jsonCtx.error(
         'E103_ATTESTATION_PUBKEYS_MISSING',
-        'Attestation public keys are missing from .data/setup_defaults.toml. Run `scrollsdk setup dummy-signers` before `scrollsdk setup bridge-init`.',
+        'Attestation public keys are missing from .data/setup_defaults.toml. Run `scrollsdk setup attestation-signer` before `scrollsdk setup bridge-init`.',
         'CONFIGURATION',
         true,
         { path: setupDefaultsPath }
@@ -534,7 +534,7 @@ export class BridgeInitCommand extends Command {
     if (!Number.isInteger(attestationKeyCount) || attestationKeyCount !== attestationPubkeys.length) {
       this.jsonCtx.error(
         'E602_INVALID_ATTESTATION_PUBKEYS',
-        `attestation_key_count (${setupDefaults.attestation_key_count}) must match attestation_pubkeys length (${attestationPubkeys.length}). Run \`scrollsdk setup dummy-signers\` again.`,
+        `attestation_key_count (${setupDefaults.attestation_key_count}) must match attestation_pubkeys length (${attestationPubkeys.length}). Run \`scrollsdk setup attestation-signer\` again.`,
         'CONFIGURATION',
         true,
         {
@@ -551,7 +551,7 @@ export class BridgeInitCommand extends Command {
     ) {
       this.jsonCtx.error(
         'E602_INVALID_ATTESTATION_THRESHOLD',
-        `attestation_threshold must be between 1 and ${attestationPubkeys.length}. Run \`scrollsdk setup dummy-signers\` again.`,
+        `attestation_threshold must be between 1 and ${attestationPubkeys.length}. Run \`scrollsdk setup attestation-signer\` again.`,
         'CONFIGURATION',
         true,
         {

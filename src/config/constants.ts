@@ -43,7 +43,7 @@ export const SETUP_DEFAULTS_TEMPLATE = getSetupDefaultsTemplate()
 export const DOGE_CONFIG_TEMPLATE = getDogeConfigTemplate()
 
 /**
- * Attestation signer deployment shape shared by dummy-signers, prep-charts and
+ * Attestation signer deployment shape shared by attestation-signer, prep-charts and
  * the values generator. One attestation-signer chart release per key.
  */
 export const ATTESTATION_SIGNER_COUNT = 3

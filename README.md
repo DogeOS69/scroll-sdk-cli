@@ -52,7 +52,7 @@ A tool for configuring, managing, and testing [Scroll SDK](https://docs.scroll.i
    ```
 
 7. ```bash
-   scrollsdk setup dummy-signers
+   scrollsdk setup attestation-signer
    ```
 
 8. ```bash
@@ -325,7 +325,7 @@ USAGE
   - [`scrollsdk setup doge-config`](#scrollsdk-setup-doge-config)
   - [`scrollsdk setup dogecoin-wallet-import`](#scrollsdk-setup-dogecoin-wallet-import)
   - [`scrollsdk setup domains`](#scrollsdk-setup-domains)
-  - [`scrollsdk setup dummy-signers`](#scrollsdk-setup-dummy-signers)
+  - [`scrollsdk setup attestation-signer`](#scrollsdk-setup-attestation-signer)
   - [`scrollsdk setup gas-token`](#scrollsdk-setup-gas-token)
   - [`scrollsdk setup gen-keystore`](#scrollsdk-setup-gen-keystore)
   - [`scrollsdk setup gen-l2-artifacts`](#scrollsdk-setup-gen-l2-artifacts)
@@ -1247,20 +1247,22 @@ EXAMPLES
 
 _See code: [src/commands/setup/domains.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/domains.ts)_
 
-## `scrollsdk setup dummy-signers`
+## `scrollsdk setup attestation-signer`
 
-Set up three dummy attestation signers (local Docker or AWS with KMS)
+Set up three attestation signers (in-cluster local/KMS chart, deprecated local Docker, or deprecated AWS ECS)
 
 ```
 USAGE
-  $ scrollsdk setup dummy-signers [--aws-account-id <value>] [--aws-ecs-cluster <value>] [--aws-image-source
+  $ scrollsdk setup attestation-signer [--aws-account-id <value>] [--aws-ecs-cluster <value>] [--aws-image-source
     dockerhub|ecr|ecr-sync] [--aws-image-uri <value>] [--aws-network-alias <value>] [-a] [--aws-region <value>] [-c <value>]
-    [--from-spec <value>] [--generate-wif-keys] [--image-tag <value>] [--json] [-l] [-N]
+    [--eks-cluster <value>] [--from-spec <value>] [--generate-wif-keys] [--image-tag <value>] [--json] [-k]
+    [--namespace <value>] [--network-alias <value>] [-l] [-N]
 
 FLAGS
   -N, --non-interactive            Run without prompts. Uses config values or sensible defaults.
   -a, --aws-only                   Set up AWS KMS attestation signers only
   -c, --config=<value>             Path to Dogecoin config file
+  -k, --k8s-only                   Set up in-cluster attestation signers (attestation-signer Helm chart) only
   -l, --local-only                 Set up local Docker attestation signers only
       --aws-account-id=<value>     AWS account ID
       --aws-ecs-cluster=<value>    ECS cluster for AWS ECS Express dummy attestation signer services. Defaults to
@@ -1270,32 +1272,51 @@ FLAGS
                                    <options: dockerhub|ecr|ecr-sync>
       --aws-image-uri=<value>      Full container image URI for AWS attestation signers. Overrides --aws-image-source.
       --aws-network-alias=<value>  Network alias for AWS resources
+      --aws-profile=<value>        AWS CLI profile used to provision in-cluster KMS and IAM resources
       --aws-region=<value>         AWS region for KMS attestation signers
-      --from-spec=<value>          Path to DeploymentSpec YAML. Uses dummy attestation signer defaults from signing.awsKms or
-                                   signing.local.
+      --eks-cluster=<value>        EKS cluster name used to configure IRSA trust policies
+      --from-spec=<value>          Path to DeploymentSpec YAML. Uses attestation signer defaults from
+                                   signing.attestationSigner, signing.awsKms or signing.local.
       --[no-]generate-wif-keys     Generate new attestation WIF keys (non-interactive mode)
       --image-tag=<value>          Specify the Docker image tag to use
       --json                       Output in JSON format (stdout for data, stderr for logs)
+      --k8s-signer-backend=<option>  Signer backend for Kubernetes releases: local or aws-kms
+      --kms-key-ids=<value>        Optional existing KMS keys; omit to create or reuse deterministic aliases
+      --kms-role-arns=<value>      Optional existing IRSA roles; omit to create or update deterministic IAM roles
+      --kms-service-accounts=<value>  Optional comma-separated Kubernetes ServiceAccount names
+      --namespace=<value>          Kubernetes namespace used in IRSA trust policies
+      --network-alias=<value>      Resource alias used in KMS aliases and IAM role names
 DESCRIPTION
-  Set up three dummy attestation signers (local Docker or AWS with KMS)
+  Set up three attestation signers (in-cluster local/KMS chart, deprecated local Docker, or deprecated AWS ECS)
 
 EXAMPLES
-  $ scrollsdk setup dummy-signers
+  $ scrollsdk setup attestation-signer
 
-  $ scrollsdk setup dummy-signers --config .data/doge-config.toml
+  $ scrollsdk setup attestation-signer --config .data/doge-config.toml
 
-  $ scrollsdk setup dummy-signers --local-only
+  $ scrollsdk setup attestation-signer --k8s-only
 
-  $ scrollsdk setup dummy-signers --aws-only
+  $ scrollsdk setup attestation-signer --k8s-only --k8s-signer-backend aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet-cluster --network-alias testnet --namespace default
 
-  $ scrollsdk setup dummy-signers --image-tag v0.3.0-develop-643e7315
+  $ scrollsdk setup attestation-signer --local-only
 
-  $ scrollsdk setup dummy-signers --aws-only --aws-image-source ecr-sync
+  $ scrollsdk setup attestation-signer --aws-only
 
-  $ scrollsdk setup dummy-signers --aws-only --aws-image-uri dogeos69/dummy-signer:v0.3.0-develop-643e7315
+  $ scrollsdk setup attestation-signer --image-tag v0.3.0-develop-643e7315
+
+  $ scrollsdk setup attestation-signer --aws-only --aws-image-source ecr-sync
+
+  $ scrollsdk setup attestation-signer --aws-only --aws-image-uri dogeos69/dummy-signer:v0.3.0-develop-643e7315
 ```
 
-_See code: [src/commands/setup/dummy-signers.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/dummy-signers.ts)_
+For the Kubernetes AWS KMS backend, the command follows the same managed-signer model as
+`setup eth-da-submitter`: it creates or reuses three `ECC_SECG_P256K1` KMS keys, creates or
+updates one IRSA IAM role per signer, binds each role to `namespace/attestation-signer-N`, and
+grants `kms:GetPublicKey` plus `kms:Sign`. Existing resources can still be supplied through
+`--kms-key-ids` and `--kms-role-arns`. The active AWS identity needs KMS, IAM, EKS describe,
+and STS caller-identity permissions; the EKS cluster must already have an IAM OIDC provider.
+
+_See code: [src/commands/setup/attestation-signer.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/attestation-signer.ts)_
 
 ## `scrollsdk setup gas-token`
 

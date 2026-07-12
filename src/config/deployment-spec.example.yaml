@@ -118,9 +118,14 @@ signing:
   # CubeSigner provides the single TEE key. Roles are populated by `scrollsdk setup cubesigner-init`.
   cubesigner: {}
   # Attestation keys are served in-cluster by the attestation-signer Helm chart,
-  # one release per key (attestation-signer-0..2). `scrollsdk setup dummy-signers`
-  # generates the WIF keys and writes secrets/attestation-signer-N.env for push-secrets.
-  attestationSigner: {}
+  # one release per key (attestation-signer-0..2). `scrollsdk setup attestation-signer`
+  # configures local WIF or provisions/reuses KMS keys and IRSA roles. Only the
+  # local WIF backend writes secrets/attestation-signer-N.env for push-secrets.
+  # Generated values allocate a 5Gi durable SQLite PVC per signer because the
+  # audit history and anti-double-sign ledger have no automatic retention.
+  attestationSigner:
+    profile: staging-local
+    # profile: staging-kms # setup attestation-signer provisions KMS keys and IRSA roles
   # Deprecated alternatives, replaced by attestationSigner:
   # awsKms:            # dummy signers on AWS ECS Express + KMS
   #   accountId: "123456789012"

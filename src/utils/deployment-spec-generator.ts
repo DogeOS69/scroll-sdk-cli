@@ -735,7 +735,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     })
   }
 
-  // Signing validation. CubeSigner provides the TEE key; dummy-signers provides attestation keys.
+  // Signing validation. CubeSigner provides the TEE key; attestation-signer provides attestation keys.
   if (!spec.signing?.cubesigner?.roles || spec.signing.cubesigner.roles.length === 0) {
     warnings.push({
       message: 'CubeSigner TEE role is not set yet',
@@ -744,11 +744,22 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     })
   }
 
+  if (
+    spec.signing?.attestationSigner
+    && !['staging-kms', 'staging-local'].includes(spec.signing.attestationSigner.profile)
+  ) {
+    errors.push({
+      code: 'E002_MISSING_REQUIRED_FIELD',
+      message: 'CLI-managed attestation signers require an explicit staging-local or staging-kms profile',
+      path: 'signing.attestationSigner.profile',
+    })
+  }
+
   if (spec.signing?.awsKms) {
     if (!spec.signing.awsKms.accountId) {
       errors.push({
         code: 'E002_MISSING_REQUIRED_FIELD',
-        message: 'AWS account ID is required for ECS Express dummy-signers',
+        message: 'AWS account ID is required for ECS Express attestation signers',
         path: 'signing.awsKms.accountId',
       })
     }
@@ -756,7 +767,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     if (!spec.signing.awsKms.region) {
       errors.push({
         code: 'E002_MISSING_REQUIRED_FIELD',
-        message: 'AWS region is required for ECS Express dummy-signers',
+        message: 'AWS region is required for ECS Express attestation signers',
         path: 'signing.awsKms.region',
       })
     }
@@ -766,7 +777,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     warnings.push({
       message: 'Attestation signer configuration is not set yet',
       path: 'signing',
-      suggestion: 'Configure signing.attestationSigner for the in-cluster attestation-signer Helm chart (recommended), signing.awsKms for ECS Express dummy-signers, or signing.local for locally-run dummy-signers.',
+      suggestion: 'Configure signing.attestationSigner for the in-cluster attestation-signer Helm chart (recommended), signing.awsKms for ECS Express attestation signers, or signing.local for locally-run attestation signers.',
     })
   }
 

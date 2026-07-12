@@ -101,6 +101,95 @@ export interface PrepChartChange {
   oldValue: string
 }
 
+export function applyAttestationSignerNetwork(
+  productionYaml: any,
+  network: string
+): PrepChartChange[] {
+  const { attestationSigner } = productionYaml
+  if (!attestationSigner || typeof attestationSigner !== 'object') return []
+
+  const { network: oldNetwork } = attestationSigner
+  if (oldNetwork === network) return []
+
+  attestationSigner.network = network
+  return [{
+    key: 'attestationSigner.network',
+    newValue: network,
+    oldValue: String(oldNetwork ?? 'undefined'),
+  }]
+}
+
+export function applyAttestationSignerRuntimeValues(
+  productionYaml: any,
+  network: string,
+  signerConfig: DogeConfig['attestationSigner'],
+  instanceIndex: number
+): PrepChartChange[] {
+  const changes = applyAttestationSignerNetwork(productionYaml, network)
+  const { attestationSigner } = productionYaml
+  if (!attestationSigner || typeof attestationSigner !== 'object' || !signerConfig) return changes
+
+  const secretName = `attestation-signer-${instanceIndex}-env`
+  const externalSecretEntry = Object.entries(productionYaml.externalSecrets || {})
+    .find(([name]) => name === secretName)
+    || Object.entries(productionYaml.externalSecrets || {})[0]
+  const externalSecret = externalSecretEntry?.[1] as any
+  const secretData = externalSecret?.data?.[0]
+
+  if (signerConfig.backend === 'aws_kms') {
+    const instance = signerConfig.kms?.instances.find(item => item.index === instanceIndex)
+    if (!instance || !signerConfig.kms) return changes
+
+    attestationSigner.profile = 'staging-kms'
+    attestationSigner.kms ||= {}
+    attestationSigner.kms.keyId = instance.kmsKeyId
+    attestationSigner.kms.region = signerConfig.kms.region
+    attestationSigner.kms.expectedSignerId = instance.expectedSignerId
+    delete attestationSigner.kms.keyIdSecretRef
+    delete attestationSigner.local
+    productionYaml.serviceAccount = {
+      annotations: { 'eks.amazonaws.com/role-arn': instance.roleArn },
+      create: true,
+      name: instance.serviceAccount,
+    }
+    if (externalSecretEntry) {
+      delete productionYaml.externalSecrets[externalSecretEntry[0]]
+      if (Object.keys(productionYaml.externalSecrets).length === 0) {
+        delete productionYaml.externalSecrets
+      }
+    }
+
+    changes.push(
+      { key: 'attestationSigner.profile', newValue: 'staging-kms', oldValue: 'staging-local' },
+      { key: 'attestationSigner.kms.expectedSignerId', newValue: instance.expectedSignerId, oldValue: 'undefined' },
+      { key: 'attestationSigner.kms.keyId', newValue: instance.kmsKeyId, oldValue: 'undefined' },
+      { key: 'attestationSigner.kms.region', newValue: signerConfig.kms.region, oldValue: 'undefined' },
+      { key: 'serviceAccount.name', newValue: instance.serviceAccount, oldValue: 'undefined' },
+    )
+    return changes
+  }
+
+  const oldProfile = attestationSigner.profile
+  attestationSigner.profile = 'staging-local'
+  attestationSigner.local ||= {}
+  attestationSigner.local.wifSecretRef = {
+    key: 'ATTESTATION_SIGNER_WIF',
+    name: secretName,
+  }
+  delete productionYaml.serviceAccount
+  if (secretData) {
+    secretData.remoteRef ||= {}
+    secretData.remoteRef.property = 'ATTESTATION_SIGNER_WIF'
+    secretData.secretKey = 'ATTESTATION_SIGNER_WIF'
+  }
+
+  if (oldProfile !== 'staging-local') {
+    changes.push({ key: 'attestationSigner.profile', newValue: 'staging-local', oldValue: String(oldProfile ?? 'undefined') })
+  }
+
+  return changes
+}
+
 const ETH_DA_ZERO_HASH = '0x0000000000000000000000000000000000000000000000000000000000000000'
 
 const FEE_ORACLE_LEGACY_CONFIGMAP_PREFIXES = [
@@ -1476,7 +1565,17 @@ export default class SetupPrepCharts extends Command {
 
         const destFilePath = path.join(valuesDir, `${chartName}-production-${releaseIndex}.yaml`);
 
-        const newYamlContent = templateContent.replaceAll('__INSTANCE_INDEX__', releaseIndex.toString());
+        let newYamlContent = templateContent.replaceAll('__INSTANCE_INDEX__', releaseIndex.toString());
+        if (chartName === 'attestation-signer') {
+          const instanceValues = yaml.load(newYamlContent) as any
+          applyAttestationSignerRuntimeValues(
+            instanceValues,
+            this.dogeConfig.network,
+            this.dogeConfig.attestationSigner,
+            releaseIndex
+          )
+          newYamlContent = yaml.dump(instanceValues, YAML_DUMP_OPTIONS)
+        }
 
         if (!fs.existsSync(destFilePath)) {
           fs.writeFileSync(destFilePath, newYamlContent);
@@ -1514,6 +1613,12 @@ export default class SetupPrepCharts extends Command {
 
       if (file === 'l2-reth-sequencer-production.yaml') {
         this.jsonCtx.info(`Skipping reth sequencer template ${file}`)
+        skippedCharts++
+        continue
+      }
+
+      if (file === 'attestation-signer-production.yaml') {
+        this.jsonCtx.info(`Skipping attestation signer template ${file}`)
         skippedCharts++
         continue
       }
@@ -2272,13 +2377,6 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_MAX_DEPOSITS_PER_ADVANCE_L1": "32",
           "DOGEOS_WITHDRAWAL_MAX_WITHDRAWAL_OUTPUTS_PER_TX": "256",
           "DOGEOS_WITHDRAWAL_NETWORK_STR": this.withdrawalProcessorConfig.network_str,
-          "DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__ENABLED": "false",
-          "DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__LEASE_OWNER": "wp-local",
-          "DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__LEASE_TTL_MS": "30000",
-          "DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__MAX_ITEMS_PER_TICK": "1",
-          "DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__POLL_INTERVAL_MS": "1000",
-          "DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__RETRY_BASE_MS": "5000",
-          "DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__RETRY_CAP_MS": "300000",
           "DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__SKIP_BRIDGE_STATE_PROOFS": "true",
           "DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__SKIP_SCROLL_EXECUTION_PROOFS": "true",
           "DOGEOS_WITHDRAWAL_REQUIRE_CHANGE_TRACKING": "false",
@@ -2420,22 +2518,19 @@ export default class SetupPrepCharts extends Command {
         }
       }
       else if (chartName === "attestation-signer") {
-        // Non-secret signer config lives in an embedded TOML string; keep its
-        // network in sync with doge-config without disturbing the rest.
-        const configData = productionYaml.configMaps?.config?.data
-        const tomlKey = 'attestation-signer.toml'
-        if (configData?.[tomlKey]) {
-          const oldToml = String(configData[tomlKey])
-          const newToml = oldToml.replace(/^network = ".*"$/m, `network = "${this.dogeConfig.network}"`)
-          if (newToml !== oldToml) {
-            configData[tomlKey] = newToml
-            updated = true
-            changes.push({
-              key: `configMaps.config.data['${tomlKey}'].service.network`,
-              newValue: this.dogeConfig.network,
-              oldValue: oldToml.match(/^network = "(.*)"$/m)?.[1] ?? 'undefined',
-            })
-          }
+        if (!productionYaml.attestationSigner) {
+          this.error(`${chartName}: attestationSigner structured config not found`)
+        }
+
+        const attestationSignerChanges = applyAttestationSignerRuntimeValues(
+          productionYaml,
+          this.dogeConfig.network,
+          this.dogeConfig.attestationSigner,
+          Number(productionNumber)
+        )
+        if (attestationSignerChanges.length > 0) {
+          updated = true
+          changes.push(...attestationSignerChanges)
         }
       }
       else if (chartName === "eth-da-submitter") {

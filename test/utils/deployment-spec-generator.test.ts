@@ -648,6 +648,31 @@ describe('deployment-spec-generator', () => {
       expect(result.warnings.some(w => w.path === 'signing.cubesigner.roles')).to.be.true;
     });
 
+    it('requires an explicit supported profile for CLI-managed attestation signers', () => {
+      const spec = createMinimalSpec();
+      spec.signing = {
+        attestationSigner: {} as any,
+        cubesigner: { roles: [] },
+      };
+
+      const result = validateDeploymentSpec(spec);
+
+      expect(result.valid).to.be.false;
+      expect(result.errors.some(error => error.path === 'signing.attestationSigner.profile')).to.be.true;
+    });
+
+    it('accepts the explicit staging-kms profile for CLI-managed attestation signers', () => {
+      const spec = createMinimalSpec();
+      spec.signing = {
+        attestationSigner: { profile: 'staging-kms' },
+        cubesigner: { roles: [] },
+      };
+
+      const result = validateDeploymentSpec(spec);
+
+      expect(result.errors.some(error => error.path === 'signing.attestationSigner.profile')).to.be.false;
+    });
+
     it('fails when ECS Express dummy signer account or region is missing', () => {
       const spec = createMinimalSpec();
       spec.signing = {
@@ -1090,7 +1115,7 @@ describe('deployment-spec-generator', () => {
 
       const k8sSpec = createMinimalSpec();
       k8sSpec.signing = {
-        attestationSigner: {},
+        attestationSigner: { profile: 'staging-local' },
         cubesigner: { roles: [] },
       };
       const k8sOutput = toml.parse(generateDogeConfigToml(k8sSpec)) as any;
@@ -1100,7 +1125,7 @@ describe('deployment-spec-generator', () => {
     it('prefers the attestation-signer chart provider over deprecated dummy signer configs', () => {
       const spec = createMinimalSpec();
       spec.signing = {
-        attestationSigner: {},
+        attestationSigner: { profile: 'staging-local' },
         awsKms: { accountId: '1', region: 'r' },
         cubesigner: { roles: [] },
         local: { signers: [] },
@@ -1366,7 +1391,7 @@ describe('deployment-spec-generator', () => {
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_MAX_WITHDRAWAL_OUTPUTS_PER_TX).to.equal('256');
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_MAX_DEPOSITS_PER_ADVANCE_L1).to.equal('32');
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__SKIP_SCROLL_EXECUTION_PROOFS).to.equal('true');
-      expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__ENABLED).to.equal('false');
+      expect(Object.keys(withdrawalRuntimeEnv).filter(key => key.startsWith('DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__'))).to.deep.equal([]);
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__STRATEGY).to.equal('band');
       expect(withdrawalValuesForRuntime.externalSecrets['withdrawal-processor-secret-env'].data.map((item: any) => item.secretKey))
         .to.include.members([
@@ -1603,6 +1628,37 @@ describe('deployment-spec-generator', () => {
 
       expect(withdrawalEnv.DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT).to.equal('8200000');
       expect(withdrawalEnv.DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__START_BLOCK).to.equal('12345678');
+    });
+
+    it('generates structured attestation-signer values without embedded application TOML', () => {
+      const spec = createMinimalSpec();
+      spec.signing = {
+        attestationSigner: { profile: 'staging-local' },
+        cubesigner: { roles: [] },
+        tsoServiceUrl: 'http://custom-tso:3000',
+      };
+
+      const files = generateValuesFiles(spec);
+      const values = yaml.load(files['attestation-signer-production.yaml']) as any;
+
+      expect(values.attestationSigner).to.deep.include({
+        network: 'testnet',
+        port: 4040,
+        profile: 'staging-local',
+      });
+      expect(values.attestationSigner.tso).to.deep.equal({
+        callbackPhase: 'attestation',
+        url: 'http://custom-tso:3000',
+      });
+      expect(values.attestationSigner.local.wifSecretRef).to.deep.equal({
+        key: 'ATTESTATION_SIGNER_WIF',
+        name: 'attestation-signer-__INSTANCE_INDEX__-env',
+      });
+      expect(values.persistence.data.size).to.equal('5Gi');
+      expect(values).not.to.have.property('configMaps');
+      expect(values).not.to.have.property('env');
+      expect(files['attestation-signer-production.yaml']).not.to.include('attestation-signer.toml');
+      expect(values.persistence).not.to.have.property('config');
     });
   });
 

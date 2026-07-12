@@ -528,6 +528,8 @@ export interface BridgeConfig {
 export interface SigningConfig {
   /** In-cluster attestation signers deployed with the attestation-signer Helm chart (one release per key). Replaces the dummy-signer local/aws runtimes. */
   attestationSigner?: {
+    /** Explicit security profile. The CLI configures local WIF or existing AWS KMS keys; configure production-kms through the chart's production values. */
+    profile: 'staging-kms' | 'staging-local'
     /** Number of attestation signer instances. Defaults to 3. */
     signerCount?: number
   }

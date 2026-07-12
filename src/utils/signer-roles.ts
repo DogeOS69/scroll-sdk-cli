@@ -1,6 +1,6 @@
 export type ManagedSignerKey = 'l1CommitSender' | 'l2GasOracleSender'
 export type ManagedSignerBackend = 'aws_kms' | 'local'
-export type ManagedSignerService = 'eth-da-submitter' | 'fee-oracle' | 'sequencer-reth'
+export type ManagedSignerService = 'attestation-signer' | 'eth-da-submitter' | 'fee-oracle' | 'sequencer-reth'
 
 export interface ManagedSignerRole {
   accountPrefix: 'L1_COMMIT_SENDER' | 'L2_GAS_ORACLE_SENDER' | 'SEQUENCER_RETH_SIGNER'

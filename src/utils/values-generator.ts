@@ -401,7 +401,7 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
   files['tso-service-production.yaml'] = generateTsoServiceValues(normalizedSpec)
   files['withdrawal-processor-production.yaml'] = generateWithdrawalProcessorValues(normalizedSpec)
 
-  // CubeSigner provides the TEE key. Dummy signers provide attestation keys.
+  // CubeSigner provides the TEE key. Attestation signers provide attestation keys.
   if (normalizedSpec.signing.cubesigner) {
     files['cubesigner-signer-production.yaml'] = generateCubesignerValues(normalizedSpec)
   }
@@ -1147,13 +1147,6 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__FLOOR_ABSOLUTE_SATS', value: '1000000' },
       { name: 'DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__SKIP_SCROLL_EXECUTION_PROOFS', value: 'true' },
       { name: 'DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__SKIP_BRIDGE_STATE_PROOFS', value: 'true' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__ENABLED', value: 'false' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__LEASE_OWNER', value: 'wp-local' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__LEASE_TTL_MS', value: '30000' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__MAX_ITEMS_PER_TICK', value: '1' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__POLL_INTERVAL_MS', value: '1000' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__RETRY_BASE_MS', value: '5000' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__RETRY_CAP_MS', value: '300000' },
       // Ethereum DA resolver/indexer inputs for AdvanceL2 builder v2.
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL', value: getEthereumDaSubmitterRpcUrl(spec) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID', value: String(getEthereumDaChainId(spec)) },
@@ -1315,9 +1308,9 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
  * Generate attestation-signer values. Template with __INSTANCE_INDEX__
  * placeholders; `setup prep-charts` expands it into one file per attestation
  * key (attestation-signer-production-{0..N-1}.yaml), same pattern as
- * cubesigner-signer. Uses the local (WIF) signer backend in staging_scaffold
- * policy mode; the WIF is supplied via the attestation-signer-N-env secret
- * pushed by `setup push-secrets` from secrets/attestation-signer-N.env.
+ * cubesigner-signer. The chart owns the application configuration contract;
+ * this generator supplies structured staging-local values and a WIF Secret
+ * reference instead of embedding an application TOML file.
  */
 function generateAttestationSignerValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
@@ -1330,68 +1323,44 @@ function generateAttestationSignerValues(spec: DeploymentSpec): string {
 
   const tsoUrl = spec.signing.tsoServiceUrl || 'http://tso-service:3000'
 
-  const signerToml = [
-    '[service]',
-    'port = 4040',
-    `network = "${spec.dogecoin.network}"`,
-    '',
-    '[policy]',
-    '# Audit-bridge mode: implemented checks stay enforced; NotImplemented',
-    '# checks are bypassed and recorded as BypassedScaffold.',
-    'mode = "staging_scaffold"',
-    'allow_unimplemented_checks = true',
-    '',
-    '[signer]',
-    'backend = "local"',
-    '# WIF supplied via ATTESTATION_SIGNER_WIF env (see env above).',
-    '',
-    '[tso]',
-    `url = "${tsoUrl}"`,
-    'callback_phase = "attestation"',
-    '',
-    '[database]',
-    'path = "/app/data/attestation-signer.sqlite"',
-    '',
-    '[envelope_policy]',
-    'max_proof_artifacts = 4',
-    'allowed_proof_triples = ""',
-    '',
-    '[proof_artifact_fetch]',
-    'mode = "disabled"',
-    ''
-  ].join('\n')
-
   const values: Record<string, any> = {
-    configMaps: {
-      config: {
-        data: {
-          'attestation-signer.toml': signerToml
+    attestationSigner: {
+      database: {
+        path: '/app/data/attestation-signer.sqlite'
+      },
+      envelopePolicy: {
+        allowedProofTriples: '',
+        maxProofArtifacts: 4
+      },
+      local: {
+        wifSecretRef: {
+          key: 'ATTESTATION_SIGNER_WIF',
+          name: 'attestation-signer-__INSTANCE_INDEX__-env'
         },
-        enabled: true
+      },
+      logFilter: 'info,attestation_signer=info',
+      network: spec.dogecoin.network,
+      port: 4040,
+      profile: spec.signing.attestationSigner?.profile,
+      proofArtifact: {
+        fetchMode: 'disabled'
+      },
+      tso: {
+        callbackPhase: 'attestation',
+        url: tsoUrl
       }
     },
-    env: [
-      { name: 'RUST_LOG', value: 'info,attestation_signer=info' },
-      { name: 'ATTESTATION_SIGNER_WIF', valueFrom: { secretKeyRef: { key: 'ATTESTATION_SIGNER_WIF', name: 'attestation-signer-__INSTANCE_INDEX__-env' } } }
-    ],
     global: {
       fullnameOverride: 'attestation-signer-__INSTANCE_INDEX__'
     },
     image,
     persistence: {
-      config: {
-        enabled: true,
-        mountPath: '/etc/dogeos/',
-        name: 'attestation-signer-__INSTANCE_INDEX__-config',
-        readOnly: true,
-        type: 'configMap'
-      },
       data: {
         accessMode: 'ReadWriteOnce',
         enabled: true,
         mountPath: '/app/data',
         retain: true,
-        size: '1Gi',
+        size: '5Gi',
         type: 'pvc'
       }
     },
