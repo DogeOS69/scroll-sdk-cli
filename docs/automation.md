@@ -518,3 +518,42 @@ Errors with `"recoverable": true` can be retried after addressing the root cause
 | `E304_DATABASE_UNREACHABLE` | Check DB is running, SSL settings | Retry `setup db-init` |
 | `E502_SECRET_PUSH_FAILED` | Check kubectl auth | Retry `setup push-secrets` |
 | `E601_MISSING_FIELD` | Add fields listed in context | Retry same command |
+
+# Automatic proof topology configuration
+
+Production verifier identities and raw program commitments must come from the
+released proof artifacts; do not copy them into Helm values by hand. After
+copying or generating the chart values into the deployment working directory,
+run:
+
+```bash
+scrollsdk setup proof-config
+```
+
+With the standard deployment layout, it discovers:
+
+```text
+proof-artifacts/release.json
+proof-artifacts/manifests/scroll-chunk.json
+proof-artifacts/manifests/scroll-batch.json
+proof-artifacts/manifests/bridge-transition.json
+values/proof-coordinator-production.yaml
+values/withdrawal-processor-production.yaml
+```
+
+The command requires all three production proof families. It validates each
+`ProofProgramManifestV1`, checks that SHA-256 of the 64-byte raw commitment in
+the artifact manifest equals the program commitment hash, embeds the manifests,
+and writes both `values/proof-coordinator-production.yaml` and
+`values/withdrawal-processor-production.yaml` via atomic file replacement. It
+also configures the shared proof-work token mount, copies the coordinator's
+external-secret mapping for WP, projects the S3 artifact store into WP, and
+removes retired proof-worker fields.
+
+Verifier IDs default deterministically to
+`<proof-system-id>-<circuit-id>-<circuit-version>`. Override an operator-pinned
+ID only when the release policy requires it:
+
+```bash
+--verifier-id scroll_chunk=openvm-scroll-chunk-verifier-v1
+```

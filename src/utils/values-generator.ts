@@ -1573,7 +1573,7 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
 
   const secretConfig = getSecretProviderConfig(spec)
   const { artifactStore } = proofCoordinator
-  const proofWorkBaseUrl = proofCoordinator.proofWorkBaseUrl || 'http://withdrawal-processor:3000'
+  const proofWorkBaseUrl = proofCoordinator.proofWorkBaseUrl || 'http://withdrawal-processor:9300'
   const explicitSecretName = proofCoordinator.secrets?.name
   const localSecretKey = explicitSecretName || 'secrets'
   const remoteSecretKey = proofCoordinator.secrets?.remoteKey || explicitSecretName || 'proof-coordinator-secrets'
