@@ -6,6 +6,8 @@ import {
   applyConfigMapEnvValues,
   applyEthDaSubmitterInitialBatchSidecar,
   applyFeeOracleCurrentEnv,
+  applyL2RethRpcPublicIngressPolicy,
+  applyL2RethRpcRuntimeValues,
   applyRethBlobS3Url,
   buildEthDaSubmitterPrepEnv,
   buildFeeOraclePrepEnv,
@@ -13,6 +15,7 @@ import {
   buildWithdrawalBlobSourcePrepEnv,
   getEthereumDaS3PublicBaseUrl,
   getEthereumDaS3PublicBlobUrl,
+  getL2RethRpcIngressConfigKey,
   removeConfigMapEnvKeys,
   removeEnvArrayKeys,
   removeL2GethBlobS3ExtraParams,
@@ -505,5 +508,78 @@ describe('setup prep-charts Ethereum DA blob source updates', () => {
 
     expect(values.configMaps.env.data).not.to.have.property('L2GETH_EXTRA_PARAMS')
     expect(removeChanges.map(change => change.key)).to.deep.equal(['configMaps.env.data.L2GETH_EXTRA_PARAMS'])
+  })
+})
+
+describe('setup prep-charts split L2 reth RPC updates', () => {
+  it('maps public HTTP and websocket ingresses to RPC gateway domains', () => {
+    expect(getL2RethRpcIngressConfigKey('l2-reth-rpc-public', 'main')).to.equal('RPC_GATEWAY_HOST')
+    expect(getL2RethRpcIngressConfigKey('l2-reth-rpc-public', 'websocket')).to.equal('RPC_GATEWAY_WS_HOST')
+  })
+
+  it('enables public ingresses and configures the production cluster issuer', () => {
+    const values: any = {
+      ingress: {
+        main: {
+          annotations: {},
+          enabled: false,
+          hosts: [{ host: 'rpc.example.com' }],
+          tls: [{ hosts: ['stale.example.com'] }],
+        },
+        websocket: {
+          enabled: false,
+          hosts: [{ host: 'ws.rpc.example.com' }],
+          tls: [{ hosts: ['stale-ws.example.com'] }],
+        },
+      },
+    }
+
+    const changes = applyL2RethRpcPublicIngressPolicy(values)
+
+    expect(values.ingress.main.enabled).to.equal(true)
+    expect(values.ingress.websocket.enabled).to.equal(true)
+    expect(values.ingress.main.annotations['cert-manager.io/cluster-issuer']).to.equal('letsencrypt-prod')
+    expect(values.ingress.websocket.annotations['cert-manager.io/cluster-issuer']).to.equal('letsencrypt-prod')
+    expect(values.ingress.main.tls[0].hosts).to.deep.equal(['rpc.example.com'])
+    expect(values.ingress.websocket.tls[0].hosts).to.deep.equal(['ws.rpc.example.com'])
+    expect(changes.map(change => change.key)).to.have.members([
+      'ingress.main.enabled',
+      'ingress.main.annotations.cert-manager.io/cluster-issuer',
+      'ingress.main.tls[0].hosts',
+      'ingress.websocket.enabled',
+      'ingress.websocket.annotations.cert-manager.io/cluster-issuer',
+      'ingress.websocket.tls[0].hosts',
+    ])
+  })
+
+  it('applies shared runtime values to either RPC values document', () => {
+    const values: any = {
+      reth: {
+        blobS3Url: 'https://old.example/blobs',
+        l1Url: 'https://old.example/l1',
+        networkId: '1',
+        trustedPeers: 'old-peer',
+      },
+    }
+
+    const changes = applyL2RethRpcRuntimeValues(values, {
+      blobS3Url: 'https://dogeos-da.s3.us-east-1.amazonaws.com/devnet/eth-da/blobs/v1',
+      l1Url: 'http://l1-interface:8545',
+      networkId: '4444444',
+      trustedPeers: 'new-peer',
+    })
+
+    expect(values.reth).to.deep.equal({
+      blobS3Url: 'https://dogeos-da.s3.us-east-1.amazonaws.com/devnet/eth-da/blobs/v1',
+      l1Url: 'http://l1-interface:8545',
+      networkId: '4444444',
+      trustedPeers: 'new-peer',
+    })
+    expect(changes.map(change => change.key)).to.have.members([
+      'reth.blobS3Url',
+      'reth.l1Url',
+      'reth.networkId',
+      'reth.trustedPeers',
+    ])
   })
 })

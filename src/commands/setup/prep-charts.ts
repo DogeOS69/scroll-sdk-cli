@@ -712,6 +712,99 @@ export function applyRethBlobS3Url(
   return changes
 }
 
+export function isL2RethRpcChart(chartName: string): boolean {
+  return chartName === 'l2-reth-rpc' || chartName === 'l2-reth-rpc-public'
+}
+
+export function getL2RethRpcIngressConfigKey(
+  chartName: string,
+  ingressKey: string
+): string | undefined {
+  if (!isL2RethRpcChart(chartName)) return undefined
+  return ingressKey === 'websocket' ? 'RPC_GATEWAY_WS_HOST' : 'RPC_GATEWAY_HOST'
+}
+
+export function applyL2RethRpcRuntimeValues(
+  productionYaml: any,
+  values: {
+    blobS3Url: string | undefined
+    l1Url: string
+    networkId: string | undefined
+    trustedPeers: string
+  }
+): PrepChartChange[] {
+  const changes: PrepChartChange[] = []
+  productionYaml.reth ||= {}
+
+  for (const [key, newValue] of Object.entries({
+    l1Url: values.l1Url,
+    networkId: values.networkId,
+    trustedPeers: values.trustedPeers,
+  })) {
+    if (newValue === undefined || productionYaml.reth[key] === newValue) continue
+    const oldValue = productionYaml.reth[key]
+    productionYaml.reth[key] = newValue
+    changes.push({
+      key: `reth.${key}`,
+      newValue,
+      oldValue: String(oldValue ?? 'undefined'),
+    })
+  }
+
+  changes.push(...applyRethBlobS3Url(productionYaml, values.blobS3Url))
+  return changes
+}
+
+export function applyL2RethRpcPublicIngressPolicy(productionYaml: any): PrepChartChange[] {
+  const changes: PrepChartChange[] = []
+  const { ingress } = productionYaml
+  if (!ingress || typeof ingress !== 'object') return changes
+
+  for (const ingressKey of ['main', 'websocket']) {
+    const ingressValue = ingress[ingressKey]
+    if (!ingressValue || typeof ingressValue !== 'object') continue
+
+    if (ingressValue.enabled !== true) {
+      changes.push({
+        key: `ingress.${ingressKey}.enabled`,
+        newValue: 'true',
+        oldValue: String(ingressValue.enabled ?? 'undefined'),
+      })
+      ingressValue.enabled = true
+    }
+
+    ingressValue.annotations ||= {}
+    const issuerKey = 'cert-manager.io/cluster-issuer'
+    if (ingressValue.annotations[issuerKey] !== 'letsencrypt-prod') {
+      changes.push({
+        key: `ingress.${ingressKey}.annotations.${issuerKey}`,
+        newValue: 'letsencrypt-prod',
+        oldValue: String(ingressValue.annotations[issuerKey] ?? 'undefined'),
+      })
+      ingressValue.annotations[issuerKey] = 'letsencrypt-prod'
+    }
+
+    const ingressHosts = Array.isArray(ingressValue.hosts)
+      ? ingressValue.hosts.map((host: { host?: unknown }) => host.host).filter((host: unknown): host is string => typeof host === 'string')
+      : []
+    if (ingressHosts.length === 0 || !Array.isArray(ingressValue.tls)) continue
+
+    for (const [tlsIndex, tlsEntry] of ingressValue.tls.entries()) {
+      if (!tlsEntry || typeof tlsEntry !== 'object') continue
+      const oldTlsHosts = Array.isArray(tlsEntry.hosts) ? tlsEntry.hosts : []
+      if (JSON.stringify(oldTlsHosts) === JSON.stringify(ingressHosts)) continue
+      changes.push({
+        key: `ingress.${ingressKey}.tls[${tlsIndex}].hosts`,
+        newValue: JSON.stringify(ingressHosts),
+        oldValue: JSON.stringify(oldTlsHosts),
+      })
+      tlsEntry.hosts = ingressHosts
+    }
+  }
+
+  return changes
+}
+
 export function removeL2GethBlobS3ExtraParams(productionYaml: any): PrepChartChange[] {
   const changes: PrepChartChange[] = []
   const envData = productionYaml.configMaps?.env?.data
@@ -1094,6 +1187,11 @@ export default class SetupPrepCharts extends Command {
   }
 
   private getIngressHostConfigValue(chartName: string, ingressKey: string): string | undefined {
+    const rethRpcConfigKey = getL2RethRpcIngressConfigKey(chartName, ingressKey)
+    if (rethRpcConfigKey) {
+      return this.getConfigValue(`ingress.${rethRpcConfigKey}`)
+    }
+
     if ((chartName === 'l2-rpc' || chartName === 'l2-rpc-reth' || chartName === 'l2-reth-rpc') && ingressKey === 'websocket') {
       return this.getConfigValue('ingress.RPC_GATEWAY_WS_HOST')
     }
@@ -1754,24 +1852,26 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
-      if (chartName === 'l2-reth-rpc') {
-        productionYaml.reth ||= {}
+      if (isL2RethRpcChart(chartName)) {
         const trustedPeers = this.buildFreshRethTrustedPeers()
-        const oldTrustedPeers = productionYaml.reth.trustedPeers
-        if (oldTrustedPeers !== trustedPeers) {
-          productionYaml.reth.trustedPeers = trustedPeers
-          changes.push({
-            key: 'reth.trustedPeers',
-            newValue: trustedPeers,
-            oldValue: String(oldTrustedPeers ?? 'undefined'),
-          })
+        const chainId = this.getConfigValue('general.CHAIN_ID_L2')
+        const runtimeChanges = applyL2RethRpcRuntimeValues(productionYaml, {
+          blobS3Url: s3PublicBlobUrl,
+          l1Url: L1_INTERFACE_RPC_ENDPOINT,
+          networkId: chainId === undefined ? undefined : String(chainId),
+          trustedPeers,
+        })
+        if (runtimeChanges.length > 0) {
+          changes.push(...runtimeChanges)
           updated = true
         }
 
-        const rethS3Changes = applyRethBlobS3Url(productionYaml, s3PublicBlobUrl)
-        if (rethS3Changes.length > 0) {
-          changes.push(...rethS3Changes)
-          updated = true
+        if (chartName === 'l2-reth-rpc-public') {
+          const ingressPolicyChanges = applyL2RethRpcPublicIngressPolicy(productionYaml)
+          if (ingressPolicyChanges.length > 0) {
+            changes.push(...ingressPolicyChanges)
+            updated = true
+          }
         }
 
         if (this.removeLegacyRethTrustedPeersEnv(productionYaml)) {
