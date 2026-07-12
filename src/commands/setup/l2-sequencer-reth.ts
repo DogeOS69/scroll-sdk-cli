@@ -203,10 +203,12 @@ export function shouldReuseExistingSequencerRethRoleArn(
 }
 
 export function applySequencerRethValues(yamlData: any, config: ResolvedSequencerRethConfig): void {
+  const chartResourceNames = getChartResourceNames(yamlData, getSequencerRethResourceName(config.index))
+  removeChartResourceNameOverrides(yamlData)
   yamlData.reth ||= {}
   yamlData.reth.nodeKey ||= {}
   yamlData.reth.nodeKey.mode = 'secret'
-  yamlData.reth.nodeKey.secretName = config.secretName
+  delete yamlData.reth.nodeKey.secretName
   yamlData.reth.nodeKey.secretKey = RETH_NODEKEY_ENV
   yamlData.reth.signer ||= {}
 
@@ -217,17 +219,17 @@ export function applySequencerRethValues(yamlData: any, config: ResolvedSequence
   } else {
     yamlData.reth.signer.type = 'localFile'
     yamlData.reth.signer.localFile ||= {}
-    yamlData.reth.signer.localFile.secretName = config.secretName
+    delete yamlData.reth.signer.localFile.secretName
     yamlData.reth.signer.localFile.secretKey = RETH_SIGNER_PRIVATE_KEY_ENV
     delete yamlData.reth.signer.awsKmsKeyId
     delete yamlData.serviceAccount
   }
 
-  yamlData.envFrom = removeSecretRef(yamlData.envFrom, config.secretName)
+  yamlData.envFrom = removeGeneratedResourceRefs(removeSecretRef(yamlData.envFrom, config.secretName), chartResourceNames)
   removeLegacyRethEnv(yamlData)
 
   if (config.secretMode === 'external-secret') {
-    removePlainSecret(yamlData, config)
+    removePlainSecret(yamlData, config, chartResourceNames)
     ensureRethExternalSecret(yamlData, config)
   } else {
     removeExternalSecret(yamlData, config.secretName)
@@ -247,6 +249,22 @@ export function applySequencerRethValues(yamlData: any, config: ResolvedSequence
       yamlData.serviceAccount.annotations['eks.amazonaws.com/role-arn'] = config.signer.serviceAccountRoleArn
     }
   }
+}
+
+function getChartResourceNames(values: any, defaultName: string): Set<string> {
+  const names = new Set<string>([defaultName])
+  for (const override of [values.global?.fullnameOverride, values.global?.nameOverride]) {
+    if (typeof override === 'string' && override) names.add(override)
+  }
+
+  return names
+}
+
+function removeChartResourceNameOverrides(values: any): void {
+  if (!values.global) return
+  delete values.global.fullnameOverride
+  delete values.global.nameOverride
+  if (Object.keys(values.global).length === 0) delete values.global
 }
 
 function removeEnvValue(env: any[] | undefined, name: string): void {
@@ -291,14 +309,13 @@ function ensurePlainSecret(yamlData: any, config: ResolvedSequencerRethConfig): 
   }
 }
 
-function removePlainSecret(yamlData: any, config: ResolvedSequencerRethConfig): void {
+function removePlainSecret(
+  yamlData: any,
+  config: ResolvedSequencerRethConfig,
+  resourceNames: Set<string>
+): void {
   if (!yamlData.secrets) return
 
-  const configuredResourceName = yamlData.global?.fullnameOverride || yamlData.global?.nameOverride
-  const resourceNames = new Set<string>([
-    getSequencerRethResourceName(config.index),
-    ...(configuredResourceName ? [configuredResourceName] : []),
-  ])
   const secretKeys = new Set<string>([config.secretName])
   for (const resourceName of resourceNames) {
     secretKeys.add(getSecretNameOverride(config.secretName, resourceName))
@@ -316,9 +333,15 @@ function removeSecretRef(envFrom: any[] | undefined, secretName: string): any[] 
   return envFrom.filter(item => item?.secretRef?.name !== secretName)
 }
 
+function removeGeneratedResourceRefs(envFrom: any[], resourceNames: Set<string>): any[] {
+  const generatedConfigMaps = new Set([...resourceNames].map(resourceName => `${resourceName}-env`))
+  return envFrom.filter(item => !generatedConfigMaps.has(item?.configMapRef?.name))
+}
+
 function ensureRethExternalSecret(yamlData: any, config: ResolvedSequencerRethConfig): void {
   yamlData.externalSecrets ||= {}
-  const existing = yamlData.externalSecrets[config.secretName] || {}
+  const existing = yamlData.externalSecrets['secret-env'] || yamlData.externalSecrets[config.secretName] || {}
+  delete yamlData.externalSecrets[config.secretName]
   const remoteKey = `dogeos/${config.secretName}`
   const data = [
     {
@@ -333,7 +356,7 @@ function ensureRethExternalSecret(yamlData: any, config: ResolvedSequencerRethCo
     })
   }
 
-  yamlData.externalSecrets[config.secretName] = {
+  yamlData.externalSecrets['secret-env'] = {
     data,
     provider: existing.provider || 'aws',
     refreshInterval: existing.refreshInterval || '2m',
@@ -343,8 +366,9 @@ function ensureRethExternalSecret(yamlData: any, config: ResolvedSequencerRethCo
 }
 
 function removeExternalSecret(yamlData: any, secretName: string): void {
-  if (!yamlData.externalSecrets?.[secretName]) return
+  if (!yamlData.externalSecrets) return
   delete yamlData.externalSecrets[secretName]
+  delete yamlData.externalSecrets['secret-env']
   if (Object.keys(yamlData.externalSecrets).length === 0) delete yamlData.externalSecrets
 }
 

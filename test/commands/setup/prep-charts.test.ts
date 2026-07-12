@@ -79,6 +79,7 @@ describe('setup prep-charts attestation-signer updates', () => {
           data: [{ remoteRef: { key: 'dogeos/attestation-signer-1-env', property: 'ATTESTATION_SIGNER_WIF' }, secretKey: 'ATTESTATION_SIGNER_WIF' }],
         },
       },
+      global: { fullnameOverride: 'attestation-signer-1', nameOverride: 'attestation-signer-1' },
     }
     const signerConfig = {
       backend: 'aws_kms' as const,
@@ -102,6 +103,7 @@ describe('setup prep-charts attestation-signer updates', () => {
     expect(values.attestationSigner.kms.expectedSignerId).to.equal(`02${'ab'.repeat(32)}`)
     expect(values.attestationSigner.kms.keyId).to.equal('alias/dogeos/attestation-1')
     expect(values.attestationSigner).not.to.have.property('local')
+    expect(values).not.to.have.property('global')
     expect(values).not.to.have.property('externalSecrets')
     expect(values.serviceAccount.annotations['eks.amazonaws.com/role-arn']).to.equal('arn:aws:iam::123456789012:role/attestation-1')
   })

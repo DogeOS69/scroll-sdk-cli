@@ -19,7 +19,11 @@ describe('setup l2-bootnode-reth', () => {
     const values: any = {
       command: ['/bin/sh', '-ec', 'old command'],
       env: [],
-      envFrom: [{ secretRef: { name: 'l2-reth-bootnode-2-secret-env' } }],
+      envFrom: [
+        { configMapRef: { name: 'l2-reth-bootnode-2-env' } },
+        { configMapRef: { name: 'shared-observability-env' } },
+        { secretRef: { name: 'l2-reth-bootnode-2-secret-env' } },
+      ],
       externalSecrets: {
         'l2-reth-bootnode-2-secret-env': { provider: 'aws' },
       },
@@ -45,15 +49,13 @@ describe('setup l2-bootnode-reth', () => {
     })
 
     expect(values.global).to.equal(undefined)
-    expect(values.envFrom.some((item: any) => item.configMapRef)).to.equal(false)
-    expect(values.envFrom.some((item: any) => item.secretRef)).to.equal(false)
+    expect(values.envFrom).to.deep.equal([{ configMapRef: { name: 'shared-observability-env' } }])
     expect(values.externalSecrets).to.equal(undefined)
     expect(values.env.some((item: any) => item.name === 'RETH_NODEKEY')).to.equal(false)
     expect(values.reth.nodeKey).to.deep.equal({
       generatedPath: '/data/nodekey',
       path: '/keys/nodekey',
       secretKey: 'RETH_NODEKEY',
-      secretName: 'l2-reth-bootnode-2-secret-env',
     })
     expect(values.secrets['secret-env'].stringData).to.deep.equal({
       RETH_NODEKEY: nodekey,
@@ -76,7 +78,7 @@ describe('setup l2-bootnode-reth', () => {
     expect(values.envFrom.some((item: any) => item.secretRef)).to.equal(false)
     expect(values.env.some((item: any) => item.name === 'RETH_NODEKEY')).to.equal(false)
     expect(values.reth).to.equal(undefined)
-    expect(values.externalSecrets['l2-reth-bootnode-1-secret-env'].data.map((item: any) => item.secretKey)).to.deep.equal([
+    expect(values.externalSecrets['secret-env'].data.map((item: any) => item.secretKey)).to.deep.equal([
       'RETH_NODEKEY',
     ])
     expect(values.command).to.equal(undefined)
@@ -105,6 +107,6 @@ describe('setup l2-bootnode-reth', () => {
     })
 
     expect(values.secrets).to.equal(undefined)
-    expect(values.externalSecrets).to.have.property('l2-reth-bootnode-0-secret-env')
+    expect(values.externalSecrets).to.have.property('secret-env')
   })
 })

@@ -48,11 +48,14 @@ export function deriveBootnodeRethEnodeUrl(nodekey: string, index: number): stri
 }
 
 export function applyBootnodeRethValues(yamlData: any, config: ResolvedBootnodeRethConfig): void {
-  yamlData.envFrom = removeSecretRef(yamlData.envFrom, config.secretName)
+  const chartResourceNames = getChartResourceNames(yamlData, getBootnodeRethResourceName(config.index))
+  removeChartResourceNameOverrides(yamlData)
+  yamlData.envFrom = removeGeneratedResourceRefs(removeSecretRef(yamlData.envFrom, config.secretName), chartResourceNames)
+  if (yamlData.reth?.nodeKey) delete yamlData.reth.nodeKey.secretName
   removeEnvValue(yamlData.env, RETH_BOOTNODE_NODEKEY_ENV)
 
   if (config.secretMode === 'external-secret') {
-    removePlainSecret(yamlData, config)
+    removePlainSecret(yamlData, config, chartResourceNames)
     ensureBootnodeRethExternalSecret(yamlData, config)
   } else {
     removeExternalSecret(yamlData, config.secretName)
@@ -64,6 +67,22 @@ export function applyBootnodeRethValues(yamlData: any, config: ResolvedBootnodeR
   if (yamlData.persistence?.keys) delete yamlData.persistence.keys
 }
 
+function getChartResourceNames(values: any, defaultName: string): Set<string> {
+  const names = new Set<string>([defaultName])
+  for (const override of [values.global?.fullnameOverride, values.global?.nameOverride]) {
+    if (typeof override === 'string' && override) names.add(override)
+  }
+
+  return names
+}
+
+function removeChartResourceNameOverrides(values: any): void {
+  if (!values.global) return
+  delete values.global.fullnameOverride
+  delete values.global.nameOverride
+  if (Object.keys(values.global).length === 0) delete values.global
+}
+
 function removeEnvValue(env: any[] | undefined, name: string): void {
   if (!Array.isArray(env)) return
   const index = env.findIndex(entry => entry?.name === name)
@@ -73,6 +92,11 @@ function removeEnvValue(env: any[] | undefined, name: string): void {
 function removeSecretRef(envFrom: any[] | undefined, secretName: string): any[] {
   if (!Array.isArray(envFrom)) return []
   return envFrom.filter(item => item?.secretRef?.name !== secretName)
+}
+
+function removeGeneratedResourceRefs(envFrom: any[], resourceNames: Set<string>): any[] {
+  const generatedConfigMaps = new Set([...resourceNames].map(resourceName => `${resourceName}-env`))
+  return envFrom.filter(item => !generatedConfigMaps.has(item?.configMapRef?.name))
 }
 
 function getSecretNameOverride(secretName: string, resourceName: string): string {
@@ -92,14 +116,13 @@ function ensurePlainSecret(yamlData: any, config: ResolvedBootnodeRethConfig): v
   }
 }
 
-function removePlainSecret(yamlData: any, config: ResolvedBootnodeRethConfig): void {
+function removePlainSecret(
+  yamlData: any,
+  config: ResolvedBootnodeRethConfig,
+  resourceNames: Set<string>
+): void {
   if (!yamlData.secrets) return
 
-  const configuredResourceName = yamlData.global?.fullnameOverride || yamlData.global?.nameOverride
-  const resourceNames = new Set<string>([
-    getBootnodeRethResourceName(config.index),
-    ...(configuredResourceName ? [configuredResourceName] : []),
-  ])
   const secretKeys = new Set<string>([config.secretName])
   for (const resourceName of resourceNames) {
     secretKeys.add(getSecretNameOverride(config.secretName, resourceName))
@@ -114,8 +137,9 @@ function removePlainSecret(yamlData: any, config: ResolvedBootnodeRethConfig): v
 
 function ensureBootnodeRethExternalSecret(yamlData: any, config: ResolvedBootnodeRethConfig): void {
   yamlData.externalSecrets ||= {}
-  const existing = yamlData.externalSecrets[config.secretName] || {}
-  yamlData.externalSecrets[config.secretName] = {
+  const existing = yamlData.externalSecrets['secret-env'] || yamlData.externalSecrets[config.secretName] || {}
+  delete yamlData.externalSecrets[config.secretName]
+  yamlData.externalSecrets['secret-env'] = {
     data: [
       {
         remoteRef: { key: `dogeos/${config.secretName}`, property: RETH_BOOTNODE_NODEKEY_ENV },
@@ -130,8 +154,9 @@ function ensureBootnodeRethExternalSecret(yamlData: any, config: ResolvedBootnod
 }
 
 function removeExternalSecret(yamlData: any, secretName: string): void {
-  if (!yamlData.externalSecrets?.[secretName]) return
+  if (!yamlData.externalSecrets) return
   delete yamlData.externalSecrets[secretName]
+  delete yamlData.externalSecrets['secret-env']
   if (Object.keys(yamlData.externalSecrets).length === 0) delete yamlData.externalSecrets
 }
 

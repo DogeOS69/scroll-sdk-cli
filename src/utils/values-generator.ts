@@ -1334,8 +1334,7 @@ function generateAttestationSignerValues(spec: DeploymentSpec): string {
       },
       local: {
         wifSecretRef: {
-          key: 'ATTESTATION_SIGNER_WIF',
-          name: 'attestation-signer-__INSTANCE_INDEX__-env'
+          key: 'ATTESTATION_SIGNER_WIF'
         },
       },
       logFilter: 'info,attestation_signer=info',
@@ -1349,9 +1348,6 @@ function generateAttestationSignerValues(spec: DeploymentSpec): string {
         callbackPhase: 'attestation',
         url: tsoUrl
       }
-    },
-    global: {
-      fullnameOverride: 'attestation-signer-__INSTANCE_INDEX__'
     },
     image,
     persistence: {
@@ -1374,7 +1370,7 @@ function generateAttestationSignerValues(spec: DeploymentSpec): string {
   }
 
   const externalSecrets = generateExternalSecrets(
-    'attestation-signer-__INSTANCE_INDEX__-env',
+    'signer-env',
     secretConfig,
     [
       { property: 'ATTESTATION_SIGNER_WIF', remoteKey: 'attestation-signer-__INSTANCE_INDEX__-env', secretKey: 'ATTESTATION_SIGNER_WIF' }
@@ -1578,9 +1574,10 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
   const { artifactStore } = proofCoordinator
   const proofWorkBaseUrl = proofCoordinator.proofWorkBaseUrl || 'http://withdrawal-processor:3000'
-  const secretName = proofCoordinator.secrets?.name || 'proof-coordinator-secrets'
-  const remoteSecretKey = proofCoordinator.secrets?.remoteKey || secretName
-  const serviceAccountName = proofCoordinator.serviceAccount?.name || 'proof-coordinator'
+  const explicitSecretName = proofCoordinator.secrets?.name
+  const localSecretKey = explicitSecretName || 'secrets'
+  const remoteSecretKey = proofCoordinator.secrets?.remoteKey || explicitSecretName || 'proof-coordinator-secrets'
+  const serviceAccountName = proofCoordinator.serviceAccount?.name
   const forcePathStyle = artifactStore.forcePathStyle ?? Boolean(artifactStore.endpointUrl)
 
   const image = resolveImage(spec, 'proofCoordinator', {
@@ -1641,7 +1638,6 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
       secrets: {
         enabled: true,
         mountPath: '/run/secrets',
-        name: secretName,
         readOnly: true,
         type: 'secret'
       }
@@ -1666,12 +1662,14 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
     serviceAccount: {
       annotations: proofCoordinator.serviceAccount?.annotations || {},
       create: true,
-      name: serviceAccountName
     }
   }
 
+  if (explicitSecretName) values.persistence.secrets.name = explicitSecretName
+  if (serviceAccountName) values.serviceAccount.name = serviceAccountName
+
   const externalSecrets = generateExternalSecrets(
-    secretName,
+    localSecretKey,
     secretConfig,
     [
       {

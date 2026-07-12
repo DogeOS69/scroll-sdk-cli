@@ -1474,7 +1474,9 @@ describe('deployment-spec-generator', () => {
         tag: 'v1.2.3',
       });
       expect(values.service.main.enabled).to.equal(true);
-      expect(values.persistence.secrets.name).to.equal('proof-coordinator-secrets');
+      expect(values.persistence.secrets).not.to.have.property('name');
+      expect(values.serviceAccount).not.to.have.property('name');
+      expect(values).not.to.have.property('global');
       expect(values.serviceAccount.annotations['eks.amazonaws.com/role-arn'])
         .to.equal('arn:aws:iam::123456789012:role/proof-coordinator');
       expect(env.DOGEOS_PROOF_COORDINATOR_PROOF_WORK_BASE_URL).to.equal('http://withdrawal-processor:3000');
@@ -1486,8 +1488,8 @@ describe('deployment-spec-generator', () => {
       expect(env.DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__FORCE_PATH_STYLE).to.equal('true');
       expect(env.DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__ENDPOINT_URL).to.equal('http://minio.scrollsdk:9000');
       expect(env.DOGEOS_PROOF_COORDINATOR_PROVER_API__PUBLIC_S3_ENDPOINT_URL).to.equal('https://proof-artifacts.example.com');
-      expect(values.externalSecrets['proof-coordinator-secrets'].secretRegion).to.equal('us-west-2');
-      expect(values.externalSecrets['proof-coordinator-secrets'].data.map((item: any) => item.secretKey))
+      expect(values.externalSecrets.secrets.secretRegion).to.equal('us-west-2');
+      expect(values.externalSecrets.secrets.data.map((item: any) => item.secretKey))
         .to.deep.equal(['proof-work-token', 'prover-worker-token']);
 
       const proofCoordinatorToml = values.configMaps.config.data['ProofCoordinator.toml'];
@@ -1652,8 +1654,8 @@ describe('deployment-spec-generator', () => {
       });
       expect(values.attestationSigner.local.wifSecretRef).to.deep.equal({
         key: 'ATTESTATION_SIGNER_WIF',
-        name: 'attestation-signer-__INSTANCE_INDEX__-env',
       });
+      expect(values).not.to.have.property('global');
       expect(values.persistence.data.size).to.equal('5Gi');
       expect(values).not.to.have.property('configMaps');
       expect(values).not.to.have.property('env');

@@ -93,7 +93,11 @@ describe('setup l2-sequencer-reth', () => {
     const values: any = {
       command: ['/bin/sh', '-ec', 'old command'],
       env: [],
-      envFrom: [{ secretRef: { name: 'l2-reth-sequencer-2-secret-env' } }],
+      envFrom: [
+        { configMapRef: { name: 'l2-reth-sequencer-2-env' } },
+        { configMapRef: { name: 'shared-observability-env' } },
+        { secretRef: { name: 'l2-reth-sequencer-2-secret-env' } },
+      ],
       externalSecrets: {
         'l2-reth-sequencer-2-secret-env': { provider: 'aws' },
       },
@@ -123,8 +127,7 @@ describe('setup l2-sequencer-reth', () => {
       signerMode: 'plain',
     })
 
-    expect(values.envFrom.some((item: any) => item.configMapRef)).to.equal(false)
-    expect(values.envFrom.some((item: any) => item.secretRef)).to.equal(false)
+    expect(values.envFrom).to.deep.equal([{ configMapRef: { name: 'shared-observability-env' } }])
     expect(values.externalSecrets).to.equal(undefined)
     expect(values.env.some((item: any) => item.name === 'RETH_NODEKEY')).to.equal(false)
     expect(values.env.some((item: any) => item.name === 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY')).to.equal(false)
@@ -133,12 +136,10 @@ describe('setup l2-sequencer-reth', () => {
       mode: 'secret',
       path: '/keys/nodekey',
       secretKey: 'RETH_NODEKEY',
-      secretName: 'l2-reth-sequencer-2-secret-env',
     })
     expect(values.reth.signer.type).to.equal('localFile')
     expect(values.reth.signer.localFile).to.deep.equal({
       secretKey: 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY',
-      secretName: 'l2-reth-sequencer-2-secret-env',
     })
     expect(values.secrets['secret-env'].stringData).to.deep.equal({
       RETH_NODEKEY: '1111111111111111111111111111111111111111111111111111111111111111',
@@ -194,15 +195,13 @@ describe('setup l2-sequencer-reth', () => {
     expect(values.reth.nodeKey).to.deep.equal({
       mode: 'secret',
       secretKey: 'RETH_NODEKEY',
-      secretName: 'l2-reth-sequencer-1-secret-env',
     })
     expect(values.reth.signer.type).to.equal('localFile')
     expect(values.reth.signer.localFile).to.deep.equal({
       secretKey: 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY',
-      secretName: 'l2-reth-sequencer-1-secret-env',
     })
     expect(values.reth.signer.awsKmsKeyId).to.equal(undefined)
-    expect(values.externalSecrets['l2-reth-sequencer-1-secret-env'].data.map((item: any) => item.secretKey)).to.deep.equal([
+    expect(values.externalSecrets['secret-env'].data.map((item: any) => item.secretKey)).to.deep.equal([
       'RETH_NODEKEY',
       'RETH_SEQUENCER_SIGNER_PRIVATE_KEY',
     ])
@@ -238,7 +237,7 @@ describe('setup l2-sequencer-reth', () => {
     })
 
     expect(values.secrets).to.equal(undefined)
-    expect(values.externalSecrets).to.have.property('l2-reth-sequencer-0-secret-env')
+    expect(values.externalSecrets).to.have.property('secret-env')
   })
 
   it('writes KMS signer env and service account without local signer private key secret', () => {
@@ -274,14 +273,13 @@ describe('setup l2-sequencer-reth', () => {
     expect(values.reth.nodeKey).to.deep.equal({
       mode: 'secret',
       secretKey: 'RETH_NODEKEY',
-      secretName: 'l2-reth-sequencer-3-secret-env',
     })
     expect(values.reth.signer.type).to.equal('awsKms')
     expect(values.reth.signer.awsKmsKeyId).to.equal('alias/dogeos/test/l2/sequencer-reth-3')
     expect(values.reth.signer.localFile).to.equal(undefined)
     expect(values.env.some((item: any) => item.name === 'RETH_SEQUENCER_SIGNER_BACKEND')).to.equal(false)
     expect(values.env.some((item: any) => item.name === 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY')).to.equal(false)
-    expect(values.externalSecrets['l2-reth-sequencer-3-secret-env'].data.map((item: any) => item.secretKey)).to.deep.equal([
+    expect(values.externalSecrets['secret-env'].data.map((item: any) => item.secretKey)).to.deep.equal([
       'RETH_NODEKEY',
     ])
     expect(values.serviceAccount.name).to.equal('l2-reth-sequencer-3')

@@ -126,6 +126,7 @@ export function applyAttestationSignerRuntimeValues(
   instanceIndex: number
 ): PrepChartChange[] {
   const changes = applyAttestationSignerNetwork(productionYaml, network)
+  removeChartResourceNameOverrides(productionYaml)
   const { attestationSigner } = productionYaml
   if (!attestationSigner || typeof attestationSigner !== 'object' || !signerConfig) return changes
 
@@ -174,7 +175,6 @@ export function applyAttestationSignerRuntimeValues(
   attestationSigner.local ||= {}
   attestationSigner.local.wifSecretRef = {
     key: 'ATTESTATION_SIGNER_WIF',
-    name: secretName,
   }
   delete productionYaml.serviceAccount
   if (secretData) {
@@ -183,11 +183,23 @@ export function applyAttestationSignerRuntimeValues(
     secretData.secretKey = 'ATTESTATION_SIGNER_WIF'
   }
 
+  if (externalSecretEntry && externalSecretEntry[0] !== 'signer-env') {
+    delete productionYaml.externalSecrets[externalSecretEntry[0]]
+    productionYaml.externalSecrets['signer-env'] = externalSecret
+  }
+
   if (oldProfile !== 'staging-local') {
     changes.push({ key: 'attestationSigner.profile', newValue: 'staging-local', oldValue: String(oldProfile ?? 'undefined') })
   }
 
   return changes
+}
+
+function removeChartResourceNameOverrides(values: any): void {
+  if (!values.global) return
+  delete values.global.fullnameOverride
+  delete values.global.nameOverride
+  if (Object.keys(values.global).length === 0) delete values.global
 }
 
 const ETH_DA_ZERO_HASH = '0x0000000000000000000000000000000000000000000000000000000000000000'
@@ -1853,6 +1865,19 @@ export default class SetupPrepCharts extends Command {
       }
 
       if (isL2RethRpcChart(chartName)) {
+        if (chartName === 'l2-reth-rpc') {
+          const oldGlobalNaming = JSON.stringify(productionYaml.global || {})
+          removeChartResourceNameOverrides(productionYaml)
+          if (oldGlobalNaming !== JSON.stringify(productionYaml.global || {})) {
+            changes.push({
+              key: 'global.nameOverride/global.fullnameOverride',
+              newValue: 'release-derived',
+              oldValue: oldGlobalNaming,
+            })
+            updated = true
+          }
+        }
+
         const trustedPeers = this.buildFreshRethTrustedPeers()
         const chainId = this.getConfigValue('general.CHAIN_ID_L2')
         const runtimeChanges = applyL2RethRpcRuntimeValues(productionYaml, {
