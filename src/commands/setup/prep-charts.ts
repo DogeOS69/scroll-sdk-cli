@@ -1082,6 +1082,10 @@ export default class SetupPrepCharts extends Command {
     }
   }
 
+  private buildFreshRethTrustedPeers(): string {
+    return this.buildRethTrustedPeers()
+  }
+
   private buildRethTrustedPeers(): string {
     const peers = new Set<string>()
     for (const peer of this.getLegacySequencerPeers()) {
@@ -1331,19 +1335,6 @@ export default class SetupPrepCharts extends Command {
       }
     }
 
-  }
-
-  private buildFreshRethTrustedPeers(): string {
-    return this.buildRethTrustedPeers()
-  }
-
-  private removeLegacyRethTrustedPeersEnv(productionYaml: any): boolean {
-    if (!productionYaml.configMaps?.env?.data || !('RETH_TRUSTED_PEERS' in productionYaml.configMaps.env.data)) {
-      return false
-    }
-
-    delete productionYaml.configMaps.env.data.RETH_TRUSTED_PEERS
-    return true
   }
 
   private parsePeerList(value: unknown): string[] {
@@ -3036,7 +3027,6 @@ export default class SetupPrepCharts extends Command {
     return { skipped: skippedCharts, updated: updatedCharts }
   }
 
-
   private async processSequencerRethInstanceFiles(valuesDir: string): Promise<{ skipped: number; updated: number }> {
     const instances = this.dogeConfig.sequencerReth?.instances ?? []
     if (instances.length === 0) return { skipped: 0, updated: 0 }
@@ -3067,6 +3057,15 @@ export default class SetupPrepCharts extends Command {
     }
 
     return { skipped: skippedCharts, updated: updatedCharts }
+  }
+
+  private removeLegacyRethTrustedPeersEnv(productionYaml: any): boolean {
+    if (!productionYaml.configMaps?.env?.data || !('RETH_TRUSTED_PEERS' in productionYaml.configMaps.env.data)) {
+      return false
+    }
+
+    delete productionYaml.configMaps.env.data.RETH_TRUSTED_PEERS
+    return true
   }
 
   private requireSigner(signerKey: 'l1CommitSender' | 'l2GasOracleSender') {

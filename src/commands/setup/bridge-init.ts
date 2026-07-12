@@ -987,6 +987,32 @@ export class BridgeInitCommand extends Command {
     )
   }
 
+  private getRequiredInitialSystemSigner(dogeConfig: any, dogeConfigPath: string): string {
+    const initialSystemSigner = resolveInitialSystemSignerFromDogeConfig(dogeConfig)
+
+    if (!initialSystemSigner) {
+      this.jsonCtx.error(
+        'E602_INVALID_DOGE_CONFIG',
+        `${dogeConfigPath} must define sequencerReth.instances[index=0].signer.address before bridge-init can write protocol_seed.toml initial_system_signer.`,
+        'CONFIGURATION',
+        true,
+        { path: dogeConfigPath }
+      )
+    }
+
+    if (!isValidEvmAddress(initialSystemSigner)) {
+      this.jsonCtx.error(
+        'E602_INVALID_DOGE_CONFIG',
+        `sequencerReth.instances[index=0].signer.address must be a 20-byte EVM address in ${dogeConfigPath}`,
+        'CONFIGURATION',
+        true,
+        { initialSystemSigner, path: dogeConfigPath }
+      )
+    }
+
+    return initialSystemSigner
+  }
+
   private getRequiredNumberValue(source: any, key: string, sourcePath: string): number {
     const value = source?.[key]
 
@@ -1616,32 +1642,6 @@ export class BridgeInitCommand extends Command {
       `with initial_system_signer = ${initialSystemSigner}`
     )
     return protocolSeedPath
-  }
-
-  private getRequiredInitialSystemSigner(dogeConfig: any, dogeConfigPath: string): string {
-    const initialSystemSigner = resolveInitialSystemSignerFromDogeConfig(dogeConfig)
-
-    if (!initialSystemSigner) {
-      this.jsonCtx.error(
-        'E602_INVALID_DOGE_CONFIG',
-        `${dogeConfigPath} must define sequencerReth.instances[index=0].signer.address before bridge-init can write protocol_seed.toml initial_system_signer.`,
-        'CONFIGURATION',
-        true,
-        { path: dogeConfigPath }
-      )
-    }
-
-    if (!isValidEvmAddress(initialSystemSigner)) {
-      this.jsonCtx.error(
-        'E602_INVALID_DOGE_CONFIG',
-        `sequencerReth.instances[index=0].signer.address must be a 20-byte EVM address in ${dogeConfigPath}`,
-        'CONFIGURATION',
-        true,
-        { initialSystemSigner, path: dogeConfigPath }
-      )
-    }
-
-    return initialSystemSigner
   }
 
   private upsertEnvValues(existingContent: string, values: Record<string, string>): string {
