@@ -730,6 +730,16 @@ export function isL2RethRpcChart(chartName: string): boolean {
   return chartName === 'l2-reth-rpc' || chartName === 'l2-reth-rpc-public'
 }
 
+export function isL2RethBlobS3Chart(chartName: string): boolean {
+  return chartName === 'l2-reth-bootnode' ||
+    chartName === 'l2-reth-sequencer' ||
+    isL2RethRpcChart(chartName)
+}
+
+export function getProductionChartName(fileName: string): string {
+  return fileName.replace(/-production(-\d+)?\.yaml$/, '')
+}
+
 export function getL2RethRpcIngressConfigKey(
   chartName: string,
   ingressKey: string
@@ -1735,7 +1745,7 @@ export default class SetupPrepCharts extends Command {
       }
 
       const yamlPath = path.join(valuesDir, file)
-      const chartName = file.replace(/-production(-\d+)?\.yaml$/, '')
+      const chartName = getProductionChartName(file)
       const productionNumber = file.match(/-production-(\d+)\.yaml$/)?.[1] || '0'
 
       this.log(`Processing ${file} for chart ${chartName}...`)
@@ -1745,6 +1755,16 @@ export default class SetupPrepCharts extends Command {
 
       let updated = false
       const changes: Array<{ key: string; newValue: string; oldValue: string }> = []
+
+      // Every concrete Reth values file consumes the same public S3 blob prefix.
+      // Numbered bootnode/sequencer files normalize to their base chart names above.
+      if (isL2RethBlobS3Chart(chartName)) {
+        const rethBlobS3Changes = applyRethBlobS3Url(productionYaml, s3PublicBlobUrl)
+        if (rethBlobS3Changes.length > 0) {
+          changes.push(...rethBlobS3Changes)
+          updated = true
+        }
+      }
 
       // Process configMaps
       if (productionYaml.configMaps) {
@@ -1817,7 +1837,6 @@ export default class SetupPrepCharts extends Command {
           productionYaml.reth.trustedPeers = trustedPeers
         }
 
-        changes.push(...applyRethBlobS3Url(productionYaml, s3PublicBlobUrl))
         this.removeLegacyRethTrustedPeersEnv(productionYaml)
 
         const nextRethValues = JSON.stringify(productionYaml)
@@ -1846,7 +1865,6 @@ export default class SetupPrepCharts extends Command {
           productionYaml.reth.trustedPeers = trustedPeers
         }
 
-        changes.push(...applyRethBlobS3Url(productionYaml, s3PublicBlobUrl))
         this.removeLegacyRethTrustedPeersEnv(productionYaml)
 
         const nextRethValues = JSON.stringify(productionYaml)

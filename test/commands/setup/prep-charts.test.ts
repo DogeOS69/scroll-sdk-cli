@@ -16,6 +16,8 @@ import {
   getEthereumDaS3PublicBaseUrl,
   getEthereumDaS3PublicBlobUrl,
   getL2RethRpcIngressConfigKey,
+  getProductionChartName,
+  isL2RethBlobS3Chart,
   removeConfigMapEnvKeys,
   removeEnvArrayKeys,
   removeL2GethBlobS3ExtraParams,
@@ -494,6 +496,27 @@ describe('setup prep-charts Ethereum DA blob source updates', () => {
 
     expect(values.reth.blobS3Url).to.equal('https://dogeos-da.s3.us-east-1.amazonaws.com/devnet/eth-da/blobs/v1')
     expect(changes.map(change => change.key)).to.deep.equal(['reth.blobS3Url'])
+  })
+
+  it('targets every concrete Reth values file for blobS3Url updates', () => {
+    const files = [
+      'l2-reth-bootnode-production-0.yaml',
+      'l2-reth-bootnode-production-1.yaml',
+      'l2-reth-rpc-production.yaml',
+      'l2-reth-rpc-public-production.yaml',
+      'l2-reth-sequencer-production-0.yaml',
+      'l2-reth-sequencer-production-1.yaml',
+    ]
+
+    expect(files.map(file => isL2RethBlobS3Chart(getProductionChartName(file)))).to.deep.equal([
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+    ])
+    expect(isL2RethBlobS3Chart(getProductionChartName('l2-geth-rpc-production.yaml'))).to.equal(false)
   })
 
   it('removes legacy l2geth bootnode S3 extra params', () => {
