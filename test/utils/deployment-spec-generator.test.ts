@@ -1422,11 +1422,8 @@ describe('deployment-spec-generator', () => {
       expect(values.externalSecrets.secrets.data.map((item: any) => item.secretKey))
         .to.deep.equal(['proof-work-token', 'prover-worker-token']);
 
-      const proofCoordinatorToml = values.configMaps.config.data['ProofCoordinator.toml'];
-      expect(proofCoordinatorToml).to.include('verifier_import_mode = "production"');
-      expect(proofCoordinatorToml).to.include('expected_proof_system_id = "<TODO>"');
-      expect(proofCoordinatorToml).to.include('chunk_program_commitment_hex = "<TODO>"');
-      expect(proofCoordinatorToml).not.to.include('DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET');
+      expect(values.proofCoordinator.config.required).to.equal(true);
+      expect(values).not.to.have.property('configMaps');
     });
 
     it('generates l1-interface genesis and indexer heights independently', () => {

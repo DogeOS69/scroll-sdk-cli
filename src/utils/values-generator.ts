@@ -1511,92 +1511,6 @@ function generateCoordinatorCronValues(spec: DeploymentSpec): string {
   return yaml.dump(values)
 }
 
-function proofCoordinatorProductionToml(): string {
-  return `poll_interval_ms = 1000
-lease_ttl_ms = 60000
-
-[auth]
-bearer_token_file = "/run/secrets/proof-work-token"
-
-[artifact_store]
-kind = "s3"
-key_prefix = "proof-topology"
-force_path_style = true
-
-[verifier]
-verifier_import_mode = "production"
-
-[verifier.scroll_chunk_verifier_identity]
-program_manifest_path = "/app/data/manifests/scroll-chunk.json"
-expected_proof_system_id = "<TODO>"
-expected_circuit_id = "<TODO>"
-expected_circuit_version = "<TODO>"
-expected_verification_key_hash_hex = "<TODO>"
-expected_program_commitment_hash_hex = "<TODO>"
-verifier_id = "<TODO>"
-
-[verifier.scroll_batch_verifier_identity]
-program_manifest_path = "/app/data/manifests/scroll-batch.json"
-expected_proof_system_id = "<TODO>"
-expected_circuit_id = "<TODO>"
-expected_circuit_version = "<TODO>"
-expected_verification_key_hash_hex = "<TODO>"
-expected_program_commitment_hash_hex = "<TODO>"
-verifier_id = "<TODO>"
-
-# Enable when bridge proof verification/materialization is part of this
-# environment, and set bridge_program_commitment_hex below.
-# [verifier.scroll_bridge_verifier_identity]
-# program_manifest_path = "/app/data/manifests/scroll-bridge.json"
-# expected_proof_system_id = "<TODO>"
-# expected_circuit_id = "<TODO>"
-# expected_circuit_version = "<TODO>"
-# expected_verification_key_hash_hex = "<TODO>"
-# expected_program_commitment_hash_hex = "<TODO>"
-# verifier_id = "<TODO>"
-
-[verifier.scroll_real_verifier]
-agg_verifying_key_path = "/app/data/verifier/agg-vk.bin"
-chunk_program_commitment_hex = "<TODO>"
-batch_program_commitment_hex = "<TODO>"
-# bridge_program_commitment_hex = "<TODO>"
-
-# Optional materializer execution config. Leave absent for verify +
-# prover gateway only. Uncomment and fill the family blocks this
-# deployment owns.
-#
-# [materializer.scroll_chunk]
-# enabled = true
-# binary_path = "/opt/dogeos/materialize-chunk-oneshot"
-# statement_namespace_config_path = "/app/data/statement-namespace.json"
-# sidecar_scratch_root = "/app/data/chunk-scratch"
-# l2_rpc_url = "http://l2-rpc:8545"
-# subprocess_timeout_ms = 600000
-# [materializer.scroll_chunk.prove_spec]
-# backend_profile = "scroll-prod-zkvm-v1"
-#
-# [materializer.scroll_batch]
-# enabled = true
-# dev_sentinel = false
-# materializer_output_root = "/app/data/batch-output"
-# proof_mode = "Production"
-
-[prover_api]
-enabled = true
-bind_addr = "0.0.0.0:9400"
-worker_auth_token_file = "/run/secrets/prover-worker-token"
-max_lease_ttl_ms = 60000
-transport = "s3"
-
-[artifact_write]
-signed_put_expiry_ms = 3600000
-staging_prefix = "staging/proofs"
-accepted_prefix = "accepted/proofs"
-max_proof_bytes = 536870912
-max_public_output_bytes = 10485760
-`
-}
-
 function isNonLoopbackPlainHttp(rawUrl: string): boolean {
   try {
     const url = new URL(rawUrl)
@@ -1667,14 +1581,6 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
   }
 
   const values: Record<string, any> = {
-    configMaps: {
-      config: {
-        data: {
-          'ProofCoordinator.toml': proofCoordinatorProductionToml()
-        },
-        enabled: true
-      }
-    },
     controller: {
       replicas: 1
     },
@@ -1692,6 +1598,11 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
       liveness: { enabled: true },
       readiness: { enabled: true },
       startup: { enabled: true }
+    },
+    proofCoordinator: {
+      config: {
+        required: true
+      }
     },
     service: {
       main: {

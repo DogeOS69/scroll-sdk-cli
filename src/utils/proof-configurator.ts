@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- Helm values and embedded TOML are dynamic documents. */
+/* eslint-disable @typescript-eslint/no-explicit-any -- Helm values and manifest-derived TOML tables are dynamic documents. */
 
 import * as toml from '@iarna/toml'
 import * as yaml from 'js-yaml'
@@ -31,15 +31,20 @@ interface ArtifactManifest {
 
 export interface ConfigureProofValuesOptions {
   artifactManifestPath: string
+  coordinatorConfigPath: string
   manifestPaths: string[]
   valuesDir: string
   verifierIds?: Partial<Record<ProofFamily, string>>
 }
 
 export interface ConfigureProofValuesResult {
+  configFile: string
   families: ProofFamily[]
   files: string[]
 }
+
+const MANAGED_VERIFIER_BEGIN = '# BEGIN scrollsdk managed verifier configuration'
+const MANAGED_VERIFIER_END = '# END scrollsdk managed verifier configuration'
 
 const FAMILY_CONFIG_KEYS: Record<ProofFamily, string> = {
   bridge_transition: 'scroll_bridge_verifier_identity',
@@ -182,6 +187,42 @@ function writeYamlAtomic(filePath: string, value: any): void {
   }
 }
 
+function writeTextAtomic(filePath: string, value: string): void {
+  const temporaryPath = `${filePath}.tmp-${process.pid}`
+  try {
+    const mode = fs.statSync(filePath).mode & 0o777
+    fs.writeFileSync(temporaryPath, value, { mode })
+    fs.renameSync(temporaryPath, filePath)
+  } finally {
+    if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath)
+  }
+}
+
+function replaceManagedVerifierBlock(filePath: string, verifier: Record<string, any>): string {
+  if (!fs.existsSync(filePath)) throw new Error(`Proof coordinator TOML not found: ${filePath}`)
+  const source = fs.readFileSync(filePath, 'utf8')
+  const begin = source.indexOf(MANAGED_VERIFIER_BEGIN)
+  const end = source.indexOf(MANAGED_VERIFIER_END)
+  if (begin < 0 || end < 0 || end < begin) {
+    throw new Error(`${filePath}: expected exactly one ${MANAGED_VERIFIER_BEGIN} / ${MANAGED_VERIFIER_END} block`)
+  }
+
+  if (source.split(MANAGED_VERIFIER_BEGIN).length !== 2 || source.split(MANAGED_VERIFIER_END).length !== 2) {
+    throw new Error(`${filePath}: duplicate scrollsdk managed verifier markers`)
+  }
+
+  const afterEnd = end + MANAGED_VERIFIER_END.length
+  const managed = `${MANAGED_VERIFIER_BEGIN}\n${toml.stringify({ verifier } as toml.JsonMap).trimEnd()}\n${MANAGED_VERIFIER_END}`
+  const candidate = `${source.slice(0, begin)}${managed}${source.slice(afterEnd)}`
+  try {
+    toml.parse(candidate)
+  } catch (error) {
+    throw new Error(`${filePath}: generated TOML is invalid: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  return candidate
+}
+
 function setEnv(env: Array<Record<string, any>>, name: string, value: string): void {
   const existing = env.find(item => item?.name === name)
   if (existing) {
@@ -194,33 +235,29 @@ function setEnv(env: Array<Record<string, any>>, name: string, value: string): v
 
 function updateProofCoordinator(
   filePath: string,
+  configPath: string,
   manifests: Map<ProofFamily, { manifest: ProofProgramManifest; path: string }>,
   commitments: Map<ProofFamily, string>,
   verifierIds: Partial<Record<ProofFamily, string>>
 ): void {
   const values = readYaml(filePath)
-  const configMap = values.configMaps?.config?.data
-  if (!configMap || typeof configMap['ProofCoordinator.toml'] !== 'string') {
-    throw new Error(`${filePath}: configMaps.config.data.ProofCoordinator.toml is missing`)
-  }
-
-  const config = toml.parse(configMap['ProofCoordinator.toml']) as any
-  config.verifier ||= {}
-  config.verifier.verifier_import_mode = 'production'
+  const verifier: Record<string, any> = { verifier_import_mode: 'production' }
   const manifestConfigMap: Record<string, string> = {}
   for (const [family, { manifest, path: manifestPath }] of manifests) {
     const verifierId = verifierIds[family] || defaultVerifierId(manifest)
     assertIdentifier(verifierId, `${family} verifier ID`)
-    config.verifier[FAMILY_CONFIG_KEYS[family]] = verifierPolicy(manifest, manifestPath, verifierId)
+    verifier[FAMILY_CONFIG_KEYS[family]] = verifierPolicy(manifest, manifestPath, verifierId)
     manifestConfigMap[path.basename(manifestPath)] = `${fs.readFileSync(manifestPath, 'utf8').trimEnd()}\n`
   }
 
-  config.verifier.scroll_real_verifier ||= {}
-  config.verifier.scroll_real_verifier.agg_verifying_key_path = '/app/data/verifier/agg-vk.bin'
-  if (commitments.has('scroll_chunk')) config.verifier.scroll_real_verifier.chunk_program_commitment_hex = commitments.get('scroll_chunk')
-  if (commitments.has('scroll_batch')) config.verifier.scroll_real_verifier.batch_program_commitment_hex = commitments.get('scroll_batch')
-  if (commitments.has('bridge_transition')) config.verifier.scroll_real_verifier.bridge_program_commitment_hex = commitments.get('bridge_transition')
-  configMap['ProofCoordinator.toml'] = toml.stringify(config)
+  verifier.scroll_real_verifier = {
+    agg_verifying_key_path: '/app/data/verifier/agg-vk.bin',
+    batch_program_commitment_hex: commitments.get('scroll_batch'),
+    bridge_program_commitment_hex: commitments.get('bridge_transition'),
+    chunk_program_commitment_hex: commitments.get('scroll_chunk'),
+  }
+  const updatedConfig = replaceManagedVerifierBlock(configPath, verifier)
+  values.configMaps ||= {}
   values.configMaps.manifests = { data: manifestConfigMap, enabled: true }
   values.persistence ||= {}
   values.persistence.manifests = {
@@ -229,6 +266,7 @@ function updateProofCoordinator(
     readOnly: true,
     type: 'configMap',
   }
+  writeTextAtomic(configPath, updatedConfig)
   writeYamlAtomic(filePath, values)
 }
 
@@ -356,6 +394,7 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
   const manifests = loadProgramManifests(options.manifestPaths)
   const commitments = loadRawCommitments(options.artifactManifestPath, manifests)
   const verifierIds = options.verifierIds || {}
+  const configFile = path.resolve(options.coordinatorConfigPath)
   const files = [
     path.join(valuesDir, 'proof-coordinator-production.yaml'),
     path.join(valuesDir, 'withdrawal-processor-production.yaml'),
@@ -363,7 +402,8 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
 
   // Complete validation happens before either target is written.
   for (const filePath of files) readYaml(filePath)
-  updateProofCoordinator(files[0], manifests, commitments, verifierIds)
+  if (!fs.existsSync(configFile)) throw new Error(`Proof coordinator TOML not found: ${configFile}`)
+  updateProofCoordinator(files[0], configFile, manifests, commitments, verifierIds)
   updateWithdrawalProcessor(files[1], files[0], manifests, commitments, verifierIds)
-  return { families: [...manifests.keys()].sort(), files }
+  return { configFile, families: [...manifests.keys()].sort(), files }
 }

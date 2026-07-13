@@ -1,3 +1,4 @@
+import * as toml from '@iarna/toml'
 import { expect } from 'chai'
 import * as yaml from 'js-yaml'
 import { createHash } from 'node:crypto'
@@ -14,8 +15,20 @@ describe('proof-configurator', () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'proof-configurator-'))
     fs.mkdirSync(path.join(root, 'values'))
     fs.writeFileSync(path.join(root, 'values/proof-coordinator-production.yaml'), yaml.dump({
-      configMaps: { config: { data: { 'ProofCoordinator.toml': '[verifier]\nverifier_import_mode = "dev_dummy"\n' } } },
+      proofCoordinator: { config: { required: true } },
     }))
+    fs.mkdirSync(path.join(root, 'config/proof-coordinator'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'config/proof-coordinator/ProofCoordinator.toml'), `# user comment must survive
+poll_interval_ms = 2345
+
+# BEGIN scrollsdk managed verifier configuration
+[verifier]
+verifier_import_mode = "dev_dummy"
+# END scrollsdk managed verifier configuration
+
+[artifact_write]
+max_proof_bytes = 42
+`)
     fs.writeFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), yaml.dump({
       env: [{ name: 'DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__SKIP_SCROLL_EXECUTION_PROOFS', value: 'true' }],
     }))
@@ -55,13 +68,19 @@ describe('proof-configurator', () => {
 
     const result = configureProofValues({
       artifactManifestPath: artifactPath,
+      coordinatorConfigPath: path.join(root, 'config/proof-coordinator/ProofCoordinator.toml'),
       manifestPaths: manifests,
       valuesDir: path.join(root, 'values'),
     })
     expect(result.families).to.deep.equal(['bridge_transition', 'scroll_batch', 'scroll_chunk'])
 
     const coordinator = yaml.load(fs.readFileSync(result.files[0], 'utf8')) as any
-    expect(coordinator.configMaps.config.data['ProofCoordinator.toml']).to.include('expected_circuit_id = "scroll_chunk-v1"')
+    const coordinatorToml = fs.readFileSync(result.configFile, 'utf8')
+    const parsedCoordinator = toml.parse(coordinatorToml) as any
+    expect(parsedCoordinator.verifier.scroll_chunk_verifier_identity.expected_circuit_id).to.equal('scroll_chunk-v1')
+    expect(coordinatorToml).to.include('# user comment must survive')
+    expect(parsedCoordinator.poll_interval_ms).to.equal(2345)
+    expect(parsedCoordinator.artifact_write.max_proof_bytes).to.equal(42)
     expect(coordinator.configMaps.manifests.data).to.have.all.keys(families.map(family => `${family}.json`))
     expect(coordinator.persistence.manifests.mountPath).to.equal('/app/data/manifests')
 
@@ -95,7 +114,12 @@ describe('proof-configurator', () => {
       chunk_program_commitment_raw: `0x${Buffer.alloc(64, 1).toString('hex')}`,
     } }))
 
-    expect(() => configureProofValues({ artifactManifestPath: artifactPath, manifestPaths: manifests, valuesDir: path.join(root, 'values') }))
+    expect(() => configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath: path.join(root, 'config/proof-coordinator/ProofCoordinator.toml'),
+      manifestPaths: manifests,
+      valuesDir: path.join(root, 'values'),
+    }))
       .to.throw('does not match program manifest')
   })
 })

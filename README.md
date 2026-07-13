@@ -1736,15 +1736,17 @@ _See code: [src/commands/setup/prep-charts.ts](https://github.com/dogeos69/scrol
 
 ## `scrollsdk setup proof-config`
 
-Populate proof topology Helm values from cryptographic release manifests
+Populate proof topology values and the managed verifier block in ProofCoordinator.toml
 
 ```
 USAGE
-  $ scrollsdk setup proof-config [--artifact-manifest <value>] [--json] [--program-manifest <value>...] [--values-dir
+  $ scrollsdk setup proof-config [--artifact-manifest <value>] [--coordinator-config <value>] [--json] [--program-manifest <value>...] [--values-dir
     <value>] [--verifier-id <value>...]
 
 FLAGS
   --artifact-manifest=<value>    Real-proving artifact manifest (default: proof-artifacts/release.json)
+  --coordinator-config=<value>   [default: config/proof-coordinator/ProofCoordinator.toml] Native TOML containing
+                                 scrollsdk managed verifier markers
   --json                         Output structured JSON
   --program-manifest=<value>...  ProofProgramManifestV1 JSON; repeat for a non-standard layout (defaults to
                                  proof-artifacts/manifests/*.json)
@@ -1752,7 +1754,7 @@ FLAGS
   --verifier-id=<value>...       Optional FAMILY=ID override; repeat per family
 
 DESCRIPTION
-  Populate proof topology Helm values from cryptographic release manifests
+  Populate proof topology values and the managed verifier block in ProofCoordinator.toml
 
 EXAMPLES
   # Use the standard proof-artifacts/ and values/ layout
