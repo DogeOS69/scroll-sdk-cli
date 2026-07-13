@@ -17,8 +17,8 @@ describe('proof-configurator', () => {
     fs.writeFileSync(path.join(root, 'values/proof-coordinator-production.yaml'), yaml.dump({
       proofCoordinator: { config: { required: true } },
     }))
-    fs.mkdirSync(path.join(root, 'config/proof-coordinator'), { recursive: true })
-    fs.writeFileSync(path.join(root, 'config/proof-coordinator/ProofCoordinator.toml'), `# user comment must survive
+    fs.mkdirSync(path.join(root, 'proof-coordinator'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'proof-coordinator/ProofCoordinator.toml'), `# user comment must survive
 poll_interval_ms = 2345
 
 # BEGIN scrollsdk managed verifier configuration
@@ -68,7 +68,7 @@ max_proof_bytes = 42
 
     const result = configureProofValues({
       artifactManifestPath: artifactPath,
-      coordinatorConfigPath: path.join(root, 'config/proof-coordinator/ProofCoordinator.toml'),
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
       manifestPaths: manifests,
       valuesDir: path.join(root, 'values'),
     })
@@ -116,7 +116,7 @@ max_proof_bytes = 42
 
     expect(() => configureProofValues({
       artifactManifestPath: artifactPath,
-      coordinatorConfigPath: path.join(root, 'config/proof-coordinator/ProofCoordinator.toml'),
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
       manifestPaths: manifests,
       valuesDir: path.join(root, 'values'),
     }))

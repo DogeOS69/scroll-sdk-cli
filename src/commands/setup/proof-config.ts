@@ -7,7 +7,7 @@ import { JsonOutputContext } from '../../utils/json-output.js'
 import { configureProofValues } from '../../utils/proof-configurator.js'
 
 export const DEFAULT_PROOF_ARTIFACT_MANIFEST = 'proof-artifacts/release.json'
-export const DEFAULT_PROOF_COORDINATOR_CONFIG = 'config/proof-coordinator/ProofCoordinator.toml'
+export const DEFAULT_PROOF_COORDINATOR_CONFIG = 'proof-coordinator/ProofCoordinator.toml'
 export const DEFAULT_PROOF_PROGRAM_MANIFESTS = [
   'proof-artifacts/manifests/scroll-chunk.json',
   'proof-artifacts/manifests/scroll-batch.json',
@@ -34,7 +34,7 @@ export default class ProofConfig extends Command {
   static override description = 'Populate proof topology values and the managed verifier block in ProofCoordinator.toml'
 
   static override examples = [
-    '# Use the standard proof-artifacts/ and values/ layout',
+    '# Use the standard proof-coordinator/, proof-artifacts/, and values/ layout',
     '<%= config.bin %> <%= command.id %>',
     '',
     '# Override paths for a non-standard layout',

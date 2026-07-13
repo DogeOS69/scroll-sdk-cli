@@ -537,13 +537,15 @@ proof-artifacts/release.json
 proof-artifacts/manifests/scroll-chunk.json
 proof-artifacts/manifests/scroll-batch.json
 proof-artifacts/manifests/bridge-transition.json
+proof-coordinator/ProofCoordinator.toml
 values/proof-coordinator-production.yaml
 values/withdrawal-processor-production.yaml
 ```
 
 The command requires all three production proof families. It validates each
 `ProofProgramManifestV1`, checks that SHA-256 of the 64-byte raw commitment in
-the artifact manifest equals the program commitment hash, embeds the manifests,
+the artifact manifest equals the program commitment hash, replaces only the
+marked verifier block in `proof-coordinator/ProofCoordinator.toml`, embeds the manifests,
 and writes both `values/proof-coordinator-production.yaml` and
 `values/withdrawal-processor-production.yaml` via atomic file replacement. It
 also configures the shared proof-work token mount, copies the coordinator's

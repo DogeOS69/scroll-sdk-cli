@@ -1745,8 +1745,8 @@ USAGE
 
 FLAGS
   --artifact-manifest=<value>    Real-proving artifact manifest (default: proof-artifacts/release.json)
-  --coordinator-config=<value>   [default: config/proof-coordinator/ProofCoordinator.toml] Native TOML containing
-                                 scrollsdk managed verifier markers
+  --coordinator-config=<value>   [default: proof-coordinator/ProofCoordinator.toml] Native TOML containing scrollsdk
+                                 managed verifier markers
   --json                         Output structured JSON
   --program-manifest=<value>...  ProofProgramManifestV1 JSON; repeat for a non-standard layout (defaults to
                                  proof-artifacts/manifests/*.json)
@@ -1757,7 +1757,7 @@ DESCRIPTION
   Populate proof topology values and the managed verifier block in ProofCoordinator.toml
 
 EXAMPLES
-  # Use the standard proof-artifacts/ and values/ layout
+  # Use the standard proof-coordinator/, proof-artifacts/, and values/ layout
 
   $ scrollsdk setup proof-config
 
