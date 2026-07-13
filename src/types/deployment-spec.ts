@@ -151,6 +151,9 @@ export interface ProofCoordinatorConfig {
   /** WP proof-work API base URL consumed by proof-coordinator. */
   proofWorkBaseUrl?: string
 
+  /** Explicit credential contract for the shared proof artifact S3 store. */
+  s3AuthMode: 'ambient' | 'irsa'
+
   /** Mounted secret and external-secret source metadata. */
   secrets?: {
     name?: string
@@ -161,6 +164,12 @@ export interface ProofCoordinatorConfig {
 
   /** Dedicated Kubernetes ServiceAccount. Use annotations for IRSA/workload identity. */
   serviceAccount?: {
+    annotations?: Record<string, string>
+    name?: string
+  }
+
+  /** Withdrawal Processor identity used to read proof objects and issue signed URLs. */
+  withdrawalProcessorServiceAccount?: {
     annotations?: Record<string, string>
     name?: string
   }

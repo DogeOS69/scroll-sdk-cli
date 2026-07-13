@@ -1014,6 +1014,14 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   if (proofCoordinator && proofCoordinator.enabled !== false) {
     const { artifactStore } = proofCoordinator
 
+    if (!['ambient', 'irsa'].includes(proofCoordinator.s3AuthMode)) {
+      errors.push({
+        code: 'E013_INVALID_PROOF_COORDINATOR_CONFIG',
+        message: 'proofCoordinator.s3AuthMode must be explicitly set to ambient or irsa',
+        path: 'proofCoordinator.s3AuthMode'
+      })
+    }
+
     if (proofCoordinator.proofWorkBaseUrl && !isHttpUrl(proofCoordinator.proofWorkBaseUrl)) {
       errors.push({
         code: 'E013_INVALID_PROOF_COORDINATOR_CONFIG',
@@ -1036,6 +1044,24 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
         message: 'proofCoordinator.artifactStore.region is required when proofCoordinator is enabled',
         path: 'proofCoordinator.artifactStore.region'
       })
+    }
+
+    if (proofCoordinator.s3AuthMode === 'irsa') {
+      for (const [path, annotations] of [
+        ['proofCoordinator.serviceAccount.annotations', proofCoordinator.serviceAccount?.annotations],
+        [
+          'proofCoordinator.withdrawalProcessorServiceAccount.annotations',
+          proofCoordinator.withdrawalProcessorServiceAccount?.annotations,
+        ],
+      ] as Array<[string, Record<string, string> | undefined]>) {
+        if (!annotations?.['eks.amazonaws.com/role-arn']) {
+          errors.push({
+            code: 'E013_INVALID_PROOF_COORDINATOR_CONFIG',
+            message: `${path}.eks.amazonaws.com/role-arn is required when proofCoordinator.s3AuthMode is irsa`,
+            path: `${path}.eks.amazonaws.com/role-arn`
+          })
+        }
+      }
     }
 
     for (const [path, value] of [

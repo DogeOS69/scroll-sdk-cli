@@ -30,6 +30,10 @@ import {
   isLocalSigner,
 } from '../../utils/signer-roles.js'
 import {
+  ensureWithdrawalProofActivationSwitch,
+  isWithdrawalProofActivationEnv,
+} from '../../utils/withdrawal-config.js'
+import {
   RETH_BOOTNODE_NODEKEY_ENV,
   type ResolvedBootnodeRethConfig,
   applyBootnodeRethValues,
@@ -916,6 +920,54 @@ export function removeEnvArrayKeys(
     productionYaml.env = nextEnv
   }
 
+  return changes
+}
+
+const WITHDRAWAL_LEGACY_PROOF_ENV_KEYS = new Set([
+  'DOGEOS_WITHDRAWAL_COORDINATOR_POLL_INTERVAL_SECS',
+  'DOGEOS_WITHDRAWAL_PROVING_MODE',
+  'DOGEOS_WITHDRAWAL_SCROLL_PROOF_INPUT_POLICY',
+  'DOGEOS_WITHDRAWAL_PROOF_CONTROL_PLANE_GATE__PROOF_MODE',
+  'DOGEOS_WITHDRAWAL_PROOF_CONTROL_PLANE_GATE__VERIFICATION_POLICY',
+  'DOGEOS_WITHDRAWAL_PROOF_CONTROL_PLANE_GATE__VERIFIER_IMPORT_MODE',
+])
+
+const WITHDRAWAL_LEGACY_PROOF_ENV_PREFIXES = [
+  'DOGEOS_WITHDRAWAL_PROOF_ARTIFACT_TRANSPORT__',
+  'DOGEOS_WITHDRAWAL_PROOF_CONTROL_PLANE_GATE__',
+  'DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__',
+  'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__',
+  'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__',
+  'DOGEOS_WITHDRAWAL_PROOF_WORK_API__',
+  'DOGEOS_WITHDRAWAL_LOCAL_BRIDGE_PROOF_RUNTIME__',
+  'DOGEOS_WITHDRAWAL_SCROLL_WORKER_API__',
+]
+
+/** Remove retired fields and proof settings now owned by WithdrawalProcessor.toml. */
+export function scrubWithdrawalLegacyProofEnv(productionYaml: any): PrepChartChange[] {
+  const changes: PrepChartChange[] = []
+  if (!Array.isArray(productionYaml.env)) return changes
+
+  const nextEnv = []
+  for (const item of productionYaml.env) {
+    const name = typeof item?.name === 'string' ? item.name : ''
+    const retired = !isWithdrawalProofActivationEnv(name) && (
+      WITHDRAWAL_LEGACY_PROOF_ENV_KEYS.has(name)
+      || WITHDRAWAL_LEGACY_PROOF_ENV_PREFIXES.some(prefix => name.startsWith(prefix))
+    )
+    if (retired) {
+      changes.push({
+        key: `env.${name}`,
+        newValue: 'removed',
+        oldValue: String(item.value ?? 'undefined'),
+      })
+      continue
+    }
+
+    nextEnv.push(item)
+  }
+
+  if (nextEnv.length !== productionYaml.env.length) productionYaml.env = nextEnv
   return changes
 }
 
@@ -2547,9 +2599,8 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_MAX_DEPOSITS_PER_ADVANCE_L1": "32",
           "DOGEOS_WITHDRAWAL_MAX_WITHDRAWAL_OUTPUTS_PER_TX": "256",
           "DOGEOS_WITHDRAWAL_NETWORK_STR": this.withdrawalProcessorConfig.network_str,
-          "DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__SKIP_BRIDGE_STATE_PROOFS": "true",
-          "DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__SKIP_SCROLL_EXECUTION_PROOFS": "true",
           "DOGEOS_WITHDRAWAL_REQUIRE_CHANGE_TRACKING": "false",
+          "DOGEOS_WITHDRAWAL_ROTATE_SEQUENCER_SIGNER_V2": "false",
           "DOGEOS_WITHDRAWAL_STRICT_L1_VALIDATION": "false",
           "DOGEOS_WITHDRAWAL_STRICT_L2_VALIDATION": "false",
           "DOGEOS_WITHDRAWAL_TSO_TIMEOUT_MINUTES": "30",
@@ -2568,6 +2619,21 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__HIGH_THRESH_SATS": "10000000000",
           "DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__PREFER_INFLIGHT_BRIDGE_OUTPUTS": "false",
           "DOGEOS_WITHDRAWAL_WF_WITHDRAWAL_PARITY_V1": "true",
+        }
+
+        const legacyProofChanges = scrubWithdrawalLegacyProofEnv(productionYaml)
+        if (legacyProofChanges.length > 0) {
+          changes.push(...legacyProofChanges)
+          updated = true
+        }
+
+        if (ensureWithdrawalProofActivationSwitch(productionYaml)) {
+          changes.push({
+            key: 'withdrawalProof.enabled',
+            newValue: productionYaml.withdrawalProof.enabled,
+            oldValue: 'missing or non-canonical activation projection',
+          })
+          updated = true
         }
 
         const ethereumDaEmbeddedIndexerStartBlock = this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock

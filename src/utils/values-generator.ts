@@ -32,6 +32,10 @@ import {
 import {
   resolveDogecoinKubernetesEndpoints,
 } from './kubernetes-endpoints.js'
+import {
+  ensureWithdrawalConfigValues,
+  ensureWithdrawalProofActivationSwitch,
+} from './withdrawal-config.js'
 
 export interface GeneratedValuesFiles {
   [filename: string]: string
@@ -413,9 +417,8 @@ export function generateValuesFiles(spec: DeploymentSpec, specBaseDir: string = 
     files['attestation-signer-production.yaml'] = generateAttestationSignerValues(normalizedSpec, specBaseDir)
   }
 
-  // Rollup services
-  files['coordinator-api-production.yaml'] = generateCoordinatorApiValues(normalizedSpec)
-  files['coordinator-cron-production.yaml'] = generateCoordinatorCronValues(normalizedSpec)
+  // Proof coordination is the only coordinator role in the O3O topology.
+  // Legacy coordinator-api/coordinator-cron values are intentionally retired.
   if (normalizedSpec.proofCoordinator && normalizedSpec.proofCoordinator.enabled !== false) {
     files['proof-coordinator-production.yaml'] = generateProofCoordinatorValues(normalizedSpec)
   }
@@ -1104,12 +1107,12 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_VOUT', value: '0' },
       { name: 'DOGEOS_WITHDRAWAL_MAX_WITHDRAWAL_OUTPUTS_PER_TX', value: '256' },
       { name: 'DOGEOS_WITHDRAWAL_FEE_RATE_SAT_PER_KVB', value: String(getBridgeFeeRateSatsPerKvb(spec)) },
-      { name: 'DOGEOS_WITHDRAWAL_COORDINATOR_POLL_INTERVAL_SECS', value: '10' },
       { name: 'DOGEOS_WITHDRAWAL_DEBUG_SKIP_BROADCAST', value: 'false' },
       { name: 'DOGEOS_WITHDRAWAL_DEBUG_SKIP_TSO_POLLING', value: 'false' },
       { name: 'DOGEOS_WITHDRAWAL_TSO_TIMEOUT_MINUTES', value: '30' },
       { name: 'DOGEOS_WITHDRAWAL_CLEANUP_TIMEOUT_SECS', value: '3600' },
       { name: 'DOGEOS_WITHDRAWAL_ROTATE_KEY_V2', value: 'true' },
+      { name: 'DOGEOS_WITHDRAWAL_ROTATE_SEQUENCER_SIGNER_V2', value: 'false' },
       { name: 'DOGEOS_WITHDRAWAL_ADVANCE_L1_BUILDER_V2', value: 'true' },
       { name: 'DOGEOS_WITHDRAWAL_ADVANCE_L2_BUILDER_V2', value: 'true' },
       { name: 'DOGEOS_WITHDRAWAL_WF_WITHDRAWAL_PARITY_V1', value: 'true' },
@@ -1147,8 +1150,6 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__BALANCE_BAND_RATIO', value: '0.10' },
       { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__MAX_BALANCE_ADDITIONS', value: '3' },
       { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__FLOOR_ABSOLUTE_SATS', value: '1000000' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__SKIP_SCROLL_EXECUTION_PROOFS', value: 'true' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__SKIP_BRIDGE_STATE_PROOFS', value: 'true' },
       // Ethereum DA resolver/indexer inputs for AdvanceL2 builder v2.
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL', value: getEthereumDaSubmitterRpcUrl(spec) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID', value: String(getEthereumDaChainId(spec)) },
@@ -1201,6 +1202,25 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
     resources: {
       limits: { cpu: '1000m', memory: '2Gi' },
       requests: { cpu: '200m', memory: '512Mi' }
+    }
+  }
+
+  ensureWithdrawalConfigValues(values)
+  ensureWithdrawalProofActivationSwitch(values)
+
+  const {proofCoordinator} = spec
+  if (proofCoordinator && proofCoordinator.enabled !== false) {
+    if (!proofCoordinator.s3AuthMode) {
+      throw new Error('proofCoordinator.s3AuthMode is required when proofCoordinator is enabled')
+    }
+
+    values.withdrawalProof.s3AuthMode = proofCoordinator.s3AuthMode
+    values.serviceAccount = {
+      annotations: proofCoordinator.withdrawalProcessorServiceAccount?.annotations || {},
+      create: true,
+    }
+    if (proofCoordinator.withdrawalProcessorServiceAccount?.name) {
+      values.serviceAccount.name = proofCoordinator.withdrawalProcessorServiceAccount.name
     }
   }
 
@@ -1430,87 +1450,6 @@ function generateAttestationSignerValues(spec: DeploymentSpec, specBaseDir: stri
   return yaml.dump(values)
 }
 
-/**
- * Generate Coordinator API values
- */
-function generateCoordinatorApiValues(spec: DeploymentSpec): string {
-  const secretConfig = getSecretProviderConfig(spec)
-
-  const image = resolveImage(spec, 'coordinator', {
-    pullPolicy: 'IfNotPresent',
-    repository: 'scrolltech/coordinator-api',
-    tag: 'v4.4.83'
-  })
-
-  const values: Record<string, any> = {
-    controller: {
-      replicas: 2
-    },
-    envFrom: [
-      { secretRef: { name: 'coordinator-api-secret-env' } }
-    ],
-    image,
-    ingress: {
-      main: {
-        hosts: [{
-          host: spec.frontend.hosts.coordinatorApi,
-          paths: [{ path: '/', pathType: 'Prefix' }]
-        }],
-        ingressClassName: 'nginx'
-      }
-    },
-    resources: {
-      limits: { cpu: '200m', memory: '24Gi' },
-      requests: { cpu: '50m', memory: '2Gi' }
-    }
-  }
-
-  const externalSecrets = generateExternalSecrets(
-    'coordinator-api-secret-env',
-    secretConfig,
-    [
-      { property: 'SCROLL_COORDINATOR_DB_DSN', remoteKey: 'coordinator-api-secret-env', secretKey: 'SCROLL_COORDINATOR_DB_DSN' },
-    ]
-  )
-
-  if (externalSecrets) {
-    values.externalSecrets = externalSecrets
-  }
-
-  return yaml.dump(values)
-}
-
-/**
- * Generate Coordinator Cron values
- */
-function generateCoordinatorCronValues(spec: DeploymentSpec): string {
-  const secretConfig = getSecretProviderConfig(spec)
-
-  const values: Record<string, any> = {
-    envFrom: [
-      { secretRef: { name: 'coordinator-cron-secret-env' } }
-    ],
-    resources: {
-      limits: { cpu: '500m', memory: '2Gi' },
-      requests: { cpu: '50m', memory: '256Mi' }
-    }
-  }
-
-  const externalSecrets = generateExternalSecrets(
-    'coordinator-cron-secret-env',
-    secretConfig,
-    [
-      { property: 'SCROLL_COORDINATOR_DB_DSN', remoteKey: 'coordinator-cron-secret-env', secretKey: 'SCROLL_COORDINATOR_DB_DSN' },
-    ]
-  )
-
-  if (externalSecrets) {
-    values.externalSecrets = externalSecrets
-  }
-
-  return yaml.dump(values)
-}
-
 function isNonLoopbackPlainHttp(rawUrl: string): boolean {
   try {
     const url = new URL(rawUrl)
@@ -1529,6 +1468,10 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
   const { proofCoordinator } = spec
   if (!proofCoordinator || proofCoordinator.enabled === false) {
     throw new Error('proofCoordinator values requested but proofCoordinator is not enabled')
+  }
+
+  if (!proofCoordinator.s3AuthMode) {
+    throw new Error('proofCoordinator.s3AuthMode is required when proofCoordinator is enabled')
   }
 
   const secretConfig = getSecretProviderConfig(spec)

@@ -1273,6 +1273,8 @@ describe('deployment-spec-generator', () => {
       expect(files).not.to.have.property('celestia-node-production.yaml');
       expect(files).not.to.have.property('da-publisher-production.yaml');
       expect(files).not.to.have.property('rollup-relayer-production.yaml');
+      expect(files).not.to.have.property('coordinator-api-production.yaml');
+      expect(files).not.to.have.property('coordinator-cron-production.yaml');
 
       expect(files['eth-da-submitter-production.yaml']).to.include('DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY');
       expect(files['eth-da-submitter-production.yaml']).to.include('dogeos-test/eth-da-submitter-secret-env');
@@ -1320,8 +1322,29 @@ describe('deployment-spec-generator', () => {
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_INITIAL_BRIDGE_REDEEM_SCRIPT_HEX).to.equal('');
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_MAX_WITHDRAWAL_OUTPUTS_PER_TX).to.equal('256');
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_MAX_DEPOSITS_PER_ADVANCE_L1).to.equal('32');
-      expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__SKIP_SCROLL_EXECUTION_PROOFS).to.equal('true');
-      expect(Object.keys(withdrawalRuntimeEnv).filter(key => key.startsWith('DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__'))).to.deep.equal([]);
+      expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_CLEANUP_TIMEOUT_SECS).to.equal('3600');
+      expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_ROTATE_SEQUENCER_SIGNER_V2).to.equal('false');
+      expect(withdrawalRuntimeEnv).not.to.have.property('DOGEOS_WITHDRAWAL_COORDINATOR_POLL_INTERVAL_SECS');
+      expect(Object.fromEntries(Object.entries(withdrawalRuntimeEnv).filter(([key]) => key.startsWith('DOGEOS_WITHDRAWAL_PROOF_')))).to.deep.equal({
+        DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE: '{{ ternary "production" "disabled" .Values.withdrawalProof.enabled }}',
+        DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
+        DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
+        DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
+      });
+      expect(withdrawalValuesForRuntime.withdrawalProof.enabled).to.equal(false);
+      const withdrawalConfig = toml.parse(withdrawalValuesForRuntime.configMaps.config.data['WithdrawalProcessor.toml']) as any;
+      expect(withdrawalConfig.proof_system).to.deep.equal({
+        mode: 'disabled',
+        require_bridge_state: false,
+        require_scroll_execution: false,
+      });
+      expect(withdrawalValuesForRuntime.args).to.deep.equal(['--config', '/app/config/WithdrawalProcessor.toml']);
+      expect(withdrawalValuesForRuntime.persistence['withdrawal-processor-config']).to.include({
+        enabled: true,
+        mountPath: '/app/config/WithdrawalProcessor.toml',
+        subPath: 'WithdrawalProcessor.toml',
+        type: 'configMap',
+      });
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__STRATEGY).to.equal('band');
       expect(withdrawalValuesForRuntime.externalSecrets['withdrawal-processor-secret-env'].data.map((item: any) => item.secretKey))
         .to.include.members([
@@ -1376,10 +1399,17 @@ describe('deployment-spec-generator', () => {
           region: 'us-west-2',
         },
         proofWorkBaseUrl: 'http://withdrawal-processor:3000',
+        s3AuthMode: 'irsa',
         serviceAccount: {
           annotations: {
             'eks.amazonaws.com/role-arn': 'arn:aws:iam::123456789012:role/proof-coordinator',
           },
+        },
+        withdrawalProcessorServiceAccount: {
+          annotations: {
+            'eks.amazonaws.com/role-arn': 'arn:aws:iam::123456789012:role/withdrawal-processor-proof',
+          },
+          name: 'withdrawal-processor',
         },
       };
       spec.images = {
@@ -1424,6 +1454,19 @@ describe('deployment-spec-generator', () => {
 
       expect(values.proofCoordinator.config.required).to.equal(true);
       expect(values).not.to.have.property('configMaps');
+
+      const withdrawalValues = yaml.load(files['withdrawal-processor-production.yaml']) as any;
+      expect(withdrawalValues.withdrawalProof).to.deep.include({
+        enabled: false,
+        s3AuthMode: 'irsa',
+      });
+      expect(withdrawalValues.serviceAccount).to.deep.equal({
+        annotations: {
+          'eks.amazonaws.com/role-arn': 'arn:aws:iam::123456789012:role/withdrawal-processor-proof',
+        },
+        create: true,
+        name: 'withdrawal-processor',
+      });
     });
 
     it('generates l1-interface genesis and indexer heights independently', () => {

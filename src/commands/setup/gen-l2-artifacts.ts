@@ -270,12 +270,9 @@ export default class SetupGenL2Artifacts extends Command {
       { source: 'bridge-history-config.yaml', target: 'bridge-history-api-config.yaml' },
       { source: 'bridge-history-config.yaml', target: 'bridge-history-fetcher-config.yaml' },
       { source: 'chain-monitor-config.yaml', target: 'chain-monitor-config.yaml' },
-      { source: 'coordinator-api-config.yaml', target: 'coordinator-api-config.yaml' },
-      { source: 'coordinator-cron-config.yaml', target: 'coordinator-cron-config.yaml' },
       { source: 'frontend-config.yaml', target: 'frontends-config.yaml' },
       { source: 'genesis.yaml', target: 'genesis.yaml' },
       { source: 'gas-oracle-config.yaml', target: 'gas-oracle-config.yaml' },
-      { source: 'rollup-config.yaml', target: 'rollup-relayer-config.yaml' },
     ]
 
     // Process all mappings
@@ -293,65 +290,6 @@ export default class SetupGenL2Artifacts extends Command {
           fs.copyFileSync(sourcePath, targetPath)
           this.jsonCtx.log(chalk.green(`Processed file: ${mapping.source} -> ${mapping.target}`))
 
-          if (
-            mapping.target === 'coordinator-api-config.yaml' ||
-            mapping.target === 'coordinator-cron-config.yaml'
-          ) {
-            // remove auth.secret
-            try {
-              const yamlFileContent = fs.readFileSync(targetPath, 'utf8')
-              const parsedYaml = yaml.load(yamlFileContent) as any | null
-
-              if (!parsedYaml || parsedYaml.scrollConfig === undefined) {
-                this.jsonCtx.log(chalk.yellow(`scrollConfig not found in ${mapping.target}`))
-                continue
-              }
-
-              let scrollConfigObject: any
-              const originalScrollConfig = parsedYaml.scrollConfig
-
-              if (typeof originalScrollConfig === 'string') {
-                scrollConfigObject = JSON.parse(originalScrollConfig)
-              } else if (typeof originalScrollConfig === 'object' && originalScrollConfig !== null) {
-                scrollConfigObject = originalScrollConfig
-              } else {
-                this.jsonCtx.log(chalk.yellow(`Unsupported scrollConfig format in ${mapping.target}`))
-                continue
-              }
-
-              if (!scrollConfigObject || typeof scrollConfigObject !== 'object') {
-                this.jsonCtx.log(chalk.yellow(`scrollConfig is not an object in ${mapping.target}`))
-                continue
-              }
-
-              if (!scrollConfigObject.auth || typeof scrollConfigObject.auth !== 'object') {
-                scrollConfigObject.auth = {}
-                this.jsonCtx.log(chalk.yellow(`auth field missing; created auth object in ${mapping.target}`))
-              }
-
-              const hadSecretKey = Object.hasOwn(scrollConfigObject.auth, 'secret')
-              scrollConfigObject.auth.secret = null
-              if (hadSecretKey) {
-                this.jsonCtx.log(chalk.green(`Sanitized auth.secret in ${mapping.target}`))
-              } else {
-                this.jsonCtx.log(chalk.yellow(`auth.secret key missing; initialized to null in ${mapping.target}`))
-              }
-
-              parsedYaml.scrollConfig =
-                typeof originalScrollConfig === 'string'
-                  ? JSON.stringify(scrollConfigObject, null, 2)
-                  : scrollConfigObject
-
-              const updatedYaml = yaml.dump(parsedYaml, { indent: 2 })
-              fs.writeFileSync(targetPath, updatedYaml)
-            } catch (error) {
-              if (error instanceof Error) {
-                this.jsonCtx.log(chalk.red(`Failed to remove auth.secret in ${mapping.target}: ${error.message}`))
-              } else {
-                this.jsonCtx.log(chalk.red(`Unknown error updating ${mapping.target}`))
-              }
-            }
-          }
         } catch (error: unknown) {
           if (error instanceof Error) {
             this.jsonCtx.log(chalk.red(`Error processing file ${mapping.source}: ${error.message}`))

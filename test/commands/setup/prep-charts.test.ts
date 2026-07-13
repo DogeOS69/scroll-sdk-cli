@@ -23,9 +23,11 @@ import {
   removeEnvArrayKeys,
   removeL2GethBlobS3ExtraParams,
   scrubFeeOracleLegacyValues,
+  scrubWithdrawalLegacyProofEnv,
   shouldSkipL2ContractDeploymentBlockUpdate,
   validateDogeConfigEthereumDaForPrep,
 } from '../../../src/commands/setup/prep-charts.js'
+import { ensureWithdrawalProofActivationSwitch } from '../../../src/utils/withdrawal-config.js'
 
 const VALID_PREP_CUTOVER = {
   lastBatchHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
@@ -36,6 +38,42 @@ const VALID_PREP_CUTOVER = {
   stateRoot: '0x3333333333333333333333333333333333333333333333333333333333333333',
   withdrawRoot: '0x4444444444444444444444444444444444444444444444444444444444444444',
 }
+
+describe('setup prep-charts withdrawal proof config migration', () => {
+  it('removes TOML-owned proof env and source-confirmed retired env', () => {
+    const retired = [
+      'DOGEOS_WITHDRAWAL_COORDINATOR_POLL_INTERVAL_SECS',
+      'DOGEOS_WITHDRAWAL_PROVING_MODE',
+      'DOGEOS_WITHDRAWAL_SCROLL_PROOF_INPUT_POLICY',
+      'DOGEOS_WITHDRAWAL_PROOF_TASK_POLICY__SKIP_SCROLL_EXECUTION_PROOFS',
+      'DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__ENABLED',
+      'DOGEOS_WITHDRAWAL_LOCAL_BRIDGE_PROOF_RUNTIME__ARTIFACT_STORE_ROOT',
+      'DOGEOS_WITHDRAWAL_SCROLL_WORKER_API__ENABLED',
+      'DOGEOS_WITHDRAWAL_PROOF_CONTROL_PLANE_GATE__PROOF_MODE',
+      'DOGEOS_WITHDRAWAL_PROOF_CONTROL_PLANE_GATE__VERIFICATION_POLICY',
+      'DOGEOS_WITHDRAWAL_PROOF_CONTROL_PLANE_GATE__VERIFIER_IMPORT_MODE',
+      'DOGEOS_WITHDRAWAL_PROOF_ARTIFACT_TRANSPORT__KIND',
+    ]
+    const values: any = {
+      env: [
+        ...retired.map(name => ({ name, value: 'legacy' })),
+        { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE', value: 'legacy' },
+        { name: 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED', value: 'legacy' },
+        { name: 'DOGEOS_WITHDRAWAL_CLEANUP_TIMEOUT_SECS', value: '3600' },
+      ],
+    }
+
+    const changes = scrubWithdrawalLegacyProofEnv(values)
+    ensureWithdrawalProofActivationSwitch(values)
+
+    expect(changes.map(change => change.key)).to.have.members(retired.map(name => `env.${name}`))
+    const env = Object.fromEntries(values.env.map((item: any) => [item.name, item.value]))
+    expect(env.DOGEOS_WITHDRAWAL_CLEANUP_TIMEOUT_SECS).to.equal('3600')
+    expect(env.DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE).to.equal('{{ ternary "production" "disabled" .Values.withdrawalProof.enabled }}')
+    expect(env.DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED).to.equal('{{ ternary "true" "false" .Values.withdrawalProof.enabled }}')
+    expect(values.withdrawalProof.enabled).to.equal(false)
+  })
+})
 
 describe('setup prep-charts attestation-signer updates', () => {
   it('updates the structured network without touching other signer settings', () => {

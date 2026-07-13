@@ -527,7 +527,8 @@ copying or generating the chart values into the deployment working directory,
 run:
 
 ```bash
-scrollsdk setup proof-config
+scrollsdk setup proof-config \
+  --signer-proof-artifact-base-url https://proofs.example.com/dogeos-proof-artifacts/testnet/o3o
 ```
 
 With the standard deployment layout, it discovers:
@@ -543,14 +544,116 @@ values/withdrawal-processor-production.yaml
 ```
 
 The command requires all three production proof families. It validates each
-`ProofProgramManifestV1`, checks that SHA-256 of the 64-byte raw commitment in
-the artifact manifest equals the program commitment hash, replaces only the
-marked verifier block in `proof-coordinator/ProofCoordinator.toml`, embeds the manifests,
-and writes both `values/proof-coordinator-production.yaml` and
-`values/withdrawal-processor-production.yaml` via atomic file replacement. It
-also configures the shared proof-work token mount, copies the coordinator's
-external-secret mapping for WP, projects the S3 artifact store into WP, and
-removes retired proof-worker fields.
+`ProofProgramManifestV1`, checks that SHA-256 of each 64-byte raw commitment in
+the artifact manifest equals the corresponding program commitment hash, checks
+the release's VK/program hashes against the three program manifests, and
+checks the aggregate verifying key file against
+`artifacts.agg_verifying_key.sha256`. The aggregate key is embedded as base64 in
+a checksummed ConfigMap and an init container installs the verified bytes at
+`/app/data/verifier/agg-vk.bin` for both WP and proof-coordinator.
+
+The proof-coordinator TOML must already contain the hand-maintained production
+materializer execution topology. The command fails closed unless these legs are
+enabled and match the WP authority topology:
+
+```toml
+[materializer]
+artifact_store_root = "/app/data/proof-artifacts"
+
+[materializer.scroll_chunk_segmentation]
+enabled = true
+
+[materializer.scroll_batch]
+enabled = true
+dev_sentinel = false
+materializer_output_root = "/app/data/scroll-batch-materializer"
+
+[materializer.scroll_batch.subprocess]
+binary_path = "/usr/local/bin/scroll-runtime-materializer"
+statement_namespace_config_path = "/app/data/manifests/statement-namespace.json"
+scratch_root = "/app/data/scroll-batch-scratch"
+chunk_program_commitment_hex = "overridden-by-scrollsdk"
+l2_rpc_url = "http://l2-rpc:8545"
+subprocess_timeout_ms = 3600000
+
+# A complete [materializer.scroll_batch.subprocess.ethereum_da] table and a
+# production blob_source provider are required as well.
+
+[materializer.bridge]
+enabled = true
+advance_l1 = true
+advance_l2 = true
+
+# Complete source-specific tables are also required:
+# [materializer.bridge.dogecoin_rpc]
+# [materializer.bridge.ethereum_da]
+```
+
+Deep materializer fields remain hand-maintained because they select binaries,
+RPCs, witness sources, Ethereum DA caches, and feature-gated coordinator
+backends. The CLI does not invent those deployment choices.
+
+After validation, the command replaces only the marked verifier block in
+`proof-coordinator/ProofCoordinator.toml` and only the marked proof block in the
+embedded `WithdrawalProcessor.toml`. It embeds the three program manifests,
+generates `/app/data/manifests/statement-namespace.json` from the same Scroll
+chunk/batch manifests, injects the release-validated raw chunk commitment for
+the coordinator subprocess backend, configures the shared proof-work token,
+exposes WP's internal port 9300, projects the S3 artifact store into WP, and
+removes retired/TOML-owned proof ENV. The two values files and coordinator TOML
+are not written until all generated documents have passed preflight validation.
+
+This command stages topology; it does **not** enable proof and it preserves an
+existing operator choice. The only activation switch is:
+
+```yaml
+withdrawalProof:
+  enabled: false
+```
+
+The chart projects that one Boolean atomically onto
+`proof_system.mode`, both `proof_system.require_*` fields, and
+`proof_work_api.enabled` via four ENV overrides. All deeper proof configuration
+remains TOML-owned. Leave the switch `false` until coordinator readiness, S3
+identity, released verifier artifacts, and an external prover worker have all
+passed their own preflight.
+
+S3 credentials are also explicit but are not an activation switch:
+
+```yaml
+withdrawalProof:
+  enabled: false
+  s3AuthMode: irsa
+
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/withdrawal-processor-proof
+```
+
+In `irsa` mode both proof-coordinator and withdrawal-processor values must have
+a real IAM role annotation; the command rejects missing or placeholder ARNs.
+Use `ambient` only as an explicit acknowledgement that a separately controlled
+credential path supplies both workloads. Scope both roles to the configured
+bucket/key prefix and grant `s3:GetObject` plus `s3:PutObject`; coordinator uses
+those operations to hydrate/publish materializer data and to read back/promote
+worker uploads, while WP uses the same object plane for proof transport and URL
+issuance.
+
+`--signer-proof-artifact-base-url` is a stable credential-free public GET base.
+WP appends each full accepted object key to it when producing signer evidence.
+It is deliberately separate from proof-coordinator's
+`PROVER_API__PUBLIC_S3_ENDPOINT_URL`, which exists to mint worker-visible S3
+presigned URLs and is not necessarily an unauthenticated signer endpoint.
+
+The default remote-prover profiles are `scroll-prod-zkvm-batch-v1` and
+`bridge-prod-zkvm-v1`. Override them only when the deployed worker fleet uses a
+different production profile:
+
+```bash
+--scroll-batch-backend-profile scroll-prod-gpu-v2 \
+--bridge-backend-profile bridge-prod-hsm-v2
+```
 
 Verifier IDs default deterministically to
 `<proof-system-id>-<circuit-id>-<circuit-version>`. Override an operator-pinned

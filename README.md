@@ -1740,18 +1740,25 @@ Populate proof topology values and the managed verifier block in ProofCoordinato
 
 ```
 USAGE
-  $ scrollsdk setup proof-config [--artifact-manifest <value>] [--coordinator-config <value>] [--json] [--program-manifest <value>...] [--values-dir
-    <value>] [--verifier-id <value>...]
+  $ scrollsdk setup proof-config --signer-proof-artifact-base-url <value> [--artifact-manifest <value>]
+    [--bridge-backend-profile <value>] [--coordinator-config <value>] [--json] [--program-manifest <value>...]
+    [--scroll-batch-backend-profile <value>] [--values-dir <value>] [--verifier-id <value>...]
 
 FLAGS
-  --artifact-manifest=<value>    Real-proving artifact manifest (default: proof-artifacts/release.json)
-  --coordinator-config=<value>   [default: proof-coordinator/ProofCoordinator.toml] Native TOML containing scrollsdk
-                                 managed verifier markers
-  --json                         Output structured JSON
-  --program-manifest=<value>...  ProofProgramManifestV1 JSON; repeat for a non-standard layout (defaults to
-                                 proof-artifacts/manifests/*.json)
-  --values-dir=<value>           [default: values] Directory containing *-production.yaml files
-  --verifier-id=<value>...       Optional FAMILY=ID override; repeat per family
+  --artifact-manifest=<value>               Real-proving artifact manifest (default: proof-artifacts/release.json)
+  --bridge-backend-profile=<value>          [default: bridge-prod-zkvm-v1] Backend profile stamped onto bridge prove
+                                            work
+  --coordinator-config=<value>              [default: proof-coordinator/ProofCoordinator.toml] Native
+                                            ProofCoordinator.toml containing scrollsdk managed verifier markers
+  --json                                    Output structured JSON
+  --program-manifest=<value>...             ProofProgramManifestV1 JSON; repeat for a non-standard layout (defaults to
+                                            proof-artifacts/manifests/*.json)
+  --scroll-batch-backend-profile=<value>    [default: scroll-prod-zkvm-batch-v1] Backend profile stamped onto Scroll
+                                            batch prove work
+  --signer-proof-artifact-base-url=<value>  (required) Stable public GET base used by attestation signers to fetch
+                                            accepted proof objects
+  --values-dir=<value>                      [default: values] Directory containing *-production.yaml files
+  --verifier-id=<value>...                  Optional FAMILY=ID override; repeat per family
 
 DESCRIPTION
   Populate proof topology values and the managed verifier block in ProofCoordinator.toml
@@ -1759,13 +1766,13 @@ DESCRIPTION
 EXAMPLES
   # Use the standard proof-coordinator/, proof-artifacts/, and values/ layout
 
-  $ scrollsdk setup proof-config
+  $ scrollsdk setup proof-config --signer-proof-artifact-base-url https://proofs.example.com/proof-topology
 
 
 
   # Override paths for a non-standard layout
 
-  $ scrollsdk setup proof-config --artifact-manifest release.json --program-manifest chunk.json --program-manifest batch.json --program-manifest bridge.json
+  $ scrollsdk setup proof-config --signer-proof-artifact-base-url https://proofs.example.com/proof-topology --artifact-manifest release.json --program-manifest chunk.json --program-manifest batch.json --program-manifest bridge.json
 ```
 
 _See code: [src/commands/setup/proof-config.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-config.ts)_
