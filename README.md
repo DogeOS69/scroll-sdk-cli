@@ -280,7 +280,7 @@ $ npm install -g @scroll-tech/scroll-sdk-cli
 $ scrollsdk COMMAND
 running command...
 $ scrollsdk (--version)
-@scroll-tech/scroll-sdk-cli/0.1.3 darwin-arm64 node-v22.19.0
+@scroll-tech/scroll-sdk-cli/0.1.3 linux-x64 node-v22.19.0
 $ scrollsdk --help [COMMAND]
 USAGE
   $ scrollsdk COMMAND
@@ -291,56 +291,56 @@ USAGE
 # Commands
 
 <!-- commands -->
-- [Scroll SDK CLI](#scroll-sdk-cli)
-  - [Introduction](#introduction)
-    - [Other Scroll SDK Repos](#other-scroll-sdk-repos)
-- [Installation](#installation)
-- [Commands](#commands)
-  - [`scrollsdk check prerequisites`](#scrollsdk-check-prerequisites)
-  - [`scrollsdk doge wallet new`](#scrollsdk-doge-wallet-new)
-  - [`scrollsdk doge wallet send`](#scrollsdk-doge-wallet-send)
-  - [`scrollsdk doge wallet sync`](#scrollsdk-doge-wallet-sync)
-  - [`scrollsdk help [COMMAND]`](#scrollsdk-help-command)
-  - [`scrollsdk helper activity`](#scrollsdk-helper-activity)
-  - [`scrollsdk helper clear-accounts`](#scrollsdk-helper-clear-accounts)
-  - [`scrollsdk helper derive-enode NODEKEY`](#scrollsdk-helper-derive-enode-nodekey)
-  - [`scrollsdk helper fund-accounts`](#scrollsdk-helper-fund-accounts)
-  - [`scrollsdk helper set-scalars`](#scrollsdk-helper-set-scalars)
-  - [`scrollsdk plugins`](#scrollsdk-plugins)
-  - [`scrollsdk plugins add PLUGIN`](#scrollsdk-plugins-add-plugin)
-  - [`scrollsdk plugins:inspect PLUGIN...`](#scrollsdk-pluginsinspect-plugin)
-  - [`scrollsdk plugins install PLUGIN`](#scrollsdk-plugins-install-plugin)
-  - [`scrollsdk plugins link PATH`](#scrollsdk-plugins-link-path)
-  - [`scrollsdk plugins remove [PLUGIN]`](#scrollsdk-plugins-remove-plugin)
-  - [`scrollsdk plugins reset`](#scrollsdk-plugins-reset)
-  - [`scrollsdk plugins uninstall [PLUGIN]`](#scrollsdk-plugins-uninstall-plugin)
-  - [`scrollsdk plugins unlink [PLUGIN]`](#scrollsdk-plugins-unlink-plugin)
-  - [`scrollsdk plugins update`](#scrollsdk-plugins-update)
-  - [`scrollsdk setup bootnode-public-p2p`](#scrollsdk-setup-bootnode-public-p2p)
-  - [`scrollsdk setup bridge-init`](#scrollsdk-setup-bridge-init)
-  - [`scrollsdk setup cubesigner-init`](#scrollsdk-setup-cubesigner-init)
-  - [`scrollsdk setup cubesigner-refresh`](#scrollsdk-setup-cubesigner-refresh)
-  - [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
-  - [`scrollsdk setup disable-internal`](#scrollsdk-setup-disable-internal)
-  - [`scrollsdk setup doge-config`](#scrollsdk-setup-doge-config)
-  - [`scrollsdk setup dogecoin-wallet-import`](#scrollsdk-setup-dogecoin-wallet-import)
-  - [`scrollsdk setup domains`](#scrollsdk-setup-domains)
-  - [`scrollsdk setup attestation-signer`](#scrollsdk-setup-attestation-signer)
-  - [`scrollsdk setup gas-token`](#scrollsdk-setup-gas-token)
-  - [`scrollsdk setup gen-keystore`](#scrollsdk-setup-gen-keystore)
-  - [`scrollsdk setup gen-l2-artifacts`](#scrollsdk-setup-gen-l2-artifacts)
-  - [`scrollsdk setup gen-rpc-package`](#scrollsdk-setup-gen-rpc-package)
-  - [`scrollsdk setup gen-secrets`](#scrollsdk-setup-gen-secrets)
-  - [`scrollsdk setup generate-from-spec`](#scrollsdk-setup-generate-from-spec)
-  - [`scrollsdk setup prep-charts`](#scrollsdk-setup-prep-charts)
-  - [`scrollsdk setup push-secrets`](#scrollsdk-setup-push-secrets)
-  - [`scrollsdk setup tls`](#scrollsdk-setup-tls)
-  - [`scrollsdk setup verify-contracts`](#scrollsdk-setup-verify-contracts)
-  - [`scrollsdk test contracts`](#scrollsdk-test-contracts)
-  - [`scrollsdk test dependencies`](#scrollsdk-test-dependencies)
-  - [`scrollsdk test dogeos [CASENAME]`](#scrollsdk-test-dogeos-casename)
-  - [`scrollsdk test e2e`](#scrollsdk-test-e2e)
-  - [`scrollsdk test ingress`](#scrollsdk-test-ingress)
+* [`scrollsdk check prerequisites`](#scrollsdk-check-prerequisites)
+* [`scrollsdk doge wallet new`](#scrollsdk-doge-wallet-new)
+* [`scrollsdk doge wallet send`](#scrollsdk-doge-wallet-send)
+* [`scrollsdk doge wallet sync`](#scrollsdk-doge-wallet-sync)
+* [`scrollsdk help [COMMAND]`](#scrollsdk-help-command)
+* [`scrollsdk helper activity`](#scrollsdk-helper-activity)
+* [`scrollsdk helper clear-accounts`](#scrollsdk-helper-clear-accounts)
+* [`scrollsdk helper derive-enode NODEKEY`](#scrollsdk-helper-derive-enode-nodekey)
+* [`scrollsdk helper fund-accounts`](#scrollsdk-helper-fund-accounts)
+* [`scrollsdk helper set-scalars`](#scrollsdk-helper-set-scalars)
+* [`scrollsdk plugins`](#scrollsdk-plugins)
+* [`scrollsdk plugins add PLUGIN`](#scrollsdk-plugins-add-plugin)
+* [`scrollsdk plugins:inspect PLUGIN...`](#scrollsdk-pluginsinspect-plugin)
+* [`scrollsdk plugins install PLUGIN`](#scrollsdk-plugins-install-plugin)
+* [`scrollsdk plugins link PATH`](#scrollsdk-plugins-link-path)
+* [`scrollsdk plugins remove [PLUGIN]`](#scrollsdk-plugins-remove-plugin)
+* [`scrollsdk plugins reset`](#scrollsdk-plugins-reset)
+* [`scrollsdk plugins uninstall [PLUGIN]`](#scrollsdk-plugins-uninstall-plugin)
+* [`scrollsdk plugins unlink [PLUGIN]`](#scrollsdk-plugins-unlink-plugin)
+* [`scrollsdk plugins update`](#scrollsdk-plugins-update)
+* [`scrollsdk setup attestation-signer`](#scrollsdk-setup-attestation-signer)
+* [`scrollsdk setup bootnode-public-p2p`](#scrollsdk-setup-bootnode-public-p2p)
+* [`scrollsdk setup bridge-init`](#scrollsdk-setup-bridge-init)
+* [`scrollsdk setup cubesigner-init`](#scrollsdk-setup-cubesigner-init)
+* [`scrollsdk setup cubesigner-refresh`](#scrollsdk-setup-cubesigner-refresh)
+* [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
+* [`scrollsdk setup disable-internal`](#scrollsdk-setup-disable-internal)
+* [`scrollsdk setup doge-config`](#scrollsdk-setup-doge-config)
+* [`scrollsdk setup dogecoin-wallet-import`](#scrollsdk-setup-dogecoin-wallet-import)
+* [`scrollsdk setup domains`](#scrollsdk-setup-domains)
+* [`scrollsdk setup eth-da-submitter`](#scrollsdk-setup-eth-da-submitter)
+* [`scrollsdk setup fee-oracle`](#scrollsdk-setup-fee-oracle)
+* [`scrollsdk setup gas-token`](#scrollsdk-setup-gas-token)
+* [`scrollsdk setup gen-keystore`](#scrollsdk-setup-gen-keystore)
+* [`scrollsdk setup gen-l2-artifacts`](#scrollsdk-setup-gen-l2-artifacts)
+* [`scrollsdk setup gen-rpc-package`](#scrollsdk-setup-gen-rpc-package)
+* [`scrollsdk setup gen-secrets`](#scrollsdk-setup-gen-secrets)
+* [`scrollsdk setup generate-from-spec`](#scrollsdk-setup-generate-from-spec)
+* [`scrollsdk setup l2-bootnode-reth`](#scrollsdk-setup-l2-bootnode-reth)
+* [`scrollsdk setup l2-sequencer-reth`](#scrollsdk-setup-l2-sequencer-reth)
+* [`scrollsdk setup prep-charts`](#scrollsdk-setup-prep-charts)
+* [`scrollsdk setup proof-config`](#scrollsdk-setup-proof-config)
+* [`scrollsdk setup push-secrets`](#scrollsdk-setup-push-secrets)
+* [`scrollsdk setup tls`](#scrollsdk-setup-tls)
+* [`scrollsdk setup verify-contracts`](#scrollsdk-setup-verify-contracts)
+* [`scrollsdk test contracts`](#scrollsdk-test-contracts)
+* [`scrollsdk test dependencies`](#scrollsdk-test-dependencies)
+* [`scrollsdk test dogeos [CASENAME]`](#scrollsdk-test-dogeos-casename)
+* [`scrollsdk test e2e`](#scrollsdk-test-e2e)
+* [`scrollsdk test ingress`](#scrollsdk-test-ingress)
 
 ## `scrollsdk check prerequisites`
 
@@ -894,6 +894,49 @@ DESCRIPTION
 
 _See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/update.ts)_
 
+## `scrollsdk setup attestation-signer`
+
+Provision Kubernetes attestation-signer releases and select the bootstrap bridge keyset
+
+```
+USAGE
+  $ scrollsdk setup attestation-signer [--active-signer-ids <value>] [--aws-profile <value>] [--aws-region <value>] [--backend
+    aws-kms|local] [-c <value>] [--eks-cluster <value>] [--from-spec <value>] [--generate-wif-keys] [--json]
+    [--kms-key-ids <value>] [--kms-role-arns <value>] [--namespace <value>] [--network-alias <value>] [-N]
+    [--signer-count <value>] [--threshold <value>]
+
+FLAGS
+  -N, --non-interactive            Run without prompts
+  -c, --config=<value>             Path to doge-config.toml
+      --active-signer-ids=<value>  Comma-separated signer IDs used only by initial bridge setup (M of N)
+      --aws-profile=<value>        AWS CLI profile used for KMS and IAM provisioning
+      --aws-region=<value>         AWS region for KMS keys and the EKS cluster
+      --backend=<option>           Kubernetes signer backend
+                                   <options: aws-kms|local>
+      --eks-cluster=<value>        EKS cluster name used by IRSA trust policies
+      --from-spec=<value>          DeploymentSpec providing signer fleet, initial keyset, and profile
+      --[no-]generate-wif-keys     Generate local WIF keys
+      --json                       Output structured JSON
+      --kms-key-ids=<value>        Optional KMS IDs in signer instance order
+      --kms-role-arns=<value>      Optional existing IRSA role ARNs in signer instance order
+      --namespace=<value>          Kubernetes namespace used by IRSA trust policies
+      --network-alias=<value>      Stable deployment alias used for AWS resource names
+      --signer-count=<value>       Number of deployed signer releases (N)
+      --threshold=<value>          Initial bridge attestation threshold (T)
+
+DESCRIPTION
+  Provision Kubernetes attestation-signer releases and select the bootstrap bridge keyset
+
+EXAMPLES
+  $ scrollsdk setup attestation-signer --from-spec deployment-spec.yaml
+
+  $ scrollsdk setup attestation-signer --signer-count 5 --active-signer-ids signer-0,signer-1,signer-2 --threshold 2
+
+  $ scrollsdk setup attestation-signer --backend aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --namespace dogeos
+```
+
+_See code: [src/commands/setup/attestation-signer.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/attestation-signer.ts)_
+
 ## `scrollsdk setup bootnode-public-p2p`
 
 Enable external nodes to form P2P network with cluster bootnodes by setting up static IPs and LoadBalancer services
@@ -953,7 +996,8 @@ Initialize DogeOS bridge after L2 artifacts and CubeSigner keys are ready
 
 ```
 USAGE
-  $ scrollsdk setup bridge-init [--image-tag <value>] [--json] [-N] [-s <value>] [--step <value>]
+  $ scrollsdk setup bridge-init [--docker-platform <value>] [--image-tag <value>] [--json] [-N] [-s <value>] [--step
+    <value>]
 
 FLAGS
   -N, --non-interactive
@@ -961,6 +1005,9 @@ FLAGS
 
   -s, --seed=<value>
       seed which will regenerate the sequencer and fee wallet
+
+  --docker-platform=<value>
+      [default: linux/amd64] Docker platform for bridge-genesis-tools image.
 
   --image-tag=<value>
       Specify the Docker image tag to use (defaults to dev-20260707-043e7f3)
@@ -997,9 +1044,11 @@ EXAMPLES
 
   $ scrollsdk setup bridge-init --seed 123456
 
-  $ scrollsdk setup bridge-init --image-tag 0.2.0-debug
+  $ scrollsdk setup bridge-init --image-tag dev-20260707-043e7f3
 
   $ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag dev-20260707-043e7f3
+
+  $ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag dev-20260707-043e7f3 --docker-platform linux/amd64
 
   $ scrollsdk setup bridge-init --non-interactive --json --seed 123456
 ```
@@ -1016,7 +1065,8 @@ USAGE
     [--roles <value>...] [--threshold <value>]
 
 FLAGS
-  -N, --non-interactive      Run without prompts. Requires --doge-config and either --new (with --role-prefix) or --roles.
+  -N, --non-interactive      Run without prompts. Requires --doge-config and either --new (with --role-prefix) or
+                             --roles.
       --count=<value>        Number of TEE keys/roles to create (must be 1; default 1)
       --doge-config=<value>  Path to Dogecoin config file
       --json                 Output in JSON format (stdout for data, stderr for logs)
@@ -1066,12 +1116,11 @@ DESCRIPTION
   Refresh cubesigner session secrets
 
   Generated signer sessions use fixed service lifetimes:
-  session-lifetime=31536000s (365 days), auth-lifetime=7200s (2 hours),
-  refresh-lifetime=604800s (7 days), and grace-lifetime=30s.
+  session-lifetime=31536000s (365 days), auth-lifetime=7200s (2 hours), refresh-lifetime=604800s (7 days), and
+  grace-lifetime=30s.
 
-  This command writes local files under ./secrets. Push the refreshed secrets
-  with setup push-secrets --cubesigner-only, then restart CubeSigner signer pods
-  after clearing /app/.sessions/main_cs_session.json so the new Secret seed is
+  This command writes local files under ./secrets. Push the refreshed secrets with setup push-secrets --cubesigner-only,
+  then restart CubeSigner signer pods after clearing /app/.sessions/main_cs_session.json so the new Secret seed is
   copied into the active session cache.
 
 EXAMPLES
@@ -1175,9 +1224,9 @@ USAGE
   $ scrollsdk setup doge-config [-c <value>] [--json] [-N]
 
 FLAGS
-  -N, --non-interactive   Run without prompts, using existing config values
-  -c, --config=<value>    Path to config file
-      --json              Output in JSON format (stdout for data, stderr for logs)
+  -N, --non-interactive  Run without prompts, using existing config values
+  -c, --config=<value>   Path to config file
+      --json             Output in JSON format (stdout for data, stderr for logs)
 
 DESCRIPTION
   Configure Dogecoin settings and bridge setup defaults for deployment
@@ -1228,11 +1277,15 @@ Set up domain configurations for external services
 
 ```
 USAGE
-  $ scrollsdk setup domains [--json] [-N]
+  $ scrollsdk setup domains [--cluster-issuer <value>] [--json] [--no-bootstrap-tls] [-N] [--values-dir <value>]
 
 FLAGS
-  -N, --non-interactive  Run without prompts, using config.toml values
-      --json             Output in JSON format (stdout for data, stderr for logs)
+  -N, --non-interactive         Run without prompts, using config.toml values
+      --cluster-issuer=<value>  [default: letsencrypt-prod] ClusterIssuer name to write into bootstrap chart TLS
+                                annotations
+      --json                    Output in JSON format (stdout for data, stderr for logs)
+      --no-bootstrap-tls        Do not write TLS settings into bootstrap dogecoin/l1-devnet values
+      --values-dir=<value>      [default: values] Directory containing Helm values files to prepare for bootstrap charts
 
 DESCRIPTION
   Set up domain configurations for external services
@@ -1247,76 +1300,93 @@ EXAMPLES
 
 _See code: [src/commands/setup/domains.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/domains.ts)_
 
-## `scrollsdk setup attestation-signer`
+## `scrollsdk setup eth-da-submitter`
 
-Set up three attestation signers (in-cluster local/KMS chart, deprecated local Docker, or deprecated AWS ECS)
+Configure the eth-da-submitter L1_COMMIT_SENDER signer
 
 ```
 USAGE
-  $ scrollsdk setup attestation-signer [--aws-account-id <value>] [--aws-ecs-cluster <value>] [--aws-image-source
-    dockerhub|ecr|ecr-sync] [--aws-image-uri <value>] [--aws-network-alias <value>] [-a] [--aws-region <value>] [-c <value>]
-    [--eks-cluster <value>] [--from-spec <value>] [--generate-wif-keys] [--image-tag <value>] [--json] [-k]
-    [--namespace <value>] [--network-alias <value>] [-l] [-N]
+  $ scrollsdk setup eth-da-submitter [--archive-bucket <value>] [--archive-key-prefix <value>] [--archive-public-base-url
+    <value>] [--archive-region <value>] [--aws-profile <value>] [--aws-region <value>] [--create-archive-bucket]
+    [--disable-archive] [--doge-config <value>] [--eks-cluster <value>] [--json] [--kms-key-id <value>] [--namespace
+    <value>] [--network-alias <value>] [-N] [--role-arn <value>] [--service-account <value>] [--signer-backend
+    local|aws-kms]
 
 FLAGS
-  -N, --non-interactive            Run without prompts. Uses config values or sensible defaults.
-  -a, --aws-only                   Set up AWS KMS attestation signers only
-  -c, --config=<value>             Path to Dogecoin config file
-  -k, --k8s-only                   Set up in-cluster attestation signers (attestation-signer Helm chart) only
-  -l, --local-only                 Set up local Docker attestation signers only
-      --aws-account-id=<value>     AWS account ID
-      --aws-ecs-cluster=<value>    ECS cluster for AWS ECS Express dummy attestation signer services. Defaults to
-                                   awsSigner.ecsClusterName or "default".
-      --aws-image-source=<option>  AWS attestation signer image source: dockerhub uses the public image directly, ecr requires
-                                   an existing ECR image, ecr-sync syncs Docker Hub to ECR from this machine
-                                   <options: dockerhub|ecr|ecr-sync>
-      --aws-image-uri=<value>      Full container image URI for AWS attestation signers. Overrides --aws-image-source.
-      --aws-network-alias=<value>  Network alias for AWS resources
-      --aws-profile=<value>        AWS CLI profile used to provision in-cluster KMS and IAM resources
-      --aws-region=<value>         AWS region for KMS attestation signers
-      --eks-cluster=<value>        EKS cluster name used to configure IRSA trust policies
-      --from-spec=<value>          Path to DeploymentSpec YAML. Uses attestation signer defaults from
-                                   signing.attestationSigner, signing.awsKms or signing.local.
-      --[no-]generate-wif-keys     Generate new attestation WIF keys (non-interactive mode)
-      --image-tag=<value>          Specify the Docker image tag to use
-      --json                       Output in JSON format (stdout for data, stderr for logs)
-      --k8s-signer-backend=<option>  Signer backend for Kubernetes releases: local or aws-kms
-      --kms-key-ids=<value>        Optional existing KMS keys; omit to create or reuse deterministic aliases
-      --kms-role-arns=<value>      Optional existing IRSA roles; omit to create or update deterministic IAM roles
-      --kms-service-accounts=<value>  Optional comma-separated Kubernetes ServiceAccount names
-      --namespace=<value>          Kubernetes namespace used in IRSA trust policies
-      --network-alias=<value>      Resource alias used in KMS aliases and IAM role names
+  -N, --non-interactive                  Run without prompts. Uses existing config or provided flags.
+      --archive-bucket=<value>           S3 bucket whose read/write permissions should be granted to the
+                                         eth-da-submitter KMS IAM role.
+      --archive-key-prefix=<value>       Object key prefix under the archive bucket.
+      --archive-public-base-url=<value>  Public HTTPS base URL used by blob consumers to read archived Ethereum DA
+                                         blobs.
+      --archive-region=<value>           Region that owns the archive bucket (defaults to --aws-region).
+      --aws-profile=<value>              AWS CLI profile to use for KMS signer provisioning.
+      --aws-region=<value>               AWS region for the EKS cluster and KMS key.
+      --[no-]create-archive-bucket       Create the archive bucket if --archive-bucket is set and the bucket does not
+                                         exist.
+      --disable-archive                  Skip S3 blob archive setup for the eth-da-submitter KMS signer.
+      --doge-config=<value>              Path to Dogecoin config file (defaults to .data/doge-config.toml)
+      --eks-cluster=<value>              EKS cluster name or ARN used for IRSA trust binding.
+      --json                             Output in JSON format (stdout for data, stderr for logs)
+      --kms-key-id=<value>               Existing KMS key id, ARN, or alias for L1_COMMIT_SENDER / eth-da-submitter.
+      --namespace=<value>                [default: default] Kubernetes namespace for the KMS signer service account.
+      --network-alias=<value>            Resource alias used to derive deterministic KMS aliases and IAM role names.
+      --role-arn=<value>                 Existing IAM role ARN to annotate on the eth-da-submitter service account.
+      --service-account=<value>          [default: eth-da-submitter] Kubernetes service account used by
+                                         eth-da-submitter.
+      --signer-backend=<option>          Signer backend for L1_COMMIT_SENDER / eth-da-submitter.
+                                         <options: local|aws-kms>
+
 DESCRIPTION
-  Set up three attestation signers (in-cluster local/KMS chart, deprecated local Docker, or deprecated AWS ECS)
+  Configure the eth-da-submitter L1_COMMIT_SENDER signer
 
 EXAMPLES
-  $ scrollsdk setup attestation-signer
+  $ scrollsdk setup eth-da-submitter
 
-  $ scrollsdk setup attestation-signer --config .data/doge-config.toml
+  $ scrollsdk setup eth-da-submitter --signer-backend aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet
 
-  $ scrollsdk setup attestation-signer --k8s-only
-
-  $ scrollsdk setup attestation-signer --k8s-only --k8s-signer-backend aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet-cluster --network-alias testnet --namespace default
-
-  $ scrollsdk setup attestation-signer --local-only
-
-  $ scrollsdk setup attestation-signer --aws-only
-
-  $ scrollsdk setup attestation-signer --image-tag v0.3.0-develop-643e7315
-
-  $ scrollsdk setup attestation-signer --aws-only --aws-image-source ecr-sync
-
-  $ scrollsdk setup attestation-signer --aws-only --aws-image-uri dogeos69/dummy-signer:v0.3.0-develop-643e7315
+  $ scrollsdk setup eth-da-submitter --non-interactive --json --signer-backend local
 ```
 
-For the Kubernetes AWS KMS backend, the command follows the same managed-signer model as
-`setup eth-da-submitter`: it creates or reuses three `ECC_SECG_P256K1` KMS keys, creates or
-updates one IRSA IAM role per signer, binds each role to `namespace/attestation-signer-N`, and
-grants `kms:GetPublicKey` plus `kms:Sign`. Existing resources can still be supplied through
-`--kms-key-ids` and `--kms-role-arns`. The active AWS identity needs KMS, IAM, EKS describe,
-and STS caller-identity permissions; the EKS cluster must already have an IAM OIDC provider.
+_See code: [src/commands/setup/eth-da-submitter.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/eth-da-submitter.ts)_
 
-_See code: [src/commands/setup/attestation-signer.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/attestation-signer.ts)_
+## `scrollsdk setup fee-oracle`
+
+Configure the fee-oracle L2_GAS_ORACLE_SENDER signer
+
+```
+USAGE
+  $ scrollsdk setup fee-oracle [--aws-profile <value>] [--aws-region <value>] [--doge-config <value>] [--eks-cluster
+    <value>] [--json] [--kms-key-id <value>] [--namespace <value>] [--network-alias <value>] [-N] [--role-arn <value>]
+    [--service-account <value>] [--signer-backend local|aws-kms]
+
+FLAGS
+  -N, --non-interactive          Run without prompts. Uses existing config or provided flags.
+      --aws-profile=<value>      AWS CLI profile to use for KMS signer provisioning.
+      --aws-region=<value>       AWS region for the EKS cluster and KMS key.
+      --doge-config=<value>      Path to Dogecoin config file (defaults to .data/doge-config.toml)
+      --eks-cluster=<value>      EKS cluster name or ARN used for IRSA trust binding.
+      --json                     Output in JSON format (stdout for data, stderr for logs)
+      --kms-key-id=<value>       Existing KMS key id, ARN, or alias for L2_GAS_ORACLE_SENDER / fee-oracle.
+      --namespace=<value>        [default: default] Kubernetes namespace for the KMS signer service account.
+      --network-alias=<value>    Resource alias used to derive deterministic KMS aliases and IAM role names.
+      --role-arn=<value>         Existing IAM role ARN to annotate on the fee-oracle service account.
+      --service-account=<value>  [default: fee-oracle] Kubernetes service account used by fee-oracle.
+      --signer-backend=<option>  Signer backend for L2_GAS_ORACLE_SENDER / fee-oracle.
+                                 <options: local|aws-kms>
+
+DESCRIPTION
+  Configure the fee-oracle L2_GAS_ORACLE_SENDER signer
+
+EXAMPLES
+  $ scrollsdk setup fee-oracle
+
+  $ scrollsdk setup fee-oracle --signer-backend aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet
+
+  $ scrollsdk setup fee-oracle --non-interactive --json --signer-backend local
+```
+
+_See code: [src/commands/setup/fee-oracle.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/fee-oracle.ts)_
 
 ## `scrollsdk setup gas-token`
 
@@ -1337,64 +1407,30 @@ _See code: [src/commands/setup/gas-token.ts](https://github.com/dogeos69/scroll-
 
 ## `scrollsdk setup gen-keystore`
 
-Generate L2 node keys and deployment signer identities
+Generate L2 node keys and deployment account keypairs
 
 ```
 USAGE
-  $ scrollsdk setup gen-keystore [--accounts] [--bootnode-count <value>] [--from-spec <value>]
-    [--archive-bucket <value>] [--archive-key-prefix <value>] [--archive-region <value>] [--aws-profile <value>]
-    [--aws-region <value>] [--create-archive-bucket] [--disable-archive] [--eks-cluster <value>]
-    [--eth-da-kms-key-id <value>] [--eth-da-role-arn <value>] [--eth-da-service-account <value>]
-    [--fee-oracle-kms-key-id <value>] [--fee-oracle-role-arn <value>] [--fee-oracle-service-account <value>]
-    [--json] [--l1-commit-signer-backend local|aws-kms] [--l2-gas-oracle-signer-backend local|aws-kms]
-    [--namespace <value>] [--network-alias <value>] [-N] [--regenerate-bootnodes] [--regenerate-sequencers]
-    [--sequencer-count <value>] [--sequencer-password <value>]
+  $ scrollsdk setup gen-keystore [--accounts] [--bootnode-count <value>] [--from-spec <value>] [--json] [-N]
+    [--regenerate-bootnodes] [--regenerate-sequencers] [--sequencer-count <value>] [--sequencer-password <value>]
 
 FLAGS
-  -N, --non-interactive                        Run without prompts. Uses existing keys or generates new ones based on
-                                               flags.
-      --[no-]accounts                          Generate account key pairs
-      --archive-bucket=<value>                 S3 bucket whose read/write permissions should be granted to the
-                                               eth-da-submitter KMS IAM role.
-      --archive-key-prefix=<value>             Object key prefix under the archive bucket.
-      --archive-region=<value>                 Region that owns the archive bucket (defaults to --aws-region).
-      --aws-profile=<value>                    AWS CLI profile to use for KMS signer provisioning.
-      --aws-region=<value>                     AWS region for the EKS cluster and KMS keys.
-      --bootnode-count=<value>                 [default: 2] Number of bootnodes. In non-interactive mode, generates if
-                                               not enough exist.
-      --[no-]create-archive-bucket             Create the archive bucket if --archive-bucket is set and the bucket does
-                                               not exist.
-      --disable-archive                        Skip S3 blob archive setup for eth-da-submitter KMS signer.
-      --eks-cluster=<value>                    EKS cluster name or ARN used for IRSA trust binding.
-      --eth-da-kms-key-id=<value>              Existing KMS key id, ARN, or alias for L1_COMMIT_SENDER /
-                                               eth-da-submitter.
-      --eth-da-role-arn=<value>                Existing IAM role ARN to annotate on the eth-da-submitter service
-                                               account.
-      --eth-da-service-account=<value>         [default: eth-da-submitter] Kubernetes service account used by
-                                               eth-da-submitter.
-      --fee-oracle-kms-key-id=<value>          Existing KMS key id, ARN, or alias for L2_GAS_ORACLE_SENDER /
-                                               fee-oracle.
-      --fee-oracle-role-arn=<value>            Existing IAM role ARN to annotate on the fee-oracle service account.
-      --fee-oracle-service-account=<value>     [default: fee-oracle] Kubernetes service account used by fee-oracle.
-      --from-spec=<value>                      Path to DeploymentSpec YAML. Uses infrastructure.sequencerCount and
-                                               bootnodeCount as count defaults.
-      --json                                   Output in JSON format (stdout for data, stderr for logs)
-      --l1-commit-signer-backend=<option>      Signer backend for L1_COMMIT_SENDER / eth-da-submitter.
-                                               <options: local|aws-kms>
-      --l2-gas-oracle-signer-backend=<option>  Signer backend for L2_GAS_ORACLE_SENDER / fee-oracle.
-                                               <options: local|aws-kms>
-      --namespace=<value>                      [default: default] Kubernetes namespace for KMS signer service accounts.
-      --network-alias=<value>                  Resource alias used to derive deterministic KMS aliases and IAM role
-                                               names.
-      --regenerate-bootnodes                   Force regeneration of all bootnode keys (non-interactive mode)
-      --regenerate-sequencers                  Force regeneration of all sequencer keys (non-interactive mode)
-      --sequencer-count=<value>                [default: 2] Number of sequencers (including primary). In non-interactive
-                                               mode, generates if not enough exist.
-      --sequencer-password=<value>             Password for sequencer keystores (or use $ENV:VAR_NAME pattern). Defaults
-                                               to a generated random password for new sequencers in non-interactive mode.
+  -N, --non-interactive             Run without prompts. Uses existing keys or generates new ones based on flags.
+      --[no-]accounts               Generate account key pairs
+      --bootnode-count=<value>      [default: 2] Number of bootnodes. In non-interactive mode, generates if not enough
+                                    exist.
+      --from-spec=<value>           Path to DeploymentSpec YAML. Uses infrastructure.sequencerCount and bootnodeCount as
+                                    count defaults.
+      --json                        Output in JSON format (stdout for data, stderr for logs)
+      --regenerate-bootnodes        Force regeneration of all bootnode keys (non-interactive mode)
+      --regenerate-sequencers       Force regeneration of all sequencer keys (non-interactive mode)
+      --sequencer-count=<value>     [default: 2] Number of sequencers (including primary). In non-interactive mode,
+                                    generates if not enough exist.
+      --sequencer-password=<value>  Password for sequencer keystores (or use $ENV:VAR_NAME pattern). Defaults to a
+                                    generated random password for new sequencers in non-interactive mode.
 
 DESCRIPTION
-  Generate L2 node keys and deployment signer identities
+  Generate L2 node keys and deployment account keypairs
 
 EXAMPLES
   $ scrollsdk setup gen-keystore
@@ -1406,8 +1442,6 @@ EXAMPLES
   $ scrollsdk setup gen-keystore --non-interactive --json --sequencer-count 2 --bootnode-count 2
 
   $ scrollsdk setup gen-keystore --non-interactive --sequencer-count 2 --bootnode-count 2
-
-  $ scrollsdk setup gen-keystore --non-interactive --l1-commit-signer-backend aws-kms --l2-gas-oracle-signer-backend aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet
 ```
 
 _See code: [src/commands/setup/gen-keystore.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-keystore.ts)_
@@ -1502,13 +1536,11 @@ Generate local secret files from config.toml, Dogecoin config, and bridge initia
 
 ```
 USAGE
-  $ scrollsdk setup gen-secrets [--configs-dir <value>] [--doge-config <value>] [--json] [-N]
+  $ scrollsdk setup gen-secrets [--doge-config <value>] [--json] [-N]
 
 FLAGS
-  -N, --non-interactive      Run without prompts. Uses config values or sensible defaults.
-      --configs-dir=<value>  [default: values] Directory containing generated values files
-      --doge-config=<value>  Path to config file (e.g., .data/doge-config-mainnet.toml or
-                             .data/doge-config-testnet.toml)
+  -N, --non-interactive      Run without prompts. Uses config values or fails fast.
+      --doge-config=<value>  Path to Dogecoin config file (defaults to .data/doge-config.toml)
       --json                 Output in JSON format (stdout for data, stderr for logs)
 
 DESCRIPTION
@@ -1530,21 +1562,20 @@ Generate configuration files from a DeploymentSpec YAML file
 
 ```
 USAGE
-  $ scrollsdk setup generate-from-spec -s <value> [--config-only] [--dry-run] [--env-file <value>] [-f] [--json]
-    [-o <value>] [--values-only] [--with-values]
+  $ scrollsdk setup generate-from-spec -s <value> [--config-only] [--dry-run] [--env-file <value>] [-f] [--json] [-o <value>]
+    [--values-only] [--with-values]
 
 FLAGS
-  -f, --force           Overwrite existing files without warning
-  -o, --output=<value>  [default: .] Output directory for generated files
-  -s, --spec=<value>    (required) Path to DeploymentSpec YAML file
-      --config-only     Only generate config.toml and .data/*.toml. This is the default.
-      --dry-run         Validate spec and show what would be generated without writing files
-      --env-file=<value>
-                         Load dotenv-style environment variables before parsing the spec. Defaults to .env.local/.env next
-                         to the spec and current directory when present.
-      --json            Output in JSON format (stdout for data, stderr for logs)
-      --values-only     Only generate values/*.yaml Helm files
-      --with-values     Also generate values/*.yaml Helm files
+  -f, --force             Overwrite existing files without warning
+  -o, --output=<value>    [default: .] Output directory for generated files
+  -s, --spec=<value>      (required) Path to DeploymentSpec YAML file
+      --config-only       Only generate config.toml and .data/*.toml. This is the default.
+      --dry-run           Validate spec and show what would be generated without writing files
+      --env-file=<value>  Load dotenv-style environment variables before parsing the spec. Defaults to .env.local/.env
+                          next to the spec and current directory when present.
+      --json              Output in JSON format (stdout for data, stderr for logs)
+      --values-only       Only generate values/*.yaml Helm files
+      --with-values       Also generate values/*.yaml Helm files
 
 DESCRIPTION
   Generate configuration files from a DeploymentSpec YAML file
@@ -1568,15 +1599,15 @@ EXAMPLES
 
 
 
-  # Dry run - validate and show what would be generated
-
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --dry-run
-
-
-
   # Load private keys/passwords from an env file before deriving account addresses
 
   $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --env-file .env.local
+
+
+
+  # Dry run - validate and show what would be generated
+
+  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --dry-run
 
 
 
@@ -1589,6 +1620,83 @@ EXAMPLES
 
 _See code: [src/commands/setup/generate-from-spec.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/generate-from-spec.ts)_
 
+## `scrollsdk setup l2-bootnode-reth`
+
+Configure rollup-node reth bootnode P2P nodekeys
+
+```
+USAGE
+  $ scrollsdk setup l2-bootnode-reth [-c <value>] [--doge-config <value>] [--json] [--nodekey <value>...] [-N]
+    [--secret-mode external-secret|plain]
+
+FLAGS
+  -N, --non-interactive       Run without prompts. Generates missing nodekeys.
+  -c, --count=<value>         Number of reth bootnode instances to configure.
+      --doge-config=<value>   Path to Dogecoin config file (defaults to .data/doge-config.toml)
+      --json                  Output in JSON format (stdout for data, stderr for logs)
+      --nodekey=<value>...    Existing reth bootnode private key as 64 hex chars, with or without 0x. Repeat for
+                              multiple instances.
+      --secret-mode=<option>  How nodekey material is referenced from values YAML.
+                              <options: external-secret|plain>
+
+DESCRIPTION
+  Configure rollup-node reth bootnode P2P nodekeys
+
+EXAMPLES
+  $ scrollsdk setup l2-bootnode-reth --count 2
+
+  $ scrollsdk setup l2-bootnode-reth --count 2 --secret-mode external-secret --non-interactive
+
+  $ scrollsdk setup l2-bootnode-reth --count 1 --nodekey 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+_See code: [src/commands/setup/l2-bootnode-reth.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/l2-bootnode-reth.ts)_
+
+## `scrollsdk setup l2-sequencer-reth`
+
+Configure a rollup-node reth sequencer signer key and P2P nodekey
+
+```
+USAGE
+  $ scrollsdk setup l2-sequencer-reth [--aws-profile <value>] [--aws-region <value>] [--doge-config <value>] [--eks-cluster
+    <value>] [-i <value>] [--json] [--kms-key-id <value>] [--namespace <value>] [--network-alias <value>] [--nodekey
+    <value>] [--nodekey-secret-mode external-secret|plain] [-N] [--role-arn <value>] [--service-account <value>]
+    [--signer-mode aws-kms|external-secret|plain] [--signer-private-key <value>]
+
+FLAGS
+  -N, --non-interactive               Run without prompts. Generates missing local keys.
+  -i, --index=<value>                 Sequencer instance index to configure.
+      --aws-profile=<value>           AWS CLI profile to use for KMS signer provisioning.
+      --aws-region=<value>            AWS region for the EKS cluster and KMS key.
+      --doge-config=<value>           Path to Dogecoin config file (defaults to .data/doge-config.toml)
+      --eks-cluster=<value>           EKS cluster name or ARN used for IRSA trust binding.
+      --json                          Output in JSON format (stdout for data, stderr for logs)
+      --kms-key-id=<value>            Existing KMS key id, ARN, or alias for the reth sequencer signer.
+      --namespace=<value>             [default: default] Kubernetes namespace for the KMS signer service account.
+      --network-alias=<value>         Resource alias used to derive deterministic KMS aliases and IAM role names.
+      --nodekey=<value>               Existing reth P2P nodekey private key as 64 hex chars, with or without 0x.
+      --nodekey-secret-mode=<option>  How P2P nodekey material is referenced from values YAML. AWS KMS signer mode only;
+                                      local signer mode uses --signer-mode.
+                                      <options: external-secret|plain>
+      --role-arn=<value>              Existing IAM role ARN to annotate on the sequencer service account.
+      --service-account=<value>       Kubernetes service account used by this sequencer.
+      --signer-mode=<option>          How the reth sequencer block signer is configured.
+                                      <options: aws-kms|external-secret|plain>
+      --signer-private-key=<value>    Existing local sequencer signer private key, with or without 0x.
+
+DESCRIPTION
+  Configure a rollup-node reth sequencer signer key and P2P nodekey
+
+EXAMPLES
+  $ scrollsdk setup l2-sequencer-reth --index 2
+
+  $ scrollsdk setup l2-sequencer-reth --index 2 --signer-mode external-secret --non-interactive
+
+  $ scrollsdk setup l2-sequencer-reth --index 2 --signer-mode aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet
+```
+
+_See code: [src/commands/setup/l2-sequencer-reth.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/l2-sequencer-reth.ts)_
+
 ## `scrollsdk setup prep-charts`
 
 Validate Makefile and prepare Helm charts for Scroll SDK
@@ -1596,16 +1704,18 @@ Validate Makefile and prepare Helm charts for Scroll SDK
 ```
 USAGE
   $ scrollsdk setup prep-charts [--doge-config <value>] [--github-token <value>] [--github-username <value>] [--json]
-    [-N] [--skip-auth-check] [--values-dir <value>]
+    [-N] [--skip-auth-check] [--skip-l2-contract-deployment-block] [--values-dir <value>]
 
 FLAGS
-  -N, --non-interactive          Run without prompts. Auto-applies all detected changes.
-      --doge-config=<value>      Path to Dogecoin config file
-      --github-token=<value>     GitHub Personal Access Token
-      --github-username=<value>  GitHub username
-      --json                     Output in JSON format (stdout for data, stderr for logs)
-      --skip-auth-check          Skip authentication check for individual charts
-      --values-dir=<value>       [default: ./values] Directory containing values files
+  -N, --non-interactive                    Run without prompts. Auto-applies all detected changes.
+      --doge-config=<value>                Path to Dogecoin config file
+      --github-token=<value>               GitHub Personal Access Token
+      --github-username=<value>            GitHub username
+      --json                               Output in JSON format (stdout for data, stderr for logs)
+      --skip-auth-check                    Skip authentication check for individual charts
+      --skip-l2-contract-deployment-block  Do not overwrite L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK in L2 production values
+                                           files
+      --values-dir=<value>                 [default: ./values] Directory containing values files
 
 DESCRIPTION
   Validate Makefile and prepare Helm charts for Scroll SDK
@@ -1618,9 +1728,45 @@ EXAMPLES
   $ scrollsdk setup prep-charts --values-dir=./custom-values
 
   $ scrollsdk setup prep-charts --skip-auth-check
+
+  $ scrollsdk setup prep-charts --skip-l2-contract-deployment-block
 ```
 
 _See code: [src/commands/setup/prep-charts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/prep-charts.ts)_
+
+## `scrollsdk setup proof-config`
+
+Populate proof topology Helm values from cryptographic release manifests
+
+```
+USAGE
+  $ scrollsdk setup proof-config [--artifact-manifest <value>] [--json] [--program-manifest <value>...] [--values-dir
+    <value>] [--verifier-id <value>...]
+
+FLAGS
+  --artifact-manifest=<value>    Real-proving artifact manifest (default: proof-artifacts/release.json)
+  --json                         Output structured JSON
+  --program-manifest=<value>...  ProofProgramManifestV1 JSON; repeat for a non-standard layout (defaults to
+                                 proof-artifacts/manifests/*.json)
+  --values-dir=<value>           [default: values] Directory containing *-production.yaml files
+  --verifier-id=<value>...       Optional FAMILY=ID override; repeat per family
+
+DESCRIPTION
+  Populate proof topology Helm values from cryptographic release manifests
+
+EXAMPLES
+  # Use the standard proof-artifacts/ and values/ layout
+
+  $ scrollsdk setup proof-config
+
+
+
+  # Override paths for a non-standard layout
+
+  $ scrollsdk setup proof-config --artifact-manifest release.json --program-manifest chunk.json --program-manifest batch.json --program-manifest bridge.json
+```
+
+_See code: [src/commands/setup/proof-config.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-config.ts)_
 
 ## `scrollsdk setup push-secrets`
 
@@ -1663,8 +1809,7 @@ EXAMPLES
 
   $ scrollsdk setup push-secrets --values-dir custom-values
 
-  $ scrollsdk setup push-secrets --secret-file secrets/l2-reth-bootnode-0-secret.env --values-file
-    values/l2-reth-bootnode-production-0.yaml
+  $ scrollsdk setup push-secrets --secret-file secrets/l2-reth-bootnode-0-secret.env --values-file values/l2-reth-bootnode-production-0.yaml
 
   $ scrollsdk setup push-secrets --cubesigner-only
 

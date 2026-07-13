@@ -489,6 +489,12 @@ export interface BridgeConfig {
     withdrawalFeeWei?: string
   }
 
+  /** Bootstrap-only attestation cohort. Runtime RotateKey state must be read from the chain, not inferred from this field. */
+  initialAttestationKeyset?: {
+    signerIds: string[]
+    threshold: number
+  }
+
   /** Key counts */
   keyCounts: {
     attestation: number
@@ -526,24 +532,25 @@ export interface BridgeConfig {
 }
 
 export interface SigningConfig {
-  /** In-cluster attestation signers deployed with the attestation-signer Helm chart (one release per key). Replaces the dummy-signer local/aws runtimes. */
+  /** In-cluster attestation signers deployed with the attestation-signer Helm chart (one release per key). */
   attestationSigner?: {
-    /** Explicit security profile. The CLI configures local WIF or existing AWS KMS keys; configure production-kms through the chart's production values. */
-    profile: 'staging-kms' | 'staging-local'
-    /** Number of attestation signer instances. Defaults to 3. */
-    signerCount?: number
-  }
-
-  /** @deprecated AWS ECS/KMS dummy-signer runtime; use attestationSigner (attestation-signer Helm chart) instead. */
-  awsKms?: {
-    /** AWS account for the ECS/KMS attestation signers. Independent from infrastructure.aws.accountId. */
-    accountId?: string
-    /** ECS cluster for the ECS Express dummy signer service. Defaults to "default". */
-    ecsClusterName?: string
-    /** Resource name prefix for ECS/KMS attestation signer resources. Defaults to metadata.name. */
-    networkAlias?: string
-    /** AWS region for the ECS/KMS attestation signers. Independent from infrastructure.aws.region. */
-    region?: string
+    /** Shorthand used when instances is omitted. Defaults to bridge.keyCounts.attestation. */
+    instanceCount?: number
+    /** Stable signer fleet. Every instance becomes one Helm release and one key. */
+    instances?: Array<{
+      /** Stable logical identity, for example signer-0. */
+      id: string
+      /** Import an existing KMS key instead of using the deterministic alias. */
+      kmsKeyId?: string
+      /** Import an existing IRSA role instead of creating a managed role. */
+      roleArn?: string
+      /** Override only for a deliberately pre-created ServiceAccount. */
+      serviceAccount?: string
+    }>
+    /** Application and evidence policy required by production-kms. */
+    productionPolicy?: AttestationSignerProductionPolicy
+    /** Explicit security profile. production-kms is modeled now even while production RotateKey remains fail-closed in the signer. */
+    profile: 'production-kms' | 'staging-kms' | 'staging-local'
   }
 
   /** CubeSigner TEE key configuration */
@@ -561,22 +568,28 @@ export interface SigningConfig {
     }>
   }
 
-  /** @deprecated Locally-run (Docker) dummy-signer runtime; use attestationSigner (attestation-signer Helm chart) instead. */
-  local?: {
-    /** Signer instances */
-    signers: Array<{
-      index: number
-      port: number
-      /** Private key - use $ENV:VAR_NAME */
-      privateKey?: string
-    }>
-  }
-
-  /** @deprecated CubeSigner TEE signing and dummy attestation signing are independent; configure cubesigner plus awsKms/local instead. */
-  method?: 'aws-kms' | 'cubesigner' | 'local'
-
   /** TSO service URL */
   tsoServiceUrl?: string
+}
+
+export interface AttestationSignerProductionPolicy {
+  activeBridgeKeyHash: string
+  allowedGitCommit: string
+  allowedReleaseVersion: string
+  allowedSigningPolicyVersion?: number
+  bridgeNamespaceId: string
+  envelope?: {
+    allowedProofTriples?: string
+    allowedTeeSignerIds?: string[]
+    maxFetchUrlBytes?: number
+    maxProofArtifacts?: number
+    maxRefStringBytes?: number
+  }
+  protocolInstanceId: string
+  sourceSetFile: string
+  supportedSigningPolicyVersions?: number[]
+  teeAllowedSignerIds: string[]
+  verifierRegistryFile: string
 }
 
 export interface FrontendSubdomains {

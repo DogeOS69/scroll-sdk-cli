@@ -12,7 +12,6 @@ import * as path from 'node:path'
 import type { DogeConfig } from '../../types/doge-config.js'
 
 import {
-  ATTESTATION_SIGNER_COUNT,
   L1_INTERFACE_BEACON_API_ENDPOINT,
   L1_INTERFACE_RPC_ENDPOINT,
   YAML_DUMP_OPTIONS,
@@ -122,7 +121,7 @@ export function applyAttestationSignerNetwork(
 export function applyAttestationSignerRuntimeValues(
   productionYaml: any,
   network: string,
-  signerConfig: DogeConfig['attestationSigner'],
+  signerConfig: (Partial<NonNullable<DogeConfig['attestationSigner']>> & Pick<NonNullable<DogeConfig['attestationSigner']>, 'backend' | 'profile'>) | undefined,
   instanceIndex: number
 ): PrepChartChange[] {
   const changes = applyAttestationSignerNetwork(productionYaml, network)
@@ -131,6 +130,8 @@ export function applyAttestationSignerRuntimeValues(
   if (!attestationSigner || typeof attestationSigner !== 'object' || !signerConfig) return changes
 
   const secretName = `attestation-signer-${instanceIndex}-env`
+  const instanceIdentity = signerConfig.instances?.find(item => item.index === instanceIndex)
+  if (instanceIdentity) attestationSigner.expectedReleaseName = instanceIdentity.releaseName
   const externalSecretEntry = Object.entries(productionYaml.externalSecrets || {})
     .find(([name]) => name === secretName)
     || Object.entries(productionYaml.externalSecrets || {})[0]
@@ -141,7 +142,8 @@ export function applyAttestationSignerRuntimeValues(
     const instance = signerConfig.kms?.instances.find(item => item.index === instanceIndex)
     if (!instance || !signerConfig.kms) return changes
 
-    attestationSigner.profile = 'staging-kms'
+    const oldProfile = attestationSigner.profile
+    attestationSigner.profile = signerConfig.profile
     attestationSigner.kms ||= {}
     attestationSigner.kms.keyId = instance.kmsKeyId
     attestationSigner.kms.region = signerConfig.kms.region
@@ -161,7 +163,7 @@ export function applyAttestationSignerRuntimeValues(
     }
 
     changes.push(
-      { key: 'attestationSigner.profile', newValue: 'staging-kms', oldValue: 'staging-local' },
+      { key: 'attestationSigner.profile', newValue: signerConfig.profile, oldValue: String(oldProfile ?? 'undefined') },
       { key: 'attestationSigner.kms.expectedSignerId', newValue: instance.expectedSignerId, oldValue: 'undefined' },
       { key: 'attestationSigner.kms.keyId', newValue: instance.kmsKeyId, oldValue: 'undefined' },
       { key: 'attestationSigner.kms.region', newValue: signerConfig.kms.region, oldValue: 'undefined' },
@@ -171,7 +173,7 @@ export function applyAttestationSignerRuntimeValues(
   }
 
   const oldProfile = attestationSigner.profile
-  attestationSigner.profile = 'staging-local'
+    attestationSigner.profile = signerConfig.profile
   attestationSigner.local ||= {}
   attestationSigner.local.wifSecretRef = {
     key: 'ATTESTATION_SIGNER_WIF',
@@ -188,8 +190,8 @@ export function applyAttestationSignerRuntimeValues(
     productionYaml.externalSecrets['signer-env'] = externalSecret
   }
 
-  if (oldProfile !== 'staging-local') {
-    changes.push({ key: 'attestationSigner.profile', newValue: 'staging-local', oldValue: String(oldProfile ?? 'undefined') })
+  if (oldProfile !== signerConfig.profile) {
+    changes.push({ key: 'attestationSigner.profile', newValue: signerConfig.profile, oldValue: String(oldProfile ?? 'undefined') })
   }
 
   return changes
@@ -1656,7 +1658,7 @@ export default class SetupPrepCharts extends Command {
           if (chartName === "cubesigner-signer") {
             maxInstances = this.dogeConfig.cubesigner?.roles?.length ?? 1;
           } else if (chartName === "attestation-signer") {
-            maxInstances = ATTESTATION_SIGNER_COUNT;
+            maxInstances = this.dogeConfig.attestationSigner?.instances?.length ?? 0;
           }
 
           if (releaseIndex >= maxInstances) {
@@ -1678,12 +1680,20 @@ export default class SetupPrepCharts extends Command {
           newYamlContent = yaml.dump(instanceValues, YAML_DUMP_OPTIONS)
         }
 
-        if (!fs.existsSync(destFilePath)) {
-          fs.writeFileSync(destFilePath, newYamlContent);
-          updatedCharts++;
-        }
+        fs.writeFileSync(destFilePath, newYamlContent);
+        updatedCharts++;
 
         releaseIndex++
+      }
+
+      if (chartName === 'attestation-signer') {
+        for (const existingFile of fs.readdirSync(valuesDir)) {
+          const match = existingFile.match(/^attestation-signer-production-(\d+)\.yaml$/)
+          if (match && Number(match[1]) >= releaseIndex) {
+            fs.rmSync(path.join(valuesDir, existingFile))
+            updatedCharts++
+          }
+        }
       }
     }
 

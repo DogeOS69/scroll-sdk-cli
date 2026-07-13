@@ -18,7 +18,7 @@ infrastructure:
   aws:
     region: us-west-2
     accountId: "123456789012"
-    eksClusterName: dogeos-devnet-cluster  # EKS cluster for Kubernetes/Helm workloads, not dummy-signers
+    eksClusterName: dogeos-devnet-cluster
     secretsPrefix: dogeos-devnet
     # Cluster creation settings (used when --create-cluster is specified)
     nodeType: m5.2xlarge        # EC2 instance type for worker nodes
@@ -100,6 +100,11 @@ bridge:
   keyCounts:
     attestation: 3
     recovery: 3
+  # Bootstrap-only M-of-N cohort. Current state after RotateKey is read from
+  # the chain and must not be inferred from this initial list.
+  initialAttestationKeyset:
+    signerIds: [signer-0, signer-1, signer-2]
+    threshold: 2
   # TEE public key is populated by `scrollsdk setup cubesigner-init`.
   timelock: 100
   feeRateSatsPerKvb: 1000000
@@ -125,13 +130,14 @@ signing:
   # audit history and anti-double-sign ledger have no automatic retention.
   attestationSigner:
     profile: staging-local
+    # N=5 deployed releases; signer-3 and signer-4 start as rotation reserves.
+    instances:
+      - id: signer-0
+      - id: signer-1
+      - id: signer-2
+      - id: signer-3
+      - id: signer-4
     # profile: staging-kms # setup attestation-signer provisions KMS keys and IRSA roles
-  # Deprecated alternatives, replaced by attestationSigner:
-  # awsKms:            # dummy signers on AWS ECS Express + KMS
-  #   accountId: "123456789012"
-  #   region: us-west-2
-  # local:             # dummy signers via local Docker
-  #   signers: []
 
 frontend:
   protocol: https

@@ -1,0 +1,6 @@
+[[verifier]]
+proof_kind = "scroll_batch"
+verifier_id = "scroll-production-v1"
+vk_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+allowed_protocol_versions = [1]
+allowed_signing_policy_versions = [1]

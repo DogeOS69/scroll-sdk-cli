@@ -8,14 +8,15 @@ function base64UrlToBuffer(value: string): Buffer {
   return Buffer.from(`${normalized}${padding}`, 'base64')
 }
 
-export function getAttestationSignerKmsRole(index: number): KmsSignerProvisionRole {
-  const serviceName = `attestation-signer-${index}`
+export function getAttestationSignerKmsRole(instance: number | string): KmsSignerProvisionRole {
+  const suffix = typeof instance === 'number' ? String(instance) : instance.replace(/^signer-/, '')
+  const serviceName = `attestation-signer-${suffix}`
   return {
     aliasSuffix: serviceName,
     defaultServiceAccount: serviceName,
-    description: `DogeOS attestation signer ${index} secp256k1 signing key`,
+    description: `DogeOS attestation signer ${instance} secp256k1 signing key`,
     purposeTag: 'bridge-attestation',
-    role: `ATTESTATION_SIGNER_${index}`,
+    role: `ATTESTATION_SIGNER_${suffix.toUpperCase().replaceAll('-', '_')}`,
     roleSuffix: `${serviceName}-kms`,
     service: 'attestation-signer',
   }

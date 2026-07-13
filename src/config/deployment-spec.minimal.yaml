@@ -72,6 +72,9 @@ bridge:
   keyCounts:
     attestation: 1
     recovery: 1
+  initialAttestationKeyset:
+    signerIds: [signer-0]
+    threshold: 1
   # Optional compressed TEE public key. If omitted, `scrollsdk setup cubesigner-init` can populate it.
   # teePubkey: "020000000000000000000000000000000000000000000000000000000000000000"
   timelock: 100
@@ -93,6 +96,8 @@ signing:
   # In-cluster attestation signers use the chart's explicit staging-local profile.
   attestationSigner:
     profile: staging-local
+    instances:
+      - id: signer-0
 
 frontend:
   protocol: https

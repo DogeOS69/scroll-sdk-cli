@@ -20,7 +20,6 @@ import type {
   ValidationResult,
   ValidationWarning
 } from '../types/deployment-spec.js'
-import type { DogeConfig } from '../types/doge-config.js'
 
 import {
   L1_INTERFACE_RPC_ENDPOINT,
@@ -327,15 +326,6 @@ function getDbPassword(spec: DeploymentSpec, key: keyof NonNullable<DeploymentSp
   return spec.database.credentials?.[key] || ''
 }
 
-function deriveNetworkAlias(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replaceAll(/[^\da-z-]/g, '-')
-    .replaceAll(/-+/g, '-')
-    .replaceAll(/^-|-$/g, '') || 'devnet'
-}
-
 function resolveDogecoinChainId(network: DeploymentSpec['dogecoin']['network']): number {
   switch (network) {
     case 'mainnet': {
@@ -388,38 +378,48 @@ function getEthereumDaChainId(rawSpec: DeploymentSpec): number {
   return rawSpec.ethereumDa?.chainId || ETHEREUM_DA_DEFAULTS[ethereumDaChain].chainId
 }
 
-export function getAwsSignerConfigFromSpec(spec: DeploymentSpec): NonNullable<DogeConfig['awsSigner']> | undefined {
-  if (!spec.signing.awsKms) {
-    return undefined
-  }
-
-  const { accountId, region } = spec.signing.awsKms
-  if (!accountId || !region) {
-    return undefined
-  }
-
-  return {
-    accountId,
-    ecsClusterName: spec.signing.awsKms?.ecsClusterName || 'default',
-    networkAlias: spec.signing.awsKms?.networkAlias || deriveNetworkAlias(spec.metadata.name),
-    region,
-  }
+export interface ResolvedAttestationSignerTopology {
+  activeSignerIds: string[]
+  instances: Array<{
+    id: string
+    index: number
+    kmsKeyId?: string
+    releaseName: string
+    roleArn?: string
+    serviceAccount: string
+  }>
+  threshold: number
 }
 
-export function getDummySignerProviderFromSpec(spec: DeploymentSpec): NonNullable<NonNullable<DogeConfig['dummySigner']>['provider']> | undefined {
-  if (spec.signing.attestationSigner) {
-    return 'k8s'
-  }
+/** Resolve the independently-sized signer fleet (N) and bootstrap bridge cohort (M). */
+export function resolveAttestationSignerTopology(spec: DeploymentSpec): ResolvedAttestationSignerTopology | undefined {
+  const signer = spec.signing?.attestationSigner
+  if (!signer) return undefined
 
-  if (spec.signing.awsKms) {
-    return 'aws'
-  }
+  const count = signer.instances?.length
+    || signer.instanceCount
+    || spec.bridge.keyCounts.attestation
+  const rawInstances: Array<{ id: string; kmsKeyId?: string; roleArn?: string; serviceAccount?: string }> = signer.instances?.length
+    ? signer.instances
+    : Array.from({ length: count }, (_value, index) => ({ id: `signer-${index}` }))
+  const instances = rawInstances.map((instance, index) => {
+    const releaseName = `attestation-signer-${instance.id.replace(/^signer-/, '')}`
+    return {
+      ...instance,
+      index,
+      releaseName,
+      serviceAccount: instance.serviceAccount || releaseName,
+    }
+  })
+  const initial = spec.bridge.initialAttestationKeyset
+  const activeSignerIds = initial?.signerIds
+    || instances.slice(0, spec.bridge.keyCounts.attestation).map(instance => instance.id)
 
-  if (spec.signing.local) {
-    return 'local'
+  return {
+    activeSignerIds,
+    instances,
+    threshold: initial?.threshold ?? spec.bridge.thresholds.attestation,
   }
-
-  return undefined
 }
 
 /**
@@ -744,41 +744,73 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     })
   }
 
-  if (
-    spec.signing?.attestationSigner
-    && !['staging-kms', 'staging-local'].includes(spec.signing.attestationSigner.profile)
-  ) {
+  if (spec.signing?.attestationSigner && !['production-kms', 'staging-kms', 'staging-local'].includes(spec.signing.attestationSigner.profile)) {
     errors.push({
       code: 'E002_MISSING_REQUIRED_FIELD',
-      message: 'CLI-managed attestation signers require an explicit staging-local or staging-kms profile',
+      message: 'Attestation signers require an explicit staging-local, staging-kms, or production-kms profile',
       path: 'signing.attestationSigner.profile',
     })
   }
 
-  if (spec.signing?.awsKms) {
-    if (!spec.signing.awsKms.accountId) {
-      errors.push({
-        code: 'E002_MISSING_REQUIRED_FIELD',
-        message: 'AWS account ID is required for ECS Express attestation signers',
-        path: 'signing.awsKms.accountId',
-      })
-    }
-
-    if (!spec.signing.awsKms.region) {
-      errors.push({
-        code: 'E002_MISSING_REQUIRED_FIELD',
-        message: 'AWS region is required for ECS Express attestation signers',
-        path: 'signing.awsKms.region',
-      })
-    }
-  }
-
-  if (!getDummySignerProviderFromSpec(spec)) {
+  if (!spec.signing?.attestationSigner) {
     warnings.push({
       message: 'Attestation signer configuration is not set yet',
       path: 'signing',
-      suggestion: 'Configure signing.attestationSigner for the in-cluster attestation-signer Helm chart (recommended), signing.awsKms for ECS Express attestation signers, or signing.local for locally-run attestation signers.',
+      suggestion: 'Configure signing.attestationSigner for the in-cluster attestation-signer Helm chart.',
     })
+  }
+
+  const signerTopology = resolveAttestationSignerTopology(spec)
+  if (signerTopology) {
+    const ids = signerTopology.instances.map(instance => instance.id)
+    if (ids.length === 0) {
+      errors.push({ code: 'E002_MISSING_REQUIRED_FIELD', message: 'At least one attestation signer instance is required', path: 'signing.attestationSigner.instances' })
+    }
+
+    if (new Set(ids).size !== ids.length || ids.some(id => !/^[\da-z](?:[\da-z-]*[\da-z])?$/.test(id))) {
+      errors.push({ code: 'E601_INVALID_VALUE', message: 'Attestation signer IDs must be unique DNS labels', path: 'signing.attestationSigner.instances' })
+    }
+
+    const active = signerTopology.activeSignerIds
+    if (active.length === 0 || new Set(active).size !== active.length || active.some(id => !ids.includes(id))) {
+      errors.push({ code: 'E601_INVALID_VALUE', message: 'Initial attestation keyset must contain unique IDs from the deployed signer fleet', path: 'bridge.initialAttestationKeyset.signerIds' })
+    }
+
+    if (signerTopology.threshold < 1 || signerTopology.threshold > active.length) {
+      errors.push({ code: 'E005_INVALID_THRESHOLD', message: `Initial attestation threshold (${signerTopology.threshold}) must be between 1 and active key count (${active.length})`, path: 'bridge.initialAttestationKeyset.threshold' })
+    }
+
+    if (spec.signing.attestationSigner?.profile === 'production-kms' && !spec.signing.attestationSigner.productionPolicy) {
+      errors.push({ code: 'E002_MISSING_REQUIRED_FIELD', message: 'production-kms requires productionPolicy', path: 'signing.attestationSigner.productionPolicy' })
+    }
+
+    if (spec.signing.attestationSigner?.profile === 'production-kms' && spec.signing.attestationSigner.productionPolicy) {
+      const policy = spec.signing.attestationSigner.productionPolicy
+      const productionFields: Array<[string, string, RegExp | undefined]> = [
+        ['activeBridgeKeyHash', policy.activeBridgeKeyHash, /^0x[\dA-Fa-f]{40}$/],
+        ['allowedGitCommit', policy.allowedGitCommit, undefined],
+        ['allowedReleaseVersion', policy.allowedReleaseVersion, undefined],
+        ['bridgeNamespaceId', policy.bridgeNamespaceId, /^0x[\dA-Fa-f]{40}$/],
+        ['protocolInstanceId', policy.protocolInstanceId, /^0x[\dA-Fa-f]{64}$/],
+        ['sourceSetFile', policy.sourceSetFile, undefined],
+        ['verifierRegistryFile', policy.verifierRegistryFile, undefined],
+      ]
+
+      for (const [field, value, pattern] of productionFields) {
+        if (!value || value.includes('<') || (pattern && !pattern.test(value))) {
+          errors.push({ code: 'E601_INVALID_VALUE', message: `production-kms requires a valid ${field}`, path: `signing.attestationSigner.productionPolicy.${field}` })
+        }
+      }
+
+      if (policy.teeAllowedSignerIds.length === 0 || policy.teeAllowedSignerIds.some(id => !/^0[23][\da-f]{64}$/.test(id))) {
+        errors.push({ code: 'E601_INVALID_VALUE', message: 'production-kms requires canonical compressed TEE signer IDs', path: 'signing.attestationSigner.productionPolicy.teeAllowedSignerIds' })
+      }
+
+      const imageTag = spec.images?.services?.attestationSigner?.tag
+      if (!imageTag || imageTag === 'latest') {
+        errors.push({ code: 'E006_INVALID_IMAGE_CONFIG', message: 'production-kms requires an immutable attestation-signer image tag', path: 'images.services.attestationSigner.tag' })
+      }
+    }
   }
 
   const ethereumDaChain = spec.ethereumDa?.chain || (spec.metadata.environment === 'mainnet' ? 'mainnet' : 'sepolia')
@@ -955,7 +987,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   }
 
   // Bridge thresholds validation
-  if (spec.bridge?.thresholds) {
+  if (spec.bridge?.thresholds && !spec.bridge.initialAttestationKeyset) {
     const { attestation } = spec.bridge.thresholds
     const attestationKeyCount = spec.bridge.keyCounts?.attestation || 0
     if (attestation > attestationKeyCount) {
@@ -1452,26 +1484,20 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
     }
   }
 
-  const awsSignerConfig = getAwsSignerConfigFromSpec(spec)
-  if (awsSignerConfig) {
-    config.awsSigner = awsSignerConfig
-  }
-
-  if (spec.signing.local) {
-    config.localSigners = {
-      signers: spec.signing.local.signers,
+  const topology = resolveAttestationSignerTopology(spec)
+  if (topology && spec.signing.attestationSigner) {
+    config.attestationSigner = {
+      activeSignerIds: topology.activeSignerIds,
+      backend: spec.signing.attestationSigner.profile.endsWith('-kms') ? 'aws_kms' : 'local',
+      instances: topology.instances,
+      profile: spec.signing.attestationSigner.profile,
+      threshold: topology.threshold,
+      ...(spec.signing.tsoServiceUrl ? { tsoServiceUrl: spec.signing.tsoServiceUrl } : {}),
     }
-  }
-
-  if (spec.signing.tsoServiceUrl) {
-    config.signerUrls = [spec.signing.tsoServiceUrl]
-  }
-
-  const dummySignerProvider = getDummySignerProviderFromSpec(spec)
-  if (dummySignerProvider) {
-    config.dummySigner = {
-      provider: dummySignerProvider,
-    }
+    config.signerUrls = topology.activeSignerIds.map(id => {
+      const instance = topology.instances.find(item => item.id === id) as ResolvedAttestationSignerTopology['instances'][number]
+      return `http://${instance.releaseName}:4040`
+    })
   }
 
   if (spec.test) {
@@ -1489,12 +1515,13 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
  */
 export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
   const spec = normalizeDeploymentSpec(rawSpec)
+  const attestationTopology = resolveAttestationSignerTopology(spec)
   const externalRpc = getDogecoinExternalRpc(spec)
   const targetAmountsSats = getBridgeTargetAmountsSats(spec)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
   const config: Record<string, any> = {
-    attestation_key_count: spec.bridge.keyCounts.attestation,
-    attestation_threshold: spec.bridge.thresholds.attestation,
+    attestation_key_count: attestationTopology?.activeSignerIds.length || spec.bridge.keyCounts.attestation,
+    attestation_threshold: attestationTopology?.threshold || spec.bridge.thresholds.attestation,
     bridge_target_amount: targetAmountsSats.bridge,
     confirmations_required: spec.bridge.confirmationsRequired,
     deposit_eth_recipient_address_hex: optionalAccountAddress(spec, 'deployer'),

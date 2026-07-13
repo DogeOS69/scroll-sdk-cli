@@ -13,6 +13,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic YAML/JSON config building requires any */
 
 import * as yaml from 'js-yaml'
+import fs from 'node:fs'
+import path from 'node:path'
 
 import type { DeploymentSpec, ImagesConfig } from '../types/deployment-spec.js'
 
@@ -379,7 +381,7 @@ function resolveImage(
 /**
  * Generate all Helm values files from a DeploymentSpec
  */
-export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles {
+export function generateValuesFiles(spec: DeploymentSpec, specBaseDir: string = process.cwd()): GeneratedValuesFiles {
   const normalizedSpec = normalizeDeploymentSpec(spec)
 
   const files: GeneratedValuesFiles = {}
@@ -408,7 +410,7 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
 
   // In-cluster attestation signers (attestation-signer chart, one release per key)
   if (normalizedSpec.signing.attestationSigner) {
-    files['attestation-signer-production.yaml'] = generateAttestationSignerValues(normalizedSpec)
+    files['attestation-signer-production.yaml'] = generateAttestationSignerValues(normalizedSpec, specBaseDir)
   }
 
   // Rollup services
@@ -1312,7 +1314,7 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
  * this generator supplies structured staging-local values and a WIF Secret
  * reference instead of embedding an application TOML file.
  */
-function generateAttestationSignerValues(spec: DeploymentSpec): string {
+function generateAttestationSignerValues(spec: DeploymentSpec, specBaseDir: string): string {
   const secretConfig = getSecretProviderConfig(spec)
 
   const image = resolveImage(spec, 'attestationSigner', {
@@ -1323,6 +1325,8 @@ function generateAttestationSignerValues(spec: DeploymentSpec): string {
 
   const tsoUrl = spec.signing.tsoServiceUrl || 'http://tso-service:3000'
 
+  const profile = spec.signing.attestationSigner?.profile
+  const production = spec.signing.attestationSigner?.productionPolicy
   const values: Record<string, any> = {
     attestationSigner: {
       database: {
@@ -1332,6 +1336,7 @@ function generateAttestationSignerValues(spec: DeploymentSpec): string {
         allowedProofTriples: '',
         maxProofArtifacts: 4
       },
+      expectedReleaseName: 'attestation-signer-__INSTANCE_INDEX__',
       local: {
         wifSecretRef: {
           key: 'ATTESTATION_SIGNER_WIF'
@@ -1340,7 +1345,7 @@ function generateAttestationSignerValues(spec: DeploymentSpec): string {
       logFilter: 'info,attestation_signer=info',
       network: spec.dogecoin.network,
       port: 4040,
-      profile: spec.signing.attestationSigner?.profile,
+      profile,
       proofArtifact: {
         fetchMode: 'disabled'
       },
@@ -1369,6 +1374,47 @@ function generateAttestationSignerValues(spec: DeploymentSpec): string {
     }
   }
 
+  if (profile === 'production-kms') {
+    if (!production) throw new Error('production-kms requires signing.attestationSigner.productionPolicy')
+    const readPolicyFile = (file: string, field: string): string => {
+      const resolved = path.resolve(specBaseDir, file)
+      if (!fs.existsSync(resolved)) throw new Error(`${field} does not exist: ${resolved}`)
+      return fs.readFileSync(resolved, 'utf8')
+    }
+
+    values.attestationSigner.productionPolicy = {
+      activeBridgeKeyHash: production.activeBridgeKeyHash,
+      bridgeNamespaceId: production.bridgeNamespaceId,
+      protocolInstanceId: production.protocolInstanceId,
+      sourceSetToml: '/etc/dogeos/source-set.toml',
+      supportedSigningPolicyVersions: (production.supportedSigningPolicyVersions || [1]).join(','),
+      teeAllowedSignerIds: production.teeAllowedSignerIds.join(','),
+      verifierRegistryToml: '/etc/dogeos/verifier-registry.toml',
+    }
+    values.attestationSigner.envelopePolicy = {
+      allowedProofTriples: production.envelope?.allowedProofTriples || '',
+      allowedTeeSignerIds: (production.envelope?.allowedTeeSignerIds || []).join(','),
+      maxFetchUrlBytes: production.envelope?.maxFetchUrlBytes || 2048,
+      maxProofArtifacts: production.envelope?.maxProofArtifacts || 0,
+      maxRefStringBytes: production.envelope?.maxRefStringBytes || 512,
+    }
+    values.attestationSigner.proofArtifact.fetchMode = 'http'
+    values.attestationSigner.releasePolicy = {
+      allowedGitCommit: production.allowedGitCommit,
+      allowedReleaseVersion: production.allowedReleaseVersion,
+      allowedSigningPolicyVersion: String(production.allowedSigningPolicyVersion || 1),
+    }
+    values.configMaps = {
+      config: {
+        data: {
+          'source-set.toml': readPolicyFile(production.sourceSetFile, 'productionPolicy.sourceSetFile'),
+          'verifier-registry.toml': readPolicyFile(production.verifierRegistryFile, 'productionPolicy.verifierRegistryFile'),
+        },
+        enabled: true,
+      },
+    }
+  }
+
   const externalSecrets = generateExternalSecrets(
     'signer-env',
     secretConfig,
@@ -1377,7 +1423,7 @@ function generateAttestationSignerValues(spec: DeploymentSpec): string {
     ]
   )
 
-  if (externalSecrets) {
+  if (externalSecrets && profile === 'staging-local') {
     values.externalSecrets = externalSecrets
   }
 

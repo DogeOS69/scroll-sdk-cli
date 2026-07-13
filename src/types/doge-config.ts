@@ -24,7 +24,17 @@ export interface DogeConfig {
     L2_GAS_ORACLE_SENDER_PRIVATE_KEY?: string
   }
   attestationSigner?: {
+    activeSignerIds: string[]
     backend: 'aws_kms' | 'local'
+    instances: Array<{
+      expectedSignerId: string
+      id: string
+      index: number
+      kmsKeyId?: string
+      releaseName: string
+      roleArn?: string
+      serviceAccount: string
+    }>
     kms?: {
       awsProfile?: string
       eksCluster?: string
@@ -39,15 +49,18 @@ export interface DogeConfig {
       networkAlias?: string
       region: string
     }
-    profile: 'staging-kms' | 'staging-local'
+    profile: 'production-kms' | 'staging-kms' | 'staging-local'
+    threshold: number
   }
-  awsSigner?: {
-    accountId?: string
-    ecsClusterName?: string
-    imageSource?: 'dockerhub' | 'ecr' | 'ecr-sync'
-    imageUri?: string
-    networkAlias?: string
-    region?: string
+  bootnodeReth?: {
+    instances?: Array<{
+      enodeUrl?: string
+      index: number
+      nodekey?: {
+        privateKey?: string
+        secretMode?: 'external-secret' | 'plain'
+      }
+    }>
   }
   cubesigner?: {
     roles: CubesignerRole[]
@@ -70,10 +83,7 @@ export interface DogeConfig {
     password?: string // for dogecoin that deploy on cluster
     username?: string // for dogecoin that deploy on cluster
   }
-  /** Attestation signer runtime provider. This is independent from the Kubernetes infrastructure provider. */
-  dummySigner?: {
-    provider?: 'aws' | 'k8s' | 'local'
-  }
+
   ethereumDa?: {
     batch?: {
       compression?: 'auto' | 'none'
@@ -134,7 +144,6 @@ export interface DogeConfig {
     }
     submitterRpcUrl?: string
   }
-
   frontend?: {
     bridgeUrl?: string
     l2Explorer?: string
@@ -165,16 +174,6 @@ export interface DogeConfig {
     password?: string // for send/sync on dogocoin
     url?: string // for send/sync on dogocoin like: https://testnet.doge.xyz/
     username?: string // for send/sync on dogocoin
-  }
-  bootnodeReth?: {
-    instances?: Array<{
-      enodeUrl?: string
-      index: number
-      nodekey?: {
-        privateKey?: string
-        secretMode?: 'external-secret' | 'plain'
-      }
-    }>
   }
   sequencerReth?: {
     instances?: Array<{

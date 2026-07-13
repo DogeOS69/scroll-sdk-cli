@@ -284,7 +284,7 @@ export default class GenerateFromSpec extends Command {
 
     if (generateValues) {
       jsonCtx.info('Generating Helm values files...')
-      valuesFiles = generateValuesFiles(spec)
+      valuesFiles = generateValuesFiles(spec, path.dirname(specPath))
     }
 
     // Dry run - just show what would be generated

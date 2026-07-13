@@ -128,7 +128,7 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       maxL1MessageGasLimit: 10_000_000,
       maxTxInChunk: 100,
     },
-    signing: { cubesigner: { roles: [] }, local: { signers: [] } },
+    signing: { attestationSigner: { profile: 'staging-local' }, cubesigner: { roles: [] } },
     version: '1.0',
     ...overrides,
   } as DeploymentSpec;
@@ -642,7 +642,7 @@ describe('deployment-spec-generator', () => {
 
     it('warns when cubesigner TEE role is not set yet', () => {
       const spec = createMinimalSpec();
-      spec.signing = { cubesigner: { roles: [] }, local: { signers: [] } };
+      spec.signing = { attestationSigner: { profile: 'staging-local' }, cubesigner: { roles: [] } };
       const result = validateDeploymentSpec(spec);
       expect(result.valid).to.be.true;
       expect(result.warnings.some(w => w.path === 'signing.cubesigner.roles')).to.be.true;
@@ -673,18 +673,17 @@ describe('deployment-spec-generator', () => {
       expect(result.errors.some(error => error.path === 'signing.attestationSigner.profile')).to.be.false;
     });
 
-    it('fails when ECS Express dummy signer account or region is missing', () => {
+    it('validates an M-of-N initial attestation keyset', () => {
       const spec = createMinimalSpec();
-      spec.signing = {
-        awsKms: {},
-        cubesigner: { roles: [] },
+      spec.signing.attestationSigner = {
+        instances: ['signer-0', 'signer-1', 'signer-2', 'signer-3', 'signer-4'].map(id => ({ id })),
+        profile: 'staging-local',
       };
+      spec.bridge.initialAttestationKeyset = { signerIds: ['signer-0', 'signer-1', 'signer-2'], threshold: 2 };
+      expect(validateDeploymentSpec(spec).valid).to.be.true;
 
-      const result = validateDeploymentSpec(spec);
-
-      expect(result.valid).to.be.false;
-      expect(result.errors.some(error => error.path === 'signing.awsKms.accountId')).to.be.true;
-      expect(result.errors.some(error => error.path === 'signing.awsKms.region')).to.be.true;
+      spec.bridge.initialAttestationKeyset.signerIds.push('unknown');
+      expect(validateDeploymentSpec(spec).errors.some(error => error.path === 'bridge.initialAttestationKeyset.signerIds')).to.be.true;
     });
 
     it('fails when attestation threshold exceeds key count', () => {
@@ -1037,52 +1036,24 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('role1');
     });
 
-    it('includes explicit aws-kms attestation signer config when present', () => {
+    it('includes the Kubernetes signer fleet and initial active routing', () => {
       const spec = createMinimalSpec();
       spec.signing = {
-        awsKms: { accountId: '123456789', networkAlias: 'testnet', region: 'us-east-1' },
+        attestationSigner: {
+          instances: ['signer-0', 'signer-1', 'signer-2', 'signer-3'].map(id => ({ id })),
+          profile: 'staging-kms',
+        },
         cubesigner: { roles: [] },
       };
-      const output = generateDogeConfigToml(spec);
+      spec.bridge.initialAttestationKeyset = { signerIds: ['signer-0', 'signer-2'], threshold: 2 };
+      const output = toml.parse(generateDogeConfigToml(spec)) as any;
 
-      expect(output).to.include('awsSigner');
-      expect(output).to.include('us-east-1');
-      expect(output).to.include('ecsClusterName = "default"');
-      expect(output).to.include('dummySigner');
-      expect(output).to.include('provider = "aws"');
-      expect(output).not.to.include('suffixes');
-    });
-
-    it('does not infer AWS dummy signer config from infrastructure.aws alone', () => {
-      const spec = createMinimalSpec();
-      spec.infrastructure = {
-        aws: { accountId: '123456789012', eksClusterName: 'dogeos-testnet-cluster', region: 'us-west-2' },
-        bootnodeCount: 1,
-        provider: 'aws',
-        sequencerCount: 1,
-      };
-      spec.metadata.name = 'DogeOS Testnet';
-      spec.signing = {
-        cubesigner: { roles: [] },
-      };
-      const output = generateDogeConfigToml(spec);
-
-      expect(output).not.to.include('awsSigner');
-      expect(output).not.to.include('dummySigner');
-    });
-
-    it('includes local signer config', () => {
-      const spec = createMinimalSpec();
-      spec.signing = {
-        cubesigner: { roles: [] },
-        local: { signers: [{ index: 0, port: 8080 }] },
-      };
-      const output = generateDogeConfigToml(spec);
-
-      expect(output).to.include('localSigners');
-      expect(output).to.include('network = "testnet"');
-      expect(output).to.include('dummySigner');
-      expect(output).to.include('provider = "local"');
+      expect(output.attestationSigner.instances).to.have.length(4);
+      expect(output.attestationSigner.activeSignerIds).to.deep.equal(['signer-0', 'signer-2']);
+      expect(output.attestationSigner.threshold).to.equal(2);
+      expect(output.signerUrls).to.deep.equal(['http://attestation-signer-0:4040', 'http://attestation-signer-2:4040']);
+      expect(output).not.to.have.property('dummySigner');
+      expect(output).not.to.have.property('awsSigner');
     });
 
     it('includes TSO service URL when present', () => {
@@ -1091,47 +1062,6 @@ describe('deployment-spec-generator', () => {
       const output = generateDogeConfigToml(spec);
 
       expect(output).to.include('http://tso:9090');
-    });
-
-    it('sets dummy signer provider from signing config independently from infrastructure provider', () => {
-      const awsSpec = createMinimalSpec();
-      awsSpec.infrastructure.provider = 'local';
-      awsSpec.signing = {
-        awsKms: { accountId: '1', region: 'r' },
-        cubesigner: { roles: [] },
-      };
-      const awsOutput = toml.parse(generateDogeConfigToml(awsSpec)) as any;
-      expect(awsOutput.dummySigner.provider).to.equal('aws');
-
-      const localSpec = createMinimalSpec();
-      localSpec.infrastructure.provider = 'aws';
-      localSpec.infrastructure.aws = { accountId: '1', eksClusterName: 'c', region: 'r' };
-      localSpec.signing = {
-        cubesigner: { roles: [] },
-        local: { signers: [] },
-      };
-      const localOutput = toml.parse(generateDogeConfigToml(localSpec)) as any;
-      expect(localOutput.dummySigner.provider).to.equal('local');
-
-      const k8sSpec = createMinimalSpec();
-      k8sSpec.signing = {
-        attestationSigner: { profile: 'staging-local' },
-        cubesigner: { roles: [] },
-      };
-      const k8sOutput = toml.parse(generateDogeConfigToml(k8sSpec)) as any;
-      expect(k8sOutput.dummySigner.provider).to.equal('k8s');
-    });
-
-    it('prefers the attestation-signer chart provider over deprecated dummy signer configs', () => {
-      const spec = createMinimalSpec();
-      spec.signing = {
-        attestationSigner: { profile: 'staging-local' },
-        awsKms: { accountId: '1', region: 'r' },
-        cubesigner: { roles: [] },
-        local: { signers: [] },
-      };
-      const output = toml.parse(generateDogeConfigToml(spec)) as any;
-      expect(output.dummySigner.provider).to.equal('k8s');
     });
 
     it('includes test config when present', () => {
@@ -1661,6 +1591,35 @@ describe('deployment-spec-generator', () => {
       expect(values).not.to.have.property('env');
       expect(files['attestation-signer-production.yaml']).not.to.include('attestation-signer.toml');
       expect(values.persistence).not.to.have.property('config');
+    });
+
+    it('generates the production policy scaffold from operator TOML files', () => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'attestation-production-'));
+      fs.writeFileSync(path.join(directory, 'verifiers.toml'), '[[verifier]]\nproof_kind="scroll_batch"\nverifier_id="v1"\nvk_hash="0x' + '11'.repeat(32) + '"\n');
+      fs.writeFileSync(path.join(directory, 'sources.toml'), '[dogecoin]\nrpcs=["https://doge"]\nmin_online_sources=1\nrequired_confirmations=20\n[ethereum_execution]\nrpcs=["https://eth"]\nmin_online_sources=1\n[dogeos_l2]\nrpcs=["https://l2"]\nmin_online_sources=1\n');
+      const spec = createMinimalSpec();
+      spec.images = { services: { attestationSigner: { tag: 'v0.3.0' } } };
+      spec.signing.attestationSigner = {
+        productionPolicy: {
+          activeBridgeKeyHash: `0x${'22'.repeat(20)}`,
+          allowedGitCommit: 'abc123',
+          allowedReleaseVersion: '0.3.0',
+          bridgeNamespaceId: `0x${'33'.repeat(20)}`,
+          protocolInstanceId: `0x${'44'.repeat(32)}`,
+          sourceSetFile: 'sources.toml',
+          teeAllowedSignerIds: [`02${'55'.repeat(32)}`],
+          verifierRegistryFile: 'verifiers.toml',
+        },
+        profile: 'production-kms',
+      };
+
+      const values = yaml.load(generateValuesFiles(spec, directory)['attestation-signer-production.yaml']) as any;
+      expect(values.attestationSigner.profile).to.equal('production-kms');
+      expect(values.attestationSigner.releasePolicy.allowedReleaseVersion).to.equal('0.3.0');
+      expect(values.configMaps.config.data['verifier-registry.toml']).to.include('scroll_batch');
+      expect(values.configMaps.config.data['source-set.toml']).to.include('[dogecoin]');
+      expect(values).not.to.have.property('externalSecrets');
+      fs.rmSync(directory, { force: true, recursive: true });
     });
   });
 

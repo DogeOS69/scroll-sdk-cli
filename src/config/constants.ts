@@ -46,7 +46,6 @@ export const DOGE_CONFIG_TEMPLATE = getDogeConfigTemplate()
  * Attestation signer deployment shape shared by attestation-signer, prep-charts and
  * the values generator. One attestation-signer chart release per key.
  */
-export const ATTESTATION_SIGNER_COUNT = 3
 export const ATTESTATION_SIGNER_PORT = 4040
 export const getAttestationSignerServiceUrl = (index: number): string =>
   `http://attestation-signer-${index}:${ATTESTATION_SIGNER_PORT}`
