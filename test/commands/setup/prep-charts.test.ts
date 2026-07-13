@@ -9,6 +9,7 @@ import {
   applyL2RethRpcPublicIngressPolicy,
   applyL2RethRpcRuntimeValues,
   applyRethBlobS3Url,
+  applyRethNetworkId,
   buildEthDaSubmitterPrepEnv,
   buildFeeOraclePrepEnv,
   buildL1InterfaceBlobSourcePrepEnv,
@@ -498,7 +499,19 @@ describe('setup prep-charts Ethereum DA blob source updates', () => {
     expect(changes.map(change => change.key)).to.deep.equal(['reth.blobS3Url'])
   })
 
-  it('targets every concrete Reth values file for blobS3Url updates', () => {
+  it('writes the configured L2 chain ID as the normal Reth P2P network ID', () => {
+    const values = { reth: { networkId: '4444444' } }
+    const changes = applyRethNetworkId(values, '6281971')
+
+    expect(values.reth.networkId).to.equal('6281971')
+    expect(changes).to.deep.equal([{
+      key: 'reth.networkId',
+      newValue: '6281971',
+      oldValue: '4444444',
+    }])
+  })
+
+  it('targets every concrete Reth values file for shared runtime updates', () => {
     const files = [
       'l2-reth-bootnode-production-0.yaml',
       'l2-reth-bootnode-production-1.yaml',

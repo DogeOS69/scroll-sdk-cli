@@ -9,11 +9,9 @@ import * as path from 'node:path'
 
 import type { DogeConfig } from '../../types/doge-config.js'
 
-import {
-  L1_INTERFACE_BEACON_API_ENDPOINT,
-  L1_INTERFACE_RPC_ENDPOINT,
-} from '../../config/constants.js'
+import { L1_INTERFACE_RPC_ENDPOINT } from '../../config/constants.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import { buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import { deriveBootnodeRethEnodeUrl } from './l2-bootnode-reth.js'
 
 type EnvVarMap = Record<string, string>
@@ -133,6 +131,22 @@ function hasClusterLocalPeer(value: string | undefined): boolean {
 
 function hasUnresolvedExternalPeer(value: string | undefined): boolean {
   return hasLoadBalancerPlaceholder(value) || hasClusterLocalPeer(value)
+}
+
+function resolveL2RethBlobS3Url(dogeConfig: DogeConfig): string | undefined {
+  const s3Archive = dogeConfig.ethereumDa?.blobArchive?.s3
+  const enabled = s3Archive?.enabled === true ||
+    (typeof s3Archive?.enabled === 'string' && s3Archive.enabled.toLowerCase() === 'true')
+  if (!enabled) return undefined
+
+  const blobS3Url = buildS3PublicPrefixUrl(s3Archive ?? {})
+  if (!blobS3Url) {
+    throw new Error(
+      'ethereumDa.blobArchive.s3 must define publicBaseUrl or bucket and region when S3 blob archive is enabled',
+    )
+  }
+
+  return blobS3Url
 }
 
 function composeDump(compose: ComposeFile): string {
@@ -650,42 +664,6 @@ function mergeEnvFileContent(
   }
 }
 
-function coerceGenesisNumber(value: unknown, fieldPath: string): number {
-  const num = typeof value === 'string' ? Number(value) : value
-  if (typeof num !== 'number' || !Number.isFinite(num)) {
-    throw new TypeError(`genesis field ${fieldPath} must be a number, got: ${JSON.stringify(value)}`)
-  }
-
-  return num
-}
-
-// rollup-node deserializes `config.scroll` strictly: the u64 fields reject
-// JSON strings, and `l1DataFeeBufferCheck` is required (no serde default).
-// The source genesis.yaml historically carries numbers as strings and may
-// omit the flag, so normalize here — the generated genesis must match what
-// the pinned rollup-node image accepts, regardless of the source's shape.
-export function normalizeScrollGenesisConfigForReth(config: any): void {
-  const scroll = config?.scroll
-  if (!scroll || typeof scroll !== 'object') {
-    throw new TypeError('genesis config.scroll not found')
-  }
-
-  if (typeof scroll.l1DataFeeBufferCheck !== 'boolean') {
-    scroll.l1DataFeeBufferCheck = false
-  }
-
-  const {l1Config} = scroll
-  if (!l1Config || typeof l1Config !== 'object') {
-    throw new TypeError('genesis config.scroll.l1Config not found')
-  }
-
-  for (const field of ['l1ChainId', 'numL1MessagesPerBlock', 'l1MessageQueueV2DeploymentBlock', 'startL1Block']) {
-    if (l1Config[field] !== undefined) {
-      l1Config[field] = coerceGenesisNumber(l1Config[field], `config.scroll.l1Config.${field}`)
-    }
-  }
-}
-
 export default class SetupGenRpcPackage extends Command {
   static override description = 'Generate configuration files for dogeos-rpc-package to enable external RPC nodes'
 
@@ -814,7 +792,7 @@ export default class SetupGenRpcPackage extends Command {
 
       // Step 7: Extract genesis.json from genesis.yaml
       this.log(chalk.blue('Step 3: Extracting genesis.json from genesis.yaml...'))
-      const genesisJsonPath = this.extractGenesisJson(flags['values-dir'], rpcPackageDir, network, dogeConfig)
+      const genesisJsonPath = this.extractGenesisJson(flags['values-dir'], rpcPackageDir, network)
       this.log(chalk.green(`✓ Extracted genesis.json at: ${genesisJsonPath}`))
 
       // Step 7b: Extract protocol_context.json from protocol_context.yaml.
@@ -973,7 +951,7 @@ export default class SetupGenRpcPackage extends Command {
     return uniqueStrings(peers)
   }
 
-  private extractGenesisJson(valuesDir: string, rpcPackageDir: string, network: string, dogeConfig: DogeConfig): string {
+  private extractGenesisJson(valuesDir: string, rpcPackageDir: string, network: string): string {
     const genesisYamlPath = path.resolve(valuesDir, 'genesis.yaml')
 
     if (!fs.existsSync(genesisYamlPath)) {
@@ -991,44 +969,35 @@ export default class SetupGenRpcPackage extends Command {
 
       // Extract genesis.json from the YAML structure
       // The structure might be: { genesis: "JSON_STRING" } or { genesis: JSON_OBJECT }
-      let genesisJson: any
+      let genesisJsonContent: string
 
       if (genesisYaml.scrollConfig) {
         if (typeof genesisYaml.scrollConfig === 'string') {
-          // If genesis is a JSON string, parse it
+          // Validate the JSON, but preserve its exact contents. genesis.yaml is
+          // the source of truth and gen-rpc-package must not rewrite genesis.
           try {
-            genesisJson = JSON.parse(genesisYaml.scrollConfig)
+            JSON.parse(genesisYaml.scrollConfig)
           } catch (parseError) {
             throw new Error(`Failed to parse genesis JSON string: ${parseError instanceof Error ? parseError.message : String(parseError)}`)
           }
+
+          genesisJsonContent = genesisYaml.scrollConfig
         } else if (typeof genesisYaml.scrollConfig === 'object') {
-          // If genesis is already an object, use it directly
-          genesisJson = genesisYaml.scrollConfig
+          genesisJsonContent = JSON.stringify(genesisYaml.scrollConfig, null, 2)
         } else {
           throw new TypeError('Invalid genesis format in genesis.yaml - expected string or object')
         }
       } else {
         // If no 'genesis' key, assume the entire YAML is the genesis data
-        genesisJson = genesisYaml
+        genesisJsonContent = JSON.stringify(genesisYaml, null, 2)
       }
 
       // Create target directory
       const targetDirectory = path.resolve(rpcPackageDir, 'configs', network)
       fs.mkdirSync(targetDirectory, { recursive: true })
-
-
-      // Write genesis.json for reth.
-      const genesisJsonForReth = JSON.parse(JSON.stringify(genesisJson));
-      const startL1Block = dogeConfig.defaults?.dogecoinIndexerStartHeight
-      if (startL1Block === undefined || startL1Block === null) {
-        throw new Error('defaults.dogecoinIndexerStartHeight missing in doge-config; required for genesis startL1Block')
-      }
-
-      genesisJsonForReth.config.scroll.l1Config.startL1Block = startL1Block;
-      genesisJsonForReth.config.scroll.l1Config.systemContractAddress = genesisJsonForReth.config.systemContract.system_contract_address;
-      normalizeScrollGenesisConfigForReth(genesisJsonForReth.config)
+      // Copy genesis into the RPC package without changing any fields.
       const genesisJsonPath = path.join(targetDirectory, 'l2reth-genesis.json')
-      fs.writeFileSync(genesisJsonPath, JSON.stringify(genesisJsonForReth, null, 2))
+      fs.writeFileSync(genesisJsonPath, genesisJsonContent)
 
       const legacyGethGenesisPath = path.join(targetDirectory, 'l2geth-genesis.json')
       if (fs.existsSync(legacyGethGenesisPath)) {
@@ -1209,6 +1178,7 @@ export default class SetupGenRpcPackage extends Command {
     const envFilePathReth = path.join(targetDirectory, 'l2reth.env')
     const legacyGethEnvFilePath = path.join(targetDirectory, 'l2geth.env')
     const l2RpcYamlPath = path.resolve(valuesDir, 'l2-rpc-production.yaml')
+    const l2RethRpcYamlPath = path.resolve(valuesDir, 'l2-reth-rpc-production.yaml')
     const removedLegacyPaths: string[] = []
 
     // Create directory structure
@@ -1218,7 +1188,17 @@ export default class SetupGenRpcPackage extends Command {
       throw new Error(`l2-rpc-production.yaml not found at: ${l2RpcYamlPath}`)
     }
 
+    if (!fs.existsSync(l2RethRpcYamlPath)) {
+      throw new Error(`l2-reth-rpc-production.yaml not found at: ${l2RethRpcYamlPath}`)
+    }
+
     const l2RpcEnvData = this.loadConfigMapEnvData(l2RpcYamlPath)
+    const l2RethRpcValues = yaml.load(fs.readFileSync(l2RethRpcYamlPath, 'utf8')) as any
+    const rawNetworkId = l2RethRpcValues?.reth?.networkId
+    const networkId = rawNetworkId === undefined || rawNetworkId === null ? '' : String(rawNetworkId).trim()
+    if (!/^\d+$/.test(networkId)) {
+      throw new Error(`l2-reth-rpc-production.yaml reth.networkId must be a decimal integer, got: ${JSON.stringify(rawNetworkId)}`)
+    }
 
     const rethBootnodePeers = this.collectRethBootnodePeers(dogeConfig, valuesDir)
     const peerListValue = this.resolveExternalPeerList(
@@ -1241,8 +1221,13 @@ export default class SetupGenRpcPackage extends Command {
       l2rethVars.L2GETH_PEER_LIST = peerListValue
     }
 
-    l2rethVars.L2RETH_DA_BLOB_BEACON_NODE = l2RpcEnvData.L2GETH_DA_BLOB_BEACON_NODE || L1_INTERFACE_BEACON_API_ENDPOINT
     l2rethVars.L2RETH_L1_ENDPOINT = l2RpcEnvData.L2GETH_L1_ENDPOINT || L1_INTERFACE_RPC_ENDPOINT
+    l2rethVars.L2RETH_NETWORK_ID = networkId
+    const blobS3Url = resolveL2RethBlobS3Url(dogeConfig)
+    if (blobS3Url) {
+      l2rethVars.L2RETH_BLOB_S3_URL = blobS3Url
+    }
+
     if (validSigner) {
       l2rethVars.L2RETH_VALID_SIGNER = validSigner
     }
@@ -1254,7 +1239,11 @@ export default class SetupGenRpcPackage extends Command {
         '',
         '# Network specific settings',
       ],
-      removeKey: key => isCelestiaEnvKey(key) || key === 'CHAIN_ID' || (key.startsWith('L2GETH_') && key !== 'L2GETH_PEER_LIST'),
+      removeKey: key => isCelestiaEnvKey(key) ||
+        key === 'CHAIN_ID' ||
+        key === 'L2RETH_DA_BLOB_BEACON_NODE' ||
+        (key === 'L2RETH_BLOB_S3_URL' && !blobS3Url) ||
+        (key.startsWith('L2GETH_') && key !== 'L2GETH_PEER_LIST'),
     })
 
     if (fs.existsSync(legacyGethEnvFilePath)) {

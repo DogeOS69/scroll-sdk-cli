@@ -7,11 +7,11 @@ import * as path from 'node:path'
 import SetupGenRpcPackage, {
   convertPeersToExternalDomains,
   normalizeConfigMapEnvData,
-  normalizeScrollGenesisConfigForReth,
   syncRpcPackageInitContainersToCompose,
 } from '../../../src/commands/setup/gen-rpc-package.js'
 
 interface CommandHarness {
+  extractGenesisJson(valuesDir: string, rpcPackageDir: string, network: string): string
   generateL1InterfaceEnvFile(valuesDir: string, rpcPackageDir: string, network: string, config?: unknown): string
   generateL2NodeEnvFiles(
     config: unknown,
@@ -66,38 +66,32 @@ describe('setup gen-rpc-package env generation', () => {
     })
   })
 
-  it('normalizes scroll genesis config into the shape rollup-node accepts', () => {
-    // Mirrors the real failure modes: source genesis carries u64 fields as
-    // strings and omits the required l1DataFeeBufferCheck flag.
-    const config = {
-      scroll: {
-        feeVaultAddress: '0x5300000000000000000000000000000000000005',
-        l1Config: {
-          l1ChainId: '111111',
-          l1MessageQueueV2DeploymentBlock: 0,
-          numL1MessagesPerBlock: '10',
-          startL1Block: '62934421',
-          systemContractAddress: '0x2000369731833cBf00e97146999442ADf10a4E59',
+  it('copies genesis into the RPC package without modifying its contents', () => {
+    const valuesDir = path.join(tmpDir, 'values')
+    const rpcPackageDir = path.join(tmpDir, 'dogeos-rpc-package')
+    fs.mkdirSync(valuesDir, { recursive: true })
+
+    const genesisJson = JSON.stringify({
+      config: {
+        scroll: {
+          l1Config: {
+            l1ChainId: '111111',
+            numL1MessagesPerBlock: '10',
+            startL1Block: '62934421',
+          },
+        },
+        systemContract: {
+          system_contract_address: '0x2000369731833cBf00e97146999442ADf10a4E59',
         },
       },
-    }
+    })
+    fs.writeFileSync(path.join(valuesDir, 'genesis.yaml'), yaml.dump({ scrollConfig: genesisJson }))
 
-    normalizeScrollGenesisConfigForReth(config)
+    const command = createCommandHarness()
+    const outputPath = command.extractGenesisJson(valuesDir, rpcPackageDir, 'testnet')
 
-    expect(config.scroll.l1Config.l1ChainId).to.equal(111_111)
-    expect(config.scroll.l1Config.numL1MessagesPerBlock).to.equal(10)
-    expect(config.scroll.l1Config.startL1Block).to.equal(62_934_421)
-    expect(config.scroll.l1Config.l1MessageQueueV2DeploymentBlock).to.equal(0)
-    expect((config.scroll as Record<string, unknown>).l1DataFeeBufferCheck).to.equal(false)
-    // An explicitly set flag is preserved.
-    const explicit = { scroll: { l1Config: {}, l1DataFeeBufferCheck: true } }
-    normalizeScrollGenesisConfigForReth(explicit)
-    expect(explicit.scroll.l1DataFeeBufferCheck).to.equal(true)
-
-    // Non-numeric strings fail loudly instead of producing a broken genesis.
-    expect(() => normalizeScrollGenesisConfigForReth({
-      scroll: { l1Config: { l1ChainId: 'not-a-number' } },
-    })).to.throw('l1ChainId')
+    expect(outputPath).to.equal(path.join(rpcPackageDir, 'configs', 'testnet', 'l2reth-genesis.json'))
+    expect(fs.readFileSync(outputPath, 'utf8')).to.equal(genesisJson)
   })
 
   it('converts internal bootnode enodes to public p2p LoadBalancer domains', () => {
@@ -159,6 +153,11 @@ describe('setup gen-rpc-package env generation', () => {
     )
 
     fs.writeFileSync(
+      path.join(valuesDir, 'l2-reth-rpc-production.yaml'),
+      yaml.dump({ reth: { networkId: '4444444' } }),
+    )
+
+    fs.writeFileSync(
       path.join(valuesDir, 'l2-reth-bootnode-production-0.yaml'),
       yaml.dump({
         reth: {
@@ -193,6 +192,8 @@ describe('setup gen-rpc-package env generation', () => {
         '# existing',
         'CHAIN_ID=1',
         'L2GETH_L1_ENDPOINT=http://old-l1',
+        'L2RETH_DA_BLOB_BEACON_NODE=https://stale-beacon.example',
+        'L2RETH_NETWORK_ID=9999999',
         '',
       ].join('\n'),
     )
@@ -206,6 +207,15 @@ describe('setup gen-rpc-package env generation', () => {
       },
       {
         defaults: { dogecoinIndexerStartHeight: '14023282' },
+        ethereumDa: {
+          blobArchive: {
+            s3: {
+              enabled: true,
+              keyPrefix: '/rehearsal/batches/',
+              publicBaseUrl: 'https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/',
+            },
+          },
+        },
         network: 'testnet',
       },
       rpcPackageDir,
@@ -225,11 +235,13 @@ describe('setup gen-rpc-package env generation', () => {
 
     const l2rethEnv = fs.readFileSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2reth.env'), 'utf8')
     expect(l2rethEnv).to.include('L2GETH_PEER_LIST=["enode://reth0@reth-bootnode-0.example.com:30303","enode://reth1@reth-bootnode-1.example.com:30303"]')
-    expect(l2rethEnv).to.include('L2RETH_DA_BLOB_BEACON_NODE=http://l1-interface:5052')
     expect(l2rethEnv).to.include('L2RETH_L1_ENDPOINT=http://l1-interface:8545')
+    expect(l2rethEnv).to.include('L2RETH_NETWORK_ID=4444444')
+    expect(l2rethEnv).to.include('L2RETH_BLOB_S3_URL=https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/rehearsal/batches')
     expect(l2rethEnv).to.include('L2RETH_VALID_SIGNER=0x1234567890123456789012345678901234567890')
     expect(l2rethEnv).not.to.include('CHAIN_ID=1')
     expect(l2rethEnv).not.to.include('L2GETH_L1_ENDPOINT=http://old-l1')
+    expect(l2rethEnv).not.to.include('L2RETH_DA_BLOB_BEACON_NODE')
     expect(l2rethEnv).not.to.include('enode://bootnode@')
     expect(l2rethEnv).not.to.include('sequencer-0.example.com')
     expect(l2rethEnv).not.to.include('l2-reth-sequencer-0')
@@ -266,6 +278,16 @@ describe('setup gen-rpc-package env generation', () => {
           },
         },
       }),
+    )
+
+    fs.writeFileSync(
+      path.join(valuesDir, 'l2-reth-rpc-production.yaml'),
+      yaml.dump({ reth: { networkId: '5555555' } }),
+    )
+
+    fs.writeFileSync(
+      path.join(rpcPackageDir, 'envs', 'testnet', 'l2reth.env'),
+      'L2RETH_BLOB_S3_URL=https://stale.example/blobs\n',
     )
 
     const command = createCommandHarness()
@@ -308,7 +330,9 @@ describe('setup gen-rpc-package env generation', () => {
     expect(fs.existsSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2geth.env'))).to.equal(false)
     const l2rethEnv = fs.readFileSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2reth.env'), 'utf8')
     expect(l2rethEnv).to.include('L2GETH_PEER_LIST=["enode://reth0@reth-bootnode-0.example.com:30303","enode://reth1@reth-bootnode-1.example.com:30303"]')
+    expect(l2rethEnv).to.include('L2RETH_NETWORK_ID=5555555')
     expect(l2rethEnv).not.to.include('LoadBalancer-Domain-For-l2-bootnode')
+    expect(l2rethEnv).not.to.include('L2RETH_BLOB_S3_URL')
     expect(l2rethEnv).not.to.include('legacy0')
     expect(l2rethEnv).not.to.include('l2-sequencer-0')
   })

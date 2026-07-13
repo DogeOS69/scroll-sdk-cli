@@ -726,6 +726,24 @@ export function applyRethBlobS3Url(
   return changes
 }
 
+export function applyRethNetworkId(
+  productionYaml: any,
+  networkId: string | undefined,
+): PrepChartChange[] {
+  if (networkId === undefined) return []
+
+  productionYaml.reth ||= {}
+  const oldValue = productionYaml.reth.networkId
+  if (oldValue === networkId) return []
+
+  productionYaml.reth.networkId = networkId
+  return [{
+    key: 'reth.networkId',
+    newValue: networkId,
+    oldValue: String(oldValue ?? 'undefined'),
+  }]
+}
+
 export function isL2RethRpcChart(chartName: string): boolean {
   return chartName === 'l2-reth-rpc' || chartName === 'l2-reth-rpc-public'
 }
@@ -762,7 +780,6 @@ export function applyL2RethRpcRuntimeValues(
 
   for (const [key, newValue] of Object.entries({
     l1Url: values.l1Url,
-    networkId: values.networkId,
     trustedPeers: values.trustedPeers,
   })) {
     if (newValue === undefined || productionYaml.reth[key] === newValue) continue
@@ -775,7 +792,10 @@ export function applyL2RethRpcRuntimeValues(
     })
   }
 
-  changes.push(...applyRethBlobS3Url(productionYaml, values.blobS3Url))
+  changes.push(
+    ...applyRethNetworkId(productionYaml, values.networkId),
+    ...applyRethBlobS3Url(productionYaml, values.blobS3Url),
+  )
   return changes
 }
 
@@ -1724,6 +1744,8 @@ export default class SetupPrepCharts extends Command {
     const s3Archive = this.dogeConfig.ethereumDa?.blobArchive?.s3
     const s3PublicBaseUrl = getEthereumDaS3PublicBaseUrl(s3Archive)
     const s3PublicBlobUrl = getEthereumDaS3PublicBlobUrl(s3Archive)
+    const configuredL2ChainId = this.getConfigValue('general.CHAIN_ID_L2')
+    const l2P2PNetworkId = configuredL2ChainId === undefined ? undefined : String(configuredL2ChainId)
 
     for (const file of productionFiles) {
       if (file === 'l2-reth-bootnode-production.yaml') {
@@ -1756,12 +1778,17 @@ export default class SetupPrepCharts extends Command {
       let updated = false
       const changes: Array<{ key: string; newValue: string; oldValue: string }> = []
 
-      // Every concrete Reth values file consumes the same public S3 blob prefix.
-      // Numbered bootnode/sequencer files normalize to their base chart names above.
+      // In the normal deployment flow every concrete Reth node uses the L2
+      // chain ID as its P2P network ID. A shadowfork may intentionally override
+      // these values afterward to isolate the dev P2P network from production.
+      // Numbered bootnode/sequencer files normalize to their base chart names.
       if (isL2RethBlobS3Chart(chartName)) {
-        const rethBlobS3Changes = applyRethBlobS3Url(productionYaml, s3PublicBlobUrl)
-        if (rethBlobS3Changes.length > 0) {
-          changes.push(...rethBlobS3Changes)
+        const sharedRethChanges = [
+          ...applyRethNetworkId(productionYaml, l2P2PNetworkId),
+          ...applyRethBlobS3Url(productionYaml, s3PublicBlobUrl),
+        ]
+        if (sharedRethChanges.length > 0) {
+          changes.push(...sharedRethChanges)
           updated = true
         }
       }
@@ -1898,11 +1925,10 @@ export default class SetupPrepCharts extends Command {
         }
 
         const trustedPeers = this.buildFreshRethTrustedPeers()
-        const chainId = this.getConfigValue('general.CHAIN_ID_L2')
         const runtimeChanges = applyL2RethRpcRuntimeValues(productionYaml, {
           blobS3Url: s3PublicBlobUrl,
           l1Url: L1_INTERFACE_RPC_ENDPOINT,
-          networkId: chainId === undefined ? undefined : String(chainId),
+          networkId: l2P2PNetworkId,
           trustedPeers,
         })
         if (runtimeChanges.length > 0) {
