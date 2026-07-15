@@ -7,6 +7,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 
 import { configureProofValues } from '../../src/utils/proof-configurator.js'
+import { scaffoldProofCoordinatorConfig } from '../../src/utils/proof-coordinator-scaffold.js'
 
 function writeValidProofRelease(root: string): {
   aggVk: Buffer
@@ -203,6 +204,22 @@ max_items = 42
       ],
       withdrawalProof: { s3AuthMode: 'ambient' },
     }))
+    fs.writeFileSync(path.join(root, 'values/attestation-signer-production.yaml'), yaml.dump({
+      attestationSigner: {
+        envelopePolicy: { allowedProofTriples: '', maxProofArtifacts: 0 },
+        network: 'testnet',
+        profile: 'staging-local',
+        proofArtifact: { fetchMode: 'disabled' },
+      },
+    }))
+    fs.writeFileSync(path.join(root, 'values/attestation-signer-production-0.yaml'), yaml.dump({
+      attestationSigner: {
+        envelopePolicy: { allowedProofTriples: '', maxProofArtifacts: 0 },
+        network: 'testnet',
+        profile: 'staging-local',
+        proofArtifact: { fetchMode: 'disabled' },
+      },
+    }))
   })
 
   afterEach(() => fs.rmSync(root, { force: true, recursive: true }))
@@ -307,6 +324,138 @@ max_items = 42
     expect(withdrawal.configMaps['agg-verifying-key'].data['agg-vk.bin.b64']).to.equal(aggVk.toString('base64'))
     expect(withdrawal.initContainers['install-agg-verifying-key'].args[0]).to.include('/app/data/verifier/agg-vk.bin')
     expect(withdrawal.externalSecrets['proof-secrets'].data).to.have.length(1)
+
+    const signerTemplatePath = path.join(root, 'values/attestation-signer-production.yaml')
+    const signerInstancePath = path.join(root, 'values/attestation-signer-production-0.yaml')
+    expect(result.files).to.include.members([signerTemplatePath, signerInstancePath])
+    const expectedTriples = [
+      `openvm_state_transition:scroll-zkvm-v1-bridge_transition-v1-1.0.0:${Buffer.alloc(32, 6).toString('hex')}`,
+      `scroll_batch:scroll-zkvm-v1-scroll_batch-v1-1.0.0:${Buffer.alloc(32, 5).toString('hex')}`,
+    ].join(',')
+    for (const signerPath of [signerTemplatePath, signerInstancePath]) {
+      const signer = (yaml.load(fs.readFileSync(signerPath, 'utf8')) as any).attestationSigner
+      expect(signer.envelopePolicy.allowedProofTriples).to.equal(expectedTriples)
+      expect(signer.envelopePolicy.maxProofArtifacts).to.equal(4)
+      expect(signer.proofArtifact.fetchMode).to.equal('http')
+      expect(signer.profile).to.equal('staging-local')
+    }
+  })
+
+  it('skips attestation-signer values when explicitly requested', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    const signerTemplatePath = path.join(root, 'values/attestation-signer-production.yaml')
+    const before = fs.readFileSync(signerTemplatePath, 'utf8')
+
+    const result = configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
+      skipAttestationSigners: true,
+      valuesDir: path.join(root, 'values'),
+    })
+    expect(result.files).not.to.include(signerTemplatePath)
+    expect(fs.readFileSync(signerTemplatePath, 'utf8')).to.equal(before)
+  })
+
+  it('fails before writing when no attestation-signer values exist', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    fs.rmSync(path.join(root, 'values/attestation-signer-production.yaml'))
+    fs.rmSync(path.join(root, 'values/attestation-signer-production-0.yaml'))
+    const coordinatorConfigPath = path.join(root, 'proof-coordinator/ProofCoordinator.toml')
+    const coordinatorBefore = fs.readFileSync(coordinatorConfigPath, 'utf8')
+
+    expect(() => configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath,
+      manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
+      valuesDir: path.join(root, 'values'),
+    })).to.throw('No attestation-signer values found')
+    expect(fs.readFileSync(coordinatorConfigPath, 'utf8')).to.equal(coordinatorBefore)
+  })
+
+  it('preserves an operator-raised proof artifact cap', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    const signerTemplatePath = path.join(root, 'values/attestation-signer-production.yaml')
+    const signer = yaml.load(fs.readFileSync(signerTemplatePath, 'utf8')) as any
+    signer.attestationSigner.envelopePolicy.maxProofArtifacts = 8
+    fs.writeFileSync(signerTemplatePath, yaml.dump(signer))
+
+    configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
+      valuesDir: path.join(root, 'values'),
+    })
+    const updated = yaml.load(fs.readFileSync(signerTemplatePath, 'utf8')) as any
+    expect(updated.attestationSigner.envelopePolicy.maxProofArtifacts).to.equal(8)
+  })
+
+  it('rejects a verifier ID that would corrupt the signer triple CSV', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+
+    expect(() => configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
+      valuesDir: path.join(root, 'values'),
+      verifierIds: { scroll_batch: 'bad:id' },
+    })).to.throw("must not contain ':' or ','")
+  })
+
+  it('accepts a scaffolded coordinator config end to end', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    const withdrawalValuesPath = path.join(root, 'values/withdrawal-processor-production.yaml')
+    const withdrawal = yaml.load(fs.readFileSync(withdrawalValuesPath, 'utf8')) as any
+    withdrawal.env.push(
+      { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL', value: 'http://dogecoin:22555' },
+      { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL', value: 'http://l2-rpc:8545' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL', value: 'https://blob-archive.example.com' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID', value: '11155111' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL', value: 'https://ethereum.example.com' },
+      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID', value: '12345' },
+      { name: 'DOGEOS_WITHDRAWAL_NETWORK_STR', value: 'testnet' },
+    )
+    fs.writeFileSync(withdrawalValuesPath, yaml.dump(withdrawal))
+    const coordinatorConfigPath = path.join(root, 'proof-coordinator/ProofCoordinator.toml')
+    fs.rmSync(coordinatorConfigPath)
+
+    const scaffold = scaffoldProofCoordinatorConfig({
+      coordinatorConfigPath,
+      valuesDir: path.join(root, 'values'),
+    })
+    expect(scaffold.created).to.equal(true)
+
+    const result = configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath,
+      manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
+      valuesDir: path.join(root, 'values'),
+    })
+    expect(result.families).to.deep.equal(['bridge_transition', 'scroll_batch', 'scroll_chunk'])
+    const coordinatorToml = toml.parse(fs.readFileSync(coordinatorConfigPath, 'utf8')) as any
+    expect(coordinatorToml.verifier.scroll_batch_verifier_identity.expected_circuit_id).to.equal('scroll_batch-v1')
+    expect(coordinatorToml.verifier.scroll_real_verifier.agg_verifying_key_path).to.equal('/app/data/verifier/agg-vk.bin')
+  })
+
+  it('enables the activation switch only with the explicit option', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    const withdrawalValuesPath = path.join(root, 'values/withdrawal-processor-production.yaml')
+
+    configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      enableWithdrawalProof: true,
+      manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
+      valuesDir: path.join(root, 'values'),
+    })
+    const withdrawal = yaml.load(fs.readFileSync(withdrawalValuesPath, 'utf8')) as any
+    expect(withdrawal.withdrawalProof.enabled).to.equal(true)
   })
 
   it('fails before writing when the signer public artifact base is absent', () => {

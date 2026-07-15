@@ -17,6 +17,7 @@ export type ProofFamily = 'bridge_transition' | 'scroll_batch' | 'scroll_chunk'
 
 export const DEFAULT_SCROLL_BATCH_BACKEND_PROFILE = 'scroll-prod-zkvm-batch-v1'
 export const DEFAULT_BRIDGE_BACKEND_PROFILE = 'bridge-prod-zkvm-v1'
+export const DEFAULT_ENVELOPE_MAX_PROOF_ARTIFACTS = 4
 const DEFAULT_SIGNED_URL_TTL_MS = 3_600_000
 const DEFAULT_MAX_READ_BODY_BYTES = 512 * 1024 * 1024
 const MAX_TRANSPORT_HORIZON_MS = 7 * 24 * 60 * 60 * 1000
@@ -73,9 +74,11 @@ export interface ConfigureProofValuesOptions {
   artifactManifestPath: string
   bridgeBackendProfile?: string
   coordinatorConfigPath: string
+  enableWithdrawalProof?: boolean
   manifestPaths: string[]
   scrollBatchBackendProfile?: string
   signerProofArtifactBaseUrl?: string
+  skipAttestationSigners?: boolean
   valuesDir: string
   verifierIds?: Partial<Record<ProofFamily, string>>
 }
@@ -118,6 +121,15 @@ const VERIFICATION_KEY_HASH_KEYS: Record<ProofFamily, keyof ArtifactIdentity> = 
   scroll_batch: 'batch_verification_key_hash',
   scroll_chunk: 'chunk_verification_key_hash',
 }
+
+// Registry-facing proof-kind tags carried on the signer evidence envelope's
+// required_proof_artifacts (see dogeos-core withdrawal_processor evidence.rs):
+// only the bridge state-transition proof and the inner ScrollBatch proof cross
+// the signer boundary; scroll_chunk proofs are aggregated into the batch.
+const ENVELOPE_PROOF_KINDS: ReadonlyArray<readonly [ProofFamily, string]> = [
+  ['bridge_transition', 'openvm_state_transition'],
+  ['scroll_batch', 'scroll_batch'],
+]
 
 function readJson<T>(filePath: string): T {
   try {
@@ -346,6 +358,78 @@ function verifierPolicy(
   }
 
   return policy
+}
+
+/**
+ * Render the attestation-signer envelope allowlist CSV from the same release
+ * identities projected into WP and proof-coordinator. Format per signer
+ * contract: `proof_kind:verifier_id:vk_hash` tokens joined by commas, with
+ * bare lowercase 32-byte hex vk hashes (the signer's canonical form).
+ */
+function buildAllowedProofTriples(
+  manifests: Map<ProofFamily, { manifest: ProofProgramManifest; path: string }>,
+  verifierIds: Partial<Record<ProofFamily, string>>
+): string {
+  return ENVELOPE_PROOF_KINDS.map(([family, proofKind]) => {
+    const { manifest } = manifests.get(family)!
+    const verifierId = verifierIds[family] || defaultVerifierId(manifest)
+    assertIdentifier(verifierId, `${family} verifier ID`)
+    if (/[,:]/.test(verifierId)) {
+      throw new Error(`${family} verifier ID must not contain ':' or ',' — it is embedded in the signer proof-triple CSV`)
+    }
+
+    const vkHash = bareHex(manifest.verification_key_hash, 32, `${family} verification key hash`)
+    return `${proofKind}:${verifierId}:${vkHash}`
+  }).join(',')
+}
+
+/**
+ * The prep-charts template plus every expanded per-instance values file.
+ * Writing the template keeps the projection stable across prep-charts re-runs
+ * (instances are regenerated from it); writing the instances makes the change
+ * effective without another prep-charts pass.
+ */
+function listAttestationSignerValuesFiles(valuesDir: string): string[] {
+  const files: string[] = []
+  const template = path.join(valuesDir, 'attestation-signer-production.yaml')
+  if (fs.existsSync(template)) files.push(template)
+  for (const entry of fs.readdirSync(valuesDir)) {
+    if (/^attestation-signer-production-\d+\.yaml$/.test(entry)) files.push(path.join(valuesDir, entry))
+  }
+
+  return files.sort()
+}
+
+function prepareAttestationSigners(
+  valuesDir: string,
+  allowedProofTriples: string
+): Array<{ filePath: string; values: any }> {
+  const files = listAttestationSignerValuesFiles(valuesDir)
+  if (files.length === 0) {
+    throw new Error(
+      `No attestation-signer values found in ${valuesDir} (expected attestation-signer-production.yaml or attestation-signer-production-<N>.yaml); `
+      + 'pass --skip-attestation-signers only when signer envelope policy is managed elsewhere'
+    )
+  }
+
+  return files.map(filePath => {
+    const values = readYaml(filePath)
+    const signer = values.attestationSigner
+    if (!signer || typeof signer !== 'object' || Array.isArray(signer)) {
+      throw new Error(`${filePath}: attestationSigner must be a YAML mapping`)
+    }
+
+    signer.envelopePolicy ||= {}
+    signer.envelopePolicy.allowedProofTriples = allowedProofTriples
+    const cap = signer.envelopePolicy.maxProofArtifacts
+    if (!Number.isSafeInteger(cap) || cap < ENVELOPE_PROOF_KINDS.length) {
+      signer.envelopePolicy.maxProofArtifacts = DEFAULT_ENVELOPE_MAX_PROOF_ARTIFACTS
+    }
+
+    signer.proofArtifact ||= {}
+    signer.proofArtifact.fetchMode = 'http'
+    return { filePath, values }
+  })
 }
 
 function readYaml(filePath: string): any {
@@ -1026,6 +1110,10 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
   assertIdentifier(bridgeBackendProfile, 'Bridge backend profile')
   readCoordinatorRuntimeProjection(files[0], configFile)
   validateCoordinatorMaterializerTopology(configFile)
+  const allowedProofTriples = buildAllowedProofTriples(manifests, verifierIds)
+  const attestationUpdates = options.skipAttestationSigners
+    ? []
+    : prepareAttestationSigners(valuesDir, allowedProofTriples)
 
   // Build and validate every target before writing any of them.
   const coordinatorUpdate = prepareProofCoordinator(
@@ -1048,9 +1136,15 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
     signerProofArtifactBaseUrl,
     verifierArtifact
   )
+  if (options.enableWithdrawalProof) withdrawalValues.withdrawalProof.enabled = true
 
   writeTextAtomic(configFile, coordinatorUpdate.updatedConfig)
   writeYamlAtomic(files[0], coordinatorUpdate.values)
   writeYamlAtomic(files[1], withdrawalValues)
-  return { configFile, families: [...manifests.keys()].sort(), files }
+  for (const update of attestationUpdates) writeYamlAtomic(update.filePath, update.values)
+  return {
+    configFile,
+    families: [...manifests.keys()].sort(),
+    files: [...files, ...attestationUpdates.map(update => update.filePath)],
+  }
 }

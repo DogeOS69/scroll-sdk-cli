@@ -603,8 +603,8 @@ exposes WP's internal port 9300, projects the S3 artifact store into WP, and
 removes retired/TOML-owned proof ENV. The two values files and coordinator TOML
 are not written until all generated documents have passed preflight validation.
 
-This command stages topology; it does **not** enable proof and it preserves an
-existing operator choice. The only activation switch is:
+This command stages topology; by default it does **not** enable proof and it
+preserves an existing operator choice. The only activation switch is:
 
 ```yaml
 withdrawalProof:
@@ -616,7 +616,84 @@ The chart projects that one Boolean atomically onto
 `proof_work_api.enabled` via four ENV overrides. All deeper proof configuration
 remains TOML-owned. Leave the switch `false` until coordinator readiness, S3
 identity, released verifier artifacts, and an external prover worker have all
-passed their own preflight.
+passed their own preflight. Once those preflights pass, an automation-friendly
+`--enable-withdrawal-proof` flag flips the switch in the same run instead of a
+manual values edit.
+
+## Attestation-signer projection
+
+The same run projects the signer envelope policy into
+`values/attestation-signer-production.yaml` (the prep-charts template) and every
+expanded `attestation-signer-production-<N>.yaml`:
+
+- `envelopePolicy.allowedProofTriples` is rendered from the identical release
+  identities staged into WP and proof-coordinator, as
+  `proof_kind:verifier_id:vk_hash` CSV tokens for the two families that cross
+  the signer boundary (`openvm_state_transition` for the bridge state
+  transition, `scroll_batch` for the inner batch proof).
+- `envelopePolicy.maxProofArtifacts` is raised to a working cap (4) when still
+  at the deny-by-default `0`; an operator-raised cap is preserved.
+- `proofArtifact.fetchMode` is switched to `http`.
+
+Writing the template keeps the projection stable across `prep-charts` re-runs;
+writing the instances makes it effective without another prep-charts pass.
+Re-deploy the signer releases afterwards (`make install-attestation-signers`).
+Pass `--skip-attestation-signers` only when signer envelope policy is managed
+elsewhere.
+
+## Scaffolding ProofCoordinator.toml
+
+`--scaffold-coordinator-config` generates the coordinator TOML when the file
+does not exist yet (an existing config is never touched). Every deployment fact
+is read back from the prepared withdrawal-processor values — L2 RPC, Ethereum
+DA RPC and chain ids, blob source (S3 archive preferred, beacon node fallback),
+Dogecoin RPC and network — so `setup prep-charts` must have resolved them
+first; any `<TODO>` left fails closed naming the offending env. The generated
+file passes the proof-config materializer validation as-is and contains the
+marked verifier block that the same run then fills.
+
+## Provisioning the AWS side: setup proof-aws-init
+
+`scrollsdk setup proof-aws-init` provisions the cloud resources the proof
+system needs — following the same aws-CLI shell-out conventions as the KMS
+signer provisioning — and projects the results into the values files:
+
+```bash
+scrollsdk setup proof-aws-init \
+  --aws-region us-west-2 \
+  --eks-cluster dogeos-testnet \
+  --network-alias testnet
+```
+
+It idempotently ensures:
+
+- the proof artifact **S3 bucket** (default
+  `dogeos-<network-alias>-proof-artifacts`; private, public access blocked,
+  SSE-S3),
+- one **IRSA IAM role per proof workload**
+  (`dogeos-<alias>-<cluster>-wp-proof` and
+  `dogeos-<alias>-<cluster>-proof-coordinator`), trust-bound to the EKS OIDC
+  subjects of the `withdrawal-processor` / `proof-coordinator` service
+  accounts, with `s3:GetObject`/`s3:PutObject` on the bucket objects and
+  `s3:ListBucket` on the bucket,
+- the **Secrets Manager secret** (default
+  `scroll/proof-coordinator-secrets`) holding freshly generated random
+  `proof-work-token` and `prover-worker-token` values. An existing secret is
+  reused, never rotated, unless `--rotate-tokens` is passed (then restart both
+  workloads).
+
+It then writes into `values/`: the coordinator artifact-store
+`BUCKET`/`REGION`/`KEY_PREFIX` env, `serviceAccount.create/name` plus the
+`eks.amazonaws.com/role-arn` annotation on both workloads,
+`withdrawalProof.s3AuthMode: irsa`, and — only when no mapping exists yet — a
+standard externalSecrets block for the two tokens. A subsequent
+`setup proof-config` run passes its IRSA/secret topology validation without
+manual edits.
+
+With this command in the flow, the only inputs the CLI cannot produce are the
+released proof artifacts (`proof-artifacts/`) and the public
+`--signer-proof-artifact-base-url` (a CDN or public endpoint in front of the
+accepted-proof objects — the bucket itself is provisioned private).
 
 S3 credentials are also explicit but are not an activation switch:
 
