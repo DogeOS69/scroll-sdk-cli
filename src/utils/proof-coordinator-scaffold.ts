@@ -1,13 +1,17 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- Helm values are dynamic documents. */
+/* eslint-disable @typescript-eslint/no-explicit-any -- Helm values and parsed TOML are dynamic documents. */
 
 import * as toml from '@iarna/toml'
 import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import { WITHDRAWAL_NATIVE_CONFIG_RELPATH } from './withdrawal-config.js'
+
 export interface ScaffoldCoordinatorConfigOptions {
   coordinatorConfigPath: string
   valuesDir: string
+  /** Native WithdrawalProcessor.toml; preferred fact source when present. */
+  withdrawalConfigPath?: string
 }
 
 export interface ScaffoldCoordinatorConfigResult {
@@ -15,11 +19,24 @@ export interface ScaffoldCoordinatorConfigResult {
   created: boolean
 }
 
+/** Deployment facts the coordinator scaffold shares with withdrawal-processor. */
+interface ScaffoldFacts {
+  beaconNodeUrl?: string
+  blobS3KeyPrefix?: string
+  blobS3Url?: string
+  blobTimeoutMs: number
+  dogecoinNetwork: string
+  dogecoinRpcUrl: string
+  ethChainId: number
+  l1RpcUrl: string
+  l2ChainId: number
+  l2RpcUrl: string
+  source: string
+}
+
 /**
- * Env names projected into withdrawal-processor values by `setup prep-charts`.
- * The scaffold reuses those already-resolved deployment facts instead of
- * inventing its own; anything still `<TODO>` there fails closed here with the
- * offending env named.
+ * Env names projected into withdrawal-processor values by older prep-charts
+ * layouts. Newer layouts own these in WithdrawalProcessor.toml instead.
  */
 const WP_ENV = {
   beaconNodeUrl: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL',
@@ -34,39 +51,27 @@ const WP_ENV = {
   l2RpcUrl: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL',
 } as const
 
-function readWithdrawalEnv(valuesDir: string): { env: Record<string, string>; valuesPath: string } {
-  const valuesPath = path.join(valuesDir, 'withdrawal-processor-production.yaml')
-  if (!fs.existsSync(valuesPath)) {
-    throw new Error(`Values file not found: ${valuesPath}; run scrollsdk setup prep-charts before scaffolding ProofCoordinator.toml`)
-  }
-
-  const values = yaml.load(fs.readFileSync(valuesPath, 'utf8')) as any
-  const env = Object.fromEntries(
-    (Array.isArray(values?.env) ? values.env : [])
-      .filter((item: any) => typeof item?.name === 'string' && item.value !== undefined)
-      .map((item: any) => [item.name, String(item.value)])
-  ) as Record<string, string>
-  return { env, valuesPath }
+function isPlaceholder(value: string): boolean {
+  return /<(?:auto|todo)>|placeholder/i.test(value)
 }
 
-function requireResolved(env: Record<string, string>, name: string, valuesPath: string): string {
-  const value = env[name]
-  if (typeof value !== 'string' || value.trim() === '') {
-    throw new Error(`${valuesPath}: env ${name} is required to scaffold ProofCoordinator.toml; run scrollsdk setup prep-charts first`)
+function requireResolved(value: unknown, label: string): string {
+  const text = typeof value === 'number' ? String(value) : value
+  if (typeof text !== 'string' || text.trim() === '') {
+    throw new Error(`${label} is required to scaffold ProofCoordinator.toml; run scrollsdk setup prep-charts first`)
   }
 
-  if (/<(?:auto|todo)>|placeholder/i.test(value)) {
-    throw new Error(`${valuesPath}: env ${name} is an unresolved placeholder (${value}); resolve it via config.toml + scrollsdk setup prep-charts before scaffolding`)
+  if (isPlaceholder(text)) {
+    throw new Error(`${label} is an unresolved placeholder (${text}); resolve it via config.toml + scrollsdk setup prep-charts before scaffolding`)
   }
 
-  return value
+  return text
 }
 
-function optionalResolved(env: Record<string, string>, name: string): string | undefined {
-  const value = env[name]
-  if (typeof value !== 'string' || value.trim() === '') return undefined
-  if (/<(?:auto|todo)>|placeholder/i.test(value)) return undefined
-  return value
+function optionalResolved(value: unknown): string | undefined {
+  const text = typeof value === 'number' ? String(value) : value
+  if (typeof text !== 'string' || text.trim() === '' || isPlaceholder(text)) return undefined
+  return text
 }
 
 function requirePositiveIntegerString(value: string, label: string): number {
@@ -78,33 +83,94 @@ function requirePositiveIntegerString(value: string, label: string): number {
   return parsed
 }
 
-const q = (value: string): string => JSON.stringify(value)
+function readFactsFromWithdrawalToml(configPath: string): ScaffoldFacts {
+  let parsed: any
+  try {
+    parsed = toml.parse(fs.readFileSync(configPath, 'utf8'))
+  } catch (error) {
+    throw new Error(`${configPath}: invalid WithdrawalProcessor TOML: ${error instanceof Error ? error.message : String(error)}`)
+  }
 
-interface EthereumDaInputs {
-  blobSourceToml: string
-  ethChainId: number
-  l1RpcUrl: string
-  l2ChainId: number
+  const at = (label: string) => `${configPath}: ${label}`
+  const blobSource = parsed.ethereum_da?.blob_source || {}
+  return {
+    beaconNodeUrl: optionalResolved(blobSource.beacon_node?.url),
+    blobS3KeyPrefix: optionalResolved(blobSource.aws_s3?.key_prefix),
+    blobS3Url: optionalResolved(blobSource.aws_s3?.url),
+    blobTimeoutMs: requirePositiveIntegerString(
+      optionalResolved(blobSource.timeout_ms) ?? '10000',
+      at('ethereum_da.blob_source.timeout_ms')
+    ),
+    dogecoinNetwork: requireResolved(parsed.network_str, at('network_str')),
+    dogecoinRpcUrl: requireResolved(parsed.dogecoin_rpc_url, at('dogecoin_rpc_url')),
+    ethChainId: requirePositiveIntegerString(
+      requireResolved(parsed.ethereum_da?.eth_chain_id, at('ethereum_da.eth_chain_id')),
+      at('ethereum_da.eth_chain_id')
+    ),
+    l1RpcUrl: requireResolved(parsed.ethereum_da?.l1_rpc_url, at('ethereum_da.l1_rpc_url')),
+    l2ChainId: requirePositiveIntegerString(
+      requireResolved(parsed.ethereum_da?.l2_chain_id, at('ethereum_da.l2_chain_id')),
+      at('ethereum_da.l2_chain_id')
+    ),
+    l2RpcUrl: requireResolved(parsed.dogeos_indexer?.rpc_url, at('dogeos_indexer.rpc_url')),
+    source: configPath,
+  }
 }
 
-function ethereumDaSection(label: string, dataRoot: string, inputs: EthereumDaInputs): string {
+function readFactsFromValuesEnv(valuesDir: string): ScaffoldFacts {
+  const valuesPath = path.join(valuesDir, 'withdrawal-processor-production.yaml')
+  if (!fs.existsSync(valuesPath)) {
+    throw new Error(`Values file not found: ${valuesPath}; run scrollsdk setup prep-charts before scaffolding ProofCoordinator.toml`)
+  }
+
+  const values = yaml.load(fs.readFileSync(valuesPath, 'utf8')) as any
+  const env = Object.fromEntries(
+    (Array.isArray(values?.env) ? values.env : [])
+      .filter((item: any) => typeof item?.name === 'string' && item.value !== undefined)
+      .map((item: any) => [item.name, String(item.value)])
+  ) as Record<string, string>
+  const at = (name: string) => `${valuesPath}: env ${name}`
+  return {
+    beaconNodeUrl: optionalResolved(env[WP_ENV.beaconNodeUrl]),
+    blobS3KeyPrefix: optionalResolved(env[WP_ENV.blobS3KeyPrefix]),
+    blobS3Url: optionalResolved(env[WP_ENV.blobS3Url]),
+    blobTimeoutMs: requirePositiveIntegerString(
+      optionalResolved(env[WP_ENV.blobTimeoutMs]) ?? '10000',
+      at(WP_ENV.blobTimeoutMs)
+    ),
+    dogecoinNetwork: requireResolved(env[WP_ENV.dogecoinNetwork], at(WP_ENV.dogecoinNetwork)),
+    dogecoinRpcUrl: requireResolved(env[WP_ENV.dogecoinRpcUrl], at(WP_ENV.dogecoinRpcUrl)),
+    ethChainId: requirePositiveIntegerString(requireResolved(env[WP_ENV.ethChainId], at(WP_ENV.ethChainId)), at(WP_ENV.ethChainId)),
+    l1RpcUrl: requireResolved(env[WP_ENV.l1RpcUrl], at(WP_ENV.l1RpcUrl)),
+    l2ChainId: requirePositiveIntegerString(requireResolved(env[WP_ENV.l2ChainId], at(WP_ENV.l2ChainId)), at(WP_ENV.l2ChainId)),
+    l2RpcUrl: requireResolved(env[WP_ENV.l2RpcUrl], at(WP_ENV.l2RpcUrl)),
+    source: valuesPath,
+  }
+}
+
+const q = (value: string): string => JSON.stringify(value)
+
+function ethereumDaSection(label: string, dataRoot: string, facts: ScaffoldFacts, providerToml: string): string {
   return `[${label}]
-l1_rpc_url = ${q(inputs.l1RpcUrl)}
-eth_chain_id = ${inputs.ethChainId}
-l2_chain_id = ${inputs.l2ChainId}
+l1_rpc_url = ${q(facts.l1RpcUrl)}
+eth_chain_id = ${facts.ethChainId}
+l2_chain_id = ${facts.l2ChainId}
 artifact_store_root = ${q(`${dataRoot}/blobs`)}
 artifact_metadata_sqlite_path = ${q(`${dataRoot}/meta.sqlite`)}
 
 [${label}.blob_source]
-${inputs.blobSourceToml.replaceAll('__BLOB_SOURCE__', `${label}.blob_source`)}`
+timeout_ms = ${facts.blobTimeoutMs}
+
+${providerToml.replaceAll('__BLOB_SOURCE__', `${label}.blob_source`)}`
 }
 
 /**
  * Generate a complete, validation-passing ProofCoordinator.toml from the
- * deployment facts prep-charts already projected into withdrawal-processor
- * values. The file is only created when missing — an existing hand-maintained
- * config is never touched. The managed verifier block is left as a marked
- * production stub for `setup proof-config` to fill in the same run.
+ * deployment facts prep-charts already resolved — read from the native
+ * WithdrawalProcessor.toml when it exists, or the legacy values env layout
+ * otherwise. The file is only created when missing; the managed verifier block
+ * is left as a marked production stub for `setup proof-config` to fill in the
+ * same run.
  */
 export function scaffoldProofCoordinatorConfig(
   options: ScaffoldCoordinatorConfigOptions
@@ -112,45 +178,29 @@ export function scaffoldProofCoordinatorConfig(
   const configFile = path.resolve(options.coordinatorConfigPath)
   if (fs.existsSync(configFile)) return { configFile, created: false }
 
-  const { env, valuesPath } = readWithdrawalEnv(path.resolve(options.valuesDir))
-  const l2RpcUrl = requireResolved(env, WP_ENV.l2RpcUrl, valuesPath)
-  const l1RpcUrl = requireResolved(env, WP_ENV.l1RpcUrl, valuesPath)
-  const ethChainId = requirePositiveIntegerString(
-    requireResolved(env, WP_ENV.ethChainId, valuesPath),
-    `${valuesPath}: env ${WP_ENV.ethChainId}`
+  const valuesDir = path.resolve(options.valuesDir)
+  const withdrawalConfigPath = path.resolve(
+    options.withdrawalConfigPath || path.join(path.dirname(valuesDir), WITHDRAWAL_NATIVE_CONFIG_RELPATH)
   )
-  const l2ChainId = requirePositiveIntegerString(
-    requireResolved(env, WP_ENV.l2ChainId, valuesPath),
-    `${valuesPath}: env ${WP_ENV.l2ChainId}`
-  )
-  const dogecoinRpcUrl = requireResolved(env, WP_ENV.dogecoinRpcUrl, valuesPath)
-  const dogecoinNetwork = requireResolved(env, WP_ENV.dogecoinNetwork, valuesPath)
+  const facts = fs.existsSync(withdrawalConfigPath)
+    ? readFactsFromWithdrawalToml(withdrawalConfigPath)
+    : readFactsFromValuesEnv(valuesDir)
 
-  const blobTimeoutMs = requirePositiveIntegerString(
-    optionalResolved(env, WP_ENV.blobTimeoutMs) ?? '10000',
-    `${valuesPath}: env ${WP_ENV.blobTimeoutMs}`
-  )
-  const blobS3Url = optionalResolved(env, WP_ENV.blobS3Url)
-  const blobS3KeyPrefix = optionalResolved(env, WP_ENV.blobS3KeyPrefix)
-  const beaconNodeUrl = optionalResolved(env, WP_ENV.beaconNodeUrl)
   let providerToml: string
-  if (blobS3Url) {
-    providerToml = `[__BLOB_SOURCE__.aws_s3]\nurl = ${q(blobS3Url)}${blobS3KeyPrefix ? `\nkey_prefix = ${q(blobS3KeyPrefix)}` : ''}`
-  } else if (beaconNodeUrl) {
-    providerToml = `[__BLOB_SOURCE__.beacon_node]\nurl = ${q(beaconNodeUrl)}`
+  if (facts.blobS3Url) {
+    providerToml = `[__BLOB_SOURCE__.aws_s3]\nurl = ${q(facts.blobS3Url)}${facts.blobS3KeyPrefix ? `\nkey_prefix = ${q(facts.blobS3KeyPrefix)}` : ''}`
+  } else if (facts.beaconNodeUrl) {
+    providerToml = `[__BLOB_SOURCE__.beacon_node]\nurl = ${q(facts.beaconNodeUrl)}`
   } else {
     throw new Error(
-      `${valuesPath}: a blob source is required to scaffold ProofCoordinator.toml; set ethereumDa blob archive (${WP_ENV.blobS3Url}) or a beacon node (${WP_ENV.beaconNodeUrl}) via config.toml + scrollsdk setup prep-charts`
+      `${facts.source}: a blob source is required to scaffold ProofCoordinator.toml; configure the ethereumDa blob archive or a beacon node via config.toml + scrollsdk setup prep-charts`
     )
   }
 
-  const blobSourceToml = `timeout_ms = ${blobTimeoutMs}\n\n${providerToml}`
-  const ethereumDaInputs: EthereumDaInputs = { blobSourceToml, ethChainId, l1RpcUrl, l2ChainId }
-
   const content = `# Generated by \`scrollsdk setup proof-config --scaffold-coordinator-config\`
-# from the prepared withdrawal-processor values. Hand-maintained afterwards:
-# scrollsdk only rewrites the marked verifier block below. Review every value
-# before production use.
+# from the prepared withdrawal-processor deployment configuration.
+# Hand-maintained afterwards: scrollsdk only rewrites the marked verifier block
+# below. Review every value before production use.
 poll_interval_ms = 1000
 lease_ttl_ms = 60000
 
@@ -180,10 +230,10 @@ scratch_root = "/app/data/scroll-batch-scratch"
 # setup proof-config injects the validated raw commitment through the
 # DOGEOS_PROOF_COORDINATOR_* environment overlay.
 chunk_program_commitment_hex = "overridden-by-scrollsdk"
-l2_rpc_url = ${q(l2RpcUrl)}
+l2_rpc_url = ${q(facts.l2RpcUrl)}
 subprocess_timeout_ms = 3600000
 
-${ethereumDaSection('materializer.scroll_batch.subprocess.ethereum_da', '/app/data/scroll-batch-eth-da', ethereumDaInputs)}
+${ethereumDaSection('materializer.scroll_batch.subprocess.ethereum_da', '/app/data/scroll-batch-eth-da', facts, providerToml)}
 
 [materializer.bridge]
 enabled = true
@@ -191,10 +241,10 @@ advance_l1 = true
 advance_l2 = true
 
 [materializer.bridge.dogecoin_rpc]
-url = ${q(dogecoinRpcUrl)}
-network = ${q(dogecoinNetwork)}
+url = ${q(facts.dogecoinRpcUrl)}
+network = ${q(facts.dogecoinNetwork)}
 
-${ethereumDaSection('materializer.bridge.ethereum_da', '/app/data/bridge-eth-da', ethereumDaInputs)}
+${ethereumDaSection('materializer.bridge.ethereum_da', '/app/data/bridge-eth-da', facts, providerToml)}
 
 # BEGIN scrollsdk managed verifier configuration
 [verifier]

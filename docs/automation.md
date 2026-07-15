@@ -641,16 +641,46 @@ Re-deploy the signer releases afterwards (`make install-attestation-signers`).
 Pass `--skip-attestation-signers` only when signer envelope policy is managed
 elsewhere.
 
+## Native WithdrawalProcessor.toml
+
+Withdrawal-processor application configuration is TOML-owned. The native file
+lives at `withdrawal-processor/WithdrawalProcessor.toml` next to `values/` and
+reaches the chart via
+`--set-file 'configMaps.config.data.WithdrawalProcessor\.toml'=...` at install
+time; the values file keeps only Kubernetes shape, secret wiring, and the
+`withdrawalProof.enabled` switch.
+
+Ownership inside the file:
+
+- **Managed deployment block** (`# BEGIN/END scrollsdk managed deployment
+  configuration`, must stay the first content of the file): `setup prep-charts`
+  merges its derived facts (RPC URLs, contract addresses, chain ids, start
+  heights, redeem script, blob source) into it on every run and seeds curated
+  defaults for keys you have not set. Any other key you tune inside the block —
+  fee rate, timeouts, indexer cadence, UTXO strategy — survives re-runs.
+  Comments inside the block do not.
+- **Managed proof block**: owned by `setup proof-config`, unchanged semantics.
+- Hand-maintained `[tables]` may sit between the blocks.
+
+prep-charts migrates legacy layouts automatically: an inline embedded TOML in
+values seeds the native file once, and every plain-value `DOGEOS_WITHDRAWAL_*`
+env (except the four activation projections and secret-backed entries) is
+stripped from values — figment still honors ad-hoc ENV overrides applied via
+kubectl, they are just not persisted. Structured values like
+`inbox_worker.expected_batchers` are now native TOML arrays instead of
+JSON-in-string env.
+
 ## Scaffolding ProofCoordinator.toml
 
 `--scaffold-coordinator-config` generates the coordinator TOML when the file
 does not exist yet (an existing config is never touched). Every deployment fact
-is read back from the prepared withdrawal-processor values — L2 RPC, Ethereum
-DA RPC and chain ids, blob source (S3 archive preferred, beacon node fallback),
-Dogecoin RPC and network — so `setup prep-charts` must have resolved them
-first; any `<TODO>` left fails closed naming the offending env. The generated
-file passes the proof-config materializer validation as-is and contains the
-marked verifier block that the same run then fills.
+is read from the native `WithdrawalProcessor.toml` (or, for legacy layouts, the
+withdrawal-processor values env) — L2 RPC, Ethereum DA RPC and chain ids, blob
+source (S3 archive preferred, beacon node fallback), Dogecoin RPC and network —
+so `setup prep-charts` must have resolved them first; any `<TODO>` left fails
+closed naming the offending key. The generated file passes the proof-config
+materializer validation as-is and contains the marked verifier block that the
+same run then fills.
 
 ## Provisioning the AWS side: setup proof-aws-init
 

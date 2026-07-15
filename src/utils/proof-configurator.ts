@@ -7,8 +7,11 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import {
+  WITHDRAWAL_NATIVE_CONFIG_RELPATH,
+  ensureWithdrawalChartWiring,
   ensureWithdrawalConfigValues,
   ensureWithdrawalProofActivationSwitch,
+  removeInlineWithdrawalConfig,
   replaceWithdrawalManagedProofBlock,
   setWithdrawalConfigToml,
 } from './withdrawal-config.js'
@@ -81,6 +84,13 @@ export interface ConfigureProofValuesOptions {
   skipAttestationSigners?: boolean
   valuesDir: string
   verifierIds?: Partial<Record<ProofFamily, string>>
+  /**
+   * Native WithdrawalProcessor.toml. When the file exists, the managed proof
+   * block is written there (helm --set-file layout) instead of into an inline
+   * values copy. Defaults to withdrawal-processor/WithdrawalProcessor.toml
+   * next to the values directory.
+   */
+  withdrawalConfigPath?: string
 }
 
 export interface ConfigureProofValuesResult {
@@ -890,8 +900,9 @@ function prepareWithdrawalProcessor(
   scrollBatchBackendProfile: string,
   bridgeBackendProfile: string,
   signerProofArtifactBaseUrl: string,
-  verifierArtifact: VerifierArtifact
-): any {
+  verifierArtifact: VerifierArtifact,
+  nativeWithdrawalConfig?: string
+): { updatedWithdrawalConfig?: string; values: any } {
   const values = readYaml(filePath)
   const projection = readCoordinatorRuntimeProjection(
     coordinatorValuesPath,
@@ -1022,11 +1033,20 @@ function prepareWithdrawalProcessor(
   }
   proofSystem.signer_proof_artifact_base_url = signerProofArtifactBaseUrl
 
-  const withdrawalConfig = ensureWithdrawalConfigValues(values)
-  setWithdrawalConfigToml(
-    values,
-    replaceWithdrawalManagedProofBlock(withdrawalConfig, proofConfig as toml.JsonMap)
-  )
+  let updatedWithdrawalConfig: string | undefined
+  if (nativeWithdrawalConfig === undefined) {
+    const withdrawalConfig = ensureWithdrawalConfigValues(values)
+    setWithdrawalConfigToml(
+      values,
+      replaceWithdrawalManagedProofBlock(withdrawalConfig, proofConfig as toml.JsonMap)
+    )
+  } else {
+    updatedWithdrawalConfig = replaceWithdrawalManagedProofBlock(nativeWithdrawalConfig, proofConfig as toml.JsonMap)
+    ensureWithdrawalChartWiring(values)
+    // helm --set-file supplies the ConfigMap key; a stale inline copy would
+    // shadow-confuse operators reading the values file.
+    removeInlineWithdrawalConfig(values)
+  }
 
   values.configMaps ||= {}
   values.configMaps['proof-manifests'] = { data: manifestConfigMap, enabled: true }
@@ -1080,7 +1100,7 @@ function prepareWithdrawalProcessor(
 
   ensureWithdrawalProofActivationSwitch(values)
 
-  return values
+  return { updatedWithdrawalConfig, values }
 }
 
 export function configureProofValues(options: ConfigureProofValuesOptions): ConfigureProofValuesResult {
@@ -1114,6 +1134,13 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
   const attestationUpdates = options.skipAttestationSigners
     ? []
     : prepareAttestationSigners(valuesDir, allowedProofTriples)
+  const withdrawalConfigFile = path.resolve(
+    options.withdrawalConfigPath
+    || path.join(path.dirname(valuesDir), WITHDRAWAL_NATIVE_CONFIG_RELPATH)
+  )
+  const nativeWithdrawalConfig = fs.existsSync(withdrawalConfigFile)
+    ? fs.readFileSync(withdrawalConfigFile, 'utf8')
+    : undefined
 
   // Build and validate every target before writing any of them.
   const coordinatorUpdate = prepareProofCoordinator(
@@ -1124,7 +1151,7 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
     verifierIds,
     verifierArtifact
   )
-  const withdrawalValues = prepareWithdrawalProcessor(
+  const withdrawalUpdate = prepareWithdrawalProcessor(
     files[1],
     files[0],
     configFile,
@@ -1134,17 +1161,26 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
     scrollBatchBackendProfile,
     bridgeBackendProfile,
     signerProofArtifactBaseUrl,
-    verifierArtifact
+    verifierArtifact,
+    nativeWithdrawalConfig
   )
-  if (options.enableWithdrawalProof) withdrawalValues.withdrawalProof.enabled = true
+  if (options.enableWithdrawalProof) withdrawalUpdate.values.withdrawalProof.enabled = true
 
   writeTextAtomic(configFile, coordinatorUpdate.updatedConfig)
   writeYamlAtomic(files[0], coordinatorUpdate.values)
-  writeYamlAtomic(files[1], withdrawalValues)
+  writeYamlAtomic(files[1], withdrawalUpdate.values)
+  if (withdrawalUpdate.updatedWithdrawalConfig !== undefined) {
+    writeTextAtomic(withdrawalConfigFile, withdrawalUpdate.updatedWithdrawalConfig)
+  }
+
   for (const update of attestationUpdates) writeYamlAtomic(update.filePath, update.values)
   return {
     configFile,
     families: [...manifests.keys()].sort(),
-    files: [...files, ...attestationUpdates.map(update => update.filePath)],
+    files: [
+      ...files,
+      ...(withdrawalUpdate.updatedWithdrawalConfig === undefined ? [] : [withdrawalConfigFile]),
+      ...attestationUpdates.map(update => update.filePath),
+    ],
   }
 }

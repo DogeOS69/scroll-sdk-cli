@@ -6,6 +6,10 @@ export const WITHDRAWAL_CONFIG_FILE = 'WithdrawalProcessor.toml'
 export const WITHDRAWAL_CONFIG_PATH = `/app/config/${WITHDRAWAL_CONFIG_FILE}`
 export const WITHDRAWAL_PROOF_BEGIN = '# BEGIN scrollsdk managed proof configuration'
 export const WITHDRAWAL_PROOF_END = '# END scrollsdk managed proof configuration'
+export const WITHDRAWAL_DEPLOYMENT_BEGIN = '# BEGIN scrollsdk managed deployment configuration'
+export const WITHDRAWAL_DEPLOYMENT_END = '# END scrollsdk managed deployment configuration'
+/** Default native config location relative to the deployment working directory. */
+export const WITHDRAWAL_NATIVE_CONFIG_RELPATH = 'withdrawal-processor/WithdrawalProcessor.toml'
 export const WITHDRAWAL_PROOF_ACTIVATION_ENV = {
   apiEnabled: 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED',
   mode: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE',
@@ -90,6 +94,329 @@ export function defaultWithdrawalConfigToml(): string {
   })}\n`
 }
 
+function isPlainObject(value: unknown): value is Record<string, any> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Drop undefined leaves so @iarna/toml stringify never sees them. */
+function stripUndefinedDeep(value: any): any {
+  if (Array.isArray(value)) return value.map(item => stripUndefinedDeep(item))
+  if (!isPlainObject(value)) return value
+  const result: Record<string, any> = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (item === undefined) continue
+    result[key] = stripUndefinedDeep(item)
+  }
+
+  return result
+}
+
+/** Overlay wins; plain objects merge recursively; arrays and scalars replace. */
+function deepMergeToml(base: any, overlay: any): any {
+  if (!isPlainObject(base) || !isPlainObject(overlay)) return overlay
+  const result: Record<string, any> = { ...base }
+  for (const [key, value] of Object.entries(overlay)) {
+    result[key] = key in result ? deepMergeToml(result[key], value) : value
+  }
+
+  return result
+}
+
+function deleteTomlPath(root: Record<string, any>, segments: string[]): void {
+  let cursor: any = root
+  for (const segment of segments.slice(0, -1)) {
+    if (!isPlainObject(cursor?.[segment])) return
+    cursor = cursor[segment]
+  }
+
+  delete cursor[segments.at(-1) as string]
+}
+
+export interface MergeWithdrawalDeploymentOptions {
+  /** Seeded only where the operator has not set the key (existing wins). */
+  defaults?: toml.JsonMap
+  /** Table/key paths to remove after the merge (e.g. a retired blob provider). */
+  deletePaths?: string[][]
+}
+
+/**
+ * Merge deployment facts into the CLI-owned deployment block.
+ *
+ * Facts overwrite their keys; every other key inside the block (operator
+ * tuning like fee rates or indexer cadence) survives verbatim. The block must
+ * be the first content of the file so its top-level scalars stay at TOML
+ * document root — a missing block is prepended, and a block that drifted below
+ * a hand-maintained table fails closed.
+ */
+export function mergeWithdrawalManagedDeploymentBlock(
+  source: string,
+  facts: toml.JsonMap,
+  options: MergeWithdrawalDeploymentOptions = {}
+): string {
+  parseToml(source, 'existing config')
+  const beginCount = markerCount(source, WITHDRAWAL_DEPLOYMENT_BEGIN)
+  const endCount = markerCount(source, WITHDRAWAL_DEPLOYMENT_END)
+  if (beginCount !== endCount || beginCount > 1) {
+    throw new Error(
+      `WithdrawalProcessor TOML must contain either zero or one ${WITHDRAWAL_DEPLOYMENT_BEGIN} / ${WITHDRAWAL_DEPLOYMENT_END} block`
+    )
+  }
+
+  let existing: Record<string, any> = {}
+  let head = ''
+  let tail = source
+  if (beginCount === 1) {
+    const begin = source.indexOf(WITHDRAWAL_DEPLOYMENT_BEGIN)
+    const end = source.indexOf(WITHDRAWAL_DEPLOYMENT_END)
+    if (end < begin) throw new Error(`WithdrawalProcessor TOML has ${WITHDRAWAL_DEPLOYMENT_END} before its begin marker`)
+    const inner = source.slice(begin + WITHDRAWAL_DEPLOYMENT_BEGIN.length, end)
+    try {
+      existing = toml.parse(inner) as Record<string, any>
+    } catch (error) {
+      throw new Error(`managed deployment block is not standalone-parseable TOML: ${error instanceof Error ? error.message : String(error)}`)
+    }
+
+    head = source.slice(0, begin)
+    tail = source.slice(end + WITHDRAWAL_DEPLOYMENT_END.length)
+  }
+
+  const seeded = deepMergeToml(stripUndefinedDeep(options.defaults || {}), existing)
+  const merged = deepMergeToml(seeded, stripUndefinedDeep(facts)) as Record<string, any>
+  for (const segments of options.deletePaths || []) deleteTomlPath(merged, segments)
+
+  const block = `${WITHDRAWAL_DEPLOYMENT_BEGIN}\n${toml.stringify(merged as toml.JsonMap).trimEnd()}\n${WITHDRAWAL_DEPLOYMENT_END}`
+  const candidate = beginCount === 1
+    ? `${head}${block}${tail}`
+    : `${block}\n\n${source.replace(/^\n+/, '')}`
+  parseToml(candidate, 'generated config')
+
+  // Top-level scalars silently attach to the preceding table if any TOML
+  // precedes the block; verify they landed at document root.
+  const parsed = toml.parse(candidate) as Record<string, any>
+  for (const [key, value] of Object.entries(merged)) {
+    if (isPlainObject(value)) continue
+    if (JSON.stringify(parsed[key]) !== JSON.stringify(value)) {
+      throw new Error(
+        `WithdrawalProcessor TOML: the ${WITHDRAWAL_DEPLOYMENT_BEGIN} block must be the first content of the file so top-level key ${key} stays at document root`
+      )
+    }
+  }
+
+  return candidate.endsWith('\n') ? candidate : `${candidate}\n`
+}
+
+function asInteger(value: unknown, label: string): number | undefined {
+  if (value === undefined || value === null || String(value).trim() === '') return undefined
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isSafeInteger(parsed)) throw new Error(`${label} must be an integer; got ${String(value)}`)
+  return parsed
+}
+
+function asBoolean(value: unknown): boolean | undefined {
+  if (value === undefined || value === null || String(value).trim() === '') return undefined
+  if (typeof value === 'boolean') return value
+  if (value === 'true') return true
+  if (value === 'false') return false
+  return undefined
+}
+
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined
+}
+
+export interface WithdrawalDeploymentFactsInput {
+  bridgeAddress: unknown
+  dogecoinIndexerStartHeight: number
+  dogecoinRpcUrl: unknown
+  ethereumDa: {
+    beaconRpcUrl?: unknown
+    ethChainId: unknown
+    expectedBatcherAddress?: unknown
+    inboxWorkerStartBlock?: unknown
+    l1RpcUrl: unknown
+    l2ChainId: unknown
+    minFinality?: unknown
+    s3?: {
+      enabled: boolean
+      keyPrefix?: unknown
+      publicBaseUrl?: unknown
+      timeoutMs?: unknown
+      treatForbiddenAsMissing?: unknown
+    }
+  }
+  genesisSequencerTxid: unknown
+  genesisSequencerVout: unknown
+  initialBridgeRedeemScriptHex: unknown
+  l2BootstrapNextStartingBlockHeight?: unknown
+  l2MessageQueueAddress: unknown
+  l2MessengerAddress: unknown
+  l2RpcUrl: unknown
+  networkStr: unknown
+  tsoUrl?: unknown
+}
+
+export interface WithdrawalDeploymentFacts {
+  /** Curated starting values seeded only where the operator has not set a key. */
+  defaults: toml.JsonMap
+  deletePaths: string[][]
+  /** Deployment facts re-asserted on every prep-charts run. */
+  facts: toml.JsonMap
+}
+
+/**
+ * Split the deployment configuration prep-charts computes into facts (derived
+ * from config.toml / doge-config; overwrite the operator on every run) and
+ * curated defaults (seeded once; operator tuning inside the managed block
+ * survives subsequent runs).
+ */
+export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsInput): WithdrawalDeploymentFacts {
+  const {s3} = input.ethereumDa
+  const s3Enabled = s3?.enabled === true && nonEmpty(s3.publicBaseUrl) !== undefined
+  const expectedBatcher = nonEmpty(input.ethereumDa.expectedBatcherAddress)
+  const inboxStartBlock = asInteger(input.ethereumDa.inboxWorkerStartBlock, 'defaults.ethereumDaEmbeddedIndexerStartBlock')
+  const beaconRpcUrl = nonEmpty(input.ethereumDa.beaconRpcUrl)
+  const facts = {
+    bridge_address: nonEmpty(input.bridgeAddress),
+    dogecoin_indexer: {
+      start_height: Math.max(0, input.dogecoinIndexerStartHeight),
+    },
+    dogecoin_rpc_url: nonEmpty(input.dogecoinRpcUrl),
+    dogeos_indexer: {
+      message_queue_address: nonEmpty(input.l2MessageQueueAddress),
+      messenger_address: nonEmpty(input.l2MessengerAddress),
+      rpc_url: nonEmpty(input.l2RpcUrl),
+    },
+    ethereum_da: {
+      blob_source: {
+        ...(s3Enabled ? {
+          aws_s3: {
+            key_prefix: nonEmpty(s3?.keyPrefix),
+            timeout_ms: asInteger(s3?.timeoutMs, 'ethereumDa.blobArchive.s3.timeoutMs'),
+            treat_forbidden_as_missing: asBoolean(s3?.treatForbiddenAsMissing),
+            url: nonEmpty(s3?.publicBaseUrl),
+          },
+        } : {}),
+        ...(beaconRpcUrl ? { beacon_node: { url: beaconRpcUrl } } : {}),
+      },
+      eth_chain_id: asInteger(input.ethereumDa.ethChainId, 'ethereumDa.chainId'),
+      ...(inboxStartBlock === undefined && expectedBatcher === undefined ? {} : {
+        inbox_worker: {
+          ...(expectedBatcher ? { expected_batchers: [expectedBatcher] } : {}),
+          start_block: inboxStartBlock,
+        },
+      }),
+      l1_rpc_url: nonEmpty(input.ethereumDa.l1RpcUrl),
+      l2_chain_id: asInteger(input.ethereumDa.l2ChainId, 'general.CHAIN_ID_L2'),
+      min_finality: nonEmpty(input.ethereumDa.minFinality),
+    },
+    genesis_sequencer_txid: nonEmpty(input.genesisSequencerTxid),
+    genesis_sequencer_vout: asInteger(input.genesisSequencerVout, 'withdrawalProcessor.genesis_sequencer_vout'),
+    initial_bridge_redeem_script_hex: nonEmpty(input.initialBridgeRedeemScriptHex),
+    l2_bootstrap_next_starting_block_height: asInteger(
+      input.l2BootstrapNextStartingBlockHeight,
+      'defaults.l2BootstrapNextStartingBlockHeight'
+    ),
+    network_str: nonEmpty(input.networkStr),
+    // Deployment-mode gates pinned by the SDK for the current proof gate.
+    rotate_sequencer_signer_v2: false,
+    tso_url: nonEmpty(input.tsoUrl) || 'http://tso-service:3000',
+    wf_withdrawal_parity_v1: true,
+  } as unknown as toml.JsonMap
+
+  const defaults = {
+    advance_l1_builder_v2: false,
+    advance_l2_builder_v2: true,
+    api_port: 3000,
+    cleanup_timeout_secs: 3600,
+    database_url: 'sqlite:///app/data/withdrawal_processor.sqlite',
+    debug_skip_broadcast: false,
+    debug_skip_tso_polling: false,
+    dogecoin_indexer: { confirmations: 6, poll_interval_ms: 1000 },
+    dogeos_indexer: { confirmations: 12, log_query_batch_size: 10_000, poll_interval_ms: 1000, start_block: 0 },
+    ethereum_da: {
+      artifact_metadata_sqlite_path: '/app/data/eth-da-artifact-metadata.sqlite',
+      artifact_store_root: '/app/data/eth-da-blob-artifacts',
+      blob_source: { timeout_ms: 10_000 },
+      inbox_worker: {
+        cursor_id: 'eth_da_inbox',
+        enabled: true,
+        finalized_depth: 64,
+        ingest_depth: 1,
+        max_blocks_per_cycle: 64,
+        poll_interval_ms: 6000,
+        rollback_lookback: 128,
+        safe_depth: 32,
+        status_poll_interval_ms: 5000,
+        writer_id: 'withdrawal-processor',
+      },
+      indexer_sqlite_path: '/app/data/eth-da-indexer.sqlite',
+    },
+    fee_rate_sat_per_kvb: 1_000_000,
+    leaf_verification_required: false,
+    max_deposits_per_advance_l1: 32,
+    max_withdrawal_outputs_per_tx: 256,
+    protocol_context_json: '/app/protocol_context.json',
+    replay_sqlite_path: '/app/data/replay.sqlite',
+    require_change_tracking: false,
+    rotate_key_v2: false,
+    strict_l1_validation: false,
+    strict_l2_validation: false,
+    tso_timeout_minutes: 30,
+    utxo_manager_intermediate: {
+      allow_inflight_bridge_outputs: true,
+      bridge_min_confirmations: 10,
+      bridge_strategy: {
+        band: {
+          balance_band_ratio: 0.1,
+          floor_absolute_sats: 1_000_000,
+          max_balance_additions: 3,
+          sweep_floor_ratio: 0.5,
+          target_active_utxos: 100,
+          target_size_ratio: 1,
+        },
+        dust_floor_sats: 1_000_000,
+        max_inputs: 60,
+        strategy: 'band',
+      },
+      high_thresh_sats: 10_000_000_000,
+      prefer_inflight_bridge_outputs: false,
+    },
+  } as unknown as toml.JsonMap
+
+  return {
+    defaults,
+    deletePaths: s3Enabled ? [] : [['ethereum_da', 'blob_source', 'aws_s3']],
+    facts,
+  }
+}
+
+/**
+ * Remove plain-value DOGEOS_WITHDRAWAL_* env entries that are now TOML-owned.
+ * Secret-backed entries (valueFrom) and the four Helm activation projections
+ * stay; figment still honors ad-hoc env overrides applied outside values.
+ */
+export function stripMigratedWithdrawalEnv(
+  values: Record<string, any>
+): Array<{ key: string; newValue: string; oldValue: string }> {
+  if (!Array.isArray(values.env)) return []
+  const changes: Array<{ key: string; newValue: string; oldValue: string }> = []
+  for (let index = values.env.length - 1; index >= 0; index--) {
+    const entry = values.env[index]
+    const name = String(entry?.name || '')
+    if (!name.startsWith('DOGEOS_WITHDRAWAL_')) continue
+    if (entry.valueFrom !== undefined) continue
+    if (isWithdrawalProofActivationEnv(name)) continue
+    changes.push({
+      key: `env.${name}`,
+      newValue: 'removed (owned by WithdrawalProcessor.toml)',
+      oldValue: String(entry.value ?? 'undefined'),
+    })
+    values.env.splice(index, 1)
+  }
+
+  return changes.reverse()
+}
+
 /** Replace or adopt the CLI-owned proof block without rewriting unrelated TOML. */
 export function replaceWithdrawalManagedProofBlock(
   source: string,
@@ -120,8 +447,13 @@ export function replaceWithdrawalManagedProofBlock(
   return candidate.endsWith('\n') ? candidate : `${candidate}\n`
 }
 
-/** Ensure the common chart mounts the embedded application TOML at the canonical path. */
-export function ensureWithdrawalConfigValues(values: Record<string, any>): string {
+/**
+ * Ensure the chart consumes the application TOML at the canonical path: the
+ * --config arg, the config ConfigMap toggle, and its mount. Does not touch the
+ * TOML content itself — in native-file mode the content arrives via helm
+ * --set-file rather than inline values.
+ */
+export function ensureWithdrawalChartWiring(values: Record<string, any>): void {
   if (values.args !== undefined && !Array.isArray(values.args)) {
     throw new TypeError('withdrawal-processor values: args must be an array')
   }
@@ -139,13 +471,6 @@ export function ensureWithdrawalConfigValues(values: Record<string, any>): strin
   values.configMaps ||= {}
   values.configMaps.config ||= {}
   values.configMaps.config.enabled = true
-  values.configMaps.config.data ||= {}
-  const existing = values.configMaps.config.data[WITHDRAWAL_CONFIG_FILE]
-  if (existing !== undefined && typeof existing !== 'string') {
-    throw new TypeError(`withdrawal-processor values: configMaps.config.data.${WITHDRAWAL_CONFIG_FILE} must be a string`)
-  }
-
-  values.configMaps.config.data[WITHDRAWAL_CONFIG_FILE] = existing || defaultWithdrawalConfigToml()
 
   values.persistence ||= {}
   values.persistence['withdrawal-processor-config'] ||= {}
@@ -157,7 +482,35 @@ export function ensureWithdrawalConfigValues(values: Record<string, any>): strin
     subPath: WITHDRAWAL_CONFIG_FILE,
     type: 'configMap',
   })
+}
 
+/**
+ * Drop an inline embedded TOML from values (native-file mode: helm --set-file
+ * supplies the ConfigMap key, and a stale inline copy would shadow-confuse).
+ * Returns the removed source, if any, so callers can seed the native file.
+ */
+export function removeInlineWithdrawalConfig(values: Record<string, any>): string | undefined {
+  const existing = values.configMaps?.config?.data?.[WITHDRAWAL_CONFIG_FILE]
+  if (existing === undefined) return undefined
+  if (typeof existing !== 'string') {
+    throw new TypeError(`withdrawal-processor values: configMaps.config.data.${WITHDRAWAL_CONFIG_FILE} must be a string`)
+  }
+
+  delete values.configMaps.config.data[WITHDRAWAL_CONFIG_FILE]
+  if (Object.keys(values.configMaps.config.data).length === 0) delete values.configMaps.config.data
+  return existing
+}
+
+/** Ensure the common chart mounts the embedded application TOML at the canonical path. */
+export function ensureWithdrawalConfigValues(values: Record<string, any>): string {
+  ensureWithdrawalChartWiring(values)
+  values.configMaps.config.data ||= {}
+  const existing = values.configMaps.config.data[WITHDRAWAL_CONFIG_FILE]
+  if (existing !== undefined && typeof existing !== 'string') {
+    throw new TypeError(`withdrawal-processor values: configMaps.config.data.${WITHDRAWAL_CONFIG_FILE} must be a string`)
+  }
+
+  values.configMaps.config.data[WITHDRAWAL_CONFIG_FILE] = existing || defaultWithdrawalConfigToml()
   return values.configMaps.config.data[WITHDRAWAL_CONFIG_FILE]
 }
 

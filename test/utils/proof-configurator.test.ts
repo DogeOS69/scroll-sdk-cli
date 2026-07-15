@@ -406,6 +406,41 @@ max_items = 42
     })).to.throw("must not contain ':' or ','")
   })
 
+  it('writes the managed proof block to a native WithdrawalProcessor.toml when present', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    const nativePath = path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml')
+    fs.mkdirSync(path.dirname(nativePath), { recursive: true })
+    fs.writeFileSync(nativePath, `# operator comment survives
+network_str = "testnet"
+
+[operator_tuning]
+max_items = 42
+`)
+
+    const result = configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
+      valuesDir: path.join(root, 'values'),
+    })
+    expect(result.files).to.include(nativePath)
+
+    const nativeSource = fs.readFileSync(nativePath, 'utf8')
+    expect(nativeSource).to.include('# operator comment survives')
+    const parsedNative = toml.parse(nativeSource) as any
+    expect(parsedNative.operator_tuning.max_items).to.equal(42)
+    expect(parsedNative.proof_system.mode).to.equal('production')
+    expect(parsedNative.proof_work_api.bind_addr).to.equal('0.0.0.0:9300')
+
+    const withdrawal = yaml.load(fs.readFileSync(result.files[1], 'utf8')) as any
+    // Inline copy dropped: helm --set-file supplies the ConfigMap key.
+    expect(withdrawal.configMaps.config.data?.['WithdrawalProcessor.toml']).to.equal(undefined)
+    expect(withdrawal.configMaps.config.enabled).to.equal(true)
+    expect(withdrawal.args).to.deep.equal(['--config', '/app/config/WithdrawalProcessor.toml'])
+    expect(withdrawal.persistence['withdrawal-processor-config'].subPath).to.equal('WithdrawalProcessor.toml')
+  })
+
   it('accepts a scaffolded coordinator config end to end', () => {
     const { artifactPath, manifests } = writeValidProofRelease(root)
     const withdrawalValuesPath = path.join(root, 'values/withdrawal-processor-production.yaml')

@@ -62,6 +62,7 @@ export default class ProofConfig extends Command {
     'skip-attestation-signers': Flags.boolean({ default: false, description: 'Do not project the proof-triple allowlist into attestation-signer values files' }),
     'values-dir': Flags.string({ default: 'values', description: 'Directory containing *-production.yaml files' }),
     'verifier-id': Flags.string({ description: 'Optional FAMILY=ID override; repeat per family', multiple: true }),
+    'withdrawal-config': Flags.string({ description: 'Native WithdrawalProcessor.toml (default: withdrawal-processor/WithdrawalProcessor.toml next to the values dir); when it exists the managed proof block is written there instead of inline values' }),
   }
 
   public async run(): Promise<void> {
@@ -70,12 +71,15 @@ export default class ProofConfig extends Command {
     try {
       const coordinatorConfigPath = path.resolve(flags['coordinator-config'])
       const valuesDir = path.resolve(flags['values-dir'])
+      const withdrawalConfigPath = flags['withdrawal-config']
+        ? path.resolve(flags['withdrawal-config'])
+        : undefined
       let scaffolded = false
       if (flags['scaffold-coordinator-config']) {
-        const scaffold = scaffoldProofCoordinatorConfig({ coordinatorConfigPath, valuesDir })
+        const scaffold = scaffoldProofCoordinatorConfig({ coordinatorConfigPath, valuesDir, withdrawalConfigPath })
         scaffolded = scaffold.created
         json.logSuccess(scaffold.created
-          ? `Scaffolded ${scaffold.configFile} from withdrawal-processor values`
+          ? `Scaffolded ${scaffold.configFile} from the withdrawal-processor deployment configuration`
           : `${scaffold.configFile} already exists; scaffold skipped`)
       }
 
@@ -90,6 +94,7 @@ export default class ProofConfig extends Command {
         skipAttestationSigners: flags['skip-attestation-signers'],
         valuesDir,
         verifierIds: parseVerifierIds(flags['verifier-id'] || []),
+        withdrawalConfigPath,
       })
       json.logSuccess(`Configured proof values for: ${result.families.join(', ')}`)
       if (flags['enable-withdrawal-proof']) {

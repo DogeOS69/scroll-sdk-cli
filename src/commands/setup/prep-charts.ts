@@ -30,8 +30,16 @@ import {
   isLocalSigner,
 } from '../../utils/signer-roles.js'
 import {
+  WITHDRAWAL_CONFIG_FILE,
+  WITHDRAWAL_NATIVE_CONFIG_RELPATH,
+  buildWithdrawalDeploymentFacts,
+  defaultWithdrawalConfigToml,
+  ensureWithdrawalChartWiring,
   ensureWithdrawalProofActivationSwitch,
   isWithdrawalProofActivationEnv,
+  mergeWithdrawalManagedDeploymentBlock,
+  removeInlineWithdrawalConfig,
+  stripMigratedWithdrawalEnv,
 } from '../../utils/withdrawal-config.js'
 import {
   RETH_BOOTNODE_NODEKEY_ENV,
@@ -2567,63 +2575,86 @@ export default class SetupPrepCharts extends Command {
 
         const s3Archive = this.dogeConfig.ethereumDa?.blobArchive?.s3
         const s3ArchiveEnabled = truthyConfigValue(s3Archive?.enabled)
-        const todoMappings: Record<string, any> = {
-          "DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS": this.withdrawalProcessorConfig.bridge_address,
-          "DOGEOS_WITHDRAWAL_CLEANUP_TIMEOUT_SECS": "3600",
-          "DOGEOS_WITHDRAWAL_DATABASE_URL": "sqlite:///app/data/withdrawal_processor.sqlite",
-          "DOGEOS_WITHDRAWAL_DEBUG_SKIP_TSO_POLLING": "false",
-          "DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__POLL_INTERVAL_MS": "1000",
-          "DOGEOS_WITHDRAWAL_DOGECOIN_INDEXER__START_HEIGHT": String(Math.max(0, dogecoinIndexerStartHeight)),
-          "DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL": dogecoinInternalUrl,
-          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSAGE_QUEUE_ADDRESS": this.getConfigValue("contractsFile.L2_MESSAGE_QUEUE_ADDR"),
-          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
-          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__POLL_INTERVAL_MS": "1000",
-          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL": this.getConfigValue("general.L2_RPC_ENDPOINT"),
-          "DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__START_BLOCK": "0",
-          "DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID": String(this.getConfigValue("ethereumDa.chainId")),
-          "DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL": this.getConfigValue("ethereumDa.submitterRpcUrl"),
-          "DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID": String(this.getConfigValue("general.CHAIN_ID_L2")),
-          "DOGEOS_WITHDRAWAL_ETHEREUM_DA__MIN_FINALITY": this.getConfigValue("ethereumDa.minFinality"),
-          ...buildWithdrawalBlobSourcePrepEnv({
-            beaconRpcUrl: this.getConfigValue("ethereumDa.beaconRpcUrl"),
-            s3KeyPrefix: s3ArchiveEnabled ? s3Archive?.keyPrefix : undefined,
-            s3PublicBaseUrl: s3ArchiveEnabled ? s3PublicBaseUrl : undefined,
-            s3TimeoutMs: s3ArchiveEnabled ? s3Archive?.timeoutMs : undefined,
-            s3TreatForbiddenAsMissing: s3ArchiveEnabled ? s3Archive?.treatForbiddenAsMissing : undefined,
-          }),
-          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_TXID": this.withdrawalProcessorConfig.genesis_sequencer_txid,
-          "DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_VOUT": this.withdrawalProcessorConfig.genesis_sequencer_vout,
-          "DOGEOS_WITHDRAWAL_INITIAL_BRIDGE_REDEEM_SCRIPT_HEX": this.bridgeConfig.redeem_script_hex,
-          "DOGEOS_WITHDRAWAL_L2_BOOTSTRAP_NEXT_STARTING_BLOCK_HEIGHT": this.dogeConfig.defaults?.l2BootstrapNextStartingBlockHeight,
-          "DOGEOS_WITHDRAWAL_LEAF_VERIFICATION_REQUIRED": "false",
-          "DOGEOS_WITHDRAWAL_MAX_DEPOSITS_PER_ADVANCE_L1": "32",
-          "DOGEOS_WITHDRAWAL_MAX_WITHDRAWAL_OUTPUTS_PER_TX": "256",
-          "DOGEOS_WITHDRAWAL_NETWORK_STR": this.withdrawalProcessorConfig.network_str,
-          "DOGEOS_WITHDRAWAL_REQUIRE_CHANGE_TRACKING": "false",
-          "DOGEOS_WITHDRAWAL_ROTATE_SEQUENCER_SIGNER_V2": "false",
-          "DOGEOS_WITHDRAWAL_STRICT_L1_VALIDATION": "false",
-          "DOGEOS_WITHDRAWAL_STRICT_L2_VALIDATION": "false",
-          "DOGEOS_WITHDRAWAL_TSO_TIMEOUT_MINUTES": "30",
-          "DOGEOS_WITHDRAWAL_TSO_URL": "http://tso-service:3000",
-          "DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__ALLOW_INFLIGHT_BRIDGE_OUTPUTS": "true",
-          "DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_MIN_CONFIRMATIONS": "10",
-          "DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__BALANCE_BAND_RATIO": "0.10",
-          "DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__FLOOR_ABSOLUTE_SATS": "1000000",
-          "DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__MAX_BALANCE_ADDITIONS": "3",
-          "DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__SWEEP_FLOOR_RATIO": "0.5",
-          "DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__TARGET_ACTIVE_UTXOS": "100",
-          "DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__TARGET_SIZE_RATIO": "1.0",
-          "DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__DUST_FLOOR_SATS": "1000000",
-          "DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__MAX_INPUTS": "60",
-          "DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__STRATEGY": "band",
-          "DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__HIGH_THRESH_SATS": "10000000000",
-          "DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__PREFER_INFLIGHT_BRIDGE_OUTPUTS": "false",
-          "DOGEOS_WITHDRAWAL_WF_WITHDRAWAL_PARITY_V1": "true",
+
+        // Deployment configuration is TOML-owned: merge the derived facts into
+        // the managed deployment block of the native WithdrawalProcessor.toml.
+        // Operator tuning of other keys inside that block survives the merge.
+        const { defaults, deletePaths, facts } = buildWithdrawalDeploymentFacts({
+          bridgeAddress: this.withdrawalProcessorConfig.bridge_address,
+          dogecoinIndexerStartHeight,
+          dogecoinRpcUrl: dogecoinInternalUrl,
+          ethereumDa: {
+            beaconRpcUrl: this.getConfigValue('ethereumDa.beaconRpcUrl'),
+            ethChainId: this.getConfigValue('ethereumDa.chainId'),
+            expectedBatcherAddress: this.getConfigValue('accounts.L1_COMMIT_SENDER_ADDR'),
+            inboxWorkerStartBlock: this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock,
+            l1RpcUrl: this.getConfigValue('ethereumDa.submitterRpcUrl'),
+            l2ChainId: this.getConfigValue('general.CHAIN_ID_L2'),
+            minFinality: this.getConfigValue('ethereumDa.minFinality'),
+            s3: {
+              enabled: s3ArchiveEnabled,
+              keyPrefix: s3Archive?.keyPrefix,
+              publicBaseUrl: s3PublicBaseUrl,
+              timeoutMs: s3Archive?.timeoutMs,
+              treatForbiddenAsMissing: s3Archive?.treatForbiddenAsMissing,
+            },
+          },
+          genesisSequencerTxid: this.withdrawalProcessorConfig.genesis_sequencer_txid,
+          genesisSequencerVout: this.withdrawalProcessorConfig.genesis_sequencer_vout,
+          initialBridgeRedeemScriptHex: this.bridgeConfig.redeem_script_hex,
+          l2BootstrapNextStartingBlockHeight: this.dogeConfig.defaults?.l2BootstrapNextStartingBlockHeight,
+          l2MessageQueueAddress: this.getConfigValue('contractsFile.L2_MESSAGE_QUEUE_ADDR'),
+          l2MessengerAddress: this.getConfigValue('contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR'),
+          l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),
+          networkStr: this.withdrawalProcessorConfig.network_str,
+        })
+
+        const nativeConfigPath = path.resolve(path.dirname(path.resolve(valuesDir)), WITHDRAWAL_NATIVE_CONFIG_RELPATH)
+        const nativeConfigExisted = fs.existsSync(nativeConfigPath)
+        // Legacy layouts embed the TOML in values: seed the native file from it
+        // once, then drop the inline copy (helm --set-file supplies the key).
+        const inlineSource = removeInlineWithdrawalConfig(productionYaml)
+        if (inlineSource !== undefined) {
+          if (nativeConfigExisted) {
+            this.jsonCtx.addWarning(`withdrawal-processor: dropping inline configMaps ${WITHDRAWAL_CONFIG_FILE}; ${nativeConfigPath} is the source of truth`)
+          }
+
+          changes.push({
+            key: `configMaps.config.data.${WITHDRAWAL_CONFIG_FILE}`,
+            newValue: `owned by ${nativeConfigPath}`,
+            oldValue: 'inline TOML',
+          })
+          updated = true
         }
 
-        const legacyProofChanges = scrubWithdrawalLegacyProofEnv(productionYaml)
-        if (legacyProofChanges.length > 0) {
-          changes.push(...legacyProofChanges)
+        const previousSource = nativeConfigExisted
+          ? fs.readFileSync(nativeConfigPath, 'utf8')
+          : (inlineSource ?? defaultWithdrawalConfigToml())
+        const mergedSource = mergeWithdrawalManagedDeploymentBlock(previousSource, facts, { defaults, deletePaths })
+        if (!nativeConfigExisted || mergedSource !== previousSource) {
+          fs.mkdirSync(path.dirname(nativeConfigPath), { recursive: true })
+          fs.writeFileSync(nativeConfigPath, mergedSource)
+          this.jsonCtx.info(`withdrawal-processor: ${nativeConfigExisted ? 'updated' : 'created'} ${nativeConfigPath}`)
+        }
+
+        const wiringBefore = JSON.stringify([
+          productionYaml.args,
+          productionYaml.configMaps?.config,
+          productionYaml.persistence?.['withdrawal-processor-config'],
+        ])
+        ensureWithdrawalChartWiring(productionYaml)
+        if (wiringBefore !== JSON.stringify([
+          productionYaml.args,
+          productionYaml.configMaps?.config,
+          productionYaml.persistence?.['withdrawal-processor-config'],
+        ])) {
+          changes.push({ key: 'withdrawal-processor config wiring', newValue: 'canonical --config arg, ConfigMap, and mount', oldValue: 'non-canonical' })
+          updated = true
+        }
+
+        const migratedEnvChanges = stripMigratedWithdrawalEnv(productionYaml)
+        if (migratedEnvChanges.length > 0) {
+          changes.push(...migratedEnvChanges)
           updated = true
         }
 
@@ -2634,61 +2665,6 @@ export default class SetupPrepCharts extends Command {
             oldValue: 'missing or non-canonical activation projection',
           })
           updated = true
-        }
-
-        const ethereumDaEmbeddedIndexerStartBlock = this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock
-        if (ethereumDaEmbeddedIndexerStartBlock !== undefined && String(ethereumDaEmbeddedIndexerStartBlock).trim() !== '') {
-          todoMappings.DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__START_BLOCK = String(ethereumDaEmbeddedIndexerStartBlock)
-        }
-
-        const expectedBatcherAddress = this.getConfigValue('accounts.L1_COMMIT_SENDER_ADDR')
-        if (expectedBatcherAddress) {
-          todoMappings.DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__EXPECTED_BATCHERS = JSON.stringify([expectedBatcherAddress])
-        }
-
-        const blobSourceChanges = removeEnvArrayKeys(productionYaml, [
-          'DOGEOS_WITHDRAWAL_BRIDGE_SCRIPT_HEX',
-          'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__KIND',
-        ])
-        if (blobSourceChanges.length > 0) {
-          changes.push(...blobSourceChanges)
-          updated = true
-        }
-
-        if (!s3ArchiveEnabled) {
-          const staleS3Changes = removeEnvArrayKeys(productionYaml, [
-            'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__KEY_PREFIX',
-            'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS',
-            'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING',
-            'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL',
-          ])
-          if (staleS3Changes.length > 0) {
-            changes.push(...staleS3Changes)
-            updated = true
-          }
-        }
-
-        for (const [envKey, newVal] of Object.entries(todoMappings)) {
-          if (newVal === undefined || newVal === null || String(newVal).trim() === '') continue
-
-          const envVar = productionYaml.env.find((item: any) => item.name === envKey);
-          if (envVar) {
-            if (envVar.value !== newVal || envVar.valueFrom) {
-              const oldValue = envVar.value ?? JSON.stringify(envVar.valueFrom ?? 'undefined');
-              if (envKey === 'DOGEOS_WITHDRAWAL_DATABASE_URL' && envVar.valueFrom) {
-                this.jsonCtx.addWarning('withdrawal-processor: replacing secret-backed DOGEOS_WITHDRAWAL_DATABASE_URL with sqlite:///app/data/withdrawal_processor.sqlite for local chart storage')
-              }
-
-              delete envVar.valueFrom;
-              envVar.value = newVal;
-              updated = true;
-              changes.push({ key: `env.${envKey}`, newValue: newVal, oldValue });
-            }
-          } else {
-            productionYaml.env.push({ name: envKey, value: newVal });
-            updated = true;
-            changes.push({ key: `env.${envKey}`, newValue: newVal, oldValue: 'undefined' });
-          }
         }
 
         // Rebuild all TSO signers so stale roles do not remain.

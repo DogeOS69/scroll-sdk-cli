@@ -81,6 +81,49 @@ describe('proof-coordinator-scaffold', () => {
     expect(parsed.materializer.bridge.advance_l2).to.equal(true)
   })
 
+  it('prefers the native WithdrawalProcessor.toml over values env', () => {
+    writeWithdrawalValues(root, { DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL: 'http://stale-env:8545' })
+    const nativePath = path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml')
+    fs.mkdirSync(path.dirname(nativePath), { recursive: true })
+    fs.writeFileSync(nativePath, `network_str = "testnet"
+dogecoin_rpc_url = "http://dogecoin:22555"
+
+[dogeos_indexer]
+rpc_url = "http://l2-rpc-from-toml:8545"
+
+[ethereum_da]
+l1_rpc_url = "https://ethereum.example.com"
+eth_chain_id = 11155111
+l2_chain_id = 12345
+
+[ethereum_da.blob_source]
+timeout_ms = 10000
+
+[ethereum_da.blob_source.aws_s3]
+url = "https://blob-archive.example.com"
+key_prefix = "blobs"
+`)
+    const configFile = path.join(root, 'proof-coordinator/ProofCoordinator.toml')
+
+    scaffoldProofCoordinatorConfig({ coordinatorConfigPath: configFile, valuesDir: path.join(root, 'values') })
+    const parsed = toml.parse(fs.readFileSync(configFile, 'utf8')) as any
+    expect(parsed.materializer.scroll_batch.subprocess.l2_rpc_url).to.equal('http://l2-rpc-from-toml:8545')
+    expect(parsed.materializer.bridge.ethereum_da.blob_source.aws_s3.url).to.equal('https://blob-archive.example.com')
+  })
+
+  it('names the offending TOML key when the native config has placeholders', () => {
+    const nativePath = path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml')
+    fs.mkdirSync(path.dirname(nativePath), { recursive: true })
+    fs.writeFileSync(nativePath, `network_str = "<TODO>"
+dogecoin_rpc_url = "http://dogecoin:22555"
+`)
+
+    expect(() => scaffoldProofCoordinatorConfig({
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      valuesDir: path.join(root, 'values'),
+    })).to.throw('network_str is an unresolved placeholder')
+  })
+
   it('falls back to a beacon node blob source when no S3 archive is configured', () => {
     writeWithdrawalValues(root, {
       DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__KEY_PREFIX: undefined,
