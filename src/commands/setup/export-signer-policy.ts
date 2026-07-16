@@ -108,6 +108,9 @@ export class ExportSignerPolicyCommand extends Command {
       const envLines = [
         '# Post-genesis production policy for a partner-operated attestation-signer.',
         '# Apply next to your existing ATTESTATION_SIGNER_WIF / KMS settings and restart.',
+        '# Overrides the pre-genesis staging_scaffold mode: the signer now enforces',
+        '# the fail-closed production policy against this bridge identity.',
+        'ATTESTATION_SIGNER_POLICY_MODE=production_enforce',
         `ATTESTATION_SIGNER_NETWORK=${config.network}`,
         `ATTESTATION_SIGNER_PROTOCOL_INSTANCE_ID=${protocolInstanceId}`,
         `ATTESTATION_SIGNER_BRIDGE_NAMESPACE_ID=${bridgeNamespaceId}`,
