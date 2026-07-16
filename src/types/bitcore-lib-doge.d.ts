@@ -23,7 +23,11 @@ declare module 'bitcore-lib-doge' {
   }
 
   export class PublicKey {
+    compressed: boolean
+
+    static fromString(str: string): PublicKey
     toAddress(): Address
+    toString(): string
   }
 
   export class Script {

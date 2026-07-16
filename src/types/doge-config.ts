@@ -25,8 +25,20 @@ export interface DogeConfig {
   }
   attestationSigner?: {
     activeSignerIds: string[]
-    backend: 'aws_kms' | 'local'
-    instances: Array<{
+    /** Legacy in-cluster provisioning only; absent for external signers. */
+    backend?: 'aws_kms' | 'local'
+    /**
+     * Partner-operated signers imported from attestation-signer descriptors.
+     * The bridge operator never deploys these; endpoints are wired into TSO
+     * and publicKeys into the bridge redeem script.
+     */
+    external?: Array<{
+      endpoint: string
+      id: string
+      publicKey: string
+    }>
+    /** Legacy in-cluster provisioning only; absent for external signers. */
+    instances?: Array<{
       expectedSignerId: string
       id: string
       index: number
@@ -49,7 +61,10 @@ export interface DogeConfig {
       networkAlias?: string
       region: string
     }
-    profile: 'production-kms' | 'staging-kms' | 'staging-local'
+    /** 'external' = partner-operated signers (descriptor-imported); legacy in-cluster configs omit this. */
+    mode?: 'external'
+    /** Legacy in-cluster provisioning only; absent for external signers. */
+    profile?: 'production-kms' | 'staging-kms' | 'staging-local'
     threshold: number
   }
   bootnodeReth?: {

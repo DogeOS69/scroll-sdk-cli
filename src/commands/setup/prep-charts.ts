@@ -133,13 +133,16 @@ export function applyAttestationSignerNetwork(
 export function applyAttestationSignerRuntimeValues(
   productionYaml: any,
   network: string,
-  signerConfig: (Partial<NonNullable<DogeConfig['attestationSigner']>> & Pick<NonNullable<DogeConfig['attestationSigner']>, 'backend' | 'profile'>) | undefined,
+  signerConfig: Partial<NonNullable<DogeConfig['attestationSigner']>> | undefined,
   instanceIndex: number
 ): PrepChartChange[] {
   const changes = applyAttestationSignerNetwork(productionYaml, network)
   removeChartResourceNameOverrides(productionYaml)
   const { attestationSigner } = productionYaml
   if (!attestationSigner || typeof attestationSigner !== 'object' || !signerConfig) return changes
+  // External (partner-operated) signers are never rendered as local chart
+  // values — their endpoints reach TSO via tsoSigners and nothing else.
+  if (signerConfig.mode === 'external' || !signerConfig.backend || !signerConfig.profile) return changes
 
   const secretName = `attestation-signer-${instanceIndex}-env`
   const instanceIdentity = signerConfig.instances?.find(item => item.index === instanceIndex)
