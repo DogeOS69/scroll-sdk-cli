@@ -148,7 +148,23 @@ export interface SignerHealthReport {
  */
 export async function fetchSignerHealth(endpoint: string, timeoutMs = 10_000): Promise<SignerHealthReport> {
   const url = `${normalizeSignerEndpoint(endpoint, 'endpoint')}/health`
-  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+  let response: Response
+  try {
+    response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+  } catch (error) {
+    // Node's fetch reports bare "fetch failed" and hides the real reason
+    // (DNS, refused connection, TLS) in error.cause — surface it, because
+    // connectivity triage is exactly what preflight exists for.
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      throw new Error(`GET ${url} timed out after ${timeoutMs}ms (endpoint unreachable from this network?)`)
+    }
+
+    const cause = error instanceof Error && error.cause instanceof Error ? error.cause : undefined
+    const causeCode = cause && 'code' in cause && typeof cause.code === 'string' ? cause.code : undefined
+    const detail = cause ? `${causeCode ? `${causeCode}: ` : ''}${cause.message}` : (error instanceof Error ? error.message : String(error))
+    throw new Error(`GET ${url} failed: ${detail} (check DNS, connectivity, and TLS from this network)`)
+  }
+
   if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}`)
   const body = await response.json() as Record<string, unknown>
   const publicKey = body.public_key

@@ -1,11 +1,13 @@
 import { expect } from 'chai'
 import fs from 'node:fs'
+import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 
 import {
   ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA,
   assertCompressedSecp256k1PublicKey,
+  fetchSignerHealth,
   loadAttestationSignerDescriptor,
   normalizeSignerEndpoint,
   validateAttestationSignerDescriptor,
@@ -66,6 +68,35 @@ describe('attestation-signer descriptor contract', () => {
     expect(() => validateAttestationSignerDescriptor({ ...validDescriptor(), id: 'Bad_Id' }, 'test')).to.throw(/DNS-label/)
     expect(() => validateAttestationSignerDescriptor({ ...validDescriptor(), id: '-lead' }, 'test')).to.throw(/DNS-label/)
     expect(() => validateAttestationSignerDescriptor({ ...validDescriptor(), network: 'devnet' }, 'test')).to.throw(/network must be one of/)
+  })
+
+  it('probes /health, extracts the public key, and reports actionable connectivity errors', async () => {
+    const server = http.createServer((req, res) => {
+      if (req.url === '/health') {
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({ network: 'testnet', public_key: VALID_PUBKEY }))
+      } else {
+        res.statusCode = 404
+        res.end()
+      }
+    })
+    await new Promise<void>(resolve => { server.listen(0, '127.0.0.1', resolve) })
+    const { port } = server.address() as { port: number }
+    try {
+      const health = await fetchSignerHealth(`http://127.0.0.1:${port}`)
+      expect(health.publicKey).to.equal(VALID_PUBKEY)
+      expect(health.network).to.equal('testnet')
+    } finally {
+      await new Promise(resolve => { server.close(resolve) })
+    }
+
+    // Closed port must surface the cause, not a bare "fetch failed".
+    try {
+      await fetchSignerHealth(`http://127.0.0.1:${port}`)
+      expect.fail('expected fetchSignerHealth to reject on a closed port')
+    } catch (error) {
+      expect((error as Error).message).to.match(/GET http.*failed/).and.to.match(/check DNS, connectivity/)
+    }
   })
 
   it('loads and validates a descriptor file from disk', () => {
