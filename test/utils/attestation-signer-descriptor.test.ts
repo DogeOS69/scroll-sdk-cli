@@ -46,6 +46,13 @@ describe('attestation-signer descriptor contract', () => {
     expect(() => assertCompressedSecp256k1PublicKey(`02${'ff'.repeat(32)}`, 'test')).to.throw(/not a valid secp256k1 point/)
   })
 
+  it('rejects a descriptor still carrying the signer-init endpoint placeholder', () => {
+    expect(() => validateAttestationSignerDescriptor(
+      { ...validDescriptor(), endpoint: 'https://REPLACE-WITH-YOUR-SIGNER-ENDPOINT' },
+      'test'
+    )).to.throw(/placeholder/)
+  })
+
   it('rejects endpoints with paths, queries, credentials, or non-http schemes', () => {
     expect(() => normalizeSignerEndpoint('https://a.example/sign', 'test')).to.throw(/bare base URL/)
     expect(() => normalizeSignerEndpoint('https://a.example/?x=1', 'test')).to.throw(/bare base URL/)

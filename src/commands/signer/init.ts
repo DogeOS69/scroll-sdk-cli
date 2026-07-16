@@ -7,13 +7,12 @@ import path from 'node:path'
 import {
   ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA,
   ATTESTATION_SIGNER_NETWORKS,
+  ENDPOINT_PLACEHOLDER,
   normalizeSignerEndpoint,
 } from '../../utils/attestation-signer-descriptor.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 
 const { Networks, PrivateKey } = bitcore
-
-const ENDPOINT_PLACEHOLDER = 'https://REPLACE-WITH-YOUR-SIGNER-ENDPOINT'
 
 function generateWif(network: string): string {
   const selected = network === 'mainnet'

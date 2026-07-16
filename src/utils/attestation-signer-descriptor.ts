@@ -58,12 +58,24 @@ export function assertCompressedSecp256k1PublicKey(value: string, source: string
   return normalized
 }
 
+/**
+ * Placeholder written by `signer init` when --endpoint is not known yet.
+ * It is a syntactically valid URL, so validation must reject it explicitly —
+ * otherwise a forgotten placeholder descriptor would import cleanly and put
+ * a junk endpoint into tsoSigners.
+ */
+export const ENDPOINT_PLACEHOLDER = 'https://REPLACE-WITH-YOUR-SIGNER-ENDPOINT'
+
 export function normalizeSignerEndpoint(value: string, source: string): string {
   let url: URL
   try {
     url = new URL(value)
   } catch {
     throw new Error(`${source}: endpoint must be an absolute http(s) URL`)
+  }
+
+  if (url.hostname === new URL(ENDPOINT_PLACEHOLDER).hostname) {
+    throw new Error(`${source}: endpoint is still the signer-init placeholder; run scrollsdk signer preflight --endpoint <real-url> to finalize the descriptor`)
   }
 
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
