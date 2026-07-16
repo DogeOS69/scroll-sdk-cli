@@ -5,9 +5,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import {
+  createKmsSigningKey,
+  fetchKmsCompressedPublicKey,
+} from '../../utils/attestation-kms.js'
+import {
   ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA,
   ATTESTATION_SIGNER_NETWORKS,
   ENDPOINT_PLACEHOLDER,
+  assertCompressedSecp256k1PublicKey,
   normalizeSignerEndpoint,
 } from '../../utils/attestation-signer-descriptor.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
@@ -26,18 +31,24 @@ function generateWif(network: string): string {
 }
 
 export class SignerInitCommand extends Command {
-  static description = 'Signer-operator tool: generate a local attestation-signer key and emit the descriptor to hand to the bridge operator. Run this on YOUR infrastructure — the private key never leaves the output directory. For an AWS KMS backend, create the key yourself and use `scrollsdk signer preflight` against the running signer to emit the descriptor instead.'
+  static description = 'Signer-operator tool: set up key material and emit the descriptor + a complete deployment env file. Run this on YOUR infrastructure — secrets and AWS calls never leave it. Backends: local (generates a WIF) or aws-kms (uses your KMS key; --create-key can create one for you). The output directory is the single source of truth for the rest of the flow — signer preflight reads it via --dir.'
 
   static examples = [
     '$ scrollsdk signer init --id partner-a-signer-0 --network testnet --endpoint https://signer.partner-a.example:4040',
-    '$ scrollsdk signer init --id partner-a-signer-0 --network mainnet --out ./my-signer',
+    '$ scrollsdk signer init --id partner-a-signer-0 --network mainnet --backend aws-kms --kms-key-id arn:aws:kms:... --kms-region us-east-1',
+    '$ scrollsdk signer init --id partner-a-signer-0 --network testnet --backend aws-kms --create-key --kms-region us-east-1',
   ]
 
   static flags = {
+    'aws-profile': Flags.string({ description: 'AWS CLI profile for KMS calls (aws-kms backend)' }),
+    backend: Flags.string({ default: 'local', description: 'Key backend', options: ['local', 'aws-kms'] }),
+    'create-key': Flags.boolean({ default: false, description: 'aws-kms backend: create the ECC_SECG_P256K1 signing key in your AWS account instead of passing --kms-key-id' }),
     endpoint: Flags.string({ description: 'Public HTTPS base URL where the bridge operator and TSO will reach this signer (can be filled in later via signer preflight)' }),
-    force: Flags.boolean({ default: false, description: 'Overwrite existing key material in the output directory' }),
+    force: Flags.boolean({ default: false, description: 'Overwrite an existing env file in the output directory' }),
     id: Flags.string({ description: 'Stable signer identifier (DNS-label shaped, agreed with the bridge operator)', required: true }),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
+    'kms-key-id': Flags.string({ description: 'aws-kms backend: key id, ARN, or alias/... of your existing ECC_SECG_P256K1 signing key' }),
+    'kms-region': Flags.string({ description: 'aws-kms backend: AWS region of the key' }),
     network: Flags.string({ default: 'testnet', description: 'Dogecoin network', options: [...ATTESTATION_SIGNER_NETWORKS] }),
     out: Flags.string({ description: 'Output directory (default: ./signer-<id>)' }),
   }
@@ -51,19 +62,70 @@ export class SignerInitCommand extends Command {
       const descriptorFile = path.join(outDir, 'descriptor.json')
       fs.mkdirSync(outDir, { recursive: true })
 
-      let wif: string
-      const existing = fs.existsSync(secretFile)
-        ? fs.readFileSync(secretFile, 'utf8').match(/^ATTESTATION_SIGNER_WIF=(.+)$/m)?.[1]
-        : undefined
-      if (existing && !flags.force) {
-        wif = existing
-        json.logSuccess(`Reusing existing key material in ${secretFile}`)
+      const backendLines: string[] = []
+      let publicKey: string
+      let kmsKeyId: string | undefined
+      if (flags.backend === 'aws-kms') {
+        if (!flags['kms-region']) throw new Error('--kms-region is required with --backend aws-kms')
+        if (flags['create-key'] && flags['kms-key-id']) throw new Error('--create-key and --kms-key-id are mutually exclusive')
+        if (fs.existsSync(secretFile) && !flags.force) {
+          throw new Error(`${secretFile} already exists; pass --force to regenerate it (the KMS key itself is never touched)`)
+        }
+
+        kmsKeyId = flags['create-key']
+          ? createKmsSigningKey(`dogeos attestation signer ${flags.id}`, flags['kms-region'], flags['aws-profile'])
+          : flags['kms-key-id']
+        if (!kmsKeyId) throw new Error('pass --kms-key-id (or --create-key to create one) with --backend aws-kms')
+        if (flags['create-key']) json.logSuccess(`Created KMS signing key ${kmsKeyId}`)
+
+        publicKey = assertCompressedSecp256k1PublicKey(
+          fetchKmsCompressedPublicKey(kmsKeyId, flags['kms-region'], flags['aws-profile']),
+          'derived KMS public key'
+        )
+        backendLines.push(
+          'ATTESTATION_SIGNER_BACKEND=aws_kms',
+          `ATTESTATION_SIGNER_KMS_KEY_ID=${kmsKeyId}`,
+          `ATTESTATION_SIGNER_KMS_REGION=${flags['kms-region']}`,
+          `ATTESTATION_SIGNER_KMS_EXPECTED_SIGNER_ID=${publicKey}`,
+          '# The container needs AWS credentials with kms:Sign + kms:GetPublicKey on',
+          '# this key: an instance role, or uncomment static keys below.',
+          '# AWS_ACCESS_KEY_ID=',
+          '# AWS_SECRET_ACCESS_KEY=',
+        )
       } else {
-        wif = generateWif(flags.network)
-        fs.writeFileSync(secretFile, `ATTESTATION_SIGNER_WIF=${wif}\n`, { mode: 0o600 })
+        for (const flag of ['kms-key-id', 'create-key'] as const) {
+          if (flags[flag]) throw new Error(`--${flag} requires --backend aws-kms`)
+        }
+
+        let wif: string
+        const existing = fs.existsSync(secretFile)
+          ? fs.readFileSync(secretFile, 'utf8').match(/^ATTESTATION_SIGNER_WIF=(.+)$/m)?.[1]
+          : undefined
+        if (existing && !flags.force) {
+          wif = existing
+          json.logSuccess(`Reusing existing key material in ${secretFile}`)
+        } else {
+          wif = generateWif(flags.network)
+        }
+
+        publicKey = PrivateKey.fromWIF(wif).toPublicKey().toString().toLowerCase()
+        backendLines.push('ATTESTATION_SIGNER_BACKEND=local', `ATTESTATION_SIGNER_WIF=${wif}`)
       }
 
-      const publicKey = PrivateKey.fromWIF(wif).toPublicKey().toString().toLowerCase()
+      // A complete deployment env: point the compose env_file directly at
+      // this file (or copy it next to docker-compose.yml) — nothing else to
+      // assemble by hand. staging_scaffold is mandatory pre-genesis; the
+      // bridge operator's policy bundle flips it to production_enforce.
+      const envLines = [
+        `# Generated by scrollsdk signer init (${flags.id}). SECRET for the local`,
+        '# backend — this file configures the signer\'s only key.',
+        ...backendLines,
+        `ATTESTATION_SIGNER_NETWORK=${flags.network}`,
+        'ATTESTATION_SIGNER_POLICY_MODE=staging_scaffold',
+        'ATTESTATION_SIGNER_TSO_URL=http://tso-not-yet-configured.invalid',
+      ]
+      fs.writeFileSync(secretFile, `${envLines.join('\n')}\n`, { mode: 0o600 })
+
       const endpoint = flags.endpoint ? normalizeSignerEndpoint(flags.endpoint, '--endpoint') : ENDPOINT_PLACEHOLDER
       const descriptor = {
         endpoint,
@@ -74,13 +136,14 @@ export class SignerInitCommand extends Command {
       }
       fs.writeFileSync(descriptorFile, `${JSON.stringify(descriptor, null, 2)}\n`)
 
-      const result = { descriptorFile, endpoint, id: flags.id, publicKey, secretFile }
+      const result = { backend: flags.backend, descriptorFile, endpoint, id: flags.id, kmsKeyId, publicKey, secretFile }
       if (flags.json) json.success(result)
       else {
-        this.log(chalk.green(`Key material written to ${secretFile} (keep this private; it is the signer's only secret).`))
+        this.log(chalk.green(`Deployment env written to ${secretFile}${flags.backend === 'local' ? ' (keep this private; it holds the signing key)' : ''}.`))
         this.log(chalk.green(`Descriptor written to ${descriptorFile} — send THIS file to the bridge operator.`))
+        this.log(chalk.green(`Next: deploy the signer, then run \`scrollsdk signer preflight --dir ${path.relative(process.cwd(), outDir) || '.'} --endpoint <url>\`.`))
         if (endpoint === ENDPOINT_PLACEHOLDER) {
-          this.log(chalk.yellow('Endpoint is a placeholder. After deploying the signer, run `scrollsdk signer preflight --endpoint <url> ...` to verify it and finalize the descriptor.'))
+          this.log(chalk.yellow('Endpoint is a placeholder; signer preflight will fill it in after deployment.'))
         }
       }
     } catch (error) {

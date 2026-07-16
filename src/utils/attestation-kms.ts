@@ -1,6 +1,34 @@
+import { execFileSync } from 'node:child_process'
 import { createPublicKey } from 'node:crypto'
 
 import type { KmsSignerProvisionRole } from './kms-signer-provisioner.js'
+
+function awsCli(args: string[], profile?: string): string {
+  const fullArgs = [...args]
+  if (profile) fullArgs.push('--profile', profile)
+  try {
+    return execFileSync('aws', fullArgs, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+  } catch (error) {
+    const stderr = (error as { stderr?: string }).stderr?.trim()
+    throw new Error(`aws ${args.slice(0, 2).join(' ')} failed${stderr ? `: ${stderr}` : ''} (is the AWS CLI installed and are your credentials configured?)`)
+  }
+}
+
+/**
+ * Signer-operator helpers: run with the OPERATOR's AWS credentials against
+ * their own account; nothing here touches bridge-operator infrastructure.
+ */
+export function fetchKmsCompressedPublicKey(keyId: string, region: string, profile?: string): string {
+  const spkiBase64 = awsCli(['kms', 'get-public-key', '--key-id', keyId, '--region', region, '--query', 'PublicKey', '--output', 'text'], profile)
+  return deriveCompressedSecp256k1PublicKeyFromSpkiDer(spkiBase64)
+}
+
+export function createKmsSigningKey(description: string, region: string, profile?: string): string {
+  const output = awsCli(['kms', 'create-key', '--key-spec', 'ECC_SECG_P256K1', '--key-usage', 'SIGN_VERIFY', '--description', description, '--region', region, '--output', 'json'], profile)
+  const arn = JSON.parse(output)?.KeyMetadata?.Arn
+  if (typeof arn !== 'string' || arn === '') throw new Error('aws kms create-key returned no KeyMetadata.Arn')
+  return arn
+}
 
 function base64UrlToBuffer(value: string): Buffer {
   const normalized = value.replaceAll('-', '+').replaceAll('_', '/')
