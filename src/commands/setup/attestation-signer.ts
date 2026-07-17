@@ -26,16 +26,16 @@ export class AttestationSignerCommand extends Command {
   static description = 'Import partner-operated attestation-signer descriptors and select the bootstrap bridge keyset. Signers are deployed by their operators (see `scrollsdk signer init` / `scrollsdk signer preflight`); this command only consumes descriptor files — endpoint + public key — and never provisions keys or Kubernetes releases.'
 
   static examples = [
+    '$ scrollsdk setup attestation-signer --threshold 2 --probe',
     '$ scrollsdk setup attestation-signer --descriptor partner-a.json --descriptor partner-b.json --descriptor ours.json --threshold 2',
     '$ scrollsdk setup attestation-signer --descriptor-dir descriptors/ --threshold 3 --active-signer-ids partner-a,partner-b,ours-0',
-    '$ scrollsdk setup attestation-signer --descriptor-dir descriptors/ --threshold 2 --probe',
   ]
 
   static flags = {
     'active-signer-ids': Flags.string({ description: 'Comma-separated signer IDs entering initial bridge setup (default: every imported descriptor)' }),
     config: Flags.string({ char: 'c', description: 'Path to doge-config.toml' }),
     descriptor: Flags.string({ description: 'attestation-signer-descriptor JSON file; repeat per signer', multiple: true }),
-    'descriptor-dir': Flags.string({ description: 'Directory whose *.json files are all loaded as descriptors' }),
+    'descriptor-dir': Flags.string({ description: 'Directory whose *.json files are all loaded as descriptors (default: descriptors/ when it exists and no --descriptor is given)' }),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
     probe: Flags.boolean({ default: false, description: 'GET each signer /health and require the runtime public key to match the descriptor before accepting it' }),
     threshold: Flags.string({ description: 'Initial bridge attestation threshold (T of the active set)' }),
@@ -97,13 +97,22 @@ export class AttestationSignerCommand extends Command {
 
   private loadDescriptors(flags: { descriptor?: string[]; 'descriptor-dir'?: string }): AttestationSignerDescriptor[] {
     const files = (flags.descriptor || []).map(item => path.resolve(item))
-    if (flags['descriptor-dir']) {
-      const dir = path.resolve(flags['descriptor-dir'])
+    // Conventional working-directory layout: collected descriptors live in
+    // descriptors/, so an explicit flag is only needed for other layouts.
+    const defaultDir = path.resolve('descriptors')
+    const descriptorDir = flags['descriptor-dir']
+      ?? (files.length === 0 && fs.existsSync(defaultDir) && fs.statSync(defaultDir).isDirectory() ? defaultDir : undefined)
+    if (descriptorDir) {
+      const dir = path.resolve(descriptorDir)
       if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error(`--descriptor-dir ${dir} is not a directory`)
       files.push(...fs.readdirSync(dir).filter(name => name.endsWith('.json')).sort().map(name => path.join(dir, name)))
     }
 
-    if (files.length === 0) throw new Error('Provide at least one signer via --descriptor or --descriptor-dir')
+    if (files.length === 0) {
+      throw new Error(descriptorDir
+        ? `no descriptor *.json files found in ${descriptorDir}`
+        : 'Provide at least one signer via --descriptor or --descriptor-dir (no descriptors/ directory found in the working directory)')
+    }
 
     const descriptors = files.map(file => loadAttestationSignerDescriptor(file))
     const ids = new Set<string>()

@@ -528,8 +528,27 @@ run:
 
 ```bash
 scrollsdk setup proof-config \
-  --signer-proof-artifact-base-url https://proofs.example.com/dogeos-proof-artifacts/testnet/o3o
+  --proof-artifact-base-url https://proofs.example.com/dogeos-proof-artifacts/testnet/o3o
 ```
+
+The base URL is only required on the first run; re-runs (for example
+`setup proof-config --enable-withdrawal-proof`) reuse the value the first run
+staged into the WithdrawalProcessor.toml proof block.
+
+`--proving-mode mock` stages the dev_dummy topology instead (persisted to
+doge-config `[proofSystem].provingMode`): no release artifacts are required,
+the three program manifests are synthesized from the canonical mock identities
+(mirroring the dogeos-core e2e strict-withdrawal topology), the coordinator
+verifier runs `dev_dummy`, and a `prover-worker-mock/docker-compose/` bundle is
+generated (coordinator URL from config.toml `[ingress].PROOF_COORDINATOR_HOST`,
+worker token from Secrets Manager). Same services, same wiring, deterministic
+NON-cryptographic proofs — never use it on a value-bearing bridge.
+
+All conventional paths are resolved from one deployment root. Run the command
+there with no path flags, or pass only `--deployment-dir /path/to/deployment`
+when invoking it elsewhere. `--artifact-manifest`, `--program-manifest`,
+`--coordinator-config`, `--withdrawal-config`, and `--values-dir` are migration
+escape hatches for non-standard layouts, not ordinary workflow inputs.
 
 With the standard deployment layout, it discovers:
 
@@ -539,6 +558,7 @@ proof-artifacts/manifests/scroll-chunk.json
 proof-artifacts/manifests/scroll-batch.json
 proof-artifacts/manifests/bridge-transition.json
 proof-coordinator/ProofCoordinator.toml
+withdrawal-processor/WithdrawalProcessor.toml
 values/proof-coordinator-production.yaml
 values/withdrawal-processor-production.yaml
 ```
@@ -595,7 +615,7 @@ backends. The CLI does not invent those deployment choices.
 
 After validation, the command replaces only the marked verifier block in
 `proof-coordinator/ProofCoordinator.toml` and only the marked proof block in the
-embedded `WithdrawalProcessor.toml`. It embeds the three program manifests,
+native `withdrawal-processor/WithdrawalProcessor.toml`. It embeds the three program manifests,
 generates `/app/data/manifests/statement-namespace.json` from the same Scroll
 chunk/batch manifests, injects the release-validated raw chunk commitment for
 the coordinator subprocess backend, configures the shared proof-work token,
@@ -620,26 +640,30 @@ passed their own preflight. Once those preflights pass, an automation-friendly
 `--enable-withdrawal-proof` flag flips the switch in the same run instead of a
 manual values edit.
 
-## Attestation-signer projection
+## Partner attestation-signer policy
 
-The same run projects the signer envelope policy into
-`values/attestation-signer-production.yaml` (the prep-charts template) and every
-expanded `attestation-signer-production-<N>.yaml`:
+`proof-config` deliberately does not read or write attestation-signer Helm
+values: that deployment shape is retired. It validates that the two verifier
+triples crossing the signer boundary can be exported, then stages the same
+identities in WP and proof-coordinator. After bridge genesis, run
+`scrollsdk setup export-signer-policy`; it derives
+`proof_kind:verifier_id:vk_hash` from the managed coordinator block and writes
+`signer-policy-bundle/` for every partner-operated docker-compose signer. This
+keeps proof identity in one source of truth without requiring a skip flag.
 
-- `envelopePolicy.allowedProofTriples` is rendered from the identical release
-  identities staged into WP and proof-coordinator, as
-  `proof_kind:verifier_id:vk_hash` CSV tokens for the two families that cross
-  the signer boundary (`openvm_state_transition` for the bridge state
-  transition, `scroll_batch` for the inner batch proof).
-- `envelopePolicy.maxProofArtifacts` is raised to a working cap (4) when still
-  at the deny-by-default `0`; an operator-raised cap is preserved.
-- `proofArtifact.fetchMode` is switched to `http`.
+The bundle inherits the proving mode persisted by `setup proof-config` and
+contains `PARTNER-COMMANDS.md` with the resolved signer endpoints, TSO callback
+URL, proof-object GET root, partner compose commands, and bridge-side K8s probe.
+Partners run the same descriptor/policy/network workflow in both modes. Mock
+selects the e2e_harness-compatible audited `staging_scaffold` posture;
+production selects fail-closed `production_enforce` and requires the partner's
+operator-owned env to pin the approved signer release version, full git commit,
+and signing-policy version.
 
-Writing the template keeps the projection stable across `prep-charts` re-runs;
-writing the instances makes it effective without another prep-charts pass.
-Re-deploy the signer releases afterwards (`make install-attestation-signers`).
-Pass `--skip-attestation-signers` only when signer envelope policy is managed
-elsewhere.
+Both modes export `ATTESTATION_SIGNER_ENVELOPE_MAX_PROOF_ARTIFACTS=4`, the exact
+proof triple allowlist, and both TEE allowlists. These are part of the flow
+contract: the signer's default artifact cap is zero, so omitting the cap would
+make every proof-backed envelope fail before the callback path is exercised.
 
 ## Native WithdrawalProcessor.toml
 
@@ -672,8 +696,10 @@ JSON-in-string env.
 
 ## Scaffolding ProofCoordinator.toml
 
-`--scaffold-coordinator-config` generates the coordinator TOML when the file
-does not exist yet (an existing config is never touched). Every deployment fact
+The command automatically scaffolds the coordinator TOML when the file does not
+exist yet (an existing config is never touched). Pass
+`--no-scaffold-coordinator-config` only when absence should be treated as an
+error. Every deployment fact
 is read from the native `WithdrawalProcessor.toml` (or, for legacy layouts, the
 withdrawal-processor values env) — L2 RPC, Ethereum DA RPC and chain ids, blob
 source (S3 archive preferred, beacon node fallback), Dogecoin RPC and network —
@@ -721,9 +747,9 @@ standard externalSecrets block for the two tokens. A subsequent
 manual edits.
 
 With this command in the flow, the only inputs the CLI cannot produce are the
-released proof artifacts (`proof-artifacts/`) and the public
-`--signer-proof-artifact-base-url` (a CDN or public endpoint in front of the
-accepted-proof objects — the bucket itself is provisioned private).
+released proof artifacts (`proof-artifacts/`, production mode only) and the
+public `--proof-artifact-base-url` (a CDN or public endpoint in front of the
+proof object key-prefix root — the bucket itself is provisioned private).
 
 S3 credentials are also explicit but are not an activation switch:
 
@@ -747,8 +773,9 @@ those operations to hydrate/publish materializer data and to read back/promote
 worker uploads, while WP uses the same object plane for proof transport and URL
 issuance.
 
-`--signer-proof-artifact-base-url` is a stable credential-free public GET base.
-WP appends each full accepted object key to it when producing signer evidence.
+`--proof-artifact-base-url` is a stable credential-free public GET root. Mock
+and real external workers append input object keys to it; WP appends each full
+accepted object key when producing signer evidence.
 It is deliberately separate from proof-coordinator's
 `PROVER_API__PUBLIC_S3_ENDPOINT_URL`, which exists to mint worker-visible S3
 presigned URLs and is not necessarily an unauthenticated signer endpoint.

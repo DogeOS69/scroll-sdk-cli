@@ -12,6 +12,7 @@
  */
 import bitcore from 'bitcore-lib-doge'
 import fs from 'node:fs'
+import { isIP } from 'node:net'
 
 const { PublicKey } = bitcore
 
@@ -66,7 +67,24 @@ export function assertCompressedSecp256k1PublicKey(value: string, source: string
  */
 export const ENDPOINT_PLACEHOLDER = 'https://REPLACE-WITH-YOUR-SIGNER-ENDPOINT'
 
-export function normalizeSignerEndpoint(value: string, source: string): string {
+function isLoopbackOrUnspecifiedUrlHost(urlHostname: string): boolean {
+  const rawHostname = urlHostname.toLowerCase()
+  const hostname = rawHostname.startsWith('[') && rawHostname.endsWith(']')
+    ? rawHostname.slice(1, -1)
+    : rawHostname
+  return hostname === 'localhost'
+    || hostname.endsWith('.localhost')
+    || hostname === '0.0.0.0'
+    || hostname === '::'
+    || hostname === '::1'
+    || (isIP(hostname) === 4 && hostname.startsWith('127.'))
+}
+
+export function normalizeExternalHttpBaseUrl(
+  value: string,
+  source: string,
+  options: { allowLoopback?: boolean; remoteNetwork: string }
+): string {
   let url: URL
   try {
     url = new URL(value)
@@ -86,7 +104,22 @@ export function normalizeSignerEndpoint(value: string, source: string): string {
     throw new Error(`${source}: endpoint must be a bare base URL without path, query, or credentials`)
   }
 
+  if (isLoopbackOrUnspecifiedUrlHost(url.hostname) && !options.allowLoopback) {
+    throw new Error(`${source}: endpoint host ${url.hostname} is loopback/unspecified and cannot be reached from the ${options.remoteNetwork}; use a routable VPN IP or DNS name`)
+  }
+
   return url.origin
+}
+
+export function normalizeSignerEndpoint(
+  value: string,
+  source: string,
+  options: { allowLoopback?: boolean } = {}
+): string {
+  return normalizeExternalHttpBaseUrl(value, source, {
+    ...options,
+    remoteNetwork: 'bridge operator\'s TSO network',
+  })
 }
 
 export function validateAttestationSignerDescriptor(raw: unknown, source: string): AttestationSignerDescriptor {
@@ -146,8 +179,12 @@ export interface SignerHealthReport {
  * runtime public key. Used by `signer preflight` (operator side) and the
  * optional --probe cross-check at descriptor import (bridge-operator side).
  */
-export async function fetchSignerHealth(endpoint: string, timeoutMs = 10_000): Promise<SignerHealthReport> {
-  const url = `${normalizeSignerEndpoint(endpoint, 'endpoint')}/health`
+export async function fetchSignerHealth(
+  endpoint: string,
+  timeoutMs = 10_000,
+  options: { allowLoopback?: boolean } = {}
+): Promise<SignerHealthReport> {
+  const url = `${normalizeSignerEndpoint(endpoint, 'endpoint', options)}/health`
   let response: Response
   try {
     response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })

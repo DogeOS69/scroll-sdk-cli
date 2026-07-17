@@ -122,22 +122,10 @@ bridge:
 signing:
   # CubeSigner provides the single TEE key. Roles are populated by `scrollsdk setup cubesigner-init`.
   cubesigner: {}
-  # Attestation keys are served in-cluster by the attestation-signer Helm chart,
-  # one release per key (attestation-signer-0..2). `scrollsdk setup attestation-signer`
-  # configures local WIF or provisions/reuses KMS keys and IRSA roles. Only the
-  # local WIF backend writes secrets/attestation-signer-N.env for push-secrets.
-  # Generated values allocate a 5Gi durable SQLite PVC per signer because the
-  # audit history and anti-double-sign ledger have no automatic retention.
-  attestationSigner:
-    profile: staging-local
-    # N=5 deployed releases; signer-3 and signer-4 start as rotation reserves.
-    instances:
-      - id: signer-0
-      - id: signer-1
-      - id: signer-2
-      - id: signer-3
-      - id: signer-4
-    # profile: staging-kms # setup attestation-signer provisions KMS keys and IRSA roles
+  # Attestation signers run as partner-operated docker-compose services. They
+  # are intentionally absent from DeploymentSpec/Helm values. Collect the
+  # finalized descriptor.json files under descriptors/ and import them before
+  # bridge-init with `scrollsdk setup attestation-signer --threshold <T> --probe`.
 
 frontend:
   protocol: https

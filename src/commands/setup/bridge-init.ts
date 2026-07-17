@@ -12,6 +12,7 @@ import { getSetupDefaultsPath } from '../../config/constants.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
+import { protocolIdSidecarPath } from '../../utils/signer-policy-derivation.js'
 
 type BridgeInitStep = '1-prepare' | '2-setup' | '3-bridge-info' | '4-fund' | '5-protocol-context' | 'all'
 
@@ -711,7 +712,7 @@ export class BridgeInitCommand extends Command {
   }
 
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = 'dev-20260707-043e7f3'
+    const defaultTag = 'dev-20260716-1'
 
     if (!providedTag) {
       return defaultTag
@@ -1492,6 +1493,18 @@ export class BridgeInitCommand extends Command {
       '.data/protocol_context.json',
     ])
     this.materializeProtocolContextYaml(paths)
+
+    // generate_protocol_context also emits the protocol instance id (canonical
+    // protocol opening hash) as a sidecar; setup export-signer-policy derives
+    // its --protocol-instance-id default from it.
+    const sidecarPath = protocolIdSidecarPath(paths.protocolContextPath)
+    if (fs.existsSync(sidecarPath)) {
+      this.jsonCtx.info(`protocol_id (protocol instance id): ${fs.readFileSync(sidecarPath, 'utf8').trim()} (${sidecarPath})`)
+    } else {
+      this.jsonCtx.addWarning(
+        `${sidecarPath} was not produced — this dogeos-core image predates the protocol_id sidecar; setup export-signer-policy will require an explicit --protocol-instance-id`
+      )
+    }
   }
 
   private async runSetupStep(imageTag: string, paths: BridgeInitPaths): Promise<void> {

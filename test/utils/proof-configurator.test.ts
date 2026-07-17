@@ -6,8 +6,9 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import { configureProofValues } from '../../src/utils/proof-configurator.js'
+import { configureProofValues, deriveAllowedProofTriples } from '../../src/utils/proof-configurator.js'
 import { scaffoldProofCoordinatorConfig } from '../../src/utils/proof-coordinator-scaffold.js'
+import { writeProverWorkerMockBundle } from '../../src/utils/prover-worker-mock-bundle.js'
 
 function writeValidProofRelease(root: string): {
   aggVk: Buffer
@@ -28,7 +29,10 @@ function writeValidProofRelease(root: string): {
     verificationKeyHashes[family] = `0x${Buffer.alloc(32, index + 4).toString('hex')}`
     const manifestPath = path.join(root, `${family}.json`)
     fs.writeFileSync(manifestPath, JSON.stringify({
-      artifacts: [],
+      artifacts: [
+        { kind: 'app_vmexe', sha256: `0x${'11'.repeat(32)}`, size_bytes: 1024 },
+        { kind: 'openvm_config', sha256: `0x${'22'.repeat(32)}`, size_bytes: 512 },
+      ],
       circuit_id: `${family}-v1`,
       circuit_version: '1.0.0',
       hard_fork_name: 'galileo_v2',
@@ -204,22 +208,6 @@ max_items = 42
       ],
       withdrawalProof: { s3AuthMode: 'ambient' },
     }))
-    fs.writeFileSync(path.join(root, 'values/attestation-signer-production.yaml'), yaml.dump({
-      attestationSigner: {
-        envelopePolicy: { allowedProofTriples: '', maxProofArtifacts: 0 },
-        network: 'testnet',
-        profile: 'staging-local',
-        proofArtifact: { fetchMode: 'disabled' },
-      },
-    }))
-    fs.writeFileSync(path.join(root, 'values/attestation-signer-production-0.yaml'), yaml.dump({
-      attestationSigner: {
-        envelopePolicy: { allowedProofTriples: '', maxProofArtifacts: 0 },
-        network: 'testnet',
-        profile: 'staging-local',
-        proofArtifact: { fetchMode: 'disabled' },
-      },
-    }))
   })
 
   afterEach(() => fs.rmSync(root, { force: true, recursive: true }))
@@ -325,25 +313,12 @@ max_items = 42
     expect(withdrawal.initContainers['install-agg-verifying-key'].args[0]).to.include('/app/data/verifier/agg-vk.bin')
     expect(withdrawal.externalSecrets['proof-secrets'].data).to.have.length(1)
 
-    const signerTemplatePath = path.join(root, 'values/attestation-signer-production.yaml')
-    const signerInstancePath = path.join(root, 'values/attestation-signer-production-0.yaml')
-    expect(result.files).to.include.members([signerTemplatePath, signerInstancePath])
-    const expectedTriples = [
-      `openvm_state_transition:scroll-zkvm-v1-bridge_transition-v1-1.0.0:${Buffer.alloc(32, 6).toString('hex')}`,
-      `scroll_batch:scroll-zkvm-v1-scroll_batch-v1-1.0.0:${Buffer.alloc(32, 5).toString('hex')}`,
-    ].join(',')
-    for (const signerPath of [signerTemplatePath, signerInstancePath]) {
-      const signer = (yaml.load(fs.readFileSync(signerPath, 'utf8')) as any).attestationSigner
-      expect(signer.envelopePolicy.allowedProofTriples).to.equal(expectedTriples)
-      expect(signer.envelopePolicy.maxProofArtifacts).to.equal(4)
-      expect(signer.proofArtifact.fetchMode).to.equal('http')
-      expect(signer.profile).to.equal('staging-local')
-    }
   })
 
-  it('skips attestation-signer values when explicitly requested', () => {
+  it('never reads or mutates retired attestation-signer Helm values', () => {
     const { artifactPath, manifests } = writeValidProofRelease(root)
     const signerTemplatePath = path.join(root, 'values/attestation-signer-production.yaml')
+    fs.writeFileSync(signerTemplatePath, 'retired: true\n')
     const before = fs.readFileSync(signerTemplatePath, 'utf8')
 
     const result = configureProofValues({
@@ -351,46 +326,25 @@ max_items = 42
       coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
       manifestPaths: manifests,
       signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
-      skipAttestationSigners: true,
       valuesDir: path.join(root, 'values'),
     })
     expect(result.files).not.to.include(signerTemplatePath)
     expect(fs.readFileSync(signerTemplatePath, 'utf8')).to.equal(before)
   })
 
-  it('fails before writing when no attestation-signer values exist', () => {
+  it('succeeds without attestation-signer values because signers are partner-operated', () => {
     const { artifactPath, manifests } = writeValidProofRelease(root)
-    fs.rmSync(path.join(root, 'values/attestation-signer-production.yaml'))
-    fs.rmSync(path.join(root, 'values/attestation-signer-production-0.yaml'))
     const coordinatorConfigPath = path.join(root, 'proof-coordinator/ProofCoordinator.toml')
     const coordinatorBefore = fs.readFileSync(coordinatorConfigPath, 'utf8')
 
-    expect(() => configureProofValues({
+    configureProofValues({
       artifactManifestPath: artifactPath,
       coordinatorConfigPath,
       manifestPaths: manifests,
       signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
       valuesDir: path.join(root, 'values'),
-    })).to.throw('No attestation-signer values found')
-    expect(fs.readFileSync(coordinatorConfigPath, 'utf8')).to.equal(coordinatorBefore)
-  })
-
-  it('preserves an operator-raised proof artifact cap', () => {
-    const { artifactPath, manifests } = writeValidProofRelease(root)
-    const signerTemplatePath = path.join(root, 'values/attestation-signer-production.yaml')
-    const signer = yaml.load(fs.readFileSync(signerTemplatePath, 'utf8')) as any
-    signer.attestationSigner.envelopePolicy.maxProofArtifacts = 8
-    fs.writeFileSync(signerTemplatePath, yaml.dump(signer))
-
-    configureProofValues({
-      artifactManifestPath: artifactPath,
-      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
-      manifestPaths: manifests,
-      signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
-      valuesDir: path.join(root, 'values'),
     })
-    const updated = yaml.load(fs.readFileSync(signerTemplatePath, 'utf8')) as any
-    expect(updated.attestationSigner.envelopePolicy.maxProofArtifacts).to.equal(8)
+    expect(fs.readFileSync(coordinatorConfigPath, 'utf8')).not.to.equal(coordinatorBefore)
   })
 
   it('rejects a verifier ID that would corrupt the signer triple CSV', () => {
@@ -404,6 +358,21 @@ max_items = 42
       valuesDir: path.join(root, 'values'),
       verifierIds: { scroll_batch: 'bad:id' },
     })).to.throw("must not contain ':' or ','")
+  })
+
+  it('rejects a manifest that the Rust ProofProgramManifestV1 loader would reject', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    const invalid = JSON.parse(fs.readFileSync(manifests[0], 'utf8'))
+    invalid.artifacts = []
+    fs.writeFileSync(manifests[0], JSON.stringify(invalid))
+
+    expect(() => configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
+      valuesDir: path.join(root, 'values'),
+    })).to.throw('artifacts must contain app_vmexe followed by openvm_config')
   })
 
   it('writes the managed proof block to a native WithdrawalProcessor.toml when present', () => {
@@ -505,7 +474,7 @@ max_items = 42
       coordinatorConfigPath,
       manifestPaths: manifests,
       valuesDir: path.join(root, 'values'),
-    })).to.throw('--signer-proof-artifact-base-url is required')
+    })).to.throw('--proof-artifact-base-url is required')
     expect(fs.readFileSync(coordinatorConfigPath, 'utf8')).to.equal(coordinatorBefore)
     expect(fs.readFileSync(coordinatorValuesPath, 'utf8')).to.equal(coordinatorValuesBefore)
   })
@@ -703,31 +672,16 @@ mode = "disabled"
   })
 
   it('rejects a raw commitment that does not match its program manifest', () => {
-    const families = ['scroll_chunk', 'scroll_batch', 'bridge_transition'] as const
-    const manifests = families.map((family, index) => {
-      const manifestPath = path.join(root, `${family}.json`)
-      fs.writeFileSync(manifestPath, JSON.stringify({
-        circuit_id: family,
-        circuit_version: '1',
-        program_commitment_hash: `0x${Buffer.alloc(32, index + 1).toString('hex')}`,
-        proof_family: family,
-        proof_system_id: 'openvm',
-        schema_version: 1,
-        verification_key_hash: `0x${Buffer.alloc(32, 9).toString('hex')}`,
-      }))
-      return manifestPath
-    })
-    const artifactPath = path.join(root, 'release.json')
-    fs.writeFileSync(artifactPath, JSON.stringify({ expected_identity: {
-      batch_program_commitment_raw: `0x${Buffer.alloc(64, 2).toString('hex')}`,
-      bridge_app_commit_raw: `0x${Buffer.alloc(64, 3).toString('hex')}`,
-      chunk_program_commitment_raw: `0x${Buffer.alloc(64, 1).toString('hex')}`,
-    } }))
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8'))
+    artifact.expected_identity.chunk_program_commitment_raw = `0x${'ff'.repeat(64)}`
+    fs.writeFileSync(artifactPath, JSON.stringify(artifact))
 
     expect(() => configureProofValues({
       artifactManifestPath: artifactPath,
       coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
       manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
       valuesDir: path.join(root, 'values'),
     }))
       .to.throw('does not match program manifest')
@@ -760,5 +714,294 @@ mode = "disabled"
       signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
       valuesDir: path.join(root, 'values'),
     })).to.throw('Aggregate verifying key SHA-256 mismatch')
+  })
+
+  it('reuses the staged signer proof-artifact base URL when the option is omitted on a re-run', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    const options = {
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      manifestPaths: manifests,
+      valuesDir: path.join(root, 'values'),
+    }
+
+    const first = configureProofValues({
+      ...options,
+      signerProofArtifactBaseUrl: 'https://proofs.example.com/public/',
+    })
+    expect(first.signerProofArtifactBaseUrlSource).to.equal('flag')
+
+    const rerun = configureProofValues(options)
+    expect(rerun.signerProofArtifactBaseUrlSource).to.equal('staged')
+    expect(rerun.signerProofArtifactBaseUrl).to.equal('https://proofs.example.com/public')
+
+    const withdrawal = yaml.load(fs.readFileSync(rerun.files[1], 'utf8')) as any
+    const parsedWithdrawal = toml.parse(withdrawal.configMaps.config.data['WithdrawalProcessor.toml']) as any
+    expect(parsedWithdrawal.proof_system.signer_proof_artifact_base_url).to.equal('https://proofs.example.com/public')
+  })
+
+  it('derives the proof-triple allowlist from the staged coordinator verifier block, honouring overrides', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    const coordinatorConfigPath = path.join(root, 'proof-coordinator/ProofCoordinator.toml')
+    configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath,
+      manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
+      valuesDir: path.join(root, 'values'),
+      verifierIds: { scroll_batch: 'scroll-production-v1' },
+    })
+
+    const derived = deriveAllowedProofTriples(coordinatorConfigPath, [])
+    expect(derived?.source).to.equal(coordinatorConfigPath)
+    expect(derived?.value).to.equal([
+      `openvm_state_transition:scroll-zkvm-v1-bridge_transition-v1-1.0.0:${Buffer.alloc(32, 6).toString('hex')}`,
+      `scroll_batch:scroll-production-v1:${Buffer.alloc(32, 5).toString('hex')}`,
+    ].join(','))
+  })
+
+  it('derives the proof-triple allowlist from release manifests before proof-config has run', () => {
+    const { manifests } = writeValidProofRelease(root)
+
+    // The pristine coordinator fixture still carries the dev_dummy scaffold
+    // block (no verifier identities), so derivation must fall back.
+    const derived = deriveAllowedProofTriples(path.join(root, 'proof-coordinator/ProofCoordinator.toml'), manifests)
+    expect(derived?.value).to.equal([
+      `openvm_state_transition:scroll-zkvm-v1-bridge_transition-v1-1.0.0:${Buffer.alloc(32, 6).toString('hex')}`,
+      `scroll_batch:scroll-zkvm-v1-scroll_batch-v1-1.0.0:${Buffer.alloc(32, 5).toString('hex')}`,
+    ].join(','))
+  })
+
+  it('returns no derived proof triples when neither the coordinator block nor the manifests exist', () => {
+    expect(deriveAllowedProofTriples(path.join(root, 'missing/ProofCoordinator.toml'), [path.join(root, 'missing/manifest.json')])).to.equal(undefined)
+  })
+
+  function writeMockCoordinatorToml(dir: string): string {
+    const configPath = path.join(dir, 'proof-coordinator/ProofCoordinator.toml')
+    fs.writeFileSync(configPath, `poll_interval_ms = 1000
+lease_ttl_ms = 60000
+
+[auth]
+bearer_token_file = "/run/secrets/proof-work-token"
+
+[artifact_store]
+kind = "s3"
+key_prefix = "proof-topology"
+force_path_style = false
+
+[materializer]
+artifact_store_root = "/app/data/proof-materializer-staging"
+
+[materializer.dev_sentinel_scroll_chunk]
+enabled = true
+
+[materializer.scroll_batch]
+enabled = true
+dev_sentinel = true
+proof_mode = "Mock"
+materializer_output_root = "/app/data/scroll-batch-materializer"
+
+[materializer.bridge]
+enabled = true
+advance_l1 = true
+advance_l2 = true
+
+[materializer.bridge.dogecoin_rpc]
+url = "http://dogecoin:22555"
+network = "testnet"
+
+[materializer.bridge.ethereum_da]
+l1_rpc_url = "https://ethereum.example.com"
+eth_chain_id = 11155111
+l2_chain_id = 12345
+artifact_store_root = "/app/data/eth-da/blobs"
+artifact_metadata_sqlite_path = "/app/data/eth-da/meta.sqlite"
+
+[materializer.bridge.ethereum_da.blob_source]
+timeout_ms = 10000
+
+[materializer.bridge.ethereum_da.blob_source.aws_s3]
+url = "https://eth-da.example.com"
+key_prefix = "batches"
+
+# BEGIN scrollsdk managed verifier configuration
+[verifier]
+verifier_import_mode = "dev_dummy"
+# END scrollsdk managed verifier configuration
+
+[prover_api]
+enabled = true
+bind_addr = "0.0.0.0:9400"
+worker_auth_token_file = "/run/secrets/prover-worker-token"
+max_lease_ttl_ms = 300000
+transport = "s3"
+`)
+    return configPath
+  }
+
+  it('stages the complete mock proving topology without release artifacts', () => {
+    const coordinatorConfigPath = writeMockCoordinatorToml(root)
+    const result = configureProofValues({
+      coordinatorConfigPath,
+      coordinatorIngressHost: 'proof-coordinator.bridge.example',
+      provingMode: 'mock',
+      signerProofArtifactBaseUrl: 'https://proofs.example.com',
+      valuesDir: path.join(root, 'values'),
+    })
+    expect(result.provingMode).to.equal('mock')
+    expect(result.families).to.deep.equal(['bridge_transition', 'scroll_batch', 'scroll_chunk'])
+
+    const withdrawal = yaml.load(fs.readFileSync(result.files[1], 'utf8')) as any
+    const parsedWithdrawal = toml.parse(withdrawal.configMaps.config.data['WithdrawalProcessor.toml']) as any
+    expect(parsedWithdrawal.proof_system.mode).to.equal('dev_dummy')
+    expect(parsedWithdrawal.proof_system.dev_dummy.scroll_input).to.equal('exact_mock')
+    expect(parsedWithdrawal.proof_system.require_bridge_state).to.equal(true)
+    expect(parsedWithdrawal.proof_system.signer_proof_artifact_base_url).to.equal('https://proofs.example.com')
+    // The bridge gate is active, so the legacy top-level gate identity must
+    // be the bridge identity (dogeos-core e2e strict-withdrawal contract).
+    expect(parsedWithdrawal.proof_control_plane_gate.circuit_id).to.equal('bridge-transition-v1')
+    expect(parsedWithdrawal.proof_control_plane_gate.verification_key_hash_hex).to.equal('88'.repeat(32))
+    expect(parsedWithdrawal.proof_control_plane_gate.scroll_chunk_verification_key_hash_hex).to.equal('44'.repeat(32))
+    expect(parsedWithdrawal.proof_control_plane_gate.scroll_bridge_verifier_identity.verifier_id)
+      .to.equal('openvm-bridge-topology-verifier-v1')
+    expect(parsedWithdrawal.proof_control_plane_gate.scroll_real_verifier).to.equal(undefined)
+    expect(parsedWithdrawal.proof_work_api.materialize.scroll_batch.remote_prove_options.backend_profile)
+      .to.equal('scroll-batch-topology-prover-v1')
+    expect(parsedWithdrawal.proof_work_api.materialize.bridge.remote_prove_options.backend_profile)
+      .to.equal('bridge-topology-prover-v1')
+
+    // Activation switch projects dev_dummy instead of production.
+    const env = Object.fromEntries(withdrawal.env.map((item: any) => [item.name, item.value]))
+    expect(env.DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE)
+      .to.equal('{{ ternary "dev_dummy" "disabled" .Values.withdrawalProof.enabled }}')
+    expect(withdrawal.configMaps['agg-verifying-key']).to.equal(undefined)
+    expect(withdrawal.initContainers?.['install-agg-verifying-key']).to.equal(undefined)
+
+    const parsedCoordinator = toml.parse(fs.readFileSync(result.configFile, 'utf8')) as any
+    expect(parsedCoordinator.verifier.verifier_import_mode).to.equal('dev_dummy')
+    expect(parsedCoordinator.verifier.scroll_real_verifier).to.equal(undefined)
+    expect(parsedCoordinator.verifier.scroll_bridge_verifier_identity.expected_verification_key_hash_hex)
+      .to.equal(`0x${'88'.repeat(32)}`)
+
+    const coordinator = yaml.load(fs.readFileSync(result.files[0], 'utf8')) as any
+    expect((coordinator.env || []).some((item: any) => String(item?.name || '').includes('CHUNK_PROGRAM_COMMITMENT_HEX'))).to.equal(false)
+    expect(coordinator.configMaps['agg-verifying-key']).to.equal(undefined)
+    const statementNamespace = JSON.parse(coordinator.configMaps.manifests.data['statement-namespace.json'])
+    expect(statementNamespace.chunk.proof_mode).to.equal('Mock')
+    expect(coordinator.ingress.main.enabled).to.equal(true)
+    expect(coordinator.ingress.main.hosts[0].host).to.equal('proof-coordinator.bridge.example')
+    expect(coordinator.ingress.main.annotations['cert-manager.io/cluster-issuer']).to.equal('letsencrypt-prod')
+    expect(coordinator.ingress.main.tls[0].secretName).to.equal('proof-coordinator-tls')
+
+    // Signer triples pair the mock bridge + batch identities — exactly what
+    // export-signer-policy later derives from the staged coordinator TOML.
+    const expectedTriples = [
+      `openvm_state_transition:openvm-bridge-topology-verifier-v1:${'88'.repeat(32)}`,
+      `scroll_batch:openvm-scroll-batch-topology-verifier-v1:${'55'.repeat(32)}`,
+    ].join(',')
+    expect(deriveAllowedProofTriples(result.configFile, [])?.value).to.equal(expectedTriples)
+  })
+
+  it('rejects a production materializer topology under mock proving', () => {
+    // The beforeEach coordinator fixture carries the production subprocess
+    // materializer shape.
+    expect(() => configureProofValues({
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      provingMode: 'mock',
+      signerProofArtifactBaseUrl: 'https://proofs.example.com',
+      valuesDir: path.join(root, 'values'),
+    })).to.throw('materializer.dev_sentinel_scroll_chunk')
+  })
+
+  it('rejects a mock dev-sentinel topology under production proving', () => {
+    const coordinatorConfigPath = writeMockCoordinatorToml(root)
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    expect(() => configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath,
+      manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proofs.example.com',
+      valuesDir: path.join(root, 'values'),
+    })).to.throw('materializer.scroll_chunk_segmentation')
+  })
+
+  it('scaffolds the dev-sentinel coordinator shape under mock proving and accepts it end to end', () => {
+    const scaffoldPath = path.join(root, 'proof-coordinator/ProofCoordinator.scaffold-mock.toml')
+    const withdrawalConfigPath = path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml')
+    fs.mkdirSync(path.dirname(withdrawalConfigPath), { recursive: true })
+    fs.writeFileSync(withdrawalConfigPath, `# BEGIN scrollsdk managed deployment configuration
+network_str = "testnet"
+dogecoin_rpc_url = "http://dogecoin:22555"
+
+[dogeos_indexer]
+rpc_url = "http://l2-rpc:8545"
+
+[ethereum_da]
+l1_rpc_url = "https://ethereum.example.com"
+eth_chain_id = 11155111
+l2_chain_id = 12345
+
+[ethereum_da.blob_source]
+timeout_ms = 10000
+
+[ethereum_da.blob_source.aws_s3]
+url = "https://eth-da.example.com"
+key_prefix = "batches"
+# END scrollsdk managed deployment configuration
+`)
+
+    const scaffold = scaffoldProofCoordinatorConfig({
+      coordinatorConfigPath: scaffoldPath,
+      provingMode: 'mock',
+      valuesDir: path.join(root, 'values'),
+      withdrawalConfigPath,
+    })
+    expect(scaffold.created).to.equal(true)
+    const parsed = toml.parse(fs.readFileSync(scaffoldPath, 'utf8')) as any
+    expect(parsed.materializer.dev_sentinel_scroll_chunk.enabled).to.equal(true)
+    expect(parsed.materializer.scroll_batch.dev_sentinel).to.equal(true)
+    expect(parsed.materializer.scroll_batch.proof_mode).to.equal('Mock')
+    expect(parsed.materializer.scroll_batch.subprocess).to.equal(undefined)
+    expect(parsed.verifier.verifier_import_mode).to.equal('dev_dummy')
+
+    // End to end: the mock scaffold passes the mock topology validation.
+    const result = configureProofValues({
+      coordinatorConfigPath: scaffoldPath,
+      provingMode: 'mock',
+      signerProofArtifactBaseUrl: 'https://proofs.example.com',
+      valuesDir: path.join(root, 'values'),
+    })
+    expect(result.provingMode).to.equal('mock')
+  })
+
+  it('writes the prover-worker-mock bundle with the mock worker contract', () => {
+    // A pre-existing world-readable placeholder must not keep its mode once
+    // the file holds the real token (writeFileSync only applies mode on create).
+    const bundleDir = path.join(root, 'prover-worker-mock/docker-compose')
+    fs.mkdirSync(bundleDir, { recursive: true })
+    fs.writeFileSync(path.join(bundleDir, 'prover-worker.env'), 'DOGEOS_PROVER_WORKER_TOKEN=PLACEHOLDER\n', { mode: 0o664 })
+
+    const bundle = writeProverWorkerMockBundle({
+      artifactReadBaseUrl: 'https://proofs.example.com',
+      coordinatorUrl: 'https://proof-coordinator.bridge.example',
+      dir: bundleDir,
+      workerToken: 'a'.repeat(64),
+    })
+    expect(bundle.files).to.have.length(3)
+
+    const compose = fs.readFileSync(path.join(bundle.bundleDir, 'docker-compose.yml'), 'utf8')
+    for (const requiredArg of ['--mode', 'mock', '--allow-dev-mock-prover', '--enable-prove-scroll-chunk', '--enable-prove-scroll-batch', '--enable-prove-bridge-transition']) {
+      expect(compose).to.include(requiredArg)
+    }
+
+    const env = fs.readFileSync(path.join(bundle.bundleDir, '.env'), 'utf8')
+    expect(env).to.include('PROOF_COORDINATOR_URL=https://proof-coordinator.bridge.example')
+    expect(env).to.include('ARTIFACT_READ_BASE_URL=https://proofs.example.com')
+
+    const tokenPath = path.join(bundle.bundleDir, 'prover-worker.env')
+    expect(fs.readFileSync(tokenPath, 'utf8')).to.include(`DOGEOS_PROVER_WORKER_TOKEN=${'a'.repeat(64)}`)
+    // POSIX permission bits are intentionally expressed in octal.
+    // eslint-disable-next-line no-bitwise
+    expect(fs.statSync(tokenPath).mode & 0o777).to.equal(0o600)
   })
 })

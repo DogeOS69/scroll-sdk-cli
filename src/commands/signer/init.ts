@@ -30,20 +30,69 @@ function generateWif(network: string): string {
   return new PrivateKey(null, selected).toWIF()
 }
 
+function readEnvValue(contents: string, name: string): string | undefined {
+  return contents.match(new RegExp(`^${name}=(.+)$`, 'm'))?.[1]?.trim()
+}
+
+export function renderSignerReleasePins(options: {
+  allowedGitCommit?: string
+  allowedReleaseVersion?: string
+  allowedSigningPolicyVersion?: string
+}): string[] {
+  const releaseVersion = options.allowedReleaseVersion?.trim()
+  const gitCommit = options.allowedGitCommit?.trim().toLowerCase()
+  const signingPolicyVersion = options.allowedSigningPolicyVersion?.trim() || '1'
+
+  if (Boolean(releaseVersion) !== Boolean(gitCommit)) {
+    throw new Error('--allowed-release-version and --allowed-git-commit must be provided together')
+  }
+
+  if (releaseVersion && !/^\d+\.\d+\.\d+(?:[+-][\d.A-Za-z-]+)?$/.test(releaseVersion)) {
+    throw new Error('--allowed-release-version must be a Cargo semver such as 0.1.0 or 0.1.0-rc.1')
+  }
+
+  if (gitCommit && !/^[\da-f]{40}$/.test(gitCommit)) {
+    throw new Error('--allowed-git-commit must be the full 40-character git commit embedded in the approved image')
+  }
+
+  const policyVersion = Number(signingPolicyVersion)
+  if (!Number.isSafeInteger(policyVersion) || policyVersion < 1 || policyVersion > 4_294_967_295) {
+    throw new Error('--allowed-signing-policy-version must be a positive u32')
+  }
+
+  return [
+    '# Image release-policy pins. The first two are mandatory when the post-genesis',
+    '# policy bundle selects production_enforce; obtain them from the approved image.',
+    ...(releaseVersion && gitCommit
+      ? [
+          `ATTESTATION_SIGNER_ALLOWED_RELEASE_VERSION=${releaseVersion}`,
+          `ATTESTATION_SIGNER_ALLOWED_GIT_COMMIT=${gitCommit}`,
+        ]
+      : [
+          '# ATTESTATION_SIGNER_ALLOWED_RELEASE_VERSION=',
+          '# ATTESTATION_SIGNER_ALLOWED_GIT_COMMIT=',
+        ]),
+    `ATTESTATION_SIGNER_ALLOWED_SIGNING_POLICY_VERSION=${policyVersion}`,
+  ]
+}
+
 export class SignerInitCommand extends Command {
-  static description = 'Signer-operator tool: set up key material and emit the descriptor + a complete deployment env file. Run this on YOUR infrastructure — secrets and AWS calls never leave it. Backends: local (generates a WIF) or aws-kms (uses your KMS key; --create-key can create one for you). The output directory is the single source of truth for the rest of the flow — signer preflight reads it via --dir.'
+  static description = 'Signer-operator tool: set up key material and emit the descriptor + a complete deployment env file. Run this on YOUR infrastructure — secrets and AWS calls never leave it. Specify the TSO-reachable signer IP/domain with --endpoint. Production operators also pin the approved image release version and full git commit here. The output directory is the single source of truth for signer preflight and compose deployment.'
 
   static examples = [
     '$ scrollsdk signer init --id partner-a-signer-0 --network testnet --endpoint https://signer.partner-a.example:4040',
-    '$ scrollsdk signer init --id partner-a-signer-0 --network mainnet --backend aws-kms --kms-key-id arn:aws:kms:... --kms-region us-east-1',
-    '$ scrollsdk signer init --id partner-a-signer-0 --network testnet --backend aws-kms --create-key --kms-region us-east-1',
+    '$ scrollsdk signer init --id partner-a-signer-0 --network mainnet --endpoint https://signer.partner-a.example:4040 --backend aws-kms --kms-key-id arn:aws:kms:... --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567',
+    '$ scrollsdk signer init --id partner-a-signer-0 --network testnet --endpoint https://signer.partner-a.example:4040 --backend aws-kms --create-key --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567',
   ]
 
   static flags = {
+    'allowed-git-commit': Flags.string({ description: 'Production release-policy pin: full 40-character git commit embedded in the approved signer image; must be paired with --allowed-release-version' }),
+    'allowed-release-version': Flags.string({ description: 'Production release-policy pin: Cargo release version embedded in the approved signer image; must be paired with --allowed-git-commit' }),
+    'allowed-signing-policy-version': Flags.string({ default: '1', description: 'Signer binary policy version approved by the operator (written to attestation-signer.env)' }),
     'aws-profile': Flags.string({ description: 'AWS CLI profile for KMS calls (aws-kms backend)' }),
     backend: Flags.string({ default: 'local', description: 'Key backend', options: ['local', 'aws-kms'] }),
     'create-key': Flags.boolean({ default: false, description: 'aws-kms backend: create the ECC_SECG_P256K1 signing key in your AWS account instead of passing --kms-key-id' }),
-    endpoint: Flags.string({ description: 'Public HTTPS base URL where the bridge operator and TSO will reach this signer (can be filled in later via signer preflight)' }),
+    endpoint: Flags.string({ description: 'HTTP(S) base URL reachable from the bridge operator/TSO network; use a TLS domain in production or a private IP in an isolated mock/VPN test (can be filled later via signer preflight)' }),
     force: Flags.boolean({ default: false, description: 'Overwrite an existing env file in the output directory' }),
     id: Flags.string({ description: 'Stable signer identifier (DNS-label shaped, agreed with the bridge operator)', required: true }),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
@@ -61,6 +110,7 @@ export class SignerInitCommand extends Command {
       const secretFile = path.join(outDir, 'attestation-signer.env')
       const descriptorFile = path.join(outDir, 'descriptor.json')
       fs.mkdirSync(outDir, { recursive: true })
+      const existingEnv = fs.existsSync(secretFile) ? fs.readFileSync(secretFile, 'utf8') : ''
 
       const backendLines: string[] = []
       let publicKey: string
@@ -98,9 +148,7 @@ export class SignerInitCommand extends Command {
         }
 
         let wif: string
-        const existing = fs.existsSync(secretFile)
-          ? fs.readFileSync(secretFile, 'utf8').match(/^ATTESTATION_SIGNER_WIF=(.+)$/m)?.[1]
-          : undefined
+        const existing = readEnvValue(existingEnv, 'ATTESTATION_SIGNER_WIF')
         if (existing && !flags.force) {
           wif = existing
           json.logSuccess(`Reusing existing key material in ${secretFile}`)
@@ -112,14 +160,23 @@ export class SignerInitCommand extends Command {
         backendLines.push('ATTESTATION_SIGNER_BACKEND=local', `ATTESTATION_SIGNER_WIF=${wif}`)
       }
 
+      const releasePinLines = renderSignerReleasePins({
+        allowedGitCommit: flags['allowed-git-commit'] || readEnvValue(existingEnv, 'ATTESTATION_SIGNER_ALLOWED_GIT_COMMIT'),
+        allowedReleaseVersion: flags['allowed-release-version'] || readEnvValue(existingEnv, 'ATTESTATION_SIGNER_ALLOWED_RELEASE_VERSION'),
+        allowedSigningPolicyVersion: flags['allowed-signing-policy-version']
+          || readEnvValue(existingEnv, 'ATTESTATION_SIGNER_ALLOWED_SIGNING_POLICY_VERSION'),
+      })
+
       // A complete deployment env: point the compose env_file directly at
       // this file (or copy it next to docker-compose.yml) — nothing else to
       // assemble by hand. staging_scaffold is mandatory pre-genesis; the
-      // bridge operator's policy bundle flips it to production_enforce.
+      // bridge operator's policy bundle selects audited staging_scaffold for
+      // mock proving or fail-closed production_enforce for production proving.
       const envLines = [
         `# Generated by scrollsdk signer init (${flags.id}). SECRET for the local`,
         '# backend — this file configures the signer\'s only key.',
         ...backendLines,
+        ...releasePinLines,
         `ATTESTATION_SIGNER_NETWORK=${flags.network}`,
         'ATTESTATION_SIGNER_POLICY_MODE=staging_scaffold',
         'ATTESTATION_SIGNER_TSO_URL=http://tso-not-yet-configured.invalid',
@@ -136,7 +193,18 @@ export class SignerInitCommand extends Command {
       }
       fs.writeFileSync(descriptorFile, `${JSON.stringify(descriptor, null, 2)}\n`)
 
-      const result = { backend: flags.backend, descriptorFile, endpoint, id: flags.id, kmsKeyId, publicKey, secretFile }
+      const result = {
+        allowedGitCommit: flags['allowed-git-commit'] || readEnvValue(existingEnv, 'ATTESTATION_SIGNER_ALLOWED_GIT_COMMIT'),
+        allowedReleaseVersion: flags['allowed-release-version'] || readEnvValue(existingEnv, 'ATTESTATION_SIGNER_ALLOWED_RELEASE_VERSION'),
+        allowedSigningPolicyVersion: flags['allowed-signing-policy-version'],
+        backend: flags.backend,
+        descriptorFile,
+        endpoint,
+        id: flags.id,
+        kmsKeyId,
+        publicKey,
+        secretFile,
+      }
       if (flags.json) json.success(result)
       else {
         this.log(chalk.green(`Deployment env written to ${secretFile}${flags.backend === 'local' ? ' (keep this private; it holds the signing key)' : ''}.`))

@@ -93,11 +93,9 @@ bridge:
 signing:
   # CubeSigner provides the single TEE key. Roles are populated by `scrollsdk setup cubesigner-init`.
   cubesigner: {}
-  # In-cluster attestation signers use the chart's explicit staging-local profile.
-  attestationSigner:
-    profile: staging-local
-    instances:
-      - id: signer-0
+  # Attestation signers are partner-operated docker-compose services. After
+  # generating this deployment, collect descriptors/*.json and run:
+  #   scrollsdk setup attestation-signer --threshold <T> --probe
 
 frontend:
   protocol: https

@@ -64,6 +64,20 @@ describe('attestation-signer descriptor contract', () => {
     expect(normalizeSignerEndpoint('http://10.0.0.5:4040', 'test')).to.equal('http://10.0.0.5:4040')
   })
 
+  it('rejects loopback and unspecified hosts that TSO can never reach cross-operator', () => {
+    for (const endpoint of [
+      'http://localhost:4040',
+      'http://signer.localhost:4040',
+      'http://127.0.0.1:4040',
+      'http://0.0.0.0:4040',
+      'http://[::1]:4040',
+      'http://[::]:4040',
+    ]) {
+      expect(() => validateAttestationSignerDescriptor({ ...validDescriptor(), endpoint }, 'test'))
+        .to.throw('cannot be reached from the bridge operator\'s TSO network')
+    }
+  })
+
   it('rejects bad ids and unknown networks', () => {
     expect(() => validateAttestationSignerDescriptor({ ...validDescriptor(), id: 'Bad_Id' }, 'test')).to.throw(/DNS-label/)
     expect(() => validateAttestationSignerDescriptor({ ...validDescriptor(), id: '-lead' }, 'test')).to.throw(/DNS-label/)
@@ -83,7 +97,7 @@ describe('attestation-signer descriptor contract', () => {
     await new Promise<void>(resolve => { server.listen(0, '127.0.0.1', resolve) })
     const { port } = server.address() as { port: number }
     try {
-      const health = await fetchSignerHealth(`http://127.0.0.1:${port}`)
+      const health = await fetchSignerHealth(`http://127.0.0.1:${port}`, 10_000, { allowLoopback: true })
       expect(health.publicKey).to.equal(VALID_PUBKEY)
       expect(health.network).to.equal('testnet')
     } finally {
@@ -92,7 +106,7 @@ describe('attestation-signer descriptor contract', () => {
 
     // Closed port must surface the cause, not a bare "fetch failed".
     try {
-      await fetchSignerHealth(`http://127.0.0.1:${port}`)
+      await fetchSignerHealth(`http://127.0.0.1:${port}`, 10_000, { allowLoopback: true })
       expect.fail('expected fetchSignerHealth to reject on a closed port')
     } catch (error) {
       expect((error as Error).message).to.match(/GET http.*failed/).and.to.match(/check DNS, connectivity/)

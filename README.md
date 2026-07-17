@@ -322,8 +322,8 @@ USAGE
 * [`scrollsdk setup dogecoin-wallet-import`](#scrollsdk-setup-dogecoin-wallet-import)
 * [`scrollsdk setup domains`](#scrollsdk-setup-domains)
 * [`scrollsdk setup eth-da-submitter`](#scrollsdk-setup-eth-da-submitter)
+* [`scrollsdk setup export-signer-policy`](#scrollsdk-setup-export-signer-policy)
 * [`scrollsdk setup fee-oracle`](#scrollsdk-setup-fee-oracle)
-* [`scrollsdk setup gas-token`](#scrollsdk-setup-gas-token)
 * [`scrollsdk setup gen-keystore`](#scrollsdk-setup-gen-keystore)
 * [`scrollsdk setup gen-l2-artifacts`](#scrollsdk-setup-gen-l2-artifacts)
 * [`scrollsdk setup gen-rpc-package`](#scrollsdk-setup-gen-rpc-package)
@@ -332,10 +332,14 @@ USAGE
 * [`scrollsdk setup l2-bootnode-reth`](#scrollsdk-setup-l2-bootnode-reth)
 * [`scrollsdk setup l2-sequencer-reth`](#scrollsdk-setup-l2-sequencer-reth)
 * [`scrollsdk setup prep-charts`](#scrollsdk-setup-prep-charts)
+* [`scrollsdk setup proof-aws-init`](#scrollsdk-setup-proof-aws-init)
 * [`scrollsdk setup proof-config`](#scrollsdk-setup-proof-config)
 * [`scrollsdk setup push-secrets`](#scrollsdk-setup-push-secrets)
 * [`scrollsdk setup tls`](#scrollsdk-setup-tls)
 * [`scrollsdk setup verify-contracts`](#scrollsdk-setup-verify-contracts)
+* [`scrollsdk signer init`](#scrollsdk-signer-init)
+* [`scrollsdk signer kms-pubkey`](#scrollsdk-signer-kms-pubkey)
+* [`scrollsdk signer preflight`](#scrollsdk-signer-preflight)
 * [`scrollsdk test contracts`](#scrollsdk-test-contracts)
 * [`scrollsdk test dependencies`](#scrollsdk-test-dependencies)
 * [`scrollsdk test dogeos [CASENAME]`](#scrollsdk-test-dogeos-casename)
@@ -896,43 +900,36 @@ _See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/
 
 ## `scrollsdk setup attestation-signer`
 
-Provision Kubernetes attestation-signer releases and select the bootstrap bridge keyset
+Import partner-operated attestation-signer descriptors and select the bootstrap bridge keyset. Signers are deployed by their operators (see `scrollsdk signer init` / `scrollsdk signer preflight`); this command only consumes descriptor files — endpoint + public key — and never provisions keys or Kubernetes releases.
 
 ```
 USAGE
-  $ scrollsdk setup attestation-signer [--active-signer-ids <value>] [--aws-profile <value>] [--aws-region <value>] [--backend
-    aws-kms|local] [-c <value>] [--eks-cluster <value>] [--from-spec <value>] [--generate-wif-keys] [--json]
-    [--kms-key-ids <value>] [--kms-role-arns <value>] [--namespace <value>] [--network-alias <value>] [-N]
-    [--signer-count <value>] [--threshold <value>]
+  $ scrollsdk setup attestation-signer [--active-signer-ids <value>] [-c <value>] [--descriptor <value>...] [--descriptor-dir
+    <value>] [--json] [--probe] [--threshold <value>]
 
 FLAGS
-  -N, --non-interactive            Run without prompts
   -c, --config=<value>             Path to doge-config.toml
-      --active-signer-ids=<value>  Comma-separated signer IDs used only by initial bridge setup (M of N)
-      --aws-profile=<value>        AWS CLI profile used for KMS and IAM provisioning
-      --aws-region=<value>         AWS region for KMS keys and the EKS cluster
-      --backend=<option>           Kubernetes signer backend
-                                   <options: aws-kms|local>
-      --eks-cluster=<value>        EKS cluster name used by IRSA trust policies
-      --from-spec=<value>          DeploymentSpec providing signer fleet, initial keyset, and profile
-      --[no-]generate-wif-keys     Generate local WIF keys
+      --active-signer-ids=<value>  Comma-separated signer IDs entering initial bridge setup (default: every imported
+                                   descriptor)
+      --descriptor=<value>...      attestation-signer-descriptor JSON file; repeat per signer
+      --descriptor-dir=<value>     Directory whose *.json files are all loaded as descriptors (default: descriptors/
+                                   when it exists and no --descriptor is given)
       --json                       Output structured JSON
-      --kms-key-ids=<value>        Optional KMS IDs in signer instance order
-      --kms-role-arns=<value>      Optional existing IRSA role ARNs in signer instance order
-      --namespace=<value>          Kubernetes namespace used by IRSA trust policies
-      --network-alias=<value>      Stable deployment alias used for AWS resource names
-      --signer-count=<value>       Number of deployed signer releases (N)
-      --threshold=<value>          Initial bridge attestation threshold (T)
+      --probe                      GET each signer /health and require the runtime public key to match the descriptor
+                                   before accepting it
+      --threshold=<value>          Initial bridge attestation threshold (T of the active set)
 
 DESCRIPTION
-  Provision Kubernetes attestation-signer releases and select the bootstrap bridge keyset
+  Import partner-operated attestation-signer descriptors and select the bootstrap bridge keyset. Signers are deployed by
+  their operators (see `scrollsdk signer init` / `scrollsdk signer preflight`); this command only consumes descriptor
+  files — endpoint + public key — and never provisions keys or Kubernetes releases.
 
 EXAMPLES
-  $ scrollsdk setup attestation-signer --from-spec deployment-spec.yaml
+  $ scrollsdk setup attestation-signer --threshold 2 --probe
 
-  $ scrollsdk setup attestation-signer --signer-count 5 --active-signer-ids signer-0,signer-1,signer-2 --threshold 2
+  $ scrollsdk setup attestation-signer --descriptor partner-a.json --descriptor partner-b.json --descriptor ours.json --threshold 2
 
-  $ scrollsdk setup attestation-signer --backend aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --namespace dogeos
+  $ scrollsdk setup attestation-signer --descriptor-dir descriptors/ --threshold 3 --active-signer-ids partner-a,partner-b,ours-0
 ```
 
 _See code: [src/commands/setup/attestation-signer.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/attestation-signer.ts)_
@@ -1350,6 +1347,62 @@ EXAMPLES
 
 _See code: [src/commands/setup/eth-da-submitter.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/eth-da-submitter.ts)_
 
+## `scrollsdk setup export-signer-policy`
+
+Assemble the post-genesis policy bundle and exact address-bearing commands for partner-operated attestation signers. The proving mode persisted by setup proof-config selects the e2e_harness-compatible mock signer posture or the fail-closed production posture; partners run the same descriptor, compose, policy-apply, TSO callback, and proof-fetch flow.
+
+```
+USAGE
+  $ scrollsdk setup export-signer-policy [--allowed-proof-triples <value>] [--bridge-namespace-id <value>] [-c <value>] [--json]
+    [--out <value>] [--protocol-context <value>] [--protocol-instance-id <value>] [--signer-proof-artifact-base-url
+    <value>] [--source-set <value>] [--supported-signing-policy-versions <value>] [--tee-allowed-signer-ids <value>]
+    [--tso-url <value>] [--verifier-registry <value>]
+
+FLAGS
+  -c, --config=<value>                             Path to doge-config.toml
+      --allowed-proof-triples=<value>              Envelope proof-triple allowlist (same format setup proof-config
+                                                   projects); default: derived from the staged ProofCoordinator.toml
+                                                   verifier block or the proof-artifacts manifests, empty when the proof
+                                                   topology is not staged yet (pass "" to force empty)
+      --bridge-namespace-id=<value>                20-byte bridge namespace id; default is read from
+                                                   .data/GenerateBridgeInfo.toml (namespace_id) written by bridge-init
+                                                   step 3
+      --json                                       Output structured JSON
+      --out=<value>                                [default: signer-policy-bundle] Bundle output directory
+      --protocol-context=<value>                   [default: .data/protocol_context.json] protocol_context.json produced
+                                                   by setup bridge-init step 5
+      --protocol-instance-id=<value>               32-byte protocol instance id (canonical protocol opening hash);
+                                                   default: read from the protocol_id sidecar next to --protocol-context
+                                                   written by bridge-init step 5
+      --signer-proof-artifact-base-url=<value>     Stable public GET base signers use to fetch accepted proof objects;
+                                                   default: the value setup proof-config staged into
+                                                   withdrawal-processor/WithdrawalProcessor.toml
+      --source-set=<value>                         [default: configs/source-set.toml] source-set.toml to include in the
+                                                   bundle
+      --supported-signing-policy-versions=<value>  [default: 1] CSV of supported signing policy versions
+      --tee-allowed-signer-ids=<value>             CSV of allowed TEE signer ids (compressed secp256k1 pubkeys);
+                                                   default: the tee_pubkey recorded in .data/setup_defaults.toml by
+                                                   cubesigner-init (pass "" to force empty)
+      --tso-url=<value>                            TSO base URL reachable FROM the signer operator network (used for
+                                                   signature callbacks); default: https://<[ingress].TSO_HOST> from
+                                                   config.toml
+      --verifier-registry=<value>                  [default: configs/verifier-registry.toml] verifier-registry.toml to
+                                                   include in the bundle
+
+DESCRIPTION
+  Assemble the post-genesis policy bundle and exact address-bearing commands for partner-operated attestation signers.
+  The proving mode persisted by setup proof-config selects the e2e_harness-compatible mock signer posture or the
+  fail-closed production posture; partners run the same descriptor, compose, policy-apply, TSO callback, and proof-fetch
+  flow.
+
+EXAMPLES
+  $ scrollsdk setup export-signer-policy
+
+  $ scrollsdk setup export-signer-policy --tso-url https://tso.dogeos.example --allowed-proof-triples "scroll_batch:scroll-production-v1:<vk-hash>"
+```
+
+_See code: [src/commands/setup/export-signer-policy.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/export-signer-policy.ts)_
+
 ## `scrollsdk setup fee-oracle`
 
 Configure the fee-oracle L2_GAS_ORACLE_SENDER signer
@@ -1387,23 +1440,6 @@ EXAMPLES
 ```
 
 _See code: [src/commands/setup/fee-oracle.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/fee-oracle.ts)_
-
-## `scrollsdk setup gas-token`
-
-Set up gas token configurations
-
-```
-USAGE
-  $ scrollsdk setup gas-token
-
-DESCRIPTION
-  Set up gas token configurations
-
-EXAMPLES
-  $ scrollsdk setup gas-token
-```
-
-_See code: [src/commands/setup/gas-token.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gas-token.ts)_
 
 ## `scrollsdk setup gen-keystore`
 
@@ -1734,45 +1770,107 @@ EXAMPLES
 
 _See code: [src/commands/setup/prep-charts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/prep-charts.ts)_
 
-## `scrollsdk setup proof-config`
+## `scrollsdk setup proof-aws-init`
 
-Populate proof topology values and the managed verifier block in ProofCoordinator.toml
+Provision the AWS side of the proof system (artifact S3 bucket, IRSA IAM roles, bearer-token secret) and project the results into the proof values files
 
 ```
 USAGE
-  $ scrollsdk setup proof-config --signer-proof-artifact-base-url <value> [--artifact-manifest <value>]
-    [--bridge-backend-profile <value>] [--coordinator-config <value>] [--json] [--program-manifest <value>...]
-    [--scroll-batch-backend-profile <value>] [--values-dir <value>] [--verifier-id <value>...]
+  $ scrollsdk setup proof-aws-init --aws-region <value> --eks-cluster <value> --network-alias <value> [--aws-profile
+    <value>] [--bucket <value>] [--coordinator-service-account <value>] [--json] [--key-prefix <value>] [--namespace
+    <value>] [--rotate-tokens] [--secret-name <value>] [--values-dir <value>] [--withdrawal-service-account <value>]
 
 FLAGS
-  --artifact-manifest=<value>               Real-proving artifact manifest (default: proof-artifacts/release.json)
-  --bridge-backend-profile=<value>          [default: bridge-prod-zkvm-v1] Backend profile stamped onto bridge prove
-                                            work
-  --coordinator-config=<value>              [default: proof-coordinator/ProofCoordinator.toml] Native
-                                            ProofCoordinator.toml containing scrollsdk managed verifier markers
-  --json                                    Output structured JSON
-  --program-manifest=<value>...             ProofProgramManifestV1 JSON; repeat for a non-standard layout (defaults to
-                                            proof-artifacts/manifests/*.json)
-  --scroll-batch-backend-profile=<value>    [default: scroll-prod-zkvm-batch-v1] Backend profile stamped onto Scroll
-                                            batch prove work
-  --signer-proof-artifact-base-url=<value>  (required) Stable public GET base used by attestation signers to fetch
-                                            accepted proof objects
-  --values-dir=<value>                      [default: values] Directory containing *-production.yaml files
-  --verifier-id=<value>...                  Optional FAMILY=ID override; repeat per family
+  --aws-profile=<value>                  AWS CLI profile used for provisioning
+  --aws-region=<value>                   (required) AWS region for the bucket, roles, and secret
+  --bucket=<value>                       Proof artifact S3 bucket (default: dogeos-<network-alias>-proof-artifacts)
+  --coordinator-service-account=<value>  [default: proof-coordinator] Kubernetes service account used by
+                                         proof-coordinator (must match the Helm release-derived name or an explicit
+                                         serviceAccount.name)
+  --eks-cluster=<value>                  (required) EKS cluster name used by the IRSA trust policies
+  --json                                 Output structured JSON
+  --key-prefix=<value>                   [default: proof-topology] Object key prefix for the proof artifact store
+  --namespace=<value>                    [default: default] Kubernetes namespace of the proof workloads
+  --network-alias=<value>                (required) Resource alias used to derive deterministic bucket and IAM role
+                                         names
+  --rotate-tokens                        Replace the proof-work/prover-worker tokens in an existing secret (both
+                                         workloads must be restarted afterwards)
+  --secret-name=<value>                  [default: scroll/proof-coordinator-secrets] Secrets Manager secret holding
+                                         proof-work-token and prover-worker-token
+  --values-dir=<value>                   [default: values] Directory containing *-production.yaml files
+  --withdrawal-service-account=<value>   [default: withdrawal-processor] Kubernetes service account used by
+                                         withdrawal-processor
 
 DESCRIPTION
-  Populate proof topology values and the managed verifier block in ProofCoordinator.toml
+  Provision the AWS side of the proof system (artifact S3 bucket, IRSA IAM roles, bearer-token secret) and project the
+  results into the proof values files
 
 EXAMPLES
-  # Use the standard proof-coordinator/, proof-artifacts/, and values/ layout
+  $ scrollsdk setup proof-aws-init --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet
 
-  $ scrollsdk setup proof-config --signer-proof-artifact-base-url https://proofs.example.com/proof-topology
+  $ scrollsdk setup proof-aws-init --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet --bucket my-proof-artifacts --rotate-tokens
+```
+
+_See code: [src/commands/setup/proof-aws-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-aws-init.ts)_
+
+## `scrollsdk setup proof-config`
+
+Generate the proof topology for the K8s withdrawal-processor/proof-coordinator services and, in mock mode, a Linux docker-compose prover-worker bundle. --proving-mode mock uses the e2e_harness dev_dummy identities and deterministic non-cryptographic proofs; production uses release artifacts. Partner attestation-signer policy is exported separately with setup export-signer-policy. withdrawalProof.enabled changes only with --enable-withdrawal-proof
+
+```
+USAGE
+  $ scrollsdk setup proof-config [--aws-profile <value>] [--aws-region <value>] [--bridge-backend-profile <value>]
+    [--deployment-dir <value>] [--enable-withdrawal-proof] [--json] [--proof-artifact-base-url <value>] [--proving-mode
+    mock|production] [--scaffold-coordinator-config] [--scroll-batch-backend-profile <value>] [--skip-worker-bundle]
+    [--verifier-id <value>...]
+
+FLAGS
+  --aws-profile=<value>                   AWS CLI profile used to read the prover-worker token (mock mode)
+  --aws-region=<value>                    AWS region of the scroll/proof-coordinator-secrets secret (mock mode; default:
+                                          the externalSecrets secretRegion in the values)
+  --bridge-backend-profile=<value>        Backend profile stamped onto bridge prove work (default: bridge-prod-zkvm-v1,
+                                          mock: bridge-topology-prover-v1)
+  --deployment-dir=<value>                [default: .] Deployment root containing config.toml, .data/, values/,
+                                          proof-coordinator/, withdrawal-processor/, and proof-artifacts/
+  --enable-withdrawal-proof               Set withdrawalProof.enabled=true after staging; without this flag the
+                                          activation switch is preserved as-is
+  --json                                  Output structured JSON
+  --proof-artifact-base-url=<value>       Credential-free public GET root for the proof object key prefix;
+                                          prover-workers read inputs and partner signers read accepted proof objects
+                                          below this same root
+  --proving-mode=<option>                 Proof implementation to stage; persisted into doge-config
+                                          [proofSystem].provingMode so every proof command agrees (default: the
+                                          persisted value, else production)
+                                          <options: mock|production>
+  --[no-]scaffold-coordinator-config      Generate ProofCoordinator.toml from prepared withdrawal configuration when
+                                          missing (default: true; never overwrites an existing file)
+  --scroll-batch-backend-profile=<value>  Backend profile stamped onto Scroll batch prove work (default:
+                                          scroll-prod-zkvm-batch-v1, mock: scroll-batch-topology-prover-v1)
+  --skip-worker-bundle                    Mock mode: do not generate the prover-worker-mock docker-compose bundle
+  --verifier-id=<value>...                Optional FAMILY=ID override; repeat per family
+
+DESCRIPTION
+  Generate the proof topology for the K8s withdrawal-processor/proof-coordinator services and, in mock mode, a Linux
+  docker-compose prover-worker bundle. --proving-mode mock uses the e2e_harness dev_dummy identities and deterministic
+  non-cryptographic proofs; production uses release artifacts. Partner attestation-signer policy is exported separately
+  with setup export-signer-policy. withdrawalProof.enabled changes only with --enable-withdrawal-proof
+
+EXAMPLES
+  # Production: run from the deployment root; standard paths are automatic
+
+  $ scrollsdk setup proof-config --proof-artifact-base-url https://proofs.example.com/proof-topology
 
 
 
-  # Override paths for a non-standard layout
+  # Mock proving: no release artifacts; ProofCoordinator.toml is scaffolded when missing
 
-  $ scrollsdk setup proof-config --signer-proof-artifact-base-url https://proofs.example.com/proof-topology --artifact-manifest release.json --program-manifest chunk.json --program-manifest batch.json --program-manifest bridge.json
+  $ scrollsdk setup proof-config --proving-mode mock --proof-artifact-base-url https://proofs.example.com/proof-topology
+
+
+
+  # Run from elsewhere with one root path; re-runs reuse the staged URL and mode
+
+  $ scrollsdk setup proof-config --deployment-dir /srv/dogeos-deployment --enable-withdrawal-proof
 ```
 
 _See code: [src/commands/setup/proof-config.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-config.ts)_
@@ -1885,6 +1983,125 @@ EXAMPLES
 ```
 
 _See code: [src/commands/setup/verify-contracts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/verify-contracts.ts)_
+
+## `scrollsdk signer init`
+
+Signer-operator tool: set up key material and emit the descriptor + a complete deployment env file. Run this on YOUR infrastructure — secrets and AWS calls never leave it. Specify the TSO-reachable signer IP/domain with --endpoint. Production operators also pin the approved image release version and full git commit here. The output directory is the single source of truth for signer preflight and compose deployment.
+
+```
+USAGE
+  $ scrollsdk signer init --id <value> [--allowed-git-commit <value>] [--allowed-release-version <value>]
+    [--allowed-signing-policy-version <value>] [--aws-profile <value>] [--backend local|aws-kms] [--create-key]
+    [--endpoint <value>] [--force] [--json] [--kms-key-id <value>] [--kms-region <value>] [--network
+    mainnet|regtest|testnet] [--out <value>]
+
+FLAGS
+  --allowed-git-commit=<value>              Production release-policy pin: full 40-character git commit embedded in the
+                                            approved signer image; must be paired with --allowed-release-version
+  --allowed-release-version=<value>         Production release-policy pin: Cargo release version embedded in the
+                                            approved signer image; must be paired with --allowed-git-commit
+  --allowed-signing-policy-version=<value>  [default: 1] Signer binary policy version approved by the operator (written
+                                            to attestation-signer.env)
+  --aws-profile=<value>                     AWS CLI profile for KMS calls (aws-kms backend)
+  --backend=<option>                        [default: local] Key backend
+                                            <options: local|aws-kms>
+  --create-key                              aws-kms backend: create the ECC_SECG_P256K1 signing key in your AWS account
+                                            instead of passing --kms-key-id
+  --endpoint=<value>                        Public HTTPS base URL where the bridge operator and TSO will reach this
+                                            signer (can be filled in later via signer preflight)
+  --force                                   Overwrite an existing env file in the output directory
+  --id=<value>                              (required) Stable signer identifier (DNS-label shaped, agreed with the
+                                            bridge operator)
+  --json                                    Output structured JSON
+  --kms-key-id=<value>                      aws-kms backend: key id, ARN, or alias/... of your existing ECC_SECG_P256K1
+                                            signing key
+  --kms-region=<value>                      aws-kms backend: AWS region of the key
+  --network=<option>                        [default: testnet] Dogecoin network
+                                            <options: mainnet|regtest|testnet>
+  --out=<value>                             Output directory (default: ./signer-<id>)
+
+DESCRIPTION
+  Signer-operator tool: set up key material and emit the descriptor + a complete deployment env file. Run this on YOUR
+  infrastructure — secrets and AWS calls never leave it. Specify the TSO-reachable signer IP/domain with --endpoint.
+  Production operators also pin the approved image release version and full git commit here. The output directory is the
+  single source of truth for signer preflight and compose deployment.
+
+EXAMPLES
+  $ scrollsdk signer init --id partner-a-signer-0 --network testnet --endpoint https://signer.partner-a.example:4040
+
+  $ scrollsdk signer init --id partner-a-signer-0 --network mainnet --endpoint https://signer.partner-a.example:4040 --backend aws-kms --kms-key-id arn:aws:kms:... --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567
+
+  $ scrollsdk signer init --id partner-a-signer-0 --network testnet --backend aws-kms --create-key --kms-region us-east-1
+```
+
+_See code: [src/commands/signer/init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/signer/init.ts)_
+
+## `scrollsdk signer kms-pubkey`
+
+Signer-operator tool: derive the compressed secp256k1 public key of an AWS KMS signing key (the value for ATTESTATION_SIGNER_KMS_EXPECTED_SIGNER_ID). Runs `aws kms get-public-key` with YOUR credentials; nothing is sent anywhere else.
+
+```
+USAGE
+  $ scrollsdk signer kms-pubkey --key-id <value> --region <value> [--aws-profile <value>] [--json]
+
+FLAGS
+  --aws-profile=<value>  AWS CLI profile to use
+  --json                 Output structured JSON
+  --key-id=<value>       (required) KMS key id, ARN, or alias/... of the ECC_SECG_P256K1 signing key
+  --region=<value>       (required) AWS region of the key
+
+DESCRIPTION
+  Signer-operator tool: derive the compressed secp256k1 public key of an AWS KMS signing key (the value for
+  ATTESTATION_SIGNER_KMS_EXPECTED_SIGNER_ID). Runs `aws kms get-public-key` with YOUR credentials; nothing is sent
+  anywhere else.
+
+EXAMPLES
+  $ scrollsdk signer kms-pubkey --key-id arn:aws:kms:us-east-1:123456789012:key/abcd-... --region us-east-1
+
+  $ scrollsdk signer kms-pubkey --key-id alias/my-attestation-signer --region eu-west-1 --aws-profile signer-ops
+```
+
+_See code: [src/commands/signer/kms-pubkey.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/signer/kms-pubkey.ts)_
+
+## `scrollsdk signer preflight`
+
+Signer-operator tool: probe a deployed attestation-signer over HTTP, verify its runtime public key, and emit the final descriptor to hand to the bridge operator. With --dir (a directory from signer init) the id, network, and expected public key are read from its descriptor.json and the verified endpoint is written back in place — no values to retype. Works with any backend because the public key is read from the running signer's /health.
+
+```
+USAGE
+  $ scrollsdk signer preflight [--dir <value>] [--endpoint <value>] [--expected-public-key <value>] [--id <value>]
+    [--json] [--network mainnet|regtest|testnet] [--out <value>]
+
+FLAGS
+  --dir=<value>                  signer init output directory; provides id/network/expected key from descriptor.json and
+                                 receives the finalized descriptor
+  --endpoint=<value>             Signer HTTP base URL to probe (with --dir, defaults to the descriptor endpoint if
+                                 already set)
+  --expected-public-key=<value>  Fail unless the runtime public key equals this compressed secp256k1 key (with --dir,
+                                 defaults to the descriptor publicKey)
+  --id=<value>                   Stable signer identifier for the emitted descriptor (required without --dir)
+  --json                         Output structured JSON
+  --network=<option>             Expected Dogecoin network (defaults to descriptor network with --dir, else to the
+                                 network reported by /health)
+                                 <options: mainnet|regtest|testnet>
+  --out=<value>                  Write the descriptor JSON to this path (default with --dir: its descriptor.json;
+                                 otherwise print to stdout)
+
+DESCRIPTION
+  Signer-operator tool: probe a deployed attestation-signer over HTTP, verify its runtime public key, and emit the final
+  descriptor to hand to the bridge operator. With --dir (a directory from signer init) the id, network, and expected
+  public key are read from its descriptor.json and the verified endpoint is written back in place — no values to retype.
+  Works with any backend because the public key is read from the running signer's /health.
+
+EXAMPLES
+  $ scrollsdk signer preflight --dir signer-partner-a-signer-0 --endpoint https://signer.partner-a.example:4040
+
+  $ scrollsdk signer preflight --endpoint https://signer.partner-a.example:4040 --id partner-a-signer-0 --out descriptor.json
+
+  $ scrollsdk signer preflight --endpoint https://signer.partner-a.example:4040 --id partner-a-signer-0 --expected-public-key 02ab...
+```
+
+_See code: [src/commands/signer/preflight.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/signer/preflight.ts)_
 
 ## `scrollsdk test contracts`
 

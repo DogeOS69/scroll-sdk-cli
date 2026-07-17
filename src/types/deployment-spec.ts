@@ -541,7 +541,7 @@ export interface BridgeConfig {
 }
 
 export interface SigningConfig {
-  /** In-cluster attestation signers deployed with the attestation-signer Helm chart (one release per key). */
+  /** @deprecated Removed deployment shape. Partner-operated signers are imported from descriptor files with setup attestation-signer. */
   attestationSigner?: {
     /** Shorthand used when instances is omitted. Defaults to bridge.keyCounts.attestation. */
     instanceCount?: number

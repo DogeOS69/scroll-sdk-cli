@@ -17,11 +17,25 @@ export const WITHDRAWAL_PROOF_ACTIVATION_ENV = {
   requireScroll: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION',
 } as const
 
-const WITHDRAWAL_PROOF_ACTIVATION_VALUES: Record<string, string> = {
-  [WITHDRAWAL_PROOF_ACTIVATION_ENV.apiEnabled]: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
-  [WITHDRAWAL_PROOF_ACTIVATION_ENV.mode]: '{{ ternary "production" "disabled" .Values.withdrawalProof.enabled }}',
-  [WITHDRAWAL_PROOF_ACTIVATION_ENV.requireBridge]: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
-  [WITHDRAWAL_PROOF_ACTIVATION_ENV.requireScroll]: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
+/**
+ * Which proof implementation the staged topology targets. `mock` renders the
+ * dev_dummy/exact-mock lane (deterministic, NON-cryptographic proofs paired
+ * with prover-worker-mock); `production` renders the release-artifact real
+ * proving lane. Same services, same wiring — only proof generation and
+ * verification differ.
+ */
+export type ProvingMode = 'mock' | 'production'
+
+function withdrawalProofActivationValues(provingMode: ProvingMode): Record<string, string> {
+  // The single Helm switch projects the matching [proof_system].mode so
+  // `withdrawalProof.enabled` is the activation gate in both proving modes.
+  const activeMode = provingMode === 'mock' ? 'dev_dummy' : 'production'
+  return {
+    [WITHDRAWAL_PROOF_ACTIVATION_ENV.apiEnabled]: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
+    [WITHDRAWAL_PROOF_ACTIVATION_ENV.mode]: `{{ ternary "${activeMode}" "disabled" .Values.withdrawalProof.enabled }}`,
+    [WITHDRAWAL_PROOF_ACTIVATION_ENV.requireBridge]: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
+    [WITHDRAWAL_PROOF_ACTIVATION_ENV.requireScroll]: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
+  }
 }
 
 const MANAGED_PROOF_TABLES = new Set([
@@ -524,7 +538,10 @@ export function setWithdrawalConfigToml(values: Record<string, any>, source: str
  * Project the single operator-facing Helm switch into the four Rust activation
  * fields that must change atomically. Deep proof topology remains TOML-owned.
  */
-export function ensureWithdrawalProofActivationSwitch(values: Record<string, any>): boolean {
+export function ensureWithdrawalProofActivationSwitch(
+  values: Record<string, any>,
+  provingMode: ProvingMode = 'production'
+): boolean {
   let changed = false
   values.withdrawalProof ||= {}
   if (values.withdrawalProof.enabled === undefined) {
@@ -538,7 +555,7 @@ export function ensureWithdrawalProofActivationSwitch(values: Record<string, any
 
   values.env ||= []
   if (!Array.isArray(values.env)) throw new TypeError('withdrawal-processor values: env must be an array')
-  for (const [name, value] of Object.entries(WITHDRAWAL_PROOF_ACTIVATION_VALUES)) {
+  for (const [name, value] of Object.entries(withdrawalProofActivationValues(provingMode))) {
     const existing = values.env.find((item: any) => item?.name === name)
     if (existing) {
       if (existing.value !== value || existing.valueFrom !== undefined) changed = true

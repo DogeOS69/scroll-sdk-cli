@@ -182,6 +182,15 @@ export interface DogeConfig {
     }>
   }
   network: Network
+  /**
+   * Deployment-wide proof posture. `mock` generates the dev_dummy topology
+   * (deterministic non-cryptographic proofs via prover-worker-mock) across
+   * every proof-config-managed artifact; `production` (default) requires the
+   * released proof artifacts. Persisted by `setup proof-config --proving-mode`.
+   */
+  proofSystem?: {
+    provingMode?: 'mock' | 'production'
+  }
   rpc?: {
     apiKey?: string
     blockbookAPIUrl?: string

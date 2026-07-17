@@ -1,8 +1,9 @@
 import { expect } from 'chai'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 
 import {
-  applyAttestationSignerNetwork,
-  applyAttestationSignerRuntimeValues,
   applyConfigMapEnvValues,
   applyEthDaSubmitterInitialBatchSidecar,
   applyFeeOracleCurrentEnv,
@@ -13,6 +14,7 @@ import {
   buildEthDaSubmitterPrepEnv,
   buildFeeOraclePrepEnv,
   buildL1InterfaceBlobSourcePrepEnv,
+  buildTsoSigners,
   buildWithdrawalBlobSourcePrepEnv,
   getEthereumDaS3PublicBaseUrl,
   getEthereumDaS3PublicBlobUrl,
@@ -22,6 +24,7 @@ import {
   removeConfigMapEnvKeys,
   removeEnvArrayKeys,
   removeL2GethBlobS3ExtraParams,
+  removeRetiredAttestationSignerValues,
   scrubFeeOracleLegacyValues,
   scrubWithdrawalLegacyProofEnv,
   shouldSkipL2ContractDeploymentBlockUpdate,
@@ -75,78 +78,47 @@ describe('setup prep-charts withdrawal proof config migration', () => {
   })
 })
 
-describe('setup prep-charts attestation-signer updates', () => {
-  it('updates the structured network without touching other signer settings', () => {
-    const values = {
-      attestationSigner: {
-        network: 'regtest',
-        profile: 'staging-local',
-        tso: { url: 'http://tso-service:3000' },
-      },
+describe('setup prep-charts retired attestation-signer cleanup', () => {
+  it('removes only the retired signer values files', () => {
+    const valuesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prep-retired-signer-'))
+    try {
+      for (const file of [
+        'attestation-signer-production.yaml',
+        'attestation-signer-production-0.yaml',
+        'attestation-signer-production-12.yaml',
+        'withdrawal-processor-production.yaml',
+      ]) fs.writeFileSync(path.join(valuesDir, file), 'enabled: true\n')
+
+      expect(removeRetiredAttestationSignerValues(valuesDir)).to.deep.equal([
+        'attestation-signer-production-0.yaml',
+        'attestation-signer-production-12.yaml',
+        'attestation-signer-production.yaml',
+      ])
+      expect(fs.readdirSync(valuesDir)).to.deep.equal(['withdrawal-processor-production.yaml'])
+    } finally {
+      fs.rmSync(valuesDir, { force: true, recursive: true })
     }
-
-    const changes = applyAttestationSignerNetwork(values, 'testnet')
-
-    expect(values.attestationSigner.network).to.equal('testnet')
-    expect(values.attestationSigner.profile).to.equal('staging-local')
-    expect(values.attestationSigner.tso.url).to.equal('http://tso-service:3000')
-    expect(changes).to.deep.equal([{
-      key: 'attestationSigner.network',
-      newValue: 'testnet',
-      oldValue: 'regtest',
-    }])
   })
+})
 
-  it('does not parse or create legacy embedded TOML config', () => {
-    const values = {
-      configMaps: {
-        config: {
-          data: {
-            'attestation-signer.toml': 'network = "regtest"',
-          },
-        },
-      },
-    }
-
-    expect(applyAttestationSignerNetwork(values, 'testnet')).to.deep.equal([])
-    expect(values.configMaps.config.data['attestation-signer.toml']).to.equal('network = "regtest"')
-  })
-
-  it('writes per-instance KMS and IRSA values without an ExternalSecret', () => {
-    const values: any = {
-      attestationSigner: { network: 'testnet', profile: 'staging-local' },
-      externalSecrets: {
-        'attestation-signer-1-env': {
-          data: [{ remoteRef: { key: 'dogeos/attestation-signer-1-env', property: 'ATTESTATION_SIGNER_WIF' }, secretKey: 'ATTESTATION_SIGNER_WIF' }],
-        },
-      },
-      global: { fullnameOverride: 'attestation-signer-1', nameOverride: 'attestation-signer-1' },
-    }
-    const signerConfig = {
-      backend: 'aws_kms' as const,
-      kms: {
-        instances: [{
-          expectedSignerId: `02${'ab'.repeat(32)}`,
-          index: 1,
-          kmsKeyId: 'alias/dogeos/attestation-1',
-          roleArn: 'arn:aws:iam::123456789012:role/attestation-1',
-          serviceAccount: 'attestation-signer-1',
-        }],
-        region: 'us-west-2',
-      },
-      profile: 'staging-kms' as const,
-    }
-
-    applyAttestationSignerRuntimeValues(values, 'testnet', signerConfig, 1)
-
-    expect(values.attestationSigner.profile).to.equal('staging-kms')
-    expect(values.attestationSigner.kms.region).to.equal('us-west-2')
-    expect(values.attestationSigner.kms.expectedSignerId).to.equal(`02${'ab'.repeat(32)}`)
-    expect(values.attestationSigner.kms.keyId).to.equal('alias/dogeos/attestation-1')
-    expect(values.attestationSigner).not.to.have.property('local')
-    expect(values).not.to.have.property('global')
-    expect(values).not.to.have.property('externalSecrets')
-    expect(values.serviceAccount.annotations['eks.amazonaws.com/role-arn']).to.equal('arn:aws:iam::123456789012:role/attestation-1')
+describe('setup prep-charts external attestation signer routing', () => {
+  it('preserves descriptor IP/domain endpoints in the TSO signer list', () => {
+    expect(buildTsoSigners({
+      cubesigner: { roles: [
+        { keys: [], name: 'tee-0', role_id: 'role-0' },
+        { keys: [], name: 'tee-1', role_id: 'role-1' },
+      ] },
+      network: 'testnet',
+      signerUrls: [
+        'https://signer.partner-a.example:4040',
+        'http://10.20.30.40:4040',
+      ],
+    })).to.deep.equal([
+      { network: 'testnet', role: 'Tee', uri: 'http://cubesigner-signer-0:3000' },
+      { network: 'testnet', role: 'Tee', uri: 'http://cubesigner-signer-1:3000' },
+      { network: 'testnet', role: 'Attestation', uri: 'https://signer.partner-a.example:4040' },
+      { network: 'testnet', role: 'Attestation', uri: 'http://10.20.30.40:4040' },
+    ])
   })
 })
 

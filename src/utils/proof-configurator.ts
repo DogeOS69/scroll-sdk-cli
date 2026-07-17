@@ -7,6 +7,15 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import {
+  MOCK_BRIDGE_BACKEND_PROFILE,
+  MOCK_PROGRAM_MANIFESTS_DIR,
+  MOCK_SCROLL_BATCH_BACKEND_PROFILE,
+  ensureMockProgramManifests,
+  mockVerifierIds,
+} from './mock-proof-topology.js'
+import {
+  type ProvingMode,
+  WITHDRAWAL_CONFIG_FILE,
   WITHDRAWAL_NATIVE_CONFIG_RELPATH,
   ensureWithdrawalChartWiring,
   ensureWithdrawalConfigValues,
@@ -16,11 +25,19 @@ import {
   setWithdrawalConfigToml,
 } from './withdrawal-config.js'
 
+export type { ProvingMode } from './withdrawal-config.js'
+
 export type ProofFamily = 'bridge_transition' | 'scroll_batch' | 'scroll_chunk'
 
 export const DEFAULT_SCROLL_BATCH_BACKEND_PROFILE = 'scroll-prod-zkvm-batch-v1'
 export const DEFAULT_BRIDGE_BACKEND_PROFILE = 'bridge-prod-zkvm-v1'
-export const DEFAULT_ENVELOPE_MAX_PROOF_ARTIFACTS = 4
+export const DEFAULT_PROOF_ARTIFACT_MANIFEST = 'proof-artifacts/release.json'
+export const DEFAULT_PROOF_COORDINATOR_CONFIG = 'proof-coordinator/ProofCoordinator.toml'
+export const DEFAULT_PROOF_PROGRAM_MANIFESTS = [
+  'proof-artifacts/manifests/scroll-chunk.json',
+  'proof-artifacts/manifests/scroll-batch.json',
+  'proof-artifacts/manifests/bridge-transition.json',
+]
 const DEFAULT_SIGNED_URL_TTL_MS = 3_600_000
 const DEFAULT_MAX_READ_BODY_BYTES = 512 * 1024 * 1024
 const MAX_TRANSPORT_HORIZON_MS = 7 * 24 * 60 * 60 * 1000
@@ -34,6 +51,11 @@ const SCROLL_BATCH_COMMITMENT_ENV =
   'DOGEOS_PROOF_COORDINATOR_MATERIALIZER__SCROLL_BATCH__SUBPROCESS__CHUNK_PROGRAM_COMMITMENT_HEX'
 
 interface ProofProgramManifest {
+  artifacts: Array<{
+    kind: 'app_vk' | 'app_vmexe' | 'openvm_config' | 'proving_params'
+    sha256: string
+    size_bytes: number
+  }>
   circuit_id: string
   circuit_version: string
   hard_fork_name?: null | string
@@ -41,6 +63,10 @@ interface ProofProgramManifest {
   proof_family: ProofFamily
   proof_system_id: string
   schema_version: number
+  toolchain: {
+    openvm_version: string
+    rust_toolchain: string
+  }
   verification_key_hash: string
 }
 
@@ -74,14 +100,23 @@ interface VerifierArtifact {
 }
 
 export interface ConfigureProofValuesOptions {
-  artifactManifestPath: string
+  /** Ignored in mock proving mode (no release artifacts exist). */
+  artifactManifestPath?: string
   bridgeBackendProfile?: string
   coordinatorConfigPath: string
+  /**
+   * Public HTTPS host for the proof-coordinator ingress (external prover
+   * workers claim through it). When set, the coordinator values gain an
+   * nginx + cert-manager ingress for this host.
+   */
+  coordinatorIngressHost?: string
   enableWithdrawalProof?: boolean
-  manifestPaths: string[]
+  /** Ignored in mock proving mode (mock manifests are synthesized). */
+  manifestPaths?: string[]
+  /** Default `production`; `mock` stages the dev_dummy/prover-worker-mock lane. */
+  provingMode?: ProvingMode
   scrollBatchBackendProfile?: string
   signerProofArtifactBaseUrl?: string
-  skipAttestationSigners?: boolean
   valuesDir: string
   verifierIds?: Partial<Record<ProofFamily, string>>
   /**
@@ -97,6 +132,9 @@ export interface ConfigureProofValuesResult {
   configFile: string
   families: ProofFamily[]
   files: string[]
+  provingMode: ProvingMode
+  signerProofArtifactBaseUrl: string
+  signerProofArtifactBaseUrlSource: 'flag' | 'staged'
 }
 
 const MANAGED_VERIFIER_BEGIN = '# BEGIN scrollsdk managed verifier configuration'
@@ -188,6 +226,75 @@ function parsePositiveInteger(
   return parsed
 }
 
+function assertJsonObjectKeys(
+  value: unknown,
+  allowed: readonly string[],
+  required: readonly string[],
+  label: string
+): asserts value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON object`)
+  }
+
+  const keys = Object.keys(value)
+  const unknown = keys.filter(key => !allowed.includes(key))
+  if (unknown.length > 0) throw new Error(`${label} contains unknown field(s): ${unknown.join(', ')}`)
+  const missing = required.filter(key => !Object.hasOwn(value, key))
+  if (missing.length > 0) throw new Error(`${label} is missing required field(s): ${missing.join(', ')}`)
+}
+
+/** Mirror dogeos_proof_worker_contract::ProofProgramManifestV1 validation. */
+function validateProgramManifestShape(manifest: ProofProgramManifest, manifestPath: string): void {
+  const topLevel = [
+    'artifacts',
+    'circuit_id',
+    'circuit_version',
+    'hard_fork_name',
+    'program_commitment_hash',
+    'proof_family',
+    'proof_system_id',
+    'schema_version',
+    'toolchain',
+    'verification_key_hash',
+  ] as const
+  assertJsonObjectKeys(
+    manifest,
+    topLevel,
+    topLevel.filter(key => key !== 'hard_fork_name'),
+    manifestPath
+  )
+  assertJsonObjectKeys(
+    manifest.toolchain,
+    ['openvm_version', 'rust_toolchain'],
+    ['openvm_version', 'rust_toolchain'],
+    `${manifestPath}: toolchain`
+  )
+  assertIdentifier(manifest.toolchain.openvm_version, `${manifestPath}: toolchain.openvm_version`)
+  assertIdentifier(manifest.toolchain.rust_toolchain, `${manifestPath}: toolchain.rust_toolchain`)
+
+  if (!Array.isArray(manifest.artifacts)) throw new Error(`${manifestPath}: artifacts must be an array`)
+  const kindOrder = ['app_vmexe', 'openvm_config', 'app_vk', 'proving_params'] as const
+  let previous = -1
+  for (const [index, artifact] of manifest.artifacts.entries()) {
+    const label = `${manifestPath}: artifacts[${index}]`
+    assertJsonObjectKeys(artifact, ['kind', 'sha256', 'size_bytes'], ['kind', 'sha256', 'size_bytes'], label)
+    const order = kindOrder.indexOf(artifact.kind)
+    if (order < 0) throw new Error(`${label}.kind is unsupported: ${String(artifact.kind)}`)
+    if (order <= previous) {
+      throw new Error(`${manifestPath}: artifacts must use unique kinds in canonical order (${kindOrder.join(', ')})`)
+    }
+
+    previous = order
+    artifact.sha256 = normalizeHex(artifact.sha256, 32, `${label}.sha256`)
+    if (typeof artifact.size_bytes !== 'number') throw new Error(`${label}.size_bytes must be a JSON integer`)
+    parsePositiveInteger(artifact.size_bytes, 1, `${label}.size_bytes`)
+  }
+
+  if (manifest.artifacts[0]?.kind !== 'app_vmexe' || manifest.artifacts[1]?.kind !== 'openvm_config') {
+    throw new Error(`${manifestPath}: artifacts must contain app_vmexe followed by openvm_config`)
+  }
+}
+
 function loadProgramManifests(paths: string[]): Map<ProofFamily, { manifest: ProofProgramManifest; path: string }> {
   if (paths.length === 0) throw new Error('At least one --program-manifest is required')
   const manifests = new Map<ProofFamily, { manifest: ProofProgramManifest; path: string }>()
@@ -195,6 +302,7 @@ function loadProgramManifests(paths: string[]): Map<ProofFamily, { manifest: Pro
 
   for (const manifestPath of paths.map(item => path.resolve(item))) {
     const manifest = readJson<ProofProgramManifest>(manifestPath)
+    validateProgramManifestShape(manifest, manifestPath)
     if (manifest.schema_version !== 1) throw new Error(`${manifestPath}: unsupported schema_version ${manifest.schema_version}`)
     if (!Object.hasOwn(FAMILY_CONFIG_KEYS, manifest.proof_family)) {
       throw new Error(`${manifestPath}: unsupported proof_family ${String(manifest.proof_family)}`)
@@ -317,26 +425,26 @@ function loadVerifierArtifact(artifactManifestPath: string): VerifierArtifact {
   return { base64: bytes.toString('base64'), sha256: actualSha256 }
 }
 
-function normalizeSignerProofArtifactBaseUrl(value: string | undefined): string {
+export function normalizeSignerProofArtifactBaseUrl(value: string | undefined): string {
   if (!value || value.trim() === '') {
-    throw new Error('--signer-proof-artifact-base-url is required for production bridge proof evidence')
+    throw new Error('a proof artifact public base URL is required for bridge proof evidence')
   }
 
   let parsed: URL
   try {
     parsed = new URL(value)
   } catch (error) {
-    throw new Error(`--signer-proof-artifact-base-url must be an absolute URL: ${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`proof artifact base URL must be an absolute URL: ${error instanceof Error ? error.message : String(error)}`)
   }
 
   if (parsed.username || parsed.password || parsed.search || parsed.hash) {
-    throw new Error('--signer-proof-artifact-base-url must not contain credentials, a query, or a fragment')
+    throw new Error('proof artifact base URL must not contain credentials, a query, or a fragment')
   }
 
   const hostname = parsed.hostname.replaceAll(/^\[|]$/g, '').toLowerCase()
   const loopback = hostname === 'localhost' || hostname === '::1' || hostname.startsWith('127.')
   if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
-    throw new Error('--signer-proof-artifact-base-url must use https:// (loopback http:// is allowed for dev/test)')
+    throw new Error('proof artifact base URL must use https:// (loopback http:// is allowed for dev/test)')
   }
 
   parsed.pathname = parsed.pathname.replaceAll(/\/+$/g, '') || '/'
@@ -393,53 +501,68 @@ function buildAllowedProofTriples(
   }).join(',')
 }
 
-/**
- * The prep-charts template plus every expanded per-instance values file.
- * Writing the template keeps the projection stable across prep-charts re-runs
- * (instances are regenerated from it); writing the instances makes the change
- * effective without another prep-charts pass.
- */
-function listAttestationSignerValuesFiles(valuesDir: string): string[] {
-  const files: string[] = []
-  const template = path.join(valuesDir, 'attestation-signer-production.yaml')
-  if (fs.existsSync(template)) files.push(template)
-  for (const entry of fs.readdirSync(valuesDir)) {
-    if (/^attestation-signer-production-\d+\.yaml$/.test(entry)) files.push(path.join(valuesDir, entry))
-  }
-
-  return files.sort()
+/** A value resolved from a deployment artifact instead of a CLI flag. */
+export interface DerivedValue {
+  source: string
+  value: string
 }
 
-function prepareAttestationSigners(
-  valuesDir: string,
-  allowedProofTriples: string
-): Array<{ filePath: string; values: any }> {
-  const files = listAttestationSignerValuesFiles(valuesDir)
-  if (files.length === 0) {
-    throw new Error(
-      `No attestation-signer values found in ${valuesDir} (expected attestation-signer-production.yaml or attestation-signer-production-<N>.yaml); `
-      + 'pass --skip-attestation-signers only when signer envelope policy is managed elsewhere'
-    )
+/**
+ * Read the signer proof-artifact base URL that an earlier proof-config run
+ * staged into a WithdrawalProcessor.toml document, so later invocations
+ * (proof-config re-runs, export-signer-policy) do not need the flag repeated.
+ */
+export function readStagedSignerProofArtifactBaseUrl(withdrawalConfigSource: string): string | undefined {
+  const parsed = toml.parse(withdrawalConfigSource) as any
+  const value = parsed?.proof_system?.signer_proof_artifact_base_url
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined
+}
+
+/**
+ * Derive the envelope proof-triple allowlist from deployment artifacts.
+ *
+ * Preferred source is the managed verifier block proof-config staged into
+ * ProofCoordinator.toml: it carries the deployed verifier identities including
+ * any --verifier-id overrides, so the exported signer policy is guaranteed to
+ * allow exactly what the coordinator enforces. Before proof-config has run,
+ * fall back to computing the same CSV from the release manifests; when neither
+ * exists the proof topology is not staged yet and the caller keeps the
+ * allowlist empty.
+ */
+export function deriveAllowedProofTriples(
+  coordinatorConfigPath: string,
+  manifestPaths: string[]
+): DerivedValue | undefined {
+  const configFile = path.resolve(coordinatorConfigPath)
+  if (fs.existsSync(configFile)) {
+    const parsed = toml.parse(fs.readFileSync(configFile, 'utf8')) as any
+    const verifier = parsed?.verifier
+    const triples: string[] = []
+    for (const [family, proofKind] of ENVELOPE_PROOF_KINDS) {
+      const identity = verifier?.[FAMILY_CONFIG_KEYS[family]]
+      const verifierId = identity?.verifier_id
+      const vkHash = identity?.expected_verification_key_hash_hex
+      if (typeof verifierId !== 'string' || typeof vkHash !== 'string') break
+      assertIdentifier(verifierId, `${family} verifier ID`)
+      if (/[,:]/.test(verifierId)) {
+        throw new Error(`${family} verifier ID must not contain ':' or ',' — it is embedded in the signer proof-triple CSV`)
+      }
+
+      triples.push(`${proofKind}:${verifierId}:${bareHex(vkHash, 32, `${family} verification key hash`)}`)
+    }
+
+    if (triples.length === ENVELOPE_PROOF_KINDS.length) {
+      return { source: configFile, value: triples.join(',') }
+    }
   }
 
-  return files.map(filePath => {
-    const values = readYaml(filePath)
-    const signer = values.attestationSigner
-    if (!signer || typeof signer !== 'object' || Array.isArray(signer)) {
-      throw new Error(`${filePath}: attestationSigner must be a YAML mapping`)
-    }
+  const resolvedManifests = manifestPaths.map(item => path.resolve(item))
+  if (resolvedManifests.length > 0 && resolvedManifests.every(item => fs.existsSync(item))) {
+    const manifests = loadProgramManifests(resolvedManifests)
+    return { source: resolvedManifests.join(', '), value: buildAllowedProofTriples(manifests, {}) }
+  }
 
-    signer.envelopePolicy ||= {}
-    signer.envelopePolicy.allowedProofTriples = allowedProofTriples
-    const cap = signer.envelopePolicy.maxProofArtifacts
-    if (!Number.isSafeInteger(cap) || cap < ENVELOPE_PROOF_KINDS.length) {
-      signer.envelopePolicy.maxProofArtifacts = DEFAULT_ENVELOPE_MAX_PROOF_ARTIFACTS
-    }
-
-    signer.proofArtifact ||= {}
-    signer.proofArtifact.fetchMode = 'http'
-    return { filePath, values }
-  })
+  return undefined
 }
 
 function readYaml(filePath: string): any {
@@ -607,19 +730,14 @@ function readCoordinatorRuntimeProjection(
   }
 }
 
-function validateCoordinatorMaterializerTopology(coordinatorConfigPath: string): void {
+function validateCoordinatorMaterializerTopology(
+  coordinatorConfigPath: string,
+  provingMode: ProvingMode = 'production'
+): void {
   const config = toml.parse(fs.readFileSync(coordinatorConfigPath, 'utf8')) as any
   const { materializer } = config
   const requireString = (value: any, label: string): void => {
     assertIdentifier(value, `${coordinatorConfigPath}: ${label}`)
-  }
-
-  const requirePositiveInteger = (value: any, label: string, maximum = Number.MAX_SAFE_INTEGER): void => {
-    if (value === undefined || value === null || value === '') {
-      throw new Error(`${coordinatorConfigPath}: ${label} is required`)
-    }
-
-    parsePositiveInteger(value, 1, `${coordinatorConfigPath}: ${label}`, maximum)
   }
 
   const requireEnabled = (table: any, label: string): void => {
@@ -662,18 +780,62 @@ function validateCoordinatorMaterializerTopology(coordinatorConfigPath: string):
 
   requireString(materializer.artifact_store_root, '[materializer].artifact_store_root')
 
-  requireEnabled(materializer.scroll_chunk_segmentation, 'materializer.scroll_chunk_segmentation')
   requireEnabled(materializer.scroll_batch, 'materializer.scroll_batch')
   requireString(
     materializer.scroll_batch.materializer_output_root,
     '[materializer.scroll_batch].materializer_output_root'
   )
 
-  if (materializer.scroll_batch.dev_sentinel === true) {
-    throw new Error(`${coordinatorConfigPath}: production proof config cannot use materializer.scroll_batch.dev_sentinel`)
+  if (provingMode === 'mock') {
+    // Mock proving runs the dev-sentinel scroll materializers (the dogeos-core
+    // e2e strict-withdrawal shape). The production subprocess topology must
+    // not coexist, or the deployment would silently mix real and mock scroll
+    // materialize lanes.
+    requireEnabled(materializer.dev_sentinel_scroll_chunk, 'materializer.dev_sentinel_scroll_chunk')
+    if (materializer.scroll_batch.dev_sentinel !== true) {
+      throw new Error(`${coordinatorConfigPath}: mock proving requires [materializer.scroll_batch].dev_sentinel = true`)
+    }
+
+    if (materializer.scroll_batch.proof_mode !== 'Mock') {
+      throw new Error(`${coordinatorConfigPath}: mock proving requires [materializer.scroll_batch].proof_mode = "Mock"`)
+    }
+
+    if (materializer.scroll_batch.subprocess !== undefined) {
+      throw new Error(
+        `${coordinatorConfigPath}: mock proving must not configure [materializer.scroll_batch.subprocess]; regenerate the coordinator TOML with --scaffold-coordinator-config under mock proving`
+      )
+    }
+  } else {
+    requireEnabled(materializer.scroll_chunk_segmentation, 'materializer.scroll_chunk_segmentation')
+    if (materializer.scroll_batch.dev_sentinel === true) {
+      throw new Error(`${coordinatorConfigPath}: production proof config cannot use materializer.scroll_batch.dev_sentinel`)
+    }
+
+    validateScrollBatchSubprocess(coordinatorConfigPath, materializer.scroll_batch.subprocess)
   }
 
-  const scrollBatchSubprocess = materializer.scroll_batch.subprocess
+  requireEnabled(materializer.bridge, 'materializer.bridge')
+  if (materializer.bridge.advance_l1 !== true || materializer.bridge.advance_l2 !== true) {
+    throw new Error(
+      `${coordinatorConfigPath}: [materializer.bridge] must set advance_l1 = true and advance_l2 = true to match WP`
+    )
+  }
+
+  if (!materializer.bridge.dogecoin_rpc || typeof materializer.bridge.dogecoin_rpc !== 'object') {
+    throw new Error(`${coordinatorConfigPath}: [materializer.bridge.dogecoin_rpc] is required for AdvanceL1`)
+  }
+
+  requireString(materializer.bridge.dogecoin_rpc.url, '[materializer.bridge.dogecoin_rpc].url')
+  requireString(materializer.bridge.dogecoin_rpc.network, '[materializer.bridge.dogecoin_rpc].network')
+
+  validateEthereumDaSection(coordinatorConfigPath, materializer.bridge.ethereum_da, 'materializer.bridge.ethereum_da')
+}
+
+function validateScrollBatchSubprocess(coordinatorConfigPath: string, scrollBatchSubprocess: any): void {
+  const requireString = (value: any, label: string): void => {
+    assertIdentifier(value, `${coordinatorConfigPath}: ${label}`)
+  }
+
   if (!scrollBatchSubprocess || typeof scrollBatchSubprocess !== 'object') {
     throw new Error(
       `${coordinatorConfigPath}: [materializer.scroll_batch.subprocess] is required; production cannot rely on an external summary.json producer`
@@ -701,9 +863,18 @@ function validateCoordinatorMaterializerTopology(coordinatorConfigPath: string):
   }
 
   requireString(scrollBatchSubprocess.scratch_root, '[materializer.scroll_batch.subprocess].scratch_root')
-  requirePositiveInteger(
+  if (
+    scrollBatchSubprocess.subprocess_timeout_ms === undefined ||
+    scrollBatchSubprocess.subprocess_timeout_ms === null ||
+    scrollBatchSubprocess.subprocess_timeout_ms === ''
+  ) {
+    throw new Error(`${coordinatorConfigPath}: [materializer.scroll_batch.subprocess].subprocess_timeout_ms is required`)
+  }
+
+  parsePositiveInteger(
     scrollBatchSubprocess.subprocess_timeout_ms,
-    '[materializer.scroll_batch.subprocess].subprocess_timeout_ms'
+    1,
+    `${coordinatorConfigPath}: [materializer.scroll_batch.subprocess].subprocess_timeout_ms`
   )
   const hasL2Rpc = scrollBatchSubprocess.l2_rpc_url !== undefined
   const hasBlockWitnessDir = scrollBatchSubprocess.block_witness_dir !== undefined
@@ -718,54 +889,51 @@ function validateCoordinatorMaterializerTopology(coordinatorConfigPath: string):
     requireString(scrollBatchSubprocess.block_witness_dir, '[materializer.scroll_batch.subprocess].block_witness_dir')
   }
 
-  const validateEthereumDa = (ethereumDa: any, label: string): void => {
-    if (!ethereumDa || typeof ethereumDa !== 'object') {
-      throw new Error(`${coordinatorConfigPath}: [${label}] is required`)
-    }
-
-    requireString(ethereumDa.l1_rpc_url, `[${label}].l1_rpc_url`)
-    requireString(ethereumDa.artifact_store_root, `[${label}].artifact_store_root`)
-    requireString(ethereumDa.artifact_metadata_sqlite_path, `[${label}].artifact_metadata_sqlite_path`)
-    requirePositiveInteger(ethereumDa.eth_chain_id, `[${label}].eth_chain_id`)
-    requirePositiveInteger(ethereumDa.l2_chain_id, `[${label}].l2_chain_id`, 0xFF_FF_FF_FF)
-    const blobSource = ethereumDa.blob_source
-    if (!blobSource || typeof blobSource !== 'object') {
-      throw new Error(`${coordinatorConfigPath}: [${label}.blob_source] is required for cache misses`)
-    }
-
-    requirePositiveInteger(blobSource.timeout_ms, `[${label}.blob_source].timeout_ms`)
-    const providerNames = ['anvil', 'aws_s3', 'beacon_node', 'blob_scan', 'block_native']
-      .filter(name => blobSource[name] && typeof blobSource[name] === 'object')
-    if (providerNames.length === 0) {
-      throw new Error(`${coordinatorConfigPath}: [${label}.blob_source] must configure at least one provider`)
-    }
-
-    for (const providerName of providerNames) {
-      if (providerName === 'anvil' && blobSource[providerName].url === undefined) continue
-      requireString(blobSource[providerName].url, `[${label}.blob_source.${providerName}].url`)
-    }
-  }
-
-  validateEthereumDa(
+  validateEthereumDaSection(
+    coordinatorConfigPath,
     scrollBatchSubprocess.ethereum_da,
     'materializer.scroll_batch.subprocess.ethereum_da'
   )
+}
 
-  requireEnabled(materializer.bridge, 'materializer.bridge')
-  if (materializer.bridge.advance_l1 !== true || materializer.bridge.advance_l2 !== true) {
-    throw new Error(
-      `${coordinatorConfigPath}: [materializer.bridge] must set advance_l1 = true and advance_l2 = true to match WP`
-    )
+function validateEthereumDaSection(coordinatorConfigPath: string, ethereumDa: any, label: string): void {
+  const requireString = (value: any, itemLabel: string): void => {
+    assertIdentifier(value, `${coordinatorConfigPath}: ${itemLabel}`)
   }
 
-  if (!materializer.bridge.dogecoin_rpc || typeof materializer.bridge.dogecoin_rpc !== 'object') {
-    throw new Error(`${coordinatorConfigPath}: [materializer.bridge.dogecoin_rpc] is required for AdvanceL1`)
+  const requirePositiveInteger = (value: any, itemLabel: string, maximum = Number.MAX_SAFE_INTEGER): void => {
+    if (value === undefined || value === null || value === '') {
+      throw new Error(`${coordinatorConfigPath}: ${itemLabel} is required`)
+    }
+
+    parsePositiveInteger(value, 1, `${coordinatorConfigPath}: ${itemLabel}`, maximum)
   }
 
-  requireString(materializer.bridge.dogecoin_rpc.url, '[materializer.bridge.dogecoin_rpc].url')
-  requireString(materializer.bridge.dogecoin_rpc.network, '[materializer.bridge.dogecoin_rpc].network')
+  if (!ethereumDa || typeof ethereumDa !== 'object') {
+    throw new Error(`${coordinatorConfigPath}: [${label}] is required`)
+  }
 
-  validateEthereumDa(materializer.bridge.ethereum_da, 'materializer.bridge.ethereum_da')
+  requireString(ethereumDa.l1_rpc_url, `[${label}].l1_rpc_url`)
+  requireString(ethereumDa.artifact_store_root, `[${label}].artifact_store_root`)
+  requireString(ethereumDa.artifact_metadata_sqlite_path, `[${label}].artifact_metadata_sqlite_path`)
+  requirePositiveInteger(ethereumDa.eth_chain_id, `[${label}].eth_chain_id`)
+  requirePositiveInteger(ethereumDa.l2_chain_id, `[${label}].l2_chain_id`, 0xFF_FF_FF_FF)
+  const blobSource = ethereumDa.blob_source
+  if (!blobSource || typeof blobSource !== 'object') {
+    throw new Error(`${coordinatorConfigPath}: [${label}.blob_source] is required for cache misses`)
+  }
+
+  requirePositiveInteger(blobSource.timeout_ms, `[${label}.blob_source].timeout_ms`)
+  const providerNames = ['anvil', 'aws_s3', 'beacon_node', 'blob_scan', 'block_native']
+    .filter(name => blobSource[name] && typeof blobSource[name] === 'object')
+  if (providerNames.length === 0) {
+    throw new Error(`${coordinatorConfigPath}: [${label}.blob_source] must configure at least one provider`)
+  }
+
+  for (const providerName of providerNames) {
+    if (providerName === 'anvil' && blobSource[providerName].url === undefined) continue
+    requireString(blobSource[providerName].url, `[${label}.blob_source.${providerName}].url`)
+  }
 }
 
 function configureAggVerifierArtifact(
@@ -812,12 +980,14 @@ function prepareProofCoordinator(
   filePath: string,
   configPath: string,
   manifests: Map<ProofFamily, { manifest: ProofProgramManifest; path: string }>,
-  commitments: Map<ProofFamily, string>,
+  commitments: Map<ProofFamily, string> | undefined,
   verifierIds: Partial<Record<ProofFamily, string>>,
-  verifierArtifact: VerifierArtifact
+  verifierArtifact: VerifierArtifact | undefined,
+  provingMode: ProvingMode
 ): { updatedConfig: string; values: any } {
+  const mock = provingMode === 'mock'
   const values = readYaml(filePath)
-  const verifier: Record<string, any> = { verifier_import_mode: 'production' }
+  const verifier: Record<string, any> = { verifier_import_mode: mock ? 'dev_dummy' : 'production' }
   const manifestConfigMap: Record<string, string> = {}
   for (const [family, { manifest, path: manifestPath }] of manifests) {
     const verifierId = verifierIds[family] || defaultVerifierId(manifest)
@@ -828,39 +998,47 @@ function prepareProofCoordinator(
 
   const scrollChunkManifest = manifests.get('scroll_chunk')!.manifest
   const scrollBatchManifest = manifests.get('scroll_batch')!.manifest
+  const statementProofMode = mock ? 'Mock' : 'Production'
   manifestConfigMap['statement-namespace.json'] = `${JSON.stringify({
     batch: {
       circuit_id: scrollBatchManifest.circuit_id,
-      proof_mode: 'Production',
+      proof_mode: statementProofMode,
       proof_system_id: scrollBatchManifest.proof_system_id,
       verification_key_hash: scrollBatchManifest.verification_key_hash,
     },
     chunk: {
       circuit_id: scrollChunkManifest.circuit_id,
-      proof_mode: 'Production',
+      proof_mode: statementProofMode,
       proof_system_id: scrollChunkManifest.proof_system_id,
       verification_key_hash: scrollChunkManifest.verification_key_hash,
     },
   }, null, 2)}\n`
 
-  verifier.scroll_real_verifier = {
-    agg_verifying_key_path: AGG_VK_PATH,
-    batch_program_commitment_hex: commitments.get('scroll_batch'),
-    bridge_program_commitment_hex: commitments.get('bridge_transition'),
-    chunk_program_commitment_hex: commitments.get('scroll_chunk'),
+  // The real Scroll verifier attachment (aggregate VK + raw commitments) only
+  // exists for release artifacts; the dev_dummy verifier is structural.
+  if (!mock) {
+    verifier.scroll_real_verifier = {
+      agg_verifying_key_path: AGG_VK_PATH,
+      batch_program_commitment_hex: commitments!.get('scroll_batch'),
+      bridge_program_commitment_hex: commitments!.get('bridge_transition'),
+      chunk_program_commitment_hex: commitments!.get('scroll_chunk'),
+    }
   }
+
   const updatedConfig = replaceManagedVerifierBlock(configPath, verifier)
   values.env ||= []
   if (!Array.isArray(values.env)) throw new Error(`${filePath}: env must be an array`)
-  const existingCommitment = values.env.find((item: any) => item?.name === SCROLL_BATCH_COMMITMENT_ENV)
-  if (existingCommitment) {
-    existingCommitment.value = commitments.get('scroll_chunk')
-    delete existingCommitment.valueFrom
-  } else {
+  const commitmentIndex = values.env.findIndex((item: any) => item?.name === SCROLL_BATCH_COMMITMENT_ENV)
+  if (mock) {
+    if (commitmentIndex !== -1) values.env.splice(commitmentIndex, 1)
+  } else if (commitmentIndex === -1) {
     values.env.push({
       name: SCROLL_BATCH_COMMITMENT_ENV,
-      value: commitments.get('scroll_chunk'),
+      value: commitments!.get('scroll_chunk'),
     })
+  } else {
+    values.env[commitmentIndex].value = commitments!.get('scroll_chunk')
+    delete values.env[commitmentIndex].valueFrom
   }
 
   values.configMaps ||= {}
@@ -873,11 +1051,16 @@ function prepareProofCoordinator(
     readOnly: true,
     type: 'configMap',
   }
-  configureAggVerifierArtifact(
-    values,
-    '{{ include "scroll.common.lib.chart.names.fullname" . }}-agg-verifying-key',
-    verifierArtifact
-  )
+  if (mock) {
+    removeAggVerifierArtifact(values)
+  } else {
+    configureAggVerifierArtifact(
+      values,
+      '{{ include "scroll.common.lib.chart.names.fullname" . }}-agg-verifying-key',
+      verifierArtifact!
+    )
+  }
+
   values.service ||= {}
   values.service.main ||= {}
   values.service.main.enabled = true
@@ -890,19 +1073,52 @@ function prepareProofCoordinator(
   return { updatedConfig, values }
 }
 
+/**
+ * Render the public HTTPS entrypoint external prover workers use to reach the
+ * coordinator's `/v1/prover` gateway. Mirrors the tso-service ingress shape
+ * (nginx class + cert-manager cluster issuer).
+ */
+function ensureCoordinatorIngress(values: Record<string, any>, host: string): void {
+  assertIdentifier(host, 'proof-coordinator ingress host')
+  values.ingress ||= {}
+  const existingAnnotations = values.ingress.main?.annotations || {}
+  values.ingress.main = {
+    annotations: {
+      ...existingAnnotations,
+      'cert-manager.io/cluster-issuer': existingAnnotations['cert-manager.io/cluster-issuer'] || 'letsencrypt-prod',
+    },
+    enabled: true,
+    hosts: [{ host, paths: [{ path: '/', pathType: 'Prefix' }] }],
+    ingressClassName: values.ingress.main?.ingressClassName || 'nginx',
+    tls: [{ hosts: [host], secretName: 'proof-coordinator-tls' }],
+  }
+}
+
+/** Drop the release-artifact aggregate-VK plumbing when staging mock proving. */
+function removeAggVerifierArtifact(values: Record<string, any>): void {
+  if (values.configMaps) delete values.configMaps['agg-verifying-key']
+  if (values.persistence) delete values.persistence['agg-verifying-key-source']
+  if (values.initContainers) {
+    delete values.initContainers['install-agg-verifying-key']
+    if (Object.keys(values.initContainers).length === 0) delete values.initContainers
+  }
+}
+
 function prepareWithdrawalProcessor(
   filePath: string,
   coordinatorValuesPath: string,
   coordinatorConfigPath: string,
   manifests: Map<ProofFamily, { manifest: ProofProgramManifest; path: string }>,
-  commitments: Map<ProofFamily, string>,
+  commitments: Map<ProofFamily, string> | undefined,
   verifierIds: Partial<Record<ProofFamily, string>>,
   scrollBatchBackendProfile: string,
   bridgeBackendProfile: string,
   signerProofArtifactBaseUrl: string,
-  verifierArtifact: VerifierArtifact,
+  verifierArtifact: VerifierArtifact | undefined,
+  provingMode: ProvingMode,
   nativeWithdrawalConfig?: string
 ): { updatedWithdrawalConfig?: string; values: any } {
+  const mock = provingMode === 'mock'
   const values = readYaml(filePath)
   const projection = readCoordinatorRuntimeProjection(
     coordinatorValuesPath,
@@ -934,10 +1150,17 @@ function prepareWithdrawalProcessor(
   }
 
   const proofSystem: Record<string, any> = {
-    mode: 'production',
+    mode: mock ? 'dev_dummy' : 'production',
     require_bridge_state: manifests.has('bridge_transition'),
     require_scroll_execution: manifests.has('scroll_chunk') || manifests.has('scroll_batch'),
   }
+  if (mock) {
+    // ExactMock drives the complete produce → prove → verify → import
+    // lifecycle with deterministic inputs (dogeos-core e2e strict-withdrawal
+    // topology shape).
+    proofSystem.dev_dummy = { scroll_input: 'exact_mock' }
+  }
+
   const proofControlPlaneGate: Record<string, any> = {
     store_path: '/app/data/control-plane.sqlite',
   }
@@ -970,23 +1193,25 @@ function prepareWithdrawalProcessor(
     )
   }
 
-  proofControlPlaneGate.scroll_real_verifier = {
-    agg_verifying_key_path: AGG_VK_PATH,
-    batch_program_commitment_hex: bareHex(
-      commitments.get('scroll_batch')!,
-      64,
-      'scroll batch raw program commitment'
-    ),
-    bridge_program_commitment_hex: bareHex(
-      commitments.get('bridge_transition')!,
-      64,
-      'bridge raw program commitment'
-    ),
-    chunk_program_commitment_hex: bareHex(
-      commitments.get('scroll_chunk')!,
-      64,
-      'scroll chunk raw program commitment'
-    ),
+  if (!mock) {
+    proofControlPlaneGate.scroll_real_verifier = {
+      agg_verifying_key_path: AGG_VK_PATH,
+      batch_program_commitment_hex: bareHex(
+        commitments!.get('scroll_batch')!,
+        64,
+        'scroll batch raw program commitment'
+      ),
+      bridge_program_commitment_hex: bareHex(
+        commitments!.get('bridge_transition')!,
+        64,
+        'bridge raw program commitment'
+      ),
+      chunk_program_commitment_hex: bareHex(
+        commitments!.get('scroll_chunk')!,
+        64,
+        'scroll chunk raw program commitment'
+      ),
+    }
   }
 
   const proofConfig: Record<string, any> = {
@@ -1065,11 +1290,16 @@ function prepareWithdrawalProcessor(
     readOnly: true,
     type: 'secret',
   }
-  configureAggVerifierArtifact(
-    values,
-    '{{ include "withdrawal-processor.fullname" . }}-agg-verifying-key',
-    verifierArtifact
-  )
+  if (mock) {
+    removeAggVerifierArtifact(values)
+  } else {
+    configureAggVerifierArtifact(
+      values,
+      '{{ include "withdrawal-processor.fullname" . }}-agg-verifying-key',
+      verifierArtifact!
+    )
+  }
+
   values.service ||= {}
   values.service.main ||= {}
   values.service.main.ports ||= {}
@@ -1098,17 +1328,39 @@ function prepareWithdrawalProcessor(
     values.persistence['proof-secrets'].name = existingSecretName
   }
 
-  ensureWithdrawalProofActivationSwitch(values)
+  ensureWithdrawalProofActivationSwitch(values, provingMode)
 
   return { updatedWithdrawalConfig, values }
 }
 
 export function configureProofValues(options: ConfigureProofValuesOptions): ConfigureProofValuesResult {
+  const provingMode: ProvingMode = options.provingMode || 'production'
+  const mock = provingMode === 'mock'
   const valuesDir = path.resolve(options.valuesDir)
-  const manifests = loadProgramManifests(options.manifestPaths)
-  const commitments = loadRawCommitments(options.artifactManifestPath, manifests)
-  const verifierArtifact = loadVerifierArtifact(options.artifactManifestPath)
-  const verifierIds = options.verifierIds || {}
+  // Mock proving has no release artifacts: the program manifests are
+  // synthesized from the canonical mock topology identities (anchored to the
+  // deployment working directory next to values/), and there is no
+  // raw-commitment / aggregate-verifying-key material to stage.
+  const manifestPaths = mock
+    ? ensureMockProgramManifests(path.join(path.dirname(valuesDir), MOCK_PROGRAM_MANIFESTS_DIR))
+    : options.manifestPaths
+  if (!manifestPaths || manifestPaths.length === 0) {
+    throw new Error('At least one program manifest is required')
+  }
+
+  const manifests = loadProgramManifests(manifestPaths)
+  let commitments: Map<ProofFamily, string> | undefined
+  let verifierArtifact: VerifierArtifact | undefined
+  if (!mock) {
+    if (!options.artifactManifestPath) {
+      throw new Error('The release artifact manifest is required for production proving')
+    }
+
+    commitments = loadRawCommitments(options.artifactManifestPath, manifests)
+    verifierArtifact = loadVerifierArtifact(options.artifactManifestPath)
+  }
+
+  const verifierIds = { ...(mock ? mockVerifierIds() : {}), ...options.verifierIds }
   const configFile = path.resolve(options.coordinatorConfigPath)
   const files = [
     path.join(valuesDir, 'proof-coordinator-production.yaml'),
@@ -1121,19 +1373,10 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
   validateProofS3AuthTopology(coordinatorValuesInput, withdrawalValuesInput)
   validateProofSecretTopology(coordinatorValuesInput)
   if (!fs.existsSync(configFile)) throw new Error(`Proof coordinator TOML not found: ${configFile}`)
-  const scrollBatchBackendProfile = options.scrollBatchBackendProfile || DEFAULT_SCROLL_BATCH_BACKEND_PROFILE
-  const bridgeBackendProfile = options.bridgeBackendProfile || DEFAULT_BRIDGE_BACKEND_PROFILE
-  const signerProofArtifactBaseUrl = normalizeSignerProofArtifactBaseUrl(
-    options.signerProofArtifactBaseUrl
-  )
-  assertIdentifier(scrollBatchBackendProfile, 'Scroll batch backend profile')
-  assertIdentifier(bridgeBackendProfile, 'Bridge backend profile')
-  readCoordinatorRuntimeProjection(files[0], configFile)
-  validateCoordinatorMaterializerTopology(configFile)
-  const allowedProofTriples = buildAllowedProofTriples(manifests, verifierIds)
-  const attestationUpdates = options.skipAttestationSigners
-    ? []
-    : prepareAttestationSigners(valuesDir, allowedProofTriples)
+  const scrollBatchBackendProfile = options.scrollBatchBackendProfile
+    || (mock ? MOCK_SCROLL_BATCH_BACKEND_PROFILE : DEFAULT_SCROLL_BATCH_BACKEND_PROFILE)
+  const bridgeBackendProfile = options.bridgeBackendProfile
+    || (mock ? MOCK_BRIDGE_BACKEND_PROFILE : DEFAULT_BRIDGE_BACKEND_PROFILE)
   const withdrawalConfigFile = path.resolve(
     options.withdrawalConfigPath
     || path.join(path.dirname(valuesDir), WITHDRAWAL_NATIVE_CONFIG_RELPATH)
@@ -1142,6 +1385,36 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
     ? fs.readFileSync(withdrawalConfigFile, 'utf8')
     : undefined
 
+  // The base URL is an external deployment decision, so the first run must
+  // receive it explicitly; re-runs default to what that run staged into the
+  // WithdrawalProcessor.toml proof block (native file or inline values copy).
+  let signerProofArtifactBaseUrlSource: 'flag' | 'staged' = 'flag'
+  let signerProofArtifactBaseUrlInput = options.signerProofArtifactBaseUrl
+  if (!signerProofArtifactBaseUrlInput) {
+    const inlineWithdrawalConfig = withdrawalValuesInput?.configMaps?.config?.data?.[WITHDRAWAL_CONFIG_FILE]
+    const stagedSource = nativeWithdrawalConfig
+      ?? (typeof inlineWithdrawalConfig === 'string' ? inlineWithdrawalConfig : undefined)
+    const staged = stagedSource === undefined ? undefined : readStagedSignerProofArtifactBaseUrl(stagedSource)
+    if (staged === undefined) {
+      throw new Error(
+        '--proof-artifact-base-url is required: no previously staged value found in WithdrawalProcessor.toml (the first proof-config run must pass it explicitly)'
+      )
+    }
+
+    signerProofArtifactBaseUrlSource = 'staged'
+    signerProofArtifactBaseUrlInput = staged
+  }
+
+  const signerProofArtifactBaseUrl = normalizeSignerProofArtifactBaseUrl(signerProofArtifactBaseUrlInput)
+  assertIdentifier(scrollBatchBackendProfile, 'Scroll batch backend profile')
+  assertIdentifier(bridgeBackendProfile, 'Bridge backend profile')
+  readCoordinatorRuntimeProjection(files[0], configFile)
+  validateCoordinatorMaterializerTopology(configFile, provingMode)
+  // Validate the partner signer policy projection now, even though the actual
+  // docker-compose policy bundle is exported after bridge genesis. This keeps
+  // an invalid verifier ID from being staged into coordinator/WP and failing
+  // only much later at `setup export-signer-policy`.
+  buildAllowedProofTriples(manifests, verifierIds)
   // Build and validate every target before writing any of them.
   const coordinatorUpdate = prepareProofCoordinator(
     files[0],
@@ -1149,8 +1422,13 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
     manifests,
     commitments,
     verifierIds,
-    verifierArtifact
+    verifierArtifact,
+    provingMode
   )
+  if (options.coordinatorIngressHost) {
+    ensureCoordinatorIngress(coordinatorUpdate.values, options.coordinatorIngressHost)
+  }
+
   const withdrawalUpdate = prepareWithdrawalProcessor(
     files[1],
     files[0],
@@ -1162,6 +1440,7 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
     bridgeBackendProfile,
     signerProofArtifactBaseUrl,
     verifierArtifact,
+    provingMode,
     nativeWithdrawalConfig
   )
   if (options.enableWithdrawalProof) withdrawalUpdate.values.withdrawalProof.enabled = true
@@ -1173,14 +1452,15 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
     writeTextAtomic(withdrawalConfigFile, withdrawalUpdate.updatedWithdrawalConfig)
   }
 
-  for (const update of attestationUpdates) writeYamlAtomic(update.filePath, update.values)
   return {
     configFile,
     families: [...manifests.keys()].sort(),
     files: [
       ...files,
       ...(withdrawalUpdate.updatedWithdrawalConfig === undefined ? [] : [withdrawalConfigFile]),
-      ...attestationUpdates.map(update => update.filePath),
     ],
+    provingMode,
+    signerProofArtifactBaseUrl,
+    signerProofArtifactBaseUrlSource,
   }
 }

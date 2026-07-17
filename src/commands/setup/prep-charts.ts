@@ -62,6 +62,32 @@ import {
   signerModeToConfig,
 } from './l2-sequencer-reth.js'
 
+export interface TsoSignerEndpoint {
+  network: string
+  role: 'Attestation' | 'Tee'
+  uri: string
+}
+
+/**
+ * The descriptor endpoint is the routing contract: preserve the partner's
+ * exact IP/domain and project it into the TSO registration list alongside the
+ * in-cluster TEE signers. Always return the full list so a missing/stale values
+ * array cannot silently disconnect external signers.
+ */
+export function buildTsoSigners(config: Pick<DogeConfig, 'cubesigner' | 'network' | 'signerUrls'>): TsoSignerEndpoint[] {
+  const teeSigners: TsoSignerEndpoint[] = (config.cubesigner?.roles || []).map((_role, index) => ({
+    network: config.network,
+    role: 'Tee',
+    uri: `http://cubesigner-signer-${index}:3000`,
+  }))
+  const attestationSigners: TsoSignerEndpoint[] = (config.signerUrls || []).map(uri => ({
+    network: config.network,
+    role: 'Attestation',
+    uri,
+  }))
+  return [...teeSigners, ...attestationSigners]
+}
+
 /**
  * Strip port from hostname for Kubernetes Ingress
  * Kubernetes Ingress hosts cannot contain port numbers
@@ -112,104 +138,17 @@ export interface PrepChartChange {
   oldValue: string
 }
 
-export function applyAttestationSignerNetwork(
-  productionYaml: any,
-  network: string
-): PrepChartChange[] {
-  const { attestationSigner } = productionYaml
-  if (!attestationSigner || typeof attestationSigner !== 'object') return []
-
-  const { network: oldNetwork } = attestationSigner
-  if (oldNetwork === network) return []
-
-  attestationSigner.network = network
-  return [{
-    key: 'attestationSigner.network',
-    newValue: network,
-    oldValue: String(oldNetwork ?? 'undefined'),
-  }]
-}
-
-export function applyAttestationSignerRuntimeValues(
-  productionYaml: any,
-  network: string,
-  signerConfig: Partial<NonNullable<DogeConfig['attestationSigner']>> | undefined,
-  instanceIndex: number
-): PrepChartChange[] {
-  const changes = applyAttestationSignerNetwork(productionYaml, network)
-  removeChartResourceNameOverrides(productionYaml)
-  const { attestationSigner } = productionYaml
-  if (!attestationSigner || typeof attestationSigner !== 'object' || !signerConfig) return changes
-  // External (partner-operated) signers are never rendered as local chart
-  // values — their endpoints reach TSO via tsoSigners and nothing else.
-  if (signerConfig.mode === 'external' || !signerConfig.backend || !signerConfig.profile) return changes
-
-  const secretName = `attestation-signer-${instanceIndex}-env`
-  const instanceIdentity = signerConfig.instances?.find(item => item.index === instanceIndex)
-  if (instanceIdentity) attestationSigner.expectedReleaseName = instanceIdentity.releaseName
-  const externalSecretEntry = Object.entries(productionYaml.externalSecrets || {})
-    .find(([name]) => name === secretName)
-    || Object.entries(productionYaml.externalSecrets || {})[0]
-  const externalSecret = externalSecretEntry?.[1] as any
-  const secretData = externalSecret?.data?.[0]
-
-  if (signerConfig.backend === 'aws_kms') {
-    const instance = signerConfig.kms?.instances.find(item => item.index === instanceIndex)
-    if (!instance || !signerConfig.kms) return changes
-
-    const oldProfile = attestationSigner.profile
-    attestationSigner.profile = signerConfig.profile
-    attestationSigner.kms ||= {}
-    attestationSigner.kms.keyId = instance.kmsKeyId
-    attestationSigner.kms.region = signerConfig.kms.region
-    attestationSigner.kms.expectedSignerId = instance.expectedSignerId
-    delete attestationSigner.kms.keyIdSecretRef
-    delete attestationSigner.local
-    productionYaml.serviceAccount = {
-      annotations: { 'eks.amazonaws.com/role-arn': instance.roleArn },
-      create: true,
-      name: instance.serviceAccount,
-    }
-    if (externalSecretEntry) {
-      delete productionYaml.externalSecrets[externalSecretEntry[0]]
-      if (Object.keys(productionYaml.externalSecrets).length === 0) {
-        delete productionYaml.externalSecrets
-      }
-    }
-
-    changes.push(
-      { key: 'attestationSigner.profile', newValue: signerConfig.profile, oldValue: String(oldProfile ?? 'undefined') },
-      { key: 'attestationSigner.kms.expectedSignerId', newValue: instance.expectedSignerId, oldValue: 'undefined' },
-      { key: 'attestationSigner.kms.keyId', newValue: instance.kmsKeyId, oldValue: 'undefined' },
-      { key: 'attestationSigner.kms.region', newValue: signerConfig.kms.region, oldValue: 'undefined' },
-      { key: 'serviceAccount.name', newValue: instance.serviceAccount, oldValue: 'undefined' },
-    )
-    return changes
+/** Remove values files for the retired in-cluster attestation-signer chart. */
+export function removeRetiredAttestationSignerValues(valuesDir: string): string[] {
+  if (!fs.existsSync(valuesDir)) return []
+  const removed: string[] = []
+  for (const file of fs.readdirSync(valuesDir)) {
+    if (!/^attestation-signer-production(?:-\d+)?\.yaml$/.test(file)) continue
+    fs.rmSync(path.join(valuesDir, file))
+    removed.push(file)
   }
 
-  const oldProfile = attestationSigner.profile
-    attestationSigner.profile = signerConfig.profile
-  attestationSigner.local ||= {}
-  attestationSigner.local.wifSecretRef = {
-    key: 'ATTESTATION_SIGNER_WIF',
-  }
-  delete productionYaml.serviceAccount
-  if (secretData) {
-    secretData.remoteRef ||= {}
-    secretData.remoteRef.property = 'ATTESTATION_SIGNER_WIF'
-    secretData.secretKey = 'ATTESTATION_SIGNER_WIF'
-  }
-
-  if (externalSecretEntry && externalSecretEntry[0] !== 'signer-env') {
-    delete productionYaml.externalSecrets[externalSecretEntry[0]]
-    productionYaml.externalSecrets['signer-env'] = externalSecret
-  }
-
-  if (oldProfile !== signerConfig.profile) {
-    changes.push({ key: 'attestationSigner.profile', newValue: signerConfig.profile, oldValue: String(oldProfile ?? 'undefined') })
-  }
-
-  return changes
+  return removed.sort()
 }
 
 function removeChartResourceNameOverrides(values: any): void {
@@ -1697,6 +1636,17 @@ export default class SetupPrepCharts extends Command {
       configKey: null | string;
     }
 
+    let updatedCharts = 0;
+    let skippedCharts = 0;
+
+    // attestation-signer is partner-operated through docker-compose. Remove
+    // values left by older CLI releases so a later `helm install-all` cannot
+    // accidentally resurrect the retired in-cluster deployment shape.
+    for (const file of removeRetiredAttestationSignerValues(valuesDir)) {
+      this.jsonCtx.info(`Removed retired in-cluster attestation signer values: ${file}`)
+      updatedCharts++
+    }
+
     const names: ChartConfig[] = [{
       chartName: "l2-bootnode",
       configKey: "bootnode"
@@ -1706,12 +1656,7 @@ export default class SetupPrepCharts extends Command {
     }, {
       chartName: "cubesigner-signer",
       configKey: null
-    }, {
-      chartName: "attestation-signer",
-      configKey: null
     }];
-    let updatedCharts = 0;
-    let skippedCharts = 0;
 
     for (const item of names) {
       const { chartName, configKey } = item;
@@ -1750,8 +1695,6 @@ export default class SetupPrepCharts extends Command {
           let maxInstances = 1;
           if (chartName === "cubesigner-signer") {
             maxInstances = this.dogeConfig.cubesigner?.roles?.length ?? 1;
-          } else if (chartName === "attestation-signer") {
-            maxInstances = this.dogeConfig.attestationSigner?.instances?.length ?? 0;
           }
 
           if (releaseIndex >= maxInstances) {
@@ -1761,33 +1704,13 @@ export default class SetupPrepCharts extends Command {
 
         const destFilePath = path.join(valuesDir, `${chartName}-production-${releaseIndex}.yaml`);
 
-        let newYamlContent = templateContent.replaceAll('__INSTANCE_INDEX__', releaseIndex.toString());
-        if (chartName === 'attestation-signer') {
-          const instanceValues = yaml.load(newYamlContent) as any
-          applyAttestationSignerRuntimeValues(
-            instanceValues,
-            this.dogeConfig.network,
-            this.dogeConfig.attestationSigner,
-            releaseIndex
-          )
-          newYamlContent = yaml.dump(instanceValues, YAML_DUMP_OPTIONS)
-        }
-
+        const newYamlContent = templateContent.replaceAll('__INSTANCE_INDEX__', releaseIndex.toString());
         fs.writeFileSync(destFilePath, newYamlContent);
         updatedCharts++;
 
         releaseIndex++
       }
 
-      if (chartName === 'attestation-signer') {
-        for (const existingFile of fs.readdirSync(valuesDir)) {
-          const match = existingFile.match(/^attestation-signer-production-(\d+)\.yaml$/)
-          if (match && Number(match[1]) >= releaseIndex) {
-            fs.rmSync(path.join(valuesDir, existingFile))
-            updatedCharts++
-          }
-        }
-      }
     }
 
     return { skipped: skippedCharts, updated: updatedCharts };
@@ -1819,12 +1742,6 @@ export default class SetupPrepCharts extends Command {
 
       if (file === 'l2-reth-sequencer-production.yaml') {
         this.jsonCtx.info(`Skipping reth sequencer template ${file}`)
-        skippedCharts++
-        continue
-      }
-
-      if (file === 'attestation-signer-production.yaml') {
-        this.jsonCtx.info(`Skipping attestation signer template ${file}`)
         skippedCharts++
         continue
       }
@@ -2661,7 +2578,7 @@ export default class SetupPrepCharts extends Command {
           updated = true
         }
 
-        if (ensureWithdrawalProofActivationSwitch(productionYaml)) {
+        if (ensureWithdrawalProofActivationSwitch(productionYaml, this.dogeConfig.proofSystem?.provingMode || 'production')) {
           changes.push({
             key: 'withdrawalProof.enabled',
             newValue: productionYaml.withdrawalProof.enabled,
@@ -2670,21 +2587,12 @@ export default class SetupPrepCharts extends Command {
           updated = true
         }
 
-        // Rebuild all TSO signers so stale roles do not remain.
-        if (productionYaml.tsoSigners && Array.isArray(productionYaml.tsoSigners)) {
-          const teeSigners = (this.dogeConfig.cubesigner?.roles || []).map((_role, index) => ({
-            network: this.dogeConfig.network,
-            role: 'Tee',
-            uri: `http://cubesigner-signer-${index}:3000`,
-          }) as any);
-          const attestationSigners = (this.dogeConfig.signerUrls || []).map((url) => ({
-            network: this.dogeConfig.network,
-            role: 'Attestation',
-            uri: url,
-          }) as any);
-          const newSigners = [...teeSigners, ...attestationSigners];
-          const existingSigners = productionYaml.tsoSigners;
-          productionYaml.tsoSigners = newSigners;
+        // Rebuild all TSO signers so stale roles do not remain. Create the
+        // array when absent: descriptor import must always reach TSO values.
+        const existingSigners = Array.isArray(productionYaml.tsoSigners) ? productionYaml.tsoSigners : []
+        const newSigners = buildTsoSigners(this.dogeConfig)
+        if (JSON.stringify(existingSigners) !== JSON.stringify(newSigners)) {
+          productionYaml.tsoSigners = newSigners
           updated = true;
           changes.push({
             key: 'tsoSigners',
@@ -2730,22 +2638,6 @@ export default class SetupPrepCharts extends Command {
             updated = true;
             changes.push({ key: `env.${envKey}`, newValue, oldValue: 'undefined' });
           }
-        }
-      }
-      else if (chartName === "attestation-signer") {
-        if (!productionYaml.attestationSigner) {
-          this.error(`${chartName}: attestationSigner structured config not found`)
-        }
-
-        const attestationSignerChanges = applyAttestationSignerRuntimeValues(
-          productionYaml,
-          this.dogeConfig.network,
-          this.dogeConfig.attestationSigner,
-          Number(productionNumber)
-        )
-        if (attestationSignerChanges.length > 0) {
-          updated = true
-          changes.push(...attestationSignerChanges)
         }
       }
       else if (chartName === "eth-da-submitter") {
