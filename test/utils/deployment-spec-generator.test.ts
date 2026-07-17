@@ -1286,18 +1286,14 @@ describe('deployment-spec-generator', () => {
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_ROTATE_SEQUENCER_SIGNER_V2).to.equal('false');
       expect(withdrawalRuntimeEnv).not.to.have.property('DOGEOS_WITHDRAWAL_COORDINATOR_POLL_INTERVAL_SECS');
       expect(Object.fromEntries(Object.entries(withdrawalRuntimeEnv).filter(([key]) => key.startsWith('DOGEOS_WITHDRAWAL_PROOF_')))).to.deep.equal({
-        DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE: '{{ ternary "production" "disabled" .Values.withdrawalProof.enabled }}',
-        DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
-        DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
-        DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
+        DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE: 'disabled',
+        DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE: 'false',
+        DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION: 'false',
+        DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED: 'false',
       });
       expect(withdrawalValuesForRuntime.withdrawalProof.enabled).to.equal(false);
-      const withdrawalConfig = toml.parse(withdrawalValuesForRuntime.configMaps.config.data['WithdrawalProcessor.toml']) as any;
-      expect(withdrawalConfig.proof_system).to.deep.equal({
-        mode: 'disabled',
-        require_bridge_state: false,
-        require_scroll_execution: false,
-      });
+      expect(withdrawalValuesForRuntime.withdrawalProof.provingMode).to.equal('production');
+      expect(withdrawalValuesForRuntime.configMaps.config.data?.['WithdrawalProcessor.toml']).to.equal(undefined);
       expect(withdrawalValuesForRuntime.args).to.deep.equal(['--config', '/app/config/WithdrawalProcessor.toml']);
       expect(withdrawalValuesForRuntime.persistence['withdrawal-processor-config']).to.include({
         enabled: true,
@@ -1394,6 +1390,7 @@ describe('deployment-spec-generator', () => {
         tag: 'v1.2.3',
       });
       expect(values.service.main.enabled).to.equal(true);
+      expect(values.persistence.secrets.mountPath).to.equal('/app/secrets');
       expect(values.persistence.secrets).not.to.have.property('name');
       expect(values.serviceAccount).not.to.have.property('name');
       expect(values).not.to.have.property('global');

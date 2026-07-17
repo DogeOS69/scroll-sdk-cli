@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- Helm values and embedded TOML are dynamic documents. */
+/* eslint-disable @typescript-eslint/no-explicit-any -- Helm values and native TOML are dynamic documents. */
 
 import * as toml from '@iarna/toml'
 
@@ -12,6 +12,7 @@ export const WITHDRAWAL_DEPLOYMENT_END = '# END scrollsdk managed deployment con
 export const WITHDRAWAL_NATIVE_CONFIG_RELPATH = 'withdrawal-processor/WithdrawalProcessor.toml'
 export const WITHDRAWAL_PROOF_ACTIVATION_ENV = {
   apiEnabled: 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED',
+  devDummyScrollInput: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__DEV_DUMMY__SCROLL_INPUT',
   mode: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE',
   requireBridge: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE',
   requireScroll: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION',
@@ -25,18 +26,6 @@ export const WITHDRAWAL_PROOF_ACTIVATION_ENV = {
  * verification differ.
  */
 export type ProvingMode = 'mock' | 'production'
-
-function withdrawalProofActivationValues(provingMode: ProvingMode): Record<string, string> {
-  // The single Helm switch projects the matching [proof_system].mode so
-  // `withdrawalProof.enabled` is the activation gate in both proving modes.
-  const activeMode = provingMode === 'mock' ? 'dev_dummy' : 'production'
-  return {
-    [WITHDRAWAL_PROOF_ACTIVATION_ENV.apiEnabled]: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
-    [WITHDRAWAL_PROOF_ACTIVATION_ENV.mode]: `{{ ternary "${activeMode}" "disabled" .Values.withdrawalProof.enabled }}`,
-    [WITHDRAWAL_PROOF_ACTIVATION_ENV.requireBridge]: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
-    [WITHDRAWAL_PROOF_ACTIVATION_ENV.requireScroll]: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
-  }
-}
 
 const MANAGED_PROOF_TABLES = new Set([
   'local_bridge_proof_runtime',
@@ -96,16 +85,6 @@ function stripUnmarkedManagedProofTables(source: string): string {
 
 function renderManagedProofBlock(proofConfig: toml.JsonMap): string {
   return `${WITHDRAWAL_PROOF_BEGIN}\n${toml.stringify(proofConfig).trimEnd()}\n${WITHDRAWAL_PROOF_END}`
-}
-
-export function defaultWithdrawalConfigToml(): string {
-  return `${renderManagedProofBlock({
-    proof_system: {
-      mode: 'disabled',
-      require_bridge_state: false,
-      require_scroll_execution: false,
-    },
-  })}\n`
 }
 
 function isPlainObject(value: unknown): value is Record<string, any> {
@@ -501,7 +480,8 @@ export function ensureWithdrawalChartWiring(values: Record<string, any>): void {
 /**
  * Drop an inline embedded TOML from values (native-file mode: helm --set-file
  * supplies the ConfigMap key, and a stale inline copy would shadow-confuse).
- * Returns the removed source, if any, so callers can seed the native file.
+ * Returns the removed source only so callers can report that migration; it is
+ * never used to create or seed the required native template.
  */
 export function removeInlineWithdrawalConfig(values: Record<string, any>): string | undefined {
   const existing = values.configMaps?.config?.data?.[WITHDRAWAL_CONFIG_FILE]
@@ -515,59 +495,65 @@ export function removeInlineWithdrawalConfig(values: Record<string, any>): strin
   return existing
 }
 
-/** Ensure the common chart mounts the embedded application TOML at the canonical path. */
-export function ensureWithdrawalConfigValues(values: Record<string, any>): string {
-  ensureWithdrawalChartWiring(values)
-  values.configMaps.config.data ||= {}
-  const existing = values.configMaps.config.data[WITHDRAWAL_CONFIG_FILE]
-  if (existing !== undefined && typeof existing !== 'string') {
-    throw new TypeError(`withdrawal-processor values: configMaps.config.data.${WITHDRAWAL_CONFIG_FILE} must be a string`)
-  }
-
-  values.configMaps.config.data[WITHDRAWAL_CONFIG_FILE] = existing || defaultWithdrawalConfigToml()
-  return values.configMaps.config.data[WITHDRAWAL_CONFIG_FILE]
-}
-
-export function setWithdrawalConfigToml(values: Record<string, any>, source: string): void {
-  ensureWithdrawalConfigValues(values)
-  parseToml(source, 'generated config')
-  values.configMaps.config.data[WITHDRAWAL_CONFIG_FILE] = source.endsWith('\n') ? source : `${source}\n`
-}
-
 /**
- * Project the single operator-facing Helm switch into the four Rust activation
- * fields that must change atomically. Deep proof topology remains TOML-owned.
+ * Atomically project CLI-owned proof activation state into explicit Rust env.
+ * The generic chart only renders these values and has no knowledge of proof
+ * modes. exact_mock is present only for active mock mode; application topology
+ * remains in the native TOML.
  */
 export function ensureWithdrawalProofActivationSwitch(
   values: Record<string, any>,
   provingMode: ProvingMode = 'production'
 ): boolean {
-  let changed = false
   values.withdrawalProof ||= {}
+  values.env ||= []
+  if (!Array.isArray(values.env)) throw new TypeError('withdrawal-processor values: env must be an array')
+  const before = JSON.stringify([values.withdrawalProof, values.env])
+
   if (values.withdrawalProof.enabled === undefined) {
     values.withdrawalProof.enabled = false
-    changed = true
   }
 
   if (typeof values.withdrawalProof.enabled !== 'boolean') {
     throw new TypeError('withdrawal-processor values: withdrawalProof.enabled must be a boolean')
   }
 
-  values.env ||= []
-  if (!Array.isArray(values.env)) throw new TypeError('withdrawal-processor values: env must be an array')
-  for (const [name, value] of Object.entries(withdrawalProofActivationValues(provingMode))) {
-    const existing = values.env.find((item: any) => item?.name === name)
-    if (existing) {
-      if (existing.value !== value || existing.valueFrom !== undefined) changed = true
-      existing.value = value
-      delete existing.valueFrom
-    } else {
-      values.env.push({ name, value })
-      changed = true
-    }
+  if (values.withdrawalProof.provingMode !== provingMode) {
+    values.withdrawalProof.provingMode = provingMode
   }
 
-  return changed
+  const enabled = values.withdrawalProof.enabled as boolean
+  const unmanagedEnv = values.env.filter(
+    (item: any) => !isWithdrawalProofActivationEnv(String(item?.name || ''))
+  )
+  const activationEnv: Array<{ name: string; value: string }> = [
+    {
+      name: WITHDRAWAL_PROOF_ACTIVATION_ENV.mode,
+      value: enabled ? (provingMode === 'mock' ? 'dev_dummy' : 'production') : 'disabled',
+    },
+    {
+      name: WITHDRAWAL_PROOF_ACTIVATION_ENV.requireScroll,
+      value: enabled ? 'true' : 'false',
+    },
+    {
+      name: WITHDRAWAL_PROOF_ACTIVATION_ENV.requireBridge,
+      value: enabled ? 'true' : 'false',
+    },
+    {
+      name: WITHDRAWAL_PROOF_ACTIVATION_ENV.apiEnabled,
+      value: enabled ? 'true' : 'false',
+    },
+  ]
+  if (enabled && provingMode === 'mock') {
+    activationEnv.push({
+      name: WITHDRAWAL_PROOF_ACTIVATION_ENV.devDummyScrollInput,
+      value: 'exact_mock',
+    })
+  }
+
+  values.env = [...unmanagedEnv, ...activationEnv]
+
+  return before !== JSON.stringify([values.withdrawalProof, values.env])
 }
 
 export function isWithdrawalProofActivationEnv(name: string): boolean {

@@ -81,6 +81,22 @@ function hasProofTokenMappings(values: Record<string, any>): boolean {
   return PROOF_SECRET_PROPERTIES.every(property => mappedKeys.has(property))
 }
 
+function projectManagedAwsSecretRegion(
+  values: Record<string, any>,
+  secretName: string,
+  region: string
+): void {
+  for (const secret of Object.values(values.externalSecrets || {}) as any[]) {
+    if (secret?.provider !== 'aws' || !Array.isArray(secret.data)) continue
+
+    const readsProvisionedProofSecret = secret.data.some((item: any) =>
+      PROOF_SECRET_PROPERTIES.includes(item?.secretKey) &&
+      item?.remoteRef?.key === secretName
+    )
+    if (readsProvisionedProofSecret) secret.secretRegion = region
+  }
+}
+
 /**
  * Project the provisioned AWS resources into the two proof values documents so
  * a subsequent `setup proof-config` passes its IRSA/secret topology validation
@@ -105,13 +121,23 @@ export function applyProofAwsValues(
       })),
       provider: 'aws',
       refreshInterval: '2m',
+      secretRegion: projection.region,
       serviceAccount: 'external-secrets',
     }
   }
 
+  // Do not rely on the shared chart's historical us-west-2 fallback. Keep an
+  // existing managed mapping in sync as well as newly created mappings, while
+  // leaving operator-owned Vault or alternate-secret mappings untouched.
+  projectManagedAwsSecretRegion(coordinatorValues, projection.secretName, projection.region)
+
   withdrawalValues.withdrawalProof ||= {}
   withdrawalValues.withdrawalProof.s3AuthMode = 'irsa'
   bindIrsaServiceAccount(withdrawalValues, projection.withdrawalServiceAccount, projection.withdrawalRoleArn)
+  // proof-config copies the coordinator's proof-work token mapping into WP.
+  // If proof-aws-init is rerun afterwards, keep that managed copy in the same
+  // explicitly selected region without requiring another proof-config pass.
+  projectManagedAwsSecretRegion(withdrawalValues, projection.secretName, projection.region)
 }
 
 /**

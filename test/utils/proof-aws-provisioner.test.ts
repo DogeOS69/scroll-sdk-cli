@@ -37,6 +37,7 @@ describe('proof-aws-provisioner values projection', () => {
       key: 'scroll/proof-coordinator-secrets',
       property: 'proof-work-token',
     })
+    expect(coordinator.externalSecrets.secrets.secretRegion).to.equal('us-west-2')
 
     expect(withdrawal.withdrawalProof.s3AuthMode).to.equal('irsa')
     expect(withdrawal.serviceAccount.name).to.equal('withdrawal-processor')
@@ -66,6 +67,87 @@ describe('proof-aws-provisioner values projection', () => {
     expect(coordinator.serviceAccount.annotations['eks.amazonaws.com/role-arn']).to.equal(PROJECTION.coordinatorRoleArn)
     expect(withdrawal.withdrawalProof.enabled).to.equal(true)
     expect(withdrawal.withdrawalProof.s3AuthMode).to.equal('irsa')
+  })
+
+  it('updates the region on an existing AWS mapping for the provisioned proof secret', () => {
+    const coordinator = {
+      externalSecrets: {
+        secrets: {
+          data: [
+            {
+              remoteRef: { key: 'scroll/proof-coordinator-secrets', property: 'proof-work-token' },
+              secretKey: 'proof-work-token',
+            },
+            {
+              remoteRef: { key: 'scroll/proof-coordinator-secrets', property: 'prover-worker-token' },
+              secretKey: 'prover-worker-token',
+            },
+          ],
+          provider: 'aws',
+          secretRegion: 'us-west-2',
+          serviceAccount: 'external-secrets',
+        },
+      },
+    }
+
+    const withdrawal = {
+      externalSecrets: {
+        'proof-secrets': {
+          data: [
+            {
+              remoteRef: { key: 'scroll/proof-coordinator-secrets', property: 'proof-work-token' },
+              secretKey: 'proof-work-token',
+            },
+          ],
+          provider: 'aws',
+          secretRegion: 'us-west-2',
+          serviceAccount: 'external-secrets',
+        },
+      },
+    }
+
+    applyProofAwsValues(coordinator, withdrawal, { ...PROJECTION, region: 'us-east-1' })
+
+    expect(coordinator.externalSecrets.secrets.secretRegion).to.equal('us-east-1')
+    expect(withdrawal.externalSecrets['proof-secrets'].secretRegion).to.equal('us-east-1')
+  })
+
+  it('preserves the region on AWS mappings for an alternate Secret', () => {
+    const coordinator = {
+      externalSecrets: {
+        custom: {
+          data: [
+            {
+              remoteRef: { key: 'ops/alternate-proof-secrets', property: 'proof-work-token' },
+              secretKey: 'proof-work-token',
+            },
+            {
+              remoteRef: { key: 'ops/alternate-proof-secrets', property: 'prover-worker-token' },
+              secretKey: 'prover-worker-token',
+            },
+          ],
+          provider: 'aws',
+          secretRegion: 'ap-northeast-1',
+        },
+      },
+    }
+    const withdrawal = {
+      externalSecrets: {
+        'proof-secrets': {
+          data: [{
+            remoteRef: { key: 'ops/alternate-proof-secrets', property: 'proof-work-token' },
+            secretKey: 'proof-work-token',
+          }],
+          provider: 'aws',
+          secretRegion: 'ap-northeast-1',
+        },
+      },
+    }
+
+    applyProofAwsValues(coordinator, withdrawal, { ...PROJECTION, region: 'us-east-1' })
+
+    expect(coordinator.externalSecrets.custom.secretRegion).to.equal('ap-northeast-1')
+    expect(withdrawal.externalSecrets['proof-secrets'].secretRegion).to.equal('ap-northeast-1')
   })
 
   it('replaces a stale valueFrom on managed env entries', () => {

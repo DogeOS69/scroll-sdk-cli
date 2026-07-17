@@ -5,6 +5,7 @@ import {
   WITHDRAWAL_DEPLOYMENT_BEGIN,
   WITHDRAWAL_DEPLOYMENT_END,
   buildWithdrawalDeploymentFacts,
+  ensureWithdrawalProofActivationSwitch,
   mergeWithdrawalManagedDeploymentBlock,
   stripMigratedWithdrawalEnv,
 } from '../../src/utils/withdrawal-config.js'
@@ -145,5 +146,39 @@ ${WITHDRAWAL_DEPLOYMENT_END}
       'DOGEOS_WITHDRAWAL_DATABASE_URL',
       'RUST_LOG',
     ])
+  })
+
+  it('atomically projects active mock env while preserving ordinary and secret env', () => {
+    const values: Record<string, any> = {
+      env: [
+        { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE', value: 'dev_dummy' },
+        { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION', value: 'true' },
+        { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE', value: 'true' },
+        { name: 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED', value: 'true' },
+        { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__DEV_DUMMY__SCROLL_INPUT', value: 'exact_mock' },
+        { name: 'RUST_LOG', value: 'info' },
+        {
+          name: 'DOGEOS_WITHDRAWAL_DATABASE_URL',
+          valueFrom: { secretKeyRef: { key: 'url', name: 'withdrawal-db' } },
+        },
+      ],
+      withdrawalProof: { enabled: true, provingMode: 'production' },
+    }
+
+    expect(ensureWithdrawalProofActivationSwitch(values, 'mock')).to.equal(true)
+    expect(values.withdrawalProof).to.deep.equal({ enabled: true, provingMode: 'mock' })
+    expect(values.env).to.deep.equal([
+      { name: 'RUST_LOG', value: 'info' },
+      {
+        name: 'DOGEOS_WITHDRAWAL_DATABASE_URL',
+        valueFrom: { secretKeyRef: { key: 'url', name: 'withdrawal-db' } },
+      },
+      { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE', value: 'dev_dummy' },
+      { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION', value: 'true' },
+      { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE', value: 'true' },
+      { name: 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED', value: 'true' },
+      { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__DEV_DUMMY__SCROLL_INPUT', value: 'exact_mock' },
+    ])
+    expect(ensureWithdrawalProofActivationSwitch(values, 'mock')).to.equal(false)
   })
 })
