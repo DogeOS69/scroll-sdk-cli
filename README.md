@@ -27,250 +27,36 @@ A tool for configuring, managing, and testing [Scroll SDK](https://docs.scroll.i
 
 <!-- installation -->
 
-1. ```bash
-   scrollsdk setup domains
-   ```
-
-2. ```bash
-   scrollsdk setup db-init --clean
-   ```
-
-3. ```bash
-   scrollsdk setup gen-keystore
-   ```
-
-4. ```bash
-   scrollsdk setup doge-config
-   ```
-
-5. ```bash
-   scrollsdk setup gen-l2-artifacts
-   ```
-
-6. ```bash
-   scrollsdk setup cubesigner-init
-   ```
-
-7. ```bash
-   scrollsdk setup attestation-signer
-   ```
-
-8. ```bash
-   scrollsdk setup bridge-init
-   ```
-   **Note:** If you encounter an "Insufficient base funds" error like this:
-   ```
-   2025-05-31T00:32:08.308083Z  INFO generate_test_keys: Checking funding for distribution helper address: nmCrhAu4STRor8Tmv4rNHt6JXeqUXFxeo1
-   ......
-   Error: Insufficient base funds for setup tx after selecting all UTXOs. Needed: 6049001000 sats, Have: 3950999000 sats
-   ```
-  or
-  ```
-  ? Enter the seed string 123456
-  Pulling Docker Image: docker.io/dogeos69/generate-test-keys:v0.1.1-test
-  Image pulled successfully
-  Creating Docker Container...
-  Starting Container
-  M--- Running Test Setup & Key Generation (with OP_RETURN bridge funding) ---
-  PLoading configuration from: "./.data/setup_defaults.toml"...
-  'Starting setup for network: Testnet...
-  )Using RPC URL: https://testnet.doge.xyz/
-  :Using Blockbook URL: https://dogebook-testnet.nownodes.io
-  �2025-05-31T03:19:48.077868Z  INFO generate_test_keys: Using OP_RETURN payload (hex): 00151a64570e4997739458455ba4ab5a535fd2e306 for script (hex): 6a1500151a64570e4997739458455ba4ab5a535fd2e306
-  TDistribution Helper Address (derived from seed): nqBXoHUiH92gxgrsmFYjqcBNWZ7VMPFNJY
-  {2025-05-31T03:19:48.077948Z  INFO generate_test_keys: Initializing Dogecoin RPC client...
-  �2025-05-31T03:19:48.144522Z  INFO generate_test_keys: Checking funding for distribution helper address: nqBXoHUiH92gxgrsmFYjqcBNWZ7VMPFNJY
-  �2025-05-31T03:19:49.671868Z ERROR generate_test_keys: Distribution Helper address nqBXoHUiH92gxgrsmFYjqcBNWZ7VMPFNJY has no funds on testnet!
-
-  EPlease send some testnet DOGE to: nqBXoHUiH92gxgrsmFYjqcBNWZ7VMPFNJY
-  Then re-run this script.
-  ```   
-   Send Dogecoin to the displayed helper address and retry the command. Please keep the same seed string, or the helper address will change.
-
-
-
-8. ```bash
-   scrollsdk setup gen-secrets
-   ```
-
-9. ```bash
-   scrollsdk setup prep-charts
-   ```
-
-10. ```
-    scrollsdk setup cubesigner-refresh
-    ```
-
-10. ```
-    scrollsdk setup push-secrets
-    ```
-
-11. ```bash
-    scrollsdk setup tls
-    ```
-
-1. `scrollsdk helper fund-accounts -i -f 2 -d`
-1. `scrollsdk helper fund-accounts -l 1 -f 2 -d`
-1. `scrollsdk helper fund-accounts -l 2 -d`
-<!-- installationstop -->
-
-## Non-Interactive / CI Mode
-
-Steps 1-11 support `--non-interactive` (`-N`) and `--json` flags for automated pipelines. Steps 12-14 (`helper fund-accounts`) are flag-driven for L1 devnet funding, while some L2 funding paths may still prompt for bridge/direct/manual selection. See [docs/automation.md](docs/automation.md) for the full automation guide including required flags per step, JSON output format, error codes, environment variable substitution, and example scripts.
-
-## Ethereum DA S3 Archive
-
-`eth-da-submitter` can archive submitted EIP-4844 blob bytes to S3, and
-`l1-interface` / `withdrawal-processor` can later rehydrate those blobs through
-an unauthenticated HTTP `aws_s3` blob source. This is useful after Beacon API
-blob retention expires.
-
-The CLI does not create S3 buckets or bucket policies. Configure the bucket,
-public read path, and submitter write permissions before running
-`scrollsdk setup prep-charts`. The CLI only reads
-`.data/doge-config.toml` and writes the corresponding Helm environment values.
-
-The resolver performs one anonymous HTTP GET per blob:
-
-```text
-GET {publicBaseUrl}/{0x-versioned-hash}
-```
-
-The response body must be the raw EIP-4844 blob bytes. It is not JSON, and the
-expected size is `131072` bytes.
-
-### AWS S3 Direct Bucket
-
-Create a dedicated bucket for one environment, for example:
-
-```text
-dogeos-eth-da-archive-testnet
-```
-
-Use the real bucket region and direct virtual-hosted S3 URL:
-
-```toml
-[ethereumDa.blobArchive.s3]
-enabled = true
-bucket = "dogeos-eth-da-archive-testnet"
-region = "us-west-2"
-publicBaseUrl = "https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/"
-timeoutMs = 15000
-treatForbiddenAsMissing = false
-```
-
-`bucket` and `region` are used by `eth-da-submitter` for `PutObject`. The
-`publicBaseUrl` is used by `l1-interface` and `withdrawal-processor` for
-anonymous HTTP reads. These values must point at the same object namespace.
-Object keys are the `0x`-prefixed versioned hashes; there is no separate prefix
-setting.
-
-Grant the submitter's AWS identity, such as the IRSA role for the
-`eth-da-submitter` service account, write access and read-back access for
-conflict checks:
-
-```json
-{
-  "Effect": "Allow",
-  "Action": ["s3:PutObject", "s3:GetObject"],
-  "Resource": "arn:aws:s3:::dogeos-eth-da-archive-testnet/*"
-}
-```
-
-If using direct public S3 reads, configure the bucket policy to allow anonymous
-`s3:GetObject` on archive objects while keeping writes private:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "PublicReadEthDaBlobArchive",
-      "Effect": "Allow",
-      "Principal": "*",
-      "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::dogeos-eth-da-archive-testnet/*"
-    }
-  ]
-}
-```
-
-### CloudFront Or Custom Public Read URL
-
-You can keep the bucket private and expose reads through CloudFront or another
-HTTP proxy. In that case `bucket` and `region` still describe the S3 upload
-target, while `publicBaseUrl` is the public read endpoint:
-
-```toml
-[ethereumDa.blobArchive.s3]
-enabled = true
-bucket = "dogeos-eth-da-archive-testnet"
-region = "us-west-2"
-publicBaseUrl = "https://da-archive.example.com/"
-timeoutMs = 15000
-treatForbiddenAsMissing = false
-```
-
-The URL `https://da-archive.example.com/0xabc...` must return the object stored
-at `s3://dogeos-eth-da-archive-testnet/0xabc...`.
-
-### S3-Compatible Endpoints
-
-For MinIO or another S3-compatible service, configure the upload endpoint and
-path-style addressing when required:
-
-```toml
-[ethereumDa.blobArchive.s3]
-enabled = true
-bucket = "dogeos-da"
-region = "us-east-1"
-endpointUrl = "http://minio.default.svc.cluster.local:9000"
-forcePathStyle = true
-publicBaseUrl = "http://minio.default.svc.cluster.local:9000/dogeos-da"
-timeoutMs = 15000
-treatForbiddenAsMissing = false
-```
-
-The resolver will request
-`http://minio.default.svc.cluster.local:9000/dogeos-da/0xabc...`.
-
-### Field Reference
-
-| Field | Required | Used by | Description |
-|-------|----------|---------|-------------|
-| `enabled` | yes | submitter, l1-interface, withdrawal-processor | Enables S3 upload and readback when `true`. |
-| `bucket` | yes when enabled | eth-da-submitter | Existing bucket name. The CLI does not create it. |
-| `region` | yes when enabled | eth-da-submitter | Bucket region. Must match the real bucket region. |
-| `publicBaseUrl` | yes when enabled | l1-interface, withdrawal-processor | Public HTTP base URL used for anonymous `GET {base}/{0x-versioned-hash}`. |
-| `timeoutMs` | no | l1-interface, withdrawal-processor | HTTP GET timeout. `15000` is a reasonable starting point. |
-| `treatForbiddenAsMissing` | no | l1-interface, withdrawal-processor | Keep `false` unless the read endpoint intentionally returns 403 for absent objects and you want fallback providers to continue. |
-| `endpointUrl` | no | eth-da-submitter | Custom S3-compatible upload endpoint. Usually omitted for AWS S3. |
-| `forcePathStyle` | no | eth-da-submitter | Set `true` for most MinIO/S3-compatible endpoints that require path-style URLs. |
-| `pollIntervalMs`, `initialBackoffMs`, `maxBackoffMs`, `maxRetries`, `uploadingTimeoutMs` | no | eth-da-submitter | Upload worker retry and timeout tuning. Defaults are normally sufficient. |
-
-### Verify The Public URL
-
-After `eth-da-submitter` has uploaded an object, verify that the read URL works
-from a network that can reach `l1-interface` and `withdrawal-processor`:
+Install the published CLI:
 
 ```bash
-curl -I "https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/0x..."
-curl -s "https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/0x..." | wc -c
+npm install --global @scroll-tech/scroll-sdk-cli
+scrollsdk --help
 ```
 
-Expected results:
+For repository development:
 
-- Existing object: HTTP `200`
-- Existing object body size: `131072`
-- Missing object: ideally HTTP `404`; some deny policies return `403`
+```bash
+yarn install
+yarn build
+bin/run.js --help
+```
+<!-- installationstop -->
 
-Keep `treatForbiddenAsMissing = false` first so ACL or public-read mistakes are
-visible. Set it to `true` only after confirming that 403 is the intended
-missing-object behavior for the read endpoint.
+## Documentation
 
-Run `scrollsdk setup prep-charts` after updating `.data/doge-config.toml` to
-sync the S3 settings into `eth-da-submitter`, `l1-interface`, and
-`withdrawal-processor` values.
+- [DogeOS proof operator runbook](docs/proof-operator-runbook.md) — the single
+  official bridge-operator workflow for proof services, partner handoff, and
+  mock/production acceptance.
+- [CLI automation reference](docs/automation.md) — `--non-interactive`, JSON,
+  environment references, retries, and secret handling; it does not define
+  deployment order.
+- [Ethereum DA S3 archive reference](docs/ethereum-da-s3.md) — S3 upload and
+  public readback configuration.
+- [Partner attestation-signer kit](https://github.com/dogeos69/scroll-sdk/tree/v0.3.0-develop/partner-kit/attestation-signer)
+  — the generic manual sent to signer operators. The generated
+  `signer-policy-bundle/PARTNER-COMMANDS.md` is authoritative for one concrete
+  deployment.
 
 # Usage
 
@@ -1054,7 +840,7 @@ _See code: [src/commands/setup/bridge-init.ts](https://github.com/dogeos69/scrol
 
 ## `scrollsdk setup cubesigner-init`
 
-Setup a CubeSigner TEE key and role
+Setup a CubeSigner TEE key and role, preserving the provider key and dogeos-core compressed identity
 
 ```
 USAGE
@@ -1073,7 +859,7 @@ FLAGS
       --threshold=<value>    Deprecated; ignored because cubesigner-init configures the single TEE key.
 
 DESCRIPTION
-  Setup a CubeSigner TEE key and role
+  Setup a CubeSigner TEE key and role, preserving the provider key and dogeos-core compressed identity
 
 EXAMPLES
   $ scrollsdk setup cubesigner-init --roles tee_role
@@ -1361,9 +1147,8 @@ USAGE
 FLAGS
   -c, --config=<value>                             Path to doge-config.toml
       --allowed-proof-triples=<value>              Envelope proof-triple allowlist (same format setup proof-config
-                                                   projects); default: derived from the staged ProofCoordinator.toml
-                                                   verifier block or the proof-artifacts manifests, empty when the proof
-                                                   topology is not staged yet (pass "" to force empty)
+                                                   projects); default: derived from staged ProofCoordinator.toml or
+                                                   proof-artifacts manifests; missing/empty fails closed
       --bridge-namespace-id=<value>                20-byte bridge namespace id; default is read from
                                                    .data/GenerateBridgeInfo.toml (namespace_id) written by bridge-init
                                                    step 3
@@ -1377,17 +1162,18 @@ FLAGS
       --signer-proof-artifact-base-url=<value>     Stable public GET base signers use to fetch accepted proof objects;
                                                    default: the value setup proof-config staged into
                                                    withdrawal-processor/WithdrawalProcessor.toml
-      --source-set=<value>                         [default: configs/source-set.toml] source-set.toml to include in the
-                                                   bundle
+      --source-set=<value>                         source-set.toml override. Mock defaults to an e2e_harness empty
+                                                   scaffold; production defaults to configs/source-set.toml
       --supported-signing-policy-versions=<value>  [default: 1] CSV of supported signing policy versions
-      --tee-allowed-signer-ids=<value>             CSV of allowed TEE signer ids (compressed secp256k1 pubkeys);
-                                                   default: the tee_pubkey recorded in .data/setup_defaults.toml by
-                                                   cubesigner-init (pass "" to force empty)
+      --tee-allowed-signer-ids=<value>             CSV of allowed TEE signer ids; compressed or uncompressed SEC1 keys
+                                                   are normalized to dogeos-core's compressed form. Production defaults
+                                                   to .data/setup_defaults.toml tee_pubkey; mock defaults to empty,
+                                                   matching e2e_harness
       --tso-url=<value>                            TSO base URL reachable FROM the signer operator network (used for
                                                    signature callbacks); default: https://<[ingress].TSO_HOST> from
                                                    config.toml
-      --verifier-registry=<value>                  [default: configs/verifier-registry.toml] verifier-registry.toml to
-                                                   include in the bundle
+      --verifier-registry=<value>                  verifier-registry.toml override; default is generated from the proof
+                                                   triples staged by setup proof-config
 
 DESCRIPTION
   Assemble the post-genesis policy bundle and exact address-bearing commands for partner-operated attestation signers.
@@ -2007,8 +1793,9 @@ FLAGS
                                             <options: local|aws-kms>
   --create-key                              aws-kms backend: create the ECC_SECG_P256K1 signing key in your AWS account
                                             instead of passing --kms-key-id
-  --endpoint=<value>                        Public HTTPS base URL where the bridge operator and TSO will reach this
-                                            signer (can be filled in later via signer preflight)
+  --endpoint=<value>                        HTTP(S) base URL reachable from the bridge operator/TSO network; use a TLS
+                                            domain in production or a private IP in an isolated mock/VPN test (can be
+                                            filled later via signer preflight)
   --force                                   Overwrite an existing env file in the output directory
   --id=<value>                              (required) Stable signer identifier (DNS-label shaped, agreed with the
                                             bridge operator)
@@ -2031,7 +1818,7 @@ EXAMPLES
 
   $ scrollsdk signer init --id partner-a-signer-0 --network mainnet --endpoint https://signer.partner-a.example:4040 --backend aws-kms --kms-key-id arn:aws:kms:... --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567
 
-  $ scrollsdk signer init --id partner-a-signer-0 --network testnet --backend aws-kms --create-key --kms-region us-east-1
+  $ scrollsdk signer init --id partner-a-signer-0 --network testnet --endpoint https://signer.partner-a.example:4040 --backend aws-kms --create-key --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567
 ```
 
 _See code: [src/commands/signer/init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/signer/init.ts)_

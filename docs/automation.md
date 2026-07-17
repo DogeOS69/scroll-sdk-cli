@@ -1,798 +1,242 @@
-# Non-Interactive Automation Guide
+# CLI Automation Reference
 
-This document describes how to run the Scroll SDK CLI installation workflow without interactive prompts, suitable for CI/CD pipelines, AI agents, and scripted deployments.
-
-## Quick Start
-
-Steps 1-11 support two flags for automation (steps 12-14 are already fully flag-driven with no prompts):
+This document defines how scripts, CI jobs, and agents invoke `scrollsdk`.
+It intentionally does not define deployment order. For the official proof and
+partner-handoff workflow, use [proof-operator-runbook.md](proof-operator-runbook.md).
+For command-specific flags, use:
 
 ```bash
-scrollsdk <command> --non-interactive --json
+scrollsdk <command> --help
 ```
 
-| Flag | Short | Description |
-|------|-------|-------------|
-| `--non-interactive` | `-N` | Disable all prompts; read values from `config.toml` |
-| `--json` | | Output structured JSON to stdout; logs to stderr |
+The root README command section is generated from the same command metadata.
 
-## Prerequisites
+## Non-interactive execution
 
-Before running non-interactively, you need:
+Commands that support automation expose:
 
-1. A populated `config.toml` in the working directory
-2. Docker running (for `setup gen-l2-artifacts`, `setup bridge-init`)
-3. kubectl connected to the target cluster (for `setup push-secrets`, `setup prep-charts`)
-4. Environment variables set for any `$ENV:VAR_NAME` references in config
+```bash
+--non-interactive
+-N
+--json
+```
 
-## Environment Variable Substitution
+`--non-interactive` disables prompts. Required values must already exist in
+the standard deployment files, environment variables, or explicit flags.
+`--json` emits a machine-readable final response. Not every legacy helper
+supports both flags; check the command's `--help` output rather than assuming.
 
-Config values can reference environment variables using the `$ENV:VAR_NAME` pattern:
+Typical invocation:
+
+```bash
+scrollsdk setup proof-config \
+  --non-interactive \
+  --json \
+  --proving-mode mock \
+  --proof-artifact-base-url https://proofs.example.com/test
+```
+
+## Standard working directory
+
+Automation should run from one deployment root containing `config.toml`,
+`.data/`, `values/`, and native service configuration directories. Commands
+derive conventional paths from that root.
+
+Do not pass path overrides for every generated file. Path flags are migration
+escape hatches for non-standard layouts. For proof topology invoked from
+another directory, prefer the single deployment-root option:
+
+```bash
+scrollsdk setup proof-config --deployment-dir /srv/dogeos/deployment ...
+```
+
+## Environment-variable references
+
+Configuration and supported flags may use exact `$ENV:NAME` references:
 
 ```toml
 [db.admin]
-DB_PASSWORD = "$ENV:POSTGRES_ADMIN_PASSWORD"
-
-[accounts]
-DEPLOYER_PRIVATE_KEY = "$ENV:DEPLOYER_KEY"
+PASSWORD = "$ENV:POSTGRES_ADMIN_PASSWORD"
 ```
 
-At runtime, `$ENV:POSTGRES_ADMIN_PASSWORD` resolves to `process.env.POSTGRES_ADMIN_PASSWORD`. If the variable is unset, the field is treated as missing.
+```bash
+export POSTGRES_ADMIN_PASSWORD='...'
+scrollsdk setup db-init --non-interactive --json
+```
 
-## JSON Output Format
+Keep the `$ENV:` reference quoted when passing it through a shell so the shell
+does not expand `$ENV` itself:
 
-### Success Response
+```bash
+scrollsdk setup gen-keystore \
+  --non-interactive \
+  --json \
+  --sequencer-password '$ENV:SEQUENCER_KEYSTORE_PASSWORD'
+```
+
+An unset or empty referenced variable is treated as unavailable. Commands must
+fail with a configuration error instead of silently writing the literal
+reference into runtime secrets.
+
+## JSON response contract
+
+Successful commands return a single object shaped like:
 
 ```json
 {
-  "success": true,
-  "command": "setup domains",
-  "timestamp": "2025-01-15T10:30:00.000Z",
+  "command": "setup proof-config",
+  "data": {},
   "duration_ms": 1234,
-  "data": { ... },
-  "warnings": ["optional warning messages"]
+  "success": true,
+  "timestamp": "2026-07-17T00:00:00.000Z",
+  "warnings": []
 }
 ```
 
-### Error Response
+Failures return:
 
 ```json
 {
-  "success": false,
-  "command": "setup domains",
-  "timestamp": "2025-01-15T10:30:00.000Z",
+  "command": "setup proof-config",
+  "duration_ms": 123,
   "error": {
-    "code": "E601_MISSING_FIELD",
-    "message": "Missing 2 required configuration value(s) for non-interactive mode",
     "category": "CONFIGURATION",
-    "recoverable": true,
-    "context": {
-      "missingFields": [
-        {
-          "field": "EXTERNAL_RPC_URI_L1",
-          "configPath": "[frontend].EXTERNAL_RPC_URI_L1",
-          "description": "L1 RPC endpoint URL"
-        }
-      ]
-    }
-  }
+    "code": "E701_PROOF_CONFIG_FAILED",
+    "context": {},
+    "message": "actionable failure description",
+    "recoverable": true
+  },
+  "success": false,
+  "timestamp": "2026-07-17T00:00:00.000Z"
 }
 ```
 
-### Error Categories
+Fields under `data` and `context` are command-specific. Automation should use
+`success`, `error.code`, `error.category`, and `error.recoverable` as the stable
+control fields rather than matching human-readable log text.
 
-| Category | Meaning | Recovery Strategy |
-|----------|---------|-------------------|
-| `CONFIGURATION` | Missing/invalid config values | Add values to config.toml |
-| `PREREQUISITE` | Missing dependency (Docker, kubectl) | Install/start the dependency |
-| `NETWORK` | RPC/API endpoint unreachable | Check connectivity, retry |
-| `DOCKER` | Container operation failed | Check Docker daemon, retry |
-| `KUBERNETES` | K8s operation failed | Check cluster connectivity |
-| `FUNDING` | Insufficient funds | Fund the specified address |
-| `VALIDATION` | Input validation failed | Fix the invalid value |
-| `INTERNAL` | Unexpected error | Report bug |
+## Stdout and stderr
 
-### Error Codes
+With `--json`:
 
-| Code | Category | Recoverable | Description |
-|------|----------|-------------|-------------|
-| `E100_DOCKER_NOT_RUNNING` | PREREQUISITE | Yes | Docker daemon not running |
-| `E101_CONFIG_NOT_FOUND` | CONFIGURATION | Yes | config.toml not found |
-| `E102_DATA_DIR_MISSING` | CONFIGURATION | Yes | .data/ directory missing |
-| `E103_DOGE_CONFIG_MISSING` | CONFIGURATION | Yes | doge-config.toml not found |
-| `E104_KUBECTL_NOT_CONNECTED` | PREREQUISITE | Yes | kubectl not connected |
-| `E200_HELPER_UNFUNDED` | FUNDING | Yes | Helper address has no funds |
-| `E201_INSUFFICIENT_L1_BALANCE` | FUNDING | Yes | Not enough L1 balance |
-| `E202_UTXO_SPENT` | FUNDING | No | UTXO already spent |
-| `E300_L1_RPC_UNREACHABLE` | NETWORK | Yes | L1 RPC endpoint down |
-| `E301_L2_RPC_UNREACHABLE` | NETWORK | Yes | L2 RPC endpoint down |
-| `E302_BLOCKBOOK_UNREACHABLE` | NETWORK | Yes | Blockbook API unreachable |
-| `E303_CELESTIA_RPC_UNREACHABLE` | NETWORK | Yes | Celestia RPC unreachable |
-| `E304_DATABASE_UNREACHABLE` | NETWORK | Yes | Database connection failed |
-| `E400_DOCKER_IMAGE_PULL_FAILED` | DOCKER | Yes | Cannot pull Docker image |
-| `E401_DOCKER_CONTAINER_FAILED` | DOCKER | No | Container exited with error |
-| `E402_DOCKER_TIMEOUT` | DOCKER | Yes | Docker operation timed out |
-| `E500_K8S_NOT_CONNECTED` | KUBERNETES | Yes | Cluster not reachable |
-| `E501_INGRESS_NOT_FOUND` | KUBERNETES | No | Ingress resource not found |
-| `E502_SECRET_PUSH_FAILED` | KUBERNETES | Yes | Failed to push K8s secret |
-| `E600_INVALID_ADDRESS` | VALIDATION | No | Invalid Ethereum address |
-| `E601_MISSING_FIELD` | CONFIGURATION | Yes | Required config field missing |
-| `E602_INVALID_CONFIG_FORMAT` | VALIDATION | No | Config file has invalid format |
-| `E900_UNEXPECTED_ERROR` | INTERNAL | No | Unexpected internal error |
+- stdout contains the final JSON response;
+- stderr contains progress, warnings, Docker/Kubernetes output, and diagnostic
+  context.
 
-## Installation Workflow (Non-Interactive)
-
-All commands below assume `config.toml` is fully populated. Run them in order:
-
-### Step 1: Configure Dogecoin
+Do not discard stderr in CI logs. Parse stdout separately while retaining
+stderr as an artifact:
 
 ```bash
-scrollsdk setup doge-config -N --json
+response="$(scrollsdk setup export-signer-policy --json 2>scrollsdk.stderr.log)"
+printf '%s\n' "$response" | jq .
 ```
 
-Creates or updates `.data/doge-config.toml`, including Dogecoin network and Ethereum DA settings. It migrates legacy `[dogecoin]` and `[ethereumDa]` values out of `config.toml` when present.
+## Exit status
 
-**Required config fields:**
-- `network` in `.data/doge-config.toml` or legacy `[dogecoin].network` in `config.toml` for migration.
-- `[ethereumDa]` in `.data/doge-config.toml` or legacy `[ethereumDa]` in `config.toml` for migration.
-
-### Step 2: Set up domains
+A successful command exits `0`; a failed command exits non-zero. Check both the
+process status and the JSON `success` field. A wrapper must never continue to a
+state-changing downstream step merely because stdout was parseable.
 
 ```bash
-scrollsdk setup domains -N --json
+if ! response="$(scrollsdk setup export-signer-policy --json 2>scrollsdk.stderr.log)"; then
+  printf '%s\n' "$response" | jq . >&2
+  exit 1
+fi
+
+test "$(printf '%s\n' "$response" | jq -r '.success')" = true
 ```
 
-Reads domain and ingress values from `[frontend]` and `[ingress]` sections of config.toml. Reads Dogecoin network and Ethereum DA settings from `.data/doge-config.toml`.
+## Error categories and retries
 
-**Required config fields:**
-- `[frontend].EXTERNAL_RPC_URI_L1` - L1 RPC endpoint
-- `[frontend].EXTERNAL_RPC_URI_L2` - L2 RPC endpoint
-- `[frontend].BRIDGE_API_URI` - Bridge API endpoint
-- `[frontend].ROLLUPSCAN_API_URI` - Rollupscan API endpoint
-- `[ingress].*` - Ingress hostnames
+| Category | Meaning | Automation response |
+|---|---|---|
+| `CONFIGURATION` | missing, inconsistent, or unsafe input | correct configuration; do not blind-retry |
+| `PREREQUISITE` | required local tool or service unavailable | restore prerequisite, then retry |
+| `NETWORK` | DNS, TLS, RPC, or endpoint failure | verify route and policy; bounded retry may be appropriate |
+| `DOCKER` | image, daemon, or container failure | inspect Docker logs before retry |
+| `KUBERNETES` | cluster, resource, or authorization failure | inspect cluster state before retry |
+| `FUNDING` | required chain funds unavailable | fund the reported address, then retry with the same identity inputs |
+| `VALIDATION` | generated or supplied artifact violates a contract | fix the artifact; do not retry unchanged |
+| `INTERNAL` | unexpected implementation failure | preserve diagnostics and report a bug |
 
-### Step 3: Initialize databases
+`recoverable: true` means the command may succeed after the reported external
+condition is corrected. It does not mean immediate retries are safe. Preserve
+the same bridge seed, signer cohort, proving mode, and release artifacts across
+retries unless the operator explicitly starts a new deployment.
 
-```bash
-scrollsdk setup db-init --clean -N --json
-```
+## Idempotency and write boundaries
 
-Creates PostgreSQL databases and roles. Attempts SSL connection first, falls back to non-SSL for local dev databases.
+Automation should assume each command owns only its documented managed blocks
+and artifacts. Relevant examples:
 
-**Required config fields:**
-- `[db.admin].PUBLIC_HOST` - Database host
-- `[db.admin].PUBLIC_PORT` - Database port
-- `[db.admin].USERNAME` - Admin username
-- `[db.admin].PASSWORD` - Admin password (use `$ENV:` for secrets)
-- `[db.*]` sections for each service database
+- `proof-config` rewrites marked proof/verifier blocks and preserves unrelated
+  native TOML settings;
+- `export-signer-policy` regenerates the bundle from current deployment facts;
+- `prep-charts` rebuilds managed values and removes retired generated files;
+- `proof-aws-init` is designed to reuse matching cloud resources.
 
-### Step 4: Generate keystores
+Before retrying after partial failure:
 
-```bash
-scrollsdk setup gen-keystore -N --json --sequencer-password '$ENV:SEQUENCER_KEYSTORE_PASSWORD'
-```
+1. read the command's JSON error and stderr;
+2. inspect `git diff` or the deployment artifact diff;
+3. correct the external condition;
+4. rerun the same command with the same identity inputs;
+5. verify generated outputs before continuing.
 
-Generates keystores for validator/sequencer accounts.
+## Secret handling
 
-**Required flags (non-interactive):**
-- `--sequencer-password` - Password for sequencer keystores (required when generating new sequencers). Supports `$ENV:VAR_NAME` pattern.
-- `--sequencer-count` - Number of sequencers (optional, defaults to existing count)
-- `--bootnode-count` - Number of bootnodes (optional, defaults to existing count)
-- `--regenerate-sequencers` - Force regeneration of all sequencer keys
-- `--regenerate-bootnodes` - Force regeneration of all bootnode keys
+- Use environment references or a secret manager; do not commit expanded
+  secrets to configuration repositories.
+- Treat generated `*.env` files containing WIFs, bearer tokens, AWS keys, or
+  database passwords as secrets.
+- Keep `prover-worker.env` and signer `attestation-signer.env` mode `0600`.
+- `descriptor.json`, `signer-policy.json`, and public-key metadata are public
+  deployment artifacts, but review endpoints before publication.
+- Retain stderr logs carefully: external tools may print sensitive context.
 
-**Required config fields:**
-- `[accounts]` section with private keys
-
-### Step 5: Generate L2 artifacts
-
-```bash
-scrollsdk setup gen-l2-artifacts -N --json
-```
-
-Runs the L2 config generation Docker container and prepares deployment artifacts.
-
-**Generated files:**
-- `values/genesis.yaml` - Required by `setup bridge-init`
-- `config.public.toml`
-- `config-contracts.toml`
-- `values/scroll-common-config.yaml`
-- `values/scroll-common-config-contracts.yaml`
-- `values/*-config.yaml`
-
-**Required config fields:**
-- `config.toml` fully populated
-
-### Step 6: Initialize the CubeSigner TEE key
-
-```bash
-scrollsdk setup cubesigner-init -N --json --new --role-prefix tee --doge-config .data/doge-config.toml
-```
-
-Creates or selects one CubeSigner role and writes the TEE public key to `.data/setup_defaults.toml`. This must run before bridge initialization.
-
-**Required flags (non-interactive):**
-- `--doge-config <path>` - Path to doge-config file
-- Either `--new --role-prefix <prefix>` or `--roles <role>`
-
-### Step 7: Generate dummy attestation signers
-
-```bash
-scrollsdk setup dummy-signers -N --json --config .data/doge-config.toml
-```
-
-Creates three dummy attestation signer keys and writes `attestation_pubkeys`, `attestation_key_count`, and `attestation_threshold` to `.data/setup_defaults.toml`.
-
-**Required flags (non-interactive):**
-- `--config <path>` - Path to doge-config file (required to avoid config selection prompt)
-- `--generate-wif-keys` - Generate new WIF keys (otherwise existing keys must be in config)
-
-**Required config fields:**
-- `.data/doge-config.toml` must exist (run step 4 first)
-
-### Step 8: Initialize bridge
-
-```bash
-scrollsdk setup bridge-init -N --json --seed 123456
-```
-
-Runs the bridge initialization Docker container. Requires Docker.
-
-**Required flags (non-interactive):**
-- `--seed <string>` - Seed for generating sequencer and fee wallet keys (required)
-- `--image-tag <tag>` - Docker image tag (optional, has default)
-
-**Required config fields:**
-- `values/genesis.yaml` from `setup gen-l2-artifacts`
-- `.data/setup_defaults.toml` with CubeSigner `tee_pubkey` and dummy signer `attestation_pubkeys`
-- `.data/doge-config.toml` with bridge parameters
-
-**Note:** This step may require funding. If you receive error `E200_HELPER_UNFUNDED`, send Dogecoin to the address in the error context and retry.
-
-### Step 9: Generate local secrets
-
-```bash
-scrollsdk setup gen-secrets -N --json
-```
-
-Generates local `secrets/*.env` files from `config.toml`, Dogecoin config, and bridge initialization outputs.
-
-**Required config fields:**
-- `.data/output-withdrawal-processor.toml` from `setup bridge-init`
-
-### Step 10: Prepare Helm charts
-
-```bash
-scrollsdk setup prep-charts -N --json
-```
-
-Generates Helm values files and prepares chart directories.
-
-If Ethereum DA S3 archive readback is enabled, prepare the bucket and update
-`.data/doge-config.toml` before this step. The CLI does not create S3 buckets,
-bucket policies, CloudFront distributions, or IAM/IRSA policies.
-
-AWS S3 direct-read example:
-
-```toml
-[ethereumDa.blobArchive.s3]
-enabled = true
-bucket = "dogeos-eth-da-archive-testnet"
-region = "us-west-2"
-publicBaseUrl = "https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/"
-timeoutMs = 15000
-treatForbiddenAsMissing = false
-```
-
-The bucket must already exist. `eth-da-submitter` needs `s3:PutObject` and
-`s3:GetObject` on the archive objects. `l1-interface` and
-`withdrawal-processor` read blobs through anonymous HTTP GET requests to
-`{publicBaseUrl}/{0x-versioned-hash}`. See the Ethereum DA S3 Archive section
-in `README.md` for AWS direct, CloudFront, and S3-compatible examples.
-
-**Required config fields:**
-- `config.toml` and generated configs from step 7
-- `[ingress]` hostnames (ports are stripped automatically)
-
-### Step 11: Refresh CubeSigner tokens
-
-```bash
-scrollsdk setup cubesigner-refresh -N --json --doge-config .data/doge-config.toml
-```
-
-Refreshes CubeSigner session secrets under `./secrets` using fixed service
-lifetimes: 365 day session lifetime, 2 hour auth token lifetime, 7 day refresh
-token lifetime, and 30 second auth-token grace lifetime.
-
-**Required flags (non-interactive):**
-- `--doge-config <path>` - Path to doge-config file (required)
-- `--org-id <id>` - CubeSigner organization ID (required if not already logged in)
-- `--email <email>` - CubeSigner account email (required if not already logged in)
-
-### Step 12: Push secrets to Kubernetes
-
-```bash
-scrollsdk setup push-secrets -N --json --aws-region "$AWS_REGION"
-```
-
-Pushes generated secrets to the Kubernetes cluster. Requires kubectl.
-
-**Optional flags (non-interactive):**
-- `--provider aws|vault` - Secret service provider (default: `aws`)
-- `--aws-region <region>` - AWS region for Secrets Manager (required when `--provider aws`)
-- `--aws-prefix <prefix>` - AWS Secrets Manager path prefix (default: `dogeos`)
-- `--aws-service-account <name>` - AWS IAM service account (default: `external-secrets`)
-- `--secret-file <path>` - Push only one local secret file
-- `--values-file <path>` - Update only one Helm values YAML file after pushing secrets
-
-Example for a targeted secret push:
-
-```bash
-scrollsdk setup push-secrets -N --json \
-  --aws-region "$AWS_REGION" \
-  --secret-file secrets/l2-reth-bootnode-0-secret.env \
-  --values-file values/l2-reth-bootnode-production-0.yaml
-```
-
-### Step 13: Set up TLS
-
-```bash
-scrollsdk setup tls -N --json --cluster-issuer letsencrypt-prod
-```
-
-Configures TLS certificates for ingress.
-
-**Required flags (non-interactive):**
-- `--cluster-issuer <name>` - ClusterIssuer to use, OR:
-- `--create-issuer --issuer-email <email>` - Create a letsencrypt-prod ClusterIssuer if none exists
-
-### Steps 14-16: Fund accounts
-
-`helper fund-accounts` does not yet support `--non-interactive`/`--json` flags. Some funding paths may prompt for user confirmation (for example, L2 bridge/direct/manual selection or manual funding instructions). Use the `-d` (dev mode) flag to fund L1 accounts from the local L1 devnet prefunded wallet where possible:
-
-```bash
-# Fund deployer on L1 (dev mode)
-scrollsdk helper fund-accounts -i -f 2 -d
-
-# Fund service accounts on L1
-scrollsdk helper fund-accounts -l 1 -f 2 -d
-
-# Fund service accounts on L2
-scrollsdk helper fund-accounts -l 2 -d
-```
-
-| Flag | Description |
-|------|-------------|
-| `-i` | Fund deployer address only |
-| `-f <amount>` | Amount in ETH to fund |
-| `-l <1\|2>` | Target layer (1=L1, 2=L2) |
-| `-d` | Use Anvil devnet funding logic |
-| `-k <key>` | Private key for funder wallet |
-| `-a <address>` | Additional account to fund |
-| `-m` | Manual funding mode (displays QR codes) |
-
-## Full Automation Script Example
+## Minimal shell wrapper
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Export secrets as environment variables
-export POSTGRES_ADMIN_PASSWORD="your-password"
-export DEPLOYER_KEY="0x..."
-export SEQUENCER_KEYSTORE_PASSWORD="your-keystore-password"
-export AWS_REGION="your-aws-region"
+run_scrollsdk() {
+  local name="$1"
+  shift
 
-NETWORK="testnet"  # mainnet, testnet, or regtest
-DOGE_CONFIG=".data/doge-config.toml"
-SEED="your-bridge-seed-string"
-
-run_step() {
-  local desc="$1"; shift
-  echo "Running: $desc"
-  output=$(scrollsdk "$@" 2>/dev/null)
-  success=$(echo "$output" | jq -r '.success')
-  if [ "$success" != "true" ]; then
-    echo "FAILED: $desc"
-    echo "$output" | jq '.error'
-    exit 1
+  local stderr_log="scrollsdk-${name}.stderr.log"
+  local response
+  if ! response="$(scrollsdk "$@" --non-interactive --json 2>"$stderr_log")"; then
+    printf 'scrollsdk step %s failed; diagnostics: %s\n' "$name" "$stderr_log" >&2
+    printf '%s\n' "$response" | jq . >&2 || true
+    return 1
   fi
+
+  if test "$(printf '%s\n' "$response" | jq -r '.success')" != true; then
+    printf '%s\n' "$response" | jq . >&2
+    return 1
+  fi
+
+  printf '%s\n' "$response"
 }
 
-# Steps 1-2: Domain and database setup
-run_step "setup doge-config" setup doge-config -N --json
-run_step "setup domains" setup domains -N --json
-run_step "setup db-init" setup db-init --clean -N --json
-
-# Step 3: Generate keystores
-run_step "setup gen-keystore" setup gen-keystore -N --json \
-  --sequencer-password '$ENV:SEQUENCER_KEYSTORE_PASSWORD'
-
-# Steps 4-9: Dogecoin, L2 artifacts, CubeSigner, bridge, secrets, Helm charts
-run_step "setup doge-config" setup doge-config -N --json
-run_step "setup gen-l2-artifacts" setup gen-l2-artifacts -N --json
-run_step "setup cubesigner-init" setup cubesigner-init -N --json \
-  --new --role-prefix tee --doge-config "$DOGE_CONFIG"
-run_step "setup dummy-signers" setup dummy-signers -N --json --config "$DOGE_CONFIG"
-run_step "setup bridge-init" setup bridge-init -N --json --seed "$SEED"
-run_step "setup gen-secrets" setup gen-secrets -N --json
-run_step "setup prep-charts" setup prep-charts -N --json
-
-# Step 10: CubeSigner sessions (requires prior login or --org-id/--email)
-run_step "setup cubesigner-refresh" setup cubesigner-refresh -N --json \
-  --doge-config "$DOGE_CONFIG"
-
-# Step 10: Push secrets to K8s
-run_step "setup push-secrets" setup push-secrets -N --json --aws-region "$AWS_REGION"
-
-# Step 11: TLS certificates
-run_step "setup tls" setup tls -N --json --cluster-issuer letsencrypt-prod
-
-# Steps 12-14: Fund accounts (no -N/--json support; some L2 paths may prompt)
-scrollsdk helper fund-accounts -i -f 2 -d
-scrollsdk helper fund-accounts -l 1 -f 2 -d
-scrollsdk helper fund-accounts -l 2 -d
-
-echo "Installation complete"
+# Deployment ordering belongs to the operator runbook. This wrapper only
+# standardizes one command invocation.
+run_scrollsdk proof-config setup proof-config \
+  --proving-mode mock \
+  --proof-artifact-base-url https://proofs.example.com/test
 ```
 
-## DeploymentSpec Alternative
+## DeploymentSpec generation
 
-For fully declarative deployments, use a `deployment-spec.yaml` file:
+For declarative base configuration:
 
 ```bash
-scrollsdk setup generate-from-spec --spec deployment-spec.yaml --json
+scrollsdk setup generate-from-spec \
+  --spec deployment-spec.yaml \
+  --json
 ```
 
-This generates base config files (`config.toml`, `doge-config.toml`, `setup_defaults.toml`, `values/*.yaml`) from a single YAML specification. Run `setup gen-l2-artifacts`, `setup cubesigner-init`, `setup dummy-signers`, `setup bridge-init`, and `setup gen-secrets` afterward to produce the runtime L2 genesis, CubeSigner TEE key, dummy attestation keys, bridge outputs, and local secrets. See `src/types/deployment-spec.ts` for the full schema.
-
-## Parsing JSON Output Programmatically
-
-### Bash with jq
-
-```bash
-output=$(scrollsdk setup domains -N --json 2>/dev/null)
-if echo "$output" | jq -e '.success' > /dev/null 2>&1; then
-  echo "Success"
-  echo "$output" | jq '.data'
-else
-  code=$(echo "$output" | jq -r '.error.code')
-  msg=$(echo "$output" | jq -r '.error.message')
-  echo "Error $code: $msg"
-fi
-```
-
-### Python
-
-```python
-import subprocess, json
-
-result = subprocess.run(
-    ["scrollsdk", "setup", "domains", "-N", "--json"],
-    capture_output=True, text=True
-)
-response = json.loads(result.stdout)
-if response["success"]:
-    print("Domains configured:", response["data"])
-else:
-    error = response["error"]
-    if error["recoverable"]:
-        for field in error["context"]["missingFields"]:
-            print(f"Missing: {field['field']} in {field['configPath']}")
-```
-
-### Node.js / TypeScript
-
-```typescript
-import { execFileSync } from 'node:child_process';
-
-const output = execFileSync('scrollsdk', ['setup', 'domains', '-N', '--json'], {
-  encoding: 'utf-8',
-  stdio: ['pipe', 'pipe', 'pipe'],
-});
-const response = JSON.parse(output);
-if (response.success) {
-  console.log('Duration:', response.duration_ms, 'ms');
-} else if (response.error.code === 'E601_MISSING_FIELD') {
-  // Add missing fields to config.toml and retry
-}
-```
-
-## Stdout / Stderr Separation
-
-When `--json` is enabled:
-- **stdout**: Only the final JSON response object
-- **stderr**: All human-readable logs, progress messages, Docker container output, and warnings
-
-This allows clean parsing: `scrollsdk ... --json 2>/dev/null | jq .`
-
-## Retry Strategy for Recoverable Errors
-
-Errors with `"recoverable": true` can be retried after addressing the root cause:
-
-| Error Code | Fix | Then |
-|-----------|-----|------|
-| `E100_DOCKER_NOT_RUNNING` | Start Docker daemon | Retry same command |
-| `E101_CONFIG_NOT_FOUND` | Create/place config.toml | Retry same command |
-| `E200_HELPER_UNFUNDED` | Send DOGE to address in context | Retry `setup bridge-init` |
-| `E300_*` | Check network/DNS | Retry after delay |
-| `E304_DATABASE_UNREACHABLE` | Check DB is running, SSL settings | Retry `setup db-init` |
-| `E502_SECRET_PUSH_FAILED` | Check kubectl auth | Retry `setup push-secrets` |
-| `E601_MISSING_FIELD` | Add fields listed in context | Retry same command |
-
-# Automatic proof topology configuration
-
-Production verifier identities and raw program commitments must come from the
-released proof artifacts; do not copy them into Helm values by hand. After
-copying or generating the chart values into the deployment working directory,
-run:
-
-```bash
-scrollsdk setup proof-config \
-  --proof-artifact-base-url https://proofs.example.com/dogeos-proof-artifacts/testnet/o3o
-```
-
-The base URL is only required on the first run; re-runs (for example
-`setup proof-config --enable-withdrawal-proof`) reuse the value the first run
-staged into the WithdrawalProcessor.toml proof block.
-
-`--proving-mode mock` stages the dev_dummy topology instead (persisted to
-doge-config `[proofSystem].provingMode`): no release artifacts are required,
-the three program manifests are synthesized from the canonical mock identities
-(mirroring the dogeos-core e2e strict-withdrawal topology), the coordinator
-verifier runs `dev_dummy`, and a `prover-worker-mock/docker-compose/` bundle is
-generated (coordinator URL from config.toml `[ingress].PROOF_COORDINATOR_HOST`,
-worker token from Secrets Manager). Same services, same wiring, deterministic
-NON-cryptographic proofs — never use it on a value-bearing bridge.
-
-All conventional paths are resolved from one deployment root. Run the command
-there with no path flags, or pass only `--deployment-dir /path/to/deployment`
-when invoking it elsewhere. `--artifact-manifest`, `--program-manifest`,
-`--coordinator-config`, `--withdrawal-config`, and `--values-dir` are migration
-escape hatches for non-standard layouts, not ordinary workflow inputs.
-
-With the standard deployment layout, it discovers:
-
-```text
-proof-artifacts/release.json
-proof-artifacts/manifests/scroll-chunk.json
-proof-artifacts/manifests/scroll-batch.json
-proof-artifacts/manifests/bridge-transition.json
-proof-coordinator/ProofCoordinator.toml
-withdrawal-processor/WithdrawalProcessor.toml
-values/proof-coordinator-production.yaml
-values/withdrawal-processor-production.yaml
-```
-
-The command requires all three production proof families. It validates each
-`ProofProgramManifestV1`, checks that SHA-256 of each 64-byte raw commitment in
-the artifact manifest equals the corresponding program commitment hash, checks
-the release's VK/program hashes against the three program manifests, and
-checks the aggregate verifying key file against
-`artifacts.agg_verifying_key.sha256`. The aggregate key is embedded as base64 in
-a checksummed ConfigMap and an init container installs the verified bytes at
-`/app/data/verifier/agg-vk.bin` for both WP and proof-coordinator.
-
-The proof-coordinator TOML must already contain the hand-maintained production
-materializer execution topology. The command fails closed unless these legs are
-enabled and match the WP authority topology:
-
-```toml
-[materializer]
-artifact_store_root = "/app/data/proof-artifacts"
-
-[materializer.scroll_chunk_segmentation]
-enabled = true
-
-[materializer.scroll_batch]
-enabled = true
-dev_sentinel = false
-materializer_output_root = "/app/data/scroll-batch-materializer"
-
-[materializer.scroll_batch.subprocess]
-binary_path = "/usr/local/bin/scroll-runtime-materializer"
-statement_namespace_config_path = "/app/data/manifests/statement-namespace.json"
-scratch_root = "/app/data/scroll-batch-scratch"
-chunk_program_commitment_hex = "overridden-by-scrollsdk"
-l2_rpc_url = "http://l2-rpc:8545"
-subprocess_timeout_ms = 3600000
-
-# A complete [materializer.scroll_batch.subprocess.ethereum_da] table and a
-# production blob_source provider are required as well.
-
-[materializer.bridge]
-enabled = true
-advance_l1 = true
-advance_l2 = true
-
-# Complete source-specific tables are also required:
-# [materializer.bridge.dogecoin_rpc]
-# [materializer.bridge.ethereum_da]
-```
-
-Deep materializer fields remain hand-maintained because they select binaries,
-RPCs, witness sources, Ethereum DA caches, and feature-gated coordinator
-backends. The CLI does not invent those deployment choices.
-
-After validation, the command replaces only the marked verifier block in
-`proof-coordinator/ProofCoordinator.toml` and only the marked proof block in the
-native `withdrawal-processor/WithdrawalProcessor.toml`. It embeds the three program manifests,
-generates `/app/data/manifests/statement-namespace.json` from the same Scroll
-chunk/batch manifests, injects the release-validated raw chunk commitment for
-the coordinator subprocess backend, configures the shared proof-work token,
-exposes WP's internal port 9300, projects the S3 artifact store into WP, and
-removes retired/TOML-owned proof ENV. The two values files and coordinator TOML
-are not written until all generated documents have passed preflight validation.
-
-This command stages topology; by default it does **not** enable proof and it
-preserves an existing operator choice. The only activation switch is:
-
-```yaml
-withdrawalProof:
-  enabled: false
-```
-
-The chart projects that one Boolean atomically onto
-`proof_system.mode`, both `proof_system.require_*` fields, and
-`proof_work_api.enabled` via four ENV overrides. All deeper proof configuration
-remains TOML-owned. Leave the switch `false` until coordinator readiness, S3
-identity, released verifier artifacts, and an external prover worker have all
-passed their own preflight. Once those preflights pass, an automation-friendly
-`--enable-withdrawal-proof` flag flips the switch in the same run instead of a
-manual values edit.
-
-## Partner attestation-signer policy
-
-`proof-config` deliberately does not read or write attestation-signer Helm
-values: that deployment shape is retired. It validates that the two verifier
-triples crossing the signer boundary can be exported, then stages the same
-identities in WP and proof-coordinator. After bridge genesis, run
-`scrollsdk setup export-signer-policy`; it derives
-`proof_kind:verifier_id:vk_hash` from the managed coordinator block and writes
-`signer-policy-bundle/` for every partner-operated docker-compose signer. This
-keeps proof identity in one source of truth without requiring a skip flag.
-
-The bundle inherits the proving mode persisted by `setup proof-config` and
-contains `PARTNER-COMMANDS.md` with the resolved signer endpoints, TSO callback
-URL, proof-object GET root, partner compose commands, and bridge-side K8s probe.
-Partners run the same descriptor/policy/network workflow in both modes. Mock
-selects the e2e_harness-compatible audited `staging_scaffold` posture;
-production selects fail-closed `production_enforce` and requires the partner's
-operator-owned env to pin the approved signer release version, full git commit,
-and signing-policy version.
-
-Both modes export `ATTESTATION_SIGNER_ENVELOPE_MAX_PROOF_ARTIFACTS=4`, the exact
-proof triple allowlist, and both TEE allowlists. These are part of the flow
-contract: the signer's default artifact cap is zero, so omitting the cap would
-make every proof-backed envelope fail before the callback path is exercised.
-
-## Native WithdrawalProcessor.toml
-
-Withdrawal-processor application configuration is TOML-owned. The native file
-lives at `withdrawal-processor/WithdrawalProcessor.toml` next to `values/` and
-reaches the chart via
-`--set-file 'configMaps.config.data.WithdrawalProcessor\.toml'=...` at install
-time; the values file keeps only Kubernetes shape, secret wiring, and the
-`withdrawalProof.enabled` switch.
-
-Ownership inside the file:
-
-- **Managed deployment block** (`# BEGIN/END scrollsdk managed deployment
-  configuration`, must stay the first content of the file): `setup prep-charts`
-  merges its derived facts (RPC URLs, contract addresses, chain ids, start
-  heights, redeem script, blob source) into it on every run and seeds curated
-  defaults for keys you have not set. Any other key you tune inside the block —
-  fee rate, timeouts, indexer cadence, UTXO strategy — survives re-runs.
-  Comments inside the block do not.
-- **Managed proof block**: owned by `setup proof-config`, unchanged semantics.
-- Hand-maintained `[tables]` may sit between the blocks.
-
-prep-charts migrates legacy layouts automatically: an inline embedded TOML in
-values seeds the native file once, and every plain-value `DOGEOS_WITHDRAWAL_*`
-env (except the four activation projections and secret-backed entries) is
-stripped from values — figment still honors ad-hoc ENV overrides applied via
-kubectl, they are just not persisted. Structured values like
-`inbox_worker.expected_batchers` are now native TOML arrays instead of
-JSON-in-string env.
-
-## Scaffolding ProofCoordinator.toml
-
-The command automatically scaffolds the coordinator TOML when the file does not
-exist yet (an existing config is never touched). Pass
-`--no-scaffold-coordinator-config` only when absence should be treated as an
-error. Every deployment fact
-is read from the native `WithdrawalProcessor.toml` (or, for legacy layouts, the
-withdrawal-processor values env) — L2 RPC, Ethereum DA RPC and chain ids, blob
-source (S3 archive preferred, beacon node fallback), Dogecoin RPC and network —
-so `setup prep-charts` must have resolved them first; any `<TODO>` left fails
-closed naming the offending key. The generated file passes the proof-config
-materializer validation as-is and contains the marked verifier block that the
-same run then fills.
-
-## Provisioning the AWS side: setup proof-aws-init
-
-`scrollsdk setup proof-aws-init` provisions the cloud resources the proof
-system needs — following the same aws-CLI shell-out conventions as the KMS
-signer provisioning — and projects the results into the values files:
-
-```bash
-scrollsdk setup proof-aws-init \
-  --aws-region us-west-2 \
-  --eks-cluster dogeos-testnet \
-  --network-alias testnet
-```
-
-It idempotently ensures:
-
-- the proof artifact **S3 bucket** (default
-  `dogeos-<network-alias>-proof-artifacts`; private, public access blocked,
-  SSE-S3),
-- one **IRSA IAM role per proof workload**
-  (`dogeos-<alias>-<cluster>-wp-proof` and
-  `dogeos-<alias>-<cluster>-proof-coordinator`), trust-bound to the EKS OIDC
-  subjects of the `withdrawal-processor` / `proof-coordinator` service
-  accounts, with `s3:GetObject`/`s3:PutObject` on the bucket objects and
-  `s3:ListBucket` on the bucket,
-- the **Secrets Manager secret** (default
-  `scroll/proof-coordinator-secrets`) holding freshly generated random
-  `proof-work-token` and `prover-worker-token` values. An existing secret is
-  reused, never rotated, unless `--rotate-tokens` is passed (then restart both
-  workloads).
-
-It then writes into `values/`: the coordinator artifact-store
-`BUCKET`/`REGION`/`KEY_PREFIX` env, `serviceAccount.create/name` plus the
-`eks.amazonaws.com/role-arn` annotation on both workloads,
-`withdrawalProof.s3AuthMode: irsa`, and — only when no mapping exists yet — a
-standard externalSecrets block for the two tokens. A subsequent
-`setup proof-config` run passes its IRSA/secret topology validation without
-manual edits.
-
-With this command in the flow, the only inputs the CLI cannot produce are the
-released proof artifacts (`proof-artifacts/`, production mode only) and the
-public `--proof-artifact-base-url` (a CDN or public endpoint in front of the
-proof object key-prefix root — the bucket itself is provisioned private).
-
-S3 credentials are also explicit but are not an activation switch:
-
-```yaml
-withdrawalProof:
-  enabled: false
-  s3AuthMode: irsa
-
-serviceAccount:
-  create: true
-  annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/withdrawal-processor-proof
-```
-
-In `irsa` mode both proof-coordinator and withdrawal-processor values must have
-a real IAM role annotation; the command rejects missing or placeholder ARNs.
-Use `ambient` only as an explicit acknowledgement that a separately controlled
-credential path supplies both workloads. Scope both roles to the configured
-bucket/key prefix and grant `s3:GetObject` plus `s3:PutObject`; coordinator uses
-those operations to hydrate/publish materializer data and to read back/promote
-worker uploads, while WP uses the same object plane for proof transport and URL
-issuance.
-
-`--proof-artifact-base-url` is a stable credential-free public GET root. Mock
-and real external workers append input object keys to it; WP appends each full
-accepted object key when producing signer evidence.
-It is deliberately separate from proof-coordinator's
-`PROVER_API__PUBLIC_S3_ENDPOINT_URL`, which exists to mint worker-visible S3
-presigned URLs and is not necessarily an unauthenticated signer endpoint.
-
-The default remote-prover profiles are `scroll-prod-zkvm-batch-v1` and
-`bridge-prod-zkvm-v1`. Override them only when the deployed worker fleet uses a
-different production profile:
-
-```bash
---scroll-batch-backend-profile scroll-prod-gpu-v2 \
---bridge-backend-profile bridge-prod-hsm-v2
-```
-
-Verifier IDs default deterministically to
-`<proof-system-id>-<circuit-id>-<circuit-version>`. Override an operator-pinned
-ID only when the release policy requires it:
-
-```bash
---verifier-id scroll_chunk=openvm-scroll-chunk-verifier-v1
-```
+This generates base deployment artifacts; it does not replace bridge genesis,
+partner descriptor exchange, proof release review, cloud provisioning, or
+lifecycle acceptance. Follow the operator runbook for those stateful steps.

@@ -1,5 +1,11 @@
 # DogeOS 核心服务配置 Runbook（中文）
 
+> [!WARNING]
+> **个人/内部笔记，不属于正式使用手册。** 本文件仅用于作者自己的中文梳理，
+> 不应加入 README、正式文档导航或对外发布包。桥运营方的正式流程以
+> `docs/proof-operator-runbook.md` 为准，合作方流程以
+> `scroll-sdk/partner-kit/attestation-signer/README.md` 为准。
+
 > 覆盖五个服务的配置生成与部署主线：**attestation-signer**、**withdrawal-processor**、
 > **proof-coordinator**、**prover-worker**、**tso-service**。
 
@@ -112,7 +118,7 @@ stderr）。secret 值可在 config 里写 `$ENV:VAR_NAME` 引用环境变量。
 完整双侧文档：
 
 - signer 运营方 runbook：`scroll-sdk/partner-kit/attestation-signer/README.md`
-- 桥运营方 runbook：本仓库 `docs/partner-attestation-signers.md`
+- 桥运营方 runbook：本仓库 `docs/proof-operator-runbook.md`
 
 ### 5.1 signer 运营方侧（合作方执行，我们自营 signer 走同一流程）
 
@@ -180,16 +186,20 @@ scrollsdk setup export-signer-policy
 | `--protocol-instance-id` | `.data/protocol_context.protocol_id`（bridge-init step 5 的 sidecar，需要带该功能的 dogeos-core 镜像） |
 | `--tso-url` | `config.toml` 的 `[ingress].TSO_HOST` → `https://<host>` |
 | `--signer-proof-artifact-base-url` | proof-config（⑨）写进 `withdrawal-processor/WithdrawalProcessor.toml` 的 `[proof_system].signer_proof_artifact_base_url` |
-| `--allowed-proof-triples` | 优先 `ProofCoordinator.toml` 的 managed verifier 块（含 `--verifier-id` 覆盖），其次 `proof-artifacts/` manifests，都没有则留空（传 `""` 强制留空） |
-| `--tee-allowed-signer-ids` | `.data/setup_defaults.toml` 的 `tee_pubkey`（cubesigner-init 写入；传 `""` 强制留空） |
+| `--allowed-proof-triples` | 优先 `ProofCoordinator.toml` 的 managed verifier 块（含 `--verifier-id` 覆盖），其次 `proof-artifacts/` manifests；proof-backed policy 缺失三元组时 fail-closed |
+| `--tee-allowed-signer-ids` | production 从 `.data/setup_defaults.toml` 的 `tee_pubkey` 推导；mock 默认留空以对齐 e2e_harness。CLI 接受 CubeSigner 的 `04+X+Y` 与 canonical `02/03+X`，写入 policy 前统一压缩 |
+| signer verifier registry | 默认从上述 proof triples 直接生成，确保 signer 与 WP/coordinator 使用同一组 `(proof_kind, verifier_id, vk_hash)`；只有迁移时才传 `--verifier-registry` |
+| signer source set | mock 自动生成 e2e_harness 空 scaffold；production 固定读取 `configs/source-set.toml`，非标准迁移才传 `--source-set` |
 
-前五项推导不出来会直接报错（提示先跑对应步骤或手动传 flag）；后两项
-推导不出来则留空。产物目录 `signer-policy-bundle/`：
+前五项推导不出来会直接报错（提示先跑对应步骤或手动传 flag）；proof-backed
+policy 也必须有至少一个 proof triple。production policy 必须有 TEE signer id，mock 不读取也不校验
+`tee_pubkey`，除非运营方显式传 `--tee-allowed-signer-ids` 覆盖。产物目录
+`signer-policy-bundle/`：
 
 | 文件 | signer 运营方的用法 |
 |---|---|
 | `signer-policy.env` | 替换 compose 目录里的 `signer-policy.env` |
-| `verifier-registry.toml`、`source-set.toml` | 复制进 `docker-compose/policy/` |
+| `verifier-registry.toml`、`source-set.toml` | CLI 按 mode 生成/选择；合作方复制进 `docker-compose/policy/` |
 | `signer-policy.json` | 机读摘要，留档 |
 | `PARTNER-COMMANDS.md` | 已代入本次 mode、每个 signer endpoint、公钥、TSO URL、proof GET 根地址的双侧精确命令 |
 
@@ -210,12 +220,21 @@ compose 重启 → TSO `/sign` → signer 下载 proof → 回调 TSO，命令�
 
 | 模式 | policy env | 含义 |
 |---|---|---|
-| mock | `POLICY_MODE=staging_scaffold`、`ALLOW_UNIMPLEMENTED_CHECKS=true` | 对齐 e2e_harness；所有已实现检查、proof HTTP 下载、审计和回调仍执行，只审计放行确定性假 proof 无法满足的未实现生产检查 |
-| production | `POLICY_MODE=production_enforce`、`ALLOW_UNIMPLEMENTED_CHECKS=false` | fail-closed；合作方还必须在自己持有的 `attestation-signer.env` 中固定批准镜像的 release version、完整 git commit 和 signing policy version |
+| mock | `POLICY_MODE=staging_scaffold`、`ALLOW_UNIMPLEMENTED_CHECKS=true`、TEE allowlist 默认空 | 对齐 e2e_harness；所有已实现检查、proof HTTP 下载、审计和回调仍执行，只审计放行确定性假 proof 无法满足的未实现生产检查 |
+| production | `POLICY_MODE=production_enforce`、`ALLOW_UNIMPLEMENTED_CHECKS=false`、TEE allowlist 必填 | fail-closed；合作方还必须在自己持有的 `attestation-signer.env` 中固定批准镜像的 release version、完整 git commit 和 signing policy version |
 
-两种 bundle 都写入 `ENVELOPE_MAX_PROOF_ARTIFACTS=4`，并同时写入普通与
-envelope 的 TEE signer allowlist。attestation-signer 的默认 artifact cap 是 0；
-若缺少这项，所有携带 proof 的签名请求都会被正确拒绝。
+两种 bundle 都写入 `ENVELOPE_MAX_PROOF_ARTIFACTS=4`。production 同时写入普通与
+envelope 的 TEE signer allowlist；mock 的两个 TEE allowlist 默认为空，因为当前
+e2e_harness evidence 不携带 TEE receipt。attestation-signer 的默认 artifact cap
+是 0；若缺少正数 cap，所有携带 proof 的签名请求都会被正确拒绝。
+
+`cubesigner-init` 会在 `.data/doge-config.toml` 同时保存 CubeSigner API 原样返回的
+`public_key`（通常是 65 字节 `04+X+Y`，方便和 `cs` 输出逐字核对）和验证后生成的
+`public_key_compressed`（33 字节 `02/03+X`）。`setup_defaults.toml` 只写后者。
+旧部署仍可保留原文件：production
+policy 导出会只读兼容转换。压缩前后是同一曲线点，不改变 `protocol_id`；
+dogeos-core 在生成 redeem script 时本来就固定写入压缩公钥，而
+`generate_protocol_context` 哈希的是生成后的 bridge script，不是原始 TOML 字符串。
 
 注意：当前 dogeos-core 的 attestation-signer 对 STARK proof bytes 的密码学验证仍
 报告 `NotImplemented`，因此 `production_enforce` 会按设计拒绝 proof-backed
@@ -484,7 +503,7 @@ TSO → signer `POST /sign` / `GET /health`；signer → TSO 回调；signer →
 | `setup prep-charts` | `config.toml`、doge-config、contracts | `values/*-production.yaml`、`WithdrawalProcessor.toml` managed 块、`tsoSigners` |
 | `setup proof-aws-init` | 两个 proof values 文件 | S3/IRSA/secret（云端）+ 回写两个 values |
 | `setup proof-config` | production: `proof-artifacts/`；两种模式：两个 K8s values 与 WP 部署配置 | 两个 values、两个 TOML 的标记块；mock 另写 `prover-worker-mock/docker-compose/` |
-| `setup export-signer-policy` | doge-config、`protocol_context.json` + `.protocol_id`、`config.toml`、`setup_defaults.toml`、WP/coordinator TOML、`configs/*.toml` | `signer-policy-bundle/`（含带真实地址/命令的 `PARTNER-COMMANDS.md`，发给全体 signer 运营方） |
+| `setup export-signer-policy` | doge-config、`protocol_context.json` + `.protocol_id`、`config.toml`、`setup_defaults.toml`、WP/coordinator TOML；production 另读固定的 `configs/source-set.toml` | `signer-policy-bundle/`（verifier registry 从 proof triples 生成；mock source set 自动生成为空；含带真实地址/命令的 `PARTNER-COMMANDS.md`，发给全体 signer 运营方） |
 | `setup push-secrets` | `secrets/*.env` | 云端 Secrets Manager + values 的 externalSecrets 接线 |
 
 ## 10. 排错要点
