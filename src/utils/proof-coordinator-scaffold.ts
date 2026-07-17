@@ -244,7 +244,7 @@ poll_interval_ms = 1000
 lease_ttl_ms = 60000
 
 [auth]
-bearer_token_file = "/run/secrets/proof-work-token"
+bearer_token_file = "/app/secrets/proof-work-token"
 
 [artifact_store]
 kind = "s3"
@@ -275,7 +275,7 @@ verifier_import_mode = ${q(provingMode === 'mock' ? 'dev_dummy' : 'production')}
 [prover_api]
 enabled = true
 bind_addr = "0.0.0.0:9400"
-worker_auth_token_file = "/run/secrets/prover-worker-token"
+worker_auth_token_file = "/app/secrets/prover-worker-token"
 max_lease_ttl_ms = 300000
 transport = "s3"
 

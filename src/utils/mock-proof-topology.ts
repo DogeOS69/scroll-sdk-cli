@@ -25,8 +25,8 @@ export const MOCK_PROOF_SYSTEM_ID = 'openvm'
 export const MOCK_PROOF_CIRCUIT_VERSION = '1.0.0'
 export const MOCK_SCROLL_BATCH_BACKEND_PROFILE = 'scroll-batch-topology-prover-v1'
 export const MOCK_BRIDGE_BACKEND_PROFILE = 'bridge-topology-prover-v1'
-/** Working-directory home for the synthesized mock program manifests. */
-export const MOCK_PROGRAM_MANIFESTS_DIR = '.data/mock-proof-topology/manifests'
+/** Deployment-artifact home for the synthesized mock program manifests. */
+export const MOCK_PROGRAM_MANIFESTS_DIR = 'proof-artifacts/mock-manifests'
 
 export const MOCK_PROOF_IDENTITIES: Record<ProofFamily, MockProofIdentity> = {
   bridge_transition: {

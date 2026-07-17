@@ -53,13 +53,13 @@ describe('proof-coordinator-scaffold', () => {
     expect(source).to.include('# BEGIN scrollsdk managed verifier configuration')
     expect(source).to.include('# END scrollsdk managed verifier configuration')
     const parsed = toml.parse(source) as any
-    expect(parsed.auth.bearer_token_file).to.equal('/run/secrets/proof-work-token')
+    expect(parsed.auth.bearer_token_file).to.equal('/app/secrets/proof-work-token')
     expect(parsed.artifact_store.kind).to.equal('s3')
     expect(parsed.prover_api).to.deep.include({
       bind_addr: '0.0.0.0:9400',
       enabled: true,
       transport: 's3',
-      worker_auth_token_file: '/run/secrets/prover-worker-token',
+      worker_auth_token_file: '/app/secrets/prover-worker-token',
     })
     expect(parsed.verifier.verifier_import_mode).to.equal('production')
     const batchSubprocess = parsed.materializer.scroll_batch.subprocess

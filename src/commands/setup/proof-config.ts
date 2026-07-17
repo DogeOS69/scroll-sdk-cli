@@ -14,6 +14,7 @@ import {
   DEFAULT_PROOF_COORDINATOR_CONFIG,
   DEFAULT_PROOF_PROGRAM_MANIFESTS,
   DEFAULT_SCROLL_BATCH_BACKEND_PROFILE,
+  DEFAULT_STATEMENT_NAMESPACE_CONFIG,
   configureProofValues,
 } from '../../utils/proof-configurator.js'
 import { scaffoldProofCoordinatorConfig } from '../../utils/proof-coordinator-scaffold.js'
@@ -28,6 +29,7 @@ export {
   DEFAULT_PROOF_ARTIFACT_MANIFEST,
   DEFAULT_PROOF_COORDINATOR_CONFIG,
   DEFAULT_PROOF_PROGRAM_MANIFESTS,
+  DEFAULT_STATEMENT_NAMESPACE_CONFIG,
 } from '../../utils/proof-configurator.js'
 
 const PROOF_SECRET_NAME = 'scroll/proof-coordinator-secrets'
@@ -42,6 +44,7 @@ export interface ProofDeploymentPaths {
   deploymentDir: string
   dogeConfig: string
   programManifests: string[]
+  statementNamespace: string
   valuesDir: string
   withdrawalConfig: string
   workerBundleDir: string
@@ -75,6 +78,7 @@ export function resolveProofDeploymentPaths(options: {
     dogeConfig: fromDeploymentRoot(deploymentDir, options.dogeConfig, DEFAULT_DOGE_CONFIG),
     programManifests: (options.programManifests || DEFAULT_PROOF_PROGRAM_MANIFESTS)
       .map(item => path.resolve(deploymentDir, item)),
+    statementNamespace: fromDeploymentRoot(deploymentDir, undefined, DEFAULT_STATEMENT_NAMESPACE_CONFIG),
     valuesDir: fromDeploymentRoot(deploymentDir, options.valuesDir, DEFAULT_PROOF_VALUES_DIR),
     withdrawalConfig: fromDeploymentRoot(deploymentDir, options.withdrawalConfig, WITHDRAWAL_NATIVE_CONFIG_RELPATH),
     workerBundleDir: fromDeploymentRoot(deploymentDir, undefined, PROVER_WORKER_MOCK_BUNDLE_DIR),
@@ -119,7 +123,7 @@ export default class ProofConfig extends Command {
     config: Flags.string({ char: 'c', description: `Advanced override for doge-config.toml (default under deployment root: ${DEFAULT_DOGE_CONFIG})`, hidden: true }),
     'coordinator-config': Flags.string({ description: `Advanced override for native ProofCoordinator.toml (default under deployment root: ${DEFAULT_PROOF_COORDINATOR_CONFIG})`, hidden: true }),
     'deployment-dir': Flags.string({ default: '.', description: 'Deployment root containing config.toml, .data/, values/, proof-coordinator/, withdrawal-processor/, and proof-artifacts/' }),
-    'enable-withdrawal-proof': Flags.boolean({ default: false, description: 'Set withdrawalProof.enabled=true after staging; without this flag the activation switch is preserved as-is' }),
+    'enable-withdrawal-proof': Flags.boolean({ default: false, description: 'Set withdrawalProof.enabled=true after staging and atomically project the explicit runtime env; without this flag the activation state is preserved as-is' }),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
     'program-manifest': Flags.string({ description: 'Advanced ProofProgramManifestV1 path override; repeat for a non-standard layout; not used in mock proving mode', hidden: true, multiple: true }),
     'proof-artifact-base-url': Flags.string({ description: 'Credential-free public GET root for the proof object key prefix; prover-workers read inputs and partner signers read accepted proof objects below this same root' }),
@@ -187,6 +191,7 @@ export default class ProofConfig extends Command {
         provingMode,
         scrollBatchBackendProfile: flags['scroll-batch-backend-profile'],
         signerProofArtifactBaseUrl: flags['proof-artifact-base-url'] || flags['signer-proof-artifact-base-url'],
+        statementNamespacePath: layout.statementNamespace,
         valuesDir,
         verifierIds: parseVerifierIds(flags['verifier-id'] || []),
         withdrawalConfigPath,
@@ -213,7 +218,20 @@ export default class ProofConfig extends Command {
       }
 
       if (flags['enable-withdrawal-proof']) {
-        json.logSuccess('withdrawalProof.enabled set to true — verify coordinator readiness, S3 identity, and prover workers before deploying')
+        json.logSuccess('withdrawalProof.enabled set to true and runtime env projected atomically — verify coordinator readiness, S3 identity, and prover workers before deploying')
+      }
+
+      if (!json.isJsonEnabled) {
+        json.logSection('Required Helm --set-file bindings')
+        json.log('proof-coordinator:')
+        for (const binding of result.helmSetFiles.proofCoordinator) {
+          json.log(`  --set-file '${binding.key}=${binding.filePath}'`)
+        }
+
+        json.log('withdrawal-processor:')
+        for (const binding of result.helmSetFiles.withdrawalProcessor) {
+          json.log(`  --set-file '${binding.key}=${binding.filePath}'`)
+        }
       }
 
       json.success({ ...result, deploymentDir: layout.deploymentDir, scaffoldedCoordinatorConfig: scaffolded, workerBundleDir })

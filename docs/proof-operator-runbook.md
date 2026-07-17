@@ -81,12 +81,17 @@ deployment/
 │   └── WithdrawalProcessor.toml
 ├── proof-coordinator/
 │   └── ProofCoordinator.toml
-├── proof-artifacts/                     # production only
-│   ├── release.json
-│   └── manifests/
-│       ├── scroll-chunk.json
-│       ├── scroll-batch.json
-│       └── bridge-transition.json
+├── proof-artifacts/                     # proof inputs and generated JSON
+│   ├── release.json                     # production only
+│   ├── manifests/
+│   │   ├── scroll-chunk.json            # production only
+│   │   ├── scroll-batch.json            # production only
+│   │   ├── bridge-transition.json       # production only
+│   │   └── statement-namespace.json     # generated; passed with --set-file
+│   └── mock-manifests/                 # generated in mock mode
+│       ├── scroll-chunk-topology-program.json
+│       ├── scroll-batch-topology-program.json
+│       └── bridge-topology-program.json
 ├── configs/
 │   └── source-set.toml                  # production signer policy only
 ├── prover-worker-mock/                  # generated in mock mode
@@ -104,6 +109,14 @@ the hand-maintained materializer sections remain operator-owned and are never
 silently replaced. Production `configs/source-set.toml` must contain real RPC
 sources reachable from partner signer networks. The CLI cannot safely invent
 production RPC quorum policy.
+
+`withdrawal-processor/WithdrawalProcessor.toml` is different: it is a required
+native application-config template supplied by
+`scroll-sdk/examples/withdrawal-processor/WithdrawalProcessor.toml`. Copy the
+scroll-sdk examples layout into a new deployment before running the CLI. Neither
+`prep-charts` nor `proof-config` creates this file or embeds its TOML in a values
+YAML document; both commands only update their marked blocks in the existing
+native file. Helm receives the file through `--set-file`.
 
 ## 4. Address contract
 
@@ -184,6 +197,12 @@ scrollsdk setup gen-secrets -N --json
 scrollsdk setup prep-charts -N --json
 ```
 
+`prep-charts` fails if the native WithdrawalProcessor template is absent. If a
+legacy values file still contains
+`configMaps.config.data.WithdrawalProcessor.toml`, the command removes that
+inline copy only after confirming the native template exists; it never uses the
+inline content to create the native file.
+
 For the S3/IRSA proof topology, provision the proof bucket roles, service
 accounts, and the two distinct bearer tokens after the proof values exist:
 
@@ -215,9 +234,10 @@ scrollsdk setup proof-config \
 Mock mode:
 
 - synthesizes the canonical e2e-harness-compatible program manifests;
-- stages `dev_dummy` verifier identities in WP and coordinator;
+- stages `dev_dummy` verifier identities in the native WP TOML and coordinator;
 - scaffolds a compatible coordinator configuration when missing;
 - writes `prover-worker-mock/docker-compose/`;
+- records `withdrawalProof.provingMode: mock` in WP values;
 - keeps `withdrawalProof.enabled` unchanged unless explicitly activated.
 
 ### Production
@@ -235,6 +255,18 @@ Production validates release/manifests, verifier IDs, program commitments,
 verification-key hashes, and aggregate verifying-key checksums. Production
 identities must come from release artifacts; do not transcribe them into Helm
 values by hand.
+
+The CLI derives the complete runtime activation environment atomically from
+`withdrawalProof.enabled` and `withdrawalProof.provingMode` and writes the
+explicit env entries into WP values. The generic chart only renders those
+entries; it has no proof-mode logic. Disabled mode always carries
+`mode=disabled` with both required-family gates and the proof-work API off.
+Active production carries the production posture. Active mock carries
+`mode=dev_dummy` and adds `dev_dummy.scroll_input=exact_mock`; that entry is
+absent from the native TOML and every CLI-generated disabled posture, avoiding
+an invalid cross-mode configuration. Do not edit `withdrawalProof.enabled`
+without rerunning `prep-charts` or `proof-config`, because the CLI must update
+the complete env projection at the same time.
 
 On a rerun, the command reuses the staged proof-object base URL. Use
 `--enable-withdrawal-proof` only after the coordinator, worker, storage,
@@ -304,9 +336,30 @@ make install-proof-coordinator
 make install-tso
 ```
 
-The WP and coordinator install targets pass their native TOML with
-`--set-file`. Values remain responsible for Kubernetes shape, secret wiring,
-and the proof activation switch.
+The WP and coordinator install targets must pass their native TOML and program
+manifest JSON files with `--set-file`. `setup proof-config` also writes the
+derived statement namespace to `proof-artifacts/manifests/statement-namespace.json`
+and returns every required key/path binding under `helmSetFiles` in JSON mode;
+human output prints the same bindings. Values remain responsible for
+Kubernetes shape, secret wiring, and the proof activation switch, and contain
+no inline JSON document.
+
+For the conventional production layout, the coordinator bindings are:
+
+```bash
+--set-file 'proofCoordinator.config.content=proof-coordinator/ProofCoordinator.toml' \
+--set-file 'configMaps.manifests.data.scroll-chunk\.json=proof-artifacts/manifests/scroll-chunk.json' \
+--set-file 'configMaps.manifests.data.scroll-batch\.json=proof-artifacts/manifests/scroll-batch.json' \
+--set-file 'configMaps.manifests.data.bridge-transition\.json=proof-artifacts/manifests/bridge-transition.json' \
+--set-file 'configMaps.manifests.data.statement-namespace\.json=proof-artifacts/manifests/statement-namespace.json'
+```
+
+The withdrawal-processor uses the same three manifests under
+`configMaps.proof-manifests.data`, in addition to its native TOML binding.
+Mock manifest paths and basenames differ; consume the bindings printed by the
+command instead of hard-coding the production list. The rendered Kubernetes
+ConfigMap necessarily contains the file bytes in YAML `data`; the maintained
+values source does not.
 
 Validate:
 

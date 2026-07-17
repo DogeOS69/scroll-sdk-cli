@@ -31,7 +31,7 @@ import {
   resolveDogecoinKubernetesEndpoints,
 } from './kubernetes-endpoints.js'
 import {
-  ensureWithdrawalConfigValues,
+  ensureWithdrawalChartWiring,
   ensureWithdrawalProofActivationSwitch,
 } from './withdrawal-config.js'
 
@@ -1198,7 +1198,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
     }
   }
 
-  ensureWithdrawalConfigValues(values)
+  ensureWithdrawalChartWiring(values)
   ensureWithdrawalProofActivationSwitch(values)
 
   const {proofCoordinator} = spec
@@ -1401,7 +1401,7 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
     persistence: {
       secrets: {
         enabled: true,
-        mountPath: '/run/secrets',
+        mountPath: '/app/secrets',
         readOnly: true,
         type: 'secret'
       }

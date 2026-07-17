@@ -15,14 +15,11 @@ import {
 } from './mock-proof-topology.js'
 import {
   type ProvingMode,
-  WITHDRAWAL_CONFIG_FILE,
   WITHDRAWAL_NATIVE_CONFIG_RELPATH,
   ensureWithdrawalChartWiring,
-  ensureWithdrawalConfigValues,
   ensureWithdrawalProofActivationSwitch,
   removeInlineWithdrawalConfig,
   replaceWithdrawalManagedProofBlock,
-  setWithdrawalConfigToml,
 } from './withdrawal-config.js'
 
 export type { ProvingMode } from './withdrawal-config.js'
@@ -38,15 +35,18 @@ export const DEFAULT_PROOF_PROGRAM_MANIFESTS = [
   'proof-artifacts/manifests/scroll-batch.json',
   'proof-artifacts/manifests/bridge-transition.json',
 ]
+export const DEFAULT_STATEMENT_NAMESPACE_CONFIG = 'proof-artifacts/manifests/statement-namespace.json'
 const DEFAULT_SIGNED_URL_TTL_MS = 3_600_000
 const DEFAULT_MAX_READ_BODY_BYTES = 512 * 1024 * 1024
 const MAX_TRANSPORT_HORIZON_MS = 7 * 24 * 60 * 60 * 1000
 const MAX_EMBEDDED_AGG_VK_BYTES = 700 * 1024
+const PROOF_DATA_MOUNT_PATH = '/app/data'
 const AGG_VK_PATH = '/app/data/verifier/agg-vk.bin'
 const STATEMENT_NAMESPACE_CONFIG_PATH = '/app/data/manifests/statement-namespace.json'
 const SCROLL_MATERIALIZER_BINARY_PATH = '/usr/local/bin/scroll-runtime-materializer'
-const PROOF_WORK_TOKEN_PATH = '/run/secrets/proof-work-token'
-const PROVER_WORKER_TOKEN_PATH = '/run/secrets/prover-worker-token'
+const PROOF_SECRET_MOUNT_PATH = '/app/secrets'
+const PROOF_WORK_TOKEN_PATH = `${PROOF_SECRET_MOUNT_PATH}/proof-work-token`
+const PROVER_WORKER_TOKEN_PATH = `${PROOF_SECRET_MOUNT_PATH}/prover-worker-token`
 const SCROLL_BATCH_COMMITMENT_ENV =
   'DOGEOS_PROOF_COORDINATOR_MATERIALIZER__SCROLL_BATCH__SUBPROCESS__CHUNK_PROGRAM_COMMITMENT_HEX'
 
@@ -117,24 +117,36 @@ export interface ConfigureProofValuesOptions {
   provingMode?: ProvingMode
   scrollBatchBackendProfile?: string
   signerProofArtifactBaseUrl?: string
+  /** Generated JSON passed to Helm with --set-file, never embedded in values. */
+  statementNamespacePath?: string
   valuesDir: string
   verifierIds?: Partial<Record<ProofFamily, string>>
   /**
-   * Native WithdrawalProcessor.toml. When the file exists, the managed proof
-   * block is written there (helm --set-file layout) instead of into an inline
-   * values copy. Defaults to withdrawal-processor/WithdrawalProcessor.toml
-   * next to the values directory.
+   * Required native WithdrawalProcessor.toml template. The managed proof block
+   * is updated there and Helm supplies it with --set-file; application TOML is
+   * never embedded in values YAML. Defaults to
+   * withdrawal-processor/WithdrawalProcessor.toml next to the values directory.
    */
   withdrawalConfigPath?: string
+}
+
+export interface HelmSetFileBinding {
+  filePath: string
+  key: string
 }
 
 export interface ConfigureProofValuesResult {
   configFile: string
   families: ProofFamily[]
   files: string[]
+  helmSetFiles: {
+    proofCoordinator: HelmSetFileBinding[]
+    withdrawalProcessor: HelmSetFileBinding[]
+  }
   provingMode: ProvingMode
   signerProofArtifactBaseUrl: string
   signerProofArtifactBaseUrlSource: 'flag' | 'staged'
+  statementNamespaceFile: string
 }
 
 const MANAGED_VERIFIER_BEGIN = '# BEGIN scrollsdk managed verifier configuration'
@@ -638,9 +650,93 @@ function writeTextAtomic(filePath: string, value: string): void {
   }
 }
 
+function writeGeneratedTextAtomic(filePath: string, value: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  const temporaryPath = `${filePath}.tmp-${process.pid}`
+  try {
+    fs.writeFileSync(temporaryPath, value, { mode: 0o600 })
+    fs.renameSync(temporaryPath, filePath)
+  } finally {
+    if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath)
+  }
+}
+
+/**
+ * Keep values responsible only for ConfigMap shape. JSON payloads arrive via
+ * Helm --set-file; remove legacy inline JSON without disturbing unrelated
+ * entries an operator may keep in the same ConfigMap.
+ */
+function ensureExternalJsonConfigMap(values: Record<string, any>, name: string, label: string): void {
+  values.configMaps ||= {}
+  values.configMaps[name] ||= {}
+  const configMap = values.configMaps[name]
+  if (!configMap || typeof configMap !== 'object' || Array.isArray(configMap)) {
+    throw new TypeError(`${label}: configMaps.${name} must be a mapping`)
+  }
+
+  configMap.enabled = true
+  if (configMap.data === undefined) return
+  if (!configMap.data || typeof configMap.data !== 'object' || Array.isArray(configMap.data)) {
+    throw new TypeError(`${label}: configMaps.${name}.data must be a mapping`)
+  }
+
+  for (const key of Object.keys(configMap.data)) {
+    if (key.toLowerCase().endsWith('.json')) delete configMap.data[key]
+  }
+
+  if (Object.keys(configMap.data).length === 0) delete configMap.data
+}
+
+function buildStatementNamespaceConfig(
+  manifests: Map<ProofFamily, { manifest: ProofProgramManifest; path: string }>,
+  provingMode: ProvingMode
+): string {
+  const scrollChunkManifest = manifests.get('scroll_chunk')!.manifest
+  const scrollBatchManifest = manifests.get('scroll_batch')!.manifest
+  const proofMode = provingMode === 'mock' ? 'Mock' : 'Production'
+  return `${JSON.stringify({
+    batch: {
+      circuit_id: scrollBatchManifest.circuit_id,
+      proof_mode: proofMode,
+      proof_system_id: scrollBatchManifest.proof_system_id,
+      verification_key_hash: scrollBatchManifest.verification_key_hash,
+    },
+    chunk: {
+      circuit_id: scrollChunkManifest.circuit_id,
+      proof_mode: proofMode,
+      proof_system_id: scrollChunkManifest.proof_system_id,
+      verification_key_hash: scrollChunkManifest.verification_key_hash,
+    },
+  }, null, 2)}\n`
+}
+
+function escapeHelmKeySegment(value: string): string {
+  return value
+    .replaceAll('\\', '\\\\')
+    .replaceAll('.', '\\.')
+    .replaceAll(',', '\\,')
+    .replaceAll('=', '\\=')
+}
+
+function manifestSetFileBindings(
+  configMapName: string,
+  manifests: Map<ProofFamily, { manifest: ProofProgramManifest; path: string }>
+): HelmSetFileBinding[] {
+  return [...manifests.values()].map(({ path: manifestPath }) => ({
+    filePath: manifestPath,
+    key: `configMaps.${configMapName}.data.${escapeHelmKeySegment(path.basename(manifestPath))}`,
+  }))
+}
+
+function migrateLegacyProofSecretPaths(config: string): string {
+  return config
+    .replaceAll('/run/secrets/proof-work-token', PROOF_WORK_TOKEN_PATH)
+    .replaceAll('/run/secrets/prover-worker-token', PROVER_WORKER_TOKEN_PATH)
+}
+
 function replaceManagedVerifierBlock(filePath: string, verifier: Record<string, any>): string {
   if (!fs.existsSync(filePath)) throw new Error(`Proof coordinator TOML not found: ${filePath}`)
-  const source = fs.readFileSync(filePath, 'utf8')
+  const source = migrateLegacyProofSecretPaths(fs.readFileSync(filePath, 'utf8'))
   const begin = source.indexOf(MANAGED_VERIFIER_BEGIN)
   const end = source.indexOf(MANAGED_VERIFIER_END)
   if (begin < 0 || end < 0 || end < begin) {
@@ -691,7 +787,9 @@ function readCoordinatorRuntimeProjection(
       .filter((item: any) => typeof item?.name === 'string' && item.value !== undefined)
       .map((item: any) => [item.name, String(item.value)])
   ) as Record<string, string>
-  const coordinatorConfig = toml.parse(fs.readFileSync(coordinatorConfigPath, 'utf8')) as any
+  const coordinatorConfig = toml.parse(
+    migrateLegacyProofSecretPaths(fs.readFileSync(coordinatorConfigPath, 'utf8'))
+  ) as any
   const bucket = coordinatorEnv.DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET
   const region = coordinatorEnv.DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__REGION
   const keyPrefix = coordinatorEnv.DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__KEY_PREFIX || 'proof-topology'
@@ -734,7 +832,9 @@ function validateCoordinatorMaterializerTopology(
   coordinatorConfigPath: string,
   provingMode: ProvingMode = 'production'
 ): void {
-  const config = toml.parse(fs.readFileSync(coordinatorConfigPath, 'utf8')) as any
+  const config = toml.parse(
+    migrateLegacyProofSecretPaths(fs.readFileSync(coordinatorConfigPath, 'utf8'))
+  ) as any
   const { materializer } = config
   const requireString = (value: any, label: string): void => {
     assertIdentifier(value, `${coordinatorConfigPath}: ${label}`)
@@ -936,6 +1036,74 @@ function validateEthereumDaSection(coordinatorConfigPath: string, ethereumDa: an
   }
 }
 
+function requireProofDataPath(value: unknown, label: string): string {
+  assertIdentifier(value, label)
+  if (!path.posix.isAbsolute(value)) {
+    throw new Error(`${label} must be an absolute path under ${PROOF_DATA_MOUNT_PATH}`)
+  }
+
+  const normalized = path.posix.normalize(value)
+  if (normalized !== value || (normalized !== PROOF_DATA_MOUNT_PATH && !normalized.startsWith(`${PROOF_DATA_MOUNT_PATH}/`))) {
+    throw new Error(`${label} must be a normalized path under ${PROOF_DATA_MOUNT_PATH}`)
+  }
+
+  return normalized
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`
+}
+
+/**
+ * Project coordinator-owned writable paths onto the chart's data PVC. The
+ * coordinator deliberately requires the shared materializer staging root to
+ * exist, and other materializers create children below their configured roots.
+ * Creating every configured output/cache parent here makes the filesystem
+ * contract explicit and catches paths outside the mounted PVC before Helm is
+ * run.
+ */
+function configureProofDataDirectories(
+  values: Record<string, any>,
+  coordinatorConfig: string,
+  coordinatorConfigPath: string
+): void {
+  const config = toml.parse(coordinatorConfig) as any
+  const directories = new Set<string>()
+
+  const visit = (value: unknown, labels: string[]): void => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      const itemLabels = [...labels, key]
+      const label = `${coordinatorConfigPath}: [${itemLabels.slice(0, -1).join('.')}].${key}`
+      if (key === 'artifact_store_root' || key === 'materializer_output_root' || key === 'scratch_root') {
+        directories.add(requireProofDataPath(item, label))
+      } else if (key === 'artifact_metadata_sqlite_path') {
+        const filePath = requireProofDataPath(item, label)
+        if (filePath === PROOF_DATA_MOUNT_PATH) {
+          throw new Error(`${label} must name a file below ${PROOF_DATA_MOUNT_PATH}`)
+        }
+
+        directories.add(path.posix.dirname(filePath))
+      }
+
+      visit(item, itemLabels)
+    }
+  }
+
+  visit(config.materializer, ['materializer'])
+  if (directories.size === 0) {
+    throw new Error(`${coordinatorConfigPath}: [materializer] does not configure any writable data directories`)
+  }
+
+  values.initContainers ||= {}
+  values.initContainers['prepare-proof-data-directories'] = {
+    args: [`mkdir -p ${[...directories].sort().map(directory => shellQuote(directory)).join(' ')}`],
+    command: ['/bin/sh', '-ec'],
+    image: 'busybox:1.36.1',
+    volumeMounts: [{ mountPath: PROOF_DATA_MOUNT_PATH, name: 'data' }],
+  }
+}
+
 function configureAggVerifierArtifact(
   values: Record<string, any>,
   configMapName: string,
@@ -987,32 +1155,15 @@ function prepareProofCoordinator(
 ): { updatedConfig: string; values: any } {
   const mock = provingMode === 'mock'
   const values = readYaml(filePath)
+  values.persistence ||= {}
+  values.persistence.secrets ||= {}
+  values.persistence.secrets.mountPath = PROOF_SECRET_MOUNT_PATH
   const verifier: Record<string, any> = { verifier_import_mode: mock ? 'dev_dummy' : 'production' }
-  const manifestConfigMap: Record<string, string> = {}
   for (const [family, { manifest, path: manifestPath }] of manifests) {
     const verifierId = verifierIds[family] || defaultVerifierId(manifest)
     assertIdentifier(verifierId, `${family} verifier ID`)
     verifier[FAMILY_CONFIG_KEYS[family]] = verifierPolicy(manifest, manifestPath, verifierId)
-    manifestConfigMap[path.basename(manifestPath)] = `${fs.readFileSync(manifestPath, 'utf8').trimEnd()}\n`
   }
-
-  const scrollChunkManifest = manifests.get('scroll_chunk')!.manifest
-  const scrollBatchManifest = manifests.get('scroll_batch')!.manifest
-  const statementProofMode = mock ? 'Mock' : 'Production'
-  manifestConfigMap['statement-namespace.json'] = `${JSON.stringify({
-    batch: {
-      circuit_id: scrollBatchManifest.circuit_id,
-      proof_mode: statementProofMode,
-      proof_system_id: scrollBatchManifest.proof_system_id,
-      verification_key_hash: scrollBatchManifest.verification_key_hash,
-    },
-    chunk: {
-      circuit_id: scrollChunkManifest.circuit_id,
-      proof_mode: statementProofMode,
-      proof_system_id: scrollChunkManifest.proof_system_id,
-      verification_key_hash: scrollChunkManifest.verification_key_hash,
-    },
-  }, null, 2)}\n`
 
   // The real Scroll verifier attachment (aggregate VK + raw commitments) only
   // exists for release artifacts; the dev_dummy verifier is structural.
@@ -1026,6 +1177,7 @@ function prepareProofCoordinator(
   }
 
   const updatedConfig = replaceManagedVerifierBlock(configPath, verifier)
+  configureProofDataDirectories(values, updatedConfig, configPath)
   values.env ||= []
   if (!Array.isArray(values.env)) throw new Error(`${filePath}: env must be an array`)
   const commitmentIndex = values.env.findIndex((item: any) => item?.name === SCROLL_BATCH_COMMITMENT_ENV)
@@ -1041,8 +1193,7 @@ function prepareProofCoordinator(
     delete values.env[commitmentIndex].valueFrom
   }
 
-  values.configMaps ||= {}
-  values.configMaps.manifests = { data: manifestConfigMap, enabled: true }
+  ensureExternalJsonConfigMap(values, 'manifests', filePath)
   values.persistence ||= {}
   values.persistence.manifests = {
     enabled: true,
@@ -1116,7 +1267,7 @@ function prepareWithdrawalProcessor(
   signerProofArtifactBaseUrl: string,
   verifierArtifact: VerifierArtifact | undefined,
   provingMode: ProvingMode,
-  nativeWithdrawalConfig?: string
+  nativeWithdrawalConfig: string
 ): { updatedWithdrawalConfig?: string; values: any } {
   const mock = provingMode === 'mock'
   const values = readYaml(filePath)
@@ -1130,7 +1281,6 @@ function prepareWithdrawalProcessor(
   values.env ||= []
   if (!Array.isArray(values.env)) throw new Error(`${filePath}: env must be an array`)
   const env = values.env as Array<Record<string, any>>
-  const manifestConfigMap: Record<string, string> = {}
 
   for (let index = env.length - 1; index >= 0; index--) {
     const name = String(env[index]?.name || '')
@@ -1154,13 +1304,6 @@ function prepareWithdrawalProcessor(
     require_bridge_state: manifests.has('bridge_transition'),
     require_scroll_execution: manifests.has('scroll_chunk') || manifests.has('scroll_batch'),
   }
-  if (mock) {
-    // ExactMock drives the complete produce → prove → verify → import
-    // lifecycle with deterministic inputs (dogeos-core e2e strict-withdrawal
-    // topology shape).
-    proofSystem.dev_dummy = { scroll_input: 'exact_mock' }
-  }
-
   const proofControlPlaneGate: Record<string, any> = {
     store_path: '/app/data/control-plane.sqlite',
   }
@@ -1178,8 +1321,6 @@ function prepareWithdrawalProcessor(
     }
 
     proofControlPlaneGate[FAMILY_CONFIG_KEYS[family]] = verifierPolicy(manifest, manifestPath, verifierId)
-
-    manifestConfigMap[path.basename(manifestPath)] = `${fs.readFileSync(manifestPath, 'utf8').trimEnd()}\n`
   }
 
   const bridge = manifests.get('bridge_transition')?.manifest
@@ -1220,7 +1361,7 @@ function prepareWithdrawalProcessor(
     proof_work_api: {
       allow_insecure_http: true,
       auth: {
-        bearer_token_file: '/run/secrets/proof-work-token',
+        bearer_token_file: PROOF_WORK_TOKEN_PATH,
       },
       bind_addr: '0.0.0.0:9300',
       enabled: true,
@@ -1240,7 +1381,10 @@ function prepareWithdrawalProcessor(
             backend_profile: scrollBatchBackendProfile,
           },
         },
-        scroll_chunk_segmentation: { enabled: true },
+        // This is the explicit production Scroll proof-input source. The
+        // e2e_harness exact-mock topology must leave it absent so dogeos-core
+        // wires DevExactMockFactSource instead.
+        ...(mock ? {} : { scroll_chunk_segmentation: { enabled: true } }),
       },
     },
   }
@@ -1258,23 +1402,13 @@ function prepareWithdrawalProcessor(
   }
   proofSystem.signer_proof_artifact_base_url = signerProofArtifactBaseUrl
 
-  let updatedWithdrawalConfig: string | undefined
-  if (nativeWithdrawalConfig === undefined) {
-    const withdrawalConfig = ensureWithdrawalConfigValues(values)
-    setWithdrawalConfigToml(
-      values,
-      replaceWithdrawalManagedProofBlock(withdrawalConfig, proofConfig as toml.JsonMap)
-    )
-  } else {
-    updatedWithdrawalConfig = replaceWithdrawalManagedProofBlock(nativeWithdrawalConfig, proofConfig as toml.JsonMap)
-    ensureWithdrawalChartWiring(values)
-    // helm --set-file supplies the ConfigMap key; a stale inline copy would
-    // shadow-confuse operators reading the values file.
-    removeInlineWithdrawalConfig(values)
-  }
+  const updatedWithdrawalConfig = replaceWithdrawalManagedProofBlock(nativeWithdrawalConfig, proofConfig as toml.JsonMap)
+  ensureWithdrawalChartWiring(values)
+  // helm --set-file supplies the ConfigMap key; a stale inline copy would
+  // shadow-confuse operators reading the values file.
+  removeInlineWithdrawalConfig(values)
 
-  values.configMaps ||= {}
-  values.configMaps['proof-manifests'] = { data: manifestConfigMap, enabled: true }
+  ensureExternalJsonConfigMap(values, 'proof-manifests', filePath)
   values.persistence ||= {}
   values.persistence['proof-manifests'] = {
     enabled: true,
@@ -1285,7 +1419,7 @@ function prepareWithdrawalProcessor(
   }
   values.persistence['proof-secrets'] = {
     enabled: true,
-    mountPath: '/run/secrets',
+    mountPath: PROOF_SECRET_MOUNT_PATH,
     name: 'proof-secrets',
     readOnly: true,
     type: 'secret',
@@ -1349,6 +1483,18 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
   }
 
   const manifests = loadProgramManifests(manifestPaths)
+  const statementNamespaceFile = path.resolve(
+    options.statementNamespacePath
+    || path.join(path.dirname(valuesDir), DEFAULT_STATEMENT_NAMESPACE_CONFIG)
+  )
+  if ([...manifests.values()].some(item => item.path === statementNamespaceFile)) {
+    throw new Error(`statement namespace output must not overwrite a program manifest: ${statementNamespaceFile}`)
+  }
+
+  const statementNamespaceConfig = buildStatementNamespaceConfig(manifests, provingMode)
+  // Keep the generated file subject to the same parse-before-write rule as
+  // every other proof-config output.
+  JSON.parse(statementNamespaceConfig)
   let commitments: Map<ProofFamily, string> | undefined
   let verifierArtifact: VerifierArtifact | undefined
   if (!mock) {
@@ -1381,20 +1527,23 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
     options.withdrawalConfigPath
     || path.join(path.dirname(valuesDir), WITHDRAWAL_NATIVE_CONFIG_RELPATH)
   )
-  const nativeWithdrawalConfig = fs.existsSync(withdrawalConfigFile)
-    ? fs.readFileSync(withdrawalConfigFile, 'utf8')
-    : undefined
+  if (!fs.existsSync(withdrawalConfigFile)) {
+    throw new Error(
+      `WithdrawalProcessor TOML template not found: ${withdrawalConfigFile}. `
+      + 'Copy withdrawal-processor/WithdrawalProcessor.toml from the scroll-sdk examples layout; '
+      + 'proof-config updates the native file and never embeds application TOML in values YAML.'
+    )
+  }
+
+  const nativeWithdrawalConfig = fs.readFileSync(withdrawalConfigFile, 'utf8')
 
   // The base URL is an external deployment decision, so the first run must
   // receive it explicitly; re-runs default to what that run staged into the
-  // WithdrawalProcessor.toml proof block (native file or inline values copy).
+  // native WithdrawalProcessor.toml proof block.
   let signerProofArtifactBaseUrlSource: 'flag' | 'staged' = 'flag'
   let signerProofArtifactBaseUrlInput = options.signerProofArtifactBaseUrl
   if (!signerProofArtifactBaseUrlInput) {
-    const inlineWithdrawalConfig = withdrawalValuesInput?.configMaps?.config?.data?.[WITHDRAWAL_CONFIG_FILE]
-    const stagedSource = nativeWithdrawalConfig
-      ?? (typeof inlineWithdrawalConfig === 'string' ? inlineWithdrawalConfig : undefined)
-    const staged = stagedSource === undefined ? undefined : readStagedSignerProofArtifactBaseUrl(stagedSource)
+    const staged = readStagedSignerProofArtifactBaseUrl(nativeWithdrawalConfig)
     if (staged === undefined) {
       throw new Error(
         '--proof-artifact-base-url is required: no previously staged value found in WithdrawalProcessor.toml (the first proof-config run must pass it explicitly)'
@@ -1444,6 +1593,27 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
     nativeWithdrawalConfig
   )
   if (options.enableWithdrawalProof) withdrawalUpdate.values.withdrawalProof.enabled = true
+  ensureWithdrawalProofActivationSwitch(withdrawalUpdate.values, provingMode)
+
+  const coordinatorManifestSetFiles = manifestSetFileBindings('manifests', manifests)
+  const withdrawalManifestSetFiles = manifestSetFileBindings('proof-manifests', manifests)
+  const helmSetFiles = {
+    proofCoordinator: [
+      { filePath: configFile, key: 'proofCoordinator.config.content' },
+      ...coordinatorManifestSetFiles,
+      {
+        filePath: statementNamespaceFile,
+        key: 'configMaps.manifests.data.statement-namespace\\.json',
+      },
+    ],
+    withdrawalProcessor: [
+      {
+        filePath: withdrawalConfigFile,
+        key: 'configMaps.config.data.WithdrawalProcessor\\.toml',
+      },
+      ...withdrawalManifestSetFiles,
+    ],
+  }
 
   writeTextAtomic(configFile, coordinatorUpdate.updatedConfig)
   writeYamlAtomic(files[0], coordinatorUpdate.values)
@@ -1452,15 +1622,20 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
     writeTextAtomic(withdrawalConfigFile, withdrawalUpdate.updatedWithdrawalConfig)
   }
 
+  writeGeneratedTextAtomic(statementNamespaceFile, statementNamespaceConfig)
+
   return {
     configFile,
     families: [...manifests.keys()].sort(),
     files: [
       ...files,
       ...(withdrawalUpdate.updatedWithdrawalConfig === undefined ? [] : [withdrawalConfigFile]),
+      statementNamespaceFile,
     ],
+    helmSetFiles,
     provingMode,
     signerProofArtifactBaseUrl,
     signerProofArtifactBaseUrlSource,
+    statementNamespaceFile,
   }
 }

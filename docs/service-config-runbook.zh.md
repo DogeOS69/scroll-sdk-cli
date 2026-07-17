@@ -50,7 +50,9 @@
   withdrawal-processor values 的 `tsoSigners` 数组。
 - **withdrawal-processor**：应用配置为 TOML 所有制
   （`withdrawal-processor/WithdrawalProcessor.toml`），values 只保留 k8s 形态、
-  secret 接线和 `withdrawalProof.enabled` 总开关。
+  secret 接线、CLI 管理的 `withdrawalProof.enabled` /
+  `withdrawalProof.provingMode` 状态，以及对应的显式 activation env。通用 Chart
+  只机械渲染这些 values，不理解 proof 业务。
 - **prover-worker**：不可信、只做证明。凭 worker token 从 proof-coordinator 的
   `/v1/prover` 网关领任务，从 artifact store 读输入（裸 GET），用签名 PUT 上传证明。
 
@@ -273,6 +275,11 @@ scrollsdk setup gen-secrets -N --json
 scrollsdk setup prep-charts -N --json
 ```
 
+首次创建部署目录时，必须先从
+`scroll-sdk/examples/withdrawal-processor/WithdrawalProcessor.toml` 复制原生
+模板。CLI 不创建这份应用配置，也不会把 TOML 嵌进 values YAML；模板缺失时
+`prep-charts` 和 `proof-config` 都会 fail-closed。
+
 prep-charts 对 WP 做的事：
 
 - 维护 `withdrawal-processor/WithdrawalProcessor.toml` 顶部的
@@ -285,8 +292,11 @@ prep-charts 对 WP 做的事：
   attestation signer endpoint（`role: Attestation`）。TSO 通过这个数组认识全部
   signer——外部 signer 模式下 prep-charts **不再**渲染任何
   attestation-signer values 文件（并清掉旧的）。
-- 保证 `withdrawalProof.enabled` 总开关存在（默认 false，见 §7）。
-- 把 legacy 的内联 TOML/`DOGEOS_WITHDRAWAL_*` env 迁移进原生 TOML。
+- 保证 `withdrawalProof.enabled` 总开关存在（默认 false，见 §7），并从
+  doge-config 投影 `withdrawalProof.provingMode: mock|production`。
+- 删除已经迁入原生 TOML 的 legacy `DOGEOS_WITHDRAWAL_*` env。若 values 中仍有
+  legacy 内联 TOML，只会在确认独立模板存在后删除内联副本；不会用它创建或覆盖
+  原生文件。
 
 ```bash
 # ⑫ secret 上云 + TLS
@@ -380,17 +390,31 @@ scrollsdk setup proof-config \
   和 `WithdrawalProcessor.toml` 中带标记的 proof 块；深层 materializer 拓扑
   （二进制路径、RPC、blob source、`[materializer.bridge.*]` 等）保持手工维护，
   缺失则 fail-closed。
-- 生成 `statement-namespace.json`、配置共享 proof-work token、暴露 WP 内部
-  9300 端口、把 S3 artifact store 投影进 WP。
+- 将派生的 `statement-namespace.json` 独立写到
+  `proof-artifacts/manifests/statement-namespace.json`，配置共享 proof-work token、暴露
+  WP 内部 9300 端口、把 S3 artifact store 投影进 WP。三个 program manifest
+  和该派生文件都不嵌入 values YAML；CLI 在结果的 `helmSetFiles` 中返回完整
+  `--set-file` key/path 接线，普通输出也会逐项打印。
 - **attestation-signer 策略校验**：提前验证 verifier id 可安全导出为
   `proof_kind:verifier_id:vk_hash` CSV，但不读写任何 signer Helm values（该部署形态
   已淘汰）。§5.2 的 `export-signer-policy` 自动从 staged
   `ProofCoordinator.toml` verifier 块推导同一批 triple，写进合作方 compose 的
   policy bundle，无需 skip flag 或手抄。
 
-**默认不激活 proof**。唯一激活开关是 WP values 的 `withdrawalProof.enabled`，
-在 coordinator 就绪、S3 身份、对应模式的证明材料/worker 各自 preflight 通过之前
-保持 false。全通过后：
+CLI 从 `withdrawalProof.enabled` 与 `withdrawalProof.provingMode` 原子生成完整的
+proof activation env，并把显式结果写进 WP values；通用 Chart 不包含任何模式判断。
+disabled 状态始终投影 `mode=disabled`、两个 family require gate=false、proof-work
+API=false；active production 投影 production；只有
+`enabled=true + provingMode=mock` 才写入
+`DEV_DUMMY__SCROLL_INPUT=exact_mock`。独立 TOML 永远不持久化
+`[proof_system.dev_dummy]`，因此 disabled 时不会留下 dogeos-core 会拒绝的跨模式
+半配置。不要单独手改 `withdrawalProof.enabled` 或上述 env；必须通过
+`prep-charts` / `proof-config` 让 CLI 一次更新完整投影。
+
+**默认不激活 proof**。CLI 以 WP values 的 `withdrawalProof.enabled` 记录激活
+状态，并同步更新整组显式 env；它不是 Chart 自己解释的 Helm 开关。在 coordinator
+就绪、S3 身份、对应模式的证明材料/worker 各自 preflight 通过之前保持 false。
+全通过后：
 
 ```bash
 # 重跑不必重复 base URL（沿用首跑落盘的值）
@@ -399,12 +423,35 @@ make install-withdrawal-processor install-proof-coordinator
 ```
 
 ```bash
-# coordinator 安装（Makefile 目标）
+# coordinator 安装（Makefile 目标包含下列全部绑定）
 make install-proof-coordinator
 # helm upgrade -i proof-coordinator oci://.../proof-coordinator \
 #   --values values/proof-coordinator-production.yaml \
-#   --set-file proofCoordinator.config.content=proof-coordinator/ProofCoordinator.toml
+#   --set-file 'proofCoordinator.config.content=proof-coordinator/ProofCoordinator.toml' \
+#   --set-file 'configMaps.manifests.data.scroll-chunk\.json=proof-artifacts/manifests/scroll-chunk.json' \
+#   --set-file 'configMaps.manifests.data.scroll-batch\.json=proof-artifacts/manifests/scroll-batch.json' \
+#   --set-file 'configMaps.manifests.data.bridge-transition\.json=proof-artifacts/manifests/bridge-transition.json' \
+#   --set-file 'configMaps.manifests.data.statement-namespace\.json=proof-artifacts/manifests/statement-namespace.json'
 ```
+
+启用 proof 后安装 withdrawal-processor 时也必须把同一组三个 manifest 传给
+`configMaps.proof-manifests.data`：
+
+```bash
+helm upgrade -i withdrawal-processor oci://.../withdrawal-processor \
+  --values values/withdrawal-processor-production.yaml \
+  --set-file 'configMaps.config.data.WithdrawalProcessor\.toml=withdrawal-processor/WithdrawalProcessor.toml' \
+  --set-file 'configMaps.proof-manifests.data.scroll-chunk\.json=proof-artifacts/manifests/scroll-chunk.json' \
+  --set-file 'configMaps.proof-manifests.data.scroll-batch\.json=proof-artifacts/manifests/scroll-batch.json' \
+  --set-file 'configMaps.proof-manifests.data.bridge-transition\.json=proof-artifacts/manifests/bridge-transition.json'
+```
+
+mock 模式的 manifest 位于 `proof-artifacts/mock-manifests/`，文件名也不同；不要
+照抄上面的 production 参数，使用
+`proof-config` 普通输出打印的绑定，或读取 `--json` 结果中的
+`data.helmSetFiles`。无论哪种模式，Git 中维护的 values 只保留 ConfigMap 开关和
+volume mount 结构；最终渲染出的 Kubernetes ConfigMap YAML 出现 JSON `data` 是
+Kubernetes API 的正常文件表示。
 
 ### 7.3 prover-worker（集群外部署）
 

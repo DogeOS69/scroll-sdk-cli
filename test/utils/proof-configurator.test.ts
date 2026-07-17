@@ -80,6 +80,15 @@ describe('proof-configurator', () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'proof-configurator-'))
     fs.mkdirSync(path.join(root, 'values'))
     fs.writeFileSync(path.join(root, 'values/proof-coordinator-production.yaml'), yaml.dump({
+      configMaps: {
+        manifests: {
+          data: {
+            README: 'operator-owned entry\n',
+            'legacy.json': '{"stale":true}\n',
+          },
+          enabled: true,
+        },
+      },
       env: [
         { name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET', value: 'proof-bucket' },
         { name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__REGION', value: 'us-west-2' },
@@ -181,11 +190,8 @@ timeout_ms = 10000
 url = "https://eth-da.example.com"
 key_prefix = "batches"
 `)
-    fs.writeFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), yaml.dump({
-      configMaps: {
-        config: {
-          data: {
-            'WithdrawalProcessor.toml': `# withdrawal user comment must survive
+    fs.mkdirSync(path.join(root, 'withdrawal-processor'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), `# withdrawal user comment must survive
 [proof_system]
 mode = "disabled"
 require_scroll_execution = false
@@ -193,7 +199,16 @@ require_bridge_state = false
 
 [operator_tuning]
 max_items = 42
-`,
+`)
+    fs.writeFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), yaml.dump({
+      configMaps: {
+        config: {
+          enabled: true,
+        },
+        'proof-manifests': {
+          data: {
+            README: 'operator-owned entry\n',
+            'legacy.json': '{"stale":true}\n',
           },
           enabled: true,
         },
@@ -211,6 +226,28 @@ max_items = 42
   })
 
   afterEach(() => fs.rmSync(root, { force: true, recursive: true }))
+
+  it('fails closed when the required native WithdrawalProcessor TOML template is missing', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    const withdrawalConfigPath = path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml')
+    const coordinatorConfigPath = path.join(root, 'proof-coordinator/ProofCoordinator.toml')
+    const coordinatorBefore = fs.readFileSync(coordinatorConfigPath, 'utf8')
+    const withdrawalValuesPath = path.join(root, 'values/withdrawal-processor-production.yaml')
+    const withdrawalValuesBefore = fs.readFileSync(withdrawalValuesPath, 'utf8')
+    fs.rmSync(withdrawalConfigPath)
+
+    expect(() => configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath,
+      manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
+      valuesDir: path.join(root, 'values'),
+    })).to.throw('WithdrawalProcessor TOML template not found')
+
+    expect(fs.existsSync(withdrawalConfigPath)).to.equal(false)
+    expect(fs.readFileSync(coordinatorConfigPath, 'utf8')).to.equal(coordinatorBefore)
+    expect(fs.readFileSync(withdrawalValuesPath, 'utf8')).to.equal(withdrawalValuesBefore)
+  })
 
   it('validates release identities and updates coordinator and WP values consistently', () => {
     const { aggVk, artifactPath, families, manifests, raw } = writeValidProofRelease(root)
@@ -241,11 +278,11 @@ max_items = 42
     expect(coordinatorToml).to.include('# user comment must survive')
     expect(parsedCoordinator.poll_interval_ms).to.equal(2345)
     expect(parsedCoordinator.artifact_write.max_proof_bytes).to.equal(42)
-    expect(coordinator.configMaps.manifests.data).to.have.all.keys([
-      ...families.map(family => `${family}.json`),
-      'statement-namespace.json',
-    ])
-    const statementNamespace = JSON.parse(coordinator.configMaps.manifests.data['statement-namespace.json'])
+    expect(parsedCoordinator.auth.bearer_token_file).to.equal('/app/secrets/proof-work-token')
+    expect(parsedCoordinator.prover_api.worker_auth_token_file).to.equal('/app/secrets/prover-worker-token')
+    expect(coordinator.persistence.secrets.mountPath).to.equal('/app/secrets')
+    expect(coordinator.configMaps.manifests.data).to.deep.equal({ README: 'operator-owned entry\n' })
+    const statementNamespace = JSON.parse(fs.readFileSync(result.statementNamespaceFile, 'utf8'))
     expect(statementNamespace.chunk).to.deep.include({
       circuit_id: 'scroll_chunk-v1',
       proof_mode: 'Production',
@@ -256,11 +293,45 @@ max_items = 42
       proof_mode: 'Production',
       proof_system_id: 'scroll-zkvm-v1',
     })
+    expect(result.files).to.include(result.statementNamespaceFile)
+    expect(result.statementNamespaceFile).to.equal(path.join(root, 'proof-artifacts/manifests/statement-namespace.json'))
+    expect(result.helmSetFiles.proofCoordinator).to.deep.equal([
+      {
+        filePath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+        key: 'proofCoordinator.config.content',
+      },
+      ...families.map((family, index) => ({
+        filePath: manifests[index],
+        key: `configMaps.manifests.data.${family}\\.json`,
+      })),
+      {
+        filePath: path.join(root, 'proof-artifacts/manifests/statement-namespace.json'),
+        key: 'configMaps.manifests.data.statement-namespace\\.json',
+      },
+    ])
+    expect(result.helmSetFiles.withdrawalProcessor).to.deep.equal([
+      {
+        filePath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
+        key: 'configMaps.config.data.WithdrawalProcessor\\.toml',
+      },
+      ...families.map((family, index) => ({
+        filePath: manifests[index],
+        key: `configMaps.proof-manifests.data.${family}\\.json`,
+      })),
+    ])
     const coordinatorEnv = Object.fromEntries(coordinator.env.map((item: any) => [item.name, item.value]))
     expect(coordinatorEnv.DOGEOS_PROOF_COORDINATOR_MATERIALIZER__SCROLL_BATCH__SUBPROCESS__CHUNK_PROGRAM_COMMITMENT_HEX)
       .to.equal(raw.scroll_chunk)
     expect(coordinator.persistence.manifests.mountPath).to.equal('/app/data/manifests')
     expect(coordinator.persistence.manifests.name).to.equal('{{ include "scroll.common.lib.chart.names.fullname" . }}-manifests')
+    expect(coordinator.initContainers['prepare-proof-data-directories']).to.deep.equal({
+      args: [
+        "mkdir -p '/app/data/eth-da' '/app/data/eth-da/blobs' '/app/data/proof-artifacts' '/app/data/scroll-batch-eth-da' '/app/data/scroll-batch-eth-da/blobs' '/app/data/scroll-batch-materializer' '/app/data/scroll-batch-scratch'",
+      ],
+      command: ['/bin/sh', '-ec'],
+      image: 'busybox:1.36.1',
+      volumeMounts: [{ mountPath: '/app/data', name: 'data' }],
+    })
     expect(coordinator.configMaps['agg-verifying-key'].data['agg-vk.bin.b64']).to.equal(aggVk.toString('base64'))
     expect(coordinator.service.main.ports.http).to.deep.equal({
       enabled: true,
@@ -276,14 +347,17 @@ max_items = 42
     expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_PROOF_CONTROL_PLANE_GATE__VERIFIER_IMPORT_MODE')
     expect(env.DOGEOS_WITHDRAWAL_CLEANUP_TIMEOUT_SECS).to.equal('3600')
     expect(Object.fromEntries(Object.entries(env).filter(([name]) => name.startsWith('DOGEOS_WITHDRAWAL_PROOF_')))).to.deep.equal({
-      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE: '{{ ternary "production" "disabled" .Values.withdrawalProof.enabled }}',
-      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
-      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
-      DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED: '{{ ternary "true" "false" .Values.withdrawalProof.enabled }}',
+      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE: 'disabled',
+      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE: 'false',
+      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION: 'false',
+      DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED: 'false',
     })
     expect(withdrawal.withdrawalProof.enabled).to.equal(false)
+    expect(withdrawal.withdrawalProof.provingMode).to.equal('production')
+    expect(withdrawal.configMaps.config.data?.['WithdrawalProcessor.toml']).to.equal(undefined)
+    expect(withdrawal.configMaps['proof-manifests'].data).to.deep.equal({ README: 'operator-owned entry\n' })
 
-    const withdrawalToml = withdrawal.configMaps.config.data['WithdrawalProcessor.toml'] as string
+    const withdrawalToml = fs.readFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), 'utf8')
     const parsedWithdrawal = toml.parse(withdrawalToml) as any
     expect(withdrawalToml).to.include('# withdrawal user comment must survive')
     expect(withdrawalToml.match(/# BEGIN scrollsdk managed proof configuration/g)).to.have.length(1)
@@ -300,6 +374,7 @@ max_items = 42
     expect(parsedWithdrawal.proof_work_api.materialize.bridge.advance_l2_enabled).to.equal(true)
     expect(parsedWithdrawal.proof_work_api.materialize.bridge.remote_prove_options.backend_profile).to.equal('bridge-prod-zkvm-v1')
     expect(parsedWithdrawal.proof_work_api.materialize.scroll_batch.remote_prove_options.backend_profile).to.equal('scroll-prod-zkvm-batch-v1')
+    expect(parsedWithdrawal.proof_work_api.materialize.scroll_chunk_segmentation.enabled).to.equal(true)
     expect(parsedWithdrawal.proof_artifact_transport.force_path_style).to.equal(false)
     expect(parsedWithdrawal.proof_artifact_transport.endpoint_url).to.equal('https://s3.example.com')
     expect(parsedWithdrawal.proof_artifact_transport.signed_url_ttl_ms).to.equal(3_600_000)
@@ -308,6 +383,7 @@ max_items = 42
     expect(withdrawal.persistence['withdrawal-processor-config'].subPath).to.equal('WithdrawalProcessor.toml')
     expect(withdrawal.persistence['proof-manifests'].name).to.equal('{{ include "withdrawal-processor.fullname" . }}-proof-manifests')
     expect(withdrawal.persistence['proof-secrets'].name).to.equal('proof-secrets')
+    expect(withdrawal.persistence['proof-secrets'].mountPath).to.equal('/app/secrets')
     expect(withdrawal.service.main.ports['proof-work'].port).to.equal(9300)
     expect(withdrawal.configMaps['agg-verifying-key'].data['agg-vk.bin.b64']).to.equal(aggVk.toString('base64'))
     expect(withdrawal.initContainers['install-agg-verifying-key'].args[0]).to.include('/app/data/verifier/agg-vk.bin')
@@ -412,18 +488,21 @@ max_items = 42
 
   it('accepts a scaffolded coordinator config end to end', () => {
     const { artifactPath, manifests } = writeValidProofRelease(root)
-    const withdrawalValuesPath = path.join(root, 'values/withdrawal-processor-production.yaml')
-    const withdrawal = yaml.load(fs.readFileSync(withdrawalValuesPath, 'utf8')) as any
-    withdrawal.env.push(
-      { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL', value: 'http://dogecoin:22555' },
-      { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL', value: 'http://l2-rpc:8545' },
-      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL', value: 'https://blob-archive.example.com' },
-      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID', value: '11155111' },
-      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL', value: 'https://ethereum.example.com' },
-      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID', value: '12345' },
-      { name: 'DOGEOS_WITHDRAWAL_NETWORK_STR', value: 'testnet' },
-    )
-    fs.writeFileSync(withdrawalValuesPath, yaml.dump(withdrawal))
+    fs.writeFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), `
+network_str = "testnet"
+dogecoin_rpc_url = "http://dogecoin:22555"
+
+[dogeos_indexer]
+rpc_url = "http://l2-rpc:8545"
+
+[ethereum_da]
+l1_rpc_url = "https://ethereum.example.com"
+eth_chain_id = 11155111
+l2_chain_id = 12345
+
+[ethereum_da.blob_source.aws_s3]
+url = "https://blob-archive.example.com"
+`)
     const coordinatorConfigPath = path.join(root, 'proof-coordinator/ProofCoordinator.toml')
     fs.rmSync(coordinatorConfigPath)
 
@@ -460,6 +539,12 @@ max_items = 42
     })
     const withdrawal = yaml.load(fs.readFileSync(withdrawalValuesPath, 'utf8')) as any
     expect(withdrawal.withdrawalProof.enabled).to.equal(true)
+    const env = Object.fromEntries(withdrawal.env.map((item: any) => [item.name, item.value]))
+    expect(env.DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE).to.equal('production')
+    expect(env.DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION).to.equal('true')
+    expect(env.DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE).to.equal('true')
+    expect(env.DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED).to.equal('true')
+    expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_PROOF_SYSTEM__DEV_DUMMY__SCROLL_INPUT')
   })
 
   it('fails before writing when the signer public artifact base is absent', () => {
@@ -496,6 +581,8 @@ max_items = 42
 
     const updated = yaml.load(fs.readFileSync(withdrawalValuesPath, 'utf8')) as any
     expect(updated.withdrawalProof.enabled).to.equal(true)
+    const env = Object.fromEntries(updated.env.map((item: any) => [item.name, item.value]))
+    expect(env.DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE).to.equal('production')
   })
 
   it('requires an explicit proof S3 authentication mode before writing', () => {
@@ -566,13 +653,11 @@ max_items = 42
 
   it('rejects a malformed WP managed marker before writing coordinator files', () => {
     const { artifactPath, manifests } = writeValidProofRelease(root)
-    const withdrawalValuesPath = path.join(root, 'values/withdrawal-processor-production.yaml')
-    const withdrawal = yaml.load(fs.readFileSync(withdrawalValuesPath, 'utf8')) as any
-    withdrawal.configMaps.config.data['WithdrawalProcessor.toml'] = `# BEGIN scrollsdk managed proof configuration
+    const withdrawalConfigPath = path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml')
+    fs.writeFileSync(withdrawalConfigPath, `# BEGIN scrollsdk managed proof configuration
 [proof_system]
 mode = "disabled"
-`
-    fs.writeFileSync(withdrawalValuesPath, yaml.dump(withdrawal))
+`)
     const coordinatorConfigPath = path.join(root, 'proof-coordinator/ProofCoordinator.toml')
     const coordinatorBefore = fs.readFileSync(coordinatorConfigPath, 'utf8')
 
@@ -641,6 +726,27 @@ mode = "disabled"
     })).to.throw('[materializer].artifact_store_root must not contain an unresolved placeholder')
   })
 
+  it('rejects coordinator writable paths outside the data PVC mount', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    const coordinatorConfigPath = path.join(root, 'proof-coordinator/ProofCoordinator.toml')
+    const source = fs.readFileSync(coordinatorConfigPath, 'utf8')
+    fs.writeFileSync(
+      coordinatorConfigPath,
+      source.replace(
+        'materializer_output_root = "/app/data/scroll-batch-materializer"',
+        'materializer_output_root = "/tmp/scroll-batch-materializer"'
+      )
+    )
+
+    expect(() => configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath,
+      manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
+      valuesDir: path.join(root, 'values'),
+    })).to.throw('[materializer.scroll_batch].materializer_output_root must be a normalized path under /app/data')
+  })
+
   it('rejects an unresolved backend profile placeholder', () => {
     const { artifactPath, manifests } = writeValidProofRelease(root)
 
@@ -656,7 +762,7 @@ mode = "disabled"
 
   it('projects operator-selected backend profiles into managed TOML', () => {
     const { artifactPath, manifests } = writeValidProofRelease(root)
-    const result = configureProofValues({
+    configureProofValues({
       artifactManifestPath: artifactPath,
       bridgeBackendProfile: 'bridge-prod-hsm-v2',
       coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
@@ -665,8 +771,7 @@ mode = "disabled"
       signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
       valuesDir: path.join(root, 'values'),
     })
-    const withdrawal = yaml.load(fs.readFileSync(result.files[1], 'utf8')) as any
-    const config = toml.parse(withdrawal.configMaps.config.data['WithdrawalProcessor.toml']) as any
+    const config = toml.parse(fs.readFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), 'utf8')) as any
     expect(config.proof_work_api.materialize.bridge.remote_prove_options.backend_profile).to.equal('bridge-prod-hsm-v2')
     expect(config.proof_work_api.materialize.scroll_batch.remote_prove_options.backend_profile).to.equal('scroll-prod-gpu-v2')
   })
@@ -735,8 +840,7 @@ mode = "disabled"
     expect(rerun.signerProofArtifactBaseUrlSource).to.equal('staged')
     expect(rerun.signerProofArtifactBaseUrl).to.equal('https://proofs.example.com/public')
 
-    const withdrawal = yaml.load(fs.readFileSync(rerun.files[1], 'utf8')) as any
-    const parsedWithdrawal = toml.parse(withdrawal.configMaps.config.data['WithdrawalProcessor.toml']) as any
+    const parsedWithdrawal = toml.parse(fs.readFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), 'utf8')) as any
     expect(parsedWithdrawal.proof_system.signer_proof_artifact_base_url).to.equal('https://proofs.example.com/public')
   })
 
@@ -782,7 +886,7 @@ mode = "disabled"
 lease_ttl_ms = 60000
 
 [auth]
-bearer_token_file = "/run/secrets/proof-work-token"
+bearer_token_file = "/app/secrets/proof-work-token"
 
 [artifact_store]
 kind = "s3"
@@ -832,7 +936,7 @@ verifier_import_mode = "dev_dummy"
 [prover_api]
 enabled = true
 bind_addr = "0.0.0.0:9400"
-worker_auth_token_file = "/run/secrets/prover-worker-token"
+worker_auth_token_file = "/app/secrets/prover-worker-token"
 max_lease_ttl_ms = 300000
 transport = "s3"
 `)
@@ -850,11 +954,21 @@ transport = "s3"
     })
     expect(result.provingMode).to.equal('mock')
     expect(result.families).to.deep.equal(['bridge_transition', 'scroll_batch', 'scroll_chunk'])
+    expect(result.statementNamespaceFile).to.equal(path.join(root, 'proof-artifacts/manifests/statement-namespace.json'))
+    expect(result.helmSetFiles.proofCoordinator.slice(1, 4).map(binding => binding.filePath)).to.deep.equal([
+      path.join(root, 'proof-artifacts/mock-manifests/scroll-chunk-topology-program.json'),
+      path.join(root, 'proof-artifacts/mock-manifests/scroll-batch-topology-program.json'),
+      path.join(root, 'proof-artifacts/mock-manifests/bridge-topology-program.json'),
+    ])
+    expect([
+      ...result.helmSetFiles.proofCoordinator,
+      ...result.helmSetFiles.withdrawalProcessor,
+    ].some(binding => binding.filePath.includes(`${path.sep}.data${path.sep}`))).to.equal(false)
 
     const withdrawal = yaml.load(fs.readFileSync(result.files[1], 'utf8')) as any
-    const parsedWithdrawal = toml.parse(withdrawal.configMaps.config.data['WithdrawalProcessor.toml']) as any
+    const parsedWithdrawal = toml.parse(fs.readFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), 'utf8')) as any
     expect(parsedWithdrawal.proof_system.mode).to.equal('dev_dummy')
-    expect(parsedWithdrawal.proof_system.dev_dummy.scroll_input).to.equal('exact_mock')
+    expect(parsedWithdrawal.proof_system.dev_dummy).to.equal(undefined)
     expect(parsedWithdrawal.proof_system.require_bridge_state).to.equal(true)
     expect(parsedWithdrawal.proof_system.signer_proof_artifact_base_url).to.equal('https://proofs.example.com')
     // The bridge gate is active, so the legacy top-level gate identity must
@@ -869,11 +983,18 @@ transport = "s3"
       .to.equal('scroll-batch-topology-prover-v1')
     expect(parsedWithdrawal.proof_work_api.materialize.bridge.remote_prove_options.backend_profile)
       .to.equal('bridge-topology-prover-v1')
+    expect(parsedWithdrawal.proof_work_api.materialize.scroll_chunk_segmentation).to.equal(undefined)
 
-    // Activation switch projects dev_dummy instead of production.
+    // The CLI owns the atomic activation env; the generic chart only renders
+    // these explicit values. exact_mock is absent while mock is disabled.
     const env = Object.fromEntries(withdrawal.env.map((item: any) => [item.name, item.value]))
-    expect(env.DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE)
-      .to.equal('{{ ternary "dev_dummy" "disabled" .Values.withdrawalProof.enabled }}')
+    expect(Object.fromEntries(Object.entries(env).filter(([name]) => name.startsWith('DOGEOS_WITHDRAWAL_PROOF_')))).to.deep.equal({
+      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE: 'disabled',
+      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE: 'false',
+      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION: 'false',
+      DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED: 'false',
+    })
+    expect(withdrawal.withdrawalProof).to.deep.include({ enabled: false, provingMode: 'mock' })
     expect(withdrawal.configMaps['agg-verifying-key']).to.equal(undefined)
     expect(withdrawal.initContainers?.['install-agg-verifying-key']).to.equal(undefined)
 
@@ -886,7 +1007,11 @@ transport = "s3"
     const coordinator = yaml.load(fs.readFileSync(result.files[0], 'utf8')) as any
     expect((coordinator.env || []).some((item: any) => String(item?.name || '').includes('CHUNK_PROGRAM_COMMITMENT_HEX'))).to.equal(false)
     expect(coordinator.configMaps['agg-verifying-key']).to.equal(undefined)
-    const statementNamespace = JSON.parse(coordinator.configMaps.manifests.data['statement-namespace.json'])
+    expect(coordinator.initContainers['prepare-proof-data-directories'].args).to.deep.equal([
+      "mkdir -p '/app/data/eth-da' '/app/data/eth-da/blobs' '/app/data/proof-materializer-staging' '/app/data/scroll-batch-materializer'",
+    ])
+    expect(coordinator.configMaps.manifests.data).to.deep.equal({ README: 'operator-owned entry\n' })
+    const statementNamespace = JSON.parse(fs.readFileSync(result.statementNamespaceFile, 'utf8'))
     expect(statementNamespace.chunk.proof_mode).to.equal('Mock')
     expect(coordinator.ingress.main.enabled).to.equal(true)
     expect(coordinator.ingress.main.hosts[0].host).to.equal('proof-coordinator.bridge.example')

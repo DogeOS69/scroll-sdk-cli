@@ -33,7 +33,6 @@ import {
   WITHDRAWAL_CONFIG_FILE,
   WITHDRAWAL_NATIVE_CONFIG_RELPATH,
   buildWithdrawalDeploymentFacts,
-  defaultWithdrawalConfigToml,
   ensureWithdrawalChartWiring,
   ensureWithdrawalProofActivationSwitch,
   isWithdrawalProofActivationEnv,
@@ -2531,13 +2530,19 @@ export default class SetupPrepCharts extends Command {
 
         const nativeConfigPath = path.resolve(path.dirname(path.resolve(valuesDir)), WITHDRAWAL_NATIVE_CONFIG_RELPATH)
         const nativeConfigExisted = fs.existsSync(nativeConfigPath)
-        // Legacy layouts embed the TOML in values: seed the native file from it
-        // once, then drop the inline copy (helm --set-file supplies the key).
+        if (!nativeConfigExisted) {
+          this.error(
+            `withdrawal-processor native TOML template is missing: ${nativeConfigPath}. `
+            + 'Copy withdrawal-processor/WithdrawalProcessor.toml from the scroll-sdk examples layout; '
+            + 'prep-charts updates that file but never creates or embeds application TOML in values YAML.'
+          )
+        }
+
+        // Legacy inline copies are discarded only after the scroll-sdk native
+        // template is present; helm --set-file supplies the ConfigMap content.
         const inlineSource = removeInlineWithdrawalConfig(productionYaml)
         if (inlineSource !== undefined) {
-          if (nativeConfigExisted) {
-            this.jsonCtx.addWarning(`withdrawal-processor: dropping inline configMaps ${WITHDRAWAL_CONFIG_FILE}; ${nativeConfigPath} is the source of truth`)
-          }
+          this.jsonCtx.addWarning(`withdrawal-processor: dropping inline configMaps ${WITHDRAWAL_CONFIG_FILE}; ${nativeConfigPath} is the source of truth`)
 
           changes.push({
             key: `configMaps.config.data.${WITHDRAWAL_CONFIG_FILE}`,
@@ -2547,14 +2552,11 @@ export default class SetupPrepCharts extends Command {
           updated = true
         }
 
-        const previousSource = nativeConfigExisted
-          ? fs.readFileSync(nativeConfigPath, 'utf8')
-          : (inlineSource ?? defaultWithdrawalConfigToml())
+        const previousSource = fs.readFileSync(nativeConfigPath, 'utf8')
         const mergedSource = mergeWithdrawalManagedDeploymentBlock(previousSource, facts, { defaults, deletePaths })
-        if (!nativeConfigExisted || mergedSource !== previousSource) {
-          fs.mkdirSync(path.dirname(nativeConfigPath), { recursive: true })
+        if (mergedSource !== previousSource) {
           fs.writeFileSync(nativeConfigPath, mergedSource)
-          this.jsonCtx.info(`withdrawal-processor: ${nativeConfigExisted ? 'updated' : 'created'} ${nativeConfigPath}`)
+          this.jsonCtx.info(`withdrawal-processor: updated ${nativeConfigPath}`)
         }
 
         const wiringBefore = JSON.stringify([

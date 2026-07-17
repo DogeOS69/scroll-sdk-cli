@@ -4,6 +4,7 @@ import {
   DEFAULT_PROOF_ARTIFACT_MANIFEST,
   DEFAULT_PROOF_COORDINATOR_CONFIG,
   DEFAULT_PROOF_PROGRAM_MANIFESTS,
+  DEFAULT_STATEMENT_NAMESPACE_CONFIG,
   resolveProofDeploymentPaths,
 } from '../../../src/commands/setup/proof-config.js'
 
@@ -11,6 +12,7 @@ describe('setup proof-config path convention', () => {
   it('uses the deployment Makefile proof-artifacts layout', () => {
     expect(DEFAULT_PROOF_ARTIFACT_MANIFEST).to.equal('proof-artifacts/release.json')
     expect(DEFAULT_PROOF_COORDINATOR_CONFIG).to.equal('proof-coordinator/ProofCoordinator.toml')
+    expect(DEFAULT_STATEMENT_NAMESPACE_CONFIG).to.equal('proof-artifacts/manifests/statement-namespace.json')
     expect(DEFAULT_PROOF_PROGRAM_MANIFESTS).to.deep.equal([
       'proof-artifacts/manifests/scroll-chunk.json',
       'proof-artifacts/manifests/scroll-batch.json',
@@ -24,6 +26,7 @@ describe('setup proof-config path convention', () => {
     expect(layout.coordinatorConfig).to.equal('/srv/dogeos/testnet/proof-coordinator/ProofCoordinator.toml')
     expect(layout.withdrawalConfig).to.equal('/srv/dogeos/testnet/withdrawal-processor/WithdrawalProcessor.toml')
     expect(layout.dogeConfig).to.equal('/srv/dogeos/testnet/.data/doge-config.toml')
+    expect(layout.statementNamespace).to.equal('/srv/dogeos/testnet/proof-artifacts/manifests/statement-namespace.json')
     expect(layout.programManifests).to.deep.equal([
       '/srv/dogeos/testnet/proof-artifacts/manifests/scroll-chunk.json',
       '/srv/dogeos/testnet/proof-artifacts/manifests/scroll-batch.json',
