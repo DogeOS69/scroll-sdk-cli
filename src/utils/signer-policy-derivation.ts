@@ -6,6 +6,7 @@ import path from 'node:path'
 import type { DerivedValue } from './proof-configurator.js'
 
 import { parseTomlConfig } from './config-parser.js'
+import { normalizeCompressedSecp256k1PublicKey } from './secp256k1-public-key.js'
 
 /**
  * dogeos-core `generate_protocol_context` writes the canonical protocol
@@ -79,10 +80,8 @@ export function deriveTeeAllowedSignerIds(setupDefaultsPath = '.data/setup_defau
   if (!fs.existsSync(file)) return undefined
   const teePubkey = (toml.parse(fs.readFileSync(file, 'utf8')) as any)?.tee_pubkey
   if (typeof teePubkey !== 'string' || teePubkey.trim() === '') return undefined
-  const normalized = teePubkey.trim().toLowerCase().replace(/^0x/, '')
-  if (!/^0[23][\da-f]{64}$/.test(normalized)) {
-    throw new Error(`${file} tee_pubkey is not a compressed secp256k1 public key; pass --tee-allowed-signer-ids explicitly`)
+  return {
+    source: `${file} tee_pubkey`,
+    value: normalizeCompressedSecp256k1PublicKey(teePubkey, `${file} tee_pubkey`),
   }
-
-  return { source: `${file} tee_pubkey`, value: normalized }
 }

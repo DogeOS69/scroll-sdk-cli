@@ -7,6 +7,42 @@ import * as path from 'node:path'
 
 const PUBKEY = `02${'11'.repeat(32)}`
 const TEE_PUBKEY = `03${'22'.repeat(32)}`
+const COMPRESSED_GENERATOR = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'
+const UNCOMPRESSED_GENERATOR = '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798' +
+  '483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8'
+
+function writeDogeConfig(provingMode: 'mock' | 'production'): void {
+  fs.writeFileSync('.data/doge-config.toml', toml.stringify({
+    attestationSigner: {
+      activeSignerIds: ['partner-a'],
+      external: [{
+        endpoint: 'https://signer.partner-a.example:4040',
+        id: 'partner-a',
+        publicKey: PUBKEY,
+      }],
+      mode: 'external',
+      threshold: 1,
+    },
+    network: 'testnet',
+    proofSystem: { provingMode },
+    wallet: { path: '.data/wallet.json' },
+  } as toml.JsonMap))
+}
+
+function commandArgs(...extra: string[]): string[] {
+  return [
+    'setup',
+    'export-signer-policy',
+    '--config', '.data/doge-config.toml',
+    '--protocol-context', '.data/protocol_context.json',
+    '--bridge-namespace-id', `0x${'44'.repeat(20)}`,
+    '--protocol-instance-id', `0x${'55'.repeat(32)}`,
+    '--tso-url', 'https://tso.bridge.example',
+    '--signer-proof-artifact-base-url', 'https://proofs.bridge.example/proof-topology',
+    '--allowed-proof-triples', `openvm_state_transition:bridge-v1:0x${'66'.repeat(32)}`,
+    ...extra,
+  ]
+}
 
 describe('setup export-signer-policy operator flow', () => {
   let originalCwd: string
@@ -31,36 +67,13 @@ describe('setup export-signer-policy operator flow', () => {
 
   for (const provingMode of ['mock', 'production'] as const) {
     it(`exports an address-bearing ${provingMode} partner bundle`, async () => {
-      fs.writeFileSync('.data/doge-config.toml', toml.stringify({
-        attestationSigner: {
-          activeSignerIds: ['partner-a'],
-          external: [{
-            endpoint: 'https://signer.partner-a.example:4040',
-            id: 'partner-a',
-            publicKey: PUBKEY,
-          }],
-          mode: 'external',
-          threshold: 1,
-        },
-        network: 'testnet',
-        proofSystem: { provingMode },
-        wallet: { path: '.data/wallet.json' },
-      } as toml.JsonMap))
+      writeDogeConfig(provingMode)
 
-      const { stdout } = await runCommand([
-        'setup',
-        'export-signer-policy',
-        '--config', '.data/doge-config.toml',
-        '--protocol-context', '.data/protocol_context.json',
-        '--bridge-namespace-id', `0x${'44'.repeat(20)}`,
-        '--protocol-instance-id', `0x${'55'.repeat(32)}`,
-        '--tso-url', 'https://tso.bridge.example',
-        '--signer-proof-artifact-base-url', 'https://proofs.bridge.example/proof-topology',
-        '--allowed-proof-triples', `openvm_state_transition:bridge-v1:0x${'66'.repeat(32)}`,
+      const { stdout } = await runCommand(commandArgs(
         '--tee-allowed-signer-ids', TEE_PUBKEY,
         '--verifier-registry', 'verifier-registry.toml',
-        '--source-set', 'source-set.toml',
-      ])
+        '--source-set', 'source-set.toml'
+      ))
 
       expect(stdout).to.include(`${provingMode} policy bundle written`)
       const policy = JSON.parse(fs.readFileSync('signer-policy-bundle/signer-policy.json', 'utf8'))
@@ -85,4 +98,36 @@ describe('setup export-signer-policy operator flow', () => {
       expect(commands).to.include('kubectl -n <namespace> run signer-reachability-partner-a')
     })
   }
+
+  it('leaves TEE allowlists empty in mock mode without reading a legacy setup_defaults key', async () => {
+    writeDogeConfig('mock')
+    fs.writeFileSync('.data/setup_defaults.toml', 'tee_pubkey = "not-even-a-public-key"\n')
+
+    await runCommand(commandArgs())
+
+    const policy = JSON.parse(fs.readFileSync('signer-policy-bundle/signer-policy.json', 'utf8'))
+    expect(policy.teeAllowedSignerIds).to.equal('')
+    const env = fs.readFileSync('signer-policy-bundle/signer-policy.env', 'utf8')
+    expect(env).to.include('ATTESTATION_SIGNER_TEE_ALLOWED_SIGNER_IDS=\n')
+    expect(env).to.include('ATTESTATION_SIGNER_ENVELOPE_ALLOWED_TEE_SIGNER_IDS=\n')
+    const registry = fs.readFileSync('signer-policy-bundle/verifier-registry.toml', 'utf8')
+    expect(registry).to.include('proof_kind = "openvm_state_transition"')
+    expect(registry).to.include('verifier_id = "bridge-v1"')
+    expect(registry).to.include(`vk_hash = "0x${'66'.repeat(32)}"`)
+    const sourceSet = fs.readFileSync('signer-policy-bundle/source-set.toml', 'utf8')
+    expect(sourceSet).to.include('Mock/e2e_harness source-set scaffold')
+  })
+
+  it('normalizes a legacy uncompressed CubeSigner key for production policy', async () => {
+    writeDogeConfig('production')
+    fs.writeFileSync('.data/setup_defaults.toml', `tee_pubkey = "${UNCOMPRESSED_GENERATOR}"\n`)
+
+    await runCommand(commandArgs('--source-set', 'source-set.toml'))
+
+    const policy = JSON.parse(fs.readFileSync('signer-policy-bundle/signer-policy.json', 'utf8'))
+    expect(policy.teeAllowedSignerIds).to.equal(COMPRESSED_GENERATOR)
+    const env = fs.readFileSync('signer-policy-bundle/signer-policy.env', 'utf8')
+    expect(env).to.include(`ATTESTATION_SIGNER_TEE_ALLOWED_SIGNER_IDS=${COMPRESSED_GENERATOR}`)
+    expect(env).to.include(`ATTESTATION_SIGNER_ENVELOPE_ALLOWED_TEE_SIGNER_IDS=${COMPRESSED_GENERATOR}`)
+  })
 })

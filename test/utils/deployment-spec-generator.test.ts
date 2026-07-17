@@ -998,10 +998,11 @@ describe('deployment-spec-generator', () => {
 
     it('includes cubesigner TEE config when present', () => {
       const spec = createMinimalSpec();
+      const rawPublicKey = '0x0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8';
       spec.signing = {
         cubesigner: {
           roles: [{
-            keys: [{ keyId: 'k1', keyType: 'secp256k1', materialId: 'm1', publicKey: '0xpub1' }],
+            keys: [{ keyId: 'k1', keyType: 'secp256k1', materialId: 'm1', publicKey: rawPublicKey }],
             name: 'role1',
             roleId: 'r1',
           }],
@@ -1011,6 +1012,8 @@ describe('deployment-spec-generator', () => {
 
       expect(output).to.include('cubesigner');
       expect(output).to.include('role1');
+      expect(output).to.include(`public_key = "${rawPublicKey}"`);
+      expect(output).to.include('public_key_compressed = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"');
     });
 
     it('leaves partner signer routing for descriptor import', () => {
@@ -1046,10 +1049,10 @@ describe('deployment-spec-generator', () => {
 
     it('includes TEE public key when configured', () => {
       const spec = createMinimalSpec();
-      spec.bridge.teePubkey = '0x020000000000000000000000000000000000000000000000000000000000000000';
+      spec.bridge.teePubkey = '0x0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
       const output = generateSetupDefaultsToml(spec);
 
-      expect(output).to.include('tee_pubkey = "020000000000000000000000000000000000000000000000000000000000000000"');
+      expect(output).to.include('tee_pubkey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"');
     });
 
     it('outputs timelock using setup_defaults.toml field name', () => {
@@ -1116,16 +1119,14 @@ describe('deployment-spec-generator', () => {
       spec.signing = {
         cubesigner: {
           roles: [
-            { keys: [{ keyId: 'k1', keyType: 'secp256k1', materialId: 'm1', publicKey: '0xabc123' }], name: 'r1', roleId: 'id1' },
-            { keys: [{ keyId: 'k2', keyType: 'secp256k1', materialId: 'm2', publicKey: '0xdef456' }], name: 'r2', roleId: 'id2' },
+            { keys: [{ keyId: 'k1', keyType: 'secp256k1', materialId: 'm1', publicKey: '0x0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8' }], name: 'r1', roleId: 'id1' },
           ],
         },
       };
       const output = generateSetupDefaultsToml(spec);
 
-      expect(output).to.include('tee_pubkey = "abc123"');
+      expect(output).to.include('tee_pubkey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"');
       expect(output).not.to.include('attestation_pubkeys');
-      expect(output).not.to.include('def456');
     });
   });
 

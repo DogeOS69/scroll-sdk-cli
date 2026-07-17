@@ -75,8 +75,9 @@ bridge:
   initialAttestationKeyset:
     signerIds: [signer-0]
     threshold: 1
-  # Optional compressed TEE public key. If omitted, `scrollsdk setup cubesigner-init` can populate it.
-  # teePubkey: "020000000000000000000000000000000000000000000000000000000000000000"
+  # Optional compressed/uncompressed SEC1 TEE public key. The CLI validates it
+  # and writes dogeos-core's canonical compressed representation.
+  # teePubkey: "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
   timelock: 100
   feeRateSatsPerKvb: 1000000
   targetAmountsSats:

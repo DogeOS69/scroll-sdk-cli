@@ -13,11 +13,12 @@ import type { CubesignerRole, DogeConfig } from '../../types/doge-config.js'
 import { SETUP_DEFAULTS_TEMPLATE, getSetupDefaultsPath } from '../../config/constants.js'
 import { dogeConfigToToml, loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
+import { normalizeCompressedSecp256k1PublicKey } from '../../utils/secp256k1-public-key.js'
 const execAsync = promisify(exec)
 const TEE_KEY_COUNT = 1
 
 export default class SetupCubesignerSetup extends Command {
-    static override description = 'Setup a CubeSigner TEE key and role'
+    static override description = 'Setup a CubeSigner TEE key and role, preserving the provider key and dogeos-core compressed identity'
 
     static override examples = [
         '<%= config.bin %> <%= command.id %> --roles tee_role',
@@ -300,6 +301,28 @@ export default class SetupCubesignerSetup extends Command {
         }
     }
 
+    /**
+     * Preserve CubeSigner's public_key verbatim in doge-config for `cs` output
+     * reconciliation, while deriving the canonical identity dogeos-core uses
+     * in bridge scripts and TEE signer policies.
+     */
+    private normalizeCubesignerPublicKey(role: any, key: any): string {
+        try {
+            return normalizeCompressedSecp256k1PublicKey(
+                String(key.public_key || ''),
+                `CubeSigner role ${role.name || role.role_id || '<unknown>'} key ${key.key_id || '<unknown>'} public_key`
+            )
+        } catch (error) {
+            this.jsonCtx.error(
+                'E602_INVALID_CUBESIGNER_TEE_PUBKEY',
+                error instanceof Error ? error.message : String(error),
+                'CONFIGURATION',
+                true,
+                { keyId: key.key_id, roleId: role.role_id }
+            )
+        }
+    }
+
     private async saveRolesToConfig(selectedRoles: any[]) {
         try {
             this.jsonCtx.info('Saving roles to DogeConfig...')
@@ -311,6 +334,7 @@ export default class SetupCubesignerSetup extends Command {
                     key_type: key.key_type,
                     material_id: key.material_id,
                     public_key: key.public_key,
+                    public_key_compressed: this.normalizeCubesignerPublicKey(role, key),
                     purpose: key.purpose
                 })),
                 name: role.name,
@@ -408,7 +432,7 @@ export default class SetupCubesignerSetup extends Command {
             for (const role of selectedRoles) {
                 if (role.keys && role.keys.length > 0) {
                     const key = role.keys[0] // Use first key of each role
-                    teePubkeys.push(key.public_key.replace(/^0x/, ''))
+                    teePubkeys.push(this.normalizeCubesignerPublicKey(role, key))
                 }
             }
 
@@ -441,6 +465,7 @@ export default class SetupCubesignerSetup extends Command {
                 setupDefaultsFile: setupDefaultsPath,
                 teeKeyCount: TEE_KEY_COUNT,
                 teePubkey: teePubkeys[0],
+                teePubkeyOriginal: selectedRoles[0]?.keys?.[0]?.public_key,
             })
 
         } catch (error) {

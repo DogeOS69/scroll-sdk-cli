@@ -4,7 +4,10 @@ export interface CubesignerKey {
   key_id: string
   key_type: string
   material_id: string
+  /** CubeSigner CLI/API output preserved verbatim for operator reconciliation. */
   public_key: string
+  /** dogeos-core canonical 33-byte compressed SEC1 representation. */
+  public_key_compressed?: string
   purpose: string
 }
 

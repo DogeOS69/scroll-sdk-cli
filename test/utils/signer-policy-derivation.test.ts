@@ -11,6 +11,10 @@ import {
   protocolIdSidecarPath,
 } from '../../src/utils/signer-policy-derivation.js'
 
+const COMPRESSED_GENERATOR = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'
+const UNCOMPRESSED_GENERATOR = '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798' +
+  '483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8'
+
 describe('signer-policy-derivation', () => {
   let root: string
 
@@ -136,11 +140,18 @@ namespace_id = [136, 103, 197, 158, 34, 190, 133, 61, 144, 81, 235, 194, 88, 246
       expect(deriveTeeAllowedSignerIds(defaultsPath)).to.equal(undefined)
     })
 
-    it('rejects a tee_pubkey that is not a compressed secp256k1 key', () => {
+    it('normalizes a legacy CubeSigner uncompressed tee_pubkey', () => {
       const defaultsPath = path.join(root, 'setup_defaults.toml')
-      fs.writeFileSync(defaultsPath, `tee_pubkey = "04${'ab'.repeat(32)}"\n`)
+      fs.writeFileSync(defaultsPath, `tee_pubkey = "${UNCOMPRESSED_GENERATOR}"\n`)
 
-      expect(() => deriveTeeAllowedSignerIds(defaultsPath)).to.throw('not a compressed secp256k1 public key')
+      expect(deriveTeeAllowedSignerIds(defaultsPath)?.value).to.equal(COMPRESSED_GENERATOR)
+    })
+
+    it('rejects a tee_pubkey that is not a valid secp256k1 point', () => {
+      const defaultsPath = path.join(root, 'setup_defaults.toml')
+      fs.writeFileSync(defaultsPath, `tee_pubkey = "02${'00'.repeat(32)}"\n`)
+
+      expect(() => deriveTeeAllowedSignerIds(defaultsPath)).to.throw('not a valid secp256k1 curve point')
     })
   })
 })

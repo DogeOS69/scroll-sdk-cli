@@ -571,6 +571,8 @@ export interface SigningConfig {
         keyType: string
         materialId: string
         publicKey: string
+        /** Optional cached dogeos-core canonical form; generators verify/recompute it from publicKey. */
+        publicKeyCompressed?: string
       }>
       name: string
       roleId: string

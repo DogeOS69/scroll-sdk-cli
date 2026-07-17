@@ -19,9 +19,10 @@ recovery_key_count = 3
 timelock = 100
 
 # Optional: provide specific signer public keys instead of deriving them from seed_string.
-# `scrollsdk setup cubesigner-init` writes tee_pubkey before bridge-init.
+# `scrollsdk setup cubesigner-init` writes tee_pubkey in canonical compressed
+# SEC1 form before bridge-init (CubeSigner 04+X+Y responses are normalized).
 # `scrollsdk setup attestation-signer` writes the selected initial-cohort pubkeys before bridge-init.
-# tee_pubkey = "020000000000000000000000000000000000000000000000000000000000000000"
+# tee_pubkey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
 # attestation_pubkeys = [
 #   "0400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
 #   "0400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002",

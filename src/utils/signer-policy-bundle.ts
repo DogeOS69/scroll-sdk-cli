@@ -43,6 +43,44 @@ export function signerRuntimePolicyProfile(provingMode: ProvingMode): SignerRunt
     : { allowUnimplementedChecks: false, policyMode: 'production_enforce' }
 }
 
+export function renderVerifierRegistryToml(allowedProofTriples: string): string {
+  const triples = allowedProofTriples.split(',').map(value => value.trim()).filter(Boolean)
+  const entries = triples.map((triple, index) => {
+    const [proofKind, verifierId, vkHash, ...extra] = triple.split(':')
+    if (extra.length > 0 || !proofKind || !verifierId || !vkHash) {
+      throw new Error(`allowed proof triple ${index} must be proof_kind:verifier_id:vk_hash`)
+    }
+
+    const normalizedVkHash = vkHash.toLowerCase().startsWith('0x')
+      ? vkHash.toLowerCase()
+      : `0x${vkHash.toLowerCase()}`
+    if (!/^0x[\da-f]{64}$/.test(normalizedVkHash)) {
+      throw new Error(`allowed proof triple ${index} vk_hash must be 32-byte hex`)
+    }
+
+    return `[[verifier]]
+proof_kind = ${JSON.stringify(proofKind)}
+verifier_id = ${JSON.stringify(verifierId)}
+vk_hash = ${JSON.stringify(normalizedVkHash)}
+allowed_protocol_versions = [1]
+allowed_signing_policy_versions = [1]
+`
+  })
+
+  return `# Generated from the proof topology staged by scrollsdk setup proof-config.
+# Registry membership binds signer policy to the same proof identities used by
+# withdrawal-processor and proof-coordinator; it is not proof-byte verification.
+${entries.join('\n')}`
+}
+
+export function renderMockSourceSetToml(): string {
+  return `# Mock/e2e_harness source-set scaffold.
+# Intentionally empty: staging_scaffold records the not-yet-implemented RPC
+# source agreement checks as audited bypasses. Production must provide the
+# three real source sections in configs/source-set.toml.
+`
+}
+
 export function renderSignerPolicyEnv(input: SignerPolicyBundleInput): string {
   const profile = signerRuntimePolicyProfile(input.provingMode)
   return [

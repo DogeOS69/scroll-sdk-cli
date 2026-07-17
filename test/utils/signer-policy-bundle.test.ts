@@ -4,8 +4,10 @@ import type { SignerPolicyBundleInput } from '../../src/utils/signer-policy-bund
 
 import {
   DEFAULT_ENVELOPE_MAX_PROOF_ARTIFACTS,
+  renderMockSourceSetToml,
   renderPartnerCommands,
   renderSignerPolicyEnv,
+  renderVerifierRegistryToml,
 } from '../../src/utils/signer-policy-bundle.js'
 
 function input(provingMode: 'mock' | 'production'): SignerPolicyBundleInput {
@@ -38,6 +40,28 @@ function envMap(rendered: string): Record<string, string> {
 }
 
 describe('signer policy bundle', () => {
+  it('renders a verifier registry from the exact staged proof triples', () => {
+    const registry = renderVerifierRegistryToml(input('mock').allowedProofTriples)
+    expect(registry).to.include('proof_kind = "openvm_state_transition"')
+    expect(registry).to.include('verifier_id = "bridge-v1"')
+    expect(registry).to.include(`vk_hash = "0x${'22'.repeat(32)}"`)
+    expect(registry).to.include('proof_kind = "scroll_batch"')
+    expect(registry.match(/\[\[verifier]]/g)).to.have.length(2)
+  })
+
+  it('rejects malformed proof triples instead of emitting a permissive registry', () => {
+    expect(() => renderVerifierRegistryToml('scroll_batch:missing-vk'))
+      .to.throw('must be proof_kind:verifier_id:vk_hash')
+    expect(() => renderVerifierRegistryToml('scroll_batch:batch-v1:not-a-hash'))
+      .to.throw('vk_hash must be 32-byte hex')
+  })
+
+  it('renders an intentionally empty mock source-set scaffold', () => {
+    const sourceSet = renderMockSourceSetToml()
+    expect(sourceSet).to.include('Mock/e2e_harness')
+    expect(sourceSet).not.to.include('[dogecoin]')
+  })
+
   it('renders the e2e_harness-compatible mock signer posture with bounded proof and TEE allowlists', () => {
     const env = envMap(renderSignerPolicyEnv(input('mock')))
     expect(env.ATTESTATION_SIGNER_POLICY_MODE).to.equal('staging_scaffold')

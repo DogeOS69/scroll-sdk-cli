@@ -26,6 +26,7 @@ import {
   L1_INTERFACE_RPC_WEBSOCKET_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
+import { normalizeCompressedSecp256k1PublicKey } from './secp256k1-public-key.js'
 import { MANAGED_SIGNER_ROLES, buildLocalSignerConfig } from './signer-roles.js'
 
 const ETHEREUM_DA_DEFAULTS = {
@@ -1398,6 +1399,10 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
           key_type: key.keyType,
           material_id: key.materialId,
           public_key: key.publicKey,
+          public_key_compressed: normalizeCompressedSecp256k1PublicKey(
+            key.publicKey,
+            `signing.cubesigner role ${role.name} key ${key.keyId} publicKey`
+          ),
         })),
         name: role.name,
         role_id: role.roleId
@@ -1443,12 +1448,12 @@ export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
   }
 
   if (spec.bridge.teePubkey) {
-    config.tee_pubkey = spec.bridge.teePubkey.replace(/^0x/, '')
+    config.tee_pubkey = normalizeCompressedSecp256k1PublicKey(spec.bridge.teePubkey, 'bridge.teePubkey')
   } else if (spec.signing.cubesigner?.roles?.length) {
     const key = spec.signing.cubesigner.roles[0].keys[0]
-    const teePubkey = key?.publicKey?.replace(/^0x/, '')
+    const teePubkey = key?.publicKey
     if (teePubkey) {
-      config.tee_pubkey = teePubkey
+      config.tee_pubkey = normalizeCompressedSecp256k1PublicKey(teePubkey, 'signing.cubesigner.roles[0].keys[0].publicKey')
     }
   }
 
