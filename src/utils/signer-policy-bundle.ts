@@ -230,10 +230,10 @@ signature callback to the TSO.
 
 ## Bridge-operator reachability check
 
-Before genesis, the bridge operator runs:
+Before genesis, the bridge operator imports the descriptors:
 
 \`\`\`bash
-scrollsdk setup attestation-signer --threshold <T> --probe
+scrollsdk setup attestation-signer --threshold <T>
 \`\`\`
 
 After K8s deployment, repeat the network check from the cluster namespace so a

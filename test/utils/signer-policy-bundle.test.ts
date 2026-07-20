@@ -97,7 +97,7 @@ describe('signer policy bundle', () => {
       'https://proofs.bridge.example/proof-topology',
       'scrollsdk signer init',
       'scrollsdk signer preflight',
-      'scrollsdk setup attestation-signer --threshold <T> --probe',
+      'scrollsdk setup attestation-signer --threshold <T>',
       'docker compose --project-directory docker-compose up -d',
       'kubectl -n <namespace> run signer-reachability-partner-a',
       "curl -fsS 'http://10.20.30.40:4040/health'",

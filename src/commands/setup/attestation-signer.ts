@@ -8,7 +8,7 @@ import path from 'node:path'
 import type { AttestationSignerDescriptor } from '../../utils/attestation-signer-descriptor.js'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
-import { fetchSignerHealth, loadAttestationSignerDescriptor } from '../../utils/attestation-signer-descriptor.js'
+import { loadAttestationSignerDescriptor } from '../../utils/attestation-signer-descriptor.js'
 import { dogeConfigToToml, loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 
@@ -23,10 +23,9 @@ function positiveInteger(raw: string | undefined, fallback: number, name: string
 }
 
 export class AttestationSignerCommand extends Command {
-  static description = 'Import partner-operated attestation-signer descriptors and select the bootstrap bridge keyset. Signers are deployed by their operators (see `scrollsdk signer init` / `scrollsdk signer preflight`); this command only consumes descriptor files — endpoint + public key — and never provisions keys or Kubernetes releases.'
+  static description = 'Import partner-operated attestation-signer descriptors and select the bootstrap bridge keyset. Signers are deployed by their operators (see `scrollsdk signer init` / `scrollsdk signer preflight`); this command only consumes descriptor files — endpoint + public key — and never provisions keys, Kubernetes releases, or network probes. Reachability is verified later by the partner operator and the TSO, not during config generation.'
 
   static examples = [
-    '$ scrollsdk setup attestation-signer --threshold 2 --probe',
     '$ scrollsdk setup attestation-signer --descriptor partner-a.json --descriptor partner-b.json --descriptor ours.json --threshold 2',
     '$ scrollsdk setup attestation-signer --descriptor-dir descriptors/ --threshold 3 --active-signer-ids partner-a,partner-b,ours-0',
   ]
@@ -37,7 +36,6 @@ export class AttestationSignerCommand extends Command {
     descriptor: Flags.string({ description: 'attestation-signer-descriptor JSON file; repeat per signer', multiple: true }),
     'descriptor-dir': Flags.string({ description: 'Directory whose *.json files are all loaded as descriptors (default: descriptors/ when it exists and no --descriptor is given)' }),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
-    probe: Flags.boolean({ default: false, description: 'GET each signer /health and require the runtime public key to match the descriptor before accepting it' }),
     threshold: Flags.string({ description: 'Initial bridge attestation threshold (T of the active set)' }),
   }
 
@@ -54,8 +52,6 @@ export class AttestationSignerCommand extends Command {
           throw new Error(`descriptor ${descriptor.id} is for network ${descriptor.network}, but doge-config network is ${config.network}`)
         }
       }
-
-      if (flags.probe) await this.probeDescriptors(descriptors, json)
 
       const byId = new Map(descriptors.map(descriptor => [descriptor.id, descriptor]))
       const requestedActive = csv(flags['active-signer-ids'])
@@ -128,21 +124,6 @@ export class AttestationSignerCommand extends Command {
     }
 
     return descriptors
-  }
-
-  private async probeDescriptors(descriptors: AttestationSignerDescriptor[], json: JsonOutputContext): Promise<void> {
-    for (const descriptor of descriptors) {
-      const health = await fetchSignerHealth(descriptor.endpoint)
-      if (health.publicKey !== descriptor.publicKey) {
-        throw new Error(`${descriptor.id}: /health public key ${health.publicKey} does not match descriptor publicKey ${descriptor.publicKey}`)
-      }
-
-      if (health.network && health.network !== descriptor.network) {
-        throw new Error(`${descriptor.id}: /health network ${health.network} does not match descriptor network ${descriptor.network}`)
-      }
-
-      json.logSuccess(`Probed ${descriptor.id} at ${descriptor.endpoint}: public key matches`)
-    }
   }
 
   private writeInitialBridgeConfig(descriptors: AttestationSignerDescriptor[], activeIds: string[], threshold: number): void {

@@ -708,11 +708,10 @@ FLAGS
 DESCRIPTION
   Import partner-operated attestation-signer descriptors and select the bootstrap bridge keyset. Signers are deployed by
   their operators (see `scrollsdk signer init` / `scrollsdk signer preflight`); this command only consumes descriptor
-  files — endpoint + public key — and never provisions keys or Kubernetes releases.
+  files — endpoint + public key — and never provisions keys, Kubernetes releases, or network probes. Reachability is
+  verified later by the partner operator and the TSO, not during config generation.
 
 EXAMPLES
-  $ scrollsdk setup attestation-signer --threshold 2 --probe
-
   $ scrollsdk setup attestation-signer --descriptor partner-a.json --descriptor partner-b.json --descriptor ours.json --threshold 2
 
   $ scrollsdk setup attestation-signer --descriptor-dir descriptors/ --threshold 3 --active-signer-ids partner-a,partner-b,ours-0
