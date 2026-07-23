@@ -20,6 +20,7 @@ import {
 import { scaffoldProofCoordinatorConfig } from '../../utils/proof-coordinator-scaffold.js'
 import {
   PROVER_WORKER_MOCK_BUNDLE_DIR,
+  type ProverWorkerMockBundleResult,
   readProverWorkerTokenFromSecretsManager,
   writeProverWorkerMockBundle,
 } from '../../utils/prover-worker-mock-bundle.js'
@@ -197,6 +198,13 @@ export default class ProofConfig extends Command {
         withdrawalConfigPath,
       })
       json.logSuccess(`Configured ${provingMode} proof values for: ${result.families.join(', ')}`)
+      if (result.artifactReadBaseUrlMapping === 'custom-gateway-root') {
+        json.addWarning(
+          `custom proof artifact gateway root ${result.signerProofArtifactBaseUrl} does not expose the S3 key prefix in its URL path; `
+          + 'verify that the gateway maps this root to the configured artifact-store prefix and preflight an exact artifact key from every worker/signer network'
+        )
+      }
+
       if (result.signerProofArtifactBaseUrlSource === 'staged') {
         json.info(`--signer-proof-artifact-base-url not given; reusing staged value ${result.signerProofArtifactBaseUrl} from WithdrawalProcessor.toml`)
       }
@@ -206,8 +214,9 @@ export default class ProofConfig extends Command {
       }
 
       let workerBundleDir: string | undefined
+      let workerBundleId: string | undefined
       if (mock && !flags['skip-worker-bundle']) {
-        workerBundleDir = this.writeWorkerBundle(
+        const workerBundle = this.writeWorkerBundle(
           flags,
           json,
           coordinatorIngressHost,
@@ -215,6 +224,8 @@ export default class ProofConfig extends Command {
           layout.workerBundleDir,
           valuesDir
         )
+        workerBundleDir = workerBundle.bundleDir
+        workerBundleId = workerBundle.bundleId
       }
 
       if (flags['enable-withdrawal-proof']) {
@@ -234,7 +245,13 @@ export default class ProofConfig extends Command {
         }
       }
 
-      json.success({ ...result, deploymentDir: layout.deploymentDir, scaffoldedCoordinatorConfig: scaffolded, workerBundleDir })
+      json.success({
+        ...result,
+        deploymentDir: layout.deploymentDir,
+        scaffoldedCoordinatorConfig: scaffolded,
+        workerBundleDir,
+        workerBundleId,
+      })
     } catch (error) {
       json.error('E701_PROOF_CONFIG_FAILED', error instanceof Error ? error.message : String(error), 'CONFIGURATION', true)
     }
@@ -277,7 +294,7 @@ export default class ProofConfig extends Command {
     artifactReadBaseUrl: string,
     bundleDir: string,
     valuesDir: string
-  ): string {
+  ): ProverWorkerMockBundleResult {
     if (!coordinatorIngressHost) {
       throw new Error(
         'mock proving generates the prover-worker-mock bundle, which needs the public coordinator URL: set [ingress].PROOF_COORDINATOR_HOST in config.toml (or pass --skip-worker-bundle)'
@@ -296,8 +313,11 @@ export default class ProofConfig extends Command {
       dir: bundleDir,
       workerToken,
     })
-    json.logSuccess(`prover-worker-mock bundle written to ${bundle.bundleDir} — sync to the worker host and run docker compose up -d`)
-    return bundle.bundleDir
+    json.logSuccess(
+      `prover-worker-mock bundle ${bundle.bundleId} written to ${bundle.bundleDir} — sync the complete directory, `
+      + `run scrollsdk setup proof-worker-check --expected-bundle-id ${bundle.bundleId} on the worker host, then docker compose up -d`
+    )
+    return bundle
   }
 }
 

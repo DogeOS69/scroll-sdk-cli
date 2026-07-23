@@ -1,6 +1,15 @@
 import { expect } from 'chai'
 
-import { applyProofAwsValues } from '../../src/utils/proof-aws-provisioner.js'
+import type { AwsCliOptions } from '../../src/utils/aws-cli.js'
+
+import { JsonOutputContext } from '../../src/utils/json-output.js'
+import {
+  ProofAwsProvisioner,
+  applyProofAwsValues,
+  buildProofArtifactStorePolicy,
+  normalizeProofKeyPrefix,
+  upsertProofArtifactVpcEndpointReadPolicy,
+} from '../../src/utils/proof-aws-provisioner.js'
 
 const PROJECTION = {
   bucket: 'dogeos-testnet-proof-artifacts',
@@ -14,6 +23,168 @@ const PROJECTION = {
 }
 
 describe('proof-aws-provisioner values projection', () => {
+  it('configures only explicit same-VPC route tables and preserves policy while provisioning VPC endpoint read', () => {
+    const calls: Array<{ args: string[]; kind: 'json' | 'run' | 'text'; options: AwsCliOptions }> = []
+    const operatorStatement = {
+      Action: 's3:ListBucket',
+      Effect: 'Deny',
+      Resource: 'arn:aws:s3:::proof-bucket',
+      Sid: 'OperatorGuard',
+    }
+    const aws = {
+      json(args: string[], options: AwsCliOptions = {}): any {
+        calls.push({ args, kind: 'json', options })
+        if (args[0] === 'ec2' && args[1] === 'describe-vpc-endpoints') {
+          return {
+            VpcEndpoints: [{
+              RouteTableIds: ['rtb-aaaaaaaa'],
+              ServiceName: 'com.amazonaws.us-east-1.s3',
+              State: 'available',
+              VpcEndpointType: 'Gateway',
+              VpcId: 'vpc-11111111',
+            }],
+          }
+        }
+
+        if (args[0] === 'ec2' && args[1] === 'describe-route-tables') {
+          return {
+            RouteTables: [
+              { RouteTableId: 'rtb-aaaaaaaa', VpcId: 'vpc-11111111' },
+              { RouteTableId: 'rtb-bbbbbbbb', VpcId: 'vpc-11111111' },
+            ],
+          }
+        }
+
+        return {}
+      },
+      run(args: string[], options: AwsCliOptions = {}): string {
+        calls.push({ args, kind: 'run', options })
+        return ''
+      },
+      text(args: string[], options: AwsCliOptions = {}): string {
+        calls.push({ args, kind: 'text', options })
+        if (args[0] === 'sts') return '123456789012'
+        if (args[0] === 'eks') return 'https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE'
+        if (args[0] === 's3api' && args[1] === 'get-bucket-policy') {
+          return JSON.stringify({ Statement: [operatorStatement], Version: '2012-10-17' })
+        }
+
+        throw new Error(`unexpected text call: ${args.join(' ')}`)
+      },
+    }
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    const result = provisioner.provision(
+      { awsRegion: 'us-east-1', eksCluster: 'cluster', namespace: 'default', networkAlias: 'testnet' },
+      {
+        artifactRead: {
+          mode: 'vpc-endpoint',
+          routeTableIds: ['rtb-aaaaaaaa', 'rtb-bbbbbbbb'],
+          vpcEndpointId: 'vpce-abc123',
+        },
+        bucket: 'proof-bucket',
+        coordinatorRole: { description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator' },
+        keyPrefix: 'proof-topology',
+        secretName: 'proof-secret',
+        withdrawalRole: { description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor' },
+      }
+    )
+
+    expect(result.artifactReadTransport).to.deep.equal({
+      mode: 'vpc-endpoint',
+      routeTableIds: ['rtb-aaaaaaaa', 'rtb-bbbbbbbb'],
+      status: 'configured-unverified',
+      vpcEndpointId: 'vpce-abc123',
+    })
+    const modify = calls.find(call => call.args[0] === 'ec2' && call.args[1] === 'modify-vpc-endpoint')
+    expect(modify?.args).to.deep.equal([
+      'ec2',
+      'modify-vpc-endpoint',
+      '--vpc-endpoint-id',
+      'vpce-abc123',
+      '--add-route-table-ids',
+      'rtb-bbbbbbbb',
+    ])
+
+    const putBucketPolicy = calls.find(call => call.args[0] === 's3api' && call.args[1] === 'put-bucket-policy')
+    const policy = JSON.parse(putBucketPolicy?.args[putBucketPolicy.args.indexOf('--policy') + 1] as string)
+    expect(policy.Statement[0]).to.deep.equal(operatorStatement)
+    expect(policy.Statement[1].Resource).to.equal('arn:aws:s3:::proof-bucket/proof-topology/*')
+    expect(policy.Statement[1].Condition.StringEquals['aws:SourceVpce']).to.equal('vpce-abc123')
+
+    const rolePolicies = calls.filter(call => call.args[0] === 'iam' && call.args[1] === 'put-role-policy')
+    expect(rolePolicies).to.have.length(2)
+    for (const call of rolePolicies) {
+      const policyDocument = JSON.parse(call.args[call.args.indexOf('--policy-document') + 1])
+      expect(policyDocument.Statement[0].Resource).to.equal('arn:aws:s3:::proof-bucket/proof-topology/*')
+      expect(policyDocument.Statement[1].Condition.StringLike['s3:prefix'])
+        .to.deep.equal(['proof-topology', 'proof-topology/*'])
+    }
+  })
+
+  it('builds a key-prefix-scoped S3 role policy', () => {
+    expect(buildProofArtifactStorePolicy('proof-bucket', 'proof-topology')).to.deep.equal({
+      Statement: [
+        {
+          Action: ['s3:GetObject', 's3:PutObject'],
+          Effect: 'Allow',
+          Resource: 'arn:aws:s3:::proof-bucket/proof-topology/*',
+        },
+        {
+          Action: ['s3:ListBucket'],
+          Condition: {
+            StringLike: {
+              's3:prefix': ['proof-topology', 'proof-topology/*'],
+            },
+          },
+          Effect: 'Allow',
+          Resource: 'arn:aws:s3:::proof-bucket',
+        },
+      ],
+      Version: '2012-10-17',
+    })
+  })
+
+  it('accepts nested proof key prefixes and rejects unsafe path syntax', () => {
+    expect(normalizeProofKeyPrefix('releases/v1')).to.equal('releases/v1')
+    for (const invalid of ['', '/proof-topology', 'proof-topology/', 'proof//topology', 'proof/../topology', 'proof/*']) {
+      expect(() => normalizeProofKeyPrefix(invalid)).to.throw('proof artifact key prefix')
+    }
+  })
+
+  it('preserves operator bucket-policy statements while upserting prefix-scoped VPC endpoint read', () => {
+    const existing = {
+      Statement: [{ Action: 's3:ListBucket', Effect: 'Deny', Resource: 'arn:aws:s3:::proof-bucket', Sid: 'OperatorGuard' }],
+      Version: '2012-10-17',
+    }
+    const updated = upsertProofArtifactVpcEndpointReadPolicy(
+      existing,
+      'proof-bucket',
+      'proof-topology',
+      'vpce-0123456789abcdef0'
+    )
+
+    expect(updated.Statement).to.deep.equal([
+      existing.Statement[0],
+      {
+        Action: 's3:GetObject',
+        Condition: { StringEquals: { 'aws:SourceVpce': 'vpce-0123456789abcdef0' } },
+        Effect: 'Allow',
+        Principal: '*',
+        Resource: 'arn:aws:s3:::proof-bucket/proof-topology/*',
+        Sid: 'ScrollSdkProofArtifactReadViaVpcEndpoint',
+      },
+    ])
+
+    const rerun = upsertProofArtifactVpcEndpointReadPolicy(
+      updated,
+      'proof-bucket',
+      'proof-topology',
+      'vpce-fedcba98765432100'
+    )
+    expect(rerun.Statement).to.have.length(2)
+    expect(rerun.Statement[1].Condition.StringEquals['aws:SourceVpce']).to.equal('vpce-fedcba98765432100')
+  })
+
   it('projects bucket, roles, auth mode, and token mappings into fresh values', () => {
     const coordinator: Record<string, any> = {
       env: [{ name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET', value: '<TODO>' }],

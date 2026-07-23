@@ -8,7 +8,10 @@ import * as path from 'node:path'
 
 import { configureProofValues, deriveAllowedProofTriples } from '../../src/utils/proof-configurator.js'
 import { scaffoldProofCoordinatorConfig } from '../../src/utils/proof-coordinator-scaffold.js'
-import { writeProverWorkerMockBundle } from '../../src/utils/prover-worker-mock-bundle.js'
+import {
+  verifyProverWorkerMockBundle,
+  writeProverWorkerMockBundle,
+} from '../../src/utils/prover-worker-mock-bundle.js'
 
 function writeValidProofRelease(root: string): {
   aggVk: Buffer
@@ -564,6 +567,64 @@ url = "https://blob-archive.example.com"
     expect(fs.readFileSync(coordinatorValuesPath, 'utf8')).to.equal(coordinatorValuesBefore)
   })
 
+  it('rejects a native S3 artifact root that omits the configured key prefix', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    expect(() => configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proof-bucket.s3.us-west-2.amazonaws.com',
+      valuesDir: path.join(root, 'values'),
+    })).to.throw('must end at key prefix /releases/v1')
+  })
+
+  it('accepts a native S3 artifact root ending at the configured key prefix', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    const result = configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proof-bucket.s3.us-west-2.amazonaws.com/releases/v1/',
+      valuesDir: path.join(root, 'values'),
+    })
+
+    expect(result.signerProofArtifactBaseUrl).to.equal('https://proof-bucket.s3.us-west-2.amazonaws.com/releases/v1')
+    expect(result.artifactReadBaseUrlMapping).to.equal('native-s3-prefix')
+  })
+
+  it('validates native path-style S3 roots against both bucket and key prefix', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    const options = {
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      manifestPaths: manifests,
+      valuesDir: path.join(root, 'values'),
+    }
+    expect(() => configureProofValues({
+      ...options,
+      signerProofArtifactBaseUrl: 'https://s3.us-west-2.amazonaws.com/proof-bucket',
+    })).to.throw('must end at /proof-bucket/releases/v1')
+
+    const result = configureProofValues({
+      ...options,
+      signerProofArtifactBaseUrl: 'https://s3.us-west-2.amazonaws.com/proof-bucket/releases/v1',
+    })
+    expect(result.artifactReadBaseUrlMapping).to.equal('native-s3-prefix')
+  })
+
+  it('classifies a custom gateway root for an operator-visible mapping warning', () => {
+    const { artifactPath, manifests } = writeValidProofRelease(root)
+    const result = configureProofValues({
+      artifactManifestPath: artifactPath,
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      manifestPaths: manifests,
+      signerProofArtifactBaseUrl: 'https://proofs.example.com',
+      valuesDir: path.join(root, 'values'),
+    })
+
+    expect(result.artifactReadBaseUrlMapping).to.equal('custom-gateway-root')
+  })
+
   it('preserves an explicitly enabled activation switch while staging topology', () => {
     const { artifactPath, manifests } = writeValidProofRelease(root)
     const withdrawalValuesPath = path.join(root, 'values/withdrawal-processor-production.yaml')
@@ -1112,7 +1173,8 @@ key_prefix = "batches"
       dir: bundleDir,
       workerToken: 'a'.repeat(64),
     })
-    expect(bundle.files).to.have.length(3)
+    expect(bundle.files).to.have.length(4)
+    expect(bundle.bundleId).to.match(/^[\da-f]{64}$/)
 
     const compose = fs.readFileSync(path.join(bundle.bundleDir, 'docker-compose.yml'), 'utf8')
     for (const requiredArg of ['--mode', 'mock', '--allow-dev-mock-prover', '--enable-prove-scroll-chunk', '--enable-prove-scroll-batch', '--enable-prove-bridge-transition']) {
@@ -1128,5 +1190,18 @@ key_prefix = "batches"
     // POSIX permission bits are intentionally expressed in octal.
     // eslint-disable-next-line no-bitwise
     expect(fs.statSync(tokenPath).mode & 0o777).to.equal(0o600)
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(bundle.bundleDir, 'bundle-manifest.json'), 'utf8'))
+    expect(manifest.bundleId).to.equal(bundle.bundleId)
+    expect(manifest.files['prover-worker.env']).to.deep.equal({ requiredMode: '0600', sensitive: true })
+    expect(JSON.stringify(manifest)).not.to.include('a'.repeat(64))
+    expect(verifyProverWorkerMockBundle({
+      dir: bundle.bundleDir,
+      expectedBundleId: bundle.bundleId,
+    }).bundleId).to.equal(bundle.bundleId)
+
+    fs.appendFileSync(path.join(bundle.bundleDir, '.env'), 'STALE_CONFIG=true\n')
+    expect(() => verifyProverWorkerMockBundle({ dir: bundle.bundleDir }))
+      .to.throw('SHA-256 does not match bundle-manifest.json')
   })
 })

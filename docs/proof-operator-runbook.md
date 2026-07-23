@@ -215,13 +215,49 @@ scrollsdk setup proof-aws-init \
 ```
 
 This step is idempotent. The coordinator/WP control-plane token and the
-external prover-worker token are separate credentials.
+external prover-worker token are separate credentials. The default
+`--artifact-read-mode external` deliberately leaves credential-free GET under
+operator control and reports it as unverified; a successful command means the
+private bucket and IRSA path are ready, not that an external worker can read an
+artifact.
+
+To let workers/signers in audited private subnets read through an existing S3
+Gateway VPC endpoint, explicitly provide the endpoint and every target-network
+route table:
+
+```bash
+scrollsdk setup proof-aws-init \
+  --aws-region <region> \
+  --eks-cluster <cluster> \
+  --network-alias <network-alias> \
+  --namespace <namespace> \
+  --artifact-read-mode vpc-endpoint \
+  --artifact-read-vpc-endpoint-id vpce-... \
+  --artifact-read-route-table-id rtb-0123456789abcdef0 \
+  --artifact-read-route-table-id rtb-0fedcba9876543210
+```
+
+The CLI verifies an available regional S3 Gateway endpoint, associates only
+the explicitly supplied route tables, and merges a fixed-Sid bucket-policy
+statement restricted by both `aws:SourceVpce` and `<key-prefix>/*`. It preserves
+unrelated bucket-policy statements and keeps all Public Access Block settings.
+Both IRSA policies are also restricted to the key prefix, including an
+`s3:prefix` condition for `ListBucket`. This is still `configured-unverified`:
+from every worker/signer network, GET one exact existing artifact key and
+require HTTP 200 before activation.
 
 ## 8. Stage proof topology
 
 The proof-object base URL must be a stable credential-free HTTP(S) GET root.
 The worker uses it to read inputs and partner signers use concrete object URLs
 carried in signing requests to fetch accepted proof artifacts.
+
+For an AWS-native virtual-hosted or path-style S3 URL, `proof-config` requires
+the URL path to include the configured artifact-store `key_prefix`; passing
+only the bucket root fails before any generated file is written. A custom HTTPS
+gateway may intentionally map its own root to the prefix, so it remains
+supported but emits a warning requiring an exact-key preflight from every
+worker/signer network.
 
 ### Mock
 
@@ -236,7 +272,8 @@ Mock mode:
 - synthesizes the canonical e2e-harness-compatible program manifests;
 - stages `dev_dummy` verifier identities in the native WP TOML and coordinator;
 - scaffolds a compatible coordinator configuration when missing;
-- writes `prover-worker-mock/docker-compose/`;
+- writes `prover-worker-mock/docker-compose/` with a non-secret
+  `bundle-manifest.json` and stable `bundleId`;
 - records `withdrawalProof.provingMode: mock` in WP values;
 - keeps `withdrawalProof.enabled` unchanged unless explicitly activated.
 
@@ -280,13 +317,21 @@ On the selected Linux host, transfer the generated bundle and run from its
 deployment root:
 
 ```bash
+scrollsdk setup proof-worker-check \
+  --bundle-dir prover-worker-mock/docker-compose \
+  --expected-bundle-id <bundleId-printed-by-proof-config>
 docker compose --project-directory prover-worker-mock/docker-compose config --quiet
 docker compose --project-directory prover-worker-mock/docker-compose up -d
 ```
 
 The generated `prover-worker.env` contains a bearer token and must remain mode
-`0600`. Confirm the worker advertises all required capabilities and performs
-claim, heartbeat, and result calls against the coordinator.
+`0600`. `proof-worker-check` does not read or print that token; it validates the
+compose and endpoint-env checksums, stable bundle ID, chunk/batch/bridge
+capabilities, and secret-file mode. Run it before transfer and again on the
+worker host. A missing manifest identifies a pre-fix bundle; a bundle-ID
+mismatch identifies a stale remote copy. Then confirm the running container
+advertises all required capabilities and performs claim, heartbeat, and result
+calls against the coordinator.
 
 ### Production worker
 

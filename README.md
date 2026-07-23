@@ -120,6 +120,7 @@ USAGE
 * [`scrollsdk setup prep-charts`](#scrollsdk-setup-prep-charts)
 * [`scrollsdk setup proof-aws-init`](#scrollsdk-setup-proof-aws-init)
 * [`scrollsdk setup proof-config`](#scrollsdk-setup-proof-config)
+* [`scrollsdk setup proof-worker-check`](#scrollsdk-setup-proof-worker-check)
 * [`scrollsdk setup push-secrets`](#scrollsdk-setup-push-secrets)
 * [`scrollsdk setup tls`](#scrollsdk-setup-tls)
 * [`scrollsdk setup verify-contracts`](#scrollsdk-setup-verify-contracts)
@@ -1557,43 +1558,55 @@ _See code: [src/commands/setup/prep-charts.ts](https://github.com/dogeos69/scrol
 
 ## `scrollsdk setup proof-aws-init`
 
-Provision the AWS side of the proof system (artifact S3 bucket, IRSA IAM roles, bearer-token secret) and project the results into the proof values files
+Provision the AWS side of the proof system (private artifact S3 bucket, prefix-scoped IRSA IAM roles, bearer-token secret, and optionally VPC-endpoint credential-free GET) and project the results into the proof values files
 
 ```
 USAGE
-  $ scrollsdk setup proof-aws-init --aws-region <value> --eks-cluster <value> --network-alias <value> [--aws-profile
-    <value>] [--bucket <value>] [--coordinator-service-account <value>] [--json] [--key-prefix <value>] [--namespace
-    <value>] [--rotate-tokens] [--secret-name <value>] [--values-dir <value>] [--withdrawal-service-account <value>]
+  $ scrollsdk setup proof-aws-init --aws-region <value> --eks-cluster <value> --network-alias <value>
+    [--artifact-read-mode external|vpc-endpoint] [--artifact-read-route-table-id <value>...]
+    [--artifact-read-vpc-endpoint-id <value>] [--aws-profile <value>] [--bucket <value>] [--coordinator-service-account
+    <value>] [--json] [--key-prefix <value>] [--namespace <value>] [--rotate-tokens] [--secret-name <value>]
+    [--values-dir <value>] [--withdrawal-service-account <value>]
 
 FLAGS
-  --aws-profile=<value>                  AWS CLI profile used for provisioning
-  --aws-region=<value>                   (required) AWS region for the bucket, roles, and secret
-  --bucket=<value>                       Proof artifact S3 bucket (default: dogeos-<network-alias>-proof-artifacts)
-  --coordinator-service-account=<value>  [default: proof-coordinator] Kubernetes service account used by
-                                         proof-coordinator (must match the Helm release-derived name or an explicit
-                                         serviceAccount.name)
-  --eks-cluster=<value>                  (required) EKS cluster name used by the IRSA trust policies
-  --json                                 Output structured JSON
-  --key-prefix=<value>                   [default: proof-topology] Object key prefix for the proof artifact store
-  --namespace=<value>                    [default: default] Kubernetes namespace of the proof workloads
-  --network-alias=<value>                (required) Resource alias used to derive deterministic bucket and IAM role
-                                         names
-  --rotate-tokens                        Replace the proof-work/prover-worker tokens in an existing secret (both
-                                         workloads must be restarted afterwards)
-  --secret-name=<value>                  [default: scroll/proof-coordinator-secrets] Secrets Manager secret holding
-                                         proof-work-token and prover-worker-token
-  --values-dir=<value>                   [default: values] Directory containing *-production.yaml files
-  --withdrawal-service-account=<value>   [default: withdrawal-processor] Kubernetes service account used by
-                                         withdrawal-processor
+  --artifact-read-mode=<option>              [default: external] Credential-free external artifact GET transport:
+                                             external leaves it operator-managed; vpc-endpoint configures a
+                                             prefix-scoped aws:SourceVpce bucket policy and route-table associations
+                                             <options: external|vpc-endpoint>
+  --artifact-read-route-table-id=<value>...  Worker/signer subnet route table to associate with the S3 gateway endpoint;
+                                             required and repeatable with --artifact-read-mode vpc-endpoint
+  --artifact-read-vpc-endpoint-id=<value>    Existing S3 Gateway VPC endpoint; required with --artifact-read-mode
+                                             vpc-endpoint
+  --aws-profile=<value>                      AWS CLI profile used for provisioning
+  --aws-region=<value>                       (required) AWS region for the bucket, roles, and secret
+  --bucket=<value>                           Proof artifact S3 bucket (default: dogeos-<network-alias>-proof-artifacts)
+  --coordinator-service-account=<value>      [default: proof-coordinator] Kubernetes service account used by
+                                             proof-coordinator (must match the Helm release-derived name or an explicit
+                                             serviceAccount.name)
+  --eks-cluster=<value>                      (required) EKS cluster name used by the IRSA trust policies
+  --json                                     Output structured JSON
+  --key-prefix=<value>                       [default: proof-topology] Object key prefix for the proof artifact store
+  --namespace=<value>                        [default: default] Kubernetes namespace of the proof workloads
+  --network-alias=<value>                    (required) Resource alias used to derive deterministic bucket and IAM role
+                                             names
+  --rotate-tokens                            Replace the proof-work/prover-worker tokens in an existing secret (both
+                                             workloads must be restarted afterwards)
+  --secret-name=<value>                      [default: scroll/proof-coordinator-secrets] Secrets Manager secret holding
+                                             proof-work-token and prover-worker-token
+  --values-dir=<value>                       [default: values] Directory containing *-production.yaml files
+  --withdrawal-service-account=<value>       [default: withdrawal-processor] Kubernetes service account used by
+                                             withdrawal-processor
 
 DESCRIPTION
-  Provision the AWS side of the proof system (artifact S3 bucket, IRSA IAM roles, bearer-token secret) and project the
-  results into the proof values files
+  Provision the AWS side of the proof system (private artifact S3 bucket, prefix-scoped IRSA IAM roles, bearer-token
+  secret, and optionally VPC-endpoint credential-free GET) and project the results into the proof values files
 
 EXAMPLES
   $ scrollsdk setup proof-aws-init --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet
 
   $ scrollsdk setup proof-aws-init --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet --bucket my-proof-artifacts --rotate-tokens
+
+  $ scrollsdk setup proof-aws-init --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet --artifact-read-mode vpc-endpoint --artifact-read-vpc-endpoint-id vpce-0123456789abcdef0 --artifact-read-route-table-id rtb-0123456789abcdef0
 ```
 
 _See code: [src/commands/setup/proof-aws-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-aws-init.ts)_
@@ -1617,8 +1630,9 @@ FLAGS
                                           mock: bridge-topology-prover-v1)
   --deployment-dir=<value>                [default: .] Deployment root containing config.toml, .data/, values/,
                                           proof-coordinator/, withdrawal-processor/, and proof-artifacts/
-  --enable-withdrawal-proof               Set withdrawalProof.enabled=true after staging; without this flag the
-                                          activation switch is preserved as-is
+  --enable-withdrawal-proof               Set withdrawalProof.enabled=true after staging and atomically project the
+                                          explicit runtime env; without this flag the activation state is preserved
+                                          as-is
   --json                                  Output structured JSON
   --proof-artifact-base-url=<value>       Credential-free public GET root for the proof object key prefix;
                                           prover-workers read inputs and partner signers read accepted proof objects
@@ -1659,6 +1673,33 @@ EXAMPLES
 ```
 
 _See code: [src/commands/setup/proof-config.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-config.ts)_
+
+## `scrollsdk setup proof-worker-check`
+
+Verify a generated mock prover-worker bundle checksum, required proof capabilities, secret-file mode, and optional expected bundle ID without reading or printing the bearer token
+
+```
+USAGE
+  $ scrollsdk setup proof-worker-check [--bundle-dir <value>] [--expected-bundle-id <value>] [--json]
+
+FLAGS
+  --bundle-dir=<value>          [default: prover-worker-mock/docker-compose] Directory containing docker-compose.yml,
+                                .env, prover-worker.env, and bundle-manifest.json
+  --expected-bundle-id=<value>  Expected bundle ID printed by proof-config; use on the worker host to reject a stale
+                                synchronized bundle
+  --json                        Output structured JSON
+
+DESCRIPTION
+  Verify a generated mock prover-worker bundle checksum, required proof capabilities, secret-file mode, and optional
+  expected bundle ID without reading or printing the bearer token
+
+EXAMPLES
+  $ scrollsdk setup proof-worker-check
+
+  $ scrollsdk setup proof-worker-check --bundle-dir /home/ubuntu/prover-worker-mock/docker-compose --expected-bundle-id <sha256>
+```
+
+_See code: [src/commands/setup/proof-worker-check.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-worker-check.ts)_
 
 ## `scrollsdk setup push-secrets`
 

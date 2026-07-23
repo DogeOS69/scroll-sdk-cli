@@ -136,6 +136,7 @@ export interface HelmSetFileBinding {
 }
 
 export interface ConfigureProofValuesResult {
+  artifactReadBaseUrlMapping: 'custom-gateway-root' | 'custom-prefix-path' | 'native-s3-prefix'
   configFile: string
   families: ProofFamily[]
   files: string[]
@@ -461,6 +462,59 @@ export function normalizeSignerProofArtifactBaseUrl(value: string | undefined): 
 
   parsed.pathname = parsed.pathname.replaceAll(/\/+$/g, '') || '/'
   return parsed.toString().replaceAll(/\/$/g, '')
+}
+
+/**
+ * Validate that an AWS-native S3 GET root includes the artifact-store key
+ * prefix. Custom gateways may intentionally map their own root to that prefix,
+ * so they remain supported but are classified for an operator-visible warning.
+ */
+export function classifyProofArtifactBaseUrlMapping(
+  normalizedBaseUrl: string,
+  store: { bucket: string; keyPrefix: string; region: string }
+): ConfigureProofValuesResult['artifactReadBaseUrlMapping'] {
+  const parsed = new URL(normalizedBaseUrl)
+  const hostname = parsed.hostname.toLowerCase()
+  const nativeS3Hosts = new Set([
+    `${store.bucket}.s3.${store.region}.amazonaws.com`,
+    `${store.bucket}.s3.amazonaws.com`,
+  ])
+  const nativePathStyleHosts = new Set([
+    `s3.${store.region}.amazonaws.com`,
+    `s3-${store.region}.amazonaws.com`,
+    's3.amazonaws.com',
+  ])
+  const normalizedPath = parsed.pathname.replaceAll(/^\/+|\/+$/g, '')
+  const normalizedPrefix = store.keyPrefix.replaceAll(/^\/+|\/+$/g, '')
+
+  if (nativeS3Hosts.has(hostname)) {
+    if (normalizedPath !== normalizedPrefix) {
+      throw new Error(
+        `proof artifact base URL for native S3 bucket ${store.bucket} must end at key prefix /${normalizedPrefix}; `
+        + `got path /${normalizedPath}. Use https://${store.bucket}.s3.${store.region}.amazonaws.com/${normalizedPrefix}`
+      )
+    }
+
+    return 'native-s3-prefix'
+  }
+
+  if (nativePathStyleHosts.has(hostname)) {
+    const expectedPath = `${store.bucket}/${normalizedPrefix}`
+    if (normalizedPath !== expectedPath) {
+      throw new Error(
+        `proof artifact base URL for native path-style S3 bucket ${store.bucket} must end at /${expectedPath}; `
+        + `got path /${normalizedPath}`
+      )
+    }
+
+    return 'native-s3-prefix'
+  }
+
+  if (normalizedPath === normalizedPrefix || normalizedPath.endsWith(`/${normalizedPrefix}`)) {
+    return 'custom-prefix-path'
+  }
+
+  return 'custom-gateway-root'
 }
 
 function defaultVerifierId(manifest: ProofProgramManifest): string {
@@ -1557,7 +1611,11 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
   const signerProofArtifactBaseUrl = normalizeSignerProofArtifactBaseUrl(signerProofArtifactBaseUrlInput)
   assertIdentifier(scrollBatchBackendProfile, 'Scroll batch backend profile')
   assertIdentifier(bridgeBackendProfile, 'Bridge backend profile')
-  readCoordinatorRuntimeProjection(files[0], configFile)
+  const runtimeProjection = readCoordinatorRuntimeProjection(files[0], configFile)
+  const artifactReadBaseUrlMapping = classifyProofArtifactBaseUrlMapping(
+    signerProofArtifactBaseUrl,
+    runtimeProjection
+  )
   validateCoordinatorMaterializerTopology(configFile, provingMode)
   // Validate the partner signer policy projection now, even though the actual
   // docker-compose policy bundle is exported after bridge genesis. This keeps
@@ -1625,6 +1683,7 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
   writeGeneratedTextAtomic(statementNamespaceFile, statementNamespaceConfig)
 
   return {
+    artifactReadBaseUrlMapping,
     configFile,
     families: [...manifests.keys()].sort(),
     files: [

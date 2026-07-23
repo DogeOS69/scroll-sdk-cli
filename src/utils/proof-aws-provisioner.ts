@@ -20,14 +20,17 @@ export interface ProofAwsRolePlan {
 }
 
 export interface ProofAwsProvisionInput {
+  artifactRead?: ProofArtifactReadPlan
   bucket: string
   coordinatorRole: ProofAwsRolePlan
+  keyPrefix: string
   rotateTokens?: boolean
   secretName: string
   withdrawalRole: ProofAwsRolePlan
 }
 
 export interface ProofAwsProvisionResult {
+  artifactReadTransport: ProofArtifactReadTransportResult
   bucket: string
   bucketCreated: boolean
   coordinatorRoleArn: string
@@ -36,7 +39,23 @@ export interface ProofAwsProvisionResult {
   withdrawalRoleArn: string
 }
 
+export type ProofArtifactReadMode = 'external' | 'vpc-endpoint'
+
+export interface ProofArtifactReadPlan {
+  mode: ProofArtifactReadMode
+  routeTableIds?: string[]
+  vpcEndpointId?: string
+}
+
+export interface ProofArtifactReadTransportResult {
+  mode: ProofArtifactReadMode
+  routeTableIds?: string[]
+  status: 'configured-unverified' | 'operator-managed-unverified'
+  vpcEndpointId?: string
+}
+
 export const PROOF_SECRET_PROPERTIES = ['proof-work-token', 'prover-worker-token'] as const
+export const PROOF_ARTIFACT_VPCE_POLICY_SID = 'ScrollSdkProofArtifactReadViaVpcEndpoint'
 
 export interface ProofAwsValuesProjection {
   bucket: string
@@ -58,6 +77,86 @@ function upsertEnv(values: Record<string, any>, name: string, value: string, lab
     delete existing.valueFrom
   } else {
     values.env.push({ name, value })
+  }
+}
+
+export function normalizeProofKeyPrefix(value: string): string {
+  const prefix = value.trim()
+  if (!prefix || Buffer.byteLength(prefix) > 256) {
+    throw new Error('proof artifact key prefix must be a non-empty string of at most 256 bytes')
+  }
+
+  if (prefix.startsWith('/') || prefix.endsWith('/')) {
+    throw new Error('proof artifact key prefix must not start or end with /')
+  }
+
+  const segments = prefix.split('/')
+  if (segments.some(segment => !segment || segment === '.' || segment === '..')) {
+    throw new Error('proof artifact key prefix must contain only non-empty path segments and must not contain . or ..')
+  }
+
+  const forbiddenCharacters = ['\\', '*', '?', '[', ']', '{', '}']
+  const hasControlCharacter = [...prefix].some(character => {
+    const codePoint = character.codePointAt(0) as number
+    return codePoint < 32 || codePoint === 127
+  })
+  if (forbiddenCharacters.some(character => prefix.includes(character)) || hasControlCharacter) {
+    throw new Error('proof artifact key prefix must not contain wildcards, backslashes, braces, or control characters')
+  }
+
+  return prefix
+}
+
+export function buildProofArtifactStorePolicy(bucket: string, keyPrefix: string): Record<string, any> {
+  const prefix = normalizeProofKeyPrefix(keyPrefix)
+  return {
+    Statement: [
+      {
+        Action: ['s3:GetObject', 's3:PutObject'],
+        Effect: 'Allow',
+        Resource: `arn:aws:s3:::${bucket}/${prefix}/*`,
+      },
+      {
+        Action: ['s3:ListBucket'],
+        Condition: {
+          StringLike: {
+            's3:prefix': [prefix, `${prefix}/*`],
+          },
+        },
+        Effect: 'Allow',
+        Resource: `arn:aws:s3:::${bucket}`,
+      },
+    ],
+    Version: '2012-10-17',
+  }
+}
+
+export function upsertProofArtifactVpcEndpointReadPolicy(
+  existingPolicy: Record<string, any>,
+  bucket: string,
+  keyPrefix: string,
+  vpcEndpointId: string
+): Record<string, any> {
+  const prefix = normalizeProofKeyPrefix(keyPrefix)
+  const statements = Array.isArray(existingPolicy.Statement)
+    ? [...existingPolicy.Statement]
+    : existingPolicy.Statement ? [existingPolicy.Statement] : []
+  const readStatement = {
+    Action: 's3:GetObject',
+    Condition: { StringEquals: { 'aws:SourceVpce': vpcEndpointId } },
+    Effect: 'Allow',
+    Principal: '*',
+    Resource: `arn:aws:s3:::${bucket}/${prefix}/*`,
+    Sid: PROOF_ARTIFACT_VPCE_POLICY_SID,
+  }
+  const existingIndex = statements.findIndex((statement: any) => statement?.Sid === PROOF_ARTIFACT_VPCE_POLICY_SID)
+  if (existingIndex >= 0) statements[existingIndex] = readStatement
+  else statements.push(readStatement)
+
+  return {
+    ...existingPolicy,
+    Statement: statements,
+    Version: existingPolicy.Version || '2012-10-17',
   }
 }
 
@@ -107,9 +206,10 @@ export function applyProofAwsValues(
   withdrawalValues: Record<string, any>,
   projection: ProofAwsValuesProjection
 ): void {
+  const keyPrefix = normalizeProofKeyPrefix(projection.keyPrefix)
   upsertEnv(coordinatorValues, 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET', projection.bucket, 'proof-coordinator values')
   upsertEnv(coordinatorValues, 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__REGION', projection.region, 'proof-coordinator values')
-  upsertEnv(coordinatorValues, 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__KEY_PREFIX', projection.keyPrefix, 'proof-coordinator values')
+  upsertEnv(coordinatorValues, 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__KEY_PREFIX', keyPrefix, 'proof-coordinator values')
   bindIrsaServiceAccount(coordinatorValues, projection.coordinatorServiceAccount, projection.coordinatorRoleArn)
 
   if (!hasProofTokenMappings(coordinatorValues)) {
@@ -147,23 +247,29 @@ export function applyProofAwsValues(
  * never rotated unless explicitly requested.
  */
 export class ProofAwsProvisioner {
-  private readonly aws: AwsCliRunner
+  private readonly aws: Pick<AwsCliRunner, 'json' | 'run' | 'text'>
 
   constructor(
     private readonly jsonCtx: JsonOutputContext,
-    profile?: string
+    profile?: string,
+    aws?: Pick<AwsCliRunner, 'json' | 'run' | 'text'>
   ) {
-    this.aws = new AwsCliRunner(profile)
+    this.aws = aws || new AwsCliRunner(profile)
   }
 
   provision(identity: ProofAwsIdentity, input: ProofAwsProvisionInput): ProofAwsProvisionResult {
+    const keyPrefix = normalizeProofKeyPrefix(input.keyPrefix)
     const bucketCreated = this.ensureBucket(identity.awsRegion, input.bucket)
+    const artifactReadTransport = input.artifactRead?.mode === 'vpc-endpoint'
+      ? this.ensureVpcEndpointArtifactRead(identity.awsRegion, input.bucket, keyPrefix, input.artifactRead)
+      : { mode: 'external' as const, status: 'operator-managed-unverified' as const }
     const trust = this.discoverIrsaTrust(identity)
-    const withdrawalRoleArn = this.ensureIrsaRole(identity, trust, input.withdrawalRole, input.bucket)
-    const coordinatorRoleArn = this.ensureIrsaRole(identity, trust, input.coordinatorRole, input.bucket)
+    const withdrawalRoleArn = this.ensureIrsaRole(identity, trust, input.withdrawalRole, input.bucket, keyPrefix)
+    const coordinatorRoleArn = this.ensureIrsaRole(identity, trust, input.coordinatorRole, input.bucket, keyPrefix)
     const secretAction = this.ensureTokenSecret(identity.awsRegion, input.secretName, input.rotateTokens === true)
 
     return {
+      artifactReadTransport,
       bucket: input.bucket,
       bucketCreated,
       coordinatorRoleArn,
@@ -229,7 +335,8 @@ export class ProofAwsProvisioner {
     identity: ProofAwsIdentity,
     trust: { accountId: string; issuerHostPath: string },
     plan: ProofAwsRolePlan,
-    bucket: string
+    bucket: string,
+    keyPrefix: string
   ): string {
     const roleArn = `arn:aws:iam::${trust.accountId}:role/${plan.roleName}`
     const trustPolicyDocument = JSON.stringify({
@@ -272,8 +379,7 @@ export class ProofAwsProvisioner {
 
     // GetObject + PutObject cover artifact transport and staging->accepted
     // promotion (CopyObject authorizes as a read plus a write); ListBucket
-    // covers store scans. Tighten to a key prefix once the deployment's object
-    // layout is settled.
+    // covers scans, restricted to the deployment's normalized object prefix.
     this.aws.json([
       'iam',
       'put-role-policy',
@@ -282,23 +388,9 @@ export class ProofAwsProvisioner {
       '--policy-name',
       'proof-artifact-store',
       '--policy-document',
-      JSON.stringify({
-        Statement: [
-          {
-            Action: ['s3:GetObject', 's3:PutObject'],
-            Effect: 'Allow',
-            Resource: `arn:aws:s3:::${bucket}/*`,
-          },
-          {
-            Action: ['s3:ListBucket'],
-            Effect: 'Allow',
-            Resource: `arn:aws:s3:::${bucket}`,
-          },
-        ],
-        Version: '2012-10-17',
-      }),
+      JSON.stringify(buildProofArtifactStorePolicy(bucket, keyPrefix)),
     ])
-    this.jsonCtx.info(`proof-aws: updated IAM proof artifact policy: ${plan.roleName} -> ${bucket}`)
+    this.jsonCtx.info(`proof-aws: updated IAM proof artifact policy: ${plan.roleName} -> ${bucket}/${keyPrefix}/*`)
     return roleArn
   }
 
@@ -330,5 +422,115 @@ export class ProofAwsProvisioner {
 
     this.jsonCtx.info(`proof-aws: reusing existing token secret: ${secretName} (pass --rotate-tokens to replace)`)
     return 'reused'
+  }
+
+  private ensureVpcEndpointArtifactRead(
+    region: string,
+    bucket: string,
+    keyPrefix: string,
+    plan: ProofArtifactReadPlan
+  ): ProofArtifactReadTransportResult {
+    const endpointId = plan.vpcEndpointId?.trim()
+    const routeTableIds = [...new Set((plan.routeTableIds || []).map(value => value.trim()).filter(Boolean))]
+    if (!endpointId || !/^vpce-[\da-f]+$/i.test(endpointId)) {
+      throw new Error('vpc-endpoint artifact read mode requires a valid --artifact-read-vpc-endpoint-id')
+    }
+
+    if (routeTableIds.length === 0 || routeTableIds.some(value => !/^rtb-[\da-f]+$/i.test(value))) {
+      throw new Error('vpc-endpoint artifact read mode requires at least one valid --artifact-read-route-table-id from the worker/signer network')
+    }
+
+    const described = this.aws.json(
+      ['ec2', 'describe-vpc-endpoints', '--vpc-endpoint-ids', endpointId],
+      { region }
+    )
+    const endpoint = described?.VpcEndpoints?.[0]
+    if (!endpoint) throw new Error(`VPC endpoint ${endpointId} was not returned by AWS`)
+    if (endpoint.State !== 'available') {
+      throw new Error(`VPC endpoint ${endpointId} is not available (state=${String(endpoint.State)})`)
+    }
+
+    if (endpoint.VpcEndpointType !== 'Gateway' || endpoint.ServiceName !== `com.amazonaws.${region}.s3`) {
+      throw new Error(
+        `VPC endpoint ${endpointId} must be the ${region} S3 Gateway endpoint; `
+        + `got type=${String(endpoint.VpcEndpointType)} service=${String(endpoint.ServiceName)}`
+      )
+    }
+
+    const describedRouteTables = this.aws.json(
+      ['ec2', 'describe-route-tables', '--route-table-ids', ...routeTableIds],
+      { region }
+    )
+    const routeTables = Array.isArray(describedRouteTables?.RouteTables) ? describedRouteTables.RouteTables : []
+    const returnedRouteTableIds = new Set<string>(routeTables.map((routeTable: any) => routeTable.RouteTableId))
+    const unavailableRouteTableIds = routeTableIds.filter(value => !returnedRouteTableIds.has(value))
+    if (unavailableRouteTableIds.length > 0) {
+      throw new Error(`worker/signer route table(s) were not returned by AWS: ${unavailableRouteTableIds.join(', ')}`)
+    }
+
+    const wrongVpcRouteTableIds = routeTables
+      .filter((routeTable: any) => routeTable.VpcId !== endpoint.VpcId)
+      .map((routeTable: any) => routeTable.RouteTableId)
+    if (wrongVpcRouteTableIds.length > 0) {
+      throw new Error(
+        `route table(s) ${wrongVpcRouteTableIds.join(', ')} are not in VPC ${String(endpoint.VpcId)} of endpoint ${endpointId}`
+      )
+    }
+
+    const existingRouteTables = new Set<string>(Array.isArray(endpoint.RouteTableIds) ? endpoint.RouteTableIds : [])
+    const missingRouteTables = routeTableIds.filter(value => !existingRouteTables.has(value))
+    if (missingRouteTables.length > 0) {
+      this.aws.run([
+        'ec2',
+        'modify-vpc-endpoint',
+        '--vpc-endpoint-id',
+        endpointId,
+        '--add-route-table-ids',
+        ...missingRouteTables,
+      ], { region })
+      this.jsonCtx.info(`proof-aws: associated S3 gateway endpoint ${endpointId} with route table(s): ${missingRouteTables.join(', ')}`)
+    }
+
+    const updatedPolicy = upsertProofArtifactVpcEndpointReadPolicy(
+      this.readBucketPolicy(region, bucket),
+      bucket,
+      keyPrefix,
+      endpointId
+    )
+    this.aws.run([
+      's3api',
+      'put-bucket-policy',
+      '--bucket',
+      bucket,
+      '--policy',
+      JSON.stringify(updatedPolicy),
+    ], { region })
+    this.jsonCtx.info(`proof-aws: configured credential-free GET for ${bucket}/${keyPrefix}/* via ${endpointId}`)
+
+    return {
+      mode: 'vpc-endpoint',
+      routeTableIds,
+      status: 'configured-unverified',
+      vpcEndpointId: endpointId,
+    }
+  }
+
+  private readBucketPolicy(region: string, bucket: string): Record<string, any> {
+    try {
+      const raw = this.aws.text(
+        ['s3api', 'get-bucket-policy', '--bucket', bucket],
+        { query: 'Policy', region }
+      )
+      const parsed = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new TypeError('bucket policy is not a JSON object')
+      }
+
+      return parsed
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (message.includes('NoSuchBucketPolicy')) return { Statement: [], Version: '2012-10-17' }
+      throw new Error(`cannot read existing bucket policy for ${bucket}: ${message}`)
+    }
   }
 }

@@ -170,10 +170,13 @@ Automation should assume each command owns only its documented managed blocks
 and artifacts. Relevant examples:
 
 - `proof-config` rewrites marked proof/verifier blocks and preserves unrelated
-  native TOML settings;
+  native TOML settings; AWS-native artifact roots must match the configured key
+  prefix, and mock bundles carry a verifiable stable bundle ID;
 - `export-signer-policy` regenerates the bundle from current deployment facts;
 - `prep-charts` rebuilds managed values and removes retired generated files;
-- `proof-aws-init` is designed to reuse matching cloud resources.
+- `proof-aws-init` is designed to reuse matching cloud resources. Its default
+  external artifact-read transport remains explicitly unverified; VPC endpoint
+  mode requires audited endpoint and route-table IDs.
 
 Before retrying after partial failure:
 

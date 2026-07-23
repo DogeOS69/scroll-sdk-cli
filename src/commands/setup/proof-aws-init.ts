@@ -35,14 +35,18 @@ function writeValuesAtomic(filePath: string, value: any): void {
 }
 
 export default class ProofAwsInit extends Command {
-  static override description = 'Provision the AWS side of the proof system (artifact S3 bucket, IRSA IAM roles, bearer-token secret) and project the results into the proof values files'
+  static override description = 'Provision the AWS side of the proof system (private artifact S3 bucket, prefix-scoped IRSA IAM roles, bearer-token secret, and optionally VPC-endpoint credential-free GET) and project the results into the proof values files'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %> --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet',
     '<%= config.bin %> <%= command.id %> --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet --bucket my-proof-artifacts --rotate-tokens',
+    '<%= config.bin %> <%= command.id %> --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet --artifact-read-mode vpc-endpoint --artifact-read-vpc-endpoint-id vpce-0123456789abcdef0 --artifact-read-route-table-id rtb-0123456789abcdef0',
   ]
 
   static override flags = {
+    'artifact-read-mode': Flags.string({ default: 'external', description: 'Credential-free external artifact GET transport: external leaves it operator-managed; vpc-endpoint configures a prefix-scoped aws:SourceVpce bucket policy and route-table associations', options: ['external', 'vpc-endpoint'] }),
+    'artifact-read-route-table-id': Flags.string({ description: 'Worker/signer subnet route table to associate with the S3 gateway endpoint; required and repeatable with --artifact-read-mode vpc-endpoint', multiple: true }),
+    'artifact-read-vpc-endpoint-id': Flags.string({ description: 'Existing S3 Gateway VPC endpoint; required with --artifact-read-mode vpc-endpoint' }),
     'aws-profile': Flags.string({ description: 'AWS CLI profile used for provisioning' }),
     'aws-region': Flags.string({ description: 'AWS region for the bucket, roles, and secret', required: true }),
     bucket: Flags.string({ description: 'Proof artifact S3 bucket (default: dogeos-<network-alias>-proof-artifacts)' }),
@@ -71,6 +75,17 @@ export default class ProofAwsInit extends Command {
       const alias = sanitizeName(flags['network-alias'])
       const cluster = sanitizeName(flags['eks-cluster'])
       const bucket = flags.bucket || `dogeos-${alias}-proof-artifacts`
+      const artifactReadMode = flags['artifact-read-mode'] as 'external' | 'vpc-endpoint'
+      const artifactReadRouteTableIds = flags['artifact-read-route-table-id'] || []
+      const artifactReadVpcEndpointId = flags['artifact-read-vpc-endpoint-id']
+      if (artifactReadMode === 'vpc-endpoint' && (!artifactReadVpcEndpointId || artifactReadRouteTableIds.length === 0)) {
+        throw new Error('--artifact-read-mode vpc-endpoint requires --artifact-read-vpc-endpoint-id and at least one --artifact-read-route-table-id')
+      }
+
+      if (artifactReadMode === 'external' && (artifactReadVpcEndpointId || artifactReadRouteTableIds.length > 0)) {
+        throw new Error('--artifact-read-vpc-endpoint-id/--artifact-read-route-table-id require --artifact-read-mode vpc-endpoint')
+      }
+
       const provisioner = new ProofAwsProvisioner(json, flags['aws-profile'])
       const result = provisioner.provision(
         {
@@ -80,12 +95,18 @@ export default class ProofAwsInit extends Command {
           networkAlias: flags['network-alias'],
         },
         {
+          artifactRead: {
+            mode: artifactReadMode,
+            routeTableIds: artifactReadRouteTableIds,
+            vpcEndpointId: artifactReadVpcEndpointId,
+          },
           bucket,
           coordinatorRole: {
             description: 'DogeOS proof-coordinator artifact store role',
             roleName: truncateIamRoleName(`dogeos-${alias}-${cluster}-proof-coordinator`),
             serviceAccount: flags['coordinator-service-account'],
           },
+          keyPrefix: flags['key-prefix'],
           rotateTokens: flags['rotate-tokens'],
           secretName: flags['secret-name'],
           withdrawalRole: {
@@ -110,6 +131,16 @@ export default class ProofAwsInit extends Command {
       writeValuesAtomic(withdrawalValuesPath, withdrawalValues)
 
       json.logSuccess(`Provisioned proof AWS resources: bucket=${result.bucket} secret=${result.secretName} (${result.secretAction})`)
+      if (result.artifactReadTransport.mode === 'external') {
+        json.addWarning(
+          'proof AWS private store and IRSA are ready, but credential-free external GET remains operator-managed and unverified; configure a controlled gateway or rerun with --artifact-read-mode vpc-endpoint, then preflight an exact artifact key from every worker/signer network'
+        )
+      } else {
+        json.addWarning(
+          `credential-free GET policy and route-table associations are configured via ${result.artifactReadTransport.vpcEndpointId}, but transport remains unverified until an exact artifact key returns 200 from every worker/signer network`
+        )
+      }
+
       json.success({
         ...result,
         files: [coordinatorValuesPath, withdrawalValuesPath],
