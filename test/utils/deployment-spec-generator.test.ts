@@ -80,7 +80,7 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       beaconRpcUrl: 'https://ethereum-sepolia-beacon-api.publicnode.com',
       chain: 'sepolia',
       finalizationDepth: 64,
-      l1RpcUrl: 'https://sepolia.drpc.org',
+      l1RpcUrl: 'https://gateway.tenderly.co/public/sepolia',
       minFinality: 'finalized',
     },
     frontend: {
@@ -952,7 +952,7 @@ describe('deployment-spec-generator', () => {
 
       expect(output).to.include('[ethereumDa]');
       expect(output).to.include('chain = "sepolia"');
-      expect(output).to.include('submitterRpcUrl = "https://sepolia.drpc.org"');
+      expect(output).to.include('submitterRpcUrl = "https://gateway.tenderly.co/public/sepolia"');
       expect(output).to.include('beaconRpcUrl = "https://ethereum-sepolia-beacon-api.publicnode.com"');
       expect(output).not.to.include('submitterPrivateKey');
       expect(output).not.to.include('eth-da-indexer.sqlite');
@@ -1324,7 +1324,7 @@ describe('deployment-spec-generator', () => {
 
       const feeOracleValues = yaml.load(files['fee-oracle-production.yaml']) as any;
       const feeOracleEnv = feeOracleValues.configMaps.env.data;
-      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL).to.equal('https://sepolia.drpc.org');
+      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL).to.equal('https://gateway.tenderly.co/public/sepolia');
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_L2__CHAIN_ID).to.equal(String(spec.network.l2ChainId));
       expect(feeOracleEnv).not.to.have.property('DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE');
       expect(feeOracleEnv).not.to.have.property('DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__FORMULA');

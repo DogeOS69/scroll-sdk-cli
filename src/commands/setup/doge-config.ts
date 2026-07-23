@@ -52,7 +52,7 @@ const ETHEREUM_DA_DEFAULTS: Record<EthereumDaChain, {
     beaconRpcUrl: 'https://ethereum-sepolia-beacon-api.publicnode.com',
     chainId: '11155111',
     minFinality: 'safe',
-    submitterRpcUrl: 'https://sepolia.drpc.org',
+    submitterRpcUrl: 'https://gateway.tenderly.co/public/sepolia',
   },
 }
 

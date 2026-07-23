@@ -11,7 +11,7 @@ beaconRpcUrl = "https://ethereum-sepolia-beacon-api.publicnode.com"
 chain = "sepolia"
 chainId = "11155111"
 minFinality = "safe"
-submitterRpcUrl = "https://sepolia.drpc.org"
+submitterRpcUrl = "https://gateway.tenderly.co/public/sepolia"
 
 # Wallet Configuration
 [wallet]
