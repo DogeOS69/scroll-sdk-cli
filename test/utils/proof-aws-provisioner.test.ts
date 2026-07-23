@@ -185,6 +185,34 @@ describe('proof-aws-provisioner values projection', () => {
     expect(rerun.Statement[1].Condition.StringEquals['aws:SourceVpce']).to.equal('vpce-fedcba98765432100')
   })
 
+  it('migrates an equivalent legacy bucket-wide VPC endpoint read without retaining broad access', () => {
+    const updated = upsertProofArtifactVpcEndpointReadPolicy(
+      {
+        Statement: [
+          { Action: 's3:ListBucket', Effect: 'Deny', Resource: 'arn:aws:s3:::proof-bucket', Sid: 'OperatorGuard' },
+          {
+            Action: 's3:GetObject',
+            Condition: { StringEquals: { 'aws:SourceVpce': 'vpce-0123456789abcdef0' } },
+            Effect: 'Allow',
+            Principal: '*',
+            Resource: 'arn:aws:s3:::proof-bucket/*',
+            Sid: 'WorkerAnonymousReadViaVpcEndpoint',
+          },
+        ],
+        Version: '2012-10-17',
+      },
+      'proof-bucket',
+      'proof-topology',
+      'vpce-0123456789abcdef0'
+    )
+
+    expect(updated.Statement).to.have.length(2)
+    expect(updated.Statement[0].Sid).to.equal('OperatorGuard')
+    expect(updated.Statement[1].Sid).to.equal('ScrollSdkProofArtifactReadViaVpcEndpoint')
+    expect(updated.Statement[1].Resource).to.equal('arn:aws:s3:::proof-bucket/proof-topology/*')
+    expect(JSON.stringify(updated)).not.to.include('arn:aws:s3:::proof-bucket/*')
+  })
+
   it('projects bucket, roles, auth mode, and token mappings into fresh values', () => {
     const coordinator: Record<string, any> = {
       env: [{ name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET', value: '<TODO>' }],

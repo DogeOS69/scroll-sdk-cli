@@ -149,13 +149,31 @@ export function upsertProofArtifactVpcEndpointReadPolicy(
     Resource: `arn:aws:s3:::${bucket}/${prefix}/*`,
     Sid: PROOF_ARTIFACT_VPCE_POLICY_SID,
   }
-  const existingIndex = statements.findIndex((statement: any) => statement?.Sid === PROOF_ARTIFACT_VPCE_POLICY_SID)
-  if (existingIndex >= 0) statements[existingIndex] = readStatement
-  else statements.push(readStatement)
+  const bucketResourcePrefix = `arn:aws:s3:::${bucket}/`
+  const replaceableReadStatement = (statement: any): boolean => {
+    if (statement?.Sid === PROOF_ARTIFACT_VPCE_POLICY_SID) return true
+    const actions = Array.isArray(statement?.Action) ? statement.Action : [statement?.Action]
+    const resources = Array.isArray(statement?.Resource) ? statement.Resource : [statement?.Resource]
+    const condition = statement?.Condition
+    const stringEquals = condition?.StringEquals
+    return statement?.Effect === 'Allow'
+      && statement?.Principal === '*'
+      && actions.length === 1
+      && actions[0] === 's3:GetObject'
+      && resources.length === 1
+      && typeof resources[0] === 'string'
+      && resources[0].startsWith(bucketResourcePrefix)
+      && condition && Object.keys(condition).length === 1
+      && stringEquals && Object.keys(stringEquals).length === 1
+      && stringEquals['aws:SourceVpce'] === vpcEndpointId
+  }
+
+  const preservedStatements = statements.filter(statement => !replaceableReadStatement(statement))
+  preservedStatements.push(readStatement)
 
   return {
     ...existingPolicy,
-    Statement: statements,
+    Statement: preservedStatements,
     Version: existingPolicy.Version || '2012-10-17',
   }
 }
