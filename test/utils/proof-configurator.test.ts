@@ -247,7 +247,8 @@ max_items = 42
     expect(values.service?.main?.ports?.['proof-work']).to.equal(undefined)
     const native = toml.parse(fs.readFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), 'utf8')) as any
     expect(native.proof_system.mode).to.equal('disabled')
-    expect(native.proof_work_api.enabled).to.equal(false)
+    expect(native.proof_work_api).to.equal(undefined)
+    expect(values.env.some((item: any) => item.name.startsWith('DOGEOS_WITHDRAWAL_PROOF_WORK_API__'))).to.equal(false)
   })
 
   it('fails closed when the required native WithdrawalProcessor TOML template is missing', () => {
@@ -373,7 +374,6 @@ max_items = 42
       DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE: 'production',
       DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE: 'true',
       DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION: 'true',
-      DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED: 'true',
     })
     expect(withdrawal.withdrawalProof.enabled).to.equal(true)
     expect(withdrawal.withdrawalProof.mode).to.equal('production')
@@ -566,7 +566,7 @@ url = "https://blob-archive.example.com"
     expect(env.DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE).to.equal('production')
     expect(env.DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION).to.equal('true')
     expect(env.DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE).to.equal('true')
-    expect(env.DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED).to.equal('true')
+    expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED')
     expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_PROOF_SYSTEM__DEV_DUMMY__SCROLL_INPUT')
   })
 
@@ -1074,7 +1074,6 @@ transport = "s3"
       DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE: 'dev_dummy',
       DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE: 'true',
       DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION: 'true',
-      DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED: 'true',
     })
     expect(withdrawal.withdrawalProof).to.deep.include({ enabled: true, mode: 'mock', provingMode: 'mock' })
     expect(withdrawal.configMaps['agg-verifying-key']).to.equal(undefined)

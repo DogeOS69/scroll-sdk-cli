@@ -96,7 +96,10 @@ describe('setup proof-config path convention', () => {
       expect(values.withdrawalProof.provingMode).to.equal(undefined)
       expect(values.configMaps['proof-manifests']).to.equal(undefined)
       expect(values.service.main.ports['proof-work']).to.equal(undefined)
-      expect(fs.readFileSync('withdrawal-processor/WithdrawalProcessor.toml', 'utf8')).to.include('mode = "disabled"')
+      const native = toml.parse(fs.readFileSync('withdrawal-processor/WithdrawalProcessor.toml', 'utf8')) as any
+      expect(native.proof_system.mode).to.equal('disabled')
+      expect(native.proof_work_api).to.equal(undefined)
+      expect(values.env.some((item: any) => item.name.startsWith('DOGEOS_WITHDRAWAL_PROOF_WORK_API__'))).to.equal(false)
 
       expect(validateProofDeploymentContract(root).mode).to.equal('disabled')
     } finally {

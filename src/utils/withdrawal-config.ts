@@ -15,12 +15,15 @@ export const WITHDRAWAL_DEPLOYMENT_END = '# END scrollsdk managed deployment con
 /** Default native config location relative to the deployment working directory. */
 export const WITHDRAWAL_NATIVE_CONFIG_RELPATH = 'withdrawal-processor/WithdrawalProcessor.toml'
 export const WITHDRAWAL_PROOF_ACTIVATION_ENV = {
-  apiEnabled: 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED',
   devDummyScrollInput: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__DEV_DUMMY__SCROLL_INPUT',
   mode: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE',
   requireBridge: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE',
   requireScroll: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION',
 } as const
+// A partial proof_work_api environment table replaces the complete native TOML
+// table in Figment. Keep recognizing the old switch so setup removes it, but
+// never project it again; proof-work topology is owned wholly by native TOML.
+const RETIRED_WITHDRAWAL_PROOF_API_ENABLED_ENV = 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED'
 
 const MANAGED_PROOF_TABLES = new Set([
   'local_bridge_proof_runtime',
@@ -380,7 +383,7 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
 
 /**
  * Remove plain-value DOGEOS_WITHDRAWAL_* env entries that are now TOML-owned.
- * Secret-backed entries (valueFrom) and the four Helm activation projections
+ * Secret-backed entries (valueFrom) and the proof-system activation projections
  * stay; figment still honors ad-hoc env overrides applied outside values.
  */
 export function stripMigratedWithdrawalEnv(
@@ -491,10 +494,11 @@ export function removeInlineWithdrawalConfig(values: Record<string, any>): strin
 }
 
 /**
- * Atomically project CLI-owned proof activation state into explicit Rust env.
- * The generic chart only renders these values and has no knowledge of proof
- * modes. exact_mock is present only for active mock mode; application topology
- * remains in the native TOML.
+ * Atomically project CLI-owned proof-system activation state into explicit Rust
+ * env. The generic chart only renders these values and has no knowledge of
+ * proof modes. exact_mock is present only for active mock mode; proof-work API
+ * topology remains wholly in native TOML so Figment never replaces that table
+ * with an incomplete environment projection.
  */
 export function ensureWithdrawalProofActivationSwitch(
   values: Record<string, any>,
@@ -526,10 +530,6 @@ export function ensureWithdrawalProofActivationSwitch(
       name: WITHDRAWAL_PROOF_ACTIVATION_ENV.requireBridge,
       value: enabled ? 'true' : 'false',
     },
-    {
-      name: WITHDRAWAL_PROOF_ACTIVATION_ENV.apiEnabled,
-      value: enabled ? 'true' : 'false',
-    },
   ]
   if (proofSystemMode === 'mock') {
     activationEnv.push({
@@ -544,7 +544,8 @@ export function ensureWithdrawalProofActivationSwitch(
 }
 
 export function isWithdrawalProofActivationEnv(name: string): boolean {
-  return Object.values(WITHDRAWAL_PROOF_ACTIVATION_ENV).includes(
-    name as typeof WITHDRAWAL_PROOF_ACTIVATION_ENV[keyof typeof WITHDRAWAL_PROOF_ACTIVATION_ENV]
-  )
+  return name === RETIRED_WITHDRAWAL_PROOF_API_ENABLED_ENV
+    || Object.values(WITHDRAWAL_PROOF_ACTIVATION_ENV).includes(
+      name as typeof WITHDRAWAL_PROOF_ACTIVATION_ENV[keyof typeof WITHDRAWAL_PROOF_ACTIVATION_ENV]
+    )
 }

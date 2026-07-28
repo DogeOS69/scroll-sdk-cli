@@ -148,13 +148,16 @@ ${WITHDRAWAL_DEPLOYMENT_END}
     ])
   })
 
-  it('atomically projects active mock env while preserving ordinary and secret env', () => {
+  it('atomically projects active mock env while removing the retired partial proof-work env', () => {
     const values: Record<string, any> = {
       env: [
         { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE', value: 'dev_dummy' },
         { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION', value: 'true' },
         { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE', value: 'true' },
-        { name: 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED', value: 'true' },
+        {
+          name: 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED',
+          valueFrom: { secretKeyRef: { key: 'enabled', name: 'legacy-proof-work' } },
+        },
         { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__DEV_DUMMY__SCROLL_INPUT', value: 'exact_mock' },
         { name: 'RUST_LOG', value: 'info' },
         {
@@ -176,7 +179,6 @@ ${WITHDRAWAL_DEPLOYMENT_END}
       { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE', value: 'dev_dummy' },
       { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION', value: 'true' },
       { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE', value: 'true' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED', value: 'true' },
       { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__DEV_DUMMY__SCROLL_INPUT', value: 'exact_mock' },
     ])
     expect(ensureWithdrawalProofActivationSwitch(values, 'mock')).to.equal(false)

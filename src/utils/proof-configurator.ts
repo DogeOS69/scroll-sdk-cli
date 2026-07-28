@@ -1754,7 +1754,6 @@ export function configureDisabledProofValues(options: {
       require_bridge_state: false,
       require_scroll_execution: false,
     },
-    proof_work_api: { enabled: false },
   } as toml.JsonMap)
   writeYamlAtomic(valuesFile, values)
   writeTextAtomic(withdrawalConfigFile, nativeConfig)

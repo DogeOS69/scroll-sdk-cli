@@ -1289,7 +1289,6 @@ describe('deployment-spec-generator', () => {
         DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE: 'disabled',
         DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE: 'false',
         DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION: 'false',
-        DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED: 'false',
       });
       expect(withdrawalValuesForRuntime.withdrawalProof.enabled).to.equal(false);
       expect(withdrawalValuesForRuntime.withdrawalProof.mode).to.equal('disabled');
