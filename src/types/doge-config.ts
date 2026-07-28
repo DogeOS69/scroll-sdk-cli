@@ -1,3 +1,5 @@
+import type { ProofSystemMode, ProvingMode } from '../utils/proof-system-mode.js'
+
 export type Network = 'mainnet' | 'regtest' | 'testnet'
 
 export interface CubesignerKey {
@@ -185,14 +187,13 @@ export interface DogeConfig {
     }>
   }
   network: Network
-  /**
-   * Deployment-wide proof posture. `mock` generates the dev_dummy topology
-   * (deterministic non-cryptographic proofs via prover-worker-mock) across
-   * every proof-config-managed artifact; `production` (default) requires the
-   * released proof artifacts. Persisted by `setup proof-config --proving-mode`.
-   */
+  /** Deployment-wide proof posture, owned by setup rather than the Makefile. */
   proofSystem?: {
-    provingMode?: 'mock' | 'production'
+    /** Stable public GET root used only when mode is mock or production. */
+    artifactReadBaseUrl?: string
+    mode?: ProofSystemMode
+    /** Legacy compatibility field; migrated to mode by setup proof-config. */
+    provingMode?: ProvingMode
   }
   rpc?: {
     apiKey?: string

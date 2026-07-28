@@ -6,7 +6,11 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import { configureProofValues, deriveAllowedProofTriples } from '../../src/utils/proof-configurator.js'
+import {
+  configureDisabledProofValues,
+  configureProofValues,
+  deriveAllowedProofTriples,
+} from '../../src/utils/proof-configurator.js'
 import { scaffoldProofCoordinatorConfig } from '../../src/utils/proof-coordinator-scaffold.js'
 import {
   verifyProverWorkerMockBundle,
@@ -230,6 +234,22 @@ max_items = 42
 
   afterEach(() => fs.rmSync(root, { force: true, recursive: true }))
 
+  it('projects disabled mode without coordinator manifests, proof secrets, or proof-work service', () => {
+    const result = configureDisabledProofValues({ valuesDir: path.join(root, 'values') })
+    expect(result.helmSetFiles.proofCoordinator).to.deep.equal([])
+    expect(result.helmSetFiles.withdrawalProcessor).to.have.length(1)
+    const values = yaml.load(fs.readFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), 'utf8')) as any
+    expect(values.withdrawalProof).to.deep.include({ enabled: false, mode: 'disabled' })
+    expect(values.withdrawalProof.provingMode).to.equal(undefined)
+    expect(values.configMaps['proof-manifests']).to.equal(undefined)
+    expect(values.persistence['proof-manifests']).to.equal(undefined)
+    expect(values.persistence['proof-secrets']).to.equal(undefined)
+    expect(values.service?.main?.ports?.['proof-work']).to.equal(undefined)
+    const native = toml.parse(fs.readFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), 'utf8')) as any
+    expect(native.proof_system.mode).to.equal('disabled')
+    expect(native.proof_work_api.enabled).to.equal(false)
+  })
+
   it('fails closed when the required native WithdrawalProcessor TOML template is missing', () => {
     const { artifactPath, manifests } = writeValidProofRelease(root)
     const withdrawalConfigPath = path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml')
@@ -350,12 +370,13 @@ max_items = 42
     expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_PROOF_CONTROL_PLANE_GATE__VERIFIER_IMPORT_MODE')
     expect(env.DOGEOS_WITHDRAWAL_CLEANUP_TIMEOUT_SECS).to.equal('3600')
     expect(Object.fromEntries(Object.entries(env).filter(([name]) => name.startsWith('DOGEOS_WITHDRAWAL_PROOF_')))).to.deep.equal({
-      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE: 'disabled',
-      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE: 'false',
-      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION: 'false',
-      DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED: 'false',
+      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE: 'production',
+      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE: 'true',
+      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION: 'true',
+      DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED: 'true',
     })
-    expect(withdrawal.withdrawalProof.enabled).to.equal(false)
+    expect(withdrawal.withdrawalProof.enabled).to.equal(true)
+    expect(withdrawal.withdrawalProof.mode).to.equal('production')
     expect(withdrawal.withdrawalProof.provingMode).to.equal('production')
     expect(withdrawal.configMaps.config.data?.['WithdrawalProcessor.toml']).to.equal(undefined)
     expect(withdrawal.configMaps['proof-manifests'].data).to.deep.equal({ README: 'operator-owned entry\n' })
@@ -528,14 +549,13 @@ url = "https://blob-archive.example.com"
     expect(coordinatorToml.verifier.scroll_real_verifier.agg_verifying_key_path).to.equal('/app/data/verifier/agg-vk.bin')
   })
 
-  it('enables the activation switch only with the explicit option', () => {
+  it('atomically enables the proof runtime for production mode', () => {
     const { artifactPath, manifests } = writeValidProofRelease(root)
     const withdrawalValuesPath = path.join(root, 'values/withdrawal-processor-production.yaml')
 
     configureProofValues({
       artifactManifestPath: artifactPath,
       coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
-      enableWithdrawalProof: true,
       manifestPaths: manifests,
       signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
       valuesDir: path.join(root, 'values'),
@@ -625,11 +645,11 @@ url = "https://blob-archive.example.com"
     expect(result.artifactReadBaseUrlMapping).to.equal('custom-gateway-root')
   })
 
-  it('preserves an explicitly enabled activation switch while staging topology', () => {
+  it('overrides a stale disabled switch from the selected production mode', () => {
     const { artifactPath, manifests } = writeValidProofRelease(root)
     const withdrawalValuesPath = path.join(root, 'values/withdrawal-processor-production.yaml')
     const withdrawal = yaml.load(fs.readFileSync(withdrawalValuesPath, 'utf8')) as any
-    withdrawal.withdrawalProof.enabled = true
+    withdrawal.withdrawalProof.enabled = false
     fs.writeFileSync(withdrawalValuesPath, yaml.dump(withdrawal))
 
     configureProofValues({
@@ -1046,16 +1066,17 @@ transport = "s3"
       .to.equal('bridge-topology-prover-v1')
     expect(parsedWithdrawal.proof_work_api.materialize.scroll_chunk_segmentation).to.equal(undefined)
 
-    // The CLI owns the atomic activation env; the generic chart only renders
-    // these explicit values. exact_mock is absent while mock is disabled.
+    // Mock is a complete proof-enabled posture; the generic chart only renders
+    // the explicit projection selected by setup.
     const env = Object.fromEntries(withdrawal.env.map((item: any) => [item.name, item.value]))
     expect(Object.fromEntries(Object.entries(env).filter(([name]) => name.startsWith('DOGEOS_WITHDRAWAL_PROOF_')))).to.deep.equal({
-      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE: 'disabled',
-      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE: 'false',
-      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION: 'false',
-      DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED: 'false',
+      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__DEV_DUMMY__SCROLL_INPUT: 'exact_mock',
+      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE: 'dev_dummy',
+      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE: 'true',
+      DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION: 'true',
+      DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED: 'true',
     })
-    expect(withdrawal.withdrawalProof).to.deep.include({ enabled: false, provingMode: 'mock' })
+    expect(withdrawal.withdrawalProof).to.deep.include({ enabled: true, mode: 'mock', provingMode: 'mock' })
     expect(withdrawal.configMaps['agg-verifying-key']).to.equal(undefined)
     expect(withdrawal.initContainers?.['install-agg-verifying-key']).to.equal(undefined)
 

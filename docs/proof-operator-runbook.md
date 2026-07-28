@@ -2,8 +2,10 @@
 
 This is the single official end-to-end runbook for the DogeOS bridge operator.
 It covers proof configuration, partner attestation-signer handoff, Kubernetes
-services, the external prover worker, and lifecycle acceptance in both `mock`
-and `production` proving modes.
+services, the external prover worker, and lifecycle acceptance for the
+deployment-wide `disabled`, `mock`, and `production` proof postures. Production
+configuration remains supported, but production proving acceptance is outside
+the current mock-integration phase.
 
 This document is not for partner signer operators. Send partners the
 `scroll-sdk/partner-kit/attestation-signer/` directory and, after bridge
@@ -29,33 +31,35 @@ artifact-based:
 1. the partner sends `descriptor.json` before bridge genesis;
 2. the bridge operator sends `signer-policy-bundle/` after bridge genesis.
 
-## 2. Proving modes
+## 2. Deployment-wide proof modes
 
-One switch controls the generated proof topology:
+One setup switch controls the complete generated proof posture:
 
 ```bash
---proving-mode mock|production
+--mode disabled|mock|production
 ```
 
 The selected mode is persisted in `.data/doge-config.toml` under
-`[proofSystem].provingMode`. `setup export-signer-policy` reads that value, so
+`[proofSystem].mode`. `setup export-signer-policy` reads that value, so
 partners never pass a separate proving-mode flag.
 
-| Property | `mock` | `production` |
-|---|---|---|
-| Services and network calls | real | real |
-| WP → coordinator claim flow | real | real |
-| Worker claim / heartbeat / result | real | real |
-| TSO `POST /sign` and callback | real | real |
-| Signer HTTP proof fetch and audit DB | real | real |
-| Proof bytes | deterministic, non-cryptographic | release prover output |
-| Worker host | ordinary Linux allowed | GPU/release-specific host |
-| Signer policy | audited `staging_scaffold` | fail-closed `production_enforce` |
-| TEE allowlists | empty by default, matching e2e harness | required and canonicalized to compressed secp256k1 IDs |
-| Proof release files | synthesized mock manifests | required signed/reviewed release artifacts |
+| Property | `disabled` | `mock` | `production` |
+|---|---|---|---|
+| Withdrawal proof runtime | off | on | on |
+| Proof coordinator / worker | not required | complete real lifecycle | complete release lifecycle |
+| Attestation signer | direct-sign | proof-backed validation | fail-closed proof enforcement |
+| Signer policy | `dev_permissive`, proof fetch disabled | audited `staging_scaffold`, HTTP proof fetch | `production_enforce`, HTTP proof fetch |
+| Proof bytes | none | deterministic, non-cryptographic | release prover output |
+| Worker host | none | ordinary Linux allowed | GPU/release-specific host |
+| Proof release files | none | synthesized mock manifests | required signed/reviewed release artifacts |
 
 Mock is a lifecycle and configuration test lane. Never enable it on a bridge
 that carries assets of value.
+
+There is no stable “mock topology staged but proof disabled” state. Use
+`disabled` until the deployment is allowed to run proof work, then rerun setup
+with `--mode mock`. That transition atomically enables the proof runtime,
+coordinator contract, mock worker bundle, and signer-policy posture.
 
 ## 3. Standard deployment layout
 
@@ -68,6 +72,7 @@ deployment/
 ├── config.toml
 ├── .data/
 │   ├── doge-config.toml
+│   ├── proof-deployment.json             # generated deployment contract
 │   ├── setup_defaults.toml
 │   ├── GenerateBridgeInfo.toml
 │   ├── protocol_context.json
@@ -246,7 +251,7 @@ Both IRSA policies are also restricted to the key prefix, including an
 from every worker/signer network, GET one exact existing artifact key and
 require HTTP 200 before activation.
 
-## 8. Stage proof topology
+## 8. Select and generate the proof posture
 
 The proof-object base URL must be a stable credential-free HTTP(S) GET root.
 The worker uses it to read inputs and partner signers use concrete object URLs
@@ -259,11 +264,21 @@ gateway may intentionally map its own root to the prefix, so it remains
 supported but emits a warning requiring an exact-key preflight from every
 worker/signer network.
 
+### Disabled / direct-sign
+
+```bash
+scrollsdk setup proof-config --mode disabled
+```
+
+Disabled mode requires no proof artifact URL, release manifests, coordinator,
+proof storage, or worker. It writes the withdrawal processor's disabled runtime
+projection and records the direct-sign `dev_permissive` signer posture.
+
 ### Mock
 
 ```bash
 scrollsdk setup proof-config \
-  --proving-mode mock \
+  --mode mock \
   --proof-artifact-base-url https://proofs.example.com/<deployment>
 ```
 
@@ -274,8 +289,8 @@ Mock mode:
 - scaffolds a compatible coordinator configuration when missing;
 - writes `prover-worker-mock/docker-compose/` with a non-secret
   `bundle-manifest.json` and stable `bundleId`;
-- records `withdrawalProof.provingMode: mock` in WP values;
-- keeps `withdrawalProof.enabled` unchanged unless explicitly activated.
+- records proof mode `mock` in the setup contract and doge config;
+- atomically enables the WP proof requirements and proof-work API.
 
 ### Production
 
@@ -284,7 +299,7 @@ then run:
 
 ```bash
 scrollsdk setup proof-config \
-  --proving-mode production \
+  --mode production \
   --proof-artifact-base-url https://proofs.example.com/<deployment>
 ```
 
@@ -293,21 +308,27 @@ verification-key hashes, and aggregate verifying-key checksums. Production
 identities must come from release artifacts; do not transcribe them into Helm
 values by hand.
 
-The CLI derives the complete runtime activation environment atomically from
-`withdrawalProof.enabled` and `withdrawalProof.provingMode` and writes the
-explicit env entries into WP values. The generic chart only renders those
-entries; it has no proof-mode logic. Disabled mode always carries
+The CLI derives the complete runtime environment atomically from
+`proofSystem.mode` and writes the explicit env entries into WP values. The
+generic chart only renders those entries; it has no proof-mode logic. Disabled
+mode always carries
 `mode=disabled` with both required-family gates and the proof-work API off.
-Active production carries the production posture. Active mock carries
+Production carries the production posture. Mock carries
 `mode=dev_dummy` and adds `dev_dummy.scroll_input=exact_mock`; that entry is
 absent from the native TOML and every CLI-generated disabled posture, avoiding
-an invalid cross-mode configuration. Do not edit `withdrawalProof.enabled`
-without rerunning `prep-charts` or `proof-config`, because the CLI must update
-the complete env projection at the same time.
+an invalid cross-mode configuration. Do not edit individual proof values or
+runtime environment entries by hand; rerun `proof-config` with the intended
+deployment-wide mode.
 
-On a rerun, the command reuses the staged proof-object base URL. Use
-`--enable-withdrawal-proof` only after the coordinator, worker, storage,
-partner policy, and network preflights below have passed.
+Every successful setup writes `.data/proof-deployment.json`. Before Helm
+installation, validate that contract and all recorded checksums:
+
+```bash
+scrollsdk setup proof-config-check --deployment-dir .
+```
+
+The mode-agnostic Helm adapter consumes only this contract; Makefiles must not
+select manifests or reinterpret disabled/mock/production state.
 
 ## 9. Start the external prover worker
 
@@ -422,13 +443,16 @@ kubectl -n <namespace> run signer-reachability-<id> --rm -i --restart=Never \
   curl -fsS https://signer.example.com:4040/health
 ```
 
-## 12. Activate and run lifecycle acceptance
+## 12. Enter mock mode and run lifecycle acceptance
 
 After the worker is registered and all partners have applied the generated
 policy bundle:
 
 ```bash
-scrollsdk setup proof-config --enable-withdrawal-proof
+scrollsdk setup proof-config \
+  --mode mock \
+  --proof-artifact-base-url https://proofs.example.com/<deployment>
+scrollsdk setup proof-config-check --deployment-dir .
 make install-withdrawal-processor install-proof-coordinator install-tso
 ```
 

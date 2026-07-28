@@ -2,6 +2,10 @@
 
 import * as toml from '@iarna/toml'
 
+import type { ProofSystemMode } from './proof-system-mode.js'
+
+export type { ProvingMode } from './proof-system-mode.js'
+
 export const WITHDRAWAL_CONFIG_FILE = 'WithdrawalProcessor.toml'
 export const WITHDRAWAL_CONFIG_PATH = `/app/config/${WITHDRAWAL_CONFIG_FILE}`
 export const WITHDRAWAL_PROOF_BEGIN = '# BEGIN scrollsdk managed proof configuration'
@@ -17,15 +21,6 @@ export const WITHDRAWAL_PROOF_ACTIVATION_ENV = {
   requireBridge: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE',
   requireScroll: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION',
 } as const
-
-/**
- * Which proof implementation the staged topology targets. `mock` renders the
- * dev_dummy/exact-mock lane (deterministic, NON-cryptographic proofs paired
- * with prover-worker-mock); `production` renders the release-artifact real
- * proving lane. Same services, same wiring — only proof generation and
- * verification differ.
- */
-export type ProvingMode = 'mock' | 'production'
 
 const MANAGED_PROOF_TABLES = new Set([
   'local_bridge_proof_runtime',
@@ -503,33 +498,25 @@ export function removeInlineWithdrawalConfig(values: Record<string, any>): strin
  */
 export function ensureWithdrawalProofActivationSwitch(
   values: Record<string, any>,
-  provingMode: ProvingMode = 'production'
+  proofSystemMode: ProofSystemMode = 'disabled'
 ): boolean {
   values.withdrawalProof ||= {}
   values.env ||= []
   if (!Array.isArray(values.env)) throw new TypeError('withdrawal-processor values: env must be an array')
   const before = JSON.stringify([values.withdrawalProof, values.env])
 
-  if (values.withdrawalProof.enabled === undefined) {
-    values.withdrawalProof.enabled = false
-  }
-
-  if (typeof values.withdrawalProof.enabled !== 'boolean') {
-    throw new TypeError('withdrawal-processor values: withdrawalProof.enabled must be a boolean')
-  }
-
-  if (values.withdrawalProof.provingMode !== provingMode) {
-    values.withdrawalProof.provingMode = provingMode
-  }
-
-  const enabled = values.withdrawalProof.enabled as boolean
+  const enabled = proofSystemMode !== 'disabled'
+  values.withdrawalProof.enabled = enabled
+  values.withdrawalProof.mode = proofSystemMode
+  if (enabled) values.withdrawalProof.provingMode = proofSystemMode
+  else delete values.withdrawalProof.provingMode
   const unmanagedEnv = values.env.filter(
     (item: any) => !isWithdrawalProofActivationEnv(String(item?.name || ''))
   )
   const activationEnv: Array<{ name: string; value: string }> = [
     {
       name: WITHDRAWAL_PROOF_ACTIVATION_ENV.mode,
-      value: enabled ? (provingMode === 'mock' ? 'dev_dummy' : 'production') : 'disabled',
+      value: enabled ? (proofSystemMode === 'mock' ? 'dev_dummy' : 'production') : 'disabled',
     },
     {
       name: WITHDRAWAL_PROOF_ACTIVATION_ENV.requireScroll,
@@ -544,7 +531,7 @@ export function ensureWithdrawalProofActivationSwitch(
       value: enabled ? 'true' : 'false',
     },
   ]
-  if (enabled && provingMode === 'mock') {
+  if (proofSystemMode === 'mock') {
     activationEnv.push({
       name: WITHDRAWAL_PROOF_ACTIVATION_ENV.devDummyScrollInput,
       value: 'exact_mock',

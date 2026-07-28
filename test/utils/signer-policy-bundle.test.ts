@@ -10,14 +10,14 @@ import {
   renderVerifierRegistryToml,
 } from '../../src/utils/signer-policy-bundle.js'
 
-function input(provingMode: 'mock' | 'production'): SignerPolicyBundleInput {
+function input(mode: 'disabled' | 'mock' | 'production'): SignerPolicyBundleInput {
   return {
     activeBridgeKeyHash: `0x${'11'.repeat(20)}`,
     allowedProofTriples: `openvm_state_transition:bridge-v1:0x${'22'.repeat(32)},scroll_batch:batch-v1:0x${'33'.repeat(32)}`,
     bridgeNamespaceId: `0x${'44'.repeat(20)}`,
+    mode,
     network: 'testnet',
     protocolInstanceId: `0x${'55'.repeat(32)}`,
-    provingMode,
     signerProofArtifactBaseUrl: 'https://proofs.bridge.example/proof-topology',
     signers: [
       { endpoint: 'https://signer.partner-a.example:4040', id: 'partner-a', publicKey: `02${'66'.repeat(32)}` },
@@ -75,6 +75,17 @@ describe('signer policy bundle', () => {
     expect(env.ATTESTATION_SIGNER_TSO_URL).to.equal('https://tso.bridge.example')
   })
 
+  it('renders the proof-disabled direct-sign posture without proof fetch or proof allowlists', () => {
+    const env = envMap(renderSignerPolicyEnv(input('disabled')))
+    expect(env.ATTESTATION_SIGNER_POLICY_MODE).to.equal('dev_permissive')
+    expect(env.ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS).to.equal('false')
+    expect(env.ATTESTATION_SIGNER_ENVELOPE_MAX_PROOF_ARTIFACTS).to.equal('0')
+    expect(env.ATTESTATION_SIGNER_ENVELOPE_ALLOWED_PROOF_TRIPLES).to.equal('')
+    expect(env.ATTESTATION_SIGNER_PROOF_ARTIFACT_FETCH_MODE).to.equal('disabled')
+    expect(env.ATTESTATION_SIGNER_VERIFIER_REGISTRY_TOML).to.equal(undefined)
+    expect(env.ATTESTATION_SIGNER_SOURCE_SET_TOML).to.equal(undefined)
+  })
+
   it('keeps the operator/network flow identical while production changes only the signer safety posture', () => {
     const mock = envMap(renderSignerPolicyEnv(input('mock')))
     const production = envMap(renderSignerPolicyEnv(input('production')))
@@ -104,6 +115,13 @@ describe('signer policy bundle', () => {
     ]) expect(commands).to.include(expected)
 
     expect(commands).to.include('staging_scaffold')
-    expect(commands).to.include('same in mock and production')
+    expect(commands).to.include('staging_scaffold')
+  })
+
+  it('documents direct-sign acceptance without a proof GET dependency', () => {
+    const directInput = { ...input('disabled'), signerProofArtifactBaseUrl: undefined }
+    const commands = renderPartnerCommands(directInput)
+    expect(commands).to.include('Direct-sign acceptance')
+    expect(commands).not.to.include('accepted proof HTTPS GET root')
   })
 })

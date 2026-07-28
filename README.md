@@ -86,6 +86,7 @@ USAGE
 * [`scrollsdk helper clear-accounts`](#scrollsdk-helper-clear-accounts)
 * [`scrollsdk helper derive-enode NODEKEY`](#scrollsdk-helper-derive-enode-nodekey)
 * [`scrollsdk helper fund-accounts`](#scrollsdk-helper-fund-accounts)
+* [`scrollsdk helper proof-helm`](#scrollsdk-helper-proof-helm)
 * [`scrollsdk helper set-scalars`](#scrollsdk-helper-set-scalars)
 * [`scrollsdk plugins`](#scrollsdk-plugins)
 * [`scrollsdk plugins add PLUGIN`](#scrollsdk-plugins-add-plugin)
@@ -120,6 +121,7 @@ USAGE
 * [`scrollsdk setup prep-charts`](#scrollsdk-setup-prep-charts)
 * [`scrollsdk setup proof-aws-init`](#scrollsdk-setup-proof-aws-init)
 * [`scrollsdk setup proof-config`](#scrollsdk-setup-proof-config)
+* [`scrollsdk setup proof-config-check`](#scrollsdk-setup-proof-config-check)
 * [`scrollsdk setup proof-worker-check`](#scrollsdk-setup-proof-worker-check)
 * [`scrollsdk setup push-secrets`](#scrollsdk-setup-push-secrets)
 * [`scrollsdk setup tls`](#scrollsdk-setup-tls)
@@ -371,6 +373,33 @@ DESCRIPTION
 ```
 
 _See code: [src/commands/helper/fund-accounts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/fund-accounts.ts)_
+
+## `scrollsdk helper proof-helm`
+
+Install one proof-related Helm component from the setup-generated deployment contract; disabled components are skipped without Makefile mode logic
+
+```
+USAGE
+  $ scrollsdk helper proof-helm --chart <value> --component proof-coordinator|withdrawal-processor --release <value>
+    --version <value> [--deployment-dir <value>] [--dry-run] [--json] [--namespace <value>]
+
+FLAGS
+  --chart=<value>           (required) Helm chart reference
+  --component=<option>      (required)
+                            <options: proof-coordinator|withdrawal-processor>
+  --deployment-dir=<value>  [default: .] Deployment root containing .data/proof-deployment.json
+  --dry-run                 Pass --dry-run to Helm
+  --json                    Output structured JSON
+  --namespace=<value>       [default: default] Kubernetes namespace
+  --release=<value>         (required) Helm release name
+  --version=<value>         (required) Helm chart version
+
+DESCRIPTION
+  Install one proof-related Helm component from the setup-generated deployment contract; disabled components are skipped
+  without Makefile mode logic
+```
+
+_See code: [src/commands/helper/proof-helm.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/proof-helm.ts)_
 
 ## `scrollsdk helper set-scalars`
 
@@ -687,12 +716,12 @@ _See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/
 
 ## `scrollsdk setup attestation-signer`
 
-Import partner-operated attestation-signer descriptors and select the bootstrap bridge keyset. Signers are deployed by their operators (see `scrollsdk signer init` / `scrollsdk signer preflight`); this command only consumes descriptor files — endpoint + public key — and never provisions keys or Kubernetes releases.
+Import partner-operated attestation-signer descriptors and select the bootstrap bridge keyset. Signers are deployed by their operators (see `scrollsdk signer init` / `scrollsdk signer preflight`); this command only consumes descriptor files — endpoint + public key — and never provisions keys, Kubernetes releases, or network probes. Reachability is verified later by the partner operator and the TSO, not during config generation.
 
 ```
 USAGE
   $ scrollsdk setup attestation-signer [--active-signer-ids <value>] [-c <value>] [--descriptor <value>...] [--descriptor-dir
-    <value>] [--json] [--probe] [--threshold <value>]
+    <value>] [--json] [--threshold <value>]
 
 FLAGS
   -c, --config=<value>             Path to doge-config.toml
@@ -702,8 +731,6 @@ FLAGS
       --descriptor-dir=<value>     Directory whose *.json files are all loaded as descriptors (default: descriptors/
                                    when it exists and no --descriptor is given)
       --json                       Output structured JSON
-      --probe                      GET each signer /health and require the runtime public key to match the descriptor
-                                   before accepting it
       --threshold=<value>          Initial bridge attestation threshold (T of the active set)
 
 DESCRIPTION
@@ -1135,7 +1162,7 @@ _See code: [src/commands/setup/eth-da-submitter.ts](https://github.com/dogeos69/
 
 ## `scrollsdk setup export-signer-policy`
 
-Assemble the post-genesis policy bundle and exact address-bearing commands for partner-operated attestation signers. The proving mode persisted by setup proof-config selects the e2e_harness-compatible mock signer posture or the fail-closed production posture; partners run the same descriptor, compose, policy-apply, TSO callback, and proof-fetch flow.
+Assemble the post-genesis policy bundle for the proof-system mode persisted by setup proof-config: disabled selects direct-sign/dev_permissive with proof fetch off, mock selects staging_scaffold with basic proof checks, and production selects fail-closed production_enforce.
 
 ```
 USAGE
@@ -1176,10 +1203,9 @@ FLAGS
                                                    triples staged by setup proof-config
 
 DESCRIPTION
-  Assemble the post-genesis policy bundle and exact address-bearing commands for partner-operated attestation signers.
-  The proving mode persisted by setup proof-config selects the e2e_harness-compatible mock signer posture or the
-  fail-closed production posture; partners run the same descriptor, compose, policy-apply, TSO callback, and proof-fetch
-  flow.
+  Assemble the post-genesis policy bundle for the proof-system mode persisted by setup proof-config: disabled selects
+  direct-sign/dev_permissive with proof fetch off, mock selects staging_scaffold with basic proof checks, and production
+  selects fail-closed production_enforce.
 
 EXAMPLES
   $ scrollsdk setup export-signer-policy
@@ -1613,14 +1639,13 @@ _See code: [src/commands/setup/proof-aws-init.ts](https://github.com/dogeos69/sc
 
 ## `scrollsdk setup proof-config`
 
-Generate the proof topology for the K8s withdrawal-processor/proof-coordinator services and, in mock mode, a Linux docker-compose prover-worker bundle. --proving-mode mock uses the e2e_harness dev_dummy identities and deterministic non-cryptographic proofs; production uses release artifacts. Partner attestation-signer policy is exported separately with setup export-signer-policy. withdrawalProof.enabled changes only with --enable-withdrawal-proof
+Select and generate one deployment-wide proof posture: disabled uses direct-sign attestation with no proof infrastructure, mock enables the full deterministic proof lifecycle, and production enables release-artifact proving. The selected mode and artifact URL are persisted in doge-config; a deployment contract is written for mode-agnostic Helm installation.
 
 ```
 USAGE
   $ scrollsdk setup proof-config [--aws-profile <value>] [--aws-region <value>] [--bridge-backend-profile <value>]
-    [--deployment-dir <value>] [--enable-withdrawal-proof] [--json] [--proof-artifact-base-url <value>] [--proving-mode
-    mock|production] [--scaffold-coordinator-config] [--scroll-batch-backend-profile <value>] [--skip-worker-bundle]
-    [--verifier-id <value>...]
+    [--deployment-dir <value>] [--json] [--mode disabled|mock|production] [--proof-artifact-base-url <value>]
+    [--scaffold-coordinator-config] [--scroll-batch-backend-profile <value>] [--verifier-id <value>...]
 
 FLAGS
   --aws-profile=<value>                   AWS CLI profile used to read the prover-worker token (mock mode)
@@ -1630,49 +1655,67 @@ FLAGS
                                           mock: bridge-topology-prover-v1)
   --deployment-dir=<value>                [default: .] Deployment root containing config.toml, .data/, values/,
                                           proof-coordinator/, withdrawal-processor/, and proof-artifacts/
-  --enable-withdrawal-proof               Set withdrawalProof.enabled=true after staging and atomically project the
-                                          explicit runtime env; without this flag the activation state is preserved
-                                          as-is
   --json                                  Output structured JSON
+  --mode=<option>                         Deployment-wide proof posture; disabled = direct-sign/no proof infrastructure,
+                                          mock = enabled deterministic proof lifecycle, production = enabled
+                                          release-artifact lifecycle
+                                          <options: disabled|mock|production>
   --proof-artifact-base-url=<value>       Credential-free public GET root for the proof object key prefix;
                                           prover-workers read inputs and partner signers read accepted proof objects
                                           below this same root
-  --proving-mode=<option>                 Proof implementation to stage; persisted into doge-config
-                                          [proofSystem].provingMode so every proof command agrees (default: the
-                                          persisted value, else production)
-                                          <options: mock|production>
   --[no-]scaffold-coordinator-config      Generate ProofCoordinator.toml from prepared withdrawal configuration when
                                           missing (default: true; never overwrites an existing file)
   --scroll-batch-backend-profile=<value>  Backend profile stamped onto Scroll batch prove work (default:
                                           scroll-prod-zkvm-batch-v1, mock: scroll-batch-topology-prover-v1)
-  --skip-worker-bundle                    Mock mode: do not generate the prover-worker-mock docker-compose bundle
   --verifier-id=<value>...                Optional FAMILY=ID override; repeat per family
 
 DESCRIPTION
-  Generate the proof topology for the K8s withdrawal-processor/proof-coordinator services and, in mock mode, a Linux
-  docker-compose prover-worker bundle. --proving-mode mock uses the e2e_harness dev_dummy identities and deterministic
-  non-cryptographic proofs; production uses release artifacts. Partner attestation-signer policy is exported separately
-  with setup export-signer-policy. withdrawalProof.enabled changes only with --enable-withdrawal-proof
+  Select and generate one deployment-wide proof posture: disabled uses direct-sign attestation with no proof
+  infrastructure, mock enables the full deterministic proof lifecycle, and production enables release-artifact proving.
+  The selected mode and artifact URL are persisted in doge-config; a deployment contract is written for mode-agnostic
+  Helm installation.
 
 EXAMPLES
-  # Production: run from the deployment root; standard paths are automatic
+  # Direct-sign posture: no proof coordinator, storage, manifests, or worker
 
-  $ scrollsdk setup proof-config --proof-artifact-base-url https://proofs.example.com/proof-topology
+  $ scrollsdk setup proof-config --mode disabled
 
 
 
-  # Mock proving: no release artifacts; ProofCoordinator.toml is scaffolded when missing
+  # Mock proof lifecycle: no release artifacts; ProofCoordinator.toml is scaffolded when missing
 
-  $ scrollsdk setup proof-config --proving-mode mock --proof-artifact-base-url https://proofs.example.com/proof-topology
+  $ scrollsdk setup proof-config --mode mock --proof-artifact-base-url https://proofs.example.com/proof-topology
 
 
 
   # Run from elsewhere with one root path; re-runs reuse the staged URL and mode
 
-  $ scrollsdk setup proof-config --deployment-dir /srv/dogeos-deployment --enable-withdrawal-proof
+  $ scrollsdk setup proof-config --deployment-dir /srv/dogeos-deployment
 ```
 
 _See code: [src/commands/setup/proof-config.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-config.ts)_
+
+## `scrollsdk setup proof-config-check`
+
+Validate the proof deployment contract, generated values/native configs, mode consistency, and mock worker bundle without contacting Kubernetes or printing secrets
+
+```
+USAGE
+  $ scrollsdk setup proof-config-check [-c <value>] [--contract <value>] [--deployment-dir <value>] [--json]
+
+FLAGS
+  -c, --config=<value>          Advanced doge-config.toml override
+      --contract=<value>        [default: .data/proof-deployment.json] Proof deployment contract path relative to the
+                                deployment root
+      --deployment-dir=<value>  [default: .] Deployment root
+      --json                    Output structured JSON
+
+DESCRIPTION
+  Validate the proof deployment contract, generated values/native configs, mode consistency, and mock worker bundle
+  without contacting Kubernetes or printing secrets
+```
+
+_See code: [src/commands/setup/proof-config-check.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-config-check.ts)_
 
 ## `scrollsdk setup proof-worker-check`
 

@@ -110,7 +110,6 @@ export interface ConfigureProofValuesOptions {
    * nginx + cert-manager ingress for this host.
    */
   coordinatorIngressHost?: string
-  enableWithdrawalProof?: boolean
   /** Ignored in mock proving mode (mock manifests are synthesized). */
   manifestPaths?: string[]
   /** Default `production`; `mock` stages the dev_dummy/prover-worker-mock lane. */
@@ -148,6 +147,15 @@ export interface ConfigureProofValuesResult {
   signerProofArtifactBaseUrl: string
   signerProofArtifactBaseUrlSource: 'flag' | 'staged'
   statementNamespaceFile: string
+}
+
+export interface ConfigureDisabledProofResult {
+  files: string[]
+  helmSetFiles: {
+    proofCoordinator: HelmSetFileBinding[]
+    withdrawalProcessor: HelmSetFileBinding[]
+  }
+  provingMode: undefined
 }
 
 const MANAGED_VERIFIER_BEGIN = '# BEGIN scrollsdk managed verifier configuration'
@@ -1650,7 +1658,6 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
     provingMode,
     nativeWithdrawalConfig
   )
-  if (options.enableWithdrawalProof) withdrawalUpdate.values.withdrawalProof.enabled = true
   ensureWithdrawalProofActivationSwitch(withdrawalUpdate.values, provingMode)
 
   const coordinatorManifestSetFiles = manifestSetFileBindings('manifests', manifests)
@@ -1696,5 +1703,71 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
     signerProofArtifactBaseUrl,
     signerProofArtifactBaseUrlSource,
     statementNamespaceFile,
+  }
+}
+
+/**
+ * Project the proof-disabled/direct-sign posture without requiring release
+ * artifacts, proof storage, a coordinator, or a prover worker.
+ */
+export function configureDisabledProofValues(options: {
+  valuesDir: string
+  withdrawalConfigPath?: string
+}): ConfigureDisabledProofResult {
+  const valuesDir = path.resolve(options.valuesDir)
+  const valuesFile = path.join(valuesDir, 'withdrawal-processor-production.yaml')
+  const withdrawalConfigFile = path.resolve(
+    options.withdrawalConfigPath
+    || path.join(path.dirname(valuesDir), WITHDRAWAL_NATIVE_CONFIG_RELPATH)
+  )
+  if (!fs.existsSync(withdrawalConfigFile)) {
+    throw new Error(`WithdrawalProcessor TOML template not found: ${withdrawalConfigFile}`)
+  }
+
+  const values = readYaml(valuesFile)
+  ensureWithdrawalChartWiring(values)
+  removeInlineWithdrawalConfig(values)
+  ensureWithdrawalProofActivationSwitch(values, 'disabled')
+  if (values.configMaps) {
+    delete values.configMaps['proof-manifests']
+    delete values.configMaps['agg-verifying-key']
+  }
+
+  if (values.persistence) {
+    delete values.persistence['proof-manifests']
+    delete values.persistence['proof-secrets']
+    delete values.persistence['agg-verifying-key-source']
+  }
+
+  if (values.externalSecrets) delete values.externalSecrets['proof-secrets']
+  if (values.initContainers) {
+    delete values.initContainers['install-agg-verifying-key']
+    if (Object.keys(values.initContainers).length === 0) delete values.initContainers
+  }
+
+  if (values.service?.main?.ports) delete values.service.main.ports['proof-work']
+
+  const nativeSource = fs.readFileSync(withdrawalConfigFile, 'utf8')
+  const nativeConfig = replaceWithdrawalManagedProofBlock(nativeSource, {
+    proof_system: {
+      mode: 'disabled',
+      require_bridge_state: false,
+      require_scroll_execution: false,
+    },
+    proof_work_api: { enabled: false },
+  } as toml.JsonMap)
+  writeYamlAtomic(valuesFile, values)
+  writeTextAtomic(withdrawalConfigFile, nativeConfig)
+
+  return {
+    files: [valuesFile, withdrawalConfigFile],
+    helmSetFiles: {
+      proofCoordinator: [],
+      withdrawalProcessor: [{
+        filePath: withdrawalConfigFile,
+        key: 'configMaps.config.data.WithdrawalProcessor\\.toml',
+      }],
+    },
+    provingMode: undefined,
   }
 }

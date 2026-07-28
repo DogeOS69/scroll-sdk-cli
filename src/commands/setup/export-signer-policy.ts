@@ -3,7 +3,7 @@ import chalk from 'chalk'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import type { ProvingMode } from '../../utils/withdrawal-config.js'
+import type { ProofSystemMode } from '../../utils/proof-system-mode.js'
 
 import { normalizeExternalHttpBaseUrl } from '../../utils/attestation-signer-descriptor.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
@@ -17,7 +17,8 @@ import {
 } from '../../utils/proof-configurator.js'
 import { normalizeCompressedSecp256k1PublicKeyCsv } from '../../utils/secp256k1-public-key.js'
 import {
-  DEFAULT_ENVELOPE_MAX_PROOF_ARTIFACTS,
+  renderDisabledSourceSetToml,
+  renderDisabledVerifierRegistryToml,
   renderMockSourceSetToml,
   renderPartnerCommands,
   renderSignerPolicyEnv,
@@ -56,7 +57,7 @@ function require32ByteHex(value: string, name: string): string {
  * per-operator value is the signer's own key, which the operator already holds.
  */
 export class ExportSignerPolicyCommand extends Command {
-  static description = 'Assemble the post-genesis policy bundle and exact address-bearing commands for partner-operated attestation signers. The proving mode persisted by setup proof-config selects the e2e_harness-compatible mock signer posture or the fail-closed production posture; partners run the same descriptor, compose, policy-apply, TSO callback, and proof-fetch flow.'
+  static description = 'Assemble the post-genesis policy bundle for the proof-system mode persisted by setup proof-config: disabled selects direct-sign/dev_permissive with proof fetch off, mock selects staging_scaffold with basic proof checks, and production selects fail-closed production_enforce.'
 
   static examples = [
     '$ scrollsdk setup export-signer-policy',
@@ -85,7 +86,7 @@ export class ExportSignerPolicyCommand extends Command {
     try {
       const loaded = await loadDogeConfigWithSelection(flags.config, 'scrollsdk setup doge-config')
       const { config } = loaded
-      const provingMode = config.proofSystem?.provingMode || 'production'
+      const mode: ProofSystemMode = config.proofSystem?.mode || config.proofSystem?.provingMode || 'disabled'
       const external = config.attestationSigner?.external
       if (!external || external.length === 0 || config.attestationSigner?.mode !== 'external') {
         throw new Error('doge-config has no external attestation signers; run scrollsdk setup attestation-signer with descriptors first')
@@ -107,7 +108,7 @@ export class ExportSignerPolicyCommand extends Command {
         signerProofArtifactBaseUrl,
         teeAllowedSignerIds,
         tsoUrl,
-      } = this.resolveDerivableInputs(flags, contextPath, provingMode, json)
+      } = this.resolveDerivableInputs(flags, contextPath, mode, json)
 
       const outDir = path.resolve(flags.out)
       fs.mkdirSync(outDir, { recursive: true })
@@ -116,7 +117,10 @@ export class ExportSignerPolicyCommand extends Command {
       // Helm overlay instead of merely stopping its creation.
       fs.rmSync(path.join(outDir, 'values-overlay.yaml'), { force: true })
       const verifierRegistryOutput = path.join(outDir, 'verifier-registry.toml')
-      if (flags['verifier-registry']) {
+      if (mode === 'disabled') {
+        fs.writeFileSync(verifierRegistryOutput, renderDisabledVerifierRegistryToml())
+        derivedSources['verifier-registry'] = 'proof-system disabled posture'
+      } else if (flags['verifier-registry']) {
         const verifierRegistryPath = path.resolve(flags['verifier-registry'])
         if (!fs.existsSync(verifierRegistryPath)) throw new Error(`--verifier-registry file not found: ${verifierRegistryPath}`)
         fs.copyFileSync(verifierRegistryPath, verifierRegistryOutput)
@@ -130,8 +134,11 @@ export class ExportSignerPolicyCommand extends Command {
       const conventionalProductionSourceSet = path.resolve('configs/source-set.toml')
       const sourceSetPath = flags['source-set']
         ? path.resolve(flags['source-set'])
-        : (provingMode === 'production' ? conventionalProductionSourceSet : undefined)
-      if (sourceSetPath) {
+        : (mode === 'production' ? conventionalProductionSourceSet : undefined)
+      if (mode === 'disabled') {
+        fs.writeFileSync(sourceSetOutput, renderDisabledSourceSetToml())
+        derivedSources['source-set'] = 'proof-system disabled posture'
+      } else if (sourceSetPath) {
         if (!fs.existsSync(sourceSetPath)) {
           throw new Error(flags['source-set']
             ? `--source-set file not found: ${sourceSetPath}`
@@ -149,24 +156,24 @@ export class ExportSignerPolicyCommand extends Command {
         activeBridgeKeyHash,
         allowedProofTriples,
         bridgeNamespaceId,
+        mode,
         network: config.network,
         protocolInstanceId,
-        provingMode,
         signerProofArtifactBaseUrl,
         signers: external.map(signer => ({ endpoint: signer.endpoint, id: signer.id, publicKey: signer.publicKey })),
         supportedSigningPolicyVersions: flags['supported-signing-policy-versions'],
         teeAllowedSignerIds,
         tsoUrl,
       }
-      const runtimeProfile = signerRuntimePolicyProfile(provingMode)
+      const runtimeProfile = signerRuntimePolicyProfile(mode)
       const policy = {
         activeBridgeKeyHash,
         allowedProofTriples,
         bridgeNamespaceId,
-        envelopeMaxProofArtifacts: DEFAULT_ENVELOPE_MAX_PROOF_ARTIFACTS,
+        envelopeMaxProofArtifacts: runtimeProfile.envelopeMaxProofArtifacts,
+        mode,
         network: config.network,
         protocolInstanceId,
-        provingMode,
         signerPolicyMode: runtimeProfile.policyMode,
         signerProofArtifactBaseUrl,
         signers: bundleInput.signers,
@@ -184,10 +191,10 @@ export class ExportSignerPolicyCommand extends Command {
         bridgeNamespaceId,
         bundleDir: outDir,
         derivedSources,
-        envelopeMaxProofArtifacts: DEFAULT_ENVELOPE_MAX_PROOF_ARTIFACTS,
+        envelopeMaxProofArtifacts: runtimeProfile.envelopeMaxProofArtifacts,
         files: ['signer-policy.json', 'signer-policy.env', 'verifier-registry.toml', 'source-set.toml', 'PARTNER-COMMANDS.md'],
+        mode,
         protocolInstanceId,
-        provingMode,
         signerCount: external.length,
         signerPolicyMode: runtimeProfile.policyMode,
         signerProofArtifactBaseUrl,
@@ -195,7 +202,7 @@ export class ExportSignerPolicyCommand extends Command {
         tsoUrl,
       }
       if (flags.json) json.success(result)
-      else this.log(chalk.green(`${provingMode} policy bundle written to ${outDir} — send the whole directory to every signer operator (${external.map(signer => signer.id).join(', ')}); PARTNER-COMMANDS.md contains their exact addresses and commands.`))
+      else this.log(chalk.green(`${mode} policy bundle written to ${outDir} — send the whole directory to every signer operator (${external.map(signer => signer.id).join(', ')}); PARTNER-COMMANDS.md contains their exact addresses and commands.`))
     } catch (error) {
       json.error('E804_SIGNER_POLICY_EXPORT_FAILED', error instanceof Error ? error.message : String(error), 'CONFIGURATION', true)
     }
@@ -216,14 +223,14 @@ export class ExportSignerPolicyCommand extends Command {
       'tso-url'?: string
     },
     contextPath: string,
-    provingMode: ProvingMode,
+    mode: ProofSystemMode,
     json: JsonOutputContext
   ): {
     allowedProofTriples: string
     bridgeNamespaceId: string
     derivedSources: Record<string, string>
     protocolInstanceId: string
-    signerProofArtifactBaseUrl: string
+    signerProofArtifactBaseUrl?: string
     teeAllowedSignerIds: string
     tsoUrl: string
   } {
@@ -259,7 +266,7 @@ export class ExportSignerPolicyCommand extends Command {
       ?? derive('signer-proof-artifact-base-url', stagedBaseUrl === undefined
         ? undefined
         : { source: `${WITHDRAWAL_NATIVE_CONFIG_RELPATH} [proof_system].signer_proof_artifact_base_url`, value: stagedBaseUrl })
-    if (signerProofArtifactBaseUrlInput === undefined) {
+    if (mode !== 'disabled' && signerProofArtifactBaseUrlInput === undefined) {
       throw new Error(`no staged signer proof-artifact base URL found in ${WITHDRAWAL_NATIVE_CONFIG_RELPATH}; run scrollsdk setup proof-config first or pass --signer-proof-artifact-base-url`)
     }
 
@@ -270,18 +277,18 @@ export class ExportSignerPolicyCommand extends Command {
     // 02/03+X representation.
     const teeFlag = flags['tee-allowed-signer-ids']
     const teeAllowedSignerIds = teeFlag === undefined
-      ? (provingMode === 'production'
+      ? (mode === 'production'
           ? derive('tee-allowed-signer-ids', deriveTeeAllowedSignerIds()) ?? ''
           : '')
       : normalizeCompressedSecp256k1PublicKeyCsv(teeFlag, '--tee-allowed-signer-ids')
-    if (provingMode === 'production' && teeAllowedSignerIds === '') {
+    if (mode === 'production' && teeAllowedSignerIds === '') {
       throw new Error('production signer policy requires a TEE signer id; run scrollsdk setup cubesigner-init first or pass --tee-allowed-signer-ids')
     }
 
-    const allowedProofTriples = flags['allowed-proof-triples']
+    const allowedProofTriples = mode === 'disabled' ? '' : flags['allowed-proof-triples']
       ?? derive('allowed-proof-triples', deriveAllowedProofTriples(DEFAULT_PROOF_COORDINATOR_CONFIG, DEFAULT_PROOF_PROGRAM_MANIFESTS))
       ?? ''
-    if (allowedProofTriples === '') {
+    if (mode !== 'disabled' && allowedProofTriples === '') {
       throw new Error('no staged proof triples found; run scrollsdk setup proof-config first or pass --allowed-proof-triples')
     }
 
@@ -290,7 +297,9 @@ export class ExportSignerPolicyCommand extends Command {
       bridgeNamespaceId: require20ByteHex(bridgeNamespaceIdInput, 'bridge namespace id'),
       derivedSources,
       protocolInstanceId: require32ByteHex(protocolInstanceIdInput, '--protocol-instance-id'),
-      signerProofArtifactBaseUrl: normalizeSignerProofArtifactBaseUrl(signerProofArtifactBaseUrlInput),
+      signerProofArtifactBaseUrl: signerProofArtifactBaseUrlInput === undefined
+        ? undefined
+        : normalizeSignerProofArtifactBaseUrl(signerProofArtifactBaseUrlInput),
       teeAllowedSignerIds,
       tsoUrl: normalizeExternalHttpBaseUrl(tsoUrl, '--tso-url', { remoteNetwork: 'signer operator network' }),
     }

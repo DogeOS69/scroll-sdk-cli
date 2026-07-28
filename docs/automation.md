@@ -32,7 +32,7 @@ Typical invocation:
 scrollsdk setup proof-config \
   --non-interactive \
   --json \
-  --proving-mode mock \
+  --mode mock \
   --proof-artifact-base-url https://proofs.example.com/test
 ```
 
@@ -226,7 +226,7 @@ run_scrollsdk() {
 # Deployment ordering belongs to the operator runbook. This wrapper only
 # standardizes one command invocation.
 run_scrollsdk proof-config setup proof-config \
-  --proving-mode mock \
+  --mode mock \
   --proof-artifact-base-url https://proofs.example.com/test
 ```
 

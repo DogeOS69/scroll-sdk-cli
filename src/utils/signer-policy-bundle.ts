@@ -1,4 +1,4 @@
-import type { ProvingMode } from './withdrawal-config.js'
+import type { ProofSystemMode } from './proof-system-mode.js'
 
 /**
  * Matches dogeos-core's e2e_harness attestation-signer posture. AdvanceL1
@@ -17,10 +17,10 @@ export interface SignerPolicyBundleInput {
   activeBridgeKeyHash: string
   allowedProofTriples: string
   bridgeNamespaceId: string
+  mode: ProofSystemMode
   network: string
   protocolInstanceId: string
-  provingMode: ProvingMode
-  signerProofArtifactBaseUrl: string
+  signerProofArtifactBaseUrl?: string
   signers: SignerPolicyBundleSigner[]
   supportedSigningPolicyVersions: string
   teeAllowedSignerIds: string
@@ -29,7 +29,9 @@ export interface SignerPolicyBundleInput {
 
 export interface SignerRuntimePolicyProfile {
   allowUnimplementedChecks: boolean
-  policyMode: 'production_enforce' | 'staging_scaffold'
+  envelopeMaxProofArtifacts: number
+  policyMode: 'dev_permissive' | 'production_enforce' | 'staging_scaffold'
+  proofArtifactFetchMode: 'disabled' | 'http'
 }
 
 /**
@@ -37,10 +39,29 @@ export interface SignerRuntimePolicyProfile {
  * checks, but explicitly records/bypasses production checks that cannot accept
  * deterministic non-cryptographic proof bytes. production remains fail-closed.
  */
-export function signerRuntimePolicyProfile(provingMode: ProvingMode): SignerRuntimePolicyProfile {
-  return provingMode === 'mock'
-    ? { allowUnimplementedChecks: true, policyMode: 'staging_scaffold' }
-    : { allowUnimplementedChecks: false, policyMode: 'production_enforce' }
+export function signerRuntimePolicyProfile(mode: ProofSystemMode): SignerRuntimePolicyProfile {
+  if (mode === 'disabled') {
+    return {
+      allowUnimplementedChecks: false,
+      envelopeMaxProofArtifacts: 0,
+      policyMode: 'dev_permissive',
+      proofArtifactFetchMode: 'disabled',
+    }
+  }
+
+  return mode === 'mock'
+    ? {
+        allowUnimplementedChecks: true,
+        envelopeMaxProofArtifacts: DEFAULT_ENVELOPE_MAX_PROOF_ARTIFACTS,
+        policyMode: 'staging_scaffold',
+        proofArtifactFetchMode: 'http',
+      }
+    : {
+        allowUnimplementedChecks: false,
+        envelopeMaxProofArtifacts: DEFAULT_ENVELOPE_MAX_PROOF_ARTIFACTS,
+        policyMode: 'production_enforce',
+        proofArtifactFetchMode: 'http',
+      }
 }
 
 export function renderVerifierRegistryToml(allowedProofTriples: string): string {
@@ -81,12 +102,27 @@ export function renderMockSourceSetToml(): string {
 `
 }
 
+export function renderDisabledVerifierRegistryToml(): string {
+  return `# Proof system disabled.
+# Direct-sign/dev_permissive signer policy accepts no proof artifacts, so the
+# verifier registry is intentionally empty.
+`
+}
+
+export function renderDisabledSourceSetToml(): string {
+  return `# Proof system disabled.
+# Direct-sign/dev_permissive signer policy performs no proof source quorum.
+`
+}
+
 export function renderSignerPolicyEnv(input: SignerPolicyBundleInput): string {
-  const profile = signerRuntimePolicyProfile(input.provingMode)
+  const profile = signerRuntimePolicyProfile(input.mode)
   return [
-    `# Post-genesis ${input.provingMode} proof policy for a partner-operated attestation-signer.`,
+    `# Post-genesis ${input.mode} proof-system policy for a partner-operated attestation-signer.`,
     '# Apply next to the operator-owned WIF/KMS and release-pin settings, then restart.',
-    input.provingMode === 'mock'
+    input.mode === 'disabled'
+      ? '# DISABLED: direct-sign/dev_permissive posture; proof artifacts are not accepted or fetched.'
+      : input.mode === 'mock'
       ? '# MOCK: real service/transport/policy flow with deterministic NON-cryptographic proofs; unimplemented production checks are audited and bypassed.'
       : '# PRODUCTION: fail-closed policy; the operator must also pin the approved signer image release + git identity in attestation-signer.env.',
     `ATTESTATION_SIGNER_POLICY_MODE=${profile.policyMode}`,
@@ -96,15 +132,17 @@ export function renderSignerPolicyEnv(input: SignerPolicyBundleInput): string {
     `ATTESTATION_SIGNER_BRIDGE_NAMESPACE_ID=${input.bridgeNamespaceId}`,
     `ATTESTATION_SIGNER_ACTIVE_BRIDGE_KEY_HASH=${input.activeBridgeKeyHash}`,
     `ATTESTATION_SIGNER_SUPPORTED_SIGNING_POLICY_VERSIONS=${input.supportedSigningPolicyVersions}`,
-    'ATTESTATION_SIGNER_VERIFIER_REGISTRY_TOML=/etc/dogeos/verifier-registry.toml',
-    'ATTESTATION_SIGNER_SOURCE_SET_TOML=/etc/dogeos/source-set.toml',
-    `ATTESTATION_SIGNER_TEE_ALLOWED_SIGNER_IDS=${input.teeAllowedSignerIds}`,
-    `ATTESTATION_SIGNER_ENVELOPE_ALLOWED_TEE_SIGNER_IDS=${input.teeAllowedSignerIds}`,
-    `ATTESTATION_SIGNER_ENVELOPE_ALLOWED_PROOF_TRIPLES=${input.allowedProofTriples}`,
-    `ATTESTATION_SIGNER_ENVELOPE_MAX_PROOF_ARTIFACTS=${DEFAULT_ENVELOPE_MAX_PROOF_ARTIFACTS}`,
+    ...(input.mode === 'disabled' ? [] : [
+      'ATTESTATION_SIGNER_VERIFIER_REGISTRY_TOML=/etc/dogeos/verifier-registry.toml',
+      'ATTESTATION_SIGNER_SOURCE_SET_TOML=/etc/dogeos/source-set.toml',
+    ]),
+    `ATTESTATION_SIGNER_TEE_ALLOWED_SIGNER_IDS=${input.mode === 'disabled' ? '' : input.teeAllowedSignerIds}`,
+    `ATTESTATION_SIGNER_ENVELOPE_ALLOWED_TEE_SIGNER_IDS=${input.mode === 'disabled' ? '' : input.teeAllowedSignerIds}`,
+    `ATTESTATION_SIGNER_ENVELOPE_ALLOWED_PROOF_TRIPLES=${input.mode === 'disabled' ? '' : input.allowedProofTriples}`,
+    `ATTESTATION_SIGNER_ENVELOPE_MAX_PROOF_ARTIFACTS=${profile.envelopeMaxProofArtifacts}`,
     `ATTESTATION_SIGNER_TSO_URL=${input.tsoUrl}`,
     'ATTESTATION_SIGNER_TSO_CALLBACK_PHASE=attestation',
-    'ATTESTATION_SIGNER_PROOF_ARTIFACT_FETCH_MODE=http',
+    `ATTESTATION_SIGNER_PROOF_ARTIFACT_FETCH_MODE=${profile.proofArtifactFetchMode}`,
     '',
   ].join('\n')
 }
@@ -115,7 +153,7 @@ export function renderSignerPolicyEnv(input: SignerPolicyBundleInput): string {
  * than relying on a generic runbook that can drift from the generated policy.
  */
 export function renderPartnerCommands(input: SignerPolicyBundleInput): string {
-  const profile = signerRuntimePolicyProfile(input.provingMode)
+  const profile = signerRuntimePolicyProfile(input.mode)
   const signerRows = input.signers
     .map(signer => `| \`${signer.id}\` | \`${signer.endpoint}\` | \`${signer.publicKey}\` |`)
     .join('\n')
@@ -136,17 +174,16 @@ kubectl -n <namespace> run signer-reachability-${signer.id} --rm -i --restart=Ne
 
   return `# Partner attestation-signer commands
 
-Generated for DogeOS network \`${input.network}\` in \`${input.provingMode}\` proving mode.
-The partner commands and network directions are the same in mock and production;
-only the delivered signer policy profile and proof implementation differ. This
-bundle selects \`${profile.policyMode}\`.
+Generated for DogeOS network \`${input.network}\` in proof-system mode \`${input.mode}\`.
+This bundle selects \`${profile.policyMode}\` and proof artifact fetch mode
+\`${profile.proofArtifactFetchMode}\`.
 
 ## Addresses fixed by this deployment
 
 | Purpose | Address |
 |---|---|
 | signer → TSO callbacks | \`${input.tsoUrl}\` |
-| signer → accepted proof HTTPS GET root | \`${input.signerProofArtifactBaseUrl}\` |
+${input.mode === 'disabled' ? '' : `| signer → accepted proof HTTPS GET root | \`${input.signerProofArtifactBaseUrl}\` |`}
 
 | Signer id | TSO → signer base URL | Genesis public key |
 |---|---|---|
@@ -222,11 +259,9 @@ curl -fsS '${input.tsoUrl}/health'
 curl -fsS "$SIGNER_ENDPOINT/health"
 \`\`\`
 
-The proof GET root cannot be meaningfully health-checked without a concrete
-object key. The end-to-end withdrawal test is the authoritative check: the
-signer must receive \`POST /sign\`, fetch every full
-\`required_proof_artifacts[].proof_artifact_fetch.url\`, and submit its
-signature callback to the TSO.
+${input.mode === 'disabled'
+    ? 'Direct-sign acceptance requires the signer to receive `POST /sign` without proof artifacts and submit its signature callback to the TSO.'
+    : 'The proof GET root cannot be meaningfully health-checked without a concrete object key. The end-to-end withdrawal test is authoritative: the signer must fetch every `required_proof_artifacts[].proof_artifact_fetch.url` and submit its signature callback to the TSO.'}
 
 ## Bridge-operator reachability check
 
@@ -243,9 +278,8 @@ developer-laptop route cannot hide a TSO-network failure:
 ${clusterProbes}
 \`\`\`
 
-Mock acceptance requires the same descriptor import, policy delivery, TSO
-request, signer proof fetch, callback, and persisted audit trail as production.
-It differs only by using deterministic proof bytes and the explicit audited
-\`staging_scaffold\` policy needed for those non-cryptographic proofs.
+${input.mode === 'disabled'
+    ? 'Disabled-mode acceptance ends at the direct attestation signature and callback; proof coordinator, proof storage, verifier registry membership, and prover worker are outside this posture.'
+    : 'Mock acceptance requires descriptor import, policy delivery, TSO request, signer proof fetch, callback, and persisted audit trail. It uses deterministic proof bytes and the audited `staging_scaffold` policy.'}
 `
 }

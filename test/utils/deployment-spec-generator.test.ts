@@ -1292,7 +1292,8 @@ describe('deployment-spec-generator', () => {
         DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED: 'false',
       });
       expect(withdrawalValuesForRuntime.withdrawalProof.enabled).to.equal(false);
-      expect(withdrawalValuesForRuntime.withdrawalProof.provingMode).to.equal('production');
+      expect(withdrawalValuesForRuntime.withdrawalProof.mode).to.equal('disabled');
+      expect(withdrawalValuesForRuntime.withdrawalProof.provingMode).to.equal(undefined);
       expect(withdrawalValuesForRuntime.configMaps.config.data?.['WithdrawalProcessor.toml']).to.equal(undefined);
       expect(withdrawalValuesForRuntime.args).to.deep.equal(['--config', '/app/config/WithdrawalProcessor.toml']);
       expect(withdrawalValuesForRuntime.persistence['withdrawal-processor-config']).to.include({

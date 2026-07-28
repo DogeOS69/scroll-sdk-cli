@@ -11,7 +11,7 @@ const COMPRESSED_GENERATOR = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d9
 const UNCOMPRESSED_GENERATOR = '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798' +
   '483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8'
 
-function writeDogeConfig(provingMode: 'mock' | 'production'): void {
+function writeDogeConfig(mode: 'disabled' | 'mock' | 'production'): void {
   fs.writeFileSync('.data/doge-config.toml', toml.stringify({
     attestationSigner: {
       activeSignerIds: ['partner-a'],
@@ -24,7 +24,7 @@ function writeDogeConfig(provingMode: 'mock' | 'production'): void {
       threshold: 1,
     },
     network: 'testnet',
-    proofSystem: { provingMode },
+    proofSystem: { mode },
     wallet: { path: '.data/wallet.json' },
   } as toml.JsonMap))
 }
@@ -77,7 +77,7 @@ describe('setup export-signer-policy operator flow', () => {
 
       expect(stdout).to.include(`${provingMode} policy bundle written`)
       const policy = JSON.parse(fs.readFileSync('signer-policy-bundle/signer-policy.json', 'utf8'))
-      expect(policy.provingMode).to.equal(provingMode)
+      expect(policy.mode).to.equal(provingMode)
       expect(policy.envelopeMaxProofArtifacts).to.equal(4)
       expect(policy.signers).to.deep.equal([{
         endpoint: 'https://signer.partner-a.example:4040',
@@ -98,6 +98,26 @@ describe('setup export-signer-policy operator flow', () => {
       expect(commands).to.include('kubectl -n <namespace> run signer-reachability-partner-a')
     })
   }
+
+  it('exports a disabled direct-sign bundle without proof topology inputs', async () => {
+    writeDogeConfig('disabled')
+    const args = commandArgs().filter((value, index, all) => {
+      const previous = all[index - 1]
+      return previous !== '--signer-proof-artifact-base-url'
+        && previous !== '--allowed-proof-triples'
+        && value !== '--signer-proof-artifact-base-url'
+        && value !== '--allowed-proof-triples'
+    })
+    const { stdout } = await runCommand(args)
+    expect(stdout).to.include('disabled policy bundle written')
+    const policy = JSON.parse(fs.readFileSync('signer-policy-bundle/signer-policy.json', 'utf8'))
+    expect(policy.mode).to.equal('disabled')
+    expect(policy.envelopeMaxProofArtifacts).to.equal(0)
+    const env = fs.readFileSync('signer-policy-bundle/signer-policy.env', 'utf8')
+    expect(env).to.include('ATTESTATION_SIGNER_POLICY_MODE=dev_permissive')
+    expect(env).to.include('ATTESTATION_SIGNER_PROOF_ARTIFACT_FETCH_MODE=disabled')
+    expect(env).to.include('ATTESTATION_SIGNER_ENVELOPE_MAX_PROOF_ARTIFACTS=0')
+  })
 
   it('leaves TEE allowlists empty in mock mode without reading a legacy setup_defaults key', async () => {
     writeDogeConfig('mock')

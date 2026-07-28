@@ -2580,7 +2580,10 @@ export default class SetupPrepCharts extends Command {
           updated = true
         }
 
-        if (ensureWithdrawalProofActivationSwitch(productionYaml, this.dogeConfig.proofSystem?.provingMode || 'production')) {
+        const proofSystemMode = this.dogeConfig.proofSystem?.mode
+          || this.dogeConfig.proofSystem?.provingMode
+          || 'disabled'
+        if (ensureWithdrawalProofActivationSwitch(productionYaml, proofSystemMode)) {
           changes.push({
             key: 'withdrawalProof.enabled',
             newValue: productionYaml.withdrawalProof.enabled,

@@ -78,7 +78,8 @@ describe('setup prep-charts withdrawal proof config migration', () => {
     expect(env.DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED).to.equal('false')
     expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_PROOF_SYSTEM__DEV_DUMMY__SCROLL_INPUT')
     expect(values.withdrawalProof.enabled).to.equal(false)
-    expect(values.withdrawalProof.provingMode).to.equal('production')
+    expect(values.withdrawalProof.mode).to.equal('disabled')
+    expect(values.withdrawalProof.provingMode).to.equal(undefined)
   })
 })
 

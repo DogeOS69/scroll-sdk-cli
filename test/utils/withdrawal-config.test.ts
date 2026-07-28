@@ -166,7 +166,7 @@ ${WITHDRAWAL_DEPLOYMENT_END}
     }
 
     expect(ensureWithdrawalProofActivationSwitch(values, 'mock')).to.equal(true)
-    expect(values.withdrawalProof).to.deep.equal({ enabled: true, provingMode: 'mock' })
+    expect(values.withdrawalProof).to.deep.equal({ enabled: true, mode: 'mock', provingMode: 'mock' })
     expect(values.env).to.deep.equal([
       { name: 'RUST_LOG', value: 'info' },
       {
