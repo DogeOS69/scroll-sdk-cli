@@ -4,6 +4,7 @@ import {
   BRIDGE_TIMELOCK_MARGIN_BLOCKS,
   BRIDGE_TIMELOCK_RELATIVE_BLOCKS,
   buildEthereumDaProtocolSeedConfig,
+  buildInitialSystemSignerChoices,
   resolveBridgeTimelock,
   resolveInitialSystemSignerFromDogeConfig,
 } from '../../../src/commands/setup/bridge-init.js'
@@ -243,5 +244,49 @@ describe('setup bridge-init doge-config sequencer signer resolution', () => {
     })
 
     expect(result).to.equal('0x3333333333333333333333333333333333333333')
+  })
+})
+
+describe('setup bridge-init protocol seed sequencer signer selection', () => {
+  const existingSigner = '0x1111111111111111111111111111111111111111'
+  const primarySequencerSigner = '0x2222222222222222222222222222222222222222'
+
+  it('shows both signer addresses and a custom-address option', () => {
+    expect(buildInitialSystemSignerChoices(existingSigner, primarySequencerSigner)).to.deep.equal([
+      {
+        name: `Keep existing Protocol Seed value: ${existingSigner}`,
+        value: 'existing',
+      },
+      {
+        name: `Use primary Sequencer signer: ${primarySequencerSigner}`,
+        value: 'primary-sequencer',
+      },
+      {
+        name: 'Enter a different EVM address',
+        value: 'custom',
+      },
+    ])
+  })
+
+  it('allows a custom address even when the existing and primary values are the same', () => {
+    const choices = buildInitialSystemSignerChoices(existingSigner, existingSigner)
+
+    expect(choices).to.deep.include({
+      name: 'Enter a different EVM address',
+      value: 'custom',
+    })
+  })
+
+  it('offers the primary and custom choices when no existing value is available', () => {
+    expect(buildInitialSystemSignerChoices(undefined, primarySequencerSigner)).to.deep.equal([
+      {
+        name: `Use primary Sequencer signer: ${primarySequencerSigner}`,
+        value: 'primary-sequencer',
+      },
+      {
+        name: 'Enter a different EVM address',
+        value: 'custom',
+      },
+    ])
   })
 })

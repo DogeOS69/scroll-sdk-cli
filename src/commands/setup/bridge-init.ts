@@ -55,6 +55,8 @@ export interface ProtocolSeedConfigInputs {
   network: string
 }
 
+export type InitialSystemSignerChoice = 'custom' | 'existing' | 'primary-sequencer'
+
 export function resolveBridgeTimelock(
   existingTimelock: unknown,
   currentHeight: number
@@ -180,6 +182,33 @@ function isValidEvmAddress(address: string): boolean {
   return /^0x[\dA-Fa-f]{40}$/.test(address)
 }
 
+export function buildInitialSystemSignerChoices(
+  existingSigner: string | undefined,
+  primarySequencerSigner: string
+): Array<{ name: string; value: InitialSystemSignerChoice }> {
+  const choices: Array<{ name: string; value: InitialSystemSignerChoice }> = []
+
+  if (existingSigner) {
+    choices.push({
+      name: `Keep existing Protocol Seed value: ${existingSigner}`,
+      value: 'existing',
+    })
+  }
+
+  choices.push(
+    {
+      name: `Use primary Sequencer signer: ${primarySequencerSigner}`,
+      value: 'primary-sequencer',
+    },
+    {
+      name: 'Enter a different EVM address',
+      value: 'custom',
+    }
+  )
+
+  return choices
+}
+
 function isValidSecp256k1PublicKey(publicKey: string): boolean {
   const normalized = publicKey.replace(/^0x/, '')
   return /^[\dA-Fa-f]{66}$/.test(normalized) || /^04[\dA-Fa-f]{128}$/.test(normalized)
@@ -263,6 +292,7 @@ export class BridgeInitCommand extends Command {
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
+  private selectedInitialSystemSigner?: string
 
   async run(): Promise<void> {
     const { flags } = await this.parse(BridgeInitCommand)
@@ -1253,7 +1283,7 @@ export class BridgeInitCommand extends Command {
     newConfig.deposit_eth_recipient_address_hex = this.getNestedValue(configData, 'accounts.DEPLOYER_ADDR')
     fs.writeFileSync(paths.setupDefaultsPath, toml.stringify(newConfig))
     this.jsonCtx.info(`Updating protocol seed for Dogecoin network ${network}`)
-    this.updateProtocolSeed(paths.dataDir, network, configPath)
+    await this.updateProtocolSeed(paths.dataDir, network, configPath)
     this.updateGenerateBridgeInfoNetwork(paths.generateBridgeInfoPath, network, false)
 
     // copy ./values/genesis.yaml to .data/genesis.json, cause bridge init need genesis.json now
@@ -1444,7 +1474,7 @@ export class BridgeInitCommand extends Command {
     ])
 
     const network = this.getConfiguredDogeNetwork()
-    this.updateProtocolSeed(paths.dataDir, network, path.join(process.cwd(), 'config.toml'))
+    await this.updateProtocolSeed(paths.dataDir, network, path.join(process.cwd(), 'config.toml'))
   }
 
   private async runProtocolContextStep(imageTag: string, paths: BridgeInitPaths): Promise<void> {
@@ -1475,7 +1505,7 @@ export class BridgeInitCommand extends Command {
     )
 
     const network = this.getConfiguredDogeNetwork()
-    this.updateProtocolSeed(paths.dataDir, network, path.join(process.cwd(), 'config.toml'))
+    await this.updateProtocolSeed(paths.dataDir, network, path.join(process.cwd(), 'config.toml'))
 
     this.jsonCtx.info('Running step 5-protocol-context: generate protocol_context.json')
 
@@ -1544,6 +1574,69 @@ export class BridgeInitCommand extends Command {
     this.materializeWithdrawalProcessorSecrets(paths)
   }
 
+  private async selectProtocolSeedInitialSystemSigner(
+    protocolSeedConfig: any,
+    primarySequencerSigner: string
+  ): Promise<string> {
+    if (this.selectedInitialSystemSigner) {
+      return this.selectedInitialSystemSigner
+    }
+
+    const rawExistingSigner = protocolSeedConfig?.chain_anchors?.initial_system_signer
+    const existingSigner = typeof rawExistingSigner === 'string'
+      ? rawExistingSigner.trim()
+      : undefined
+
+    this.jsonCtx.info(`Existing Protocol Seed initial_system_signer: ${existingSigner || '<not set>'}`)
+    this.jsonCtx.info(`Primary Sequencer signer address: ${primarySequencerSigner}`)
+
+    const validExistingSigner = existingSigner && isValidEvmAddress(existingSigner)
+      ? existingSigner
+      : undefined
+
+    if (existingSigner && !validExistingSigner) {
+      this.jsonCtx.addWarning(
+        `Existing Protocol Seed initial_system_signer is invalid (${existingSigner}); ` +
+        'it cannot be preserved.'
+      )
+    }
+
+    if (this.nonInteractive) {
+      this.jsonCtx.info('Non-interactive mode: using the primary Sequencer signer.')
+      this.selectedInitialSystemSigner = primarySequencerSigner
+      return primarySequencerSigner
+    }
+
+    const selectedChoice = await select({
+      choices: buildInitialSystemSignerChoices(validExistingSigner, primarySequencerSigner),
+      default: 'primary-sequencer',
+      message: 'Choose chain_anchors.initial_system_signer for the Protocol Seed:',
+    })
+
+    let selectedSigner: string
+    if (selectedChoice === 'custom') {
+      selectedSigner = (await input({
+        message: 'Enter a different initial_system_signer EVM address:',
+        validate: value => isValidEvmAddress(value.trim()) ||
+          'Enter a valid 20-byte EVM address starting with 0x.',
+      })).trim()
+    } else if (selectedChoice === 'existing' && validExistingSigner) {
+      selectedSigner = validExistingSigner
+    } else {
+      selectedSigner = primarySequencerSigner
+    }
+
+    this.selectedInitialSystemSigner = selectedSigner
+    this.jsonCtx.info(
+      selectedChoice === 'existing'
+        ? `Keeping existing Protocol Seed initial_system_signer: ${selectedSigner}`
+        : selectedChoice === 'custom'
+          ? `Using custom initial_system_signer: ${selectedSigner}`
+          : `Using primary Sequencer signer as initial_system_signer: ${selectedSigner}`
+    )
+    return selectedSigner
+  }
+
   private syncSetupDefaultsNetwork(setupDefaultsPath: string, network: string): void {
     const setupDefaults = toml.parse(fs.readFileSync(setupDefaultsPath, 'utf8')) as any
     if (setupDefaults.network === network) return
@@ -1610,10 +1703,10 @@ export class BridgeInitCommand extends Command {
     this.jsonCtx.info(`Updated ${generateBridgeInfoPath} with network = ${network}`)
   }
 
-  private updateProtocolSeed(dataDir: string, network: string, configPath: string): string {
+  private async updateProtocolSeed(dataDir: string, network: string, configPath: string): Promise<string> {
     const configToml = this.getRequiredTomlConfig(configPath)
     const { config: dogeConfig, path: dogeConfigPath } = this.getRequiredDogeConfig(dataDir)
-    const initialSystemSigner = this.getRequiredInitialSystemSigner(dogeConfig, dogeConfigPath)
+    const primarySequencerSigner = this.getRequiredInitialSystemSigner(dogeConfig, dogeConfigPath)
     const contractsPath = path.join(process.cwd(), 'config-contracts.toml')
     const contractsConfig = this.getRequiredTomlConfig(contractsPath)
     const protocolInputConfig = {
@@ -1628,6 +1721,11 @@ export class BridgeInitCommand extends Command {
     if (fs.existsSync(protocolSeedPath)) {
       protocolSeedConfig = toml.parse(fs.readFileSync(protocolSeedPath, 'utf8'))
     }
+
+    const initialSystemSigner = await this.selectProtocolSeedInitialSystemSigner(
+      protocolSeedConfig,
+      primarySequencerSigner
+    )
 
     protocolSeedConfig = buildEthereumDaProtocolSeedConfig(
       {
