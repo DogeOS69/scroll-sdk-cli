@@ -665,6 +665,111 @@ function mergeEnvFileContent(
   }
 }
 
+function requireGenesisObject(value: unknown, fieldPath: string): Record<string, any> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`genesis field ${fieldPath} must be an object`)
+  }
+
+  return value as Record<string, any>
+}
+
+function normalizeGenesisInteger(value: unknown, fieldPath: string): number {
+  if (typeof value === 'boolean') {
+    throw new TypeError(`genesis field ${fieldPath} must be a non-negative decimal integer, got: ${JSON.stringify(value)}`)
+  }
+
+  if (typeof value === 'number') {
+    if (Number.isSafeInteger(value) && value >= 0) return value
+  } else if (typeof value === 'string' && /^(0|[1-9]\d*)$/.test(value)) {
+    const parsed = Number(value)
+    if (Number.isSafeInteger(parsed)) return parsed
+  }
+
+  throw new TypeError(`genesis field ${fieldPath} must be a non-negative decimal integer, got: ${JSON.stringify(value)}`)
+}
+
+function requireGenesisAddress(value: unknown, fieldPath: string): string {
+  if (typeof value !== 'string' || !/^0x[\dA-Fa-f]{40}$/.test(value)) {
+    throw new TypeError(`genesis field ${fieldPath} must be a 20-byte hex address, got: ${JSON.stringify(value)}`)
+  }
+
+  return value
+}
+
+// values/genesis.yaml is the canonical Geth genesis and must remain unchanged.
+// Adapt a deep copy at the RPC-package boundary to the stricter Scroll-Reth
+// chainspec schema. Keep this transformation deliberately narrow: normalize
+// integer representations, supply the required buffer flag, bind the system
+// contract address already present in the legacy metadata, and bind the L1
+// deployment block supplied by l2-rpc-production.yaml.
+export function normalizeGenesisForReth(sourceGenesis: unknown, requiredStartL1Block: unknown): Record<string, any> {
+  const source = requireGenesisObject(sourceGenesis, '<root>')
+  const normalized = JSON.parse(JSON.stringify(source)) as Record<string, any>
+  const config = requireGenesisObject(normalized.config, 'config')
+  const scroll = requireGenesisObject(config.scroll, 'config.scroll')
+  const l1Config = requireGenesisObject(scroll.l1Config, 'config.scroll.l1Config')
+
+  if (scroll.l1DataFeeBufferCheck === undefined) {
+    scroll.l1DataFeeBufferCheck = false
+  } else if (typeof scroll.l1DataFeeBufferCheck !== 'boolean') {
+    throw new TypeError(
+      `genesis field config.scroll.l1DataFeeBufferCheck must be a boolean, got: ${JSON.stringify(scroll.l1DataFeeBufferCheck)}`,
+    )
+  }
+
+  for (const field of ['l1ChainId', 'numL1MessagesPerBlock']) {
+    l1Config[field] = normalizeGenesisInteger(l1Config[field], `config.scroll.l1Config.${field}`)
+  }
+
+  if (l1Config.l1MessageQueueV2DeploymentBlock !== undefined) {
+    l1Config.l1MessageQueueV2DeploymentBlock = normalizeGenesisInteger(
+      l1Config.l1MessageQueueV2DeploymentBlock,
+      'config.scroll.l1Config.l1MessageQueueV2DeploymentBlock',
+    )
+  }
+
+  const systemContract = requireGenesisObject(config.systemContract, 'config.systemContract')
+  const systemContractAddress = requireGenesisAddress(
+    systemContract.system_contract_address,
+    'config.systemContract.system_contract_address',
+  )
+  const existingSystemContractAddress = l1Config.systemContractAddress
+  if (
+    existingSystemContractAddress !== undefined &&
+    (
+      typeof existingSystemContractAddress !== 'string' ||
+      existingSystemContractAddress.toLowerCase() !== systemContractAddress.toLowerCase()
+    )
+  ) {
+    throw new Error(
+      'genesis field config.scroll.l1Config.systemContractAddress conflicts with ' +
+      'config.systemContract.system_contract_address',
+    )
+  }
+
+  l1Config.systemContractAddress = systemContractAddress
+
+  const startL1Block = normalizeGenesisInteger(
+    requiredStartL1Block,
+    'L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK',
+  )
+  if (l1Config.startL1Block !== undefined) {
+    const existingStartL1Block = normalizeGenesisInteger(
+      l1Config.startL1Block,
+      'config.scroll.l1Config.startL1Block',
+    )
+    if (existingStartL1Block !== startL1Block) {
+      throw new Error(
+        'genesis field config.scroll.l1Config.startL1Block conflicts with ' +
+        'L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK',
+      )
+    }
+  }
+
+  l1Config.startL1Block = startL1Block
+  return normalized
+}
+
 export default class SetupGenRpcPackage extends Command {
   static override description = 'Generate configuration files for dogeos-rpc-package to enable external RPC nodes'
 
@@ -954,9 +1059,14 @@ export default class SetupGenRpcPackage extends Command {
 
   private extractGenesisJson(valuesDir: string, rpcPackageDir: string, network: string): string {
     const genesisYamlPath = path.resolve(valuesDir, 'genesis.yaml')
+    const l2RpcYamlPath = path.resolve(valuesDir, 'l2-rpc-production.yaml')
 
     if (!fs.existsSync(genesisYamlPath)) {
       throw new Error(`genesis.yaml not found at: ${genesisYamlPath}`)
+    }
+
+    if (!fs.existsSync(l2RpcYamlPath)) {
+      throw new Error(`l2-rpc-production.yaml not found at: ${l2RpcYamlPath}`)
     }
 
     try {
@@ -970,35 +1080,44 @@ export default class SetupGenRpcPackage extends Command {
 
       // Extract genesis.json from the YAML structure
       // The structure might be: { genesis: "JSON_STRING" } or { genesis: JSON_OBJECT }
-      let genesisJsonContent: string
+      let genesisJson: unknown
 
       if (genesisYaml.scrollConfig) {
         if (typeof genesisYaml.scrollConfig === 'string') {
-          // Validate the JSON, but preserve its exact contents. genesis.yaml is
-          // the source of truth and gen-rpc-package must not rewrite genesis.
           try {
-            JSON.parse(genesisYaml.scrollConfig)
+            genesisJson = JSON.parse(genesisYaml.scrollConfig)
           } catch (parseError) {
             throw new Error(`Failed to parse genesis JSON string: ${parseError instanceof Error ? parseError.message : String(parseError)}`)
           }
-
-          genesisJsonContent = genesisYaml.scrollConfig
         } else if (typeof genesisYaml.scrollConfig === 'object') {
-          genesisJsonContent = JSON.stringify(genesisYaml.scrollConfig, null, 2)
+          genesisJson = genesisYaml.scrollConfig
         } else {
           throw new TypeError('Invalid genesis format in genesis.yaml - expected string or object')
         }
       } else {
         // If no 'genesis' key, assume the entire YAML is the genesis data
-        genesisJsonContent = JSON.stringify(genesisYaml, null, 2)
+        genesisJson = genesisYaml
       }
+
+      const l2RpcEnvData = this.loadConfigMapEnvData(l2RpcYamlPath)
+      const startL1Block = l2RpcEnvData.L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK
+      if (startL1Block === undefined) {
+        throw new Error(
+          'l2-rpc-production.yaml configMaps.env.data.L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK ' +
+          'is required for genesis config.scroll.l1Config.startL1Block',
+        )
+      }
+
+      const rethGenesis = normalizeGenesisForReth(genesisJson, startL1Block)
 
       // Create target directory
       const targetDirectory = path.resolve(rpcPackageDir, 'configs', network)
       fs.mkdirSync(targetDirectory, { recursive: true })
-      // Copy genesis into the RPC package without changing any fields.
+
+      // Write a deterministic Reth-specific derivative. The source
+      // values/genesis.yaml remains untouched and continues to serve Geth.
       const genesisJsonPath = path.join(targetDirectory, 'l2reth-genesis.json')
-      fs.writeFileSync(genesisJsonPath, genesisJsonContent)
+      fs.writeFileSync(genesisJsonPath, `${JSON.stringify(rethGenesis, null, 2)}\n`)
 
       const legacyGethGenesisPath = path.join(targetDirectory, 'l2geth-genesis.json')
       if (fs.existsSync(legacyGethGenesisPath)) {
@@ -1207,7 +1326,6 @@ export default class SetupGenRpcPackage extends Command {
       config,
       loadBalancerDomains,
       rethBootnodePeers,
-      { preferAdditionalPeers: rethBootnodePeers.length > 0 },
     )
 
     const validSigner = this.resolveL2RethValidSigner(config)
@@ -1352,12 +1470,8 @@ export default class SetupGenRpcPackage extends Command {
     config: any | undefined,
     loadBalancerDomains: Record<string, string>,
     additionalPeers: string[] = [],
-    options: { preferAdditionalPeers?: boolean } = {},
   ): string | undefined {
     const extraPeers = uniqueStrings(additionalPeers)
-    if (options.preferAdditionalPeers && extraPeers.length > 0) {
-      return JSON.stringify(convertPeersToExternalDomains(extraPeers, loadBalancerDomains))
-    }
 
     const configBootnodePeers = config?.bootnode?.L2_GETH_PUBLIC_PEERS
     if (Array.isArray(configBootnodePeers) && configBootnodePeers.length > 0) {

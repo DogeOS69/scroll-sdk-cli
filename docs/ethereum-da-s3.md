@@ -5,19 +5,78 @@
 an unauthenticated HTTP `aws_s3` blob source. This is useful after Beacon API
 blob retention expires.
 
-The CLI does not create S3 buckets or bucket policies. Configure the bucket,
-public read path, and submitter write permissions before running
-`scrollsdk setup prep-charts`. The CLI reads `.data/doge-config.toml` and writes
-the corresponding Helm environment values.
+The canonical configuration lives in
+`.data/doge-config.toml` under `[ethereumDa.blobArchive.s3]`. Configure it
+directly when the bucket and IAM resources are managed separately, or use
+`scrollsdk setup eth-da-submitter` to record the archive configuration while
+configuring the submitter signer.
+
+When the submitter uses an AWS KMS signer,
+`scrollsdk setup eth-da-submitter` can create a missing AWS S3 bucket. Bucket
+creation is enabled by default and can be disabled with
+`--no-create-archive-bucket`. A bucket created by the CLI has all public access
+blocked and SSE-S3 (`AES256`) enabled. The CLI does **not** create an anonymous
+read bucket policy, CloudFront distribution, or other public read transport.
+Operators must configure and verify the `publicBaseUrl` transport separately.
+
+After configuring the archive, run `scrollsdk setup prep-charts`. It reads
+`.data/doge-config.toml` and projects the settings into `eth-da-submitter`,
+`l1-interface`, `withdrawal-processor`, and every runtime Reth values file.
+`scrollsdk setup gen-rpc-package` independently reads the same canonical
+configuration when it generates `L2RETH_BLOB_S3_URL`.
 
 The resolver performs one anonymous HTTP GET per blob:
 
 ```text
-GET {publicBaseUrl}/{0x-versioned-hash}
+GET {publicBaseUrl}/{keyPrefix}/{0x-versioned-hash}
 ```
 
+When `keyPrefix` is empty, the prefix path segment is omitted.
 The response body must be the raw EIP-4844 blob bytes. It is not JSON, and the
 expected size is `131072` bytes.
+
+## Configure through the CLI
+
+For an existing bucket whose public read path and IAM policy are managed by the
+operator:
+
+```bash
+scrollsdk setup eth-da-submitter \
+  --non-interactive \
+  --json \
+  --signer-backend aws-kms \
+  --aws-region us-east-1 \
+  --eks-cluster dogeos-devnet-cluster \
+  --namespace default \
+  --network-alias devnet \
+  --archive-bucket dogeos-eth-da-archive-devnet \
+  --archive-region us-west-2 \
+  --archive-key-prefix devnet/eth-da/blobs/v1 \
+  --archive-public-base-url https://dogeos-eth-da-archive-devnet.s3.us-west-2.amazonaws.com \
+  --no-create-archive-bucket
+```
+
+`--aws-region` selects the KMS/EKS/IRSA region.
+`--archive-region` selects the S3 bucket region; the two regions may differ.
+
+To let the CLI create a missing bucket, use
+`--create-archive-bucket` (the default) instead. The CLI performs
+`HeadBucket`, creates only on a not-found result, blocks all public access, and
+enables SSE-S3. It grants `s3:GetObject` and `s3:PutObject` on
+`arn:aws:s3:::<bucket>/*` when it creates or manages the submitter IAM role.
+When an existing role ARN is supplied or reused, treat the role as
+operator-managed and verify its S3 permissions independently.
+
+The command writes the resolved values back to `.data/doge-config.toml`; it
+does not directly update Helm values. Run:
+
+```bash
+scrollsdk setup prep-charts --non-interactive --json
+```
+
+afterward. Use `--disable-archive` only when the archive is intentionally
+disabled; a later `prep-charts`/`gen-rpc-package` run will then remove managed
+S3 read configuration.
 
 ## AWS S3 direct bucket
 
@@ -35,15 +94,17 @@ enabled = true
 bucket = "dogeos-eth-da-archive-testnet"
 region = "us-west-2"
 publicBaseUrl = "https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/"
+keyPrefix = "testnet/eth-da/blobs/v1"
 timeoutMs = 15000
 treatForbiddenAsMissing = false
 ```
 
 `bucket` and `region` are used by `eth-da-submitter` for `PutObject`.
-`publicBaseUrl` is used by `l1-interface` and `withdrawal-processor` for
-anonymous HTTP reads. These values must point at the same object namespace.
-Object keys are the `0x`-prefixed versioned hashes; there is no separate prefix
-setting.
+`publicBaseUrl` is used by `l1-interface`, `withdrawal-processor`, and Reth blob
+consumers for HTTP reads. `keyPrefix` is applied to both upload and read paths.
+These values must point at the same object namespace. With the example above,
+an object is stored and read as
+`testnet/eth-da/blobs/v1/<0x-versioned-hash>`.
 
 Grant the submitter's AWS identity, such as its IRSA role, write and read-back
 access for conflict checks:
@@ -52,12 +113,16 @@ access for conflict checks:
 {
   "Effect": "Allow",
   "Action": ["s3:PutObject", "s3:GetObject"],
-  "Resource": "arn:aws:s3:::dogeos-eth-da-archive-testnet/*"
+  "Resource": "arn:aws:s3:::dogeos-eth-da-archive-testnet/testnet/eth-da/blobs/v1/*"
 }
 ```
 
 If using direct public S3 reads, configure the bucket policy to allow anonymous
-`s3:GetObject` on archive objects while keeping writes private:
+`s3:GetObject` on archive objects while keeping writes private. A bucket
+created by the CLI has `BlockPublicPolicy=true`, so enabling direct anonymous
+S3 reads also requires an explicit, security-reviewed Public Access Block
+change. Prefer CloudFront or another authenticated/private-origin read
+transport when public S3 access is not acceptable.
 
 ```json
 {
@@ -68,7 +133,7 @@ If using direct public S3 reads, configure the bucket policy to allow anonymous
       "Effect": "Allow",
       "Principal": "*",
       "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::dogeos-eth-da-archive-testnet/*"
+      "Resource": "arn:aws:s3:::dogeos-eth-da-archive-testnet/testnet/eth-da/blobs/v1/*"
     }
   ]
 }
@@ -86,12 +151,15 @@ enabled = true
 bucket = "dogeos-eth-da-archive-testnet"
 region = "us-west-2"
 publicBaseUrl = "https://da-archive.example.com/"
+keyPrefix = "testnet/eth-da/blobs/v1"
 timeoutMs = 15000
 treatForbiddenAsMissing = false
 ```
 
-The URL `https://da-archive.example.com/0xabc...` must return the object stored
-at `s3://dogeos-eth-da-archive-testnet/0xabc...`.
+The URL
+`https://da-archive.example.com/testnet/eth-da/blobs/v1/0xabc...` must return
+the object stored at
+`s3://dogeos-eth-da-archive-testnet/testnet/eth-da/blobs/v1/0xabc...`.
 
 ## S3-compatible endpoints
 
@@ -117,10 +185,11 @@ The resolver requests
 
 | Field | Required | Used by | Description |
 |---|---|---|---|
-| `enabled` | yes | submitter, l1-interface, withdrawal-processor | Enables S3 upload and readback when `true`. |
-| `bucket` | yes when enabled | eth-da-submitter | Existing bucket name. The CLI does not create it. |
+| `enabled` | yes | submitter, l1-interface, withdrawal-processor, Reth | Enables S3 upload and readback when `true`. |
+| `bucket` | yes when enabled | eth-da-submitter | Bucket name. The AWS KMS signer setup path can create it unless `--no-create-archive-bucket` is set. |
 | `region` | yes when enabled | eth-da-submitter | Bucket region. Must match the real bucket region. |
-| `publicBaseUrl` | yes when enabled | l1-interface, withdrawal-processor | Public HTTP base URL used for anonymous `GET {base}/{0x-versioned-hash}`. |
+| `publicBaseUrl` | yes when enabled | l1-interface, withdrawal-processor, Reth | HTTP base URL used for `GET {base}/{keyPrefix}/{0x-versioned-hash}`. |
+| `keyPrefix` | no | submitter and readers | Shared object-key prefix appended between the base URL/bucket and the versioned hash. |
 | `timeoutMs` | no | l1-interface, withdrawal-processor | HTTP GET timeout. `15000` is a reasonable starting point. |
 | `treatForbiddenAsMissing` | no | l1-interface, withdrawal-processor | Keep `false` unless the endpoint intentionally uses 403 for absent objects. |
 | `endpointUrl` | no | eth-da-submitter | Custom S3-compatible upload endpoint. Usually omitted for AWS S3. |
@@ -133,8 +202,8 @@ After `eth-da-submitter` uploads an object, verify the read URL from a network
 that can reach `l1-interface` and `withdrawal-processor`:
 
 ```bash
-curl -I "https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/0x..."
-curl -s "https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/0x..." | wc -c
+curl -I "https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/testnet/eth-da/blobs/v1/0x..."
+curl -s "https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/testnet/eth-da/blobs/v1/0x..." | wc -c
 ```
 
 Expected results:
@@ -148,5 +217,7 @@ visible. Set it to `true` only after confirming that 403 is the intended
 missing-object behavior.
 
 Run `scrollsdk setup prep-charts` after updating `.data/doge-config.toml` to
-sync S3 settings into `eth-da-submitter`, `l1-interface`, and
-`withdrawal-processor` values.
+sync S3 settings into `eth-da-submitter`, `l1-interface`,
+`withdrawal-processor`, and runtime Reth values. Run
+`scrollsdk setup gen-rpc-package` after that when producing an external RPC
+package.

@@ -195,6 +195,14 @@ export interface DogeConfig {
     /** Legacy compatibility field; migrated to mode by setup proof-config. */
     provingMode?: ProvingMode
   }
+  /** Reth-specific network settings that are intentionally independent of the EVM chain ID. */
+  reth?: {
+    /**
+     * devp2p network ID. Set this explicitly when a rehearsal network must be
+     * isolated from production while retaining the production EVM chain ID.
+     */
+    networkId?: number | string
+  }
   rpc?: {
     apiKey?: string
     blockbookAPIUrl?: string

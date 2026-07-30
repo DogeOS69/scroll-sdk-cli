@@ -7,6 +7,7 @@ import * as path from 'node:path'
 import SetupGenRpcPackage, {
   convertPeersToExternalDomains,
   normalizeConfigMapEnvData,
+  normalizeGenesisForReth,
   syncRpcPackageInitContainersToCompose,
 } from '../../../src/commands/setup/gen-rpc-package.js'
 
@@ -66,32 +67,114 @@ describe('setup gen-rpc-package env generation', () => {
     })
   })
 
-  it('copies genesis into the RPC package without modifying its contents', () => {
+  it('writes a Reth-normalized genesis without modifying the Geth source', () => {
     const valuesDir = path.join(tmpDir, 'values')
     const rpcPackageDir = path.join(tmpDir, 'dogeos-rpc-package')
     fs.mkdirSync(valuesDir, { recursive: true })
 
     const genesisJson = JSON.stringify({
       config: {
+        galileoTime: 1_785_399_093,
         scroll: {
           l1Config: {
             l1ChainId: '111111',
+            l1MessageQueueV2DeploymentBlock: 0,
             numL1MessagesPerBlock: '10',
-            startL1Block: '62934421',
           },
         },
         systemContract: {
           system_contract_address: '0x2000369731833cBf00e97146999442ADf10a4E59',
         },
       },
+      marker: 'preserved',
     })
-    fs.writeFileSync(path.join(valuesDir, 'genesis.yaml'), yaml.dump({ scrollConfig: genesisJson }))
+    const genesisYamlContent = yaml.dump({ scrollConfig: genesisJson })
+    const genesisYamlPath = path.join(valuesDir, 'genesis.yaml')
+    fs.writeFileSync(genesisYamlPath, genesisYamlContent)
+    fs.writeFileSync(
+      path.join(valuesDir, 'l2-rpc-production.yaml'),
+      yaml.dump({
+        configMaps: {
+          env: {
+            data: {
+              L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK: '14023282',
+            },
+          },
+        },
+      }),
+    )
 
     const command = createCommandHarness()
     const outputPath = command.extractGenesisJson(valuesDir, rpcPackageDir, 'testnet')
+    const output = JSON.parse(fs.readFileSync(outputPath, 'utf8'))
 
     expect(outputPath).to.equal(path.join(rpcPackageDir, 'configs', 'testnet', 'l2reth-genesis.json'))
-    expect(fs.readFileSync(outputPath, 'utf8')).to.equal(genesisJson)
+    expect(output.config.scroll.l1DataFeeBufferCheck).to.equal(false)
+    expect(output.config.scroll.l1Config.l1ChainId).to.equal(111_111)
+    expect(output.config.scroll.l1Config.numL1MessagesPerBlock).to.equal(10)
+    expect(output.config.scroll.l1Config.l1MessageQueueV2DeploymentBlock).to.equal(0)
+    expect(output.config.scroll.l1Config.startL1Block).to.equal(14_023_282)
+    expect(output.config.scroll.l1Config.systemContractAddress).to.equal(
+      '0x2000369731833cBf00e97146999442ADf10a4E59',
+    )
+    expect(output.config.galileoTime).to.equal(1_785_399_093)
+    expect(output.marker).to.equal('preserved')
+    expect(fs.readFileSync(genesisYamlPath, 'utf8')).to.equal(genesisYamlContent)
+  })
+
+  it('normalizes Reth metadata idempotently and rejects conflicting source values', () => {
+    const source = {
+      config: {
+        scroll: {
+          l1Config: {
+            l1ChainId: '111111',
+            numL1MessagesPerBlock: '10',
+            startL1Block: '14023282',
+            systemContractAddress: '0x2000369731833cbf00e97146999442adf10a4e59',
+          },
+          l1DataFeeBufferCheck: true,
+        },
+        systemContract: {
+          system_contract_address: '0x2000369731833cBf00e97146999442ADf10a4E59',
+        },
+      },
+    }
+    const sourceBefore = JSON.parse(JSON.stringify(source))
+    const normalized = normalizeGenesisForReth(source, '14023282')
+
+    expect(source).to.deep.equal(sourceBefore)
+    expect(normalized.config.scroll.l1DataFeeBufferCheck).to.equal(true)
+    expect(normalized.config.scroll.l1Config.startL1Block).to.equal(14_023_282)
+    expect(normalizeGenesisForReth(normalized, 14_023_282)).to.deep.equal(normalized)
+
+    expect(() => normalizeGenesisForReth({
+      config: {
+        scroll: {
+          l1Config: {
+            l1ChainId: 'not-a-number',
+            numL1MessagesPerBlock: '10',
+          },
+        },
+        systemContract: {
+          system_contract_address: '0x2000369731833cBf00e97146999442ADf10a4E59',
+        },
+      },
+    }, 14_023_282)).to.throw('l1ChainId')
+
+    expect(() => normalizeGenesisForReth({
+      config: {
+        scroll: {
+          l1Config: {
+            l1ChainId: '111111',
+            numL1MessagesPerBlock: '10',
+            startL1Block: 1,
+          },
+        },
+        systemContract: {
+          system_contract_address: '0x2000369731833cBf00e97146999442ADf10a4E59',
+        },
+      },
+    }, 14_023_282)).to.throw('startL1Block conflicts')
   })
 
   it('converts internal bootnode enodes to public p2p LoadBalancer domains', () => {
@@ -116,7 +199,7 @@ describe('setup gen-rpc-package env generation', () => {
     ])
   })
 
-  it('writes only l2reth env from l2-rpc values YAML and prefers reth bootnode peers', () => {
+  it('writes only l2reth env and combines geth and Reth bootnode peers', () => {
     const valuesDir = path.join(tmpDir, 'values')
     const rpcPackageDir = path.join(tmpDir, 'dogeos-rpc-package')
     fs.mkdirSync(valuesDir, { recursive: true })
@@ -189,7 +272,10 @@ describe('setup gen-rpc-package env generation', () => {
     const result = command.generateL2NodeEnvFiles(
       {
         bootnode: {
-          L2_GETH_PUBLIC_PEERS: ['enode://bootnode@l2-bootnode-0:30303'],
+          L2_GETH_PUBLIC_PEERS: [
+            'enode://geth0@l2-bootnode-0:30303',
+            'enode://geth1@l2-bootnode-1:30303',
+          ],
         },
         sequencer: {
           L2GETH_SIGNER_ADDRESS: '0x1234567890123456789012345678901234567890',
@@ -211,6 +297,7 @@ describe('setup gen-rpc-package env generation', () => {
       rpcPackageDir,
       {
         'l2-bootnode-0-p2p': 'bootnode-0.example.com',
+        'l2-bootnode-1-p2p': 'bootnode-1.example.com',
         'l2-reth-bootnode-0-p2p': 'reth-bootnode-0.example.com',
         'l2-reth-bootnode-1-p2p': 'reth-bootnode-1.example.com',
         'l2-sequencer-0-p2p': 'sequencer-0.example.com',
@@ -224,7 +311,7 @@ describe('setup gen-rpc-package env generation', () => {
     expect(fs.existsSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2geth.env'))).to.equal(false)
 
     const l2rethEnv = fs.readFileSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2reth.env'), 'utf8')
-    expect(l2rethEnv).to.include('L2GETH_PEER_LIST=["enode://reth0@reth-bootnode-0.example.com:30303","enode://reth1@reth-bootnode-1.example.com:30303"]')
+    expect(l2rethEnv).to.include('L2GETH_PEER_LIST=["enode://geth0@bootnode-0.example.com:30303","enode://geth1@bootnode-1.example.com:30303","enode://reth0@reth-bootnode-0.example.com:30303","enode://reth1@reth-bootnode-1.example.com:30303"]')
     expect(l2rethEnv).to.include('L2RETH_L1_ENDPOINT=http://l1-interface:8545')
     expect(l2rethEnv).to.include('L2RETH_NETWORK_ID=4444444')
     expect(l2rethEnv).to.include('L2RETH_BLOB_S3_URL=https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/rehearsal/batches')
@@ -232,12 +319,11 @@ describe('setup gen-rpc-package env generation', () => {
     expect(l2rethEnv).not.to.include('CHAIN_ID=1')
     expect(l2rethEnv).not.to.include('L2GETH_L1_ENDPOINT=http://old-l1')
     expect(l2rethEnv).not.to.include('L2RETH_DA_BLOB_BEACON_NODE')
-    expect(l2rethEnv).not.to.include('enode://bootnode@')
     expect(l2rethEnv).not.to.include('sequencer-0.example.com')
     expect(l2rethEnv).not.to.include('l2-reth-sequencer-0')
   })
 
-  it('uses doge-config reth bootnode enodes instead of stale legacy bootnode config peers', () => {
+  it('combines config geth bootnodes with doge-config Reth bootnodes', () => {
     const valuesDir = path.join(tmpDir, 'values')
     const rpcPackageDir = path.join(tmpDir, 'dogeos-rpc-package')
     fs.mkdirSync(valuesDir, { recursive: true })
@@ -295,6 +381,8 @@ describe('setup gen-rpc-package env generation', () => {
       },
       rpcPackageDir,
       {
+        'l2-bootnode-0-p2p': 'geth-bootnode-0.example.com',
+        'l2-bootnode-1-p2p': 'geth-bootnode-1.example.com',
         'l2-reth-bootnode-0-p2p': 'reth-bootnode-0.example.com',
         'l2-reth-bootnode-1-p2p': 'reth-bootnode-1.example.com',
       },
@@ -306,11 +394,10 @@ describe('setup gen-rpc-package env generation', () => {
 
     expect(fs.existsSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2geth.env'))).to.equal(false)
     const l2rethEnv = fs.readFileSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2reth.env'), 'utf8')
-    expect(l2rethEnv).to.include('L2GETH_PEER_LIST=["enode://reth0@reth-bootnode-0.example.com:30303","enode://reth1@reth-bootnode-1.example.com:30303"]')
+    expect(l2rethEnv).to.include('L2GETH_PEER_LIST=["enode://legacy0@geth-bootnode-0.example.com:30303","enode://legacy1@geth-bootnode-1.example.com:30303","enode://reth0@reth-bootnode-0.example.com:30303","enode://reth1@reth-bootnode-1.example.com:30303"]')
     expect(l2rethEnv).to.include('L2RETH_NETWORK_ID=5555555')
     expect(l2rethEnv).not.to.include('LoadBalancer-Domain-For-l2-bootnode')
     expect(l2rethEnv).not.to.include('L2RETH_BLOB_S3_URL')
-    expect(l2rethEnv).not.to.include('legacy0')
     expect(l2rethEnv).not.to.include('l2-sequencer-0')
   })
 
@@ -337,8 +424,8 @@ describe('setup gen-rpc-package env generation', () => {
               DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL: 'https://sepolia.example',
               DOGEOS_L1_INTERFACE_GENESIS_JSON_PATH: '/app/genesis/genesis.json',
               DOGEOS_L1_INTERFACE_HEALTH_LISTEN_ADDRESS: '0.0.0.0:9090',
-              DOGEOS_L1_INTERFACE_NETWORK_STR: 'testnet',
               DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER: '0x1234567890123456789012345678901234567890',
+              DOGEOS_L1_INTERFACE_NETWORK_STR: 'testnet',
               DOGEOS_L1_INTERFACE_PRIVATE_TOKEN: 'do-not-copy',
               DOGEOS_L1_INTERFACE_SEQUENCER_GENESIS_MODE: 'true',
             },
@@ -381,8 +468,8 @@ describe('setup gen-rpc-package env generation', () => {
     expect(env).not.to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL')
     expect(env).not.to.include('l1-devnet-lighthouse')
     expect(env).not.to.include('PRIVATE_TOKEN')
-    expect(env).not.to.include('SCROLL_MESSENGER_ADDRESS')
     expect(env).not.to.include('INITIAL_SYSTEM_SIGNER')
+    expect(env).not.to.include('SCROLL_MESSENGER_ADDRESS')
     // Full overwrite: nothing from the stale prior file survives.
     expect(env).not.to.include('# existing')
     expect(env).not.to.include('http://dogecoin-node:44555')

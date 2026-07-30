@@ -14,6 +14,7 @@ import {
   buildEthDaSubmitterPrepEnv,
   buildFeeOraclePrepEnv,
   buildL1InterfaceBlobSourcePrepEnv,
+  buildRethInitialTrustedPeers,
   buildTsoSigners,
   buildWithdrawalBlobSourcePrepEnv,
   getEthereumDaS3PublicBaseUrl,
@@ -25,6 +26,7 @@ import {
   removeEnvArrayKeys,
   removeL2GethBlobS3ExtraParams,
   removeRetiredAttestationSignerValues,
+  resolveRethP2PNetworkId,
   scrubFeeOracleLegacyValues,
   scrubL1InterfaceRetiredEnv,
   scrubWithdrawalLegacyProofEnv,
@@ -42,6 +44,27 @@ const VALID_PREP_CUTOVER = {
   stateRoot: '0x3333333333333333333333333333333333333333333333333333333333333333',
   withdrawRoot: '0x4444444444444444444444444444444444444444444444444444444444444444',
 }
+
+describe('setup prep-charts Reth initial peer topology', () => {
+  it('combines geth and Reth sequencers without bootnodes and removes duplicates', () => {
+    const gethSequencers = [
+      'enode://geth0@l2-sequencer-0:30303',
+      'enode://geth1@l2-sequencer-1:30303',
+    ]
+    const rethSequencers = [
+      'enode://reth0@l2-reth-sequencer-0:30303',
+      'enode://reth1@l2-reth-sequencer-1:30303',
+      'enode://geth1@l2-sequencer-1:30303',
+    ]
+
+    expect(buildRethInitialTrustedPeers(gethSequencers, rethSequencers)).to.equal([
+      'enode://geth0@l2-sequencer-0:30303',
+      'enode://geth1@l2-sequencer-1:30303',
+      'enode://reth0@l2-reth-sequencer-0:30303',
+      'enode://reth1@l2-reth-sequencer-1:30303',
+    ].join(','))
+  })
+})
 
 describe('setup prep-charts withdrawal proof config migration', () => {
   it('removes TOML-owned proof env and source-confirmed retired env', () => {
@@ -536,16 +559,26 @@ describe('setup prep-charts Ethereum DA blob source updates', () => {
     expect(changes.map(change => change.key)).to.deep.equal(['reth.blobS3Url'])
   })
 
-  it('writes the configured L2 chain ID as the normal Reth P2P network ID', () => {
+  it('writes an explicitly isolated Reth P2P network ID', () => {
     const values = { reth: { networkId: '4444444' } }
-    const changes = applyRethNetworkId(values, '6281971')
+    const networkId = resolveRethP2PNetworkId({ reth: { networkId: '5555555' } }, '6281971')
+    const changes = applyRethNetworkId(values, networkId)
 
-    expect(values.reth.networkId).to.equal('6281971')
+    expect(values.reth.networkId).to.equal('5555555')
     expect(changes).to.deep.equal([{
       key: 'reth.networkId',
-      newValue: '6281971',
+      newValue: '5555555',
       oldValue: '4444444',
     }])
+  })
+
+  it('falls back to the EVM chain ID when no explicit Reth P2P network ID exists', () => {
+    expect(resolveRethP2PNetworkId({}, 6_281_971)).to.equal('6281971')
+  })
+
+  it('rejects a non-decimal Reth P2P network ID', () => {
+    expect(() => resolveRethP2PNetworkId({ reth: { networkId: 'devnet' } }, '6281971'))
+      .to.throw('reth.networkId must be a decimal integer')
   })
 
   it('targets every concrete Reth values file for shared runtime updates', () => {

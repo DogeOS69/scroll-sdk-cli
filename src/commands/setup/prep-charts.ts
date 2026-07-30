@@ -68,6 +68,28 @@ export interface TsoSignerEndpoint {
 }
 
 /**
+ * Build the in-cluster Reth bootstrap peer set used during the one-way
+ * geth-to-Reth cutover. Reth nodes must be able to sync from either generation
+ * of sequencer while both are available, so this set intentionally contains
+ * sequencers only: legacy geth sequencers first, followed by Reth sequencers.
+ *
+ * Bootnodes are not part of this list. They have their own topology and the
+ * external RPC package builds a separate geth+Reth bootnode peer set.
+ */
+export function buildRethInitialTrustedPeers(
+  gethSequencerPeers: string[],
+  rethSequencerPeers: string[],
+): string {
+  const peers = new Set<string>()
+  for (const peer of [...gethSequencerPeers, ...rethSequencerPeers]) {
+    const normalized = peer.trim()
+    if (normalized !== '') peers.add(normalized)
+  }
+
+  return [...peers].join(',')
+}
+
+/**
  * The descriptor endpoint is the routing contract: preserve the partner's
  * exact IP/domain and project it into the TSO registration list alongside the
  * in-cluster TEE signers. Always return the full list so a missing/stale values
@@ -697,6 +719,21 @@ export function applyRethNetworkId(
   }]
 }
 
+export function resolveRethP2PNetworkId(
+  dogeConfig: Pick<DogeConfig, 'reth'>,
+  configuredL2ChainId: unknown,
+): string | undefined {
+  const configuredNetworkId = dogeConfig.reth?.networkId ?? configuredL2ChainId
+  if (configuredNetworkId === undefined || configuredNetworkId === null) return undefined
+
+  const networkId = String(configuredNetworkId).trim()
+  if (!/^\d+$/.test(networkId)) {
+    throw new Error(`reth.networkId must be a decimal integer, got: ${JSON.stringify(configuredNetworkId)}`)
+  }
+
+  return networkId
+}
+
 export function isL2RethRpcChart(chartName: string): boolean {
   return chartName === 'l2-reth-rpc' || chartName === 'l2-reth-rpc-public'
 }
@@ -1126,23 +1163,22 @@ export default class SetupPrepCharts extends Command {
   }
 
   private buildRethTrustedPeers(): string {
-    const peers = new Set<string>()
-    for (const peer of this.getLegacySequencerPeers()) {
-      peers.add(peer)
-    }
-
+    const rethSequencerPeers: string[] = []
     for (const instance of this.dogeConfig.sequencerReth?.instances ?? []) {
       if (instance.nodekey?.privateKey) {
-        peers.add(deriveSequencerRethEnodeUrl(instance.nodekey.privateKey, instance.index))
+        rethSequencerPeers.push(deriveSequencerRethEnodeUrl(instance.nodekey.privateKey, instance.index))
         continue
       }
 
       if (instance.enodeUrl) {
-        peers.add(instance.enodeUrl)
+        rethSequencerPeers.push(instance.enodeUrl)
       }
     }
 
-    return [...peers].join(',')
+    return buildRethInitialTrustedPeers(
+      this.getLegacySequencerPeers(),
+      rethSequencerPeers,
+    )
   }
 
   private buildSequencerRethResolvedConfig(index: number): ResolvedSequencerRethConfig {
@@ -1736,7 +1772,7 @@ export default class SetupPrepCharts extends Command {
     const s3PublicBaseUrl = getEthereumDaS3PublicBaseUrl(s3Archive)
     const s3PublicBlobUrl = getEthereumDaS3PublicBlobUrl(s3Archive)
     const configuredL2ChainId = this.getConfigValue('general.CHAIN_ID_L2')
-    const l2P2PNetworkId = configuredL2ChainId === undefined ? undefined : String(configuredL2ChainId)
+    const l2P2PNetworkId = resolveRethP2PNetworkId(this.dogeConfig, configuredL2ChainId)
 
     for (const file of productionFiles) {
       if (file === 'l2-reth-bootnode-production.yaml') {
