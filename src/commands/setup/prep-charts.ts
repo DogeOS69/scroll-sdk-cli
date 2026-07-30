@@ -843,6 +843,12 @@ export function removeConfigMapEnvKeys(
   return changes
 }
 
+export function scrubL1InterfaceRetiredEnv(productionYaml: any): PrepChartChange[] {
+  return removeConfigMapEnvKeys(productionYaml, [
+    'DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER',
+  ])
+}
+
 export function removeEnvArrayKeys(
   productionYaml: any,
   envKeys: string[]
@@ -2422,7 +2428,6 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_L1_INTERFACE_ETHEREUM_DA__ETH_CHAIN_ID": String(this.getConfigValue("ethereumDa.chainId")),
           "DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL": this.getConfigValue("ethereumDa.submitterRpcUrl"),
           "DOGEOS_L1_INTERFACE_ETHEREUM_DA__L2_CHAIN_ID": String(this.getConfigValue("general.CHAIN_ID_L2")),
-          "DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER": this.getConfigValue("sequencer.L2GETH_SIGNER_ADDRESS"),
           "DOGEOS_L1_INTERFACE_L1_BASE_FEE_PER_GAS": this.getConfigValue("genesis.BASE_FEE_PER_GAS").toString(),
           "DOGEOS_L1_INTERFACE_L1_GAS_LIMIT": "30000000",
           "DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK": String(Math.max(0, l1GenesisBlock)),
@@ -2436,11 +2441,14 @@ export default class SetupPrepCharts extends Command {
           // "DOGEOS_L1_INTERFACE_SCROLL_MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
         }
 
-        const blobSourceChanges = removeConfigMapEnvKeys(productionYaml, [
-          'DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__KIND',
-        ])
-        if (blobSourceChanges.length > 0) {
-          changes.push(...blobSourceChanges)
+        const l1InterfaceCleanupChanges = [
+          ...scrubL1InterfaceRetiredEnv(productionYaml),
+          ...removeConfigMapEnvKeys(productionYaml, [
+            'DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__KIND',
+          ]),
+        ]
+        if (l1InterfaceCleanupChanges.length > 0) {
+          changes.push(...l1InterfaceCleanupChanges)
           updated = true
         }
 

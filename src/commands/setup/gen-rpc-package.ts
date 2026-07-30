@@ -62,6 +62,7 @@ const L1_INTERFACE_ENV_ENDPOINT_KEYS = new Set([
 // public RPC rejects `scroll_messenger_address` (it is sourced from the
 // committed protocol context instead).
 const L1_INTERFACE_DEPRECATED_ENV_KEYS = new Set([
+  'DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER',
   'DOGEOS_L1_INTERFACE_SCROLL_MESSENGER_ADDRESS',
 ])
 
@@ -1209,9 +1210,9 @@ export default class SetupGenRpcPackage extends Command {
       { preferAdditionalPeers: rethBootnodePeers.length > 0 },
     )
 
-    const validSigner = this.resolveL2RethValidSigner(config, valuesDir)
+    const validSigner = this.resolveL2RethValidSigner(config)
     if (!validSigner) {
-      this.warn('Unable to resolve L2RETH_VALID_SIGNER from config.toml or l1-interface-production.yaml')
+      this.warn('Unable to resolve L2RETH_VALID_SIGNER from config.toml')
     }
 
     const l2rethVars: EnvVarMap = {}
@@ -1385,22 +1386,14 @@ export default class SetupGenRpcPackage extends Command {
     return yamlPeerListValue
   }
 
-  // Canonical operator-override template. This is the git-tracked file other
-  // operators copy from, so it must stay credential-free and deterministic.
-  private resolveL2RethValidSigner(config: any | undefined, valuesDir: string): string | undefined {
+  // The sequencer config remains the canonical signer source after retiring
+  // DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER from l1-interface values.
+  private resolveL2RethValidSigner(config: any | undefined): string | undefined {
     if (config?.sequencer?.L2GETH_SIGNER_ADDRESS) {
       return String(config.sequencer.L2GETH_SIGNER_ADDRESS)
     }
 
-    const l1InterfaceYamlPath = path.resolve(valuesDir, 'l1-interface-production.yaml')
-    if (!fs.existsSync(l1InterfaceYamlPath)) return undefined
-
-    try {
-      const l1InterfaceEnvData = this.loadConfigMapEnvData(l1InterfaceYamlPath)
-      return l1InterfaceEnvData.DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER
-    } catch {
-      return undefined
-    }
+    return undefined
   }
 
   private scaffoldL1InterfaceLocalEnvFile(localEnvFilePath: string, network: string, envData: EnvVarMap): void {

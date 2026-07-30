@@ -140,19 +140,6 @@ describe('setup gen-rpc-package env generation', () => {
     )
 
     fs.writeFileSync(
-      path.join(valuesDir, 'l1-interface-production.yaml'),
-      yaml.dump({
-        configMaps: {
-          env: {
-            data: {
-              DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER: '0x1234567890123456789012345678901234567890',
-            },
-          },
-        },
-      }),
-    )
-
-    fs.writeFileSync(
       path.join(valuesDir, 'l2-reth-rpc-production.yaml'),
       yaml.dump({ reth: { networkId: '4444444' } }),
     )
@@ -203,6 +190,9 @@ describe('setup gen-rpc-package env generation', () => {
       {
         bootnode: {
           L2_GETH_PUBLIC_PEERS: ['enode://bootnode@l2-bootnode-0:30303'],
+        },
+        sequencer: {
+          L2GETH_SIGNER_ADDRESS: '0x1234567890123456789012345678901234567890',
         },
       },
       {
@@ -261,19 +251,6 @@ describe('setup gen-rpc-package env generation', () => {
             data: {
               CHAIN_ID: '4444444',
               L2GETH_PEER_LIST: JSON.stringify(['enode://sequencer@l2-sequencer-0:30303']),
-            },
-          },
-        },
-      }),
-    )
-
-    fs.writeFileSync(
-      path.join(valuesDir, 'l1-interface-production.yaml'),
-      yaml.dump({
-        configMaps: {
-          env: {
-            data: {
-              DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER: '0x1234567890123456789012345678901234567890',
             },
           },
         },
@@ -361,6 +338,7 @@ describe('setup gen-rpc-package env generation', () => {
               DOGEOS_L1_INTERFACE_GENESIS_JSON_PATH: '/app/genesis/genesis.json',
               DOGEOS_L1_INTERFACE_HEALTH_LISTEN_ADDRESS: '0.0.0.0:9090',
               DOGEOS_L1_INTERFACE_NETWORK_STR: 'testnet',
+              DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER: '0x1234567890123456789012345678901234567890',
               DOGEOS_L1_INTERFACE_PRIVATE_TOKEN: 'do-not-copy',
               DOGEOS_L1_INTERFACE_SEQUENCER_GENESIS_MODE: 'true',
             },
@@ -404,6 +382,7 @@ describe('setup gen-rpc-package env generation', () => {
     expect(env).not.to.include('l1-devnet-lighthouse')
     expect(env).not.to.include('PRIVATE_TOKEN')
     expect(env).not.to.include('SCROLL_MESSENGER_ADDRESS')
+    expect(env).not.to.include('INITIAL_SYSTEM_SIGNER')
     // Full overwrite: nothing from the stale prior file survives.
     expect(env).not.to.include('# existing')
     expect(env).not.to.include('http://dogecoin-node:44555')

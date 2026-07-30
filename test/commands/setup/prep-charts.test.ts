@@ -26,6 +26,7 @@ import {
   removeL2GethBlobS3ExtraParams,
   removeRetiredAttestationSignerValues,
   scrubFeeOracleLegacyValues,
+  scrubL1InterfaceRetiredEnv,
   scrubWithdrawalLegacyProofEnv,
   shouldSkipL2ContractDeploymentBlockUpdate,
   validateDogeConfigEthereumDaForPrep,
@@ -409,6 +410,27 @@ describe('setup prep-charts eth-da-submitter updates', () => {
 })
 
 describe('setup prep-charts Ethereum DA blob source updates', () => {
+  it('removes the retired initial system signer from l1-interface YAML', () => {
+    const values = {
+      configMaps: {
+        env: {
+          data: {
+            DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER: '0x1234567890123456789012345678901234567890',
+            DOGEOS_L1_INTERFACE_NETWORK_STR: 'testnet',
+          },
+        },
+      },
+    }
+
+    const changes = scrubL1InterfaceRetiredEnv(values)
+
+    expect(changes.map(change => change.key)).to.deep.equal([
+      'configMaps.env.data.DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER',
+    ])
+    expect(values.configMaps.env.data).not.to.have.property('DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER')
+    expect(values.configMaps.env.data.DOGEOS_L1_INTERFACE_NETWORK_STR).to.equal('testnet')
+  })
+
   it('writes beacon_node provider env for l1-interface and removes legacy kind', () => {
     const values: { configMaps: { env: { data: Record<string, string> } } } = {
       configMaps: {
