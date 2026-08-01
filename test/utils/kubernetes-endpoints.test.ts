@@ -23,5 +23,28 @@ describe('kubernetes-endpoints', () => {
         rpcUrl: 'http://dogecoin:18332',
       });
     });
+
+    it('uses an explicit source-configured RPC URL without changing P2P or ZMQ service routing', () => {
+      expect(resolveDogecoinKubernetesEndpoints({
+        kubernetes: {
+          rpcUrl: 'https://shadowfork.example.com/rpc?api_key=test',
+          serviceName: 'dogecoin-testnet',
+        },
+        network: 'testnet',
+      })).to.include({
+        p2pPort: 44_556,
+        rpcPort: 44_555,
+        rpcUrl: 'https://shadowfork.example.com/rpc?api_key=test',
+        serviceName: 'dogecoin-testnet',
+        zmqRawBlockUrl: 'tcp://dogecoin-testnet:28332',
+      });
+    });
+
+    it('rejects a non-http RPC URL override', () => {
+      expect(() => resolveDogecoinKubernetesEndpoints({
+        kubernetes: { rpcUrl: 'file:///tmp/dogecoin.sock' },
+        network: 'testnet',
+      })).to.throw('kubernetes.rpcUrl must be a valid http(s) URL')
+    })
   });
 });

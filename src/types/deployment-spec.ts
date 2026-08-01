@@ -1,3 +1,5 @@
+import type { ProofSystemMode } from '../utils/proof-system-mode.js'
+
 /**
  * DeploymentSpec - Single source of truth for DogeOS deployments
  *
@@ -52,6 +54,12 @@ export interface DeploymentSpec {
 
   /** Optional proof-coordinator deployment values generation */
   proofCoordinator?: ProofCoordinatorConfig
+
+  /**
+   * Deployment-wide proof intent. Optional: omitting it preserves the
+   * proof-disabled/direct-sign posture.
+   */
+  proofSystem?: ProofSystemIntentConfig
 
   /** Rollup parameters */
   rollup: RollupConfig
@@ -172,6 +180,22 @@ export interface ProofCoordinatorConfig {
   withdrawalProcessorServiceAccount?: {
     annotations?: Record<string, string>
     name?: string
+  }
+}
+
+export interface ProofSystemIntentConfig {
+  /** Public credential-free GET root shared by workers and partner signers. */
+  artifactReadBaseUrl?: string
+
+  /** One posture controls WP, coordinator, worker, and signer policy together. */
+  mode: ProofSystemMode
+
+  /** Proof release bundle root. Conventional proof-artifacts/ is used when omitted. */
+  release?: string
+
+  signerPolicy?: {
+    /** Partner signer source-set policy input. */
+    sourceSet?: string
   }
 }
 
@@ -616,6 +640,7 @@ export interface FrontendSubdomains {
   grafana?: string
   l1Devnet?: string
   l1Explorer?: string
+  proofCoordinator?: string
   rollupExplorerApi?: string
   rpcGateway?: string
   rpcGatewayWs?: string
@@ -652,6 +677,7 @@ export interface FrontendConfig {
     grafana: string
     l1Devnet?: string
     l1Explorer?: string
+    proofCoordinator?: string
     rollupExplorerApi: string
     rpcGateway: string
     rpcGatewayWs?: string

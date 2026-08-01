@@ -1199,7 +1199,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   }
 
   ensureWithdrawalChartWiring(values)
-  ensureWithdrawalProofActivationSwitch(values)
+  ensureWithdrawalProofActivationSwitch(values, spec.proofSystem?.mode || 'disabled')
 
   const {proofCoordinator} = spec
   if (proofCoordinator && proofCoordinator.enabled !== false) {

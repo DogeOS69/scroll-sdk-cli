@@ -5,6 +5,8 @@ export interface DogecoinKubernetesConfig {
   blockbookServiceName?: string
   p2pPort?: number
   rpcPort?: number
+  /** Explicit in-cluster consumer RPC URL; useful for an isolated shadowfork proxy. */
+  rpcUrl?: string
   serviceName?: string
   zmqHashBlockPort?: number
   zmqHashTxPort?: number
@@ -50,6 +52,18 @@ export function resolveDogecoinKubernetesEndpoints(config: DogecoinEndpointConfi
   const defaultP2pPort = network === 'mainnet' ? 22_556 : network === 'regtest' ? 18_444 : 44_556
   const rpcPort = kubernetes.rpcPort || defaultRpcPort
   const p2pPort = kubernetes.p2pPort || defaultP2pPort
+  const rpcUrl = kubernetes.rpcUrl?.trim() || `http://${serviceName}:${rpcPort}`
+  let parsedRpcUrl: URL
+  try {
+    parsedRpcUrl = new URL(rpcUrl)
+  } catch {
+    throw new Error('kubernetes.rpcUrl must be a valid http(s) URL when set')
+  }
+
+  if (!['http:', 'https:'].includes(parsedRpcUrl.protocol)) {
+    throw new Error('kubernetes.rpcUrl must be a valid http(s) URL when set')
+  }
+
   const zmqRawBlockPort = kubernetes.zmqRawBlockPort || 28_332
   const zmqRawTxPort = kubernetes.zmqRawTxPort || 28_333
   const zmqHashTxPort = kubernetes.zmqHashTxPort || 28_334
@@ -58,7 +72,7 @@ export function resolveDogecoinKubernetesEndpoints(config: DogecoinEndpointConfi
   return {
     p2pPort,
     rpcPort,
-    rpcUrl: `http://${serviceName}:${rpcPort}`,
+    rpcUrl,
     serviceName,
     zmqHashBlockPort,
     zmqHashBlockUrl: `tcp://${serviceName}:${zmqHashBlockPort}`,

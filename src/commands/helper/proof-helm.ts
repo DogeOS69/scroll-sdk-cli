@@ -6,7 +6,7 @@ import { JsonOutputContext } from '../../utils/json-output.js'
 import {
   type ProofDeploymentComponent,
   resolveContractFile,
-  validateProofDeploymentContract,
+  validateProofDeploymentContractWithWarnings,
 } from '../../utils/proof-deployment-contract.js'
 
 type ComponentName = 'proof-coordinator' | 'withdrawal-processor'
@@ -34,6 +34,7 @@ export function buildProofHelmArgs(input: {
   if (input.dryRun) args.push('--dry-run')
   return args
 }
+
 export default class ProofHelm extends Command {
   static override description = 'Install one proof-related Helm component from the setup-generated deployment contract; disabled components are skipped without Makefile mode logic'
 
@@ -53,7 +54,9 @@ export default class ProofHelm extends Command {
     const json = new JsonOutputContext('helper proof-helm', flags.json)
     try {
       const deploymentDir = path.resolve(flags['deployment-dir'])
-      const contract = validateProofDeploymentContract(deploymentDir)
+      const validation = validateProofDeploymentContractWithWarnings(deploymentDir)
+      const {contract} = validation
+      for (const warning of validation.warnings) json.addWarning(warning)
       const componentName = flags.component as ComponentName
       const component = componentName === 'proof-coordinator'
         ? contract.components.proofCoordinator

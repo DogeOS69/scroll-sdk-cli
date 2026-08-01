@@ -29,6 +29,13 @@ export const MOCK_BRIDGE_BACKEND_PROFILE = 'bridge-topology-prover-v1'
 export const MOCK_PROGRAM_MANIFESTS_DIR = 'proof-artifacts/mock-manifests'
 
 export const MOCK_PROOF_IDENTITIES: Record<ProofFamily, MockProofIdentity> = {
+  advance_l2_aggregation: {
+    circuitId: 'advance-l2-aggregation-v1',
+    manifestBasename: 'advance-l2-aggregation-topology-program.json',
+    programCommitmentHash: `0x${'99'.repeat(32)}`,
+    verifierId: 'openvm-advance-l2-aggregation-verifier-v1',
+    vkHash: `0x${'aa'.repeat(32)}`,
+  },
   bridge_transition: {
     circuitId: 'bridge-transition-v1',
     manifestBasename: 'bridge-topology-program.json',
@@ -54,6 +61,7 @@ export const MOCK_PROOF_IDENTITIES: Record<ProofFamily, MockProofIdentity> = {
 
 export function mockVerifierIds(): Record<ProofFamily, string> {
   return {
+    advance_l2_aggregation: MOCK_PROOF_IDENTITIES.advance_l2_aggregation.verifierId,
     bridge_transition: MOCK_PROOF_IDENTITIES.bridge_transition.verifierId,
     scroll_batch: MOCK_PROOF_IDENTITIES.scroll_batch.verifierId,
     scroll_chunk: MOCK_PROOF_IDENTITIES.scroll_chunk.verifierId,
@@ -83,14 +91,18 @@ function mockProgramManifest(family: ProofFamily): Record<string, unknown> {
 }
 
 /**
- * Write the three synthesized mock ProofProgramManifestV1 files and return
- * their paths (chunk, batch, bridge — the same order the production release
- * manifests are passed in). Idempotent: content is deterministic.
+ * Write the four synthesized mock ProofProgramManifestV1 files and return
+ * their paths in the same order as the production release manifests.
  */
 export function ensureMockProgramManifests(dir = MOCK_PROGRAM_MANIFESTS_DIR): string[] {
   const resolved = path.resolve(dir)
   fs.mkdirSync(resolved, { recursive: true })
-  const families: ProofFamily[] = ['scroll_chunk', 'scroll_batch', 'bridge_transition']
+  const families: ProofFamily[] = [
+    'scroll_chunk',
+    'scroll_batch',
+    'advance_l2_aggregation',
+    'bridge_transition',
+  ]
   return families.map(family => {
     const manifestPath = path.join(resolved, MOCK_PROOF_IDENTITIES[family].manifestBasename)
     fs.writeFileSync(manifestPath, `${JSON.stringify(mockProgramManifest(family), null, 2)}\n`)

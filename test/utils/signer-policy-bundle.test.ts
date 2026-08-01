@@ -116,6 +116,7 @@ describe('signer policy bundle', () => {
 
     expect(commands).to.include('staging_scaffold')
     expect(commands).to.include('staging_scaffold')
+    expect(commands).not.to.include('--probe')
   })
 
   it('documents direct-sign acceptance without a proof GET dependency', () => {

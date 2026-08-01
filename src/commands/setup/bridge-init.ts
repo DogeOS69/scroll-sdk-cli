@@ -155,10 +155,6 @@ export function buildEthereumDaProtocolSeedConfig(
     inputs.contractsConfig,
     'L2_MOAT_PROXY_ADDR'
   ).toLowerCase()
-  protocolConfig.deposit_queue_transform.message_queue_gas_limit = helpers.getNumberValue(
-    inputs.configToml?.rollup,
-    'MAX_L1_MESSAGE_GAS_LIMIT'
-  )
 
   return protocolSeedConfig
 }

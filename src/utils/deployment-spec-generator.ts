@@ -138,6 +138,7 @@ const DEFAULT_FRONTEND_SUBDOMAINS = {
   dogecoin: 'dogecoin',
   frontend: 'portal',
   grafana: 'grafana',
+  proofCoordinator: 'proof-coordinator',
   rollupExplorerApi: 'rollup-explorer-backend',
   rpcGateway: 'rpc',
   rpcGatewayWs: 'ws-rpc',
@@ -427,6 +428,7 @@ export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
     'dogecoin',
     'l1Devnet',
     'l1Explorer',
+    'proofCoordinator',
     'rpcGatewayWs',
     'tso',
   ] as FrontendHostKey[]) {
@@ -612,6 +614,14 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
         path: 'network.l1ChainId',
       })
     }
+  }
+
+  if (!Number.isSafeInteger(spec.rollup?.maxL1MessageGasLimit) || spec.rollup.maxL1MessageGasLimit < 1) {
+    errors.push({
+      code: 'E015_INVALID_ROLLUP_CONFIG',
+      message: 'rollup.maxL1MessageGasLimit must be a positive integer',
+      path: 'rollup.maxL1MessageGasLimit',
+    })
   }
 
   // Accounts validation
@@ -906,7 +916,68 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     }
   }
 
-  const { proofCoordinator } = spec
+  const { proofCoordinator, proofSystem } = spec
+  if (proofSystem) {
+    if (!['disabled', 'mock', 'production'].includes(proofSystem.mode)) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofSystem.mode must be disabled, mock, or production',
+        path: 'proofSystem.mode'
+      })
+    }
+
+    if (
+      proofSystem.artifactReadBaseUrl
+      && !isHttpUrl(proofSystem.artifactReadBaseUrl)
+    ) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofSystem.artifactReadBaseUrl must be an http(s) URL',
+        path: 'proofSystem.artifactReadBaseUrl'
+      })
+    }
+
+    if (
+      proofSystem.mode !== 'disabled'
+      && !proofSystem.artifactReadBaseUrl
+    ) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofSystem.artifactReadBaseUrl is required in mock and production modes',
+        path: 'proofSystem.artifactReadBaseUrl'
+      })
+    }
+
+    if (
+      proofSystem.mode !== 'disabled'
+      && (!proofCoordinator || proofCoordinator.enabled === false)
+    ) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofCoordinator must be enabled when proofSystem.mode is mock or production',
+        path: 'proofCoordinator'
+      })
+    }
+
+    if (
+      proofSystem.mode === 'disabled'
+      && proofCoordinator
+      && proofCoordinator.enabled !== false
+    ) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofCoordinator must be absent or disabled when proofSystem.mode is disabled',
+        path: 'proofCoordinator.enabled'
+      })
+    }
+  } else if (proofCoordinator && proofCoordinator.enabled !== false) {
+    warnings.push({
+      message: 'proofCoordinator is configured without proofSystem; add proofSystem.mode so every proof component shares one explicit posture',
+      path: 'proofSystem',
+      suggestion: 'Use proofSystem.mode: mock for non-cryptographic topology testing or production for release proving.'
+    })
+  }
+
   if (proofCoordinator && proofCoordinator.enabled !== false) {
     const { artifactStore } = proofCoordinator
 
@@ -1291,6 +1362,14 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     config.ingress.TSO_HOST = spec.frontend.hosts.tso
   }
 
+  if (
+    spec.proofSystem
+    && spec.proofSystem.mode !== 'disabled'
+    && spec.frontend.hosts.proofCoordinator
+  ) {
+    config.ingress.PROOF_COORDINATOR_HOST = spec.frontend.hosts.proofCoordinator
+  }
+
   if (spec.frontend.hosts.dogecoin) {
     config.ingress.DOGECOIN_HOST = spec.frontend.hosts.dogecoin
   }
@@ -1315,6 +1394,23 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   const ethereumDaDefaults = ETHEREUM_DA_DEFAULTS[ethereumDaChain]
 
   config.network = spec.dogecoin.network
+
+  if (spec.proofSystem) {
+    config.proofSystem = {
+      mode: spec.proofSystem.mode,
+      ...(spec.proofSystem.mode === 'disabled'
+        ? {}
+        : {
+            ...(spec.proofSystem.artifactReadBaseUrl
+              ? { artifactReadBaseUrl: spec.proofSystem.artifactReadBaseUrl }
+              : {}),
+            ...(spec.proofSystem.release ? { release: spec.proofSystem.release } : {}),
+            ...(spec.proofSystem.signerPolicy?.sourceSet
+              ? { signerPolicy: { sourceSet: spec.proofSystem.signerPolicy.sourceSet } }
+              : {}),
+          }),
+    }
+  }
 
   config.rpc = {
     password: externalRpc.password || '',
@@ -1490,7 +1586,6 @@ export function generateProtocolSeedToml(rawSpec: DeploymentSpec): string {
   depositQueueTransform.l1_scroll_messenger_address = PLACEHOLDER_L1_SCROLL_MESSENGER_ADDRESS
   depositQueueTransform.l2_messenger_address = PLACEHOLDER_L2_MESSENGER_ADDRESS
   depositQueueTransform.moat_address = PLACEHOLDER_MOAT_ADDRESS
-  depositQueueTransform.message_queue_gas_limit = spec.rollup.maxL1MessageGasLimit
 
   const protocolConfig: toml.JsonMap = {}
   protocolConfig.l2_chain_id = spec.network.l2ChainId

@@ -2,13 +2,34 @@ import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import type { ProofIntentSource } from './proof-intent.js'
 import type { ProofSystemMode } from './proof-system-mode.js'
+
+import {
+  MANAGED_VERIFIER_BEGIN,
+  MANAGED_VERIFIER_END,
+} from './proof-configurator.js'
+import {
+  WITHDRAWAL_PROOF_BEGIN,
+  WITHDRAWAL_PROOF_END,
+} from './withdrawal-config.js'
 
 export const DEFAULT_PROOF_DEPLOYMENT_CONTRACT = '.data/proof-deployment.json'
 
+export type ProofDeploymentIntegrityPolicy = 'advisory' | 'managed-block' | 'required'
+
+export interface ProofDeploymentFileIntegrity {
+  beginMarker?: string
+  endMarker?: string
+  policy: ProofDeploymentIntegrityPolicy
+  sha256: string
+}
+
 export interface ProofDeploymentFileBinding {
+  integrity?: ProofDeploymentFileIntegrity
   key: string
   path: string
+  /** Whole-file observation. Required by schema v1; advisory under schema v2. */
   sha256: string
 }
 
@@ -28,12 +49,13 @@ export interface ProofDeploymentContract {
   generatedAt: string
   generationId: string
   generator: {
-    command: 'scrollsdk setup proof-config'
+    command: 'scrollsdk setup prep-charts' | 'scrollsdk setup proof-config'
     version: number
   }
+  intentSource?: ProofIntentSource
   mode: ProofSystemMode
   proofArtifactBaseUrl?: string
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   signerPolicy: {
     policyMode: 'dev_permissive' | 'production_enforce' | 'staging_scaffold'
     proofArtifactFetchMode: 'disabled' | 'http'
@@ -42,13 +64,14 @@ export interface ProofDeploymentContract {
     bundleDir?: string
     bundleId?: string
     enabled: boolean
-    kind: 'external-production' | 'mock-compose' | 'none'
+    kind: 'external-production' | 'mock-compose' | 'none' | 'production-compose'
   }
 }
 
 export interface ProofDeploymentContractInput {
   contractPath?: string
   deploymentDir: string
+  intentSource?: ProofIntentSource
   mode: ProofSystemMode
   proofArtifactBaseUrl?: string
   proofCoordinator: {
@@ -64,11 +87,16 @@ export interface ProofDeploymentContractInput {
   worker?: {
     bundleDir?: string
     bundleId?: string
+    kind?: 'mock-compose' | 'production-compose'
   }
 }
 
 function sha256File(filePath: string): string {
   return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
+}
+
+function sha256Text(value: string): string {
+  return createHash('sha256').update(value).digest('hex')
 }
 
 function sha256Json(value: unknown): string {
@@ -90,10 +118,61 @@ function deploymentRelativePath(deploymentDir: string, filePath: string): string
   return resolved
 }
 
+function extractManagedBlock(
+  source: string,
+  beginMarker: string,
+  endMarker: string,
+  label: string
+): string {
+  const beginCount = source.split(beginMarker).length - 1
+  const endCount = source.split(endMarker).length - 1
+  const begin = source.indexOf(beginMarker)
+  const end = source.indexOf(endMarker)
+  if (beginCount !== 1 || endCount !== 1 || begin < 0 || end < begin) {
+    throw new Error(`${label}: expected exactly one ${beginMarker} / ${endMarker} block`)
+  }
+
+  return source.slice(begin, end + endMarker.length)
+}
+
+function bindingIntegrity(filePath: string, key: string): ProofDeploymentFileIntegrity {
+  const source = fs.readFileSync(filePath, 'utf8')
+  if (key === 'proofCoordinator.config.content') {
+    return {
+      beginMarker: MANAGED_VERIFIER_BEGIN,
+      endMarker: MANAGED_VERIFIER_END,
+      policy: 'managed-block',
+      sha256: sha256Text(extractManagedBlock(
+        source,
+        MANAGED_VERIFIER_BEGIN,
+        MANAGED_VERIFIER_END,
+        filePath,
+      )),
+    }
+  }
+
+  if (key === 'configMaps.config.data.WithdrawalProcessor\\.toml') {
+    return {
+      beginMarker: WITHDRAWAL_PROOF_BEGIN,
+      endMarker: WITHDRAWAL_PROOF_END,
+      policy: 'managed-block',
+      sha256: sha256Text(extractManagedBlock(
+        source,
+        WITHDRAWAL_PROOF_BEGIN,
+        WITHDRAWAL_PROOF_END,
+        filePath,
+      )),
+    }
+  }
+
+  return { policy: 'required', sha256: sha256File(filePath) }
+}
+
 function binding(deploymentDir: string, item: { filePath: string; key: string }): ProofDeploymentFileBinding {
   const filePath = path.resolve(item.filePath)
   if (!fs.existsSync(filePath)) throw new Error(`proof deployment binding file not found: ${filePath}`)
   return {
+    integrity: bindingIntegrity(filePath, item.key),
     key: item.key,
     path: deploymentRelativePath(deploymentDir, filePath),
     sha256: sha256File(filePath),
@@ -136,7 +215,16 @@ export function writeProofDeploymentContract(input: ProofDeploymentContractInput
           enabled: true,
           kind: 'mock-compose' as const,
         }
-      : { enabled: true, kind: 'external-production' as const }
+      : input.worker?.kind === 'production-compose'
+        ? {
+            bundleDir: input.worker.bundleDir
+              ? deploymentRelativePath(deploymentDir, input.worker.bundleDir)
+              : undefined,
+            bundleId: input.worker.bundleId,
+            enabled: true,
+            kind: 'production-compose' as const,
+          }
+        : { enabled: true, kind: 'external-production' as const }
   const stable = {
     components: {
       proofCoordinator: component(
@@ -153,19 +241,41 @@ export function writeProofDeploymentContract(input: ProofDeploymentContractInput
         input.withdrawalProcessor.setFiles
       ),
     },
-    generator: { command: 'scrollsdk setup proof-config' as const, version: 1 },
+    generator: { command: 'scrollsdk setup prep-charts' as const, version: 1 },
+    ...(input.intentSource
+      ? {
+          intentSource: {
+            kind: input.intentSource.kind,
+            path: deploymentRelativePath(deploymentDir, input.intentSource.path),
+          },
+        }
+      : {}),
     mode: input.mode,
     ...(input.mode === 'disabled' ? {} : { proofArtifactBaseUrl: input.proofArtifactBaseUrl }),
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     signerPolicy,
     worker,
   }
+  const generationId = sha256Json(stable)
+  const contractPath = path.resolve(deploymentDir, input.contractPath || DEFAULT_PROOF_DEPLOYMENT_CONTRACT)
+  let generatedAt = new Date().toISOString()
+  if (fs.existsSync(contractPath)) {
+    try {
+      const previous = JSON.parse(fs.readFileSync(contractPath, 'utf8')) as ProofDeploymentContract
+      if (previous.generationId === generationId
+        && sha256Json(stableContractFields(previous)) === generationId) {
+        generatedAt = previous.generatedAt
+      }
+    } catch {
+      // Invalid existing contracts are replaced by the newly generated one.
+    }
+  }
+
   const contract: ProofDeploymentContract = {
     ...stable,
-    generatedAt: new Date().toISOString(),
-    generationId: sha256Json(stable),
+    generatedAt,
+    generationId,
   }
-  const contractPath = path.resolve(deploymentDir, input.contractPath || DEFAULT_PROOF_DEPLOYMENT_CONTRACT)
   fs.mkdirSync(path.dirname(contractPath), { recursive: true })
   const temporary = `${contractPath}.tmp-${process.pid}`
   fs.writeFileSync(temporary, `${JSON.stringify(contract, null, 2)}\n`, { mode: 0o644 })
@@ -179,11 +289,14 @@ export function readProofDeploymentContract(
 ): { contract: ProofDeploymentContract; contractPath: string } {
   const resolved = path.resolve(deploymentDir, contractPath)
   if (!fs.existsSync(resolved)) {
-    throw new Error(`proof deployment contract not found: ${resolved}; run scrollsdk setup proof-config first`)
+    throw new Error(`proof deployment contract not found: ${resolved}; run scrollsdk setup prep-charts first`)
   }
 
   const contract = JSON.parse(fs.readFileSync(resolved, 'utf8')) as ProofDeploymentContract
-  if (contract.schemaVersion !== 1) throw new Error(`${resolved}: unsupported schemaVersion ${String(contract.schemaVersion)}`)
+  if (![1, 2].includes(contract.schemaVersion)) {
+    throw new Error(`${resolved}: unsupported schemaVersion ${String(contract.schemaVersion)}`)
+  }
+
   return { contract, contractPath: resolved }
 }
 
@@ -191,13 +304,86 @@ export function resolveContractFile(deploymentDir: string, filePath: string): st
   return path.isAbsolute(filePath) ? filePath : path.resolve(deploymentDir, filePath)
 }
 
-export function validateProofDeploymentContract(
+export interface ProofDeploymentValidationOptions {
+  strict?: boolean
+}
+
+export interface ProofDeploymentValidationResult {
+  contract: ProofDeploymentContract
+  warnings: string[]
+}
+
+function validateBinding(
+  root: string,
+  componentName: string,
+  setFile: ProofDeploymentFileBinding,
+  schemaVersion: 1 | 2,
+  problems: string[],
+  warnings: string[],
+): void {
+  const filePath = resolveContractFile(root, setFile.path)
+  if (!fs.existsSync(filePath)) {
+    problems.push(`${componentName}: set-file missing: ${setFile.path}`)
+    return
+  }
+
+  const wholeFileSha256 = sha256File(filePath)
+  if (schemaVersion === 1 || !setFile.integrity) {
+    const nativeOperationalConfig = setFile.key === 'proofCoordinator.config.content'
+      || setFile.key === 'configMaps.config.data.WithdrawalProcessor\\.toml'
+    if (wholeFileSha256 !== setFile.sha256) {
+      const message = `${componentName}: legacy set-file checksum mismatch: ${setFile.path}`
+      if (nativeOperationalConfig) warnings.push(`${message}; regenerate with prep-charts to enable managed-block integrity`)
+      else problems.push(message)
+    }
+
+    return
+  }
+
+  if (setFile.integrity.policy === 'required') {
+    if (wholeFileSha256 !== setFile.integrity.sha256) {
+      problems.push(`${componentName}: proof-critical set-file checksum mismatch: ${setFile.path}`)
+    }
+
+    return
+  }
+
+  if (setFile.integrity.policy === 'managed-block') {
+    const {beginMarker, endMarker} = setFile.integrity
+    if (!beginMarker || !endMarker) {
+      problems.push(`${componentName}: managed-block integrity metadata missing markers: ${setFile.path}`)
+      return
+    }
+
+    try {
+      const source = fs.readFileSync(filePath, 'utf8')
+      const block = extractManagedBlock(source, beginMarker, endMarker, filePath)
+      if (sha256Text(block) !== setFile.integrity.sha256) {
+        problems.push(`${componentName}: proof-managed block checksum mismatch: ${setFile.path}`)
+      } else if (wholeFileSha256 !== setFile.sha256) {
+        warnings.push(`${componentName}: operational content changed outside the proof-managed block: ${setFile.path}`)
+      }
+    } catch (error) {
+      problems.push(`${componentName}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+
+    return
+  }
+
+  if (wholeFileSha256 !== setFile.integrity.sha256) {
+    warnings.push(`${componentName}: advisory set-file checksum mismatch: ${setFile.path}`)
+  }
+}
+
+export function validateProofDeploymentContractWithWarnings(
   deploymentDir = '.',
-  contractPath = DEFAULT_PROOF_DEPLOYMENT_CONTRACT
-): ProofDeploymentContract {
+  contractPath = DEFAULT_PROOF_DEPLOYMENT_CONTRACT,
+  options: ProofDeploymentValidationOptions = {},
+): ProofDeploymentValidationResult {
   const root = path.resolve(deploymentDir)
   const { contract, contractPath: resolvedContract } = readProofDeploymentContract(root, contractPath)
   const problems: string[] = []
+  const warnings: string[] = []
   if (!['disabled', 'mock', 'production'].includes(contract.mode)) {
     problems.push(`unsupported mode: ${String(contract.mode)}`)
   }
@@ -215,11 +401,12 @@ export function validateProofDeploymentContract(
 
     const valuesPath = resolveContractFile(root, item.valuesFile)
     if (!fs.existsSync(valuesPath)) problems.push(`${componentName}: values file missing: ${item.valuesFile}`)
-    else if (sha256File(valuesPath) !== item.valuesSha256) problems.push(`${componentName}: values file checksum mismatch: ${item.valuesFile}`)
+    else if (sha256File(valuesPath) !== item.valuesSha256) {
+      warnings.push(`${componentName}: operational values checksum mismatch: ${item.valuesFile}`)
+    }
+
     for (const setFile of item.setFiles) {
-      const filePath = resolveContractFile(root, setFile.path)
-      if (!fs.existsSync(filePath)) problems.push(`${componentName}: set-file missing: ${setFile.path}`)
-      else if (sha256File(filePath) !== setFile.sha256) problems.push(`${componentName}: set-file checksum mismatch: ${setFile.path}`)
+      validateBinding(root, componentName, setFile, contract.schemaVersion, problems, warnings)
     }
   }
 
@@ -253,15 +440,32 @@ export function validateProofDeploymentContract(
   }
 
   if (contract.mode === 'production' && (!contract.worker.enabled
-    || contract.worker.kind !== 'external-production'
+    || !['external-production', 'production-compose'].includes(contract.worker.kind)
     || contract.signerPolicy.policyMode !== 'production_enforce'
     || contract.signerPolicy.proofArtifactFetchMode !== 'http')) {
     problems.push('production mode requires the external worker and production signer policy posture')
+  }
+
+  if (contract.mode === 'production' && contract.worker.kind === 'production-compose'
+    && (!contract.worker.bundleDir || !contract.worker.bundleId)) {
+    problems.push('production compose worker requires a manifest-bearing bundle')
+  }
+
+  if (options.strict) {
+    problems.push(...warnings.map(warning => `strict integrity: ${warning}`))
   }
 
   if (problems.length > 0) {
     throw new Error(`${resolvedContract}: stale or invalid proof deployment contract:\n- ${problems.join('\n- ')}`)
   }
 
-  return contract
+  return {contract, warnings}
+}
+
+export function validateProofDeploymentContract(
+  deploymentDir = '.',
+  contractPath = DEFAULT_PROOF_DEPLOYMENT_CONTRACT,
+  options: ProofDeploymentValidationOptions = {},
+): ProofDeploymentContract {
+  return validateProofDeploymentContractWithWarnings(deploymentDir, contractPath, options).contract
 }

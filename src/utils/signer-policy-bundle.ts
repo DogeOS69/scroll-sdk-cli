@@ -88,7 +88,7 @@ allowed_signing_policy_versions = [1]
 `
   })
 
-  return `# Generated from the proof topology staged by scrollsdk setup proof-config.
+  return `# Generated from the proof topology staged by scrollsdk setup prep-charts.
 # Registry membership binds signer policy to the same proof identities used by
 # withdrawal-processor and proof-coordinator; it is not proof-byte verification.
 ${entries.join('\n')}`
@@ -215,6 +215,7 @@ scrollsdk signer init \\
 cp "signer-$SIGNER_ID/attestation-signer.env" docker-compose/
 chmod 600 docker-compose/attestation-signer.env
 mkdir -p docker-compose/policy
+docker compose --project-directory docker-compose config --quiet
 docker compose --project-directory docker-compose up -d
 
 curl -fsS http://127.0.0.1:4040/health
@@ -224,7 +225,8 @@ scrollsdk signer preflight --dir "signer-$SIGNER_ID"
 
 Send \`signer-$SIGNER_ID/descriptor.json\` to the bridge operator. The bridge
 operator imports all descriptors with \`scrollsdk setup attestation-signer
---probe\` **before** bridge genesis.
+--threshold <T>\` **before** bridge genesis. Descriptor import is deliberately
+offline; this successful partner preflight is the runtime public-key probe.
 
 For an AWS KMS signer, use the same command with \`--backend aws-kms\` and the
 KMS flags. For a production policy, the operator-owned

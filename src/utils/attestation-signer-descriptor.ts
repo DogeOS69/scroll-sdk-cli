@@ -176,8 +176,9 @@ export interface SignerHealthReport {
 
 /**
  * Probe a running attestation_signer's /health endpoint and extract the
- * runtime public key. Used by `signer preflight` (operator side) and the
- * optional --probe cross-check at descriptor import (bridge-operator side).
+ * runtime public key. Used by `signer preflight` on the signer operator's
+ * infrastructure before the finalized descriptor is handed to the bridge
+ * operator.
  */
 export async function fetchSignerHealth(
   endpoint: string,

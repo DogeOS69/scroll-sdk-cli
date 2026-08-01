@@ -174,6 +174,8 @@ export interface DogeConfig {
     blockbookServiceName?: string
     p2pPort?: number
     rpcPort?: number
+    /** RPC URL projected to in-cluster consumers; overrides serviceName/rpcPort URL construction. */
+    rpcUrl?: string
     serviceName?: string
     zmqHashBlockPort?: number
     zmqHashTxPort?: number
@@ -192,8 +194,13 @@ export interface DogeConfig {
     /** Stable public GET root used only when mode is mock or production. */
     artifactReadBaseUrl?: string
     mode?: ProofSystemMode
-    /** Legacy compatibility field; migrated to mode by setup proof-config. */
+    /** Legacy compatibility field; migrated to mode by setup prep-charts. */
     provingMode?: ProvingMode
+    /** Proof release bundle root. Conventional proof-artifacts/ is used when omitted. */
+    release?: string
+    signerPolicy?: {
+      sourceSet?: string
+    }
   }
   /** Reth-specific network settings that are intentionally independent of the EVM chain ID. */
   reth?: {

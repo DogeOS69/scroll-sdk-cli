@@ -29,11 +29,7 @@ supports both flags; check the command's `--help` output rather than assuming.
 Typical invocation:
 
 ```bash
-scrollsdk setup proof-config \
-  --non-interactive \
-  --json \
-  --mode mock \
-  --proof-artifact-base-url https://proofs.example.com/test
+scrollsdk setup prep-charts --non-interactive --json
 ```
 
 ## Standard working directory
@@ -43,11 +39,12 @@ Automation should run from one deployment root containing `config.toml`,
 derive conventional paths from that root.
 
 Do not pass path overrides for every generated file. Path flags are migration
-escape hatches for non-standard layouts. For proof topology invoked from
-another directory, prefer the single deployment-root option:
+escape hatches for non-standard layouts. Run proof topology generation from
+the deployment root:
 
 ```bash
-scrollsdk setup proof-config --deployment-dir /srv/dogeos/deployment ...
+cd /srv/dogeos/deployment
+scrollsdk setup prep-charts --non-interactive --json
 ```
 
 ## Environment-variable references
@@ -84,7 +81,7 @@ Successful commands return a single object shaped like:
 
 ```json
 {
-  "command": "setup proof-config",
+  "command": "setup prep-charts",
   "data": {},
   "duration_ms": 1234,
   "success": true,
@@ -97,11 +94,11 @@ Failures return:
 
 ```json
 {
-  "command": "setup proof-config",
+  "command": "setup proof-worker",
   "duration_ms": 123,
   "error": {
     "category": "CONFIGURATION",
-    "code": "E701_PROOF_CONFIG_FAILED",
+    "code": "E713_PROOF_WORKER_CONFIG_FAILED",
     "context": {},
     "message": "actionable failure description",
     "recoverable": true
@@ -169,14 +166,20 @@ retries unless the operator explicitly starts a new deployment.
 Automation should assume each command owns only its documented managed blocks
 and artifacts. Relevant examples:
 
-- `proof-config` rewrites marked proof/verifier blocks and preserves unrelated
-  native TOML settings; AWS-native artifact roots must match the configured key
-  prefix, and mock bundles carry a verifiable stable bundle ID;
+- `prep-charts` rewrites marked proof/verifier blocks, rebuilds managed values,
+  preserves unrelated native TOML settings, and commits the complete generation
+  transaction only after every output succeeds;
 - `export-signer-policy` regenerates the bundle from current deployment facts;
-- `prep-charts` rebuilds managed values and removes retired generated files;
 - `proof-aws-init` is designed to reuse matching cloud resources. Its default
   external artifact-read transport remains explicitly unverified; VPC endpoint
-  mode requires audited endpoint and route-table IDs.
+  mode requires audited endpoint and route-table IDs. It writes stable,
+  non-secret resource facts to `.data/proof-aws.json` and never reads or
+  modifies generated values;
+- `prep-charts` projects `.data/proof-aws.json` into final values. With
+  unchanged configuration, templates, and release inputs, a rerun is
+  byte-idempotent and reports no changed files. Active legacy doge-config
+  deployments fail when that resource-facts file is absent instead of
+  recovering infrastructure coordinates from old values.
 
 Before retrying after partial failure:
 
@@ -223,11 +226,9 @@ run_scrollsdk() {
   printf '%s\n' "$response"
 }
 
-# Deployment ordering belongs to the operator runbook. This wrapper only
-# standardizes one command invocation.
-run_scrollsdk proof-config setup proof-config \
-  --mode mock \
-  --proof-artifact-base-url https://proofs.example.com/test
+# Deployment ordering belongs to the operator runbook. Proof intent is already
+# declared in DeploymentSpec or .data/doge-config.toml.
+run_scrollsdk prep-charts setup prep-charts
 ```
 
 ## DeploymentSpec generation

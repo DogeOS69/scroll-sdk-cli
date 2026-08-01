@@ -13,6 +13,7 @@ import {
 } from '../../src/utils/proof-configurator.js'
 import { scaffoldProofCoordinatorConfig } from '../../src/utils/proof-coordinator-scaffold.js'
 import {
+  hydrateProverWorkerMockBundle,
   verifyProverWorkerMockBundle,
   writeProverWorkerMockBundle,
 } from '../../src/utils/prover-worker-mock-bundle.js'
@@ -20,11 +21,11 @@ import {
 function writeValidProofRelease(root: string): {
   aggVk: Buffer
   artifactPath: string
-  families: readonly ['scroll_chunk', 'scroll_batch', 'bridge_transition']
+  families: readonly ['scroll_chunk', 'scroll_batch', 'advance_l2_aggregation', 'bridge_transition']
   manifests: string[]
   raw: Record<string, string>
 } {
-  const families = ['scroll_chunk', 'scroll_batch', 'bridge_transition'] as const
+  const families = ['scroll_chunk', 'scroll_batch', 'advance_l2_aggregation', 'bridge_transition'] as const
   const programHashes: Record<string, string> = {}
   const raw: Record<string, string> = {}
   const verificationKeyHashes: Record<string, string> = {}
@@ -65,6 +66,9 @@ function writeValidProofRelease(root: string): {
       },
     },
     expected_identity: {
+      advance_l2_aggregation_app_commit_raw: raw.advance_l2_aggregation,
+      advance_l2_aggregation_program_commitment_hash: programHashes.advance_l2_aggregation,
+      advance_l2_aggregation_verification_key_hash: verificationKeyHashes.advance_l2_aggregation,
       batch_program_commitment_hash: programHashes.scroll_batch,
       batch_program_commitment_raw: raw.scroll_batch,
       batch_verification_key_hash: verificationKeyHashes.scroll_batch,
@@ -283,7 +287,7 @@ max_items = 42
       signerProofArtifactBaseUrl: 'https://signer-proofs.example.com/public/proof-topology/',
       valuesDir: path.join(root, 'values'),
     })
-    expect(result.families).to.deep.equal(['bridge_transition', 'scroll_batch', 'scroll_chunk'])
+    expect(result.families).to.deep.equal(['advance_l2_aggregation', 'bridge_transition', 'scroll_batch', 'scroll_chunk'])
 
     const firstWithdrawalValues = fs.readFileSync(result.files[1], 'utf8')
     configureProofValues({
@@ -299,6 +303,10 @@ max_items = 42
     const coordinatorToml = fs.readFileSync(result.configFile, 'utf8')
     const parsedCoordinator = toml.parse(coordinatorToml) as any
     expect(parsedCoordinator.verifier.scroll_chunk_verifier_identity.expected_circuit_id).to.equal('scroll_chunk-v1')
+    expect(parsedCoordinator.verifier.advance_l2_aggregation_verifier_identity.expected_circuit_id)
+      .to.equal('advance_l2_aggregation-v1')
+    expect(parsedCoordinator.verifier.scroll_real_verifier.advance_l2_aggregation_program_commitment_hex)
+      .to.equal(raw.advance_l2_aggregation)
     expect(coordinatorToml).to.include('# user comment must survive')
     expect(parsedCoordinator.poll_interval_ms).to.equal(2345)
     expect(parsedCoordinator.artifact_write.max_proof_bytes).to.equal(42)
@@ -543,7 +551,7 @@ url = "https://blob-archive.example.com"
       signerProofArtifactBaseUrl: 'https://proofs.example.com/public',
       valuesDir: path.join(root, 'values'),
     })
-    expect(result.families).to.deep.equal(['bridge_transition', 'scroll_batch', 'scroll_chunk'])
+    expect(result.families).to.deep.equal(['advance_l2_aggregation', 'bridge_transition', 'scroll_batch', 'scroll_chunk'])
     const coordinatorToml = toml.parse(fs.readFileSync(coordinatorConfigPath, 'utf8')) as any
     expect(coordinatorToml.verifier.scroll_batch_verifier_identity.expected_circuit_id).to.equal('scroll_batch-v1')
     expect(coordinatorToml.verifier.scroll_real_verifier.agg_verifying_key_path).to.equal('/app/data/verifier/agg-vk.bin')
@@ -582,7 +590,7 @@ url = "https://blob-archive.example.com"
       coordinatorConfigPath,
       manifestPaths: manifests,
       valuesDir: path.join(root, 'values'),
-    })).to.throw('--proof-artifact-base-url is required')
+    })).to.throw('proofSystem.artifactReadBaseUrl is required')
     expect(fs.readFileSync(coordinatorConfigPath, 'utf8')).to.equal(coordinatorBefore)
     expect(fs.readFileSync(coordinatorValuesPath, 'utf8')).to.equal(coordinatorValuesBefore)
   })
@@ -940,19 +948,19 @@ mode = "disabled"
     const derived = deriveAllowedProofTriples(coordinatorConfigPath, [])
     expect(derived?.source).to.equal(coordinatorConfigPath)
     expect(derived?.value).to.equal([
-      `openvm_state_transition:scroll-zkvm-v1-bridge_transition-v1-1.0.0:${Buffer.alloc(32, 6).toString('hex')}`,
+      `openvm_state_transition:scroll-zkvm-v1-bridge_transition-v1-1.0.0:${Buffer.alloc(32, 7).toString('hex')}`,
       `scroll_batch:scroll-production-v1:${Buffer.alloc(32, 5).toString('hex')}`,
     ].join(','))
   })
 
-  it('derives the proof-triple allowlist from release manifests before proof-config has run', () => {
+  it('derives the proof-triple allowlist from release manifests before prep-charts has run', () => {
     const { manifests } = writeValidProofRelease(root)
 
     // The pristine coordinator fixture still carries the dev_dummy scaffold
     // block (no verifier identities), so derivation must fall back.
     const derived = deriveAllowedProofTriples(path.join(root, 'proof-coordinator/ProofCoordinator.toml'), manifests)
     expect(derived?.value).to.equal([
-      `openvm_state_transition:scroll-zkvm-v1-bridge_transition-v1-1.0.0:${Buffer.alloc(32, 6).toString('hex')}`,
+      `openvm_state_transition:scroll-zkvm-v1-bridge_transition-v1-1.0.0:${Buffer.alloc(32, 7).toString('hex')}`,
       `scroll_batch:scroll-zkvm-v1-scroll_batch-v1-1.0.0:${Buffer.alloc(32, 5).toString('hex')}`,
     ].join(','))
   })
@@ -1034,11 +1042,12 @@ transport = "s3"
       valuesDir: path.join(root, 'values'),
     })
     expect(result.provingMode).to.equal('mock')
-    expect(result.families).to.deep.equal(['bridge_transition', 'scroll_batch', 'scroll_chunk'])
+    expect(result.families).to.deep.equal(['advance_l2_aggregation', 'bridge_transition', 'scroll_batch', 'scroll_chunk'])
     expect(result.statementNamespaceFile).to.equal(path.join(root, 'proof-artifacts/manifests/statement-namespace.json'))
-    expect(result.helmSetFiles.proofCoordinator.slice(1, 4).map(binding => binding.filePath)).to.deep.equal([
+    expect(result.helmSetFiles.proofCoordinator.slice(1, 5).map(binding => binding.filePath)).to.deep.equal([
       path.join(root, 'proof-artifacts/mock-manifests/scroll-chunk-topology-program.json'),
       path.join(root, 'proof-artifacts/mock-manifests/scroll-batch-topology-program.json'),
+      path.join(root, 'proof-artifacts/mock-manifests/advance-l2-aggregation-topology-program.json'),
       path.join(root, 'proof-artifacts/mock-manifests/bridge-topology-program.json'),
     ])
     expect([
@@ -1197,7 +1206,7 @@ key_prefix = "batches"
     expect(bundle.bundleId).to.match(/^[\da-f]{64}$/)
 
     const compose = fs.readFileSync(path.join(bundle.bundleDir, 'docker-compose.yml'), 'utf8')
-    for (const requiredArg of ['--mode', 'mock', '--allow-dev-mock-prover', '--enable-prove-scroll-chunk', '--enable-prove-scroll-batch', '--enable-prove-bridge-transition']) {
+    for (const requiredArg of ['--mode', 'mock', '--allow-dev-mock-prover', '--enable-prove-scroll-chunk', '--enable-prove-scroll-batch', '--enable-prove-advance-l2-aggregation', '--enable-prove-bridge-transition']) {
       expect(compose).to.include(requiredArg)
     }
 
@@ -1223,5 +1232,50 @@ key_prefix = "batches"
     fs.appendFileSync(path.join(bundle.bundleDir, '.env'), 'STALE_CONFIG=true\n')
     expect(() => verifyProverWorkerMockBundle({ dir: bundle.bundleDir }))
       .to.throw('SHA-256 does not match bundle-manifest.json')
+  })
+
+  it('renders a deterministic mock worker bundle without reading or retaining credentials', () => {
+    const bundleDir = path.join(root, 'prover-worker-mock/docker-compose')
+    fs.mkdirSync(bundleDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(bundleDir, 'prover-worker.env'),
+      'DOGEOS_PROVER_WORKER_TOKEN=stale-secret\n',
+      { mode: 0o600 },
+    )
+
+    const bundle = writeProverWorkerMockBundle({
+      artifactReadBaseUrl: 'https://proofs.example.com',
+      coordinatorUrl: 'https://proof-coordinator.bridge.example',
+      dir: bundleDir,
+    })
+    expect(bundle.files).to.have.length(3)
+    expect(fs.existsSync(path.join(bundleDir, 'prover-worker.env'))).to.equal(false)
+
+    const manifest = JSON.parse(fs.readFileSync(bundle.manifestFile, 'utf8'))
+    expect(manifest.credentialState).to.equal('pending')
+    expect(manifest).not.to.have.property('generatedAt')
+    const firstManifest = fs.readFileSync(bundle.manifestFile, 'utf8')
+    writeProverWorkerMockBundle({
+      artifactReadBaseUrl: 'https://proofs.example.com',
+      coordinatorUrl: 'https://proof-coordinator.bridge.example',
+      dir: bundleDir,
+    })
+    expect(fs.readFileSync(bundle.manifestFile, 'utf8')).to.equal(firstManifest)
+    expect(() => verifyProverWorkerMockBundle({
+      dir: bundleDir,
+      expectedBundleId: bundle.bundleId,
+    })).to.throw('worker credential is pending')
+
+    const hydrated = hydrateProverWorkerMockBundle({
+      dir: bundleDir,
+      workerToken: 'b'.repeat(64),
+    })
+    expect(hydrated.bundleId).to.equal(bundle.bundleId)
+    expect(verifyProverWorkerMockBundle({
+      dir: bundleDir,
+      expectedBundleId: bundle.bundleId,
+    }).bundleId).to.equal(bundle.bundleId)
+    const readyManifest = JSON.parse(fs.readFileSync(hydrated.manifestFile, 'utf8'))
+    expect(readyManifest.credentialState).to.equal('ready')
   })
 })

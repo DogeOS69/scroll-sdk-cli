@@ -784,8 +784,11 @@ describe('deployment-spec-generator', () => {
 
     it('includes rollup configuration', () => {
       const spec = createMinimalSpec();
+      spec.rollup.maxL1MessageGasLimit = 1_000_000;
       const output = generateConfigToml(spec);
+      const parsed = toml.parse(output) as any;
 
+      expect(parsed.rollup.MAX_L1_MESSAGE_GAS_LIMIT).to.equal(1_000_000);
       expect(output).to.include('MAX_BATCH_IN_BUNDLE');
       expect(output).to.include('FINALIZE_BATCH_DEADLINE_SEC');
     });
@@ -819,11 +822,14 @@ describe('deployment-spec-generator', () => {
       const spec = createMinimalSpec();
       spec.frontend.hosts.rpcGatewayWs = 'ws.example.com';
       spec.frontend.hosts.blockscoutBackend = 'blockscout-be.example.com';
+      spec.frontend.hosts.proofCoordinator = 'proof-coordinator.example.com';
+      spec.proofSystem = {mode: 'mock'};
       const output = generateConfigToml(spec);
 
       expect(output).to.include('RPC_GATEWAY_WS_HOST');
       expect(output).to.include('ws.example.com');
       expect(output).to.include('BLOCKSCOUT_BACKEND_HOST');
+      expect(output).to.include('PROOF_COORDINATOR_HOST = "proof-coordinator.example.com"');
     });
 
     it('includes verifier digests when present', () => {
@@ -908,6 +914,25 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateDogeConfigToml', () => {
+    it('projects DeploymentSpec proof intent into doge-config for conflict-free reruns', () => {
+      const spec = createMinimalSpec({
+        proofSystem: {
+          artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
+          mode: 'production',
+          release: './proof-releases/v1',
+          signerPolicy: { sourceSet: './configs/source-set.toml' },
+        },
+      });
+      const parsed = toml.parse(generateDogeConfigToml(spec)) as any;
+
+      expect(parsed.proofSystem).to.deep.equal({
+        artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
+        mode: 'production',
+        release: './proof-releases/v1',
+        signerPolicy: { sourceSet: './configs/source-set.toml' },
+      });
+    });
+
     it('includes RPC config and the Dogecoin network source', () => {
       const spec = createMinimalSpec();
       const output = generateDogeConfigToml(spec);
@@ -1193,7 +1218,6 @@ describe('deployment-spec-generator', () => {
         deposit_queue_transform: {
           l1_scroll_messenger_address: '0x0000000000000000000000000000000000000001',
           l2_messenger_address: '0x0000000000000000000000000000000000000002',
-          message_queue_gas_limit: 1_000_000,
           moat_address: '0x0000000000000000000000000000000000000003',
         },
         eth_chain_id: 11_155_111,
@@ -1368,6 +1392,10 @@ describe('deployment-spec-generator', () => {
           name: 'withdrawal-processor',
         },
       };
+      spec.proofSystem = {
+        artifactReadBaseUrl: 'https://proof-artifacts.example.com/proof-topology',
+        mode: 'production',
+      };
       spec.images = {
         services: {
           proofCoordinator: {
@@ -1414,7 +1442,9 @@ describe('deployment-spec-generator', () => {
 
       const withdrawalValues = yaml.load(files['withdrawal-processor-production.yaml']) as any;
       expect(withdrawalValues.withdrawalProof).to.deep.include({
-        enabled: false,
+        enabled: true,
+        mode: 'production',
+        provingMode: 'production',
         s3AuthMode: 'irsa',
       });
       expect(withdrawalValues.serviceAccount).to.deep.equal({

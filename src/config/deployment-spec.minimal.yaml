@@ -96,7 +96,9 @@ signing:
   cubesigner: {}
   # Attestation signers are partner-operated docker-compose services. After
   # generating this deployment, collect descriptors/*.json and run:
-  #   scrollsdk setup attestation-signer --threshold <T> --probe
+  #   scrollsdk setup attestation-signer --threshold <T>
+  # Each partner runs `scrollsdk signer preflight` before handing over its
+  # finalized descriptor; descriptor import itself makes no network calls.
 
 frontend:
   protocol: https
@@ -118,6 +120,7 @@ rollup:
   maxTxInChunk: 100
   maxBlockInChunk: 100
   maxBatchInBundle: 20
+  # G1: maximum gas allowed for one L1 message.
   maxL1MessageGasLimit: 10000000
   coordinator:
     chunkCollectionTimeSec: 30    # Faster for devnet

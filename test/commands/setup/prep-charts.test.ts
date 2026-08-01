@@ -1,3 +1,4 @@
+import { runCommand } from '@oclif/test'
 import { expect } from 'chai'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -7,6 +8,7 @@ import {
   applyConfigMapEnvValues,
   applyEthDaSubmitterInitialBatchSidecar,
   applyFeeOracleCurrentEnv,
+  applyFrontendEnvFileValues,
   applyL2RethRpcPublicIngressPolicy,
   applyL2RethRpcRuntimeValues,
   applyRethBlobS3Url,
@@ -14,6 +16,7 @@ import {
   buildEthDaSubmitterPrepEnv,
   buildFeeOraclePrepEnv,
   buildL1InterfaceBlobSourcePrepEnv,
+  buildL2GethInitialPeerList,
   buildRethInitialTrustedPeers,
   buildTsoSigners,
   buildWithdrawalBlobSourcePrepEnv,
@@ -45,24 +48,79 @@ const VALID_PREP_CUTOVER = {
   withdrawRoot: '0x4444444444444444444444444444444444444444444444444444444444444444',
 }
 
+describe('setup prep-charts generated frontend config', () => {
+  it('updates DeploymentSpec env-file values without serializing undefined', () => {
+    const first = applyFrontendEnvFileValues(
+      '# Frontend Configuration\nREACT_APP_ROLLUP = Old Name\n',
+      {
+        REACT_APP_CONNECT_WALLET_PROJECT_ID: undefined,
+        REACT_APP_DOGE_NETWORK: 'testnet',
+        REACT_APP_ROLLUP: 'DogeOS Devnet',
+      },
+    )
+    expect(first.changed).to.equal(true)
+    expect(first.content).to.equal([
+      '# Frontend Configuration',
+      'REACT_APP_ROLLUP = DogeOS Devnet',
+      'REACT_APP_DOGE_NETWORK = testnet',
+      '',
+    ].join('\n'))
+    expect(first.content).not.to.include('undefined')
+
+    expect(applyFrontendEnvFileValues(first.content, {
+      REACT_APP_DOGE_NETWORK: 'testnet',
+      REACT_APP_ROLLUP: 'DogeOS Devnet',
+    })).to.deep.equal({changed: false, content: first.content})
+  })
+})
+
 describe('setup prep-charts Reth initial peer topology', () => {
-  it('combines geth and Reth sequencers without bootnodes and removes duplicates', () => {
+  const gethSequencers = [
+    'enode://geth0@l2-sequencer-0:30303',
+    'enode://geth1@l2-sequencer-1:30303',
+  ]
+  const rethSequencers = [
+    'enode://reth0@l2-reth-sequencer-0:30303',
+    'enode://reth1@l2-reth-sequencer-1:30303',
+    'enode://geth1@l2-sequencer-1:30303',
+  ]
+  const combinedSequencers = [
+    'enode://geth0@l2-sequencer-0:30303',
+    'enode://geth1@l2-sequencer-1:30303',
+    'enode://reth0@l2-reth-sequencer-0:30303',
+    'enode://reth1@l2-reth-sequencer-1:30303',
+  ]
+
+  it('renders geth and Reth sequencers as Reth trusted-peers CSV', () => {
+    expect(buildRethInitialTrustedPeers(gethSequencers, rethSequencers)).to.equal(
+      combinedSequencers.join(',')
+    )
+  })
+
+  it('renders the same deduplicated sequencers as a geth peer-list JSON array', () => {
+    expect(buildL2GethInitialPeerList(gethSequencers, rethSequencers)).to.equal(
+      JSON.stringify(combinedSequencers)
+    )
+  })
+
+  it('ignores blank peer entries for both client formats', () => {
     const gethSequencers = [
       'enode://geth0@l2-sequencer-0:30303',
-      'enode://geth1@l2-sequencer-1:30303',
+      ' ',
     ]
     const rethSequencers = [
       'enode://reth0@l2-reth-sequencer-0:30303',
-      'enode://reth1@l2-reth-sequencer-1:30303',
-      'enode://geth1@l2-sequencer-1:30303',
+      '',
     ]
 
     expect(buildRethInitialTrustedPeers(gethSequencers, rethSequencers)).to.equal([
       'enode://geth0@l2-sequencer-0:30303',
-      'enode://geth1@l2-sequencer-1:30303',
       'enode://reth0@l2-reth-sequencer-0:30303',
-      'enode://reth1@l2-reth-sequencer-1:30303',
     ].join(','))
+    expect(buildL2GethInitialPeerList(gethSequencers, rethSequencers)).to.equal(JSON.stringify([
+      'enode://geth0@l2-sequencer-0:30303',
+      'enode://reth0@l2-reth-sequencer-0:30303',
+    ]))
   })
 })
 
@@ -689,5 +747,60 @@ describe('setup prep-charts split L2 reth RPC updates', () => {
       'reth.networkId',
       'reth.trustedPeers',
     ])
+  })
+})
+
+describe('setup prep-charts generation transaction', () => {
+  it('rolls back earlier ordinary-chart changes when a later generation step fails', async () => {
+    const originalCwd = process.cwd()
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prep-generation-rollback-'))
+    try {
+      process.chdir(root)
+      fs.mkdirSync('.data', {recursive: true})
+      fs.mkdirSync('values', {recursive: true})
+      fs.writeFileSync('Makefile', '# no helm commands in transaction fixture\n')
+      fs.writeFileSync('config.toml', '')
+      fs.writeFileSync('.data/doge-config.toml', [
+        'network = "testnet"',
+        '',
+        '[wallet]',
+        'path = ".data/wallet.json"',
+        '',
+      ].join('\n'))
+      fs.writeFileSync('.data/output-withdrawal-processor.toml', [
+        'bridge_address = "fixture"',
+        'genesis_sequencer_txid = "fixture"',
+        'genesis_sequencer_vout = 0',
+        'network_str = "testnet"',
+        '',
+      ].join('\n'))
+      fs.writeFileSync('.data/bridge.json', JSON.stringify({
+        redeem_script_hex: '51',
+      }))
+      fs.writeFileSync('.data/output-test-data.json', JSON.stringify({
+        fee_wallet_address: 'fixture-fee-wallet',
+        sequencer_address: 'fixture-sequencer',
+      }))
+      const tsoPath = path.join(root, 'values/tso-service-production.yaml')
+      const retiredPath = path.join(root, 'values/attestation-signer-production.yaml')
+      const tsoBefore = 'env: []\noperatorOwned: keep\n'
+      fs.writeFileSync(tsoPath, tsoBefore)
+      fs.writeFileSync(retiredPath, 'enabled: true\n')
+
+      const {stderr, stdout} = await runCommand([
+        'setup',
+        'prep-charts',
+        '--non-interactive',
+        '--skip-auth-check',
+        '--json',
+      ])
+      expect(`${stdout}\n${stderr}`).to.include('Processing tso-service-production.yaml')
+      expect(fs.readFileSync(tsoPath, 'utf8')).to.equal(tsoBefore)
+      expect(fs.readFileSync(retiredPath, 'utf8')).to.equal('enabled: true\n')
+      expect(fs.existsSync(path.join(root, '.data/proof-deployment.json'))).to.equal(false)
+    } finally {
+      process.chdir(originalCwd)
+      fs.rmSync(root, {force: true, recursive: true})
+    }
   })
 })

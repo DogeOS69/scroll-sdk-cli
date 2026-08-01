@@ -125,7 +125,42 @@ signing:
   # Attestation signers run as partner-operated docker-compose services. They
   # are intentionally absent from DeploymentSpec/Helm values. Collect the
   # finalized descriptor.json files under descriptors/ and import them before
-  # bridge-init with `scrollsdk setup attestation-signer --threshold <T> --probe`.
+  # bridge-init with `scrollsdk setup attestation-signer --threshold <T>`.
+  # Each partner runs `scrollsdk signer preflight` before handoff; descriptor
+  # import itself makes no network calls.
+
+# Proof is disabled when this block is omitted. In an existing deployment that
+# does not use DeploymentSpec, put the same fields under [proofSystem] in
+# .data/doge-config.toml instead.
+# proofSystem:
+#   mode: mock
+#   artifactReadBaseUrl: "https://proof-artifacts.example.com/proof-topology"
+#
+# For production, release defaults to ./proof-artifacts. The release producer
+# runs `scrollsdk setup proof-worker-release --release-root proof-artifacts
+# --image dogeos69/prover-worker-cuda@sha256:<digest>` once after staging the
+# conventional chunk/, batch/, and bridge/ artifacts. Deployment users do not
+# repeat the image, artifact paths, hashes, L2 chain ID, or worker endpoints:
+# prep-charts consumes proof-artifacts/worker-release.json, takes CHAIN_ID_L2 and
+# PROOF_COORDINATOR_HOST from the existing config.toml, and generates the
+# production Docker Compose worker bundle.
+#
+# K8s infrastructure details remain separate from proof posture. prep-charts
+# composes these with the ordinary WP/TSO configuration; it never replaces it.
+# proofCoordinator:
+#   artifactStore:
+#     bucket: dogeos-devnet-proof-artifacts
+#     region: us-west-2
+#     keyPrefix: proof-topology
+#   s3AuthMode: irsa
+#   serviceAccount:
+#     name: proof-coordinator
+#     annotations:
+#       eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/dogeos-proof-coordinator"
+#   withdrawalProcessorServiceAccount:
+#     name: withdrawal-processor
+#     annotations:
+#       eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/dogeos-withdrawal-processor-proof"
 
 frontend:
   protocol: https
@@ -147,6 +182,7 @@ frontend:
     grafana: grafana
     l1Devnet: l1-devnet
     l1Explorer: l1-explorer
+    proofCoordinator: proof-coordinator
     tso: tso
     dogecoin: dogecoin
     blockbook: blockbook
@@ -156,6 +192,7 @@ rollup:
   maxTxInChunk: 100
   maxBlockInChunk: 100
   maxBatchInBundle: 20
+  # G1: maximum gas allowed for one L1 message.
   maxL1MessageGasLimit: 10000000
   verifierDigests:
     digest1: "0x0000000000000000000000000000000000000000000000000000000000000001"

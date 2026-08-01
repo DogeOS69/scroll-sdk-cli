@@ -215,9 +215,9 @@ function projectManagedAwsSecretRegion(
 }
 
 /**
- * Project the provisioned AWS resources into the two proof values documents so
- * a subsequent `setup proof-config` passes its IRSA/secret topology validation
- * without manual edits. Mutates both values objects in place.
+ * Project validated proof AWS resource facts into the two generated proof
+ * values documents. `setup prep-charts` is the sole caller in the operator
+ * workflow; proof-aws-init never reads or mutates these output documents.
  */
 export function applyProofAwsValues(
   coordinatorValues: Record<string, any>,
@@ -252,9 +252,7 @@ export function applyProofAwsValues(
   withdrawalValues.withdrawalProof ||= {}
   withdrawalValues.withdrawalProof.s3AuthMode = 'irsa'
   bindIrsaServiceAccount(withdrawalValues, projection.withdrawalServiceAccount, projection.withdrawalRoleArn)
-  // proof-config copies the coordinator's proof-work token mapping into WP.
-  // If proof-aws-init is rerun afterwards, keep that managed copy in the same
-  // explicitly selected region without requiring another proof-config pass.
+  // Keep any prep-charts-managed WP copy in the explicitly selected region.
   projectManagedAwsSecretRegion(withdrawalValues, projection.secretName, projection.region)
 }
 

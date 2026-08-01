@@ -102,7 +102,6 @@ describe('setup bridge-init protocol seed generation', () => {
       deposit_queue_transform: {
         l1_scroll_messenger_address: '0x0000000000000000000000000000000000000001',
         l2_messenger_address: '0x0000000000000000000000000000000000000002',
-        message_queue_gas_limit: 1_000_000,
         moat_address: '0x0000000000000000000000000000000000000003',
       },
       eth_chain_id: 32_382,
@@ -192,6 +191,9 @@ describe('setup bridge-init protocol seed generation', () => {
         existingProtocolSeedConfig: {
           protocol_config_seed: {
             protocol_config: {
+              deposit_queue_transform: {
+                message_queue_gas_limit: 250_000,
+              },
               key_rotation_min_grace_wf_txs: 12,
               min_deposit_sats: 34_567,
             },
@@ -204,6 +206,9 @@ describe('setup bridge-init protocol seed generation', () => {
 
     expect(result.protocol_config_seed.protocol_config.key_rotation_min_grace_wf_txs).to.equal(12)
     expect(result.protocol_config_seed.protocol_config.min_deposit_sats).to.equal(34_567)
+    expect(
+      result.protocol_config_seed.protocol_config.deposit_queue_transform.message_queue_gas_limit
+    ).to.equal(250_000)
   })
 })
 

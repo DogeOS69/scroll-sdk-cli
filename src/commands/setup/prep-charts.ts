@@ -18,11 +18,20 @@ import {
 } from '../../config/constants.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import { GenerationTransaction } from '../../utils/generation-transaction.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {
   resolveBlockbookKubernetesEndpoints,
   resolveDogecoinKubernetesEndpoints,
 } from '../../utils/kubernetes-endpoints.js'
+import {
+  type ResolvedProofIntent,
+  resolveProofIntent,
+} from '../../utils/proof-intent.js'
+import {
+  type ReconcileProofKubernetesResult,
+  reconcileProofKubernetes,
+} from '../../utils/proof-kubernetes-reconciler.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {
   getRequiredManagedSignerConfig,
@@ -67,26 +76,86 @@ export interface TsoSignerEndpoint {
   uri: string
 }
 
+interface PrepChartGenerationResult {
+  proof: ReconcileProofKubernetesResult
+  skippedBootnodeRethInstances: number
+  skippedConfig: number
+  skippedInstances: number
+  skippedProduction: number
+  skippedRethInstances: number
+  updatedBootnodeRethInstances: number
+  updatedConfig: number
+  updatedInstances: number
+  updatedProduction: number
+  updatedRethInstances: number
+}
+
+export function applyFrontendEnvFileValues(
+  source: string,
+  updates: Record<string, unknown>,
+): {changed: boolean; content: string} {
+  const lines = source.replaceAll('\r\n', '\n').split('\n')
+  while (lines.at(-1) === '') lines.pop()
+  const positions = new Map<string, number>()
+  for (const [index, line] of lines.entries()) {
+    const match = line.match(/^([A-Z][\dA-Z_]*)\s*=\s*(.*)$/)
+    if (match) positions.set(match[1], index)
+  }
+
+  let changed = false
+  for (const [key, rawValue] of Object.entries(updates)) {
+    if (rawValue === undefined || rawValue === null) continue
+    const rendered = `${key} = ${String(rawValue)}`
+    const position = positions.get(key)
+    if (position === undefined) {
+      lines.push(rendered)
+      positions.set(key, lines.length - 1)
+      changed = true
+    } else if (lines[position] !== rendered) {
+      lines[position] = rendered
+      changed = true
+    }
+  }
+
+  return {changed, content: `${lines.join('\n')}\n`}
+}
+
 /**
- * Build the in-cluster Reth bootstrap peer set used during the one-way
- * geth-to-Reth cutover. Reth nodes must be able to sync from either generation
- * of sequencer while both are available, so this set intentionally contains
+ * Build the in-cluster bootstrap peer set used during the one-way geth-to-Reth
+ * cutover. Every L2 client must be able to reach either generation of
+ * sequencer while both are available, so this set intentionally contains
  * sequencers only: legacy geth sequencers first, followed by Reth sequencers.
  *
  * Bootnodes are not part of this list. They have their own topology and the
  * external RPC package builds a separate geth+Reth bootnode peer set.
  */
-export function buildRethInitialTrustedPeers(
+export function buildInitialSequencerPeers(
   gethSequencerPeers: string[],
   rethSequencerPeers: string[],
-): string {
+): string[] {
   const peers = new Set<string>()
   for (const peer of [...gethSequencerPeers, ...rethSequencerPeers]) {
     const normalized = peer.trim()
     if (normalized !== '') peers.add(normalized)
   }
 
-  return [...peers].join(',')
+  return [...peers]
+}
+
+/** Render the shared in-cluster sequencer peers for Reth's CSV CLI value. */
+export function buildRethInitialTrustedPeers(
+  gethSequencerPeers: string[],
+  rethSequencerPeers: string[],
+): string {
+  return buildInitialSequencerPeers(gethSequencerPeers, rethSequencerPeers).join(',')
+}
+
+/** Render the shared in-cluster sequencer peers for geth's JSON env value. */
+export function buildL2GethInitialPeerList(
+  gethSequencerPeers: string[],
+  rethSequencerPeers: string[],
+): string {
+  return JSON.stringify(buildInitialSequencerPeers(gethSequencerPeers, rethSequencerPeers))
 }
 
 /**
@@ -968,6 +1037,7 @@ export default class SetupPrepCharts extends Command {
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
+    '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml',
     '<%= config.bin %> <%= command.id %> --github-username=your-username --github-token=your-token',
     '<%= config.bin %> <%= command.id %> --values-dir=./custom-values',
     '<%= config.bin %> <%= command.id %> --skip-auth-check',
@@ -992,7 +1062,10 @@ export default class SetupPrepCharts extends Command {
       default: false,
       description: 'Do not overwrite L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK in L2 production values files',
     }),
-    'values-dir': Flags.string({ default: './values', description: 'Directory containing values files' }),
+    spec: Flags.string({
+      description: 'Optional DeploymentSpec proof-intent source; auto-detects deployment-spec.yaml/yml when omitted',
+    }),
+    'values-dir': Flags.string({ default: './values', description: 'Directory containing values files; must be inside the deployment root for transactional generation' }),
   }
 
   private bridgeConfig: any = {}
@@ -1050,6 +1123,7 @@ export default class SetupPrepCharts extends Command {
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
   private outputTestData: Record<string, any> = {}
+  private proofIntent!: ResolvedProofIntent
   private skipL2ContractDeploymentBlock: boolean = false
   private withdrawalProcessorConfig: toml.JsonMap = {}
 
@@ -1087,13 +1161,42 @@ export default class SetupPrepCharts extends Command {
     // Validate Makefile
     await this.validateMakefile(skipAuthCheck)
 
-    // Process production.yaml files
-    const valuesDir = flags['values-dir']
-    const { skipped: skippedInstances, updated: updatedInstances } = await this.processMutipleInstance(valuesDir);
-    const { skipped: skippedBootnodeRethInstances, updated: updatedBootnodeRethInstances } = await this.processBootnodeRethInstanceFiles(valuesDir);
-    const { skipped: skippedRethInstances, updated: updatedRethInstances } = await this.processSequencerRethInstanceFiles(valuesDir);
-    const { skipped: skippedProduction, updated: updatedProduction } = await this.processProductionYaml(valuesDir);
-    const { skipped: skippedConfig, updated: updatedConfig } = await this.processConfigYaml(valuesDir);
+    const deploymentRoot = process.cwd()
+    const originalValuesDir = path.resolve(deploymentRoot, flags['values-dir'])
+    const transaction = GenerationTransaction.begin(deploymentRoot)
+    let generation: PrepChartGenerationResult
+    let changedFiles: string[] = []
+    try {
+      const stagedValuesDir = transaction.toStagingPath(originalValuesDir)
+      this.proofIntent = this.rebaseProofIntentForStaging(
+        transaction,
+        this.proofIntent,
+      )
+      process.chdir(transaction.stagingRoot)
+      generation = await this.generateCharts(stagedValuesDir)
+      process.chdir(deploymentRoot)
+      changedFiles = transaction.commit().changedFiles
+    } catch (error) {
+      process.chdir(deploymentRoot)
+      transaction.rollback()
+      throw error
+    }
+
+    const {
+      proof: stagedProof,
+      skippedBootnodeRethInstances,
+      skippedConfig,
+      skippedInstances,
+      skippedProduction,
+      skippedRethInstances,
+      updatedBootnodeRethInstances,
+      updatedConfig,
+      updatedInstances,
+      updatedProduction,
+      updatedRethInstances,
+    } = generation
+    const proof = this.rebaseProofResultFromStaging(transaction, stagedProof)
+    const valuesDir = originalValuesDir
 
     this.jsonCtx.logSuccess(`Updated instance-specific YAML files for ${updatedInstances + updatedBootnodeRethInstances + updatedRethInstances} chart(s).`);
     this.jsonCtx.info(`Skipped ${skippedInstances + skippedBootnodeRethInstances + skippedRethInstances} instance-specific chart(s).`);
@@ -1110,11 +1213,22 @@ export default class SetupPrepCharts extends Command {
     if (this.jsonMode) {
       this.jsonCtx.success({
         configCharts: { skipped: skippedConfig, updated: updatedConfig },
+        generation: {
+          changedFiles,
+          committed: true,
+        },
         instanceCharts: {
           skipped: skippedInstances + skippedBootnodeRethInstances + skippedRethInstances,
           updated: updatedInstances + updatedBootnodeRethInstances + updatedRethInstances,
         },
         productionCharts: { skipped: skippedProduction, updated: updatedProduction },
+        proof: {
+          contract: proof.contract,
+          files: proof.files,
+          mode: proof.mode,
+          scaffoldedCoordinatorConfig: proof.scaffoldedCoordinatorConfig,
+          workerBundle: proof.workerBundle,
+        },
         totalSkipped: skippedInstances + skippedBootnodeRethInstances + skippedRethInstances + skippedProduction + skippedConfig,
         totalUpdated: updatedInstances + updatedBootnodeRethInstances + updatedRethInstances + updatedProduction + updatedConfig,
         valuesDir,
@@ -1158,26 +1272,17 @@ export default class SetupPrepCharts extends Command {
     }
   }
 
-  private buildFreshRethTrustedPeers(): string {
-    return this.buildRethTrustedPeers()
+  private buildFreshL2GethPeerList(): string {
+    return buildL2GethInitialPeerList(
+      this.getLegacySequencerPeers(),
+      this.getRethSequencerPeers(),
+    )
   }
 
-  private buildRethTrustedPeers(): string {
-    const rethSequencerPeers: string[] = []
-    for (const instance of this.dogeConfig.sequencerReth?.instances ?? []) {
-      if (instance.nodekey?.privateKey) {
-        rethSequencerPeers.push(deriveSequencerRethEnodeUrl(instance.nodekey.privateKey, instance.index))
-        continue
-      }
-
-      if (instance.enodeUrl) {
-        rethSequencerPeers.push(instance.enodeUrl)
-      }
-    }
-
+  private buildFreshRethTrustedPeers(): string {
     return buildRethInitialTrustedPeers(
       this.getLegacySequencerPeers(),
-      rethSequencerPeers,
+      this.getRethSequencerPeers(),
     )
   }
 
@@ -1240,6 +1345,35 @@ export default class SetupPrepCharts extends Command {
     return cleanBase + cleanPath;
   }
 
+  private async generateCharts(valuesDir: string): Promise<PrepChartGenerationResult> {
+    const {skipped: skippedInstances, updated: updatedInstances} =
+      await this.processMutipleInstance(valuesDir)
+    const {
+      skipped: skippedBootnodeRethInstances,
+      updated: updatedBootnodeRethInstances,
+    } = await this.processBootnodeRethInstanceFiles(valuesDir)
+    const {skipped: skippedRethInstances, updated: updatedRethInstances} =
+      await this.processSequencerRethInstanceFiles(valuesDir)
+    const {skipped: skippedProduction, updated: updatedProduction} =
+      await this.processProductionYaml(valuesDir)
+    const {skipped: skippedConfig, updated: updatedConfig} =
+      await this.processConfigYaml(valuesDir)
+    const proof = this.reconcileProofKubernetes(valuesDir)
+    return {
+      proof,
+      skippedBootnodeRethInstances,
+      skippedConfig,
+      skippedInstances,
+      skippedProduction,
+      skippedRethInstances,
+      updatedBootnodeRethInstances,
+      updatedConfig,
+      updatedInstances,
+      updatedProduction,
+      updatedRethInstances,
+    }
+  }
+
   private getBaseUrl(url?: string) {
     if (!url) return url;
     try {
@@ -1272,9 +1406,12 @@ export default class SetupPrepCharts extends Command {
     
   }
 
-  private getFixedL2NodeEnvValue(key: string): string | undefined {
+  private getFixedL2NodeEnvValue(chartName: string, key: string): string | undefined {
     if (key === 'L2GETH_L1_ENDPOINT') return L1_INTERFACE_RPC_ENDPOINT
     if (key === 'L2GETH_DA_BLOB_BEACON_NODE') return L1_INTERFACE_BEACON_API_ENDPOINT
+    if (key === 'L2GETH_PEER_LIST' && this.isL2GethNode(chartName)) {
+      return this.buildFreshL2GethPeerList()
+    }
   }
 
   private getIngressHostConfigValue(chartName: string, ingressKey: string): string | undefined {
@@ -1350,6 +1487,26 @@ export default class SetupPrepCharts extends Command {
     return path.split('.').reduce((prev, curr) => prev && prev[curr], obj)
   }
 
+  private getRethSequencerPeers(): string[] {
+    const rethSequencerPeers: string[] = []
+    for (const instance of this.dogeConfig.sequencerReth?.instances ?? []) {
+      if (instance.nodekey?.privateKey) {
+        rethSequencerPeers.push(deriveSequencerRethEnodeUrl(instance.nodekey.privateKey, instance.index))
+        continue
+      }
+
+      if (instance.enodeUrl) {
+        rethSequencerPeers.push(instance.enodeUrl)
+      }
+    }
+
+    return rethSequencerPeers
+  }
+
+  private isL2GethNode(chartName: string): boolean {
+    return chartName === 'l2-bootnode' || chartName === 'l2-rpc' || chartName === 'l2-sequencer'
+  }
+
   private isL2Node(chartName: string): boolean {
     return chartName.startsWith("l2-bootnode") || chartName.startsWith("l2-rpc") || chartName.startsWith("l2-sequencer") || chartName.startsWith("l2-reth");
   }
@@ -1372,8 +1529,20 @@ export default class SetupPrepCharts extends Command {
       this.warn('config-contracts.toml not found. Some values may not be populated correctly.')
     }
 
-    const { config } = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk setup doge-config')
+    const { config, configPath: dogeConfigPath } = await loadDogeConfigWithSelection(
+      flags['doge-config'],
+      'scrollsdk setup doge-config',
+    )
     this.dogeConfig = config as DogeConfigType;
+    this.proofIntent = resolveProofIntent({
+      deploymentDir: process.cwd(),
+      dogeConfig: this.dogeConfig,
+      dogeConfigPath,
+      specPath: flags.spec,
+    })
+    this.jsonCtx.info(
+      `Proof intent: ${this.proofIntent.intent.mode} (${this.proofIntent.source.kind}: ${this.proofIntent.source.path})`,
+    )
     this.configData.ethereumDa = this.dogeConfig.ethereumDa
 
 
@@ -1542,12 +1711,8 @@ export default class SetupPrepCharts extends Command {
 
       if (chartName === "frontends") {
         const {scrollConfig} = yamlData;
-        let scrollConfigToml: any = {};
-        try {
-          scrollConfigToml = toml.parse(scrollConfig);
-        } catch (error: any) {
-          this.error(chalk.red("scrollConfig failed: " + error.message));
-        }
+        const generatedFrontendConfig =
+          yamlData.configMaps?.['frontend-config']?.data?.['frontend-config']
 
         let sharedHost = this.getConfigValue("ingress.FRONTEND_HOST")
         if (sharedHost && sharedHost.startsWith("portal.")) {
@@ -1555,18 +1720,15 @@ export default class SetupPrepCharts extends Command {
         }
 
         const configUpdates = {
-
           REACT_APP_BASE_CHAIN: this.getConfigValue("general.CHAIN_NAME_L1"),
           REACT_APP_CONNECT_WALLET_PROJECT_ID: this.getConfigValue("frontend.CONNECT_WALLET_PROJECT_ID"),
           REACT_APP_DOGE_BRIDGE_ADDRESS: this.withdrawalProcessorConfig.bridge_address,
           REACT_APP_DOGE_NETWORK: this.dogeConfig.network,
-          // new config
           REACT_APP_ETH_SYMBOL: this.getConfigValue("frontend.ETH_SYMBOL"),
           REACT_APP_EXTERNAL_DOCS_URI: this.formatUrl("https://docs." + sharedHost, "/en/home"),
           REACT_APP_EXTERNAL_EXPLORER_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_EXPLORER_URI_L1"),
           REACT_APP_EXTERNAL_RPC_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_RPC_URI_L1"),
           REACT_APP_FAUCET_URI: this.formatUrl("https://faucet." + sharedHost),
-
           REACT_APP_L1_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
           REACT_APP_L1_STANDARD_ERC20_GATEWAY_PROXY_ADDR: "",
           REACT_APP_L2_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
@@ -1574,8 +1736,45 @@ export default class SetupPrepCharts extends Command {
           REACT_APP_ROLLUP: this.getConfigValue("general.CHAIN_NAME_L2"),
         };
 
+        if (typeof scrollConfig !== 'string') {
+          if (typeof generatedFrontendConfig !== 'string') {
+            this.jsonCtx.info(`No supported frontend config payload found in ${file}`)
+            skippedCharts++
+            continue
+          }
+
+          const generatedUpdate = applyFrontendEnvFileValues(
+            generatedFrontendConfig,
+            configUpdates,
+          )
+          if (!generatedUpdate.changed) {
+            this.jsonCtx.info(`No changes needed in ${file}`)
+            skippedCharts++
+            continue
+          }
+
+          yamlData.configMaps['frontend-config'].data['frontend-config'] =
+            generatedUpdate.content
+          fs.writeFileSync(yamlPath, yaml.dump(yamlData, YAML_DUMP_OPTIONS))
+          this.jsonCtx.logSuccess(`Updated ${file}`)
+          updatedCharts++
+          continue
+        }
+
+        let scrollConfigToml: any = {};
+        try {
+          scrollConfigToml = toml.parse(scrollConfig);
+        } catch (error: any) {
+          this.error(chalk.red("scrollConfig failed: " + error.message));
+        }
+
         let updated = false;
         for (const [key, newValue] of Object.entries(configUpdates)) {
+          // Minimal/spec-first deployments may not have post-contract or
+          // optional frontend fields yet. Omit unresolved inputs instead of
+          // inserting `undefined`, which @iarna/toml cannot serialize.
+          if (newValue === undefined || newValue === null) continue
+
           const oldValue = scrollConfigToml[key];
           if (!oldValue || oldValue !== newValue) {
             changes.push({ key, newValue: String(newValue), oldValue: String(oldValue || '') });
@@ -1826,7 +2025,7 @@ export default class SetupPrepCharts extends Command {
               }
 
               if (this.isL2Node(chartName)) {
-                const fixedValue = this.getFixedL2NodeEnvValue(key)
+                const fixedValue = this.getFixedL2NodeEnvValue(chartName, key)
                 if (fixedValue !== undefined) {
                   if (fixedValue !== oldValue) {
                     changes.push({ key, newValue: fixedValue, oldValue: JSON.stringify(oldValue) })
@@ -2624,9 +2823,7 @@ export default class SetupPrepCharts extends Command {
           updated = true
         }
 
-        const proofSystemMode = this.dogeConfig.proofSystem?.mode
-          || this.dogeConfig.proofSystem?.provingMode
-          || 'disabled'
+        const proofSystemMode = this.proofIntent.intent.mode
         if (ensureWithdrawalProofActivationSwitch(productionYaml, proofSystemMode)) {
           changes.push({
             key: 'withdrawalProof.enabled',
@@ -3097,6 +3294,105 @@ export default class SetupPrepCharts extends Command {
     }
 
     return { skipped: skippedCharts, updated: updatedCharts }
+  }
+
+  private rebaseProofIntentForStaging(
+    transaction: GenerationTransaction,
+    resolved: ResolvedProofIntent,
+  ): ResolvedProofIntent {
+    let sourcePath = resolved.source.path
+    try {
+      sourcePath = transaction.toStagingPath(sourcePath)
+    } catch {
+      // An explicitly selected source outside the deployment root remains
+      // read-only and is recorded as an absolute contract path.
+    }
+
+    let {release} = resolved.intent
+    if (release) {
+      const originalRelease = path.resolve(transaction.originalRoot, release)
+      try {
+        transaction.toStagingPath(originalRelease)
+      } catch {
+        // Preserve an external release root instead of resolving its relative
+        // spelling against the temporary generation workspace.
+        release = originalRelease
+      }
+    }
+
+    return {
+      intent: {
+        ...resolved.intent,
+        ...(release ? {release} : {}),
+      },
+      source: {
+        ...resolved.source,
+        path: sourcePath,
+      },
+    }
+  }
+
+  private rebaseProofResultFromStaging(
+    transaction: GenerationTransaction,
+    result: ReconcileProofKubernetesResult,
+  ): ReconcileProofKubernetesResult {
+    const workerBundle = result.workerBundle
+      ? {
+          ...result.workerBundle,
+          bundleDir: transaction.toOriginalPath(result.workerBundle.bundleDir),
+          files: result.workerBundle.files.map(file => transaction.toOriginalPath(file)),
+          manifestFile: transaction.toOriginalPath(result.workerBundle.manifestFile),
+          ...('releaseManifestFile' in result.workerBundle
+            ? {
+                releaseManifestFile: transaction.toOriginalPath(
+                  result.workerBundle.releaseManifestFile,
+                ),
+              }
+            : {}),
+        }
+      : undefined
+    return {
+      ...result,
+      files: result.files.map(file => transaction.toOriginalPath(file)),
+      release: {
+        artifactManifest: transaction.toOriginalPath(result.release.artifactManifest),
+        programManifests: result.release.programManifests
+          .map(file => transaction.toOriginalPath(file)),
+        releaseRoot: transaction.toOriginalPath(result.release.releaseRoot),
+        statementNamespace: transaction.toOriginalPath(result.release.statementNamespace),
+      },
+      ...(workerBundle ? {workerBundle} : {}),
+    }
+  }
+
+  private reconcileProofKubernetes(valuesDir: string): ReconcileProofKubernetesResult {
+    const coordinatorIngressHost = this.getConfigValue('ingress.PROOF_COORDINATOR_HOST')
+    const result = reconcileProofKubernetes({
+      aggregationL2ChainId: this.getConfigValue('general.CHAIN_ID_L2') as number | string | undefined,
+      coordinatorIngressHost: typeof coordinatorIngressHost === 'string'
+        ? coordinatorIngressHost
+        : undefined,
+      deploymentDir: process.cwd(),
+      intent: this.proofIntent,
+      valuesDir,
+    })
+    this.jsonCtx.logSuccess(
+      `Reconciled ${result.mode} proof K8s configuration; contract ${result.contract.generationId}`,
+    )
+    if (result.workerBundle && result.mode === 'mock') {
+      this.jsonCtx.addWarning(
+        `Mock worker bundle ${result.workerBundle.bundleId} is credential-pending. `
+        + 'Hydrate prover-worker.env on the worker host before running setup proof-worker-check.',
+      )
+    } else if (result.workerBundle) {
+      this.jsonCtx.addWarning(
+        `Production worker bundle ${result.workerBundle.bundleId} is credential-pending. `
+        + 'Run setup proof-worker to inject the bearer token, sync the release and bundle to the GPU host, '
+        + 'then run setup proof-worker-check before docker compose up.',
+      )
+    }
+
+    return result
   }
 
   private removeLegacyRethTrustedPeersEnv(productionYaml: any): boolean {

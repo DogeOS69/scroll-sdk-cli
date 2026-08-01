@@ -24,7 +24,11 @@ import {
 
 export type { ProvingMode } from './withdrawal-config.js'
 
-export type ProofFamily = 'bridge_transition' | 'scroll_batch' | 'scroll_chunk'
+export type ProofFamily =
+  | 'advance_l2_aggregation'
+  | 'bridge_transition'
+  | 'scroll_batch'
+  | 'scroll_chunk'
 
 export const DEFAULT_SCROLL_BATCH_BACKEND_PROFILE = 'scroll-prod-zkvm-batch-v1'
 export const DEFAULT_BRIDGE_BACKEND_PROFILE = 'bridge-prod-zkvm-v1'
@@ -33,6 +37,7 @@ export const DEFAULT_PROOF_COORDINATOR_CONFIG = 'proof-coordinator/ProofCoordina
 export const DEFAULT_PROOF_PROGRAM_MANIFESTS = [
   'proof-artifacts/manifests/scroll-chunk.json',
   'proof-artifacts/manifests/scroll-batch.json',
+  'proof-artifacts/manifests/advance-l2-aggregation.json',
   'proof-artifacts/manifests/bridge-transition.json',
 ]
 export const DEFAULT_STATEMENT_NAMESPACE_CONFIG = 'proof-artifacts/manifests/statement-namespace.json'
@@ -71,6 +76,9 @@ interface ProofProgramManifest {
 }
 
 interface ArtifactIdentity {
+  advance_l2_aggregation_app_commit_raw?: string
+  advance_l2_aggregation_program_commitment_hash?: string
+  advance_l2_aggregation_verification_key_hash?: string
   batch_program_commitment_hash?: string
   batch_program_commitment_raw?: string
   batch_verification_key_hash?: string
@@ -158,34 +166,39 @@ export interface ConfigureDisabledProofResult {
   provingMode: undefined
 }
 
-const MANAGED_VERIFIER_BEGIN = '# BEGIN scrollsdk managed verifier configuration'
-const MANAGED_VERIFIER_END = '# END scrollsdk managed verifier configuration'
+export const MANAGED_VERIFIER_BEGIN = '# BEGIN scrollsdk managed verifier configuration'
+export const MANAGED_VERIFIER_END = '# END scrollsdk managed verifier configuration'
 
 const FAMILY_CONFIG_KEYS: Record<ProofFamily, string> = {
+  advance_l2_aggregation: 'advance_l2_aggregation_verifier_identity',
   bridge_transition: 'scroll_bridge_verifier_identity',
   scroll_batch: 'scroll_batch_verifier_identity',
   scroll_chunk: 'scroll_chunk_verifier_identity',
 }
 
 const FAMILY_PREFIXES: Record<ProofFamily, string> = {
+  advance_l2_aggregation: 'ADVANCE_L2_AGGREGATION',
   bridge_transition: 'SCROLL_BRIDGE',
   scroll_batch: 'SCROLL_BATCH',
   scroll_chunk: 'SCROLL_CHUNK',
 }
 
 const RAW_COMMITMENT_KEYS: Record<ProofFamily, keyof ArtifactIdentity> = {
+  advance_l2_aggregation: 'advance_l2_aggregation_app_commit_raw',
   bridge_transition: 'bridge_app_commit_raw',
   scroll_batch: 'batch_program_commitment_raw',
   scroll_chunk: 'chunk_program_commitment_raw',
 }
 
 const PROGRAM_COMMITMENT_HASH_KEYS: Record<ProofFamily, keyof ArtifactIdentity> = {
+  advance_l2_aggregation: 'advance_l2_aggregation_program_commitment_hash',
   bridge_transition: 'bridge_program_commitment_hash',
   scroll_batch: 'batch_program_commitment_hash',
   scroll_chunk: 'chunk_program_commitment_hash',
 }
 
 const VERIFICATION_KEY_HASH_KEYS: Record<ProofFamily, keyof ArtifactIdentity> = {
+  advance_l2_aggregation: 'advance_l2_aggregation_verification_key_hash',
   bridge_transition: 'bridge_verification_key_hash',
   scroll_batch: 'batch_verification_key_hash',
   scroll_chunk: 'chunk_verification_key_hash',
@@ -582,9 +595,9 @@ export interface DerivedValue {
 }
 
 /**
- * Read the signer proof-artifact base URL that an earlier proof-config run
+ * Read the signer proof-artifact base URL that an earlier prep-charts run
  * staged into a WithdrawalProcessor.toml document, so later invocations
- * (proof-config re-runs, export-signer-policy) do not need the flag repeated.
+ * (prep-charts re-runs, export-signer-policy) do not need the value repeated.
  */
 export function readStagedSignerProofArtifactBaseUrl(withdrawalConfigSource: string): string | undefined {
   const parsed = toml.parse(withdrawalConfigSource) as any
@@ -595,10 +608,10 @@ export function readStagedSignerProofArtifactBaseUrl(withdrawalConfigSource: str
 /**
  * Derive the envelope proof-triple allowlist from deployment artifacts.
  *
- * Preferred source is the managed verifier block proof-config staged into
+ * Preferred source is the managed verifier block prep-charts staged into
  * ProofCoordinator.toml: it carries the deployed verifier identities including
  * any --verifier-id overrides, so the exported signer policy is guaranteed to
- * allow exactly what the coordinator enforces. Before proof-config has run,
+ * allow exactly what the coordinator enforces. Before prep-charts has run,
  * fall back to computing the same CSV from the release manifests; when neither
  * exists the proof topology is not staged yet and the caller keeps the
  * allowlist empty.
@@ -1231,6 +1244,7 @@ function prepareProofCoordinator(
   // exists for release artifacts; the dev_dummy verifier is structural.
   if (!mock) {
     verifier.scroll_real_verifier = {
+      advance_l2_aggregation_program_commitment_hex: commitments!.get('advance_l2_aggregation'),
       agg_verifying_key_path: AGG_VK_PATH,
       batch_program_commitment_hex: commitments!.get('scroll_batch'),
       bridge_program_commitment_hex: commitments!.get('bridge_transition'),
@@ -1372,7 +1386,7 @@ function prepareWithdrawalProcessor(
 
   for (const [family, { manifest, path: manifestPath }] of manifests) {
     const verifierId = verifierIds[family] || defaultVerifierId(manifest)
-    if (family !== 'bridge_transition') {
+    if (family === 'scroll_batch' || family === 'scroll_chunk') {
       proofControlPlaneGate[`${FAMILY_PREFIXES[family].toLowerCase()}_circuit_id`] = manifest.circuit_id
       proofControlPlaneGate[`${FAMILY_PREFIXES[family].toLowerCase()}_verification_key_hash_hex`] = bareHex(
         manifest.verification_key_hash,
@@ -1398,6 +1412,11 @@ function prepareWithdrawalProcessor(
 
   if (!mock) {
     proofControlPlaneGate.scroll_real_verifier = {
+      advance_l2_aggregation_program_commitment_hex: bareHex(
+        commitments!.get('advance_l2_aggregation')!,
+        64,
+        'AdvanceL2 aggregation raw program commitment'
+      ),
       agg_verifying_key_path: AGG_VK_PATH,
       batch_program_commitment_hex: bareHex(
         commitments!.get('scroll_batch')!,
@@ -1555,7 +1574,7 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
 
   const statementNamespaceConfig = buildStatementNamespaceConfig(manifests, provingMode)
   // Keep the generated file subject to the same parse-before-write rule as
-  // every other proof-config output.
+  // every other prep-charts proof output.
   JSON.parse(statementNamespaceConfig)
   let commitments: Map<ProofFamily, string> | undefined
   let verifierArtifact: VerifierArtifact | undefined
@@ -1593,7 +1612,7 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
     throw new Error(
       `WithdrawalProcessor TOML template not found: ${withdrawalConfigFile}. `
       + 'Copy withdrawal-processor/WithdrawalProcessor.toml from the scroll-sdk examples layout; '
-      + 'proof-config updates the native file and never embeds application TOML in values YAML.'
+      + 'prep-charts updates the native file and never embeds application TOML in values YAML.'
     )
   }
 
@@ -1608,7 +1627,7 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
     const staged = readStagedSignerProofArtifactBaseUrl(nativeWithdrawalConfig)
     if (staged === undefined) {
       throw new Error(
-        '--proof-artifact-base-url is required: no previously staged value found in WithdrawalProcessor.toml (the first proof-config run must pass it explicitly)'
+        'proofSystem.artifactReadBaseUrl is required: no previously staged value found in WithdrawalProcessor.toml (configure proofSystem before the first prep-charts run)'
       )
     }
 
