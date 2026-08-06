@@ -401,7 +401,7 @@ describe('setup gen-rpc-package env generation', () => {
     expect(l2rethEnv).not.to.include('l2-sequencer-0')
   })
 
-  it('writes a credential-free l1-interface env, an example template, and a scaffolded local override', () => {
+  it('writes only credential-free generated config and leaves package-owned operator files untouched', () => {
     const valuesDir = path.join(tmpDir, 'values')
     const rpcPackageDir = path.join(tmpDir, 'dogeos-rpc-package')
     fs.mkdirSync(valuesDir, { recursive: true })
@@ -445,6 +445,13 @@ describe('setup gen-rpc-package env generation', () => {
       ].join('\n'),
     )
 
+    const examplePath = path.join(rpcPackageDir, 'envs', 'testnet', 'l1-interface.local.env.example')
+    const localEnvPath = path.join(rpcPackageDir, 'envs', 'testnet', 'l1-interface.local.env')
+    const packageOwnedExample = '# package-owned operator template\n'
+    const operatorOwnedLocalEnv = 'DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL=https://operator.example\n'
+    fs.writeFileSync(examplePath, packageOwnedExample)
+    fs.writeFileSync(localEnvPath, operatorOwnedLocalEnv)
+
     const command = createCommandHarness()
     command.generateL1InterfaceEnvFile(valuesDir, rpcPackageDir, 'testnet')
 
@@ -475,26 +482,17 @@ describe('setup gen-rpc-package env generation', () => {
     expect(env).not.to.include('http://dogecoin-node:44555')
     expect(env).not.to.include('http://cluster-dogecoin:44555')
 
-    // Tracked template: credential-free, deterministic, safe to commit.
-    const example = fs.readFileSync(
-      path.join(rpcPackageDir, 'envs', 'testnet', 'l1-interface.local.env.example'),
-      'utf8',
-    )
-    expect(example).to.include('# L1 Interface Testnet — operator overrides (TEMPLATE)')
-    expect(example).to.include('cp envs/testnet/l1-interface.local.env.example envs/testnet/l1-interface.local.env')
-    expect(example).to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL=https://your-ethereum-l1-rpc:8545')
-    expect(example).to.include('# DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL=https://your-dogecoin-rpc')
-    expect(example).not.to.include('cluster-dogecoin')
-    expect(example).not.to.include('cluster-user')
-    expect(example).not.to.include('do-not-copy')
+    // The target package owns its template and the operator owns the real file.
+    expect(fs.readFileSync(examplePath, 'utf8')).to.equal(packageOwnedExample)
+    expect(fs.readFileSync(localEnvPath, 'utf8')).to.equal(operatorOwnedLocalEnv)
 
-    // Local override is scaffolded for the operator to fill in.
-    const localEnvPath = path.join(rpcPackageDir, 'envs', 'testnet', 'l1-interface.local.env')
-    expect(fs.existsSync(localEnvPath)).to.equal(true)
-    const localEnv = fs.readFileSync(localEnvPath, 'utf8')
-    expect(localEnv).to.include('# DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL=https://your-dogecoin-rpc')
-    expect(localEnv).not.to.include('cluster-dogecoin')
-    expect(localEnv).not.to.include('cluster-user')
+    // A fresh network gets generated config only; CLI does not scaffold package
+    // documentation or operator-local configuration.
+    command.generateL1InterfaceEnvFile(valuesDir, rpcPackageDir, 'freshnet')
+    const freshNetworkDir = path.join(rpcPackageDir, 'envs', 'freshnet')
+    expect(fs.existsSync(path.join(freshNetworkDir, 'l1-interface.env'))).to.equal(true)
+    expect(fs.existsSync(path.join(freshNetworkDir, 'l1-interface.local.env.example'))).to.equal(false)
+    expect(fs.existsSync(path.join(freshNetworkDir, 'l1-interface.local.env'))).to.equal(false)
   })
 
   it('syncs values initContainers into docker-compose services', () => {

@@ -910,7 +910,7 @@ export default class SetupGenRpcPackage extends Command {
       const protocolContextJsonPath = this.extractProtocolContextJson(flags['values-dir'], rpcPackageDir, network)
       this.log(chalk.green(`✓ Extracted protocol_context.json at: ${protocolContextJsonPath}`))
 
-      // Step 8: Generate l1-interface.env (generated) + l1-interface.local.env (operator)
+      // Step 8: Generate deterministic l1-interface runtime configuration.
       this.log(chalk.blue('Step 4: Generating l1-interface.env file...'))
       const l1InterfaceEnv = this.generateL1InterfaceEnvFile(flags['values-dir'], rpcPackageDir, network, config)
       this.log(chalk.green(`✓ Generated l1-interface.env at: ${l1InterfaceEnv.generatedPath}`))
@@ -937,8 +937,6 @@ export default class SetupGenRpcPackage extends Command {
       this.log(chalk.cyan(`  - ${genesisJsonPath}`))
       this.log(chalk.cyan(`  - ${protocolContextJsonPath}`))
       this.log(chalk.cyan(`  - ${l1InterfaceEnv.generatedPath}`))
-      this.log(chalk.cyan(`  - ${l1InterfaceEnv.exampleLocalPath} (tracked operator-override template)`))
-      this.log(chalk.cyan(`  - ${l1InterfaceEnv.localPath} (operator overrides; not regenerated)`))
       this.log(chalk.cyan(`  - ${composeSync.composePath}`))
       this.log('')
       if (l2NodeEnv.hasUnresolvedExternalPeers) {
@@ -986,37 +984,6 @@ export default class SetupGenRpcPackage extends Command {
     if (nextContent !== content) {
       fs.writeFileSync(envFilePath, nextContent)
     }
-  }
-
-  // Only the network name and the per-network `cp` path vary.
-  private buildL1InterfaceLocalEnvExample(network: string): string[] {
-    const networkTitle = this.capitalize(network)
-    return [
-      `# L1 Interface ${networkTitle} — operator overrides (TEMPLATE)`,
-      '#',
-      '# Copy this file to `l1-interface.local.env` and fill in the values that depend',
-      '# on YOUR infrastructure:',
-      '#',
-      `#   cp envs/${network}/l1-interface.local.env.example envs/${network}/l1-interface.local.env`,
-      '#',
-      '# The real `l1-interface.local.env` is gitignored (it holds endpoints/credentials)',
-      '# and is loaded AFTER the generated `l1-interface.env`, so anything set here wins.',
-      '# Keep secrets (RPC API keys, passwords) out of version control.',
-      '',
-      '# --- Required: your Ethereum L1 execution RPC (used for Ethereum DA replay) ---',
-      'DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL=https://your-ethereum-l1-rpc:8545',
-      '',
-      '# --- Optional: your beacon node (only if the DA blob source uses beacon_node) ---',
-      '# DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL=http://your-beacon:5052',
-      '',
-      '# --- Optional: external Dogecoin RPC override ---',
-      '# The RPC package supplies its bundled-node URL and shared credentials.',
-      '# Set these only for a temporary/debug external provider; this gitignored',
-      '# file is loaded after the package defaults.',
-      '# DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL=https://your-dogecoin-rpc',
-      '# DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER=your-provider-user',
-      '# DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS=your-provider-password',
-    ]
   }
 
   private capitalize(str: string): string {
@@ -1225,7 +1192,7 @@ export default class SetupGenRpcPackage extends Command {
     rpcPackageDir: string,
     network: string,
     _config: any,
-  ): { exampleLocalPath: string; generatedPath: string; localPath: string } {
+  ): { generatedPath: string } {
     const l1InterfaceYamlPath = path.resolve(valuesDir, 'l1-interface-production.yaml')
 
     if (!fs.existsSync(l1InterfaceYamlPath)) {
@@ -1240,8 +1207,6 @@ export default class SetupGenRpcPackage extends Command {
       fs.mkdirSync(targetDirectory, { recursive: true })
 
       const envFilePath = path.join(targetDirectory, 'l1-interface.env')
-      const localEnvFilePath = path.join(targetDirectory, 'l1-interface.local.env')
-      const exampleLocalEnvFilePath = path.join(targetDirectory, 'l1-interface.local.env.example')
 
       // Generated file holds ONLY deterministic values derived from the values
       // YAML. Operator-owned keys (local creds / external endpoints), secrets,
@@ -1274,14 +1239,7 @@ export default class SetupGenRpcPackage extends Command {
       ])
       this.log(chalk.green(`✓ Wrote generated l1-interface.env (${Object.keys(generatedVars).length} vars)`))
 
-      // Tracked template: always (re)written so it cannot drift from the CLI.
-      // Credential-free by construction, so it is safe to commit.
-      this.writeL1InterfaceLocalEnvExample(exampleLocalEnvFilePath, network)
-
-      // Operator overrides: scaffold once, never clobber.
-      this.scaffoldL1InterfaceLocalEnvFile(localEnvFilePath, network)
-
-      return { exampleLocalPath: exampleLocalEnvFilePath, generatedPath: envFilePath, localPath: localEnvFilePath }
+      return { generatedPath: envFilePath }
 
     } catch (error) {
       throw new Error(`Failed to generate l1-interface.env: ${error instanceof Error ? error.message : String(error)}`)
@@ -1514,37 +1472,6 @@ export default class SetupGenRpcPackage extends Command {
     return undefined
   }
 
-  private scaffoldL1InterfaceLocalEnvFile(localEnvFilePath: string, network: string): void {
-    if (fs.existsSync(localEnvFilePath)) {
-      this.log(chalk.green('✓ Preserved operator overrides in l1-interface.local.env (never regenerated)'))
-      return
-    }
-
-    const lines: string[] = [
-      `# L1 Interface ${this.capitalize(network)} — operator overrides`,
-      '#',
-      '# This file is NEVER overwritten by gen-rpc-package. Fill in the values',
-      '# that depend on YOUR infrastructure. docker-compose loads it after',
-      '# l1-interface.env, so anything set here overrides the generated defaults.',
-      '',
-      '# --- Required: your Ethereum L1 execution RPC (Ethereum DA replay) ---',
-      '# DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL=https://your-l1-rpc:8545',
-      '',
-      '# --- Optional: your beacon node (only if blob_source uses beacon_node) ---',
-      '# DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL=http://your-beacon:5052',
-      '',
-      '# --- Optional: external Dogecoin RPC override ---',
-      '# The RPC package supplies its bundled-node URL and shared credentials.',
-      '# Uncomment these only for a temporary/debug external provider.',
-      '# DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL=https://your-dogecoin-rpc',
-      '# DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER=your-provider-user',
-      '# DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS=your-provider-password',
-    ]
-
-    fs.writeFileSync(localEnvFilePath, lines.join('\n').replace(/\n*$/, '') + '\n')
-    this.log(chalk.yellow('⚠️  Scaffolded l1-interface.local.env — set DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL before starting'))
-  }
-
   private writeEnvFile(
     envFilePath: string,
     newVars: EnvVarMap,
@@ -1577,18 +1504,6 @@ export default class SetupGenRpcPackage extends Command {
     }
 
     fs.writeFileSync(envFilePath, lines.join('\n').replace(/\n*$/, '') + '\n')
-  }
-
-  private writeL1InterfaceLocalEnvExample(exampleFilePath: string, network: string): void {
-    const content = this.buildL1InterfaceLocalEnvExample(network).join('\n').replace(/\n*$/, '') + '\n'
-    const existing = fs.existsSync(exampleFilePath) ? fs.readFileSync(exampleFilePath, 'utf8') : ''
-    if (content === existing) {
-      this.log(chalk.green('✓ l1-interface.local.env.example already up to date'))
-      return
-    }
-
-    fs.writeFileSync(exampleFilePath, content)
-    this.log(chalk.green('✓ Wrote l1-interface.local.env.example (tracked operator-override template)'))
   }
 
 }
