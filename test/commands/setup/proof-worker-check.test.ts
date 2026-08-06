@@ -24,6 +24,7 @@ describe('setup proof-worker-check', () => {
   it('returns the verified bundle ID without exposing the worker token', async () => {
     const workerToken = '<WORKER_TOKEN_FIXTURE_MUST_NOT_BE_LOGGED>'
     const bundle = writeProverWorkerMockBundle({
+      aggregationL2ChainId: 6_281_971,
       artifactReadBaseUrl: 'https://proofs.example.com/proof-topology',
       coordinatorUrl: 'https://proof-coordinator.example.com',
       dir: root,

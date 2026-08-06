@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
@@ -6,12 +7,12 @@ import type { ProofFamily } from './proof-configurator.js'
 /**
  * Canonical mock proof-topology identity constants.
  *
- * These mirror the dogeos-core e2e harness mock topology
- * (`crates/e2e_harness/src/topology/proof.rs`), which is the reference
- * implementation the `prover-worker-mock` image and the dev_dummy verifiers
- * are exercised against in CI. Keeping the same constants means a mock
- * deployment staged by scrollsdk is bit-for-bit the identity set dogeos-core
- * already proves out end to end.
+ * Most identities mirror the dogeos-core e2e harness mock topology
+ * (`crates/e2e_harness/src/topology/proof.rs`). AdvanceL2 aggregation is more
+ * constrained: its raw app commitment must also match the bridge circuit's
+ * canonical inner-program authority, even when the proof bytes are mocked.
+ * Keeping both contracts here lets scrollsdk stage a mock deployment that can
+ * complete the full aggregation-to-bridge lifecycle.
  */
 export interface MockProofIdentity {
   circuitId: string
@@ -27,12 +28,32 @@ export const MOCK_SCROLL_BATCH_BACKEND_PROFILE = 'scroll-batch-topology-prover-v
 export const MOCK_BRIDGE_BACKEND_PROFILE = 'bridge-topology-prover-v1'
 /** Deployment-artifact home for the synthesized mock program manifests. */
 export const MOCK_PROGRAM_MANIFESTS_DIR = 'proof-artifacts/mock-manifests'
+/**
+ * Canonical AdvanceL2 aggregation app commitment consumed by prover-worker.
+ *
+ * The bridge circuit pins this exact exe/vm commitment pair when validating
+ * the aggregation output sidecar. Mock proving skips cryptographic execution,
+ * but it does not skip that protocol-authority check, so an arbitrary mock
+ * value (for example `0xbb..bb`) would pass the standalone verifier policy and
+ * then fail bridge materialization. WP, proof-coordinator, the worker bundle,
+ * and the synthesized manifest all receive identity derived from this value.
+ *
+ * Source of truth in dogeos-core:
+ * crates/circuits/bridge_state/types/config/batch_aggregation_guest_app_commit.json
+ */
+export const MOCK_ADVANCE_L2_AGGREGATION_APP_COMMIT_RAW =
+  '0x005edcdbcd600e6c73c83d8a42e2b253072bef1da096c7affcfcb589a5afeca1'
+  + '0050c7d02bc389a6d63e8d4ecb86f5e76094e6900b98a7a37b38818e1817f230'
+
+function programCommitmentHash(rawCommit: string): string {
+  return `0x${createHash('sha256').update(Buffer.from(rawCommit.slice(2), 'hex')).digest('hex')}`
+}
 
 export const MOCK_PROOF_IDENTITIES: Record<ProofFamily, MockProofIdentity> = {
   advance_l2_aggregation: {
     circuitId: 'advance-l2-aggregation-v1',
     manifestBasename: 'advance-l2-aggregation-topology-program.json',
-    programCommitmentHash: `0x${'99'.repeat(32)}`,
+    programCommitmentHash: programCommitmentHash(MOCK_ADVANCE_L2_AGGREGATION_APP_COMMIT_RAW),
     verifierId: 'openvm-advance-l2-aggregation-verifier-v1',
     vkHash: `0x${'aa'.repeat(32)}`,
   },

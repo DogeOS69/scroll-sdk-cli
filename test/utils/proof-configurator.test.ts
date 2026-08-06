@@ -1094,6 +1094,68 @@ transport = "s3"
     expect(parsedCoordinator.verifier.scroll_bridge_verifier_identity.expected_verification_key_hash_hex)
       .to.equal(`0x${'88'.repeat(32)}`)
 
+    // The generated worker must consume the exact aggregation identity staged
+    // into WP, proof-coordinator, and the shared program manifest. This is the
+    // cross-output contract prep-charts promises operators in mock mode.
+    const workerBundle = writeProverWorkerMockBundle({
+      aggregationL2ChainId: 6_281_971,
+      artifactReadBaseUrl: 'https://proofs.example.com',
+      coordinatorUrl: 'https://proof-coordinator.bridge.example',
+      dir: path.join(root, 'prover-worker-mock/docker-compose'),
+    })
+    const workerCompose = fs.readFileSync(
+      path.join(workerBundle.bundleDir, 'docker-compose.yml'),
+      'utf8',
+    )
+    const composeLines = workerCompose.split(/\r?\n/).map(line => line.trim())
+    const composeArgument = (flag: string): string => {
+      const index = composeLines.indexOf(`- ${flag}`)
+      expect(index, `${flag} must be present in generated worker compose`).to.be.greaterThan(-1)
+      return composeLines[index + 1].replace(/^- /, '')
+    }
+
+    const rawCommit = composeArgument('--aggregation-app-commit-raw-hex')
+    const workerVkHash = composeArgument('--aggregation-verification-key-hash')
+    const derivedProgramHash = `0x${createHash('sha256')
+      .update(Buffer.from(rawCommit.slice(2), 'hex'))
+      .digest('hex')}`
+    // This raw identity is pinned by dogeos-core's bridge circuit. Keeping a
+    // literal assertion here prevents the generated topology from becoming
+    // internally consistent but incompatible with bridge materialization.
+    expect(rawCommit).to.equal(
+      '0x005edcdbcd600e6c73c83d8a42e2b253072bef1da096c7affcfcb589a5afeca1'
+      + '0050c7d02bc389a6d63e8d4ecb86f5e76094e6900b98a7a37b38818e1817f230',
+    )
+    expect(derivedProgramHash)
+      .to.equal('0xb177ce1c76fc0b5d54ea570aa9912ac9d97bdff601f00e8e458a1ecae26e921c')
+    const aggregationManifest = JSON.parse(fs.readFileSync(
+      path.join(
+        root,
+        'proof-artifacts/mock-manifests/advance-l2-aggregation-topology-program.json',
+      ),
+      'utf8',
+    ))
+    const wpAggregationIdentity = parsedWithdrawal.proof_control_plane_gate
+      .advance_l2_aggregation_verifier_identity
+    const coordinatorAggregationIdentity = parsedCoordinator.verifier
+      .advance_l2_aggregation_verifier_identity
+    expect(derivedProgramHash).to.equal(aggregationManifest.program_commitment_hash)
+    expect(derivedProgramHash).to.equal(
+      wpAggregationIdentity.expected_program_commitment_hash_hex,
+    )
+    expect(derivedProgramHash).to.equal(
+      coordinatorAggregationIdentity.expected_program_commitment_hash_hex,
+    )
+    expect(workerVkHash).to.equal(aggregationManifest.verification_key_hash)
+    expect(workerVkHash).to.equal(
+      wpAggregationIdentity.expected_verification_key_hash_hex,
+    )
+    expect(workerVkHash).to.equal(
+      coordinatorAggregationIdentity.expected_verification_key_hash_hex,
+    )
+    expect(fs.readFileSync(path.join(workerBundle.bundleDir, '.env'), 'utf8'))
+      .to.include('AGGREGATION_L2_CHAIN_ID=6281971')
+
     const coordinator = yaml.load(fs.readFileSync(result.files[0], 'utf8')) as any
     expect((coordinator.env || []).some((item: any) => String(item?.name || '').includes('CHUNK_PROGRAM_COMMITMENT_HEX'))).to.equal(false)
     expect(coordinator.configMaps['agg-verifying-key']).to.equal(undefined)
@@ -1197,6 +1259,7 @@ key_prefix = "batches"
     fs.writeFileSync(path.join(bundleDir, 'prover-worker.env'), 'DOGEOS_PROVER_WORKER_TOKEN=PLACEHOLDER\n', { mode: 0o664 })
 
     const bundle = writeProverWorkerMockBundle({
+      aggregationL2ChainId: 6_281_971,
       artifactReadBaseUrl: 'https://proofs.example.com',
       coordinatorUrl: 'https://proof-coordinator.bridge.example',
       dir: bundleDir,
@@ -1206,13 +1269,25 @@ key_prefix = "batches"
     expect(bundle.bundleId).to.match(/^[\da-f]{64}$/)
 
     const compose = fs.readFileSync(path.join(bundle.bundleDir, 'docker-compose.yml'), 'utf8')
-    for (const requiredArg of ['--mode', 'mock', '--allow-dev-mock-prover', '--enable-prove-scroll-chunk', '--enable-prove-scroll-batch', '--enable-prove-advance-l2-aggregation', '--enable-prove-bridge-transition']) {
+    for (const requiredArg of [
+      '--mode',
+      'mock',
+      '--allow-dev-mock-prover',
+      '--enable-prove-scroll-chunk',
+      '--enable-prove-scroll-batch',
+      '--enable-prove-advance-l2-aggregation',
+      '--aggregation-app-commit-raw-hex',
+      '--aggregation-verification-key-hash',
+      '--aggregation-l2-chain-id',
+      '--enable-prove-bridge-transition',
+    ]) {
       expect(compose).to.include(requiredArg)
     }
 
     const env = fs.readFileSync(path.join(bundle.bundleDir, '.env'), 'utf8')
     expect(env).to.include('PROOF_COORDINATOR_URL=https://proof-coordinator.bridge.example')
     expect(env).to.include('ARTIFACT_READ_BASE_URL=https://proofs.example.com')
+    expect(env).to.include('AGGREGATION_L2_CHAIN_ID=6281971')
 
     const tokenPath = path.join(bundle.bundleDir, 'prover-worker.env')
     expect(fs.readFileSync(tokenPath, 'utf8')).to.include(`DOGEOS_PROVER_WORKER_TOKEN=${'a'.repeat(64)}`)
@@ -1244,6 +1319,7 @@ key_prefix = "batches"
     )
 
     const bundle = writeProverWorkerMockBundle({
+      aggregationL2ChainId: 6_281_971,
       artifactReadBaseUrl: 'https://proofs.example.com',
       coordinatorUrl: 'https://proof-coordinator.bridge.example',
       dir: bundleDir,
@@ -1256,6 +1332,7 @@ key_prefix = "batches"
     expect(manifest).not.to.have.property('generatedAt')
     const firstManifest = fs.readFileSync(bundle.manifestFile, 'utf8')
     writeProverWorkerMockBundle({
+      aggregationL2ChainId: 6_281_971,
       artifactReadBaseUrl: 'https://proofs.example.com',
       coordinatorUrl: 'https://proof-coordinator.bridge.example',
       dir: bundleDir,

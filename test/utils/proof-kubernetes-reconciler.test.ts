@@ -119,6 +119,7 @@ describe('proof Kubernetes reconciler', () => {
 
   it('does not use generated values as the active infrastructure source', () => {
     expect(() => reconcileProofKubernetes({
+      aggregationL2ChainId: 6_281_971,
       coordinatorIngressHost: 'proof-coordinator.example.com',
       deploymentDir: root,
       intent: {
@@ -132,6 +133,30 @@ describe('proof Kubernetes reconciler', () => {
         },
       },
     })).to.throw('needs an explicit proof infrastructure source')
+  })
+
+  it('rejects a missing mock aggregation chain ID before mutating proof-owned files', () => {
+    const valuesFile = path.join(root, 'values/withdrawal-processor-production.yaml')
+    const nativeFile = path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml')
+    const beforeValues = fs.readFileSync(valuesFile, 'utf8')
+    const beforeNative = fs.readFileSync(nativeFile, 'utf8')
+
+    expect(() => reconcileProofKubernetes({
+      coordinatorIngressHost: 'proof-coordinator.example.com',
+      deploymentDir: root,
+      intent: {
+        intent: {
+          artifactReadBaseUrl: 'https://proofs.example.com/proof-topology',
+          mode: 'mock',
+        },
+        source: {
+          kind: 'doge-config',
+          path: path.join(root, '.data/doge-config.toml'),
+        },
+      },
+    })).to.throw('mock mode requires general.CHAIN_ID_L2')
+    expect(fs.readFileSync(valuesFile, 'utf8')).to.equal(beforeValues)
+    expect(fs.readFileSync(nativeFile, 'utf8')).to.equal(beforeNative)
   })
 
   it('rejects an incomplete production worker release before mutating proof-owned files', () => {

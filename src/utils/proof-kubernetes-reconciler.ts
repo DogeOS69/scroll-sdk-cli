@@ -149,12 +149,15 @@ function preflightExternalWorker(
     )
   }
 
-  if (mode !== 'production') return
-  if (options.aggregationL2ChainId === undefined) {
+  const aggregationL2ChainId = String(options.aggregationL2ChainId ?? '').trim()
+  if (!/^[1-9]\d*$/.test(aggregationL2ChainId)) {
     throw new Error(
-      'production mode requires general.CHAIN_ID_L2 in config.toml for standalone L2 aggregation',
+      `${mode} mode requires general.CHAIN_ID_L2 in config.toml as a non-zero decimal integer `
+      + 'for standalone L2 aggregation',
     )
   }
+
+  if (mode !== 'production') return
 
   // Fail before scaffolding or mutating proof-owned values when the production
   // worker release is incomplete. writeProverWorkerProductionBundle verifies it
@@ -252,6 +255,7 @@ export function reconcileProofKubernetes(
     | undefined
   if (mode === 'mock') {
     workerBundle = writeProverWorkerMockBundle({
+      aggregationL2ChainId: options.aggregationL2ChainId!,
       artifactReadBaseUrl: options.intent.intent.artifactReadBaseUrl!,
       coordinatorUrl: coordinatorExternalUrl(options.coordinatorIngressHost!),
       dir: options.workerBundleDir || path.join(deploymentDir, PROVER_WORKER_MOCK_BUNDLE_DIR),
