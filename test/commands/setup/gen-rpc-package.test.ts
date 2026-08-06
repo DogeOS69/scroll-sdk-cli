@@ -473,6 +473,7 @@ describe('setup gen-rpc-package env generation', () => {
     // Full overwrite: nothing from the stale prior file survives.
     expect(env).not.to.include('# existing')
     expect(env).not.to.include('http://dogecoin-node:44555')
+    expect(env).not.to.include('http://cluster-dogecoin:44555')
 
     // Tracked template: credential-free, deterministic, safe to commit.
     const example = fs.readFileSync(
@@ -482,12 +483,18 @@ describe('setup gen-rpc-package env generation', () => {
     expect(example).to.include('# L1 Interface Testnet — operator overrides (TEMPLATE)')
     expect(example).to.include('cp envs/testnet/l1-interface.local.env.example envs/testnet/l1-interface.local.env')
     expect(example).to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL=https://your-ethereum-l1-rpc:8545')
+    expect(example).to.include('# DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL=https://your-dogecoin-rpc')
     expect(example).not.to.include('cluster-dogecoin')
     expect(example).not.to.include('cluster-user')
     expect(example).not.to.include('do-not-copy')
 
     // Local override is scaffolded for the operator to fill in.
-    expect(fs.existsSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l1-interface.local.env'))).to.equal(true)
+    const localEnvPath = path.join(rpcPackageDir, 'envs', 'testnet', 'l1-interface.local.env')
+    expect(fs.existsSync(localEnvPath)).to.equal(true)
+    const localEnv = fs.readFileSync(localEnvPath, 'utf8')
+    expect(localEnv).to.include('# DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL=https://your-dogecoin-rpc')
+    expect(localEnv).not.to.include('cluster-dogecoin')
+    expect(localEnv).not.to.include('cluster-user')
   })
 
   it('syncs values initContainers into docker-compose services', () => {
