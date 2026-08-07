@@ -212,6 +212,14 @@ export function applySequencerRethValues(yamlData: any, config: ResolvedSequence
   yamlData.reth.nodeKey.secretKey = RETH_NODEKEY_ENV
   yamlData.reth.signer ||= {}
 
+  // The O3O topology has one producer. Instance 0 is the primary; every
+  // additional sequencer is a warm backup and must not auto-start. Keeping
+  // this in the instance projection prevents a shared template from making
+  // both numbered releases produce blocks.
+  yamlData.reth.sequencer ||= {}
+  yamlData.reth.sequencer.enabled = true
+  yamlData.reth.sequencer.autoStart = config.index === 0
+
   if (config.signer.backend === 'aws_kms') {
     yamlData.reth.signer.type = 'awsKms'
     yamlData.reth.signer.awsKmsKeyId = config.signer.kmsKeyId

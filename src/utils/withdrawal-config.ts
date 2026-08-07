@@ -473,6 +473,15 @@ export function ensureWithdrawalChartWiring(values: Record<string, any>): void {
     subPath: WITHDRAWAL_CONFIG_FILE,
     type: 'configMap',
   })
+
+  // Migrate the historical `odAnnotations` typo and make signer topology
+  // changes restart the workload that consumes the generated ConfigMap.
+  values.podAnnotations ||= {}
+  if (values.odAnnotations && typeof values.odAnnotations === 'object') {
+    values.podAnnotations = { ...values.odAnnotations, ...values.podAnnotations }
+  }
+  delete values.odAnnotations
+  values.podAnnotations['checksum/tso-signers'] = '{{ .Values.tsoSigners | toJson | sha256sum }}'
 }
 
 /**

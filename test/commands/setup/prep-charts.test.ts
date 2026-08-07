@@ -229,9 +229,9 @@ describe('setup prep-charts external attestation signer routing', () => {
         'http://10.20.30.40:4040',
       ],
     })).to.deep.equal([
-      { network: 'testnet', role: 'Tee', uri: 'http://cubesigner-signer:3000' },
-      { network: 'testnet', role: 'Attestation', uri: 'https://signer.partner-a.example:4040' },
-      { network: 'testnet', role: 'Attestation', uri: 'http://10.20.30.40:4040' },
+      { network: 'testnet', role: 'Tee', signatureMode: 'ecdsa', uri: 'http://cubesigner-signer:3000' },
+      { network: 'testnet', role: 'Attestation', signatureMode: 'ecdsa', uri: 'https://signer.partner-a.example:4040' },
+      { network: 'testnet', role: 'Attestation', signatureMode: 'ecdsa', uri: 'http://10.20.30.40:4040' },
     ])
   })
 
@@ -365,6 +365,7 @@ describe('setup prep-charts fee-oracle updates', () => {
             DOGEOS_FEE_ORACLE_CELESTIA__ENABLED: 'false',
             DOGEOS_FEE_ORACLE_DOGECOIN__NETWORK_STR: 'testnet',
             DOGEOS_FEE_ORACLE_DOGECOIN__RPC_URL: 'http://dogecoin:44555',
+            DOGEOS_FEE_ORACLE__ETHEREUM_DA__CONTRACT_WRITE_MODE: 'live',
             DOGEOS_FEE_ORACLE_PRICE_ORACLE__UPDATE_ON_EACH_CYCLE: 'true',
             DOGEOS_FEE_ORACLE_THRESHOLDS__DEFAULT_DOGECOIN_FEE: '1000000',
           },
@@ -400,6 +401,7 @@ describe('setup prep-charts fee-oracle updates', () => {
     expect(changes.map(change => change.key)).to.include('configMaps.env.data.DOGEOS_FEE_ORACLE_DOGECOIN__RPC_URL')
     expect(values.configMaps.env.data).not.to.have.property('DOGEOS_FEE_ORACLE_DOGECOIN__RPC_URL')
     expect(values.configMaps.env.data).not.to.have.property('DOGEOS_FEE_ORACLE_CELESTIA__ENABLED')
+    expect(values.configMaps.env.data).not.to.have.property('DOGEOS_FEE_ORACLE__ETHEREUM_DA__CONTRACT_WRITE_MODE')
     expect(values.configMaps.env.data).not.to.have.property('DOGEOS_FEE_ORACLE_THRESHOLDS__DEFAULT_DOGECOIN_FEE')
     expect(values.configMaps.env.data).not.to.have.property('DOGEOS_FEE_ORACLE_PRICE_ORACLE__UPDATE_ON_EACH_CYCLE')
     expect(values.configMaps.env.data.DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL).to.equal('https://eth.example')
@@ -464,7 +466,7 @@ describe('setup prep-charts eth-da-submitter updates', () => {
     expect(env.DOGEOS_ETH_DA_SUBMITTER_S3__MAX_RETRIES).to.equal('5')
   })
 
-  it('writes optional cutover, publish, L2 start, and initial-batch sidecar values', () => {
+  it('writes optional cutover, publish, and L2 start values while scrubbing the retired sidecar', () => {
     const env = buildEthDaSubmitterPrepEnv({
       batch: {
         compression: 'none',
@@ -477,7 +479,6 @@ describe('setup prep-charts eth-da-submitter updates', () => {
           stateRoot: '0x3333333333333333333333333333333333333333333333333333333333333333',
           withdrawRoot: '0x4444444444444444444444444444444444444444444444444444444444444444',
         },
-        initialBatchSidecarJson: '{"batch":4380}',
         maxL2GasPerChunk: 30_000_000,
       },
       ethereumChainId: 1,
@@ -498,18 +499,26 @@ describe('setup prep-charts eth-da-submitter updates', () => {
     expect(env.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT).to.equal('0x4444444444444444444444444444444444444444444444444444444444444444')
     expect(env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__LAST_BATCH_INDEX).to.equal('4379')
     expect(env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__WITHDRAW_ROOT).to.equal('0x4444444444444444444444444444444444444444444444444444444444444444')
-    expect(env.DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON).to.equal('/app/config/initial_batch.json')
+    expect(env).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON')
     expect(env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_BLOCKS_PER_CHUNK).to.equal('128')
     expect(env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK).to.equal('30000000')
     expect(env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__ALLOW_LIVENESS_BUDGET_OVERRIDE).to.equal('true')
     expect(env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__TARGET_BLOBS_PER_TX).to.equal('2')
 
-    const values: any = { configMaps: { env: { data: {} } }, persistence: {} }
-    const changes = applyEthDaSubmitterInitialBatchSidecar(values, '  {"batch":4380}  ')
+    const values: any = {
+      configMaps: {
+        env: { data: { DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON: '/app/config/initial_batch.json' } },
+        'initial-batch': { data: { 'initial_batch.json': '{"batch":4380}' }, enabled: true },
+      },
+      persistence: { 'initial-batch': { enabled: true, mountPath: '/app/config' } },
+    }
+    const changes = applyEthDaSubmitterInitialBatchSidecar(values, undefined)
 
     expect(changes.map(change => change.key)).to.include('configMaps.initial-batch')
-    expect(values.configMaps['initial-batch'].data['initial_batch.json']).to.equal('{"batch":4380}')
-    expect(values.persistence['initial-batch'].mountPath).to.equal('/app/config')
+    expect(changes.map(change => change.key)).to.include('persistence.initial-batch')
+    expect(values.configMaps.env.data).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON')
+    expect(values.configMaps).not.to.have.property('initial-batch')
+    expect(values.persistence).not.to.have.property('initial-batch')
   })
 
   it('does not emit an initial-batch sidecar env or mount for whitespace', () => {
@@ -531,16 +540,13 @@ describe('setup prep-charts eth-da-submitter updates', () => {
     expect(values.persistence).not.to.have.property('initial-batch')
   })
 
-  it('throws on invalid initial-batch sidecar JSON', () => {
-    expect(() => buildEthDaSubmitterPrepEnv({
-      batch: { initialBatchSidecarJson: '{"batch":' },
-      ethereumChainId: 1,
-      ethereumRpcUrl: 'https://eth.example',
-      l2ChainId: 6_281_971,
-      l2RpcUrl: 'http://l2-rpc:8545',
-    })).to.throw(/ethereumDa\.batch\.initialBatchSidecarJson/)
+  it('does not recreate the retired initial-batch sidecar from stale intent', () => {
+    const values: any = { configMaps: { env: { data: {} } }, persistence: {} }
+    const changes = applyEthDaSubmitterInitialBatchSidecar(values, '{"batch":4380}')
 
-    expect(() => applyEthDaSubmitterInitialBatchSidecar({}, '{"batch":')).to.throw(/ethereumDa\.batch\.initialBatchSidecarJson/)
+    expect(changes).to.deep.equal([])
+    expect(values.configMaps).not.to.have.property('initial-batch')
+    expect(values.persistence).not.to.have.property('initial-batch')
   })
 
   it('validates doge-config cutover and L2 start block together', () => {

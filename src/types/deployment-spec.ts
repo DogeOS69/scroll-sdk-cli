@@ -408,6 +408,7 @@ export interface EthereumDaConfig {
     genesisRelayedDepositQueueHash?: string
     genesisStateRoot?: string
     genesisWithdrawRoot?: string
+    /** @deprecated Rejected by current dogeos-core; retained only to diagnose stale specs. */
     initialBatchSidecarJson?: string
     maxBlocksPerChunk?: number
     maxChunksPerBatch?: number

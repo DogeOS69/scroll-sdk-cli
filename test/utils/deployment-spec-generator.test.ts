@@ -579,7 +579,7 @@ describe('deployment-spec-generator', () => {
       )).to.be.true;
     });
 
-    it('fails when Ethereum DA initial batch sidecar JSON is invalid', () => {
+    it('rejects the retired Ethereum DA initial batch sidecar field', () => {
       const spec = createMinimalSpec();
       spec.ethereumDa!.batch = {
         initialBatchSidecarJson: '   ',
@@ -1397,6 +1397,7 @@ describe('deployment-spec-generator', () => {
 
       const l1InterfaceValuesForRuntime = yaml.load(files['l1-interface-production.yaml']) as any;
       const l1InterfaceRuntimeEnv = l1InterfaceValuesForRuntime.configMaps.env.data;
+      expect(l1InterfaceValuesForRuntime).not.to.have.property('probes');
       expect(l1InterfaceRuntimeEnv.DOGEOS_L1_INTERFACE_L1_GAS_LIMIT).to.equal('30000000');
       expect(l1InterfaceRuntimeEnv.DOGEOS_L1_INTERFACE_REPLAY_READ__MAINTAINER_ENABLED).to.equal('true');
       expect(l1InterfaceRuntimeEnv.DOGEOS_L1_INTERFACE_REPLAY_READ__REQUIRE_FULL_VALIDATION).to.equal('false');
@@ -1467,6 +1468,7 @@ describe('deployment-spec-generator', () => {
         { configMapRef: { name: 'fee-oracle-env' } },
         { secretRef: { name: 'fee-oracle-secret-env' } },
       ]);
+      expect(feeOracleValues).not.to.have.property('probes');
       expect(files['fee-oracle-production.yaml']).not.to.include('DOGEOS_FEE_ORACLE_DOGECOIN__');
       expect(files['fee-oracle-production.yaml']).not.to.include('DOGEOS_FEE_ORACLE_CELESTIA__');
       expect(files['fee-oracle-production.yaml']).not.to.include('FEE_ORACLE_DOGE_RPC_URL');
@@ -1532,6 +1534,7 @@ describe('deployment-spec-generator', () => {
       expect(values.persistence.secrets).not.to.have.property('name');
       expect(values.serviceAccount).not.to.have.property('name');
       expect(values).not.to.have.property('global');
+      expect(values).not.to.have.property('probes');
       expect(values.serviceAccount.annotations['eks.amazonaws.com/role-arn'])
         .to.equal('arn:aws:iam::123456789012:role/proof-coordinator');
       expect(env.DOGEOS_PROOF_COORDINATOR_PROOF_WORK_BASE_URL).to.equal('http://withdrawal-processor:3000');
@@ -1594,7 +1597,7 @@ describe('deployment-spec-generator', () => {
       expect(explicitSubmitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION).to.equal('none');
     });
 
-    it('generates Ethereum DA cutover, publish, sidecar, and L2 bootstrap values', () => {
+    it('generates Ethereum DA cutover, publish, and L2 bootstrap values without the retired sidecar', () => {
       const spec = createMinimalSpec();
       spec.ethereumDa = {
         ...spec.ethereumDa!,
@@ -1608,7 +1611,6 @@ describe('deployment-spec-generator', () => {
             stateRoot: '0x3333333333333333333333333333333333333333333333333333333333333333',
             withdrawRoot: '0x4444444444444444444444444444444444444444444444444444444444444444',
           },
-          initialBatchSidecarJson: '{"batch_index":4380}',
           maxL2GasPerChunk: 30_000_000,
         },
         l2StartBlockNumber: 2_898_792,
@@ -1628,12 +1630,12 @@ describe('deployment-spec-generator', () => {
       expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_BATCH_HASH).to.equal('0x1111111111111111111111111111111111111111111111111111111111111111');
       expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT).to.equal('0x4444444444444444444444444444444444444444444444444444444444444444');
       expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__LAST_BATCH_INDEX).to.equal('4379');
-      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON).to.equal('/app/config/initial_batch.json');
+      expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON');
       expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK).to.equal('30000000');
       expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_BATCH_WAIT).to.equal('60s');
       expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__TARGET_BLOBS_PER_TX).to.equal('2');
-      expect(submitterValues.configMaps['initial-batch'].data['initial_batch.json']).to.equal('{"batch_index":4380}');
-      expect(submitterValues.persistence['initial-batch'].mountPath).to.equal('/app/config');
+      expect(submitterValues.configMaps).not.to.have.property('initial-batch');
+      expect(submitterValues.persistence).not.to.have.property('initial-batch');
 
       const l1InterfaceValues = yaml.load(files['l1-interface-production.yaml']) as any;
       expect(l1InterfaceValues.configMaps.env.data.DOGEOS_L1_INTERFACE_REPLAY_READ__L2_BOOTSTRAP_NEXT_STARTING_BLOCK_HEIGHT).to.equal('2898792');
@@ -1645,7 +1647,7 @@ describe('deployment-spec-generator', () => {
       const dogeConfig = toml.parse(generateDogeConfigToml(spec)) as any;
       expect(dogeConfig.ethereumDa.l2StartBlockNumber).to.equal(2_898_792);
       expect(dogeConfig.ethereumDa.batch.maxL2GasPerChunk).to.equal(30_000_000);
-      expect(dogeConfig.ethereumDa.batch.initialBatchSidecarJson).to.equal('{"batch_index":4380}');
+      expect(dogeConfig.ethereumDa.batch).not.to.have.property('initialBatchSidecarJson');
       expect(dogeConfig.ethereumDa.publish.targetBlobsPerTx).to.equal(2);
       expect(dogeConfig.defaults.l2BootstrapNextStartingBlockHeight).to.equal('2898792');
     });

@@ -511,21 +511,6 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     }
   }
 
-  const validateOptionalJsonString = (path: string, value: string | undefined): void => {
-    if (value === undefined) return
-    const trimmed = value.trim()
-    if (trimmed === '') {
-      pushInvalidEthereumDaConfigError(path, `${path} must be valid JSON when set`)
-      return
-    }
-
-    try {
-      JSON.parse(trimmed)
-    } catch {
-      pushInvalidEthereumDaConfigError(path, `${path} must be valid JSON`)
-    }
-  }
-
   const validateOptionalNonEmptyString = (path: string, value: string | undefined): void => {
     if (value === undefined) return
     if (value.trim() === '') {
@@ -864,7 +849,12 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     validateOptionalBytes32Hex('ethereumDa.batch.genesisRelayedDepositQueueHash', ethereumDaBatch.genesisRelayedDepositQueueHash)
     validateOptionalBytes32Hex('ethereumDa.batch.genesisStateRoot', ethereumDaBatch.genesisStateRoot)
     validateOptionalBytes32Hex('ethereumDa.batch.genesisWithdrawRoot', ethereumDaBatch.genesisWithdrawRoot)
-    validateOptionalJsonString('ethereumDa.batch.initialBatchSidecarJson', ethereumDaBatch.initialBatchSidecarJson)
+    if (ethereumDaBatch.initialBatchSidecarJson !== undefined) {
+      pushInvalidEthereumDaConfigError(
+        'ethereumDa.batch.initialBatchSidecarJson',
+        'ethereumDa.batch.initialBatchSidecarJson has been removed from dogeos-core; remove it and use the persisted cutover frontier instead',
+      )
+    }
     validateOptionalNonNegativeSafeInteger('ethereumDa.batch.genesisNextRelayedDepositIndex', ethereumDaBatch.genesisNextRelayedDepositIndex)
     validateOptionalNonNegativeSafeInteger('ethereumDa.batch.genesisNextWithdrawIndex', ethereumDaBatch.genesisNextWithdrawIndex)
     validateOptionalPositiveSafeInteger('ethereumDa.batch.maxBlocksPerChunk', ethereumDaBatch.maxBlocksPerChunk)

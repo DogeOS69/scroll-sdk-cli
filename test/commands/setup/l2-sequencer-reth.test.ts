@@ -141,6 +141,7 @@ describe('setup l2-sequencer-reth', () => {
     expect(values.reth.signer.localFile).to.deep.equal({
       secretKey: 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY',
     })
+    expect(values.reth.sequencer).to.deep.equal({enabled: true, autoStart: false})
     expect(values.secrets['secret-env'].stringData).to.deep.equal({
       RETH_NODEKEY: '1111111111111111111111111111111111111111111111111111111111111111',
       RETH_SEQUENCER_SIGNER_PRIVATE_KEY: '0x2222222222222222222222222222222222222222222222222222222222222222',
@@ -238,6 +239,7 @@ describe('setup l2-sequencer-reth', () => {
 
     expect(values.secrets).to.equal(undefined)
     expect(values.externalSecrets).to.have.property('secret-env')
+    expect(values.reth.sequencer).to.deep.equal({enabled: true, autoStart: true})
   })
 
   it('writes KMS signer env and service account without local signer private key secret', () => {

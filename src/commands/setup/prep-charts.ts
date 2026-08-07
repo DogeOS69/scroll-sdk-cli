@@ -75,6 +75,7 @@ import {
 export interface TsoSignerEndpoint {
   network: string
   role: 'Attestation' | 'Tee'
+  signatureMode: 'ecdsa' | 'shadowfork_sentinel'
   uri: string
 }
 
@@ -175,11 +176,13 @@ export function buildTsoSigners(config: Pick<DogeConfig, 'cubesigner' | 'network
   const teeSigners: TsoSignerEndpoint[] = cubesignerRoles.length === 0 ? [] : [{
     network: config.network,
     role: 'Tee',
+    signatureMode: 'ecdsa',
     uri: 'http://cubesigner-signer:3000',
   }]
   const attestationSigners: TsoSignerEndpoint[] = (config.signerUrls || []).map(uri => ({
     network: config.network,
     role: 'Attestation',
+    signatureMode: 'ecdsa',
     uri,
   }))
   return [...teeSigners, ...attestationSigners]
@@ -395,6 +398,9 @@ const FEE_ORACLE_LEGACY_CONFIGMAP_PREFIXES = [
 ]
 
 const FEE_ORACLE_LEGACY_CONFIGMAP_KEYS = new Set([
+  // Historical typo: the service prefix has one trailing underscore; the
+  // additional underscore leaves an unknown top-level Figment key.
+  'DOGEOS_FEE_ORACLE__ETHEREUM_DA__CONTRACT_WRITE_MODE',
   'DOGEOS_FEE_ORACLE_PRICE_ORACLE__UPDATE_ON_EACH_CYCLE',
 ])
 
@@ -564,10 +570,6 @@ export function buildEthDaSubmitterPrepEnv(input: {
     env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_BATCH_BYTES_SIZE = String(batch.maxUncompressedBatchBytesSize ?? 131_072)
     env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MIN_CODEC_VERSION = String(batch.minCodecVersion ?? 10)
 
-    if (normalizeInitialBatchSidecarJson(batch.initialBatchSidecarJson)) {
-      env.DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON = '/app/config/initial_batch.json'
-    }
-
     if (cutover) {
       env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__LAST_BATCH_HASH = optionalConfigString(cutover.lastBatchHash)
       env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__LAST_BATCH_INDEX = optionalConfigString(cutover.lastBatchIndex)
@@ -620,51 +622,30 @@ export function buildEthDaSubmitterPrepEnv(input: {
 
 export function applyEthDaSubmitterInitialBatchSidecar(
   productionYaml: any,
-  initialBatchSidecarJson: string | undefined
+  _initialBatchSidecarJson: string | undefined
 ): PrepChartChange[] {
   const changes: PrepChartChange[] = []
-  const sidecarJson = normalizeInitialBatchSidecarJson(initialBatchSidecarJson)
-  if (!sidecarJson) return changes
-
-  productionYaml.configMaps ||= {}
-  productionYaml.configMaps['initial-batch'] ||= {}
-  const initialBatchConfigMap = productionYaml.configMaps['initial-batch']
-  const nextConfigMap = {
-    ...initialBatchConfigMap,
-    data: {
-      ...initialBatchConfigMap.data,
-      'initial_batch.json': sidecarJson,
-    },
-    enabled: true,
-  }
-  const previousConfigMap = JSON.stringify(initialBatchConfigMap)
-  productionYaml.configMaps['initial-batch'] = nextConfigMap
-  const currentConfigMap = JSON.stringify(nextConfigMap)
-  if (previousConfigMap !== currentConfigMap) {
+  const envData = productionYaml.configMaps?.env?.data
+  if (envData?.DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON !== undefined) {
+    const oldValue = envData.DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON
+    delete envData.DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON
     changes.push({
-      key: 'configMaps.initial-batch',
-      newValue: currentConfigMap,
-      oldValue: previousConfigMap,
+      key: 'configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON',
+      newValue: 'removed',
+      oldValue: String(oldValue),
     })
   }
 
-  productionYaml.persistence ||= {}
-  const previousPersistence = JSON.stringify(productionYaml.persistence['initial-batch'])
-  productionYaml.persistence['initial-batch'] = {
-    enabled: true,
-    items: [{ key: 'initial_batch.json', path: 'initial_batch.json' }],
-    mountPath: '/app/config',
-    name: '{{ include "scroll.common.lib.chart.names.fullname" . }}-initial-batch',
-    readOnly: true,
-    type: 'configMap',
+  if (productionYaml.configMaps?.['initial-batch'] !== undefined) {
+    const oldValue = JSON.stringify(productionYaml.configMaps['initial-batch'])
+    delete productionYaml.configMaps['initial-batch']
+    changes.push({ key: 'configMaps.initial-batch', newValue: 'removed', oldValue })
   }
-  const currentPersistence = JSON.stringify(productionYaml.persistence['initial-batch'])
-  if (previousPersistence !== currentPersistence) {
-    changes.push({
-      key: 'persistence.initial-batch',
-      newValue: currentPersistence,
-      oldValue: previousPersistence || 'undefined',
-    })
+
+  if (productionYaml.persistence?.['initial-batch'] !== undefined) {
+    const oldValue = JSON.stringify(productionYaml.persistence['initial-batch'])
+    delete productionYaml.persistence['initial-batch']
+    changes.push({ key: 'persistence.initial-batch', newValue: 'removed', oldValue })
   }
 
   return changes
@@ -684,19 +665,6 @@ function optionalConfigString(value: unknown): string | undefined {
   return stringValue.trim() === '' ? undefined : stringValue
 }
 
-function normalizeInitialBatchSidecarJson(value: string | undefined): string | undefined {
-  const stringValue = optionalConfigString(value)
-  if (!stringValue) return undefined
-  const trimmed = stringValue.trim()
-  try {
-    JSON.parse(trimmed)
-  } catch {
-    throw new Error('ethereumDa.batch.initialBatchSidecarJson must be valid JSON')
-  }
-
-  return trimmed
-}
-
 function pushConfigValidationError(errors: string[], path: string, message: string): void {
   errors.push(`${path}: ${message}`)
 }
@@ -711,20 +679,6 @@ function validateOptionalBytes32Config(errors: string[], path: string, value: un
 function validateRequiredBytes32Config(errors: string[], path: string, value: unknown): void {
   if (!isConfiguredValue(value) || !/^0x[\dA-Fa-f]{64}$/.test(String(value))) {
     pushConfigValidationError(errors, path, 'must be a 32-byte 0x-prefixed hex string')
-  }
-}
-
-function validateOptionalJsonConfig(errors: string[], path: string, value: string | undefined): void {
-  if (value === undefined) return
-  if (value.trim() === '') {
-    pushConfigValidationError(errors, path, 'must be valid JSON when set')
-    return
-  }
-
-  try {
-    JSON.parse(value.trim())
-  } catch {
-    pushConfigValidationError(errors, path, 'must be valid JSON')
   }
 }
 
@@ -794,7 +748,13 @@ export function validateDogeConfigEthereumDaForPrep(ethereumDa: DogeConfig['ethe
     validateOptionalBytes32Config(errors, 'ethereumDa.batch.genesisRelayedDepositQueueHash', batch.genesisRelayedDepositQueueHash)
     validateOptionalBytes32Config(errors, 'ethereumDa.batch.genesisStateRoot', batch.genesisStateRoot)
     validateOptionalBytes32Config(errors, 'ethereumDa.batch.genesisWithdrawRoot', batch.genesisWithdrawRoot)
-    validateOptionalJsonConfig(errors, 'ethereumDa.batch.initialBatchSidecarJson', batch.initialBatchSidecarJson)
+    if (batch.initialBatchSidecarJson !== undefined) {
+      pushConfigValidationError(
+        errors,
+        'ethereumDa.batch.initialBatchSidecarJson',
+        'has been removed from dogeos-core; remove this field and use the persisted cutover frontier instead',
+      )
+    }
     validateOptionalIntegerConfig(errors, 'ethereumDa.batch.genesisNextRelayedDepositIndex', batch.genesisNextRelayedDepositIndex, 0, 'a non-negative integer')
     validateOptionalIntegerConfig(errors, 'ethereumDa.batch.genesisNextWithdrawIndex', batch.genesisNextWithdrawIndex, 0, 'a non-negative integer')
     validateOptionalIntegerConfig(errors, 'ethereumDa.batch.maxBlocksPerChunk', batch.maxBlocksPerChunk, 1, 'a positive integer')
@@ -2930,15 +2890,19 @@ export default class SetupPrepCharts extends Command {
         const wiringBefore = JSON.stringify([
           productionYaml.args,
           productionYaml.configMaps?.config,
+          productionYaml.odAnnotations,
           productionYaml.persistence?.['withdrawal-processor-config'],
+          productionYaml.podAnnotations,
         ])
         ensureWithdrawalChartWiring(productionYaml)
         if (wiringBefore !== JSON.stringify([
           productionYaml.args,
           productionYaml.configMaps?.config,
+          productionYaml.odAnnotations,
           productionYaml.persistence?.['withdrawal-processor-config'],
+          productionYaml.podAnnotations,
         ])) {
-          changes.push({ key: 'withdrawal-processor config wiring', newValue: 'canonical --config arg, ConfigMap, and mount', oldValue: 'non-canonical' })
+          changes.push({ key: 'withdrawal-processor config wiring', newValue: 'canonical --config arg, ConfigMap, mount, and TSO checksum annotation', oldValue: 'non-canonical' })
           updated = true
         }
 

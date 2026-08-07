@@ -242,19 +242,6 @@ function addStringEnvIfDefined(target: Record<string, string>, key: string, valu
   target[key] = String(value)
 }
 
-function normalizeInitialBatchSidecarJson(value: string | undefined): string | undefined {
-  if (value === undefined) return undefined
-  const trimmed = value.trim()
-  if (trimmed === '') return undefined
-  try {
-    JSON.parse(trimmed)
-  } catch {
-    throw new Error('ethereumDa.batch.initialBatchSidecarJson must be valid JSON')
-  }
-
-  return trimmed
-}
-
 function buildEthDaSubmitterBatchEnv(spec: DeploymentSpec): Record<string, string> {
   const batch = getEthereumDaBatchConfig(spec)
   const {cutover} = batch
@@ -281,11 +268,6 @@ function buildEthDaSubmitterBatchEnv(spec: DeploymentSpec): Record<string, strin
     env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__RELAYED_DEPOSIT_QUEUE_HASH = cutover.relayedDepositQueueHash
     env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__STATE_ROOT = cutover.stateRoot
     env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__WITHDRAW_ROOT = cutover.withdrawRoot
-  }
-
-  const initialBatchSidecarJson = normalizeInitialBatchSidecarJson(batch.initialBatchSidecarJson)
-  if (initialBatchSidecarJson) {
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON = '/app/config/initial_batch.json'
   }
 
   return env
@@ -710,7 +692,6 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__CONFIRMATIONS: String(spec.bridge.confirmationsRequired),
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__INDEX_DEPOSITS: 'false',
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__INDEX_UTXOS: 'false',
-          DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__INDEX_WITHDRAWALS: 'false',
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__POLL_INTERVAL_MS: '10000',
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT: String(getDogecoinIndexerStartHeight(spec)),
           DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL: dogecoinEndpoints.rpcUrl,
@@ -917,24 +898,6 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
     resources: {
       limits: { cpu: '1000m', memory: '1Gi' },
       requests: { cpu: '200m', memory: '256Mi' }
-    }
-  }
-
-  const initialBatchSidecarJson = normalizeInitialBatchSidecarJson(batch.initialBatchSidecarJson)
-  if (initialBatchSidecarJson) {
-    values.configMaps['initial-batch'] = {
-      data: {
-        'initial_batch.json': initialBatchSidecarJson,
-      },
-      enabled: true,
-    }
-    values.persistence['initial-batch'] = {
-      enabled: true,
-      items: [{ key: 'initial_batch.json', path: 'initial_batch.json' }],
-      mountPath: '/app/config',
-      name: '{{ include "scroll.common.lib.chart.names.fullname" . }}-initial-batch',
-      readOnly: true,
-      type: 'configMap',
     }
   }
 
@@ -1450,11 +1413,6 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
         type: 'secret'
       }
     },
-    probes: {
-      liveness: { enabled: true },
-      readiness: { enabled: true },
-      startup: { enabled: true }
-    },
     proofCoordinator: {
       config: {
         required: true
@@ -1604,41 +1562,6 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
       { secretRef: { name: 'fee-oracle-secret-env' } },
     ],
     image,
-    probes: {
-      liveness: {
-        custom: true,
-        enabled: true,
-        spec: {
-          failureThreshold: 3,
-          httpGet: { path: '/health', port: 'http' },
-          initialDelaySeconds: 60,
-          periodSeconds: 30,
-          timeoutSeconds: 30,
-        }
-      },
-      readiness: {
-        custom: true,
-        enabled: true,
-        spec: {
-          failureThreshold: 3,
-          httpGet: { path: '/health', port: 'http' },
-          initialDelaySeconds: 30,
-          periodSeconds: 10,
-          timeoutSeconds: 30,
-        }
-      },
-      startup: {
-        custom: true,
-        enabled: true,
-        spec: {
-          failureThreshold: 12,
-          httpGet: { path: '/health', port: 'http' },
-          initialDelaySeconds: 30,
-          periodSeconds: 10,
-          timeoutSeconds: 30,
-        }
-      }
-    },
     resources: {
       limits: { cpu: '1', memory: '512Mi' },
       requests: { cpu: '50m', memory: '256Mi' }

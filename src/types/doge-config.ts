@@ -133,6 +133,7 @@ export interface DogeConfig {
       genesisRelayedDepositQueueHash?: string
       genesisStateRoot?: string
       genesisWithdrawRoot?: string
+      /** @deprecated Rejected by current dogeos-core; retained only to diagnose stale config. */
       initialBatchSidecarJson?: string
       maxBlocksPerChunk?: number | string
       maxChunksPerBatch?: number | string
