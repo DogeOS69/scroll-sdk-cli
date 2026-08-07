@@ -19,6 +19,16 @@ export interface CubesignerRole {
   role_id: string
 }
 
+export interface CubesignerProductionPolicy {
+  liveEvidenceReportDigest?: string
+  liveEvidenceReportPath?: string
+  policyArtifactDigest: string
+  policyIdentifier: string
+  programIdentityDigest: string
+  proofResolverAuthority: string
+  verifierIdentityDigest: string
+}
+
 export interface DogeConfig {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any
@@ -83,6 +93,7 @@ export interface DogeConfig {
     }>
   }
   cubesigner?: {
+    productionPolicy?: CubesignerProductionPolicy
     roles: CubesignerRole[]
   }
   da?: {

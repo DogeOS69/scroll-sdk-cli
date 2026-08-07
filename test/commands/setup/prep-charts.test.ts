@@ -6,6 +6,7 @@ import * as path from 'node:path'
 
 import {
   applyConfigMapEnvValues,
+  applyCubesignerPrepEnv,
   applyEthDaSubmitterInitialBatchSidecar,
   applyFeeOracleCurrentEnv,
   applyFrontendEnvFileValues,
@@ -13,6 +14,7 @@ import {
   applyL2RethRpcRuntimeValues,
   applyRethBlobS3Url,
   applyRethNetworkId,
+  buildCubesignerPrepEnv,
   buildEthDaSubmitterPrepEnv,
   buildFeeOraclePrepEnv,
   buildL1InterfaceBlobSourcePrepEnv,
@@ -20,6 +22,7 @@ import {
   buildRethInitialTrustedPeers,
   buildTsoSigners,
   buildWithdrawalBlobSourcePrepEnv,
+  ensureCubesignerPolicyKeyBinding,
   getEthereumDaS3PublicBaseUrl,
   getEthereumDaS3PublicBlobUrl,
   getL2RethRpcIngressConfigKey,
@@ -29,6 +32,7 @@ import {
   removeEnvArrayKeys,
   removeL2GethBlobS3ExtraParams,
   removeRetiredAttestationSignerValues,
+  removeRetiredCubesignerInstanceValues,
   resolveRethP2PNetworkId,
   scrubFeeOracleLegacyValues,
   scrubL1InterfaceRetiredEnv,
@@ -188,12 +192,36 @@ describe('setup prep-charts retired attestation-signer cleanup', () => {
   })
 })
 
+describe('setup prep-charts retired CubeSigner instance cleanup', () => {
+  it('removes numbered CubeSigner values and preserves the singleton values file', () => {
+    const valuesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prep-retired-cubesigner-'))
+    try {
+      for (const file of [
+        'cubesigner-signer-production.yaml',
+        'cubesigner-signer-production-0.yaml',
+        'cubesigner-signer-production-12.yaml',
+        'withdrawal-processor-production.yaml',
+      ]) fs.writeFileSync(path.join(valuesDir, file), 'enabled: true\n')
+
+      expect(removeRetiredCubesignerInstanceValues(valuesDir)).to.deep.equal([
+        'cubesigner-signer-production-0.yaml',
+        'cubesigner-signer-production-12.yaml',
+      ])
+      expect(fs.readdirSync(valuesDir)).to.deep.equal([
+        'cubesigner-signer-production.yaml',
+        'withdrawal-processor-production.yaml',
+      ])
+    } finally {
+      fs.rmSync(valuesDir, { force: true, recursive: true })
+    }
+  })
+})
+
 describe('setup prep-charts external attestation signer routing', () => {
   it('preserves descriptor IP/domain endpoints in the TSO signer list', () => {
     expect(buildTsoSigners({
       cubesigner: { roles: [
         { keys: [], name: 'tee-0', role_id: 'role-0' },
-        { keys: [], name: 'tee-1', role_id: 'role-1' },
       ] },
       network: 'testnet',
       signerUrls: [
@@ -201,11 +229,88 @@ describe('setup prep-charts external attestation signer routing', () => {
         'http://10.20.30.40:4040',
       ],
     })).to.deep.equal([
-      { network: 'testnet', role: 'Tee', uri: 'http://cubesigner-signer-0:3000' },
-      { network: 'testnet', role: 'Tee', uri: 'http://cubesigner-signer-1:3000' },
+      { network: 'testnet', role: 'Tee', uri: 'http://cubesigner-signer:3000' },
       { network: 'testnet', role: 'Attestation', uri: 'https://signer.partner-a.example:4040' },
       { network: 'testnet', role: 'Attestation', uri: 'http://10.20.30.40:4040' },
     ])
+  })
+
+  it('rejects a stale multi-role CubeSigner configuration', () => {
+    expect(() => buildTsoSigners({
+      cubesigner: {roles: [
+        {keys: [], name: 'tee-0', role_id: 'role-0'},
+        {keys: [], name: 'tee-1', role_id: 'role-1'},
+      ]},
+      network: 'testnet',
+    })).to.throw('exactly one TEE role and one in-cluster deployment')
+  })
+})
+
+describe('setup prep-charts CubeSigner production config', () => {
+  const namespace = `0x${'44'.repeat(20)}`
+
+  it('projects bridge identity, exact size caps, and reviewed policy evidence', () => {
+    const env = buildCubesignerPrepEnv({
+      cubesigner: {
+        productionPolicy: {
+          policyArtifactDigest: `sha256:${'aa'.repeat(32)}`,
+          policyIdentifier: 'dogeos-bridge/v1',
+          programIdentityDigest: `sha256:${'cc'.repeat(32)}`,
+          proofResolverAuthority: 'https://proof-policy.example.com',
+          verifierIdentityDigest: `sha256:${'bb'.repeat(32)}`,
+        },
+        roles: [],
+      },
+      network: 'testnet',
+    }, namespace)
+
+    expect(env).to.include({
+      DOGEOS_CUBESIGNER_SIGNER_BRIDGE_NAMESPACE_ID: namespace,
+      DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_REQUEST_JSON_BYTES: '393216',
+      DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_RESPONSE_JSON_BYTES: '393216',
+      DOGEOS_CUBESIGNER_SIGNER_MAX_PSBT_BASE64_LEN: '130048',
+      DOGEOS_CUBESIGNER_SIGNER_MAX_SIGN_REQUEST_JSON_BYTES: '262144',
+      DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER: 'dogeos-bridge/v1',
+      DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE: 'production_verifier_key_policy',
+      DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROOF_RESOLVER_AUTHORITY:
+        'https://proof-policy.example.com',
+      DOGEOS_CUBESIGNER_SIGNER_SIGNATURE_MODE: 'ecdsa',
+    })
+  })
+
+  it('upserts scalar config and binds policy evidence to the CS key Secret', () => {
+    const values: any = {
+      env: [
+        {name: 'KEEP_ME', value: 'yes'},
+        {name: 'DOGEOS_CUBESIGNER_SIGNER_BRIDGE_NAMESPACE_ID', value: ''},
+      ],
+    }
+    const changes = [
+      ...applyCubesignerPrepEnv(values, buildCubesignerPrepEnv({
+        cubesigner: {roles: []},
+        network: 'testnet',
+      }, namespace)),
+      ...ensureCubesignerPolicyKeyBinding(values),
+    ]
+    const env = Object.fromEntries(values.env.map((item: any) => [item.name, item]))
+
+    expect(changes.map(change => change.key)).to.include(
+      'env.DOGEOS_CUBESIGNER_SIGNER_BRIDGE_NAMESPACE_ID',
+    )
+    expect(env.KEEP_ME.value).to.equal('yes')
+    expect(env.DOGEOS_CUBESIGNER_SIGNER_BRIDGE_NAMESPACE_ID.value).to.equal(namespace)
+    expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_KEY_IDENTIFIER.valueFrom)
+      .to.deep.equal({
+        secretKeyRef: {
+          key: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID',
+          name: 'cubesigner-signer-env',
+        },
+      })
+  })
+
+  it('rejects a namespace that was not canonically derived by bridge-init', () => {
+    expect(() => buildCubesignerPrepEnv({network: 'testnet'}, '44'.repeat(20)))
+      .to.throw('0x-prefixed lowercase 20-byte hex')
   })
 })
 

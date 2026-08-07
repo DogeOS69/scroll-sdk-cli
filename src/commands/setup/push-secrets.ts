@@ -104,22 +104,22 @@ class AWSSecretService implements SecretService {
     const { filename, secretsDir } = resolveSecretFile(secretFile)
 
     if (cubesignerOnly) {
-      // Only process cubesigner-signer-N-session.json files
-      let sessionFiles = fs.readdirSync(secretsDir).filter((file) =>
-        file.match(/^cubesigner-signer-\d+-session\.json$/)
-      );
-
-      if (filename) {
-        if (!/^cubesigner-signer-\d+-session\.json$/.test(filename)) {
-          console.warn(chalk.yellow(`File ${filename} is not a valid cubesigner session file. Ignoring.`));
-          throw new Error(`File ${filename} is not a valid cubesigner session file`)
-        }
-
-        sessionFiles = sessionFiles.filter(f => f === filename);
+      // CubeSigner has one deployment, one session secret, and one key-id env secret.
+      const allowedFiles = new Set([
+        'cubesigner-signer-session.json',
+        'cubesigner-signer.env',
+      ])
+      if (filename && !allowedFiles.has(filename)) {
+        throw new Error(`File ${filename} is not a valid singleton CubeSigner secret file`)
       }
 
-      if (sessionFiles.length === 0) {
-        console.log(chalk.yellow('No cubesigner-signer-N-session.json files found in secrets directory'))
+      const availableFiles = fs.readdirSync(secretsDir)
+      const sessionFiles = availableFiles.filter(file =>
+        file === 'cubesigner-signer-session.json' && (!filename || file === filename))
+      const envFiles = availableFiles.filter(file =>
+        file === 'cubesigner-signer.env' && (!filename || file === filename))
+      if (sessionFiles.length === 0 && envFiles.length === 0) {
+        console.log(chalk.yellow('No singleton CubeSigner session or env secret files found'))
         return []
       }
 
@@ -129,6 +129,15 @@ class AWSSecretService implements SecretService {
         const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
         if (await this.createOrUpdateSecret({ 'session.json': content }, secretName)) {
           pushedSecrets.push({ name: secretName, properties: ['session.json'], sourceFile: path.join(secretsDir, file) })
+        }
+      }
+
+      for (const file of envFiles) {
+        const secretName = 'cubesigner-signer-env'
+        console.log(chalk.cyan(`Processing CubeSigner key secret: ${secretName}`))
+        const data = await this.convertEnvToDict(path.join(secretsDir, file))
+        if (await this.createOrUpdateSecret(data, secretName)) {
+          pushedSecrets.push({name: secretName, properties: Object.keys(data), sourceFile: path.join(secretsDir, file)})
         }
       }
 
@@ -372,22 +381,22 @@ class HashicorpVaultDevService implements SecretService {
     const { filename, secretsDir } = resolveSecretFile(secretFile)
 
     if (cubesignerOnly) {
-      // Only process cubesigner-signer-N-session.json files
-      let sessionFiles = fs.readdirSync(secretsDir).filter((file) =>
-        file.match(/^cubesigner-signer-\d+-session\.json$/)
-      );
-
-      if (filename) {
-        if (!/^cubesigner-signer-\d+-session\.json$/.test(filename)) {
-          console.warn(chalk.yellow(`File ${filename} is not a valid cubesigner session file. Ignoring.`));
-          throw new Error(`File ${filename} is not a valid cubesigner session file`)
-        }
-
-        sessionFiles = sessionFiles.filter(f => f === filename);
+      // CubeSigner has one deployment, one session secret, and one key-id env secret.
+      const allowedFiles = new Set([
+        'cubesigner-signer-session.json',
+        'cubesigner-signer.env',
+      ])
+      if (filename && !allowedFiles.has(filename)) {
+        throw new Error(`File ${filename} is not a valid singleton CubeSigner secret file`)
       }
 
-      if (sessionFiles.length === 0) {
-        console.log(chalk.yellow('No cubesigner-signer-N-session.json files found in secrets directory'))
+      const availableFiles = fs.readdirSync(secretsDir)
+      const sessionFiles = availableFiles.filter(file =>
+        file === 'cubesigner-signer-session.json' && (!filename || file === filename))
+      const envFiles = availableFiles.filter(file =>
+        file === 'cubesigner-signer.env' && (!filename || file === filename))
+      if (sessionFiles.length === 0 && envFiles.length === 0) {
+        console.log(chalk.yellow('No singleton CubeSigner session or env secret files found'))
         return []
       }
 
@@ -400,7 +409,16 @@ class HashicorpVaultDevService implements SecretService {
         }
       }
 
-      console.log(chalk.green('All CubeSigner session secrets have been processed and populated in Vault.'))
+      for (const file of envFiles) {
+        const secretName = 'cubesigner-signer-env'
+        console.log(chalk.cyan(`Processing CubeSigner key secret: ${this.pathPrefix}/${secretName}`))
+        const data = await this.convertEnvToDict(path.join(secretsDir, file))
+        if (await this.pushToVault(secretName, data)) {
+          pushedSecrets.push({name: secretName, properties: Object.keys(data), sourceFile: path.join(secretsDir, file)})
+        }
+      }
+
+      console.log(chalk.green('All singleton CubeSigner secrets have been processed and populated in Vault.'))
       return pushedSecrets
     }
 
@@ -980,18 +998,12 @@ export default class SetupPushSecrets extends Command {
       this.error(chalk.red(`Values directory not found at ${valuesDir}`))
     }
 
-    // Find cubesigner-signer-production-N.yaml files
-    const cubesignerFiles = fs
-      .readdirSync(valuesDir)
-      .filter((file) => file.match(/^cube(?:signer-){2}production-\d+\.yaml$/))
-
-    if (cubesignerFiles.length === 0) {
-      this.error(chalk.red('No cubesigner-signer-production-N.yaml files found in values/values directory'))
+    const yamlFile = 'cubesigner-signer-production.yaml'
+    const yamlPath = path.join(valuesDir, yamlFile)
+    if (!fs.existsSync(yamlPath)) {
+      this.error(chalk.red(`${yamlFile} not found in values/values directory`))
     }
 
-    // Read the first found file
-    const yamlFile = cubesignerFiles[0]
-    const yamlPath = path.join(valuesDir, yamlFile)
     this.log(chalk.cyan(`Reading configuration from ${yamlFile}`))
 
     const content = fs.readFileSync(yamlPath, 'utf8')
@@ -1001,13 +1013,11 @@ export default class SetupPushSecrets extends Command {
       this.error(chalk.red(`No externalSecrets found in ${yamlFile}`))
     }
 
-    // Find cubesigner-signer-N-session configuration
-    const sessionSecretKey = Object.keys(yamlContent.externalSecrets).find(key =>
-      key.match(/^cubesigner-signer-\d+-session$/)
-    )
+    const sessionSecretKey = Object.keys(yamlContent.externalSecrets)
+      .find(key => key === 'cubesigner-signer-session')
 
     if (!sessionSecretKey) {
-      this.error(chalk.red(`No cubesigner-signer-N-session found in externalSecrets of ${yamlFile}`))
+      this.error(chalk.red(`No cubesigner-signer-session found in externalSecrets of ${yamlFile}`))
     }
 
     const sessionSecret = yamlContent.externalSecrets[sessionSecretKey]

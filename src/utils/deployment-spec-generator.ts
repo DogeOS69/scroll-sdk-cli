@@ -709,6 +709,86 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       path: 'signing.cubesigner.roles',
       suggestion: 'Run setup cubesigner-init to create or select the TEE role before bridge/signing artifacts are finalized',
     })
+  } else if (spec.signing.cubesigner.roles.length > 1) {
+    errors.push({
+      code: 'E601_INVALID_VALUE',
+      message: 'CubeSigner supports exactly one TEE role and one deployment instance',
+      path: 'signing.cubesigner.roles',
+    })
+  }
+
+  const cubesignerPolicy = spec.signing?.cubesigner?.productionPolicy
+  if (cubesignerPolicy) {
+    const policyPath = 'signing.cubesigner.productionPolicy'
+    const digestPattern = /^sha256:[\da-f]{64}$/
+    const requiredTextFields = [
+      ['policyIdentifier', cubesignerPolicy.policyIdentifier],
+      ['policyArtifactDigest', cubesignerPolicy.policyArtifactDigest],
+      ['verifierIdentityDigest', cubesignerPolicy.verifierIdentityDigest],
+      ['programIdentityDigest', cubesignerPolicy.programIdentityDigest],
+      ['proofResolverAuthority', cubesignerPolicy.proofResolverAuthority],
+    ] as const
+    for (const [field, value] of requiredTextFields) {
+      if (typeof value !== 'string' || value.trim() === '') {
+        errors.push({
+          code: 'E002_MISSING_REQUIRED_FIELD',
+          message: `${policyPath}.${field} is required when CubeSigner productionPolicy is configured`,
+          path: `${policyPath}.${field}`,
+        })
+      }
+    }
+
+    if (cubesignerPolicy.policyIdentifier &&
+      !/^[\da-z][\d._a-z-]{2,63}\/v[1-9]\d{0,8}$/.test(cubesignerPolicy.policyIdentifier)) {
+      errors.push({
+        code: 'E601_INVALID_VALUE',
+        message: `${policyPath}.policyIdentifier must be an immutable name/vN identifier and must not use latest`,
+        path: `${policyPath}.policyIdentifier`,
+      })
+    }
+
+    for (const [field, value] of [
+      ['policyArtifactDigest', cubesignerPolicy.policyArtifactDigest],
+      ['verifierIdentityDigest', cubesignerPolicy.verifierIdentityDigest],
+      ['programIdentityDigest', cubesignerPolicy.programIdentityDigest],
+      ['liveEvidenceReportDigest', cubesignerPolicy.liveEvidenceReportDigest],
+    ] as const) {
+      if (value !== undefined && !digestPattern.test(value)) {
+        errors.push({
+          code: 'E601_INVALID_VALUE',
+          message: `${policyPath}.${field} must be sha256:<64 lowercase hex>`,
+          path: `${policyPath}.${field}`,
+        })
+      }
+    }
+
+    if (cubesignerPolicy.proofResolverAuthority) {
+      try {
+        const authority = new URL(cubesignerPolicy.proofResolverAuthority)
+        if (authority.protocol !== 'https:' || authority.username || authority.password ||
+          authority.pathname !== '/' || authority.search || authority.hash ||
+          cubesignerPolicy.proofResolverAuthority.replace(/\/$/, '') !== authority.origin) {
+          throw new Error('not an HTTPS authority')
+        }
+      } catch {
+        errors.push({
+          code: 'E601_INVALID_VALUE',
+          message: `${policyPath}.proofResolverAuthority must be an HTTPS authority with no path, query, fragment, or userinfo`,
+          path: `${policyPath}.proofResolverAuthority`,
+        })
+      }
+    }
+
+    const hasLivePath = Boolean(cubesignerPolicy.liveEvidenceReportPath)
+    const hasLiveDigest = Boolean(cubesignerPolicy.liveEvidenceReportDigest)
+    if (hasLivePath !== hasLiveDigest ||
+      (hasLivePath && !cubesignerPolicy.liveEvidenceReportPath!.startsWith('/'))) {
+      errors.push({
+        code: 'E601_INVALID_VALUE',
+        message: `${policyPath}.liveEvidenceReportPath and liveEvidenceReportDigest must be supplied together, and the path must be absolute`,
+        path: policyPath,
+      })
+    }
   }
 
   if (spec.signing?.attestationSigner) {
@@ -1489,6 +1569,9 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   // Add signing configuration
   if (spec.signing.cubesigner) {
     config.cubesigner = {
+      ...(spec.signing.cubesigner.productionPolicy
+        ? {productionPolicy: spec.signing.cubesigner.productionPolicy}
+        : {}),
       roles: (spec.signing.cubesigner.roles || []).map(role => ({
         keys: role.keys.map(key => ({
           key_id: key.keyId,

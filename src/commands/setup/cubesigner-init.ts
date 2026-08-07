@@ -343,6 +343,7 @@ export default class SetupCubesignerSetup extends Command {
 
             // Update DogeConfig
             this.dogeConfig.cubesigner = {
+                ...this.dogeConfig.cubesigner,
                 roles: cubesignerRoles
             }
 

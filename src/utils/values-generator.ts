@@ -1240,6 +1240,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
  */
 function generateCubesignerValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
+  const productionPolicy = spec.signing?.cubesigner?.productionPolicy
 
   const image = resolveImage(spec, 'cubesignerSigner', {
     pullPolicy: 'IfNotPresent',
@@ -1254,27 +1255,70 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_CUBESIGNER_SIGNER_NETWORK', value: spec.dogecoin.network },
       { name: 'NETWORK', value: spec.dogecoin.network },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_TSO_URL', value: 'http://tso-service:3000' },
+      // bridge-init owns this value. prep-charts replaces the empty bootstrap
+      // placeholder from .data/GenerateBridgeInfo.toml before deployment.
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_BRIDGE_NAMESPACE_ID', value: '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_SIGNATURE_DELAY', value: '0' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_POLL_INTERVAL', value: '500' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_SESSION_KEEP_ALIVE_INTERVAL', value: '3600000' },
-      { name: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', valueFrom: { secretKeyRef: { key: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', name: 'cubesigner-signer-__INSTANCE_INDEX__-env' } } },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_MAX_PSBT_BASE64_LEN', value: '130048' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_MAX_SIGN_REQUEST_JSON_BYTES', value: '262144' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_REQUEST_JSON_BYTES', value: '393216' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_RESPONSE_JSON_BYTES', value: '393216' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE', value: 'production_verifier_key_policy' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION', value: '0.4.152-0' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_KEY_IDENTIFIER', valueFrom: { secretKeyRef: { key: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', name: 'cubesigner-signer-env' } } },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER', value: productionPolicy?.policyIdentifier || '' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_ARTIFACT_DIGEST', value: productionPolicy?.policyArtifactDigest || '' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_VERIFIER_IDENTITY_DIGEST', value: productionPolicy?.verifierIdentityDigest || '' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROGRAM_IDENTITY_DIGEST', value: productionPolicy?.programIdentityDigest || '' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROOF_RESOLVER_AUTHORITY', value: productionPolicy?.proofResolverAuthority || '' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT', value: 'dogeos-cubesigner-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_LIVE_EVIDENCE_REPORT_PATH', value: productionPolicy?.liveEvidenceReportPath || '' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_LIVE_EVIDENCE_REPORT_DIGEST', value: productionPolicy?.liveEvidenceReportDigest || '' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', valueFrom: { secretKeyRef: { key: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', name: 'cubesigner-signer-env' } } },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_CS_SESSION_PATH', value: '/etc/cubesigner/session.json' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_SIGNATURE_MODE', value: 'ecdsa' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_BODY_LIMIT', value: '5mb' },
-      { name: 'CUBESIGNER_MAX_PSBT_BASE64_LEN', value: '130048' },
       { name: 'CS_SESSIONS_DIR', value: '/app/.sessions' }
     ],
     global: {
-      fullnameOverride: 'cubesigner-signer-__INSTANCE_INDEX__'
+      fullnameOverride: 'cubesigner-signer'
     },
     image,
     persistence: {
       session: {
         enabled: true,
         mountPath: '/etc/cubesigner',
-        name: 'cubesigner-signer-__INSTANCE_INDEX__-session',
+        name: 'cubesigner-signer-session',
         readOnly: true,
-        secretName: 'cubesigner-signer-__INSTANCE_INDEX__-session',
+        secretName: 'cubesigner-signer-session',
         type: 'secret'
+      }
+    },
+    // The generated production values own the service health contract. Do not
+    // inherit these paths from a chart version: /health is process liveness,
+    // while /ready includes CubeSigner session and production-policy gates.
+    probes: {
+      liveness: {
+        custom: true,
+        enabled: true,
+        spec: {httpGet: {path: '/health', port: 'http'}}
+      },
+      readiness: {
+        custom: true,
+        enabled: true,
+        spec: {httpGet: {path: '/ready', port: 'http'}}
+      },
+      startup: {
+        custom: true,
+        enabled: true,
+        spec: {
+          failureThreshold: 12,
+          httpGet: {path: '/health', port: 'http'},
+          initialDelaySeconds: 10,
+          periodSeconds: 5
+        }
       }
     },
     resources: {
@@ -1287,25 +1331,25 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
     volumeClaimTemplates: [{
       accessMode: 'ReadWriteOnce',
       mountPath: '/app/.sessions',
-      name: 'session-cache-__INSTANCE_INDEX__',
+      name: 'session-cache',
       size: '1Gi'
     }]
   }
 
   // Generate external secrets for both env and session
   const envSecrets = generateExternalSecrets(
-    'cubesigner-signer-__INSTANCE_INDEX__-env',
+    'cubesigner-signer-env',
     secretConfig,
     [
-      { property: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', remoteKey: 'cubesigner-signer-__INSTANCE_INDEX__-env', secretKey: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID' }
+      { property: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', remoteKey: 'cubesigner-signer-env', secretKey: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID' }
     ]
   )
 
   const sessionSecrets = generateExternalSecrets(
-    'cubesigner-signer-__INSTANCE_INDEX__-session',
+    'cubesigner-signer-session',
     secretConfig,
     [
-      { property: 'session.json', remoteKey: 'cubesigner-signer-__INSTANCE_INDEX__-session', secretKey: 'session.json' }
+      { property: 'session.json', remoteKey: 'cubesigner-signer-session', secretKey: 'session.json' }
     ]
   )
 

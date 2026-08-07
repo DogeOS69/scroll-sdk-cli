@@ -12,6 +12,7 @@ import * as path from 'node:path'
 import type { DogeConfig } from '../../types/doge-config.js'
 
 import {
+  GENERATE_BRIDGE_INFO_FILE,
   L1_INTERFACE_BEACON_API_ENDPOINT,
   L1_INTERFACE_RPC_ENDPOINT,
   YAML_DUMP_OPTIONS,
@@ -33,6 +34,7 @@ import {
   reconcileProofKubernetes,
 } from '../../utils/proof-kubernetes-reconciler.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
+import { deriveBridgeNamespaceId } from '../../utils/signer-policy-derivation.js'
 import {
   getRequiredManagedSignerConfig,
   isAwsKmsSigner,
@@ -165,17 +167,139 @@ export function buildL2GethInitialPeerList(
  * array cannot silently disconnect external signers.
  */
 export function buildTsoSigners(config: Pick<DogeConfig, 'cubesigner' | 'network' | 'signerUrls'>): TsoSignerEndpoint[] {
-  const teeSigners: TsoSignerEndpoint[] = (config.cubesigner?.roles || []).map((_role, index) => ({
+  const cubesignerRoles = config.cubesigner?.roles || []
+  if (cubesignerRoles.length > 1) {
+    throw new Error('CubeSigner supports exactly one TEE role and one in-cluster deployment')
+  }
+
+  const teeSigners: TsoSignerEndpoint[] = cubesignerRoles.length === 0 ? [] : [{
     network: config.network,
     role: 'Tee',
-    uri: `http://cubesigner-signer-${index}:3000`,
-  }))
+    uri: 'http://cubesigner-signer:3000',
+  }]
   const attestationSigners: TsoSignerEndpoint[] = (config.signerUrls || []).map(uri => ({
     network: config.network,
     role: 'Attestation',
     uri,
   }))
   return [...teeSigners, ...attestationSigners]
+}
+
+const CUBESIGNER_POLICY_REQUEST_CONTRACT =
+  'dogeos-cubesigner-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1'
+
+/**
+ * Build the non-secret CubeSigner runtime projection owned by prep-charts.
+ * Bridge identity is derived from bridge-init output, never from the PSBT or
+ * independently authored Helm values. Reviewed production-policy evidence is
+ * projected only when it exists in doge-config; absent evidence stays blank in
+ * the production template so /ready fails closed.
+ */
+export function buildCubesignerPrepEnv(
+  config: Pick<DogeConfig, 'cubesigner' | 'network'>,
+  bridgeNamespaceId: string,
+): Record<string, string> {
+  if (!/^0x[\da-f]{40}$/.test(bridgeNamespaceId)) {
+    throw new Error('CubeSigner bridge namespace id must be 0x-prefixed lowercase 20-byte hex')
+  }
+
+  const env: Record<string, string> = {
+    CS_SESSIONS_DIR: '/app/.sessions',
+    DOGEOS_CUBESIGNER_SIGNER_BRIDGE_NAMESPACE_ID: bridgeNamespaceId,
+    DOGEOS_CUBESIGNER_SIGNER_LOG_LEVEL: 'info',
+    DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_REQUEST_JSON_BYTES: '393216',
+    DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_RESPONSE_JSON_BYTES: '393216',
+    DOGEOS_CUBESIGNER_SIGNER_MAX_PSBT_BASE64_LEN: '130048',
+    DOGEOS_CUBESIGNER_SIGNER_MAX_SIGN_REQUEST_JSON_BYTES: '262144',
+    DOGEOS_CUBESIGNER_SIGNER_NETWORK: config.network,
+    DOGEOS_CUBESIGNER_SIGNER_POLL_INTERVAL: '500',
+    DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE: 'production_verifier_key_policy',
+    DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT:
+      CUBESIGNER_POLICY_REQUEST_CONTRACT,
+    DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION: '0.4.152-0',
+    DOGEOS_CUBESIGNER_SIGNER_SESSION_KEEP_ALIVE_INTERVAL: '3600000',
+    DOGEOS_CUBESIGNER_SIGNER_SIGNATURE_MODE: 'ecdsa',
+    NETWORK: config.network,
+  }
+  const policy = config.cubesigner?.productionPolicy
+  if (policy) {
+    env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER = policy.policyIdentifier
+    env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_ARTIFACT_DIGEST =
+      policy.policyArtifactDigest
+    env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_VERIFIER_IDENTITY_DIGEST =
+      policy.verifierIdentityDigest
+    env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROGRAM_IDENTITY_DIGEST =
+      policy.programIdentityDigest
+    env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROOF_RESOLVER_AUTHORITY =
+      policy.proofResolverAuthority
+    if (policy.liveEvidenceReportPath) {
+      env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_LIVE_EVIDENCE_REPORT_PATH =
+        policy.liveEvidenceReportPath
+    }
+
+    if (policy.liveEvidenceReportDigest) {
+      env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_LIVE_EVIDENCE_REPORT_DIGEST =
+        policy.liveEvidenceReportDigest
+    }
+  }
+
+  return env
+}
+
+/** Upsert prep-owned scalar env values while preserving unrelated entries. */
+export function applyCubesignerPrepEnv(
+  productionYaml: any,
+  desiredEnv: Record<string, string>,
+): PrepChartChange[] {
+  productionYaml.env ||= []
+  const changes: PrepChartChange[] = []
+  for (const [envKey, newValue] of Object.entries(desiredEnv)) {
+    const envVar = productionYaml.env.find((item: any) => item.name === envKey)
+    if (envVar) {
+      if (envVar.value !== newValue || envVar.valueFrom !== undefined) {
+        const oldValue = envVar.valueFrom === undefined
+          ? String(envVar.value)
+          : JSON.stringify(envVar.valueFrom)
+        delete envVar.valueFrom
+        envVar.value = newValue
+        changes.push({key: `env.${envKey}`, newValue, oldValue})
+      }
+    } else {
+      productionYaml.env.push({name: envKey, value: newValue})
+      changes.push({key: `env.${envKey}`, newValue, oldValue: 'undefined'})
+    }
+  }
+
+  return changes
+}
+
+/** Bind production-policy evidence to the singleton signer's exact key Secret. */
+export function ensureCubesignerPolicyKeyBinding(productionYaml: any): PrepChartChange[] {
+  productionYaml.env ||= []
+  const name = 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_KEY_IDENTIFIER'
+  const valueFrom = {
+    secretKeyRef: {
+      key: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID',
+      name: 'cubesigner-signer-env',
+    },
+  }
+  const envVar = productionYaml.env.find((item: any) => item.name === name)
+  const oldValue = envVar
+    ? JSON.stringify(envVar.valueFrom ?? envVar.value)
+    : 'undefined'
+  if (envVar && JSON.stringify(envVar.valueFrom) === JSON.stringify(valueFrom) &&
+    envVar.value === undefined) {
+    return []
+  }
+
+  if (envVar) {
+    delete envVar.value
+    envVar.valueFrom = valueFrom
+  } else {
+    productionYaml.env.push({name, valueFrom})
+  }
+
+  return [{key: `env.${name}`, newValue: JSON.stringify(valueFrom), oldValue}]
 }
 
 /**
@@ -234,6 +358,19 @@ export function removeRetiredAttestationSignerValues(valuesDir: string): string[
   const removed: string[] = []
   for (const file of fs.readdirSync(valuesDir)) {
     if (!/^attestation-signer-production(?:-\d+)?\.yaml$/.test(file)) continue
+    fs.rmSync(path.join(valuesDir, file))
+    removed.push(file)
+  }
+
+  return removed.sort()
+}
+
+/** Remove obsolete multi-instance CubeSigner values generated by older CLIs. */
+export function removeRetiredCubesignerInstanceValues(valuesDir: string): string[] {
+  if (!fs.existsSync(valuesDir)) return []
+  const removed: string[] = []
+  for (const file of fs.readdirSync(valuesDir)) {
+    if (!/^cube(?:signer-){2}production-\d+\.yaml$/.test(file)) continue
     fs.rmSync(path.join(valuesDir, file))
     removed.push(file)
   }
@@ -1873,7 +2010,7 @@ export default class SetupPrepCharts extends Command {
   private async processMutipleInstance(valuesDir: string): Promise<{ skipped: number; updated: number }> {
     interface ChartConfig {
       chartName: string;
-      configKey: null | string;
+      configKey: string;
     }
 
     let updatedCharts = 0;
@@ -1887,15 +2024,17 @@ export default class SetupPrepCharts extends Command {
       updatedCharts++
     }
 
+    for (const file of removeRetiredCubesignerInstanceValues(valuesDir)) {
+      this.jsonCtx.info(`Removed obsolete multi-instance CubeSigner values: ${file}`)
+      updatedCharts++
+    }
+
     const names: ChartConfig[] = [{
       chartName: "l2-bootnode",
       configKey: "bootnode"
     }, {
       chartName: "l2-sequencer",
       configKey: "sequencer"
-    }, {
-      chartName: "cubesigner-signer",
-      configKey: null
     }];
 
     for (const item of names) {
@@ -1909,8 +2048,7 @@ export default class SetupPrepCharts extends Command {
         continue;
       }
 
-      // Skip config validation for charts that don't need configKey (like cubesigner-signer)
-      if (configKey && !this.configData[configKey]) {
+      if (!this.configData[configKey]) {
         this.error(`${configKey} not found in config.toml`);
       }
 
@@ -1918,28 +2056,15 @@ export default class SetupPrepCharts extends Command {
 
       // eslint-disable-next-line no-constant-condition
       while (true) {
-        // For charts without configKey, we generate a fixed number of instances (e.g., 6 for cubesigner-signer)
-        if (configKey) {
-          const instanceKey = `${configKey}-${releaseIndex}`
+        const instanceKey = `${configKey}-${releaseIndex}`
 
-          // instanceConfig is like this.configData.bootnode.bootnode-0, or this.configData.sequencer.sequencer-0
-          const instanceConfig = this.configData[configKey][instanceKey]
+        // instanceConfig is like this.configData.bootnode.bootnode-0, or this.configData.sequencer.sequencer-0
+        const instanceConfig = this.configData[configKey][instanceKey]
 
-          if (!instanceConfig && instanceKey !== "sequencer-0") {
-            // No more bootnode instances defined
-            this.log(chalk.yellow(`No more ${instanceKey} instances defined.`));
-            break
-          }
-        } else {
-          // Determine the number of instances dynamically for cubesigner-signer based on dogeConfig.cubesigner.roles
-          let maxInstances = 1;
-          if (chartName === "cubesigner-signer") {
-            maxInstances = this.dogeConfig.cubesigner?.roles?.length ?? 1;
-          }
-
-          if (releaseIndex >= maxInstances) {
-            break;
-          }
+        if (!instanceConfig && instanceKey !== "sequencer-0") {
+          // No more bootnode instances defined
+          this.log(chalk.yellow(`No more ${instanceKey} instances defined.`));
+          break
         }
 
         const destFilePath = path.join(valuesDir, `${chartName}-production-${releaseIndex}.yaml`);
@@ -2853,37 +2978,32 @@ export default class SetupPrepCharts extends Command {
           this.error(`${chartName}: env not found in config`);
         }
 
-        /*
-        env:
-        - name: "DOGEOS_CUBESIGNER_SIGNER_PORT"
-          value: "3000"
-        - name: "DOGEOS_CUBESIGNER_SIGNER_NETWORK"
-          value: "testnet"
-        */
-        const todoMappings = {
-          CS_SESSIONS_DIR: '/app/.sessions',
-          CUBESIGNER_MAX_PSBT_BASE64_LEN: '130048',
-          DOGEOS_CUBESIGNER_SIGNER_LOG_LEVEL: 'info',
-          DOGEOS_CUBESIGNER_SIGNER_NETWORK: this.dogeConfig.network,
-          DOGEOS_CUBESIGNER_SIGNER_POLL_INTERVAL: '500',
-          DOGEOS_CUBESIGNER_SIGNER_SESSION_KEEP_ALIVE_INTERVAL: '3600000',
-          NETWORK: this.dogeConfig.network,
+        const namespace = deriveBridgeNamespaceId(
+          path.join(process.cwd(), GENERATE_BRIDGE_INFO_FILE),
+        )
+        if (!namespace) {
+          this.error(
+            `${GENERATE_BRIDGE_INFO_FILE} missing a canonical namespace_id; ` +
+            'run scrollsdk setup bridge-init --step 3-bridge-info first',
+          )
         }
 
-        for (const [envKey, newValue] of Object.entries(todoMappings)) {
-          const envVar = productionYaml.env.find((item: any) => item.name === envKey);
-          if (envVar) {
-            if (envVar.value !== newValue) {
-              const oldValue = envVar.value;
-              envVar.value = newValue;
-              updated = true;
-              changes.push({ key: `env.${envKey}`, newValue, oldValue });
-            }
-          } else {
-            productionYaml.env.push({ name: envKey, value: newValue });
-            updated = true;
-            changes.push({ key: `env.${envKey}`, newValue, oldValue: 'undefined' });
-          }
+        const cubesignerChanges = [
+          ...removeEnvArrayKeys(productionYaml, [
+            // Retired compatibility/configuration surfaces. The signer now has
+            // one correctness/TEE role and the prefixed cap is authoritative.
+            'CUBESIGNER_MAX_PSBT_BASE64_LEN',
+            'DOGEOS_CUBESIGNER_SIGNER_SIGNER_ROLE',
+          ]),
+          ...applyCubesignerPrepEnv(
+            productionYaml,
+            buildCubesignerPrepEnv(this.dogeConfig, namespace.value),
+          ),
+          ...ensureCubesignerPolicyKeyBinding(productionYaml),
+        ]
+        if (cubesignerChanges.length > 0) {
+          updated = true
+          changes.push(...cubesignerChanges)
         }
       }
       else if (chartName === "eth-da-submitter") {

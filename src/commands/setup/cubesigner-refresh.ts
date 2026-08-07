@@ -251,7 +251,17 @@ export default class SetupCubesignerRefresh extends Command {
             }
 
             const {roles} = this.dogeConfig.cubesigner
-            this.jsonCtx.info(`Found ${roles.length} roles in config, creating session files...`)
+            if (roles.length !== 1) {
+                this.jsonCtx.error(
+                    'E601_INVALID_VALUE',
+                    `CubeSigner supports exactly one TEE role; found ${roles.length}`,
+                    'CONFIGURATION',
+                    true,
+                    {rolesCount: roles.length}
+                )
+            }
+
+            this.jsonCtx.info('Found the CubeSigner TEE role, creating the singleton session files...')
             this.jsonCtx.info(
                 `Using CubeSigner lifetimes: session=${CUBESIGNER_SESSION_LIFETIME_SECONDS}s, auth=${CUBESIGNER_AUTH_LIFETIME_SECONDS}s, refresh=${CUBESIGNER_REFRESH_LIFETIME_SECONDS}s, grace=${CUBESIGNER_GRACE_LIFETIME_SECONDS}s`
             )
@@ -260,34 +270,33 @@ export default class SetupCubesignerRefresh extends Command {
             const envFiles: string[] = []
             fs.mkdirSync('./secrets', { recursive: true })
 
-            for (const [i, role] of roles.entries()) {
-                const sessionFile = `./secrets/cubesigner-signer-${i}-session.json`
-                const tmpSessionFile = `${sessionFile}.tmp`
-                const sessionCreateArgs = [
-                    'session',
-                    'create',
-                    `--role-id=${role.role_id}`,
-                    `--session-lifetime=${CUBESIGNER_SESSION_LIFETIME_SECONDS}`,
-                    `--auth-lifetime=${CUBESIGNER_AUTH_LIFETIME_SECONDS}`,
-                    `--refresh-lifetime=${CUBESIGNER_REFRESH_LIFETIME_SECONDS}`,
-                    `--grace-lifetime=${CUBESIGNER_GRACE_LIFETIME_SECONDS}`,
-                    '--output',
-                    'json',
-                ]
-                this.jsonCtx.info(`Executing: cs ${sessionCreateArgs.join(' ')}`)
-                const { stdout } = await execFileAsync('cs', sessionCreateArgs, { cwd: process.cwd() })
-                fs.writeFileSync(tmpSessionFile, stdout, { mode: 0o600 })
-                fs.renameSync(tmpSessionFile, sessionFile)
-                sessionFiles.push(sessionFile)
+            const role = roles[0]
+            const sessionFile = './secrets/cubesigner-signer-session.json'
+            const tmpSessionFile = `${sessionFile}.tmp`
+            const sessionCreateArgs = [
+                'session',
+                'create',
+                `--role-id=${role.role_id}`,
+                `--session-lifetime=${CUBESIGNER_SESSION_LIFETIME_SECONDS}`,
+                `--auth-lifetime=${CUBESIGNER_AUTH_LIFETIME_SECONDS}`,
+                `--refresh-lifetime=${CUBESIGNER_REFRESH_LIFETIME_SECONDS}`,
+                `--grace-lifetime=${CUBESIGNER_GRACE_LIFETIME_SECONDS}`,
+                '--output',
+                'json',
+            ]
+            this.jsonCtx.info(`Executing: cs ${sessionCreateArgs.join(' ')}`)
+            const { stdout } = await execFileAsync('cs', sessionCreateArgs, { cwd: process.cwd() })
+            fs.writeFileSync(tmpSessionFile, stdout, { mode: 0o600 })
+            fs.renameSync(tmpSessionFile, sessionFile)
+            sessionFiles.push(sessionFile)
 
-                const secret = `DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID="${role.keys[0].key_id}"\n`
-                const envFile = `./secrets/cubesigner-signer-${i}.env`
-                fs.writeFileSync(envFile, secret)
-                this.jsonCtx.info(`write ${envFile} success`)
-                envFiles.push(envFile)
-            }
+            const secret = `DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID="${role.keys[0].key_id}"\n`
+            const envFile = './secrets/cubesigner-signer.env'
+            fs.writeFileSync(envFile, secret)
+            this.jsonCtx.info(`write ${envFile} success`)
+            envFiles.push(envFile)
 
-            this.jsonCtx.info(`Successfully refreshed sessions for ${roles.length} roles`)
+            this.jsonCtx.info('Successfully refreshed the CubeSigner session')
             this.jsonCtx.info('Run setup push-secrets --cubesigner-only and restart CubeSigner signer pods after clearing their active session cache.')
 
             // JSON success output
@@ -301,8 +310,8 @@ export default class SetupCubesignerRefresh extends Command {
                 },
                 nextSteps: [
                     'Run setup push-secrets --cubesigner-only',
-                    'Clear /app/.sessions/main_cs_session.json in each cubesigner-signer pod',
-                    'Restart the cubesigner-signer pods so the refreshed Secret seed is copied into the active session cache',
+                    'Clear /app/.sessions/main_cs_session.json in the cubesigner-signer pod',
+                    'Restart the cubesigner-signer pod so the refreshed Secret seed is copied into the active session cache',
                 ],
                 roles: roles.map((r, i) => ({
                     index: i,

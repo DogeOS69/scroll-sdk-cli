@@ -121,7 +121,17 @@ bridge:
 
 signing:
   # CubeSigner provides the single TEE key. Roles are populated by `scrollsdk setup cubesigner-init`.
-  cubesigner: {}
+  cubesigner:
+    # Optional at initial generation. When omitted, generated production values
+    # remain deliberately fail-closed until reviewed evidence is supplied.
+    # productionPolicy:
+    #   policyIdentifier: dogeos-bridge/v1
+    #   policyArtifactDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    #   verifierIdentityDigest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    #   programIdentityDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    #   proofResolverAuthority: https://proof-policy.example.com
+    #   liveEvidenceReportPath: /etc/dogeos/cubesigner-live-evidence.json
+    #   liveEvidenceReportDigest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
   # Attestation signers run as partner-operated docker-compose services. They
   # are intentionally absent from DeploymentSpec/Helm values. Collect the
   # finalized descriptor.json files under descriptors/ and import them before

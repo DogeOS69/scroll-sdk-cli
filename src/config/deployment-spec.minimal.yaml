@@ -93,6 +93,9 @@ bridge:
 
 signing:
   # CubeSigner provides the single TEE key. Roles are populated by `scrollsdk setup cubesigner-init`.
+  # Production policy evidence can be added later under
+  # signing.cubesigner.productionPolicy; generated production values remain
+  # fail-closed while those reviewed fields are absent.
   cubesigner: {}
   # Attestation signers are partner-operated docker-compose services. After
   # generating this deployment, collect descriptors/*.json and run:

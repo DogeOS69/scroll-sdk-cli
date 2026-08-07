@@ -588,6 +588,13 @@ export interface SigningConfig {
 
   /** CubeSigner TEE key configuration */
   cubesigner?: {
+    /**
+     * Reviewed, non-secret static evidence for the fail-closed CubeSigner
+     * production verifier-key policy. The target key identifier is derived
+     * per signer from the same Secret as CS_KEY_ID; the bridge namespace is
+     * derived later from bridge-init output by prep-charts.
+     */
+    productionPolicy?: CubesignerProductionPolicy
     /** Role configurations from cubesigner-init */
     roles?: Array<{
       keys: Array<{
@@ -605,6 +612,23 @@ export interface SigningConfig {
 
   /** TSO service URL */
   tsoServiceUrl?: string
+}
+
+export interface CubesignerProductionPolicy {
+  /** Required with liveEvidenceReportPath; sha256:<64 lowercase hex>. */
+  liveEvidenceReportDigest?: string
+  /** Optional absolute path to a future redacted live-evidence report. */
+  liveEvidenceReportPath?: string
+  /** sha256:<64 lowercase hex> digest of the reviewed policy artifact. */
+  policyArtifactDigest: string
+  /** Immutable named policy version, for example dogeos-bridge/v1. */
+  policyIdentifier: string
+  /** sha256:<64 lowercase hex> digest of the verifier program identity. */
+  programIdentityDigest: string
+  /** HTTPS authority only; no path, query, fragment, or userinfo. */
+  proofResolverAuthority: string
+  /** sha256:<64 lowercase hex> digest of the verifier identity. */
+  verifierIdentityDigest: string
 }
 
 export interface AttestationSignerProductionPolicy {
