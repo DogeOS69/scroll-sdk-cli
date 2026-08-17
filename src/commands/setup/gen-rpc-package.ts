@@ -379,7 +379,7 @@ export function normalizeConfigMapEnvData(envData: unknown): EnvVarMap {
 }
 
 export function convertPeersToExternalDomains(peers: string[], loadBalancerDomains: Record<string, string> = {}): string[] {
-  return peers.map(peer => {
+  return peers.flatMap(peer => {
     // External RPC packages should peer through bootnode public p2p LoadBalancers
     // created by `setup bootnode-public-p2p`.
     // Format: enode://nodekey@hostname:port
@@ -389,11 +389,17 @@ export function convertPeersToExternalDomains(peers: string[], loadBalancerDomai
       const nodeIndex = match[2]
       const port = match[3]
       const serviceName = `l2-${nodeType}-${nodeIndex}-p2p`
-      const domain = loadBalancerDomains[serviceName] || `<LoadBalancer-Domain-For-l2-${nodeType}-${nodeIndex}>`
-      return peer.replace(/@l2-(?:reth-)?bootnode-\d+(?:[.:][^:]+)*:\d+/, `@${domain}:${port}`)
+      const domain = loadBalancerDomains[serviceName]
+
+      // Geth and Reth bootnodes are independently optional. If a configured
+      // internal bootnode has no public p2p service in the discovered cluster
+      // topology, omit that stale peer from the external RPC package.
+      if (!domain) return []
+
+      return [peer.replace(/@l2-(?:reth-)?bootnode-\d+(?:[.:][^:]+)*:\d+/, `@${domain}:${port}`)]
     }
 
-    return peer
+    return [peer]
   })
 }
 

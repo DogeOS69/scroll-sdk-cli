@@ -199,6 +199,38 @@ describe('setup gen-rpc-package env generation', () => {
     ])
   })
 
+  it('drops optional bootnode peers without matching public p2p services', () => {
+    const rethOnlyPeers = convertPeersToExternalDomains(
+      [
+        'enode://geth0@l2-bootnode-0:30303',
+        'enode://reth0@l2-reth-bootnode-0:30303',
+        'enode://external@external.example.com:30303',
+      ],
+      {
+        'l2-reth-bootnode-0-p2p': 'reth-bootnode-0.example.com',
+      },
+    )
+
+    expect(rethOnlyPeers).to.deep.equal([
+      'enode://reth0@reth-bootnode-0.example.com:30303',
+      'enode://external@external.example.com:30303',
+    ])
+
+    const gethOnlyPeers = convertPeersToExternalDomains(
+      [
+        'enode://geth0@l2-bootnode-0:30303',
+        'enode://reth0@l2-reth-bootnode-0:30303',
+      ],
+      {
+        'l2-bootnode-0-p2p': 'geth-bootnode-0.example.com',
+      },
+    )
+
+    expect(gethOnlyPeers).to.deep.equal([
+      'enode://geth0@geth-bootnode-0.example.com:30303',
+    ])
+  })
+
   it('writes only l2reth env and combines geth and Reth bootnode peers', () => {
     const valuesDir = path.join(tmpDir, 'values')
     const rpcPackageDir = path.join(tmpDir, 'dogeos-rpc-package')
@@ -323,7 +355,7 @@ describe('setup gen-rpc-package env generation', () => {
     expect(l2rethEnv).not.to.include('l2-reth-sequencer-0')
   })
 
-  it('combines config geth bootnodes with doge-config Reth bootnodes', () => {
+  it('omits config geth bootnodes when only Reth public p2p services exist', () => {
     const valuesDir = path.join(tmpDir, 'values')
     const rpcPackageDir = path.join(tmpDir, 'dogeos-rpc-package')
     fs.mkdirSync(valuesDir, { recursive: true })
@@ -381,8 +413,6 @@ describe('setup gen-rpc-package env generation', () => {
       },
       rpcPackageDir,
       {
-        'l2-bootnode-0-p2p': 'geth-bootnode-0.example.com',
-        'l2-bootnode-1-p2p': 'geth-bootnode-1.example.com',
         'l2-reth-bootnode-0-p2p': 'reth-bootnode-0.example.com',
         'l2-reth-bootnode-1-p2p': 'reth-bootnode-1.example.com',
       },
@@ -394,8 +424,10 @@ describe('setup gen-rpc-package env generation', () => {
 
     expect(fs.existsSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2geth.env'))).to.equal(false)
     const l2rethEnv = fs.readFileSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2reth.env'), 'utf8')
-    expect(l2rethEnv).to.include('L2GETH_PEER_LIST=["enode://legacy0@geth-bootnode-0.example.com:30303","enode://legacy1@geth-bootnode-1.example.com:30303","enode://reth0@reth-bootnode-0.example.com:30303","enode://reth1@reth-bootnode-1.example.com:30303"]')
+    expect(l2rethEnv).to.include('L2GETH_PEER_LIST=["enode://reth0@reth-bootnode-0.example.com:30303","enode://reth1@reth-bootnode-1.example.com:30303"]')
     expect(l2rethEnv).to.include('L2RETH_NETWORK_ID=5555555')
+    expect(l2rethEnv).not.to.include('legacy0')
+    expect(l2rethEnv).not.to.include('legacy1')
     expect(l2rethEnv).not.to.include('LoadBalancer-Domain-For-l2-bootnode')
     expect(l2rethEnv).not.to.include('L2RETH_BLOB_S3_URL')
     expect(l2rethEnv).not.to.include('l2-sequencer-0')
