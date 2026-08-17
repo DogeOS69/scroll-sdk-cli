@@ -921,6 +921,8 @@ function validateCoordinatorMaterializerTopology(
     }
   }
 
+  requireString(config.protocol_context_json, 'protocol_context_json')
+
   if (config.auth?.bearer_token_file !== PROOF_WORK_TOKEN_PATH) {
     throw new Error(`${coordinatorConfigPath}: [auth].bearer_token_file must be ${PROOF_WORK_TOKEN_PATH}`)
   }
@@ -1091,8 +1093,14 @@ function validateEthereumDaSection(coordinatorConfigPath: string, ethereumDa: an
   requireString(ethereumDa.l1_rpc_url, `[${label}].l1_rpc_url`)
   requireString(ethereumDa.artifact_store_root, `[${label}].artifact_store_root`)
   requireString(ethereumDa.artifact_metadata_sqlite_path, `[${label}].artifact_metadata_sqlite_path`)
-  requirePositiveInteger(ethereumDa.eth_chain_id, `[${label}].eth_chain_id`)
-  requirePositiveInteger(ethereumDa.l2_chain_id, `[${label}].l2_chain_id`, 0xFF_FF_FF_FF)
+  for (const retiredKey of ['eth_chain_id', 'l2_chain_id']) {
+    if (ethereumDa[retiredKey] !== undefined) {
+      throw new Error(
+        `${coordinatorConfigPath}: [${label}].${retiredKey} is retired; derive it from protocol_context_json`
+      )
+    }
+  }
+
   const blobSource = ethereumDa.blob_source
   if (!blobSource || typeof blobSource !== 'object') {
     throw new Error(`${coordinatorConfigPath}: [${label}.blob_source] is required for cache misses`)
@@ -1276,6 +1284,14 @@ function prepareProofCoordinator(
     mountPath: '/app/data/manifests',
     name: '{{ include "scroll.common.lib.chart.names.fullname" . }}-manifests',
     readOnly: true,
+    type: 'configMap',
+  }
+  values.persistence['protocol-context'] = {
+    enabled: true,
+    mountPath: '/app/protocol_context.json',
+    name: 'protocol-context-config',
+    readOnly: true,
+    subPath: 'protocol_context.json',
     type: 'configMap',
   }
   if (mock) {

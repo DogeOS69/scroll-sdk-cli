@@ -1310,7 +1310,7 @@ describe('deployment-spec-generator', () => {
         .to.deep.equal(env.DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID.valueFrom);
       expect(env.DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID.valueFrom.secretKeyRef.name)
         .to.equal('cubesigner-signer-env');
-      expect(env.DOGEOS_CUBESIGNER_SIGNER_BRIDGE_NAMESPACE_ID.value).to.equal('');
+      expect(env.DOGEOS_CUBESIGNER_SIGNER_PROTOCOL_CONTEXT_JSON.value).to.equal('/app/protocol_context.json');
       expect(values.global.fullnameOverride).to.equal('cubesigner-signer');
       expect(values.persistence.session.secretName).to.equal('cubesigner-signer-session');
       expect(values.volumeClaimTemplates[0].name).to.equal('session-cache');
@@ -1366,8 +1366,8 @@ describe('deployment-spec-generator', () => {
       expect(files['l1-devnet-production.yaml']).to.include('chainId: 11155111');
       expect(files['l1-devnet-production.yaml']).to.include('networkId: 11155111');
       expect(files['l1-interface-production.yaml']).to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL');
-      expect(files['l1-interface-production.yaml']).to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__ETH_CHAIN_ID');
-      expect(files['l1-interface-production.yaml']).to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__L2_CHAIN_ID');
+      expect(files['l1-interface-production.yaml']).not.to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__ETH_CHAIN_ID');
+      expect(files['l1-interface-production.yaml']).not.to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__L2_CHAIN_ID');
       expect(files['l1-interface-production.yaml']).to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL');
       expect(files['l1-interface-production.yaml']).not.to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__KIND');
       expect(files['withdrawal-processor-production.yaml']).to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__INDEXER_SQLITE_PATH');
@@ -1390,8 +1390,10 @@ describe('deployment-spec-generator', () => {
 
       const submitterValues = yaml.load(files['eth-da-submitter-production.yaml']) as any;
       const submitterEnv = submitterValues.configMaps.env.data;
-      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT).to.equal('0x0000000000000000000000000000000000000000000000000000000000000000');
-      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_RELAYED_DEPOSIT_QUEUE_HASH).to.equal('0x0000000000000000000000000000000000000000000000000000000000000000');
+      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_PROTOCOL_CONTEXT_JSON).to.equal('/app/protocol_context.json');
+      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_JSON_PATH).to.equal('/app/genesis/genesis.json');
+      expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT');
+      expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_RELAYED_DEPOSIT_QUEUE_HASH');
       expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK).to.equal('6000000');
       expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_FEE_PER_GAS_WEI');
 
@@ -1445,7 +1447,7 @@ describe('deployment-spec-generator', () => {
       const cubesignerEnv = Object.fromEntries(cubesignerValues.env.map((item: any) => [item.name, item.value]));
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_LOG_LEVEL).to.equal('info');
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_POLL_INTERVAL).to.equal('500');
-      expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_BRIDGE_NAMESPACE_ID).to.equal('');
+      expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_PROTOCOL_CONTEXT_JSON).to.equal('/app/protocol_context.json');
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_MAX_PSBT_BASE64_LEN).to.equal('130048');
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_MAX_SIGN_REQUEST_JSON_BYTES).to.equal('262144');
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_REQUEST_JSON_BYTES).to.equal('393216');
@@ -1530,6 +1532,12 @@ describe('deployment-spec-generator', () => {
         tag: 'v1.2.3',
       });
       expect(values.service.main.enabled).to.equal(true);
+      expect(values.persistence['protocol-context']).to.include({
+        mountPath: '/app/protocol_context.json',
+        name: 'protocol-context-config',
+        readOnly: true,
+        subPath: 'protocol_context.json',
+      });
       expect(values.persistence.secrets.mountPath).to.equal('/app/secrets');
       expect(values.persistence.secrets).not.to.have.property('name');
       expect(values.serviceAccount).not.to.have.property('name');
@@ -1538,6 +1546,7 @@ describe('deployment-spec-generator', () => {
       expect(values.serviceAccount.annotations['eks.amazonaws.com/role-arn'])
         .to.equal('arn:aws:iam::123456789012:role/proof-coordinator');
       expect(env.DOGEOS_PROOF_COORDINATOR_PROOF_WORK_BASE_URL).to.equal('http://withdrawal-processor:3000');
+      expect(env.DOGEOS_PROOF_COORDINATOR_PROTOCOL_CONTEXT_JSON).to.equal('/app/protocol_context.json');
       expect(env.DOGEOS_PROOF_COORDINATOR_ALLOW_INSECURE_HTTP).to.equal('true');
       expect(env.DOGEOS_PROOF_COORDINATOR_COORDINATOR_ID).to.equal('proof-coordinator');
       expect(env.DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET).to.equal('dogeos-proofs');
@@ -1627,8 +1636,8 @@ describe('deployment-spec-generator', () => {
       const submitterEnv = submitterValues.configMaps.env.data;
 
       expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER).to.equal('2898792');
-      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_BATCH_HASH).to.equal('0x1111111111111111111111111111111111111111111111111111111111111111');
-      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT).to.equal('0x4444444444444444444444444444444444444444444444444444444444444444');
+      expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_BATCH_HASH');
+      expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT');
       expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__LAST_BATCH_INDEX).to.equal('4379');
       expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON');
       expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK).to.equal('30000000');

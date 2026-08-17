@@ -14,9 +14,7 @@ function writeWithdrawalValues(root: string, overrides: Record<string, string | 
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__KEY_PREFIX: 'blobs',
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL: 'https://blob-archive.example.com',
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS: '10000',
-    DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID: '11155111',
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL: 'https://ethereum.example.com',
-    DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID: '12345',
     DOGEOS_WITHDRAWAL_NETWORK_STR: 'testnet',
     ...overrides,
   }
@@ -62,12 +60,13 @@ describe('proof-coordinator-scaffold', () => {
       worker_auth_token_file: '/app/secrets/prover-worker-token',
     })
     expect(parsed.verifier.verifier_import_mode).to.equal('production')
+    expect(parsed.protocol_context_json).to.equal('/app/protocol_context.json')
     const batchSubprocess = parsed.materializer.scroll_batch.subprocess
     expect(batchSubprocess.l2_rpc_url).to.equal('http://l2-rpc:8545')
     expect(batchSubprocess.binary_path).to.equal('/usr/local/bin/scroll-runtime-materializer')
     expect(batchSubprocess.ethereum_da.l1_rpc_url).to.equal('https://ethereum.example.com')
-    expect(batchSubprocess.ethereum_da.eth_chain_id).to.equal(11_155_111)
-    expect(batchSubprocess.ethereum_da.l2_chain_id).to.equal(12_345)
+    expect(batchSubprocess.ethereum_da).not.to.have.property('eth_chain_id')
+    expect(batchSubprocess.ethereum_da).not.to.have.property('l2_chain_id')
     expect(batchSubprocess.ethereum_da.blob_source.aws_s3).to.deep.equal({
       key_prefix: 'blobs',
       url: 'https://blob-archive.example.com',
@@ -93,8 +92,6 @@ rpc_url = "http://l2-rpc-from-toml:8545"
 
 [ethereum_da]
 l1_rpc_url = "https://ethereum.example.com"
-eth_chain_id = 11155111
-l2_chain_id = 12345
 
 [ethereum_da.blob_source]
 timeout_ms = 10000

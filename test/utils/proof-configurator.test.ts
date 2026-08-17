@@ -119,8 +119,9 @@ describe('proof-configurator', () => {
       proofCoordinator: { config: { required: true } },
     }))
     fs.mkdirSync(path.join(root, 'proof-coordinator'), { recursive: true })
-    fs.writeFileSync(path.join(root, 'proof-coordinator/ProofCoordinator.toml'), `# user comment must survive
+fs.writeFileSync(path.join(root, 'proof-coordinator/ProofCoordinator.toml'), `# user comment must survive
 poll_interval_ms = 2345
+protocol_context_json = "/app/protocol_context.json"
 
 [auth]
 bearer_token_file = "/run/secrets/proof-work-token"
@@ -166,8 +167,6 @@ subprocess_timeout_ms = 3600000
 
 [materializer.scroll_batch.subprocess.ethereum_da]
 l1_rpc_url = "https://ethereum.example.com"
-eth_chain_id = 11155111
-l2_chain_id = 12345
 artifact_store_root = "/app/data/scroll-batch-eth-da/blobs"
 artifact_metadata_sqlite_path = "/app/data/scroll-batch-eth-da/meta.sqlite"
 
@@ -189,8 +188,6 @@ network = "testnet"
 
 [materializer.bridge.ethereum_da]
 l1_rpc_url = "https://ethereum.example.com"
-eth_chain_id = 11155111
-l2_chain_id = 12345
 artifact_store_root = "/app/data/eth-da/blobs"
 artifact_metadata_sqlite_path = "/app/data/eth-da/meta.sqlite"
 
@@ -529,8 +526,6 @@ rpc_url = "http://l2-rpc:8545"
 
 [ethereum_da]
 l1_rpc_url = "https://ethereum.example.com"
-eth_chain_id = 11155111
-l2_chain_id = 12345
 
 [ethereum_da.blob_source.aws_s3]
 url = "https://blob-archive.example.com"
@@ -973,6 +968,7 @@ mode = "disabled"
     const configPath = path.join(dir, 'proof-coordinator/ProofCoordinator.toml')
     fs.writeFileSync(configPath, `poll_interval_ms = 1000
 lease_ttl_ms = 60000
+protocol_context_json = "/app/protocol_context.json"
 
 [auth]
 bearer_token_file = "/app/secrets/proof-work-token"
@@ -1005,8 +1001,6 @@ network = "testnet"
 
 [materializer.bridge.ethereum_da]
 l1_rpc_url = "https://ethereum.example.com"
-eth_chain_id = 11155111
-l2_chain_id = 12345
 artifact_store_root = "/app/data/eth-da/blobs"
 artifact_metadata_sqlite_path = "/app/data/eth-da/meta.sqlite"
 
@@ -1215,8 +1209,6 @@ rpc_url = "http://l2-rpc:8545"
 
 [ethereum_da]
 l1_rpc_url = "https://ethereum.example.com"
-eth_chain_id = 11155111
-l2_chain_id = 12345
 
 [ethereum_da.blob_source]
 timeout_ms = 10000

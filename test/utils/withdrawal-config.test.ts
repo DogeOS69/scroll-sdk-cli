@@ -11,16 +11,13 @@ import {
 } from '../../src/utils/withdrawal-config.js'
 
 const FACTS_INPUT = {
-  bridgeAddress: 'DBRIDGE1',
   dogecoinIndexerStartHeight: 1234,
   dogecoinRpcUrl: 'http://dogecoin:22555',
   ethereumDa: {
     beaconRpcUrl: 'https://beacon.example.com',
-    ethChainId: 11_155_111,
     expectedBatcherAddress: '0xbatcher',
     inboxWorkerStartBlock: '777',
     l1RpcUrl: 'https://ethereum.example.com',
-    l2ChainId: '12345',
     minFinality: 'finalized',
     s3: {
       enabled: true,
@@ -30,8 +27,6 @@ const FACTS_INPUT = {
       treatForbiddenAsMissing: 'true',
     },
   },
-  genesisSequencerTxid: 'ff'.repeat(32),
-  genesisSequencerVout: '1',
   initialBridgeRedeemScriptHex: 'aabb',
   l2BootstrapNextStartingBlockHeight: '99',
   l2MessageQueueAddress: '0xqueue',
@@ -43,10 +38,17 @@ const FACTS_INPUT = {
 describe('withdrawal-config deployment block', () => {
   it('builds typed TOML facts from string inputs', () => {
     const { defaults, deletePaths, facts } = buildWithdrawalDeploymentFacts(FACTS_INPUT)
-    expect(deletePaths).to.deep.equal([])
-    expect((facts as any).genesis_sequencer_vout).to.equal(1)
-    expect((facts as any).ethereum_da.eth_chain_id).to.equal(11_155_111)
-    expect((facts as any).ethereum_da.l2_chain_id).to.equal(12_345)
+    expect(deletePaths).to.include.deep.members([
+      ['bridge_address'],
+      ['genesis_sequencer_txid'],
+      ['genesis_sequencer_vout'],
+      ['ethereum_da', 'eth_chain_id'],
+      ['ethereum_da', 'l2_chain_id'],
+    ])
+    expect((facts as any).bridge_address).to.equal(undefined)
+    expect((facts as any).genesis_sequencer_vout).to.equal(undefined)
+    expect((facts as any).ethereum_da.eth_chain_id).to.equal(undefined)
+    expect((facts as any).ethereum_da.l2_chain_id).to.equal(undefined)
     expect((facts as any).ethereum_da.inbox_worker.expected_batchers).to.deep.equal(['0xbatcher'])
     expect((facts as any).ethereum_da.inbox_worker.start_block).to.equal(777)
     expect((facts as any).ethereum_da.blob_source.aws_s3.treat_forbidden_as_missing).to.equal(true)
@@ -59,7 +61,7 @@ describe('withdrawal-config deployment block', () => {
       ...FACTS_INPUT,
       ethereumDa: { ...FACTS_INPUT.ethereumDa, s3: { enabled: false } },
     })
-    expect(deletePaths).to.deep.equal([['ethereum_da', 'blob_source', 'aws_s3']])
+    expect(deletePaths).to.deep.include(['ethereum_da', 'blob_source', 'aws_s3'])
     expect((facts as any).ethereum_da.blob_source.aws_s3).to.equal(undefined)
   })
 

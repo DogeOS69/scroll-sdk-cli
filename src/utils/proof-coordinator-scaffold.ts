@@ -33,9 +33,7 @@ interface ScaffoldFacts {
   blobTimeoutMs: number
   dogecoinNetwork: string
   dogecoinRpcUrl: string
-  ethChainId: number
   l1RpcUrl: string
-  l2ChainId: number
   l2RpcUrl: string
   source: string
 }
@@ -51,9 +49,7 @@ const WP_ENV = {
   blobTimeoutMs: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS',
   dogecoinNetwork: 'DOGEOS_WITHDRAWAL_NETWORK_STR',
   dogecoinRpcUrl: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL',
-  ethChainId: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID',
   l1RpcUrl: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL',
-  l2ChainId: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID',
   l2RpcUrl: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL',
 } as const
 
@@ -109,15 +105,7 @@ function readFactsFromWithdrawalToml(configPath: string): ScaffoldFacts {
     ),
     dogecoinNetwork: requireResolved(parsed.network_str, at('network_str')),
     dogecoinRpcUrl: requireResolved(parsed.dogecoin_rpc_url, at('dogecoin_rpc_url')),
-    ethChainId: requirePositiveIntegerString(
-      requireResolved(parsed.ethereum_da?.eth_chain_id, at('ethereum_da.eth_chain_id')),
-      at('ethereum_da.eth_chain_id')
-    ),
     l1RpcUrl: requireResolved(parsed.ethereum_da?.l1_rpc_url, at('ethereum_da.l1_rpc_url')),
-    l2ChainId: requirePositiveIntegerString(
-      requireResolved(parsed.ethereum_da?.l2_chain_id, at('ethereum_da.l2_chain_id')),
-      at('ethereum_da.l2_chain_id')
-    ),
     l2RpcUrl: requireResolved(parsed.dogeos_indexer?.rpc_url, at('dogeos_indexer.rpc_url')),
     source: configPath,
   }
@@ -146,9 +134,7 @@ function readFactsFromValuesEnv(valuesDir: string): ScaffoldFacts {
     ),
     dogecoinNetwork: requireResolved(env[WP_ENV.dogecoinNetwork], at(WP_ENV.dogecoinNetwork)),
     dogecoinRpcUrl: requireResolved(env[WP_ENV.dogecoinRpcUrl], at(WP_ENV.dogecoinRpcUrl)),
-    ethChainId: requirePositiveIntegerString(requireResolved(env[WP_ENV.ethChainId], at(WP_ENV.ethChainId)), at(WP_ENV.ethChainId)),
     l1RpcUrl: requireResolved(env[WP_ENV.l1RpcUrl], at(WP_ENV.l1RpcUrl)),
-    l2ChainId: requirePositiveIntegerString(requireResolved(env[WP_ENV.l2ChainId], at(WP_ENV.l2ChainId)), at(WP_ENV.l2ChainId)),
     l2RpcUrl: requireResolved(env[WP_ENV.l2RpcUrl], at(WP_ENV.l2RpcUrl)),
     source: valuesPath,
   }
@@ -159,8 +145,6 @@ const q = (value: string): string => JSON.stringify(value)
 function ethereumDaSection(label: string, dataRoot: string, facts: ScaffoldFacts, providerToml: string): string {
   return `[${label}]
 l1_rpc_url = ${q(facts.l1RpcUrl)}
-eth_chain_id = ${facts.ethChainId}
-l2_chain_id = ${facts.l2ChainId}
 artifact_store_root = ${q(`${dataRoot}/blobs`)}
 artifact_metadata_sqlite_path = ${q(`${dataRoot}/meta.sqlite`)}
 
@@ -242,6 +226,7 @@ ${ethereumDaSection('materializer.scroll_batch.subprocess.ethereum_da', '/app/da
 # below. Review every value before production use.
 poll_interval_ms = 1000
 lease_ttl_ms = 60000
+protocol_context_json = "/app/protocol_context.json"
 
 [auth]
 bearer_token_file = "/app/secrets/proof-work-token"

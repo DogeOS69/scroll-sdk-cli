@@ -117,6 +117,9 @@ export function renderDisabledSourceSetToml(): string {
 
 export function renderSignerPolicyEnv(input: SignerPolicyBundleInput): string {
   const profile = signerRuntimePolicyProfile(input.mode)
+  const artifactAllowedOrigins = input.signerProofArtifactBaseUrl
+    ? new URL(input.signerProofArtifactBaseUrl).origin
+    : ''
   return [
     `# Post-genesis ${input.mode} proof-system policy for a partner-operated attestation-signer.`,
     '# Apply next to the operator-owned WIF/KMS and release-pin settings, then restart.',
@@ -128,21 +131,11 @@ export function renderSignerPolicyEnv(input: SignerPolicyBundleInput): string {
     `ATTESTATION_SIGNER_POLICY_MODE=${profile.policyMode}`,
     `ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS=${profile.allowUnimplementedChecks}`,
     `ATTESTATION_SIGNER_NETWORK=${input.network}`,
-    `ATTESTATION_SIGNER_PROTOCOL_INSTANCE_ID=${input.protocolInstanceId}`,
-    `ATTESTATION_SIGNER_BRIDGE_NAMESPACE_ID=${input.bridgeNamespaceId}`,
-    `ATTESTATION_SIGNER_ACTIVE_BRIDGE_KEY_HASH=${input.activeBridgeKeyHash}`,
-    `ATTESTATION_SIGNER_SUPPORTED_SIGNING_POLICY_VERSIONS=${input.supportedSigningPolicyVersions}`,
-    ...(input.mode === 'disabled' ? [] : [
-      'ATTESTATION_SIGNER_VERIFIER_REGISTRY_TOML=/etc/dogeos/verifier-registry.toml',
-      'ATTESTATION_SIGNER_SOURCE_SET_TOML=/etc/dogeos/source-set.toml',
-    ]),
-    `ATTESTATION_SIGNER_TEE_ALLOWED_SIGNER_IDS=${input.mode === 'disabled' ? '' : input.teeAllowedSignerIds}`,
-    `ATTESTATION_SIGNER_ENVELOPE_ALLOWED_TEE_SIGNER_IDS=${input.mode === 'disabled' ? '' : input.teeAllowedSignerIds}`,
-    `ATTESTATION_SIGNER_ENVELOPE_ALLOWED_PROOF_TRIPLES=${input.mode === 'disabled' ? '' : input.allowedProofTriples}`,
-    `ATTESTATION_SIGNER_ENVELOPE_MAX_PROOF_ARTIFACTS=${profile.envelopeMaxProofArtifacts}`,
+    'ATTESTATION_SIGNER_PROTOCOL_CONTEXT_JSON=/etc/dogeos/protocol_context.json',
+    ...(artifactAllowedOrigins
+      ? [`ATTESTATION_SIGNER_ARTIFACT_ALLOWED_ORIGINS=${artifactAllowedOrigins}`]
+      : []),
     `ATTESTATION_SIGNER_TSO_URL=${input.tsoUrl}`,
-    'ATTESTATION_SIGNER_TSO_CALLBACK_PHASE=attestation',
-    `ATTESTATION_SIGNER_PROOF_ARTIFACT_FETCH_MODE=${profile.proofArtifactFetchMode}`,
     '',
   ].join('\n')
 }
@@ -250,6 +243,7 @@ export SIGNER_ID='<your signer id from the table above>'
 export SIGNER_ENDPOINT="$(SIGNER_ID="$SIGNER_ID" node -p 'JSON.parse(require("fs").readFileSync("signer-" + process.env.SIGNER_ID + "/descriptor.json", "utf8")).endpoint')"
 
 cp signer-policy-bundle/signer-policy.env docker-compose/signer-policy.env
+cp signer-policy-bundle/protocol_context.json docker-compose/policy/protocol_context.json
 cp signer-policy-bundle/verifier-registry.toml docker-compose/policy/verifier-registry.toml
 cp signer-policy-bundle/source-set.toml docker-compose/policy/source-set.toml
 

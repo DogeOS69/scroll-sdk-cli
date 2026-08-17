@@ -12,7 +12,6 @@ import * as path from 'node:path'
 import type { DogeConfig } from '../../types/doge-config.js'
 
 import {
-  GENERATE_BRIDGE_INFO_FILE,
   L1_INTERFACE_BEACON_API_ENDPOINT,
   L1_INTERFACE_RPC_ENDPOINT,
   YAML_DUMP_OPTIONS,
@@ -34,7 +33,6 @@ import {
   reconcileProofKubernetes,
 } from '../../utils/proof-kubernetes-reconciler.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
-import { deriveBridgeNamespaceId } from '../../utils/signer-policy-derivation.js'
 import {
   getRequiredManagedSignerConfig,
   isAwsKmsSigner,
@@ -193,22 +191,16 @@ const CUBESIGNER_POLICY_REQUEST_CONTRACT =
 
 /**
  * Build the non-secret CubeSigner runtime projection owned by prep-charts.
- * Bridge identity is derived from bridge-init output, never from the PSBT or
- * independently authored Helm values. Reviewed production-policy evidence is
- * projected only when it exists in doge-config; absent evidence stays blank in
- * the production template so /ready fails closed.
+ * Protocol identity is resolved by the signer from the shared canonical
+ * protocol context. Reviewed production-policy evidence is projected only
+ * when it exists in doge-config; absent evidence stays blank in the production
+ * template so /ready fails closed.
  */
 export function buildCubesignerPrepEnv(
   config: Pick<DogeConfig, 'cubesigner' | 'network'>,
-  bridgeNamespaceId: string,
 ): Record<string, string> {
-  if (!/^0x[\da-f]{40}$/.test(bridgeNamespaceId)) {
-    throw new Error('CubeSigner bridge namespace id must be 0x-prefixed lowercase 20-byte hex')
-  }
-
   const env: Record<string, string> = {
     CS_SESSIONS_DIR: '/app/.sessions',
-    DOGEOS_CUBESIGNER_SIGNER_BRIDGE_NAMESPACE_ID: bridgeNamespaceId,
     DOGEOS_CUBESIGNER_SIGNER_LOG_LEVEL: 'info',
     DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_REQUEST_JSON_BYTES: '393216',
     DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_RESPONSE_JSON_BYTES: '393216',
@@ -220,6 +212,7 @@ export function buildCubesignerPrepEnv(
     DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT:
       CUBESIGNER_POLICY_REQUEST_CONTRACT,
     DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION: '0.4.152-0',
+    DOGEOS_CUBESIGNER_SIGNER_PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
     DOGEOS_CUBESIGNER_SIGNER_SESSION_KEEP_ALIVE_INTERVAL: '3600000',
     DOGEOS_CUBESIGNER_SIGNER_SIGNATURE_MODE: 'ecdsa',
     NETWORK: config.network,
@@ -388,8 +381,6 @@ function removeChartResourceNameOverrides(values: any): void {
   if (Object.keys(values.global).length === 0) delete values.global
 }
 
-const ETH_DA_ZERO_HASH = '0x0000000000000000000000000000000000000000000000000000000000000000'
-
 const FEE_ORACLE_LEGACY_CONFIGMAP_PREFIXES = [
   'DOGEOS_FEE_ORACLE_DOGECOIN__',
   'DOGEOS_FEE_ORACLE_CELESTIA__',
@@ -528,9 +519,7 @@ export function buildFeeOraclePrepEnv(input: {
 
 export function buildEthDaSubmitterPrepEnv(input: {
   batch?: NonNullable<NonNullable<DogeConfig['ethereumDa']>['batch']> | undefined
-  ethereumChainId: number | string | undefined
   ethereumRpcUrl: string | undefined
-  l2ChainId: number | string | undefined
   l2RpcUrl: string | undefined
   l2StartBlockNumber?: number | string | undefined
   publish?: NonNullable<NonNullable<DogeConfig['ethereumDa']>['publish']> | undefined
@@ -547,23 +536,17 @@ export function buildEthDaSubmitterPrepEnv(input: {
   s3UploadingTimeoutMs?: number | string | undefined
 }): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = {
-    DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__ETH_CHAIN_ID: input.ethereumChainId === undefined ? undefined : String(input.ethereumChainId),
-    DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__L2_CHAIN_ID: input.l2ChainId === undefined ? undefined : String(input.l2ChainId),
+    DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_JSON_PATH: '/app/genesis/genesis.json',
     DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: input.ethereumRpcUrl,
     DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: input.l2RpcUrl,
     DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER: optionalConfigString(input.l2StartBlockNumber),
+    DOGEOS_ETH_DA_SUBMITTER_PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
   }
 
   const {batch} = input
   if (batch) {
     const {cutover} = batch
     env.DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION = optionalConfigString(batch.compression) ?? 'auto'
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_BATCH_HASH = optionalConfigString(batch.genesisBatchHash) ?? optionalConfigString(cutover?.lastBatchHash) ?? ETH_DA_ZERO_HASH
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_RELAYED_DEPOSIT_INDEX = String(batch.genesisNextRelayedDepositIndex ?? cutover?.nextRelayedDepositIndex ?? 0)
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_WITHDRAW_INDEX = String(batch.genesisNextWithdrawIndex ?? cutover?.nextWithdrawIndex ?? 0)
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_RELAYED_DEPOSIT_QUEUE_HASH = optionalConfigString(batch.genesisRelayedDepositQueueHash) ?? optionalConfigString(cutover?.relayedDepositQueueHash) ?? ETH_DA_ZERO_HASH
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_STATE_ROOT = optionalConfigString(batch.genesisStateRoot) ?? optionalConfigString(cutover?.stateRoot) ?? ETH_DA_ZERO_HASH
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT = optionalConfigString(batch.genesisWithdrawRoot) ?? optionalConfigString(cutover?.withdrawRoot) ?? ETH_DA_ZERO_HASH
     env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_BLOCKS_PER_CHUNK = String(batch.maxBlocksPerChunk ?? 128)
     env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_CHUNKS_PER_BATCH = String(batch.maxChunksPerBatch ?? 1)
     env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK = String(batch.maxL2GasPerChunk ?? 6_000_000)
@@ -622,7 +605,7 @@ export function buildEthDaSubmitterPrepEnv(input: {
 
 export function applyEthDaSubmitterInitialBatchSidecar(
   productionYaml: any,
-  _initialBatchSidecarJson: string | undefined
+  _initialBatchSidecarJson?: string
 ): PrepChartChange[] {
   const changes: PrepChartChange[] = []
   const envData = productionYaml.configMaps?.env?.data
@@ -755,6 +738,7 @@ export function validateDogeConfigEthereumDaForPrep(ethereumDa: DogeConfig['ethe
         'has been removed from dogeos-core; remove this field and use the persisted cutover frontier instead',
       )
     }
+
     validateOptionalIntegerConfig(errors, 'ethereumDa.batch.genesisNextRelayedDepositIndex', batch.genesisNextRelayedDepositIndex, 0, 'a non-negative integer')
     validateOptionalIntegerConfig(errors, 'ethereumDa.batch.genesisNextWithdrawIndex', batch.genesisNextWithdrawIndex, 0, 'a non-negative integer')
     validateOptionalIntegerConfig(errors, 'ethereumDa.batch.maxBlocksPerChunk', batch.maxBlocksPerChunk, 1, 'a positive integer')
@@ -1048,7 +1032,18 @@ export function removeConfigMapEnvKeys(
 
 export function scrubL1InterfaceRetiredEnv(productionYaml: any): PrepChartChange[] {
   return removeConfigMapEnvKeys(productionYaml, [
+    'DOGEOS_L1_INTERFACE_CHAIN_ID',
+    'DOGEOS_L1_INTERFACE_ETHEREUM_DA__ETH_CHAIN_ID',
+    'DOGEOS_L1_INTERFACE_ETHEREUM_DA__L2_CHAIN_ID',
     'DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER',
+    'DOGEOS_L1_INTERFACE_L1_CHAIN_ID',
+    'DOGEOS_L1_INTERFACE_L1_MESSAGE_QUEUE_ADDRESS',
+    'DOGEOS_L1_INTERFACE_L1_MESSAGE_QUEUE_V2_ADDRESS',
+    'DOGEOS_L1_INTERFACE_L2_MESSENGER_ADDRESS',
+    'DOGEOS_L1_INTERFACE_L2_MOAT_CONTRACT_ADDRESS',
+    'DOGEOS_L1_INTERFACE_SCROLL_CHAIN_ADDRESS',
+    'DOGEOS_L1_INTERFACE_SCROLL_MESSENGER_ADDRESS',
+    'DOGEOS_L1_INTERFACE_SYSTEM_CONFIG_ADDRESS',
   ])
 }
 
@@ -1079,6 +1074,32 @@ export function removeEnvArrayKeys(
   }
 
   return changes
+}
+
+export function ensureConfigMapFileMount(
+  productionYaml: any,
+  key: string,
+  mountPath: string,
+  name: string,
+): PrepChartChange[] {
+  productionYaml.persistence ||= {}
+  const expected = {
+    enabled: true,
+    mountPath,
+    name,
+    readOnly: true,
+    subPath: path.basename(mountPath),
+    type: 'configMap',
+  }
+  const oldValue = productionYaml.persistence[key]
+  if (JSON.stringify(oldValue) === JSON.stringify(expected)) return []
+
+  productionYaml.persistence[key] = expected
+  return [{
+    key: `persistence.${key}`,
+    newValue: JSON.stringify(expected),
+    oldValue: JSON.stringify(oldValue ?? 'undefined'),
+  }]
 }
 
 const WITHDRAWAL_LEGACY_PROOF_ENV_KEYS = new Set([
@@ -1177,14 +1198,10 @@ export default class SetupPrepCharts extends Command {
     'CHAIN_ID_L1': 'general.CHAIN_ID_L1',
     'CHAIN_ID_L2': 'general.CHAIN_ID_L2',
     'COORDINATOR_API_HOST': 'ingress.COORDINATOR_API_HOST',
-    'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__ETH_CHAIN_ID': 'ethereumDa.chainId',
-    'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__L2_CHAIN_ID': 'general.CHAIN_ID_L2',
     'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL': 'ethereumDa.submitterRpcUrl',
     'DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL': 'general.L2_RPC_ENDPOINT',
-    'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID': 'ethereumDa.chainId',
     'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__EXPECTED_BATCHERS': 'signers.l1CommitSender.expectedAddress',
     'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL': 'ethereumDa.submitterRpcUrl',
-    'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID': 'general.CHAIN_ID_L2',
     // Add ingress host mappings
     'FRONTEND_HOST': 'ingress.FRONTEND_HOST',
     'GRAFANA_HOST': 'ingress.GRAFANA_HOST',
@@ -2745,20 +2762,16 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__SEQUENCER_ADDRESS": this.outputTestData.sequencer_address,
           "DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT": String(Math.max(0, dogecoinIndexerStartHeight)),
           "DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL": dogecoinInternalUrl,
-          "DOGEOS_L1_INTERFACE_ETHEREUM_DA__ETH_CHAIN_ID": String(this.getConfigValue("ethereumDa.chainId")),
           "DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL": this.getConfigValue("ethereumDa.submitterRpcUrl"),
-          "DOGEOS_L1_INTERFACE_ETHEREUM_DA__L2_CHAIN_ID": String(this.getConfigValue("general.CHAIN_ID_L2")),
+          "DOGEOS_L1_INTERFACE_GENESIS_JSON_PATH": "/app/genesis/genesis.json",
           "DOGEOS_L1_INTERFACE_L1_BASE_FEE_PER_GAS": this.getConfigValue("genesis.BASE_FEE_PER_GAS").toString(),
           "DOGEOS_L1_INTERFACE_L1_GAS_LIMIT": "30000000",
           "DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK": String(Math.max(0, l1GenesisBlock)),
-          "DOGEOS_L1_INTERFACE_L2_MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR"),
-          "DOGEOS_L1_INTERFACE_L2_MOAT_CONTRACT_ADDRESS": this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
           "DOGEOS_L1_INTERFACE_NETWORK_STR": this.withdrawalProcessorConfig.network_str,
           "DOGEOS_L1_INTERFACE_REPLAY_READ__L2_BOOTSTRAP_NEXT_STARTING_BLOCK_HEIGHT": this.dogeConfig.defaults?.l2BootstrapNextStartingBlockHeight,
           "DOGEOS_L1_INTERFACE_REPLAY_READ__MAINTAINER_ENABLED": "true",
+          "DOGEOS_L1_INTERFACE_REPLAY_READ__PROTOCOL_CONTEXT_JSON": "/app/protocol_context.json",
           "DOGEOS_L1_INTERFACE_REPLAY_READ__REQUIRE_FULL_VALIDATION": "false",
-          "DOGEOS_L1_INTERFACE_SCROLL_CHAIN_ADDRESS": this.getConfigValue("contractsFile.L1_SCROLL_CHAIN_PROXY_ADDR"),
-          // "DOGEOS_L1_INTERFACE_SCROLL_MESSENGER_ADDRESS": this.getConfigValue("contractsFile.L1_SCROLL_MESSENGER_PROXY_ADDR")
         }
 
         const l1InterfaceCleanupChanges = [
@@ -2766,6 +2779,18 @@ export default class SetupPrepCharts extends Command {
           ...removeConfigMapEnvKeys(productionYaml, [
             'DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__KIND',
           ]),
+          ...ensureConfigMapFileMount(
+            productionYaml,
+            'genesis',
+            '/app/genesis/genesis.json',
+            'genesis-config',
+          ),
+          ...ensureConfigMapFileMount(
+            productionYaml,
+            'protocol-context',
+            '/app/protocol_context.json',
+            'protocol-context-config',
+          ),
         ]
         if (l1InterfaceCleanupChanges.length > 0) {
           changes.push(...l1InterfaceCleanupChanges)
@@ -2827,16 +2852,13 @@ export default class SetupPrepCharts extends Command {
         // the managed deployment block of the native WithdrawalProcessor.toml.
         // Operator tuning of other keys inside that block survives the merge.
         const { defaults, deletePaths, facts } = buildWithdrawalDeploymentFacts({
-          bridgeAddress: this.withdrawalProcessorConfig.bridge_address,
           dogecoinIndexerStartHeight,
           dogecoinRpcUrl: dogecoinInternalUrl,
           ethereumDa: {
             beaconRpcUrl: this.getConfigValue('ethereumDa.beaconRpcUrl'),
-            ethChainId: this.getConfigValue('ethereumDa.chainId'),
             expectedBatcherAddress: this.getConfigValue('accounts.L1_COMMIT_SENDER_ADDR'),
             inboxWorkerStartBlock: this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock,
             l1RpcUrl: this.getConfigValue('ethereumDa.submitterRpcUrl'),
-            l2ChainId: this.getConfigValue('general.CHAIN_ID_L2'),
             minFinality: this.getConfigValue('ethereumDa.minFinality'),
             s3: {
               enabled: s3ArchiveEnabled,
@@ -2846,8 +2868,6 @@ export default class SetupPrepCharts extends Command {
               treatForbiddenAsMissing: s3Archive?.treatForbiddenAsMissing,
             },
           },
-          genesisSequencerTxid: this.withdrawalProcessorConfig.genesis_sequencer_txid,
-          genesisSequencerVout: this.withdrawalProcessorConfig.genesis_sequencer_vout,
           initialBridgeRedeemScriptHex: this.bridgeConfig.redeem_script_hex,
           l2BootstrapNextStartingBlockHeight: this.dogeConfig.defaults?.l2BootstrapNextStartingBlockHeight,
           l2MessageQueueAddress: this.getConfigValue('contractsFile.L2_MESSAGE_QUEUE_ADDR'),
@@ -2912,6 +2932,17 @@ export default class SetupPrepCharts extends Command {
           updated = true
         }
 
+        const withdrawalContextMountChanges = ensureConfigMapFileMount(
+          productionYaml,
+          'protocol-context',
+          '/app/protocol_context.json',
+          'protocol-context-config',
+        )
+        if (withdrawalContextMountChanges.length > 0) {
+          changes.push(...withdrawalContextMountChanges)
+          updated = true
+        }
+
         const proofSystemMode = this.proofIntent.intent.mode
         if (ensureWithdrawalProofActivationSwitch(productionYaml, proofSystemMode)) {
           changes.push({
@@ -2942,28 +2973,25 @@ export default class SetupPrepCharts extends Command {
           this.error(`${chartName}: env not found in config`);
         }
 
-        const namespace = deriveBridgeNamespaceId(
-          path.join(process.cwd(), GENERATE_BRIDGE_INFO_FILE),
-        )
-        if (!namespace) {
-          this.error(
-            `${GENERATE_BRIDGE_INFO_FILE} missing a canonical namespace_id; ` +
-            'run scrollsdk setup bridge-init --step 3-bridge-info first',
-          )
-        }
-
         const cubesignerChanges = [
           ...removeEnvArrayKeys(productionYaml, [
             // Retired compatibility/configuration surfaces. The signer now has
             // one correctness/TEE role and the prefixed cap is authoritative.
             'CUBESIGNER_MAX_PSBT_BASE64_LEN',
+            'DOGEOS_CUBESIGNER_SIGNER_BRIDGE_NAMESPACE_ID',
             'DOGEOS_CUBESIGNER_SIGNER_SIGNER_ROLE',
           ]),
           ...applyCubesignerPrepEnv(
             productionYaml,
-            buildCubesignerPrepEnv(this.dogeConfig, namespace.value),
+            buildCubesignerPrepEnv(this.dogeConfig),
           ),
           ...ensureCubesignerPolicyKeyBinding(productionYaml),
+          ...ensureConfigMapFileMount(
+            productionYaml,
+            'protocol-context',
+            '/app/protocol_context.json',
+            'protocol-context-config',
+          ),
         ]
         if (cubesignerChanges.length > 0) {
           updated = true
@@ -2984,9 +3012,7 @@ export default class SetupPrepCharts extends Command {
         const s3Archive = this.dogeConfig.ethereumDa?.blobArchive?.s3
         const todoMappings = buildEthDaSubmitterPrepEnv({
           batch: this.dogeConfig.ethereumDa?.batch,
-          ethereumChainId: this.getConfigValue("ethereumDa.chainId"),
           ethereumRpcUrl: this.getConfigValue("ethereumDa.submitterRpcUrl"),
-          l2ChainId: this.getConfigValue("general.CHAIN_ID_L2"),
           l2RpcUrl: this.getConfigValue("general.L2_RPC_ENDPOINT"),
           l2StartBlockNumber: this.dogeConfig.ethereumDa?.l2StartBlockNumber,
           publish: this.dogeConfig.ethereumDa?.publish,
@@ -3002,6 +3028,35 @@ export default class SetupPrepCharts extends Command {
           s3Region: s3Archive?.region,
           s3UploadingTimeoutMs: s3Archive?.uploadingTimeoutMs,
         })
+
+        const retiredSubmitterChanges = [
+          ...removeConfigMapEnvKeys(productionYaml, [
+            'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__ETH_CHAIN_ID',
+            'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__L2_CHAIN_ID',
+            'DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_BATCH_HASH',
+            'DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_STATE_ROOT',
+            'DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT',
+            'DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_WITHDRAW_INDEX',
+            'DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_RELAYED_DEPOSIT_INDEX',
+            'DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_RELAYED_DEPOSIT_QUEUE_HASH',
+          ]),
+          ...ensureConfigMapFileMount(
+            productionYaml,
+            'genesis',
+            '/app/genesis/genesis.json',
+            'genesis-config',
+          ),
+          ...ensureConfigMapFileMount(
+            productionYaml,
+            'protocol-context',
+            '/app/protocol_context.json',
+            'protocol-context-config',
+          ),
+        ]
+        if (retiredSubmitterChanges.length > 0) {
+          changes.push(...retiredSubmitterChanges)
+          updated = true
+        }
 
         const signerConfig = this.requireSigner('l1CommitSender')
         if (signerConfig?.backend === 'aws_kms') {

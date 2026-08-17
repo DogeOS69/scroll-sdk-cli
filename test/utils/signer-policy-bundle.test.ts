@@ -3,7 +3,6 @@ import { expect } from 'chai'
 import type { SignerPolicyBundleInput } from '../../src/utils/signer-policy-bundle.js'
 
 import {
-  DEFAULT_ENVELOPE_MAX_PROOF_ARTIFACTS,
   renderMockSourceSetToml,
   renderPartnerCommands,
   renderSignerPolicyEnv,
@@ -62,16 +61,14 @@ describe('signer policy bundle', () => {
     expect(sourceSet).not.to.include('[dogecoin]')
   })
 
-  it('renders the e2e_harness-compatible mock signer posture with bounded proof and TEE allowlists', () => {
+  it('renders the current mock signer posture from one canonical protocol context', () => {
     const env = envMap(renderSignerPolicyEnv(input('mock')))
     expect(env.ATTESTATION_SIGNER_POLICY_MODE).to.equal('staging_scaffold')
     expect(env.ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS).to.equal('true')
-    expect(env.ATTESTATION_SIGNER_ENVELOPE_MAX_PROOF_ARTIFACTS)
-      .to.equal(String(DEFAULT_ENVELOPE_MAX_PROOF_ARTIFACTS))
-    expect(env.ATTESTATION_SIGNER_ENVELOPE_ALLOWED_PROOF_TRIPLES).to.include('bridge-v1')
-    expect(env.ATTESTATION_SIGNER_ENVELOPE_ALLOWED_TEE_SIGNER_IDS)
-      .to.equal(input('mock').teeAllowedSignerIds)
-    expect(env.ATTESTATION_SIGNER_PROOF_ARTIFACT_FETCH_MODE).to.equal('http')
+    expect(env.ATTESTATION_SIGNER_PROTOCOL_CONTEXT_JSON).to.equal('/etc/dogeos/protocol_context.json')
+    expect(env.ATTESTATION_SIGNER_ARTIFACT_ALLOWED_ORIGINS).to.equal('https://proofs.bridge.example')
+    expect(env).not.to.have.property('ATTESTATION_SIGNER_BRIDGE_NAMESPACE_ID')
+    expect(env).not.to.have.property('ATTESTATION_SIGNER_PROTOCOL_INSTANCE_ID')
     expect(env.ATTESTATION_SIGNER_TSO_URL).to.equal('https://tso.bridge.example')
   })
 
@@ -79,11 +76,7 @@ describe('signer policy bundle', () => {
     const env = envMap(renderSignerPolicyEnv(input('disabled')))
     expect(env.ATTESTATION_SIGNER_POLICY_MODE).to.equal('dev_permissive')
     expect(env.ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS).to.equal('false')
-    expect(env.ATTESTATION_SIGNER_ENVELOPE_MAX_PROOF_ARTIFACTS).to.equal('0')
-    expect(env.ATTESTATION_SIGNER_ENVELOPE_ALLOWED_PROOF_TRIPLES).to.equal('')
-    expect(env.ATTESTATION_SIGNER_PROOF_ARTIFACT_FETCH_MODE).to.equal('disabled')
-    expect(env.ATTESTATION_SIGNER_VERIFIER_REGISTRY_TOML).to.equal(undefined)
-    expect(env.ATTESTATION_SIGNER_SOURCE_SET_TOML).to.equal(undefined)
+    expect(env.ATTESTATION_SIGNER_PROTOCOL_CONTEXT_JSON).to.equal('/etc/dogeos/protocol_context.json')
   })
 
   it('keeps the operator/network flow identical while production changes only the signer safety posture', () => {
@@ -110,6 +103,7 @@ describe('signer policy bundle', () => {
       'scrollsdk signer preflight',
       'scrollsdk setup attestation-signer --threshold <T>',
       'docker compose --project-directory docker-compose up -d',
+      'cp signer-policy-bundle/protocol_context.json docker-compose/policy/protocol_context.json',
       'kubectl -n <namespace> run signer-reachability-partner-a',
       "curl -fsS 'http://10.20.30.40:4040/health'",
     ]) expect(commands).to.include(expected)

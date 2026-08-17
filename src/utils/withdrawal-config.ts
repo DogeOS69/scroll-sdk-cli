@@ -216,16 +216,13 @@ function nonEmpty(value: unknown): string | undefined {
 }
 
 export interface WithdrawalDeploymentFactsInput {
-  bridgeAddress: unknown
   dogecoinIndexerStartHeight: number
   dogecoinRpcUrl: unknown
   ethereumDa: {
     beaconRpcUrl?: unknown
-    ethChainId: unknown
     expectedBatcherAddress?: unknown
     inboxWorkerStartBlock?: unknown
     l1RpcUrl: unknown
-    l2ChainId: unknown
     minFinality?: unknown
     s3?: {
       enabled: boolean
@@ -235,8 +232,6 @@ export interface WithdrawalDeploymentFactsInput {
       treatForbiddenAsMissing?: unknown
     }
   }
-  genesisSequencerTxid: unknown
-  genesisSequencerVout: unknown
   initialBridgeRedeemScriptHex: unknown
   l2BootstrapNextStartingBlockHeight?: unknown
   l2MessageQueueAddress: unknown
@@ -267,7 +262,6 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
   const inboxStartBlock = asInteger(input.ethereumDa.inboxWorkerStartBlock, 'defaults.ethereumDaEmbeddedIndexerStartBlock')
   const beaconRpcUrl = nonEmpty(input.ethereumDa.beaconRpcUrl)
   const facts = {
-    bridge_address: nonEmpty(input.bridgeAddress),
     dogecoin_indexer: {
       start_height: Math.max(0, input.dogecoinIndexerStartHeight),
     },
@@ -289,7 +283,6 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
         } : {}),
         ...(beaconRpcUrl ? { beacon_node: { url: beaconRpcUrl } } : {}),
       },
-      eth_chain_id: asInteger(input.ethereumDa.ethChainId, 'ethereumDa.chainId'),
       ...(inboxStartBlock === undefined && expectedBatcher === undefined ? {} : {
         inbox_worker: {
           ...(expectedBatcher ? { expected_batchers: [expectedBatcher] } : {}),
@@ -297,11 +290,8 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
         },
       }),
       l1_rpc_url: nonEmpty(input.ethereumDa.l1RpcUrl),
-      l2_chain_id: asInteger(input.ethereumDa.l2ChainId, 'general.CHAIN_ID_L2'),
       min_finality: nonEmpty(input.ethereumDa.minFinality),
     },
-    genesis_sequencer_txid: nonEmpty(input.genesisSequencerTxid),
-    genesis_sequencer_vout: asInteger(input.genesisSequencerVout, 'withdrawalProcessor.genesis_sequencer_vout'),
     initial_bridge_redeem_script_hex: nonEmpty(input.initialBridgeRedeemScriptHex),
     l2_bootstrap_next_starting_block_height: asInteger(
       input.l2BootstrapNextStartingBlockHeight,
@@ -376,7 +366,17 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
 
   return {
     defaults,
-    deletePaths: s3Enabled ? [] : [['ethereum_da', 'blob_source', 'aws_s3']],
+    // The current loader rejects these former parallel authorities. Remove
+    // them from an existing scrollsdk-managed block during migration.
+    deletePaths: [
+      ['bridge_address'],
+      ['bridge_script_hex'],
+      ['genesis_sequencer_txid'],
+      ['genesis_sequencer_vout'],
+      ['ethereum_da', 'eth_chain_id'],
+      ['ethereum_da', 'l2_chain_id'],
+      ...(s3Enabled ? [] : [['ethereum_da', 'blob_source', 'aws_s3']]),
+    ],
     facts,
   }
 }
@@ -480,6 +480,7 @@ export function ensureWithdrawalChartWiring(values: Record<string, any>): void {
   if (values.odAnnotations && typeof values.odAnnotations === 'object') {
     values.podAnnotations = { ...values.odAnnotations, ...values.podAnnotations }
   }
+
   delete values.odAnnotations
   values.podAnnotations['checksum/tso-signers'] = '{{ .Values.tsoSigners | toJson | sha256sum }}'
 }

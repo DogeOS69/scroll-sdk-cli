@@ -855,6 +855,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
         'ethereumDa.batch.initialBatchSidecarJson has been removed from dogeos-core; remove it and use the persisted cutover frontier instead',
       )
     }
+
     validateOptionalNonNegativeSafeInteger('ethereumDa.batch.genesisNextRelayedDepositIndex', ethereumDaBatch.genesisNextRelayedDepositIndex)
     validateOptionalNonNegativeSafeInteger('ethereumDa.batch.genesisNextWithdrawIndex', ethereumDaBatch.genesisNextWithdrawIndex)
     validateOptionalPositiveSafeInteger('ethereumDa.batch.maxBlocksPerChunk', ethereumDaBatch.maxBlocksPerChunk)

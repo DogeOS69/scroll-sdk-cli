@@ -22,6 +22,7 @@ import {
   buildRethInitialTrustedPeers,
   buildTsoSigners,
   buildWithdrawalBlobSourcePrepEnv,
+  ensureConfigMapFileMount,
   ensureCubesignerPolicyKeyBinding,
   getEthereumDaS3PublicBaseUrl,
   getEthereumDaS3PublicBlobUrl,
@@ -75,6 +76,27 @@ describe('setup prep-charts generated frontend config', () => {
       REACT_APP_DOGE_NETWORK: 'testnet',
       REACT_APP_ROLLUP: 'DogeOS Devnet',
     })).to.deep.equal({changed: false, content: first.content})
+  })
+})
+
+describe('setup prep-charts ConfigMap file mounts', () => {
+  it('uses the ConfigMap key as subPath so the mount target remains a file', () => {
+    const values: any = {}
+
+    expect(ensureConfigMapFileMount(
+      values,
+      'protocol-context',
+      '/app/protocol_context.json',
+      'protocol-context-config',
+    )).to.have.length(1)
+    expect(values.persistence['protocol-context']).to.deep.equal({
+      enabled: true,
+      mountPath: '/app/protocol_context.json',
+      name: 'protocol-context-config',
+      readOnly: true,
+      subPath: 'protocol_context.json',
+      type: 'configMap',
+    })
   })
 })
 
@@ -247,9 +269,7 @@ describe('setup prep-charts external attestation signer routing', () => {
 })
 
 describe('setup prep-charts CubeSigner production config', () => {
-  const namespace = `0x${'44'.repeat(20)}`
-
-  it('projects bridge identity, exact size caps, and reviewed policy evidence', () => {
+  it('projects the canonical context path, exact size caps, and reviewed policy evidence', () => {
     const env = buildCubesignerPrepEnv({
       cubesigner: {
         productionPolicy: {
@@ -262,10 +282,9 @@ describe('setup prep-charts CubeSigner production config', () => {
         roles: [],
       },
       network: 'testnet',
-    }, namespace)
+    })
 
     expect(env).to.include({
-      DOGEOS_CUBESIGNER_SIGNER_BRIDGE_NAMESPACE_ID: namespace,
       DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_REQUEST_JSON_BYTES: '393216',
       DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_RESPONSE_JSON_BYTES: '393216',
       DOGEOS_CUBESIGNER_SIGNER_MAX_PSBT_BASE64_LEN: '130048',
@@ -274,6 +293,7 @@ describe('setup prep-charts CubeSigner production config', () => {
       DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE: 'production_verifier_key_policy',
       DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROOF_RESOLVER_AUTHORITY:
         'https://proof-policy.example.com',
+      DOGEOS_CUBESIGNER_SIGNER_PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
       DOGEOS_CUBESIGNER_SIGNER_SIGNATURE_MODE: 'ecdsa',
     })
   })
@@ -289,16 +309,16 @@ describe('setup prep-charts CubeSigner production config', () => {
       ...applyCubesignerPrepEnv(values, buildCubesignerPrepEnv({
         cubesigner: {roles: []},
         network: 'testnet',
-      }, namespace)),
+      })),
       ...ensureCubesignerPolicyKeyBinding(values),
     ]
     const env = Object.fromEntries(values.env.map((item: any) => [item.name, item]))
 
     expect(changes.map(change => change.key)).to.include(
-      'env.DOGEOS_CUBESIGNER_SIGNER_BRIDGE_NAMESPACE_ID',
+      'env.DOGEOS_CUBESIGNER_SIGNER_PROTOCOL_CONTEXT_JSON',
     )
     expect(env.KEEP_ME.value).to.equal('yes')
-    expect(env.DOGEOS_CUBESIGNER_SIGNER_BRIDGE_NAMESPACE_ID.value).to.equal(namespace)
+    expect(env.DOGEOS_CUBESIGNER_SIGNER_PROTOCOL_CONTEXT_JSON.value).to.equal('/app/protocol_context.json')
     expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_KEY_IDENTIFIER.valueFrom)
       .to.deep.equal({
         secretKeyRef: {
@@ -308,10 +328,6 @@ describe('setup prep-charts CubeSigner production config', () => {
       })
   })
 
-  it('rejects a namespace that was not canonically derived by bridge-init', () => {
-    expect(() => buildCubesignerPrepEnv({network: 'testnet'}, '44'.repeat(20)))
-      .to.throw('0x-prefixed lowercase 20-byte hex')
-  })
 })
 
 describe('setup prep-charts L2 contract deployment block updates', () => {
@@ -362,10 +378,10 @@ describe('setup prep-charts fee-oracle updates', () => {
       configMaps: {
         env: {
           data: {
+            DOGEOS_FEE_ORACLE__ETHEREUM_DA__CONTRACT_WRITE_MODE: 'live',
             DOGEOS_FEE_ORACLE_CELESTIA__ENABLED: 'false',
             DOGEOS_FEE_ORACLE_DOGECOIN__NETWORK_STR: 'testnet',
             DOGEOS_FEE_ORACLE_DOGECOIN__RPC_URL: 'http://dogecoin:44555',
-            DOGEOS_FEE_ORACLE__ETHEREUM_DA__CONTRACT_WRITE_MODE: 'live',
             DOGEOS_FEE_ORACLE_PRICE_ORACLE__UPDATE_ON_EACH_CYCLE: 'true',
             DOGEOS_FEE_ORACLE_THRESHOLDS__DEFAULT_DOGECOIN_FEE: '1000000',
           },
@@ -424,31 +440,27 @@ describe('setup prep-charts fee-oracle updates', () => {
 describe('setup prep-charts eth-da-submitter updates', () => {
   it('does not include cutover or genesis frontier env because another script owns cutover', () => {
     const env = buildEthDaSubmitterPrepEnv({
-      ethereumChainId: 1,
       ethereumRpcUrl: 'https://eth.example',
-      l2ChainId: 6_281_971,
       l2RpcUrl: 'http://l2-rpc:8545',
     })
 
     expect(env).to.deep.equal({
-      DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__ETH_CHAIN_ID: '1',
-      DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__L2_CHAIN_ID: '6281971',
+      DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_JSON_PATH: '/app/genesis/genesis.json',
       DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: 'https://eth.example',
       DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: 'http://l2-rpc:8545',
+      DOGEOS_ETH_DA_SUBMITTER_PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
     })
 
     for (const key of Object.keys(env)) {
       expect(key).not.to.include('CUTOVER')
-      expect(key).not.to.include('GENESIS')
+      if (key !== 'DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_JSON_PATH') expect(key).not.to.include('GENESIS')
       expect(key).not.to.include('FRONTIER')
     }
   })
 
   it('writes S3 upload env when S3 archive is enabled', () => {
     const env = buildEthDaSubmitterPrepEnv({
-      ethereumChainId: 1,
       ethereumRpcUrl: 'https://eth.example',
-      l2ChainId: 6_281_971,
       l2RpcUrl: 'http://l2-rpc:8545',
       s3Bucket: 'dogeos-da',
       s3Enabled: true,
@@ -481,9 +493,7 @@ describe('setup prep-charts eth-da-submitter updates', () => {
         },
         maxL2GasPerChunk: 30_000_000,
       },
-      ethereumChainId: 1,
       ethereumRpcUrl: 'https://eth.example',
-      l2ChainId: 6_281_971,
       l2RpcUrl: 'http://l2-rpc:8545',
       l2StartBlockNumber: 2_898_792,
       publish: {
@@ -495,8 +505,8 @@ describe('setup prep-charts eth-da-submitter updates', () => {
 
     expect(env.DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER).to.equal('2898792')
     expect(env.DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION).to.equal('none')
-    expect(env.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_BATCH_HASH).to.equal('0x1111111111111111111111111111111111111111111111111111111111111111')
-    expect(env.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT).to.equal('0x4444444444444444444444444444444444444444444444444444444444444444')
+    expect(env).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_BATCH_HASH')
+    expect(env).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT')
     expect(env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__LAST_BATCH_INDEX).to.equal('4379')
     expect(env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__WITHDRAW_ROOT).to.equal('0x4444444444444444444444444444444444444444444444444444444444444444')
     expect(env).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__INITIAL_BATCH_SIDECAR_JSON')
@@ -512,7 +522,7 @@ describe('setup prep-charts eth-da-submitter updates', () => {
       },
       persistence: { 'initial-batch': { enabled: true, mountPath: '/app/config' } },
     }
-    const changes = applyEthDaSubmitterInitialBatchSidecar(values, undefined)
+    const changes = applyEthDaSubmitterInitialBatchSidecar(values)
 
     expect(changes.map(change => change.key)).to.include('configMaps.initial-batch')
     expect(changes.map(change => change.key)).to.include('persistence.initial-batch')
@@ -524,9 +534,7 @@ describe('setup prep-charts eth-da-submitter updates', () => {
   it('does not emit an initial-batch sidecar env or mount for whitespace', () => {
     const env = buildEthDaSubmitterPrepEnv({
       batch: { initialBatchSidecarJson: '   ' },
-      ethereumChainId: 1,
       ethereumRpcUrl: 'https://eth.example',
-      l2ChainId: 6_281_971,
       l2RpcUrl: 'http://l2-rpc:8545',
     })
 

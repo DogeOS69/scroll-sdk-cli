@@ -460,7 +460,7 @@ describe('setup gen-rpc-package env generation', () => {
     expect(env).to.include('RUST_LOG=info')
     expect(env).to.include('DOGEOS_L1_INTERFACE_API_BIND_ADDRESS=0.0.0.0:8545')
     expect(env).to.include('DOGEOS_L1_INTERFACE_BEACON_API_LISTEN_ADDRESS=0.0.0.0:5052')
-    expect(env).to.include('DOGEOS_L1_INTERFACE_CHAIN_ID=6281971')
+    expect(env).not.to.include('DOGEOS_L1_INTERFACE_CHAIN_ID')
     expect(env).to.include('DOGEOS_L1_INTERFACE_DATABASE_URL=sqlite:///data/l1-interface-vo3o.sqlite')
     expect(env).to.include('DOGEOS_L1_INTERFACE_GENESIS_JSON_PATH=/app/genesis/genesis.json')
     expect(env).to.include('DOGEOS_L1_INTERFACE_HEALTH_LISTEN_ADDRESS=0.0.0.0:9090')

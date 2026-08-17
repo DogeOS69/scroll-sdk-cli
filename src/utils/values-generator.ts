@@ -161,7 +161,6 @@ function buildPeerList(spec: DeploymentSpec): string[] {
  */
 type ServiceImageKey = keyof NonNullable<ImagesConfig['services']>
 
-const ZERO_HASH = '0x0000000000000000000000000000000000000000000000000000000000000000'
 const DEFAULT_L1_FEE_VAULT_ADDR = '0x1111111111111111111111111111111111111111'
 
 const ETHEREUM_DA_DEFAULTS = {
@@ -247,12 +246,7 @@ function buildEthDaSubmitterBatchEnv(spec: DeploymentSpec): Record<string, strin
   const {cutover} = batch
   const env: Record<string, string> = {
     DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION: batch.compression ?? 'auto',
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_BATCH_HASH: batch.genesisBatchHash ?? cutover?.lastBatchHash ?? ZERO_HASH,
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_RELAYED_DEPOSIT_INDEX: String(batch.genesisNextRelayedDepositIndex ?? cutover?.nextRelayedDepositIndex ?? 0),
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_WITHDRAW_INDEX: String(batch.genesisNextWithdrawIndex ?? cutover?.nextWithdrawIndex ?? 0),
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_RELAYED_DEPOSIT_QUEUE_HASH: batch.genesisRelayedDepositQueueHash ?? cutover?.relayedDepositQueueHash ?? ZERO_HASH,
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_STATE_ROOT: batch.genesisStateRoot ?? cutover?.stateRoot ?? ZERO_HASH,
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT: batch.genesisWithdrawRoot ?? cutover?.withdrawRoot ?? ZERO_HASH,
+    DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_JSON_PATH: '/app/genesis/genesis.json',
     DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_BLOCKS_PER_CHUNK: String(batch.maxBlocksPerChunk ?? 128),
     DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_CHUNKS_PER_BATCH: String(batch.maxChunksPerBatch ?? 1),
     DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: String(batch.maxL2GasPerChunk ?? 6_000_000),
@@ -687,7 +681,6 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
         data: {
           DOGEOS_L1_INTERFACE_API_BIND_ADDRESS: '0.0.0.0:8545',
           DOGEOS_L1_INTERFACE_BEACON_API_LISTEN_ADDRESS: '0.0.0.0:5052',
-          DOGEOS_L1_INTERFACE_CHAIN_ID: String(spec.network.l2ChainId),
           DOGEOS_L1_INTERFACE_DATABASE_URL: 'sqlite:///data/l1-interface.sqlite',
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__CONFIRMATIONS: String(spec.bridge.confirmationsRequired),
           DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__INDEX_DEPOSITS: 'false',
@@ -698,12 +691,9 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
           DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL: getEthereumDaBeaconRpcUrl(spec),
           DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS: '10000',
           ...buildEthereumDaS3BlobSourceEnv('DOGEOS_L1_INTERFACE_ETHEREUM_DA', spec),
-          DOGEOS_L1_INTERFACE_ETHEREUM_DA__ETH_CHAIN_ID: String(getEthereumDaChainId(spec)),
           DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
-          DOGEOS_L1_INTERFACE_ETHEREUM_DA__L2_CHAIN_ID: String(spec.network.l2ChainId),
           DOGEOS_L1_INTERFACE_GENESIS_JSON_PATH: '/app/genesis/genesis.json',
           DOGEOS_L1_INTERFACE_HEALTH_LISTEN_ADDRESS: '0.0.0.0:9090',
-          DOGEOS_L1_INTERFACE_L1_CHAIN_ID: String(spec.network.l1ChainId),
           DOGEOS_L1_INTERFACE_L1_GAS_LIMIT: '30000000',
           DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK: String(getL1GenesisBlock(spec)),
           DOGEOS_L1_INTERFACE_NETWORK_STR: spec.dogecoin.network,
@@ -741,6 +731,7 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
         mountPath: '/app/genesis/genesis.json',
         name: 'genesis-config',
         readOnly: true,
+        subPath: 'genesis.json',
         type: 'configMap',
       },
       'protocol-context': {
@@ -748,6 +739,7 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
         mountPath: '/app/protocol_context.json',
         name: 'protocol-context-config',
         readOnly: true,
+        subPath: 'protocol_context.json',
         type: 'configMap',
       },
     },
@@ -836,7 +828,6 @@ function generateL1DevnetValues(spec: DeploymentSpec): string {
 function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
   const ethereumDa = getEthereumDaConfig(spec)
-  const batch = getEthereumDaBatchConfig(spec)
   const l2StartBlockNumber = getEthereumDaL2StartBlockNumber(spec)
 
   const image = resolveImage(spec, 'ethDaSubmitter', {
@@ -852,10 +843,9 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
           ...buildEthDaSubmitterBatchEnv(spec),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMATION_DEPTH: String(ethereumDa.confirmationDepth ?? 1),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMER_POLL_INTERVAL_MS: String(ethereumDa.confirmerPollIntervalMs ?? 12_000),
-          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__ETH_CHAIN_ID: String(getEthereumDaChainId(spec)),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__FINALIZATION_DEPTH: String(ethereumDa.finalizationDepth ?? 64),
-          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__L2_CHAIN_ID: String(spec.network.l2ChainId),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_BLOB_BASE_FEE_WEI: ethereumDa.maxBlobBaseFeeWei || '50000000000',
+          DOGEOS_ETH_DA_SUBMITTER_PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
           ...(ethereumDa.maxFeePerGasWei ? {
             DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_FEE_PER_GAS_WEI: ethereumDa.maxFeePerGasWei,
           } : {}),
@@ -893,7 +883,23 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
       data: {
         retain: true,
         size: '10Gi'
-      }
+      },
+      genesis: {
+        enabled: true,
+        mountPath: '/app/genesis/genesis.json',
+        name: 'genesis-config',
+        readOnly: true,
+        subPath: 'genesis.json',
+        type: 'configMap',
+      },
+      'protocol-context': {
+        enabled: true,
+        mountPath: '/app/protocol_context.json',
+        name: 'protocol-context-config',
+        readOnly: true,
+        subPath: 'protocol_context.json',
+        type: 'configMap',
+      },
     },
     resources: {
       limits: { cpu: '1000m', memory: '1Gi' },
@@ -1057,10 +1063,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_API_PORT', value: '3000' },
       { name: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_URL', value: dogecoinEndpoints.rpcUrl },
       { name: 'DOGEOS_WITHDRAWAL_TSO_URL', value: 'http://tso-service:3000' },
-      { name: 'DOGEOS_WITHDRAWAL_BRIDGE_ADDRESS', value: '' },
       { name: 'DOGEOS_WITHDRAWAL_INITIAL_BRIDGE_REDEEM_SCRIPT_HEX', value: '' },
-      { name: 'DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_TXID', value: '' },
-      { name: 'DOGEOS_WITHDRAWAL_GENESIS_SEQUENCER_VOUT', value: '0' },
       { name: 'DOGEOS_WITHDRAWAL_MAX_WITHDRAWAL_OUTPUTS_PER_TX', value: '256' },
       { name: 'DOGEOS_WITHDRAWAL_FEE_RATE_SAT_PER_KVB', value: String(getBridgeFeeRateSatsPerKvb(spec)) },
       { name: 'DOGEOS_WITHDRAWAL_DEBUG_SKIP_BROADCAST', value: 'false' },
@@ -1108,8 +1111,6 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__FLOOR_ABSOLUTE_SATS', value: '1000000' },
       // Ethereum DA resolver/indexer inputs for AdvanceL2 builder v2.
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL', value: getEthereumDaSubmitterRpcUrl(spec) },
-      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ETH_CHAIN_ID', value: String(getEthereumDaChainId(spec)) },
-      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L2_CHAIN_ID', value: String(spec.network.l2ChainId) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INDEXER_SQLITE_PATH', value: '/app/data/eth-da-indexer.sqlite' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_STORE_ROOT', value: '/app/data/eth-da-blob-artifacts' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_METADATA_SQLITE_PATH', value: '/app/data/eth-da-artifact-metadata.sqlite' },
@@ -1152,6 +1153,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
         mountPath: '/app/protocol_context.json',
         name: 'protocol-context-config',
         readOnly: true,
+        subPath: 'protocol_context.json',
         type: 'configMap',
       },
     },
@@ -1218,9 +1220,7 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_CUBESIGNER_SIGNER_NETWORK', value: spec.dogecoin.network },
       { name: 'NETWORK', value: spec.dogecoin.network },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_TSO_URL', value: 'http://tso-service:3000' },
-      // bridge-init owns this value. prep-charts replaces the empty bootstrap
-      // placeholder from .data/GenerateBridgeInfo.toml before deployment.
-      { name: 'DOGEOS_CUBESIGNER_SIGNER_BRIDGE_NAMESPACE_ID', value: '' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PROTOCOL_CONTEXT_JSON', value: '/app/protocol_context.json' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_SIGNATURE_DELAY', value: '0' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_POLL_INTERVAL', value: '500' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_SESSION_KEEP_ALIVE_INTERVAL', value: '3600000' },
@@ -1250,6 +1250,14 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
     },
     image,
     persistence: {
+      'protocol-context': {
+        enabled: true,
+        mountPath: '/app/protocol_context.json',
+        name: 'protocol-context-config',
+        readOnly: true,
+        subPath: 'protocol_context.json',
+        type: 'configMap'
+      },
       session: {
         enabled: true,
         mountPath: '/etc/cubesigner',
@@ -1367,6 +1375,7 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
 
   const env: Array<Record<string, any>> = [
     { name: 'DOGEOS_PROOF_COORDINATOR_PROOF_WORK_BASE_URL', value: proofWorkBaseUrl },
+    { name: 'DOGEOS_PROOF_COORDINATOR_PROTOCOL_CONTEXT_JSON', value: '/app/protocol_context.json' },
     {
       name: 'DOGEOS_PROOF_COORDINATOR_ALLOW_INSECURE_HTTP',
       value: String(proofCoordinator.allowInsecureHttp ?? isNonLoopbackPlainHttp(proofWorkBaseUrl))
@@ -1406,6 +1415,14 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
     env,
     image,
     persistence: {
+      'protocol-context': {
+        enabled: true,
+        mountPath: '/app/protocol_context.json',
+        name: 'protocol-context-config',
+        readOnly: true,
+        subPath: 'protocol_context.json',
+        type: 'configMap'
+      },
       secrets: {
         enabled: true,
         mountPath: '/app/secrets',

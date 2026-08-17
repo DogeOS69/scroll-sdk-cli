@@ -120,6 +120,9 @@ export class ExportSignerPolicyCommand extends Command {
 
       const outDir = path.resolve(flags.out)
       fs.mkdirSync(outDir, { recursive: true })
+      // Every signer receives the exact reviewed context bytes. The partner
+      // compose mounts its policy directory read-only at /etc/dogeos.
+      fs.copyFileSync(contextPath, path.join(outDir, 'protocol_context.json'))
       // Removed in the partner-compose-only deployment model. A bundle may be
       // regenerated into an existing directory, so actively delete the stale
       // Helm overlay instead of merely stopping its creation.
@@ -202,7 +205,7 @@ export class ExportSignerPolicyCommand extends Command {
         bundleDir: outDir,
         derivedSources,
         envelopeMaxProofArtifacts: runtimeProfile.envelopeMaxProofArtifacts,
-        files: ['signer-policy.json', 'signer-policy.env', 'verifier-registry.toml', 'source-set.toml', 'PARTNER-COMMANDS.md'],
+        files: ['protocol_context.json', 'signer-policy.json', 'signer-policy.env', 'verifier-registry.toml', 'source-set.toml', 'PARTNER-COMMANDS.md'],
         mode,
         protocolInstanceId,
         signerCount: external.length,
