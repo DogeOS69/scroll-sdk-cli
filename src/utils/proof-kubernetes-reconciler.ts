@@ -6,6 +6,10 @@ import type { ProofFamily } from './proof-configurator.js'
 import type { ResolvedProofIntent } from './proof-intent.js'
 
 import {
+  PRE_TSUKI_DIRECT_SIGN_TSO_ENV,
+  assertPreTsukiDirectSignPosture,
+} from './pre-tsuki-direct-sign.js'
+import {
   DEFAULT_PROOF_AWS_CONFIG,
   proofAwsValuesProjection,
   readOptionalProofAwsConfig,
@@ -50,6 +54,7 @@ export interface ReconcileProofKubernetesOptions {
   coordinatorIngressHost?: string
   deploymentDir?: string
   intent: ResolvedProofIntent
+  network?: string
   proofAwsConfigPath?: string
   scaffoldCoordinatorConfig?: boolean
   scrollBatchBackendProfile?: string
@@ -109,6 +114,28 @@ function readValues(filePath: string): Record<string, unknown> {
 
 function writeValues(filePath: string, value: Record<string, unknown>): void {
   fs.writeFileSync(filePath, yaml.dump(value, {lineWidth: -1, noRefs: true}))
+}
+
+function projectTsoPreTsukiDirectSignPin(filePath: string, pin?: number): void {
+  const values = readValues(filePath)
+  const env = values.env ?? []
+  if (!Array.isArray(env)) throw new Error(`${filePath}: env must be an array`)
+  const projected = env.filter(
+    item => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return true
+      return String((item as {name?: unknown}).name || '') !== PRE_TSUKI_DIRECT_SIGN_TSO_ENV
+    },
+  )
+  if (pin !== undefined) {
+    projected.push({
+      name: PRE_TSUKI_DIRECT_SIGN_TSO_ENV,
+      value: String(pin),
+    })
+  }
+
+  values.env = projected
+
+  writeValues(filePath, values)
 }
 
 export function projectProofAwsConfig(
@@ -194,6 +221,13 @@ export function reconcileProofKubernetes(
   const release = resolveProofReleasePaths(deploymentDir, options.intent.intent.release)
   const {mode} = options.intent.intent
   const disabled = mode === 'disabled'
+  const {preTsukiDirectSign} = options.intent.intent
+  assertPreTsukiDirectSignPosture({
+    mode,
+    network: options.network,
+    preTsukiDirectSign,
+    source: options.intent.source.path,
+  })
   preflightExternalWorker(options, release)
   const proofAwsConfigPath = disabled
     ? undefined
@@ -214,7 +248,11 @@ export function reconcileProofKubernetes(
   let result: ReturnType<typeof configureDisabledProofValues> | ReturnType<typeof configureProofValues>
 
   if (disabled) {
-    result = configureDisabledProofValues({ valuesDir, withdrawalConfigPath })
+    result = configureDisabledProofValues({
+      preTsukiDirectSignMaxEndBatchHeight: preTsukiDirectSign?.maxEndBatchHeight,
+      valuesDir,
+      withdrawalConfigPath,
+    })
   } else {
     const {artifactReadBaseUrl} = options.intent.intent
     if (!artifactReadBaseUrl) {
@@ -248,6 +286,11 @@ export function reconcileProofKubernetes(
       withdrawalConfigPath,
     })
   }
+
+  projectTsoPreTsukiDirectSignPin(
+    tsoValuesFile,
+    preTsukiDirectSign?.maxEndBatchHeight,
+  )
 
   let workerBundle:
     | ProverWorkerMockBundleResult
@@ -292,6 +335,7 @@ export function reconcileProofKubernetes(
     deploymentDir,
     intentSource: options.intent.source,
     mode,
+    preTsukiDirectSign,
     ...(proofAwsConfigPath ? {proofAwsConfigPath} : {}),
     proofArtifactBaseUrl: options.intent.intent.artifactReadBaseUrl,
     proofCoordinator: {

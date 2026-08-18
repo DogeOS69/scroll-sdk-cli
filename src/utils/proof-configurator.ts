@@ -1746,6 +1746,7 @@ export function configureProofValues(options: ConfigureProofValuesOptions): Conf
  * artifacts, proof storage, a coordinator, or a prover worker.
  */
 export function configureDisabledProofValues(options: {
+  preTsukiDirectSignMaxEndBatchHeight?: number
   valuesDir: string
   withdrawalConfigPath?: string
 }): ConfigureDisabledProofResult {
@@ -1786,6 +1787,13 @@ export function configureDisabledProofValues(options: {
   const nativeConfig = replaceWithdrawalManagedProofBlock(nativeSource, {
     proof_system: {
       mode: 'disabled',
+      ...(options.preTsukiDirectSignMaxEndBatchHeight === undefined
+        ? {}
+        : {
+            pre_tsuki_direct_sign: {
+              max_end_batch_height: options.preTsukiDirectSignMaxEndBatchHeight,
+            },
+          }),
       require_bridge_state: false,
       require_scroll_execution: false,
     },

@@ -8,6 +8,7 @@ import type { ProofSystemMode } from '../../utils/proof-system-mode.js'
 import { normalizeExternalHttpBaseUrl } from '../../utils/attestation-signer-descriptor.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
+import { assertPreTsukiDirectSignPosture } from '../../utils/pre-tsuki-direct-sign.js'
 import {
   DEFAULT_PROOF_COORDINATOR_CONFIG,
   DEFAULT_PROOF_PROGRAM_MANIFESTS,
@@ -95,6 +96,12 @@ export class ExportSignerPolicyCommand extends Command {
         specPath: flags.spec,
       })
       const {mode} = resolvedIntent.intent
+      assertPreTsukiDirectSignPosture({
+        mode,
+        network: config.network,
+        preTsukiDirectSign: resolvedIntent.intent.preTsukiDirectSign,
+        source: resolvedIntent.source.path,
+      })
       const external = config.attestationSigner?.external
       if (!external || external.length === 0 || config.attestationSigner?.mode !== 'external') {
         throw new Error('doge-config has no external attestation signers; run scrollsdk setup attestation-signer with descriptors first')
@@ -171,6 +178,7 @@ export class ExportSignerPolicyCommand extends Command {
         bridgeNamespaceId,
         mode,
         network: config.network,
+        preTsukiDirectSign: resolvedIntent.intent.preTsukiDirectSign,
         protocolInstanceId,
         signerProofArtifactBaseUrl,
         signers: external.map(signer => ({ endpoint: signer.endpoint, id: signer.id, publicKey: signer.publicKey })),
@@ -186,6 +194,7 @@ export class ExportSignerPolicyCommand extends Command {
         envelopeMaxProofArtifacts: runtimeProfile.envelopeMaxProofArtifacts,
         mode,
         network: config.network,
+        preTsukiDirectSign: resolvedIntent.intent.preTsukiDirectSign,
         protocolInstanceId,
         signerPolicyMode: runtimeProfile.policyMode,
         signerProofArtifactBaseUrl,

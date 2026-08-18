@@ -1019,6 +1019,32 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       })
     }
 
+    const directSignPin = proofSystem.preTsukiDirectSign?.maxEndBatchHeight
+    if (proofSystem.preTsukiDirectSign
+      && (!Number.isSafeInteger(directSignPin) || directSignPin! < 1 || directSignPin! > 4_294_967_295)) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofSystem.preTsukiDirectSign.maxEndBatchHeight must be an integer in 1..=4294967295',
+        path: 'proofSystem.preTsukiDirectSign.maxEndBatchHeight'
+      })
+    }
+
+    if (proofSystem.preTsukiDirectSign && proofSystem.mode !== 'disabled') {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofSystem.preTsukiDirectSign requires proofSystem.mode disabled',
+        path: 'proofSystem.preTsukiDirectSign'
+      })
+    }
+
+    if (proofSystem.preTsukiDirectSign && spec.dogecoin.network === 'mainnet') {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofSystem.preTsukiDirectSign is testnet-only and cannot be enabled on Dogecoin mainnet',
+        path: 'proofSystem.preTsukiDirectSign'
+      })
+    }
+
     if (
       proofSystem.mode !== 'disabled'
       && (!proofCoordinator || proofCoordinator.enabled === false)
@@ -1469,6 +1495,9 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   if (spec.proofSystem) {
     config.proofSystem = {
       mode: spec.proofSystem.mode,
+      ...(spec.proofSystem.preTsukiDirectSign
+        ? { preTsukiDirectSign: spec.proofSystem.preTsukiDirectSign }
+        : {}),
       ...(spec.proofSystem.mode === 'disabled'
         ? {}
         : {

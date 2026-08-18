@@ -190,6 +190,12 @@ export interface ProofSystemIntentConfig {
   /** One posture controls WP, coordinator, worker, and signer policy together. */
   mode: ProofSystemMode
 
+  /** Temporary, testnet-only Issue #843 recovery posture; valid only with mode disabled. */
+  preTsukiDirectSign?: {
+    /** Inclusive Tsuki-boundary L2 batch height, projected identically to WP, TSO, and Rust signer. */
+    maxEndBatchHeight: number
+  }
+
   /** Proof release bundle root. Conventional proof-artifacts/ is used when omitted. */
   release?: string
 

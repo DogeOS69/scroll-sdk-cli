@@ -303,6 +303,46 @@ coordinator, proof storage, or worker. Mock and production require
 `artifactReadBaseUrl`; the CLI gets the coordinator host and L2 chain ID from
 the existing `config.toml`.
 
+### Temporary pre-Tsuki direct-sign recovery (Issue #843)
+
+PR #847 adds a bounded, testnet-only recovery posture for already-persisted
+pre-Tsuki work. It is not a fourth proof mode. Declare it only under disabled
+mode, using the reviewed Tsuki-boundary L2 batch height:
+
+```yaml
+proofSystem:
+  mode: disabled
+  preTsukiDirectSign:
+    maxEndBatchHeight: 6863
+```
+
+The equivalent doge-config form is:
+
+```toml
+[proofSystem]
+mode = "disabled"
+
+[proofSystem.preTsukiDirectSign]
+maxEndBatchHeight = 6863
+```
+
+`setup prep-charts` writes the same pin to
+`[proof_system.pre_tsuki_direct_sign].max_end_batch_height` in the native WP
+TOML and `TSO_PRE_TSUKI_DIRECT_SIGN_MAX_END_BATCH_HEIGHT` in TSO values. The
+schema-v3 proof deployment contract records the pin and
+`setup proof-config-check --strict` rejects disagreement or residual runtime
+configuration. `setup export-signer-policy` writes the same value as
+`ATTESTATION_SIGNER_PRE_TSUKI_DIRECT_SIGN_MAX_END_BATCH_HEIGHT` in the Rust
+attestation-signer policy bundle.
+
+The CLI rejects this posture on mainnet, with mock/production mode, or with an
+invalid/non-positive/u32-overflow pin. CubeSigner has no corresponding setting;
+the attestation role requires the Rust signer. During the recovery window,
+follow dogeos-core's PR #847 runbook for enable order, `/policy` capability
+checks, the WP-only TSO `/propose` network boundary, completion, and reverse
+retirement. Do not switch to proof mode until the authoritative completion
+predicate is stable and the temporary pins have been removed.
+
 For a production release, the release-producing pipeline stages this
 conventional worker layout:
 

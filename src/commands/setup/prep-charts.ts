@@ -3513,6 +3513,7 @@ export default class SetupPrepCharts extends Command {
         : undefined,
       deploymentDir: process.cwd(),
       intent: this.proofIntent,
+      network: this.dogeConfig.network,
       valuesDir,
     })
     this.jsonCtx.logSuccess(

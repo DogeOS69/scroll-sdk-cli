@@ -11,7 +11,10 @@ const COMPRESSED_GENERATOR = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d9
 const UNCOMPRESSED_GENERATOR = '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798' +
   '483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8'
 
-function writeDogeConfig(mode: 'disabled' | 'mock' | 'production'): void {
+function writeDogeConfig(
+  mode: 'disabled' | 'mock' | 'production',
+  preTsukiDirectSign?: {maxEndBatchHeight: number},
+): void {
   fs.writeFileSync('.data/doge-config.toml', toml.stringify({
     attestationSigner: {
       activeSignerIds: ['partner-a'],
@@ -24,7 +27,7 @@ function writeDogeConfig(mode: 'disabled' | 'mock' | 'production'): void {
       threshold: 1,
     },
     network: 'testnet',
-    proofSystem: { mode },
+    proofSystem: { mode, ...(preTsukiDirectSign ? {preTsukiDirectSign} : {}) },
     wallet: { path: '.data/wallet.json' },
   } as toml.JsonMap))
 }
@@ -120,6 +123,25 @@ describe('setup export-signer-policy operator flow', () => {
     expect(env).to.include('ATTESTATION_SIGNER_POLICY_MODE=dev_permissive')
     expect(env).to.include('ATTESTATION_SIGNER_PROTOCOL_CONTEXT_JSON=/etc/dogeos/protocol_context.json')
     expect(env).not.to.include('ATTESTATION_SIGNER_ARTIFACT_ALLOWED_ORIGINS')
+  })
+
+  it('exports the temporary recovery pin from canonical proof intent', async () => {
+    writeDogeConfig('disabled', {maxEndBatchHeight: 6863})
+    const args = commandArgs().filter((value, index, all) => {
+      const previous = all[index - 1]
+      return previous !== '--signer-proof-artifact-base-url'
+        && previous !== '--allowed-proof-triples'
+        && value !== '--signer-proof-artifact-base-url'
+        && value !== '--allowed-proof-triples'
+    })
+    await runCommand(args)
+
+    const policy = JSON.parse(fs.readFileSync('signer-policy-bundle/signer-policy.json', 'utf8'))
+    expect(policy.preTsukiDirectSign).to.deep.equal({maxEndBatchHeight: 6863})
+    const env = fs.readFileSync('signer-policy-bundle/signer-policy.env', 'utf8')
+    expect(env).to.include(
+      'ATTESTATION_SIGNER_PRE_TSUKI_DIRECT_SIGN_MAX_END_BATCH_HEIGHT=6863',
+    )
   })
 
   it('leaves TEE allowlists empty in mock mode without reading a legacy setup_defaults key', async () => {

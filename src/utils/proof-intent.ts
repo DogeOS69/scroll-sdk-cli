@@ -6,6 +6,10 @@ import type { DeploymentSpec } from '../types/deployment-spec.js'
 import type { DogeConfig } from '../types/doge-config.js'
 
 import {
+  type PreTsukiDirectSignIntent,
+  normalizePreTsukiDirectSignIntent,
+} from './pre-tsuki-direct-sign.js'
+import {
   type ProofSystemMode,
   normalizeProofSystemMode,
 } from './proof-system-mode.js'
@@ -18,6 +22,8 @@ export const DEFAULT_DEPLOYMENT_SPEC_FILES = [
 export interface ProofSystemIntent {
   artifactReadBaseUrl?: string
   mode: ProofSystemMode
+  /** Temporary, testnet-only Issue #843 recovery posture. */
+  preTsukiDirectSign?: PreTsukiDirectSignIntent
   /** Proof release bundle root. Conventional proof-artifacts/ is used when omitted. */
   release?: string
   signerPolicy?: {
@@ -42,6 +48,9 @@ export interface ResolvedProofIntent {
 interface RawProofSystemIntent {
   artifactReadBaseUrl?: unknown
   mode?: unknown
+  preTsukiDirectSign?: {
+    maxEndBatchHeight?: unknown
+  }
   provingMode?: unknown
   release?: unknown
   signerPolicy?: {
@@ -86,10 +95,23 @@ export function normalizeProofIntent(
     throw new Error(`${label}.mode must be disabled, mock, or production`)
   }
 
+  const preTsukiDirectSign = normalizePreTsukiDirectSignIntent(
+    raw?.preTsukiDirectSign,
+    `${label}.preTsukiDirectSign`,
+  )
+  if (preTsukiDirectSign && mode !== 'disabled') {
+    throw new Error(`${label}.preTsukiDirectSign requires mode disabled`)
+  }
+
   // Disabled intentionally discards stale proof-only coordinates. This makes
   // mode transitions idempotent and prevents generated output from keeping a
   // disabled deployment coupled to proof infrastructure.
-  if (mode === 'disabled') return { mode }
+  if (mode === 'disabled') {
+    return {
+      mode,
+      ...(preTsukiDirectSign ? {preTsukiDirectSign} : {}),
+    }
+  }
 
   const artifactReadBaseUrl = normalizeArtifactReadBaseUrl(
     raw?.artifactReadBaseUrl,
@@ -158,6 +180,8 @@ function proofIntentFingerprint(intent: ProofSystemIntent): string {
   return JSON.stringify({
     artifactReadBaseUrl: intent.artifactReadBaseUrl,
     mode: intent.mode,
+    preTsukiDirectSignMaxEndBatchHeight:
+      intent.preTsukiDirectSign?.maxEndBatchHeight,
     release: intent.release,
     sourceSet: intent.signerPolicy?.sourceSet,
   })

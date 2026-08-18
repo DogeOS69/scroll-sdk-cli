@@ -252,6 +252,31 @@ max_items = 42
     expect(values.env.some((item: any) => item.name.startsWith('DOGEOS_WITHDRAWAL_PROOF_WORK_API__'))).to.equal(false)
   })
 
+  it('projects and retires the temporary pre-Tsuki direct-sign WP pin atomically', () => {
+    const valuesDir = path.join(root, 'values')
+    configureDisabledProofValues({
+      preTsukiDirectSignMaxEndBatchHeight: 6863,
+      valuesDir,
+    })
+    let native = toml.parse(
+      fs.readFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), 'utf8'),
+    ) as any
+    expect(native.proof_system).to.deep.include({
+      mode: 'disabled',
+      require_bridge_state: false,
+      require_scroll_execution: false,
+    })
+    expect(native.proof_system.pre_tsuki_direct_sign).to.deep.equal({
+      max_end_batch_height: 6863,
+    })
+
+    configureDisabledProofValues({valuesDir})
+    native = toml.parse(
+      fs.readFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), 'utf8'),
+    ) as any
+    expect(native.proof_system.pre_tsuki_direct_sign).to.equal(undefined)
+  })
+
   it('fails closed when the required native WithdrawalProcessor TOML template is missing', () => {
     const { artifactPath, manifests } = writeValidProofRelease(root)
     const withdrawalConfigPath = path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml')

@@ -146,6 +146,15 @@ signing:
 #   mode: mock
 #   artifactReadBaseUrl: "https://proof-artifacts.example.com/proof-topology"
 #
+# Temporary Issue #843 testnet recovery only; never enable this by default.
+# Use the reviewed Tsuki-boundary batch height and keep mode disabled. The CLI
+# projects the same pin to WP and TSO and exports it in the Rust signer bundle.
+# Remove this block after the authoritative completion predicate is stable.
+# proofSystem:
+#   mode: disabled
+#   preTsukiDirectSign:
+#     maxEndBatchHeight: 6863
+#
 # For production, release defaults to ./proof-artifacts. The release producer
 # runs `scrollsdk setup proof-worker-release --release-root proof-artifacts
 # --image dogeos69/prover-worker-cuda@sha256:<digest>` once after staging the

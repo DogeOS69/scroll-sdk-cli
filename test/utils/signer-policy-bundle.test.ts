@@ -79,6 +79,25 @@ describe('signer policy bundle', () => {
     expect(env.ATTESTATION_SIGNER_PROTOCOL_CONTEXT_JSON).to.equal('/etc/dogeos/protocol_context.json')
   })
 
+  it('projects the temporary recovery pin and operator retirement instructions', () => {
+    const direct = {
+      ...input('disabled'),
+      preTsukiDirectSign: {maxEndBatchHeight: 6863},
+      signerProofArtifactBaseUrl: undefined,
+    }
+    const env = envMap(renderSignerPolicyEnv(direct))
+    expect(env.ATTESTATION_SIGNER_PRE_TSUKI_DIRECT_SIGN_MAX_END_BATCH_HEIGHT)
+      .to.equal('6863')
+    const commands = renderPartnerCommands(direct)
+    expect(commands).to.include('Temporary pre-Tsuki direct-sign recovery')
+    expect(commands).to.include('advance_l2_pre_tsuki_direct_sign')
+    expect(commands).to.include('excluded from `/ready`')
+    expect(commands).to.include('retire in reverse')
+    expect(commands).to.include(
+      'ATTESTATION_SIGNER_PRE_TSUKI_DIRECT_SIGN_MAX_END_BATCH_HEIGHT must not be set in operator-owned attestation-signer.env',
+    )
+  })
+
   it('keeps the operator/network flow identical while production changes only the signer safety posture', () => {
     const mock = envMap(renderSignerPolicyEnv(input('mock')))
     const production = envMap(renderSignerPolicyEnv(input('production')))

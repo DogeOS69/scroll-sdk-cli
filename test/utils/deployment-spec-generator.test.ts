@@ -737,6 +737,37 @@ describe('deployment-spec-generator', () => {
       const result = validateDeploymentSpec(spec);
       expect(result.warnings.some(w => w.path?.includes('l2Sequencer'))).to.be.true;
     });
+
+    it('validates the temporary pre-Tsuki direct-sign posture as disabled and non-mainnet', () => {
+      const valid = createMinimalSpec({
+        proofSystem: {
+          mode: 'disabled',
+          preTsukiDirectSign: {maxEndBatchHeight: 6863},
+        },
+      });
+      expect(validateDeploymentSpec(valid).errors).to.have.length(0);
+
+      const wrongMode = createMinimalSpec({
+        proofSystem: {
+          mode: 'mock',
+          preTsukiDirectSign: {maxEndBatchHeight: 6863},
+        },
+      });
+      expect(validateDeploymentSpec(wrongMode).errors.some(
+        error => error.path === 'proofSystem.preTsukiDirectSign',
+      )).to.equal(true);
+
+      const mainnet = createMinimalSpec({
+        dogecoin: {
+          ...valid.dogecoin,
+          network: 'mainnet',
+        },
+        proofSystem: valid.proofSystem,
+      });
+      expect(validateDeploymentSpec(mainnet).errors.some(
+        error => error.message.includes('testnet-only'),
+      )).to.equal(true);
+    });
   });
 
   describe('generateConfigToml', () => {
@@ -969,6 +1000,20 @@ describe('deployment-spec-generator', () => {
         mode: 'production',
         release: './proof-releases/v1',
         signerPolicy: { sourceSet: './configs/source-set.toml' },
+      });
+    });
+
+    it('preserves a disabled pre-Tsuki direct-sign pin in doge-config', () => {
+      const spec = createMinimalSpec({
+        proofSystem: {
+          mode: 'disabled',
+          preTsukiDirectSign: {maxEndBatchHeight: 6863},
+        },
+      });
+      const parsed = toml.parse(generateDogeConfigToml(spec)) as any;
+      expect(parsed.proofSystem).to.deep.equal({
+        mode: 'disabled',
+        preTsukiDirectSign: {maxEndBatchHeight: 6863},
       });
     });
 
@@ -1288,6 +1333,20 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateValuesFiles', () => {
+    it('projects the temporary recovery pin into generated TSO values', () => {
+      const spec = createMinimalSpec({
+        proofSystem: {
+          mode: 'disabled',
+          preTsukiDirectSign: {maxEndBatchHeight: 6863},
+        },
+      });
+      const values = yaml.load(generateValuesFiles(spec)['tso-service-production.yaml']) as any;
+      expect(values.env).to.deep.include({
+        name: 'TSO_PRE_TSUKI_DIRECT_SIGN_MAX_END_BATCH_HEIGHT',
+        value: '6863',
+      });
+    });
+
     it('projects reviewed CubeSigner production policy evidence and key binding', () => {
       const spec = createMinimalSpec();
       spec.signing!.cubesigner!.productionPolicy = {

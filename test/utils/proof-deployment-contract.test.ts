@@ -60,6 +60,10 @@ describe('proof deployment contract', () => {
       path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
       COORDINATOR_TOML,
     )
+    fs.writeFileSync(
+      path.join(root, 'values/tso-service-production.yaml'),
+      'env: []\n',
+    )
   })
 
   afterEach(() => fs.rmSync(root, { force: true, recursive: true }))
@@ -79,7 +83,7 @@ describe('proof deployment contract', () => {
       },
     })
     expect(contract.mode).to.equal('disabled')
-    expect(contract.schemaVersion).to.equal(2)
+    expect(contract.schemaVersion).to.equal(3)
     expect(contract.components.proofCoordinator.enabled).to.equal(false)
     expect(contract.components.withdrawalProcessor.setFiles[0].integrity?.policy).to.equal('managed-block')
     expect(contract.worker).to.deep.equal({ enabled: false, kind: 'none' })
@@ -358,5 +362,38 @@ describe('proof deployment contract', () => {
     contract.signerPolicy.policyMode = 'production_enforce'
     fs.writeFileSync(contractPath, `${JSON.stringify(contract, null, 2)}\n`)
     expect(() => validateProofDeploymentContract(root)).to.throw('generation ID does not match')
+  })
+
+  it('semantically binds the temporary recovery pin across WP and TSO projections', () => {
+    const withdrawalPath = path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml')
+    const tsoPath = path.join(root, 'values/tso-service-production.yaml')
+    fs.writeFileSync(withdrawalPath, WITHDRAWAL_TOML.replace(
+      'mode = "disabled"',
+      'mode = "disabled"\n\n[proof_system.pre_tsuki_direct_sign]\nmax_end_batch_height = 6863',
+    ))
+    fs.writeFileSync(tsoPath, `env:
+  - name: TSO_PRE_TSUKI_DIRECT_SIGN_MAX_END_BATCH_HEIGHT
+    value: "6863"
+`)
+    writeProofDeploymentContract({
+      deploymentDir: root,
+      mode: 'disabled',
+      preTsukiDirectSign: {maxEndBatchHeight: 6863},
+      proofCoordinator: {enabled: false, setFiles: []},
+      tsoValuesFile: tsoPath,
+      withdrawalProcessor: {
+        setFiles: [{
+          filePath: withdrawalPath,
+          key: 'configMaps.config.data.WithdrawalProcessor\\.toml',
+        }],
+        valuesFile: path.join(root, 'values/withdrawal-processor-production.yaml'),
+      },
+    })
+    expect(() => validateProofDeploymentContract(root)).not.to.throw()
+
+    fs.writeFileSync(tsoPath, fs.readFileSync(tsoPath, 'utf8').replace('6863', '6862'))
+    expect(() => validateProofDeploymentContract(root)).to.throw(
+      'tsoService: pre-Tsuki direct-sign pin 6862 does not match contract 6863',
+    )
   })
 })

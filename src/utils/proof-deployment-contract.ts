@@ -1,10 +1,14 @@
+import * as toml from '@iarna/toml'
+import * as yaml from 'js-yaml'
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import type { PreTsukiDirectSignIntent } from './pre-tsuki-direct-sign.js'
 import type { ProofIntentSource } from './proof-intent.js'
 import type { ProofSystemMode } from './proof-system-mode.js'
 
+import { PRE_TSUKI_DIRECT_SIGN_TSO_ENV } from './pre-tsuki-direct-sign.js'
 import {
   MANAGED_VERIFIER_BEGIN,
   MANAGED_VERIFIER_END,
@@ -29,7 +33,7 @@ export interface ProofDeploymentFileBinding {
   integrity?: ProofDeploymentFileIntegrity
   key: string
   path: string
-  /** Whole-file observation. Required by schema v1; advisory under schema v2. */
+  /** Whole-file observation. Required by schema v1; advisory under schema v2/v3. */
   sha256: string
 }
 
@@ -54,8 +58,10 @@ export interface ProofDeploymentContract {
   }
   intentSource?: ProofIntentSource
   mode: ProofSystemMode
+  /** Temporary, testnet-only Issue #843 recovery posture. */
+  preTsukiDirectSign?: PreTsukiDirectSignIntent
   proofArtifactBaseUrl?: string
-  schemaVersion: 1 | 2
+  schemaVersion: 1 | 2 | 3
   signerPolicy: {
     policyMode: 'dev_permissive' | 'production_enforce' | 'staging_scaffold'
     proofArtifactFetchMode: 'disabled' | 'http'
@@ -73,6 +79,7 @@ export interface ProofDeploymentContractInput {
   deploymentDir: string
   intentSource?: ProofIntentSource
   mode: ProofSystemMode
+  preTsukiDirectSign?: PreTsukiDirectSignIntent
   proofArtifactBaseUrl?: string
   proofCoordinator: {
     enabled: boolean
@@ -251,8 +258,11 @@ export function writeProofDeploymentContract(input: ProofDeploymentContractInput
         }
       : {}),
     mode: input.mode,
+    ...(input.preTsukiDirectSign
+      ? {preTsukiDirectSign: input.preTsukiDirectSign}
+      : {}),
     ...(input.mode === 'disabled' ? {} : { proofArtifactBaseUrl: input.proofArtifactBaseUrl }),
-    schemaVersion: 2 as const,
+    schemaVersion: 3 as const,
     signerPolicy,
     worker,
   }
@@ -293,7 +303,7 @@ export function readProofDeploymentContract(
   }
 
   const contract = JSON.parse(fs.readFileSync(resolved, 'utf8')) as ProofDeploymentContract
-  if (![1, 2].includes(contract.schemaVersion)) {
+  if (![1, 2, 3].includes(contract.schemaVersion)) {
     throw new Error(`${resolved}: unsupported schemaVersion ${String(contract.schemaVersion)}`)
   }
 
@@ -317,7 +327,7 @@ function validateBinding(
   root: string,
   componentName: string,
   setFile: ProofDeploymentFileBinding,
-  schemaVersion: 1 | 2,
+  schemaVersion: 1 | 2 | 3,
   problems: string[],
   warnings: string[],
 ): void {
@@ -375,6 +385,118 @@ function validateBinding(
   }
 }
 
+function parseWithdrawalPreTsukiDirectSignPin(
+  root: string,
+  contract: ProofDeploymentContract,
+  problems: string[],
+): number | undefined {
+  const binding = contract.components.withdrawalProcessor.setFiles.find(
+    item => item.key === 'configMaps.config.data.WithdrawalProcessor\\.toml',
+  )
+  if (!binding) {
+    if (contract.preTsukiDirectSign) {
+      problems.push('withdrawalProcessor: pre-Tsuki direct-sign validation requires the native WithdrawalProcessor.toml binding')
+    }
+
+    return undefined
+  }
+
+  const filePath = resolveContractFile(root, binding.path)
+  if (!fs.existsSync(filePath)) return undefined
+  try {
+    const parsed = toml.parse(fs.readFileSync(filePath, 'utf8')) as {
+      proof_system?: {
+        pre_tsuki_direct_sign?: {
+          max_end_batch_height?: unknown
+        }
+      }
+    }
+    const value = parsed.proof_system?.pre_tsuki_direct_sign?.max_end_batch_height
+    if (value === undefined) return undefined
+    if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > 4_294_967_295) {
+      problems.push('withdrawalProcessor: [proof_system.pre_tsuki_direct_sign].max_end_batch_height must be an integer in 1..=4294967295')
+      return undefined
+    }
+
+    return value as number
+  } catch (error) {
+    problems.push(`withdrawalProcessor: failed to parse direct-sign projection: ${error instanceof Error ? error.message : String(error)}`)
+    return undefined
+  }
+}
+
+function parseTsoPreTsukiDirectSignPin(
+  root: string,
+  contract: ProofDeploymentContract,
+  problems: string[],
+): number | undefined {
+  const {valuesFile} = contract.components.tsoService
+  if (!valuesFile) return undefined
+  const filePath = resolveContractFile(root, valuesFile)
+  if (!fs.existsSync(filePath)) return undefined
+  try {
+    const parsed = yaml.load(fs.readFileSync(filePath, 'utf8')) as {
+      env?: Array<{name?: unknown; value?: unknown}>
+    } | undefined
+    const env = parsed?.env
+    if (!Array.isArray(env)) {
+      problems.push('tsoService: env must be an array for pre-Tsuki direct-sign validation')
+      return undefined
+    }
+
+    const matches = env.filter(item => item?.name === PRE_TSUKI_DIRECT_SIGN_TSO_ENV)
+    if (matches.length > 1) {
+      problems.push(`tsoService: ${PRE_TSUKI_DIRECT_SIGN_TSO_ENV} must appear at most once`)
+      return undefined
+    }
+
+    if (matches.length === 0) return undefined
+    const [{value}] = matches
+    if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+      problems.push(`tsoService: ${PRE_TSUKI_DIRECT_SIGN_TSO_ENV} must be a decimal string`)
+      return undefined
+    }
+
+    const parsedValue = Number(value)
+    if (!Number.isSafeInteger(parsedValue) || parsedValue < 1 || parsedValue > 4_294_967_295) {
+      problems.push(`tsoService: ${PRE_TSUKI_DIRECT_SIGN_TSO_ENV} must be in 1..=4294967295`)
+      return undefined
+    }
+
+    return parsedValue
+  } catch (error) {
+    problems.push(`tsoService: failed to parse direct-sign projection: ${error instanceof Error ? error.message : String(error)}`)
+    return undefined
+  }
+}
+
+function validatePreTsukiDirectSignProjection(
+  root: string,
+  contract: ProofDeploymentContract,
+  problems: string[],
+): void {
+  const expected = contract.preTsukiDirectSign?.maxEndBatchHeight
+  if (contract.preTsukiDirectSign) {
+    if (contract.mode !== 'disabled') {
+      problems.push('preTsukiDirectSign requires disabled mode')
+    }
+
+    if (!Number.isSafeInteger(expected) || expected! < 1 || expected! > 4_294_967_295) {
+      problems.push('preTsukiDirectSign.maxEndBatchHeight must be an integer in 1..=4294967295')
+    }
+  }
+
+  const withdrawalPin = parseWithdrawalPreTsukiDirectSignPin(root, contract, problems)
+  const tsoPin = parseTsoPreTsukiDirectSignPin(root, contract, problems)
+  if (withdrawalPin !== expected) {
+    problems.push(`withdrawalProcessor: pre-Tsuki direct-sign pin ${String(withdrawalPin)} does not match contract ${String(expected)}`)
+  }
+
+  if (tsoPin !== expected) {
+    problems.push(`tsoService: pre-Tsuki direct-sign pin ${String(tsoPin)} does not match contract ${String(expected)}`)
+  }
+}
+
 export function validateProofDeploymentContractWithWarnings(
   deploymentDir = '.',
   contractPath = DEFAULT_PROOF_DEPLOYMENT_CONTRACT,
@@ -412,6 +534,13 @@ export function validateProofDeploymentContractWithWarnings(
 
   if (!contract.components.tsoService.enabled) problems.push('tso-service must remain enabled in every proof mode')
   if (!contract.components.withdrawalProcessor.enabled) problems.push('withdrawal-processor must remain enabled in every proof mode')
+
+  // Schema v3 makes the temporary recovery posture an explicit deployment
+  // contract and proves both generated runtime projections agree with it.
+  // Legacy contracts remain readable without retroactively assigning intent.
+  if (contract.schemaVersion === 3) {
+    validatePreTsukiDirectSignProjection(root, contract, problems)
+  }
 
   if (contract.mode === 'disabled') {
     if (contract.components.proofCoordinator.enabled) problems.push('disabled mode must not enable proof-coordinator')

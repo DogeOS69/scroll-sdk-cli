@@ -206,6 +206,10 @@ export interface DogeConfig {
     /** Stable public GET root used only when mode is mock or production. */
     artifactReadBaseUrl?: string
     mode?: ProofSystemMode
+    /** Temporary, testnet-only Issue #843 recovery posture. */
+    preTsukiDirectSign?: {
+      maxEndBatchHeight: number
+    }
     /** Legacy compatibility field; migrated to mode by setup prep-charts. */
     provingMode?: ProvingMode
     /** Proof release bundle root. Conventional proof-artifacts/ is used when omitted. */

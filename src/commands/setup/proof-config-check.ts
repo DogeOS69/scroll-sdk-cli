@@ -3,6 +3,7 @@ import * as path from 'node:path'
 
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
+import { assertPreTsukiDirectSignPosture } from '../../utils/pre-tsuki-direct-sign.js'
 import {
   DEFAULT_PROOF_DEPLOYMENT_CONTRACT,
   resolveContractFile,
@@ -51,9 +52,26 @@ export default class ProofConfigCheck extends Command {
         specPath: flags.spec || recordedSpec,
       })
       const configuredMode = configuredIntent.intent.mode
+      assertPreTsukiDirectSignPosture({
+        mode: configuredMode,
+        network: config.network,
+        preTsukiDirectSign: configuredIntent.intent.preTsukiDirectSign,
+        source: configuredIntent.source.path,
+      })
       if (configuredMode !== contract.mode) {
         throw new Error(
           `${configuredIntent.source.kind} proof mode ${configuredMode} does not match deployment contract mode ${contract.mode}`,
+        )
+      }
+
+      const configuredDirectSignPin =
+        configuredIntent.intent.preTsukiDirectSign?.maxEndBatchHeight
+      const contractDirectSignPin = contract.preTsukiDirectSign?.maxEndBatchHeight
+      if (configuredDirectSignPin !== contractDirectSignPin) {
+        throw new Error(
+          `${configuredIntent.source.kind} pre-Tsuki direct-sign pin `
+          + `${String(configuredDirectSignPin)} does not match deployment contract pin `
+          + `${String(contractDirectSignPin)}`,
         )
       }
 

@@ -1,4 +1,7 @@
+import type { PreTsukiDirectSignIntent } from './pre-tsuki-direct-sign.js'
 import type { ProofSystemMode } from './proof-system-mode.js'
+
+import { PRE_TSUKI_DIRECT_SIGN_ATTESTATION_SIGNER_ENV } from './pre-tsuki-direct-sign.js'
 
 /**
  * Matches dogeos-core's e2e_harness attestation-signer posture. AdvanceL1
@@ -19,6 +22,7 @@ export interface SignerPolicyBundleInput {
   bridgeNamespaceId: string
   mode: ProofSystemMode
   network: string
+  preTsukiDirectSign?: PreTsukiDirectSignIntent
   protocolInstanceId: string
   signerProofArtifactBaseUrl?: string
   signers: SignerPolicyBundleSigner[]
@@ -123,14 +127,19 @@ export function renderSignerPolicyEnv(input: SignerPolicyBundleInput): string {
   return [
     `# Post-genesis ${input.mode} proof-system policy for a partner-operated attestation-signer.`,
     '# Apply next to the operator-owned WIF/KMS and release-pin settings, then restart.',
-    input.mode === 'disabled'
-      ? '# DISABLED: direct-sign/dev_permissive posture; proof artifacts are not accepted or fetched.'
+    input.preTsukiDirectSign
+      ? `# TEMPORARY TESTNET RECOVERY: pre-Tsuki direct-sign is bounded at L2 batch ${input.preTsukiDirectSign.maxEndBatchHeight}.`
+      : input.mode === 'disabled'
+      ? '# DISABLED: proof-disabled/dev_permissive posture; proof artifacts are not accepted or fetched.'
       : input.mode === 'mock'
       ? '# MOCK: real service/transport/policy flow with deterministic NON-cryptographic proofs; unimplemented production checks are audited and bypassed.'
       : '# PRODUCTION: fail-closed policy; the operator must also pin the approved signer image release + git identity in attestation-signer.env.',
     `ATTESTATION_SIGNER_POLICY_MODE=${profile.policyMode}`,
     `ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS=${profile.allowUnimplementedChecks}`,
     `ATTESTATION_SIGNER_NETWORK=${input.network}`,
+    ...(input.preTsukiDirectSign
+      ? [`${PRE_TSUKI_DIRECT_SIGN_ATTESTATION_SIGNER_ENV}=${input.preTsukiDirectSign.maxEndBatchHeight}`]
+      : []),
     'ATTESTATION_SIGNER_PROTOCOL_CONTEXT_JSON=/etc/dogeos/protocol_context.json',
     ...(artifactAllowedOrigins
       ? [`ATTESTATION_SIGNER_ARTIFACT_ALLOWED_ORIGINS=${artifactAllowedOrigins}`]
@@ -164,6 +173,25 @@ kubectl -n <namespace> run signer-reachability-${signer.id} --rm -i --restart=Ne
   --image=curlimages/curl:8.20.0 -- \\
   curl -fsS '${signer.endpoint}/health'`)
     .join('\n\n')
+  const directSignNotice = input.preTsukiDirectSign
+    ? `## Temporary pre-Tsuki direct-sign recovery
+
+This bundle enables the Issue #843 **testnet-only** recovery capability through
+L2 batch height \`${input.preTsukiDirectSign.maxEndBatchHeight}\`. The bridge
+operator must configure that exact same pin on Withdrawal Processor and TSO.
+After restart, inspect the signer \`/policy\` response: the
+\`advance_l1_pre_tsuki_direct_sign\` and
+\`advance_l2_pre_tsuki_direct_sign\` capabilities must be serving. They are
+excluded from \`/ready\`, so readiness alone does not verify this posture.
+
+After the authoritative completion predicate is stable, retire in reverse
+order: remove the WP posture, then remove
+\`${PRE_TSUKI_DIRECT_SIGN_ATTESTATION_SIGNER_ENV}\` from this signer policy and
+restart it, then remove the TSO pin. Never enable proof mode while this temporary
+posture remains configured.
+
+`
+    : ''
 
   return `# Partner attestation-signer commands
 
@@ -247,6 +275,13 @@ cp signer-policy-bundle/protocol_context.json docker-compose/policy/protocol_con
 cp signer-policy-bundle/verifier-registry.toml docker-compose/policy/verifier-registry.toml
 cp signer-policy-bundle/source-set.toml docker-compose/policy/source-set.toml
 
+# The deployment-wide recovery pin belongs only to signer-policy.env. Refuse a
+# stale manual copy that could silently survive a generated retirement bundle.
+if grep -q '^${PRE_TSUKI_DIRECT_SIGN_ATTESTATION_SIGNER_ENV}=' docker-compose/attestation-signer.env; then
+  echo '${PRE_TSUKI_DIRECT_SIGN_ATTESTATION_SIGNER_ENV} must not be set in operator-owned attestation-signer.env' >&2
+  exit 1
+fi
+
 docker compose --project-directory docker-compose config --quiet
 docker compose --project-directory docker-compose up -d
 
@@ -259,6 +294,7 @@ ${input.mode === 'disabled'
     ? 'Direct-sign acceptance requires the signer to receive `POST /sign` without proof artifacts and submit its signature callback to the TSO.'
     : 'The proof GET root cannot be meaningfully health-checked without a concrete object key. The end-to-end withdrawal test is authoritative: the signer must fetch every `required_proof_artifacts[].proof_artifact_fetch.url` and submit its signature callback to the TSO.'}
 
+${directSignNotice}
 ## Bridge-operator reachability check
 
 Before genesis, the bridge operator imports the descriptors:

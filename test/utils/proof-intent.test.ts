@@ -110,6 +110,60 @@ describe('proof intent source resolution', () => {
     expect(resolved.source.kind).to.equal('deployment-spec')
   })
 
+  it('preserves the temporary pre-Tsuki direct-sign pin in disabled intent', () => {
+    const resolved = resolveProofIntent({
+      deploymentDir: root,
+      dogeConfig: {
+        proofSystem: {
+          mode: 'disabled',
+          preTsukiDirectSign: {maxEndBatchHeight: 6863},
+        },
+      },
+      dogeConfigPath: dogeConfigPath(),
+    })
+
+    expect(resolved.intent).to.deep.equal({
+      mode: 'disabled',
+      preTsukiDirectSign: {maxEndBatchHeight: 6863},
+    })
+  })
+
+  it('rejects the temporary pin outside disabled mode or the u32 range', () => {
+    for (const proofSystem of [
+      {mode: 'mock', preTsukiDirectSign: {maxEndBatchHeight: 6863}},
+      {mode: 'disabled', preTsukiDirectSign: {maxEndBatchHeight: 0}},
+      {mode: 'disabled', preTsukiDirectSign: {maxEndBatchHeight: 1.5}},
+      {mode: 'disabled', preTsukiDirectSign: {maxEndBatchHeight: 4_294_967_296}},
+    ]) {
+      expect(() => resolveProofIntent({
+        deploymentDir: root,
+        dogeConfig: {proofSystem: proofSystem as any},
+        dogeConfigPath: dogeConfigPath(),
+      })).to.throw('preTsukiDirectSign')
+    }
+  })
+
+  it('treats a direct-sign pin mismatch as an intent-source conflict', () => {
+    fs.writeFileSync(path.join(root, 'deployment-spec.yaml'), yaml.dump({
+      proofSystem: {
+        mode: 'disabled',
+        preTsukiDirectSign: {maxEndBatchHeight: 6863},
+      },
+      version: '1.0',
+    }))
+
+    expect(() => resolveProofIntent({
+      deploymentDir: root,
+      dogeConfig: {
+        proofSystem: {
+          mode: 'disabled',
+          preTsukiDirectSign: {maxEndBatchHeight: 6862},
+        },
+      },
+      dogeConfigPath: dogeConfigPath(),
+    })).to.throw('Proof intent conflict')
+  })
+
   it('fails closed when spec and doge-config disagree', () => {
     fs.writeFileSync(path.join(root, 'deployment-spec.yaml'), yaml.dump({
       proofSystem: { mode: 'disabled' },
