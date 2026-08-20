@@ -53,6 +53,10 @@ describe('withdrawal-config deployment block', () => {
     expect((facts as any).ethereum_da.inbox_worker.start_block).to.equal(777)
     expect((facts as any).ethereum_da.blob_source.aws_s3.treat_forbidden_as_missing).to.equal(true)
     expect((facts as any).l2_bootstrap_next_starting_block_height).to.equal(99)
+    expect((facts as any).rotate_sequencer_signer_v2).to.equal(undefined)
+    expect((facts as any).wf_withdrawal_parity_v1).to.equal(undefined)
+    expect((defaults as any).rotate_sequencer_signer_v2).to.equal(true)
+    expect((defaults as any).wf_withdrawal_parity_v1).to.equal(true)
     expect((defaults as any).utxo_manager_intermediate.bridge_strategy.max_inputs).to.equal(60)
   })
 
@@ -88,6 +92,8 @@ mode = "disabled"
     const tuned = seeded
       .replace('max_inputs = 60', 'max_inputs = 42')
       .replace('fee_rate_sat_per_kvb = 1_000_000', 'fee_rate_sat_per_kvb = 2000000')
+      .replace('rotate_sequencer_signer_v2 = true', 'rotate_sequencer_signer_v2 = false')
+      .replace('wf_withdrawal_parity_v1 = true', 'wf_withdrawal_parity_v1 = false')
       .replace('rpc_url = "http://l2-rpc:8545"', 'rpc_url = "http://operator-edited:8545"')
       .replace(WITHDRAWAL_DEPLOYMENT_BEGIN, `${WITHDRAWAL_DEPLOYMENT_BEGIN}\noperator_custom_flag = true`)
 
@@ -95,6 +101,8 @@ mode = "disabled"
     const parsed = toml.parse(remerged) as any
     expect(parsed.operator_custom_flag).to.equal(true)
     expect(parsed.fee_rate_sat_per_kvb).to.equal(2_000_000)
+    expect(parsed.rotate_sequencer_signer_v2).to.equal(false)
+    expect(parsed.wf_withdrawal_parity_v1).to.equal(false)
     expect(parsed.utxo_manager_intermediate.bridge_strategy.max_inputs).to.equal(42)
     // The fact key is re-asserted by the merge.
     expect(parsed.dogeos_indexer.rpc_url).to.equal('http://l2-rpc:8545')

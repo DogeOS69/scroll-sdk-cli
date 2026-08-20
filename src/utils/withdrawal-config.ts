@@ -298,10 +298,7 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
       'defaults.l2BootstrapNextStartingBlockHeight'
     ),
     network_str: nonEmpty(input.networkStr),
-    // Deployment-mode gates pinned by the SDK for the current proof gate.
-    rotate_sequencer_signer_v2: false,
     tso_url: nonEmpty(input.tsoUrl) || 'http://tso-service:3000',
-    wf_withdrawal_parity_v1: true,
   } as unknown as toml.JsonMap
 
   const defaults = {
@@ -340,6 +337,7 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
     replay_sqlite_path: '/app/data/replay.sqlite',
     require_change_tracking: false,
     rotate_key_v2: false,
+    rotate_sequencer_signer_v2: true,
     strict_l1_validation: false,
     strict_l2_validation: false,
     tso_timeout_minutes: 30,
@@ -362,6 +360,7 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
       high_thresh_sats: 10_000_000_000,
       prefer_inflight_bridge_outputs: false,
     },
+    wf_withdrawal_parity_v1: true,
   } as unknown as toml.JsonMap
 
   return {

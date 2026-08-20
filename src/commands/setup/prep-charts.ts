@@ -72,7 +72,7 @@ import {
 
 export interface TsoSignerEndpoint {
   network: string
-  role: 'Attestation' | 'Tee'
+  role: 'Attestation' | 'Correctness'
   signatureMode: 'ecdsa' | 'shadowfork_sentinel'
   uri: string
 }
@@ -173,7 +173,9 @@ export function buildTsoSigners(config: Pick<DogeConfig, 'cubesigner' | 'network
 
   const teeSigners: TsoSignerEndpoint[] = cubesignerRoles.length === 0 ? [] : [{
     network: config.network,
-    role: 'Tee',
+    // TSO's public registration contract calls the TEE signer "Correctness".
+    // "Tee" is its internal script role and is intentionally not accepted here.
+    role: 'Correctness',
     signatureMode: 'ecdsa',
     uri: 'http://cubesigner-signer:3000',
   }]
@@ -867,6 +869,40 @@ export function applyRethNetworkId(
     newValue: networkId,
     oldValue: String(oldValue ?? 'undefined'),
   }]
+}
+
+export interface RethExtraArgsSnapshot {
+  present: boolean
+  value?: unknown
+}
+
+/**
+ * Reth extraArgs are an operator-owned escape hatch, not prep-charts input.
+ * Snapshot them before reconciling generated runtime fields so current and
+ * future helpers cannot accidentally add, replace, or remove the value.
+ */
+export function snapshotRethExtraArgs(productionYaml: any): RethExtraArgsSnapshot {
+  const reth = productionYaml?.reth
+  const present = Boolean(reth && typeof reth === 'object' && Object.hasOwn(reth, 'extraArgs'))
+  return {
+    present,
+    ...(present ? {value: structuredClone(reth.extraArgs)} : {}),
+  }
+}
+
+export function restoreRethExtraArgs(
+  productionYaml: any,
+  snapshot: RethExtraArgsSnapshot,
+): void {
+  if (snapshot.present) {
+    productionYaml.reth ||= {}
+    productionYaml.reth.extraArgs = structuredClone(snapshot.value)
+    return
+  }
+
+  if (productionYaml?.reth && typeof productionYaml.reth === 'object') {
+    delete productionYaml.reth.extraArgs
+  }
 }
 
 export function resolveRethP2PNetworkId(
@@ -2096,6 +2132,9 @@ export default class SetupPrepCharts extends Command {
 
       const productionYamlContent = fs.readFileSync(yamlPath, 'utf8')
       const productionYaml = yaml.load(productionYamlContent) as any
+      const rethExtraArgsSnapshot = isL2RethBlobS3Chart(chartName)
+        ? snapshotRethExtraArgs(productionYaml)
+        : undefined
 
       let updated = false
       const changes: Array<{ key: string; newValue: string; oldValue: string }> = []
@@ -3367,6 +3406,12 @@ export default class SetupPrepCharts extends Command {
           updated = true;
           changes.push({ key: `config.externalRpcUriL2`, newValue: l2RpcEndpoint, oldValue: productionYaml.config?.externalRpcUriL2 });
         }
+      }
+
+      // reth.extraArgs is deliberately outside prep-charts ownership. Restore
+      // both its value and its presence/absence after every Reth reconciliation.
+      if (rethExtraArgsSnapshot) {
+        restoreRethExtraArgs(productionYaml, rethExtraArgsSnapshot)
       }
 
       if (updated) {

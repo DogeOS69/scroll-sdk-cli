@@ -95,7 +95,7 @@ const COMPOSE_YML = `# Mock prover-worker (dev/test only — deterministic, NON-
 name: prover-worker-mock
 services:
   prover-worker:
-    image: dogeos69/prover-worker-mock:\${PROVER_WORKER_IMAGE_TAG:-latest}
+    image: dogeos69/prover-worker-mock:\${PROVER_WORKER_IMAGE_TAG:-0.3.0-beta.0}
     restart: unless-stopped
     env_file:
       - prover-worker.env

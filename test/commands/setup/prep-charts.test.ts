@@ -35,10 +35,12 @@ import {
   removeRetiredAttestationSignerValues,
   removeRetiredCubesignerInstanceValues,
   resolveRethP2PNetworkId,
+  restoreRethExtraArgs,
   scrubFeeOracleLegacyValues,
   scrubL1InterfaceRetiredEnv,
   scrubWithdrawalLegacyProofEnv,
   shouldSkipL2ContractDeploymentBlockUpdate,
+  snapshotRethExtraArgs,
   validateDogeConfigEthereumDaForPrep,
 } from '../../../src/commands/setup/prep-charts.js'
 import { ensureWithdrawalProofActivationSwitch } from '../../../src/utils/withdrawal-config.js'
@@ -251,7 +253,7 @@ describe('setup prep-charts external attestation signer routing', () => {
         'http://10.20.30.40:4040',
       ],
     })).to.deep.equal([
-      { network: 'testnet', role: 'Tee', signatureMode: 'ecdsa', uri: 'http://cubesigner-signer:3000' },
+      { network: 'testnet', role: 'Correctness', signatureMode: 'ecdsa', uri: 'http://cubesigner-signer:3000' },
       { network: 'testnet', role: 'Attestation', signatureMode: 'ecdsa', uri: 'https://signer.partner-a.example:4040' },
       { network: 'testnet', role: 'Attestation', signatureMode: 'ecdsa', uri: 'http://10.20.30.40:4040' },
     ])
@@ -841,6 +843,11 @@ describe('setup prep-charts split L2 reth RPC updates', () => {
     const values: any = {
       reth: {
         blobS3Url: 'https://old.example/blobs',
+        extraArgs: [
+          '--network.legacy-geth-header-transform',
+          'true',
+          '--consensus.exit-on-signer-rotation',
+        ],
         l1Url: 'https://old.example/l1',
         networkId: '1',
         trustedPeers: 'old-peer',
@@ -856,6 +863,11 @@ describe('setup prep-charts split L2 reth RPC updates', () => {
 
     expect(values.reth).to.deep.equal({
       blobS3Url: 'https://dogeos-da.s3.us-east-1.amazonaws.com/devnet/eth-da/blobs/v1',
+      extraArgs: [
+        '--network.legacy-geth-header-transform',
+        'true',
+        '--consensus.exit-on-signer-rotation',
+      ],
       l1Url: 'http://l1-interface:8545',
       networkId: '4444444',
       trustedPeers: 'new-peer',
@@ -866,6 +878,42 @@ describe('setup prep-charts split L2 reth RPC updates', () => {
       'reth.networkId',
       'reth.trustedPeers',
     ])
+  })
+
+  it('restores operator-owned reth extraArgs after runtime reconciliation', () => {
+    const values: any = {
+      reth: {
+        extraArgs: [
+          '--network.legacy-geth-header-transform',
+          'true',
+          '--l1.query-range',
+          '100',
+          '--consensus.exit-on-signer-rotation',
+        ],
+      },
+    }
+    const snapshot = snapshotRethExtraArgs(values)
+
+    values.reth.extraArgs = ['--unexpected-generated-value']
+    restoreRethExtraArgs(values, snapshot)
+
+    expect(values.reth.extraArgs).to.deep.equal([
+      '--network.legacy-geth-header-transform',
+      'true',
+      '--l1.query-range',
+      '100',
+      '--consensus.exit-on-signer-rotation',
+    ])
+  })
+
+  it('removes extraArgs introduced by reconciliation when the operator did not define it', () => {
+    const values: any = {reth: {networkId: '4444444'}}
+    const snapshot = snapshotRethExtraArgs(values)
+
+    values.reth.extraArgs = ['--unexpected-generated-value']
+    restoreRethExtraArgs(values, snapshot)
+
+    expect(values.reth).not.to.have.property('extraArgs')
   })
 })
 

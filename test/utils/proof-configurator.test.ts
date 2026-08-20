@@ -325,9 +325,9 @@ max_items = 42
     const coordinatorToml = fs.readFileSync(result.configFile, 'utf8')
     const parsedCoordinator = toml.parse(coordinatorToml) as any
     expect(parsedCoordinator.verifier.scroll_chunk_verifier_identity.expected_circuit_id).to.equal('scroll_chunk-v1')
-    expect(parsedCoordinator.verifier.advance_l2_aggregation_verifier_identity.expected_circuit_id)
+    expect(parsedCoordinator.verifier.l2_range_aggregation_verifier_identity.expected_circuit_id)
       .to.equal('advance_l2_aggregation-v1')
-    expect(parsedCoordinator.verifier.scroll_real_verifier.advance_l2_aggregation_program_commitment_hex)
+    expect(parsedCoordinator.verifier.scroll_real_verifier.l2_range_aggregation_program_commitment_hex)
       .to.equal(raw.advance_l2_aggregation)
     expect(coordinatorToml).to.include('# user comment must survive')
     expect(parsedCoordinator.poll_interval_ms).to.equal(2345)
@@ -1066,7 +1066,7 @@ transport = "s3"
     expect(result.helmSetFiles.proofCoordinator.slice(1, 5).map(binding => binding.filePath)).to.deep.equal([
       path.join(root, 'proof-artifacts/mock-manifests/scroll-chunk-topology-program.json'),
       path.join(root, 'proof-artifacts/mock-manifests/scroll-batch-topology-program.json'),
-      path.join(root, 'proof-artifacts/mock-manifests/advance-l2-aggregation-topology-program.json'),
+      path.join(root, 'proof-artifacts/mock-manifests/l2-range-aggregation-topology-program.json'),
       path.join(root, 'proof-artifacts/mock-manifests/bridge-topology-program.json'),
     ])
     expect([
@@ -1080,11 +1080,16 @@ transport = "s3"
     expect(parsedWithdrawal.proof_system.dev_dummy).to.equal(undefined)
     expect(parsedWithdrawal.proof_system.require_bridge_state).to.equal(true)
     expect(parsedWithdrawal.proof_system.signer_proof_artifact_base_url).to.equal('https://proofs.example.com')
+    expect(parsedWithdrawal.l2_proof_pipeline.enabled).to.equal(true)
     // The bridge gate is active, so the legacy top-level gate identity must
     // be the bridge identity (dogeos-core e2e strict-withdrawal contract).
     expect(parsedWithdrawal.proof_control_plane_gate.circuit_id).to.equal('bridge-transition-v1')
     expect(parsedWithdrawal.proof_control_plane_gate.verification_key_hash_hex).to.equal('88'.repeat(32))
     expect(parsedWithdrawal.proof_control_plane_gate.scroll_chunk_verification_key_hash_hex).to.equal('44'.repeat(32))
+    expect(parsedWithdrawal.proof_control_plane_gate.scroll_chunk_verifier_identity.verifier_id)
+      .to.equal('dogeos-prover-worker-dev-mock-chunk-v1')
+    expect(parsedWithdrawal.proof_control_plane_gate.scroll_batch_verifier_identity.verifier_id)
+      .to.equal('dogeos-prover-worker-dev-mock-batch-v1')
     expect(parsedWithdrawal.proof_control_plane_gate.scroll_bridge_verifier_identity.verifier_id)
       .to.equal('openvm-bridge-topology-verifier-v1')
     expect(parsedWithdrawal.proof_control_plane_gate.scroll_real_verifier).to.equal(undefined)
@@ -1110,6 +1115,10 @@ transport = "s3"
     const parsedCoordinator = toml.parse(fs.readFileSync(result.configFile, 'utf8')) as any
     expect(parsedCoordinator.verifier.verifier_import_mode).to.equal('dev_dummy')
     expect(parsedCoordinator.verifier.scroll_real_verifier).to.equal(undefined)
+    expect(parsedCoordinator.verifier.scroll_chunk_verifier_identity.verifier_id)
+      .to.equal('dogeos-prover-worker-dev-mock-chunk-v1')
+    expect(parsedCoordinator.verifier.scroll_batch_verifier_identity.verifier_id)
+      .to.equal('dogeos-prover-worker-dev-mock-batch-v1')
     expect(parsedCoordinator.verifier.scroll_bridge_verifier_identity.expected_verification_key_hash_hex)
       .to.equal(`0x${'88'.repeat(32)}`)
 
@@ -1150,14 +1159,17 @@ transport = "s3"
     const aggregationManifest = JSON.parse(fs.readFileSync(
       path.join(
         root,
-        'proof-artifacts/mock-manifests/advance-l2-aggregation-topology-program.json',
+        'proof-artifacts/mock-manifests/l2-range-aggregation-topology-program.json',
       ),
       'utf8',
     ))
     const wpAggregationIdentity = parsedWithdrawal.proof_control_plane_gate
-      .advance_l2_aggregation_verifier_identity
+      .l2_range_aggregation_verifier_identity
     const coordinatorAggregationIdentity = parsedCoordinator.verifier
-      .advance_l2_aggregation_verifier_identity
+      .l2_range_aggregation_verifier_identity
+    expect(aggregationManifest.circuit_version).to.equal('1')
+    expect(wpAggregationIdentity.expected_circuit_version).to.equal('1')
+    expect(coordinatorAggregationIdentity.expected_circuit_version).to.equal('1')
     expect(derivedProgramHash).to.equal(aggregationManifest.program_commitment_hash)
     expect(derivedProgramHash).to.equal(
       wpAggregationIdentity.expected_program_commitment_hash_hex,
@@ -1193,7 +1205,7 @@ transport = "s3"
     // export-signer-policy later derives from the staged coordinator TOML.
     const expectedTriples = [
       `openvm_state_transition:openvm-bridge-topology-verifier-v1:${'88'.repeat(32)}`,
-      `scroll_batch:openvm-scroll-batch-topology-verifier-v1:${'55'.repeat(32)}`,
+      `scroll_batch:dogeos-prover-worker-dev-mock-batch-v1:${'55'.repeat(32)}`,
     ].join(',')
     expect(deriveAllowedProofTriples(result.configFile, [])?.value).to.equal(expectedTriples)
   })

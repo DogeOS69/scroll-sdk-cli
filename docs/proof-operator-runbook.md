@@ -116,11 +116,15 @@ deployment/
     └── source-set.toml
 ```
 
-`prep-charts` may scaffold a missing `ProofCoordinator.toml`; after creation,
-the hand-maintained materializer sections remain operator-owned and are never
-silently replaced. Production `configs/source-set.toml` must contain real RPC
-sources reachable from partner signer networks. The CLI cannot safely invent
-production RPC quorum policy.
+`prep-charts` scaffolds a missing `ProofCoordinator.toml` and reconciles two
+explicitly marked blocks on every subsequent run: the materializer runtime
+derived from the native withdrawal-processor configuration, and the verifier
+registry derived from the selected proof mode. Content outside those marked
+blocks remains operator-owned. A legacy CLI scaffold is adopted once when its
+shape is unambiguous; an unmarked hand-written materializer configuration is
+rejected instead of being silently overwritten. Production
+`configs/source-set.toml` must contain real RPC sources reachable from partner
+signer networks. The CLI cannot safely invent production RPC quorum policy.
 
 `withdrawal-processor/WithdrawalProcessor.toml` is different: it is a required
 native application-config template supplied by

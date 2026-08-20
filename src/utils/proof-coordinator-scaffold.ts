@@ -23,6 +23,8 @@ export interface ScaffoldCoordinatorConfigOptions {
 export interface ScaffoldCoordinatorConfigResult {
   configFile: string
   created: boolean
+  /** True when this invocation changed the file, including initial creation. */
+  updated: boolean
 }
 
 /** Deployment facts the coordinator scaffold shares with withdrawal-processor. */
@@ -142,32 +144,232 @@ function readFactsFromValuesEnv(valuesDir: string): ScaffoldFacts {
 
 const q = (value: string): string => JSON.stringify(value)
 
-function ethereumDaSection(label: string, dataRoot: string, facts: ScaffoldFacts, providerToml: string): string {
-  return `[${label}]
-l1_rpc_url = ${q(facts.l1RpcUrl)}
-artifact_store_root = ${q(`${dataRoot}/blobs`)}
-artifact_metadata_sqlite_path = ${q(`${dataRoot}/meta.sqlite`)}
+export const MANAGED_RUNTIME_BEGIN = '# BEGIN scrollsdk managed proof coordinator runtime'
+export const MANAGED_RUNTIME_END = '# END scrollsdk managed proof coordinator runtime'
+const MANAGED_VERIFIER_BEGIN = '# BEGIN scrollsdk managed verifier configuration'
 
-[${label}.blob_source]
-timeout_ms = ${facts.blobTimeoutMs}
+function table(value: unknown): Record<string, any> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? {...value as Record<string, any>}
+    : {}
+}
 
-${providerToml.replaceAll('__BLOB_SOURCE__', `${label}.blob_source`)}`
+function existingString(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.trim() !== '' ? value : fallback
+}
+
+function ethereumDaConfig(
+  existing: unknown,
+  dataRoot: string,
+  facts: ScaffoldFacts,
+): Record<string, any> {
+  const config = table(existing)
+  const blobSource = table(config.blob_source)
+  delete blobSource.aws_s3
+  delete blobSource.beacon_node
+  blobSource.timeout_ms = facts.blobTimeoutMs
+  if (facts.blobS3Url) {
+    blobSource.aws_s3 = {
+      ...(facts.blobS3KeyPrefix ? {key_prefix: facts.blobS3KeyPrefix} : {}),
+      url: facts.blobS3Url,
+    }
+  } else if (facts.beaconNodeUrl) {
+    blobSource.beacon_node = {url: facts.beaconNodeUrl}
+  } else {
+    throw new Error(
+      `${facts.source}: a blob source is required to scaffold ProofCoordinator.toml; configure the ethereumDa blob archive or a beacon node via config.toml + scrollsdk setup prep-charts`
+    )
+  }
+
+  config.l1_rpc_url = facts.l1RpcUrl
+  config.artifact_store_root = existingString(config.artifact_store_root, `${dataRoot}/blobs`)
+  config.artifact_metadata_sqlite_path = existingString(
+    config.artifact_metadata_sqlite_path,
+    `${dataRoot}/meta.sqlite`,
+  )
+  config.blob_source = blobSource
+  return config
+}
+
+/**
+ * Merge CLI-owned deployment facts into the coordinator materializer tree.
+ * Unknown runtime tuning remains intact, while fields that must agree with the
+ * withdrawal processor and mutually exclusive mock/production topology are
+ * always reconciled.
+ */
+function buildMaterializerRuntime(
+  facts: ScaffoldFacts,
+  provingMode: ProvingMode,
+  existing: unknown = undefined,
+): Record<string, any> {
+  const materializer = table(existing)
+  materializer.artifact_store_root = existingString(
+    materializer.artifact_store_root,
+    '/app/data/proof-materializer-staging',
+  )
+
+  const scrollBatch = table(materializer.scroll_batch)
+  scrollBatch.enabled = true
+  scrollBatch.materializer_output_root = existingString(
+    scrollBatch.materializer_output_root,
+    '/app/data/scroll-batch-materializer',
+  )
+  if (provingMode === 'mock') {
+    delete materializer.scroll_chunk_segmentation
+    materializer.dev_sentinel_scroll_chunk = {
+      ...table(materializer.dev_sentinel_scroll_chunk),
+      enabled: true,
+    }
+    scrollBatch.dev_sentinel = true
+    scrollBatch.proof_mode = 'Mock'
+    delete scrollBatch.subprocess
+  } else {
+    delete materializer.dev_sentinel_scroll_chunk
+    materializer.scroll_chunk_segmentation = {
+      ...table(materializer.scroll_chunk_segmentation),
+      enabled: true,
+    }
+    scrollBatch.dev_sentinel = false
+    delete scrollBatch.proof_mode
+    const subprocess = table(scrollBatch.subprocess)
+    subprocess.binary_path = existingString(
+      subprocess.binary_path,
+      '/usr/local/bin/scroll-runtime-materializer',
+    )
+    subprocess.statement_namespace_config_path = existingString(
+      subprocess.statement_namespace_config_path,
+      '/app/data/manifests/statement-namespace.json',
+    )
+    subprocess.scratch_root = existingString(
+      subprocess.scratch_root,
+      '/app/data/scroll-batch-scratch',
+    )
+    subprocess.chunk_program_commitment_hex = 'overridden-by-scrollsdk'
+    subprocess.l2_rpc_url = facts.l2RpcUrl
+    subprocess.subprocess_timeout_ms = Number.isSafeInteger(subprocess.subprocess_timeout_ms)
+      && subprocess.subprocess_timeout_ms > 0
+      ? subprocess.subprocess_timeout_ms
+      : 3_600_000
+    subprocess.ethereum_da = ethereumDaConfig(
+      subprocess.ethereum_da,
+      '/app/data/scroll-batch-eth-da',
+      facts,
+    )
+    scrollBatch.subprocess = subprocess
+  }
+
+  materializer.scroll_batch = scrollBatch
+  const bridge = table(materializer.bridge)
+  bridge.enabled = true
+  bridge.advance_l1 = true
+  bridge.advance_l2 = true
+  bridge.dogecoin_rpc = {
+    ...table(bridge.dogecoin_rpc),
+    network: facts.dogecoinNetwork,
+    url: facts.dogecoinRpcUrl,
+  }
+  bridge.ethereum_da = ethereumDaConfig(
+    bridge.ethereum_da,
+    '/app/data/bridge-eth-da',
+    facts,
+  )
+  materializer.bridge = bridge
+  return materializer
+}
+
+function renderManagedRuntime(materializer: Record<string, any>): string {
+  const body = toml.stringify({materializer} as toml.JsonMap).trimEnd()
+  return `${MANAGED_RUNTIME_BEGIN}\n${body}\n${MANAGED_RUNTIME_END}`
+}
+
+function migrateLegacyHeader(source: string): string {
+  return source
+    .replace(
+      '# Initially scaffolded from the prepared withdrawal-processor configuration.\n'
+      + '# Hand-maintained afterwards: `scrollsdk setup prep-charts` only rewrites the\n'
+      + '# marked verifier block when proof mode is active. Review every value before\n'
+      + '# production use.\n',
+      '# Initially scaffolded from the prepared withdrawal-processor configuration.\n'
+      + '# scrollsdk owns the marked runtime and verifier blocks. Configuration outside\n'
+      + '# those blocks remains operator-maintained.\n',
+    )
+    .replace(
+      '# Generated by `scrollsdk setup prep-charts`\n'
+      + '# from the prepared withdrawal-processor deployment configuration.\n'
+      + '# Hand-maintained afterwards: scrollsdk only rewrites the marked verifier block\n'
+      + '# below. Review every value before production use.\n',
+      '# Generated by `scrollsdk setup prep-charts` from the prepared\n'
+      + '# withdrawal-processor deployment configuration. scrollsdk owns the marked\n'
+      + '# runtime and verifier blocks; all other configuration is operator-maintained.\n',
+    )
+}
+
+function replaceManagedRuntimeBlock(
+  filePath: string,
+  source: string,
+  materializer: Record<string, any>,
+): string {
+  const beginCount = source.split(MANAGED_RUNTIME_BEGIN).length - 1
+  const endCount = source.split(MANAGED_RUNTIME_END).length - 1
+  if (beginCount !== endCount || beginCount > 1) {
+    throw new Error(`${filePath}: expected at most one complete ${MANAGED_RUNTIME_BEGIN} / ${MANAGED_RUNTIME_END} block`)
+  }
+
+  const managed = renderManagedRuntime(materializer)
+  if (beginCount === 1) {
+    const begin = source.indexOf(MANAGED_RUNTIME_BEGIN)
+    const end = source.indexOf(MANAGED_RUNTIME_END, begin)
+    const afterEnd = end + MANAGED_RUNTIME_END.length
+    return `${source.slice(0, begin)}${managed}${source.slice(afterEnd)}`
+  }
+
+  // One-time migration for coordinator files scaffolded before the runtime
+  // ownership marker existed. The verifier marker is the unambiguous boundary;
+  // refusing any other section in between prevents accidental broad rewrites.
+  const materializerHeader = /^\[materializer]\s*(?:#.*)?$/m.exec(source)
+  const verifierBoundary = source.indexOf(MANAGED_VERIFIER_BEGIN)
+  if (!materializerHeader || verifierBoundary < materializerHeader.index) {
+    throw new Error(
+      `${filePath}: cannot safely reconcile an existing coordinator config without a [materializer] tree followed by ${MANAGED_VERIFIER_BEGIN}`
+    )
+  }
+
+  const legacyRuntime = source.slice(materializerHeader.index, verifierBoundary)
+  for (const match of legacyRuntime.matchAll(/^\s*\[\[?([^\]]+)]]?\s*(?:#.*)?$/gm)) {
+    if (match[1] !== 'materializer' && !match[1].startsWith('materializer.')) {
+      throw new Error(`${filePath}: cannot migrate coordinator runtime across non-materializer section [${match[1]}]`)
+    }
+  }
+
+  const prefix = source.slice(0, materializerHeader.index)
+  const suffix = source.slice(verifierBoundary)
+  return `${prefix}${managed}\n\n${suffix}`
+}
+
+function writeAtomically(filePath: string, content: string, mode: number): void {
+  fs.mkdirSync(path.dirname(filePath), {recursive: true})
+  const temporaryPath = `${filePath}.tmp-${process.pid}`
+  try {
+    fs.writeFileSync(temporaryPath, content, {mode})
+    fs.renameSync(temporaryPath, filePath)
+  } finally {
+    if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath)
+  }
 }
 
 /**
  * Generate a complete, validation-passing ProofCoordinator.toml from the
  * deployment facts prep-charts already resolved — read from the native
  * WithdrawalProcessor.toml when it exists, or the legacy values env layout
- * otherwise. The file is only created when missing; the managed verifier block
- * is left as a marked production stub for `setup prep-charts` to fill in the
- * same run.
+ * otherwise. For an existing file, the marked materializer/runtime block is
+ * reconciled on every run while operator-owned configuration outside the block
+ * remains byte-for-byte intact. The managed verifier block is left for
+ * `setup prep-charts` to fill in the same run.
  */
 export function scaffoldProofCoordinatorConfig(
   options: ScaffoldCoordinatorConfigOptions
 ): ScaffoldCoordinatorConfigResult {
   const configFile = path.resolve(options.coordinatorConfigPath)
-  if (fs.existsSync(configFile)) return { configFile, created: false }
-
   const valuesDir = path.resolve(options.valuesDir)
   const withdrawalConfigPath = path.resolve(
     options.withdrawalConfigPath || path.join(path.dirname(valuesDir), WITHDRAWAL_NATIVE_CONFIG_RELPATH)
@@ -176,54 +378,40 @@ export function scaffoldProofCoordinatorConfig(
     ? readFactsFromWithdrawalToml(withdrawalConfigPath)
     : readFactsFromValuesEnv(valuesDir)
 
-  let providerToml: string
-  if (facts.blobS3Url) {
-    providerToml = `[__BLOB_SOURCE__.aws_s3]\nurl = ${q(facts.blobS3Url)}${facts.blobS3KeyPrefix ? `\nkey_prefix = ${q(facts.blobS3KeyPrefix)}` : ''}`
-  } else if (facts.beaconNodeUrl) {
-    providerToml = `[__BLOB_SOURCE__.beacon_node]\nurl = ${q(facts.beaconNodeUrl)}`
-  } else {
-    throw new Error(
-      `${facts.source}: a blob source is required to scaffold ProofCoordinator.toml; configure the ethereumDa blob archive or a beacon node via config.toml + scrollsdk setup prep-charts`
-    )
+  const provingMode = options.provingMode || 'production'
+  const existed = fs.existsSync(configFile)
+  if (existed) {
+    const original = fs.readFileSync(configFile, 'utf8')
+    const source = migrateLegacyHeader(original)
+    let parsed: any
+    try {
+      parsed = toml.parse(source)
+    } catch (error) {
+      throw new Error(`${configFile}: invalid existing ProofCoordinator TOML: ${error instanceof Error ? error.message : String(error)}`)
+    }
+
+    const materializer = buildMaterializerRuntime(facts, provingMode, parsed.materializer)
+    const candidate = replaceManagedRuntimeBlock(configFile, source, materializer)
+    try {
+      toml.parse(candidate)
+    } catch (error) {
+      throw new Error(`${configFile}: reconciled ProofCoordinator TOML is invalid: ${error instanceof Error ? error.message : String(error)}`)
+    }
+
+    const updated = candidate !== original
+    if (updated) {
+      writeAtomically(configFile, candidate, fs.statSync(configFile).mode % 0o1000)
+    }
+
+    return {configFile, created: false, updated}
   }
 
-  const provingMode = options.provingMode || 'production'
-  // Mock proving replaces the real scroll materializer subprocess topology
-  // with the dev-sentinel materializers the dev_dummy verifier pairs with;
-  // the bridge witness materializer stays real in both modes.
-  const scrollMaterializerToml = provingMode === 'mock'
-    ? `[materializer.dev_sentinel_scroll_chunk]
-enabled = true
-
-[materializer.scroll_batch]
-enabled = true
-dev_sentinel = true
-proof_mode = "Mock"
-materializer_output_root = "/app/data/scroll-batch-materializer"`
-    : `[materializer.scroll_chunk_segmentation]
-enabled = true
-
-[materializer.scroll_batch]
-enabled = true
-dev_sentinel = false
-materializer_output_root = "/app/data/scroll-batch-materializer"
-
-[materializer.scroll_batch.subprocess]
-binary_path = "/usr/local/bin/scroll-runtime-materializer"
-statement_namespace_config_path = "/app/data/manifests/statement-namespace.json"
-scratch_root = "/app/data/scroll-batch-scratch"
-# setup prep-charts injects the validated raw commitment through the
-# DOGEOS_PROOF_COORDINATOR_* environment overlay.
-chunk_program_commitment_hex = "overridden-by-scrollsdk"
-l2_rpc_url = ${q(facts.l2RpcUrl)}
-subprocess_timeout_ms = 3600000
-
-${ethereumDaSection('materializer.scroll_batch.subprocess.ethereum_da', '/app/data/scroll-batch-eth-da', facts, providerToml)}`
+  const materializer = buildMaterializerRuntime(facts, provingMode)
 
   const content = `# Generated by \`scrollsdk setup prep-charts\`
 # from the prepared withdrawal-processor deployment configuration.
-# Hand-maintained afterwards: scrollsdk only rewrites the marked verifier block
-# below. Review every value before production use.
+# scrollsdk owns the marked runtime and verifier blocks; all other
+# configuration is operator-maintained.
 poll_interval_ms = 1000
 lease_ttl_ms = 60000
 protocol_context_json = "/app/protocol_context.json"
@@ -236,21 +424,7 @@ kind = "s3"
 key_prefix = "proof-topology"
 force_path_style = false
 
-[materializer]
-artifact_store_root = "/app/data/proof-materializer-staging"
-
-${scrollMaterializerToml}
-
-[materializer.bridge]
-enabled = true
-advance_l1 = true
-advance_l2 = true
-
-[materializer.bridge.dogecoin_rpc]
-url = ${q(facts.dogecoinRpcUrl)}
-network = ${q(facts.dogecoinNetwork)}
-
-${ethereumDaSection('materializer.bridge.ethereum_da', '/app/data/bridge-eth-da', facts, providerToml)}
+${renderManagedRuntime(materializer)}
 
 # BEGIN scrollsdk managed verifier configuration
 [verifier]
@@ -278,14 +452,6 @@ max_public_output_bytes = 10485760
     throw new Error(`Generated ProofCoordinator.toml is invalid TOML: ${error instanceof Error ? error.message : String(error)}`)
   }
 
-  fs.mkdirSync(path.dirname(configFile), { recursive: true })
-  const temporaryPath = `${configFile}.tmp-${process.pid}`
-  try {
-    fs.writeFileSync(temporaryPath, content, { mode: 0o600 })
-    fs.renameSync(temporaryPath, configFile)
-  } finally {
-    if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath)
-  }
-
-  return { configFile, created: true }
+  writeAtomically(configFile, content, 0o600)
+  return {configFile, created: true, updated: true}
 }

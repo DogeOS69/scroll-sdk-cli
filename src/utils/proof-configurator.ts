@@ -170,7 +170,7 @@ export const MANAGED_VERIFIER_BEGIN = '# BEGIN scrollsdk managed verifier config
 export const MANAGED_VERIFIER_END = '# END scrollsdk managed verifier configuration'
 
 const FAMILY_CONFIG_KEYS: Record<ProofFamily, string> = {
-  advance_l2_aggregation: 'advance_l2_aggregation_verifier_identity',
+  advance_l2_aggregation: 'l2_range_aggregation_verifier_identity',
   bridge_transition: 'scroll_bridge_verifier_identity',
   scroll_batch: 'scroll_batch_verifier_identity',
   scroll_chunk: 'scroll_chunk_verifier_identity',
@@ -338,11 +338,17 @@ function loadProgramManifests(paths: string[]): Map<ProofFamily, { manifest: Pro
     const manifest = readJson<ProofProgramManifest>(manifestPath)
     validateProgramManifestShape(manifest, manifestPath)
     if (manifest.schema_version !== 1) throw new Error(`${manifestPath}: unsupported schema_version ${manifest.schema_version}`)
-    if (!Object.hasOwn(FAMILY_CONFIG_KEYS, manifest.proof_family)) {
+    // The core wire contract calls tag 5 `l2_range_aggregation`. Keep the
+    // historical internal key temporarily because released identity manifests
+    // still expose `advance_l2_aggregation_*` expected-identity fields.
+    const family = (manifest.proof_family as string) === 'l2_range_aggregation'
+      ? 'advance_l2_aggregation'
+      : manifest.proof_family
+    if (!Object.hasOwn(FAMILY_CONFIG_KEYS, family)) {
       throw new Error(`${manifestPath}: unsupported proof_family ${String(manifest.proof_family)}`)
     }
 
-    if (manifests.has(manifest.proof_family)) throw new Error(`Duplicate manifest for ${manifest.proof_family}`)
+    if (manifests.has(family)) throw new Error(`Duplicate manifest for ${manifest.proof_family}`)
     const basename = path.basename(manifestPath)
     if (basenames.has(basename)) {
       throw new Error(`Duplicate program manifest basename ${basename}; mounted ConfigMap keys must be unique`)
@@ -358,7 +364,7 @@ function loadProgramManifests(paths: string[]): Map<ProofFamily, { manifest: Pro
 
     manifest.verification_key_hash = normalizeHex(manifest.verification_key_hash, 32, `${manifestPath}: verification_key_hash`)
     manifest.program_commitment_hash = normalizeHex(manifest.program_commitment_hash, 32, `${manifestPath}: program_commitment_hash`)
-    manifests.set(manifest.proof_family, { manifest, path: manifestPath })
+    manifests.set(family, { manifest, path: manifestPath })
   }
 
   for (const family of Object.keys(FAMILY_CONFIG_KEYS) as ProofFamily[]) {
@@ -1252,11 +1258,11 @@ function prepareProofCoordinator(
   // exists for release artifacts; the dev_dummy verifier is structural.
   if (!mock) {
     verifier.scroll_real_verifier = {
-      advance_l2_aggregation_program_commitment_hex: commitments!.get('advance_l2_aggregation'),
       agg_verifying_key_path: AGG_VK_PATH,
       batch_program_commitment_hex: commitments!.get('scroll_batch'),
       bridge_program_commitment_hex: commitments!.get('bridge_transition'),
       chunk_program_commitment_hex: commitments!.get('scroll_chunk'),
+      l2_range_aggregation_program_commitment_hex: commitments!.get('advance_l2_aggregation'),
     }
   }
 
@@ -1386,6 +1392,7 @@ function prepareWithdrawalProcessor(
       name.startsWith('DOGEOS_WITHDRAWAL_PROOF_EXECUTION_WORKER__') ||
       name.startsWith('DOGEOS_WITHDRAWAL_PROOF_SYSTEM__') ||
       name.startsWith('DOGEOS_WITHDRAWAL_PROOF_WORK_API__') ||
+      name.startsWith('DOGEOS_WITHDRAWAL_L2_PROOF_PIPELINE__') ||
       name.startsWith('DOGEOS_WITHDRAWAL_LOCAL_BRIDGE_PROOF_RUNTIME__') ||
       name.startsWith('DOGEOS_WITHDRAWAL_SCROLL_WORKER_API__')
     ) env.splice(index, 1)
@@ -1428,11 +1435,6 @@ function prepareWithdrawalProcessor(
 
   if (!mock) {
     proofControlPlaneGate.scroll_real_verifier = {
-      advance_l2_aggregation_program_commitment_hex: bareHex(
-        commitments!.get('advance_l2_aggregation')!,
-        64,
-        'AdvanceL2 aggregation raw program commitment'
-      ),
       agg_verifying_key_path: AGG_VK_PATH,
       batch_program_commitment_hex: bareHex(
         commitments!.get('scroll_batch')!,
@@ -1449,10 +1451,22 @@ function prepareWithdrawalProcessor(
         64,
         'scroll chunk raw program commitment'
       ),
+      l2_range_aggregation_program_commitment_hex: bareHex(
+        commitments!.get('advance_l2_aggregation')!,
+        64,
+        'AdvanceL2 aggregation raw program commitment'
+      ),
     }
   }
 
   const proofConfig: Record<string, any> = {
+    // The reusable range pipeline owns Scroll child-proof production and the
+    // head-free tag-5 aggregation used by migrated AdvanceL2 materialization.
+    // dogeos-core rejects an enabled AdvanceL2 bridge materializer unless this
+    // explicit opt-in is present.
+    l2_proof_pipeline: {
+      enabled: true,
+    },
     proof_control_plane_gate: proofControlPlaneGate,
     proof_system: proofSystem,
     proof_work_api: {
