@@ -248,6 +248,7 @@ max_items = 42
     expect(values.service?.main?.ports?.['proof-work']).to.equal(undefined)
     const native = toml.parse(fs.readFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), 'utf8')) as any
     expect(native.proof_system.mode).to.equal('disabled')
+    expect(native.proof_system.correctness_policy_transport).to.equal('plain')
     expect(native.proof_work_api).to.equal(undefined)
     expect(values.env.some((item: any) => item.name.startsWith('DOGEOS_WITHDRAWAL_PROOF_WORK_API__'))).to.equal(false)
   })
@@ -417,6 +418,7 @@ max_items = 42
     expect(withdrawalToml.match(/# BEGIN scrollsdk managed proof configuration/g)).to.have.length(1)
     expect(parsedWithdrawal.operator_tuning.max_items).to.equal(42)
     expect(parsedWithdrawal.proof_system.mode).to.equal('production')
+    expect(parsedWithdrawal.proof_system.correctness_policy_transport).to.equal('bridge_proof_ref_v1')
     expect(parsedWithdrawal.proof_system.require_scroll_execution).to.equal(true)
     expect(parsedWithdrawal.proof_system.require_bridge_state).to.equal(true)
     expect(parsedWithdrawal.proof_system.signer_proof_artifact_base_url).to.equal('https://signer-proofs.example.com/public/proof-topology')
@@ -530,6 +532,7 @@ max_items = 42
     const parsedNative = toml.parse(nativeSource) as any
     expect(parsedNative.operator_tuning.max_items).to.equal(42)
     expect(parsedNative.proof_system.mode).to.equal('production')
+    expect(parsedNative.proof_system.correctness_policy_transport).to.equal('bridge_proof_ref_v1')
     expect(parsedNative.proof_work_api.bind_addr).to.equal('0.0.0.0:9300')
 
     const withdrawal = yaml.load(fs.readFileSync(result.files[1], 'utf8')) as any
@@ -1077,6 +1080,7 @@ transport = "s3"
     const withdrawal = yaml.load(fs.readFileSync(result.files[1], 'utf8')) as any
     const parsedWithdrawal = toml.parse(fs.readFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), 'utf8')) as any
     expect(parsedWithdrawal.proof_system.mode).to.equal('dev_dummy')
+    expect(parsedWithdrawal.proof_system.correctness_policy_transport).to.equal('plain')
     expect(parsedWithdrawal.proof_system.dev_dummy).to.equal(undefined)
     expect(parsedWithdrawal.proof_system.require_bridge_state).to.equal(true)
     expect(parsedWithdrawal.proof_system.signer_proof_artifact_base_url).to.equal('https://proofs.example.com')

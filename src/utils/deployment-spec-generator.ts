@@ -498,13 +498,6 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     }
   }
 
-  const validateOptionalBytes32Hex = (path: string, value: string | undefined): void => {
-    if (value === undefined) return
-    if (!/^0x[\dA-Fa-f]{64}$/.test(value)) {
-      pushInvalidEthereumDaConfigError(path, `${path} must be a 32-byte 0x-prefixed hex string`)
-    }
-  }
-
   const validateRequiredBytes32Hex = (path: string, value: string | undefined): void => {
     if (!value || !/^0x[\dA-Fa-f]{64}$/.test(value)) {
       pushInvalidEthereumDaConfigError(path, `${path} must be a 32-byte 0x-prefixed hex string`)
@@ -845,10 +838,23 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       pushInvalidEthereumDaConfigError('ethereumDa.batch.compression', 'ethereumDa.batch.compression must be auto or none')
     }
 
-    validateOptionalBytes32Hex('ethereumDa.batch.genesisBatchHash', ethereumDaBatch.genesisBatchHash)
-    validateOptionalBytes32Hex('ethereumDa.batch.genesisRelayedDepositQueueHash', ethereumDaBatch.genesisRelayedDepositQueueHash)
-    validateOptionalBytes32Hex('ethereumDa.batch.genesisStateRoot', ethereumDaBatch.genesisStateRoot)
-    validateOptionalBytes32Hex('ethereumDa.batch.genesisWithdrawRoot', ethereumDaBatch.genesisWithdrawRoot)
+    for (const [field, value] of [
+      ['genesisBatchHash', ethereumDaBatch.genesisBatchHash],
+      ['genesisNextRelayedDepositIndex', ethereumDaBatch.genesisNextRelayedDepositIndex],
+      ['genesisNextWithdrawIndex', ethereumDaBatch.genesisNextWithdrawIndex],
+      ['genesisRelayedDepositQueueHash', ethereumDaBatch.genesisRelayedDepositQueueHash],
+      ['genesisStateRoot', ethereumDaBatch.genesisStateRoot],
+      ['genesisWithdrawRoot', ethereumDaBatch.genesisWithdrawRoot],
+      ['minCodecVersion', ethereumDaBatch.minCodecVersion],
+    ] as const) {
+      if (value !== undefined) {
+        pushInvalidEthereumDaConfigError(
+          `ethereumDa.batch.${field}`,
+          `ethereumDa.batch.${field} has been removed from dogeos-core; remove it and use protocol_context.json plus execution genesis authority`,
+        )
+      }
+    }
+
     if (ethereumDaBatch.initialBatchSidecarJson !== undefined) {
       pushInvalidEthereumDaConfigError(
         'ethereumDa.batch.initialBatchSidecarJson',
@@ -856,14 +862,10 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       )
     }
 
-    validateOptionalNonNegativeSafeInteger('ethereumDa.batch.genesisNextRelayedDepositIndex', ethereumDaBatch.genesisNextRelayedDepositIndex)
-    validateOptionalNonNegativeSafeInteger('ethereumDa.batch.genesisNextWithdrawIndex', ethereumDaBatch.genesisNextWithdrawIndex)
     validateOptionalPositiveSafeInteger('ethereumDa.batch.maxBlocksPerChunk', ethereumDaBatch.maxBlocksPerChunk)
     validateOptionalPositiveSafeInteger('ethereumDa.batch.maxChunksPerBatch', ethereumDaBatch.maxChunksPerBatch)
     validateOptionalPositiveSafeInteger('ethereumDa.batch.maxL2GasPerChunk', ethereumDaBatch.maxL2GasPerChunk)
     validateOptionalPositiveSafeInteger('ethereumDa.batch.maxUncompressedBatchBytesSize', ethereumDaBatch.maxUncompressedBatchBytesSize)
-    validateOptionalNonNegativeSafeInteger('ethereumDa.batch.minCodecVersion', ethereumDaBatch.minCodecVersion)
-
     const { cutover } = ethereumDaBatch
     if (cutover) {
       validateRequiredNonNegativeSafeInteger('ethereumDa.batch.cutover.lastBatchIndex', cutover.lastBatchIndex)

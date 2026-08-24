@@ -255,7 +255,6 @@ function buildEthDaSubmitterBatchEnv(spec: DeploymentSpec): Record<string, strin
     DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_CHUNKS_PER_BATCH: String(batch.maxChunksPerBatch ?? 1),
     DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: String(batch.maxL2GasPerChunk ?? 6_000_000),
     DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_BATCH_BYTES_SIZE: String(batch.maxUncompressedBatchBytesSize ?? 131_072),
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__MIN_CODEC_VERSION: String(batch.minCodecVersion ?? 10),
   }
 
   if (cutover) {
@@ -1254,7 +1253,7 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_VERIFIER_IDENTITY_DIGEST', value: productionPolicy?.verifierIdentityDigest || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROGRAM_IDENTITY_DIGEST', value: productionPolicy?.programIdentityDigest || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROOF_RESOLVER_AUTHORITY', value: productionPolicy?.proofResolverAuthority || '' },
-      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT', value: 'dogeos-cubesigner-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT', value: 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-v2' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_LIVE_EVIDENCE_REPORT_PATH', value: productionPolicy?.liveEvidenceReportPath || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_LIVE_EVIDENCE_REPORT_DIGEST', value: productionPolicy?.liveEvidenceReportDigest || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', valueFrom: { secretKeyRef: { key: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', name: 'cubesigner-signer-env' } } },
@@ -1576,7 +1575,7 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
           DOGEOS_FEE_ORACLE_MONITORING__HEALTH_BIND_ADDRESS: '0.0.0.0',
           DOGEOS_FEE_ORACLE_MONITORING__HEALTH_CHECK_PORT: '8080',
           DOGEOS_FEE_ORACLE_MONITORING__METRICS_PORT: '9090',
-          DOGEOS_FEE_ORACLE_PRICE_ORACLE__CACHE_DURATION: '60',
+          DOGEOS_FEE_ORACLE_PRICE_ORACLE__CACHE_DURATION: '30',
           DOGEOS_FEE_ORACLE_PRICE_ORACLE__COINBASE_ENABLED: 'true',
           DOGEOS_FEE_ORACLE_PRICE_ORACLE__COINGECKO_ENABLED: 'false',
           DOGEOS_FEE_ORACLE_PRICE_ORACLE__GATEIO_ENABLED: 'true',

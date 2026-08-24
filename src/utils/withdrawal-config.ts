@@ -124,8 +124,6 @@ function deleteTomlPath(root: Record<string, any>, segments: string[]): void {
 }
 
 export interface MergeWithdrawalDeploymentOptions {
-  /** Seeded only where the operator has not set the key (existing wins). */
-  defaults?: toml.JsonMap
   /** Table/key paths to remove after the merge (e.g. a retired blob provider). */
   deletePaths?: string[][]
 }
@@ -171,8 +169,7 @@ export function mergeWithdrawalManagedDeploymentBlock(
     tail = source.slice(end + WITHDRAWAL_DEPLOYMENT_END.length)
   }
 
-  const seeded = deepMergeToml(stripUndefinedDeep(options.defaults || {}), existing)
-  const merged = deepMergeToml(seeded, stripUndefinedDeep(facts)) as Record<string, any>
+  const merged = deepMergeToml(existing, stripUndefinedDeep(facts)) as Record<string, any>
   for (const segments of options.deletePaths || []) deleteTomlPath(merged, segments)
 
   const block = `${WITHDRAWAL_DEPLOYMENT_BEGIN}\n${toml.stringify(merged as toml.JsonMap).trimEnd()}\n${WITHDRAWAL_DEPLOYMENT_END}`
@@ -203,14 +200,6 @@ function asInteger(value: unknown, label: string): number | undefined {
   return parsed
 }
 
-function asBoolean(value: unknown): boolean | undefined {
-  if (value === undefined || value === null || String(value).trim() === '') return undefined
-  if (typeof value === 'boolean') return value
-  if (value === 'true') return true
-  if (value === 'false') return false
-  return undefined
-}
-
 function nonEmpty(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
 }
@@ -223,13 +212,10 @@ export interface WithdrawalDeploymentFactsInput {
     expectedBatcherAddress?: unknown
     inboxWorkerStartBlock?: unknown
     l1RpcUrl: unknown
-    minFinality?: unknown
     s3?: {
       enabled: boolean
       keyPrefix?: unknown
       publicBaseUrl?: unknown
-      timeoutMs?: unknown
-      treatForbiddenAsMissing?: unknown
     }
   }
   initialBridgeRedeemScriptHex: unknown
@@ -242,18 +228,14 @@ export interface WithdrawalDeploymentFactsInput {
 }
 
 export interface WithdrawalDeploymentFacts {
-  /** Curated starting values seeded only where the operator has not set a key. */
-  defaults: toml.JsonMap
   deletePaths: string[][]
   /** Deployment facts re-asserted on every prep-charts run. */
   facts: toml.JsonMap
 }
 
 /**
- * Split the deployment configuration prep-charts computes into facts (derived
- * from config.toml / doge-config; overwrite the operator on every run) and
- * curated defaults (seeded once; operator tuning inside the managed block
- * survives subsequent runs).
+ * Build deployment facts derived from config.toml / doge-config. These facts
+ * overwrite their matching keys; template-owned strategy and limits survive.
  */
 export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsInput): WithdrawalDeploymentFacts {
   const {s3} = input.ethereumDa
@@ -276,8 +258,6 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
         ...(s3Enabled ? {
           aws_s3: {
             key_prefix: nonEmpty(s3?.keyPrefix),
-            timeout_ms: asInteger(s3?.timeoutMs, 'ethereumDa.blobArchive.s3.timeoutMs'),
-            treat_forbidden_as_missing: asBoolean(s3?.treatForbiddenAsMissing),
             url: nonEmpty(s3?.publicBaseUrl),
           },
         } : {}),
@@ -290,7 +270,6 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
         },
       }),
       l1_rpc_url: nonEmpty(input.ethereumDa.l1RpcUrl),
-      min_finality: nonEmpty(input.ethereumDa.minFinality),
     },
     initial_bridge_redeem_script_hex: nonEmpty(input.initialBridgeRedeemScriptHex),
     l2_bootstrap_next_starting_block_height: asInteger(
@@ -301,70 +280,7 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
     tso_url: nonEmpty(input.tsoUrl) || 'http://tso-service:3000',
   } as unknown as toml.JsonMap
 
-  const defaults = {
-    advance_l1_builder_v2: false,
-    advance_l2_builder_v2: true,
-    api_port: 3000,
-    cleanup_timeout_secs: 3600,
-    database_url: 'sqlite:///app/data/withdrawal_processor.sqlite',
-    debug_skip_broadcast: false,
-    debug_skip_tso_polling: false,
-    dogecoin_indexer: { confirmations: 6, poll_interval_ms: 1000 },
-    dogeos_indexer: { confirmations: 12, log_query_batch_size: 10_000, poll_interval_ms: 1000, start_block: 0 },
-    ethereum_da: {
-      artifact_metadata_sqlite_path: '/app/data/eth-da-artifact-metadata.sqlite',
-      artifact_store_root: '/app/data/eth-da-blob-artifacts',
-      blob_source: { timeout_ms: 10_000 },
-      inbox_worker: {
-        cursor_id: 'eth_da_inbox',
-        enabled: true,
-        finalized_depth: 64,
-        ingest_depth: 1,
-        max_blocks_per_cycle: 64,
-        poll_interval_ms: 6000,
-        rollback_lookback: 128,
-        safe_depth: 32,
-        status_poll_interval_ms: 5000,
-        writer_id: 'withdrawal-processor',
-      },
-      indexer_sqlite_path: '/app/data/eth-da-indexer.sqlite',
-    },
-    fee_rate_sat_per_kvb: 1_000_000,
-    leaf_verification_required: false,
-    max_deposits_per_advance_l1: 32,
-    max_withdrawal_outputs_per_tx: 256,
-    protocol_context_json: '/app/protocol_context.json',
-    replay_sqlite_path: '/app/data/replay.sqlite',
-    require_change_tracking: false,
-    rotate_key_v2: false,
-    rotate_sequencer_signer_v2: true,
-    strict_l1_validation: false,
-    strict_l2_validation: false,
-    tso_timeout_minutes: 30,
-    utxo_manager_intermediate: {
-      allow_inflight_bridge_outputs: true,
-      bridge_min_confirmations: 10,
-      bridge_strategy: {
-        band: {
-          balance_band_ratio: 0.1,
-          floor_absolute_sats: 1_000_000,
-          max_balance_additions: 3,
-          sweep_floor_ratio: 0.5,
-          target_active_utxos: 100,
-          target_size_ratio: 1,
-        },
-        dust_floor_sats: 1_000_000,
-        max_inputs: 60,
-        strategy: 'band',
-      },
-      high_thresh_sats: 10_000_000_000,
-      prefer_inflight_bridge_outputs: false,
-    },
-    wf_withdrawal_parity_v1: true,
-  } as unknown as toml.JsonMap
-
   return {
-    defaults,
     // The current loader rejects these former parallel authorities. Remove
     // them from an existing scrollsdk-managed block during migration.
     deletePaths: [

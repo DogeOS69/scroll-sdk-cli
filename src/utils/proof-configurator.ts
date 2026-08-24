@@ -1399,6 +1399,7 @@ function prepareWithdrawalProcessor(
   }
 
   const proofSystem: Record<string, any> = {
+    correctness_policy_transport: mock ? 'plain' : 'bridge_proof_ref_v1',
     mode: mock ? 'dev_dummy' : 'production',
     require_bridge_state: manifests.has('bridge_transition'),
     require_scroll_execution: manifests.has('scroll_chunk') || manifests.has('scroll_batch'),
@@ -1800,6 +1801,7 @@ export function configureDisabledProofValues(options: {
   const nativeSource = fs.readFileSync(withdrawalConfigFile, 'utf8')
   const nativeConfig = replaceWithdrawalManagedProofBlock(nativeSource, {
     proof_system: {
+      correctness_policy_transport: 'plain',
       mode: 'disabled',
       ...(options.preTsukiDirectSignMaxEndBatchHeight === undefined
         ? {}

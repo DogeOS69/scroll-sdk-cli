@@ -1514,7 +1514,7 @@ describe('deployment-spec-generator', () => {
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE).to.equal('production_verifier_key_policy');
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION).to.equal('0.4.152-0');
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT)
-        .to.equal('dogeos-cubesigner-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1');
+        .to.equal('dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-v2');
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_SIGNATURE_MODE).to.equal('ecdsa');
       expect(cubesignerEnv).not.to.have.property('CUBESIGNER_MAX_PSBT_BASE64_LEN');
 
@@ -1656,7 +1656,6 @@ describe('deployment-spec-generator', () => {
       const defaultSubmitterValues = yaml.load(defaultFiles['eth-da-submitter-production.yaml']) as any;
 
       expect(defaultSubmitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION).to.equal('auto');
-
       const explicitSpec = createMinimalSpec();
       explicitSpec.ethereumDa!.batch = { compression: 'none' };
       const explicitFiles = generateValuesFiles(explicitSpec);

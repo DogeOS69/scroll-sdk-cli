@@ -72,6 +72,7 @@ import {
 
 export interface TsoSignerEndpoint {
   network: string
+  publicKeyOverride?: string
   role: 'Attestation' | 'Correctness'
   signatureMode: 'ecdsa' | 'shadowfork_sentinel'
   uri: string
@@ -171,14 +172,25 @@ export function buildTsoSigners(config: Pick<DogeConfig, 'cubesigner' | 'network
     throw new Error('CubeSigner supports exactly one TEE role and one in-cluster deployment')
   }
 
-  const teeSigners: TsoSignerEndpoint[] = cubesignerRoles.length === 0 ? [] : [{
-    network: config.network,
-    // TSO's public registration contract calls the TEE signer "Correctness".
-    // "Tee" is its internal script role and is intentionally not accepted here.
-    role: 'Correctness',
-    signatureMode: 'ecdsa',
-    uri: 'http://cubesigner-signer:3000',
-  }]
+  const teeSigners: TsoSignerEndpoint[] = cubesignerRoles.length === 0 ? [] : (() => {
+    const publicKeyOverride = cubesignerRoles[0]?.keys?.[0]?.public_key_compressed
+    if (!publicKeyOverride) {
+      throw new Error(
+        'CubeSigner correctness signer requires roles[0].keys[0].public_key_compressed; '
+        + 'refresh CubeSigner roles before preparing charts'
+      )
+    }
+
+    return [{
+      network: config.network,
+      publicKeyOverride,
+      // TSO's public registration contract calls the TEE signer "Correctness".
+      // "Tee" is its internal script role and is intentionally not accepted here.
+      role: 'Correctness',
+      signatureMode: 'ecdsa',
+      uri: 'http://cubesigner-signer:3000',
+    }]
+  })()
   const attestationSigners: TsoSignerEndpoint[] = (config.signerUrls || []).map(uri => ({
     network: config.network,
     role: 'Attestation',
@@ -187,9 +199,6 @@ export function buildTsoSigners(config: Pick<DogeConfig, 'cubesigner' | 'network
   }))
   return [...teeSigners, ...attestationSigners]
 }
-
-const CUBESIGNER_POLICY_REQUEST_CONTRACT =
-  'dogeos-cubesigner-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1'
 
 /**
  * Build the non-secret CubeSigner runtime projection owned by prep-charts.
@@ -202,21 +211,7 @@ export function buildCubesignerPrepEnv(
   config: Pick<DogeConfig, 'cubesigner' | 'network'>,
 ): Record<string, string> {
   const env: Record<string, string> = {
-    CS_SESSIONS_DIR: '/app/.sessions',
-    DOGEOS_CUBESIGNER_SIGNER_LOG_LEVEL: 'info',
-    DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_REQUEST_JSON_BYTES: '393216',
-    DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_RESPONSE_JSON_BYTES: '393216',
-    DOGEOS_CUBESIGNER_SIGNER_MAX_PSBT_BASE64_LEN: '130048',
-    DOGEOS_CUBESIGNER_SIGNER_MAX_SIGN_REQUEST_JSON_BYTES: '262144',
     DOGEOS_CUBESIGNER_SIGNER_NETWORK: config.network,
-    DOGEOS_CUBESIGNER_SIGNER_POLL_INTERVAL: '500',
-    DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE: 'production_verifier_key_policy',
-    DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT:
-      CUBESIGNER_POLICY_REQUEST_CONTRACT,
-    DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION: '0.4.152-0',
-    DOGEOS_CUBESIGNER_SIGNER_PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
-    DOGEOS_CUBESIGNER_SIGNER_SESSION_KEEP_ALIVE_INTERVAL: '3600000',
-    DOGEOS_CUBESIGNER_SIGNER_SIGNATURE_MODE: 'ecdsa',
     NETWORK: config.network,
   }
   const policy = config.cubesigner?.productionPolicy
@@ -298,6 +293,30 @@ export function ensureCubesignerPolicyKeyBinding(productionYaml: any): PrepChart
   }
 
   return [{key: `env.${name}`, newValue: JSON.stringify(valueFrom), oldValue}]
+}
+
+/** Replace the retired v1 CubeSigner request contract without taking ownership
+ * of other operator-reviewed production-policy evidence. */
+export function migrateCubesignerRequestContract(productionYaml: any): PrepChartChange[] {
+  const envVar = Array.isArray(productionYaml?.env)
+    ? productionYaml.env.find((item: any) =>
+        item?.name === 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT')
+    : undefined
+  const retired = new Set([
+    'dogeos-cubesigner-compact-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1',
+    'dogeos-cubesigner-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1',
+  ])
+  const current = 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-v2'
+  if (!envVar || !retired.has(envVar.value)) return []
+
+  const oldValue = envVar.value
+  envVar.value = current
+  delete envVar.valueFrom
+  return [{
+    key: 'env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT',
+    newValue: current,
+    oldValue,
+  }]
 }
 
 /**
@@ -520,22 +539,16 @@ export function buildFeeOraclePrepEnv(input: {
 }
 
 export function buildEthDaSubmitterPrepEnv(input: {
-  batch?: NonNullable<NonNullable<DogeConfig['ethereumDa']>['batch']> | undefined
+  batch?: Pick<NonNullable<NonNullable<DogeConfig['ethereumDa']>['batch']>, 'cutover'> | undefined
   ethereumRpcUrl: string | undefined
   l2RpcUrl: string | undefined
   l2StartBlockNumber?: number | string | undefined
-  publish?: NonNullable<NonNullable<DogeConfig['ethereumDa']>['publish']> | undefined
   s3Bucket?: string | undefined
   s3Enabled?: boolean | string | undefined
   s3EndpointUrl?: string | undefined
   s3ForcePathStyle?: boolean | string | undefined
-  s3InitialBackoffMs?: number | string | undefined
   s3KeyPrefix?: string | undefined
-  s3MaxBackoffMs?: number | string | undefined
-  s3MaxRetries?: number | string | undefined
-  s3PollIntervalMs?: number | string | undefined
   s3Region?: string | undefined
-  s3UploadingTimeoutMs?: number | string | undefined
 }): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = {
     DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_JSON_PATH: '/app/genesis/genesis.json',
@@ -548,12 +561,6 @@ export function buildEthDaSubmitterPrepEnv(input: {
   const {batch} = input
   if (batch) {
     const {cutover} = batch
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION = optionalConfigString(batch.compression) ?? 'auto'
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_BLOCKS_PER_CHUNK = String(batch.maxBlocksPerChunk ?? 128)
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_CHUNKS_PER_BATCH = String(batch.maxChunksPerBatch ?? 1)
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK = String(batch.maxL2GasPerChunk ?? 6_000_000)
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_BATCH_BYTES_SIZE = String(batch.maxUncompressedBatchBytesSize ?? 131_072)
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MIN_CODEC_VERSION = String(batch.minCodecVersion ?? 10)
 
     if (cutover) {
       env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__LAST_BATCH_HASH = optionalConfigString(cutover.lastBatchHash)
@@ -566,18 +573,6 @@ export function buildEthDaSubmitterPrepEnv(input: {
     }
   }
 
-  const {publish} = input
-  if (publish) {
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__ALLOW_LIVENESS_BUDGET_OVERRIDE = optionalConfigString(publish.allowLivenessBudgetOverride)
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__BUDGET_WINDOW = optionalConfigString(publish.budgetWindow)
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__HIGH_BACKLOG_THRESHOLD = optionalConfigString(publish.highBacklogThreshold)
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_BATCH_WAIT = optionalConfigString(publish.maxBatchWait)
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_BLOBS_PER_TX = optionalConfigString(publish.maxBlobsPerTx)
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_LIVENESS_DELAY = optionalConfigString(publish.maxLivenessDelay)
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS = optionalConfigString(publish.maxPendingBlobTxs)
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__TARGET_BLOBS_PER_TX = optionalConfigString(publish.targetBlobsPerTx)
-  }
-
   if (input.s3Enabled !== undefined) {
     const s3Enabled = truthyConfigValue(input.s3Enabled)
     env.DOGEOS_ETH_DA_SUBMITTER_S3__ENABLED = s3Enabled ? 'true' : 'false'
@@ -588,11 +583,6 @@ export function buildEthDaSubmitterPrepEnv(input: {
       env.DOGEOS_ETH_DA_SUBMITTER_S3__KEY_PREFIX = optionalConfigString(input.s3KeyPrefix)
       env.DOGEOS_ETH_DA_SUBMITTER_S3__ENDPOINT_URL = optionalConfigString(input.s3EndpointUrl)
       env.DOGEOS_ETH_DA_SUBMITTER_S3__FORCE_PATH_STYLE = optionalConfigString(input.s3ForcePathStyle)
-      env.DOGEOS_ETH_DA_SUBMITTER_S3__POLL_INTERVAL_MS = optionalConfigString(input.s3PollIntervalMs)
-      env.DOGEOS_ETH_DA_SUBMITTER_S3__INITIAL_BACKOFF_MS = optionalConfigString(input.s3InitialBackoffMs)
-      env.DOGEOS_ETH_DA_SUBMITTER_S3__MAX_BACKOFF_MS = optionalConfigString(input.s3MaxBackoffMs)
-      env.DOGEOS_ETH_DA_SUBMITTER_S3__MAX_RETRIES = optionalConfigString(input.s3MaxRetries)
-      env.DOGEOS_ETH_DA_SUBMITTER_S3__UPLOADING_TIMEOUT_MS = optionalConfigString(input.s3UploadingTimeoutMs)
     }
   }
 
@@ -652,13 +642,6 @@ function optionalConfigString(value: unknown): string | undefined {
 
 function pushConfigValidationError(errors: string[], path: string, message: string): void {
   errors.push(`${path}: ${message}`)
-}
-
-function validateOptionalBytes32Config(errors: string[], path: string, value: unknown): void {
-  if (value === undefined || value === null) return
-  if (!/^0x[\dA-Fa-f]{64}$/.test(String(value))) {
-    pushConfigValidationError(errors, path, 'must be a 32-byte 0x-prefixed hex string')
-  }
 }
 
 function validateRequiredBytes32Config(errors: string[], path: string, value: unknown): void {
@@ -729,10 +712,24 @@ export function validateDogeConfigEthereumDaForPrep(ethereumDa: DogeConfig['ethe
       pushConfigValidationError(errors, 'ethereumDa.batch.compression', 'must be auto or none')
     }
 
-    validateOptionalBytes32Config(errors, 'ethereumDa.batch.genesisBatchHash', batch.genesisBatchHash)
-    validateOptionalBytes32Config(errors, 'ethereumDa.batch.genesisRelayedDepositQueueHash', batch.genesisRelayedDepositQueueHash)
-    validateOptionalBytes32Config(errors, 'ethereumDa.batch.genesisStateRoot', batch.genesisStateRoot)
-    validateOptionalBytes32Config(errors, 'ethereumDa.batch.genesisWithdrawRoot', batch.genesisWithdrawRoot)
+    for (const [field, value] of [
+      ['genesisBatchHash', batch.genesisBatchHash],
+      ['genesisNextRelayedDepositIndex', batch.genesisNextRelayedDepositIndex],
+      ['genesisNextWithdrawIndex', batch.genesisNextWithdrawIndex],
+      ['genesisRelayedDepositQueueHash', batch.genesisRelayedDepositQueueHash],
+      ['genesisStateRoot', batch.genesisStateRoot],
+      ['genesisWithdrawRoot', batch.genesisWithdrawRoot],
+      ['minCodecVersion', batch.minCodecVersion],
+    ] as const) {
+      if (value !== undefined) {
+        pushConfigValidationError(
+          errors,
+          `ethereumDa.batch.${field}`,
+          'has been removed from dogeos-core; remove this field and use protocol_context.json plus execution genesis authority',
+        )
+      }
+    }
+
     if (batch.initialBatchSidecarJson !== undefined) {
       pushConfigValidationError(
         errors,
@@ -741,14 +738,10 @@ export function validateDogeConfigEthereumDaForPrep(ethereumDa: DogeConfig['ethe
       )
     }
 
-    validateOptionalIntegerConfig(errors, 'ethereumDa.batch.genesisNextRelayedDepositIndex', batch.genesisNextRelayedDepositIndex, 0, 'a non-negative integer')
-    validateOptionalIntegerConfig(errors, 'ethereumDa.batch.genesisNextWithdrawIndex', batch.genesisNextWithdrawIndex, 0, 'a non-negative integer')
     validateOptionalIntegerConfig(errors, 'ethereumDa.batch.maxBlocksPerChunk', batch.maxBlocksPerChunk, 1, 'a positive integer')
     validateOptionalIntegerConfig(errors, 'ethereumDa.batch.maxChunksPerBatch', batch.maxChunksPerBatch, 1, 'a positive integer')
     validateOptionalIntegerConfig(errors, 'ethereumDa.batch.maxL2GasPerChunk', batch.maxL2GasPerChunk, 1, 'a positive integer')
     validateOptionalIntegerConfig(errors, 'ethereumDa.batch.maxUncompressedBatchBytesSize', batch.maxUncompressedBatchBytesSize, 1, 'a positive integer')
-    validateOptionalIntegerConfig(errors, 'ethereumDa.batch.minCodecVersion', batch.minCodecVersion, 0, 'a non-negative integer')
-
     if (cutover) {
       validateRequiredIntegerConfig(errors, 'ethereumDa.batch.cutover.lastBatchIndex', cutover.lastBatchIndex, 0, 'a non-negative integer')
       validateRequiredIntegerConfig(errors, 'ethereumDa.batch.cutover.nextRelayedDepositIndex', cutover.nextRelayedDepositIndex, 0, 'a non-negative integer')
@@ -793,16 +786,11 @@ export function buildL1InterfaceBlobSourcePrepEnv(input: {
   beaconRpcUrl: string | undefined
   s3KeyPrefix?: string | undefined
   s3PublicBaseUrl?: string | undefined
-  s3TimeoutMs?: boolean | number | string | undefined
-  s3TreatForbiddenAsMissing?: boolean | number | string | undefined
 }): Record<string, string | undefined> {
   return {
     DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__KEY_PREFIX: optionalConfigString(input.s3KeyPrefix),
-    DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS: optionalConfigString(input.s3TimeoutMs),
-    DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING: optionalConfigString(input.s3TreatForbiddenAsMissing),
     DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL: optionalConfigString(input.s3PublicBaseUrl),
     DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL: input.beaconRpcUrl,
-    DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS: '10000',
   }
 }
 
@@ -810,16 +798,11 @@ export function buildWithdrawalBlobSourcePrepEnv(input: {
   beaconRpcUrl: string | undefined
   s3KeyPrefix?: string | undefined
   s3PublicBaseUrl?: string | undefined
-  s3TimeoutMs?: boolean | number | string | undefined
-  s3TreatForbiddenAsMissing?: boolean | number | string | undefined
 }): Record<string, string | undefined> {
   return {
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__KEY_PREFIX: optionalConfigString(input.s3KeyPrefix),
-    DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS: optionalConfigString(input.s3TimeoutMs),
-    DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING: optionalConfigString(input.s3TreatForbiddenAsMissing),
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL: optionalConfigString(input.s3PublicBaseUrl),
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL: input.beaconRpcUrl,
-    DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS: '10000',
   }
 }
 
@@ -2808,9 +2791,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK": String(Math.max(0, l1GenesisBlock)),
           "DOGEOS_L1_INTERFACE_NETWORK_STR": this.withdrawalProcessorConfig.network_str,
           "DOGEOS_L1_INTERFACE_REPLAY_READ__L2_BOOTSTRAP_NEXT_STARTING_BLOCK_HEIGHT": this.dogeConfig.defaults?.l2BootstrapNextStartingBlockHeight,
-          "DOGEOS_L1_INTERFACE_REPLAY_READ__MAINTAINER_ENABLED": "true",
           "DOGEOS_L1_INTERFACE_REPLAY_READ__PROTOCOL_CONTEXT_JSON": "/app/protocol_context.json",
-          "DOGEOS_L1_INTERFACE_REPLAY_READ__REQUIRE_FULL_VALIDATION": "false",
         }
 
         const l1InterfaceCleanupChanges = [
@@ -2857,8 +2838,6 @@ export default class SetupPrepCharts extends Command {
             beaconRpcUrl: this.getConfigValue("ethereumDa.beaconRpcUrl"),
             s3KeyPrefix: s3ArchiveEnabled ? s3Archive?.keyPrefix : undefined,
             s3PublicBaseUrl: s3ArchiveEnabled ? s3PublicBaseUrl : undefined,
-            s3TimeoutMs: s3ArchiveEnabled ? s3Archive?.timeoutMs : undefined,
-            s3TreatForbiddenAsMissing: s3ArchiveEnabled ? s3Archive?.treatForbiddenAsMissing : undefined,
           }),
         }
 
@@ -2890,7 +2869,7 @@ export default class SetupPrepCharts extends Command {
         // Deployment configuration is TOML-owned: merge the derived facts into
         // the managed deployment block of the native WithdrawalProcessor.toml.
         // Operator tuning of other keys inside that block survives the merge.
-        const { defaults, deletePaths, facts } = buildWithdrawalDeploymentFacts({
+        const { deletePaths, facts } = buildWithdrawalDeploymentFacts({
           dogecoinIndexerStartHeight,
           dogecoinRpcUrl: dogecoinInternalUrl,
           ethereumDa: {
@@ -2898,13 +2877,10 @@ export default class SetupPrepCharts extends Command {
             expectedBatcherAddress: this.getConfigValue('accounts.L1_COMMIT_SENDER_ADDR'),
             inboxWorkerStartBlock: this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock,
             l1RpcUrl: this.getConfigValue('ethereumDa.submitterRpcUrl'),
-            minFinality: this.getConfigValue('ethereumDa.minFinality'),
             s3: {
               enabled: s3ArchiveEnabled,
               keyPrefix: s3Archive?.keyPrefix,
               publicBaseUrl: s3PublicBaseUrl,
-              timeoutMs: s3Archive?.timeoutMs,
-              treatForbiddenAsMissing: s3Archive?.treatForbiddenAsMissing,
             },
           },
           initialBridgeRedeemScriptHex: this.bridgeConfig.redeem_script_hex,
@@ -2940,7 +2916,7 @@ export default class SetupPrepCharts extends Command {
         }
 
         const previousSource = fs.readFileSync(nativeConfigPath, 'utf8')
-        const mergedSource = mergeWithdrawalManagedDeploymentBlock(previousSource, facts, { defaults, deletePaths })
+        const mergedSource = mergeWithdrawalManagedDeploymentBlock(previousSource, facts, {deletePaths})
         if (mergedSource !== previousSource) {
           fs.writeFileSync(nativeConfigPath, mergedSource)
           this.jsonCtx.info(`withdrawal-processor: updated ${nativeConfigPath}`)
@@ -3024,6 +3000,7 @@ export default class SetupPrepCharts extends Command {
             productionYaml,
             buildCubesignerPrepEnv(this.dogeConfig),
           ),
+          ...migrateCubesignerRequestContract(productionYaml),
           ...ensureCubesignerPolicyKeyBinding(productionYaml),
           ...ensureConfigMapFileMount(
             productionYaml,
@@ -3054,18 +3031,12 @@ export default class SetupPrepCharts extends Command {
           ethereumRpcUrl: this.getConfigValue("ethereumDa.submitterRpcUrl"),
           l2RpcUrl: this.getConfigValue("general.L2_RPC_ENDPOINT"),
           l2StartBlockNumber: this.dogeConfig.ethereumDa?.l2StartBlockNumber,
-          publish: this.dogeConfig.ethereumDa?.publish,
           s3Bucket: s3Archive?.bucket,
           s3Enabled: s3Archive?.enabled,
           s3EndpointUrl: s3Archive?.endpointUrl,
           s3ForcePathStyle: s3Archive?.forcePathStyle,
-          s3InitialBackoffMs: s3Archive?.initialBackoffMs,
           s3KeyPrefix: s3Archive?.keyPrefix,
-          s3MaxBackoffMs: s3Archive?.maxBackoffMs,
-          s3MaxRetries: s3Archive?.maxRetries,
-          s3PollIntervalMs: s3Archive?.pollIntervalMs,
           s3Region: s3Archive?.region,
-          s3UploadingTimeoutMs: s3Archive?.uploadingTimeoutMs,
         })
 
         const retiredSubmitterChanges = [
@@ -3078,6 +3049,7 @@ export default class SetupPrepCharts extends Command {
             'DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_WITHDRAW_INDEX',
             'DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_RELAYED_DEPOSIT_INDEX',
             'DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_RELAYED_DEPOSIT_QUEUE_HASH',
+            'DOGEOS_ETH_DA_SUBMITTER_BATCH__MIN_CODEC_VERSION',
           ]),
           ...ensureConfigMapFileMount(
             productionYaml,
@@ -3191,9 +3163,6 @@ export default class SetupPrepCharts extends Command {
 
         const todoMappings = {
           "DOGE_NETWORK": this.dogeConfig.network,
-          "TIMEOUT_CHECK_INTERVAL_SECONDS": "60",
-          "TSO_CORRECTNESS_MAX_PSBT_BASE64_LEN": "130048",
-          "TSO_CUBESIGNER_MAX_PSBT_BASE64_LEN": "130048",
         }
 
         for (const [envKey, newValue] of Object.entries(todoMappings)) {
