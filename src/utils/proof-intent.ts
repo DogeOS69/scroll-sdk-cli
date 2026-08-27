@@ -103,16 +103,6 @@ export function normalizeProofIntent(
     throw new Error(`${label}.preTsukiDirectSign requires mode disabled`)
   }
 
-  // Disabled intentionally discards stale proof-only coordinates. This makes
-  // mode transitions idempotent and prevents generated output from keeping a
-  // disabled deployment coupled to proof infrastructure.
-  if (mode === 'disabled') {
-    return {
-      mode,
-      ...(preTsukiDirectSign ? {preTsukiDirectSign} : {}),
-    }
-  }
-
   const artifactReadBaseUrl = normalizeArtifactReadBaseUrl(
     raw?.artifactReadBaseUrl,
     `${label}.artifactReadBaseUrl`,
@@ -126,6 +116,7 @@ export function normalizeProofIntent(
   return {
     ...(artifactReadBaseUrl ? { artifactReadBaseUrl } : {}),
     mode,
+    ...(preTsukiDirectSign ? {preTsukiDirectSign} : {}),
     ...(release ? { release } : {}),
     ...(sourceSet ? { signerPolicy: { sourceSet } } : {}),
   }

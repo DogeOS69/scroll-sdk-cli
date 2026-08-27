@@ -110,21 +110,27 @@ describe('proof intent source resolution', () => {
     expect(resolved.source.kind).to.equal('deployment-spec')
   })
 
-  it('preserves the temporary pre-Tsuki direct-sign pin in disabled intent', () => {
+  it('preserves prepared proof resources and the temporary pin in disabled intent', () => {
     const resolved = resolveProofIntent({
       deploymentDir: root,
       dogeConfig: {
         proofSystem: {
+          artifactReadBaseUrl: 'https://proofs.example.com/releases/v1/',
           mode: 'disabled',
           preTsukiDirectSign: {maxEndBatchHeight: 6863},
+          release: './proof-releases/v1',
+          signerPolicy: {sourceSet: './configs/source-set.toml'},
         },
       },
       dogeConfigPath: dogeConfigPath(),
     })
 
     expect(resolved.intent).to.deep.equal({
+      artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
       mode: 'disabled',
       preTsukiDirectSign: {maxEndBatchHeight: 6863},
+      release: './proof-releases/v1',
+      signerPolicy: {sourceSet: './configs/source-set.toml'},
     })
   })
 

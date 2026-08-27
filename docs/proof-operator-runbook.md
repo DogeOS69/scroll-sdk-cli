@@ -52,11 +52,21 @@ same selected intent, so partners never pass a separate proving-mode flag.
 Mock is a lifecycle and configuration test lane. Never enable it on a bridge
 that carries assets of value.
 
-There is no stable “mock topology staged but proof disabled” state. Use
-`disabled` until the deployment is allowed to run proof work, then change the
-selected proof intent to `mode = "mock"` and rerun `setup prep-charts`. That
-transition atomically enables the proof runtime,
-coordinator contract, mock worker bundle, and signer-policy posture.
+A disabled deployment may stage the proof artifact endpoint, release root,
+signer source-set, and coordinator storage/identity. These are resource facts,
+not proof activation. DeploymentSpec generation emits proof-coordinator values
+without deriving replica count from proof mode. Whether the coordinator
+workload is installed or stopped remains an operator action. Proof
+reconciliation also preserves any previously prepared inactive Worker bundle
+instead of deleting it; disabled mode does not yet generate both mode-specific
+Worker bundles itself.
+
+This preparation behavior is deliberately separate from the eventual runtime
+cutover contract. A supported `disabled -> mock -> production` cutover must be
+implemented by the native services as mode-only configuration plus explicit
+operator start/stop/drain actions; it must not require regenerating deployment
+configuration. Until that dogeos-core contract is complete, do not treat a CLI
+rerun as the production mode-switch procedure.
 
 ## 3. Standard deployment layout
 
@@ -302,8 +312,10 @@ Do not maintain both sources independently. If DeploymentSpec and doge config
 both contain proof intent, the CLI rejects disagreement instead of choosing
 whichever command happened to run last.
 
-Disabled mode may omit the entire block. It requires no artifact URL, release,
-coordinator, proof storage, or worker. Mock and production require
+Disabled mode may omit the entire block and requires none of the proof
+resources. It may instead declare the final artifact URL, release, signer
+source-set, coordinator, and proof storage up front. Those values are retained
+but do not activate proof work. Mock and production require
 `artifactReadBaseUrl`; the CLI gets the coordinator host and L2 chain ID from
 the existing `config.toml`.
 
@@ -392,8 +404,9 @@ non-proof parameters. The proof reconciliation:
   manifests plus release identities and aggregate-verifying-key checksums;
 - updates the marked proof blocks in native WP/coordinator TOML;
 - generates the matching credential-pending mock or production Compose bundle;
-- removes inactive CLI-generated worker bundle directories, including any
-  previously hydrated token, when the selected mode changes;
+- preserves inactive CLI-generated Worker bundle directories so ordinary-host
+  mock preparation and GPU-host production preparation can coexist; cleanup
+  and credential retirement are explicit operator actions;
 - writes `.data/proof-deployment.json`, including integrity metadata, intent
   source, mode, and worker bundle ID.
 

@@ -153,7 +153,7 @@ export interface ProofCoordinatorConfig {
   /** Stable coordinator lease owner id. */
   coordinatorId?: string
 
-  /** Generate proof-coordinator Helm values. Defaults to true when this block is present. */
+  /** Prepare proof-coordinator Helm values. Defaults to true when this block is present. */
   enabled?: boolean
 
   /** WP proof-work API base URL consumed by proof-coordinator. */
@@ -184,7 +184,7 @@ export interface ProofCoordinatorConfig {
 }
 
 export interface ProofSystemIntentConfig {
-  /** Public credential-free GET root shared by workers and partner signers. */
+  /** Public credential-free GET root shared by workers and partner signers. May be prepared while mode is disabled. */
   artifactReadBaseUrl?: string
 
   /** One posture controls WP, coordinator, worker, and signer policy together. */
@@ -196,7 +196,7 @@ export interface ProofSystemIntentConfig {
     maxEndBatchHeight: number
   }
 
-  /** Proof release bundle root. Conventional proof-artifacts/ is used when omitted. */
+  /** Proof release bundle root. Conventional proof-artifacts/ is used when omitted. May be prepared while disabled. */
   release?: string
 
   signerPolicy?: {

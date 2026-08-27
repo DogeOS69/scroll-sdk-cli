@@ -139,12 +139,17 @@ signing:
   # Each partner runs `scrollsdk signer preflight` before handoff; descriptor
   # import itself makes no network calls.
 
-# Proof is disabled when this block is omitted. In an existing deployment that
-# does not use DeploymentSpec, put the same fields under [proofSystem] in
+# Proof is disabled when this block is omitted. Resources may also be prepared
+# up front while mode remains disabled; the CLI preserves those coordinates
+# without activating proof execution. In an existing deployment that does not
+# use DeploymentSpec, put the same fields under [proofSystem] in
 # .data/doge-config.toml instead.
 # proofSystem:
-#   mode: mock
+#   mode: disabled
 #   artifactReadBaseUrl: "https://proof-artifacts.example.com/proof-topology"
+#   release: ./proof-artifacts
+#   signerPolicy:
+#     sourceSet: ./configs/source-set.toml
 #
 # Temporary Issue #843 testnet recovery only; never enable this by default.
 # Use the reviewed Tsuki-boundary batch height and keep mode disabled. The CLI
@@ -164,8 +169,11 @@ signing:
 # PROOF_COORDINATOR_HOST from the existing config.toml, and generates the
 # production Docker Compose worker bundle.
 #
-# K8s infrastructure details remain separate from proof posture. prep-charts
-# composes these with the ordinary WP/TSO configuration; it never replaces it.
+# K8s infrastructure details remain separate from proof posture. This block is
+# valid while proofSystem.mode is disabled; generated proof-coordinator values
+# retain the resource coordinates without deriving replica count from mode.
+# prep-charts composes these with the ordinary WP/TSO configuration; it never
+# replaces it.
 # proofCoordinator:
 #   artifactStore:
 #     bucket: dogeos-devnet-proof-artifacts

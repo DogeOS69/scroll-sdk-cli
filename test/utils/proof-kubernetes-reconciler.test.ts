@@ -55,7 +55,7 @@ describe('proof Kubernetes reconciler', () => {
       .to.equal(result.contract.generationId)
   })
 
-  it('removes generated worker bundles and hydrated tokens in disabled mode', () => {
+  it('preserves prepared worker bundles and hydrated tokens in disabled mode', () => {
     for (const [bundleDir, tokenFile] of [
       ['prover-worker-mock/docker-compose', 'prover-worker.env'],
       ['prover-worker-production/docker-compose', 'prover-worker.token'],
@@ -76,8 +76,37 @@ describe('proof Kubernetes reconciler', () => {
       },
     })
 
-    expect(fs.existsSync(path.join(root, 'prover-worker-mock'))).to.equal(false)
-    expect(fs.existsSync(path.join(root, 'prover-worker-production'))).to.equal(false)
+    expect(fs.readFileSync(
+      path.join(root, 'prover-worker-mock/docker-compose/prover-worker.env'),
+      'utf8',
+    )).to.equal('sensitive-fixture-token\n')
+    expect(fs.readFileSync(
+      path.join(root, 'prover-worker-production/docker-compose/prover-worker.token'),
+      'utf8',
+    )).to.equal('sensitive-fixture-token\n')
+  })
+
+  it('records a prepared artifact endpoint without activating proof services', () => {
+    const result = reconcileProofKubernetes({
+      deploymentDir: root,
+      intent: {
+        intent: {
+          artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
+          mode: 'disabled',
+          release: './proof-releases/v1',
+        },
+        source: {
+          kind: 'doge-config',
+          path: path.join(root, '.data/doge-config.toml'),
+        },
+      },
+    })
+
+    expect(result.contract.proofArtifactBaseUrl)
+      .to.equal('https://proofs.example.com/releases/v1')
+    expect(result.contract.components.proofCoordinator.enabled).to.equal(false)
+    expect(result.contract.worker).to.deep.include({enabled: false, kind: 'none'})
+    expect(() => validateProofDeploymentContract(root)).not.to.throw()
   })
 
   it('projects one temporary recovery pin to WP, TSO, and the deployment contract', () => {

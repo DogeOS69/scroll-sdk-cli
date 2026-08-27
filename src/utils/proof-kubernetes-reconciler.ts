@@ -229,9 +229,14 @@ export function reconcileProofKubernetes(
     source: options.intent.source.path,
   })
   preflightExternalWorker(options, release)
-  const proofAwsConfigPath = disabled
-    ? undefined
-    : projectProofAwsConfig(deploymentDir, valuesDir, options.proofAwsConfigPath)
+  // Proof infrastructure is deployment state, not active-mode state. Project
+  // it even while disabled so an operator can prepare the eventual topology
+  // without starting proof services.
+  const proofAwsConfigPath = projectProofAwsConfig(
+    deploymentDir,
+    valuesDir,
+    options.proofAwsConfigPath,
+  )
   if (
     !disabled
     && !proofAwsConfigPath
@@ -314,22 +319,9 @@ export function reconcileProofKubernetes(
     })
   }
 
-  // Conventional worker bundle directories are CLI-owned generated output and
-  // may contain hydrated bearer tokens. Never leave an inactive-mode bundle
-  // behind where an operator could accidentally start it.
-  if (mode !== 'mock') {
-    fs.rmSync(path.join(deploymentDir, path.dirname(PROVER_WORKER_MOCK_BUNDLE_DIR)), {
-      force: true,
-      recursive: true,
-    })
-  }
-
-  if (mode !== 'production') {
-    fs.rmSync(path.join(deploymentDir, path.dirname(PROVER_WORKER_PRODUCTION_BUNDLE_DIR)), {
-      force: true,
-      recursive: true,
-    })
-  }
+  // Worker bundles are prepared deployment artifacts. Reconciliation must not
+  // delete an inactive bundle: mock and production may run on different hosts,
+  // and switching hosts is an operator-controlled start/stop/drain operation.
 
   const contract = writeProofDeploymentContract({
     deploymentDir,

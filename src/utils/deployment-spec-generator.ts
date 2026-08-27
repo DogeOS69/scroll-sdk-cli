@@ -1058,17 +1058,6 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       })
     }
 
-    if (
-      proofSystem.mode === 'disabled'
-      && proofCoordinator
-      && proofCoordinator.enabled !== false
-    ) {
-      errors.push({
-        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'proofCoordinator must be absent or disabled when proofSystem.mode is disabled',
-        path: 'proofCoordinator.enabled'
-      })
-    }
   } else if (proofCoordinator && proofCoordinator.enabled !== false) {
     warnings.push({
       message: 'proofCoordinator is configured without proofSystem; add proofSystem.mode so every proof component shares one explicit posture',
@@ -1462,8 +1451,8 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
   }
 
   if (
-    spec.proofSystem
-    && spec.proofSystem.mode !== 'disabled'
+    spec.proofCoordinator
+    && spec.proofCoordinator.enabled !== false
     && spec.frontend.hosts.proofCoordinator
   ) {
     config.ingress.PROOF_COORDINATOR_HOST = spec.frontend.hosts.proofCoordinator
@@ -1500,17 +1489,13 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
       ...(spec.proofSystem.preTsukiDirectSign
         ? { preTsukiDirectSign: spec.proofSystem.preTsukiDirectSign }
         : {}),
-      ...(spec.proofSystem.mode === 'disabled'
-        ? {}
-        : {
-            ...(spec.proofSystem.artifactReadBaseUrl
-              ? { artifactReadBaseUrl: spec.proofSystem.artifactReadBaseUrl }
-              : {}),
-            ...(spec.proofSystem.release ? { release: spec.proofSystem.release } : {}),
-            ...(spec.proofSystem.signerPolicy?.sourceSet
-              ? { signerPolicy: { sourceSet: spec.proofSystem.signerPolicy.sourceSet } }
-              : {}),
-          }),
+      ...(spec.proofSystem.artifactReadBaseUrl
+        ? { artifactReadBaseUrl: spec.proofSystem.artifactReadBaseUrl }
+        : {}),
+      ...(spec.proofSystem.release ? { release: spec.proofSystem.release } : {}),
+      ...(spec.proofSystem.signerPolicy?.sourceSet
+        ? { signerPolicy: { sourceSet: spec.proofSystem.signerPolicy.sourceSet } }
+        : {}),
     }
   }
 

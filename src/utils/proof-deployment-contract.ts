@@ -261,7 +261,7 @@ export function writeProofDeploymentContract(input: ProofDeploymentContractInput
     ...(input.preTsukiDirectSign
       ? {preTsukiDirectSign: input.preTsukiDirectSign}
       : {}),
-    ...(input.mode === 'disabled' ? {} : { proofArtifactBaseUrl: input.proofArtifactBaseUrl }),
+    ...(input.proofArtifactBaseUrl ? {proofArtifactBaseUrl: input.proofArtifactBaseUrl} : {}),
     schemaVersion: 3 as const,
     signerPolicy,
     worker,
@@ -545,7 +545,6 @@ export function validateProofDeploymentContractWithWarnings(
   if (contract.mode === 'disabled') {
     if (contract.components.proofCoordinator.enabled) problems.push('disabled mode must not enable proof-coordinator')
     if (contract.worker.enabled || contract.worker.kind !== 'none') problems.push('disabled mode must not enable a prover worker')
-    if (contract.proofArtifactBaseUrl) problems.push('disabled mode must not publish a proof artifact base URL')
     if (contract.signerPolicy.policyMode !== 'dev_permissive'
       || contract.signerPolicy.proofArtifactFetchMode !== 'disabled') {
       problems.push('disabled mode requires the direct-sign signer policy posture')

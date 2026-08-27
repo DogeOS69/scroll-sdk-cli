@@ -768,6 +768,26 @@ describe('deployment-spec-generator', () => {
         error => error.message.includes('testnet-only'),
       )).to.equal(true);
     });
+
+    it('allows proof infrastructure to be prepared while proof mode is disabled', () => {
+      const spec = createMinimalSpec({
+        proofCoordinator: {
+          artifactStore: {
+            bucket: 'dogeos-proofs',
+            region: 'us-west-2',
+          },
+          s3AuthMode: 'ambient',
+        },
+        proofSystem: {
+          artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
+          mode: 'disabled',
+          release: './proof-releases/v1',
+          signerPolicy: {sourceSet: './configs/source-set.toml'},
+        },
+      });
+
+      expect(validateDeploymentSpec(spec).errors).to.have.length(0);
+    });
   });
 
   describe('generateConfigToml', () => {
@@ -893,7 +913,11 @@ describe('deployment-spec-generator', () => {
       spec.frontend.hosts.rpcGatewayWs = 'ws.example.com';
       spec.frontend.hosts.blockscoutBackend = 'blockscout-be.example.com';
       spec.frontend.hosts.proofCoordinator = 'proof-coordinator.example.com';
-      spec.proofSystem = {mode: 'mock'};
+      spec.proofCoordinator = {
+        artifactStore: {bucket: 'dogeos-proofs', region: 'us-west-2'},
+        s3AuthMode: 'ambient',
+      };
+      spec.proofSystem = {mode: 'disabled'};
       const output = generateConfigToml(spec);
 
       expect(output).to.include('RPC_GATEWAY_WS_HOST');
@@ -1003,17 +1027,23 @@ describe('deployment-spec-generator', () => {
       });
     });
 
-    it('preserves a disabled pre-Tsuki direct-sign pin in doge-config', () => {
+    it('preserves disabled proof resources and a pre-Tsuki pin in doge-config', () => {
       const spec = createMinimalSpec({
         proofSystem: {
+          artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
           mode: 'disabled',
           preTsukiDirectSign: {maxEndBatchHeight: 6863},
+          release: './proof-releases/v1',
+          signerPolicy: {sourceSet: './configs/source-set.toml'},
         },
       });
       const parsed = toml.parse(generateDogeConfigToml(spec)) as any;
       expect(parsed.proofSystem).to.deep.equal({
+        artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
         mode: 'disabled',
         preTsukiDirectSign: {maxEndBatchHeight: 6863},
+        release: './proof-releases/v1',
+        signerPolicy: {sourceSet: './configs/source-set.toml'},
       });
     });
 
@@ -1635,6 +1665,38 @@ describe('deployment-spec-generator', () => {
         create: true,
         name: 'withdrawal-processor',
       });
+    });
+
+    it('prepares mode-independent proof-coordinator values in disabled mode', () => {
+      const spec = createMinimalSpec({
+        proofCoordinator: {
+          artifactStore: {
+            bucket: 'dogeos-proofs',
+            region: 'us-west-2',
+          },
+          s3AuthMode: 'ambient',
+        },
+        proofSystem: {
+          artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
+          mode: 'disabled',
+        },
+      });
+
+      const files = generateValuesFiles(spec);
+      const coordinatorValues = yaml.load(files['proof-coordinator-production.yaml']) as any;
+      const withdrawalValues = yaml.load(files['withdrawal-processor-production.yaml']) as any;
+
+      expect(coordinatorValues.controller.replicas).to.equal(1);
+      expect(coordinatorValues.env).to.deep.include({
+        name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET',
+        value: 'dogeos-proofs',
+      });
+      expect(withdrawalValues.withdrawalProof).to.deep.include({
+        enabled: false,
+        mode: 'disabled',
+        s3AuthMode: 'ambient',
+      });
+      expect(withdrawalValues.withdrawalProof).not.to.have.property('provingMode');
     });
 
     it('generates l1-interface genesis and indexer heights independently', () => {
