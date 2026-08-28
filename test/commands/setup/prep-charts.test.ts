@@ -1,5 +1,6 @@
 import { runCommand } from '@oclif/test'
 import { expect } from 'chai'
+import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -980,9 +981,18 @@ describe('setup prep-charts split L2 reth RPC updates', () => {
 describe('setup prep-charts generation transaction', () => {
   it('rolls back earlier ordinary-chart changes when a later generation step fails', async () => {
     const originalCwd = process.cwd()
+    const originalEnvironment = {...process.env}
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prep-generation-rollback-'))
     try {
       process.chdir(root)
+      Object.assign(process.env, {
+        DB_ADMIN_PASSWORD: 'test-password',
+        DOGECOIN_CLUSTER_RPC_PASSWORD: 'test-password',
+        DOGECOIN_CLUSTER_RPC_USERNAME: 'test-user',
+        DOGECOIN_EXTERNAL_RPC_PASSWORD: 'test-password',
+        DOGECOIN_EXTERNAL_RPC_USERNAME: 'test-user',
+        OWNER_ADDRESS: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+      })
       fs.mkdirSync('.data', {recursive: true})
       fs.mkdirSync('values', {recursive: true})
       fs.writeFileSync('Makefile', '# no helm commands in transaction fixture\n')
@@ -1008,6 +1018,20 @@ describe('setup prep-charts generation transaction', () => {
         fee_wallet_address: 'fixture-fee-wallet',
         sequencer_address: 'fixture-sequencer',
       }))
+      const spec = yaml.load(fs.readFileSync(
+        path.join(originalCwd, 'src/config/deployment-spec.example.yaml'),
+        'utf8',
+      )) as any
+      spec.proofTopology = {
+        compiler: {
+          image: {
+            digest: `sha256:${'a'.repeat(64)}`,
+            repository: 'dogeos69/dogeos-proof-topology',
+          },
+        },
+        mode: 'disabled',
+      }
+      fs.writeFileSync('deployment-spec.yaml', yaml.dump(spec))
       const tsoPath = path.join(root, 'values/tso-service-production.yaml')
       const retiredPath = path.join(root, 'values/attestation-signer-production.yaml')
       const tsoBefore = 'env: []\noperatorOwned: keep\n'
@@ -1027,6 +1051,7 @@ describe('setup prep-charts generation transaction', () => {
       expect(fs.existsSync(path.join(root, '.data/proof-deployment.json'))).to.equal(false)
     } finally {
       process.chdir(originalCwd)
+      process.env = originalEnvironment
       fs.rmSync(root, {force: true, recursive: true})
     }
   })

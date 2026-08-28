@@ -243,9 +243,6 @@ signing:
 #   recovery:
 #     preTsukiDirectSignMaxEndBatchHeight: 6863
 #
-# Existing deployments may retain legacy `proofSystem`; it is mutually
-# exclusive with `proofTopology` and continues to use the legacy renderer.
-#
 # K8s infrastructure details remain separate from proof posture. This block is
 # valid while proofTopology.mode is disabled and retains the staged bucket,
 # identity, and Secret coordinates. The compiler adapter separately projects

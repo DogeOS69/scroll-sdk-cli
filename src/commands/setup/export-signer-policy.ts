@@ -9,14 +9,13 @@ import { normalizeExternalHttpBaseUrl } from '../../utils/attestation-signer-des
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { assertPreTsukiDirectSignPosture } from '../../utils/pre-tsuki-direct-sign.js'
+import { resolveProofIntent } from '../../utils/proof-intent.js'
 import {
   DEFAULT_PROOF_COORDINATOR_CONFIG,
-  DEFAULT_PROOF_PROGRAM_MANIFESTS,
   deriveAllowedProofTriples,
   normalizeSignerProofArtifactBaseUrl,
   readStagedSignerProofArtifactBaseUrl,
-} from '../../utils/proof-configurator.js'
-import { resolveProofIntent } from '../../utils/proof-intent.js'
+} from '../../utils/proof-signer-policy-input.js'
 import { normalizeCompressedSecp256k1PublicKeyCsv } from '../../utils/secp256k1-public-key.js'
 import {
   renderDisabledSourceSetToml,
@@ -67,7 +66,7 @@ export class ExportSignerPolicyCommand extends Command {
   ]
 
   static flags = {
-    'allowed-proof-triples': Flags.string({ description: 'Envelope proof-triple allowlist; default: derived from the ProofCoordinator.toml or proof-artifacts manifests staged by prep-charts; missing/empty fails closed' }),
+    'allowed-proof-triples': Flags.string({ description: 'Envelope proof-triple allowlist; default: derived from compiler-rendered ProofCoordinator.toml; missing/empty fails closed' }),
     'bridge-namespace-id': Flags.string({ description: '20-byte bridge namespace id; default is read from .data/GenerateBridgeInfo.toml (namespace_id) written by bridge-init step 3' }),
     config: Flags.string({ char: 'c', description: 'Path to doge-config.toml' }),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
@@ -76,7 +75,7 @@ export class ExportSignerPolicyCommand extends Command {
     'protocol-instance-id': Flags.string({ description: '32-byte protocol instance id (canonical protocol opening hash); default: read from the protocol_id sidecar next to --protocol-context written by bridge-init step 5' }),
     'signer-proof-artifact-base-url': Flags.string({ description: `Stable public GET base signers use to fetch accepted proof objects; default: the value prep-charts staged into ${WITHDRAWAL_NATIVE_CONFIG_RELPATH}` }),
     'source-set': Flags.string({ description: 'source-set.toml override. Mock defaults to an e2e_harness empty scaffold; production defaults to configs/source-set.toml' }),
-    spec: Flags.string({ description: 'Optional DeploymentSpec proof-intent source; auto-detects deployment-spec.yaml/yml when omitted' }),
+    spec: Flags.string({ description: 'DeploymentSpec proofTopology source; auto-detects deployment-spec.yaml/yml when omitted' }),
     'supported-signing-policy-versions': Flags.string({ default: '1', description: 'CSV of supported signing policy versions' }),
     'tee-allowed-signer-ids': Flags.string({ description: 'CSV of allowed TEE signer ids; compressed or uncompressed SEC1 keys are normalized to dogeos-core\'s compressed form. Production defaults to .data/setup_defaults.toml tee_pubkey; mock defaults to empty, matching e2e_harness' }),
     'tso-url': Flags.string({ description: 'TSO base URL reachable FROM the signer operator network (used for signature callbacks); default: https://<[ingress].TSO_HOST> from config.toml' }),
@@ -91,8 +90,6 @@ export class ExportSignerPolicyCommand extends Command {
       const { config } = loaded
       const resolvedIntent = resolveProofIntent({
         deploymentDir: process.cwd(),
-        dogeConfig: config,
-        dogeConfigPath: loaded.configPath,
         specPath: flags.spec,
       })
       const {mode} = resolvedIntent.intent
@@ -152,9 +149,7 @@ export class ExportSignerPolicyCommand extends Command {
       const conventionalProductionSourceSet = path.resolve('configs/source-set.toml')
       const sourceSetPath = flags['source-set']
         ? path.resolve(flags['source-set'])
-        : resolvedIntent.intent.signerPolicy?.sourceSet
-          ? path.resolve(resolvedIntent.intent.signerPolicy.sourceSet)
-          : (mode === 'production' ? conventionalProductionSourceSet : undefined)
+        : (mode === 'production' ? conventionalProductionSourceSet : undefined)
       if (mode === 'disabled') {
         fs.writeFileSync(sourceSetOutput, renderDisabledSourceSetToml())
         derivedSources['source-set'] = 'proof-system disabled posture'
@@ -308,7 +303,7 @@ export class ExportSignerPolicyCommand extends Command {
     }
 
     const allowedProofTriples = mode === 'disabled' ? '' : flags['allowed-proof-triples']
-      ?? derive('allowed-proof-triples', deriveAllowedProofTriples(DEFAULT_PROOF_COORDINATOR_CONFIG, DEFAULT_PROOF_PROGRAM_MANIFESTS))
+      ?? derive('allowed-proof-triples', deriveAllowedProofTriples(DEFAULT_PROOF_COORDINATOR_CONFIG))
       ?? ''
     if (mode !== 'disabled' && allowedProofTriples === '') {
       throw new Error('no staged proof triples found; run scrollsdk setup prep-charts first or pass --allowed-proof-triples')

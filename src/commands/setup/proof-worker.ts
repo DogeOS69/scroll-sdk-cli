@@ -8,16 +8,12 @@ import {
   readProofDeploymentContract,
   resolveContractFile,
 } from '../../utils/proof-deployment-contract.js'
-import {
-  hydrateProverWorkerMockBundle,
-  readProverWorkerTokenFromSecretsManager,
-} from '../../utils/prover-worker-mock-bundle.js'
-import { hydrateProverWorkerProductionBundle } from '../../utils/prover-worker-production-bundle.js'
+import {readProverWorkerTokenFromSecretsManager} from '../../utils/proof-worker-token.js'
 
 const DEFAULT_PROOF_SECRET_NAME = 'scroll/proof-coordinator-secrets'
 
 export default class ProofWorker extends Command {
-  static override description = 'Hydrate a generated mock or production prover-worker Docker Compose bundle with its bearer token; run explicitly after deterministic K8s config generation'
+  static override description = 'Hydrate a compiler-generated external prover-worker bundle with its bearer token after deterministic configuration generation'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
@@ -39,7 +35,7 @@ export default class ProofWorker extends Command {
     try {
       const deploymentDir = path.resolve(flags['deployment-dir'])
       const {contract} = readProofDeploymentContract(deploymentDir)
-      if (!['compiled-external', 'mock-compose', 'production-compose'].includes(contract.worker.kind)) {
+      if (contract.worker.kind !== 'compiled-external') {
         throw new Error(
           `setup proof-worker requires an external generated Compose worker bundle; `
           + `current mode is ${contract.mode} (${contract.worker.kind})`,
@@ -58,11 +54,7 @@ export default class ProofWorker extends Command {
           secretName: flags['secret-name'] || proofAwsConfig?.secret.name || DEFAULT_PROOF_SECRET_NAME,
         })
       const bundleDir = resolveContractFile(deploymentDir, contract.worker.bundleDir)
-      const bundle = contract.worker.kind === 'compiled-external'
-        ? hydrateCompiledProverWorkerBundle({bundleDir, workerToken})
-        : contract.worker.kind === 'production-compose'
-          ? hydrateProverWorkerProductionBundle({dir: bundleDir, workerToken})
-          : hydrateProverWorkerMockBundle({dir: bundleDir, workerToken})
+      const bundle = hydrateCompiledProverWorkerBundle({bundleDir, workerToken})
       if (bundle.bundleId !== contract.worker.bundleId) {
         throw new Error(
           `hydrated worker bundle ID ${bundle.bundleId} does not match deployment contract ${contract.worker.bundleId}; rerun setup prep-charts`,
@@ -70,24 +62,12 @@ export default class ProofWorker extends Command {
       }
 
       json.logSuccess(`Hydrated ${contract.mode} prover-worker bundle ${bundle.bundleId}`)
-      if (contract.worker.kind === 'compiled-external') {
-        json.info(
-          'Sync the selected proof resources and exact compiler Worker bundle to the GPU host, '
-          + `run scrollsdk setup proof-worker-check --bundle-dir ${bundle.bundleDir} `
-          + `--expected-bundle-id ${bundle.bundleId}, then run docker compose config --quiet `
-          + 'and docker compose up -d prover-worker.',
-        )
-      } else {
-        const productionHint = contract.worker.kind === 'production-compose'
-          ? 'Sync both the proof release and worker bundle to the GPU host, '
-          : `Copy ${bundle.bundleDir} to the worker host, `
-        json.info(
-          productionHint
-          + `run scrollsdk setup proof-worker-check --bundle-dir ${bundle.bundleDir} `
-          + `--expected-bundle-id ${bundle.bundleId}, then docker compose --profile tools run --rm preflight `
-          + 'and docker compose up -d prover-worker.',
-        )
-      }
+      json.info(
+        'Sync the selected proof resources and exact compiler Worker bundle to the worker host, '
+        + `run scrollsdk setup proof-worker-check --bundle-dir ${bundle.bundleDir} `
+        + `--expected-bundle-id ${bundle.bundleId}, then run docker compose config --quiet `
+        + 'and docker compose up -d prover-worker.',
+      )
 
       json.success(bundle)
     } catch (error) {

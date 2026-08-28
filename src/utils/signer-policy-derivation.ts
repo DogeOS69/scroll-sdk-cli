@@ -3,7 +3,7 @@ import * as toml from '@iarna/toml'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import type { DerivedValue } from './proof-configurator.js'
+import type {DerivedValue} from './proof-signer-policy-input.js'
 
 import { parseTomlConfig } from './config-parser.js'
 import { normalizeCompressedSecp256k1PublicKey } from './secp256k1-public-key.js'

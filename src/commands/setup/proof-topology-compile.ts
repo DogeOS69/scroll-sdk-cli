@@ -110,9 +110,7 @@ export default class ProofTopologyCompile extends Command {
       }
 
       if (!spec.proofTopology) {
-        throw new Error(
-          `${specPath}: proofTopology is required; legacy proofSystem continues to use the old prep-charts renderer`,
-        )
+        throw new Error(`${specPath}: proofTopology is required`)
       }
 
       const endpoints = resolveDogecoinKubernetesEndpoints({

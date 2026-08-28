@@ -8,8 +8,6 @@ export type { ProvingMode } from './proof-system-mode.js'
 
 export const WITHDRAWAL_CONFIG_FILE = 'WithdrawalProcessor.toml'
 export const WITHDRAWAL_CONFIG_PATH = `/app/config/${WITHDRAWAL_CONFIG_FILE}`
-export const WITHDRAWAL_PROOF_BEGIN = '# BEGIN scrollsdk managed proof configuration'
-export const WITHDRAWAL_PROOF_END = '# END scrollsdk managed proof configuration'
 export const WITHDRAWAL_DEPLOYMENT_BEGIN = '# BEGIN scrollsdk managed deployment configuration'
 export const WITHDRAWAL_DEPLOYMENT_END = '# END scrollsdk managed deployment configuration'
 /** Default native config location relative to the deployment working directory. */
@@ -25,22 +23,6 @@ export const WITHDRAWAL_PROOF_ACTIVATION_ENV = {
 // never project it again; proof-work topology is owned wholly by native TOML.
 const RETIRED_WITHDRAWAL_PROOF_API_ENABLED_ENV = 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__ENABLED'
 
-const MANAGED_PROOF_TABLES = new Set([
-  'local_bridge_proof_runtime',
-  'proof_artifact_transport',
-  'proof_control_plane_gate',
-  'proof_execution_worker',
-  'proof_system',
-  'proof_task_policy',
-  'proof_work_api',
-  'scroll_worker_api',
-])
-
-const RETIRED_PROOF_TOP_LEVEL_KEYS = new Set([
-  'proving_mode',
-  'scroll_proof_input_policy',
-])
-
 function parseToml(source: string, label: string): void {
   try {
     toml.parse(source)
@@ -51,38 +33,6 @@ function parseToml(source: string, label: string): void {
 
 function markerCount(source: string, marker: string): number {
   return source.split(marker).length - 1
-}
-
-/**
- * Remove legacy unmarked proof tables while preserving unrelated TOML and comments.
- * This is used once when adopting managed markers in an existing values file.
- */
-function stripUnmarkedManagedProofTables(source: string): string {
-  const kept: string[] = []
-  let skipTable = false
-  let sawTable = false
-
-  for (const line of source.split(/\r?\n/)) {
-    const table = line.match(/^\s*\[{1,2}\s*([\w.-]+)\s*]{1,2}\s*(?:#.*)?$/)
-    if (table) {
-      sawTable = true
-      const root = table[1].split('.')[0]
-      skipTable = MANAGED_PROOF_TABLES.has(root)
-    }
-
-    if (!sawTable) {
-      const assignment = line.match(/^\s*([\w-]+)\s*=/)
-      if (assignment && RETIRED_PROOF_TOP_LEVEL_KEYS.has(assignment[1])) continue
-    }
-
-    if (!skipTable) kept.push(line)
-  }
-
-  return kept.join('\n').trimEnd()
-}
-
-function renderManagedProofBlock(proofConfig: toml.JsonMap): string {
-  return `${WITHDRAWAL_PROOF_BEGIN}\n${toml.stringify(proofConfig).trimEnd()}\n${WITHDRAWAL_PROOF_END}`
 }
 
 function isPlainObject(value: unknown): value is Record<string, any> {
@@ -323,36 +273,6 @@ export function stripMigratedWithdrawalEnv(
   return changes.reverse()
 }
 
-/** Replace or adopt the CLI-owned proof block without rewriting unrelated TOML. */
-export function replaceWithdrawalManagedProofBlock(
-  source: string,
-  proofConfig: toml.JsonMap
-): string {
-  parseToml(source, 'existing config')
-  const beginCount = markerCount(source, WITHDRAWAL_PROOF_BEGIN)
-  const endCount = markerCount(source, WITHDRAWAL_PROOF_END)
-  if (beginCount !== endCount || beginCount > 1) {
-    throw new Error(
-      `WithdrawalProcessor TOML must contain either zero or one ${WITHDRAWAL_PROOF_BEGIN} / ${WITHDRAWAL_PROOF_END} block`
-    )
-  }
-
-  const managed = renderManagedProofBlock(proofConfig)
-  let candidate: string
-  if (beginCount === 1) {
-    const begin = source.indexOf(WITHDRAWAL_PROOF_BEGIN)
-    const end = source.indexOf(WITHDRAWAL_PROOF_END)
-    if (end < begin) throw new Error(`WithdrawalProcessor TOML has ${WITHDRAWAL_PROOF_END} before its begin marker`)
-    candidate = `${source.slice(0, begin)}${managed}${source.slice(end + WITHDRAWAL_PROOF_END.length)}`
-  } else {
-    const unmanaged = stripUnmarkedManagedProofTables(source)
-    candidate = `${unmanaged}${unmanaged ? '\n\n' : ''}${managed}\n`
-  }
-
-  parseToml(candidate, 'generated config')
-  return candidate.endsWith('\n') ? candidate : `${candidate}\n`
-}
-
 /**
  * Ensure the chart consumes the application TOML at the canonical path: the
  * --config arg, the config ConfigMap toggle, and its mount. Does not touch the
@@ -400,22 +320,15 @@ export function ensureWithdrawalChartWiring(values: Record<string, any>): void {
   values.podAnnotations['checksum/tso-signers'] = '{{ .Values.tsoSigners | toJson | sha256sum }}'
 }
 
-/**
- * Drop an inline embedded TOML from values (native-file mode: helm --set-file
- * supplies the ConfigMap key, and a stale inline copy would shadow-confuse).
- * Returns the removed source only so callers can report that migration; it is
- * never used to create or seed the required native template.
- */
-export function removeInlineWithdrawalConfig(values: Record<string, any>): string | undefined {
+/** Reject inline application TOML; compiler output is mounted only through --set-file. */
+export function assertNoInlineWithdrawalConfig(values: Record<string, any>): void {
   const existing = values.configMaps?.config?.data?.[WITHDRAWAL_CONFIG_FILE]
-  if (existing === undefined) return undefined
-  if (typeof existing !== 'string') {
-    throw new TypeError(`withdrawal-processor values: configMaps.config.data.${WITHDRAWAL_CONFIG_FILE} must be a string`)
+  if (existing !== undefined) {
+    throw new Error(
+      `withdrawal-processor values must not embed configMaps.config.data.${WITHDRAWAL_CONFIG_FILE}; `
+      + 'use the compiler-managed native --set-file binding',
+    )
   }
-
-  delete values.configMaps.config.data[WITHDRAWAL_CONFIG_FILE]
-  if (Object.keys(values.configMaps.config.data).length === 0) delete values.configMaps.config.data
-  return existing
 }
 
 /**
@@ -427,17 +340,17 @@ export function removeInlineWithdrawalConfig(values: Record<string, any>): strin
  */
 export function ensureWithdrawalProofActivationSwitch(
   values: Record<string, any>,
-  proofSystemMode: ProofSystemMode = 'disabled'
+  topologyMode: ProofSystemMode = 'disabled'
 ): boolean {
   values.withdrawalProof ||= {}
   values.env ||= []
   if (!Array.isArray(values.env)) throw new TypeError('withdrawal-processor values: env must be an array')
   const before = JSON.stringify([values.withdrawalProof, values.env])
 
-  const enabled = proofSystemMode !== 'disabled'
+  const enabled = topologyMode !== 'disabled'
   values.withdrawalProof.enabled = enabled
-  values.withdrawalProof.mode = proofSystemMode
-  if (enabled) values.withdrawalProof.provingMode = proofSystemMode
+  values.withdrawalProof.mode = topologyMode
+  if (enabled) values.withdrawalProof.provingMode = topologyMode
   else delete values.withdrawalProof.provingMode
   const unmanagedEnv = values.env.filter(
     (item: any) => !isWithdrawalProofActivationEnv(String(item?.name || ''))
@@ -445,7 +358,7 @@ export function ensureWithdrawalProofActivationSwitch(
   const activationEnv: Array<{ name: string; value: string }> = [
     {
       name: WITHDRAWAL_PROOF_ACTIVATION_ENV.mode,
-      value: enabled ? (proofSystemMode === 'mock' ? 'dev_dummy' : 'production') : 'disabled',
+      value: enabled ? (topologyMode === 'mock' ? 'dev_dummy' : 'production') : 'disabled',
     },
     {
       name: WITHDRAWAL_PROOF_ACTIVATION_ENV.requireScroll,
@@ -456,7 +369,7 @@ export function ensureWithdrawalProofActivationSwitch(
       value: enabled ? 'true' : 'false',
     },
   ]
-  if (proofSystemMode === 'mock') {
+  if (topologyMode === 'mock') {
     activationEnv.push({
       name: WITHDRAWAL_PROOF_ACTIVATION_ENV.devDummyScrollInput,
       value: 'exact_mock',

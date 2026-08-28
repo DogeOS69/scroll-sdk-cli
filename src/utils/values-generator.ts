@@ -376,13 +376,6 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
         : undefined,
       source: 'DeploymentSpec proofTopology',
     })
-  } else if (normalizedSpec.proofSystem) {
-    assertPreTsukiDirectSignPosture({
-      mode: normalizedSpec.proofSystem.mode,
-      network: normalizedSpec.dogecoin.network,
-      preTsukiDirectSign: normalizedSpec.proofSystem.preTsukiDirectSign,
-      source: 'DeploymentSpec proofSystem',
-    })
   }
 
   const files: GeneratedValuesFiles = {}
@@ -1036,10 +1029,10 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
       { name: 'TIMEOUT_CHECK_INTERVAL_SECONDS', value: '60' },
       { name: 'TSO_CORRECTNESS_MAX_PSBT_BASE64_LEN', value: '130048' },
       { name: 'TSO_CUBESIGNER_MAX_PSBT_BASE64_LEN', value: '130048' },
-      ...(spec.proofSystem?.preTsukiDirectSign
+      ...(spec.proofTopology?.recovery
         ? [{
             name: PRE_TSUKI_DIRECT_SIGN_TSO_ENV,
-            value: String(spec.proofSystem.preTsukiDirectSign.maxEndBatchHeight),
+            value: String(spec.proofTopology.recovery.preTsukiDirectSignMaxEndBatchHeight),
           }]
         : []),
       { name: 'RUST_LOG', value: 'debug' }
@@ -1193,7 +1186,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   }
 
   ensureWithdrawalChartWiring(values)
-  ensureWithdrawalProofActivationSwitch(values, spec.proofSystem?.mode || 'disabled')
+  ensureWithdrawalProofActivationSwitch(values, spec.proofTopology?.mode || 'disabled')
 
   const {proofCoordinator} = spec
   if (proofCoordinator && proofCoordinator.enabled !== false) {

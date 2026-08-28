@@ -1,5 +1,3 @@
-import type { ProofSystemMode, ProvingMode } from '../utils/proof-system-mode.js'
-
 export type Network = 'mainnet' | 'regtest' | 'testnet'
 
 export interface CubesignerKey {
@@ -201,23 +199,6 @@ export interface DogeConfig {
     }>
   }
   network: Network
-  /** Deployment-wide proof posture, owned by setup rather than the Makefile. */
-  proofSystem?: {
-    /** Stable public GET root used only when mode is mock or production. */
-    artifactReadBaseUrl?: string
-    mode?: ProofSystemMode
-    /** Temporary, testnet-only Issue #843 recovery posture. */
-    preTsukiDirectSign?: {
-      maxEndBatchHeight: number
-    }
-    /** Legacy compatibility field; migrated to mode by setup prep-charts. */
-    provingMode?: ProvingMode
-    /** Proof release bundle root. Conventional proof-artifacts/ is used when omitted. */
-    release?: string
-    signerPolicy?: {
-      sourceSet?: string
-    }
-  }
   /** Reth-specific network settings that are intentionally independent of the EVM chain ID. */
   reth?: {
     /**

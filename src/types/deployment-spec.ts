@@ -56,12 +56,6 @@ export interface DeploymentSpec {
   proofCoordinator?: ProofCoordinatorConfig
 
   /**
-   * Deployment-wide proof intent. Optional: omitting it preserves the
-   * proof-disabled/direct-sign posture.
-   */
-  proofSystem?: ProofSystemIntentConfig
-
-  /**
    * Versioned proof-topology compiler source. Both active profiles may be
    * staged while disabled; changing only `mode` selects the compiled topology.
    */
@@ -186,28 +180,6 @@ export interface ProofCoordinatorConfig {
   withdrawalProcessorServiceAccount?: {
     annotations?: Record<string, string>
     name?: string
-  }
-}
-
-export interface ProofSystemIntentConfig {
-  /** Public credential-free GET root shared by workers and partner signers. May be prepared while mode is disabled. */
-  artifactReadBaseUrl?: string
-
-  /** One posture controls WP, coordinator, worker, and signer policy together. */
-  mode: ProofSystemMode
-
-  /** Temporary, testnet-only Issue #843 recovery posture; valid only with mode disabled. */
-  preTsukiDirectSign?: {
-    /** Inclusive Tsuki-boundary L2 batch height, projected identically to WP, TSO, and Rust signer. */
-    maxEndBatchHeight: number
-  }
-
-  /** Proof release bundle root. Conventional proof-artifacts/ is used when omitted. May be prepared while disabled. */
-  release?: string
-
-  signerPolicy?: {
-    /** Partner signer source-set policy input. */
-    sourceSet?: string
   }
 }
 

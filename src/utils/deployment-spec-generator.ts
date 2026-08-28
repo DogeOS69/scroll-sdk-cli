@@ -994,12 +994,12 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     }
   }
 
-  const { proofCoordinator, proofSystem, proofTopology } = spec
-  if (proofSystem && proofTopology) {
+  const { proofCoordinator, proofTopology } = spec
+  if ((spec as {proofSystem?: unknown} & DeploymentSpec).proofSystem !== undefined) {
     errors.push({
       code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-      message: 'proofSystem and proofTopology are mutually exclusive; proofTopology is the compiler-backed authority',
-      path: 'proofTopology',
+      message: 'proofSystem has been removed; use compiler-backed proofTopology',
+      path: 'proofSystem',
     })
   }
 
@@ -1231,79 +1231,11 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     }
   }
 
-  if (proofSystem) {
-    if (!['disabled', 'mock', 'production'].includes(proofSystem.mode)) {
-      errors.push({
-        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'proofSystem.mode must be disabled, mock, or production',
-        path: 'proofSystem.mode'
-      })
-    }
-
-    if (
-      proofSystem.artifactReadBaseUrl
-      && !isHttpUrl(proofSystem.artifactReadBaseUrl)
-    ) {
-      errors.push({
-        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'proofSystem.artifactReadBaseUrl must be an http(s) URL',
-        path: 'proofSystem.artifactReadBaseUrl'
-      })
-    }
-
-    if (
-      proofSystem.mode !== 'disabled'
-      && !proofSystem.artifactReadBaseUrl
-    ) {
-      errors.push({
-        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'proofSystem.artifactReadBaseUrl is required in mock and production modes',
-        path: 'proofSystem.artifactReadBaseUrl'
-      })
-    }
-
-    const directSignPin = proofSystem.preTsukiDirectSign?.maxEndBatchHeight
-    if (proofSystem.preTsukiDirectSign
-      && (!Number.isSafeInteger(directSignPin) || directSignPin! < 1 || directSignPin! > 4_294_967_295)) {
-      errors.push({
-        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'proofSystem.preTsukiDirectSign.maxEndBatchHeight must be an integer in 1..=4294967295',
-        path: 'proofSystem.preTsukiDirectSign.maxEndBatchHeight'
-      })
-    }
-
-    if (proofSystem.preTsukiDirectSign && proofSystem.mode !== 'disabled') {
-      errors.push({
-        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'proofSystem.preTsukiDirectSign requires proofSystem.mode disabled',
-        path: 'proofSystem.preTsukiDirectSign'
-      })
-    }
-
-    if (proofSystem.preTsukiDirectSign && spec.dogecoin.network === 'mainnet') {
-      errors.push({
-        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'proofSystem.preTsukiDirectSign is testnet-only and cannot be enabled on Dogecoin mainnet',
-        path: 'proofSystem.preTsukiDirectSign'
-      })
-    }
-
-    if (
-      proofSystem.mode !== 'disabled'
-      && (!proofCoordinator || proofCoordinator.enabled === false)
-    ) {
-      errors.push({
-        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'proofCoordinator must be enabled when proofSystem.mode is mock or production',
-        path: 'proofCoordinator'
-      })
-    }
-
-  } else if (!proofTopology && proofCoordinator && proofCoordinator.enabled !== false) {
+  if (!proofTopology && proofCoordinator && proofCoordinator.enabled !== false) {
     warnings.push({
-      message: 'proofCoordinator is configured without proofSystem; add proofSystem.mode so every proof component shares one explicit posture',
-      path: 'proofSystem',
-      suggestion: 'Use proofSystem.mode: mock for non-cryptographic topology testing or production for release proving.'
+      message: 'proofCoordinator is configured without proofTopology; proof commands require one explicit compiler-backed topology',
+      path: 'proofTopology',
+      suggestion: 'Stage proofTopology and select disabled, mock, or production mode.'
     })
   }
 
@@ -1723,34 +1655,6 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   const ethereumDaDefaults = ETHEREUM_DA_DEFAULTS[ethereumDaChain]
 
   config.network = spec.dogecoin.network
-
-  if (spec.proofTopology) {
-    config.proofSystem = {
-      mode: spec.proofTopology.mode,
-      ...(spec.proofTopology.recovery
-        ? {
-            preTsukiDirectSign: {
-              maxEndBatchHeight:
-                spec.proofTopology.recovery.preTsukiDirectSignMaxEndBatchHeight,
-            },
-          }
-        : {}),
-    }
-  } else if (spec.proofSystem) {
-    config.proofSystem = {
-      mode: spec.proofSystem.mode,
-      ...(spec.proofSystem.preTsukiDirectSign
-        ? { preTsukiDirectSign: spec.proofSystem.preTsukiDirectSign }
-        : {}),
-      ...(spec.proofSystem.artifactReadBaseUrl
-        ? { artifactReadBaseUrl: spec.proofSystem.artifactReadBaseUrl }
-        : {}),
-      ...(spec.proofSystem.release ? { release: spec.proofSystem.release } : {}),
-      ...(spec.proofSystem.signerPolicy?.sourceSet
-        ? { signerPolicy: { sourceSet: spec.proofSystem.signerPolicy.sourceSet } }
-        : {}),
-    }
-  }
 
   config.rpc = {
     password: externalRpc.password || '',

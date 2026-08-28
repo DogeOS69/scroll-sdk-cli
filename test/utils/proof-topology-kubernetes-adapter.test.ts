@@ -185,7 +185,7 @@ describe('compiled proof topology Kubernetes adapter', () => {
     fs.writeFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), '')
     fs.writeFileSync(path.join(root, 'proof-coordinator/ProofCoordinator.toml'), '')
     fs.writeFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), yaml.dump({
-      configMaps: {config: {data: {'WithdrawalProcessor.toml': 'stale'}, enabled: true}},
+      configMaps: {config: {enabled: true}},
       env: [],
       service: {main: {ports: {}}},
     }))

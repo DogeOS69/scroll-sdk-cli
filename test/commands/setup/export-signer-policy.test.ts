@@ -1,6 +1,7 @@
 import * as toml from '@iarna/toml'
 import { runCommand } from '@oclif/test'
 import { expect } from 'chai'
+import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -10,6 +11,7 @@ const TEE_PUBKEY = `03${'22'.repeat(32)}`
 const COMPRESSED_GENERATOR = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'
 const UNCOMPRESSED_GENERATOR = '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798' +
   '483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8'
+const REPOSITORY_ROOT = process.cwd()
 
 function writeDogeConfig(
   mode: 'disabled' | 'mock' | 'production',
@@ -27,9 +29,56 @@ function writeDogeConfig(
       threshold: 1,
     },
     network: 'testnet',
-    proofSystem: { mode, ...(preTsukiDirectSign ? {preTsukiDirectSign} : {}) },
     wallet: { path: '.data/wallet.json' },
   } as toml.JsonMap))
+  const spec = yaml.load(fs.readFileSync(
+    path.join(REPOSITORY_ROOT, 'src/config/deployment-spec.example.yaml'),
+    'utf8',
+  )) as Record<string, any>
+  const image = (suffix: string): Record<string, string> => ({
+    digest: `sha256:${suffix.repeat(64)}`,
+    repository: 'dogeos69/test-image',
+  })
+  spec.proofTopology = {
+    compiler: {image: image('a')},
+    deployment: {resourcesPersistentVolumeClaim: 'proof-resources'},
+    mode,
+    ...(mode === 'mock'
+      ? {
+          mock: {
+            artifactStore: {kind: 'local_fs'},
+            profile: 'cheap_scroll_chunk',
+            workerImage: image('b'),
+          },
+        }
+      : {}),
+    ...(mode === 'production'
+      ? {
+          production: {
+            artifactStore: {kind: 'local_fs'},
+            profile: 'real_scroll_withdrawal_full_topology',
+            realScroll: {resourcesRoot: 'proof-resources'},
+            workerImage: image('c'),
+            workerLaunch: 'external',
+          },
+        }
+      : {}),
+    ...(preTsukiDirectSign
+      ? {
+          recovery: {
+            preTsukiDirectSignMaxEndBatchHeight: preTsukiDirectSign.maxEndBatchHeight,
+          },
+        }
+      : {}),
+  }
+  if (mode !== 'disabled') {
+    spec.proofCoordinator = {
+      artifactStore: {bucket: 'proofs', region: 'us-west-2'},
+      s3AuthMode: 'ambient',
+    }
+  }
+
+  fs.writeFileSync('deployment-spec.yaml', yaml.dump(spec))
 }
 
 function commandArgs(...extra: string[]): string[] {
@@ -49,10 +98,20 @@ function commandArgs(...extra: string[]): string[] {
 
 describe('setup export-signer-policy operator flow', () => {
   let originalCwd: string
+  let originalEnvironment: NodeJS.ProcessEnv
   let root: string
 
   beforeEach(() => {
     originalCwd = process.cwd()
+    originalEnvironment = {...process.env}
+    Object.assign(process.env, {
+      DB_ADMIN_PASSWORD: 'test-password',
+      DOGECOIN_CLUSTER_RPC_PASSWORD: 'test-password',
+      DOGECOIN_CLUSTER_RPC_USERNAME: 'test-user',
+      DOGECOIN_EXTERNAL_RPC_PASSWORD: 'test-password',
+      DOGECOIN_EXTERNAL_RPC_USERNAME: 'test-user',
+      OWNER_ADDRESS: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    })
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'export-signer-policy-'))
     process.chdir(root)
     fs.mkdirSync('.data', { recursive: true })
@@ -65,6 +124,7 @@ describe('setup export-signer-policy operator flow', () => {
 
   afterEach(() => {
     process.chdir(originalCwd)
+    process.env = originalEnvironment
     fs.rmSync(root, { force: true, recursive: true })
   })
 

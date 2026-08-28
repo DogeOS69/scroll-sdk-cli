@@ -6,7 +6,7 @@ import { JsonOutputContext } from '../../utils/json-output.js'
 import {
   type ProofDeploymentComponent,
   resolveContractFile,
-  validateProofDeploymentContractWithWarnings,
+  validateProofDeploymentContract,
 } from '../../utils/proof-deployment-contract.js'
 
 type ComponentName =
@@ -24,7 +24,6 @@ export function buildProofHelmArgs(input: {
   release: string
   version: string
 }): string[] {
-  if (!input.component.valuesFile) throw new Error('enabled proof component has no values file in the deployment contract')
   const args = [
     'upgrade', '-i', input.release, input.chart,
     '-n', input.namespace,
@@ -66,9 +65,7 @@ export default class ProofHelm extends Command {
     const json = new JsonOutputContext('helper proof-helm', flags.json)
     try {
       const deploymentDir = path.resolve(flags['deployment-dir'])
-      const validation = validateProofDeploymentContractWithWarnings(deploymentDir)
-      const {contract} = validation
-      for (const warning of validation.warnings) json.addWarning(warning)
+      const contract = validateProofDeploymentContract(deploymentDir)
       const componentName = flags.component as ComponentName
       const component = componentName === 'eth-da-submitter'
         ? contract.components.ethDaSubmitter
@@ -77,25 +74,7 @@ export default class ProofHelm extends Command {
           : componentName === 'prover-worker'
             ? contract.components.proverWorker
             : contract.components.withdrawalProcessor
-      if (!component) {
-        if (componentName === 'eth-da-submitter' && contract.schemaVersion < 4) {
-          json.info('Skipping compiler submitter projection: legacy proof contract')
-          json.success({component: componentName, mode: contract.mode, skipped: true})
-          return
-        }
-
-        throw new Error(
-          `${componentName} is unavailable in proof deployment contract schema ${contract.schemaVersion}`,
-        )
-      }
-
       if (!component.enabled) {
-        if (!component.valuesFile) {
-          json.info(`Skipping ${componentName}: absent from proof deployment mode ${contract.mode}`)
-          json.success({component: componentName, mode: contract.mode, skipped: true})
-          return
-        }
-
         json.info(`Applying absent ${componentName} projection for proof mode ${contract.mode}`)
       }
 

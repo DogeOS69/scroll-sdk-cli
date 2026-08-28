@@ -134,6 +134,22 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
   } as DeploymentSpec;
 }
 
+function createProofTopology(
+  mode: 'disabled' | 'mock' | 'production' = 'disabled',
+  recovery?: {preTsukiDirectSignMaxEndBatchHeight: number},
+): NonNullable<DeploymentSpec['proofTopology']> {
+  return {
+    compiler: {
+      image: {
+        digest: `sha256:${'a'.repeat(64)}`,
+        repository: 'dogeos69/dogeos-proof-topology',
+      },
+    },
+    mode,
+    ...(recovery ? {recovery} : {}),
+  }
+}
+
 function createValidEthereumDaCutover(): NonNullable<NonNullable<NonNullable<DeploymentSpec['ethereumDa']>['batch']>['cutover']> {
   return {
     lastBatchHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
@@ -740,21 +756,19 @@ describe('deployment-spec-generator', () => {
 
     it('validates the temporary pre-Tsuki direct-sign posture as disabled and non-mainnet', () => {
       const valid = createMinimalSpec({
-        proofSystem: {
-          mode: 'disabled',
-          preTsukiDirectSign: {maxEndBatchHeight: 6863},
-        },
+        proofTopology: createProofTopology('disabled', {
+          preTsukiDirectSignMaxEndBatchHeight: 6863,
+        }),
       });
       expect(validateDeploymentSpec(valid).errors).to.have.length(0);
 
       const wrongMode = createMinimalSpec({
-        proofSystem: {
-          mode: 'mock',
-          preTsukiDirectSign: {maxEndBatchHeight: 6863},
-        },
+        proofTopology: createProofTopology('mock', {
+          preTsukiDirectSignMaxEndBatchHeight: 6863,
+        }),
       });
       expect(validateDeploymentSpec(wrongMode).errors.some(
-        error => error.path === 'proofSystem.preTsukiDirectSign',
+        error => error.path === 'proofTopology.recovery',
       )).to.equal(true);
 
       const mainnet = createMinimalSpec({
@@ -762,7 +776,7 @@ describe('deployment-spec-generator', () => {
           ...valid.dogecoin,
           network: 'mainnet',
         },
-        proofSystem: valid.proofSystem,
+        proofTopology: valid.proofTopology,
       });
       expect(validateDeploymentSpec(mainnet).errors.some(
         error => error.message.includes('testnet-only'),
@@ -778,18 +792,13 @@ describe('deployment-spec-generator', () => {
           },
           s3AuthMode: 'ambient',
         },
-        proofSystem: {
-          artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
-          mode: 'disabled',
-          release: './proof-releases/v1',
-          signerPolicy: {sourceSet: './configs/source-set.toml'},
-        },
+        proofTopology: createProofTopology(),
       });
 
       expect(validateDeploymentSpec(spec).errors).to.have.length(0);
     });
 
-    it('accepts staged compiler profiles while disabled and rejects dual proof authorities', () => {
+    it('accepts staged compiler profiles while disabled and rejects the removed proofSystem field', () => {
       const compilerTopology = {
         compiler: {
           image: {
@@ -813,12 +822,12 @@ describe('deployment-spec-generator', () => {
         warning => warning.path === 'proofTopology.production',
       )).to.equal(true);
 
-      const dual = createMinimalSpec({
+      const removed = {
+        ...createMinimalSpec({proofTopology: compilerTopology}),
         proofSystem: {mode: 'disabled'},
-        proofTopology: compilerTopology,
-      });
-      expect(validateDeploymentSpec(dual).errors.some(
-        error => error.message.includes('mutually exclusive'),
+      } as DeploymentSpec;
+      expect(validateDeploymentSpec(removed).errors.some(
+        error => error.message.includes('proofSystem has been removed'),
       )).to.equal(true);
     });
   });
@@ -950,7 +959,7 @@ describe('deployment-spec-generator', () => {
         artifactStore: {bucket: 'dogeos-proofs', region: 'us-west-2'},
         s3AuthMode: 'ambient',
       };
-      spec.proofSystem = {mode: 'disabled'};
+      spec.proofTopology = createProofTopology();
       const output = generateConfigToml(spec);
 
       expect(output).to.include('RPC_GATEWAY_WS_HOST');
@@ -1041,7 +1050,7 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateDogeConfigToml', () => {
-    it('projects only compiler mode and recovery intent into legacy doge-config compatibility', () => {
+    it('does not duplicate proof topology into doge-config', () => {
       const spec = createMinimalSpec({
         proofTopology: {
           compiler: {
@@ -1055,49 +1064,7 @@ describe('deployment-spec-generator', () => {
         },
       });
       const parsed = toml.parse(generateDogeConfigToml(spec)) as any;
-      expect(parsed.proofSystem).to.deep.equal({
-        mode: 'disabled',
-        preTsukiDirectSign: {maxEndBatchHeight: 6863},
-      });
-    });
-
-    it('projects DeploymentSpec proof intent into doge-config for conflict-free reruns', () => {
-      const spec = createMinimalSpec({
-        proofSystem: {
-          artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
-          mode: 'production',
-          release: './proof-releases/v1',
-          signerPolicy: { sourceSet: './configs/source-set.toml' },
-        },
-      });
-      const parsed = toml.parse(generateDogeConfigToml(spec)) as any;
-
-      expect(parsed.proofSystem).to.deep.equal({
-        artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
-        mode: 'production',
-        release: './proof-releases/v1',
-        signerPolicy: { sourceSet: './configs/source-set.toml' },
-      });
-    });
-
-    it('preserves disabled proof resources and a pre-Tsuki pin in doge-config', () => {
-      const spec = createMinimalSpec({
-        proofSystem: {
-          artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
-          mode: 'disabled',
-          preTsukiDirectSign: {maxEndBatchHeight: 6863},
-          release: './proof-releases/v1',
-          signerPolicy: {sourceSet: './configs/source-set.toml'},
-        },
-      });
-      const parsed = toml.parse(generateDogeConfigToml(spec)) as any;
-      expect(parsed.proofSystem).to.deep.equal({
-        artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
-        mode: 'disabled',
-        preTsukiDirectSign: {maxEndBatchHeight: 6863},
-        release: './proof-releases/v1',
-        signerPolicy: {sourceSet: './configs/source-set.toml'},
-      });
+      expect(parsed.proofSystem).to.equal(undefined);
     });
 
     it('includes RPC config and the Dogecoin network source', () => {
@@ -1418,10 +1385,9 @@ describe('deployment-spec-generator', () => {
   describe('generateValuesFiles', () => {
     it('projects the temporary recovery pin into generated TSO values', () => {
       const spec = createMinimalSpec({
-        proofSystem: {
-          mode: 'disabled',
-          preTsukiDirectSign: {maxEndBatchHeight: 6863},
-        },
+        proofTopology: createProofTopology('disabled', {
+          preTsukiDirectSignMaxEndBatchHeight: 6863,
+        }),
       });
       const values = yaml.load(generateValuesFiles(spec)['tso-service-production.yaml']) as any;
       expect(values.env).to.deep.include({
@@ -1648,10 +1614,7 @@ describe('deployment-spec-generator', () => {
           name: 'withdrawal-processor',
         },
       };
-      spec.proofSystem = {
-        artifactReadBaseUrl: 'https://proof-artifacts.example.com/proof-topology',
-        mode: 'production',
-      };
+      spec.proofTopology = createProofTopology('production');
       spec.images = {
         services: {
           proofCoordinator: {
@@ -1729,10 +1692,7 @@ describe('deployment-spec-generator', () => {
           },
           s3AuthMode: 'ambient',
         },
-        proofSystem: {
-          artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
-          mode: 'disabled',
-        },
+        proofTopology: createProofTopology(),
       });
 
       const files = generateValuesFiles(spec);

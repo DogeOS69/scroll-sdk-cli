@@ -124,7 +124,6 @@ USAGE
 * [`scrollsdk setup proof-topology-compile`](#scrollsdk-setup-proof-topology-compile)
 * [`scrollsdk setup proof-worker`](#scrollsdk-setup-proof-worker)
 * [`scrollsdk setup proof-worker-check`](#scrollsdk-setup-proof-worker-check)
-* [`scrollsdk setup proof-worker-release`](#scrollsdk-setup-proof-worker-release)
 * [`scrollsdk setup push-secrets`](#scrollsdk-setup-push-secrets)
 * [`scrollsdk setup tls`](#scrollsdk-setup-tls)
 * [`scrollsdk setup verify-contracts`](#scrollsdk-setup-verify-contracts)
@@ -1176,9 +1175,8 @@ USAGE
 
 FLAGS
   -c, --config=<value>                             Path to doge-config.toml
-      --allowed-proof-triples=<value>              Envelope proof-triple allowlist; default: derived from the
-                                                   ProofCoordinator.toml or proof-artifacts manifests staged by
-                                                   prep-charts; missing/empty fails closed
+      --allowed-proof-triples=<value>              Envelope proof-triple allowlist; default: derived from
+                                                   compiler-rendered ProofCoordinator.toml; missing/empty fails closed
       --bridge-namespace-id=<value>                20-byte bridge namespace id; default is read from
                                                    .data/GenerateBridgeInfo.toml (namespace_id) written by bridge-init
                                                    step 3
@@ -1194,7 +1192,7 @@ FLAGS
                                                    withdrawal-processor/WithdrawalProcessor.toml
       --source-set=<value>                         source-set.toml override. Mock defaults to an e2e_harness empty
                                                    scaffold; production defaults to configs/source-set.toml
-      --spec=<value>                               Optional DeploymentSpec proof-intent source; auto-detects
+      --spec=<value>                               DeploymentSpec proofTopology source; auto-detects
                                                    deployment-spec.yaml/yml when omitted
       --supported-signing-policy-versions=<value>  [default: 1] CSV of supported signing policy versions
       --tee-allowed-signer-ids=<value>             CSV of allowed TEE signer ids; compressed or uncompressed SEC1 keys
@@ -1658,8 +1656,8 @@ Validate the proof deployment contract, generated values/native configs, mode co
 
 ```
 USAGE
-  $ scrollsdk setup proof-config-check [-c <value>] [--contract <value>] [--deployment-dir <value>] [--json] [--spec <value>]
-    [--strict]
+  $ scrollsdk setup proof-config-check [-c <value>] [--contract <value>] [--deployment-dir <value>] [--json] [--spec
+  <value>]
 
 FLAGS
   -c, --config=<value>          Advanced doge-config.toml override
@@ -1667,10 +1665,8 @@ FLAGS
                                 deployment root
       --deployment-dir=<value>  [default: .] Deployment root
       --json                    Output structured JSON
-      --spec=<value>            Optional DeploymentSpec proof-intent source; defaults to the source recorded in the
-                                deployment contract or conventional auto-discovery
-      --strict                  Also fail on ordinary values or non-proof native-config drift; intended for immutable CI
-                                artifacts
+      --spec=<value>            DeploymentSpec proofTopology source; defaults to the source recorded in the deployment
+                                contract or conventional auto-discovery
 
 DESCRIPTION
   Validate the proof deployment contract, generated values/native configs, mode consistency, and generated worker bundle
@@ -1731,7 +1727,7 @@ _See code: [src/commands/setup/proof-topology-compile.ts](https://github.com/dog
 
 ## `scrollsdk setup proof-worker`
 
-Hydrate a generated mock or production prover-worker Docker Compose bundle with its bearer token; run explicitly after deterministic K8s config generation
+Hydrate a compiler-generated external prover-worker bundle with its bearer token after deterministic configuration generation
 
 ```
 USAGE
@@ -1750,8 +1746,8 @@ FLAGS
                               when unset, read it from Secrets Manager
 
 DESCRIPTION
-  Hydrate a generated mock or production prover-worker Docker Compose bundle with its bearer token; run explicitly after
-  deterministic K8s config generation
+  Hydrate a compiler-generated external prover-worker bundle with its bearer token after deterministic configuration
+  generation
 
 EXAMPLES
   $ scrollsdk setup proof-worker
@@ -1763,63 +1759,30 @@ _See code: [src/commands/setup/proof-worker.ts](https://github.com/dogeos69/scro
 
 ## `scrollsdk setup proof-worker-check`
 
-Auto-detect and verify a generated mock or production prover-worker bundle, release artifacts, capabilities, secret-file mode, and optional expected bundle ID
+Verify a compiler-generated external prover-worker bundle, selected resources, secret-file mode, and optional expected bundle ID
 
 ```
 USAGE
-  $ scrollsdk setup proof-worker-check [--bundle-dir <value>] [--expected-bundle-id <value>] [--json] [--release-root <value>]
-    [--resources-root <value>]
+  $ scrollsdk setup proof-worker-check --bundle-dir <value> [--expected-bundle-id <value>] [--json] [--resources-root
+  <value>]
 
 FLAGS
-  --bundle-dir=<value>          [default: prover-worker-mock/docker-compose] Generated mock or production Compose bundle
-                                directory; defaults to the mock bundle convention
+  --bundle-dir=<value>          (required) Compiler-generated external Worker Compose bundle directory
   --expected-bundle-id=<value>  Expected bundle ID written by prep-charts; use on the worker host to reject a stale
                                 synchronized bundle
   --json                        Output structured JSON
-  --release-root=<value>        Production release root on this worker host; defaults to PROVER_WORKER_RELEASE_ROOT from
-                                the generated .env
   --resources-root=<value>      Compiler-backed Worker resources root on this host; defaults to PROOF_RESOURCES_ROOT
                                 from the bundle .env
 
 DESCRIPTION
-  Auto-detect and verify a generated mock or production prover-worker bundle, release artifacts, capabilities,
-  secret-file mode, and optional expected bundle ID
+  Verify a compiler-generated external prover-worker bundle, selected resources, secret-file mode, and optional expected
+  bundle ID
 
 EXAMPLES
-  $ scrollsdk setup proof-worker-check
-
-  $ scrollsdk setup proof-worker-check --bundle-dir /home/ubuntu/prover-worker-mock/docker-compose --expected-bundle-id <sha256>
-
-  $ scrollsdk setup proof-worker-check --bundle-dir /srv/dogeos/prover-worker-production/docker-compose --release-root /srv/dogeos/proof-artifacts --expected-bundle-id <sha256>
+  $ scrollsdk setup proof-worker-check --bundle-dir /srv/dogeos/prover-worker-production/docker-compose --resources-root /srv/dogeos/proof-resources --expected-bundle-id <sha256>
 ```
 
 _See code: [src/commands/setup/proof-worker-check.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-worker-check.ts)_
-
-## `scrollsdk setup proof-worker-release`
-
-Release-producer helper: hash the conventional all-family prover artifacts and write worker-release.json for deployment-side worker bundle generation
-
-```
-USAGE
-  $ scrollsdk setup proof-worker-release --image <value> [--json] [--release-root <value>]
-
-FLAGS
-  --image=<value>         (required) Immutable all-family CUDA worker image digest
-  --json                  Output structured JSON
-  --release-root=<value>  [default: proof-artifacts] Release root containing chunk/, batch/, and bridge/ conventional
-                          artifacts
-
-DESCRIPTION
-  Release-producer helper: hash the conventional all-family prover artifacts and write worker-release.json for
-  deployment-side worker bundle generation
-
-EXAMPLES
-  $ scrollsdk setup proof-worker-release --image dogeos69/prover-worker-cuda@sha256:<digest>
-
-  $ scrollsdk setup proof-worker-release --release-root proof-releases/v2026.07.1 --image dogeos69/prover-worker-cuda@sha256:<digest>
-```
-
-_See code: [src/commands/setup/proof-worker-release.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-worker-release.ts)_
 
 ## `scrollsdk setup push-secrets`
 

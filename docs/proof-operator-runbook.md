@@ -36,9 +36,8 @@ artifact-based:
 One declarative compiler source controls the complete generated proof posture:
 `proofTopology.mode: disabled|mock|production`. A compiler-backed deployment
 uses DeploymentSpec as its authority and stages both the mock and production
-blocks before initial deployment. `proofSystem` remains a legacy compatibility
-source for deployments that have not adopted the dogeos-core compiler. Never
-declare both. `setup export-signer-policy` reads the same selected intent, so
+blocks before initial deployment. The removed `proofSystem` source is not
+accepted. `setup export-signer-policy` reads the same selected intent, so
 partners never pass a separate proving-mode flag.
 
 | Property | `disabled` | `mock` | `production` |
@@ -97,7 +96,6 @@ deployment/
 ├── proof-coordinator/
 │   └── ProofCoordinator.toml
 ├── proof-artifacts/                     # proof inputs and generated JSON
-│   ├── release.json                     # optional legacy release metadata
 │   ├── chunk/                            # production worker program
 │   ├── batch/                            # production worker program
 │   ├── bridge/                           # bridge + standalone aggregation programs
@@ -118,10 +116,9 @@ compiler and atomically installs its complete strict outputs. It does not patch
 mode-specific verifier or materializer blocks itself. The compiler also emits
 generated materials beneath `.data/generated/proof-topology/materials`, a
 Worker contract, submitter projection, resolved sidecar, and rollout plan.
-Legacy `proofSystem` deployments retain the marked-block renderer described by
-older contracts. Production `configs/source-set.toml` must still contain real
-RPC sources reachable from partner signer networks; the compiler does not
-invent signer RPC quorum policy.
+Production `configs/source-set.toml` must still contain real RPC sources
+reachable from partner signer networks; the compiler does not invent signer
+RPC quorum policy.
 
 `prep-charts` does not execute a durable proof database regeneration. When the
 compiler plan reports `requires_proof_regeneration`, the CLI emits an explicit
@@ -268,10 +265,9 @@ Only a deployment that will never use the AWS proof topology should skip
 `proof-aws-init`. Resource preparation is valid while the selected mode is
 disabled. Next select the proof posture and run `prep-charts` as described in
 section 8. `prep-charts` fails if the native
-WithdrawalProcessor template is absent. If a legacy values file still contains
-`configMaps.config.data.WithdrawalProcessor.toml`, the command removes that
-inline copy only after confirming the native template exists; it never uses the
-inline content to create the native file.
+WithdrawalProcessor template is absent. The maintained values template must
+use the native-file layout and must not contain an inline
+`configMaps.config.data.WithdrawalProcessor.toml` copy.
 
 ## 8. Select and generate the proof posture
 
@@ -331,19 +327,8 @@ read-only into the compiler. The existing PVC must contain identical release
 content at `resourcesMountPath` for WP and PC. External Worker launch uses the
 same runtime path contract on its host.
 
-Legacy deployments may continue to use the old non-compiler source:
-
-```toml
-[proofSystem]
-mode = "mock"
-artifactReadBaseUrl = "https://proofs.example.com/<deployment>"
-# release = "proof-releases/v2026.07.1"
-```
-
-Do not maintain `proofSystem` and `proofTopology` independently. The CLI rejects
-both in one DeploymentSpec. Generated doge-config carries only the selected
-mode/recovery compatibility projection; dormant compiler profiles remain in
-DeploymentSpec and are never flattened into native daemon config.
+`proofTopology` is the only proof configuration source. It is not flattened
+into doge-config; dormant profiles remain exclusively in DeploymentSpec.
 
 Disabled compiler mode still requires the WP base template but deliberately
 does not open dormant profile resources. Validate them before deployment with:
@@ -371,22 +356,11 @@ proofTopology:
     preTsukiDirectSignMaxEndBatchHeight: 6863
 ```
 
-The equivalent doge-config form is:
-
-```toml
-[proofSystem]
-mode = "disabled"
-
-[proofSystem.preTsukiDirectSign]
-maxEndBatchHeight = 6863
-```
-
 `setup prep-charts` writes the same pin to
 `[proof_system.pre_tsuki_direct_sign].max_end_batch_height` in the native WP
 TOML and `TSO_PRE_TSUKI_DIRECT_SIGN_MAX_END_BATCH_HEIGHT` in TSO values. The
-schema-v4 compiler deployment contract (schema v3 for the legacy renderer)
-records the pin and
-`setup proof-config-check --strict` rejects disagreement or residual runtime
+schema-v4 compiler deployment contract records the pin and
+`setup proof-config-check` rejects disagreement or residual runtime
 configuration. `setup export-signer-policy` writes the same value as
 `ATTESTATION_SIGNER_PRE_TSUKI_DIRECT_SIGN_MAX_END_BATCH_HEIGHT` in the Rust
 attestation-signer policy bundle.
@@ -423,7 +397,6 @@ authority. Release-relative paths and reviewed VK/commitment identities come
 from `proofTopology.production.realScroll`; the selected digest-pinned image
 comes from `proofTopology.production.workerImage`. The dogeos-core compiler
 validates the selected files and builds the complete Worker argv contract.
-`setup proof-worker-release` remains only for legacy `proofSystem` deployments.
 
 Now run the normal chart command for every mode:
 
@@ -445,24 +418,20 @@ only a fully validated, non-preflight bundle. The compiler-backed projection:
 - writes schema-v4 `.data/proof-deployment.json` with proof digest, deployment
   revision, rollout plan, compiler bundle, and Worker contract paths.
 
-The deployment contract uses a risk-based integrity boundary:
+The schema-v4 deployment contract uses a fail-closed integrity boundary:
 
-- Compiler-owned WP and PC files use required whole-file integrity. The legacy
-  renderer retains its managed-block compatibility boundary.
+- Compiler-owned WP and PC files use required whole-file integrity.
 - Proof manifests and other proof-critical `--set-file` inputs retain
   whole-file integrity and block installation when changed.
-- Compiler-backed WP, PC, Worker, and submitter values use required integrity
-  because they carry mode, image, argv, namespace, or replica lifecycle state.
-  TSO values retain an observed checksum for diagnostics; ordinary TSO drift
-  is a warning unless strict validation is selected.
+- WP, PC, Worker, submitter, and TSO values use required integrity because they
+  carry mode, image, argv, namespace, recovery, or replica lifecycle state.
 - The contract generation ID, proof mode/posture, required files, and worker
   bundle verification remain mandatory.
 
 Compiler-owned native configs, Worker contract, bundle manifest, resolved
 sidecar, rollout plan, and generated materials are required-integrity inputs.
-Use `scrollsdk setup proof-config-check --strict` in an immutable-artifact CI
-pipeline when ordinary Helm values drift should also fail. Legacy contracts
-remain readable with their historical managed-block behavior.
+Use `scrollsdk setup proof-config-check` before installation. Contract schemas
+older than v4 are rejected and must be regenerated with `setup prep-charts`.
 
 Missing selected endpoints, release material, or protocol context is rejected
 before proof-owned files are committed. The complete command runs in
@@ -539,11 +508,7 @@ validates and requires a hydrated external bundle when one is selected:
 
 ```bash
 scrollsdk setup proof-config-check --deployment-dir .
-scrollsdk setup proof-config-check --deployment-dir . --strict # immutable CI
 ```
-
-Legacy `proofSystem` mock/production Compose bundles remain supported by the
-same `setup proof-worker` and `setup proof-worker-check` commands.
 
 ## 10. Phase B — export and deliver signer policy
 
@@ -561,7 +526,7 @@ registry directly from the staged proof triples.
 - mock generates an empty e2e-harness source-set scaffold and leaves both TEE
   allowlists empty by default;
 - production requires `configs/source-set.toml` and a non-empty TEE signer ID;
-  legacy `04+X+Y` keys are validated and normalized to `02/03+X`.
+  uncompressed `04+X+Y` keys are validated and normalized to `02/03+X`.
 
 Send the entire generated directory to every signer operator:
 
@@ -617,8 +582,7 @@ kubectl -n <namespace> run signer-reachability-<id> --rm -i --restart=Never \
 
 After all partners have applied the generated policy bundle, change only
 `proofTopology.mode` from `disabled` to `mock`, then regenerate and install the
-compiler projection. A legacy `proofSystem` deployment also updates its legacy
-artifact URL as documented by that schema.
+compiler projection.
 
 ```bash
 scrollsdk setup prep-charts -N
@@ -711,7 +675,7 @@ verification or production readiness.
 | descriptor import fails | validate schema/network/key/endpoint; run the partner `scrollsdk signer preflight`, replace the collected descriptor, and rerun `setup attestation-signer` |
 | no external attestation signers | import descriptors before bridge genesis; doge-config must use `attestationSigner.mode = "external"` |
 | missing `protocol_context.protocol_id` | rerun bridge-init protocol-context step with a current dogeos-core image |
-| no staged proof GET base URL | verify the selected `proofTopology` artifact store/public endpoint (or legacy `proofSystem.artifactReadBaseUrl`), then rerun `setup prep-charts` |
+| no staged proof GET base URL | verify the selected `proofTopology` artifact store/public endpoint, then rerun `setup prep-charts` |
 | compiler preflight fails | fix only the selected dormant profile's missing release paths, identities, image, or endpoint; do not edit generated WP/PC files |
 | compiled external Worker check fails | sync the generated Compose bundle and selected resources root together; pass `--resources-root` if their relative layout changed |
 | production source set missing | create `configs/source-set.toml` with real partner-reachable Dogecoin, Ethereum execution, and DogeOS L2 RPC sets |

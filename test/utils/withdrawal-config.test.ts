@@ -65,10 +65,8 @@ describe('withdrawal-config deployment block', () => {
   })
 
   it('creates the deployment block at the top of a proof-only config', () => {
-    const source = `# BEGIN scrollsdk managed proof configuration
-[proof_system]
+    const source = `[proof_system]
 mode = "disabled"
-# END scrollsdk managed proof configuration
 `
     const { deletePaths, facts } = buildWithdrawalDeploymentFacts(FACTS_INPUT)
     const merged = mergeWithdrawalManagedDeploymentBlock(source, facts, {deletePaths})

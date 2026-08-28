@@ -42,7 +42,7 @@ export function assertPreTsukiDirectSignPosture(options: {
   }
 
   if (options.mode !== 'disabled') {
-    throw new Error(`${options.source}: preTsukiDirectSign requires proofSystem.mode disabled`)
+    throw new Error(`${options.source}: proofTopology.recovery requires proofTopology.mode disabled`)
   }
 
   const network = options.network?.trim().toLowerCase()

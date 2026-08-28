@@ -12,7 +12,6 @@ import {
   writeCompiledProverWorkerBundle,
 } from './compiled-prover-worker-bundle.js'
 import {resolveDeploymentSpecEnvRefs} from './deployment-spec-generator.js'
-import {scaffoldProofCoordinatorConfig} from './proof-coordinator-scaffold.js'
 import {
   type CompileProofTopologyOptions,
   type ProofTopologyBridgeContext,
@@ -21,9 +20,9 @@ import {
   compileProofTopology,
 } from './proof-topology-compiler.js'
 import {
+  assertNoInlineWithdrawalConfig,
   ensureWithdrawalChartWiring,
   ensureWithdrawalProofActivationSwitch,
-  removeInlineWithdrawalConfig,
 } from './withdrawal-config.js'
 
 const MATERIALS_CONFIG_MAP = 'proof-topology-materials'
@@ -44,7 +43,6 @@ export interface ReconcileCompiledProofTopologyOptions {
   deploymentDir: string
   deploymentSpec: DeploymentSpec
   ethereumL1RpcUrl?: string
-  scaffoldCoordinatorConfig?: boolean
   valuesDir: string
   withdrawalConfigPath: string
 }
@@ -59,7 +57,6 @@ export interface ReconcileCompiledProofTopologyResult {
     withdrawalProcessor: Array<{filePath: string; integrityPolicy: 'required'; key: string}>
   }
   proofArtifactBaseUrl?: string
-  scaffoldedCoordinatorConfig: boolean
   worker?: ProverWorkerContractV1
   workerBundle?: CompiledProverWorkerBundleResult
 }
@@ -347,7 +344,7 @@ function configureWithdrawalValues(
 ): Array<{filePath: string; integrityPolicy: 'required'; key: string}> {
   const values = readYaml(filePath)
   ensureWithdrawalChartWiring(values)
-  removeInlineWithdrawalConfig(values)
+  assertNoInlineWithdrawalConfig(values)
   ensureWithdrawalProofActivationSwitch(values, mode)
   values.service ||= {}
   values.service.main ||= {}
@@ -500,19 +497,11 @@ export function reconcileCompiledProofTopology(
   const withdrawalValuesPath = path.join(valuesDir, 'withdrawal-processor-production.yaml')
   const submitterValuesPath = path.join(valuesDir, 'eth-da-submitter-production.yaml')
 
-  let scaffoldedCoordinatorConfig = false
   if (mode !== 'disabled' && !fs.existsSync(options.coordinatorConfigPath)) {
-    if (options.scaffoldCoordinatorConfig === false) {
-      throw new Error(`Proof Coordinator base config not found: ${options.coordinatorConfigPath}`)
-    }
-
-    const scaffold = scaffoldProofCoordinatorConfig({
-      coordinatorConfigPath: options.coordinatorConfigPath,
-      provingMode: mode,
-      valuesDir,
-      withdrawalConfigPath: options.withdrawalConfigPath,
-    })
-    scaffoldedCoordinatorConfig = scaffold.created
+    throw new Error(
+      `Proof Coordinator base config not found: ${options.coordinatorConfigPath}. `
+      + 'Copy proof-coordinator/ProofCoordinator.toml from the scroll-sdk examples layout.',
+    )
   }
 
   const proverPublicUrl = topology.deployment?.proverPublicUrl
@@ -675,7 +664,6 @@ export function reconcileCompiledProofTopology(
       ],
     },
     proofArtifactBaseUrl: argumentValue(bundle.worker, '--artifact-read-base-url'),
-    scaffoldedCoordinatorConfig,
     worker: bundle.worker,
     workerBundle,
   }

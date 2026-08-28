@@ -39,14 +39,13 @@ import {
   isLocalSigner,
 } from '../../utils/signer-roles.js'
 import {
-  WITHDRAWAL_CONFIG_FILE,
   WITHDRAWAL_NATIVE_CONFIG_RELPATH,
+  assertNoInlineWithdrawalConfig,
   buildWithdrawalDeploymentFacts,
   ensureWithdrawalChartWiring,
   ensureWithdrawalProofActivationSwitch,
   isWithdrawalProofActivationEnv,
   mergeWithdrawalManagedDeploymentBlock,
-  removeInlineWithdrawalConfig,
   stripMigratedWithdrawalEnv,
 } from '../../utils/withdrawal-config.js'
 import {
@@ -1367,7 +1366,6 @@ export default class SetupPrepCharts extends Command {
           contract: proof.contract,
           files: proof.files,
           mode: proof.mode,
-          scaffoldedCoordinatorConfig: proof.scaffoldedCoordinatorConfig,
           workerBundle: proof.workerBundle,
         },
         totalSkipped: skippedInstances + skippedBootnodeRethInstances + skippedRethInstances + skippedProduction + skippedConfig,
@@ -1670,15 +1668,13 @@ export default class SetupPrepCharts extends Command {
       this.warn('config-contracts.toml not found. Some values may not be populated correctly.')
     }
 
-    const { config, configPath: dogeConfigPath } = await loadDogeConfigWithSelection(
+    const { config } = await loadDogeConfigWithSelection(
       flags['doge-config'],
       'scrollsdk setup doge-config',
     )
     this.dogeConfig = config as DogeConfigType;
     this.proofIntent = resolveProofIntent({
       deploymentDir: process.cwd(),
-      dogeConfig: this.dogeConfig,
-      dogeConfigPath,
       specPath: flags.spec,
     })
     this.jsonCtx.info(
@@ -2909,19 +2905,7 @@ export default class SetupPrepCharts extends Command {
           )
         }
 
-        // Legacy inline copies are discarded only after the scroll-sdk native
-        // template is present; helm --set-file supplies the ConfigMap content.
-        const inlineSource = removeInlineWithdrawalConfig(productionYaml)
-        if (inlineSource !== undefined) {
-          this.jsonCtx.addWarning(`withdrawal-processor: dropping inline configMaps ${WITHDRAWAL_CONFIG_FILE}; ${nativeConfigPath} is the source of truth`)
-
-          changes.push({
-            key: `configMaps.config.data.${WITHDRAWAL_CONFIG_FILE}`,
-            newValue: `owned by ${nativeConfigPath}`,
-            oldValue: 'inline TOML',
-          })
-          updated = true
-        }
+        assertNoInlineWithdrawalConfig(productionYaml)
 
         const previousSource = fs.readFileSync(nativeConfigPath, 'utf8')
         const mergedSource = mergeWithdrawalManagedDeploymentBlock(previousSource, facts, {deletePaths})
@@ -2966,8 +2950,8 @@ export default class SetupPrepCharts extends Command {
           updated = true
         }
 
-        const proofSystemMode = this.proofIntent.intent.mode
-        if (ensureWithdrawalProofActivationSwitch(productionYaml, proofSystemMode)) {
+        const topologyMode = this.proofIntent.intent.mode
+        if (ensureWithdrawalProofActivationSwitch(productionYaml, topologyMode)) {
           changes.push({
             key: 'withdrawalProof.enabled',
             newValue: productionYaml.withdrawalProof.enabled,
@@ -3469,24 +3453,9 @@ export default class SetupPrepCharts extends Command {
       // read-only and is recorded as an absolute contract path.
     }
 
-    let {release} = resolved.intent
-    if (release) {
-      const originalRelease = path.resolve(transaction.originalRoot, release)
-      try {
-        transaction.toStagingPath(originalRelease)
-      } catch {
-        // Preserve an external release root instead of resolving its relative
-        // spelling against the temporary generation workspace.
-        release = originalRelease
-      }
-    }
-
     return {
-      ...(resolved.deploymentSpec ? {deploymentSpec: resolved.deploymentSpec} : {}),
-      intent: {
-        ...resolved.intent,
-        ...(release ? {release} : {}),
-      },
+      deploymentSpec: resolved.deploymentSpec,
+      intent: resolved.intent,
       source: {
         ...resolved.source,
         path: sourcePath,
@@ -3504,25 +3473,11 @@ export default class SetupPrepCharts extends Command {
           bundleDir: transaction.toOriginalPath(result.workerBundle.bundleDir),
           files: result.workerBundle.files.map(file => transaction.toOriginalPath(file)),
           manifestFile: transaction.toOriginalPath(result.workerBundle.manifestFile),
-          ...('releaseManifestFile' in result.workerBundle
-            ? {
-                releaseManifestFile: transaction.toOriginalPath(
-                  result.workerBundle.releaseManifestFile,
-                ),
-              }
-            : {}),
         }
       : undefined
     return {
       ...result,
       files: result.files.map(file => transaction.toOriginalPath(file)),
-      release: {
-        artifactManifest: transaction.toOriginalPath(result.release.artifactManifest),
-        programManifests: result.release.programManifests
-          .map(file => transaction.toOriginalPath(file)),
-        releaseRoot: transaction.toOriginalPath(result.release.releaseRoot),
-        statementNamespace: transaction.toOriginalPath(result.release.statementNamespace),
-      },
       ...(workerBundle ? {workerBundle} : {}),
     }
   }
@@ -3534,7 +3489,6 @@ export default class SetupPrepCharts extends Command {
       network: this.dogeConfig.network,
     })
     const result = reconcileProofKubernetes({
-      aggregationL2ChainId: this.getConfigValue('general.CHAIN_ID_L2') as number | string | undefined,
       coordinatorIngressHost: typeof coordinatorIngressHost === 'string'
         ? coordinatorIngressHost
         : undefined,
@@ -3563,15 +3517,10 @@ export default class SetupPrepCharts extends Command {
       )
     }
 
-    if (result.workerBundle && result.mode === 'mock') {
+    if (result.workerBundle) {
       this.jsonCtx.addWarning(
-        `Mock worker bundle ${result.workerBundle.bundleId} is credential-pending. `
-        + 'Hydrate prover-worker.env on the worker host before running setup proof-worker-check.',
-      )
-    } else if (result.workerBundle) {
-      this.jsonCtx.addWarning(
-        `Production worker bundle ${result.workerBundle.bundleId} is credential-pending. `
-        + 'Run setup proof-worker to inject the bearer token, sync the release and bundle to the GPU host, '
+        `External worker bundle ${result.workerBundle.bundleId} is credential-pending. `
+        + 'Run setup proof-worker to inject the bearer token, sync the resources and bundle to the worker host, '
         + 'then run setup proof-worker-check before docker compose up.',
       )
     }
