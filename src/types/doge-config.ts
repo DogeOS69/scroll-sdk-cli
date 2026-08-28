@@ -1,3 +1,5 @@
+import type {ProofTopologySpec} from './proof-topology.js'
+
 export type Network = 'mainnet' | 'regtest' | 'testnet'
 
 export interface CubesignerKey {
@@ -199,6 +201,8 @@ export interface DogeConfig {
     }>
   }
   network: Network
+  /** Compiler-backed proof topology when DeploymentSpec is not used. */
+  proof_topology?: ProofTopologySpec
   /** Reth-specific network settings that are intentionally independent of the EVM chain ID. */
   reth?: {
     /**

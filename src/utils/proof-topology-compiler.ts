@@ -6,14 +6,13 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 
 import type {
-  DeploymentSpec,
   MockProofTopologySpec,
   ProductionProofTopologySpec,
   ProofTopologyArtifactStoreConfig,
   ProofTopologyImageReference,
   ProofTopologyRealScrollConfig,
   ProofTopologySpec,
-} from '../types/deployment-spec.js'
+} from '../types/proof-topology.js'
 import type {ProofSystemMode} from './proof-system-mode.js'
 
 export const PROOF_TOPOLOGY_BUNDLE_SCHEMA_VERSION = 1
@@ -40,15 +39,17 @@ export interface CompileProofTopologyOptions {
   compilerBinary?: string
   compilerImage?: string
   deploymentDir?: string
+  deploymentName: string
   durableProofRows?: DurableProofRows
   ethDaSubmitterBaseConfig?: string
   ethereumL1RpcUrl?: string
   lastActiveDigest?: string
+  network: string
   outputDir?: string
   preflightMode?: ProofTopologyPreflightMode
   previousSidecar?: string
   proofCoordinatorBaseConfig?: string
-  spec: DeploymentSpec
+  proofTopology: ProofTopologySpec
   withdrawalProcessorBaseConfig?: string
 }
 
@@ -593,7 +594,7 @@ function deploymentContext(
     withdrawalBase: string
   },
 ): Record<string, unknown> {
-  const topology = options.spec.proofTopology!
+  const topology = options.proofTopology
   const deployment = topology.deployment || {}
   const selected = selectedProfile(topology, input.mode)
   const resourcesMount = deployment.resourcesMountPath || DEFAULT_PROOF_TOPOLOGY_RESOURCES_MOUNT
@@ -626,7 +627,7 @@ function deploymentContext(
   }
   return {
     schema_version: PROOF_TOPOLOGY_CONTEXT_SCHEMA_VERSION,
-    network: options.spec.dogecoin.network,
+    network: options.network,
     protocol_context_path: deployment.protocolContextPath || '/app/protocol_context.json',
     withdrawal_processor: {
       base_config_path: mountedInputPath(input.withdrawalBase, input.container, input.inputDir),
@@ -643,7 +644,7 @@ function deploymentContext(
       prover_bind: deployment.proverBind || '0.0.0.0:7788',
       prover_public_url:
         deployment.proverPublicUrl || 'http://proof-coordinator:7788',
-      coordinator_id: deployment.coordinatorId || `${options.spec.metadata.name}-proof-coordinator`,
+      coordinator_id: deployment.coordinatorId || `${options.deploymentName}-proof-coordinator`,
       ...optional('ethereum_l1_rpc_url', options.ethereumL1RpcUrl),
       ...(options.bridge
         ? {
@@ -714,8 +715,7 @@ function installBundle(stagedBundle: string, target: string): void {
 export function compileProofTopology(
   options: CompileProofTopologyOptions,
 ): ValidatedProofTopologyBundle {
-  const topology = options.spec.proofTopology
-  if (!topology) throw new Error('DeploymentSpec proofTopology is required')
+  const topology = options.proofTopology
   const deploymentDir = path.resolve(options.deploymentDir || '.')
   const mode: ProofSystemMode = options.preflightMode || topology.mode
   const preflightOnly = options.preflightMode !== undefined
@@ -915,7 +915,7 @@ export function compileProofTopology(
         validated.worker.image.repository !== selected.workerImage.repository
         || validated.worker.image.digest !== selected.workerImage.digest
       ) {
-        throw new Error('compiler Worker image does not match the selected DeploymentSpec profile')
+        throw new Error('compiler Worker image does not match the selected proof topology profile')
       }
 
       const expectedDesiredState = mode === 'production'

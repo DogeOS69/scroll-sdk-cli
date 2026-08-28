@@ -65,4 +65,25 @@ describe('doge-config utilities', () => {
     expect(parsed.localSigners).not.to.have.property('network')
     expect(parsed.wallet.path).to.equal('.data/doge-wallet-testnet.json')
   })
+
+  it('preserves compiler-backed proof topology as a doge-config section', () => {
+    const content = dogeConfigToToml({
+      network: 'testnet',
+      proof_topology: {
+        compiler: {
+          image: {
+            digest: `sha256:${'a'.repeat(64)}`,
+            repository: 'dogeos69/dogeos-proof-topology',
+          },
+        },
+        mode: 'disabled',
+      },
+      wallet: {path: '.data/doge-wallet-testnet.json'},
+    })
+    const parsed = toml.parse(content) as any
+
+    expect(parsed.proof_topology.mode).to.equal('disabled')
+    expect(parsed.proof_topology.compiler.image.repository)
+      .to.equal('dogeos69/dogeos-proof-topology')
+  })
 })

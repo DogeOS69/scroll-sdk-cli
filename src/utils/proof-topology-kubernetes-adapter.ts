@@ -4,14 +4,14 @@ import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import type {DeploymentSpec} from '../types/deployment-spec.js'
+import type {ProofCoordinatorConfig} from '../types/deployment-spec.js'
+import type {ProofTopologySpec} from '../types/proof-topology.js'
 import type {ProofSystemMode} from './proof-system-mode.js'
 
 import {
   type CompiledProverWorkerBundleResult,
   writeCompiledProverWorkerBundle,
 } from './compiled-prover-worker-bundle.js'
-import {resolveDeploymentSpecEnvRefs} from './deployment-spec-generator.js'
 import {
   type CompileProofTopologyOptions,
   type ProofTopologyBridgeContext,
@@ -41,8 +41,12 @@ export interface ReconcileCompiledProofTopologyOptions {
   coordinatorConfigPath: string
   coordinatorIngressHost?: string
   deploymentDir: string
-  deploymentSpec: DeploymentSpec
+  deploymentName: string
   ethereumL1RpcUrl?: string
+  network: string
+  proofCoordinator?: ProofCoordinatorConfig
+  proofTopology: ProofTopologySpec
+  proverPublicUrl?: string
   valuesDir: string
   withdrawalConfigPath: string
 }
@@ -156,8 +160,7 @@ function configureMaterials(
   return bindings
 }
 
-function selectedRealScroll(spec: DeploymentSpec, mode: ProofSystemMode) {
-  const topology = spec.proofTopology!
+function selectedRealScroll(topology: ProofTopologySpec, mode: ProofSystemMode) {
   return mode === 'mock'
     ? topology.mock?.realScroll
     : mode === 'production'
@@ -178,9 +181,10 @@ function configureWorkerValues(
     digest: string
     generatedMaterialsRoot: string
     materialsDir?: string
+    proofCoordinator?: ProofCoordinatorConfig
     resourceClaim?: string
     resourcesMountPath: string
-    spec: DeploymentSpec
+    topology: ProofTopologySpec
     worker?: ProverWorkerContractV1
   },
 ): Array<{filePath: string; integrityPolicy: 'required'; key: string}> {
@@ -218,10 +222,10 @@ function configureWorkerValues(
   values.service.main.enabled = false
   values.automountServiceAccountToken = false
 
-  const deployment = input.spec.proofTopology?.deployment || {}
+  const deployment = input.topology.deployment || {}
   const tokenPath = workerArgument(worker, '--worker-token-file')
   const tokenName = path.posix.basename(tokenPath)
-  const tokenKey = input.spec.proofCoordinator?.secrets?.proverWorkerTokenProperty
+  const tokenKey = input.proofCoordinator?.secrets?.proverWorkerTokenProperty
     || 'prover-worker-token'
   values.persistence ||= {}
   values.persistence[WORKER_TOKEN_VOLUME] = {
@@ -229,7 +233,7 @@ function configureWorkerValues(
     items: [{key: tokenKey, path: tokenName}],
     mountPath: tokenPath,
     name: deployment.workerSecretName
-      || input.spec.proofCoordinator?.secrets?.name
+      || input.proofCoordinator?.secrets?.name
       || 'proof-coordinator-secrets',
     readOnly: true,
     subPath: tokenName,
@@ -278,8 +282,8 @@ function configureWorkerValues(
   values.probes.liveness = {enabled: false}
   if (deployment.workerResources) values.resources = deployment.workerResources
   else if (
-    input.spec.proofTopology?.mode === 'production'
-    && input.spec.proofTopology.production?.workerLaunch === 'local_cuda'
+    input.topology.mode === 'production'
+    && input.topology.production?.workerLaunch === 'local_cuda'
   ) {
     values.resources = {
       limits: {'nvidia.com/gpu': 1},
@@ -471,25 +475,24 @@ function argumentValue(worker: ProverWorkerContractV1 | undefined, flag: string)
   return index >= 0 ? worker.argv[index + 1] : undefined
 }
 
-function derivedProverPublicUrl(
-  spec: DeploymentSpec,
-  mode: ProofSystemMode,
-): string | undefined {
-  if (mode !== 'production' || spec.proofTopology?.production?.workerLaunch !== 'external') {
+function derivedProverPublicUrl(options: ReconcileCompiledProofTopologyOptions): string | undefined {
+  const {proofTopology: topology} = options
+  if (topology.mode !== 'production' || topology.production?.workerLaunch !== 'external') {
     return undefined
   }
 
-  const host = spec.frontend.hosts.proofCoordinator
-  if (!host) throw new Error('external production Worker requires frontend.hosts.proofCoordinator')
-  return `${spec.frontend.protocol || 'https'}://${host}`
+  if (options.proverPublicUrl) return options.proverPublicUrl
+  if (options.coordinatorIngressHost) return `https://${options.coordinatorIngressHost}`
+  throw new Error(
+    'external production Worker requires proofTopology.deployment.proverPublicUrl '
+    + 'or a Proof Coordinator ingress host',
+  )
 }
 
 export function reconcileCompiledProofTopology(
   options: ReconcileCompiledProofTopologyOptions,
 ): ReconcileCompiledProofTopologyResult {
-  const spec = resolveDeploymentSpecEnvRefs(options.deploymentSpec)
-  const {proofTopology: topology} = spec
-  if (!topology) throw new Error('compiler adapter requires DeploymentSpec proofTopology')
+  const {proofTopology: topology} = options
   const {mode} = topology
   const valuesDir = path.resolve(options.valuesDir)
   const coordinatorValuesPath = path.join(valuesDir, 'proof-coordinator-production.yaml')
@@ -505,15 +508,12 @@ export function reconcileCompiledProofTopology(
   }
 
   const proverPublicUrl = topology.deployment?.proverPublicUrl
-    || derivedProverPublicUrl(spec, mode)
-  const effectiveSpec: DeploymentSpec = {
-    ...spec,
-    proofTopology: {
-      ...topology,
-      deployment: {
-        ...topology.deployment,
-        ...(proverPublicUrl ? {proverPublicUrl} : {}),
-      },
+    || derivedProverPublicUrl(options)
+  const effectiveTopology: ProofTopologySpec = {
+    ...topology,
+    deployment: {
+      ...topology.deployment,
+      ...(proverPublicUrl ? {proverPublicUrl} : {}),
     },
   }
   const compileOptions: CompileProofTopologyOptions = {
@@ -521,9 +521,11 @@ export function reconcileCompiledProofTopology(
     compilerBinary: options.compilerBinary,
     compilerImage: options.compilerImage,
     deploymentDir: options.deploymentDir,
+    deploymentName: options.deploymentName,
     ethereumL1RpcUrl: options.ethereumL1RpcUrl,
+    network: options.network,
     proofCoordinatorBaseConfig: options.coordinatorConfigPath,
-    spec: effectiveSpec,
+    proofTopology: effectiveTopology,
     withdrawalProcessorBaseConfig: options.withdrawalConfigPath,
   }
   const bundle = (options.compile || compileProofTopology)(compileOptions)
@@ -581,9 +583,10 @@ export function reconcileCompiledProofTopology(
     digest: bundle.plan.to_digest,
     generatedMaterialsRoot,
     materialsDir,
-    resourceClaim: selectedRealScroll(spec, mode) ? resourceClaim : undefined,
+    proofCoordinator: options.proofCoordinator,
+    resourceClaim: selectedRealScroll(topology, mode) ? resourceClaim : undefined,
     resourcesMountPath,
-    spec,
+    topology,
     worker: bundle.worker,
   })
 
@@ -593,7 +596,7 @@ export function reconcileCompiledProofTopology(
       throw new Error('external compiler Worker requires its contract and generated materials')
     }
 
-    const realScroll = selectedRealScroll(spec, mode)
+    const realScroll = selectedRealScroll(topology, mode)
     if (!realScroll) throw new Error('external compiler Worker requires selected realScroll resources')
     const deploymentRoot = path.resolve(options.deploymentDir)
     workerBundle = writeCompiledProverWorkerBundle({

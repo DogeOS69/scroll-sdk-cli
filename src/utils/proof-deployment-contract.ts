@@ -50,7 +50,7 @@ export interface ProofDeploymentContract {
   mode: ProofSystemMode
   preTsukiDirectSign?: PreTsukiDirectSignIntent
   proofArtifactBaseUrl?: string
-  schemaVersion: 4
+  schemaVersion: 5
   signerPolicy: {
     policyMode: 'dev_permissive' | 'production_enforce' | 'staging_scaffold'
     proofArtifactFetchMode: 'disabled' | 'http'
@@ -239,11 +239,12 @@ export function writeProofDeploymentContract(
     intentSource: {
       kind: input.intentSource.kind,
       path: deploymentRelativePath(deploymentDir, input.intentSource.path),
+      sha256: input.intentSource.sha256,
     },
     mode: input.mode,
     ...(input.preTsukiDirectSign ? {preTsukiDirectSign: input.preTsukiDirectSign} : {}),
     ...(input.proofArtifactBaseUrl ? {proofArtifactBaseUrl: input.proofArtifactBaseUrl} : {}),
-    schemaVersion: 4 as const,
+    schemaVersion: 5 as const,
     signerPolicy,
     topology: {
       bundleDir: deploymentRelativePath(deploymentDir, input.topology.bundleDir),
@@ -274,7 +275,7 @@ export function writeProofDeploymentContract(
     try {
       const previous = JSON.parse(fs.readFileSync(contractPath, 'utf8')) as ProofDeploymentContract
       if (
-        previous.schemaVersion === 4
+        previous.schemaVersion === 5
         && previous.generationId === generationId
         && sha256Json(stableContractFields(previous)) === generationId
       ) {
@@ -305,9 +306,9 @@ export function readProofDeploymentContract(
   }
 
   const parsed = JSON.parse(fs.readFileSync(resolved, 'utf8')) as {schemaVersion?: unknown}
-  if (parsed.schemaVersion !== 4) {
+  if (parsed.schemaVersion !== 5) {
     throw new Error(
-      `${resolved}: only proof deployment contract schemaVersion 4 is supported; `
+      `${resolved}: only proof deployment contract schemaVersion 5 is supported; `
       + 'rerun scrollsdk setup prep-charts',
     )
   }
@@ -467,6 +468,14 @@ export function validateProofDeploymentContract(
 
   if (sha256Json(stableContractFields(contract)) !== contract.generationId) {
     problems.push('generation ID does not match the deployment contract contents')
+  }
+
+  if (
+    !['deployment-spec', 'doge-config'].includes(contract.intentSource?.kind)
+    || !contract.intentSource.path
+    || !/^[\da-f]{64}$/.test(contract.intentSource.sha256)
+  ) {
+    problems.push('proof intent source metadata is missing or invalid')
   }
 
   for (const [name, componentValue] of Object.entries(contract.components)) {

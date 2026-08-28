@@ -78,7 +78,7 @@ export interface TsoSignerEndpoint {
 }
 
 interface PrepChartGenerationResult {
-  proof: ReconcileProofKubernetesResult
+  proof?: ReconcileProofKubernetesResult
   skippedBootnodeRethInstances: number
   skippedConfig: number
   skippedInstances: number
@@ -1194,7 +1194,7 @@ export default class SetupPrepCharts extends Command {
       description: 'Run without prompts. Auto-applies all detected changes.',
     }),
     'proof-topology-compiler-binary': Flags.string({
-      description: 'Development-only local dogeos-proof-topology binary; production uses the digest-pinned DeploymentSpec image',
+      description: 'Development-only local dogeos-proof-topology binary; production uses the digest-pinned configured image',
       exclusive: ['proof-topology-compiler-image'],
     }),
     'proof-topology-compiler-image': Flags.string({
@@ -1207,7 +1207,7 @@ export default class SetupPrepCharts extends Command {
       description: 'Do not overwrite L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK in L2 production values files',
     }),
     spec: Flags.string({
-      description: 'Optional DeploymentSpec proof-intent source; auto-detects deployment-spec.yaml/yml when omitted',
+      description: 'Optional DeploymentSpec proof source; conflicts with doge-config [proof_topology]',
     }),
     'values-dir': Flags.string({ default: './values', description: 'Directory containing values files; must be inside the deployment root for transactional generation' }),
   }
@@ -1263,7 +1263,7 @@ export default class SetupPrepCharts extends Command {
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
   private outputTestData: Record<string, any> = {}
-  private proofIntent!: ResolvedProofIntent
+  private proofIntent?: ResolvedProofIntent
   private skipL2ContractDeploymentBlock: boolean = false
   private withdrawalProcessorConfig: toml.JsonMap = {}
 
@@ -1308,10 +1308,13 @@ export default class SetupPrepCharts extends Command {
     let changedFiles: string[] = []
     try {
       const stagedValuesDir = transaction.toStagingPath(originalValuesDir)
-      this.proofIntent = this.rebaseProofIntentForStaging(
-        transaction,
-        this.proofIntent,
-      )
+      if (this.proofIntent) {
+        this.proofIntent = this.rebaseProofIntentForStaging(
+          transaction,
+          this.proofIntent,
+        )
+      }
+
       process.chdir(transaction.stagingRoot)
       generation = await this.generateCharts(stagedValuesDir)
       process.chdir(deploymentRoot)
@@ -1335,7 +1338,9 @@ export default class SetupPrepCharts extends Command {
       updatedProduction,
       updatedRethInstances,
     } = generation
-    const proof = this.rebaseProofResultFromStaging(transaction, stagedProof)
+    const proof = stagedProof
+      ? this.rebaseProofResultFromStaging(transaction, stagedProof)
+      : undefined
     const valuesDir = originalValuesDir
 
     this.jsonCtx.logSuccess(`Updated instance-specific YAML files for ${updatedInstances + updatedBootnodeRethInstances + updatedRethInstances} chart(s).`);
@@ -1362,12 +1367,14 @@ export default class SetupPrepCharts extends Command {
           updated: updatedInstances + updatedBootnodeRethInstances + updatedRethInstances,
         },
         productionCharts: { skipped: skippedProduction, updated: updatedProduction },
-        proof: {
-          contract: proof.contract,
-          files: proof.files,
-          mode: proof.mode,
-          workerBundle: proof.workerBundle,
-        },
+        proof: proof
+          ? {
+              contract: proof.contract,
+              files: proof.files,
+              mode: proof.mode,
+              workerBundle: proof.workerBundle,
+            }
+          : {configured: false},
         totalSkipped: skippedInstances + skippedBootnodeRethInstances + skippedRethInstances + skippedProduction + skippedConfig,
         totalUpdated: updatedInstances + updatedBootnodeRethInstances + updatedRethInstances + updatedProduction + updatedConfig,
         valuesDir,
@@ -1497,7 +1504,9 @@ export default class SetupPrepCharts extends Command {
       await this.processProductionYaml(valuesDir)
     const {skipped: skippedConfig, updated: updatedConfig} =
       await this.processConfigYaml(valuesDir)
-    const proof = this.reconcileProofKubernetes(valuesDir)
+    const proof = this.proofIntent
+      ? this.reconcileProofKubernetes(valuesDir)
+      : undefined
     return {
       proof,
       skippedBootnodeRethInstances,
@@ -1668,18 +1677,36 @@ export default class SetupPrepCharts extends Command {
       this.warn('config-contracts.toml not found. Some values may not be populated correctly.')
     }
 
-    const { config } = await loadDogeConfigWithSelection(
+    const { config, configPath: dogeConfigPath } = await loadDogeConfigWithSelection(
       flags['doge-config'],
       'scrollsdk setup doge-config',
     )
     this.dogeConfig = config as DogeConfigType;
     this.proofIntent = resolveProofIntent({
       deploymentDir: process.cwd(),
+      dogeConfig: this.dogeConfig,
+      dogeConfigPath,
+      required: false,
       specPath: flags.spec,
     })
-    this.jsonCtx.info(
-      `Proof intent: ${this.proofIntent.intent.mode} (${this.proofIntent.source.kind}: ${this.proofIntent.source.path})`,
-    )
+    const priorProofState = fs.existsSync(path.join(process.cwd(), '.data/proof-deployment.json'))
+      || fs.existsSync(path.join(process.cwd(), '.data/generated/proof-topology'))
+    if (!this.proofIntent && priorProofState) {
+      throw new Error(
+        'proof topology source is missing while generated proof state exists; restore '
+        + '.data/doge-config.toml [proof_topology] or DeploymentSpec proofTopology before prep-charts',
+      )
+    }
+
+    if (this.proofIntent) {
+      for (const warning of this.proofIntent.warnings) this.jsonCtx.addWarning(warning)
+      this.jsonCtx.info(
+        `Proof intent: ${this.proofIntent.intent.mode} (${this.proofIntent.source.kind}: ${this.proofIntent.source.path})`,
+      )
+    } else {
+      this.jsonCtx.info('Proof topology is not configured; proof compiler reconciliation is skipped')
+    }
+
     this.configData.ethereumDa = this.dogeConfig.ethereumDa
 
 
@@ -2950,7 +2977,7 @@ export default class SetupPrepCharts extends Command {
           updated = true
         }
 
-        const topologyMode = this.proofIntent.intent.mode
+        const topologyMode = this.proofIntent?.intent.mode || 'disabled'
         if (ensureWithdrawalProofActivationSwitch(productionYaml, topologyMode)) {
           changes.push({
             key: 'withdrawalProof.enabled',
@@ -3454,12 +3481,17 @@ export default class SetupPrepCharts extends Command {
     }
 
     return {
-      deploymentSpec: resolved.deploymentSpec,
+      deploymentName: resolved.deploymentName,
       intent: resolved.intent,
+      network: resolved.network,
+      proofCoordinator: resolved.proofCoordinator,
+      proofTopology: resolved.proofTopology,
+      proverPublicUrl: resolved.proverPublicUrl,
       source: {
         ...resolved.source,
         path: sourcePath,
       },
+      warnings: resolved.warnings,
     }
   }
 
@@ -3483,6 +3515,7 @@ export default class SetupPrepCharts extends Command {
   }
 
   private reconcileProofKubernetes(valuesDir: string): ReconcileProofKubernetesResult {
+    if (!this.proofIntent) throw new Error('proof topology is not configured')
     const coordinatorIngressHost = this.getConfigValue('ingress.PROOF_COORDINATOR_HOST')
     const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints({
       kubernetes: this.dogeConfig.kubernetes,

@@ -97,7 +97,7 @@
         "description": "Useful tools for setting up and interacting with your chain"
       },
       "setup": {
-        "description": "Generate and validate deployment configuration from DeploymentSpec"
+        "description": "Generate and validate deployment configuration"
       },
       "test": {
         "description": "Test your chain configuration and setup"

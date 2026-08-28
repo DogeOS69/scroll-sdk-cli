@@ -1,6 +1,6 @@
 import {expect} from 'chai'
 
-import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
+import type {ProofTopologySpec} from '../../src/types/deployment-spec.js'
 
 import {buildProofAwsConfig} from '../../src/utils/proof-aws-config.js'
 import {assertProofAwsMatchesTopology} from '../../src/utils/proof-kubernetes-reconciler.js'
@@ -27,24 +27,22 @@ describe('proof Kubernetes reconciler preflight', () => {
       },
       withdrawalServiceAccount: 'withdrawal-processor',
     })
-    const spec = {
-      proofTopology: {
-        compiler: {
-          image: {digest: `sha256:${'a'.repeat(64)}`, repository: 'compiler'},
-        },
-        mode: 'disabled',
-        production: {
-          artifactStore: {
-            bucket: 'different-bucket',
-            keyPrefix: 'proof-topology',
-            kind: 's3_compatible',
-            region: 'us-west-2',
-          },
+    const topology = {
+      compiler: {
+        image: {digest: `sha256:${'a'.repeat(64)}`, repository: 'compiler'},
+      },
+      mode: 'disabled',
+      production: {
+        artifactStore: {
+          bucket: 'different-bucket',
+          keyPrefix: 'proof-topology',
+          kind: 's3_compatible',
+          region: 'us-west-2',
         },
       },
-    } as unknown as DeploymentSpec
+    } as unknown as ProofTopologySpec
 
-    expect(() => assertProofAwsMatchesTopology(spec, proofAws))
+    expect(() => assertProofAwsMatchesTopology(topology, proofAws))
       .to.throw('production.artifactStore.bucket')
   })
 
@@ -69,23 +67,21 @@ describe('proof Kubernetes reconciler preflight', () => {
       },
       withdrawalServiceAccount: 'withdrawal-processor',
     })
-    const spec = {
-      proofTopology: {
-        compiler: {
-          image: {digest: `sha256:${'a'.repeat(64)}`, repository: 'compiler'},
-        },
-        mock: {
-          artifactStore: {
-            bucket: 'proof-bucket',
-            keyPrefix: 'proof-topology',
-            kind: 's3_compatible',
-            region: 'us-west-2',
-          },
-        },
-        mode: 'disabled',
+    const topology = {
+      compiler: {
+        image: {digest: `sha256:${'a'.repeat(64)}`, repository: 'compiler'},
       },
-    } as unknown as DeploymentSpec
+      mock: {
+        artifactStore: {
+          bucket: 'proof-bucket',
+          keyPrefix: 'proof-topology',
+          kind: 's3_compatible',
+          region: 'us-west-2',
+        },
+      },
+      mode: 'disabled',
+    } as unknown as ProofTopologySpec
 
-    expect(() => assertProofAwsMatchesTopology(spec, proofAws)).not.to.throw()
+    expect(() => assertProofAwsMatchesTopology(topology, proofAws)).not.to.throw()
   })
 })

@@ -1192,8 +1192,8 @@ FLAGS
                                                    withdrawal-processor/WithdrawalProcessor.toml
       --source-set=<value>                         source-set.toml override. Mock defaults to an e2e_harness empty
                                                    scaffold; production defaults to configs/source-set.toml
-      --spec=<value>                               DeploymentSpec proofTopology source; auto-detects
-                                                   deployment-spec.yaml/yml when omitted
+      --spec=<value>                               Optional DeploymentSpec proof source; conflicts with doge-config
+                                                   [proof_topology]
       --supported-signing-policy-versions=<value>  [default: 1] CSV of supported signing policy versions
       --tee-allowed-signer-ids=<value>             CSV of allowed TEE signer ids; compressed or uncompressed SEC1 keys
                                                    are normalized to dogeos-core's compressed form. Production defaults
@@ -1565,13 +1565,13 @@ FLAGS
       --github-username=<value>                 GitHub username
       --json                                    Output in JSON format (stdout for data, stderr for logs)
       --proof-topology-compiler-binary=<value>  Development-only local dogeos-proof-topology binary; production uses the
-                                                digest-pinned DeploymentSpec image
+                                                digest-pinned configured image
       --proof-topology-compiler-image=<value>   Override the digest-pinned proof-topology compiler image
       --skip-auth-check                         Skip authentication check for individual charts
       --skip-l2-contract-deployment-block       Do not overwrite L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK in L2 production
                                                 values files
-      --spec=<value>                            Optional DeploymentSpec proof-intent source; auto-detects
-                                                deployment-spec.yaml/yml when omitted
+      --spec=<value>                            Optional DeploymentSpec proof source; conflicts with doge-config
+                                                [proof_topology]
       --values-dir=<value>                      [default: ./values] Directory containing values files; must be inside
                                                 the deployment root for transactional generation
 
@@ -1660,13 +1660,12 @@ USAGE
   <value>]
 
 FLAGS
-  -c, --config=<value>          Advanced doge-config.toml override
+  -c, --config=<value>          doge-config.toml path; it is the proof source when [proof_topology] is present
       --contract=<value>        [default: .data/proof-deployment.json] Proof deployment contract path relative to the
                                 deployment root
       --deployment-dir=<value>  [default: .] Deployment root
       --json                    Output structured JSON
-      --spec=<value>            DeploymentSpec proofTopology source; defaults to the source recorded in the deployment
-                                contract or conventional auto-discovery
+      --spec=<value>            Optional DeploymentSpec proof source; conflicts with doge-config [proof_topology]
 
 DESCRIPTION
   Validate the proof deployment contract, generated values/native configs, mode consistency, and generated worker bundle
@@ -1677,21 +1676,22 @@ _See code: [src/commands/setup/proof-config-check.ts](https://github.com/dogeos6
 
 ## `scrollsdk setup proof-topology-compile`
 
-Compile DeploymentSpec proofTopology through the pinned dogeos-core compiler; validates and installs a deployment-neutral bundle without touching Kubernetes
+Compile proof topology from doge-config or DeploymentSpec through the pinned dogeos-core compiler without touching Kubernetes
 
 ```
 USAGE
   $ scrollsdk setup proof-topology-compile [--compiler-binary <value> | --compiler-image <value>] [--deployment-dir <value>]
-    [--durable-proof-rows yes|no|unknown] [--eth-da-submitter-config <value>] [--json] [--last-active-digest <value>]
-    [--output <value>] [--preflight mock|production] [--previous-sidecar <value>] [--proof-coordinator-config <value>]
-    [--spec <value>] [--withdrawal-processor-config <value>]
+    [--doge-config <value>] [--durable-proof-rows yes|no|unknown] [--eth-da-submitter-config <value>] [--json]
+    [--last-active-digest <value>] [--output <value>] [--preflight mock|production] [--previous-sidecar <value>]
+    [--proof-coordinator-config <value>] [--spec <value>] [--withdrawal-processor-config <value>]
 
 FLAGS
   --compiler-binary=<value>              Development-only local compiler binary; production uses
                                          proofTopology.compiler.image
-  --compiler-image=<value>               Override digest-pinned compiler image (repository@sha256:...); normally read
-                                         from DeploymentSpec
-  --deployment-dir=<value>               [default: .] Deployment root containing service base configs and DeploymentSpec
+  --compiler-image=<value>               Override the configured digest-pinned compiler image (repository@sha256:...)
+  --deployment-dir=<value>               [default: .] Deployment root containing service base configs and
+                                         .data/doge-config.toml
+  --doge-config=<value>                  doge-config.toml path; defaults to .data/doge-config.toml in --deployment-dir
   --durable-proof-rows=<option>          [default: unknown] Whether durable proof rows exist; used only for transition
                                          planning
                                          <options: yes|no|unknown>
@@ -1707,13 +1707,14 @@ FLAGS
   --previous-sidecar=<value>             Previous resolved-v1.json; defaults to the currently installed bundle sidecar
   --proof-coordinator-config=<value>     [default: proof-coordinator/ProofCoordinator.toml] Deployment-relative Proof
                                          Coordinator base config
-  --spec=<value>                         DeploymentSpec path; defaults to deployment-spec.yaml/yml in --deployment-dir
+  --spec=<value>                         Optional DeploymentSpec proof source; conflicts with doge-config
+                                         [proof_topology]
   --withdrawal-processor-config=<value>  [default: withdrawal-processor/WithdrawalProcessor.toml] Deployment-relative
                                          Withdrawal Processor base config
 
 DESCRIPTION
-  Compile DeploymentSpec proofTopology through the pinned dogeos-core compiler; validates and installs a
-  deployment-neutral bundle without touching Kubernetes
+  Compile proof topology from doge-config or DeploymentSpec through the pinned dogeos-core compiler without touching
+  Kubernetes
 
 EXAMPLES
   $ scrollsdk setup proof-topology-compile --deployment-dir .

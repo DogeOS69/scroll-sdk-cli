@@ -2,7 +2,7 @@ import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import type {DeploymentSpec} from '../types/deployment-spec.js'
+import type {ProofTopologySpec} from '../types/proof-topology.js'
 import type {CompiledProverWorkerBundleResult} from './compiled-prover-worker-bundle.js'
 import type {ProofAwsConfig} from './proof-aws-config.js'
 import type {ResolvedProofIntent} from './proof-intent.js'
@@ -111,13 +111,12 @@ function normalizedKeyPrefix(value: string): string {
 
 /** Fail before compilation when staged topology coordinates disagree with provisioned AWS facts. */
 export function assertProofAwsMatchesTopology(
-  spec: DeploymentSpec,
+  topology: ProofTopologySpec,
   proofAws: ProofAwsConfig,
 ): void {
-  if (!spec.proofTopology) return
   for (const [profileName, profile] of [
-    ['mock', spec.proofTopology.mock],
-    ['production', spec.proofTopology.production],
+    ['mock', topology.mock],
+    ['production', topology.production],
   ] as const) {
     const store = profile?.artifactStore
     if (!store || store.kind !== 's3_compatible') continue
@@ -140,7 +139,7 @@ export function assertProofAwsMatchesTopology(
   }
 }
 
-/** Compile one DeploymentSpec proofTopology and project its strict service configs. */
+/** Compile one resolved proof topology and project its strict service configs. */
 export function reconcileProofKubernetes(
   options: ReconcileProofKubernetesOptions,
 ): ReconcileProofKubernetesResult {
@@ -170,7 +169,7 @@ export function reconcileProofKubernetes(
     options.proofAwsConfigPath || DEFAULT_PROOF_AWS_CONFIG,
   )
   if (loadedProofAws) {
-    assertProofAwsMatchesTopology(options.intent.deploymentSpec, loadedProofAws.config)
+    assertProofAwsMatchesTopology(options.intent.proofTopology, loadedProofAws.config)
   }
 
   const proofAwsConfigPath = projectProofAwsConfig(
@@ -187,8 +186,12 @@ export function reconcileProofKubernetes(
     coordinatorConfigPath,
     coordinatorIngressHost: options.coordinatorIngressHost,
     deploymentDir,
-    deploymentSpec: options.intent.deploymentSpec,
+    deploymentName: options.intent.deploymentName,
     ethereumL1RpcUrl: options.ethereumL1RpcUrl,
+    network: options.intent.network,
+    proofCoordinator: options.intent.proofCoordinator,
+    proofTopology: options.intent.proofTopology,
+    proverPublicUrl: options.intent.proverPublicUrl,
     valuesDir,
     withdrawalConfigPath,
   })

@@ -1,10 +1,10 @@
 import {Command, Flags} from '@oclif/core'
-import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec} from '../../utils/deployment-spec-generator.js'
+import {loadDogeConfigWithSelection} from '../../utils/doge-config.js'
 import {JsonOutputContext} from '../../utils/json-output.js'
 import {resolveDogecoinKubernetesEndpoints} from '../../utils/kubernetes-endpoints.js'
+import {resolveProofIntent} from '../../utils/proof-intent.js'
 import {
   DEFAULT_PROOF_TOPOLOGY_OUTPUT,
   type DurableProofRows,
@@ -12,26 +12,8 @@ import {
   compileProofTopology,
 } from '../../utils/proof-topology-compiler.js'
 
-function discoverSpec(deploymentDir: string, explicit?: string): string {
-  if (explicit) return path.resolve(deploymentDir, explicit)
-  const matches = ['deployment-spec.yaml', 'deployment-spec.yml']
-    .map(name => path.join(deploymentDir, name))
-    .filter(file => fs.existsSync(file))
-  if (matches.length === 0) {
-    throw new Error(
-      `no DeploymentSpec found in ${deploymentDir}; create deployment-spec.yaml or pass --spec`,
-    )
-  }
-
-  if (matches.length > 1) {
-    throw new Error(`multiple DeploymentSpec files found; select one with --spec: ${matches.join(', ')}`)
-  }
-
-  return matches[0]
-}
-
 export default class ProofTopologyCompile extends Command {
-  static override description = 'Compile DeploymentSpec proofTopology through the pinned dogeos-core compiler; validates and installs a deployment-neutral bundle without touching Kubernetes'
+  static override description = 'Compile proof topology from doge-config or DeploymentSpec through the pinned dogeos-core compiler without touching Kubernetes'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %> --deployment-dir .',
@@ -45,12 +27,15 @@ export default class ProofTopologyCompile extends Command {
       exclusive: ['compiler-image'],
     }),
     'compiler-image': Flags.string({
-      description: 'Override digest-pinned compiler image (repository@sha256:...); normally read from DeploymentSpec',
+      description: 'Override the configured digest-pinned compiler image (repository@sha256:...)',
       exclusive: ['compiler-binary'],
     }),
     'deployment-dir': Flags.string({
       default: '.',
-      description: 'Deployment root containing service base configs and DeploymentSpec',
+      description: 'Deployment root containing service base configs and .data/doge-config.toml',
+    }),
+    'doge-config': Flags.string({
+      description: 'doge-config.toml path; defaults to .data/doge-config.toml in --deployment-dir',
     }),
     'durable-proof-rows': Flags.string({
       default: 'unknown',
@@ -80,7 +65,7 @@ export default class ProofTopologyCompile extends Command {
       description: 'Deployment-relative Proof Coordinator base config',
     }),
     spec: Flags.string({
-      description: 'DeploymentSpec path; defaults to deployment-spec.yaml/yml in --deployment-dir',
+      description: 'Optional DeploymentSpec proof source; conflicts with doge-config [proof_topology]',
     }),
     'withdrawal-processor-config': Flags.string({
       default: 'withdrawal-processor/WithdrawalProcessor.toml',
@@ -93,55 +78,49 @@ export default class ProofTopologyCompile extends Command {
     const json = new JsonOutputContext('setup proof-topology-compile', flags.json)
     try {
       const deploymentDir = path.resolve(flags['deployment-dir'])
-      const specPath = discoverSpec(deploymentDir, flags.spec)
-      if (!fs.existsSync(specPath)) throw new Error(`DeploymentSpec not found: ${specPath}`)
-      const spec = resolveDeploymentSpecEnvRefs(loadDeploymentSpec(specPath))
-      const validation = validateDeploymentSpec(spec)
-      for (const warning of validation.warnings) {
-        json.addWarning(`${warning.path}: ${warning.message}`)
-      }
-
-      if (!validation.valid) {
-        throw new Error(
-          `DeploymentSpec validation failed:\n${validation.errors
-            .map(error => `- ${error.path}: ${error.message}`)
-            .join('\n')}`,
-        )
-      }
-
-      if (!spec.proofTopology) {
-        throw new Error(`${specPath}: proofTopology is required`)
-      }
+      const configPath = flags['doge-config']
+        ? path.resolve(deploymentDir, flags['doge-config'])
+        : path.join(deploymentDir, '.data/doge-config.toml')
+      const {config} = await loadDogeConfigWithSelection(
+        configPath,
+        'scrollsdk setup doge-config',
+      )
+      const resolved = resolveProofIntent({
+        deploymentDir,
+        dogeConfig: config,
+        dogeConfigPath: configPath,
+        specPath: flags.spec,
+      })!
+      for (const warning of resolved.warnings) json.addWarning(warning)
 
       const endpoints = resolveDogecoinKubernetesEndpoints({
-        kubernetes: spec.dogecoin.kubernetes,
-        network: spec.dogecoin.network,
+        kubernetes: config.kubernetes,
+        network: config.network,
       })
-      const clusterRpc = spec.dogecoin.clusterRpc || {
-        password: spec.dogecoin.rpc?.password || '',
-        username: spec.dogecoin.rpc?.username || '',
-      }
+      const clusterRpc = config.dogecoinClusterRpc || {password: '', username: ''}
       const result = compileProofTopology({
         bridge: {
-          dogecoinNetwork: spec.dogecoin.network,
-          dogecoinRpcPassword: clusterRpc.password,
+          dogecoinNetwork: config.network,
+          dogecoinRpcPassword: clusterRpc.password || '',
           dogecoinRpcUrl: endpoints.rpcUrl,
-          dogecoinRpcUser: clusterRpc.username,
+          dogecoinRpcUser: clusterRpc.username || '',
         },
         compilerBinary: flags['compiler-binary'],
         compilerImage: flags['compiler-image'],
         deploymentDir,
+        deploymentName: resolved.deploymentName,
         durableProofRows: flags['durable-proof-rows'] as DurableProofRows,
         ethDaSubmitterBaseConfig: flags['eth-da-submitter-config'],
-        ethereumL1RpcUrl: spec.ethereumDa?.l1RpcUrl,
+        ethereumL1RpcUrl: config.ethereumDa?.submitterRpcUrl,
         lastActiveDigest: flags['last-active-digest'],
+        network: resolved.network,
         outputDir: flags.preflight && flags.output === DEFAULT_PROOF_TOPOLOGY_OUTPUT
           ? `.data/generated/proof-topology-preflight-${flags.preflight}`
           : flags.output,
         preflightMode: flags.preflight as ProofTopologyPreflightMode | undefined,
         previousSidecar: flags['previous-sidecar'],
         proofCoordinatorBaseConfig: flags['proof-coordinator-config'],
-        spec,
+        proofTopology: resolved.proofTopology,
         withdrawalProcessorBaseConfig: flags['withdrawal-processor-config'],
       })
 

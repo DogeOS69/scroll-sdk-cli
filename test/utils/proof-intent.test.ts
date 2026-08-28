@@ -1,3 +1,4 @@
+import * as toml from '@iarna/toml'
 import {expect} from 'chai'
 import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
@@ -79,18 +80,30 @@ describe('proof intent source resolution', () => {
     return filePath
   }
 
-  it('requires a DeploymentSpec', () => {
+  function writeDogeConfig(proofTopology: ProofTopologySpec): string {
+    const filePath = path.join(root, '.data/doge-config.toml')
+    fs.mkdirSync(path.dirname(filePath), {recursive: true})
+    fs.writeFileSync(filePath, toml.stringify({
+      network: 'testnet',
+      proof_topology: proofTopology,
+      wallet: {path: '.data/doge-wallet-testnet.json'},
+    } as unknown as toml.JsonMap))
+    return filePath
+  }
+
+  it('requires one proof topology authority', () => {
     expect(() => resolveProofIntent({deploymentDir: root}))
-      .to.throw('proof topology requires deployment-spec.yaml or deployment-spec.yml')
+      .to.throw('proof topology is not configured')
   })
 
   it('auto-discovers DeploymentSpec as the only proof intent authority', () => {
     const specPath = writeSpec(topology())
     const resolved = resolveProofIntent({deploymentDir: root})
 
-    expect(resolved.source).to.deep.equal({kind: 'deployment-spec', path: specPath})
+    expect(resolved.source).to.deep.include({kind: 'deployment-spec', path: specPath})
+    expect(resolved.source.sha256).to.match(/^[\da-f]{64}$/)
     expect(resolved.intent).to.deep.equal({mode: 'disabled'})
-    expect(resolved.deploymentSpec.proofTopology?.mode).to.equal('disabled')
+    expect(resolved.proofTopology.mode).to.equal('disabled')
   })
 
   it('selects a compiler-backed active profile without flattening dormant data', () => {
@@ -98,7 +111,7 @@ describe('proof intent source resolution', () => {
     const resolved = resolveProofIntent({deploymentDir: root})
 
     expect(resolved.intent).to.deep.equal({mode: 'mock'})
-    expect(resolved.deploymentSpec.proofTopology?.mock?.profile).to.equal('cheap_scroll_chunk')
+    expect(resolved.proofTopology.mock?.profile).to.equal('cheap_scroll_chunk')
   })
 
   it('projects the recovery declaration from proofTopology', () => {
@@ -124,7 +137,7 @@ describe('proof intent source resolution', () => {
     writeSpec(topology(), 'deployment-spec.yaml')
     writeSpec(topology(), 'deployment-spec.yml')
     expect(() => resolveProofIntent({deploymentDir: root}))
-      .to.throw('Multiple conventional DeploymentSpec files found')
+      .to.throw('Multiple conventional DeploymentSpec proof authorities found')
   })
 
   it('rejects the removed proofSystem source instead of interpreting it', () => {
@@ -134,5 +147,48 @@ describe('proof intent source resolution', () => {
 
     expect(() => resolveProofIntent({deploymentDir: root}))
       .to.throw('proofSystem has been removed')
+  })
+
+  it('uses doge-config [proof_topology] without a DeploymentSpec', () => {
+    const configPath = writeDogeConfig(topology('mock'))
+    const resolved = resolveProofIntent({deploymentDir: root})
+
+    expect(resolved.source).to.deep.include({kind: 'doge-config', path: configPath})
+    expect(resolved.proofTopology.mock?.profile).to.equal('cheap_scroll_chunk')
+    expect(resolved.intent.mode).to.equal('mock')
+    expect(resolved.network).to.equal('testnet')
+  })
+
+  it('fails when doge-config and DeploymentSpec both declare proof topology', () => {
+    writeDogeConfig(topology())
+    writeSpec(topology())
+
+    expect(() => resolveProofIntent({deploymentDir: root}))
+      .to.throw('Conflicting proof topology sources')
+  })
+
+  it('normalizes doge-config and DeploymentSpec into the same compiler topology', () => {
+    const expected = topology('mock')
+    const specPath = writeSpec(expected)
+    const fromSpec = resolveProofIntent({deploymentDir: root})
+    fs.rmSync(specPath)
+    writeDogeConfig(expected)
+    const fromDogeConfig = resolveProofIntent({deploymentDir: root})
+
+    expect(fromDogeConfig.proofTopology).to.deep.equal(fromSpec.proofTopology)
+  })
+
+  it('rejects unknown doge-config proof fields instead of dropping them', () => {
+    writeDogeConfig({
+      ...topology(),
+      typoMode: 'mock',
+    } as unknown as ProofTopologySpec)
+
+    expect(() => resolveProofIntent({deploymentDir: root}))
+      .to.throw('proof_topology.typoMode is not supported')
+  })
+
+  it('allows callers to detect an unconfigured proof topology', () => {
+    expect(resolveProofIntent({deploymentDir: root, required: false})).to.equal(undefined)
   })
 })

@@ -82,6 +82,17 @@ function spec(mode: 'disabled' | 'mock' | 'production'): DeploymentSpec {
   } as DeploymentSpec
 }
 
+function resolvedInput(mode: 'disabled' | 'mock' | 'production') {
+  const deploymentSpec = spec(mode)
+  return {
+    deploymentName: deploymentSpec.metadata.name,
+    network: deploymentSpec.dogecoin.network,
+    proofCoordinator: deploymentSpec.proofCoordinator,
+    proofTopology: deploymentSpec.proofTopology!,
+    proverPublicUrl: 'https://proof.example.com',
+  }
+}
+
 function fakeBundle(
   root: string,
   mode: 'disabled' | 'mock' | 'production',
@@ -216,7 +227,7 @@ describe('compiled proof topology Kubernetes adapter', () => {
       compile: () => bundle,
       coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
       deploymentDir: root,
-      deploymentSpec: spec('mock'),
+      ...resolvedInput('mock'),
       valuesDir: path.join(root, 'values'),
       withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
     })
@@ -280,7 +291,7 @@ describe('compiled proof topology Kubernetes adapter', () => {
       compile: () => bundle,
       coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
       deploymentDir: root,
-      deploymentSpec: spec('disabled'),
+      ...resolvedInput('disabled'),
       valuesDir: path.join(root, 'values'),
       withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
     })
@@ -315,7 +326,7 @@ describe('compiled proof topology Kubernetes adapter', () => {
       compile: () => bundle,
       coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
       deploymentDir: root,
-      deploymentSpec: spec('production'),
+      ...resolvedInput('production'),
       valuesDir: path.join(root, 'values'),
       withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
     })

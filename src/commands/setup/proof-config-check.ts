@@ -17,11 +17,11 @@ export default class ProofConfigCheck extends Command {
   static override description = 'Validate the proof deployment contract, generated values/native configs, mode consistency, and generated worker bundle without contacting Kubernetes or printing secrets'
 
   static override flags = {
-    config: Flags.string({ char: 'c', description: 'Advanced doge-config.toml override' }),
+    config: Flags.string({ char: 'c', description: 'doge-config.toml path; it is the proof source when [proof_topology] is present' }),
     contract: Flags.string({ default: DEFAULT_PROOF_DEPLOYMENT_CONTRACT, description: 'Proof deployment contract path relative to the deployment root' }),
     'deployment-dir': Flags.string({ default: '.', description: 'Deployment root' }),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
-    spec: Flags.string({ description: 'DeploymentSpec proofTopology source; defaults to the source recorded in the deployment contract or conventional auto-discovery' }),
+    spec: Flags.string({ description: 'Optional DeploymentSpec proof source; conflicts with doge-config [proof_topology]' }),
   }
 
   public async run(): Promise<void> {
@@ -33,8 +33,12 @@ export default class ProofConfigCheck extends Command {
         deploymentDir,
         flags.contract,
       )
-      const configPath = flags.config || path.join(deploymentDir, '.data/doge-config.toml')
-      const { config } = await loadDogeConfigWithSelection(
+      const recordedConfig = contract.intentSource?.kind === 'doge-config'
+        ? resolveContractFile(deploymentDir, contract.intentSource.path)
+        : undefined
+      const configPath = flags.config || recordedConfig
+        || path.join(deploymentDir, '.data/doge-config.toml')
+      const { config, configPath: loadedConfigPath } = await loadDogeConfigWithSelection(
         configPath,
         'scrollsdk setup prep-charts',
       )
@@ -43,8 +47,17 @@ export default class ProofConfigCheck extends Command {
         : undefined
       const configuredIntent = resolveProofIntent({
         deploymentDir,
+        dogeConfig: config,
+        dogeConfigPath: loadedConfigPath,
         specPath: flags.spec || recordedSpec,
-      })
+      })!
+      if (configuredIntent.source.sha256 !== contract.intentSource.sha256) {
+        throw new Error(
+          `${configuredIntent.source.path} changed after proof configuration generation; `
+          + 'rerun scrollsdk setup prep-charts',
+        )
+      }
+
       const configuredMode = configuredIntent.intent.mode
       assertPreTsukiDirectSignPosture({
         mode: configuredMode,

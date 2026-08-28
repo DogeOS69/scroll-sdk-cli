@@ -17,7 +17,7 @@ function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
-describe('proof deployment contract schema v4', () => {
+describe('proof deployment contract schema v5', () => {
   let root: string
 
   beforeEach(() => {
@@ -52,7 +52,11 @@ describe('proof deployment contract schema v4', () => {
       ethDaSubmitter: {
         valuesFile: path.join(root, 'values/eth-da-submitter-production.yaml'),
       },
-      intentSource: {kind: 'deployment-spec', path: path.join(root, 'deployment-spec.yaml')},
+      intentSource: {
+        kind: 'deployment-spec',
+        path: path.join(root, 'deployment-spec.yaml'),
+        sha256: 'c'.repeat(64),
+      },
       mode,
       ...(active
         ? {proofArtifactBaseUrl: 'http://proof-coordinator:7788/v1/prover/objects'}
@@ -102,13 +106,14 @@ describe('proof deployment contract schema v4', () => {
     }
   }
 
-  it('always writes a strict schema-v4 compiler contract', () => {
+  it('always writes a strict schema-v5 compiler contract', () => {
     const contract = writeProofDeploymentContract(input())
 
-    expect(contract.schemaVersion).to.equal(4)
+    expect(contract.schemaVersion).to.equal(5)
     expect(contract.intentSource).to.deep.equal({
       kind: 'deployment-spec',
       path: 'deployment-spec.yaml',
+      sha256: 'c'.repeat(64),
     })
     expect(contract.worker).to.deep.equal({enabled: false, kind: 'none'})
     expect(contract.components.proofCoordinator.enabled).to.equal(false)
@@ -139,14 +144,14 @@ describe('proof deployment contract schema v4', () => {
 
   it('rejects old contract schemas instead of migrating them', () => {
     const contract = writeProofDeploymentContract(input()) as unknown as Record<string, unknown>
-    contract.schemaVersion = 3
+    contract.schemaVersion = 4
     fs.writeFileSync(
       path.join(root, '.data/proof-deployment.json'),
       `${JSON.stringify(contract, null, 2)}\n`,
     )
 
     expect(() => readProofDeploymentContract(root))
-      .to.throw('only proof deployment contract schemaVersion 4 is supported')
+      .to.throw('only proof deployment contract schemaVersion 5 is supported')
   })
 
   it('fails closed on any generated values or set-file drift', () => {
@@ -164,7 +169,7 @@ describe('proof deployment contract schema v4', () => {
       .to.throw('withdrawalProcessor: proof-critical set-file checksum mismatch')
   })
 
-  it('builds Helm arguments only from schema-v4 bindings', () => {
+  it('builds Helm arguments only from schema-v5 bindings', () => {
     const contract = writeProofDeploymentContract(input('mock'))
     const args = buildProofHelmArgs({
       chart: 'oci://example/withdrawal-processor',

@@ -101,7 +101,7 @@ export function hasEnvRef(value: string): boolean {
   return /\$ENV:\w+/.test(value)
 }
 
-function resolveEnvRefsDeep(value: unknown): unknown {
+export function resolveEnvRefsDeep(value: unknown): unknown {
   if (typeof value === 'string') {
     return hasEnvRef(value) ? resolveInlineEnvRefs(value) : value
   }

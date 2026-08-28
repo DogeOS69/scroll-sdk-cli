@@ -75,7 +75,7 @@ export class ExportSignerPolicyCommand extends Command {
     'protocol-instance-id': Flags.string({ description: '32-byte protocol instance id (canonical protocol opening hash); default: read from the protocol_id sidecar next to --protocol-context written by bridge-init step 5' }),
     'signer-proof-artifact-base-url': Flags.string({ description: `Stable public GET base signers use to fetch accepted proof objects; default: the value prep-charts staged into ${WITHDRAWAL_NATIVE_CONFIG_RELPATH}` }),
     'source-set': Flags.string({ description: 'source-set.toml override. Mock defaults to an e2e_harness empty scaffold; production defaults to configs/source-set.toml' }),
-    spec: Flags.string({ description: 'DeploymentSpec proofTopology source; auto-detects deployment-spec.yaml/yml when omitted' }),
+    spec: Flags.string({ description: 'Optional DeploymentSpec proof source; conflicts with doge-config [proof_topology]' }),
     'supported-signing-policy-versions': Flags.string({ default: '1', description: 'CSV of supported signing policy versions' }),
     'tee-allowed-signer-ids': Flags.string({ description: 'CSV of allowed TEE signer ids; compressed or uncompressed SEC1 keys are normalized to dogeos-core\'s compressed form. Production defaults to .data/setup_defaults.toml tee_pubkey; mock defaults to empty, matching e2e_harness' }),
     'tso-url': Flags.string({ description: 'TSO base URL reachable FROM the signer operator network (used for signature callbacks); default: https://<[ingress].TSO_HOST> from config.toml' }),
@@ -90,8 +90,10 @@ export class ExportSignerPolicyCommand extends Command {
       const { config } = loaded
       const resolvedIntent = resolveProofIntent({
         deploymentDir: process.cwd(),
+        dogeConfig: config,
+        dogeConfigPath: loaded.configPath,
         specPath: flags.spec,
-      })
+      })!
       const {mode} = resolvedIntent.intent
       assertPreTsukiDirectSignPosture({
         mode,
