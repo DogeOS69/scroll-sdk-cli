@@ -27,10 +27,14 @@ function fixture() {
     keyPrefix: 'proof-topology',
     provisioned: {
       artifactReadTransport: {
-        mode: 'vpc-endpoint',
-        routeTableIds: ['rtb-bbbbbbbb', 'rtb-aaaaaaaa'],
-        status: 'configured-unverified',
-        vpcEndpointId: 'vpce-abc123',
+        publicEndpointUrl: 'https://objects.example.com',
+        publicStatus: 'operator-managed-unverified',
+        vpcEndpoint: {
+          created: false,
+          routeTableIds: ['rtb-bbbbbbbb', 'rtb-aaaaaaaa'],
+          status: 'configured-unverified',
+          vpcEndpointId: 'vpce-abc123',
+        },
       },
       bucket: 'dogeos-testnet-proof-artifacts',
       bucketCreated: false,
@@ -66,7 +70,7 @@ describe('proof AWS config source', () => {
     expect(before).not.to.include('generatedAt')
     expect(before).not.to.include('proof-work-token')
     expect(before).not.to.include('prover-worker-token')
-    expect(readProofAwsConfig(root).config.artifactReadTransport.routeTableIds)
+    expect(readProofAwsConfig(root).config.artifactReadTransport.vpcEndpoint?.routeTableIds)
       .to.deep.equal(['rtb-aaaaaaaa', 'rtb-bbbbbbbb'])
   })
 

@@ -71,10 +71,7 @@ initializer and both preflights.
 # Receive the real pinned manifest and proof-artifacts directory from the
 # release producer. Do not rename the .example file into service use.
 
-scrollsdk setup proof-aws-init \
-  --aws-region us-west-2 \
-  --eks-cluster dogeos-testnet \
-  --network-alias testnet
+scrollsdk setup proof-aws-init
 
 scrollsdk setup doge-config --proof-topology
 scrollsdk setup prep-charts -N

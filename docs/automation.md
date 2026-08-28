@@ -170,11 +170,12 @@ and artifacts. Relevant examples:
   preserves unrelated native TOML settings, and commits the complete generation
   transaction only after every output succeeds;
 - `export-signer-policy` regenerates the bundle from current deployment facts;
-- `proof-aws-init` is designed to reuse matching cloud resources. Its default
-  external artifact-read transport remains explicitly unverified; VPC endpoint
-  mode requires audited endpoint and route-table IDs. It writes stable,
-  non-secret resource facts to `.data/proof-aws.json` and never reads or
-  modifies generated values;
+- `proof-aws-init` is designed to reuse matching cloud resources. It records an
+  explicit operator-managed public HTTPS endpoint for external Workers and
+  partner Signers, and can auto-discover or create the EKS cluster's S3 Gateway
+  VPC endpoint and route-table associations. Both routes remain explicitly
+  unverified. It writes stable, non-secret resource facts to
+  `.data/proof-aws.json` and never reads or modifies generated values;
 - `prep-charts` projects `.data/proof-aws.json` into final values. With
   unchanged configuration, templates, and release inputs, a rerun is
   byte-idempotent and reports no changed files. Active legacy doge-config

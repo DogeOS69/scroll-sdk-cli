@@ -7,6 +7,7 @@ import {
   ProofAwsProvisioner,
   applyProofAwsValues,
   buildProofArtifactStorePolicy,
+  normalizeProofArtifactPublicEndpoint,
   normalizeProofKeyPrefix,
   upsertProofArtifactVpcEndpointReadPolicy,
 } from '../../src/utils/proof-aws-provisioner.js'
@@ -77,9 +78,12 @@ describe('proof-aws-provisioner values projection', () => {
       { awsRegion: 'us-east-1', eksCluster: 'cluster', namespace: 'default', networkAlias: 'testnet' },
       {
         artifactRead: {
-          mode: 'vpc-endpoint',
-          routeTableIds: ['rtb-aaaaaaaa', 'rtb-bbbbbbbb'],
-          vpcEndpointId: 'vpce-abc123',
+          publicEndpointUrl: 'https://objects.example.com',
+          vpcEndpoint: {
+            enabled: true,
+            routeTableIds: ['rtb-aaaaaaaa', 'rtb-bbbbbbbb'],
+            vpcEndpointId: 'vpce-abc123',
+          },
         },
         bucket: 'proof-bucket',
         coordinatorRole: { description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator' },
@@ -90,10 +94,14 @@ describe('proof-aws-provisioner values projection', () => {
     )
 
     expect(result.artifactReadTransport).to.deep.equal({
-      mode: 'vpc-endpoint',
-      routeTableIds: ['rtb-aaaaaaaa', 'rtb-bbbbbbbb'],
-      status: 'configured-unverified',
-      vpcEndpointId: 'vpce-abc123',
+      publicEndpointUrl: 'https://objects.example.com',
+      publicStatus: 'operator-managed-unverified',
+      vpcEndpoint: {
+        created: false,
+        routeTableIds: ['rtb-aaaaaaaa', 'rtb-bbbbbbbb'],
+        status: 'configured-unverified',
+        vpcEndpointId: 'vpce-abc123',
+      },
     })
     const modify = calls.find(call => call.args[0] === 'ec2' && call.args[1] === 'modify-vpc-endpoint')
     expect(modify?.args).to.deep.equal([
@@ -118,6 +126,140 @@ describe('proof-aws-provisioner values projection', () => {
       expect(policyDocument.Statement[0].Resource).to.equal('arn:aws:s3:::proof-bucket/proof-topology/*')
       expect(policyDocument.Statement[1].Condition.StringLike['s3:prefix'])
         .to.deep.equal(['proof-topology', 'proof-topology/*'])
+    }
+  })
+
+  it('discovers EKS route tables and creates the regional S3 gateway endpoint', () => {
+    const calls: Array<{args: string[]; kind: 'json' | 'run' | 'text'}> = []
+    const aws = {
+      json(args: string[]): any {
+        calls.push({args, kind: 'json'})
+        if (args[0] === 'eks' && args[1] === 'describe-cluster') {
+          return {
+            cluster: {
+              resourcesVpcConfig: {
+                subnetIds: ['subnet-aaaaaaaa', 'subnet-bbbbbbbb'],
+                vpcId: 'vpc-11111111',
+              },
+            },
+          }
+        }
+
+        if (args[0] === 'ec2' && args[1] === 'describe-route-tables' && args.includes('--filters')) {
+          return {
+            RouteTables: [
+              {
+                Associations: [{SubnetId: 'subnet-aaaaaaaa'}],
+                RouteTableId: 'rtb-aaaaaaaa',
+                VpcId: 'vpc-11111111',
+              },
+              {
+                Associations: [{Main: true}],
+                RouteTableId: 'rtb-bbbbbbbb',
+                VpcId: 'vpc-11111111',
+              },
+            ],
+          }
+        }
+
+        if (args[0] === 'ec2' && args[1] === 'describe-vpc-endpoints' && args.includes('--filters')) {
+          return {VpcEndpoints: []}
+        }
+
+        if (args[0] === 'ec2' && args[1] === 'create-vpc-endpoint') {
+          return {VpcEndpoint: {VpcEndpointId: 'vpce-abc123'}}
+        }
+
+        if (args[0] === 'ec2' && args[1] === 'describe-vpc-endpoints') {
+          return {
+            VpcEndpoints: [{
+              RouteTableIds: ['rtb-aaaaaaaa', 'rtb-bbbbbbbb'],
+              ServiceName: 'com.amazonaws.us-east-1.s3',
+              State: 'pending',
+              VpcEndpointType: 'Gateway',
+              VpcId: 'vpc-11111111',
+            }],
+          }
+        }
+
+        if (args[0] === 'ec2' && args[1] === 'describe-route-tables') {
+          return {
+            RouteTables: [
+              {RouteTableId: 'rtb-aaaaaaaa', VpcId: 'vpc-11111111'},
+              {RouteTableId: 'rtb-bbbbbbbb', VpcId: 'vpc-11111111'},
+            ],
+          }
+        }
+
+        return {}
+      },
+      run(args: string[]): string {
+        calls.push({args, kind: 'run'})
+        return ''
+      },
+      text(args: string[]): string {
+        calls.push({args, kind: 'text'})
+        if (args[0] === 'sts') return '123456789012'
+        if (args[0] === 'eks') return 'https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE'
+        if (args[0] === 's3api' && args[1] === 'get-bucket-policy') {
+          throw new Error('NoSuchBucketPolicy')
+        }
+
+        throw new Error(`unexpected text call: ${args.join(' ')}`)
+      },
+    }
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    const result = provisioner.provision(
+      {awsRegion: 'us-east-1', eksCluster: 'cluster', namespace: 'default', networkAlias: 'testnet'},
+      {
+        artifactRead: {
+          publicEndpointUrl: 'https://objects.example.com/',
+          vpcEndpoint: {enabled: true},
+        },
+        bucket: 'proof-bucket',
+        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
+        keyPrefix: 'proof-topology',
+        secretName: 'proof-secret',
+        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
+      },
+    )
+
+    expect(result.artifactReadTransport).to.deep.equal({
+      publicEndpointUrl: 'https://objects.example.com',
+      publicStatus: 'operator-managed-unverified',
+      vpcEndpoint: {
+        created: true,
+        routeTableIds: ['rtb-aaaaaaaa', 'rtb-bbbbbbbb'],
+        status: 'configured-unverified',
+        vpcEndpointId: 'vpce-abc123',
+      },
+    })
+    const create = calls.find(call => call.args[0] === 'ec2' && call.args[1] === 'create-vpc-endpoint')
+    expect(create?.args).to.deep.equal([
+      'ec2',
+      'create-vpc-endpoint',
+      '--vpc-id',
+      'vpc-11111111',
+      '--service-name',
+      'com.amazonaws.us-east-1.s3',
+      '--vpc-endpoint-type',
+      'Gateway',
+      '--route-table-ids',
+      'rtb-aaaaaaaa',
+      'rtb-bbbbbbbb',
+    ])
+  })
+
+  it('accepts only credential-free HTTPS endpoint roots for public proof reads', () => {
+    expect(normalizeProofArtifactPublicEndpoint('https://objects.example.com/'))
+      .to.equal('https://objects.example.com')
+    for (const invalid of [
+      'http://objects.example.com',
+      'https://user:secret@objects.example.com',
+      'https://objects.example.com/bucket',
+      'https://objects.example.com?token=secret',
+    ]) {
+      expect(() => normalizeProofArtifactPublicEndpoint(invalid)).to.throw('proof artifact public endpoint')
     }
   })
 

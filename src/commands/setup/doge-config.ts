@@ -881,7 +881,8 @@ export class DogeConfigCommand extends Command {
       }
       options.log(
         chalk.blue(
-          `Using prepared proof artifact store s3://${prepared.bucket}/${prepared.keyPrefix}`,
+          `Using prepared proof artifact store s3://${prepared.bucket}/${prepared.keyPrefix} `
+          + `with partner endpoint ${proofAws!.config.artifactReadTransport.publicEndpointUrl}`,
         ),
       )
     } else {
@@ -1043,6 +1044,9 @@ export class DogeConfigCommand extends Command {
         })
     const publicS3Endpoint = options.publicS3Endpoint
       || currentReal?.s3PublicEndpointUrl
+      || (artifactSource === 'prepared-aws'
+        ? proofAws!.config.artifactReadTransport.publicEndpointUrl
+        : undefined)
       || artifactStore.endpointUrl
     const topology = buildProofTopologyFromRelease({
       artifactStore,

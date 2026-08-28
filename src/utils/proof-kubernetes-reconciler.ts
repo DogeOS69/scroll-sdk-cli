@@ -136,6 +136,17 @@ export function assertProofAwsMatchesTopology(
         )
       }
     }
+
+    if (profileName === 'production') {
+      const actual = profile.realScroll?.s3PublicEndpointUrl
+      const expected = proofAws.artifactReadTransport.publicEndpointUrl
+      if (actual !== expected) {
+        throw new Error(
+          `proofTopology.production.realScroll.s3PublicEndpointUrl (${String(actual)}) does not match `
+          + `.data/proof-aws.json (${expected}); rerun the topology initializer or provision matching resources`,
+        )
+      }
+    }
   }
 }
 

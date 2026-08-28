@@ -8,10 +8,13 @@ import type {
   ProofAwsValuesProjection,
 } from './proof-aws-provisioner.js'
 
-import { normalizeProofKeyPrefix } from './proof-aws-provisioner.js'
+import {
+  normalizeProofArtifactPublicEndpoint,
+  normalizeProofKeyPrefix,
+} from './proof-aws-provisioner.js'
 
 export const DEFAULT_PROOF_AWS_CONFIG = '.data/proof-aws.json'
-export const PROOF_AWS_CONFIG_SCHEMA = 'dogeos/proof-aws/v1'
+export const PROOF_AWS_CONFIG_SCHEMA = 'dogeos/proof-aws/v2'
 
 export interface ProofAwsConfig {
   artifactReadTransport: ProofArtifactReadTransportResult
@@ -76,55 +79,54 @@ function normalizeArtifactReadTransport(
   }
 
   const value = raw as Partial<ProofArtifactReadTransportResult>
-  if (!['external', 'vpc-endpoint'].includes(value.mode || '')) {
-    throw new Error(`${label}.mode must be external or vpc-endpoint`)
+  if (value.publicStatus !== 'operator-managed-unverified') {
+    throw new Error(`${label}.publicStatus must be operator-managed-unverified`)
   }
 
-  if (!['configured-unverified', 'operator-managed-unverified'].includes(value.status || '')) {
-    throw new Error(`${label}.status is invalid`)
+  const normalized: ProofArtifactReadTransportResult = {
+    publicEndpointUrl: normalizeProofArtifactPublicEndpoint(
+      requiredString(value.publicEndpointUrl, `${label}.publicEndpointUrl`),
+    ),
+    publicStatus: 'operator-managed-unverified',
   }
+  if (!value.vpcEndpoint) return normalized
 
-  if (value.mode === 'external') {
-    if (value.status !== 'operator-managed-unverified') {
-      throw new Error(
-        `${label}.status must be operator-managed-unverified for external mode`,
-      )
-    }
-
-    return {
-      mode: 'external',
-      status: 'operator-managed-unverified',
-    }
-  }
-
-  if (value.status !== 'configured-unverified') {
-    throw new Error(
-      `${label}.status must be configured-unverified for vpc-endpoint mode`,
-    )
-  }
-
-  const vpcEndpointId = requiredString(value.vpcEndpointId, `${label}.vpcEndpointId`)
+  const vpcEndpointId = requiredString(
+    value.vpcEndpoint.vpcEndpointId,
+    `${label}.vpcEndpoint.vpcEndpointId`,
+  )
   if (!/^vpce-[\da-f]+$/i.test(vpcEndpointId)) {
-    throw new Error(`${label}.vpcEndpointId is invalid`)
+    throw new Error(`${label}.vpcEndpoint.vpcEndpointId is invalid`)
   }
 
-  const routeTableIds = [...new Set((value.routeTableIds || []).map((item, index) => {
-    const routeTableId = requiredString(item, `${label}.routeTableIds[${index}]`)
+  if (value.vpcEndpoint.status !== 'configured-unverified') {
+    throw new Error(`${label}.vpcEndpoint.status must be configured-unverified`)
+  }
+
+  if (typeof value.vpcEndpoint.created !== 'boolean') {
+    throw new TypeError(`${label}.vpcEndpoint.created must be a boolean`)
+  }
+
+  const routeTableIds = [...new Set((value.vpcEndpoint.routeTableIds || []).map((item, index) => {
+    const routeTableId = requiredString(item, `${label}.vpcEndpoint.routeTableIds[${index}]`)
     if (!/^rtb-[\da-f]+$/i.test(routeTableId)) {
-      throw new Error(`${label}.routeTableIds[${index}] is invalid`)
+      throw new Error(`${label}.vpcEndpoint.routeTableIds[${index}] is invalid`)
     }
 
     return routeTableId
   }))].sort()
   if (routeTableIds.length === 0) {
-    throw new Error(`${label}.routeTableIds must contain at least one route table`)
+    throw new Error(`${label}.vpcEndpoint.routeTableIds must contain at least one route table`)
   }
 
   return {
-    mode: 'vpc-endpoint',
-    routeTableIds,
-    status: 'configured-unverified',
-    vpcEndpointId,
+    ...normalized,
+    vpcEndpoint: {
+      created: value.vpcEndpoint.created,
+      routeTableIds,
+      status: 'configured-unverified',
+      vpcEndpointId,
+    },
   }
 }
 

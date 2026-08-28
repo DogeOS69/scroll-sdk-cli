@@ -223,46 +223,47 @@ roles, service accounts, and two distinct bearer tokens before generating
 charts:
 
 ```bash
+scrollsdk setup proof-aws-init
+```
+
+The interactive wizard discovers the AWS region from the environment or AWS
+CLI configuration, lists EKS clusters, and defaults the network alias from
+`.data/doge-config.toml`. It asks the operator for one deployment fact that AWS
+cannot infer: the credential-free HTTPS S3-compatible endpoint root reachable
+by external Workers and partner-operated Attestation Signers. dogeos-core uses
+virtual-host addressing, so an endpoint such as `https://objects.example.com`
+must serve the deployment bucket at
+`https://<bucket>.objects.example.com/<key-prefix>/...`.
+
+By default the wizard also derives the EKS VPC and subnets, resolves the route
+table actually used by each cluster subnet, reuses a regional S3 Gateway VPC
+endpoint, or creates one when absent. `vpce-*` and `rtb-*` are not ordinary
+operator inputs. Advanced overrides remain available for audited automation,
+but are unnecessary in the normal flow.
+
+For unattended automation, provide values that cannot be discovered or reused:
+
+```bash
 scrollsdk setup proof-aws-init \
+  --non-interactive \
   --aws-region <region> \
   --eks-cluster <cluster> \
   --network-alias <network-alias> \
-  --namespace <namespace>
+  --artifact-public-endpoint-url https://objects.example.com
 ```
 
 This step is idempotent and writes only non-secret resource facts to
 `.data/proof-aws.json`; it neither reads nor modifies `values/`. The
 coordinator/WP control-plane token and the external prover-worker token are
-separate credentials. The default
-`--artifact-read-mode external` deliberately leaves credential-free GET under
-operator control and reports it as unverified; a successful command means the
-private bucket and IRSA path are ready, not that an external worker can read an
-artifact.
-
-To let workers/signers in audited private subnets read through an existing S3
-Gateway VPC endpoint, explicitly provide the endpoint and every target-network
-route table:
-
-```bash
-scrollsdk setup proof-aws-init \
-  --aws-region <region> \
-  --eks-cluster <cluster> \
-  --network-alias <network-alias> \
-  --namespace <namespace> \
-  --artifact-read-mode vpc-endpoint \
-  --artifact-read-vpc-endpoint-id vpce-... \
-  --artifact-read-route-table-id rtb-0123456789abcdef0 \
-  --artifact-read-route-table-id rtb-0fedcba9876543210
-```
-
-The CLI verifies an available regional S3 Gateway endpoint, associates only
-the explicitly supplied route tables, and merges a fixed-Sid bucket-policy
-statement restricted by both `aws:SourceVpce` and `<key-prefix>/*`. It preserves
-unrelated bucket-policy statements and keeps all Public Access Block settings.
-Both IRSA policies are also restricted to the key prefix, including an
-`s3:prefix` condition for `ListBucket`. This is still `configured-unverified`:
-from every worker/signer network, GET one exact existing artifact key and
-require HTTP 200 before activation.
+separate credentials. The S3 bucket remains private with Public Access Block;
+the public endpoint is a separate operator-managed gateway and is never
+treated as verified merely because provisioning succeeded. The VPC endpoint
+bucket-policy statement is restricted by both `aws:SourceVpce` and
+`<key-prefix>/*`, and unrelated policy statements are preserved. Before proof
+activation, require HTTP 200 for one exact digest-scoped object through the
+public endpoint from every external Worker and partner Signer network. The CLI
+does not provision the production GPU Worker and does not probe partner
+networks.
 
 Only a deployment that will never use the AWS proof topology should skip
 `proof-aws-init`. Resource preparation is valid while the selected mode is
@@ -274,16 +275,13 @@ use the native-file layout and must not contain an inline
 
 ## 8. Select and generate the proof posture
 
-The proof-object base URL must be a stable credential-free HTTP(S) GET root.
-The worker uses it to read inputs and partner signers use concrete object URLs
-carried in signing requests to fetch accepted proof artifacts.
-
-For an AWS-native virtual-hosted or path-style S3 URL, `prep-charts` requires
-the URL path to include the configured artifact-store `key_prefix`; passing
-only the bucket root fails before any generated file is written. A custom HTTPS
-gateway may intentionally map its own root to the prefix, so it remains
-supported but emits a warning requiring an exact-key preflight from every
-worker/signer network.
+The configured public endpoint must be a stable credential-free HTTPS
+S3-compatible endpoint root. The compiler combines it with the bucket and
+digest-scoped key prefix to produce concrete object URLs. External Workers use
+those URLs to read inputs, and partner Signers receive them in signing requests
+to fetch accepted proof artifacts. With prepared AWS resources,
+`setup doge-config --proof-topology` reuses the endpoint recorded by
+`proof-aws-init`; it does not ask the operator to enter it again.
 
 For the normal compiler-backed deployment, do not enter image digests, release
 paths, VK hashes, or commitments by hand. Obtain the

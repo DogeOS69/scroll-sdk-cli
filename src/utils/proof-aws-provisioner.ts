@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- Helm values and aws CLI JSON are dynamic documents. */
+/* eslint-disable @typescript-eslint/no-explicit-any, perfectionist/sort-classes -- Helm values and aws CLI JSON are dynamic documents; discovery helpers stay beside the VPC reconciliation flow. */
 
 import { randomBytes } from 'node:crypto'
 
@@ -39,19 +39,28 @@ export interface ProofAwsProvisionResult {
   withdrawalRoleArn: string
 }
 
-export type ProofArtifactReadMode = 'external' | 'vpc-endpoint'
-
 export interface ProofArtifactReadPlan {
-  mode: ProofArtifactReadMode
+  publicEndpointUrl: string
+  vpcEndpoint?: ProofArtifactVpcEndpointPlan
+}
+
+export interface ProofArtifactReadTransportResult {
+  publicEndpointUrl: string
+  publicStatus: 'operator-managed-unverified'
+  vpcEndpoint?: ProofArtifactVpcEndpointResult
+}
+
+export interface ProofArtifactVpcEndpointPlan {
+  enabled: boolean
   routeTableIds?: string[]
   vpcEndpointId?: string
 }
 
-export interface ProofArtifactReadTransportResult {
-  mode: ProofArtifactReadMode
-  routeTableIds?: string[]
-  status: 'configured-unverified' | 'operator-managed-unverified'
-  vpcEndpointId?: string
+export interface ProofArtifactVpcEndpointResult {
+  created: boolean
+  routeTableIds: string[]
+  status: 'configured-unverified'
+  vpcEndpointId: string
 }
 
 export const PROOF_SECRET_PROPERTIES = ['proof-work-token', 'prover-worker-token'] as const
@@ -105,6 +114,36 @@ export function normalizeProofKeyPrefix(value: string): string {
   }
 
   return prefix
+}
+
+/**
+ * Public proof artifacts are consumed without AWS credentials by external
+ * Workers and partner-operated Attestation Signers. dogeos-core applies the
+ * bucket name as a virtual host, so this value is an HTTPS S3-compatible
+ * endpoint root rather than a bucket or object URL.
+ */
+export function normalizeProofArtifactPublicEndpoint(value: string): string {
+  const raw = value.trim()
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    throw new Error('proof artifact public endpoint must be an absolute HTTPS URL')
+  }
+
+  if (parsed.protocol !== 'https:') {
+    throw new Error('proof artifact public endpoint must use HTTPS')
+  }
+
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error('proof artifact public endpoint must not contain credentials, query parameters, or a fragment')
+  }
+
+  if (parsed.pathname !== '/' && parsed.pathname !== '') {
+    throw new Error('proof artifact public endpoint must be an endpoint root without a path')
+  }
+
+  return parsed.origin
 }
 
 export function buildProofArtifactStorePolicy(bucket: string, keyPrefix: string): Record<string, any> {
@@ -275,10 +314,20 @@ export class ProofAwsProvisioner {
 
   provision(identity: ProofAwsIdentity, input: ProofAwsProvisionInput): ProofAwsProvisionResult {
     const keyPrefix = normalizeProofKeyPrefix(input.keyPrefix)
+    if (!input.artifactRead) {
+      throw new Error('proof artifact public read configuration is required')
+    }
+
+    const publicEndpointUrl = normalizeProofArtifactPublicEndpoint(input.artifactRead.publicEndpointUrl)
     const bucketCreated = this.ensureBucket(identity.awsRegion, input.bucket)
-    const artifactReadTransport = input.artifactRead?.mode === 'vpc-endpoint'
-      ? this.ensureVpcEndpointArtifactRead(identity.awsRegion, input.bucket, keyPrefix, input.artifactRead)
-      : { mode: 'external' as const, status: 'operator-managed-unverified' as const }
+    const vpcEndpoint = input.artifactRead.vpcEndpoint?.enabled
+      ? this.ensureVpcEndpointArtifactRead(identity, input.bucket, keyPrefix, input.artifactRead.vpcEndpoint)
+      : undefined
+    const artifactReadTransport: ProofArtifactReadTransportResult = {
+      publicEndpointUrl,
+      publicStatus: 'operator-managed-unverified',
+      ...(vpcEndpoint ? {vpcEndpoint} : {}),
+    }
     const trust = this.discoverIrsaTrust(identity)
     const withdrawalRoleArn = this.ensureIrsaRole(identity, trust, input.withdrawalRole, input.bucket, keyPrefix)
     const coordinatorRoleArn = this.ensureIrsaRole(identity, trust, input.coordinatorRole, input.bucket, keyPrefix)
@@ -441,28 +490,81 @@ export class ProofAwsProvisioner {
   }
 
   private ensureVpcEndpointArtifactRead(
-    region: string,
+    identity: ProofAwsIdentity,
     bucket: string,
     keyPrefix: string,
-    plan: ProofArtifactReadPlan
-  ): ProofArtifactReadTransportResult {
-    const endpointId = plan.vpcEndpointId?.trim()
-    const routeTableIds = [...new Set((plan.routeTableIds || []).map(value => value.trim()).filter(Boolean))]
-    if (!endpointId || !/^vpce-[\da-f]+$/i.test(endpointId)) {
-      throw new Error('vpc-endpoint artifact read mode requires a valid --artifact-read-vpc-endpoint-id')
+    plan: ProofArtifactVpcEndpointPlan
+  ): ProofArtifactVpcEndpointResult {
+    const {awsRegion: region} = identity
+    let endpointId = plan.vpcEndpointId?.trim()
+    let routeTableIds = [...new Set((plan.routeTableIds || []).map(value => value.trim()).filter(Boolean))]
+    if (endpointId && !/^vpce-[\da-f]+$/i.test(endpointId)) {
+      throw new Error('proof artifact VPC endpoint ID is invalid')
     }
 
-    if (routeTableIds.length === 0 || routeTableIds.some(value => !/^rtb-[\da-f]+$/i.test(value))) {
-      throw new Error('vpc-endpoint artifact read mode requires at least one valid --artifact-read-route-table-id from the worker/signer network')
+    if (routeTableIds.some(value => !/^rtb-[\da-f]+$/i.test(value))) {
+      throw new Error('proof artifact VPC route table ID is invalid')
     }
+
+    let clusterVpcId: string | undefined
+    if (!endpointId || routeTableIds.length === 0) {
+      const network = this.discoverEksNetwork(identity)
+      clusterVpcId = network.vpcId
+      if (routeTableIds.length === 0) {
+        routeTableIds = this.discoverClusterRouteTableIds(region, network.vpcId, network.subnetIds)
+        this.jsonCtx.info(
+          `proof-aws: discovered EKS route table(s): ${routeTableIds.join(', ')}`,
+        )
+      }
+    }
+
+    let created = false
+    if (!endpointId) {
+      const existing = this.aws.json([
+        'ec2',
+        'describe-vpc-endpoints',
+        '--filters',
+        `Name=vpc-id,Values=${clusterVpcId}`,
+        `Name=service-name,Values=com.amazonaws.${region}.s3`,
+        'Name=vpc-endpoint-type,Values=Gateway',
+      ], {region})
+      const reusable = (Array.isArray(existing?.VpcEndpoints) ? existing.VpcEndpoints : [])
+        .find((candidate: any) => candidate?.State === 'available')
+      if (reusable?.VpcEndpointId) {
+        endpointId = reusable.VpcEndpointId
+        this.jsonCtx.info(`proof-aws: reusing S3 gateway endpoint: ${endpointId}`)
+      } else {
+        const response = this.aws.json([
+          'ec2',
+          'create-vpc-endpoint',
+          '--vpc-id',
+          clusterVpcId as string,
+          '--service-name',
+          `com.amazonaws.${region}.s3`,
+          '--vpc-endpoint-type',
+          'Gateway',
+          '--route-table-ids',
+          ...routeTableIds,
+        ], {region})
+        endpointId = response?.VpcEndpoint?.VpcEndpointId
+        if (!endpointId || !/^vpce-[\da-f]+$/i.test(endpointId)) {
+          throw new Error('AWS did not return an ID for the newly created S3 gateway endpoint')
+        }
+
+        created = true
+        this.jsonCtx.info(`proof-aws: created S3 gateway endpoint: ${endpointId}`)
+      }
+    }
+
+    const resolvedEndpointId = endpointId as string
 
     const described = this.aws.json(
-      ['ec2', 'describe-vpc-endpoints', '--vpc-endpoint-ids', endpointId],
+      ['ec2', 'describe-vpc-endpoints', '--vpc-endpoint-ids', resolvedEndpointId],
       { region }
     )
     const endpoint = described?.VpcEndpoints?.[0]
     if (!endpoint) throw new Error(`VPC endpoint ${endpointId} was not returned by AWS`)
-    if (endpoint.State !== 'available') {
+    if (!['available', ...(created ? ['pending'] : [])].includes(endpoint.State)) {
       throw new Error(`VPC endpoint ${endpointId} is not available (state=${String(endpoint.State)})`)
     }
 
@@ -500,7 +602,7 @@ export class ProofAwsProvisioner {
         'ec2',
         'modify-vpc-endpoint',
         '--vpc-endpoint-id',
-        endpointId,
+        resolvedEndpointId,
         '--add-route-table-ids',
         ...missingRouteTables,
       ], { region })
@@ -511,7 +613,7 @@ export class ProofAwsProvisioner {
       this.readBucketPolicy(region, bucket),
       bucket,
       keyPrefix,
-      endpointId
+      resolvedEndpointId
     )
     this.aws.run([
       's3api',
@@ -524,11 +626,61 @@ export class ProofAwsProvisioner {
     this.jsonCtx.info(`proof-aws: configured credential-free GET for ${bucket}/${keyPrefix}/* via ${endpointId}`)
 
     return {
-      mode: 'vpc-endpoint',
+      created,
       routeTableIds,
       status: 'configured-unverified',
-      vpcEndpointId: endpointId,
+      vpcEndpointId: resolvedEndpointId,
     }
+  }
+
+  private discoverEksNetwork(identity: ProofAwsIdentity): {subnetIds: string[]; vpcId: string} {
+    const described = this.aws.json(
+      ['eks', 'describe-cluster', '--name', identity.eksCluster],
+      {region: identity.awsRegion},
+    )
+    const resources = described?.cluster?.resourcesVpcConfig
+    const vpcId = typeof resources?.vpcId === 'string' ? resources.vpcId : ''
+    const subnetIds = Array.isArray(resources?.subnetIds)
+      ? resources.subnetIds.filter((value: unknown): value is string => typeof value === 'string')
+      : []
+    if (!/^vpc-[\da-f]+$/i.test(vpcId) || subnetIds.length === 0) {
+      throw new Error(
+        `EKS cluster ${identity.eksCluster} did not return a VPC and subnet list for proof artifact routing`,
+      )
+    }
+
+    return {subnetIds, vpcId}
+  }
+
+  private discoverClusterRouteTableIds(region: string, vpcId: string, subnetIds: string[]): string[] {
+    const described = this.aws.json([
+      'ec2',
+      'describe-route-tables',
+      '--filters',
+      `Name=vpc-id,Values=${vpcId}`,
+    ], {region})
+    const routeTables = Array.isArray(described?.RouteTables) ? described.RouteTables : []
+    const main = routeTables.find((routeTable: any) =>
+      Array.isArray(routeTable?.Associations)
+      && routeTable.Associations.some((association: any) => association?.Main === true)
+    )?.RouteTableId
+    const selected = subnetIds.map(subnetId => {
+      const explicit = routeTables.find((routeTable: any) =>
+        Array.isArray(routeTable?.Associations)
+        && routeTable.Associations.some((association: any) => association?.SubnetId === subnetId)
+      )?.RouteTableId
+      return explicit || main
+    })
+    const routeTableIds = [...new Set(selected.filter((value: unknown): value is string =>
+      typeof value === 'string' && /^rtb-[\da-f]+$/i.test(value)
+    ))].sort()
+    if (routeTableIds.length === 0) {
+      throw new Error(
+        `could not resolve route tables for EKS subnets ${subnetIds.join(', ')} in ${vpcId}`,
+      )
+    }
+
+    return routeTableIds
   }
 
   private readBucketPolicy(region: string, bucket: string): Record<string, any> {

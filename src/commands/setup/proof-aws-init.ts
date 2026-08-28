@@ -1,14 +1,22 @@
-import { Command, Flags } from '@oclif/core'
+import {confirm, input, select} from '@inquirer/prompts'
+import {Command, Flags} from '@oclif/core'
+import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import {loadDogeNetworkFromDogeConfig} from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { sanitizeName, truncateIamRoleName } from '../../utils/kms-signer-provisioner.js'
 import {
   DEFAULT_PROOF_AWS_CONFIG,
   buildProofAwsConfig,
+  readOptionalProofAwsConfig,
   writeProofAwsConfig,
 } from '../../utils/proof-aws-config.js'
-import { ProofAwsProvisioner } from '../../utils/proof-aws-provisioner.js'
+import {ProofAwsDiscovery} from '../../utils/proof-aws-discovery.js'
+import {
+  ProofAwsProvisioner,
+  normalizeProofArtifactPublicEndpoint,
+} from '../../utils/proof-aws-provisioner.js'
 
 export const DEFAULT_PROOF_SECRET_NAME = 'scroll/proof-coordinator-secrets'
 
@@ -16,76 +24,176 @@ export default class ProofAwsInit extends Command {
   static override description = 'Provision proof AWS resources and persist their non-secret resource facts as prep-charts input; never read or modify generated Helm values'
 
   static override examples = [
-    '<%= config.bin %> <%= command.id %> --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet',
-    '<%= config.bin %> <%= command.id %> --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet --bucket my-proof-artifacts --rotate-tokens',
-    '<%= config.bin %> <%= command.id %> --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet --artifact-read-mode vpc-endpoint --artifact-read-vpc-endpoint-id vpce-0123456789abcdef0 --artifact-read-route-table-id rtb-0123456789abcdef0',
+    '<%= config.bin %> <%= command.id %>',
+    '<%= config.bin %> <%= command.id %> --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet --artifact-public-endpoint-url https://objects.example.com -N',
+    '<%= config.bin %> <%= command.id %> --bucket my-proof-artifacts --rotate-tokens',
   ]
 
   static override flags = {
-    'artifact-read-mode': Flags.string({ default: 'external', description: 'Credential-free external artifact GET transport: external leaves it operator-managed; vpc-endpoint configures a prefix-scoped aws:SourceVpce bucket policy and route-table associations', options: ['external', 'vpc-endpoint'] }),
-    'artifact-read-route-table-id': Flags.string({ description: 'Worker/signer subnet route table to associate with the S3 gateway endpoint; required and repeatable with --artifact-read-mode vpc-endpoint', multiple: true }),
-    'artifact-read-vpc-endpoint-id': Flags.string({ description: 'Existing S3 Gateway VPC endpoint; required with --artifact-read-mode vpc-endpoint' }),
+    'artifact-public-endpoint-url': Flags.string({description: 'Credential-free HTTPS S3-compatible endpoint root reachable by external Workers and partner Attestation Signers'}),
+    'artifact-read-route-table-id': Flags.string({description: 'Advanced override: EKS subnet route table to associate with the S3 gateway endpoint (repeatable; normally auto-discovered)', multiple: true}),
+    'artifact-read-vpc-endpoint-id': Flags.string({description: 'Advanced override: existing S3 Gateway VPC endpoint (normally auto-discovered or created)'}),
     'aws-profile': Flags.string({ description: 'AWS CLI profile used for provisioning' }),
-    'aws-region': Flags.string({ description: 'AWS region for the bucket, roles, and secret', required: true }),
+    'aws-region': Flags.string({description: 'AWS region for the bucket, roles, and secret (auto-detected when omitted)'}),
     bucket: Flags.string({ description: 'Proof artifact S3 bucket (default: dogeos-<network-alias>-proof-artifacts)' }),
     config: Flags.string({ default: DEFAULT_PROOF_AWS_CONFIG, description: 'Output config file consumed by setup prep-charts' }),
-    'coordinator-service-account': Flags.string({ default: 'proof-coordinator', description: 'Kubernetes service account used by proof-coordinator (must match the Helm release-derived name or an explicit serviceAccount.name)' }),
-    'eks-cluster': Flags.string({ description: 'EKS cluster name used by the IRSA trust policies', required: true }),
+    'coordinator-service-account': Flags.string({description: 'Kubernetes service account used by proof-coordinator (default: proof-coordinator)'}),
+    'eks-cluster': Flags.string({description: 'EKS cluster name used by the IRSA trust policies (selected interactively when omitted)'}),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
-    'key-prefix': Flags.string({ default: 'proof-topology', description: 'Object key prefix for the proof artifact store' }),
-    namespace: Flags.string({ default: 'default', description: 'Kubernetes namespace of the proof workloads' }),
-    'network-alias': Flags.string({ description: 'Resource alias used to derive deterministic bucket and IAM role names', required: true }),
+    'key-prefix': Flags.string({description: 'Object key prefix for the proof artifact store (default: proof-topology)'}),
+    namespace: Flags.string({description: 'Kubernetes namespace of the proof workloads (default: default)'}),
+    'network-alias': Flags.string({description: 'Resource alias used to derive deterministic bucket and IAM role names (defaults to doge-config network)'}),
+    'non-interactive': Flags.boolean({char: 'N', default: false, description: 'Run without prompts; missing values must be discoverable, already configured, or passed as flags'}),
     'rotate-tokens': Flags.boolean({ default: false, description: 'Replace the proof-work/prover-worker tokens in an existing secret (both workloads must be restarted afterwards)' }),
-    'secret-name': Flags.string({ default: DEFAULT_PROOF_SECRET_NAME, description: 'Secrets Manager secret holding proof-work-token and prover-worker-token' }),
-    'withdrawal-service-account': Flags.string({ default: 'withdrawal-processor', description: 'Kubernetes service account used by withdrawal-processor' }),
+    'secret-name': Flags.string({description: `Secrets Manager secret holding proof-work-token and prover-worker-token (default: ${DEFAULT_PROOF_SECRET_NAME})`}),
+    'skip-vpc-endpoint': Flags.boolean({default: false, description: 'Do not auto-discover or create an S3 Gateway VPC endpoint for EKS-internal S3 traffic'}),
+    'withdrawal-service-account': Flags.string({description: 'Kubernetes service account used by withdrawal-processor (default: withdrawal-processor)'}),
+    yes: Flags.boolean({char: 'y', default: false, description: 'Apply the displayed AWS resource plan without confirmation'}),
   }
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(ProofAwsInit)
     const json = new JsonOutputContext('setup proof-aws-init', flags.json)
     try {
-      const alias = sanitizeName(flags['network-alias'])
-      const cluster = sanitizeName(flags['eks-cluster'])
-      const bucket = flags.bucket || `dogeos-${alias}-proof-artifacts`
-      const artifactReadMode = flags['artifact-read-mode'] as 'external' | 'vpc-endpoint'
-      const artifactReadRouteTableIds = flags['artifact-read-route-table-id'] || []
-      const artifactReadVpcEndpointId = flags['artifact-read-vpc-endpoint-id']
-      if (artifactReadMode === 'vpc-endpoint' && (!artifactReadVpcEndpointId || artifactReadRouteTableIds.length === 0)) {
-        throw new Error('--artifact-read-mode vpc-endpoint requires --artifact-read-vpc-endpoint-id and at least one --artifact-read-route-table-id')
+      const nonInteractive = flags['non-interactive'] || flags.json
+      const existing = readOptionalProofAwsConfig('.', flags.config)?.config
+      const discovery = new ProofAwsDiscovery(flags['aws-profile'])
+      const awsRegion = await this.resolveRequiredValue({
+        configured: flags['aws-region'] || existing?.artifactStore.region || discovery.configuredRegion(),
+        flag: '--aws-region',
+        message: 'Enter the AWS region containing the EKS cluster:',
+        nonInteractive,
+      })
+      const eksCluster = await this.resolveEksCluster({
+        configured: flags['eks-cluster'] || existing?.kubernetes.eksCluster,
+        discovery,
+        nonInteractive,
+        region: awsRegion,
+      })
+      const dogeConfigPath = path.resolve('.data/doge-config.toml')
+      const dogeNetwork = fs.existsSync(dogeConfigPath)
+        ? loadDogeNetworkFromDogeConfig(dogeConfigPath)
+        : undefined
+      const networkAlias = await this.resolveRequiredValue({
+        configured: flags['network-alias'] || existing?.kubernetes.networkAlias || dogeNetwork,
+        flag: '--network-alias',
+        message: 'Enter the deployment network alias used in AWS resource names:',
+        nonInteractive,
+      })
+      const alias = sanitizeName(networkAlias)
+      const cluster = sanitizeName(eksCluster)
+      const bucket = flags.bucket
+        || (existing?.kubernetes.networkAlias === networkAlias
+          ? existing.artifactStore.bucket
+          : undefined)
+        || `dogeos-${alias}-proof-artifacts`
+      if (!nonInteractive
+        && !flags['artifact-public-endpoint-url']
+        && !existing?.artifactReadTransport.publicEndpointUrl) {
+        this.log('')
+        this.log('External Workers and partner Attestation Signers fetch proof objects without AWS credentials.')
+        this.log('The CLI keeps S3 private, so enter the root of your controlled public S3-compatible gateway.')
+        this.log(`It must serve this bucket as https://${bucket}.<gateway-host>/<key-prefix>/...`)
+        this.log('')
       }
 
-      if (artifactReadMode === 'external' && (artifactReadVpcEndpointId || artifactReadRouteTableIds.length > 0)) {
-        throw new Error('--artifact-read-vpc-endpoint-id/--artifact-read-route-table-id require --artifact-read-mode vpc-endpoint')
+      const publicEndpointUrl = await this.resolveRequiredValue({
+        configured: flags['artifact-public-endpoint-url']
+          || existing?.artifactReadTransport.publicEndpointUrl,
+        flag: '--artifact-public-endpoint-url',
+        message: 'Enter the credential-free HTTPS S3-compatible endpoint root reachable by partner Signers:',
+        nonInteractive,
+        normalize: normalizeProofArtifactPublicEndpoint,
+      })
+      const advancedVpcInput = Boolean(
+        flags['artifact-read-vpc-endpoint-id']
+        || flags['artifact-read-route-table-id']?.length,
+      )
+      if (flags['skip-vpc-endpoint'] && advancedVpcInput) {
+        throw new Error(
+          '--skip-vpc-endpoint cannot be combined with --artifact-read-vpc-endpoint-id or --artifact-read-route-table-id',
+        )
+      }
+
+      const configureVpcEndpoint = flags['skip-vpc-endpoint']
+        ? false
+        : nonInteractive || flags.yes || advancedVpcInput
+          ? true
+          : await confirm({
+              default: true,
+              message: 'Configure EKS-internal S3 routing through an auto-discovered Gateway VPC endpoint?',
+            })
+      const namespace = flags.namespace || existing?.kubernetes.namespace || 'default'
+      const keyPrefix = flags['key-prefix'] || existing?.artifactStore.keyPrefix || 'proof-topology'
+      const secretName = flags['secret-name'] || existing?.secret.name || DEFAULT_PROOF_SECRET_NAME
+      const coordinatorServiceAccount = flags['coordinator-service-account']
+        || existing?.serviceAccounts.proofCoordinator.name
+        || 'proof-coordinator'
+      const withdrawalServiceAccount = flags['withdrawal-service-account']
+        || existing?.serviceAccounts.withdrawalProcessor.name
+        || 'withdrawal-processor'
+      const canReuseVpcFacts = existing?.artifactStore.region === awsRegion
+        && existing.kubernetes.eksCluster === eksCluster
+      const artifactReadVpcEndpointId = flags['artifact-read-vpc-endpoint-id']
+        || (canReuseVpcFacts
+          ? existing?.artifactReadTransport.vpcEndpoint?.vpcEndpointId
+          : undefined)
+      const artifactReadRouteTableIds = flags['artifact-read-route-table-id']?.length
+        ? flags['artifact-read-route-table-id']
+        : canReuseVpcFacts
+          ? existing?.artifactReadTransport.vpcEndpoint?.routeTableIds
+          : undefined
+
+      if (!nonInteractive && !flags.yes) {
+        this.log('')
+        this.log('Proof AWS resource plan:')
+        this.log(`  AWS region:             ${awsRegion}`)
+        this.log(`  EKS cluster/namespace:  ${eksCluster} / ${namespace}`)
+        this.log(`  S3 artifact prefix:     s3://${bucket}/${keyPrefix}`)
+        this.log(`  Partner HTTPS endpoint: ${publicEndpointUrl}`)
+        this.log(`  EKS S3 Gateway route:   ${configureVpcEndpoint ? 'auto-discover/create' : 'skipped'}`)
+        this.log(`  Secrets Manager secret: ${secretName}`)
+        this.log('')
+        if (!(await confirm({default: true, message: 'Provision or reconcile these AWS resources?'}))) {
+          throw new Error('proof AWS provisioning cancelled')
+        }
       }
 
       const provisioner = new ProofAwsProvisioner(json, flags['aws-profile'])
       const identity = {
-        awsRegion: flags['aws-region'],
-        eksCluster: flags['eks-cluster'],
-        namespace: flags.namespace,
-        networkAlias: flags['network-alias'],
+        awsRegion,
+        eksCluster,
+        namespace,
+        networkAlias,
       }
       const result = provisioner.provision(
         identity,
         {
           artifactRead: {
-            mode: artifactReadMode,
-            routeTableIds: artifactReadRouteTableIds,
-            vpcEndpointId: artifactReadVpcEndpointId,
+            publicEndpointUrl,
+            ...(configureVpcEndpoint
+              ? {
+                  vpcEndpoint: {
+                    enabled: true,
+                    routeTableIds: artifactReadRouteTableIds,
+                    vpcEndpointId: artifactReadVpcEndpointId,
+                  },
+                }
+              : {}),
           },
           bucket,
           coordinatorRole: {
             description: 'DogeOS proof-coordinator artifact store role',
             roleName: truncateIamRoleName(`dogeos-${alias}-${cluster}-proof-coordinator`),
-            serviceAccount: flags['coordinator-service-account'],
+            serviceAccount: coordinatorServiceAccount,
           },
-          keyPrefix: flags['key-prefix'],
+          keyPrefix,
           rotateTokens: flags['rotate-tokens'],
-          secretName: flags['secret-name'],
+          secretName,
           withdrawalRole: {
             description: 'DogeOS withdrawal-processor proof transport role',
             roleName: truncateIamRoleName(`dogeos-${alias}-${cluster}-wp-proof`),
-            serviceAccount: flags['withdrawal-service-account'],
+            serviceAccount: withdrawalServiceAccount,
           },
         }
       )
@@ -93,11 +201,11 @@ export default class ProofAwsInit extends Command {
       const configResult = writeProofAwsConfig(
         path.resolve(flags.config),
         buildProofAwsConfig({
-          coordinatorServiceAccount: flags['coordinator-service-account'],
+          coordinatorServiceAccount,
           identity,
-          keyPrefix: flags['key-prefix'],
+          keyPrefix,
           provisioned: result,
-          withdrawalServiceAccount: flags['withdrawal-service-account'],
+          withdrawalServiceAccount,
         }),
       )
 
@@ -106,13 +214,12 @@ export default class ProofAwsInit extends Command {
         `${configResult.changed ? 'Wrote' : 'Reused'} proof AWS config ${configResult.filePath}; `
         + 'run scrollsdk setup prep-charts once to generate final values and deployment contract',
       )
-      if (result.artifactReadTransport.mode === 'external') {
+      json.addWarning(
+        `the partner/external artifact route ${result.artifactReadTransport.publicEndpointUrl} is recorded but operator-managed and unverified; require HTTP 200 for one exact digest-scoped object from every external Worker and partner Signer network before activation`,
+      )
+      if (result.artifactReadTransport.vpcEndpoint) {
         json.addWarning(
-          'proof AWS private store and IRSA are ready, but credential-free external GET remains operator-managed and unverified; configure a controlled gateway or rerun with --artifact-read-mode vpc-endpoint, then preflight an exact artifact key from every worker/signer network'
-        )
-      } else {
-        json.addWarning(
-          `credential-free GET policy and route-table associations are configured via ${result.artifactReadTransport.vpcEndpointId}, but transport remains unverified until an exact artifact key returns 200 from every worker/signer network`
+          `EKS-internal credential-free GET and route-table associations are configured via ${result.artifactReadTransport.vpcEndpoint.vpcEndpointId}, but this private route does not provide access to partner Signers outside the VPC`,
         )
       }
 
@@ -125,5 +232,56 @@ export default class ProofAwsInit extends Command {
     } catch (error) {
       json.error('E710_PROOF_AWS_INIT_FAILED', error instanceof Error ? error.message : String(error), 'CONFIGURATION', true)
     }
+  }
+
+  private async resolveEksCluster(options: {
+    configured?: string
+    discovery: ProofAwsDiscovery
+    nonInteractive: boolean
+    region: string
+  }): Promise<string> {
+    if (options.configured?.trim()) return options.configured.trim()
+    if (options.nonInteractive) {
+      throw new Error('--eks-cluster is required in non-interactive mode when .data/proof-aws.json does not provide it')
+    }
+
+    const clusters = options.discovery.eksClusters(options.region)
+    if (clusters.length === 0) {
+      return this.resolveRequiredValue({
+        flag: '--eks-cluster',
+        message: `No EKS clusters were listed in ${options.region}; enter the cluster name:`,
+        nonInteractive: false,
+      })
+    }
+
+    return select({
+      choices: clusters.map(cluster => ({name: cluster, value: cluster})),
+      message: `Select the EKS cluster in ${options.region}:`,
+    })
+  }
+
+  private async resolveRequiredValue(options: {
+    configured?: string
+    flag: string
+    message: string
+    nonInteractive: boolean
+    normalize?: (value: string) => string
+  }): Promise<string> {
+    const normalize = options.normalize || ((value: string) => value.trim())
+    if (options.configured?.trim()) return normalize(options.configured)
+    if (options.nonInteractive) {
+      throw new Error(`${options.flag} is required in non-interactive mode when it cannot be discovered or reused`)
+    }
+
+    return input({
+      message: options.message,
+      validate(value) {
+        try {
+          return normalize(value) ? true : `${options.flag} must not be empty`
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error)
+        }
+      },
+    }).then(normalize)
   }
 }
