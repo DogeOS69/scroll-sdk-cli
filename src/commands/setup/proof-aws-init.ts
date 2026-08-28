@@ -59,14 +59,16 @@ export default class ProofAwsInit extends Command {
       const existing = readOptionalProofAwsConfig('.', flags.config)?.config
       const discovery = new ProofAwsDiscovery(flags['aws-profile'])
       const awsRegion = await this.resolveRequiredValue({
-        configured: flags['aws-region'] || existing?.artifactStore.region || discovery.configuredRegion(),
+        defaultValue: existing?.artifactStore.region || discovery.configuredRegion(),
+        explicit: flags['aws-region'],
         flag: '--aws-region',
         message: 'Enter the AWS region containing the EKS cluster:',
         nonInteractive,
       })
       const eksCluster = await this.resolveEksCluster({
-        configured: flags['eks-cluster'] || existing?.kubernetes.eksCluster,
+        configured: existing?.kubernetes.eksCluster,
         discovery,
+        explicit: flags['eks-cluster'],
         nonInteractive,
         region: awsRegion,
       })
@@ -75,7 +77,8 @@ export default class ProofAwsInit extends Command {
         ? loadDogeNetworkFromDogeConfig(dogeConfigPath)
         : undefined
       const networkAlias = await this.resolveRequiredValue({
-        configured: flags['network-alias'] || existing?.kubernetes.networkAlias || dogeNetwork,
+        defaultValue: existing?.kubernetes.networkAlias || dogeNetwork,
+        explicit: flags['network-alias'],
         flag: '--network-alias',
         message: 'Enter the deployment network alias used in AWS resource names:',
         nonInteractive,
@@ -98,8 +101,8 @@ export default class ProofAwsInit extends Command {
       }
 
       const publicEndpointUrl = await this.resolveRequiredValue({
-        configured: flags['artifact-public-endpoint-url']
-          || existing?.artifactReadTransport.publicEndpointUrl,
+        defaultValue: existing?.artifactReadTransport.publicEndpointUrl,
+        explicit: flags['artifact-public-endpoint-url'],
         flag: '--artifact-public-endpoint-url',
         message: 'Enter the credential-free HTTPS S3-compatible endpoint root reachable by partner Signers:',
         nonInteractive,
@@ -117,7 +120,7 @@ export default class ProofAwsInit extends Command {
 
       const configureVpcEndpoint = flags['skip-vpc-endpoint']
         ? false
-        : nonInteractive || flags.yes || advancedVpcInput
+        : nonInteractive || advancedVpcInput
           ? true
           : await confirm({
               default: true,
@@ -237,43 +240,61 @@ export default class ProofAwsInit extends Command {
   private async resolveEksCluster(options: {
     configured?: string
     discovery: ProofAwsDiscovery
+    explicit?: string
     nonInteractive: boolean
     region: string
   }): Promise<string> {
-    if (options.configured?.trim()) return options.configured.trim()
+    if (options.explicit?.trim()) return options.explicit.trim()
     if (options.nonInteractive) {
+      if (options.configured?.trim()) return options.configured.trim()
       throw new Error('--eks-cluster is required in non-interactive mode when .data/proof-aws.json does not provide it')
     }
 
     const clusters = options.discovery.eksClusters(options.region)
     if (clusters.length === 0) {
       return this.resolveRequiredValue({
+        defaultValue: options.configured,
         flag: '--eks-cluster',
         message: `No EKS clusters were listed in ${options.region}; enter the cluster name:`,
         nonInteractive: false,
       })
     }
 
+    const choices = clusters.map(cluster => ({name: cluster, value: cluster}))
+    if (options.configured && !clusters.includes(options.configured)) {
+      choices.unshift({
+        name: `${options.configured} (configured previously; not returned in ${options.region})`,
+        value: options.configured,
+      })
+    }
+
     return select({
-      choices: clusters.map(cluster => ({name: cluster, value: cluster})),
+      choices,
+      default: options.configured,
       message: `Select the EKS cluster in ${options.region}:`,
     })
   }
 
   private async resolveRequiredValue(options: {
-    configured?: string
+    defaultValue?: string
+    explicit?: string
     flag: string
     message: string
     nonInteractive: boolean
     normalize?: (value: string) => string
   }): Promise<string> {
     const normalize = options.normalize || ((value: string) => value.trim())
-    if (options.configured?.trim()) return normalize(options.configured)
+    if (options.explicit?.trim()) return normalize(options.explicit)
+    const defaultValue = options.defaultValue?.trim()
+      ? normalize(options.defaultValue)
+      : undefined
     if (options.nonInteractive) {
+      if (defaultValue) return defaultValue
       throw new Error(`${options.flag} is required in non-interactive mode when it cannot be discovered or reused`)
     }
 
     return input({
+      default: defaultValue,
       message: options.message,
       validate(value) {
         try {

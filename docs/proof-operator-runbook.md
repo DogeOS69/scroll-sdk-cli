@@ -226,11 +226,14 @@ charts:
 scrollsdk setup proof-aws-init
 ```
 
-The interactive wizard discovers the AWS region from the environment or AWS
-CLI configuration, lists EKS clusters, and defaults the network alias from
-`.data/doge-config.toml`. It asks the operator for one deployment fact that AWS
-cannot infer: the credential-free HTTPS S3-compatible endpoint root reachable
-by external Workers and partner-operated Attestation Signers. dogeos-core uses
+The interactive wizard presents the AWS region discovered from the environment
+or AWS CLI configuration as an editable default, lists EKS clusters only after
+the operator confirms that region, and presents the network alias from
+`.data/doge-config.toml` as another editable default. An explicitly supplied
+flag skips only its corresponding prompt. The wizard asks the operator for one
+deployment fact that AWS cannot infer: the credential-free HTTPS S3-compatible
+endpoint root reachable by external Workers and partner-operated Attestation
+Signers. dogeos-core uses
 virtual-host addressing, so an endpoint such as `https://objects.example.com`
 must serve the deployment bucket at
 `https://<bucket>.objects.example.com/<key-prefix>/...`.
