@@ -69,6 +69,11 @@ describe('doge-config utilities', () => {
   it('preserves compiler-backed proof topology as a doge-config section', () => {
     const content = dogeConfigToToml({
       network: 'testnet',
+      proof_release: {
+        manifestPath: '.data/proof-release-v1.json',
+        manifestSha256: 'd'.repeat(64),
+        releaseId: 'dogeos-core-test-v1',
+      },
       proof_topology: {
         compiler: {
           image: {
@@ -85,5 +90,10 @@ describe('doge-config utilities', () => {
     expect(parsed.proof_topology.mode).to.equal('disabled')
     expect(parsed.proof_topology.compiler.image.repository)
       .to.equal('dogeos69/dogeos-proof-topology')
+    expect(parsed.proof_release).to.deep.equal({
+      manifestPath: '.data/proof-release-v1.json',
+      manifestSha256: 'd'.repeat(64),
+      releaseId: 'dogeos-core-test-v1',
+    })
   })
 })

@@ -1029,24 +1029,59 @@ _See code: [src/commands/setup/disable-internal.ts](https://github.com/dogeos69/
 
 ## `scrollsdk setup doge-config`
 
-Configure Dogecoin settings and bridge setup defaults for deployment
+Configure Dogecoin/DA settings and optionally initialize compiler-backed proof topology
 
 ```
 USAGE
-  $ scrollsdk setup doge-config [-c <value>] [--json] [-N]
+  $ scrollsdk setup doge-config [-c <value>] [--json] [-N] [--production-worker-launch external|local_cpu|local_cuda
+    --proof-topology] [--proof-artifact-source existing-s3|prepared-aws ] [--proof-bucket <value> ]
+    [--proof-coordinator-url <value> ] [--proof-endpoint-url <value> ] [--proof-force-path-style ] [--proof-key-prefix
+    <value> ] [--proof-mode disabled|mock|production ] [--proof-public-s3-endpoint <value> ] [--proof-region <value> ]
+    [--proof-release <value> ] [--proof-resources-pvc <value> ] [--proof-resources-root <value> ]
+    [--proof-topology-compiler-binary <value> ] [--proof-witness-dir <value> ] [--proof-witness-rpc-url <value> ]
+    [--proof-witness-source block_witness_dir|rpc ]
 
 FLAGS
-  -N, --non-interactive  Run without prompts, using existing config values
-  -c, --config=<value>   Path to config file
-      --json             Output in JSON format (stdout for data, stderr for logs)
+  -N, --non-interactive                         Run without prompts, using existing config values
+  -c, --config=<value>                          Path to config file
+      --json                                    Output in JSON format (stdout for data, stderr for logs)
+      --production-worker-launch=<option>       Production Worker placement used by --proof-topology
+                                                <options: external|local_cpu|local_cuda>
+      --proof-artifact-source=<option>          Artifact resource source used by --proof-topology
+                                                <options: existing-s3|prepared-aws>
+      --proof-bucket=<value>                    Existing S3-compatible proof artifact bucket
+      --proof-coordinator-url=<value>           Proof Coordinator URL reachable by the selected Worker placement
+      --proof-endpoint-url=<value>              Worker-visible S3-compatible endpoint root
+      --proof-force-path-style                  Use path-style S3 object URLs for an existing compatible store
+      --proof-key-prefix=<value>                Base proof artifact key prefix before compiler digest scoping
+      --proof-mode=<option>                     Initial proof mode; new deployments default to disabled
+                                                <options: disabled|mock|production>
+      --proof-public-s3-endpoint=<value>        External Worker/signer-visible S3 endpoint when different from the store
+                                                endpoint
+      --proof-region=<value>                    Existing S3-compatible proof artifact region
+      --proof-release=<value>                   Versioned dogeos/proof-release/v1 manifest; conventional paths are
+                                                auto-discovered
+      --proof-resources-pvc=<value>             Existing PVC containing the selected proof release materials
+      --proof-resources-root=<value>            Deployment-relative directory containing proof release materials
+      --proof-topology                          Initialize or replace compiler-backed proof topology
+      --proof-topology-compiler-binary=<value>  Development-only local dogeos-proof-topology binary used for both
+                                                initialization preflights
+      --proof-witness-dir=<value>               Block witness directory relative to --proof-resources-root
+      --proof-witness-rpc-url=<value>           Scroll witness RPC URL used when --proof-witness-source=rpc
+      --proof-witness-source=<option>           Chunk witness source used by real materialization
+                                                <options: block_witness_dir|rpc>
 
 DESCRIPTION
-  Configure Dogecoin settings and bridge setup defaults for deployment
+  Configure Dogecoin/DA settings and optionally initialize compiler-backed proof topology
 
 EXAMPLES
   $ scrollsdk setup doge-config
 
   $ scrollsdk setup doge-config --config .data/doge-config.toml
+
+  $ scrollsdk setup doge-config --proof-topology
+
+  $ scrollsdk setup doge-config --proof-topology --proof-release .data/proof-release-v1.json
 
   $ scrollsdk setup doge-config --non-interactive
 

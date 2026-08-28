@@ -107,14 +107,14 @@ export interface ProofTopologyDeploymentConfig {
   resourcesMountPath?: string
   /** Existing PVC pre-populated with the selected release at resourcesMountPath. */
   resourcesPersistentVolumeClaim?: string
-  /** Optional Kubernetes placement for compiler-selected local Workers. */
+  /** Optional Kubernetes placement for the compiler-selected local production Worker. */
   workerNodeSelector?: Record<string, string>
-  /** Kubernetes resources for compiler-selected local Workers. */
+  /** Kubernetes resources for the compiler-selected local production Worker. */
   workerResources?: {
     limits?: Record<string, number | string>
     requests?: Record<string, number | string>
   }
-  /** RuntimeClass for a compiler-selected local Worker, for example `nvidia`. */
+  /** RuntimeClass for the compiler-selected local production Worker, for example `nvidia`. */
   workerRuntimeClassName?: string
   /** Existing Kubernetes Secret containing the selected Worker token key. */
   workerSecretName?: string

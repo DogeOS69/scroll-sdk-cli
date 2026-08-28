@@ -222,6 +222,18 @@ describe('compiled proof topology Kubernetes adapter', () => {
   })
 
   it('installs compiler-owned configs and material bindings for active mock mode', () => {
+    const workerValuesPath = path.join(root, 'values/prover-worker-production.yaml')
+    const seededWorker = yaml.load(fs.readFileSync(workerValuesPath, 'utf8')) as {
+      nodeSelector?: Record<string, string>
+      resources?: {limits: Record<string, number>}
+      runtimeClassName?: string
+      tolerations?: Array<Record<string, string>>
+    }
+    seededWorker.nodeSelector = {'accelerator': 'nvidia'}
+    seededWorker.resources = {limits: {'nvidia.com/gpu': 1}}
+    seededWorker.runtimeClassName = 'nvidia'
+    seededWorker.tolerations = [{key: 'nvidia.com/gpu', operator: 'Exists'}]
+    fs.writeFileSync(workerValuesPath, yaml.dump(seededWorker))
     const bundle = fakeBundle(path.join(root, '.data/generated/proof-topology'), 'mock')
     const result = reconcileCompiledProofTopology({
       compile: () => bundle,
@@ -261,6 +273,10 @@ describe('compiled proof topology Kubernetes adapter', () => {
     expect(worker.args).to.deep.equal(result.worker?.argv)
     expect(worker.persistence['prover-worker-token'].mountPath)
       .to.equal('/app/secrets/prover-worker-token')
+    expect(worker.nodeSelector).to.equal(undefined)
+    expect(worker.resources).to.equal(undefined)
+    expect(worker.runtimeClassName).to.equal(undefined)
+    expect(worker.tolerations).to.equal(undefined)
 
     const withdrawal = yaml.load(fs.readFileSync(
       path.join(root, 'values/withdrawal-processor-production.yaml'),

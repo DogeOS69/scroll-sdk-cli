@@ -201,6 +201,12 @@ export interface DogeConfig {
     }>
   }
   network: Network
+  /** Auditable release-producer input used to initialize proof_topology. */
+  proof_release?: {
+    manifestPath: string
+    manifestSha256: string
+    releaseId: string
+  }
   /** Compiler-backed proof topology when DeploymentSpec is not used. */
   proof_topology?: ProofTopologySpec
   /** Reth-specific network settings that are intentionally independent of the EVM chain ID. */

@@ -16,6 +16,11 @@ import {
   resolveEnvRefsDeep,
   validateDeploymentSpec,
 } from './deployment-spec-generator.js'
+import {
+  proofReleaseManifestSha256,
+  readProofRelease,
+  verifyProofTopologyReleaseBinding,
+} from './proof-release.js'
 
 export const DEFAULT_DEPLOYMENT_SPEC_FILES = [
   'deployment-spec.yaml',
@@ -358,7 +363,55 @@ function fromDeploymentSpec(specPath: string): ResolvedProofIntent {
   }
 }
 
-function fromDogeConfig(configPath: string, rawConfig: DogeConfig): ResolvedProofIntent {
+function verifyDogeProofRelease(
+  rawConfig: DogeConfig,
+  topology: ProofTopologySpec,
+  deploymentDir: string,
+  configPath: string,
+): string[] {
+  const binding = rawConfig.proof_release
+  if (!binding) {
+    return [
+      'proof_release is not recorded; rerun scrollsdk setup doge-config --proof-topology '
+      + 'to bind release images, identities, and material hashes',
+    ]
+  }
+
+  assertKnownKeys(
+    binding,
+    ['manifestPath', 'manifestSha256', 'releaseId'],
+    `${configPath}: proof_release`,
+  )
+  if (!/^[\da-f]{64}$/.test(binding.manifestSha256)) {
+    throw new Error(`${configPath}: proof_release.manifestSha256 must be lowercase SHA-256 hex`)
+  }
+
+  const manifestPath = path.resolve(deploymentDir, binding.manifestPath)
+  const actualDigest = proofReleaseManifestSha256(manifestPath)
+  if (actualDigest !== binding.manifestSha256) {
+    throw new Error(
+      `${configPath}: proof release manifest changed: expected ${binding.manifestSha256}, `
+      + `got ${actualDigest} for ${manifestPath}`,
+    )
+  }
+
+  const release = readProofRelease(manifestPath)
+  if (release.releaseId !== binding.releaseId) {
+    throw new Error(
+      `${configPath}: proof_release.releaseId ${binding.releaseId} does not match `
+      + `${release.releaseId} in ${manifestPath}`,
+    )
+  }
+
+  verifyProofTopologyReleaseBinding(topology, release, deploymentDir)
+  return []
+}
+
+function fromDogeConfig(
+  configPath: string,
+  rawConfig: DogeConfig,
+  deploymentDir: string,
+): ResolvedProofIntent {
   const {network} = rawConfig
   if (!['mainnet', 'regtest', 'testnet'].includes(network)) {
     throw new Error(`${configPath}: top-level network must be mainnet, testnet, or regtest`)
@@ -368,7 +421,10 @@ function fromDogeConfig(configPath: string, rawConfig: DogeConfig): ResolvedProo
   if (!rawTopology) throw new Error(`${configPath}: [proof_topology] is required`)
   assertDogeTopologyShape(rawTopology, configPath)
   const topology = resolveEnvRefsDeep(rawTopology) as ProofTopologySpec
-  const warnings = validateDogeTopology(topology, network, configPath)
+  const warnings = [
+    ...validateDogeTopology(topology, network, configPath),
+    ...verifyDogeProofRelease(rawConfig, topology, deploymentDir, configPath),
+  ]
   return {
     deploymentName: `dogeos-${network}`,
     intent: {
@@ -422,7 +478,7 @@ export function resolveProofIntent(
   }
 
   if (specPath) return fromDeploymentSpec(specPath)
-  if (dogeAuthority && dogeConfig) return fromDogeConfig(configPath, dogeConfig)
+  if (dogeAuthority && dogeConfig) return fromDogeConfig(configPath, dogeConfig, deploymentDir)
   if (options.required !== false) {
     throw new Error(
       `proof topology is not configured; add [proof_topology] to ${configPath} `

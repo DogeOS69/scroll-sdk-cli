@@ -34,11 +34,12 @@ artifact-based:
 ## 2. Deployment-wide proof modes
 
 One declarative compiler source controls the complete generated proof posture:
-`proofTopology.mode: disabled|mock|production`. A compiler-backed deployment
-uses DeploymentSpec as its authority and stages both the mock and production
-blocks before initial deployment. The removed `proofSystem` source is not
-accepted. `setup export-signer-policy` reads the same selected intent, so
-partners never pass a separate proving-mode flag.
+`.data/doge-config.toml [proof_topology].mode` in the normal operator flow, or
+DeploymentSpec `proofTopology.mode` in the alternative automation flow. Both
+stage mock and production blocks before initial deployment; defining both
+authorities is rejected. The removed `proofSystem` source is not accepted.
+`setup export-signer-policy` reads the same selected intent, so partners never
+pass a separate proving-mode flag.
 
 | Property | `disabled` | `mock` | `production` |
 |---|---|---|---|
@@ -48,7 +49,7 @@ partners never pass a separate proving-mode flag.
 | Signer policy | `dev_permissive`, proof fetch disabled | audited `staging_scaffold`, HTTP proof fetch | `production_enforce`, HTTP proof fetch |
 | Proof bytes | none | deterministic, non-cryptographic | release prover output |
 | Worker host | none | ordinary Linux allowed | GPU/release-specific host |
-| Proof release files | none | synthesized mock manifests | required signed/reviewed release artifacts |
+| Proof release files | staged but inactive | pinned release material when the selected mock profile materializes real statements | required reviewed release artifacts |
 
 Mock is a lifecycle and configuration test lane. Never enable it on a bridge
 that carries assets of value.
@@ -56,7 +57,7 @@ that carries assets of value.
 A disabled deployment may stage both artifact stores, release material,
 digest-pinned Worker images, coordinator infrastructure, and the shared proof
 resource PVC. These are dormant resource facts, not proof activation. Changing
-only `proofTopology.mode` selects them. The pinned dogeos-core compiler then
+only the authority's `mode` field selects them. The pinned dogeos-core compiler then
 regenerates strict mode-specific WP, PC, Worker, and submitter projections; the
 operator never edits those generated service files.
 
@@ -74,10 +75,11 @@ working directory.
 
 ```text
 deployment/
-├── deployment-spec.yaml                 # authority for compiler-backed proof
+├── deployment-spec.yaml                 # optional alternative proof authority
 ├── config.toml
 ├── .data/
-│   ├── doge-config.toml
+│   ├── doge-config.toml                  # normal proof authority + release binding
+│   ├── proof-release-v1.json             # immutable release-producer input
 │   ├── proof-aws.json                    # stable AWS resource facts; active AWS modes
 │   ├── proof-deployment.json             # generated deployment contract
 │   ├── generated/proof-topology/         # validated dogeos-core compiler bundle
@@ -99,6 +101,8 @@ deployment/
 │   ├── chunk/                            # production worker program
 │   ├── batch/                            # production worker program
 │   ├── bridge/                           # bridge + standalone aggregation programs
+│   ├── keys/                             # aggregate verification key
+│   └── bin/                              # pinned runtime materializer
 ├── configs/
 │   └── source-set.toml                  # production signer policy only
 ├── prover-worker-production/            # generated for external production Worker
@@ -111,7 +115,7 @@ deployment/
     └── source-set.toml
 ```
 
-For `proofTopology`, `prep-charts` gives the WP and PC base files to the pinned
+For the selected proof topology, `prep-charts` gives the WP and PC base files to the pinned
 compiler and atomically installs its complete strict outputs. It does not patch
 mode-specific verifier or materializer blocks itself. The compiler also emits
 generated materials beneath `.data/generated/proof-topology/materials`, a
@@ -282,10 +286,27 @@ gateway may intentionally map its own root to the prefix, so it remains
 supported but emits a warning requiring an exact-key preflight from every
 worker/signer network.
 
-For a compiler-backed deployment, declare the digest-pinned compiler and stage
-both profiles in DeploymentSpec. This abbreviated example shows the selection
-boundary; use `src/config/deployment-spec.example.yaml` for the full production
-`realScroll` resource/identity shape:
+For the normal compiler-backed deployment, do not enter image digests, release
+paths, VK hashes, or commitments by hand. Obtain the
+`dogeos/proof-release/v1` manifest shipped by the dogeos-core release producer,
+place it at `.data/proof-release-v1.json`, prepare the referenced release
+material and artifact resources, and run:
+
+```bash
+scrollsdk setup doge-config --proof-topology
+```
+
+The initializer verifies every digest-pinned image and release file, imports
+the reviewed identities, derives deployment defaults, writes complete dormant
+mock and production profiles to `.data/doge-config.toml`, and preflights both
+profiles before committing the file. It defaults the selected mode to
+`disabled`. The example manifest shape is available at
+`scroll-sdk/examples/.data/proof-release-v1.json.example`; its placeholder
+values are not deployable.
+
+DeploymentSpec remains an alternative authority for automation-oriented
+deployments. This abbreviated example shows its equivalent selection boundary;
+use `src/config/deployment-spec.example.yaml` for the complete generated shape:
 
 ```yaml
 proofTopology:
@@ -327,11 +348,16 @@ read-only into the compiler. The existing PVC must contain identical release
 content at `resourcesMountPath` for WP and PC. External Worker launch uses the
 same runtime path contract on its host.
 
-`proofTopology` is the only proof configuration source. It is not flattened
-into doge-config; dormant profiles remain exclusively in DeploymentSpec.
+`.data/doge-config.toml [proof_topology]` and DeploymentSpec `proofTopology`
+are alternative proof authorities. Defining both is rejected. In the ordinary
+doge-config path, `[proof_release]` pins the imported manifest path, manifest
+SHA-256, and release ID so subsequent compilation can revalidate release files
+and prevent source drift.
 
 Disabled compiler mode still requires the WP base template but deliberately
-does not open dormant profile resources. Validate them before deployment with:
+does not open dormant profile resources. `setup doge-config --proof-topology`
+preflights both profiles during initialization. They can also be revalidated
+later without changing the selected mode:
 
 ```bash
 scrollsdk setup proof-topology-compile --preflight mock
@@ -359,7 +385,7 @@ proofTopology:
 `setup prep-charts` writes the same pin to
 `[proof_system.pre_tsuki_direct_sign].max_end_batch_height` in the native WP
 TOML and `TSO_PRE_TSUKI_DIRECT_SIGN_MAX_END_BATCH_HEIGHT` in TSO values. The
-schema-v4 compiler deployment contract records the pin and
+schema-v5 compiler deployment contract records the pin and
 `setup proof-config-check` rejects disagreement or residual runtime
 configuration. `setup export-signer-policy` writes the same value as
 `ATTESTATION_SIGNER_PRE_TSUKI_DIRECT_SIGN_MAX_END_BATCH_HEIGHT` in the Rust
@@ -373,9 +399,10 @@ checks, the WP-only TSO `/propose` network boundary, completion, and reverse
 retirement. Do not switch to proof mode until the authoritative completion
 predicate is stable and the temporary pins have been removed.
 
-For a production release, the release-producing pipeline stages the paths and
-identities declared in `proofTopology.production.realScroll`. A conventional
-worker layout is:
+For a production release, the release-producing pipeline emits
+`proof-release-v1.json` with the reviewed paths, file SHA-256 values, image
+digests, profiles, and identities. The initializer imports those values into
+`proof_topology.production.realScroll`. A conventional worker layout is:
 
 ```text
 proof-artifacts/
@@ -393,10 +420,12 @@ proof-artifacts/
 ```
 
 Compiler-backed deployments do not use `worker-release.json` as a second
-authority. Release-relative paths and reviewed VK/commitment identities come
-from `proofTopology.production.realScroll`; the selected digest-pinned image
-comes from `proofTopology.production.workerImage`. The dogeos-core compiler
-validates the selected files and builds the complete Worker argv contract.
+authority. Release-relative paths, file hashes, reviewed VK/commitment
+identities, and selected digest-pinned images are imported from the pinned
+`proof-release-v1.json`. The expanded doge-config or DeploymentSpec topology
+remains the compiler source, while its release binding detects manifest or
+material drift. The dogeos-core compiler validates the selected files and
+builds the complete Worker argv contract.
 
 Now run the normal chart command for every mode:
 
@@ -415,10 +444,10 @@ only a fully validated, non-preflight bundle. The compiler-backed projection:
 - applies the compiler's digest-scoped submitter patch and rollout annotation;
 - projects the exact Worker contract into local Worker Helm values or a
   manifest-bearing external Compose bundle without reconstructing argv;
-- writes schema-v4 `.data/proof-deployment.json` with proof digest, deployment
+- writes schema-v5 `.data/proof-deployment.json` with proof digest, deployment
   revision, rollout plan, compiler bundle, and Worker contract paths.
 
-The schema-v4 deployment contract uses a fail-closed integrity boundary:
+The schema-v5 deployment contract uses a fail-closed integrity boundary:
 
 - Compiler-owned WP and PC files use required whole-file integrity.
 - Proof manifests and other proof-critical `--set-file` inputs retain
@@ -680,7 +709,7 @@ verification or production readiness.
 | compiled external Worker check fails | sync the generated Compose bundle and selected resources root together; pass `--resources-root` if their relative layout changed |
 | production source set missing | create `configs/source-set.toml` with real partner-reachable Dogecoin, Ethereum execution, and DogeOS L2 RPC sets |
 | proof AWS config missing during preparation | run `setup proof-aws-init` first, or restore the reviewed `.data/proof-aws.json` resource-facts file |
-| materializer configuration rejected | complete the hand-maintained coordinator materializer section; the CLI does not invent backend/RPC choices |
+| materializer configuration rejected | verify the pinned release materials and rerun `setup doge-config --proof-topology` with the correct witness/RPC choice; do not edit generated PC materializer sections |
 | signer health key differs from descriptor | stop; do not generate genesis with that descriptor |
 | signer cannot fetch proof | inspect the full URL in the sign request from the signer host; verify DNS/TLS/object permissions |
 | callback fails | test the generated TSO URL from the signer network and verify callback phase is `attestation` |

@@ -203,6 +203,10 @@ function configureWorkerValues(
     delete values.persistence?.[WORKER_READINESS_VOLUME]
     delete values.persistence?.[WORKER_TOKEN_VOLUME]
     delete values.configMaps?.[MATERIALS_CONFIG_MAP]
+    delete values.nodeSelector
+    delete values.resources
+    delete values.runtimeClassName
+    delete values.tolerations
     writeYaml(filePath, values)
     return []
   }
@@ -280,21 +284,29 @@ function configureWorkerValues(
   }
 
   values.probes.liveness = {enabled: false}
-  if (deployment.workerResources) values.resources = deployment.workerResources
-  else if (
-    input.topology.mode === 'production'
-    && input.topology.production?.workerLaunch === 'local_cuda'
-  ) {
-    values.resources = {
-      limits: {'nvidia.com/gpu': 1},
-      requests: {'nvidia.com/gpu': 1},
-    }
-  }
+  if (input.topology.mode === 'production') {
+    if (deployment.workerResources) values.resources = deployment.workerResources
+    else if (input.topology.production?.workerLaunch === 'local_cuda') {
+      values.resources = {
+        limits: {'nvidia.com/gpu': 1},
+        requests: {'nvidia.com/gpu': 1},
+      }
+    } else delete values.resources
 
-  if (deployment.workerNodeSelector) values.nodeSelector = deployment.workerNodeSelector
-  if (deployment.workerTolerations) values.tolerations = deployment.workerTolerations
-  if (deployment.workerRuntimeClassName) {
-    values.runtimeClassName = deployment.workerRuntimeClassName
+    if (deployment.workerNodeSelector) values.nodeSelector = deployment.workerNodeSelector
+    else delete values.nodeSelector
+    if (deployment.workerTolerations) values.tolerations = deployment.workerTolerations
+    else delete values.tolerations
+    if (deployment.workerRuntimeClassName) {
+      values.runtimeClassName = deployment.workerRuntimeClassName
+    } else delete values.runtimeClassName
+  } else {
+    // Production GPU placement is dormant in mock mode. Mock must remain
+    // schedulable on the ordinary cluster nodes used before production cutover.
+    delete values.nodeSelector
+    delete values.resources
+    delete values.runtimeClassName
+    delete values.tolerations
   }
 
   writeYaml(filePath, values)

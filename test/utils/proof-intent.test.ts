@@ -188,6 +188,22 @@ describe('proof intent source resolution', () => {
       .to.throw('proof_topology.typoMode is not supported')
   })
 
+  it('rejects a changed release manifest recorded by doge-config initialization', () => {
+    const configPath = writeDogeConfig(topology())
+    const manifestPath = path.join(root, '.data/proof-release-v1.json')
+    fs.writeFileSync(manifestPath, '{}\n')
+    const config = toml.parse(fs.readFileSync(configPath, 'utf8')) as toml.JsonMap
+    config.proof_release = {
+      manifestPath: '.data/proof-release-v1.json',
+      manifestSha256: '0'.repeat(64),
+      releaseId: 'release-v1',
+    }
+    fs.writeFileSync(configPath, toml.stringify(config))
+
+    expect(() => resolveProofIntent({deploymentDir: root}))
+      .to.throw('proof release manifest changed')
+  })
+
   it('allows callers to detect an unconfigured proof topology', () => {
     expect(resolveProofIntent({deploymentDir: root, required: false})).to.equal(undefined)
   })
