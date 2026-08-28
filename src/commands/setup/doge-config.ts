@@ -194,11 +194,11 @@ export class DogeConfigCommand extends Command {
     }),
     'proof-resources-pvc': Flags.string({
       dependsOn: ['proof-topology'],
-      description: 'Existing PVC containing the selected proof release materials',
+      description: 'Advanced override for the pre-populated proof release PVC (default: dogeos-proof-release)',
     }),
     'proof-resources-root': Flags.string({
       dependsOn: ['proof-topology'],
-      description: 'Deployment-relative directory containing proof release materials',
+      description: 'Advanced override for the deployment-relative proof release directory (default: proof-artifacts)',
     }),
     'proof-topology': Flags.boolean({
       default: false,
@@ -959,24 +959,18 @@ export class DogeConfigCommand extends Command {
         }) as 'external' | 'local_cpu' | 'local_cuda'
 
     const currentReal = existing?.production?.realScroll
-    const defaultResourcesRoot = options.resourcesRoot
+    const resourcesRoot = options.resourcesRoot
       || currentReal?.resourcesRoot
       || 'proof-artifacts'
-    const resourcesRoot = options.nonInteractive
-      ? defaultResourcesRoot
-      : await input({
-          default: defaultResourcesRoot,
-          message: 'Enter the deployment-relative proof release resources directory:',
-        })
-    const defaultPvc = options.resourcesPersistentVolumeClaim
+    const resourcesPersistentVolumeClaim = options.resourcesPersistentVolumeClaim
       || existing?.deployment?.resourcesPersistentVolumeClaim
       || 'dogeos-proof-release'
-    const resourcesPersistentVolumeClaim = options.nonInteractive
-      ? defaultPvc
-      : await input({
-          default: defaultPvc,
-          message: 'Enter the existing PVC containing the same proof release materials:',
-        })
+    options.log(
+      chalk.blue(
+        `Using release materials from ${resourcesRoot}; Kubernetes services will mount `
+        + `the pre-populated PVC ${resourcesPersistentVolumeClaim} read-only`,
+      ),
+    )
 
     const defaultWitnessSource = options.witnessSource
       || currentReal?.chunkWitnessSource

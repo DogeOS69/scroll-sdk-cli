@@ -1060,8 +1060,10 @@ FLAGS
       --proof-region=<value>                    Existing S3-compatible proof artifact region
       --proof-release=<value>                   Versioned dogeos/proof-release/v1 manifest; conventional paths are
                                                 auto-discovered
-      --proof-resources-pvc=<value>             Existing PVC containing the selected proof release materials
-      --proof-resources-root=<value>            Deployment-relative directory containing proof release materials
+      --proof-resources-pvc=<value>             Advanced override for the pre-populated proof release PVC (default:
+                                                dogeos-proof-release)
+      --proof-resources-root=<value>            Advanced override for the deployment-relative proof release directory
+                                                (default: proof-artifacts)
       --proof-topology                          Initialize or replace compiler-backed proof topology
       --proof-topology-compiler-binary=<value>  Development-only local dogeos-proof-topology binary used for both
                                                 initialization preflights

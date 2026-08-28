@@ -34,6 +34,10 @@ The release producer owns all manifest values. The deployment operator owns:
 
 The CLI derives service ports and URLs, container mount paths, secret-file
 paths, coordinator/Worker IDs, AWS store coordinates, and ordinary defaults.
+Unless advanced flags override them, the deployment host directory is
+`proof-artifacts` and the read-only Kubernetes claim is
+`dogeos-proof-release`; the wizard reports these names instead of asking the
+operator to invent them.
 The dogeos-core compiler then generates native WP/PC configs, Worker launch
 contract, submitter patch, canonical topology digest, digest-scoped artifact
 prefix, generated program manifests, and rollout plan.

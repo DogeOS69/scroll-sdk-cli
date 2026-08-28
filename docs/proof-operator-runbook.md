@@ -345,6 +345,15 @@ read-only into the compiler. The existing PVC must contain identical release
 content at `resourcesMountPath` for WP and PC. External Worker launch uses the
 same runtime path contract on its host.
 
+The ordinary doge-config wizard derives `resourcesRoot=proof-artifacts` and
+`resourcesPersistentVolumeClaim=dogeos-proof-release` and displays both facts;
+it does not ask the operator to choose arbitrary names. Use
+`--proof-resources-root` or `--proof-resources-pvc` only when the deployment
+already has a different storage convention. Creating the storage backend and
+copying the reviewed release directory remain explicit infrastructure
+operations because the correct ReadOnlyMany/RWX implementation is
+cluster-specific.
+
 `.data/doge-config.toml [proof_topology]` and DeploymentSpec `proofTopology`
 are alternative proof authorities. Defining both is rejected. In the ordinary
 doge-config path, `[proof_release]` pins the imported manifest path, manifest
