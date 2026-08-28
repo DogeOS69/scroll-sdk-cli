@@ -718,7 +718,7 @@ _See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/
 
 ## `scrollsdk setup attestation-signer`
 
-Import partner-operated attestation-signer descriptors and select the bootstrap bridge keyset. Signers are deployed by their operators (see `scrollsdk signer init` / `scrollsdk signer preflight`); this command only consumes descriptor files — endpoint + public key — and never provisions keys, Kubernetes releases, or network probes. Reachability is verified later by the partner operator and the TSO, not during config generation.
+Import signer-init descriptors from partner-operated attestation-signers and select the bootstrap bridge keyset. This command consumes only endpoint + public key and never provisions keys, deployments, or network probes. Current dogeos-core runtime preflight occurs after partners install the post-genesis canonical-context bundle.
 
 ```
 USAGE
@@ -736,10 +736,9 @@ FLAGS
       --threshold=<value>          Initial bridge attestation threshold (T of the active set)
 
 DESCRIPTION
-  Import partner-operated attestation-signer descriptors and select the bootstrap bridge keyset. Signers are deployed by
-  their operators (see `scrollsdk signer init` / `scrollsdk signer preflight`); this command only consumes descriptor
-  files — endpoint + public key — and never provisions keys, Kubernetes releases, or network probes. Reachability is
-  verified later by the partner operator and the TSO, not during config generation.
+  Import signer-init descriptors from partner-operated attestation-signers and select the bootstrap bridge keyset. This
+  command consumes only endpoint + public key and never provisions keys, deployments, or network probes. Current
+  dogeos-core runtime preflight occurs after partners install the post-genesis canonical-context bundle.
 
 EXAMPLES
   $ scrollsdk setup attestation-signer --descriptor partner-a.json --descriptor partner-b.json --descriptor ours.json --threshold 2
@@ -1199,56 +1198,35 @@ _See code: [src/commands/setup/eth-da-submitter.ts](https://github.com/dogeos69/
 
 ## `scrollsdk setup export-signer-policy`
 
-Assemble the post-genesis policy bundle for the proof-system mode reconciled by setup prep-charts: disabled selects direct-sign/dev_permissive with proof fetch off, mock selects staging_scaffold with basic proof checks, and production selects fail-closed production_enforce.
+Export the dogeos-core attestation_evidence_v2 policy selected by the current proof topology. The bundle contains bridge-owned protocol/verifier inputs; each signer operator keeps its RPC source sets, rotation allowlists, keys, and release pins.
 
 ```
 USAGE
-  $ scrollsdk setup export-signer-policy [--allowed-proof-triples <value>] [--bridge-namespace-id <value>] [-c <value>] [--json]
-    [--out <value>] [--protocol-context <value>] [--protocol-instance-id <value>] [--signer-proof-artifact-base-url
-    <value>] [--source-set <value>] [--spec <value>] [--supported-signing-policy-versions <value>]
-    [--tee-allowed-signer-ids <value>] [--tso-url <value>] [--verifier-registry <value>]
+  $ scrollsdk setup export-signer-policy [-c <value>] [--json] [--out <value>] [--protocol-context <value>]
+    [--signer-proof-artifact-base-url <value>] [--spec <value>] [--tso-url <value>]
 
 FLAGS
-  -c, --config=<value>                             Path to doge-config.toml
-      --allowed-proof-triples=<value>              Envelope proof-triple allowlist; default: derived from
-                                                   compiler-rendered ProofCoordinator.toml; missing/empty fails closed
-      --bridge-namespace-id=<value>                20-byte bridge namespace id; default is read from
-                                                   .data/GenerateBridgeInfo.toml (namespace_id) written by bridge-init
-                                                   step 3
-      --json                                       Output structured JSON
-      --out=<value>                                [default: signer-policy-bundle] Bundle output directory
-      --protocol-context=<value>                   [default: .data/protocol_context.json] protocol_context.json produced
-                                                   by setup bridge-init step 5
-      --protocol-instance-id=<value>               32-byte protocol instance id (canonical protocol opening hash);
-                                                   default: read from the protocol_id sidecar next to --protocol-context
-                                                   written by bridge-init step 5
-      --signer-proof-artifact-base-url=<value>     Stable public GET base signers use to fetch accepted proof objects;
-                                                   default: the value prep-charts staged into
-                                                   withdrawal-processor/WithdrawalProcessor.toml
-      --source-set=<value>                         source-set.toml override. Mock defaults to an e2e_harness empty
-                                                   scaffold; production defaults to configs/source-set.toml
-      --spec=<value>                               Optional DeploymentSpec proof source; conflicts with doge-config
-                                                   [proof_topology]
-      --supported-signing-policy-versions=<value>  [default: 1] CSV of supported signing policy versions
-      --tee-allowed-signer-ids=<value>             CSV of allowed TEE signer ids; compressed or uncompressed SEC1 keys
-                                                   are normalized to dogeos-core's compressed form. Production defaults
-                                                   to .data/setup_defaults.toml tee_pubkey; mock defaults to empty,
-                                                   matching e2e_harness
-      --tso-url=<value>                            TSO base URL reachable FROM the signer operator network (used for
-                                                   signature callbacks); default: https://<[ingress].TSO_HOST> from
-                                                   config.toml
-      --verifier-registry=<value>                  verifier-registry.toml override; default is generated from the proof
-                                                   triples staged by setup prep-charts
+  -c, --config=<value>                          Path to doge-config.toml
+      --json                                    Output structured JSON
+      --out=<value>                             [default: signer-policy-bundle] Bundle output directory
+      --protocol-context=<value>                [default: .data/protocol_context.json] Canonical protocol_context.json
+                                                produced by setup bridge-init
+      --signer-proof-artifact-base-url=<value>  Public GET base used by signers; default: compiler output in
+                                                withdrawal-processor/WithdrawalProcessor.toml
+      --spec=<value>                            Optional DeploymentSpec proof source; conflicts with doge-config
+                                                [proof_topology]
+      --tso-url=<value>                         TSO base URL reachable from signer networks; default: config.toml
+                                                [ingress].TSO_HOST
 
 DESCRIPTION
-  Assemble the post-genesis policy bundle for the proof-system mode reconciled by setup prep-charts: disabled selects
-  direct-sign/dev_permissive with proof fetch off, mock selects staging_scaffold with basic proof checks, and production
-  selects fail-closed production_enforce.
+  Export the dogeos-core attestation_evidence_v2 policy selected by the current proof topology. The bundle contains
+  bridge-owned protocol/verifier inputs; each signer operator keeps its RPC source sets, rotation allowlists, keys, and
+  release pins.
 
 EXAMPLES
   $ scrollsdk setup export-signer-policy
 
-  $ scrollsdk setup export-signer-policy --tso-url https://tso.dogeos.example --allowed-proof-triples "scroll_batch:scroll-production-v1:<vk-hash>"
+  $ scrollsdk setup export-signer-policy --tso-url https://tso.dogeos.example
 ```
 
 _See code: [src/commands/setup/export-signer-policy.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/export-signer-policy.ts)_
@@ -1931,7 +1909,7 @@ _See code: [src/commands/setup/verify-contracts.ts](https://github.com/dogeos69/
 
 ## `scrollsdk signer init`
 
-Signer-operator tool: set up key material and emit the descriptor + a complete deployment env file. Run this on YOUR infrastructure — secrets and AWS calls never leave it. Specify the TSO-reachable signer IP/domain with --endpoint. Production operators also pin the approved image release version and full git commit here. The output directory is the single source of truth for signer preflight and compose deployment.
+Signer-operator tool: create key material, a public descriptor, secret deployment env, and a partner-owned V2 policy template. Run on your infrastructure; secrets and AWS calls never leave it. Send the descriptor before genesis, then deploy and preflight only after receiving the canonical-context policy bundle.
 
 ```
 USAGE
@@ -1967,10 +1945,9 @@ FLAGS
   --out=<value>                             Output directory (default: ./signer-<id>)
 
 DESCRIPTION
-  Signer-operator tool: set up key material and emit the descriptor + a complete deployment env file. Run this on YOUR
-  infrastructure — secrets and AWS calls never leave it. Specify the TSO-reachable signer IP/domain with --endpoint.
-  Production operators also pin the approved image release version and full git commit here. The output directory is the
-  single source of truth for signer preflight and compose deployment.
+  Signer-operator tool: create key material, a public descriptor, secret deployment env, and a partner-owned V2 policy
+  template. Run on your infrastructure; secrets and AWS calls never leave it. Send the descriptor before genesis, then
+  deploy and preflight only after receiving the canonical-context policy bundle.
 
 EXAMPLES
   $ scrollsdk signer init --id partner-a-signer-0 --network testnet --endpoint https://signer.partner-a.example:4040
@@ -2011,12 +1988,12 @@ _See code: [src/commands/signer/kms-pubkey.ts](https://github.com/dogeos69/scrol
 
 ## `scrollsdk signer preflight`
 
-Signer-operator tool: probe a deployed attestation-signer over HTTP, verify its runtime public key, and emit the final descriptor to hand to the bridge operator. With --dir (a directory from signer init) the id, network, and expected public key are read from its descriptor.json and the verified endpoint is written back in place — no values to retype. Works with any backend because the public key is read from the running signer's /health.
+Probe a deployed attestation-signer and verify its runtime identity. Add --require-production-ready after applying a production bundle to require dogeos-core attestation_evidence_v2, fail-closed policy, and all four production capabilities.
 
 ```
 USAGE
   $ scrollsdk signer preflight [--dir <value>] [--endpoint <value>] [--expected-public-key <value>] [--id <value>]
-    [--json] [--network mainnet|regtest|testnet] [--out <value>]
+    [--json] [--network mainnet|regtest|testnet] [--out <value>] [--require-production-ready]
 
 FLAGS
   --dir=<value>                  signer init output directory; provides id/network/expected key from descriptor.json and
@@ -2032,12 +2009,13 @@ FLAGS
                                  <options: mainnet|regtest|testnet>
   --out=<value>                  Write the descriptor JSON to this path (default with --dir: its descriptor.json;
                                  otherwise print to stdout)
+  --require-production-ready     Also require /ready and /policy to prove all four attestation_evidence_v2 production
+                                 capabilities are serving
 
 DESCRIPTION
-  Signer-operator tool: probe a deployed attestation-signer over HTTP, verify its runtime public key, and emit the final
-  descriptor to hand to the bridge operator. With --dir (a directory from signer init) the id, network, and expected
-  public key are read from its descriptor.json and the verified endpoint is written back in place — no values to retype.
-  Works with any backend because the public key is read from the running signer's /health.
+  Probe a deployed attestation-signer and verify its runtime identity. Add --require-production-ready after applying a
+  production bundle to require dogeos-core attestation_evidence_v2, fail-closed policy, and all four production
+  capabilities.
 
 EXAMPLES
   $ scrollsdk signer preflight --dir signer-partner-a-signer-0 --endpoint https://signer.partner-a.example:4040
@@ -2045,6 +2023,8 @@ EXAMPLES
   $ scrollsdk signer preflight --endpoint https://signer.partner-a.example:4040 --id partner-a-signer-0 --out descriptor.json
 
   $ scrollsdk signer preflight --endpoint https://signer.partner-a.example:4040 --id partner-a-signer-0 --expected-public-key 02ab...
+
+  $ scrollsdk signer preflight --dir signer-partner-a-signer-0 --require-production-ready
 ```
 
 _See code: [src/commands/signer/preflight.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/signer/preflight.ts)_

@@ -174,6 +174,48 @@ export interface SignerHealthReport {
   raw: Record<string, unknown>
 }
 
+export interface SignerJsonReport {
+  body: Record<string, unknown>
+  status: number
+  url: string
+}
+
+/** Fetch a signer JSON status surface, preserving fail-closed HTTP status. */
+export async function fetchSignerJson(
+  endpoint: string,
+  pathname: '/health' | '/policy' | '/ready',
+  timeoutMs = 10_000,
+  options: {allowLoopback?: boolean} = {},
+): Promise<SignerJsonReport> {
+  const url = `${normalizeSignerEndpoint(endpoint, 'endpoint', options)}${pathname}`
+  let response: Response
+  try {
+    response = await fetch(url, {signal: AbortSignal.timeout(timeoutMs)})
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      throw new Error(`GET ${url} timed out after ${timeoutMs}ms (endpoint unreachable from this network?)`)
+    }
+
+    const cause = error instanceof Error && error.cause instanceof Error ? error.cause : undefined
+    const causeCode = cause && 'code' in cause && typeof cause.code === 'string' ? cause.code : undefined
+    const detail = cause ? `${causeCode ? `${causeCode}: ` : ''}${cause.message}` : (error instanceof Error ? error.message : String(error))
+    throw new Error(`GET ${url} failed: ${detail} (check DNS, connectivity, and TLS from this network)`)
+  }
+
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch {
+    throw new Error(`${url} returned HTTP ${response.status} with a non-JSON body`)
+  }
+
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new Error(`${url} returned HTTP ${response.status} with a non-object JSON body`)
+  }
+
+  return {body: body as Record<string, unknown>, status: response.status, url}
+}
+
 /**
  * Probe a running attestation_signer's /health endpoint and extract the
  * runtime public key. Used by `signer preflight` on the signer operator's
@@ -185,26 +227,8 @@ export async function fetchSignerHealth(
   timeoutMs = 10_000,
   options: { allowLoopback?: boolean } = {}
 ): Promise<SignerHealthReport> {
-  const url = `${normalizeSignerEndpoint(endpoint, 'endpoint', options)}/health`
-  let response: Response
-  try {
-    response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
-  } catch (error) {
-    // Node's fetch reports bare "fetch failed" and hides the real reason
-    // (DNS, refused connection, TLS) in error.cause — surface it, because
-    // connectivity triage is exactly what preflight exists for.
-    if (error instanceof Error && error.name === 'TimeoutError') {
-      throw new Error(`GET ${url} timed out after ${timeoutMs}ms (endpoint unreachable from this network?)`)
-    }
-
-    const cause = error instanceof Error && error.cause instanceof Error ? error.cause : undefined
-    const causeCode = cause && 'code' in cause && typeof cause.code === 'string' ? cause.code : undefined
-    const detail = cause ? `${causeCode ? `${causeCode}: ` : ''}${cause.message}` : (error instanceof Error ? error.message : String(error))
-    throw new Error(`GET ${url} failed: ${detail} (check DNS, connectivity, and TLS from this network)`)
-  }
-
-  if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}`)
-  const body = await response.json() as Record<string, unknown>
+  const {body, status, url} = await fetchSignerJson(endpoint, '/health', timeoutMs, options)
+  if (status < 200 || status >= 300) throw new Error(`${url} returned HTTP ${status}`)
   const publicKey = body.public_key
   if (typeof publicKey !== 'string' || publicKey === '') {
     throw new Error(`${url} response is missing public_key`)

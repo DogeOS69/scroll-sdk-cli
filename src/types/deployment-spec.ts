@@ -576,8 +576,6 @@ export interface SigningConfig {
       /** Override only for a deliberately pre-created ServiceAccount. */
       serviceAccount?: string
     }>
-    /** Application and evidence policy required by production-kms. */
-    productionPolicy?: AttestationSignerProductionPolicy
     /** Explicit security profile. production-kms is modeled now even while production RotateKey remains fail-closed in the signer. */
     profile: 'production-kms' | 'staging-kms' | 'staging-local'
   }
@@ -625,26 +623,6 @@ export interface CubesignerProductionPolicy {
   proofResolverAuthority: string
   /** sha256:<64 lowercase hex> digest of the verifier identity. */
   verifierIdentityDigest: string
-}
-
-export interface AttestationSignerProductionPolicy {
-  activeBridgeKeyHash: string
-  allowedGitCommit: string
-  allowedReleaseVersion: string
-  allowedSigningPolicyVersion?: number
-  bridgeNamespaceId: string
-  envelope?: {
-    allowedProofTriples?: string
-    allowedTeeSignerIds?: string[]
-    maxFetchUrlBytes?: number
-    maxProofArtifacts?: number
-    maxRefStringBytes?: number
-  }
-  protocolInstanceId: string
-  sourceSetFile: string
-  supportedSigningPolicyVersions?: number[]
-  teeAllowedSignerIds: string[]
-  verifierRegistryFile: string
 }
 
 export interface FrontendSubdomains {

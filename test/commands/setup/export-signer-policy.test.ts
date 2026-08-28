@@ -7,10 +7,6 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 
 const PUBKEY = `02${'11'.repeat(32)}`
-const TEE_PUBKEY = `03${'22'.repeat(32)}`
-const COMPRESSED_GENERATOR = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'
-const UNCOMPRESSED_GENERATOR = '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798' +
-  '483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8'
 const REPOSITORY_ROOT = process.cwd()
 
 function writeDogeConfig(
@@ -57,7 +53,12 @@ function writeDogeConfig(
           production: {
             artifactStore: {kind: 'local_fs'},
             profile: 'real_scroll_withdrawal_full_topology',
-            realScroll: {resourcesRoot: 'proof-resources'},
+            realScroll: {
+              aggVerifyingKeyPath: 'keys/agg-vk.bin',
+              batchProgramCommitmentHex: `0x${'44'.repeat(64)}`,
+              l2RangeAggregationAppCommitRawHex: `0x${'55'.repeat(64)}`,
+              resourcesRoot: 'proof-resources',
+            },
             workerImage: image('c'),
             workerLaunch: 'external',
           },
@@ -71,6 +72,12 @@ function writeDogeConfig(
         }
       : {}),
   }
+
+  if (mode === 'production') {
+    fs.mkdirSync('proof-resources/keys', {recursive: true})
+    fs.writeFileSync('proof-resources/keys/agg-vk.bin', 'test-aggregate-verifying-key')
+  }
+
   if (mode !== 'disabled') {
     spec.proofCoordinator = {
       artifactStore: {bucket: 'proofs', region: 'us-west-2'},
@@ -87,11 +94,8 @@ function commandArgs(...extra: string[]): string[] {
     'export-signer-policy',
     '--config', '.data/doge-config.toml',
     '--protocol-context', '.data/protocol_context.json',
-    '--bridge-namespace-id', `0x${'44'.repeat(20)}`,
-    '--protocol-instance-id', `0x${'55'.repeat(32)}`,
     '--tso-url', 'https://tso.bridge.example',
     '--signer-proof-artifact-base-url', 'https://proofs.bridge.example/proof-topology',
-    '--allowed-proof-triples', `openvm_state_transition:bridge-v1:0x${'66'.repeat(32)}`,
     ...extra,
   ]
 }
@@ -118,8 +122,6 @@ describe('setup export-signer-policy operator flow', () => {
     fs.writeFileSync('.data/protocol_context.json', JSON.stringify({
       genesis: { genesis_bridge_key_hash: `0x${'33'.repeat(20)}` },
     }))
-    fs.writeFileSync('verifier-registry.toml', '')
-    fs.writeFileSync('source-set.toml', '')
   })
 
   afterEach(() => {
@@ -132,16 +134,13 @@ describe('setup export-signer-policy operator flow', () => {
     it(`exports an address-bearing ${provingMode} partner bundle`, async () => {
       writeDogeConfig(provingMode)
 
-      const { stdout } = await runCommand(commandArgs(
-        '--tee-allowed-signer-ids', TEE_PUBKEY,
-        '--verifier-registry', 'verifier-registry.toml',
-        '--source-set', 'source-set.toml'
-      ))
+      const {stdout} = await runCommand(commandArgs())
 
-      expect(stdout).to.include(`${provingMode} policy bundle written`)
+      expect(stdout).to.include(`${provingMode} V2 signer policy bundle written`)
       const policy = JSON.parse(fs.readFileSync('signer-policy-bundle/signer-policy.json', 'utf8'))
       expect(policy.mode).to.equal(provingMode)
-      expect(policy.envelopeMaxProofArtifacts).to.equal(4)
+      expect(policy.schema).to.equal('dogeos/attestation-signer-policy-bundle/v2')
+      expect(policy.contract).to.equal('attestation_evidence_v2')
       expect(policy.signers).to.deep.equal([{
         endpoint: 'https://signer.partner-a.example:4040',
         id: 'partner-a',
@@ -162,6 +161,28 @@ describe('setup export-signer-policy operator flow', () => {
       expect(commands).to.include('https://proofs.bridge.example/proof-topology')
       expect(commands).to.include('scrollsdk signer init')
       expect(commands).to.include('kubectl -n <namespace> run signer-reachability-partner-a')
+      expect(commands).not.to.include('verifier-registry.toml')
+      expect(commands).not.to.include('source-set.toml')
+
+      const manifest = JSON.parse(fs.readFileSync('signer-policy-bundle/signer-policy-manifest.json', 'utf8'))
+      expect(manifest.schema).to.equal('dogeos/attestation-signer-policy-manifest/v1')
+      expect(manifest.files.map((entry: {file: string}) => entry.file)).to.include.members([
+        'protocol_context.json',
+        'signer-policy.env',
+        'signer-policy.json',
+      ])
+
+      if (provingMode === 'production') {
+        expect(env).to.include('ATTESTATION_SIGNER_ADVANCE_L2_AGG_VERIFYING_KEY_PATH=/etc/dogeos/advance-l2-agg-verifying-key.bin')
+        expect(env).to.include(`ATTESTATION_SIGNER_ADVANCE_L2_BATCH_PROGRAM_COMMITMENT_HEX=0x${'44'.repeat(64)}`)
+        expect(env).to.include(`ATTESTATION_SIGNER_L2_RANGE_AGGREGATION_PROGRAM_COMMITMENT_HEX=0x${'55'.repeat(64)}`)
+        expect(fs.readFileSync('signer-policy-bundle/advance-l2-agg-verifying-key.bin', 'utf8'))
+          .to.equal('test-aggregate-verifying-key')
+        expect(policy.advanceL2Verifier.aggVerifyingKeySha256).to.match(/^sha256:[\da-f]{64}$/)
+      } else {
+        expect(policy).not.to.have.property('advanceL2Verifier')
+        expect(fs.existsSync('signer-policy-bundle/advance-l2-agg-verifying-key.bin')).to.equal(false)
+      }
     })
   }
 
@@ -170,15 +191,12 @@ describe('setup export-signer-policy operator flow', () => {
     const args = commandArgs().filter((value, index, all) => {
       const previous = all[index - 1]
       return previous !== '--signer-proof-artifact-base-url'
-        && previous !== '--allowed-proof-triples'
         && value !== '--signer-proof-artifact-base-url'
-        && value !== '--allowed-proof-triples'
     })
     const { stdout } = await runCommand(args)
-    expect(stdout).to.include('disabled policy bundle written')
+    expect(stdout).to.include('disabled V2 signer policy bundle written')
     const policy = JSON.parse(fs.readFileSync('signer-policy-bundle/signer-policy.json', 'utf8'))
     expect(policy.mode).to.equal('disabled')
-    expect(policy.envelopeMaxProofArtifacts).to.equal(0)
     const env = fs.readFileSync('signer-policy-bundle/signer-policy.env', 'utf8')
     expect(env).to.include('ATTESTATION_SIGNER_POLICY_MODE=dev_permissive')
     expect(env).to.include('ATTESTATION_SIGNER_PROTOCOL_CONTEXT_JSON=/etc/dogeos/protocol_context.json')
@@ -190,9 +208,7 @@ describe('setup export-signer-policy operator flow', () => {
     const args = commandArgs().filter((value, index, all) => {
       const previous = all[index - 1]
       return previous !== '--signer-proof-artifact-base-url'
-        && previous !== '--allowed-proof-triples'
         && value !== '--signer-proof-artifact-base-url'
-        && value !== '--allowed-proof-triples'
     })
     await runCommand(args)
 
@@ -204,35 +220,27 @@ describe('setup export-signer-policy operator flow', () => {
     )
   })
 
-  it('leaves TEE allowlists empty in mock mode without reading a legacy setup_defaults key', async () => {
+  it('does not emit any retired verifier registry, source set, or TEE envelope input', async () => {
     writeDogeConfig('mock')
     fs.writeFileSync('.data/setup_defaults.toml', 'tee_pubkey = "not-even-a-public-key"\n')
 
     await runCommand(commandArgs())
 
     const policy = JSON.parse(fs.readFileSync('signer-policy-bundle/signer-policy.json', 'utf8'))
-    expect(policy.teeAllowedSignerIds).to.equal('')
+    expect(policy).not.to.have.property('teeAllowedSignerIds')
+    expect(policy).not.to.have.property('allowedProofTriples')
     const env = fs.readFileSync('signer-policy-bundle/signer-policy.env', 'utf8')
     expect(env).not.to.include('ATTESTATION_SIGNER_TEE_ALLOWED_SIGNER_IDS')
     expect(env).not.to.include('ATTESTATION_SIGNER_ENVELOPE_ALLOWED_TEE_SIGNER_IDS')
-    const registry = fs.readFileSync('signer-policy-bundle/verifier-registry.toml', 'utf8')
-    expect(registry).to.include('proof_kind = "openvm_state_transition"')
-    expect(registry).to.include('verifier_id = "bridge-v1"')
-    expect(registry).to.include(`vk_hash = "0x${'66'.repeat(32)}"`)
-    const sourceSet = fs.readFileSync('signer-policy-bundle/source-set.toml', 'utf8')
-    expect(sourceSet).to.include('Mock/e2e_harness source-set scaffold')
+    expect(fs.existsSync('signer-policy-bundle/verifier-registry.toml')).to.equal(false)
+    expect(fs.existsSync('signer-policy-bundle/source-set.toml')).to.equal(false)
   })
 
-  it('normalizes a legacy uncompressed CubeSigner key for production policy', async () => {
+  it('rejects a symlinked production aggregate verifying key', async () => {
     writeDogeConfig('production')
-    fs.writeFileSync('.data/setup_defaults.toml', `tee_pubkey = "${UNCOMPRESSED_GENERATOR}"\n`)
-
-    await runCommand(commandArgs('--source-set', 'source-set.toml'))
-
-    const policy = JSON.parse(fs.readFileSync('signer-policy-bundle/signer-policy.json', 'utf8'))
-    expect(policy.teeAllowedSignerIds).to.equal(COMPRESSED_GENERATOR)
-    const env = fs.readFileSync('signer-policy-bundle/signer-policy.env', 'utf8')
-    expect(env).not.to.include('ATTESTATION_SIGNER_TEE_ALLOWED_SIGNER_IDS')
-    expect(env).not.to.include('ATTESTATION_SIGNER_ENVELOPE_ALLOWED_TEE_SIGNER_IDS')
+    fs.renameSync('proof-resources/keys/agg-vk.bin', 'proof-resources/keys/real-agg-vk.bin')
+    fs.symlinkSync('real-agg-vk.bin', 'proof-resources/keys/agg-vk.bin')
+    const {error} = await runCommand(commandArgs())
+    expect(error?.message).to.include('must be a regular non-symlink file')
   })
 })

@@ -1521,14 +1521,14 @@ export class BridgeInitCommand extends Command {
     this.materializeProtocolContextYaml(paths)
 
     // generate_protocol_context also emits the protocol instance id (canonical
-    // protocol opening hash) as a sidecar; setup export-signer-policy derives
-    // its --protocol-instance-id default from it.
+    // protocol opening hash) as an operator audit sidecar. The V2 signer reads
+    // its identity only from canonical protocol_context.json.
     const sidecarPath = protocolIdSidecarPath(paths.protocolContextPath)
     if (fs.existsSync(sidecarPath)) {
       this.jsonCtx.info(`protocol_id (protocol instance id): ${fs.readFileSync(sidecarPath, 'utf8').trim()} (${sidecarPath})`)
     } else {
       this.jsonCtx.addWarning(
-        `${sidecarPath} was not produced — this dogeos-core image predates the protocol_id sidecar; setup export-signer-policy will require an explicit --protocol-instance-id`
+        `${sidecarPath} was not produced — this dogeos-core image predates the protocol_id audit sidecar; canonical protocol_context.json remains the signer authority`
       )
     }
   }
