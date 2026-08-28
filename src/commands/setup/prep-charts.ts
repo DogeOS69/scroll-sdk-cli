@@ -1194,6 +1194,14 @@ export default class SetupPrepCharts extends Command {
       default: false,
       description: 'Run without prompts. Auto-applies all detected changes.',
     }),
+    'proof-topology-compiler-binary': Flags.string({
+      description: 'Development-only local dogeos-proof-topology binary; production uses the digest-pinned DeploymentSpec image',
+      exclusive: ['proof-topology-compiler-image'],
+    }),
+    'proof-topology-compiler-image': Flags.string({
+      description: 'Override the digest-pinned proof-topology compiler image',
+      exclusive: ['proof-topology-compiler-binary'],
+    }),
     'skip-auth-check': Flags.boolean({ default: false, description: 'Skip authentication check for individual charts' }),
     'skip-l2-contract-deployment-block': Flags.boolean({
       default: false,
@@ -3474,6 +3482,7 @@ export default class SetupPrepCharts extends Command {
     }
 
     return {
+      ...(resolved.deploymentSpec ? {deploymentSpec: resolved.deploymentSpec} : {}),
       intent: {
         ...resolved.intent,
         ...(release ? {release} : {}),
@@ -3520,19 +3529,40 @@ export default class SetupPrepCharts extends Command {
 
   private reconcileProofKubernetes(valuesDir: string): ReconcileProofKubernetesResult {
     const coordinatorIngressHost = this.getConfigValue('ingress.PROOF_COORDINATOR_HOST')
+    const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints({
+      kubernetes: this.dogeConfig.kubernetes,
+      network: this.dogeConfig.network,
+    })
     const result = reconcileProofKubernetes({
       aggregationL2ChainId: this.getConfigValue('general.CHAIN_ID_L2') as number | string | undefined,
       coordinatorIngressHost: typeof coordinatorIngressHost === 'string'
         ? coordinatorIngressHost
         : undefined,
       deploymentDir: process.cwd(),
+      ethereumL1RpcUrl: this.dogeConfig.ethereumDa?.submitterRpcUrl,
       intent: this.proofIntent,
       network: this.dogeConfig.network,
+      proofTopologyBridge: {
+        dogecoinNetwork: this.dogeConfig.network,
+        dogecoinRpcPassword: String(this.dogeConfig.dogecoinClusterRpc?.password || ''),
+        dogecoinRpcUrl: dogecoinEndpoints.rpcUrl,
+        dogecoinRpcUser: String(this.dogeConfig.dogecoinClusterRpc?.username || ''),
+      },
+      proofTopologyCompilerBinary: this.flags['proof-topology-compiler-binary'],
+      proofTopologyCompilerImage: this.flags['proof-topology-compiler-image'],
       valuesDir,
     })
     this.jsonCtx.logSuccess(
       `Reconciled ${result.mode} proof K8s configuration; contract ${result.contract.generationId}`,
     )
+    if (result.rolloutPlan?.requires_proof_regeneration) {
+      this.jsonCtx.addWarning(
+        `Proof topology transition requires durable proof-layer regeneration `
+        + `(${String(result.rolloutPlan.regeneration)}). Configuration generation does not execute `
+        + 'that one-shot database operation; complete the reviewed transition procedure before activation.',
+      )
+    }
+
     if (result.workerBundle && result.mode === 'mock') {
       this.jsonCtx.addWarning(
         `Mock worker bundle ${result.workerBundle.bundleId} is credential-pending. `

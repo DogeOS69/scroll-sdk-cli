@@ -41,6 +41,8 @@ export interface ProofIntentSource {
 }
 
 export interface ResolvedProofIntent {
+  /** Present when DeploymentSpec uses the dogeos-core proof-topology compiler contract. */
+  deploymentSpec?: DeploymentSpec
   intent: ProofSystemIntent
   source: ProofIntentSource
 }
@@ -146,6 +148,7 @@ function discoverDeploymentSpec(deploymentDir: string, explicitSpecPath?: string
 }
 
 function readSpecProofIntent(specPath: string): {
+  deploymentSpec?: DeploymentSpec
   intent: ProofSystemIntent
 } {
   let parsed: unknown
@@ -161,7 +164,28 @@ function readSpecProofIntent(specPath: string): {
     throw new Error(`DeploymentSpec ${specPath} must be a YAML object`)
   }
 
-  const {proofSystem} = (parsed as Partial<DeploymentSpec>)
+  const {proofSystem, proofTopology} = (parsed as Partial<DeploymentSpec>)
+  if (proofSystem && proofTopology) {
+    throw new Error(`${specPath}: proofSystem and proofTopology are mutually exclusive`)
+  }
+
+  if (proofTopology) {
+    return {
+      deploymentSpec: parsed as DeploymentSpec,
+      intent: normalizeProofIntent({
+        mode: proofTopology.mode,
+        ...(proofTopology.recovery
+          ? {
+              preTsukiDirectSign: {
+                maxEndBatchHeight:
+                  proofTopology.recovery.preTsukiDirectSignMaxEndBatchHeight,
+              },
+            }
+          : {}),
+      }, `${specPath}: proofTopology`),
+    }
+  }
+
   return {
     intent: normalizeProofIntent(proofSystem, `${specPath}: proofSystem`),
   }
@@ -217,6 +241,7 @@ export function resolveProofIntent(options: {
   }
 
   return {
+    ...(spec.deploymentSpec ? {deploymentSpec: spec.deploymentSpec} : {}),
     intent: spec.intent,
     source: { kind: 'deployment-spec', path: specPath },
   }

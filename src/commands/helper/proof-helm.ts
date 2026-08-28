@@ -9,7 +9,11 @@ import {
   validateProofDeploymentContractWithWarnings,
 } from '../../utils/proof-deployment-contract.js'
 
-type ComponentName = 'proof-coordinator' | 'withdrawal-processor'
+type ComponentName =
+  | 'eth-da-submitter'
+  | 'proof-coordinator'
+  | 'prover-worker'
+  | 'withdrawal-processor'
 
 export function buildProofHelmArgs(input: {
   chart: string
@@ -36,11 +40,19 @@ export function buildProofHelmArgs(input: {
 }
 
 export default class ProofHelm extends Command {
-  static override description = 'Install one proof-related Helm component from the setup-generated deployment contract; disabled components are skipped without Makefile mode logic'
+  static override description = 'Apply one proof-related Helm component from the setup-generated deployment contract; absent components with values are projected to zero replicas'
 
   static override flags = {
     chart: Flags.string({ description: 'Helm chart reference', required: true }),
-    component: Flags.string({ options: ['proof-coordinator', 'withdrawal-processor'], required: true }),
+    component: Flags.string({
+      options: [
+        'eth-da-submitter',
+        'proof-coordinator',
+        'prover-worker',
+        'withdrawal-processor',
+      ],
+      required: true,
+    }),
     'deployment-dir': Flags.string({ default: '.', description: 'Deployment root containing .data/proof-deployment.json' }),
     'dry-run': Flags.boolean({ default: false, description: 'Pass --dry-run to Helm' }),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
@@ -58,13 +70,33 @@ export default class ProofHelm extends Command {
       const {contract} = validation
       for (const warning of validation.warnings) json.addWarning(warning)
       const componentName = flags.component as ComponentName
-      const component = componentName === 'proof-coordinator'
-        ? contract.components.proofCoordinator
-        : contract.components.withdrawalProcessor
+      const component = componentName === 'eth-da-submitter'
+        ? contract.components.ethDaSubmitter
+        : componentName === 'proof-coordinator'
+          ? contract.components.proofCoordinator
+          : componentName === 'prover-worker'
+            ? contract.components.proverWorker
+            : contract.components.withdrawalProcessor
+      if (!component) {
+        if (componentName === 'eth-da-submitter' && contract.schemaVersion < 4) {
+          json.info('Skipping compiler submitter projection: legacy proof contract')
+          json.success({component: componentName, mode: contract.mode, skipped: true})
+          return
+        }
+
+        throw new Error(
+          `${componentName} is unavailable in proof deployment contract schema ${contract.schemaVersion}`,
+        )
+      }
+
       if (!component.enabled) {
-        json.info(`Skipping ${componentName}: disabled by proof deployment mode ${contract.mode}`)
-        json.success({ component: componentName, mode: contract.mode, skipped: true })
-        return
+        if (!component.valuesFile) {
+          json.info(`Skipping ${componentName}: absent from proof deployment mode ${contract.mode}`)
+          json.success({component: componentName, mode: contract.mode, skipped: true})
+          return
+        }
+
+        json.info(`Applying absent ${componentName} projection for proof mode ${contract.mode}`)
       }
 
       const args = buildProofHelmArgs({

@@ -2,6 +2,7 @@ import { Command, Flags } from '@oclif/core'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import {verifyCompiledProverWorkerBundle} from '../../utils/compiled-prover-worker-bundle.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {
   PROVER_WORKER_MOCK_BUNDLE_DIR,
@@ -25,6 +26,9 @@ export default class ProofWorkerCheck extends Command {
     'expected-bundle-id': Flags.string({ description: 'Expected bundle ID written by prep-charts; use on the worker host to reject a stale synchronized bundle' }),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
     'release-root': Flags.string({ description: 'Production release root on this worker host; defaults to PROVER_WORKER_RELEASE_ROOT from the generated .env' }),
+    'resources-root': Flags.string({
+      description: 'Compiler-backed Worker resources root on this host; defaults to PROOF_RESOURCES_ROOT from the bundle .env',
+    }),
   }
 
   public async run(): Promise<void> {
@@ -33,7 +37,7 @@ export default class ProofWorkerCheck extends Command {
     try {
       const bundleDir = path.resolve(flags['bundle-dir'])
       const manifestPath = path.join(bundleDir, 'bundle-manifest.json')
-      let manifest: {release?: unknown}
+      let manifest: {kind?: unknown; release?: unknown}
       try {
         manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {release?: unknown}
       } catch (error) {
@@ -43,18 +47,25 @@ export default class ProofWorkerCheck extends Command {
         )
       }
 
+      const compiled = manifest.kind === 'compiled-proof-topology-worker'
       const production = Boolean(manifest.release)
-      const result = production
-        ? verifyProverWorkerProductionBundle({
+      const result = compiled
+          ? verifyCompiledProverWorkerBundle({
+            bundleDir,
+            expectedBundleId: flags['expected-bundle-id'],
+            resourcesRoot: flags['resources-root'] || flags['release-root'],
+          })
+        : production
+          ? verifyProverWorkerProductionBundle({
             dir: bundleDir,
             expectedBundleId: flags['expected-bundle-id'],
             releaseRoot: flags['release-root'],
-          })
-        : verifyProverWorkerMockBundle({
-            dir: bundleDir,
-            expectedBundleId: flags['expected-bundle-id'],
-          })
-      const mode = production ? 'production' : 'mock'
+            })
+          : verifyProverWorkerMockBundle({
+              dir: bundleDir,
+              expectedBundleId: flags['expected-bundle-id'],
+            })
+      const mode = compiled ? 'compiled' : production ? 'production' : 'mock'
       json.logSuccess(`Verified ${mode} prover-worker bundle ${result.bundleId} at ${result.bundleDir}`)
       json.success({...result, mode})
     } catch (error) {

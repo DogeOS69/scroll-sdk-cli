@@ -97,6 +97,40 @@ describe('proof intent source resolution', () => {
     expect(resolved.source.kind).to.equal('deployment-spec')
   })
 
+  it('selects compiler-backed proofTopology without flattening dormant profiles', () => {
+    const specPath = path.join(root, 'deployment-spec.yaml')
+    fs.writeFileSync(specPath, yaml.dump({
+      proofTopology: {
+        compiler: {
+          image: {
+            digest: `sha256:${'a'.repeat(64)}`,
+            repository: 'dogeos69/dogeos-proof-topology',
+          },
+        },
+        mock: {
+          artifactStore: {kind: 'local_fs'},
+          profile: 'cheap_scroll_chunk',
+          workerImage: {
+            digest: `sha256:${'b'.repeat(64)}`,
+            repository: 'dogeos69/prover-worker-mock',
+          },
+        },
+        mode: 'mock',
+      },
+      version: '1.0',
+    }))
+    const resolved = resolveProofIntent({
+      deploymentDir: root,
+      dogeConfig: {proofSystem: {mode: 'mock'}},
+      dogeConfigPath: dogeConfigPath(),
+    })
+
+    expect(resolved.intent).to.deep.equal({mode: 'mock'})
+    expect(resolved.deploymentSpec?.proofTopology?.mock?.profile)
+      .to.equal('cheap_scroll_chunk')
+    expect(resolved.source).to.deep.equal({kind: 'deployment-spec', path: specPath})
+  })
+
   it('defaults to disabled when neither source declares proof intent', () => {
     fs.writeFileSync(path.join(root, 'deployment-spec.yaml'), 'version: "1.0"\n')
 

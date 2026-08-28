@@ -41,7 +41,9 @@ describe('proof deployment contract', () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'proof-deployment-contract-'))
     for (const file of [
       'values/withdrawal-processor-production.yaml',
+      'values/eth-da-submitter-production.yaml',
       'values/proof-coordinator-production.yaml',
+      'values/prover-worker-production.yaml',
       'values/tso-service-production.yaml',
       'withdrawal-processor/WithdrawalProcessor.toml',
       'proof-coordinator/ProofCoordinator.toml',
@@ -118,6 +120,104 @@ describe('proof deployment contract', () => {
 
     expect(second.generatedAt).to.equal(fixedGeneratedAt)
     expect(fs.readFileSync(contractPath, 'utf8')).to.equal(before)
+  })
+
+  it('records compiler evidence and a compiler-owned Worker contract in schema v4', () => {
+    const bundleDir = path.join(root, '.data/generated/proof-topology')
+    fs.mkdirSync(bundleDir, {recursive: true})
+    const bundleManifest = path.join(bundleDir, 'bundle-manifest-v1.json')
+    const resolvedSidecar = path.join(bundleDir, 'resolved-v1.json')
+    const rolloutPlan = path.join(bundleDir, 'rollout-plan-v1.json')
+    const workerContract = path.join(bundleDir, 'prover-worker-v1.json')
+    fs.writeFileSync(bundleManifest, '{}\n')
+    fs.writeFileSync(resolvedSidecar, '{}\n')
+    fs.writeFileSync(rolloutPlan, '{}\n')
+    fs.writeFileSync(workerContract, '{}\n')
+    const digest = 'a'.repeat(64)
+    const deploymentRevision = 'b'.repeat(64)
+    const contract = writeProofDeploymentContract({
+      deploymentDir: root,
+      ethDaSubmitter: {
+        valuesFile: path.join(root, 'values/eth-da-submitter-production.yaml'),
+      },
+      mode: 'mock',
+      proofArtifactBaseUrl: 'http://proof-coordinator:7788/v1/prover/objects',
+      proofCoordinator: {
+        enabled: true,
+        setFiles: [{
+          filePath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+          integrityPolicy: 'required',
+          key: 'proofCoordinator.config.content',
+        }],
+        valuesFile: path.join(root, 'values/proof-coordinator-production.yaml'),
+      },
+      proverWorker: {
+        enabled: true,
+        setFiles: [],
+        valuesFile: path.join(root, 'values/prover-worker-production.yaml'),
+        valuesIntegrity: 'required',
+      },
+      topology: {
+        bundleDir,
+        bundleManifest,
+        deploymentRevision,
+        digest,
+        resolvedSidecar,
+        rolloutPlan,
+      },
+      tsoValuesFile: path.join(root, 'values/tso-service-production.yaml'),
+      withdrawalProcessor: {
+        setFiles: [{
+          filePath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
+          integrityPolicy: 'required',
+          key: 'configMaps.config.data.WithdrawalProcessor\\.toml',
+        }],
+        valuesFile: path.join(root, 'values/withdrawal-processor-production.yaml'),
+      },
+      worker: {contractFile: workerContract, kind: 'compiled-local'},
+    })
+
+    expect(contract.schemaVersion).to.equal(4)
+    expect(contract.topology).to.deep.equal({
+      bundleDir: '.data/generated/proof-topology',
+      bundleManifest: '.data/generated/proof-topology/bundle-manifest-v1.json',
+      bundleManifestSha256: createHash('sha256').update('{}\n').digest('hex'),
+      deploymentRevision,
+      digest,
+      resolvedSidecar: '.data/generated/proof-topology/resolved-v1.json',
+      resolvedSidecarSha256: createHash('sha256').update('{}\n').digest('hex'),
+      rolloutPlan: '.data/generated/proof-topology/rollout-plan-v1.json',
+      rolloutPlanSha256: createHash('sha256').update('{}\n').digest('hex'),
+    })
+    expect(contract.worker).to.deep.equal({
+      bundleDir: undefined,
+      bundleId: undefined,
+      contractFile: '.data/generated/proof-topology/prover-worker-v1.json',
+      contractSha256: createHash('sha256').update('{}\n').digest('hex'),
+      enabled: true,
+      kind: 'compiled-local',
+    })
+    expect(contract.components.proverWorker?.enabled).to.equal(true)
+    expect(contract.components.proverWorker?.valuesIntegrity).to.equal('required')
+    expect(contract.components.ethDaSubmitter?.enabled).to.equal(true)
+    expect(contract.components.ethDaSubmitter?.valuesIntegrity).to.equal('required')
+    expect(contract.components.proofCoordinator.setFiles[0].integrity?.policy).to.equal('required')
+    expect(validateProofDeploymentContract(root).generationId).to.equal(contract.generationId)
+
+    fs.appendFileSync(path.join(root, 'values/prover-worker-production.yaml'), 'args: [tampered]\n')
+    expect(() => validateProofDeploymentContract(root))
+      .to.throw('proverWorker: values checksum mismatch')
+
+    fs.writeFileSync(
+      path.join(root, 'values/prover-worker-production.yaml'),
+      'values/prover-worker-production.yaml\n',
+    )
+    fs.appendFileSync(
+      path.join(root, 'values/eth-da-submitter-production.yaml'),
+      'proof-prefix: tampered\n',
+    )
+    expect(() => validateProofDeploymentContract(root))
+      .to.throw('ethDaSubmitter: values checksum mismatch')
   })
 
   it('builds Helm set-file arguments solely from the generated contract', () => {

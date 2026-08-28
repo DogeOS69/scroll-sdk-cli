@@ -121,6 +121,7 @@ USAGE
 * [`scrollsdk setup prep-charts`](#scrollsdk-setup-prep-charts)
 * [`scrollsdk setup proof-aws-init`](#scrollsdk-setup-proof-aws-init)
 * [`scrollsdk setup proof-config-check`](#scrollsdk-setup-proof-config-check)
+* [`scrollsdk setup proof-topology-compile`](#scrollsdk-setup-proof-topology-compile)
 * [`scrollsdk setup proof-worker`](#scrollsdk-setup-proof-worker)
 * [`scrollsdk setup proof-worker-check`](#scrollsdk-setup-proof-worker-check)
 * [`scrollsdk setup proof-worker-release`](#scrollsdk-setup-proof-worker-release)
@@ -377,17 +378,18 @@ _See code: [src/commands/helper/fund-accounts.ts](https://github.com/dogeos69/sc
 
 ## `scrollsdk helper proof-helm`
 
-Install one proof-related Helm component from the setup-generated deployment contract; disabled components are skipped without Makefile mode logic
+Apply one proof-related Helm component from the setup-generated deployment contract; absent components with values are projected to zero replicas
 
 ```
 USAGE
-  $ scrollsdk helper proof-helm --chart <value> --component proof-coordinator|withdrawal-processor --release <value>
-    --version <value> [--deployment-dir <value>] [--dry-run] [--json] [--namespace <value>]
+  $ scrollsdk helper proof-helm --chart <value> --component
+    eth-da-submitter|proof-coordinator|prover-worker|withdrawal-processor --release <value> --version <value>
+    [--deployment-dir <value>] [--dry-run] [--json] [--namespace <value>]
 
 FLAGS
   --chart=<value>           (required) Helm chart reference
   --component=<option>      (required)
-                            <options: proof-coordinator|withdrawal-processor>
+                            <options: eth-da-submitter|proof-coordinator|prover-worker|withdrawal-processor>
   --deployment-dir=<value>  [default: .] Deployment root containing .data/proof-deployment.json
   --dry-run                 Pass --dry-run to Helm
   --json                    Output structured JSON
@@ -396,8 +398,8 @@ FLAGS
   --version=<value>         (required) Helm chart version
 
 DESCRIPTION
-  Install one proof-related Helm component from the setup-generated deployment contract; disabled components are skipped
-  without Makefile mode logic
+  Apply one proof-related Helm component from the setup-generated deployment contract; absent components with values are
+  projected to zero replicas
 ```
 
 _See code: [src/commands/helper/proof-helm.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/proof-helm.ts)_
@@ -1555,21 +1557,25 @@ Validate Makefile and prepare Helm charts for Scroll SDK
 ```
 USAGE
   $ scrollsdk setup prep-charts [--doge-config <value>] [--github-token <value>] [--github-username <value>] [--json]
-    [-N] [--skip-auth-check] [--skip-l2-contract-deployment-block] [--spec <value>] [--values-dir <value>]
+    [-N] [--proof-topology-compiler-binary <value> | --proof-topology-compiler-image <value>] [--skip-auth-check]
+    [--skip-l2-contract-deployment-block] [--spec <value>] [--values-dir <value>]
 
 FLAGS
-  -N, --non-interactive                    Run without prompts. Auto-applies all detected changes.
-      --doge-config=<value>                Path to Dogecoin config file
-      --github-token=<value>               GitHub Personal Access Token
-      --github-username=<value>            GitHub username
-      --json                               Output in JSON format (stdout for data, stderr for logs)
-      --skip-auth-check                    Skip authentication check for individual charts
-      --skip-l2-contract-deployment-block  Do not overwrite L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK in L2 production values
-                                           files
-      --spec=<value>                       Optional DeploymentSpec proof-intent source; auto-detects
-                                           deployment-spec.yaml/yml when omitted
-      --values-dir=<value>                 [default: ./values] Directory containing values files; must be inside the
-                                           deployment root for transactional generation
+  -N, --non-interactive                         Run without prompts. Auto-applies all detected changes.
+      --doge-config=<value>                     Path to Dogecoin config file
+      --github-token=<value>                    GitHub Personal Access Token
+      --github-username=<value>                 GitHub username
+      --json                                    Output in JSON format (stdout for data, stderr for logs)
+      --proof-topology-compiler-binary=<value>  Development-only local dogeos-proof-topology binary; production uses the
+                                                digest-pinned DeploymentSpec image
+      --proof-topology-compiler-image=<value>   Override the digest-pinned proof-topology compiler image
+      --skip-auth-check                         Skip authentication check for individual charts
+      --skip-l2-contract-deployment-block       Do not overwrite L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK in L2 production
+                                                values files
+      --spec=<value>                            Optional DeploymentSpec proof-intent source; auto-detects
+                                                deployment-spec.yaml/yml when omitted
+      --values-dir=<value>                      [default: ./values] Directory containing values files; must be inside
+                                                the deployment root for transactional generation
 
 DESCRIPTION
   Validate Makefile and prepare Helm charts for Scroll SDK
@@ -1673,6 +1679,56 @@ DESCRIPTION
 
 _See code: [src/commands/setup/proof-config-check.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-config-check.ts)_
 
+## `scrollsdk setup proof-topology-compile`
+
+Compile DeploymentSpec proofTopology through the pinned dogeos-core compiler; validates and installs a deployment-neutral bundle without touching Kubernetes
+
+```
+USAGE
+  $ scrollsdk setup proof-topology-compile [--compiler-binary <value> | --compiler-image <value>] [--deployment-dir <value>]
+    [--durable-proof-rows yes|no|unknown] [--eth-da-submitter-config <value>] [--json] [--last-active-digest <value>]
+    [--output <value>] [--preflight mock|production] [--previous-sidecar <value>] [--proof-coordinator-config <value>]
+    [--spec <value>] [--withdrawal-processor-config <value>]
+
+FLAGS
+  --compiler-binary=<value>              Development-only local compiler binary; production uses
+                                         proofTopology.compiler.image
+  --compiler-image=<value>               Override digest-pinned compiler image (repository@sha256:...); normally read
+                                         from DeploymentSpec
+  --deployment-dir=<value>               [default: .] Deployment root containing service base configs and DeploymentSpec
+  --durable-proof-rows=<option>          [default: unknown] Whether durable proof rows exist; used only for transition
+                                         planning
+                                         <options: yes|no|unknown>
+  --eth-da-submitter-config=<value>      Optional deployment-relative native submitter base config; omission emits a
+                                         mergeable patch
+  --json                                 Output structured JSON
+  --last-active-digest=<value>           Last active proof-generation digest used when reactivating from disabled
+  --output=<value>                       [default: .data/generated/proof-topology] Deployment-relative output directory
+                                         atomically replaced after full validation
+  --preflight=<option>                   Validate a dormant profile without changing the checked-in mode or producing an
+                                         applyable bundle
+                                         <options: mock|production>
+  --previous-sidecar=<value>             Previous resolved-v1.json; defaults to the currently installed bundle sidecar
+  --proof-coordinator-config=<value>     [default: proof-coordinator/ProofCoordinator.toml] Deployment-relative Proof
+                                         Coordinator base config
+  --spec=<value>                         DeploymentSpec path; defaults to deployment-spec.yaml/yml in --deployment-dir
+  --withdrawal-processor-config=<value>  [default: withdrawal-processor/WithdrawalProcessor.toml] Deployment-relative
+                                         Withdrawal Processor base config
+
+DESCRIPTION
+  Compile DeploymentSpec proofTopology through the pinned dogeos-core compiler; validates and installs a
+  deployment-neutral bundle without touching Kubernetes
+
+EXAMPLES
+  $ scrollsdk setup proof-topology-compile --deployment-dir .
+
+  $ scrollsdk setup proof-topology-compile --preflight production
+
+  $ scrollsdk setup proof-topology-compile --compiler-binary /workspace/dogeos-core/target/release/dogeos-proof-topology
+```
+
+_See code: [src/commands/setup/proof-topology-compile.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-topology-compile.ts)_
+
 ## `scrollsdk setup proof-worker`
 
 Hydrate a generated mock or production prover-worker Docker Compose bundle with its bearer token; run explicitly after deterministic K8s config generation
@@ -1711,8 +1767,8 @@ Auto-detect and verify a generated mock or production prover-worker bundle, rele
 
 ```
 USAGE
-  $ scrollsdk setup proof-worker-check [--bundle-dir <value>] [--expected-bundle-id <value>] [--json] [--release-root
-  <value>]
+  $ scrollsdk setup proof-worker-check [--bundle-dir <value>] [--expected-bundle-id <value>] [--json] [--release-root <value>]
+    [--resources-root <value>]
 
 FLAGS
   --bundle-dir=<value>          [default: prover-worker-mock/docker-compose] Generated mock or production Compose bundle
@@ -1722,6 +1778,8 @@ FLAGS
   --json                        Output structured JSON
   --release-root=<value>        Production release root on this worker host; defaults to PROVER_WORKER_RELEASE_ROOT from
                                 the generated .env
+  --resources-root=<value>      Compiler-backed Worker resources root on this host; defaults to PROOF_RESOURCES_ROOT
+                                from the bundle .env
 
 DESCRIPTION
   Auto-detect and verify a generated mock or production prover-worker bundle, release artifacts, capabilities,

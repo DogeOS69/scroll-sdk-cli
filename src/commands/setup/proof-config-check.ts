@@ -1,6 +1,7 @@
 import { Command, Flags } from '@oclif/core'
 import * as path from 'node:path'
 
+import {verifyCompiledProverWorkerBundle} from '../../utils/compiled-prover-worker-bundle.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { assertPreTsukiDirectSignPosture } from '../../utils/pre-tsuki-direct-sign.js'
@@ -10,6 +11,7 @@ import {
   validateProofDeploymentContractWithWarnings,
 } from '../../utils/proof-deployment-contract.js'
 import { resolveProofIntent } from '../../utils/proof-intent.js'
+import {validateProofTopologyBundle} from '../../utils/proof-topology-compiler.js'
 import { verifyProverWorkerMockBundle } from '../../utils/prover-worker-mock-bundle.js'
 import { verifyProverWorkerProductionBundle } from '../../utils/prover-worker-production-bundle.js'
 
@@ -76,18 +78,54 @@ export default class ProofConfigCheck extends Command {
       }
 
       let workerBundleId: string | undefined
-      if (contract.mode === 'mock') {
-        const result = verifyProverWorkerMockBundle({
-          dir: path.resolve(deploymentDir, contract.worker.bundleDir!),
-          expectedBundleId: contract.worker.bundleId,
-        })
-        workerBundleId = result.bundleId
-      } else if (contract.worker.kind === 'production-compose') {
-        const result = verifyProverWorkerProductionBundle({
-          dir: path.resolve(deploymentDir, contract.worker.bundleDir!),
-          expectedBundleId: contract.worker.bundleId,
-        })
-        workerBundleId = result.bundleId
+      let topologyDigest: string | undefined
+      if (contract.topology) {
+        const {topology} = contract
+        const bundle = validateProofTopologyBundle(
+          resolveContractFile(deploymentDir, topology.bundleDir),
+          {mode: contract.mode, preflightOnly: false},
+        )
+        if (
+          bundle.plan.to_digest !== topology.digest
+          || bundle.plan.to_deployment_revision !== topology.deploymentRevision
+        ) {
+          throw new Error('compiler bundle digest/revision does not match deployment contract')
+        }
+
+        topologyDigest = bundle.plan.to_digest
+      }
+
+      switch (contract.worker.kind) {
+        case 'compiled-external': {
+          const result = verifyCompiledProverWorkerBundle({
+            bundleDir: resolveContractFile(deploymentDir, contract.worker.bundleDir!),
+            expectedBundleId: contract.worker.bundleId,
+          })
+          workerBundleId = result.bundleId
+          break
+        }
+
+        case 'compiled-local': {
+          break
+        }
+
+        case 'mock-compose': {
+          const result = verifyProverWorkerMockBundle({
+            dir: path.resolve(deploymentDir, contract.worker.bundleDir!),
+            expectedBundleId: contract.worker.bundleId,
+          })
+          workerBundleId = result.bundleId
+          break
+        }
+
+        case 'production-compose': {
+          const result = verifyProverWorkerProductionBundle({
+            dir: path.resolve(deploymentDir, contract.worker.bundleDir!),
+            expectedBundleId: contract.worker.bundleId,
+          })
+          workerBundleId = result.bundleId
+          break
+        }
       }
 
       json.logSuccess(`Verified ${contract.mode} proof deployment contract ${contract.generationId}`)
@@ -96,6 +134,7 @@ export default class ProofConfigCheck extends Command {
         generationId: contract.generationId,
         mode: contract.mode,
         strict: flags.strict,
+        topologyDigest,
         workerBundleId,
       })
     } catch (error) {

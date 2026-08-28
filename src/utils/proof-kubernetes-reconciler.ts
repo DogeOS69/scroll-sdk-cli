@@ -2,6 +2,9 @@ import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import type {DeploymentSpec} from '../types/deployment-spec.js'
+import type {CompiledProverWorkerBundleResult} from './compiled-prover-worker-bundle.js'
+import type {ProofAwsConfig} from './proof-aws-config.js'
 import type { ProofFamily } from './proof-configurator.js'
 import type { ResolvedProofIntent } from './proof-intent.js'
 
@@ -28,6 +31,11 @@ import {
   writeProofDeploymentContract,
 } from './proof-deployment-contract.js'
 import {
+  type ProofTopologyBridgeContext,
+  type ProofTopologyRolloutPlanV1,
+} from './proof-topology-compiler.js'
+import {reconcileCompiledProofTopology} from './proof-topology-kubernetes-adapter.js'
+import {
   PROVER_WORKER_MOCK_BUNDLE_DIR,
   type ProverWorkerMockBundleResult,
   writeProverWorkerMockBundle,
@@ -53,9 +61,13 @@ export interface ReconcileProofKubernetesOptions {
   coordinatorConfigPath?: string
   coordinatorIngressHost?: string
   deploymentDir?: string
+  ethereumL1RpcUrl?: string
   intent: ResolvedProofIntent
   network?: string
   proofAwsConfigPath?: string
+  proofTopologyBridge?: ProofTopologyBridgeContext
+  proofTopologyCompilerBinary?: string
+  proofTopologyCompilerImage?: string
   scaffoldCoordinatorConfig?: boolean
   scrollBatchBackendProfile?: string
   valuesDir?: string
@@ -70,8 +82,12 @@ export interface ReconcileProofKubernetesResult {
   mode: ResolvedProofIntent['intent']['mode']
   proofAwsConfigPath?: string
   release: ProofReleasePaths
+  rolloutPlan?: ProofTopologyRolloutPlanV1
   scaffoldedCoordinatorConfig: boolean
-  workerBundle?: ProverWorkerMockBundleResult | ProverWorkerProductionBundleResult
+  workerBundle?:
+    | CompiledProverWorkerBundleResult
+    | ProverWorkerMockBundleResult
+    | ProverWorkerProductionBundleResult
 }
 
 export function resolveProofReleasePaths(
@@ -163,6 +179,41 @@ export function projectProofAwsConfig(
   return loaded.configPath
 }
 
+function normalizedKeyPrefix(value: string): string {
+  return value.trim().replaceAll(/^\/+|\/+$/g, '')
+}
+
+/** Fail before compilation when staged topology coordinates disagree with provisioned AWS facts. */
+export function assertProofAwsMatchesTopology(
+  spec: DeploymentSpec,
+  proofAws: ProofAwsConfig,
+): void {
+  if (!spec.proofTopology) return
+  for (const [profileName, profile] of [
+    ['mock', spec.proofTopology.mock],
+    ['production', spec.proofTopology.production],
+  ] as const) {
+    const store = profile?.artifactStore
+    if (!store || store.kind !== 's3_compatible') continue
+    for (const [field, actual, expected] of [
+      ['bucket', store.bucket, proofAws.artifactStore.bucket],
+      ['region', store.region, proofAws.artifactStore.region],
+      [
+        'keyPrefix',
+        store.keyPrefix && normalizedKeyPrefix(store.keyPrefix),
+        normalizedKeyPrefix(proofAws.artifactStore.keyPrefix),
+      ],
+    ] as const) {
+      if (actual !== expected) {
+        throw new Error(
+          `proofTopology.${profileName}.artifactStore.${field} (${String(actual)}) does not match `
+          + `.data/proof-aws.json (${expected}); update the staged profile or provision matching resources`,
+        )
+      }
+    }
+  }
+}
+
 function preflightExternalWorker(
   options: ReconcileProofKubernetesOptions,
   release: ProofReleasePaths,
@@ -228,15 +279,101 @@ export function reconcileProofKubernetes(
     preTsukiDirectSign,
     source: options.intent.source.path,
   })
-  preflightExternalWorker(options, release)
   // Proof infrastructure is deployment state, not active-mode state. Project
   // it even while disabled so an operator can prepare the eventual topology
   // without starting proof services.
+  const loadedProofAws = readOptionalProofAwsConfig(
+    deploymentDir,
+    options.proofAwsConfigPath || DEFAULT_PROOF_AWS_CONFIG,
+  )
+  if (options.intent.deploymentSpec?.proofTopology && loadedProofAws) {
+    assertProofAwsMatchesTopology(options.intent.deploymentSpec, loadedProofAws.config)
+  }
+
   const proofAwsConfigPath = projectProofAwsConfig(
     deploymentDir,
     valuesDir,
     options.proofAwsConfigPath,
   )
+  if (options.intent.deploymentSpec?.proofTopology) {
+    projectTsoPreTsukiDirectSignPin(
+      tsoValuesFile,
+      preTsukiDirectSign?.maxEndBatchHeight,
+    )
+    const compiled = reconcileCompiledProofTopology({
+      bridge: options.proofTopologyBridge,
+      compilerBinary: options.proofTopologyCompilerBinary,
+      compilerImage: options.proofTopologyCompilerImage,
+      coordinatorConfigPath,
+      coordinatorIngressHost: options.coordinatorIngressHost,
+      deploymentDir,
+      deploymentSpec: options.intent.deploymentSpec,
+      ethereumL1RpcUrl: options.ethereumL1RpcUrl,
+      scaffoldCoordinatorConfig: options.scaffoldCoordinatorConfig,
+      valuesDir,
+      withdrawalConfigPath,
+    })
+    const workerContractFile = compiled.bundle.manifest.prover_worker
+      ? path.join(compiled.bundle.bundleDir, compiled.bundle.manifest.prover_worker)
+      : undefined
+    const contract = writeProofDeploymentContract({
+      deploymentDir,
+      ethDaSubmitter: {valuesFile: compiled.ethDaSubmitterValuesPath},
+      intentSource: options.intent.source,
+      mode,
+      preTsukiDirectSign,
+      ...(proofAwsConfigPath ? {proofAwsConfigPath} : {}),
+      proofArtifactBaseUrl: compiled.proofArtifactBaseUrl,
+      proofCoordinator: {
+        enabled: !disabled,
+        setFiles: compiled.helmSetFiles.proofCoordinator,
+        valuesFile: path.join(valuesDir, 'proof-coordinator-production.yaml'),
+      },
+      proverWorker: {
+        enabled: compiled.worker?.desired_state === 'local_deployment',
+        setFiles: compiled.helmSetFiles.proverWorker,
+        valuesFile: path.join(valuesDir, 'prover-worker-production.yaml'),
+        valuesIntegrity: 'required',
+      },
+      topology: {
+        bundleDir: compiled.bundle.bundleDir,
+        bundleManifest: path.join(compiled.bundle.bundleDir, 'bundle-manifest-v1.json'),
+        deploymentRevision: compiled.bundle.plan.to_deployment_revision,
+        digest: compiled.bundle.plan.to_digest,
+        resolvedSidecar: path.join(
+          compiled.bundle.bundleDir,
+          compiled.bundle.manifest.resolved_sidecar,
+        ),
+        rolloutPlan: path.join(compiled.bundle.bundleDir, compiled.bundle.manifest.rollout_plan),
+      },
+      tsoValuesFile,
+      withdrawalProcessor: {
+        setFiles: compiled.helmSetFiles.withdrawalProcessor,
+        valuesFile: path.join(valuesDir, 'withdrawal-processor-production.yaml'),
+      },
+      worker: compiled.worker && workerContractFile
+        ? {
+            bundleDir: compiled.workerBundle?.bundleDir,
+            bundleId: compiled.workerBundle?.bundleId,
+            contractFile: workerContractFile,
+            kind: compiled.worker.desired_state === 'external'
+              ? 'compiled-external'
+              : 'compiled-local',
+          }
+        : undefined,
+    })
+    return {
+      contract,
+      files: compiled.files,
+      mode,
+      release,
+      rolloutPlan: compiled.bundle.plan,
+      scaffoldedCoordinatorConfig: compiled.scaffoldedCoordinatorConfig,
+      workerBundle: compiled.workerBundle,
+    }
+  }
+
+  preflightExternalWorker(options, release)
   if (
     !disabled
     && !proofAwsConfigPath

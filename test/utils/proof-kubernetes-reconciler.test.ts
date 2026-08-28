@@ -5,8 +5,10 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
+import {buildProofAwsConfig} from '../../src/utils/proof-aws-config.js'
 import { validateProofDeploymentContract } from '../../src/utils/proof-deployment-contract.js'
 import {
+  assertProofAwsMatchesTopology,
   reconcileProofKubernetes,
   resolveProofReleasePaths,
 } from '../../src/utils/proof-kubernetes-reconciler.js'
@@ -29,6 +31,49 @@ describe('proof Kubernetes reconciler', () => {
 
   afterEach(() => {
     fs.rmSync(root, { force: true, recursive: true })
+  })
+
+  it('rejects staged S3 profiles that disagree with provisioned AWS facts', () => {
+    const proofAws = buildProofAwsConfig({
+      coordinatorServiceAccount: 'proof-coordinator',
+      identity: {
+        awsRegion: 'us-west-2',
+        eksCluster: 'test',
+        namespace: 'default',
+        networkAlias: 'testnet',
+      },
+      keyPrefix: 'proof-topology',
+      provisioned: {
+        artifactReadTransport: {
+          mode: 'external',
+          status: 'operator-managed-unverified',
+        },
+        bucket: 'provisioned-proof-bucket',
+        bucketCreated: false,
+        coordinatorRoleArn: 'arn:aws:iam::123456789012:role/proof-coordinator',
+        secretAction: 'reused',
+        secretName: 'scroll/proof-coordinator-secrets',
+        withdrawalRoleArn: 'arn:aws:iam::123456789012:role/withdrawal-processor',
+      },
+      withdrawalServiceAccount: 'withdrawal-processor',
+    })
+    const spec = {
+      proofTopology: {
+        compiler: {image: {digest: `sha256:${'a'.repeat(64)}`, repository: 'compiler'}},
+        mode: 'disabled',
+        production: {
+          artifactStore: {
+            bucket: 'different-bucket',
+            keyPrefix: 'proof-topology',
+            kind: 's3_compatible',
+            region: 'us-west-2',
+          },
+        },
+      },
+    } as unknown as import('../../src/types/deployment-spec.js').DeploymentSpec
+
+    expect(() => assertProofAwsMatchesTopology(spec, proofAws))
+      .to.throw('production.artifactStore.bucket')
   })
 
   it('reconciles the default disabled posture without a deployment spec', () => {

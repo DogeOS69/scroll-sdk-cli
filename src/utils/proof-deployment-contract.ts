@@ -41,12 +41,17 @@ export interface ProofDeploymentComponent {
   enabled: boolean
   setFiles: ProofDeploymentFileBinding[]
   valuesFile?: string
+  valuesIntegrity?: 'advisory' | 'required'
   valuesSha256?: string
 }
 
 export interface ProofDeploymentContract {
   components: {
+    /** Present in compiler-backed schema-v4 contracts. */
+    ethDaSubmitter?: ProofDeploymentComponent
     proofCoordinator: ProofDeploymentComponent
+    /** Present in compiler-backed schema-v4 contracts. */
+    proverWorker?: ProofDeploymentComponent
     tsoService: ProofDeploymentComponent
     withdrawalProcessor: ProofDeploymentComponent
   }
@@ -61,40 +66,78 @@ export interface ProofDeploymentContract {
   /** Temporary, testnet-only Issue #843 recovery posture. */
   preTsukiDirectSign?: PreTsukiDirectSignIntent
   proofArtifactBaseUrl?: string
-  schemaVersion: 1 | 2 | 3
+  schemaVersion: 1 | 2 | 3 | 4
   signerPolicy: {
     policyMode: 'dev_permissive' | 'production_enforce' | 'staging_scaffold'
     proofArtifactFetchMode: 'disabled' | 'http'
   }
+  /** dogeos-core compiler evidence, present only in schema-v4 contracts. */
+  topology?: {
+    bundleDir: string
+    bundleManifest: string
+    bundleManifestSha256: string
+    deploymentRevision: string
+    digest: string
+    resolvedSidecar: string
+    resolvedSidecarSha256: string
+    rolloutPlan: string
+    rolloutPlanSha256: string
+  }
   worker: {
     bundleDir?: string
     bundleId?: string
+    contractFile?: string
+    contractSha256?: string
     enabled: boolean
-    kind: 'external-production' | 'mock-compose' | 'none' | 'production-compose'
+    kind:
+      | 'compiled-external'
+      | 'compiled-local'
+      | 'external-production'
+      | 'mock-compose'
+      | 'none'
+      | 'production-compose'
   }
 }
 
 export interface ProofDeploymentContractInput {
   contractPath?: string
   deploymentDir: string
+  ethDaSubmitter?: {
+    valuesFile: string
+  }
   intentSource?: ProofIntentSource
   mode: ProofSystemMode
   preTsukiDirectSign?: PreTsukiDirectSignIntent
   proofArtifactBaseUrl?: string
   proofCoordinator: {
     enabled: boolean
-    setFiles: Array<{ filePath: string; key: string }>
+    setFiles: Array<{ filePath: string; integrityPolicy?: 'required'; key: string }>
     valuesFile?: string
+  }
+  proverWorker?: {
+    enabled: boolean
+    setFiles: Array<{filePath: string; integrityPolicy?: 'required'; key: string}>
+    valuesFile: string
+    valuesIntegrity?: 'advisory' | 'required'
+  }
+  topology?: {
+    bundleDir: string
+    bundleManifest: string
+    deploymentRevision: string
+    digest: string
+    resolvedSidecar: string
+    rolloutPlan: string
   }
   tsoValuesFile: string
   withdrawalProcessor: {
-    setFiles: Array<{ filePath: string; key: string }>
+    setFiles: Array<{ filePath: string; integrityPolicy?: 'required'; key: string }>
     valuesFile: string
   }
   worker?: {
     bundleDir?: string
     bundleId?: string
-    kind?: 'mock-compose' | 'production-compose'
+    contractFile?: string
+    kind?: 'compiled-external' | 'compiled-local' | 'mock-compose' | 'production-compose'
   }
 }
 
@@ -123,6 +166,10 @@ function deploymentRelativePath(deploymentDir: string, filePath: string): string
   const relative = path.relative(root, resolved)
   if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) return relative || '.'
   return resolved
+}
+
+function deploymentInputPath(deploymentDir: string, filePath: string): string {
+  return path.isAbsolute(filePath) ? filePath : path.resolve(deploymentDir, filePath)
 }
 
 function extractManagedBlock(
@@ -175,11 +222,16 @@ function bindingIntegrity(filePath: string, key: string): ProofDeploymentFileInt
   return { policy: 'required', sha256: sha256File(filePath) }
 }
 
-function binding(deploymentDir: string, item: { filePath: string; key: string }): ProofDeploymentFileBinding {
+function binding(
+  deploymentDir: string,
+  item: {filePath: string; integrityPolicy?: 'required'; key: string},
+): ProofDeploymentFileBinding {
   const filePath = path.resolve(item.filePath)
   if (!fs.existsSync(filePath)) throw new Error(`proof deployment binding file not found: ${filePath}`)
   return {
-    integrity: bindingIntegrity(filePath, item.key),
+    integrity: item.integrityPolicy === 'required'
+      ? {policy: 'required', sha256: sha256File(filePath)}
+      : bindingIntegrity(filePath, item.key),
     key: item.key,
     path: deploymentRelativePath(deploymentDir, filePath),
     sha256: sha256File(filePath),
@@ -190,7 +242,8 @@ function component(
   deploymentDir: string,
   enabled: boolean,
   valuesFile: string | undefined,
-  setFiles: Array<{ filePath: string; key: string }>
+  setFiles: Array<{ filePath: string; integrityPolicy?: 'required'; key: string }>,
+  valuesIntegrity: 'advisory' | 'required' = 'advisory',
 ): ProofDeploymentComponent {
   if (!enabled && !valuesFile) return { enabled, setFiles: [] }
   if (!valuesFile) throw new Error('enabled proof deployment component is missing a values file')
@@ -200,6 +253,7 @@ function component(
     enabled,
     setFiles: enabled ? setFiles.map(item => binding(deploymentDir, item)) : [],
     valuesFile: deploymentRelativePath(deploymentDir, resolvedValues),
+    valuesIntegrity,
     valuesSha256: sha256File(resolvedValues),
   }
 }
@@ -213,6 +267,21 @@ export function writeProofDeploymentContract(input: ProofDeploymentContractInput
       : { policyMode: 'production_enforce' as const, proofArtifactFetchMode: 'http' as const }
   const worker = input.mode === 'disabled'
     ? { enabled: false, kind: 'none' as const }
+    : input.worker?.kind === 'compiled-local' || input.worker?.kind === 'compiled-external'
+      ? {
+          bundleDir: input.worker.bundleDir
+            ? deploymentRelativePath(deploymentDir, input.worker.bundleDir)
+            : undefined,
+          bundleId: input.worker.bundleId,
+          contractFile: input.worker.contractFile
+            ? deploymentRelativePath(deploymentDir, input.worker.contractFile)
+            : undefined,
+          contractSha256: input.worker.contractFile
+            ? sha256File(deploymentInputPath(deploymentDir, input.worker.contractFile))
+            : undefined,
+          enabled: true,
+          kind: input.worker.kind,
+        }
     : input.mode === 'mock'
       ? {
           bundleDir: input.worker?.bundleDir
@@ -234,18 +303,42 @@ export function writeProofDeploymentContract(input: ProofDeploymentContractInput
         : { enabled: true, kind: 'external-production' as const }
   const stable = {
     components: {
+      ...(input.topology && input.ethDaSubmitter
+        ? {
+            ethDaSubmitter: component(
+              deploymentDir,
+              true,
+              input.ethDaSubmitter.valuesFile,
+              [],
+              'required',
+            ),
+          }
+        : {}),
       proofCoordinator: component(
         deploymentDir,
         input.proofCoordinator.enabled,
         input.proofCoordinator.valuesFile,
-        input.proofCoordinator.setFiles
+        input.proofCoordinator.setFiles,
+        input.topology ? 'required' : 'advisory',
       ),
+      ...(input.topology && input.proverWorker
+        ? {
+            proverWorker: component(
+              deploymentDir,
+              input.proverWorker.enabled,
+              input.proverWorker.valuesFile,
+              input.proverWorker.setFiles,
+              input.proverWorker.valuesIntegrity,
+            ),
+          }
+        : {}),
       tsoService: component(deploymentDir, true, input.tsoValuesFile, []),
       withdrawalProcessor: component(
         deploymentDir,
         true,
         input.withdrawalProcessor.valuesFile,
-        input.withdrawalProcessor.setFiles
+        input.withdrawalProcessor.setFiles,
+        input.topology ? 'required' : 'advisory',
       ),
     },
     generator: { command: 'scrollsdk setup prep-charts' as const, version: 1 },
@@ -262,7 +355,34 @@ export function writeProofDeploymentContract(input: ProofDeploymentContractInput
       ? {preTsukiDirectSign: input.preTsukiDirectSign}
       : {}),
     ...(input.proofArtifactBaseUrl ? {proofArtifactBaseUrl: input.proofArtifactBaseUrl} : {}),
-    schemaVersion: 3 as const,
+    ...(input.topology
+      ? {
+          topology: {
+            bundleDir: deploymentRelativePath(deploymentDir, input.topology.bundleDir),
+            bundleManifest: deploymentRelativePath(
+              deploymentDir,
+              input.topology.bundleManifest,
+            ),
+            bundleManifestSha256: sha256File(
+              deploymentInputPath(deploymentDir, input.topology.bundleManifest),
+            ),
+            deploymentRevision: input.topology.deploymentRevision,
+            digest: input.topology.digest,
+            resolvedSidecar: deploymentRelativePath(
+              deploymentDir,
+              input.topology.resolvedSidecar,
+            ),
+            resolvedSidecarSha256: sha256File(
+              deploymentInputPath(deploymentDir, input.topology.resolvedSidecar),
+            ),
+            rolloutPlan: deploymentRelativePath(deploymentDir, input.topology.rolloutPlan),
+            rolloutPlanSha256: sha256File(
+              deploymentInputPath(deploymentDir, input.topology.rolloutPlan),
+            ),
+          },
+        }
+      : {}),
+    schemaVersion: input.topology ? 4 as const : 3 as const,
     signerPolicy,
     worker,
   }
@@ -303,7 +423,7 @@ export function readProofDeploymentContract(
   }
 
   const contract = JSON.parse(fs.readFileSync(resolved, 'utf8')) as ProofDeploymentContract
-  if (![1, 2, 3].includes(contract.schemaVersion)) {
+  if (![1, 2, 3, 4].includes(contract.schemaVersion)) {
     throw new Error(`${resolved}: unsupported schemaVersion ${String(contract.schemaVersion)}`)
   }
 
@@ -327,7 +447,7 @@ function validateBinding(
   root: string,
   componentName: string,
   setFile: ProofDeploymentFileBinding,
-  schemaVersion: 1 | 2 | 3,
+  schemaVersion: 1 | 2 | 3 | 4,
   problems: string[],
   warnings: string[],
 ): void {
@@ -524,7 +644,11 @@ export function validateProofDeploymentContractWithWarnings(
     const valuesPath = resolveContractFile(root, item.valuesFile)
     if (!fs.existsSync(valuesPath)) problems.push(`${componentName}: values file missing: ${item.valuesFile}`)
     else if (sha256File(valuesPath) !== item.valuesSha256) {
-      warnings.push(`${componentName}: operational values checksum mismatch: ${item.valuesFile}`)
+      if (item.valuesIntegrity === 'required') {
+        problems.push(`${componentName}: values checksum mismatch: ${item.valuesFile}`)
+      } else {
+        warnings.push(`${componentName}: operational values checksum mismatch: ${item.valuesFile}`)
+      }
     }
 
     for (const setFile of item.setFiles) {
@@ -534,16 +658,20 @@ export function validateProofDeploymentContractWithWarnings(
 
   if (!contract.components.tsoService.enabled) problems.push('tso-service must remain enabled in every proof mode')
   if (!contract.components.withdrawalProcessor.enabled) problems.push('withdrawal-processor must remain enabled in every proof mode')
+  if (contract.schemaVersion === 4 && !contract.components.ethDaSubmitter?.enabled) {
+    problems.push('schema-v4 contract must enable eth-da-submitter')
+  }
 
   // Schema v3 makes the temporary recovery posture an explicit deployment
   // contract and proves both generated runtime projections agree with it.
   // Legacy contracts remain readable without retroactively assigning intent.
-  if (contract.schemaVersion === 3) {
+  if (contract.schemaVersion >= 3) {
     validatePreTsukiDirectSignProjection(root, contract, problems)
   }
 
   if (contract.mode === 'disabled') {
     if (contract.components.proofCoordinator.enabled) problems.push('disabled mode must not enable proof-coordinator')
+    if (contract.components.proverWorker?.enabled) problems.push('disabled mode must not enable local prover-worker')
     if (contract.worker.enabled || contract.worker.kind !== 'none') problems.push('disabled mode must not enable a prover worker')
     if (contract.signerPolicy.policyMode !== 'dev_permissive'
       || contract.signerPolicy.proofArtifactFetchMode !== 'disabled') {
@@ -557,8 +685,13 @@ export function validateProofDeploymentContractWithWarnings(
     problems.push(`${contract.mode} mode requires a proof artifact base URL`)
   }
 
-  if (contract.mode === 'mock' && (contract.worker.kind !== 'mock-compose' || !contract.worker.bundleDir || !contract.worker.bundleId)) {
-    problems.push('mock mode requires a manifest-bearing mock worker bundle')
+  if (contract.mode === 'mock' && !['compiled-local', 'mock-compose'].includes(contract.worker.kind)) {
+    problems.push('mock mode requires a compiler Worker contract or manifest-bearing mock bundle')
+  }
+
+  if (contract.mode === 'mock' && contract.worker.kind === 'mock-compose'
+    && (!contract.worker.bundleDir || !contract.worker.bundleId)) {
+    problems.push('mock compose worker requires a manifest-bearing bundle')
   }
 
   if (contract.mode === 'mock' && (!contract.worker.enabled
@@ -568,7 +701,12 @@ export function validateProofDeploymentContractWithWarnings(
   }
 
   if (contract.mode === 'production' && (!contract.worker.enabled
-    || !['external-production', 'production-compose'].includes(contract.worker.kind)
+    || ![
+      'compiled-external',
+      'compiled-local',
+      'external-production',
+      'production-compose',
+    ].includes(contract.worker.kind)
     || contract.signerPolicy.policyMode !== 'production_enforce'
     || contract.signerPolicy.proofArtifactFetchMode !== 'http')) {
     problems.push('production mode requires the external worker and production signer policy posture')
@@ -577,6 +715,112 @@ export function validateProofDeploymentContractWithWarnings(
   if (contract.mode === 'production' && contract.worker.kind === 'production-compose'
     && (!contract.worker.bundleDir || !contract.worker.bundleId)) {
     problems.push('production compose worker requires a manifest-bearing bundle')
+  }
+
+  if (contract.worker.kind === 'compiled-local' || contract.worker.kind === 'compiled-external') {
+    if (!contract.topology) {
+      problems.push('compiled Worker contract requires proof topology evidence')
+    }
+
+    if (!contract.worker.contractFile || !contract.worker.contractSha256) {
+      problems.push('compiled Worker contract file is missing')
+    } else {
+      const workerContractPath = resolveContractFile(root, contract.worker.contractFile)
+      if (!fs.existsSync(workerContractPath)) {
+        problems.push(`compiled Worker contract file is missing: ${contract.worker.contractFile}`)
+      } else if (sha256File(workerContractPath) !== contract.worker.contractSha256) {
+        problems.push(`compiled Worker contract SHA-256 mismatch: ${contract.worker.contractFile}`)
+      }
+    }
+
+    if (!contract.components.proverWorker) {
+      problems.push('compiled Worker requires a proverWorker deployment component')
+    } else if (
+      contract.worker.kind === 'compiled-local'
+      && !contract.components.proverWorker.enabled
+    ) {
+      problems.push('compiled-local Worker requires an enabled proverWorker component')
+    } else if (
+      contract.worker.kind === 'compiled-external'
+      && contract.components.proverWorker.enabled
+    ) {
+      problems.push('compiled-external Worker must keep the local proverWorker component disabled')
+    }
+
+    if (
+      contract.worker.kind === 'compiled-external'
+      && (!contract.worker.bundleDir || !contract.worker.bundleId)
+    ) {
+      problems.push('compiled-external Worker requires a manifest-bearing launch bundle')
+    }
+  }
+
+  if (contract.schemaVersion === 4) {
+    if (!contract.topology) {
+      problems.push('schema-v4 contract is missing proof topology evidence')
+    }
+
+    if (!contract.components.ethDaSubmitter) {
+      problems.push('schema-v4 contract is missing the ethDaSubmitter component')
+    } else if (contract.components.ethDaSubmitter.valuesIntegrity !== 'required') {
+      problems.push('schema-v4 ethDaSubmitter values must use required integrity')
+    }
+
+    for (const [componentName, componentValue] of [
+      ['proofCoordinator', contract.components.proofCoordinator],
+      ['withdrawalProcessor', contract.components.withdrawalProcessor],
+    ] as const) {
+      if (componentValue.valuesIntegrity !== 'required') {
+        problems.push(`schema-v4 ${componentName} values must use required integrity`)
+      }
+    }
+
+    if (!contract.components.proverWorker) {
+      problems.push('schema-v4 contract is missing the proverWorker component')
+    } else if (contract.components.proverWorker.valuesIntegrity !== 'required') {
+      problems.push('schema-v4 proverWorker values must use required integrity')
+    }
+
+    for (const [componentName, componentValue] of [
+      ['proofCoordinator', contract.components.proofCoordinator],
+      ['withdrawalProcessor', contract.components.withdrawalProcessor],
+    ] as const) {
+      for (const setFile of componentValue.setFiles) {
+        if (setFile.integrity?.policy !== 'required') {
+          problems.push(
+            `schema-v4 ${componentName} compiler binding must use required integrity: ${setFile.path}`,
+          )
+        }
+      }
+    }
+  }
+
+  if (contract.topology) {
+    for (const [label, file, expectedSha256] of [
+      ['bundle manifest', contract.topology.bundleManifest, contract.topology.bundleManifestSha256],
+      ['resolved sidecar', contract.topology.resolvedSidecar, contract.topology.resolvedSidecarSha256],
+      ['rollout plan', contract.topology.rolloutPlan, contract.topology.rolloutPlanSha256],
+    ]) {
+      const resolved = resolveContractFile(root, file)
+      if (!fs.existsSync(resolved)) {
+        problems.push(`proof topology ${label} is missing: ${file}`)
+      } else if (!expectedSha256 || sha256File(resolved) !== expectedSha256) {
+        problems.push(`proof topology ${label} SHA-256 mismatch: ${file}`)
+      }
+    }
+
+    if (!fs.existsSync(resolveContractFile(root, contract.topology.bundleDir))) {
+      problems.push(`proof topology bundle is missing: ${contract.topology.bundleDir}`)
+    }
+
+    for (const [label, digest] of [
+      ['digest', contract.topology.digest],
+      ['deployment revision', contract.topology.deploymentRevision],
+    ]) {
+      if (!/^[\da-f]{64}$/.test(digest)) {
+        problems.push(`proof topology ${label} must be a lowercase SHA-256 digest`)
+      }
+    }
   }
 
   if (options.strict) {

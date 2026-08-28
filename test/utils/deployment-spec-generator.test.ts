@@ -788,6 +788,39 @@ describe('deployment-spec-generator', () => {
 
       expect(validateDeploymentSpec(spec).errors).to.have.length(0);
     });
+
+    it('accepts staged compiler profiles while disabled and rejects dual proof authorities', () => {
+      const compilerTopology = {
+        compiler: {
+          image: {
+            digest: `sha256:${'a'.repeat(64)}`,
+            repository: 'dogeos69/dogeos-proof-topology',
+          },
+        },
+        mock: {
+          artifactStore: {kind: 'local_fs' as const},
+          profile: 'cheap_scroll_chunk' as const,
+          workerImage: {
+            digest: `sha256:${'b'.repeat(64)}`,
+            repository: 'dogeos69/prover-worker-mock',
+          },
+        },
+        mode: 'disabled' as const,
+      };
+      const staged = createMinimalSpec({proofTopology: compilerTopology});
+      expect(validateDeploymentSpec(staged).errors).to.have.length(0);
+      expect(validateDeploymentSpec(staged).warnings.some(
+        warning => warning.path === 'proofTopology.production',
+      )).to.equal(true);
+
+      const dual = createMinimalSpec({
+        proofSystem: {mode: 'disabled'},
+        proofTopology: compilerTopology,
+      });
+      expect(validateDeploymentSpec(dual).errors.some(
+        error => error.message.includes('mutually exclusive'),
+      )).to.equal(true);
+    });
   });
 
   describe('generateConfigToml', () => {
@@ -1008,6 +1041,26 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateDogeConfigToml', () => {
+    it('projects only compiler mode and recovery intent into legacy doge-config compatibility', () => {
+      const spec = createMinimalSpec({
+        proofTopology: {
+          compiler: {
+            image: {
+              digest: `sha256:${'a'.repeat(64)}`,
+              repository: 'dogeos69/dogeos-proof-topology',
+            },
+          },
+          mode: 'disabled',
+          recovery: {preTsukiDirectSignMaxEndBatchHeight: 6863},
+        },
+      });
+      const parsed = toml.parse(generateDogeConfigToml(spec)) as any;
+      expect(parsed.proofSystem).to.deep.equal({
+        mode: 'disabled',
+        preTsukiDirectSign: {maxEndBatchHeight: 6863},
+      });
+    });
+
     it('projects DeploymentSpec proof intent into doge-config for conflict-free reruns', () => {
       const spec = createMinimalSpec({
         proofSystem: {

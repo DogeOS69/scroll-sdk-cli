@@ -139,41 +139,118 @@ signing:
   # Each partner runs `scrollsdk signer preflight` before handoff; descriptor
   # import itself makes no network calls.
 
-# Proof is disabled when this block is omitted. Resources may also be prepared
-# up front while mode remains disabled; the CLI preserves those coordinates
-# without activating proof execution. In an existing deployment that does not
-# use DeploymentSpec, put the same fields under [proofSystem] in
-# .data/doge-config.toml instead.
-# proofSystem:
-#   mode: disabled
-#   artifactReadBaseUrl: "https://proof-artifacts.example.com/proof-topology"
-#   release: ./proof-artifacts
-#   signerPolicy:
-#     sourceSet: ./configs/source-set.toml
+# The compiler-backed proof topology is optional. When used, stage both mock
+# and production profiles during the initial deployment and change only
+# `proofTopology.mode` to select one. `prep-charts` passes the selected source
+# to the digest-pinned dogeos-core compiler; it does not duplicate verifier,
+# materializer, Worker argv, or artifact-prefix rules in TypeScript.
 #
-# Temporary Issue #843 testnet recovery only; never enable this by default.
-# Use the reviewed Tsuki-boundary batch height and keep mode disabled. The CLI
-# projects the same pin to WP and TSO and exports it in the Rust signer bundle.
-# Remove this block after the authoritative completion predicate is stable.
-# proofSystem:
-#   mode: disabled
-#   preTsukiDirectSign:
-#     maxEndBatchHeight: 6863
+# proofTopology:
+#   # This is the only operator-facing selection field.
+#   mode: disabled # disabled | mock | production
 #
-# For production, release defaults to ./proof-artifacts. The release producer
-# runs `scrollsdk setup proof-worker-release --release-root proof-artifacts
-# --image dogeos69/prover-worker-cuda@sha256:<digest>` once after staging the
-# conventional chunk/, batch/, and bridge/ artifacts. Deployment users do not
-# repeat the image, artifact paths, hashes, L2 chain ID, or worker endpoints:
-# prep-charts consumes proof-artifacts/worker-release.json, takes CHAIN_ID_L2 and
-# PROOF_COORDINATOR_HOST from the existing config.toml, and generates the
-# production Docker Compose worker bundle.
+#   compiler:
+#     # Must come from the same dogeos-core release as WP, PC, and Worker.
+#     image:
+#       repository: dogeos69/dogeos-proof-topology
+#       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+#
+#   deployment:
+#     protocolContextSource: .data/protocol_context.json
+#     protocolContextPath: /app/protocol_context.json
+#     generatedMaterialsRoot: /app/data/proof-topology
+#     artifactLocalRoot: /app/data/proof-artifacts
+#     proofWorkBind: 0.0.0.0:9300
+#     proofWorkPublicUrl: http://withdrawal-processor:9300
+#     proverBind: 0.0.0.0:7788
+#     # External production Workers use this public endpoint. Local mock
+#     # Workers use the in-cluster default when this field is omitted.
+#     proverPublicUrl: https://proof-coordinator.example.com
+#     proofWorkTokenFile: /app/secrets/proof-work-token
+#     workerTokenFile: /app/secrets/prover-worker-token
+#     readinessEvidencePath: /run/dogeos/prover-worker-ready-v1.json
+#     resourcesMountPath: /app/data/proof-release
+#     # Existing read-only PVC populated with the release beneath resourcesRoot.
+#     resourcesPersistentVolumeClaim: dogeos-proof-release
+#     # Optional local Worker placement. It is ignored for an external Worker.
+#     workerNodeSelector:
+#       dogeos.io/prover-pool: ordinary
+#     # workerRuntimeClassName: nvidia
+#     # workerTolerations:
+#     #   - key: nvidia.com/gpu
+#     #     operator: Exists
+#     #     effect: NoSchedule
+#
+#   mock:
+#     profile: cheap_scroll_chunk
+#     artifactStore:
+#       kind: s3_compatible
+#       bucket: dogeos-devnet-proof-artifacts
+#       region: us-west-2
+#       keyPrefix: proof-topology
+#       endpointUrl: https://s3.us-west-2.amazonaws.com
+#     workerImage:
+#       # This image must be built with dev-mock-prover.
+#       repository: dogeos69/prover-worker-mock
+#       digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+#
+#   production:
+#     profile: real_scroll_withdrawal_full_topology
+#     # external moves the Worker to the dedicated GPU host while WP and PC
+#     # remain in Kubernetes. local_cpu/local_cuda produce a local Deployment.
+#     workerLaunch: external
+#     artifactStore:
+#       kind: s3_compatible
+#       bucket: dogeos-devnet-proof-artifacts
+#       region: us-west-2
+#       keyPrefix: proof-topology
+#       endpointUrl: https://s3.us-west-2.amazonaws.com
+#       # Public credential-free read origin used by an external Worker.
+#       # s3PublicEndpointUrl is declared below because it is Worker placement.
+#       maxReadBodyBytes: 536870912
+#     workerImage:
+#       # Production image must not contain dev-mock-prover.
+#       repository: dogeos69/prover-worker
+#       digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+#     realScroll:
+#       resourcesRoot: proof-artifacts
+#       chunkAppExe: chunk/app.vmexe
+#       chunkAppConfig: chunk/openvm.toml
+#       batchAppExe: batch/app.vmexe
+#       batchAppConfig: batch/openvm.toml
+#       aggVerifyingKeyPath: keys/agg-verifying-key.bin
+#       chunkMaterializerBinaryPath: bin/scroll-runtime-materializer
+#       batchMaterializerBinaryPath: bin/scroll-runtime-materializer
+#       chunkWitnessSource: block_witness_dir
+#       chunkBlockWitnessDir: witnesses
+#       chunkVerificationKeyHashHex: "0x<64-lowercase-hex>"
+#       chunkProgramCommitmentHashHex: "0x<64-lowercase-hex>"
+#       chunkProgramCommitmentHex: "0x<128-lowercase-hex>"
+#       batchVerificationKeyHashHex: "0x<64-lowercase-hex>"
+#       batchProgramCommitmentHashHex: "0x<64-lowercase-hex>"
+#       batchProgramCommitmentHex: "0x<128-lowercase-hex>"
+#       bridgeVerificationKeyHashHex: "0x<64-lowercase-hex>"
+#       bridgeProgramCommitmentHashHex: "0x<64-lowercase-hex>"
+#       bridgeAppCommitRawHex: "0x<128-lowercase-hex>"
+#       l2RangeAggregationVerificationKeyHashHex: "0x<64-lowercase-hex>"
+#       l2RangeAggregationProgramCommitmentHashHex: "0x<64-lowercase-hex>"
+#       l2RangeAggregationAppCommitRawHex: "0x<128-lowercase-hex>"
+#       workerId: gpu-worker-0
+#       s3PublicEndpointUrl: https://proof-artifacts.example.com
+#
+# Temporary Issue #843 testnet recovery only. Keep mode disabled and remove
+# the recovery block after the authoritative completion predicate is stable.
+#   recovery:
+#     preTsukiDirectSignMaxEndBatchHeight: 6863
+#
+# Existing deployments may retain legacy `proofSystem`; it is mutually
+# exclusive with `proofTopology` and continues to use the legacy renderer.
 #
 # K8s infrastructure details remain separate from proof posture. This block is
-# valid while proofSystem.mode is disabled; generated proof-coordinator values
-# retain the resource coordinates without deriving replica count from mode.
-# prep-charts composes these with the ordinary WP/TSO configuration; it never
-# replaces it.
+# valid while proofTopology.mode is disabled and retains the staged bucket,
+# identity, and Secret coordinates. The compiler adapter separately projects
+# the selected PC replica lifecycle. prep-charts composes this infrastructure
+# with ordinary WP/TSO configuration; it never invents cloud resources.
 # proofCoordinator:
 #   artifactStore:
 #     bucket: dogeos-devnet-proof-artifacts

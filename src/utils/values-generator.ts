@@ -364,7 +364,19 @@ function resolveImage(
  */
 export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles {
   const normalizedSpec = normalizeDeploymentSpec(spec)
-  if (normalizedSpec.proofSystem) {
+  if (normalizedSpec.proofTopology) {
+    assertPreTsukiDirectSignPosture({
+      mode: normalizedSpec.proofTopology.mode,
+      network: normalizedSpec.dogecoin.network,
+      preTsukiDirectSign: normalizedSpec.proofTopology.recovery
+        ? {
+            maxEndBatchHeight:
+              normalizedSpec.proofTopology.recovery.preTsukiDirectSignMaxEndBatchHeight,
+          }
+        : undefined,
+      source: 'DeploymentSpec proofTopology',
+    })
+  } else if (normalizedSpec.proofSystem) {
     assertPreTsukiDirectSignPosture({
       mode: normalizedSpec.proofSystem.mode,
       network: normalizedSpec.dogecoin.network,

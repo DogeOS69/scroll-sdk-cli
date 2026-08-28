@@ -119,6 +119,11 @@ function resolveEnvRefsDeep(value: unknown): unknown {
   return value
 }
 
+/** Resolve every $ENV reference before handing a DeploymentSpec to external compilers. */
+export function resolveDeploymentSpecEnvRefs(spec: DeploymentSpec): DeploymentSpec {
+  return normalizeDeploymentSpec(resolveEnvRefsDeep(spec) as DeploymentSpec)
+}
+
 function isHttpUrl(value: string): boolean {
   try {
     const url = new URL(value)
@@ -989,7 +994,243 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     }
   }
 
-  const { proofCoordinator, proofSystem } = spec
+  const { proofCoordinator, proofSystem, proofTopology } = spec
+  if (proofSystem && proofTopology) {
+    errors.push({
+      code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+      message: 'proofSystem and proofTopology are mutually exclusive; proofTopology is the compiler-backed authority',
+      path: 'proofTopology',
+    })
+  }
+
+  if (proofTopology) {
+    const digestPattern = /^sha256:[\da-f]{64}$/
+    const validateImage = (
+      image: {digest?: string; repository?: string} | undefined,
+      imagePath: string,
+    ): void => {
+      if (!image?.repository?.trim()) {
+        errors.push({
+          code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+          message: `${imagePath}.repository is required`,
+          path: `${imagePath}.repository`,
+        })
+      }
+
+      if (!image?.digest || !digestPattern.test(image.digest)) {
+        errors.push({
+          code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+          message: `${imagePath}.digest must match sha256:[0-9a-f]{64}`,
+          path: `${imagePath}.digest`,
+        })
+      }
+    }
+
+    if (!['disabled', 'mock', 'production'].includes(proofTopology.mode)) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofTopology.mode must be disabled, mock, or production',
+        path: 'proofTopology.mode',
+      })
+    }
+
+    validateImage(proofTopology.compiler?.image, 'proofTopology.compiler.image')
+    for (const [field, value] of Object.entries({
+      artifactLocalRoot: proofTopology.deployment?.artifactLocalRoot,
+      generatedMaterialsRoot: proofTopology.deployment?.generatedMaterialsRoot,
+      proofWorkTokenFile: proofTopology.deployment?.proofWorkTokenFile,
+      protocolContextPath: proofTopology.deployment?.protocolContextPath,
+      readinessEvidencePath: proofTopology.deployment?.readinessEvidencePath,
+      resourcesMountPath: proofTopology.deployment?.resourcesMountPath,
+      workerTokenFile: proofTopology.deployment?.workerTokenFile,
+    })) {
+      if (value !== undefined && !path.posix.isAbsolute(value)) {
+        errors.push({
+          code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+          message: `proofTopology.deployment.${field} must be an absolute POSIX path`,
+          path: `proofTopology.deployment.${field}`,
+        })
+      }
+    }
+
+    const protocolContextSource = proofTopology.deployment?.protocolContextSource
+    if (
+      protocolContextSource
+      && (
+        path.isAbsolute(protocolContextSource)
+        || path.normalize(protocolContextSource).startsWith(`..${path.sep}`)
+        || path.normalize(protocolContextSource) === '..'
+      )
+    ) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofTopology.deployment.protocolContextSource must remain inside the deployment directory',
+        path: 'proofTopology.deployment.protocolContextSource',
+      })
+    }
+
+    if (!proofTopology.mock) {
+      warnings.push({
+        message: 'mock resources are not staged; a later mode-only switch to mock will fail preflight',
+        path: 'proofTopology.mock',
+        suggestion: 'Prepare the dormant mock block and digest-pinned mock Worker image before deployment.',
+      })
+    }
+
+    if (!proofTopology.production) {
+      warnings.push({
+        message: 'production resources are not staged; a later mode-only switch to production will fail preflight',
+        path: 'proofTopology.production',
+        suggestion: 'Prepare the dormant production block, release material, and Worker image before deployment.',
+      })
+    }
+
+    const selected = proofTopology.mode === 'mock'
+      ? proofTopology.mock
+      : proofTopology.mode === 'production'
+        ? proofTopology.production
+        : undefined
+    if (proofTopology.mode !== 'disabled' && !selected) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: `proofTopology.mode ${proofTopology.mode} requires proofTopology.${proofTopology.mode}`,
+        path: `proofTopology.${proofTopology.mode}`,
+      })
+    }
+
+    if (selected) {
+      validateImage(
+        selected.workerImage,
+        `proofTopology.${proofTopology.mode}.workerImage`,
+      )
+    }
+
+    if (selected && !selected.artifactStore) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'selected proof topology requires artifactStore',
+        path: `proofTopology.${proofTopology.mode}.artifactStore`,
+      })
+    }
+
+    if (selected?.artifactStore?.kind === 's3_compatible') {
+      for (const [field, value] of [
+        ['bucket', selected.artifactStore.bucket],
+        ['region', selected.artifactStore.region],
+        ['keyPrefix', selected.artifactStore.keyPrefix],
+      ] as Array<[string, string | undefined]>) {
+        if (!value?.trim()) {
+          errors.push({
+            code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+            message: `selected s3_compatible artifact store requires ${field}`,
+            path: `proofTopology.${proofTopology.mode}.artifactStore.${field}`,
+          })
+        }
+      }
+
+      if (selected.artifactStore.endpointUrl && !isHttpUrl(selected.artifactStore.endpointUrl)) {
+        errors.push({
+          code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+          message: 'selected artifactStore.endpointUrl must be an http(s) URL',
+          path: `proofTopology.${proofTopology.mode}.artifactStore.endpointUrl`,
+        })
+      }
+    }
+
+    if (
+      selected?.artifactStore
+      && !['local_fs', 'managed_minio', 's3_compatible'].includes(selected.artifactStore.kind)
+    ) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'artifactStore.kind must be local_fs, managed_minio, or s3_compatible',
+        path: `proofTopology.${proofTopology.mode}.artifactStore.kind`,
+      })
+    }
+
+    if (
+      proofTopology.mode === 'production'
+      && proofTopology.production
+      && !['external', 'local_cpu', 'local_cuda'].includes(proofTopology.production.workerLaunch)
+    ) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'production.workerLaunch must be external, local_cpu, or local_cuda',
+        path: 'proofTopology.production.workerLaunch',
+      })
+    }
+
+    if (selected?.realScroll && !selected.realScroll.resourcesRoot?.trim()) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'selected realScroll.resourcesRoot is required',
+        path: `proofTopology.${proofTopology.mode}.realScroll.resourcesRoot`,
+      })
+    }
+
+    if (
+      selected?.realScroll?.resourcesRoot
+      && (
+        path.isAbsolute(selected.realScroll.resourcesRoot)
+        || path.normalize(selected.realScroll.resourcesRoot) === '..'
+        || path.normalize(selected.realScroll.resourcesRoot).startsWith(`..${path.sep}`)
+      )
+    ) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'selected realScroll.resourcesRoot must remain inside the deployment directory',
+        path: `proofTopology.${proofTopology.mode}.realScroll.resourcesRoot`,
+      })
+    }
+
+    if (selected?.realScroll && !proofTopology.deployment?.resourcesPersistentVolumeClaim?.trim()) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'selected realScroll topology requires deployment.resourcesPersistentVolumeClaim so WP and PC see the same staged release paths used by the compiler',
+        path: 'proofTopology.deployment.resourcesPersistentVolumeClaim',
+      })
+    }
+
+    const recoveryPin = proofTopology.recovery?.preTsukiDirectSignMaxEndBatchHeight
+    if (
+      proofTopology.recovery
+      && (!Number.isSafeInteger(recoveryPin) || recoveryPin! < 1 || recoveryPin! > 4_294_967_295)
+    ) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofTopology.recovery.preTsukiDirectSignMaxEndBatchHeight must be an integer in 1..=4294967295',
+        path: 'proofTopology.recovery.preTsukiDirectSignMaxEndBatchHeight',
+      })
+    }
+
+    if (proofTopology.recovery && proofTopology.mode !== 'disabled') {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofTopology.recovery requires proofTopology.mode disabled',
+        path: 'proofTopology.recovery',
+      })
+    }
+
+    if (proofTopology.recovery && spec.dogecoin.network === 'mainnet') {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofTopology.recovery is testnet-only and cannot be enabled on Dogecoin mainnet',
+        path: 'proofTopology.recovery',
+      })
+    }
+
+    if (
+      proofTopology.mode !== 'disabled'
+      && (!proofCoordinator || proofCoordinator.enabled === false)
+    ) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofCoordinator infrastructure must be enabled for an active proofTopology',
+        path: 'proofCoordinator',
+      })
+    }
+  }
+
   if (proofSystem) {
     if (!['disabled', 'mock', 'production'].includes(proofSystem.mode)) {
       errors.push({
@@ -1058,7 +1299,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       })
     }
 
-  } else if (proofCoordinator && proofCoordinator.enabled !== false) {
+  } else if (!proofTopology && proofCoordinator && proofCoordinator.enabled !== false) {
     warnings.push({
       message: 'proofCoordinator is configured without proofSystem; add proofSystem.mode so every proof component shares one explicit posture',
       path: 'proofSystem',
@@ -1483,7 +1724,19 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
 
   config.network = spec.dogecoin.network
 
-  if (spec.proofSystem) {
+  if (spec.proofTopology) {
+    config.proofSystem = {
+      mode: spec.proofTopology.mode,
+      ...(spec.proofTopology.recovery
+        ? {
+            preTsukiDirectSign: {
+              maxEndBatchHeight:
+                spec.proofTopology.recovery.preTsukiDirectSignMaxEndBatchHeight,
+            },
+          }
+        : {}),
+    }
+  } else if (spec.proofSystem) {
     config.proofSystem = {
       mode: spec.proofSystem.mode,
       ...(spec.proofSystem.preTsukiDirectSign
