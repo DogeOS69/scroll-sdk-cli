@@ -635,17 +635,14 @@ export function prepareProofRelease(options: PrepareProofReleaseOptions): Prepar
     )
 
     options.log?.('Baking deployment-bound Bridge material on CPU; this can take several minutes')
-    checkedRun(
+    containerId = checkedRun(
       runner,
       'docker',
       [
-        'run',
-        '--rm',
+        'create',
         ...dockerSecurityArgs(),
-        '--user',
-        `${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}`,
         '--mount',
-        mountValue(stagingRoot, finalRoot),
+        mountValue(stagingRoot, finalRoot, true),
         '--mount',
         mountValue(protocolContext, protocolContext, true),
         bakerImage,
@@ -657,10 +654,25 @@ export function prepareProofRelease(options: PrepareProofReleaseOptions): Prepar
         '--software-release-root',
         path.join(finalRoot, 'software'),
         '--output',
-        path.join(finalRoot, 'bridge'),
+        '/baker-output/bridge',
       ],
+      'docker create dogeos proof Bridge baker',
+    ).split(/\s+/)[0]
+    if (!containerId) throw new Error('docker create did not return a Bridge baker container ID')
+    checkedRun(
+      runner,
+      'docker',
+      ['start', '--attach', containerId],
       'dogeos proof Bridge baker',
     )
+    checkedRun(
+      runner,
+      'docker',
+      ['cp', `${containerId}:/baker-output/bridge`, stagingRoot],
+      'docker copy Bridge material',
+    )
+    checkedRun(runner, 'docker', ['rm', '-f', containerId], 'docker remove Bridge baker')
+    containerId = undefined
 
     const lockPath = path.join(finalRoot, PROOF_DEPLOYMENT_RELEASE_LOCK)
     runReleaseTool(
