@@ -95,10 +95,6 @@ export interface ProductionProofTopologySpec {
 
 export interface ProofTopologyDeploymentConfig {
   artifactLocalRoot?: string
-  /** Production Worker path relative to production.realScroll.resourcesRoot. */
-  bridgeStagedAppConfig?: string
-  /** Production Worker path relative to production.realScroll.resourcesRoot. */
-  bridgeStagedAppExe?: string
   coordinatorId?: string
   generatedMaterialsRoot?: string
   proofWorkBind?: string

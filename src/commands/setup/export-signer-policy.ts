@@ -80,7 +80,7 @@ function resolveProductionVerifier(
   const source = path.resolve(resourcesRoot, relativeKey)
   const inside = path.relative(resourcesRoot, source)
   if (inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)) {
-    throw new Error('proofTopology.production.realScroll.aggVerifyingKeyPath escapes resourcesRoot')
+    throw new Error('ProofSoftwareReleaseV1 aggregate verification key path escapes software root')
   }
 
   assertRegularNonSymlinkFile(source, 'production aggregate verifying key')

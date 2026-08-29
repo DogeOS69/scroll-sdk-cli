@@ -79,8 +79,6 @@ function assertDogeTopologyShape(value: unknown, source: string): void {
   if (topology.deployment !== undefined) {
     assertKnownKeys(topology.deployment, [
       'artifactLocalRoot',
-      'bridgeStagedAppConfig',
-      'bridgeStagedAppExe',
       'coordinatorId',
       'generatedMaterialsRoot',
       'proofWorkBind',
