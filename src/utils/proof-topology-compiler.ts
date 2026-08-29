@@ -1,6 +1,7 @@
 /* eslint-disable perfectionist/sort-objects -- Keep emitted Rust contract fields in schema order. */
 import * as toml from '@iarna/toml'
 import {spawnSync} from 'node:child_process'
+import {createHash} from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -18,6 +19,7 @@ import type {ProofSystemMode} from './proof-system-mode.js'
 export const PROOF_TOPOLOGY_BUNDLE_SCHEMA_VERSION = 1
 export const PROOF_TOPOLOGY_CONTEXT_SCHEMA_VERSION = 1
 export const PROOF_TOPOLOGY_SOURCE_SCHEMA_VERSION = 1
+export const PROOF_TOPOLOGY_SIDECAR_SCHEMA_VERSION = 2
 export const DEFAULT_PROOF_TOPOLOGY_OUTPUT = '.data/generated/proof-topology'
 export const DEFAULT_PROOF_TOPOLOGY_RESOURCES_MOUNT = '/app/data/proof-release'
 
@@ -47,6 +49,7 @@ export interface CompileProofTopologyOptions {
   network: string
   outputDir?: string
   preflightMode?: ProofTopologyPreflightMode
+  previousBundleManifest?: string
   previousSidecar?: string
   proofCoordinatorBaseConfig?: string
   proofTopology: ProofTopologySpec
@@ -54,6 +57,7 @@ export interface CompileProofTopologyOptions {
 }
 
 export interface ProofTopologyCompilerBundleManifestV1 {
+  bundle_revision: string
   compiler_package_version: string
   deployment_context_schema_version: number
   eth_da_submitter?: null | string
@@ -70,26 +74,29 @@ export interface ProofTopologyCompilerBundleManifestV1 {
 }
 
 export interface ProofTopologyRolloutPlanV1 {
+  bundle_changed: boolean
   deployment_changed: boolean
   desired_services: {
     proof_coordinator: 'absent' | 'external' | 'running'
     prover_worker: 'absent' | 'external' | 'running'
     withdrawal_processor: 'absent' | 'external' | 'running'
   }
-  from_deployment_revision?: null | string
-  from_digest?: null | string
-  from_mode?: ProofSystemMode | null
+  from_bundle_revision: null | string
+  from_deployment_revision: null | string
+  from_digest: null | string
+  from_mode: ProofSystemMode | null
   regeneration?: null | string
   requires_proof_regeneration: boolean
   schema_version: number
   submitter_config_changed: boolean
+  to_bundle_revision: string
   to_deployment_revision: string
   to_digest: string
   to_mode: ProofSystemMode
 }
 
-interface ResolvedProofTopologySidecarV1 {
-  deployment_revision?: string
+interface ResolvedProofTopologySidecarV2 {
+  deployment_revision: string
   digest: string
   schema_version: number
   selected: {
@@ -105,6 +112,7 @@ export interface ProverWorkerContractV1 {
   environment: Array<{name: string; value: string}>
   expected_topology_digest: string
   image: ProofTopologyImageReference
+  placement: 'external' | 'local_cpu' | 'local_cuda'
   readiness_evidence_path: string
   required_build_class: 'mock_capable' | 'production'
   schema_version: number
@@ -147,6 +155,45 @@ function optional<T>(key: string, value: T | undefined): Record<string, T> {
   return value === undefined ? {} : {[key]: value}
 }
 
+function proofBucket(value: string | undefined): string {
+  const bucket = nonEmpty(value, 'proofTopology artifactStore.bucket')
+  if (
+    bucket.length < 3
+    || bucket.length > 63
+    || !/^[\da-z][\d.a-z-]*[\da-z]$/.test(bucket)
+    || bucket.includes('..')
+  ) {
+    throw new Error(
+      'proofTopology artifactStore.bucket must be a 3-63 character lowercase S3 bucket name',
+    )
+  }
+
+  return bucket
+}
+
+function proofKeyPrefix(value: string | undefined): string {
+  const prefix = nonEmpty(value, 'proofTopology artifactStore.keyPrefix')
+  if (
+    prefix.startsWith('/')
+    || prefix.endsWith('/')
+    || prefix.split('/').some(segment => !segment || segment === '.' || segment === '..')
+    || [...prefix].some(character =>
+      character === '\\'
+      || character === '?'
+      || character === '#'
+      || /\s/u.test(character)
+      || character.codePointAt(0)! < 32
+      || character.codePointAt(0) === 127)
+  ) {
+    throw new Error(
+      'proofTopology artifactStore.keyPrefix must contain safe non-empty path segments '
+      + 'without whitespace, control characters, backslashes, ?, or #',
+    )
+  }
+
+  return prefix
+}
+
 function artifactStoreSource(store: ProofTopologyArtifactStoreConfig): toml.JsonMap {
   if (!['local_fs', 'managed_minio', 's3_compatible'].includes(store.kind)) {
     throw new Error(`unsupported proof topology artifact store kind: ${String(store.kind)}`)
@@ -155,9 +202,9 @@ function artifactStoreSource(store: ProofTopologyArtifactStoreConfig): toml.Json
   if (store.kind !== 's3_compatible') return {kind: store.kind}
   return {
     kind: store.kind,
-    bucket: nonEmpty(store.bucket, 'proofTopology artifactStore.bucket'),
+    bucket: proofBucket(store.bucket),
     region: nonEmpty(store.region, 'proofTopology artifactStore.region'),
-    key_prefix: nonEmpty(store.keyPrefix, 'proofTopology artifactStore.keyPrefix'),
+    key_prefix: proofKeyPrefix(store.keyPrefix),
     ...optional('endpoint_url', store.endpointUrl),
     ...optional('force_path_style', store.forcePathStyle),
     ...optional('max_read_body_bytes', store.maxReadBodyBytes),
@@ -356,11 +403,11 @@ function readJson<T>(filePath: string, label: string): T {
 
 function bundlePath(
   root: string,
-  relative: string,
+  relative: unknown,
   label: string,
   expectedType: 'directory' | 'file' = 'file',
 ): string {
-  if (relative.trim() === '' || path.isAbsolute(relative)) {
+  if (typeof relative !== 'string' || relative.trim() === '' || path.isAbsolute(relative)) {
     throw new Error(`${label} must be a non-empty bundle-relative path`)
   }
 
@@ -390,6 +437,45 @@ function validateDigest(value: unknown, label: string): asserts value is string 
   }
 }
 
+function validateNullableDigest(value: unknown, label: string): asserts value is null | string {
+  if (value !== null) validateDigest(value, label)
+}
+
+/** Recompute the core compiler's canonical revision over every bundle payload file. */
+export function computeProofTopologyBundleRevision(bundleDir: string): string {
+  const root = path.resolve(bundleDir)
+  const files: Array<[string, string]> = []
+  const visit = (directory: string): void => {
+    for (const entry of fs.readdirSync(directory, {withFileTypes: true})) {
+      const filePath = path.join(directory, entry.name)
+      const stat = fs.lstatSync(filePath)
+      if (stat.isSymbolicLink()) {
+        throw new Error(`proof topology compiler bundle must not contain symlinks: ${filePath}`)
+      }
+
+      if (stat.isDirectory()) {
+        visit(filePath)
+        continue
+      }
+
+      if (!stat.isFile()) {
+        throw new Error(`proof topology compiler bundle contains a non-regular entry: ${filePath}`)
+      }
+
+      const relative = path.relative(root, filePath).split(path.sep).join('/')
+      if (['bundle-manifest-v1.json', 'rollout-plan-v1.json'].includes(relative)) continue
+      files.push([
+        relative,
+        createHash('sha256').update(fs.readFileSync(filePath)).digest('hex'),
+      ])
+    }
+  }
+
+  visit(root)
+  files.sort((left, right) => Buffer.compare(Buffer.from(left[0]), Buffer.from(right[0])))
+  return createHash('sha256').update(JSON.stringify(files)).digest('hex')
+}
+
 export function validateProofTopologyBundle(
   bundleDir: string,
   expected: {mode: ProofSystemMode; preflightOnly: boolean},
@@ -409,13 +495,25 @@ export function validateProofTopologyBundle(
     throw new Error(`${manifestPath}: unsupported proof topology compiler schema version`)
   }
 
-  if (!manifest.installable_service_configs) {
-    throw new Error(`${manifestPath}: compiler bundle is not installable`)
+  validateDigest(manifest.bundle_revision, `${manifestPath}: bundle_revision`)
+  if (
+    typeof manifest.preflight_only !== 'boolean'
+    || typeof manifest.installable_service_configs !== 'boolean'
+  ) {
+    throw new TypeError(`${manifestPath}: compiler lifecycle flags must be booleans`)
   }
 
   if (manifest.preflight_only !== expected.preflightOnly) {
     throw new Error(
       `${manifestPath}: preflight_only=${String(manifest.preflight_only)} does not match invocation`,
+    )
+  }
+
+  if (manifest.installable_service_configs !== !expected.preflightOnly) {
+    throw new Error(
+      expected.preflightOnly
+        ? `${manifestPath}: preflight bundle must not be installable`
+        : `${manifestPath}: compiler bundle is not installable`,
     )
   }
 
@@ -435,6 +533,14 @@ export function validateProofTopologyBundle(
     if (file) bundlePath(root, file, label, type || 'file')
   }
 
+  if (
+    manifest.resolved_sidecar !== 'resolved-v2.json'
+    || manifest.rollout_plan !== 'rollout-plan-v1.json'
+    || manifest.withdrawal_processor !== 'withdrawal-processor.toml'
+  ) {
+    throw new Error(`${manifestPath}: compiler bundle uses non-canonical contract filenames`)
+  }
+
   const planPath = bundlePath(root, manifest.rollout_plan, 'rollout_plan')
   const plan = readJson<ProofTopologyRolloutPlanV1>(planPath, planPath)
   if (plan.schema_version !== 1 || plan.to_mode !== expected.mode) {
@@ -442,26 +548,75 @@ export function validateProofTopologyBundle(
   }
 
   validateDigest(plan.to_digest, `${planPath}: to_digest`)
-  if (!/^[\da-f]{64}$/.test(plan.to_deployment_revision)) {
-    throw new Error(`${planPath}: to_deployment_revision must be a lowercase SHA-256 digest`)
+  validateDigest(plan.to_deployment_revision, `${planPath}: to_deployment_revision`)
+  validateDigest(plan.to_bundle_revision, `${planPath}: to_bundle_revision`)
+  validateNullableDigest(plan.from_digest, `${planPath}: from_digest`)
+  validateNullableDigest(
+    plan.from_deployment_revision,
+    `${planPath}: from_deployment_revision`,
+  )
+  validateNullableDigest(plan.from_bundle_revision, `${planPath}: from_bundle_revision`)
+  if (plan.from_mode !== null && !['disabled', 'mock', 'production'].includes(plan.from_mode)) {
+    throw new Error(`${planPath}: from_mode is invalid`)
   }
 
-  if (typeof plan.from_digest === 'string') {
-    validateDigest(plan.from_digest, `${planPath}: from_digest`)
+  const regenerationReasons = [
+    'active_digest_changed',
+    'dormant_digest_changed',
+    'dormant_identity_unknown_with_durable_rows',
+  ]
+  if (
+    plan.regeneration !== null
+    && (
+      typeof plan.regeneration !== 'string'
+      || !regenerationReasons.includes(plan.regeneration)
+    )
+  ) {
+    throw new Error(`${planPath}: regeneration reason is invalid`)
+  }
+
+  if (plan.requires_proof_regeneration !== (plan.regeneration !== null)) {
+    throw new Error(`${planPath}: regeneration reason disagrees with rollout decision`)
   }
 
   if (
-    typeof plan.from_deployment_revision === 'string'
-    && !/^[\da-f]{64}$/.test(plan.from_deployment_revision)
+    typeof plan.bundle_changed !== 'boolean'
+    || typeof plan.deployment_changed !== 'boolean'
+    || typeof plan.requires_proof_regeneration !== 'boolean'
+    || typeof plan.submitter_config_changed !== 'boolean'
   ) {
-    throw new Error(`${planPath}: from_deployment_revision must be a lowercase SHA-256 digest`)
+    throw new TypeError(`${planPath}: rollout decision flags must be booleans`)
+  }
+
+  if (
+    !plan.desired_services
+    || plan.desired_services.withdrawal_processor !== 'running'
+    || !['absent', 'external', 'running'].includes(plan.desired_services.proof_coordinator)
+    || !['absent', 'external', 'running'].includes(plan.desired_services.prover_worker)
+  ) {
+    throw new Error(`${planPath}: desired_services is invalid`)
+  }
+
+  const expectedBundleChanged = plan.from_bundle_revision !== plan.to_bundle_revision
+  if (plan.bundle_changed !== expectedBundleChanged) {
+    throw new Error(`${planPath}: bundle_changed disagrees with bundle revisions`)
+  }
+
+  const actualBundleRevision = computeProofTopologyBundleRevision(root)
+  if (
+    manifest.bundle_revision !== actualBundleRevision
+    || plan.to_bundle_revision !== actualBundleRevision
+  ) {
+    throw new Error(
+      `${manifestPath}: bundle_revision does not match the rendered bundle payload`,
+    )
   }
 
   const sidecarPath = bundlePath(root, manifest.resolved_sidecar, 'resolved_sidecar')
-  const sidecar = readJson<ResolvedProofTopologySidecarV1>(sidecarPath, sidecarPath)
+  const sidecar = readJson<ResolvedProofTopologySidecarV2>(sidecarPath, sidecarPath)
   if (
-    sidecar.schema_version !== 1
-    || sidecar.selected?.schema_version !== 1
+    sidecar.schema_version !== PROOF_TOPOLOGY_SIDECAR_SCHEMA_VERSION
+    || sidecar.selected?.schema_version !== PROOF_TOPOLOGY_SIDECAR_SCHEMA_VERSION
     || sidecar.selected.selected_mode !== expected.mode
     || sidecar.digest !== plan.to_digest
     || sidecar.deployment_revision !== plan.to_deployment_revision
@@ -521,6 +676,19 @@ export function validateProofTopologyBundle(
     throw new Error(`${workerPath}: desired_state is invalid`)
   }
 
+  if (!['external', 'local_cpu', 'local_cuda'].includes(worker.placement)) {
+    throw new Error(`${workerPath}: placement is invalid`)
+  }
+
+  const expectedDesiredState = worker.placement === 'external' ? 'external' : 'local_deployment'
+  if (worker.desired_state !== expectedDesiredState) {
+    throw new Error(`${workerPath}: desired_state disagrees with placement`)
+  }
+
+  if (expected.mode === 'mock' && worker.placement !== 'local_cpu') {
+    throw new Error(`${workerPath}: mock Worker placement must be local_cpu`)
+  }
+
   if (
     !Array.isArray(worker.environment)
     || worker.environment.some(item =>
@@ -532,6 +700,10 @@ export function validateProofTopologyBundle(
     throw new Error(`${workerPath}: environment is invalid`)
   }
 
+  if (new Set(worker.environment.map(item => item.name)).size !== worker.environment.length) {
+    throw new Error(`${workerPath}: environment names must be unique`)
+  }
+
   const digestEnvironment = worker.environment.filter(
     item => item.name === 'DOGEOS_PROOF_TOPOLOGY_DIGEST',
   )
@@ -540,6 +712,27 @@ export function validateProofTopologyBundle(
     || digestEnvironment[0].value !== plan.to_digest
   ) {
     throw new Error(`${workerPath}: environment does not bind the topology digest`)
+  }
+
+  const readinessEnvironment = worker.environment.filter(
+    item => item.name === 'DOGEOS_PROVER_WORKER_READY_FILE',
+  )
+  if (
+    readinessEnvironment.length !== 1
+    || readinessEnvironment[0].value !== worker.readiness_evidence_path
+  ) {
+    throw new Error(`${workerPath}: environment does not bind the readiness evidence path`)
+  }
+
+  const cudaEnvironment = worker.environment.filter(
+    item => item.name === 'DOGEOS_REQUIRE_CUDA_PROVER',
+  )
+  if (
+    worker.placement === 'local_cuda'
+      ? cudaEnvironment.length !== 1 || cudaEnvironment[0].value !== '1'
+      : cudaEnvironment.length > 0
+  ) {
+    throw new Error(`${workerPath}: CUDA environment does not match Worker placement`)
   }
 
   if (
@@ -583,9 +776,37 @@ function mountedInputPath(name: string, container: boolean, inputDir: string): s
   return container ? `/compiler-input/${name}` : path.join(inputDir, name)
 }
 
+function isLoopbackHost(host: string): boolean {
+  const lower = host.toLowerCase()
+  const normalized = lower.startsWith('[') && lower.endsWith(']')
+    ? lower.slice(1, -1)
+    : lower
+  return normalized === 'localhost'
+    || normalized === '::1'
+    || /^127(?:\.\d{1,3}){3}$/.test(normalized)
+}
+
+function socketIsLoopback(value: string): boolean {
+  const host = value.startsWith('[')
+    ? value.slice(1, value.indexOf(']'))
+    : value.slice(0, value.lastIndexOf(':'))
+  return isLoopbackHost(host)
+}
+
+function requiresInsecureHttpAcknowledgement(value: string): boolean {
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)
+  } catch {
+    // Leave URL diagnostics to the authoritative compiler.
+    return false
+  }
+}
+
 function deploymentContext(
   options: CompileProofTopologyOptions,
   input: {
+    bridgePassword?: string
     container: boolean
     inputDir: string
     mode: ProofSystemMode
@@ -598,6 +819,15 @@ function deploymentContext(
   const deployment = topology.deployment || {}
   const selected = selectedProfile(topology, input.mode)
   const resourcesMount = deployment.resourcesMountPath || DEFAULT_PROOF_TOPOLOGY_RESOURCES_MOUNT
+  const proverPublicUrl = deployment.proverPublicUrl
+    || (input.mode === 'disabled' ? 'http://127.0.0.1:7788' : undefined)
+  if (!proverPublicUrl) {
+    throw new Error(
+      'active proof topology requires proofTopology.deployment.proverPublicUrl; '
+      + 'use an HTTPS URL reachable by the selected Worker (or an explicit 127.0.0.1 tunnel)',
+    )
+  }
+
   const proverWorker = {
     ...(input.mode === 'mock' && topology.mock
       ? {mock_image: topology.mock.workerImage}
@@ -632,6 +862,9 @@ function deploymentContext(
     withdrawal_processor: {
       base_config_path: mountedInputPath(input.withdrawalBase, input.container, input.inputDir),
       proof_work_bind: deployment.proofWorkBind || '0.0.0.0:9300',
+      allow_insecure_http: !socketIsLoopback(
+        deployment.proofWorkBind || '0.0.0.0:9300',
+      ),
       proof_work_public_url:
         deployment.proofWorkPublicUrl || 'http://withdrawal-processor:9300',
     },
@@ -642,9 +875,11 @@ function deploymentContext(
         input.inputDir,
       ),
       prover_bind: deployment.proverBind || '0.0.0.0:7788',
-      prover_public_url:
-        deployment.proverPublicUrl || 'http://proof-coordinator:7788',
+      prover_public_url: proverPublicUrl,
       coordinator_id: deployment.coordinatorId || `${options.deploymentName}-proof-coordinator`,
+      allow_insecure_http: requiresInsecureHttpAcknowledgement(
+        deployment.proofWorkPublicUrl || 'http://withdrawal-processor:9300',
+      ),
       ...optional('ethereum_l1_rpc_url', options.ethereumL1RpcUrl),
       ...(options.bridge
         ? {
@@ -652,7 +887,11 @@ function deploymentContext(
               dogecoin_rpc_url: options.bridge.dogecoinRpcUrl,
               dogecoin_network: options.bridge.dogecoinNetwork,
               dogecoin_rpc_user: options.bridge.dogecoinRpcUser,
-              dogecoin_rpc_password: options.bridge.dogecoinRpcPassword,
+              dogecoin_rpc_password_file: mountedInputPath(
+                input.bridgePassword!,
+                input.container,
+                input.inputDir,
+              ),
             },
           }
         : {}),
@@ -706,6 +945,39 @@ function installBundle(stagedBundle: string, target: string): void {
 
     throw error
   }
+}
+
+function validatePreviousBundleEvidence(sidecarPath: string, manifestPath: string): void {
+  const bundleDir = path.dirname(path.resolve(manifestPath))
+  if (path.basename(manifestPath) !== 'bundle-manifest-v1.json') {
+    throw new Error('previousBundleManifest must point to bundle-manifest-v1.json')
+  }
+
+  const manifest = readJson<ProofTopologyCompilerBundleManifestV1>(
+    manifestPath,
+    'previous proof topology bundle manifest',
+  )
+  const manifestSidecar = bundlePath(
+    bundleDir,
+    manifest.resolved_sidecar,
+    'previous proof topology resolved_sidecar',
+  )
+  if (path.resolve(sidecarPath) !== manifestSidecar) {
+    throw new Error(
+      'previousSidecar does not match resolved_sidecar in previousBundleManifest',
+    )
+  }
+
+  const sidecar = readJson<ResolvedProofTopologySidecarV2>(
+    manifestSidecar,
+    'previous proof topology resolved sidecar',
+  )
+  const mode = sidecar.selected?.selected_mode
+  if (!['disabled', 'mock', 'production'].includes(mode)) {
+    throw new Error('previous proof topology sidecar selected_mode is invalid')
+  }
+
+  validateProofTopologyBundle(bundleDir, {mode, preflightOnly: false})
 }
 
 /**
@@ -771,6 +1043,15 @@ export function compileProofTopology(
       )
     }
 
+    let bridgePasswordName: string | undefined
+    if (options.bridge) {
+      bridgePasswordName = 'dogecoin-rpc-password'
+      writePrivate(
+        path.join(inputDir, bridgePasswordName),
+        `${options.bridge.dogecoinRpcPassword}\n`,
+      )
+    }
+
     const resourcesMountPath = container
       ? topology.deployment?.resourcesMountPath || DEFAULT_PROOF_TOPOLOGY_RESOURCES_MOUNT
       : selectedResourcesRoot(topology, mode, deploymentDir)
@@ -807,6 +1088,7 @@ export function compileProofTopology(
     writePrivate(sourcePath, renderProofTopologySource(topology, {resourcesMountPath}))
     const contextPath = path.join(inputDir, 'deployment-context.json')
     writePrivate(contextPath, `${JSON.stringify(deploymentContext(options, {
+      bridgePassword: bridgePasswordName,
       container,
       inputDir,
       mode,
@@ -815,16 +1097,62 @@ export function compileProofTopology(
       withdrawalBase: withdrawalName,
     }), null, 2)}\n`)
 
-    let previousName: string | undefined
-    const previousCandidate = options.previousSidecar
-      ? path.resolve(deploymentDir, options.previousSidecar)
-      : path.join(outputDir, 'resolved-v1.json')
-    if (!preflightOnly && fs.existsSync(previousCandidate)) {
-      previousName = 'previous-resolved-v1.json'
+    if (
+      !preflightOnly
+      && Boolean(options.previousSidecar) !== Boolean(options.previousBundleManifest)
+    ) {
+      throw new Error(
+        'previous proof topology evidence must include both previousSidecar '
+        + 'and previousBundleManifest',
+      )
+    }
+
+    let previousSidecarName: string | undefined
+    let previousManifestName: string | undefined
+    let previousSidecarCandidate: string | undefined
+    let previousManifestCandidate: string | undefined
+    if (!preflightOnly && options.previousSidecar && options.previousBundleManifest) {
+      previousSidecarCandidate = path.resolve(deploymentDir, options.previousSidecar)
+      previousManifestCandidate = path.resolve(deploymentDir, options.previousBundleManifest)
+    } else if (!preflightOnly) {
+      const installedManifest = path.join(outputDir, 'bundle-manifest-v1.json')
+      if (fs.existsSync(installedManifest)) {
+        const manifest = readJson<Partial<ProofTopologyCompilerBundleManifestV1>>(
+          installedManifest,
+          'installed proof topology bundle manifest',
+        )
+        const legacyV1 = manifest.resolved_sidecar === 'resolved-v1.json'
+          && manifest.bundle_revision === undefined
+        if (!legacyV1) {
+          previousManifestCandidate = installedManifest
+          previousSidecarCandidate = bundlePath(
+            outputDir,
+            manifest.resolved_sidecar,
+            'installed proof topology resolved_sidecar',
+          )
+        }
+      } else if (fs.existsSync(path.join(outputDir, 'resolved-v2.json'))) {
+        throw new Error(
+          `installed proof topology evidence is incomplete in ${outputDir}: `
+          + 'bundle-manifest-v1.json is missing',
+        )
+      }
+    }
+
+    if (previousSidecarCandidate && previousManifestCandidate) {
+      validatePreviousBundleEvidence(previousSidecarCandidate, previousManifestCandidate)
+      previousSidecarName = 'previous-resolved-v2.json'
       copyInput(
-        previousCandidate,
-        path.join(inputDir, previousName),
+        previousSidecarCandidate,
+        path.join(inputDir, previousSidecarName),
         'previous proof topology sidecar',
+        true,
+      )
+      previousManifestName = 'previous-bundle-manifest-v1.json'
+      copyInput(
+        previousManifestCandidate,
+        path.join(inputDir, previousManifestName),
+        'previous proof topology bundle manifest',
         true,
       )
     }
@@ -837,8 +1165,13 @@ export function compileProofTopology(
       mountedInputPath('proof-topology.toml', container, inputDir),
       '--deployment-context',
       mountedInputPath('deployment-context.json', container, inputDir),
-      ...(!preflightOnly && previousName
-        ? ['--previous-sidecar', mountedInputPath(previousName, container, inputDir)]
+      ...(!preflightOnly && previousSidecarName && previousManifestName
+        ? [
+            '--previous-sidecar',
+            mountedInputPath(previousSidecarName, container, inputDir),
+            '--previous-bundle-manifest',
+            mountedInputPath(previousManifestName, container, inputDir),
+          ]
         : []),
       ...(!preflightOnly && options.lastActiveDigest
         ? ['--last-active-digest', options.lastActiveDigest]
@@ -924,6 +1257,13 @@ export function compileProofTopology(
         : 'local_deployment'
       if (validated.worker.desired_state !== expectedDesiredState) {
         throw new Error('compiler Worker desired_state does not match selected workerLaunch')
+      }
+
+      const expectedPlacement = mode === 'mock'
+        ? 'local_cpu'
+        : topology.production?.workerLaunch
+      if (validated.worker.placement !== expectedPlacement) {
+        throw new Error('compiler Worker placement does not match selected workerLaunch')
       }
     }
 

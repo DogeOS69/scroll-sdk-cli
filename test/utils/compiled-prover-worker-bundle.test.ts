@@ -26,12 +26,19 @@ function worker(): ProverWorkerContractV1 {
     ],
     capabilities: ['scroll_chunk'],
     desired_state: 'external',
-    environment: [{name: 'DOGEOS_PROOF_TOPOLOGY_DIGEST', value: DIGEST}],
+    environment: [
+      {name: 'DOGEOS_PROOF_TOPOLOGY_DIGEST', value: DIGEST},
+      {
+        name: 'DOGEOS_PROVER_WORKER_READY_FILE',
+        value: '/run/dogeos/prover-worker-ready-v1.json',
+      },
+    ],
     expected_topology_digest: DIGEST,
     image: {
       digest: `sha256:${'b'.repeat(64)}`,
       repository: 'dogeos69/prover-worker',
     },
+    placement: 'external',
     readiness_evidence_path: '/run/dogeos/prover-worker-ready-v1.json',
     required_build_class: 'production',
     schema_version: 1,
@@ -119,5 +126,36 @@ describe('compiled prover-worker bundle', () => {
     fs.writeFileSync(path.join(resourcesRoot, 'chunk/app.vmexe'), 'tampered')
     expect(() => verifyCompiledProverWorkerBundle({bundleDir, resourcesRoot}))
       .to.throw('resource SHA-256 mismatch')
+  })
+
+  it('rejects stale or corrupt bundles before writing the worker credential', () => {
+    const pending = writeCompiledProverWorkerBundle({
+      bundleDir,
+      contractFile,
+      generatedMaterialsDir: path.join(root, '.data/generated/proof-topology/materials'),
+      generatedMaterialsRoot: '/app/data/proof-topology',
+      protocolContextPath: path.join(root, '.data/protocol_context.json'),
+      protocolContextRuntimePath: '/app/protocol_context.json',
+      resourcesMountPath: '/app/data/proof-release',
+      resourcesRoot,
+      worker: worker(),
+    })
+    const tokenPath = path.join(bundleDir, 'prover-worker.token')
+    expect(() => hydrateCompiledProverWorkerBundle({
+      bundleDir,
+      expectedBundleId: 'f'.repeat(64),
+      workerToken: 'must-not-be-written',
+    })).to.throw('bundle is stale')
+    expect(fs.existsSync(tokenPath)).to.equal(false)
+
+    fs.appendFileSync(path.join(bundleDir, 'prover-worker-v1.json'), '\n')
+    expect(() => hydrateCompiledProverWorkerBundle({
+      bundleDir,
+      expectedBundleId: pending.bundleId,
+      workerToken: 'must-not-be-written',
+    })).to.throw('SHA-256 does not match')
+    expect(fs.existsSync(tokenPath)).to.equal(false)
+    expect(JSON.parse(fs.readFileSync(pending.manifestFile, 'utf8')).credentialState)
+      .to.equal('pending')
   })
 })

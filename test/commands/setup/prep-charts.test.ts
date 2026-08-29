@@ -1045,7 +1045,9 @@ describe('setup prep-charts generation transaction', () => {
         '--skip-auth-check',
         '--json',
       ])
-      expect(`${stdout}\n${stderr}`).to.include('Processing tso-service-production.yaml')
+      const output = `${stdout}\n${stderr}`
+      expect(output).to.include('Processing tso-service-production.yaml')
+      expect(output).not.to.include("Cannot read properties of undefined (reading 'proof-topology-compiler-binary')")
       expect(fs.readFileSync(tsoPath, 'utf8')).to.equal(tsoBefore)
       expect(fs.readFileSync(retiredPath, 'utf8')).to.equal('enabled: true\n')
       expect(fs.existsSync(path.join(root, '.data/proof-deployment.json'))).to.equal(false)

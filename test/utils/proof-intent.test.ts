@@ -30,7 +30,7 @@ function topology(mode: 'disabled' | 'mock' = 'disabled'): ProofTopologySpec {
       ? {
           mock: {
             artifactStore: {kind: 'local_fs' as const},
-            profile: 'cheap_scroll_chunk' as const,
+            profile: 'withdrawal_mock_prover' as const,
             workerImage: {
               digest: `sha256:${'b'.repeat(64)}`,
               repository: 'dogeos69/prover-worker-mock',
@@ -111,7 +111,7 @@ describe('proof intent source resolution', () => {
     const resolved = resolveProofIntent({deploymentDir: root})
 
     expect(resolved.intent).to.deep.equal({mode: 'mock'})
-    expect(resolved.proofTopology.mock?.profile).to.equal('cheap_scroll_chunk')
+    expect(resolved.proofTopology.mock?.profile).to.equal('withdrawal_mock_prover')
   })
 
   it('projects the recovery declaration from proofTopology', () => {
@@ -149,14 +149,32 @@ describe('proof intent source resolution', () => {
       .to.throw('proofSystem has been removed')
   })
 
+  it('rejects the harness-only cheap_scroll_chunk profile even while dormant', () => {
+    const invalid = topology()
+    invalid.mock = {
+      artifactStore: {kind: 'local_fs'},
+      profile: 'cheap_scroll_chunk',
+      workerImage: {
+        digest: `sha256:${'b'.repeat(64)}`,
+        repository: 'dogeos69/prover-worker-mock',
+      },
+    } as unknown as NonNullable<ProofTopologySpec['mock']>
+    writeDogeConfig(invalid)
+    expect(() => resolveProofIntent({deploymentDir: root}))
+      .to.throw('mock.profile must be a deployable withdrawal mock profile')
+  })
+
   it('uses doge-config [proof_topology] without a DeploymentSpec', () => {
-    const configPath = writeDogeConfig(topology('mock'))
+    const configured = topology('mock')
+    configured.deployment = {coordinatorId: 'dogeos-dev0829-proof-coordinator'}
+    const configPath = writeDogeConfig(configured)
     const resolved = resolveProofIntent({deploymentDir: root})
 
     expect(resolved.source).to.deep.include({kind: 'doge-config', path: configPath})
-    expect(resolved.proofTopology.mock?.profile).to.equal('cheap_scroll_chunk')
+    expect(resolved.proofTopology.mock?.profile).to.equal('withdrawal_mock_prover')
     expect(resolved.intent.mode).to.equal('mock')
     expect(resolved.network).to.equal('testnet')
+    expect(resolved.deploymentName).to.equal('dogeos-dev0829')
   })
 
   it('fails when doge-config and DeploymentSpec both declare proof topology', () => {

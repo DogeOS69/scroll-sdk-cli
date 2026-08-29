@@ -808,7 +808,7 @@ describe('deployment-spec-generator', () => {
         },
         mock: {
           artifactStore: {kind: 'local_fs' as const},
-          profile: 'cheap_scroll_chunk' as const,
+          profile: 'withdrawal_mock_prover' as const,
           workerImage: {
             digest: `sha256:${'b'.repeat(64)}`,
             repository: 'dogeos69/prover-worker-mock',

@@ -43,7 +43,7 @@ function writeDogeConfig(
       ? {
           mock: {
             artifactStore: {kind: 'local_fs'},
-            profile: 'cheap_scroll_chunk',
+            profile: 'withdrawal_mock_prover',
             workerImage: image('b'),
           },
         }

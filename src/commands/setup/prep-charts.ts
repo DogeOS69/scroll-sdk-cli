@@ -24,12 +24,14 @@ import {
   resolveBlockbookKubernetesEndpoints,
   resolveDogecoinKubernetesEndpoints,
 } from '../../utils/kubernetes-endpoints.js'
+import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
 import {
   type ResolvedProofIntent,
   resolveProofIntent,
 } from '../../utils/proof-intent.js'
 import {
   type ReconcileProofKubernetesResult,
+  assertProofAwsMatchesTopology,
   reconcileProofKubernetes,
 } from '../../utils/proof-kubernetes-reconciler.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
@@ -1269,6 +1271,7 @@ export default class SetupPrepCharts extends Command {
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupPrepCharts)
+    this.flags = flags
 
     // Setup non-interactive/JSON mode
     this.nonInteractive = flags['non-interactive']
@@ -1699,6 +1702,26 @@ export default class SetupPrepCharts extends Command {
     }
 
     if (this.proofIntent) {
+      const proofAws = readOptionalProofAwsConfig(process.cwd())
+      if (proofAws) {
+        try {
+          assertProofAwsMatchesTopology(this.proofIntent.proofTopology, proofAws.config)
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          if (this.proofIntent.source.kind === 'doge-config') {
+            throw new Error(
+              `${detail}; run scrollsdk setup doge-config --proof-topology to bind the `
+              + 'provisioned AWS facts and proof release before rerunning prep-charts',
+            )
+          }
+
+          throw new Error(
+            `${detail}; update DeploymentSpec proofTopology to match the provisioned AWS facts `
+            + 'before rerunning prep-charts',
+          )
+        }
+      }
+
       for (const warning of this.proofIntent.warnings) this.jsonCtx.addWarning(warning)
       this.jsonCtx.info(
         `Proof intent: ${this.proofIntent.intent.mode} (${this.proofIntent.source.kind}: ${this.proofIntent.source.path})`,

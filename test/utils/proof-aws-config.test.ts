@@ -6,6 +6,7 @@ import * as path from 'node:path'
 
 import {
   buildProofAwsConfig,
+  defaultProofSecretName,
   proofAwsValuesProjection,
   readProofAwsConfig,
   writeProofAwsConfig,
@@ -20,14 +21,15 @@ function fixture() {
     coordinatorServiceAccount: 'proof-coordinator',
     identity: {
       awsRegion: 'us-east-1',
+      deploymentAlias: 'dogeos-testnet-01',
       eksCluster: 'dogeos-testnet',
       namespace: 'proof',
-      networkAlias: 'testnet',
     },
     keyPrefix: 'proof-topology',
     provisioned: {
       artifactReadTransport: {
         publicEndpointUrl: 'https://objects.example.com',
+        publicReadMode: 'existing-gateway',
         publicStatus: 'operator-managed-unverified',
         vpcEndpoint: {
           created: false,
@@ -58,6 +60,13 @@ describe('proof AWS config source', () => {
     fs.rmSync(root, {force: true, recursive: true})
   })
 
+  it('derives a deployment-scoped default secret name', () => {
+    expect(defaultProofSecretName('dogeos-testnet-01'))
+      .to.equal('scroll/dogeos-testnet-01/proof-coordinator-secrets')
+    expect(() => defaultProofSecretName('Partner A'))
+      .to.throw('must already be normalized')
+  })
+
   it('writes stable resource facts without operation timestamps or secret values', () => {
     const configPath = path.join(root, '.data/proof-aws.json')
     const first = writeProofAwsConfig(configPath, fixture())
@@ -72,6 +81,25 @@ describe('proof AWS config source', () => {
     expect(before).not.to.include('prover-worker-token')
     expect(readProofAwsConfig(root).config.artifactReadTransport.vpcEndpoint?.routeTableIds)
       .to.deep.equal(['rtb-aaaaaaaa', 'rtb-bbbbbbbb'])
+  })
+
+  it('rejects the superseded v2 network-alias contract instead of silently migrating it', () => {
+    const configPath = path.join(root, '.data/proof-aws.json')
+    const legacy = {
+      ...fixture(),
+      kubernetes: {
+        eksCluster: 'dogeos-testnet',
+        namespace: 'proof',
+        networkAlias: 'testnet',
+      },
+      schema: 'dogeos/proof-aws/v2',
+    }
+    fs.mkdirSync(path.dirname(configPath), {recursive: true})
+    fs.writeFileSync(configPath, `${JSON.stringify(legacy, undefined, 2)}\n`)
+
+    expect(() => readProofAwsConfig(root)).to.throw(
+      '.schema must be dogeos/proof-aws/v3',
+    )
   })
 
   it('projects config into final values idempotently', () => {

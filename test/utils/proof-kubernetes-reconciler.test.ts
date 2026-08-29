@@ -11,14 +11,15 @@ describe('proof Kubernetes reconciler preflight', () => {
       coordinatorServiceAccount: 'proof-coordinator',
       identity: {
         awsRegion: 'us-west-2',
+        deploymentAlias: 'deployment-01',
         eksCluster: 'test',
         namespace: 'default',
-        networkAlias: 'testnet',
       },
       keyPrefix: 'proof-topology',
       provisioned: {
         artifactReadTransport: {
           publicEndpointUrl: 'https://objects.example.com',
+          publicReadMode: 'existing-gateway',
           publicStatus: 'operator-managed-unverified',
         },
         bucket: 'provisioned-proof-bucket',
@@ -54,14 +55,15 @@ describe('proof Kubernetes reconciler preflight', () => {
       coordinatorServiceAccount: 'proof-coordinator',
       identity: {
         awsRegion: 'us-west-2',
+        deploymentAlias: 'deployment-01',
         eksCluster: 'test',
         namespace: 'default',
-        networkAlias: 'testnet',
       },
       keyPrefix: 'proof-topology',
       provisioned: {
         artifactReadTransport: {
           publicEndpointUrl: 'https://objects.example.com',
+          publicReadMode: 'existing-gateway',
           publicStatus: 'operator-managed-unverified',
         },
         bucket: 'proof-bucket',
@@ -96,14 +98,15 @@ describe('proof Kubernetes reconciler preflight', () => {
       coordinatorServiceAccount: 'proof-coordinator',
       identity: {
         awsRegion: 'us-west-2',
+        deploymentAlias: 'deployment-01',
         eksCluster: 'test',
         namespace: 'default',
-        networkAlias: 'testnet',
       },
       keyPrefix: 'proof-topology',
       provisioned: {
         artifactReadTransport: {
           publicEndpointUrl: 'https://objects.example.com',
+          publicReadMode: 'existing-gateway',
           publicStatus: 'operator-managed-unverified',
         },
         bucket: 'proof-bucket',

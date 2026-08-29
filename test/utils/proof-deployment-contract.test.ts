@@ -25,7 +25,7 @@ describe('proof deployment contract schema v5', () => {
     const contents: Record<string, string> = {
       '.data/generated/proof-topology/bundle-manifest-v1.json': '{}\n',
       '.data/generated/proof-topology/prover-worker-v1.json': '{}\n',
-      '.data/generated/proof-topology/resolved-v1.json': '{}\n',
+      '.data/generated/proof-topology/resolved-v2.json': '{}\n',
       '.data/generated/proof-topology/rollout-plan-v1.json': '{}\n',
       'proof-coordinator/ProofCoordinator.toml': '[verifier]\nverifier_import_mode = "dev_dummy"\n',
       'values/eth-da-submitter-production.yaml': 'controller: {}\n',
@@ -82,7 +82,7 @@ describe('proof deployment contract schema v5', () => {
         bundleManifest: path.join(bundleDir, 'bundle-manifest-v1.json'),
         deploymentRevision: 'b'.repeat(64),
         digest: 'a'.repeat(64),
-        resolvedSidecar: path.join(bundleDir, 'resolved-v1.json'),
+        resolvedSidecar: path.join(bundleDir, 'resolved-v2.json'),
         rolloutPlan: path.join(bundleDir, 'rollout-plan-v1.json'),
       },
       tsoValuesFile: path.join(root, 'values/tso-service-production.yaml'),

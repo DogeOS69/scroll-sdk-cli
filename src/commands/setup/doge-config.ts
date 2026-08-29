@@ -19,6 +19,7 @@ import {
   normalizeDogeNetwork,
 } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
+import {sanitizeName} from '../../utils/kms-signer-provisioner.js'
 import {
   resolveBlockbookKubernetesEndpoints,
   resolveDogecoinKubernetesEndpoints,
@@ -27,6 +28,7 @@ import {
   createNonInteractiveContext,
   resolveConfirm,
   resolveEnvValue,
+  resolveFlagOrPrompt,
   resolveOrPrompt,
   resolveOrSelect,
   validateAndExit,
@@ -53,7 +55,7 @@ interface InitializeProofTopologyOptions {
   config: DogeConfig
   coordinatorUrl?: string
   endpointUrl?: string
-  forcePathStyle: boolean
+  forcePathStyle?: boolean
   keyPrefix?: string
   log: (message: string) => void
   mode?: 'disabled' | 'mock' | 'production'
@@ -72,6 +74,25 @@ interface InitializeProofTopologyOptions {
 interface InitializedProofTopology {
   release: NonNullable<DogeConfig['proof_release']>
   topology: ProofTopologySpec
+}
+
+export const PROOF_RELEASE_MANIFEST_NOT_DISCOVERED_MESSAGE =
+  'No proof release manifest was auto-discovered. This file must come from the '
+  + 'dogeos-core proof release bundle; it pins worker images, verifier keys, '
+  + 'program material, and material hashes.'
+
+export const PROOF_RELEASE_MANIFEST_REQUIRED_MESSAGE =
+  'No proof release manifest was provided. Obtain dogeos/proof-release/v1 from the '
+  + 'dogeos-core proof release bundle, place it at a conventional path such as '
+  + '.data/proof-release-v1.json, or pass --proof-release.'
+
+export function proofReleaseManifestPrompt(
+  discoveredManifestPath?: string,
+): {default?: string; message: string} {
+  return {
+    ...(discoveredManifestPath ? {default: discoveredManifestPath} : {}),
+    message: 'Enter the dogeos/proof-release/v1 manifest path:',
+  }
 }
 
 const ETHEREUM_DA_DEFAULTS: Record<EthereumDaChain, {
@@ -160,14 +181,14 @@ export class DogeConfigCommand extends Command {
     }),
     'proof-coordinator-url': Flags.string({
       dependsOn: ['proof-topology'],
-      description: 'Proof Coordinator URL reachable by the selected Worker placement',
+      description: 'HTTPS Proof Coordinator URL reachable by mock and production Workers',
     }),
     'proof-endpoint-url': Flags.string({
       dependsOn: ['proof-topology'],
       description: 'Worker-visible S3-compatible endpoint root',
     }),
     'proof-force-path-style': Flags.boolean({
-      default: false,
+      allowNo: true,
       dependsOn: ['proof-topology'],
       description: 'Use path-style S3 object URLs for an existing compatible store',
     }),
@@ -824,40 +845,56 @@ export class DogeConfigCommand extends Command {
   ): Promise<InitializedProofTopology> {
     const deploymentDir = process.cwd()
     const existing = options.config.proof_topology
-    let manifestPath = discoverProofRelease(
+    const discoveredManifestPath = discoverProofRelease(
       deploymentDir,
-      options.releasePath || options.config.proof_release?.manifestPath,
+      options.config.proof_release?.manifestPath,
     )
-    if (!manifestPath && !options.nonInteractive) {
-      manifestPath = path.resolve(deploymentDir, await input({
-        default: '.data/proof-release-v1.json',
-        message: 'Enter the dogeos/proof-release/v1 manifest path:',
-      }))
+    if (!discoveredManifestPath && !options.releasePath) {
+      options.log(chalk.yellow(PROOF_RELEASE_MANIFEST_NOT_DISCOVERED_MESSAGE))
     }
 
+    const manifestInput = await resolveFlagOrPrompt(
+      options.releasePath,
+      options.nonInteractive,
+      discoveredManifestPath,
+      () => input(proofReleaseManifestPrompt(discoveredManifestPath)),
+    )
+    const manifestPath = manifestInput
+      ? path.resolve(deploymentDir, manifestInput)
+      : undefined
+
     if (!manifestPath) {
-      throw new Error(
-        'No proof release manifest was found. Place the release-producer '
-        + 'proof-release-v1.json at .data/proof-release-v1.json or pass --proof-release.',
-      )
+      throw new Error(PROOF_RELEASE_MANIFEST_REQUIRED_MESSAGE)
     }
 
     const release = readProofRelease(manifestPath)
     const manifestSha256 = proofReleaseManifestSha256(manifestPath)
     options.log(chalk.blue(`Using proof release ${release.releaseId} from ${manifestPath}`))
     const proofAws = readOptionalProofAwsConfig(deploymentDir)
+    const normalizedDeploymentAlias = sanitizeName(
+      proofAws?.config.kubernetes.deploymentAlias || path.basename(deploymentDir),
+    )
+    if (!normalizedDeploymentAlias) {
+      throw new Error('cannot derive a non-empty proof deployment identity')
+    }
+
+    const deploymentName = normalizedDeploymentAlias.startsWith('dogeos-')
+      ? normalizedDeploymentAlias
+      : `dogeos-${normalizedDeploymentAlias}`
     const availableArtifactSources = [
       ...(proofAws ? [{name: 'Prepared resources from .data/proof-aws.json', value: 'prepared-aws'}] : []),
       {name: 'Existing S3-compatible store', value: 'existing-s3'},
     ]
-    const artifactSource = options.artifactSource || (
-      options.nonInteractive
-        ? proofAws ? 'prepared-aws' : 'existing-s3'
-        : await select({
-            choices: availableArtifactSources,
-            default: proofAws ? 'prepared-aws' : 'existing-s3',
-            message: 'Select the proof artifact resource source:',
-          })
+    const defaultArtifactSource = proofAws ? 'prepared-aws' : 'existing-s3'
+    const artifactSource = await resolveFlagOrPrompt(
+      options.artifactSource,
+      options.nonInteractive,
+      defaultArtifactSource,
+      () => select({
+        choices: availableArtifactSources,
+        default: defaultArtifactSource,
+        message: 'Select the proof artifact resource source:',
+      }),
     )
     if (artifactSource === 'prepared-aws' && !proofAws) {
       throw new Error(
@@ -887,42 +924,56 @@ export class DogeConfigCommand extends Command {
       )
     } else {
       const requiredInput = async (
-        configured: string | undefined,
+        explicit: string | undefined,
+        defaultValue: string | undefined,
         message: string,
         label: string,
       ): Promise<string> => {
-        if (options.nonInteractive) {
-          if (!configured?.trim()) throw new Error(`${label} is required in non-interactive mode`)
-          return configured.trim()
+        const resolved = await resolveFlagOrPrompt(
+          explicit,
+          options.nonInteractive,
+          defaultValue,
+          () => input({
+            default: defaultValue,
+            message,
+            validate: value => value.trim() ? true : `${label} must not be empty`,
+          }),
+        )
+        if (!resolved?.trim()) {
+          throw new Error(
+            options.nonInteractive
+              ? `${label} is required in non-interactive mode`
+              : `${label} must not be empty`,
+          )
         }
 
-        return input({
-          default: configured,
-          message,
-          validate: value => value.trim() ? true : `${label} must not be empty`,
-        })
+        return resolved.trim()
       }
 
       const bucket = await requiredInput(
-        options.bucket || currentStore?.bucket,
+        options.bucket,
+        currentStore?.bucket,
         'Enter the proof artifact bucket:',
         '--proof-bucket',
       )
       const region = await requiredInput(
-        options.region || currentStore?.region,
+        options.region,
+        currentStore?.region,
         'Enter the proof artifact region:',
         '--proof-region',
       )
       artifactStore = {
         bucket,
         endpointUrl: await requiredInput(
-          options.endpointUrl || currentStore?.endpointUrl || awsS3Endpoint(region),
+          options.endpointUrl,
+          currentStore?.endpointUrl || awsS3Endpoint(region),
           'Enter the Worker-visible S3-compatible endpoint root:',
           '--proof-endpoint-url',
         ),
-        forcePathStyle: options.forcePathStyle || currentStore?.forcePathStyle || false,
+        forcePathStyle: options.forcePathStyle ?? currentStore?.forcePathStyle ?? false,
         keyPrefix: await requiredInput(
-          options.keyPrefix || currentStore?.keyPrefix || 'proof-topology',
+          options.keyPrefix,
+          currentStore?.keyPrefix || 'proof-topology',
           'Enter the base proof artifact key prefix:',
           '--proof-key-prefix',
         ),
@@ -932,31 +983,37 @@ export class DogeConfigCommand extends Command {
       }
     }
 
-    const mode = options.mode || existing?.mode || 'disabled'
-    const selectedMode = options.nonInteractive
-      ? mode
-      : await select({
-          choices: [
-            {name: 'disabled (prepare resources without running proof services)', value: 'disabled'},
-            {name: 'mock', value: 'mock'},
-            {name: 'production', value: 'production'},
-          ],
-          default: mode,
-          message: 'Select the initial proof mode:',
-        }) as 'disabled' | 'mock' | 'production'
+    const defaultMode = existing?.mode || 'disabled'
+    const selectedMode = await resolveFlagOrPrompt(
+      options.mode,
+      options.nonInteractive,
+      defaultMode,
+      () => select({
+        choices: [
+          {name: 'disabled (prepare resources without running proof services)', value: 'disabled'},
+          {name: 'mock', value: 'mock'},
+          {name: 'production', value: 'production'},
+        ],
+        default: defaultMode,
+        message: 'Select the initial proof mode:',
+      }),
+    ) as 'disabled' | 'mock' | 'production'
     const currentLaunch = existing?.production?.workerLaunch
-    const launch = options.productionWorkerLaunch || currentLaunch || 'external'
-    const productionWorkerLaunch = options.nonInteractive
-      ? launch
-      : await select({
-          choices: [
-            {name: 'External GPU server', value: 'external'},
-            {name: 'Kubernetes CUDA node', value: 'local_cuda'},
-            {name: 'Kubernetes CPU node', value: 'local_cpu'},
-          ],
-          default: launch,
-          message: 'Select the production Worker placement:',
-        }) as 'external' | 'local_cpu' | 'local_cuda'
+    const defaultLaunch = currentLaunch || 'external'
+    const productionWorkerLaunch = await resolveFlagOrPrompt(
+      options.productionWorkerLaunch,
+      options.nonInteractive,
+      defaultLaunch,
+      () => select({
+        choices: [
+          {name: 'External GPU server', value: 'external'},
+          {name: 'Kubernetes CUDA node', value: 'local_cuda'},
+          {name: 'Kubernetes CPU node', value: 'local_cpu'},
+        ],
+        default: defaultLaunch,
+        message: 'Select the production Worker placement:',
+      }),
+    ) as 'external' | 'local_cpu' | 'local_cuda'
 
     const currentReal = existing?.production?.realScroll
     const resourcesRoot = options.resourcesRoot
@@ -972,70 +1029,75 @@ export class DogeConfigCommand extends Command {
       ),
     )
 
-    const defaultWitnessSource = options.witnessSource
-      || currentReal?.chunkWitnessSource
+    const defaultWitnessSource = currentReal?.chunkWitnessSource
       || (fs.existsSync(path.resolve(deploymentDir, resourcesRoot, 'witnesses'))
         ? 'block_witness_dir'
         : options.config.rpc?.l2Url
           ? 'rpc'
           : 'block_witness_dir')
-    const witnessSource = options.nonInteractive
-      ? defaultWitnessSource
-      : await select({
-          choices: [
-            {name: 'Prepared block witness directory', value: 'block_witness_dir'},
-            {name: 'Scroll witness RPC', value: 'rpc'},
-          ],
-          default: defaultWitnessSource,
-          message: 'Select the production chunk witness source:',
-        }) as 'block_witness_dir' | 'rpc'
+    const witnessSource = await resolveFlagOrPrompt(
+      options.witnessSource,
+      options.nonInteractive,
+      defaultWitnessSource,
+      () => select({
+        choices: [
+          {name: 'Prepared block witness directory', value: 'block_witness_dir'},
+          {name: 'Scroll witness RPC', value: 'rpc'},
+        ],
+        default: defaultWitnessSource,
+        message: 'Select the production chunk witness source:',
+      }),
+    ) as 'block_witness_dir' | 'rpc'
     let witnessDir: string | undefined
     let witnessRpcUrl: string | undefined
     if (witnessSource === 'block_witness_dir') {
-      const current = options.witnessDir || currentReal?.chunkBlockWitnessDir || 'witnesses'
-      witnessDir = options.nonInteractive
-        ? current
-        : await input({
-            default: current,
-            message: 'Enter the block witness directory relative to the release resources root:',
-          })
+      const defaultWitnessDir = currentReal?.chunkBlockWitnessDir || 'witnesses'
+      witnessDir = await resolveFlagOrPrompt(
+        options.witnessDir,
+        options.nonInteractive,
+        defaultWitnessDir,
+        () => input({
+          default: defaultWitnessDir,
+          message: 'Enter the block witness directory relative to the release resources root:',
+        }),
+      )
     } else {
-      const current = options.witnessRpcUrl
-        || currentReal?.chunkWitnessRpcUrl
+      const defaultWitnessRpcUrl = currentReal?.chunkWitnessRpcUrl
         || options.config.rpc?.l2Url
-      if (options.nonInteractive && !current) {
+      witnessRpcUrl = await resolveFlagOrPrompt(
+        options.witnessRpcUrl,
+        options.nonInteractive,
+        defaultWitnessRpcUrl,
+        () => input({
+          default: defaultWitnessRpcUrl,
+          message: 'Enter the Scroll witness RPC URL:',
+          validate: value => value.trim() ? true : 'Witness RPC URL must not be empty',
+        }),
+      )
+      if (!witnessRpcUrl?.trim()) {
         throw new Error('--proof-witness-rpc-url is required for RPC witness input')
       }
-
-      witnessRpcUrl = options.nonInteractive
-        ? current
-        : await input({
-            default: current,
-            message: 'Enter the Scroll witness RPC URL:',
-            validate: value => value.trim() ? true : 'Witness RPC URL must not be empty',
-          })
     }
 
-    const currentCoordinatorUrl = options.coordinatorUrl
-      || existing?.deployment?.proverPublicUrl
+    const defaultCoordinatorUrl = existing?.deployment?.proverPublicUrl
       || this.proofCoordinatorUrlFromMainConfig()
-      || (productionWorkerLaunch === 'external' ? undefined : 'http://proof-coordinator:7788')
-    if (options.nonInteractive && !currentCoordinatorUrl) {
+    const coordinatorUrl = await resolveFlagOrPrompt(
+      options.coordinatorUrl,
+      options.nonInteractive,
+      defaultCoordinatorUrl,
+      () => input({
+        default: defaultCoordinatorUrl,
+        message: 'Enter the HTTPS Proof Coordinator URL reachable from proof Workers:',
+        validate: value => value.trim() ? true : 'Proof Coordinator URL must not be empty',
+      }),
+    )
+    if (!coordinatorUrl?.trim()) {
       throw new Error(
         '--proof-coordinator-url or config.toml [ingress].PROOF_COORDINATOR_HOST is required '
-        + 'for an external production Worker',
+        + 'for proof Workers',
       )
     }
 
-    const coordinatorUrl = options.nonInteractive
-      ? currentCoordinatorUrl
-      : await input({
-          default: currentCoordinatorUrl,
-          message: productionWorkerLaunch === 'external'
-            ? 'Enter the Proof Coordinator URL reachable from the external Worker:'
-            : 'Enter the Proof Coordinator service URL:',
-          validate: value => value.trim() ? true : 'Proof Coordinator URL must not be empty',
-        })
     const publicS3Endpoint = options.publicS3Endpoint
       || currentReal?.s3PublicEndpointUrl
       || (artifactSource === 'prepared-aws'
@@ -1045,7 +1107,7 @@ export class DogeConfigCommand extends Command {
     const topology = buildProofTopologyFromRelease({
       artifactStore,
       deploymentDir,
-      deploymentName: `dogeos-${options.config.network}`,
+      deploymentName,
       mode: selectedMode,
       productionWorkerLaunch,
       release,
@@ -1082,6 +1144,7 @@ export class DogeConfigCommand extends Command {
     await this.preflightProofTopology(
       topology,
       options.config,
+      deploymentName,
       options.log,
       options.compilerBinary,
     )
@@ -1112,6 +1175,7 @@ export class DogeConfigCommand extends Command {
   private async preflightProofTopology(
     topology: ProofTopologySpec,
     config: DogeConfig,
+    deploymentName: string,
     log: (message: string) => void,
     compilerBinary?: string,
   ): Promise<void> {
@@ -1145,7 +1209,7 @@ export class DogeConfigCommand extends Command {
           },
           compilerBinary,
           deploymentDir,
-          deploymentName: `dogeos-${config.network}`,
+          deploymentName,
           ethereumL1RpcUrl: config.ethereumDa?.submitterRpcUrl,
           network: config.network,
           outputDir: output,

@@ -1,7 +1,10 @@
 import { Command, Flags } from '@oclif/core'
 import * as path from 'node:path'
 
-import {hydrateCompiledProverWorkerBundle} from '../../utils/compiled-prover-worker-bundle.js'
+import {
+  hydrateCompiledProverWorkerBundle,
+  verifyCompiledProverWorkerBundle,
+} from '../../utils/compiled-prover-worker-bundle.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { readOptionalProofAwsConfig } from '../../utils/proof-aws-config.js'
 import {
@@ -9,8 +12,6 @@ import {
   resolveContractFile,
 } from '../../utils/proof-deployment-contract.js'
 import {readProverWorkerTokenFromSecretsManager} from '../../utils/proof-worker-token.js'
-
-const DEFAULT_PROOF_SECRET_NAME = 'scroll/proof-coordinator-secrets'
 
 export default class ProofWorker extends Command {
   static override description = 'Hydrate a compiler-generated external prover-worker bundle with its bearer token after deterministic configuration generation'
@@ -46,15 +47,33 @@ export default class ProofWorker extends Command {
         throw new Error('deployment contract has no generated worker bundle; run scrollsdk setup prep-charts first')
       }
 
+      const bundleDir = resolveContractFile(deploymentDir, contract.worker.bundleDir)
+      verifyCompiledProverWorkerBundle({
+        allowPendingCredential: true,
+        bundleDir,
+        expectedBundleId: contract.worker.bundleId,
+      })
+
       const tokenFromEnvironment = process.env[flags['worker-token-env']]?.trim()
       const proofAwsConfig = readOptionalProofAwsConfig(deploymentDir)?.config
+      const secretName = flags['secret-name'] || proofAwsConfig?.secret.name
+      if (!tokenFromEnvironment && !secretName) {
+        throw new Error(
+          'cannot infer the deployment-specific proof secret; run setup proof-aws-init, '
+          + 'pass --secret-name, or set the configured worker token environment variable',
+        )
+      }
+
       const workerToken = tokenFromEnvironment || readProverWorkerTokenFromSecretsManager({
           awsProfile: flags['aws-profile'],
           awsRegion: flags['aws-region'] || proofAwsConfig?.secret.region,
-          secretName: flags['secret-name'] || proofAwsConfig?.secret.name || DEFAULT_PROOF_SECRET_NAME,
+          secretName: secretName as string,
         })
-      const bundleDir = resolveContractFile(deploymentDir, contract.worker.bundleDir)
-      const bundle = hydrateCompiledProverWorkerBundle({bundleDir, workerToken})
+      const bundle = hydrateCompiledProverWorkerBundle({
+        bundleDir,
+        expectedBundleId: contract.worker.bundleId,
+        workerToken,
+      })
       if (bundle.bundleId !== contract.worker.bundleId) {
         throw new Error(
           `hydrated worker bundle ID ${bundle.bundleId} does not match deployment contract ${contract.worker.bundleId}; rerun setup prep-charts`,

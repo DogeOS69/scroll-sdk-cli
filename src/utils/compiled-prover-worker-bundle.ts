@@ -150,7 +150,11 @@ function argumentValue(worker: ProverWorkerContractV1, flag: string): string | u
 }
 
 function validateWorkerContract(worker: ProverWorkerContractV1): void {
-  if (worker.schema_version !== 1 || worker.desired_state !== 'external') {
+  if (
+    worker.schema_version !== 1
+    || worker.desired_state !== 'external'
+    || worker.placement !== 'external'
+  ) {
     throw new Error('compiled Compose bundle requires a schema-v1 external Worker contract')
   }
 
@@ -460,6 +464,7 @@ export function writeCompiledProverWorkerBundle(
 }
 
 export function verifyCompiledProverWorkerBundle(options: {
+  allowPendingCredential?: boolean
   bundleDir: string
   expectedBundleId?: string
   resourcesRoot?: string
@@ -523,22 +528,6 @@ export function verifyCompiledProverWorkerBundle(options: {
     throw new Error(`${manifestFile}: Worker contract disagrees with bundle identity`)
   }
 
-  if (manifest.credentialState !== 'ready') {
-    throw new Error(`${manifestFile}: worker credential is pending; run setup proof-worker first`)
-  }
-
-  const tokenPath = requireFile(
-    path.join(bundleDir, COMPILED_PROVER_WORKER_TOKEN_FILE),
-    'compiled Worker token',
-  )
-  // POSIX permission bits are intentionally expressed in octal.
-  // eslint-disable-next-line no-bitwise
-  const mode = fs.statSync(tokenPath).mode & 0o777
-  if (mode !== 0o600) {
-    throw new Error(`${tokenPath}: secret file mode must be 0600, got ${mode.toString(8).padStart(4, '0')}`)
-  }
-
-  if (!fs.readFileSync(tokenPath, 'utf8').trim()) throw new Error(`${tokenPath}: worker token is empty`)
   const environment = readEnvironment(path.join(bundleDir, '.env'))
   const resourcesRoot = path.resolve(
     options.resourcesRoot || path.join(bundleDir, environment.PROOF_RESOURCES_ROOT || ''),
@@ -546,13 +535,37 @@ export function verifyCompiledProverWorkerBundle(options: {
   requireDirectory(resourcesRoot, 'compiled Worker resourcesRoot')
   verifyRequiredResources(manifest, resourcesRoot)
 
+  let tokenPath: string | undefined
+  if (manifest.credentialState === 'pending') {
+    if (!options.allowPendingCredential) {
+      throw new Error(`${manifestFile}: worker credential is pending; run setup proof-worker first`)
+    }
+  } else if (manifest.credentialState === 'ready') {
+    tokenPath = requireFile(
+      path.join(bundleDir, COMPILED_PROVER_WORKER_TOKEN_FILE),
+      'compiled Worker token',
+    )
+    // POSIX permission bits are intentionally expressed in octal.
+    // eslint-disable-next-line no-bitwise
+    const mode = fs.statSync(tokenPath).mode & 0o777
+    if (mode !== 0o600) {
+      throw new Error(`${tokenPath}: secret file mode must be 0600, got ${mode.toString(8).padStart(4, '0')}`)
+    }
+
+    if (!fs.readFileSync(tokenPath, 'utf8').trim()) {
+      throw new Error(`${tokenPath}: worker token is empty`)
+    }
+  } else {
+    throw new Error(`${manifestFile}: invalid credentialState`)
+  }
+
   return {
     bundleDir,
     bundleId: actualBundleId,
     files: [
       ...hashedFiles.map(([relative]) => path.join(bundleDir, relative)),
       ...manifest.files.materials.map(item => path.join(bundleDir, 'materials', item.path)),
-      tokenPath,
+      ...(tokenPath ? [tokenPath] : []),
       manifestFile,
     ],
     manifestFile,
@@ -561,16 +574,44 @@ export function verifyCompiledProverWorkerBundle(options: {
 
 export function hydrateCompiledProverWorkerBundle(options: {
   bundleDir: string
+  expectedBundleId?: string
   workerToken: string
 }): CompiledProverWorkerBundleResult {
   if (!options.workerToken.trim()) throw new Error('worker token must be non-empty')
   const bundleDir = path.resolve(options.bundleDir)
   const manifestFile = path.join(bundleDir, COMPILED_PROVER_WORKER_BUNDLE_MANIFEST)
+  verifyCompiledProverWorkerBundle({
+    allowPendingCredential: true,
+    bundleDir,
+    expectedBundleId: options.expectedBundleId,
+  })
   const manifest = readManifest(manifestFile)
   const tokenPath = path.join(bundleDir, COMPILED_PROVER_WORKER_TOKEN_FILE)
-  fs.rmSync(tokenPath, {force: true})
-  fs.writeFileSync(tokenPath, `${options.workerToken.trim()}\n`, {mode: 0o600})
-  manifest.credentialState = 'ready'
-  fs.writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`)
-  return verifyCompiledProverWorkerBundle({bundleDir, expectedBundleId: manifest.bundleId})
+  const originalManifest = fs.readFileSync(manifestFile)
+  const originalToken = fs.existsSync(tokenPath) ? fs.readFileSync(tokenPath) : undefined
+  const originalTokenMode = fs.existsSync(tokenPath)
+    // POSIX permission bits are intentionally expressed in octal.
+    // eslint-disable-next-line no-bitwise
+    ? fs.statSync(tokenPath).mode & 0o777
+    : undefined
+  const tokenTemporary = `${tokenPath}.tmp-${process.pid}`
+  const manifestTemporary = `${manifestFile}.tmp-${process.pid}`
+  try {
+    fs.writeFileSync(tokenTemporary, `${options.workerToken.trim()}\n`, {mode: 0o600})
+    manifest.credentialState = 'ready'
+    fs.writeFileSync(manifestTemporary, `${JSON.stringify(manifest, null, 2)}\n`)
+    fs.renameSync(tokenTemporary, tokenPath)
+    fs.renameSync(manifestTemporary, manifestFile)
+    return verifyCompiledProverWorkerBundle({
+      bundleDir,
+      expectedBundleId: options.expectedBundleId || manifest.bundleId,
+    })
+  } catch (error) {
+    fs.rmSync(tokenTemporary, {force: true})
+    fs.rmSync(manifestTemporary, {force: true})
+    fs.writeFileSync(manifestFile, originalManifest)
+    if (originalToken === undefined) fs.rmSync(tokenPath, {force: true})
+    else fs.writeFileSync(tokenPath, originalToken, {mode: originalTokenMode})
+    throw error
+  }
 }

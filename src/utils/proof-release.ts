@@ -23,7 +23,6 @@ export const DEFAULT_PROOF_RELEASE_FILES = [
 ] as const
 
 const MOCK_PROFILES = [
-  'cheap_scroll_chunk',
   'withdrawal_mock_prover',
   'withdrawal_mock_prover_real_materialize',
 ] as const

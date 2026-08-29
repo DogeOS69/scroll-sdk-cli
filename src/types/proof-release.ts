@@ -49,7 +49,6 @@ export interface ProofReleaseV1 {
   compilerImage: ProofTopologyImageReference
   profiles: {
     mock:
-      | 'cheap_scroll_chunk'
       | 'withdrawal_mock_prover'
       | 'withdrawal_mock_prover_real_materialize'
     production:

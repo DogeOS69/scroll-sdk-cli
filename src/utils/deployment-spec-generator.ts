@@ -1077,11 +1077,38 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       })
     }
 
+    if (
+      proofTopology.mock
+      && !['withdrawal_mock_prover', 'withdrawal_mock_prover_real_materialize']
+        .includes(proofTopology.mock.profile)
+    ) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'mock.profile must be withdrawal_mock_prover or withdrawal_mock_prover_real_materialize',
+        path: 'proofTopology.mock.profile',
+      })
+    }
+
     if (!proofTopology.production) {
       warnings.push({
         message: 'production resources are not staged; a later mode-only switch to production will fail preflight',
         path: 'proofTopology.production',
         suggestion: 'Prepare the dormant production block, release material, and Worker image before deployment.',
+      })
+    }
+
+    if (
+      proofTopology.production
+      && ![
+        'real_scroll_prover',
+        'real_scroll_withdrawal',
+        'real_scroll_withdrawal_full_topology',
+      ].includes(proofTopology.production.profile)
+    ) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'production.profile is not a supported deployable real Scroll profile',
+        path: 'proofTopology.production.profile',
       })
     }
 

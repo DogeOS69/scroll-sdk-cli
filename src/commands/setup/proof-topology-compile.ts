@@ -57,8 +57,13 @@ export default class ProofTopologyCompile extends Command {
       description: 'Validate a dormant profile without changing the checked-in mode or producing an applyable bundle',
       options: ['mock', 'production'],
     }),
+    'previous-bundle-manifest': Flags.string({
+      dependsOn: ['previous-sidecar'],
+      description: 'Previous bundle-manifest-v1.json; defaults to the installed bundle manifest',
+    }),
     'previous-sidecar': Flags.string({
-      description: 'Previous resolved-v1.json; defaults to the currently installed bundle sidecar',
+      dependsOn: ['previous-bundle-manifest'],
+      description: 'Previous resolved-v2.json; defaults to the currently installed bundle sidecar',
     }),
     'proof-coordinator-config': Flags.string({
       default: 'proof-coordinator/ProofCoordinator.toml',
@@ -118,6 +123,7 @@ export default class ProofTopologyCompile extends Command {
           ? `.data/generated/proof-topology-preflight-${flags.preflight}`
           : flags.output,
         preflightMode: flags.preflight as ProofTopologyPreflightMode | undefined,
+        previousBundleManifest: flags['previous-bundle-manifest'],
         previousSidecar: flags['previous-sidecar'],
         proofCoordinatorBaseConfig: flags['proof-coordinator-config'],
         proofTopology: resolved.proofTopology,

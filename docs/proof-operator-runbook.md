@@ -67,6 +67,13 @@ the compiler rollout plan says the canonical proof-generation digest changed.
 Worker drain/start/stop and moving from an ordinary mock host/node to the
 production GPU host remain explicit operational actions.
 
+Every active Worker must receive a Proof Coordinator URL over HTTPS. The only
+plaintext exception accepted by dogeos-core is `http://127.0.0.1` behind an
+explicit loopback tunnel; a cluster-local URL such as
+`http://proof-coordinator:7788` is deliberately rejected. PC-to-WP can remain
+plain HTTP on the trusted cluster link because the generated deployment
+context records the separate explicit acknowledgements required by core.
+
 ## 3. Standard deployment layout
 
 Run commands from one deployment root. Normal operation should not pass a list
@@ -228,14 +235,22 @@ scrollsdk setup proof-aws-init
 
 The interactive wizard presents the AWS region discovered from the environment
 or AWS CLI configuration as an editable default, lists EKS clusters only after
-the operator confirms that region, and presents the network alias from
-`.data/doge-config.toml` as another editable default. An explicitly supplied
-flag skips only its corresponding prompt. The wizard asks the operator for one
-deployment fact that AWS cannot infer: the credential-free HTTPS S3-compatible
-endpoint root reachable by external Workers and partner-operated Attestation
-Signers. dogeos-core uses
-virtual-host addressing, so an endpoint such as `https://objects.example.com`
-must serve the deployment bucket at
+the operator confirms that region, and presents the deployment directory name
+as the editable deployment-instance alias. Dogecoin `mainnet` or `testnet` is
+not a sufficient alias because either network can have multiple deployments.
+An explicitly supplied flag skips only its corresponding prompt.
+
+The wizard then selects one public proof-artifact read mode:
+
+- `direct-s3` derives `https://s3.<region>.amazonaws.com`, keeps public ACLs,
+  bucket listing, writes, and deletes blocked, and adds exactly one anonymous
+  `s3:GetObject` statement for `<key-prefix>/*`;
+- `existing-gateway` keeps S3 Public Access Block enabled and asks for the
+  credential-free HTTPS S3-compatible gateway root reachable by external
+  Workers and partner-operated Attestation Signers.
+
+dogeos-core uses virtual-host addressing, so an existing gateway such as
+`https://objects.example.com` must serve the deployment bucket at
 `https://<bucket>.objects.example.com/<key-prefix>/...`.
 
 By default the wizard also derives the EKS VPC and subnets, resolves the route
@@ -251,22 +266,41 @@ scrollsdk setup proof-aws-init \
   --non-interactive \
   --aws-region <region> \
   --eks-cluster <cluster> \
-  --network-alias <network-alias> \
+  --deployment-alias <unique-deployment-instance> \
+  --artifact-public-read-mode direct-s3
+```
+
+To retain a private S3 origin behind an existing gateway instead:
+
+```bash
+scrollsdk setup proof-aws-init \
+  --non-interactive \
+  --aws-region <region> \
+  --eks-cluster <cluster> \
+  --deployment-alias <unique-deployment-instance> \
+  --artifact-public-read-mode existing-gateway \
   --artifact-public-endpoint-url https://objects.example.com
 ```
 
 This step is idempotent and writes only non-secret resource facts to
 `.data/proof-aws.json`; it neither reads nor modifies `values/`. The
 coordinator/WP control-plane token and the external prover-worker token are
-separate credentials. The S3 bucket remains private with Public Access Block;
-the public endpoint is a separate operator-managed gateway and is never
-treated as verified merely because provisioning succeeded. The VPC endpoint
-bucket-policy statement is restricted by both `aws:SourceVpce` and
-`<key-prefix>/*`, and unrelated policy statements are preserved. Before proof
-activation, require HTTP 200 for one exact digest-scoped object through the
-public endpoint from every external Worker and partner Signer network. The CLI
-does not provision the production GPU Worker and does not probe partner
-networks.
+separate credentials. Their Secrets Manager secret defaults to
+`scroll/<deployment-alias>/proof-coordinator-secrets`, so separate DogeOS
+deployment instances do not share proof tokens. In `direct-s3`, only proof objects below the selected
+prefix are public: the CLI never grants anonymous `ListBucket`, `PutObject`, or
+`DeleteObject`. It also refuses to disable public-policy blocking when an
+unrelated wildcard grant is already present. AWS account-level Block Public
+Access can still reject direct public reads; use `existing-gateway` or change
+that account control deliberately rather than weakening it implicitly. In
+`existing-gateway`, the bucket remains private and the endpoint is
+operator-managed. The VPC endpoint bucket-policy statement remains restricted
+by both `aws:SourceVpce` and `<key-prefix>/*`.
+
+Neither mode is treated as reachable merely because provisioning succeeded.
+Before proof activation, require HTTP 200 for one exact digest-scoped object
+from every external Worker and partner Signer network. The CLI does not
+provision the production GPU Worker and does not probe partner networks.
 
 Only a deployment that will never use the AWS proof topology should skip
 `proof-aws-init`. Resource preparation is valid while the selected mode is
@@ -320,7 +354,7 @@ proofTopology:
     resourcesMountPath: /app/data/proof-release
     resourcesPersistentVolumeClaim: dogeos-proof-release
   mock:
-    profile: cheap_scroll_chunk
+    profile: withdrawal_mock_prover
     artifactStore: {kind: local_fs}
     workerImage:
       repository: dogeos69/prover-worker-mock
@@ -375,8 +409,9 @@ scrollsdk setup proof-topology-compile --preflight production
 
 Preflight does not edit `proofTopology.mode`; its output is marked
 `preflight_only` and cannot be installed. Ordinary compilation defaults to
-`.data/generated/proof-topology` and uses its previous `resolved-v1.json` to
-derive the transition plan.
+`.data/generated/proof-topology` and supplies its previous `resolved-v2.json`
+together with `bundle-manifest-v1.json` to derive topology and rendered-bundle
+transition evidence.
 
 ### Temporary pre-Tsuki direct-sign recovery (Issue #843)
 
@@ -450,7 +485,8 @@ only a fully validated, non-preflight bundle. The compiler-backed projection:
 - mounts compiler-generated program manifests and statement namespace through
   required-integrity ConfigMap bindings;
 - mounts the pre-populated release PVC at the source-declared runtime root;
-- applies the compiler's digest-scoped submitter patch and rollout annotation;
+- applies the compiler's digest-scoped submitter patch and proof-digest,
+  deployment-revision, and bundle-revision rollout annotations;
 - projects the exact Worker contract into local Worker Helm values or a
   manifest-bearing external Compose bundle without reconstructing argv;
 - writes schema-v5 `.data/proof-deployment.json` with proof digest, deployment
@@ -466,10 +502,16 @@ The schema-v5 deployment contract uses a fail-closed integrity boundary:
 - The contract generation ID, proof mode/posture, required files, and worker
   bundle verification remain mandatory.
 
+The proof digest identifies reusable proof work. The deployment revision also
+captures Worker placement, while the bundle revision captures image, URL,
+tuning, native config, and generated-material bytes. Consequently an image- or
+URL-only change rolls the affected deployment even when it correctly leaves
+the proof digest unchanged.
+
 Compiler-owned native configs, Worker contract, bundle manifest, resolved
 sidecar, rollout plan, and generated materials are required-integrity inputs.
 Use `scrollsdk setup proof-config-check` before installation. Contract schemas
-older than v4 are rejected and must be regenerated with `setup prep-charts`.
+older than v5 are rejected and must be regenerated with `setup prep-charts`.
 
 Missing selected endpoints, release material, or protocol context is rejected
 before proof-owned files are committed. The complete command runs in

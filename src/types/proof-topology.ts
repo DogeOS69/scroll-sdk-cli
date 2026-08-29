@@ -68,7 +68,6 @@ export interface ProofTopologyRealScrollConfig {
 export interface MockProofTopologySpec {
   artifactStore: ProofTopologyArtifactStoreConfig
   profile:
-    | 'cheap_scroll_chunk'
     | 'withdrawal_mock_prover'
     | 'withdrawal_mock_prover_real_materialize'
   realScroll?: ProofTopologyRealScrollConfig

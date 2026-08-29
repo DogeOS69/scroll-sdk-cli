@@ -183,7 +183,7 @@ signing:
 #     #     effect: NoSchedule
 #
 #   mock:
-#     profile: cheap_scroll_chunk
+#     profile: withdrawal_mock_prover
 #     artifactStore:
 #       kind: s3_compatible
 #       bucket: dogeos-devnet-proof-artifacts

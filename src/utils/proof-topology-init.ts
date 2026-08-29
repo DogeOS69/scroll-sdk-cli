@@ -80,12 +80,16 @@ function validateHttpUrl(value: string, label: string): string {
   return value.replace(/\/$/, '')
 }
 
-function isClusterLocalCoordinator(value: string): boolean {
-  const {hostname} = new URL(value)
-  return hostname === 'proof-coordinator'
-    || hostname.endsWith('.svc')
-    || hostname.endsWith('.svc.cluster.local')
-    || hostname.endsWith('.cluster.local')
+function validateWorkerVisibleUrl(value: string, label: string): string {
+  const normalized = validateHttpUrl(value, label)
+  const parsed = new URL(normalized)
+  if (parsed.protocol === 'http:' && parsed.hostname !== '127.0.0.1') {
+    throw new Error(
+      `${label} must use HTTPS unless it is http://127.0.0.1 for an explicit loopback tunnel`,
+    )
+  }
+
+  return normalized
 }
 
 function validateArtifactStore(
@@ -166,7 +170,7 @@ function runtimeRealScroll(
     resourcesRoot,
     ...(runtime.publicS3EndpointUrl
       ? {
-          s3PublicEndpointUrl: validateHttpUrl(
+          s3PublicEndpointUrl: validateWorkerVisibleUrl(
             runtime.publicS3EndpointUrl,
             'Worker-visible S3 endpoint URL',
           ),
@@ -189,17 +193,10 @@ export function buildProofTopologyFromRelease(
   verifyProofReleaseMaterials(options.release, path.resolve(deploymentDir, resourcesRoot))
   const realScroll = runtimeRealScroll(options, resourcesRoot)
   const artifactStore = validateArtifactStore(options.artifactStore)
-  const coordinatorUrl = runtime.proofCoordinatorPublicUrl
-    ? validateHttpUrl(runtime.proofCoordinatorPublicUrl, 'proof coordinator public URL')
-    : 'http://proof-coordinator:7788'
-  if (
-    options.productionWorkerLaunch === 'external'
-    && isClusterLocalCoordinator(coordinatorUrl)
-  ) {
-    throw new Error(
-      'external production Worker requires a proof coordinator URL reachable outside Kubernetes',
-    )
-  }
+  const coordinatorUrl = validateWorkerVisibleUrl(
+    nonEmpty(runtime.proofCoordinatorPublicUrl, 'proof coordinator public URL'),
+    'proof coordinator public URL',
+  )
 
   const deployment: ProofTopologyDeploymentConfig = {
     artifactLocalRoot: '/app/data/proof-artifacts',

@@ -29,6 +29,8 @@ const MATERIALS_CONFIG_MAP = 'proof-topology-materials'
 const MATERIALS_VOLUME = 'proof-topology-materials'
 const RESOURCES_VOLUME = 'proof-topology-resources'
 const TOPOLOGY_ANNOTATION = 'dogeos.io/proof-topology-digest'
+const TOPOLOGY_BUNDLE_ANNOTATION = 'dogeos.io/proof-topology-bundle-revision'
+const TOPOLOGY_DEPLOYMENT_ANNOTATION = 'dogeos.io/proof-topology-deployment-revision'
 const WORKER_READINESS_VOLUME = 'prover-worker-readiness'
 const WORKER_TOKEN_VOLUME = 'prover-worker-token'
 
@@ -178,6 +180,8 @@ function workerArgument(worker: ProverWorkerContractV1, flag: string): string {
 function configureWorkerValues(
   filePath: string,
   input: {
+    bundleRevision: string
+    deploymentRevision: string
     digest: string
     generatedMaterialsRoot: string
     materialsDir?: string
@@ -192,7 +196,7 @@ function configureWorkerValues(
   const local = input.worker?.desired_state === 'local_deployment'
   values.controller ||= {}
   values.controller.replicas = local ? 1 : 0
-  annotate(values, input.digest)
+  annotate(values, input.digest, input.bundleRevision, input.deploymentRevision)
 
   if (!local || !input.worker) {
     values.args = []
@@ -344,15 +348,24 @@ function configureProofResources(
   }
 }
 
-function annotate(values: Record<string, any>, digest: string): void {
+function annotate(
+  values: Record<string, any>,
+  digest: string,
+  bundleRevision: string,
+  deploymentRevision: string,
+): void {
   values.podAnnotations ||= {}
   values.podAnnotations[TOPOLOGY_ANNOTATION] = digest
+  values.podAnnotations[TOPOLOGY_BUNDLE_ANNOTATION] = bundleRevision
+  values.podAnnotations[TOPOLOGY_DEPLOYMENT_ANNOTATION] = deploymentRevision
 }
 
 function configureWithdrawalValues(
   filePath: string,
   mode: ProofSystemMode,
   digest: string,
+  bundleRevision: string,
+  deploymentRevision: string,
   materialsDir: string | undefined,
   generatedMaterialsRoot: string,
   resourceClaim: string | undefined,
@@ -375,7 +388,7 @@ function configureWithdrawalValues(
     }
   }
 
-  annotate(values, digest)
+  annotate(values, digest, bundleRevision, deploymentRevision)
   const bindings = configureMaterials(
     values,
     materialsDir,
@@ -389,6 +402,8 @@ function configureWithdrawalValues(
 function configureCoordinatorValues(
   filePath: string,
   digest: string,
+  bundleRevision: string,
+  deploymentRevision: string,
   materialsDir: string,
   generatedMaterialsRoot: string,
   resourceClaim: string | undefined,
@@ -415,7 +430,7 @@ function configureCoordinatorValues(
     protocol: 'TCP',
     targetPort: 7788,
   }
-  annotate(values, digest)
+  annotate(values, digest, bundleRevision, deploymentRevision)
   const bindings = configureMaterials(
     values,
     materialsDir,
@@ -426,7 +441,12 @@ function configureCoordinatorValues(
   return bindings
 }
 
-function configureAbsentCoordinatorValues(filePath: string, digest: string): void {
+function configureAbsentCoordinatorValues(
+  filePath: string,
+  digest: string,
+  bundleRevision: string,
+  deploymentRevision: string,
+): void {
   const values = readYaml(filePath)
   values.controller ||= {}
   values.controller.replicas = 0
@@ -441,7 +461,7 @@ function configureAbsentCoordinatorValues(filePath: string, digest: string): voi
   delete values.configMaps[MATERIALS_CONFIG_MAP]
   delete values.persistence[MATERIALS_VOLUME]
   delete values.persistence[RESOURCES_VOLUME]
-  annotate(values, digest)
+  annotate(values, digest, bundleRevision, deploymentRevision)
   writeYaml(filePath, values)
 }
 
@@ -449,7 +469,13 @@ function envName(section: string, field: string): string {
   return `DOGEOS_ETH_DA_SUBMITTER_${section.toUpperCase()}__${field.toUpperCase()}`
 }
 
-function applySubmitterPatch(filePath: string, patchPath: string, digest: string): void {
+function applySubmitterPatch(
+  filePath: string,
+  patchPath: string,
+  digest: string,
+  bundleRevision: string,
+  deploymentRevision: string,
+): void {
   const values = readYaml(filePath)
   values.configMaps ||= {}
   values.configMaps.env ||= {data: {}, enabled: true}
@@ -477,7 +503,7 @@ function applySubmitterPatch(filePath: string, patchPath: string, digest: string
     }
   }
 
-  annotate(values, digest)
+  annotate(values, digest, bundleRevision, deploymentRevision)
   writeYaml(filePath, values)
 }
 
@@ -489,15 +515,13 @@ function argumentValue(worker: ProverWorkerContractV1 | undefined, flag: string)
 
 function derivedProverPublicUrl(options: ReconcileCompiledProofTopologyOptions): string | undefined {
   const {proofTopology: topology} = options
-  if (topology.mode !== 'production' || topology.production?.workerLaunch !== 'external') {
-    return undefined
-  }
+  if (topology.mode === 'disabled') return undefined
 
   if (options.proverPublicUrl) return options.proverPublicUrl
   if (options.coordinatorIngressHost) return `https://${options.coordinatorIngressHost}`
   throw new Error(
-    'external production Worker requires proofTopology.deployment.proverPublicUrl '
-    + 'or a Proof Coordinator ingress host',
+    `${topology.mode} Worker requires proofTopology.deployment.proverPublicUrl `
+    + 'or a Proof Coordinator ingress host reachable over HTTPS',
   )
 }
 
@@ -564,6 +588,8 @@ export function reconcileCompiledProofTopology(
     withdrawalValuesPath,
     mode,
     bundle.plan.to_digest,
+    bundle.manifest.bundle_revision,
+    bundle.plan.to_deployment_revision,
     materialsDir,
     generatedMaterialsRoot,
     resourceClaim,
@@ -571,7 +597,12 @@ export function reconcileCompiledProofTopology(
   )
   let coordinatorMaterialBindings: ReturnType<typeof configureMaterials> = []
   if (mode === 'disabled') {
-    configureAbsentCoordinatorValues(coordinatorValuesPath, bundle.plan.to_digest)
+    configureAbsentCoordinatorValues(
+      coordinatorValuesPath,
+      bundle.plan.to_digest,
+      bundle.manifest.bundle_revision,
+      bundle.plan.to_deployment_revision,
+    )
   } else {
     if (!materialsDir || !coordinatorSource) {
       throw new Error('active compiler bundle is missing coordinator config or generated materials')
@@ -580,6 +611,8 @@ export function reconcileCompiledProofTopology(
     coordinatorMaterialBindings = configureCoordinatorValues(
       coordinatorValuesPath,
       bundle.plan.to_digest,
+      bundle.manifest.bundle_revision,
+      bundle.plan.to_deployment_revision,
       materialsDir,
       generatedMaterialsRoot,
       resourceClaim,
@@ -592,6 +625,8 @@ export function reconcileCompiledProofTopology(
   }
 
   const workerMaterialBindings = configureWorkerValues(workerValuesPath, {
+    bundleRevision: bundle.manifest.bundle_revision,
+    deploymentRevision: bundle.plan.to_deployment_revision,
     digest: bundle.plan.to_digest,
     generatedMaterialsRoot,
     materialsDir,
@@ -641,6 +676,8 @@ export function reconcileCompiledProofTopology(
     submitterValuesPath,
     path.join(bundle.bundleDir, bundle.manifest.eth_da_submitter),
     bundle.plan.to_digest,
+    bundle.manifest.bundle_revision,
+    bundle.plan.to_deployment_revision,
   )
 
   const proofCoordinatorBindings = coordinatorSource

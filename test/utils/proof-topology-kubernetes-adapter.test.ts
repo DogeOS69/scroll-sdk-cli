@@ -11,6 +11,7 @@ import {reconcileCompiledProofTopology} from '../../src/utils/proof-topology-kub
 
 const DIGEST = 'a'.repeat(64)
 const REVISION = 'b'.repeat(64)
+const BUNDLE_REVISION = 'd'.repeat(64)
 const IMAGE_DIGEST = `sha256:${'c'.repeat(64)}`
 
 function spec(mode: 'disabled' | 'mock' | 'production'): DeploymentSpec {
@@ -40,7 +41,7 @@ function spec(mode: 'disabled' | 'mock' | 'production'): DeploymentSpec {
       deployment: {protocolContextSource: '.data/protocol_context.json'},
       mock: {
         artifactStore: {kind: 'local_fs'},
-        profile: 'cheap_scroll_chunk',
+        profile: 'withdrawal_mock_prover',
         workerImage: {digest: IMAGE_DIGEST, repository: 'dogeos69/prover-worker-mock'},
       },
       mode,
@@ -125,7 +126,13 @@ function fakeBundle(
         ],
         capabilities: ['scroll_chunk'],
         desired_state: mode === 'production' ? 'external' as const : 'local_deployment' as const,
-        environment: [{name: 'DOGEOS_PROOF_TOPOLOGY_DIGEST', value: DIGEST}],
+        environment: [
+          {name: 'DOGEOS_PROOF_TOPOLOGY_DIGEST', value: DIGEST},
+          {
+            name: 'DOGEOS_PROVER_WORKER_READY_FILE',
+            value: '/run/dogeos/prover-worker-ready-v1.json',
+          },
+        ],
         expected_topology_digest: DIGEST,
         image: {
           digest: IMAGE_DIGEST,
@@ -133,6 +140,7 @@ function fakeBundle(
             ? 'dogeos69/prover-worker'
             : 'dogeos69/prover-worker-mock',
         },
+        placement: mode === 'production' ? 'external' as const : 'local_cpu' as const,
         readiness_evidence_path: '/run/dogeos/prover-worker-ready-v1.json',
         required_build_class: mode === 'production' ? 'production' as const : 'mock_capable' as const,
         schema_version: 1,
@@ -148,6 +156,7 @@ function fakeBundle(
   return {
     bundleDir: root,
     manifest: {
+      bundle_revision: BUNDLE_REVISION,
       compiler_package_version: '0.1.0',
       deployment_context_schema_version: 1,
       eth_da_submitter: 'eth-da-submitter.patch.toml',
@@ -156,7 +165,7 @@ function fakeBundle(
       preflight_only: false,
       ...(active ? {proof_coordinator: 'proof-coordinator.toml'} : {}),
       ...(active ? {prover_worker: 'prover-worker-v1.json'} : {}),
-      resolved_sidecar: 'resolved-v1.json',
+      resolved_sidecar: 'resolved-v2.json',
       rollout_plan: 'rollout-plan-v1.json',
       schema_version: 1,
       source_schema_version: 1,
@@ -164,15 +173,22 @@ function fakeBundle(
     },
     mode,
     plan: {
+      bundle_changed: true,
       deployment_changed: false,
       desired_services: {
         proof_coordinator: active ? 'running' : 'absent',
         prover_worker: active ? mode === 'production' ? 'external' : 'running' : 'absent',
         withdrawal_processor: 'running',
       },
+      from_bundle_revision: null,
+      from_deployment_revision: null,
+      from_digest: null,
+      from_mode: null,
+      regeneration: null,
       requires_proof_regeneration: false,
       schema_version: 1,
       submitter_config_changed: false,
+      to_bundle_revision: BUNDLE_REVISION,
       to_deployment_revision: REVISION,
       to_digest: DIGEST,
       to_mode: mode,
@@ -285,6 +301,10 @@ describe('compiled proof topology Kubernetes adapter', () => {
     expect(withdrawal.configMaps.config.data).to.equal(undefined)
     expect(withdrawal.withdrawalProof.mode).to.equal('mock')
     expect(withdrawal.podAnnotations['dogeos.io/proof-topology-digest']).to.equal(DIGEST)
+    expect(withdrawal.podAnnotations['dogeos.io/proof-topology-bundle-revision'])
+      .to.equal(BUNDLE_REVISION)
+    expect(withdrawal.podAnnotations['dogeos.io/proof-topology-deployment-revision'])
+      .to.equal(REVISION)
 
     const submitter = yaml.load(fs.readFileSync(
       path.join(root, 'values/eth-da-submitter-production.yaml'),

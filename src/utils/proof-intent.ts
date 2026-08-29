@@ -277,6 +277,27 @@ function validateDogeTopology(topology: ProofTopologySpec, network: Network, sou
   }
 
   assertImage(topology.compiler?.image, `${source}: proof_topology.compiler.image`)
+  if (
+    topology.mock
+    && !['withdrawal_mock_prover', 'withdrawal_mock_prover_real_materialize']
+      .includes(topology.mock.profile)
+  ) {
+    throw new Error(
+      `${source}: proof_topology.mock.profile must be a deployable withdrawal mock profile`,
+    )
+  }
+
+  if (
+    topology.production
+    && ![
+      'real_scroll_prover',
+      'real_scroll_withdrawal',
+      'real_scroll_withdrawal_full_topology',
+    ].includes(topology.production.profile)
+  ) {
+    throw new Error(`${source}: proof_topology.production.profile is not supported`)
+  }
+
   const selected = topology.mode === 'mock'
     ? topology.mock
     : topology.mode === 'production'
@@ -425,8 +446,12 @@ function fromDogeConfig(
     ...validateDogeTopology(topology, network, configPath),
     ...verifyDogeProofRelease(rawConfig, topology, deploymentDir, configPath),
   ]
+  const coordinatorId = topology.deployment?.coordinatorId?.trim()
+  const deploymentName = coordinatorId?.endsWith('-proof-coordinator')
+    ? coordinatorId.slice(0, -'-proof-coordinator'.length)
+    : undefined
   return {
-    deploymentName: `dogeos-${network}`,
+    deploymentName: deploymentName || `dogeos-${network}`,
     intent: {
       mode: topology.mode,
       ...(topology.recovery

@@ -8,9 +8,9 @@ import { AwsCliRunner } from './aws-cli.js'
 
 export interface ProofAwsIdentity {
   awsRegion: string
+  deploymentAlias: string
   eksCluster: string
   namespace: string
-  networkAlias: string
 }
 
 export interface ProofAwsRolePlan {
@@ -40,15 +40,19 @@ export interface ProofAwsProvisionResult {
 }
 
 export interface ProofArtifactReadPlan {
-  publicEndpointUrl: string
+  publicEndpointUrl?: string
+  publicReadMode: ProofArtifactPublicReadMode
   vpcEndpoint?: ProofArtifactVpcEndpointPlan
 }
 
 export interface ProofArtifactReadTransportResult {
   publicEndpointUrl: string
-  publicStatus: 'operator-managed-unverified'
+  publicReadMode: ProofArtifactPublicReadMode
+  publicStatus: 'configured-unverified' | 'operator-managed-unverified'
   vpcEndpoint?: ProofArtifactVpcEndpointResult
 }
+
+export type ProofArtifactPublicReadMode = 'direct-s3' | 'existing-gateway'
 
 export interface ProofArtifactVpcEndpointPlan {
   enabled: boolean
@@ -64,6 +68,7 @@ export interface ProofArtifactVpcEndpointResult {
 }
 
 export const PROOF_SECRET_PROPERTIES = ['proof-work-token', 'prover-worker-token'] as const
+export const PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID = 'ScrollSdkProofArtifactPublicRead'
 export const PROOF_ARTIFACT_VPCE_POLICY_SID = 'ScrollSdkProofArtifactReadViaVpcEndpoint'
 
 export interface ProofAwsValuesProjection {
@@ -104,16 +109,41 @@ export function normalizeProofKeyPrefix(value: string): string {
     throw new Error('proof artifact key prefix must contain only non-empty path segments and must not contain . or ..')
   }
 
-  const forbiddenCharacters = ['\\', '*', '?', '[', ']', '{', '}']
+  const forbiddenCharacters = ['\\', '*', '?', '#', '[', ']', '{', '}']
   const hasControlCharacter = [...prefix].some(character => {
     const codePoint = character.codePointAt(0) as number
     return codePoint < 32 || codePoint === 127
   })
-  if (forbiddenCharacters.some(character => prefix.includes(character)) || hasControlCharacter) {
-    throw new Error('proof artifact key prefix must not contain wildcards, backslashes, braces, or control characters')
+  const hasWhitespace = [...prefix].some(character => /\s/u.test(character))
+  if (
+    forbiddenCharacters.some(character => prefix.includes(character))
+    || hasControlCharacter
+    || hasWhitespace
+  ) {
+    throw new Error('proof artifact key prefix must not contain whitespace, wildcards, backslashes, #, braces, or control characters')
   }
 
   return prefix
+}
+
+export function normalizeProofBucketName(value: string): string {
+  const bucket = value.trim()
+  if (bucket.length < 3 || bucket.length > 63) {
+    throw new Error('proof artifact S3 bucket must be 3-63 characters')
+  }
+
+  if (!/^[\da-z][\d.a-z-]*[\da-z]$/.test(bucket)) {
+    throw new Error(
+      'proof artifact S3 bucket must contain only lowercase letters, digits, dots, and hyphens, '
+      + 'and must start and end with a letter or digit',
+    )
+  }
+
+  if (bucket.includes('..')) {
+    throw new Error('proof artifact S3 bucket must not contain consecutive dots')
+  }
+
+  return bucket
 }
 
 /**
@@ -139,11 +169,14 @@ export function normalizeProofArtifactPublicEndpoint(value: string): string {
     throw new Error('proof artifact public endpoint must not contain credentials, query parameters, or a fragment')
   }
 
-  if (parsed.pathname !== '/' && parsed.pathname !== '') {
-    throw new Error('proof artifact public endpoint must be an endpoint root without a path')
-  }
+  const pathname = parsed.pathname.replaceAll(/\/+$/g, '')
+  return `${parsed.origin}${pathname}`
+}
 
-  return parsed.origin
+export function proofArtifactS3Endpoint(region: string): string {
+  const normalized = region.trim()
+  if (!normalized) throw new Error('proof artifact AWS region must not be empty')
+  return `https://s3.${normalized}.amazonaws.com`
 }
 
 export function buildProofArtifactStorePolicy(bucket: string, keyPrefix: string): Record<string, any> {
@@ -214,6 +247,74 @@ export function upsertProofArtifactVpcEndpointReadPolicy(
     ...existingPolicy,
     Statement: preservedStatements,
     Version: existingPolicy.Version || '2012-10-17',
+  }
+}
+
+export function upsertProofArtifactPublicReadPolicy(
+  existingPolicy: Record<string, any>,
+  bucket: string,
+  keyPrefix: string,
+  enabled: boolean,
+): Record<string, any> {
+  const prefix = normalizeProofKeyPrefix(keyPrefix)
+  const statements = Array.isArray(existingPolicy.Statement)
+    ? [...existingPolicy.Statement]
+    : existingPolicy.Statement ? [existingPolicy.Statement] : []
+  const preservedStatements = statements.filter(
+    statement => statement?.Sid !== PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID,
+  )
+  if (enabled) {
+    preservedStatements.push({
+      Action: 's3:GetObject',
+      Effect: 'Allow',
+      Principal: '*',
+      Resource: `arn:aws:s3:::${bucket}/${prefix}/*`,
+      Sid: PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID,
+    })
+  }
+
+  return {
+    ...existingPolicy,
+    Statement: preservedStatements,
+    Version: existingPolicy.Version || '2012-10-17',
+  }
+}
+
+function principalIncludesWildcard(principal: unknown): boolean {
+  if (principal === '*') return true
+  if (!principal || typeof principal !== 'object' || Array.isArray(principal)) return false
+  const awsPrincipal = (principal as Record<string, unknown>).AWS
+  return awsPrincipal === '*'
+    || (Array.isArray(awsPrincipal) && awsPrincipal.includes('*'))
+}
+
+function isVpcEndpointRestricted(statement: Record<string, any>): boolean {
+  const condition = statement.Condition
+  if (!condition || typeof condition !== 'object' || Array.isArray(condition)) return false
+  const stringEquals = condition.StringEquals
+  if (!stringEquals || typeof stringEquals !== 'object' || Array.isArray(stringEquals)) return false
+  const sourceVpcEndpoint = stringEquals['aws:SourceVpce']
+  return typeof sourceVpcEndpoint === 'string' && /^vpce-[\da-f]+$/i.test(sourceVpcEndpoint)
+}
+
+export function assertNoUnmanagedPublicProofBucketGrant(
+  policy: Record<string, any>,
+): void {
+  const statements = Array.isArray(policy.Statement)
+    ? policy.Statement
+    : policy.Statement ? [policy.Statement] : []
+  const unsafe = statements.find((statement: any) =>
+    statement?.Effect === 'Allow'
+    && principalIncludesWildcard(statement.Principal)
+    && statement?.Sid !== PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID
+    && !isVpcEndpointRestricted(statement)
+  )
+  if (unsafe) {
+    throw new Error(
+      `cannot enable direct-s3 proof reads while bucket policy statement `
+      + `${String(unsafe.Sid || '<without Sid>')} grants unmanaged public access; `
+      + 'use a dedicated proof bucket, remove the statement, or select existing-gateway',
+    )
   }
 }
 
@@ -314,28 +415,60 @@ export class ProofAwsProvisioner {
 
   provision(identity: ProofAwsIdentity, input: ProofAwsProvisionInput): ProofAwsProvisionResult {
     const keyPrefix = normalizeProofKeyPrefix(input.keyPrefix)
+    const bucket = normalizeProofBucketName(input.bucket)
     if (!input.artifactRead) {
       throw new Error('proof artifact public read configuration is required')
     }
 
-    const publicEndpointUrl = normalizeProofArtifactPublicEndpoint(input.artifactRead.publicEndpointUrl)
-    const bucketCreated = this.ensureBucket(identity.awsRegion, input.bucket)
+    const {publicReadMode} = input.artifactRead
+    if (!['direct-s3', 'existing-gateway'].includes(publicReadMode)) {
+      throw new Error(`unsupported proof artifact public read mode: ${String(publicReadMode)}`)
+    }
+
+    const directS3Endpoint = proofArtifactS3Endpoint(identity.awsRegion)
+    if (publicReadMode === 'direct-s3' && input.artifactRead.publicEndpointUrl) {
+      const supplied = normalizeProofArtifactPublicEndpoint(input.artifactRead.publicEndpointUrl)
+      if (supplied !== directS3Endpoint) {
+        throw new Error(
+          `direct-s3 proof artifact endpoint is derived as ${directS3Endpoint}; `
+          + 'do not supply a different public endpoint',
+        )
+      }
+    }
+
+    if (publicReadMode === 'existing-gateway' && !input.artifactRead.publicEndpointUrl) {
+      throw new Error('existing-gateway proof artifact reads require publicEndpointUrl')
+    }
+
+    const publicEndpointUrl = publicReadMode === 'direct-s3'
+      ? directS3Endpoint
+      : normalizeProofArtifactPublicEndpoint(input.artifactRead.publicEndpointUrl as string)
+    const bucketCreated = this.ensureBucket(identity.awsRegion, bucket)
     const vpcEndpoint = input.artifactRead.vpcEndpoint?.enabled
-      ? this.ensureVpcEndpointArtifactRead(identity, input.bucket, keyPrefix, input.artifactRead.vpcEndpoint)
+      ? this.ensureVpcEndpointArtifactRead(identity, bucket, keyPrefix, input.artifactRead.vpcEndpoint)
       : undefined
+    this.reconcilePublicArtifactRead(
+      identity.awsRegion,
+      bucket,
+      keyPrefix,
+      publicReadMode,
+    )
     const artifactReadTransport: ProofArtifactReadTransportResult = {
       publicEndpointUrl,
-      publicStatus: 'operator-managed-unverified',
+      publicReadMode,
+      publicStatus: publicReadMode === 'direct-s3'
+        ? 'configured-unverified'
+        : 'operator-managed-unverified',
       ...(vpcEndpoint ? {vpcEndpoint} : {}),
     }
     const trust = this.discoverIrsaTrust(identity)
-    const withdrawalRoleArn = this.ensureIrsaRole(identity, trust, input.withdrawalRole, input.bucket, keyPrefix)
-    const coordinatorRoleArn = this.ensureIrsaRole(identity, trust, input.coordinatorRole, input.bucket, keyPrefix)
+    const withdrawalRoleArn = this.ensureIrsaRole(identity, trust, input.withdrawalRole, bucket, keyPrefix)
+    const coordinatorRoleArn = this.ensureIrsaRole(identity, trust, input.coordinatorRole, bucket, keyPrefix)
     const secretAction = this.ensureTokenSecret(identity.awsRegion, input.secretName, input.rotateTokens === true)
 
     return {
       artifactReadTransport,
-      bucket: input.bucket,
+      bucket,
       bucketCreated,
       coordinatorRoleArn,
       secretAction,
@@ -394,6 +527,55 @@ export class ProofAwsProvisioner {
     ], { region })
     this.jsonCtx.info(`proof-aws: created S3 bucket: ${bucket} (region=${region}, public access blocked, SSE-S3)`)
     return true
+  }
+
+  private reconcilePublicArtifactRead(
+    region: string,
+    bucket: string,
+    keyPrefix: string,
+    mode: ProofArtifactPublicReadMode,
+  ): void {
+    const directS3 = mode === 'direct-s3'
+    const existingPolicy = this.readBucketPolicy(region, bucket)
+    if (directS3) assertNoUnmanagedPublicProofBucketGrant(existingPolicy)
+
+    this.aws.run([
+      's3api',
+      'put-public-access-block',
+      '--bucket',
+      bucket,
+      '--public-access-block-configuration',
+      directS3
+        ? 'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false'
+        : 'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true',
+    ], {region})
+
+    const updatedPolicy = upsertProofArtifactPublicReadPolicy(
+      existingPolicy,
+      bucket,
+      keyPrefix,
+      directS3,
+    )
+    if (JSON.stringify(existingPolicy) !== JSON.stringify(updatedPolicy)) {
+      if (updatedPolicy.Statement.length === 0) {
+        this.aws.run(['s3api', 'delete-bucket-policy', '--bucket', bucket], {region})
+      } else {
+        this.aws.run([
+          's3api',
+          'put-bucket-policy',
+          '--bucket',
+          bucket,
+          '--policy',
+          JSON.stringify(updatedPolicy),
+        ], {region})
+      }
+    }
+
+    this.jsonCtx.info(
+      directS3
+        ? `proof-aws: configured anonymous GetObject for ${bucket}/${keyPrefix}/*; list/write/delete remain private`
+        : `proof-aws: kept S3 public access blocked and removed the CLI-managed anonymous read for ${bucket}/${keyPrefix}/*`,
+    )
   }
 
   private ensureIrsaRole(

@@ -96,6 +96,25 @@ export function isUnresolvedEnvRef(value: string | undefined): boolean {
 }
 
 /**
+ * Resolve a CLI flag without prompting when it was explicitly supplied.
+ *
+ * Interactive commands use the configured/discovered value only as the
+ * prompt default. Non-interactive commands consume that value directly.
+ * Checking against undefined is intentional so explicit false/zero values
+ * are not mistaken for an omitted flag.
+ */
+export async function resolveFlagOrPrompt<T>(
+  explicitValue: T | undefined,
+  nonInteractive: boolean,
+  fallbackValue: T,
+  promptFn: () => Promise<T>
+): Promise<T> {
+  if (explicitValue !== undefined) return explicitValue
+  if (nonInteractive) return fallbackValue
+  return promptFn()
+}
+
+/**
  * In non-interactive mode, use the config value. In interactive mode, run the prompt.
  *
  * If non-interactive and value is missing, records it as a missing field (doesn't throw).

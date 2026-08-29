@@ -10,11 +10,13 @@ import type {
 
 import {
   normalizeProofArtifactPublicEndpoint,
+  normalizeProofBucketName,
   normalizeProofKeyPrefix,
 } from './proof-aws-provisioner.js'
 
 export const DEFAULT_PROOF_AWS_CONFIG = '.data/proof-aws.json'
-export const PROOF_AWS_CONFIG_SCHEMA = 'dogeos/proof-aws/v2'
+export const LEGACY_SHARED_PROOF_SECRET_NAME = 'scroll/proof-coordinator-secrets'
+export const PROOF_AWS_CONFIG_SCHEMA = 'dogeos/proof-aws/v3'
 
 export interface ProofAwsConfig {
   artifactReadTransport: ProofArtifactReadTransportResult
@@ -24,9 +26,9 @@ export interface ProofAwsConfig {
     region: string
   }
   kubernetes: {
+    deploymentAlias: string
     eksCluster: string
     namespace: string
-    networkAlias: string
   }
   schema: typeof PROOF_AWS_CONFIG_SCHEMA
   secret: {
@@ -61,6 +63,15 @@ function requiredString(value: unknown, label: string): string {
   return value.trim()
 }
 
+export function defaultProofSecretName(normalizedDeploymentAlias: string): string {
+  const alias = requiredString(normalizedDeploymentAlias, 'proof AWS deployment alias')
+  if (!/^[\da-z](?:[\da-z-]*[\da-z])?$/.test(alias)) {
+    throw new Error('proof AWS deployment alias must already be normalized for AWS resource names')
+  }
+
+  return `scroll/${alias}/proof-coordinator-secrets`
+}
+
 function requiredRoleArn(value: unknown, label: string): string {
   const arn = requiredString(value, label)
   if (!/^arn:aws:iam::\d{12}:role\/[\w+,./=@-]+$/.test(arn)) {
@@ -79,15 +90,24 @@ function normalizeArtifactReadTransport(
   }
 
   const value = raw as Partial<ProofArtifactReadTransportResult>
-  if (value.publicStatus !== 'operator-managed-unverified') {
-    throw new Error(`${label}.publicStatus must be operator-managed-unverified`)
+  const {publicReadMode} = value
+  if (publicReadMode !== 'direct-s3' && publicReadMode !== 'existing-gateway') {
+    throw new Error(`${label}.publicReadMode must be direct-s3 or existing-gateway`)
+  }
+
+  const expectedStatus = publicReadMode === 'direct-s3'
+    ? 'configured-unverified'
+    : 'operator-managed-unverified'
+  if (value.publicStatus !== expectedStatus) {
+    throw new Error(`${label}.publicStatus must be ${expectedStatus} for ${publicReadMode}`)
   }
 
   const normalized: ProofArtifactReadTransportResult = {
     publicEndpointUrl: normalizeProofArtifactPublicEndpoint(
       requiredString(value.publicEndpointUrl, `${label}.publicEndpointUrl`),
     ),
-    publicStatus: 'operator-managed-unverified',
+    publicReadMode,
+    publicStatus: expectedStatus,
   }
   if (!value.vpcEndpoint) return normalized
 
@@ -138,14 +158,14 @@ export function buildProofAwsConfig(input: ProofAwsConfigInput): ProofAwsConfig 
       'proof AWS artifactReadTransport',
     ),
     artifactStore: {
-      bucket: requiredString(provisioned.bucket, 'proof AWS bucket'),
+      bucket: normalizeProofBucketName(requiredString(provisioned.bucket, 'proof AWS bucket')),
       keyPrefix: normalizeProofKeyPrefix(input.keyPrefix),
       region: requiredString(identity.awsRegion, 'proof AWS region'),
     },
     kubernetes: {
+      deploymentAlias: requiredString(identity.deploymentAlias, 'proof AWS deployment alias'),
       eksCluster: requiredString(identity.eksCluster, 'proof AWS EKS cluster'),
       namespace: requiredString(identity.namespace, 'proof AWS namespace'),
-      networkAlias: requiredString(identity.networkAlias, 'proof AWS network alias'),
     },
     schema: PROOF_AWS_CONFIG_SCHEMA,
     secret: {
@@ -193,9 +213,9 @@ export function validateProofAwsConfig(raw: unknown, label: string): ProofAwsCon
     ),
     identity: {
       awsRegion: artifactRegion,
+      deploymentAlias: requiredString(value.kubernetes?.deploymentAlias, `${label}.kubernetes.deploymentAlias`),
       eksCluster: requiredString(value.kubernetes?.eksCluster, `${label}.kubernetes.eksCluster`),
       namespace: requiredString(value.kubernetes?.namespace, `${label}.kubernetes.namespace`),
-      networkAlias: requiredString(value.kubernetes?.networkAlias, `${label}.kubernetes.networkAlias`),
     },
     keyPrefix: requiredString(value.artifactStore?.keyPrefix, `${label}.artifactStore.keyPrefix`),
     provisioned: {

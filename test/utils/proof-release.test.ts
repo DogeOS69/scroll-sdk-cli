@@ -181,7 +181,7 @@ describe('proof release manifest', () => {
       .to.equal('https://proof-coordinator.example.com')
   })
 
-  it('requires an externally reachable coordinator for an external Worker', () => {
+  it('requires a Worker-safe coordinator URL for every staged Worker placement', () => {
     const release = fixture(resources)
     expect(() => buildProofTopologyFromRelease({
       artifactStore: {
@@ -195,7 +195,7 @@ describe('proof release manifest', () => {
       deploymentName: 'dogeos-testnet',
       productionWorkerLaunch: 'external',
       release,
-    })).to.throw('requires a proof coordinator URL reachable outside Kubernetes')
+    })).to.throw('proof coordinator public URL must be a non-empty string')
 
     expect(() => buildProofTopologyFromRelease({
       artifactStore: {
@@ -210,7 +210,7 @@ describe('proof release manifest', () => {
       productionWorkerLaunch: 'external',
       release,
       runtime: {proofCoordinatorPublicUrl: 'http://proof-coordinator.dogeos.svc:7788'},
-    })).to.throw('requires a proof coordinator URL reachable outside Kubernetes')
+    })).to.throw('must use HTTPS unless it is http://127.0.0.1')
   })
 
   it('binds generated topology identities and files back to the pinned release', () => {

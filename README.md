@@ -1049,9 +1049,9 @@ FLAGS
       --proof-artifact-source=<option>          Artifact resource source used by --proof-topology
                                                 <options: existing-s3|prepared-aws>
       --proof-bucket=<value>                    Existing S3-compatible proof artifact bucket
-      --proof-coordinator-url=<value>           Proof Coordinator URL reachable by the selected Worker placement
+      --proof-coordinator-url=<value>           HTTPS Proof Coordinator URL reachable by mock and production Workers
       --proof-endpoint-url=<value>              Worker-visible S3-compatible endpoint root
-      --proof-force-path-style                  Use path-style S3 object URLs for an existing compatible store
+      --[no-]proof-force-path-style             Use path-style S3 object URLs for an existing compatible store
       --proof-key-prefix=<value>                Base proof artifact key prefix before compiler digest scoping
       --proof-mode=<option>                     Initial proof mode; new deployments default to disabled
                                                 <options: disabled|mock|production>
@@ -1615,18 +1615,21 @@ Provision proof AWS resources and persist their non-secret resource facts as pre
 
 ```
 USAGE
-  $ scrollsdk setup proof-aws-init [--artifact-public-endpoint-url <value>] [--artifact-read-route-table-id <value>...]
-    [--artifact-read-vpc-endpoint-id <value>] [--aws-profile <value>] [--aws-region <value>] [--bucket <value>]
-    [--config <value>] [--coordinator-service-account <value>] [--eks-cluster <value>] [--json] [--key-prefix <value>]
-    [--namespace <value>] [--network-alias <value>] [-N] [--rotate-tokens] [--secret-name <value>] [--skip-vpc-endpoint]
-    [--withdrawal-service-account <value>] [-y]
+  $ scrollsdk setup proof-aws-init [--artifact-public-endpoint-url <value>] [--artifact-public-read-mode
+    direct-s3|existing-gateway] [--artifact-read-route-table-id <value>...] [--artifact-read-vpc-endpoint-id <value>]
+    [--aws-profile <value>] [--aws-region <value>] [--bucket <value>] [--config <value>] [--coordinator-service-account
+    <value>] [--deployment-alias <value>] [--eks-cluster <value>] [--json] [--key-prefix <value>] [--namespace <value>]
+    [-N] [--rotate-tokens] [--secret-name <value>] [--skip-vpc-endpoint] [--withdrawal-service-account <value>] [-y]
 
 FLAGS
   -N, --non-interactive                          Run without prompts; missing values must be discoverable, already
                                                  configured, or passed as flags
   -y, --yes                                      Apply the displayed AWS resource plan without confirmation
-      --artifact-public-endpoint-url=<value>     Credential-free HTTPS S3-compatible endpoint root reachable by external
-                                                 Workers and partner Attestation Signers
+      --artifact-public-endpoint-url=<value>     Existing credential-free HTTPS S3-compatible gateway root; used only
+                                                 with --artifact-public-read-mode=existing-gateway
+      --artifact-public-read-mode=<option>       Public proof artifact delivery: direct anonymous S3 prefix read, or an
+                                                 existing HTTPS gateway backed by private S3
+                                                 <options: direct-s3|existing-gateway>
       --artifact-read-route-table-id=<value>...  Advanced override: EKS subnet route table to associate with the S3
                                                  gateway endpoint (repeatable; normally auto-discovered)
       --artifact-read-vpc-endpoint-id=<value>    Advanced override: existing S3 Gateway VPC endpoint (normally
@@ -1635,23 +1638,23 @@ FLAGS
       --aws-region=<value>                       AWS region for the bucket, roles, and secret (auto-detected when
                                                  omitted)
       --bucket=<value>                           Proof artifact S3 bucket (default:
-                                                 dogeos-<network-alias>-proof-artifacts)
+                                                 dogeos-<deployment-alias>-proof-artifacts)
       --config=<value>                           [default: .data/proof-aws.json] Output config file consumed by setup
                                                  prep-charts
       --coordinator-service-account=<value>      Kubernetes service account used by proof-coordinator (default:
                                                  proof-coordinator)
+      --deployment-alias=<value>                 Unique deployment instance alias used to derive deterministic bucket
+                                                 and IAM role names
       --eks-cluster=<value>                      EKS cluster name used by the IRSA trust policies (selected
                                                  interactively when omitted)
       --json                                     Output structured JSON
       --key-prefix=<value>                       Object key prefix for the proof artifact store (default:
                                                  proof-topology)
       --namespace=<value>                        Kubernetes namespace of the proof workloads (default: default)
-      --network-alias=<value>                    Resource alias used to derive deterministic bucket and IAM role names
-                                                 (defaults to doge-config network)
       --rotate-tokens                            Replace the proof-work/prover-worker tokens in an existing secret (both
                                                  workloads must be restarted afterwards)
       --secret-name=<value>                      Secrets Manager secret holding proof-work-token and prover-worker-token
-                                                 (default: scroll/proof-coordinator-secrets)
+                                                 (default: scroll/<deployment-alias>/proof-coordinator-secrets)
       --skip-vpc-endpoint                        Do not auto-discover or create an S3 Gateway VPC endpoint for
                                                  EKS-internal S3 traffic
       --withdrawal-service-account=<value>       Kubernetes service account used by withdrawal-processor (default:
@@ -1664,7 +1667,9 @@ DESCRIPTION
 EXAMPLES
   $ scrollsdk setup proof-aws-init
 
-  $ scrollsdk setup proof-aws-init --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet --artifact-public-endpoint-url https://objects.example.com -N
+  $ scrollsdk setup proof-aws-init --aws-region us-west-2 --eks-cluster dogeos-testnet --deployment-alias dev0829 --artifact-public-read-mode direct-s3 -N
+
+  $ scrollsdk setup proof-aws-init --artifact-public-read-mode existing-gateway --artifact-public-endpoint-url https://objects.example.com
 
   $ scrollsdk setup proof-aws-init --bucket my-proof-artifacts --rotate-tokens
 ```
@@ -1703,8 +1708,9 @@ Compile proof topology from doge-config or DeploymentSpec through the pinned dog
 USAGE
   $ scrollsdk setup proof-topology-compile [--compiler-binary <value> | --compiler-image <value>] [--deployment-dir <value>]
     [--doge-config <value>] [--durable-proof-rows yes|no|unknown] [--eth-da-submitter-config <value>] [--json]
-    [--last-active-digest <value>] [--output <value>] [--preflight mock|production] [--previous-sidecar <value>]
-    [--proof-coordinator-config <value>] [--spec <value>] [--withdrawal-processor-config <value>]
+    [--last-active-digest <value>] [--output <value>] [--preflight mock|production] [--previous-bundle-manifest <value>
+    --previous-sidecar <value>] [--proof-coordinator-config <value>] [--spec <value>] [--withdrawal-processor-config
+    <value>]
 
 FLAGS
   --compiler-binary=<value>              Development-only local compiler binary; production uses
@@ -1725,7 +1731,8 @@ FLAGS
   --preflight=<option>                   Validate a dormant profile without changing the checked-in mode or producing an
                                          applyable bundle
                                          <options: mock|production>
-  --previous-sidecar=<value>             Previous resolved-v1.json; defaults to the currently installed bundle sidecar
+  --previous-bundle-manifest=<value>     Previous bundle-manifest-v1.json; defaults to the installed bundle manifest
+  --previous-sidecar=<value>             Previous resolved-v2.json; defaults to the currently installed bundle sidecar
   --proof-coordinator-config=<value>     [default: proof-coordinator/ProofCoordinator.toml] Deployment-relative Proof
                                          Coordinator base config
   --spec=<value>                         Optional DeploymentSpec proof source; conflicts with doge-config

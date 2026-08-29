@@ -1,51 +1,58 @@
 import {confirm, input, select} from '@inquirer/prompts'
 import {Command, Flags} from '@oclif/core'
-import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import {loadDogeNetworkFromDogeConfig} from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { sanitizeName, truncateIamRoleName } from '../../utils/kms-signer-provisioner.js'
 import {
   DEFAULT_PROOF_AWS_CONFIG,
+  LEGACY_SHARED_PROOF_SECRET_NAME,
   buildProofAwsConfig,
+  defaultProofSecretName,
   readOptionalProofAwsConfig,
   writeProofAwsConfig,
 } from '../../utils/proof-aws-config.js'
 import {ProofAwsDiscovery} from '../../utils/proof-aws-discovery.js'
 import {
+  type ProofArtifactPublicReadMode,
   ProofAwsProvisioner,
   normalizeProofArtifactPublicEndpoint,
+  normalizeProofBucketName,
+  proofArtifactS3Endpoint,
 } from '../../utils/proof-aws-provisioner.js'
 
-export const DEFAULT_PROOF_SECRET_NAME = 'scroll/proof-coordinator-secrets'
+export const PROOF_AWS_INIT_NEXT_STEPS =
+  'obtain the dogeos-core proof release manifest, then run '
+  + 'scrollsdk setup doge-config --proof-topology before prep-charts'
 
 export default class ProofAwsInit extends Command {
   static override description = 'Provision proof AWS resources and persist their non-secret resource facts as prep-charts input; never read or modify generated Helm values'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet --artifact-public-endpoint-url https://objects.example.com -N',
+    '<%= config.bin %> <%= command.id %> --aws-region us-west-2 --eks-cluster dogeos-testnet --deployment-alias dev0829 --artifact-public-read-mode direct-s3 -N',
+    '<%= config.bin %> <%= command.id %> --artifact-public-read-mode existing-gateway --artifact-public-endpoint-url https://objects.example.com',
     '<%= config.bin %> <%= command.id %> --bucket my-proof-artifacts --rotate-tokens',
   ]
 
   static override flags = {
-    'artifact-public-endpoint-url': Flags.string({description: 'Credential-free HTTPS S3-compatible endpoint root reachable by external Workers and partner Attestation Signers'}),
+    'artifact-public-endpoint-url': Flags.string({description: 'Existing credential-free HTTPS S3-compatible gateway root; used only with --artifact-public-read-mode=existing-gateway'}),
+    'artifact-public-read-mode': Flags.string({description: 'Public proof artifact delivery: direct anonymous S3 prefix read, or an existing HTTPS gateway backed by private S3', options: ['direct-s3', 'existing-gateway']}),
     'artifact-read-route-table-id': Flags.string({description: 'Advanced override: EKS subnet route table to associate with the S3 gateway endpoint (repeatable; normally auto-discovered)', multiple: true}),
     'artifact-read-vpc-endpoint-id': Flags.string({description: 'Advanced override: existing S3 Gateway VPC endpoint (normally auto-discovered or created)'}),
     'aws-profile': Flags.string({ description: 'AWS CLI profile used for provisioning' }),
     'aws-region': Flags.string({description: 'AWS region for the bucket, roles, and secret (auto-detected when omitted)'}),
-    bucket: Flags.string({ description: 'Proof artifact S3 bucket (default: dogeos-<network-alias>-proof-artifacts)' }),
+    bucket: Flags.string({ description: 'Proof artifact S3 bucket (default: dogeos-<deployment-alias>-proof-artifacts)' }),
     config: Flags.string({ default: DEFAULT_PROOF_AWS_CONFIG, description: 'Output config file consumed by setup prep-charts' }),
     'coordinator-service-account': Flags.string({description: 'Kubernetes service account used by proof-coordinator (default: proof-coordinator)'}),
+    'deployment-alias': Flags.string({description: 'Unique deployment instance alias used to derive deterministic bucket and IAM role names'}),
     'eks-cluster': Flags.string({description: 'EKS cluster name used by the IRSA trust policies (selected interactively when omitted)'}),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
     'key-prefix': Flags.string({description: 'Object key prefix for the proof artifact store (default: proof-topology)'}),
     namespace: Flags.string({description: 'Kubernetes namespace of the proof workloads (default: default)'}),
-    'network-alias': Flags.string({description: 'Resource alias used to derive deterministic bucket and IAM role names (defaults to doge-config network)'}),
     'non-interactive': Flags.boolean({char: 'N', default: false, description: 'Run without prompts; missing values must be discoverable, already configured, or passed as flags'}),
     'rotate-tokens': Flags.boolean({ default: false, description: 'Replace the proof-work/prover-worker tokens in an existing secret (both workloads must be restarted afterwards)' }),
-    'secret-name': Flags.string({description: `Secrets Manager secret holding proof-work-token and prover-worker-token (default: ${DEFAULT_PROOF_SECRET_NAME})`}),
+    'secret-name': Flags.string({description: 'Secrets Manager secret holding proof-work-token and prover-worker-token (default: scroll/<deployment-alias>/proof-coordinator-secrets)'}),
     'skip-vpc-endpoint': Flags.boolean({default: false, description: 'Do not auto-discover or create an S3 Gateway VPC endpoint for EKS-internal S3 traffic'}),
     'withdrawal-service-account': Flags.string({description: 'Kubernetes service account used by withdrawal-processor (default: withdrawal-processor)'}),
     yes: Flags.boolean({char: 'y', default: false, description: 'Apply the displayed AWS resource plan without confirmation'}),
@@ -72,42 +79,72 @@ export default class ProofAwsInit extends Command {
         nonInteractive,
         region: awsRegion,
       })
-      const dogeConfigPath = path.resolve('.data/doge-config.toml')
-      const dogeNetwork = fs.existsSync(dogeConfigPath)
-        ? loadDogeNetworkFromDogeConfig(dogeConfigPath)
-        : undefined
-      const networkAlias = await this.resolveRequiredValue({
-        defaultValue: existing?.kubernetes.networkAlias || dogeNetwork,
-        explicit: flags['network-alias'],
-        flag: '--network-alias',
-        message: 'Enter the deployment network alias used in AWS resource names:',
+      const deploymentAlias = await this.resolveRequiredValue({
+        defaultValue: existing?.kubernetes.deploymentAlias
+          || (nonInteractive ? undefined : sanitizeName(path.basename(process.cwd()))),
+        explicit: flags['deployment-alias'],
+        flag: '--deployment-alias',
+        message: 'Enter a unique alias for this DogeOS deployment instance (for example dev0829):',
         nonInteractive,
       })
-      const alias = sanitizeName(networkAlias)
-      const cluster = sanitizeName(eksCluster)
-      const bucket = flags.bucket
-        || (existing?.kubernetes.networkAlias === networkAlias
-          ? existing.artifactStore.bucket
-          : undefined)
-        || `dogeos-${alias}-proof-artifacts`
-      if (!nonInteractive
-        && !flags['artifact-public-endpoint-url']
-        && !existing?.artifactReadTransport.publicEndpointUrl) {
-        this.log('')
-        this.log('External Workers and partner Attestation Signers fetch proof objects without AWS credentials.')
-        this.log('The CLI keeps S3 private, so enter the root of your controlled public S3-compatible gateway.')
-        this.log(`It must serve this bucket as https://${bucket}.<gateway-host>/<key-prefix>/...`)
-        this.log('')
+      const alias = sanitizeName(deploymentAlias)
+      if (!alias) {
+        throw new Error('deployment alias must contain at least one ASCII letter or digit')
       }
 
-      const publicEndpointUrl = await this.resolveRequiredValue({
-        defaultValue: existing?.artifactReadTransport.publicEndpointUrl,
-        explicit: flags['artifact-public-endpoint-url'],
-        flag: '--artifact-public-endpoint-url',
-        message: 'Enter the credential-free HTTPS S3-compatible endpoint root reachable by partner Signers:',
-        nonInteractive,
-        normalize: normalizeProofArtifactPublicEndpoint,
-      })
+      const cluster = sanitizeName(eksCluster)
+      const bucket = normalizeProofBucketName(flags.bucket
+        || (existing?.kubernetes.deploymentAlias === deploymentAlias
+          ? existing.artifactStore.bucket
+          : undefined)
+        || `dogeos-${alias}-proof-artifacts`)
+      const defaultPublicReadMode = existing?.artifactReadTransport.publicReadMode || 'direct-s3'
+      let publicReadMode = flags['artifact-public-read-mode'] as ProofArtifactPublicReadMode | undefined
+      if (!publicReadMode) {
+        if (nonInteractive) {
+          if (!existing?.artifactReadTransport.publicReadMode) {
+            throw new Error(
+              '--artifact-public-read-mode is required in non-interactive mode when .data/proof-aws.json does not provide it',
+            )
+          }
+
+          publicReadMode = existing.artifactReadTransport.publicReadMode
+        } else {
+          publicReadMode = await select({
+            choices: [
+              {
+                name: 'Direct AWS S3 (public GetObject only for the proof prefix)',
+                value: 'direct-s3',
+              },
+              {
+                name: 'Existing HTTPS gateway (keep the S3 bucket private)',
+                value: 'existing-gateway',
+              },
+            ],
+            default: defaultPublicReadMode,
+            message: 'How should external Workers and partner Signers read proof artifacts?',
+          }) as ProofArtifactPublicReadMode
+        }
+      }
+
+      if (publicReadMode === 'direct-s3' && flags['artifact-public-endpoint-url']) {
+        throw new Error(
+          '--artifact-public-endpoint-url is only valid with --artifact-public-read-mode=existing-gateway',
+        )
+      }
+
+      const publicEndpointUrl = publicReadMode === 'direct-s3'
+        ? proofArtifactS3Endpoint(awsRegion)
+        : await this.resolveRequiredValue({
+            defaultValue: existing?.artifactReadTransport.publicReadMode === 'existing-gateway'
+              ? existing.artifactReadTransport.publicEndpointUrl
+              : undefined,
+            explicit: flags['artifact-public-endpoint-url'],
+            flag: '--artifact-public-endpoint-url',
+            message: 'Enter the existing credential-free HTTPS S3-compatible gateway root:',
+            nonInteractive,
+            normalize: normalizeProofArtifactPublicEndpoint,
+          })
       const advancedVpcInput = Boolean(
         flags['artifact-read-vpc-endpoint-id']
         || flags['artifact-read-route-table-id']?.length,
@@ -128,7 +165,14 @@ export default class ProofAwsInit extends Command {
             })
       const namespace = flags.namespace || existing?.kubernetes.namespace || 'default'
       const keyPrefix = flags['key-prefix'] || existing?.artifactStore.keyPrefix || 'proof-topology'
-      const secretName = flags['secret-name'] || existing?.secret.name || DEFAULT_PROOF_SECRET_NAME
+      const sameDeployment = existing?.kubernetes.deploymentAlias === deploymentAlias
+      const reusableSecretName = sameDeployment
+        && existing?.secret.name !== LEGACY_SHARED_PROOF_SECRET_NAME
+        ? existing?.secret.name
+        : undefined
+      const secretName = flags['secret-name']
+        || reusableSecretName
+        || defaultProofSecretName(alias)
       const coordinatorServiceAccount = flags['coordinator-service-account']
         || existing?.serviceAccounts.proofCoordinator.name
         || 'proof-coordinator'
@@ -153,11 +197,12 @@ export default class ProofAwsInit extends Command {
         this.log(`  AWS region:             ${awsRegion}`)
         this.log(`  EKS cluster/namespace:  ${eksCluster} / ${namespace}`)
         this.log(`  S3 artifact prefix:     s3://${bucket}/${keyPrefix}`)
-        this.log(`  Partner HTTPS endpoint: ${publicEndpointUrl}`)
+        this.log(`  Public read mode:       ${publicReadMode}`)
+        this.log(`  External artifact endpoint: ${publicEndpointUrl}`)
         this.log(`  EKS S3 Gateway route:   ${configureVpcEndpoint ? 'auto-discover/create' : 'skipped'}`)
         this.log(`  Secrets Manager secret: ${secretName}`)
         this.log('')
-        if (!(await confirm({default: true, message: 'Provision or reconcile these AWS resources?'}))) {
+        if (!(await confirm({default: true, message: 'Create or update the AWS resources shown above?'}))) {
           throw new Error('proof AWS provisioning cancelled')
         }
       }
@@ -165,15 +210,16 @@ export default class ProofAwsInit extends Command {
       const provisioner = new ProofAwsProvisioner(json, flags['aws-profile'])
       const identity = {
         awsRegion,
+        deploymentAlias,
         eksCluster,
         namespace,
-        networkAlias,
       }
       const result = provisioner.provision(
         identity,
         {
           artifactRead: {
             publicEndpointUrl,
+            publicReadMode,
             ...(configureVpcEndpoint
               ? {
                   vpcEndpoint: {
@@ -215,10 +261,15 @@ export default class ProofAwsInit extends Command {
       json.logSuccess(`Provisioned proof AWS resources: bucket=${result.bucket} secret=${result.secretName} (${result.secretAction})`)
       json.logSuccess(
         `${configResult.changed ? 'Wrote' : 'Reused'} proof AWS config ${configResult.filePath}; `
-        + 'run scrollsdk setup prep-charts once to generate final values and deployment contract',
+        + PROOF_AWS_INIT_NEXT_STEPS,
       )
       json.addWarning(
-        `the partner/external artifact route ${result.artifactReadTransport.publicEndpointUrl} is recorded but operator-managed and unverified; require HTTP 200 for one exact digest-scoped object from every external Worker and partner Signer network before activation`,
+        result.artifactReadTransport.publicReadMode === 'direct-s3'
+          ? `anonymous GetObject is configured only for s3://${result.bucket}/${keyPrefix}/* at ${result.artifactReadTransport.publicEndpointUrl}; list/write/delete remain private, but external reachability is unverified`
+          : `the partner/external artifact route ${result.artifactReadTransport.publicEndpointUrl} is operator-managed and unverified; S3 remains private`,
+      )
+      json.addWarning(
+        'require HTTP 200 for one exact digest-scoped object from every external Worker and partner Signer network before activation',
       )
       if (result.artifactReadTransport.vpcEndpoint) {
         json.addWarning(

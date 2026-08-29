@@ -7,6 +7,7 @@ import * as path from 'node:path'
 import type {DeploymentSpec, ProofTopologySpec} from '../../src/types/deployment-spec.js'
 
 import {
+  computeProofTopologyBundleRevision,
   renderProofTopologySource,
   validateProofTopologyBundle,
 } from '../../src/utils/proof-topology-compiler.js'
@@ -21,7 +22,7 @@ function topology(mode: 'disabled' | 'mock' | 'production' = 'disabled'): ProofT
     },
     mock: {
       artifactStore: {kind: 'local_fs'},
-      profile: 'cheap_scroll_chunk',
+      profile: 'withdrawal_mock_prover',
       workerImage: {digest: IMAGE_DIGEST, repository: 'dogeos69/prover-worker-mock'},
     },
     mode,
@@ -70,11 +71,11 @@ function writeBundle(
   const active = mode !== 'disabled'
   fs.mkdirSync(root, {recursive: true})
   fs.writeFileSync(path.join(root, 'withdrawal-processor.toml'), '')
-  fs.writeFileSync(path.join(root, 'resolved-v1.json'), `${JSON.stringify({
+  fs.writeFileSync(path.join(root, 'resolved-v2.json'), `${JSON.stringify({
     deployment_revision: 'c'.repeat(64),
     digest: DIGEST,
-    schema_version: 1,
-    selected: {schema_version: 1, selected_mode: mode},
+    schema_version: 2,
+    selected: {schema_version: 2, selected_mode: mode},
   }, null, 2)}\n`)
   fs.writeFileSync(path.join(root, 'eth-da-submitter.patch.toml'), '')
   if (active) {
@@ -83,22 +84,32 @@ function writeBundle(
       argv: ['--mode', mode === 'mock' ? 'mock' : 'real'],
       capabilities: ['scroll_chunk'],
       desired_state: mode === 'production' ? 'external' : 'local_deployment',
-      environment: [{name: 'DOGEOS_PROOF_TOPOLOGY_DIGEST', value: DIGEST}],
+      environment: [
+        {name: 'DOGEOS_PROOF_TOPOLOGY_DIGEST', value: DIGEST},
+        {
+          name: 'DOGEOS_PROVER_WORKER_READY_FILE',
+          value: '/run/dogeos/prover-worker-ready-v1.json',
+        },
+      ],
       expected_topology_digest: DIGEST,
       image: {digest: IMAGE_DIGEST, repository: 'dogeos69/prover-worker'},
+      placement: mode === 'production' ? 'external' : 'local_cpu',
       readiness_evidence_path: '/run/dogeos/prover-worker-ready-v1.json',
       required_build_class: mode === 'mock' ? 'mock_capable' : 'production',
       schema_version: 1,
     }, null, 2)}\n`)
   }
 
+  const bundleRevision = computeProofTopologyBundleRevision(root)
   fs.writeFileSync(path.join(root, 'rollout-plan-v1.json'), `${JSON.stringify({
+    bundle_changed: true,
     deployment_changed: false,
     desired_services: {
       proof_coordinator: active ? 'running' : 'absent',
       prover_worker: active ? mode === 'production' ? 'external' : 'running' : 'absent',
       withdrawal_processor: 'running',
     },
+    from_bundle_revision: null,
     from_deployment_revision: null,
     from_digest: null,
     from_mode: null,
@@ -106,20 +117,22 @@ function writeBundle(
     requires_proof_regeneration: false,
     schema_version: 1,
     submitter_config_changed: false,
+    to_bundle_revision: bundleRevision,
     to_deployment_revision: 'c'.repeat(64),
     to_digest: DIGEST,
     to_mode: mode,
   }, null, 2)}\n`)
   fs.writeFileSync(path.join(root, 'bundle-manifest-v1.json'), `${JSON.stringify({
+    bundle_revision: bundleRevision,
     compiler_package_version: '0.1.0',
     deployment_context_schema_version: 1,
     eth_da_submitter: 'eth-da-submitter.patch.toml',
     generated_materials: null,
-    installable_service_configs: true,
+    installable_service_configs: !preflightOnly,
     preflight_only: preflightOnly,
     proof_coordinator: active ? 'proof-coordinator.toml' : null,
     prover_worker: active ? 'prover-worker-v1.json' : null,
-    resolved_sidecar: 'resolved-v1.json',
+    resolved_sidecar: 'resolved-v2.json',
     rollout_plan: 'rollout-plan-v1.json',
     schema_version: 1,
     source_schema_version: 1,
@@ -195,6 +208,23 @@ describe('proof topology compiler adapter', () => {
     fs.writeFileSync(manifestFile, `${JSON.stringify(manifest)}\n`)
     expect(() => validateProofTopologyBundle(root, {mode: 'disabled', preflightOnly: false}))
       .to.throw('withdrawal_processor escapes compiler bundle')
+  })
+
+  it('rejects payload drift against both manifest and rollout bundle revisions', () => {
+    writeBundle(root, 'disabled')
+    fs.appendFileSync(path.join(root, 'withdrawal-processor.toml'), 'tampered = true\n')
+    expect(() => validateProofTopologyBundle(root, {mode: 'disabled', preflightOnly: false}))
+      .to.throw('bundle_revision does not match the rendered bundle payload')
+  })
+
+  it('rejects a preflight manifest that claims its configs are installable', () => {
+    writeBundle(root, 'production', true)
+    const manifestFile = path.join(root, 'bundle-manifest-v1.json')
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'))
+    manifest.installable_service_configs = true
+    fs.writeFileSync(manifestFile, `${JSON.stringify(manifest)}\n`)
+    expect(() => validateProofTopologyBundle(root, {mode: 'production', preflightOnly: true}))
+      .to.throw('preflight bundle must not be installable')
   })
 
   it('is structurally compatible with DeploymentSpec typing', () => {
