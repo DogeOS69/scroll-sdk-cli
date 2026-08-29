@@ -332,7 +332,11 @@ scrollsdk setup proof-release-init \
 
 Without `--release-image`, the interactive command asks for it and displays an
 already imported reference as the editable default. New non-interactive
-imports require the flag. Mutable tags are rejected.
+imports require the flag. Mutable tags are rejected. The command uses
+`linux/amd64` by default and explicitly inspects or pulls every immutable image
+for that platform, following the same Docker API pattern as `setup
+bridge-init`; an officially published alternative can be selected with
+`--docker-platform`.
 
 The command extracts `dogeos/proof-software-release/v1`, validates it through
 the release-pinned dogeos-core tool, and runs the release-pinned CPU Bridge
@@ -340,6 +344,9 @@ baker against the canonical protocol context. It then creates and validates
 `dogeos/proof-deployment-release-lock/v1` and atomically installs the complete
 tree below `.data/proof-releases/`. This Bridge bake compiles a deployment-
 specific `.vmexe`, but performs no real proof and requires no GPU.
+The build is also network-disabled. Its release-pinned baker image already
+contains both the materializer toolchain and the Bridge guest's separately
+pinned Rust/OpenVM toolchain; no download or host Rust installation is needed.
 
 Now run:
 

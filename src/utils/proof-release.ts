@@ -1,3 +1,4 @@
+import Docker from 'dockerode'
 import {spawnSync} from 'node:child_process'
 import {createHash} from 'node:crypto'
 import * as fs from 'node:fs'
@@ -41,11 +42,19 @@ export type ProofReleaseCommandRunner = (
 export interface PrepareProofReleaseOptions {
   commandRunner?: ProofReleaseCommandRunner
   deploymentDir?: string
+  dockerPlatform?: string
+  imagePuller?: ProofReleaseImagePuller
   log?: (message: string) => void
   protocolContext?: string
   releaseImage: string
   releasesRoot?: string
 }
+
+export type ProofReleaseImagePuller = (
+  imageReference: string,
+  platform: string,
+  log?: (message: string) => void,
+) => Promise<void>
 
 function mapping(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -470,6 +479,44 @@ function checkedRun(
   return result.stdout.trim()
 }
 
+async function pullProofImage(
+  imageReference: string,
+  platform: string,
+  log?: (message: string) => void,
+): Promise<void> {
+  const docker = new Docker()
+  try {
+    try {
+      const local = await docker.getImage(imageReference).inspect()
+      const localPlatform = `${local.Os}/${local.Architecture}`
+      if (localPlatform === platform) {
+        log?.(`Docker image already present for ${platform}: ${imageReference}`)
+        return
+      }
+
+      log?.(`Docker image is ${localPlatform}; pulling ${platform}: ${imageReference}`)
+    } catch (error) {
+      const statusCode = error && typeof error === 'object' && 'statusCode' in error
+        ? Number(error.statusCode)
+        : undefined
+      if (statusCode !== 404) throw error
+      log?.(`Pulling Docker image for ${platform}: ${imageReference}`)
+    }
+
+    const stream = await docker.pull(imageReference, {platform})
+    await new Promise<void>((resolve, reject) => {
+      docker.modem.followProgress(stream, error => {
+        if (error) reject(error)
+        else resolve()
+      })
+    })
+    log?.(`Docker image ready for ${platform}: ${imageReference}`)
+  } finally {
+    const modem = docker.modem as unknown as {agent?: {destroy?: () => void}}
+    modem.agent?.destroy?.()
+  }
+}
+
 function dockerSecurityArgs(): string[] {
   return [
     '--network',
@@ -498,6 +545,7 @@ function runReleaseTool(
   rootDestination: string,
   protocolContext: string,
   commandArgs: string[],
+  dockerPlatform = 'linux/amd64',
 ): void {
   checkedRun(
     runner,
@@ -505,6 +553,8 @@ function runReleaseTool(
     [
       'run',
       '--rm',
+      '--platform',
+      dockerPlatform,
       ...dockerSecurityArgs(),
       '--read-only',
       '--tmpfs',
@@ -527,6 +577,7 @@ function runReleaseTool(
 export function validatePreparedProofRelease(
   prepared: PreparedProofRelease,
   commandRunner: ProofReleaseCommandRunner = defaultCommandRunner,
+  dockerPlatform = 'linux/amd64',
 ): void {
   const topologyImage = immutableImage(prepared.release.images.topology_compiler)
   runReleaseTool(
@@ -542,6 +593,7 @@ export function validatePreparedProofRelease(
       '--protocol-context',
       prepared.receipt.protocol_context,
     ],
+    dockerPlatform,
   )
 }
 
@@ -553,7 +605,9 @@ function writeReceipt(filePath: string, receipt: ProofReleaseImportV1): void {
   })
 }
 
-export function prepareProofRelease(options: PrepareProofReleaseOptions): PreparedProofRelease {
+export async function prepareProofRelease(
+  options: PrepareProofReleaseOptions,
+): Promise<PreparedProofRelease> {
   const deploymentDir = path.resolve(options.deploymentDir || '.')
   const protocolContext = path.resolve(
     deploymentDir,
@@ -577,6 +631,8 @@ export function prepareProofRelease(options: PrepareProofReleaseOptions): Prepar
   const finalRoot = path.join(releasesRoot, key)
   const finalLock = path.join(finalRoot, PROOF_DEPLOYMENT_RELEASE_LOCK)
   const runner = options.commandRunner || defaultCommandRunner
+  const dockerPlatform = options.dockerPlatform || 'linux/amd64'
+  const imagePuller = options.imagePuller || pullProofImage
   if (fs.existsSync(finalRoot)) {
     const prepared = readPreparedProofRelease(finalLock)
     if (prepared.receipt.release_image !== releaseImage) {
@@ -584,20 +640,30 @@ export function prepareProofRelease(options: PrepareProofReleaseOptions): Prepar
     }
 
     options.log?.(`Revalidating prepared proof release ${prepared.release.release_id}`)
-    validatePreparedProofRelease(prepared, runner)
+    await imagePuller(
+      immutableImage(prepared.release.images.topology_compiler),
+      dockerPlatform,
+      options.log,
+    )
+    validatePreparedProofRelease(prepared, runner, dockerPlatform)
     return prepared
   }
 
   fs.mkdirSync(releasesRoot, {recursive: true})
   const stagingRoot = fs.mkdtempSync(path.join(releasesRoot, `.${key}.preparing-`))
+  // Node creates mkdtemp directories as 0700. The source-bearing baker runs
+  // through Docker and may be subject to daemon user-namespace remapping, so
+  // it must be able to traverse this host directory to read the bind-mounted
+  // public release material. No secret is stored in this tree; the only local
+  // receipt is still written as 0600 below.
+  fs.chmodSync(stagingRoot, 0o755)
   let containerId: string | undefined
   try {
-    options.log?.(`Pulling immutable proof software release ${releaseImage}`)
-    checkedRun(runner, 'docker', ['pull', releaseImage], 'docker pull proof release')
+    await imagePuller(releaseImage, dockerPlatform, options.log)
     containerId = checkedRun(
       runner,
       'docker',
-      ['create', releaseImage, '/bin/true'],
+      ['create', '--platform', dockerPlatform, releaseImage, '/bin/true'],
       'docker create proof release',
     ).split(/\s+/)[0]
     if (!containerId) throw new Error('docker create did not return a container ID')
@@ -618,6 +684,7 @@ export function prepareProofRelease(options: PrepareProofReleaseOptions): Prepar
     )
     const topologyImage = immutableImage(release.images.topology_compiler)
     const bakerImage = immutableImage(release.images.bridge_artifact_baker)
+    await imagePuller(topologyImage, dockerPlatform, options.log)
     options.log?.(`Validating proof software release ${release.release_id}`)
     runReleaseTool(
       runner,
@@ -632,14 +699,18 @@ export function prepareProofRelease(options: PrepareProofReleaseOptions): Prepar
         '--root',
         path.join(finalRoot, 'software'),
       ],
+      dockerPlatform,
     )
 
+    await imagePuller(bakerImage, dockerPlatform, options.log)
     options.log?.('Baking deployment-bound Bridge material on CPU; this can take several minutes')
     containerId = checkedRun(
       runner,
       'docker',
       [
         'create',
+        '--platform',
+        dockerPlatform,
         ...dockerSecurityArgs(),
         '--mount',
         mountValue(stagingRoot, finalRoot, true),
@@ -696,6 +767,7 @@ export function prepareProofRelease(options: PrepareProofReleaseOptions): Prepar
         '--output',
         lockPath,
       ],
+      dockerPlatform,
     )
     const stagedLock = readProofDeploymentReleaseLock(
       path.join(stagingRoot, PROOF_DEPLOYMENT_RELEASE_LOCK),
@@ -721,6 +793,7 @@ export function prepareProofRelease(options: PrepareProofReleaseOptions): Prepar
       finalRoot,
       protocolContext,
       ['validate-deployment', '--lock', lockPath, '--protocol-context', protocolContext],
+      dockerPlatform,
     )
     if (fs.existsSync(finalRoot)) throw new Error(`proof release destination appeared: ${finalRoot}`)
     fs.renameSync(stagingRoot, finalRoot)

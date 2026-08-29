@@ -26,6 +26,10 @@ export default class ProofReleaseInit extends Command {
     'deployment-dir': Flags.string({
       description: 'Deployment root containing .data/protocol_context.json',
     }),
+    'docker-platform': Flags.string({
+      default: 'linux/amd64',
+      description: 'Docker platform for the release, compiler, and CPU Bridge baker images',
+    }),
     json: Flags.boolean({default: false, description: 'Output structured JSON'}),
     'non-interactive': Flags.boolean({
       char: 'N',
@@ -102,6 +106,7 @@ export default class ProofReleaseInit extends Command {
       json.log(`  Immutable release: ${releaseImage}`)
       json.log(`  Protocol context:  ${resolvedProtocolContext}`)
       json.log(`  Output root:       ${path.resolve(deploymentDir, '.data/proof-releases')}`)
+      json.log(`  Docker platform:   ${flags['docker-platform']}`)
       json.log('  Bridge bake:       CPU-only, no GPU required')
       if (!flags.yes && !nonInteractive) {
         const proceed = await confirm({
@@ -114,8 +119,9 @@ export default class ProofReleaseInit extends Command {
         }
       }
 
-      const prepared = prepareProofRelease({
+      const prepared = await prepareProofRelease({
         deploymentDir,
+        dockerPlatform: flags['docker-platform'],
         log: message => json.log(message),
         protocolContext,
         releaseImage,

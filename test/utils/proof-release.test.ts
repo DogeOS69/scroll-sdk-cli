@@ -21,6 +21,7 @@ import {
   discoverPreparedProofRelease,
   immutableProofImageReference,
   listPreparedProofReleaseLocks,
+  prepareProofRelease,
   readPreparedProofRelease,
   readProofDeploymentReleaseLock,
   verifyProofTopologyReleaseBinding,
@@ -168,6 +169,38 @@ describe('official proof release deployment lock', () => {
       .to.equal(`dogeos69/proof-release@${digest('a')}`)
     expect(() => immutableProofImageReference('dogeos69/proof-release:latest'))
       .to.throw('repository@sha256')
+  })
+
+  it('makes the staging root traversable by root-remapped Docker containers', async () => {
+    const dataDir = path.join(deployment, '.data')
+    fs.mkdirSync(dataDir, {recursive: true})
+    fs.writeFileSync(path.join(dataDir, 'protocol_context.json'), '{"network":"testnet"}\n')
+    let observedMode: number | undefined
+
+    let failure: unknown
+    try {
+      await prepareProofRelease({
+        deploymentDir: deployment,
+        async imagePuller(imageReference, platform) {
+          expect(imageReference).to.equal(`dogeos69/proof-release@${digest('7')}`)
+          expect(platform).to.equal('linux/amd64')
+          const releasesRoot = path.join(dataDir, 'proof-releases')
+          const staging = fs.readdirSync(releasesRoot)
+            .find(entry => entry.includes('.preparing-'))
+          expect(staging).to.be.a('string')
+          observedMode = fs.statSync(path.join(releasesRoot, staging!)).mode % 0o1000
+          throw new Error('expected test stop')
+        },
+        releaseImage: `dogeos69/proof-release@${digest('7')}`,
+      })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).to.be.instanceOf(Error)
+    expect((failure as Error).message).to.equal('expected test stop')
+    expect(observedMode).to.equal(0o755)
+    expect(fs.readdirSync(path.join(dataDir, 'proof-releases'))).to.deep.equal([])
   })
 
   it('discovers and reads one prepared deployment lock', () => {

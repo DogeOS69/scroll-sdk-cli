@@ -62,12 +62,26 @@ The commands obey the usual CLI rule: an explicit flag suppresses its prompt;
 without the flag, the command asks and displays any discovered value as the
 editable default. In non-interactive mode a new import requires
 `--release-image`. `--protocol-context` defaults to
-`.data/protocol_context.json`.
+`.data/protocol_context.json`. Containers default to `linux/amd64`, matching
+the proof release workflow; use `--docker-platform` only when the selected
+official release has published that platform.
+
+The CLI uses the same Docker API client pattern as `setup bridge-init` to
+inspect exact images, skip pulls only when the immutable digest and requested
+platform are already local, pull with progress completion, and select the
+platform explicitly. Validation runs as the host UID/GID so it cannot leave
+root-owned deployment files. The Bridge baker is the deliberate exception: it
+runs as the image's default user because the image contains private,
+image-owned Cargo and Rust toolchain caches needed for an offline build. Its
+inputs are read-only bind mounts, its output is copied from a temporary
+container, and all proof-release containers run with networking disabled,
+capabilities dropped, and `no-new-privileges`.
 
 `proof-release-init` performs this fail-closed sequence:
 
 1. Require an immutable `repository@sha256:...` release image.
-2. Pull it and extract `/proof-release` into a temporary local directory.
+2. Inspect or pull the exact release digest for the requested Docker platform
+   and extract `/proof-release` into a temporary local directory.
 3. Invoke the release-pinned `dogeos-proof-release validate-software` command.
 4. Invoke the release-pinned `dogeos-proof-artifact-baker` on the canonical
    protocol context to create deployment-bound Bridge material on CPU.
