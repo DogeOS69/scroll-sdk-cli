@@ -584,6 +584,7 @@ export function reconcileCompiledProofTopology(
   const resourcesMountPath = topology.deployment?.resourcesMountPath
     || '/app/data/proof-release'
   const resourceClaim = topology.deployment?.resourcesPersistentVolumeClaim
+  const selectedResourceClaim = selectedRealScroll(topology, mode) ? resourceClaim : undefined
   const withdrawalMaterialBindings = configureWithdrawalValues(
     withdrawalValuesPath,
     mode,
@@ -592,7 +593,7 @@ export function reconcileCompiledProofTopology(
     bundle.plan.to_deployment_revision,
     materialsDir,
     generatedMaterialsRoot,
-    resourceClaim,
+    selectedResourceClaim,
     resourcesMountPath,
   )
   let coordinatorMaterialBindings: ReturnType<typeof configureMaterials> = []
@@ -615,7 +616,7 @@ export function reconcileCompiledProofTopology(
       bundle.plan.to_deployment_revision,
       materialsDir,
       generatedMaterialsRoot,
-      resourceClaim,
+      selectedResourceClaim,
       resourcesMountPath,
     )
   }
@@ -631,7 +632,7 @@ export function reconcileCompiledProofTopology(
     generatedMaterialsRoot,
     materialsDir,
     proofCoordinator: options.proofCoordinator,
-    resourceClaim: selectedRealScroll(topology, mode) ? resourceClaim : undefined,
+    resourceClaim: selectedResourceClaim,
     resourcesMountPath,
     topology,
     worker: bundle.worker,

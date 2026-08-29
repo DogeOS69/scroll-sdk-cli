@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import type {ProofReleaseV1} from '../types/proof-release.js'
+import type {PreparedProofRelease} from '../types/proof-release.js'
 import type {
   ProofTopologyArtifactStoreConfig,
   ProofTopologyDeploymentConfig,
@@ -10,9 +10,6 @@ import type {
 } from '../types/proof-topology.js'
 import type {ProofSystemMode} from './proof-system-mode.js'
 
-import {verifyProofReleaseMaterials} from './proof-release.js'
-
-export const DEFAULT_PROOF_RESOURCES_ROOT = 'proof-artifacts'
 export const DEFAULT_PROOF_RESOURCES_PVC = 'dogeos-proof-release'
 export const DEFAULT_PROOF_KEY_PREFIX = 'proof-topology'
 
@@ -37,7 +34,7 @@ export interface BuildProofTopologyOptions {
   deploymentName: string
   mode?: ProofSystemMode
   productionWorkerLaunch: 'external' | 'local_cpu' | 'local_cuda'
-  release: ProofReleaseV1
+  release: PreparedProofRelease
   runtime?: ProofTopologyRuntimeInput
 }
 
@@ -120,7 +117,8 @@ function runtimeRealScroll(
   options: BuildProofTopologyOptions,
   resourcesRoot: string,
 ): ProofTopologyRealScrollConfig {
-  const {defaults, files, identities} = options.release.realScroll
+  const {identities} = options.release.lock.projection
+  const {projection} = options.release.lock
   const runtime = options.runtime || {}
   const witnessSource = runtime.witnessSource || 'block_witness_dir'
   let chunkBlockWitnessDir: string | undefined
@@ -148,25 +146,56 @@ function runtimeRealScroll(
   }
 
   return {
-    aggVerifyingKeyPath: files.aggVerifyingKey.path,
-    batchAppConfig: files.batchAppConfig.path,
-    batchAppExe: files.batchAppExe.path,
-    batchBackendProfile: defaults.batchBackendProfile,
-    batchMaterializerBinaryPath: files.batchMaterializerBinary.path,
-    ...(defaults.batchProverRequirements
-      ? {batchProverRequirements: defaults.batchProverRequirements}
-      : {}),
-    ...identities,
-    chunkAppConfig: files.chunkAppConfig.path,
-    chunkAppExe: files.chunkAppExe.path,
-    chunkBackendProfile: defaults.chunkBackendProfile,
+    aggVerifyingKeyPath: releaseRelativePath(
+      options.release,
+      projection.aggregate_verification_key,
+      'aggregate_verification_key',
+    ),
+    batchAppConfig: releaseRelativePath(
+      options.release,
+      projection.batch_openvm_config,
+      'batch_openvm_config',
+    ),
+    batchAppExe: releaseRelativePath(
+      options.release,
+      projection.batch_app_vmexe,
+      'batch_app_vmexe',
+    ),
+    batchMaterializerBinaryPath: releaseRelativePath(
+      options.release,
+      projection.batch_materializer,
+      'batch_materializer',
+    ),
+    batchProgramCommitmentHashHex: identities.batch.program_commitment_hash,
+    batchProgramCommitmentHex: identities.batch.program_commitment_le_raw,
+    batchVerificationKeyHashHex: identities.batch.verification_key_hash,
+    bridgeAppCommitRawHex: identities.bridge.app_commit_raw,
+    bridgeProgramCommitmentHashHex: identities.bridge.program_commitment_hash,
+    bridgeVerificationKeyHashHex: identities.bridge.verification_key_hash,
+    chunkAppConfig: releaseRelativePath(
+      options.release,
+      projection.chunk_openvm_config,
+      'chunk_openvm_config',
+    ),
+    chunkAppExe: releaseRelativePath(
+      options.release,
+      projection.chunk_app_vmexe,
+      'chunk_app_vmexe',
+    ),
     ...(chunkBlockWitnessDir ? {chunkBlockWitnessDir} : {}),
-    chunkMaterializerBinaryPath: files.chunkMaterializerBinary.path,
-    ...(defaults.chunkProverRequirements
-      ? {chunkProverRequirements: defaults.chunkProverRequirements}
-      : {}),
+    chunkMaterializerBinaryPath: releaseRelativePath(
+      options.release,
+      projection.chunk_materializer,
+      'chunk_materializer',
+    ),
+    chunkProgramCommitmentHashHex: identities.chunk.program_commitment_hash,
+    chunkProgramCommitmentHex: identities.chunk.program_commitment_le_raw,
+    chunkVerificationKeyHashHex: identities.chunk.verification_key_hash,
     ...(chunkWitnessRpcUrl ? {chunkWitnessRpcUrl} : {}),
     chunkWitnessSource: witnessSource,
+    l2RangeAggregationAppCommitRawHex: identities.l2_range.app_commit_raw,
+    l2RangeAggregationProgramCommitmentHashHex: identities.l2_range.program_commitment_hash,
+    l2RangeAggregationVerificationKeyHashHex: identities.l2_range.verification_key_hash,
     resourcesRoot,
     ...(runtime.publicS3EndpointUrl
       ? {
@@ -180,6 +209,19 @@ function runtimeRealScroll(
   }
 }
 
+function releaseRelativePath(
+  prepared: PreparedProofRelease,
+  candidate: string,
+  label: string,
+): string {
+  const relative = path.relative(prepared.resourcesRoot, path.resolve(candidate))
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`proof release projection ${label} escapes prepared resources root`)
+  }
+
+  return relative.replaceAll(path.sep, '/')
+}
+
 export function buildProofTopologyFromRelease(
   options: BuildProofTopologyOptions,
 ): ProofTopologySpec {
@@ -187,10 +229,16 @@ export function buildProofTopologyFromRelease(
   const runtime = options.runtime || {}
   const resourcesRoot = portableRelativePath(
     deploymentDir,
-    runtime.resourcesRoot || DEFAULT_PROOF_RESOURCES_ROOT,
+    options.release.resourcesRoot,
     'proof resourcesRoot',
   )
-  verifyProofReleaseMaterials(options.release, path.resolve(deploymentDir, resourcesRoot))
+  if (
+    runtime.resourcesRoot
+    && path.resolve(deploymentDir, runtime.resourcesRoot) !== options.release.resourcesRoot
+  ) {
+    throw new Error('proof resourcesRoot override must match the prepared deployment release lock')
+  }
+
   const realScroll = runtimeRealScroll(options, resourcesRoot)
   const artifactStore = validateArtifactStore(options.artifactStore)
   const coordinatorUrl = validateWorkerVisibleUrl(
@@ -200,8 +248,16 @@ export function buildProofTopologyFromRelease(
 
   const deployment: ProofTopologyDeploymentConfig = {
     artifactLocalRoot: '/app/data/proof-artifacts',
-    bridgeStagedAppConfig: options.release.realScroll.files.bridgeAppConfig.path,
-    bridgeStagedAppExe: options.release.realScroll.files.bridgeAppExe.path,
+    bridgeStagedAppConfig: releaseRelativePath(
+      options.release,
+      options.release.lock.projection.bridge_openvm_config,
+      'bridge_openvm_config',
+    ),
+    bridgeStagedAppExe: releaseRelativePath(
+      options.release,
+      options.release.lock.projection.bridge_app_vmexe,
+      'bridge_app_vmexe',
+    ),
     coordinatorId: `${options.deploymentName}-proof-coordinator`,
     generatedMaterialsRoot: '/app/data/proof-topology',
     proofWorkBind: '0.0.0.0:9300',
@@ -227,22 +283,19 @@ export function buildProofTopologyFromRelease(
     ...(runtime.workerTolerations ? {workerTolerations: runtime.workerTolerations} : {}),
   }
   return {
-    compiler: {image: {...options.release.compilerImage}},
+    compiler: {image: {...options.release.lock.projection.images.topology_compiler}},
     deployment,
     mock: {
       artifactStore: {...artifactStore},
-      profile: options.release.profiles.mock,
-      ...(options.release.profiles.mock === 'withdrawal_mock_prover_real_materialize'
-        ? {realScroll: {...realScroll}}
-        : {}),
-      workerImage: {...options.release.workerImages.mock},
+      profile: 'withdrawal_mock_prover',
+      workerImage: {...options.release.lock.projection.images.mock_worker},
     },
     mode: options.mode || 'disabled',
     production: {
       artifactStore: {...artifactStore},
-      profile: options.release.profiles.production,
+      profile: 'real_scroll_withdrawal_full_topology',
       realScroll: {...realScroll},
-      workerImage: {...options.release.workerImages.production},
+      workerImage: {...options.release.lock.projection.images.production_worker},
       workerLaunch: options.productionWorkerLaunch,
     },
   }

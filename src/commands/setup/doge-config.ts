@@ -35,9 +35,9 @@ import {
 } from '../../utils/non-interactive.js'
 import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
 import {
-  discoverProofRelease,
-  proofReleaseManifestSha256,
-  readProofRelease,
+  discoverPreparedProofRelease,
+  readPreparedProofRelease,
+  validatePreparedProofRelease,
   verifyProofTopologyReleaseBinding,
 } from '../../utils/proof-release.js'
 import {compileProofTopology} from '../../utils/proof-topology-compiler.js'
@@ -63,9 +63,8 @@ interface InitializeProofTopologyOptions {
   productionWorkerLaunch?: 'external' | 'local_cpu' | 'local_cuda'
   publicS3Endpoint?: string
   region?: string
-  releasePath?: string
+  releaseLockPath?: string
   resourcesPersistentVolumeClaim?: string
-  resourcesRoot?: string
   witnessDir?: string
   witnessRpcUrl?: string
   witnessSource?: 'block_witness_dir' | 'rpc'
@@ -76,24 +75,9 @@ interface InitializedProofTopology {
   topology: ProofTopologySpec
 }
 
-export const PROOF_RELEASE_MANIFEST_NOT_DISCOVERED_MESSAGE =
-  'No proof release manifest was auto-discovered. This file must come from the '
-  + 'dogeos-core proof release bundle; it pins worker images, verifier keys, '
-  + 'program material, and material hashes.'
-
-export const PROOF_RELEASE_MANIFEST_REQUIRED_MESSAGE =
-  'No proof release manifest was provided. Obtain dogeos/proof-release/v1 from the '
-  + 'dogeos-core proof release bundle, place it at a conventional path such as '
-  + '.data/proof-release-v1.json, or pass --proof-release.'
-
-export function proofReleaseManifestPrompt(
-  discoveredManifestPath?: string,
-): {default?: string; message: string} {
-  return {
-    ...(discoveredManifestPath ? {default: discoveredManifestPath} : {}),
-    message: 'Enter the dogeos/proof-release/v1 manifest path:',
-  }
-}
+export const PROOF_RELEASE_LOCK_REQUIRED_MESSAGE =
+  'No prepared proof deployment release lock was found. Run scrollsdk setup '
+  + 'proof-release-init first, or pass --proof-release-lock.'
 
 const ETHEREUM_DA_DEFAULTS: Record<EthereumDaChain, {
   beaconRpcUrl: string
@@ -146,7 +130,7 @@ export class DogeConfigCommand extends Command {
     '$ scrollsdk setup doge-config',
     '$ scrollsdk setup doge-config --config .data/doge-config.toml',
     '$ scrollsdk setup doge-config --proof-topology',
-    '$ scrollsdk setup doge-config --proof-topology --proof-release .data/proof-release-v1.json',
+    '$ scrollsdk setup doge-config --proof-topology --proof-release-lock .data/proof-releases/.../proof-deployment-release-lock-v1.json',
     '$ scrollsdk setup doge-config --non-interactive',
     '$ scrollsdk setup doge-config --non-interactive --json',
   ]
@@ -209,17 +193,13 @@ export class DogeConfigCommand extends Command {
       dependsOn: ['proof-topology'],
       description: 'Existing S3-compatible proof artifact region',
     }),
-    'proof-release': Flags.string({
+    'proof-release-lock': Flags.string({
       dependsOn: ['proof-topology'],
-      description: 'Versioned dogeos/proof-release/v1 manifest; conventional paths are auto-discovered',
+      description: 'Prepared dogeos/proof-deployment-release-lock/v1; auto-discovered when unique',
     }),
     'proof-resources-pvc': Flags.string({
       dependsOn: ['proof-topology'],
       description: 'Advanced override for the pre-populated proof release PVC (default: dogeos-proof-release)',
-    }),
-    'proof-resources-root': Flags.string({
-      dependsOn: ['proof-topology'],
-      description: 'Advanced override for the deployment-relative proof release directory (default: proof-artifacts)',
     }),
     'proof-topology': Flags.boolean({
       default: false,
@@ -231,7 +211,7 @@ export class DogeConfigCommand extends Command {
     }),
     'proof-witness-dir': Flags.string({
       dependsOn: ['proof-topology'],
-      description: 'Block witness directory relative to --proof-resources-root',
+      description: 'Block witness directory relative to the prepared proof release root',
     }),
     'proof-witness-rpc-url': Flags.string({
       dependsOn: ['proof-topology'],
@@ -312,9 +292,8 @@ export class DogeConfigCommand extends Command {
         | undefined,
       publicS3Endpoint: flags['proof-public-s3-endpoint'],
       region: flags['proof-region'],
-      releasePath: flags['proof-release'],
+      releaseLockPath: flags['proof-release-lock'],
       resourcesPersistentVolumeClaim: flags['proof-resources-pvc'],
-      resourcesRoot: flags['proof-resources-root'],
       witnessDir: flags['proof-witness-dir'],
       witnessRpcUrl: flags['proof-witness-rpc-url'],
       witnessSource: flags['proof-witness-source'] as 'block_witness_dir' | 'rpc' | undefined,
@@ -845,31 +824,19 @@ export class DogeConfigCommand extends Command {
   ): Promise<InitializedProofTopology> {
     const deploymentDir = process.cwd()
     const existing = options.config.proof_topology
-    const discoveredManifestPath = discoverProofRelease(
+    const discoveredLockPath = discoverPreparedProofRelease(
       deploymentDir,
-      options.config.proof_release?.manifestPath,
+      options.releaseLockPath || options.config.proof_release?.deploymentLockPath,
     )
-    if (!discoveredManifestPath && !options.releasePath) {
-      options.log(chalk.yellow(PROOF_RELEASE_MANIFEST_NOT_DISCOVERED_MESSAGE))
-    }
-
-    const manifestInput = await resolveFlagOrPrompt(
-      options.releasePath,
-      options.nonInteractive,
-      discoveredManifestPath,
-      () => input(proofReleaseManifestPrompt(discoveredManifestPath)),
+    if (!discoveredLockPath) throw new Error(PROOF_RELEASE_LOCK_REQUIRED_MESSAGE)
+    const release = readPreparedProofRelease(discoveredLockPath)
+    options.log(chalk.blue(`Validating prepared proof release ${release.release.release_id}`))
+    validatePreparedProofRelease(release)
+    options.log(
+      chalk.blue(
+        `Using ${release.receipt.release_image} with deployment lock ${release.lock.lock_digest}`,
+      ),
     )
-    const manifestPath = manifestInput
-      ? path.resolve(deploymentDir, manifestInput)
-      : undefined
-
-    if (!manifestPath) {
-      throw new Error(PROOF_RELEASE_MANIFEST_REQUIRED_MESSAGE)
-    }
-
-    const release = readProofRelease(manifestPath)
-    const manifestSha256 = proofReleaseManifestSha256(manifestPath)
-    options.log(chalk.blue(`Using proof release ${release.releaseId} from ${manifestPath}`))
     const proofAws = readOptionalProofAwsConfig(deploymentDir)
     const normalizedDeploymentAlias = sanitizeName(
       proofAws?.config.kubernetes.deploymentAlias || path.basename(deploymentDir),
@@ -1016,9 +983,7 @@ export class DogeConfigCommand extends Command {
     ) as 'external' | 'local_cpu' | 'local_cuda'
 
     const currentReal = existing?.production?.realScroll
-    const resourcesRoot = options.resourcesRoot
-      || currentReal?.resourcesRoot
-      || 'proof-artifacts'
+    const resourcesRoot = path.relative(deploymentDir, release.resourcesRoot).replaceAll(path.sep, '/')
     const resourcesPersistentVolumeClaim = options.resourcesPersistentVolumeClaim
       || existing?.deployment?.resourcesPersistentVolumeClaim
       || 'dogeos-proof-release'
@@ -1148,25 +1113,20 @@ export class DogeConfigCommand extends Command {
       options.log,
       options.compilerBinary,
     )
-    const currentManifestSha256 = proofReleaseManifestSha256(manifestPath)
-    if (currentManifestSha256 !== manifestSha256) {
-      throw new Error(
-        `proof release manifest changed during initialization: ${manifestPath}; rerun preflight`,
-      )
-    }
-
     verifyProofTopologyReleaseBinding(topology, release, deploymentDir)
-    const manifestRelative = path.relative(deploymentDir, manifestPath)
-    const storedManifestPath = manifestRelative === '..'
-      || manifestRelative.startsWith(`..${path.sep}`)
-      || path.isAbsolute(manifestRelative)
-      ? manifestPath
-      : manifestRelative.replaceAll(path.sep, '/')
+    const lockRelative = path.relative(deploymentDir, release.lockPath)
+    const storedLockPath = lockRelative === '..'
+      || lockRelative.startsWith(`..${path.sep}`)
+      || path.isAbsolute(lockRelative)
+      ? release.lockPath
+      : lockRelative.replaceAll(path.sep, '/')
     return {
       release: {
-        manifestPath: storedManifestPath,
-        manifestSha256,
-        releaseId: release.releaseId,
+        deploymentLockDigest: release.lock.lock_digest,
+        deploymentLockPath: storedLockPath,
+        releaseId: release.release.release_id,
+        releaseImage: release.receipt.release_image,
+        softwareReleaseDigest: release.release.release_digest,
       },
       topology,
     }

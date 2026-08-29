@@ -1,62 +1,58 @@
+import {spawnSync} from 'node:child_process'
 import {createHash} from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import type {
-  ProofReleaseFileReference,
-  ProofReleaseRealScrollFiles,
-  ProofReleaseRealScrollIdentities,
-  ProofReleaseV1,
+  PreparedProofRelease,
+  ProofDeploymentReleaseLockV1,
+  ProofReleaseImportV1,
+  ProofSoftwareReleaseV1,
 } from '../types/proof-release.js'
-import type {
-  ProofTopologyImageReference,
-  ProofTopologyRealScrollConfig,
-  ProofTopologySpec,
-} from '../types/proof-topology.js'
+import type {ProofTopologyImageReference, ProofTopologySpec} from '../types/proof-topology.js'
 
-import {PROOF_RELEASE_SCHEMA} from '../types/proof-release.js'
+import {
+  PROOF_DEPLOYMENT_RELEASE_LOCK_SCHEMA,
+  PROOF_RELEASE_IMPORT_SCHEMA,
+  PROOF_SOFTWARE_RELEASE_SCHEMA,
+} from '../types/proof-release.js'
 
-export const DEFAULT_PROOF_RELEASE_FILES = [
-  '.data/proof-release-v1.json',
-  'proof-release-v1.json',
-  'proof-artifacts/proof-release-v1.json',
-] as const
+export const DEFAULT_PROOF_RELEASES_ROOT = '.data/proof-releases'
+export const PROOF_SOFTWARE_RELEASE_MANIFEST = 'proof-software-release-v1.json'
+export const PROOF_DEPLOYMENT_RELEASE_LOCK = 'proof-deployment-release-lock-v1.json'
+export const PROOF_RELEASE_IMPORT_RECEIPT = 'scrollsdk-proof-release-import-v1.json'
 
-const MOCK_PROFILES = [
-  'withdrawal_mock_prover',
-  'withdrawal_mock_prover_real_materialize',
-] as const
-const PRODUCTION_PROFILES = [
-  'real_scroll_prover',
-  'real_scroll_withdrawal',
-  'real_scroll_withdrawal_full_topology',
-] as const
+const PINNED_IMAGE = /^([^\s@]+)@(sha256:[\da-f]{64})$/
+const SHA256_DIGEST = /^sha256:[\da-f]{64}$/
+const HEX_32 = /^0x[\da-f]{64}$/
+const HEX_64 = /^0x[\da-f]{128}$/
 
-function sha256File(filePath: string, prefix = false): string {
-  const hash = createHash('sha256')
-  const descriptor = fs.openSync(filePath, 'r')
-  const buffer = Buffer.allocUnsafe(1024 * 1024)
-  try {
-    let bytesRead = 0
-    do {
-      bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null)
-      if (bytesRead > 0) hash.update(buffer.subarray(0, bytesRead))
-    } while (bytesRead > 0)
-  } finally {
-    fs.closeSync(descriptor)
-  }
-
-  const value = hash.digest('hex')
-  return prefix ? `sha256:${value}` : value
+export interface ProofReleaseCommandResult {
+  status: number
+  stderr: string
+  stdout: string
 }
 
-function isMapping(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+export type ProofReleaseCommandRunner = (
+  command: string,
+  args: string[],
+) => ProofReleaseCommandResult
+
+export interface PrepareProofReleaseOptions {
+  commandRunner?: ProofReleaseCommandRunner
+  deploymentDir?: string
+  log?: (message: string) => void
+  protocolContext?: string
+  releaseImage: string
+  releasesRoot?: string
 }
 
 function mapping(value: unknown, label: string): Record<string, unknown> {
-  if (!isMapping(value)) throw new TypeError(`${label} must be a JSON object`)
-  return value
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`${label} must be a JSON object`)
+  }
+
+  return value as Record<string, unknown>
 }
 
 function assertKnownKeys(
@@ -75,441 +71,762 @@ function requiredString(value: unknown, label: string): string {
     throw new Error(`${label} must be a non-empty string`)
   }
 
-  return value.trim()
+  if (value !== value.trim()) throw new Error(`${label} must not have surrounding whitespace`)
+  return value
 }
 
-function canonicalSha256(value: unknown, label: string): string {
-  const digest = requiredString(value, label)
-  if (!/^sha256:[\da-f]{64}$/.test(digest)) {
-    throw new Error(`${label} must match sha256:[0-9a-f]{64}`)
-  }
-
-  return digest
+function digest(value: unknown, label: string): string {
+  const result = requiredString(value, label)
+  if (!SHA256_DIGEST.test(result)) throw new Error(`${label} must match sha256:[0-9a-f]{64}`)
+  return result
 }
 
-function canonicalHex(value: unknown, bytes: number, label: string): string {
-  const hex = requiredString(value, label)
-  if (!new RegExp(`^0x[\\da-f]{${bytes * 2}}$`).test(hex)) {
-    throw new Error(`${label} must be 0x-prefixed lowercase hex encoding ${bytes} bytes`)
-  }
-
-  return hex
+function absolutePath(value: unknown, label: string): string {
+  const result = requiredString(value, label)
+  if (!path.isAbsolute(result)) throw new Error(`${label} must be absolute`)
+  return path.resolve(result)
 }
 
 function image(value: unknown, label: string): ProofTopologyImageReference {
   const raw = mapping(value, label)
   assertKnownKeys(raw, ['digest', 'repository'], label)
-  return {
-    digest: canonicalSha256(raw.digest, `${label}.digest`),
-    repository: requiredString(raw.repository, `${label}.repository`),
+  const repository = requiredString(raw.repository, `${label}.repository`)
+  if (repository.includes('@') || /\s/.test(repository)) {
+    throw new Error(`${label}.repository must contain an untagged repository name`)
   }
+
+  const lastSlash = repository.lastIndexOf('/')
+  if (repository.lastIndexOf(':') > lastSlash) {
+    throw new Error(`${label}.repository must not contain a mutable tag`)
+  }
+
+  return {digest: digest(raw.digest, `${label}.digest`), repository}
 }
 
-function relativePath(value: unknown, label: string): string {
-  const input = requiredString(value, label).replaceAll('\\', '/')
-  if (path.posix.isAbsolute(input)) throw new Error(`${label} must be release-relative`)
-  const normalized = path.posix.normalize(input)
-  if (normalized === '.' || normalized === '..' || normalized.startsWith('../')) {
-    throw new Error(`${label} must remain inside the proof release directory`)
-  }
-
-  return normalized
+export function immutableProofImageReference(value: string, label = 'proof release image'): string {
+  const match = PINNED_IMAGE.exec(value.trim())
+  if (!match) throw new Error(`${label} must match repository@sha256:<64 lowercase hex>`)
+  return `${match[1]}@${match[2]}`
 }
 
-function file(value: unknown, label: string): ProofReleaseFileReference {
-  const raw = mapping(value, label)
-  assertKnownKeys(raw, ['path', 'sha256'], label)
-  return {
-    path: relativePath(raw.path, `${label}.path`),
-    sha256: canonicalSha256(raw.sha256, `${label}.sha256`),
-  }
+function immutableImage(imageValue: ProofTopologyImageReference): string {
+  return `${imageValue.repository}@${imageValue.digest}`
 }
 
-function files(value: unknown, label: string): ProofReleaseRealScrollFiles {
-  const raw = mapping(value, label)
-  const keys = [
-    'aggVerifyingKey',
-    'batchAppConfig',
-    'batchAppExe',
-    'batchMaterializerBinary',
-    'bridgeAppConfig',
-    'bridgeAppExe',
-    'chunkAppConfig',
-    'chunkAppExe',
-    'chunkMaterializerBinary',
-    'l2RangeAggregationAppConfig',
-    'l2RangeAggregationAppExe',
-  ] as const
-  assertKnownKeys(raw, keys, label)
-  const parsed = Object.fromEntries(
-    keys.map(key => [key, file(raw[key], `${label}.${key}`)]),
-  )
-  const bridgeDirectory = path.posix.dirname(parsed.bridgeAppExe.path)
-  if (path.posix.dirname(parsed.bridgeAppConfig.path) !== bridgeDirectory) {
-    throw new Error(`${label}.bridgeAppExe and ${label}.bridgeAppConfig must share a directory`)
-  }
-
-  const expectedL2Exe = path.posix.join(bridgeDirectory, 'batch-aggregation.vmexe')
-  const expectedL2Config = path.posix.join(bridgeDirectory, 'batch-aggregation-openvm.toml')
-  if (parsed.l2RangeAggregationAppExe.path !== expectedL2Exe) {
-    throw new Error(
-      `${label}.l2RangeAggregationAppExe.path must be ${expectedL2Exe} because the `
-      + 'dogeos-core Worker contract derives it from bridgeAppExe',
-    )
-  }
-
-  if (parsed.l2RangeAggregationAppConfig.path !== expectedL2Config) {
-    throw new Error(
-      `${label}.l2RangeAggregationAppConfig.path must be ${expectedL2Config} because the `
-      + 'dogeos-core Worker contract derives it from bridgeAppExe',
-    )
-  }
-
-  return parsed as unknown as ProofReleaseRealScrollFiles
-}
-
-function identities(value: unknown, label: string): ProofReleaseRealScrollIdentities {
-  const raw = mapping(value, label)
-  const hashFields = [
-    'batchProgramCommitmentHashHex',
-    'batchVerificationKeyHashHex',
-    'bridgeProgramCommitmentHashHex',
-    'bridgeVerificationKeyHashHex',
-    'chunkProgramCommitmentHashHex',
-    'chunkVerificationKeyHashHex',
-    'l2RangeAggregationProgramCommitmentHashHex',
-    'l2RangeAggregationVerificationKeyHashHex',
-  ] as const
-  const rawCommitmentFields = [
-    'batchProgramCommitmentHex',
-    'bridgeAppCommitRawHex',
-    'chunkProgramCommitmentHex',
-    'l2RangeAggregationAppCommitRawHex',
-  ] as const
-  assertKnownKeys(raw, [...hashFields, ...rawCommitmentFields], label)
-  const parsed: Record<string, string> = {}
-  for (const field of hashFields) parsed[field] = canonicalHex(raw[field], 32, `${label}.${field}`)
-  for (const field of rawCommitmentFields) {
-    parsed[field] = canonicalHex(raw[field], 64, `${label}.${field}`)
-  }
-
-  if (
-    parsed.l2RangeAggregationVerificationKeyHashHex
-    !== parsed.bridgeVerificationKeyHashHex
-  ) {
-    throw new Error(
-      `${label}.l2RangeAggregationVerificationKeyHashHex must equal `
-      + `${label}.bridgeVerificationKeyHashHex`,
-    )
-  }
-
-  const rawL2Commitment = Buffer.from(
-    parsed.l2RangeAggregationAppCommitRawHex.slice(2),
-    'hex',
-  )
-  const derivedL2Hash = `0x${createHash('sha256').update(rawL2Commitment).digest('hex')}`
-  if (parsed.l2RangeAggregationProgramCommitmentHashHex !== derivedL2Hash) {
-    throw new Error(
-      `${label}.l2RangeAggregationProgramCommitmentHashHex does not match the SHA-256 `
-      + `of ${label}.l2RangeAggregationAppCommitRawHex`,
-    )
-  }
-
-  return parsed as unknown as ProofReleaseRealScrollIdentities
-}
-
-export function validateProofRelease(rawValue: unknown, label: string): ProofReleaseV1 {
-  const raw = mapping(rawValue, label)
-  assertKnownKeys(
-    raw,
-    ['compilerImage', 'profiles', 'realScroll', 'releaseId', 'schema', 'workerImages'],
-    label,
-  )
-  if (raw.schema !== PROOF_RELEASE_SCHEMA) {
-    throw new Error(`${label}.schema must be ${PROOF_RELEASE_SCHEMA}`)
-  }
-
-  const profiles = mapping(raw.profiles, `${label}.profiles`)
-  assertKnownKeys(profiles, ['mock', 'production'], `${label}.profiles`)
-  const mockProfile = requiredString(profiles.mock, `${label}.profiles.mock`)
-  const productionProfile = requiredString(profiles.production, `${label}.profiles.production`)
-  if (!(MOCK_PROFILES as readonly string[]).includes(mockProfile)) {
-    throw new Error(`${label}.profiles.mock is not a supported mock profile`)
-  }
-
-  if (!(PRODUCTION_PROFILES as readonly string[]).includes(productionProfile)) {
-    throw new Error(`${label}.profiles.production is not a supported production profile`)
-  }
-
-  const workers = mapping(raw.workerImages, `${label}.workerImages`)
-  assertKnownKeys(workers, ['mock', 'production'], `${label}.workerImages`)
-  const realScroll = mapping(raw.realScroll, `${label}.realScroll`)
-  assertKnownKeys(realScroll, ['defaults', 'files', 'identities'], `${label}.realScroll`)
-  const defaults = mapping(realScroll.defaults, `${label}.realScroll.defaults`)
-  assertKnownKeys(
-    defaults,
-    [
-      'batchBackendProfile',
-      'batchProverRequirements',
-      'chunkBackendProfile',
-      'chunkProverRequirements',
-    ],
-    `${label}.realScroll.defaults`,
-  )
-
-  return {
-    compilerImage: image(raw.compilerImage, `${label}.compilerImage`),
-    profiles: {
-      mock: mockProfile as ProofReleaseV1['profiles']['mock'],
-      production: productionProfile as ProofReleaseV1['profiles']['production'],
-    },
-    realScroll: {
-      defaults: {
-        batchBackendProfile: requiredString(
-          defaults.batchBackendProfile,
-          `${label}.realScroll.defaults.batchBackendProfile`,
-        ),
-        ...(defaults.batchProverRequirements === undefined
-          ? {}
-          : {
-              batchProverRequirements: requiredString(
-                defaults.batchProverRequirements,
-                `${label}.realScroll.defaults.batchProverRequirements`,
-              ),
-            }),
-        chunkBackendProfile: requiredString(
-          defaults.chunkBackendProfile,
-          `${label}.realScroll.defaults.chunkBackendProfile`,
-        ),
-        ...(defaults.chunkProverRequirements === undefined
-          ? {}
-          : {
-              chunkProverRequirements: requiredString(
-                defaults.chunkProverRequirements,
-                `${label}.realScroll.defaults.chunkProverRequirements`,
-              ),
-            }),
-      },
-      files: files(realScroll.files, `${label}.realScroll.files`),
-      identities: identities(realScroll.identities, `${label}.realScroll.identities`),
-    },
-    releaseId: requiredString(raw.releaseId, `${label}.releaseId`),
-    schema: PROOF_RELEASE_SCHEMA,
-    workerImages: {
-      mock: image(workers.mock, `${label}.workerImages.mock`),
-      production: image(workers.production, `${label}.workerImages.production`),
-    },
-  }
-}
-
-export function readProofRelease(filePath: string): ProofReleaseV1 {
+function readJson(filePath: string, label: string): unknown {
   const resolved = path.resolve(filePath)
-  if (!fs.existsSync(resolved)) throw new Error(`proof release manifest not found: ${resolved}`)
-  let parsed: unknown
+  if (!fs.existsSync(resolved)) throw new Error(`${label} not found: ${resolved}`)
+  if (!fs.lstatSync(resolved).isFile() || fs.lstatSync(resolved).isSymbolicLink()) {
+    throw new Error(`${label} must be a regular non-symlink file: ${resolved}`)
+  }
+
   try {
-    parsed = JSON.parse(fs.readFileSync(resolved, 'utf8'))
+    return JSON.parse(fs.readFileSync(resolved, 'utf8')) as unknown
   } catch (error) {
     throw new Error(
-      `${resolved}: failed to parse proof release manifest: `
+      `${resolved}: failed to decode ${label}: `
       + `${error instanceof Error ? error.message : String(error)}`,
     )
   }
-
-  return validateProofRelease(parsed, resolved)
 }
 
-export function proofReleaseManifestSha256(filePath: string): string {
-  return sha256File(path.resolve(filePath))
+function assertIdentityShape(rawValue: unknown, label: string, kind: 'batch' | 'openvm' | 'scroll') {
+  const raw = mapping(rawValue, label)
+  const allowed = kind === 'openvm'
+    ? ['app_commit_raw', 'program_commitment_hash', 'verification_key_hash']
+    : kind === 'batch'
+      ? [
+          'program_commitment_hash',
+          'program_commitment_le_raw',
+          'recursive_app_commit_raw',
+          'verification_key_hash',
+        ]
+      : ['program_commitment_hash', 'program_commitment_le_raw', 'verification_key_hash']
+  assertKnownKeys(raw, allowed, label)
+  for (const field of ['program_commitment_hash', 'verification_key_hash']) {
+    if (!HEX_32.test(requiredString(raw[field], `${label}.${field}`))) {
+      throw new Error(`${label}.${field} must be canonical 32-byte lowercase hex`)
+    }
+  }
+
+  const rawField = kind === 'openvm' ? 'app_commit_raw' : 'program_commitment_le_raw'
+  if (!HEX_64.test(requiredString(raw[rawField], `${label}.${rawField}`))) {
+    throw new Error(`${label}.${rawField} must be canonical 64-byte lowercase hex`)
+  }
+
+  if (
+    kind === 'batch'
+    && !HEX_64.test(requiredString(raw.recursive_app_commit_raw, `${label}.recursive_app_commit_raw`))
+  ) {
+    throw new Error(`${label}.recursive_app_commit_raw must be canonical 64-byte lowercase hex`)
+  }
 }
 
-export function discoverProofRelease(
+function assertImagesShape(rawValue: unknown, label: string): void {
+  const raw = mapping(rawValue, label)
+  assertKnownKeys(
+    raw,
+    [
+      'bridge_artifact_baker',
+      'mock_worker',
+      'production_worker',
+      'proof_coordinator',
+      'topology_compiler',
+      'withdrawal_processor',
+    ],
+    label,
+  )
+  for (const field of [
+    'bridge_artifact_baker',
+    'mock_worker',
+    'production_worker',
+    'topology_compiler',
+  ]) image(raw[field], `${label}.${field}`)
+  if (raw.proof_coordinator !== undefined) image(raw.proof_coordinator, `${label}.proof_coordinator`)
+  if (raw.withdrawal_processor !== undefined) {
+    image(raw.withdrawal_processor, `${label}.withdrawal_processor`)
+  }
+}
+
+export function readProofSoftwareRelease(filePath: string): ProofSoftwareReleaseV1 {
+  const raw = mapping(readJson(filePath, 'proof software release'), filePath)
+  assertKnownKeys(
+    raw,
+    [
+      'build',
+      'identities',
+      'images',
+      'materials',
+      'release_digest',
+      'release_id',
+      'schema',
+      'schema_version',
+      'source_revisions',
+    ],
+    filePath,
+  )
+  if (raw.schema !== PROOF_SOFTWARE_RELEASE_SCHEMA || raw.schema_version !== 1) {
+    throw new Error(`${filePath} must be dogeos/proof-software-release/v1 schema_version 1`)
+  }
+
+  requiredString(raw.release_id, `${filePath}.release_id`)
+  digest(raw.release_digest, `${filePath}.release_digest`)
+  assertImagesShape(raw.images, `${filePath}.images`)
+  const identities = mapping(raw.identities, `${filePath}.identities`)
+  assertKnownKeys(
+    identities,
+    ['aggregate_verification_key_hash', 'batch', 'chunk', 'l2_range'],
+    `${filePath}.identities`,
+  )
+  if (!HEX_32.test(requiredString(
+    identities.aggregate_verification_key_hash,
+    `${filePath}.identities.aggregate_verification_key_hash`,
+  ))) throw new Error(`${filePath}.identities.aggregate_verification_key_hash is invalid`)
+  assertIdentityShape(identities.chunk, `${filePath}.identities.chunk`, 'scroll')
+  assertIdentityShape(identities.batch, `${filePath}.identities.batch`, 'batch')
+  assertIdentityShape(identities.l2_range, `${filePath}.identities.l2_range`, 'openvm')
+  mapping(raw.materials, `${filePath}.materials`)
+  mapping(raw.build, `${filePath}.build`)
+  mapping(raw.source_revisions, `${filePath}.source_revisions`)
+  return raw as unknown as ProofSoftwareReleaseV1
+}
+
+export function readProofDeploymentReleaseLock(filePath: string): ProofDeploymentReleaseLockV1 {
+  const raw = mapping(readJson(filePath, 'proof deployment release lock'), filePath)
+  assertKnownKeys(
+    raw,
+    [
+      'bridge_material_digest',
+      'bridge_material_manifest',
+      'bridge_material_root',
+      'lock_digest',
+      'projection',
+      'schema',
+      'schema_version',
+      'software_release_digest',
+      'software_release_manifest',
+      'software_release_root',
+    ],
+    filePath,
+  )
+  if (raw.schema !== PROOF_DEPLOYMENT_RELEASE_LOCK_SCHEMA || raw.schema_version !== 1) {
+    throw new Error(`${filePath} must be dogeos/proof-deployment-release-lock/v1 schema_version 1`)
+  }
+
+  for (const field of ['bridge_material_digest', 'lock_digest', 'software_release_digest']) {
+    digest(raw[field], `${filePath}.${field}`)
+  }
+
+  for (const field of [
+    'bridge_material_manifest',
+    'bridge_material_root',
+    'software_release_manifest',
+    'software_release_root',
+  ]) absolutePath(raw[field], `${filePath}.${field}`)
+  const projection = mapping(raw.projection, `${filePath}.projection`)
+  assertKnownKeys(
+    projection,
+    [
+      'aggregate_verification_key',
+      'batch_app_vmexe',
+      'batch_materializer',
+      'batch_openvm_config',
+      'bridge_app_vmexe',
+      'bridge_openvm_config',
+      'chunk_app_vmexe',
+      'chunk_materializer',
+      'chunk_openvm_config',
+      'identities',
+      'images',
+      'l2_range_app_vmexe',
+      'l2_range_openvm_config',
+    ],
+    `${filePath}.projection`,
+  )
+  for (const field of [
+    'aggregate_verification_key',
+    'batch_app_vmexe',
+    'batch_materializer',
+    'batch_openvm_config',
+    'bridge_app_vmexe',
+    'bridge_openvm_config',
+    'chunk_app_vmexe',
+    'chunk_materializer',
+    'chunk_openvm_config',
+    'l2_range_app_vmexe',
+    'l2_range_openvm_config',
+  ]) absolutePath(projection[field], `${filePath}.projection.${field}`)
+  assertImagesShape(projection.images, `${filePath}.projection.images`)
+  const identities = mapping(projection.identities, `${filePath}.projection.identities`)
+  assertKnownKeys(
+    identities,
+    ['aggregate_verification_key_hash', 'batch', 'bridge', 'chunk', 'l2_range'],
+    `${filePath}.projection.identities`,
+  )
+  assertIdentityShape(identities.chunk, `${filePath}.projection.identities.chunk`, 'scroll')
+  assertIdentityShape(identities.batch, `${filePath}.projection.identities.batch`, 'batch')
+  assertIdentityShape(identities.bridge, `${filePath}.projection.identities.bridge`, 'openvm')
+  assertIdentityShape(identities.l2_range, `${filePath}.projection.identities.l2_range`, 'openvm')
+  return raw as unknown as ProofDeploymentReleaseLockV1
+}
+
+export function readProofReleaseImport(filePath: string): ProofReleaseImportV1 {
+  const raw = mapping(readJson(filePath, 'scroll-sdk proof release import receipt'), filePath)
+  assertKnownKeys(
+    raw,
+    [
+      'deployment_lock',
+      'deployment_lock_digest',
+      'protocol_context',
+      'protocol_context_sha256',
+      'release_id',
+      'release_image',
+      'schema',
+      'schema_version',
+      'software_release_digest',
+    ],
+    filePath,
+  )
+  if (raw.schema !== PROOF_RELEASE_IMPORT_SCHEMA || raw.schema_version !== 1) {
+    throw new Error(`${filePath} must be ${PROOF_RELEASE_IMPORT_SCHEMA} schema_version 1`)
+  }
+
+  immutableProofImageReference(requiredString(raw.release_image, `${filePath}.release_image`))
+  absolutePath(raw.deployment_lock, `${filePath}.deployment_lock`)
+  absolutePath(raw.protocol_context, `${filePath}.protocol_context`)
+  for (const field of ['deployment_lock_digest', 'protocol_context_sha256', 'software_release_digest']) {
+    digest(raw[field], `${filePath}.${field}`)
+  }
+
+  requiredString(raw.release_id, `${filePath}.release_id`)
+  return raw as unknown as ProofReleaseImportV1
+}
+
+export function sha256File(filePath: string): string {
+  const hash = createHash('sha256')
+  const descriptor = fs.openSync(filePath, 'r')
+  const buffer = Buffer.allocUnsafe(1024 * 1024)
+  try {
+    let bytesRead = 0
+    do {
+      bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null)
+      if (bytesRead > 0) hash.update(buffer.subarray(0, bytesRead))
+    } while (bytesRead > 0)
+  } finally {
+    fs.closeSync(descriptor)
+  }
+
+  return `sha256:${hash.digest('hex')}`
+}
+
+function ensureInside(root: string, candidate: string, label: string): string {
+  const resolvedRoot = path.resolve(root)
+  const resolved = path.resolve(candidate)
+  const relative = path.relative(resolvedRoot, resolved)
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${label} must remain inside prepared proof release root ${resolvedRoot}`)
+  }
+
+  return resolved
+}
+
+export function readPreparedProofRelease(lockPath: string): PreparedProofRelease {
+  const resolvedLock = path.resolve(lockPath)
+  const resourcesRoot = path.dirname(resolvedLock)
+  const importPath = path.join(resourcesRoot, PROOF_RELEASE_IMPORT_RECEIPT)
+  const lock = readProofDeploymentReleaseLock(resolvedLock)
+  const receipt = readProofReleaseImport(importPath)
+  if (path.resolve(receipt.deployment_lock) !== resolvedLock) {
+    throw new Error(`${importPath}.deployment_lock does not name ${resolvedLock}`)
+  }
+
+  if (receipt.deployment_lock_digest !== lock.lock_digest) {
+    throw new Error(`${importPath}.deployment_lock_digest does not match the deployment lock`)
+  }
+
+  for (const [label, candidate] of [
+    ['software_release_manifest', lock.software_release_manifest],
+    ['software_release_root', lock.software_release_root],
+    ['bridge_material_manifest', lock.bridge_material_manifest],
+    ['bridge_material_root', lock.bridge_material_root],
+    ...Object.entries(lock.projection).filter(([key]) => key !== 'identities' && key !== 'images'),
+  ] as Array<[string, string]>) ensureInside(resourcesRoot, candidate, label)
+  const release = readProofSoftwareRelease(lock.software_release_manifest)
+  if (
+    release.release_digest !== lock.software_release_digest
+    || release.release_digest !== receipt.software_release_digest
+  ) throw new Error('prepared proof release software digest binding is inconsistent')
+  if (release.release_id !== receipt.release_id) {
+    throw new Error('prepared proof release release_id binding is inconsistent')
+  }
+
+  if (sha256File(receipt.protocol_context) !== receipt.protocol_context_sha256) {
+    throw new Error(`protocol context changed after proof release preparation: ${receipt.protocol_context}`)
+  }
+
+  return {importPath, lock, lockPath: resolvedLock, receipt, release, resourcesRoot}
+}
+
+export function discoverPreparedProofRelease(
   deploymentDir = '.',
-  explicitPath?: string,
+  explicitLock?: string,
 ): string | undefined {
-  if (explicitPath) return path.resolve(deploymentDir, explicitPath)
-  const found = DEFAULT_PROOF_RELEASE_FILES
-    .map(candidate => path.resolve(deploymentDir, candidate))
-    .filter(candidate => fs.existsSync(candidate))
+  if (explicitLock) return path.resolve(deploymentDir, explicitLock)
+  const found = listPreparedProofReleaseLocks(deploymentDir)
   if (found.length > 1) {
     throw new Error(
-      `multiple conventional proof release manifests found: ${found.join(', ')}; `
-      + 'pass --proof-release explicitly',
+      `multiple prepared proof releases found: ${found.join(', ')}; `
+      + 'pass --proof-release-lock explicitly',
     )
   }
 
   return found[0]
 }
 
-function releaseFiles(release: ProofReleaseV1): ProofReleaseFileReference[] {
-  return Object.values(release.realScroll.files)
+export function listPreparedProofReleaseLocks(deploymentDir = '.'): string[] {
+  const releasesRoot = path.resolve(deploymentDir, DEFAULT_PROOF_RELEASES_ROOT)
+  if (!fs.existsSync(releasesRoot)) return []
+  return fs.readdirSync(releasesRoot, {withFileTypes: true})
+    .filter(entry => entry.isDirectory())
+    .map(entry => path.join(releasesRoot, entry.name, PROOF_DEPLOYMENT_RELEASE_LOCK))
+    .filter(candidate => fs.existsSync(candidate))
 }
 
-export function verifyProofReleaseMaterials(
-  release: ProofReleaseV1,
-  resourcesRoot: string,
-): void {
-  const root = path.resolve(resourcesRoot)
-  if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
-    throw new Error(`proof release resources directory not found: ${root}`)
-  }
-
-  if (fs.lstatSync(root).isSymbolicLink()) {
-    throw new Error(`proof release resources directory must not be a symlink: ${root}`)
-  }
-
-  const physicalRoot = fs.realpathSync(root)
-
-  for (const reference of releaseFiles(release)) {
-    const candidate = path.resolve(root, reference.path)
-    const inside = path.relative(root, candidate)
-    if (inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)) {
-      throw new Error(`proof release material escapes resources root: ${reference.path}`)
-    }
-
-    if (!fs.existsSync(candidate)) throw new Error(`proof release material not found: ${candidate}`)
-    const stat = fs.lstatSync(candidate)
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      throw new Error(`proof release material must be a regular non-symlink file: ${candidate}`)
-    }
-
-    const physicalCandidate = fs.realpathSync(candidate)
-    const physicalInside = path.relative(physicalRoot, physicalCandidate)
-    if (
-      physicalInside === '..'
-      || physicalInside.startsWith(`..${path.sep}`)
-      || path.isAbsolute(physicalInside)
-    ) {
-      throw new Error(`proof release material resolves outside resources root: ${candidate}`)
-    }
-
-    const actual = sha256File(candidate, true)
-    if (actual !== reference.sha256) {
-      throw new Error(
-        `proof release material digest mismatch for ${candidate}: `
-        + `expected ${reference.sha256}, got ${actual}`,
-      )
-    }
+function defaultCommandRunner(command: string, args: string[]): ProofReleaseCommandResult {
+  const child = spawnSync(command, args, {
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: 'pipe',
+  })
+  if (child.error) throw child.error
+  return {
+    status: child.status ?? 1,
+    stderr: child.stderr || '',
+    stdout: child.stdout || '',
   }
 }
 
-function assertEqual(actual: unknown, expected: unknown, label: string): void {
-  if (actual !== expected) {
-    throw new Error(
-      `${label} does not match the pinned proof release: expected ${String(expected)}, `
-      + `got ${String(actual)}`,
-    )
-  }
-}
-
-function assertRealScrollRelease(
-  actual: ProofTopologyRealScrollConfig | undefined,
-  release: ProofReleaseV1,
+function checkedRun(
+  runner: ProofReleaseCommandRunner,
+  command: string,
+  args: string[],
   label: string,
-): void {
-  if (!actual) throw new Error(`${label} is required by the pinned proof release`)
-  const {defaults, files: releaseFiles, identities: releaseIdentities} = release.realScroll
-  const paths: Array<[keyof ProofTopologyRealScrollConfig, string]> = [
-    ['aggVerifyingKeyPath', releaseFiles.aggVerifyingKey.path],
-    ['batchAppConfig', releaseFiles.batchAppConfig.path],
-    ['batchAppExe', releaseFiles.batchAppExe.path],
-    ['batchMaterializerBinaryPath', releaseFiles.batchMaterializerBinary.path],
-    ['chunkAppConfig', releaseFiles.chunkAppConfig.path],
-    ['chunkAppExe', releaseFiles.chunkAppExe.path],
-    ['chunkMaterializerBinaryPath', releaseFiles.chunkMaterializerBinary.path],
-  ]
-  for (const [field, expected] of paths) {
-    assertEqual(actual[field], expected, `${label}.${field}`)
+): string {
+  const result = runner(command, args)
+  if (result.status !== 0) {
+    const detail = result.stderr.trim() || result.stdout.trim()
+    throw new Error(`${label} failed with status ${result.status}${detail ? `: ${detail}` : ''}`)
   }
 
-  for (const [field, expected] of Object.entries(releaseIdentities)) {
-    assertEqual(
-      actual[field as keyof ProofTopologyRealScrollConfig],
-      expected,
-      `${label}.${field}`,
+  return result.stdout.trim()
+}
+
+function dockerSecurityArgs(): string[] {
+  return [
+    '--network',
+    'none',
+    '--cap-drop',
+    'ALL',
+    '--security-opt',
+    'no-new-privileges',
+    '--pids-limit',
+    '4096',
+  ]
+}
+
+function mountValue(source: string, destination: string, readonly = false): string {
+  for (const value of [source, destination]) {
+    if (value.includes(',')) throw new Error(`Docker bind-mount paths must not contain commas: ${value}`)
+  }
+
+  return `type=bind,src=${source},dst=${destination}${readonly ? ',readonly' : ''}`
+}
+
+function runReleaseTool(
+  runner: ProofReleaseCommandRunner,
+  imageReference: string,
+  rootSource: string,
+  rootDestination: string,
+  protocolContext: string,
+  commandArgs: string[],
+): void {
+  checkedRun(
+    runner,
+    'docker',
+    [
+      'run',
+      '--rm',
+      ...dockerSecurityArgs(),
+      '--read-only',
+      '--tmpfs',
+      '/tmp:rw,noexec,nosuid,size=64m',
+      '--user',
+      `${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}`,
+      '--mount',
+      mountValue(rootSource, rootDestination),
+      '--mount',
+      mountValue(protocolContext, protocolContext, true),
+      '--entrypoint',
+      'dogeos-proof-release',
+      imageReference,
+      ...commandArgs,
+    ],
+    `dogeos-proof-release ${commandArgs[0]}`,
+  )
+}
+
+export function validatePreparedProofRelease(
+  prepared: PreparedProofRelease,
+  commandRunner: ProofReleaseCommandRunner = defaultCommandRunner,
+): void {
+  const topologyImage = immutableImage(prepared.release.images.topology_compiler)
+  runReleaseTool(
+    commandRunner,
+    topologyImage,
+    prepared.resourcesRoot,
+    prepared.resourcesRoot,
+    prepared.receipt.protocol_context,
+    [
+      'validate-deployment',
+      '--lock',
+      prepared.lockPath,
+      '--protocol-context',
+      prepared.receipt.protocol_context,
+    ],
+  )
+}
+
+function writeReceipt(filePath: string, receipt: ProofReleaseImportV1): void {
+  fs.writeFileSync(filePath, `${JSON.stringify(receipt, undefined, 2)}\n`, {
+    encoding: 'utf8',
+    flag: 'wx',
+    mode: 0o600,
+  })
+}
+
+export function prepareProofRelease(options: PrepareProofReleaseOptions): PreparedProofRelease {
+  const deploymentDir = path.resolve(options.deploymentDir || '.')
+  const protocolContext = path.resolve(
+    deploymentDir,
+    options.protocolContext || '.data/protocol_context.json',
+  )
+  if (!fs.existsSync(protocolContext) || !fs.statSync(protocolContext).isFile()) {
+    throw new Error(
+      `canonical protocol context not found: ${protocolContext}; `
+      + 'run scrollsdk setup bridge-init --step 5-protocol-context first',
     )
   }
 
-  assertEqual(actual.batchBackendProfile, defaults.batchBackendProfile, `${label}.batchBackendProfile`)
-  assertEqual(actual.chunkBackendProfile, defaults.chunkBackendProfile, `${label}.chunkBackendProfile`)
-  assertEqual(
-    actual.batchProverRequirements,
-    defaults.batchProverRequirements,
-    `${label}.batchProverRequirements`,
+  const releaseImage = immutableProofImageReference(options.releaseImage)
+  const match = PINNED_IMAGE.exec(releaseImage)!
+  const protocolContextSha256 = sha256File(protocolContext)
+  const releasesRoot = path.resolve(
+    deploymentDir,
+    options.releasesRoot || DEFAULT_PROOF_RELEASES_ROOT,
   )
-  assertEqual(
-    actual.chunkProverRequirements,
-    defaults.chunkProverRequirements,
-    `${label}.chunkProverRequirements`,
-  )
+  const key = `${match[2].replace(':', '-')}-${protocolContextSha256.slice('sha256:'.length, 29)}`
+  const finalRoot = path.join(releasesRoot, key)
+  const finalLock = path.join(finalRoot, PROOF_DEPLOYMENT_RELEASE_LOCK)
+  const runner = options.commandRunner || defaultCommandRunner
+  if (fs.existsSync(finalRoot)) {
+    const prepared = readPreparedProofRelease(finalLock)
+    if (prepared.receipt.release_image !== releaseImage) {
+      throw new Error(`${finalRoot} was prepared from a different immutable release image`)
+    }
+
+    options.log?.(`Revalidating prepared proof release ${prepared.release.release_id}`)
+    validatePreparedProofRelease(prepared, runner)
+    return prepared
+  }
+
+  fs.mkdirSync(releasesRoot, {recursive: true})
+  const stagingRoot = fs.mkdtempSync(path.join(releasesRoot, `.${key}.preparing-`))
+  let containerId: string | undefined
+  try {
+    options.log?.(`Pulling immutable proof software release ${releaseImage}`)
+    checkedRun(runner, 'docker', ['pull', releaseImage], 'docker pull proof release')
+    containerId = checkedRun(
+      runner,
+      'docker',
+      ['create', releaseImage, '/bin/true'],
+      'docker create proof release',
+    ).split(/\s+/)[0]
+    if (!containerId) throw new Error('docker create did not return a container ID')
+    const softwareStaging = path.join(stagingRoot, 'software')
+    fs.mkdirSync(softwareStaging)
+    checkedRun(
+      runner,
+      'docker',
+      ['cp', `${containerId}:/proof-release/.`, softwareStaging],
+      'docker copy proof release',
+    )
+    checkedRun(runner, 'docker', ['rm', '-f', containerId], 'docker remove proof release container')
+    containerId = undefined
+
+    const softwareManifest = path.join(finalRoot, 'software', PROOF_SOFTWARE_RELEASE_MANIFEST)
+    const release = readProofSoftwareRelease(
+      path.join(stagingRoot, 'software', PROOF_SOFTWARE_RELEASE_MANIFEST),
+    )
+    const topologyImage = immutableImage(release.images.topology_compiler)
+    const bakerImage = immutableImage(release.images.bridge_artifact_baker)
+    options.log?.(`Validating proof software release ${release.release_id}`)
+    runReleaseTool(
+      runner,
+      topologyImage,
+      stagingRoot,
+      finalRoot,
+      protocolContext,
+      [
+        'validate-software',
+        '--manifest',
+        softwareManifest,
+        '--root',
+        path.join(finalRoot, 'software'),
+      ],
+    )
+
+    options.log?.('Baking deployment-bound Bridge material on CPU; this can take several minutes')
+    checkedRun(
+      runner,
+      'docker',
+      [
+        'run',
+        '--rm',
+        ...dockerSecurityArgs(),
+        '--user',
+        `${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}`,
+        '--mount',
+        mountValue(stagingRoot, finalRoot),
+        '--mount',
+        mountValue(protocolContext, protocolContext, true),
+        bakerImage,
+        'bake-bridge',
+        '--protocol-context',
+        protocolContext,
+        '--software-release',
+        softwareManifest,
+        '--software-release-root',
+        path.join(finalRoot, 'software'),
+        '--output',
+        path.join(finalRoot, 'bridge'),
+      ],
+      'dogeos proof Bridge baker',
+    )
+
+    const lockPath = path.join(finalRoot, PROOF_DEPLOYMENT_RELEASE_LOCK)
+    runReleaseTool(
+      runner,
+      topologyImage,
+      stagingRoot,
+      finalRoot,
+      protocolContext,
+      [
+        'lock-deployment',
+        '--software-manifest',
+        softwareManifest,
+        '--software-root',
+        path.join(finalRoot, 'software'),
+        '--bridge-manifest',
+        path.join(finalRoot, 'bridge', 'proof-bridge-material-v1.json'),
+        '--bridge-root',
+        path.join(finalRoot, 'bridge'),
+        '--protocol-context',
+        protocolContext,
+        '--output',
+        lockPath,
+      ],
+    )
+    const stagedLock = readProofDeploymentReleaseLock(
+      path.join(stagingRoot, PROOF_DEPLOYMENT_RELEASE_LOCK),
+    )
+    const receipt: ProofReleaseImportV1 = {
+      deployment_lock: lockPath,
+      deployment_lock_digest: stagedLock.lock_digest,
+      protocol_context: protocolContext,
+      protocol_context_sha256: protocolContextSha256,
+      release_id: release.release_id,
+      release_image: releaseImage,
+      schema: PROOF_RELEASE_IMPORT_SCHEMA,
+      schema_version: 1,
+      software_release_digest: release.release_digest,
+    }
+    writeReceipt(path.join(stagingRoot, PROOF_RELEASE_IMPORT_RECEIPT), receipt)
+    // The lock intentionally records final absolute paths. Validate it through
+    // the same final-path container mount before installing the staged tree.
+    runReleaseTool(
+      runner,
+      topologyImage,
+      stagingRoot,
+      finalRoot,
+      protocolContext,
+      ['validate-deployment', '--lock', lockPath, '--protocol-context', protocolContext],
+    )
+    if (fs.existsSync(finalRoot)) throw new Error(`proof release destination appeared: ${finalRoot}`)
+    fs.renameSync(stagingRoot, finalRoot)
+    const prepared = readPreparedProofRelease(finalLock)
+    if (prepared.lock.lock_digest !== stagedLock.lock_digest) {
+      throw new Error('proof deployment lock changed while it was installed')
+    }
+
+    return prepared
+  } finally {
+    if (containerId) runner('docker', ['rm', '-f', containerId])
+    if (fs.existsSync(stagingRoot)) fs.rmSync(stagingRoot, {force: true, recursive: true})
+  }
+}
+
+function relativeProjectionPath(
+  prepared: PreparedProofRelease,
+  absolute: string,
+  label: string,
+): string {
+  const candidate = ensureInside(prepared.resourcesRoot, absolute, label)
+  return path.relative(prepared.resourcesRoot, candidate).replaceAll(path.sep, '/')
 }
 
 export function verifyProofTopologyReleaseBinding(
   topology: ProofTopologySpec,
-  release: ProofReleaseV1,
+  prepared: PreparedProofRelease,
   deploymentDir = '.',
 ): void {
-  assertEqual(
-    topology.compiler.image.repository,
-    release.compilerImage.repository,
-    'proof_topology.compiler.image.repository',
-  )
-  assertEqual(
-    topology.compiler.image.digest,
-    release.compilerImage.digest,
-    'proof_topology.compiler.image.digest',
-  )
+  const {projection} = prepared.lock
+  const expectedCompiler = projection.images.topology_compiler
+  const expectedMockWorker = projection.images.mock_worker
+  const expectedProductionWorker = projection.images.production_worker
+  const equalImage = (
+    actual: ProofTopologyImageReference,
+    expected: ProofTopologyImageReference,
+    label: string,
+  ) => {
+    if (actual.repository !== expected.repository || actual.digest !== expected.digest) {
+      throw new Error(`${label} does not match the prepared proof release`)
+    }
+  }
+
+  equalImage(topology.compiler.image, expectedCompiler, 'proof_topology.compiler.image')
   if (!topology.mock || !topology.production) {
-    throw new Error('proof_topology must stage both mock and production release profiles')
+    throw new Error('proof_topology must stage both mock and production profiles')
   }
 
-  assertEqual(topology.mock.profile, release.profiles.mock, 'proof_topology.mock.profile')
-  assertEqual(
-    topology.mock.workerImage.repository,
-    release.workerImages.mock.repository,
-    'proof_topology.mock.workerImage.repository',
-  )
-  assertEqual(
-    topology.mock.workerImage.digest,
-    release.workerImages.mock.digest,
-    'proof_topology.mock.workerImage.digest',
-  )
-  assertEqual(
-    topology.production.profile,
-    release.profiles.production,
-    'proof_topology.production.profile',
-  )
-  assertEqual(
-    topology.production.workerImage.repository,
-    release.workerImages.production.repository,
-    'proof_topology.production.workerImage.repository',
-  )
-  assertEqual(
-    topology.production.workerImage.digest,
-    release.workerImages.production.digest,
-    'proof_topology.production.workerImage.digest',
-  )
-  assertEqual(
-    topology.deployment?.bridgeStagedAppExe,
-    release.realScroll.files.bridgeAppExe.path,
-    'proof_topology.deployment.bridgeStagedAppExe',
-  )
-  assertEqual(
-    topology.deployment?.bridgeStagedAppConfig,
-    release.realScroll.files.bridgeAppConfig.path,
-    'proof_topology.deployment.bridgeStagedAppConfig',
-  )
-  assertRealScrollRelease(
-    topology.production.realScroll,
-    release,
-    'proof_topology.production.realScroll',
-  )
-  if (release.profiles.mock === 'withdrawal_mock_prover_real_materialize') {
-    assertRealScrollRelease(topology.mock.realScroll, release, 'proof_topology.mock.realScroll')
+  if (topology.mock.profile !== 'withdrawal_mock_prover' || topology.mock.realScroll) {
+    throw new Error(
+      'proof_topology.mock must use the release-backed withdrawal_mock_prover profile',
+    )
   }
 
-  const resourcesRoot = path.resolve(
-    deploymentDir,
-    topology.production.realScroll.resourcesRoot,
+  if (topology.production.profile !== 'real_scroll_withdrawal_full_topology') {
+    throw new Error(
+      'proof_topology.production must use real_scroll_withdrawal_full_topology',
+    )
+  }
+
+  equalImage(topology.mock.workerImage, expectedMockWorker, 'proof_topology.mock.workerImage')
+  equalImage(
+    topology.production.workerImage,
+    expectedProductionWorker,
+    'proof_topology.production.workerImage',
   )
-  verifyProofReleaseMaterials(release, resourcesRoot)
+  const real = topology.production.realScroll
+  const identityFields: Array<[keyof typeof real, string]> = [
+    ['batchProgramCommitmentHashHex', projection.identities.batch.program_commitment_hash],
+    ['batchProgramCommitmentHex', projection.identities.batch.program_commitment_le_raw],
+    ['batchVerificationKeyHashHex', projection.identities.batch.verification_key_hash],
+    ['bridgeAppCommitRawHex', projection.identities.bridge.app_commit_raw],
+    ['bridgeProgramCommitmentHashHex', projection.identities.bridge.program_commitment_hash],
+    ['bridgeVerificationKeyHashHex', projection.identities.bridge.verification_key_hash],
+    ['chunkProgramCommitmentHashHex', projection.identities.chunk.program_commitment_hash],
+    ['chunkProgramCommitmentHex', projection.identities.chunk.program_commitment_le_raw],
+    ['chunkVerificationKeyHashHex', projection.identities.chunk.verification_key_hash],
+    ['l2RangeAggregationAppCommitRawHex', projection.identities.l2_range.app_commit_raw],
+    [
+      'l2RangeAggregationProgramCommitmentHashHex',
+      projection.identities.l2_range.program_commitment_hash,
+    ],
+    [
+      'l2RangeAggregationVerificationKeyHashHex',
+      projection.identities.l2_range.verification_key_hash,
+    ],
+  ]
+  for (const [field, expected] of identityFields) {
+    if (real[field] !== expected) {
+      throw new Error(`proof_topology.production.realScroll.${field} does not match release lock`)
+    }
+  }
+
+  const expectedPaths: Array<[keyof typeof real, string]> = [
+    ['aggVerifyingKeyPath', projection.aggregate_verification_key],
+    ['batchAppConfig', projection.batch_openvm_config],
+    ['batchAppExe', projection.batch_app_vmexe],
+    ['batchMaterializerBinaryPath', projection.batch_materializer],
+    ['chunkAppConfig', projection.chunk_openvm_config],
+    ['chunkAppExe', projection.chunk_app_vmexe],
+    ['chunkMaterializerBinaryPath', projection.chunk_materializer],
+  ]
+  for (const [field, absolute] of expectedPaths) {
+    const expected = relativeProjectionPath(prepared, absolute, String(field))
+    if (real[field] !== expected) throw new Error(`proof_topology.production.realScroll.${field} does not match release lock`)
+  }
+
+  const configuredRoot = path.resolve(deploymentDir, real.resourcesRoot)
+  if (configuredRoot !== prepared.resourcesRoot) {
+    throw new Error('proof_topology production resourcesRoot does not match prepared release root')
+  }
+
+  const expectedBridgeAppExe = relativeProjectionPath(
+    prepared,
+    projection.bridge_app_vmexe,
+    'bridge_app_vmexe',
+  )
+  const expectedBridgeAppConfig = relativeProjectionPath(
+    prepared,
+    projection.bridge_openvm_config,
+    'bridge_openvm_config',
+  )
+  if (topology.deployment?.bridgeStagedAppExe !== expectedBridgeAppExe) {
+    throw new Error('proof_topology.deployment.bridgeStagedAppExe does not match release lock')
+  }
+
+  if (topology.deployment.bridgeStagedAppConfig !== expectedBridgeAppConfig) {
+    throw new Error('proof_topology.deployment.bridgeStagedAppConfig does not match release lock')
+  }
 }

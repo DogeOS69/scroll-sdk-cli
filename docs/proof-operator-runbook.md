@@ -86,8 +86,12 @@ deployment/
 ├── config.toml
 ├── .data/
 │   ├── doge-config.toml                  # normal proof authority + release binding
-│   ├── proof-release-v1.json             # immutable release-producer input
 │   ├── proof-aws.json                    # stable AWS resource facts; active AWS modes
+│   ├── proof-releases/                   # validated OCI release + deployment Bridge bake
+│   │   └── <release-and-context-key>/
+│   │       ├── software/                 # immutable global release material
+│   │       ├── bridge/                   # deployment-bound Bridge material
+│   │       └── proof-deployment-release-lock-v1.json
 │   ├── proof-deployment.json             # generated deployment contract
 │   ├── generated/proof-topology/         # validated dogeos-core compiler bundle
 │   ├── setup_defaults.toml
@@ -104,12 +108,6 @@ deployment/
 │   └── WithdrawalProcessor.toml
 ├── proof-coordinator/
 │   └── ProofCoordinator.toml
-├── proof-artifacts/                     # proof inputs and generated JSON
-│   ├── chunk/                            # production worker program
-│   ├── batch/                            # production worker program
-│   ├── bridge/                           # bridge + standalone aggregation programs
-│   ├── keys/                             # aggregate verification key
-│   └── bin/                              # pinned runtime materializer
 ├── prover-worker-production/            # generated for external production Worker
 │   └── docker-compose/
 └── signer-policy-bundle/                # generated after genesis
@@ -304,8 +302,10 @@ provision the production GPU Worker and does not probe partner networks.
 
 Only a deployment that will never use the AWS proof topology should skip
 `proof-aws-init`. Resource preparation is valid while the selected mode is
-disabled. Next select the proof posture and run `prep-charts` as described in
-section 8. `prep-charts` fails if the native
+disabled. The command's next-step message is deliberately ordered: import the
+official immutable release with `setup proof-release-init`, initialize both
+dormant topology profiles with `setup doge-config --proof-topology`, and only
+then run `prep-charts` as described in section 8. `prep-charts` fails if the native
 WithdrawalProcessor template is absent. The maintained values template must
 use the native-file layout and must not contain an inline
 `configMaps.config.data.WithdrawalProcessor.toml` copy.
@@ -321,22 +321,38 @@ to fetch accepted proof artifacts. With prepared AWS resources,
 `proof-aws-init`; it does not ask the operator to enter it again.
 
 For the normal compiler-backed deployment, do not enter image digests, release
-paths, VK hashes, or commitments by hand. Obtain the
-`dogeos/proof-release/v1` manifest shipped by the dogeos-core release producer,
-place it at `.data/proof-release-v1.json`, prepare the referenced release
-material and artifact resources, and run:
+paths, VK hashes, or commitments by hand. Obtain the authoritative immutable
+OCI reference printed by the dogeos-core `Proof Software Release` workflow,
+then import it after `.data/protocol_context.json` exists:
+
+```bash
+scrollsdk setup proof-release-init \
+  --release-image dogeos69/proof-release@sha256:<digest>
+```
+
+Without `--release-image`, the interactive command asks for it and displays an
+already imported reference as the editable default. New non-interactive
+imports require the flag. Mutable tags are rejected.
+
+The command extracts `dogeos/proof-software-release/v1`, validates it through
+the release-pinned dogeos-core tool, and runs the release-pinned CPU Bridge
+baker against the canonical protocol context. It then creates and validates
+`dogeos/proof-deployment-release-lock/v1` and atomically installs the complete
+tree below `.data/proof-releases/`. This Bridge bake compiles a deployment-
+specific `.vmexe`, but performs no real proof and requires no GPU.
+
+Now run:
 
 ```bash
 scrollsdk setup doge-config --proof-topology
 ```
 
-The initializer verifies every digest-pinned image and release file, imports
-the reviewed identities, derives deployment defaults, writes complete dormant
-mock and production profiles to `.data/doge-config.toml`, and preflights both
-profiles before committing the file. It defaults the selected mode to
-`disabled`. The example manifest shape is available at
-`scroll-sdk/examples/.data/proof-release-v1.json.example`; its placeholder
-values are not deployable.
+The initializer discovers the prepared deployment lock (or accepts an explicit
+`--proof-release-lock` if several releases are installed), validates it again
+through dogeos-core, imports its reviewed projection, derives deployment
+defaults, writes complete dormant mock and production profiles to
+`.data/doge-config.toml`, and preflights both profiles before committing the
+file. It defaults the selected mode to `disabled`.
 
 DeploymentSpec remains an alternative authority for automation-oriented
 deployments. This abbreviated example shows its equivalent selection boundary;
@@ -376,26 +392,27 @@ proofTopology:
       # release-relative paths and reviewed identity pins follow
 ```
 
-The compiler image must come from the same dogeos-core release as WP, PC,
-Worker, and submitter. `resourcesRoot` is the operator-host directory mounted
-read-only into the compiler. The existing PVC must contain identical release
-content at `resourcesMountPath` for WP and PC. External Worker launch uses the
-same runtime path contract on its host.
+The compiler and both Worker images come from the same deployment lock. The
+prepared `.data/proof-releases/<key>/` directory is the operator-host
+`resourcesRoot` mounted read-only into the compiler. For production, the
+existing PVC must contain identical bytes at `resourcesMountPath` for WP, PC,
+and any local Worker. External Worker launch uses the same runtime path
+contract on its host. Mock does not mount dormant production programs.
 
-The ordinary doge-config wizard derives `resourcesRoot=proof-artifacts` and
-`resourcesPersistentVolumeClaim=dogeos-proof-release` and displays both facts;
-it does not ask the operator to choose arbitrary names. Use
-`--proof-resources-root` or `--proof-resources-pvc` only when the deployment
-already has a different storage convention. Creating the storage backend and
-copying the reviewed release directory remain explicit infrastructure
-operations because the correct ReadOnlyMany/RWX implementation is
-cluster-specific.
+The ordinary doge-config wizard derives `resourcesRoot` from the imported lock
+and defaults `resourcesPersistentVolumeClaim=dogeos-proof-release`; it does not
+ask the operator to invent a second release directory. Use
+`--proof-resources-pvc` only when the deployment already has a different
+storage convention. Creating the storage backend and copying the validated
+release directory remain explicit infrastructure operations because the
+correct ReadOnlyMany/RWX implementation is cluster-specific.
 
 `.data/doge-config.toml [proof_topology]` and DeploymentSpec `proofTopology`
 are alternative proof authorities. Defining both is rejected. In the ordinary
-doge-config path, `[proof_release]` pins the imported manifest path, manifest
-SHA-256, and release ID so subsequent compilation can revalidate release files
-and prevent source drift.
+doge-config path, `[proof_release]` pins the immutable OCI reference,
+software-release digest, deployment-lock path and digest, and release ID.
+Subsequent compilation revalidates the lock, protocol-context binding, release
+files, and expanded topology to prevent source drift.
 
 Disabled compiler mode still requires the WP base template but deliberately
 does not open dormant profile resources. `setup doge-config --proof-topology`
@@ -443,31 +460,33 @@ checks, the WP-only TSO `/propose` network boundary, completion, and reverse
 retirement. Do not switch to proof mode until the authoritative completion
 predicate is stable and the temporary pins have been removed.
 
-For a production release, the release-producing pipeline emits
-`proof-release-v1.json` with the reviewed paths, file SHA-256 values, image
-digests, profiles, and identities. The initializer imports those values into
-`proof_topology.production.realScroll`. A conventional worker layout is:
+The dogeos-core release pipeline emits one data-only proof-release OCI image
+with the reviewed paths, file SHA-256 values, image digests, and global
+identities. The CPU bake adds deployment-bound Bridge material. Their validated
+deployment lock is projected into `proof_topology.production.realScroll`. The
+operator does not construct this layout or transcribe its fields. A prepared
+release is approximately:
 
 ```text
-proof-artifacts/
-├── chunk/app.vmexe
-├── chunk/openvm.toml
-├── batch/app.vmexe
-├── batch/openvm.toml
+.data/proof-releases/<key>/
+├── software/
+│   ├── chunk/
+│   ├── batch/
+│   ├── l2-range/
+│   ├── verifier/
+│   └── bin/
 └── bridge/
     ├── bridge-state.vmexe
     ├── openvm.toml
     ├── bridge-artifact-manifest.json
-    ├── protocol_context.json
-    ├── batch-aggregation.vmexe
-    └── batch-aggregation-openvm.toml
+    └── proof-bridge-material-v1.json
 ```
 
 Compiler-backed deployments do not use `worker-release.json` as a second
-authority. Release-relative paths, file hashes, reviewed VK/commitment
-identities, and selected digest-pinned images are imported from the pinned
-`proof-release-v1.json`. The expanded doge-config or DeploymentSpec topology
-remains the compiler source, while its release binding detects manifest or
+authority. Release paths, reviewed VK/commitment identities, and selected
+digest-pinned images are imported from the validated dogeos-core deployment
+lock. The expanded doge-config or DeploymentSpec topology remains the compiler
+source, while its release binding detects manifest, protocol-context, or
 material drift. The dogeos-core compiler validates the selected files and
 builds the complete Worker argv contract.
 
@@ -561,14 +580,15 @@ This explicit second phase keeps deterministic configuration generation free
 of secret reads. The stable bundle ID excludes the credential and does not
 change when the raw `prover-worker.token` file is written with mode `0600`.
 
-Sync both the selected `resourcesRoot` (normally `proof-artifacts/`) and
+Sync both the selected `resourcesRoot` (the prepared `.data/proof-releases/<key>/`
+directory) and
 `prover-worker-production/docker-compose/` to the GPU host while preserving
 their relative layout. If the layout changes, pass the new root explicitly:
 
 ```bash
 scrollsdk setup proof-worker-check \
   --bundle-dir prover-worker-production/docker-compose \
-  --resources-root proof-artifacts \
+  --resources-root .data/proof-releases/<key> \
   --expected-bundle-id <bundleId-from-proof-deployment.json>
 
 docker compose --project-directory prover-worker-production/docker-compose config --quiet

@@ -34,6 +34,10 @@ import {
   assertProofAwsMatchesTopology,
   reconcileProofKubernetes,
 } from '../../utils/proof-kubernetes-reconciler.js'
+import {
+  readPreparedProofRelease,
+  validatePreparedProofRelease,
+} from '../../utils/proof-release.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {
   getRequiredManagedSignerConfig,
@@ -1702,6 +1706,17 @@ export default class SetupPrepCharts extends Command {
     }
 
     if (this.proofIntent) {
+      if (
+        this.proofIntent.source.kind === 'doge-config'
+        && this.dogeConfig.proof_release?.deploymentLockPath
+      ) {
+        const preparedRelease = readPreparedProofRelease(path.resolve(
+          process.cwd(),
+          this.dogeConfig.proof_release.deploymentLockPath,
+        ))
+        validatePreparedProofRelease(preparedRelease)
+      }
+
       const proofAws = readOptionalProofAwsConfig(process.cwd())
       if (proofAws) {
         try {

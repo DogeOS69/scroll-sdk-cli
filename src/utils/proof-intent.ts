@@ -17,8 +17,7 @@ import {
   validateDeploymentSpec,
 } from './deployment-spec-generator.js'
 import {
-  proofReleaseManifestSha256,
-  readProofRelease,
+  readPreparedProofRelease,
   verifyProofTopologyReleaseBinding,
 } from './proof-release.js'
 
@@ -400,28 +399,31 @@ function verifyDogeProofRelease(
 
   assertKnownKeys(
     binding,
-    ['manifestPath', 'manifestSha256', 'releaseId'],
+    [
+      'deploymentLockDigest',
+      'deploymentLockPath',
+      'releaseId',
+      'releaseImage',
+      'softwareReleaseDigest',
+    ],
     `${configPath}: proof_release`,
   )
-  if (!/^[\da-f]{64}$/.test(binding.manifestSha256)) {
-    throw new Error(`${configPath}: proof_release.manifestSha256 must be lowercase SHA-256 hex`)
-  }
-
-  const manifestPath = path.resolve(deploymentDir, binding.manifestPath)
-  const actualDigest = proofReleaseManifestSha256(manifestPath)
-  if (actualDigest !== binding.manifestSha256) {
-    throw new Error(
-      `${configPath}: proof release manifest changed: expected ${binding.manifestSha256}, `
-      + `got ${actualDigest} for ${manifestPath}`,
-    )
-  }
-
-  const release = readProofRelease(manifestPath)
-  if (release.releaseId !== binding.releaseId) {
-    throw new Error(
-      `${configPath}: proof_release.releaseId ${binding.releaseId} does not match `
-      + `${release.releaseId} in ${manifestPath}`,
-    )
+  const release = readPreparedProofRelease(
+    path.resolve(deploymentDir, binding.deploymentLockPath),
+  )
+  const mismatches: Array<[string, string, string]> = [
+    ['releaseId', binding.releaseId, release.release.release_id],
+    ['releaseImage', binding.releaseImage, release.receipt.release_image],
+    ['softwareReleaseDigest', binding.softwareReleaseDigest, release.release.release_digest],
+    ['deploymentLockDigest', binding.deploymentLockDigest, release.lock.lock_digest],
+  ]
+  for (const [field, configured, actual] of mismatches) {
+    if (configured !== actual) {
+      throw new Error(
+        `${configPath}: proof_release.${field} ${configured} does not match ${actual} `
+        + 'in the prepared deployment release',
+      )
+    }
   }
 
   verifyProofTopologyReleaseBinding(topology, release, deploymentDir)

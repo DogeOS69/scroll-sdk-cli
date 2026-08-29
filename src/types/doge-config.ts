@@ -201,11 +201,13 @@ export interface DogeConfig {
     }>
   }
   network: Network
-  /** Auditable release-producer input used to initialize proof_topology. */
+  /** Auditable immutable OCI release + deployment lock used to initialize proof_topology. */
   proof_release?: {
-    manifestPath: string
-    manifestSha256: string
+    deploymentLockDigest: string
+    deploymentLockPath: string
     releaseId: string
+    releaseImage: string
+    softwareReleaseDigest: string
   }
   /** Compiler-backed proof topology when DeploymentSpec is not used. */
   proof_topology?: ProofTopologySpec
