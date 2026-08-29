@@ -23,6 +23,7 @@ import { JsonOutputContext } from '../../utils/json-output.js'
 import {
   resolveBlockbookKubernetesEndpoints,
   resolveDogecoinKubernetesEndpoints,
+  resolveDogecoinServiceRpcUrl,
 } from '../../utils/kubernetes-endpoints.js'
 import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
 import {
@@ -36,7 +37,9 @@ import {
 } from '../../utils/proof-kubernetes-reconciler.js'
 import {
   readPreparedProofRelease,
+  readPreparedProofSoftwareRelease,
   validatePreparedProofRelease,
+  validatePreparedProofSoftwareRelease,
 } from '../../utils/proof-release.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {
@@ -1715,6 +1718,15 @@ export default class SetupPrepCharts extends Command {
           this.dogeConfig.proof_release.deploymentLockPath,
         ))
         validatePreparedProofRelease(preparedRelease)
+      } else if (
+        this.proofIntent.source.kind === 'doge-config'
+        && this.dogeConfig.proof_release?.softwareReleaseManifestPath
+      ) {
+        const preparedRelease = readPreparedProofSoftwareRelease(path.resolve(
+          process.cwd(),
+          this.dogeConfig.proof_release.softwareReleaseManifestPath,
+        ))
+        validatePreparedProofSoftwareRelease(preparedRelease)
       }
 
       const proofAws = readOptionalProofAwsConfig(process.cwd())
@@ -3555,7 +3567,7 @@ export default class SetupPrepCharts extends Command {
   private reconcileProofKubernetes(valuesDir: string): ReconcileProofKubernetesResult {
     if (!this.proofIntent) throw new Error('proof topology is not configured')
     const coordinatorIngressHost = this.getConfigValue('ingress.PROOF_COORDINATOR_HOST')
-    const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints({
+    const proofDogecoinRpcUrl = resolveDogecoinServiceRpcUrl({
       kubernetes: this.dogeConfig.kubernetes,
       network: this.dogeConfig.network,
     })
@@ -3570,7 +3582,7 @@ export default class SetupPrepCharts extends Command {
       proofTopologyBridge: {
         dogecoinNetwork: this.dogeConfig.network,
         dogecoinRpcPassword: String(this.dogeConfig.dogecoinClusterRpc?.password || ''),
-        dogecoinRpcUrl: dogecoinEndpoints.rpcUrl,
+        dogecoinRpcUrl: proofDogecoinRpcUrl,
         dogecoinRpcUser: String(this.dogeConfig.dogecoinClusterRpc?.username || ''),
       },
       proofTopologyCompilerBinary: this.flags['proof-topology-compiler-binary'],

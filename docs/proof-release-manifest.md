@@ -38,19 +38,21 @@ The deployment operator owns:
 
 Bridge proof material is deployment-bound. It cannot be shipped as one global
 file because the Bridge guest includes the deployment's genesis profile.
-`scrollsdk setup proof-release-init` therefore invokes the release-pinned CPU
-baker after `protocol_context.json` exists. No GPU is required and the CLI does
-not reimplement any OpenVM identity derivation in TypeScript.
+`scrollsdk setup proof-release-init --scope production` therefore invokes the
+release-pinned CPU baker after `protocol_context.json` exists. No GPU is
+required and the CLI does not reimplement any OpenVM identity derivation in
+TypeScript. `--scope mock` deliberately stops after validating the global
+software release and needs no deployment-bound Bridge material.
 
 ## Normal import flow
 
-After Bridge initialization and after selecting or creating the proof artifact
-store, run:
+After selecting or creating the proof artifact store, run:
 
 ```bash
 scrollsdk setup proof-aws-init
 
 scrollsdk setup proof-release-init \
+  --scope mock \
   --release-image dogeos69/proof-release@sha256:<digest>
 
 scrollsdk setup doge-config --proof-topology
@@ -58,13 +60,19 @@ scrollsdk setup prep-charts -N
 scrollsdk setup proof-config-check --deployment-dir .
 ```
 
+This is the short mock path. It creates only a mock topology. To prepare both
+dormant mock and production profiles for later mode-only transitions, replace
+`--scope mock` with `--scope production`; that path requires the finalized
+`.data/protocol_context.json` and performs the CPU Bridge bake.
+
 The commands obey the usual CLI rule: an explicit flag suppresses its prompt;
 without the flag, the command asks and displays any discovered value as the
 editable default. In non-interactive mode a new import requires
-`--release-image`. `--protocol-context` defaults to
-`.data/protocol_context.json`. Containers default to `linux/amd64`, matching
-the proof release workflow; use `--docker-platform` only when the selected
-official release has published that platform.
+`--release-image`. In production scope, `--protocol-context` defaults to
+`.data/protocol_context.json`; mock scope does not read it. Containers default
+to `linux/amd64`, matching the proof release workflow; use
+`--docker-platform` only when the selected official release has published that
+platform.
 
 The CLI uses the same Docker API client pattern as `setup bridge-init` to
 inspect exact images, skip pulls only when the immutable digest and requested
@@ -77,18 +85,23 @@ inputs are read-only bind mounts, its output is copied from a temporary
 container, and all proof-release containers run with networking disabled,
 capabilities dropped, and `no-new-privileges`.
 
-`proof-release-init` performs this fail-closed sequence:
+`proof-release-init --scope mock` performs this fail-closed sequence:
 
 1. Require an immutable `repository@sha256:...` release image.
 2. Inspect or pull the exact release digest for the requested Docker platform
    and extract `/proof-release` into a temporary local directory.
 3. Invoke the release-pinned `dogeos-proof-release validate-software` command.
-4. Invoke the release-pinned `dogeos-proof-artifact-baker` on the canonical
+4. Atomically install the validated software tree and a local receipt below
+   `.data/proof-releases/`.
+
+`--scope production` continues with deployment-bound steps before installation:
+
+1. Invoke the release-pinned `dogeos-proof-artifact-baker` on the canonical
    protocol context to create deployment-bound Bridge material on CPU.
-5. Invoke `dogeos-proof-release lock-deployment` and
+2. Invoke `dogeos-proof-release lock-deployment` and
    `validate-deployment`.
-6. Atomically install the validated tree under `.data/proof-releases/`.
-7. Record a local import receipt that binds the OCI digest, software-release
+3. Atomically install the validated tree under `.data/proof-releases/`.
+4. Record a local import receipt that binds the OCI digest, software-release
    digest, protocol-context hash, and deployment-lock digest.
 
 The installed directory contains approximately:
@@ -111,19 +124,36 @@ The installed directory contains approximately:
 └── scrollsdk-proof-release-import-v1.json
 ```
 
+A mock-only import is smaller:
+
+```text
+.data/proof-releases/software-<release-digest>/
+├── software/
+│   ├── proof-software-release-v1.json
+│   ├── chunk/
+│   ├── batch/
+│   ├── l2-range/
+│   ├── verifier/
+│   └── bin/
+└── scrollsdk-proof-software-release-import-v1.json
+```
+
 Directory and file names below `software/` and `bridge/` are contract-driven;
 consumers use the paths recorded by dogeos-core instead of guessing them.
 
 ## Deployment lock and doge-config binding
 
 `dogeos/proof-deployment-release-lock/v1` is the only proof-identity input used
-when the CLI constructs the dormant mock and production topology profiles. It
+when the CLI constructs dormant mock and production topology profiles. It
 combines the global software release with the locally baked Bridge material
-and carries the projection dogeos-core has already validated.
+and carries the projection dogeos-core has already validated. A mock-only
+topology instead binds directly to the validated software manifest and is
+fail-closed against adding any production profile.
 
-`setup doge-config --proof-topology` discovers a single prepared lock, or
-accepts `--proof-release-lock` when more than one release is installed. It
-validates the lock again through the release-pinned dogeos-core command before
+`setup doge-config --proof-topology` discovers a single prepared production
+lock or mock software manifest. It accepts `--proof-release-lock` or
+`--proof-software-release` when explicit selection is needed. It validates the
+prepared input again through the release-pinned dogeos-core command before
 writing:
 
 ```toml
@@ -133,12 +163,15 @@ deploymentLockPath = ".data/proof-releases/.../proof-deployment-release-lock-v1.
 releaseId = "<release-id>"
 releaseImage = "dogeos69/proof-release@sha256:<digest>"
 softwareReleaseDigest = "sha256:<digest>"
+softwareReleaseManifestPath = ".data/proof-releases/.../software/proof-software-release-v1.json"
 ```
 
-Later `prep-charts` and `proof-config-check` reload the receipt and lock,
-recheck the protocol-context hash and recorded binding, invoke official
-dogeos-core validation, and verify that the expanded topology still uses the
-lock's images, identities, and paths.
+The deployment lock fields are absent for a mock-only import.
+
+Later `prep-charts` and `proof-config-check` reload the receipt and selected
+manifest or lock, invoke official dogeos-core validation, and verify that the
+expanded topology still uses the authorized images, identities, and paths.
+Production validation additionally rechecks the protocol-context hash.
 
 Changing a manifest or material file in place is rejected. Import a new
 immutable OCI release and rerun `doge-config --proof-topology` for a software

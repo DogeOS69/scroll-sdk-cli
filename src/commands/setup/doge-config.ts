@@ -22,7 +22,7 @@ import { JsonOutputContext } from '../../utils/json-output.js'
 import {sanitizeName} from '../../utils/kms-signer-provisioner.js'
 import {
   resolveBlockbookKubernetesEndpoints,
-  resolveDogecoinKubernetesEndpoints,
+  resolveDogecoinServiceRpcUrl,
 } from '../../utils/kubernetes-endpoints.js'
 import {
   createNonInteractiveContext,
@@ -36,13 +36,18 @@ import {
 import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
 import {
   discoverPreparedProofRelease,
+  discoverPreparedProofSoftwareRelease,
   readPreparedProofRelease,
+  readPreparedProofSoftwareRelease,
   validatePreparedProofRelease,
+  validatePreparedProofSoftwareRelease,
+  verifyMockProofTopologySoftwareBinding,
   verifyProofTopologyReleaseBinding,
 } from '../../utils/proof-release.js'
 import {compileProofTopology} from '../../utils/proof-topology-compiler.js'
 import {
   awsS3Endpoint,
+  buildMockProofTopologyFromSoftwareRelease,
   buildProofTopologyFromRelease,
 } from '../../utils/proof-topology-init.js'
 
@@ -65,6 +70,7 @@ interface InitializeProofTopologyOptions {
   region?: string
   releaseLockPath?: string
   resourcesPersistentVolumeClaim?: string
+  softwareReleaseManifestPath?: string
   witnessDir?: string
   witnessRpcUrl?: string
   witnessSource?: 'block_witness_dir' | 'rpc'
@@ -76,8 +82,8 @@ interface InitializedProofTopology {
 }
 
 export const PROOF_RELEASE_LOCK_REQUIRED_MESSAGE =
-  'No prepared proof deployment release lock was found. Run scrollsdk setup '
-  + 'proof-release-init first, or pass --proof-release-lock.'
+  'No prepared proof software release was found. Run scrollsdk setup '
+  + 'proof-release-init --scope mock first, or pass --proof-software-release.'
 
 const ETHEREUM_DA_DEFAULTS: Record<EthereumDaChain, {
   beaconRpcUrl: string
@@ -182,7 +188,7 @@ export class DogeConfigCommand extends Command {
     }),
     'proof-mode': Flags.string({
       dependsOn: ['proof-topology'],
-      description: 'Initial proof mode; new deployments default to disabled',
+      description: 'Initial proof mode; mock-only imports default mock, production-ready imports default disabled',
       options: ['disabled', 'mock', 'production'],
     }),
     'proof-public-s3-endpoint': Flags.string({
@@ -200,6 +206,10 @@ export class DogeConfigCommand extends Command {
     'proof-resources-pvc': Flags.string({
       dependsOn: ['proof-topology'],
       description: 'Advanced override for the pre-populated proof release PVC (default: dogeos-proof-release)',
+    }),
+    'proof-software-release': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Prepared mock software manifest from setup proof-release-init --scope mock',
     }),
     'proof-topology': Flags.boolean({
       default: false,
@@ -294,6 +304,7 @@ export class DogeConfigCommand extends Command {
       region: flags['proof-region'],
       releaseLockPath: flags['proof-release-lock'],
       resourcesPersistentVolumeClaim: flags['proof-resources-pvc'],
+      softwareReleaseManifestPath: flags['proof-software-release'],
       witnessDir: flags['proof-witness-dir'],
       witnessRpcUrl: flags['proof-witness-rpc-url'],
       witnessSource: flags['proof-witness-source'] as 'block_witness_dir' | 'rpc' | undefined,
@@ -829,19 +840,51 @@ export class DogeConfigCommand extends Command {
   ): Promise<InitializedProofTopology> {
     const deploymentDir = process.cwd()
     const existing = options.config.proof_topology
-    const discoveredLockPath = discoverPreparedProofRelease(
-      deploymentDir,
-      options.releaseLockPath || options.config.proof_release?.deploymentLockPath,
-    )
-    if (!discoveredLockPath) throw new Error(PROOF_RELEASE_LOCK_REQUIRED_MESSAGE)
-    const release = readPreparedProofRelease(discoveredLockPath)
-    options.log(chalk.blue(`Validating prepared proof release ${release.release.release_id}`))
-    validatePreparedProofRelease(release)
-    options.log(
-      chalk.blue(
-        `Using ${release.receipt.release_image} with deployment lock ${release.lock.lock_digest}`,
-      ),
-    )
+    if (options.releaseLockPath && options.softwareReleaseManifestPath) {
+      throw new Error('--proof-release-lock conflicts with --proof-software-release')
+    }
+
+    const configuredLockPath = options.releaseLockPath
+      || options.config.proof_release?.deploymentLockPath
+    const configuredSoftwareManifest = options.softwareReleaseManifestPath
+      || options.config.proof_release?.softwareReleaseManifestPath
+    const discoveredLockPath = options.softwareReleaseManifestPath
+      ? undefined
+      : discoverPreparedProofRelease(deploymentDir, configuredLockPath)
+    const discoveredSoftwareManifest = discoveredLockPath
+      ? undefined
+      : discoverPreparedProofSoftwareRelease(deploymentDir, configuredSoftwareManifest)
+    if (!discoveredLockPath && !discoveredSoftwareManifest) {
+      throw new Error(PROOF_RELEASE_LOCK_REQUIRED_MESSAGE)
+    }
+
+    const release = discoveredLockPath
+      ? readPreparedProofRelease(discoveredLockPath)
+      : undefined
+    const softwareRelease = discoveredSoftwareManifest
+      ? readPreparedProofSoftwareRelease(discoveredSoftwareManifest)
+      : undefined
+    if (release) {
+      options.log(chalk.blue(`Validating prepared proof release ${release.release.release_id}`))
+      validatePreparedProofRelease(release)
+      options.log(
+        chalk.blue(
+          `Using ${release.receipt.release_image} with deployment lock ${release.lock.lock_digest}`,
+        ),
+      )
+    } else {
+      options.log(
+        chalk.blue(`Validating prepared mock software release ${softwareRelease!.release.release_id}`),
+      )
+      validatePreparedProofSoftwareRelease(softwareRelease!)
+      options.log(
+        chalk.blue(
+          `Using ${softwareRelease!.receipt.release_image}; production remains unavailable until `
+          + 'a deployment lock is prepared',
+        ),
+      )
+    }
+
     const proofAws = readOptionalProofAwsConfig(deploymentDir)
     const normalizedDeploymentAlias = sanitizeName(
       proofAws?.config.kubernetes.deploymentAlias || path.basename(deploymentDir),
@@ -875,7 +918,7 @@ export class DogeConfigCommand extends Command {
       )
     }
 
-    const currentStore = existing?.production?.artifactStore
+    const currentStore = existing?.mock?.artifactStore || existing?.production?.artifactStore
     let artifactStore: ProofTopologyArtifactStoreConfig
     if (artifactSource === 'prepared-aws') {
       const prepared = proofAws!.config.artifactStore
@@ -955,7 +998,7 @@ export class DogeConfigCommand extends Command {
       }
     }
 
-    const defaultMode = existing?.mode || 'disabled'
+    const defaultMode = existing?.mode || (softwareRelease ? 'mock' : 'disabled')
     const selectedMode = await resolveFlagOrPrompt(
       options.mode,
       options.nonInteractive,
@@ -970,6 +1013,76 @@ export class DogeConfigCommand extends Command {
         message: 'Select the initial proof mode:',
       }),
     ) as 'disabled' | 'mock' | 'production'
+    const defaultCoordinatorUrl = existing?.deployment?.proverPublicUrl
+      || this.proofCoordinatorUrlFromMainConfig()
+    const coordinatorUrl = await resolveFlagOrPrompt(
+      options.coordinatorUrl,
+      options.nonInteractive,
+      defaultCoordinatorUrl,
+      () => input({
+        default: defaultCoordinatorUrl,
+        message: 'Enter the HTTPS Proof Coordinator URL reachable from proof Workers:',
+        validate: value => value.trim() ? true : 'Proof Coordinator URL must not be empty',
+      }),
+    )
+    if (!coordinatorUrl?.trim()) {
+      throw new Error(
+        '--proof-coordinator-url or config.toml [ingress].PROOF_COORDINATOR_HOST is required '
+        + 'for proof Workers',
+      )
+    }
+
+    if (!release) {
+      if (selectedMode === 'production') {
+        throw new Error(
+          'production mode requires a deployment release lock; run '
+          + 'scrollsdk setup proof-release-init --scope production first',
+        )
+      }
+
+      const topology = buildMockProofTopologyFromSoftwareRelease({
+        artifactStore,
+        deploymentName,
+        mode: selectedMode,
+        release: softwareRelease!,
+        runtime: {
+          proofCoordinatorPublicUrl: coordinatorUrl,
+          ...(existing?.deployment?.workerNodeSelector
+            ? {workerNodeSelector: existing.deployment.workerNodeSelector}
+            : {}),
+          ...(existing?.deployment?.workerSecretName
+            ? {workerSecretName: existing.deployment.workerSecretName}
+            : {}),
+          ...(existing?.deployment?.workerTolerations
+            ? {workerTolerations: existing.deployment.workerTolerations}
+            : {}),
+        },
+      })
+      await this.preflightProofTopology(
+        topology,
+        options.config,
+        deploymentName,
+        options.log,
+        options.compilerBinary,
+      )
+      verifyMockProofTopologySoftwareBinding(topology, softwareRelease!)
+      const manifestRelative = path.relative(deploymentDir, softwareRelease!.manifestPath)
+      const storedManifestPath = manifestRelative === '..'
+        || manifestRelative.startsWith(`..${path.sep}`)
+        || path.isAbsolute(manifestRelative)
+        ? softwareRelease!.manifestPath
+        : manifestRelative.replaceAll(path.sep, '/')
+      return {
+        release: {
+          releaseId: softwareRelease!.release.release_id,
+          releaseImage: softwareRelease!.receipt.release_image,
+          softwareReleaseDigest: softwareRelease!.release.release_digest,
+          softwareReleaseManifestPath: storedManifestPath,
+        },
+        topology,
+      }
+    }
+
     const currentLaunch = existing?.production?.workerLaunch
     const defaultLaunch = currentLaunch || 'external'
     const productionWorkerLaunch = await resolveFlagOrPrompt(
@@ -1049,25 +1162,6 @@ export class DogeConfigCommand extends Command {
       }
     }
 
-    const defaultCoordinatorUrl = existing?.deployment?.proverPublicUrl
-      || this.proofCoordinatorUrlFromMainConfig()
-    const coordinatorUrl = await resolveFlagOrPrompt(
-      options.coordinatorUrl,
-      options.nonInteractive,
-      defaultCoordinatorUrl,
-      () => input({
-        default: defaultCoordinatorUrl,
-        message: 'Enter the HTTPS Proof Coordinator URL reachable from proof Workers:',
-        validate: value => value.trim() ? true : 'Proof Coordinator URL must not be empty',
-      }),
-    )
-    if (!coordinatorUrl?.trim()) {
-      throw new Error(
-        '--proof-coordinator-url or config.toml [ingress].PROOF_COORDINATOR_HOST is required '
-        + 'for proof Workers',
-      )
-    }
-
     const publicS3Endpoint = options.publicS3Endpoint
       || currentReal?.s3PublicEndpointUrl
       || (artifactSource === 'prepared-aws'
@@ -1132,6 +1226,10 @@ export class DogeConfigCommand extends Command {
         releaseId: release.release.release_id,
         releaseImage: release.receipt.release_image,
         softwareReleaseDigest: release.release.release_digest,
+        softwareReleaseManifestPath: path.relative(
+          deploymentDir,
+          release.lock.software_release_manifest,
+        ).replaceAll(path.sep, '/'),
       },
       topology,
     }
@@ -1145,15 +1243,19 @@ export class DogeConfigCommand extends Command {
     compilerBinary?: string,
   ): Promise<void> {
     const deploymentDir = process.cwd()
-    const dogecoin = resolveDogecoinKubernetesEndpoints({
+    const proofDogecoinRpcUrl = resolveDogecoinServiceRpcUrl({
       kubernetes: config.kubernetes,
       network: config.network,
     })
     const clusterRpc = config.dogecoinClusterRpc || {}
-    for (const mode of ['mock', 'production'] as const) {
+    const modes = [
+      ...(topology.mock ? ['mock' as const] : []),
+      ...(topology.production ? ['production' as const] : []),
+    ]
+    for (const mode of modes) {
       const output = `.data/generated/.proof-topology-init-preflight-${mode}-${process.pid}`
       try {
-        const preflightTopology = compilerBinary
+        const preflightTopology = compilerBinary && topology.production?.realScroll
           ? {
               ...topology,
               deployment: {
@@ -1169,7 +1271,7 @@ export class DogeConfigCommand extends Command {
           bridge: {
             dogecoinNetwork: config.network,
             dogecoinRpcPassword: clusterRpc.password || '',
-            dogecoinRpcUrl: dogecoin.rpcUrl,
+            dogecoinRpcUrl: proofDogecoinRpcUrl,
             dogecoinRpcUser: clusterRpc.username || '',
           },
           compilerBinary,

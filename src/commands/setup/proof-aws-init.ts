@@ -22,7 +22,7 @@ import {
 } from '../../utils/proof-aws-provisioner.js'
 
 export const PROOF_AWS_INIT_NEXT_STEPS =
-  'run scrollsdk setup proof-release-init with the immutable dogeos-core release image, '
+  'run scrollsdk setup proof-release-init --scope mock with the immutable dogeos-core release image, '
   + 'then run scrollsdk setup doge-config --proof-topology before prep-charts'
 
 export default class ProofAwsInit extends Command {

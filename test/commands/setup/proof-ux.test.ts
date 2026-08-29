@@ -10,15 +10,17 @@ describe('proof setup command guidance', () => {
   it('points proof-aws-init users through doge-config before prep-charts', () => {
     expect(PROOF_AWS_INIT_NEXT_STEPS)
       .to.include('scrollsdk setup proof-release-init')
+    expect(PROOF_AWS_INIT_NEXT_STEPS).to.include('--scope mock')
     expect(PROOF_AWS_INIT_NEXT_STEPS)
       .to.include('scrollsdk setup doge-config --proof-topology')
     expect(PROOF_AWS_INIT_NEXT_STEPS).to.include('before prep-charts')
     expect(PROOF_AWS_INIT_NEXT_STEPS).not.to.include('run scrollsdk setup prep-charts once')
   })
 
-  it('routes a missing deployment lock through the release preparation command', () => {
+  it('routes a missing mock software release through the release preparation command', () => {
     expect(PROOF_RELEASE_LOCK_REQUIRED_MESSAGE).to.include('setup proof-release-init')
-    expect(PROOF_RELEASE_LOCK_REQUIRED_MESSAGE).to.include('--proof-release-lock')
+    expect(PROOF_RELEASE_LOCK_REQUIRED_MESSAGE).to.include('--scope mock')
+    expect(PROOF_RELEASE_LOCK_REQUIRED_MESSAGE).to.include('--proof-software-release')
     expect(PROOF_RELEASE_INIT_NEXT_STEP).to.include('setup doge-config --proof-topology')
     expect(PROOF_RELEASE_INIT_NEXT_STEP).to.include('setup prep-charts')
   })

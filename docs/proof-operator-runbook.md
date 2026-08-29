@@ -303,9 +303,9 @@ provision the production GPU Worker and does not probe partner networks.
 Only a deployment that will never use the AWS proof topology should skip
 `proof-aws-init`. Resource preparation is valid while the selected mode is
 disabled. The command's next-step message is deliberately ordered: import the
-official immutable release with `setup proof-release-init`, initialize both
-dormant topology profiles with `setup doge-config --proof-topology`, and only
-then run `prep-charts` as described in section 8. `prep-charts` fails if the native
+official immutable release with `setup proof-release-init`, initialize the
+topology with `setup doge-config --proof-topology`, and only then run
+`prep-charts` as described in section 8. `prep-charts` fails if the native
 WithdrawalProcessor template is absent. The maintained values template must
 use the native-file layout and must not contain an inline
 `configMaps.config.data.WithdrawalProcessor.toml` copy.
@@ -320,13 +320,15 @@ to fetch accepted proof artifacts. With prepared AWS resources,
 `setup doge-config --proof-topology` reuses the endpoint recorded by
 `proof-aws-init`; it does not ask the operator to enter it again.
 
-For the normal compiler-backed deployment, do not enter image digests, release
-paths, VK hashes, or commitments by hand. Obtain the authoritative immutable
-OCI reference printed by the dogeos-core `Proof Software Release` workflow,
-then import it after `.data/protocol_context.json` exists:
+For the normal compiler-backed deployment, do not enter component image
+digests, release paths, VK hashes, or commitments by hand. Obtain the single
+authoritative immutable OCI reference printed by the dogeos-core `Proof
+Software Release` workflow. For a mock-only deployment, import just its global
+software and image contract:
 
 ```bash
 scrollsdk setup proof-release-init \
+  --scope mock \
   --release-image dogeos69/proof-release@sha256:<digest>
 ```
 
@@ -338,15 +340,30 @@ for that platform, following the same Docker API pattern as `setup
 bridge-init`; an officially published alternative can be selected with
 `--docker-platform`.
 
-The command extracts `dogeos/proof-software-release/v1`, validates it through
-the release-pinned dogeos-core tool, and runs the release-pinned CPU Bridge
-baker against the canonical protocol context. It then creates and validates
-`dogeos/proof-deployment-release-lock/v1` and atomically installs the complete
-tree below `.data/proof-releases/`. This Bridge bake compiles a deployment-
-specific `.vmexe`, but performs no real proof and requires no GPU.
-The build is also network-disabled. Its release-pinned baker image already
-contains both the materializer toolchain and the Bridge guest's separately
-pinned Rust/OpenVM toolchain; no download or host Rust installation is needed.
+Mock scope extracts `dogeos/proof-software-release/v1`, validates it through
+the release-pinned dogeos-core tool, and atomically installs it below
+`.data/proof-releases/`. It does not need `protocol_context.json`, run the
+Bridge baker, create a release PVC, or require a GPU. It authorizes only the
+compiler and mock Worker image; a production profile cannot be staged from
+this software-only import.
+
+If production must be staged from the first deployment so that future
+`disabled -> mock -> production` transitions change only `mode`, wait until
+`.data/protocol_context.json` exists and prepare the complete lock instead:
+
+```bash
+scrollsdk setup proof-release-init \
+  --scope production \
+  --release-image dogeos69/proof-release@sha256:<digest>
+```
+
+Production scope additionally runs the release-pinned CPU Bridge baker against
+the canonical protocol context and creates and validates
+`dogeos/proof-deployment-release-lock/v1`. The Bridge bake compiles a
+deployment-specific `.vmexe`, but performs no proof and requires no GPU. The
+build is network-disabled. Its release-pinned baker image contains both the
+materializer toolchain and the Bridge guest's separately pinned Rust/OpenVM
+toolchain; no host Rust installation is needed.
 
 Now run:
 
@@ -354,12 +371,16 @@ Now run:
 scrollsdk setup doge-config --proof-topology
 ```
 
-The initializer discovers the prepared deployment lock (or accepts an explicit
-`--proof-release-lock` if several releases are installed), validates it again
-through dogeos-core, imports its reviewed projection, derives deployment
-defaults, writes complete dormant mock and production profiles to
-`.data/doge-config.toml`, and preflights both profiles before committing the
-file. It defaults the selected mode to `disabled`.
+The initializer discovers the prepared input and validates it again through
+dogeos-core. A mock-scope import writes and preflights a mock-only topology and
+defaults the selected mode to `mock`; `--proof-software-release` selects one
+explicitly when several are installed. A production deployment lock writes
+complete dormant mock and production profiles, preflights both before
+committing `.data/doge-config.toml`, and defaults the selected mode to
+`disabled`; `--proof-release-lock` selects one explicitly. A newly prepared
+production lock takes precedence over a previously recorded mock software
+manifest, so upgrading the staged topology does not require deleting the old
+import.
 
 DeploymentSpec remains an alternative authority for automation-oriented
 deployments. This abbreviated example shows its equivalent selection boundary;

@@ -3,7 +3,7 @@ import * as path from 'node:path'
 
 import {loadDogeConfigWithSelection} from '../../utils/doge-config.js'
 import {JsonOutputContext} from '../../utils/json-output.js'
-import {resolveDogecoinKubernetesEndpoints} from '../../utils/kubernetes-endpoints.js'
+import {resolveDogecoinServiceRpcUrl} from '../../utils/kubernetes-endpoints.js'
 import {resolveProofIntent} from '../../utils/proof-intent.js'
 import {
   DEFAULT_PROOF_TOPOLOGY_OUTPUT,
@@ -98,7 +98,7 @@ export default class ProofTopologyCompile extends Command {
       })!
       for (const warning of resolved.warnings) json.addWarning(warning)
 
-      const endpoints = resolveDogecoinKubernetesEndpoints({
+      const dogecoinRpcUrl = resolveDogecoinServiceRpcUrl({
         kubernetes: config.kubernetes,
         network: config.network,
       })
@@ -107,7 +107,7 @@ export default class ProofTopologyCompile extends Command {
         bridge: {
           dogecoinNetwork: config.network,
           dogecoinRpcPassword: clusterRpc.password || '',
-          dogecoinRpcUrl: endpoints.rpcUrl,
+          dogecoinRpcUrl,
           dogecoinRpcUser: clusterRpc.username || '',
         },
         compilerBinary: flags['compiler-binary'],

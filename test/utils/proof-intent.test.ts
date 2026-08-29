@@ -215,6 +215,8 @@ describe('proof intent source resolution', () => {
       releaseId: 'release-v1',
       releaseImage: `dogeos69/proof-release@sha256:${'b'.repeat(64)}`,
       softwareReleaseDigest: `sha256:${'c'.repeat(64)}`,
+      softwareReleaseManifestPath:
+        '.data/proof-releases/missing/software/proof-software-release-v1.json',
     }
     fs.writeFileSync(configPath, toml.stringify(config))
 

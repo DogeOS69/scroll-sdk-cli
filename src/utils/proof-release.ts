@@ -6,8 +6,10 @@ import * as path from 'node:path'
 
 import type {
   PreparedProofRelease,
+  PreparedProofSoftwareRelease,
   ProofDeploymentReleaseLockV1,
   ProofReleaseImportV1,
+  ProofSoftwareReleaseImportV1,
   ProofSoftwareReleaseV1,
 } from '../types/proof-release.js'
 import type {ProofTopologyImageReference, ProofTopologySpec} from '../types/proof-topology.js'
@@ -15,6 +17,7 @@ import type {ProofTopologyImageReference, ProofTopologySpec} from '../types/proo
 import {
   PROOF_DEPLOYMENT_RELEASE_LOCK_SCHEMA,
   PROOF_RELEASE_IMPORT_SCHEMA,
+  PROOF_SOFTWARE_RELEASE_IMPORT_SCHEMA,
   PROOF_SOFTWARE_RELEASE_SCHEMA,
 } from '../types/proof-release.js'
 
@@ -22,6 +25,8 @@ export const DEFAULT_PROOF_RELEASES_ROOT = '.data/proof-releases'
 export const PROOF_SOFTWARE_RELEASE_MANIFEST = 'proof-software-release-v1.json'
 export const PROOF_DEPLOYMENT_RELEASE_LOCK = 'proof-deployment-release-lock-v1.json'
 export const PROOF_RELEASE_IMPORT_RECEIPT = 'scrollsdk-proof-release-import-v1.json'
+export const PROOF_SOFTWARE_RELEASE_IMPORT_RECEIPT =
+  'scrollsdk-proof-software-release-import-v1.json'
 
 const PINNED_IMAGE = /^([^\s@]+)@(sha256:[\da-f]{64})$/
 const SHA256_DIGEST = /^sha256:[\da-f]{64}$/
@@ -46,6 +51,16 @@ export interface PrepareProofReleaseOptions {
   imagePuller?: ProofReleaseImagePuller
   log?: (message: string) => void
   protocolContext?: string
+  releaseImage: string
+  releasesRoot?: string
+}
+
+export interface PrepareProofSoftwareReleaseOptions {
+  commandRunner?: ProofReleaseCommandRunner
+  deploymentDir?: string
+  dockerPlatform?: string
+  imagePuller?: ProofReleaseImagePuller
+  log?: (message: string) => void
   releaseImage: string
   releasesRoot?: string
 }
@@ -360,6 +375,33 @@ export function readProofReleaseImport(filePath: string): ProofReleaseImportV1 {
   return raw as unknown as ProofReleaseImportV1
 }
 
+export function readProofSoftwareReleaseImport(
+  filePath: string,
+): ProofSoftwareReleaseImportV1 {
+  const raw = mapping(readJson(filePath, 'scroll-sdk proof software release import receipt'), filePath)
+  assertKnownKeys(
+    raw,
+    [
+      'release_id',
+      'release_image',
+      'schema',
+      'schema_version',
+      'software_release_digest',
+      'software_release_manifest',
+    ],
+    filePath,
+  )
+  if (raw.schema !== PROOF_SOFTWARE_RELEASE_IMPORT_SCHEMA || raw.schema_version !== 1) {
+    throw new Error(`${filePath} must be ${PROOF_SOFTWARE_RELEASE_IMPORT_SCHEMA} schema_version 1`)
+  }
+
+  immutableProofImageReference(requiredString(raw.release_image, `${filePath}.release_image`))
+  absolutePath(raw.software_release_manifest, `${filePath}.software_release_manifest`)
+  digest(raw.software_release_digest, `${filePath}.software_release_digest`)
+  requiredString(raw.release_id, `${filePath}.release_id`)
+  return raw as unknown as ProofSoftwareReleaseImportV1
+}
+
 export function sha256File(filePath: string): string {
   const hash = createHash('sha256')
   const descriptor = fs.openSync(filePath, 'r')
@@ -425,6 +467,31 @@ export function readPreparedProofRelease(lockPath: string): PreparedProofRelease
   return {importPath, lock, lockPath: resolvedLock, receipt, release, resourcesRoot}
 }
 
+export function readPreparedProofSoftwareRelease(
+  manifestPath: string,
+): PreparedProofSoftwareRelease {
+  const resolvedManifest = path.resolve(manifestPath)
+  const softwareRoot = path.dirname(resolvedManifest)
+  const resourcesRoot = path.dirname(softwareRoot)
+  const importPath = path.join(resourcesRoot, PROOF_SOFTWARE_RELEASE_IMPORT_RECEIPT)
+  ensureInside(resourcesRoot, resolvedManifest, 'software_release_manifest')
+  const receipt = readProofSoftwareReleaseImport(importPath)
+  if (path.resolve(receipt.software_release_manifest) !== resolvedManifest) {
+    throw new Error(`${importPath}.software_release_manifest does not name ${resolvedManifest}`)
+  }
+
+  const release = readProofSoftwareRelease(resolvedManifest)
+  if (release.release_digest !== receipt.software_release_digest) {
+    throw new Error('prepared proof software release digest binding is inconsistent')
+  }
+
+  if (release.release_id !== receipt.release_id) {
+    throw new Error('prepared proof software release release_id binding is inconsistent')
+  }
+
+  return {importPath, manifestPath: resolvedManifest, receipt, release, resourcesRoot, softwareRoot}
+}
+
 export function discoverPreparedProofRelease(
   deploymentDir = '.',
   explicitLock?: string,
@@ -447,6 +514,33 @@ export function listPreparedProofReleaseLocks(deploymentDir = '.'): string[] {
   return fs.readdirSync(releasesRoot, {withFileTypes: true})
     .filter(entry => entry.isDirectory())
     .map(entry => path.join(releasesRoot, entry.name, PROOF_DEPLOYMENT_RELEASE_LOCK))
+    .filter(candidate => fs.existsSync(candidate))
+}
+
+export function discoverPreparedProofSoftwareRelease(
+  deploymentDir = '.',
+  explicitManifest?: string,
+): string | undefined {
+  if (explicitManifest) return path.resolve(deploymentDir, explicitManifest)
+  const found = listPreparedProofSoftwareReleaseManifests(deploymentDir)
+  if (found.length > 1) {
+    throw new Error(
+      `multiple prepared proof software releases found: ${found.join(', ')}; `
+      + 'pass --proof-software-release explicitly',
+    )
+  }
+
+  return found[0]
+}
+
+export function listPreparedProofSoftwareReleaseManifests(deploymentDir = '.'): string[] {
+  const releasesRoot = path.resolve(deploymentDir, DEFAULT_PROOF_RELEASES_ROOT)
+  if (!fs.existsSync(releasesRoot)) return []
+  return fs.readdirSync(releasesRoot, {withFileTypes: true})
+    .filter(entry => entry.isDirectory())
+    .map(entry => path.join(releasesRoot, entry.name))
+    .filter(root => fs.existsSync(path.join(root, PROOF_SOFTWARE_RELEASE_IMPORT_RECEIPT)))
+    .map(root => path.join(root, 'software', PROOF_SOFTWARE_RELEASE_MANIFEST))
     .filter(candidate => fs.existsSync(candidate))
 }
 
@@ -543,7 +637,7 @@ function runReleaseTool(
   imageReference: string,
   rootSource: string,
   rootDestination: string,
-  protocolContext: string,
+  protocolContext: string | undefined,
   commandArgs: string[],
   dockerPlatform = 'linux/amd64',
 ): void {
@@ -563,8 +657,9 @@ function runReleaseTool(
       `${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}`,
       '--mount',
       mountValue(rootSource, rootDestination),
-      '--mount',
-      mountValue(protocolContext, protocolContext, true),
+      ...(protocolContext
+        ? ['--mount', mountValue(protocolContext, protocolContext, true)]
+        : []),
       '--entrypoint',
       'dogeos-proof-release',
       imageReference,
@@ -597,12 +692,137 @@ export function validatePreparedProofRelease(
   )
 }
 
-function writeReceipt(filePath: string, receipt: ProofReleaseImportV1): void {
+export function validatePreparedProofSoftwareRelease(
+  prepared: PreparedProofSoftwareRelease,
+  commandRunner: ProofReleaseCommandRunner = defaultCommandRunner,
+  dockerPlatform = 'linux/amd64',
+): void {
+  const topologyImage = immutableImage(prepared.release.images.topology_compiler)
+  runReleaseTool(
+    commandRunner,
+    topologyImage,
+    prepared.resourcesRoot,
+    prepared.resourcesRoot,
+    undefined,
+    [
+      'validate-software',
+      '--manifest',
+      prepared.manifestPath,
+      '--root',
+      prepared.softwareRoot,
+    ],
+    dockerPlatform,
+  )
+}
+
+function writeReceipt(
+  filePath: string,
+  receipt: ProofReleaseImportV1 | ProofSoftwareReleaseImportV1,
+): void {
   fs.writeFileSync(filePath, `${JSON.stringify(receipt, undefined, 2)}\n`, {
     encoding: 'utf8',
     flag: 'wx',
     mode: 0o600,
   })
+}
+
+export async function prepareProofSoftwareRelease(
+  options: PrepareProofSoftwareReleaseOptions,
+): Promise<PreparedProofSoftwareRelease> {
+  const deploymentDir = path.resolve(options.deploymentDir || '.')
+  const releaseImage = immutableProofImageReference(options.releaseImage)
+  const match = PINNED_IMAGE.exec(releaseImage)!
+  const releasesRoot = path.resolve(
+    deploymentDir,
+    options.releasesRoot || DEFAULT_PROOF_RELEASES_ROOT,
+  )
+  const key = `software-${match[2].replace(':', '-')}`
+  const finalRoot = path.join(releasesRoot, key)
+  const finalManifest = path.join(finalRoot, 'software', PROOF_SOFTWARE_RELEASE_MANIFEST)
+  const runner = options.commandRunner || defaultCommandRunner
+  const dockerPlatform = options.dockerPlatform || 'linux/amd64'
+  const imagePuller = options.imagePuller || pullProofImage
+  if (fs.existsSync(finalRoot)) {
+    const prepared = readPreparedProofSoftwareRelease(finalManifest)
+    if (prepared.receipt.release_image !== releaseImage) {
+      throw new Error(`${finalRoot} was prepared from a different immutable release image`)
+    }
+
+    options.log?.(`Revalidating prepared proof software release ${prepared.release.release_id}`)
+    await imagePuller(
+      immutableImage(prepared.release.images.topology_compiler),
+      dockerPlatform,
+      options.log,
+    )
+    validatePreparedProofSoftwareRelease(prepared, runner, dockerPlatform)
+    return prepared
+  }
+
+  fs.mkdirSync(releasesRoot, {recursive: true})
+  const stagingRoot = fs.mkdtempSync(path.join(releasesRoot, `.${key}.preparing-`))
+  fs.chmodSync(stagingRoot, 0o755)
+  let containerId: string | undefined
+  try {
+    await imagePuller(releaseImage, dockerPlatform, options.log)
+    containerId = checkedRun(
+      runner,
+      'docker',
+      ['create', '--platform', dockerPlatform, releaseImage, '/bin/true'],
+      'docker create proof software release',
+    ).split(/\s+/)[0]
+    if (!containerId) throw new Error('docker create did not return a container ID')
+    const softwareStaging = path.join(stagingRoot, 'software')
+    fs.mkdirSync(softwareStaging)
+    checkedRun(
+      runner,
+      'docker',
+      ['cp', `${containerId}:/proof-release/.`, softwareStaging],
+      'docker copy proof software release',
+    )
+    checkedRun(runner, 'docker', ['rm', '-f', containerId], 'docker remove proof release container')
+    containerId = undefined
+
+    const stagedManifest = path.join(softwareStaging, PROOF_SOFTWARE_RELEASE_MANIFEST)
+    const release = readProofSoftwareRelease(stagedManifest)
+    const topologyImage = immutableImage(release.images.topology_compiler)
+    await imagePuller(topologyImage, dockerPlatform, options.log)
+    options.log?.(`Validating proof software release ${release.release_id}`)
+    runReleaseTool(
+      runner,
+      topologyImage,
+      stagingRoot,
+      finalRoot,
+      undefined,
+      [
+        'validate-software',
+        '--manifest',
+        finalManifest,
+        '--root',
+        path.join(finalRoot, 'software'),
+      ],
+      dockerPlatform,
+    )
+    const receipt: ProofSoftwareReleaseImportV1 = {
+      release_id: release.release_id,
+      release_image: releaseImage,
+      schema: PROOF_SOFTWARE_RELEASE_IMPORT_SCHEMA,
+      schema_version: 1,
+      software_release_digest: release.release_digest,
+      software_release_manifest: finalManifest,
+    }
+    writeReceipt(path.join(stagingRoot, PROOF_SOFTWARE_RELEASE_IMPORT_RECEIPT), receipt)
+    if (fs.existsSync(finalRoot)) throw new Error(`proof release destination appeared: ${finalRoot}`)
+    fs.renameSync(stagingRoot, finalRoot)
+    const prepared = readPreparedProofSoftwareRelease(finalManifest)
+    if (prepared.release.release_digest !== release.release_digest) {
+      throw new Error('proof software release changed while it was installed')
+    }
+
+    return prepared
+  } finally {
+    if (containerId) runner('docker', ['rm', '-f', containerId])
+    if (fs.existsSync(stagingRoot)) fs.rmSync(stagingRoot, {force: true, recursive: true})
+  }
 }
 
 export async function prepareProofRelease(
@@ -818,6 +1038,17 @@ function relativeProjectionPath(
   return path.relative(prepared.resourcesRoot, candidate).replaceAll(path.sep, '/')
 }
 
+function assertProofImageBinding(
+  actual: ProofTopologyImageReference,
+  expected: ProofTopologyImageReference,
+  label: string,
+  authority: string,
+): void {
+  if (actual.repository !== expected.repository || actual.digest !== expected.digest) {
+    throw new Error(`${label} does not match the ${authority}`)
+  }
+}
+
 export function verifyProofTopologyReleaseBinding(
   topology: ProofTopologySpec,
   prepared: PreparedProofRelease,
@@ -827,17 +1058,12 @@ export function verifyProofTopologyReleaseBinding(
   const expectedCompiler = projection.images.topology_compiler
   const expectedMockWorker = projection.images.mock_worker
   const expectedProductionWorker = projection.images.production_worker
-  const equalImage = (
-    actual: ProofTopologyImageReference,
-    expected: ProofTopologyImageReference,
-    label: string,
-  ) => {
-    if (actual.repository !== expected.repository || actual.digest !== expected.digest) {
-      throw new Error(`${label} does not match the prepared proof release`)
-    }
-  }
-
-  equalImage(topology.compiler.image, expectedCompiler, 'proof_topology.compiler.image')
+  assertProofImageBinding(
+    topology.compiler.image,
+    expectedCompiler,
+    'proof_topology.compiler.image',
+    'prepared proof release',
+  )
   if (!topology.mock || !topology.production) {
     throw new Error('proof_topology must stage both mock and production profiles')
   }
@@ -854,11 +1080,17 @@ export function verifyProofTopologyReleaseBinding(
     )
   }
 
-  equalImage(topology.mock.workerImage, expectedMockWorker, 'proof_topology.mock.workerImage')
-  equalImage(
+  assertProofImageBinding(
+    topology.mock.workerImage,
+    expectedMockWorker,
+    'proof_topology.mock.workerImage',
+    'prepared proof release',
+  )
+  assertProofImageBinding(
     topology.production.workerImage,
     expectedProductionWorker,
     'proof_topology.production.workerImage',
+    'prepared proof release',
   )
   const real = topology.production.realScroll
   const identityFields: Array<[keyof typeof real, string]> = [
@@ -923,4 +1155,36 @@ export function verifyProofTopologyReleaseBinding(
   if (topology.deployment.bridgeStagedAppConfig !== expectedBridgeAppConfig) {
     throw new Error('proof_topology.deployment.bridgeStagedAppConfig does not match release lock')
   }
+}
+
+export function verifyMockProofTopologySoftwareBinding(
+  topology: ProofTopologySpec,
+  prepared: PreparedProofSoftwareRelease,
+): void {
+  if (topology.mode === 'production' || topology.production) {
+    throw new Error(
+      'a software-only proof release cannot authorize production; '
+      + 'run setup proof-release-init --scope production first',
+    )
+  }
+
+  assertProofImageBinding(
+    topology.compiler.image,
+    prepared.release.images.topology_compiler,
+    'proof_topology.compiler.image',
+    'prepared proof software release',
+  )
+  if (!topology.mock) throw new Error('proof_topology.mock must be staged')
+  if (topology.mock.profile !== 'withdrawal_mock_prover' || topology.mock.realScroll) {
+    throw new Error(
+      'software-only proof_topology.mock must use withdrawal_mock_prover without realScroll',
+    )
+  }
+
+  assertProofImageBinding(
+    topology.mock.workerImage,
+    prepared.release.images.mock_worker,
+    'proof_topology.mock.workerImage',
+    'prepared proof software release',
+  )
 }

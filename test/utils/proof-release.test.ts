@@ -7,26 +7,37 @@ import * as path from 'node:path'
 import type {
   ProofDeploymentReleaseLockV1,
   ProofReleaseImportV1,
+  ProofSoftwareReleaseImportV1,
   ProofSoftwareReleaseV1,
 } from '../../src/types/proof-release.js'
 
 import {
   PROOF_DEPLOYMENT_RELEASE_LOCK_SCHEMA,
   PROOF_RELEASE_IMPORT_SCHEMA,
+  PROOF_SOFTWARE_RELEASE_IMPORT_SCHEMA,
   PROOF_SOFTWARE_RELEASE_SCHEMA,
 } from '../../src/types/proof-release.js'
 import {
   PROOF_DEPLOYMENT_RELEASE_LOCK,
   PROOF_RELEASE_IMPORT_RECEIPT,
+  PROOF_SOFTWARE_RELEASE_IMPORT_RECEIPT,
   discoverPreparedProofRelease,
+  discoverPreparedProofSoftwareRelease,
   immutableProofImageReference,
   listPreparedProofReleaseLocks,
+  listPreparedProofSoftwareReleaseManifests,
   prepareProofRelease,
+  prepareProofSoftwareRelease,
   readPreparedProofRelease,
+  readPreparedProofSoftwareRelease,
   readProofDeploymentReleaseLock,
+  verifyMockProofTopologySoftwareBinding,
   verifyProofTopologyReleaseBinding,
 } from '../../src/utils/proof-release.js'
-import {buildProofTopologyFromRelease} from '../../src/utils/proof-topology-init.js'
+import {
+  buildMockProofTopologyFromSoftwareRelease,
+  buildProofTopologyFromRelease,
+} from '../../src/utils/proof-topology-init.js'
 
 const digest = (character: string) => `sha256:${character.repeat(64)}`
 const hex32 = (character: string) => `0x${character.repeat(64)}`
@@ -155,6 +166,23 @@ export function preparedReleaseFixture(deployment: string) {
   return readPreparedProofRelease(lockPath)
 }
 
+function preparedSoftwareReleaseFixture(deployment: string) {
+  const full = preparedReleaseFixture(deployment)
+  const receipt: ProofSoftwareReleaseImportV1 = {
+    release_id: full.release.release_id,
+    release_image: full.receipt.release_image,
+    schema: PROOF_SOFTWARE_RELEASE_IMPORT_SCHEMA,
+    schema_version: 1,
+    software_release_digest: full.release.release_digest,
+    software_release_manifest: full.lock.software_release_manifest,
+  }
+  fs.writeFileSync(
+    path.join(full.resourcesRoot, PROOF_SOFTWARE_RELEASE_IMPORT_RECEIPT),
+    `${JSON.stringify(receipt, undefined, 2)}\n`,
+  )
+  return readPreparedProofSoftwareRelease(full.lock.software_release_manifest)
+}
+
 describe('official proof release deployment lock', () => {
   let deployment: string
 
@@ -203,11 +231,75 @@ describe('official proof release deployment lock', () => {
     expect(fs.readdirSync(path.join(dataDir, 'proof-releases'))).to.deep.equal([])
   })
 
+  it('imports mock software without requiring a protocol context or Bridge bake', async () => {
+    let observedMode: number | undefined
+    let failure: unknown
+    try {
+      await prepareProofSoftwareRelease({
+        deploymentDir: deployment,
+        async imagePuller() {
+          const releasesRoot = path.join(deployment, '.data/proof-releases')
+          const staging = fs.readdirSync(releasesRoot)
+            .find(entry => entry.includes('.preparing-'))
+          expect(staging).to.be.a('string')
+          observedMode = fs.statSync(path.join(releasesRoot, staging!)).mode % 0o1000
+          throw new Error('expected mock import stop')
+        },
+        releaseImage: `dogeos69/proof-release@${digest('7')}`,
+      })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).to.be.instanceOf(Error)
+    expect((failure as Error).message).to.equal('expected mock import stop')
+    expect(observedMode).to.equal(0o755)
+    expect(fs.existsSync(path.join(deployment, '.data/protocol_context.json'))).to.equal(false)
+    expect(fs.readdirSync(path.join(deployment, '.data/proof-releases'))).to.deep.equal([])
+  })
+
   it('discovers and reads one prepared deployment lock', () => {
     const prepared = preparedReleaseFixture(deployment)
     expect(discoverPreparedProofRelease(deployment)).to.equal(prepared.lockPath)
     expect(prepared.release.schema).to.equal(PROOF_SOFTWARE_RELEASE_SCHEMA)
     expect(prepared.lock.schema).to.equal(PROOF_DEPLOYMENT_RELEASE_LOCK_SCHEMA)
+  })
+
+  it('discovers a mock software release and binds only compiler and mock Worker images', () => {
+    const prepared = preparedSoftwareReleaseFixture(deployment)
+    expect(discoverPreparedProofSoftwareRelease(deployment)).to.equal(prepared.manifestPath)
+    expect(listPreparedProofSoftwareReleaseManifests(deployment)).to.deep.equal([
+      prepared.manifestPath,
+    ])
+    const topology = buildMockProofTopologyFromSoftwareRelease({
+      artifactStore: {
+        bucket: 'dogeos-testnet-proof-artifacts',
+        endpointUrl: 'https://s3.us-west-2.amazonaws.com',
+        keyPrefix: 'proof-topology',
+        kind: 's3_compatible',
+        region: 'us-west-2',
+      },
+      deploymentName: 'dogeos-testnet',
+      mode: 'mock',
+      release: prepared,
+      runtime: {proofCoordinatorPublicUrl: 'https://proof-coordinator.example.com'},
+    })
+    expect(topology.mode).to.equal('mock')
+    expect(topology.mock?.profile).to.equal('withdrawal_mock_prover')
+    expect(topology.production).to.equal(undefined)
+    expect(topology.deployment?.resourcesPersistentVolumeClaim).to.equal(undefined)
+    expect(topology.deployment?.bridgeStagedAppExe).to.equal(undefined)
+    expect(() => verifyMockProofTopologySoftwareBinding(topology, prepared)).not.to.throw()
+
+    topology.production = {
+      artifactStore: topology.mock!.artifactStore,
+      profile: 'real_scroll_withdrawal_full_topology',
+      realScroll: {} as never,
+      workerImage: prepared.release.images.production_worker,
+      workerLaunch: 'external',
+    }
+    expect(() => verifyMockProofTopologySoftwareBinding(topology, prepared))
+      .to.throw('cannot authorize production')
   })
 
   it('lists multiple imports while requiring explicit lock selection from consumers', () => {

@@ -13,7 +13,9 @@ import {
 import { resolveProofIntent } from '../../utils/proof-intent.js'
 import {
   readPreparedProofRelease,
+  readPreparedProofSoftwareRelease,
   validatePreparedProofRelease,
+  validatePreparedProofSoftwareRelease,
 } from '../../utils/proof-release.js'
 import {validateProofTopologyBundle} from '../../utils/proof-topology-compiler.js'
 
@@ -62,6 +64,14 @@ export default class ProofConfigCheck extends Command {
         validatePreparedProofRelease(readPreparedProofRelease(path.resolve(
           deploymentDir,
           config.proof_release.deploymentLockPath,
+        )))
+      } else if (
+        configuredIntent.source.kind === 'doge-config'
+        && config.proof_release?.softwareReleaseManifestPath
+      ) {
+        validatePreparedProofSoftwareRelease(readPreparedProofSoftwareRelease(path.resolve(
+          deploymentDir,
+          config.proof_release.softwareReleaseManifestPath,
         )))
       }
 

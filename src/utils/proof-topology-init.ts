@@ -1,7 +1,10 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import type {PreparedProofRelease} from '../types/proof-release.js'
+import type {
+  PreparedProofRelease,
+  PreparedProofSoftwareRelease,
+} from '../types/proof-release.js'
 import type {
   ProofTopologyArtifactStoreConfig,
   ProofTopologyDeploymentConfig,
@@ -35,6 +38,14 @@ export interface BuildProofTopologyOptions {
   mode?: ProofSystemMode
   productionWorkerLaunch: 'external' | 'local_cpu' | 'local_cuda'
   release: PreparedProofRelease
+  runtime?: ProofTopologyRuntimeInput
+}
+
+export interface BuildMockProofTopologyOptions {
+  artifactStore: ProofTopologyArtifactStoreConfig
+  deploymentName: string
+  mode?: 'disabled' | 'mock'
+  release: PreparedProofSoftwareRelease
   runtime?: ProofTopologyRuntimeInput
 }
 
@@ -94,7 +105,7 @@ function validateArtifactStore(
 ): ProofTopologyArtifactStoreConfig {
   if (store.kind !== 's3_compatible') {
     throw new Error(
-      'staging a production proof topology requires an s3_compatible artifact store; '
+      'staging a proof topology requires an s3_compatible artifact store; '
       + 'prepare AWS/S3-compatible resources before initialization',
     )
   }
@@ -110,6 +121,52 @@ function validateArtifactStore(
     kind: 's3_compatible',
     maxReadBodyBytes: store.maxReadBodyBytes || 512 * 1024 * 1024,
     region: nonEmpty(store.region, 'proof artifact store region'),
+  }
+}
+
+/**
+ * Build a mock-only topology from an immutable software release. This path
+ * intentionally has no production profile, Bridge artifact, real proving
+ * identity, release PVC, or deployment lock.
+ */
+export function buildMockProofTopologyFromSoftwareRelease(
+  options: BuildMockProofTopologyOptions,
+): ProofTopologySpec {
+  const runtime = options.runtime || {}
+  const artifactStore = validateArtifactStore(options.artifactStore)
+  const coordinatorUrl = validateWorkerVisibleUrl(
+    nonEmpty(runtime.proofCoordinatorPublicUrl, 'proof coordinator public URL'),
+    'proof coordinator public URL',
+  )
+  return {
+    compiler: {image: {...options.release.release.images.topology_compiler}},
+    deployment: {
+      artifactLocalRoot: '/app/data/proof-artifacts',
+      coordinatorId: `${options.deploymentName}-proof-coordinator`,
+      generatedMaterialsRoot: '/app/data/proof-topology',
+      proofWorkBind: '0.0.0.0:9300',
+      proofWorkPublicUrl: 'http://withdrawal-processor:9300',
+      proofWorkTokenFile: '/app/secrets/proof-work-token',
+      protocolContextPath: '/app/protocol_context.json',
+      protocolContextSource: '.data/protocol_context.json',
+      proverBind: '0.0.0.0:7788',
+      proverPublicUrl: coordinatorUrl,
+      readinessEvidencePath: '/run/dogeos/prover-worker-ready-v1.json',
+      ...(runtime.workerNodeSelector ? {workerNodeSelector: runtime.workerNodeSelector} : {}),
+      ...(runtime.workerResources ? {workerResources: runtime.workerResources} : {}),
+      ...(runtime.workerRuntimeClassName
+        ? {workerRuntimeClassName: runtime.workerRuntimeClassName}
+        : {}),
+      ...(runtime.workerSecretName ? {workerSecretName: runtime.workerSecretName} : {}),
+      workerTokenFile: '/app/secrets/prover-worker-token',
+      ...(runtime.workerTolerations ? {workerTolerations: runtime.workerTolerations} : {}),
+    },
+    mock: {
+      artifactStore: {...artifactStore},
+      profile: 'withdrawal_mock_prover',
+      workerImage: {...options.release.release.images.mock_worker},
+    },
+    mode: options.mode || 'mock',
   }
 }
 

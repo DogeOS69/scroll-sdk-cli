@@ -18,6 +18,8 @@ import {
 } from './deployment-spec-generator.js'
 import {
   readPreparedProofRelease,
+  readPreparedProofSoftwareRelease,
+  verifyMockProofTopologySoftwareBinding,
   verifyProofTopologyReleaseBinding,
 } from './proof-release.js'
 
@@ -393,7 +395,7 @@ function verifyDogeProofRelease(
   if (!binding) {
     return [
       'proof_release is not recorded; rerun scrollsdk setup doge-config --proof-topology '
-      + 'to bind release images, identities, and material hashes',
+      + 'to bind immutable compiler and Worker images',
     ]
   }
 
@@ -405,28 +407,68 @@ function verifyDogeProofRelease(
       'releaseId',
       'releaseImage',
       'softwareReleaseDigest',
+      'softwareReleaseManifestPath',
     ],
     `${configPath}: proof_release`,
   )
-  const release = readPreparedProofRelease(
-    path.resolve(deploymentDir, binding.deploymentLockPath),
+  if (!binding.softwareReleaseManifestPath) {
+    throw new Error(`${configPath}: proof_release.softwareReleaseManifestPath is required`)
+  }
+
+  if (binding.deploymentLockPath) {
+    if (!binding.deploymentLockDigest) {
+      throw new Error(`${configPath}: proof_release.deploymentLockDigest is required with deploymentLockPath`)
+    }
+
+    const release = readPreparedProofRelease(
+      path.resolve(deploymentDir, binding.deploymentLockPath),
+    )
+    const mismatches: Array<[string, string, string]> = [
+      ['releaseId', binding.releaseId, release.release.release_id],
+      ['releaseImage', binding.releaseImage, release.receipt.release_image],
+      ['softwareReleaseDigest', binding.softwareReleaseDigest, release.release.release_digest],
+      ['deploymentLockDigest', binding.deploymentLockDigest, release.lock.lock_digest],
+      [
+        'softwareReleaseManifestPath',
+        path.resolve(deploymentDir, binding.softwareReleaseManifestPath),
+        release.lock.software_release_manifest,
+      ],
+    ]
+    for (const [field, configured, actual] of mismatches) {
+      if (configured !== actual) {
+        throw new Error(
+          `${configPath}: proof_release.${field} ${configured} does not match ${actual} `
+          + 'in the prepared deployment release',
+        )
+      }
+    }
+
+    verifyProofTopologyReleaseBinding(topology, release, deploymentDir)
+    return []
+  }
+
+  if (binding.deploymentLockDigest) {
+    throw new Error(`${configPath}: proof_release.deploymentLockDigest requires deploymentLockPath`)
+  }
+
+  const release = readPreparedProofSoftwareRelease(
+    path.resolve(deploymentDir, binding.softwareReleaseManifestPath),
   )
   const mismatches: Array<[string, string, string]> = [
     ['releaseId', binding.releaseId, release.release.release_id],
     ['releaseImage', binding.releaseImage, release.receipt.release_image],
     ['softwareReleaseDigest', binding.softwareReleaseDigest, release.release.release_digest],
-    ['deploymentLockDigest', binding.deploymentLockDigest, release.lock.lock_digest],
   ]
   for (const [field, configured, actual] of mismatches) {
     if (configured !== actual) {
       throw new Error(
         `${configPath}: proof_release.${field} ${configured} does not match ${actual} `
-        + 'in the prepared deployment release',
+        + 'in the prepared proof software release',
       )
     }
   }
 
-  verifyProofTopologyReleaseBinding(topology, release, deploymentDir)
+  verifyMockProofTopologySoftwareBinding(topology, release)
   return []
 }
 

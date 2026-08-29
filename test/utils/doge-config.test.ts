@@ -75,6 +75,8 @@ describe('doge-config utilities', () => {
         releaseId: 'dogeos-core-test-v1',
         releaseImage: `dogeos69/proof-release@sha256:${'e'.repeat(64)}`,
         softwareReleaseDigest: `sha256:${'f'.repeat(64)}`,
+        softwareReleaseManifestPath:
+          '.data/proof-releases/release/software/proof-software-release-v1.json',
       },
       proof_topology: {
         compiler: {
@@ -98,6 +100,8 @@ describe('doge-config utilities', () => {
       releaseId: 'dogeos-core-test-v1',
       releaseImage: `dogeos69/proof-release@sha256:${'e'.repeat(64)}`,
       softwareReleaseDigest: `sha256:${'f'.repeat(64)}`,
+      softwareReleaseManifestPath:
+        '.data/proof-releases/release/software/proof-software-release-v1.json',
     })
   })
 })

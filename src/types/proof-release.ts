@@ -4,6 +4,8 @@ export const PROOF_SOFTWARE_RELEASE_SCHEMA = 'dogeos/proof-software-release/v1' 
 export const PROOF_DEPLOYMENT_RELEASE_LOCK_SCHEMA =
   'dogeos/proof-deployment-release-lock/v1' as const
 export const PROOF_RELEASE_IMPORT_SCHEMA = 'scrollsdk/proof-release-import/v1' as const
+export const PROOF_SOFTWARE_RELEASE_IMPORT_SCHEMA =
+  'scrollsdk/proof-software-release-import/v1' as const
 
 export interface ProofReleaseFileV1 {
   path: string
@@ -116,6 +118,26 @@ export interface ProofReleaseImportV1 {
   schema: typeof PROOF_RELEASE_IMPORT_SCHEMA
   schema_version: 1
   software_release_digest: string
+}
+
+/** Local receipt for a validated software release imported without deployment-bound Bridge material. */
+export interface ProofSoftwareReleaseImportV1 {
+  release_id: string
+  release_image: string
+  schema: typeof PROOF_SOFTWARE_RELEASE_IMPORT_SCHEMA
+  schema_version: 1
+  software_release_digest: string
+  software_release_manifest: string
+}
+
+/** Mock-capable immutable software release; it is deliberately insufficient for production. */
+export interface PreparedProofSoftwareRelease {
+  importPath: string
+  manifestPath: string
+  receipt: ProofSoftwareReleaseImportV1
+  release: ProofSoftwareReleaseV1
+  resourcesRoot: string
+  softwareRoot: string
 }
 
 /** The validated local input consumed by topology initialization. */
