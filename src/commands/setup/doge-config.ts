@@ -335,6 +335,11 @@ export class DogeConfigCommand extends Command {
         }
 
         const initialized = await initializeTopology(existingConfig)
+        if ((existingConfig as Record<string, unknown>).proofSystem !== undefined) {
+          delete (existingConfig as Record<string, unknown>).proofSystem
+          log(chalk.blue('Removed retired [proofSystem] after installing [proof_topology]'))
+        }
+
         existingConfig.proof_topology = initialized.topology
         existingConfig.proof_release = initialized.release
         fs.writeFileSync(resolvedPath, dogeConfigToToml(existingConfig))

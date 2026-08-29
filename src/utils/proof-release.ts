@@ -303,6 +303,15 @@ export function readProofDeploymentReleaseLock(filePath: string): ProofDeploymen
     ['aggregate_verification_key_hash', 'batch', 'bridge', 'chunk', 'l2_range'],
     `${filePath}.projection.identities`,
   )
+  if (!HEX_32.test(requiredString(
+    identities.aggregate_verification_key_hash,
+    `${filePath}.projection.identities.aggregate_verification_key_hash`,
+  ))) {
+    throw new Error(
+      `${filePath}.projection.identities.aggregate_verification_key_hash is invalid`,
+    )
+  }
+
   assertIdentityShape(identities.chunk, `${filePath}.projection.identities.chunk`, 'scroll')
   assertIdentityShape(identities.batch, `${filePath}.projection.identities.batch`, 'batch')
   assertIdentityShape(identities.bridge, `${filePath}.projection.identities.bridge`, 'openvm')
