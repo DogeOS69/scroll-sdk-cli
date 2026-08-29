@@ -9,7 +9,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import type { DogeConfig } from '../../types/doge-config.js'
-import type {ProofTopologyArtifactStoreConfig, ProofTopologySpec} from '../../types/proof-topology.js'
+import type {
+  ProofTopologyArtifactStoreConfig,
+  ProofTopologyImageReference,
+  ProofTopologySpec,
+} from '../../types/proof-topology.js'
 
 import { SETUP_DEFAULTS_TEMPLATE, getSetupDefaultsPath } from '../../config/constants.js'
 import { Network } from '../../types/doge-config.js'
@@ -35,20 +39,16 @@ import {
 } from '../../utils/non-interactive.js'
 import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
 import {
-  discoverPreparedProofRelease,
-  discoverPreparedProofSoftwareRelease,
-  readPreparedProofRelease,
-  readPreparedProofSoftwareRelease,
-  validatePreparedProofRelease,
-  validatePreparedProofSoftwareRelease,
-  verifyMockProofTopologySoftwareBinding,
-  verifyProofTopologyReleaseBinding,
+  discoverPreparedProofProductionInputs,
+  immutableProofImageReference,
+  parseImmutableProofImageReference,
+  readPreparedProofProductionInputs,
+  verifyProductionReleaseBinding,
 } from '../../utils/proof-release.js'
 import {compileProofTopology} from '../../utils/proof-topology-compiler.js'
 import {
   awsS3Endpoint,
-  buildMockProofTopologyFromSoftwareRelease,
-  buildProofTopologyFromRelease,
+  buildProofTopology,
 } from '../../utils/proof-topology-init.js'
 
 type EthereumDaChain = 'devnet' | 'mainnet' | 'sepolia'
@@ -63,27 +63,28 @@ interface InitializeProofTopologyOptions {
   forcePathStyle?: boolean
   keyPrefix?: string
   log: (message: string) => void
+  mockWorkerImage?: string
   mode?: 'disabled' | 'mock' | 'production'
   nonInteractive: boolean
+  productionInputsPath?: string
   productionWorkerLaunch?: 'external' | 'local_cpu' | 'local_cuda'
   publicS3Endpoint?: string
   region?: string
-  releaseLockPath?: string
   resourcesPersistentVolumeClaim?: string
-  softwareReleaseManifestPath?: string
+  topologyCompilerImage?: string
   witnessDir?: string
   witnessRpcUrl?: string
   witnessSource?: 'block_witness_dir' | 'rpc'
 }
 
 interface InitializedProofTopology {
-  release: NonNullable<DogeConfig['proof_release']>
+  productionReleaseId?: string
   topology: ProofTopologySpec
 }
 
-export const PROOF_RELEASE_LOCK_REQUIRED_MESSAGE =
-  'No prepared proof software release was found. Run scrollsdk setup '
-  + 'proof-release-init --scope mock first, or pass --proof-software-release.'
+export const PROOF_PRODUCTION_INPUTS_REQUIRED_MESSAGE =
+  'Production mode requires prepared ProofSoftwareReleaseV1 and ProofBridgeMaterialV1 inputs. '
+  + 'Run scrollsdk setup proof-release-init first, or pass --proof-production-inputs.'
 
 const ETHEREUM_DA_DEFAULTS: Record<EthereumDaChain, {
   beaconRpcUrl: string
@@ -136,7 +137,8 @@ export class DogeConfigCommand extends Command {
     '$ scrollsdk setup doge-config',
     '$ scrollsdk setup doge-config --config .data/doge-config.toml',
     '$ scrollsdk setup doge-config --proof-topology',
-    '$ scrollsdk setup doge-config --proof-topology --proof-release-lock .data/proof-releases/.../proof-deployment-release-lock-v1.json',
+    '$ scrollsdk setup doge-config --proof-topology --proof-mode mock',
+    '$ scrollsdk setup doge-config --proof-topology --proof-mode production --proof-production-inputs .data/proof-production',
     '$ scrollsdk setup doge-config --non-interactive',
     '$ scrollsdk setup doge-config --non-interactive --json',
   ]
@@ -186,10 +188,18 @@ export class DogeConfigCommand extends Command {
       dependsOn: ['proof-topology'],
       description: 'Base proof artifact key prefix before compiler digest scoping',
     }),
+    'proof-mock-worker-image': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Digest-pinned mock Worker image (repository@sha256:...)',
+    }),
     'proof-mode': Flags.string({
       dependsOn: ['proof-topology'],
-      description: 'Initial proof mode; mock-only imports default mock, production-ready imports default disabled',
+      description: 'Initial proof mode (default: existing value or disabled)',
       options: ['disabled', 'mock', 'production'],
+    }),
+    'proof-production-inputs': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Prepared production input receipt or root; auto-discovers .data/proof-production',
     }),
     'proof-public-s3-endpoint': Flags.string({
       dependsOn: ['proof-topology'],
@@ -199,17 +209,9 @@ export class DogeConfigCommand extends Command {
       dependsOn: ['proof-topology'],
       description: 'Existing S3-compatible proof artifact region',
     }),
-    'proof-release-lock': Flags.string({
-      dependsOn: ['proof-topology'],
-      description: 'Prepared dogeos/proof-deployment-release-lock/v1; auto-discovered when unique',
-    }),
     'proof-resources-pvc': Flags.string({
       dependsOn: ['proof-topology'],
-      description: 'Advanced override for the pre-populated proof release PVC (default: dogeos-proof-release)',
-    }),
-    'proof-software-release': Flags.string({
-      dependsOn: ['proof-topology'],
-      description: 'Prepared mock software manifest from setup proof-release-init --scope mock',
+      description: 'Production-only override for the pre-populated proof material PVC (default: dogeos-proof-release)',
     }),
     'proof-topology': Flags.boolean({
       default: false,
@@ -219,9 +221,13 @@ export class DogeConfigCommand extends Command {
       dependsOn: ['proof-topology'],
       description: 'Development-only local dogeos-proof-topology binary used for both initialization preflights',
     }),
+    'proof-topology-compiler-image': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Digest-pinned dogeos-proof-topology image (repository@sha256:...)',
+    }),
     'proof-witness-dir': Flags.string({
       dependsOn: ['proof-topology'],
-      description: 'Block witness directory relative to the prepared proof release root',
+      description: 'Production block witness directory relative to the prepared material root',
     }),
     'proof-witness-rpc-url': Flags.string({
       dependsOn: ['proof-topology'],
@@ -293,8 +299,10 @@ export class DogeConfigCommand extends Command {
       forcePathStyle: flags['proof-force-path-style'],
       keyPrefix: flags['proof-key-prefix'],
       log,
+      mockWorkerImage: flags['proof-mock-worker-image'],
       mode: flags['proof-mode'] as 'disabled' | 'mock' | 'production' | undefined,
       nonInteractive: flags['non-interactive'],
+      productionInputsPath: flags['proof-production-inputs'],
       productionWorkerLaunch: flags['production-worker-launch'] as
         | 'external'
         | 'local_cpu'
@@ -302,9 +310,8 @@ export class DogeConfigCommand extends Command {
         | undefined,
       publicS3Endpoint: flags['proof-public-s3-endpoint'],
       region: flags['proof-region'],
-      releaseLockPath: flags['proof-release-lock'],
       resourcesPersistentVolumeClaim: flags['proof-resources-pvc'],
-      softwareReleaseManifestPath: flags['proof-software-release'],
+      topologyCompilerImage: flags['proof-topology-compiler-image'],
       witnessDir: flags['proof-witness-dir'],
       witnessRpcUrl: flags['proof-witness-rpc-url'],
       witnessSource: flags['proof-witness-source'] as 'block_witness_dir' | 'rpc' | undefined,
@@ -352,18 +359,21 @@ export class DogeConfigCommand extends Command {
         }
 
         existingConfig.proof_topology = initialized.topology
-        existingConfig.proof_release = initialized.release
+        delete (existingConfig as Record<string, unknown>).proof_release
         fs.writeFileSync(resolvedPath, dogeConfigToToml(existingConfig))
         log(chalk.green(`Proof topology saved to ${resolvedPath}`))
         log(chalk.blue(`Proof Mode: ${initialized.topology.mode}`))
-        log(chalk.blue(`Proof Release: ${initialized.release.releaseId}`))
+        if (initialized.productionReleaseId) {
+          log(chalk.blue(`Production Proof Release: ${initialized.productionReleaseId}`))
+        }
+
         if (flags.json) {
           jsonCtx.success({
             configPath: resolvedPath,
             network: existingNetwork,
             proofTopology: {
               mode: initialized.topology.mode,
-              releaseId: initialized.release.releaseId,
+              productionReleaseId: initialized.productionReleaseId,
             },
           })
         }
@@ -734,7 +744,7 @@ export class DogeConfigCommand extends Command {
     if (initializeProofTopology) {
       const initialized = await initializeTopology(newConfig)
       newConfig.proof_topology = initialized.topology
-      newConfig.proof_release = initialized.release
+      delete (newConfig as Record<string, unknown>).proof_release
     }
 
     // Validate any missing required fields before proceeding
@@ -766,8 +776,10 @@ export class DogeConfigCommand extends Command {
     log(chalk.blue(`Wallet Path: ${newConfig.wallet.path}`))
     if (newConfig.proof_topology) {
       log(chalk.blue(`Proof Mode: ${newConfig.proof_topology.mode}`))
-      if (newConfig.proof_release) {
-        log(chalk.blue(`Proof Release: ${newConfig.proof_release.releaseId}`))
+      if (newConfig.proof_topology.production?.release) {
+        log(chalk.blue(
+          `Production Software Release Digest: ${newConfig.proof_topology.production.release.softwareReleaseDigest}`,
+        ))
       }
     }
 
@@ -787,7 +799,8 @@ export class DogeConfigCommand extends Command {
           ? {
               proofTopology: {
                 mode: newConfig.proof_topology.mode,
-                releaseId: newConfig.proof_release?.releaseId,
+                productionSoftwareReleaseDigest:
+                  newConfig.proof_topology.production?.release.softwareReleaseDigest,
               },
             }
           : {}),
@@ -840,50 +853,75 @@ export class DogeConfigCommand extends Command {
   ): Promise<InitializedProofTopology> {
     const deploymentDir = process.cwd()
     const existing = options.config.proof_topology
-    if (options.releaseLockPath && options.softwareReleaseManifestPath) {
-      throw new Error('--proof-release-lock conflicts with --proof-software-release')
-    }
-
-    const configuredLockPath = options.releaseLockPath
-      || options.config.proof_release?.deploymentLockPath
-    const configuredSoftwareManifest = options.softwareReleaseManifestPath
-      || options.config.proof_release?.softwareReleaseManifestPath
-    const discoveredLockPath = options.softwareReleaseManifestPath
-      ? undefined
-      : discoverPreparedProofRelease(deploymentDir, configuredLockPath)
-    const discoveredSoftwareManifest = discoveredLockPath
-      ? undefined
-      : discoverPreparedProofSoftwareRelease(deploymentDir, configuredSoftwareManifest)
-    if (!discoveredLockPath && !discoveredSoftwareManifest) {
-      throw new Error(PROOF_RELEASE_LOCK_REQUIRED_MESSAGE)
-    }
-
-    const release = discoveredLockPath
-      ? readPreparedProofRelease(discoveredLockPath)
+    const productionInputsPath = discoverPreparedProofProductionInputs(
+      deploymentDir,
+      options.productionInputsPath || existing?.production?.release?.resourcesRoot,
+    )
+    const productionInputs = productionInputsPath
+      ? readPreparedProofProductionInputs(productionInputsPath)
       : undefined
-    const softwareRelease = discoveredSoftwareManifest
-      ? readPreparedProofSoftwareRelease(discoveredSoftwareManifest)
-      : undefined
-    if (release) {
-      options.log(chalk.blue(`Validating prepared proof release ${release.release.release_id}`))
-      validatePreparedProofRelease(release)
-      options.log(
-        chalk.blue(
-          `Using ${release.receipt.release_image} with deployment lock ${release.lock.lock_digest}`,
-        ),
-      )
+    if (productionInputs) {
+      options.log(chalk.blue(
+        `Using prepared production proof inputs ${productionInputs.release.release_id} `
+        + `(${productionInputs.release.release_digest})`,
+      ))
     } else {
-      options.log(
-        chalk.blue(`Validating prepared mock software release ${softwareRelease!.release.release_id}`),
-      )
-      validatePreparedProofSoftwareRelease(softwareRelease!)
-      options.log(
-        chalk.blue(
-          `Using ${softwareRelease!.receipt.release_image}; production remains unavailable until `
-          + 'a deployment lock is prepared',
-        ),
-      )
+      options.log(chalk.blue(
+        'No production proof inputs are staged; disabled and mock remain available',
+      ))
     }
+
+    const resolveImage = async (
+      explicit: string | undefined,
+      existingImage: ProofTopologyImageReference | undefined,
+      releaseImage: ProofTopologyImageReference | undefined,
+      message: string,
+      flag: string,
+    ): Promise<ProofTopologyImageReference> => {
+      const defaultImage = existingImage || releaseImage
+      const defaultValue = defaultImage
+        ? immutableProofImageReference(defaultImage, flag)
+        : undefined
+      const value = await resolveFlagOrPrompt(
+        explicit,
+        options.nonInteractive,
+        defaultValue,
+        () => input({
+          default: defaultValue,
+          message,
+          validate(candidate) {
+            try {
+              parseImmutableProofImageReference(candidate, flag)
+              return true
+            } catch (error) {
+              return error instanceof Error ? error.message : String(error)
+            }
+          },
+        }),
+      )
+      if (!value?.trim()) {
+        throw new Error(
+          `${flag} is required; use an immutable repository@sha256:<64 lowercase hex> reference`,
+        )
+      }
+
+      return parseImmutableProofImageReference(value, flag)
+    }
+
+    const compilerImage = await resolveImage(
+      options.topologyCompilerImage,
+      existing?.compiler.image,
+      productionInputs?.release.images.topology_compiler,
+      'Enter the immutable dogeos-proof-topology compiler image:',
+      '--proof-topology-compiler-image',
+    )
+    const mockWorkerImage = await resolveImage(
+      options.mockWorkerImage,
+      existing?.mock?.workerImage,
+      productionInputs?.release.images.mock_worker,
+      'Enter the immutable mock prover-worker image:',
+      '--proof-mock-worker-image',
+    )
 
     const proofAws = readOptionalProofAwsConfig(deploymentDir)
     const normalizedDeploymentAlias = sanitizeName(
@@ -998,7 +1036,7 @@ export class DogeConfigCommand extends Command {
       }
     }
 
-    const defaultMode = existing?.mode || (softwareRelease ? 'mock' : 'disabled')
+    const defaultMode = existing?.mode || 'disabled'
     const selectedMode = await resolveFlagOrPrompt(
       options.mode,
       options.nonInteractive,
@@ -1007,12 +1045,16 @@ export class DogeConfigCommand extends Command {
         choices: [
           {name: 'disabled (prepare resources without running proof services)', value: 'disabled'},
           {name: 'mock', value: 'mock'},
-          {name: 'production', value: 'production'},
+          ...(productionInputs ? [{name: 'production', value: 'production'}] : []),
         ],
         default: defaultMode,
         message: 'Select the initial proof mode:',
       }),
     ) as 'disabled' | 'mock' | 'production'
+    if (selectedMode === 'production' && !productionInputs) {
+      throw new Error(PROOF_PRODUCTION_INPUTS_REQUIRED_MESSAGE)
+    }
+
     const defaultCoordinatorUrl = existing?.deployment?.proverPublicUrl
       || this.proofCoordinatorUrlFromMainConfig()
     const coordinatorUrl = await resolveFlagOrPrompt(
@@ -1032,155 +1074,111 @@ export class DogeConfigCommand extends Command {
       )
     }
 
-    if (!release) {
-      if (selectedMode === 'production') {
-        throw new Error(
-          'production mode requires a deployment release lock; run '
-          + 'scrollsdk setup proof-release-init --scope production first',
-        )
-      }
-
-      const topology = buildMockProofTopologyFromSoftwareRelease({
-        artifactStore,
-        deploymentName,
-        mode: selectedMode,
-        release: softwareRelease!,
-        runtime: {
-          proofCoordinatorPublicUrl: coordinatorUrl,
-          ...(existing?.deployment?.workerNodeSelector
-            ? {workerNodeSelector: existing.deployment.workerNodeSelector}
-            : {}),
-          ...(existing?.deployment?.workerSecretName
-            ? {workerSecretName: existing.deployment.workerSecretName}
-            : {}),
-          ...(existing?.deployment?.workerTolerations
-            ? {workerTolerations: existing.deployment.workerTolerations}
-            : {}),
-        },
-      })
-      await this.preflightProofTopology(
-        topology,
-        options.config,
-        deploymentName,
-        options.log,
-        options.compilerBinary,
-      )
-      verifyMockProofTopologySoftwareBinding(topology, softwareRelease!)
-      const manifestRelative = path.relative(deploymentDir, softwareRelease!.manifestPath)
-      const storedManifestPath = manifestRelative === '..'
-        || manifestRelative.startsWith(`..${path.sep}`)
-        || path.isAbsolute(manifestRelative)
-        ? softwareRelease!.manifestPath
-        : manifestRelative.replaceAll(path.sep, '/')
-      return {
-        release: {
-          releaseId: softwareRelease!.release.release_id,
-          releaseImage: softwareRelease!.receipt.release_image,
-          softwareReleaseDigest: softwareRelease!.release.release_digest,
-          softwareReleaseManifestPath: storedManifestPath,
-        },
-        topology,
-      }
-    }
-
-    const currentLaunch = existing?.production?.workerLaunch
-    const defaultLaunch = currentLaunch || 'external'
-    const productionWorkerLaunch = await resolveFlagOrPrompt(
-      options.productionWorkerLaunch,
-      options.nonInteractive,
-      defaultLaunch,
-      () => select({
-        choices: [
-          {name: 'External GPU server', value: 'external'},
-          {name: 'Kubernetes CUDA node', value: 'local_cuda'},
-          {name: 'Kubernetes CPU node', value: 'local_cpu'},
-        ],
-        default: defaultLaunch,
-        message: 'Select the production Worker placement:',
-      }),
-    ) as 'external' | 'local_cpu' | 'local_cuda'
-
-    const currentReal = existing?.production?.realScroll
-    const resourcesRoot = path.relative(deploymentDir, release.resourcesRoot).replaceAll(path.sep, '/')
-    const resourcesPersistentVolumeClaim = options.resourcesPersistentVolumeClaim
-      || existing?.deployment?.resourcesPersistentVolumeClaim
-      || 'dogeos-proof-release'
-    options.log(
-      chalk.blue(
-        `Using release materials from ${resourcesRoot}; Kubernetes services will mount `
-        + `the pre-populated PVC ${resourcesPersistentVolumeClaim} read-only`,
-      ),
-    )
-
-    const defaultWitnessSource = currentReal?.chunkWitnessSource
-      || (fs.existsSync(path.resolve(deploymentDir, resourcesRoot, 'witnesses'))
-        ? 'block_witness_dir'
-        : options.config.rpc?.l2Url
-          ? 'rpc'
-          : 'block_witness_dir')
-    const witnessSource = await resolveFlagOrPrompt(
-      options.witnessSource,
-      options.nonInteractive,
-      defaultWitnessSource,
-      () => select({
-        choices: [
-          {name: 'Prepared block witness directory', value: 'block_witness_dir'},
-          {name: 'Scroll witness RPC', value: 'rpc'},
-        ],
-        default: defaultWitnessSource,
-        message: 'Select the production chunk witness source:',
-      }),
-    ) as 'block_witness_dir' | 'rpc'
+    let productionWorkerLaunch: 'external' | 'local_cpu' | 'local_cuda' =
+      existing?.production?.workerLaunch || 'external'
+    let witnessSource: 'block_witness_dir' | 'rpc' | undefined
     let witnessDir: string | undefined
     let witnessRpcUrl: string | undefined
-    if (witnessSource === 'block_witness_dir') {
-      const defaultWitnessDir = currentReal?.chunkBlockWitnessDir || 'witnesses'
-      witnessDir = await resolveFlagOrPrompt(
-        options.witnessDir,
+    let resourcesPersistentVolumeClaim: string | undefined
+    let publicS3Endpoint: string | undefined
+    if (productionInputs) {
+      productionWorkerLaunch = await resolveFlagOrPrompt(
+        options.productionWorkerLaunch,
         options.nonInteractive,
-        defaultWitnessDir,
-        () => input({
-          default: defaultWitnessDir,
-          message: 'Enter the block witness directory relative to the release resources root:',
+        productionWorkerLaunch,
+        () => select({
+          choices: [
+            {name: 'External GPU server', value: 'external'},
+            {name: 'Kubernetes CUDA node', value: 'local_cuda'},
+            {name: 'Kubernetes CPU node', value: 'local_cpu'},
+          ],
+          default: productionWorkerLaunch,
+          message: 'Select the production Worker placement:',
         }),
+      ) as 'external' | 'local_cpu' | 'local_cuda'
+
+      const currentReal = existing?.production?.realScroll
+      resourcesPersistentVolumeClaim = options.resourcesPersistentVolumeClaim
+        || existing?.deployment?.resourcesPersistentVolumeClaim
+        || 'dogeos-proof-release'
+      const relativeResourcesRoot = path.relative(
+        deploymentDir,
+        productionInputs.resourcesRoot,
+      ).replaceAll(path.sep, '/')
+      options.log(chalk.blue(
+        `Using production materials from ${relativeResourcesRoot}; Kubernetes services will mount `
+        + `the pre-populated PVC ${resourcesPersistentVolumeClaim} read-only`,
+      ))
+
+      const hasPreparedWitnesses = fs.existsSync(
+        path.join(productionInputs.resourcesRoot, 'witnesses'),
       )
-    } else {
-      const defaultWitnessRpcUrl = currentReal?.chunkWitnessRpcUrl
-        || options.config.rpc?.l2Url
-      witnessRpcUrl = await resolveFlagOrPrompt(
-        options.witnessRpcUrl,
+      const defaultWitnessSource = currentReal?.chunkWitnessSource
+        || (options.config.rpc?.l2Url ? 'rpc' : hasPreparedWitnesses ? 'block_witness_dir' : 'rpc')
+      witnessSource = await resolveFlagOrPrompt(
+        options.witnessSource,
         options.nonInteractive,
-        defaultWitnessRpcUrl,
-        () => input({
-          default: defaultWitnessRpcUrl,
-          message: 'Enter the Scroll witness RPC URL:',
-          validate: value => value.trim() ? true : 'Witness RPC URL must not be empty',
+        defaultWitnessSource,
+        () => select({
+          choices: [
+            {name: 'Scroll witness RPC', value: 'rpc'},
+            {name: 'Prepared block witness directory', value: 'block_witness_dir'},
+          ],
+          default: defaultWitnessSource,
+          message: 'Select the production chunk witness source:',
         }),
-      )
-      if (!witnessRpcUrl?.trim()) {
-        throw new Error('--proof-witness-rpc-url is required for RPC witness input')
+      ) as 'block_witness_dir' | 'rpc'
+      if (witnessSource === 'block_witness_dir') {
+        const defaultWitnessDir = currentReal?.chunkBlockWitnessDir || 'witnesses'
+        witnessDir = await resolveFlagOrPrompt(
+          options.witnessDir,
+          options.nonInteractive,
+          defaultWitnessDir,
+          () => input({
+            default: defaultWitnessDir,
+            message: 'Enter the block witness directory relative to the production resources root:',
+          }),
+        )
+      } else {
+        const defaultWitnessRpcUrl = currentReal?.chunkWitnessRpcUrl || options.config.rpc?.l2Url
+        witnessRpcUrl = await resolveFlagOrPrompt(
+          options.witnessRpcUrl,
+          options.nonInteractive,
+          defaultWitnessRpcUrl,
+          () => input({
+            default: defaultWitnessRpcUrl,
+            message: 'Enter the Scroll witness RPC URL:',
+            validate: value => value.trim() ? true : 'Witness RPC URL must not be empty',
+          }),
+        )
+        if (!witnessRpcUrl?.trim()) {
+          throw new Error('--proof-witness-rpc-url is required for production RPC witness input')
+        }
       }
+
+      publicS3Endpoint = options.publicS3Endpoint
+        || currentReal?.s3PublicEndpointUrl
+        || (artifactSource === 'prepared-aws'
+          ? proofAws!.config.artifactReadTransport.publicEndpointUrl
+          : undefined)
+        || artifactStore.endpointUrl
     }
 
-    const publicS3Endpoint = options.publicS3Endpoint
-      || currentReal?.s3PublicEndpointUrl
-      || (artifactSource === 'prepared-aws'
-        ? proofAws!.config.artifactReadTransport.publicEndpointUrl
-        : undefined)
-      || artifactStore.endpointUrl
-    const topology = buildProofTopologyFromRelease({
+    const topology = buildProofTopology({
       artifactStore,
+      compilerImage,
       deploymentDir,
       deploymentName,
+      mockWorkerImage,
       mode: selectedMode,
-      productionWorkerLaunch,
-      release,
+      ...(productionInputs
+        ? {production: {inputs: productionInputs, workerLaunch: productionWorkerLaunch}}
+        : {}),
       runtime: {
         ...(witnessDir ? {blockWitnessDir: witnessDir} : {}),
         proofCoordinatorPublicUrl: coordinatorUrl,
         ...(publicS3Endpoint ? {publicS3EndpointUrl: publicS3Endpoint} : {}),
-        resourcesPersistentVolumeClaim,
-        resourcesRoot,
+        ...(resourcesPersistentVolumeClaim ? {resourcesPersistentVolumeClaim} : {}),
         ...(witnessRpcUrl ? {rpcWitnessUrl: witnessRpcUrl} : {}),
         ...(existing?.deployment?.workerNodeSelector
           ? {workerNodeSelector: existing.deployment.workerNodeSelector}
@@ -1201,7 +1199,7 @@ export class DogeConfigCommand extends Command {
                 existing?.deployment?.workerRuntimeClassName || 'nvidia',
             }
           : {}),
-        witnessSource,
+        ...(witnessSource ? {witnessSource} : {}),
       },
     })
 
@@ -1212,25 +1210,9 @@ export class DogeConfigCommand extends Command {
       options.log,
       options.compilerBinary,
     )
-    verifyProofTopologyReleaseBinding(topology, release, deploymentDir)
-    const lockRelative = path.relative(deploymentDir, release.lockPath)
-    const storedLockPath = lockRelative === '..'
-      || lockRelative.startsWith(`..${path.sep}`)
-      || path.isAbsolute(lockRelative)
-      ? release.lockPath
-      : lockRelative.replaceAll(path.sep, '/')
+    if (productionInputs) verifyProductionReleaseBinding(topology, deploymentDir)
     return {
-      release: {
-        deploymentLockDigest: release.lock.lock_digest,
-        deploymentLockPath: storedLockPath,
-        releaseId: release.release.release_id,
-        releaseImage: release.receipt.release_image,
-        softwareReleaseDigest: release.release.release_digest,
-        softwareReleaseManifestPath: path.relative(
-          deploymentDir,
-          release.lock.software_release_manifest,
-        ).replaceAll(path.sep, '/'),
-      },
+      ...(productionInputs ? {productionReleaseId: productionInputs.release.release_id} : {}),
       topology,
     }
   }
@@ -1255,14 +1237,15 @@ export class DogeConfigCommand extends Command {
     for (const mode of modes) {
       const output = `.data/generated/.proof-topology-init-preflight-${mode}-${process.pid}`
       try {
-        const preflightTopology = compilerBinary && topology.production?.realScroll
+        const preflightTopology = compilerBinary && mode === 'production'
+          && topology.production?.release
           ? {
               ...topology,
               deployment: {
                 ...topology.deployment,
                 resourcesMountPath: path.resolve(
                   deploymentDir,
-                  topology.production!.realScroll.resourcesRoot,
+                  topology.production.release.resourcesRoot,
                 ),
               },
             }

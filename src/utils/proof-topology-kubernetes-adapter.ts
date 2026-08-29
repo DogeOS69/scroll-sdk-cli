@@ -647,6 +647,13 @@ export function reconcileCompiledProofTopology(
     const realScroll = selectedRealScroll(topology, mode)
     if (!realScroll) throw new Error('external compiler Worker requires selected realScroll resources')
     const deploymentRoot = path.resolve(options.deploymentDir)
+    const selectedResourcesRoot = mode === 'production'
+      ? topology.production?.release.resourcesRoot
+      : realScroll.resourcesRoot
+    if (!selectedResourcesRoot) {
+      throw new Error(`external ${mode} Worker requires a deployment-relative resources root`)
+    }
+
     workerBundle = writeCompiledProverWorkerBundle({
       bundleDir: path.join(deploymentRoot, `prover-worker-${mode}/docker-compose`),
       contractFile: path.join(bundle.bundleDir, bundle.manifest.prover_worker),
@@ -662,8 +669,10 @@ export function reconcileCompiledProofTopology(
       resourcesMountPath,
       resourcesRoot: deploymentFile(
         deploymentRoot,
-        realScroll.resourcesRoot,
-        `proofTopology.${mode}.realScroll.resourcesRoot`,
+        selectedResourcesRoot,
+        mode === 'production'
+          ? 'proofTopology.production.release.resourcesRoot'
+          : `proofTopology.${mode}.realScroll.resourcesRoot`,
       ),
       worker: bundle.worker,
     })

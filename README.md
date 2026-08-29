@@ -1036,10 +1036,10 @@ USAGE
   $ scrollsdk setup doge-config [-c <value>] [--json] [-N] [--production-worker-launch external|local_cpu|local_cuda
     --proof-topology] [--proof-artifact-source existing-s3|prepared-aws ] [--proof-bucket <value> ]
     [--proof-coordinator-url <value> ] [--proof-endpoint-url <value> ] [--proof-force-path-style ] [--proof-key-prefix
-    <value> ] [--proof-mode disabled|mock|production ] [--proof-public-s3-endpoint <value> ] [--proof-region <value> ]
-    [--proof-release-lock <value> ] [--proof-resources-pvc <value> ] [--proof-software-release <value> ]
-    [--proof-topology-compiler-binary <value> ] [--proof-witness-dir <value> ] [--proof-witness-rpc-url <value> ]
-    [--proof-witness-source block_witness_dir|rpc ]
+    <value> ] [--proof-mock-worker-image <value> ] [--proof-mode disabled|mock|production ] [--proof-production-inputs
+    <value> ] [--proof-public-s3-endpoint <value> ] [--proof-region <value> ] [--proof-resources-pvc <value> ]
+    [--proof-topology-compiler-binary <value> ] [--proof-topology-compiler-image <value> ] [--proof-witness-dir <value>
+    ] [--proof-witness-rpc-url <value> ] [--proof-witness-source block_witness_dir|rpc ]
 
 FLAGS
   -N, --non-interactive                         Run without prompts, using existing config values
@@ -1054,21 +1054,22 @@ FLAGS
       --proof-endpoint-url=<value>              Worker-visible S3-compatible endpoint root
       --[no-]proof-force-path-style             Use path-style S3 object URLs for an existing compatible store
       --proof-key-prefix=<value>                Base proof artifact key prefix before compiler digest scoping
-      --proof-mode=<option>                     Initial proof mode; new deployments default to disabled
+      --proof-mock-worker-image=<value>         Digest-pinned mock Worker image (repository@sha256:...)
+      --proof-mode=<option>                     Initial proof mode (default: existing value or disabled)
                                                 <options: disabled|mock|production>
+      --proof-production-inputs=<value>         Prepared production input receipt or root; auto-discovers
+                                                .data/proof-production
       --proof-public-s3-endpoint=<value>        External Worker/signer-visible S3 endpoint when different from the store
                                                 endpoint
       --proof-region=<value>                    Existing S3-compatible proof artifact region
-      --proof-release-lock=<value>              Prepared dogeos/proof-deployment-release-lock/v1; auto-discovered when
-                                                unique
-      --proof-resources-pvc=<value>             Advanced override for the pre-populated proof release PVC (default:
-                                                dogeos-proof-release)
-      --proof-software-release=<value>          Prepared mock software manifest from setup proof-release-init --scope
-                                                mock
+      --proof-resources-pvc=<value>             Production-only override for the pre-populated proof material PVC
+                                                (default: dogeos-proof-release)
       --proof-topology                          Initialize or replace compiler-backed proof topology
       --proof-topology-compiler-binary=<value>  Development-only local dogeos-proof-topology binary used for both
                                                 initialization preflights
-      --proof-witness-dir=<value>               Block witness directory relative to the prepared proof release root
+      --proof-topology-compiler-image=<value>   Digest-pinned dogeos-proof-topology image (repository@sha256:...)
+      --proof-witness-dir=<value>               Production block witness directory relative to the prepared material
+                                                root
       --proof-witness-rpc-url=<value>           Scroll witness RPC URL used when --proof-witness-source=rpc
       --proof-witness-source=<option>           Chunk witness source used by real materialization
                                                 <options: block_witness_dir|rpc>
@@ -1083,7 +1084,9 @@ EXAMPLES
 
   $ scrollsdk setup doge-config --proof-topology
 
-  $ scrollsdk setup doge-config --proof-topology --proof-release-lock .data/proof-releases/.../proof-deployment-release-lock-v1.json
+  $ scrollsdk setup doge-config --proof-topology --proof-mode mock
+
+  $ scrollsdk setup doge-config --proof-topology --proof-mode production --proof-production-inputs .data/proof-production
 
   $ scrollsdk setup doge-config --non-interactive
 
@@ -1703,36 +1706,35 @@ _See code: [src/commands/setup/proof-config-check.ts](https://github.com/dogeos6
 
 ## `scrollsdk setup proof-release-init`
 
-Import an immutable dogeos-core proof release for mock mode, or explicitly prepare the complete production Bridge deployment lock
+Prepare production proof inputs from an extracted ProofSoftwareReleaseV1 and deployment protocol context; disabled/mock do not use this command
 
 ```
 USAGE
-  $ scrollsdk setup proof-release-init [--deployment-dir <value>] [--docker-platform <value>] [--json] [-N]
-    [--protocol-context <value>] [--release-image <value>] [--scope mock|production] [-y]
+  $ scrollsdk setup proof-release-init [--bridge-material <value>] [--deployment-dir <value>] [--docker-platform <value>]
+    [--json] [-N] [--output-root <value>] [--protocol-context <value>] [--software-release <value>] [-y]
 
 FLAGS
-  -N, --non-interactive           Run without prompts; --release-image is required for a new import
-  -y, --yes                       Prepare the selected scope without the final confirmation
-      --deployment-dir=<value>    Deployment root; production scope also reads .data/protocol_context.json
-      --docker-platform=<value>   [default: linux/amd64] Docker platform for the release, compiler, and CPU Bridge baker
-                                  images
+  -N, --non-interactive           Run without prompts; required values must be flags, defaults, or existing state
+  -y, --yes                       Prepare the production inputs without the final confirmation
+      --bridge-material=<value>   Existing ProofBridgeMaterialV1 manifest; skips the normal CPU Bridge bake
+      --deployment-dir=<value>    Deployment root
+      --docker-platform=<value>   [default: linux/amd64] Docker platform for the digest-pinned CPU Bridge baker image
       --json                      Output structured JSON
-      --protocol-context=<value>  Production-only canonical protocol_context.json generated by setup bridge-init
-      --release-image=<value>     Immutable dogeos-core proof release data image (repository@sha256:...)
-      --scope=<option>            Preparation scope; mock imports software/images only, production also bakes Bridge
-                                  material
-                                  <options: mock|production>
+      --output-root=<value>       [default: .data/proof-production] Deployment-relative directory for copied software
+                                  and baked Bridge material
+      --protocol-context=<value>  Canonical protocol_context.json generated by setup bridge-init
+      --software-release=<value>  Extracted dogeos/proof-software-release/v1 manifest
 
 DESCRIPTION
-  Import an immutable dogeos-core proof release for mock mode, or explicitly prepare the complete production Bridge
-  deployment lock
+  Prepare production proof inputs from an extracted ProofSoftwareReleaseV1 and deployment protocol context;
+  disabled/mock do not use this command
 
 EXAMPLES
   $ scrollsdk setup proof-release-init
 
-  $ scrollsdk setup proof-release-init --scope mock --release-image dogeos69/proof-release@sha256:<digest>
+  $ scrollsdk setup proof-release-init --software-release /srv/releases/proof-software-release-v1.json
 
-  $ scrollsdk setup proof-release-init --scope production --release-image dogeos69/proof-release@sha256:<digest>
+  $ scrollsdk setup proof-release-init --software-release /srv/releases/proof-software-release-v1.json --bridge-material /srv/bridge/proof-bridge-material-v1.json
 ```
 
 _See code: [src/commands/setup/proof-release-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-release-init.ts)_

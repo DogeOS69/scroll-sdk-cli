@@ -5,110 +5,100 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 
 import type {
-  ProofDeploymentReleaseLockV1,
-  ProofReleaseImportV1,
-  ProofSoftwareReleaseImportV1,
+  ProofBridgeMaterialV1,
+  ProofReleaseFileV1,
   ProofSoftwareReleaseV1,
 } from '../../src/types/proof-release.js'
 
 import {
-  PROOF_DEPLOYMENT_RELEASE_LOCK_SCHEMA,
-  PROOF_RELEASE_IMPORT_SCHEMA,
-  PROOF_SOFTWARE_RELEASE_IMPORT_SCHEMA,
+  PROOF_BRIDGE_MATERIAL_SCHEMA,
   PROOF_SOFTWARE_RELEASE_SCHEMA,
 } from '../../src/types/proof-release.js'
 import {
-  PROOF_DEPLOYMENT_RELEASE_LOCK,
-  PROOF_RELEASE_IMPORT_RECEIPT,
-  PROOF_SOFTWARE_RELEASE_IMPORT_RECEIPT,
-  discoverPreparedProofRelease,
-  discoverPreparedProofSoftwareRelease,
+  PROOF_BRIDGE_MATERIAL_MANIFEST,
+  PROOF_SOFTWARE_RELEASE_MANIFEST,
+  discoverPreparedProofProductionInputs,
   immutableProofImageReference,
-  listPreparedProofReleaseLocks,
-  listPreparedProofSoftwareReleaseManifests,
-  prepareProofRelease,
-  prepareProofSoftwareRelease,
-  readPreparedProofRelease,
-  readPreparedProofSoftwareRelease,
-  readProofDeploymentReleaseLock,
-  verifyMockProofTopologySoftwareBinding,
-  verifyProofTopologyReleaseBinding,
+  parseImmutableProofImageReference,
+  prepareProofProductionInputs,
+  readPreparedProofProductionInputs,
+  readProofBridgeMaterial,
+  readProofSoftwareRelease,
+  verifyProductionReleaseBinding,
 } from '../../src/utils/proof-release.js'
-import {
-  buildMockProofTopologyFromSoftwareRelease,
-  buildProofTopologyFromRelease,
-} from '../../src/utils/proof-topology-init.js'
+import {buildProofTopology} from '../../src/utils/proof-topology-init.js'
 
 const digest = (character: string) => `sha256:${character.repeat(64)}`
 const hex32 = (character: string) => `0x${character.repeat(64)}`
 const hex64 = (character: string) => `0x${character.repeat(128)}`
 
-export function preparedReleaseFixture(deployment: string) {
-  const root = path.join(deployment, '.data/proof-releases/release-fixture')
-  const softwareRoot = path.join(root, 'software')
-  const bridgeRoot = path.join(root, 'bridge')
+function sha256(contents: Buffer | string): string {
+  return `sha256:${createHash('sha256').update(contents).digest('hex')}`
+}
+
+function material(root: string, relative: string): ProofReleaseFileV1 {
+  const contents = Buffer.from(`fixture:${relative}`)
+  const target = path.join(root, relative)
+  fs.mkdirSync(path.dirname(target), {recursive: true})
+  fs.writeFileSync(target, contents)
+  return {path: relative, sha256: sha256(contents), size_bytes: contents.length}
+}
+
+function sourceFixture(deployment: string): {
+  bridgeManifest: string
+  protocolContext: string
+  release: ProofSoftwareReleaseV1
+  softwareManifest: string
+} {
+  const sourceRoot = path.join(deployment, 'producer-output')
+  const softwareRoot = path.join(sourceRoot, 'software')
+  const bridgeRoot = path.join(sourceRoot, 'bridge')
   fs.mkdirSync(softwareRoot, {recursive: true})
   fs.mkdirSync(bridgeRoot, {recursive: true})
-  const files = {
-    aggregate_verification_key: 'software/keys/agg-vk.bin',
-    batch_app_vmexe: 'software/batch/app.vmexe',
-    batch_materializer: 'software/bin/scroll-runtime-materializer',
-    batch_openvm_config: 'software/batch/openvm.toml',
-    bridge_app_vmexe: 'bridge/bridge-state.vmexe',
-    bridge_openvm_config: 'bridge/openvm.toml',
-    chunk_app_vmexe: 'software/chunk/app.vmexe',
-    chunk_materializer: 'software/bin/materialize-chunk-oneshot',
-    chunk_openvm_config: 'software/chunk/openvm.toml',
-    l2_range_app_vmexe: 'software/l2-range/app.vmexe',
-    l2_range_openvm_config: 'software/l2-range/openvm.toml',
-  }
-  for (const relative of Object.values(files)) {
-    const target = path.join(root, relative)
-    fs.mkdirSync(path.dirname(target), {recursive: true})
-    fs.writeFileSync(target, relative)
-  }
-
-  const scroll = {
+  const scrollIdentity = {
     program_commitment_hash: hex32('1'),
     program_commitment_le_raw: hex64('2'),
     verification_key_hash: hex32('3'),
   }
-  const batch = {...scroll, recursive_app_commit_raw: hex64('4')}
-  const openvm = {
-    app_commit_raw: hex64('5'),
-    program_commitment_hash: hex32('6'),
-    verification_key_hash: hex32('7'),
+  const l2RangeIdentity = {
+    app_commit_raw: hex64('4'),
+    program_commitment_hash: hex32('5'),
+    verification_key_hash: hex32('6'),
   }
-  const images = {
-    bridge_artifact_baker: {digest: digest('d'), repository: 'dogeos69/proof-artifact-baker'},
-    mock_worker: {digest: digest('b'), repository: 'dogeos69/prover-worker-mock'},
-    production_worker: {digest: digest('c'), repository: 'dogeos69/prover-worker'},
-    topology_compiler: {digest: digest('a'), repository: 'dogeos69/dogeos-proof-topology'},
-  }
-  const file = (relative: string) => ({path: relative, sha256: digest('e'), size_bytes: 1})
   const release: ProofSoftwareReleaseV1 = {
     build: {
       openvm_version: '1.7.0',
-      root_verifier_asm_sha256: hex32('8'),
+      root_verifier_asm_sha256: hex32('7'),
       rust_toolchain: 'nightly-2026-03-17',
     },
     identities: {
-      aggregate_verification_key_hash: hex32('7'),
-      batch,
-      chunk: scroll,
-      l2_range: openvm,
+      aggregate_verification_key_hash: l2RangeIdentity.verification_key_hash,
+      batch: {...scrollIdentity, recursive_app_commit_raw: hex64('8')},
+      chunk: scrollIdentity,
+      l2_range: l2RangeIdentity,
     },
-    images,
+    images: {
+      bridge_artifact_baker: {
+        digest: digest('d'),
+        repository: 'dogeos69/proof-artifact-baker',
+      },
+      mock_worker: {digest: digest('b'), repository: 'dogeos69/prover-worker-mock'},
+      production_worker: {digest: digest('c'), repository: 'dogeos69/prover-worker'},
+      topology_compiler: {
+        digest: digest('a'),
+        repository: 'dogeos69/dogeos-proof-topology',
+      },
+    },
     materials: {
-      aggregate_verification_key: file('keys/agg-vk.bin'),
-      batch_app_vmexe: file('batch/app.vmexe'),
-      batch_materializer: file('bin/scroll-runtime-materializer'),
-      batch_openvm_config: file('batch/openvm.toml'),
-      chunk_app_vmexe: file('chunk/app.vmexe'),
-      chunk_materializer: file('bin/materialize-chunk-oneshot'),
-      chunk_openvm_config: file('chunk/openvm.toml'),
-      l2_range_app_vmexe: file('l2-range/app.vmexe'),
-      l2_range_openvm_config: file('l2-range/openvm.toml'),
+      aggregate_verification_key: material(softwareRoot, 'keys/agg-vk.bin'),
+      batch_app_vmexe: material(softwareRoot, 'batch/app.vmexe'),
+      batch_materializer: material(softwareRoot, 'bin/scroll-runtime-materializer'),
+      batch_openvm_config: material(softwareRoot, 'batch/openvm.toml'),
+      chunk_app_vmexe: material(softwareRoot, 'chunk/app.vmexe'),
+      chunk_materializer: material(softwareRoot, 'bin/materialize-chunk-oneshot'),
+      chunk_openvm_config: material(softwareRoot, 'chunk/openvm.toml'),
+      l2_range_app_vmexe: material(softwareRoot, 'l2-range/app.vmexe'),
+      l2_range_openvm_config: material(softwareRoot, 'l2-range/openvm.toml'),
     },
     release_digest: digest('f'),
     release_id: 'proof-test-release',
@@ -116,74 +106,65 @@ export function preparedReleaseFixture(deployment: string) {
     schema_version: 1,
     source_revisions: {dogeos_core: '1'.repeat(40), scroll_zkvm_prover: '2'.repeat(40)},
   }
-  const softwareManifest = path.join(softwareRoot, 'proof-software-release-v1.json')
+  const softwareManifest = path.join(softwareRoot, PROOF_SOFTWARE_RELEASE_MANIFEST)
   fs.writeFileSync(softwareManifest, `${JSON.stringify(release, undefined, 2)}\n`)
-  const bridgeManifest = path.join(bridgeRoot, 'proof-bridge-material-v1.json')
-  fs.writeFileSync(bridgeManifest, '{}\n')
-  const lock: ProofDeploymentReleaseLockV1 = {
-    bridge_material_digest: digest('9'),
-    bridge_material_manifest: bridgeManifest,
-    bridge_material_root: bridgeRoot,
-    lock_digest: digest('8'),
-    projection: {
-      ...Object.fromEntries(Object.entries(files).map(([key, relative]) => [key, path.join(root, relative)])),
-      identities: {
-        aggregate_verification_key_hash: hex32('7'),
-        batch,
-        bridge: openvm,
-        chunk: scroll,
-        l2_range: openvm,
-      },
-      images,
-    } as ProofDeploymentReleaseLockV1['projection'],
-    schema: PROOF_DEPLOYMENT_RELEASE_LOCK_SCHEMA,
-    schema_version: 1,
-    software_release_digest: release.release_digest,
-    software_release_manifest: softwareManifest,
-    software_release_root: softwareRoot,
-  }
-  const lockPath = path.join(root, PROOF_DEPLOYMENT_RELEASE_LOCK)
-  fs.writeFileSync(lockPath, `${JSON.stringify(lock, undefined, 2)}\n`)
+
   const protocolContext = path.join(deployment, '.data/protocol_context.json')
   fs.mkdirSync(path.dirname(protocolContext), {recursive: true})
   fs.writeFileSync(protocolContext, '{"network":"testnet"}\n')
-  const contextDigest = `sha256:${createHash('sha256').update(fs.readFileSync(protocolContext)).digest('hex')}`
-  const receipt: ProofReleaseImportV1 = {
-    deployment_lock: lockPath,
-    deployment_lock_digest: lock.lock_digest,
-    protocol_context: protocolContext,
-    protocol_context_sha256: contextDigest,
-    release_id: release.release_id,
-    release_image: `dogeos69/proof-release@${digest('7')}`,
-    schema: PROOF_RELEASE_IMPORT_SCHEMA,
+  const bridge: ProofBridgeMaterialV1 = {
+    bridge_material_digest: digest('9'),
+    files: {
+      bridge_app_vmexe: material(bridgeRoot, 'bridge-state.vmexe'),
+      bridge_openvm_config: material(bridgeRoot, 'openvm.toml'),
+      l2_range_app_vmexe: material(bridgeRoot, 'l2-range/app.vmexe'),
+      l2_range_openvm_config: material(bridgeRoot, 'l2-range/openvm.toml'),
+      native_staged_manifest: material(bridgeRoot, 'bridge-state-artifact-v1.json'),
+    },
+    genesis_sequencer_outpoint_index: 0,
+    genesis_state_hash: hex32('a'),
+    identities: {
+      bridge: {
+        app_commit_raw: hex64('b'),
+        program_commitment_hash: hex32('c'),
+        verification_key_hash: hex32('d'),
+      },
+      l2_range: l2RangeIdentity,
+    },
+    openvm_version: release.build.openvm_version,
+    protocol_context_sha256: sha256(fs.readFileSync(protocolContext)),
+    root_verifier_asm_sha256: release.build.root_verifier_asm_sha256,
+    schema: PROOF_BRIDGE_MATERIAL_SCHEMA,
     schema_version: 1,
     software_release_digest: release.release_digest,
   }
-  fs.writeFileSync(
-    path.join(root, PROOF_RELEASE_IMPORT_RECEIPT),
-    `${JSON.stringify(receipt, undefined, 2)}\n`,
-  )
-  return readPreparedProofRelease(lockPath)
+  const bridgeManifest = path.join(bridgeRoot, PROOF_BRIDGE_MATERIAL_MANIFEST)
+  fs.writeFileSync(bridgeManifest, `${JSON.stringify(bridge, undefined, 2)}\n`)
+  return {bridgeManifest, protocolContext, release, softwareManifest}
 }
 
-function preparedSoftwareReleaseFixture(deployment: string) {
-  const full = preparedReleaseFixture(deployment)
-  const receipt: ProofSoftwareReleaseImportV1 = {
-    release_id: full.release.release_id,
-    release_image: full.receipt.release_image,
-    schema: PROOF_SOFTWARE_RELEASE_IMPORT_SCHEMA,
-    schema_version: 1,
-    software_release_digest: full.release.release_digest,
-    software_release_manifest: full.lock.software_release_manifest,
+async function preparedFixture(deployment: string) {
+  const source = sourceFixture(deployment)
+  const prepared = await prepareProofProductionInputs({
+    bridgeManifestPath: source.bridgeManifest,
+    deploymentDir: deployment,
+    protocolContextPath: source.protocolContext,
+    softwareManifestPath: source.softwareManifest,
+  })
+  return {prepared, source}
+}
+
+function artifactStore() {
+  return {
+    bucket: 'dogeos-testnet-proof-artifacts',
+    endpointUrl: 'https://s3.us-west-2.amazonaws.com',
+    keyPrefix: 'proof-topology',
+    kind: 's3_compatible' as const,
+    region: 'us-west-2',
   }
-  fs.writeFileSync(
-    path.join(full.resourcesRoot, PROOF_SOFTWARE_RELEASE_IMPORT_RECEIPT),
-    `${JSON.stringify(receipt, undefined, 2)}\n`,
-  )
-  return readPreparedProofSoftwareRelease(full.lock.software_release_manifest)
 }
 
-describe('official proof release deployment lock', () => {
+describe('proof production inputs', () => {
   let deployment: string
 
   beforeEach(() => {
@@ -192,225 +173,117 @@ describe('official proof release deployment lock', () => {
 
   afterEach(() => fs.rmSync(deployment, {force: true, recursive: true}))
 
-  it('requires immutable OCI release references', () => {
-    expect(immutableProofImageReference(`dogeos69/proof-release@${digest('a')}`))
-      .to.equal(`dogeos69/proof-release@${digest('a')}`)
-    expect(() => immutableProofImageReference('dogeos69/proof-release:latest'))
+  it('parses only immutable image references', () => {
+    const value = `dogeos69/dogeos-proof-topology@${digest('a')}`
+    const parsed = parseImmutableProofImageReference(value)
+    expect(immutableProofImageReference(parsed)).to.equal(value)
+    expect(() => parseImmutableProofImageReference('dogeos69/dogeos-proof-topology:latest'))
       .to.throw('repository@sha256')
   })
 
-  it('makes the staging root traversable by root-remapped Docker containers', async () => {
-    const dataDir = path.join(deployment, '.data')
-    fs.mkdirSync(dataDir, {recursive: true})
-    fs.writeFileSync(path.join(dataDir, 'protocol_context.json'), '{"network":"testnet"}\n')
-    let observedMode: number | undefined
-
-    let failure: unknown
-    try {
-      await prepareProofRelease({
-        deploymentDir: deployment,
-        async imagePuller(imageReference, platform) {
-          expect(imageReference).to.equal(`dogeos69/proof-release@${digest('7')}`)
-          expect(platform).to.equal('linux/amd64')
-          const releasesRoot = path.join(dataDir, 'proof-releases')
-          const staging = fs.readdirSync(releasesRoot)
-            .find(entry => entry.includes('.preparing-'))
-          expect(staging).to.be.a('string')
-          observedMode = fs.statSync(path.join(releasesRoot, staging!)).mode % 0o1000
-          throw new Error('expected test stop')
-        },
-        releaseImage: `dogeos69/proof-release@${digest('7')}`,
-      })
-    } catch (error) {
-      failure = error
-    }
-
-    expect(failure).to.be.instanceOf(Error)
-    expect((failure as Error).message).to.equal('expected test stop')
-    expect(observedMode).to.equal(0o755)
-    expect(fs.readdirSync(path.join(dataDir, 'proof-releases'))).to.deep.equal([])
+  it('validates producer software and Bridge manifests with their files', () => {
+    const fixture = sourceFixture(deployment)
+    expect(readProofSoftwareRelease(fixture.softwareManifest).release_id)
+      .to.equal('proof-test-release')
+    expect(readProofBridgeMaterial(fixture.bridgeManifest).software_release_digest)
+      .to.equal(fixture.release.release_digest)
   })
 
-  it('imports mock software without requiring a protocol context or Bridge bake', async () => {
-    let observedMode: number | undefined
-    let failure: unknown
-    try {
-      await prepareProofSoftwareRelease({
-        deploymentDir: deployment,
-        async imagePuller() {
-          const releasesRoot = path.join(deployment, '.data/proof-releases')
-          const staging = fs.readdirSync(releasesRoot)
-            .find(entry => entry.includes('.preparing-'))
-          expect(staging).to.be.a('string')
-          observedMode = fs.statSync(path.join(releasesRoot, staging!)).mode % 0o1000
-          throw new Error('expected mock import stop')
-        },
-        releaseImage: `dogeos69/proof-release@${digest('7')}`,
-      })
-    } catch (error) {
-      failure = error
-    }
-
-    expect(failure).to.be.instanceOf(Error)
-    expect((failure as Error).message).to.equal('expected mock import stop')
-    expect(observedMode).to.equal(0o755)
-    expect(fs.existsSync(path.join(deployment, '.data/protocol_context.json'))).to.equal(false)
-    expect(fs.readdirSync(path.join(deployment, '.data/proof-releases'))).to.deep.equal([])
-  })
-
-  it('discovers and reads one prepared deployment lock', () => {
-    const prepared = preparedReleaseFixture(deployment)
-    expect(discoverPreparedProofRelease(deployment)).to.equal(prepared.lockPath)
-    expect(prepared.release.schema).to.equal(PROOF_SOFTWARE_RELEASE_SCHEMA)
-    expect(prepared.lock.schema).to.equal(PROOF_DEPLOYMENT_RELEASE_LOCK_SCHEMA)
-  })
-
-  it('discovers a mock software release and binds only compiler and mock Worker images', () => {
-    const prepared = preparedSoftwareReleaseFixture(deployment)
-    expect(discoverPreparedProofSoftwareRelease(deployment)).to.equal(prepared.manifestPath)
-    expect(listPreparedProofSoftwareReleaseManifests(deployment)).to.deep.equal([
-      prepared.manifestPath,
-    ])
-    const topology = buildMockProofTopologyFromSoftwareRelease({
-      artifactStore: {
-        bucket: 'dogeos-testnet-proof-artifacts',
-        endpointUrl: 'https://s3.us-west-2.amazonaws.com',
-        keyPrefix: 'proof-topology',
-        kind: 's3_compatible',
-        region: 'us-west-2',
+  it('builds disabled/mock topology without any release manifest', () => {
+    const topology = buildProofTopology({
+      artifactStore: artifactStore(),
+      compilerImage: {
+        digest: digest('a'),
+        repository: 'dogeos69/dogeos-proof-topology',
       },
+      deploymentDir: deployment,
       deploymentName: 'dogeos-testnet',
+      mockWorkerImage: {digest: digest('b'), repository: 'dogeos69/prover-worker-mock'},
       mode: 'mock',
-      release: prepared,
       runtime: {proofCoordinatorPublicUrl: 'https://proof-coordinator.example.com'},
     })
     expect(topology.mode).to.equal('mock')
     expect(topology.mock?.profile).to.equal('withdrawal_mock_prover')
     expect(topology.production).to.equal(undefined)
     expect(topology.deployment?.resourcesPersistentVolumeClaim).to.equal(undefined)
-    expect(topology.deployment?.bridgeStagedAppExe).to.equal(undefined)
-    expect(() => verifyMockProofTopologySoftwareBinding(topology, prepared)).not.to.throw()
+  })
 
-    topology.production = {
-      artifactStore: topology.mock!.artifactStore,
-      profile: 'real_scroll_withdrawal_full_topology',
-      realScroll: {} as never,
-      workerImage: prepared.release.images.production_worker,
-      workerLaunch: 'external',
+  it('imports the two production manifests and stages both profiles', async () => {
+    const {prepared} = await preparedFixture(deployment)
+    expect(discoverPreparedProofProductionInputs(deployment)).to.equal(prepared.receiptPath)
+    expect(readPreparedProofProductionInputs(prepared.resourcesRoot).release.release_id)
+      .to.equal('proof-test-release')
+
+    const topology = buildProofTopology({
+      artifactStore: artifactStore(),
+      compilerImage: prepared.release.images.topology_compiler,
+      deploymentDir: deployment,
+      deploymentName: 'dogeos-testnet',
+      mockWorkerImage: prepared.release.images.mock_worker,
+      mode: 'disabled',
+      production: {inputs: prepared, workerLaunch: 'external'},
+      runtime: {
+        proofCoordinatorPublicUrl: 'https://proof-coordinator.example.com',
+        publicS3EndpointUrl: 'https://s3.us-west-2.amazonaws.com',
+        rpcWitnessUrl: 'https://l2-rpc.example.com',
+        witnessSource: 'rpc',
+      },
+    })
+    expect(topology.production?.release.softwareReleaseDigest)
+      .to.equal(prepared.release.release_digest)
+    expect(topology.production?.realScroll.chunkAppExe).to.equal(undefined)
+    expect(topology.production).not.to.have.property('workerImage')
+    expect(() => verifyProductionReleaseBinding(topology, deployment)).not.to.throw()
+  })
+
+  it('rejects changed deployment protocol context', async () => {
+    const {prepared} = await preparedFixture(deployment)
+    fs.appendFileSync(prepared.protocolContextPath, 'changed')
+    expect(() => readPreparedProofProductionInputs(prepared.resourcesRoot))
+      .to.throw('protocol context changed')
+  })
+
+  it('does not silently reuse production inputs for another protocol context', async () => {
+    const {source} = await preparedFixture(deployment)
+    const anotherProtocolContext = path.join(deployment, '.data/another-protocol-context.json')
+    fs.writeFileSync(anotherProtocolContext, '{"network":"another-testnet"}\n')
+
+    let error: unknown
+    try {
+      await prepareProofProductionInputs({
+        bridgeManifestPath: source.bridgeManifest,
+        deploymentDir: deployment,
+        protocolContextPath: anotherProtocolContext,
+        softwareManifestPath: source.softwareManifest,
+      })
+    } catch (error_) {
+      error = error_
     }
-    expect(() => verifyMockProofTopologySoftwareBinding(topology, prepared))
-      .to.throw('cannot authorize production')
+
+    expect(error).to.be.instanceOf(Error)
+    expect((error as Error).message).to.include(
+      'do not match the requested software release and protocol context',
+    )
   })
 
-  it('lists multiple imports while requiring explicit lock selection from consumers', () => {
-    const prepared = preparedReleaseFixture(deployment)
-    const second = path.join(deployment, '.data/proof-releases/second')
-    fs.mkdirSync(second, {recursive: true})
-    fs.copyFileSync(prepared.lockPath, path.join(second, PROOF_DEPLOYMENT_RELEASE_LOCK))
-
-    expect(listPreparedProofReleaseLocks(deployment)).to.have.length(2)
-    expect(() => discoverPreparedProofRelease(deployment))
-      .to.throw('multiple prepared proof releases found')
-  })
-
-  it('rejects unknown deployment-lock fields', () => {
-    const prepared = preparedReleaseFixture(deployment)
-    const raw = JSON.parse(fs.readFileSync(prepared.lockPath, 'utf8')) as Record<string, unknown>
-    raw.typo = true
-    fs.writeFileSync(prepared.lockPath, JSON.stringify(raw))
-    expect(() => readProofDeploymentReleaseLock(prepared.lockPath)).to.throw('.typo is not supported')
-  })
-
-  it('rejects a changed protocol context', () => {
-    const prepared = preparedReleaseFixture(deployment)
-    fs.appendFileSync(prepared.receipt.protocol_context, 'changed')
-    expect(() => readPreparedProofRelease(prepared.lockPath))
-      .to.throw('protocol context changed after proof release preparation')
-  })
-
-  it('builds staged mock and production profiles from the authoritative projection', () => {
-    const prepared = preparedReleaseFixture(deployment)
-    const topology = buildProofTopologyFromRelease({
-      artifactStore: {
-        bucket: 'dogeos-testnet-proof-artifacts',
-        endpointUrl: 'https://s3.us-west-2.amazonaws.com',
-        keyPrefix: 'proof-topology',
-        kind: 's3_compatible',
-        region: 'us-west-2',
-      },
+  it('rejects topology bindings that diverge from prepared inputs', async () => {
+    const {prepared} = await preparedFixture(deployment)
+    const topology = buildProofTopology({
+      artifactStore: artifactStore(),
+      compilerImage: prepared.release.images.topology_compiler,
       deploymentDir: deployment,
       deploymentName: 'dogeos-testnet',
-      mode: 'mock',
-      productionWorkerLaunch: 'external',
-      release: prepared,
+      mockWorkerImage: prepared.release.images.mock_worker,
+      production: {inputs: prepared, workerLaunch: 'external'},
       runtime: {
         proofCoordinatorPublicUrl: 'https://proof-coordinator.example.com',
+        publicS3EndpointUrl: 'https://s3.us-west-2.amazonaws.com',
         rpcWitnessUrl: 'https://l2-rpc.example.com',
         witnessSource: 'rpc',
       },
     })
-    expect(topology.mode).to.equal('mock')
-    expect(topology.mock?.profile).to.equal('withdrawal_mock_prover')
-    expect(topology.mock?.realScroll).to.equal(undefined)
-    expect(topology.production?.profile).to.equal('real_scroll_withdrawal_full_topology')
-    expect(topology.production?.realScroll.resourcesRoot).to.include('.data/proof-releases')
-    expect(topology.deployment?.bridgeStagedAppExe).to.equal('bridge/bridge-state.vmexe')
-    expect(() => verifyProofTopologyReleaseBinding(topology, prepared, deployment)).not.to.throw()
-  })
-
-  it('rejects topology paths that diverge from the release lock', () => {
-    const prepared = preparedReleaseFixture(deployment)
-    const topology = buildProofTopologyFromRelease({
-      artifactStore: {
-        bucket: 'proofs',
-        endpointUrl: 'https://s3.us-west-2.amazonaws.com',
-        keyPrefix: 'proof-topology',
-        kind: 's3_compatible',
-        region: 'us-west-2',
-      },
-      deploymentDir: deployment,
-      deploymentName: 'dogeos-testnet',
-      productionWorkerLaunch: 'external',
-      release: prepared,
-      runtime: {
-        proofCoordinatorPublicUrl: 'https://proof-coordinator.example.com',
-        rpcWitnessUrl: 'https://l2-rpc.example.com',
-        witnessSource: 'rpc',
-      },
-    })
-    topology.production!.realScroll.chunkAppExe = 'software/wrong.vmexe'
-    expect(() => verifyProofTopologyReleaseBinding(topology, prepared, deployment))
-      .to.throw('chunkAppExe does not match release lock')
-  })
-
-  it('rejects topology identities and Bridge paths that diverge from the release lock', () => {
-    const prepared = preparedReleaseFixture(deployment)
-    const build = () => buildProofTopologyFromRelease({
-      artifactStore: {
-        bucket: 'proofs',
-        endpointUrl: 'https://s3.us-west-2.amazonaws.com',
-        keyPrefix: 'proof-topology',
-        kind: 's3_compatible' as const,
-        region: 'us-west-2',
-      },
-      deploymentDir: deployment,
-      deploymentName: 'dogeos-testnet',
-      productionWorkerLaunch: 'external' as const,
-      release: prepared,
-      runtime: {
-        proofCoordinatorPublicUrl: 'https://proof-coordinator.example.com',
-        rpcWitnessUrl: 'https://l2-rpc.example.com',
-        witnessSource: 'rpc' as const,
-      },
-    })
-    const changedIdentity = build()
-    changedIdentity.production!.realScroll.bridgeAppCommitRawHex = hex64('a')
-    expect(() => verifyProofTopologyReleaseBinding(changedIdentity, prepared, deployment))
-      .to.throw('bridgeAppCommitRawHex does not match release lock')
-
-    const changedBridgePath = build()
-    changedBridgePath.deployment!.bridgeStagedAppExe = 'software/chunk/app.vmexe'
-    expect(() => verifyProofTopologyReleaseBinding(changedBridgePath, prepared, deployment))
-      .to.throw('bridgeStagedAppExe does not match release lock')
+    topology.production!.release.bridgeMaterialDigest = digest('0')
+    expect(() => verifyProductionReleaseBinding(topology, deployment))
+      .to.throw('does not match the prepared two-manifest inputs')
   })
 })

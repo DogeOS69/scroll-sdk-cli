@@ -11,12 +11,6 @@ import {
   validateProofDeploymentContract,
 } from '../../utils/proof-deployment-contract.js'
 import { resolveProofIntent } from '../../utils/proof-intent.js'
-import {
-  readPreparedProofRelease,
-  readPreparedProofSoftwareRelease,
-  validatePreparedProofRelease,
-  validatePreparedProofSoftwareRelease,
-} from '../../utils/proof-release.js'
 import {validateProofTopologyBundle} from '../../utils/proof-topology-compiler.js'
 
 export default class ProofConfigCheck extends Command {
@@ -57,24 +51,6 @@ export default class ProofConfigCheck extends Command {
         dogeConfigPath: loadedConfigPath,
         specPath: flags.spec || recordedSpec,
       })!
-      if (
-        configuredIntent.source.kind === 'doge-config'
-        && config.proof_release?.deploymentLockPath
-      ) {
-        validatePreparedProofRelease(readPreparedProofRelease(path.resolve(
-          deploymentDir,
-          config.proof_release.deploymentLockPath,
-        )))
-      } else if (
-        configuredIntent.source.kind === 'doge-config'
-        && config.proof_release?.softwareReleaseManifestPath
-      ) {
-        validatePreparedProofSoftwareRelease(readPreparedProofSoftwareRelease(path.resolve(
-          deploymentDir,
-          config.proof_release.softwareReleaseManifestPath,
-        )))
-      }
-
       if (configuredIntent.source.sha256 !== contract.intentSource.sha256) {
         throw new Error(
           `${configuredIntent.source.path} changed after proof configuration generation; `

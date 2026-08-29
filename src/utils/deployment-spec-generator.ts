@@ -1125,11 +1125,54 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       })
     }
 
-    if (selected) {
-      validateImage(
-        selected.workerImage,
-        `proofTopology.${proofTopology.mode}.workerImage`,
-      )
+    if (proofTopology.mock) {
+      validateImage(proofTopology.mock.workerImage, 'proofTopology.mock.workerImage')
+    }
+
+    if (proofTopology.production) {
+      const {release} = proofTopology.production
+      if (release) {
+        for (const [field, value] of Object.entries({
+          bridgeManifest: release.bridgeManifest,
+          bridgeRoot: release.bridgeRoot,
+          resourcesRoot: release.resourcesRoot,
+          softwareManifest: release.softwareManifest,
+          softwareRoot: release.softwareRoot,
+        })) {
+          const normalized = path.normalize(value || '')
+          if (
+            !value?.trim()
+            || path.isAbsolute(value)
+            || normalized === '..'
+            || normalized.startsWith(`..${path.sep}`)
+          ) {
+            errors.push({
+              code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+              message: `production.release.${field} must be a deployment-relative path`,
+              path: `proofTopology.production.release.${field}`,
+            })
+          }
+        }
+
+        for (const [field, value] of Object.entries({
+          bridgeMaterialDigest: release.bridgeMaterialDigest,
+          softwareReleaseDigest: release.softwareReleaseDigest,
+        })) {
+          if (!digestPattern.test(value || '')) {
+            errors.push({
+              code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+              message: `production.release.${field} must match sha256:[0-9a-f]{64}`,
+              path: `proofTopology.production.release.${field}`,
+            })
+          }
+        }
+      } else {
+        errors.push({
+          code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+          message: 'production.release must reference prepared ProofSoftwareReleaseV1 and ProofBridgeMaterialV1 inputs',
+          path: 'proofTopology.production.release',
+        })
+      }
     }
 
     if (selected && !selected.artifactStore) {
@@ -1187,33 +1230,10 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       })
     }
 
-    if (selected?.realScroll && !selected.realScroll.resourcesRoot?.trim()) {
+    if (proofTopology.production && !proofTopology.deployment?.resourcesPersistentVolumeClaim?.trim()) {
       errors.push({
         code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'selected realScroll.resourcesRoot is required',
-        path: `proofTopology.${proofTopology.mode}.realScroll.resourcesRoot`,
-      })
-    }
-
-    if (
-      selected?.realScroll?.resourcesRoot
-      && (
-        path.isAbsolute(selected.realScroll.resourcesRoot)
-        || path.normalize(selected.realScroll.resourcesRoot) === '..'
-        || path.normalize(selected.realScroll.resourcesRoot).startsWith(`..${path.sep}`)
-      )
-    ) {
-      errors.push({
-        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'selected realScroll.resourcesRoot must remain inside the deployment directory',
-        path: `proofTopology.${proofTopology.mode}.realScroll.resourcesRoot`,
-      })
-    }
-
-    if (selected?.realScroll && !proofTopology.deployment?.resourcesPersistentVolumeClaim?.trim()) {
-      errors.push({
-        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'selected realScroll topology requires deployment.resourcesPersistentVolumeClaim so WP and PC see the same staged release paths used by the compiler',
+        message: 'production topology requires deployment.resourcesPersistentVolumeClaim so WP and PC see the same staged release paths used by the compiler',
         path: 'proofTopology.deployment.resourcesPersistentVolumeClaim',
       })
     }

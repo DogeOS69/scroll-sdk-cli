@@ -206,7 +206,7 @@ describe('proof intent source resolution', () => {
       .to.throw('proof_topology.typoMode is not supported')
   })
 
-  it('rejects a missing deployment lock recorded by doge-config initialization', () => {
+  it('rejects the retired proof_release wrapper', () => {
     const configPath = writeDogeConfig(topology())
     const config = toml.parse(fs.readFileSync(configPath, 'utf8')) as toml.JsonMap
     config.proof_release = {
@@ -221,7 +221,7 @@ describe('proof intent source resolution', () => {
     fs.writeFileSync(configPath, toml.stringify(config))
 
     expect(() => resolveProofIntent({deploymentDir: root}))
-      .to.throw('proof deployment release lock not found')
+      .to.throw('[proof_release] is retired')
   })
 
   it('allows callers to detect an unconfigured proof topology', () => {

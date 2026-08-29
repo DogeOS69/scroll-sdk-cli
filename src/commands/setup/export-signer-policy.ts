@@ -12,6 +12,7 @@ import {loadDogeConfigWithSelection} from '../../utils/doge-config.js'
 import {JsonOutputContext} from '../../utils/json-output.js'
 import {assertPreTsukiDirectSignPosture} from '../../utils/pre-tsuki-direct-sign.js'
 import {resolveProofIntent} from '../../utils/proof-intent.js'
+import {verifyProductionReleaseBinding} from '../../utils/proof-release.js'
 import {
   normalizeSignerProofArtifactBaseUrl,
   readStagedSignerProofArtifactBaseUrl,
@@ -57,19 +58,23 @@ function resolveProductionVerifier(
   resolved: ResolvedProofIntent,
   outDir: string,
 ): SignerAdvanceL2VerifierMaterial {
-  const real = resolved.proofTopology.production?.realScroll
-  if (!real) throw new Error('production proof topology has no realScroll release material')
+  const prepared = verifyProductionReleaseBinding(resolved.proofTopology, process.cwd())
+  if (!prepared) {
+    throw new Error(
+      'production proof topology has no prepared ProofSoftwareReleaseV1/ProofBridgeMaterialV1 inputs',
+    )
+  }
 
-  const resourcesRoot = path.resolve(process.cwd(), real.resourcesRoot)
+  const resourcesRoot = prepared.softwareRoot
   if (!fs.existsSync(resourcesRoot)) throw new Error(`production resourcesRoot not found: ${resourcesRoot}`)
   const resourcesRootStat = fs.lstatSync(resourcesRoot)
   if (resourcesRootStat.isSymbolicLink() || !resourcesRootStat.isDirectory()) {
     throw new Error(`production resourcesRoot must be a non-symlink directory: ${resourcesRoot}`)
   }
 
-  const relativeKey = real.aggVerifyingKeyPath
+  const relativeKey = prepared.release.materials.aggregate_verification_key.path
   if (!relativeKey || path.isAbsolute(relativeKey)) {
-    throw new Error('proofTopology.production.realScroll.aggVerifyingKeyPath must be relative to resourcesRoot')
+    throw new Error('ProofSoftwareReleaseV1 aggregate verification key must be relative to its root')
   }
 
   const source = path.resolve(resourcesRoot, relativeKey)
@@ -94,12 +99,12 @@ function resolveProductionVerifier(
     aggVerifyingKeyFile: ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE,
     aggVerifyingKeySha256: sha256(contents),
     batchProgramCommitmentHex: require64ByteHex(
-      real.batchProgramCommitmentHex,
-      'proofTopology.production.realScroll.batchProgramCommitmentHex',
+      prepared.release.identities.batch.program_commitment_le_raw,
+      'ProofSoftwareReleaseV1 identities.batch.program_commitment_le_raw',
     ),
     l2RangeAggregationProgramCommitmentHex: require64ByteHex(
-      real.l2RangeAggregationAppCommitRawHex,
-      'proofTopology.production.realScroll.l2RangeAggregationAppCommitRawHex',
+      prepared.release.identities.l2_range.app_commit_raw,
+      'ProofSoftwareReleaseV1 identities.l2_range.app_commit_raw',
     ),
   }
 }

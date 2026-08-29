@@ -1,18 +1,14 @@
 import type {ProofTopologyImageReference} from './proof-topology.js'
 
 export const PROOF_SOFTWARE_RELEASE_SCHEMA = 'dogeos/proof-software-release/v1' as const
-export const PROOF_DEPLOYMENT_RELEASE_LOCK_SCHEMA =
-  'dogeos/proof-deployment-release-lock/v1' as const
-export const PROOF_RELEASE_IMPORT_SCHEMA = 'scrollsdk/proof-release-import/v1' as const
-export const PROOF_SOFTWARE_RELEASE_IMPORT_SCHEMA =
-  'scrollsdk/proof-software-release-import/v1' as const
+export const PROOF_BRIDGE_MATERIAL_SCHEMA = 'dogeos/proof-bridge-material/v1' as const
+export const PROOF_PRODUCTION_INPUTS_SCHEMA = 'scrollsdk/proof-production-inputs/v1' as const
 
 export interface ProofReleaseFileV1 {
   path: string
   sha256: string
   size_bytes: number
 }
-
 export interface ScrollProgramIdentityV1 {
   program_commitment_hash: string
   program_commitment_le_raw: string
@@ -33,9 +29,7 @@ export interface ProofReleaseImagesV1 {
   bridge_artifact_baker: ProofTopologyImageReference
   mock_worker: ProofTopologyImageReference
   production_worker: ProofTopologyImageReference
-  proof_coordinator?: ProofTopologyImageReference
   topology_compiler: ProofTopologyImageReference
-  withdrawal_processor?: ProofTopologyImageReference
 }
 
 export interface ProofSoftwareReleaseV1 {
@@ -72,80 +66,54 @@ export interface ProofSoftwareReleaseV1 {
   }
 }
 
-export interface ProofDeploymentReleaseProjectionV1 {
-  aggregate_verification_key: string
-  batch_app_vmexe: string
-  batch_materializer: string
-  batch_openvm_config: string
-  bridge_app_vmexe: string
-  bridge_openvm_config: string
-  chunk_app_vmexe: string
-  chunk_materializer: string
-  chunk_openvm_config: string
+export interface ProofBridgeMaterialV1 {
+  bridge_material_digest: string
+  files: {
+    bridge_app_vmexe: ProofReleaseFileV1
+    bridge_openvm_config: ProofReleaseFileV1
+    l2_range_app_vmexe: ProofReleaseFileV1
+    l2_range_openvm_config: ProofReleaseFileV1
+    native_staged_manifest: ProofReleaseFileV1
+  }
+  genesis_sequencer_outpoint_index: number
+  genesis_state_hash: string
   identities: {
-    aggregate_verification_key_hash: string
-    batch: ScrollBatchProgramIdentityV1
     bridge: OpenVmProgramIdentityV1
-    chunk: ScrollProgramIdentityV1
     l2_range: OpenVmProgramIdentityV1
   }
-  images: ProofReleaseImagesV1
-  l2_range_app_vmexe: string
-  l2_range_openvm_config: string
+  openvm_version: string
+  protocol_context_sha256: string
+  root_verifier_asm_sha256: string
+  schema: typeof PROOF_BRIDGE_MATERIAL_SCHEMA
+  schema_version: 1
+  software_release_digest: string
 }
 
-export interface ProofDeploymentReleaseLockV1 {
+/** Local receipt for the two authoritative production manifests. */
+export interface ProofProductionInputsReceiptV1 {
   bridge_material_digest: string
   bridge_material_manifest: string
   bridge_material_root: string
-  lock_digest: string
-  projection: ProofDeploymentReleaseProjectionV1
-  schema: typeof PROOF_DEPLOYMENT_RELEASE_LOCK_SCHEMA
+  protocol_context: string
+  protocol_context_sha256: string
+  release_id: string
+  resources_root: string
+  schema: typeof PROOF_PRODUCTION_INPUTS_SCHEMA
   schema_version: 1
   software_release_digest: string
   software_release_manifest: string
   software_release_root: string
 }
 
-/** Local, non-authoritative receipt recording which immutable OCI image was imported. */
-export interface ProofReleaseImportV1 {
-  deployment_lock: string
-  deployment_lock_digest: string
-  protocol_context: string
-  protocol_context_sha256: string
-  release_id: string
-  release_image: string
-  schema: typeof PROOF_RELEASE_IMPORT_SCHEMA
-  schema_version: 1
-  software_release_digest: string
-}
-
-/** Local receipt for a validated software release imported without deployment-bound Bridge material. */
-export interface ProofSoftwareReleaseImportV1 {
-  release_id: string
-  release_image: string
-  schema: typeof PROOF_SOFTWARE_RELEASE_IMPORT_SCHEMA
-  schema_version: 1
-  software_release_digest: string
-  software_release_manifest: string
-}
-
-/** Mock-capable immutable software release; it is deliberately insufficient for production. */
-export interface PreparedProofSoftwareRelease {
-  importPath: string
-  manifestPath: string
-  receipt: ProofSoftwareReleaseImportV1
+export interface PreparedProofProductionInputs {
+  bridge: ProofBridgeMaterialV1
+  bridgeManifestPath: string
+  bridgeRoot: string
+  protocolContextPath: string
+  receipt: ProofProductionInputsReceiptV1
+  receiptPath: string
   release: ProofSoftwareReleaseV1
   resourcesRoot: string
+  softwareManifestPath: string
   softwareRoot: string
-}
-
-/** The validated local input consumed by topology initialization. */
-export interface PreparedProofRelease {
-  importPath: string
-  lock: ProofDeploymentReleaseLockV1
-  lockPath: string
-  receipt: ProofReleaseImportV1
-  release: ProofSoftwareReleaseV1
-  resourcesRoot: string
 }

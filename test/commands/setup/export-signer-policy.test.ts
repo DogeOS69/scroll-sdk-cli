@@ -2,12 +2,147 @@ import * as toml from '@iarna/toml'
 import { runCommand } from '@oclif/test'
 import { expect } from 'chai'
 import * as yaml from 'js-yaml'
+import {createHash} from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
 const PUBKEY = `02${'11'.repeat(32)}`
 const REPOSITORY_ROOT = process.cwd()
+const digest = (character: string) => `sha256:${character.repeat(64)}`
+const hex32 = (character: string) => `0x${character.repeat(64)}`
+const hex64 = (character: string) => `0x${character.repeat(128)}`
+
+function sha256(contents: Buffer | string): string {
+  return `sha256:${createHash('sha256').update(contents).digest('hex')}`
+}
+
+function writeProductionInputs(image: (suffix: string) => Record<string, string>) {
+  const resourcesRoot = path.resolve('.data/proof-production')
+  const softwareRoot = path.join(resourcesRoot, 'software')
+  const bridgeRoot = path.join(resourcesRoot, 'bridge')
+  const releaseFile = (root: string, relative: string, contents = `fixture:${relative}`) => {
+    const target = path.join(root, relative)
+    fs.mkdirSync(path.dirname(target), {recursive: true})
+    fs.writeFileSync(target, contents)
+    return {path: relative, sha256: sha256(contents), size_bytes: Buffer.byteLength(contents)}
+  }
+
+  const l2Range = {
+    app_commit_raw: hex64('5'),
+    program_commitment_hash: hex32('5'),
+    verification_key_hash: hex32('6'),
+  }
+  const softwareReleaseDigest = digest('f')
+  const release = {
+    build: {
+      openvm_version: '1.7.0',
+      root_verifier_asm_sha256: hex32('7'),
+      rust_toolchain: 'nightly-2026-03-17',
+    },
+    identities: {
+      aggregate_verification_key_hash: l2Range.verification_key_hash,
+      batch: {
+        program_commitment_hash: hex32('4'),
+        program_commitment_le_raw: hex64('4'),
+        recursive_app_commit_raw: hex64('8'),
+        verification_key_hash: hex32('3'),
+      },
+      chunk: {
+        program_commitment_hash: hex32('1'),
+        program_commitment_le_raw: hex64('2'),
+        verification_key_hash: hex32('3'),
+      },
+      l2_range: l2Range,
+    },
+    images: {
+      bridge_artifact_baker: image('d'),
+      mock_worker: image('b'),
+      production_worker: image('c'),
+      topology_compiler: image('a'),
+    },
+    materials: {
+      aggregate_verification_key: releaseFile(
+        softwareRoot,
+        'keys/agg-vk.bin',
+        'test-aggregate-verifying-key',
+      ),
+      batch_app_vmexe: releaseFile(softwareRoot, 'batch/app.vmexe'),
+      batch_materializer: releaseFile(softwareRoot, 'bin/batch-materializer'),
+      batch_openvm_config: releaseFile(softwareRoot, 'batch/openvm.toml'),
+      chunk_app_vmexe: releaseFile(softwareRoot, 'chunk/app.vmexe'),
+      chunk_materializer: releaseFile(softwareRoot, 'bin/chunk-materializer'),
+      chunk_openvm_config: releaseFile(softwareRoot, 'chunk/openvm.toml'),
+      l2_range_app_vmexe: releaseFile(softwareRoot, 'l2-range/app.vmexe'),
+      l2_range_openvm_config: releaseFile(softwareRoot, 'l2-range/openvm.toml'),
+    },
+    release_digest: softwareReleaseDigest,
+    release_id: 'proof-test-release',
+    schema: 'dogeos/proof-software-release/v1',
+    schema_version: 1,
+    source_revisions: {dogeos_core: '1'.repeat(40), scroll_zkvm_prover: '2'.repeat(40)},
+  }
+  const softwareManifest = path.join(softwareRoot, 'proof-software-release-v1.json')
+  fs.writeFileSync(softwareManifest, `${JSON.stringify(release, undefined, 2)}\n`)
+
+  const protocolContext = path.resolve('.data/protocol_context.json')
+  const protocolContextDigest = sha256(fs.readFileSync(protocolContext))
+  const bridgeMaterialDigest = digest('9')
+  const bridge = {
+    bridge_material_digest: bridgeMaterialDigest,
+    files: {
+      bridge_app_vmexe: releaseFile(bridgeRoot, 'bridge-state.vmexe'),
+      bridge_openvm_config: releaseFile(bridgeRoot, 'openvm.toml'),
+      l2_range_app_vmexe: releaseFile(bridgeRoot, 'l2-range/app.vmexe'),
+      l2_range_openvm_config: releaseFile(bridgeRoot, 'l2-range/openvm.toml'),
+      native_staged_manifest: releaseFile(bridgeRoot, 'bridge-state-artifact-v1.json'),
+    },
+    genesis_sequencer_outpoint_index: 0,
+    genesis_state_hash: hex32('a'),
+    identities: {
+      bridge: {
+        app_commit_raw: hex64('b'),
+        program_commitment_hash: hex32('c'),
+        verification_key_hash: hex32('d'),
+      },
+      l2_range: l2Range,
+    },
+    openvm_version: release.build.openvm_version,
+    protocol_context_sha256: protocolContextDigest,
+    root_verifier_asm_sha256: release.build.root_verifier_asm_sha256,
+    schema: 'dogeos/proof-bridge-material/v1',
+    schema_version: 1,
+    software_release_digest: softwareReleaseDigest,
+  }
+  const bridgeManifest = path.join(bridgeRoot, 'proof-bridge-material-v1.json')
+  fs.writeFileSync(bridgeManifest, `${JSON.stringify(bridge, undefined, 2)}\n`)
+  fs.writeFileSync(
+    path.join(resourcesRoot, 'scrollsdk-proof-production-inputs-v1.json'),
+    `${JSON.stringify({
+      bridge_material_digest: bridgeMaterialDigest,
+      bridge_material_manifest: bridgeManifest,
+      bridge_material_root: bridgeRoot,
+      protocol_context: protocolContext,
+      protocol_context_sha256: protocolContextDigest,
+      release_id: release.release_id,
+      resources_root: resourcesRoot,
+      schema: 'scrollsdk/proof-production-inputs/v1',
+      schema_version: 1,
+      software_release_digest: softwareReleaseDigest,
+      software_release_manifest: softwareManifest,
+      software_release_root: softwareRoot,
+    }, undefined, 2)}\n`,
+  )
+  return {
+    bridgeManifest: 'bridge/proof-bridge-material-v1.json',
+    bridgeMaterialDigest,
+    bridgeRoot: 'bridge',
+    resourcesRoot: '.data/proof-production',
+    softwareManifest: 'software/proof-software-release-v1.json',
+    softwareReleaseDigest,
+    softwareRoot: 'software',
+  }
+}
 
 function writeDogeConfig(
   mode: 'disabled' | 'mock' | 'production',
@@ -32,9 +167,10 @@ function writeDogeConfig(
     'utf8',
   )) as Record<string, any>
   const image = (suffix: string): Record<string, string> => ({
-    digest: `sha256:${suffix.repeat(64)}`,
+    digest: digest(suffix),
     repository: 'dogeos69/test-image',
   })
+  const productionRelease = mode === 'production' ? writeProductionInputs(image) : undefined
   spec.proofTopology = {
     compiler: {image: image('a')},
     deployment: {resourcesPersistentVolumeClaim: 'proof-resources'},
@@ -54,12 +190,10 @@ function writeDogeConfig(
             artifactStore: {kind: 'local_fs'},
             profile: 'real_scroll_withdrawal_full_topology',
             realScroll: {
-              aggVerifyingKeyPath: 'keys/agg-vk.bin',
-              batchProgramCommitmentHex: `0x${'44'.repeat(64)}`,
-              l2RangeAggregationAppCommitRawHex: `0x${'55'.repeat(64)}`,
-              resourcesRoot: 'proof-resources',
+              chunkWitnessRpcUrl: 'https://l2-rpc.example.com',
+              chunkWitnessSource: 'rpc',
             },
-            workerImage: image('c'),
+            release: productionRelease,
             workerLaunch: 'external',
           },
         }
@@ -71,11 +205,6 @@ function writeDogeConfig(
           },
         }
       : {}),
-  }
-
-  if (mode === 'production') {
-    fs.mkdirSync('proof-resources/keys', {recursive: true})
-    fs.writeFileSync('proof-resources/keys/agg-vk.bin', 'test-aggregate-verifying-key')
   }
 
   if (mode !== 'disabled') {
@@ -238,8 +367,14 @@ describe('setup export-signer-policy operator flow', () => {
 
   it('rejects a symlinked production aggregate verifying key', async () => {
     writeDogeConfig('production')
-    fs.renameSync('proof-resources/keys/agg-vk.bin', 'proof-resources/keys/real-agg-vk.bin')
-    fs.symlinkSync('real-agg-vk.bin', 'proof-resources/keys/agg-vk.bin')
+    fs.renameSync(
+      '.data/proof-production/software/keys/agg-vk.bin',
+      '.data/proof-production/software/keys/real-agg-vk.bin',
+    )
+    fs.symlinkSync(
+      'real-agg-vk.bin',
+      '.data/proof-production/software/keys/agg-vk.bin',
+    )
     const {error} = await runCommand(commandArgs())
     expect(error?.message).to.include('must be a regular non-symlink file')
   })

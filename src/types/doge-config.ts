@@ -201,18 +201,6 @@ export interface DogeConfig {
     }>
   }
   network: Network
-  /** Auditable immutable OCI release + deployment lock used to initialize proof_topology. */
-  proof_release?: {
-    /** Present only after production Bridge material has been baked and locked. */
-    deploymentLockDigest?: string
-    /** Present only after production Bridge material has been baked and locked. */
-    deploymentLockPath?: string
-    releaseId: string
-    releaseImage: string
-    softwareReleaseDigest: string
-    /** Validated immutable software manifest; sufficient for disabled/mock topology. */
-    softwareReleaseManifestPath: string
-  }
   /** Compiler-backed proof topology when DeploymentSpec is not used. */
   proof_topology?: ProofTopologySpec
   /** Reth-specific network settings that are intentionally independent of the EVM chain ID. */

@@ -140,9 +140,10 @@ signing:
   # Current dogeos-core requires canonical protocol context in every mode, so
   # runtime preflight occurs after the post-genesis signer bundle is installed.
 
-# The compiler-backed proof topology is optional. When used, stage both mock
-# and production profiles during the initial deployment and change only
-# `proofTopology.mode` to select one. `prep-charts` passes the selected source
+# The compiler-backed proof topology is optional. Disabled/mock need only the
+# compiler and mock Worker images. Stage production only after proof-release-init
+# has prepared ProofSoftwareReleaseV1 and ProofBridgeMaterialV1. Once both
+# profiles are staged, change only `proofTopology.mode`. `prep-charts` passes the selected source
 # to the digest-pinned dogeos-core compiler; it does not duplicate verifier,
 # materializer, Worker argv, or artifact-prefix rules in TypeScript.
 #
@@ -171,7 +172,7 @@ signing:
 #     workerTokenFile: /app/secrets/prover-worker-token
 #     readinessEvidencePath: /run/dogeos/prover-worker-ready-v1.json
 #     resourcesMountPath: /app/data/proof-release
-#     # Existing read-only PVC populated with the release beneath resourcesRoot.
+#     # Required only when production is staged. Populate it from resourcesRoot.
 #     resourcesPersistentVolumeClaim: dogeos-proof-release
 #     # Optional local Worker placement. It is ignored for an external Worker.
 #     workerNodeSelector:
@@ -209,33 +210,21 @@ signing:
 #       # Public credential-free read origin used by an external Worker.
 #       # s3PublicEndpointUrl is declared below because it is Worker placement.
 #       maxReadBodyBytes: 536870912
-#     workerImage:
-#       # Production image must not contain dev-mock-prover.
-#       repository: dogeos69/prover-worker
-#       digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+#     # Direct references to the two dogeos-core production contracts prepared
+#     # under .data/proof-production. The compiler validates and projects all
+#     # production images, programs, VKs, commitments, and Bridge identities.
+#     release:
+#       resourcesRoot: .data/proof-production
+#       softwareRoot: software
+#       softwareManifest: software/proof-software-release-v1.json
+#       softwareReleaseDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+#       bridgeRoot: bridge
+#       bridgeManifest: bridge/proof-bridge-material-v1.json
+#       bridgeMaterialDigest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 #     realScroll:
-#       resourcesRoot: proof-artifacts
-#       chunkAppExe: chunk/app.vmexe
-#       chunkAppConfig: chunk/openvm.toml
-#       batchAppExe: batch/app.vmexe
-#       batchAppConfig: batch/openvm.toml
-#       aggVerifyingKeyPath: keys/agg-verifying-key.bin
-#       chunkMaterializerBinaryPath: bin/scroll-runtime-materializer
-#       batchMaterializerBinaryPath: bin/scroll-runtime-materializer
-#       chunkWitnessSource: block_witness_dir
-#       chunkBlockWitnessDir: witnesses
-#       chunkVerificationKeyHashHex: "0x<64-lowercase-hex>"
-#       chunkProgramCommitmentHashHex: "0x<64-lowercase-hex>"
-#       chunkProgramCommitmentHex: "0x<128-lowercase-hex>"
-#       batchVerificationKeyHashHex: "0x<64-lowercase-hex>"
-#       batchProgramCommitmentHashHex: "0x<64-lowercase-hex>"
-#       batchProgramCommitmentHex: "0x<128-lowercase-hex>"
-#       bridgeVerificationKeyHashHex: "0x<64-lowercase-hex>"
-#       bridgeProgramCommitmentHashHex: "0x<64-lowercase-hex>"
-#       bridgeAppCommitRawHex: "0x<128-lowercase-hex>"
-#       l2RangeAggregationVerificationKeyHashHex: "0x<64-lowercase-hex>"
-#       l2RangeAggregationProgramCommitmentHashHex: "0x<64-lowercase-hex>"
-#       l2RangeAggregationAppCommitRawHex: "0x<128-lowercase-hex>"
+#       # Deployment placement/input remains operator-owned.
+#       chunkWitnessSource: rpc
+#       chunkWitnessRpcUrl: https://l2-rpc.example.com
 #       workerId: gpu-worker-0
 #       s3PublicEndpointUrl: https://proof-artifacts.example.com
 #

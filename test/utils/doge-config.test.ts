@@ -69,15 +69,6 @@ describe('doge-config utilities', () => {
   it('preserves compiler-backed proof topology as a doge-config section', () => {
     const content = dogeConfigToToml({
       network: 'testnet',
-      proof_release: {
-        deploymentLockDigest: `sha256:${'d'.repeat(64)}`,
-        deploymentLockPath: '.data/proof-releases/release/proof-deployment-release-lock-v1.json',
-        releaseId: 'dogeos-core-test-v1',
-        releaseImage: `dogeos69/proof-release@sha256:${'e'.repeat(64)}`,
-        softwareReleaseDigest: `sha256:${'f'.repeat(64)}`,
-        softwareReleaseManifestPath:
-          '.data/proof-releases/release/software/proof-software-release-v1.json',
-      },
       proof_topology: {
         compiler: {
           image: {
@@ -94,14 +85,6 @@ describe('doge-config utilities', () => {
     expect(parsed.proof_topology.mode).to.equal('disabled')
     expect(parsed.proof_topology.compiler.image.repository)
       .to.equal('dogeos69/dogeos-proof-topology')
-    expect(parsed.proof_release).to.deep.equal({
-      deploymentLockDigest: `sha256:${'d'.repeat(64)}`,
-      deploymentLockPath: '.data/proof-releases/release/proof-deployment-release-lock-v1.json',
-      releaseId: 'dogeos-core-test-v1',
-      releaseImage: `dogeos69/proof-release@sha256:${'e'.repeat(64)}`,
-      softwareReleaseDigest: `sha256:${'f'.repeat(64)}`,
-      softwareReleaseManifestPath:
-        '.data/proof-releases/release/software/proof-software-release-v1.json',
-    })
+    expect(parsed).not.to.have.property('proof_release')
   })
 })

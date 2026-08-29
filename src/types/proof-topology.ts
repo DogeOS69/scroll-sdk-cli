@@ -27,39 +27,39 @@ export interface ProofTopologyArtifactStoreConfig {
  * are compiled at the stable runtime mount selected by `resourcesMountPath`.
  */
 export interface ProofTopologyRealScrollConfig {
-  aggVerifyingKeyPath: string
-  batchAppConfig: string
-  batchAppExe: string
+  aggVerifyingKeyPath?: string
+  batchAppConfig?: string
+  batchAppExe?: string
   batchBackendProfile?: string
-  batchMaterializerBinaryPath: string
+  batchMaterializerBinaryPath?: string
   batchParallelism?: number
-  batchProgramCommitmentHashHex: string
-  batchProgramCommitmentHex: string
+  batchProgramCommitmentHashHex?: string
+  batchProgramCommitmentHex?: string
   batchProverRequirements?: string
-  batchVerificationKeyHashHex: string
-  bridgeAppCommitRawHex: string
-  bridgeProgramCommitmentHashHex: string
-  bridgeVerificationKeyHashHex: string
-  chunkAppConfig: string
-  chunkAppExe: string
+  batchVerificationKeyHashHex?: string
+  bridgeAppCommitRawHex?: string
+  bridgeProgramCommitmentHashHex?: string
+  bridgeVerificationKeyHashHex?: string
+  chunkAppConfig?: string
+  chunkAppExe?: string
   chunkBackendProfile?: string
   chunkBlockWitnessDir?: string
-  chunkMaterializerBinaryPath: string
+  chunkMaterializerBinaryPath?: string
   chunkMaterializerTimeoutMs?: number
   chunkParallelism?: number
-  chunkProgramCommitmentHashHex: string
-  chunkProgramCommitmentHex: string
+  chunkProgramCommitmentHashHex?: string
+  chunkProgramCommitmentHex?: string
   chunkProverRequirements?: string
-  chunkVerificationKeyHashHex: string
+  chunkVerificationKeyHashHex?: string
   chunkWitnessRpcUrl?: string
   chunkWitnessSource?: 'block_witness_dir' | 'rpc'
-  l2RangeAggregationAppCommitRawHex: string
-  l2RangeAggregationProgramCommitmentHashHex: string
-  l2RangeAggregationVerificationKeyHashHex: string
+  l2RangeAggregationAppCommitRawHex?: string
+  l2RangeAggregationProgramCommitmentHashHex?: string
+  l2RangeAggregationVerificationKeyHashHex?: string
   proofCoordinatorPublicUrl?: string
   regtestPinnedGenesisSequencerOutpoint?: string
   /** Host path containing all selected release material. */
-  resourcesRoot: string
+  resourcesRoot?: string
   s3PublicEndpointUrl?: string
   workerId?: string
   workerMaxBodyBytes?: number
@@ -81,7 +81,15 @@ export interface ProductionProofTopologySpec {
     | 'real_scroll_withdrawal'
     | 'real_scroll_withdrawal_full_topology'
   realScroll: ProofTopologyRealScrollConfig
-  workerImage: ProofTopologyImageReference
+  release: {
+    bridgeManifest: string
+    bridgeMaterialDigest: string
+    bridgeRoot: string
+    resourcesRoot: string
+    softwareManifest: string
+    softwareReleaseDigest: string
+    softwareRoot: string
+  }
   workerLaunch: 'external' | 'local_cpu' | 'local_cuda'
 }
 

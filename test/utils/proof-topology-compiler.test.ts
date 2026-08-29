@@ -57,7 +57,15 @@ function topology(mode: 'disabled' | 'mock' | 'production' = 'disabled'): ProofT
         l2RangeAggregationVerificationKeyHashHex: `0x${'6'.repeat(64)}`,
         resourcesRoot: 'proof-artifacts',
       },
-      workerImage: {digest: IMAGE_DIGEST, repository: 'dogeos69/prover-worker'},
+      release: {
+        bridgeManifest: 'bridge/proof-bridge-material-v1.json',
+        bridgeMaterialDigest: `sha256:${'c'.repeat(64)}`,
+        bridgeRoot: 'bridge',
+        resourcesRoot: 'proof-artifacts',
+        softwareManifest: 'software/proof-software-release-v1.json',
+        softwareReleaseDigest: `sha256:${'d'.repeat(64)}`,
+        softwareRoot: 'software',
+      },
       workerLaunch: 'external',
     },
   }
@@ -165,6 +173,7 @@ describe('proof topology compiler adapter', () => {
     expect(production).to.deep.equal(disabled)
     expect(disabled.proof_topology.production.real_scroll.chunk_app_exe)
       .to.equal('/app/data/proof-release/chunk/app.vmexe')
+    expect(disabled.proof_topology.production).not.to.have.property('release')
     expect(disabled.proof_topology.production).not.to.have.property('worker_image')
   })
 

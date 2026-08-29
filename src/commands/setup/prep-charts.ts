@@ -35,12 +35,6 @@ import {
   assertProofAwsMatchesTopology,
   reconcileProofKubernetes,
 } from '../../utils/proof-kubernetes-reconciler.js'
-import {
-  readPreparedProofRelease,
-  readPreparedProofSoftwareRelease,
-  validatePreparedProofRelease,
-  validatePreparedProofSoftwareRelease,
-} from '../../utils/proof-release.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {
   getRequiredManagedSignerConfig,
@@ -1709,26 +1703,6 @@ export default class SetupPrepCharts extends Command {
     }
 
     if (this.proofIntent) {
-      if (
-        this.proofIntent.source.kind === 'doge-config'
-        && this.dogeConfig.proof_release?.deploymentLockPath
-      ) {
-        const preparedRelease = readPreparedProofRelease(path.resolve(
-          process.cwd(),
-          this.dogeConfig.proof_release.deploymentLockPath,
-        ))
-        validatePreparedProofRelease(preparedRelease)
-      } else if (
-        this.proofIntent.source.kind === 'doge-config'
-        && this.dogeConfig.proof_release?.softwareReleaseManifestPath
-      ) {
-        const preparedRelease = readPreparedProofSoftwareRelease(path.resolve(
-          process.cwd(),
-          this.dogeConfig.proof_release.softwareReleaseManifestPath,
-        ))
-        validatePreparedProofSoftwareRelease(preparedRelease)
-      }
-
       const proofAws = readOptionalProofAwsConfig(process.cwd())
       if (proofAws) {
         try {
@@ -1738,7 +1712,7 @@ export default class SetupPrepCharts extends Command {
           if (this.proofIntent.source.kind === 'doge-config') {
             throw new Error(
               `${detail}; run scrollsdk setup doge-config --proof-topology to bind the `
-              + 'provisioned AWS facts and proof release before rerunning prep-charts',
+              + 'provisioned AWS facts before rerunning prep-charts',
             )
           }
 

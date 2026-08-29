@@ -16,6 +16,8 @@ import type {
 } from '../types/proof-topology.js'
 import type {ProofSystemMode} from './proof-system-mode.js'
 
+import {readProofBridgeMaterial, readProofSoftwareRelease} from './proof-release.js'
+
 export const PROOF_TOPOLOGY_BUNDLE_SCHEMA_VERSION = 1
 export const PROOF_TOPOLOGY_CONTEXT_SCHEMA_VERSION = 1
 export const PROOF_TOPOLOGY_SOURCE_SCHEMA_VERSION = 1
@@ -383,9 +385,17 @@ function selectedResourcesRoot(
   deploymentDir: string,
 ): string | undefined {
   const profile = selectedProfile(topology, mode)
-  const real = profile?.realScroll
-  if (!real?.resourcesRoot) return undefined
-  const root = resolveInside(deploymentDir, real.resourcesRoot, 'proofTopology realScroll.resourcesRoot')
+  const configured = mode === 'production'
+    ? topology.production?.release.resourcesRoot
+    : profile?.realScroll?.resourcesRoot
+  if (!configured) return undefined
+  const root = resolveInside(
+    deploymentDir,
+    configured,
+    mode === 'production'
+      ? 'proofTopology production.release.resourcesRoot'
+      : 'proofTopology realScroll.resourcesRoot',
+  )
   if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
     throw new Error(`proof topology resourcesRoot is not a directory: ${root}`)
   }
@@ -818,7 +828,6 @@ function deploymentContext(
   const topology = options.proofTopology
   const deployment = topology.deployment || {}
   const selected = selectedProfile(topology, input.mode)
-  const resourcesMount = deployment.resourcesMountPath || DEFAULT_PROOF_TOPOLOGY_RESOURCES_MOUNT
   const proverPublicUrl = deployment.proverPublicUrl
     || (input.mode === 'disabled' ? 'http://127.0.0.1:7788' : undefined)
   if (!proverPublicUrl) {
@@ -832,25 +841,8 @@ function deploymentContext(
     ...(input.mode === 'mock' && topology.mock
       ? {mock_image: topology.mock.workerImage}
       : {}),
-    ...(input.mode === 'production' && topology.production
-      ? {production_image: topology.production.workerImage}
-      : {}),
     readiness_evidence_path:
       deployment.readinessEvidencePath || '/run/dogeos/prover-worker-ready-v1.json',
-    ...(topology.production
-      ? {
-          bridge_staged_app_exe: relativeResourcePath(
-            resourcesMount,
-            deployment.bridgeStagedAppExe || 'bridge/bridge-state.vmexe',
-            'proofTopology.deployment.bridgeStagedAppExe',
-          ),
-          bridge_staged_app_config: relativeResourcePath(
-            resourcesMount,
-            deployment.bridgeStagedAppConfig || 'bridge/openvm.toml',
-            'proofTopology.deployment.bridgeStagedAppConfig',
-          ),
-        }
-      : {}),
     ...(selected?.realScroll?.s3PublicEndpointUrl
       ? {public_s3_endpoint_url: selected.realScroll.s3PublicEndpointUrl}
       : {}),
@@ -912,6 +904,19 @@ function deploymentContext(
         }
       : {},
   }
+}
+
+function releaseRuntimePath(
+  resourcesRoot: string,
+  resourcesMount: string,
+  value: string,
+  label: string,
+  container: boolean,
+): string {
+  const hostPath = resolveInside(resourcesRoot, value, label)
+  if (!container) return hostPath
+  const relative = path.relative(resourcesRoot, hostPath).replaceAll(path.sep, '/')
+  return path.posix.join(resourcesMount, relative)
 }
 
 function compilerFailure(command: string, status: null | number, stdout: string, stderr: string): Error {
@@ -1084,6 +1089,109 @@ export function compileProofTopology(
       }
     }
 
+    let productionReleaseArgs: string[] = []
+    let productionWorkerImage: ProofTopologyImageReference | undefined
+    if (mode === 'production') {
+      const {production} = topology
+      if (!production) {
+        throw new Error('production mode requires proofTopology.production')
+      }
+
+      const resourcesRoot = selectedResourcesRoot(topology, mode, deploymentDir)!
+      const softwareRoot = resolveInside(
+        resourcesRoot,
+        production.release.softwareRoot,
+        'proofTopology.production.release.softwareRoot',
+      )
+      const softwareManifest = resolveInside(
+        resourcesRoot,
+        production.release.softwareManifest,
+        'proofTopology.production.release.softwareManifest',
+      )
+      const bridgeRoot = resolveInside(
+        resourcesRoot,
+        production.release.bridgeRoot,
+        'proofTopology.production.release.bridgeRoot',
+      )
+      const bridgeManifest = resolveInside(
+        resourcesRoot,
+        production.release.bridgeManifest,
+        'proofTopology.production.release.bridgeManifest',
+      )
+      const release = readProofSoftwareRelease(softwareManifest, softwareRoot)
+      if (release.release_digest !== production.release.softwareReleaseDigest) {
+        throw new Error(
+          'proofTopology.production.release.softwareReleaseDigest does not match its manifest',
+        )
+      }
+
+      const bridge = readProofBridgeMaterial(bridgeManifest, bridgeRoot)
+      if (bridge.bridge_material_digest !== production.release.bridgeMaterialDigest) {
+        throw new Error(
+          'proofTopology.production.release.bridgeMaterialDigest does not match its manifest',
+        )
+      }
+
+      if (
+        release.images.topology_compiler.repository !== topology.compiler.image.repository
+        || release.images.topology_compiler.digest !== topology.compiler.image.digest
+      ) {
+        throw new Error(
+          'production software release topology compiler image does not match proofTopology.compiler.image',
+        )
+      }
+
+      productionWorkerImage = release.images.production_worker
+      const protocolContextSource = resolveInside(
+        deploymentDir,
+        topology.deployment?.protocolContextSource || '.data/protocol_context.json',
+        'proofTopology.deployment.protocolContextSource',
+      )
+      const protocolContextName = 'protocol_context.json'
+      copyInput(
+        protocolContextSource,
+        path.join(inputDir, protocolContextName),
+        'protocol context',
+        true,
+      )
+      productionReleaseArgs = [
+        '--software-release-manifest',
+        releaseRuntimePath(
+          resourcesRoot,
+          resourcesMountPath,
+          path.relative(resourcesRoot, softwareManifest),
+          'proof software release manifest',
+          container,
+        ),
+        '--software-release-root',
+        releaseRuntimePath(
+          resourcesRoot,
+          resourcesMountPath,
+          path.relative(resourcesRoot, softwareRoot),
+          'proof software release root',
+          container,
+        ),
+        '--bridge-material-manifest',
+        releaseRuntimePath(
+          resourcesRoot,
+          resourcesMountPath,
+          path.relative(resourcesRoot, bridgeManifest),
+          'proof Bridge material manifest',
+          container,
+        ),
+        '--bridge-material-root',
+        releaseRuntimePath(
+          resourcesRoot,
+          resourcesMountPath,
+          path.relative(resourcesRoot, bridgeRoot),
+          'proof Bridge material root',
+          container,
+        ),
+        '--protocol-context-source',
+        mountedInputPath(protocolContextName, container, inputDir),
+      ]
+    }
+
     const sourcePath = path.join(inputDir, 'proof-topology.toml')
     writePrivate(sourcePath, renderProofTopologySource(topology, {resourcesMountPath}))
     const contextPath = path.join(inputDir, 'deployment-context.json')
@@ -1179,6 +1287,7 @@ export function compileProofTopology(
       ...(preflightOnly
         ? []
         : ['--durable-proof-rows', options.durableProofRows || 'unknown']),
+      ...productionReleaseArgs,
       '--output',
       container ? '/compiler-output/bundle' : stagedBundle,
     ]
@@ -1244,9 +1353,16 @@ export function compileProofTopology(
     const validated = validateProofTopologyBundle(stagedBundle, {mode, preflightOnly})
     const selected = selectedProfile(topology, mode)
     if (validated.worker && selected) {
+      const expectedImage = mode === 'production'
+        ? productionWorkerImage
+        : topology.mock?.workerImage
+      if (!expectedImage) {
+        throw new Error(`selected ${mode} topology has no authoritative Worker image`)
+      }
+
       if (
-        validated.worker.image.repository !== selected.workerImage.repository
-        || validated.worker.image.digest !== selected.workerImage.digest
+        validated.worker.image.repository !== expectedImage.repository
+        || validated.worker.image.digest !== expectedImage.digest
       ) {
         throw new Error('compiler Worker image does not match the selected proof topology profile')
       }

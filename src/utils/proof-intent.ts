@@ -17,10 +17,7 @@ import {
   validateDeploymentSpec,
 } from './deployment-spec-generator.js'
 import {
-  readPreparedProofRelease,
-  readPreparedProofSoftwareRelease,
-  verifyMockProofTopologySoftwareBinding,
-  verifyProofTopologyReleaseBinding,
+  verifyProductionReleaseBinding,
 } from './proof-release.js'
 
 export const DEFAULT_DEPLOYMENT_SPEC_FILES = [
@@ -182,8 +179,7 @@ function assertDogeTopologyShape(value: unknown, source: string): void {
         'artifactStore',
         'profile',
         'realScroll',
-        'workerImage',
-        ...(profileName === 'production' ? ['workerLaunch'] : []),
+        ...(profileName === 'production' ? ['release', 'workerLaunch'] : ['workerImage']),
       ],
       `${label}.${profileName}`,
     )
@@ -201,6 +197,22 @@ function assertDogeTopologyShape(value: unknown, source: string): void {
         profile.workerImage,
         ['digest', 'repository'],
         `${label}.${profileName}.workerImage`,
+      )
+    }
+
+    if (profile.release !== undefined) {
+      assertKnownKeys(
+        profile.release,
+        [
+          'bridgeManifest',
+          'bridgeMaterialDigest',
+          'bridgeRoot',
+          'resourcesRoot',
+          'softwareManifest',
+          'softwareReleaseDigest',
+          'softwareRoot',
+        ],
+        `${label}.${profileName}.release`,
       )
     }
 
@@ -308,7 +320,14 @@ function validateDogeTopology(topology: ProofTopologySpec, network: Network, sou
     throw new Error(`${source}: proof_topology.${topology.mode} is required by the selected mode`)
   }
 
-  if (selected) assertImage(selected.workerImage, `${source}: proof_topology.${topology.mode}.workerImage`)
+  if (topology.mode === 'mock') {
+    assertImage(topology.mock?.workerImage, `${source}: proof_topology.mock.workerImage`)
+  }
+
+  if (topology.production && !topology.production.release) {
+    throw new Error(`${source}: proof_topology.production.release is required`)
+  }
+
   if (
     topology.production
     && !['external', 'local_cpu', 'local_cuda'].includes(topology.production.workerLaunch)
@@ -348,7 +367,7 @@ function validateDogeTopology(topology: ProofTopologySpec, network: Network, sou
   return warnings
 }
 
-function fromDeploymentSpec(specPath: string): ResolvedProofIntent {
+function fromDeploymentSpec(specPath: string, deploymentDir: string): ResolvedProofIntent {
   const deploymentSpec = resolveDeploymentSpecEnvRefs(loadDeploymentSpec(specPath))
   const validation = validateDeploymentSpec(deploymentSpec)
   if (!validation.valid) {
@@ -361,6 +380,7 @@ function fromDeploymentSpec(specPath: string): ResolvedProofIntent {
 
   const topology = deploymentSpec.proofTopology
   if (!topology) throw new Error(`${specPath}: proofTopology is required`)
+  if (topology.production) verifyProductionReleaseBinding(topology, deploymentDir)
   const proverHost = deploymentSpec.frontend.hosts.proofCoordinator
   return {
     deploymentName: deploymentSpec.metadata.name,
@@ -385,90 +405,11 @@ function fromDeploymentSpec(specPath: string): ResolvedProofIntent {
   }
 }
 
-function verifyDogeProofRelease(
-  rawConfig: DogeConfig,
+function verifyDogeProductionInputs(
   topology: ProofTopologySpec,
   deploymentDir: string,
-  configPath: string,
 ): string[] {
-  const binding = rawConfig.proof_release
-  if (!binding) {
-    return [
-      'proof_release is not recorded; rerun scrollsdk setup doge-config --proof-topology '
-      + 'to bind immutable compiler and Worker images',
-    ]
-  }
-
-  assertKnownKeys(
-    binding,
-    [
-      'deploymentLockDigest',
-      'deploymentLockPath',
-      'releaseId',
-      'releaseImage',
-      'softwareReleaseDigest',
-      'softwareReleaseManifestPath',
-    ],
-    `${configPath}: proof_release`,
-  )
-  if (!binding.softwareReleaseManifestPath) {
-    throw new Error(`${configPath}: proof_release.softwareReleaseManifestPath is required`)
-  }
-
-  if (binding.deploymentLockPath) {
-    if (!binding.deploymentLockDigest) {
-      throw new Error(`${configPath}: proof_release.deploymentLockDigest is required with deploymentLockPath`)
-    }
-
-    const release = readPreparedProofRelease(
-      path.resolve(deploymentDir, binding.deploymentLockPath),
-    )
-    const mismatches: Array<[string, string, string]> = [
-      ['releaseId', binding.releaseId, release.release.release_id],
-      ['releaseImage', binding.releaseImage, release.receipt.release_image],
-      ['softwareReleaseDigest', binding.softwareReleaseDigest, release.release.release_digest],
-      ['deploymentLockDigest', binding.deploymentLockDigest, release.lock.lock_digest],
-      [
-        'softwareReleaseManifestPath',
-        path.resolve(deploymentDir, binding.softwareReleaseManifestPath),
-        release.lock.software_release_manifest,
-      ],
-    ]
-    for (const [field, configured, actual] of mismatches) {
-      if (configured !== actual) {
-        throw new Error(
-          `${configPath}: proof_release.${field} ${configured} does not match ${actual} `
-          + 'in the prepared deployment release',
-        )
-      }
-    }
-
-    verifyProofTopologyReleaseBinding(topology, release, deploymentDir)
-    return []
-  }
-
-  if (binding.deploymentLockDigest) {
-    throw new Error(`${configPath}: proof_release.deploymentLockDigest requires deploymentLockPath`)
-  }
-
-  const release = readPreparedProofSoftwareRelease(
-    path.resolve(deploymentDir, binding.softwareReleaseManifestPath),
-  )
-  const mismatches: Array<[string, string, string]> = [
-    ['releaseId', binding.releaseId, release.release.release_id],
-    ['releaseImage', binding.releaseImage, release.receipt.release_image],
-    ['softwareReleaseDigest', binding.softwareReleaseDigest, release.release.release_digest],
-  ]
-  for (const [field, configured, actual] of mismatches) {
-    if (configured !== actual) {
-      throw new Error(
-        `${configPath}: proof_release.${field} ${configured} does not match ${actual} `
-        + 'in the prepared proof software release',
-      )
-    }
-  }
-
-  verifyMockProofTopologySoftwareBinding(topology, release)
+  if (topology.production) verifyProductionReleaseBinding(topology, deploymentDir)
   return []
 }
 
@@ -484,11 +425,18 @@ function fromDogeConfig(
 
   const rawTopology = rawConfig.proof_topology
   if (!rawTopology) throw new Error(`${configPath}: [proof_topology] is required`)
+  if ((rawConfig as Record<string, unknown>).proof_release !== undefined) {
+    throw new Error(
+      `${configPath}: [proof_release] is retired; rerun scrollsdk setup doge-config `
+      + '--proof-topology to write the direct two-manifest production contract',
+    )
+  }
+
   assertDogeTopologyShape(rawTopology, configPath)
   const topology = resolveEnvRefsDeep(rawTopology) as ProofTopologySpec
   const warnings = [
     ...validateDogeTopology(topology, network, configPath),
-    ...verifyDogeProofRelease(rawConfig, topology, deploymentDir, configPath),
+    ...verifyDogeProductionInputs(topology, deploymentDir),
   ]
   const coordinatorId = topology.deployment?.coordinatorId?.trim()
   const deploymentName = coordinatorId?.endsWith('-proof-coordinator')
@@ -546,7 +494,7 @@ export function resolveProofIntent(
     )
   }
 
-  if (specPath) return fromDeploymentSpec(specPath)
+  if (specPath) return fromDeploymentSpec(specPath, deploymentDir)
   if (dogeAuthority && dogeConfig) return fromDogeConfig(configPath, dogeConfig, deploymentDir)
   if (options.required !== false) {
     throw new Error(
