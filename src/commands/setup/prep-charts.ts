@@ -19,6 +19,7 @@ import {
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { GenerationTransaction } from '../../utils/generation-transaction.js'
+import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {
   resolveBlockbookKubernetesEndpoints,
@@ -1739,6 +1740,15 @@ export default class SetupPrepCharts extends Command {
       return
     }
 
+    const genesisTransaction = await ensureGenesisSequencerTransaction({
+      protocolContextPath: path.join(process.cwd(), '.data/protocol_context.json'),
+      setupDefaultsPath: path.join(process.cwd(), '.data/setup_defaults.toml'),
+      withdrawalProcessorOutputPath: withdrawalProcessorConfigPath,
+    })
+    this.jsonCtx.info(
+      `Genesis sequencer transaction material: ${genesisTransaction.txid}:${genesisTransaction.vout} (validated)`,
+    )
+
     const withdrawalProcessorConfigContent = fs.readFileSync(withdrawalProcessorConfigPath, 'utf8');
     this.withdrawalProcessorConfig = toml.parse(withdrawalProcessorConfigContent);
 
@@ -2937,6 +2947,7 @@ export default class SetupPrepCharts extends Command {
               publicBaseUrl: s3PublicBaseUrl,
             },
           },
+          genesisSequencerTxHex: this.withdrawalProcessorConfig.genesis_sequencer_tx_hex,
           initialBridgeRedeemScriptHex: this.bridgeConfig.redeem_script_hex,
           l2BootstrapNextStartingBlockHeight: this.dogeConfig.defaults?.l2BootstrapNextStartingBlockHeight,
           l2MessageQueueAddress: this.getConfigValue('contractsFile.L2_MESSAGE_QUEUE_ADDR'),

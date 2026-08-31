@@ -11,6 +11,7 @@ import * as path from 'node:path'
 import { getSetupDefaultsPath } from '../../config/constants.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
+import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import { protocolIdSidecarPath } from '../../utils/signer-policy-derivation.js'
 
@@ -1518,6 +1519,15 @@ export class BridgeInitCommand extends Command {
       '--output',
       '.data/protocol_context.json',
     ])
+    const genesisTransaction = await ensureGenesisSequencerTransaction({
+      protocolContextPath: paths.protocolContextPath,
+      setupDefaultsPath: paths.setupDefaultsPath,
+      withdrawalProcessorOutputPath: paths.withdrawalProcessorTomlPath,
+    })
+    this.jsonCtx.info(
+      `Saved and validated genesis sequencer transaction ${genesisTransaction.txid}:${genesisTransaction.vout} `
+      + `in ${paths.withdrawalProcessorTomlPath}`,
+    )
     this.materializeProtocolContextYaml(paths)
 
     // generate_protocol_context also emits the protocol instance id (canonical

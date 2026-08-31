@@ -1006,8 +1006,9 @@ describe.skip('setup prep-charts legacy generation transaction fixture', () => {
       ].join('\n'))
       fs.writeFileSync('.data/output-withdrawal-processor.toml', [
         'bridge_address = "fixture"',
-        'genesis_sequencer_txid = "fixture"',
+        'genesis_sequencer_txid = "f5eedbcaed2b12685bfc046c04ae7827e47ba6b75cb09342a5ec062ee4c4997f"',
         'genesis_sequencer_vout = 0',
+        'genesis_sequencer_tx_hex = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff0101000000000000000000000000"',
         'network_str = "testnet"',
         '',
       ].join('\n'))

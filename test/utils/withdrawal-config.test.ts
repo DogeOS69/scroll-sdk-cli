@@ -24,6 +24,7 @@ const FACTS_INPUT = {
       publicBaseUrl: 'https://blob-archive.example.com',
     },
   },
+  genesisSequencerTxHex: '01000000',
   initialBridgeRedeemScriptHex: 'aabb',
   l2BootstrapNextStartingBlockHeight: '99',
   l2MessageQueueAddress: '0xqueue',
@@ -44,6 +45,7 @@ describe('withdrawal-config deployment block', () => {
     ])
     expect((facts as any).bridge_address).to.equal(undefined)
     expect((facts as any).genesis_sequencer_vout).to.equal(undefined)
+    expect((facts as any).genesis_sequencer_tx_hex).to.equal('01000000')
     expect((facts as any).ethereum_da.eth_chain_id).to.equal(undefined)
     expect((facts as any).ethereum_da.l2_chain_id).to.equal(undefined)
     expect((facts as any).ethereum_da.inbox_worker.expected_batchers).to.deep.equal(['0xbatcher'])

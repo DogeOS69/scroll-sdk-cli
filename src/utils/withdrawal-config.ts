@@ -166,6 +166,7 @@ export interface WithdrawalDeploymentFactsInput {
       publicBaseUrl?: unknown
     }
   }
+  genesisSequencerTxHex: unknown
   initialBridgeRedeemScriptHex: unknown
   l2BootstrapNextStartingBlockHeight?: unknown
   l2MessageQueueAddress: unknown
@@ -219,6 +220,7 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
       }),
       l1_rpc_url: nonEmpty(input.ethereumDa.l1RpcUrl),
     },
+    genesis_sequencer_tx_hex: nonEmpty(input.genesisSequencerTxHex),
     initial_bridge_redeem_script_hex: nonEmpty(input.initialBridgeRedeemScriptHex),
     l2_bootstrap_next_starting_block_height: asInteger(
       input.l2BootstrapNextStartingBlockHeight,
