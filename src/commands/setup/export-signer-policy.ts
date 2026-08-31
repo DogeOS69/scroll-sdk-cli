@@ -10,9 +10,8 @@ import type {SignerAdvanceL2VerifierMaterial} from '../../utils/signer-policy-bu
 import {normalizeExternalHttpBaseUrl} from '../../utils/attestation-signer-descriptor.js'
 import {loadDogeConfigWithSelection} from '../../utils/doge-config.js'
 import {JsonOutputContext} from '../../utils/json-output.js'
-import {assertPreTsukiDirectSignPosture} from '../../utils/pre-tsuki-direct-sign.js'
 import {resolveProofIntent} from '../../utils/proof-intent.js'
-import {verifyProductionReleaseBinding} from '../../utils/proof-release.js'
+import {DEFAULT_PROOF_MATERIALS_RECEIPT, readProofMaterials} from '../../utils/proof-materials.js'
 import {
   normalizeSignerProofArtifactBaseUrl,
   readStagedSignerProofArtifactBaseUrl,
@@ -58,39 +57,17 @@ function resolveProductionVerifier(
   resolved: ResolvedProofIntent,
   outDir: string,
 ): SignerAdvanceL2VerifierMaterial {
-  const prepared = verifyProductionReleaseBinding(resolved.proofTopology, process.cwd())
-  if (!prepared) {
-    throw new Error(
-      'production proof topology has no prepared ProofSoftwareReleaseV1/ProofBridgeMaterialV1 inputs',
-    )
+  const prepared = readProofMaterials(
+    path.resolve(DEFAULT_PROOF_MATERIALS_RECEIPT),
+    process.cwd(),
+  )
+  if (!prepared.software.artifacts) {
+    throw new Error('Production proof enforcement requires full real proof materials; rerun scrollsdk setup proof-materials --generation real')
   }
 
-  const resourcesRoot = prepared.softwareRoot
-  if (!fs.existsSync(resourcesRoot)) throw new Error(`production resourcesRoot not found: ${resourcesRoot}`)
-  const resourcesRootStat = fs.lstatSync(resourcesRoot)
-  if (resourcesRootStat.isSymbolicLink() || !resourcesRootStat.isDirectory()) {
-    throw new Error(`production resourcesRoot must be a non-symlink directory: ${resourcesRoot}`)
-  }
-
-  const relativeKey = prepared.release.materials.aggregate_verification_key.path
-  if (!relativeKey || path.isAbsolute(relativeKey)) {
-    throw new Error('ProofSoftwareReleaseV1 aggregate verification key must be relative to its root')
-  }
-
-  const source = path.resolve(resourcesRoot, relativeKey)
-  const inside = path.relative(resourcesRoot, source)
-  if (inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)) {
-    throw new Error('ProofSoftwareReleaseV1 aggregate verification key path escapes software root')
-  }
+  const source = path.resolve(process.cwd(), prepared.software.artifacts.aggregateVerifyingKey.path)
 
   assertRegularNonSymlinkFile(source, 'production aggregate verifying key')
-  const canonicalRoot = fs.realpathSync(resourcesRoot)
-  const canonicalSource = fs.realpathSync(source)
-  const canonicalInside = path.relative(canonicalRoot, canonicalSource)
-  if (canonicalInside === '..' || canonicalInside.startsWith(`..${path.sep}`) || path.isAbsolute(canonicalInside)) {
-    throw new Error('production aggregate verifying key resolves outside resourcesRoot through a symlink')
-  }
-
   const contents = fs.readFileSync(source)
   if (contents.length === 0) throw new Error(`production aggregate verifying key is empty: ${source}`)
   fs.writeFileSync(path.join(outDir, ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE), contents)
@@ -99,12 +76,12 @@ function resolveProductionVerifier(
     aggVerifyingKeyFile: ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE,
     aggVerifyingKeySha256: sha256(contents),
     batchProgramCommitmentHex: require64ByteHex(
-      prepared.release.identities.batch.program_commitment_le_raw,
-      'ProofSoftwareReleaseV1 identities.batch.program_commitment_le_raw',
+      prepared.software.identities.batch.appCommitRaw,
+      'proof materials batch app commitment',
     ),
     l2RangeAggregationProgramCommitmentHex: require64ByteHex(
-      prepared.release.identities.l2_range.app_commit_raw,
-      'ProofSoftwareReleaseV1 identities.l2_range.app_commit_raw',
+      prepared.software.identities.l2Range.appCommitRaw,
+      'proof materials L2-range app commitment',
     ),
   }
 }
@@ -147,13 +124,10 @@ export class ExportSignerPolicyCommand extends Command {
         dogeConfigPath: loaded.configPath,
         specPath: flags.spec,
       })!
-      const {mode} = resolved.intent
-      assertPreTsukiDirectSignPosture({
-        mode,
-        network: config.network,
-        preTsukiDirectSign: resolved.intent.preTsukiDirectSign,
-        source: resolved.source.path,
-      })
+      const {enforcement, generation, mode} = resolved.intent
+      if (config.network === 'mainnet' && enforcement === 'observe') {
+        throw new Error('dogeos-core refuses attestation-signer policy_mode=observe on Dogecoin mainnet; validate real proving and select enforcement=enforce before exporting the mainnet signer policy')
+      }
 
       const signers = config.attestationSigner?.external
       if (!signers || signers.length === 0 || config.attestationSigner?.mode !== 'external') {
@@ -207,23 +181,26 @@ export class ExportSignerPolicyCommand extends Command {
       }
 
       fs.writeFileSync(path.join(outDir, 'protocol_context.json'), protocolContextBytes)
-      const advanceL2Verifier = mode === 'production' ? resolveProductionVerifier(resolved, outDir) : undefined
+      const advanceL2Verifier = generation === 'real' ? resolveProductionVerifier(resolved, outDir) : undefined
       if (!advanceL2Verifier) fs.rmSync(path.join(outDir, ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE), {force: true})
 
       const bundleInput = {
         advanceL2Verifier,
+        enforcement,
+        generation,
         mode,
         network: config.network,
-        preTsukiDirectSign: resolved.intent.preTsukiDirectSign,
         signerProofArtifactBaseUrl,
         signers: signers.map(signer => ({endpoint: signer.endpoint, id: signer.id, publicKey: signer.publicKey})),
         tsoUrl,
       }
-      const runtime = signerRuntimePolicyProfile(mode)
+      const runtime = signerRuntimePolicyProfile(enforcement)
       const policy = {
         activeBridgeKeyHash,
         advanceL2Verifier,
         contract: 'attestation_evidence_v2',
+        enforcement,
+        generation,
         mode,
         network: config.network,
         operatorOwnedPolicy: {
@@ -237,7 +214,6 @@ export class ExportSignerPolicyCommand extends Command {
           ],
         },
         policyMode: runtime.policyMode,
-        preTsukiDirectSign: resolved.intent.preTsukiDirectSign,
         protocolContext: {file: 'protocol_context.json', sha256: sha256(protocolContextBytes)},
         schema: BUNDLE_SCHEMA,
         signerProofArtifactBaseUrl,
@@ -271,7 +247,7 @@ export class ExportSignerPolicyCommand extends Command {
         tsoUrl,
       }
       if (flags.json) json.success(result)
-      else this.log(chalk.green(`${mode} V2 signer policy bundle written to ${outDir} for ${signers.length} partner operator(s).`))
+      else this.log(chalk.green(`${mode}/${generation}/${enforcement} V2 signer policy bundle written to ${outDir} for ${signers.length} partner operator(s).`))
     } catch (error) {
       json.error('E804_SIGNER_POLICY_EXPORT_FAILED', error instanceof Error ? error.message : String(error), 'CONFIGURATION', true)
     }

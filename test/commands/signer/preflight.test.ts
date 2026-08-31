@@ -10,7 +10,6 @@ function capability(capability: string, productionServing = true): Record<string
     capability,
     production_block: productionServing ? null : `${capability}_policy_not_configured`,
     production_serving: productionServing,
-    scaffold_bypass_eligible: capability !== 'advance_l1',
   }
 }
 
@@ -26,17 +25,14 @@ function reports(): {policy: Record<string, unknown>; ready: Record<string, unkn
     policy: {
       contract: 'attestation_evidence_v2',
       network: NETWORK,
-      policy_mode: 'production_enforce',
+      policy_mode: 'enforce',
       production_v2_ready: true,
       public_key: PUBLIC_KEY,
-      scaffold_bypass_enabled: false,
-      scaffold_flags: {allow_unimplemented_checks: false},
       v2_capabilities: v2Capabilities,
     },
     ready: {
-      mode: 'production_enforce',
+      mode: 'enforce',
       production_v2_ready: true,
-      scaffold_bypass_enabled: false,
       v2_capabilities: v2Capabilities,
     },
   }
@@ -81,16 +77,16 @@ describe('signer preflight production V2 assertion', () => {
     })).to.throw('blocked: advance_l2=advance_l2_policy_not_configured')
   })
 
-  it('rejects scaffold policy and identity mismatches', () => {
+  it('rejects observe policy and identity mismatches', () => {
     const scaffold = reports()
-    scaffold.policy.scaffold_bypass_enabled = true
+    scaffold.policy.policy_mode = 'observe'
     expect(() => assertProductionSignerV2Ready({
       expectedNetwork: NETWORK,
       expectedPublicKey: PUBLIC_KEY,
       policy: scaffold.policy,
       ready: scaffold.ready,
       readyStatus: 200,
-    })).to.throw('must disable')
+    })).to.throw('must both report enforce')
 
     const mismatch = reports()
     mismatch.policy.public_key = `03${'22'.repeat(32)}`

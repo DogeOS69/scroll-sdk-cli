@@ -1,7 +1,4 @@
-import type {PreTsukiDirectSignIntent} from './pre-tsuki-direct-sign.js'
-import type {ProofSystemMode} from './proof-system-mode.js'
-
-import {PRE_TSUKI_DIRECT_SIGN_ATTESTATION_SIGNER_ENV} from './pre-tsuki-direct-sign.js'
+import type {ProofEnforcement, ProofGeneration, ProofTopologyMode} from '../types/proof-topology.js'
 
 export const ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE = 'advance-l2-agg-verifying-key.bin'
 export const ADVANCE_L2_AGG_VERIFYING_KEY_CONTAINER_PATH = `/etc/dogeos/${ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE}`
@@ -21,24 +18,21 @@ export interface SignerAdvanceL2VerifierMaterial {
 
 export interface SignerPolicyBundleInput {
   advanceL2Verifier?: SignerAdvanceL2VerifierMaterial
-  mode: ProofSystemMode
+  enforcement: ProofEnforcement
+  generation: ProofGeneration
+  mode: ProofTopologyMode
   network: string
-  preTsukiDirectSign?: PreTsukiDirectSignIntent
   signerProofArtifactBaseUrl?: string
   signers: SignerPolicyBundleSigner[]
   tsoUrl: string
 }
 
 export interface SignerRuntimePolicyProfile {
-  allowUnimplementedChecks: boolean
-  policyMode: 'dev_permissive' | 'production_enforce' | 'staging_scaffold'
+  policyMode: ProofEnforcement
 }
 
-export function signerRuntimePolicyProfile(mode: ProofSystemMode): SignerRuntimePolicyProfile {
-  if (mode === 'disabled') return {allowUnimplementedChecks: false, policyMode: 'dev_permissive'}
-  return mode === 'mock'
-    ? {allowUnimplementedChecks: true, policyMode: 'staging_scaffold'}
-    : {allowUnimplementedChecks: false, policyMode: 'production_enforce'}
+export function signerRuntimePolicyProfile(enforcement: ProofEnforcement): SignerRuntimePolicyProfile {
+  return {policyMode: enforcement}
 }
 
 /** Partner-owned V2 policy; bridge-derived inputs are supplied by env. */
@@ -100,22 +94,18 @@ export function renderSignerOperatorPolicyTemplate(): string {
 }
 
 export function renderSignerPolicyEnv(input: SignerPolicyBundleInput): string {
-  const profile = signerRuntimePolicyProfile(input.mode)
-  const artifactOrigin = input.mode !== 'disabled' && input.signerProofArtifactBaseUrl
+  const profile = signerRuntimePolicyProfile(input.enforcement)
+  const artifactOrigin = input.mode === 'active' && input.signerProofArtifactBaseUrl
     ? new URL(input.signerProofArtifactBaseUrl).origin
     : undefined
-  if (input.mode === 'production' && !input.advanceL2Verifier) {
-    throw new Error('production signer policy requires compiler-selected AdvanceL2 verifier material')
+  if (input.generation === 'real' && !input.advanceL2Verifier) {
+    throw new Error('real signer policy requires compiler-selected AdvanceL2 verifier material')
   }
 
   return [
-    `# dogeos-core attestation_evidence_v2 policy for proof mode ${input.mode}.`,
+    `# dogeos-core attestation_evidence_v2 policy for ${input.mode}/${input.generation}/${input.enforcement}.`,
     `ATTESTATION_SIGNER_POLICY_MODE=${profile.policyMode}`,
-    `ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS=${profile.allowUnimplementedChecks}`,
     `ATTESTATION_SIGNER_NETWORK=${input.network}`,
-    ...(input.preTsukiDirectSign
-      ? [`${PRE_TSUKI_DIRECT_SIGN_ATTESTATION_SIGNER_ENV}=${input.preTsukiDirectSign.maxEndBatchHeight}`]
-      : []),
     'ATTESTATION_SIGNER_PROTOCOL_CONTEXT_JSON=/etc/dogeos/protocol_context.json',
     ...(artifactOrigin ? [`ATTESTATION_SIGNER_ARTIFACT_ALLOWED_ORIGINS=${artifactOrigin}`] : []),
     ...(input.advanceL2Verifier
@@ -131,7 +121,7 @@ export function renderSignerPolicyEnv(input: SignerPolicyBundleInput): string {
 }
 
 export function renderPartnerCommands(input: SignerPolicyBundleInput): string {
-  const profile = signerRuntimePolicyProfile(input.mode)
+  const profile = signerRuntimePolicyProfile(input.enforcement)
   const signerRows = input.signers
     .map(signer => `| \`${signer.id}\` | \`${signer.endpoint}\` | \`${signer.publicKey}\` |`)
     .join('\n')
@@ -148,23 +138,14 @@ kubectl -n <namespace> run signer-reachability-${signer.id} --rm -i --restart=Ne
   const verifierCopy = input.advanceL2Verifier
     ? `cp signer-policy-bundle/${input.advanceL2Verifier.aggVerifyingKeyFile} docker-compose/policy/${ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE}`
     : ''
-  const preflight = input.mode === 'production'
+  const preflight = input.enforcement === 'enforce'
     ? 'scrollsdk signer preflight --dir "signer-$SIGNER_ID" --require-production-ready'
     : 'scrollsdk signer preflight --dir "signer-$SIGNER_ID"'
-  const recovery = input.preTsukiDirectSign
-    ? `## Temporary pre-Tsuki direct-sign recovery
-
-The Issue #843 testnet-only pin ends at L2 batch
-\`${input.preTsukiDirectSign.maxEndBatchHeight}\`. WP and TSO must carry the
-same pin. The two recovery capability rows do not count toward
-\`production_v2_ready\`. Retire WP, signer, then TSO after completion is stable.
-
-`
-    : ''
 
   return `# Partner attestation-signer commands
 
-Network \`${input.network}\`; proof mode \`${input.mode}\`; dogeos-core contract
+Network \`${input.network}\`; proof posture
+\`${input.mode}/${input.generation}/${input.enforcement}\`; dogeos-core contract
 \`attestation_evidence_v2\`; runtime policy \`${profile.policyMode}\`.
 
 | Purpose | Address |
@@ -217,11 +198,6 @@ cp signer-policy-bundle/signer-policy.env docker-compose/signer-policy.env
 cp signer-policy-bundle/protocol_context.json docker-compose/policy/protocol_context.json
 ${verifierCopy}
 
-if grep -q '^${PRE_TSUKI_DIRECT_SIGN_ATTESTATION_SIGNER_ENV}=' docker-compose/attestation-signer.env; then
-  echo '${PRE_TSUKI_DIRECT_SIGN_ATTESTATION_SIGNER_ENV} belongs only in signer-policy.env' >&2
-  exit 1
-fi
-
 docker compose --project-directory docker-compose config --quiet
 docker compose --project-directory docker-compose up -d
 curl -fsS "$SIGNER_ENDPOINT/health"
@@ -231,7 +207,7 @@ ${preflight}
 The signer must call \`${input.tsoUrl}\` and, in proof modes, GET concrete
 artifact URLs from requests. The CLI does not probe a fabricated object key.
 
-${recovery}## Bridge-operator reachability check
+## Bridge-operator reachability check
 
 \`\`\`bash
 ${clusterProbes}

@@ -9,9 +9,13 @@ import {
   renderSignerPolicyEnv,
 } from '../../src/utils/signer-policy-bundle.js'
 
-function input(mode: 'disabled' | 'mock' | 'production'): SignerPolicyBundleInput {
+function input(
+  mode: 'active' | 'disabled',
+  generation: 'mock' | 'real' = 'mock',
+  enforcement: 'enforce' | 'observe' = 'observe',
+): SignerPolicyBundleInput {
   return {
-    ...(mode === 'production'
+    ...(generation === 'real'
       ? {
           advanceL2Verifier: {
             aggVerifyingKeyFile: ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE,
@@ -21,6 +25,8 @@ function input(mode: 'disabled' | 'mock' | 'production'): SignerPolicyBundleInpu
           },
         }
       : {}),
+    enforcement,
+    generation,
     mode,
     network: 'testnet',
     signerProofArtifactBaseUrl: mode === 'disabled' ? undefined : 'https://proofs.bridge.example/proof-topology',
@@ -52,19 +58,19 @@ describe('signer policy bundle V2', () => {
     expect(policy).not.to.include('verifier-registry.toml')
   })
 
-  it('renders audited scaffold mode without activating production verifier material', () => {
-    const env = envMap(renderSignerPolicyEnv(input('mock')))
-    expect(env.ATTESTATION_SIGNER_POLICY_MODE).to.equal('staging_scaffold')
-    expect(env.ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS).to.equal('true')
+  it('renders observe mode without activating real verifier material', () => {
+    const env = envMap(renderSignerPolicyEnv(input('active')))
+    expect(env.ATTESTATION_SIGNER_POLICY_MODE).to.equal('observe')
+    expect(env).not.to.have.property('ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS')
     expect(env.ATTESTATION_SIGNER_PROTOCOL_CONTEXT_JSON).to.equal('/etc/dogeos/protocol_context.json')
     expect(env.ATTESTATION_SIGNER_ARTIFACT_ALLOWED_ORIGINS).to.equal('https://proofs.bridge.example')
     expect(env).not.to.have.property('ATTESTATION_SIGNER_ADVANCE_L2_AGG_VERIFYING_KEY_PATH')
   })
 
-  it('renders all compiler-selected AdvanceL2 verifier inputs in production', () => {
-    const env = envMap(renderSignerPolicyEnv(input('production')))
-    expect(env.ATTESTATION_SIGNER_POLICY_MODE).to.equal('production_enforce')
-    expect(env.ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS).to.equal('false')
+  it('renders all compiler-selected AdvanceL2 verifier inputs for real enforcement', () => {
+    const env = envMap(renderSignerPolicyEnv(input('active', 'real', 'enforce')))
+    expect(env.ATTESTATION_SIGNER_POLICY_MODE).to.equal('enforce')
+    expect(env).not.to.have.property('ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS')
     expect(env.ATTESTATION_SIGNER_ADVANCE_L2_AGG_VERIFYING_KEY_PATH)
       .to.equal('/etc/dogeos/advance-l2-agg-verifying-key.bin')
     expect(env.ATTESTATION_SIGNER_ADVANCE_L2_BATCH_PROGRAM_COMMITMENT_HEX)
@@ -73,29 +79,20 @@ describe('signer policy bundle V2', () => {
       .to.equal(`0x${'33'.repeat(64)}`)
   })
 
-  it('fails closed when production verifier material is absent', () => {
-    expect(() => renderSignerPolicyEnv({...input('mock'), mode: 'production'}))
+  it('fails closed when real verifier material is absent', () => {
+    expect(() => renderSignerPolicyEnv({...input('active'), generation: 'real'}))
       .to.throw('requires compiler-selected AdvanceL2 verifier material')
   })
 
-  it('renders disabled direct-sign posture without artifact or verifier activation', () => {
+  it('renders disabled observe posture without artifact or verifier activation', () => {
     const env = envMap(renderSignerPolicyEnv(input('disabled')))
-    expect(env.ATTESTATION_SIGNER_POLICY_MODE).to.equal('dev_permissive')
+    expect(env.ATTESTATION_SIGNER_POLICY_MODE).to.equal('observe')
     expect(env).not.to.have.property('ATTESTATION_SIGNER_ARTIFACT_ALLOWED_ORIGINS')
     expect(env).not.to.have.property('ATTESTATION_SIGNER_ADVANCE_L2_AGG_VERIFYING_KEY_PATH')
   })
 
-  it('projects the recovery pin and its retirement order', () => {
-    const direct = {...input('disabled'), preTsukiDirectSign: {maxEndBatchHeight: 6863}}
-    const env = envMap(renderSignerPolicyEnv(direct))
-    expect(env.ATTESTATION_SIGNER_PRE_TSUKI_DIRECT_SIGN_MAX_END_BATCH_HEIGHT).to.equal('6863')
-    const commands = renderPartnerCommands(direct)
-    expect(commands).to.include('Issue #843')
-    expect(commands).to.include('Retire WP, signer, then TSO')
-  })
-
-  it('documents the protocol-context bootstrap boundary and production readiness check', () => {
-    const commands = renderPartnerCommands(input('production'))
+  it('documents the protocol-context bootstrap boundary and enforcement readiness check', () => {
+    const commands = renderPartnerCommands(input('active', 'real', 'enforce'))
     for (const expected of [
       'https://signer.partner-a.example:4040',
       'https://tso.bridge.example',

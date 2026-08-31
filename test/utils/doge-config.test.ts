@@ -70,12 +70,41 @@ describe('doge-config utilities', () => {
     const content = dogeConfigToToml({
       network: 'testnet',
       proof_topology: {
+        active: {
+          artifactStore: {kind: 'local_fs'},
+          profile: 'withdrawal_mock_prover',
+          realScroll: {
+            batchMaterializerBinaryPath: '.data/proof-materials/batch',
+            batchProgramCommitmentHashHex: `0x${'1'.repeat(64)}`,
+            batchProgramCommitmentHex: `0x${'2'.repeat(128)}`,
+            batchVerificationKeyHashHex: `0x${'1'.repeat(64)}`,
+            bridgeAppCommitRawHex: `0x${'2'.repeat(128)}`,
+            bridgeProgramCommitmentHashHex: `0x${'1'.repeat(64)}`,
+            bridgeVerificationKeyHashHex: `0x${'1'.repeat(64)}`,
+            chunkMaterializerBinaryPath: '.data/proof-materials/chunk',
+            chunkProgramCommitmentHashHex: `0x${'1'.repeat(64)}`,
+            chunkProgramCommitmentHex: `0x${'2'.repeat(128)}`,
+            chunkVerificationKeyHashHex: `0x${'1'.repeat(64)}`,
+            l2RangeAggregationAppCommitRawHex: `0x${'2'.repeat(128)}`,
+            l2RangeAggregationProgramCommitmentHashHex: `0x${'1'.repeat(64)}`,
+            l2RangeAggregationVerificationKeyHashHex: `0x${'1'.repeat(64)}`,
+            resourcesRoot: '.data/proof-materials',
+          },
+          workerLaunch: 'local_cpu',
+        },
         compiler: {
           image: {
             digest: `sha256:${'a'.repeat(64)}`,
             repository: 'dogeos69/dogeos-proof-topology',
           },
         },
+        deployment: {
+          artifactKeyPrefix: 'proof-topology',
+          mockWorkerImage: {digest: `sha256:${'b'.repeat(64)}`, repository: 'dogeos69/prover-worker-mock'},
+          productionWorkerImage: {digest: `sha256:${'c'.repeat(64)}`, repository: 'dogeos69/prover-worker'},
+        },
+        enforcement: 'observe',
+        generation: 'mock',
         mode: 'disabled',
       },
       wallet: {path: '.data/doge-wallet-testnet.json'},
@@ -85,6 +114,5 @@ describe('doge-config utilities', () => {
     expect(parsed.proof_topology.mode).to.equal('disabled')
     expect(parsed.proof_topology.compiler.image.repository)
       .to.equal('dogeos69/dogeos-proof-topology')
-    expect(parsed).not.to.have.property('proof_release')
   })
 })

@@ -63,7 +63,7 @@ export function renderSignerReleasePins(options: {
 
   return [
     '# Image release-policy pins. The first two are mandatory when the post-genesis',
-    '# policy bundle selects production_enforce; obtain them from the approved image.',
+    '# policy bundle selects enforcement=enforce; obtain them from the approved image.',
     ...(releaseVersion && gitCommit
       ? [
           `ATTESTATION_SIGNER_ALLOWED_RELEASE_VERSION=${releaseVersion}`,
@@ -171,9 +171,9 @@ export class SignerInitCommand extends Command {
 
       // A complete deployment env: point the compose env_file directly at
       // this file (or copy it next to docker-compose.yml) — nothing else to
-      // assemble by hand. staging_scaffold is mandatory pre-genesis; the
-      // bridge operator's policy bundle selects audited staging_scaffold for
-      // mock proving or fail-closed production_enforce for production proving.
+      // assemble by hand. The bridge operator's post-genesis policy bundle is
+      // authoritative for observe/enforce. This bootstrap value is observe on
+      // testnet and enforce on mainnet, where dogeos-core refuses observe.
       //
       // Do NOT put externally-supplied policy values here (e.g. TSO_URL).
       // Those belong in the bridge operator's signer-policy.env so that every
@@ -185,7 +185,7 @@ export class SignerInitCommand extends Command {
         ...backendLines,
         ...releasePinLines,
         `ATTESTATION_SIGNER_NETWORK=${flags.network}`,
-        'ATTESTATION_SIGNER_POLICY_MODE=staging_scaffold',
+        `ATTESTATION_SIGNER_POLICY_MODE=${flags.network === 'mainnet' ? 'enforce' : 'observe'}`,
       ]
       fs.writeFileSync(secretFile, `${envLines.join('\n')}\n`, { mode: 0o600 })
 

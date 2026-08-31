@@ -43,7 +43,6 @@ import {
 } from '../../utils/signer-roles.js'
 import {
   WITHDRAWAL_NATIVE_CONFIG_RELPATH,
-  assertNoInlineWithdrawalConfig,
   buildWithdrawalDeploymentFacts,
   ensureWithdrawalChartWiring,
   ensureWithdrawalProofActivationSwitch,
@@ -2956,8 +2955,6 @@ export default class SetupPrepCharts extends Command {
           )
         }
 
-        assertNoInlineWithdrawalConfig(productionYaml)
-
         const previousSource = fs.readFileSync(nativeConfigPath, 'utf8')
         const mergedSource = mergeWithdrawalManagedDeploymentBlock(previousSource, facts, {deletePaths})
         if (mergedSource !== previousSource) {
@@ -3566,17 +3563,9 @@ export default class SetupPrepCharts extends Command {
     this.jsonCtx.logSuccess(
       `Reconciled ${result.mode} proof K8s configuration; contract ${result.contract.generationId}`,
     )
-    if (result.rolloutPlan?.requires_proof_regeneration) {
-      this.jsonCtx.addWarning(
-        `Proof topology transition requires durable proof-layer regeneration `
-        + `(${String(result.rolloutPlan.regeneration)}). Configuration generation does not execute `
-        + 'that one-shot database operation; complete the reviewed transition procedure before activation.',
-      )
-    }
-
     if (result.workerBundle) {
       this.jsonCtx.addWarning(
-        `External worker bundle ${result.workerBundle.bundleId} is credential-pending. `
+        `Docker Compose worker bundle ${result.workerBundle.bundleId} is credential-pending. `
         + 'Run setup proof-worker to inject the bearer token, sync the resources and bundle to the worker host, '
         + 'then run setup proof-worker-check before docker compose up.',
       )

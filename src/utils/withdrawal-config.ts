@@ -2,9 +2,7 @@
 
 import * as toml from '@iarna/toml'
 
-import type { ProofSystemMode } from './proof-system-mode.js'
-
-export type { ProvingMode } from './proof-system-mode.js'
+import type {ProofTopologyMode} from '../types/proof-topology.js'
 
 export const WITHDRAWAL_CONFIG_FILE = 'WithdrawalProcessor.toml'
 export const WITHDRAWAL_CONFIG_PATH = `/app/config/${WITHDRAWAL_CONFIG_FILE}`
@@ -275,9 +273,9 @@ export function stripMigratedWithdrawalEnv(
 
 /**
  * Ensure the chart consumes the application TOML at the canonical path: the
- * --config arg, the config ConfigMap toggle, and its mount. Does not touch the
- * TOML content itself — in native-file mode the content arrives via helm
- * --set-file rather than inline values.
+ * --config arg, the config ConfigMap toggle, and its mount. The proof topology
+ * reconciler embeds the compiler-rendered TOML in the final self-contained
+ * values document after ordinary chart processing completes.
  */
 export function ensureWithdrawalChartWiring(values: Record<string, any>): void {
   if (values.args !== undefined && !Array.isArray(values.args)) {
@@ -320,63 +318,28 @@ export function ensureWithdrawalChartWiring(values: Record<string, any>): void {
   values.podAnnotations['checksum/tso-signers'] = '{{ .Values.tsoSigners | toJson | sha256sum }}'
 }
 
-/** Reject inline application TOML; compiler output is mounted only through --set-file. */
-export function assertNoInlineWithdrawalConfig(values: Record<string, any>): void {
-  const existing = values.configMaps?.config?.data?.[WITHDRAWAL_CONFIG_FILE]
-  if (existing !== undefined) {
-    throw new Error(
-      `withdrawal-processor values must not embed configMaps.config.data.${WITHDRAWAL_CONFIG_FILE}; `
-      + 'use the compiler-managed native --set-file binding',
-    )
-  }
-}
-
 /**
- * Atomically project CLI-owned proof-system activation state into explicit Rust
- * env. The generic chart only renders these values and has no knowledge of
- * proof modes. exact_mock is present only for active mock mode; proof-work API
- * topology remains wholly in native TOML so Figment never replaces that table
- * with an incomplete environment projection.
+ * Project only the chart-level lifecycle switch. PR #937 compiler output owns
+ * [proof_system].mode and enforcement in native TOML; all old Figment proof
+ * environment overrides are removed so they cannot replace that strict table.
  */
 export function ensureWithdrawalProofActivationSwitch(
   values: Record<string, any>,
-  topologyMode: ProofSystemMode = 'disabled'
+  topologyMode: ProofTopologyMode = 'disabled'
 ): boolean {
   values.withdrawalProof ||= {}
   values.env ||= []
   if (!Array.isArray(values.env)) throw new TypeError('withdrawal-processor values: env must be an array')
   const before = JSON.stringify([values.withdrawalProof, values.env])
 
-  const enabled = topologyMode !== 'disabled'
+  const enabled = topologyMode === 'active'
   values.withdrawalProof.enabled = enabled
-  values.withdrawalProof.mode = topologyMode
-  if (enabled) values.withdrawalProof.provingMode = topologyMode
-  else delete values.withdrawalProof.provingMode
+  delete values.withdrawalProof.mode
+  delete values.withdrawalProof.provingMode
   const unmanagedEnv = values.env.filter(
     (item: any) => !isWithdrawalProofActivationEnv(String(item?.name || ''))
   )
-  const activationEnv: Array<{ name: string; value: string }> = [
-    {
-      name: WITHDRAWAL_PROOF_ACTIVATION_ENV.mode,
-      value: enabled ? (topologyMode === 'mock' ? 'dev_dummy' : 'production') : 'disabled',
-    },
-    {
-      name: WITHDRAWAL_PROOF_ACTIVATION_ENV.requireScroll,
-      value: enabled ? 'true' : 'false',
-    },
-    {
-      name: WITHDRAWAL_PROOF_ACTIVATION_ENV.requireBridge,
-      value: enabled ? 'true' : 'false',
-    },
-  ]
-  if (topologyMode === 'mock') {
-    activationEnv.push({
-      name: WITHDRAWAL_PROOF_ACTIVATION_ENV.devDummyScrollInput,
-      value: 'exact_mock',
-    })
-  }
-
-  values.env = [...unmanagedEnv, ...activationEnv]
+  values.env = unmanagedEnv
 
   return before !== JSON.stringify([values.withdrawalProof, values.env])
 }

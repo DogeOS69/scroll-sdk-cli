@@ -136,17 +136,47 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
 
 function createProofTopology(
   mode: 'disabled' | 'mock' | 'production' = 'disabled',
-  recovery?: {preTsukiDirectSignMaxEndBatchHeight: number},
 ): NonNullable<DeploymentSpec['proofTopology']> {
+  const image = (character: string, repository: string) => ({
+    digest: `sha256:${character.repeat(64)}`,
+    repository,
+  })
+  const identity32 = `0x${'1'.repeat(64)}`
+  const identity64 = `0x${'2'.repeat(128)}`
   return {
-    compiler: {
-      image: {
-        digest: `sha256:${'a'.repeat(64)}`,
-        repository: 'dogeos69/dogeos-proof-topology',
+    active: {
+      artifactStore: {kind: 'local_fs'},
+      profile: mode === 'production' ? 'real_scroll_prover' : 'withdrawal_mock_prover',
+      realScroll: {
+        batchMaterializerBinaryPath: '.data/proof-materials/software/bin/batch-materializer',
+        batchProgramCommitmentHashHex: identity32,
+        batchProgramCommitmentHex: identity64,
+        batchVerificationKeyHashHex: identity32,
+        bridgeAppCommitRawHex: identity64,
+        bridgeProgramCommitmentHashHex: identity32,
+        bridgeVerificationKeyHashHex: identity32,
+        chunkMaterializerBinaryPath: '.data/proof-materials/software/bin/chunk-materializer',
+        chunkProgramCommitmentHashHex: identity32,
+        chunkProgramCommitmentHex: identity64,
+        chunkVerificationKeyHashHex: identity32,
+        l2RangeAggregationAppCommitRawHex: identity64,
+        l2RangeAggregationProgramCommitmentHashHex: identity32,
+        l2RangeAggregationVerificationKeyHashHex: identity32,
+        resourcesRoot: '.data/proof-materials',
       },
+      workerLaunch: 'local_cpu',
     },
-    mode,
-    ...(recovery ? {recovery} : {}),
+    compiler: {
+      image: image('a', 'dogeos69/dogeos-proof-topology'),
+    },
+    deployment: {
+      artifactKeyPrefix: 'proof-topology',
+      mockWorkerImage: image('b', 'dogeos69/prover-worker-mock'),
+      productionWorkerImage: image('c', 'dogeos69/prover-worker'),
+    },
+    enforcement: mode === 'production' ? 'enforce' : 'observe',
+    generation: mode === 'production' ? 'real' : 'mock',
+    mode: mode === 'disabled' ? 'disabled' : 'active',
   }
 }
 
@@ -754,35 +784,6 @@ describe('deployment-spec-generator', () => {
       expect(result.warnings.some(w => w.path?.includes('l2Sequencer'))).to.be.true;
     });
 
-    it('validates the temporary pre-Tsuki direct-sign posture as disabled and non-mainnet', () => {
-      const valid = createMinimalSpec({
-        proofTopology: createProofTopology('disabled', {
-          preTsukiDirectSignMaxEndBatchHeight: 6863,
-        }),
-      });
-      expect(validateDeploymentSpec(valid).errors).to.have.length(0);
-
-      const wrongMode = createMinimalSpec({
-        proofTopology: createProofTopology('mock', {
-          preTsukiDirectSignMaxEndBatchHeight: 6863,
-        }),
-      });
-      expect(validateDeploymentSpec(wrongMode).errors.some(
-        error => error.path === 'proofTopology.recovery',
-      )).to.equal(true);
-
-      const mainnet = createMinimalSpec({
-        dogecoin: {
-          ...valid.dogecoin,
-          network: 'mainnet',
-        },
-        proofTopology: valid.proofTopology,
-      });
-      expect(validateDeploymentSpec(mainnet).errors.some(
-        error => error.message.includes('testnet-only'),
-      )).to.equal(true);
-    });
-
     it('allows proof infrastructure to be prepared while proof mode is disabled', () => {
       const spec = createMinimalSpec({
         proofCoordinator: {
@@ -799,28 +800,9 @@ describe('deployment-spec-generator', () => {
     });
 
     it('accepts staged compiler profiles while disabled and rejects the removed proofSystem field', () => {
-      const compilerTopology = {
-        compiler: {
-          image: {
-            digest: `sha256:${'a'.repeat(64)}`,
-            repository: 'dogeos69/dogeos-proof-topology',
-          },
-        },
-        mock: {
-          artifactStore: {kind: 'local_fs' as const},
-          profile: 'withdrawal_mock_prover' as const,
-          workerImage: {
-            digest: `sha256:${'b'.repeat(64)}`,
-            repository: 'dogeos69/prover-worker-mock',
-          },
-        },
-        mode: 'disabled' as const,
-      };
+      const compilerTopology = createProofTopology();
       const staged = createMinimalSpec({proofTopology: compilerTopology});
       expect(validateDeploymentSpec(staged).errors).to.have.length(0);
-      expect(validateDeploymentSpec(staged).warnings.some(
-        warning => warning.path === 'proofTopology.production',
-      )).to.equal(true);
 
       const removed = {
         ...createMinimalSpec({proofTopology: compilerTopology}),
@@ -1052,16 +1034,7 @@ describe('deployment-spec-generator', () => {
   describe('generateDogeConfigToml', () => {
     it('does not duplicate proof topology into doge-config', () => {
       const spec = createMinimalSpec({
-        proofTopology: {
-          compiler: {
-            image: {
-              digest: `sha256:${'a'.repeat(64)}`,
-              repository: 'dogeos69/dogeos-proof-topology',
-            },
-          },
-          mode: 'disabled',
-          recovery: {preTsukiDirectSignMaxEndBatchHeight: 6863},
-        },
+        proofTopology: createProofTopology(),
       });
       const parsed = toml.parse(generateDogeConfigToml(spec)) as any;
       expect(parsed.proofSystem).to.equal(undefined);
@@ -1383,19 +1356,6 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateValuesFiles', () => {
-    it('projects the temporary recovery pin into generated TSO values', () => {
-      const spec = createMinimalSpec({
-        proofTopology: createProofTopology('disabled', {
-          preTsukiDirectSignMaxEndBatchHeight: 6863,
-        }),
-      });
-      const values = yaml.load(generateValuesFiles(spec)['tso-service-production.yaml']) as any;
-      expect(values.env).to.deep.include({
-        name: 'TSO_PRE_TSUKI_DIRECT_SIGN_MAX_END_BATCH_HEIGHT',
-        value: '6863',
-      });
-    });
-
     it('projects reviewed CubeSigner production policy evidence and key binding', () => {
       const spec = createMinimalSpec();
       spec.signing!.cubesigner!.productionPolicy = {
@@ -1520,13 +1480,9 @@ describe('deployment-spec-generator', () => {
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_CLEANUP_TIMEOUT_SECS).to.equal('3600');
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_ROTATE_SEQUENCER_SIGNER_V2).to.equal('false');
       expect(withdrawalRuntimeEnv).not.to.have.property('DOGEOS_WITHDRAWAL_COORDINATOR_POLL_INTERVAL_SECS');
-      expect(Object.fromEntries(Object.entries(withdrawalRuntimeEnv).filter(([key]) => key.startsWith('DOGEOS_WITHDRAWAL_PROOF_')))).to.deep.equal({
-        DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE: 'disabled',
-        DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE: 'false',
-        DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION: 'false',
-      });
+      expect(Object.fromEntries(Object.entries(withdrawalRuntimeEnv).filter(([key]) => key.startsWith('DOGEOS_WITHDRAWAL_PROOF_')))).to.deep.equal({});
       expect(withdrawalValuesForRuntime.withdrawalProof.enabled).to.equal(false);
-      expect(withdrawalValuesForRuntime.withdrawalProof.mode).to.equal('disabled');
+      expect(withdrawalValuesForRuntime.withdrawalProof.mode).to.equal(undefined);
       expect(withdrawalValuesForRuntime.withdrawalProof.provingMode).to.equal(undefined);
       expect(withdrawalValuesForRuntime.configMaps.config.data?.['WithdrawalProcessor.toml']).to.equal(undefined);
       expect(withdrawalValuesForRuntime.args).to.deep.equal(['--config', '/app/config/WithdrawalProcessor.toml']);
@@ -1670,8 +1626,6 @@ describe('deployment-spec-generator', () => {
       const withdrawalValues = yaml.load(files['withdrawal-processor-production.yaml']) as any;
       expect(withdrawalValues.withdrawalProof).to.deep.include({
         enabled: true,
-        mode: 'production',
-        provingMode: 'production',
         s3AuthMode: 'irsa',
       });
       expect(withdrawalValues.serviceAccount).to.deep.equal({
@@ -1706,9 +1660,9 @@ describe('deployment-spec-generator', () => {
       });
       expect(withdrawalValues.withdrawalProof).to.deep.include({
         enabled: false,
-        mode: 'disabled',
         s3AuthMode: 'ambient',
       });
+      expect(withdrawalValues.withdrawalProof).not.to.have.property('mode');
       expect(withdrawalValues.withdrawalProof).not.to.have.property('provingMode');
     });
 

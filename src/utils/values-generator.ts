@@ -31,10 +31,6 @@ import {
   resolveDogecoinKubernetesEndpoints,
 } from './kubernetes-endpoints.js'
 import {
-  PRE_TSUKI_DIRECT_SIGN_TSO_ENV,
-  assertPreTsukiDirectSignPosture,
-} from './pre-tsuki-direct-sign.js'
-import {
   ensureWithdrawalChartWiring,
   ensureWithdrawalProofActivationSwitch,
 } from './withdrawal-config.js'
@@ -364,19 +360,10 @@ function resolveImage(
  */
 export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles {
   const normalizedSpec = normalizeDeploymentSpec(spec)
-  if (normalizedSpec.proofTopology) {
-    assertPreTsukiDirectSignPosture({
-      mode: normalizedSpec.proofTopology.mode,
-      network: normalizedSpec.dogecoin.network,
-      preTsukiDirectSign: normalizedSpec.proofTopology.recovery
-        ? {
-            maxEndBatchHeight:
-              normalizedSpec.proofTopology.recovery.preTsukiDirectSignMaxEndBatchHeight,
-          }
-        : undefined,
-      source: 'DeploymentSpec proofTopology',
-    })
-  }
+  if (normalizedSpec.proofTopology?.enforcement === 'enforce' && (
+    normalizedSpec.proofTopology.mode !== 'active'
+    || normalizedSpec.proofTopology.generation !== 'real'
+  )) throw new Error('DeploymentSpec proof enforcement requires active real proving')
 
   const files: GeneratedValuesFiles = {}
 
@@ -1029,12 +1016,6 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
       { name: 'TIMEOUT_CHECK_INTERVAL_SECONDS', value: '60' },
       { name: 'TSO_CORRECTNESS_MAX_PSBT_BASE64_LEN', value: '130048' },
       { name: 'TSO_CUBESIGNER_MAX_PSBT_BASE64_LEN', value: '130048' },
-      ...(spec.proofTopology?.recovery
-        ? [{
-            name: PRE_TSUKI_DIRECT_SIGN_TSO_ENV,
-            value: String(spec.proofTopology.recovery.preTsukiDirectSignMaxEndBatchHeight),
-          }]
-        : []),
       { name: 'RUST_LOG', value: 'debug' }
     ],
     image,
@@ -1186,7 +1167,10 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   }
 
   ensureWithdrawalChartWiring(values)
-  ensureWithdrawalProofActivationSwitch(values, spec.proofTopology?.mode || 'disabled')
+  ensureWithdrawalProofActivationSwitch(
+    values,
+    spec.proofTopology?.mode ?? 'disabled',
+  )
 
   const {proofCoordinator} = spec
   if (proofCoordinator && proofCoordinator.enabled !== false) {

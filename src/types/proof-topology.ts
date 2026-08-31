@@ -1,13 +1,17 @@
-import type {ProofSystemMode} from '../utils/proof-system-mode.js'
-
-/** Digest-pinned image consumed as part of a compiler or Worker contract. */
+/** Digest-pinned image consumed by the compiler or a generated Worker contract. */
 export interface ProofTopologyImageReference {
   digest: string
   repository: string
 }
 
+export type ProofTopologyMode = 'active' | 'disabled'
+export type ProofGeneration = 'mock' | 'real'
+export type ProofEnforcement = 'enforce' | 'observe'
+export type ProofWorkerLaunch = 'external' | 'local_cpu' | 'local_cuda'
+export type ProofWorkerDeploymentBackend = 'docker_compose' | 'kubernetes'
+
 export interface ProofTopologyCompilerConfig {
-  /** Must be the proof-topology compiler from the same dogeos-core release as the services. */
+  /** Must come from the same dogeos-core revision as the deployed services. */
   image: ProofTopologyImageReference
 }
 
@@ -15,6 +19,7 @@ export interface ProofTopologyArtifactStoreConfig {
   bucket?: string
   endpointUrl?: string
   forcePathStyle?: boolean
+  /** Retired: artifact key placement now belongs to deployment.artifactKeyPrefix. */
   keyPrefix?: string
   kind: 'local_fs' | 'managed_minio' | 's3_compatible'
   maxReadBodyBytes?: number
@@ -22,9 +27,9 @@ export interface ProofTopologyArtifactStoreConfig {
 }
 
 /**
- * Real Scroll material and identity input owned by the release producer.
- * File/directory fields are deployment-relative beneath `resourcesRoot` and
- * are compiled at the stable runtime mount selected by `resourcesMountPath`.
+ * Strict identity/resource table consumed by dogeos-core. Identity values are
+ * derived by Rust/OpenVM tooling and imported from proof-materials-v1.json;
+ * scroll-sdk-cli never computes them independently.
  */
 export interface ProofTopologyRealScrollConfig {
   aggVerifyingKeyPath?: string
@@ -33,13 +38,13 @@ export interface ProofTopologyRealScrollConfig {
   batchBackendProfile?: string
   batchMaterializerBinaryPath?: string
   batchParallelism?: number
-  batchProgramCommitmentHashHex?: string
-  batchProgramCommitmentHex?: string
+  batchProgramCommitmentHashHex: string
+  batchProgramCommitmentHex: string
   batchProverRequirements?: string
-  batchVerificationKeyHashHex?: string
-  bridgeAppCommitRawHex?: string
-  bridgeProgramCommitmentHashHex?: string
-  bridgeVerificationKeyHashHex?: string
+  batchVerificationKeyHashHex: string
+  bridgeAppCommitRawHex: string
+  bridgeProgramCommitmentHashHex: string
+  bridgeVerificationKeyHashHex: string
   chunkAppConfig?: string
   chunkAppExe?: string
   chunkBackendProfile?: string
@@ -47,82 +52,64 @@ export interface ProofTopologyRealScrollConfig {
   chunkMaterializerBinaryPath?: string
   chunkMaterializerTimeoutMs?: number
   chunkParallelism?: number
-  chunkProgramCommitmentHashHex?: string
-  chunkProgramCommitmentHex?: string
+  chunkProgramCommitmentHashHex: string
+  chunkProgramCommitmentHex: string
   chunkProverRequirements?: string
-  chunkVerificationKeyHashHex?: string
+  chunkVerificationKeyHashHex: string
   chunkWitnessRpcUrl?: string
   chunkWitnessSource?: 'block_witness_dir' | 'rpc'
-  l2RangeAggregationAppCommitRawHex?: string
-  l2RangeAggregationProgramCommitmentHashHex?: string
-  l2RangeAggregationVerificationKeyHashHex?: string
-  proofCoordinatorPublicUrl?: string
+  l2RangeAggregationAppCommitRawHex: string
+  l2RangeAggregationProgramCommitmentHashHex: string
+  l2RangeAggregationVerificationKeyHashHex: string
   regtestPinnedGenesisSequencerOutpoint?: string
-  /** Host path containing all selected release material. */
-  resourcesRoot?: string
+  /** Host path containing imported software and Bridge material. */
+  resourcesRoot: string
+  /** Retired placement field; rejected by the PR #937 source adapter. */
   s3PublicEndpointUrl?: string
   workerId?: string
   workerMaxBodyBytes?: number
 }
 
-export interface MockProofTopologySpec {
-  artifactStore: ProofTopologyArtifactStoreConfig
-  profile:
-    | 'withdrawal_mock_prover'
-    | 'withdrawal_mock_prover_real_materialize'
-  realScroll?: ProofTopologyRealScrollConfig
-  workerImage: ProofTopologyImageReference
-}
-
-export interface ProductionProofTopologySpec {
+export interface ActiveProofTopologySpec {
   artifactStore: ProofTopologyArtifactStoreConfig
   profile:
     | 'real_scroll_prover'
     | 'real_scroll_withdrawal'
     | 'real_scroll_withdrawal_full_topology'
+    | 'withdrawal_mock_prover'
+    | 'withdrawal_mock_prover_real_materialize'
   realScroll: ProofTopologyRealScrollConfig
-  release: {
-    bridgeManifest: string
-    bridgeMaterialDigest: string
-    bridgeRoot: string
-    resourcesRoot: string
-    softwareManifest: string
-    softwareReleaseDigest: string
-    softwareRoot: string
-  }
-  workerLaunch: 'external' | 'local_cpu' | 'local_cuda'
+  workerLaunch: ProofWorkerLaunch
 }
 
 export interface ProofTopologyDeploymentConfig {
-  artifactLocalRoot?: string
+  artifactKeyPrefix: string
   coordinatorId?: string
   generatedMaterialsRoot?: string
+  mockWorkerImage: ProofTopologyImageReference
+  productionWorkerImage?: ProofTopologyImageReference
   proofWorkBind?: string
   proofWorkPublicUrl?: string
   proofWorkTokenFile?: string
   protocolContextPath?: string
-  /** Deployment-relative protocol context copied into an external Worker bundle. */
-  protocolContextSource?: string
   proverBind?: string
   proverPublicUrl?: string
+  publicS3EndpointUrl?: string
   readinessEvidencePath?: string
-  /** Runtime mount corresponding to the selected profile's resourcesRoot. */
+  /** Runtime mount corresponding to realScroll.resourcesRoot. */
   resourcesMountPath?: string
-  /** Existing PVC pre-populated with the selected release at resourcesMountPath. */
+  /** Existing PVC pre-populated with proof material at resourcesMountPath. */
   resourcesPersistentVolumeClaim?: string
-  /** Optional Kubernetes placement for the compiler-selected local production Worker. */
+  /** How scroll-sdk-cli installs adapter-managed local_cpu/local_cuda Workers. */
+  workerDeploymentBackend?: ProofWorkerDeploymentBackend
   workerNodeSelector?: Record<string, string>
-  /** Kubernetes resources for the compiler-selected local production Worker. */
   workerResources?: {
     limits?: Record<string, number | string>
     requests?: Record<string, number | string>
   }
-  /** RuntimeClass for the compiler-selected local production Worker, for example `nvidia`. */
   workerRuntimeClassName?: string
-  /** Existing Kubernetes Secret containing the selected Worker token key. */
   workerSecretName?: string
   workerTokenFile?: string
-  /** Kubernetes tolerations for compiler-selected local Workers. */
   workerTolerations?: Array<{
     effect?: 'NoExecute' | 'NoSchedule' | 'PreferNoSchedule'
     key?: string
@@ -133,12 +120,10 @@ export interface ProofTopologyDeploymentConfig {
 }
 
 export interface ProofTopologySpec {
+  active?: ActiveProofTopologySpec
   compiler: ProofTopologyCompilerConfig
-  deployment?: ProofTopologyDeploymentConfig
-  mock?: MockProofTopologySpec
-  mode: ProofSystemMode
-  production?: ProductionProofTopologySpec
-  recovery?: {
-    preTsukiDirectSignMaxEndBatchHeight: number
-  }
+  deployment: ProofTopologyDeploymentConfig
+  enforcement: ProofEnforcement
+  generation: ProofGeneration
+  mode: ProofTopologyMode
 }

@@ -6,7 +6,6 @@ import * as path from 'node:path'
 
 import type {ProofCoordinatorConfig} from '../types/deployment-spec.js'
 import type {ProofTopologySpec} from '../types/proof-topology.js'
-import type {ProofSystemMode} from './proof-system-mode.js'
 
 import {
   type CompiledProverWorkerBundleResult,
@@ -20,7 +19,7 @@ import {
   compileProofTopology,
 } from './proof-topology-compiler.js'
 import {
-  assertNoInlineWithdrawalConfig,
+  WITHDRAWAL_CONFIG_FILE,
   ensureWithdrawalChartWiring,
   ensureWithdrawalProofActivationSwitch,
 } from './withdrawal-config.js'
@@ -28,9 +27,11 @@ import {
 const MATERIALS_CONFIG_MAP = 'proof-topology-materials'
 const MATERIALS_VOLUME = 'proof-topology-materials'
 const RESOURCES_VOLUME = 'proof-topology-resources'
-const TOPOLOGY_ANNOTATION = 'dogeos.io/proof-topology-digest'
 const TOPOLOGY_BUNDLE_ANNOTATION = 'dogeos.io/proof-topology-bundle-revision'
-const TOPOLOGY_DEPLOYMENT_ANNOTATION = 'dogeos.io/proof-topology-deployment-revision'
+const RETIRED_TOPOLOGY_ANNOTATIONS = [
+  'dogeos.io/proof-topology-digest',
+  'dogeos.io/proof-topology-deployment-revision',
+] as const
 const WORKER_READINESS_VOLUME = 'prover-worker-readiness'
 const WORKER_TOKEN_VOLUME = 'prover-worker-token'
 
@@ -57,11 +58,6 @@ export interface ReconcileCompiledProofTopologyResult {
   bundle: ValidatedProofTopologyBundle
   ethDaSubmitterValuesPath: string
   files: string[]
-  helmSetFiles: {
-    proofCoordinator: Array<{filePath: string; integrityPolicy: 'required'; key: string}>
-    proverWorker: Array<{filePath: string; integrityPolicy: 'required'; key: string}>
-    withdrawalProcessor: Array<{filePath: string; integrityPolicy: 'required'; key: string}>
-  }
   proofArtifactBaseUrl?: string
   worker?: ProverWorkerContractV1
   workerBundle?: CompiledProverWorkerBundleResult
@@ -95,14 +91,6 @@ function copyAtomic(source: string, destination: string): void {
   fs.renameSync(temporary, destination)
 }
 
-function escapeHelmKeySegment(value: string): string {
-  return value
-    .replaceAll('\\', '\\\\')
-    .replaceAll('.', '\\.')
-    .replaceAll(',', '\\,')
-    .replaceAll('=', '\\=')
-}
-
 function filesRecursively(root: string): Array<{filePath: string; relative: string}> {
   const files: Array<{filePath: string; relative: string}> = []
   const visit = (directory: string): void => {
@@ -128,28 +116,24 @@ function configureMaterials(
   values: Record<string, any>,
   materialsDir: string | undefined,
   runtimeRoot: string,
-): Array<{filePath: string; integrityPolicy: 'required'; key: string}> {
+): void {
   values.configMaps ||= {}
   values.persistence ||= {}
   if (!materialsDir) {
     delete values.configMaps[MATERIALS_CONFIG_MAP]
     delete values.persistence[MATERIALS_VOLUME]
-    return []
+    return
   }
 
   const materials = filesRecursively(materialsDir)
   const data: Record<string, string> = {}
   const items: Array<{key: string; path: string}> = []
-  const bindings = materials.map((material, index) => {
+  for (const [index, material] of materials.entries()) {
     const key = `material-${String(index).padStart(2, '0')}-${path.basename(material.relative)}`
-    data[key] = ''
+    data[key] = fs.readFileSync(material.filePath, 'utf8')
     items.push({key, path: material.relative})
-    return {
-      filePath: material.filePath,
-      integrityPolicy: 'required' as const,
-      key: `configMaps.${MATERIALS_CONFIG_MAP}.data.${escapeHelmKeySegment(key)}`,
-    }
-  })
+  }
+
   values.configMaps[MATERIALS_CONFIG_MAP] = {data, enabled: true}
   values.persistence[MATERIALS_VOLUME] = {
     enabled: true,
@@ -159,15 +143,10 @@ function configureMaterials(
     readOnly: true,
     type: 'configMap',
   }
-  return bindings
 }
 
-function selectedRealScroll(topology: ProofTopologySpec, mode: ProofSystemMode) {
-  return mode === 'mock'
-    ? topology.mock?.realScroll
-    : mode === 'production'
-      ? topology.production?.realScroll
-      : undefined
+function selectedRealScroll(topology: ProofTopologySpec) {
+  return topology.mode === 'active' ? topology.active?.realScroll : undefined
 }
 
 function workerArgument(worker: ProverWorkerContractV1, flag: string): string {
@@ -181,8 +160,6 @@ function configureWorkerValues(
   filePath: string,
   input: {
     bundleRevision: string
-    deploymentRevision: string
-    digest: string
     generatedMaterialsRoot: string
     materialsDir?: string
     proofCoordinator?: ProofCoordinatorConfig
@@ -191,12 +168,13 @@ function configureWorkerValues(
     topology: ProofTopologySpec
     worker?: ProverWorkerContractV1
   },
-): Array<{filePath: string; integrityPolicy: 'required'; key: string}> {
+): void {
   const values = readYaml(filePath)
   const local = input.worker?.desired_state === 'local_deployment'
+    && (input.topology.deployment.workerDeploymentBackend || 'docker_compose') === 'kubernetes'
   values.controller ||= {}
   values.controller.replicas = local ? 1 : 0
-  annotate(values, input.digest, input.bundleRevision, input.deploymentRevision)
+  annotate(values, input.bundleRevision)
 
   if (!local || !input.worker) {
     values.args = []
@@ -212,7 +190,7 @@ function configureWorkerValues(
     delete values.runtimeClassName
     delete values.tolerations
     writeYaml(filePath, values)
-    return []
+    return
   }
 
   const {worker} = input
@@ -263,7 +241,7 @@ function configureWorkerValues(
     type: 'emptyDir',
   }
 
-  const bindings = configureMaterials(
+  configureMaterials(
     values,
     input.materialsDir,
     input.generatedMaterialsRoot,
@@ -288,9 +266,9 @@ function configureWorkerValues(
   }
 
   values.probes.liveness = {enabled: false}
-  if (input.topology.mode === 'production') {
+  if (input.topology.generation === 'real') {
     if (deployment.workerResources) values.resources = deployment.workerResources
-    else if (input.topology.production?.workerLaunch === 'local_cuda') {
+    else if (input.topology.active?.workerLaunch === 'local_cuda') {
       values.resources = {
         limits: {'nvidia.com/gpu': 1},
         requests: {'nvidia.com/gpu': 1},
@@ -314,7 +292,6 @@ function configureWorkerValues(
   }
 
   writeYaml(filePath, values)
-  return bindings
 }
 
 function deploymentFile(root: string, relative: string, label: string): string {
@@ -350,30 +327,30 @@ function configureProofResources(
 
 function annotate(
   values: Record<string, any>,
-  digest: string,
   bundleRevision: string,
-  deploymentRevision: string,
 ): void {
   values.podAnnotations ||= {}
-  values.podAnnotations[TOPOLOGY_ANNOTATION] = digest
+  for (const key of RETIRED_TOPOLOGY_ANNOTATIONS) delete values.podAnnotations[key]
   values.podAnnotations[TOPOLOGY_BUNDLE_ANNOTATION] = bundleRevision
-  values.podAnnotations[TOPOLOGY_DEPLOYMENT_ANNOTATION] = deploymentRevision
 }
 
 function configureWithdrawalValues(
   filePath: string,
-  mode: ProofSystemMode,
-  digest: string,
+  configContent: string,
+  mode: ProofTopologySpec['mode'],
   bundleRevision: string,
-  deploymentRevision: string,
   materialsDir: string | undefined,
   generatedMaterialsRoot: string,
   resourceClaim: string | undefined,
   resourcesMountPath: string,
-): Array<{filePath: string; integrityPolicy: 'required'; key: string}> {
+): void {
   const values = readYaml(filePath)
   ensureWithdrawalChartWiring(values)
-  assertNoInlineWithdrawalConfig(values)
+  values.configMaps ||= {}
+  values.configMaps.config ||= {}
+  values.configMaps.config.enabled = true
+  values.configMaps.config.data ||= {}
+  values.configMaps.config.data[WITHDRAWAL_CONFIG_FILE] = configContent
   ensureWithdrawalProofActivationSwitch(values, mode)
   values.service ||= {}
   values.service.main ||= {}
@@ -388,27 +365,25 @@ function configureWithdrawalValues(
     }
   }
 
-  annotate(values, digest, bundleRevision, deploymentRevision)
-  const bindings = configureMaterials(
+  annotate(values, bundleRevision)
+  configureMaterials(
     values,
     materialsDir,
     generatedMaterialsRoot,
   )
   configureProofResources(values, mode === 'disabled' ? undefined : resourceClaim, resourcesMountPath)
   writeYaml(filePath, values)
-  return bindings
 }
 
 function configureCoordinatorValues(
   filePath: string,
-  digest: string,
+  configContent: string,
   bundleRevision: string,
-  deploymentRevision: string,
   materialsDir: string,
   generatedMaterialsRoot: string,
   resourceClaim: string | undefined,
   resourcesMountPath: string,
-): Array<{filePath: string; integrityPolicy: 'required'; key: string}> {
+): void {
   const values = readYaml(filePath)
   // Native compiler output is authoritative. Leaving old Figment variables in
   // the chart would partially override its strict tables after compilation.
@@ -417,6 +392,8 @@ function configureCoordinatorValues(
   )
   values.proofCoordinator ||= {}
   values.proofCoordinator.config ||= {}
+  values.proofCoordinator.config.content = configContent
+  values.proofCoordinator.config.existingConfigMap = ''
   values.proofCoordinator.config.required = true
   values.controller ||= {}
   values.controller.replicas = 1
@@ -430,38 +407,67 @@ function configureCoordinatorValues(
     protocol: 'TCP',
     targetPort: 7788,
   }
-  annotate(values, digest, bundleRevision, deploymentRevision)
-  const bindings = configureMaterials(
+  values.ingress ||= {}
+  values.ingress.main ||= {}
+  values.ingress.main.enabled = true
+  annotate(values, bundleRevision)
+  configureMaterials(
     values,
     materialsDir,
     generatedMaterialsRoot,
   )
   configureProofResources(values, resourceClaim, resourcesMountPath)
   writeYaml(filePath, values)
-  return bindings
 }
 
 function configureAbsentCoordinatorValues(
   filePath: string,
-  digest: string,
   bundleRevision: string,
-  deploymentRevision: string,
+  generation: ProofTopologySpec['generation'],
 ): void {
   const values = readYaml(filePath)
+  // The deployment keeps PC warm across proof-mode changes. A disabled
+  // compiler bundle intentionally has no PC projection, so install a minimal
+  // observe/local_fs idle config instead of retaining a stale active topology.
+  // With WP's proof-work API disabled it has no work to claim, and active
+  // compilation replaces this config atomically later.
+  values.env = (Array.isArray(values.env) ? values.env : []).filter(
+    (item: any) => !String(item?.name || '').startsWith('DOGEOS_PROOF_COORDINATOR_'),
+  )
   values.controller ||= {}
-  values.controller.replicas = 0
+  values.controller.replicas = 1
   values.proofCoordinator ||= {}
   values.proofCoordinator.config ||= {}
-  values.proofCoordinator.config.required = false
+  values.proofCoordinator.config.content = [
+    '# Idle Proof Coordinator configuration for disabled proof topology.',
+    '# WP does not expose proof work and no prover gateway or materializer runs.',
+    'protocol_context_json = "/app/protocol_context.json"',
+    'proof_work_base_url = "http://127.0.0.1:9300"',
+    'coordinator_id = "proof-coordinator-idle"',
+    `generation = "${generation}"`,
+    '',
+    '[artifact_store]',
+    'kind = "local_fs"',
+    'root = "/app/data/proof-artifacts"',
+    '',
+    '[verifier]',
+    'enforcement = "observe"',
+    '',
+  ].join('\n')
+  values.proofCoordinator.config.existingConfigMap = ''
+  values.proofCoordinator.config.required = true
   values.service ||= {}
   values.service.main ||= {}
-  values.service.main.enabled = false
+  values.service.main.enabled = true
+  values.ingress ||= {}
+  values.ingress.main ||= {}
+  values.ingress.main.enabled = true
   values.configMaps ||= {}
   values.persistence ||= {}
   delete values.configMaps[MATERIALS_CONFIG_MAP]
   delete values.persistence[MATERIALS_VOLUME]
   delete values.persistence[RESOURCES_VOLUME]
-  annotate(values, digest, bundleRevision, deploymentRevision)
+  annotate(values, bundleRevision)
   writeYaml(filePath, values)
 }
 
@@ -472,9 +478,7 @@ function envName(section: string, field: string): string {
 function applySubmitterPatch(
   filePath: string,
   patchPath: string,
-  digest: string,
   bundleRevision: string,
-  deploymentRevision: string,
 ): void {
   const values = readYaml(filePath)
   values.configMaps ||= {}
@@ -503,7 +507,7 @@ function applySubmitterPatch(
     }
   }
 
-  annotate(values, digest, bundleRevision, deploymentRevision)
+  annotate(values, bundleRevision)
   writeYaml(filePath, values)
 }
 
@@ -582,38 +586,34 @@ export function reconcileCompiledProofTopology(
   const generatedMaterialsRoot = topology.deployment?.generatedMaterialsRoot
     || '/app/data/proof-topology'
   const resourcesMountPath = topology.deployment?.resourcesMountPath
-    || '/app/data/proof-release'
+    || '/app/data/proof-materials'
   const resourceClaim = topology.deployment?.resourcesPersistentVolumeClaim
-  const selectedResourceClaim = selectedRealScroll(topology, mode) ? resourceClaim : undefined
-  const withdrawalMaterialBindings = configureWithdrawalValues(
+  const selectedResourceClaim = selectedRealScroll(topology) ? resourceClaim : undefined
+  configureWithdrawalValues(
     withdrawalValuesPath,
+    fs.readFileSync(options.withdrawalConfigPath, 'utf8'),
     mode,
-    bundle.plan.to_digest,
     bundle.manifest.bundle_revision,
-    bundle.plan.to_deployment_revision,
     materialsDir,
     generatedMaterialsRoot,
     selectedResourceClaim,
     resourcesMountPath,
   )
-  let coordinatorMaterialBindings: ReturnType<typeof configureMaterials> = []
   if (mode === 'disabled') {
     configureAbsentCoordinatorValues(
       coordinatorValuesPath,
-      bundle.plan.to_digest,
       bundle.manifest.bundle_revision,
-      bundle.plan.to_deployment_revision,
+      topology.generation,
     )
   } else {
     if (!materialsDir || !coordinatorSource) {
       throw new Error('active compiler bundle is missing coordinator config or generated materials')
     }
 
-    coordinatorMaterialBindings = configureCoordinatorValues(
+    configureCoordinatorValues(
       coordinatorValuesPath,
-      bundle.plan.to_digest,
+      fs.readFileSync(options.coordinatorConfigPath, 'utf8'),
       bundle.manifest.bundle_revision,
-      bundle.plan.to_deployment_revision,
       materialsDir,
       generatedMaterialsRoot,
       selectedResourceClaim,
@@ -625,10 +625,8 @@ export function reconcileCompiledProofTopology(
     throw new Error(`Prover Worker values template not found: ${workerValuesPath}`)
   }
 
-  const workerMaterialBindings = configureWorkerValues(workerValuesPath, {
+  configureWorkerValues(workerValuesPath, {
     bundleRevision: bundle.manifest.bundle_revision,
-    deploymentRevision: bundle.plan.to_deployment_revision,
-    digest: bundle.plan.to_digest,
     generatedMaterialsRoot,
     materialsDir,
     proofCoordinator: options.proofCoordinator,
@@ -639,19 +637,22 @@ export function reconcileCompiledProofTopology(
   })
 
   let workerBundle: CompiledProverWorkerBundleResult | undefined
-  if (bundle.worker?.desired_state === 'external') {
+  const workerDeploymentBackend = topology.deployment.workerDeploymentBackend || 'docker_compose'
+  const composeWorker = bundle.worker && (
+    bundle.worker.desired_state === 'external'
+    || workerDeploymentBackend === 'docker_compose'
+  ) ? bundle.worker : undefined
+  if (composeWorker) {
     if (!bundle.manifest.prover_worker || !materialsDir) {
-      throw new Error('external compiler Worker requires its contract and generated materials')
+      throw new Error('Docker Compose Worker requires its compiler contract and generated materials')
     }
 
-    const realScroll = selectedRealScroll(topology, mode)
-    if (!realScroll) throw new Error('external compiler Worker requires selected realScroll resources')
+    const realScroll = selectedRealScroll(topology)
+    if (!realScroll) throw new Error('Docker Compose Worker requires selected realScroll resources')
     const deploymentRoot = path.resolve(options.deploymentDir)
-    const selectedResourcesRoot = mode === 'production'
-      ? topology.production?.release.resourcesRoot
-      : realScroll.resourcesRoot
+    const selectedResourcesRoot = realScroll.resourcesRoot
     if (!selectedResourcesRoot) {
-      throw new Error(`external ${mode} Worker requires a deployment-relative resources root`)
+      throw new Error(`Docker Compose ${mode} Worker requires a deployment-relative resources root`)
     }
 
     workerBundle = writeCompiledProverWorkerBundle({
@@ -661,8 +662,8 @@ export function reconcileCompiledProofTopology(
       generatedMaterialsRoot,
       protocolContextPath: deploymentFile(
         deploymentRoot,
-        topology.deployment?.protocolContextSource || '.data/protocol_context.json',
-        'proofTopology.deployment.protocolContextSource',
+        '.data/protocol_context.json',
+        'deployment protocol context',
       ),
       protocolContextRuntimePath:
         topology.deployment?.protocolContextPath || '/app/protocol_context.json',
@@ -670,11 +671,9 @@ export function reconcileCompiledProofTopology(
       resourcesRoot: deploymentFile(
         deploymentRoot,
         selectedResourcesRoot,
-        mode === 'production'
-          ? 'proofTopology.production.release.resourcesRoot'
-          : `proofTopology.${mode}.realScroll.resourcesRoot`,
+        'proofTopology.active.realScroll.resourcesRoot',
       ),
-      worker: bundle.worker,
+      worker: composeWorker,
     })
   }
 
@@ -685,20 +684,11 @@ export function reconcileCompiledProofTopology(
   applySubmitterPatch(
     submitterValuesPath,
     path.join(bundle.bundleDir, bundle.manifest.eth_da_submitter),
-    bundle.plan.to_digest,
     bundle.manifest.bundle_revision,
-    bundle.plan.to_deployment_revision,
   )
 
-  const proofCoordinatorBindings = coordinatorSource
-    ? [
-        {
-          filePath: options.coordinatorConfigPath,
-          integrityPolicy: 'required' as const,
-          key: 'proofCoordinator.config.content',
-        },
-        ...coordinatorMaterialBindings,
-      ]
+  const generatedMaterialFiles = materialsDir
+    ? filesRecursively(materialsDir).map(material => material.filePath)
     : []
   return {
     bundle,
@@ -710,21 +700,9 @@ export function reconcileCompiledProofTopology(
       coordinatorValuesPath,
       workerValuesPath,
       submitterValuesPath,
-      ...withdrawalMaterialBindings.map(binding => binding.filePath),
+      ...generatedMaterialFiles,
       ...(workerBundle?.files || []),
     ],
-    helmSetFiles: {
-      proofCoordinator: proofCoordinatorBindings,
-      proverWorker: workerMaterialBindings,
-      withdrawalProcessor: [
-        {
-          filePath: options.withdrawalConfigPath,
-          integrityPolicy: 'required',
-          key: 'configMaps.config.data.WithdrawalProcessor\\.toml',
-        },
-        ...withdrawalMaterialBindings,
-      ],
-    },
     proofArtifactBaseUrl: argumentValue(bundle.worker, '--artifact-read-base-url'),
     worker: bundle.worker,
     workerBundle,

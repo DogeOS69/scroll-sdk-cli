@@ -14,7 +14,7 @@ import {
 import {readProverWorkerTokenFromSecretsManager} from '../../utils/proof-worker-token.js'
 
 export default class ProofWorker extends Command {
-  static override description = 'Hydrate a compiler-generated external prover-worker bundle with its bearer token after deterministic configuration generation'
+  static override description = 'Hydrate a compiler-generated Docker Compose prover-worker bundle with its bearer token after deterministic configuration generation'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
@@ -36,9 +36,9 @@ export default class ProofWorker extends Command {
     try {
       const deploymentDir = path.resolve(flags['deployment-dir'])
       const {contract} = readProofDeploymentContract(deploymentDir)
-      if (contract.worker.kind !== 'compiled-external') {
+      if (!['compiled-compose', 'compiled-external'].includes(contract.worker.kind)) {
         throw new Error(
-          `setup proof-worker requires an external generated Compose worker bundle; `
+          `setup proof-worker requires a generated Docker Compose Worker bundle; `
           + `current mode is ${contract.mode} (${contract.worker.kind})`,
         )
       }
@@ -80,7 +80,7 @@ export default class ProofWorker extends Command {
         )
       }
 
-      json.logSuccess(`Hydrated ${contract.mode} prover-worker bundle ${bundle.bundleId}`)
+      json.logSuccess(`Hydrated ${contract.mode}/${contract.generation} prover-worker bundle ${bundle.bundleId}`)
       json.info(
         'Sync the selected proof resources and exact compiler Worker bundle to the worker host, '
         + `run scrollsdk setup proof-worker-check --bundle-dir ${bundle.bundleDir} `

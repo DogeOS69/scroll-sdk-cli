@@ -22,8 +22,8 @@ import {
 } from '../../utils/proof-aws-provisioner.js'
 
 export const PROOF_AWS_INIT_NEXT_STEPS =
-  'run scrollsdk setup doge-config --proof-topology (disabled/mock need no release manifest), '
-  + 'then run scrollsdk setup prep-charts; run proof-release-init first only when staging production'
+  'run scrollsdk setup proof-materials, then scrollsdk setup doge-config --proof-topology, '
+  + 'then run scrollsdk setup prep-charts'
 
 export default class ProofAwsInit extends Command {
   static override description = 'Provision proof AWS resources and persist their non-secret resource facts as prep-charts input; never read or modify generated Helm values'

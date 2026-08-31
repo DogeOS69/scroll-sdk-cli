@@ -22,7 +22,7 @@ function worker(): ProverWorkerContractV1 {
       '--worker-token-file',
       '/app/secrets/prover-worker-token',
       '--chunk-app-exe',
-      '/app/data/proof-release/chunk/app.vmexe',
+      '/app/data/proof-materials/chunk/app.vmexe',
     ],
     capabilities: ['scroll_chunk'],
     desired_state: 'external',
@@ -42,6 +42,17 @@ function worker(): ProverWorkerContractV1 {
     readiness_evidence_path: '/run/dogeos/prover-worker-ready-v1.json',
     required_build_class: 'production',
     schema_version: 1,
+  }
+}
+
+function mockLocalWorker(): ProverWorkerContractV1 {
+  const value = worker()
+  return {
+    ...value,
+    desired_state: 'local_deployment',
+    image: {...value.image, repository: 'dogeos69/prover-worker-mock'},
+    placement: 'local_cpu',
+    required_build_class: 'mock_capable',
   }
 }
 
@@ -79,7 +90,7 @@ describe('compiled prover-worker bundle', () => {
       generatedMaterialsRoot: '/app/data/proof-topology',
       protocolContextPath: path.join(root, '.data/protocol_context.json'),
       protocolContextRuntimePath: '/app/protocol_context.json',
-      resourcesMountPath: '/app/data/proof-release',
+      resourcesMountPath: '/app/data/proof-materials',
       resourcesRoot,
       worker: worker(),
     })
@@ -92,15 +103,36 @@ describe('compiled prover-worker bundle', () => {
     expect(compose.services['prover-worker'].environment.DOGEOS_PROOF_TOPOLOGY_DIGEST)
       .to.equal(DIGEST)
     expect(compose.services['prover-worker'].volumes)
-      .to.include(`${String.fromCodePoint(36)}{PROOF_RESOURCES_ROOT:?missing PROOF_RESOURCES_ROOT}:/app/data/proof-release:ro`)
+      .to.include(`${String.fromCodePoint(36)}{PROOF_RESOURCES_ROOT:?missing PROOF_RESOURCES_ROOT}:/app/data/proof-materials:ro`)
     const manifest = JSON.parse(fs.readFileSync(result.manifestFile, 'utf8'))
     expect(manifest.credentialState).to.equal('pending')
     expect(manifest.requiredResources).to.deep.include({
       path: 'chunk/app.vmexe',
-      runtimePath: '/app/data/proof-release/chunk/app.vmexe',
+      runtimePath: '/app/data/proof-materials/chunk/app.vmexe',
       sha256: manifest.requiredResources[0].sha256,
       type: 'file',
     })
+  })
+
+  it('accepts adapter-managed local CPU contracts without adding GPU runtime', () => {
+    const local = mockLocalWorker()
+    fs.writeFileSync(contractFile, `${JSON.stringify(local, null, 2)}\n`)
+    writeCompiledProverWorkerBundle({
+      bundleDir,
+      contractFile,
+      generatedMaterialsDir: path.join(root, '.data/generated/proof-topology/materials'),
+      generatedMaterialsRoot: '/app/data/proof-topology',
+      protocolContextPath: path.join(root, '.data/protocol_context.json'),
+      protocolContextRuntimePath: '/app/protocol_context.json',
+      resourcesMountPath: '/app/data/proof-materials',
+      resourcesRoot,
+      worker: local,
+    })
+
+    const compose = yaml.load(fs.readFileSync(path.join(bundleDir, 'docker-compose.yml'), 'utf8')) as any
+    expect(compose.services['prover-worker'].image)
+      .to.equal(`dogeos69/prover-worker-mock@sha256:${'b'.repeat(64)}`)
+    expect(compose.services['prover-worker']).not.to.have.property('gpus')
   })
 
   it('hydrates a 0600 token without changing bundle identity and detects resource drift', () => {
@@ -111,7 +143,7 @@ describe('compiled prover-worker bundle', () => {
       generatedMaterialsRoot: '/app/data/proof-topology',
       protocolContextPath: path.join(root, '.data/protocol_context.json'),
       protocolContextRuntimePath: '/app/protocol_context.json',
-      resourcesMountPath: '/app/data/proof-release',
+      resourcesMountPath: '/app/data/proof-materials',
       resourcesRoot,
       worker: worker(),
     })
@@ -136,7 +168,7 @@ describe('compiled prover-worker bundle', () => {
       generatedMaterialsRoot: '/app/data/proof-topology',
       protocolContextPath: path.join(root, '.data/protocol_context.json'),
       protocolContextRuntimePath: '/app/protocol_context.json',
-      resourcesMountPath: '/app/data/proof-release',
+      resourcesMountPath: '/app/data/proof-materials',
       resourcesRoot,
       worker: worker(),
     })

@@ -5,14 +5,14 @@ import {verifyCompiledProverWorkerBundle} from '../../utils/compiled-prover-work
 import { JsonOutputContext } from '../../utils/json-output.js'
 
 export default class ProofWorkerCheck extends Command {
-  static override description = 'Verify a compiler-generated external prover-worker bundle, selected resources, secret-file mode, and optional expected bundle ID'
+  static override description = 'Verify a compiler-generated Docker Compose prover-worker bundle, selected resources, secret-file mode, and optional expected bundle ID'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %> --bundle-dir /srv/dogeos/prover-worker-production/docker-compose --resources-root /srv/dogeos/proof-resources --expected-bundle-id <sha256>',
   ]
 
   static override flags = {
-    'bundle-dir': Flags.string({ description: 'Compiler-generated external Worker Compose bundle directory', required: true }),
+    'bundle-dir': Flags.string({ description: 'Compiler-generated Worker Compose bundle directory', required: true }),
     'expected-bundle-id': Flags.string({ description: 'Expected bundle ID written by prep-charts; use on the worker host to reject a stale synchronized bundle' }),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
     'resources-root': Flags.string({

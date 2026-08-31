@@ -1,47 +1,45 @@
-import * as fs from 'node:fs'
-import * as path from 'node:path'
-
-import type {PreparedProofProductionInputs} from '../types/proof-release.js'
+import type {ProofMaterialsV1} from '../types/proof-materials.js'
 import type {
+  ProofEnforcement,
+  ProofGeneration,
   ProofTopologyArtifactStoreConfig,
-  ProofTopologyDeploymentConfig,
-  ProofTopologyImageReference,
-  ProofTopologyRealScrollConfig,
   ProofTopologySpec,
+  ProofWorkerDeploymentBackend,
+  ProofWorkerLaunch,
 } from '../types/proof-topology.js'
-import type {ProofSystemMode} from './proof-system-mode.js'
 
-import {productionReleaseForTopology} from './proof-release.js'
-
-export const DEFAULT_PROOF_RESOURCES_PVC = 'dogeos-proof-release'
 export const DEFAULT_PROOF_KEY_PREFIX = 'proof-topology'
 
+export function awsS3Endpoint(region: string): string {
+  return region === 'us-east-1'
+    ? 'https://s3.amazonaws.com'
+    : `https://s3.${region}.amazonaws.com`
+}
+
 export interface ProofTopologyRuntimeInput {
+  artifactKeyPrefix?: string
   blockWitnessDir?: string
-  proofCoordinatorPublicUrl?: string
+  proofCoordinatorPublicUrl: string
   publicS3EndpointUrl?: string
-  resourcesPersistentVolumeClaim?: string
   rpcWitnessUrl?: string
   witnessSource?: 'block_witness_dir' | 'rpc'
+  workerDeploymentBackend?: ProofWorkerDeploymentBackend
+  workerLaunch?: ProofWorkerLaunch
   workerNodeSelector?: Record<string, string>
-  workerResources?: ProofTopologyDeploymentConfig['workerResources']
+  workerResources?: ProofTopologySpec['deployment']['workerResources']
   workerRuntimeClassName?: string
   workerSecretName?: string
-  workerTolerations?: ProofTopologyDeploymentConfig['workerTolerations']
+  workerTolerations?: ProofTopologySpec['deployment']['workerTolerations']
 }
 
 export interface BuildProofTopologyOptions {
   artifactStore: ProofTopologyArtifactStoreConfig
-  compilerImage: ProofTopologyImageReference
-  deploymentDir?: string
   deploymentName: string
-  mockWorkerImage: ProofTopologyImageReference
-  mode?: ProofSystemMode
-  production?: {
-    inputs: PreparedProofProductionInputs
-    workerLaunch: 'external' | 'local_cpu' | 'local_cuda'
-  }
-  runtime?: ProofTopologyRuntimeInput
+  enforcement?: ProofEnforcement
+  generation?: ProofGeneration
+  materials: ProofMaterialsV1
+  mode?: 'active' | 'disabled'
+  runtime: ProofTopologyRuntimeInput
 }
 
 function nonEmpty(value: string | undefined, label: string): string {
@@ -49,7 +47,7 @@ function nonEmpty(value: string | undefined, label: string): string {
   return value.trim()
 }
 
-function validateHttpUrl(value: string, label: string): string {
+function httpUrl(value: string, label: string, workerVisible = false): string {
   let parsed: URL
   try {
     parsed = new URL(value)
@@ -57,180 +55,115 @@ function validateHttpUrl(value: string, label: string): string {
     throw new Error(`${label} must be an absolute http(s) URL`)
   }
 
-  if (
-    !['http:', 'https:'].includes(parsed.protocol)
-    || !parsed.hostname
-    || parsed.username
-    || parsed.password
-    || parsed.search
-    || parsed.hash
-  ) {
-    throw new Error(
-      `${label} must be an absolute http(s) URL without userinfo, query, or fragment`,
-    )
+  if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error(`${label} must be an absolute http(s) URL without credentials, query, or fragment`)
+  }
+
+  if (workerVisible && parsed.protocol === 'http:' && !['::1', '127.0.0.1', 'localhost'].includes(parsed.hostname)) {
+    throw new Error(`${label} must use HTTPS unless it is an explicit loopback tunnel`)
   }
 
   return value.replace(/\/$/, '')
 }
 
-function validateWorkerVisibleUrl(value: string, label: string): string {
-  const normalized = validateHttpUrl(value, label)
-  const parsed = new URL(normalized)
-  if (parsed.protocol === 'http:' && parsed.hostname !== '127.0.0.1') {
-    throw new Error(
-      `${label} must use HTTPS unless it is http://127.0.0.1 for an explicit loopback tunnel`,
-    )
-  }
-
-  return normalized
-}
-
-function validateImage(
-  image: ProofTopologyImageReference,
-  label: string,
-): ProofTopologyImageReference {
-  if (!image.repository?.trim()) throw new Error(`${label}.repository must not be empty`)
-  if (!/^sha256:[\da-f]{64}$/.test(image.digest)) {
-    throw new Error(`${label}.digest must match sha256:[0-9a-f]{64}`)
-  }
-
-  return {...image}
-}
-
-function validateArtifactStore(
-  store: ProofTopologyArtifactStoreConfig,
-): ProofTopologyArtifactStoreConfig {
-  if (store.kind !== 's3_compatible') {
-    throw new Error(
-      'staging a proof topology requires an s3_compatible artifact store; '
-      + 'prepare AWS/S3-compatible resources before initialization',
-    )
-  }
-
+function artifactStore(value: ProofTopologyArtifactStoreConfig): ProofTopologyArtifactStoreConfig {
+  if (value.kind !== 's3_compatible') throw new Error('proof deployment requires an s3_compatible artifact store')
   return {
-    bucket: nonEmpty(store.bucket, 'proof artifact store bucket'),
-    endpointUrl: validateHttpUrl(
-      nonEmpty(store.endpointUrl, 'proof artifact store endpointUrl'),
-      'proof artifact store endpointUrl',
-    ),
-    forcePathStyle: store.forcePathStyle ?? false,
-    keyPrefix: nonEmpty(store.keyPrefix || DEFAULT_PROOF_KEY_PREFIX, 'proof artifact keyPrefix'),
+    bucket: nonEmpty(value.bucket, 'proof artifact bucket'),
+    endpointUrl: httpUrl(nonEmpty(value.endpointUrl, 'proof artifact endpoint'), 'proof artifact endpoint'),
+    forcePathStyle: value.forcePathStyle ?? false,
     kind: 's3_compatible',
-    maxReadBodyBytes: store.maxReadBodyBytes || 512 * 1024 * 1024,
-    region: nonEmpty(store.region, 'proof artifact store region'),
+    maxReadBodyBytes: value.maxReadBodyBytes ?? 512 * 1024 * 1024,
+    region: nonEmpty(value.region, 'proof artifact region'),
   }
-}
-
-function productionRealScroll(
-  options: BuildProofTopologyOptions,
-): ProofTopologyRealScrollConfig {
-  const runtime = options.runtime || {}
-  const witnessSource = runtime.witnessSource || 'rpc'
-  const real: ProofTopologyRealScrollConfig = {
-    chunkWitnessSource: witnessSource,
-    ...(runtime.publicS3EndpointUrl
-      ? {
-          s3PublicEndpointUrl: validateWorkerVisibleUrl(
-            runtime.publicS3EndpointUrl,
-            'Worker-visible S3 endpoint URL',
-          ),
-        }
-      : {}),
-    workerId: `${options.deploymentName}-proof-worker-0`,
-  }
-  if (witnessSource === 'rpc') {
-    real.chunkWitnessRpcUrl = validateHttpUrl(
-      nonEmpty(runtime.rpcWitnessUrl, 'proof RPC witness URL'),
-      'proof RPC witness URL',
-    )
-  } else {
-    const {resourcesRoot} = options.production!.inputs
-    const witness = path.resolve(resourcesRoot, runtime.blockWitnessDir || 'witnesses')
-    const relative = path.relative(resourcesRoot, witness)
-    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new Error('proof block witness directory must remain inside production resources root')
-    }
-
-    if (!fs.existsSync(witness) || !fs.statSync(witness).isDirectory()) {
-      throw new Error(`proof block witness directory not found: ${witness}`)
-    }
-
-    real.chunkBlockWitnessDir = relative.replaceAll(path.sep, '/')
-  }
-
-  return real
 }
 
 export function buildProofTopology(options: BuildProofTopologyOptions): ProofTopologySpec {
-  const runtime = options.runtime || {}
-  const artifactStore = validateArtifactStore(options.artifactStore)
-  const coordinatorUrl = validateWorkerVisibleUrl(
-    nonEmpty(runtime.proofCoordinatorPublicUrl, 'proof coordinator public URL'),
-    'proof coordinator public URL',
-  )
-  const mode = options.mode || 'disabled'
-  if (mode === 'production' && !options.production) {
-    throw new Error(
-      'production mode requires prepared ProofSoftwareReleaseV1 and ProofBridgeMaterialV1 inputs',
-    )
+  const generation = options.generation ?? 'mock'
+  const mode = options.mode ?? 'disabled'
+  const {materials} = options
+  if (generation === 'real' && materials.software.identitySource !== 'real_identity_probe') {
+    throw new Error('real proof generation requires identities produced by the dogeos-core real identity probe')
   }
 
-  const deployment: ProofTopologyDeploymentConfig = {
-    artifactLocalRoot: '/app/data/proof-artifacts',
-    coordinatorId: `${options.deploymentName}-proof-coordinator`,
-    generatedMaterialsRoot: '/app/data/proof-topology',
-    proofWorkBind: '0.0.0.0:9300',
-    proofWorkPublicUrl: 'http://withdrawal-processor:9300',
-    proofWorkTokenFile: '/app/secrets/proof-work-token',
-    protocolContextPath: '/app/protocol_context.json',
-    protocolContextSource: '.data/protocol_context.json',
-    proverBind: '0.0.0.0:7788',
-    proverPublicUrl: coordinatorUrl,
-    readinessEvidencePath: '/run/dogeos/prover-worker-ready-v1.json',
-    ...(options.production
-      ? {
-          resourcesMountPath: '/app/data/proof-release',
-          resourcesPersistentVolumeClaim: nonEmpty(
-            runtime.resourcesPersistentVolumeClaim || DEFAULT_PROOF_RESOURCES_PVC,
-            'proof resources PVC',
-          ),
-        }
-      : {}),
-    ...(runtime.workerNodeSelector ? {workerNodeSelector: runtime.workerNodeSelector} : {}),
-    ...(runtime.workerResources ? {workerResources: runtime.workerResources} : {}),
-    ...(runtime.workerRuntimeClassName
-      ? {workerRuntimeClassName: runtime.workerRuntimeClassName}
-      : {}),
-    ...(runtime.workerSecretName ? {workerSecretName: runtime.workerSecretName} : {}),
-    workerTokenFile: '/app/secrets/prover-worker-token',
-    ...(runtime.workerTolerations ? {workerTolerations: runtime.workerTolerations} : {}),
+  if (generation === 'real' && (!materials.software.artifacts || !materials.bridge || !materials.images.productionWorker)) {
+    throw new Error('real proof generation requires full software artifacts, deployment-bound Bridge material, and a production Worker image in proof-materials-v1.json')
+  }
+
+  const bridgeIdentity = materials.bridge?.identity ?? materials.software.identities.bridge
+  const witnessSource = options.runtime.witnessSource ?? 'rpc'
+  if (generation === 'real' && witnessSource === 'rpc' && !options.runtime.rpcWitnessUrl) {
+    throw new Error('real proof generation with RPC witnesses requires a witness RPC URL')
+  }
+
+  const workerLaunch = options.runtime.workerLaunch ?? (generation === 'mock' ? 'local_cpu' : 'external')
+  const root = '.data/proof-materials'
+  const {artifacts} = materials.software
+  const realScroll = {
+    ...(artifacts ? {
+      aggVerifyingKeyPath: artifacts.aggregateVerifyingKey.path,
+      batchAppConfig: artifacts.batchAppConfig.path,
+      batchAppExe: artifacts.batchAppExe.path,
+      batchMaterializerBinaryPath: artifacts.batchMaterializer.path,
+      chunkAppConfig: artifacts.chunkAppConfig.path,
+      chunkAppExe: artifacts.chunkAppExe.path,
+      chunkMaterializerBinaryPath: artifacts.chunkMaterializer.path,
+    } : {}),
+    batchProgramCommitmentHashHex: materials.software.identities.batch.programCommitmentHash,
+    batchProgramCommitmentHex: materials.software.identities.batch.appCommitRaw,
+    batchVerificationKeyHashHex: materials.software.identities.batch.verificationKeyHash,
+    bridgeAppCommitRawHex: bridgeIdentity.appCommitRaw,
+    bridgeProgramCommitmentHashHex: bridgeIdentity.programCommitmentHash,
+    bridgeVerificationKeyHashHex: bridgeIdentity.verificationKeyHash,
+    chunkBlockWitnessDir: options.runtime.blockWitnessDir,
+    chunkProgramCommitmentHashHex: materials.software.identities.chunk.programCommitmentHash,
+    chunkProgramCommitmentHex: materials.software.identities.chunk.appCommitRaw,
+    chunkVerificationKeyHashHex: materials.software.identities.chunk.verificationKeyHash,
+    chunkWitnessRpcUrl: options.runtime.rpcWitnessUrl,
+    chunkWitnessSource: witnessSource,
+    l2RangeAggregationAppCommitRawHex: materials.software.identities.l2Range.appCommitRaw,
+    l2RangeAggregationProgramCommitmentHashHex: materials.software.identities.l2Range.programCommitmentHash,
+    l2RangeAggregationVerificationKeyHashHex: materials.software.identities.l2Range.verificationKeyHash,
+    resourcesRoot: root,
+    workerId: `${options.deploymentName}-proof-worker-0`,
   }
   return {
-    compiler: {image: validateImage(options.compilerImage, 'proof topology compiler image')},
-    deployment,
-    mock: {
-      artifactStore: {...artifactStore},
-      profile: 'withdrawal_mock_prover',
-      workerImage: validateImage(options.mockWorkerImage, 'mock Worker image'),
+    active: {
+      artifactStore: artifactStore(options.artifactStore),
+      profile: materials.bridge
+        ? 'real_scroll_withdrawal_full_topology'
+        : 'withdrawal_mock_prover',
+      realScroll,
+      workerLaunch,
     },
+    compiler: {image: materials.images.topologyCompiler},
+    deployment: {
+      artifactKeyPrefix: nonEmpty(options.runtime.artifactKeyPrefix ?? DEFAULT_PROOF_KEY_PREFIX, 'proof artifact key prefix'),
+      coordinatorId: `${options.deploymentName}-proof-coordinator`,
+      generatedMaterialsRoot: '/app/data/proof-topology',
+      mockWorkerImage: materials.images.mockWorker,
+      ...(materials.images.productionWorker ? {productionWorkerImage: materials.images.productionWorker} : {}),
+      proofWorkBind: '0.0.0.0:9300',
+      proofWorkPublicUrl: 'http://withdrawal-processor:9300',
+      proofWorkTokenFile: '/app/secrets/proof-work-token',
+      protocolContextPath: '/app/protocol_context.json',
+      proverBind: '0.0.0.0:7788',
+      proverPublicUrl: httpUrl(options.runtime.proofCoordinatorPublicUrl, 'Proof Coordinator URL', true),
+      publicS3EndpointUrl: options.runtime.publicS3EndpointUrl
+        ? httpUrl(options.runtime.publicS3EndpointUrl, 'external artifact endpoint')
+        : undefined,
+      readinessEvidencePath: '/run/dogeos/prover-worker-ready-v1.json',
+      resourcesMountPath: '/app/data/proof-materials',
+      workerDeploymentBackend: options.runtime.workerDeploymentBackend ?? 'docker_compose',
+      workerNodeSelector: options.runtime.workerNodeSelector,
+      workerResources: options.runtime.workerResources,
+      workerRuntimeClassName: options.runtime.workerRuntimeClassName,
+      workerSecretName: options.runtime.workerSecretName,
+      workerTokenFile: '/app/secrets/prover-worker-token',
+      workerTolerations: options.runtime.workerTolerations,
+    },
+    enforcement: options.enforcement ?? 'observe',
+    generation,
     mode,
-    ...(options.production
-      ? {
-          production: {
-            artifactStore: {...artifactStore},
-            profile: 'real_scroll_withdrawal_full_topology' as const,
-            realScroll: productionRealScroll(options),
-            release: productionReleaseForTopology(
-              options.production.inputs,
-              options.deploymentDir || '.',
-            ),
-            workerLaunch: options.production.workerLaunch,
-          },
-        }
-      : {}),
   }
-}
-
-export function awsS3Endpoint(region: string): string {
-  return `https://s3.${nonEmpty(region, 'AWS region')}.amazonaws.com`
 }

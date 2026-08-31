@@ -150,16 +150,17 @@ function argumentValue(worker: ProverWorkerContractV1, flag: string): string | u
 }
 
 function validateWorkerContract(worker: ProverWorkerContractV1): void {
-  if (
-    worker.schema_version !== 1
-    || worker.desired_state !== 'external'
-    || worker.placement !== 'external'
-  ) {
-    throw new Error('compiled Compose bundle requires a schema-v1 external Worker contract')
+  const placementMatchesState = worker.desired_state === 'external'
+    ? worker.placement === 'external'
+    : worker.placement === 'local_cpu' || worker.placement === 'local_cuda'
+  if (worker.schema_version !== 1 || !placementMatchesState) {
+    throw new Error(
+      'compiled Compose bundle requires a schema-v1 Worker contract whose desired state matches its placement',
+    )
   }
 
-  if (!SHA256.test(worker.expected_topology_digest)) {
-    throw new Error('compiled Worker expected_topology_digest must be lowercase SHA-256')
+  if (worker.expected_topology_digest && !SHA256.test(worker.expected_topology_digest)) {
+    throw new Error('compiled Worker expected_topology_digest must be lowercase SHA-256 when present')
   }
 
   if (!/^sha256:[\da-f]{64}$/.test(worker.image.digest) || !worker.image.repository.trim()) {
@@ -247,7 +248,7 @@ function composeDocument(options: {
     healthcheck: {
       test: [
         'CMD-SHELL',
-        `test -s ${shellQuote(options.worker.readiness_evidence_path)} && grep -F -- ${shellQuote(options.worker.expected_topology_digest)} ${shellQuote(options.worker.readiness_evidence_path)} >/dev/null`,
+        `test -s ${shellQuote(options.worker.readiness_evidence_path)}`,
       ],
       interval: '10s',
       timeout: '3s',
@@ -255,7 +256,10 @@ function composeDocument(options: {
       start_period: '30s',
     },
   }
-  if (options.worker.required_build_class === 'production') service.gpus = 'all'
+  if (
+    options.worker.placement === 'local_cuda'
+    || (options.worker.placement === 'external' && options.worker.required_build_class === 'production')
+  ) service.gpus = 'all'
   return {
     name: 'dogeos-proof-topology-worker',
     services: {'prover-worker': service},
@@ -433,7 +437,7 @@ export function writeCompiledProverWorkerBundle(
     requiredBuildClass: options.worker.required_build_class,
     requiredResources: requiredResources(options.worker, resourcesRoot, resourcesMountPath),
     schemaVersion: 1,
-    topologyDigest: options.worker.expected_topology_digest,
+    topologyDigest: options.worker.expected_topology_digest || sha256(JSON.stringify(options.worker)),
   }
   const manifest: CompiledProverWorkerBundleManifestV1 = {
     ...stable,
@@ -521,7 +525,7 @@ export function verifyCompiledProverWorkerBundle(options: {
   ) as ProverWorkerContractV1
   validateWorkerContract(worker)
   if (
-    worker.expected_topology_digest !== manifest.topologyDigest
+    (worker.expected_topology_digest || sha256(JSON.stringify(worker))) !== manifest.topologyDigest
     || `${worker.image.repository}@${worker.image.digest}` !== manifest.image
     || worker.required_build_class !== manifest.requiredBuildClass
   ) {

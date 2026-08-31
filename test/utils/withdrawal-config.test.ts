@@ -132,7 +132,7 @@ ${WITHDRAWAL_DEPLOYMENT_END}
       .to.throw('must be the first content of the file')
   })
 
-  it('strips migrated env while keeping secrets and activation projections', () => {
+  it('strips migrated env while leaving final proof-override cleanup to the lifecycle projector', () => {
     const values: Record<string, any> = {
       env: [
         { name: 'DOGEOS_WITHDRAWAL_NETWORK_STR', value: 'testnet' },
@@ -154,7 +154,7 @@ ${WITHDRAWAL_DEPLOYMENT_END}
     ])
   })
 
-  it('atomically projects active mock env while removing the retired partial proof-work env', () => {
+  it('projects active lifecycle without any native proof-system environment overrides', () => {
     const values: Record<string, any> = {
       env: [
         { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE', value: 'dev_dummy' },
@@ -174,19 +174,15 @@ ${WITHDRAWAL_DEPLOYMENT_END}
       withdrawalProof: { enabled: true, provingMode: 'production' },
     }
 
-    expect(ensureWithdrawalProofActivationSwitch(values, 'mock')).to.equal(true)
-    expect(values.withdrawalProof).to.deep.equal({ enabled: true, mode: 'mock', provingMode: 'mock' })
+    expect(ensureWithdrawalProofActivationSwitch(values, 'active')).to.equal(true)
+    expect(values.withdrawalProof).to.deep.equal({ enabled: true })
     expect(values.env).to.deep.equal([
       { name: 'RUST_LOG', value: 'info' },
       {
         name: 'DOGEOS_WITHDRAWAL_DATABASE_URL',
         valueFrom: { secretKeyRef: { key: 'url', name: 'withdrawal-db' } },
       },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE', value: 'dev_dummy' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION', value: 'true' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE', value: 'true' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__DEV_DUMMY__SCROLL_INPUT', value: 'exact_mock' },
     ])
-    expect(ensureWithdrawalProofActivationSwitch(values, 'mock')).to.equal(false)
+    expect(ensureWithdrawalProofActivationSwitch(values, 'active')).to.equal(false)
   })
 })

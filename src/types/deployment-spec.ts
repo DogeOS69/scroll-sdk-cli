@@ -1,8 +1,9 @@
 import type {ProofTopologySpec} from './proof-topology.js'
 
 export type {
-  MockProofTopologySpec,
-  ProductionProofTopologySpec,
+  ActiveProofTopologySpec,
+  ProofEnforcement,
+  ProofGeneration,
   ProofTopologyArtifactStoreConfig,
   ProofTopologyCompilerConfig,
   ProofTopologyDeploymentConfig,

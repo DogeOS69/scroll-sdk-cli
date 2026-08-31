@@ -35,15 +35,8 @@ export function assertProductionSignerV2Ready(options: {
     throw new Error(`/policy contract must be attestation_evidence_v2 (got ${JSON.stringify(policy.contract)})`)
   }
 
-  if (policy.policy_mode !== 'production_enforce' || ready.mode !== 'production_enforce') {
-    throw new Error('/policy and /ready must both report production_enforce')
-  }
-
-  const scaffoldFlags = policy.scaffold_flags as Record<string, unknown> | undefined
-  if (scaffoldFlags?.allow_unimplemented_checks !== false
-    || policy.scaffold_bypass_enabled !== false
-    || ready.scaffold_bypass_enabled !== false) {
-    throw new Error('production signer must disable unimplemented-check and scaffold bypasses')
+  if (policy.policy_mode !== 'enforce' || ready.mode !== 'enforce') {
+    throw new Error('/policy and /ready must both report enforce')
   }
 
   if (policy.public_key !== options.expectedPublicKey) {
@@ -81,7 +74,7 @@ export function assertProductionSignerV2Ready(options: {
 }
 
 export class SignerPreflightCommand extends Command {
-  static description = 'Probe a deployed attestation-signer and verify its runtime identity. Add --require-production-ready after applying a production bundle to require dogeos-core attestation_evidence_v2, fail-closed policy, and all four production capabilities.'
+  static description = 'Probe a deployed attestation-signer and verify its runtime identity. Add --require-production-ready after selecting enforcement=enforce to require dogeos-core attestation_evidence_v2 and all four production capabilities.'
 
   static examples = [
     '$ scrollsdk signer preflight --dir signer-partner-a-signer-0 --endpoint https://signer.partner-a.example:4040',
