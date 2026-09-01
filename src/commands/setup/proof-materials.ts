@@ -136,6 +136,10 @@ export default class ProofMaterials extends Command {
         outputRoot: flags['materials-dir'],
         producerManifest: softwareManifest ? path.resolve(softwareManifest) : undefined,
         protocolContext: protocolContext ? path.resolve(protocolContext) : undefined,
+        refreshExistingImages: generation === 'mock'
+          && Boolean(flags['compiler-image'])
+          && Boolean(flags['mock-worker-image'])
+          && !identityEnv,
       })
 
       output.logSuccess(`Prepared proof materials ${result.receiptPath}`)

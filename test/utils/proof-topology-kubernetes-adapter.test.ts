@@ -7,10 +7,16 @@ import * as path from 'node:path'
 import type {ProofTopologySpec} from '../../src/types/proof-topology.js'
 import type {ValidatedProofTopologyBundle} from '../../src/utils/proof-topology-compiler.js'
 
+import {PROVER_WORKER_EXECUTABLE} from '../../src/utils/compiled-prover-worker-bundle.js'
 import {reconcileCompiledProofTopology} from '../../src/utils/proof-topology-kubernetes-adapter.js'
 
 const BUNDLE_REVISION = 'b'.repeat(64)
 const IMAGE_DIGEST = `sha256:${'c'.repeat(64)}`
+const WORKER_ARGV = [
+  '--proof-coordinator-url', 'https://proof-coordinator.example.com',
+  '--worker-token-file', '/app/secrets/prover-worker-token',
+  '--artifact-read-base-url', 'https://proof.example.com/objects',
+]
 
 function topology(
   mode: 'active' | 'disabled',
@@ -63,11 +69,7 @@ function fakeBundle(root: string, mode: 'active' | 'disabled'): ValidatedProofTo
   }
 
   const worker = mode === 'active' ? {
-    argv: [
-      '--proof-coordinator-url', 'https://proof-coordinator.example.com',
-      '--worker-token-file', '/app/secrets/prover-worker-token',
-      '--artifact-read-base-url', 'https://proof.example.com/objects',
-    ],
+    argv: WORKER_ARGV,
     capabilities: ['scroll_chunk'],
     desired_state: 'local_deployment' as const,
     environment: [{name: 'DOGEOS_PROVER_WORKER_READY_FILE', value: '/run/dogeos/ready.json'}],
@@ -196,6 +198,8 @@ describe('self-contained proof topology Kubernetes adapter', () => {
 
     const worker = yaml.load(fs.readFileSync(path.join(root, 'values/prover-worker-production.yaml'), 'utf8')) as any
     expect(worker.controller.replicas).to.equal(1)
+    expect(worker.command).to.deep.equal([PROVER_WORKER_EXECUTABLE])
+    expect(worker.args).to.deep.equal(WORKER_ARGV)
     expect(worker.configMaps['proof-topology-materials'].data['material-00-chunk.json'])
       .to.equal('{"kind":"chunk"}\n')
     expect(fs.existsSync(path.join(root, 'prover-worker-active/docker-compose'))).to.equal(false)
@@ -222,5 +226,6 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     expect(coordinator.proofCoordinator.config.content).not.to.include('verifier_import_mode')
     const worker = yaml.load(fs.readFileSync(path.join(root, 'values/prover-worker-production.yaml'), 'utf8')) as any
     expect(worker.controller.replicas).to.equal(0)
+    expect(worker.command).to.deep.equal([])
   })
 })

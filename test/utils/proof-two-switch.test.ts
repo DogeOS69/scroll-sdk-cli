@@ -17,6 +17,10 @@ function sha256(filePath: string): string {
   return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
 }
 
+function proofImage(character: string, repository: string) {
+  return {digest: `sha256:${character.repeat(64)}`, repository}
+}
+
 describe('PR #937 two-switch proof adapter', () => {
   let root: string
 
@@ -255,6 +259,55 @@ describe('PR #937 two-switch proof adapter', () => {
     fs.writeFileSync(prepared.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`)
     expect(() => readProofMaterials(prepared.receiptPath, root)).to.throw(
       'Synthetic mock proof identities differ from the dogeos-core PR #937 fixture table',
+    )
+  })
+
+  it('refreshes explicit mock image pins without replacing prepared identities or files', () => {
+    const prepared = prepareProofMaterials({
+      deploymentDir: root,
+      generation: 'mock',
+      images: {
+        mockWorker: proofImage('1', 'dogeos69/prover-worker-mock'),
+        topologyCompiler: proofImage('2', 'dogeos69/dogeos-proof-topology'),
+      },
+    })
+    const marker = path.join(root, '.data/proof-materials/operator-marker')
+    fs.writeFileSync(marker, 'preserve')
+
+    const refreshed = prepareProofMaterials({
+      deploymentDir: root,
+      generation: 'mock',
+      images: {
+        mockWorker: proofImage('3', 'dogeos69/prover-worker-mock'),
+        topologyCompiler: proofImage('4', 'dogeos69/dogeos-proof-topology'),
+      },
+      refreshExistingImages: true,
+    })
+
+    expect(refreshed.receipt.images.mockWorker.digest).to.equal(`sha256:${'3'.repeat(64)}`)
+    expect(refreshed.receipt.images.topologyCompiler.digest).to.equal(`sha256:${'4'.repeat(64)}`)
+    expect(refreshed.receipt.software).to.deep.equal(prepared.receipt.software)
+    expect(fs.readFileSync(marker, 'utf8')).to.equal('preserve')
+    expect(readProofMaterials(refreshed.receiptPath, root).images).to.deep.equal(refreshed.receipt.images)
+  })
+
+  it('refuses implicit or incomplete replacement of existing proof materials', () => {
+    const options = {
+      deploymentDir: root,
+      generation: 'mock' as const,
+      images: {
+        mockWorker: proofImage('1', 'dogeos69/prover-worker-mock'),
+        topologyCompiler: proofImage('2', 'dogeos69/dogeos-proof-topology'),
+      },
+    }
+    prepareProofMaterials(options)
+    expect(() => prepareProofMaterials(options)).to.throw(
+      'mock image refresh requires explicit --compiler-image and --mock-worker-image',
+    )
+
+    fs.rmSync(path.join(root, '.data/proof-materials-v1.json'))
+    expect(() => prepareProofMaterials({...options, refreshExistingImages: true})).to.throw(
+      'both the material directory and receipt are required',
     )
   })
 })

@@ -12,6 +12,8 @@ import type {
   ProofTopologySpec,
 } from '../types/proof-topology.js'
 
+import {buildS3PublicBaseUrl} from './s3-archive.js'
+
 export const DEFAULT_PROOF_TOPOLOGY_OUTPUT = '.data/generated/proof-topology'
 
 export type ProofTopologyPreflightMode = ProofGeneration
@@ -23,6 +25,65 @@ export interface ProofTopologyBridgeContext {
   dogecoinRpcUser: string
 }
 
+export interface ProofTopologyEthereumDaBlobSource {
+  awsS3?: {
+    keyPrefix?: string
+    url: string
+  }
+  beaconNodeUrl: string
+  timeoutMs?: number
+}
+
+interface EthereumDaBlobSourceInput {
+  beaconRpcUrl?: unknown
+  blobArchive?: {
+    s3?: {
+      bucket?: unknown
+      enabled?: unknown
+      keyPrefix?: unknown
+      publicBaseUrl?: unknown
+      region?: unknown
+    }
+  }
+}
+
+function configuredString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function configuredBoolean(value: unknown): boolean {
+  return value === true || (typeof value === 'string' && value.trim().toLowerCase() === 'true')
+}
+
+/**
+ * Convert deployment-owned Ethereum DA facts into the provider projection
+ * consumed by Proof Coordinator materializers. These URLs describe the
+ * deployment and deliberately do not belong to the proof identity source.
+ */
+export function proofTopologyEthereumDaBlobSource(
+  ethereumDa: EthereumDaBlobSourceInput | undefined,
+): ProofTopologyEthereumDaBlobSource | undefined {
+  const beaconNodeUrl = configuredString(ethereumDa?.beaconRpcUrl)
+  if (!beaconNodeUrl) return undefined
+
+  const s3 = ethereumDa?.blobArchive?.s3
+  const publicBaseUrl = configuredBoolean(s3?.enabled)
+    ? configuredString(s3?.publicBaseUrl) || buildS3PublicBaseUrl({
+        bucket: configuredString(s3?.bucket),
+        region: configuredString(s3?.region),
+      })
+    : undefined
+  return {
+    ...(publicBaseUrl ? {
+      awsS3: {
+        ...(configuredString(s3?.keyPrefix) ? {keyPrefix: configuredString(s3?.keyPrefix)} : {}),
+        url: publicBaseUrl,
+      },
+    } : {}),
+    beaconNodeUrl,
+  }
+}
+
 export interface CompileProofTopologyOptions {
   bridge?: ProofTopologyBridgeContext
   compilerBinary?: string
@@ -30,6 +91,7 @@ export interface CompileProofTopologyOptions {
   deploymentDir?: string
   deploymentName: string
   ethDaSubmitterBaseConfig?: string
+  ethereumDaBlobSource?: ProofTopologyEthereumDaBlobSource
   ethereumL1RpcUrl?: string
   network: string
   outputDir?: string
@@ -248,6 +310,104 @@ function collectBundleFiles(root: string, current = root): Array<[string, string
 
 export function computeProofTopologyBundleRevision(bundleDir: string): string {
   return createHash('sha256').update(JSON.stringify(collectBundleFiles(path.resolve(bundleDir)))).digest('hex')
+}
+
+function tableAt(root: toml.JsonMap, segments: string[]): toml.JsonMap | undefined {
+  let current: unknown = root
+  for (const segment of segments) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined
+    current = (current as Record<string, unknown>)[segment]
+  }
+
+  return current && typeof current === 'object' && !Array.isArray(current)
+    ? current as toml.JsonMap
+    : undefined
+}
+
+function validateProviderUrl(value: string, label: string): void {
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error(`${label} must be an absolute HTTP(S) URL`)
+  }
+
+  if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) {
+    throw new Error(`${label} must be an absolute HTTP(S) URL`)
+  }
+}
+
+function rebindProofTopologyBundleRevision(bundleDir: string): void {
+  const manifestPath = path.join(bundleDir, 'bundle-manifest-v1.json')
+  const manifest = readJson<ProofTopologyCompilerBundleManifestV1>(
+    manifestPath,
+    'proof topology bundle manifest',
+  )
+  const sidecarPath = bundleFile(bundleDir, manifest.resolved_sidecar, 'resolved_sidecar')
+  const sidecar = readJson<ResolvedProofTopologySidecarV2>(
+    sidecarPath,
+    'resolved proof topology sidecar',
+  )
+  const revision = computeProofTopologyBundleRevision(bundleDir)
+  manifest.bundle_revision = revision
+  sidecar.bundle_revision = revision
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {mode: 0o600})
+  fs.writeFileSync(sidecarPath, `${JSON.stringify(sidecar, null, 2)}\n`, {mode: 0o600})
+}
+
+/**
+ * dogeos-core v0.3.0-beta.1 renders an empty Anvil provider for every active
+ * PC materializer. Anvil is valid only for dev/regtest and is mutually
+ * exclusive with production providers. Until the compiler accepts DA
+ * provider placement through its deployment context, replace that generated
+ * provider with the deployment facts already owned by scroll-sdk-cli.
+ */
+export function projectProofCoordinatorEthereumDa(
+  bundleDir: string,
+  source: ProofTopologyEthereumDaBlobSource | undefined,
+): void {
+  if (!source) return
+  validateProviderUrl(source.beaconNodeUrl, 'Ethereum DA beacon node URL')
+  if (source.awsS3) validateProviderUrl(source.awsS3.url, 'Ethereum DA S3 archive URL')
+  if (source.timeoutMs !== undefined && (!Number.isSafeInteger(source.timeoutMs) || source.timeoutMs <= 0)) {
+    throw new Error('Ethereum DA blob source timeoutMs must be a positive integer')
+  }
+
+  const manifestPath = path.join(bundleDir, 'bundle-manifest-v1.json')
+  const manifest = readJson<ProofTopologyCompilerBundleManifestV1>(
+    manifestPath,
+    'proof topology bundle manifest',
+  )
+  if (!manifest.proof_coordinator) return
+  const coordinatorPath = bundleFile(bundleDir, manifest.proof_coordinator, 'proof_coordinator')
+  const parsed = toml.parse(fs.readFileSync(coordinatorPath, 'utf8')) as toml.JsonMap
+  let changed = false
+  for (const ethereumDaPath of [
+    ['materializer', 'bridge', 'ethereum_da'],
+    ['materializer', 'scroll_batch', 'subprocess', 'ethereum_da'],
+  ]) {
+    const ethereumDa = tableAt(parsed, ethereumDaPath)
+    if (!ethereumDa) continue
+    const existing = tableAt(ethereumDa, ['blob_source']) || {}
+    delete existing.anvil
+    existing.timeout_ms = source.timeoutMs ?? 10_000
+    existing.beacon_node = {url: source.beaconNodeUrl}
+    if (source.awsS3) {
+      existing.aws_s3 = {
+        ...(source.awsS3.keyPrefix ? {key_prefix: source.awsS3.keyPrefix} : {}),
+        url: source.awsS3.url,
+      }
+    } else {
+      delete existing.aws_s3
+    }
+
+    ethereumDa.blob_source = existing
+    changed = true
+  }
+
+  if (!changed) return
+  fs.writeFileSync(coordinatorPath, toml.stringify(parsed), {mode: 0o600})
+  rebindProofTopologyBundleRevision(bundleDir)
 }
 
 export function validateProofTopologyBundle(
@@ -470,6 +630,7 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
       : spawnSync(path.resolve(options.compilerBinary!), args, {encoding: 'utf8'})
     if (result.error) throw result.error
     if (result.status !== 0) throw new Error(`dogeos-proof-topology ${operation} failed: ${(result.stderr || result.stdout).trim()}`)
+    projectProofCoordinatorEthereumDa(stagedBundle, options.ethereumDaBlobSource)
     validateProofTopologyBundle(stagedBundle, {preflightOnly: Boolean(options.preflightMode)})
     installBundle(stagedBundle, outputDir)
     return validateProofTopologyBundle(outputDir, {preflightOnly: Boolean(options.preflightMode)})

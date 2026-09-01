@@ -7,6 +7,7 @@ import type {CompiledProverWorkerBundleResult} from './compiled-prover-worker-bu
 import type {ProofAwsConfig} from './proof-aws-config.js'
 import type {ProofDeploymentContract} from './proof-deployment-contract.js'
 import type {ResolvedProofIntent} from './proof-intent.js'
+import type {ProofTopologyEthereumDaBlobSource} from './proof-topology-compiler.js'
 
 import {DEFAULT_PROOF_AWS_CONFIG, proofAwsValuesProjection, readOptionalProofAwsConfig} from './proof-aws-config.js'
 import {applyProofAwsValues} from './proof-aws-provisioner.js'
@@ -19,6 +20,7 @@ export interface ReconcileProofKubernetesOptions {
   coordinatorConfigPath?: string
   coordinatorIngressHost?: string
   deploymentDir?: string
+  ethereumDaBlobSource?: ProofTopologyEthereumDaBlobSource
   ethereumL1RpcUrl?: string
   intent: ResolvedProofIntent
   network?: string
@@ -103,6 +105,7 @@ export function reconcileProofKubernetes(options: ReconcileProofKubernetesOption
     coordinatorIngressHost: options.coordinatorIngressHost,
     deploymentDir,
     deploymentName: options.intent.deploymentName,
+    ethereumDaBlobSource: options.ethereumDaBlobSource,
     ethereumL1RpcUrl: options.ethereumL1RpcUrl,
     network: options.intent.network,
     proofCoordinator: options.intent.proofCoordinator,

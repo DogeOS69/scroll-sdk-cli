@@ -8,6 +8,7 @@ import {resolveProofIntent} from '../../utils/proof-intent.js'
 import {
   DEFAULT_PROOF_TOPOLOGY_OUTPUT,
   compileProofTopology,
+  proofTopologyEthereumDaBlobSource,
 } from '../../utils/proof-topology-compiler.js'
 
 export default class ProofTopologyCompile extends Command {
@@ -55,6 +56,7 @@ export default class ProofTopologyCompile extends Command {
         deploymentDir,
         deploymentName: intent.deploymentName,
         ethDaSubmitterBaseConfig: flags['eth-da-submitter-config'],
+        ethereumDaBlobSource: proofTopologyEthereumDaBlobSource(config.ethereumDa),
         ethereumL1RpcUrl: config.ethereumDa?.submitterRpcUrl,
         network: intent.network,
         outputDir: flags.preflight && flags.output === DEFAULT_PROOF_TOPOLOGY_OUTPUT

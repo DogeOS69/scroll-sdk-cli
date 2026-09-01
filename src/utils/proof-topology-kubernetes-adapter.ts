@@ -9,11 +9,13 @@ import type {ProofTopologySpec} from '../types/proof-topology.js'
 
 import {
   type CompiledProverWorkerBundleResult,
+  PROVER_WORKER_EXECUTABLE,
   writeCompiledProverWorkerBundle,
 } from './compiled-prover-worker-bundle.js'
 import {
   type CompileProofTopologyOptions,
   type ProofTopologyBridgeContext,
+  type ProofTopologyEthereumDaBlobSource,
   type ProverWorkerContractV1,
   type ValidatedProofTopologyBundle,
   compileProofTopology,
@@ -45,6 +47,7 @@ export interface ReconcileCompiledProofTopologyOptions {
   coordinatorIngressHost?: string
   deploymentDir: string
   deploymentName: string
+  ethereumDaBlobSource?: ProofTopologyEthereumDaBlobSource
   ethereumL1RpcUrl?: string
   network: string
   proofCoordinator?: ProofCoordinatorConfig
@@ -177,6 +180,7 @@ function configureWorkerValues(
   annotate(values, input.bundleRevision)
 
   if (!local || !input.worker) {
+    values.command = []
     values.args = []
     values.env = []
     delete values.image?.digest
@@ -198,7 +202,7 @@ function configureWorkerValues(
   values.image.repository = worker.image.repository
   values.image.digest = worker.image.digest
   delete values.image.tag
-  values.command = []
+  values.command = [PROVER_WORKER_EXECUTABLE]
   values.args = worker.argv
   values.env = worker.environment
   values.termination ||= {}
@@ -562,6 +566,7 @@ export function reconcileCompiledProofTopology(
     compilerImage: options.compilerImage,
     deploymentDir: options.deploymentDir,
     deploymentName: options.deploymentName,
+    ethereumDaBlobSource: options.ethereumDaBlobSource,
     ethereumL1RpcUrl: options.ethereumL1RpcUrl,
     network: options.network,
     proofCoordinatorBaseConfig: options.coordinatorConfigPath,

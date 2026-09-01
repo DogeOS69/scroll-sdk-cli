@@ -41,7 +41,10 @@ import {
   DEFAULT_PROOF_MATERIALS_RECEIPT,
   readProofMaterials,
 } from '../../utils/proof-materials.js'
-import {compileProofTopology} from '../../utils/proof-topology-compiler.js'
+import {
+  compileProofTopology,
+  proofTopologyEthereumDaBlobSource,
+} from '../../utils/proof-topology-compiler.js'
 import {
   awsS3Endpoint,
   buildProofTopology,
@@ -1073,6 +1076,7 @@ export class DogeConfigCommand extends Command {
         compilerBinary,
         deploymentDir: process.cwd(),
         deploymentName,
+        ethereumDaBlobSource: proofTopologyEthereumDaBlobSource(config.ethereumDa),
         ethereumL1RpcUrl: config.ethereumDa?.submitterRpcUrl,
         network: config.network,
         outputDir: output,

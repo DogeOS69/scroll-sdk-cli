@@ -96,6 +96,7 @@ export interface PrepareProofMaterialsOptions {
   outputRoot?: string
   producerManifest?: string
   protocolContext?: string
+  refreshExistingImages?: boolean
 }
 
 function mapping(value: unknown, label: string): Record<string, unknown> {
@@ -363,6 +364,58 @@ function writePrivateJson(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, {flag: 'wx', mode: 0o600})
 }
 
+function replacePrivateJson(filePath: string, value: unknown): void {
+  const temporary = `${filePath}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`
+  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {flag: 'wx', mode: 0o600})
+  try {
+    fs.renameSync(temporary, filePath)
+  } catch (error) {
+    fs.rmSync(temporary, {force: true})
+    throw error
+  }
+}
+
+function refreshExistingProofMaterialImages(
+  options: PrepareProofMaterialsOptions,
+  deploymentDir: string,
+  outputRoot: string,
+  receiptPath: string,
+): {receipt: ProofMaterialsV1; receiptPath: string} | undefined {
+  const outputRootExists = fs.existsSync(outputRoot)
+  const receiptExists = fs.existsSync(receiptPath)
+  if (!outputRootExists && !receiptExists) return
+  if (!options.refreshExistingImages) {
+    throw new Error(
+      'Proof materials already exist; mock image refresh requires explicit '
+      + '--compiler-image and --mock-worker-image',
+    )
+  }
+
+  if (!outputRootExists || !receiptExists) {
+    throw new Error('Existing proof materials are incomplete; both the material directory and receipt are required for image refresh')
+  }
+
+  if (options.generation !== 'mock' || options.identityEnv || options.bridgeArtifactDir
+    || options.producerManifest || options.chunkMaterializer || options.batchMaterializer
+    || options.protocolContext || options.images.productionWorker) {
+    throw new Error('Existing proof materials only support an image-only refresh in generation=mock')
+  }
+
+  assertDirectory(outputRoot, 'Existing proof material directory')
+  const existing = readProofMaterials(receiptPath, deploymentDir)
+  const receipt: ProofMaterialsV1 = {
+    ...existing,
+    generatedAt: new Date().toISOString(),
+    images: {
+      ...existing.images,
+      mockWorker: options.images.mockWorker,
+      topologyCompiler: options.images.topologyCompiler,
+    },
+  }
+  replacePrivateJson(receiptPath, receipt)
+  return {receipt, receiptPath}
+}
+
 export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
   receipt: ProofMaterialsV1
   receiptPath: string
@@ -370,11 +423,17 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
   const deploymentDir = path.resolve(options.deploymentDir)
   const outputRoot = path.resolve(deploymentDir, options.outputRoot ?? DEFAULT_PROOF_MATERIALS_ROOT)
   const receiptPath = path.resolve(deploymentDir, options.outputReceipt ?? DEFAULT_PROOF_MATERIALS_RECEIPT)
-  if (fs.existsSync(outputRoot)) throw new Error(`Refusing to overwrite existing proof material directory: ${outputRoot}`)
-  if (fs.existsSync(receiptPath)) throw new Error(`Refusing to overwrite existing proof material receipt: ${receiptPath}`)
   for (const image of Object.values(options.images)) {
     if (image) immutableProofImage(image)
   }
+
+  const refreshed = refreshExistingProofMaterialImages(
+    options,
+    deploymentDir,
+    outputRoot,
+    receiptPath,
+  )
+  if (refreshed) return refreshed
 
   let env: Record<string, string> | undefined
   if (options.identityEnv) {

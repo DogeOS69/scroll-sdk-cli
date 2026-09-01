@@ -36,6 +36,7 @@ import {
   assertProofAwsMatchesTopology,
   reconcileProofKubernetes,
 } from '../../utils/proof-kubernetes-reconciler.js'
+import {proofTopologyEthereumDaBlobSource} from '../../utils/proof-topology-compiler.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {
   getRequiredManagedSignerConfig,
@@ -3558,6 +3559,7 @@ export default class SetupPrepCharts extends Command {
         ? coordinatorIngressHost
         : undefined,
       deploymentDir: process.cwd(),
+      ethereumDaBlobSource: proofTopologyEthereumDaBlobSource(this.dogeConfig.ethereumDa),
       ethereumL1RpcUrl: this.dogeConfig.ethereumDa?.submitterRpcUrl,
       intent: this.proofIntent,
       network: this.dogeConfig.network,

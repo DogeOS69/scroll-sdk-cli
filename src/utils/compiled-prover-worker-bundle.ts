@@ -10,6 +10,7 @@ export const COMPILED_PROVER_WORKER_BUNDLE_MANIFEST = 'bundle-manifest.json'
 export const COMPILED_PROVER_WORKER_CONTRACT = 'prover-worker-v1.json'
 export const COMPILED_PROVER_WORKER_TOKEN_FILE = 'prover-worker.token'
 export const COMPILED_PROVER_WORKER_PROTOCOL_CONTEXT = 'protocol_context.json'
+export const PROVER_WORKER_EXECUTABLE = '/usr/local/bin/prover-worker'
 
 const SHA256 = /^[\da-f]{64}$/
 
@@ -236,7 +237,7 @@ function composeDocument(options: {
     cap_drop: ['ALL'],
     security_opt: ['no-new-privileges:true'],
     tmpfs: ['/tmp:rw,noexec,nosuid,size=1g'],
-    command: options.worker.argv,
+    command: [PROVER_WORKER_EXECUTABLE, ...options.worker.argv],
     environment,
     volumes: [
       `./${COMPILED_PROVER_WORKER_TOKEN_FILE}:${options.tokenRuntimePath}:ro`,
