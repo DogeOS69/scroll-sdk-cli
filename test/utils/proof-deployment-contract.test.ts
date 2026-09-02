@@ -76,12 +76,15 @@ describe('proof deployment contract schema v7', () => {
     expect(validateProofDeploymentContract(root).generationId).to.equal(contract.generationId)
   })
 
-  it('rejects retired schemas and generated-file drift', () => {
+  it('allows deployment values overlays while rejecting retired schemas and missing files', () => {
     const contract = writeProofDeploymentContract(input('disabled'))
     expect(contract.components.proofCoordinator.enabled).to.equal(true)
     expect(contract.components.proverWorker.enabled).to.equal(false)
     fs.appendFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), 'tampered: true\n')
-    expect(() => validateProofDeploymentContract(root)).to.throw('values checksum mismatch')
+    expect(() => validateProofDeploymentContract(root)).not.to.throw()
+
+    fs.rmSync(path.join(root, 'values/withdrawal-processor-production.yaml'))
+    expect(() => validateProofDeploymentContract(root)).to.throw('values file is missing')
 
     fs.writeFileSync(path.join(root, '.data/proof-deployment.json'), JSON.stringify({...contract, schemaVersion: 6}))
     expect(() => readProofDeploymentContract(root)).to.throw('unsupported proof deployment contract')

@@ -1706,7 +1706,7 @@ FLAGS
       --json                             Output structured JSON
       --materials-dir=<value>            [default: .data/proof-materials] Deployment-relative material destination
       --mock-worker-image=<value>        Mock Worker release tag or digest (default:
-                                         dogeos69/prover-worker-mock:v0.3.0-beta.1)
+                                         dogeos69/prover-worker-mock:0.3.0-beta.1d-rc2)
       --output=<value>                   [default: .data/proof-materials-v1.json] Deployment-relative receipt path
       --production-worker-image=<value>  Real Worker release tag or digest; real only
       --protocol-context=<value>         Deployment protocol_context.json required with --bridge-artifact-dir; real only

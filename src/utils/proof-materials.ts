@@ -14,9 +14,8 @@ import {PROOF_MATERIALS_SCHEMA} from '../types/proof-materials.js'
 
 export const DEFAULT_PROOF_MATERIALS_RECEIPT = '.data/proof-materials-v1.json'
 export const DEFAULT_PROOF_MATERIALS_ROOT = '.data/proof-materials'
-export const DEFAULT_DOGEOS_CORE_PROOF_RELEASE = 'v0.3.0-beta.1'
-export const DEFAULT_PROOF_TOPOLOGY_COMPILER_IMAGE = `dogeos69/dogeos-proof-topology:${DEFAULT_DOGEOS_CORE_PROOF_RELEASE}`
-export const DEFAULT_MOCK_PROVER_WORKER_IMAGE = `dogeos69/prover-worker-mock:${DEFAULT_DOGEOS_CORE_PROOF_RELEASE}`
+export const DEFAULT_PROOF_TOPOLOGY_COMPILER_IMAGE = 'dogeos69/dogeos-proof-topology:v0.3.0-beta.1'
+export const DEFAULT_MOCK_PROVER_WORKER_IMAGE = 'dogeos69/prover-worker-mock:0.3.0-beta.1d-rc2'
 
 const HEX_32 = /^0x[\da-f]{64}$/
 const HEX_64 = /^0x[\da-f]{128}$/

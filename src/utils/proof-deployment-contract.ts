@@ -180,7 +180,11 @@ export function validateProofDeploymentContract(
   if (contract.enforcement === 'enforce' && (contract.mode !== 'active' || contract.generation !== 'real')) problems.push('enforcement requires active real proving')
   for (const [name, item] of Object.entries(contract.components)) {
     const values = resolveContractFile(root, item.valuesFile)
-    if (!fs.existsSync(values) || sha256File(values) !== item.valuesSha256) problems.push(`${name}: values checksum mismatch`)
+    // Deployment-specific overlays (for example the shadowfork RPC/network
+    // projection) are intentionally applied after prep-charts. Require every
+    // declared values file to remain present, but do not treat a byte-level
+    // values change as corruption of the compiler-owned proof artifacts.
+    if (!fs.existsSync(values)) problems.push(`${name}: values file is missing`)
   }
 
   const manifest = resolveContractFile(root, contract.topology.bundleManifest)

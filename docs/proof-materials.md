@@ -102,11 +102,11 @@ production Worker, and optional Bridge bake. It does not reimplement or hide
 the Rust/OpenVM build commands.
 
 The compiler and mock Worker prompts default to the dogeos-core
-`v0.3.0-beta.1` release:
+current mock rehearsal releases:
 
 ```text
 dogeos69/dogeos-proof-topology:v0.3.0-beta.1
-dogeos69/prover-worker-mock:v0.3.0-beta.1
+dogeos69/prover-worker-mock:0.3.0-beta.1d-rc2
 ```
 
 The CLI resolves each release tag through the OCI registry and records the

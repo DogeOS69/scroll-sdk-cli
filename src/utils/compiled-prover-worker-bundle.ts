@@ -8,11 +8,10 @@ import type {ProverWorkerContractV1} from './proof-topology-compiler.js'
 
 export const COMPILED_PROVER_WORKER_BUNDLE_MANIFEST = 'bundle-manifest.json'
 export const COMPILED_PROVER_WORKER_CONTRACT = 'prover-worker-v1.json'
+export const COMPILED_PROVER_WORKER_GITIGNORE = '.gitignore'
 export const COMPILED_PROVER_WORKER_TOKEN_FILE = 'prover-worker.token'
 export const COMPILED_PROVER_WORKER_PROTOCOL_CONTEXT = 'protocol_context.json'
 export const PROVER_WORKER_EXECUTABLE = '/usr/local/bin/prover-worker'
-
-const SHA256 = /^[\da-f]{64}$/
 
 export interface CompiledProverWorkerBundleFileV1 {
   path: string
@@ -43,7 +42,6 @@ export interface CompiledProverWorkerBundleManifestV1 {
   requiredBuildClass: ProverWorkerContractV1['required_build_class']
   requiredResources: CompiledProverWorkerRequiredResourceV1[]
   schemaVersion: 1
-  topologyDigest: string
 }
 
 export interface CompiledProverWorkerBundleResult {
@@ -160,8 +158,10 @@ function validateWorkerContract(worker: ProverWorkerContractV1): void {
     )
   }
 
-  if (worker.expected_topology_digest && !SHA256.test(worker.expected_topology_digest)) {
-    throw new Error('compiled Worker expected_topology_digest must be lowercase SHA-256 when present')
+  if ('expected_topology_digest' in worker) {
+    throw new Error(
+      'compiled Worker contract contains retired expected_topology_digest; regenerate it with the post-#937 compiler flow',
+    )
   }
 
   if (!/^sha256:[\da-f]{64}$/.test(worker.image.digest) || !worker.image.repository.trim()) {
@@ -179,6 +179,12 @@ function validateWorkerContract(worker: ProverWorkerContractV1): void {
     }
 
     names.add(item.name)
+  }
+
+  if (names.has('DOGEOS_PROOF_TOPOLOGY_DIGEST')) {
+    throw new Error(
+      'compiled Worker contract contains retired DOGEOS_PROOF_TOPOLOGY_DIGEST; regenerate it with the post-#937 compiler flow',
+    )
   }
 }
 
@@ -302,6 +308,12 @@ function readManifest(filePath: string): CompiledProverWorkerBundleManifestV1 {
     throw new Error(`${filePath}: unsupported or invalid compiled prover-worker bundle manifest`)
   }
 
+  if ('topologyDigest' in manifest) {
+    throw new Error(
+      `${filePath}: retired topologyDigest is not supported; regenerate the bundle with the post-#937 flow`,
+    )
+  }
+
   return manifest as CompiledProverWorkerBundleManifestV1
 }
 
@@ -407,6 +419,12 @@ export function writeCompiledProverWorkerBundle(
   ].join('\n')
   fs.writeFileSync(envPath, env)
 
+  // The credential is hydrated after deterministic generation. Keep it out of
+  // source control even when operators check in the generated bundle for
+  // review or copy it through a deployment repository.
+  const gitignorePath = path.join(bundleDir, COMPILED_PROVER_WORKER_GITIGNORE)
+  fs.writeFileSync(gitignorePath, `${COMPILED_PROVER_WORKER_TOKEN_FILE}\n`)
+
   const copiedContract = path.join(bundleDir, COMPILED_PROVER_WORKER_CONTRACT)
   fs.copyFileSync(contractFile, copiedContract)
   const copiedProtocolContext = path.join(bundleDir, COMPILED_PROVER_WORKER_PROTOCOL_CONTEXT)
@@ -438,7 +456,6 @@ export function writeCompiledProverWorkerBundle(
     requiredBuildClass: options.worker.required_build_class,
     requiredResources: requiredResources(options.worker, resourcesRoot, resourcesMountPath),
     schemaVersion: 1,
-    topologyDigest: options.worker.expected_topology_digest || sha256(JSON.stringify(options.worker)),
   }
   const manifest: CompiledProverWorkerBundleManifestV1 = {
     ...stable,
@@ -459,6 +476,7 @@ export function writeCompiledProverWorkerBundle(
         files: [
           composePath,
           envPath,
+          gitignorePath,
           copiedContract,
           copiedProtocolContext,
           ...filesRecursively(materialsTarget).map(file => file.absolute),
@@ -526,8 +544,7 @@ export function verifyCompiledProverWorkerBundle(options: {
   ) as ProverWorkerContractV1
   validateWorkerContract(worker)
   if (
-    (worker.expected_topology_digest || sha256(JSON.stringify(worker))) !== manifest.topologyDigest
-    || `${worker.image.repository}@${worker.image.digest}` !== manifest.image
+    `${worker.image.repository}@${worker.image.digest}` !== manifest.image
     || worker.required_build_class !== manifest.requiredBuildClass
   ) {
     throw new Error(`${manifestFile}: Worker contract disagrees with bundle identity`)

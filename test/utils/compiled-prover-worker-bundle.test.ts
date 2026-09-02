@@ -13,8 +13,6 @@ import {
   writeCompiledProverWorkerBundle,
 } from '../../src/utils/compiled-prover-worker-bundle.js'
 
-const DIGEST = 'a'.repeat(64)
-
 function worker(): ProverWorkerContractV1 {
   return {
     argv: [
@@ -28,13 +26,11 @@ function worker(): ProverWorkerContractV1 {
     capabilities: ['scroll_chunk'],
     desired_state: 'external',
     environment: [
-      {name: 'DOGEOS_PROOF_TOPOLOGY_DIGEST', value: DIGEST},
       {
         name: 'DOGEOS_PROVER_WORKER_READY_FILE',
         value: '/run/dogeos/prover-worker-ready-v1.json',
       },
     ],
-    expected_topology_digest: DIGEST,
     image: {
       digest: `sha256:${'b'.repeat(64)}`,
       repository: 'dogeos69/prover-worker',
@@ -102,12 +98,15 @@ describe('compiled prover-worker bundle', () => {
       .to.equal(`dogeos69/prover-worker@sha256:${'b'.repeat(64)}`)
     expect(compose.services['prover-worker'].command)
       .to.deep.equal([PROVER_WORKER_EXECUTABLE, ...worker().argv])
-    expect(compose.services['prover-worker'].environment.DOGEOS_PROOF_TOPOLOGY_DIGEST)
-      .to.equal(DIGEST)
+    expect(compose.services['prover-worker'].environment)
+      .not.to.have.property('DOGEOS_PROOF_TOPOLOGY_DIGEST')
     expect(compose.services['prover-worker'].volumes)
       .to.include(`${String.fromCodePoint(36)}{PROOF_RESOURCES_ROOT:?missing PROOF_RESOURCES_ROOT}:/app/data/proof-materials:ro`)
     const manifest = JSON.parse(fs.readFileSync(result.manifestFile, 'utf8'))
     expect(manifest.credentialState).to.equal('pending')
+    expect(manifest).not.to.have.property('topologyDigest')
+    expect(fs.readFileSync(path.join(bundleDir, '.gitignore'), 'utf8'))
+      .to.equal('prover-worker.token\n')
     expect(manifest.requiredResources).to.deep.include({
       path: 'chunk/app.vmexe',
       runtimePath: '/app/data/proof-materials/chunk/app.vmexe',
@@ -191,5 +190,43 @@ describe('compiled prover-worker bundle', () => {
     expect(fs.existsSync(tokenPath)).to.equal(false)
     expect(JSON.parse(fs.readFileSync(pending.manifestFile, 'utf8')).credentialState)
       .to.equal('pending')
+  })
+
+  it('rejects retired pre-#937 Worker identity fields', () => {
+    const legacyDigest = 'a'.repeat(64)
+    const withLegacyField = {
+      ...worker(),
+      expected_topology_digest: legacyDigest,
+    } as ProverWorkerContractV1
+    fs.writeFileSync(contractFile, `${JSON.stringify(withLegacyField, null, 2)}\n`)
+    expect(() => writeCompiledProverWorkerBundle({
+      bundleDir,
+      contractFile,
+      generatedMaterialsDir: path.join(root, '.data/generated/proof-topology/materials'),
+      generatedMaterialsRoot: '/app/data/proof-topology',
+      protocolContextPath: path.join(root, '.data/protocol_context.json'),
+      protocolContextRuntimePath: '/app/protocol_context.json',
+      resourcesMountPath: '/app/data/proof-materials',
+      resourcesRoot,
+      worker: withLegacyField,
+    })).to.throw('retired expected_topology_digest')
+
+    const withLegacyEnvironment = worker()
+    withLegacyEnvironment.environment.push({
+      name: 'DOGEOS_PROOF_TOPOLOGY_DIGEST',
+      value: legacyDigest,
+    })
+    fs.writeFileSync(contractFile, `${JSON.stringify(withLegacyEnvironment, null, 2)}\n`)
+    expect(() => writeCompiledProverWorkerBundle({
+      bundleDir,
+      contractFile,
+      generatedMaterialsDir: path.join(root, '.data/generated/proof-topology/materials'),
+      generatedMaterialsRoot: '/app/data/proof-topology',
+      protocolContextPath: path.join(root, '.data/protocol_context.json'),
+      protocolContextRuntimePath: '/app/protocol_context.json',
+      resourcesMountPath: '/app/data/proof-materials',
+      resourcesRoot,
+      worker: withLegacyEnvironment,
+    })).to.throw('retired DOGEOS_PROOF_TOPOLOGY_DIGEST')
   })
 })

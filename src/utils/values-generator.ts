@@ -1376,7 +1376,7 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'proofCoordinator', {
     pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/proof-coordinator',
-    tag: 'latest'
+    tag: '0.3.0-beta.1d-rc2'
   })
 
   const env: Array<Record<string, any>> = [

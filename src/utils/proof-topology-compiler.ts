@@ -122,8 +122,6 @@ export interface ProverWorkerContractV1 {
   capabilities: string[]
   desired_state: 'external' | 'local_deployment'
   environment: Array<{name: string; value: string}>
-  /** Legacy bundles used a topology digest; PR #937 contracts omit it. */
-  expected_topology_digest?: string
   image: ProofTopologyImageReference
   placement: 'external' | 'local_cpu' | 'local_cuda'
   readiness_evidence_path: string

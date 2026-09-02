@@ -121,9 +121,13 @@ mock harness. Mock proofs are recognized by their hash-committed proof-kind tag,
 and the coordinator selects the dev verifier when aggregate-VK material is
 absent. The mock path does not ask for `real-identity.env`, real-proving
 `.vmexe`, aggregate VK file,
-materializers, Bridge bake, or production Worker image. The compiler and mock
-Worker default to the dogeos-core `v0.3.0-beta.1` release tags; the CLI resolves
-and stores their immutable OCI digests.
+materializers, Bridge bake, or production Worker image. The topology compiler
+defaults to `dogeos-proof-topology:v0.3.0-beta.1`. The mock Worker defaults to
+`prover-worker-mock:0.3.0-beta.1d-rc2`, and generated Proof Coordinator values
+default to `proof-coordinator:0.3.0-beta.1d-rc2`. Both rc2 images were built
+from the same dogeos-core source revision. The CLI
+resolves and stores immutable OCI digests rather than retaining mutable tags in
+the Worker contract.
 
 Prepare the larger real-only input set later with:
 
@@ -177,6 +181,13 @@ The compiler-rendered native TOML and generated text manifests are embedded in
 those final values, so ordinary Helm commands need no dynamic `--set-file`
 arguments or scrollsdk deployment helper. It does not contact Kubernetes.
 
+The post-#937 Worker handoff bundle has its own `bundleId`, derived from the
+Worker contract, immutable image, Compose document, protocol context,
+materials, and required resources. It does not contain or consume the retired
+`topologyDigest`, `expected_topology_digest`, or
+`DOGEOS_PROOF_TOPOLOGY_DIGEST` fields. Their presence is treated as evidence of
+a stale pre-#937 bundle and fails generation or validation.
+
 ### Step 5: validate the deployment contract
 
 ```bash
@@ -185,10 +196,12 @@ scrollsdk setup proof-config-check
 
 This checks the source switches, compiler bundle, Helm projection, native
 configuration, Worker contract, material hashes, and secret-file modes without
-network probes or printing secrets. Compiler bundle, self-contained values,
-sidecar, and Worker contract remain strict. If a native source file is changed
-after `prep-charts`, rerun `prep-charts`; Helm deploys the copy embedded in the
-validated values rather than reading mutable files at install time.
+network probes or printing secrets. Compiler-owned bundle files, sidecars, and
+the Worker handoff bundle remain strict. Helm values must exist but are not
+required to remain byte-identical: deployment-specific overlays such as the
+shadowfork RPC/network projection are intentionally applied after
+`prep-charts`. The Worker bundle's own manifest still verifies all of its
+security-relevant files.
 
 ## 5. Switch operations
 

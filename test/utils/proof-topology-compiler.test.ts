@@ -7,8 +7,8 @@ import * as path from 'node:path'
 
 import {
   computeProofTopologyBundleRevision,
-  proofTopologyEthereumDaBlobSource,
   projectProofCoordinatorEthereumDa,
+  proofTopologyEthereumDaBlobSource,
 } from '../../src/utils/proof-topology-compiler.js'
 
 describe('proof topology compiler deployment projection', () => {
