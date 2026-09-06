@@ -196,14 +196,18 @@ function proofMaterialRuntimeFile(
 }
 
 /**
- * Stage the binary root VK, and for PC the image-owned materializer binaries,
- * into the runtime paths rendered by dogeos-proof-topology.
+ * Stage the runtime files that are valid for the selected proof generation.
  *
  * ConfigMaps cannot carry the multi-megabyte materializer executables. The
  * release PC image already owns those executables; an init container copies
  * them into a read-only-at-runtime emptyDir and verifies their hashes against
- * the operator-imported release files. The smaller binary VK is transported as
- * base64 text in a Kubernetes Secret and decoded into the same runtime volume.
+ * the operator-imported release files. Real generation additionally transports
+ * the smaller binary VK as base64 text in a Kubernetes Secret.
+ *
+ * Mock generation deliberately leaves the aggregate VK absent. Under observe
+ * enforcement that absence is what makes Proof Coordinator select dev_dummy;
+ * staging the real VK would make it select real_scroll and reject mock proof
+ * bytes as malformed real STARK proofs.
  */
 function configureRuntimeProofMaterials(
   values: Record<string, any>,
@@ -225,7 +229,7 @@ function configureRuntimeProofMaterials(
   }
 
   const realScroll = selectedRealScroll(topology)
-  if (!realScroll?.aggVerifyingKeyPath) {
+  if (!realScroll) {
     cleanup()
     return
   }
@@ -238,19 +242,51 @@ function configureRuntimeProofMaterials(
     return
   }
 
-  const rootVk = proofMaterialRuntimeFile(
-    deploymentDir,
-    realScroll.aggVerifyingKeyPath,
-    resourcesMountPath,
-    'aggregate verifying key',
-  )
-  const rootVkBase64 = fs.readFileSync(rootVk.hostPath).toString('base64')
-  const commands = [
-    `install -d -m 0755 ${shellQuote(path.posix.dirname(rootVk.runtimePath))}`,
-    `base64 -d ${shellQuote(`${RUNTIME_SEED_MOUNT}/root_verifier_vk.b64`)} > ${shellQuote(rootVk.runtimePath)}`,
-    `chmod 0444 ${shellQuote(rootVk.runtimePath)}`,
+  const stageRootVk = topology.generation === 'real'
+  if (component === 'withdrawal-processor' && !stageRootVk) {
+    cleanup()
+    return
+  }
+
+  const commands: string[] = []
+  const checks: string[] = []
+  const volumeMounts: Array<{mountPath: string; name: string; readOnly?: boolean}> = [
+    {mountPath: resourcesMountPath, name: RUNTIME_MATERIALS_VOLUME},
   ]
-  const checks = [`${sha256File(rootVk.hostPath)}  ${rootVk.runtimePath}`]
+
+  if (stageRootVk) {
+    if (!realScroll.aggVerifyingKeyPath) {
+      throw new Error('real generation requires an aggregate verifying key')
+    }
+    const rootVk = proofMaterialRuntimeFile(
+      deploymentDir,
+      realScroll.aggVerifyingKeyPath,
+      resourcesMountPath,
+      'aggregate verifying key',
+    )
+    commands.push(
+      `install -d -m 0755 ${shellQuote(path.posix.dirname(rootVk.runtimePath))}`,
+      `base64 -d ${shellQuote(`${RUNTIME_SEED_MOUNT}/root_verifier_vk.b64`)} > ${shellQuote(rootVk.runtimePath)}`,
+      `chmod 0444 ${shellQuote(rootVk.runtimePath)}`,
+    )
+    checks.push(`${sha256File(rootVk.hostPath)}  ${rootVk.runtimePath}`)
+    values.secrets[RUNTIME_SEED_SECRET] = {
+      enabled: true,
+      stringData: {'root_verifier_vk.b64': fs.readFileSync(rootVk.hostPath).toString('base64')},
+      type: 'Opaque',
+    }
+    values.persistence[RUNTIME_SEED_VOLUME] = {
+      enabled: true,
+      mountPath: RUNTIME_SEED_MOUNT,
+      name: `{{ include "scroll.common.lib.chart.names.fullname" . }}-${RUNTIME_SEED_SECRET}`,
+      readOnly: true,
+      type: 'secret',
+    }
+    volumeMounts.push({mountPath: RUNTIME_SEED_MOUNT, name: RUNTIME_SEED_VOLUME, readOnly: true})
+  } else {
+    delete values.secrets[RUNTIME_SEED_SECRET]
+    delete values.persistence[RUNTIME_SEED_VOLUME]
+  }
 
   if (component === 'proof-coordinator') {
     if (!realScroll.chunkMaterializerBinaryPath || !realScroll.batchMaterializerBinaryPath) {
@@ -280,18 +316,6 @@ function configureRuntimeProofMaterials(
   }
   commands.push(`printf '%s\\n' ${checks.map(shellQuote).join(' ')} | sha256sum -c -`)
 
-  values.secrets[RUNTIME_SEED_SECRET] = {
-    enabled: true,
-    stringData: {'root_verifier_vk.b64': rootVkBase64},
-    type: 'Opaque',
-  }
-  values.persistence[RUNTIME_SEED_VOLUME] = {
-    enabled: true,
-    mountPath: RUNTIME_SEED_MOUNT,
-    name: `{{ include "scroll.common.lib.chart.names.fullname" . }}-${RUNTIME_SEED_SECRET}`,
-    readOnly: true,
-    type: 'secret',
-  }
   values.persistence[RUNTIME_MATERIALS_VOLUME] = {
     enabled: true,
     mountPath: resourcesMountPath,
@@ -301,10 +325,7 @@ function configureRuntimeProofMaterials(
     args: [commands.join('\n')],
     command: ['/bin/sh', '-ec'],
     image: workloadImageReference(values, component),
-    volumeMounts: [
-      {mountPath: resourcesMountPath, name: RUNTIME_MATERIALS_VOLUME},
-      {mountPath: RUNTIME_SEED_MOUNT, name: RUNTIME_SEED_VOLUME, readOnly: true},
-    ],
+    volumeMounts,
   }
 }
 

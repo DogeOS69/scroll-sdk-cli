@@ -238,13 +238,15 @@ those final values, so ordinary Helm commands need no dynamic `--set-file`
 arguments or scrollsdk deployment helper. It does not contact Kubernetes.
 
 For a real-materialize profile without a pre-populated proof-material PVC, the
-generated WP and PC values also stage the binary root VK at the exact compiler
-runtime path. The VK is transported as base64 text in a release-scoped
-Kubernetes Secret and decoded by a checksum-verifying init container. PC's two
-large materializer executables are not embedded in a ConfigMap: the init
+generated PC values stage the two materializer executables at the exact
+compiler runtime paths. They are not embedded in a ConfigMap: the init
 container copies them from the selected PC image and verifies both against the
 SHA-256 values of the files imported by `setup proof-materials`. A mismatched
-PC image therefore fails before the coordinator starts. When
+PC image therefore fails before the coordinator starts. When generation is
+`real`, the generated WP and PC values additionally stage the binary root VK
+through a release-scoped Kubernetes Secret. Mock generation deliberately does
+not mount the root VK, because its absence under observe enforcement selects
+the development verifier that accepts mock proof envelopes. When
 `resourcesPersistentVolumeClaim` is configured, that operator-populated,
 read-only release PVC remains authoritative instead.
 
