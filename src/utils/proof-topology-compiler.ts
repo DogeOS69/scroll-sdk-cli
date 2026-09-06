@@ -458,6 +458,47 @@ export function projectProofCoordinatorEthereumDa(
   rebindProofTopologyBundleRevision(bundleDir)
 }
 
+/**
+ * Keep mock generation on the development verifier while retaining real
+ * Scroll materialization and the release identities used to shape statements.
+ *
+ * The beta.3 compiler requires the aggregate VK as selected-profile evidence
+ * for `withdrawal_mock_prover_real_materialize`, but currently also projects
+ * that path into both native verifier blocks. Proof Coordinator selects its
+ * verifier solely from the block's presence, so leaving those blocks in place
+ * makes it parse the mock Worker's envelope as a real STARK proof. Remove only
+ * the executable real-verifier material; identity policy and materializer
+ * configuration remain compiler-owned and unchanged.
+ */
+export function projectMockGenerationVerifierSelection(
+  bundleDir: string,
+  generation: ProofGeneration,
+): void {
+  if (generation !== 'mock') return
+
+  const manifestPath = path.join(bundleDir, 'bundle-manifest-v1.json')
+  const manifest = readJson<ProofTopologyCompilerBundleManifestV1>(
+    manifestPath,
+    'proof topology bundle manifest',
+  )
+  let changed = false
+  for (const [relativePath, tablePath] of [
+    [manifest.proof_coordinator, ['verifier', 'scroll_real_verifier']],
+    [manifest.withdrawal_processor, ['proof_control_plane_gate', 'scroll_real_verifier']],
+  ] as Array<[string | undefined, string[]]>) {
+    if (!relativePath) continue
+    const filePath = bundleFile(bundleDir, relativePath, tablePath.join('.'))
+    const parsed = toml.parse(fs.readFileSync(filePath, 'utf8')) as toml.JsonMap
+    const parent = tableAt(parsed, tablePath.slice(0, -1))
+    const key = tablePath.at(-1)!
+    if (!parent || !(key in parent)) continue
+    delete parent[key]
+    fs.writeFileSync(filePath, toml.stringify(parsed), {mode: 0o600})
+    changed = true
+  }
+  if (changed) rebindProofTopologyBundleRevision(bundleDir)
+}
+
 export function validateProofTopologyBundle(
   bundleDir: string,
   expected?: {preflightOnly?: boolean},
@@ -690,6 +731,7 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
     if (result.error) throw result.error
     if (result.status !== 0) throw new Error(`dogeos-proof-topology ${operation} failed: ${(result.stderr || result.stdout).trim()}`)
     projectProofCoordinatorEthereumDa(stagedBundle, options.ethereumDaBlobSource)
+    projectMockGenerationVerifierSelection(stagedBundle, options.proofTopology.generation)
     validateProofTopologyBundle(stagedBundle, {preflightOnly: Boolean(options.preflightMode)})
     installBundle(stagedBundle, outputDir)
     return validateProofTopologyBundle(outputDir, {preflightOnly: Boolean(options.preflightMode)})

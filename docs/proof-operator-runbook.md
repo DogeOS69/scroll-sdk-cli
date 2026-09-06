@@ -246,7 +246,12 @@ PC image therefore fails before the coordinator starts. When generation is
 `real`, the generated WP and PC values additionally stage the binary root VK
 through a release-scoped Kubernetes Secret. Mock generation deliberately does
 not mount the root VK, because its absence under observe enforcement selects
-the development verifier that accepts mock proof envelopes. When
+the development verifier that accepts mock proof envelopes. The adapter also
+removes only the compiler-rendered executable real-verifier blocks in this
+mock case; the canonical verifier identities and real materializer sections
+remain intact. Without that projection, beta.3 PC selects `real_scroll` from
+the block's presence and rejects the mock envelope before observe-mode policy
+can use it. When
 `resourcesPersistentVolumeClaim` is configured, that operator-populated,
 read-only release PVC remains authoritative instead.
 
