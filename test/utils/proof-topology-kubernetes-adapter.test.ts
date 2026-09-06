@@ -29,6 +29,8 @@ function topology(
       artifactStore: {kind: 'local_fs'},
       profile: 'withdrawal_mock_prover_real_materialize',
       realScroll: {
+        aggVerifyingKeyPath: '.data/proof-materials/software/verifier/root_verifier_vk',
+        batchMaterializerBinaryPath: '.data/proof-materials/software/bin/batch-materializer',
         batchProgramCommitmentHashHex: hex32('1'),
         batchProgramCommitmentHex: hex64('2'),
         batchVerificationKeyHashHex: hex32('3'),
@@ -37,6 +39,7 @@ function topology(
         bridgeVerificationKeyHashHex: hex32('6'),
         chunkProgramCommitmentHashHex: hex32('7'),
         chunkProgramCommitmentHex: hex64('8'),
+        chunkMaterializerBinaryPath: '.data/proof-materials/software/bin/chunk-materializer',
         chunkVerificationKeyHashHex: hex32('9'),
         l2RangeAggregationAppCommitRawHex: hex64('a'),
         l2RangeAggregationProgramCommitmentHashHex: hex32('b'),
@@ -125,18 +128,25 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     }
 
     fs.writeFileSync(path.join(root, '.data/protocol_context.json'), '{"network":"testnet"}\n')
+    fs.mkdirSync(path.join(root, '.data/proof-materials/software/bin'), {recursive: true})
+    fs.mkdirSync(path.join(root, '.data/proof-materials/software/verifier'), {recursive: true})
+    fs.writeFileSync(path.join(root, '.data/proof-materials/software/bin/batch-materializer'), 'batch materializer')
+    fs.writeFileSync(path.join(root, '.data/proof-materials/software/bin/chunk-materializer'), 'chunk materializer')
+    fs.writeFileSync(path.join(root, '.data/proof-materials/software/verifier/root_verifier_vk'), Buffer.from([0, 1, 2, 3]))
 
     fs.writeFileSync(path.join(root, 'proof-coordinator/ProofCoordinator.toml'), '')
     fs.writeFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), '')
     fs.writeFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), yaml.dump({
       configMaps: {config: {data: {}, enabled: true}},
       env: [],
+      image: {repository: 'dogeos69/withdrawal-processor', tag: 'test'},
       persistence: {},
       service: {main: {ports: {}}},
     }))
     fs.writeFileSync(path.join(root, 'values/proof-coordinator-production.yaml'), yaml.dump({
       controller: {replicas: 1},
       env: [{name: 'RUST_LOG', value: 'info'}],
+      image: {repository: 'dogeos69/proof-coordinator', tag: 'test'},
       ingress: {main: {enabled: true}},
       persistence: {},
       service: {main: {enabled: true, ports: {}}},
@@ -178,6 +188,13 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     expect(result).not.to.have.property('helmSetFiles')
     const withdrawal = yaml.load(fs.readFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), 'utf8')) as any
     expect(withdrawal.configMaps.config.data['WithdrawalProcessor.toml']).to.include('mode = "active"')
+    expect(withdrawal.secrets['proof-runtime-seed'].stringData['root_verifier_vk.b64'])
+      .to.equal('AAECAw==')
+    expect(withdrawal.persistence['proof-runtime-materials']).to.deep.include({
+      enabled: true,
+      mountPath: '/app/data/proof-materials',
+      type: 'emptyDir',
+    })
     expect(withdrawal.configMaps['proof-topology-materials'].data).to.deep.include({
       'material-00-chunk.json': '{"kind":"chunk"}\n',
     })
@@ -187,6 +204,19 @@ describe('self-contained proof topology Kubernetes adapter', () => {
       required: true,
     })
     expect(coordinator.controller.replicas).to.equal(1)
+    expect(coordinator.secrets['proof-runtime-seed'].stringData['root_verifier_vk.b64'])
+      .to.equal('AAECAw==')
+    expect(coordinator.persistence['proof-runtime-materials']).to.deep.include({
+      enabled: true,
+      mountPath: '/app/data/proof-materials',
+      type: 'emptyDir',
+    })
+    expect(coordinator.initContainers['prepare-proof-runtime-materials'].image)
+      .to.equal('dogeos69/proof-coordinator:test')
+    expect(coordinator.initContainers['prepare-proof-runtime-materials'].args[0])
+      .to.include('/usr/local/bin/materialize-chunk-oneshot')
+      .and.to.include('/usr/local/bin/scroll-runtime-materializer')
+      .and.to.include('sha256sum -c -')
     expect(coordinator.persistence.genesis).to.deep.equal({
       enabled: true,
       mountPath: '/app/genesis/genesis.json',

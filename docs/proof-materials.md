@@ -151,6 +151,14 @@ There are two supported mock preparations:
 The second form is the correct pre-production rehearsal when materializer
 correctness or per-chunk performance is under test.
 
+On Kubernetes, these imported files are also deployment evidence. The adapter
+uses the root VK to generate a checksum-verified runtime seed for WP and PC. It
+does not place the multi-megabyte materializer executables in ConfigMaps;
+instead PC copies the executables already present in its selected image and
+checks that their SHA-256 values match the imported release files before
+startup. This keeps the compiler's exact runtime paths valid while detecting a
+PC image/materializer lineage mismatch early.
+
 ```bash
 scrollsdk setup proof-materials \
   --generation mock \

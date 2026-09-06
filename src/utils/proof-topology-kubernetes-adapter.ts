@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Helm values and TOML patches are dynamic deployment documents. */
 import * as toml from '@iarna/toml'
 import * as yaml from 'js-yaml'
+import {createHash} from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
@@ -29,6 +30,10 @@ import {
 const MATERIALS_CONFIG_MAP = 'proof-topology-materials'
 const MATERIALS_VOLUME = 'proof-topology-materials'
 const RESOURCES_VOLUME = 'proof-topology-resources'
+const RUNTIME_MATERIALS_VOLUME = 'proof-runtime-materials'
+const RUNTIME_SEED_SECRET = 'proof-runtime-seed'
+const RUNTIME_SEED_VOLUME = 'proof-runtime-seed'
+const RUNTIME_SEED_MOUNT = '/app/data/proof-runtime-seed'
 const GENESIS_VOLUME = 'genesis'
 const TOPOLOGY_BUNDLE_ANNOTATION = 'dogeos.io/proof-topology-bundle-revision'
 const RETIRED_TOPOLOGY_ANNOTATIONS = [
@@ -151,6 +156,156 @@ function configureMaterials(
 
 function selectedRealScroll(topology: ProofTopologySpec) {
   return topology.mode === 'active' ? topology.active?.realScroll : undefined
+}
+
+function sha256File(filePath: string): string {
+  return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+function workloadImageReference(values: Record<string, any>, label: string): string {
+  const repository = String(values.image?.repository || '').trim()
+  const digest = String(values.image?.digest || '').trim()
+  const tag = String(values.image?.tag || '').trim()
+  if (!repository) throw new Error(`${label} image repository is required to stage proof runtime materials`)
+  if (digest) return `${repository}@${digest}`
+  if (tag) return `${repository}:${tag}`
+  throw new Error(`${label} image tag or digest is required to stage proof runtime materials`)
+}
+
+function proofMaterialRuntimeFile(
+  deploymentDir: string,
+  sourcePath: string,
+  resourcesMountPath: string,
+  label: string,
+): {hostPath: string; runtimePath: string} {
+  const hostPath = deploymentFile(deploymentDir, sourcePath, label)
+  const materialsRoot = path.resolve(deploymentDir, '.data/proof-materials')
+  const relative = path.relative(materialsRoot, hostPath)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`${label} must remain inside .data/proof-materials`)
+  }
+  if (!fs.statSync(hostPath).isFile()) throw new Error(`${label} is not a regular file: ${hostPath}`)
+  return {
+    hostPath,
+    runtimePath: path.posix.join(resourcesMountPath, relative.split(path.sep).join('/')),
+  }
+}
+
+/**
+ * Stage the binary root VK, and for PC the image-owned materializer binaries,
+ * into the runtime paths rendered by dogeos-proof-topology.
+ *
+ * ConfigMaps cannot carry the multi-megabyte materializer executables. The
+ * release PC image already owns those executables; an init container copies
+ * them into a read-only-at-runtime emptyDir and verifies their hashes against
+ * the operator-imported release files. The smaller binary VK is transported as
+ * base64 text in a Kubernetes Secret and decoded into the same runtime volume.
+ */
+function configureRuntimeProofMaterials(
+  values: Record<string, any>,
+  topology: ProofTopologySpec,
+  deploymentDir: string,
+  resourcesMountPath: string,
+  component: 'proof-coordinator' | 'withdrawal-processor',
+  resourceClaim: string | undefined,
+): void {
+  values.initContainers ||= {}
+  values.persistence ||= {}
+  values.secrets ||= {}
+
+  const cleanup = (): void => {
+    delete values.initContainers['prepare-proof-runtime-materials']
+    delete values.persistence[RUNTIME_MATERIALS_VOLUME]
+    delete values.persistence[RUNTIME_SEED_VOLUME]
+    delete values.secrets[RUNTIME_SEED_SECRET]
+  }
+
+  const realScroll = selectedRealScroll(topology)
+  if (!realScroll?.aggVerifyingKeyPath) {
+    cleanup()
+    return
+  }
+
+  // A pre-populated release PVC remains the production ownership boundary.
+  // The generated init path is for deployments, such as mock/observe, that
+  // import release files locally but do not have a proof-material PVC.
+  if (resourceClaim) {
+    cleanup()
+    return
+  }
+
+  const rootVk = proofMaterialRuntimeFile(
+    deploymentDir,
+    realScroll.aggVerifyingKeyPath,
+    resourcesMountPath,
+    'aggregate verifying key',
+  )
+  const rootVkBase64 = fs.readFileSync(rootVk.hostPath).toString('base64')
+  const commands = [
+    `install -d -m 0755 ${shellQuote(path.posix.dirname(rootVk.runtimePath))}`,
+    `base64 -d ${shellQuote(`${RUNTIME_SEED_MOUNT}/root_verifier_vk.b64`)} > ${shellQuote(rootVk.runtimePath)}`,
+    `chmod 0444 ${shellQuote(rootVk.runtimePath)}`,
+  ]
+  const checks = [`${sha256File(rootVk.hostPath)}  ${rootVk.runtimePath}`]
+
+  if (component === 'proof-coordinator') {
+    if (!realScroll.chunkMaterializerBinaryPath || !realScroll.batchMaterializerBinaryPath) {
+      throw new Error('real Scroll materialization requires both Chunk and Batch materializer binaries')
+    }
+    const chunk = proofMaterialRuntimeFile(
+      deploymentDir,
+      realScroll.chunkMaterializerBinaryPath,
+      resourcesMountPath,
+      'Chunk materializer binary',
+    )
+    const batch = proofMaterialRuntimeFile(
+      deploymentDir,
+      realScroll.batchMaterializerBinaryPath,
+      resourcesMountPath,
+      'Batch materializer binary',
+    )
+    commands.unshift(`install -d -m 0755 ${shellQuote(path.posix.dirname(chunk.runtimePath))} ${shellQuote(path.posix.dirname(batch.runtimePath))}`)
+    commands.push(
+      `install -m 0555 /usr/local/bin/materialize-chunk-oneshot ${shellQuote(chunk.runtimePath)}`,
+      `install -m 0555 /usr/local/bin/scroll-runtime-materializer ${shellQuote(batch.runtimePath)}`,
+    )
+    checks.push(
+      `${sha256File(chunk.hostPath)}  ${chunk.runtimePath}`,
+      `${sha256File(batch.hostPath)}  ${batch.runtimePath}`,
+    )
+  }
+  commands.push(`printf '%s\\n' ${checks.map(shellQuote).join(' ')} | sha256sum -c -`)
+
+  values.secrets[RUNTIME_SEED_SECRET] = {
+    enabled: true,
+    stringData: {'root_verifier_vk.b64': rootVkBase64},
+    type: 'Opaque',
+  }
+  values.persistence[RUNTIME_SEED_VOLUME] = {
+    enabled: true,
+    mountPath: RUNTIME_SEED_MOUNT,
+    name: `{{ include "scroll.common.lib.chart.names.fullname" . }}-${RUNTIME_SEED_SECRET}`,
+    readOnly: true,
+    type: 'secret',
+  }
+  values.persistence[RUNTIME_MATERIALS_VOLUME] = {
+    enabled: true,
+    mountPath: resourcesMountPath,
+    type: 'emptyDir',
+  }
+  values.initContainers['prepare-proof-runtime-materials'] = {
+    args: [commands.join('\n')],
+    command: ['/bin/sh', '-ec'],
+    image: workloadImageReference(values, component),
+    volumeMounts: [
+      {mountPath: resourcesMountPath, name: RUNTIME_MATERIALS_VOLUME},
+      {mountPath: RUNTIME_SEED_MOUNT, name: RUNTIME_SEED_VOLUME, readOnly: true},
+    ],
+  }
 }
 
 function workerArgument(worker: ProverWorkerContractV1, flag: string): string {
@@ -342,13 +497,15 @@ function annotate(
 function configureWithdrawalValues(
   filePath: string,
   configContent: string,
-  mode: ProofTopologySpec['mode'],
+  topology: ProofTopologySpec,
+  deploymentDir: string,
   bundleRevision: string,
   materialsDir: string | undefined,
   generatedMaterialsRoot: string,
   resourceClaim: string | undefined,
   resourcesMountPath: string,
 ): void {
+  const {mode} = topology
   const values = readYaml(filePath)
   ensureWithdrawalChartWiring(values)
   values.configMaps ||= {}
@@ -377,6 +534,14 @@ function configureWithdrawalValues(
     generatedMaterialsRoot,
   )
   configureProofResources(values, mode === 'disabled' ? undefined : resourceClaim, resourcesMountPath)
+  configureRuntimeProofMaterials(
+    values,
+    topology,
+    deploymentDir,
+    resourcesMountPath,
+    'withdrawal-processor',
+    mode === 'disabled' ? undefined : resourceClaim,
+  )
   writeYaml(filePath, values)
 }
 
@@ -395,6 +560,8 @@ function configureL2Genesis(values: Record<string, any>, l2GenesisJson: string):
 function configureCoordinatorValues(
   filePath: string,
   configContent: string,
+  topology: ProofTopologySpec,
+  deploymentDir: string,
   bundleRevision: string,
   materialsDir: string,
   generatedMaterialsRoot: string,
@@ -436,6 +603,14 @@ function configureCoordinatorValues(
   )
   configureL2Genesis(values, l2GenesisJson)
   configureProofResources(values, resourceClaim, resourcesMountPath)
+  configureRuntimeProofMaterials(
+    values,
+    topology,
+    deploymentDir,
+    resourcesMountPath,
+    'proof-coordinator',
+    resourceClaim,
+  )
   writeYaml(filePath, values)
 }
 
@@ -487,6 +662,10 @@ function configureAbsentCoordinatorValues(
   delete values.configMaps[MATERIALS_CONFIG_MAP]
   delete values.persistence[MATERIALS_VOLUME]
   delete values.persistence[RESOURCES_VOLUME]
+  delete values.persistence[RUNTIME_MATERIALS_VOLUME]
+  delete values.persistence[RUNTIME_SEED_VOLUME]
+  delete values.secrets?.[RUNTIME_SEED_SECRET]
+  delete values.initContainers?.['prepare-proof-runtime-materials']
   configureL2Genesis(values, l2GenesisJson)
   annotate(values, bundleRevision)
   writeYaml(filePath, values)
@@ -635,7 +814,8 @@ export function reconcileCompiledProofTopology(
   configureWithdrawalValues(
     withdrawalValuesPath,
     fs.readFileSync(options.withdrawalConfigPath, 'utf8'),
-    mode,
+    effectiveTopology,
+    options.deploymentDir,
     bundle.manifest.bundle_revision,
     materialsDir,
     generatedMaterialsRoot,
@@ -657,6 +837,8 @@ export function reconcileCompiledProofTopology(
     configureCoordinatorValues(
       coordinatorValuesPath,
       fs.readFileSync(options.coordinatorConfigPath, 'utf8'),
+      effectiveTopology,
+      options.deploymentDir,
       bundle.manifest.bundle_revision,
       materialsDir,
       generatedMaterialsRoot,
