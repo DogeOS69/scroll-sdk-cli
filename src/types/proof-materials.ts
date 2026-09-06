@@ -59,6 +59,12 @@ export interface ProofMaterialsV1 {
       l2Range: ProofProgramIdentityV1
     }
     identitySource: 'dogeos_core_synthetic_mock_v1' | 'real_identity_probe'
+    /** Files required by production-shaped materialization with mock proving. */
+    materializationArtifacts?: {
+      aggregateVerifyingKey: ProofMaterialFileV1
+      batchMaterializer: ProofMaterialFileV1
+      chunkMaterializer: ProofMaterialFileV1
+    }
     openvmVersion?: string
     rustToolchain?: string
     sourceRevisions?: {

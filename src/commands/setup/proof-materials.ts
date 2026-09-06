@@ -15,15 +15,16 @@ export default class ProofMaterials extends Command {
 
   static examples = [
     '$ scrollsdk setup proof-materials --generation mock',
-    '$ scrollsdk setup proof-materials --generation mock --identity-env /build/real-identity.env',
+    '$ scrollsdk setup proof-materials --generation mock --identity-env /build/real-identity.env --worker-identity-bundle /build/worker-identity-bundle.json',
     '$ scrollsdk setup proof-materials --generation real --software-manifest /build/real-proving-artifacts.json --identity-env /build/real-identity.env --chunk-materializer /build/materialize-chunk-oneshot --batch-materializer /build/scroll-runtime-materializer --mock-worker-image repo/mock@sha256:... --production-worker-image repo/worker@sha256:... --compiler-image repo/compiler@sha256:...',
     '$ scrollsdk setup proof-materials --generation real --bridge-artifact-dir /build/bridge --protocol-context .data/protocol_context.json',
   ]
 
   static flags = {
-    'batch-materializer': Flags.string({description: 'Built dogeos-core Batch materializer binary; real only'}),
+    'aggregate-verifying-key': Flags.string({description: 'Root aggregate verifying key; required with mock real-materialization and supplied by the real software manifest for real generation'}),
+    'batch-materializer': Flags.string({description: 'Built dogeos-core Batch materializer binary; required for real materialization'}),
     'bridge-artifact-dir': Flags.string({description: 'Optional output of prover-worker --stage-bridge-artifact; real only'}),
-    'chunk-materializer': Flags.string({description: 'Built dogeos-core Chunk materializer binary; real only'}),
+    'chunk-materializer': Flags.string({description: 'Built dogeos-core Chunk materializer binary; required for real materialization'}),
     'compiler-image': Flags.string({description: 'dogeos-proof-topology tag or digest from the approved release lineage'}),
     'deployment-dir': Flags.string({default: '.', description: 'Deployment directory'}),
     generation: Flags.string({description: 'Materials to prepare: mock imports shared identities only; real imports the full proving release', options: ['mock', 'real']}),
@@ -36,6 +37,7 @@ export default class ProofMaterials extends Command {
     'production-worker-image': Flags.string({description: 'Real Worker release tag or digest; real only'}),
     'protocol-context': Flags.string({description: 'Deployment protocol_context.json required with --bridge-artifact-dir; real only'}),
     'software-manifest': Flags.string({description: 'real-proving-artifacts.json written by dogeos-core --check-only; real only'}),
+    'worker-identity-bundle': Flags.string({description: 'Canonical worker-identity-bundle.json from the matching dogeos-core bake; required for mock proving with real materialization'}),
   }
 
   public async run(): Promise<void> {
@@ -62,22 +64,41 @@ export default class ProofMaterials extends Command {
         message: 'Which proof generation materials do you want to prepare?',
       }))) as 'mock' | 'real'
       if (generation === 'mock' && [
-        flags['batch-materializer'],
         flags['bridge-artifact-dir'],
-        flags['chunk-materializer'],
         flags['production-worker-image'],
         flags['protocol-context'],
         flags['software-manifest'],
       ].some(Boolean)) {
         throw new Error('Real-only flags were supplied with --generation mock; remove them or select --generation real')
       }
+      if (flags['worker-identity-bundle'] && !(generation === 'mock' && flags['identity-env'])) {
+        throw new Error('--worker-identity-bundle is valid only with --generation mock --identity-env')
+      }
+      if (generation === 'real' && flags['aggregate-verifying-key']) {
+        throw new Error('--aggregate-verifying-key is supplied by --software-manifest for --generation real')
+      }
 
       const identityEnv = generation === 'real'
         ? await required(flags['identity-env'], 'Enter the dogeos-core real-identity.env path:', 'identity-env')
         : flags['identity-env']?.trim()
+      const workerIdentityBundle = generation === 'mock' && identityEnv
+        ? await required(
+          flags['worker-identity-bundle'],
+          'Enter the matching dogeos-core worker-identity-bundle.json path:',
+          'worker-identity-bundle',
+        )
+        : flags['worker-identity-bundle']?.trim()
+      const aggregateVerifyingKey = generation === 'mock' && identityEnv
+        ? await required(
+          flags['aggregate-verifying-key'],
+          'Enter the root aggregate verifying key path:',
+          'aggregate-verifying-key',
+        )
+        : undefined
       const softwareManifest = generation === 'real' ? await required(flags['software-manifest'], 'Enter the dogeos-core real-proving artifact manifest path:', 'software-manifest') : undefined
-      const chunkMaterializer = generation === 'real' ? await required(flags['chunk-materializer'], 'Enter the built Chunk materializer binary path:', 'chunk-materializer') : undefined
-      const batchMaterializer = generation === 'real' ? await required(flags['batch-materializer'], 'Enter the built Batch materializer binary path:', 'batch-materializer') : undefined
+      const usesRealMaterializers = generation === 'real' || Boolean(identityEnv)
+      const chunkMaterializer = usesRealMaterializers ? await required(flags['chunk-materializer'], 'Enter the built Chunk materializer binary path:', 'chunk-materializer') : undefined
+      const batchMaterializer = usesRealMaterializers ? await required(flags['batch-materializer'], 'Enter the built Batch materializer binary path:', 'batch-materializer') : undefined
       const compilerImage = await required(
         flags['compiler-image'],
         'Enter the approved dogeos-core proof-topology compiler image:',
@@ -116,6 +137,7 @@ export default class ProofMaterials extends Command {
       }
 
       const result = prepareProofMaterials({
+        aggregateVerifyingKey: aggregateVerifyingKey ? path.resolve(aggregateVerifyingKey) : undefined,
         batchMaterializer: batchMaterializer ? path.resolve(batchMaterializer) : undefined,
         bridgeArtifactDir: bridgeArtifactDir ? path.resolve(bridgeArtifactDir) : undefined,
         chunkMaterializer: chunkMaterializer ? path.resolve(chunkMaterializer) : undefined,
@@ -137,6 +159,7 @@ export default class ProofMaterials extends Command {
           && Boolean(flags['compiler-image'])
           && Boolean(flags['mock-worker-image'])
           && !identityEnv,
+        workerIdentityBundle: workerIdentityBundle ? path.resolve(workerIdentityBundle) : undefined,
       })
 
       output.logSuccess(`Prepared proof materials ${result.receiptPath}`)

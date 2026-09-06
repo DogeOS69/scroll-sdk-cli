@@ -96,6 +96,14 @@ export function buildProofTopology(options: BuildProofTopologyOptions): ProofTop
   if (generation === 'real' && (!materials.software.artifacts || !materials.bridge || !materials.images.productionWorker)) {
     throw new Error('real proof generation requires full software artifacts, deployment-bound Bridge material, and a production Worker image in proof-materials-v1.json')
   }
+  const materializationArtifacts = materials.software.artifacts
+    ?? materials.software.materializationArtifacts
+  if (realMaterialization && !materializationArtifacts) {
+    throw new Error(
+      'real Scroll materialization requires the aggregate verifying key plus Chunk and Batch materializer binaries; '
+      + 'rerun setup proof-materials with the release materialization files',
+    )
+  }
 
   const compilerIdentity = generation === 'real'
     ? materials.bridge?.artifacts.nativeManifest
@@ -114,14 +122,16 @@ export function buildProofTopology(options: BuildProofTopologyOptions): ProofTop
   const root = '.data/proof-materials'
   const {artifacts} = materials.software
   const realScroll = {
+    ...(materializationArtifacts ? {
+      aggVerifyingKeyPath: materializationArtifacts.aggregateVerifyingKey.path,
+      batchMaterializerBinaryPath: materializationArtifacts.batchMaterializer.path,
+      chunkMaterializerBinaryPath: materializationArtifacts.chunkMaterializer.path,
+    } : {}),
     ...(artifacts ? {
-      aggVerifyingKeyPath: artifacts.aggregateVerifyingKey.path,
       batchAppConfig: artifacts.batchAppConfig.path,
       batchAppExe: artifacts.batchAppExe.path,
-      batchMaterializerBinaryPath: artifacts.batchMaterializer.path,
       chunkAppConfig: artifacts.chunkAppConfig.path,
       chunkAppExe: artifacts.chunkAppExe.path,
-      chunkMaterializerBinaryPath: artifacts.chunkMaterializer.path,
     } : {}),
     batchProgramCommitmentHashHex: materials.software.identities.batch.programCommitmentHash,
     batchProgramCommitmentHex: materials.software.identities.batch.appCommitRaw,

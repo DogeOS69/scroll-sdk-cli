@@ -140,7 +140,9 @@ There are two supported mock preparations:
 - `--generation mock` without `--identity-env` uses the pinned mock Worker's
   canonical identity document plus synthetic placeholders. The resulting
   `withdrawal_mock_prover` profile uses one batch-wide exact-mock chunk.
-- `--generation mock --identity-env /path/to/real-identity.env` imports the
+- `--generation mock --identity-env /path/to/real-identity.env
+  --worker-identity-bundle /path/to/worker-identity-bundle.json` plus the root
+  aggregate VK and the matching Chunk/Batch materializer binaries imports the
   release's real materializer identities without importing the real proving
   programs. The resulting `withdrawal_mock_prover_real_materialize` profile
   uses the DA segmentation sidecar and real Chunk/Batch materializers, while
@@ -148,6 +150,16 @@ There are two supported mock preparations:
 
 The second form is the correct pre-production rehearsal when materializer
 correctness or per-chunk performance is under test.
+
+```bash
+scrollsdk setup proof-materials \
+  --generation mock \
+  --identity-env /secure/build/real-identity.env \
+  --worker-identity-bundle /secure/build/worker-identity-bundle.json \
+  --aggregate-verifying-key /secure/build/verifier/root_verifier_vk \
+  --chunk-materializer /secure/build/materialize-chunk-oneshot \
+  --batch-materializer /secure/build/scroll-runtime-materializer
+```
 
 For real operation, run the producer/probe/baker first, then import the full
 result:
@@ -177,8 +189,13 @@ Before writing a synthetic mock receipt, the CLI requires:
 
 For identity-backed mock materialization, the CLI additionally applies the
 identity-env allow-list and canonical-encoding checks used by the real path,
-but it does not require `.vmexe`, aggregate VK, Bridge bake, materializer binary
-copies, or a production Worker image.
+and requires the matching dogeos-core `worker-identity-bundle.json`. The bundle
+must carry a non-placeholder `batch_guest`; its Batch and Aggregation
+commitments must agree with the identity env. The mock Worker's all-zero Batch
+placeholder is rejected for this profile. This path also requires the root
+aggregate VK and both materializer binaries because dogeos-core validates every
+runtime resource used by the selected profile. It does not require `.vmexe`,
+Bridge bake, or a production Worker image.
 
 The real path additionally requires:
 

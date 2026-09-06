@@ -81,6 +81,7 @@ interface NativeBridgeManifest {
 }
 
 export interface PrepareProofMaterialsOptions {
+  aggregateVerifyingKey?: string
   batchMaterializer?: string
   bridgeArtifactDir?: string
   chunkMaterializer?: string
@@ -99,6 +100,12 @@ export interface PrepareProofMaterialsOptions {
   producerManifest?: string
   protocolContext?: string
   refreshExistingImages?: boolean
+  /**
+   * Canonical worker-identity-bundle.json emitted by the matching dogeos-core
+   * bake. Required when mock proving uses real Scroll materialization because
+   * the mock image intentionally carries an all-zero batch_guest placeholder.
+   */
+  workerIdentityBundle?: string
 }
 
 function mockWorkerAggregationIdentity(body: string, label: string): {appCommitRaw: string; programCommitmentHash: string} {
@@ -180,6 +187,33 @@ function validateGuestCommit(value: Record<string, unknown>, label: string): voi
 
 function validateMockWorkerIdentity(body: string, label: string): void {
   mockWorkerAggregationIdentity(body, label)
+}
+
+function validateRealMaterializationWorkerIdentity(
+  body: string,
+  env: Record<string, string>,
+  label: string,
+): void {
+  const root = mapping(JSON.parse(body) as unknown, label)
+  const batch = mapping(root.batch_guest, `${label}.batch_guest`)
+  const batchRaw = canonicalHex(batch.app_commit_raw, 64, `${label}.batch_guest.app_commit_raw`)
+  if (batchRaw === `0x${'0'.repeat(128)}`) {
+    throw new Error(`${label}.batch_guest must not be the all-zero mock placeholder for real materialization`)
+  }
+
+  if (batchRaw !== env.DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW) {
+    throw new Error(`${label}.batch_guest does not match DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW`)
+  }
+
+  const aggregation = mapping(root.batch_aggregation_guest, `${label}.batch_aggregation_guest`)
+  const aggregationRaw = canonicalHex(
+    aggregation.app_commit_raw,
+    64,
+    `${label}.batch_aggregation_guest.app_commit_raw`,
+  )
+  if (aggregationRaw !== env.DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW) {
+    throw new Error(`${label}.batch_aggregation_guest does not match DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW`)
+  }
 }
 
 export function extractMockWorkerIdentity(image: ProofTopologyImageReference): string {
@@ -515,7 +549,6 @@ function refreshExistingProofMaterialImages(
   deploymentDir: string,
   outputRoot: string,
   receiptPath: string,
-  mockWorkerIdentity: string | undefined,
 ): {receipt: ProofMaterialsV1; receiptPath: string} | undefined {
   const outputRootExists = fs.existsSync(outputRoot)
   const receiptExists = fs.existsSync(receiptPath)
@@ -539,14 +572,6 @@ function refreshExistingProofMaterialImages(
 
   assertDirectory(outputRoot, 'Existing proof material directory')
   const existing = readProofMaterials(receiptPath, deploymentDir)
-  if (!mockWorkerIdentity) throw new Error('Mock image refresh requires the pinned Worker identity document')
-  const compilerIdentity = writeMaterialBody(
-    deploymentDir,
-    outputRoot,
-    mockWorkerIdentity,
-    MOCK_WORKER_IDENTITY_RELATIVE_PATH,
-    true,
-  )
   const receipt: ProofMaterialsV1 = {
     ...existing,
     generatedAt: new Date().toISOString(),
@@ -555,10 +580,11 @@ function refreshExistingProofMaterialImages(
       mockWorker: options.images.mockWorker,
       topologyCompiler: options.images.topologyCompiler,
     },
-    software: {
-      ...existing.software,
-      compilerIdentity,
-    },
+    // Image-only refresh must not replace release/deployment identity material.
+    // In particular, mock Worker images intentionally carry an all-zero
+    // batch_guest placeholder, while a real-materialization mock topology uses
+    // the non-placeholder bundle imported during the original preparation.
+    software: existing.software,
   }
   replacePrivateJson(receiptPath, receipt)
   return {receipt, receiptPath}
@@ -575,28 +601,40 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
     if (image) immutableProofImage(image)
   }
 
-  const mockWorkerIdentity = options.mockWorkerIdentity === undefined
+  if (options.generation === 'mock' && options.identityEnv
+    && !options.workerIdentityBundle && !options.mockWorkerIdentity) {
+    throw new Error(
+      'Mock proving with real materialization requires --worker-identity-bundle from the matching dogeos-core bake; '
+      + 'the mock Worker image carries an all-zero batch_guest placeholder',
+    )
+  }
+
+  const workerIdentityPath = options.workerIdentityBundle ?? options.mockWorkerIdentity
+  const mockWorkerIdentity = workerIdentityPath === undefined
     ? extractMockWorkerIdentity(options.images.mockWorker)
-    : fs.readFileSync(path.resolve(options.mockWorkerIdentity), 'utf8')
-  validateMockWorkerIdentity(mockWorkerIdentity, 'mock Worker identity')
+    : fs.readFileSync(path.resolve(workerIdentityPath), 'utf8')
+  validateMockWorkerIdentity(mockWorkerIdentity, 'Worker identity bundle')
 
   const refreshed = refreshExistingProofMaterialImages(
     options,
     deploymentDir,
     outputRoot,
     receiptPath,
-    mockWorkerIdentity,
   )
   if (refreshed) return refreshed
 
   let env: Record<string, string> | undefined
   if (options.identityEnv) {
     env = parseProofIdentityEnv(fs.readFileSync(path.resolve(options.identityEnv), 'utf8'))
+    if (options.generation === 'mock') {
+      validateRealMaterializationWorkerIdentity(mockWorkerIdentity, env, 'Worker identity bundle')
+    }
   } else if (options.generation === 'real') {
     throw new Error('Real proof materials require --identity-env')
   }
 
   let producer: ProducerManifest | undefined
+  let aggregateVerifyingKey: string | undefined
   let chunkMaterializer: string | undefined
   let batchMaterializer: string | undefined
   if (options.generation === 'real') {
@@ -604,12 +642,29 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
     if (!options.chunkMaterializer) throw new Error('Real proof materials require --chunk-materializer')
     if (!options.batchMaterializer) throw new Error('Real proof materials require --batch-materializer')
     producer = readProducerManifest(path.resolve(options.producerManifest))
+    aggregateVerifyingKey = producer.artifacts.root_agg_verifying_key.path
     chunkMaterializer = path.resolve(options.chunkMaterializer)
     batchMaterializer = path.resolve(options.batchMaterializer)
     assertRegularFile(chunkMaterializer, 'Chunk materializer')
     assertRegularFile(batchMaterializer, 'Batch materializer')
   } else if (options.bridgeArtifactDir || options.protocolContext || options.images.productionWorker) {
     throw new Error('Bridge artifacts and the production Worker image belong to generation=real; rerun with --generation real')
+  } else if (env) {
+    if (!options.aggregateVerifyingKey || !options.chunkMaterializer || !options.batchMaterializer) {
+      throw new Error(
+        'Mock proving with real materialization requires --aggregate-verifying-key, '
+        + '--chunk-materializer, and --batch-materializer',
+      )
+    }
+
+    aggregateVerifyingKey = path.resolve(options.aggregateVerifyingKey)
+    chunkMaterializer = path.resolve(options.chunkMaterializer)
+    batchMaterializer = path.resolve(options.batchMaterializer)
+    assertRegularFile(aggregateVerifyingKey, 'Aggregate verifying key')
+    assertRegularFile(chunkMaterializer, 'Chunk materializer')
+    assertRegularFile(batchMaterializer, 'Batch materializer')
+  } else if (options.aggregateVerifyingKey || options.chunkMaterializer || options.batchMaterializer) {
+    throw new Error('Materializer files require --identity-env or --generation real')
   }
 
   fs.mkdirSync(path.dirname(outputRoot), {recursive: true})
@@ -621,6 +676,7 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
       chunk: identity(env.DOGEOS_CHUNK_PROGRAM_COMMITMENT_RAW, env.DOGEOS_CHUNK_PROGRAM_COMMITMENT, env.DOGEOS_CHUNK_VK_HASH),
       l2Range: identity(env.DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW, sha256Bytes(env.DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW), env.DOGEOS_BRIDGE_VK_HASH),
     } : syntheticMockProofIdentities()
+
     if (!env && options.generation === 'mock') {
       const aggregation = mockWorkerAggregationIdentity(mockWorkerIdentity, 'mock Worker identity')
       identities.l2Range = {
@@ -661,6 +717,27 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
       receipt.software.sourceRevisions = {
         dogeosCore: producer.dogeos_core_commit,
         scrollZkvmProver: producer.producer.commit,
+      }
+    } else if (env && aggregateVerifyingKey && chunkMaterializer && batchMaterializer) {
+      receipt.software.materializationArtifacts = {
+        aggregateVerifyingKey: copyMaterial(
+          deploymentDir,
+          outputRoot,
+          aggregateVerifyingKey,
+          'software/verifier/root_verifier_vk',
+        ),
+        batchMaterializer: copyMaterial(
+          deploymentDir,
+          outputRoot,
+          batchMaterializer,
+          'software/bin/batch-materializer',
+        ),
+        chunkMaterializer: copyMaterial(
+          deploymentDir,
+          outputRoot,
+          chunkMaterializer,
+          'software/bin/chunk-materializer',
+        ),
       }
     }
 
@@ -818,6 +895,15 @@ export function readProofMaterials(receiptPath: string, deploymentDir = path.dir
     throw new Error('Identity-only proof material receipt must not contain incomplete real-release metadata')
   }
 
+  if (software.materializationArtifacts !== undefined) {
+    const artifacts = mapping(software.materializationArtifacts, 'proof material receipt.software.materializationArtifacts')
+    receipt.software.materializationArtifacts = {
+      aggregateVerifyingKey: proofMaterialFile(artifacts.aggregateVerifyingKey, 'software.materializationArtifacts.aggregateVerifyingKey'),
+      batchMaterializer: proofMaterialFile(artifacts.batchMaterializer, 'software.materializationArtifacts.batchMaterializer'),
+      chunkMaterializer: proofMaterialFile(artifacts.chunkMaterializer, 'software.materializationArtifacts.chunkMaterializer'),
+    }
+  }
+
   if (root.bridge !== undefined) {
     const bridge = mapping(root.bridge, 'proof material receipt.bridge')
     const bridgeArtifacts = mapping(bridge.artifacts, 'proof material receipt.bridge.artifacts')
@@ -840,6 +926,7 @@ export function readProofMaterials(receiptPath: string, deploymentDir = path.dir
   for (const file of [
     ...(receipt.software.compilerIdentity ? [receipt.software.compilerIdentity] : []),
     ...Object.values(receipt.software.artifacts ?? {}),
+    ...Object.values(receipt.software.materializationArtifacts ?? {}),
     ...Object.values(receipt.bridge?.artifacts ?? {}),
   ]) {
     const resolved = path.resolve(deploymentDir, file.path)

@@ -283,7 +283,7 @@ export default class ProofAwsInit extends Command {
       json.addWarning(
         result.artifactReadTransport.publicReadMode === 'direct-s3'
           ? `anonymous GetObject is limited to the required external-consumer object paths under s3://${result.bucket}/${keyPrefix}; the segmentation sidecar, list/write/delete remain private, but external reachability is unverified`
-          : `the partner/external artifact route ${result.artifactReadTransport.publicEndpointUrl} is operator-managed and unverified; S3 remains private`,
+          : `the partner/external artifact route ${result.artifactReadTransport.publicEndpointUrl} is operator-managed and unverified; scroll-sdk-cli did not change the bucket policy or Public Access Block settings`,
       )
       json.addWarning(
         'require HTTP 200 for one exact digest-scoped object from every external Worker and partner Signer network before activation',
