@@ -19,6 +19,29 @@ blocked and SSE-S3 (`AES256`) enabled. The CLI does **not** create an anonymous
 read bucket policy, CloudFront distribution, or other public read transport.
 Operators must configure and verify the `publicBaseUrl` transport separately.
 
+This is also the canonical object store for proof topology. dogeos-core does
+not expose a second S3 client for segmentation sidecars: raw DA blobs and proof
+artifacts use the same bucket, region, and key prefix, with different logical
+object keys. `setup proof-aws-init` reads this table and refuses an independent
+proof bucket/prefix.
+
+For a prefix such as `rehearsal/batches`, the relevant namespaces are:
+
+```text
+rehearsal/batches/0x<versioned-hash>                         raw DA blob
+rehearsal/batches/scroll-chunk-segmentation-sidecars/...    internal sidecar
+rehearsal/batches/input-specs/...                           Worker input
+rehearsal/batches/prepared-bundles/...                      Worker input
+rehearsal/batches/witnesses/...                             Worker/signer input
+rehearsal/batches/public-outputs/...                        Worker output
+rehearsal/batches/proofs/...                                proof bytes
+```
+
+The bucket can still apply different read permissions to those object-key
+patterns. In direct-S3 mode, never grant anonymous `GetObject` to the entire
+`<keyPrefix>/*`: the segmentation-sidecar namespace is internal. List, write,
+and delete remain authenticated even for externally readable objects.
+
 After configuring the archive, run `scrollsdk setup prep-charts`. It reads
 `.data/doge-config.toml` and projects the settings into `eth-da-submitter`,
 `l1-interface`, `withdrawal-processor`, and every runtime Reth values file.
@@ -56,8 +79,10 @@ scrollsdk setup eth-da-submitter \
   --no-create-archive-bucket
 ```
 
-`--aws-region` selects the KMS/EKS/IRSA region.
+`--aws-region` selects the KMS/EKS/IRSA and Secrets Manager region.
 `--archive-region` selects the S3 bucket region; the two regions may differ.
+An S3 Gateway endpoint is regional, so proof AWS setup does not associate an
+EKS-region gateway endpoint when the shared artifact bucket is cross-region.
 
 To let the CLI create a missing bucket, use
 `--create-archive-bucket` (the default) instead. The CLI performs

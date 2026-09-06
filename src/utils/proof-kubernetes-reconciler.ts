@@ -96,7 +96,6 @@ export function reconcileProofKubernetes(options: ReconcileProofKubernetesOption
   const withdrawalConfigPath = path.resolve(options.withdrawalConfigPath || path.join(deploymentDir, WITHDRAWAL_NATIVE_CONFIG_RELPATH))
   const proofAws = readOptionalProofAwsConfig(deploymentDir, options.proofAwsConfigPath || DEFAULT_PROOF_AWS_CONFIG)
   if (proofAws) assertProofAwsMatchesTopology(options.intent.proofTopology, proofAws.config)
-  const proofAwsConfigPath = projectProofAwsConfig(deploymentDir, valuesDir, options.proofAwsConfigPath)
   const compiled = reconcileCompiledProofTopology({
     bridge: options.proofTopologyBridge,
     compilerBinary: options.proofTopologyCompilerBinary,
@@ -114,6 +113,10 @@ export function reconcileProofKubernetes(options: ReconcileProofKubernetesOption
     valuesDir,
     withdrawalConfigPath,
   })
+  // The compiler adapter updates the same values documents. Apply the
+  // deployment-specific AWS projection last so a stale template secret path
+  // can never overwrite the proof-aws.json authority.
+  const proofAwsConfigPath = projectProofAwsConfig(deploymentDir, valuesDir, options.proofAwsConfigPath)
   const workerContract = compiled.bundle.manifest.prover_worker
     ? path.join(compiled.bundle.bundleDir, compiled.bundle.manifest.prover_worker)
     : undefined

@@ -20,6 +20,7 @@ import {
   normalizeProofBucketName,
   proofArtifactS3Endpoint,
 } from '../../utils/proof-aws-provisioner.js'
+import {readSharedArtifactStore} from '../../utils/proof-shared-artifact-store.js'
 
 export const PROOF_AWS_INIT_NEXT_STEPS =
   'run scrollsdk setup proof-materials, then scrollsdk setup doge-config --proof-topology, '
@@ -32,7 +33,7 @@ export default class ProofAwsInit extends Command {
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --aws-region us-west-2 --eks-cluster dogeos-testnet --deployment-alias dev0829 --artifact-public-read-mode direct-s3 -N',
     '<%= config.bin %> <%= command.id %> --artifact-public-read-mode existing-gateway --artifact-public-endpoint-url https://objects.example.com',
-    '<%= config.bin %> <%= command.id %> --bucket my-proof-artifacts --rotate-tokens',
+    '<%= config.bin %> <%= command.id %> --rotate-tokens',
   ]
 
   static override flags = {
@@ -41,14 +42,15 @@ export default class ProofAwsInit extends Command {
     'artifact-read-route-table-id': Flags.string({description: 'Advanced override: EKS subnet route table to associate with the S3 gateway endpoint (repeatable; normally auto-discovered)', multiple: true}),
     'artifact-read-vpc-endpoint-id': Flags.string({description: 'Advanced override: existing S3 Gateway VPC endpoint (normally auto-discovered or created)'}),
     'aws-profile': Flags.string({ description: 'AWS CLI profile used for provisioning' }),
-    'aws-region': Flags.string({description: 'AWS region for the bucket, roles, and secret (auto-detected when omitted)'}),
-    bucket: Flags.string({ description: 'Proof artifact S3 bucket (default: dogeos-<deployment-alias>-proof-artifacts)' }),
+    'aws-region': Flags.string({description: 'AWS region containing EKS and the proof token secret (auto-detected when omitted)'}),
+    bucket: Flags.string({ description: 'Advanced consistency assertion for the shared artifact bucket; the value is read from doge-config' }),
     config: Flags.string({ default: DEFAULT_PROOF_AWS_CONFIG, description: 'Output config file consumed by setup prep-charts' }),
     'coordinator-service-account': Flags.string({description: 'Kubernetes service account used by proof-coordinator (default: proof-coordinator)'}),
     'deployment-alias': Flags.string({description: 'Unique deployment instance alias used to derive deterministic bucket and IAM role names'}),
+    'doge-config': Flags.string({default: '.data/doge-config.toml', description: 'DogeOS config containing the canonical ethereumDa.blobArchive.s3 store'}),
     'eks-cluster': Flags.string({description: 'EKS cluster name used by the IRSA trust policies (selected interactively when omitted)'}),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
-    'key-prefix': Flags.string({description: 'Object key prefix for the proof artifact store (default: proof-topology)'}),
+    'key-prefix': Flags.string({description: 'Advanced consistency assertion for the shared artifact key prefix; the value is read from doge-config'}),
     namespace: Flags.string({description: 'Kubernetes namespace of the proof workloads (default: default)'}),
     'non-interactive': Flags.boolean({char: 'N', default: false, description: 'Run without prompts; missing values must be discoverable, already configured, or passed as flags'}),
     'rotate-tokens': Flags.boolean({ default: false, description: 'Replace the proof-work/prover-worker tokens in an existing secret (both workloads must be restarted afterwards)' }),
@@ -64,9 +66,10 @@ export default class ProofAwsInit extends Command {
     try {
       const nonInteractive = flags['non-interactive'] || flags.json
       const existing = readOptionalProofAwsConfig('.', flags.config)?.config
+      const shared = readSharedArtifactStore('.', flags['doge-config']).store
       const discovery = new ProofAwsDiscovery(flags['aws-profile'])
       const awsRegion = await this.resolveRequiredValue({
-        defaultValue: existing?.artifactStore.region || discovery.configuredRegion(),
+        defaultValue: existing?.kubernetes.awsRegion || discovery.configuredRegion(),
         explicit: flags['aws-region'],
         flag: '--aws-region',
         message: 'Enter the AWS region containing the EKS cluster:',
@@ -93,11 +96,11 @@ export default class ProofAwsInit extends Command {
       }
 
       const cluster = sanitizeName(eksCluster)
-      const bucket = normalizeProofBucketName(flags.bucket
-        || (existing?.kubernetes.deploymentAlias === deploymentAlias
-          ? existing.artifactStore.bucket
-          : undefined)
-        || `dogeos-${alias}-proof-artifacts`)
+      const bucket = normalizeProofBucketName(shared.bucket)
+      if (flags.bucket && normalizeProofBucketName(flags.bucket) !== bucket) {
+        throw new Error(`--bucket must match canonical ethereumDa.blobArchive.s3.bucket (${bucket})`)
+      }
+
       const defaultPublicReadMode = existing?.artifactReadTransport.publicReadMode || 'direct-s3'
       let publicReadMode = flags['artifact-public-read-mode'] as ProofArtifactPublicReadMode | undefined
       if (!publicReadMode) {
@@ -113,7 +116,7 @@ export default class ProofAwsInit extends Command {
           publicReadMode = await select({
             choices: [
               {
-                name: 'Direct AWS S3 (public GetObject only for the proof prefix)',
+                name: 'Direct AWS S3 (public GetObject only for required DA/proof object paths)',
                 value: 'direct-s3',
               },
               {
@@ -134,7 +137,7 @@ export default class ProofAwsInit extends Command {
       }
 
       const publicEndpointUrl = publicReadMode === 'direct-s3'
-        ? proofArtifactS3Endpoint(awsRegion)
+        ? proofArtifactS3Endpoint(shared.region)
         : await this.resolveRequiredValue({
             defaultValue: existing?.artifactReadTransport.publicReadMode === 'existing-gateway'
               ? existing.artifactReadTransport.publicEndpointUrl
@@ -155,7 +158,13 @@ export default class ProofAwsInit extends Command {
         )
       }
 
-      const configureVpcEndpoint = flags['skip-vpc-endpoint']
+      if (shared.region !== awsRegion && advancedVpcInput) {
+        throw new Error(
+          `S3 Gateway endpoint overrides cannot be used because EKS is in ${awsRegion} while the shared artifact bucket is in ${shared.region}`,
+        )
+      }
+
+      const configureVpcEndpoint = shared.region !== awsRegion || flags['skip-vpc-endpoint']
         ? false
         : nonInteractive || advancedVpcInput
           ? true
@@ -164,7 +173,11 @@ export default class ProofAwsInit extends Command {
               message: 'Configure EKS-internal S3 routing through an auto-discovered Gateway VPC endpoint?',
             })
       const namespace = flags.namespace || existing?.kubernetes.namespace || 'default'
-      const keyPrefix = flags['key-prefix'] || existing?.artifactStore.keyPrefix || 'proof-topology'
+      const {keyPrefix} = shared
+      if (flags['key-prefix'] && flags['key-prefix'] !== keyPrefix) {
+        throw new Error(`--key-prefix must match canonical ethereumDa.blobArchive.s3.keyPrefix (${keyPrefix})`)
+      }
+
       const sameDeployment = existing?.kubernetes.deploymentAlias === deploymentAlias
       const reusableSecretName = sameDeployment
         && existing?.secret.name !== LEGACY_SHARED_PROOF_SECRET_NAME
@@ -179,7 +192,9 @@ export default class ProofAwsInit extends Command {
       const withdrawalServiceAccount = flags['withdrawal-service-account']
         || existing?.serviceAccounts.withdrawalProcessor.name
         || 'withdrawal-processor'
-      const canReuseVpcFacts = existing?.artifactStore.region === awsRegion
+      const canReuseVpcFacts = shared.region === awsRegion
+        && existing?.artifactStore.region === shared.region
+        && existing.kubernetes.awsRegion === awsRegion
         && existing.kubernetes.eksCluster === eksCluster
       const artifactReadVpcEndpointId = flags['artifact-read-vpc-endpoint-id']
         || (canReuseVpcFacts
@@ -194,9 +209,9 @@ export default class ProofAwsInit extends Command {
       if (!nonInteractive && !flags.yes) {
         this.log('')
         this.log('Proof AWS resource plan:')
-        this.log(`  AWS region:             ${awsRegion}`)
+        this.log(`  EKS/secret AWS region:  ${awsRegion}`)
         this.log(`  EKS cluster/namespace:  ${eksCluster} / ${namespace}`)
-        this.log(`  S3 artifact prefix:     s3://${bucket}/${keyPrefix}`)
+        this.log(`  Shared DA/proof store:  s3://${bucket}/${keyPrefix} (${shared.region})`)
         this.log(`  Public read mode:       ${publicReadMode}`)
         this.log(`  External artifact endpoint: ${publicEndpointUrl}`)
         this.log(`  EKS S3 Gateway route:   ${configureVpcEndpoint ? 'auto-discover/create' : 'skipped'}`)
@@ -209,6 +224,7 @@ export default class ProofAwsInit extends Command {
 
       const provisioner = new ProofAwsProvisioner(json, flags['aws-profile'])
       const identity = {
+        artifactRegion: shared.region,
         awsRegion,
         deploymentAlias,
         eksCluster,
@@ -250,6 +266,7 @@ export default class ProofAwsInit extends Command {
       const configResult = writeProofAwsConfig(
         path.resolve(flags.config),
         buildProofAwsConfig({
+          artifactRegion: shared.region,
           coordinatorServiceAccount,
           identity,
           keyPrefix,
@@ -265,7 +282,7 @@ export default class ProofAwsInit extends Command {
       )
       json.addWarning(
         result.artifactReadTransport.publicReadMode === 'direct-s3'
-          ? `anonymous GetObject is configured only for s3://${result.bucket}/${keyPrefix}/* at ${result.artifactReadTransport.publicEndpointUrl}; list/write/delete remain private, but external reachability is unverified`
+          ? `anonymous GetObject is limited to the required external-consumer object paths under s3://${result.bucket}/${keyPrefix}; the segmentation sidecar, list/write/delete remain private, but external reachability is unverified`
           : `the partner/external artifact route ${result.artifactReadTransport.publicEndpointUrl} is operator-managed and unverified; S3 remains private`,
       )
       json.addWarning(

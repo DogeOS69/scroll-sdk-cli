@@ -14,11 +14,12 @@ import {PROOF_MATERIALS_SCHEMA} from '../types/proof-materials.js'
 
 export const DEFAULT_PROOF_MATERIALS_RECEIPT = '.data/proof-materials-v1.json'
 export const DEFAULT_PROOF_MATERIALS_ROOT = '.data/proof-materials'
-export const DEFAULT_PROOF_TOPOLOGY_COMPILER_IMAGE = 'dogeos69/dogeos-proof-topology:v0.3.0-beta.1'
-export const DEFAULT_MOCK_PROVER_WORKER_IMAGE = 'dogeos69/prover-worker-mock:0.3.0-beta.1d-rc2'
+export const MOCK_WORKER_IDENTITY_CONTAINER_PATH = '/etc/dogeos/proof-identity/worker-identity.json'
+const MOCK_WORKER_IDENTITY_RELATIVE_PATH = 'software/identity/worker-identity.json'
 
 const HEX_32 = /^0x[\da-f]{64}$/
 const HEX_64 = /^0x[\da-f]{128}$/
+const BARE_HEX_32 = /^[\da-f]{64}$/
 const SHA256 = /^[\da-f]{64}$/
 const PINNED_IMAGE = /^(\S+)@(sha256:[\da-f]{64})$/
 
@@ -86,6 +87,8 @@ export interface PrepareProofMaterialsOptions {
   deploymentDir: string
   generation: 'mock' | 'real'
   identityEnv?: string
+  /** Test/air-gapped override; ordinary setup extracts this from mockWorker. */
+  mockWorkerIdentity?: string
   images: {
     mockWorker: ProofTopologyImageReference
     productionWorker?: ProofTopologyImageReference
@@ -96,6 +99,114 @@ export interface PrepareProofMaterialsOptions {
   producerManifest?: string
   protocolContext?: string
   refreshExistingImages?: boolean
+}
+
+function mockWorkerAggregationIdentity(body: string, label: string): {appCommitRaw: string; programCommitmentHash: string} {
+  const root = mapping(JSON.parse(body) as unknown, label)
+  assertOnlyKeys(root, [
+    'batch_aggregation_guest',
+    'batch_guest',
+    'guest_openvm_toml_sha256',
+    'image_revision',
+    'openvm_version',
+    'root_verifier_asm_sha256',
+  ], label)
+  if (root.image_revision !== null) requiredString(root.image_revision, `${label}.image_revision`)
+  requiredString(root.openvm_version, `${label}.openvm_version`)
+  canonicalHex(root.root_verifier_asm_sha256, 32, `${label}.root_verifier_asm_sha256`)
+  canonicalHex(root.guest_openvm_toml_sha256, 32, `${label}.guest_openvm_toml_sha256`)
+
+  const batch = mapping(root.batch_guest, `${label}.batch_guest`)
+  validateGuestCommit(batch, `${label}.batch_guest`)
+  const aggregation = mapping(root.batch_aggregation_guest, `${label}.batch_aggregation_guest`)
+  assertOnlyKeys(aggregation, [
+    'app_commit_raw',
+    'app_exe_commit',
+    'app_vm_commit',
+    'embedded_inner_batch_app_commit_raw',
+    'program_commitment_hash',
+  ], `${label}.batch_aggregation_guest`)
+  validateGuestCommit(aggregation, `${label}.batch_aggregation_guest`)
+  const appCommitRaw = canonicalHex(
+    aggregation.app_commit_raw,
+    64,
+    `${label}.batch_aggregation_guest.app_commit_raw`,
+  )
+  const programCommitmentHash = canonicalHex(
+    aggregation.program_commitment_hash,
+    32,
+    `${label}.batch_aggregation_guest.program_commitment_hash`,
+  )
+  if (sha256Bytes(appCommitRaw) !== programCommitmentHash) {
+    throw new Error(`${label}.batch_aggregation_guest program commitment hash does not match app_commit_raw`)
+  }
+
+  const embeddedInner = canonicalHex(
+    aggregation.embedded_inner_batch_app_commit_raw,
+    64,
+    `${label}.batch_aggregation_guest.embedded_inner_batch_app_commit_raw`,
+  )
+  const batchRaw = canonicalHex(batch.app_commit_raw, 64, `${label}.batch_guest.app_commit_raw`)
+  if (batchRaw !== `0x${'0'.repeat(128)}` && embeddedInner !== batchRaw) {
+    throw new Error(`${label}.batch_aggregation_guest embedded inner Batch commitment does not match batch_guest`)
+  }
+
+  return {appCommitRaw, programCommitmentHash}
+}
+
+function assertOnlyKeys(value: Record<string, unknown>, allowed: string[], label: string): void {
+  const allowedSet = new Set(allowed)
+  const unknown = Object.keys(value).filter(key => !allowedSet.has(key))
+  if (unknown.length > 0) throw new Error(`${label} contains unknown field ${unknown[0]}`)
+  for (const key of allowed) {
+    if (!(key in value)) throw new Error(`${label} is missing ${key}`)
+  }
+}
+
+function bareHex32(value: unknown, label: string): string {
+  const text = requiredString(value, label)
+  if (!BARE_HEX_32.test(text)) throw new Error(`${label} must be canonical lowercase bare 32-byte hex`)
+  return text
+}
+
+function validateGuestCommit(value: Record<string, unknown>, label: string): void {
+  const required = ['app_commit_raw', 'app_exe_commit', 'app_vm_commit']
+  if (label.endsWith('.batch_guest')) assertOnlyKeys(value, required, label)
+  const exe = bareHex32(value.app_exe_commit, `${label}.app_exe_commit`)
+  const vm = bareHex32(value.app_vm_commit, `${label}.app_vm_commit`)
+  const raw = canonicalHex(value.app_commit_raw, 64, `${label}.app_commit_raw`)
+  if (raw !== `0x${exe}${vm}`) throw new Error(`${label}.app_commit_raw does not match app_exe_commit ++ app_vm_commit`)
+}
+
+function validateMockWorkerIdentity(body: string, label: string): void {
+  mockWorkerAggregationIdentity(body, label)
+}
+
+export function extractMockWorkerIdentity(image: ProofTopologyImageReference): string {
+  const reference = immutableProofImage(image)
+  const result = spawnSync('docker', [
+    'run',
+    '--rm',
+    '--entrypoint',
+    '/bin/cat',
+    reference,
+    MOCK_WORKER_IDENTITY_CONTAINER_PATH,
+  ], {encoding: 'utf8', maxBuffer: 4 * 1024 * 1024})
+  if (result.error) {
+    throw new Error(`Unable to extract mock Worker identity from ${reference}: ${result.error.message}`)
+  }
+
+  if (result.status !== 0) {
+    throw new Error(`Unable to extract ${MOCK_WORKER_IDENTITY_CONTAINER_PATH} from ${reference}: ${(result.stderr || result.stdout).trim()}`)
+  }
+
+  try {
+    validateMockWorkerIdentity(result.stdout, `${reference}:${MOCK_WORKER_IDENTITY_CONTAINER_PATH}`)
+  } catch (error) {
+    throw new Error(`Invalid mock Worker identity in ${reference}: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  return result.stdout
 }
 
 function mapping(value: unknown, label: string): Record<string, unknown> {
@@ -308,6 +419,31 @@ function copyMaterial(
   }
 }
 
+function writeMaterialBody(
+  deploymentDir: string,
+  outputRoot: string,
+  body: string,
+  relative: string,
+  replace = false,
+): ProofMaterialFileV1 {
+  const destination = path.join(outputRoot, relative)
+  fs.mkdirSync(path.dirname(destination), {recursive: true})
+  if (replace) {
+    const temporary = `${destination}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`
+    fs.writeFileSync(temporary, body, {flag: 'wx', mode: 0o600})
+    fs.renameSync(temporary, destination)
+  } else {
+    fs.writeFileSync(destination, body, {flag: 'wx', mode: 0o600})
+  }
+
+  const stat = fs.statSync(destination)
+  return {
+    path: path.relative(deploymentDir, destination).replaceAll(path.sep, '/'),
+    sha256: sha256File(destination),
+    sizeBytes: stat.size,
+  }
+}
+
 function bridgeManifest(filePath: string): NativeBridgeManifest {
   const root = mapping(readJson(filePath, 'Bridge artifact manifest'), 'Bridge artifact manifest')
   return {
@@ -379,6 +515,7 @@ function refreshExistingProofMaterialImages(
   deploymentDir: string,
   outputRoot: string,
   receiptPath: string,
+  mockWorkerIdentity: string | undefined,
 ): {receipt: ProofMaterialsV1; receiptPath: string} | undefined {
   const outputRootExists = fs.existsSync(outputRoot)
   const receiptExists = fs.existsSync(receiptPath)
@@ -402,6 +539,14 @@ function refreshExistingProofMaterialImages(
 
   assertDirectory(outputRoot, 'Existing proof material directory')
   const existing = readProofMaterials(receiptPath, deploymentDir)
+  if (!mockWorkerIdentity) throw new Error('Mock image refresh requires the pinned Worker identity document')
+  const compilerIdentity = writeMaterialBody(
+    deploymentDir,
+    outputRoot,
+    mockWorkerIdentity,
+    MOCK_WORKER_IDENTITY_RELATIVE_PATH,
+    true,
+  )
   const receipt: ProofMaterialsV1 = {
     ...existing,
     generatedAt: new Date().toISOString(),
@@ -409,6 +554,10 @@ function refreshExistingProofMaterialImages(
       ...existing.images,
       mockWorker: options.images.mockWorker,
       topologyCompiler: options.images.topologyCompiler,
+    },
+    software: {
+      ...existing.software,
+      compilerIdentity,
     },
   }
   replacePrivateJson(receiptPath, receipt)
@@ -426,11 +575,17 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
     if (image) immutableProofImage(image)
   }
 
+  const mockWorkerIdentity = options.mockWorkerIdentity === undefined
+    ? extractMockWorkerIdentity(options.images.mockWorker)
+    : fs.readFileSync(path.resolve(options.mockWorkerIdentity), 'utf8')
+  validateMockWorkerIdentity(mockWorkerIdentity, 'mock Worker identity')
+
   const refreshed = refreshExistingProofMaterialImages(
     options,
     deploymentDir,
     outputRoot,
     receiptPath,
+    mockWorkerIdentity,
   )
   if (refreshed) return refreshed
 
@@ -466,12 +621,25 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
       chunk: identity(env.DOGEOS_CHUNK_PROGRAM_COMMITMENT_RAW, env.DOGEOS_CHUNK_PROGRAM_COMMITMENT, env.DOGEOS_CHUNK_VK_HASH),
       l2Range: identity(env.DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW, sha256Bytes(env.DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW), env.DOGEOS_BRIDGE_VK_HASH),
     } : syntheticMockProofIdentities()
+    if (!env && options.generation === 'mock') {
+      const aggregation = mockWorkerAggregationIdentity(mockWorkerIdentity, 'mock Worker identity')
+      identities.l2Range = {
+        ...identities.l2Range,
+        ...aggregation,
+      }
+    }
     const receipt: ProofMaterialsV1 = {
       generatedAt: new Date().toISOString(),
       images: options.images,
       schema: PROOF_MATERIALS_SCHEMA,
       schemaVersion: 1,
       software: {
+        compilerIdentity: writeMaterialBody(
+          deploymentDir,
+          outputRoot,
+          mockWorkerIdentity,
+          MOCK_WORKER_IDENTITY_RELATIVE_PATH,
+        ),
         identities,
         identitySource: env ? 'real_identity_probe' : 'dogeos_core_synthetic_mock_v1',
       },
@@ -602,6 +770,9 @@ export function readProofMaterials(receiptPath: string, deploymentDir = path.dir
     schema: PROOF_MATERIALS_SCHEMA,
     schemaVersion: 1,
     software: {
+      ...(software.compilerIdentity === undefined ? {} : {
+        compilerIdentity: proofMaterialFile(software.compilerIdentity, 'software.compilerIdentity'),
+      }),
       identities: {
         batch: proofProgramIdentity(identities.batch, 'software.identities.batch'),
         bridge: proofProgramIdentity(identities.bridge, 'software.identities.bridge'),
@@ -615,11 +786,13 @@ export function readProofMaterials(receiptPath: string, deploymentDir = path.dir
     throw new Error(`Unsupported proof identity source: ${receipt.software.identitySource}`)
   }
 
-  if (
-    receipt.software.identitySource === 'dogeos_core_synthetic_mock_v1'
-    && JSON.stringify(receipt.software.identities) !== JSON.stringify(syntheticMockProofIdentities())
-  ) {
-    throw new Error('Synthetic mock proof identities differ from the dogeos-core PR #937 fixture table')
+  if (receipt.software.identitySource === 'dogeos_core_synthetic_mock_v1') {
+    const expected = syntheticMockProofIdentities()
+    for (const family of ['batch', 'bridge', 'chunk'] as const) {
+      if (JSON.stringify(receipt.software.identities[family]) !== JSON.stringify(expected[family])) {
+        throw new Error('Synthetic mock proof identities differ from the dogeos-core PR #937 fixture table')
+      }
+    }
   }
 
   if (software.artifacts !== undefined) {
@@ -664,6 +837,7 @@ export function readProofMaterials(receiptPath: string, deploymentDir = path.dir
   }
 
   for (const file of [
+    ...(receipt.software.compilerIdentity ? [receipt.software.compilerIdentity] : []),
     ...Object.values(receipt.software.artifacts ?? {}),
     ...Object.values(receipt.bridge?.artifacts ?? {}),
   ]) {

@@ -82,6 +82,13 @@ export function buildProofTopology(options: BuildProofTopologyOptions): ProofTop
   const generation = options.generation ?? 'mock'
   const mode = options.mode ?? 'disabled'
   const {materials} = options
+  // Mock proving and materialization are independent. When operators import
+  // the release's real identity probe for a mock deployment, select the
+  // compiler profile that keeps proof generation mock while sourcing the
+  // canonical chunk segmentation and running the real materializers. Synthetic
+  // identities can only support the one-chunk exact-mock development profile.
+  const realMaterialization = generation === 'real'
+    || materials.software.identitySource === 'real_identity_probe'
   if (generation === 'real' && materials.software.identitySource !== 'real_identity_probe') {
     throw new Error('real proof generation requires identities produced by the dogeos-core real identity probe')
   }
@@ -90,10 +97,17 @@ export function buildProofTopology(options: BuildProofTopologyOptions): ProofTop
     throw new Error('real proof generation requires full software artifacts, deployment-bound Bridge material, and a production Worker image in proof-materials-v1.json')
   }
 
+  const compilerIdentity = generation === 'real'
+    ? materials.bridge?.artifacts.nativeManifest
+    : materials.software.compilerIdentity
+  if (!compilerIdentity) {
+    throw new Error(`${generation} proof generation requires a canonical dogeos-core compiler identity file; rerun setup proof-materials`)
+  }
+
   const bridgeIdentity = materials.bridge?.identity ?? materials.software.identities.bridge
   const witnessSource = options.runtime.witnessSource ?? 'rpc'
-  if (generation === 'real' && witnessSource === 'rpc' && !options.runtime.rpcWitnessUrl) {
-    throw new Error('real proof generation with RPC witnesses requires a witness RPC URL')
+  if (realMaterialization && witnessSource === 'rpc' && !options.runtime.rpcWitnessUrl) {
+    throw new Error('real proof materialization with RPC witnesses requires a witness RPC URL')
   }
 
   const workerLaunch = options.runtime.workerLaunch ?? (generation === 'mock' ? 'local_cpu' : 'external')
@@ -130,17 +144,23 @@ export function buildProofTopology(options: BuildProofTopologyOptions): ProofTop
   return {
     active: {
       artifactStore: artifactStore(options.artifactStore),
-      profile: materials.bridge
+      profile: generation === 'real'
         ? 'real_scroll_withdrawal_full_topology'
-        : 'withdrawal_mock_prover',
+        : realMaterialization
+          ? 'withdrawal_mock_prover_real_materialize'
+          : 'withdrawal_mock_prover',
       realScroll,
       workerLaunch,
     },
-    compiler: {image: materials.images.topologyCompiler},
+    compiler: {
+      identityFilePath: compilerIdentity.path,
+      image: materials.images.topologyCompiler,
+    },
     deployment: {
       artifactKeyPrefix: nonEmpty(options.runtime.artifactKeyPrefix ?? DEFAULT_PROOF_KEY_PREFIX, 'proof artifact key prefix'),
       coordinatorId: `${options.deploymentName}-proof-coordinator`,
       generatedMaterialsRoot: '/app/data/proof-topology',
+      l2GenesisJson: '/app/genesis/genesis.json',
       mockWorkerImage: materials.images.mockWorker,
       ...(materials.images.productionWorker ? {productionWorkerImage: materials.images.productionWorker} : {}),
       proofWorkBind: '0.0.0.0:9300',

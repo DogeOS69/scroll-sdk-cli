@@ -61,7 +61,12 @@ function topology(
 function fakeBundle(root: string, mode: 'active' | 'disabled'): ValidatedProofTopologyBundle {
   fs.mkdirSync(root, {recursive: true})
   fs.writeFileSync(path.join(root, 'withdrawal-processor.toml'), `[proof_system]\nmode = "${mode}"\n`)
-  fs.writeFileSync(path.join(root, 'eth-da-submitter.patch.toml'), '[s3]\nenabled = false\n')
+  fs.writeFileSync(
+    path.join(root, 'eth-da-submitter.patch.toml'),
+    mode === 'active'
+      ? '[s3]\nenabled = true\nbucket = "dogeos-da-archive"\nregion = "us-west-2"\nkey_prefix = "testnet/batches"\n\n[segmentation_sidecar]\nenabled = true\ns3 = true\n'
+      : '[s3]\nenabled = false\n\n[segmentation_sidecar]\nenabled = false\ns3 = false\n',
+  )
   if (mode === 'active') {
     fs.writeFileSync(path.join(root, 'proof-coordinator.toml'), 'coordinator_id = "compiled"\n')
     fs.mkdirSync(path.join(root, 'materials/program-manifests'), {recursive: true})
@@ -142,7 +147,17 @@ describe('self-contained proof topology Kubernetes adapter', () => {
       persistence: {},
     }))
     fs.writeFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), yaml.dump({
-      configMaps: {env: {data: {}}},
+      configMaps: {
+        env: {
+          data: {
+            DOGEOS_ETH_DA_SUBMITTER_S3__BUCKET: 'dogeos-da-archive',
+            DOGEOS_ETH_DA_SUBMITTER_S3__ENABLED: 'true',
+            DOGEOS_ETH_DA_SUBMITTER_S3__KEY_PREFIX: 'testnet/batches',
+            DOGEOS_ETH_DA_SUBMITTER_S3__REGION: 'us-west-2',
+            DOGEOS_ETH_DA_SUBMITTER_SEGMENTATION_SIDECAR__ENABLED: 'true',
+          },
+        },
+      },
     }))
   })
 
@@ -172,6 +187,14 @@ describe('self-contained proof topology Kubernetes adapter', () => {
       required: true,
     })
     expect(coordinator.controller.replicas).to.equal(1)
+    expect(coordinator.persistence.genesis).to.deep.equal({
+      enabled: true,
+      mountPath: '/app/genesis/genesis.json',
+      name: 'genesis-config',
+      readOnly: true,
+      subPath: 'genesis.json',
+      type: 'configMap',
+    })
     const worker = yaml.load(fs.readFileSync(path.join(root, 'values/prover-worker-production.yaml'), 'utf8')) as any
     expect(worker.controller.replicas).to.equal(0)
     expect(result.workerBundle?.bundleId).to.match(/^[\da-f]{64}$/)
@@ -224,8 +247,54 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     expect(coordinator.proofCoordinator.config.content).to.include('generation = "mock"')
     expect(coordinator.proofCoordinator.config.content).to.include('enforcement = "observe"')
     expect(coordinator.proofCoordinator.config.content).not.to.include('verifier_import_mode')
+    expect(coordinator.persistence.genesis.name).to.equal('genesis-config')
+    expect(coordinator.persistence.genesis.mountPath).to.equal('/app/genesis/genesis.json')
     const worker = yaml.load(fs.readFileSync(path.join(root, 'values/prover-worker-production.yaml'), 'utf8')) as any
     expect(worker.controller.replicas).to.equal(0)
     expect(worker.command).to.deep.equal([])
+  })
+
+  it('preserves the raw DA S3 archive when proof topology disables its sidecar', () => {
+    reconcileCompiledProofTopology({
+      compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'disabled'),
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      deploymentDir: root,
+      deploymentName: 'test',
+      network: 'testnet',
+      proofTopology: topology('disabled'),
+      valuesDir: path.join(root, 'values'),
+      withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
+    })
+
+    const submitter = yaml.load(fs.readFileSync(
+      path.join(root, 'values/eth-da-submitter-production.yaml'),
+      'utf8',
+    )) as any
+    const env = submitter.configMaps.env.data
+    expect(env.DOGEOS_ETH_DA_SUBMITTER_S3__ENABLED).to.equal('true')
+    expect(env.DOGEOS_ETH_DA_SUBMITTER_S3__BUCKET).to.equal('dogeos-da-archive')
+    expect(env.DOGEOS_ETH_DA_SUBMITTER_S3__REGION).to.equal('us-west-2')
+    expect(env.DOGEOS_ETH_DA_SUBMITTER_S3__KEY_PREFIX).to.equal('testnet/batches')
+    expect(env.DOGEOS_ETH_DA_SUBMITTER_SEGMENTATION_SIDECAR__ENABLED).to.equal('false')
+  })
+
+  it('rejects an active compiler patch that retargets the shared raw-DA/proof store', () => {
+    expect(() => reconcileCompiledProofTopology({
+      compile() {
+        const bundle = fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active')
+        fs.writeFileSync(
+          path.join(bundle.bundleDir, 'eth-da-submitter.patch.toml'),
+          '[s3]\nenabled = true\nbucket = "different-proof-bucket"\nregion = "us-west-2"\nkey_prefix = "testnet/batches"\n\n[segmentation_sidecar]\nenabled = true\ns3 = true\n',
+        )
+        return bundle
+      },
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      deploymentDir: root,
+      deploymentName: 'test',
+      network: 'testnet',
+      proofTopology: topology('active'),
+      valuesDir: path.join(root, 'values'),
+      withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
+    })).to.throw('does not match canonical eth-da-submitter')
   })
 })

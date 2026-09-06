@@ -3,9 +3,10 @@
 `scrollsdk setup proof-materials` prepares the inputs consumed by the
 proof-topology compiler. It has two intentionally different paths:
 
-- `--generation mock` generates the same verifier-consistent synthetic identity
-  table used by dogeos-core's PR #937 harness fixtures and records the
-  compiler/mock Worker images. It does **not** require `real-identity.env`,
+- `--generation mock` extracts the canonical machine-readable identity from
+  the selected digest-pinned mock Worker image and records the compiler/Worker
+  images. Fields that no mock runtime component cross-checks remain structural
+  placeholders. It does **not** require `real-identity.env`,
   `.vmexe`, aggregate-VK, materializer, Bridge bake, or production Worker inputs.
 - `--generation real` imports the complete real proving files, deployment-bound
   Bridge bake, and production Worker image in addition to those identities.
@@ -17,8 +18,8 @@ It is an operator import workflow, not a proof-software publication authority.
 The command writes `.data/proof-materials-v1.json` with schema
 `scrollsdk/proof-materials/v1`. Every receipt contains:
 
-1. a complete Chunk, Batch, Bridge, and L2-range identity table (synthetic for
-   mock-only preparation; identity-probe-derived for real preparation);
+1. the exact Worker identity JSON, its SHA-256, and a complete structural
+   Chunk, Batch, Bridge, and L2-range table (identity-probe-derived for real);
 2. the digest-pinned compiler and mock Worker image references.
 
 A real receipt additionally contains:
@@ -95,19 +96,18 @@ the deployment genesis.
 ## Guided import
 
 `scrollsdk setup proof-materials` first asks whether to prepare mock or real
-materials. For mock it generates dogeos-core's synthetic identity table and
-asks only for image references. For real it additionally asks for
+materials. For mock it copies `/etc/dogeos/proof-identity/worker-identity.json`
+out of the digest-pinned mock Worker image and asks only for image references.
+For real it additionally asks for
 `real-identity.env`, the producer manifest, both materializers,
 production Worker, and optional Bridge bake. It does not reimplement or hide
 the Rust/OpenVM build commands.
 
-The compiler and mock Worker prompts default to the dogeos-core
-current mock rehearsal releases:
-
-```text
-dogeos69/dogeos-proof-topology:v0.3.0-beta.1
-dogeos69/prover-worker-mock:0.3.0-beta.1d-rc2
-```
+The compiler and mock Worker have no hard-coded release defaults. Interactive
+mode requires the operator to confirm both references; non-interactive mode
+requires `--compiler-image` and `--mock-worker-image`. Take both from the same
+approved dogeos-core release note. This prevents an old rehearsal tag from
+silently entering a fresh deployment while a new lineage is being cut.
 
 The CLI resolves each release tag through the OCI registry and records the
 resulting `repository@sha256:...` manifest reference. An explicitly supplied
@@ -119,17 +119,35 @@ For disabled/mock operation, no OpenVM build or identity probe is needed:
 
 ```bash
 scrollsdk setup proof-materials \
-  --generation mock
+  --generation mock \
+  --compiler-image '<approved-compiler-image-or-digest>' \
+  --mock-worker-image '<approved-mock-worker-image-or-digest>'
 ```
 
 PR #937 deliberately gives mock no separate verifier mode: mock material is
 recognized by its hash-committed `ProofMode::Mock` tag, and without aggregate
 VK material the coordinator selects the dev verifier under `observe`. The
 compiler still requires one structurally complete shared identity table for
-every active topology, so the CLI mirrors
-`dogeos_proof_topology::fixtures::synthetic_identities()` and records its
-provenance as `dogeos_core_synthetic_mock_v1`. These values are not real proof
-identities and cannot be used with `generation = "real"`.
+every active topology. The CLI retains placeholders only for fields that are
+not runtime authorities in mock mode. It passes the Worker-owned identity file
+to the compiler with `--identity-file`; the compiler derives the aggregation
+commitment and records the input file's kind and digest in its bundle manifest.
+The CLI does not derive recursive identities in TypeScript. Mock-only values
+cannot be used with `generation = "real"`.
+
+There are two supported mock preparations:
+
+- `--generation mock` without `--identity-env` uses the pinned mock Worker's
+  canonical identity document plus synthetic placeholders. The resulting
+  `withdrawal_mock_prover` profile uses one batch-wide exact-mock chunk.
+- `--generation mock --identity-env /path/to/real-identity.env` imports the
+  release's real materializer identities without importing the real proving
+  programs. The resulting `withdrawal_mock_prover_real_materialize` profile
+  uses the DA segmentation sidecar and real Chunk/Batch materializers, while
+  the Worker still emits mock proofs and enforcement can remain `observe`.
+
+The second form is the correct pre-production rehearsal when materializer
+correctness or per-chunk performance is under test.
 
 For real operation, run the producer/probe/baker first, then import the full
 result:
@@ -150,12 +168,17 @@ and writes the same receipt as the guided path.
 
 ## Required validation
 
-Before writing a mock receipt, the CLI requires:
+Before writing a synthetic mock receipt, the CLI requires:
 
 - the exact supported receipt schema;
 - the exact verifier-consistent synthetic table defined by PR #937;
 - commitment hashes derived from their synthetic raw app commitments;
 - compiler and mock Worker tags resolved to immutable image digests.
+
+For identity-backed mock materialization, the CLI additionally applies the
+identity-env allow-list and canonical-encoding checks used by the real path,
+but it does not require `.vmexe`, aggregate VK, Bridge bake, materializer binary
+copies, or a production Worker image.
 
 The real path additionally requires:
 

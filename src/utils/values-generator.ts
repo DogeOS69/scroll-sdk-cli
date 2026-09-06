@@ -1216,7 +1216,7 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'cubesignerSigner', {
     pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/cubesigner-signer',
-    tag: '0.2.0-rc.4'
+    tag: 'v0.3.0-beta.2'
   })
 
   const values: Record<string, any> = {
@@ -1235,14 +1235,14 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_REQUEST_JSON_BYTES', value: '393216' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_RESPONSE_JSON_BYTES', value: '393216' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE', value: 'production_verifier_key_policy' },
-      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION', value: '0.4.152-0' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION', value: '0.4.281' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_KEY_IDENTIFIER', valueFrom: { secretKeyRef: { key: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', name: 'cubesigner-signer-env' } } },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER', value: productionPolicy?.policyIdentifier || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_ARTIFACT_DIGEST', value: productionPolicy?.policyArtifactDigest || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_VERIFIER_IDENTITY_DIGEST', value: productionPolicy?.verifierIdentityDigest || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROGRAM_IDENTITY_DIGEST', value: productionPolicy?.programIdentityDigest || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROOF_RESOLVER_AUTHORITY', value: productionPolicy?.proofResolverAuthority || '' },
-      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT', value: 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-v2' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT', value: 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_LIVE_EVIDENCE_REPORT_PATH', value: productionPolicy?.liveEvidenceReportPath || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_LIVE_EVIDENCE_REPORT_DIGEST', value: productionPolicy?.liveEvidenceReportDigest || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', valueFrom: { secretKeyRef: { key: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', name: 'cubesigner-signer-env' } } },
@@ -1303,7 +1303,12 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
       requests: { cpu: '50m', memory: '128Mi' }
     },
     serviceMonitor: {
-      main: { enabled: false }
+      main: {
+        enabled: true,
+        endpoints: [{ interval: '10s', port: 'http', scrapeTimeout: '5s' }],
+        labels: { release: 'scroll-sdk' },
+        serviceName: '{{ include "scroll.common.lib.chart.names.fullname" $ }}'
+      }
     },
     volumeClaimTemplates: [{
       accessMode: 'ReadWriteOnce',
@@ -1421,6 +1426,14 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
     env,
     image,
     persistence: {
+      genesis: {
+        enabled: true,
+        mountPath: '/app/genesis/genesis.json',
+        name: 'genesis-config',
+        readOnly: true,
+        subPath: 'genesis.json',
+        type: 'configMap'
+      },
       'protocol-context': {
         enabled: true,
         mountPath: '/app/protocol_context.json',

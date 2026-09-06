@@ -189,20 +189,24 @@ function realScrollSource(
   value: ProofTopologyRealScrollConfig,
   deploymentDir: string,
   container: boolean,
+  identityDerivedFields: ReadonlySet<keyof ProofTopologyRealScrollConfig> = new Set(),
 ): toml.JsonMap {
-  const result: toml.JsonMap = {
-    batch_program_commitment_hash_hex: value.batchProgramCommitmentHashHex,
-    batch_program_commitment_hex: value.batchProgramCommitmentHex,
-    batch_verification_key_hash_hex: value.batchVerificationKeyHashHex,
-    bridge_app_commit_raw_hex: value.bridgeAppCommitRawHex,
-    bridge_program_commitment_hash_hex: value.bridgeProgramCommitmentHashHex,
-    bridge_verification_key_hash_hex: value.bridgeVerificationKeyHashHex,
-    chunk_program_commitment_hash_hex: value.chunkProgramCommitmentHashHex,
-    chunk_program_commitment_hex: value.chunkProgramCommitmentHex,
-    chunk_verification_key_hash_hex: value.chunkVerificationKeyHashHex,
-    l2_range_aggregation_app_commit_raw_hex: value.l2RangeAggregationAppCommitRawHex,
-    l2_range_aggregation_program_commitment_hash_hex: value.l2RangeAggregationProgramCommitmentHashHex,
-    l2_range_aggregation_verification_key_hash_hex: value.l2RangeAggregationVerificationKeyHashHex,
+  const result: toml.JsonMap = {}
+  for (const [field, serialized] of [
+    ['batchProgramCommitmentHashHex', 'batch_program_commitment_hash_hex'],
+    ['batchProgramCommitmentHex', 'batch_program_commitment_hex'],
+    ['batchVerificationKeyHashHex', 'batch_verification_key_hash_hex'],
+    ['bridgeAppCommitRawHex', 'bridge_app_commit_raw_hex'],
+    ['bridgeProgramCommitmentHashHex', 'bridge_program_commitment_hash_hex'],
+    ['bridgeVerificationKeyHashHex', 'bridge_verification_key_hash_hex'],
+    ['chunkProgramCommitmentHashHex', 'chunk_program_commitment_hash_hex'],
+    ['chunkProgramCommitmentHex', 'chunk_program_commitment_hex'],
+    ['chunkVerificationKeyHashHex', 'chunk_verification_key_hash_hex'],
+    ['l2RangeAggregationAppCommitRawHex', 'l2_range_aggregation_app_commit_raw_hex'],
+    ['l2RangeAggregationProgramCommitmentHashHex', 'l2_range_aggregation_program_commitment_hash_hex'],
+    ['l2RangeAggregationVerificationKeyHashHex', 'l2_range_aggregation_verification_key_hash_hex'],
+  ] as Array<[keyof ProofTopologyRealScrollConfig, string]>) {
+    if (!identityDerivedFields.has(field)) result[serialized] = value[field] as string
   }
   const paths: Array<[keyof ProofTopologyRealScrollConfig, string]> = [
     ['aggVerifyingKeyPath', 'agg_verifying_key_path'],
@@ -241,11 +245,56 @@ function realScrollSource(
   return result
 }
 
+function identityDerivedFields(identityFile: string): ReadonlySet<keyof ProofTopologyRealScrollConfig> {
+  const identity = readJson<Record<string, unknown>>(identityFile, 'proof compiler identity')
+  // dogeos-core beta.3 deliberately defines WorkerIdentityBundle by its strict
+  // field shape; it has no `kind` or `schema_version` discriminator. The
+  // presence of bridge_guest distinguishes a real bake from a mock export.
+  if (identity.batch_guest && identity.batch_aggregation_guest) {
+    const fields = new Set<keyof ProofTopologyRealScrollConfig>([
+      'l2RangeAggregationAppCommitRawHex',
+      'l2RangeAggregationProgramCommitmentHashHex',
+    ])
+    const batch = identity.batch_guest
+    if (batch && typeof batch === 'object' && !Array.isArray(batch)) {
+      const raw = (batch as Record<string, unknown>).app_commit_raw
+      if (typeof raw === 'string' && !/^0x0{128}$/.test(raw)) {
+        fields.add('batchProgramCommitmentHex')
+        fields.add('batchProgramCommitmentHashHex')
+      }
+    }
+
+    if (identity.bridge_guest) {
+      fields.add('bridgeAppCommitRawHex')
+      fields.add('bridgeProgramCommitmentHashHex')
+      fields.add('bridgeVerificationKeyHashHex')
+      fields.add('l2RangeAggregationVerificationKeyHashHex')
+    }
+
+    return fields
+  }
+
+  return new Set<keyof ProofTopologyRealScrollConfig>([
+    'batchProgramCommitmentHashHex',
+    'batchProgramCommitmentHex',
+    'bridgeAppCommitRawHex',
+    'bridgeProgramCommitmentHashHex',
+    'bridgeVerificationKeyHashHex',
+    'l2RangeAggregationAppCommitRawHex',
+    'l2RangeAggregationProgramCommitmentHashHex',
+    'l2RangeAggregationVerificationKeyHashHex',
+  ])
+}
+
 export function renderProofTopologySource(
   topology: ProofTopologySpec,
   deploymentDir = '.',
   container = false,
 ): string {
+  const compilerIdentityFile = topology.compiler.identityFilePath
+    ? resolveInside(path.resolve(deploymentDir), topology.compiler.identityFilePath, 'proof compiler identity path')
+    : undefined
+  const derivedFields = compilerIdentityFile ? identityDerivedFields(compilerIdentityFile) : new Set<keyof ProofTopologyRealScrollConfig>()
   const proof: toml.JsonMap = {
     enforcement: topology.enforcement,
     generation: topology.generation,
@@ -263,7 +312,7 @@ export function renderProofTopologySource(
     proof.active = {
       artifact_store: store,
       profile: topology.active.profile,
-      real_scroll: realScrollSource(topology.active.realScroll, path.resolve(deploymentDir), container),
+      real_scroll: realScrollSource(topology.active.realScroll, path.resolve(deploymentDir), container, derivedFields),
       worker_launch: topology.active.workerLaunch,
     }
   }
@@ -570,6 +619,7 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
         allow_insecure_http: urlNeedsAcknowledgement(proofWorkPublicUrl),
         base_config_path: mountedInput(pcName),
         coordinator_id: deployment.coordinatorId ?? `${options.deploymentName}-proof-coordinator`,
+        l2_genesis_json: deployment.l2GenesisJson ?? '/app/genesis/genesis.json',
         prover_bind: deployment.proverBind ?? '0.0.0.0:7788',
         prover_public_url: proverPublicUrl,
         ...(options.ethereumL1RpcUrl ? {ethereum_l1_rpc_url: options.ethereumL1RpcUrl} : {}),
@@ -608,7 +658,17 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
     fs.writeFileSync(sourcePath, renderProofTopologySource(options.proofTopology, deploymentDir, container), {mode: 0o600})
     fs.writeFileSync(contextPath, `${JSON.stringify(context, null, 2)}\n`, {mode: 0o600})
     const operation = options.preflightMode ? 'preflight' : 'compile'
-    const common = ['--source', mountedInput('proof-topology.toml'), '--deployment-context', mountedInput('deployment-context.json'), '--output', container ? '/output/bundle' : stagedBundle]
+    const identityFilePath = options.proofTopology.compiler.identityFilePath
+    if (!identityFilePath?.trim()) throw new Error('proof compiler identity path is required')
+    const identityFile = resolveInside(deploymentDir, identityFilePath, 'proof compiler identity path')
+    copyInput(identityFile, path.join(inputDir, 'proof-identity.json'), 'Proof compiler identity', true)
+    const mountedIdentity = mountedInput('proof-identity.json')
+    const common = [
+      '--source', mountedInput('proof-topology.toml'),
+      '--deployment-context', mountedInput('deployment-context.json'),
+      '--output', container ? '/output/bundle' : stagedBundle,
+      '--identity-file', mountedIdentity,
+    ]
     const args = options.preflightMode ? [operation, '--generation', options.preflightMode, ...common] : [operation, ...common]
     const hostUser = typeof process.getuid === 'function' && typeof process.getgid === 'function'
       ? `${process.getuid()}:${process.getgid()}`

@@ -67,6 +67,7 @@ compiler perform final validation.
 deployment/
 ├── .data/
 │   ├── doge-config.toml
+│   ├── genesis.json
 │   ├── proof-aws.json
 │   ├── proof-materials-v1.json
 │   ├── proof-materials/
@@ -99,15 +100,31 @@ and deployment-bound Bridge bake were used.
 
 ## 4. Normal setup
 
-### Step 1: prepare AWS resources
+### Step 1: establish the shared DA/proof object namespace
+
+`eth-da-submitter` has one `[s3]` client. Raw EIP-4844 blobs and proof-system
+objects therefore share the canonical bucket, region, and key prefix recorded
+under `[ethereumDa.blobArchive.s3]` in `.data/doge-config.toml`; logical object
+keys separate raw blobs, segmentation sidecars, Worker inputs, and proofs.
+
+Configure the archive first, for example with `setup eth-da-submitter`, and
+then run:
 
 ```bash
 scrollsdk setup proof-aws-init
 ```
 
-This creates or reuses the proof artifact bucket/prefix, IAM roles, token
-secret, and optional EKS S3 Gateway routing, then writes `.data/proof-aws.json`.
-It does not prepare proof programs.
+This reuses the configured DA bucket/prefix, creates or reconciles the proof
+IAM roles and token secret, configures the selected external read transport,
+and writes `.data/proof-aws.json`. It never invents a second proof-only bucket.
+If the bucket is in a different AWS region from EKS, the command keeps the
+EKS/Secrets region separate from the artifact region and skips the regional S3
+Gateway endpoint; cross-region access uses the normal S3 endpoint or an
+operator-managed gateway. It does not prepare proof programs.
+
+The resulting `dogeos/proof-aws/v4` document records these independently as
+`artifactStore.region`, `kubernetes.awsRegion`, and `secret.region`. The latter
+two must match; the artifact region may differ.
 
 ### Step 2: prepare proof materials and identities
 
@@ -115,19 +132,41 @@ It does not prepare proof programs.
 scrollsdk setup proof-materials --generation mock
 ```
 
-For disabled/mock operation, the interactive command generates the same
-verifier-consistent synthetic identity table used by dogeos-core PR #937's
-mock harness. Mock proofs are recognized by their hash-committed proof-kind tag,
+For disabled/mock operation, the interactive command extracts the canonical
+identity JSON shipped by the selected digest-pinned mock Worker image. Mock
+proofs are recognized by their hash-committed proof-kind tag,
 and the coordinator selects the dev verifier when aggregate-VK material is
 absent. The mock path does not ask for `real-identity.env`, real-proving
 `.vmexe`, aggregate VK file,
 materializers, Bridge bake, or production Worker image. The topology compiler
-defaults to `dogeos-proof-topology:v0.3.0-beta.1`. The mock Worker defaults to
-`prover-worker-mock:0.3.0-beta.1d-rc2`, and generated Proof Coordinator values
-default to `proof-coordinator:0.3.0-beta.1d-rc2`. Both rc2 images were built
-from the same dogeos-core source revision. The CLI
+defaults to the current identity-file-capable compiler release. The mock Worker
+defaults to the matching current rehearsal release. Generated Proof Coordinator
+values must be pinned to the rollout lineage listed in the operator release
+note. The CLI
 resolves and stores immutable OCI digests rather than retaining mutable tags in
 the Worker contract.
+
+The command above intentionally selects development exact-mock materialization:
+each DA batch is represented by one batch-wide chunk. It is useful for a cheap
+topology smoke test, but it does not exercise the DA-owned segmentation sidecar
+or provide production-shaped materializer timings.
+
+To run real segmentation and the real Chunk/Batch subprocess materializers
+while keeping proof generation mock and enforcement in observe, import the
+release identity probe as part of the mock receipt:
+
+```bash
+scrollsdk setup proof-materials \
+  --generation mock \
+  --identity-env /secure/build/real-identity.env
+```
+
+`setup doge-config --proof-topology` then selects
+`withdrawal_mock_prover_real_materialize`. The compiled bundle enables all
+three ends of the contract: the submitter publishes the segmentation sidecar,
+the coordinator reads and validates it, and Withdrawal Processor requests the
+materialized segmentation before creating per-chunk work. The selected proof
+Worker remains the mock Worker.
 
 Prepare the larger real-only input set later with:
 
@@ -136,8 +175,9 @@ scrollsdk setup proof-materials --generation real
 ```
 
 The command must finish with a strict `.data/proof-materials-v1.json`. The mock
-receipt records `dogeos_core_synthetic_mock_v1` provenance and validates the
-synthetic identity encoding and recursive relationship.
+receipt binds the copied Worker identity file by path, size, SHA-256, and the
+digest-pinned image from which it was extracted. The topology compiler, not the
+deployment CLI, validates and derives the recursive commitment fields.
 The real receipt additionally rejects artifact hash drift, path escape/symlink
 input, and Bridge material that does not match `protocol_context.json`.
 
@@ -180,6 +220,14 @@ installs it atomically, and projects the selected WP/PC/Worker/submitter values.
 The compiler-rendered native TOML and generated text manifests are embedded in
 those final values, so ordinary Helm commands need no dynamic `--set-file`
 arguments or scrollsdk deployment helper. It does not contact Kubernetes.
+
+For beta.3 and later real-materialize profiles, the deployment context includes
+`proof_coordinator.l2_genesis_json = "/app/genesis/genesis.json"`. The generated
+Proof Coordinator values mount `genesis-config/genesis.json` read-only at that
+same path, including in the initially disabled posture. The CLI owns this
+deployment convention: operators do not copy genesis contents into the native
+Proof Coordinator TOML or change the path in a post-generation environment
+overlay.
 
 The post-#937 Worker handoff bundle has its own `bundleId`, derived from the
 Worker contract, immutable image, Compose document, protocol context,

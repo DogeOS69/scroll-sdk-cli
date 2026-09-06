@@ -11,6 +11,8 @@ export type ProofWorkerLaunch = 'external' | 'local_cpu' | 'local_cuda'
 export type ProofWorkerDeploymentBackend = 'docker_compose' | 'kubernetes'
 
 export interface ProofTopologyCompilerConfig {
+  /** Deployment-relative canonical identity input passed to dogeos-core. */
+  identityFilePath?: string
   /** Must come from the same dogeos-core revision as the deployed services. */
   image: ProofTopologyImageReference
 }
@@ -86,6 +88,7 @@ export interface ProofTopologyDeploymentConfig {
   artifactKeyPrefix: string
   coordinatorId?: string
   generatedMaterialsRoot?: string
+  l2GenesisJson?: string
   mockWorkerImage: ProofTopologyImageReference
   productionWorkerImage?: ProofTopologyImageReference
   proofWorkBind?: string

@@ -1052,6 +1052,11 @@ export class DogeConfigCommand extends Command {
         workerTolerations: existing?.deployment.workerTolerations,
       },
     })
+    const materialization = topology.active?.profile === 'withdrawal_mock_prover_real_materialize'
+      || topology.generation === 'real'
+      ? 'real segmentation and subprocess materializers'
+      : 'development exact-mock one-chunk materialization'
+    options.log(chalk.blue(`Proof materialization: ${materialization}`))
     await this.preflightProofTopologyV2(topology, options.config, deploymentName, options.log, options.compilerBinary)
     return {topology}
   }

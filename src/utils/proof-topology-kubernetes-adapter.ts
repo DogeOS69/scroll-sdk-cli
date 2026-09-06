@@ -29,6 +29,7 @@ import {
 const MATERIALS_CONFIG_MAP = 'proof-topology-materials'
 const MATERIALS_VOLUME = 'proof-topology-materials'
 const RESOURCES_VOLUME = 'proof-topology-resources'
+const GENESIS_VOLUME = 'genesis'
 const TOPOLOGY_BUNDLE_ANNOTATION = 'dogeos.io/proof-topology-bundle-revision'
 const RETIRED_TOPOLOGY_ANNOTATIONS = [
   'dogeos.io/proof-topology-digest',
@@ -379,6 +380,18 @@ function configureWithdrawalValues(
   writeYaml(filePath, values)
 }
 
+function configureL2Genesis(values: Record<string, any>, l2GenesisJson: string): void {
+  values.persistence ||= {}
+  values.persistence[GENESIS_VOLUME] = {
+    enabled: true,
+    mountPath: l2GenesisJson,
+    name: 'genesis-config',
+    readOnly: true,
+    subPath: 'genesis.json',
+    type: 'configMap',
+  }
+}
+
 function configureCoordinatorValues(
   filePath: string,
   configContent: string,
@@ -387,6 +400,7 @@ function configureCoordinatorValues(
   generatedMaterialsRoot: string,
   resourceClaim: string | undefined,
   resourcesMountPath: string,
+  l2GenesisJson: string,
 ): void {
   const values = readYaml(filePath)
   // Native compiler output is authoritative. Leaving old Figment variables in
@@ -420,6 +434,7 @@ function configureCoordinatorValues(
     materialsDir,
     generatedMaterialsRoot,
   )
+  configureL2Genesis(values, l2GenesisJson)
   configureProofResources(values, resourceClaim, resourcesMountPath)
   writeYaml(filePath, values)
 }
@@ -428,6 +443,7 @@ function configureAbsentCoordinatorValues(
   filePath: string,
   bundleRevision: string,
   generation: ProofTopologySpec['generation'],
+  l2GenesisJson: string,
 ): void {
   const values = readYaml(filePath)
   // The deployment keeps PC warm across proof-mode changes. A disabled
@@ -471,6 +487,7 @@ function configureAbsentCoordinatorValues(
   delete values.configMaps[MATERIALS_CONFIG_MAP]
   delete values.persistence[MATERIALS_VOLUME]
   delete values.persistence[RESOURCES_VOLUME]
+  configureL2Genesis(values, l2GenesisJson)
   annotate(values, bundleRevision)
   writeYaml(filePath, values)
 }
@@ -490,16 +507,35 @@ function applySubmitterPatch(
   values.configMaps.env.data ||= {}
   const data = values.configMaps.env.data as Record<string, string>
   for (const key of Object.keys(data)) {
-    if (
-      key.startsWith('DOGEOS_ETH_DA_SUBMITTER_S3__')
-      || key.startsWith('DOGEOS_ETH_DA_SUBMITTER_SEGMENTATION_SIDECAR__')
-    ) {
+    if (key.startsWith('DOGEOS_ETH_DA_SUBMITTER_SEGMENTATION_SIDECAR__')) {
       delete data[key]
     }
   }
 
   const patch = toml.parse(fs.readFileSync(patchPath, 'utf8')) as Record<string, unknown>
-  for (const section of ['s3', 'segmentation_sidecar']) {
+  const patchS3 = patch.s3
+  if (patchS3 && typeof patchS3 === 'object' && !Array.isArray(patchS3)) {
+    const s3 = patchS3 as Record<string, unknown>
+    if (s3.enabled === true) {
+      // dogeos-core intentionally uses one submitter [s3] client for raw DA
+      // blobs and segmentation sidecars. Refuse to let compiler output point
+      // that shared client at a different namespace from the deployment-owned
+      // ethereumDa.blobArchive.s3 projection already present in the values.
+      for (const field of ['bucket', 'region', 'key_prefix'] as const) {
+        const key = envName('s3', field)
+        if (String(data[key] ?? '') !== String(s3[field] ?? '')) {
+          throw new Error(
+            `${patchPath}: compiler [s3].${field} (${String(s3[field])}) does not match `
+            + `canonical eth-da-submitter ${key} (${String(data[key])})`,
+          )
+        }
+      }
+    }
+    // A disabled proof topology may disable only segmentation publishing. Its
+    // reset patch must not turn off the durable raw DA archive uploader.
+  }
+
+  for (const section of ['segmentation_sidecar', ...(patchS3 && (patchS3 as Record<string, unknown>).enabled === true ? ['s3'] : [])]) {
     const table = patch[section]
     if (!table || typeof table !== 'object' || Array.isArray(table)) continue
     for (const [field, value] of Object.entries(table)) {
@@ -592,6 +628,8 @@ export function reconcileCompiledProofTopology(
     || '/app/data/proof-topology'
   const resourcesMountPath = topology.deployment?.resourcesMountPath
     || '/app/data/proof-materials'
+  const l2GenesisJson = topology.deployment?.l2GenesisJson
+    || '/app/genesis/genesis.json'
   const resourceClaim = topology.deployment?.resourcesPersistentVolumeClaim
   const selectedResourceClaim = selectedRealScroll(topology) ? resourceClaim : undefined
   configureWithdrawalValues(
@@ -609,6 +647,7 @@ export function reconcileCompiledProofTopology(
       coordinatorValuesPath,
       bundle.manifest.bundle_revision,
       topology.generation,
+      l2GenesisJson,
     )
   } else {
     if (!materialsDir || !coordinatorSource) {
@@ -623,6 +662,7 @@ export function reconcileCompiledProofTopology(
       generatedMaterialsRoot,
       selectedResourceClaim,
       resourcesMountPath,
+      l2GenesisJson,
     )
   }
 

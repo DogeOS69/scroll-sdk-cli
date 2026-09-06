@@ -7,6 +7,9 @@ import type { JsonOutputContext } from './json-output.js'
 import { AwsCliRunner } from './aws-cli.js'
 
 export interface ProofAwsIdentity {
+  /** Region containing the shared DA/proof artifact bucket. */
+  artifactRegion?: string
+  /** Region containing EKS and the deployment-scoped Secrets Manager secret. */
   awsRegion: string
   deploymentAlias: string
   eksCluster: string
@@ -71,13 +74,35 @@ export const PROOF_SECRET_PROPERTIES = ['proof-work-token', 'prover-worker-token
 export const PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID = 'ScrollSdkProofArtifactPublicRead'
 export const PROOF_ARTIFACT_VPCE_POLICY_SID = 'ScrollSdkProofArtifactReadViaVpcEndpoint'
 
+/**
+ * Logical object namespaces read without AWS credentials by DA clients,
+ * external proof Workers, or partner Attestation Signers. The segmentation
+ * sidecar namespace is deliberately absent because it is a PC-internal input.
+ */
+export const PUBLIC_ARTIFACT_OBJECT_PATTERNS = [
+  '0x*',
+  'input-specs/*',
+  'prepared-bundles/*',
+  'witnesses/*',
+  'public-outputs/*',
+  'proofs/*',
+] as const
+
+export function publicArtifactObjectResources(bucket: string, keyPrefix: string): string[] {
+  const prefix = normalizeProofKeyPrefix(keyPrefix)
+  return PUBLIC_ARTIFACT_OBJECT_PATTERNS.map(pattern =>
+    `arn:aws:s3:::${bucket}/${prefix}/${pattern}`
+  )
+}
+
 export interface ProofAwsValuesProjection {
+  artifactRegion: string
   bucket: string
   coordinatorRoleArn: string
   coordinatorServiceAccount: string
   keyPrefix: string
-  region: string
   secretName: string
+  secretRegion: string
   withdrawalRoleArn: string
   withdrawalServiceAccount: string
 }
@@ -268,7 +293,7 @@ export function upsertProofArtifactPublicReadPolicy(
       Action: 's3:GetObject',
       Effect: 'Allow',
       Principal: '*',
-      Resource: `arn:aws:s3:::${bucket}/${prefix}/*`,
+      Resource: publicArtifactObjectResources(bucket, prefix),
       Sid: PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID,
     })
   }
@@ -338,7 +363,7 @@ function hasProofTokenMappings(values: Record<string, any>): boolean {
   return PROOF_SECRET_PROPERTIES.every(property => mappedKeys.has(property))
 }
 
-function projectManagedAwsSecretRegion(
+function projectManagedAwsProofSecret(
   values: Record<string, any>,
   secretName: string,
   region: string
@@ -346,11 +371,22 @@ function projectManagedAwsSecretRegion(
   for (const secret of Object.values(values.externalSecrets || {}) as any[]) {
     if (secret?.provider !== 'aws' || !Array.isArray(secret.data)) continue
 
-    const readsProvisionedProofSecret = secret.data.some((item: any) =>
-      PROOF_SECRET_PROPERTIES.includes(item?.secretKey) &&
-      item?.remoteRef?.key === secretName
+    const proofTokenMappings = secret.data.filter((item: any) =>
+      PROOF_SECRET_PROPERTIES.includes(item?.secretKey)
     )
-    if (readsProvisionedProofSecret) secret.secretRegion = region
+    if (proofTokenMappings.length === 0) continue
+
+    // When proof-aws.json is present, its deployment-scoped Secrets Manager
+    // path is authoritative for AWS-backed proof tokens. In particular, do
+    // not preserve the historical scroll/proof-coordinator-secrets fallback:
+    // doing so gives the Coordinator and an external Worker different bearer
+    // tokens while both generated configurations still look valid.
+    for (const item of proofTokenMappings) {
+      item.remoteRef ||= {}
+      item.remoteRef.key = secretName
+    }
+
+    secret.secretRegion = region
   }
 }
 
@@ -366,7 +402,7 @@ export function applyProofAwsValues(
 ): void {
   const keyPrefix = normalizeProofKeyPrefix(projection.keyPrefix)
   upsertEnv(coordinatorValues, 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET', projection.bucket, 'proof-coordinator values')
-  upsertEnv(coordinatorValues, 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__REGION', projection.region, 'proof-coordinator values')
+  upsertEnv(coordinatorValues, 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__REGION', projection.artifactRegion, 'proof-coordinator values')
   upsertEnv(coordinatorValues, 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__KEY_PREFIX', keyPrefix, 'proof-coordinator values')
   bindIrsaServiceAccount(coordinatorValues, projection.coordinatorServiceAccount, projection.coordinatorRoleArn)
 
@@ -379,21 +415,21 @@ export function applyProofAwsValues(
       })),
       provider: 'aws',
       refreshInterval: '2m',
-      secretRegion: projection.region,
+      secretRegion: projection.secretRegion,
       serviceAccount: 'external-secrets',
     }
   }
 
-  // Do not rely on the shared chart's historical us-west-2 fallback. Keep an
-  // existing managed mapping in sync as well as newly created mappings, while
-  // leaving operator-owned Vault or alternate-secret mappings untouched.
-  projectManagedAwsSecretRegion(coordinatorValues, projection.secretName, projection.region)
+  // Do not rely on historical secret-path or us-west-2 fallbacks. Keep every
+  // AWS-backed proof-token mapping aligned with the provisioned resource
+  // facts, while leaving operator-owned non-AWS mappings untouched.
+  projectManagedAwsProofSecret(coordinatorValues, projection.secretName, projection.secretRegion)
 
   withdrawalValues.withdrawalProof ||= {}
   withdrawalValues.withdrawalProof.s3AuthMode = 'irsa'
   bindIrsaServiceAccount(withdrawalValues, projection.withdrawalServiceAccount, projection.withdrawalRoleArn)
   // Keep any prep-charts-managed WP copy in the explicitly selected region.
-  projectManagedAwsSecretRegion(withdrawalValues, projection.secretName, projection.region)
+  projectManagedAwsProofSecret(withdrawalValues, projection.secretName, projection.secretRegion)
 }
 
 /**
@@ -425,7 +461,8 @@ export class ProofAwsProvisioner {
       throw new Error(`unsupported proof artifact public read mode: ${String(publicReadMode)}`)
     }
 
-    const directS3Endpoint = proofArtifactS3Endpoint(identity.awsRegion)
+    const artifactRegion = identity.artifactRegion || identity.awsRegion
+    const directS3Endpoint = proofArtifactS3Endpoint(artifactRegion)
     if (publicReadMode === 'direct-s3' && input.artifactRead.publicEndpointUrl) {
       const supplied = normalizeProofArtifactPublicEndpoint(input.artifactRead.publicEndpointUrl)
       if (supplied !== directS3Endpoint) {
@@ -443,12 +480,19 @@ export class ProofAwsProvisioner {
     const publicEndpointUrl = publicReadMode === 'direct-s3'
       ? directS3Endpoint
       : normalizeProofArtifactPublicEndpoint(input.artifactRead.publicEndpointUrl as string)
-    const bucketCreated = this.ensureBucket(identity.awsRegion, bucket)
+    const bucketCreated = this.ensureBucket(artifactRegion, bucket)
+    if (input.artifactRead.vpcEndpoint?.enabled && artifactRegion !== identity.awsRegion) {
+      throw new Error(
+        `cannot configure an ${identity.awsRegion} S3 Gateway endpoint for artifact bucket region ${artifactRegion}; `
+        + 'cross-region S3 access must use the normal AWS endpoint or an operator-managed gateway',
+      )
+    }
+
     const vpcEndpoint = input.artifactRead.vpcEndpoint?.enabled
       ? this.ensureVpcEndpointArtifactRead(identity, bucket, keyPrefix, input.artifactRead.vpcEndpoint)
       : undefined
     this.reconcilePublicArtifactRead(
-      identity.awsRegion,
+      artifactRegion,
       bucket,
       keyPrefix,
       publicReadMode,
@@ -573,7 +617,7 @@ export class ProofAwsProvisioner {
 
     this.jsonCtx.info(
       directS3
-        ? `proof-aws: configured anonymous GetObject for ${bucket}/${keyPrefix}/*; list/write/delete remain private`
+        ? `proof-aws: configured anonymous GetObject for required external-consumer paths under ${bucket}/${keyPrefix}; list/write/delete remain private`
         : `proof-aws: kept S3 public access blocked and removed the CLI-managed anonymous read for ${bucket}/${keyPrefix}/*`,
     )
   }

@@ -30,6 +30,7 @@ import {
   getL2RethRpcIngressConfigKey,
   getProductionChartName,
   isL2RethBlobS3Chart,
+  migrateCubesignerPolicySdkVersion,
   migrateCubesignerRequestContract,
   removeConfigMapEnvKeys,
   removeEnvArrayKeys,
@@ -361,7 +362,7 @@ describe('setup prep-charts CubeSigner production config', () => {
 
     expect(migrateCubesignerRequestContract(values)).to.deep.equal([{
       key: 'env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT',
-      newValue: 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-v2',
+      newValue: 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3',
       oldValue: 'dogeos-cubesigner-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1',
     }])
     expect(values.env[1].value).to.equal('operator-owned')
@@ -369,7 +370,32 @@ describe('setup prep-charts CubeSigner production config', () => {
     values.env[0].value = 'dogeos-cubesigner-compact-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1'
     expect(migrateCubesignerRequestContract(values)).to.have.length(1)
     expect(values.env[0].value)
-      .to.equal('dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-v2')
+      .to.equal('dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3')
+
+    values.env[0].value = 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-v2'
+    expect(migrateCubesignerRequestContract(values)).to.have.length(1)
+    expect(values.env[0].value)
+      .to.equal('dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3')
+  })
+
+  it('migrates only the known pre-beta.2 CubeSigner SDK evidence', () => {
+    const values: any = {
+      env: [{
+        name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION',
+        value: '0.4.152-0',
+      }],
+    }
+
+    expect(migrateCubesignerPolicySdkVersion(values)).to.deep.equal([{
+      key: 'env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION',
+      newValue: '0.4.281',
+      oldValue: '0.4.152-0',
+    }])
+    expect(values.env[0].value).to.equal('0.4.281')
+
+    values.env[0].value = 'operator-owned'
+    expect(migrateCubesignerPolicySdkVersion(values)).to.deep.equal([])
+    expect(values.env[0].value).to.equal('operator-owned')
   })
 
 })

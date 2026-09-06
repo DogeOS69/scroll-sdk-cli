@@ -20,6 +20,7 @@ function fixture() {
   return buildProofAwsConfig({
     coordinatorServiceAccount: 'proof-coordinator',
     identity: {
+      artifactRegion: 'us-east-1',
       awsRegion: 'us-east-1',
       deploymentAlias: 'dogeos-testnet-01',
       eksCluster: 'dogeos-testnet',
@@ -98,8 +99,25 @@ describe('proof AWS config source', () => {
     fs.writeFileSync(configPath, `${JSON.stringify(legacy, undefined, 2)}\n`)
 
     expect(() => readProofAwsConfig(root)).to.throw(
-      '.schema must be dogeos/proof-aws/v3',
+      '.schema must be dogeos/proof-aws/v4',
     )
+  })
+
+  it('keeps artifact and EKS/secret regions independent', () => {
+    const config = fixture()
+    config.artifactStore.region = 'us-west-2'
+    config.kubernetes.awsRegion = 'us-east-1'
+    config.secret.region = 'us-east-1'
+    writeProofAwsConfig(path.join(root, '.data/proof-aws.json'), config)
+
+    const loaded = readProofAwsConfig(root).config
+    expect(loaded.artifactStore.region).to.equal('us-west-2')
+    expect(loaded.kubernetes.awsRegion).to.equal('us-east-1')
+    expect(loaded.secret.region).to.equal('us-east-1')
+    expect(proofAwsValuesProjection(loaded)).to.include({
+      artifactRegion: 'us-west-2',
+      secretRegion: 'us-east-1',
+    })
   })
 
   it('projects config into final values idempotently', () => {
@@ -148,5 +166,46 @@ describe('proof AWS config source', () => {
     })
     expect(proofAwsValuesProjection(readProofAwsConfig(root).config).secretName)
       .to.equal('scroll/proof-coordinator-secrets')
+  })
+
+  it('replaces stale generated AWS proof secret paths with the provisioned path', () => {
+    const valuesDir = path.join(root, 'values')
+    fs.mkdirSync(valuesDir, {recursive: true})
+    const staleSecret = 'scroll/proof-coordinator-secrets'
+    const deploymentSecret = 'scroll/dogeos-testnet-01/proof-coordinator-secrets'
+    const proofMapping = (properties: string[]) => ({
+      data: properties.map(property => ({
+        remoteRef: {key: staleSecret, property},
+        secretKey: property,
+      })),
+      provider: 'aws',
+      secretRegion: 'us-west-2',
+    })
+    fs.writeFileSync(
+      path.join(valuesDir, 'proof-coordinator-production.yaml'),
+      yaml.dump({externalSecrets: {secrets: proofMapping(['proof-work-token', 'prover-worker-token'])}}),
+    )
+    fs.writeFileSync(
+      path.join(valuesDir, 'withdrawal-processor-production.yaml'),
+      yaml.dump({externalSecrets: {'proof-secrets': proofMapping(['proof-work-token'])}}),
+    )
+    const config = fixture()
+    config.secret.name = deploymentSecret
+    writeProofAwsConfig(path.join(root, '.data/proof-aws.json'), config)
+
+    projectProofAwsConfig(root, valuesDir)
+
+    const coordinator = yaml.load(fs.readFileSync(
+      path.join(valuesDir, 'proof-coordinator-production.yaml'),
+      'utf8',
+    )) as any
+    const withdrawal = yaml.load(fs.readFileSync(
+      path.join(valuesDir, 'withdrawal-processor-production.yaml'),
+      'utf8',
+    )) as any
+    expect(coordinator.externalSecrets.secrets.data.map((item: any) => item.remoteRef.key))
+      .to.deep.equal([deploymentSecret, deploymentSecret])
+    expect(withdrawal.externalSecrets['proof-secrets'].data[0].remoteRef.key)
+      .to.equal(deploymentSecret)
   })
 })

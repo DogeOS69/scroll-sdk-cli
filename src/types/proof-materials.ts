@@ -40,6 +40,8 @@ export interface ProofMaterialsV1 {
   schema: typeof PROOF_MATERIALS_SCHEMA
   schemaVersion: 1
   software: {
+    /** Canonical identity input copied verbatim from the pinned mock Worker image. */
+    compilerIdentity?: ProofMaterialFileV1
     /** Real-generation files. Absent for identity-only mock preparation. */
     artifacts?: {
       aggregateVerifyingKey: ProofMaterialFileV1

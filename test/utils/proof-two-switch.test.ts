@@ -23,9 +23,30 @@ function proofImage(character: string, repository: string) {
 
 describe('PR #937 two-switch proof adapter', () => {
   let root: string
+  let mockWorkerIdentity: string
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'scrollsdk-proof-two-switch-'))
+    mockWorkerIdentity = path.join(root, 'mock-worker-identity.json')
+    const aggregationRaw = `0x${'1'.repeat(128)}`
+    fs.writeFileSync(mockWorkerIdentity, JSON.stringify({
+      batch_aggregation_guest: {
+        app_commit_raw: aggregationRaw,
+        app_exe_commit: '1'.repeat(64),
+        app_vm_commit: '1'.repeat(64),
+        embedded_inner_batch_app_commit_raw: `0x${'0'.repeat(128)}`,
+        program_commitment_hash: `0x${createHash('sha256').update(Buffer.from(aggregationRaw.slice(2), 'hex')).digest('hex')}`,
+      },
+      batch_guest: {
+        app_commit_raw: `0x${'0'.repeat(128)}`,
+        app_exe_commit: '0'.repeat(64),
+        app_vm_commit: '0'.repeat(64),
+      },
+      guest_openvm_toml_sha256: `0x${'2'.repeat(64)}`,
+      image_revision: 'test-revision',
+      openvm_version: '1.7',
+      root_verifier_asm_sha256: `0x${'3'.repeat(64)}`,
+    }))
   })
 
   afterEach(() => {
@@ -89,6 +110,7 @@ describe('PR #937 two-switch proof adapter', () => {
         mockWorker: image('c', 'dogeos69/prover-worker-mock'),
         topologyCompiler: image('e', 'dogeos69/dogeos-proof-topology'),
       },
+      mockWorkerIdentity,
       producerManifest: manifest,
     })
 
@@ -122,6 +144,7 @@ describe('PR #937 two-switch proof adapter', () => {
     expect(source.proof_topology).not.to.have.property('production')
     expect(topology.deployment).not.to.have.property('productionWorkerImage')
     expect(topology.deployment).not.to.have.property('artifactLocalRoot')
+    expect(topology.active?.profile).to.equal('withdrawal_mock_prover_real_materialize')
 
     const stagedRealProfile = {
       ...topology,
@@ -214,11 +237,15 @@ describe('PR #937 two-switch proof adapter', () => {
         mockWorker: image('c', 'dogeos69/prover-worker-mock'),
         topologyCompiler: image('e', 'dogeos69/dogeos-proof-topology'),
       },
+      mockWorkerIdentity,
     })
 
     expect(prepared.receipt.software.artifacts).to.equal(undefined)
+    expect(prepared.receipt.software.compilerIdentity).to.include({
+      path: '.data/proof-materials/software/identity/worker-identity.json',
+    })
     expect(prepared.receipt.software.identitySource).to.equal('dogeos_core_synthetic_mock_v1')
-    expect(fs.readdirSync(path.join(root, '.data/proof-materials'))).to.deep.equal([])
+    expect(fs.existsSync(path.join(root, '.data/proof-materials/software/identity/worker-identity.json'))).to.equal(true)
     const reloaded = readProofMaterials(prepared.receiptPath, root)
     const topology = buildProofTopology({
       artifactStore: {
@@ -239,6 +266,7 @@ describe('PR #937 two-switch proof adapter', () => {
     const source = toml.parse(renderProofTopologySource(topology, root)) as {
       proof_topology: {active: {real_scroll: Record<string, unknown>; worker_launch: string}}
     }
+    expect(topology.active?.profile).to.equal('withdrawal_mock_prover')
     expect(source.proof_topology.active.worker_launch).to.equal('external')
     expect(source.proof_topology.active.real_scroll).to.include({
       batch_program_commitment_hex: hex64('8'),
@@ -250,6 +278,11 @@ describe('PR #937 two-switch proof adapter', () => {
       'batch_materializer_binary_path',
       'chunk_app_exe',
       'chunk_materializer_binary_path',
+      'l2_range_aggregation_app_commit_raw_hex',
+      'l2_range_aggregation_program_commitment_hash_hex',
+    )
+    expect(source.proof_topology.active.real_scroll).to.have.property(
+      'l2_range_aggregation_verification_key_hash_hex',
     )
 
     const receipt = JSON.parse(fs.readFileSync(prepared.receiptPath, 'utf8')) as {
@@ -262,6 +295,62 @@ describe('PR #937 two-switch proof adapter', () => {
     )
   })
 
+  it('selects real segmentation and materializers for mock proving with imported real identities', () => {
+    const hex32 = (character: string) => `0x${character.repeat(64)}`
+    const hex64 = (character: string) => `0x${character.repeat(128)}`
+    const identityEnv = path.join(root, 'real-identity.env')
+    fs.writeFileSync(identityEnv, [
+      `export DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW=${hex64('1')}`,
+      `export DOGEOS_BATCH_PROGRAM_COMMITMENT=${hex32('2')}`,
+      `export DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW=${hex64('3')}`,
+      `export DOGEOS_BATCH_SCROLL_PROGRAM_COMMITMENT_RAW=${hex64('4')}`,
+      `export DOGEOS_BATCH_VK_HASH=${hex32('5')}`,
+      `export DOGEOS_BRIDGE_APP_COMMIT_RAW=${hex64('6')}`,
+      `export DOGEOS_BRIDGE_PROGRAM_COMMITMENT=${hex32('7')}`,
+      `export DOGEOS_BRIDGE_VK_HASH=${hex32('8')}`,
+      `export DOGEOS_CHUNK_PROGRAM_COMMITMENT=${hex32('9')}`,
+      `export DOGEOS_CHUNK_PROGRAM_COMMITMENT_RAW=${hex64('a')}`,
+      `export DOGEOS_CHUNK_VK_HASH=${hex32('b')}`,
+      '',
+    ].join('\n'))
+    const prepared = prepareProofMaterials({
+      deploymentDir: root,
+      generation: 'mock',
+      identityEnv,
+      images: {
+        mockWorker: proofImage('c', 'dogeos69/prover-worker-mock'),
+        topologyCompiler: proofImage('e', 'dogeos69/dogeos-proof-topology'),
+      },
+      mockWorkerIdentity,
+    })
+
+    expect(prepared.receipt.software.artifacts).to.equal(undefined)
+    expect(prepared.receipt.software.identitySource).to.equal('real_identity_probe')
+    const topology = buildProofTopology({
+      artifactStore: {
+        bucket: 'proof-bucket',
+        endpointUrl: 'https://s3.us-east-1.amazonaws.com',
+        kind: 's3_compatible',
+        region: 'us-east-1',
+      },
+      deploymentName: 'dogeos-test',
+      generation: 'mock',
+      materials: prepared.receipt,
+      mode: 'active',
+      runtime: {
+        proofCoordinatorPublicUrl: 'https://proof-coordinator.example.com',
+        rpcWitnessUrl: 'https://l2-rpc.example.com',
+        witnessSource: 'rpc',
+      },
+    })
+
+    expect(topology.generation).to.equal('mock')
+    expect(topology.enforcement).to.equal('observe')
+    expect(topology.active?.profile).to.equal('withdrawal_mock_prover_real_materialize')
+    expect(topology.active?.realScroll).not.to.have.property('chunkAppExe')
+    expect(topology.active?.realScroll).not.to.have.property('batchAppExe')
+  })
+
   it('refreshes explicit mock image pins without replacing prepared identities or files', () => {
     const prepared = prepareProofMaterials({
       deploymentDir: root,
@@ -270,6 +359,7 @@ describe('PR #937 two-switch proof adapter', () => {
         mockWorker: proofImage('1', 'dogeos69/prover-worker-mock'),
         topologyCompiler: proofImage('2', 'dogeos69/dogeos-proof-topology'),
       },
+      mockWorkerIdentity,
     })
     const marker = path.join(root, '.data/proof-materials/operator-marker')
     fs.writeFileSync(marker, 'preserve')
@@ -281,6 +371,7 @@ describe('PR #937 two-switch proof adapter', () => {
         mockWorker: proofImage('3', 'dogeos69/prover-worker-mock'),
         topologyCompiler: proofImage('4', 'dogeos69/dogeos-proof-topology'),
       },
+      mockWorkerIdentity,
       refreshExistingImages: true,
     })
 
@@ -299,6 +390,7 @@ describe('PR #937 two-switch proof adapter', () => {
         mockWorker: proofImage('1', 'dogeos69/prover-worker-mock'),
         topologyCompiler: proofImage('2', 'dogeos69/dogeos-proof-topology'),
       },
+      mockWorkerIdentity,
     }
     prepareProofMaterials(options)
     expect(() => prepareProofMaterials(options)).to.throw(

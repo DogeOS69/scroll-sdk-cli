@@ -58,10 +58,10 @@ function known(value: unknown, allowed: readonly string[], label: string): void 
 function validateShape(value: unknown, source: string): void {
   const root = mapping(value, `${source}: proof_topology`)
   known(root, ['active', 'compiler', 'deployment', 'enforcement', 'generation', 'mode'], `${source}: proof_topology`)
-  known(root.compiler, ['image'], `${source}: proof_topology.compiler`)
+  known(root.compiler, ['identityFilePath', 'image'], `${source}: proof_topology.compiler`)
   known(mapping(root.compiler, 'compiler').image, ['digest', 'repository'], `${source}: proof_topology.compiler.image`)
   known(root.deployment, [
-    'artifactKeyPrefix', 'coordinatorId', 'generatedMaterialsRoot',
+    'artifactKeyPrefix', 'coordinatorId', 'generatedMaterialsRoot', 'l2GenesisJson',
     'mockWorkerImage', 'productionWorkerImage', 'proofWorkBind', 'proofWorkPublicUrl',
     'proofWorkTokenFile', 'protocolContextPath', 'proverBind', 'proverPublicUrl',
     'publicS3EndpointUrl', 'readinessEvidencePath', 'resourcesMountPath',
@@ -114,6 +114,9 @@ function validateTopology(topology: ProofTopologySpec, source: string): void {
   }
 
   assertImage(topology.compiler?.image, `${source}: compiler.image`)
+  if (!topology.compiler?.identityFilePath?.trim()) {
+    throw new Error(`${source}: compiler.identityFilePath is required`)
+  }
   assertImage(topology.deployment?.mockWorkerImage, `${source}: deployment.mockWorkerImage`)
   if (topology.deployment?.productionWorkerImage !== undefined) {
     assertImage(topology.deployment.productionWorkerImage, `${source}: deployment.productionWorkerImage`)

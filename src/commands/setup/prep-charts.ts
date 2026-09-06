@@ -36,6 +36,7 @@ import {
   assertProofAwsMatchesTopology,
   reconcileProofKubernetes,
 } from '../../utils/proof-kubernetes-reconciler.js'
+import {assertTopologyUsesSharedArtifactStore, sharedArtifactStoreFromDogeConfig} from '../../utils/proof-shared-artifact-store.js'
 import {proofTopologyEthereumDaBlobSource} from '../../utils/proof-topology-compiler.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {
@@ -298,7 +299,7 @@ export function ensureCubesignerPolicyKeyBinding(productionYaml: any): PrepChart
   return [{key: `env.${name}`, newValue: JSON.stringify(valueFrom), oldValue}]
 }
 
-/** Replace the retired v1 CubeSigner request contract without taking ownership
+/** Replace retired CubeSigner request contracts without taking ownership
  * of other operator-reviewed production-policy evidence. */
 export function migrateCubesignerRequestContract(productionYaml: any): PrepChartChange[] {
   const envVar = Array.isArray(productionYaml?.env)
@@ -308,8 +309,9 @@ export function migrateCubesignerRequestContract(productionYaml: any): PrepChart
   const retired = new Set([
     'dogeos-cubesigner-compact-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1',
     'dogeos-cubesigner-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1',
+    'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-v2',
   ])
-  const current = 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-v2'
+  const current = 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3'
   if (!envVar || !retired.has(envVar.value)) return []
 
   const oldValue = envVar.value
@@ -320,6 +322,23 @@ export function migrateCubesignerRequestContract(productionYaml: any): PrepChart
     newValue: current,
     oldValue,
   }]
+}
+
+/** Move known pre-beta.2 CubeSigner SDK evidence to the exact SDK bundled by
+ * the beta.2 image. Unknown operator values are left untouched and fail closed
+ * at runtime instead of being silently rewritten. */
+export function migrateCubesignerPolicySdkVersion(productionYaml: any): PrepChartChange[] {
+  const name = 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION'
+  const envVar = Array.isArray(productionYaml?.env)
+    ? productionYaml.env.find((item: any) => item?.name === name)
+    : undefined
+  const current = '0.4.281'
+  if (!envVar || envVar.value !== '0.4.152-0') return []
+
+  const oldValue = envVar.value
+  envVar.value = current
+  delete envVar.valueFrom
+  return [{key: `env.${name}`, newValue: current, oldValue}]
 }
 
 /**
@@ -1704,6 +1723,16 @@ export default class SetupPrepCharts extends Command {
     }
 
     if (this.proofIntent) {
+      const sharedArtifactStore = sharedArtifactStoreFromDogeConfig(this.dogeConfig)
+      const topologyArtifactStore = this.proofIntent.proofTopology.active?.artifactStore
+      if (topologyArtifactStore?.kind === 's3_compatible') {
+        assertTopologyUsesSharedArtifactStore({
+          bucket: topologyArtifactStore.bucket,
+          keyPrefix: this.proofIntent.proofTopology.deployment.artifactKeyPrefix,
+          region: topologyArtifactStore.region,
+        }, sharedArtifactStore)
+      }
+
       const proofAws = readOptionalProofAwsConfig(process.cwd())
       if (proofAws) {
         try {
@@ -3052,6 +3081,7 @@ export default class SetupPrepCharts extends Command {
             productionYaml,
             buildCubesignerPrepEnv(this.dogeConfig),
           ),
+          ...migrateCubesignerPolicySdkVersion(productionYaml),
           ...migrateCubesignerRequestContract(productionYaml),
           ...ensureCubesignerPolicyKeyBinding(productionYaml),
           ...ensureConfigMapFileMount(

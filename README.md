@@ -1599,7 +1599,7 @@ USAGE
   $ scrollsdk setup proof-aws-init [--artifact-public-endpoint-url <value>] [--artifact-public-read-mode
     direct-s3|existing-gateway] [--artifact-read-route-table-id <value>...] [--artifact-read-vpc-endpoint-id <value>]
     [--aws-profile <value>] [--aws-region <value>] [--bucket <value>] [--config <value>] [--coordinator-service-account
-    <value>] [--deployment-alias <value>] [--eks-cluster <value>] [--json] [--key-prefix <value>] [--namespace <value>]
+    <value>] [--deployment-alias <value>] [--doge-config <value>] [--eks-cluster <value>] [--json] [--key-prefix <value>] [--namespace <value>]
     [-N] [--rotate-tokens] [--secret-name <value>] [--skip-vpc-endpoint] [--withdrawal-service-account <value>] [-y]
 
 FLAGS
@@ -1616,21 +1616,23 @@ FLAGS
       --artifact-read-vpc-endpoint-id=<value>    Advanced override: existing S3 Gateway VPC endpoint (normally
                                                  auto-discovered or created)
       --aws-profile=<value>                      AWS CLI profile used for provisioning
-      --aws-region=<value>                       AWS region for the bucket, roles, and secret (auto-detected when
-                                                 omitted)
-      --bucket=<value>                           Proof artifact S3 bucket (default:
-                                                 dogeos-<deployment-alias>-proof-artifacts)
+      --aws-region=<value>                       AWS region containing EKS and the proof token secret (auto-detected
+                                                 when omitted)
+      --bucket=<value>                           Advanced consistency assertion for the shared artifact bucket; the
+                                                 value is read from doge-config
       --config=<value>                           [default: .data/proof-aws.json] Output config file consumed by setup
                                                  prep-charts
       --coordinator-service-account=<value>      Kubernetes service account used by proof-coordinator (default:
                                                  proof-coordinator)
       --deployment-alias=<value>                 Unique deployment instance alias used to derive deterministic bucket
                                                  and IAM role names
+      --doge-config=<value>                      [default: .data/doge-config.toml] DogeOS config containing the
+                                                 canonical ethereumDa.blobArchive.s3 store
       --eks-cluster=<value>                      EKS cluster name used by the IRSA trust policies (selected
                                                  interactively when omitted)
       --json                                     Output structured JSON
-      --key-prefix=<value>                       Object key prefix for the proof artifact store (default:
-                                                 proof-topology)
+      --key-prefix=<value>                       Advanced consistency assertion for the shared artifact key prefix; the
+                                                 value is read from doge-config
       --namespace=<value>                        Kubernetes namespace of the proof workloads (default: default)
       --rotate-tokens                            Replace the proof-work/prover-worker tokens in an existing secret (both
                                                  workloads must be restarted afterwards)
@@ -1652,7 +1654,7 @@ EXAMPLES
 
   $ scrollsdk setup proof-aws-init --artifact-public-read-mode existing-gateway --artifact-public-endpoint-url https://objects.example.com
 
-  $ scrollsdk setup proof-aws-init --bucket my-proof-artifacts --rotate-tokens
+  $ scrollsdk setup proof-aws-init --rotate-tokens
 ```
 
 _See code: [src/commands/setup/proof-aws-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-aws-init.ts)_
@@ -1717,6 +1719,8 @@ DESCRIPTION
 
 EXAMPLES
   $ scrollsdk setup proof-materials --generation mock
+
+  $ scrollsdk setup proof-materials --generation mock --identity-env /build/real-identity.env
 
   $ scrollsdk setup proof-materials --generation real --software-manifest /build/real-proving-artifacts.json --identity-env /build/real-identity.env --chunk-materializer /build/materialize-chunk-oneshot --batch-materializer /build/scroll-runtime-materializer --mock-worker-image repo/mock@sha256:... --production-worker-image repo/worker@sha256:... --compiler-image repo/compiler@sha256:...
 

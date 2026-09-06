@@ -12,11 +12,12 @@ import {
   normalizeProofArtifactPublicEndpoint,
   normalizeProofBucketName,
   normalizeProofKeyPrefix,
+  proofArtifactS3Endpoint,
 } from './proof-aws-provisioner.js'
 
 export const DEFAULT_PROOF_AWS_CONFIG = '.data/proof-aws.json'
 export const LEGACY_SHARED_PROOF_SECRET_NAME = 'scroll/proof-coordinator-secrets'
-export const PROOF_AWS_CONFIG_SCHEMA = 'dogeos/proof-aws/v3'
+export const PROOF_AWS_CONFIG_SCHEMA = 'dogeos/proof-aws/v4'
 
 export interface ProofAwsConfig {
   artifactReadTransport: ProofArtifactReadTransportResult
@@ -26,6 +27,7 @@ export interface ProofAwsConfig {
     region: string
   }
   kubernetes: {
+    awsRegion: string
     deploymentAlias: string
     eksCluster: string
     namespace: string
@@ -48,6 +50,7 @@ export interface ProofAwsConfig {
 }
 
 export interface ProofAwsConfigInput {
+  artifactRegion?: string
   coordinatorServiceAccount: string
   identity: ProofAwsIdentity
   keyPrefix: string
@@ -160,9 +163,10 @@ export function buildProofAwsConfig(input: ProofAwsConfigInput): ProofAwsConfig 
     artifactStore: {
       bucket: normalizeProofBucketName(requiredString(provisioned.bucket, 'proof AWS bucket')),
       keyPrefix: normalizeProofKeyPrefix(input.keyPrefix),
-      region: requiredString(identity.awsRegion, 'proof AWS region'),
+      region: requiredString(input.artifactRegion || identity.artifactRegion || identity.awsRegion, 'proof artifact AWS region'),
     },
     kubernetes: {
+      awsRegion: requiredString(identity.awsRegion, 'proof EKS AWS region'),
       deploymentAlias: requiredString(identity.deploymentAlias, 'proof AWS deployment alias'),
       eksCluster: requiredString(identity.eksCluster, 'proof AWS EKS cluster'),
       namespace: requiredString(identity.namespace, 'proof AWS namespace'),
@@ -200,29 +204,40 @@ export function validateProofAwsConfig(raw: unknown, label: string): ProofAwsCon
     `${label}.artifactStore.region`,
   )
   const secretRegion = requiredString(value.secret?.region, `${label}.secret.region`)
-  if (secretRegion !== artifactRegion) {
+  const kubernetesRegion = requiredString(value.kubernetes?.awsRegion, `${label}.kubernetes.awsRegion`)
+  if (secretRegion !== kubernetesRegion) {
+    throw new Error(`${label}.secret.region must match ${label}.kubernetes.awsRegion`)
+  }
+
+  const artifactReadTransport = normalizeArtifactReadTransport(
+    value.artifactReadTransport,
+    `${label}.artifactReadTransport`,
+  )
+  if (
+    artifactReadTransport.publicReadMode === 'direct-s3'
+    && artifactReadTransport.publicEndpointUrl !== proofArtifactS3Endpoint(artifactRegion)
+  ) {
     throw new Error(
-      `${label}.secret.region must match ${label}.artifactStore.region`,
+      `${label}.artifactReadTransport.publicEndpointUrl must match artifactStore.region in direct-s3 mode`,
     )
   }
 
   return buildProofAwsConfig({
+    artifactRegion,
     coordinatorServiceAccount: requiredString(
       value.serviceAccounts?.proofCoordinator?.name,
       `${label}.serviceAccounts.proofCoordinator.name`,
     ),
     identity: {
-      awsRegion: artifactRegion,
+      artifactRegion,
+      awsRegion: kubernetesRegion,
       deploymentAlias: requiredString(value.kubernetes?.deploymentAlias, `${label}.kubernetes.deploymentAlias`),
       eksCluster: requiredString(value.kubernetes?.eksCluster, `${label}.kubernetes.eksCluster`),
       namespace: requiredString(value.kubernetes?.namespace, `${label}.kubernetes.namespace`),
     },
     keyPrefix: requiredString(value.artifactStore?.keyPrefix, `${label}.artifactStore.keyPrefix`),
     provisioned: {
-      artifactReadTransport: normalizeArtifactReadTransport(
-        value.artifactReadTransport,
-        `${label}.artifactReadTransport`,
-      ),
+      artifactReadTransport,
       bucket: requiredString(value.artifactStore?.bucket, `${label}.artifactStore.bucket`),
       bucketCreated: false,
       coordinatorRoleArn: requiredRoleArn(
@@ -283,12 +298,13 @@ export function readOptionalProofAwsConfig(
 
 export function proofAwsValuesProjection(config: ProofAwsConfig): ProofAwsValuesProjection {
   return {
+    artifactRegion: config.artifactStore.region,
     bucket: config.artifactStore.bucket,
     coordinatorRoleArn: config.serviceAccounts.proofCoordinator.roleArn,
     coordinatorServiceAccount: config.serviceAccounts.proofCoordinator.name,
     keyPrefix: config.artifactStore.keyPrefix,
-    region: config.artifactStore.region,
     secretName: config.secret.name,
+    secretRegion: config.secret.region,
     withdrawalRoleArn: config.serviceAccounts.withdrawalProcessor.roleArn,
     withdrawalServiceAccount: config.serviceAccounts.withdrawalProcessor.name,
   }

@@ -1335,6 +1335,7 @@ describe('deployment-spec-generator', () => {
         deposit_queue_transform: {
           l1_scroll_messenger_address: '0x0000000000000000000000000000000000000001',
           l2_messenger_address: '0x0000000000000000000000000000000000000002',
+          message_queue_gas_limit: 10_000_000,
           moat_address: '0x0000000000000000000000000000000000000003',
         },
         eth_chain_id: 11_155_111,
@@ -1517,9 +1518,17 @@ describe('deployment-spec-generator', () => {
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_REQUEST_JSON_BYTES).to.equal('393216');
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_RESPONSE_JSON_BYTES).to.equal('393216');
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE).to.equal('production_verifier_key_policy');
-      expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION).to.equal('0.4.152-0');
+      expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION).to.equal('0.4.281');
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT)
-        .to.equal('dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-v2');
+        .to.equal('dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3');
+      expect(cubesignerValues.serviceMonitor).to.deep.equal({
+        main: {
+          enabled: true,
+          endpoints: [{interval: '10s', port: 'http', scrapeTimeout: '5s'}],
+          labels: {release: 'scroll-sdk'},
+          serviceName: '{{ include "scroll.common.lib.chart.names.fullname" $ }}',
+        },
+      });
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_SIGNATURE_MODE).to.equal('ecdsa');
       expect(cubesignerEnv).not.to.have.property('CUBESIGNER_MAX_PSBT_BASE64_LEN');
 
@@ -1598,6 +1607,12 @@ describe('deployment-spec-generator', () => {
         name: 'protocol-context-config',
         readOnly: true,
         subPath: 'protocol_context.json',
+      });
+      expect(values.persistence.genesis).to.include({
+        mountPath: '/app/genesis/genesis.json',
+        name: 'genesis-config',
+        readOnly: true,
+        subPath: 'genesis.json',
       });
       expect(values.persistence.secrets.mountPath).to.equal('/app/secrets');
       expect(values.persistence.secrets).not.to.have.property('name');

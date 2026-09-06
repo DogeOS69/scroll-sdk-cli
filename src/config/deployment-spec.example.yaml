@@ -156,12 +156,18 @@ signing:
 #   enforcement: observe # observe | enforce
 #
 #   compiler:
+#     # Written by setup proof-materials from the pinned Worker image. The
+#     # compiler derives aggregation identity from this file.
+#     identityFilePath: .data/proof-materials/software/identity/worker-identity.json
 #     image:
 #       repository: dogeos69/dogeos-proof-topology
 #       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 #
 #   active:
-#     profile: withdrawal_mock_prover
+#     # Use withdrawal_mock_prover for a cheap one-chunk smoke topology.
+#     # Use withdrawal_mock_prover_real_materialize for production-shaped
+#     # segmentation/materialization with mock proof generation.
+#     profile: withdrawal_mock_prover_real_materialize
 #     # Staged real Worker compute/ownership placement. Mock renders as
 #     # adapter-managed local_cpu independently of this value.
 #     workerLaunch: external # local_cpu | local_cuda | external

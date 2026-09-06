@@ -12,17 +12,19 @@ import {
   normalizeProofBucketName,
   normalizeProofKeyPrefix,
   proofArtifactS3Endpoint,
+  publicArtifactObjectResources,
   upsertProofArtifactPublicReadPolicy,
   upsertProofArtifactVpcEndpointReadPolicy,
 } from '../../src/utils/proof-aws-provisioner.js'
 
 const PROJECTION = {
+  artifactRegion: 'us-west-2',
   bucket: 'dogeos-testnet-proof-artifacts',
   coordinatorRoleArn: 'arn:aws:iam::123456789012:role/dogeos-testnet-cluster-proof-coordinator',
   coordinatorServiceAccount: 'proof-coordinator',
   keyPrefix: 'proof-topology',
-  region: 'us-west-2',
   secretName: 'scroll/proof-coordinator-secrets',
+  secretRegion: 'us-west-2',
   withdrawalRoleArn: 'arn:aws:iam::123456789012:role/dogeos-testnet-cluster-wp-proof',
   withdrawalServiceAccount: 'withdrawal-processor',
 }
@@ -341,7 +343,7 @@ describe('proof-aws-provisioner values projection', () => {
         Action: 's3:GetObject',
         Effect: 'Allow',
         Principal: '*',
-        Resource: 'arn:aws:s3:::proof-bucket/proof-topology/*',
+        Resource: publicArtifactObjectResources('proof-bucket', 'proof-topology'),
         Sid: 'ScrollSdkProofArtifactPublicRead',
       },
     ])
@@ -350,6 +352,56 @@ describe('proof-aws-provisioner values projection', () => {
   it('derives the regional direct S3 endpoint', () => {
     expect(proofArtifactS3Endpoint('ap-northeast-1'))
       .to.equal('https://s3.ap-northeast-1.amazonaws.com')
+  })
+
+  it('separates public external-consumer keys from the internal sidecar namespace', () => {
+    const resources = publicArtifactObjectResources('proof-bucket', 'rehearsal/batches')
+    expect(resources).to.deep.equal([
+      'arn:aws:s3:::proof-bucket/rehearsal/batches/0x*',
+      'arn:aws:s3:::proof-bucket/rehearsal/batches/input-specs/*',
+      'arn:aws:s3:::proof-bucket/rehearsal/batches/prepared-bundles/*',
+      'arn:aws:s3:::proof-bucket/rehearsal/batches/witnesses/*',
+      'arn:aws:s3:::proof-bucket/rehearsal/batches/public-outputs/*',
+      'arn:aws:s3:::proof-bucket/rehearsal/batches/proofs/*',
+    ])
+    expect(JSON.stringify(resources)).not.to.include('scroll-chunk-segmentation-sidecars')
+  })
+
+  it('rejects an EKS-region gateway endpoint for a cross-region artifact bucket', () => {
+    const calls: Array<{args: string[]; options: AwsCliOptions}> = []
+    const aws = {
+      json(): any { return {} },
+      run(args: string[], options: AwsCliOptions = {}): string {
+        calls.push({args, options})
+        return ''
+      },
+      text(): string { throw new Error('unexpected text call') },
+    }
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    expect(() => provisioner.provision(
+      {
+        artifactRegion: 'us-west-2',
+        awsRegion: 'us-east-1',
+        deploymentAlias: 'deployment-01',
+        eksCluster: 'cluster',
+        namespace: 'default',
+      },
+      {
+        artifactRead: {
+          publicReadMode: 'direct-s3',
+          vpcEndpoint: {enabled: true},
+        },
+        bucket: 'proof-bucket',
+        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
+        keyPrefix: 'rehearsal/batches',
+        secretName: 'proof-secret',
+        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
+      },
+    )).to.throw('cannot configure an us-east-1 S3 Gateway endpoint for artifact bucket region us-west-2')
+    expect(calls).to.deep.equal([{
+      args: ['s3api', 'head-bucket', '--bucket', 'proof-bucket'],
+      options: {region: 'us-west-2'},
+    }])
   })
 
   it('builds a key-prefix-scoped S3 role policy', () => {
@@ -470,7 +522,7 @@ describe('proof-aws-provisioner values projection', () => {
         Action: 's3:GetObject',
         Effect: 'Allow',
         Principal: '*',
-        Resource: 'arn:aws:s3:::proof-bucket/proof-topology/*',
+        Resource: publicArtifactObjectResources('proof-bucket', 'proof-topology'),
         Sid: 'ScrollSdkProofArtifactPublicRead',
       },
     ])
@@ -569,7 +621,7 @@ describe('proof-aws-provisioner values projection', () => {
     expect(withdrawal.withdrawalProof.s3AuthMode).to.equal('irsa')
   })
 
-  it('updates the region on an existing AWS mapping for the provisioned proof secret', () => {
+  it('updates the secret path and region on existing AWS proof-token mappings', () => {
     const coordinator = {
       externalSecrets: {
         secrets: {
@@ -606,13 +658,24 @@ describe('proof-aws-provisioner values projection', () => {
       },
     }
 
-    applyProofAwsValues(coordinator, withdrawal, { ...PROJECTION, region: 'us-east-1' })
+    applyProofAwsValues(coordinator, withdrawal, {
+      ...PROJECTION,
+      secretName: 'scroll/dev0829/proof-coordinator-secrets',
+      secretRegion: 'us-east-1',
+    })
 
     expect(coordinator.externalSecrets.secrets.secretRegion).to.equal('us-east-1')
     expect(withdrawal.externalSecrets['proof-secrets'].secretRegion).to.equal('us-east-1')
+    expect(coordinator.externalSecrets.secrets.data.map((item: any) => item.remoteRef.key))
+      .to.deep.equal([
+        'scroll/dev0829/proof-coordinator-secrets',
+        'scroll/dev0829/proof-coordinator-secrets',
+      ])
+    expect(withdrawal.externalSecrets['proof-secrets'].data[0].remoteRef.key)
+      .to.equal('scroll/dev0829/proof-coordinator-secrets')
   })
 
-  it('preserves the region on AWS mappings for an alternate Secret', () => {
+  it('rebinds alternate AWS proof-token mappings to proof-aws authority', () => {
     const coordinator = {
       externalSecrets: {
         custom: {
@@ -644,10 +707,17 @@ describe('proof-aws-provisioner values projection', () => {
       },
     }
 
-    applyProofAwsValues(coordinator, withdrawal, { ...PROJECTION, region: 'us-east-1' })
+    applyProofAwsValues(coordinator, withdrawal, { ...PROJECTION, secretRegion: 'us-east-1' })
 
-    expect(coordinator.externalSecrets.custom.secretRegion).to.equal('ap-northeast-1')
-    expect(withdrawal.externalSecrets['proof-secrets'].secretRegion).to.equal('ap-northeast-1')
+    expect(coordinator.externalSecrets.custom.secretRegion).to.equal('us-east-1')
+    expect(withdrawal.externalSecrets['proof-secrets'].secretRegion).to.equal('us-east-1')
+    expect(coordinator.externalSecrets.custom.data.map((item: any) => item.remoteRef.key))
+      .to.deep.equal([
+        'scroll/proof-coordinator-secrets',
+        'scroll/proof-coordinator-secrets',
+      ])
+    expect(withdrawal.externalSecrets['proof-secrets'].data[0].remoteRef.key)
+      .to.equal('scroll/proof-coordinator-secrets')
   })
 
   it('replaces a stale valueFrom on managed env entries', () => {

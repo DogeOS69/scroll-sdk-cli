@@ -243,7 +243,11 @@ function composeDocument(options: {
     cap_drop: ['ALL'],
     security_opt: ['no-new-privileges:true'],
     tmpfs: ['/tmp:rw,noexec,nosuid,size=1g'],
-    command: [PROVER_WORKER_EXECUTABLE, ...options.worker.argv],
+    // Published prover-worker images already set the executable as ENTRYPOINT.
+    // Compose `command` replaces CMD, not ENTRYPOINT, so it must contain only
+    // the compiler-produced arguments. Repeating the binary here makes Clap
+    // parse `/usr/local/bin/prover-worker` as an unexpected positional arg.
+    command: options.worker.argv,
     environment,
     volumes: [
       `./${COMPILED_PROVER_WORKER_TOKEN_FILE}:${options.tokenRuntimePath}:ro`,

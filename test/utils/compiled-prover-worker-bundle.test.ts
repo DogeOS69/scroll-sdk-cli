@@ -7,7 +7,6 @@ import * as path from 'node:path'
 import type {ProverWorkerContractV1} from '../../src/utils/proof-topology-compiler.js'
 
 import {
-  PROVER_WORKER_EXECUTABLE,
   hydrateCompiledProverWorkerBundle,
   verifyCompiledProverWorkerBundle,
   writeCompiledProverWorkerBundle,
@@ -79,7 +78,7 @@ describe('compiled prover-worker bundle', () => {
 
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
-  it('renders the Worker executable before the compiler argv', () => {
+  it('uses the image entrypoint and renders only the compiler argv as Compose command', () => {
     const result = writeCompiledProverWorkerBundle({
       bundleDir,
       contractFile,
@@ -97,7 +96,7 @@ describe('compiled prover-worker bundle', () => {
     expect(compose.services['prover-worker'].image)
       .to.equal(`dogeos69/prover-worker@sha256:${'b'.repeat(64)}`)
     expect(compose.services['prover-worker'].command)
-      .to.deep.equal([PROVER_WORKER_EXECUTABLE, ...worker().argv])
+      .to.deep.equal(worker().argv)
     expect(compose.services['prover-worker'].environment)
       .not.to.have.property('DOGEOS_PROOF_TOPOLOGY_DIGEST')
     expect(compose.services['prover-worker'].volumes)
