@@ -178,7 +178,7 @@ describe('proof-aws-provisioner values projection', () => {
 
     const bucketMutations = calls.filter(call =>
       call.args[0] === 's3api'
-      && ['put-public-access-block', 'put-bucket-policy', 'delete-bucket-policy'].includes(call.args[1]),
+      && ['delete-bucket-policy', 'put-bucket-policy', 'put-public-access-block'].includes(call.args[1]),
     )
     expect(bucketMutations).to.deep.equal([])
   })

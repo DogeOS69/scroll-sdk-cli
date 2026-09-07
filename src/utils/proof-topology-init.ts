@@ -96,6 +96,7 @@ export function buildProofTopology(options: BuildProofTopologyOptions): ProofTop
   if (generation === 'real' && (!materials.software.artifacts || !materials.bridge || !materials.images.productionWorker)) {
     throw new Error('real proof generation requires full software artifacts, deployment-bound Bridge material, and a production Worker image in proof-materials-v1.json')
   }
+
   const materializationArtifacts = materials.software.artifacts
     ?? materials.software.materializationArtifacts
   if (realMaterialization && !materializationArtifacts) {

@@ -71,9 +71,11 @@ export default class ProofMaterials extends Command {
       ].some(Boolean)) {
         throw new Error('Real-only flags were supplied with --generation mock; remove them or select --generation real')
       }
+
       if (flags['worker-identity-bundle'] && !(generation === 'mock' && flags['identity-env'])) {
         throw new Error('--worker-identity-bundle is valid only with --generation mock --identity-env')
       }
+
       if (generation === 'real' && flags['aggregate-verifying-key']) {
         throw new Error('--aggregate-verifying-key is supplied by --software-manifest for --generation real')
       }

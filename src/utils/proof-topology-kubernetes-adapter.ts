@@ -188,6 +188,7 @@ function proofMaterialRuntimeFile(
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error(`${label} must remain inside .data/proof-materials`)
   }
+
   if (!fs.statSync(hostPath).isFile()) throw new Error(`${label} is not a regular file: ${hostPath}`)
   return {
     hostPath,
@@ -258,6 +259,7 @@ function configureRuntimeProofMaterials(
     if (!realScroll.aggVerifyingKeyPath) {
       throw new Error('real generation requires an aggregate verifying key')
     }
+
     const rootVk = proofMaterialRuntimeFile(
       deploymentDir,
       realScroll.aggVerifyingKeyPath,
@@ -292,6 +294,7 @@ function configureRuntimeProofMaterials(
     if (!realScroll.chunkMaterializerBinaryPath || !realScroll.batchMaterializerBinaryPath) {
       throw new Error('real Scroll materialization requires both Chunk and Batch materializer binaries')
     }
+
     const chunk = proofMaterialRuntimeFile(
       deploymentDir,
       realScroll.chunkMaterializerBinaryPath,
@@ -314,7 +317,8 @@ function configureRuntimeProofMaterials(
       `${sha256File(batch.hostPath)}  ${batch.runtimePath}`,
     )
   }
-  commands.push(`printf '%s\\n' ${checks.map(shellQuote).join(' ')} | sha256sum -c -`)
+
+  commands.push(`printf '%s\\n' ${checks.map(check => shellQuote(check)).join(' ')} | sha256sum -c -`)
 
   values.persistence[RUNTIME_MATERIALS_VOLUME] = {
     enabled: true,

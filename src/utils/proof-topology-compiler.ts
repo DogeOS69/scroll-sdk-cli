@@ -496,6 +496,7 @@ export function projectMockGenerationVerifierSelection(
     fs.writeFileSync(filePath, toml.stringify(parsed), {mode: 0o600})
     changed = true
   }
+
   if (changed) rebindProofTopologyBundleRevision(bundleDir)
 }
 

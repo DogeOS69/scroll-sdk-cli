@@ -505,6 +505,7 @@ export class ProofAwsProvisioner {
         keyPrefix,
       )
     }
+
     const artifactReadTransport: ProofArtifactReadTransportResult = {
       publicEndpointUrl,
       publicReadMode,
