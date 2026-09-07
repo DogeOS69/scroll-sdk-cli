@@ -87,13 +87,13 @@ export interface PrepareProofMaterialsOptions {
   deploymentDir: string
   generation: 'mock' | 'real'
   identityEnv?: string
-  /** Test/air-gapped override; ordinary setup extracts this from mockWorker. */
-  mockWorkerIdentity?: string
   images: {
     mockWorker: ProofTopologyImageReference
     productionWorker?: ProofTopologyImageReference
     topologyCompiler: ProofTopologyImageReference
   }
+  /** Test/air-gapped override; ordinary setup extracts this from mockWorker. */
+  mockWorkerIdentity?: string
   outputReceipt?: string
   outputRoot?: string
   producerManifest?: string
@@ -628,6 +628,7 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
         ...aggregation,
       }
     }
+
     const receipt: ProofMaterialsV1 = {
       generatedAt: new Date().toISOString(),
       images: options.images,

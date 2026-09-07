@@ -208,6 +208,7 @@ function realScrollSource(
   ] as Array<[keyof ProofTopologyRealScrollConfig, string]>) {
     if (!identityDerivedFields.has(field)) result[serialized] = value[field] as string
   }
+
   const paths: Array<[keyof ProofTopologyRealScrollConfig, string]> = [
     ['aggVerifyingKeyPath', 'agg_verifying_key_path'],
     ['batchAppConfig', 'batch_app_config'],
@@ -658,7 +659,7 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
     fs.writeFileSync(sourcePath, renderProofTopologySource(options.proofTopology, deploymentDir, container), {mode: 0o600})
     fs.writeFileSync(contextPath, `${JSON.stringify(context, null, 2)}\n`, {mode: 0o600})
     const operation = options.preflightMode ? 'preflight' : 'compile'
-    const identityFilePath = options.proofTopology.compiler.identityFilePath
+    const {identityFilePath} = options.proofTopology.compiler
     if (!identityFilePath?.trim()) throw new Error('proof compiler identity path is required')
     const identityFile = resolveInside(deploymentDir, identityFilePath, 'proof compiler identity path')
     copyInput(identityFile, path.join(inputDir, 'proof-identity.json'), 'Proof compiler identity', true)

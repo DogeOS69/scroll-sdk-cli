@@ -117,6 +117,7 @@ function validateTopology(topology: ProofTopologySpec, source: string): void {
   if (!topology.compiler?.identityFilePath?.trim()) {
     throw new Error(`${source}: compiler.identityFilePath is required`)
   }
+
   assertImage(topology.deployment?.mockWorkerImage, `${source}: deployment.mockWorkerImage`)
   if (topology.deployment?.productionWorkerImage !== undefined) {
     assertImage(topology.deployment.productionWorkerImage, `${source}: deployment.productionWorkerImage`)
