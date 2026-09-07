@@ -178,7 +178,11 @@ and artifacts. Relevant examples:
   explicit operator-managed public HTTPS endpoint for external Workers and
   partner Signers, and can auto-discover or create the EKS cluster's S3 Gateway
   VPC endpoint and route-table associations. Both routes remain explicitly
-  unverified. It writes stable, non-secret resource facts to
+  unverified. For a shared bucket with an existing public S3 policy, select
+  `existing-public-s3`: the CLI preserves bucket-wide Public Access Block and
+  public-policy ownership while still reconciling the deployment-scoped
+  endpoint, IRSA, and secret resources. `direct-s3` is reserved for buckets
+  whose public-read posture the CLI owns. It writes stable, non-secret resource facts to
   `.data/proof-aws.json` and never reads or modifies generated values;
 - `prep-charts` projects `.data/proof-aws.json` into final values. With
   unchanged configuration, templates, and release inputs, a rerun is

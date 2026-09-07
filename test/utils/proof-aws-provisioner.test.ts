@@ -398,10 +398,7 @@ describe('proof-aws-provisioner values projection', () => {
         withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
       },
     )).to.throw('cannot configure an us-east-1 S3 Gateway endpoint for artifact bucket region us-west-2')
-    expect(calls).to.deep.equal([{
-      args: ['s3api', 'head-bucket', '--bucket', 'proof-bucket'],
-      options: {region: 'us-west-2'},
-    }])
+    expect(calls).to.deep.equal([])
   })
 
   it('builds a key-prefix-scoped S3 role policy', () => {
@@ -544,7 +541,7 @@ describe('proof-aws-provisioner values projection', () => {
     expect(disabled.Statement).to.deep.equal([operatorStatement])
   })
 
-  it('refuses to activate unrelated wildcard grants when disabling public-policy blocking', () => {
+  it('ignores public grants on sibling prefixes and rejects grants overlapping the managed prefix', () => {
     expect(() => assertNoUnmanagedPublicProofBucketGrant({
       Statement: [{
         Action: 's3:GetObject',
@@ -553,7 +550,23 @@ describe('proof-aws-provisioner values projection', () => {
         Resource: 'arn:aws:s3:::proof-bucket/unrelated/*',
         Sid: 'UnrelatedPublicRead',
       }],
-    })).to.throw('grants unmanaged public access')
+    }, 'proof-bucket', 'proof-topology')).not.to.throw()
+
+    for (const resource of [
+      'arn:aws:s3:::proof-bucket/*',
+      'arn:aws:s3:::proof-bucket/proof-topology/*',
+      'arn:aws:s3:::proof-bucket/proof-topology/proofs/*',
+    ]) {
+      expect(() => assertNoUnmanagedPublicProofBucketGrant({
+        Statement: [{
+          Action: 's3:GetObject',
+          Effect: 'Allow',
+          Principal: '*',
+          Resource: resource,
+          Sid: 'OverlappingPublicRead',
+        }],
+      }, 'proof-bucket', 'proof-topology')).to.throw('overlapping s3://proof-bucket/proof-topology')
+    }
 
     expect(() => assertNoUnmanagedPublicProofBucketGrant({
       Statement: [{
@@ -563,7 +576,105 @@ describe('proof-aws-provisioner values projection', () => {
         Principal: '*',
         Resource: 'arn:aws:s3:::proof-bucket/proof-topology/*',
       }],
-    })).not.to.throw()
+    }, 'proof-bucket', 'proof-topology')).not.to.throw()
+  })
+
+  it('preserves an existing public S3 bucket policy and Public Access Block settings', () => {
+    const calls: Array<{args: string[]; kind: 'json' | 'run' | 'text'}> = []
+    const aws = {
+      json(args: string[]): any {
+        calls.push({args, kind: 'json'})
+        return {}
+      },
+      run(args: string[]): string {
+        calls.push({args, kind: 'run'})
+        return ''
+      },
+      text(args: string[]): string {
+        calls.push({args, kind: 'text'})
+        if (args[0] === 'sts') return '123456789012'
+        if (args[0] === 'eks') return 'https://oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE'
+        throw new Error(`unexpected text call: ${args.join(' ')}`)
+      },
+    }
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    const result = provisioner.provision(
+      {
+        artifactRegion: 'us-west-2',
+        awsRegion: 'us-west-2',
+        deploymentAlias: 'deployment-01',
+        eksCluster: 'cluster',
+        namespace: 'default',
+      },
+      {
+        artifactRead: {publicReadMode: 'existing-public-s3'},
+        bucket: 'proof-bucket',
+        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
+        keyPrefix: 'batches',
+        secretName: 'proof-secret',
+        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
+      },
+    )
+
+    expect(result.artifactReadTransport).to.deep.equal({
+      publicEndpointUrl: 'https://s3.us-west-2.amazonaws.com',
+      publicReadMode: 'existing-public-s3',
+      publicStatus: 'operator-managed-unverified',
+    })
+    expect(calls.some(call =>
+      call.args[0] === 's3api'
+      && ['delete-bucket-policy', 'put-bucket-policy', 'put-public-access-block'].includes(call.args[1])
+    )).to.equal(false)
+  })
+
+  it('rejects an overlapping public grant before changing VPC, IAM, or secret resources', () => {
+    const calls: Array<{args: string[]; kind: 'json' | 'run' | 'text'}> = []
+    const aws = {
+      json(args: string[]): any {
+        calls.push({args, kind: 'json'})
+        return {}
+      },
+      run(args: string[]): string {
+        calls.push({args, kind: 'run'})
+        return ''
+      },
+      text(args: string[]): string {
+        calls.push({args, kind: 'text'})
+        if (args[0] === 's3api' && args[1] === 'get-bucket-policy') {
+          return JSON.stringify({
+            Statement: [{
+              Action: 's3:GetObject',
+              Effect: 'Allow',
+              Principal: '*',
+              Resource: 'arn:aws:s3:::proof-bucket/*',
+              Sid: 'PublicReadGetObject',
+            }],
+          })
+        }
+
+        throw new Error(`unexpected text call: ${args.join(' ')}`)
+      },
+    }
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    expect(() => provisioner.provision(
+      {awsRegion: 'us-west-2', deploymentAlias: 'deployment-01', eksCluster: 'cluster', namespace: 'default'},
+      {
+        artifactRead: {
+          publicReadMode: 'direct-s3',
+          vpcEndpoint: {enabled: true},
+        },
+        bucket: 'proof-bucket',
+        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
+        keyPrefix: 'batches',
+        secretName: 'proof-secret',
+        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
+      },
+    )).to.throw('select existing-public-s3')
+
+    expect(calls.map(call => call.args.slice(0, 2))).to.deep.equal([
+      ['s3api', 'head-bucket'],
+      ['s3api', 'get-bucket-policy'],
+    ])
   })
 
   it('projects bucket, roles, auth mode, and token mappings into fresh values', () => {

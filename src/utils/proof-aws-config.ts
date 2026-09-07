@@ -94,8 +94,14 @@ function normalizeArtifactReadTransport(
 
   const value = raw as Partial<ProofArtifactReadTransportResult>
   const {publicReadMode} = value
-  if (publicReadMode !== 'direct-s3' && publicReadMode !== 'existing-gateway') {
-    throw new Error(`${label}.publicReadMode must be direct-s3 or existing-gateway`)
+  if (
+    publicReadMode !== 'direct-s3'
+    && publicReadMode !== 'existing-public-s3'
+    && publicReadMode !== 'existing-gateway'
+  ) {
+    throw new Error(
+      `${label}.publicReadMode must be direct-s3, existing-public-s3, or existing-gateway`,
+    )
   }
 
   const expectedStatus = publicReadMode === 'direct-s3'
@@ -214,11 +220,12 @@ export function validateProofAwsConfig(raw: unknown, label: string): ProofAwsCon
     `${label}.artifactReadTransport`,
   )
   if (
-    artifactReadTransport.publicReadMode === 'direct-s3'
+    (artifactReadTransport.publicReadMode === 'direct-s3'
+      || artifactReadTransport.publicReadMode === 'existing-public-s3')
     && artifactReadTransport.publicEndpointUrl !== proofArtifactS3Endpoint(artifactRegion)
   ) {
     throw new Error(
-      `${label}.artifactReadTransport.publicEndpointUrl must match artifactStore.region in direct-s3 mode`,
+      `${label}.artifactReadTransport.publicEndpointUrl must match artifactStore.region in S3 endpoint mode`,
     )
   }
 

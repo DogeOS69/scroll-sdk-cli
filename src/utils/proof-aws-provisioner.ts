@@ -55,7 +55,7 @@ export interface ProofArtifactReadTransportResult {
   vpcEndpoint?: ProofArtifactVpcEndpointResult
 }
 
-export type ProofArtifactPublicReadMode = 'direct-s3' | 'existing-gateway'
+export type ProofArtifactPublicReadMode = 'direct-s3' | 'existing-gateway' | 'existing-public-s3'
 
 export interface ProofArtifactVpcEndpointPlan {
   enabled: boolean
@@ -322,8 +322,51 @@ function isVpcEndpointRestricted(statement: Record<string, any>): boolean {
   return typeof sourceVpcEndpoint === 'string' && /^vpce-[\da-f]+$/i.test(sourceVpcEndpoint)
 }
 
+function wildcardMatches(pattern: string, value: string): boolean {
+  const escaped = pattern.replaceAll(/[$()+.[\\\]^{|}]/g, '\\$&')
+    .replaceAll('*', '.*')
+    .replaceAll('?', '.')
+  return new RegExp(`^${escaped}$`, 'u').test(value)
+}
+
+function actionCanGetObject(action: unknown): boolean {
+  const actions = Array.isArray(action) ? action : [action]
+  return actions.some(candidate =>
+    typeof candidate === 'string'
+    && wildcardMatches(candidate.toLowerCase(), 's3:getobject')
+  )
+}
+
+function resourceMayOverlapPrefix(resource: unknown, bucket: string, keyPrefix: string): boolean {
+  if (resource === '*') return true
+  if (typeof resource !== 'string') return false
+
+  const match = /^arn:(?:aws|aws-cn|aws-us-gov):s3:::(?<bucket>[^/]+)(?:\/(?<object>.*))?$/u.exec(resource)
+  if (!match?.groups || !wildcardMatches(match.groups.bucket, bucket)) return false
+
+  const objectPattern = match.groups.object
+  if (objectPattern === undefined) return false
+
+  const managedPrefix = `${normalizeProofKeyPrefix(keyPrefix)}/`
+  if (!objectPattern.includes('*') && !objectPattern.includes('?')) {
+    return objectPattern === keyPrefix || objectPattern.startsWith(managedPrefix)
+  }
+
+  // S3 policy resources normally end in `/*`. Comparing the literal part on
+  // both sides also handles broader forms such as `*` and `batches*` without
+  // pretending a disjoint sibling such as `rehearsal/*` affects `batches/`.
+  const firstWildcard = objectPattern.search(/[?*]/u)
+  const literalPrefix = objectPattern.slice(0, firstWildcard)
+  return managedPrefix.startsWith(literalPrefix)
+    || literalPrefix.startsWith(managedPrefix)
+    || wildcardMatches(objectPattern, `${managedPrefix}proofs/example`)
+    || wildcardMatches(objectPattern, `${managedPrefix}0xexample`)
+}
+
 export function assertNoUnmanagedPublicProofBucketGrant(
   policy: Record<string, any>,
+  bucket: string,
+  keyPrefix: string,
 ): void {
   const statements = Array.isArray(policy.Statement)
     ? policy.Statement
@@ -331,14 +374,18 @@ export function assertNoUnmanagedPublicProofBucketGrant(
   const unsafe = statements.find((statement: any) =>
     statement?.Effect === 'Allow'
     && principalIncludesWildcard(statement.Principal)
+    && actionCanGetObject(statement.Action)
     && statement?.Sid !== PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID
     && !isVpcEndpointRestricted(statement)
+    && (Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource])
+      .some((resource: unknown) => resourceMayOverlapPrefix(resource, bucket, keyPrefix))
   )
   if (unsafe) {
     throw new Error(
       `cannot enable direct-s3 proof reads while bucket policy statement `
-      + `${String(unsafe.Sid || '<without Sid>')} grants unmanaged public access; `
-      + 'use a dedicated proof bucket, remove the statement, or select existing-gateway',
+      + `${String(unsafe.Sid || '<without Sid>')} grants unmanaged public GetObject access overlapping `
+      + `s3://${bucket}/${normalizeProofKeyPrefix(keyPrefix)}; use a dedicated proof bucket, remove the statement, `
+      + 'or select existing-public-s3 to preserve the operator-managed bucket policy',
     )
   }
 }
@@ -457,17 +504,18 @@ export class ProofAwsProvisioner {
     }
 
     const {publicReadMode} = input.artifactRead
-    if (!['direct-s3', 'existing-gateway'].includes(publicReadMode)) {
+    if (!['direct-s3', 'existing-gateway', 'existing-public-s3'].includes(publicReadMode)) {
       throw new Error(`unsupported proof artifact public read mode: ${String(publicReadMode)}`)
     }
 
     const artifactRegion = identity.artifactRegion || identity.awsRegion
     const directS3Endpoint = proofArtifactS3Endpoint(artifactRegion)
-    if (publicReadMode === 'direct-s3' && input.artifactRead.publicEndpointUrl) {
+    const usesRegionalS3Endpoint = publicReadMode === 'direct-s3' || publicReadMode === 'existing-public-s3'
+    if (usesRegionalS3Endpoint && input.artifactRead.publicEndpointUrl) {
       const supplied = normalizeProofArtifactPublicEndpoint(input.artifactRead.publicEndpointUrl)
       if (supplied !== directS3Endpoint) {
         throw new Error(
-          `direct-s3 proof artifact endpoint is derived as ${directS3Endpoint}; `
+          `${publicReadMode} proof artifact endpoint is derived as ${directS3Endpoint}; `
           + 'do not supply a different public endpoint',
         )
       }
@@ -477,14 +525,29 @@ export class ProofAwsProvisioner {
       throw new Error('existing-gateway proof artifact reads require publicEndpointUrl')
     }
 
-    const publicEndpointUrl = publicReadMode === 'direct-s3'
+    const publicEndpointUrl = usesRegionalS3Endpoint
       ? directS3Endpoint
       : normalizeProofArtifactPublicEndpoint(input.artifactRead.publicEndpointUrl as string)
-    const bucketCreated = this.ensureBucket(artifactRegion, bucket)
     if (input.artifactRead.vpcEndpoint?.enabled && artifactRegion !== identity.awsRegion) {
       throw new Error(
         `cannot configure an ${identity.awsRegion} S3 Gateway endpoint for artifact bucket region ${artifactRegion}; `
         + 'cross-region S3 access must use the normal AWS endpoint or an operator-managed gateway',
+      )
+    }
+
+    const bucketCreated = this.ensureBucket(
+      artifactRegion,
+      bucket,
+      publicReadMode !== 'existing-public-s3',
+    )
+    // Validate any existing public policy before creating/associating a VPC
+    // endpoint or changing IAM/secrets. This keeps a rejected direct-S3
+    // adoption from leaving unrelated AWS resources half-provisioned.
+    if (publicReadMode === 'direct-s3') {
+      assertNoUnmanagedPublicProofBucketGrant(
+        this.readBucketPolicy(artifactRegion, bucket),
+        bucket,
+        keyPrefix,
       )
     }
 
@@ -534,7 +597,7 @@ export class ProofAwsProvisioner {
     return { accountId, issuerHostPath: issuer.replace(/^https:\/\//, '') }
   }
 
-  private ensureBucket(region: string, bucket: string): boolean {
+  private ensureBucket(region: string, bucket: string, createIfMissing: boolean): boolean {
     try {
       this.aws.run(['s3api', 'head-bucket', '--bucket', bucket], { region })
       this.jsonCtx.info(`proof-aws: reusing existing S3 bucket: ${bucket}`)
@@ -544,6 +607,12 @@ export class ProofAwsProvisioner {
       const notFound = message.includes('404') || /not found/i.test(message)
       if (!notFound) {
         throw new Error(`S3 bucket ${bucket} exists but is not accessible (it may be owned by another AWS account): ${message}`)
+      }
+
+      if (!createIfMissing) {
+        throw new Error(
+          `existing-public-s3 requires an existing accessible S3 bucket, but ${bucket} was not found`,
+        )
       }
     }
 
@@ -579,9 +648,16 @@ export class ProofAwsProvisioner {
     keyPrefix: string,
     mode: ProofArtifactPublicReadMode,
   ): void {
+    if (mode === 'existing-public-s3') {
+      this.jsonCtx.info(
+        `proof-aws: preserved operator-managed public S3 policy and Public Access Block settings for ${bucket}; `
+        + `no public-read settings were changed for ${bucket}/${keyPrefix}`,
+      )
+      return
+    }
+
     const directS3 = mode === 'direct-s3'
     const existingPolicy = this.readBucketPolicy(region, bucket)
-    if (directS3) assertNoUnmanagedPublicProofBucketGrant(existingPolicy)
 
     this.aws.run([
       's3api',

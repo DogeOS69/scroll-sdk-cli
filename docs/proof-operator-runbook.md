@@ -117,6 +117,24 @@ scrollsdk setup proof-aws-init
 This reuses the configured DA bucket/prefix, creates or reconciles the proof
 IAM roles and token secret, configures the selected external read transport,
 and writes `.data/proof-aws.json`. It never invents a second proof-only bucket.
+Choose the public-read mode according to who owns the bucket-level policy:
+
+- `existing-public-s3` uses the regional S3 endpoint and preserves the existing
+  bucket policy and Public Access Block settings. Use it for a shared bucket
+  whose anonymous `GetObject` policy is already managed by the operator, such
+  as a testnet DA archive. The CLI still manages the selected prefix's IRSA
+  roles, optional EKS S3 Gateway endpoint statement, and proof token secret.
+- `direct-s3` makes the CLI manage anonymous reads for the required external
+  proof paths. Use it only where the CLI is allowed to manage the bucket-wide
+  Public Access Block posture. It rejects an unmanaged public `GetObject`
+  statement that overlaps the selected prefix before creating a VPC endpoint
+  or changing IAM/secrets.
+- `existing-gateway` keeps S3 private and records an operator-managed
+  credential-free HTTPS gateway.
+
+`existing-public-s3` does not narrow or otherwise endorse a pre-existing broad
+policy such as `arn:aws:s3:::bucket/*`; it records that policy as
+operator-managed and unverified. Review that policy independently.
 If the bucket is in a different AWS region from EKS, the command keeps the
 EKS/Secrets region separate from the artifact region and skips the regional S3
 Gateway endpoint; cross-region access uses the normal S3 endpoint or an

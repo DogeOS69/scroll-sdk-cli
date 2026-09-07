@@ -120,6 +120,34 @@ describe('proof AWS config source', () => {
     })
   })
 
+  it('accepts an operator-managed public S3 transport with the regional endpoint', () => {
+    const config = fixture()
+    config.artifactReadTransport = {
+      publicEndpointUrl: 'https://s3.us-east-1.amazonaws.com',
+      publicReadMode: 'existing-public-s3',
+      publicStatus: 'operator-managed-unverified',
+    }
+    writeProofAwsConfig(path.join(root, '.data/proof-aws.json'), config)
+
+    expect(readProofAwsConfig(root).config.artifactReadTransport).to.deep.equal({
+      publicEndpointUrl: 'https://s3.us-east-1.amazonaws.com',
+      publicReadMode: 'existing-public-s3',
+      publicStatus: 'operator-managed-unverified',
+    })
+  })
+
+  it('rejects a non-regional endpoint for an operator-managed public S3 transport', () => {
+    const config = fixture()
+    config.artifactReadTransport = {
+      publicEndpointUrl: 'https://objects.example.com',
+      publicReadMode: 'existing-public-s3',
+      publicStatus: 'operator-managed-unverified',
+    }
+
+    expect(() => writeProofAwsConfig(path.join(root, '.data/proof-aws.json'), config))
+      .to.throw('must match artifactStore.region in S3 endpoint mode')
+  })
+
   it('projects config into final values idempotently', () => {
     const valuesDir = path.join(root, 'values')
     fs.mkdirSync(valuesDir, {recursive: true})

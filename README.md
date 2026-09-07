@@ -1013,43 +1013,43 @@ USAGE
     [--proof-key-prefix <value> ] [--proof-materials <value> ] [--proof-mode active|disabled ]
     [--proof-public-s3-endpoint <value> ] [--proof-region <value> ] [--proof-topology-compiler-binary <value> ]
     [--proof-witness-dir <value> ] [--proof-witness-rpc-url <value> ] [--proof-witness-source block_witness_dir|rpc ]
-    [--proof-worker-deployment-backend docker_compose|kubernetes ] [--proof-worker-launch external|local_cpu|local_cuda ]
+    [--proof-worker-deployment-backend docker_compose|kubernetes ] [--proof-worker-launch external|local_cpu|local_cuda
+    ]
 
 FLAGS
-  -N, --non-interactive                         Run without prompts, using existing config values
-  -c, --config=<value>                          Path to config file
-      --json                                    Output in JSON format (stdout for data, stderr for logs)
-      --proof-artifact-source=<option>          Artifact resource source used by --proof-topology
-                                                <options: existing-s3|prepared-aws>
-      --proof-bucket=<value>                    Existing S3-compatible proof artifact bucket
-      --proof-coordinator-url=<value>           HTTPS Proof Coordinator URL reachable by mock and production Workers
-      --proof-endpoint-url=<value>              Worker-visible S3-compatible endpoint root
-      --proof-enforcement=<option>              Proof enforcement switch; keep observe until real proofs are validated
-                                                <options: observe|enforce>
-      --[no-]proof-force-path-style             Use path-style S3 object URLs for an existing compatible store
-      --proof-generation=<option>               Proof generation implementation selected for active services
-                                                <options: mock|real>
-      --proof-key-prefix=<value>                Base proof artifact key prefix before compiler digest scoping
-      --proof-materials=<value>                 Prepared proof-materials-v1.json receipt
-      --proof-mode=<option>                     Initial proof mode (default: existing value or disabled)
-                                                <options: active|disabled>
-      --proof-public-s3-endpoint=<value>        External Worker/signer-visible S3 endpoint when different from the store
-                                                endpoint
-      --proof-region=<value>                    Existing S3-compatible proof artifact region
-      --proof-topology                          Initialize or replace compiler-backed proof topology
-      --proof-topology-compiler-binary=<value>  Development-only local dogeos-proof-topology binary used for both
-                                                initialization preflights
-      --proof-witness-dir=<value>               Production block witness directory relative to the prepared material
-                                                root
-      --proof-witness-rpc-url=<value>           Scroll witness RPC URL used when --proof-witness-source=rpc
-      --proof-witness-source=<option>           Chunk witness source used by real materialization
-                                                <options: block_witness_dir|rpc>
-      --proof-worker-deployment-backend=<option>
-                                                Deployment adapter backend for local_cpu/local_cuda Workers
-                                                <options: docker_compose|kubernetes>
-      --proof-worker-launch=<option>            Staged real Worker compute/ownership placement from the dogeos-core
-                                                contract
-                                                <options: external|local_cpu|local_cuda>
+  -N, --non-interactive                           Run without prompts, using existing config values
+  -c, --config=<value>                            Path to config file
+      --json                                      Output in JSON format (stdout for data, stderr for logs)
+      --proof-artifact-source=<option>            Artifact resource source used by --proof-topology
+                                                  <options: existing-s3|prepared-aws>
+      --proof-bucket=<value>                      Existing S3-compatible proof artifact bucket
+      --proof-coordinator-url=<value>             HTTPS Proof Coordinator URL reachable by mock and production Workers
+      --proof-endpoint-url=<value>                Worker-visible S3-compatible endpoint root
+      --proof-enforcement=<option>                Proof enforcement switch; keep observe until real proofs are validated
+                                                  <options: observe|enforce>
+      --[no-]proof-force-path-style               Use path-style S3 object URLs for an existing compatible store
+      --proof-generation=<option>                 Proof generation implementation selected for active services
+                                                  <options: mock|real>
+      --proof-key-prefix=<value>                  Base proof artifact key prefix before compiler digest scoping
+      --proof-materials=<value>                   Prepared proof-materials-v1.json receipt
+      --proof-mode=<option>                       Initial proof mode (default: existing value or disabled)
+                                                  <options: active|disabled>
+      --proof-public-s3-endpoint=<value>          External Worker/signer-visible S3 endpoint when different from the
+                                                  store endpoint
+      --proof-region=<value>                      Existing S3-compatible proof artifact region
+      --proof-topology                            Initialize or replace compiler-backed proof topology
+      --proof-topology-compiler-binary=<value>    Development-only local dogeos-proof-topology binary used for both
+                                                  initialization preflights
+      --proof-witness-dir=<value>                 Production block witness directory relative to the prepared material
+                                                  root
+      --proof-witness-rpc-url=<value>             Scroll witness RPC URL used when --proof-witness-source=rpc
+      --proof-witness-source=<option>             Chunk witness source used by real materialization
+                                                  <options: block_witness_dir|rpc>
+      --proof-worker-deployment-backend=<option>  Deployment adapter backend for local_cpu/local_cuda Workers
+                                                  <options: docker_compose|kubernetes>
+      --proof-worker-launch=<option>              Staged real Worker compute/ownership placement from the dogeos-core
+                                                  contract
+                                                  <options: external|local_cpu|local_cuda>
 
 DESCRIPTION
   Configure Dogecoin/DA settings and optionally initialize compiler-backed proof topology
@@ -1597,10 +1597,11 @@ Provision proof AWS resources and persist their non-secret resource facts as pre
 ```
 USAGE
   $ scrollsdk setup proof-aws-init [--artifact-public-endpoint-url <value>] [--artifact-public-read-mode
-    direct-s3|existing-gateway] [--artifact-read-route-table-id <value>...] [--artifact-read-vpc-endpoint-id <value>]
-    [--aws-profile <value>] [--aws-region <value>] [--bucket <value>] [--config <value>] [--coordinator-service-account
-    <value>] [--deployment-alias <value>] [--doge-config <value>] [--eks-cluster <value>] [--json] [--key-prefix <value>] [--namespace <value>]
-    [-N] [--rotate-tokens] [--secret-name <value>] [--skip-vpc-endpoint] [--withdrawal-service-account <value>] [-y]
+    direct-s3|existing-public-s3|existing-gateway] [--artifact-read-route-table-id <value>...]
+    [--artifact-read-vpc-endpoint-id <value>] [--aws-profile <value>] [--aws-region <value>] [--bucket <value>]
+    [--config <value>] [--coordinator-service-account <value>] [--deployment-alias <value>] [--doge-config <value>]
+    [--eks-cluster <value>] [--json] [--key-prefix <value>] [--namespace <value>] [-N] [--rotate-tokens] [--secret-name
+    <value>] [--skip-vpc-endpoint] [--withdrawal-service-account <value>] [-y]
 
 FLAGS
   -N, --non-interactive                          Run without prompts; missing values must be discoverable, already
@@ -1608,9 +1609,9 @@ FLAGS
   -y, --yes                                      Apply the displayed AWS resource plan without confirmation
       --artifact-public-endpoint-url=<value>     Existing credential-free HTTPS S3-compatible gateway root; used only
                                                  with --artifact-public-read-mode=existing-gateway
-      --artifact-public-read-mode=<option>       Public proof artifact delivery: direct anonymous S3 prefix read, or an
-                                                 existing HTTPS gateway backed by private S3
-                                                 <options: direct-s3|existing-gateway>
+      --artifact-public-read-mode=<option>       Public proof artifact delivery: CLI-managed direct S3, operator-managed
+                                                 public S3, or an existing HTTPS gateway backed by private S3
+                                                 <options: direct-s3|existing-public-s3|existing-gateway>
       --artifact-read-route-table-id=<value>...  Advanced override: EKS subnet route table to associate with the S3
                                                  gateway endpoint (repeatable; normally auto-discovered)
       --artifact-read-vpc-endpoint-id=<value>    Advanced override: existing S3 Gateway VPC endpoint (normally
@@ -1651,6 +1652,8 @@ EXAMPLES
   $ scrollsdk setup proof-aws-init
 
   $ scrollsdk setup proof-aws-init --aws-region us-west-2 --eks-cluster dogeos-testnet --deployment-alias dev0829 --artifact-public-read-mode direct-s3 -N
+
+  $ scrollsdk setup proof-aws-init --artifact-public-read-mode existing-public-s3
 
   $ scrollsdk setup proof-aws-init --artifact-public-read-mode existing-gateway --artifact-public-endpoint-url https://objects.example.com
 
@@ -1697,8 +1700,7 @@ FLAGS
       --batch-materializer=<value>       Built dogeos-core Batch materializer binary; real only
       --bridge-artifact-dir=<value>      Optional output of prover-worker --stage-bridge-artifact; real only
       --chunk-materializer=<value>       Built dogeos-core Chunk materializer binary; real only
-      --compiler-image=<value>           dogeos-proof-topology release tag or digest (default:
-                                         dogeos69/dogeos-proof-topology:v0.3.0-beta.1)
+      --compiler-image=<value>           dogeos-proof-topology tag or digest from the approved release lineage
       --deployment-dir=<value>           [default: .] Deployment directory
       --generation=<option>              Materials to prepare: mock imports shared identities only; real imports the
                                          full proving release
@@ -1707,8 +1709,7 @@ FLAGS
                                          for real
       --json                             Output structured JSON
       --materials-dir=<value>            [default: .data/proof-materials] Deployment-relative material destination
-      --mock-worker-image=<value>        Mock Worker release tag or digest (default:
-                                         dogeos69/prover-worker-mock:0.3.0-beta.1d-rc2)
+      --mock-worker-image=<value>        Mock Worker tag or digest from the same approved release lineage
       --output=<value>                   [default: .data/proof-materials-v1.json] Deployment-relative receipt path
       --production-worker-image=<value>  Real Worker release tag or digest; real only
       --protocol-context=<value>         Deployment protocol_context.json required with --bridge-artifact-dir; real only
@@ -1768,7 +1769,7 @@ _See code: [src/commands/setup/proof-topology-compile.ts](https://github.com/dog
 
 ## `scrollsdk setup proof-worker`
 
-Hydrate a compiler-generated external prover-worker bundle with its bearer token after deterministic configuration generation
+Hydrate a compiler-generated Docker Compose prover-worker bundle with its bearer token after deterministic configuration generation
 
 ```
 USAGE
@@ -1787,8 +1788,8 @@ FLAGS
                               when unset, read it from Secrets Manager
 
 DESCRIPTION
-  Hydrate a compiler-generated external prover-worker bundle with its bearer token after deterministic configuration
-  generation
+  Hydrate a compiler-generated Docker Compose prover-worker bundle with its bearer token after deterministic
+  configuration generation
 
 EXAMPLES
   $ scrollsdk setup proof-worker
@@ -1800,7 +1801,7 @@ _See code: [src/commands/setup/proof-worker.ts](https://github.com/dogeos69/scro
 
 ## `scrollsdk setup proof-worker-check`
 
-Verify a compiler-generated external prover-worker bundle, selected resources, secret-file mode, and optional expected bundle ID
+Verify a compiler-generated Docker Compose prover-worker bundle, selected resources, secret-file mode, and optional expected bundle ID
 
 ```
 USAGE
@@ -1808,7 +1809,7 @@ USAGE
   <value>]
 
 FLAGS
-  --bundle-dir=<value>          (required) Compiler-generated external Worker Compose bundle directory
+  --bundle-dir=<value>          (required) Compiler-generated Worker Compose bundle directory
   --expected-bundle-id=<value>  Expected bundle ID written by prep-charts; use on the worker host to reject a stale
                                 synchronized bundle
   --json                        Output structured JSON
@@ -1816,8 +1817,8 @@ FLAGS
                                 from the bundle .env
 
 DESCRIPTION
-  Verify a compiler-generated external prover-worker bundle, selected resources, secret-file mode, and optional expected
-  bundle ID
+  Verify a compiler-generated Docker Compose prover-worker bundle, selected resources, secret-file mode, and optional
+  expected bundle ID
 
 EXAMPLES
   $ scrollsdk setup proof-worker-check --bundle-dir /srv/dogeos/prover-worker-production/docker-compose --resources-root /srv/dogeos/proof-resources --expected-bundle-id <sha256>
