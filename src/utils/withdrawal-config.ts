@@ -80,10 +80,13 @@ export interface MergeWithdrawalDeploymentOptions {
  * Merge deployment facts into the CLI-owned deployment block.
  *
  * Facts overwrite their keys; every other key inside the block (operator
- * tuning like fee rates or indexer cadence) survives verbatim. The block must
- * be the first content of the file so its top-level scalars stay at TOML
- * document root — a missing block is prepended, and a block that drifted below
- * a hand-maintained table fails closed.
+ * tuning like fee rates or indexer cadence) survives. The block must be the
+ * first content of the file so its top-level scalars stay at TOML document
+ * root. Compiler-rendered native configs do not preserve comments, including
+ * these markers, so a markerless config is structurally absorbed: root
+ * scalars and tables touched by deployment facts move into a rebuilt managed
+ * block, while unrelated tables remain after it. A marked block that drifted
+ * below a hand-maintained table still fails closed.
  */
 export function mergeWithdrawalManagedDeploymentBlock(
   source: string,
@@ -115,6 +118,22 @@ export function mergeWithdrawalManagedDeploymentBlock(
 
     head = source.slice(0, begin)
     tail = source.slice(end + WITHDRAWAL_DEPLOYMENT_END.length)
+  } else {
+    // dogeos-proof-topology parses and reserializes the native config, so the
+    // next prep-charts run sees a valid but markerless rendered file. Merely
+    // prepending facts would duplicate tables such as [dogecoin_indexer]. Move
+    // every root scalar (which cannot safely appear after a TOML table) and
+    // each fact-owned top-level table into the reconstructed managed block.
+    const remainder = toml.parse(source) as Record<string, any>
+    for (const [key, value] of Object.entries(remainder)) {
+      if (!isPlainObject(value) || key in facts) {
+        existing[key] = value
+        delete remainder[key]
+      }
+    }
+
+    tail = toml.stringify(remainder as toml.JsonMap).trimEnd()
+    if (tail !== '') tail = `\n\n${tail}\n`
   }
 
   const merged = deepMergeToml(existing, stripUndefinedDeep(facts)) as Record<string, any>
@@ -123,7 +142,7 @@ export function mergeWithdrawalManagedDeploymentBlock(
   const block = `${WITHDRAWAL_DEPLOYMENT_BEGIN}\n${toml.stringify(merged as toml.JsonMap).trimEnd()}\n${WITHDRAWAL_DEPLOYMENT_END}`
   const candidate = beginCount === 1
     ? `${head}${block}${tail}`
-    : `${block}\n\n${source.replace(/^\n+/, '')}`
+    : `${block}${tail}`
   parseToml(candidate, 'generated config')
 
   // Top-level scalars silently attach to the preceding table if any TOML

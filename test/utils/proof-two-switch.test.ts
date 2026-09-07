@@ -433,6 +433,15 @@ describe('PR #937 two-switch proof adapter', () => {
     })
     const marker = path.join(root, '.data/proof-materials/operator-marker')
     fs.writeFileSync(marker, 'preserve')
+    const preparedIdentity = fs.readFileSync(
+      path.join(root, '.data/proof-materials/software/identity/worker-identity.json'),
+      'utf8',
+    )
+    const refreshedMockWorkerIdentity = path.join(root, 'refreshed-mock-worker-identity.json')
+    fs.writeFileSync(refreshedMockWorkerIdentity, JSON.stringify({
+      ...JSON.parse(fs.readFileSync(mockWorkerIdentity, 'utf8')),
+      image_revision: 'new-image-with-a-different-embedded-identity',
+    }))
 
     const refreshed = prepareProofMaterials({
       deploymentDir: root,
@@ -441,7 +450,7 @@ describe('PR #937 two-switch proof adapter', () => {
         mockWorker: proofImage('3', 'dogeos69/prover-worker-mock'),
         topologyCompiler: proofImage('4', 'dogeos69/dogeos-proof-topology'),
       },
-      mockWorkerIdentity,
+      mockWorkerIdentity: refreshedMockWorkerIdentity,
       refreshExistingImages: true,
     })
 
@@ -449,6 +458,10 @@ describe('PR #937 two-switch proof adapter', () => {
     expect(refreshed.receipt.images.topologyCompiler.digest).to.equal(`sha256:${'4'.repeat(64)}`)
     expect(refreshed.receipt.software).to.deep.equal(prepared.receipt.software)
     expect(fs.readFileSync(marker, 'utf8')).to.equal('preserve')
+    expect(fs.readFileSync(
+      path.join(root, '.data/proof-materials/software/identity/worker-identity.json'),
+      'utf8',
+    )).to.equal(preparedIdentity)
     expect(readProofMaterials(refreshed.receiptPath, root).images).to.deep.equal(refreshed.receipt.images)
   })
 

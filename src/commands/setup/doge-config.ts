@@ -1038,10 +1038,12 @@ export class DogeConfigCommand extends Command {
       mode,
       runtime: {
         artifactKeyPrefix: keyPrefix,
-        blockWitnessDir: options.witnessDir,
+        blockWitnessDir: options.witnessDir || existing?.active?.realScroll.chunkBlockWitnessDir,
         proofCoordinatorPublicUrl: coordinatorUrl,
         publicS3EndpointUrl: publicEndpoint,
-        rpcWitnessUrl: options.witnessRpcUrl || options.config.rpc?.l2Url,
+        rpcWitnessUrl: options.witnessRpcUrl
+          || existing?.active?.realScroll.chunkWitnessRpcUrl
+          || options.config.rpc?.l2Url,
         witnessSource,
         workerDeploymentBackend,
         workerLaunch,

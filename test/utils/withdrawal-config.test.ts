@@ -80,6 +80,32 @@ mode = "disabled"
     expect(parsed.proof_system.mode).to.equal('disabled')
   })
 
+  it('reconstructs a managed block from a compiler-rendered markerless config', () => {
+    const source = `api_port = 3000
+fee_rate_sat_per_kvb = 2000000
+
+[dogecoin_indexer]
+confirmations = 120
+poll_interval_ms = 9000
+start_height = 1
+
+[proof_system]
+mode = "active"
+`
+    const {deletePaths, facts} = buildWithdrawalDeploymentFacts(FACTS_INPUT)
+    const merged = mergeWithdrawalManagedDeploymentBlock(source, facts, {deletePaths})
+    const parsed = toml.parse(merged) as any
+
+    expect(merged.startsWith(WITHDRAWAL_DEPLOYMENT_BEGIN)).to.equal(true)
+    expect(parsed.api_port).to.equal(3000)
+    expect(parsed.fee_rate_sat_per_kvb).to.equal(2_000_000)
+    expect(parsed.dogecoin_indexer.confirmations).to.equal(120)
+    expect(parsed.dogecoin_indexer.poll_interval_ms).to.equal(9000)
+    expect(parsed.dogecoin_indexer.start_height).to.equal(1234)
+    expect(parsed.proof_system.mode).to.equal('active')
+    expect((merged.match(/^\[dogecoin_indexer]$/gm) || [])).to.have.length(1)
+  })
+
   it('preserves operator tuning while facts win on their keys', () => {
     const { facts } = buildWithdrawalDeploymentFacts(FACTS_INPUT)
     const tuned = `${WITHDRAWAL_DEPLOYMENT_BEGIN}
