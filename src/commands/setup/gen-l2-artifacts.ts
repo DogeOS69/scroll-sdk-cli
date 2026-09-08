@@ -11,6 +11,7 @@ import * as path from 'node:path'
 
 import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
 import { writeConfigs } from '../../utils/config-writer.js'
+import {getContractsPlaceholderKey} from '../../utils/contracts-placeholder.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import {
@@ -544,6 +545,10 @@ export default class SetupGenL2Artifacts extends Command {
       const configPath = path.resolve('config.toml')
       const config = toml.parse(fs.readFileSync(configPath, 'utf8'))
       const dogeConfig = toml.parse(fs.readFileSync(dogeConfigPath, 'utf8'))
+      if (getContractsPlaceholderKey(config, dogeConfig)) {
+        this.jsonCtx.info('Using the public contracts-only commit-sender placeholder; runtime signer remains in doge-config. This compatibility mode is only for L2-only deployment, never L1 contract authorization.')
+      }
+
       if (!applyRethGenesisSigner(config, dogeConfig)) return
       if (!writeConfigs(config, undefined, configPath, this.jsonMode)) {
         throw new Error('Failed to persist the Reth genesis signer in config.toml and config.public.toml')

@@ -45,6 +45,9 @@ bin/run.js --help
 
 ## Documentation
 
+- [Legacy contracts placeholder compatibility](docs/contracts-placeholder-compatibility.md)
+  — isolate a real DA service signer from legacy contracts account validation
+  in explicitly selected DogeOS testnet/regtest L2-only deployments.
 - [DogeOS proof operator runbook](docs/proof-operator-runbook.md) — the single
   operator workflow for two-switch proof services, partner handoff, and
   mock/real/enforcement activation.
