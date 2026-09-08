@@ -231,7 +231,9 @@ function configureRuntimeProofMaterials(
   }
 
   const realScroll = selectedRealScroll(topology)
-  if (!realScroll) {
+  // Pure mock carries identity metadata in realScroll, but the compiler uses
+  // sentinel materialization for this profile and requires no runtime binaries.
+  if (!realScroll || topology.active?.profile === 'withdrawal_mock_prover') {
     cleanup()
     return
   }

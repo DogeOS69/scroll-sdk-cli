@@ -235,6 +235,79 @@ describe('self-contained proof topology Kubernetes adapter', () => {
       .to.include('DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER: "2898792"')
   })
 
+  for (const backend of ['docker_compose', 'kubernetes'] as const) {
+    it(`supports pure mock without materializer files and removes stale runtime staging (${backend})`, () => {
+      const proofTopology = topology('active', backend)
+      proofTopology.active!.profile = 'withdrawal_mock_prover'
+      delete proofTopology.active!.realScroll.chunkMaterializerBinaryPath
+      delete proofTopology.active!.realScroll.batchMaterializerBinaryPath
+      delete proofTopology.active!.realScroll.aggVerifyingKeyPath
+      fs.rmSync(path.join(root, '.data/proof-materials/software'), {recursive: true})
+
+      for (const component of ['withdrawal-processor', 'proof-coordinator']) {
+        const file = path.join(root, `values/${component}-production.yaml`)
+        const values = yaml.load(fs.readFileSync(file, 'utf8')) as any
+        values.initContainers = {
+          'operator-init': {image: 'operator-image'},
+          'prepare-proof-runtime-materials': {image: 'old-proof-image'},
+        }
+        values.persistence ||= {}
+        values.persistence['proof-runtime-materials'] = {enabled: true, type: 'emptyDir'}
+        values.persistence['proof-runtime-seed'] = {enabled: true, type: 'secret'}
+        values.secrets = {'proof-runtime-seed': {enabled: true}}
+        fs.writeFileSync(file, yaml.dump(values))
+      }
+
+      const result = reconcileCompiledProofTopology({
+        compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active'),
+        coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+        deploymentDir: root,
+        deploymentName: 'test',
+        network: 'testnet',
+        proofTopology,
+        valuesDir: path.join(root, 'values'),
+        withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
+      })
+
+      for (const component of ['withdrawal-processor', 'proof-coordinator']) {
+        const values = yaml.load(fs.readFileSync(path.join(root, `values/${component}-production.yaml`), 'utf8')) as any
+        expect(values.initContainers).not.to.have.property('prepare-proof-runtime-materials')
+        expect(values.initContainers['operator-init']).to.deep.equal({image: 'operator-image'})
+        expect(values.persistence).not.to.have.property('proof-runtime-materials')
+        expect(values.persistence).not.to.have.property('proof-runtime-seed')
+        expect(values.secrets).not.to.have.property('proof-runtime-seed')
+        expect(values.configMaps['proof-topology-materials'].data).to.deep.include({
+          'material-00-chunk.json': '{"kind":"chunk"}\n',
+        })
+      }
+
+      const worker = yaml.load(fs.readFileSync(path.join(root, 'values/prover-worker-production.yaml'), 'utf8')) as any
+      expect(worker.controller.replicas).to.equal(backend === 'kubernetes' ? 1 : 0)
+      expect(Boolean(result.workerBundle)).to.equal(backend === 'docker_compose')
+    })
+  }
+
+  for (const profile of ['withdrawal_mock_prover_real_materialize', 'real_scroll_withdrawal_full_topology'] as const) {
+    for (const field of ['chunkMaterializerBinaryPath', 'batchMaterializerBinaryPath'] as const) {
+      it(`still requires ${field} for ${profile}`, () => {
+        const proofTopology = topology('active')
+        proofTopology.active!.profile = profile
+        if (profile === 'real_scroll_withdrawal_full_topology') proofTopology.generation = 'real'
+        delete proofTopology.active!.realScroll[field]
+        expect(() => reconcileCompiledProofTopology({
+          compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active'),
+          coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+          deploymentDir: root,
+          deploymentName: 'test',
+          network: 'testnet',
+          proofTopology,
+          valuesDir: path.join(root, 'values'),
+          withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
+        })).to.throw('real Scroll materialization requires both Chunk and Batch materializer binaries')
+      })
+    }
+  }
+
   it('stages the aggregate VK only for real proof generation', () => {
     const proofTopology = topology('active')
     proofTopology.generation = 'real'
