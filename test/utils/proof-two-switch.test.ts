@@ -313,7 +313,36 @@ describe('PR #937 two-switch proof adapter', () => {
       `export DOGEOS_CHUNK_VK_HASH=${hex32('b')}`,
       '',
     ].join('\n'))
+    const workerIdentityBundle = path.join(root, 'real-materialization-worker-identity.json')
+    const aggregationRaw = hex64('1')
+    fs.writeFileSync(workerIdentityBundle, JSON.stringify({
+      batch_aggregation_guest: {
+        app_commit_raw: aggregationRaw,
+        app_exe_commit: '1'.repeat(64),
+        app_vm_commit: '1'.repeat(64),
+        embedded_inner_batch_app_commit_raw: hex64('3'),
+        program_commitment_hash: `0x${createHash('sha256').update(Buffer.from(aggregationRaw.slice(2), 'hex')).digest('hex')}`,
+      },
+      batch_guest: {
+        app_commit_raw: hex64('3'),
+        app_exe_commit: '3'.repeat(64),
+        app_vm_commit: '3'.repeat(64),
+      },
+      guest_openvm_toml_sha256: hex32('2'),
+      image_revision: 'test-real-materialization',
+      openvm_version: '1.7',
+      root_verifier_asm_sha256: hex32('3'),
+    }))
+    const aggregateVerifyingKey = path.join(root, 'root_verifier_vk')
+    const chunkMaterializer = path.join(root, 'materialize-chunk-oneshot')
+    const batchMaterializer = path.join(root, 'scroll-runtime-materializer')
+    fs.writeFileSync(aggregateVerifyingKey, 'aggregate verification key')
+    fs.writeFileSync(chunkMaterializer, 'chunk materializer')
+    fs.writeFileSync(batchMaterializer, 'batch materializer')
     const prepared = prepareProofMaterials({
+      aggregateVerifyingKey,
+      batchMaterializer,
+      chunkMaterializer,
       deploymentDir: root,
       generation: 'mock',
       identityEnv,
@@ -321,10 +350,15 @@ describe('PR #937 two-switch proof adapter', () => {
         mockWorker: proofImage('c', 'dogeos69/prover-worker-mock'),
         topologyCompiler: proofImage('e', 'dogeos69/dogeos-proof-topology'),
       },
-      mockWorkerIdentity,
+      workerIdentityBundle,
     })
 
     expect(prepared.receipt.software.artifacts).to.equal(undefined)
+    expect(prepared.receipt.software.materializationArtifacts).to.have.keys(
+      'aggregateVerifyingKey',
+      'batchMaterializer',
+      'chunkMaterializer',
+    )
     expect(prepared.receipt.software.identitySource).to.equal('real_identity_probe')
     const topology = buildProofTopology({
       artifactStore: {
@@ -349,6 +383,42 @@ describe('PR #937 two-switch proof adapter', () => {
     expect(topology.active?.profile).to.equal('withdrawal_mock_prover_real_materialize')
     expect(topology.active?.realScroll).not.to.have.property('chunkAppExe')
     expect(topology.active?.realScroll).not.to.have.property('batchAppExe')
+    expect(topology.active?.realScroll).to.include({
+      aggVerifyingKeyPath: '.data/proof-materials/software/verifier/root_verifier_vk',
+      batchMaterializerBinaryPath: '.data/proof-materials/software/bin/batch-materializer',
+      chunkMaterializerBinaryPath: '.data/proof-materials/software/bin/chunk-materializer',
+    })
+  })
+
+  it('rejects the mock Worker all-zero batch identity for real materialization', () => {
+    const hex32 = (character: string) => `0x${character.repeat(64)}`
+    const hex64 = (character: string) => `0x${character.repeat(128)}`
+    const identityEnv = path.join(root, 'real-identity.env')
+    fs.writeFileSync(identityEnv, [
+      `export DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW=${hex64('1')}`,
+      `export DOGEOS_BATCH_PROGRAM_COMMITMENT=${hex32('2')}`,
+      `export DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW=${hex64('3')}`,
+      `export DOGEOS_BATCH_SCROLL_PROGRAM_COMMITMENT_RAW=${hex64('4')}`,
+      `export DOGEOS_BATCH_VK_HASH=${hex32('5')}`,
+      `export DOGEOS_BRIDGE_APP_COMMIT_RAW=${hex64('6')}`,
+      `export DOGEOS_BRIDGE_PROGRAM_COMMITMENT=${hex32('7')}`,
+      `export DOGEOS_BRIDGE_VK_HASH=${hex32('8')}`,
+      `export DOGEOS_CHUNK_PROGRAM_COMMITMENT=${hex32('9')}`,
+      `export DOGEOS_CHUNK_PROGRAM_COMMITMENT_RAW=${hex64('a')}`,
+      `export DOGEOS_CHUNK_VK_HASH=${hex32('b')}`,
+      '',
+    ].join('\n'))
+
+    expect(() => prepareProofMaterials({
+      deploymentDir: root,
+      generation: 'mock',
+      identityEnv,
+      images: {
+        mockWorker: proofImage('c', 'dogeos69/prover-worker-mock'),
+        topologyCompiler: proofImage('e', 'dogeos69/dogeos-proof-topology'),
+      },
+      workerIdentityBundle: mockWorkerIdentity,
+    })).to.throw('batch_guest must not be the all-zero mock placeholder')
   })
 
   it('refreshes explicit mock image pins without replacing prepared identities or files', () => {
@@ -363,6 +433,15 @@ describe('PR #937 two-switch proof adapter', () => {
     })
     const marker = path.join(root, '.data/proof-materials/operator-marker')
     fs.writeFileSync(marker, 'preserve')
+    const preparedIdentity = fs.readFileSync(
+      path.join(root, '.data/proof-materials/software/identity/worker-identity.json'),
+      'utf8',
+    )
+    const refreshedMockWorkerIdentity = path.join(root, 'refreshed-mock-worker-identity.json')
+    fs.writeFileSync(refreshedMockWorkerIdentity, JSON.stringify({
+      ...JSON.parse(fs.readFileSync(mockWorkerIdentity, 'utf8')),
+      image_revision: 'new-image-with-a-different-embedded-identity',
+    }))
 
     const refreshed = prepareProofMaterials({
       deploymentDir: root,
@@ -371,7 +450,7 @@ describe('PR #937 two-switch proof adapter', () => {
         mockWorker: proofImage('3', 'dogeos69/prover-worker-mock'),
         topologyCompiler: proofImage('4', 'dogeos69/dogeos-proof-topology'),
       },
-      mockWorkerIdentity,
+      mockWorkerIdentity: refreshedMockWorkerIdentity,
       refreshExistingImages: true,
     })
 
@@ -379,6 +458,10 @@ describe('PR #937 two-switch proof adapter', () => {
     expect(refreshed.receipt.images.topologyCompiler.digest).to.equal(`sha256:${'4'.repeat(64)}`)
     expect(refreshed.receipt.software).to.deep.equal(prepared.receipt.software)
     expect(fs.readFileSync(marker, 'utf8')).to.equal('preserve')
+    expect(fs.readFileSync(
+      path.join(root, '.data/proof-materials/software/identity/worker-identity.json'),
+      'utf8',
+    )).to.equal(preparedIdentity)
     expect(readProofMaterials(refreshed.receiptPath, root).images).to.deep.equal(refreshed.receipt.images)
   })
 

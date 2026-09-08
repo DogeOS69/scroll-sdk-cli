@@ -554,12 +554,25 @@ export class ProofAwsProvisioner {
     const vpcEndpoint = input.artifactRead.vpcEndpoint?.enabled
       ? this.ensureVpcEndpointArtifactRead(identity, bucket, keyPrefix, input.artifactRead.vpcEndpoint)
       : undefined
-    this.reconcilePublicArtifactRead(
-      artifactRegion,
-      bucket,
-      keyPrefix,
-      publicReadMode,
-    )
+    // `existing-gateway` is explicitly operator-managed.  In that mode the
+    // CLI must not rewrite either the bucket policy or Public Access Block:
+    // an existing archive bucket can already expose raw DA objects through a
+    // policy or gateway whose scope the proof adapter does not own.  Toggling
+    // Public Access Block here can silently break that established download
+    // path.  Direct S3 is the only mode in which scroll-sdk-cli owns and
+    // reconciles anonymous-read policy.
+    if (publicReadMode === 'direct-s3') {
+      this.reconcileDirectS3ArtifactRead(
+        artifactRegion,
+        bucket,
+        keyPrefix,
+      )
+    } else {
+      this.jsonCtx.info(
+        `proof-aws: preserved operator-managed bucket policy and Public Access Block settings for ${bucket} (${publicReadMode})`,
+      )
+    }
+
     const artifactReadTransport: ProofArtifactReadTransportResult = {
       publicEndpointUrl,
       publicReadMode,
@@ -642,21 +655,11 @@ export class ProofAwsProvisioner {
     return true
   }
 
-  private reconcilePublicArtifactRead(
+  private reconcileDirectS3ArtifactRead(
     region: string,
     bucket: string,
     keyPrefix: string,
-    mode: ProofArtifactPublicReadMode,
   ): void {
-    if (mode === 'existing-public-s3') {
-      this.jsonCtx.info(
-        `proof-aws: preserved operator-managed public S3 policy and Public Access Block settings for ${bucket}; `
-        + `no public-read settings were changed for ${bucket}/${keyPrefix}`,
-      )
-      return
-    }
-
-    const directS3 = mode === 'direct-s3'
     const existingPolicy = this.readBucketPolicy(region, bucket)
 
     this.aws.run([
@@ -665,16 +668,14 @@ export class ProofAwsProvisioner {
       '--bucket',
       bucket,
       '--public-access-block-configuration',
-      directS3
-        ? 'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false'
-        : 'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true',
+      'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false',
     ], {region})
 
     const updatedPolicy = upsertProofArtifactPublicReadPolicy(
       existingPolicy,
       bucket,
       keyPrefix,
-      directS3,
+      true,
     )
     if (JSON.stringify(existingPolicy) !== JSON.stringify(updatedPolicy)) {
       if (updatedPolicy.Statement.length === 0) {
@@ -692,9 +693,7 @@ export class ProofAwsProvisioner {
     }
 
     this.jsonCtx.info(
-      directS3
-        ? `proof-aws: configured anonymous GetObject for required external-consumer paths under ${bucket}/${keyPrefix}; list/write/delete remain private`
-        : `proof-aws: kept S3 public access blocked and removed the CLI-managed anonymous read for ${bucket}/${keyPrefix}/*`,
+      `proof-aws: configured anonymous GetObject for required external-consumer paths under ${bucket}/${keyPrefix}; list/write/delete remain private`,
     )
   }
 

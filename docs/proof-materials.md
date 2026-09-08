@@ -83,11 +83,20 @@ context. The command exits before connecting or claiming work. It produces:
 bridge-state.vmexe
 openvm.toml
 bridge-artifact-manifest.json
+worker-identity-bundle.json
 batch-aggregation.vmexe
 batch-aggregation-openvm.toml
 ```
 
 and one JSON object containing the Bridge and aggregation identities.
+The CLI copies `worker-identity-bundle.json` verbatim and uses it as the real
+compiler's `--identity-file`. Its Batch and aggregation identities and shared
+recursive VK must match the imported identity probe. The deployment-bound
+`bridge_guest` must match the Bridge artifact manifest; its program commitment
+may differ from a software probe built with a different genesis.
+`bridge-artifact-manifest.json` remains the artifact integrity manifest.
+Older receipts without the worker bundle must be prepared again before real
+topology compilation.
 
 The Bridge verification key is shared recursive software identity; the Bridge
 program commitment and `.vmexe` are deployment-bound because the guest embeds
@@ -140,7 +149,9 @@ There are two supported mock preparations:
 - `--generation mock` without `--identity-env` uses the pinned mock Worker's
   canonical identity document plus synthetic placeholders. The resulting
   `withdrawal_mock_prover` profile uses one batch-wide exact-mock chunk.
-- `--generation mock --identity-env /path/to/real-identity.env` imports the
+- `--generation mock --identity-env /path/to/real-identity.env
+  --worker-identity-bundle /path/to/worker-identity-bundle.json` plus the root
+  aggregate VK and the matching Chunk/Batch materializer binaries imports the
   release's real materializer identities without importing the real proving
   programs. The resulting `withdrawal_mock_prover_real_materialize` profile
   uses the DA segmentation sidecar and real Chunk/Batch materializers, while
@@ -148,6 +159,29 @@ There are two supported mock preparations:
 
 The second form is the correct pre-production rehearsal when materializer
 correctness or per-chunk performance is under test.
+
+On Kubernetes, these imported files are also deployment evidence. The adapter
+does not place the multi-megabyte materializer executables in ConfigMaps;
+instead PC copies the executables already present in its selected image and
+checks that their SHA-256 values match the imported release files before
+startup. For real generation, the adapter also uses the root VK to generate a
+checksum-verified runtime seed for WP and PC. It deliberately leaves the VK
+and removes the executable real-verifier config blocks during mock generation
+so PC selects the development verifier instead of attempting to parse mock
+bytes as real STARK proofs. The real verifier identities used to shape and
+cross-check statements remain present. This keeps the
+compiler's exact runtime paths valid while detecting a PC image/materializer
+lineage mismatch early.
+
+```bash
+scrollsdk setup proof-materials \
+  --generation mock \
+  --identity-env /secure/build/real-identity.env \
+  --worker-identity-bundle /secure/build/worker-identity-bundle.json \
+  --aggregate-verifying-key /secure/build/verifier/root_verifier_vk \
+  --chunk-materializer /secure/build/materialize-chunk-oneshot \
+  --batch-materializer /secure/build/scroll-runtime-materializer
+```
 
 For real operation, run the producer/probe/baker first, then import the full
 result:
@@ -177,8 +211,13 @@ Before writing a synthetic mock receipt, the CLI requires:
 
 For identity-backed mock materialization, the CLI additionally applies the
 identity-env allow-list and canonical-encoding checks used by the real path,
-but it does not require `.vmexe`, aggregate VK, Bridge bake, materializer binary
-copies, or a production Worker image.
+and requires the matching dogeos-core `worker-identity-bundle.json`. The bundle
+must carry a non-placeholder `batch_guest`; its Batch and Aggregation
+commitments must agree with the identity env. The mock Worker's all-zero Batch
+placeholder is rejected for this profile. This path also requires the root
+aggregate VK and both materializer binaries because dogeos-core validates every
+runtime resource used by the selected profile. It does not require `.vmexe`,
+Bridge bake, or a production Worker image.
 
 The real path additionally requires:
 

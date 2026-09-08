@@ -81,6 +81,7 @@ interface NativeBridgeManifest {
 }
 
 export interface PrepareProofMaterialsOptions {
+  aggregateVerifyingKey?: string
   batchMaterializer?: string
   bridgeArtifactDir?: string
   chunkMaterializer?: string
@@ -99,6 +100,12 @@ export interface PrepareProofMaterialsOptions {
   producerManifest?: string
   protocolContext?: string
   refreshExistingImages?: boolean
+  /**
+   * Canonical worker-identity-bundle.json emitted by the matching dogeos-core
+   * bake. Required when mock proving uses real Scroll materialization because
+   * the mock image intentionally carries an all-zero batch_guest placeholder.
+   */
+  workerIdentityBundle?: string
 }
 
 function mockWorkerAggregationIdentity(body: string, label: string): {appCommitRaw: string; programCommitmentHash: string} {
@@ -180,6 +187,66 @@ function validateGuestCommit(value: Record<string, unknown>, label: string): voi
 
 function validateMockWorkerIdentity(body: string, label: string): void {
   mockWorkerAggregationIdentity(body, label)
+}
+
+function validateRealMaterializationWorkerIdentity(
+  body: string,
+  env: Record<string, string>,
+  label: string,
+): void {
+  const root = mapping(JSON.parse(body) as unknown, label)
+  const batch = mapping(root.batch_guest, `${label}.batch_guest`)
+  const batchRaw = canonicalHex(batch.app_commit_raw, 64, `${label}.batch_guest.app_commit_raw`)
+  if (batchRaw === `0x${'0'.repeat(128)}`) {
+    throw new Error(`${label}.batch_guest must not be the all-zero mock placeholder for real materialization`)
+  }
+
+  if (batchRaw !== env.DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW) {
+    throw new Error(`${label}.batch_guest does not match DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW`)
+  }
+
+  const aggregation = mapping(root.batch_aggregation_guest, `${label}.batch_aggregation_guest`)
+  const aggregationRaw = canonicalHex(
+    aggregation.app_commit_raw,
+    64,
+    `${label}.batch_aggregation_guest.app_commit_raw`,
+  )
+  if (aggregationRaw !== env.DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW) {
+    throw new Error(`${label}.batch_aggregation_guest does not match DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW`)
+  }
+}
+
+function validateRealWorkerIdentity(
+  body: string,
+  env: Record<string, string>,
+  native: NativeBridgeManifest,
+): void {
+  const label = 'Real Worker identity bundle'
+  const root = mapping(JSON.parse(body) as unknown, label)
+  const {bridge_guest: bridgeGuest, ...shared} = root
+  // Core uses the same bundle shape for both generations; only a real bake
+  // carries bridge_guest. Validate the shared fields without changing the
+  // original bytes that will be copied for --identity-file.
+  validateMockWorkerIdentity(JSON.stringify(shared), label)
+  validateRealMaterializationWorkerIdentity(body, env, label)
+  const bridge = mapping(bridgeGuest, `${label}.bridge_guest`)
+  assertOnlyKeys(bridge, ['app_commit_raw', 'program_commitment_hash', 'verification_key_hash'], `${label}.bridge_guest`)
+  const raw = canonicalHex(bridge.app_commit_raw, 64, `${label}.bridge_guest.app_commit_raw`)
+  const hash = canonicalHex(bridge.program_commitment_hash, 32, `${label}.bridge_guest.program_commitment_hash`)
+  const vk = canonicalHex(bridge.verification_key_hash, 32, `${label}.bridge_guest.verification_key_hash`)
+  if (hash !== sha256Bytes(raw)) {
+    throw new Error(`${label}.bridge_guest program commitment hash does not match app_commit_raw`)
+  }
+
+  // The software probe can use a different genesis. The deployment bake owns
+  // the Bridge program commitment; only its recursive VK is software-bound.
+  if (vk !== env.DOGEOS_BRIDGE_VK_HASH) {
+    throw new Error(`${label}.bridge_guest does not match the identity probe`)
+  }
+
+  if (raw !== native.app_commit_raw || hash !== native.program_commitment_hash || vk !== native.verification_key_hash) {
+    throw new Error(`${label}.bridge_guest does not match the Bridge artifact manifest`)
+  }
 }
 
 export function extractMockWorkerIdentity(image: ProofTopologyImageReference): string {
@@ -515,7 +582,6 @@ function refreshExistingProofMaterialImages(
   deploymentDir: string,
   outputRoot: string,
   receiptPath: string,
-  mockWorkerIdentity: string | undefined,
 ): {receipt: ProofMaterialsV1; receiptPath: string} | undefined {
   const outputRootExists = fs.existsSync(outputRoot)
   const receiptExists = fs.existsSync(receiptPath)
@@ -539,14 +605,6 @@ function refreshExistingProofMaterialImages(
 
   assertDirectory(outputRoot, 'Existing proof material directory')
   const existing = readProofMaterials(receiptPath, deploymentDir)
-  if (!mockWorkerIdentity) throw new Error('Mock image refresh requires the pinned Worker identity document')
-  const compilerIdentity = writeMaterialBody(
-    deploymentDir,
-    outputRoot,
-    mockWorkerIdentity,
-    MOCK_WORKER_IDENTITY_RELATIVE_PATH,
-    true,
-  )
   const receipt: ProofMaterialsV1 = {
     ...existing,
     generatedAt: new Date().toISOString(),
@@ -555,10 +613,11 @@ function refreshExistingProofMaterialImages(
       mockWorker: options.images.mockWorker,
       topologyCompiler: options.images.topologyCompiler,
     },
-    software: {
-      ...existing.software,
-      compilerIdentity,
-    },
+    // Image-only refresh must not replace release/deployment identity material.
+    // In particular, mock Worker images intentionally carry an all-zero
+    // batch_guest placeholder, while a real-materialization mock topology uses
+    // the non-placeholder bundle imported during the original preparation.
+    software: existing.software,
   }
   replacePrivateJson(receiptPath, receipt)
   return {receipt, receiptPath}
@@ -575,28 +634,40 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
     if (image) immutableProofImage(image)
   }
 
-  const mockWorkerIdentity = options.mockWorkerIdentity === undefined
+  if (options.generation === 'mock' && options.identityEnv
+    && !options.workerIdentityBundle && !options.mockWorkerIdentity) {
+    throw new Error(
+      'Mock proving with real materialization requires --worker-identity-bundle from the matching dogeos-core bake; '
+      + 'the mock Worker image carries an all-zero batch_guest placeholder',
+    )
+  }
+
+  const workerIdentityPath = options.workerIdentityBundle ?? options.mockWorkerIdentity
+  const mockWorkerIdentity = workerIdentityPath === undefined
     ? extractMockWorkerIdentity(options.images.mockWorker)
-    : fs.readFileSync(path.resolve(options.mockWorkerIdentity), 'utf8')
-  validateMockWorkerIdentity(mockWorkerIdentity, 'mock Worker identity')
+    : fs.readFileSync(path.resolve(workerIdentityPath), 'utf8')
+  validateMockWorkerIdentity(mockWorkerIdentity, 'Worker identity bundle')
 
   const refreshed = refreshExistingProofMaterialImages(
     options,
     deploymentDir,
     outputRoot,
     receiptPath,
-    mockWorkerIdentity,
   )
   if (refreshed) return refreshed
 
   let env: Record<string, string> | undefined
   if (options.identityEnv) {
     env = parseProofIdentityEnv(fs.readFileSync(path.resolve(options.identityEnv), 'utf8'))
+    if (options.generation === 'mock') {
+      validateRealMaterializationWorkerIdentity(mockWorkerIdentity, env, 'Worker identity bundle')
+    }
   } else if (options.generation === 'real') {
     throw new Error('Real proof materials require --identity-env')
   }
 
   let producer: ProducerManifest | undefined
+  let aggregateVerifyingKey: string | undefined
   let chunkMaterializer: string | undefined
   let batchMaterializer: string | undefined
   if (options.generation === 'real') {
@@ -604,12 +675,29 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
     if (!options.chunkMaterializer) throw new Error('Real proof materials require --chunk-materializer')
     if (!options.batchMaterializer) throw new Error('Real proof materials require --batch-materializer')
     producer = readProducerManifest(path.resolve(options.producerManifest))
+    aggregateVerifyingKey = producer.artifacts.root_agg_verifying_key.path
     chunkMaterializer = path.resolve(options.chunkMaterializer)
     batchMaterializer = path.resolve(options.batchMaterializer)
     assertRegularFile(chunkMaterializer, 'Chunk materializer')
     assertRegularFile(batchMaterializer, 'Batch materializer')
   } else if (options.bridgeArtifactDir || options.protocolContext || options.images.productionWorker) {
     throw new Error('Bridge artifacts and the production Worker image belong to generation=real; rerun with --generation real')
+  } else if (env) {
+    if (!options.aggregateVerifyingKey || !options.chunkMaterializer || !options.batchMaterializer) {
+      throw new Error(
+        'Mock proving with real materialization requires --aggregate-verifying-key, '
+        + '--chunk-materializer, and --batch-materializer',
+      )
+    }
+
+    aggregateVerifyingKey = path.resolve(options.aggregateVerifyingKey)
+    chunkMaterializer = path.resolve(options.chunkMaterializer)
+    batchMaterializer = path.resolve(options.batchMaterializer)
+    assertRegularFile(aggregateVerifyingKey, 'Aggregate verifying key')
+    assertRegularFile(chunkMaterializer, 'Chunk materializer')
+    assertRegularFile(batchMaterializer, 'Batch materializer')
+  } else if (options.aggregateVerifyingKey || options.chunkMaterializer || options.batchMaterializer) {
+    throw new Error('Materializer files require --identity-env or --generation real')
   }
 
   fs.mkdirSync(path.dirname(outputRoot), {recursive: true})
@@ -621,6 +709,7 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
       chunk: identity(env.DOGEOS_CHUNK_PROGRAM_COMMITMENT_RAW, env.DOGEOS_CHUNK_PROGRAM_COMMITMENT, env.DOGEOS_CHUNK_VK_HASH),
       l2Range: identity(env.DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW, sha256Bytes(env.DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW), env.DOGEOS_BRIDGE_VK_HASH),
     } : syntheticMockProofIdentities()
+
     if (!env && options.generation === 'mock') {
       const aggregation = mockWorkerAggregationIdentity(mockWorkerIdentity, 'mock Worker identity')
       identities.l2Range = {
@@ -662,6 +751,27 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
         dogeosCore: producer.dogeos_core_commit,
         scrollZkvmProver: producer.producer.commit,
       }
+    } else if (env && aggregateVerifyingKey && chunkMaterializer && batchMaterializer) {
+      receipt.software.materializationArtifacts = {
+        aggregateVerifyingKey: copyMaterial(
+          deploymentDir,
+          outputRoot,
+          aggregateVerifyingKey,
+          'software/verifier/root_verifier_vk',
+        ),
+        batchMaterializer: copyMaterial(
+          deploymentDir,
+          outputRoot,
+          batchMaterializer,
+          'software/bin/batch-materializer',
+        ),
+        chunkMaterializer: copyMaterial(
+          deploymentDir,
+          outputRoot,
+          chunkMaterializer,
+          'software/bin/chunk-materializer',
+        ),
+      }
     }
 
     if (options.bridgeArtifactDir) {
@@ -670,6 +780,9 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
       assertDirectory(bridgeRoot, 'Bridge artifact directory')
       const nativeManifestPath = path.join(bridgeRoot, 'bridge-artifact-manifest.json')
       const native = bridgeManifest(nativeManifestPath)
+      const workerIdentityPath = path.join(bridgeRoot, 'worker-identity-bundle.json')
+      assertRegularFile(workerIdentityPath, 'Real bake worker-identity-bundle.json')
+      validateRealWorkerIdentity(fs.readFileSync(workerIdentityPath, 'utf8'), env, native)
       if (native.verification_key_hash !== receipt.software.identities.l2Range.verificationKeyHash) {
         throw new Error('Bridge verification key does not match the shared L2-range recursive verification key')
       }
@@ -695,6 +808,7 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
           l2RangeAppConfig: copyMaterial(deploymentDir, outputRoot, path.join(bridgeRoot, 'batch-aggregation-openvm.toml'), 'bridge/batch-aggregation-openvm.toml'),
           l2RangeAppExe: copyMaterial(deploymentDir, outputRoot, path.join(bridgeRoot, 'batch-aggregation.vmexe'), 'bridge/batch-aggregation.vmexe'),
           nativeManifest: copyMaterial(deploymentDir, outputRoot, nativeManifestPath, 'bridge/bridge-artifact-manifest.json'),
+          workerIdentityBundle: copyMaterial(deploymentDir, outputRoot, workerIdentityPath, 'bridge/worker-identity-bundle.json'),
         },
         genesisSequencerOutpointIndex: native.genesis_sequencer_outpoint_index,
         genesisStateHash: native.genesis_state_hash,
@@ -818,6 +932,15 @@ export function readProofMaterials(receiptPath: string, deploymentDir = path.dir
     throw new Error('Identity-only proof material receipt must not contain incomplete real-release metadata')
   }
 
+  if (software.materializationArtifacts !== undefined) {
+    const artifacts = mapping(software.materializationArtifacts, 'proof material receipt.software.materializationArtifacts')
+    receipt.software.materializationArtifacts = {
+      aggregateVerifyingKey: proofMaterialFile(artifacts.aggregateVerifyingKey, 'software.materializationArtifacts.aggregateVerifyingKey'),
+      batchMaterializer: proofMaterialFile(artifacts.batchMaterializer, 'software.materializationArtifacts.batchMaterializer'),
+      chunkMaterializer: proofMaterialFile(artifacts.chunkMaterializer, 'software.materializationArtifacts.chunkMaterializer'),
+    }
+  }
+
   if (root.bridge !== undefined) {
     const bridge = mapping(root.bridge, 'proof material receipt.bridge')
     const bridgeArtifacts = mapping(bridge.artifacts, 'proof material receipt.bridge.artifacts')
@@ -828,6 +951,9 @@ export function readProofMaterials(receiptPath: string, deploymentDir = path.dir
         l2RangeAppConfig: proofMaterialFile(bridgeArtifacts.l2RangeAppConfig, 'bridge.artifacts.l2RangeAppConfig'),
         l2RangeAppExe: proofMaterialFile(bridgeArtifacts.l2RangeAppExe, 'bridge.artifacts.l2RangeAppExe'),
         nativeManifest: proofMaterialFile(bridgeArtifacts.nativeManifest, 'bridge.artifacts.nativeManifest'),
+        ...(bridgeArtifacts.workerIdentityBundle === undefined ? {} : {
+          workerIdentityBundle: proofMaterialFile(bridgeArtifacts.workerIdentityBundle, 'bridge.artifacts.workerIdentityBundle'),
+        }),
       },
       genesisSequencerOutpointIndex: requiredInteger(bridge.genesisSequencerOutpointIndex, 'bridge.genesisSequencerOutpointIndex'),
       genesisStateHash: canonicalHex(bridge.genesisStateHash, 32, 'bridge.genesisStateHash'),
@@ -840,6 +966,7 @@ export function readProofMaterials(receiptPath: string, deploymentDir = path.dir
   for (const file of [
     ...(receipt.software.compilerIdentity ? [receipt.software.compilerIdentity] : []),
     ...Object.values(receipt.software.artifacts ?? {}),
+    ...Object.values(receipt.software.materializationArtifacts ?? {}),
     ...Object.values(receipt.bridge?.artifacts ?? {}),
   ]) {
     const resolved = path.resolve(deploymentDir, file.path)

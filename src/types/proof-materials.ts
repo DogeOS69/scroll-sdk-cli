@@ -24,6 +24,8 @@ export interface ProofMaterialsV1 {
       l2RangeAppConfig: ProofMaterialFileV1
       l2RangeAppExe: ProofMaterialFileV1
       nativeManifest: ProofMaterialFileV1
+      /** Canonical real-bake compiler input; absent in receipts prepared by older CLI versions. */
+      workerIdentityBundle?: ProofMaterialFileV1
     }
     genesisSequencerOutpointIndex: number
     genesisStateHash: string
@@ -59,6 +61,12 @@ export interface ProofMaterialsV1 {
       l2Range: ProofProgramIdentityV1
     }
     identitySource: 'dogeos_core_synthetic_mock_v1' | 'real_identity_probe'
+    /** Files required by production-shaped materialization with mock proving. */
+    materializationArtifacts?: {
+      aggregateVerifyingKey: ProofMaterialFileV1
+      batchMaterializer: ProofMaterialFileV1
+      chunkMaterializer: ProofMaterialFileV1
+    }
     openvmVersion?: string
     rustToolchain?: string
     sourceRevisions?: {

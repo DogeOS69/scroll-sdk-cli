@@ -97,11 +97,20 @@ export function buildProofTopology(options: BuildProofTopologyOptions): ProofTop
     throw new Error('real proof generation requires full software artifacts, deployment-bound Bridge material, and a production Worker image in proof-materials-v1.json')
   }
 
+  const materializationArtifacts = materials.software.artifacts
+    ?? materials.software.materializationArtifacts
+  if (realMaterialization && !materializationArtifacts) {
+    throw new Error(
+      'real Scroll materialization requires the aggregate verifying key plus Chunk and Batch materializer binaries; '
+      + 'rerun setup proof-materials with the release materialization files',
+    )
+  }
+
   const compilerIdentity = generation === 'real'
-    ? materials.bridge?.artifacts.nativeManifest
+    ? materials.bridge?.artifacts.workerIdentityBundle
     : materials.software.compilerIdentity
   if (!compilerIdentity) {
-    throw new Error(`${generation} proof generation requires a canonical dogeos-core compiler identity file; rerun setup proof-materials`)
+    throw new Error(`${generation} proof generation requires a canonical dogeos-core worker-identity-bundle.json compiler input; rerun setup proof-materials`)
   }
 
   const bridgeIdentity = materials.bridge?.identity ?? materials.software.identities.bridge
@@ -114,14 +123,16 @@ export function buildProofTopology(options: BuildProofTopologyOptions): ProofTop
   const root = '.data/proof-materials'
   const {artifacts} = materials.software
   const realScroll = {
+    ...(materializationArtifacts ? {
+      aggVerifyingKeyPath: materializationArtifacts.aggregateVerifyingKey.path,
+      batchMaterializerBinaryPath: materializationArtifacts.batchMaterializer.path,
+      chunkMaterializerBinaryPath: materializationArtifacts.chunkMaterializer.path,
+    } : {}),
     ...(artifacts ? {
-      aggVerifyingKeyPath: artifacts.aggregateVerifyingKey.path,
       batchAppConfig: artifacts.batchAppConfig.path,
       batchAppExe: artifacts.batchAppExe.path,
-      batchMaterializerBinaryPath: artifacts.batchMaterializer.path,
       chunkAppConfig: artifacts.chunkAppConfig.path,
       chunkAppExe: artifacts.chunkAppExe.path,
-      chunkMaterializerBinaryPath: artifacts.chunkMaterializer.path,
     } : {}),
     batchProgramCommitmentHashHex: materials.software.identities.batch.programCommitmentHash,
     batchProgramCommitmentHex: materials.software.identities.batch.appCommitRaw,

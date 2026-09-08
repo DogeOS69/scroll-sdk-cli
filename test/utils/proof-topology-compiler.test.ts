@@ -7,6 +7,7 @@ import * as path from 'node:path'
 
 import {
   computeProofTopologyBundleRevision,
+  projectMockGenerationVerifierSelection,
   projectProofCoordinatorEthereumDa,
   proofTopologyEthereumDaBlobSource,
 } from '../../src/utils/proof-topology-compiler.js'
@@ -94,5 +95,39 @@ timeout_ms = 10000
       },
       beaconNodeUrl: 'https://beacon.example.com',
     })
+  })
+
+  it('removes executable real verifier material from mock compiler output', () => {
+    fs.writeFileSync(path.join(root, 'proof-coordinator.toml'), `
+generation = "mock"
+[verifier]
+enforcement = "observe"
+[verifier.scroll_chunk_verifier_identity]
+verifier_id = "openvm-scroll-chunk-real-topology-verifier-v1"
+[verifier.scroll_real_verifier]
+agg_verifying_key_path = "/app/data/proof-materials/verifier/root_verifier_vk"
+`)
+    fs.writeFileSync(path.join(root, 'withdrawal-processor.toml'), `
+[proof_control_plane_gate.scroll_real_verifier]
+agg_verifying_key_path = "/app/data/proof-materials/verifier/root_verifier_vk"
+[proof_work_api.materialize.scroll_chunk_segmentation]
+enabled = true
+`)
+
+    projectMockGenerationVerifierSelection(root, 'mock')
+
+    const coordinator = toml.parse(fs.readFileSync(path.join(root, 'proof-coordinator.toml'), 'utf8')) as any
+    const withdrawal = toml.parse(fs.readFileSync(path.join(root, 'withdrawal-processor.toml'), 'utf8')) as any
+    expect(coordinator.verifier).not.to.have.property('scroll_real_verifier')
+    expect(coordinator.verifier.scroll_chunk_verifier_identity.verifier_id)
+      .to.equal('openvm-scroll-chunk-real-topology-verifier-v1')
+    expect(withdrawal.proof_control_plane_gate).not.to.have.property('scroll_real_verifier')
+    expect(withdrawal.proof_work_api.materialize.scroll_chunk_segmentation.enabled).to.equal(true)
+
+    const expectedRevision = computeProofTopologyBundleRevision(root)
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, 'bundle-manifest-v1.json'), 'utf8'))
+    const sidecar = JSON.parse(fs.readFileSync(path.join(root, 'resolved-v2.json'), 'utf8'))
+    expect(manifest.bundle_revision).to.equal(expectedRevision)
+    expect(sidecar.bundle_revision).to.equal(expectedRevision)
   })
 })

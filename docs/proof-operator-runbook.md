@@ -81,6 +81,7 @@ deployment/
 │   │       ├── bridge-state.vmexe
 │   │       ├── openvm.toml
 │   │       ├── bridge-artifact-manifest.json
+│   │       ├── worker-identity-bundle.json
 │   │       ├── batch-aggregation.vmexe
 │   │       └── batch-aggregation-openvm.toml
 │   └── generated/proof-topology/
@@ -140,6 +141,13 @@ EKS/Secrets region separate from the artifact region and skips the regional S3
 Gateway endpoint; cross-region access uses the normal S3 endpoint or an
 operator-managed gateway. It does not prepare proof programs.
 
+When `existing-gateway` is selected, the bucket policy and S3 Public Access
+Block settings remain entirely operator-managed: `proof-aws-init` does not
+change either one. This matters when the shared archive bucket already serves
+raw DA objects publicly. The operator must verify that the supplied HTTPS
+endpoint permits the required exact-key reads; selecting this mode is not
+evidence that the route is reachable or that the bucket is private.
+
 The resulting `dogeos/proof-aws/v4` document records these independently as
 `artifactStore.region`, `kubernetes.awsRegion`, and `secret.region`. The latter
 two must match; the artifact region may differ.
@@ -176,7 +184,11 @@ release identity probe as part of the mock receipt:
 ```bash
 scrollsdk setup proof-materials \
   --generation mock \
-  --identity-env /secure/build/real-identity.env
+  --identity-env /secure/build/real-identity.env \
+  --worker-identity-bundle /secure/build/worker-identity-bundle.json \
+  --aggregate-verifying-key /secure/build/verifier/root_verifier_vk \
+  --chunk-materializer /secure/build/materialize-chunk-oneshot \
+  --batch-materializer /secure/build/scroll-runtime-materializer
 ```
 
 `setup doge-config --proof-topology` then selects
@@ -185,6 +197,11 @@ three ends of the contract: the submitter publishes the segmentation sidecar,
 the coordinator reads and validates it, and Withdrawal Processor requests the
 materialized segmentation before creating per-chunk work. The selected proof
 Worker remains the mock Worker.
+The identity bundle must come from the same dogeos-core bake as the env values;
+the CLI rejects the all-zero `batch_guest` shipped by the ordinary mock image.
+The aggregate VK and two materializer binaries are also required by the
+dogeos-core selected-profile preflight even though proof generation remains
+mock. Only the proving `.vmexe` files and production Worker image stay absent.
 
 Prepare the larger real-only input set later with:
 
@@ -245,6 +262,24 @@ allowlist. Operators must not maintain a second sender address in WP. For KMS,
 generation fails if the account projection and signer-bound expected address
 have drifted, preventing the submitter and WP from selecting different DA
 publisher authorities.
+
+For a real-materialize profile without a pre-populated proof-material PVC, the
+generated PC values stage the two materializer executables at the exact
+compiler runtime paths. They are not embedded in a ConfigMap: the init
+container copies them from the selected PC image and verifies both against the
+SHA-256 values of the files imported by `setup proof-materials`. A mismatched
+PC image therefore fails before the coordinator starts. When generation is
+`real`, the generated WP and PC values additionally stage the binary root VK
+through a release-scoped Kubernetes Secret. Mock generation deliberately does
+not mount the root VK, because its absence under observe enforcement selects
+the development verifier that accepts mock proof envelopes. The adapter also
+removes only the compiler-rendered executable real-verifier blocks in this
+mock case; the canonical verifier identities and real materializer sections
+remain intact. Without that projection, beta.3 PC selects `real_scroll` from
+the block's presence and rejects the mock envelope before observe-mode policy
+can use it. When
+`resourcesPersistentVolumeClaim` is configured, that operator-populated,
+read-only release PVC remains authoritative instead.
 
 For beta.3 and later real-materialize profiles, the deployment context includes
 `proof_coordinator.l2_genesis_json = "/app/genesis/genesis.json"`. The generated

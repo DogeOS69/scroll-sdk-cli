@@ -130,9 +130,7 @@ describe('proof-aws-provisioner values projection', () => {
     const publicAccessBlock = calls.find(
       call => call.args[0] === 's3api' && call.args[1] === 'put-public-access-block',
     )
-    expect(publicAccessBlock?.args).to.include(
-      'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true',
-    )
+    expect(publicAccessBlock).to.equal(undefined)
 
     const rolePolicies = calls.filter(call => call.args[0] === 'iam' && call.args[1] === 'put-role-policy')
     expect(rolePolicies).to.have.length(2)
@@ -142,6 +140,47 @@ describe('proof-aws-provisioner values projection', () => {
       expect(policyDocument.Statement[1].Condition.StringLike['s3:prefix'])
         .to.deep.equal(['proof-topology', 'proof-topology/*'])
     }
+  })
+
+  it('does not mutate bucket policy or Public Access Block for an operator-managed external gateway', () => {
+    const calls: Array<{args: string[]; kind: 'json' | 'run' | 'text'}> = []
+    const aws = {
+      json(args: string[]): any {
+        calls.push({args, kind: 'json'})
+        return {}
+      },
+      run(args: string[]): string {
+        calls.push({args, kind: 'run'})
+        return ''
+      },
+      text(args: string[]): string {
+        calls.push({args, kind: 'text'})
+        if (args[0] === 'sts') return '123456789012'
+        if (args[0] === 'eks') return 'https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE'
+        throw new Error(`unexpected text call: ${args.join(' ')}`)
+      },
+    }
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    provisioner.provision(
+      {awsRegion: 'us-east-1', deploymentAlias: 'deployment-01', eksCluster: 'cluster', namespace: 'default'},
+      {
+        artifactRead: {
+          publicEndpointUrl: 'https://objects.example.com',
+          publicReadMode: 'existing-gateway',
+        },
+        bucket: 'proof-bucket',
+        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
+        keyPrefix: 'proof-topology',
+        secretName: 'proof-secret',
+        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
+      },
+    )
+
+    const bucketMutations = calls.filter(call =>
+      call.args[0] === 's3api'
+      && ['delete-bucket-policy', 'put-bucket-policy', 'put-public-access-block'].includes(call.args[1]),
+    )
+    expect(bucketMutations).to.deep.equal([])
   })
 
   it('discovers EKS route tables and creates the regional S3 gateway endpoint', () => {

@@ -287,3 +287,9 @@ sync S3 settings into `eth-da-submitter`, `l1-interface`,
 `withdrawal-processor`, and runtime Reth values. Run
 `scrollsdk setup gen-rpc-package` after that when producing an external RPC
 package.
+
+Proof setup with `--artifact-public-read-mode existing-gateway` does not
+modify the shared bucket policy or its Public Access Block settings. Those
+controls may already be serving raw DA consumers and remain the operator's
+responsibility. Use `direct-s3` only when scroll-sdk-cli is meant to own the
+narrowly scoped anonymous-read statement.
