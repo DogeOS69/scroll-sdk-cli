@@ -262,6 +262,10 @@ export class BridgeInitCommand extends Command {
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)',
     }),
+    'kube-context': Flags.string({
+      description: 'Explicit Kubernetes context for the Ethereum DA RPC probe (defaults to KUBE_CONTEXT).',
+      env: 'KUBE_CONTEXT',
+    }),
     'non-interactive': Flags.boolean({
       char: 'N',
       default: false,
@@ -287,6 +291,7 @@ export class BridgeInitCommand extends Command {
   }
 
   private dockerPlatform: string = 'linux/amd64'
+  private kubeContext?: string
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
@@ -298,6 +303,7 @@ export class BridgeInitCommand extends Command {
     this.nonInteractive = flags['non-interactive']
     this.jsonMode = flags.json
     this.dockerPlatform = flags['docker-platform']
+    this.kubeContext = flags['kube-context']
     this.jsonCtx = new JsonOutputContext('setup bridge-init', this.jsonMode)
 
     let { seed } = flags
@@ -1304,6 +1310,7 @@ export class BridgeInitCommand extends Command {
     const output = execFileSync(
       'kubectl',
       [
+        ...(this.kubeContext ? ['--context', this.kubeContext] : []),
         'run', podName,
         '--namespace', namespace,
         '--image', 'curlimages/curl:8.20.0',

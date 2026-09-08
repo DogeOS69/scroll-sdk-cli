@@ -1,6 +1,6 @@
 import { expect } from 'chai'
 
-import {
+import BridgeInitCommand, {
   BRIDGE_TIMELOCK_MARGIN_BLOCKS,
   BRIDGE_TIMELOCK_RELATIVE_BLOCKS,
   buildEthereumDaProtocolSeedConfig,
@@ -8,6 +8,13 @@ import {
   resolveBridgeTimelock,
   resolveInitialSystemSignerFromDogeConfig,
 } from '../../../src/commands/setup/bridge-init.js'
+
+describe('setup bridge-init explicit Kubernetes context', () => {
+  it('offers a context flag with KUBE_CONTEXT environment fallback', () => {
+    expect(BridgeInitCommand.flags['kube-context'].env).to.equal('KUBE_CONTEXT')
+    expect(BridgeInitCommand.flags['kube-context'].description).to.contain('Ethereum DA RPC probe')
+  })
+})
 
 describe('setup bridge-init timelock resolution', () => {
   const currentHeight = 50_579_598
