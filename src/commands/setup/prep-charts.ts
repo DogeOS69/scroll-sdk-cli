@@ -40,6 +40,7 @@ import {assertTopologyUsesSharedArtifactStore, sharedArtifactStoreFromDogeConfig
 import {proofTopologyEthereumDaBlobSource} from '../../utils/proof-topology-compiler.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {
+  getRequiredManagedSignerAddress,
   getRequiredManagedSignerConfig,
   isAwsKmsSigner,
   isLocalSigner,
@@ -124,6 +125,20 @@ export function applyFrontendEnvFileValues(
   }
 
   return {changed, content: `${lines.join('\n')}\n`}
+}
+
+/** Build the deployment-owned external URLs written to frontend-config. */
+export function buildFrontendExternalUrlUpdates(
+  getConfigValue: (key: string) => unknown,
+): Record<string, unknown> {
+  return {
+    ADMIN_SYSTEM_DASHBOARD_URI: getConfigValue('frontend.ADMIN_SYSTEM_DASHBOARD_URI'),
+    GRAFANA_URI: getConfigValue('frontend.GRAFANA_URI'),
+    REACT_APP_BRIDGE_API_URI: getConfigValue('frontend.BRIDGE_API_URI'),
+    REACT_APP_EXTERNAL_EXPLORER_URI_L2: getConfigValue('frontend.EXTERNAL_EXPLORER_URI_L2'),
+    REACT_APP_EXTERNAL_RPC_URI_L2: getConfigValue('frontend.EXTERNAL_RPC_URI_L2'),
+    REACT_APP_ROLLUPSCAN_API_URI: getConfigValue('frontend.ROLLUPSCAN_API_URI'),
+  }
 }
 
 /**
@@ -216,6 +231,9 @@ export function buildCubesignerPrepEnv(
 ): Record<string, string> {
   const env: Record<string, string> = {
     DOGEOS_CUBESIGNER_SIGNER_NETWORK: config.network,
+    // CubeSigner runs in the same Kubernetes namespace as the TSO. Keep this
+    // service-to-service route independent from the deployment's public DNS.
+    DOGEOS_CUBESIGNER_SIGNER_TSO_URL: 'http://tso-service:3000',
     NETWORK: config.network,
   }
   const policy = config.cubesigner?.productionPolicy
@@ -391,6 +409,91 @@ export interface PrepChartChange {
   oldValue: string
 }
 
+/** Reconcile the direct Grafana chart ingress shape, including TLS even when
+ * the primary hosts list was already correct. */
+export function reconcileGrafanaIngressHost(
+  ingress: any,
+  desiredHost: string | undefined,
+): PrepChartChange[] {
+  if (!ingress || typeof ingress !== 'object' || !desiredHost) return []
+  const sanitizedHost = stripPortFromHost(desiredHost)
+  const changes: PrepChartChange[] = []
+  if (Array.isArray(ingress.hosts)) {
+    for (let index = 0; index < ingress.hosts.length; index++) {
+      if (typeof ingress.hosts[index] !== 'string' || ingress.hosts[index] === sanitizedHost) continue
+      changes.push({
+        key: `grafana.ingress.hosts[${index}]`,
+        newValue: sanitizedHost,
+        oldValue: ingress.hosts[index],
+      })
+      ingress.hosts[index] = sanitizedHost
+    }
+  }
+
+  if (Array.isArray(ingress.tls)) {
+    const desiredTlsHosts = [sanitizedHost]
+    for (let index = 0; index < ingress.tls.length; index++) {
+      const tlsEntry = ingress.tls[index]
+      if (!tlsEntry || typeof tlsEntry !== 'object' || !Array.isArray(tlsEntry.hosts)) continue
+      if (JSON.stringify(tlsEntry.hosts) === JSON.stringify(desiredTlsHosts)) continue
+      changes.push({
+        key: `grafana.ingress.tls[${index}].hosts`,
+        newValue: JSON.stringify(desiredTlsHosts),
+        oldValue: JSON.stringify(tlsEntry.hosts),
+      })
+      tlsEntry.hosts = desiredTlsHosts
+    }
+  }
+
+  return changes
+}
+
+/** Replace a generated Proof Coordinator batch-materializer RPC without
+ * taking ownership of any other compiler-rendered TOML. */
+export function reconcileProofCoordinatorBatchL2Rpc(
+  source: string,
+  desiredUrl: string | undefined,
+): {changed: boolean; content: string} {
+  if (!desiredUrl) return {changed: false, content: source}
+  // Parse first so malformed native config still fails at its normal boundary.
+  toml.parse(source)
+  const lines = source.replaceAll('\r\n', '\n').split('\n')
+  const section = /^\s*\[materializer\.scroll_batch\.subprocess]\s*$/
+  const nextSection = /^\s*\[/
+  const assignment = /^(\s*)l2_rpc_url\s*=.*$/
+  const sectionIndex = lines.findIndex(line => section.test(line))
+  if (sectionIndex < 0) return {changed: false, content: source}
+  let end = lines.length
+  for (let index = sectionIndex + 1; index < lines.length; index++) {
+    if (nextSection.test(lines[index])) {
+      end = index
+      break
+    }
+  }
+
+  const matches: number[] = []
+  for (let index = sectionIndex + 1; index < end; index++) {
+    if (assignment.test(lines[index])) matches.push(index)
+  }
+
+  if (matches.length > 1) {
+    throw new Error('Proof Coordinator batch materializer contains duplicate l2_rpc_url assignments')
+  }
+
+  const rendered = `l2_rpc_url = ${JSON.stringify(desiredUrl)}`
+  if (matches.length === 1) {
+    const index = matches[0]
+    const indentation = lines[index].match(assignment)?.[1] || ''
+    if (lines[index] === `${indentation}${rendered}`) return {changed: false, content: source}
+    lines[index] = `${indentation}${rendered}`
+  } else {
+    const indentation = lines[sectionIndex].match(/^(\s*)/)?.[1] || ''
+    lines.splice(sectionIndex + 1, 0, `${indentation}${rendered}`)
+  }
+
+  return {changed: true, content: lines.join('\n')}
+}
+
 /** Remove values files for the retired in-cluster attestation-signer chart. */
 export function removeRetiredAttestationSignerValues(valuesDir: string): string[] {
   if (!fs.existsSync(valuesDir)) return []
@@ -415,13 +518,6 @@ export function removeRetiredCubesignerInstanceValues(valuesDir: string): string
   }
 
   return removed.sort()
-}
-
-function removeChartResourceNameOverrides(values: any): void {
-  if (!values.global) return
-  delete values.global.fullnameOverride
-  delete values.global.nameOverride
-  if (Object.keys(values.global).length === 0) delete values.global
 }
 
 const FEE_ORACLE_LEGACY_CONFIGMAP_PREFIXES = [
@@ -1947,6 +2043,7 @@ export default class SetupPrepCharts extends Command {
         }
 
         const configUpdates = {
+          ...buildFrontendExternalUrlUpdates(key => this.getConfigValue(key)),
           REACT_APP_BASE_CHAIN: this.getConfigValue("general.CHAIN_NAME_L1"),
           REACT_APP_CONNECT_WALLET_PROJECT_ID: this.getConfigValue("frontend.CONNECT_WALLET_PROJECT_ID"),
           REACT_APP_DOGE_BRIDGE_ADDRESS: this.withdrawalProcessorConfig.bridge_address,
@@ -2349,19 +2446,6 @@ export default class SetupPrepCharts extends Command {
       }
 
       if (isL2RethRpcChart(chartName)) {
-        if (chartName === 'l2-reth-rpc') {
-          const oldGlobalNaming = JSON.stringify(productionYaml.global || {})
-          removeChartResourceNameOverrides(productionYaml)
-          if (oldGlobalNaming !== JSON.stringify(productionYaml.global || {})) {
-            changes.push({
-              key: 'global.nameOverride/global.fullnameOverride',
-              newValue: 'release-derived',
-              oldValue: oldGlobalNaming,
-            })
-            updated = true
-          }
-        }
-
         const trustedPeers = this.buildFreshRethTrustedPeers()
         const runtimeChanges = applyL2RethRpcRuntimeValues(productionYaml, {
           blobS3Url: s3PublicBlobUrl,
@@ -2656,44 +2740,13 @@ export default class SetupPrepCharts extends Command {
 
 
 
-        let ingressUpdated = false;
-        const ingressValue = productionYaml.grafana.ingress;
-        if (ingressValue && typeof ingressValue === 'object' && 'hosts' in ingressValue) {
-          const hosts = ingressValue.hosts as Array<string>;
-          if (Array.isArray(hosts)) {
-            for (let i = 0; i < hosts.length; i++) {
-              if (typeof (hosts[i]) === 'string') {
-                const configValue: string | undefined = this.getConfigValue("ingress.GRAFANA_HOST");
-                // Strip port from hostname - Kubernetes Ingress hosts cannot contain ports
-                const sanitizedHost = configValue ? stripPortFromHost(configValue) : configValue;
-
-                if (sanitizedHost && (sanitizedHost !== hosts[i])) {
-                  changes.push({ key: `ingress.hosts[${i}]`, newValue: sanitizedHost, oldValue: hosts[i] });
-                  hosts[i] = sanitizedHost;
-                  ingressUpdated = true;
-                }
-              }
-            }
-          }
-        }
-
-        if (ingressUpdated) {
-          updated = true;
-          // Update the tls section if it exists
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          for (const [_ingressKey, ingressValue] of Object.entries(productionYaml.grafana.ingress)) {
-            if (ingressValue && typeof ingressValue === 'object' && 'tls' in ingressValue && 'hosts' in ingressValue) {
-              const tlsEntries = ingressValue.tls as Array<{ hosts: string[] }>;
-              const hosts = ingressValue.hosts as Array<{ host: string }>;
-              if (Array.isArray(tlsEntries) && Array.isArray(hosts)) {
-                for (const tlsEntry of tlsEntries) {
-                  if (Array.isArray(tlsEntry.hosts)) {
-                    tlsEntry.hosts = hosts.map((host) => host.host);
-                  }
-                }
-              }
-            }
-          }
+        const ingressChanges = reconcileGrafanaIngressHost(
+          productionYaml.grafana.ingress,
+          this.getConfigValue('ingress.GRAFANA_HOST'),
+        )
+        if (ingressChanges.length > 0) {
+          changes.push(...ingressChanges)
+          updated = true
         }
       }
 
@@ -2963,12 +3016,17 @@ export default class SetupPrepCharts extends Command {
         // Deployment configuration is TOML-owned: merge the derived facts into
         // the managed deployment block of the native WithdrawalProcessor.toml.
         // Operator tuning of other keys inside that block survives the merge.
+        const l1CommitSenderAddress = this.requireSignerAddress('l1CommitSender')
+
         const { deletePaths, facts } = buildWithdrawalDeploymentFacts({
           dogecoinIndexerStartHeight,
           dogecoinRpcUrl: dogecoinInternalUrl,
           ethereumDa: {
             beaconRpcUrl: this.getConfigValue('ethereumDa.beaconRpcUrl'),
-            expectedBatcherAddress: this.getConfigValue('accounts.L1_COMMIT_SENDER_ADDR'),
+            // The same resolved signer address is projected into
+            // eth-da-submitter below. Never make operators transcribe a
+            // second DA-publisher authority into WP configuration.
+            expectedBatcherAddress: l1CommitSenderAddress,
             inboxWorkerStartBlock: this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock,
             l1RpcUrl: this.getConfigValue('ethereumDa.submitterRpcUrl'),
             s3: {
@@ -3152,9 +3210,11 @@ export default class SetupPrepCharts extends Command {
         }
 
         const signerConfig = this.requireSigner('l1CommitSender')
+        const l1CommitSenderAddress = this.requireSignerAddress('l1CommitSender')
+
         if (signerConfig?.backend === 'aws_kms') {
           Object.assign(todoMappings, {
-            "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_EXPECTED_ADDRESS": signerConfig.expectedAddress,
+            "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_EXPECTED_ADDRESS": l1CommitSenderAddress,
             "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_KEY_ID": signerConfig.kmsKeyId,
             "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_REGION": signerConfig.kmsRegion,
             "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SIGNER_BACKEND": "aws_kms",
@@ -3584,7 +3644,18 @@ export default class SetupPrepCharts extends Command {
       kubernetes: this.dogeConfig.kubernetes,
       network: this.dogeConfig.network,
     })
+    const coordinatorConfigPath = path.resolve('proof-coordinator/ProofCoordinator.toml')
+    if (fs.existsSync(coordinatorConfigPath)) {
+      const current = fs.readFileSync(coordinatorConfigPath, 'utf8')
+      const reconciled = reconcileProofCoordinatorBatchL2Rpc(
+        current,
+        this.getConfigValue('frontend.EXTERNAL_RPC_URI_L2'),
+      )
+      if (reconciled.changed) fs.writeFileSync(coordinatorConfigPath, reconciled.content)
+    }
+
     const result = reconcileProofKubernetes({
+      coordinatorConfigPath,
       coordinatorIngressHost: typeof coordinatorIngressHost === 'string'
         ? coordinatorIngressHost
         : undefined,
@@ -3636,6 +3707,20 @@ export default class SetupPrepCharts extends Command {
         'CONFIGURATION',
         true,
         { signer: signerKey }
+      )
+    }
+  }
+
+  private requireSignerAddress(signerKey: 'l1CommitSender' | 'l2GasOracleSender'): string {
+    try {
+      return getRequiredManagedSignerAddress(this.dogeConfig, signerKey)
+    } catch (error) {
+      this.jsonCtx.error(
+        'E610_SIGNER_CONFIG_MISSING',
+        error instanceof Error ? error.message : String(error),
+        'CONFIGURATION',
+        true,
+        {signer: signerKey},
       )
     }
   }

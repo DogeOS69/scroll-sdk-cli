@@ -1797,6 +1797,13 @@ EXAMPLES
   $ scrollsdk setup proof-worker --deployment-dir /srv/dogeos/testnet --aws-profile staging
 ```
 
+After synchronizing the hydrated bundle to the Worker host, run
+`scrollsdk setup proof-worker-check` there, then use
+`./prover-worker-compose config --quiet` and
+`./prover-worker-compose up -d prover-worker`. The generated launcher runs the
+container as the invoking host UID/GID so the bind-mounted `0600` token remains
+private and readable; do not invoke raw `docker compose up` for this bundle.
+
 _See code: [src/commands/setup/proof-worker.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-worker.ts)_
 
 ## `scrollsdk setup proof-worker-check`

@@ -9,6 +9,7 @@ import type {ProverWorkerContractV1} from './proof-topology-compiler.js'
 export const COMPILED_PROVER_WORKER_BUNDLE_MANIFEST = 'bundle-manifest.json'
 export const COMPILED_PROVER_WORKER_CONTRACT = 'prover-worker-v1.json'
 export const COMPILED_PROVER_WORKER_GITIGNORE = '.gitignore'
+export const COMPILED_PROVER_WORKER_LAUNCHER = 'prover-worker-compose'
 export const COMPILED_PROVER_WORKER_TOKEN_FILE = 'prover-worker.token'
 export const COMPILED_PROVER_WORKER_PROTOCOL_CONTEXT = 'protocol_context.json'
 export const PROVER_WORKER_EXECUTABLE = '/usr/local/bin/prover-worker'
@@ -31,6 +32,7 @@ export interface CompiledProverWorkerBundleManifestV1 {
   files: {
     '.env': {sha256: string}
     'docker-compose.yml': {sha256: string}
+    [COMPILED_PROVER_WORKER_LAUNCHER]: {sha256: string}
     [COMPILED_PROVER_WORKER_CONTRACT]: {sha256: string}
     [COMPILED_PROVER_WORKER_PROTOCOL_CONTEXT]: {sha256: string}
     [COMPILED_PROVER_WORKER_TOKEN_FILE]: {requiredMode: '0600'; sensitive: true}
@@ -241,6 +243,11 @@ function composeDocument(options: {
     stop_grace_period: '7m',
     read_only: true,
     cap_drop: ['ALL'],
+    // The launcher supplies the invoking host user's numeric identity. This
+    // lets a 0600 bind-mounted token remain private without giving container
+    // root CAP_DAC_OVERRIDE. It also makes runtime files host-manageable.
+    user: `${String.fromCodePoint(36)}{PROVER_WORKER_UID:?run ./prover-worker-compose}:`
+      + `${String.fromCodePoint(36)}{PROVER_WORKER_GID:?run ./prover-worker-compose}`,
     security_opt: ['no-new-privileges:true'],
     tmpfs: ['/tmp:rw,noexec,nosuid,size=1g'],
     // Published prover-worker images already set the executable as ENTRYPOINT.
@@ -254,7 +261,7 @@ function composeDocument(options: {
       `./${COMPILED_PROVER_WORKER_PROTOCOL_CONTEXT}:${options.protocolContextRuntimePath}:ro`,
       `./materials:${options.generatedMaterialsRoot}:ro`,
       `\${PROOF_RESOURCES_ROOT:?missing PROOF_RESOURCES_ROOT}:${options.resourcesMountPath}:ro`,
-      `prover-worker-readiness:${readinessDirectory}`,
+      `./.runtime/prover-worker-readiness:${readinessDirectory}`,
     ],
     healthcheck: {
       test: [
@@ -274,8 +281,33 @@ function composeDocument(options: {
   return {
     name: 'dogeos-proof-topology-worker',
     services: {'prover-worker': service},
-    volumes: {'prover-worker-readiness': {}},
   }
+}
+
+function composeLauncher(): string {
+  return `#!/bin/sh
+set -eu
+
+bundle_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+cd "$bundle_dir"
+
+token="$bundle_dir/${COMPILED_PROVER_WORKER_TOKEN_FILE}"
+if [ ! -f "$token" ]; then
+  echo "missing $token; run scrollsdk setup proof-worker before syncing this bundle" >&2
+  exit 1
+fi
+if [ ! -r "$token" ]; then
+  echo "$token is not readable by uid $(id -u); copy the bundle as the user that will run Docker Compose" >&2
+  exit 1
+fi
+
+mkdir -p .runtime/prover-worker-readiness
+chmod 0700 .runtime .runtime/prover-worker-readiness
+
+export PROVER_WORKER_UID="$(id -u)"
+export PROVER_WORKER_GID="$(id -g)"
+exec docker compose "$@"
+`
 }
 
 function stableManifestFields(
@@ -413,6 +445,11 @@ export function writeCompiledProverWorkerBundle(
   }), {lineWidth: -1, noRefs: true})
   fs.writeFileSync(composePath, compose)
 
+  const launcherPath = path.join(bundleDir, COMPILED_PROVER_WORKER_LAUNCHER)
+  const launcher = composeLauncher()
+  fs.writeFileSync(launcherPath, launcher, {mode: 0o755})
+  fs.chmodSync(launcherPath, 0o755)
+
   const defaultResourcesRoot = portable(path.relative(bundleDir, resourcesRoot)) || '.'
   const envPath = path.join(bundleDir, '.env')
   const env = [
@@ -427,7 +464,10 @@ export function writeCompiledProverWorkerBundle(
   // source control even when operators check in the generated bundle for
   // review or copy it through a deployment repository.
   const gitignorePath = path.join(bundleDir, COMPILED_PROVER_WORKER_GITIGNORE)
-  fs.writeFileSync(gitignorePath, `${COMPILED_PROVER_WORKER_TOKEN_FILE}\n`)
+  fs.writeFileSync(
+    gitignorePath,
+    `${COMPILED_PROVER_WORKER_TOKEN_FILE}\n.runtime/\n`,
+  )
 
   const copiedContract = path.join(bundleDir, COMPILED_PROVER_WORKER_CONTRACT)
   fs.copyFileSync(contractFile, copiedContract)
@@ -449,6 +489,7 @@ export function writeCompiledProverWorkerBundle(
     files: {
       '.env': {sha256: sha256(env)},
       'docker-compose.yml': {sha256: sha256(compose)},
+      [COMPILED_PROVER_WORKER_LAUNCHER]: {sha256: sha256(launcher)},
       [COMPILED_PROVER_WORKER_CONTRACT]: {sha256: sha256File(copiedContract)},
       [COMPILED_PROVER_WORKER_PROTOCOL_CONTEXT]: {sha256: sha256File(copiedProtocolContext)},
       [COMPILED_PROVER_WORKER_TOKEN_FILE]: {requiredMode: '0600', sensitive: true},
@@ -479,6 +520,7 @@ export function writeCompiledProverWorkerBundle(
         bundleId: manifest.bundleId,
         files: [
           composePath,
+          launcherPath,
           envPath,
           gitignorePath,
           copiedContract,
@@ -518,6 +560,7 @@ export function verifyCompiledProverWorkerBundle(options: {
   const hashedFiles = [
     ['.env', manifest.files['.env'].sha256],
     ['docker-compose.yml', manifest.files['docker-compose.yml'].sha256],
+    [COMPILED_PROVER_WORKER_LAUNCHER, manifest.files[COMPILED_PROVER_WORKER_LAUNCHER].sha256],
     [COMPILED_PROVER_WORKER_CONTRACT, manifest.files[COMPILED_PROVER_WORKER_CONTRACT].sha256],
     [
       COMPILED_PROVER_WORKER_PROTOCOL_CONTEXT,

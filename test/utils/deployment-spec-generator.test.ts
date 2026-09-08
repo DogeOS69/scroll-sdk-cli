@@ -1335,7 +1335,7 @@ describe('deployment-spec-generator', () => {
         deposit_queue_transform: {
           l1_scroll_messenger_address: '0x0000000000000000000000000000000000000001',
           l2_messenger_address: '0x0000000000000000000000000000000000000002',
-          message_queue_gas_limit: 10_000_000,
+          message_queue_gas_limit: 200_000,
           moat_address: '0x0000000000000000000000000000000000000003',
         },
         eth_chain_id: 11_155_111,

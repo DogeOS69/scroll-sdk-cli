@@ -57,6 +57,20 @@ describe('withdrawal-config deployment block', () => {
     expect((facts as any).wf_withdrawal_parity_v1).to.equal(undefined)
   })
 
+  it('does not emit an open sender allowlist when the canonical batcher is provided', () => {
+    const {facts} = buildWithdrawalDeploymentFacts({
+      ...FACTS_INPUT,
+      ethereumDa: {
+        ...FACTS_INPUT.ethereumDa,
+        expectedBatcherAddress: '0x809cb1378Cb2775816dD14d1a3754a536b066889',
+      },
+    })
+
+    expect((facts as any).ethereum_da.inbox_worker.expected_batchers).to.deep.equal([
+      '0x809cb1378Cb2775816dD14d1a3754a536b066889',
+    ])
+  })
+
   it('requests aws_s3 removal when the blob archive is disabled', () => {
     const { deletePaths, facts } = buildWithdrawalDeploymentFacts({
       ...FACTS_INPUT,

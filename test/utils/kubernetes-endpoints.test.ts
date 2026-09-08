@@ -17,7 +17,8 @@ describe('kubernetes-endpoints', () => {
       expect(resolveDogecoinKubernetesEndpoints({ network: 'testnet' })).to.include({
         p2pPort: 44_556,
         rpcPort: 44_555,
-        rpcUrl: 'http://dogecoin:44555',
+        rpcUrl: 'http://dogecoin-testnet:44555',
+        serviceName: 'dogecoin-testnet',
       });
 
       expect(resolveDogecoinKubernetesEndpoints({ network: 'regtest' })).to.include({
@@ -65,6 +66,7 @@ describe('kubernetes-endpoints', () => {
 
     it('uses the network-specific default service port', () => {
       expect(resolveDogecoinServiceRpcUrl({network: 'mainnet'})).to.equal('http://dogecoin:22555')
+      expect(resolveDogecoinServiceRpcUrl({network: 'testnet'})).to.equal('http://dogecoin-testnet:44555')
       expect(resolveDogecoinServiceRpcUrl({network: 'regtest'})).to.equal('http://dogecoin:18332')
     })
   })

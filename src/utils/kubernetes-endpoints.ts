@@ -47,7 +47,7 @@ export function resolveDogecoinKubernetesEndpoints(config: DogecoinEndpointConfi
 
   const { network } = config
   const kubernetes = config.kubernetes || {}
-  const serviceName = kubernetes.serviceName || 'dogecoin'
+  const serviceName = kubernetes.serviceName || (network === 'testnet' ? 'dogecoin-testnet' : 'dogecoin')
   const defaultRpcPort = network === 'mainnet' ? 22_555 : network === 'regtest' ? 18_332 : 44_555
   const defaultP2pPort = network === 'mainnet' ? 22_556 : network === 'regtest' ? 18_444 : 44_556
   const rpcPort = kubernetes.rpcPort || defaultRpcPort

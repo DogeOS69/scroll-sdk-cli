@@ -7,6 +7,7 @@ import * as path from 'node:path'
 import type {ProofCoordinatorConfig} from '../types/deployment-spec.js'
 import type {ProofTopologySpec} from '../types/proof-topology.js'
 
+import {YAML_DUMP_OPTIONS} from '../config/constants.js'
 import {
   type CompiledProverWorkerBundleResult,
   PROVER_WORKER_EXECUTABLE,
@@ -85,7 +86,7 @@ function writeAtomic(filePath: string, content: string): void {
 }
 
 function writeYaml(filePath: string, value: Record<string, any>): void {
-  writeAtomic(filePath, yaml.dump(value, {lineWidth: -1, noRefs: true}))
+  writeAtomic(filePath, yaml.dump(value, YAML_DUMP_OPTIONS))
 }
 
 function copyAtomic(source: string, destination: string): void {

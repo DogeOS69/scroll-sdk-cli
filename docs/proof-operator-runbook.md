@@ -239,6 +239,13 @@ The compiler-rendered native TOML and generated text manifests are embedded in
 those final values, so ordinary Helm commands need no dynamic `--set-file`
 arguments or scrollsdk deployment helper. It does not contact Kubernetes.
 
+The same pass resolves the eth-da-submitter `L1_COMMIT_SENDER` and writes it
+into Withdrawal Processor's `ethereum_da.inbox_worker.expected_batchers`
+allowlist. Operators must not maintain a second sender address in WP. For KMS,
+generation fails if the account projection and signer-bound expected address
+have drifted, preventing the submitter and WP from selecting different DA
+publisher authorities.
+
 For beta.3 and later real-materialize profiles, the deployment context includes
 `proof_coordinator.l2_genesis_json = "/app/genesis/genesis.json"`. The generated
 Proof Coordinator values mount `genesis-config/genesis.json` read-only at that
@@ -254,7 +261,24 @@ materials, and required resources. It does not contain or consume the retired
 `DOGEOS_PROOF_TOPOLOGY_DIGEST` fields. Their presence is treated as evidence of
 a stale pre-#937 bundle and fails generation or validation.
 
-### Step 5: validate the deployment contract
+### Step 5: export the partner signer policy bundle
+
+After the final `prep-charts` pass, regenerate the complete bundle distributed
+to every external Attestation Signer operator:
+
+```bash
+scrollsdk setup export-signer-policy
+```
+
+The command derives the public TSO URL from `config.toml [ingress].TSO_HOST`,
+the canonical protocol identity from `.data/protocol_context.json`, and the
+signer-readable proof artifact base URL from the generated Withdrawal
+Processor configuration. Use `--tso-url`, `--protocol-context`, or
+`--signer-proof-artifact-base-url` only when deliberately overriding those
+sources. Do not reuse a bundle generated for another deployment or an earlier
+protocol context.
+
+### Step 6: validate the deployment contract
 
 ```bash
 scrollsdk setup proof-config-check
@@ -283,7 +307,12 @@ Edit only:
 
 Then regenerate and validate. With `workerDeploymentBackend =
 "docker_compose"`, run `setup proof-worker`, synchronize the generated bundle
-to the managed Worker host, and start it with Docker Compose. With
+to the managed Worker host, verify it there, and start it with the generated
+`./prover-worker-compose up -d prover-worker` launcher. The launcher runs the
+container with the invoking host user's numeric UID/GID, preserving the
+`0600` Worker token without granting the container filesystem-bypass
+capabilities, and prepares a private host-owned readiness directory. Do not
+start this bundle with a raw `docker compose up`. With
 `workerDeploymentBackend = "kubernetes"`, deploy the generated Worker Helm
 values. In both cases verify WP, PC, and the mock Worker are ready while
 Attestation Signers remain in `observe`.

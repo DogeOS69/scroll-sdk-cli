@@ -1,5 +1,6 @@
 import {expect} from 'chai'
 import * as yaml from 'js-yaml'
+import {spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -99,13 +100,30 @@ describe('compiled prover-worker bundle', () => {
       .to.deep.equal(worker().argv)
     expect(compose.services['prover-worker'].environment)
       .not.to.have.property('DOGEOS_PROOF_TOPOLOGY_DIGEST')
+    expect(compose.services['prover-worker'].user)
+      .to.equal(
+        `${String.fromCodePoint(36)}{PROVER_WORKER_UID:?run ./prover-worker-compose}:`
+        + `${String.fromCodePoint(36)}{PROVER_WORKER_GID:?run ./prover-worker-compose}`,
+      )
     expect(compose.services['prover-worker'].volumes)
       .to.include(`${String.fromCodePoint(36)}{PROOF_RESOURCES_ROOT:?missing PROOF_RESOURCES_ROOT}:/app/data/proof-materials:ro`)
+    expect(compose.services['prover-worker'].volumes)
+      .to.include('./.runtime/prover-worker-readiness:/run/dogeos')
+    expect(compose).not.to.have.property('volumes')
+    const launcherPath = path.join(bundleDir, 'prover-worker-compose')
+    const launcher = fs.readFileSync(launcherPath, 'utf8')
+    expect(launcher).to.include('export PROVER_WORKER_UID="$(id -u)"')
+    expect(launcher).to.include('export PROVER_WORKER_GID="$(id -g)"')
+    expect(launcher).to.include('mkdir -p .runtime/prover-worker-readiness')
+    // POSIX permission bits are intentionally expressed in octal.
+    // eslint-disable-next-line no-bitwise
+    expect(fs.statSync(launcherPath).mode & 0o777).to.equal(0o755)
     const manifest = JSON.parse(fs.readFileSync(result.manifestFile, 'utf8'))
     expect(manifest.credentialState).to.equal('pending')
     expect(manifest).not.to.have.property('topologyDigest')
     expect(fs.readFileSync(path.join(bundleDir, '.gitignore'), 'utf8'))
-      .to.equal('prover-worker.token\n')
+      .to.equal('prover-worker.token\n.runtime/\n')
+    expect(manifest.files['prover-worker-compose'].sha256).to.match(/^[\da-f]{64}$/)
     expect(manifest.requiredResources).to.deep.include({
       path: 'chunk/app.vmexe',
       runtimePath: '/app/data/proof-materials/chunk/app.vmexe',
@@ -158,6 +176,40 @@ describe('compiled prover-worker bundle', () => {
     fs.writeFileSync(path.join(resourcesRoot, 'chunk/app.vmexe'), 'tampered')
     expect(() => verifyCompiledProverWorkerBundle({bundleDir, resourcesRoot}))
       .to.throw('resource SHA-256 mismatch')
+  })
+
+  it('launches Compose as the invoking host UID/GID with private readiness storage', () => {
+    writeCompiledProverWorkerBundle({
+      bundleDir,
+      contractFile,
+      generatedMaterialsDir: path.join(root, '.data/generated/proof-topology/materials'),
+      generatedMaterialsRoot: '/app/data/proof-topology',
+      protocolContextPath: path.join(root, '.data/protocol_context.json'),
+      protocolContextRuntimePath: '/app/protocol_context.json',
+      resourcesMountPath: '/app/data/proof-materials',
+      resourcesRoot,
+      worker: worker(),
+      workerToken: 'secret-token',
+    })
+    const binDir = path.join(root, 'bin')
+    fs.mkdirSync(binDir)
+    const docker = path.join(binDir, 'docker')
+    fs.writeFileSync(
+      docker,
+      '#!/bin/sh\nprintf "%s|%s|%s\\n" "$PROVER_WORKER_UID" "$PROVER_WORKER_GID" "$*"\n',
+      {mode: 0o755},
+    )
+    const result = spawnSync(path.join(bundleDir, 'prover-worker-compose'), ['config', '--quiet'], {
+      encoding: 'utf8',
+      env: {...process.env, PATH: `${binDir}:${process.env.PATH || ''}`},
+    })
+    expect(result.status, result.stderr).to.equal(0)
+    expect(result.stdout.trim()).to.equal(`${process.getuid?.()}|${process.getgid?.()}|compose config --quiet`)
+    const readiness = path.join(bundleDir, '.runtime/prover-worker-readiness')
+    expect(fs.statSync(readiness).isDirectory()).to.equal(true)
+    // POSIX permission bits are intentionally expressed in octal.
+    // eslint-disable-next-line no-bitwise
+    expect(fs.statSync(readiness).mode & 0o777).to.equal(0o700)
   })
 
   it('rejects stale or corrupt bundles before writing the worker credential', () => {

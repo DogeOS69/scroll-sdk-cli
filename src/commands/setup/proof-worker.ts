@@ -84,8 +84,9 @@ export default class ProofWorker extends Command {
       json.info(
         'Sync the selected proof resources and exact compiler Worker bundle to the worker host, '
         + `run scrollsdk setup proof-worker-check --bundle-dir ${bundle.bundleDir} `
-        + `--expected-bundle-id ${bundle.bundleId}, then run docker compose config --quiet `
-        + 'and docker compose up -d prover-worker.',
+        + `--expected-bundle-id ${bundle.bundleId}, then run ./prover-worker-compose config --quiet `
+        + 'and ./prover-worker-compose up -d prover-worker. The launcher runs the container as '
+        + 'the invoking host UID/GID so the 0600 token stays private and readable.',
       )
 
       json.success(bundle)

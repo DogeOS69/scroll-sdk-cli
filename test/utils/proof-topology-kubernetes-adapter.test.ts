@@ -150,6 +150,7 @@ describe('self-contained proof topology Kubernetes adapter', () => {
       configMaps: {
         env: {
           data: {
+            DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER: '2898792',
             DOGEOS_ETH_DA_SUBMITTER_S3__BUCKET: 'dogeos-da-archive',
             DOGEOS_ETH_DA_SUBMITTER_S3__ENABLED: 'true',
             DOGEOS_ETH_DA_SUBMITTER_S3__KEY_PREFIX: 'testnet/batches',
@@ -205,6 +206,8 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     expect(compose.services['prover-worker'].image)
       .to.equal(`dogeos69/prover-worker-mock@${IMAGE_DIGEST}`)
     expect(compose.services['prover-worker']).not.to.have.property('gpus')
+    expect(fs.readFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), 'utf8'))
+      .to.include('DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER: "2898792"')
   })
 
   it('keeps Kubernetes as an explicit deployment backend for local CPU Workers', () => {

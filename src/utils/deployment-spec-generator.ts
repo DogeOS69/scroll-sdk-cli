@@ -1669,7 +1669,7 @@ export function generateProtocolSeedToml(rawSpec: DeploymentSpec): string {
   depositQueueTransform.l1_scroll_messenger_address = PLACEHOLDER_L1_SCROLL_MESSENGER_ADDRESS
   depositQueueTransform.l2_messenger_address = PLACEHOLDER_L2_MESSENGER_ADDRESS
   depositQueueTransform.moat_address = PLACEHOLDER_MOAT_ADDRESS
-  depositQueueTransform.message_queue_gas_limit = 10_000_000
+  depositQueueTransform.message_queue_gas_limit = 200_000
 
   const protocolConfig: toml.JsonMap = {}
   protocolConfig.l2_chain_id = spec.network.l2ChainId

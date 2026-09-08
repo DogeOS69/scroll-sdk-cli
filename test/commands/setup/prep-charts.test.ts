@@ -18,6 +18,7 @@ import {
   buildCubesignerPrepEnv,
   buildEthDaSubmitterPrepEnv,
   buildFeeOraclePrepEnv,
+  buildFrontendExternalUrlUpdates,
   buildL1InterfaceBlobSourcePrepEnv,
   buildL2GethInitialPeerList,
   buildRethInitialTrustedPeers,
@@ -32,6 +33,8 @@ import {
   isL2RethBlobS3Chart,
   migrateCubesignerPolicySdkVersion,
   migrateCubesignerRequestContract,
+  reconcileGrafanaIngressHost,
+  reconcileProofCoordinatorBatchL2Rpc,
   removeConfigMapEnvKeys,
   removeEnvArrayKeys,
   removeL2GethBlobS3ExtraParams,
@@ -81,6 +84,64 @@ describe('setup prep-charts generated frontend config', () => {
       REACT_APP_DOGE_NETWORK: 'testnet',
       REACT_APP_ROLLUP: 'DogeOS Devnet',
     })).to.deep.equal({changed: false, content: first.content})
+  })
+
+  it('projects every deployment-owned external URL', () => {
+    const values: Record<string, string> = {
+      'frontend.ADMIN_SYSTEM_DASHBOARD_URI': 'https://admin.testnet.example',
+      'frontend.BRIDGE_API_URI': 'https://bridge.testnet.example/api',
+      'frontend.EXTERNAL_EXPLORER_URI_L2': 'https://explorer.testnet.example',
+      'frontend.EXTERNAL_RPC_URI_L2': 'https://rpc.testnet.example',
+      'frontend.GRAFANA_URI': 'https://grafana.testnet.example',
+      'frontend.ROLLUPSCAN_API_URI': 'https://rollup.testnet.example/api',
+    }
+
+    expect(buildFrontendExternalUrlUpdates(key => values[key])).to.deep.equal({
+      ADMIN_SYSTEM_DASHBOARD_URI: 'https://admin.testnet.example',
+      GRAFANA_URI: 'https://grafana.testnet.example',
+      REACT_APP_BRIDGE_API_URI: 'https://bridge.testnet.example/api',
+      REACT_APP_EXTERNAL_EXPLORER_URI_L2: 'https://explorer.testnet.example',
+      REACT_APP_EXTERNAL_RPC_URI_L2: 'https://rpc.testnet.example',
+      REACT_APP_ROLLUPSCAN_API_URI: 'https://rollup.testnet.example/api',
+    })
+  })
+})
+
+describe('setup prep-charts environment URL reconciliation', () => {
+  it('updates Grafana TLS hosts even when the primary ingress host is already current', () => {
+    const ingress = {
+      hosts: ['grafana.testnet.example'],
+      tls: [{hosts: ['grafana.devnet.example'], secretName: 'grafana-tls'}],
+    }
+    const changes = reconcileGrafanaIngressHost(ingress, 'grafana.testnet.example')
+    expect(changes).to.deep.equal([{
+      key: 'grafana.ingress.tls[0].hosts',
+      newValue: '["grafana.testnet.example"]',
+      oldValue: '["grafana.devnet.example"]',
+    }])
+    expect(ingress.tls[0].hosts).to.deep.equal(['grafana.testnet.example'])
+  })
+
+  it('replaces only the batch materializer L2 RPC in generated coordinator TOML', () => {
+    const source = [
+      'coordinator_id = "pc"',
+      '',
+      '  [materializer.scroll_batch.subprocess]',
+      '  binary_path = "/usr/local/bin/materializer"',
+      '  l2_rpc_url = "https://rpc.devnet.example"',
+      '',
+      '    [materializer.scroll_batch.subprocess.ethereum_da]',
+      '    l1_rpc_url = "https://l1.example"',
+      '',
+    ].join('\n')
+    const result = reconcileProofCoordinatorBatchL2Rpc(source, 'https://rpc.testnet.example')
+    expect(result.changed).to.equal(true)
+    expect(result.content).to.include('  l2_rpc_url = "https://rpc.testnet.example"')
+    expect(result.content).to.include('    l1_rpc_url = "https://l1.example"')
+    expect(reconcileProofCoordinatorBatchL2Rpc(
+      result.content,
+      'https://rpc.testnet.example',
+    ).changed).to.equal(false)
   })
 })
 
@@ -311,6 +372,7 @@ describe('setup prep-charts CubeSigner production config', () => {
       DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER: 'dogeos-bridge/v1',
       DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROOF_RESOLVER_AUTHORITY:
         'https://proof-policy.example.com',
+      DOGEOS_CUBESIGNER_SIGNER_TSO_URL: 'http://tso-service:3000',
       NETWORK: 'testnet',
     })
     expect(env).not.to.have.property('DOGEOS_CUBESIGNER_SIGNER_MAX_PSBT_BASE64_LEN')

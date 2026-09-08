@@ -57,6 +57,38 @@ After configuring the archive, run `scrollsdk setup prep-charts`. It reads
 `scrollsdk setup gen-rpc-package` independently reads the same canonical
 configuration when it generates `L2RETH_BLOB_S3_URL`.
 
+## DA publisher authority
+
+The Ethereum DA inbox is permissionless: any Ethereum account can submit a
+type-3 transaction to the inbox address derived from the L2 chain ID. The
+Withdrawal Processor therefore uses its `ethereum_da.inbox_worker.expected_batchers`
+allowlist as an ingest-time availability guard.
+
+Operators do not configure that allowlist separately. `setup prep-charts`
+resolves the `L1_COMMIT_SENDER` selected by `setup eth-da-submitter` and writes
+the same address to both:
+
+```text
+eth-da-submitter KMS/local signer authority
+                    │
+                    └── withdrawal-processor
+                        [ethereum_da.inbox_worker]
+                        expected_batchers = ["0x..."]
+```
+
+For an AWS KMS signer, the command also requires
+`accounts.L1_COMMIT_SENDER_ADDR` and
+`signers.l1CommitSender.expectedAddress` to match case-insensitively. A drift
+fails before values are installed. To rotate the submitter signer, reconcile
+it with `setup eth-da-submitter` and regenerate the values; do not hand-edit
+the WP allowlist.
+
+This allowlist is a local, non-normative filter rather than protocol-level
+authorization. Blob integrity, decoded L2 state, continuity, finality, and
+proof checks remain authoritative. The allowlist prevents unrelated senders
+from entering this deployment's candidate feed and causing avoidable
+same-height ambiguity or resource consumption.
+
 The resolver performs one anonymous HTTP GET per blob:
 
 ```text

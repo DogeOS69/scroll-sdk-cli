@@ -27,6 +27,9 @@ describe('setup l2-bootnode-reth', () => {
       externalSecrets: {
         'l2-reth-bootnode-2-secret-env': { provider: 'aws' },
       },
+      global: {
+        nameOverride: 'operator-bootnode-name',
+      },
       persistence: {
         keys: { enabled: true, mountPath: '/keys', type: 'emptyDir' },
       },
@@ -48,7 +51,7 @@ describe('setup l2-bootnode-reth', () => {
       secretName: 'l2-reth-bootnode-2-secret-env',
     })
 
-    expect(values.global).to.equal(undefined)
+    expect(values.global).to.deep.equal({nameOverride: 'operator-bootnode-name'})
     expect(values.envFrom).to.deep.equal([{ configMapRef: { name: 'shared-observability-env' } }])
     expect(values.externalSecrets).to.equal(undefined)
     expect(values.env.some((item: any) => item.name === 'RETH_NODEKEY')).to.equal(false)

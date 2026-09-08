@@ -101,6 +101,9 @@ describe('setup l2-sequencer-reth', () => {
       externalSecrets: {
         'l2-reth-sequencer-2-secret-env': { provider: 'aws' },
       },
+      global: {
+        nameOverride: 'operator-sequencer-name',
+      },
       persistence: {
         keys: { enabled: true, mountPath: '/keys', type: 'emptyDir' },
       },
@@ -128,6 +131,7 @@ describe('setup l2-sequencer-reth', () => {
     })
 
     expect(values.envFrom).to.deep.equal([{ configMapRef: { name: 'shared-observability-env' } }])
+    expect(values.global).to.deep.equal({nameOverride: 'operator-sequencer-name'})
     expect(values.externalSecrets).to.equal(undefined)
     expect(values.env.some((item: any) => item.name === 'RETH_NODEKEY')).to.equal(false)
     expect(values.env.some((item: any) => item.name === 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY')).to.equal(false)
@@ -169,6 +173,9 @@ describe('setup l2-sequencer-reth', () => {
         { name: 'RETH_SEQUENCER_AWS_KMS_KEY_ID', value: 'alias/old' },
       ],
       reth: {
+        sequencer: {
+          enabled: false,
+        },
         signer: {
           awsKmsKeyId: 'alias/old',
         },
@@ -202,6 +209,7 @@ describe('setup l2-sequencer-reth', () => {
       secretKey: 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY',
     })
     expect(values.reth.signer.awsKmsKeyId).to.equal(undefined)
+    expect(values.reth.sequencer).to.deep.equal({autoStart: false, enabled: false})
     expect(values.externalSecrets['secret-env'].data.map((item: any) => item.secretKey)).to.deep.equal([
       'RETH_NODEKEY',
       'RETH_SEQUENCER_SIGNER_PRIVATE_KEY',
