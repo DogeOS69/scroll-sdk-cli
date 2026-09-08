@@ -1363,8 +1363,11 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     WITHDRAWAL_FEE: bridgeFees.withdrawalFeeWei,
   }
 
+  // Native DOGE is a mandatory protocol predeploy, not an operator-selected address.
+  config.contracts.overrides = {
+    L2_NATIVE_DOGE_TOKEN: '0x530000000000000000000000000000000000d09e',
+  }
   if (spec.contracts.overrides) {
-    config.contracts.overrides = {}
     if (spec.contracts.overrides.l2MessageQueue) {
       config.contracts.overrides.L2_MESSAGE_QUEUE = spec.contracts.overrides.l2MessageQueue
     }

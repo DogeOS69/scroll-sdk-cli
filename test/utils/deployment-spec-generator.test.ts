@@ -815,6 +815,16 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateConfigToml', () => {
+    it('always includes the mandatory native DOGE predeploy, preserving optional overrides', () => {
+      for (const overrides of [undefined, {l2Wdoge: '0x5300000000000000000000000000000000000004'}]) {
+        const spec = createMinimalSpec();
+        spec.contracts.overrides = overrides;
+        const config = toml.parse(generateConfigToml(spec)) as any;
+        expect(config.contracts.overrides.L2_NATIVE_DOGE_TOKEN).to.equal('0x530000000000000000000000000000000000d09e');
+        if (overrides) expect(config.contracts.overrides.L2_WDOGE).to.equal(overrides.l2Wdoge);
+      }
+    });
+
     it('includes the contracts-template commit scalar for specs predating Galileo', () => {
       const config = toml.parse(generateConfigToml(createMinimalSpec())) as any;
       expect(config.contracts.COMMIT_SCALAR).to.equal(38_720_000_000);
