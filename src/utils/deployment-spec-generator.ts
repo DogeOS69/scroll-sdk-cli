@@ -1351,6 +1351,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
   // [contracts] section
   config.contracts = {
     BLOB_SCALAR: spec.contracts.gasOracle.blobScalar,
+    COMMIT_SCALAR: spec.contracts.gasOracle.commitScalar ?? 38_720_000_000,
     DEPLOYMENT_SALT: spec.contracts.deploymentSalt,
     DEPOSIT_FEE: bridgeFees.depositFeeSats,
     L1_FEE_VAULT_ADDR: DEFAULT_L1_FEE_VAULT_ADDR,

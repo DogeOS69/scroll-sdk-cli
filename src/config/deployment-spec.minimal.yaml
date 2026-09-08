@@ -138,6 +138,7 @@ contracts:
   deploymentSalt: "dogeos-devnet-v1"
   gasOracle:
     blobScalar: 1
+    commitScalar: 38720000000
     scalar: 1
     penaltyThreshold: 100
     penaltyFactor: 10

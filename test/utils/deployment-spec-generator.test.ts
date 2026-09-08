@@ -815,6 +815,21 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateConfigToml', () => {
+    it('includes the contracts-template commit scalar for specs predating Galileo', () => {
+      const config = toml.parse(generateConfigToml(createMinimalSpec())) as any;
+      expect(config.contracts.COMMIT_SCALAR).to.equal(38_720_000_000);
+      expect(config.contracts.SCALAR).to.equal(1);
+    });
+
+    it('preserves explicitly configured commit scalars, including zero', () => {
+      for (const commitScalar of [0, 12_345]) {
+        const spec = createMinimalSpec();
+        spec.contracts.gasOracle.commitScalar = commitScalar;
+        const config = toml.parse(generateConfigToml(spec)) as any;
+        expect(config.contracts.COMMIT_SCALAR).to.equal(commitScalar);
+      }
+    });
+
     it('generates valid TOML with all required sections', () => {
       const spec = createMinimalSpec();
       const output = generateConfigToml(spec);
