@@ -283,7 +283,7 @@ export class BridgeInitCommand extends Command {
         '1-prepare requires values/genesis.yaml, extracts .data/genesis.json, and prepares protocol_seed.toml.',
         '2-setup is NOT idempotent: generate test keys and broadcast the setup transaction.',
         '3-bridge-info is idempotent: generate namespace and bridge.json.',
-        '4-fund is NOT idempotent: broadcast 10 initial bridge funding transactions.',
+        '4-fund is NOT idempotent: broadcast the configured bridge-funding and/or deposit-seed transactions.',
         '5-protocol-context is idempotent: generate protocol_context.json.',
         'Numeric aliases 1, 2, 3, 4, and 5 are accepted.',
       ].join(' '),
@@ -1440,10 +1440,10 @@ export class BridgeInitCommand extends Command {
 
     this.warnNonIdempotentStep(
       '4-fund',
-      'This step is NOT idempotent. It consumes funding UTXOs and broadcasts 10 bridge funding transactions.'
+      'This step is NOT idempotent. It consumes funding UTXOs and broadcasts the configured bridge-funding and/or deposit-seed transactions.'
     )
 
-    this.jsonCtx.info('Running step 4-fund: broadcast 10 initial bridge funding transactions')
+    this.jsonCtx.info('Running step 4-fund: broadcast configured bridge-funding and/or deposit-seed transactions')
     await this.runDockerCommand(imageTag, [
       'generate_test_keys',
       'fund-bridge',

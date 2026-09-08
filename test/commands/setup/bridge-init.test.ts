@@ -14,6 +14,11 @@ describe('setup bridge-init explicit Kubernetes context', () => {
     expect(BridgeInitCommand.flags['kube-context'].env).to.equal('KUBE_CONTEXT')
     expect(BridgeInitCommand.flags['kube-context'].description).to.contain('Ethereum DA RPC probe')
   })
+
+  it('describes funding according to configured transaction kinds, not a fixed count', () => {
+    expect(BridgeInitCommand.flags.step.description).to.contain('bridge-funding and/or deposit-seed')
+    expect(BridgeInitCommand.flags.step.description).not.to.contain('10 initial bridge funding')
+  })
 })
 
 describe('setup bridge-init timelock resolution', () => {

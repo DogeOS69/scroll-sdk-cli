@@ -808,7 +808,7 @@ FLAGS
       [default: all] Bridge init step to run. all runs 1-prepare, 2-setup, 3-bridge-info, 4-fund, and 5-protocol-context.
       1-prepare requires values/genesis.yaml, extracts .data/genesis.json, and prepares protocol_seed.toml. 2-setup is NOT
       idempotent: generate test keys and broadcast the setup transaction. 3-bridge-info is idempotent: generate namespace
-      and bridge.json. 4-fund is NOT idempotent: broadcast 10 initial bridge funding transactions. 5-protocol-context is
+      and bridge.json. 4-fund is NOT idempotent: broadcast configured bridge-funding and/or deposit-seed transactions. 5-protocol-context is
       idempotent: generate protocol_context.json. Numeric aliases 1, 2, 3, 4, and 5 are accepted.
 
 DESCRIPTION
