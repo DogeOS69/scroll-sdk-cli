@@ -870,6 +870,36 @@ describe('proof-aws-provisioner values projection', () => {
       .to.equal('scroll/proof-coordinator-secrets')
   })
 
+  it('isolates the legacy WP bearer env mapping from service keys and remains idempotent', () => {
+    const bearerEnv = 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__AUTH__BEARER_TOKEN'
+    const withdrawal: Record<string, any> = {
+      envFrom: [{secretRef: {name: 'withdrawal-processor-secret-env'}}],
+      externalSecrets: {
+        'withdrawal-processor-secret-env': {
+          data: [
+            {remoteRef: {key: 'dogeos/withdrawal-processor', property: 'RPC_PASSWORD'}, secretKey: 'RPC_PASSWORD'},
+            {remoteRef: {key: 'scroll/proof-coordinator-secrets', property: 'proof-work-token'}, secretKey: bearerEnv},
+          ], provider: 'aws', secretRegion: 'us-west-2',
+        },
+      },
+    }
+    const projection = {...PROJECTION, secretName: 'scroll/new-devnet/proof-coordinator-secrets', secretRegion: 'us-east-1'}
+    applyProofAwsValues({}, withdrawal, projection)
+    expect(withdrawal.externalSecrets['withdrawal-processor-secret-env'].data).to.have.length(1)
+    expect(withdrawal.externalSecrets['withdrawal-processor-secret-env'].secretRegion).to.equal('us-west-2')
+    expect(withdrawal.externalSecrets['withdrawal-proof-token'].data).to.deep.equal([
+      {remoteRef: {key: projection.secretName, property: 'proof-work-token'}, secretKey: bearerEnv},
+    ])
+    expect(withdrawal.externalSecrets['withdrawal-proof-token'].secretRegion).to.equal('us-east-1')
+    expect(withdrawal.envFrom).to.deep.equal([
+      {secretRef: {name: 'withdrawal-processor-secret-env'}},
+      {secretRef: {name: 'withdrawal-proof-token'}},
+    ])
+    const before = JSON.stringify(withdrawal)
+    applyProofAwsValues({}, withdrawal, projection)
+    expect(JSON.stringify(withdrawal)).to.equal(before)
+  })
+
   it('replaces a stale valueFrom on managed env entries', () => {
     const coordinator: Record<string, any> = {
       env: [{

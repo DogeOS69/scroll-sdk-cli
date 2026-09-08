@@ -420,6 +420,7 @@ function projectManagedAwsProofSecret(
 
     const proofTokenMappings = secret.data.filter((item: any) =>
       PROOF_SECRET_PROPERTIES.includes(item?.secretKey)
+      || item?.secretKey === 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__AUTH__BEARER_TOKEN'
     )
     if (proofTokenMappings.length === 0) continue
 
@@ -475,6 +476,31 @@ export function applyProofAwsValues(
   withdrawalValues.withdrawalProof ||= {}
   withdrawalValues.withdrawalProof.s3AuthMode = 'irsa'
   bindIrsaServiceAccount(withdrawalValues, projection.withdrawalServiceAccount, projection.withdrawalRoleArn)
+  // Legacy WP templates mix the remote proof token into the service-key Secret.
+  // Split that mapping so ordinary push-secrets cannot overwrite its independent
+  // authority, and so token/service secrets may use different AWS regions.
+  const bearerEnv = 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__AUTH__BEARER_TOKEN'
+  const bearerMappings = []
+  for (const [name, secret] of Object.entries(withdrawalValues.externalSecrets || {}) as [string, any][]) {
+    if (name === 'withdrawal-proof-token' || secret?.provider !== 'aws' || !Array.isArray(secret.data)) continue
+    const owned = secret.data.filter((item: any) => item?.secretKey === bearerEnv)
+    if (owned.length === 0) continue
+    bearerMappings.push(...owned)
+    secret.data = secret.data.filter((item: any) => item?.secretKey !== bearerEnv)
+    if (secret.data.length === 0) delete withdrawalValues.externalSecrets[name]
+  }
+
+  if (bearerMappings.length > 0) {
+    withdrawalValues.externalSecrets['withdrawal-proof-token'] = {
+      data: [{remoteRef: {key: projection.secretName, property: 'proof-work-token'}, secretKey: bearerEnv}],
+      provider: 'aws', refreshInterval: '2m', secretRegion: projection.secretRegion, serviceAccount: 'external-secrets',
+    }
+    withdrawalValues.envFrom ||= []
+    if (!withdrawalValues.envFrom.some((item: any) => item?.secretRef?.name === 'withdrawal-proof-token')) {
+      withdrawalValues.envFrom.push({secretRef: {name: 'withdrawal-proof-token'}})
+    }
+  }
+
   // Keep any prep-charts-managed WP copy in the explicitly selected region.
   projectManagedAwsProofSecret(withdrawalValues, projection.secretName, projection.secretRegion)
 }
