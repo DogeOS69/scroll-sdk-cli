@@ -34,6 +34,26 @@ export async function resolveGenesisImageTag(providedTag?: string): Promise<stri
   return tag
 }
 
+export function applyRethGenesisSigner(config: any, dogeConfig: any): boolean {
+  // Legacy deployments may not have Reth configuration at all.
+  if (dogeConfig.sequencerReth === undefined) return false
+
+  const instances = dogeConfig.sequencerReth?.instances
+  const primaryInstances = Array.isArray(instances) ? instances.filter(instance => instance.index === 0) : []
+  const address = primaryInstances[0]?.signer?.address
+  if (primaryInstances.length !== 1 || typeof address !== 'string' || !ethers.isAddress(address)) {
+    throw new Error('sequencerReth.instances must contain exactly one index-0 signer with a valid address. Run setup l2-sequencer-reth --index 0 before generating genesis; refusing to use a stale legacy signer.')
+  }
+
+  // The contracts generator still names this input L2GETH_SIGNER_ADDRESS.
+  // Copy only the public address; Reth keys and KMS metadata stay in doge-config.
+  const signerAddress = ethers.getAddress(address)
+  if (config.sequencer?.L2GETH_SIGNER_ADDRESS === signerAddress) return false
+  config.sequencer ||= {}
+  config.sequencer.L2GETH_SIGNER_ADDRESS = signerAddress
+  return true
+}
+
 export default class SetupGenL2Artifacts extends Command {
   static override description = 'Generate L2 deployment artifacts, including genesis, public config, contract config, and Helm config values'
 
@@ -54,6 +74,9 @@ export default class SetupGenL2Artifacts extends Command {
     }),
     'deployment-salt': Flags.string({
       description: 'Deployment salt value (non-interactive mode). If not provided, keeps existing or auto-increments.',
+    }),
+    'doge-config': Flags.string({
+      description: 'Path to Dogecoin config containing the Reth genesis signer (defaults to .data/doge-config.toml when present)',
     }),
     'image-tag': Flags.string({
       description: 'Specify the Docker image tag to use',
@@ -108,6 +131,8 @@ export default class SetupGenL2Artifacts extends Command {
 
     const configsDir = flags['configs-dir']
     this.jsonCtx.info(`Using configuration directory: ${configsDir}`)
+
+    this.syncRethGenesisSigner(flags['doge-config'])
 
     // Skip L1_CONTRACT_DEPLOYMENT_BLOCK for DogeOS network
     // this.jsonCtx.info('Checking L1_CONTRACT_DEPLOYMENT_BLOCK...')
@@ -177,8 +202,6 @@ export default class SetupGenL2Artifacts extends Command {
     }
   }
 
-
-
   private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
     try {
       return await resolveGenesisImageTag(providedTag)
@@ -192,6 +215,8 @@ export default class SetupGenL2Artifacts extends Command {
       )
     }
   }
+
+
 
   private async processYamlFiles(configsDir: string): Promise<void> {
     const sourceDir = process.cwd()
@@ -508,6 +533,31 @@ export default class SetupGenL2Artifacts extends Command {
       // Close Docker HTTP agent to release event loop
       const { agent } = docker.modem as { agent?: { destroy?: () => void } }
       agent?.destroy?.()
+    }
+  }
+
+  private syncRethGenesisSigner(providedPath?: string): void {
+    const dogeConfigPath = path.resolve(providedPath || '.data/doge-config.toml')
+    if (!providedPath && !fs.existsSync(dogeConfigPath)) return
+
+    try {
+      const configPath = path.resolve('config.toml')
+      const config = toml.parse(fs.readFileSync(configPath, 'utf8'))
+      const dogeConfig = toml.parse(fs.readFileSync(dogeConfigPath, 'utf8'))
+      if (!applyRethGenesisSigner(config, dogeConfig)) return
+      if (!writeConfigs(config, undefined, configPath, this.jsonMode)) {
+        throw new Error('Failed to persist the Reth genesis signer in config.toml and config.public.toml')
+      }
+
+      this.jsonCtx.info('Synchronized the genesis signer from Reth sequencer index 0 (contracts input: sequencer.L2GETH_SIGNER_ADDRESS).')
+    } catch (error) {
+      this.jsonCtx.error(
+        'E602_INVALID_CONFIG_FORMAT',
+        `Failed to prepare Reth genesis signer: ${error instanceof Error ? error.message : String(error)}`,
+        'CONFIGURATION',
+        true,
+        { path: dogeConfigPath }
+      )
     }
   }
 
@@ -934,7 +984,7 @@ export default class SetupGenL2Artifacts extends Command {
     if (typeof signerAddress !== 'string' || !ethers.isAddress(signerAddress)) {
       this.jsonCtx.error(
         'E002_MISSING_REQUIRED_FIELD',
-        'sequencer.L2GETH_SIGNER_ADDRESS is required before generating L2 artifacts. Run setup gen-keystore --from-spec deployment-spec.yaml --non-interactive --sequencer-password "$ENV:SEQUENCER_KEYSTORE_PASSWORD", or set infrastructure.sequencers[0].signerAddress in the spec and regenerate config.toml.',
+        'A valid genesis signer is required. For Reth, run setup l2-sequencer-reth --index 0 and supply its doge-config file. Legacy deployments must set sequencer.L2GETH_SIGNER_ADDRESS in config.toml.',
         'VALIDATION',
         true,
         { path: 'sequencer.L2GETH_SIGNER_ADDRESS' }
