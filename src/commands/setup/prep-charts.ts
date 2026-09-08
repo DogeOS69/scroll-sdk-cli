@@ -3,7 +3,7 @@ import * as toml from '@iarna/toml'
 import { confirm } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
-import { Wallet } from 'ethers'
+import { Wallet, isAddress } from 'ethers'
 import * as yaml from 'js-yaml'
 import { execFileSync, spawn } from 'node:child_process'
 import * as fs from 'node:fs'
@@ -953,6 +953,19 @@ export function applyRethBlobS3Url(
   }
 
   return changes
+}
+
+export function applyRethFeeRecipient(productionYaml: any, feeVaultAddress: unknown): PrepChartChange[] {
+  if (typeof feeVaultAddress !== 'string' || !isAddress(feeVaultAddress) || /^0x0{40}$/i.test(feeVaultAddress)) {
+    throw new Error('contracts.overrides.L2_TX_FEE_VAULT must be a valid nonzero address for Reth')
+  }
+
+  productionYaml.reth ||= {}
+  productionYaml.reth.sequencer ||= {}
+  const oldValue = productionYaml.reth.sequencer.feeRecipient
+  if (oldValue === feeVaultAddress) return []
+  productionYaml.reth.sequencer.feeRecipient = feeVaultAddress
+  return [{key: 'reth.sequencer.feeRecipient', newValue: feeVaultAddress, oldValue: String(oldValue ?? 'undefined')}]
 }
 
 export function applyRethNetworkId(
@@ -2322,6 +2335,7 @@ export default class SetupPrepCharts extends Command {
         const sharedRethChanges = [
           ...applyRethNetworkId(productionYaml, l2P2PNetworkId),
           ...applyRethBlobS3Url(productionYaml, s3PublicBlobUrl),
+          ...applyRethFeeRecipient(productionYaml, this.getConfigValue('contracts.overrides.L2_TX_FEE_VAULT')),
         ]
         if (sharedRethChanges.length > 0) {
           changes.push(...sharedRethChanges)
