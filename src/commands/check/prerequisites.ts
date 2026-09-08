@@ -73,7 +73,7 @@ export default class CheckPrerequisites extends Command {
         required: true,
       },
       {
-        check: () => this.checkCommand('kubectl'),
+        check: () => this.checkCommand('kubectl', 'version --client'),
         description: 'Kubernetes CLI',
         name: 'kubectl',
         required: true,
@@ -85,7 +85,7 @@ export default class CheckPrerequisites extends Command {
         required: false,
       },
       {
-        check: () => this.checkCommand('helm'),
+        check: () => this.checkCommand('helm', 'version --short'),
         description: 'Helm package manager',
         name: 'helm',
         required: true,
