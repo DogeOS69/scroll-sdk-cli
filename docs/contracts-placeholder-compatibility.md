@@ -1,5 +1,17 @@
 # Legacy contracts compatibility without exporting a service key
 
+**Version boundary:** the instructions below describe the historical 28f6ca
+and ba832bb images. Current devnet uses contracts commit
+`56a4cacda6046c9445af023aefee15a42fda2fdd` and a newly created Bridge; follow
+[the new-instance runbook](devnet-new-bridge-20260909.md) for its exact pins and
+resume boundary. That release removes the legacy L1 commit/finalize account
+inputs, zeros the unused L1 gas-oracle and Geth signer fields, fixes the unused
+coordinator JWT, and emits native Reth genesis. Its contracts scripts no longer
+need those legacy keys. Existing CLI compatibility fields may remain locally
+until the corresponding legacy CLI configuration path is retired; never fund
+or authorize the public placeholder. The real fee-oracle address is still
+required, and neither KMS service needs an exportable private key.
+
 This is an opt-in compatibility mode for **DogeOS testnet/regtest L2-only
 deployment**, not a general-purpose KMS workaround for Scroll L1 contracts.
 

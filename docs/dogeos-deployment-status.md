@@ -1,6 +1,6 @@
 # DogeOS deployment status and runbook corrections
 
-This page consolidates findings from the 2026-09-08 from-scratch devnet deployment.
+This page consolidates findings from the 2026-09-08/09 from-scratch devnet deployment.
 It is a **partial, verified-progress record**, not a completed end-to-end manual.
 The README command reference lists available commands, not their execution order.
 Never run the entire command list sequentially as an installation script.
@@ -23,15 +23,25 @@ readiness, and end-to-end acceptance are different milestones.
 
 ## Current checkpoint
 
+- On 2026-09-09 the user explicitly authorized a **new Bridge**, with native
+  Reth genesis from contracts commit 56a4cac. The verified procedure, release
+  pins, identity, manual changes and retry rules are consolidated in
+  [the new-instance runbook](devnet-new-bridge-20260909.md). It supersedes the
+  old-instance observations wherever identity or output format differs.
 - Domain: devnet.doge.xyz. L2 chain ID: 221122. Ethereum DA: Sepolia (11155111).
 - Bridge setup and ten deposit-seed transactions are already confirmed; the
   canonical protocol context has been generated. **Do not regenerate genesis,
   change seed/salt, or repeat Bridge setup/funding to resume this instance.**
-- gen-secrets, prep-charts, proof-config-check, selected Secret uploads, the new
-  contracts image's offline None/verify-config simulation, and a Reth server-side
-  dry-run have passed. None of these proves full runtime readiness.
-- scroll-common and l1-interface Helm releases were installed. Their canonical
-  ConfigMaps match local artifacts; L1 Interface's ExternalSecret synchronized.
+- New Bridge: `2NDLYMxd7SH4U94k3HfgmQtgBZE3FAPJe4H`; protocol ID:
+  `b7e9425fda9ad99b782a10b5575521bca67f4842da4923f00d690a8a5947beaa`.
+  New gen-secrets, prep-charts, policy export, proof-config-check and actual
+  offline Reth init passed. Reth's hash matches the protocol context exactly.
+- scroll-common and l1-interface Helm releases still belong to the **old**
+  instance. Their ConfigMaps no longer match the newly adopted local artifacts.
+  No new-instance Helm rollout has been performed; preserve the old PVC/Secrets.
+  The new deploy image's offline None/verify-config passed with only the deployer
+  key. New service Secrets were uploaded under dogeos/devnet-20260909. Historical
+  server-side dry-run success must not be attributed to the new instance.
 - L1 Interface v0.3.0-beta.3e fails on a fresh PVC because /data/replay.sqlite
   does not exist. [Core #1139](https://github.com/DogeOS69/dogeos-core/issues/1139)
   requires initialization inside the service binary, before strict startup
@@ -50,8 +60,8 @@ readiness, and end-to-end acceptance are different milestones.
    exception is dogeos69/scroll-sdk-frontends:0.3.0-rc3. These are recorded pins,
    not a claim that all runtime images have passed acceptance.
 2. **Contracts have three independent-purpose tags from one build.** Follow
-   [the contracts guide](contracts-placeholder-compatibility.md#fee-oracle-address-only-contracts-release)
-   for exact gen-configs/deploy/verify tags and the already-bound genesis exception.
+   [the new-instance runbook](devnet-new-bridge-20260909.md)
+   for exact gen-configs/deploy/verify tags and the already-bound genesis warning.
    Never pass the rollup-node/core image tag as the gen-l2-artifacts image tag.
 3. **fee-oracle requires its actual address, not an exportable KMS private key.**
    The new contracts release authorizes the real address directly. The public
@@ -71,9 +81,9 @@ readiness, and end-to-end acceptance are different milestones.
    the service-key Secret merely to satisfy an old mixed mapping.
 7. **Reth fee recipient and genesis normalization need explicit verification.**
    prep-charts must resolve the EVM L2 FeeVault address, not leave `<TODO>` or use a
-   Dogecoin recipient. A Reth-mounted genesis adapter must use this instance's
-   virtual L1 genesis height (62634568 here), never another deployment's hardcoded
-   height, and must preserve the canonical genesis rather than edit it in place.
+   Dogecoin recipient. Native Reth genesis from 56a4cac mounts directly and has
+   scan startL1Block=0; virtual L1 genesis height 62638951 is a separate setting.
+   Do not apply the old Geth adapter or replace the canonical scan start.
 8. **Do not claim strict JSON automation is verified for all commands.** See
    [the automation wrapper limitation](automation.md#minimal-shell-wrapper) for
    observed prep-charts progress output before its JSON result.

@@ -45,6 +45,7 @@ bin/run.js --help
 
 ## Documentation
 
+- [New Bridge / native Reth devnet runbook](docs/devnet-new-bridge-20260909.md) — verified 2026-09-09 steps, manual edits, release pins and the remaining runtime blocker.
 - [Monitoring account balances](docs/monitoring-balances.md) — `prep-charts`
   generation for fee-oracle on L2, eth-da-submitter on Ethereum DA, and fee-wallet
   UTXO thresholds, including canonical signer validation and Secret-owned RPCs.

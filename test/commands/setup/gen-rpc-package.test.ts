@@ -177,6 +177,45 @@ describe('setup gen-rpc-package env generation', () => {
     }, 14_023_282)).to.throw('startL1Block conflicts')
   })
 
+  it('preserves native Reth scan height without legacy metadata or Geth values', () => {
+    const source = {
+      alloc: {},
+      config: {
+        chainId: 221_122,
+        scroll: {
+          l1Config: {
+            l1ChainId: 111_111,
+            numL1MessagesPerBlock: 10,
+            startL1Block: 0,
+            systemContractAddress: '0x2000369731833cbf00e97146999442adf10a4e59',
+          },
+          l1DataFeeBufferCheck: false,
+        },
+        tsukiTime: 0,
+      },
+      extraData: '0x',
+      gasLimit: '0x989680',
+    }
+    const before = JSON.stringify(source)
+    expect(normalizeGenesisForReth(source, 62_638_951)).to.deep.equal(source)
+    expect(JSON.stringify(source)).to.equal(before)
+
+    const valuesDir = path.join(tmpDir, 'values')
+    fs.mkdirSync(valuesDir)
+    const content = yaml.dump({ scrollConfig: before })
+    fs.writeFileSync(path.join(valuesDir, 'genesis.yaml'), content)
+    const outputPath = createCommandHarness().extractGenesisJson(valuesDir, tmpDir, 'testnet')
+    expect(JSON.parse(fs.readFileSync(outputPath, 'utf8'))).to.deep.equal(source)
+    expect(fs.readFileSync(path.join(valuesDir, 'genesis.yaml'), 'utf8')).to.equal(content)
+
+    const invalidAddress = JSON.parse(before)
+    delete invalidAddress.config.scroll.l1Config.systemContractAddress
+    expect(() => normalizeGenesisForReth(invalidAddress)).to.throw('systemContractAddress')
+    const invalidHeight = JSON.parse(before)
+    delete invalidHeight.config.scroll.l1Config.startL1Block
+    expect(() => normalizeGenesisForReth(invalidHeight)).to.throw('startL1Block')
+  })
+
   it('converts internal bootnode enodes to public p2p LoadBalancer domains', () => {
     const peers = convertPeersToExternalDomains(
       [
