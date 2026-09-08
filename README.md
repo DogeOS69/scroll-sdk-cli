@@ -45,6 +45,9 @@ bin/run.js --help
 
 ## Documentation
 
+- [Monitoring account balances](docs/monitoring-balances.md) — `prep-charts`
+  generation for fee-oracle on L2, eth-da-submitter on Ethereum DA, and fee-wallet
+  UTXO thresholds, including canonical signer validation and Secret-owned RPCs.
 - [DogeOS deployment status and runbook corrections](docs/dogeos-deployment-status.md)
   — verified progress, current blockers, safe resume boundaries, and corrections
   found during the from-scratch devnet deployment. This is not yet a completed

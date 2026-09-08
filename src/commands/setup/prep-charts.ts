@@ -40,6 +40,7 @@ import {
 import {assertTopologyUsesSharedArtifactStore, sharedArtifactStoreFromDogeConfig} from '../../utils/proof-shared-artifact-store.js'
 import {proofTopologyEthereumDaBlobSource} from '../../utils/proof-topology-compiler.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
+import {reconcileScrollMonitorBalances} from '../../utils/scroll-monitor-values.js'
 import {
   getRequiredManagedSignerAddress,
   getRequiredManagedSignerConfig,
@@ -2718,6 +2719,18 @@ export default class SetupPrepCharts extends Command {
 
         if (ingressUpdated) {
           updated = true;
+        }
+      }
+
+      if (chartName === 'scroll-monitor') {
+        const monitorChanges = reconcileScrollMonitorBalances(productionYaml, {
+          dogeConfig: this.dogeConfig,
+          l2ChainId: configuredL2ChainId,
+          l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),
+        })
+        if (monitorChanges.length > 0) {
+          changes.push(...monitorChanges)
+          updated = true
         }
       }
 

@@ -48,6 +48,10 @@ enabled, since its legacy root-config target is the placeholder. L2 account
 funding (`--layer 2`) and explicit deployer funding remain available. Fund the
 real DA sender separately on its configured Ethereum DA network. Do not use
 root config's commit address for monitoring the actual submitter balance.
+`prep-charts` generates scroll-monitor balance settings from the real canonical
+signer and Ethereum DA RPC, and monitors the fee-oracle separately on L2. See
+[Monitoring account balances](monitoring-balances.md) for configuration sources
+and thresholds.
 
 Acceptance checks:
 
