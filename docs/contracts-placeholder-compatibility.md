@@ -60,3 +60,67 @@ Acceptance checks:
 This does not remove other legacy contracts account inputs, authorize L1
 deployment, or make the complete deployment pass without subsequent chart,
 secret, runtime and end-to-end checks.
+
+## Fee-oracle address-only contracts release
+
+The fee-oracle is different: its real address is authorized by the L2 Whitelist.
+Never use the public L1 compatibility placeholder for this role.
+
+Contracts commit `ba832bbd97a13aaee4cbc1b14d792966e86b412b` removes only the
+L2_GAS_ORACLE_SENDER_PRIVATE_KEY declaration, input reads, validation, and
+generated template field. A valid nonzero L2_GAS_ORACLE_SENDER_ADDR is required.
+Existing deployments using a local signer remain compatible, but the contracts
+configuration no longer depends on that signer's private key. Other legacy
+account checks remain unchanged. Its deploy entrypoint retains the audited
+None simulation followed by L2 simulation/broadcast, with L1 broadcast disabled.
+
+The three application images were published together by
+[Actions 34219590027](https://github.com/DogeOS69/scroll-contracts/actions/runs/34219590027):
+
+| Purpose | dogeos69/scroll-stack-contracts tag |
+| --- | --- |
+| Fresh genesis generation | gen-configs-ba832bbd97a13aaee4cbc1b14d792966e86b412b |
+| L2 deployment | deploy-ba832bbd97a13aaee4cbc1b14d792966e86b412b |
+| Contract verification | verify-ba832bbd97a13aaee4cbc1b14d792966e86b412b |
+
+For a new instance, configure the actual fee-oracle signer first, then run
+gen-l2-artifacts with the exact gen-configs tag. For a Bridge already initialized
+on Dogecoin, do **not** regenerate genesis or replay Bridge funding steps just
+to adopt this configuration-only repair. Preserve the canonical genesis and
+verify existing deterministic contract predictions with the new deploy image.
+
+Reproducible configuration sequence:
+
+1. Run `setup fee-oracle --signer-backend aws-kms` with the existing key and
+   a role trusting this deployment's EKS OIDC and fee-oracle ServiceAccount.
+   When the key and cluster regions differ, supply a pre-provisioned matching
+   `--role-arn`; `--aws-region` selects the key region in that path. Do not reuse
+   an old-cluster role just because the KMS alias contains that cluster's name.
+2. Confirm root config.toml/config.public.toml contain the actual
+   L2_GAS_ORACLE_SENDER_ADDR. Remove a stale local fee private-key field from
+   root config.toml if one remains. Do not invent a KMS private key.
+3. Set values/contracts-production.yaml image.tag to the matching deploy tag.
+   Remove its ExternalSecret mapping for L2_GAS_ORACLE_SENDER_PRIVATE_KEY.
+   This is a recorded operator edit for the new contracts image; do not remove
+   the other legacy fields still required by Configuration.sol.
+4. Run `setup prep-charts`, then `setup gen-secrets`, then selectively
+   `setup push-secrets --secret-file ... --values-file ...` with the actual
+   Secrets Manager region and deployment-specific prefix. Run secret upload
+   after the final values generation, and verify the resulting remote refs.
+5. Check contracts Secret includes deployer, legacy L1 finalize/oracle inputs,
+   coordinator JWT, and the explicitly opted-in L1 commit placeholder if used.
+   KMS fee-oracle and DA runtime services must have no local signer key Secret.
+   WP proof bearer token uses its own proof-aws-managed Secret, not the service
+   private-key Secret. Do not copy its value into the latter to silence errors.
+6. Before broadcasting, run the new image's Forge `None / verify-config`
+   simulation using the actual public config, contract predictions, and
+   generated Secret environment. It must pass without a fee-oracle private key.
+
+The 2026-09-08 devnet passed this offline image check, 27 targeted contracts
+tests, generation, selective secret upload and proof config preflight. This is
+**not** complete deployment acceptance: first L1 Interface startup on a fresh
+PVC failed with `Replay SQLite file not found: /data/replay.sqlite` in core
+v0.3.0-beta.3e. Core requires a valid protocol-bound manifest/bootstrap snapshot,
+not an empty file. Do not disable replay checks or reuse another instance's DB.
+Resolve the core cold-start initializer/image before continuing Reth and L2
+deployment. Full end-to-end deployment acceptance remains pending.
