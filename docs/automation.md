@@ -214,6 +214,7 @@ Before retrying after partial failure:
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 run_scrollsdk() {
   local name="$1"
@@ -235,10 +236,19 @@ run_scrollsdk() {
   printf '%s\n' "$response"
 }
 
-# Deployment ordering belongs to the operator runbook. Proof intent is already
-# declared in DeploymentSpec or .data/doge-config.toml.
-run_scrollsdk prep-charts setup prep-charts
+# Example only: requires existing validated deployment config/Bridge outputs.
+# This is not a from-scratch deployment order.
+run_scrollsdk gen-secrets setup gen-secrets --doge-config .data/doge-config.toml
 ```
+
+Known deployment finding (2026-09-08): `setup prep-charts --json` can still emit
+ordinary progress text before its JSON result. The strict wrapper above will
+reject that output even if generation completes. It must not be presented as a
+verified prep-charts wrapper until stdout framing is fixed and tested. For that
+command, retain stdout/stderr privately and inspect the final result and required
+artifact checks; do not infer success from exit code alone, discard errors, or
+blindly retry non-idempotent neighboring steps. This limitation does not change
+the intended machine-readable JSON contract.
 
 ## DeploymentSpec generation
 

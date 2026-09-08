@@ -45,6 +45,10 @@ bin/run.js --help
 
 ## Documentation
 
+- [DogeOS deployment status and runbook corrections](docs/dogeos-deployment-status.md)
+  — verified progress, current blockers, safe resume boundaries, and corrections
+  found during the from-scratch devnet deployment. This is not yet a completed
+  end-to-end deployment manual; the command reference below is not execution order.
 - [Legacy contracts placeholder compatibility](docs/contracts-placeholder-compatibility.md)
   — isolate a real DA service signer from legacy contracts account validation
   in explicitly selected DogeOS testnet/regtest L2-only deployments.

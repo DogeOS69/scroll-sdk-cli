@@ -122,5 +122,12 @@ tests, generation, selective secret upload and proof config preflight. This is
 PVC failed with `Replay SQLite file not found: /data/replay.sqlite` in core
 v0.3.0-beta.3e. Core requires a valid protocol-bound manifest/bootstrap snapshot,
 not an empty file. Do not disable replay checks or reuse another instance's DB.
-Resolve the core cold-start initializer/image before continuing Reth and L2
-deployment. Full end-to-end deployment acceptance remains pending.
+The required resolution is automatic initialization in the normal l1_interface
+binary startup, using reusable core library logic; a separate mandatory command
+or init container is not the intended deployment solution. Track
+[core issue #1139](https://github.com/DogeOS69/dogeos-core/issues/1139) and use a
+validated corrected service image before continuing Reth and L2 deployment.
+Full end-to-end deployment acceptance remains pending. See the
+[deployment status and corrections](dogeos-deployment-status.md) for the current
+resume boundary; do not treat historical generation examples as commands to rerun
+against an already initialized Bridge.
