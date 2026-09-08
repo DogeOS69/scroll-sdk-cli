@@ -1,5 +1,5 @@
 import * as toml from '@iarna/toml'
-import { confirm, input, select } from '@inquirer/prompts'
+import { confirm, input } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import Docker from 'dockerode'
@@ -18,6 +18,21 @@ import {
 } from '../../utils/non-interactive.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- TOML configs have dynamic structure */
+
+export async function resolveGenesisImageTag(providedTag?: string): Promise<string> {
+  if (!providedTag) return `gen-configs-${CONTRACTS_DOCKER_DEFAULT_TAG}`
+
+  const tag = providedTag.startsWith('gen-configs-')
+    ? providedTag
+    : `gen-configs-${/^\d+\.\d+\.\d+$/.test(providedTag) ? 'v' : ''}${providedTag}`
+  // Query the exact tag: older releases may be absent from the first tags page.
+  const response = await fetch(`${DOCKER_TAGS_URL}/${encodeURIComponent(tag)}`)
+  if (!response.ok) {
+    throw new Error(`Cannot resolve explicitly requested image ${DOCKER_REPOSITORY}:${tag} (HTTP ${response.status}); refusing to substitute the default image`)
+  }
+
+  return tag
+}
 
 export default class SetupGenL2Artifacts extends Command {
   static override description = 'Generate L2 deployment artifacts, including genesis, public config, contract config, and Helm config values'
@@ -164,61 +179,18 @@ export default class SetupGenL2Artifacts extends Command {
 
 
 
-  private async fetchDockerTags(): Promise<string[]> {
+  private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
     try {
-      const response = await fetch(
-        `${DOCKER_TAGS_URL}?page_size=100`,
-      )
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-
-      const data = await response.json()
-      return data.results.map((tag: { name: string }) => tag.name).filter((tag: string) => tag.startsWith('gen-configs-'))
+      return await resolveGenesisImageTag(providedTag)
     } catch (error) {
       this.jsonCtx.error(
         'E400_DOCKER_IMAGE_PULL_FAILED',
-        `Failed to fetch Docker tags: ${error}`,
+        `Failed to resolve genesis image: ${error}`,
         'DOCKER',
         true,
         { error: String(error) }
       )
     }
-  }
-
-  private async getDockerImageTag(providedTag: string | undefined): Promise<string> {
-    const defaultTag = `gen-configs-${CONTRACTS_DOCKER_DEFAULT_TAG}`
-
-    if (!providedTag) {
-      return defaultTag
-    }
-
-    const tags = await this.fetchDockerTags()
-
-    if (providedTag.startsWith('gen-configs-') && tags.includes(providedTag)) {
-      return providedTag
-    }
-
-    if (providedTag.startsWith('v') && tags.includes(`gen-configs-${providedTag}`)) {
-      return `gen-configs-${providedTag}`
-    }
-
-    if (/^\d+\.\d+\.\d+$/.test(providedTag) && tags.includes(`gen-configs-v${providedTag}`)) {
-      return `gen-configs-v${providedTag}`
-    }
-
-    // In non-interactive mode, use default tag if provided tag is invalid
-    if (this.nonInteractive) {
-      this.jsonCtx.addWarning(`Provided tag "${providedTag}" not found, using default: ${defaultTag}`)
-      return defaultTag
-    }
-
-    const selectedTag = await select({
-      choices: tags.map((tag) => ({ name: tag, value: tag })),
-      message: 'Select a Docker image tag:',
-    })
-
-    return selectedTag
   }
 
   private async processYamlFiles(configsDir: string): Promise<void> {
