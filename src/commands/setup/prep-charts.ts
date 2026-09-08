@@ -26,6 +26,7 @@ import {
   resolveDogecoinKubernetesEndpoints,
   resolveDogecoinServiceRpcUrl,
 } from '../../utils/kubernetes-endpoints.js'
+import { parseHelmUpgradeRecipes } from '../../utils/makefile-helm.js'
 import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
 import {
   type ResolvedProofIntent,
@@ -3733,22 +3734,18 @@ export default class SetupPrepCharts extends Command {
     }
 
     const makefileContent = fs.readFileSync(makefilePath, 'utf8')
-    const installCommands = makefileContent.match(/helm\s+upgrade\s+-i.*?(?=\n\n|Z)/gs)
+    const installCommands = parseHelmUpgradeRecipes(makefileContent)
 
-    if (!installCommands) {
+    if (installCommands.length === 0) {
       this.warn('No Helm upgrade commands found in the Makefile.')
       return
     }
 
     for (const command of installCommands) {
-      const chartNameMatch = command.match(/upgrade\s+-i\s+(\S+)/)
-      const ociMatch = command.match(/oci:\/\/(\S+)/)
-      const ociVersionMatch = command.match(/--version\s*=\s*(\S+)\s+/);
-
-      if (chartNameMatch && ociMatch) {
-        const chartName = chartNameMatch[1]
-        const ociUrl = ociMatch[0]
-        const ociVersion = ociVersionMatch && ociVersionMatch.length > 1 ? ociVersionMatch[1] : "";
+      const chartName = command.release
+      if (command.chart.startsWith('oci://')) {
+        const ociUrl = command.chart
+        const ociVersion = command.version || ''
 
         if (!skipAuthCheck) {
           const hasAccess = this.validateOCIAccess(ociUrl, ociVersion)
@@ -3765,16 +3762,13 @@ export default class SetupPrepCharts extends Command {
           }
         }
 
-        const valuesFileMatches = command.match(/-f\s+(\S+)/g)
-        if (valuesFileMatches) {
-          for (const match of valuesFileMatches) {
-            const valuesFile = match.split(' ')[1]
-            if (fs.existsSync(valuesFile)) {
-              this.log(chalk.green(`Values file verified: ${valuesFile}`))
-            } else {
-              this.log(chalk.red(`Values file not found: ${valuesFile}`))
-            }
-          }
+      }
+
+      for (const valuesFile of command.valuesFiles) {
+        if (fs.existsSync(valuesFile)) {
+          this.log(chalk.green(`Values file verified: ${valuesFile}`))
+        } else {
+          this.log(chalk.red(`Values file not found: ${valuesFile}`))
         }
       }
     }
