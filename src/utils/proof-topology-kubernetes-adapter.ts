@@ -585,6 +585,26 @@ function configureL2Genesis(values: Record<string, any>, l2GenesisJson: string):
   }
 }
 
+function configureCoordinatorProbes(values: Record<string, any>, active: boolean): void {
+  values.probes ||= {}
+  for (const name of ['liveness', 'readiness', 'startup']) {
+    // Helm merges chart defaults: explicitly remove the other handler when
+    // switching modes, otherwise exec and httpGet can coexist in one probe.
+    values.probes[name] = {
+      custom: true,
+      enabled: true,
+      spec: {
+        exec: active ? null : {command: ['sh', '-ec', 'kill -0 1']},
+        failureThreshold: name === 'startup' ? 24 : 3,
+        httpGet: active ? {path: name === 'readiness' ? '/readyz' : '/healthz', port: 'prover'} : null,
+        periodSeconds: name === 'startup' ? 5 : 10,
+        tcpSocket: null,
+        timeoutSeconds: 2,
+      },
+    }
+  }
+}
+
 function configureCoordinatorValues(
   filePath: string,
   configContent: string,
@@ -610,6 +630,7 @@ function configureCoordinatorValues(
   values.proofCoordinator.config.required = true
   values.controller ||= {}
   values.controller.replicas = 1
+  configureCoordinatorProbes(values, true)
   values.service ||= {}
   values.service.main ||= {}
   values.service.main.enabled = true
@@ -654,6 +675,7 @@ function configureAbsentCoordinatorValues(
   // observe/local_fs idle config instead of retaining a stale active topology.
   // With WP's proof-work API disabled it has no work to claim, and active
   // compilation replaces this config atomically later.
+  configureCoordinatorProbes(values, false)
   values.env = (Array.isArray(values.env) ? values.env : []).filter(
     (item: any) => !String(item?.name || '').startsWith('DOGEOS_PROOF_COORDINATOR_'),
   )

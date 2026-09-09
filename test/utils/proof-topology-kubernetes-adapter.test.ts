@@ -371,6 +371,11 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     const coordinator = yaml.load(fs.readFileSync(path.join(root, 'values/proof-coordinator-production.yaml'), 'utf8')) as any
     expect(coordinator.controller.replicas).to.equal(1)
     expect(coordinator.service.main.enabled).to.equal(true)
+    for (const name of ['liveness', 'readiness', 'startup']) {
+      expect(coordinator.probes[name].spec.httpGet).to.equal(null)
+      expect(coordinator.probes[name].spec.exec.command).to.deep.equal(['sh', '-ec', 'kill -0 1'])
+    }
+
     expect(coordinator.proofCoordinator.config.required).to.equal(true)
     expect(coordinator.proofCoordinator.config.content).to.include('generation = "mock"')
     expect(coordinator.proofCoordinator.config.content).to.include('enforcement = "observe"')
@@ -380,6 +385,32 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     const worker = yaml.load(fs.readFileSync(path.join(root, 'values/prover-worker-production.yaml'), 'utf8')) as any
     expect(worker.controller.replicas).to.equal(0)
     expect(worker.command).to.deep.equal([])
+  })
+
+  it('restores HTTP probes across disabled-active-disabled mode changes', () => {
+    for (const mode of ['disabled', 'active', 'disabled'] as const) {
+      reconcileCompiledProofTopology({
+        compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), mode),
+        coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+        deploymentDir: root,
+        deploymentName: 'test',
+        network: 'testnet',
+        proofTopology: topology(mode),
+        valuesDir: path.join(root, 'values'),
+        withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
+      })
+      const coordinator = yaml.load(fs.readFileSync(path.join(root, 'values/proof-coordinator-production.yaml'), 'utf8')) as any
+      for (const name of ['liveness', 'readiness', 'startup']) {
+        const {spec} = coordinator.probes[name]
+        if (mode === 'active') {
+          expect(spec.exec).to.equal(null)
+          expect(spec.httpGet).to.deep.equal({path: name === 'readiness' ? '/readyz' : '/healthz', port: 'prover'})
+        } else {
+          expect(spec.httpGet).to.equal(null)
+          expect(spec.exec.command).to.deep.equal(['sh', '-ec', 'kill -0 1'])
+        }
+      }
+    }
   })
 
   it('preserves the raw DA S3 archive when proof topology disables its sidecar', () => {

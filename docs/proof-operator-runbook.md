@@ -45,6 +45,15 @@ Changing a switch means editing the one high-level value, rerunning
 `scrollsdk setup prep-charts`, reviewing the generated diff, and applying the
 normal Helm deployment. It does not mean editing native service files.
 
+In disabled mode Kubernetes retains one idle Coordinator process, but the native
+configuration has no prover HTTP listener. CLI generation therefore uses exec
+process-presence probes (`kill -0 1`) for this mode, not `/healthz` or `/readyz`.
+Idle Ready means only that the daemon is alive; it does not certify proof work,
+gateway health or Worker readiness. Active generation restores the prover-port
+HTTP probes. Both transitions explicitly null the previous probe handler because
+Helm otherwise merges it with chart defaults. Do not enable a fake prover gateway
+or remove active HTTP checks to make an idle deployment appear functional.
+
 ## 2. Ownership boundary
 
 | Component | Responsibility |
