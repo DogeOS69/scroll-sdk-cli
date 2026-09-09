@@ -63,8 +63,23 @@ Full deposit/withdrawal and eager-hit/Batch no-RPC acceptance remains pending.
 Use `reth.sequencer.l1InclusionMode: finalized:0` for the WF-backed synthetic L1:
 `finalized:2` waits for two additional WF transitions, not two Dogecoin blocks.
 Preserve standby autoStart=false, gas 10M and empty blocks. PC ingress is opt-in,
-not automatically enabled by active proof mode. Normal L1 startup already has
-genesis hold disabled; do not blindly run the legacy start-l1-sync command.
+not automatically enabled by active proof mode.
+
+Fresh instances intentionally start with genesis hold enabled. Set
+`DOGEOS_L1_INTERFACE_SEQUENCER_GENESIS_MODE: "true"` before installing L1
+Interface. After contracts have completed and the services and attestation
+signers are prepared, run `make start-l1-sync` to call
+`POST http://l1-interface:9091/disable-genesis-hold`. Verify
+`GET http://l1-interface:9090/health/detailed` reports
+`components.genesis_hold.details.enabled=true` and `activated=true` afterwards:
+`activated` means the hold has been released, not that it is still holding.
+On resume, read this state first and skip the POST only when already released.
+Do not suppress arbitrary HTTP 400 responses. The earlier deployment returned
+400 because its configuration explicitly set the mode to false; that observation
+does not describe the intended fresh-instance workflow.
+
+Mock proof generation is handled inside proof-coordinator. Do not install or
+start the deprecated mock worker; this is independent of genesis-hold release.
 
 ### Current run: repository-root wrapper (supersedes staging phase 1)
 

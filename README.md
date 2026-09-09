@@ -45,6 +45,7 @@ bin/run.js --help
 
 ## Documentation
 
+- [Post-Bridge instance deployment](docs/post-bridge-instance-deployment.md) — environment-owned automation, intentional genesis hold, no mock worker, safe checkpoints and explicit signer cutover. Runtime acceptance stays in the deployment repository.
 - [Fresh devnet redeployment acceptance](docs/devnet-fresh-redeployment.md) — current operator decision: new independent CubeSigner role/key, new Bridge and fresh L2; preserve all existing policies and Kubernetes resources not deployed by this agent.
 - [L1 Interface beta.4e cold start](docs/l1-interface-beta4e-cold-start.md) — required fresh-instance opt-in, isolated storage and verified Kubernetes rollout.
 - [New Bridge / native Reth devnet runbook](docs/devnet-new-bridge-20260909.md) — verified 2026-09-09 steps, manual edits, release pins and the remaining runtime blocker.
