@@ -174,6 +174,29 @@ describe('self-contained proof topology Kubernetes adapter', () => {
 
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
+  for (const mode of ['active', 'disabled'] as const) {
+    for (const enabled of [undefined, false, true]) {
+      it(`preserves operator ingress opt-in (${mode}, ${enabled})`, () => {
+        const file = path.join(root, 'values/proof-coordinator-production.yaml')
+        const values = yaml.load(fs.readFileSync(file, 'utf8')) as any
+        values.ingress = enabled === undefined ? {} : {main: {enabled}}
+        fs.writeFileSync(file, yaml.dump(values))
+        reconcileCompiledProofTopology({
+          compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), mode),
+          coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+          deploymentDir: root,
+          deploymentName: 'test',
+          network: 'testnet',
+          proofTopology: topology(mode),
+          valuesDir: path.join(root, 'values'),
+          withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
+        })
+        const actual = yaml.load(fs.readFileSync(file, 'utf8')) as any
+        expect(actual.ingress.main.enabled).to.equal(enabled ?? false)
+      })
+    }
+  }
+
   it('keeps real materialization self-contained without deploying a mock Worker', () => {
     const result = reconcileCompiledProofTopology({
       compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active'),

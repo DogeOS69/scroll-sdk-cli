@@ -680,7 +680,8 @@ function configureCoordinatorValues(
   }
   values.ingress ||= {}
   values.ingress.main ||= {}
-  values.ingress.main.enabled = true
+  // Public exposure is operator-owned, not implied by active proof mode.
+  values.ingress.main.enabled ??= false
   annotate(values, bundleRevision)
   configureMaterials(
     values,
@@ -743,7 +744,7 @@ function configureAbsentCoordinatorValues(
   values.service.main.enabled = true
   values.ingress ||= {}
   values.ingress.main ||= {}
-  values.ingress.main.enabled = true
+  values.ingress.main.enabled ??= false
   values.configMaps ||= {}
   values.persistence ||= {}
   delete values.configMaps[MATERIALS_CONFIG_MAP]
