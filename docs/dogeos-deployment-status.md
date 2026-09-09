@@ -67,8 +67,10 @@ readiness, and end-to-end acceptance are different milestones.
   [EC2 signer cutover](ec2-signer-cutover-20260909.md) is complete; old Worker is
   stopped while proofs remain disabled. TSO/public
   RPC TLS and a WebSocket newHeads subscription now pass; see
-  [TLS and signer handoff](devnet-tls-and-signer-handoff.md) for the remaining
-  CubeSigner policy evidence dependency.
+  [TLS and signer handoff](devnet-tls-and-signer-handoff.md). The operator selected
+  transport_only; [CubeSigner runtime](cubesigner-transport-runtime.md) now passes
+  session/processing readiness and re-registration. Actual signing, withdrawal
+  settlement and production proof-policy acceptance are not yet established.
   Blockscout is explicitly deferred because RDS admin credentials are
   unavailable. Do not reset RDS or deploy retired PostgreSQL consumers to proceed.
 
