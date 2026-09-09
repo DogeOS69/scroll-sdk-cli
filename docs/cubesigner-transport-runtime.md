@@ -5,6 +5,11 @@ deployment. The old production-policy evidence requirement is therefore not a
 blocker for **this transport-only runtime**, but production proof acceptance is
 still not established. Remote CubeSigner key policy was not changed.
 
+Later actual signing exposed a separate remote role-policy blocker:
+[`WasmPolicyDenied / wrong_namespace`](cubesigner-devnet-namespace-blocker.md).
+Transport-only startup/health success does not imply the remote policy permits
+the existing Bridge. Follow that handoff before retrying the terminal WP job.
+
 ## Commands and configuration
 
 From the deployment directory:

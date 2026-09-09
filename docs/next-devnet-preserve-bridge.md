@@ -53,6 +53,9 @@ build and verifier-start validation in [native proof image tools](proof-image-to
 The cluster is now running active/mock/observe. See the
 [live rollout checkpoint](#live-rollout-checkpoint-2026-09-09) for executed repairs
 and remaining acceptance; the earlier disabled-profile notes are historical.
+The current end-to-end blocker is the
+[CubeSigner role policy namespace](cubesigner-devnet-namespace-blocker.md),
+discovered after successful proof processing and attestation signatures.
 
 PR #1136 merged as `8b1d22ecb55544456b0d4846bafbb30e952ff7a4`.
 GitHub comparison confirms `v0.3.0-beta.4e` contains it (30 commits ahead,
@@ -340,3 +343,10 @@ with no Worker deployment. PC logged `eager_locate_hit` / valid locator with no
 Chunk subprocess run. The fresh WP DA index was still catching up. A completed
 deposit/withdrawal, Batch child zero-RPC evidence and final clean runtime checks
 are **not yet claimed**; continue those checks before marking this run complete.
+
+At the later checkpoint, all 48 admitted Chunk/Batch proof pipelines and one
+Bridge proof succeeded. Eager reported 50 produced chunks. AdvanceL1 reached real
+TSO signing with all three attestation signers, but CubeSigner returned permanent
+`wrong_namespace` from the Devnet role's remote WASM policy. The job is terminal;
+no WF was broadcast. See the [owner/core handoff](cubesigner-devnet-namespace-blocker.md)
+before attempting recovery. Do not mark this deployment complete or reset Bridge.
