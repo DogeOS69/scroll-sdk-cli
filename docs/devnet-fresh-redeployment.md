@@ -21,6 +21,10 @@ Hard boundaries:
   Other-owned/unknown resources remain untouched. Ask before resolving any
   protected name, storage or Helm ownership conflict; create new resources only
   within the fresh deployment's scope.
+- Explicit later exception: the user confirmed `scroll-common` and `contracts`
+  were forgotten during cleanup and authorized uninstalling precisely those
+  releases. Exact-name uninstall succeeded; all other baseline resources stay
+  protected. New deployment can recreate the two releases with fresh configs.
 - Preserve shared Dogecoin/Shadowfork/orchestrator workloads and storage,
   monitoring infrastructure, other test workloads, EKS, DNS/TLS, S3 bucket,
   existing KMS keys/roles and external databases. Blockscout remains deferred.
@@ -39,11 +43,11 @@ Hard boundaries:
   remaining `scroll-common` and `contracts` Helm releases, including their
   `genesis-config`, `protocol-context-config`, `contracts-deployment-env` and
   `scroll-smart-contracts-config` ConfigMaps and contracts ExternalSecret.
-  These are now protected baseline resources. Updating their contents for a
-  new chain requires explicit clarification before installation proceeds;
-  no uninstall, deletion, scaling, ConfigMap update or Bridge broadcast was
-  performed during this resumed preflight. The existing sqlite-debug Deployments
-  both have zero replicas and remain untouched.
+  User subsequently authorized uninstalling precisely these two releases.
+  Exact-name uninstall exited 0, resolving that configuration conflict. Neither
+  release manifest contains a PVC/PV. No other existing resource was selected.
+  The existing sqlite-debug Deployments both have zero replicas and remain
+  untouched. No Bridge broadcast has occurred at this checkpoint.
 - CLI branch: `fix/fresh-devnet-cubesigner-runbook`, starting at `7c504e1`.
 - Private workspace: `/data/dogeos-devnet-fresh-20260909.grtp5c` (0700).
   Staging is its `staging/` subdirectory, an ordinary directory, not a worktree.
@@ -66,7 +70,15 @@ Hard boundaries:
   `gen-configs-56a4cacda6046c9445af023aefee15a42fda2fdd` image. New
   `values/genesis.yaml` SHA256:
   `5b03183fc8a473f35cc9b7b2f2246a1e9c563e125cdd50357b9d99f6908e03da`.
-  Actual Reth init validation and Bridge generation have not yet run.
+  `bridge-init --step 1-prepare` subsequently succeeded with beta.4e at
+  07:16:10 UTC, extracting `.data/genesis.json` and generating the protocol seed.
+  A fresh random seed was passed through the CLI; its JSON echo was suppressed.
+  Actual `rollup-node:v0.3.0-beta.1c init` then passed with no network and tmpfs
+  storage. Frozen L2 genesis block:
+  `0x5357626ba823a474967d72f7e1ce88c1d2df95864b44498aff5edce744c79811`.
+  Bridge setup/funding have not yet run. The staged source still contains the
+  previous instance's spent funding UTXO; supply a fresh verified input before
+  step 2. Do not repeat step 1 with another random seed when resuming.
 
 ## CubeSigner initialization and safe resume
 
@@ -121,7 +133,8 @@ and test the CLI on the approved branch, commit the fix, and rerun safely.
 ## Pending deployment sequence
 
 1. Finish protected-baseline inventory; resolve the existing scroll-common and
-   contracts configuration conflict with the user before any cluster mutation.
+   contracts configuration conflict with the user before any cluster mutation
+   (resolved by the explicit two-release removal authorization above).
 2. Review fresh canonical input files: domain, Sepolia/KMS, Reth identities,
    release pins, 10M gas limit, empty blocks, DA interval and new archive prefix.
 3. Generate L2 artifacts once with the approved contracts gen-configs image;
