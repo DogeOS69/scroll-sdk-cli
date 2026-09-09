@@ -279,6 +279,9 @@ export function stripMigratedWithdrawalEnv(
     const entry = values.env[index]
     const name = String(entry?.name || '')
     if (!name.startsWith('DOGEOS_WITHDRAWAL_')) continue
+    // beta.4e's explicit storage-initialization opt-in is an operator-owned
+    // runtime switch, not a field emitted by the pinned topology compiler.
+    if (name === 'DOGEOS_WITHDRAWAL_FRESH_GENESIS_INIT') continue
     if (entry.valueFrom !== undefined) continue
     if (isWithdrawalProofActivationEnv(name)) continue
     changes.push({

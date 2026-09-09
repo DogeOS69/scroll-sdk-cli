@@ -174,6 +174,17 @@ ${WITHDRAWAL_DEPLOYMENT_END}
       .to.throw('must be the first content of the file')
   })
 
+  it('preserves the explicit fresh-genesis storage switch without enabling it implicitly', () => {
+    for (const value of ['true', 'false']) {
+      const values = {env: [{name: 'DOGEOS_WITHDRAWAL_FRESH_GENESIS_INIT', value}]}
+      expect(stripMigratedWithdrawalEnv(values)).to.deep.equal([])
+      expect(values.env).to.deep.equal([{name: 'DOGEOS_WITHDRAWAL_FRESH_GENESIS_INIT', value}])
+    }
+    const values = {env: []}
+    stripMigratedWithdrawalEnv(values)
+    expect(values.env).to.deep.equal([])
+  })
+
   it('strips migrated env while leaving final proof-override cleanup to the lifecycle projector', () => {
     const values: Record<string, any> = {
       env: [
