@@ -128,6 +128,12 @@ container used to copy the data-only image was removed after extraction.
 
 ## Local changes already made (not rolled out)
 
+Subsequent image-tool checkpoint: beta.4e materializers and the placeholder
+Worker identity were exported; the historical CPU producer successfully derived
+Scroll identities from the five candidate inputs. This does not certify current
+Batch/Aggregation compatibility. See [native proof image tools](proof-image-tools.md)
+for exact commands, hashes, strict rejection and the remaining core packaging gap.
+
 The deployment's private `.data/doge-config.toml` now explicitly contains:
 
 ```toml

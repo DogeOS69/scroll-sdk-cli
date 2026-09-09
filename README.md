@@ -63,6 +63,9 @@ bin/run.js --help
 - [Proof material preparation](docs/proof-materials.md) — local
   `scroll-zkvm-prover`/dogeos-core derivation, Bridge bake, validation, and the
   CLI-owned material receipt.
+- [Native proof image tools](docs/proof-image-tools.md) — invoke pinned CPU
+  tools, export materializers/identities, and reject placeholder Batch identities
+  before real-materialization activation.
 - [CLI automation reference](docs/automation.md) — `--non-interactive`, JSON,
   environment references, retries, and secret handling; it does not define
   deployment order.

@@ -13,6 +13,13 @@ proof-topology compiler. It has two intentionally different paths:
 
 It is an operator import workflow, not a proof-software publication authority.
 
+For published Docker tools, start with [native proof image tools](proof-image-tools.md).
+`setup proof-image-tools` exports or derives native evidence without a deployment
+or GPU Worker. Its receipt is not a replacement for this command's validated
+material receipt. Mock proof generation with **real materialization** additionally
+requires non-placeholder matching identities and the real Scroll material files;
+the lightweight mock path above covers synthetic materialization only.
+
 ## What is produced
 
 The command writes `.data/proof-materials-v1.json` with schema

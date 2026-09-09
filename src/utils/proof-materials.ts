@@ -185,7 +185,7 @@ function validateGuestCommit(value: Record<string, unknown>, label: string): voi
   if (raw !== `0x${exe}${vm}`) throw new Error(`${label}.app_commit_raw does not match app_exe_commit ++ app_vm_commit`)
 }
 
-function validateMockWorkerIdentity(body: string, label: string): void {
+export function validateMockWorkerIdentity(body: string, label: string): void {
   mockWorkerAggregationIdentity(body, label)
 }
 
