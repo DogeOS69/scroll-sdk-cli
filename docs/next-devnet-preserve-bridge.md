@@ -1,5 +1,10 @@
 # Next-devnet upgrade: preserve the existing Bridge
 
+**Historical checkpoint:** the operator subsequently authorized a complete fresh
+deployment with a new independent CubeSigner role/key and fresh L2. Follow
+[the current redeployment plan](devnet-fresh-redeployment.md). Do not change
+existing CubeSigner policies or delete Kubernetes resources owned by others.
+
 Checkpoint: 2026-09-09. Operator decision: **do not initialize another Bridge**.
 This is an upgrade of the existing devnet, not another chain deployment.
 

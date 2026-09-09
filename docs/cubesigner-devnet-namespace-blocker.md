@@ -1,5 +1,13 @@
 # Devnet acceptance blocked by CubeSigner role policy namespace
 
+**Historical failure / superseded repair plan:** the operator forbids changing
+existing role/key policies and has selected a new independent role/key plus a
+fresh Bridge and L2. Follow [the current plan](devnet-fresh-redeployment.md),
+not the owner-policy replacement procedure below. Core explicitly supports a
+plain/no-WASM-policy `transport_only` testnet lane; a new matching WASM policy
+is not the only development deployment option. A denial of policy-log access
+alone also does not establish whether the caller can update a role attachment.
+
 Checkpoint: 2026-09-09, failure at 06:29:46 UTC. This is a real signing attempt
 on `dogeos-devnet-cluster`, not a hypothetical production-evidence prerequisite.
 

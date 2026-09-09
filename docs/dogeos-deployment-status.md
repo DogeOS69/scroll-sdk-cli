@@ -23,6 +23,12 @@ readiness, and end-to-end acceptance are different milestones.
 
 ## Current checkpoint
 
+The entries below describe earlier instances. The latest operator decision is
+[a full fresh redeployment](devnet-fresh-redeployment.md) with independent new
+CubeSigner identity and no changes to existing policies. That page owns the
+current execution/resume status; historical preserve-Bridge and owner-policy
+repair requirements below are not the current plan.
+
 - Latest decision: preserve this existing Bridge for the PR #1136 upgrade.
   Read-only chain/replay checks confirmed WF #0 and the unspent genesis
   sequencer outpoint. CLI/chart adaptation is staged, but real materialization
