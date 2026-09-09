@@ -3,7 +3,7 @@ import { confirm, input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import * as yaml from 'js-yaml'
-import { exec } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { promisify } from 'node:util'
@@ -11,7 +11,7 @@ import { promisify } from 'node:util'
 import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 
-const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 
 export default class SetupTls extends Command {
   static override description = 'Update TLS configuration in Helm charts'
@@ -47,6 +47,9 @@ export default class SetupTls extends Command {
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)',
     }),
+    'kube-context': Flags.string({
+      description: 'Explicit Kubernetes context for issuer checks and creation',
+    }),
     'non-interactive': Flags.boolean({
       char: 'N',
       default: false,
@@ -61,6 +64,7 @@ export default class SetupTls extends Command {
   private debugMode: boolean = false
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
+  private kubeContext: string | undefined
   private nonInteractive: boolean = false
   private selectedIssuer: null | string = null
   private valuesDir: string = 'values'
@@ -74,6 +78,7 @@ export default class SetupTls extends Command {
 
     this.debugMode = flags.debug
     this.valuesDir = flags['values-dir']
+    this.kubeContext = flags['kube-context']
 
     // In non-interactive mode, validate required flags
     if (this.nonInteractive) {
@@ -164,6 +169,8 @@ export default class SetupTls extends Command {
         'bridge-history-api',
         'rollup-explorer-backend',
         'l2-rpc',
+        'l2-reth-rpc',
+        'l2-reth-rpc-public',
         'l1-devnet',
         'scroll-monitor',
         'tso-service',
@@ -205,7 +212,7 @@ export default class SetupTls extends Command {
 
   private async checkClusterIssuer(specifiedIssuer?: string): Promise<boolean> {
     try {
-      const { stdout } = await execAsync('kubectl get clusterissuer -o jsonpath="{.items[*].metadata.name}"')
+      const { stdout } = await this.kubectl(['get', 'clusterissuer', '-o', 'jsonpath={.items[*].metadata.name}'])
       const clusterIssuers = stdout.trim().split(' ').filter(Boolean)
 
       if (clusterIssuers.length > 0) {
@@ -285,7 +292,7 @@ spec:
 
     try {
       await fs.promises.writeFile('cluster-issuer.yaml', clusterIssuerYaml)
-      await execAsync('kubectl apply -f cluster-issuer.yaml')
+      await this.kubectl(['apply', '-f', 'cluster-issuer.yaml'])
       await fs.promises.unlink('cluster-issuer.yaml')
       this.jsonCtx.info('ClusterIssuer created successfully.')
     } catch (error) {
@@ -297,6 +304,10 @@ spec:
         { error: String(error) }
       )
     }
+  }
+
+  private kubectl(args: string[]) {
+    return execFileAsync('kubectl', this.kubeContext ? ['--context', this.kubeContext, ...args] : args)
   }
 
   private async loadConfig(): Promise<any> {

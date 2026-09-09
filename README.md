@@ -1902,7 +1902,7 @@ Update TLS configuration in Helm charts
 ```
 USAGE
   $ scrollsdk setup tls [--cluster-issuer <value>] [--create-issuer] [-d] [--issuer-email <value>] [--json]
-    [-N] [--values-dir <value>]
+    [--kube-context <value>] [-N] [--values-dir <value>]
 
 FLAGS
   -N, --non-interactive         Run without prompts. Requires --cluster-issuer or (--create-issuer with --issuer-email)
@@ -1911,6 +1911,7 @@ FLAGS
       --create-issuer           Create a letsencrypt-prod ClusterIssuer if none exists (for non-interactive mode)
       --issuer-email=<value>    Email address for the ClusterIssuer (required with --create-issuer)
       --json                    Output in JSON format (stdout for data, stderr for logs)
+      --kube-context=<value>    Explicit Kubernetes context for issuer checks and creation
       --values-dir=<value>      [default: values] Directory containing the values files
 
 DESCRIPTION
