@@ -76,6 +76,68 @@ targeted lint has no errors and one complexity warning.
 
 ## Current release gap and the next activation gate
 
+**Mock-scope correction:** the full three-phase real-proving workflow below is
+not a prerequisite for this devnet's internal mock producer. Core's
+`identity_ingest.rs` requires a non-placeholder **Batch** commit for
+`withdrawal_mock_prover_real_materialize`; `worker_identity.rs` explicitly
+supports injecting `DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW` at compile time. Build
+the CPU export binary from the exact beta.4e revision with that native-derived
+Batch value, retaining the release's compiled Aggregation identity. Do not bake
+a new real Bridge guest or pretend this mock bundle approves real proving.
+
+The CLI now accepts `setup proof-materials --generation mock
+--scroll-identity-evidence PATH --worker-identity-bundle PATH` as an alternative
+to `--identity-env`. It imports native Chunk/Batch identities, takes Aggregation
+from the compiled Worker bundle, and explicitly retains the topology-only mock
+Bridge identity. It checks the native schema, OpenVM version, aggregate VK file
+hash/size, program hashes and Batch/Worker agreement. The native evidence is
+copied and hashed in the receipt with source `dogeos_core_scroll_identity_v1`;
+this source is **refused for generation=real**. Normal compiler/runtime checks
+still apply. This avoids requiring real Bridge env fields for a mock deployment.
+
+CPU fallback, with an unmodified checkout of the approved core revision in
+`CORE_BUILD`, the native JSON in `SCROLL_IDENTITIES`, and a new `OUTPUT_DIR`:
+
+```bash
+test "$(git -C "$CORE_BUILD" rev-parse HEAD)" = eef62d3e40a387b1f53b24825c2e85af54facbc8
+git -C "$CORE_BUILD" diff --exit-code HEAD
+BATCH_COMMIT=$(jq -er '.batch.recursive_app_commit_raw' "$SCROLL_IDENTITIES")
+(
+  cd "$CORE_BUILD"
+  env -u DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW \
+    CARGO_BUILD_JOBS=4 GIT_COMMIT=eef62d3e40a387b1f53b24825c2e85af54facbc8 \
+    DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW="$BATCH_COMMIT" \
+    cargo +nightly-2026-03-17 build --locked --release --package prover_worker \
+      --no-default-features --features dev-mock-prover,bridge-worker --bin prover-worker
+)
+mkdir "$OUTPUT_DIR"
+"$CORE_BUILD/target/release/prover-worker" --print-identity-json \
+  > "$OUTPUT_DIR/worker-identity-bundle.json"
+```
+
+No daemon is started. Record the source SHA, build inputs and executable hash
+with this locally generated bundle; do not claim it was exported from the
+unmodified published mock image. The `mockWorker` image reference remains a
+release reference, not a deployment contract: the current compiler emits no
+mock Worker service. Current-native verifier/materializer preflight must pass
+before activating this candidate on the cluster.
+
+Import with new material/output destinations (do not overwrite old receipts):
+
+```bash
+scrollsdk setup proof-materials --generation mock --non-interactive \
+  --scroll-identity-evidence "$SCROLL_IDENTITIES" \
+  --worker-identity-bundle "$OUTPUT_DIR/worker-identity-bundle.json" \
+  --aggregate-verifying-key "$CANDIDATE_RELEASE/verifier/aggregate-vk" \
+  --chunk-materializer .data/generated/proof-image-tools-beta4e/materialize-chunk-oneshot \
+  --batch-materializer .data/generated/proof-image-tools-beta4e/scroll-runtime-materializer \
+  --materials-dir .data/proof-materials-beta4e \
+  --output .data/proof-materials-beta4e.json \
+  --mock-worker-image dogeos69/prover-worker-mock@sha256:e5de8a3782b88590eda0083977cf882c61b1eb2994fdd647e464984cb1f69a38 \
+  --compiler-image dogeos69/dogeos-proof-topology@sha256:c48946dc0af058d839cf064034c805e681fa8439e377ba8ecf4afbbefb02620a \
+  --json
+```
+
 The inspected Docker Hub repositories contain a historical CPU artifact baker,
 beta.4e PC materializers and beta.4e mock Worker. No matching beta.4e CPU identity
 producer was found in that inspection. The historical producer's outputs cannot

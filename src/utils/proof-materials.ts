@@ -100,6 +100,7 @@ export interface PrepareProofMaterialsOptions {
   producerManifest?: string
   protocolContext?: string
   refreshExistingImages?: boolean
+  scrollIdentityEvidence?: string
   /**
    * Canonical worker-identity-bundle.json emitted by the matching dogeos-core
    * bake. Required when mock proving uses real Scroll materialization because
@@ -623,6 +624,45 @@ function refreshExistingProofMaterialImages(
   return {receipt, receiptPath}
 }
 
+/** Consume native Scroll output without inventing a real Bridge identity. */
+function mockScrollIdentityEnv(file: string, workerBody: string, aggregateVk: string): Record<string, string> {
+  const evidence = mapping(JSON.parse(fs.readFileSync(file, 'utf8')), 'Scroll identity evidence')
+  if (evidence.schema !== 'dogeos/proof-scroll-identities/v1' || evidence.schema_version !== 1) throw new Error('Unsupported native Scroll identity schema')
+  const worker = mapping(JSON.parse(workerBody), 'Worker identity')
+  if (evidence.openvm_version !== worker.openvm_version) throw new Error('Scroll and Worker OpenVM versions differ')
+  const artifacts = mapping(evidence.artifacts, 'Scroll identity artifacts')
+  const vk = mapping(artifacts.aggregate_verification_key, 'Scroll aggregate VK artifact')
+  const vkSha = requiredString(vk.sha256, 'Scroll aggregate VK sha256').replace(/^sha256:/, '')
+  if (normalizeSha256(vkSha, 'Scroll aggregate VK sha256') !== sha256File(aggregateVk)
+    || vk.size_bytes !== fs.statSync(aggregateVk).size) throw new Error('Scroll identity evidence aggregate VK differs from supplied file')
+  const chunk = mapping(evidence.chunk, 'Scroll chunk identity')
+  const batch = mapping(evidence.batch, 'Scroll batch identity')
+  for (const [name, value] of [['chunk', chunk], ['batch', batch]] as const) {
+    const raw = canonicalHex(value.program_commitment_le_raw, 64, `${name} program commitment`)
+    if (canonicalHex(value.program_commitment_hash, 32, `${name} commitment hash`) !== sha256Bytes(raw)) throw new Error(`${name} native commitment hash mismatch`)
+    canonicalHex(value.verification_key_hash, 32, `${name} verification key hash`)
+  }
+
+  const aggregation = mockWorkerAggregationIdentity(workerBody, 'Worker identity')
+  const mockBridge = syntheticMockProofIdentities().bridge
+  const env = {
+    DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW: aggregation.appCommitRaw,
+    DOGEOS_BATCH_PROGRAM_COMMITMENT: String(batch.program_commitment_hash),
+    DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW: canonicalHex(batch.recursive_app_commit_raw, 64, 'native Batch recursive app commitment'),
+    DOGEOS_BATCH_SCROLL_PROGRAM_COMMITMENT_RAW: String(batch.program_commitment_le_raw),
+    DOGEOS_BATCH_VK_HASH: String(batch.verification_key_hash),
+    // Mock Bridge identity is explicitly topology-only; no Bridge guest is baked.
+    DOGEOS_BRIDGE_APP_COMMIT_RAW: mockBridge.appCommitRaw,
+    DOGEOS_BRIDGE_PROGRAM_COMMITMENT: mockBridge.programCommitmentHash,
+    DOGEOS_BRIDGE_VK_HASH: mockBridge.verificationKeyHash,
+    DOGEOS_CHUNK_PROGRAM_COMMITMENT: String(chunk.program_commitment_hash),
+    DOGEOS_CHUNK_PROGRAM_COMMITMENT_RAW: String(chunk.program_commitment_le_raw),
+    DOGEOS_CHUNK_VK_HASH: String(chunk.verification_key_hash),
+  }
+  validateRealMaterializationWorkerIdentity(workerBody, env, 'Worker identity bundle')
+  return env
+}
+
 export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
   receipt: ProofMaterialsV1
   receiptPath: string
@@ -634,7 +674,11 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
     if (image) immutableProofImage(image)
   }
 
-  if (options.generation === 'mock' && options.identityEnv
+  if (options.scrollIdentityEvidence && (options.generation !== 'mock' || options.identityEnv || options.refreshExistingImages)) {
+    throw new Error('--scroll-identity-evidence is mock-only and cannot be combined with identity-env or image-only refresh')
+  }
+
+  if (options.generation === 'mock' && (options.identityEnv || options.scrollIdentityEvidence)
     && !options.workerIdentityBundle && !options.mockWorkerIdentity) {
     throw new Error(
       'Mock proving with real materialization requires --worker-identity-bundle from the matching dogeos-core bake; '
@@ -664,6 +708,11 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
     }
   } else if (options.generation === 'real') {
     throw new Error('Real proof materials require --identity-env')
+  }
+
+  if (options.scrollIdentityEvidence) {
+    if (!options.aggregateVerifyingKey) throw new Error('Native Scroll identity import requires --aggregate-verifying-key')
+    env = mockScrollIdentityEnv(options.scrollIdentityEvidence, mockWorkerIdentity, options.aggregateVerifyingKey)
   }
 
   let producer: ProducerManifest | undefined
@@ -731,8 +780,12 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
           MOCK_WORKER_IDENTITY_RELATIVE_PATH,
         ),
         identities,
-        identitySource: env ? 'real_identity_probe' : 'dogeos_core_synthetic_mock_v1',
+        identitySource: options.scrollIdentityEvidence ? 'dogeos_core_scroll_identity_v1' : env ? 'real_identity_probe' : 'dogeos_core_synthetic_mock_v1',
       },
+    }
+
+    if (options.scrollIdentityEvidence) {
+      receipt.software.scrollIdentityEvidence = copyMaterial(deploymentDir, outputRoot, options.scrollIdentityEvidence, 'software/identity/scroll-identities.json')
     }
 
     if (producer && chunkMaterializer && batchMaterializer) {
@@ -897,7 +950,7 @@ export function readProofMaterials(receiptPath: string, deploymentDir = path.dir
       identitySource: requiredString(software.identitySource, 'software.identitySource') as ProofMaterialsV1['software']['identitySource'],
     },
   }
-  if (!['dogeos_core_synthetic_mock_v1', 'real_identity_probe'].includes(receipt.software.identitySource)) {
+  if (!['dogeos_core_scroll_identity_v1', 'dogeos_core_synthetic_mock_v1', 'real_identity_probe'].includes(receipt.software.identitySource)) {
     throw new Error(`Unsupported proof identity source: ${receipt.software.identitySource}`)
   }
 
@@ -941,6 +994,15 @@ export function readProofMaterials(receiptPath: string, deploymentDir = path.dir
     }
   }
 
+  if (software.scrollIdentityEvidence !== undefined) {
+    receipt.software.scrollIdentityEvidence = proofMaterialFile(software.scrollIdentityEvidence, 'software.scrollIdentityEvidence')
+  }
+
+  if (receipt.software.identitySource === 'dogeos_core_scroll_identity_v1'
+    && (!receipt.software.scrollIdentityEvidence || !receipt.software.compilerIdentity || !receipt.software.materializationArtifacts)) {
+    throw new Error('Native Scroll identity receipt requires evidence, Worker identity and materialization files')
+  }
+
   if (root.bridge !== undefined) {
     const bridge = mapping(root.bridge, 'proof material receipt.bridge')
     const bridgeArtifacts = mapping(bridge.artifacts, 'proof material receipt.bridge.artifacts')
@@ -964,6 +1026,7 @@ export function readProofMaterials(receiptPath: string, deploymentDir = path.dir
   }
 
   for (const file of [
+    ...(receipt.software.scrollIdentityEvidence ? [receipt.software.scrollIdentityEvidence] : []),
     ...(receipt.software.compilerIdentity ? [receipt.software.compilerIdentity] : []),
     ...Object.values(receipt.software.artifacts ?? {}),
     ...Object.values(receipt.software.materializationArtifacts ?? {}),

@@ -36,6 +36,7 @@ export default class ProofMaterials extends Command {
     output: Flags.string({default: DEFAULT_PROOF_MATERIALS_RECEIPT, description: 'Deployment-relative receipt path'}),
     'production-worker-image': Flags.string({description: 'Real Worker release tag or digest; real only'}),
     'protocol-context': Flags.string({description: 'Deployment protocol_context.json required with --bridge-artifact-dir; real only'}),
+    'scroll-identity-evidence': Flags.string({description: 'Native proof-scroll-identities-v1.json for mock real materialization without a real Bridge bake; excludes identity-env'}),
     'software-manifest': Flags.string({description: 'real-proving-artifacts.json written by dogeos-core --check-only; real only'}),
     'worker-identity-bundle': Flags.string({description: 'Canonical worker-identity-bundle.json from the matching dogeos-core bake; required for mock proving with real materialization'}),
   }
@@ -72,8 +73,12 @@ export default class ProofMaterials extends Command {
         throw new Error('Real-only flags were supplied with --generation mock; remove them or select --generation real')
       }
 
-      if (flags['worker-identity-bundle'] && !(generation === 'mock' && flags['identity-env'])) {
-        throw new Error('--worker-identity-bundle is valid only with --generation mock --identity-env')
+      if (flags['scroll-identity-evidence'] && (generation !== 'mock' || flags['identity-env'])) {
+        throw new Error('--scroll-identity-evidence is mock-only and excludes --identity-env')
+      }
+
+      if (flags['worker-identity-bundle'] && !(generation === 'mock' && (flags['identity-env'] || flags['scroll-identity-evidence']))) {
+        throw new Error('--worker-identity-bundle requires mock with identity-env or scroll-identity-evidence')
       }
 
       if (generation === 'real' && flags['aggregate-verifying-key']) {
@@ -83,14 +88,15 @@ export default class ProofMaterials extends Command {
       const identityEnv = generation === 'real'
         ? await required(flags['identity-env'], 'Enter the dogeos-core real-identity.env path:', 'identity-env')
         : flags['identity-env']?.trim()
-      const workerIdentityBundle = generation === 'mock' && identityEnv
+      const nativeScrollEvidence = flags['scroll-identity-evidence']
+      const workerIdentityBundle = generation === 'mock' && (identityEnv || nativeScrollEvidence)
         ? await required(
           flags['worker-identity-bundle'],
           'Enter the matching dogeos-core worker-identity-bundle.json path:',
           'worker-identity-bundle',
         )
         : flags['worker-identity-bundle']?.trim()
-      const aggregateVerifyingKey = generation === 'mock' && identityEnv
+      const aggregateVerifyingKey = generation === 'mock' && (identityEnv || nativeScrollEvidence)
         ? await required(
           flags['aggregate-verifying-key'],
           'Enter the root aggregate verifying key path:',
@@ -98,7 +104,7 @@ export default class ProofMaterials extends Command {
         )
         : undefined
       const softwareManifest = generation === 'real' ? await required(flags['software-manifest'], 'Enter the dogeos-core real-proving artifact manifest path:', 'software-manifest') : undefined
-      const usesRealMaterializers = generation === 'real' || Boolean(identityEnv)
+      const usesRealMaterializers = generation === 'real' || Boolean(identityEnv || nativeScrollEvidence)
       const chunkMaterializer = usesRealMaterializers ? await required(flags['chunk-materializer'], 'Enter the built Chunk materializer binary path:', 'chunk-materializer') : undefined
       const batchMaterializer = usesRealMaterializers ? await required(flags['batch-materializer'], 'Enter the built Batch materializer binary path:', 'batch-materializer') : undefined
       const compilerImage = await required(
@@ -160,7 +166,8 @@ export default class ProofMaterials extends Command {
         refreshExistingImages: generation === 'mock'
           && Boolean(flags['compiler-image'])
           && Boolean(flags['mock-worker-image'])
-          && !identityEnv,
+          && !identityEnv && !nativeScrollEvidence,
+        scrollIdentityEvidence: nativeScrollEvidence ? path.resolve(nativeScrollEvidence) : undefined,
         workerIdentityBundle: workerIdentityBundle ? path.resolve(workerIdentityBundle) : undefined,
       })
 

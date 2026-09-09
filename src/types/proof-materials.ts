@@ -60,7 +60,7 @@ export interface ProofMaterialsV1 {
       chunk: ProofProgramIdentityV1
       l2Range: ProofProgramIdentityV1
     }
-    identitySource: 'dogeos_core_synthetic_mock_v1' | 'real_identity_probe'
+    identitySource: 'dogeos_core_scroll_identity_v1' | 'dogeos_core_synthetic_mock_v1' | 'real_identity_probe'
     /** Files required by production-shaped materialization with mock proving. */
     materializationArtifacts?: {
       aggregateVerifyingKey: ProofMaterialFileV1
@@ -69,6 +69,8 @@ export interface ProofMaterialsV1 {
     }
     openvmVersion?: string
     rustToolchain?: string
+    /** Native Scroll derivation evidence; mock materialization only, not a Bridge bake. */
+    scrollIdentityEvidence?: ProofMaterialFileV1
     sourceRevisions?: {
       dogeosCore: string
       scrollZkvmProver: string

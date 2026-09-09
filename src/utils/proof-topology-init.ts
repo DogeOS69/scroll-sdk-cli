@@ -91,6 +91,7 @@ export function buildProofTopology(options: BuildProofTopologyOptions): ProofTop
   // identities can only support the one-chunk exact-mock development profile.
   const realMaterialization = generation === 'real'
     || materials.software.identitySource === 'real_identity_probe'
+    || materials.software.identitySource === 'dogeos_core_scroll_identity_v1'
   if (generation === 'real' && materials.software.identitySource !== 'real_identity_probe') {
     throw new Error('real proof generation requires identities produced by the dogeos-core real identity probe')
   }
