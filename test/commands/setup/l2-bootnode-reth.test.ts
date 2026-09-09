@@ -92,7 +92,7 @@ describe('setup l2-bootnode-reth', () => {
     it(`preserves custom remote paths across regeneration (${name})`, () => {
       const remoteKey = 'dogeos/custom-instance/bootnode-key'
       const values: any = {externalSecrets: {[name]: {data: [
-        {secretKey: 'RETH_NODEKEY', remoteRef: {key: remoteKey}},
+        {remoteRef: {key: remoteKey}, secretKey: 'RETH_NODEKEY'},
       ]}}}
       for (let pass = 0; pass < 2; pass++) {
         applyBootnodeRethValues(values, {

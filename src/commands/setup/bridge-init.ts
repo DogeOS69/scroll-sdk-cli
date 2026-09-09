@@ -291,9 +291,9 @@ export class BridgeInitCommand extends Command {
   }
 
   private dockerPlatform: string = 'linux/amd64'
-  private kubeContext?: string
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
+  private kubeContext?: string
   private nonInteractive: boolean = false
   private selectedInitialSystemSigner?: string
 

@@ -180,6 +180,7 @@ ${WITHDRAWAL_DEPLOYMENT_END}
       expect(stripMigratedWithdrawalEnv(values)).to.deep.equal([])
       expect(values.env).to.deep.equal([{name: 'DOGEOS_WITHDRAWAL_FRESH_GENESIS_INIT', value}])
     }
+
     const values = {env: []}
     stripMigratedWithdrawalEnv(values)
     expect(values.env).to.deep.equal([])
