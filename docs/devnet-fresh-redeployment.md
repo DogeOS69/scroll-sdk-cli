@@ -36,7 +36,8 @@ Hard boundaries:
 - Private workspace: `/data/dogeos-devnet-fresh-20260909.grtp5c` (0700).
   Staging is its `staging/` subdirectory, an ordinary directory, not a worktree.
 - Archive: `deployment-before-reset.tar.gz` (private; contains credentials).
-  Archive completion/integrity must be checked before any destructive cutover.
+  Completed, mode 0600, 661419686 bytes; `gzip -t` passed. This is a local
+  configuration/artifact archive, not a backup of live Kubernetes databases.
 - Read-only Helm/pod/PVC inventory completed. No Kubernetes resource has been
   deleted, scaled or replaced during this fresh-redeployment checkpoint.
 - New CubeSigner role created through `setup cubesigner-init --new`:
@@ -46,6 +47,14 @@ Hard boundaries:
   Compressed TEE public key:
   `028eaa9e96f368ef71e39628cbfa482436011d4f760d4b5fda69d9d7696b332909`.
   No policy create/update/set-policy operation was performed.
+- `setup cubesigner-refresh` succeeded at 06:58:07 UTC for the new role,
+  creating local session/key-reference files in staging. They have not been
+  uploaded or activated in Kubernetes. Old service session/cache remain intact.
+- `setup gen-l2-artifacts` succeeded in staging with the approved
+  `gen-configs-56a4cacda6046c9445af023aefee15a42fda2fdd` image. New
+  `values/genesis.yaml` SHA256:
+  `5b03183fc8a473f35cc9b7b2f2246a1e9c563e125cdd50357b9d99f6908e03da`.
+  Actual Reth init validation and Bridge generation have not yet run.
 
 ## CubeSigner initialization and safe resume
 
@@ -75,6 +84,27 @@ from staging with the already-created role, not by creating a second key:
 Before Bridge generation, independently verify the new key is owned/usable by
 the current account, its role membership and policy attachments, and confirm
 that the existing Devnet role/key/policy remain unchanged.
+
+Use the existing CLI for session generation too; do not hand-edit a session,
+copy the old role's session, or manually substitute key IDs:
+
+```bash
+# Same staging deployment working directory as above. Executed successfully.
+"$DOGEOS_CLI" setup cubesigner-refresh \
+  --doge-config .data/doge-config.toml -N --json
+```
+
+Outputs are `secrets/cubesigner-signer-session.json` and
+`secrets/cubesigner-signer.env`. The command configures a 365-day session,
+2-hour auth, 7-day refresh and 30-second grace period. Keep files private.
+After the new values and isolated Secret prefix are ready, use the existing
+`setup push-secrets --cubesigner-only` command to upload/reconcile references.
+That upload is pending, not a completed step. Use a fresh instance session cache
+at cutover; do not clear the running old instance's cache during preparation.
+
+Operator rule: whenever a setup/generation command exists, use it rather than
+manually editing its generated output. If that command is defective, repair
+and test the CLI on the approved branch, commit the fix, and rerun safely.
 
 ## Pending deployment sequence
 
