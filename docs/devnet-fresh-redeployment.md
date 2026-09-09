@@ -39,6 +39,55 @@ Hard boundaries:
 
 ## Execution checkpoint
 
+### Current run: repository-root wrapper (supersedes staging phase 1)
+
+The operator discarded the isolated phase-1 preparation and requested using
+the existing shell helper, not new direct core-tool integration. The current
+working directory is `/mnt/wsl/data/github/dogeos69/dogeos-aws-devnet`.
+
+- Repaired `scripts/shadowfork/bridge-init-with-shadowfork-mining.sh` in that
+  project (commit `77dc7db`), retaining its two full scrollsdk invocations.
+  Twelve offline tests passed. No new direct Docker/core runtime dependency
+  was added to the wrapper; see its adjacent README for guards and limits.
+- Archived old local Bridge/protocol outputs plus pre-change configs to
+  `/data/dogeos-devnet-fresh-20260909.grtp5c/root-before-wrapper/`. This is
+  recoverable local archival, not deletion of protected Kubernetes resources.
+- In the project root, ran `setup cubesigner-init --roles
+  devnet_fresh_20260909_0 --doge-config .data/doge-config.toml -N --json`, then
+  `setup cubesigner-refresh` with the same config. New identity/session are now
+  in the actual project; no additional CubeSigner key was created.
+- Reran `setup gen-l2-artifacts` with the approved 56a4cac gen-configs image
+  and reviewed existing salt/fee-vault inputs. Current genesis YAML SHA256:
+  `545d0286a9a4efd387605cc87e482b3ef386bf98ad87985cc31df65fd9b05309`.
+  Actual offline Reth init passed; genesis block:
+  `0x7c0c97b0f50e788567d1d7bf7b4cc660445588c9d74f9eadf04c1d53fa6e2f64`.
+- Started the repaired wrapper with a fresh random SEED passed privately via
+  environment, explicit beta.4e/context and maturity-confirmations=100. Its
+  first CLI call stopped at the expected preflight of the old spent funding
+  UTXO, with no setup output; helper is `noRnKtSTqeXq6Kin9G16rGQR23STHrvWYK`.
+  Initial mining succeeded. Maturity wait and second invocation are in progress,
+  not yet completed. Do not start a second wrapper or remove its attempt lock.
+
+Commands (SEED is a privately prepared fresh value, never a literal example):
+
+```bash
+cd /mnt/wsl/data/github/dogeos69/dogeos-aws-devnet
+scrollsdk setup cubesigner-init --roles devnet_fresh_20260909_0 \
+  --doge-config .data/doge-config.toml -N --json
+scrollsdk setup cubesigner-refresh --doge-config .data/doge-config.toml -N --json
+scrollsdk setup gen-l2-artifacts \
+  --image-tag gen-configs-56a4cacda6046c9445af023aefee15a42fda2fdd \
+  --doge-config .data/doge-config.toml --configs-dir values \
+  --skip-deployment-salt-update --skip-l1-fee-vault-update \
+  --skip-l1-plonk-verifier-update -N --json
+./scripts/shadowfork/bridge-init-with-shadowfork-mining.sh \
+  --image-tag v0.3.0-beta.4e \
+  --kube-context arn:aws:eks:us-east-1:074120976575:cluster/dogeos-devnet-cluster \
+  --maturity-confirmations 100
+```
+
+### Earlier staging checkpoint (historical, not the current output identity)
+
 - Deployment resumed after the user's cleanup report. Read-only inventory found
   remaining `scroll-common` and `contracts` Helm releases, including their
   `genesis-config`, `protocol-context-config`, `contracts-deployment-env` and
