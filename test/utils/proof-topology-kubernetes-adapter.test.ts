@@ -8,7 +8,7 @@ import type {ProofTopologySpec} from '../../src/types/proof-topology.js'
 import type {ValidatedProofTopologyBundle} from '../../src/utils/proof-topology-compiler.js'
 
 import {PROVER_WORKER_EXECUTABLE} from '../../src/utils/compiled-prover-worker-bundle.js'
-import {reconcileCompiledProofTopology} from '../../src/utils/proof-topology-kubernetes-adapter.js'
+import {configureEagerMaterializerValues, reconcileCompiledProofTopology} from '../../src/utils/proof-topology-kubernetes-adapter.js'
 
 const BUNDLE_REVISION = 'b'.repeat(64)
 const IMAGE_DIGEST = `sha256:${'c'.repeat(64)}`
@@ -61,7 +61,7 @@ function topology(
   }
 }
 
-function fakeBundle(root: string, mode: 'active' | 'disabled'): ValidatedProofTopologyBundle {
+function fakeBundle(root: string, mode: 'active' | 'disabled', generation: 'mock' | 'real' = 'mock'): ValidatedProofTopologyBundle {
   fs.mkdirSync(root, {recursive: true})
   fs.writeFileSync(path.join(root, 'withdrawal-processor.toml'), `[proof_system]\nmode = "${mode}"\n`)
   fs.writeFileSync(
@@ -76,15 +76,15 @@ function fakeBundle(root: string, mode: 'active' | 'disabled'): ValidatedProofTo
     fs.writeFileSync(path.join(root, 'materials/program-manifests/chunk.json'), '{"kind":"chunk"}\n')
   }
 
-  const worker = mode === 'active' ? {
+  const worker = mode === 'active' && generation === 'real' ? {
     argv: WORKER_ARGV,
     capabilities: ['scroll_chunk'],
     desired_state: 'local_deployment' as const,
     environment: [{name: 'DOGEOS_PROVER_WORKER_READY_FILE', value: '/run/dogeos/ready.json'}],
-    image: {digest: IMAGE_DIGEST, repository: 'dogeos69/prover-worker-mock'},
+    image: {digest: IMAGE_DIGEST, repository: 'dogeos69/prover-worker'},
     placement: 'local_cpu' as const,
     readiness_evidence_path: '/run/dogeos/ready.json',
-    required_build_class: 'mock_capable' as const,
+    required_build_class: 'production' as const,
     schema_version: 1,
   } : undefined
   if (worker) fs.writeFileSync(path.join(root, 'prover-worker-v1.json'), `${JSON.stringify(worker)}\n`)
@@ -92,7 +92,7 @@ function fakeBundle(root: string, mode: 'active' | 'disabled'): ValidatedProofTo
   return {
     bundleDir: root,
     enforcement: 'observe',
-    generation: 'mock',
+    generation,
     manifest: {
       bundle_revision: BUNDLE_REVISION,
       compiler_package_version: '0.3.0',
@@ -102,7 +102,7 @@ function fakeBundle(root: string, mode: 'active' | 'disabled'): ValidatedProofTo
       installable_service_configs: true,
       preflight_only: false,
       ...(mode === 'active' ? {proof_coordinator: 'proof-coordinator.toml'} : {}),
-      ...(mode === 'active' ? {prover_worker: 'prover-worker-v1.json'} : {}),
+      ...(worker ? {prover_worker: 'prover-worker-v1.json'} : {}),
       resolved_sidecar: 'resolved-v2.json',
       schema_version: 1,
       source_schema_version: 1,
@@ -174,7 +174,7 @@ describe('self-contained proof topology Kubernetes adapter', () => {
 
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
-  it('renders a Compose bundle for adapter-managed mock CPU Workers', () => {
+  it('keeps real materialization self-contained without deploying a mock Worker', () => {
     const result = reconcileCompiledProofTopology({
       compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active'),
       coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
@@ -223,14 +223,8 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     })
     const worker = yaml.load(fs.readFileSync(path.join(root, 'values/prover-worker-production.yaml'), 'utf8')) as any
     expect(worker.controller.replicas).to.equal(0)
-    expect(result.workerBundle?.bundleId).to.match(/^[\da-f]{64}$/)
-    const compose = yaml.load(fs.readFileSync(
-      path.join(root, 'prover-worker-active/docker-compose/docker-compose.yml'),
-      'utf8',
-    )) as any
-    expect(compose.services['prover-worker'].image)
-      .to.equal(`dogeos69/prover-worker-mock@${IMAGE_DIGEST}`)
-    expect(compose.services['prover-worker']).not.to.have.property('gpus')
+    expect(result.workerBundle).to.equal(undefined)
+    expect(fs.existsSync(path.join(root, 'prover-worker-active/docker-compose/docker-compose.yml'))).to.equal(false)
     expect(fs.readFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), 'utf8'))
       .to.include('DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER: "2898792"')
   })
@@ -282,8 +276,8 @@ describe('self-contained proof topology Kubernetes adapter', () => {
       }
 
       const worker = yaml.load(fs.readFileSync(path.join(root, 'values/prover-worker-production.yaml'), 'utf8')) as any
-      expect(worker.controller.replicas).to.equal(backend === 'kubernetes' ? 1 : 0)
-      expect(Boolean(result.workerBundle)).to.equal(backend === 'docker_compose')
+      expect(worker.controller.replicas).to.equal(0)
+      expect(result.workerBundle).to.equal(undefined)
     })
   }
 
@@ -336,13 +330,15 @@ describe('self-contained proof topology Kubernetes adapter', () => {
   })
 
   it('keeps Kubernetes as an explicit deployment backend for local CPU Workers', () => {
+    const proofTopology = topology('active', 'kubernetes')
+    proofTopology.generation = 'real'
     reconcileCompiledProofTopology({
-      compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active'),
+      compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active', 'real'),
       coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
       deploymentDir: root,
       deploymentName: 'test',
       network: 'testnet',
-      proofTopology: topology('active', 'kubernetes'),
+      proofTopology,
       valuesDir: path.join(root, 'values'),
       withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
     })
@@ -354,6 +350,27 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     expect(worker.configMaps['proof-topology-materials'].data['material-00-chunk.json'])
       .to.equal('{"kind":"chunk"}\n')
     expect(fs.existsSync(path.join(root, 'prover-worker-active/docker-compose'))).to.equal(false)
+  })
+
+  it('projects eager compiler output and identity mounts without overriding operator IAM', () => {
+    const bundle = fakeBundle(path.join(root, 'eager-bundle'), 'active')
+    bundle.manifest.eager_materializer = 'eager-materializer.toml'
+    const content = '[service]\nlisten_port = 3107\nstate_dir = "/app/state"\n[materializer]\nl2_genesis_json = "/app/genesis/genesis.json"\n'
+    fs.writeFileSync(path.join(bundle.bundleDir, bundle.manifest.eager_materializer), content)
+    const file = path.join(root, 'values/eager-materializer-production.yaml')
+    fs.writeFileSync(file, yaml.dump({serviceAccount: {annotations: {'eks.amazonaws.com/role-arn': 'operator-role'}}}))
+    configureEagerMaterializerValues(file, bundle, topology('active'))
+    const values = yaml.load(fs.readFileSync(file, 'utf8')) as any
+    expect(values.eagerMaterializer.config).to.equal(content)
+    expect(values.controller.replicas).to.equal(1)
+    expect(values.persistence.data.mountPath).to.equal('/app/state')
+    expect(values.service.main.ports.http.port).to.equal(3107)
+    expect(values.persistence.genesis.name).to.equal('genesis-config')
+    expect(values.persistence['proof-topology-materials'].mountPath).to.equal('/app/data/proof-topology')
+    expect(values.serviceAccount.annotations['eks.amazonaws.com/role-arn']).to.equal('operator-role')
+    delete bundle.manifest.eager_materializer
+    configureEagerMaterializerValues(file, bundle, topology('disabled'))
+    expect((yaml.load(fs.readFileSync(file, 'utf8')) as any).controller.replicas).to.equal(0)
   })
 
   it('keeps PC running with a minimal beta.1-compatible idle config when disabled', () => {

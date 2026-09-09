@@ -23,6 +23,14 @@ readiness, and end-to-end acceptance are different milestones.
 
 ## Current checkpoint
 
+- Latest decision: preserve this existing Bridge for the PR #1136 upgrade.
+  Read-only chain/replay checks confirmed WF #0 and the unspent genesis
+  sequencer outpoint. CLI/chart adaptation is staged, but real materialization
+  preflight is blocked by the existing all-zero Batch guest identity. No upgrade
+  rollout/database reset has occurred. See the exact evidence, pending inputs
+  and sequence in [the preserve-bridge upgrade guide](next-devnet-preserve-bridge.md).
+  The staged doge-config changed, so regenerate/validate before any new install;
+  historical proof-config-check success below is not current-config acceptance.
 - On 2026-09-09 the user explicitly authorized a **new Bridge**, with native
   Reth genesis from contracts commit 56a4cac. The verified procedure, release
   pins, identity, manual changes and retry rules are consolidated in

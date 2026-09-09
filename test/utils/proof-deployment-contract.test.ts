@@ -35,7 +35,6 @@ describe('proof deployment contract schema v7', () => {
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
   function input(mode: 'active' | 'disabled'): ProofDeploymentContractInput {
-    const active = mode === 'active'
     const bundleDir = path.join(root, '.data/generated/proof-topology')
     const component = (name: string, enabled: boolean) => ({
       enabled,
@@ -49,7 +48,7 @@ describe('proof deployment contract schema v7', () => {
       intentSource: {kind: 'doge-config', path: path.join(root, '.data/doge-config.toml'), sha256: 'a'.repeat(64)},
       mode,
       proofCoordinator: component('proof-coordinator', true),
-      proverWorker: component('prover-worker', active),
+      proverWorker: component('prover-worker', false),
       topology: {
         bundleDir,
         bundleManifest: path.join(bundleDir, 'bundle-manifest-v1.json'),
@@ -58,10 +57,6 @@ describe('proof deployment contract schema v7', () => {
       },
       tsoValuesFile: path.join(root, 'values/tso-service-production.yaml'),
       withdrawalProcessor: component('withdrawal-processor', true),
-      ...(active ? {worker: {
-        contractFile: path.join(bundleDir, 'prover-worker-v1.json'),
-        kind: 'compiled-local' as const,
-      }} : {}),
     }
   }
 
@@ -72,8 +67,22 @@ describe('proof deployment contract schema v7', () => {
     expect(contract.topology).not.to.have.property('digest')
     expect(contract.topology).not.to.have.property('deploymentRevision')
     expect(contract.components.proofCoordinator.enabled).to.equal(true)
-    expect(contract.worker.kind).to.equal('compiled-local')
+    expect(contract.worker.kind).to.equal('none')
     expect(validateProofDeploymentContract(root).generationId).to.equal(contract.generationId)
+  })
+
+  it('rejects a mock Worker and requires a production Worker for active real generation', () => {
+    const mock = input('active')
+    mock.proverWorker.enabled = true
+    expect(() => writeProofDeploymentContract(mock)).to.throw('mock proving must not deploy a Worker')
+    const real = {...input('active'), generation: 'real' as const}
+    expect(() => writeProofDeploymentContract(real)).to.throw('missing its Worker contract')
+    const contract = writeProofDeploymentContract({...real, worker: {
+      contractFile: path.join(root, '.data/generated/proof-topology/prover-worker-v1.json'),
+      kind: 'compiled-external',
+    }})
+    expect(contract.worker.enabled).to.equal(true)
+    expect(() => validateProofDeploymentContract(root)).not.to.throw()
   })
 
   it('allows deployment values overlays while rejecting retired schemas and missing files', () => {

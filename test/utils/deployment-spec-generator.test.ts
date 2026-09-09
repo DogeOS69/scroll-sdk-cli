@@ -177,6 +177,7 @@ function createProofTopology(
     enforcement: mode === 'production' ? 'enforce' : 'observe',
     generation: mode === 'production' ? 'real' : 'mock',
     mode: mode === 'disabled' ? 'disabled' : 'active',
+    observeRealProofDeadlineMs: 1_800_000,
   }
 }
 

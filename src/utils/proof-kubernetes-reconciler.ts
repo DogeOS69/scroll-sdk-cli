@@ -130,6 +130,10 @@ export function reconcileProofKubernetes(options: ReconcileProofKubernetesOption
       ? 'compiled-compose' as const
       : 'compiled-local' as const
   const contract = writeProofDeploymentContract({
+    ...(compiled.eagerMaterializerValuesPath ? {eagerMaterializer: {
+      enabled: Boolean(compiled.bundle.manifest.eager_materializer),
+      valuesFile: compiled.eagerMaterializerValuesPath,
+    }} : {}),
     deploymentDir,
     enforcement: options.intent.proofTopology.enforcement,
     ethDaSubmitter: {valuesFile: compiled.ethDaSubmitterValuesPath},

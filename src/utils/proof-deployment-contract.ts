@@ -16,6 +16,7 @@ export interface ProofDeploymentComponent {
 
 export interface ProofDeploymentContract {
   components: {
+    eagerMaterializer?: ProofDeploymentComponent
     ethDaSubmitter: ProofDeploymentComponent
     proofCoordinator: ProofDeploymentComponent
     proverWorker: ProofDeploymentComponent
@@ -57,6 +58,7 @@ interface ComponentInput {
 export interface ProofDeploymentContractInput {
   contractPath?: string
   deploymentDir: string
+  eagerMaterializer?: ComponentInput
   enforcement: ProofEnforcement
   ethDaSubmitter: {valuesFile: string}
   generation: ProofGeneration
@@ -102,7 +104,8 @@ function component(root: string, input: ComponentInput): ProofDeploymentComponen
 
 export function writeProofDeploymentContract(input: ProofDeploymentContractInput): ProofDeploymentContract {
   const root = path.resolve(input.deploymentDir)
-  const worker = input.mode === 'disabled'
+  if (input.generation === 'mock' && (input.worker || input.proverWorker.enabled)) throw new Error('mock proving must not deploy a Worker')
+  const worker = input.mode === 'disabled' || input.generation === 'mock'
     ? {enabled: false, kind: 'none' as const}
     : input.worker
       ? {
@@ -118,6 +121,7 @@ export function writeProofDeploymentContract(input: ProofDeploymentContractInput
   const sidecar = path.resolve(root, input.topology.resolvedSidecar)
   const stable = {
     components: {
+      ...(input.eagerMaterializer ? {eagerMaterializer: component(root, input.eagerMaterializer)} : {}),
       ethDaSubmitter: component(root, {enabled: true, valuesFile: input.ethDaSubmitter.valuesFile}),
       proofCoordinator: component(root, input.proofCoordinator),
       proverWorker: component(root, input.proverWorker),
@@ -194,7 +198,12 @@ export function validateProofDeploymentContract(
   if (contract.mode === 'disabled') {
     if (!contract.components.proofCoordinator.enabled) problems.push('disabled mode keeps the idle PC deployment enabled')
     if (contract.components.proverWorker.enabled || contract.worker.enabled) problems.push('disabled mode must keep Worker absent')
-  } else if (!contract.components.proofCoordinator.enabled || !contract.worker.enabled) problems.push('active mode requires PC and a Worker contract')
+  } else {
+    if (!contract.components.proofCoordinator.enabled) problems.push('active mode requires PC')
+    if (contract.generation === 'real' && !contract.worker.enabled) problems.push('active real generation requires a Worker contract')
+    if (contract.generation === 'mock' && (contract.worker.enabled || contract.components.proverWorker.enabled)) problems.push('mock proving must keep Worker absent')
+  }
+
   if (problems.length > 0) throw new Error(`Invalid proof deployment contract:\n- ${problems.join('\n- ')}`)
   return contract
 }

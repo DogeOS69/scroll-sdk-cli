@@ -1,7 +1,8 @@
 # DogeOS proof operator runbook
 
 This is the operator-facing procedure for preparing and deploying DogeOS proof
-services. It follows dogeos-core PR #937's two-switch model. The generated
+services. It follows dogeos-core PR #937's two-switch model, updated for PR #1136
+(coordinator-internal mock proving and eager materialization). The generated
 Withdrawal Processor, Proof Coordinator, Worker, submitter, and signer files are
 compiler outputs; do not edit them by hand.
 
@@ -14,14 +15,15 @@ The normal source of truth is `.data/doge-config.toml`:
 mode = "disabled"       # disabled | active
 generation = "mock"     # mock | real
 enforcement = "observe" # observe | enforce
+observeRealProofDeadlineMs = 1800000 # Explicit example: 30 minutes, no implicit default
 ```
 
 The fields are independent:
 
 | Field | Meaning |
 |---|---|
-| `mode` | Whether Proof Coordinator and Worker topology is running. |
-| `generation` | Whether Workers produce hash-tagged mock material or real cryptographic proof material. |
+| `mode` | Whether proof work is active; disabled keeps an idle Coordinator. |
+| `generation` | `mock`: Coordinator produces proofs internally; `real`: production Workers produce proofs. |
 | `enforcement` | Whether failed, missing, or mock proof outcomes are observed and allowed, or rejected. |
 
 Use these postures in order:
@@ -34,8 +36,18 @@ Use these postures in order:
 | Require real verified proofs | `active` | `real` | `enforce` |
 
 Never use `generation = "mock"` with `enforcement = "enforce"`. Mock and real
-proof statements share the same verifier-identity table and artifact namespace;
-the hash-committed proof-kind tag distinguishes their output.
+proof statement mode is derived from **enforcement**, not generation. Changing
+observe to enforce changes statement identities and requires a fresh/regenerated
+proof store; do not migrate old proof rows into the new statement namespace.
+
+The source deadline is required even for mock and disabled modes. CLI emits
+`[proof_topology].observe_real_proof_deadline_ms`, and the compiler emits
+`[verifier].observe_real_proof_deadline_ms`. Under real/observe a deadline,
+permanent prover failure or verification failure can trigger internal mock
+fallback; enforce continues to reject mock material.
+
+For the preserve-existing-bridge upgrade and its release-material prerequisite,
+see [Next-devnet upgrade without bridge reinitialization](next-devnet-preserve-bridge.md).
 
 `observe` is a staging posture and Attestation Signer refuses it on Dogecoin
 mainnet. A mainnet deployment must not activate proof-conditioned signing until
@@ -204,8 +216,8 @@ scrollsdk setup proof-materials \
 `withdrawal_mock_prover_real_materialize`. The compiled bundle enables all
 three ends of the contract: the submitter publishes the segmentation sidecar,
 the coordinator reads and validates it, and Withdrawal Processor requests the
-materialized segmentation before creating per-chunk work. The selected proof
-Worker remains the mock Worker.
+materialized segmentation before creating per-chunk work. Proof Coordinator
+produces mock proofs internally; no mock Worker is rendered or deployed.
 The identity bundle must come from the same dogeos-core bake as the env values;
 the CLI rejects the all-zero `batch_guest` shipped by the ordinary mock image.
 The aggregate VK and two materializer binaries are also required by the
@@ -246,12 +258,11 @@ enforcement = "observe"
 
 It runs compiler preflight before replacing the existing topology.
 
-Under PR #937, a mock Worker renders as `local_cpu`/`mock_capable`; that is a
-compute and ownership contract, not a Kubernetes requirement. The independent
-`deployment.workerDeploymentBackend` tells scroll-sdk-cli to install an
-adapter-managed Worker as either `docker_compose` (the default, suitable for a
-managed EC2 host) or `kubernetes`. `active.workerLaunch` remains the staged real
-Worker placement used after `generation = "real"`.
+The independent `deployment.workerDeploymentBackend` selects Docker Compose or
+Kubernetes for **real** Workers only. `active.workerLaunch` remains the staged
+real Worker placement. Under PR #1136 mock produces no Worker contract regardless
+of these placement choices. The mock image may still be used as a legacy
+identity-export input; it is not a service to deploy.
 
 ### Step 4: generate charts and native configuration
 
@@ -349,22 +360,16 @@ Edit only:
 +mode = "active"
 ```
 
-Then regenerate and validate. With `workerDeploymentBackend =
-"docker_compose"`, run `setup proof-worker`, synchronize the generated bundle
-to the managed Worker host, verify it there, and start it with the generated
-`./prover-worker-compose up -d prover-worker` launcher. The launcher runs the
-container with the invoking host user's numeric UID/GID, preserving the
-`0600` Worker token without granting the container filesystem-bypass
-capabilities, and prepares a private host-owned readiness directory. Do not
-start this bundle with a raw `docker compose up`. With
-`workerDeploymentBackend = "kubernetes"`, deploy the generated Worker Helm
-values. In both cases verify WP, PC, and the mock Worker are ready while
-Attestation Signers remain in `observe`.
+Then regenerate and validate. Deploy WP and PC; keep all legacy mock Workers
+stopped. Do not run `setup proof-worker` for mock. When the compiler declares
+`eager_materializer`, deploy that service with the matching genesis, namespace
+and prefix-scoped store credential. Verify proof rows reach `succeeded` with
+zero Worker pods/containers, while Attestation Signers remain in `observe`.
 
 ### Mock to real generation
 
-Drain/stop the CPU mock Worker through its selected deployment backend. If the
-already-staged `workerLaunch` is `external`, start the real Worker on the
+There is no CPU mock Worker to drain on PR #1136. If the already-staged
+`workerLaunch` is `external`, start the real Worker on the
 operator-selected GPU host using the newly generated Compose handoff bundle.
 Edit only:
 

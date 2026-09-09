@@ -5,11 +5,16 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
+import type {ProofTopologySpec} from '../../src/types/proof-topology.js'
+
 import {
   computeProofTopologyBundleRevision,
   projectMockGenerationVerifierSelection,
   projectProofCoordinatorEthereumDa,
   proofTopologyEthereumDaBlobSource,
+  rebindProofTopologyBundleRevision,
+  renderProofTopologySource,
+  validateProofTopologyBundle,
 } from '../../src/utils/proof-topology-compiler.js'
 
 describe('proof topology compiler deployment projection', () => {
@@ -48,6 +53,29 @@ timeout_ms = 10000
   })
 
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
+
+  it('requires an explicit positive deadline and emits the native snake-case key', () => {
+    const topology = {compiler: {}, enforcement: 'observe', generation: 'mock', mode: 'disabled'} as ProofTopologySpec
+    for (const deadline of [undefined, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => renderProofTopologySource({...topology, observeRealProofDeadlineMs: deadline})).to.throw('explicit positive safe integer')
+    }
+
+    const source = toml.parse(renderProofTopologySource({...topology, observeRealProofDeadlineMs: 1_800_000})) as any
+    expect(source.proof_topology.observe_real_proof_deadline_ms).to.equal(1_800_000)
+  })
+
+  it('accepts coordinator-internal mock and rejects a legacy mock Worker manifest', () => {
+    fs.writeFileSync(path.join(root, 'withdrawal-processor.toml'), '')
+    rebindProofTopologyBundleRevision(root)
+    expect(validateProofTopologyBundle(root).worker).to.equal(undefined)
+    const file = path.join(root, 'bundle-manifest-v1.json')
+    const manifest = JSON.parse(fs.readFileSync(file, 'utf8'))
+    manifest.prover_worker = 'worker.json'
+    fs.writeFileSync(path.join(root, 'worker.json'), '{}')
+    fs.writeFileSync(file, JSON.stringify(manifest))
+    rebindProofTopologyBundleRevision(root)
+    expect(() => validateProofTopologyBundle(root)).to.throw('mock proving is coordinator-internal')
+  })
 
   it('replaces compiler-generated Anvil providers with deployment Beacon and S3 providers', () => {
     projectProofCoordinatorEthereumDa(root, {

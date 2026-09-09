@@ -19,6 +19,8 @@ export function awsS3Endpoint(region: string): string {
 export interface ProofTopologyRuntimeInput {
   artifactKeyPrefix?: string
   blockWitnessDir?: string
+  eagerMaterializer?: ProofTopologySpec['deployment']['eagerMaterializer']
+  observeRealProofDeadlineMs?: number
   proofCoordinatorPublicUrl: string
   publicS3EndpointUrl?: string
   rpcWitnessUrl?: string
@@ -170,9 +172,9 @@ export function buildProofTopology(options: BuildProofTopologyOptions): ProofTop
     deployment: {
       artifactKeyPrefix: nonEmpty(options.runtime.artifactKeyPrefix ?? DEFAULT_PROOF_KEY_PREFIX, 'proof artifact key prefix'),
       coordinatorId: `${options.deploymentName}-proof-coordinator`,
+      eagerMaterializer: options.runtime.eagerMaterializer ?? {listenPort: 3007, startBatchHeight: 0, stateDir: '/app/data'},
       generatedMaterialsRoot: '/app/data/proof-topology',
       l2GenesisJson: '/app/genesis/genesis.json',
-      mockWorkerImage: materials.images.mockWorker,
       ...(materials.images.productionWorker ? {productionWorkerImage: materials.images.productionWorker} : {}),
       proofWorkBind: '0.0.0.0:9300',
       proofWorkPublicUrl: 'http://withdrawal-processor:9300',
@@ -196,5 +198,6 @@ export function buildProofTopology(options: BuildProofTopologyOptions): ProofTop
     enforcement: options.enforcement ?? 'observe',
     generation,
     mode,
+    observeRealProofDeadlineMs: options.runtime.observeRealProofDeadlineMs,
   }
 }

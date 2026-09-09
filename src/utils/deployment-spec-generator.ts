@@ -1004,10 +1004,13 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   }
 
   if (proofTopology) {
+    if (!Number.isSafeInteger(proofTopology.observeRealProofDeadlineMs) || proofTopology.observeRealProofDeadlineMs! <= 0) {
+      errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: 'An explicit positive observeRealProofDeadlineMs is required', path: 'proofTopology.observeRealProofDeadlineMs'})
+    }
+
     const imagePattern = /^sha256:[\da-f]{64}$/
     const imageFields = [
       ['proofTopology.compiler.image', proofTopology.compiler?.image],
-      ['proofTopology.deployment.mockWorkerImage', proofTopology.deployment?.mockWorkerImage],
     ] as const
     for (const [field, image] of imageFields) {
       if (!image?.repository?.trim() || !imagePattern.test(image.digest || '')) {

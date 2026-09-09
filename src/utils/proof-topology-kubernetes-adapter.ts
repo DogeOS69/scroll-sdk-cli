@@ -66,6 +66,7 @@ export interface ReconcileCompiledProofTopologyOptions {
 
 export interface ReconcileCompiledProofTopologyResult {
   bundle: ValidatedProofTopologyBundle
+  eagerMaterializerValuesPath?: string
   ethDaSubmitterValuesPath: string
   files: string[]
   proofArtifactBaseUrl?: string
@@ -605,6 +606,38 @@ function configureCoordinatorProbes(values: Record<string, any>, active: boolean
   }
 }
 
+/** Only the compiler decides whether a producer exists and owns its config. */
+export function configureEagerMaterializerValues(
+  filePath: string,
+  bundle: ValidatedProofTopologyBundle,
+  topology: ProofTopologySpec,
+): void {
+  const values = readYaml(filePath)
+  values.controller ||= {}
+  values.controller.replicas = bundle.manifest.eager_materializer ? 1 : 0
+  if (bundle.manifest.eager_materializer) {
+    const content = fs.readFileSync(path.join(bundle.bundleDir, bundle.manifest.eager_materializer), 'utf8')
+    const config = toml.parse(content) as Record<string, any>
+    values.eagerMaterializer = {config: content}
+    values.env = (Array.isArray(values.env) ? values.env : []).filter(
+      (item: any) => !String(item?.name || '').startsWith('DOGEOS_EAGER_MATERIALIZER_'),
+    )
+    values.service ||= {}
+    values.service.main ||= {}
+    values.service.main.ports ||= {}
+    values.service.main.ports.http = {enabled: true, port: config.service.listen_port, targetPort: config.service.listen_port}
+    values.persistence ||= {}
+    values.persistence.data ||= {}
+    values.persistence.data.mountPath = config.service.state_dir
+    configureL2Genesis(values, config.materializer.l2_genesis_json)
+    if (!bundle.manifest.generated_materials) throw new Error('eager materializer requires compiler-generated statement materials')
+    configureMaterials(values, path.join(bundle.bundleDir, bundle.manifest.generated_materials), topology.deployment.generatedMaterialsRoot || '/app/data/proof-topology')
+  }
+
+  annotate(values, bundle.manifest.bundle_revision)
+  writeYaml(filePath, values)
+}
+
 function configureCoordinatorValues(
   filePath: string,
   configContent: string,
@@ -808,6 +841,7 @@ export function reconcileCompiledProofTopology(
   const workerValuesPath = path.join(valuesDir, 'prover-worker-production.yaml')
   const withdrawalValuesPath = path.join(valuesDir, 'withdrawal-processor-production.yaml')
   const submitterValuesPath = path.join(valuesDir, 'eth-da-submitter-production.yaml')
+  const eagerValuesPath = path.join(valuesDir, 'eager-materializer-production.yaml')
 
   if (mode !== 'disabled' && !fs.existsSync(options.coordinatorConfigPath)) {
     throw new Error(
@@ -841,6 +875,10 @@ export function reconcileCompiledProofTopology(
   const bundle = (options.compile || compileProofTopology)(compileOptions)
   if (bundle.manifest.preflight_only) {
     throw new Error('refusing to install a preflight-only proof topology bundle')
+  }
+
+  if (bundle.manifest.eager_materializer || fs.existsSync(eagerValuesPath)) {
+    configureEagerMaterializerValues(eagerValuesPath, bundle, effectiveTopology)
   }
 
   const wpSource = path.join(bundle.bundleDir, bundle.manifest.withdrawal_processor)
@@ -969,6 +1007,7 @@ export function reconcileCompiledProofTopology(
     : []
   return {
     bundle,
+    eagerMaterializerValuesPath: fs.existsSync(eagerValuesPath) ? eagerValuesPath : undefined,
     ethDaSubmitterValuesPath: submitterValuesPath,
     files: [
       options.withdrawalConfigPath,
@@ -977,6 +1016,7 @@ export function reconcileCompiledProofTopology(
       coordinatorValuesPath,
       workerValuesPath,
       submitterValuesPath,
+      ...(fs.existsSync(eagerValuesPath) ? [eagerValuesPath] : []),
       ...generatedMaterialFiles,
       ...(workerBundle?.files || []),
     ],

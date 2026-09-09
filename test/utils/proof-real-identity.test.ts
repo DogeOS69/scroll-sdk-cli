@@ -125,7 +125,7 @@ function topology(materials: ProofMaterialsV1) {
     generation: 'real',
     materials,
     mode: 'active',
-    runtime: {proofCoordinatorPublicUrl: 'https://proof.example.com', rpcWitnessUrl: 'https://l2.example.com'},
+    runtime: {observeRealProofDeadlineMs: 1_800_000, proofCoordinatorPublicUrl: 'https://proof.example.com', rpcWitnessUrl: 'https://l2.example.com'},
   })
 }
 

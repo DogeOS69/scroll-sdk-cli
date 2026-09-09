@@ -57,7 +57,7 @@ function known(value: unknown, allowed: readonly string[], label: string): void 
 
 function validateShape(value: unknown, source: string): void {
   const root = mapping(value, `${source}: proof_topology`)
-  known(root, ['active', 'compiler', 'deployment', 'enforcement', 'generation', 'mode'], `${source}: proof_topology`)
+  known(root, ['active', 'compiler', 'deployment', 'enforcement', 'generation', 'mode', 'observeRealProofDeadlineMs'], `${source}: proof_topology`)
   known(root.compiler, ['identityFilePath', 'image'], `${source}: proof_topology.compiler`)
   known(mapping(root.compiler, 'compiler').image, ['digest', 'repository'], `${source}: proof_topology.compiler.image`)
   known(root.deployment, [
@@ -67,10 +67,11 @@ function validateShape(value: unknown, source: string): void {
     'publicS3EndpointUrl', 'readinessEvidencePath', 'resourcesMountPath',
     'resourcesPersistentVolumeClaim', 'workerNodeSelector', 'workerResources',
     'workerDeploymentBackend', 'workerRuntimeClassName', 'workerSecretName',
-    'workerTokenFile', 'workerTolerations',
+    'workerTokenFile', 'workerTolerations', 'eagerMaterializer',
   ], `${source}: proof_topology.deployment`)
   const deployment = mapping(root.deployment, 'deployment')
-  known(deployment.mockWorkerImage, ['digest', 'repository'], `${source}: proof_topology.deployment.mockWorkerImage`)
+  if (deployment.mockWorkerImage !== undefined) known(deployment.mockWorkerImage, ['digest', 'repository'], `${source}: proof_topology.deployment.mockWorkerImage`)
+  if (deployment.eagerMaterializer !== undefined) known(deployment.eagerMaterializer, ['listenPort', 'startBatchHeight', 'stateDir'], `${source}: proof_topology.deployment.eagerMaterializer`)
   if (deployment.productionWorkerImage !== undefined) {
     known(deployment.productionWorkerImage, ['digest', 'repository'], `${source}: proof_topology.deployment.productionWorkerImage`)
   }
@@ -102,6 +103,16 @@ function assertImage(value: {digest?: string; repository?: string} | undefined, 
 }
 
 function validateTopology(topology: ProofTopologySpec, source: string): void {
+  if (!Number.isSafeInteger(topology.observeRealProofDeadlineMs) || topology.observeRealProofDeadlineMs! <= 0) {
+    throw new Error(`${source}: observeRealProofDeadlineMs must be an explicit positive safe integer`)
+  }
+
+  const eager = topology.deployment?.eagerMaterializer
+  if (eager && (!Number.isInteger(eager.listenPort) || eager.listenPort < 1 || eager.listenPort > 65_535
+    || !Number.isSafeInteger(eager.startBatchHeight) || eager.startBatchHeight < 0 || !eager.stateDir?.startsWith('/'))) {
+    throw new Error(`${source}: eagerMaterializer requires a valid listenPort, nonnegative startBatchHeight and absolute stateDir`)
+  }
+
   if (!['active', 'disabled'].includes(topology.mode)) throw new Error(`${source}: mode must be active or disabled`)
   if (!['mock', 'real'].includes(topology.generation)) throw new Error(`${source}: generation must be mock or real`)
   if (!['enforce', 'observe'].includes(topology.enforcement)) throw new Error(`${source}: enforcement must be observe or enforce`)
@@ -118,7 +129,7 @@ function validateTopology(topology: ProofTopologySpec, source: string): void {
     throw new Error(`${source}: compiler.identityFilePath is required`)
   }
 
-  assertImage(topology.deployment?.mockWorkerImage, `${source}: deployment.mockWorkerImage`)
+  if (topology.deployment?.mockWorkerImage) assertImage(topology.deployment.mockWorkerImage, `${source}: deployment.mockWorkerImage`)
   if (topology.deployment?.productionWorkerImage !== undefined) {
     assertImage(topology.deployment.productionWorkerImage, `${source}: deployment.productionWorkerImage`)
   }

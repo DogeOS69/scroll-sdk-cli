@@ -87,9 +87,15 @@ export interface ActiveProofTopologySpec {
 export interface ProofTopologyDeploymentConfig {
   artifactKeyPrefix: string
   coordinatorId?: string
+  eagerMaterializer?: {
+    listenPort: number
+    startBatchHeight: number
+    stateDir: string
+  }
   generatedMaterialsRoot?: string
   l2GenesisJson?: string
-  mockWorkerImage: ProofTopologyImageReference
+  /** Legacy identity-export input only; mock proving has no runtime Worker. */
+  mockWorkerImage?: ProofTopologyImageReference
   productionWorkerImage?: ProofTopologyImageReference
   proofWorkBind?: string
   proofWorkPublicUrl?: string
@@ -129,4 +135,6 @@ export interface ProofTopologySpec {
   enforcement: ProofEnforcement
   generation: ProofGeneration
   mode: ProofTopologyMode
+  /** Required at validation/render time, including disabled and mock modes. No default. */
+  observeRealProofDeadlineMs?: number
 }

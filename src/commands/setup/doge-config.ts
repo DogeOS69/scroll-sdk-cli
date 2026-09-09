@@ -67,6 +67,7 @@ interface InitializeProofTopologyV2Options {
   materialsPath?: string
   mode?: 'active' | 'disabled'
   nonInteractive: boolean
+  observeRealProofDeadlineMs?: number
   publicS3Endpoint?: string
   region?: string
   witnessDir?: string
@@ -162,7 +163,7 @@ export class DogeConfigCommand extends Command {
     }),
     'proof-coordinator-url': Flags.string({
       dependsOn: ['proof-topology'],
-      description: 'HTTPS Proof Coordinator URL reachable by mock and production Workers',
+      description: 'HTTPS Proof Coordinator URL reachable by production Workers',
     }),
     'proof-endpoint-url': Flags.string({
       dependsOn: ['proof-topology'],
@@ -195,6 +196,11 @@ export class DogeConfigCommand extends Command {
       dependsOn: ['proof-topology'],
       description: 'Initial proof mode (default: existing value or disabled)',
       options: ['active', 'disabled'],
+    }),
+    'proof-observe-real-proof-deadline-ms': Flags.integer({
+      dependsOn: ['proof-topology'],
+      description: 'Required positive observe fallback deadline in milliseconds; also required for mock (no default)',
+      min: 1,
     }),
     'proof-public-s3-endpoint': Flags.string({
       dependsOn: ['proof-topology'],
@@ -301,6 +307,7 @@ export class DogeConfigCommand extends Command {
       materialsPath: flags['proof-materials'],
       mode: flags['proof-mode'] as 'active' | 'disabled' | undefined,
       nonInteractive: flags['non-interactive'],
+      observeRealProofDeadlineMs: flags['proof-observe-real-proof-deadline-ms'],
       publicS3Endpoint: flags['proof-public-s3-endpoint'],
       region: flags['proof-region'],
       witnessDir: flags['proof-witness-dir'],
@@ -1024,9 +1031,15 @@ export class DogeConfigCommand extends Command {
         message: 'How should scroll-sdk-cli deploy adapter-managed CPU/CUDA Workers?',
       }),
     ) as 'docker_compose' | 'kubernetes'
-    if (generation === 'mock') options.log(chalk.blue(
-      `Mock Worker: local CPU via ${workerDeploymentBackend}; staged real Worker placement: ${workerLaunch}`,
+    if (generation === 'mock') options.log(chalk.blue('Mock proofs are produced inside Proof Coordinator; no mock Worker will be deployed.'))
+
+    const deadline = Number(await required(
+      options.observeRealProofDeadlineMs?.toString(),
+      existing?.observeRealProofDeadlineMs?.toString(),
+      'Observe real-proof deadline in milliseconds (for example 1800000 for 30 minutes):',
+      '--proof-observe-real-proof-deadline-ms',
     ))
+    if (!Number.isSafeInteger(deadline) || deadline <= 0) throw new Error('observe real-proof deadline must be a positive safe integer')
 
     const witnessSource = options.witnessSource || existing?.active?.realScroll.chunkWitnessSource || 'rpc'
     const topology = buildProofTopology({
@@ -1039,6 +1052,8 @@ export class DogeConfigCommand extends Command {
       runtime: {
         artifactKeyPrefix: keyPrefix,
         blockWitnessDir: options.witnessDir || existing?.active?.realScroll.chunkBlockWitnessDir,
+        eagerMaterializer: existing?.deployment.eagerMaterializer,
+        observeRealProofDeadlineMs: deadline,
         proofCoordinatorPublicUrl: coordinatorUrl,
         publicS3EndpointUrl: publicEndpoint,
         rpcWitnessUrl: options.witnessRpcUrl

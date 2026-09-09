@@ -105,6 +105,7 @@ export interface ProofTopologyCompilerBundleManifestV1 {
   bundle_revision: string
   compiler_package_version: string
   deployment_context_schema_version: number
+  eager_materializer?: string
   eth_da_submitter?: string
   generated_materials?: string
   installable_service_configs: boolean
@@ -292,6 +293,10 @@ export function renderProofTopologySource(
   deploymentDir = '.',
   container = false,
 ): string {
+  if (!Number.isSafeInteger(topology.observeRealProofDeadlineMs) || topology.observeRealProofDeadlineMs! <= 0) {
+    throw new Error('observeRealProofDeadlineMs must be an explicit positive safe integer (no default)')
+  }
+
   const compilerIdentityFile = topology.compiler.identityFilePath
     ? resolveInside(path.resolve(deploymentDir), topology.compiler.identityFilePath, 'proof compiler identity path')
     : undefined
@@ -300,6 +305,7 @@ export function renderProofTopologySource(
     enforcement: topology.enforcement,
     generation: topology.generation,
     mode: topology.mode,
+    observe_real_proof_deadline_ms: topology.observeRealProofDeadlineMs!,
   }
   if (topology.active) {
     const store: toml.JsonMap = {kind: topology.active.artifactStore.kind}
@@ -385,7 +391,7 @@ function validateProviderUrl(value: string, label: string): void {
   }
 }
 
-function rebindProofTopologyBundleRevision(bundleDir: string): void {
+export function rebindProofTopologyBundleRevision(bundleDir: string): void {
   const manifestPath = path.join(bundleDir, 'bundle-manifest-v1.json')
   const manifest = readJson<ProofTopologyCompilerBundleManifestV1>(
     manifestPath,
@@ -527,6 +533,7 @@ export function validateProofTopologyBundle(
     ['proof_coordinator', manifest.proof_coordinator],
     ['prover_worker', manifest.prover_worker],
     ['eth_da_submitter', manifest.eth_da_submitter],
+    ['eager_materializer', manifest.eager_materializer],
   ] as const) if (relative) bundleFile(root, relative, label)
   if (manifest.generated_materials) {
     const materials = path.resolve(root, manifest.generated_materials)
@@ -549,8 +556,8 @@ export function validateProofTopologyBundle(
   const mode = sidecar.resolved.mode === 'disabled' ? 'disabled' : 'active'
   const generation = sidecar.resolved.mode === 'production' ? 'real' : sidecar.resolved.generation ?? 'mock'
   const active = mode === 'active'
-  if (Boolean(manifest.proof_coordinator) !== active || Boolean(manifest.prover_worker) !== active) {
-    throw new Error(`${manifestPath}: PC/Worker presence does not match resolved mode`)
+  if (Boolean(manifest.proof_coordinator) !== active || Boolean(manifest.prover_worker) !== (active && generation === 'real')) {
+    throw new Error(`${manifestPath}: PC/Worker presence does not match resolved mode/generation (mock proving is coordinator-internal)`)
   }
 
   let worker: ProverWorkerContractV1 | undefined
@@ -656,6 +663,11 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
       // dogeos-core derives every runtime child directory below it.
       artifact_local_root: '/app/data/proof-artifacts',
       eth_da_submitter: hasSubmitter ? {base_config_path: mountedInput(submitterName)} : {},
+      ...(deployment.eagerMaterializer ? {eager_materializer: {
+        listen_port: deployment.eagerMaterializer.listenPort,
+        start_batch_height: deployment.eagerMaterializer.startBatchHeight,
+        state_dir: deployment.eagerMaterializer.stateDir,
+      }} : {}),
       generated_materials_root: deployment.generatedMaterialsRoot ?? '/app/data/proof-topology',
       network: options.network,
       proof_coordinator: {
@@ -676,7 +688,7 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
       proof_work_token_file: deployment.proofWorkTokenFile ?? '/app/secrets/proof-work-token',
       protocol_context_path: deployment.protocolContextPath ?? '/app/protocol_context.json',
       prover_worker: {
-        mock_image: deployment.mockWorkerImage,
+        ...(deployment.mockWorkerImage ? {mock_image: deployment.mockWorkerImage} : {}),
         ...(deployment.productionWorkerImage ? {production_image: deployment.productionWorkerImage} : {}),
         readiness_evidence_path: deployment.readinessEvidencePath ?? '/run/dogeos/prover-worker-ready-v1.json',
         ...(deployment.publicS3EndpointUrl ? {public_s3_endpoint_url: deployment.publicS3EndpointUrl} : {}),

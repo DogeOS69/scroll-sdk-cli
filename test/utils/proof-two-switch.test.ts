@@ -126,6 +126,7 @@ describe('PR #937 two-switch proof adapter', () => {
       materials: prepared.receipt,
       runtime: {
         artifactKeyPrefix: 'proof-topology',
+        observeRealProofDeadlineMs: 1_800_000,
         proofCoordinatorPublicUrl: 'https://proof-coordinator.example.com',
         publicS3EndpointUrl: 'https://s3.us-east-1.amazonaws.com',
         rpcWitnessUrl: 'https://l2-rpc.example.com',
@@ -259,6 +260,7 @@ describe('PR #937 two-switch proof adapter', () => {
       materials: reloaded,
       mode: 'active',
       runtime: {
+        observeRealProofDeadlineMs: 1_800_000,
         proofCoordinatorPublicUrl: 'https://proof-coordinator.example.com',
         workerLaunch: 'external',
       },
@@ -372,6 +374,7 @@ describe('PR #937 two-switch proof adapter', () => {
       materials: prepared.receipt,
       mode: 'active',
       runtime: {
+        observeRealProofDeadlineMs: 1_800_000,
         proofCoordinatorPublicUrl: 'https://proof-coordinator.example.com',
         rpcWitnessUrl: 'https://l2-rpc.example.com',
         witnessSource: 'rpc',
