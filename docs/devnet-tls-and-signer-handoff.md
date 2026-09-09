@@ -55,6 +55,11 @@ same-instance upgrade, not a cold reset.
 
 ## Signer cutover and remaining policy prerequisite
 
+**Current runtime checkpoint:** [CubeSigner transport-only rollout](cubesigner-transport-runtime.md)
+has now completed. Session/processing readiness and WP re-registration passed;
+actual signing and settlement remain to be tested. The local-only edit below
+describes the preceding step, not the current deployed state.
+
 **Later operator decision (2026-09-09):** the user explicitly selected
 `transport_only` for the local CubeSigner production values. Set env
 `DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE=transport_only`; keep
