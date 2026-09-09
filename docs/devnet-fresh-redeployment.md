@@ -14,10 +14,13 @@ Hard boundaries:
   Keep the existing `Devnet` role and key untouched. Create a separate role/key
   for this instance and use the documented plain `transport_only` testnet lane.
   This is not CubeSigner proof-enforcement acceptance.
-- Kubernetes resources not deployed by this deployment agent must not be
-  deleted or modified. Unknown ownership means leave untouched. Inventory
-  names and establish ownership before acting; no namespace deletion, `--all`
-  cleanup, or blanket `make delete-all`.
+- Updated after user cleanup: **all remaining Kubernetes resources are
+  protected from deletion**, including earlier agent-owned resources. This
+  overrides old cutover cleanup plans. No uninstall, force replacement,
+  cascading deletion, namespace deletion, `--all`, or blanket `make delete-all`.
+  Other-owned/unknown resources remain untouched. Ask before resolving any
+  protected name, storage or Helm ownership conflict; create new resources only
+  within the fresh deployment's scope.
 - Preserve shared Dogecoin/Shadowfork/orchestrator workloads and storage,
   monitoring infrastructure, other test workloads, EKS, DNS/TLS, S3 bucket,
   existing KMS keys/roles and external databases. Blockscout remains deferred.
@@ -32,6 +35,15 @@ Hard boundaries:
 
 ## Execution checkpoint
 
+- Deployment resumed after the user's cleanup report. Read-only inventory found
+  remaining `scroll-common` and `contracts` Helm releases, including their
+  `genesis-config`, `protocol-context-config`, `contracts-deployment-env` and
+  `scroll-smart-contracts-config` ConfigMaps and contracts ExternalSecret.
+  These are now protected baseline resources. Updating their contents for a
+  new chain requires explicit clarification before installation proceeds;
+  no uninstall, deletion, scaling, ConfigMap update or Bridge broadcast was
+  performed during this resumed preflight. The existing sqlite-debug Deployments
+  both have zero replicas and remain untouched.
 - CLI branch: `fix/fresh-devnet-cubesigner-runbook`, starting at `7c504e1`.
 - Private workspace: `/data/dogeos-devnet-fresh-20260909.grtp5c` (0700).
   Staging is its `staging/` subdirectory, an ordinary directory, not a worktree.
@@ -108,7 +120,8 @@ and test the CLI on the approved branch, commit the fix, and rerun safely.
 
 ## Pending deployment sequence
 
-1. Finish backup/inventory; record an exact agent-owned cutover allowlist.
+1. Finish protected-baseline inventory; resolve the existing scroll-common and
+   contracts configuration conflict with the user before any cluster mutation.
 2. Review fresh canonical input files: domain, Sepolia/KMS, Reth identities,
    release pins, 10M gas limit, empty blocks, DA interval and new archive prefix.
 3. Generate L2 artifacts once with the approved contracts gen-configs image;
@@ -118,9 +131,10 @@ and test the CLI on the approved branch, commit the fix, and rerun safely.
    Bridge/protocol/replay outputs into the new instance.
 5. Regenerate proof topology, native configurations, service Secrets and signer
    policy bundles in documented order. Use isolated protocol-bound state.
-6. Stop only verified agent-owned old consumers before switching shared chain
-   ConfigMaps. Reset only the corresponding explicitly identified instance
-   storage, then install from the repaired values and charts.
+6. Install new instance resources from the repaired values/charts. All resources
+   remaining after user cleanup are protected; do not execute the old
+   stop/reset/delete sequence. Existing chain ConfigMap updates require the
+   separately confirmed boundary above; do not reuse old protocol databases.
 7. Deploy contracts on the fresh L2; start DA, fee oracle, signers, WP and proof
    services. Verify cold start/restart, receipts and matching chain identities.
 8. Complete an actual deposit and withdrawal through signing, broadcast and
