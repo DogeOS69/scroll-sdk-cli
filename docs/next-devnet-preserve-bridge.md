@@ -71,13 +71,60 @@ rejects that placeholder because Batch commitment is cross-checked at runtime.
 Do not fill in arbitrary nonzero bytes, disable the check, or relabel synthetic
 materials as real.
 
-The matching `real-identity.env`, non-placeholder `worker-identity-bundle.json`
-and aggregate verifying key were not found in the searched local deployment/core
-directories or the EC2 home tree (search depth six). The beta.4e image-build run
-publishes Docker build records/digests, not these bake outputs. Obtain the release
-materialization package from its producer. The two materializer binaries must
-also match the deployed PC image. Import/bake against the **existing**
-`protocol_context.json`; stop if the producer requires changing protocol identity.
+The first search missed the repository's historical **Proof Software Release**
+workflow: the normal beta.4e image-build run is not the only artifact source.
+The user-directed GitHub search subsequently found and downloaded real programs
+and the aggregate VK, detailed below. The remaining prerequisite is deriving and
+validating a compatible current identity bundle, not finding any material at all.
+The materializer binaries must also match the deployed PC image. Import/bake
+against the **existing** `protocol_context.json`; stop if the producer requires
+changing protocol identity.
+
+### Located proof release (follow-up GitHub search)
+
+- Successful [Proof Software Release run 33255802647](https://github.com/DogeOS69/dogeos-core/actions/runs/33255802647),
+  2026-08-29, source `aa856ab3f9718f914326bd3fc4b0ea8f809016f8` on
+  `ci/proof-pr935-e2e-publish-v3`.
+- Downloadable artifact ID `9716098804`,
+  `proof-software-release-publishable-proof-pr935-e2e-v3-aa856ab3f9718f914326bd3fc4b0ea8f809016f8`;
+  162795686 bytes, not expired at inspection. The separate producer-output
+  artifact has expired; the publishable archive is the usable download.
+- Data-only OCI image (registry manifest verified and pulled):
+  `dogeos69/proof-release@sha256:1a8f6a09d67679dc65ad1cad3060f1065f99ffb927676bfda16f1972434939ae`.
+- Extracted inspection copy:
+  `/tmp/dogeos-proof-release-inspect.s0RPdp/proof-release/`.
+  The Actions download also completed as `proof-software-release.tar` in its
+  parent. This is temporary inspection storage, not installed deployment input.
+
+The package contains `proof-software-release-v1.json`, Chunk/Batch
+`app.vmexe` and `openvm.toml`, L2-range exe/config, `verifier/aggregate-vk`,
+and `bin/chunk-materializer` / `bin/batch-materializer`. All nine material
+files passed size and SHA256 comparison against the manifest. The recorded
+software release digest is
+`sha256:582084c940e5ad5f5216308c2f7826bcc15022a0d2d8584e0eea84bcc2879b97`.
+This file-hash check is not a claim of native beta.4e compatibility validation.
+
+Its Scroll prover revision is `0badaf7aebe407bc7e50a5eb713a0ab44668a362`, matching
+beta.4e; it reports OpenVM `1.7` (beta.4e pins SDK `v1.7.0`). However, its core
+revision diverges from beta.4e, and its L2-range commitment is not the current
+compiled-default commitment. The old release pins an old compiler and old
+Workers. **Do not overwrite beta.4e component pins or import the whole package
+as if it were a beta.4e release.**
+
+The publication workflow and OCI release tooling were on the old PR #935
+validation branch, not beta.4e. [PR #935](https://github.com/DogeOS69/dogeos-core/pull/935)
+was closed without merging and explicitly superseded by #937. The historical
+[producer README](https://github.com/DogeOS69/dogeos-core/blob/aa856ab3f9718f914326bd3fc4b0ea8f809016f8/tools/proof-release/README.md)
+explains the package; current
+[real-proving guidance](https://github.com/DogeOS69/dogeos-core/blob/v0.3.0-beta.4e/docs/engineering/real-proving-runner.md)
+and the current compiler contract govern compatibility and identity export.
+
+Next: check the candidate Chunk/Batch/VK with current native tooling, obtain or
+generate the non-placeholder identity bundle from matching build inputs, and
+use beta.4e materializer binaries. A file-hash match and the same OpenVM major
+line alone are insufficient to approve aggregation/Bridge artifacts. No old
+binary was executed during this inspection; the temporary stopped Docker
+container used to copy the data-only image was removed after extraction.
 
 ## Local changes already made (not rolled out)
 
