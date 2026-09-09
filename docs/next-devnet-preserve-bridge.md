@@ -46,7 +46,13 @@ ssh ec2-dev 'curl --fail-with-body -sS --max-time 20 \
   http://192.168.30.65:22555/'
 ```
 
-## Release and prerequisite status
+## Release and prerequisite history
+
+The identity prerequisite described below was resolved by the exact-source CPU
+build and verifier-start validation in [native proof image tools](proof-image-tools.md).
+The cluster is now running active/mock/observe. See the
+[live rollout checkpoint](#live-rollout-checkpoint-2026-09-09) for executed repairs
+and remaining acceptance; the earlier disabled-profile notes are historical.
 
 PR #1136 merged as `8b1d22ecb55544456b0d4846bafbb30e952ff7a4`.
 GitHub comparison confirms `v0.3.0-beta.4e` contains it (30 commits ahead,
@@ -64,7 +70,7 @@ manifest is `sha256:2467dccfa4a28dd78136fa660f7afba2449d3010a873173e8adbf92700d7
 The initial guessed repository `proof-topology-compiler` was wrong; use
 `dogeos-proof-topology` above.
 
-**Current blocker is real materialization identity, not a Bridge reset.** The
+**Initial blocker was real materialization identity, not a Bridge reset.** The
 existing material receipt uses synthetic identities and the Worker identity
 bundle has an all-zero `batch_guest`. Native beta.4e eager-profile preflight
 rejects that placeholder because Batch commitment is cross-checked at runtime.
@@ -126,7 +132,7 @@ line alone are insufficient to approve aggregation/Bridge artifacts. No old
 binary was executed during this inspection; the temporary stopped Docker
 container used to copy the data-only image was removed after extraction.
 
-## Local changes already made (not rolled out)
+## Earlier preflight checkpoint (before rollout)
 
 Subsequent image-tool checkpoint: beta.4e materializers and the placeholder
 Worker identity were exported; the historical CPU producer successfully derived
@@ -178,7 +184,7 @@ compiler config fails as intended. The genesis YAML and protocol-context SHA256
 remain `ef936991667e3010fd081ede6235c109257c7a36077e46738996a435aa86edc8`
 and `c24bff010e525e4992eee41511bdd5cbd2f84313fd0cd3952881a1ced0ff73e7`.
 
-## Remaining cutover, in order
+## Reproducible cutover order
 
 1. Import matching real materialization inputs using the commands in
    [the proof operator runbook](proof-operator-runbook.md). Preserve old materials
@@ -223,3 +229,114 @@ and `c24bff010e525e4992eee41511bdd5cbd2f84313fd0cd3952881a1ced0ff73e7`.
 Do not mark the checklist complete based on Pod Ready alone. Real/observe
 fallback and later enforce cutover are distinct follow-up acceptance steps;
 enforce changes statement identity and needs a fresh/regenerated proof store.
+
+## Live rollout checkpoint (2026-09-09)
+
+The beta.4e CPU identity export and current-source verifier-start smoke passed.
+The accepted mock receipt is `.data/proof-materials-beta4e.json`, with files under
+`.data/proof-materials/beta4e`. Native Scroll evidence is imported explicitly;
+the historical whole proof release and the zero-placeholder published Worker
+identity are not substituted into the active deployment.
+
+Executed from the deployment project, using its existing protocol context:
+
+```bash
+scrollsdk setup doge-config --config .data/doge-config.toml -N \
+  --proof-topology --proof-materials .data/proof-materials-beta4e.json \
+  --proof-mode active --proof-generation mock --proof-enforcement observe \
+  --proof-observe-real-proof-deadline-ms 1800000 --json
+scrollsdk setup prep-charts --doge-config .data/doge-config.toml -N \
+  --skip-auth-check --skip-l2-contract-deployment-block --json
+scrollsdk setup proof-config-check --json
+```
+
+The skip flags above belong to this already-deployed-contract upgrade, not a
+fresh deployment recipe. In the native WP base TOML, explicitly set
+`advance_l1_builder_v2 = true`: the old example had false, leaving valid deposits
+indexed but never admitted by an AdvanceL1 transition. Change the base before
+`prep-charts`, not the compiler output. Keep the existing genesis transaction.
+
+Before cutover, the no-WF/unspent-output checks were repeated. The old four WP
+SQLite databases were backed up with SQLite `.backup`; configuration was archived
+with mode 0600. Dedicated fresh claims were provisioned:
+
+- `withdrawal-processor-data-beta4e-20260909`: 100Gi, gp3.
+- `proof-coordinator-data-beta4e-20260909`: 10Gi, gp3.
+- Eager's chart created its own 5Gi state claim.
+
+Set `persistence.data.existingClaim` in WP/PC values to the matching new claim.
+Keep Reth, DA and signer volumes unchanged. Do not migrate the old WP database
+or clear the shared S3 prefix. Backups in this instance are under
+`.data/checkpoints/next-devnet-beta4e-20260909/`; they contain sensitive data and
+must not be committed. The old claims remain rollback resources, not active DBs.
+
+After review and successful preflight, the actual installs used:
+
+```bash
+make install-eth-da-submitter KUBE_CONTEXT="$KUBE_CONTEXT"
+make install-proof-coordinator KUBE_CONTEXT="$KUBE_CONTEXT"
+make install-withdrawal-processor KUBE_CONTEXT="$KUBE_CONTEXT"
+make install-eager-materializer KUBE_CONTEXT="$KUBE_CONTEXT"
+```
+
+### Repairs found only during live execution
+
+1. Use the regional S3 endpoint `https://s3.us-east-1.amazonaws.com`, including
+   in us-east-1. The global endpoint prevented DA's anonymous-PUT safety check
+   from deriving its probe URL. CLI a65f7e2 fixes the default. Regenerate from
+   the corrected topology source and roll DA; do not disable the safety check.
+2. WP proof-work auth must use exactly one input. Compiler output uses
+   `bearer_token_file`; CLI e59b8cd changes the reserved `withdrawal-proof-token`
+   ExternalSecret key to `proof-work-token`, removes its env injection, and
+   mounts it at `/app/secrets/proof-work-token`, read-only. The WP service-key
+   Secret remains separate and unchanged. Never restore both bearer env and file.
+3. The internal witness node needs HTTP `debug_executionWitness` and historical
+   `eth_getProof`. Set internal `reth.http.api: eth,net,web3,rpc,debug`; append
+   `--rpc.eth-proof-window`, `100000` to `reth.extraArgs`. This window must exceed
+   head minus the oldest unprepared block and needs capacity review as backlog
+   grows. Do not add debug to public RPC. Both requests passed at block 1 after
+   internal Reth revision 5. No Reth database or genesis reset was needed.
+4. A failed StatefulSet pod can block the repaired RollingUpdate. After checking
+   the corrected template and token Secret, the old failed WP pod alone was
+   deleted, allowing the replacement to start. Its PVC was not deleted.
+5. Set PC `RUST_LOG=info` to retain acceptance telemetry. Active PC resources in
+   this instance are requests 1Gi/500m, limits 4Gi/2000m. These are operator-owned
+   values, not proof identity inputs. Eager similarly has a dedicated IRSA role
+   restricted to List/Get/Put in the instance prefix, without Delete/KMS.
+6. Restart eager after correcting witness RPC. Its persistent cursor plus
+   64-height lookback re-discovered this instance's backlog; no state deletion
+   was necessary. Materialize timing logs now report successful real witness
+   construction and no RPC errors, and S3 contains chunk locators.
+
+### Existing EC2 signer identities
+
+Run `setup export-signer-policy` only **after** `prep-charts` completes. Do not
+run them concurrently: the chart-preparation transaction replaces `.data` and
+can discard a concurrently created policy export. Copy only the completed public
+policy bundle to the existing EC2 deployment directory. Do not run Phase A again.
+
+The three original Compose projects retained `identity.env`, `partner.toml` and
+their named `signer-data` volumes. The beta.4e override pins:
+
+```text
+dogeos69/attestation-signer@sha256:ac90b03ae9c2d34d97288bd4d56712cabd7ca225aa962fb79b8566ced94b3586
+```
+
+The override sets Observe/testnet, existing protocol context, the regional S3
+artifact origin and existing TSO URL; it replaces only the public policy mount.
+Supply `SIGNER_PORT=4040`, `4041` or `4042` for the matching original Compose
+project (`dogeos-devnet-20260909-signer0`, `signer1`, `signer2`), using the original
+compose file plus the override. Validate with `docker compose config --quiet`
+before `up -d`. On this host published ports bind **192.168.30.65**, not loopback;
+check `http://192.168.30.65:4040/health` and the other two ports. All three return
+core revision `eef62d3e...` and the original public keys. Re-registration through
+WP `POST /register-tso` returned `{"status":"ok"}`. CubeSigner remains
+`transport_only`; this is not production-policy certification.
+
+### Acceptance so far
+
+At 06:23 UTC, WP proof rows included succeeded materialize/prove/verify work
+with no Worker deployment. PC logged `eager_locate_hit` / valid locator with no
+Chunk subprocess run. The fresh WP DA index was still catching up. A completed
+deposit/withdrawal, Batch child zero-RPC evidence and final clean runtime checks
+are **not yet claimed**; continue those checks before marking this run complete.
