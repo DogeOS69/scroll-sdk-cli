@@ -343,15 +343,19 @@ function ensureRethExternalSecret(yamlData: any, config: ResolvedSequencerRethCo
   const existing = yamlData.externalSecrets['secret-env'] || yamlData.externalSecrets[config.secretName] || {}
   delete yamlData.externalSecrets[config.secretName]
   const remoteKey = `dogeos/${config.secretName}`
+  // push-secrets owns the remote path. Regeneration must not retarget an
+  // existing node/signer identity to a different instance's default Secret.
+  const remoteKeyFor = (secretKey: string): string =>
+    existing.data?.find((item: any) => item.secretKey === secretKey)?.remoteRef?.key ?? remoteKey
   const data = [
     {
-      remoteRef: { key: remoteKey, property: RETH_NODEKEY_ENV },
+      remoteRef: { key: remoteKeyFor(RETH_NODEKEY_ENV), property: RETH_NODEKEY_ENV },
       secretKey: RETH_NODEKEY_ENV,
     },
   ]
   if (config.signer.backend === 'local') {
     data.push({
-      remoteRef: { key: remoteKey, property: RETH_SIGNER_PRIVATE_KEY_ENV },
+      remoteRef: { key: remoteKeyFor(RETH_SIGNER_PRIVATE_KEY_ENV), property: RETH_SIGNER_PRIVATE_KEY_ENV },
       secretKey: RETH_SIGNER_PRIVATE_KEY_ENV,
     })
   }

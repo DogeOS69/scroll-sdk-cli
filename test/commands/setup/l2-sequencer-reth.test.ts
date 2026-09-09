@@ -217,6 +217,24 @@ describe('setup l2-sequencer-reth', () => {
     expect(values.command).to.equal(undefined)
   })
 
+  for (const name of ['secret-env', 'l2-reth-sequencer-1-secret-env']) {
+    it(`preserves separate node and signer remote paths across regeneration (${name})`, () => {
+      const paths = ['dogeos/custom-instance/node', 'dogeos/custom-instance/signer']
+      const fields = ['RETH_NODEKEY', 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY']
+      const values: any = {externalSecrets: {[name]: {data: fields.map((secretKey, index) => ({
+        secretKey, remoteRef: {key: paths[index]},
+      }))}}}
+      for (let pass = 0; pass < 2; pass++) {
+        applySequencerRethValues(values, {
+          index: 1, nodekey: '1'.repeat(64), secretMode: 'external-secret',
+          secretName: 'l2-reth-sequencer-1-secret-env', signerMode: 'external_secret',
+          signer: {address: '0x1234567890123456789012345678901234567890', backend: 'local', privateKey: '0x' + '2'.repeat(64)},
+        })
+        expect(values.externalSecrets['secret-env'].data.map((item: any) => item.remoteRef.key)).to.deep.equal(paths)
+      }
+    })
+  }
+
   it('removes plain Secret fields when switching back to ExternalSecret mode', () => {
     const values: any = {
       env: [],

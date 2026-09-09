@@ -131,10 +131,13 @@ function ensureBootnodeRethExternalSecret(yamlData: any, config: ResolvedBootnod
   yamlData.externalSecrets ||= {}
   const existing = yamlData.externalSecrets['secret-env'] || yamlData.externalSecrets[config.secretName] || {}
   delete yamlData.externalSecrets[config.secretName]
+  // Keep the operator/push-secrets-selected path when regenerating values.
+  const remoteKey = existing.data?.find((item: any) => item.secretKey === RETH_BOOTNODE_NODEKEY_ENV)
+    ?.remoteRef?.key ?? `dogeos/${config.secretName}`
   yamlData.externalSecrets['secret-env'] = {
     data: [
       {
-        remoteRef: { key: `dogeos/${config.secretName}`, property: RETH_BOOTNODE_NODEKEY_ENV },
+        remoteRef: { key: remoteKey, property: RETH_BOOTNODE_NODEKEY_ENV },
         secretKey: RETH_BOOTNODE_NODEKEY_ENV,
       },
     ],

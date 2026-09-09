@@ -39,6 +39,33 @@ Hard boundaries:
 
 ## Execution checkpoint
 
+### Latest override: default service Secret prefix
+
+The operator selected `--aws-prefix dogeos`, superseding custom prefixes below.
+Ten service Secrets were uploaded at their default paths, then the corresponding
+Helm references updated. Do not push unrelated Dogecoin/coordinator-cron Secrets.
+Proof-AWS split token ownership and S3 artifact prefix remain unchanged.
+Existing custom-prefix Secrets were not deleted. Contracts already completed:
+updating its Secret reference must not delete/recreate the Completed Pod.
+
+Reth setup/prep helpers previously hardcoded the default remote path, discarding
+custom paths set by push-secrets. This could silently load another instance's
+node/signing keys. Both helpers now preserve each existing remoteRef.key;
+defaults apply only to newly configured fields. Changing a prefix is an explicit
+push-secrets operation, not a side effect of prep-charts. Focused tests cover
+repeated generation and separate node/signer Secret paths.
+
+Fresh rollout has completed contracts (77 successful receipts), L1, Reth, DA,
+fee oracle, TSO, CubeSigner, WP, PC, eager and frontends. EC2 signers use the new
+protocol and separate databases with existing identities. One AdvanceL1 has
+been signed/broadcast/confirmed and L1 replay canonicalized ten deposits.
+Full deposit/withdrawal and eager-hit/Batch no-RPC acceptance remains pending.
+Use `reth.sequencer.l1InclusionMode: finalized:0` for the WF-backed synthetic L1:
+`finalized:2` waits for two additional WF transitions, not two Dogecoin blocks.
+Preserve standby autoStart=false, gas 10M and empty blocks. PC ingress is opt-in,
+not automatically enabled by active proof mode. Normal L1 startup already has
+genesis hold disabled; do not blindly run the legacy start-l1-sync command.
+
 ### Current run: repository-root wrapper (supersedes staging phase 1)
 
 The operator discarded the isolated phase-1 preparation and requested using
