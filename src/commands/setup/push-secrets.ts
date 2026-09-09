@@ -834,19 +834,8 @@ export default class SetupPushSecrets extends Command {
       const pushedSecretNames = pushedSecrets.map(secret => secret.name)
       this.jsonCtx.logSuccess('Secrets pushed successfully')
 
-      if (flags['cubesigner-only']) {
-        this.jsonCtx.logSuccess('CubeSigner secret push process completed.')
-        if (this.jsonMode) {
-          this.jsonCtx.success({
-            cubesignerOnly: true,
-            provider,
-            secretsPushed: pushedSecretNames,
-          })
-        }
-
-        return;
-      }
-
+      // CubeSigner-only narrows uploaded files, not reconciliation. Its values
+      // must follow the selected region/prefix just like other service Secrets.
       let shouldUpdateYaml: boolean
       if (this.nonInteractive) {
         shouldUpdateYaml = !flags['skip-yaml-update']
@@ -871,6 +860,7 @@ export default class SetupPushSecrets extends Command {
       // JSON output
       if (this.jsonMode) {
         this.jsonCtx.success({
+          ...(flags['cubesigner-only'] ? {cubesignerOnly: true} : {}),
           credentials: {
             prefixName: credentials.prefixName || credentials.path,
             region: credentials.secretRegion,

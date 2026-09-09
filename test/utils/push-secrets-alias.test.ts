@@ -29,4 +29,14 @@ describe('push-secrets chart-local aliases', () => {
       expect(resolvePushedSecretName('secret-env', secret, names)).to.equal(undefined)
     }
   })
+
+  it('matches only the singleton CubeSigner uploads for scoped reconciliation', () => {
+    const pushed = new Set(['cubesigner-signer-session', 'cubesigner-signer-env'])
+    for (const secret of pushed) {
+      expect(resolvePushedSecretName(secret, {data: [ref(`dogeos/${secret}`)]}, pushed)).to.equal(secret)
+    }
+
+    expect(resolvePushedSecretName('cubesigner-signer-0-session', {}, pushed)).to.equal(undefined)
+    expect(resolvePushedSecretName('withdrawal-proof-token', {}, pushed)).to.equal(undefined)
+  })
 })
