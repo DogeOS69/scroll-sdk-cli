@@ -101,3 +101,28 @@ is a normal policy decision, not by itself a failure.
 
 This verifies DA recovery only. It does not complete WP, proof/signers, external
 access or end-to-end bridge acceptance.
+
+## Subsequent operator tuning: batch open time
+
+After observing approximately one small blob every 63 seconds, the operator
+requested `DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_OPEN_L2_TIME = "3000s"` in the SDK
+example and `"300s"` in this devnet's production values. SDK commit `9f6c49e`
+contains the example-only change. Apply the local value with
+`make install-eth-da-submitter`; revision 3 completed successfully and the live
+ConfigMap contains `300s`. The daemon remains Ready without submit/upload errors.
+
+The previous 60-second open time, one chunk per batch and 60-second publish wait
+predated RPC recovery. Recovery changed pending concurrency from four to one,
+not these timeouts. With empty blocks enabled, logs showed batches of 21 blocks,
+about 115 compressed bytes per 131072-byte raw blob, sealed by
+`max_chunks_per_batch` and submitted by `soft_batching_timeout`.
+
+Only MAX_OPEN_L2_TIME was changed in this tuning step. The optional
+CHUNK_MAX_OPEN_L2_TIME stays absent and inherits it; MAX_CHUNKS_PER_BATCH=1,
+MAX_BLOCKS_PER_CHUNK=128 and MAX_BATCH_WAIT=60s remain unchanged. Time is an upper
+bound, not a fixed publication interval: block count, gas and byte limits may
+seal earlier (particularly with the example's 3000-second value). Extending
+only publish wait would combine blobs into fewer transactions, not combine
+already sealed batches into fewer blobs. Current prep-charts has no mapping
+that overrides this existing production timeout; verify it after generation
+or when replacing local values from examples.
