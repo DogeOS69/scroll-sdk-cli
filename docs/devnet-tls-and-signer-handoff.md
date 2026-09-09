@@ -37,13 +37,21 @@ Verified TSO revision 2 and public RPC revision 3. Certificates
 `tso-service-tls`, `l2-reth-rpc-public-tls` and
 `l2-reth-rpc-public-websocket-tls` are Ready. EC2 verified TSO HTTPS returned 200;
 public HTTPS RPC returned `0x35fc2` (221122). No DNS, ClusterIssuer or unrelated
-running service was changed. Certificate readiness alone does not certify a
-WebSocket subscription; test that separately.
+running service was changed by this TLS rollout. A separate verified-TLS
+WebSocket connection to `wss://ws.rpc.devnet.doge.xyz` subscribed to `newHeads`
+and received block `0x407`; this checks more than certificate readiness.
 
 The command also updates other existing local values, including legacy files.
 That is configuration generation only: do not install retired services or
 Blockscout just because the command lists them as updated. Only the two releases
 above were applied for TLS at this checkpoint.
+
+Separately, `make install-fee-oracle` (revision 2) and
+`make install-l1-interface` (revision 3) reconciled their previously generated
+PublicNode Sepolia RPC settings. Both replacement Pods reached Ready with zero
+restarts. L1 retained `l1-interface-data-devnet-20260909` and the same canonical
+genesis. Live ConfigMaps now agree with the configured DA RPC. This is a normal
+same-instance upgrade, not a cold reset.
 
 ## Signer handoff prerequisites still unresolved
 

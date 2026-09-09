@@ -63,7 +63,10 @@ readiness, and end-to-end acceptance are different milestones.
   Fee-oracle has signed a successful on-chain update with its actual KMS identity;
   TSO is Ready. [WP cold start and idle Coordinator](core-services-runtime-20260909.md)
   now pass their mode-appropriate readiness checks. Active proof topology, EC2
-  signer/worker replacement and DNS/TLS/end-to-end validation remain pending.
+  signer/worker replacement and end-to-end validation remain pending. TSO/public
+  RPC TLS and a WebSocket newHeads subscription now pass; see
+  [TLS and signer handoff](devnet-tls-and-signer-handoff.md) for the remaining
+  operator confirmation and CubeSigner policy evidence dependencies.
   Blockscout is explicitly deferred because RDS admin credentials are
   unavailable. Do not reset RDS or deploy retired PostgreSQL consumers to proceed.
 
