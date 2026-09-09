@@ -143,7 +143,11 @@ never restart old and new signers on the same ports together. Stop new projects
 first, verify old TSO/instance ownership, then explicitly authorize rollback.
 Do not point an old signer DB at the new protocol context.
 
-EC2 cutover is complete. Full bridge/withdrawal acceptance is still blocked by
-the CubeSigner production policy information described in
-[the TLS/handoff guide](devnet-tls-and-signer-handoff.md). No policy was downgraded,
-and no artificial signing request was submitted to claim end-to-end success.
+This beta.3e EC2 cutover checkpoint is complete. The operator subsequently
+selected CubeSigner `transport_only` explicitly; its runtime handoff is recorded
+in [CubeSigner transport runtime](cubesigner-transport-runtime.md). Do not continue
+to treat missing production-policy evidence as a blocker for that selected devnet
+posture, and do not claim production-policy acceptance. The later beta.4e signer
+upgrade preserves these same identities and volumes; follow the
+[bridge-preserving upgrade](next-devnet-preserve-bridge.md#live-rollout-checkpoint-2026-09-09)
+for current runtime status and end-to-end acceptance.

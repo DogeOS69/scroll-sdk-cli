@@ -329,6 +329,10 @@ a stale pre-#937 bundle and fails generation or validation.
 After the final `prep-charts` pass, regenerate the complete bundle distributed
 to every external Attestation Signer operator:
 
+Wait for `prep-charts` to finish before starting this command. Chart preparation
+transactionally replaces `.data`; a concurrently created signer-policy export
+can be discarded by that replacement.
+
 ```bash
 scrollsdk setup export-signer-policy
 ```
