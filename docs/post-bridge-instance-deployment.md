@@ -104,8 +104,8 @@ cleanup does not erase that fence or replay funding transactions.
 | `secrets` | Selectively push required service Secrets and CubeSigner session with `--aws-prefix dogeos`. Proof-AWS manages split proof-token ownership separately. |
 | `core` | Install common config, L1 and six Reth nodes with fresh storage; check genesis agreement, chain ID, gas limit and empty blocks. |
 | `contracts` | Install the pinned native-genesis-compatible chart; wait for the one-shot Pod to succeed. |
-| `services` | Fund the configured KMS fee oracle to its reviewed floor if needed; install DA, fee oracle, CubeSigner, TSO, PC, eager, WP and frontends. |
-| `signers` | Prepare isolated EC2 projects/fresh SQLite volumes with exported policy and existing identities; validate all old-container ownership before authorized cutover. |
+| `services` | Fund the configured KMS fee oracle to its reviewed floor if needed; install DA, fee oracle, CubeSigner, TSO, PC, eager and frontends. WP is deliberately deferred. |
+| `signers` | Prepare isolated EC2 projects/fresh SQLite volumes with exported policy and existing identities; validate old-container ownership, perform authorized cutover, then install WP. This prevents new-protocol proposals from reaching old-protocol attestors. |
 | `start-l1-sync` | Wait for service readiness, read genesis-hold state, release if held, and verify release. |
 | `verify` | Recheck readiness, L2 progress, signer identity, DA status and hold release; write readiness evidence. |
 
@@ -120,6 +120,17 @@ Generation stays in the CLI; the runner does not hand-edit sessions or compiled
 proof outputs. Operator edits precede `prep-charts`; the proof contract is checked
 before installation. Short devnet confirmations belong in the environment's
 override script, not SDK examples. DA submission interval is not shortened.
+
+When using `existing-public-s3`, ensure the operator-managed bucket policy
+already permits credential-free reads under the **new instance prefix**, not
+only an older deployment prefix. This mode deliberately does not rewrite shared
+bucket policy. Test a generated proof artifact URL from the attestation host
+before enabling WF traffic. The reused DA KMS IAM role also needs GetObject/
+PutObject access to the new prefix; `setup eth-da-submitter --role-arn ...
+--archive-bucket ... --archive-key-prefix ...` must provision that grant.
+DA readiness alone is insufficient: inspect `blob_uploads.failed`, `conflict`,
+`retry_exhausted` and the sidecar publisher logs. A fixed IAM policy does not
+automatically unpark uploads already classified as permanent failures.
 
 ## Genesis hold is intentional
 
