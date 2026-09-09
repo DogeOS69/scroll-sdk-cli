@@ -53,14 +53,13 @@ restarts. L1 retained `l1-interface-data-devnet-20260909` and the same canonical
 genesis. Live ConfigMaps now agree with the configured DA RPC. This is a normal
 same-instance upgrade, not a cold reset.
 
-## Signer handoff prerequisites still unresolved
+## Signer cutover and remaining policy prerequisite
 
-Read-only checks on EC2 found three healthy old-instance attestation signers
-on ports 4040–4042 and one old Worker. Their existing directories and named
-SQLite volumes have not been modified. New policy bundle callbacks now have a
-working TLS destination, but replacing old service ownership requires operator
-confirmation. Preserve old data; do not reuse old protocol-bound SQLite state
-for the new Bridge. Signer public keys must continue to match genesis.
+The operator subsequently authorized EC2 cutover. Three new attestation signers
+now run beta.3e with the same KMS keys, new protocol context and fresh volumes.
+Old signers and Worker are stopped with backups and original data retained.
+See [the executed cutover procedure](ec2-signer-cutover-20260909.md) for commands,
+the Shadowfork proxy dependency, successful TSO registration and limitations.
 
 CubeSigner production values select `production_verifier_key_policy` but lack
 reviewed verifier/program identity digests and proof-resolver authority, along
