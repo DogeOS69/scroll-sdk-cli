@@ -55,6 +55,17 @@ same-instance upgrade, not a cold reset.
 
 ## Signer cutover and remaining policy prerequisite
 
+**Later operator decision (2026-09-09):** the user explicitly selected
+`transport_only` for the local CubeSigner production values. Set env
+`DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE=transport_only`; keep
+`SIGNATURE_MODE=ecdsa` and existing key/session bindings. This edit is local,
+not yet a Helm rollout. It supersedes the production-evidence prerequisite
+below for this devnet transport-only deployment, not for production acceptance.
+Transport-only still enforces service PSBT/session checks and CubeSigner-side
+key authorization, and reports `production_ready=false`. Fresh values generation
+defaults to production_verifier_key_policy; review/reapply the explicit local
+override if replacing values. No SDK or CLI default was changed.
+
 The operator subsequently authorized EC2 cutover. Three new attestation signers
 now run beta.3e with the same KMS keys, new protocol context and fresh volumes.
 Old signers and Worker are stopped with backups and original data retained.
