@@ -1614,7 +1614,7 @@ Provision proof AWS resources and persist their non-secret resource facts as pre
 ```
 USAGE
   $ scrollsdk setup proof-aws-init [--artifact-public-endpoint-url <value>] [--artifact-public-read-mode
-    direct-s3|existing-public-s3|existing-gateway] [--artifact-read-route-table-id <value>...]
+    direct-s3|shared-s3|existing-public-s3|existing-gateway] [--artifact-read-route-table-id <value>...]
     [--artifact-read-vpc-endpoint-id <value>] [--aws-profile <value>] [--aws-region <value>] [--bucket <value>]
     [--config <value>] [--coordinator-service-account <value>] [--deployment-alias <value>] [--doge-config <value>]
     [--eks-cluster <value>] [--json] [--key-prefix <value>] [--namespace <value>] [-N] [--rotate-tokens] [--secret-name
@@ -1626,9 +1626,10 @@ FLAGS
   -y, --yes                                      Apply the displayed AWS resource plan without confirmation
       --artifact-public-endpoint-url=<value>     Existing credential-free HTTPS S3-compatible gateway root; used only
                                                  with --artifact-public-read-mode=existing-gateway
-      --artifact-public-read-mode=<option>       Public proof artifact delivery: CLI-managed direct S3, operator-managed
-                                                 public S3, or an existing HTTPS gateway backed by private S3
-                                                 <options: direct-s3|existing-public-s3|existing-gateway>
+      --artifact-public-read-mode=<option>       Public artifact delivery: direct-s3 manages bucket settings; shared-s3
+                                                 adds only this prefix read grant; existing modes preserve
+                                                 operator-managed delivery
+                                                 <options: direct-s3|shared-s3|existing-public-s3|existing-gateway>
       --artifact-read-route-table-id=<value>...  Advanced override: EKS subnet route table to associate with the S3
                                                  gateway endpoint (repeatable; normally auto-discovered)
       --artifact-read-vpc-endpoint-id=<value>    Advanced override: existing S3 Gateway VPC endpoint (normally
@@ -1671,6 +1672,8 @@ EXAMPLES
   $ scrollsdk setup proof-aws-init --aws-region us-west-2 --eks-cluster dogeos-testnet --deployment-alias dev0829 --artifact-public-read-mode direct-s3 -N
 
   $ scrollsdk setup proof-aws-init --artifact-public-read-mode existing-public-s3
+
+  $ scrollsdk setup proof-aws-init --artifact-public-read-mode shared-s3 --skip-vpc-endpoint
 
   $ scrollsdk setup proof-aws-init --artifact-public-read-mode existing-gateway --artifact-public-endpoint-url https://objects.example.com
 

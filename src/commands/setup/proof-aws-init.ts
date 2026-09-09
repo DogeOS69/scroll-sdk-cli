@@ -33,6 +33,7 @@ export default class ProofAwsInit extends Command {
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --aws-region us-west-2 --eks-cluster dogeos-testnet --deployment-alias dev0829 --artifact-public-read-mode direct-s3 -N',
     '<%= config.bin %> <%= command.id %> --artifact-public-read-mode existing-public-s3',
+    '<%= config.bin %> <%= command.id %> --artifact-public-read-mode shared-s3 --skip-vpc-endpoint',
     '<%= config.bin %> <%= command.id %> --artifact-public-read-mode existing-gateway --artifact-public-endpoint-url https://objects.example.com',
     '<%= config.bin %> <%= command.id %> --rotate-tokens',
   ]
@@ -40,8 +41,8 @@ export default class ProofAwsInit extends Command {
   static override flags = {
     'artifact-public-endpoint-url': Flags.string({description: 'Existing credential-free HTTPS S3-compatible gateway root; used only with --artifact-public-read-mode=existing-gateway'}),
     'artifact-public-read-mode': Flags.string({
-      description: 'Public proof artifact delivery: CLI-managed direct S3, operator-managed public S3, or an existing HTTPS gateway backed by private S3',
-      options: ['direct-s3', 'existing-public-s3', 'existing-gateway'],
+      description: 'Public artifact delivery: direct-s3 manages bucket settings; shared-s3 adds only this prefix read grant; existing modes preserve operator-managed delivery',
+      options: ['direct-s3', 'shared-s3', 'existing-public-s3', 'existing-gateway'],
     }),
     'artifact-read-route-table-id': Flags.string({description: 'Advanced override: EKS subnet route table to associate with the S3 gateway endpoint (repeatable; normally auto-discovered)', multiple: true}),
     'artifact-read-vpc-endpoint-id': Flags.string({description: 'Advanced override: existing S3 Gateway VPC endpoint (normally auto-discovered or created)'}),
@@ -124,6 +125,10 @@ export default class ProofAwsInit extends Command {
                 value: 'direct-s3',
               },
               {
+                name: 'Shared AWS S3 (add this prefix read grant; preserve existing grants and bucket settings)',
+                value: 'shared-s3',
+              },
+              {
                 name: 'Existing public AWS S3 policy (preserve bucket-wide public access settings)',
                 value: 'existing-public-s3',
               },
@@ -144,9 +149,8 @@ export default class ProofAwsInit extends Command {
         )
       }
 
-      const publicEndpointUrl = publicReadMode === 'direct-s3' || publicReadMode === 'existing-public-s3'
-        ? proofArtifactS3Endpoint(shared.region)
-        : await this.resolveRequiredValue({
+      const publicEndpointUrl = publicReadMode === 'existing-gateway'
+        ? await this.resolveRequiredValue({
             defaultValue: existing?.artifactReadTransport.publicReadMode === 'existing-gateway'
               ? existing.artifactReadTransport.publicEndpointUrl
               : undefined,
@@ -156,6 +160,7 @@ export default class ProofAwsInit extends Command {
             nonInteractive,
             normalize: normalizeProofArtifactPublicEndpoint,
           })
+        : proofArtifactS3Endpoint(shared.region)
       const advancedVpcInput = Boolean(
         flags['artifact-read-vpc-endpoint-id']
         || flags['artifact-read-route-table-id']?.length,
@@ -288,8 +293,8 @@ export default class ProofAwsInit extends Command {
         `${configResult.changed ? 'Wrote' : 'Reused'} proof AWS config ${configResult.filePath}; `
         + PROOF_AWS_INIT_NEXT_STEPS,
       )
-      const publicReadWarning = result.artifactReadTransport.publicReadMode === 'direct-s3'
-        ? `anonymous GetObject is limited to the required external-consumer object paths under s3://${result.bucket}/${keyPrefix}; the segmentation sidecar, list/write/delete remain private, but external reachability is unverified`
+      const publicReadWarning = ['direct-s3', 'shared-s3'].includes(result.artifactReadTransport.publicReadMode)
+        ? `the CLI grant permits anonymous GetObject only for required external-consumer paths under s3://${result.bucket}/${keyPrefix}; it grants no sidecar/list/write/delete access. Existing unrelated grants are preserved and external reachability is unverified`
         : result.artifactReadTransport.publicReadMode === 'existing-public-s3'
           ? `the existing public S3 policy and bucket-wide Public Access Block settings are operator-managed and were preserved; verify anonymous GetObject for every required external-consumer path under s3://${result.bucket}/${keyPrefix}`
           : `the partner/external artifact route ${result.artifactReadTransport.publicEndpointUrl} is operator-managed and unverified; scroll-sdk-cli did not change the bucket policy or Public Access Block settings`

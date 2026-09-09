@@ -121,11 +121,21 @@ proof outputs. Operator edits precede `prep-charts`; the proof contract is check
 before installation. Short devnet confirmations belong in the environment's
 override script, not SDK examples. DA submission interval is not shortened.
 
-When using `existing-public-s3`, ensure the operator-managed bucket policy
-already permits credential-free reads under the **new instance prefix**, not
-only an older deployment prefix. This mode deliberately does not rewrite shared
-bucket policy. Test a generated proof artifact URL from the attestation host
-before enabling WF traffic. The reused DA KMS IAM role also needs GetObject/
+For a shared, public-artifact S3 bucket, the runner uses
+`setup proof-aws-init --artifact-public-read-mode shared-s3 --skip-vpc-endpoint`.
+This requires an existing bucket in the caller's account and adds an idempotent,
+bucket/prefix-specific `GetObject` statement for the **new instance prefix**.
+It preserves all older policy statements, encryption, bucket/account Public
+Access Block settings and VPC routing. It fails if Public Access Block prevents
+this grant, rather than weakening shared security settings. Serialize bucket
+policy writers; S3 does not provide conditional policy updates.
+
+`existing-public-s3` remains available when an operator separately manages the
+new prefix grant; it deliberately adds no public read permission. Do not use it
+as automatic provisioning for a new prefix. Test a generated proof artifact URL
+from the attestation host before enabling WF traffic. A configured grant is not
+an end-to-end reachability result (for example, explicit denies can still apply).
+The reused DA KMS IAM role also needs GetObject/
 PutObject access to the new prefix; `setup eth-da-submitter --role-arn ...
 --archive-bucket ... --archive-key-prefix ...` must provision that grant.
 DA readiness alone is insufficient: inspect `blob_uploads.failed`, `conflict`,
