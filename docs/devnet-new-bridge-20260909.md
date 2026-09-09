@@ -262,12 +262,16 @@ name from the private contracts Secret; no legacy service keys or fee-oracle
 private key were supplied. Exit 0, no broadcast. The deploy image's default
 entrypoint DOES broadcast L2 transactions; do not use it for this offline check.
 
-## Current resume boundary — L1 Interface running; downstream rollout pending
+## Current resume boundary — contracts blocked on invalid Reth block 1
 
 The cluster has now switched scroll-common/l1-interface to the new instance,
 using a separate fresh PVC. See [the beta.4e rollout record](l1-interface-beta4e-cold-start.md)
-for exact commands and validation. Do not reuse old protocol storage. L2 contract
-broadcast, EC2 replacement and DNS/TLS/end-to-end acceptance remain pending.
+for exact commands and validation. Do not reuse old protocol storage. All six
+Reth nodes initially became Ready with fresh 100Gi volumes. After the
+[Reth/contracts readiness repair](reth-contracts-runtime.md), seven transactions
+were broadcast, but all followers reject block 1's 10M-to-20M gas-limit jump.
+Recovery, receipt verification, EC2 replacement and DNS/TLS/end-to-end acceptance
+remain pending. Empty-block enablement is staged until safe chain recovery.
 
 Core #1139 is not fixed in v0.3.0-beta.4 (nor beta.4a): the tagged L1 Interface
 source still rejects a missing replay SQLite file before service initialization.
@@ -277,5 +281,5 @@ do not add a mandatory external initializer, create
 an empty SQLite file, disable replay validation, or import another protocol DB.
 Blockscout remains deferred without RDS administrator credentials.
 
-**For this already-created new Bridge, resume after L1 Interface startup —
+**For this already-created new Bridge, reconcile the current contracts run —
 never repeat genesis generation, Bridge setup or deposit funding.**

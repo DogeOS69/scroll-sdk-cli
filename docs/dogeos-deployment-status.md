@@ -47,8 +47,14 @@ readiness, and end-to-end acceptance are different milestones.
   service startup created replay DB and passed validation before syncing and
   serving. See [the verified rollout and opt-in instructions](l1-interface-beta4e-cold-start.md).
   Do not disable replay, add an external initializer or reuse another protocol DB.
-- Reth, L2 contracts, fee-oracle, DA and proof services are not installed in this
-  run. EC2 signer/worker replacement and DNS/TLS/end-to-end validation remain
+- All six Reth nodes initially became Ready with fresh 100Gi volumes. Contracts
+  passed the repaired RPC init check and broadcast seven transactions, but block 1
+  is rejected by all five followers: the primary's gas limit jumps from genesis
+  10M to 20M. Deployment is blocked; no successful receipt acceptance is claimed.
+  Empty-block enablement is staged, not applied while this split remains.
+  See [Reth/contracts runtime](reth-contracts-runtime.md)
+  for Service-name alignment, the local chart fix, exact commands and safe retries.
+  Fee-oracle, DA and proof rollout, EC2 signer/worker replacement and DNS/TLS/end-to-end validation remain
   pending. Blockscout is explicitly deferred because RDS admin credentials are
   unavailable. Do not reset RDS or deploy retired PostgreSQL consumers to proceed.
 
