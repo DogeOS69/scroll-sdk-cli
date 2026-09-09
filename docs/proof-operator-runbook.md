@@ -144,11 +144,18 @@ Choose the public-read mode according to who owns the bucket-level policy:
 - `shared-s3` adds a CLI-managed read statement for this instance's required
   DA/proof paths in an **existing bucket owned by the caller's AWS account**.
   Use `--skip-vpc-endpoint` with it: existing VPC routes and grants are preserved.
-  Each bucket/prefix has a deterministic statement ID, so new instances retain
-  previous instances' access and reruns do not duplicate statements. A changed
+  Each bucket/prefix/required-path-set has a deterministic statement ID, so new
+  instances retain previous instances' access and reruns do not duplicate
+  statements. A newer CLI requiring an additional path appends a new grant and
+  preserves the old one; retired grants require a separate operator review.
+  A changed
   statement with the same ID causes an error, not an overwrite. No existing
   statement (including explicit denies) is removed. No public list, write,
   delete, or segmentation-sidecar grant is added.
+  Public paths include `0x*`, `input-specs/*`, `prepared-bundles/*`, `witnesses/*`,
+  `public-outputs/*`, `proofs/*`, and `signer-policy-evidence/*`. The last path
+  carries AdvanceL1 completeness evidence fetched by attestation signers after
+  the bridge witness; omitting it causes a second artifact-fetch 403.
   The CLI checks bucket and account Public Access Block and fails rather than
   weakening either; inspecting these settings requires `s3:GetBucketPublicAccessBlock`
   and `s3:GetAccountPublicAccessBlock`. Prefix-policy management requires

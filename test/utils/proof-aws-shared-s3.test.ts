@@ -75,6 +75,19 @@ describe('shared S3 proof prefix grants', () => {
     expect(upsertSharedProofArtifactPublicReadPolicy(second, input.bucket, input.keyPrefix)).to.deep.equal(second)
   })
 
+  it('adds AdvanceL1 completeness access while preserving an older shared grant', () => {
+    const previous = {
+      Action: 's3:GetObject', Effect: 'Allow', Principal: '*',
+      Resource: publicArtifactObjectResources(input.bucket, input.keyPrefix).filter(item => !item.includes('signer-policy-evidence')),
+      Sid: 'ScrollSdkProofArtifactPublicReadPreviousRelease',
+    }
+    const policy = upsertSharedProofArtifactPublicReadPolicy({Statement: [previous]}, input.bucket, input.keyPrefix)
+    expect(policy.Statement).to.have.length(2)
+    expect(policy.Statement[0]).to.deep.equal(previous)
+    expect(policy.Statement[1].Resource).to.include('arn:aws:s3:::proof-bucket/instances/new/signer-policy-evidence/*')
+    expect(upsertSharedProofArtifactPublicReadPolicy(policy, input.bucket, input.keyPrefix)).to.deep.equal(policy)
+  })
+
   it('refuses to overwrite a modified grant with the same Sid', () => {
     const policy = upsertSharedProofArtifactPublicReadPolicy(original, input.bucket, input.keyPrefix)
     policy.Statement[2].Condition = {StringEquals: {'aws:SourceVpce': 'vpce-1234'}}

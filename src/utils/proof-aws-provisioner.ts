@@ -88,6 +88,8 @@ export const PUBLIC_ARTIFACT_OBJECT_PATTERNS = [
   'witnesses/*',
   'public-outputs/*',
   'proofs/*',
+  // AdvanceL1 attestors fetch completeness evidence after the bridge witness.
+  'signer-policy-evidence/*',
 ] as const
 
 export function publicArtifactObjectResources(bucket: string, keyPrefix: string): string[] {
@@ -314,12 +316,15 @@ export function upsertSharedProofArtifactPublicReadPolicy(
   keyPrefix: string,
 ): Record<string, any> {
   const prefix = normalizeProofKeyPrefix(keyPrefix)
-  const sid = `${PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID}${createHash('sha256').update(`${bucket}/${prefix}`).digest('hex').slice(0, 24)}`
+  const resources = publicArtifactObjectResources(bucket, prefix)
+  // Include the allowed path set: newer CLI versions can add required paths
+  // without rewriting a previous release's statement or weakening conditions.
+  const sid = `${PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID}${createHash('sha256').update(JSON.stringify(resources)).digest('hex').slice(0, 24)}`
   const statement = {
     Action: 's3:GetObject',
     Effect: 'Allow',
     Principal: '*',
-    Resource: publicArtifactObjectResources(bucket, prefix),
+    Resource: resources,
     Sid: sid,
   }
   const statements = Array.isArray(existingPolicy.Statement)
