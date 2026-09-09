@@ -49,9 +49,14 @@ readiness, and end-to-end acceptance are different milestones.
   Do not disable replay, add an external initializer or reuse another protocol DB.
 - All six Reth nodes initially became Ready with fresh 100Gi volumes. Contracts
   passed the repaired RPC init check and broadcast seven transactions, but block 1
-  is rejected by all five followers: the primary's gas limit jumps from genesis
-  10M to 20M. Deployment is blocked; no successful receipt acceptance is claimed.
-  Empty-block enablement is staged, not applied while this split remains.
+  was rejected by all five followers because gas limit jumped from 10M to 20M.
+  The operator then authorized a [six-volume recovery](reth-gas-limit-recovery.md):
+  rebuilt with the same genesis, explicit 10M builder limit and empty blocks.
+  All six nodes now accept the same empty blocks. Contracts deployment was
+  restarted after verifying common block hashes and genesis deployer nonce.
+  Contracts then completed successfully: all 77 receipts have status 0x1,
+  29 configured L2 addresses have code, and the actual KMS fee-oracle address
+  is whitelisted. Do not repeat the successful broadcast to resume.
   See [Reth/contracts runtime](reth-contracts-runtime.md)
   for Service-name alignment, the local chart fix, exact commands and safe retries.
   Fee-oracle, DA and proof rollout, EC2 signer/worker replacement and DNS/TLS/end-to-end validation remain

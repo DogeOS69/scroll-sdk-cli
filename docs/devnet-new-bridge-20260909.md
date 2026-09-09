@@ -262,7 +262,7 @@ name from the private contracts Secret; no legacy service keys or fee-oracle
 private key were supplied. Exit 0, no broadcast. The deploy image's default
 entrypoint DOES broadcast L2 transactions; do not use it for this offline check.
 
-## Current resume boundary — contracts blocked on invalid Reth block 1
+## Current resume boundary — Reth recovered; L2 contracts deployed
 
 The cluster has now switched scroll-common/l1-interface to the new instance,
 using a separate fresh PVC. See [the beta.4e rollout record](l1-interface-beta4e-cold-start.md)
@@ -270,8 +270,11 @@ for exact commands and validation. Do not reuse old protocol storage. All six
 Reth nodes initially became Ready with fresh 100Gi volumes. After the
 [Reth/contracts readiness repair](reth-contracts-runtime.md), seven transactions
 were broadcast, but all followers reject block 1's 10M-to-20M gas-limit jump.
-Recovery, receipt verification, EC2 replacement and DNS/TLS/end-to-end acceptance
-remain pending. Empty-block enablement is staged until safe chain recovery.
+The operator-authorized [six-volume recovery](reth-gas-limit-recovery.md) has now
+corrected the builder gas limit and enabled empty blocks; all six nodes accept
+the same chain. Contract redeployment completed: 77 successful receipts and code
+at all 29 configured L2 addresses; the KMS fee-oracle is whitelisted. Remaining
+DA/WP/proof rollout, EC2 replacement and DNS/TLS/end-to-end acceptance are pending.
 
 Core #1139 is not fixed in v0.3.0-beta.4 (nor beta.4a): the tagged L1 Interface
 source still rejects a missing replay SQLite file before service initialization.
@@ -281,5 +284,5 @@ do not add a mandatory external initializer, create
 an empty SQLite file, disable replay validation, or import another protocol DB.
 Blockscout remains deferred without RDS administrator credentials.
 
-**For this already-created new Bridge, reconcile the current contracts run —
+**For this already-created new Bridge, resume after the verified L2 contracts run —
 never repeat genesis generation, Bridge setup or deposit funding.**

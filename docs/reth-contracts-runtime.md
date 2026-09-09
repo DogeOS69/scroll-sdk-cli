@@ -88,7 +88,11 @@ deployer nonce advanced from 1 to 8. **Broadcast has now started; do not repeat
 the deletion/retry commands above without transaction reconciliation.** Completion
 and receipt checks must be recorded separately, not inferred from Helm success.
 
-## Current blocker: block 1 rejected by every follower
+## Historical blocker: block 1 rejected by every follower
+
+This incident was subsequently addressed by the operator-authorized
+[six-volume rebuild and gas-limit correction](reth-gas-limit-recovery.md).
+The text below records the state before recovery, not the current empty-block setting.
 
 The primary built block 1 with gasLimit 20,000,000 (0x1312d00), whereas frozen
 genesis has 10,000,000 (0x989680). The RPC log reports:
