@@ -59,8 +59,11 @@ readiness, and end-to-end acceptance are different milestones.
   is whitelisted. Do not repeat the successful broadcast to resume.
   See [Reth/contracts runtime](reth-contracts-runtime.md)
   for Service-name alignment, the local chart fix, exact commands and safe retries.
-  Fee-oracle, DA and proof rollout, EC2 signer/worker replacement and DNS/TLS/end-to-end validation remain
-  pending. Blockscout is explicitly deferred because RDS admin credentials are
+  DA has now passed [runtime and on-chain recovery checks](eth-da-submitter-rpc-recovery.md).
+  Fee-oracle has signed a successful on-chain update with its actual KMS identity;
+  TSO is Ready. Proof Coordinator rollout is still under validation; WP, EC2
+  signer/worker replacement and DNS/TLS/end-to-end validation remain pending.
+  Blockscout is explicitly deferred because RDS admin credentials are
   unavailable. Do not reset RDS or deploy retired PostgreSQL consumers to proceed.
 
 ## Corrections that must carry into the final runbook
