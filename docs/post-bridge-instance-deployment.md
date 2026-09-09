@@ -82,6 +82,16 @@ prefix-based cleanup. Older/manual deployments and interrupted installs lacking
 complete receipts need a separate explicit ownership audit; the runner cannot
 infer ownership from names. A cleaned instance ID must not be reused.
 
+Some environments retain unrelated historical resources whose names share a
+service prefix. Do not delete these merely to pass preflight. The environment
+profile can record audited `preservedDormantDeployments` (exact name, UID,
+expected PVC names, and zero replicas) and `preservedConfigMaps` (exact name,
+UID and data hash). Preflight verifies these pins and leaves the objects alone;
+this grants no adoption, modification or cleanup authority. A changed object
+blocks deployment, and an exact collision with a rendered chart still blocks
+installation. Keep environment-specific names and audit evidence in the
+deployment repository, not this manual.
+
 The Bridge wrapper's persistent attempt fence remains separate. Inspect/archive
 the completed old attempt and prepare fresh inputs using its documented workflow;
 cleanup does not erase that fence or replay funding transactions.
