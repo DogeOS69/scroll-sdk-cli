@@ -11,9 +11,9 @@ import type {
 export const DEFAULT_PROOF_KEY_PREFIX = 'proof-topology'
 
 export function awsS3Endpoint(region: string): string {
-  return region === 'us-east-1'
-    ? 'https://s3.amazonaws.com'
-    : `https://s3.${region}.amazonaws.com`
+  // The DA uploader's anonymous-write safety probe requires a regional root,
+  // including us-east-1; the legacy global endpoint cannot be classified.
+  return `https://s3.${region}.amazonaws.com`
 }
 
 export interface ProofTopologyRuntimeInput {

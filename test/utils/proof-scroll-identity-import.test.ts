@@ -5,12 +5,16 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 
 import {prepareProofMaterials, readProofMaterials, syntheticMockProofIdentities} from '../../src/utils/proof-materials.js'
-import {buildProofTopology} from '../../src/utils/proof-topology-init.js'
+import {awsS3Endpoint, buildProofTopology} from '../../src/utils/proof-topology-init.js'
 
 const raw = (c: string) => `0x${c.repeat(128)}`
 const hash = (body: Buffer | string) => createHash('sha256').update(body).digest('hex')
 
 describe('native Scroll identity import for mock materialization', () => {
+  it('uses regional AWS endpoints including us-east-1 for the uploader safety probe', () => {
+    expect(awsS3Endpoint('us-east-1')).to.equal('https://s3.us-east-1.amazonaws.com')
+    expect(awsS3Endpoint('us-west-2')).to.equal('https://s3.us-west-2.amazonaws.com')
+  })
   let root: string
   let evidence: string
   let bundle: string
