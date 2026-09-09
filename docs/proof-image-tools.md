@@ -131,7 +131,7 @@ scrollsdk setup proof-materials --generation mock --non-interactive \
   --aggregate-verifying-key "$CANDIDATE_RELEASE/verifier/aggregate-vk" \
   --chunk-materializer .data/generated/proof-image-tools-beta4e/materialize-chunk-oneshot \
   --batch-materializer .data/generated/proof-image-tools-beta4e/scroll-runtime-materializer \
-  --materials-dir .data/proof-materials-beta4e \
+  --materials-dir .data/proof-materials/beta4e \
   --output .data/proof-materials-beta4e.json \
   --mock-worker-image dogeos69/prover-worker-mock@sha256:e5de8a3782b88590eda0083977cf882c61b1eb2994fdd647e464984cb1f69a38 \
   --compiler-image dogeos69/dogeos-proof-topology@sha256:c48946dc0af058d839cf064034c805e681fa8439e377ba8ecf4afbbefb02620a \
