@@ -65,8 +65,26 @@ working directory is `/mnt/wsl/data/github/dogeos69/dogeos-aws-devnet`.
   environment, explicit beta.4e/context and maturity-confirmations=100. Its
   first CLI call stopped at the expected preflight of the old spent funding
   UTXO, with no setup output; helper is `noRnKtSTqeXq6Kin9G16rGQR23STHrvWYK`.
-  Initial mining succeeded. Maturity wait and second invocation are in progress,
-  not yet completed. Do not start a second wrapper or remove its attempt lock.
+  The wrapper subsequently completed successfully, recording status=complete
+  and 118 mining requests. It waited for 100 coinbase confirmations, wrote the
+  verified funding UTXO and stopped its miner after the second CLI call.
+  Funding input: `2af2ba42052aeb30b341f8454a40e69dcedcf5fea6d089139cc08f83626a9359:0`.
+  New Bridge: `2NG2hXDaLonSY7pVGojdXFv4v77bjQ6KUQG`.
+  Protocol ID: `fe5d2bf4bdd76afd384aa665c1fde2323cfd3e1b96db936f3c385e71b1c51182`.
+  Setup outpoint: `fab25097677dcc57f3354690ac5cbcf6b6ef39359053c7be15f02129cbf3b3d9:0`.
+  Independent read-only RPC audit verified all 11 setup/deposit-seed transactions
+  confirmed (setup 9 confirmations, deposits 5–7 at that check), 10 × 5 DOGE.
+  Do not rerun funding or remove the persistent attempt fence.
+- Used `setup eth-da-submitter` with the existing KMS key/role and
+  `--archive-key-prefix devnet-20260908/instance-20260909/fresh-0731`, then
+  `setup proof-aws-init` with the same canonical prefix, existing-public-s3,
+  --skip-vpc-endpoint and the existing infrastructure alias devnet-20260908.
+  No bucket or token rotation; IAM artifact policies now target the new prefix.
+  Used `setup doge-config --proof-topology` with the validated beta.4e mock
+  material receipt, active/mock/observe and 1800000ms fallback deadline. Native
+  mock preflight passed. These software identities are reusable; generated
+  per-protocol bundles are not reused. prep-charts is now running for this
+  identity, before any new workload installation.
 
 Commands (SEED is a privately prepared fresh value, never a literal example):
 
