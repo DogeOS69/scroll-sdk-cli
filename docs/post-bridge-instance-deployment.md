@@ -127,13 +127,23 @@ Fresh sequencer deployments must preserve
 `DOGEOS_L1_INTERFACE_SEQUENCER_GENESIS_MODE: "true"`. After setup, the manual
 command `make start-l1-sync` calls
 `POST http://l1-interface:9091/disable-genesis-hold` inside the cluster.
-The automated phase uses the same request from an existing RPC Pod, without
-creating/deleting a helper Pod.
+The automated phase sends the same request from an existing RPC Pod.
 
-Read `GET http://l1-interface:9090/health/detailed` before and after release.
-`components.genesis_hold.details.enabled=true, activated=false` means held;
-`enabled=true, activated=true` means released. Resume skips POST only when
-persisted state is already released, including a lost previous response.
+The detailed health URL is `http://l1-interface:9090/api/v1/health/detailed`.
+In beta.4f the standalone health server is not connected to ChainStateManager,
+so this response does **not** include `components.genesis_hold`. A healthy
+response alone cannot prove release. The environment runner therefore checks
+the live configuration and reads `l1_interface_genesis_state.genesis_hold_disabled`
+before and after the POST: `0` means held, `1` means durably released. It creates
+a temporary same-node Pod using the core withdrawal-processor image's SQLite
+client, mounts only the owned L1 PVC read-only, invokes `sqlite3 -readonly`,
+and removes only that helper after checking its UID. It never executes SQL writes.
+This requires permission to create/delete that temporary Pod and read the PVC.
+
+If a future health server exposes the explicit genesis component,
+`enabled=true, activated=false` means held and `enabled=true, activated=true`
+means released. Resume skips POST only when persisted state is already released,
+including a lost previous response.
 Missing state, disabled configuration, HTTP errors or an unsuccessful POST
 are not silently accepted. Do not turn off the configuration to bypass the step.
 
