@@ -12,6 +12,10 @@ until the corresponding legacy CLI configuration path is retired; never fund
 or authorize the public placeholder. The real fee-oracle address is still
 required, and neither KMS service needs an exportable private key.
 
+The historical #1139 startup blocker described below is now resolved in the
+devnet trial using beta.4e and explicit fresh-genesis opt-in; see the
+[verified L1 Interface rollout](l1-interface-beta4e-cold-start.md).
+
 This is an opt-in compatibility mode for **DogeOS testnet/regtest L2-only
 deployment**, not a general-purpose KMS workaround for Scroll L1 contracts.
 

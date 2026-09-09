@@ -36,17 +36,17 @@ readiness, and end-to-end acceptance are different milestones.
   `b7e9425fda9ad99b782a10b5575521bca67f4842da4923f00d690a8a5947beaa`.
   New gen-secrets, prep-charts, policy export, proof-config-check and actual
   offline Reth init passed. Reth's hash matches the protocol context exactly.
-- scroll-common and l1-interface Helm releases still belong to the **old**
-  instance. Their ConfigMaps no longer match the newly adopted local artifacts.
-  No new-instance Helm rollout has been performed; preserve the old PVC/Secrets.
+- scroll-common and l1-interface now serve the **new** instance (Helm revision 2).
+  ConfigMaps match canonical artifacts; L1 Interface beta.4e is Ready on a new
+  dedicated 100Gi PVC. The old PVC/Secrets are retained, not reused or deleted.
   The new deploy image's offline None/verify-config passed with only the deployer
   key. New service Secrets were uploaded under dogeos/devnet-20260909. Historical
   server-side dry-run success must not be attributed to the new instance.
-- L1 Interface v0.3.0-beta.3e fails on a fresh PVC because /data/replay.sqlite
-  does not exist. [Core #1139](https://github.com/DogeOS69/dogeos-core/issues/1139)
-  requires initialization inside the service binary, before strict startup
-  validation. A separate mandatory initializer/init container is not the intended
-  fix. Do not disable replay or import another instance's database.
+- [Core #1139](https://github.com/DogeOS69/dogeos-core/issues/1139) is resolved
+  for this instance by beta.4e plus explicit fresh_genesis_init=true. Normal
+  service startup created replay DB and passed validation before syncing and
+  serving. See [the verified rollout and opt-in instructions](l1-interface-beta4e-cold-start.md).
+  Do not disable replay, add an external initializer or reuse another protocol DB.
 - Reth, L2 contracts, fee-oracle, DA and proof services are not installed in this
   run. EC2 signer/worker replacement and DNS/TLS/end-to-end validation remain
   pending. Blockscout is explicitly deferred because RDS admin credentials are
@@ -56,7 +56,7 @@ readiness, and end-to-end acceptance are different milestones.
 
 1. **Use Reth, not retired l2geth setup instructions.** For this deployment the
    rollup-node image exception is v0.3.0-beta.1c; core services otherwise use
-   v0.3.0-beta.3e, with the unresolved L1 cold-start limitation above. The frontend
+   v0.3.0-beta.3e, except L1 Interface now uses verified v0.3.0-beta.4e. The frontend
    exception is dogeos69/scroll-sdk-frontends:0.3.0-rc3. These are recorded pins,
    not a claim that all runtime images have passed acceptance.
 2. **Contracts have three independent-purpose tags from one build.** Follow
@@ -89,6 +89,6 @@ readiness, and end-to-end acceptance are different milestones.
    observed prep-charts progress output before its JSON result.
 
 The final consolidated manual will incorporate the actual successful runtime,
-partner handoff and end-to-end steps after the blocker is fixed and those steps
+partner handoff and end-to-end steps after those remaining steps
 have been executed. Until then, a generated file or proposed workaround must not
 be labeled a successfully tested deployment step.

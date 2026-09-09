@@ -3,7 +3,9 @@
 This records the user-authorized **new instance**, created on 2026-09-09 JST.
 It supersedes the 2026-09-08 instance; it is not an in-place genesis upgrade.
 Steps through configuration and offline Reth initialization are verified.
-Cluster rollout and end-to-end acceptance remain blocked by core #1139.
+The initial core #1139 blocker has since been resolved with beta.4e; see the
+[verified L1 rollout](l1-interface-beta4e-cold-start.md). Full end-to-end
+acceptance remains pending.
 
 ## Identity and release pins
 
@@ -16,7 +18,7 @@ Cluster rollout and end-to-end acceptance remain blocked by core #1139.
 | Dogecoin chain / Ethereum DA | Shadowfork `111111` / Sepolia `11155111` |
 | Virtual L1 genesis height | `62638951` |
 | Reth chainspec scan start | `0` (not the virtual L1 genesis height) |
-| Core / Bridge tools | `v0.3.0-beta.3e` |
+| Core / Bridge tools | `v0.3.0-beta.3e`, except L1 Interface now `v0.3.0-beta.4e` |
 | Reth | `dogeos69/rollup-node:v0.3.0-beta.1c` |
 | Frontend | `dogeos69/scroll-sdk-frontends:0.3.0-rc3` |
 
@@ -260,20 +262,20 @@ name from the private contracts Secret; no legacy service keys or fee-oracle
 private key were supplied. Exit 0, no broadcast. The deploy image's default
 entrypoint DOES broadcast L2 transactions; do not use it for this offline check.
 
-## Resume boundary — not yet a running new instance
+## Current resume boundary — L1 Interface running; downstream rollout pending
 
-The cluster still contains the **old** scroll-common/l1-interface deployment.
-Do not apply only new genesis or only a new protocol context to its existing
-database/PVC. No new-instance Helm rollout, L2 contract broadcast, EC2 replacement
-or DNS/TLS/end-to-end acceptance has occurred.
+The cluster has now switched scroll-common/l1-interface to the new instance,
+using a separate fresh PVC. See [the beta.4e rollout record](l1-interface-beta4e-cold-start.md)
+for exact commands and validation. Do not reuse old protocol storage. L2 contract
+broadcast, EC2 replacement and DNS/TLS/end-to-end acceptance remain pending.
 
 Core #1139 is not fixed in v0.3.0-beta.4 (nor beta.4a): the tagged L1 Interface
 source still rejects a missing replay SQLite file before service initialization.
-Wait for a corrected approved image, then perform a coordinated instance switch
-with fresh instance-specific storage and preserve the old storage. Initialization
-belongs inside l1_interface; do not add a mandatory external initializer, create
+That historical blocker was resolved by beta.4e with explicit
+replay_read.fresh_genesis_init=true. Initialization belongs inside l1_interface;
+do not add a mandatory external initializer, create
 an empty SQLite file, disable replay validation, or import another protocol DB.
 Blockscout remains deferred without RDS administrator credentials.
 
-**For this already-created new Bridge, resume at runtime rollout preparation —
+**For this already-created new Bridge, resume after L1 Interface startup —
 never repeat genesis generation, Bridge setup or deposit funding.**
