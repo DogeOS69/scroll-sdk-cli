@@ -7,7 +7,7 @@ import * as secp256k1 from 'tiny-secp256k1'
  *
  * Accepting both encodings at external/config boundaries keeps existing
  * deployments readable; returning only compressed bytes gives bridge genesis,
- * TEE receipt signer ids, and generated policy allowlists one stable identity.
+ * and CubeSigner policy inputs one stable identity.
  */
 export function normalizeCompressedSecp256k1PublicKey(value: string, source: string): string {
   const normalized = value.trim().toLowerCase().replace(/^0x/, '')
@@ -23,10 +23,4 @@ export function normalizeCompressedSecp256k1PublicKey(value: string, source: str
   }
 
   return Buffer.from(secp256k1.pointCompress(point, true)).toString('hex')
-}
-
-/** Normalize a comma-separated TEE signer-id allowlist to compressed keys. */
-export function normalizeCompressedSecp256k1PublicKeyCsv(value: string, source: string): string {
-  const keys = value.split(',').map(key => key.trim()).filter(Boolean)
-  return keys.map((key, index) => normalizeCompressedSecp256k1PublicKey(key, `${source}[${index}]`)).join(',')
 }

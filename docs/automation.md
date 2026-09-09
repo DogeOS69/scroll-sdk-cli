@@ -170,11 +170,20 @@ and artifacts. Relevant examples:
   preserves unrelated native TOML settings, and commits the complete generation
   transaction only after every output succeeds;
 - `export-signer-policy` regenerates the bundle from current deployment facts;
-- `proof-aws-init` is designed to reuse matching cloud resources. Its default
-  external artifact-read transport remains explicitly unverified; VPC endpoint
-  mode requires audited endpoint and route-table IDs. It writes stable,
-  non-secret resource facts to `.data/proof-aws.json` and never reads or
-  modifies generated values;
+- `proof-aws-init` is designed to reuse matching cloud resources. It records an
+  existing `[ethereumDa.blobArchive.s3]` bucket/region/keyPrefix as the one
+  shared DA/proof object namespace rather than creating a second proof store.
+  EKS/Secrets Manager may be in a different region from that bucket; in that
+  case it deliberately skips the regional S3 Gateway endpoint. It records an
+  explicit operator-managed public HTTPS endpoint for external Workers and
+  partner Signers, and can auto-discover or create the EKS cluster's S3 Gateway
+  VPC endpoint and route-table associations. Both routes remain explicitly
+  unverified. For a shared bucket with an existing public S3 policy, select
+  `existing-public-s3`: the CLI preserves bucket-wide Public Access Block and
+  public-policy ownership while still reconciling the deployment-scoped
+  endpoint, IRSA, and secret resources. `direct-s3` is reserved for buckets
+  whose public-read posture the CLI owns. It writes stable, non-secret resource facts to
+  `.data/proof-aws.json` and never reads or modifies generated values;
 - `prep-charts` projects `.data/proof-aws.json` into final values. With
   unchanged configuration, templates, and release inputs, a rerun is
   byte-idempotent and reports no changed files. Active legacy doge-config
@@ -205,6 +214,7 @@ Before retrying after partial failure:
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 run_scrollsdk() {
   local name="$1"
@@ -226,10 +236,19 @@ run_scrollsdk() {
   printf '%s\n' "$response"
 }
 
-# Deployment ordering belongs to the operator runbook. Proof intent is already
-# declared in DeploymentSpec or .data/doge-config.toml.
-run_scrollsdk prep-charts setup prep-charts
+# Example only: requires existing validated deployment config/Bridge outputs.
+# This is not a from-scratch deployment order.
+run_scrollsdk gen-secrets setup gen-secrets --doge-config .data/doge-config.toml
 ```
+
+Known deployment finding (2026-09-08): `setup prep-charts --json` can still emit
+ordinary progress text before its JSON result. The strict wrapper above will
+reject that output even if generation completes. It must not be presented as a
+verified prep-charts wrapper until stdout framing is fixed and tested. For that
+command, retain stdout/stderr privately and inspect the final result and required
+artifact checks; do not infer success from exit code alone, discard errors, or
+blindly retry non-idempotent neighboring steps. This limitation does not change
+the intended machine-readable JSON contract.
 
 ## DeploymentSpec generation
 

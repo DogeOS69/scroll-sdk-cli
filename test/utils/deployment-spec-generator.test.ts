@@ -134,6 +134,53 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
   } as DeploymentSpec;
 }
 
+function createProofTopology(
+  mode: 'disabled' | 'mock' | 'production' = 'disabled',
+): NonNullable<DeploymentSpec['proofTopology']> {
+  const image = (character: string, repository: string) => ({
+    digest: `sha256:${character.repeat(64)}`,
+    repository,
+  })
+  const identity32 = `0x${'1'.repeat(64)}`
+  const identity64 = `0x${'2'.repeat(128)}`
+  return {
+    active: {
+      artifactStore: {kind: 'local_fs'},
+      profile: mode === 'production' ? 'real_scroll_prover' : 'withdrawal_mock_prover',
+      realScroll: {
+        batchMaterializerBinaryPath: '.data/proof-materials/software/bin/batch-materializer',
+        batchProgramCommitmentHashHex: identity32,
+        batchProgramCommitmentHex: identity64,
+        batchVerificationKeyHashHex: identity32,
+        bridgeAppCommitRawHex: identity64,
+        bridgeProgramCommitmentHashHex: identity32,
+        bridgeVerificationKeyHashHex: identity32,
+        chunkMaterializerBinaryPath: '.data/proof-materials/software/bin/chunk-materializer',
+        chunkProgramCommitmentHashHex: identity32,
+        chunkProgramCommitmentHex: identity64,
+        chunkVerificationKeyHashHex: identity32,
+        l2RangeAggregationAppCommitRawHex: identity64,
+        l2RangeAggregationProgramCommitmentHashHex: identity32,
+        l2RangeAggregationVerificationKeyHashHex: identity32,
+        resourcesRoot: '.data/proof-materials',
+      },
+      workerLaunch: 'local_cpu',
+    },
+    compiler: {
+      image: image('a', 'dogeos69/dogeos-proof-topology'),
+    },
+    deployment: {
+      artifactKeyPrefix: 'proof-topology',
+      mockWorkerImage: image('b', 'dogeos69/prover-worker-mock'),
+      productionWorkerImage: image('c', 'dogeos69/prover-worker'),
+    },
+    enforcement: mode === 'production' ? 'enforce' : 'observe',
+    generation: mode === 'production' ? 'real' : 'mock',
+    mode: mode === 'disabled' ? 'disabled' : 'active',
+    observeRealProofDeadlineMs: 1_800_000,
+  }
+}
+
 function createValidEthereumDaCutover(): NonNullable<NonNullable<NonNullable<DeploymentSpec['ethereumDa']>['batch']>['cutover']> {
   return {
     lastBatchHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
@@ -737,9 +784,63 @@ describe('deployment-spec-generator', () => {
       const result = validateDeploymentSpec(spec);
       expect(result.warnings.some(w => w.path?.includes('l2Sequencer'))).to.be.true;
     });
+
+    it('allows proof infrastructure to be prepared while proof mode is disabled', () => {
+      const spec = createMinimalSpec({
+        proofCoordinator: {
+          artifactStore: {
+            bucket: 'dogeos-proofs',
+            region: 'us-west-2',
+          },
+          s3AuthMode: 'ambient',
+        },
+        proofTopology: createProofTopology(),
+      });
+
+      expect(validateDeploymentSpec(spec).errors).to.have.length(0);
+    });
+
+    it('accepts staged compiler profiles while disabled and rejects the removed proofSystem field', () => {
+      const compilerTopology = createProofTopology();
+      const staged = createMinimalSpec({proofTopology: compilerTopology});
+      expect(validateDeploymentSpec(staged).errors).to.have.length(0);
+
+      const removed = {
+        ...createMinimalSpec({proofTopology: compilerTopology}),
+        proofSystem: {mode: 'disabled'},
+      } as DeploymentSpec;
+      expect(validateDeploymentSpec(removed).errors.some(
+        error => error.message.includes('proofSystem has been removed'),
+      )).to.equal(true);
+    });
   });
 
   describe('generateConfigToml', () => {
+    it('always includes the mandatory native DOGE predeploy, preserving optional overrides', () => {
+      for (const overrides of [undefined, {l2Wdoge: '0x5300000000000000000000000000000000000004'}]) {
+        const spec = createMinimalSpec();
+        spec.contracts.overrides = overrides;
+        const config = toml.parse(generateConfigToml(spec)) as any;
+        expect(config.contracts.overrides.L2_NATIVE_DOGE_TOKEN).to.equal('0x530000000000000000000000000000000000d09e');
+        if (overrides) expect(config.contracts.overrides.L2_WDOGE).to.equal(overrides.l2Wdoge);
+      }
+    });
+
+    it('includes the contracts-template commit scalar for specs predating Galileo', () => {
+      const config = toml.parse(generateConfigToml(createMinimalSpec())) as any;
+      expect(config.contracts.COMMIT_SCALAR).to.equal(38_720_000_000);
+      expect(config.contracts.SCALAR).to.equal(1);
+    });
+
+    it('preserves explicitly configured commit scalars, including zero', () => {
+      for (const commitScalar of [0, 12_345]) {
+        const spec = createMinimalSpec();
+        spec.contracts.gasOracle.commitScalar = commitScalar;
+        const config = toml.parse(generateConfigToml(spec)) as any;
+        expect(config.contracts.COMMIT_SCALAR).to.equal(commitScalar);
+      }
+    });
+
     it('generates valid TOML with all required sections', () => {
       const spec = createMinimalSpec();
       const output = generateConfigToml(spec);
@@ -862,7 +963,11 @@ describe('deployment-spec-generator', () => {
       spec.frontend.hosts.rpcGatewayWs = 'ws.example.com';
       spec.frontend.hosts.blockscoutBackend = 'blockscout-be.example.com';
       spec.frontend.hosts.proofCoordinator = 'proof-coordinator.example.com';
-      spec.proofSystem = {mode: 'mock'};
+      spec.proofCoordinator = {
+        artifactStore: {bucket: 'dogeos-proofs', region: 'us-west-2'},
+        s3AuthMode: 'ambient',
+      };
+      spec.proofTopology = createProofTopology();
       const output = generateConfigToml(spec);
 
       expect(output).to.include('RPC_GATEWAY_WS_HOST');
@@ -953,23 +1058,12 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateDogeConfigToml', () => {
-    it('projects DeploymentSpec proof intent into doge-config for conflict-free reruns', () => {
+    it('does not duplicate proof topology into doge-config', () => {
       const spec = createMinimalSpec({
-        proofSystem: {
-          artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
-          mode: 'production',
-          release: './proof-releases/v1',
-          signerPolicy: { sourceSet: './configs/source-set.toml' },
-        },
+        proofTopology: createProofTopology(),
       });
       const parsed = toml.parse(generateDogeConfigToml(spec)) as any;
-
-      expect(parsed.proofSystem).to.deep.equal({
-        artifactReadBaseUrl: 'https://proofs.example.com/releases/v1',
-        mode: 'production',
-        release: './proof-releases/v1',
-        signerPolicy: { sourceSet: './configs/source-set.toml' },
-      });
+      expect(parsed.proofSystem).to.equal(undefined);
     });
 
     it('includes RPC config and the Dogecoin network source', () => {
@@ -1267,6 +1361,7 @@ describe('deployment-spec-generator', () => {
         deposit_queue_transform: {
           l1_scroll_messenger_address: '0x0000000000000000000000000000000000000001',
           l2_messenger_address: '0x0000000000000000000000000000000000000002',
+          message_queue_gas_limit: 200_000,
           moat_address: '0x0000000000000000000000000000000000000003',
         },
         eth_chain_id: 11_155_111,
@@ -1412,13 +1507,9 @@ describe('deployment-spec-generator', () => {
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_CLEANUP_TIMEOUT_SECS).to.equal('3600');
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_ROTATE_SEQUENCER_SIGNER_V2).to.equal('false');
       expect(withdrawalRuntimeEnv).not.to.have.property('DOGEOS_WITHDRAWAL_COORDINATOR_POLL_INTERVAL_SECS');
-      expect(Object.fromEntries(Object.entries(withdrawalRuntimeEnv).filter(([key]) => key.startsWith('DOGEOS_WITHDRAWAL_PROOF_')))).to.deep.equal({
-        DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE: 'disabled',
-        DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE: 'false',
-        DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION: 'false',
-      });
+      expect(Object.fromEntries(Object.entries(withdrawalRuntimeEnv).filter(([key]) => key.startsWith('DOGEOS_WITHDRAWAL_PROOF_')))).to.deep.equal({});
       expect(withdrawalValuesForRuntime.withdrawalProof.enabled).to.equal(false);
-      expect(withdrawalValuesForRuntime.withdrawalProof.mode).to.equal('disabled');
+      expect(withdrawalValuesForRuntime.withdrawalProof.mode).to.equal(undefined);
       expect(withdrawalValuesForRuntime.withdrawalProof.provingMode).to.equal(undefined);
       expect(withdrawalValuesForRuntime.configMaps.config.data?.['WithdrawalProcessor.toml']).to.equal(undefined);
       expect(withdrawalValuesForRuntime.args).to.deep.equal(['--config', '/app/config/WithdrawalProcessor.toml']);
@@ -1453,9 +1544,17 @@ describe('deployment-spec-generator', () => {
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_REQUEST_JSON_BYTES).to.equal('393216');
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_RESPONSE_JSON_BYTES).to.equal('393216');
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE).to.equal('production_verifier_key_policy');
-      expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION).to.equal('0.4.152-0');
+      expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION).to.equal('0.4.281');
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT)
-        .to.equal('dogeos-cubesigner-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1');
+        .to.equal('dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3');
+      expect(cubesignerValues.serviceMonitor).to.deep.equal({
+        main: {
+          enabled: true,
+          endpoints: [{interval: '10s', port: 'http', scrapeTimeout: '5s'}],
+          labels: {release: 'scroll-sdk'},
+          serviceName: '{{ include "scroll.common.lib.chart.names.fullname" $ }}',
+        },
+      });
       expect(cubesignerEnv.DOGEOS_CUBESIGNER_SIGNER_SIGNATURE_MODE).to.equal('ecdsa');
       expect(cubesignerEnv).not.to.have.property('CUBESIGNER_MAX_PSBT_BASE64_LEN');
 
@@ -1506,10 +1605,7 @@ describe('deployment-spec-generator', () => {
           name: 'withdrawal-processor',
         },
       };
-      spec.proofSystem = {
-        artifactReadBaseUrl: 'https://proof-artifacts.example.com/proof-topology',
-        mode: 'production',
-      };
+      spec.proofTopology = createProofTopology('production');
       spec.images = {
         services: {
           proofCoordinator: {
@@ -1538,6 +1634,12 @@ describe('deployment-spec-generator', () => {
         readOnly: true,
         subPath: 'protocol_context.json',
       });
+      expect(values.persistence.genesis).to.include({
+        mountPath: '/app/genesis/genesis.json',
+        name: 'genesis-config',
+        readOnly: true,
+        subPath: 'genesis.json',
+      });
       expect(values.persistence.secrets.mountPath).to.equal('/app/secrets');
       expect(values.persistence.secrets).not.to.have.property('name');
       expect(values.serviceAccount).not.to.have.property('name');
@@ -1565,8 +1667,6 @@ describe('deployment-spec-generator', () => {
       const withdrawalValues = yaml.load(files['withdrawal-processor-production.yaml']) as any;
       expect(withdrawalValues.withdrawalProof).to.deep.include({
         enabled: true,
-        mode: 'production',
-        provingMode: 'production',
         s3AuthMode: 'irsa',
       });
       expect(withdrawalValues.serviceAccount).to.deep.equal({
@@ -1576,6 +1676,35 @@ describe('deployment-spec-generator', () => {
         create: true,
         name: 'withdrawal-processor',
       });
+    });
+
+    it('prepares mode-independent proof-coordinator values in disabled mode', () => {
+      const spec = createMinimalSpec({
+        proofCoordinator: {
+          artifactStore: {
+            bucket: 'dogeos-proofs',
+            region: 'us-west-2',
+          },
+          s3AuthMode: 'ambient',
+        },
+        proofTopology: createProofTopology(),
+      });
+
+      const files = generateValuesFiles(spec);
+      const coordinatorValues = yaml.load(files['proof-coordinator-production.yaml']) as any;
+      const withdrawalValues = yaml.load(files['withdrawal-processor-production.yaml']) as any;
+
+      expect(coordinatorValues.controller.replicas).to.equal(1);
+      expect(coordinatorValues.env).to.deep.include({
+        name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET',
+        value: 'dogeos-proofs',
+      });
+      expect(withdrawalValues.withdrawalProof).to.deep.include({
+        enabled: false,
+        s3AuthMode: 'ambient',
+      });
+      expect(withdrawalValues.withdrawalProof).not.to.have.property('mode');
+      expect(withdrawalValues.withdrawalProof).not.to.have.property('provingMode');
     });
 
     it('generates l1-interface genesis and indexer heights independently', () => {
@@ -1597,7 +1726,6 @@ describe('deployment-spec-generator', () => {
       const defaultSubmitterValues = yaml.load(defaultFiles['eth-da-submitter-production.yaml']) as any;
 
       expect(defaultSubmitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION).to.equal('auto');
-
       const explicitSpec = createMinimalSpec();
       explicitSpec.ethereumDa!.batch = { compression: 'none' };
       const explicitFiles = generateValuesFiles(explicitSpec);

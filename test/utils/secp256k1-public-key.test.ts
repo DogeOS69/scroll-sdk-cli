@@ -1,9 +1,6 @@
 import { expect } from 'chai'
 
-import {
-  normalizeCompressedSecp256k1PublicKey,
-  normalizeCompressedSecp256k1PublicKeyCsv,
-} from '../../src/utils/secp256k1-public-key.js'
+import {normalizeCompressedSecp256k1PublicKey} from '../../src/utils/secp256k1-public-key.js'
 
 const COMPRESSED_GENERATOR = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'
 const UNCOMPRESSED_GENERATOR = '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798' +
@@ -18,13 +15,6 @@ describe('secp256k1 public-key normalization', () => {
   it('converts a CubeSigner-style uncompressed SEC1 key to compressed form', () => {
     expect(normalizeCompressedSecp256k1PublicKey(`0x${UNCOMPRESSED_GENERATOR.toUpperCase()}`, 'CubeSigner key'))
       .to.equal(COMPRESSED_GENERATOR)
-  })
-
-  it('normalizes every key in a CSV allowlist', () => {
-    expect(normalizeCompressedSecp256k1PublicKeyCsv(
-      `${UNCOMPRESSED_GENERATOR}, ${COMPRESSED_GENERATOR}`,
-      '--tee-allowed-signer-ids'
-    )).to.equal(`${COMPRESSED_GENERATOR},${COMPRESSED_GENERATOR}`)
   })
 
   it('rejects malformed encodings and values that are not curve points', () => {

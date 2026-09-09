@@ -1,5 +1,6 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- Helm values and aws CLI JSON are dynamic documents. */
+/* eslint-disable @typescript-eslint/no-explicit-any, perfectionist/sort-classes -- Helm values and aws CLI JSON are dynamic documents; discovery helpers stay beside the VPC reconciliation flow. */
 
+import { parse as parseToml } from '@iarna/toml'
 import { randomBytes } from 'node:crypto'
 
 import type { JsonOutputContext } from './json-output.js'
@@ -7,10 +8,13 @@ import type { JsonOutputContext } from './json-output.js'
 import { AwsCliRunner } from './aws-cli.js'
 
 export interface ProofAwsIdentity {
+  /** Region containing the shared DA/proof artifact bucket. */
+  artifactRegion?: string
+  /** Region containing EKS and the deployment-scoped Secrets Manager secret. */
   awsRegion: string
+  deploymentAlias: string
   eksCluster: string
   namespace: string
-  networkAlias: string
 }
 
 export interface ProofAwsRolePlan {
@@ -39,31 +43,67 @@ export interface ProofAwsProvisionResult {
   withdrawalRoleArn: string
 }
 
-export type ProofArtifactReadMode = 'external' | 'vpc-endpoint'
-
 export interface ProofArtifactReadPlan {
-  mode: ProofArtifactReadMode
-  routeTableIds?: string[]
-  vpcEndpointId?: string
+  publicEndpointUrl?: string
+  publicReadMode: ProofArtifactPublicReadMode
+  vpcEndpoint?: ProofArtifactVpcEndpointPlan
 }
 
 export interface ProofArtifactReadTransportResult {
-  mode: ProofArtifactReadMode
+  publicEndpointUrl: string
+  publicReadMode: ProofArtifactPublicReadMode
+  publicStatus: 'configured-unverified' | 'operator-managed-unverified'
+  vpcEndpoint?: ProofArtifactVpcEndpointResult
+}
+
+export type ProofArtifactPublicReadMode = 'direct-s3' | 'existing-gateway' | 'existing-public-s3'
+
+export interface ProofArtifactVpcEndpointPlan {
+  enabled: boolean
   routeTableIds?: string[]
-  status: 'configured-unverified' | 'operator-managed-unverified'
   vpcEndpointId?: string
 }
 
+export interface ProofArtifactVpcEndpointResult {
+  created: boolean
+  routeTableIds: string[]
+  status: 'configured-unverified'
+  vpcEndpointId: string
+}
+
 export const PROOF_SECRET_PROPERTIES = ['proof-work-token', 'prover-worker-token'] as const
+export const PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID = 'ScrollSdkProofArtifactPublicRead'
 export const PROOF_ARTIFACT_VPCE_POLICY_SID = 'ScrollSdkProofArtifactReadViaVpcEndpoint'
 
+/**
+ * Logical object namespaces read without AWS credentials by DA clients,
+ * external proof Workers, or partner Attestation Signers. The segmentation
+ * sidecar namespace is deliberately absent because it is a PC-internal input.
+ */
+export const PUBLIC_ARTIFACT_OBJECT_PATTERNS = [
+  '0x*',
+  'input-specs/*',
+  'prepared-bundles/*',
+  'witnesses/*',
+  'public-outputs/*',
+  'proofs/*',
+] as const
+
+export function publicArtifactObjectResources(bucket: string, keyPrefix: string): string[] {
+  const prefix = normalizeProofKeyPrefix(keyPrefix)
+  return PUBLIC_ARTIFACT_OBJECT_PATTERNS.map(pattern =>
+    `arn:aws:s3:::${bucket}/${prefix}/${pattern}`
+  )
+}
+
 export interface ProofAwsValuesProjection {
+  artifactRegion: string
   bucket: string
   coordinatorRoleArn: string
   coordinatorServiceAccount: string
   keyPrefix: string
-  region: string
   secretName: string
+  secretRegion: string
   withdrawalRoleArn: string
   withdrawalServiceAccount: string
 }
@@ -95,16 +135,74 @@ export function normalizeProofKeyPrefix(value: string): string {
     throw new Error('proof artifact key prefix must contain only non-empty path segments and must not contain . or ..')
   }
 
-  const forbiddenCharacters = ['\\', '*', '?', '[', ']', '{', '}']
+  const forbiddenCharacters = ['\\', '*', '?', '#', '[', ']', '{', '}']
   const hasControlCharacter = [...prefix].some(character => {
     const codePoint = character.codePointAt(0) as number
     return codePoint < 32 || codePoint === 127
   })
-  if (forbiddenCharacters.some(character => prefix.includes(character)) || hasControlCharacter) {
-    throw new Error('proof artifact key prefix must not contain wildcards, backslashes, braces, or control characters')
+  const hasWhitespace = [...prefix].some(character => /\s/u.test(character))
+  if (
+    forbiddenCharacters.some(character => prefix.includes(character))
+    || hasControlCharacter
+    || hasWhitespace
+  ) {
+    throw new Error('proof artifact key prefix must not contain whitespace, wildcards, backslashes, #, braces, or control characters')
   }
 
   return prefix
+}
+
+export function normalizeProofBucketName(value: string): string {
+  const bucket = value.trim()
+  if (bucket.length < 3 || bucket.length > 63) {
+    throw new Error('proof artifact S3 bucket must be 3-63 characters')
+  }
+
+  if (!/^[\da-z][\d.a-z-]*[\da-z]$/.test(bucket)) {
+    throw new Error(
+      'proof artifact S3 bucket must contain only lowercase letters, digits, dots, and hyphens, '
+      + 'and must start and end with a letter or digit',
+    )
+  }
+
+  if (bucket.includes('..')) {
+    throw new Error('proof artifact S3 bucket must not contain consecutive dots')
+  }
+
+  return bucket
+}
+
+/**
+ * Public proof artifacts are consumed without AWS credentials by external
+ * Workers and partner-operated Attestation Signers. dogeos-core applies the
+ * bucket name as a virtual host, so this value is an HTTPS S3-compatible
+ * endpoint root rather than a bucket or object URL.
+ */
+export function normalizeProofArtifactPublicEndpoint(value: string): string {
+  const raw = value.trim()
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    throw new Error('proof artifact public endpoint must be an absolute HTTPS URL')
+  }
+
+  if (parsed.protocol !== 'https:') {
+    throw new Error('proof artifact public endpoint must use HTTPS')
+  }
+
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error('proof artifact public endpoint must not contain credentials, query parameters, or a fragment')
+  }
+
+  const pathname = parsed.pathname.replaceAll(/\/+$/g, '')
+  return `${parsed.origin}${pathname}`
+}
+
+export function proofArtifactS3Endpoint(region: string): string {
+  const normalized = region.trim()
+  if (!normalized) throw new Error('proof artifact AWS region must not be empty')
+  return `https://s3.${normalized}.amazonaws.com`
 }
 
 export function buildProofArtifactStorePolicy(bucket: string, keyPrefix: string): Record<string, any> {
@@ -178,6 +276,121 @@ export function upsertProofArtifactVpcEndpointReadPolicy(
   }
 }
 
+export function upsertProofArtifactPublicReadPolicy(
+  existingPolicy: Record<string, any>,
+  bucket: string,
+  keyPrefix: string,
+  enabled: boolean,
+): Record<string, any> {
+  const prefix = normalizeProofKeyPrefix(keyPrefix)
+  const statements = Array.isArray(existingPolicy.Statement)
+    ? [...existingPolicy.Statement]
+    : existingPolicy.Statement ? [existingPolicy.Statement] : []
+  const preservedStatements = statements.filter(
+    statement => statement?.Sid !== PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID,
+  )
+  if (enabled) {
+    preservedStatements.push({
+      Action: 's3:GetObject',
+      Effect: 'Allow',
+      Principal: '*',
+      Resource: publicArtifactObjectResources(bucket, prefix),
+      Sid: PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID,
+    })
+  }
+
+  return {
+    ...existingPolicy,
+    Statement: preservedStatements,
+    Version: existingPolicy.Version || '2012-10-17',
+  }
+}
+
+function principalIncludesWildcard(principal: unknown): boolean {
+  if (principal === '*') return true
+  if (!principal || typeof principal !== 'object' || Array.isArray(principal)) return false
+  const awsPrincipal = (principal as Record<string, unknown>).AWS
+  return awsPrincipal === '*'
+    || (Array.isArray(awsPrincipal) && awsPrincipal.includes('*'))
+}
+
+function isVpcEndpointRestricted(statement: Record<string, any>): boolean {
+  const condition = statement.Condition
+  if (!condition || typeof condition !== 'object' || Array.isArray(condition)) return false
+  const stringEquals = condition.StringEquals
+  if (!stringEquals || typeof stringEquals !== 'object' || Array.isArray(stringEquals)) return false
+  const sourceVpcEndpoint = stringEquals['aws:SourceVpce']
+  return typeof sourceVpcEndpoint === 'string' && /^vpce-[\da-f]+$/i.test(sourceVpcEndpoint)
+}
+
+function wildcardMatches(pattern: string, value: string): boolean {
+  const escaped = pattern.replaceAll(/[$()+.[\\\]^{|}]/g, '\\$&')
+    .replaceAll('*', '.*')
+    .replaceAll('?', '.')
+  return new RegExp(`^${escaped}$`, 'u').test(value)
+}
+
+function actionCanGetObject(action: unknown): boolean {
+  const actions = Array.isArray(action) ? action : [action]
+  return actions.some(candidate =>
+    typeof candidate === 'string'
+    && wildcardMatches(candidate.toLowerCase(), 's3:getobject')
+  )
+}
+
+function resourceMayOverlapPrefix(resource: unknown, bucket: string, keyPrefix: string): boolean {
+  if (resource === '*') return true
+  if (typeof resource !== 'string') return false
+
+  const match = /^arn:(?:aws|aws-cn|aws-us-gov):s3:::(?<bucket>[^/]+)(?:\/(?<object>.*))?$/u.exec(resource)
+  if (!match?.groups || !wildcardMatches(match.groups.bucket, bucket)) return false
+
+  const objectPattern = match.groups.object
+  if (objectPattern === undefined) return false
+
+  const managedPrefix = `${normalizeProofKeyPrefix(keyPrefix)}/`
+  if (!objectPattern.includes('*') && !objectPattern.includes('?')) {
+    return objectPattern === keyPrefix || objectPattern.startsWith(managedPrefix)
+  }
+
+  // S3 policy resources normally end in `/*`. Comparing the literal part on
+  // both sides also handles broader forms such as `*` and `batches*` without
+  // pretending a disjoint sibling such as `rehearsal/*` affects `batches/`.
+  const firstWildcard = objectPattern.search(/[?*]/u)
+  const literalPrefix = objectPattern.slice(0, firstWildcard)
+  return managedPrefix.startsWith(literalPrefix)
+    || literalPrefix.startsWith(managedPrefix)
+    || wildcardMatches(objectPattern, `${managedPrefix}proofs/example`)
+    || wildcardMatches(objectPattern, `${managedPrefix}0xexample`)
+}
+
+export function assertNoUnmanagedPublicProofBucketGrant(
+  policy: Record<string, any>,
+  bucket: string,
+  keyPrefix: string,
+): void {
+  const statements = Array.isArray(policy.Statement)
+    ? policy.Statement
+    : policy.Statement ? [policy.Statement] : []
+  const unsafe = statements.find((statement: any) =>
+    statement?.Effect === 'Allow'
+    && principalIncludesWildcard(statement.Principal)
+    && actionCanGetObject(statement.Action)
+    && statement?.Sid !== PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID
+    && !isVpcEndpointRestricted(statement)
+    && (Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource])
+      .some((resource: unknown) => resourceMayOverlapPrefix(resource, bucket, keyPrefix))
+  )
+  if (unsafe) {
+    throw new Error(
+      `cannot enable direct-s3 proof reads while bucket policy statement `
+      + `${String(unsafe.Sid || '<without Sid>')} grants unmanaged public GetObject access overlapping `
+      + `s3://${bucket}/${normalizeProofKeyPrefix(keyPrefix)}; use a dedicated proof bucket, remove the statement, `
+      + 'or select existing-public-s3 to preserve the operator-managed bucket policy',
+    )
+  }
+}
+
 function bindIrsaServiceAccount(values: Record<string, any>, name: string, roleArn: string): void {
   values.serviceAccount ||= {}
   values.serviceAccount.create = true
@@ -198,7 +411,7 @@ function hasProofTokenMappings(values: Record<string, any>): boolean {
   return PROOF_SECRET_PROPERTIES.every(property => mappedKeys.has(property))
 }
 
-function projectManagedAwsSecretRegion(
+function projectManagedAwsProofSecret(
   values: Record<string, any>,
   secretName: string,
   region: string
@@ -206,11 +419,23 @@ function projectManagedAwsSecretRegion(
   for (const secret of Object.values(values.externalSecrets || {}) as any[]) {
     if (secret?.provider !== 'aws' || !Array.isArray(secret.data)) continue
 
-    const readsProvisionedProofSecret = secret.data.some((item: any) =>
-      PROOF_SECRET_PROPERTIES.includes(item?.secretKey) &&
-      item?.remoteRef?.key === secretName
+    const proofTokenMappings = secret.data.filter((item: any) =>
+      PROOF_SECRET_PROPERTIES.includes(item?.secretKey)
+      || item?.secretKey === 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__AUTH__BEARER_TOKEN'
     )
-    if (readsProvisionedProofSecret) secret.secretRegion = region
+    if (proofTokenMappings.length === 0) continue
+
+    // When proof-aws.json is present, its deployment-scoped Secrets Manager
+    // path is authoritative for AWS-backed proof tokens. In particular, do
+    // not preserve the historical scroll/proof-coordinator-secrets fallback:
+    // doing so gives the Coordinator and an external Worker different bearer
+    // tokens while both generated configurations still look valid.
+    for (const item of proofTokenMappings) {
+      item.remoteRef ||= {}
+      item.remoteRef.key = secretName
+    }
+
+    secret.secretRegion = region
   }
 }
 
@@ -225,9 +450,27 @@ export function applyProofAwsValues(
   projection: ProofAwsValuesProjection
 ): void {
   const keyPrefix = normalizeProofKeyPrefix(projection.keyPrefix)
-  upsertEnv(coordinatorValues, 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET', projection.bucket, 'proof-coordinator values')
-  upsertEnv(coordinatorValues, 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__REGION', projection.region, 'proof-coordinator values')
-  upsertEnv(coordinatorValues, 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__KEY_PREFIX', keyPrefix, 'proof-coordinator values')
+  const content = coordinatorValues.proofCoordinator?.config?.content
+  const nativeConfig = typeof content === 'string' && content.trim() ? parseToml(content) as any : undefined
+  const artifactEnv = {
+    DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET: projection.bucket,
+    DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__KEY_PREFIX: keyPrefix,
+    DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__REGION: projection.artifactRegion,
+  }
+  if (nativeConfig?.artifact_store?.kind === 'local_fs') {
+    // Disabled topology emits an idle local_fs coordinator. Provisioned AWS
+    // resources still own IRSA/tokens, but must not override its storage kind.
+    if (coordinatorValues.env !== undefined && !Array.isArray(coordinatorValues.env)) {
+      throw new TypeError('proof-coordinator values: env must be an array')
+    }
+
+    coordinatorValues.env = (coordinatorValues.env || []).filter((item: any) => !Object.hasOwn(artifactEnv, item?.name))
+  } else {
+    for (const [name, value] of Object.entries(artifactEnv)) {
+      upsertEnv(coordinatorValues, name, value, 'proof-coordinator values')
+    }
+  }
+
   bindIrsaServiceAccount(coordinatorValues, projection.coordinatorServiceAccount, projection.coordinatorRoleArn)
 
   if (!hasProofTokenMappings(coordinatorValues)) {
@@ -239,21 +482,52 @@ export function applyProofAwsValues(
       })),
       provider: 'aws',
       refreshInterval: '2m',
-      secretRegion: projection.region,
+      secretRegion: projection.secretRegion,
       serviceAccount: 'external-secrets',
     }
   }
 
-  // Do not rely on the shared chart's historical us-west-2 fallback. Keep an
-  // existing managed mapping in sync as well as newly created mappings, while
-  // leaving operator-owned Vault or alternate-secret mappings untouched.
-  projectManagedAwsSecretRegion(coordinatorValues, projection.secretName, projection.region)
+  // Do not rely on historical secret-path or us-west-2 fallbacks. Keep every
+  // AWS-backed proof-token mapping aligned with the provisioned resource
+  // facts, while leaving operator-owned non-AWS mappings untouched.
+  projectManagedAwsProofSecret(coordinatorValues, projection.secretName, projection.secretRegion)
 
   withdrawalValues.withdrawalProof ||= {}
   withdrawalValues.withdrawalProof.s3AuthMode = 'irsa'
   bindIrsaServiceAccount(withdrawalValues, projection.withdrawalServiceAccount, projection.withdrawalRoleArn)
+  // Legacy WP templates mix the remote proof token into the service-key Secret.
+  // Split that mapping so ordinary push-secrets cannot overwrite its independent
+  // authority, and so token/service secrets may use different AWS regions.
+  const bearerEnv = 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__AUTH__BEARER_TOKEN'
+  const bearerMappings = []
+  for (const [name, secret] of Object.entries(withdrawalValues.externalSecrets || {}) as [string, any][]) {
+    if (name === 'withdrawal-proof-token' || secret?.provider !== 'aws' || !Array.isArray(secret.data)) continue
+    const owned = secret.data.filter((item: any) => item?.secretKey === bearerEnv)
+    if (owned.length === 0) continue
+    bearerMappings.push(...owned)
+    secret.data = secret.data.filter((item: any) => item?.secretKey !== bearerEnv)
+    if (secret.data.length === 0) delete withdrawalValues.externalSecrets[name]
+  }
+
+  if (bearerMappings.length > 0 || withdrawalValues.externalSecrets?.['withdrawal-proof-token']?.provider === 'aws') {
+    withdrawalValues.externalSecrets['withdrawal-proof-token'] = {
+      data: [{remoteRef: {key: projection.secretName, property: 'proof-work-token'}, secretKey: 'proof-work-token'}],
+      provider: 'aws', refreshInterval: '2m', secretRegion: projection.secretRegion, serviceAccount: 'external-secrets',
+    }
+    // The compiler selects bearer_token_file. Injecting the old bearer-token
+    // environment value simultaneously makes active WP fail closed at startup.
+    withdrawalValues.envFrom = (withdrawalValues.envFrom || []).filter((item: any) => item?.secretRef?.name !== 'withdrawal-proof-token')
+    if (Array.isArray(withdrawalValues.env)) withdrawalValues.env = withdrawalValues.env.filter((item: any) => item?.name !== bearerEnv)
+    else if (withdrawalValues.env) delete withdrawalValues.env[bearerEnv]
+    withdrawalValues.persistence ||= {}
+    withdrawalValues.persistence['proof-work-token'] = {
+      enabled: true, mountPath: '/app/secrets/proof-work-token', name: 'withdrawal-proof-token',
+      readOnly: true, subPath: 'proof-work-token', type: 'secret',
+    }
+  }
+
   // Keep any prep-charts-managed WP copy in the explicitly selected region.
-  projectManagedAwsSecretRegion(withdrawalValues, projection.secretName, projection.region)
+  projectManagedAwsProofSecret(withdrawalValues, projection.secretName, projection.secretRegion)
 }
 
 /**
@@ -275,18 +549,97 @@ export class ProofAwsProvisioner {
 
   provision(identity: ProofAwsIdentity, input: ProofAwsProvisionInput): ProofAwsProvisionResult {
     const keyPrefix = normalizeProofKeyPrefix(input.keyPrefix)
-    const bucketCreated = this.ensureBucket(identity.awsRegion, input.bucket)
-    const artifactReadTransport = input.artifactRead?.mode === 'vpc-endpoint'
-      ? this.ensureVpcEndpointArtifactRead(identity.awsRegion, input.bucket, keyPrefix, input.artifactRead)
-      : { mode: 'external' as const, status: 'operator-managed-unverified' as const }
+    const bucket = normalizeProofBucketName(input.bucket)
+    if (!input.artifactRead) {
+      throw new Error('proof artifact public read configuration is required')
+    }
+
+    const {publicReadMode} = input.artifactRead
+    if (!['direct-s3', 'existing-gateway', 'existing-public-s3'].includes(publicReadMode)) {
+      throw new Error(`unsupported proof artifact public read mode: ${String(publicReadMode)}`)
+    }
+
+    const artifactRegion = identity.artifactRegion || identity.awsRegion
+    const directS3Endpoint = proofArtifactS3Endpoint(artifactRegion)
+    const usesRegionalS3Endpoint = publicReadMode === 'direct-s3' || publicReadMode === 'existing-public-s3'
+    if (usesRegionalS3Endpoint && input.artifactRead.publicEndpointUrl) {
+      const supplied = normalizeProofArtifactPublicEndpoint(input.artifactRead.publicEndpointUrl)
+      if (supplied !== directS3Endpoint) {
+        throw new Error(
+          `${publicReadMode} proof artifact endpoint is derived as ${directS3Endpoint}; `
+          + 'do not supply a different public endpoint',
+        )
+      }
+    }
+
+    if (publicReadMode === 'existing-gateway' && !input.artifactRead.publicEndpointUrl) {
+      throw new Error('existing-gateway proof artifact reads require publicEndpointUrl')
+    }
+
+    const publicEndpointUrl = usesRegionalS3Endpoint
+      ? directS3Endpoint
+      : normalizeProofArtifactPublicEndpoint(input.artifactRead.publicEndpointUrl as string)
+    if (input.artifactRead.vpcEndpoint?.enabled && artifactRegion !== identity.awsRegion) {
+      throw new Error(
+        `cannot configure an ${identity.awsRegion} S3 Gateway endpoint for artifact bucket region ${artifactRegion}; `
+        + 'cross-region S3 access must use the normal AWS endpoint or an operator-managed gateway',
+      )
+    }
+
+    const bucketCreated = this.ensureBucket(
+      artifactRegion,
+      bucket,
+      publicReadMode !== 'existing-public-s3',
+    )
+    // Validate any existing public policy before creating/associating a VPC
+    // endpoint or changing IAM/secrets. This keeps a rejected direct-S3
+    // adoption from leaving unrelated AWS resources half-provisioned.
+    if (publicReadMode === 'direct-s3') {
+      assertNoUnmanagedPublicProofBucketGrant(
+        this.readBucketPolicy(artifactRegion, bucket),
+        bucket,
+        keyPrefix,
+      )
+    }
+
+    const vpcEndpoint = input.artifactRead.vpcEndpoint?.enabled
+      ? this.ensureVpcEndpointArtifactRead(identity, bucket, keyPrefix, input.artifactRead.vpcEndpoint)
+      : undefined
+    // `existing-gateway` is explicitly operator-managed.  In that mode the
+    // CLI must not rewrite either the bucket policy or Public Access Block:
+    // an existing archive bucket can already expose raw DA objects through a
+    // policy or gateway whose scope the proof adapter does not own.  Toggling
+    // Public Access Block here can silently break that established download
+    // path.  Direct S3 is the only mode in which scroll-sdk-cli owns and
+    // reconciles anonymous-read policy.
+    if (publicReadMode === 'direct-s3') {
+      this.reconcileDirectS3ArtifactRead(
+        artifactRegion,
+        bucket,
+        keyPrefix,
+      )
+    } else {
+      this.jsonCtx.info(
+        `proof-aws: preserved operator-managed bucket policy and Public Access Block settings for ${bucket} (${publicReadMode})`,
+      )
+    }
+
+    const artifactReadTransport: ProofArtifactReadTransportResult = {
+      publicEndpointUrl,
+      publicReadMode,
+      publicStatus: publicReadMode === 'direct-s3'
+        ? 'configured-unverified'
+        : 'operator-managed-unverified',
+      ...(vpcEndpoint ? {vpcEndpoint} : {}),
+    }
     const trust = this.discoverIrsaTrust(identity)
-    const withdrawalRoleArn = this.ensureIrsaRole(identity, trust, input.withdrawalRole, input.bucket, keyPrefix)
-    const coordinatorRoleArn = this.ensureIrsaRole(identity, trust, input.coordinatorRole, input.bucket, keyPrefix)
+    const withdrawalRoleArn = this.ensureIrsaRole(identity, trust, input.withdrawalRole, bucket, keyPrefix)
+    const coordinatorRoleArn = this.ensureIrsaRole(identity, trust, input.coordinatorRole, bucket, keyPrefix)
     const secretAction = this.ensureTokenSecret(identity.awsRegion, input.secretName, input.rotateTokens === true)
 
     return {
       artifactReadTransport,
-      bucket: input.bucket,
+      bucket,
       bucketCreated,
       coordinatorRoleArn,
       secretAction,
@@ -308,7 +661,7 @@ export class ProofAwsProvisioner {
     return { accountId, issuerHostPath: issuer.replace(/^https:\/\//, '') }
   }
 
-  private ensureBucket(region: string, bucket: string): boolean {
+  private ensureBucket(region: string, bucket: string, createIfMissing: boolean): boolean {
     try {
       this.aws.run(['s3api', 'head-bucket', '--bucket', bucket], { region })
       this.jsonCtx.info(`proof-aws: reusing existing S3 bucket: ${bucket}`)
@@ -318,6 +671,12 @@ export class ProofAwsProvisioner {
       const notFound = message.includes('404') || /not found/i.test(message)
       if (!notFound) {
         throw new Error(`S3 bucket ${bucket} exists but is not accessible (it may be owned by another AWS account): ${message}`)
+      }
+
+      if (!createIfMissing) {
+        throw new Error(
+          `existing-public-s3 requires an existing accessible S3 bucket, but ${bucket} was not found`,
+        )
       }
     }
 
@@ -345,6 +704,48 @@ export class ProofAwsProvisioner {
     ], { region })
     this.jsonCtx.info(`proof-aws: created S3 bucket: ${bucket} (region=${region}, public access blocked, SSE-S3)`)
     return true
+  }
+
+  private reconcileDirectS3ArtifactRead(
+    region: string,
+    bucket: string,
+    keyPrefix: string,
+  ): void {
+    const existingPolicy = this.readBucketPolicy(region, bucket)
+
+    this.aws.run([
+      's3api',
+      'put-public-access-block',
+      '--bucket',
+      bucket,
+      '--public-access-block-configuration',
+      'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false',
+    ], {region})
+
+    const updatedPolicy = upsertProofArtifactPublicReadPolicy(
+      existingPolicy,
+      bucket,
+      keyPrefix,
+      true,
+    )
+    if (JSON.stringify(existingPolicy) !== JSON.stringify(updatedPolicy)) {
+      if (updatedPolicy.Statement.length === 0) {
+        this.aws.run(['s3api', 'delete-bucket-policy', '--bucket', bucket], {region})
+      } else {
+        this.aws.run([
+          's3api',
+          'put-bucket-policy',
+          '--bucket',
+          bucket,
+          '--policy',
+          JSON.stringify(updatedPolicy),
+        ], {region})
+      }
+    }
+
+    this.jsonCtx.info(
+      `proof-aws: configured anonymous GetObject for required external-consumer paths under ${bucket}/${keyPrefix}; list/write/delete remain private`,
+    )
   }
 
   private ensureIrsaRole(
@@ -441,28 +842,81 @@ export class ProofAwsProvisioner {
   }
 
   private ensureVpcEndpointArtifactRead(
-    region: string,
+    identity: ProofAwsIdentity,
     bucket: string,
     keyPrefix: string,
-    plan: ProofArtifactReadPlan
-  ): ProofArtifactReadTransportResult {
-    const endpointId = plan.vpcEndpointId?.trim()
-    const routeTableIds = [...new Set((plan.routeTableIds || []).map(value => value.trim()).filter(Boolean))]
-    if (!endpointId || !/^vpce-[\da-f]+$/i.test(endpointId)) {
-      throw new Error('vpc-endpoint artifact read mode requires a valid --artifact-read-vpc-endpoint-id')
+    plan: ProofArtifactVpcEndpointPlan
+  ): ProofArtifactVpcEndpointResult {
+    const {awsRegion: region} = identity
+    let endpointId = plan.vpcEndpointId?.trim()
+    let routeTableIds = [...new Set((plan.routeTableIds || []).map(value => value.trim()).filter(Boolean))]
+    if (endpointId && !/^vpce-[\da-f]+$/i.test(endpointId)) {
+      throw new Error('proof artifact VPC endpoint ID is invalid')
     }
 
-    if (routeTableIds.length === 0 || routeTableIds.some(value => !/^rtb-[\da-f]+$/i.test(value))) {
-      throw new Error('vpc-endpoint artifact read mode requires at least one valid --artifact-read-route-table-id from the worker/signer network')
+    if (routeTableIds.some(value => !/^rtb-[\da-f]+$/i.test(value))) {
+      throw new Error('proof artifact VPC route table ID is invalid')
     }
+
+    let clusterVpcId: string | undefined
+    if (!endpointId || routeTableIds.length === 0) {
+      const network = this.discoverEksNetwork(identity)
+      clusterVpcId = network.vpcId
+      if (routeTableIds.length === 0) {
+        routeTableIds = this.discoverClusterRouteTableIds(region, network.vpcId, network.subnetIds)
+        this.jsonCtx.info(
+          `proof-aws: discovered EKS route table(s): ${routeTableIds.join(', ')}`,
+        )
+      }
+    }
+
+    let created = false
+    if (!endpointId) {
+      const existing = this.aws.json([
+        'ec2',
+        'describe-vpc-endpoints',
+        '--filters',
+        `Name=vpc-id,Values=${clusterVpcId}`,
+        `Name=service-name,Values=com.amazonaws.${region}.s3`,
+        'Name=vpc-endpoint-type,Values=Gateway',
+      ], {region})
+      const reusable = (Array.isArray(existing?.VpcEndpoints) ? existing.VpcEndpoints : [])
+        .find((candidate: any) => candidate?.State === 'available')
+      if (reusable?.VpcEndpointId) {
+        endpointId = reusable.VpcEndpointId
+        this.jsonCtx.info(`proof-aws: reusing S3 gateway endpoint: ${endpointId}`)
+      } else {
+        const response = this.aws.json([
+          'ec2',
+          'create-vpc-endpoint',
+          '--vpc-id',
+          clusterVpcId as string,
+          '--service-name',
+          `com.amazonaws.${region}.s3`,
+          '--vpc-endpoint-type',
+          'Gateway',
+          '--route-table-ids',
+          ...routeTableIds,
+        ], {region})
+        endpointId = response?.VpcEndpoint?.VpcEndpointId
+        if (!endpointId || !/^vpce-[\da-f]+$/i.test(endpointId)) {
+          throw new Error('AWS did not return an ID for the newly created S3 gateway endpoint')
+        }
+
+        created = true
+        this.jsonCtx.info(`proof-aws: created S3 gateway endpoint: ${endpointId}`)
+      }
+    }
+
+    const resolvedEndpointId = endpointId as string
 
     const described = this.aws.json(
-      ['ec2', 'describe-vpc-endpoints', '--vpc-endpoint-ids', endpointId],
+      ['ec2', 'describe-vpc-endpoints', '--vpc-endpoint-ids', resolvedEndpointId],
       { region }
     )
     const endpoint = described?.VpcEndpoints?.[0]
     if (!endpoint) throw new Error(`VPC endpoint ${endpointId} was not returned by AWS`)
-    if (endpoint.State !== 'available') {
+    if (!['available', ...(created ? ['pending'] : [])].includes(endpoint.State)) {
       throw new Error(`VPC endpoint ${endpointId} is not available (state=${String(endpoint.State)})`)
     }
 
@@ -500,7 +954,7 @@ export class ProofAwsProvisioner {
         'ec2',
         'modify-vpc-endpoint',
         '--vpc-endpoint-id',
-        endpointId,
+        resolvedEndpointId,
         '--add-route-table-ids',
         ...missingRouteTables,
       ], { region })
@@ -511,7 +965,7 @@ export class ProofAwsProvisioner {
       this.readBucketPolicy(region, bucket),
       bucket,
       keyPrefix,
-      endpointId
+      resolvedEndpointId
     )
     this.aws.run([
       's3api',
@@ -524,11 +978,61 @@ export class ProofAwsProvisioner {
     this.jsonCtx.info(`proof-aws: configured credential-free GET for ${bucket}/${keyPrefix}/* via ${endpointId}`)
 
     return {
-      mode: 'vpc-endpoint',
+      created,
       routeTableIds,
       status: 'configured-unverified',
-      vpcEndpointId: endpointId,
+      vpcEndpointId: resolvedEndpointId,
     }
+  }
+
+  private discoverEksNetwork(identity: ProofAwsIdentity): {subnetIds: string[]; vpcId: string} {
+    const described = this.aws.json(
+      ['eks', 'describe-cluster', '--name', identity.eksCluster],
+      {region: identity.awsRegion},
+    )
+    const resources = described?.cluster?.resourcesVpcConfig
+    const vpcId = typeof resources?.vpcId === 'string' ? resources.vpcId : ''
+    const subnetIds = Array.isArray(resources?.subnetIds)
+      ? resources.subnetIds.filter((value: unknown): value is string => typeof value === 'string')
+      : []
+    if (!/^vpc-[\da-f]+$/i.test(vpcId) || subnetIds.length === 0) {
+      throw new Error(
+        `EKS cluster ${identity.eksCluster} did not return a VPC and subnet list for proof artifact routing`,
+      )
+    }
+
+    return {subnetIds, vpcId}
+  }
+
+  private discoverClusterRouteTableIds(region: string, vpcId: string, subnetIds: string[]): string[] {
+    const described = this.aws.json([
+      'ec2',
+      'describe-route-tables',
+      '--filters',
+      `Name=vpc-id,Values=${vpcId}`,
+    ], {region})
+    const routeTables = Array.isArray(described?.RouteTables) ? described.RouteTables : []
+    const main = routeTables.find((routeTable: any) =>
+      Array.isArray(routeTable?.Associations)
+      && routeTable.Associations.some((association: any) => association?.Main === true)
+    )?.RouteTableId
+    const selected = subnetIds.map(subnetId => {
+      const explicit = routeTables.find((routeTable: any) =>
+        Array.isArray(routeTable?.Associations)
+        && routeTable.Associations.some((association: any) => association?.SubnetId === subnetId)
+      )?.RouteTableId
+      return explicit || main
+    })
+    const routeTableIds = [...new Set(selected.filter((value: unknown): value is string =>
+      typeof value === 'string' && /^rtb-[\da-f]+$/i.test(value)
+    ))].sort()
+    if (routeTableIds.length === 0) {
+      throw new Error(
+        `could not resolve route tables for EKS subnets ${subnetIds.join(', ')} in ${vpcId}`,
+      )
+    }
+
+    return routeTableIds
   }
 
   private readBucketPolicy(region: string, bucket: string): Record<string, any> {

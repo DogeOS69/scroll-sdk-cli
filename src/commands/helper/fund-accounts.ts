@@ -7,6 +7,7 @@ import path from 'node:path'
 import { toString as qrCodeToString } from 'qrcode'
 
 import { parseTomlConfig } from '../../utils/config-parser.js'
+import {assertNoPlaceholderFunding} from '../../utils/contracts-placeholder.js'
 import { addressLink, txLink } from '../../utils/onchain/index.js'
 
 enum Layer {
@@ -103,6 +104,7 @@ export default class HelperFundAccounts extends Command {
 
     const configPath = path.resolve(flags.config)
     const config = parseTomlConfig(configPath)
+    assertNoPlaceholderFunding(config, flags.layer, flags['fund-deployer'])
 
     const l1RpcUrl = flags.l1rpc ?? this.getL1RpcUrl(config)
     const l2RpcUrl = flags.pod

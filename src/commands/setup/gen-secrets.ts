@@ -7,6 +7,7 @@ import * as path from 'node:path'
 
 import type { DogeConfig } from '../../types/doge-config.js'
 
+import {getContractsPlaceholderKey} from '../../utils/contracts-placeholder.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {
@@ -183,7 +184,10 @@ export default class SetupGenSecrets extends Command {
       'contracts': [
         'DEPLOYER_PRIVATE_KEY:DEPLOYER_PRIVATE_KEY',
         'L1_COMMIT_SENDER_PRIVATE_KEY:L1_COMMIT_SENDER_PRIVATE_KEY',
+        'L1_FINALIZE_SENDER_PRIVATE_KEY:L1_FINALIZE_SENDER_PRIVATE_KEY',
+        'L1_GAS_ORACLE_SENDER_PRIVATE_KEY:L1_GAS_ORACLE_SENDER_PRIVATE_KEY',
         'L2_GAS_ORACLE_SENDER_PRIVATE_KEY:L2_GAS_ORACLE_SENDER_PRIVATE_KEY',
+        'COORDINATOR_JWT_SECRET_KEY:COORDINATOR_JWT_SECRET_KEY',
         'ROLLUP_EXPLORER_DB_CONNECTION_STRING:ROLLUP_EXPLORER_DB_CONNECTION_STRING',
       ],
       'coordinator-api': [
@@ -261,7 +265,7 @@ export default class SetupGenSecrets extends Command {
       let content = ''
       for (const pair of mapping[service] || []) {
         const [configKey, envKey] = pair.split(':')
-        const value = this.getMappedConfigValue(config, configKey)
+        const value = this.getMappedConfigValue(config, configKey, service)
         if (value) {
           content += this.envLine(envKey, value, configKey)
         }
@@ -409,8 +413,13 @@ export default class SetupGenSecrets extends Command {
     return this.dogeConfig.accounts?.[key]
   }
 
-  private getMappedConfigValue(config: any, configKey: string): unknown {
+  private getMappedConfigValue(config: any, configKey: string, service?: string): unknown {
     if (configKey === 'L1_COMMIT_SENDER_PRIVATE_KEY') {
+      if (service === 'contracts') {
+        const placeholder = getContractsPlaceholderKey(config, this.dogeConfig)
+        if (placeholder) return placeholder
+      }
+
       return isAwsKmsSigner(this.requireSigner('l1CommitSender'))
         ? undefined
         : this.getDogeAccountValue('L1_COMMIT_SENDER_PRIVATE_KEY')

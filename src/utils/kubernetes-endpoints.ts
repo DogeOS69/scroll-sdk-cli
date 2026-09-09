@@ -47,7 +47,7 @@ export function resolveDogecoinKubernetesEndpoints(config: DogecoinEndpointConfi
 
   const { network } = config
   const kubernetes = config.kubernetes || {}
-  const serviceName = kubernetes.serviceName || 'dogecoin'
+  const serviceName = kubernetes.serviceName || (network === 'testnet' ? 'dogecoin-testnet' : 'dogecoin')
   const defaultRpcPort = network === 'mainnet' ? 22_555 : network === 'regtest' ? 18_332 : 44_555
   const defaultP2pPort = network === 'mainnet' ? 22_556 : network === 'regtest' ? 18_444 : 44_556
   const rpcPort = kubernetes.rpcPort || defaultRpcPort
@@ -83,6 +83,20 @@ export function resolveDogecoinKubernetesEndpoints(config: DogecoinEndpointConfi
     zmqRawTxPort,
     zmqRawTxUrl: `tcp://${serviceName}:${zmqRawTxPort}`,
   }
+}
+
+/**
+ * Return the stable in-cluster Dogecoin JSON-RPC endpoint for native service
+ * configs that keep credentials outside the URL.
+ *
+ * `kubernetes.rpcUrl` may be an operator-facing proxy URL containing a query
+ * parameter such as a shadowfork API key. The proof-topology contract rejects
+ * URL-embedded credentials, queries, and fragments, so Proof Coordinator uses
+ * the Kubernetes Service and its dedicated RPC username/password fields.
+ */
+export function resolveDogecoinServiceRpcUrl(config: DogecoinEndpointConfig): string {
+  const endpoints = resolveDogecoinKubernetesEndpoints(config)
+  return `http://${endpoints.serviceName}:${endpoints.rpcPort}`
 }
 
 export function resolveBlockbookKubernetesEndpoints(config: DogecoinEndpointConfig): BlockbookKubernetesEndpoints {

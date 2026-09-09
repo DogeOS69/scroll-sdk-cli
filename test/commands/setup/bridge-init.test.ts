@@ -1,6 +1,6 @@
 import { expect } from 'chai'
 
-import {
+import BridgeInitCommand, {
   BRIDGE_TIMELOCK_MARGIN_BLOCKS,
   BRIDGE_TIMELOCK_RELATIVE_BLOCKS,
   buildEthereumDaProtocolSeedConfig,
@@ -8,6 +8,18 @@ import {
   resolveBridgeTimelock,
   resolveInitialSystemSignerFromDogeConfig,
 } from '../../../src/commands/setup/bridge-init.js'
+
+describe('setup bridge-init explicit Kubernetes context', () => {
+  it('offers a context flag with KUBE_CONTEXT environment fallback', () => {
+    expect(BridgeInitCommand.flags['kube-context'].env).to.equal('KUBE_CONTEXT')
+    expect(BridgeInitCommand.flags['kube-context'].description).to.contain('Ethereum DA RPC probe')
+  })
+
+  it('describes funding according to configured transaction kinds, not a fixed count', () => {
+    expect(BridgeInitCommand.flags.step.description).to.contain('bridge-funding and/or deposit-seed')
+    expect(BridgeInitCommand.flags.step.description).not.to.contain('10 initial bridge funding')
+  })
+})
 
 describe('setup bridge-init timelock resolution', () => {
   const currentHeight = 50_579_598
@@ -102,6 +114,7 @@ describe('setup bridge-init protocol seed generation', () => {
       deposit_queue_transform: {
         l1_scroll_messenger_address: '0x0000000000000000000000000000000000000001',
         l2_messenger_address: '0x0000000000000000000000000000000000000002',
+        message_queue_gas_limit: 200_000,
         moat_address: '0x0000000000000000000000000000000000000003',
       },
       eth_chain_id: 32_382,

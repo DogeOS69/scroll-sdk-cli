@@ -16,6 +16,7 @@ import {
   normalizeSignerEndpoint,
 } from '../../utils/attestation-signer-descriptor.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
+import {renderSignerOperatorPolicyTemplate} from '../../utils/signer-policy-bundle.js'
 
 const { Networks, PrivateKey } = bitcore
 
@@ -62,7 +63,7 @@ export function renderSignerReleasePins(options: {
 
   return [
     '# Image release-policy pins. The first two are mandatory when the post-genesis',
-    '# policy bundle selects production_enforce; obtain them from the approved image.',
+    '# policy bundle selects enforcement=enforce; obtain them from the approved image.',
     ...(releaseVersion && gitCommit
       ? [
           `ATTESTATION_SIGNER_ALLOWED_RELEASE_VERSION=${releaseVersion}`,
@@ -77,7 +78,7 @@ export function renderSignerReleasePins(options: {
 }
 
 export class SignerInitCommand extends Command {
-  static description = 'Signer-operator tool: set up key material and emit the descriptor + a complete deployment env file. Run this on YOUR infrastructure — secrets and AWS calls never leave it. Specify the TSO-reachable signer IP/domain with --endpoint. Production operators also pin the approved image release version and full git commit here. The output directory is the single source of truth for signer preflight and compose deployment.'
+  static description = 'Signer-operator tool: create key material, a public descriptor, secret deployment env, and a partner-owned V2 policy template. Run on your infrastructure; secrets and AWS calls never leave it. Send the descriptor before genesis, then deploy and preflight only after receiving the canonical-context policy bundle.'
 
   static examples = [
     '$ scrollsdk signer init --id partner-a-signer-0 --network testnet --endpoint https://signer.partner-a.example:4040',
@@ -108,6 +109,7 @@ export class SignerInitCommand extends Command {
     try {
       const outDir = path.resolve(flags.out || `signer-${flags.id}`)
       const secretFile = path.join(outDir, 'attestation-signer.env')
+      const policyFile = path.join(outDir, 'attestation-signer.toml')
       const descriptorFile = path.join(outDir, 'descriptor.json')
       fs.mkdirSync(outDir, { recursive: true })
       const existingEnv = fs.existsSync(secretFile) ? fs.readFileSync(secretFile, 'utf8') : ''
@@ -169,9 +171,9 @@ export class SignerInitCommand extends Command {
 
       // A complete deployment env: point the compose env_file directly at
       // this file (or copy it next to docker-compose.yml) — nothing else to
-      // assemble by hand. staging_scaffold is mandatory pre-genesis; the
-      // bridge operator's policy bundle selects audited staging_scaffold for
-      // mock proving or fail-closed production_enforce for production proving.
+      // assemble by hand. The bridge operator's post-genesis policy bundle is
+      // authoritative for observe/enforce. This bootstrap value is observe on
+      // testnet and enforce on mainnet, where dogeos-core refuses observe.
       //
       // Do NOT put externally-supplied policy values here (e.g. TSO_URL).
       // Those belong in the bridge operator's signer-policy.env so that every
@@ -183,9 +185,17 @@ export class SignerInitCommand extends Command {
         ...backendLines,
         ...releasePinLines,
         `ATTESTATION_SIGNER_NETWORK=${flags.network}`,
-        'ATTESTATION_SIGNER_POLICY_MODE=staging_scaffold',
+        `ATTESTATION_SIGNER_POLICY_MODE=${flags.network === 'mainnet' ? 'enforce' : 'observe'}`,
       ]
       fs.writeFileSync(secretFile, `${envLines.join('\n')}\n`, { mode: 0o600 })
+
+      // This is partner-owned policy. In particular, --force may rotate or
+      // reconstruct key env without erasing reviewed RPC trust domains and
+      // rotation targets, so the template is created exactly once.
+      const createdPolicyTemplate = !fs.existsSync(policyFile)
+      if (createdPolicyTemplate) {
+        fs.writeFileSync(policyFile, renderSignerOperatorPolicyTemplate())
+      }
 
       const endpoint = flags.endpoint ? normalizeSignerEndpoint(flags.endpoint, '--endpoint') : ENDPOINT_PLACEHOLDER
       const descriptor = {
@@ -206,14 +216,17 @@ export class SignerInitCommand extends Command {
         endpoint,
         id: flags.id,
         kmsKeyId,
+        policyFile,
+        policyTemplateCreated: createdPolicyTemplate,
         publicKey,
         secretFile,
       }
       if (flags.json) json.success(result)
       else {
         this.log(chalk.green(`Deployment env written to ${secretFile}${flags.backend === 'local' ? ' (keep this private; it holds the signing key)' : ''}.`))
+        this.log(chalk.green(`${createdPolicyTemplate ? 'Partner-owned V2 policy template written' : 'Existing partner-owned V2 policy preserved'} at ${policyFile}.`))
         this.log(chalk.green(`Descriptor written to ${descriptorFile} — send THIS file to the bridge operator.`))
-        this.log(chalk.green(`Next: deploy the signer, then run \`scrollsdk signer preflight --dir ${path.relative(process.cwd(), outDir) || '.'} --endpoint <url>\`.`))
+        this.log(chalk.green('Next: send the descriptor to the bridge operator. Start the signer after receiving the canonical post-genesis policy bundle.'))
         if (endpoint === ENDPOINT_PLACEHOLDER) {
           this.log(chalk.yellow('Endpoint is a placeholder; signer preflight will fill it in after deployment.'))
         }

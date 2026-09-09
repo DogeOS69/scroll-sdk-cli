@@ -1,4 +1,4 @@
-import type { ProofSystemMode, ProvingMode } from '../utils/proof-system-mode.js'
+import type {ProofTopologySpec} from './proof-topology.js'
 
 export type Network = 'mainnet' | 'regtest' | 'testnet'
 
@@ -201,19 +201,8 @@ export interface DogeConfig {
     }>
   }
   network: Network
-  /** Deployment-wide proof posture, owned by setup rather than the Makefile. */
-  proofSystem?: {
-    /** Stable public GET root used only when mode is mock or production. */
-    artifactReadBaseUrl?: string
-    mode?: ProofSystemMode
-    /** Legacy compatibility field; migrated to mode by setup prep-charts. */
-    provingMode?: ProvingMode
-    /** Proof release bundle root. Conventional proof-artifacts/ is used when omitted. */
-    release?: string
-    signerPolicy?: {
-      sourceSet?: string
-    }
-  }
+  /** Compiler-backed proof topology when DeploymentSpec is not used. */
+  proof_topology?: ProofTopologySpec
   /** Reth-specific network settings that are intentionally independent of the EVM chain ID. */
   reth?: {
     /**

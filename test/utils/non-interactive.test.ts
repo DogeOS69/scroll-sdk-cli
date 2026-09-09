@@ -8,6 +8,7 @@ import {
   isUnresolvedEnvRef,
   resolveConfirm,
   resolveEnvValue,
+  resolveFlagOrPrompt,
   resolveOrPrompt,
   resolveOrSelect,
   shouldSkipConfirmation,
@@ -112,6 +113,44 @@ describe('non-interactive utilities', () => {
 
     it('returns false for partial $ENV in middle of string', () => {
       expect(isUnresolvedEnvRef('prefix$ENV:VAR')).to.be.false;
+    });
+  });
+
+  describe('resolveFlagOrPrompt', () => {
+    it('returns an explicit interactive flag without prompting', async () => {
+      const promptFn = sinon.stub().resolves('prompted-value');
+
+      const result = await resolveFlagOrPrompt('flag-value', false, 'configured-value', promptFn);
+
+      expect(result).to.equal('flag-value');
+      expect(promptFn.called).to.be.false;
+    });
+
+    it('prompts in interactive mode when the flag was omitted', async () => {
+      const promptFn = sinon.stub().resolves('prompted-value');
+
+      const result = await resolveFlagOrPrompt(undefined, false, 'configured-value', promptFn);
+
+      expect(result).to.equal('prompted-value');
+      expect(promptFn.calledOnce).to.be.true;
+    });
+
+    it('uses the configured value without prompting in non-interactive mode', async () => {
+      const promptFn = sinon.stub().resolves('prompted-value');
+
+      const result = await resolveFlagOrPrompt(undefined, true, 'configured-value', promptFn);
+
+      expect(result).to.equal('configured-value');
+      expect(promptFn.called).to.be.false;
+    });
+
+    it('preserves explicit false values', async () => {
+      const promptFn = sinon.stub().resolves(true);
+
+      const result = await resolveFlagOrPrompt(false, false, true, promptFn);
+
+      expect(result).to.be.false;
+      expect(promptFn.called).to.be.false;
     });
   });
 

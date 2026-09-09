@@ -23,7 +23,7 @@ function positiveInteger(raw: string | undefined, fallback: number, name: string
 }
 
 export class AttestationSignerCommand extends Command {
-  static description = 'Import partner-operated attestation-signer descriptors and select the bootstrap bridge keyset. Signers are deployed by their operators (see `scrollsdk signer init` / `scrollsdk signer preflight`); this command only consumes descriptor files — endpoint + public key — and never provisions keys, Kubernetes releases, or network probes. Reachability is verified later by the partner operator and the TSO, not during config generation.'
+  static description = 'Import signer-init descriptors from partner-operated attestation-signers and select the bootstrap bridge keyset. This command consumes only endpoint + public key and never provisions keys, deployments, or network probes. Current dogeos-core runtime preflight occurs after partners install the post-genesis canonical-context bundle.'
 
   static examples = [
     '$ scrollsdk setup attestation-signer --descriptor partner-a.json --descriptor partner-b.json --descriptor ours.json --threshold 2',

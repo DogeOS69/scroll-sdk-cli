@@ -251,7 +251,6 @@ function buildEthDaSubmitterBatchEnv(spec: DeploymentSpec): Record<string, strin
     DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_CHUNKS_PER_BATCH: String(batch.maxChunksPerBatch ?? 1),
     DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: String(batch.maxL2GasPerChunk ?? 6_000_000),
     DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_BATCH_BYTES_SIZE: String(batch.maxUncompressedBatchBytesSize ?? 131_072),
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__MIN_CODEC_VERSION: String(batch.minCodecVersion ?? 10),
   }
 
   if (cutover) {
@@ -361,6 +360,10 @@ function resolveImage(
  */
 export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles {
   const normalizedSpec = normalizeDeploymentSpec(spec)
+  if (normalizedSpec.proofTopology?.enforcement === 'enforce' && (
+    normalizedSpec.proofTopology.mode !== 'active'
+    || normalizedSpec.proofTopology.generation !== 'real'
+  )) throw new Error('DeploymentSpec proof enforcement requires active real proving')
 
   const files: GeneratedValuesFiles = {}
 
@@ -1164,7 +1167,10 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   }
 
   ensureWithdrawalChartWiring(values)
-  ensureWithdrawalProofActivationSwitch(values, spec.proofSystem?.mode || 'disabled')
+  ensureWithdrawalProofActivationSwitch(
+    values,
+    spec.proofTopology?.mode ?? 'disabled',
+  )
 
   const {proofCoordinator} = spec
   if (proofCoordinator && proofCoordinator.enabled !== false) {
@@ -1210,7 +1216,7 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'cubesignerSigner', {
     pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/cubesigner-signer',
-    tag: '0.2.0-rc.4'
+    tag: 'v0.3.0-beta.2'
   })
 
   const values: Record<string, any> = {
@@ -1229,14 +1235,14 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_REQUEST_JSON_BYTES', value: '393216' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_RESPONSE_JSON_BYTES', value: '393216' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE', value: 'production_verifier_key_policy' },
-      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION', value: '0.4.152-0' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION', value: '0.4.281' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_KEY_IDENTIFIER', valueFrom: { secretKeyRef: { key: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', name: 'cubesigner-signer-env' } } },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER', value: productionPolicy?.policyIdentifier || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_ARTIFACT_DIGEST', value: productionPolicy?.policyArtifactDigest || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_VERIFIER_IDENTITY_DIGEST', value: productionPolicy?.verifierIdentityDigest || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROGRAM_IDENTITY_DIGEST', value: productionPolicy?.programIdentityDigest || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROOF_RESOLVER_AUTHORITY', value: productionPolicy?.proofResolverAuthority || '' },
-      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT', value: 'dogeos-cubesigner-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1' },
+      { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT', value: 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_LIVE_EVIDENCE_REPORT_PATH', value: productionPolicy?.liveEvidenceReportPath || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_LIVE_EVIDENCE_REPORT_DIGEST', value: productionPolicy?.liveEvidenceReportDigest || '' },
       { name: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', valueFrom: { secretKeyRef: { key: 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID', name: 'cubesigner-signer-env' } } },
@@ -1297,7 +1303,12 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
       requests: { cpu: '50m', memory: '128Mi' }
     },
     serviceMonitor: {
-      main: { enabled: false }
+      main: {
+        enabled: true,
+        endpoints: [{ interval: '10s', port: 'http', scrapeTimeout: '5s' }],
+        labels: { release: 'scroll-sdk' },
+        serviceName: '{{ include "scroll.common.lib.chart.names.fullname" $ }}'
+      }
     },
     volumeClaimTemplates: [{
       accessMode: 'ReadWriteOnce',
@@ -1370,7 +1381,7 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'proofCoordinator', {
     pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/proof-coordinator',
-    tag: 'latest'
+    tag: '0.3.0-beta.1d-rc2'
   })
 
   const env: Array<Record<string, any>> = [
@@ -1415,6 +1426,14 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
     env,
     image,
     persistence: {
+      genesis: {
+        enabled: true,
+        mountPath: '/app/genesis/genesis.json',
+        name: 'genesis-config',
+        readOnly: true,
+        subPath: 'genesis.json',
+        type: 'configMap'
+      },
       'protocol-context': {
         enabled: true,
         mountPath: '/app/protocol_context.json',
@@ -1558,7 +1577,7 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
           DOGEOS_FEE_ORACLE_MONITORING__HEALTH_BIND_ADDRESS: '0.0.0.0',
           DOGEOS_FEE_ORACLE_MONITORING__HEALTH_CHECK_PORT: '8080',
           DOGEOS_FEE_ORACLE_MONITORING__METRICS_PORT: '9090',
-          DOGEOS_FEE_ORACLE_PRICE_ORACLE__CACHE_DURATION: '60',
+          DOGEOS_FEE_ORACLE_PRICE_ORACLE__CACHE_DURATION: '30',
           DOGEOS_FEE_ORACLE_PRICE_ORACLE__COINBASE_ENABLED: 'true',
           DOGEOS_FEE_ORACLE_PRICE_ORACLE__COINGECKO_ENABLED: 'false',
           DOGEOS_FEE_ORACLE_PRICE_ORACLE__GATEIO_ENABLED: 'true',

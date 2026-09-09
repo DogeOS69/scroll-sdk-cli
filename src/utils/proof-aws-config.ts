@@ -8,10 +8,16 @@ import type {
   ProofAwsValuesProjection,
 } from './proof-aws-provisioner.js'
 
-import { normalizeProofKeyPrefix } from './proof-aws-provisioner.js'
+import {
+  normalizeProofArtifactPublicEndpoint,
+  normalizeProofBucketName,
+  normalizeProofKeyPrefix,
+  proofArtifactS3Endpoint,
+} from './proof-aws-provisioner.js'
 
 export const DEFAULT_PROOF_AWS_CONFIG = '.data/proof-aws.json'
-export const PROOF_AWS_CONFIG_SCHEMA = 'dogeos/proof-aws/v1'
+export const LEGACY_SHARED_PROOF_SECRET_NAME = 'scroll/proof-coordinator-secrets'
+export const PROOF_AWS_CONFIG_SCHEMA = 'dogeos/proof-aws/v4'
 
 export interface ProofAwsConfig {
   artifactReadTransport: ProofArtifactReadTransportResult
@@ -21,9 +27,10 @@ export interface ProofAwsConfig {
     region: string
   }
   kubernetes: {
+    awsRegion: string
+    deploymentAlias: string
     eksCluster: string
     namespace: string
-    networkAlias: string
   }
   schema: typeof PROOF_AWS_CONFIG_SCHEMA
   secret: {
@@ -43,6 +50,7 @@ export interface ProofAwsConfig {
 }
 
 export interface ProofAwsConfigInput {
+  artifactRegion?: string
   coordinatorServiceAccount: string
   identity: ProofAwsIdentity
   keyPrefix: string
@@ -56,6 +64,15 @@ function requiredString(value: unknown, label: string): string {
   }
 
   return value.trim()
+}
+
+export function defaultProofSecretName(normalizedDeploymentAlias: string): string {
+  const alias = requiredString(normalizedDeploymentAlias, 'proof AWS deployment alias')
+  if (!/^[\da-z](?:[\da-z-]*[\da-z])?$/.test(alias)) {
+    throw new Error('proof AWS deployment alias must already be normalized for AWS resource names')
+  }
+
+  return `scroll/${alias}/proof-coordinator-secrets`
 }
 
 function requiredRoleArn(value: unknown, label: string): string {
@@ -76,55 +93,69 @@ function normalizeArtifactReadTransport(
   }
 
   const value = raw as Partial<ProofArtifactReadTransportResult>
-  if (!['external', 'vpc-endpoint'].includes(value.mode || '')) {
-    throw new Error(`${label}.mode must be external or vpc-endpoint`)
-  }
-
-  if (!['configured-unverified', 'operator-managed-unverified'].includes(value.status || '')) {
-    throw new Error(`${label}.status is invalid`)
-  }
-
-  if (value.mode === 'external') {
-    if (value.status !== 'operator-managed-unverified') {
-      throw new Error(
-        `${label}.status must be operator-managed-unverified for external mode`,
-      )
-    }
-
-    return {
-      mode: 'external',
-      status: 'operator-managed-unverified',
-    }
-  }
-
-  if (value.status !== 'configured-unverified') {
+  const {publicReadMode} = value
+  if (
+    publicReadMode !== 'direct-s3'
+    && publicReadMode !== 'existing-public-s3'
+    && publicReadMode !== 'existing-gateway'
+  ) {
     throw new Error(
-      `${label}.status must be configured-unverified for vpc-endpoint mode`,
+      `${label}.publicReadMode must be direct-s3, existing-public-s3, or existing-gateway`,
     )
   }
 
-  const vpcEndpointId = requiredString(value.vpcEndpointId, `${label}.vpcEndpointId`)
-  if (!/^vpce-[\da-f]+$/i.test(vpcEndpointId)) {
-    throw new Error(`${label}.vpcEndpointId is invalid`)
+  const expectedStatus = publicReadMode === 'direct-s3'
+    ? 'configured-unverified'
+    : 'operator-managed-unverified'
+  if (value.publicStatus !== expectedStatus) {
+    throw new Error(`${label}.publicStatus must be ${expectedStatus} for ${publicReadMode}`)
   }
 
-  const routeTableIds = [...new Set((value.routeTableIds || []).map((item, index) => {
-    const routeTableId = requiredString(item, `${label}.routeTableIds[${index}]`)
+  const normalized: ProofArtifactReadTransportResult = {
+    publicEndpointUrl: normalizeProofArtifactPublicEndpoint(
+      requiredString(value.publicEndpointUrl, `${label}.publicEndpointUrl`),
+    ),
+    publicReadMode,
+    publicStatus: expectedStatus,
+  }
+  if (!value.vpcEndpoint) return normalized
+
+  const vpcEndpointId = requiredString(
+    value.vpcEndpoint.vpcEndpointId,
+    `${label}.vpcEndpoint.vpcEndpointId`,
+  )
+  if (!/^vpce-[\da-f]+$/i.test(vpcEndpointId)) {
+    throw new Error(`${label}.vpcEndpoint.vpcEndpointId is invalid`)
+  }
+
+  if (value.vpcEndpoint.status !== 'configured-unverified') {
+    throw new Error(`${label}.vpcEndpoint.status must be configured-unverified`)
+  }
+
+  if (typeof value.vpcEndpoint.created !== 'boolean') {
+    throw new TypeError(`${label}.vpcEndpoint.created must be a boolean`)
+  }
+
+  const routeTableIds = [...new Set((value.vpcEndpoint.routeTableIds || []).map((item, index) => {
+    const routeTableId = requiredString(item, `${label}.vpcEndpoint.routeTableIds[${index}]`)
     if (!/^rtb-[\da-f]+$/i.test(routeTableId)) {
-      throw new Error(`${label}.routeTableIds[${index}] is invalid`)
+      throw new Error(`${label}.vpcEndpoint.routeTableIds[${index}] is invalid`)
     }
 
     return routeTableId
   }))].sort()
   if (routeTableIds.length === 0) {
-    throw new Error(`${label}.routeTableIds must contain at least one route table`)
+    throw new Error(`${label}.vpcEndpoint.routeTableIds must contain at least one route table`)
   }
 
   return {
-    mode: 'vpc-endpoint',
-    routeTableIds,
-    status: 'configured-unverified',
-    vpcEndpointId,
+    ...normalized,
+    vpcEndpoint: {
+      created: value.vpcEndpoint.created,
+      routeTableIds,
+      status: 'configured-unverified',
+      vpcEndpointId,
+    },
   }
 }
 
@@ -136,14 +167,15 @@ export function buildProofAwsConfig(input: ProofAwsConfigInput): ProofAwsConfig 
       'proof AWS artifactReadTransport',
     ),
     artifactStore: {
-      bucket: requiredString(provisioned.bucket, 'proof AWS bucket'),
+      bucket: normalizeProofBucketName(requiredString(provisioned.bucket, 'proof AWS bucket')),
       keyPrefix: normalizeProofKeyPrefix(input.keyPrefix),
-      region: requiredString(identity.awsRegion, 'proof AWS region'),
+      region: requiredString(input.artifactRegion || identity.artifactRegion || identity.awsRegion, 'proof artifact AWS region'),
     },
     kubernetes: {
+      awsRegion: requiredString(identity.awsRegion, 'proof EKS AWS region'),
+      deploymentAlias: requiredString(identity.deploymentAlias, 'proof AWS deployment alias'),
       eksCluster: requiredString(identity.eksCluster, 'proof AWS EKS cluster'),
       namespace: requiredString(identity.namespace, 'proof AWS namespace'),
-      networkAlias: requiredString(identity.networkAlias, 'proof AWS network alias'),
     },
     schema: PROOF_AWS_CONFIG_SCHEMA,
     secret: {
@@ -178,29 +210,41 @@ export function validateProofAwsConfig(raw: unknown, label: string): ProofAwsCon
     `${label}.artifactStore.region`,
   )
   const secretRegion = requiredString(value.secret?.region, `${label}.secret.region`)
-  if (secretRegion !== artifactRegion) {
+  const kubernetesRegion = requiredString(value.kubernetes?.awsRegion, `${label}.kubernetes.awsRegion`)
+  if (secretRegion !== kubernetesRegion) {
+    throw new Error(`${label}.secret.region must match ${label}.kubernetes.awsRegion`)
+  }
+
+  const artifactReadTransport = normalizeArtifactReadTransport(
+    value.artifactReadTransport,
+    `${label}.artifactReadTransport`,
+  )
+  if (
+    (artifactReadTransport.publicReadMode === 'direct-s3'
+      || artifactReadTransport.publicReadMode === 'existing-public-s3')
+    && artifactReadTransport.publicEndpointUrl !== proofArtifactS3Endpoint(artifactRegion)
+  ) {
     throw new Error(
-      `${label}.secret.region must match ${label}.artifactStore.region`,
+      `${label}.artifactReadTransport.publicEndpointUrl must match artifactStore.region in S3 endpoint mode`,
     )
   }
 
   return buildProofAwsConfig({
+    artifactRegion,
     coordinatorServiceAccount: requiredString(
       value.serviceAccounts?.proofCoordinator?.name,
       `${label}.serviceAccounts.proofCoordinator.name`,
     ),
     identity: {
-      awsRegion: artifactRegion,
+      artifactRegion,
+      awsRegion: kubernetesRegion,
+      deploymentAlias: requiredString(value.kubernetes?.deploymentAlias, `${label}.kubernetes.deploymentAlias`),
       eksCluster: requiredString(value.kubernetes?.eksCluster, `${label}.kubernetes.eksCluster`),
       namespace: requiredString(value.kubernetes?.namespace, `${label}.kubernetes.namespace`),
-      networkAlias: requiredString(value.kubernetes?.networkAlias, `${label}.kubernetes.networkAlias`),
     },
     keyPrefix: requiredString(value.artifactStore?.keyPrefix, `${label}.artifactStore.keyPrefix`),
     provisioned: {
-      artifactReadTransport: normalizeArtifactReadTransport(
-        value.artifactReadTransport,
-        `${label}.artifactReadTransport`,
-      ),
+      artifactReadTransport,
       bucket: requiredString(value.artifactStore?.bucket, `${label}.artifactStore.bucket`),
       bucketCreated: false,
       coordinatorRoleArn: requiredRoleArn(
@@ -261,12 +305,13 @@ export function readOptionalProofAwsConfig(
 
 export function proofAwsValuesProjection(config: ProofAwsConfig): ProofAwsValuesProjection {
   return {
+    artifactRegion: config.artifactStore.region,
     bucket: config.artifactStore.bucket,
     coordinatorRoleArn: config.serviceAccounts.proofCoordinator.roleArn,
     coordinatorServiceAccount: config.serviceAccounts.proofCoordinator.name,
     keyPrefix: config.artifactStore.keyPrefix,
-    region: config.artifactStore.region,
     secretName: config.secret.name,
+    secretRegion: config.secret.region,
     withdrawalRoleArn: config.serviceAccounts.withdrawalProcessor.roleArn,
     withdrawalServiceAccount: config.serviceAccounts.withdrawalProcessor.name,
   }

@@ -18,15 +18,13 @@ const FACTS_INPUT = {
     expectedBatcherAddress: '0xbatcher',
     inboxWorkerStartBlock: '777',
     l1RpcUrl: 'https://ethereum.example.com',
-    minFinality: 'finalized',
     s3: {
       enabled: true,
       keyPrefix: 'blobs',
       publicBaseUrl: 'https://blob-archive.example.com',
-      timeoutMs: '10000',
-      treatForbiddenAsMissing: 'true',
     },
   },
+  genesisSequencerTxHex: '01000000',
   initialBridgeRedeemScriptHex: 'aabb',
   l2BootstrapNextStartingBlockHeight: '99',
   l2MessageQueueAddress: '0xqueue',
@@ -37,7 +35,7 @@ const FACTS_INPUT = {
 
 describe('withdrawal-config deployment block', () => {
   it('builds typed TOML facts from string inputs', () => {
-    const { defaults, deletePaths, facts } = buildWithdrawalDeploymentFacts(FACTS_INPUT)
+    const { deletePaths, facts } = buildWithdrawalDeploymentFacts(FACTS_INPUT)
     expect(deletePaths).to.include.deep.members([
       ['bridge_address'],
       ['genesis_sequencer_txid'],
@@ -47,13 +45,30 @@ describe('withdrawal-config deployment block', () => {
     ])
     expect((facts as any).bridge_address).to.equal(undefined)
     expect((facts as any).genesis_sequencer_vout).to.equal(undefined)
+    expect((facts as any).genesis_sequencer_tx_hex).to.equal('01000000')
     expect((facts as any).ethereum_da.eth_chain_id).to.equal(undefined)
     expect((facts as any).ethereum_da.l2_chain_id).to.equal(undefined)
     expect((facts as any).ethereum_da.inbox_worker.expected_batchers).to.deep.equal(['0xbatcher'])
     expect((facts as any).ethereum_da.inbox_worker.start_block).to.equal(777)
-    expect((facts as any).ethereum_da.blob_source.aws_s3.treat_forbidden_as_missing).to.equal(true)
+    expect((facts as any).ethereum_da.blob_source.aws_s3.timeout_ms).to.equal(undefined)
+    expect((facts as any).ethereum_da.blob_source.aws_s3.treat_forbidden_as_missing).to.equal(undefined)
     expect((facts as any).l2_bootstrap_next_starting_block_height).to.equal(99)
-    expect((defaults as any).utxo_manager_intermediate.bridge_strategy.max_inputs).to.equal(60)
+    expect((facts as any).rotate_sequencer_signer_v2).to.equal(undefined)
+    expect((facts as any).wf_withdrawal_parity_v1).to.equal(undefined)
+  })
+
+  it('does not emit an open sender allowlist when the canonical batcher is provided', () => {
+    const {facts} = buildWithdrawalDeploymentFacts({
+      ...FACTS_INPUT,
+      ethereumDa: {
+        ...FACTS_INPUT.ethereumDa,
+        expectedBatcherAddress: '0x809cb1378Cb2775816dD14d1a3754a536b066889',
+      },
+    })
+
+    expect((facts as any).ethereum_da.inbox_worker.expected_batchers).to.deep.equal([
+      '0x809cb1378Cb2775816dD14d1a3754a536b066889',
+    ])
   })
 
   it('requests aws_s3 removal when the blob archive is disabled', () => {
@@ -66,35 +81,67 @@ describe('withdrawal-config deployment block', () => {
   })
 
   it('creates the deployment block at the top of a proof-only config', () => {
-    const source = `# BEGIN scrollsdk managed proof configuration
-[proof_system]
+    const source = `[proof_system]
 mode = "disabled"
-# END scrollsdk managed proof configuration
 `
-    const { defaults, deletePaths, facts } = buildWithdrawalDeploymentFacts(FACTS_INPUT)
-    const merged = mergeWithdrawalManagedDeploymentBlock(source, facts, { defaults, deletePaths })
+    const { deletePaths, facts } = buildWithdrawalDeploymentFacts(FACTS_INPUT)
+    const merged = mergeWithdrawalManagedDeploymentBlock(source, facts, {deletePaths})
     expect(merged.startsWith(WITHDRAWAL_DEPLOYMENT_BEGIN)).to.equal(true)
     const parsed = toml.parse(merged) as any
     expect(parsed.network_str).to.equal('testnet')
     expect(parsed.dogeos_indexer.rpc_url).to.equal('http://l2-rpc:8545')
-    expect(parsed.utxo_manager_intermediate.bridge_strategy.max_inputs).to.equal(60)
+    expect(parsed.utxo_manager_intermediate).to.equal(undefined)
     expect(parsed.proof_system.mode).to.equal('disabled')
   })
 
-  it('preserves operator tuning while facts win on their keys', () => {
-    const { defaults, facts } = buildWithdrawalDeploymentFacts(FACTS_INPUT)
-    const seeded = mergeWithdrawalManagedDeploymentBlock('', facts, { defaults })
-    // Operator tunes curated defaults, a fact key, and adds a new key.
-    const tuned = seeded
-      .replace('max_inputs = 60', 'max_inputs = 42')
-      .replace('fee_rate_sat_per_kvb = 1_000_000', 'fee_rate_sat_per_kvb = 2000000')
-      .replace('rpc_url = "http://l2-rpc:8545"', 'rpc_url = "http://operator-edited:8545"')
-      .replace(WITHDRAWAL_DEPLOYMENT_BEGIN, `${WITHDRAWAL_DEPLOYMENT_BEGIN}\noperator_custom_flag = true`)
+  it('reconstructs a managed block from a compiler-rendered markerless config', () => {
+    const source = `api_port = 3000
+fee_rate_sat_per_kvb = 2000000
 
-    const remerged = mergeWithdrawalManagedDeploymentBlock(tuned, facts, { defaults })
+[dogecoin_indexer]
+confirmations = 120
+poll_interval_ms = 9000
+start_height = 1
+
+[proof_system]
+mode = "active"
+`
+    const {deletePaths, facts} = buildWithdrawalDeploymentFacts(FACTS_INPUT)
+    const merged = mergeWithdrawalManagedDeploymentBlock(source, facts, {deletePaths})
+    const parsed = toml.parse(merged) as any
+
+    expect(merged.startsWith(WITHDRAWAL_DEPLOYMENT_BEGIN)).to.equal(true)
+    expect(parsed.api_port).to.equal(3000)
+    expect(parsed.fee_rate_sat_per_kvb).to.equal(2_000_000)
+    expect(parsed.dogecoin_indexer.confirmations).to.equal(120)
+    expect(parsed.dogecoin_indexer.poll_interval_ms).to.equal(9000)
+    expect(parsed.dogecoin_indexer.start_height).to.equal(1234)
+    expect(parsed.proof_system.mode).to.equal('active')
+    expect((merged.match(/^\[dogecoin_indexer]$/gm) || [])).to.have.length(1)
+  })
+
+  it('preserves operator tuning while facts win on their keys', () => {
+    const { facts } = buildWithdrawalDeploymentFacts(FACTS_INPUT)
+    const tuned = `${WITHDRAWAL_DEPLOYMENT_BEGIN}
+operator_custom_flag = true
+fee_rate_sat_per_kvb = 2000000
+rotate_sequencer_signer_v2 = false
+wf_withdrawal_parity_v1 = false
+
+[dogeos_indexer]
+rpc_url = "http://operator-edited:8545"
+
+[utxo_manager_intermediate.bridge_strategy]
+max_inputs = 42
+${WITHDRAWAL_DEPLOYMENT_END}
+`
+
+    const remerged = mergeWithdrawalManagedDeploymentBlock(tuned, facts)
     const parsed = toml.parse(remerged) as any
     expect(parsed.operator_custom_flag).to.equal(true)
     expect(parsed.fee_rate_sat_per_kvb).to.equal(2_000_000)
+    expect(parsed.rotate_sequencer_signer_v2).to.equal(false)
+    expect(parsed.wf_withdrawal_parity_v1).to.equal(false)
     expect(parsed.utxo_manager_intermediate.bridge_strategy.max_inputs).to.equal(42)
     // The fact key is re-asserted by the merge.
     expect(parsed.dogeos_indexer.rpc_url).to.equal('http://l2-rpc:8545')
@@ -102,13 +149,12 @@ mode = "disabled"
 
   it('removes a stale aws_s3 provider via deletePaths', () => {
     const initial = buildWithdrawalDeploymentFacts(FACTS_INPUT)
-    const seeded = mergeWithdrawalManagedDeploymentBlock('', initial.facts, { defaults: initial.defaults })
+    const seeded = mergeWithdrawalManagedDeploymentBlock('', initial.facts)
     const disabled = buildWithdrawalDeploymentFacts({
       ...FACTS_INPUT,
       ethereumDa: { ...FACTS_INPUT.ethereumDa, s3: { enabled: false } },
     })
     const remerged = mergeWithdrawalManagedDeploymentBlock(seeded, disabled.facts, {
-      defaults: disabled.defaults,
       deletePaths: disabled.deletePaths,
     })
     const parsed = toml.parse(remerged) as any
@@ -128,7 +174,19 @@ ${WITHDRAWAL_DEPLOYMENT_END}
       .to.throw('must be the first content of the file')
   })
 
-  it('strips migrated env while keeping secrets and activation projections', () => {
+  it('preserves the explicit fresh-genesis storage switch without enabling it implicitly', () => {
+    for (const value of ['true', 'false']) {
+      const values = {env: [{name: 'DOGEOS_WITHDRAWAL_FRESH_GENESIS_INIT', value}]}
+      expect(stripMigratedWithdrawalEnv(values)).to.deep.equal([])
+      expect(values.env).to.deep.equal([{name: 'DOGEOS_WITHDRAWAL_FRESH_GENESIS_INIT', value}])
+    }
+
+    const values = {env: []}
+    stripMigratedWithdrawalEnv(values)
+    expect(values.env).to.deep.equal([])
+  })
+
+  it('strips migrated env while leaving final proof-override cleanup to the lifecycle projector', () => {
     const values: Record<string, any> = {
       env: [
         { name: 'DOGEOS_WITHDRAWAL_NETWORK_STR', value: 'testnet' },
@@ -150,7 +208,7 @@ ${WITHDRAWAL_DEPLOYMENT_END}
     ])
   })
 
-  it('atomically projects active mock env while removing the retired partial proof-work env', () => {
+  it('projects active lifecycle without any native proof-system environment overrides', () => {
     const values: Record<string, any> = {
       env: [
         { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE', value: 'dev_dummy' },
@@ -170,19 +228,15 @@ ${WITHDRAWAL_DEPLOYMENT_END}
       withdrawalProof: { enabled: true, provingMode: 'production' },
     }
 
-    expect(ensureWithdrawalProofActivationSwitch(values, 'mock')).to.equal(true)
-    expect(values.withdrawalProof).to.deep.equal({ enabled: true, mode: 'mock', provingMode: 'mock' })
+    expect(ensureWithdrawalProofActivationSwitch(values, 'active')).to.equal(true)
+    expect(values.withdrawalProof).to.deep.equal({ enabled: true })
     expect(values.env).to.deep.equal([
       { name: 'RUST_LOG', value: 'info' },
       {
         name: 'DOGEOS_WITHDRAWAL_DATABASE_URL',
         valueFrom: { secretKeyRef: { key: 'url', name: 'withdrawal-db' } },
       },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__MODE', value: 'dev_dummy' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_SCROLL_EXECUTION', value: 'true' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__REQUIRE_BRIDGE_STATE', value: 'true' },
-      { name: 'DOGEOS_WITHDRAWAL_PROOF_SYSTEM__DEV_DUMMY__SCROLL_INPUT', value: 'exact_mock' },
     ])
-    expect(ensureWithdrawalProofActivationSwitch(values, 'mock')).to.equal(false)
+    expect(ensureWithdrawalProofActivationSwitch(values, 'active')).to.equal(false)
   })
 })

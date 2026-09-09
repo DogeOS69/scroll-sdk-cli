@@ -9,6 +9,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import type { DogeConfig } from '../../types/doge-config.js'
+import type {
+  ProofTopologyArtifactStoreConfig,
+  ProofTopologySpec,
+} from '../../types/proof-topology.js'
 
 import { SETUP_DEFAULTS_TEMPLATE, getSetupDefaultsPath } from '../../config/constants.js'
 import { Network } from '../../types/doge-config.js'
@@ -18,17 +22,64 @@ import {
   normalizeDogeNetwork,
 } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
-import { resolveBlockbookKubernetesEndpoints } from '../../utils/kubernetes-endpoints.js'
+import {sanitizeName} from '../../utils/kms-signer-provisioner.js'
+import {
+  resolveBlockbookKubernetesEndpoints,
+  resolveDogecoinServiceRpcUrl,
+} from '../../utils/kubernetes-endpoints.js'
 import {
   createNonInteractiveContext,
   resolveConfirm,
   resolveEnvValue,
+  resolveFlagOrPrompt,
   resolveOrPrompt,
   resolveOrSelect,
   validateAndExit,
 } from '../../utils/non-interactive.js'
+import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
+import {
+  DEFAULT_PROOF_MATERIALS_RECEIPT,
+  readProofMaterials,
+} from '../../utils/proof-materials.js'
+import {
+  compileProofTopology,
+  proofTopologyEthereumDaBlobSource,
+} from '../../utils/proof-topology-compiler.js'
+import {
+  awsS3Endpoint,
+  buildProofTopology,
+} from '../../utils/proof-topology-init.js'
 
 type EthereumDaChain = 'devnet' | 'mainnet' | 'sepolia'
+
+interface InitializeProofTopologyV2Options {
+  artifactSource?: string
+  bucket?: string
+  compilerBinary?: string
+  config: DogeConfig
+  coordinatorUrl?: string
+  endpointUrl?: string
+  enforcement?: 'enforce' | 'observe'
+  forcePathStyle?: boolean
+  generation?: 'mock' | 'real'
+  keyPrefix?: string
+  log: (message: string) => void
+  materialsPath?: string
+  mode?: 'active' | 'disabled'
+  nonInteractive: boolean
+  observeRealProofDeadlineMs?: number
+  publicS3Endpoint?: string
+  region?: string
+  witnessDir?: string
+  witnessRpcUrl?: string
+  witnessSource?: 'block_witness_dir' | 'rpc'
+  workerDeploymentBackend?: 'docker_compose' | 'kubernetes'
+  workerLaunch?: 'external' | 'local_cpu' | 'local_cuda'
+}
+
+interface InitializedProofTopology {
+  topology: ProofTopologySpec
+}
 
 const ETHEREUM_DA_DEFAULTS: Record<EthereumDaChain, {
   beaconRpcUrl: string
@@ -75,11 +126,14 @@ function normalizeClusterLocalHttpUrl(value: string): string {
 }
 
 export class DogeConfigCommand extends Command {
-  static description = 'Configure Dogecoin settings and bridge setup defaults for deployment'
+  static description = 'Configure Dogecoin/DA settings and optionally initialize compiler-backed proof topology'
 
   static examples = [
     '$ scrollsdk setup doge-config',
     '$ scrollsdk setup doge-config --config .data/doge-config.toml',
+    '$ scrollsdk setup doge-config --proof-topology',
+    '$ scrollsdk setup doge-config --proof-topology --proof-mode disabled --proof-generation mock --proof-enforcement observe',
+    '$ scrollsdk setup doge-config --proof-topology --proof-mode active --proof-generation mock',
     '$ scrollsdk setup doge-config --non-interactive',
     '$ scrollsdk setup doge-config --non-interactive --json',
   ]
@@ -97,6 +151,95 @@ export class DogeConfigCommand extends Command {
       char: 'N',
       default: false,
       description: 'Run without prompts, using existing config values',
+    }),
+    'proof-artifact-source': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Artifact resource source used by --proof-topology',
+      options: ['existing-s3', 'prepared-aws'],
+    }),
+    'proof-bucket': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Existing S3-compatible proof artifact bucket',
+    }),
+    'proof-coordinator-url': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'HTTPS Proof Coordinator URL reachable by production Workers',
+    }),
+    'proof-endpoint-url': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Worker-visible S3-compatible endpoint root',
+    }),
+    'proof-enforcement': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Proof enforcement switch; keep observe until real proofs are validated',
+      options: ['observe', 'enforce'],
+    }),
+    'proof-force-path-style': Flags.boolean({
+      allowNo: true,
+      dependsOn: ['proof-topology'],
+      description: 'Use path-style S3 object URLs for an existing compatible store',
+    }),
+    'proof-generation': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Proof generation implementation selected for active services',
+      options: ['mock', 'real'],
+    }),
+    'proof-key-prefix': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Base proof artifact key prefix before compiler digest scoping',
+    }),
+    'proof-materials': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Prepared proof-materials-v1.json receipt',
+    }),
+    'proof-mode': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Initial proof mode (default: existing value or disabled)',
+      options: ['active', 'disabled'],
+    }),
+    'proof-observe-real-proof-deadline-ms': Flags.integer({
+      dependsOn: ['proof-topology'],
+      description: 'Required positive observe fallback deadline in milliseconds; also required for mock (no default)',
+      min: 1,
+    }),
+    'proof-public-s3-endpoint': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'External Worker/signer-visible S3 endpoint when different from the store endpoint',
+    }),
+    'proof-region': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Existing S3-compatible proof artifact region',
+    }),
+    'proof-topology': Flags.boolean({
+      default: false,
+      description: 'Initialize or replace compiler-backed proof topology',
+    }),
+    'proof-topology-compiler-binary': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Development-only local dogeos-proof-topology binary used for both initialization preflights',
+    }),
+    'proof-witness-dir': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Production block witness directory relative to the prepared material root',
+    }),
+    'proof-witness-rpc-url': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Scroll witness RPC URL used when --proof-witness-source=rpc',
+    }),
+    'proof-witness-source': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Chunk witness source used by real materialization',
+      options: ['block_witness_dir', 'rpc'],
+    }),
+    'proof-worker-deployment-backend': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Deployment adapter backend for local_cpu/local_cuda Workers',
+      options: ['docker_compose', 'kubernetes'],
+    }),
+    'proof-worker-launch': Flags.string({
+      dependsOn: ['proof-topology'],
+      description: 'Staged real Worker compute/ownership placement from the dogeos-core contract',
+      options: ['external', 'local_cpu', 'local_cuda'],
     }),
   }
 
@@ -149,6 +292,37 @@ export class DogeConfigCommand extends Command {
 
     // Helper for logging
     const log = (msg: string) => jsonCtx.log(msg)
+    const initializeTopology = (config: DogeConfig) => this.initializeProofTopologyV2({
+      artifactSource: flags['proof-artifact-source'],
+      bucket: flags['proof-bucket'],
+      compilerBinary: flags['proof-topology-compiler-binary'],
+      config,
+      coordinatorUrl: flags['proof-coordinator-url'],
+      endpointUrl: flags['proof-endpoint-url'],
+      enforcement: flags['proof-enforcement'] as 'enforce' | 'observe' | undefined,
+      forcePathStyle: flags['proof-force-path-style'],
+      generation: flags['proof-generation'] as 'mock' | 'real' | undefined,
+      keyPrefix: flags['proof-key-prefix'],
+      log,
+      materialsPath: flags['proof-materials'],
+      mode: flags['proof-mode'] as 'active' | 'disabled' | undefined,
+      nonInteractive: flags['non-interactive'],
+      observeRealProofDeadlineMs: flags['proof-observe-real-proof-deadline-ms'],
+      publicS3Endpoint: flags['proof-public-s3-endpoint'],
+      region: flags['proof-region'],
+      witnessDir: flags['proof-witness-dir'],
+      witnessRpcUrl: flags['proof-witness-rpc-url'],
+      witnessSource: flags['proof-witness-source'] as 'block_witness_dir' | 'rpc' | undefined,
+      workerDeploymentBackend: flags['proof-worker-deployment-backend'] as
+        | 'docker_compose'
+        | 'kubernetes'
+        | undefined,
+      workerLaunch: flags['proof-worker-launch'] as
+        | 'external'
+        | 'local_cpu'
+        | 'local_cuda'
+        | undefined,
+    })
 
     if (!fs.existsSync('.data')) {
       fs.mkdirSync('.data', { recursive: true })
@@ -176,6 +350,42 @@ export class DogeConfigCommand extends Command {
       }
 
       network = existingNetwork || legacyNetwork || network
+
+      if (flags['proof-topology']) {
+        if (!existingNetwork) {
+          this.error(
+            `${resolvedPath} must contain top-level network before proof topology initialization; `
+            + 'run scrollsdk setup doge-config once to complete the base configuration',
+          )
+        }
+
+        const initialized = await initializeTopology(existingConfig)
+        if ((existingConfig as Record<string, unknown>).proofSystem !== undefined) {
+          delete (existingConfig as Record<string, unknown>).proofSystem
+          log(chalk.blue('Removed retired [proofSystem] after installing [proof_topology]'))
+        }
+
+        existingConfig.proof_topology = initialized.topology
+        fs.writeFileSync(resolvedPath, dogeConfigToToml(existingConfig))
+        log(chalk.green(`Proof topology saved to ${resolvedPath}`))
+        log(chalk.blue(`Proof Mode: ${initialized.topology.mode}`))
+        log(chalk.blue(`Proof Generation: ${initialized.topology.generation}`))
+        log(chalk.blue(`Proof Enforcement: ${initialized.topology.enforcement}`))
+
+        if (flags.json) {
+          jsonCtx.success({
+            configPath: resolvedPath,
+            network: existingNetwork,
+            proofTopology: {
+              enforcement: initialized.topology.enforcement,
+              generation: initialized.topology.generation,
+              mode: initialized.topology.mode,
+            },
+          })
+        }
+
+        return
+      }
     }
 
     const selectedNetwork = await resolveOrSelect<Network>(
@@ -529,6 +739,19 @@ export class DogeConfigCommand extends Command {
     log(chalk.blue(`Dogecoin Indexer Start Height: ${newConfig.defaults!.dogecoinIndexerStartHeight}`))
     log(chalk.blue(`L1 Genesis Block: ${newConfig.defaults!.l1GenesisBlock}`))
 
+    const initializeProofTopology = flags['proof-topology'] || (
+      !flags['non-interactive']
+      && !newConfig.proof_topology
+      && await confirm({
+        default: false,
+        message: 'Configure the compiler-backed proof topology now?',
+      })
+    )
+    if (initializeProofTopology) {
+      const initialized = await initializeTopology(newConfig)
+      newConfig.proof_topology = initialized.topology
+    }
+
     // Validate any missing required fields before proceeding
     validateAndExit(niCtx)
 
@@ -556,6 +779,11 @@ export class DogeConfigCommand extends Command {
     log(chalk.blue(`RPC URL: ${newConfig.rpc!.url}`))
     log(chalk.blue(`Blockbook API URL: ${newConfig.rpc!.blockbookAPIUrl}`))
     log(chalk.blue(`Wallet Path: ${newConfig.wallet.path}`))
+    if (newConfig.proof_topology) {
+      log(chalk.blue(`Proof Mode: ${newConfig.proof_topology.mode}`))
+      log(chalk.blue(`Proof Generation: ${newConfig.proof_topology.generation}`))
+      log(chalk.blue(`Proof Enforcement: ${newConfig.proof_topology.enforcement}`))
+    }
 
     await this.generateSetupDefaultsToml(newConfig)
 
@@ -569,6 +797,15 @@ export class DogeConfigCommand extends Command {
         },
         ethereumDa: newConfig.ethereumDa,
         network: newConfig.network,
+        ...(newConfig.proof_topology
+          ? {
+              proofTopology: {
+                enforcement: newConfig.proof_topology.enforcement,
+                generation: newConfig.proof_topology.generation,
+                mode: newConfig.proof_topology.mode,
+              },
+            }
+          : {}),
         rpc: {
           blockbookAPIUrl: newConfig.rpc!.blockbookAPIUrl,
           url: newConfig.rpc!.url,
@@ -609,6 +846,279 @@ export class DogeConfigCommand extends Command {
     const { dogecoin } = mainConfig as Record<string, unknown>
     if (!dogecoin || typeof dogecoin !== 'object' || Array.isArray(dogecoin)) return undefined
     return normalizeDogeNetwork((dogecoin as Record<string, unknown>).network)
+  }
+
+  private async initializeProofTopologyV2(
+    options: InitializeProofTopologyV2Options,
+  ): Promise<InitializedProofTopology> {
+    const deploymentDir = process.cwd()
+    const existing = options.config.proof_topology
+    const receiptPath = path.resolve(
+      deploymentDir,
+      options.materialsPath || DEFAULT_PROOF_MATERIALS_RECEIPT,
+    )
+    if (!fs.existsSync(receiptPath)) {
+      throw new Error(
+        `No prepared proof materials were found at ${receiptPath}. `
+        + 'Run scrollsdk setup proof-materials first, or pass --proof-materials.',
+      )
+    }
+
+    const materials = readProofMaterials(receiptPath, deploymentDir)
+    options.log(chalk.blue(
+      `Using validated proof materials from ${path.relative(deploymentDir, receiptPath)}`,
+    ))
+
+    const proofAws = readOptionalProofAwsConfig(deploymentDir)
+    const deploymentAlias = sanitizeName(
+      proofAws?.config.kubernetes.deploymentAlias || path.basename(deploymentDir),
+    )
+    const deploymentName = deploymentAlias.startsWith('dogeos-')
+      ? deploymentAlias
+      : `dogeos-${deploymentAlias}`
+    const artifactSource = await resolveFlagOrPrompt(
+      options.artifactSource,
+      options.nonInteractive,
+      proofAws ? 'prepared-aws' : 'existing-s3',
+      () => select({
+        choices: [
+          ...(proofAws ? [{name: 'Prepared resources from .data/proof-aws.json', value: 'prepared-aws'}] : []),
+          {name: 'Existing S3-compatible store', value: 'existing-s3'},
+        ],
+        default: proofAws ? 'prepared-aws' : 'existing-s3',
+        message: 'Select the proof artifact resource source:',
+      }),
+    )
+    if (artifactSource === 'prepared-aws' && !proofAws) {
+      throw new Error('prepared-aws requires .data/proof-aws.json; run scrollsdk setup proof-aws-init first')
+    }
+
+    const required = async (
+      explicit: string | undefined,
+      defaultValue: string | undefined,
+      message: string,
+      flag: string,
+    ): Promise<string> => {
+      const selected = await resolveFlagOrPrompt(
+        explicit,
+        options.nonInteractive,
+        defaultValue,
+        () => input({
+          default: defaultValue,
+          message,
+          validate: value => value.trim() ? true : `${flag} is required`,
+        }),
+      )
+      if (!selected?.trim()) throw new Error(`${flag} is required`)
+      return selected.trim()
+    }
+
+    const currentStore = existing?.active?.artifactStore
+    let store: ProofTopologyArtifactStoreConfig
+    let keyPrefix: string
+    let publicEndpoint: string | undefined
+    if (artifactSource === 'prepared-aws') {
+      const prepared = proofAws!.config
+      store = {
+        bucket: prepared.artifactStore.bucket,
+        endpointUrl: options.endpointUrl || awsS3Endpoint(prepared.artifactStore.region),
+        forcePathStyle: false,
+        kind: 's3_compatible',
+        maxReadBodyBytes: 512 * 1024 * 1024,
+        region: prepared.artifactStore.region,
+      }
+      keyPrefix = options.keyPrefix || prepared.artifactStore.keyPrefix
+      publicEndpoint = options.publicS3Endpoint
+        || prepared.artifactReadTransport.publicEndpointUrl
+      options.log(chalk.blue(
+        `Using s3://${store.bucket}/${keyPrefix} with external endpoint ${publicEndpoint}`,
+      ))
+    } else {
+      const region = await required(options.region, currentStore?.region, 'Enter the proof artifact region:', '--proof-region')
+      store = {
+        bucket: await required(options.bucket, currentStore?.bucket, 'Enter the proof artifact bucket:', '--proof-bucket'),
+        endpointUrl: await required(options.endpointUrl, currentStore?.endpointUrl || awsS3Endpoint(region), 'Enter the S3-compatible endpoint root:', '--proof-endpoint-url'),
+        forcePathStyle: options.forcePathStyle ?? currentStore?.forcePathStyle ?? false,
+        kind: 's3_compatible',
+        maxReadBodyBytes: currentStore?.maxReadBodyBytes || 512 * 1024 * 1024,
+        region,
+      }
+      keyPrefix = await required(options.keyPrefix, existing?.deployment.artifactKeyPrefix || 'proof-topology', 'Enter the proof artifact key prefix:', '--proof-key-prefix')
+      publicEndpoint = options.publicS3Endpoint || store.endpointUrl
+    }
+
+    const mode = await resolveFlagOrPrompt(
+      options.mode,
+      options.nonInteractive,
+      existing?.mode === 'active' || existing?.mode === 'disabled' ? existing.mode : 'disabled',
+      () => select({
+        choices: [
+          {name: 'disabled (proof services off)', value: 'disabled'},
+          {name: 'active (generate proofs)', value: 'active'},
+        ],
+        default: existing?.mode === 'active' ? 'active' : 'disabled',
+        message: 'Should proof generation services be active?',
+      }),
+    ) as 'active' | 'disabled'
+    const generation = await resolveFlagOrPrompt(
+      options.generation,
+      options.nonInteractive,
+      existing?.generation || 'mock',
+      () => select({
+        choices: [
+          {name: 'mock (non-cryptographic development proofs)', value: 'mock'},
+          ...(materials.bridge && materials.software.artifacts && materials.images.productionWorker
+            ? [{name: 'real (cryptographic production proofs)', value: 'real'}]
+            : []),
+        ],
+        default: existing?.generation || 'mock',
+        message: 'Select the proof generation implementation:',
+      }),
+    ) as 'mock' | 'real'
+    if (generation === 'real' && (!materials.bridge || !materials.software.artifacts || !materials.images.productionWorker)) {
+      throw new Error('real generation requires full software/Bridge materials and a production Worker image; rerun setup proof-materials --generation real')
+    }
+
+    const enforcement = await resolveFlagOrPrompt(
+      options.enforcement,
+      options.nonInteractive,
+      existing?.enforcement || 'observe',
+      () => select({
+        choices: [
+          {name: 'observe (generate and validate without gating service behavior)', value: 'observe'},
+          ...(mode === 'active' && generation === 'real'
+            ? [{name: 'enforce (require validated real proofs)', value: 'enforce'}]
+            : []),
+        ],
+        default: existing?.enforcement || 'observe',
+        message: 'Select proof enforcement:',
+      }),
+    ) as 'enforce' | 'observe'
+    if (enforcement === 'enforce' && (mode !== 'active' || generation !== 'real')) {
+      throw new Error('proof enforcement can be enabled only after active real proving is validated')
+    }
+
+    const coordinatorUrl = await required(
+      options.coordinatorUrl,
+      existing?.deployment.proverPublicUrl || this.proofCoordinatorUrlFromMainConfig(),
+      'Enter the HTTPS Proof Coordinator URL reachable from proof Workers:',
+      '--proof-coordinator-url',
+    )
+    const workerLaunch = await resolveFlagOrPrompt(
+      options.workerLaunch,
+      options.nonInteractive,
+      existing?.active?.workerLaunch || 'external',
+      () => select({
+        choices: [
+          {name: 'External server when generation becomes real', value: 'external'},
+          {name: 'Adapter-managed CUDA Worker when generation becomes real', value: 'local_cuda'},
+          {name: 'Adapter-managed CPU Worker when generation becomes real', value: 'local_cpu'},
+        ],
+        default: existing?.active?.workerLaunch || 'external',
+        message: 'Select the staged real Worker compute/ownership placement:',
+      }),
+    ) as 'external' | 'local_cpu' | 'local_cuda'
+    const workerDeploymentBackend = await resolveFlagOrPrompt(
+      options.workerDeploymentBackend,
+      options.nonInteractive,
+      existing?.deployment.workerDeploymentBackend || 'docker_compose',
+      () => select({
+        choices: [
+          {name: 'Docker Compose bundle (for an adapter-managed server such as EC2)', value: 'docker_compose'},
+          {name: 'Kubernetes Deployment', value: 'kubernetes'},
+        ],
+        default: existing?.deployment.workerDeploymentBackend || 'docker_compose',
+        message: 'How should scroll-sdk-cli deploy adapter-managed CPU/CUDA Workers?',
+      }),
+    ) as 'docker_compose' | 'kubernetes'
+    if (generation === 'mock') options.log(chalk.blue('Mock proofs are produced inside Proof Coordinator; no mock Worker will be deployed.'))
+
+    const deadline = Number(await required(
+      options.observeRealProofDeadlineMs?.toString(),
+      existing?.observeRealProofDeadlineMs?.toString(),
+      'Observe real-proof deadline in milliseconds (for example 1800000 for 30 minutes):',
+      '--proof-observe-real-proof-deadline-ms',
+    ))
+    if (!Number.isSafeInteger(deadline) || deadline <= 0) throw new Error('observe real-proof deadline must be a positive safe integer')
+
+    const witnessSource = options.witnessSource || existing?.active?.realScroll.chunkWitnessSource || 'rpc'
+    const topology = buildProofTopology({
+      artifactStore: store,
+      deploymentName,
+      enforcement,
+      generation,
+      materials,
+      mode,
+      runtime: {
+        artifactKeyPrefix: keyPrefix,
+        blockWitnessDir: options.witnessDir || existing?.active?.realScroll.chunkBlockWitnessDir,
+        eagerMaterializer: existing?.deployment.eagerMaterializer,
+        observeRealProofDeadlineMs: deadline,
+        proofCoordinatorPublicUrl: coordinatorUrl,
+        publicS3EndpointUrl: publicEndpoint,
+        rpcWitnessUrl: options.witnessRpcUrl
+          || existing?.active?.realScroll.chunkWitnessRpcUrl
+          || options.config.rpc?.l2Url,
+        witnessSource,
+        workerDeploymentBackend,
+        workerLaunch,
+        workerNodeSelector: existing?.deployment.workerNodeSelector,
+        workerResources: existing?.deployment.workerResources,
+        workerRuntimeClassName: existing?.deployment.workerRuntimeClassName,
+        workerSecretName: existing?.deployment.workerSecretName,
+        workerTolerations: existing?.deployment.workerTolerations,
+      },
+    })
+    const materialization = topology.active?.profile === 'withdrawal_mock_prover_real_materialize'
+      || topology.generation === 'real'
+      ? 'real segmentation and subprocess materializers'
+      : 'development exact-mock one-chunk materialization'
+    options.log(chalk.blue(`Proof materialization: ${materialization}`))
+    await this.preflightProofTopologyV2(topology, options.config, deploymentName, options.log, options.compilerBinary)
+    return {topology}
+  }
+
+  private async preflightProofTopologyV2(
+    topology: ProofTopologySpec,
+    config: DogeConfig,
+    deploymentName: string,
+    log: (message: string) => void,
+    compilerBinary?: string,
+  ): Promise<void> {
+    const output = `.data/generated/.proof-topology-init-preflight-${topology.generation}-${process.pid}`
+    const clusterRpc = config.dogecoinClusterRpc || {}
+    try {
+      compileProofTopology({
+        bridge: {
+          dogecoinNetwork: config.network,
+          dogecoinRpcPassword: clusterRpc.password || '',
+          dogecoinRpcUrl: resolveDogecoinServiceRpcUrl({kubernetes: config.kubernetes, network: config.network}),
+          dogecoinRpcUser: clusterRpc.username || '',
+        },
+        compilerBinary,
+        deploymentDir: process.cwd(),
+        deploymentName,
+        ethereumDaBlobSource: proofTopologyEthereumDaBlobSource(config.ethereumDa),
+        ethereumL1RpcUrl: config.ethereumDa?.submitterRpcUrl,
+        network: config.network,
+        outputDir: output,
+        preflightMode: topology.generation,
+        proofTopology: topology,
+      })
+      log(chalk.green(`Proof topology ${topology.generation} preflight passed`))
+    } finally {
+      fs.rmSync(path.resolve(output), {force: true, recursive: true})
+    }
+  }
+
+  private proofCoordinatorUrlFromMainConfig(): string | undefined {
+    const mainConfigPath = path.resolve('config.toml')
+    if (!fs.existsSync(mainConfigPath)) return undefined
+    const config = toml.parse(fs.readFileSync(mainConfigPath, 'utf8')) as JsonMap
+    const {ingress} = config
+    if (!ingress || typeof ingress !== 'object' || Array.isArray(ingress)) return undefined
+    const host = (ingress as JsonMap).PROOF_COORDINATOR_HOST
+    return typeof host === 'string' && host.trim() ? `https://${host.trim()}` : undefined
   }
 
   private removeLegacyDogeConfigFromMainConfig(mainConfigPath: string, jsonMode: boolean, log: (msg: string) => void): void {

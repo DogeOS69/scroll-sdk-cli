@@ -101,7 +101,7 @@ export function hasEnvRef(value: string): boolean {
   return /\$ENV:\w+/.test(value)
 }
 
-function resolveEnvRefsDeep(value: unknown): unknown {
+export function resolveEnvRefsDeep(value: unknown): unknown {
   if (typeof value === 'string') {
     return hasEnvRef(value) ? resolveInlineEnvRefs(value) : value
   }
@@ -117,6 +117,11 @@ function resolveEnvRefsDeep(value: unknown): unknown {
   }
 
   return value
+}
+
+/** Resolve every $ENV reference before handing a DeploymentSpec to external compilers. */
+export function resolveDeploymentSpecEnvRefs(spec: DeploymentSpec): DeploymentSpec {
+  return normalizeDeploymentSpec(resolveEnvRefsDeep(spec) as DeploymentSpec)
 }
 
 function isHttpUrl(value: string): boolean {
@@ -498,13 +503,6 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     }
   }
 
-  const validateOptionalBytes32Hex = (path: string, value: string | undefined): void => {
-    if (value === undefined) return
-    if (!/^0x[\dA-Fa-f]{64}$/.test(value)) {
-      pushInvalidEthereumDaConfigError(path, `${path} must be a 32-byte 0x-prefixed hex string`)
-    }
-  }
-
   const validateRequiredBytes32Hex = (path: string, value: string | undefined): void => {
     if (!value || !/^0x[\dA-Fa-f]{64}$/.test(value)) {
       pushInvalidEthereumDaConfigError(path, `${path} must be a 32-byte 0x-prefixed hex string`)
@@ -845,10 +843,23 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       pushInvalidEthereumDaConfigError('ethereumDa.batch.compression', 'ethereumDa.batch.compression must be auto or none')
     }
 
-    validateOptionalBytes32Hex('ethereumDa.batch.genesisBatchHash', ethereumDaBatch.genesisBatchHash)
-    validateOptionalBytes32Hex('ethereumDa.batch.genesisRelayedDepositQueueHash', ethereumDaBatch.genesisRelayedDepositQueueHash)
-    validateOptionalBytes32Hex('ethereumDa.batch.genesisStateRoot', ethereumDaBatch.genesisStateRoot)
-    validateOptionalBytes32Hex('ethereumDa.batch.genesisWithdrawRoot', ethereumDaBatch.genesisWithdrawRoot)
+    for (const [field, value] of [
+      ['genesisBatchHash', ethereumDaBatch.genesisBatchHash],
+      ['genesisNextRelayedDepositIndex', ethereumDaBatch.genesisNextRelayedDepositIndex],
+      ['genesisNextWithdrawIndex', ethereumDaBatch.genesisNextWithdrawIndex],
+      ['genesisRelayedDepositQueueHash', ethereumDaBatch.genesisRelayedDepositQueueHash],
+      ['genesisStateRoot', ethereumDaBatch.genesisStateRoot],
+      ['genesisWithdrawRoot', ethereumDaBatch.genesisWithdrawRoot],
+      ['minCodecVersion', ethereumDaBatch.minCodecVersion],
+    ] as const) {
+      if (value !== undefined) {
+        pushInvalidEthereumDaConfigError(
+          `ethereumDa.batch.${field}`,
+          `ethereumDa.batch.${field} has been removed from dogeos-core; remove it and use protocol_context.json plus execution genesis authority`,
+        )
+      }
+    }
+
     if (ethereumDaBatch.initialBatchSidecarJson !== undefined) {
       pushInvalidEthereumDaConfigError(
         'ethereumDa.batch.initialBatchSidecarJson',
@@ -856,14 +867,10 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       )
     }
 
-    validateOptionalNonNegativeSafeInteger('ethereumDa.batch.genesisNextRelayedDepositIndex', ethereumDaBatch.genesisNextRelayedDepositIndex)
-    validateOptionalNonNegativeSafeInteger('ethereumDa.batch.genesisNextWithdrawIndex', ethereumDaBatch.genesisNextWithdrawIndex)
     validateOptionalPositiveSafeInteger('ethereumDa.batch.maxBlocksPerChunk', ethereumDaBatch.maxBlocksPerChunk)
     validateOptionalPositiveSafeInteger('ethereumDa.batch.maxChunksPerBatch', ethereumDaBatch.maxChunksPerBatch)
     validateOptionalPositiveSafeInteger('ethereumDa.batch.maxL2GasPerChunk', ethereumDaBatch.maxL2GasPerChunk)
     validateOptionalPositiveSafeInteger('ethereumDa.batch.maxUncompressedBatchBytesSize', ethereumDaBatch.maxUncompressedBatchBytesSize)
-    validateOptionalNonNegativeSafeInteger('ethereumDa.batch.minCodecVersion', ethereumDaBatch.minCodecVersion)
-
     const { cutover } = ethereumDaBatch
     if (cutover) {
       validateRequiredNonNegativeSafeInteger('ethereumDa.batch.cutover.lastBatchIndex', cutover.lastBatchIndex)
@@ -987,65 +994,87 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     }
   }
 
-  const { proofCoordinator, proofSystem } = spec
-  if (proofSystem) {
-    if (!['disabled', 'mock', 'production'].includes(proofSystem.mode)) {
-      errors.push({
-        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'proofSystem.mode must be disabled, mock, or production',
-        path: 'proofSystem.mode'
-      })
-    }
-
-    if (
-      proofSystem.artifactReadBaseUrl
-      && !isHttpUrl(proofSystem.artifactReadBaseUrl)
-    ) {
-      errors.push({
-        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'proofSystem.artifactReadBaseUrl must be an http(s) URL',
-        path: 'proofSystem.artifactReadBaseUrl'
-      })
-    }
-
-    if (
-      proofSystem.mode !== 'disabled'
-      && !proofSystem.artifactReadBaseUrl
-    ) {
-      errors.push({
-        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'proofSystem.artifactReadBaseUrl is required in mock and production modes',
-        path: 'proofSystem.artifactReadBaseUrl'
-      })
-    }
-
-    if (
-      proofSystem.mode !== 'disabled'
-      && (!proofCoordinator || proofCoordinator.enabled === false)
-    ) {
-      errors.push({
-        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'proofCoordinator must be enabled when proofSystem.mode is mock or production',
-        path: 'proofCoordinator'
-      })
-    }
-
-    if (
-      proofSystem.mode === 'disabled'
-      && proofCoordinator
-      && proofCoordinator.enabled !== false
-    ) {
-      errors.push({
-        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
-        message: 'proofCoordinator must be absent or disabled when proofSystem.mode is disabled',
-        path: 'proofCoordinator.enabled'
-      })
-    }
-  } else if (proofCoordinator && proofCoordinator.enabled !== false) {
-    warnings.push({
-      message: 'proofCoordinator is configured without proofSystem; add proofSystem.mode so every proof component shares one explicit posture',
+  const { proofCoordinator, proofTopology } = spec
+  if ((spec as {proofSystem?: unknown} & DeploymentSpec).proofSystem !== undefined) {
+    errors.push({
+      code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+      message: 'proofSystem has been removed; use compiler-backed proofTopology',
       path: 'proofSystem',
-      suggestion: 'Use proofSystem.mode: mock for non-cryptographic topology testing or production for release proving.'
+    })
+  }
+
+  if (proofTopology) {
+    if (!Number.isSafeInteger(proofTopology.observeRealProofDeadlineMs) || proofTopology.observeRealProofDeadlineMs! <= 0) {
+      errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: 'An explicit positive observeRealProofDeadlineMs is required', path: 'proofTopology.observeRealProofDeadlineMs'})
+    }
+
+    const imagePattern = /^sha256:[\da-f]{64}$/
+    const imageFields = [
+      ['proofTopology.compiler.image', proofTopology.compiler?.image],
+    ] as const
+    for (const [field, image] of imageFields) {
+      if (!image?.repository?.trim() || !imagePattern.test(image.digest || '')) {
+        errors.push({
+          code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+          message: `${field} must contain a repository and sha256 digest`,
+          path: field,
+        })
+      }
+    }
+
+    const productionWorkerImage = proofTopology.deployment?.productionWorkerImage
+    if (productionWorkerImage !== undefined && (!productionWorkerImage.repository?.trim() || !imagePattern.test(productionWorkerImage.digest || ''))) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofTopology.deployment.productionWorkerImage must contain a repository and sha256 digest',
+        path: 'proofTopology.deployment.productionWorkerImage',
+      })
+    }
+
+    if (proofTopology.generation === 'real' && productionWorkerImage === undefined) {
+      errors.push({
+        code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
+        message: 'proofTopology.deployment.productionWorkerImage is required for real generation',
+        path: 'proofTopology.deployment.productionWorkerImage',
+      })
+    }
+
+    if (!['active', 'disabled'].includes(proofTopology.mode)) {
+      errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: 'proofTopology.mode must be active or disabled', path: 'proofTopology.mode'})
+    }
+
+    if (!['mock', 'real'].includes(proofTopology.generation)) {
+      errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: 'proofTopology.generation must be mock or real', path: 'proofTopology.generation'})
+    }
+
+    if (!['enforce', 'observe'].includes(proofTopology.enforcement)) {
+      errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: 'proofTopology.enforcement must be observe or enforce', path: 'proofTopology.enforcement'})
+    }
+
+    if (proofTopology.enforcement === 'enforce' && (
+      proofTopology.mode !== 'active' || proofTopology.generation !== 'real'
+    )) {
+      errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: 'proof enforcement requires active real proving', path: 'proofTopology.enforcement'})
+    }
+
+    if (!proofTopology.active) {
+      errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: 'proofTopology.active must be staged even while disabled', path: 'proofTopology.active'})
+    }
+
+    if (!proofTopology.deployment?.artifactKeyPrefix?.trim()) {
+      errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: 'proofTopology.deployment.artifactKeyPrefix is required', path: 'proofTopology.deployment.artifactKeyPrefix'})
+    }
+
+    if (proofTopology.mode === 'active' && (!proofCoordinator || proofCoordinator.enabled === false)) {
+      errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: 'active proof topology requires proofCoordinator infrastructure', path: 'proofCoordinator'})
+    }
+  }
+
+  if (!proofTopology && proofCoordinator && proofCoordinator.enabled !== false) {
+    warnings.push({
+      message: 'proofCoordinator is configured without proofTopology; proof commands require one explicit compiler-backed topology',
+      path: 'proofTopology',
+      suggestion: 'Stage proofTopology with explicit mode, generation, and enforcement switches.'
     })
   }
 
@@ -1325,6 +1354,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
   // [contracts] section
   config.contracts = {
     BLOB_SCALAR: spec.contracts.gasOracle.blobScalar,
+    COMMIT_SCALAR: spec.contracts.gasOracle.commitScalar ?? 38_720_000_000,
     DEPLOYMENT_SALT: spec.contracts.deploymentSalt,
     DEPOSIT_FEE: bridgeFees.depositFeeSats,
     L1_FEE_VAULT_ADDR: DEFAULT_L1_FEE_VAULT_ADDR,
@@ -1336,8 +1366,11 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     WITHDRAWAL_FEE: bridgeFees.withdrawalFeeWei,
   }
 
+  // Native DOGE is a mandatory protocol predeploy, not an operator-selected address.
+  config.contracts.overrides = {
+    L2_NATIVE_DOGE_TOKEN: '0x530000000000000000000000000000000000d09e',
+  }
   if (spec.contracts.overrides) {
-    config.contracts.overrides = {}
     if (spec.contracts.overrides.l2MessageQueue) {
       config.contracts.overrides.L2_MESSAGE_QUEUE = spec.contracts.overrides.l2MessageQueue
     }
@@ -1434,8 +1467,8 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
   }
 
   if (
-    spec.proofSystem
-    && spec.proofSystem.mode !== 'disabled'
+    spec.proofCoordinator
+    && spec.proofCoordinator.enabled !== false
     && spec.frontend.hosts.proofCoordinator
   ) {
     config.ingress.PROOF_COORDINATOR_HOST = spec.frontend.hosts.proofCoordinator
@@ -1465,23 +1498,6 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   const ethereumDaDefaults = ETHEREUM_DA_DEFAULTS[ethereumDaChain]
 
   config.network = spec.dogecoin.network
-
-  if (spec.proofSystem) {
-    config.proofSystem = {
-      mode: spec.proofSystem.mode,
-      ...(spec.proofSystem.mode === 'disabled'
-        ? {}
-        : {
-            ...(spec.proofSystem.artifactReadBaseUrl
-              ? { artifactReadBaseUrl: spec.proofSystem.artifactReadBaseUrl }
-              : {}),
-            ...(spec.proofSystem.release ? { release: spec.proofSystem.release } : {}),
-            ...(spec.proofSystem.signerPolicy?.sourceSet
-              ? { signerPolicy: { sourceSet: spec.proofSystem.signerPolicy.sourceSet } }
-              : {}),
-          }),
-    }
-  }
 
   config.rpc = {
     password: externalRpc.password || '',
@@ -1660,6 +1676,7 @@ export function generateProtocolSeedToml(rawSpec: DeploymentSpec): string {
   depositQueueTransform.l1_scroll_messenger_address = PLACEHOLDER_L1_SCROLL_MESSENGER_ADDRESS
   depositQueueTransform.l2_messenger_address = PLACEHOLDER_L2_MESSENGER_ADDRESS
   depositQueueTransform.moat_address = PLACEHOLDER_MOAT_ADDRESS
+  depositQueueTransform.message_queue_gas_limit = 200_000
 
   const protocolConfig: toml.JsonMap = {}
   protocolConfig.l2_chain_id = spec.network.l2ChainId

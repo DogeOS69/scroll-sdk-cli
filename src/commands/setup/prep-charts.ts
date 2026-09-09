@@ -3,7 +3,7 @@ import * as toml from '@iarna/toml'
 import { confirm } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
-import { Wallet } from 'ethers'
+import { Wallet, isAddress } from 'ethers'
 import * as yaml from 'js-yaml'
 import { execFileSync, spawn } from 'node:child_process'
 import * as fs from 'node:fs'
@@ -19,34 +19,41 @@ import {
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { GenerationTransaction } from '../../utils/generation-transaction.js'
+import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {
   resolveBlockbookKubernetesEndpoints,
   resolveDogecoinKubernetesEndpoints,
+  resolveDogecoinServiceRpcUrl,
 } from '../../utils/kubernetes-endpoints.js'
+import { parseHelmUpgradeRecipes } from '../../utils/makefile-helm.js'
+import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
 import {
   type ResolvedProofIntent,
   resolveProofIntent,
 } from '../../utils/proof-intent.js'
 import {
   type ReconcileProofKubernetesResult,
+  assertProofAwsMatchesTopology,
   reconcileProofKubernetes,
 } from '../../utils/proof-kubernetes-reconciler.js'
+import {assertTopologyUsesSharedArtifactStore, sharedArtifactStoreFromDogeConfig} from '../../utils/proof-shared-artifact-store.js'
+import {proofTopologyEthereumDaBlobSource} from '../../utils/proof-topology-compiler.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
+import {reconcileScrollMonitorBalances} from '../../utils/scroll-monitor-values.js'
 import {
+  getRequiredManagedSignerAddress,
   getRequiredManagedSignerConfig,
   isAwsKmsSigner,
   isLocalSigner,
 } from '../../utils/signer-roles.js'
 import {
-  WITHDRAWAL_CONFIG_FILE,
   WITHDRAWAL_NATIVE_CONFIG_RELPATH,
   buildWithdrawalDeploymentFacts,
   ensureWithdrawalChartWiring,
   ensureWithdrawalProofActivationSwitch,
   isWithdrawalProofActivationEnv,
   mergeWithdrawalManagedDeploymentBlock,
-  removeInlineWithdrawalConfig,
   stripMigratedWithdrawalEnv,
 } from '../../utils/withdrawal-config.js'
 import {
@@ -72,13 +79,14 @@ import {
 
 export interface TsoSignerEndpoint {
   network: string
-  role: 'Attestation' | 'Tee'
+  publicKeyOverride?: string
+  role: 'Attestation' | 'Correctness'
   signatureMode: 'ecdsa' | 'shadowfork_sentinel'
   uri: string
 }
 
 interface PrepChartGenerationResult {
-  proof: ReconcileProofKubernetesResult
+  proof?: ReconcileProofKubernetesResult
   skippedBootnodeRethInstances: number
   skippedConfig: number
   skippedInstances: number
@@ -119,6 +127,20 @@ export function applyFrontendEnvFileValues(
   }
 
   return {changed, content: `${lines.join('\n')}\n`}
+}
+
+/** Build the deployment-owned external URLs written to frontend-config. */
+export function buildFrontendExternalUrlUpdates(
+  getConfigValue: (key: string) => unknown,
+): Record<string, unknown> {
+  return {
+    ADMIN_SYSTEM_DASHBOARD_URI: getConfigValue('frontend.ADMIN_SYSTEM_DASHBOARD_URI'),
+    GRAFANA_URI: getConfigValue('frontend.GRAFANA_URI'),
+    REACT_APP_BRIDGE_API_URI: getConfigValue('frontend.BRIDGE_API_URI'),
+    REACT_APP_EXTERNAL_EXPLORER_URI_L2: getConfigValue('frontend.EXTERNAL_EXPLORER_URI_L2'),
+    REACT_APP_EXTERNAL_RPC_URI_L2: getConfigValue('frontend.EXTERNAL_RPC_URI_L2'),
+    REACT_APP_ROLLUPSCAN_API_URI: getConfigValue('frontend.ROLLUPSCAN_API_URI'),
+  }
 }
 
 /**
@@ -171,12 +193,25 @@ export function buildTsoSigners(config: Pick<DogeConfig, 'cubesigner' | 'network
     throw new Error('CubeSigner supports exactly one TEE role and one in-cluster deployment')
   }
 
-  const teeSigners: TsoSignerEndpoint[] = cubesignerRoles.length === 0 ? [] : [{
-    network: config.network,
-    role: 'Tee',
-    signatureMode: 'ecdsa',
-    uri: 'http://cubesigner-signer:3000',
-  }]
+  const teeSigners: TsoSignerEndpoint[] = cubesignerRoles.length === 0 ? [] : (() => {
+    const publicKeyOverride = cubesignerRoles[0]?.keys?.[0]?.public_key_compressed
+    if (!publicKeyOverride) {
+      throw new Error(
+        'CubeSigner correctness signer requires roles[0].keys[0].public_key_compressed; '
+        + 'refresh CubeSigner roles before preparing charts'
+      )
+    }
+
+    return [{
+      network: config.network,
+      publicKeyOverride,
+      // TSO's public registration contract calls the TEE signer "Correctness".
+      // "Tee" is its internal script role and is intentionally not accepted here.
+      role: 'Correctness',
+      signatureMode: 'ecdsa',
+      uri: 'http://cubesigner-signer:3000',
+    }]
+  })()
   const attestationSigners: TsoSignerEndpoint[] = (config.signerUrls || []).map(uri => ({
     network: config.network,
     role: 'Attestation',
@@ -185,9 +220,6 @@ export function buildTsoSigners(config: Pick<DogeConfig, 'cubesigner' | 'network
   }))
   return [...teeSigners, ...attestationSigners]
 }
-
-const CUBESIGNER_POLICY_REQUEST_CONTRACT =
-  'dogeos-cubesigner-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1'
 
 /**
  * Build the non-secret CubeSigner runtime projection owned by prep-charts.
@@ -200,21 +232,10 @@ export function buildCubesignerPrepEnv(
   config: Pick<DogeConfig, 'cubesigner' | 'network'>,
 ): Record<string, string> {
   const env: Record<string, string> = {
-    CS_SESSIONS_DIR: '/app/.sessions',
-    DOGEOS_CUBESIGNER_SIGNER_LOG_LEVEL: 'info',
-    DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_REQUEST_JSON_BYTES: '393216',
-    DOGEOS_CUBESIGNER_SIGNER_MAX_CUBESIGNER_RESPONSE_JSON_BYTES: '393216',
-    DOGEOS_CUBESIGNER_SIGNER_MAX_PSBT_BASE64_LEN: '130048',
-    DOGEOS_CUBESIGNER_SIGNER_MAX_SIGN_REQUEST_JSON_BYTES: '262144',
     DOGEOS_CUBESIGNER_SIGNER_NETWORK: config.network,
-    DOGEOS_CUBESIGNER_SIGNER_POLL_INTERVAL: '500',
-    DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE: 'production_verifier_key_policy',
-    DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT:
-      CUBESIGNER_POLICY_REQUEST_CONTRACT,
-    DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION: '0.4.152-0',
-    DOGEOS_CUBESIGNER_SIGNER_PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
-    DOGEOS_CUBESIGNER_SIGNER_SESSION_KEEP_ALIVE_INTERVAL: '3600000',
-    DOGEOS_CUBESIGNER_SIGNER_SIGNATURE_MODE: 'ecdsa',
+    // CubeSigner runs in the same Kubernetes namespace as the TSO. Keep this
+    // service-to-service route independent from the deployment's public DNS.
+    DOGEOS_CUBESIGNER_SIGNER_TSO_URL: 'http://tso-service:3000',
     NETWORK: config.network,
   }
   const policy = config.cubesigner?.productionPolicy
@@ -298,6 +319,48 @@ export function ensureCubesignerPolicyKeyBinding(productionYaml: any): PrepChart
   return [{key: `env.${name}`, newValue: JSON.stringify(valueFrom), oldValue}]
 }
 
+/** Replace retired CubeSigner request contracts without taking ownership
+ * of other operator-reviewed production-policy evidence. */
+export function migrateCubesignerRequestContract(productionYaml: any): PrepChartChange[] {
+  const envVar = Array.isArray(productionYaml?.env)
+    ? productionYaml.env.find((item: any) =>
+        item?.name === 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT')
+    : undefined
+  const retired = new Set([
+    'dogeos-cubesigner-compact-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1',
+    'dogeos-cubesigner-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1',
+    'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-v2',
+  ])
+  const current = 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3'
+  if (!envVar || !retired.has(envVar.value)) return []
+
+  const oldValue = envVar.value
+  envVar.value = current
+  delete envVar.valueFrom
+  return [{
+    key: 'env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT',
+    newValue: current,
+    oldValue,
+  }]
+}
+
+/** Move known pre-beta.2 CubeSigner SDK evidence to the exact SDK bundled by
+ * the beta.2 image. Unknown operator values are left untouched and fail closed
+ * at runtime instead of being silently rewritten. */
+export function migrateCubesignerPolicySdkVersion(productionYaml: any): PrepChartChange[] {
+  const name = 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_SDK_VERSION'
+  const envVar = Array.isArray(productionYaml?.env)
+    ? productionYaml.env.find((item: any) => item?.name === name)
+    : undefined
+  const current = '0.4.281'
+  if (!envVar || envVar.value !== '0.4.152-0') return []
+
+  const oldValue = envVar.value
+  envVar.value = current
+  delete envVar.valueFrom
+  return [{key: `env.${name}`, newValue: current, oldValue}]
+}
+
 /**
  * Strip port from hostname for Kubernetes Ingress
  * Kubernetes Ingress hosts cannot contain port numbers
@@ -348,6 +411,91 @@ export interface PrepChartChange {
   oldValue: string
 }
 
+/** Reconcile the direct Grafana chart ingress shape, including TLS even when
+ * the primary hosts list was already correct. */
+export function reconcileGrafanaIngressHost(
+  ingress: any,
+  desiredHost: string | undefined,
+): PrepChartChange[] {
+  if (!ingress || typeof ingress !== 'object' || !desiredHost) return []
+  const sanitizedHost = stripPortFromHost(desiredHost)
+  const changes: PrepChartChange[] = []
+  if (Array.isArray(ingress.hosts)) {
+    for (let index = 0; index < ingress.hosts.length; index++) {
+      if (typeof ingress.hosts[index] !== 'string' || ingress.hosts[index] === sanitizedHost) continue
+      changes.push({
+        key: `grafana.ingress.hosts[${index}]`,
+        newValue: sanitizedHost,
+        oldValue: ingress.hosts[index],
+      })
+      ingress.hosts[index] = sanitizedHost
+    }
+  }
+
+  if (Array.isArray(ingress.tls)) {
+    const desiredTlsHosts = [sanitizedHost]
+    for (let index = 0; index < ingress.tls.length; index++) {
+      const tlsEntry = ingress.tls[index]
+      if (!tlsEntry || typeof tlsEntry !== 'object' || !Array.isArray(tlsEntry.hosts)) continue
+      if (JSON.stringify(tlsEntry.hosts) === JSON.stringify(desiredTlsHosts)) continue
+      changes.push({
+        key: `grafana.ingress.tls[${index}].hosts`,
+        newValue: JSON.stringify(desiredTlsHosts),
+        oldValue: JSON.stringify(tlsEntry.hosts),
+      })
+      tlsEntry.hosts = desiredTlsHosts
+    }
+  }
+
+  return changes
+}
+
+/** Replace a generated Proof Coordinator batch-materializer RPC without
+ * taking ownership of any other compiler-rendered TOML. */
+export function reconcileProofCoordinatorBatchL2Rpc(
+  source: string,
+  desiredUrl: string | undefined,
+): {changed: boolean; content: string} {
+  if (!desiredUrl) return {changed: false, content: source}
+  // Parse first so malformed native config still fails at its normal boundary.
+  toml.parse(source)
+  const lines = source.replaceAll('\r\n', '\n').split('\n')
+  const section = /^\s*\[materializer\.scroll_batch\.subprocess]\s*$/
+  const nextSection = /^\s*\[/
+  const assignment = /^(\s*)l2_rpc_url\s*=.*$/
+  const sectionIndex = lines.findIndex(line => section.test(line))
+  if (sectionIndex < 0) return {changed: false, content: source}
+  let end = lines.length
+  for (let index = sectionIndex + 1; index < lines.length; index++) {
+    if (nextSection.test(lines[index])) {
+      end = index
+      break
+    }
+  }
+
+  const matches: number[] = []
+  for (let index = sectionIndex + 1; index < end; index++) {
+    if (assignment.test(lines[index])) matches.push(index)
+  }
+
+  if (matches.length > 1) {
+    throw new Error('Proof Coordinator batch materializer contains duplicate l2_rpc_url assignments')
+  }
+
+  const rendered = `l2_rpc_url = ${JSON.stringify(desiredUrl)}`
+  if (matches.length === 1) {
+    const index = matches[0]
+    const indentation = lines[index].match(assignment)?.[1] || ''
+    if (lines[index] === `${indentation}${rendered}`) return {changed: false, content: source}
+    lines[index] = `${indentation}${rendered}`
+  } else {
+    const indentation = lines[sectionIndex].match(/^(\s*)/)?.[1] || ''
+    lines.splice(sectionIndex + 1, 0, `${indentation}${rendered}`)
+  }
+
+  return {changed: true, content: lines.join('\n')}
+}
+
 /** Remove values files for the retired in-cluster attestation-signer chart. */
 export function removeRetiredAttestationSignerValues(valuesDir: string): string[] {
   if (!fs.existsSync(valuesDir)) return []
@@ -372,13 +520,6 @@ export function removeRetiredCubesignerInstanceValues(valuesDir: string): string
   }
 
   return removed.sort()
-}
-
-function removeChartResourceNameOverrides(values: any): void {
-  if (!values.global) return
-  delete values.global.fullnameOverride
-  delete values.global.nameOverride
-  if (Object.keys(values.global).length === 0) delete values.global
 }
 
 const FEE_ORACLE_LEGACY_CONFIGMAP_PREFIXES = [
@@ -518,22 +659,16 @@ export function buildFeeOraclePrepEnv(input: {
 }
 
 export function buildEthDaSubmitterPrepEnv(input: {
-  batch?: NonNullable<NonNullable<DogeConfig['ethereumDa']>['batch']> | undefined
+  batch?: Pick<NonNullable<NonNullable<DogeConfig['ethereumDa']>['batch']>, 'cutover'> | undefined
   ethereumRpcUrl: string | undefined
   l2RpcUrl: string | undefined
   l2StartBlockNumber?: number | string | undefined
-  publish?: NonNullable<NonNullable<DogeConfig['ethereumDa']>['publish']> | undefined
   s3Bucket?: string | undefined
   s3Enabled?: boolean | string | undefined
   s3EndpointUrl?: string | undefined
   s3ForcePathStyle?: boolean | string | undefined
-  s3InitialBackoffMs?: number | string | undefined
   s3KeyPrefix?: string | undefined
-  s3MaxBackoffMs?: number | string | undefined
-  s3MaxRetries?: number | string | undefined
-  s3PollIntervalMs?: number | string | undefined
   s3Region?: string | undefined
-  s3UploadingTimeoutMs?: number | string | undefined
 }): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = {
     DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_JSON_PATH: '/app/genesis/genesis.json',
@@ -546,12 +681,6 @@ export function buildEthDaSubmitterPrepEnv(input: {
   const {batch} = input
   if (batch) {
     const {cutover} = batch
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION = optionalConfigString(batch.compression) ?? 'auto'
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_BLOCKS_PER_CHUNK = String(batch.maxBlocksPerChunk ?? 128)
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_CHUNKS_PER_BATCH = String(batch.maxChunksPerBatch ?? 1)
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK = String(batch.maxL2GasPerChunk ?? 6_000_000)
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_BATCH_BYTES_SIZE = String(batch.maxUncompressedBatchBytesSize ?? 131_072)
-    env.DOGEOS_ETH_DA_SUBMITTER_BATCH__MIN_CODEC_VERSION = String(batch.minCodecVersion ?? 10)
 
     if (cutover) {
       env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__LAST_BATCH_HASH = optionalConfigString(cutover.lastBatchHash)
@@ -564,18 +693,6 @@ export function buildEthDaSubmitterPrepEnv(input: {
     }
   }
 
-  const {publish} = input
-  if (publish) {
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__ALLOW_LIVENESS_BUDGET_OVERRIDE = optionalConfigString(publish.allowLivenessBudgetOverride)
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__BUDGET_WINDOW = optionalConfigString(publish.budgetWindow)
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__HIGH_BACKLOG_THRESHOLD = optionalConfigString(publish.highBacklogThreshold)
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_BATCH_WAIT = optionalConfigString(publish.maxBatchWait)
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_BLOBS_PER_TX = optionalConfigString(publish.maxBlobsPerTx)
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_LIVENESS_DELAY = optionalConfigString(publish.maxLivenessDelay)
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS = optionalConfigString(publish.maxPendingBlobTxs)
-    env.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__TARGET_BLOBS_PER_TX = optionalConfigString(publish.targetBlobsPerTx)
-  }
-
   if (input.s3Enabled !== undefined) {
     const s3Enabled = truthyConfigValue(input.s3Enabled)
     env.DOGEOS_ETH_DA_SUBMITTER_S3__ENABLED = s3Enabled ? 'true' : 'false'
@@ -586,11 +703,6 @@ export function buildEthDaSubmitterPrepEnv(input: {
       env.DOGEOS_ETH_DA_SUBMITTER_S3__KEY_PREFIX = optionalConfigString(input.s3KeyPrefix)
       env.DOGEOS_ETH_DA_SUBMITTER_S3__ENDPOINT_URL = optionalConfigString(input.s3EndpointUrl)
       env.DOGEOS_ETH_DA_SUBMITTER_S3__FORCE_PATH_STYLE = optionalConfigString(input.s3ForcePathStyle)
-      env.DOGEOS_ETH_DA_SUBMITTER_S3__POLL_INTERVAL_MS = optionalConfigString(input.s3PollIntervalMs)
-      env.DOGEOS_ETH_DA_SUBMITTER_S3__INITIAL_BACKOFF_MS = optionalConfigString(input.s3InitialBackoffMs)
-      env.DOGEOS_ETH_DA_SUBMITTER_S3__MAX_BACKOFF_MS = optionalConfigString(input.s3MaxBackoffMs)
-      env.DOGEOS_ETH_DA_SUBMITTER_S3__MAX_RETRIES = optionalConfigString(input.s3MaxRetries)
-      env.DOGEOS_ETH_DA_SUBMITTER_S3__UPLOADING_TIMEOUT_MS = optionalConfigString(input.s3UploadingTimeoutMs)
     }
   }
 
@@ -650,13 +762,6 @@ function optionalConfigString(value: unknown): string | undefined {
 
 function pushConfigValidationError(errors: string[], path: string, message: string): void {
   errors.push(`${path}: ${message}`)
-}
-
-function validateOptionalBytes32Config(errors: string[], path: string, value: unknown): void {
-  if (value === undefined || value === null) return
-  if (!/^0x[\dA-Fa-f]{64}$/.test(String(value))) {
-    pushConfigValidationError(errors, path, 'must be a 32-byte 0x-prefixed hex string')
-  }
 }
 
 function validateRequiredBytes32Config(errors: string[], path: string, value: unknown): void {
@@ -727,10 +832,24 @@ export function validateDogeConfigEthereumDaForPrep(ethereumDa: DogeConfig['ethe
       pushConfigValidationError(errors, 'ethereumDa.batch.compression', 'must be auto or none')
     }
 
-    validateOptionalBytes32Config(errors, 'ethereumDa.batch.genesisBatchHash', batch.genesisBatchHash)
-    validateOptionalBytes32Config(errors, 'ethereumDa.batch.genesisRelayedDepositQueueHash', batch.genesisRelayedDepositQueueHash)
-    validateOptionalBytes32Config(errors, 'ethereumDa.batch.genesisStateRoot', batch.genesisStateRoot)
-    validateOptionalBytes32Config(errors, 'ethereumDa.batch.genesisWithdrawRoot', batch.genesisWithdrawRoot)
+    for (const [field, value] of [
+      ['genesisBatchHash', batch.genesisBatchHash],
+      ['genesisNextRelayedDepositIndex', batch.genesisNextRelayedDepositIndex],
+      ['genesisNextWithdrawIndex', batch.genesisNextWithdrawIndex],
+      ['genesisRelayedDepositQueueHash', batch.genesisRelayedDepositQueueHash],
+      ['genesisStateRoot', batch.genesisStateRoot],
+      ['genesisWithdrawRoot', batch.genesisWithdrawRoot],
+      ['minCodecVersion', batch.minCodecVersion],
+    ] as const) {
+      if (value !== undefined) {
+        pushConfigValidationError(
+          errors,
+          `ethereumDa.batch.${field}`,
+          'has been removed from dogeos-core; remove this field and use protocol_context.json plus execution genesis authority',
+        )
+      }
+    }
+
     if (batch.initialBatchSidecarJson !== undefined) {
       pushConfigValidationError(
         errors,
@@ -739,14 +858,10 @@ export function validateDogeConfigEthereumDaForPrep(ethereumDa: DogeConfig['ethe
       )
     }
 
-    validateOptionalIntegerConfig(errors, 'ethereumDa.batch.genesisNextRelayedDepositIndex', batch.genesisNextRelayedDepositIndex, 0, 'a non-negative integer')
-    validateOptionalIntegerConfig(errors, 'ethereumDa.batch.genesisNextWithdrawIndex', batch.genesisNextWithdrawIndex, 0, 'a non-negative integer')
     validateOptionalIntegerConfig(errors, 'ethereumDa.batch.maxBlocksPerChunk', batch.maxBlocksPerChunk, 1, 'a positive integer')
     validateOptionalIntegerConfig(errors, 'ethereumDa.batch.maxChunksPerBatch', batch.maxChunksPerBatch, 1, 'a positive integer')
     validateOptionalIntegerConfig(errors, 'ethereumDa.batch.maxL2GasPerChunk', batch.maxL2GasPerChunk, 1, 'a positive integer')
     validateOptionalIntegerConfig(errors, 'ethereumDa.batch.maxUncompressedBatchBytesSize', batch.maxUncompressedBatchBytesSize, 1, 'a positive integer')
-    validateOptionalIntegerConfig(errors, 'ethereumDa.batch.minCodecVersion', batch.minCodecVersion, 0, 'a non-negative integer')
-
     if (cutover) {
       validateRequiredIntegerConfig(errors, 'ethereumDa.batch.cutover.lastBatchIndex', cutover.lastBatchIndex, 0, 'a non-negative integer')
       validateRequiredIntegerConfig(errors, 'ethereumDa.batch.cutover.nextRelayedDepositIndex', cutover.nextRelayedDepositIndex, 0, 'a non-negative integer')
@@ -791,16 +906,11 @@ export function buildL1InterfaceBlobSourcePrepEnv(input: {
   beaconRpcUrl: string | undefined
   s3KeyPrefix?: string | undefined
   s3PublicBaseUrl?: string | undefined
-  s3TimeoutMs?: boolean | number | string | undefined
-  s3TreatForbiddenAsMissing?: boolean | number | string | undefined
 }): Record<string, string | undefined> {
   return {
     DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__KEY_PREFIX: optionalConfigString(input.s3KeyPrefix),
-    DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS: optionalConfigString(input.s3TimeoutMs),
-    DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING: optionalConfigString(input.s3TreatForbiddenAsMissing),
     DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL: optionalConfigString(input.s3PublicBaseUrl),
     DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL: input.beaconRpcUrl,
-    DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS: '10000',
   }
 }
 
@@ -808,16 +918,11 @@ export function buildWithdrawalBlobSourcePrepEnv(input: {
   beaconRpcUrl: string | undefined
   s3KeyPrefix?: string | undefined
   s3PublicBaseUrl?: string | undefined
-  s3TimeoutMs?: boolean | number | string | undefined
-  s3TreatForbiddenAsMissing?: boolean | number | string | undefined
 }): Record<string, string | undefined> {
   return {
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__KEY_PREFIX: optionalConfigString(input.s3KeyPrefix),
-    DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS: optionalConfigString(input.s3TimeoutMs),
-    DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING: optionalConfigString(input.s3TreatForbiddenAsMissing),
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL: optionalConfigString(input.s3PublicBaseUrl),
     DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL: input.beaconRpcUrl,
-    DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__TIMEOUT_MS: '10000',
   }
 }
 
@@ -851,6 +956,19 @@ export function applyRethBlobS3Url(
   return changes
 }
 
+export function applyRethFeeRecipient(productionYaml: any, feeVaultAddress: unknown): PrepChartChange[] {
+  if (typeof feeVaultAddress !== 'string' || !isAddress(feeVaultAddress) || /^0x0{40}$/i.test(feeVaultAddress)) {
+    throw new Error('contracts.overrides.L2_TX_FEE_VAULT must be a valid nonzero address for Reth')
+  }
+
+  productionYaml.reth ||= {}
+  productionYaml.reth.sequencer ||= {}
+  const oldValue = productionYaml.reth.sequencer.feeRecipient
+  if (oldValue === feeVaultAddress) return []
+  productionYaml.reth.sequencer.feeRecipient = feeVaultAddress
+  return [{key: 'reth.sequencer.feeRecipient', newValue: feeVaultAddress, oldValue: String(oldValue ?? 'undefined')}]
+}
+
 export function applyRethNetworkId(
   productionYaml: any,
   networkId: string | undefined,
@@ -867,6 +985,40 @@ export function applyRethNetworkId(
     newValue: networkId,
     oldValue: String(oldValue ?? 'undefined'),
   }]
+}
+
+export interface RethExtraArgsSnapshot {
+  present: boolean
+  value?: unknown
+}
+
+/**
+ * Reth extraArgs are an operator-owned escape hatch, not prep-charts input.
+ * Snapshot them before reconciling generated runtime fields so current and
+ * future helpers cannot accidentally add, replace, or remove the value.
+ */
+export function snapshotRethExtraArgs(productionYaml: any): RethExtraArgsSnapshot {
+  const reth = productionYaml?.reth
+  const present = Boolean(reth && typeof reth === 'object' && Object.hasOwn(reth, 'extraArgs'))
+  return {
+    present,
+    ...(present ? {value: structuredClone(reth.extraArgs)} : {}),
+  }
+}
+
+export function restoreRethExtraArgs(
+  productionYaml: any,
+  snapshot: RethExtraArgsSnapshot,
+): void {
+  if (snapshot.present) {
+    productionYaml.reth ||= {}
+    productionYaml.reth.extraArgs = structuredClone(snapshot.value)
+    return
+  }
+
+  if (productionYaml?.reth && typeof productionYaml.reth === 'object') {
+    delete productionYaml.reth.extraArgs
+  }
 }
 
 export function resolveRethP2PNetworkId(
@@ -1175,13 +1327,21 @@ export default class SetupPrepCharts extends Command {
       default: false,
       description: 'Run without prompts. Auto-applies all detected changes.',
     }),
+    'proof-topology-compiler-binary': Flags.string({
+      description: 'Development-only local dogeos-proof-topology binary; production uses the digest-pinned configured image',
+      exclusive: ['proof-topology-compiler-image'],
+    }),
+    'proof-topology-compiler-image': Flags.string({
+      description: 'Override the digest-pinned proof-topology compiler image',
+      exclusive: ['proof-topology-compiler-binary'],
+    }),
     'skip-auth-check': Flags.boolean({ default: false, description: 'Skip authentication check for individual charts' }),
     'skip-l2-contract-deployment-block': Flags.boolean({
       default: false,
       description: 'Do not overwrite L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK in L2 production values files',
     }),
     spec: Flags.string({
-      description: 'Optional DeploymentSpec proof-intent source; auto-detects deployment-spec.yaml/yml when omitted',
+      description: 'Optional DeploymentSpec proof source; conflicts with doge-config [proof_topology]',
     }),
     'values-dir': Flags.string({ default: './values', description: 'Directory containing values files; must be inside the deployment root for transactional generation' }),
   }
@@ -1237,12 +1397,13 @@ export default class SetupPrepCharts extends Command {
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
   private outputTestData: Record<string, any> = {}
-  private proofIntent!: ResolvedProofIntent
+  private proofIntent?: ResolvedProofIntent
   private skipL2ContractDeploymentBlock: boolean = false
   private withdrawalProcessorConfig: toml.JsonMap = {}
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupPrepCharts)
+    this.flags = flags
 
     // Setup non-interactive/JSON mode
     this.nonInteractive = flags['non-interactive']
@@ -1282,10 +1443,13 @@ export default class SetupPrepCharts extends Command {
     let changedFiles: string[] = []
     try {
       const stagedValuesDir = transaction.toStagingPath(originalValuesDir)
-      this.proofIntent = this.rebaseProofIntentForStaging(
-        transaction,
-        this.proofIntent,
-      )
+      if (this.proofIntent) {
+        this.proofIntent = this.rebaseProofIntentForStaging(
+          transaction,
+          this.proofIntent,
+        )
+      }
+
       process.chdir(transaction.stagingRoot)
       generation = await this.generateCharts(stagedValuesDir)
       process.chdir(deploymentRoot)
@@ -1309,7 +1473,9 @@ export default class SetupPrepCharts extends Command {
       updatedProduction,
       updatedRethInstances,
     } = generation
-    const proof = this.rebaseProofResultFromStaging(transaction, stagedProof)
+    const proof = stagedProof
+      ? this.rebaseProofResultFromStaging(transaction, stagedProof)
+      : undefined
     const valuesDir = originalValuesDir
 
     this.jsonCtx.logSuccess(`Updated instance-specific YAML files for ${updatedInstances + updatedBootnodeRethInstances + updatedRethInstances} chart(s).`);
@@ -1336,13 +1502,14 @@ export default class SetupPrepCharts extends Command {
           updated: updatedInstances + updatedBootnodeRethInstances + updatedRethInstances,
         },
         productionCharts: { skipped: skippedProduction, updated: updatedProduction },
-        proof: {
-          contract: proof.contract,
-          files: proof.files,
-          mode: proof.mode,
-          scaffoldedCoordinatorConfig: proof.scaffoldedCoordinatorConfig,
-          workerBundle: proof.workerBundle,
-        },
+        proof: proof
+          ? {
+              contract: proof.contract,
+              files: proof.files,
+              mode: proof.mode,
+              workerBundle: proof.workerBundle,
+            }
+          : {configured: false},
         totalSkipped: skippedInstances + skippedBootnodeRethInstances + skippedRethInstances + skippedProduction + skippedConfig,
         totalUpdated: updatedInstances + updatedBootnodeRethInstances + updatedRethInstances + updatedProduction + updatedConfig,
         valuesDir,
@@ -1472,7 +1639,9 @@ export default class SetupPrepCharts extends Command {
       await this.processProductionYaml(valuesDir)
     const {skipped: skippedConfig, updated: updatedConfig} =
       await this.processConfigYaml(valuesDir)
-    const proof = this.reconcileProofKubernetes(valuesDir)
+    const proof = this.proofIntent
+      ? this.reconcileProofKubernetes(valuesDir)
+      : undefined
     return {
       proof,
       skippedBootnodeRethInstances,
@@ -1577,6 +1746,10 @@ export default class SetupPrepCharts extends Command {
     if (!sequencerConfig || typeof sequencerConfig !== 'object') return []
 
     const peers = this.parsePeerList(sequencerConfig.L2_GETH_STATIC_PEERS)
+    // An explicit empty TOML array opts out of retired Geth peers while
+    // preserving archived compatibility keys. Only absent/non-array legacy
+    // settings should fall back to deriving peers from those keys.
+    if (Array.isArray(sequencerConfig.L2_GETH_STATIC_PEERS)) return peers
     if (peers.length > 0) return peers
 
     const derivedPeers: string[] = []
@@ -1652,11 +1825,57 @@ export default class SetupPrepCharts extends Command {
       deploymentDir: process.cwd(),
       dogeConfig: this.dogeConfig,
       dogeConfigPath,
+      required: false,
       specPath: flags.spec,
     })
-    this.jsonCtx.info(
-      `Proof intent: ${this.proofIntent.intent.mode} (${this.proofIntent.source.kind}: ${this.proofIntent.source.path})`,
-    )
+    const priorProofState = fs.existsSync(path.join(process.cwd(), '.data/proof-deployment.json'))
+      || fs.existsSync(path.join(process.cwd(), '.data/generated/proof-topology'))
+    if (!this.proofIntent && priorProofState) {
+      throw new Error(
+        'proof topology source is missing while generated proof state exists; restore '
+        + '.data/doge-config.toml [proof_topology] or DeploymentSpec proofTopology before prep-charts',
+      )
+    }
+
+    if (this.proofIntent) {
+      const sharedArtifactStore = sharedArtifactStoreFromDogeConfig(this.dogeConfig)
+      const topologyArtifactStore = this.proofIntent.proofTopology.active?.artifactStore
+      if (topologyArtifactStore?.kind === 's3_compatible') {
+        assertTopologyUsesSharedArtifactStore({
+          bucket: topologyArtifactStore.bucket,
+          keyPrefix: this.proofIntent.proofTopology.deployment.artifactKeyPrefix,
+          region: topologyArtifactStore.region,
+        }, sharedArtifactStore)
+      }
+
+      const proofAws = readOptionalProofAwsConfig(process.cwd())
+      if (proofAws) {
+        try {
+          assertProofAwsMatchesTopology(this.proofIntent.proofTopology, proofAws.config)
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          if (this.proofIntent.source.kind === 'doge-config') {
+            throw new Error(
+              `${detail}; run scrollsdk setup doge-config --proof-topology to bind the `
+              + 'provisioned AWS facts before rerunning prep-charts',
+            )
+          }
+
+          throw new Error(
+            `${detail}; update DeploymentSpec proofTopology to match the provisioned AWS facts `
+            + 'before rerunning prep-charts',
+          )
+        }
+      }
+
+      for (const warning of this.proofIntent.warnings) this.jsonCtx.addWarning(warning)
+      this.jsonCtx.info(
+        `Proof intent: ${this.proofIntent.intent.mode} (${this.proofIntent.source.kind}: ${this.proofIntent.source.path})`,
+      )
+    } else {
+      this.jsonCtx.info('Proof topology is not configured; proof compiler reconciliation is skipped')
+    }
+
     this.configData.ethereumDa = this.dogeConfig.ethereumDa
 
 
@@ -1665,6 +1884,15 @@ export default class SetupPrepCharts extends Command {
       this.error("run scrollsdk setup bridge-init first");
       return
     }
+
+    const genesisTransaction = await ensureGenesisSequencerTransaction({
+      protocolContextPath: path.join(process.cwd(), '.data/protocol_context.json'),
+      setupDefaultsPath: path.join(process.cwd(), '.data/setup_defaults.toml'),
+      withdrawalProcessorOutputPath: withdrawalProcessorConfigPath,
+    })
+    this.jsonCtx.info(
+      `Genesis sequencer transaction material: ${genesisTransaction.txid}:${genesisTransaction.vout} (validated)`,
+    )
 
     const withdrawalProcessorConfigContent = fs.readFileSync(withdrawalProcessorConfigPath, 'utf8');
     this.withdrawalProcessorConfig = toml.parse(withdrawalProcessorConfigContent);
@@ -1834,6 +2062,7 @@ export default class SetupPrepCharts extends Command {
         }
 
         const configUpdates = {
+          ...buildFrontendExternalUrlUpdates(key => this.getConfigValue(key)),
           REACT_APP_BASE_CHAIN: this.getConfigValue("general.CHAIN_NAME_L1"),
           REACT_APP_CONNECT_WALLET_PROJECT_ID: this.getConfigValue("frontend.CONNECT_WALLET_PROJECT_ID"),
           REACT_APP_DOGE_BRIDGE_ADDRESS: this.withdrawalProcessorConfig.bridge_address,
@@ -2096,6 +2325,9 @@ export default class SetupPrepCharts extends Command {
 
       const productionYamlContent = fs.readFileSync(yamlPath, 'utf8')
       const productionYaml = yaml.load(productionYamlContent) as any
+      const rethExtraArgsSnapshot = isL2RethBlobS3Chart(chartName)
+        ? snapshotRethExtraArgs(productionYaml)
+        : undefined
 
       let updated = false
       const changes: Array<{ key: string; newValue: string; oldValue: string }> = []
@@ -2108,6 +2340,7 @@ export default class SetupPrepCharts extends Command {
         const sharedRethChanges = [
           ...applyRethNetworkId(productionYaml, l2P2PNetworkId),
           ...applyRethBlobS3Url(productionYaml, s3PublicBlobUrl),
+          ...applyRethFeeRecipient(productionYaml, this.getConfigValue('contracts.overrides.L2_TX_FEE_VAULT')),
         ]
         if (sharedRethChanges.length > 0) {
           changes.push(...sharedRethChanges)
@@ -2233,19 +2466,6 @@ export default class SetupPrepCharts extends Command {
       }
 
       if (isL2RethRpcChart(chartName)) {
-        if (chartName === 'l2-reth-rpc') {
-          const oldGlobalNaming = JSON.stringify(productionYaml.global || {})
-          removeChartResourceNameOverrides(productionYaml)
-          if (oldGlobalNaming !== JSON.stringify(productionYaml.global || {})) {
-            changes.push({
-              key: 'global.nameOverride/global.fullnameOverride',
-              newValue: 'release-derived',
-              oldValue: oldGlobalNaming,
-            })
-            updated = true
-          }
-        }
-
         const trustedPeers = this.buildFreshRethTrustedPeers()
         const runtimeChanges = applyL2RethRpcRuntimeValues(productionYaml, {
           blobS3Url: s3PublicBlobUrl,
@@ -2506,6 +2726,18 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
+      if (chartName === 'scroll-monitor') {
+        const monitorChanges = reconcileScrollMonitorBalances(productionYaml, {
+          dogeConfig: this.dogeConfig,
+          l2ChainId: configuredL2ChainId,
+          l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),
+        })
+        if (monitorChanges.length > 0) {
+          changes.push(...monitorChanges)
+          updated = true
+        }
+      }
+
       if (productionYaml.grafana) {
         /*
           grafana.ini:
@@ -2540,44 +2772,13 @@ export default class SetupPrepCharts extends Command {
 
 
 
-        let ingressUpdated = false;
-        const ingressValue = productionYaml.grafana.ingress;
-        if (ingressValue && typeof ingressValue === 'object' && 'hosts' in ingressValue) {
-          const hosts = ingressValue.hosts as Array<string>;
-          if (Array.isArray(hosts)) {
-            for (let i = 0; i < hosts.length; i++) {
-              if (typeof (hosts[i]) === 'string') {
-                const configValue: string | undefined = this.getConfigValue("ingress.GRAFANA_HOST");
-                // Strip port from hostname - Kubernetes Ingress hosts cannot contain ports
-                const sanitizedHost = configValue ? stripPortFromHost(configValue) : configValue;
-
-                if (sanitizedHost && (sanitizedHost !== hosts[i])) {
-                  changes.push({ key: `ingress.hosts[${i}]`, newValue: sanitizedHost, oldValue: hosts[i] });
-                  hosts[i] = sanitizedHost;
-                  ingressUpdated = true;
-                }
-              }
-            }
-          }
-        }
-
-        if (ingressUpdated) {
-          updated = true;
-          // Update the tls section if it exists
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          for (const [_ingressKey, ingressValue] of Object.entries(productionYaml.grafana.ingress)) {
-            if (ingressValue && typeof ingressValue === 'object' && 'tls' in ingressValue && 'hosts' in ingressValue) {
-              const tlsEntries = ingressValue.tls as Array<{ hosts: string[] }>;
-              const hosts = ingressValue.hosts as Array<{ host: string }>;
-              if (Array.isArray(tlsEntries) && Array.isArray(hosts)) {
-                for (const tlsEntry of tlsEntries) {
-                  if (Array.isArray(tlsEntry.hosts)) {
-                    tlsEntry.hosts = hosts.map((host) => host.host);
-                  }
-                }
-              }
-            }
-          }
+        const ingressChanges = reconcileGrafanaIngressHost(
+          productionYaml.grafana.ingress,
+          this.getConfigValue('ingress.GRAFANA_HOST'),
+        )
+        if (ingressChanges.length > 0) {
+          changes.push(...ingressChanges)
+          updated = true
         }
       }
 
@@ -2769,9 +2970,7 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK": String(Math.max(0, l1GenesisBlock)),
           "DOGEOS_L1_INTERFACE_NETWORK_STR": this.withdrawalProcessorConfig.network_str,
           "DOGEOS_L1_INTERFACE_REPLAY_READ__L2_BOOTSTRAP_NEXT_STARTING_BLOCK_HEIGHT": this.dogeConfig.defaults?.l2BootstrapNextStartingBlockHeight,
-          "DOGEOS_L1_INTERFACE_REPLAY_READ__MAINTAINER_ENABLED": "true",
           "DOGEOS_L1_INTERFACE_REPLAY_READ__PROTOCOL_CONTEXT_JSON": "/app/protocol_context.json",
-          "DOGEOS_L1_INTERFACE_REPLAY_READ__REQUIRE_FULL_VALIDATION": "false",
         }
 
         const l1InterfaceCleanupChanges = [
@@ -2818,8 +3017,6 @@ export default class SetupPrepCharts extends Command {
             beaconRpcUrl: this.getConfigValue("ethereumDa.beaconRpcUrl"),
             s3KeyPrefix: s3ArchiveEnabled ? s3Archive?.keyPrefix : undefined,
             s3PublicBaseUrl: s3ArchiveEnabled ? s3PublicBaseUrl : undefined,
-            s3TimeoutMs: s3ArchiveEnabled ? s3Archive?.timeoutMs : undefined,
-            s3TreatForbiddenAsMissing: s3ArchiveEnabled ? s3Archive?.treatForbiddenAsMissing : undefined,
           }),
         }
 
@@ -2851,23 +3048,26 @@ export default class SetupPrepCharts extends Command {
         // Deployment configuration is TOML-owned: merge the derived facts into
         // the managed deployment block of the native WithdrawalProcessor.toml.
         // Operator tuning of other keys inside that block survives the merge.
-        const { defaults, deletePaths, facts } = buildWithdrawalDeploymentFacts({
+        const l1CommitSenderAddress = this.requireSignerAddress('l1CommitSender')
+
+        const { deletePaths, facts } = buildWithdrawalDeploymentFacts({
           dogecoinIndexerStartHeight,
           dogecoinRpcUrl: dogecoinInternalUrl,
           ethereumDa: {
             beaconRpcUrl: this.getConfigValue('ethereumDa.beaconRpcUrl'),
-            expectedBatcherAddress: this.getConfigValue('accounts.L1_COMMIT_SENDER_ADDR'),
+            // The same resolved signer address is projected into
+            // eth-da-submitter below. Never make operators transcribe a
+            // second DA-publisher authority into WP configuration.
+            expectedBatcherAddress: l1CommitSenderAddress,
             inboxWorkerStartBlock: this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock,
             l1RpcUrl: this.getConfigValue('ethereumDa.submitterRpcUrl'),
-            minFinality: this.getConfigValue('ethereumDa.minFinality'),
             s3: {
               enabled: s3ArchiveEnabled,
               keyPrefix: s3Archive?.keyPrefix,
               publicBaseUrl: s3PublicBaseUrl,
-              timeoutMs: s3Archive?.timeoutMs,
-              treatForbiddenAsMissing: s3Archive?.treatForbiddenAsMissing,
             },
           },
+          genesisSequencerTxHex: this.withdrawalProcessorConfig.genesis_sequencer_tx_hex,
           initialBridgeRedeemScriptHex: this.bridgeConfig.redeem_script_hex,
           l2BootstrapNextStartingBlockHeight: this.dogeConfig.defaults?.l2BootstrapNextStartingBlockHeight,
           l2MessageQueueAddress: this.getConfigValue('contractsFile.L2_MESSAGE_QUEUE_ADDR'),
@@ -2886,22 +3086,8 @@ export default class SetupPrepCharts extends Command {
           )
         }
 
-        // Legacy inline copies are discarded only after the scroll-sdk native
-        // template is present; helm --set-file supplies the ConfigMap content.
-        const inlineSource = removeInlineWithdrawalConfig(productionYaml)
-        if (inlineSource !== undefined) {
-          this.jsonCtx.addWarning(`withdrawal-processor: dropping inline configMaps ${WITHDRAWAL_CONFIG_FILE}; ${nativeConfigPath} is the source of truth`)
-
-          changes.push({
-            key: `configMaps.config.data.${WITHDRAWAL_CONFIG_FILE}`,
-            newValue: `owned by ${nativeConfigPath}`,
-            oldValue: 'inline TOML',
-          })
-          updated = true
-        }
-
         const previousSource = fs.readFileSync(nativeConfigPath, 'utf8')
-        const mergedSource = mergeWithdrawalManagedDeploymentBlock(previousSource, facts, { defaults, deletePaths })
+        const mergedSource = mergeWithdrawalManagedDeploymentBlock(previousSource, facts, {deletePaths})
         if (mergedSource !== previousSource) {
           fs.writeFileSync(nativeConfigPath, mergedSource)
           this.jsonCtx.info(`withdrawal-processor: updated ${nativeConfigPath}`)
@@ -2943,8 +3129,8 @@ export default class SetupPrepCharts extends Command {
           updated = true
         }
 
-        const proofSystemMode = this.proofIntent.intent.mode
-        if (ensureWithdrawalProofActivationSwitch(productionYaml, proofSystemMode)) {
+        const topologyMode = this.proofIntent?.intent.mode || 'disabled'
+        if (ensureWithdrawalProofActivationSwitch(productionYaml, topologyMode)) {
           changes.push({
             key: 'withdrawalProof.enabled',
             newValue: productionYaml.withdrawalProof.enabled,
@@ -2985,6 +3171,8 @@ export default class SetupPrepCharts extends Command {
             productionYaml,
             buildCubesignerPrepEnv(this.dogeConfig),
           ),
+          ...migrateCubesignerPolicySdkVersion(productionYaml),
+          ...migrateCubesignerRequestContract(productionYaml),
           ...ensureCubesignerPolicyKeyBinding(productionYaml),
           ...ensureConfigMapFileMount(
             productionYaml,
@@ -3015,18 +3203,12 @@ export default class SetupPrepCharts extends Command {
           ethereumRpcUrl: this.getConfigValue("ethereumDa.submitterRpcUrl"),
           l2RpcUrl: this.getConfigValue("general.L2_RPC_ENDPOINT"),
           l2StartBlockNumber: this.dogeConfig.ethereumDa?.l2StartBlockNumber,
-          publish: this.dogeConfig.ethereumDa?.publish,
           s3Bucket: s3Archive?.bucket,
           s3Enabled: s3Archive?.enabled,
           s3EndpointUrl: s3Archive?.endpointUrl,
           s3ForcePathStyle: s3Archive?.forcePathStyle,
-          s3InitialBackoffMs: s3Archive?.initialBackoffMs,
           s3KeyPrefix: s3Archive?.keyPrefix,
-          s3MaxBackoffMs: s3Archive?.maxBackoffMs,
-          s3MaxRetries: s3Archive?.maxRetries,
-          s3PollIntervalMs: s3Archive?.pollIntervalMs,
           s3Region: s3Archive?.region,
-          s3UploadingTimeoutMs: s3Archive?.uploadingTimeoutMs,
         })
 
         const retiredSubmitterChanges = [
@@ -3039,6 +3221,7 @@ export default class SetupPrepCharts extends Command {
             'DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_WITHDRAW_INDEX',
             'DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_NEXT_RELAYED_DEPOSIT_INDEX',
             'DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_RELAYED_DEPOSIT_QUEUE_HASH',
+            'DOGEOS_ETH_DA_SUBMITTER_BATCH__MIN_CODEC_VERSION',
           ]),
           ...ensureConfigMapFileMount(
             productionYaml,
@@ -3059,9 +3242,11 @@ export default class SetupPrepCharts extends Command {
         }
 
         const signerConfig = this.requireSigner('l1CommitSender')
+        const l1CommitSenderAddress = this.requireSignerAddress('l1CommitSender')
+
         if (signerConfig?.backend === 'aws_kms') {
           Object.assign(todoMappings, {
-            "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_EXPECTED_ADDRESS": signerConfig.expectedAddress,
+            "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_EXPECTED_ADDRESS": l1CommitSenderAddress,
             "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_KEY_ID": signerConfig.kmsKeyId,
             "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__KMS_REGION": signerConfig.kmsRegion,
             "DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SIGNER_BACKEND": "aws_kms",
@@ -3152,9 +3337,6 @@ export default class SetupPrepCharts extends Command {
 
         const todoMappings = {
           "DOGE_NETWORK": this.dogeConfig.network,
-          "TIMEOUT_CHECK_INTERVAL_SECONDS": "60",
-          "TSO_CORRECTNESS_MAX_PSBT_BASE64_LEN": "130048",
-          "TSO_CUBESIGNER_MAX_PSBT_BASE64_LEN": "130048",
         }
 
         for (const [envKey, newValue] of Object.entries(todoMappings)) {
@@ -3369,6 +3551,12 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
+      // reth.extraArgs is deliberately outside prep-charts ownership. Restore
+      // both its value and its presence/absence after every Reth reconciliation.
+      if (rethExtraArgsSnapshot) {
+        restoreRethExtraArgs(productionYaml, rethExtraArgsSnapshot)
+      }
+
       if (updated) {
         if (!this.jsonMode) {
           this.log(`\nFor ${chalk.cyan(file)}:`)
@@ -3447,27 +3635,18 @@ export default class SetupPrepCharts extends Command {
       // read-only and is recorded as an absolute contract path.
     }
 
-    let {release} = resolved.intent
-    if (release) {
-      const originalRelease = path.resolve(transaction.originalRoot, release)
-      try {
-        transaction.toStagingPath(originalRelease)
-      } catch {
-        // Preserve an external release root instead of resolving its relative
-        // spelling against the temporary generation workspace.
-        release = originalRelease
-      }
-    }
-
     return {
-      intent: {
-        ...resolved.intent,
-        ...(release ? {release} : {}),
-      },
+      deploymentName: resolved.deploymentName,
+      intent: resolved.intent,
+      network: resolved.network,
+      proofCoordinator: resolved.proofCoordinator,
+      proofTopology: resolved.proofTopology,
+      proverPublicUrl: resolved.proverPublicUrl,
       source: {
         ...resolved.source,
         path: sourcePath,
       },
+      warnings: resolved.warnings,
     }
   }
 
@@ -3481,52 +3660,59 @@ export default class SetupPrepCharts extends Command {
           bundleDir: transaction.toOriginalPath(result.workerBundle.bundleDir),
           files: result.workerBundle.files.map(file => transaction.toOriginalPath(file)),
           manifestFile: transaction.toOriginalPath(result.workerBundle.manifestFile),
-          ...('releaseManifestFile' in result.workerBundle
-            ? {
-                releaseManifestFile: transaction.toOriginalPath(
-                  result.workerBundle.releaseManifestFile,
-                ),
-              }
-            : {}),
         }
       : undefined
     return {
       ...result,
       files: result.files.map(file => transaction.toOriginalPath(file)),
-      release: {
-        artifactManifest: transaction.toOriginalPath(result.release.artifactManifest),
-        programManifests: result.release.programManifests
-          .map(file => transaction.toOriginalPath(file)),
-        releaseRoot: transaction.toOriginalPath(result.release.releaseRoot),
-        statementNamespace: transaction.toOriginalPath(result.release.statementNamespace),
-      },
       ...(workerBundle ? {workerBundle} : {}),
     }
   }
 
   private reconcileProofKubernetes(valuesDir: string): ReconcileProofKubernetesResult {
+    if (!this.proofIntent) throw new Error('proof topology is not configured')
     const coordinatorIngressHost = this.getConfigValue('ingress.PROOF_COORDINATOR_HOST')
+    const proofDogecoinRpcUrl = resolveDogecoinServiceRpcUrl({
+      kubernetes: this.dogeConfig.kubernetes,
+      network: this.dogeConfig.network,
+    })
+    const coordinatorConfigPath = path.resolve('proof-coordinator/ProofCoordinator.toml')
+    if (fs.existsSync(coordinatorConfigPath)) {
+      const current = fs.readFileSync(coordinatorConfigPath, 'utf8')
+      const reconciled = reconcileProofCoordinatorBatchL2Rpc(
+        current,
+        this.getConfigValue('frontend.EXTERNAL_RPC_URI_L2'),
+      )
+      if (reconciled.changed) fs.writeFileSync(coordinatorConfigPath, reconciled.content)
+    }
+
     const result = reconcileProofKubernetes({
-      aggregationL2ChainId: this.getConfigValue('general.CHAIN_ID_L2') as number | string | undefined,
+      coordinatorConfigPath,
       coordinatorIngressHost: typeof coordinatorIngressHost === 'string'
         ? coordinatorIngressHost
         : undefined,
       deploymentDir: process.cwd(),
+      ethereumDaBlobSource: proofTopologyEthereumDaBlobSource(this.dogeConfig.ethereumDa),
+      ethereumL1RpcUrl: this.dogeConfig.ethereumDa?.submitterRpcUrl,
       intent: this.proofIntent,
+      network: this.dogeConfig.network,
+      proofTopologyBridge: {
+        dogecoinNetwork: this.dogeConfig.network,
+        dogecoinRpcPassword: String(this.dogeConfig.dogecoinClusterRpc?.password || ''),
+        dogecoinRpcUrl: proofDogecoinRpcUrl,
+        dogecoinRpcUser: String(this.dogeConfig.dogecoinClusterRpc?.username || ''),
+      },
+      proofTopologyCompilerBinary: this.flags['proof-topology-compiler-binary'],
+      proofTopologyCompilerImage: this.flags['proof-topology-compiler-image'],
       valuesDir,
     })
     this.jsonCtx.logSuccess(
       `Reconciled ${result.mode} proof K8s configuration; contract ${result.contract.generationId}`,
     )
-    if (result.workerBundle && result.mode === 'mock') {
+    if (result.workerBundle) {
       this.jsonCtx.addWarning(
-        `Mock worker bundle ${result.workerBundle.bundleId} is credential-pending. `
-        + 'Hydrate prover-worker.env on the worker host before running setup proof-worker-check.',
-      )
-    } else if (result.workerBundle) {
-      this.jsonCtx.addWarning(
-        `Production worker bundle ${result.workerBundle.bundleId} is credential-pending. `
-        + 'Run setup proof-worker to inject the bearer token, sync the release and bundle to the GPU host, '
+        `Docker Compose worker bundle ${result.workerBundle.bundleId} is credential-pending. `
+        + 'Run setup proof-worker to inject the bearer token, sync the resources and bundle to the worker host, '
         + 'then run setup proof-worker-check before docker compose up.',
       )
     }
@@ -3557,6 +3743,20 @@ export default class SetupPrepCharts extends Command {
     }
   }
 
+  private requireSignerAddress(signerKey: 'l1CommitSender' | 'l2GasOracleSender'): string {
+    try {
+      return getRequiredManagedSignerAddress(this.dogeConfig, signerKey)
+    } catch (error) {
+      this.jsonCtx.error(
+        'E610_SIGNER_CONFIG_MISSING',
+        error instanceof Error ? error.message : String(error),
+        'CONFIGURATION',
+        true,
+        {signer: signerKey},
+      )
+    }
+  }
+
   private async validateMakefile(skipAuthCheck: boolean): Promise<void> {
     this.log(chalk.blue('Validating Makefile...'))
     const makefilePath = path.join(process.cwd(), 'Makefile')
@@ -3565,22 +3765,18 @@ export default class SetupPrepCharts extends Command {
     }
 
     const makefileContent = fs.readFileSync(makefilePath, 'utf8')
-    const installCommands = makefileContent.match(/helm\s+upgrade\s+-i.*?(?=\n\n|Z)/gs)
+    const installCommands = parseHelmUpgradeRecipes(makefileContent)
 
-    if (!installCommands) {
+    if (installCommands.length === 0) {
       this.warn('No Helm upgrade commands found in the Makefile.')
       return
     }
 
     for (const command of installCommands) {
-      const chartNameMatch = command.match(/upgrade\s+-i\s+(\S+)/)
-      const ociMatch = command.match(/oci:\/\/(\S+)/)
-      const ociVersionMatch = command.match(/--version\s*=\s*(\S+)\s+/);
-
-      if (chartNameMatch && ociMatch) {
-        const chartName = chartNameMatch[1]
-        const ociUrl = ociMatch[0]
-        const ociVersion = ociVersionMatch && ociVersionMatch.length > 1 ? ociVersionMatch[1] : "";
+      const chartName = command.release
+      if (command.chart.startsWith('oci://')) {
+        const ociUrl = command.chart
+        const ociVersion = command.version || ''
 
         if (!skipAuthCheck) {
           const hasAccess = this.validateOCIAccess(ociUrl, ociVersion)
@@ -3597,16 +3793,13 @@ export default class SetupPrepCharts extends Command {
           }
         }
 
-        const valuesFileMatches = command.match(/-f\s+(\S+)/g)
-        if (valuesFileMatches) {
-          for (const match of valuesFileMatches) {
-            const valuesFile = match.split(' ')[1]
-            if (fs.existsSync(valuesFile)) {
-              this.log(chalk.green(`Values file verified: ${valuesFile}`))
-            } else {
-              this.log(chalk.red(`Values file not found: ${valuesFile}`))
-            }
-          }
+      }
+
+      for (const valuesFile of command.valuesFiles) {
+        if (fs.existsSync(valuesFile)) {
+          this.log(chalk.green(`Values file verified: ${valuesFile}`))
+        } else {
+          this.log(chalk.red(`Values file not found: ${valuesFile}`))
         }
       }
     }

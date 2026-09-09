@@ -27,6 +27,9 @@ describe('setup l2-bootnode-reth', () => {
       externalSecrets: {
         'l2-reth-bootnode-2-secret-env': { provider: 'aws' },
       },
+      global: {
+        nameOverride: 'operator-bootnode-name',
+      },
       persistence: {
         keys: { enabled: true, mountPath: '/keys', type: 'emptyDir' },
       },
@@ -48,7 +51,7 @@ describe('setup l2-bootnode-reth', () => {
       secretName: 'l2-reth-bootnode-2-secret-env',
     })
 
-    expect(values.global).to.equal(undefined)
+    expect(values.global).to.deep.equal({nameOverride: 'operator-bootnode-name'})
     expect(values.envFrom).to.deep.equal([{ configMapRef: { name: 'shared-observability-env' } }])
     expect(values.externalSecrets).to.equal(undefined)
     expect(values.env.some((item: any) => item.name === 'RETH_NODEKEY')).to.equal(false)
@@ -82,7 +85,24 @@ describe('setup l2-bootnode-reth', () => {
       'RETH_NODEKEY',
     ])
     expect(values.command).to.equal(undefined)
+    expect(values.externalSecrets['secret-env'].data[0].remoteRef.key).to.equal('dogeos/l2-reth-bootnode-1-secret-env')
   })
+
+  for (const name of ['secret-env', 'l2-reth-bootnode-1-secret-env']) {
+    it(`preserves custom remote paths across regeneration (${name})`, () => {
+      const remoteKey = 'dogeos/custom-instance/bootnode-key'
+      const values: any = {externalSecrets: {[name]: {data: [
+        {remoteRef: {key: remoteKey}, secretKey: 'RETH_NODEKEY'},
+      ]}}}
+      for (let pass = 0; pass < 2; pass++) {
+        applyBootnodeRethValues(values, {
+          enodeUrl: deriveBootnodeRethEnodeUrl(nodekey, 1), index: 1, nodekey,
+          secretMode: 'external-secret', secretName: 'l2-reth-bootnode-1-secret-env',
+        })
+        expect(values.externalSecrets['secret-env'].data[0].remoteRef.key).to.equal(remoteKey)
+      }
+    })
+  }
 
   it('removes plain Secret fields when switching back to ExternalSecret mode', () => {
     const values: any = {

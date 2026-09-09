@@ -1,122 +1,109 @@
-import { expect } from 'chai'
+import {expect} from 'chai'
 
-import type { SignerPolicyBundleInput } from '../../src/utils/signer-policy-bundle.js'
+import type {SignerPolicyBundleInput} from '../../src/utils/signer-policy-bundle.js'
 
 import {
-  renderMockSourceSetToml,
+  ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE,
   renderPartnerCommands,
+  renderSignerOperatorPolicyTemplate,
   renderSignerPolicyEnv,
-  renderVerifierRegistryToml,
 } from '../../src/utils/signer-policy-bundle.js'
 
-function input(mode: 'disabled' | 'mock' | 'production'): SignerPolicyBundleInput {
+function input(
+  mode: 'active' | 'disabled',
+  generation: 'mock' | 'real' = 'mock',
+  enforcement: 'enforce' | 'observe' = 'observe',
+): SignerPolicyBundleInput {
   return {
-    activeBridgeKeyHash: `0x${'11'.repeat(20)}`,
-    allowedProofTriples: `openvm_state_transition:bridge-v1:0x${'22'.repeat(32)},scroll_batch:batch-v1:0x${'33'.repeat(32)}`,
-    bridgeNamespaceId: `0x${'44'.repeat(20)}`,
+    ...(generation === 'real'
+      ? {
+          advanceL2Verifier: {
+            aggVerifyingKeyFile: ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE,
+            aggVerifyingKeySha256: `sha256:${'11'.repeat(32)}`,
+            batchProgramCommitmentHex: `0x${'22'.repeat(64)}`,
+            l2RangeAggregationProgramCommitmentHex: `0x${'33'.repeat(64)}`,
+          },
+        }
+      : {}),
+    enforcement,
+    generation,
     mode,
     network: 'testnet',
-    protocolInstanceId: `0x${'55'.repeat(32)}`,
-    signerProofArtifactBaseUrl: 'https://proofs.bridge.example/proof-topology',
+    signerProofArtifactBaseUrl: mode === 'disabled' ? undefined : 'https://proofs.bridge.example/proof-topology',
     signers: [
-      { endpoint: 'https://signer.partner-a.example:4040', id: 'partner-a', publicKey: `02${'66'.repeat(32)}` },
-      { endpoint: 'http://10.20.30.40:4040', id: 'partner-b', publicKey: `03${'77'.repeat(32)}` },
+      {endpoint: 'https://signer.partner-a.example:4040', id: 'partner-a', publicKey: `02${'66'.repeat(32)}`},
+      {endpoint: 'http://10.20.30.40:4040', id: 'partner-b', publicKey: `03${'77'.repeat(32)}`},
     ],
-    supportedSigningPolicyVersions: '1',
-    teeAllowedSignerIds: `02${'88'.repeat(32)}`,
     tsoUrl: 'https://tso.bridge.example',
   }
 }
 
 function envMap(rendered: string): Record<string, string> {
-  return Object.fromEntries(rendered
-    .split('\n')
-    .filter(line => line && !line.startsWith('#'))
-    .map(line => {
-      const separator = line.indexOf('=')
-      return [line.slice(0, separator), line.slice(separator + 1)]
-    }))
+  return Object.fromEntries(rendered.split('\n').filter(line => line && !line.startsWith('#')).map(line => {
+    const separator = line.indexOf('=')
+    return [line.slice(0, separator), line.slice(separator + 1)]
+  }))
 }
 
-describe('signer policy bundle', () => {
-  it('renders a verifier registry from the exact staged proof triples', () => {
-    const registry = renderVerifierRegistryToml(input('mock').allowedProofTriples)
-    expect(registry).to.include('proof_kind = "openvm_state_transition"')
-    expect(registry).to.include('verifier_id = "bridge-v1"')
-    expect(registry).to.include(`vk_hash = "0x${'22'.repeat(32)}"`)
-    expect(registry).to.include('proof_kind = "scroll_batch"')
-    expect(registry.match(/\[\[verifier]]/g)).to.have.length(2)
+describe('signer policy bundle V2', () => {
+  it('renders partner-owned RPC and rotation policy without bridge-owned verifier fields', () => {
+    const policy = renderSignerOperatorPolicyTemplate()
+    expect(policy).to.include('[advance_l1_policy.terminal_anchor_sources]')
+    expect(policy).to.include('[advance_l2_policy.ethereum_sources]')
+    expect(policy).to.include('[advance_l2_policy.l2_sources]')
+    expect(policy).to.include('[rotation_policy]')
+    expect(policy).not.to.include('agg_verifying_key_path')
+    expect(policy).not.to.include('protocol_context_json')
+    expect(policy).not.to.include('source-set.toml')
+    expect(policy).not.to.include('verifier-registry.toml')
   })
 
-  it('rejects malformed proof triples instead of emitting a permissive registry', () => {
-    expect(() => renderVerifierRegistryToml('scroll_batch:missing-vk'))
-      .to.throw('must be proof_kind:verifier_id:vk_hash')
-    expect(() => renderVerifierRegistryToml('scroll_batch:batch-v1:not-a-hash'))
-      .to.throw('vk_hash must be 32-byte hex')
-  })
-
-  it('renders an intentionally empty mock source-set scaffold', () => {
-    const sourceSet = renderMockSourceSetToml()
-    expect(sourceSet).to.include('Mock/e2e_harness')
-    expect(sourceSet).not.to.include('[dogecoin]')
-  })
-
-  it('renders the current mock signer posture from one canonical protocol context', () => {
-    const env = envMap(renderSignerPolicyEnv(input('mock')))
-    expect(env.ATTESTATION_SIGNER_POLICY_MODE).to.equal('staging_scaffold')
-    expect(env.ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS).to.equal('true')
+  it('renders observe mode without activating real verifier material', () => {
+    const env = envMap(renderSignerPolicyEnv(input('active')))
+    expect(env.ATTESTATION_SIGNER_POLICY_MODE).to.equal('observe')
+    expect(env).not.to.have.property('ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS')
     expect(env.ATTESTATION_SIGNER_PROTOCOL_CONTEXT_JSON).to.equal('/etc/dogeos/protocol_context.json')
     expect(env.ATTESTATION_SIGNER_ARTIFACT_ALLOWED_ORIGINS).to.equal('https://proofs.bridge.example')
-    expect(env).not.to.have.property('ATTESTATION_SIGNER_BRIDGE_NAMESPACE_ID')
-    expect(env).not.to.have.property('ATTESTATION_SIGNER_PROTOCOL_INSTANCE_ID')
-    expect(env.ATTESTATION_SIGNER_TSO_URL).to.equal('https://tso.bridge.example')
+    expect(env).not.to.have.property('ATTESTATION_SIGNER_ADVANCE_L2_AGG_VERIFYING_KEY_PATH')
   })
 
-  it('renders the proof-disabled direct-sign posture without proof fetch or proof allowlists', () => {
+  it('renders all compiler-selected AdvanceL2 verifier inputs for real enforcement', () => {
+    const env = envMap(renderSignerPolicyEnv(input('active', 'real', 'enforce')))
+    expect(env.ATTESTATION_SIGNER_POLICY_MODE).to.equal('enforce')
+    expect(env).not.to.have.property('ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS')
+    expect(env.ATTESTATION_SIGNER_ADVANCE_L2_AGG_VERIFYING_KEY_PATH)
+      .to.equal('/etc/dogeos/advance-l2-agg-verifying-key.bin')
+    expect(env.ATTESTATION_SIGNER_ADVANCE_L2_BATCH_PROGRAM_COMMITMENT_HEX)
+      .to.equal(`0x${'22'.repeat(64)}`)
+    expect(env.ATTESTATION_SIGNER_L2_RANGE_AGGREGATION_PROGRAM_COMMITMENT_HEX)
+      .to.equal(`0x${'33'.repeat(64)}`)
+  })
+
+  it('fails closed when real verifier material is absent', () => {
+    expect(() => renderSignerPolicyEnv({...input('active'), generation: 'real'}))
+      .to.throw('requires compiler-selected AdvanceL2 verifier material')
+  })
+
+  it('renders disabled observe posture without artifact or verifier activation', () => {
     const env = envMap(renderSignerPolicyEnv(input('disabled')))
-    expect(env.ATTESTATION_SIGNER_POLICY_MODE).to.equal('dev_permissive')
-    expect(env.ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS).to.equal('false')
-    expect(env.ATTESTATION_SIGNER_PROTOCOL_CONTEXT_JSON).to.equal('/etc/dogeos/protocol_context.json')
+    expect(env.ATTESTATION_SIGNER_POLICY_MODE).to.equal('observe')
+    expect(env).not.to.have.property('ATTESTATION_SIGNER_ARTIFACT_ALLOWED_ORIGINS')
+    expect(env).not.to.have.property('ATTESTATION_SIGNER_ADVANCE_L2_AGG_VERIFYING_KEY_PATH')
   })
 
-  it('keeps the operator/network flow identical while production changes only the signer safety posture', () => {
-    const mock = envMap(renderSignerPolicyEnv(input('mock')))
-    const production = envMap(renderSignerPolicyEnv(input('production')))
-    const changed = Object.keys(mock).filter(key => mock[key] !== production[key]).sort()
-
-    expect(changed).to.deep.equal([
-      'ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS',
-      'ATTESTATION_SIGNER_POLICY_MODE',
-    ])
-    expect(production.ATTESTATION_SIGNER_POLICY_MODE).to.equal('production_enforce')
-    expect(production.ATTESTATION_SIGNER_ALLOW_UNIMPLEMENTED_CHECKS).to.equal('false')
-  })
-
-  it('puts exact domain/IP addresses and both parties commands in the generated handoff', () => {
-    const commands = renderPartnerCommands(input('mock'))
+  it('documents the protocol-context bootstrap boundary and enforcement readiness check', () => {
+    const commands = renderPartnerCommands(input('active', 'real', 'enforce'))
     for (const expected of [
       'https://signer.partner-a.example:4040',
-      'http://10.20.30.40:4040',
       'https://tso.bridge.example',
       'https://proofs.bridge.example/proof-topology',
-      'scrollsdk signer init',
-      'scrollsdk signer preflight',
-      'scrollsdk setup attestation-signer --threshold <T>',
-      'docker compose --project-directory docker-compose up -d',
-      'cp signer-policy-bundle/protocol_context.json docker-compose/policy/protocol_context.json',
+      'requires canonical protocol context in every mode',
+      'cp "signer-$SIGNER_ID/attestation-signer.toml" docker-compose/',
+      'advance-l2-agg-verifying-key.bin',
+      '--require-production-ready',
       'kubectl -n <namespace> run signer-reachability-partner-a',
-      "curl -fsS 'http://10.20.30.40:4040/health'",
     ]) expect(commands).to.include(expected)
-
-    expect(commands).to.include('staging_scaffold')
-    expect(commands).to.include('staging_scaffold')
-    expect(commands).not.to.include('--probe')
-  })
-
-  it('documents direct-sign acceptance without a proof GET dependency', () => {
-    const directInput = { ...input('disabled'), signerProofArtifactBaseUrl: undefined }
-    const commands = renderPartnerCommands(directInput)
-    expect(commands).to.include('Direct-sign acceptance')
-    expect(commands).not.to.include('accepted proof HTTPS GET root')
+    expect(commands).not.to.include('verifier-registry.toml')
+    expect(commands).not.to.include('source-set.toml')
   })
 })

@@ -33,6 +33,22 @@ interface PushedSecret {
   sourceFile: string
 }
 
+// Chart-local aliases (e.g. Reth's "secret-env") need not equal AWS names.
+// Only match an alias when all remote references name the same pushed secret.
+export function resolvePushedSecretName(entryName: string, secret: any, pushedNames: ReadonlySet<string>): string | undefined {
+  if (pushedNames.has(entryName)) return entryName
+
+  const data = secret?.data
+  if (!Array.isArray(data) || data.length === 0) return undefined
+
+  const names = data.map(item => {
+    const key = item?.remoteRef?.key
+    return typeof key === 'string' ? key.split('/').at(-1) : undefined
+  })
+  const name = names[0]
+  return name && names.every(value => value === name) && pushedNames.has(name) ? name : undefined
+}
+
 interface ResolvedSecretFile {
   filename?: string
   secretsDir: string
@@ -818,19 +834,8 @@ export default class SetupPushSecrets extends Command {
       const pushedSecretNames = pushedSecrets.map(secret => secret.name)
       this.jsonCtx.logSuccess('Secrets pushed successfully')
 
-      if (flags['cubesigner-only']) {
-        this.jsonCtx.logSuccess('CubeSigner secret push process completed.')
-        if (this.jsonMode) {
-          this.jsonCtx.success({
-            cubesignerOnly: true,
-            provider,
-            secretsPushed: pushedSecretNames,
-          })
-        }
-
-        return;
-      }
-
+      // CubeSigner-only narrows uploaded files, not reconciliation. Its values
+      // must follow the selected region/prefix just like other service Secrets.
       let shouldUpdateYaml: boolean
       if (this.nonInteractive) {
         shouldUpdateYaml = !flags['skip-yaml-update']
@@ -855,6 +860,7 @@ export default class SetupPushSecrets extends Command {
       // JSON output
       if (this.jsonMode) {
         this.jsonCtx.success({
+          ...(flags['cubesigner-only'] ? {cubesignerOnly: true} : {}),
           credentials: {
             prefixName: credentials.prefixName || credentials.path,
             region: credentials.secretRegion,
@@ -1105,6 +1111,7 @@ export default class SetupPushSecrets extends Command {
     }
 
     const pushedSecretsByName = new Map(pushedSecrets.map(secret => [secret.name, secret]))
+    const pushedNames = new Set(pushedSecretsByName.keys())
     const yamlFiles = this.getProductionYamlFiles()
     let matchedSecrets = 0
 
@@ -1122,13 +1129,14 @@ export default class SetupPushSecrets extends Command {
       let matchedInFile = false
       if (yamlContent.externalSecrets) {
         for (const [secretName, secret] of Object.entries(yamlContent.externalSecrets) as [string, any][]) {
-          const pushedSecret = pushedSecretsByName.get(secretName)
+          const remoteName = resolvePushedSecretName(secretName, secret, pushedNames)
+          const pushedSecret = remoteName ? pushedSecretsByName.get(remoteName) : undefined
           if (!pushedSecret) continue
 
           matchedSecrets++
           matchedInFile = true
           this.validateYamlSecretProperties(yamlFile.displayName, secretName, secret, pushedSecret)
-          updated = this.updateExternalSecretProvider(secretName, secret, provider, credentials) || updated
+          updated = this.updateExternalSecretProvider(pushedSecret.name, secret, provider, credentials) || updated
         }
       }
 

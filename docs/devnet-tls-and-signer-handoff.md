@@ -1,0 +1,90 @@
+# Devnet TLS and signer handoff checkpoint
+
+The instance is still the new Bridge documented in
+[the instance runbook](devnet-new-bridge-20260909.md). This is a partial handoff,
+not end-to-end acceptance.
+
+## TLS before signer callbacks
+
+On 2026-09-09, EC2 could reach the TSO through HTTP, but verified HTTPS failed
+with a self-signed certificate. DNS already pointed at the cluster ingress.
+Do not use `curl -k` or change signer callbacks to unverified HTTP to hide this.
+
+The CLI TLS command omitted Reth's current RPC values and did not accept an
+explicit context. The repair includes `l2-reth-rpc` and `l2-reth-rpc-public`
+and adds `--kube-context` to both issuer reads and creation. Arguments are passed
+without a shell. A regression test covers Reth HTTP/WebSocket TLS, explicit
+context retention and idempotent reruns; build and targeted lint pass.
+
+Run from the deployment directory, after domains and chart configuration:
+
+```bash
+scrollsdk setup tls --non-interactive --cluster-issuer letsencrypt-prod \
+  --kube-context arn:aws:eks:us-east-1:074120976575:cluster/dogeos-devnet-cluster --json
+make install-tso
+helm --kube-context arn:aws:eks:us-east-1:074120976575:cluster/dogeos-devnet-cluster \
+  upgrade -i l2-reth-rpc-public oci://ghcr.io/dogeos69/scroll-sdk/helm/l2-reth \
+  --version 0.1.4 -n default -f values/l2-reth-rpc-public-production.yaml
+kubectl --context arn:aws:eks:us-east-1:074120976575:cluster/dogeos-devnet-cluster \
+  -n default get certificates
+ssh ec2-dev 'curl -fsS --max-time 10 https://tso.devnet.doge.xyz/health'
+curl -fsS --max-time 15 https://rpc.devnet.doge.xyz \
+  -H 'content-type: application/json' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'
+```
+
+Verified TSO revision 2 and public RPC revision 3. Certificates
+`tso-service-tls`, `l2-reth-rpc-public-tls` and
+`l2-reth-rpc-public-websocket-tls` are Ready. EC2 verified TSO HTTPS returned 200;
+public HTTPS RPC returned `0x35fc2` (221122). No DNS, ClusterIssuer or unrelated
+running service was changed by this TLS rollout. A separate verified-TLS
+WebSocket connection to `wss://ws.rpc.devnet.doge.xyz` subscribed to `newHeads`
+and received block `0x407`; this checks more than certificate readiness.
+
+The command also updates other existing local values, including legacy files.
+That is configuration generation only: do not install retired services or
+Blockscout just because the command lists them as updated. Only the two releases
+above were applied for TLS at this checkpoint.
+
+Separately, `make install-fee-oracle` (revision 2) and
+`make install-l1-interface` (revision 3) reconciled their previously generated
+PublicNode Sepolia RPC settings. Both replacement Pods reached Ready with zero
+restarts. L1 retained `l1-interface-data-devnet-20260909` and the same canonical
+genesis. Live ConfigMaps now agree with the configured DA RPC. This is a normal
+same-instance upgrade, not a cold reset.
+
+## Signer cutover and remaining policy prerequisite
+
+**Current runtime checkpoint:** [CubeSigner transport-only rollout](cubesigner-transport-runtime.md)
+has now completed. Session/processing readiness and WP re-registration passed;
+actual signing and settlement remain to be tested. The local-only edit below
+describes the preceding step, not the current deployed state.
+
+**Later operator decision (2026-09-09):** the user explicitly selected
+`transport_only` for the local CubeSigner production values. Set env
+`DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE=transport_only`; keep
+`SIGNATURE_MODE=ecdsa` and existing key/session bindings. This edit is local,
+not yet a Helm rollout. It supersedes the production-evidence prerequisite
+below for this devnet transport-only deployment, not for production acceptance.
+Transport-only still enforces service PSBT/session checks and CubeSigner-side
+key authorization, and reports `production_ready=false`. Fresh values generation
+defaults to production_verifier_key_policy; review/reapply the explicit local
+override if replacing values. No SDK or CLI default was changed.
+
+The operator subsequently authorized EC2 cutover. Three new attestation signers
+now run beta.3e with the same KMS keys, new protocol context and fresh volumes.
+Old signers and Worker are stopped with backups and original data retained.
+See [the executed cutover procedure](ec2-signer-cutover-20260909.md) for commands,
+the Shadowfork proxy dependency, successful TSO registration and limitations.
+
+CubeSigner production values select `production_verifier_key_policy` but lack
+reviewed verifier/program identity digests and proof-resolver authority, along
+with the completed policy evidence fields. Obtain the actual policy deployment
+manifest/evidence from its owner. A live-evidence report path/digest is optional
+in the service schema; the verifier/program/policy bindings are not optional.
+Do not invent digests, treat a health response as proof verification, replace
+ECDSA with shadowfork sentinels, or downgrade to transport-only to pass readiness.
+
+Active proof topology and end-to-end withdrawals remain unverified. These
+dependencies do not invalidate the separately verified DA, fee-oracle, WP
+ingestion and idle-PC startup results.

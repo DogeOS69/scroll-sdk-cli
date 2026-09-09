@@ -1,6 +1,9 @@
 import { expect } from 'chai';
 
-import { resolveDogecoinKubernetesEndpoints } from '../../src/utils/kubernetes-endpoints.js';
+import {
+  resolveDogecoinKubernetesEndpoints,
+  resolveDogecoinServiceRpcUrl,
+} from '../../src/utils/kubernetes-endpoints.js';
 
 describe('kubernetes-endpoints', () => {
   describe('resolveDogecoinKubernetesEndpoints', () => {
@@ -14,7 +17,8 @@ describe('kubernetes-endpoints', () => {
       expect(resolveDogecoinKubernetesEndpoints({ network: 'testnet' })).to.include({
         p2pPort: 44_556,
         rpcPort: 44_555,
-        rpcUrl: 'http://dogecoin:44555',
+        rpcUrl: 'http://dogecoin-testnet:44555',
+        serviceName: 'dogecoin-testnet',
       });
 
       expect(resolveDogecoinKubernetesEndpoints({ network: 'regtest' })).to.include({
@@ -47,4 +51,23 @@ describe('kubernetes-endpoints', () => {
       })).to.throw('kubernetes.rpcUrl must be a valid http(s) URL')
     })
   });
+
+  describe('resolveDogecoinServiceRpcUrl', () => {
+    it('uses the Kubernetes Service when the operator RPC URL contains an API key', () => {
+      expect(resolveDogecoinServiceRpcUrl({
+        kubernetes: {
+          rpcPort: 44_556,
+          rpcUrl: 'https://shadowfork.example.com/rpc?api_key=test',
+          serviceName: 'dogecoin-testnet',
+        },
+        network: 'testnet',
+      })).to.equal('http://dogecoin-testnet:44556')
+    })
+
+    it('uses the network-specific default service port', () => {
+      expect(resolveDogecoinServiceRpcUrl({network: 'mainnet'})).to.equal('http://dogecoin:22555')
+      expect(resolveDogecoinServiceRpcUrl({network: 'testnet'})).to.equal('http://dogecoin-testnet:44555')
+      expect(resolveDogecoinServiceRpcUrl({network: 'regtest'})).to.equal('http://dogecoin:18332')
+    })
+  })
 });

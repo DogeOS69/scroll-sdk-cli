@@ -1,624 +1,436 @@
-# DogeOS Proof System Operator Runbook
+# DogeOS proof operator runbook
 
-This is the single official end-to-end runbook for the DogeOS bridge operator.
-It covers proof configuration, partner attestation-signer handoff, Kubernetes
-services, the external prover worker, and lifecycle acceptance for the
-deployment-wide `disabled`, `mock`, and `production` proof postures. Production
-configuration includes a generated, release-pinned external GPU worker bundle.
+This is the operator-facing procedure for preparing and deploying DogeOS proof
+services. It follows dogeos-core PR #937's two-switch model, updated for PR #1136
+(coordinator-internal mock proving and eager materialization). The generated
+Withdrawal Processor, Proof Coordinator, Worker, submitter, and signer files are
+compiler outputs; do not edit them by hand.
 
-This document is not for partner signer operators. Send partners the
-`scroll-sdk/partner-kit/attestation-signer/` directory and, after bridge
-genesis, the generated `signer-policy-bundle/`. For exact CLI flags, use
-`scrollsdk <command> --help` or the generated command reference in the root
-README instead of copying flag lists into this runbook.
+## 1. The three operator fields
 
-## 1. Deployment boundary
+The normal source of truth is `.data/doge-config.toml`:
 
-| Component | Operator | Runtime |
-|---|---|---|
-| `attestation-signer` | each partner, or us following the same external-operator procedure | partner-owned Docker Compose host |
-| `tso-service` | bridge operator | Kubernetes |
-| `withdrawal-processor` | bridge operator | Kubernetes |
-| `proof-coordinator` | bridge operator | Kubernetes |
-| `prover-worker` | bridge operator / proving operator | external GPU host in production; ordinary Linux is sufficient in mock |
-| L2 nodes, `l1-interface`, fee oracle, CubeSigner signer, supporting services | bridge operator | Kubernetes |
+```toml
+[proof_topology]
+mode = "disabled"       # disabled | active
+generation = "mock"     # mock | real
+enforcement = "observe" # observe | enforce
+observeRealProofDeadlineMs = 1800000 # Explicit example: 30 minutes, no implicit default
+```
 
-There is no attestation-signer Helm chart. The bridge operator never receives
-a partner's private key and never deploys the partner's signer. The exchange is
-artifact-based:
+The fields are independent:
 
-1. the partner sends `descriptor.json` before bridge genesis;
-2. the bridge operator sends `signer-policy-bundle/` after bridge genesis.
+| Field | Meaning |
+|---|---|
+| `mode` | Whether proof work is active; disabled keeps an idle Coordinator. |
+| `generation` | `mock`: Coordinator produces proofs internally; `real`: production Workers produce proofs. |
+| `enforcement` | Whether failed, missing, or mock proof outcomes are observed and allowed, or rejected. |
 
-## 2. Deployment-wide proof modes
+Use these postures in order:
 
-One declarative proof intent controls the complete generated proof posture:
-`proofSystem.mode: disabled|mock|production`. A DeploymentSpec is optional.
-When one exists it is authoritative; otherwise the CLI reads
-`[proofSystem]` from `.data/doge-config.toml`. If neither file declares proof
-intent, proof defaults to `disabled`. `setup export-signer-policy` reads the
-same selected intent, so partners never pass a separate proving-mode flag.
-
-| Property | `disabled` | `mock` | `production` |
+| Stage | `mode` | `generation` | `enforcement` |
 |---|---|---|---|
-| Withdrawal proof runtime | off | on | on |
-| Proof coordinator / worker | not required | complete real lifecycle | complete release lifecycle |
-| Attestation signer | direct-sign | proof-backed validation | fail-closed proof enforcement |
-| Signer policy | `dev_permissive`, proof fetch disabled | audited `staging_scaffold`, HTTP proof fetch | `production_enforce`, HTTP proof fetch |
-| Proof bytes | none | deterministic, non-cryptographic | release prover output |
-| Worker host | none | ordinary Linux allowed | GPU/release-specific host |
-| Proof release files | none | synthesized mock manifests | required signed/reviewed release artifacts |
+| Proof services off | `disabled` | `mock` | `observe` |
+| Exercise the complete topology cheaply | `active` | `mock` | `observe` |
+| Generate and validate real proofs | `active` | `real` | `observe` |
+| Require real verified proofs | `active` | `real` | `enforce` |
 
-Mock is a lifecycle and configuration test lane. Never enable it on a bridge
-that carries assets of value.
+Never use `generation = "mock"` with `enforcement = "enforce"`. Mock and real
+proof statement mode is derived from **enforcement**, not generation. Changing
+observe to enforce changes statement identities and requires a fresh/regenerated
+proof store; do not migrate old proof rows into the new statement namespace.
 
-There is no stable “mock topology staged but proof disabled” state. Use
-`disabled` until the deployment is allowed to run proof work, then change the
-selected proof intent to `mode = "mock"` and rerun `setup prep-charts`. That
-transition atomically enables the proof runtime,
-coordinator contract, mock worker bundle, and signer-policy posture.
+The source deadline is required even for mock and disabled modes. CLI emits
+`[proof_topology].observe_real_proof_deadline_ms`, and the compiler emits
+`[verifier].observe_real_proof_deadline_ms`. Under real/observe a deadline,
+permanent prover failure or verification failure can trigger internal mock
+fallback; enforce continues to reject mock material.
 
-## 3. Standard deployment layout
+For the preserve-existing-bridge upgrade and its release-material prerequisite,
+see [Next-devnet upgrade without bridge reinitialization](next-devnet-preserve-bridge.md).
 
-Run commands from one deployment root. Normal operation should not pass a list
-of file paths. Run `setup prep-charts` with the deployment root as the current
-working directory.
+`observe` is a staging posture and Attestation Signer refuses it on Dogecoin
+mainnet. A mainnet deployment must not activate proof-conditioned signing until
+real generation is healthy and all enforcement/policy surfaces use `enforce`.
+
+Changing a switch means editing the one high-level value, rerunning
+`scrollsdk setup prep-charts`, reviewing the generated diff, and applying the
+normal Helm deployment. It does not mean editing native service files.
+
+In disabled mode Kubernetes retains one idle Coordinator process, but the native
+configuration has no prover HTTP listener. CLI generation therefore uses exec
+process-presence probes (`kill -0 1`) for this mode, not `/healthz` or `/readyz`.
+Idle Ready means only that the daemon is alive; it does not certify proof work,
+gateway health or Worker readiness. Active generation restores the prover-port
+HTTP probes. Both transitions explicitly null the previous probe handler because
+Helm otherwise merges it with chart defaults. Do not enable a fake prover gateway
+or remove active HTTP checks to make an idle deployment appear functional.
+
+## 2. Ownership boundary
+
+| Component | Responsibility |
+|---|---|
+| `scroll-zkvm-prover` | Build Chunk/Batch `.vmexe`, OpenVM configs, and aggregate VK. |
+| dogeos-core identity probe | Derive Chunk, Batch, and recursive program identities. |
+| dogeos-core Bridge baker | Bake deployment-bound Bridge/L2-range artifacts from `protocol_context.json`. |
+| `scroll-sdk-cli` | Prompt for and import those tools' outputs, parse allow-listed evidence, store local material facts, and prepare compiler inputs. |
+| `dogeos-proof-topology` | Strictly validate the selected source/context and render service configuration. |
+| Helm/Kubernetes operator | Apply generated values, drain or move Workers, and verify readiness. |
+| Partner operator | Deploy and operate each Attestation Signer and apply the exported observe/enforce policy. |
+
+`scroll-sdk-cli` does not implement VK or program-commitment algorithms in
+TypeScript. It treats the Rust/OpenVM outputs as inputs and lets the dogeos-core
+compiler perform final validation.
+
+## 3. Files in a deployment
 
 ```text
 deployment/
-├── deployment-spec.yaml                 # optional; never required for proof
-├── config.toml
 ├── .data/
 │   ├── doge-config.toml
-│   ├── proof-aws.json                    # stable AWS resource facts; active AWS modes
-│   ├── proof-deployment.json             # generated deployment contract
-│   ├── setup_defaults.toml
-│   ├── GenerateBridgeInfo.toml
-│   ├── protocol_context.json
-│   └── protocol_context.protocol_id
-├── descriptors/                         # partner descriptor.json files
-├── values/
-│   ├── proof-coordinator-production.yaml
-│   ├── tso-service-production.yaml
-│   └── withdrawal-processor-production.yaml
-├── withdrawal-processor/
-│   └── WithdrawalProcessor.toml
-├── proof-coordinator/
-│   └── ProofCoordinator.toml
-├── proof-artifacts/                     # proof inputs and generated JSON
-│   ├── release.json                     # production only
-│   ├── worker-release.json              # production image + artifact hashes
-│   ├── manifests/
-│   │   ├── scroll-chunk.json            # production only
-│   │   ├── scroll-batch.json            # production only
-│   │   ├── advance-l2-aggregation.json  # production only
-│   │   ├── bridge-transition.json       # production only
-│   │   └── statement-namespace.json     # generated; passed with --set-file
-│   ├── chunk/                            # production worker program
-│   ├── batch/                            # production worker program
-│   ├── bridge/                           # bridge + standalone aggregation programs
-│   └── mock-manifests/                   # generated in mock mode
-│       ├── scroll-chunk-topology-program.json
-│       ├── scroll-batch-topology-program.json
-│       ├── advance-l2-aggregation-topology-program.json
-│       └── bridge-topology-program.json
-├── configs/
-│   └── source-set.toml                  # production signer policy only
-├── prover-worker-mock/                  # generated in mock mode
-│   └── docker-compose/
-├── prover-worker-production/            # generated in production mode
-│   └── docker-compose/
-└── signer-policy-bundle/                # generated after genesis
-    ├── PARTNER-COMMANDS.md
-    ├── signer-policy.env
-    ├── signer-policy.json
-    ├── verifier-registry.toml
-    └── source-set.toml
+│   ├── genesis.json
+│   ├── proof-aws.json
+│   ├── proof-materials-v1.json
+│   ├── proof-materials/
+│   │   ├── software/
+│   │   │   ├── chunk/app.vmexe
+│   │   │   ├── chunk/openvm.toml
+│   │   │   ├── batch/app.vmexe
+│   │   │   ├── batch/openvm.toml
+│   │   │   └── verifier/root_verifier_vk
+│   │   └── bridge/
+│   │       ├── bridge-state.vmexe
+│   │       ├── openvm.toml
+│   │       ├── bridge-artifact-manifest.json
+│   │       ├── worker-identity-bundle.json
+│   │       ├── batch-aggregation.vmexe
+│   │       └── batch-aggregation-openvm.toml
+│   └── generated/proof-topology/
+│       ├── bundle-manifest-v1.json
+│       ├── resolved-v2.json
+│       ├── withdrawal-processor.toml
+│       ├── proof-coordinator.toml
+│       ├── prover-worker-v1.json
+│       └── eth-da-submitter.toml
+└── values/
 ```
 
-`prep-charts` may scaffold a missing `ProofCoordinator.toml`; after creation,
-the hand-maintained materializer sections remain operator-owned and are never
-silently replaced. Production `configs/source-set.toml` must contain real RPC
-sources reachable from partner signer networks. The CLI cannot safely invent
-production RPC quorum policy.
+`.data/proof-materials-v1.json` is local deployment state owned by
+`scroll-sdk-cli`. It is not a dogeos-core protocol object or a publication
+authority. It records exactly which source revisions, artifacts, identities,
+and deployment-bound Bridge bake were used.
 
-`withdrawal-processor/WithdrawalProcessor.toml` is different: it is a required
-native application-config template supplied by
-`scroll-sdk/examples/withdrawal-processor/WithdrawalProcessor.toml`. Copy the
-scroll-sdk examples layout into a new deployment before running the CLI.
-`prep-charts` does not create this file or embed its TOML in a values YAML
-document; it only updates marked blocks in the existing native file. Helm
-receives the file through `--set-file`.
+## 4. Normal setup
 
-## 4. Address contract
+### Step 1: establish the shared DA/proof object namespace
 
-Agree all cross-operator addresses before a partner creates its descriptor.
+`eth-da-submitter` has one `[s3]` client. Raw EIP-4844 blobs and proof-system
+objects therefore share the canonical bucket, region, and key prefix recorded
+under `[ethereumDa.blobArchive.s3]` in `.data/doge-config.toml`; logical object
+keys separate raw blobs, segmentation sidecars, Worker inputs, and proofs.
 
-| Address | Chosen by | Must be reachable from | Recorded in |
-|---|---|---|---|
-| signer ID | bridge + signer operator | n/a | `signer init --id`, descriptor |
-| signer base URL | signer operator | TSO network | descriptor, WP `tsoSigners` |
-| TSO callback base URL | bridge operator | signer network | policy bundle |
-| proof-object GET root | bridge operator | worker and signer networks | WP proof config and policy bundle |
-| proof-coordinator prover API | bridge operator | external worker host | worker bundle/config |
-
-Production normally uses TLS domains. An isolated mock/VPN exercise may use a
-private address such as `http://10.20.30.40:4040`. Never exchange `localhost`,
-a Docker-only hostname, or a Kubernetes-only service name as a cross-operator
-endpoint.
-
-## 5. Phase A — collect partner descriptors before genesis
-
-Send the partner the complete `scroll-sdk/partner-kit/attestation-signer/`
-directory. The partner follows its README to:
-
-1. initialize a local WIF or AWS KMS signer;
-2. start the Docker Compose service;
-3. verify `/health` and its public key;
-4. run `scrollsdk signer preflight`;
-5. send `signer-<id>/descriptor.json` to the bridge operator.
-
-Place all descriptors under the standard `descriptors/` directory, then import
-and probe them before bridge genesis:
+Configure the archive first, for example with `setup eth-da-submitter`, and
+then run:
 
 ```bash
-scrollsdk setup attestation-signer \
-  --threshold <T> \
-  --active-signer-ids <signer-a,signer-b,signer-c>
+scrollsdk setup proof-aws-init
 ```
 
-The command validates descriptor schema, network, endpoint, public-key curve
-membership, and global uniqueness of signer IDs, keys, and endpoints. The
-partner's preceding `scrollsdk signer preflight` is the public-key/runtime
-probe. After Kubernetes deployment, the bridge operator separately verifies
-each `/health` endpoint from the TSO namespace; descriptor import itself makes
-no network calls.
+This reuses the configured DA bucket/prefix, creates or reconciles the proof
+IAM roles and token secret, configures the selected external read transport,
+and writes `.data/proof-aws.json`. It never invents a second proof-only bucket.
+Choose the public-read mode according to who owns the bucket-level policy:
 
-The imported public keys are written to `.data/setup_defaults.toml` and enter
-the bridge redeem script permanently at genesis. A later descriptor re-import
-is not key rotation; rotation is an on-chain coordinated ceremony.
+- `existing-public-s3` uses the regional S3 endpoint and preserves the existing
+  bucket policy and Public Access Block settings. Use it for a shared bucket
+  whose anonymous `GetObject` policy is already managed by the operator, such
+  as a testnet DA archive. The CLI still manages the selected prefix's IRSA
+  roles, optional EKS S3 Gateway endpoint statement, and proof token secret.
+- `direct-s3` makes the CLI manage anonymous reads for the required external
+  proof paths. Use it only where the CLI is allowed to manage the bucket-wide
+  Public Access Block posture. It rejects an unmanaged public `GetObject`
+  statement that overlaps the selected prefix before creating a VPC endpoint
+  or changing IAM/secrets.
+- `existing-gateway` keeps S3 private and records an operator-managed
+  credential-free HTTPS gateway.
 
-## 6. Generate bridge identity
+`existing-public-s3` does not narrow or otherwise endorse a pre-existing broad
+policy such as `arn:aws:s3:::bucket/*`; it records that policy as
+operator-managed and unverified. Review that policy independently.
+If the bucket is in a different AWS region from EKS, the command keeps the
+EKS/Secrets region separate from the artifact region and skips the regional S3
+Gateway endpoint; cross-region access uses the normal S3 endpoint or an
+operator-managed gateway. It does not prepare proof programs.
 
-Run the normal bridge initialization after descriptor import:
+When `existing-gateway` is selected, the bucket policy and S3 Public Access
+Block settings remain entirely operator-managed: `proof-aws-init` does not
+change either one. This matters when the shared archive bucket already serves
+raw DA objects publicly. The operator must verify that the supplied HTTPS
+endpoint permits the required exact-key reads; selecting this mode is not
+evidence that the route is reachable or that the bucket is private.
+
+The resulting `dogeos/proof-aws/v4` document records these independently as
+`artifactStore.region`, `kubernetes.awsRegion`, and `secret.region`. The latter
+two must match; the artifact region may differ.
+
+### Step 2: prepare proof materials and identities
 
 ```bash
-scrollsdk setup bridge-init -N --json --step all --seed <stable-seed>
+scrollsdk setup proof-materials --generation mock
 ```
 
-Keep the same seed when retrying a funding-gated setup. The required downstream
-identity outputs are:
+For disabled/mock operation, the interactive command extracts the canonical
+identity JSON shipped by the selected digest-pinned mock Worker image. Mock
+proofs are recognized by their hash-committed proof-kind tag,
+and the coordinator selects the dev verifier when aggregate-VK material is
+absent. The mock path does not ask for `real-identity.env`, real-proving
+`.vmexe`, aggregate VK file,
+materializers, Bridge bake, or production Worker image. The topology compiler
+defaults to the current identity-file-capable compiler release. The mock Worker
+defaults to the matching current rehearsal release. Generated Proof Coordinator
+values must be pinned to the rollout lineage listed in the operator release
+note. The CLI
+resolves and stores immutable OCI digests rather than retaining mutable tags in
+the Worker contract.
 
-```text
-.data/GenerateBridgeInfo.toml
-.data/protocol_context.json
-.data/protocol_context.protocol_id
-```
+The command above intentionally selects development exact-mock materialization:
+each DA batch is represented by one batch-wide chunk. It is useful for a cheap
+topology smoke test, but it does not exercise the DA-owned segmentation sidecar
+or provide production-shaped materializer timings.
 
-CubeSigner may return a 65-byte uncompressed SEC1 TEE public key. The CLI keeps
-that original value as `public_key` for reconciliation and records
-`public_key_compressed` as the DogeOS canonical identity. `setup_defaults.toml`
-uses the compressed form for new deployments. Legacy uncompressed inputs are
-accepted and canonicalized; the mathematical key, redeem script, bridge hash,
-and protocol ID do not change.
+To run real segmentation and the real Chunk/Batch subprocess materializers
+while keeping proof generation mock and enforcement in observe, import the
+release identity probe as part of the mock receipt:
 
-## 7. Prepare Kubernetes and proof control-plane resources
-
-Generate the base secrets first:
+For published native Scroll identity JSON, use the alternative
+`--scroll-identity-evidence /build/proof-scroll-identities-v1.json` instead of
+`--identity-env`. This mock-only path takes real Chunk/Batch identities from
+native output and Aggregation from a matching compiled Worker export, while
+keeping Bridge identity explicitly mock. It does **not** require a real Bridge
+guest bake or a new on-chain Bridge. See [image tools and CPU fallback](proof-image-tools.md)
+for the complete procedure, including the beta.4e compile-time Batch injection.
 
 ```bash
-scrollsdk setup gen-secrets -N --json
+scrollsdk setup proof-materials \
+  --generation mock \
+  --identity-env /secure/build/real-identity.env \
+  --worker-identity-bundle /secure/build/worker-identity-bundle.json \
+  --aggregate-verifying-key /secure/build/verifier/root_verifier_vk \
+  --chunk-materializer /secure/build/materialize-chunk-oneshot \
+  --batch-materializer /secure/build/scroll-runtime-materializer
 ```
 
-For a mock or production AWS topology, provision the S3/IRSA proof bucket
-roles, service accounts, and two distinct bearer tokens before generating
-charts:
+`setup doge-config --proof-topology` then selects
+`withdrawal_mock_prover_real_materialize`. The compiled bundle enables all
+three ends of the contract: the submitter publishes the segmentation sidecar,
+the coordinator reads and validates it, and Withdrawal Processor requests the
+materialized segmentation before creating per-chunk work. Proof Coordinator
+produces mock proofs internally; no mock Worker is rendered or deployed.
+The identity bundle must come from the same dogeos-core bake as the env values;
+the CLI rejects the all-zero `batch_guest` shipped by the ordinary mock image.
+The aggregate VK and two materializer binaries are also required by the
+dogeos-core selected-profile preflight even though proof generation remains
+mock. Only the proving `.vmexe` files and production Worker image stay absent.
+
+Prepare the larger real-only input set later with:
 
 ```bash
-scrollsdk setup proof-aws-init \
-  --aws-region <region> \
-  --eks-cluster <cluster> \
-  --network-alias <network-alias> \
-  --namespace <namespace>
+scrollsdk setup proof-materials --generation real
 ```
 
-This step is idempotent and writes only non-secret resource facts to
-`.data/proof-aws.json`; it neither reads nor modifies `values/`. The
-coordinator/WP control-plane token and the external prover-worker token are
-separate credentials. The default
-`--artifact-read-mode external` deliberately leaves credential-free GET under
-operator control and reports it as unverified; a successful command means the
-private bucket and IRSA path are ready, not that an external worker can read an
-artifact.
+The command must finish with a strict `.data/proof-materials-v1.json`. The mock
+receipt binds the copied Worker identity file by path, size, SHA-256, and the
+digest-pinned image from which it was extracted. The topology compiler, not the
+deployment CLI, validates and derives the recursive commitment fields.
+The real receipt additionally rejects artifact hash drift, path escape/symlink
+input, and Bridge material that does not match `protocol_context.json`.
 
-To let workers/signers in audited private subnets read through an existing S3
-Gateway VPC endpoint, explicitly provide the endpoint and every target-network
-route table:
+See [Proof material preparation](proof-materials.md) for the exact inputs.
+
+### Step 3: initialize the high-level proof topology
 
 ```bash
-scrollsdk setup proof-aws-init \
-  --aws-region <region> \
-  --eks-cluster <cluster> \
-  --network-alias <network-alias> \
-  --namespace <namespace> \
-  --artifact-read-mode vpc-endpoint \
-  --artifact-read-vpc-endpoint-id vpce-... \
-  --artifact-read-route-table-id rtb-0123456789abcdef0 \
-  --artifact-read-route-table-id rtb-0fedcba9876543210
+scrollsdk setup doge-config --proof-topology
 ```
 
-The CLI verifies an available regional S3 Gateway endpoint, associates only
-the explicitly supplied route tables, and merges a fixed-Sid bucket-policy
-statement restricted by both `aws:SourceVpce` and `<key-prefix>/*`. It preserves
-unrelated bucket-policy statements and keeps all Public Access Block settings.
-Both IRSA policies are also restricted to the key prefix, including an
-`s3:prefix` condition for `ListBucket`. This is still `configured-unverified`:
-from every worker/signer network, GET one exact existing artifact key and
-require HTTP 200 before activation.
-
-Disabled mode skips `proof-aws-init`. Next select the proof posture and run
-`prep-charts` as described in section 8. `prep-charts` fails if the native
-WithdrawalProcessor template is absent. If a legacy values file still contains
-`configMaps.config.data.WithdrawalProcessor.toml`, the command removes that
-inline copy only after confirming the native template exists; it never uses the
-inline content to create the native file.
-
-## 8. Select and generate the proof posture
-
-The proof-object base URL must be a stable credential-free HTTP(S) GET root.
-The worker uses it to read inputs and partner signers use concrete object URLs
-carried in signing requests to fetch accepted proof artifacts.
-
-For an AWS-native virtual-hosted or path-style S3 URL, `prep-charts` requires
-the URL path to include the configured artifact-store `key_prefix`; passing
-only the bucket root fails before any generated file is written. A custom HTTPS
-gateway may intentionally map its own root to the prefix, so it remains
-supported but emits a warning requiring an exact-key preflight from every
-worker/signer network.
-
-Declare only the proof intent. With DeploymentSpec:
-
-```yaml
-proofSystem:
-  mode: mock # disabled | mock | production
-  artifactReadBaseUrl: https://proofs.example.com/<deployment>
-  # release: proof-releases/v2026.07.1 # optional; default is proof-artifacts
-```
-
-Without DeploymentSpec, use the equivalent legacy-compatible TOML:
+The wizard reads `.data/proof-aws.json` and `.data/proof-materials-v1.json`,
+asks for the future real Worker placement, the deployment backend for
+adapter-managed Workers, and the Worker-visible Proof Coordinator URL. It
+writes the staged active profile and defaults to:
 
 ```toml
-[proofSystem]
-mode = "mock"
-artifactReadBaseUrl = "https://proofs.example.com/<deployment>"
-# release = "proof-releases/v2026.07.1"
+mode = "disabled"
+generation = "mock"
+enforcement = "observe"
 ```
 
-Do not maintain both sources independently. If DeploymentSpec and doge config
-both contain proof intent, the CLI rejects disagreement instead of choosing
-whichever command happened to run last.
+It runs compiler preflight before replacing the existing topology.
 
-Disabled mode may omit the entire block. It requires no artifact URL, release,
-coordinator, proof storage, or worker. Mock and production require
-`artifactReadBaseUrl`; the CLI gets the coordinator host and L2 chain ID from
-the existing `config.toml`.
+The independent `deployment.workerDeploymentBackend` selects Docker Compose or
+Kubernetes for **real** Workers only. `active.workerLaunch` remains the staged
+real Worker placement. Under PR #1136 mock produces no Worker contract regardless
+of these placement choices. The mock image may still be used as a legacy
+identity-export input; it is not a service to deploy.
 
-For a production release, the release-producing pipeline stages this
-conventional worker layout:
-
-```text
-proof-artifacts/
-├── chunk/app.vmexe
-├── chunk/openvm.toml
-├── batch/app.vmexe
-├── batch/openvm.toml
-└── bridge/
-    ├── bridge-state.vmexe
-    ├── openvm.toml
-    ├── bridge-artifact-manifest.json
-    ├── protocol_context.json
-    ├── batch-aggregation.vmexe
-    └── batch-aggregation-openvm.toml
-```
-
-The release producer runs one command to bind those files to the exact
-all-family image:
+### Step 4: generate charts and native configuration
 
 ```bash
-scrollsdk setup proof-worker-release \
-  --release-root proof-artifacts \
-  --image dogeos69/prover-worker-cuda@sha256:<64-lowercase-hex>
+scrollsdk setup prep-charts
 ```
 
-This writes `worker-release.json` with all ten content hashes. Deployment users
-do not repeat the image, artifact paths, hashes, bridge genesis context, or L2
-chain ID.
+This invokes the pinned dogeos-core compiler, validates its complete bundle,
+installs it atomically, and projects the selected WP/PC/Worker/submitter values.
+The compiler-rendered native TOML and generated text manifests are embedded in
+those final values, so ordinary Helm commands need no dynamic `--set-file`
+arguments or scrollsdk deployment helper. It does not contact Kubernetes.
 
-Now run the normal chart command for every mode:
+The same pass resolves the eth-da-submitter `L1_COMMIT_SENDER` and writes it
+into Withdrawal Processor's `ethereum_da.inbox_worker.expected_batchers`
+allowlist. Operators must not maintain a second sender address in WP. For KMS,
+generation fails if the account projection and signer-bound expected address
+have drifted, preventing the submitter and WP from selecting different DA
+publisher authorities.
 
-```bash
-scrollsdk setup prep-charts -N --json
-```
+For a real-materialize profile without a pre-populated proof-material PVC, the
+generated PC values stage the two materializer executables at the exact
+compiler runtime paths. They are not embedded in a ConfigMap: the init
+container copies them from the selected PC image and verifies both against the
+SHA-256 values of the files imported by `setup proof-materials`. A mismatched
+PC image therefore fails before the coordinator starts. When generation is
+`real`, the generated WP and PC values additionally stage the binary root VK
+through a release-scoped Kubernetes Secret. Mock generation deliberately does
+not mount the root VK, because its absence under observe enforcement selects
+the development verifier that accepts mock proof envelopes. The adapter also
+removes only the compiler-rendered executable real-verifier blocks in this
+mock case; the canonical verifier identities and real materializer sections
+remain intact. Without that projection, beta.3 PC selects `real_scroll` from
+the block's presence and rejects the mock envelope before observe-mode policy
+can use it. When
+`resourcesPersistentVolumeClaim` is configured, that operator-populated,
+read-only release PVC remains authoritative instead.
 
-`prep-charts` first performs its existing ordinary WP/TSO/chart work, then
-reconciles only the proof-owned overlay. It does not replace TSO or WP
-non-proof parameters. The proof reconciliation:
+For beta.3 and later real-materialize profiles, the deployment context includes
+`proof_coordinator.l2_genesis_json = "/app/genesis/genesis.json"`. The generated
+Proof Coordinator values mount `genesis-config/genesis.json` read-only at that
+same path, including in the initially disabled posture. The CLI owns this
+deployment convention: operators do not copy genesis contents into the native
+Proof Coordinator TOML or change the path in a post-generation environment
+overlay.
 
-- synthesizes all four mock manifests, or validates all four production program
-  manifests plus release identities and aggregate-verifying-key checksums;
-- updates the marked proof blocks in native WP/coordinator TOML;
-- generates the matching credential-pending mock or production Compose bundle;
-- removes inactive CLI-generated worker bundle directories, including any
-  previously hydrated token, when the selected mode changes;
-- writes `.data/proof-deployment.json`, including integrity metadata, intent
-  source, mode, and worker bundle ID.
+The post-#937 Worker handoff bundle has its own `bundleId`, derived from the
+Worker contract, immutable image, Compose document, protocol context,
+materials, and required resources. It does not contain or consume the retired
+`topologyDigest`, `expected_topology_digest`, or
+`DOGEOS_PROOF_TOPOLOGY_DIGEST` fields. Their presence is treated as evidence of
+a stale pre-#937 bundle and fails generation or validation.
 
-The deployment contract uses a risk-based integrity boundary:
+### Step 5: export the partner signer policy bundle
 
-- Proof-owned blocks inside WP and coordinator TOML are required to match.
-  Changes elsewhere in those shared operational files produce a warning.
-- Proof manifests and other proof-critical `--set-file` inputs retain
-  whole-file integrity and block installation when changed.
-- Helm values retain an observed checksum for diagnostics, but ordinary values
-  drift produces a warning because WP and TSO also contain non-proof settings.
-- The contract generation ID, proof mode/posture, required files, and worker
-  bundle verification remain mandatory.
+After the final `prep-charts` pass, regenerate the complete bundle distributed
+to every external Attestation Signer operator:
 
-This allows operators to tune unrelated WP/TSO settings without regenerating
-proof artifacts. Use `scrollsdk setup proof-config-check --strict` in an
-immutable-artifact CI pipeline when any values or shared-config drift should
-also fail. Contracts generated by the removed `setup proof-config` command are
-still readable: drift in legacy WP/coordinator native config is advisory until
-the next `setup prep-charts` writes a schema-v2 managed-block digest; legacy
-proof manifests remain strict.
-
-Missing worker ingress, L2 chain ID, or production `worker-release.json` is
-rejected before proof-owned files are mutated. The complete command now runs in
-a copy-on-write generation workspace: ordinary chart changes, native TOML,
-proof manifests, worker bundles, and the deployment contract are committed
-together only after every step succeeds. On failure the staging workspace is
-discarded and the deployment directory is unchanged. JSON output includes the
-committed `generation.changedFiles` list.
-
-The mode-agnostic Helm adapter consumes only this contract. Makefiles must not
-select manifests or reinterpret disabled/mock/production state.
-
-`prep-charts` reads `.data/proof-aws.json` when it exists and projects its
-bucket, IRSA roles, service accounts, secret name, and region into the final
-proof values before validation. It never treats an existing generated values
-field as the source for those facts. With unchanged intent, resource facts,
-templates, and release inputs, rerunning `prep-charts` is byte-idempotent and
-reports an empty `generation.changedFiles` list.
-
-For mock/production without a DeploymentSpec, `.data/proof-aws.json` is
-required; `prep-charts` does not silently reuse infrastructure coordinates from
-an earlier values output. A non-AWS `ambient` deployment declares its
-`proofCoordinator` infrastructure explicitly in DeploymentSpec instead.
-
-## 9. Start the external prover worker
-
-First hydrate the generated bundle from the deployment root. The token may be
-supplied by `DOGEOS_PROVER_WORKER_TOKEN`; otherwise the command reads the
-existing proof secret from AWS Secrets Manager:
-
-```bash
-scrollsdk setup proof-worker --deployment-dir .
-```
-
-This explicit second phase keeps deterministic K8s config generation free of
-secret reads. The stable bundle ID does not change when the credential is
-injected.
-
-Validate the complete deployment contract and generated worker bundle before
-Helm installation:
-
-```bash
-scrollsdk setup proof-config-check --deployment-dir .
-```
-
-The default check has the same installation-safe boundary as the Helm adapter:
-warnings are reported but do not block ordinary operational changes. For a
-release artifact that should be byte-for-byte immutable, run:
-
-```bash
-scrollsdk setup proof-config-check --deployment-dir . --strict
-```
-
-### Mock worker
-
-Copy `prover-worker-mock/docker-compose/` to an ordinary Linux worker host:
-
-```bash
-scrollsdk setup proof-worker-check \
-  --bundle-dir prover-worker-mock/docker-compose \
-  --expected-bundle-id <bundleId-from-proof-deployment.json>
-docker compose --project-directory prover-worker-mock/docker-compose config --quiet
-docker compose --project-directory prover-worker-mock/docker-compose up -d
-```
-
-The generated `prover-worker.env` is mode `0600`. The mock worker advertises
-chunk, batch, standalone AdvanceL2 aggregation, and bridge-transition
-capabilities, but emits deterministic non-cryptographic proofs.
-
-### Production worker
-
-Sync both `proof-artifacts/` (or the selected release root) and
-`prover-worker-production/docker-compose/` to the GPU host while preserving
-their relative layout. Then:
-
-```bash
-scrollsdk setup proof-worker-check \
-  --bundle-dir prover-worker-production/docker-compose \
-  --release-root proof-artifacts \
-  --expected-bundle-id <bundleId-from-proof-deployment.json>
-
-cd prover-worker-production/docker-compose
-docker compose --profile tools run --rm preflight
-docker compose up -d prover-worker
-```
-
-The production check verifies the digest-pinned CUDA image reference, all ten
-release files against `worker-release.json`, all four capability flags, L2
-chain ID, endpoints, bundle ID, and the raw `prover-worker.token` mode without
-printing its contents. Compose mounts the release read-only, passes the token
-through `--worker-token-file`, supplies the bridge genesis context, and grants
-a seven-minute graceful stop window for the worker's default drain timeout.
-Override the default ID per host without editing generated files:
-
-```bash
-PROVER_WORKER_ID=gpu-worker-a docker compose up -d prover-worker
-```
-
-## 10. Phase B — export and deliver signer policy
-
-After bridge identity and proof topology are both staged, generate the common
-policy bundle:
+Wait for `prep-charts` to finish before starting this command. Chart preparation
+transactionally replaces `.data`; a concurrently created signer-policy export
+can be discarded by that replacement.
 
 ```bash
 scrollsdk setup export-signer-policy
 ```
 
-The command derives bridge namespace, protocol ID, TSO URL, proof GET root, and
-proof triples from standard deployment artifacts. It generates the verifier
-registry directly from the staged proof triples.
+The command derives the public TSO URL from `config.toml [ingress].TSO_HOST`,
+the canonical protocol identity from `.data/protocol_context.json`, and the
+signer-readable proof artifact base URL from the generated Withdrawal
+Processor configuration. Use `--tso-url`, `--protocol-context`, or
+`--signer-proof-artifact-base-url` only when deliberately overriding those
+sources. Do not reuse a bundle generated for another deployment or an earlier
+protocol context.
 
-- mock generates an empty e2e-harness source-set scaffold and leaves both TEE
-  allowlists empty by default;
-- production requires `configs/source-set.toml` and a non-empty TEE signer ID;
-  legacy `04+X+Y` keys are validated and normalized to `02/03+X`.
-
-Send the entire generated directory to every signer operator:
-
-```text
-signer-policy-bundle/
-```
-
-`PARTNER-COMMANDS.md` is the authoritative deployment-specific instruction
-file. It contains the selected mode, signer IDs/endpoints/public keys, TSO URL,
-proof GET root, partner apply commands, and bridge-side reachability probes.
-The static partner README explains the generic process; do not maintain a
-second set of deployment addresses by hand.
-
-## 11. Install Kubernetes services
-
-The canonical Helm invocations live in `scroll-sdk/examples/Makefile.example`.
-With that Makefile copied into the deployment root:
+### Step 6: validate the deployment contract
 
 ```bash
-make install-withdrawal-processor
-make install-proof-coordinator
-make install-tso
+scrollsdk setup proof-config-check
 ```
 
-The WP and coordinator install targets must pass their native TOML and program
-manifest JSON files with `--set-file`. `setup prep-charts` also writes the
-derived statement namespace to `proof-artifacts/manifests/statement-namespace.json`
-and returns every required key/path binding under `helmSetFiles` in JSON mode;
-human output prints the same bindings. Values remain responsible for
-Kubernetes shape, secret wiring, and the proof activation switch, and contain
-no inline JSON document.
+This checks the source switches, compiler bundle, Helm projection, native
+configuration, Worker contract, material hashes, and secret-file modes without
+network probes or printing secrets. Compiler-owned bundle files, sidecars, and
+the Worker handoff bundle remain strict. Helm values must exist but are not
+required to remain byte-identical: deployment-specific overlays such as the
+shadowfork RPC/network projection are intentionally applied after
+`prep-charts`. The Worker bundle's own manifest still verifies all of its
+security-relevant files.
 
-For the conventional production layout, the coordinator bindings are:
+## 5. Switch operations
 
-```bash
---set-file 'proofCoordinator.config.content=proof-coordinator/ProofCoordinator.toml' \
---set-file 'configMaps.manifests.data.scroll-chunk\.json=proof-artifacts/manifests/scroll-chunk.json' \
---set-file 'configMaps.manifests.data.scroll-batch\.json=proof-artifacts/manifests/scroll-batch.json' \
---set-file 'configMaps.manifests.data.bridge-transition\.json=proof-artifacts/manifests/bridge-transition.json' \
---set-file 'configMaps.manifests.data.statement-namespace\.json=proof-artifacts/manifests/statement-namespace.json'
+### Disabled to active mock
+
+Edit only:
+
+```diff
+ [proof_topology]
+-mode = "disabled"
++mode = "active"
 ```
 
-The withdrawal-processor uses the same three manifests under
-`configMaps.proof-manifests.data`, in addition to its native TOML binding.
-Mock manifest paths and basenames differ; consume the bindings printed by the
-command instead of hard-coding the production list. The rendered Kubernetes
-ConfigMap necessarily contains the file bytes in YAML `data`; the maintained
-values source does not.
+Then regenerate and validate. Deploy WP and PC; keep all legacy mock Workers
+stopped. Do not run `setup proof-worker` for mock. When the compiler declares
+`eager_materializer`, deploy that service with the matching genesis, namespace
+and prefix-scoped store credential. Verify proof rows reach `succeeded` with
+zero Worker pods/containers, while Attestation Signers remain in `observe`.
 
-Validate:
+### Mock to real generation
 
-- WP readiness and proof-work API wiring;
-- coordinator storage, auth, prover API, and verifier identities;
-- TSO ingress and signer routing;
-- pod access to S3 and Secrets Manager/ExternalSecret material;
-- cluster-to-partner signer `/health` reachability.
+There is no CPU mock Worker to drain on PR #1136. If the already-staged
+`workerLaunch` is `external`, start the real Worker on the
+operator-selected GPU host using the newly generated Compose handoff bundle.
+Edit only:
 
-Do the last check from the Kubernetes namespace, not only from a workstation:
-
-```bash
-kubectl -n <namespace> run signer-reachability-<id> --rm -i --restart=Never \
-  --image=curlimages/curl:8.20.0 -- \
-  curl -fsS https://signer.example.com:4040/health
+```diff
+ [proof_topology]
+-generation = "mock"
++generation = "real"
 ```
 
-## 12. Enter mock mode and run lifecycle acceptance
+Regenerate and deploy while enforcement remains `observe`. Watch coordinator
+routing warnings and proof outcomes until real proofs are consistently
+produced and verified. Worker movement is an operational action, not a proof
+identity change.
 
-After the worker is registered and all partners have applied the generated
-policy bundle, select `mode = "mock"` and the proof artifact URL in the
-DeploymentSpec or `.data/doge-config.toml`, then regenerate:
+### Observe to enforce
 
-```bash
-scrollsdk setup prep-charts -N
-scrollsdk setup proof-config-check --deployment-dir .
-make install-withdrawal-processor install-proof-coordinator install-tso
+After a clean observation window, edit only:
+
+```diff
+ [proof_topology]
+-enforcement = "observe"
++enforcement = "enforce"
 ```
 
-Run a real L2 → Dogecoin withdrawal through the complete stack. Where the
-deployment test accounts and contracts are prepared, the existing multi-
-withdrawal case can be used:
+Regenerate and deploy WP/PC configuration, export the matching signer policy,
+and have every partner apply it. This switch does not change Worker image,
+program identity, or artifact prefix.
 
-```bash
-scrollsdk test dogeos 4
-```
+## 6. Partner signer handoff
 
-A mock acceptance is not complete merely because files render or pods are
-green. Collect evidence for every boundary:
+Attestation Signers are partner-operated and may be outside AWS. They need:
 
-1. WP submits real proof work to the coordinator.
-2. The external worker claims work, heartbeats, and posts results.
-3. The coordinator accepts receipts and WP observes readiness before signing.
-4. TSO sends real `POST /sign` calls to descriptor endpoints.
-5. Each signer fetches every concrete proof URL and validates size/SHA-256.
-6. Each signer persists its request, policy verdict, and audit trail in SQLite.
-7. Each signer submits its callback to the configured TSO address.
-8. TSO accepts the Attestation-role callbacks.
-9. The withdrawal completes beyond proof-file creation.
+- their own descriptor and signing key;
+- the exported `observe` or `enforce` policy bundle;
+- static verifier/program material distributed by the operator;
+- credential-free HTTPS GET access to exact proof artifact objects.
 
-The partner commands and network directions are identical in mock and
-production. Only the generated proof implementation and signer safety profile
-differ.
+They do not need S3 list, write, or delete permission. The CLI does not deploy
+partner Signers or prove their network reachability.
 
-## 13. Production limitation
+## 7. Safety and recovery
 
-The current `dogeos-core` attestation signer reports cryptographic STARK
-proof-byte verification, TEE receipt signature verification, and some external
-source checks as `NotImplemented`. Consequently:
-
-- mock `staging_scaffold` may audit and explicitly bypass those unfinished
-  checks while still exercising all implemented checks and the full service
-  flow;
-- production `production_enforce` correctly refuses proof-backed signing until
-  the selected signer release implements every production-required check.
-
-Do not interpret successful mock lifecycle acceptance as cryptographic proof
-verification or production readiness.
-
-## 14. Troubleshooting
-
-| Symptom | Action |
-|---|---|
-| descriptor import fails | validate schema/network/key/endpoint; run the partner `scrollsdk signer preflight`, replace the collected descriptor, and rerun `setup attestation-signer` |
-| no external attestation signers | import descriptors before bridge genesis; doge-config must use `attestationSigner.mode = "external"` |
-| missing `protocol_context.protocol_id` | rerun bridge-init protocol-context step with a current dogeos-core image |
-| no staged proof GET base URL | configure `proofSystem.artifactReadBaseUrl`, then run `setup prep-charts` |
-| no staged proof triples | verify the managed coordinator verifier block or production manifests |
-| production source set missing | create `configs/source-set.toml` with real partner-reachable Dogecoin, Ethereum execution, and DogeOS L2 RPC sets |
-| proof AWS config missing during preparation | run `setup proof-aws-init` first, or restore the reviewed `.data/proof-aws.json` resource-facts file |
-| materializer configuration rejected | complete the hand-maintained coordinator materializer section; the CLI does not invent backend/RPC choices |
-| signer health key differs from descriptor | stop; do not generate genesis with that descriptor |
-| signer cannot fetch proof | inspect the full URL in the sign request from the signer host; verify DNS/TLS/object permissions |
-| callback fails | test the generated TSO URL from the signer network and verify callback phase is `attestation` |
-
-There is currently no application-layer authentication on the signer↔TSO HTTP
-path. Use private connectivity such as VPN/WireGuard or an IP-allowlisted TLS
-reverse proxy, and record the selected mechanism with each partner.
+- `observe` still verifies and records failures; it is not proof-disabled.
+- Roll back enforcement to `observe` if real proof availability regresses.
+- Do not change protocol version, proof generation, and enforcement in one
+  unreviewed deployment.
+- Keep proof material generation outputs immutable after the receipt is
+  written; rerun `proof-materials` to create a new receipt after any change.
+- A software/OpenVM/circuit or deployment genesis change requires regenerated
+  identities and a new Bridge bake. A normal mock/real switch does not.
+- Feynman/Tsuki activation is determined by canonical protocol context, not by
+  these deployment switches.

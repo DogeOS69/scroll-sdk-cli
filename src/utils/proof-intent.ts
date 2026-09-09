@@ -1,237 +1,218 @@
-import * as yaml from 'js-yaml'
+import * as toml from '@iarna/toml'
+import {createHash} from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import type { DeploymentSpec } from '../types/deployment-spec.js'
-import type { DogeConfig } from '../types/doge-config.js'
+import type {ProofCoordinatorConfig} from '../types/deployment-spec.js'
+import type {DogeConfig, Network} from '../types/doge-config.js'
+import type {ProofTopologySpec} from '../types/proof-topology.js'
 
 import {
-  type ProofSystemMode,
-  normalizeProofSystemMode,
-} from './proof-system-mode.js'
+  loadDeploymentSpec,
+  resolveDeploymentSpecEnvRefs,
+  resolveEnvRefsDeep,
+  validateDeploymentSpec,
+} from './deployment-spec-generator.js'
 
-export const DEFAULT_DEPLOYMENT_SPEC_FILES = [
-  'deployment-spec.yaml',
-  'deployment-spec.yml',
-] as const
+export const DEFAULT_DEPLOYMENT_SPEC_FILES = ['deployment-spec.yaml', 'deployment-spec.yml'] as const
+export const DEFAULT_DOGE_CONFIG_FILE = '.data/doge-config.toml'
 
-export interface ProofSystemIntent {
-  artifactReadBaseUrl?: string
-  mode: ProofSystemMode
-  /** Proof release bundle root. Conventional proof-artifacts/ is used when omitted. */
-  release?: string
-  signerPolicy?: {
-    sourceSet?: string
-  }
+export interface ProofTopologyIntent {
+  enforcement: ProofTopologySpec['enforcement']
+  generation: ProofTopologySpec['generation']
+  mode: ProofTopologySpec['mode']
 }
 
 export interface ProofIntentSource {
-  /**
-   * `legacy-doge-config` is accepted only so schema-v1/v2 contracts generated
-   * by older CLI releases remain readable. New contracts use `doge-config`.
-   */
-  kind: 'deployment-spec' | 'doge-config' | 'legacy-doge-config'
+  kind: 'deployment-spec' | 'doge-config'
   path: string
+  sha256: string
 }
 
 export interface ResolvedProofIntent {
-  intent: ProofSystemIntent
+  deploymentName: string
+  intent: ProofTopologyIntent
+  network: Network
+  proofCoordinator?: ProofCoordinatorConfig
+  proofTopology: ProofTopologySpec
+  proverPublicUrl?: string
   source: ProofIntentSource
+  warnings: string[]
 }
 
-interface RawProofSystemIntent {
-  artifactReadBaseUrl?: unknown
-  mode?: unknown
-  provingMode?: unknown
-  release?: unknown
-  signerPolicy?: {
-    sourceSet?: unknown
+function sha256File(filePath: string): string {
+  return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
+}
+
+function mapping(value: unknown, label: string): Record<string, unknown> {
+  if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error(`${label} must be a table`)
+  return value as Record<string, unknown>
+}
+
+function known(value: unknown, allowed: readonly string[], label: string): void {
+  for (const key of Object.keys(mapping(value, label))) {
+    if (!allowed.includes(key)) throw new Error(`${label}.${key} is not supported`)
   }
 }
 
-function optionalNonEmptyString(value: unknown, label: string): string | undefined {
-  if (value === undefined) return undefined
-  if (typeof value !== 'string' || value.trim() === '') {
-    throw new Error(`${label} must be a non-empty string when set`)
+function validateShape(value: unknown, source: string): void {
+  const root = mapping(value, `${source}: proof_topology`)
+  known(root, ['active', 'compiler', 'deployment', 'enforcement', 'generation', 'mode', 'observeRealProofDeadlineMs'], `${source}: proof_topology`)
+  known(root.compiler, ['identityFilePath', 'image'], `${source}: proof_topology.compiler`)
+  known(mapping(root.compiler, 'compiler').image, ['digest', 'repository'], `${source}: proof_topology.compiler.image`)
+  known(root.deployment, [
+    'artifactKeyPrefix', 'coordinatorId', 'generatedMaterialsRoot', 'l2GenesisJson',
+    'mockWorkerImage', 'productionWorkerImage', 'proofWorkBind', 'proofWorkPublicUrl',
+    'proofWorkTokenFile', 'protocolContextPath', 'proverBind', 'proverPublicUrl',
+    'publicS3EndpointUrl', 'readinessEvidencePath', 'resourcesMountPath',
+    'resourcesPersistentVolumeClaim', 'workerNodeSelector', 'workerResources',
+    'workerDeploymentBackend', 'workerRuntimeClassName', 'workerSecretName',
+    'workerTokenFile', 'workerTolerations', 'eagerMaterializer',
+  ], `${source}: proof_topology.deployment`)
+  const deployment = mapping(root.deployment, 'deployment')
+  if (deployment.mockWorkerImage !== undefined) known(deployment.mockWorkerImage, ['digest', 'repository'], `${source}: proof_topology.deployment.mockWorkerImage`)
+  if (deployment.eagerMaterializer !== undefined) known(deployment.eagerMaterializer, ['listenPort', 'startBatchHeight', 'stateDir'], `${source}: proof_topology.deployment.eagerMaterializer`)
+  if (deployment.productionWorkerImage !== undefined) {
+    known(deployment.productionWorkerImage, ['digest', 'repository'], `${source}: proof_topology.deployment.productionWorkerImage`)
   }
 
-  return value.trim()
+  if (root.active !== undefined) {
+    known(root.active, ['artifactStore', 'profile', 'realScroll', 'workerLaunch'], `${source}: proof_topology.active`)
+    const active = mapping(root.active, 'active')
+    known(active.artifactStore, ['bucket', 'endpointUrl', 'forcePathStyle', 'kind', 'maxReadBodyBytes', 'region'], `${source}: proof_topology.active.artifactStore`)
+    known(active.realScroll, [
+      'aggVerifyingKeyPath', 'batchAppConfig', 'batchAppExe', 'batchBackendProfile',
+      'batchMaterializerBinaryPath', 'batchParallelism', 'batchProgramCommitmentHashHex',
+      'batchProgramCommitmentHex', 'batchProverRequirements', 'batchVerificationKeyHashHex',
+      'bridgeAppCommitRawHex', 'bridgeProgramCommitmentHashHex', 'bridgeVerificationKeyHashHex',
+      'chunkAppConfig', 'chunkAppExe', 'chunkBackendProfile', 'chunkBlockWitnessDir',
+      'chunkMaterializerBinaryPath', 'chunkMaterializerTimeoutMs', 'chunkParallelism',
+      'chunkProgramCommitmentHashHex', 'chunkProgramCommitmentHex', 'chunkProverRequirements',
+      'chunkVerificationKeyHashHex', 'chunkWitnessRpcUrl', 'chunkWitnessSource',
+      'l2RangeAggregationAppCommitRawHex', 'l2RangeAggregationProgramCommitmentHashHex',
+      'l2RangeAggregationVerificationKeyHashHex', 'regtestPinnedGenesisSequencerOutpoint',
+      'resourcesRoot', 'workerId', 'workerMaxBodyBytes',
+    ], `${source}: proof_topology.active.realScroll`)
+  }
 }
 
-function normalizeArtifactReadBaseUrl(value: unknown, label: string): string | undefined {
-  const normalized = optionalNonEmptyString(value, label)
-  if (!normalized) return undefined
-
-  let parsed: URL
-  try {
-    parsed = new URL(normalized)
-  } catch {
-    throw new Error(`${label} must be an http(s) URL`)
+function assertImage(value: {digest?: string; repository?: string} | undefined, label: string): void {
+  if (!value?.repository?.trim() || !value.digest || !/^sha256:[\da-f]{64}$/.test(value.digest)) {
+    throw new Error(`${label} must be a digest-pinned image`)
   }
-
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw new Error(`${label} must be an http(s) URL`)
-  }
-
-  return normalized.replace(/\/+$/, '')
 }
 
-export function normalizeProofIntent(
-  raw: RawProofSystemIntent | undefined,
-  label: string,
-): ProofSystemIntent {
-  const rawMode = raw?.mode ?? raw?.provingMode ?? 'disabled'
-  const mode = normalizeProofSystemMode(rawMode)
-  if (!mode) {
-    throw new Error(`${label}.mode must be disabled, mock, or production`)
+function validateTopology(topology: ProofTopologySpec, source: string): void {
+  if (!Number.isSafeInteger(topology.observeRealProofDeadlineMs) || topology.observeRealProofDeadlineMs! <= 0) {
+    throw new Error(`${source}: observeRealProofDeadlineMs must be an explicit positive safe integer`)
   }
 
-  // Disabled intentionally discards stale proof-only coordinates. This makes
-  // mode transitions idempotent and prevents generated output from keeping a
-  // disabled deployment coupled to proof infrastructure.
-  if (mode === 'disabled') return { mode }
+  const eager = topology.deployment?.eagerMaterializer
+  if (eager && (!Number.isInteger(eager.listenPort) || eager.listenPort < 1 || eager.listenPort > 65_535
+    || !Number.isSafeInteger(eager.startBatchHeight) || eager.startBatchHeight < 0 || !eager.stateDir?.startsWith('/'))) {
+    throw new Error(`${source}: eagerMaterializer requires a valid listenPort, nonnegative startBatchHeight and absolute stateDir`)
+  }
 
-  const artifactReadBaseUrl = normalizeArtifactReadBaseUrl(
-    raw?.artifactReadBaseUrl,
-    `${label}.artifactReadBaseUrl`,
-  )
-  const release = optionalNonEmptyString(raw?.release, `${label}.release`)
-  const sourceSet = optionalNonEmptyString(
-    raw?.signerPolicy?.sourceSet,
-    `${label}.signerPolicy.sourceSet`,
-  )
+  if (!['active', 'disabled'].includes(topology.mode)) throw new Error(`${source}: mode must be active or disabled`)
+  if (!['mock', 'real'].includes(topology.generation)) throw new Error(`${source}: generation must be mock or real`)
+  if (!['enforce', 'observe'].includes(topology.enforcement)) throw new Error(`${source}: enforcement must be observe or enforce`)
+  if (topology.enforcement === 'enforce' && topology.mode !== 'active') {
+    throw new Error(`${source}: enforcement=enforce requires mode=active`)
+  }
 
+  if (topology.enforcement === 'enforce' && topology.generation !== 'real') {
+    throw new Error(`${source}: enforcement=enforce requires generation=real`)
+  }
+
+  assertImage(topology.compiler?.image, `${source}: compiler.image`)
+  if (!topology.compiler?.identityFilePath?.trim()) {
+    throw new Error(`${source}: compiler.identityFilePath is required`)
+  }
+
+  if (topology.deployment?.mockWorkerImage) assertImage(topology.deployment.mockWorkerImage, `${source}: deployment.mockWorkerImage`)
+  if (topology.deployment?.productionWorkerImage !== undefined) {
+    assertImage(topology.deployment.productionWorkerImage, `${source}: deployment.productionWorkerImage`)
+  }
+
+  if (topology.generation === 'real') {
+    assertImage(topology.deployment?.productionWorkerImage, `${source}: real generation requires deployment.productionWorkerImage`)
+  }
+
+  if (!topology.deployment?.artifactKeyPrefix?.trim()) throw new Error(`${source}: deployment.artifactKeyPrefix is required`)
+  if (!topology.active) throw new Error(`${source}: active profile must be staged even while disabled`)
+  if (topology.mode === 'active' && topology.generation === 'real' && !topology.active.profile.startsWith('real_scroll_')) {
+    throw new Error(`${source}: real generation requires a real_scroll profile`)
+  }
+}
+
+function fromDogeConfig(configPath: string, config: DogeConfig): ResolvedProofIntent {
+  const raw = config.proof_topology
+  if (!raw) throw new Error(`${configPath}: [proof_topology] is required`)
+  validateShape(raw, configPath)
+  const topology = resolveEnvRefsDeep(raw) as ProofTopologySpec
+  validateTopology(topology, configPath)
+  const coordinator = topology.deployment.coordinatorId
   return {
-    ...(artifactReadBaseUrl ? { artifactReadBaseUrl } : {}),
-    mode,
-    ...(release ? { release } : {}),
-    ...(sourceSet ? { signerPolicy: { sourceSet } } : {}),
+    deploymentName: coordinator?.endsWith('-proof-coordinator')
+      ? coordinator.slice(0, -'-proof-coordinator'.length)
+      : `dogeos-${config.network}`,
+    intent: {enforcement: topology.enforcement, generation: topology.generation, mode: topology.mode},
+    network: config.network,
+    proofTopology: topology,
+    proverPublicUrl: topology.deployment.proverPublicUrl,
+    source: {kind: 'doge-config', path: configPath, sha256: sha256File(configPath)},
+    warnings: [],
   }
 }
 
-function discoverDeploymentSpec(deploymentDir: string, explicitSpecPath?: string): string | undefined {
-  if (explicitSpecPath) {
-    const resolved = path.resolve(deploymentDir, explicitSpecPath)
-    if (!fs.existsSync(resolved)) {
-      throw new Error(`DeploymentSpec file not found: ${resolved}`)
-    }
-
-    return resolved
-  }
-
-  const candidates = DEFAULT_DEPLOYMENT_SPEC_FILES
-    .map(file => path.resolve(deploymentDir, file))
-    .filter(file => fs.existsSync(file))
-  if (candidates.length > 1) {
-    throw new Error(
-      `Multiple conventional DeploymentSpec files found: ${candidates.join(', ')}. `
-      + 'Keep one file or select one explicitly with --spec.',
-    )
-  }
-
-  return candidates[0]
-}
-
-function readSpecProofIntent(specPath: string): {
-  intent: ProofSystemIntent
-} {
-  let parsed: unknown
-  try {
-    parsed = yaml.load(fs.readFileSync(specPath, 'utf8'))
-  } catch (error) {
-    throw new Error(
-      `Failed to load DeploymentSpec ${specPath}: ${error instanceof Error ? error.message : String(error)}`,
-    )
-  }
-
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`DeploymentSpec ${specPath} must be a YAML object`)
-  }
-
-  const {proofSystem} = (parsed as Partial<DeploymentSpec>)
+function fromDeploymentSpec(specPath: string): ResolvedProofIntent {
+  const spec = resolveDeploymentSpecEnvRefs(loadDeploymentSpec(specPath))
+  const validation = validateDeploymentSpec(spec)
+  if (!validation.valid) throw new Error(`${specPath}: ${validation.errors.map(error => `${error.path}: ${error.message}`).join('; ')}`)
+  if (!spec.proofTopology) throw new Error(`${specPath}: proofTopology is required`)
+  validateTopology(spec.proofTopology, specPath)
+  const host = spec.frontend.hosts.proofCoordinator
   return {
-    intent: normalizeProofIntent(proofSystem, `${specPath}: proofSystem`),
+    deploymentName: spec.metadata.name,
+    intent: {
+      enforcement: spec.proofTopology.enforcement,
+      generation: spec.proofTopology.generation,
+      mode: spec.proofTopology.mode,
+    },
+    network: spec.dogecoin.network,
+    proofCoordinator: spec.proofCoordinator,
+    proofTopology: spec.proofTopology,
+    proverPublicUrl: host ? `${spec.frontend.protocol ?? 'https'}://${host}` : spec.proofTopology.deployment.proverPublicUrl,
+    source: {kind: 'deployment-spec', path: specPath, sha256: sha256File(specPath)},
+    warnings: validation.warnings.map(warning => `${warning.path}: ${warning.message}`),
   }
 }
 
-function proofIntentFingerprint(intent: ProofSystemIntent): string {
-  return JSON.stringify({
-    artifactReadBaseUrl: intent.artifactReadBaseUrl,
-    mode: intent.mode,
-    release: intent.release,
-    sourceSet: intent.signerPolicy?.sourceSet,
-  })
-}
-
-/**
- * Select the proof intent provider without making DeploymentSpec mandatory.
- *
- * An explicitly selected or conventional DeploymentSpec is authoritative.
- * Otherwise the existing .data/doge-config.toml remains the source of truth.
- * When both files contain proof intent, disagreement is rejected instead of
- * silently allowing generated files to depend on whichever command ran last.
- */
 export function resolveProofIntent(options: {
   deploymentDir?: string
-  dogeConfig: Pick<DogeConfig, 'proofSystem'>
-  dogeConfigPath: string
+  dogeConfig?: DogeConfig
+  dogeConfigPath?: string
+  required?: boolean
   specPath?: string
-}): ResolvedProofIntent {
-  const deploymentDir = path.resolve(options.deploymentDir || '.')
-  const dogeConfigPath = path.resolve(options.dogeConfigPath)
-  const dogeRaw = options.dogeConfig.proofSystem as RawProofSystemIntent | undefined
-  const dogeIntent = normalizeProofIntent(dogeRaw, `${dogeConfigPath}: proofSystem`)
-  const specPath = discoverDeploymentSpec(deploymentDir, options.specPath)
-
-  if (!specPath) {
-    return {
-      intent: dogeIntent,
-      source: { kind: 'doge-config', path: dogeConfigPath },
+}): ResolvedProofIntent | undefined {
+  const deploymentDir = path.resolve(options.deploymentDir ?? '.')
+  const configPath = path.resolve(deploymentDir, options.dogeConfigPath ?? DEFAULT_DOGE_CONFIG_FILE)
+  const explicitSpec = options.specPath ? path.resolve(deploymentDir, options.specPath) : undefined
+  if (explicitSpec) return fromDeploymentSpec(explicitSpec)
+  if (options.dogeConfig?.proof_topology) return fromDogeConfig(configPath, options.dogeConfig)
+  for (const name of DEFAULT_DEPLOYMENT_SPEC_FILES) {
+    const candidate = path.join(deploymentDir, name)
+    if (fs.existsSync(candidate)) {
+      const raw = loadDeploymentSpec(candidate)
+      if (raw.proofTopology) return fromDeploymentSpec(candidate)
     }
   }
 
-  const spec = readSpecProofIntent(specPath)
-  if (
-    dogeRaw !== undefined
-    && proofIntentFingerprint(spec.intent) !== proofIntentFingerprint(dogeIntent)
-  ) {
-    throw new Error(
-      `Proof intent conflict: ${specPath} and ${dogeConfigPath} disagree. `
-      + 'DeploymentSpec is authoritative when present; update proofSystem there, then regenerate doge-config.toml.',
-    )
+  if (fs.existsSync(configPath)) {
+    const parsed = toml.parse(fs.readFileSync(configPath, 'utf8')) as unknown as DogeConfig
+    if (parsed.proof_topology) return fromDogeConfig(configPath, parsed)
   }
 
-  return {
-    intent: spec.intent,
-    source: { kind: 'deployment-spec', path: specPath },
-  }
-}
-
-export function assertProofIntentOverrideAllowed(options: {
-  artifactReadBaseUrl?: string
-  mode?: ProofSystemMode
-  resolved: ResolvedProofIntent
-}): void {
-  if (options.resolved.source.kind !== 'deployment-spec') return
-
-  const {intent} = options.resolved
-  if (options.mode && options.mode !== intent.mode) {
-    throw new Error(
-      `--mode ${options.mode} conflicts with proofSystem.mode ${intent.mode} in `
-      + `${options.resolved.source.path}; update the DeploymentSpec instead of creating a one-run override.`,
-    )
-  }
-
-  if (options.artifactReadBaseUrl) {
-    const normalized = normalizeArtifactReadBaseUrl(
-      options.artifactReadBaseUrl,
-      '--proof-artifact-base-url',
-    )
-    if (normalized !== intent.artifactReadBaseUrl) {
-      throw new Error(
-        `--proof-artifact-base-url conflicts with proofSystem.artifactReadBaseUrl in `
-        + `${options.resolved.source.path}; update the DeploymentSpec instead of creating a one-run override.`,
-      )
-    }
-  }
+  if (options.required) throw new Error('No proof topology found; run scrollsdk setup doge-config --proof-topology')
+  return undefined
 }

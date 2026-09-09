@@ -204,7 +204,6 @@ export function shouldReuseExistingSequencerRethRoleArn(
 
 export function applySequencerRethValues(yamlData: any, config: ResolvedSequencerRethConfig): void {
   const chartResourceNames = getChartResourceNames(yamlData, getSequencerRethResourceName(config.index))
-  removeChartResourceNameOverrides(yamlData)
   yamlData.reth ||= {}
   yamlData.reth.nodeKey ||= {}
   yamlData.reth.nodeKey.mode = 'secret'
@@ -212,12 +211,12 @@ export function applySequencerRethValues(yamlData: any, config: ResolvedSequence
   yamlData.reth.nodeKey.secretKey = RETH_NODEKEY_ENV
   yamlData.reth.signer ||= {}
 
-  // The O3O topology has one producer. Instance 0 is the primary; every
-  // additional sequencer is a warm backup and must not auto-start. Keeping
-  // this in the instance projection prevents a shared template from making
-  // both numbered releases produce blocks.
+  // `enabled` is an operator-owned runtime switch. Preserve an explicit false
+  // so prep-charts cannot reactivate a deliberately paused sequencer. Fresh
+  // values default to enabled, while instance 0 remains the only auto-starting
+  // producer and every additional instance remains a warm backup.
   yamlData.reth.sequencer ||= {}
-  yamlData.reth.sequencer.enabled = true
+  yamlData.reth.sequencer.enabled ??= true
   yamlData.reth.sequencer.autoStart = config.index === 0
 
   if (config.signer.backend === 'aws_kms') {
@@ -266,13 +265,6 @@ function getChartResourceNames(values: any, defaultName: string): Set<string> {
   }
 
   return names
-}
-
-function removeChartResourceNameOverrides(values: any): void {
-  if (!values.global) return
-  delete values.global.fullnameOverride
-  delete values.global.nameOverride
-  if (Object.keys(values.global).length === 0) delete values.global
 }
 
 function removeEnvValue(env: any[] | undefined, name: string): void {
@@ -351,15 +343,19 @@ function ensureRethExternalSecret(yamlData: any, config: ResolvedSequencerRethCo
   const existing = yamlData.externalSecrets['secret-env'] || yamlData.externalSecrets[config.secretName] || {}
   delete yamlData.externalSecrets[config.secretName]
   const remoteKey = `dogeos/${config.secretName}`
+  // push-secrets owns the remote path. Regeneration must not retarget an
+  // existing node/signer identity to a different instance's default Secret.
+  const remoteKeyFor = (secretKey: string): string =>
+    existing.data?.find((item: any) => item.secretKey === secretKey)?.remoteRef?.key ?? remoteKey
   const data = [
     {
-      remoteRef: { key: remoteKey, property: RETH_NODEKEY_ENV },
+      remoteRef: { key: remoteKeyFor(RETH_NODEKEY_ENV), property: RETH_NODEKEY_ENV },
       secretKey: RETH_NODEKEY_ENV,
     },
   ]
   if (config.signer.backend === 'local') {
     data.push({
-      remoteRef: { key: remoteKey, property: RETH_SIGNER_PRIVATE_KEY_ENV },
+      remoteRef: { key: remoteKeyFor(RETH_SIGNER_PRIVATE_KEY_ENV), property: RETH_SIGNER_PRIVATE_KEY_ENV },
       secretKey: RETH_SIGNER_PRIVATE_KEY_ENV,
     })
   }

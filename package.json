@@ -96,6 +96,9 @@
       "helper": {
         "description": "Useful tools for setting up and interacting with your chain"
       },
+      "setup": {
+        "description": "Generate and validate deployment configuration"
+      },
       "test": {
         "description": "Test your chain configuration and setup"
       }
@@ -106,7 +109,7 @@
     "url": "git+https://github.com/dogeos69/scroll-sdk-cli.git"
   },
   "scripts": {
-    "build": "shx rm -rf dist && tsc -b",
+    "build": "shx rm -rf dist && shx rm -f oclif.manifest.json && tsc -b",
     "watch": "tsc -b --watch",
     "dev": "tsc -b --watch",
     "lint": "eslint . --ext .ts",

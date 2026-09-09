@@ -713,13 +713,13 @@ function requireGenesisAddress(value: unknown, fieldPath: string): string {
   return value
 }
 
-// values/genesis.yaml is the canonical Geth genesis and must remain unchanged.
+// values/genesis.yaml is canonical and must remain unchanged.
 // Adapt a deep copy at the RPC-package boundary to the stricter Scroll-Reth
 // chainspec schema. Keep this transformation deliberately narrow: normalize
 // integer representations, supply the required buffer flag, bind the system
 // contract address already present in the legacy metadata, and bind the L1
 // deployment block supplied by l2-rpc-production.yaml.
-export function normalizeGenesisForReth(sourceGenesis: unknown, requiredStartL1Block: unknown): Record<string, any> {
+export function normalizeGenesisForReth(sourceGenesis: unknown, requiredStartL1Block?: unknown): Record<string, any> {
   const source = requireGenesisObject(sourceGenesis, '<root>')
   const normalized = JSON.parse(JSON.stringify(source)) as Record<string, any>
   const config = requireGenesisObject(normalized.config, 'config')
@@ -743,6 +743,21 @@ export function normalizeGenesisForReth(sourceGenesis: unknown, requiredStartL1B
       l1Config.l1MessageQueueV2DeploymentBlock,
       'config.scroll.l1Config.l1MessageQueueV2DeploymentBlock',
     )
+  }
+
+  // Native Reth releases intentionally scan from zero and no longer emit the
+  // legacy systemContract metadata. Their chainspec is authoritative; the
+  // virtual L1 genesis height is a different setting, not a replacement value.
+  if (config.systemContract === undefined) {
+    l1Config.systemContractAddress = requireGenesisAddress(
+      l1Config.systemContractAddress,
+      'config.scroll.l1Config.systemContractAddress',
+    )
+    l1Config.startL1Block = normalizeGenesisInteger(
+      l1Config.startL1Block,
+      'config.scroll.l1Config.startL1Block',
+    )
+    return normalized
   }
 
   const systemContract = requireGenesisObject(config.systemContract, 'config.systemContract')
@@ -1052,10 +1067,6 @@ export default class SetupGenRpcPackage extends Command {
       throw new Error(`genesis.yaml not found at: ${genesisYamlPath}`)
     }
 
-    if (!fs.existsSync(l2RpcYamlPath)) {
-      throw new Error(`l2-rpc-production.yaml not found at: ${l2RpcYamlPath}`)
-    }
-
     try {
       // Read and parse genesis.yaml
       const genesisYamlContent = fs.readFileSync(genesisYamlPath, 'utf8')
@@ -1086,13 +1097,22 @@ export default class SetupGenRpcPackage extends Command {
         genesisJson = genesisYaml
       }
 
-      const l2RpcEnvData = this.loadConfigMapEnvData(l2RpcYamlPath)
-      const startL1Block = l2RpcEnvData.L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK
-      if (startL1Block === undefined) {
-        throw new Error(
-          'l2-rpc-production.yaml configMaps.env.data.L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK ' +
-          'is required for genesis config.scroll.l1Config.startL1Block',
-        )
+      const sourceConfig = requireGenesisObject(
+        requireGenesisObject(genesisJson, '<root>').config, 'config',
+      )
+      let startL1Block: unknown
+      if (sourceConfig.systemContract !== undefined) {
+        if (!fs.existsSync(l2RpcYamlPath)) {
+          throw new Error(`l2-rpc-production.yaml not found at: ${l2RpcYamlPath}`)
+        }
+
+        startL1Block = this.loadConfigMapEnvData(l2RpcYamlPath).L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK
+        if (startL1Block === undefined) {
+          throw new Error(
+            'l2-rpc-production.yaml configMaps.env.data.L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK ' +
+            'is required for legacy genesis config.scroll.l1Config.startL1Block',
+          )
+        }
       }
 
       const rethGenesis = normalizeGenesisForReth(genesisJson, startL1Block)
@@ -1102,7 +1122,7 @@ export default class SetupGenRpcPackage extends Command {
       fs.mkdirSync(targetDirectory, { recursive: true })
 
       // Write a deterministic Reth-specific derivative. The source
-      // values/genesis.yaml remains untouched and continues to serve Geth.
+      // values/genesis.yaml remains untouched for all consumers.
       const genesisJsonPath = path.join(targetDirectory, 'l2reth-genesis.json')
       fs.writeFileSync(genesisJsonPath, `${JSON.stringify(rethGenesis, null, 2)}\n`)
 

@@ -109,6 +109,43 @@ export function getRequiredManagedSignerConfig(config: any, key: ManagedSignerKe
   return signer
 }
 
+function requiredEthereumAddress(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !/^0x[\dA-Fa-f]{40}$/.test(value)) {
+    throw new Error(`${label} must be a 20-byte 0x-prefixed Ethereum address.`)
+  }
+
+  return value
+}
+
+/**
+ * Resolve the address a managed service actually signs as.
+ *
+ * The legacy `[accounts]` address remains the common deployment projection
+ * for both local and KMS signers. KMS configuration additionally records the
+ * provider-bound expected address; requiring both values to agree prevents
+ * eth-da-submitter and downstream sender allowlists from silently selecting
+ * different authorities.
+ */
+export function getRequiredManagedSignerAddress(config: any, key: ManagedSignerKey): string {
+  const role = MANAGED_SIGNER_ROLES[key]
+  const signer = getRequiredManagedSignerConfig(config, key)
+  const accountLabel = `accounts.${accountAddressKey(role)}`
+  const accountAddress = requiredEthereumAddress(config?.accounts?.[accountAddressKey(role)], accountLabel)
+
+  if (signer.backend !== 'aws_kms') return accountAddress
+
+  const signerLabel = `signers.${key}.expectedAddress`
+  const signerAddress = requiredEthereumAddress(signer.expectedAddress, signerLabel)
+  if (accountAddress.toLowerCase() !== signerAddress.toLowerCase()) {
+    throw new Error(
+      `${accountLabel} (${accountAddress}) does not match ${signerLabel} (${signerAddress}). `
+      + `Run setup ${role.service} to reconcile the ${role.role} signer before prep-charts.`,
+    )
+  }
+
+  return signerAddress
+}
+
 export function isAwsKmsSigner(signer: ManagedSignerConfig | undefined): boolean {
   return signer?.backend === 'aws_kms'
 }

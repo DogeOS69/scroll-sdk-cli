@@ -6,18 +6,25 @@ import { JsonOutputContext } from '../../src/utils/json-output.js'
 import {
   ProofAwsProvisioner,
   applyProofAwsValues,
+  assertNoUnmanagedPublicProofBucketGrant,
   buildProofArtifactStorePolicy,
+  normalizeProofArtifactPublicEndpoint,
+  normalizeProofBucketName,
   normalizeProofKeyPrefix,
+  proofArtifactS3Endpoint,
+  publicArtifactObjectResources,
+  upsertProofArtifactPublicReadPolicy,
   upsertProofArtifactVpcEndpointReadPolicy,
 } from '../../src/utils/proof-aws-provisioner.js'
 
 const PROJECTION = {
+  artifactRegion: 'us-west-2',
   bucket: 'dogeos-testnet-proof-artifacts',
   coordinatorRoleArn: 'arn:aws:iam::123456789012:role/dogeos-testnet-cluster-proof-coordinator',
   coordinatorServiceAccount: 'proof-coordinator',
   keyPrefix: 'proof-topology',
-  region: 'us-west-2',
   secretName: 'scroll/proof-coordinator-secrets',
+  secretRegion: 'us-west-2',
   withdrawalRoleArn: 'arn:aws:iam::123456789012:role/dogeos-testnet-cluster-wp-proof',
   withdrawalServiceAccount: 'withdrawal-processor',
 }
@@ -74,12 +81,16 @@ describe('proof-aws-provisioner values projection', () => {
     }
     const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
     const result = provisioner.provision(
-      { awsRegion: 'us-east-1', eksCluster: 'cluster', namespace: 'default', networkAlias: 'testnet' },
+      { awsRegion: 'us-east-1', deploymentAlias: 'deployment-01', eksCluster: 'cluster', namespace: 'default' },
       {
         artifactRead: {
-          mode: 'vpc-endpoint',
-          routeTableIds: ['rtb-aaaaaaaa', 'rtb-bbbbbbbb'],
-          vpcEndpointId: 'vpce-abc123',
+          publicEndpointUrl: 'https://objects.example.com',
+          publicReadMode: 'existing-gateway',
+          vpcEndpoint: {
+            enabled: true,
+            routeTableIds: ['rtb-aaaaaaaa', 'rtb-bbbbbbbb'],
+            vpcEndpointId: 'vpce-abc123',
+          },
         },
         bucket: 'proof-bucket',
         coordinatorRole: { description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator' },
@@ -90,10 +101,15 @@ describe('proof-aws-provisioner values projection', () => {
     )
 
     expect(result.artifactReadTransport).to.deep.equal({
-      mode: 'vpc-endpoint',
-      routeTableIds: ['rtb-aaaaaaaa', 'rtb-bbbbbbbb'],
-      status: 'configured-unverified',
-      vpcEndpointId: 'vpce-abc123',
+      publicEndpointUrl: 'https://objects.example.com',
+      publicReadMode: 'existing-gateway',
+      publicStatus: 'operator-managed-unverified',
+      vpcEndpoint: {
+        created: false,
+        routeTableIds: ['rtb-aaaaaaaa', 'rtb-bbbbbbbb'],
+        status: 'configured-unverified',
+        vpcEndpointId: 'vpce-abc123',
+      },
     })
     const modify = calls.find(call => call.args[0] === 'ec2' && call.args[1] === 'modify-vpc-endpoint')
     expect(modify?.args).to.deep.equal([
@@ -111,6 +127,11 @@ describe('proof-aws-provisioner values projection', () => {
     expect(policy.Statement[1].Resource).to.equal('arn:aws:s3:::proof-bucket/proof-topology/*')
     expect(policy.Statement[1].Condition.StringEquals['aws:SourceVpce']).to.equal('vpce-abc123')
 
+    const publicAccessBlock = calls.find(
+      call => call.args[0] === 's3api' && call.args[1] === 'put-public-access-block',
+    )
+    expect(publicAccessBlock).to.equal(undefined)
+
     const rolePolicies = calls.filter(call => call.args[0] === 'iam' && call.args[1] === 'put-role-policy')
     expect(rolePolicies).to.have.length(2)
     for (const call of rolePolicies) {
@@ -119,6 +140,304 @@ describe('proof-aws-provisioner values projection', () => {
       expect(policyDocument.Statement[1].Condition.StringLike['s3:prefix'])
         .to.deep.equal(['proof-topology', 'proof-topology/*'])
     }
+  })
+
+  it('does not mutate bucket policy or Public Access Block for an operator-managed external gateway', () => {
+    const calls: Array<{args: string[]; kind: 'json' | 'run' | 'text'}> = []
+    const aws = {
+      json(args: string[]): any {
+        calls.push({args, kind: 'json'})
+        return {}
+      },
+      run(args: string[]): string {
+        calls.push({args, kind: 'run'})
+        return ''
+      },
+      text(args: string[]): string {
+        calls.push({args, kind: 'text'})
+        if (args[0] === 'sts') return '123456789012'
+        if (args[0] === 'eks') return 'https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE'
+        throw new Error(`unexpected text call: ${args.join(' ')}`)
+      },
+    }
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    provisioner.provision(
+      {awsRegion: 'us-east-1', deploymentAlias: 'deployment-01', eksCluster: 'cluster', namespace: 'default'},
+      {
+        artifactRead: {
+          publicEndpointUrl: 'https://objects.example.com',
+          publicReadMode: 'existing-gateway',
+        },
+        bucket: 'proof-bucket',
+        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
+        keyPrefix: 'proof-topology',
+        secretName: 'proof-secret',
+        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
+      },
+    )
+
+    const bucketMutations = calls.filter(call =>
+      call.args[0] === 's3api'
+      && ['delete-bucket-policy', 'put-bucket-policy', 'put-public-access-block'].includes(call.args[1]),
+    )
+    expect(bucketMutations).to.deep.equal([])
+  })
+
+  it('discovers EKS route tables and creates the regional S3 gateway endpoint', () => {
+    const calls: Array<{args: string[]; kind: 'json' | 'run' | 'text'}> = []
+    const aws = {
+      json(args: string[]): any {
+        calls.push({args, kind: 'json'})
+        if (args[0] === 'eks' && args[1] === 'describe-cluster') {
+          return {
+            cluster: {
+              resourcesVpcConfig: {
+                subnetIds: ['subnet-aaaaaaaa', 'subnet-bbbbbbbb'],
+                vpcId: 'vpc-11111111',
+              },
+            },
+          }
+        }
+
+        if (args[0] === 'ec2' && args[1] === 'describe-route-tables' && args.includes('--filters')) {
+          return {
+            RouteTables: [
+              {
+                Associations: [{SubnetId: 'subnet-aaaaaaaa'}],
+                RouteTableId: 'rtb-aaaaaaaa',
+                VpcId: 'vpc-11111111',
+              },
+              {
+                Associations: [{Main: true}],
+                RouteTableId: 'rtb-bbbbbbbb',
+                VpcId: 'vpc-11111111',
+              },
+            ],
+          }
+        }
+
+        if (args[0] === 'ec2' && args[1] === 'describe-vpc-endpoints' && args.includes('--filters')) {
+          return {VpcEndpoints: []}
+        }
+
+        if (args[0] === 'ec2' && args[1] === 'create-vpc-endpoint') {
+          return {VpcEndpoint: {VpcEndpointId: 'vpce-abc123'}}
+        }
+
+        if (args[0] === 'ec2' && args[1] === 'describe-vpc-endpoints') {
+          return {
+            VpcEndpoints: [{
+              RouteTableIds: ['rtb-aaaaaaaa', 'rtb-bbbbbbbb'],
+              ServiceName: 'com.amazonaws.us-east-1.s3',
+              State: 'pending',
+              VpcEndpointType: 'Gateway',
+              VpcId: 'vpc-11111111',
+            }],
+          }
+        }
+
+        if (args[0] === 'ec2' && args[1] === 'describe-route-tables') {
+          return {
+            RouteTables: [
+              {RouteTableId: 'rtb-aaaaaaaa', VpcId: 'vpc-11111111'},
+              {RouteTableId: 'rtb-bbbbbbbb', VpcId: 'vpc-11111111'},
+            ],
+          }
+        }
+
+        return {}
+      },
+      run(args: string[]): string {
+        calls.push({args, kind: 'run'})
+        return ''
+      },
+      text(args: string[]): string {
+        calls.push({args, kind: 'text'})
+        if (args[0] === 'sts') return '123456789012'
+        if (args[0] === 'eks') return 'https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE'
+        if (args[0] === 's3api' && args[1] === 'get-bucket-policy') {
+          throw new Error('NoSuchBucketPolicy')
+        }
+
+        throw new Error(`unexpected text call: ${args.join(' ')}`)
+      },
+    }
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    const result = provisioner.provision(
+      {awsRegion: 'us-east-1', deploymentAlias: 'deployment-01', eksCluster: 'cluster', namespace: 'default'},
+      {
+        artifactRead: {
+          publicEndpointUrl: 'https://objects.example.com/',
+          publicReadMode: 'existing-gateway',
+          vpcEndpoint: {enabled: true},
+        },
+        bucket: 'proof-bucket',
+        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
+        keyPrefix: 'proof-topology',
+        secretName: 'proof-secret',
+        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
+      },
+    )
+
+    expect(result.artifactReadTransport).to.deep.equal({
+      publicEndpointUrl: 'https://objects.example.com',
+      publicReadMode: 'existing-gateway',
+      publicStatus: 'operator-managed-unverified',
+      vpcEndpoint: {
+        created: true,
+        routeTableIds: ['rtb-aaaaaaaa', 'rtb-bbbbbbbb'],
+        status: 'configured-unverified',
+        vpcEndpointId: 'vpce-abc123',
+      },
+    })
+    const create = calls.find(call => call.args[0] === 'ec2' && call.args[1] === 'create-vpc-endpoint')
+    expect(create?.args).to.deep.equal([
+      'ec2',
+      'create-vpc-endpoint',
+      '--vpc-id',
+      'vpc-11111111',
+      '--service-name',
+      'com.amazonaws.us-east-1.s3',
+      '--vpc-endpoint-type',
+      'Gateway',
+      '--route-table-ids',
+      'rtb-aaaaaaaa',
+      'rtb-bbbbbbbb',
+    ])
+  })
+
+  it('accepts only credential-free HTTPS endpoint bases for public proof reads', () => {
+    expect(normalizeProofArtifactPublicEndpoint('https://objects.example.com/'))
+      .to.equal('https://objects.example.com')
+    expect(normalizeProofArtifactPublicEndpoint('https://objects.example.com/proof-gateway/'))
+      .to.equal('https://objects.example.com/proof-gateway')
+    for (const invalid of [
+      'http://objects.example.com',
+      'https://user:secret@objects.example.com',
+      'https://objects.example.com?token=secret',
+    ]) {
+      expect(() => normalizeProofArtifactPublicEndpoint(invalid)).to.throw('proof artifact public endpoint')
+    }
+  })
+
+  it('derives and provisions a prefix-scoped direct S3 public read without public list or write', () => {
+    const calls: Array<{args: string[]; kind: 'json' | 'run' | 'text'}> = []
+    const operatorStatement = {
+      Action: 's3:ListBucket',
+      Effect: 'Deny',
+      Resource: 'arn:aws:s3:::proof-bucket',
+      Sid: 'OperatorGuard',
+    }
+    const aws = {
+      json(args: string[]): any {
+        calls.push({args, kind: 'json'})
+        return {}
+      },
+      run(args: string[]): string {
+        calls.push({args, kind: 'run'})
+        return ''
+      },
+      text(args: string[]): string {
+        calls.push({args, kind: 'text'})
+        if (args[0] === 'sts') return '123456789012'
+        if (args[0] === 'eks') return 'https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE'
+        if (args[0] === 's3api' && args[1] === 'get-bucket-policy') {
+          return JSON.stringify({Statement: [operatorStatement], Version: '2012-10-17'})
+        }
+
+        throw new Error(`unexpected text call: ${args.join(' ')}`)
+      },
+    }
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    const result = provisioner.provision(
+      {awsRegion: 'us-east-1', deploymentAlias: 'deployment-01', eksCluster: 'cluster', namespace: 'default'},
+      {
+        artifactRead: {publicReadMode: 'direct-s3'},
+        bucket: 'proof-bucket',
+        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
+        keyPrefix: 'proof-topology',
+        secretName: 'proof-secret',
+        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
+      },
+    )
+
+    expect(result.artifactReadTransport).to.deep.equal({
+      publicEndpointUrl: 'https://s3.us-east-1.amazonaws.com',
+      publicReadMode: 'direct-s3',
+      publicStatus: 'configured-unverified',
+    })
+    const publicAccessBlock = calls.find(
+      call => call.args[0] === 's3api' && call.args[1] === 'put-public-access-block',
+    )
+    expect(publicAccessBlock?.args).to.include(
+      'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false',
+    )
+    const putBucketPolicy = calls.find(
+      call => call.args[0] === 's3api' && call.args[1] === 'put-bucket-policy',
+    )
+    const policy = JSON.parse(putBucketPolicy?.args[putBucketPolicy.args.indexOf('--policy') + 1] as string)
+    expect(policy.Statement).to.deep.equal([
+      operatorStatement,
+      {
+        Action: 's3:GetObject',
+        Effect: 'Allow',
+        Principal: '*',
+        Resource: publicArtifactObjectResources('proof-bucket', 'proof-topology'),
+        Sid: 'ScrollSdkProofArtifactPublicRead',
+      },
+    ])
+  })
+
+  it('derives the regional direct S3 endpoint', () => {
+    expect(proofArtifactS3Endpoint('ap-northeast-1'))
+      .to.equal('https://s3.ap-northeast-1.amazonaws.com')
+  })
+
+  it('separates public external-consumer keys from the internal sidecar namespace', () => {
+    const resources = publicArtifactObjectResources('proof-bucket', 'rehearsal/batches')
+    expect(resources).to.deep.equal([
+      'arn:aws:s3:::proof-bucket/rehearsal/batches/0x*',
+      'arn:aws:s3:::proof-bucket/rehearsal/batches/input-specs/*',
+      'arn:aws:s3:::proof-bucket/rehearsal/batches/prepared-bundles/*',
+      'arn:aws:s3:::proof-bucket/rehearsal/batches/witnesses/*',
+      'arn:aws:s3:::proof-bucket/rehearsal/batches/public-outputs/*',
+      'arn:aws:s3:::proof-bucket/rehearsal/batches/proofs/*',
+    ])
+    expect(JSON.stringify(resources)).not.to.include('scroll-chunk-segmentation-sidecars')
+  })
+
+  it('rejects an EKS-region gateway endpoint for a cross-region artifact bucket', () => {
+    const calls: Array<{args: string[]; options: AwsCliOptions}> = []
+    const aws = {
+      json(): any { return {} },
+      run(args: string[], options: AwsCliOptions = {}): string {
+        calls.push({args, options})
+        return ''
+      },
+      text(): string { throw new Error('unexpected text call') },
+    }
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    expect(() => provisioner.provision(
+      {
+        artifactRegion: 'us-west-2',
+        awsRegion: 'us-east-1',
+        deploymentAlias: 'deployment-01',
+        eksCluster: 'cluster',
+        namespace: 'default',
+      },
+      {
+        artifactRead: {
+          publicReadMode: 'direct-s3',
+          vpcEndpoint: {enabled: true},
+        },
+        bucket: 'proof-bucket',
+        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
+        keyPrefix: 'rehearsal/batches',
+        secretName: 'proof-secret',
+        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
+      },
+    )).to.throw('cannot configure an us-east-1 S3 Gateway endpoint for artifact bucket region us-west-2')
+    expect(calls).to.deep.equal([])
   })
 
   it('builds a key-prefix-scoped S3 role policy', () => {
@@ -146,8 +465,15 @@ describe('proof-aws-provisioner values projection', () => {
 
   it('accepts nested proof key prefixes and rejects unsafe path syntax', () => {
     expect(normalizeProofKeyPrefix('releases/v1')).to.equal('releases/v1')
-    for (const invalid of ['', '/proof-topology', 'proof-topology/', 'proof//topology', 'proof/../topology', 'proof/*']) {
+    for (const invalid of ['', '/proof-topology', 'proof-topology/', 'proof//topology', 'proof/../topology', 'proof/*', 'proof topology', 'proof#topology']) {
       expect(() => normalizeProofKeyPrefix(invalid)).to.throw('proof artifact key prefix')
+    }
+  })
+
+  it('validates S3 bucket names before contacting AWS', () => {
+    expect(normalizeProofBucketName('proof-bucket')).to.equal('proof-bucket')
+    for (const invalid of ['ab', '-proofs', 'Proofs', 'proofs..archive', `${'a'.repeat(64)}`]) {
+      expect(() => normalizeProofBucketName(invalid)).to.throw('proof artifact S3 bucket')
     }
   })
 
@@ -213,6 +539,210 @@ describe('proof-aws-provisioner values projection', () => {
     expect(JSON.stringify(updated)).not.to.include('arn:aws:s3:::proof-bucket/*')
   })
 
+  it('upserts and removes only the CLI-managed direct S3 public read statement', () => {
+    const operatorStatement = {
+      Action: 's3:ListBucket',
+      Effect: 'Deny',
+      Resource: 'arn:aws:s3:::proof-bucket',
+      Sid: 'OperatorGuard',
+    }
+    const enabled = upsertProofArtifactPublicReadPolicy(
+      {Statement: [operatorStatement], Version: '2012-10-17'},
+      'proof-bucket',
+      'proof-topology',
+      true,
+    )
+    expect(enabled.Statement).to.deep.equal([
+      operatorStatement,
+      {
+        Action: 's3:GetObject',
+        Effect: 'Allow',
+        Principal: '*',
+        Resource: publicArtifactObjectResources('proof-bucket', 'proof-topology'),
+        Sid: 'ScrollSdkProofArtifactPublicRead',
+      },
+    ])
+
+    const rerun = upsertProofArtifactPublicReadPolicy(
+      enabled,
+      'proof-bucket',
+      'proof-topology',
+      true,
+    )
+    expect(rerun).to.deep.equal(enabled)
+
+    const disabled = upsertProofArtifactPublicReadPolicy(
+      enabled,
+      'proof-bucket',
+      'proof-topology',
+      false,
+    )
+    expect(disabled.Statement).to.deep.equal([operatorStatement])
+  })
+
+  it('ignores public grants on sibling prefixes and rejects grants overlapping the managed prefix', () => {
+    expect(() => assertNoUnmanagedPublicProofBucketGrant({
+      Statement: [{
+        Action: 's3:GetObject',
+        Effect: 'Allow',
+        Principal: '*',
+        Resource: 'arn:aws:s3:::proof-bucket/unrelated/*',
+        Sid: 'UnrelatedPublicRead',
+      }],
+    }, 'proof-bucket', 'proof-topology')).not.to.throw()
+
+    for (const resource of [
+      'arn:aws:s3:::proof-bucket/*',
+      'arn:aws:s3:::proof-bucket/proof-topology/*',
+      'arn:aws:s3:::proof-bucket/proof-topology/proofs/*',
+    ]) {
+      expect(() => assertNoUnmanagedPublicProofBucketGrant({
+        Statement: [{
+          Action: 's3:GetObject',
+          Effect: 'Allow',
+          Principal: '*',
+          Resource: resource,
+          Sid: 'OverlappingPublicRead',
+        }],
+      }, 'proof-bucket', 'proof-topology')).to.throw('overlapping s3://proof-bucket/proof-topology')
+    }
+
+    expect(() => assertNoUnmanagedPublicProofBucketGrant({
+      Statement: [{
+        Action: 's3:GetObject',
+        Condition: {StringEquals: {'aws:SourceVpce': 'vpce-0123456789abcdef0'}},
+        Effect: 'Allow',
+        Principal: '*',
+        Resource: 'arn:aws:s3:::proof-bucket/proof-topology/*',
+      }],
+    }, 'proof-bucket', 'proof-topology')).not.to.throw()
+  })
+
+  it('preserves an existing public S3 bucket policy and Public Access Block settings', () => {
+    const calls: Array<{args: string[]; kind: 'json' | 'run' | 'text'}> = []
+    const aws = {
+      json(args: string[]): any {
+        calls.push({args, kind: 'json'})
+        return {}
+      },
+      run(args: string[]): string {
+        calls.push({args, kind: 'run'})
+        return ''
+      },
+      text(args: string[]): string {
+        calls.push({args, kind: 'text'})
+        if (args[0] === 'sts') return '123456789012'
+        if (args[0] === 'eks') return 'https://oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE'
+        throw new Error(`unexpected text call: ${args.join(' ')}`)
+      },
+    }
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    const result = provisioner.provision(
+      {
+        artifactRegion: 'us-west-2',
+        awsRegion: 'us-west-2',
+        deploymentAlias: 'deployment-01',
+        eksCluster: 'cluster',
+        namespace: 'default',
+      },
+      {
+        artifactRead: {publicReadMode: 'existing-public-s3'},
+        bucket: 'proof-bucket',
+        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
+        keyPrefix: 'batches',
+        secretName: 'proof-secret',
+        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
+      },
+    )
+
+    expect(result.artifactReadTransport).to.deep.equal({
+      publicEndpointUrl: 'https://s3.us-west-2.amazonaws.com',
+      publicReadMode: 'existing-public-s3',
+      publicStatus: 'operator-managed-unverified',
+    })
+    expect(calls.some(call =>
+      call.args[0] === 's3api'
+      && ['delete-bucket-policy', 'put-bucket-policy', 'put-public-access-block'].includes(call.args[1])
+    )).to.equal(false)
+  })
+
+  it('rejects an overlapping public grant before changing VPC, IAM, or secret resources', () => {
+    const calls: Array<{args: string[]; kind: 'json' | 'run' | 'text'}> = []
+    const aws = {
+      json(args: string[]): any {
+        calls.push({args, kind: 'json'})
+        return {}
+      },
+      run(args: string[]): string {
+        calls.push({args, kind: 'run'})
+        return ''
+      },
+      text(args: string[]): string {
+        calls.push({args, kind: 'text'})
+        if (args[0] === 's3api' && args[1] === 'get-bucket-policy') {
+          return JSON.stringify({
+            Statement: [{
+              Action: 's3:GetObject',
+              Effect: 'Allow',
+              Principal: '*',
+              Resource: 'arn:aws:s3:::proof-bucket/*',
+              Sid: 'PublicReadGetObject',
+            }],
+          })
+        }
+
+        throw new Error(`unexpected text call: ${args.join(' ')}`)
+      },
+    }
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    expect(() => provisioner.provision(
+      {awsRegion: 'us-west-2', deploymentAlias: 'deployment-01', eksCluster: 'cluster', namespace: 'default'},
+      {
+        artifactRead: {
+          publicReadMode: 'direct-s3',
+          vpcEndpoint: {enabled: true},
+        },
+        bucket: 'proof-bucket',
+        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
+        keyPrefix: 'batches',
+        secretName: 'proof-secret',
+        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
+      },
+    )).to.throw('select existing-public-s3')
+
+    expect(calls.map(call => call.args.slice(0, 2))).to.deep.equal([
+      ['s3api', 'head-bucket'],
+      ['s3api', 'get-bucket-policy'],
+    ])
+  })
+
+  it('keeps idle local_fs storage free of AWS overrides while binding roles and tokens', () => {
+    const coordinator: Record<string, any> = {
+      env: [
+        {name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET', value: 'old'},
+        {name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__REGION', value: 'old'},
+        {name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__KEY_PREFIX', value: 'old'},
+        {name: 'RUST_LOG', value: 'info'},
+      ],
+      proofCoordinator: {config: {content: '[artifact_store]\nkind = "local_fs"\nroot = "/app/data/proof-artifacts"\n'}},
+    }
+    const withdrawal: Record<string, any> = {}
+    applyProofAwsValues(coordinator, withdrawal, PROJECTION)
+    applyProofAwsValues(coordinator, withdrawal, PROJECTION)
+    expect(coordinator.env).to.deep.equal([{name: 'RUST_LOG', value: 'info'}])
+    expect(coordinator.serviceAccount.annotations['eks.amazonaws.com/role-arn']).to.equal(PROJECTION.coordinatorRoleArn)
+    expect(coordinator.externalSecrets.secrets.data[0].remoteRef.key).to.equal(PROJECTION.secretName)
+    expect(withdrawal.withdrawalProof.s3AuthMode).to.equal('irsa')
+  })
+
+  it('preserves S3 projection for an active native S3 configuration', () => {
+    const coordinator: Record<string, any> = {
+      proofCoordinator: {config: {content: '[artifact_store]\nkind = "s3_compatible"\n'}},
+    }
+    applyProofAwsValues(coordinator, {}, PROJECTION)
+    expect(coordinator.env.find((item: any) => item.name.endsWith('__BUCKET')).value).to.equal(PROJECTION.bucket)
+  })
+
   it('projects bucket, roles, auth mode, and token mappings into fresh values', () => {
     const coordinator: Record<string, any> = {
       env: [{ name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET', value: '<TODO>' }],
@@ -268,7 +798,7 @@ describe('proof-aws-provisioner values projection', () => {
     expect(withdrawal.withdrawalProof.s3AuthMode).to.equal('irsa')
   })
 
-  it('updates the region on an existing AWS mapping for the provisioned proof secret', () => {
+  it('updates the secret path and region on existing AWS proof-token mappings', () => {
     const coordinator = {
       externalSecrets: {
         secrets: {
@@ -305,13 +835,24 @@ describe('proof-aws-provisioner values projection', () => {
       },
     }
 
-    applyProofAwsValues(coordinator, withdrawal, { ...PROJECTION, region: 'us-east-1' })
+    applyProofAwsValues(coordinator, withdrawal, {
+      ...PROJECTION,
+      secretName: 'scroll/dev0829/proof-coordinator-secrets',
+      secretRegion: 'us-east-1',
+    })
 
     expect(coordinator.externalSecrets.secrets.secretRegion).to.equal('us-east-1')
     expect(withdrawal.externalSecrets['proof-secrets'].secretRegion).to.equal('us-east-1')
+    expect(coordinator.externalSecrets.secrets.data.map((item: any) => item.remoteRef.key))
+      .to.deep.equal([
+        'scroll/dev0829/proof-coordinator-secrets',
+        'scroll/dev0829/proof-coordinator-secrets',
+      ])
+    expect(withdrawal.externalSecrets['proof-secrets'].data[0].remoteRef.key)
+      .to.equal('scroll/dev0829/proof-coordinator-secrets')
   })
 
-  it('preserves the region on AWS mappings for an alternate Secret', () => {
+  it('rebinds alternate AWS proof-token mappings to proof-aws authority', () => {
     const coordinator = {
       externalSecrets: {
         custom: {
@@ -343,10 +884,49 @@ describe('proof-aws-provisioner values projection', () => {
       },
     }
 
-    applyProofAwsValues(coordinator, withdrawal, { ...PROJECTION, region: 'us-east-1' })
+    applyProofAwsValues(coordinator, withdrawal, { ...PROJECTION, secretRegion: 'us-east-1' })
 
-    expect(coordinator.externalSecrets.custom.secretRegion).to.equal('ap-northeast-1')
-    expect(withdrawal.externalSecrets['proof-secrets'].secretRegion).to.equal('ap-northeast-1')
+    expect(coordinator.externalSecrets.custom.secretRegion).to.equal('us-east-1')
+    expect(withdrawal.externalSecrets['proof-secrets'].secretRegion).to.equal('us-east-1')
+    expect(coordinator.externalSecrets.custom.data.map((item: any) => item.remoteRef.key))
+      .to.deep.equal([
+        'scroll/proof-coordinator-secrets',
+        'scroll/proof-coordinator-secrets',
+      ])
+    expect(withdrawal.externalSecrets['proof-secrets'].data[0].remoteRef.key)
+      .to.equal('scroll/proof-coordinator-secrets')
+  })
+
+  it('migrates the legacy WP bearer env to a token file without changing service keys', () => {
+    const bearerEnv = 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__AUTH__BEARER_TOKEN'
+    const withdrawal: Record<string, any> = {
+      envFrom: [{secretRef: {name: 'withdrawal-processor-secret-env'}}],
+      externalSecrets: {
+        'withdrawal-processor-secret-env': {
+          data: [
+            {remoteRef: {key: 'dogeos/withdrawal-processor', property: 'RPC_PASSWORD'}, secretKey: 'RPC_PASSWORD'},
+            {remoteRef: {key: 'scroll/proof-coordinator-secrets', property: 'proof-work-token'}, secretKey: bearerEnv},
+          ], provider: 'aws', secretRegion: 'us-west-2',
+        },
+      },
+    }
+    const projection = {...PROJECTION, secretName: 'scroll/new-devnet/proof-coordinator-secrets', secretRegion: 'us-east-1'}
+    applyProofAwsValues({}, withdrawal, projection)
+    expect(withdrawal.externalSecrets['withdrawal-processor-secret-env'].data).to.have.length(1)
+    expect(withdrawal.externalSecrets['withdrawal-processor-secret-env'].secretRegion).to.equal('us-west-2')
+    expect(withdrawal.externalSecrets['withdrawal-proof-token'].data).to.deep.equal([
+      {remoteRef: {key: projection.secretName, property: 'proof-work-token'}, secretKey: 'proof-work-token'},
+    ])
+    expect(withdrawal.externalSecrets['withdrawal-proof-token'].secretRegion).to.equal('us-east-1')
+    expect(withdrawal.envFrom).to.deep.equal([
+      {secretRef: {name: 'withdrawal-processor-secret-env'}},
+    ])
+    expect(withdrawal.persistence['proof-work-token']).to.include({
+      mountPath: '/app/secrets/proof-work-token', name: 'withdrawal-proof-token', readOnly: true, subPath: 'proof-work-token',
+    })
+    const before = JSON.stringify(withdrawal)
+    applyProofAwsValues({}, withdrawal, projection)
+    expect(JSON.stringify(withdrawal)).to.equal(before)
   })
 
   it('replaces a stale valueFrom on managed env entries', () => {

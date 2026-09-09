@@ -1,4 +1,16 @@
-import type { ProofSystemMode } from '../utils/proof-system-mode.js'
+import type {ProofTopologySpec} from './proof-topology.js'
+
+export type {
+  ActiveProofTopologySpec,
+  ProofEnforcement,
+  ProofGeneration,
+  ProofTopologyArtifactStoreConfig,
+  ProofTopologyCompilerConfig,
+  ProofTopologyDeploymentConfig,
+  ProofTopologyImageReference,
+  ProofTopologyRealScrollConfig,
+  ProofTopologySpec,
+} from './proof-topology.js'
 
 /**
  * DeploymentSpec - Single source of truth for DogeOS deployments
@@ -56,10 +68,10 @@ export interface DeploymentSpec {
   proofCoordinator?: ProofCoordinatorConfig
 
   /**
-   * Deployment-wide proof intent. Optional: omitting it preserves the
-   * proof-disabled/direct-sign posture.
+   * Versioned proof-topology compiler source. Both active profiles may be
+   * staged while disabled; changing only `mode` selects the compiled topology.
    */
-  proofSystem?: ProofSystemIntentConfig
+  proofTopology?: ProofTopologySpec
 
   /** Rollup parameters */
   rollup: RollupConfig
@@ -153,7 +165,7 @@ export interface ProofCoordinatorConfig {
   /** Stable coordinator lease owner id. */
   coordinatorId?: string
 
-  /** Generate proof-coordinator Helm values. Defaults to true when this block is present. */
+  /** Prepare proof-coordinator Helm values. Defaults to true when this block is present. */
   enabled?: boolean
 
   /** WP proof-work API base URL consumed by proof-coordinator. */
@@ -180,22 +192,6 @@ export interface ProofCoordinatorConfig {
   withdrawalProcessorServiceAccount?: {
     annotations?: Record<string, string>
     name?: string
-  }
-}
-
-export interface ProofSystemIntentConfig {
-  /** Public credential-free GET root shared by workers and partner signers. */
-  artifactReadBaseUrl?: string
-
-  /** One posture controls WP, coordinator, worker, and signer policy together. */
-  mode: ProofSystemMode
-
-  /** Proof release bundle root. Conventional proof-artifacts/ is used when omitted. */
-  release?: string
-
-  signerPolicy?: {
-    /** Partner signer source-set policy input. */
-    sourceSet?: string
   }
 }
 
@@ -581,8 +577,6 @@ export interface SigningConfig {
       /** Override only for a deliberately pre-created ServiceAccount. */
       serviceAccount?: string
     }>
-    /** Application and evidence policy required by production-kms. */
-    productionPolicy?: AttestationSignerProductionPolicy
     /** Explicit security profile. production-kms is modeled now even while production RotateKey remains fail-closed in the signer. */
     profile: 'production-kms' | 'staging-kms' | 'staging-local'
   }
@@ -630,26 +624,6 @@ export interface CubesignerProductionPolicy {
   proofResolverAuthority: string
   /** sha256:<64 lowercase hex> digest of the verifier identity. */
   verifierIdentityDigest: string
-}
-
-export interface AttestationSignerProductionPolicy {
-  activeBridgeKeyHash: string
-  allowedGitCommit: string
-  allowedReleaseVersion: string
-  allowedSigningPolicyVersion?: number
-  bridgeNamespaceId: string
-  envelope?: {
-    allowedProofTriples?: string
-    allowedTeeSignerIds?: string[]
-    maxFetchUrlBytes?: number
-    maxProofArtifacts?: number
-    maxRefStringBytes?: number
-  }
-  protocolInstanceId: string
-  sourceSetFile: string
-  supportedSigningPolicyVersions?: number[]
-  teeAllowedSignerIds: string[]
-  verifierRegistryFile: string
 }
 
 export interface FrontendSubdomains {
@@ -768,6 +742,8 @@ export interface ContractsConfig {
   /** Gas oracle settings */
   gasOracle: {
     blobScalar: number
+    /** Galileo commit scalar. Defaults to the contracts template value 38_720_000_000. */
+    commitScalar?: number
     penaltyFactor: number
     penaltyThreshold: number
     scalar: number

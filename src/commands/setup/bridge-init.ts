@@ -11,6 +11,7 @@ import * as path from 'node:path'
 import { getSetupDefaultsPath } from '../../config/constants.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
+import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import { protocolIdSidecarPath } from '../../utils/signer-policy-derivation.js'
 
@@ -155,6 +156,7 @@ export function buildEthereumDaProtocolSeedConfig(
     inputs.contractsConfig,
     'L2_MOAT_PROXY_ADDR'
   ).toLowerCase()
+  protocolConfig.deposit_queue_transform.message_queue_gas_limit ??= 200_000
 
   return protocolSeedConfig
 }
@@ -260,6 +262,10 @@ export class BridgeInitCommand extends Command {
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)',
     }),
+    'kube-context': Flags.string({
+      description: 'Explicit Kubernetes context for the Ethereum DA RPC probe (defaults to KUBE_CONTEXT).',
+      env: 'KUBE_CONTEXT',
+    }),
     'non-interactive': Flags.boolean({
       char: 'N',
       default: false,
@@ -277,7 +283,7 @@ export class BridgeInitCommand extends Command {
         '1-prepare requires values/genesis.yaml, extracts .data/genesis.json, and prepares protocol_seed.toml.',
         '2-setup is NOT idempotent: generate test keys and broadcast the setup transaction.',
         '3-bridge-info is idempotent: generate namespace and bridge.json.',
-        '4-fund is NOT idempotent: broadcast 10 initial bridge funding transactions.',
+        '4-fund is NOT idempotent: broadcast the configured bridge-funding and/or deposit-seed transactions.',
         '5-protocol-context is idempotent: generate protocol_context.json.',
         'Numeric aliases 1, 2, 3, 4, and 5 are accepted.',
       ].join(' '),
@@ -287,6 +293,7 @@ export class BridgeInitCommand extends Command {
   private dockerPlatform: string = 'linux/amd64'
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
+  private kubeContext?: string
   private nonInteractive: boolean = false
   private selectedInitialSystemSigner?: string
 
@@ -296,6 +303,7 @@ export class BridgeInitCommand extends Command {
     this.nonInteractive = flags['non-interactive']
     this.jsonMode = flags.json
     this.dockerPlatform = flags['docker-platform']
+    this.kubeContext = flags['kube-context']
     this.jsonCtx = new JsonOutputContext('setup bridge-init', this.jsonMode)
 
     let { seed } = flags
@@ -1302,6 +1310,7 @@ export class BridgeInitCommand extends Command {
     const output = execFileSync(
       'kubectl',
       [
+        ...(this.kubeContext ? ['--context', this.kubeContext] : []),
         'run', podName,
         '--namespace', namespace,
         '--image', 'curlimages/curl:8.20.0',
@@ -1431,10 +1440,10 @@ export class BridgeInitCommand extends Command {
 
     this.warnNonIdempotentStep(
       '4-fund',
-      'This step is NOT idempotent. It consumes funding UTXOs and broadcasts 10 bridge funding transactions.'
+      'This step is NOT idempotent. It consumes funding UTXOs and broadcasts the configured bridge-funding and/or deposit-seed transactions.'
     )
 
-    this.jsonCtx.info('Running step 4-fund: broadcast 10 initial bridge funding transactions')
+    this.jsonCtx.info('Running step 4-fund: broadcast configured bridge-funding and/or deposit-seed transactions')
     await this.runDockerCommand(imageTag, [
       'generate_test_keys',
       'fund-bridge',
@@ -1518,17 +1527,26 @@ export class BridgeInitCommand extends Command {
       '--output',
       '.data/protocol_context.json',
     ])
+    const genesisTransaction = await ensureGenesisSequencerTransaction({
+      protocolContextPath: paths.protocolContextPath,
+      setupDefaultsPath: paths.setupDefaultsPath,
+      withdrawalProcessorOutputPath: paths.withdrawalProcessorTomlPath,
+    })
+    this.jsonCtx.info(
+      `Saved and validated genesis sequencer transaction ${genesisTransaction.txid}:${genesisTransaction.vout} `
+      + `in ${paths.withdrawalProcessorTomlPath}`,
+    )
     this.materializeProtocolContextYaml(paths)
 
     // generate_protocol_context also emits the protocol instance id (canonical
-    // protocol opening hash) as a sidecar; setup export-signer-policy derives
-    // its --protocol-instance-id default from it.
+    // protocol opening hash) as an operator audit sidecar. The V2 signer reads
+    // its identity only from canonical protocol_context.json.
     const sidecarPath = protocolIdSidecarPath(paths.protocolContextPath)
     if (fs.existsSync(sidecarPath)) {
       this.jsonCtx.info(`protocol_id (protocol instance id): ${fs.readFileSync(sidecarPath, 'utf8').trim()} (${sidecarPath})`)
     } else {
       this.jsonCtx.addWarning(
-        `${sidecarPath} was not produced — this dogeos-core image predates the protocol_id sidecar; setup export-signer-policy will require an explicit --protocol-instance-id`
+        `${sidecarPath} was not produced — this dogeos-core image predates the protocol_id audit sidecar; canonical protocol_context.json remains the signer authority`
       )
     }
   }

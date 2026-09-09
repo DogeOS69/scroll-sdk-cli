@@ -1,39 +1,36 @@
-import { Command, Flags } from '@oclif/core'
+import {Command, Flags} from '@oclif/core'
 import chalk from 'chalk'
+import {createHash} from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import type { ProofSystemMode } from '../../utils/proof-system-mode.js'
+import type {ResolvedProofIntent} from '../../utils/proof-intent.js'
+import type {SignerAdvanceL2VerifierMaterial} from '../../utils/signer-policy-bundle.js'
 
-import { normalizeExternalHttpBaseUrl } from '../../utils/attestation-signer-descriptor.js'
-import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
-import { JsonOutputContext } from '../../utils/json-output.js'
+import {normalizeExternalHttpBaseUrl} from '../../utils/attestation-signer-descriptor.js'
+import {loadDogeConfigWithSelection} from '../../utils/doge-config.js'
+import {JsonOutputContext} from '../../utils/json-output.js'
+import {resolveProofIntent} from '../../utils/proof-intent.js'
+import {DEFAULT_PROOF_MATERIALS_RECEIPT, readProofMaterials} from '../../utils/proof-materials.js'
 import {
-  DEFAULT_PROOF_COORDINATOR_CONFIG,
-  DEFAULT_PROOF_PROGRAM_MANIFESTS,
-  deriveAllowedProofTriples,
   normalizeSignerProofArtifactBaseUrl,
   readStagedSignerProofArtifactBaseUrl,
-} from '../../utils/proof-configurator.js'
-import { resolveProofIntent } from '../../utils/proof-intent.js'
-import { normalizeCompressedSecp256k1PublicKeyCsv } from '../../utils/secp256k1-public-key.js'
+} from '../../utils/proof-signer-policy-input.js'
 import {
-  renderDisabledSourceSetToml,
-  renderDisabledVerifierRegistryToml,
-  renderMockSourceSetToml,
+  ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE,
   renderPartnerCommands,
   renderSignerPolicyEnv,
-  renderVerifierRegistryToml,
   signerRuntimePolicyProfile,
 } from '../../utils/signer-policy-bundle.js'
-import {
-  deriveBridgeNamespaceId,
-  deriveProtocolInstanceId,
-  deriveTeeAllowedSignerIds,
-  deriveTsoUrl,
-  protocolIdSidecarPath,
-} from '../../utils/signer-policy-derivation.js'
-import { WITHDRAWAL_NATIVE_CONFIG_RELPATH } from '../../utils/withdrawal-config.js'
+import {deriveTsoUrl} from '../../utils/signer-policy-derivation.js'
+import {WITHDRAWAL_NATIVE_CONFIG_RELPATH} from '../../utils/withdrawal-config.js'
+
+const BUNDLE_SCHEMA = 'dogeos/attestation-signer-policy-bundle/v2'
+const MANIFEST_SCHEMA = 'dogeos/attestation-signer-policy-manifest/v1'
+
+function sha256(contents: Buffer | string): string {
+  return `sha256:${createHash('sha256').update(contents).digest('hex')}`
+}
 
 function require20ByteHex(value: string, name: string): string {
   const normalized = value.toLowerCase().startsWith('0x') ? value.toLowerCase() : `0x${value.toLowerCase()}`
@@ -41,280 +38,218 @@ function require20ByteHex(value: string, name: string): string {
   return normalized
 }
 
-function require32ByteHex(value: string, name: string): string {
-  const normalized = value.toLowerCase().startsWith('0x') ? value.toLowerCase() : `0x${value.toLowerCase()}`
-  if (!/^0x[\da-f]{64}$/.test(normalized)) throw new Error(`${name} must be 32-byte hex (0x + 64 hex chars)`)
+function require64ByteHex(value: string | undefined, name: string): string {
+  const normalized = value?.toLowerCase()
+  if (!normalized || !/^0x[\da-f]{128}$/.test(normalized)) {
+    throw new Error(`${name} must be canonical 64-byte hex (0x + 128 hex chars)`)
+  }
+
   return normalized
 }
 
-/**
- * The post-genesis half of the partner-signer handshake: after descriptors
- * were imported (`setup attestation-signer`) and the bridge was generated
- * (`setup bridge-init`), this command assembles the policy bundle every
- * signer operator needs to switch their attestation-signer into the bridge's
- * selected policy profile. Mock proving mirrors e2e_harness's audited
- * staging-scaffold posture; production proving remains fail-closed. The bundle
- * is chain-level (identical for every signer of this bridge) — the only
- * per-operator value is the signer's own key, which the operator already holds.
- */
+function assertRegularNonSymlinkFile(file: string, name: string): void {
+  if (!fs.existsSync(file)) throw new Error(`${name} not found: ${file}`)
+  const stat = fs.lstatSync(file)
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`${name} must be a regular non-symlink file: ${file}`)
+}
+
+function resolveProductionVerifier(
+  resolved: ResolvedProofIntent,
+  outDir: string,
+): SignerAdvanceL2VerifierMaterial {
+  const prepared = readProofMaterials(
+    path.resolve(DEFAULT_PROOF_MATERIALS_RECEIPT),
+    process.cwd(),
+  )
+  if (!prepared.software.artifacts) {
+    throw new Error('Production proof enforcement requires full real proof materials; rerun scrollsdk setup proof-materials --generation real')
+  }
+
+  const source = path.resolve(process.cwd(), prepared.software.artifacts.aggregateVerifyingKey.path)
+
+  assertRegularNonSymlinkFile(source, 'production aggregate verifying key')
+  const contents = fs.readFileSync(source)
+  if (contents.length === 0) throw new Error(`production aggregate verifying key is empty: ${source}`)
+  fs.writeFileSync(path.join(outDir, ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE), contents)
+
+  return {
+    aggVerifyingKeyFile: ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE,
+    aggVerifyingKeySha256: sha256(contents),
+    batchProgramCommitmentHex: require64ByteHex(
+      prepared.software.identities.batch.appCommitRaw,
+      'proof materials batch app commitment',
+    ),
+    l2RangeAggregationProgramCommitmentHex: require64ByteHex(
+      prepared.software.identities.l2Range.appCommitRaw,
+      'proof materials L2-range app commitment',
+    ),
+  }
+}
+
+function writeManifest(outDir: string, payloadFiles: string[]): void {
+  const files = [...payloadFiles].sort().map(file => {
+    const contents = fs.readFileSync(path.join(outDir, file))
+    return {file, sha256: sha256(contents), sizeBytes: contents.length}
+  })
+  fs.writeFileSync(path.join(outDir, 'signer-policy-manifest.json'), `${JSON.stringify({files, schema: MANIFEST_SCHEMA}, null, 2)}\n`)
+}
+
 export class ExportSignerPolicyCommand extends Command {
-  static description = 'Assemble the post-genesis policy bundle for the proof-system mode reconciled by setup prep-charts: disabled selects direct-sign/dev_permissive with proof fetch off, mock selects staging_scaffold with basic proof checks, and production selects fail-closed production_enforce.'
+  static description = 'Export the dogeos-core attestation_evidence_v2 policy selected by the current proof topology. The bundle contains bridge-owned protocol/verifier inputs; each signer operator keeps its RPC source sets, rotation allowlists, keys, and release pins.'
 
   static examples = [
     '$ scrollsdk setup export-signer-policy',
-    '$ scrollsdk setup export-signer-policy --tso-url https://tso.dogeos.example --allowed-proof-triples "scroll_batch:scroll-production-v1:<vk-hash>"',
+    '$ scrollsdk setup export-signer-policy --tso-url https://tso.dogeos.example',
   ]
 
   static flags = {
-    'allowed-proof-triples': Flags.string({ description: 'Envelope proof-triple allowlist; default: derived from the ProofCoordinator.toml or proof-artifacts manifests staged by prep-charts; missing/empty fails closed' }),
-    'bridge-namespace-id': Flags.string({ description: '20-byte bridge namespace id; default is read from .data/GenerateBridgeInfo.toml (namespace_id) written by bridge-init step 3' }),
-    config: Flags.string({ char: 'c', description: 'Path to doge-config.toml' }),
-    json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
-    out: Flags.string({ default: 'signer-policy-bundle', description: 'Bundle output directory' }),
-    'protocol-context': Flags.string({ default: '.data/protocol_context.json', description: 'protocol_context.json produced by setup bridge-init step 5' }),
-    'protocol-instance-id': Flags.string({ description: '32-byte protocol instance id (canonical protocol opening hash); default: read from the protocol_id sidecar next to --protocol-context written by bridge-init step 5' }),
-    'signer-proof-artifact-base-url': Flags.string({ description: `Stable public GET base signers use to fetch accepted proof objects; default: the value prep-charts staged into ${WITHDRAWAL_NATIVE_CONFIG_RELPATH}` }),
-    'source-set': Flags.string({ description: 'source-set.toml override. Mock defaults to an e2e_harness empty scaffold; production defaults to configs/source-set.toml' }),
-    spec: Flags.string({ description: 'Optional DeploymentSpec proof-intent source; auto-detects deployment-spec.yaml/yml when omitted' }),
-    'supported-signing-policy-versions': Flags.string({ default: '1', description: 'CSV of supported signing policy versions' }),
-    'tee-allowed-signer-ids': Flags.string({ description: 'CSV of allowed TEE signer ids; compressed or uncompressed SEC1 keys are normalized to dogeos-core\'s compressed form. Production defaults to .data/setup_defaults.toml tee_pubkey; mock defaults to empty, matching e2e_harness' }),
-    'tso-url': Flags.string({ description: 'TSO base URL reachable FROM the signer operator network (used for signature callbacks); default: https://<[ingress].TSO_HOST> from config.toml' }),
-    'verifier-registry': Flags.string({ description: 'verifier-registry.toml override; default is generated from the proof triples staged by setup prep-charts' }),
+    config: Flags.string({char: 'c', description: 'Path to doge-config.toml'}),
+    json: Flags.boolean({default: false, description: 'Output structured JSON'}),
+    out: Flags.string({default: 'signer-policy-bundle', description: 'Bundle output directory'}),
+    'protocol-context': Flags.string({default: '.data/protocol_context.json', description: 'Canonical protocol_context.json produced by setup bridge-init'}),
+    'signer-proof-artifact-base-url': Flags.string({description: `Public GET base used by signers; default: compiler output in ${WITHDRAWAL_NATIVE_CONFIG_RELPATH}`}),
+    spec: Flags.string({description: 'Optional DeploymentSpec proof source; conflicts with doge-config [proof_topology]'}),
+    'tso-url': Flags.string({description: 'TSO base URL reachable from signer networks; default: config.toml [ingress].TSO_HOST'}),
   }
 
   async run(): Promise<void> {
-    const { flags } = await this.parse(ExportSignerPolicyCommand)
+    const {flags} = await this.parse(ExportSignerPolicyCommand)
     const json = new JsonOutputContext('setup export-signer-policy', flags.json)
     try {
       const loaded = await loadDogeConfigWithSelection(flags.config, 'scrollsdk setup doge-config')
-      const { config } = loaded
-      const resolvedIntent = resolveProofIntent({
+      const {config} = loaded
+      const resolved = resolveProofIntent({
         deploymentDir: process.cwd(),
         dogeConfig: config,
         dogeConfigPath: loaded.configPath,
         specPath: flags.spec,
-      })
-      const {mode} = resolvedIntent.intent
-      const external = config.attestationSigner?.external
-      if (!external || external.length === 0 || config.attestationSigner?.mode !== 'external') {
-        throw new Error('doge-config has no external attestation signers; run scrollsdk setup attestation-signer with descriptors first')
+      })!
+      const {enforcement, generation, mode} = resolved.intent
+      if (config.network === 'mainnet' && enforcement === 'observe') {
+        throw new Error('dogeos-core refuses attestation-signer policy_mode=observe on Dogecoin mainnet; validate real proving and select enforcement=enforce before exporting the mainnet signer policy')
+      }
+
+      const signers = config.attestationSigner?.external
+      if (!signers || signers.length === 0 || config.attestationSigner?.mode !== 'external') {
+        throw new Error('doge-config has no external attestation signers; run scrollsdk setup attestation-signer first')
       }
 
       const contextPath = path.resolve(flags['protocol-context'])
-      if (!fs.existsSync(contextPath)) throw new Error(`${contextPath} not found; run scrollsdk setup bridge-init first`)
-      const protocolContext = JSON.parse(fs.readFileSync(contextPath, 'utf8'))
+      assertRegularNonSymlinkFile(contextPath, 'canonical protocol context')
+      const protocolContextBytes = fs.readFileSync(contextPath)
+      const protocolContext = JSON.parse(protocolContextBytes.toString('utf8')) as unknown
+      if (!protocolContext || typeof protocolContext !== 'object' || Array.isArray(protocolContext)) {
+        throw new Error('protocol_context.json must contain a JSON object')
+      }
+
+      const {genesis} = protocolContext as Record<string, unknown>
+      if (!genesis || typeof genesis !== 'object' || Array.isArray(genesis)) {
+        throw new Error('protocol_context.json genesis must be a JSON object')
+      }
+
       const activeBridgeKeyHash = require20ByteHex(
-        String(protocolContext?.genesis?.genesis_bridge_key_hash || ''),
-        'protocol_context.json genesis.genesis_bridge_key_hash'
+        String((genesis as Record<string, unknown>).genesis_bridge_key_hash || ''),
+        'protocol_context.json genesis.genesis_bridge_key_hash',
       )
 
-      const {
-        allowedProofTriples,
-        bridgeNamespaceId,
-        derivedSources,
-        protocolInstanceId,
-        signerProofArtifactBaseUrl,
-        teeAllowedSignerIds,
-        tsoUrl,
-      } = this.resolveDerivableInputs(flags, contextPath, mode, json)
+      const derivedSources: Record<string, string> = {}
+      const derivedTso = deriveTsoUrl()
+      const tsoInput = flags['tso-url'] || derivedTso?.value
+      if (!tsoInput) throw new Error('config.toml has no [ingress].TSO_HOST; pass --tso-url')
+      if (!flags['tso-url'] && derivedTso) derivedSources.tsoUrl = derivedTso.source
+      const tsoUrl = normalizeExternalHttpBaseUrl(tsoInput, '--tso-url', {remoteNetwork: 'signer operator network'})
 
+      const stagedArtifactUrl = fs.existsSync(WITHDRAWAL_NATIVE_CONFIG_RELPATH)
+        ? readStagedSignerProofArtifactBaseUrl(fs.readFileSync(WITHDRAWAL_NATIVE_CONFIG_RELPATH, 'utf8'))
+        : undefined
+      const artifactInput = flags['signer-proof-artifact-base-url'] || stagedArtifactUrl
+      if (mode !== 'disabled' && !artifactInput) {
+        throw new Error(`no signer proof-artifact base URL in ${WITHDRAWAL_NATIVE_CONFIG_RELPATH}; run setup prep-charts or pass --signer-proof-artifact-base-url`)
+      }
+
+      if (!flags['signer-proof-artifact-base-url'] && stagedArtifactUrl) {
+        derivedSources.signerProofArtifactBaseUrl = `${WITHDRAWAL_NATIVE_CONFIG_RELPATH} [proof_system].signer_proof_artifact_base_url`
+      }
+
+      const signerProofArtifactBaseUrl = artifactInput
+        ? normalizeSignerProofArtifactBaseUrl(artifactInput)
+        : undefined
       const outDir = path.resolve(flags.out)
-      fs.mkdirSync(outDir, { recursive: true })
-      // Every signer receives the exact reviewed context bytes. The partner
-      // compose mounts its policy directory read-only at /etc/dogeos.
-      fs.copyFileSync(contextPath, path.join(outDir, 'protocol_context.json'))
-      // Removed in the partner-compose-only deployment model. A bundle may be
-      // regenerated into an existing directory, so actively delete the stale
-      // Helm overlay instead of merely stopping its creation.
-      fs.rmSync(path.join(outDir, 'values-overlay.yaml'), { force: true })
-      const verifierRegistryOutput = path.join(outDir, 'verifier-registry.toml')
-      if (mode === 'disabled') {
-        fs.writeFileSync(verifierRegistryOutput, renderDisabledVerifierRegistryToml())
-        derivedSources['verifier-registry'] = 'proof-system disabled posture'
-      } else if (flags['verifier-registry']) {
-        const verifierRegistryPath = path.resolve(flags['verifier-registry'])
-        if (!fs.existsSync(verifierRegistryPath)) throw new Error(`--verifier-registry file not found: ${verifierRegistryPath}`)
-        fs.copyFileSync(verifierRegistryPath, verifierRegistryOutput)
-      } else {
-        fs.writeFileSync(verifierRegistryOutput, renderVerifierRegistryToml(allowedProofTriples))
-        derivedSources['verifier-registry'] = 'proof triples staged by setup prep-charts'
-        json.info('--verifier-registry generated from proof triples staged by setup prep-charts')
+      fs.mkdirSync(outDir, {recursive: true})
+      for (const stale of ['source-set.toml', 'values-overlay.yaml', 'verifier-registry.toml']) {
+        fs.rmSync(path.join(outDir, stale), {force: true})
       }
 
-      const sourceSetOutput = path.join(outDir, 'source-set.toml')
-      const conventionalProductionSourceSet = path.resolve('configs/source-set.toml')
-      const sourceSetPath = flags['source-set']
-        ? path.resolve(flags['source-set'])
-        : resolvedIntent.intent.signerPolicy?.sourceSet
-          ? path.resolve(resolvedIntent.intent.signerPolicy.sourceSet)
-          : (mode === 'production' ? conventionalProductionSourceSet : undefined)
-      if (mode === 'disabled') {
-        fs.writeFileSync(sourceSetOutput, renderDisabledSourceSetToml())
-        derivedSources['source-set'] = 'proof-system disabled posture'
-      } else if (sourceSetPath) {
-        if (!fs.existsSync(sourceSetPath)) {
-          throw new Error(flags['source-set']
-            ? `--source-set file not found: ${sourceSetPath}`
-            : `production signer policy requires source-set.toml at the standard path ${conventionalProductionSourceSet}; create it with real partner-reachable RPC sources or pass --source-set`)
-        }
-
-        fs.copyFileSync(sourceSetPath, sourceSetOutput)
-      } else {
-        fs.writeFileSync(sourceSetOutput, renderMockSourceSetToml())
-        derivedSources['source-set'] = 'mock e2e_harness empty scaffold'
-        json.info('--source-set generated as mock e2e_harness empty scaffold')
-      }
+      fs.writeFileSync(path.join(outDir, 'protocol_context.json'), protocolContextBytes)
+      const advanceL2Verifier = generation === 'real' ? resolveProductionVerifier(resolved, outDir) : undefined
+      if (!advanceL2Verifier) fs.rmSync(path.join(outDir, ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE), {force: true})
 
       const bundleInput = {
-        activeBridgeKeyHash,
-        allowedProofTriples,
-        bridgeNamespaceId,
+        advanceL2Verifier,
+        enforcement,
+        generation,
         mode,
         network: config.network,
-        protocolInstanceId,
         signerProofArtifactBaseUrl,
-        signers: external.map(signer => ({ endpoint: signer.endpoint, id: signer.id, publicKey: signer.publicKey })),
-        supportedSigningPolicyVersions: flags['supported-signing-policy-versions'],
-        teeAllowedSignerIds,
+        signers: signers.map(signer => ({endpoint: signer.endpoint, id: signer.id, publicKey: signer.publicKey})),
         tsoUrl,
       }
-      const runtimeProfile = signerRuntimePolicyProfile(mode)
+      const runtime = signerRuntimePolicyProfile(enforcement)
       const policy = {
         activeBridgeKeyHash,
-        allowedProofTriples,
-        bridgeNamespaceId,
-        envelopeMaxProofArtifacts: runtimeProfile.envelopeMaxProofArtifacts,
+        advanceL2Verifier,
+        contract: 'attestation_evidence_v2',
+        enforcement,
+        generation,
         mode,
         network: config.network,
-        protocolInstanceId,
-        signerPolicyMode: runtimeProfile.policyMode,
+        operatorOwnedPolicy: {
+          file: 'attestation-signer.toml',
+          productionRequires: [
+            'advance_l1_policy.terminal_anchor_sources',
+            'advance_l2_policy.ethereum_sources',
+            'advance_l2_policy.l2_sources',
+            'rotation_policy.allowed_next_bridge_script_hashes',
+            'rotation_policy.allowed_next_sequencer_signers',
+          ],
+        },
+        policyMode: runtime.policyMode,
+        protocolContext: {file: 'protocol_context.json', sha256: sha256(protocolContextBytes)},
+        schema: BUNDLE_SCHEMA,
         signerProofArtifactBaseUrl,
         signers: bundleInput.signers,
-        supportedSigningPolicyVersions: flags['supported-signing-policy-versions'],
-        teeAllowedSignerIds,
         tsoUrl,
       }
       fs.writeFileSync(path.join(outDir, 'signer-policy.json'), `${JSON.stringify(policy, null, 2)}\n`)
       fs.writeFileSync(path.join(outDir, 'signer-policy.env'), renderSignerPolicyEnv(bundleInput))
       fs.writeFileSync(path.join(outDir, 'PARTNER-COMMANDS.md'), renderPartnerCommands(bundleInput))
+      const payloadFiles = [
+        'PARTNER-COMMANDS.md',
+        'protocol_context.json',
+        'signer-policy.env',
+        'signer-policy.json',
+        ...(advanceL2Verifier ? [ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE] : []),
+      ]
+      writeManifest(outDir, payloadFiles)
+      const files = [...payloadFiles, 'signer-policy-manifest.json'].sort()
 
       const result = {
         activeBridgeKeyHash,
-        allowedProofTriples,
-        bridgeNamespaceId,
+        advanceL2Verifier,
         bundleDir: outDir,
+        contract: 'attestation_evidence_v2',
         derivedSources,
-        envelopeMaxProofArtifacts: runtimeProfile.envelopeMaxProofArtifacts,
-        files: ['protocol_context.json', 'signer-policy.json', 'signer-policy.env', 'verifier-registry.toml', 'source-set.toml', 'PARTNER-COMMANDS.md'],
+        files,
         mode,
-        protocolInstanceId,
-        signerCount: external.length,
-        signerPolicyMode: runtimeProfile.policyMode,
+        signerCount: signers.length,
+        signerPolicyMode: runtime.policyMode,
         signerProofArtifactBaseUrl,
-        teeAllowedSignerIds,
         tsoUrl,
       }
       if (flags.json) json.success(result)
-      else this.log(chalk.green(`${mode} policy bundle written to ${outDir} — send the whole directory to every signer operator (${external.map(signer => signer.id).join(', ')}); PARTNER-COMMANDS.md contains their exact addresses and commands.`))
+      else this.log(chalk.green(`${mode}/${generation}/${enforcement} V2 signer policy bundle written to ${outDir} for ${signers.length} partner operator(s).`))
     } catch (error) {
       json.error('E804_SIGNER_POLICY_EXPORT_FAILED', error instanceof Error ? error.message : String(error), 'CONFIGURATION', true)
-    }
-  }
-
-  /**
-   * Resolve the bundle inputs that are derivable from deployment artifacts;
-   * flags are overrides. Each derived value is reported with its source so
-   * the operator can audit what went into the bundle.
-   */
-  private resolveDerivableInputs(
-    flags: {
-      'allowed-proof-triples'?: string
-      'bridge-namespace-id'?: string
-      'protocol-instance-id'?: string
-      'signer-proof-artifact-base-url'?: string
-      'tee-allowed-signer-ids'?: string
-      'tso-url'?: string
-    },
-    contextPath: string,
-    mode: ProofSystemMode,
-    json: JsonOutputContext
-  ): {
-    allowedProofTriples: string
-    bridgeNamespaceId: string
-    derivedSources: Record<string, string>
-    protocolInstanceId: string
-    signerProofArtifactBaseUrl?: string
-    teeAllowedSignerIds: string
-    tsoUrl: string
-  } {
-    const derivedSources: Record<string, string> = {}
-    const derive = (flagName: string, derived: { source: string; value: string } | undefined): string | undefined => {
-      if (derived === undefined) return undefined
-      derivedSources[flagName] = derived.source
-      json.info(`--${flagName} derived from ${derived.source}`)
-      return derived.value
-    }
-
-    const bridgeNamespaceIdInput = flags['bridge-namespace-id']
-      ?? derive('bridge-namespace-id', deriveBridgeNamespaceId())
-    if (bridgeNamespaceIdInput === undefined) {
-      throw new Error('bridge namespace id unavailable: run scrollsdk setup bridge-init --step 3-bridge-info (expected namespace_id in .data/GenerateBridgeInfo.toml) or pass --bridge-namespace-id')
-    }
-
-    const protocolInstanceIdInput = flags['protocol-instance-id']
-      ?? derive('protocol-instance-id', deriveProtocolInstanceId(contextPath))
-    if (protocolInstanceIdInput === undefined) {
-      throw new Error(`${protocolIdSidecarPath(contextPath)} not found; re-run scrollsdk setup bridge-init --step 5-protocol-context with a dogeos-core image that emits the protocol_id sidecar, or pass --protocol-instance-id`)
-    }
-
-    const tsoUrl = flags['tso-url'] ?? derive('tso-url', deriveTsoUrl())
-    if (tsoUrl === undefined) {
-      throw new Error('config.toml has no [ingress].TSO_HOST to derive the TSO base URL from; pass --tso-url')
-    }
-
-    const stagedBaseUrl = fs.existsSync(WITHDRAWAL_NATIVE_CONFIG_RELPATH)
-      ? readStagedSignerProofArtifactBaseUrl(fs.readFileSync(WITHDRAWAL_NATIVE_CONFIG_RELPATH, 'utf8'))
-      : undefined
-    const signerProofArtifactBaseUrlInput = flags['signer-proof-artifact-base-url']
-      ?? derive('signer-proof-artifact-base-url', stagedBaseUrl === undefined
-        ? undefined
-        : { source: `${WITHDRAWAL_NATIVE_CONFIG_RELPATH} [proof_system].signer_proof_artifact_base_url`, value: stagedBaseUrl })
-    if (mode !== 'disabled' && signerProofArtifactBaseUrlInput === undefined) {
-      throw new Error(`no staged signer proof-artifact base URL found in ${WITHDRAWAL_NATIVE_CONFIG_RELPATH}; run scrollsdk setup prep-charts first or pass --signer-proof-artifact-base-url`)
-    }
-
-    // e2e_harness's staging-scaffold mock signer carries proof artifacts but
-    // no TEE receipt, so it intentionally leaves both TEE allowlists empty.
-    // Production requires the bridge TEE signer id; accept legacy CubeSigner
-    // 04+X+Y values at the boundary and canonicalize them to dogeos-core's
-    // 02/03+X representation.
-    const teeFlag = flags['tee-allowed-signer-ids']
-    const teeAllowedSignerIds = teeFlag === undefined
-      ? (mode === 'production'
-          ? derive('tee-allowed-signer-ids', deriveTeeAllowedSignerIds()) ?? ''
-          : '')
-      : normalizeCompressedSecp256k1PublicKeyCsv(teeFlag, '--tee-allowed-signer-ids')
-    if (mode === 'production' && teeAllowedSignerIds === '') {
-      throw new Error('production signer policy requires a TEE signer id; run scrollsdk setup cubesigner-init first or pass --tee-allowed-signer-ids')
-    }
-
-    const allowedProofTriples = mode === 'disabled' ? '' : flags['allowed-proof-triples']
-      ?? derive('allowed-proof-triples', deriveAllowedProofTriples(DEFAULT_PROOF_COORDINATOR_CONFIG, DEFAULT_PROOF_PROGRAM_MANIFESTS))
-      ?? ''
-    if (mode !== 'disabled' && allowedProofTriples === '') {
-      throw new Error('no staged proof triples found; run scrollsdk setup prep-charts first or pass --allowed-proof-triples')
-    }
-
-    return {
-      allowedProofTriples,
-      bridgeNamespaceId: require20ByteHex(bridgeNamespaceIdInput, 'bridge namespace id'),
-      derivedSources,
-      protocolInstanceId: require32ByteHex(protocolInstanceIdInput, '--protocol-instance-id'),
-      signerProofArtifactBaseUrl: signerProofArtifactBaseUrlInput === undefined
-        ? undefined
-        : normalizeSignerProofArtifactBaseUrl(signerProofArtifactBaseUrlInput),
-      teeAllowedSignerIds,
-      tsoUrl: normalizeExternalHttpBaseUrl(tsoUrl, '--tso-url', { remoteNetwork: 'signer operator network' }),
     }
   }
 }

@@ -49,7 +49,6 @@ export function deriveBootnodeRethEnodeUrl(nodekey: string, index: number): stri
 
 export function applyBootnodeRethValues(yamlData: any, config: ResolvedBootnodeRethConfig): void {
   const chartResourceNames = getChartResourceNames(yamlData, getBootnodeRethResourceName(config.index))
-  removeChartResourceNameOverrides(yamlData)
   yamlData.envFrom = removeGeneratedResourceRefs(removeSecretRef(yamlData.envFrom, config.secretName), chartResourceNames)
   if (yamlData.reth?.nodeKey) delete yamlData.reth.nodeKey.secretName
   removeEnvValue(yamlData.env, RETH_BOOTNODE_NODEKEY_ENV)
@@ -74,13 +73,6 @@ function getChartResourceNames(values: any, defaultName: string): Set<string> {
   }
 
   return names
-}
-
-function removeChartResourceNameOverrides(values: any): void {
-  if (!values.global) return
-  delete values.global.fullnameOverride
-  delete values.global.nameOverride
-  if (Object.keys(values.global).length === 0) delete values.global
 }
 
 function removeEnvValue(env: any[] | undefined, name: string): void {
@@ -139,10 +131,13 @@ function ensureBootnodeRethExternalSecret(yamlData: any, config: ResolvedBootnod
   yamlData.externalSecrets ||= {}
   const existing = yamlData.externalSecrets['secret-env'] || yamlData.externalSecrets[config.secretName] || {}
   delete yamlData.externalSecrets[config.secretName]
+  // Keep the operator/push-secrets-selected path when regenerating values.
+  const remoteKey = existing.data?.find((item: any) => item.secretKey === RETH_BOOTNODE_NODEKEY_ENV)
+    ?.remoteRef?.key ?? `dogeos/${config.secretName}`
   yamlData.externalSecrets['secret-env'] = {
     data: [
       {
-        remoteRef: { key: `dogeos/${config.secretName}`, property: RETH_BOOTNODE_NODEKEY_ENV },
+        remoteRef: { key: remoteKey, property: RETH_BOOTNODE_NODEKEY_ENV },
         secretKey: RETH_BOOTNODE_NODEKEY_ENV,
       },
     ],

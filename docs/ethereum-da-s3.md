@@ -19,11 +19,75 @@ blocked and SSE-S3 (`AES256`) enabled. The CLI does **not** create an anonymous
 read bucket policy, CloudFront distribution, or other public read transport.
 Operators must configure and verify the `publicBaseUrl` transport separately.
 
+This is also the canonical object store for proof topology. dogeos-core does
+not expose a second S3 client for segmentation sidecars: raw DA blobs and proof
+artifacts use the same bucket, region, and key prefix, with different logical
+object keys. `setup proof-aws-init` reads this table and refuses an independent
+proof bucket/prefix.
+
+For a prefix such as `rehearsal/batches`, the relevant namespaces are:
+
+```text
+rehearsal/batches/0x<versioned-hash>                         raw DA blob
+rehearsal/batches/scroll-chunk-segmentation-sidecars/...    internal sidecar
+rehearsal/batches/input-specs/...                           Worker input
+rehearsal/batches/prepared-bundles/...                      Worker input
+rehearsal/batches/witnesses/...                             Worker/signer input
+rehearsal/batches/public-outputs/...                        Worker output
+rehearsal/batches/proofs/...                                proof bytes
+```
+
+The bucket can still apply different read permissions to those object-key
+patterns. In direct-S3 mode, never grant anonymous `GetObject` to the entire
+`<keyPrefix>/*`: the segmentation-sidecar namespace is internal. List, write,
+and delete remain authenticated even for externally readable objects.
+
+`setup proof-aws-init` distinguishes bucket-policy ownership from object-key
+layout. Use `--artifact-public-read-mode existing-public-s3` when the canonical
+archive bucket already has an operator-managed anonymous S3 policy. In that
+mode the command does not change the bucket-wide Public Access Block settings
+or the existing public-read policy; it only manages deployment-scoped proof
+resources and, when selected, the prefix-scoped EKS Gateway endpoint grant.
+Use `direct-s3` only when the CLI owns the bucket's public-access posture, or
+`existing-gateway` when S3 remains private behind an HTTPS gateway.
+
 After configuring the archive, run `scrollsdk setup prep-charts`. It reads
 `.data/doge-config.toml` and projects the settings into `eth-da-submitter`,
 `l1-interface`, `withdrawal-processor`, and every runtime Reth values file.
 `scrollsdk setup gen-rpc-package` independently reads the same canonical
 configuration when it generates `L2RETH_BLOB_S3_URL`.
+
+## DA publisher authority
+
+The Ethereum DA inbox is permissionless: any Ethereum account can submit a
+type-3 transaction to the inbox address derived from the L2 chain ID. The
+Withdrawal Processor therefore uses its `ethereum_da.inbox_worker.expected_batchers`
+allowlist as an ingest-time availability guard.
+
+Operators do not configure that allowlist separately. `setup prep-charts`
+resolves the `L1_COMMIT_SENDER` selected by `setup eth-da-submitter` and writes
+the same address to both:
+
+```text
+eth-da-submitter KMS/local signer authority
+                    │
+                    └── withdrawal-processor
+                        [ethereum_da.inbox_worker]
+                        expected_batchers = ["0x..."]
+```
+
+For an AWS KMS signer, the command also requires
+`accounts.L1_COMMIT_SENDER_ADDR` and
+`signers.l1CommitSender.expectedAddress` to match case-insensitively. A drift
+fails before values are installed. To rotate the submitter signer, reconcile
+it with `setup eth-da-submitter` and regenerate the values; do not hand-edit
+the WP allowlist.
+
+This allowlist is a local, non-normative filter rather than protocol-level
+authorization. Blob integrity, decoded L2 state, continuity, finality, and
+proof checks remain authoritative. The allowlist prevents unrelated senders
+from entering this deployment's candidate feed and causing avoidable
+same-height ambiguity or resource consumption.
 
 The resolver performs one anonymous HTTP GET per blob:
 
@@ -56,8 +120,10 @@ scrollsdk setup eth-da-submitter \
   --no-create-archive-bucket
 ```
 
-`--aws-region` selects the KMS/EKS/IRSA region.
+`--aws-region` selects the KMS/EKS/IRSA and Secrets Manager region.
 `--archive-region` selects the S3 bucket region; the two regions may differ.
+An S3 Gateway endpoint is regional, so proof AWS setup does not associate an
+EKS-region gateway endpoint when the shared artifact bucket is cross-region.
 
 To let the CLI create a missing bucket, use
 `--create-archive-bucket` (the default) instead. The CLI performs
@@ -221,3 +287,9 @@ sync S3 settings into `eth-da-submitter`, `l1-interface`,
 `withdrawal-processor`, and runtime Reth values. Run
 `scrollsdk setup gen-rpc-package` after that when producing an external RPC
 package.
+
+Proof setup with `--artifact-public-read-mode existing-gateway` does not
+modify the shared bucket policy or its Public Access Block settings. Those
+controls may already be serving raw DA consumers and remain the operator's
+responsibility. Use `direct-s3` only when scroll-sdk-cli is meant to own the
+narrowly scoped anonymous-read statement.

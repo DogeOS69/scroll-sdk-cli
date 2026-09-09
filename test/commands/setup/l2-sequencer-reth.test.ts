@@ -101,6 +101,9 @@ describe('setup l2-sequencer-reth', () => {
       externalSecrets: {
         'l2-reth-sequencer-2-secret-env': { provider: 'aws' },
       },
+      global: {
+        nameOverride: 'operator-sequencer-name',
+      },
       persistence: {
         keys: { enabled: true, mountPath: '/keys', type: 'emptyDir' },
       },
@@ -128,6 +131,7 @@ describe('setup l2-sequencer-reth', () => {
     })
 
     expect(values.envFrom).to.deep.equal([{ configMapRef: { name: 'shared-observability-env' } }])
+    expect(values.global).to.deep.equal({nameOverride: 'operator-sequencer-name'})
     expect(values.externalSecrets).to.equal(undefined)
     expect(values.env.some((item: any) => item.name === 'RETH_NODEKEY')).to.equal(false)
     expect(values.env.some((item: any) => item.name === 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY')).to.equal(false)
@@ -141,7 +145,7 @@ describe('setup l2-sequencer-reth', () => {
     expect(values.reth.signer.localFile).to.deep.equal({
       secretKey: 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY',
     })
-    expect(values.reth.sequencer).to.deep.equal({enabled: true, autoStart: false})
+    expect(values.reth.sequencer).to.deep.equal({autoStart: false, enabled: true})
     expect(values.secrets['secret-env'].stringData).to.deep.equal({
       RETH_NODEKEY: '1111111111111111111111111111111111111111111111111111111111111111',
       RETH_SEQUENCER_SIGNER_PRIVATE_KEY: '0x2222222222222222222222222222222222222222222222222222222222222222',
@@ -169,6 +173,9 @@ describe('setup l2-sequencer-reth', () => {
         { name: 'RETH_SEQUENCER_AWS_KMS_KEY_ID', value: 'alias/old' },
       ],
       reth: {
+        sequencer: {
+          enabled: false,
+        },
         signer: {
           awsKmsKeyId: 'alias/old',
         },
@@ -202,12 +209,31 @@ describe('setup l2-sequencer-reth', () => {
       secretKey: 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY',
     })
     expect(values.reth.signer.awsKmsKeyId).to.equal(undefined)
+    expect(values.reth.sequencer).to.deep.equal({autoStart: false, enabled: false})
     expect(values.externalSecrets['secret-env'].data.map((item: any) => item.secretKey)).to.deep.equal([
       'RETH_NODEKEY',
       'RETH_SEQUENCER_SIGNER_PRIVATE_KEY',
     ])
     expect(values.command).to.equal(undefined)
   })
+
+  for (const name of ['secret-env', 'l2-reth-sequencer-1-secret-env']) {
+    it(`preserves separate node and signer remote paths across regeneration (${name})`, () => {
+      const paths = ['dogeos/custom-instance/node', 'dogeos/custom-instance/signer']
+      const fields = ['RETH_NODEKEY', 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY']
+      const values: any = {externalSecrets: {[name]: {data: fields.map((secretKey, index) => ({
+        remoteRef: {key: paths[index]}, secretKey,
+      }))}}}
+      for (let pass = 0; pass < 2; pass++) {
+        applySequencerRethValues(values, {
+          index: 1, nodekey: '1'.repeat(64), secretMode: 'external-secret',
+          secretName: 'l2-reth-sequencer-1-secret-env', signer: {address: '0x1234567890123456789012345678901234567890', backend: 'local', privateKey: '0x' + '2'.repeat(64)},
+          signerMode: 'external_secret',
+        })
+        expect(values.externalSecrets['secret-env'].data.map((item: any) => item.remoteRef.key)).to.deep.equal(paths)
+      }
+    })
+  }
 
   it('removes plain Secret fields when switching back to ExternalSecret mode', () => {
     const values: any = {
@@ -239,7 +265,7 @@ describe('setup l2-sequencer-reth', () => {
 
     expect(values.secrets).to.equal(undefined)
     expect(values.externalSecrets).to.have.property('secret-env')
-    expect(values.reth.sequencer).to.deep.equal({enabled: true, autoStart: true})
+    expect(values.reth.sequencer).to.deep.equal({autoStart: true, enabled: true})
   })
 
   it('writes KMS signer env and service account without local signer private key secret', () => {

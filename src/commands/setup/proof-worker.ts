@@ -1,22 +1,20 @@
 import { Command, Flags } from '@oclif/core'
 import * as path from 'node:path'
 
+import {
+  hydrateCompiledProverWorkerBundle,
+  verifyCompiledProverWorkerBundle,
+} from '../../utils/compiled-prover-worker-bundle.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { readOptionalProofAwsConfig } from '../../utils/proof-aws-config.js'
 import {
   readProofDeploymentContract,
   resolveContractFile,
 } from '../../utils/proof-deployment-contract.js'
-import {
-  hydrateProverWorkerMockBundle,
-  readProverWorkerTokenFromSecretsManager,
-} from '../../utils/prover-worker-mock-bundle.js'
-import { hydrateProverWorkerProductionBundle } from '../../utils/prover-worker-production-bundle.js'
-
-const DEFAULT_PROOF_SECRET_NAME = 'scroll/proof-coordinator-secrets'
+import {readProverWorkerTokenFromSecretsManager} from '../../utils/proof-worker-token.js'
 
 export default class ProofWorker extends Command {
-  static override description = 'Hydrate a generated mock or production prover-worker Docker Compose bundle with its bearer token; run explicitly after deterministic K8s config generation'
+  static override description = 'Hydrate a compiler-generated Docker Compose prover-worker bundle with its bearer token after deterministic configuration generation'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
@@ -38,9 +36,9 @@ export default class ProofWorker extends Command {
     try {
       const deploymentDir = path.resolve(flags['deployment-dir'])
       const {contract} = readProofDeploymentContract(deploymentDir)
-      if (!['mock-compose', 'production-compose'].includes(contract.worker.kind)) {
+      if (!['compiled-compose', 'compiled-external'].includes(contract.worker.kind)) {
         throw new Error(
-          `setup proof-worker requires a generated Compose worker bundle; `
+          `setup proof-worker requires a generated Docker Compose Worker bundle; `
           + `current mode is ${contract.mode} (${contract.worker.kind})`,
         )
       }
@@ -49,33 +47,48 @@ export default class ProofWorker extends Command {
         throw new Error('deployment contract has no generated worker bundle; run scrollsdk setup prep-charts first')
       }
 
+      const bundleDir = resolveContractFile(deploymentDir, contract.worker.bundleDir)
+      verifyCompiledProverWorkerBundle({
+        allowPendingCredential: true,
+        bundleDir,
+        expectedBundleId: contract.worker.bundleId,
+      })
+
       const tokenFromEnvironment = process.env[flags['worker-token-env']]?.trim()
       const proofAwsConfig = readOptionalProofAwsConfig(deploymentDir)?.config
+      const secretName = flags['secret-name'] || proofAwsConfig?.secret.name
+      if (!tokenFromEnvironment && !secretName) {
+        throw new Error(
+          'cannot infer the deployment-specific proof secret; run setup proof-aws-init, '
+          + 'pass --secret-name, or set the configured worker token environment variable',
+        )
+      }
+
       const workerToken = tokenFromEnvironment || readProverWorkerTokenFromSecretsManager({
           awsProfile: flags['aws-profile'],
           awsRegion: flags['aws-region'] || proofAwsConfig?.secret.region,
-          secretName: flags['secret-name'] || proofAwsConfig?.secret.name || DEFAULT_PROOF_SECRET_NAME,
+          secretName: secretName as string,
         })
-      const bundleDir = resolveContractFile(deploymentDir, contract.worker.bundleDir)
-      const bundle = contract.worker.kind === 'production-compose'
-        ? hydrateProverWorkerProductionBundle({dir: bundleDir, workerToken})
-        : hydrateProverWorkerMockBundle({dir: bundleDir, workerToken})
+      const bundle = hydrateCompiledProverWorkerBundle({
+        bundleDir,
+        expectedBundleId: contract.worker.bundleId,
+        workerToken,
+      })
       if (bundle.bundleId !== contract.worker.bundleId) {
         throw new Error(
           `hydrated worker bundle ID ${bundle.bundleId} does not match deployment contract ${contract.worker.bundleId}; rerun setup prep-charts`,
         )
       }
 
-      json.logSuccess(`Hydrated ${contract.mode} prover-worker bundle ${bundle.bundleId}`)
-      const productionHint = contract.worker.kind === 'production-compose'
-        ? 'Sync both the proof release and worker bundle to the GPU host, '
-        : `Copy ${bundle.bundleDir} to the worker host, `
+      json.logSuccess(`Hydrated ${contract.mode}/${contract.generation} prover-worker bundle ${bundle.bundleId}`)
       json.info(
-        productionHint
+        'Sync the selected proof resources and exact compiler Worker bundle to the worker host, '
         + `run scrollsdk setup proof-worker-check --bundle-dir ${bundle.bundleDir} `
-        + `--expected-bundle-id ${bundle.bundleId}, then docker compose --profile tools run --rm preflight `
-        + 'and docker compose up -d prover-worker.',
+        + `--expected-bundle-id ${bundle.bundleId}, then run ./prover-worker-compose config --quiet `
+        + 'and ./prover-worker-compose up -d prover-worker. The launcher runs the container as '
+        + 'the invoking host UID/GID so the 0600 token stays private and readable.',
       )
+
       json.success(bundle)
     } catch (error) {
       json.error(
