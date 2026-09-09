@@ -5,7 +5,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import {
+import PrepCharts, {
   applyConfigMapEnvValues,
   applyCubesignerPrepEnv,
   applyEthDaSubmitterInitialBatchSidecar,
@@ -167,6 +167,17 @@ describe('setup prep-charts ConfigMap file mounts', () => {
 })
 
 describe('setup prep-charts Reth initial peer topology', () => {
+  it('honors an explicit empty Geth peer array without reviving legacy node keys', () => {
+    const harness: any = Object.create(PrepCharts.prototype)
+    harness.configData = { sequencer: { L2_GETH_STATIC_PEERS: [], L2GETH_NODEKEY: 'archived-key' } }
+    harness.deriveLegacySequencerEnodeUrl = () => 'enode://legacy@l2-sequencer-0:30303'
+    expect(harness.getLegacySequencerPeers()).to.deep.equal([])
+    harness.configData.sequencer.L2_GETH_STATIC_PEERS = ['enode://explicit@peer:30303']
+    expect(harness.getLegacySequencerPeers()).to.deep.equal(['enode://explicit@peer:30303'])
+    delete harness.configData.sequencer.L2_GETH_STATIC_PEERS
+    expect(harness.getLegacySequencerPeers()).to.deep.equal(['enode://legacy@l2-sequencer-0:30303'])
+  })
+
   const gethSequencers = [
     'enode://geth0@l2-sequencer-0:30303',
     'enode://geth1@l2-sequencer-1:30303',

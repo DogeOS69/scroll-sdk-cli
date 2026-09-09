@@ -1746,6 +1746,10 @@ export default class SetupPrepCharts extends Command {
     if (!sequencerConfig || typeof sequencerConfig !== 'object') return []
 
     const peers = this.parsePeerList(sequencerConfig.L2_GETH_STATIC_PEERS)
+    // An explicit empty TOML array opts out of retired Geth peers while
+    // preserving archived compatibility keys. Only absent/non-array legacy
+    // settings should fall back to deriving peers from those keys.
+    if (Array.isArray(sequencerConfig.L2_GETH_STATIC_PEERS)) return peers
     if (peers.length > 0) return peers
 
     const derivedPeers: string[] = []
