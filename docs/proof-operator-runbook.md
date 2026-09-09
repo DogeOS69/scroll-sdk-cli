@@ -202,6 +202,14 @@ To run real segmentation and the real Chunk/Batch subprocess materializers
 while keeping proof generation mock and enforcement in observe, import the
 release identity probe as part of the mock receipt:
 
+For published native Scroll identity JSON, use the alternative
+`--scroll-identity-evidence /build/proof-scroll-identities-v1.json` instead of
+`--identity-env`. This mock-only path takes real Chunk/Batch identities from
+native output and Aggregation from a matching compiled Worker export, while
+keeping Bridge identity explicitly mock. It does **not** require a real Bridge
+guest bake or a new on-chain Bridge. See [image tools and CPU fallback](proof-image-tools.md)
+for the complete procedure, including the beta.4e compile-time Batch injection.
+
 ```bash
 scrollsdk setup proof-materials \
   --generation mock \
