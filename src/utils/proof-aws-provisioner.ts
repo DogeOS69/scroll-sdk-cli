@@ -509,14 +509,20 @@ export function applyProofAwsValues(
     if (secret.data.length === 0) delete withdrawalValues.externalSecrets[name]
   }
 
-  if (bearerMappings.length > 0) {
+  if (bearerMappings.length > 0 || withdrawalValues.externalSecrets?.['withdrawal-proof-token']?.provider === 'aws') {
     withdrawalValues.externalSecrets['withdrawal-proof-token'] = {
-      data: [{remoteRef: {key: projection.secretName, property: 'proof-work-token'}, secretKey: bearerEnv}],
+      data: [{remoteRef: {key: projection.secretName, property: 'proof-work-token'}, secretKey: 'proof-work-token'}],
       provider: 'aws', refreshInterval: '2m', secretRegion: projection.secretRegion, serviceAccount: 'external-secrets',
     }
-    withdrawalValues.envFrom ||= []
-    if (!withdrawalValues.envFrom.some((item: any) => item?.secretRef?.name === 'withdrawal-proof-token')) {
-      withdrawalValues.envFrom.push({secretRef: {name: 'withdrawal-proof-token'}})
+    // The compiler selects bearer_token_file. Injecting the old bearer-token
+    // environment value simultaneously makes active WP fail closed at startup.
+    withdrawalValues.envFrom = (withdrawalValues.envFrom || []).filter((item: any) => item?.secretRef?.name !== 'withdrawal-proof-token')
+    if (Array.isArray(withdrawalValues.env)) withdrawalValues.env = withdrawalValues.env.filter((item: any) => item?.name !== bearerEnv)
+    else if (withdrawalValues.env) delete withdrawalValues.env[bearerEnv]
+    withdrawalValues.persistence ||= {}
+    withdrawalValues.persistence['proof-work-token'] = {
+      enabled: true, mountPath: '/app/secrets/proof-work-token', name: 'withdrawal-proof-token',
+      readOnly: true, subPath: 'proof-work-token', type: 'secret',
     }
   }
 

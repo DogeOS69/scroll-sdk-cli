@@ -537,6 +537,10 @@ function configureWithdrawalValues(
   const {mode} = topology
   const values = readYaml(filePath)
   ensureWithdrawalChartWiring(values)
+  if (values.persistence?.['proof-work-token']) {
+    values.persistence['proof-work-token'].mountPath = topology.deployment.proofWorkTokenFile
+  }
+
   values.configMaps ||= {}
   values.configMaps.config ||= {}
   values.configMaps.config.enabled = true
