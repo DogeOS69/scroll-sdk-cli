@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, perfectionist/sort-classes -- Helm values and aws CLI JSON are dynamic documents; discovery helpers stay beside the VPC reconciliation flow. */
 
+import { parse as parseToml } from '@iarna/toml'
 import { randomBytes } from 'node:crypto'
 
 import type { JsonOutputContext } from './json-output.js'
@@ -449,9 +450,27 @@ export function applyProofAwsValues(
   projection: ProofAwsValuesProjection
 ): void {
   const keyPrefix = normalizeProofKeyPrefix(projection.keyPrefix)
-  upsertEnv(coordinatorValues, 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET', projection.bucket, 'proof-coordinator values')
-  upsertEnv(coordinatorValues, 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__REGION', projection.artifactRegion, 'proof-coordinator values')
-  upsertEnv(coordinatorValues, 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__KEY_PREFIX', keyPrefix, 'proof-coordinator values')
+  const content = coordinatorValues.proofCoordinator?.config?.content
+  const nativeConfig = typeof content === 'string' && content.trim() ? parseToml(content) as any : undefined
+  const artifactEnv = {
+    DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET: projection.bucket,
+    DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__KEY_PREFIX: keyPrefix,
+    DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__REGION: projection.artifactRegion,
+  }
+  if (nativeConfig?.artifact_store?.kind === 'local_fs') {
+    // Disabled topology emits an idle local_fs coordinator. Provisioned AWS
+    // resources still own IRSA/tokens, but must not override its storage kind.
+    if (coordinatorValues.env !== undefined && !Array.isArray(coordinatorValues.env)) {
+      throw new TypeError('proof-coordinator values: env must be an array')
+    }
+
+    coordinatorValues.env = (coordinatorValues.env || []).filter((item: any) => !Object.hasOwn(artifactEnv, item?.name))
+  } else {
+    for (const [name, value] of Object.entries(artifactEnv)) {
+      upsertEnv(coordinatorValues, name, value, 'proof-coordinator values')
+    }
+  }
+
   bindIrsaServiceAccount(coordinatorValues, projection.coordinatorServiceAccount, projection.coordinatorRoleArn)
 
   if (!hasProofTokenMappings(coordinatorValues)) {

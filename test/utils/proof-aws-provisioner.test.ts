@@ -716,6 +716,33 @@ describe('proof-aws-provisioner values projection', () => {
     ])
   })
 
+  it('keeps idle local_fs storage free of AWS overrides while binding roles and tokens', () => {
+    const coordinator: Record<string, any> = {
+      env: [
+        {name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET', value: 'old'},
+        {name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__REGION', value: 'old'},
+        {name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__KEY_PREFIX', value: 'old'},
+        {name: 'RUST_LOG', value: 'info'},
+      ],
+      proofCoordinator: {config: {content: '[artifact_store]\nkind = "local_fs"\nroot = "/app/data/proof-artifacts"\n'}},
+    }
+    const withdrawal: Record<string, any> = {}
+    applyProofAwsValues(coordinator, withdrawal, PROJECTION)
+    applyProofAwsValues(coordinator, withdrawal, PROJECTION)
+    expect(coordinator.env).to.deep.equal([{name: 'RUST_LOG', value: 'info'}])
+    expect(coordinator.serviceAccount.annotations['eks.amazonaws.com/role-arn']).to.equal(PROJECTION.coordinatorRoleArn)
+    expect(coordinator.externalSecrets.secrets.data[0].remoteRef.key).to.equal(PROJECTION.secretName)
+    expect(withdrawal.withdrawalProof.s3AuthMode).to.equal('irsa')
+  })
+
+  it('preserves S3 projection for an active native S3 configuration', () => {
+    const coordinator: Record<string, any> = {
+      proofCoordinator: {config: {content: '[artifact_store]\nkind = "s3_compatible"\n'}},
+    }
+    applyProofAwsValues(coordinator, {}, PROJECTION)
+    expect(coordinator.env.find((item: any) => item.name.endsWith('__BUCKET')).value).to.equal(PROJECTION.bucket)
+  })
+
   it('projects bucket, roles, auth mode, and token mappings into fresh values', () => {
     const coordinator: Record<string, any> = {
       env: [{ name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET', value: '<TODO>' }],
