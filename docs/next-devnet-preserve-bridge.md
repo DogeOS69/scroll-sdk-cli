@@ -350,3 +350,21 @@ TSO signing with all three attestation signers, but CubeSigner returned permanen
 `wrong_namespace` from the Devnet role's remote WASM policy. The job is terminal;
 no WF was broadcast. See the [owner/core handoff](cubesigner-devnet-namespace-blocker.md)
 before attempting recovery. Do not mark this deployment complete or reset Bridge.
+
+### Deployment/example synchronization rule
+
+The operator requires every discovered service configuration fix to appear both
+in local `values/<service>-production.yaml` and in
+`scroll-sdk/examples/values/<service>-production.yaml`. Follow native/compiler
+ownership: correct the base/template and regenerate, with example wiring and
+instructions pointing at that same authority. Never copy credentials, instance
+identity JSON or hard-coded devnet IAM bindings into reusable examples.
+
+The rollout audit synchronized PC RUST_LOG and active materializer resources,
+fresh-PC/WP claim selection guidance, WP token-file auth and native AdvanceL1,
+internal Reth debug/proof-window parameters, eager genesis/data mounts and IRSA
+ServiceAccount, and regional S3 endpoint/sidecar guidance. Preserve explicitly
+different local/example values, especially DA MAX_OPEN_L2_TIME 300s/3000s.
+Four related charts passed Helm lint and rendered-controller assertions; native
+WP TOML parses with AdvanceL1 enabled. These template repairs do not remove the
+remote CubeSigner role-policy blocker described above.
