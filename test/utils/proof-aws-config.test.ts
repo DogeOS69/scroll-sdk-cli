@@ -136,6 +136,26 @@ describe('proof AWS config source', () => {
     })
   })
 
+  it('normalizes the historical shared-s3 v4 transport for reconciliation', () => {
+    const configPath = path.join(root, '.data/proof-aws.json')
+    const config = {
+      ...fixture(),
+      artifactReadTransport: {
+        publicEndpointUrl: 'https://s3.us-east-1.amazonaws.com',
+        publicReadMode: 'shared-s3',
+        publicStatus: 'configured-unverified',
+      },
+    }
+    fs.mkdirSync(path.dirname(configPath), {recursive: true})
+    fs.writeFileSync(configPath, `${JSON.stringify(config, undefined, 2)}\n`)
+
+    expect(readProofAwsConfig(root).config.artifactReadTransport).to.deep.equal({
+      publicEndpointUrl: 'https://s3.us-east-1.amazonaws.com',
+      publicReadMode: 'existing-public-s3',
+      publicStatus: 'operator-managed-unverified',
+    })
+  })
+
   it('rejects a non-regional endpoint for an operator-managed public S3 transport', () => {
     const config = fixture()
     config.artifactReadTransport = {
