@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {
+  assertProofWorkerImageMatchesPreparation,
   checkProofWorkerImage,
   readProofWorkerImageCheck,
 } from '../../src/utils/proof-worker-image-check.js'
@@ -78,5 +79,32 @@ describe('production proof Worker image check', () => {
     labels['dogeos.cuda.archs'] = '86'
     check()
     expect(() => check()).to.throw('Refusing to overwrite')
+  })
+
+  it('cross-checks both compiled commitments when material import joins the receipts', () => {
+    const worker = check().receipt
+    const identityFile = path.join(root, 'identity.env')
+    const env = {
+      DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW: aggregation,
+      DOGEOS_BATCH_PROGRAM_COMMITMENT: `0x${'1'.repeat(64)}`,
+      DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW: batch,
+      DOGEOS_BATCH_SCROLL_PROGRAM_COMMITMENT_RAW: `0x${'2'.repeat(128)}`,
+      DOGEOS_BATCH_VK_HASH: `0x${'3'.repeat(64)}`,
+      DOGEOS_BRIDGE_APP_COMMIT_RAW: `0x${'4'.repeat(128)}`,
+      DOGEOS_BRIDGE_PROGRAM_COMMITMENT: `0x${'5'.repeat(64)}`,
+      DOGEOS_BRIDGE_VK_HASH: `0x${'6'.repeat(64)}`,
+      DOGEOS_CHUNK_PROGRAM_COMMITMENT: `0x${'7'.repeat(64)}`,
+      DOGEOS_CHUNK_PROGRAM_COMMITMENT_RAW: `0x${'8'.repeat(128)}`,
+      DOGEOS_CHUNK_VK_HASH: `0x${'9'.repeat(64)}`,
+    }
+    fs.writeFileSync(identityFile, Object.entries(env).map(([key, value]) => `export ${key}=${value}`).join('\n'))
+    const preparation = {
+      coreRevision: revision,
+      files: {identityEnv: {path: identityFile, sha256: 'unused', sizeBytes: 1}},
+    }
+    expect(() => assertProofWorkerImageMatchesPreparation(worker, preparation)).not.to.throw()
+
+    fs.writeFileSync(identityFile, fs.readFileSync(identityFile, 'utf8').replace(batch, `0x${'e'.repeat(128)}`))
+    expect(() => assertProofWorkerImageMatchesPreparation(worker, preparation)).to.throw('different Batch commitments')
   })
 })

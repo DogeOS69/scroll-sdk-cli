@@ -10,7 +10,10 @@ import {
   resolveImmutableProofImage,
 } from '../../utils/proof-materials.js'
 import {readProofReleasePreparation} from '../../utils/proof-release-preparation.js'
-import {readProofWorkerImageCheck} from '../../utils/proof-worker-image-check.js'
+import {
+  assertProofWorkerImageMatchesPreparation,
+  readProofWorkerImageCheck,
+} from '../../utils/proof-worker-image-check.js'
 
 export default class ProofMaterials extends Command {
   static description = 'Prepare shared proof identities for mock, or identities plus real proving artifacts for production'
@@ -71,9 +74,7 @@ export default class ProofMaterials extends Command {
       const workerImageCheck = flags['production-worker-receipt']
         ? readProofWorkerImageCheck(path.resolve(deploymentDir, flags['production-worker-receipt']))
         : undefined
-      if (preparation && workerImageCheck && preparation.coreRevision !== workerImageCheck.coreRevision) {
-        throw new Error('Preparation and production Worker image receipts use different dogeos-core revisions')
-      }
+      if (preparation && workerImageCheck) assertProofWorkerImageMatchesPreparation(workerImageCheck, preparation)
 
       const manualPreparationFlags = [
         'aggregate-verifying-key',

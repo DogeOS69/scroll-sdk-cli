@@ -2,11 +2,12 @@ import {spawnSync} from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import type {ProofReleasePreparationV1} from '../types/proof-release-preparation.js'
 import type {ProofTopologyImageReference} from '../types/proof-topology.js'
 import type {ProofWorkerImageCheckV1} from '../types/proof-worker-image-check.js'
 
 import {PROOF_WORKER_IMAGE_CHECK_SCHEMA} from '../types/proof-worker-image-check.js'
-import {immutableProofImage} from './proof-materials.js'
+import {immutableProofImage, parseProofIdentityEnv} from './proof-materials.js'
 
 export const DEFAULT_PROOF_WORKER_IMAGE_CHECK = '.data/proof-worker-image-check-v1.json'
 
@@ -23,6 +24,27 @@ export interface CheckProofWorkerImageOptions {
   image: ProofTopologyImageReference
   output: string
   run?: ProofWorkerImageDockerRunner
+}
+
+export function assertProofWorkerImageMatchesPreparation(
+  worker: ProofWorkerImageCheckV1,
+  preparation: {
+    files: Pick<ProofReleasePreparationV1['files'], 'identityEnv'>
+  } & Pick<ProofReleasePreparationV1, 'coreRevision'>,
+): void {
+  if (preparation.coreRevision !== worker.coreRevision) {
+    throw new Error('Preparation and production Worker image receipts use different dogeos-core revisions')
+  }
+
+  const identities = parseProofIdentityEnv(fs.readFileSync(preparation.files.identityEnv.path, 'utf8'))
+  if (identities.DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW !== worker.identities.batchProgramCommitmentRaw) {
+    throw new Error('Preparation and production Worker receipts use different Batch commitments')
+  }
+
+  if (identities.DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW
+    !== worker.identities.batchAggregationProgramCommitmentRaw) {
+    throw new Error('Preparation and production Worker receipts use different Batch aggregation commitments')
+  }
 }
 
 function docker(args: string[]): string {
