@@ -11,6 +11,13 @@ There is no longer an empty-array switch or a Geth peer fallback.
 
 ## Setup flow
 
+For external nodes, also follow [Reth bootnode public P2P access](bootnode-public-p2p.md):
+run `setup bootnode-public-p2p` after `prep-charts`, deploy the bootnode releases,
+then export public peers with `setup gen-rpc-package` once LB endpoints exist.
+
+This is the node-configuration subset of [CLI setup order](setup-order.md),
+not a complete deployment sequence.
+
 After preparing the root accounts and doge-config, run:
 
 ```bash
@@ -22,8 +29,8 @@ scrollsdk setup l2-sequencer-reth --index 0 --signer-mode external-secret --non-
 scrollsdk setup l2-bootnode-reth --count 1 --secret-mode external-secret --non-interactive
 
 # After bridge-init and service signer setup have produced their required inputs:
-scrollsdk setup gen-secrets --non-interactive
 scrollsdk setup prep-charts --non-interactive
+scrollsdk setup gen-secrets --non-interactive
 ```
 
 For sequencer KMS signing, use `setup l2-sequencer-reth --signer-mode aws-kms`

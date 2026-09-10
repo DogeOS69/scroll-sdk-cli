@@ -632,10 +632,12 @@ export class DogeConfigCommand extends Command {
     ) || defaultEthereumDaChain
     const ethereumDaDefaults = ETHEREUM_DA_DEFAULTS[ethereumDaChain]
     const shouldReuseExistingEthereumDaValues = niCtx.enabled || existingEthereumDaChain === ethereumDaChain
+    // TOML permits an integer chainId; text prompts and environment references
+    // require strings in both interactive and non-interactive setup.
     const ethereumDaFieldDefault = (field: 'beaconRpcUrl' | 'chainId' | 'submitterRpcUrl') =>
-      shouldReuseExistingEthereumDaValues
+      String(shouldReuseExistingEthereumDaValues
         ? existingEthereumDa?.[field] || ethereumDaDefaults[field]
-        : ethereumDaDefaults[field]
+        : ethereumDaDefaults[field])
 
     const ethereumDaSubmitterRpcUrl = normalizeClusterLocalHttpUrl(await resolveOrPrompt(
       niCtx,

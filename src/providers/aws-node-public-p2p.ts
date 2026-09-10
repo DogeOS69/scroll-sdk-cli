@@ -1,369 +1,195 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic YAML config operations */
-import { input } from '@inquirer/prompts'
-import chalk from 'chalk'
+/* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic Helm values. */
+import {input} from '@inquirer/prompts'
 import * as yaml from 'js-yaml'
+import {execFile} from 'node:child_process'
+import {createHash} from 'node:crypto'
 import * as fs from 'node:fs'
+import * as os from 'node:os'
 import * as path from 'node:path'
+import {promisify} from 'node:util'
 
-import { YAML_DUMP_OPTIONS } from '../config/constants.js'
-import { executeCommand } from '../utils/command-executor.js'
+import {YAML_DUMP_OPTIONS} from '../config/constants.js'
+
+const execFileAsync = promisify(execFile)
+const CONTROLLER = 'aws-load-balancer-controller'
+const ANNOTATION = 'service.beta.kubernetes.io/aws-load-balancer-'
 
 export interface NodeLBProvider {
-  checkPrerequisites(): Promise<boolean>
+  checkPrerequisites(flags?: any): Promise<boolean>
   setupLb(flags: any, bootnodeIndices: number[]): Promise<string[]>
 }
 
 export class AWSNodeLBProvider implements NodeLBProvider {
-  private accountId: string;
-  private clusterName: string;
-  private region: string;
+  constructor(private readonly log: (message: string) => void = console.log) {}
 
-  constructor() {
-    this.region = '';
-    this.clusterName = '';
-    this.accountId = '';
-  }
-
-  async checkPrerequisites(): Promise<boolean> {
-    const commands = [
-      { cmd: 'aws --version', name: 'AWS CLI' },
-      { cmd: 'eksctl version', name: 'eksctl' },
-      { cmd: 'kubectl version --client', name: 'kubectl' },
-      { cmd: 'helm version', name: 'Helm' }
-    ];
-
-    console.log(chalk.blue('Checking AWS prerequisites...'));
-
-    for (const { cmd, name } of commands) {
-      try {
-        await executeCommand(cmd, false);
-        console.log(chalk.green(`✓ ${name} is installed`));
-      } catch {
-        console.log(chalk.red(`✗ ${name} is not installed or not in PATH`));
-        return false;
-      }
-    }
-
-    try {
-      await executeCommand('aws sts get-caller-identity', false);
-      console.log(chalk.green('✓ AWS credentials configured'));
-    } catch {
-      console.log(chalk.red('✗ AWS credentials not configured, please run "aws configure"'));
-      return false;
-    }
-
-    console.log(chalk.green('All AWS prerequisites met!'));
-    return true;
+  async checkPrerequisites(flags: any = {}): Promise<boolean> {
+    const commands: [string, string[]][] = [
+      ['aws', ['--version']], ['kubectl', ['version', '--client']],
+      ...(flags['skip-controller-setup'] ? [] : [
+        ['eksctl', ['version']], ['helm', ['version']], ['curl', ['--version']],
+      ] as [string, string[]][]),
+    ]
+    for (const [binary, args] of commands) await this.run(binary, args)
+    await this.run('aws', ['sts', 'get-caller-identity'])
+    return true
   }
 
   async setupLb(flags: any, bootnodeIndices: number[]): Promise<string[]> {
-    console.log(chalk.blue('Starting AWS P2P Loadbalancer...'));
-    console.log('====================================');
+    const cluster = await this.required(flags['cluster-name'], '--cluster-name', 'EKS cluster name:', flags['non-interactive'])
+    const region = await this.required(flags.region, '--region', 'AWS region:', flags['non-interactive'])
+    if (!/^[\dA-Za-z][\w-]{0,99}$/.test(cluster)) throw new Error('Invalid EKS cluster name')
+    if (!/^[a-z]{2}(?:-[a-z]+)+-\d+$/.test(region)) throw new Error('Invalid AWS region')
+    const namespace = flags.namespace || 'default'
+    if (!/^[\da-z](?:[\da-z-]{0,61}[\da-z])?$/.test(namespace)) throw new Error('Invalid Kubernetes namespace')
 
-    if (flags['cluster-name']) {
-      this.clusterName = flags['cluster-name'];
-    } else {
-      this.clusterName = await input({ message: 'Enter your EKS cluster name:' });
-      if (!this.clusterName) {
-        throw new Error('Cluster name cannot be empty');
-      }
-    }
-
-    if (flags.region) {
-      this.region = flags.region;
-    } else {
-      this.region = await input({ message: 'Enter your AWS region (e.g., us-east-2):' });
-      if (!this.region) {
-        throw new Error('AWS region cannot be empty');
-      }
-    }
-
-    console.log('Verifying cluster exists...');
-    const clusterExists = await this.verifyClusterExists(this.clusterName, this.region);
-    if (!clusterExists) {
-      throw new Error(`Cluster '${this.clusterName}' not found in region '${this.region}'`);
-    }
-
-    this.accountId = await this.getAwsAccountId();
-
-    console.log('Configuration:');
-    console.log(`  Cluster: ${this.clusterName}`);
-    console.log(`  Region: ${this.region}`);
-    console.log(`  Account ID: ${this.accountId}`);
-    console.log('');
-
+    // Parse and validate every file before provisioning or changing any values.
+    const prepared = this.prepareProductionFiles(flags['values-dir'], bootnodeIndices, cluster)
+    await this.checkPrerequisites(flags)
+    const clusterInfo = JSON.parse(await this.run('aws', ['eks', 'describe-cluster', '--name', cluster, '--region', region]))
+    if (!clusterInfo.cluster?.endpoint || !clusterInfo.cluster?.resourcesVpcConfig?.vpcId) throw new Error('EKS cluster endpoint or VPC is missing')
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'scrollsdk-p2p-'))
+    const kubeconfig = path.join(workspace, 'kubeconfig')
     try {
+      // Never use or replace the operator's current kubeconfig/context.
+      const source = await this.run('aws', ['eks', 'update-kubeconfig', '--name', cluster, '--region', region, '--kubeconfig', kubeconfig, '--dry-run'])
+      const config = yaml.load(source) as any
+      const context = config?.contexts?.find((item: any) => item.name === config['current-context'])
+      const target = config?.clusters?.find((item: any) => item.name === context?.context?.cluster)
+      if (target?.cluster?.server !== clusterInfo.cluster.endpoint) throw new Error('Generated kubeconfig does not select the requested EKS cluster')
+      fs.writeFileSync(kubeconfig, source, {mode: 0o600})
+
+      if (!flags['skip-controller-setup']) {
+        await this.installController(cluster, region, clusterInfo.cluster.resourcesVpcConfig.vpcId, kubeconfig, workspace, flags['controller-chart-version'])
+      }
+
+      await this.run('kubectl', ['--kubeconfig', kubeconfig, 'wait', '--for=condition=available', '--timeout=180s', `deployment/${CONTROLLER}`, '-n', 'kube-system'], 190_000)
+      const available = await this.run('kubectl', ['--kubeconfig', kubeconfig, 'get', 'deployment', CONTROLLER, '-n', 'kube-system', '-o', 'jsonpath={.status.conditions[?(@.type=="Available")].status}'])
+      if (available !== 'True') throw new Error('AWS Load Balancer Controller is not available in the requested cluster')
+
+      this.writePreparedFiles(prepared)
       for (const index of bootnodeIndices) {
-        const file = path.join(flags['values-dir'], `l2-reth-bootnode-production-${index}.yaml`);
-        if (!fs.existsSync(file)) throw new Error(`Missing ${file}; run setup prep-charts first`);
+        this.log(`Apply the reviewed bootnode ${index} Helm values in namespace ${namespace}; then inspect Service l2-reth-bootnode-${index}-p2p for its public endpoint.`)
       }
 
-      await this.configureIamPermissions(this.accountId);
-      await this.installLoadBalancerController(this.clusterName, this.region);
-      console.log(chalk.blue(`Setting up LB for ${bootnodeIndices.length} bootnode(s)`))
-
-      const valuesDir = flags['values-dir']
-      await this.updateProductionFiles(valuesDir, bootnodeIndices, this.region, this.clusterName);
-
-      const verificationPassed = await this.verifyAwsSetup(this.accountId, this.region, bootnodeIndices.length);
-      if (verificationPassed) {
-        console.log(chalk.green('🚀 AWS P2P setup completed successfully!'));
-      } else {
-        console.log(chalk.yellow('⚠️  AWS P2P setup completed with warnings - some verification checks failed'));
-        console.log(chalk.yellow('💡 You may need to troubleshoot the failed components before deployment'));
-        throw new Error('AWS P2P setup failed');
-      }
-
-      const ns = flags.namespace || 'default';
-      console.log(chalk.blue('💡 To get LoadBalancer domains after deployment:'));
-      for (const i of bootnodeIndices) {
-        console.log(chalk.blue(`  kubectl get service l2-reth-bootnode-${i}-p2p -n ${ns} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{\\"\\n\\"}'`));
-      }
-
-      return [];
-    } catch (error) {
-      console.log(chalk.red('Error occurred during AWS setup:'));
-      console.log(chalk.red(error instanceof Error ? error.message : String(error)));
-      throw new Error('AWS P2P Load Balancer setup failed');
+      this.log('Public P2P values prepared. Bootnode Services and NLBs are created by the subsequent Helm rollout; public connectivity has not been checked.')
+      return prepared.map(item => item.file)
+    } finally {
+      fs.rmSync(workspace, {force: true, recursive: true})
     }
   }
 
-  private async configL2BootnodeP2p(doc: any, index: number, region?: string, clusterName?: string) {
+  private configL2BootnodeP2p(doc: any, index: number, clusterName: string): void {
+    doc.reth ||= {}
+    doc.reth.service ||= {}
+    doc.reth.service.extra ||= {}
+    doc.reth.service.extra.p2p ||= {}
+    const {p2p} = doc.reth.service.extra
+    const port = Number(doc.reth.ports?.p2p ?? 30_303)
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error(`Bootnode ${index} P2P port must be an integer between 1 and 65535`)
+    p2p.annotations ||= {}
+    const {annotations} = p2p
+    // Existing Service ownership/scheme must be migrated explicitly, not silently changed.
+    if (annotations[`${ANNOTATION}type`] && !['external', 'nlb-ip'].includes(annotations[`${ANNOTATION}type`])) {
+      throw new Error(`Bootnode ${index} has legacy load balancer ownership; review and recreate its Service before changing ${ANNOTATION}type to external`)
+    }
 
-    doc.reth ||= {};
-    doc.reth.service ||= {};
-    doc.reth.service.extra ||= {};
-    doc.reth.service.extra.p2p ||= {};
-    const p2pCfg = doc.reth.service.extra.p2p;
-    p2pCfg.type = 'LoadBalancer';
-    const port = doc.reth.ports?.p2p || 30_303;
-    p2pCfg.ports = {
+    if ((annotations[`${ANNOTATION}scheme`] && annotations[`${ANNOTATION}scheme`] !== 'internet-facing') || annotations[`${ANNOTATION}internal`] === 'true') {
+      throw new Error(`Bootnode ${index} has an internal load balancer; review its Service before enabling public P2P`)
+    }
+
+    p2p.enabled = true
+    p2p.type = 'LoadBalancer'
+    p2p.ports = {
       'p2p-tcp': {enabled: true, port, protocol: 'TCP', targetPort: port},
       'p2p-udp': {enabled: true, port, protocol: 'UDP', targetPort: port},
-    };
-    p2pCfg.enabled = true;
-
-    if (!p2pCfg.annotations || typeof p2pCfg.annotations !== 'object') {
-      p2pCfg.annotations = {};
     }
-
-    const {annotations} = p2pCfg;
-
-    annotations['service.beta.kubernetes.io/aws-load-balancer-type'] ||= 'nlb';
-    annotations['service.beta.kubernetes.io/aws-load-balancer-scheme'] ||= 'internet-facing';
-    annotations['service.beta.kubernetes.io/aws-load-balancer-nlb-target-type'] ||= 'ip';
-    annotations['service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled'] = 'true';
-    const lbNamePrefix = clusterName ? `${clusterName}-` : '';
-    annotations['service.beta.kubernetes.io/aws-load-balancer-name'] = `${lbNamePrefix}b-${index}`;
+    annotations[`${ANNOTATION}type`] ||= 'external'
+    annotations[`${ANNOTATION}scheme`] = 'internet-facing'
+    annotations[`${ANNOTATION}nlb-target-type`] ||= 'ip'
+    annotations[`${ANNOTATION}enable-tcp-udp-listener`] = 'true'
+    annotations[`${ANNOTATION}cross-zone-load-balancing-enabled`] = 'true'
+    const fullName = `${clusterName}-b-${index}`.replaceAll('_', '-')
+    const shortName = fullName.length <= 32 ? fullName : `${fullName.slice(0, 23)}-${createHash('sha256').update(fullName).digest('hex').slice(0, 8)}`
+    annotations[`${ANNOTATION}name`] ||= shortName
+    if (String(annotations[`${ANNOTATION}name`]).length > 32) throw new Error(`Bootnode ${index} load balancer name exceeds 32 characters`)
   }
 
-  private async configureIamPermissions(accountId: string): Promise<void> {
-    console.log(chalk.blue('Configuring IAM permissions for AWS Load Balancer Controller...'));
-
-    // 1. Associate IAM OIDC provider
-    console.log('Associating IAM OIDC provider...');
-    try {
-      await executeCommand(`eksctl utils associate-iam-oidc-provider --region "${this.region}" --cluster "${this.clusterName}" --approve`);
-      console.log(chalk.green('✓ IAM OIDC provider associated'));
-    } catch {
-      console.log(chalk.yellow('⚠️  IAM OIDC provider may already be associated'));
+  private async installController(cluster: string, region: string, vpc: string, kubeconfig: string, workspace: string, version?: string): Promise<void> {
+    await this.run('helm', ['repo', 'add', 'eks', 'https://aws.github.io/eks-charts'])
+    await this.run('helm', ['repo', 'update', 'eks'])
+    const chart = yaml.load(await this.run('helm', ['show', 'chart', `eks/${CONTROLLER}`, ...(version ? ['--version', version] : [])])) as any
+    if (!/^\d+\.\d+\.\d+(?:[+-][\w.-]+)?$/.test(String(chart?.version)) || !/^v?\d+\.\d+\.\d+(?:[+-][\w.-]+)?$/.test(String(chart?.appVersion))) {
+      throw new Error('Controller chart metadata must contain a release version and appVersion')
     }
 
-    // 2. Download IAM policy JSON
-    console.log('Downloading AWS Load Balancer Controller IAM policy...');
-    const policyFile = 'iam_policy.json';
+    const appVersion = String(chart.appVersion).replace(/^v/, '')
+    const policyFile = path.join(workspace, 'iam-policy.json')
+    await this.run('curl', ['-fsSL', '-o', policyFile, `https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v${appVersion}/docs/install/iam_policy.json`])
+    const policy = JSON.parse(fs.readFileSync(policyFile, 'utf8'))
+    if (!Array.isArray(policy.Statement) || policy.Statement.length === 0) throw new Error('Controller IAM policy is empty or invalid')
+    const identity = JSON.parse(await this.run('aws', ['sts', 'get-caller-identity']))
+    const partition = String(identity.Arn).split(':')[1]
+    if (!/^\d{12}$/.test(identity.Account) || !/^aws(?:-[a-z]+)*$/.test(partition)) throw new Error('Invalid AWS caller identity')
+    // Versioned policy avoids silently reusing stale permissions from an older controller.
+    const policyName = `AWSLoadBalancerControllerIAMPolicy-${appVersion}`
+    const policyArn = `arn:${partition}:iam::${identity.Account}:policy/${policyName}`
+    await this.run('eksctl', ['utils', 'associate-iam-oidc-provider', '--region', region, '--cluster', cluster, '--approve'])
     try {
-      await executeCommand(`curl -o ${policyFile} https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/main/docs/install/iam_policy.json`);
-      console.log(chalk.green(`✓ IAM policy downloaded to ${policyFile}`));
-    } catch {
-      throw new Error('Failed to download IAM policy file');
-    }
-
-    // 3. Get policy name from user or use default
-    const policyName = 'AWSLoadBalancerControllerIAMPolicy';
-    
-    // 4. Create IAM policy
-    console.log(`Creating IAM policy: ${policyName}...`);
-    try {
-      await executeCommand(`aws iam create-policy --policy-name "${policyName}" --policy-document file://${policyFile}`);
-      console.log(chalk.green(`✓ IAM policy ${policyName} created`));
-    } catch {
-      console.log(chalk.yellow(`⚠️  IAM policy ${policyName} may already exist`));
-    }
-
-    // 5. Get service account name from user or use default
-    const serviceAccountName = 'aws-load-balancer-controller';
-   
-    // 6. Create IAM service account
-    console.log(`Creating IAM service account: ${serviceAccountName}...`);
-    const policyArn = `arn:aws:iam::${accountId}:policy/${policyName}`;
-    
-    try {
-      await executeCommand(`eksctl create iamserviceaccount \
-        --cluster "${this.clusterName}" \
-        --namespace kube-system \
-        --name "${serviceAccountName}" \
-        --attach-policy-arn "${policyArn}" \
-        --override-existing-serviceaccounts \
-        --approve \
-        --region "${this.region}"`);
-      console.log(chalk.green(`✓ IAM service account ${serviceAccountName} created with policy ${policyName}`));
+      await this.run('aws', ['iam', 'create-policy', '--policy-name', policyName, '--policy-document', `file://${policyFile}`])
     } catch (error) {
-      throw new Error(`Failed to create IAM service account: ${error instanceof Error ? error.message : String(error)}`);
+      if (!String(error).includes('EntityAlreadyExists')) throw error
+      await this.run('aws', ['iam', 'get-policy', '--policy-arn', policyArn])
     }
 
-    // 7. Clean up downloaded policy file
+    await this.run('eksctl', ['create', 'iamserviceaccount', '--cluster', cluster, '--namespace', 'kube-system', '--name', CONTROLLER, '--attach-policy-arn', policyArn, '--override-existing-serviceaccounts', '--approve', '--region', region], 600_000)
+    await this.run('helm', ['--kubeconfig', kubeconfig, 'upgrade', '-i', CONTROLLER, `eks/${CONTROLLER}`, '--version', String(chart.version), '-n', 'kube-system', '--set-string', `clusterName=${cluster}`, '--set', 'serviceAccount.create=false', '--set-string', `serviceAccount.name=${CONTROLLER}`, '--set-string', `region=${region}`, '--set-string', `vpcId=${vpc}`])
+  }
+
+  private prepareProductionFiles(valuesDir: string, indices: number[], cluster: string): {content: string; file: string; original: string}[] {
+    return indices.map(index => {
+      const file = path.join(valuesDir, `l2-reth-bootnode-production-${index}.yaml`)
+      if (!fs.existsSync(file)) throw new Error(`Missing ${file}; run setup prep-charts first`)
+      const original = fs.readFileSync(file, 'utf8')
+      const doc = yaml.load(original) as any
+      if (!doc || typeof doc !== 'object' || Array.isArray(doc)) throw new Error(`Invalid values mapping: ${file}`)
+      this.configL2BootnodeP2p(doc, index, cluster)
+      return {content: yaml.dump(doc, YAML_DUMP_OPTIONS), file, original}
+    })
+  }
+
+  private async required(value: string | undefined, flag: string, message: string, nonInteractive: boolean): Promise<string> {
+    if (value?.trim()) return value.trim()
+    if (nonInteractive) throw new Error(`${flag} is required in non-interactive mode`)
+    const result = (await input({message, required: true})).trim()
+    if (!result) throw new Error(`${flag} must not be empty`)
+    return result
+  }
+
+  private async run(binary: string, args: string[], timeout = 180_000): Promise<string> {
+    this.log(`Running ${binary} ${args.join(' ')}`)
     try {
-      if (fs.existsSync(policyFile)) {
-        fs.unlinkSync(policyFile);
-        console.log(chalk.green(`✓ Cleaned up ${policyFile}`));
-      }
-    } catch {
-      console.log(chalk.yellow(`⚠️  Could not clean up ${policyFile}`));
+      const result = await execFileAsync(binary, args, {maxBuffer: 4 * 1024 * 1024, timeout})
+      return result.stdout.trim()
+    } catch (error) {
+      const failure = error as {stderr?: string} & Error
+      throw new Error(`${binary} failed: ${failure.stderr?.trim() || failure.message}`)
     }
-
-    console.log(chalk.green('IAM permissions configured successfully!'));
   }
 
-  private async getAwsAccountId(): Promise<string> {
-    const { stdout } = await executeCommand('aws sts get-caller-identity --query "Account" --output text', false);
-    return stdout.trim();
+  private async updateProductionFiles(valuesDir: string, indices: number[], _region: string, cluster: string): Promise<void> {
+    this.writePreparedFiles(this.prepareProductionFiles(valuesDir, indices, cluster))
   }
 
-  private async installLoadBalancerController(clusterName: string, region: string): Promise<void> {
-
-    console.log('Adding EKS Helm repository...');
-    await executeCommand('helm repo add eks https://aws.github.io/eks-charts');
-    await executeCommand('helm repo update');
-
-    const { stdout: vpcId } = await executeCommand(`aws eks describe-cluster --name "${clusterName}" --region "${region}" --query "cluster.resourcesVpcConfig.vpcId" --output text`, false);
-
-    console.log('Installing or upgrading AWS Load Balancer Controller...');
-
-    await executeCommand(`helm upgrade -i aws-load-balancer-controller eks/aws-load-balancer-controller \
-        -n kube-system \
-        --set clusterName="${clusterName}" \
-        --set serviceAccount.create=false \
-        --set serviceAccount.name=aws-load-balancer-controller \
-        --set region="${region}" \
-        --set vpcId="${vpcId.trim()}"`);
-
-
-    console.log('Waiting for AWS Load Balancer Controller to be ready...');
-
+  private writePreparedFiles(prepared: {content: string; file: string; original: string}[]): void {
+    const written: typeof prepared = []
     try {
-      await executeCommand('kubectl wait --for=condition=available --timeout=180s deployment/aws-load-balancer-controller -n kube-system', false);
-    } catch {
-      console.log(chalk.yellow('Deployment not ready within timeout, checking pod status...'));
-
-      try {
-        const { stdout } = await executeCommand('kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller -o jsonpath="{.items[*].status.phase}"', false);
-        const { stdout: podNames } = await executeCommand('kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller -o jsonpath="{.items[*].metadata.name}"', false);
-
-        console.log(`Pod statuses: ${stdout}`);
-
-        const pods = podNames.split(' ').filter(Boolean);
-        for (const pod of pods) {
-          try {
-            const { stdout: logs } = await executeCommand(`kubectl logs ${pod} -n kube-system --tail=5`, false);
-            if (logs.includes('Unauthorized') || logs.includes('unable to create controller')) {
-              throw new Error(`AWS Load Balancer Controller pod ${pod} has permission issues. This usually indicates the IAM service account was not created properly.`);
-            }
-          } catch {
-          }
-        }
-      } catch {
+      for (const item of prepared) {
+        fs.writeFileSync(item.file, item.content)
+        written.push(item)
       }
-
-      throw new Error('AWS Load Balancer Controller failed to become ready within timeout');
-    }
-
-    try {
-      const { stdout } = await executeCommand('kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller --field-selector=status.phase=Running --no-headers | wc -l', false);
-      const runningPods = Number.parseInt(stdout.trim(), 10);
-      if (runningPods === 0) {
-        throw new Error('No AWS Load Balancer Controller pods are running');
-      }
-
-      console.log(chalk.green(`✓ ${runningPods} AWS Load Balancer Controller pod(s) running`));
-    } catch {
-      throw new Error('Failed to verify AWS Load Balancer Controller pod status');
-    }
-
-    console.log(chalk.green('AWS Load Balancer Controller installed successfully!'));
-  }
-
-  /**
-   * Safely parse AWS CLI JSON output. When the CLI returns the literal strings
-   * "None", "null" or an empty value, JSON.parse will throw. This helper
-   * normalises those cases to null and suppresses parse errors so that the
-   * caller can handle them gracefully.
-   */
-  private safeJsonParse(input: string): any | null {
-    try {
-      const trimmed = input?.trim();
-      if (!trimmed || trimmed === 'None' || trimmed === 'null') {
-        return null;
-      }
-
-      return JSON.parse(trimmed);
-    } catch {
-      return null;
+    } catch (error) {
+      for (const item of written) fs.writeFileSync(item.file, item.original)
+      throw error
     }
   }
-
-  private async updateProductionFiles(valuesDir: string, bootnodeIndices: number[], region: string, clusterName: string): Promise<void> {
-    console.log(chalk.blue('Updating production YAML files...'));
-
-    for (const i of bootnodeIndices) {
-      const prodFile = path.join(valuesDir, `l2-reth-bootnode-production-${i}.yaml`);
-
-      if (fs.existsSync(prodFile)) {
-        console.log(`Updating ${prodFile}...`);
-
-        let content = fs.readFileSync(prodFile, 'utf8');
-
-        const yamlData = yaml.load(content) as any;
-
-        await this.configL2BootnodeP2p(yamlData, i, region, clusterName);
-
-        content = yaml.dump(yamlData, YAML_DUMP_OPTIONS);
-        fs.writeFileSync(prodFile, content);
-
-        // console.log(chalk.green(`Updated ${prodFile} with allocation ID: ${allocationIds[i]}`));
-      } else {
-        console.log(chalk.yellow(`Production file ${prodFile} not found, skipping...`));
-      }
-    }
-  }
-
-  private async verifyAwsSetup(_accountId: string, _region: string, _bootnodeCount: number): Promise<boolean> {
-    console.log(chalk.blue('Verifying setup...'));
-
-    let allChecksPass = true;
-
-    try {
-      const { stdout } = await executeCommand(`kubectl get deployment aws-load-balancer-controller -n kube-system -o jsonpath='{.status.conditions[?(@.type=="Available")].status}'`, false);
-      if (stdout.trim() === 'True') {
-        console.log(chalk.green('✓ AWS Load Balancer Controller is running'));
-      } else {
-        console.log(chalk.red('✗ AWS Load Balancer Controller is not ready'));
-        allChecksPass = false;
-      }
-    } catch {
-      console.log(chalk.red('✗ AWS Load Balancer Controller not found'));
-      allChecksPass = false;
-    }
-
-    return allChecksPass;
-  }
-
-  private async verifyClusterExists(clusterName: string, region: string): Promise<boolean> {
-    try {
-      await executeCommand(`aws eks describe-cluster --name "${clusterName}" --region "${region}"`, false);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-} 
+}

@@ -5,6 +5,8 @@ CLI and the matching `scroll-contracts` workspace. Existing deployment status
 reports describe their historical deployments; use this page for the supported
 configuration fields and prompts.
 
+For the general command sequence, see [CLI setup order](setup-order.md).
+
 ## Matching contracts release
 
 The CLI defaults are pinned to contracts commit
@@ -224,8 +226,8 @@ hostnames to the cluster. `test ingress` checks TSO at `/health` and Proof Coord
    and setup defaults. Re-run `setup domains` to refresh frontend/domain outputs.
 3. Run `setup db-init` only if Blockscout database initialization or permissions changes are
    needed. A config refresh does not require recreating databases.
-4. After bridge/service signer inputs are ready, rerun `setup gen-secrets` and
-   `setup prep-charts`. Declarative deployments can regenerate using
+4. After bridge/service signer inputs are ready, run `setup prep-charts`, then
+   `setup gen-secrets`, before selectively uploading Secrets. Declarative deployments can regenerate using
    `setup generate-from-spec --with-values` with their reviewed spec.
 5. Review generated changes and follow the environment's rollout procedure.
 

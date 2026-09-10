@@ -35,6 +35,7 @@ describe('Blockbook removal', () => {
       fs.mkdirSync(path.join(dir, '.data'), {recursive: true})
       if (existing) {
         fs.writeFileSync(path.join(dir, '.data/doge-config.toml'), toml.stringify({
+          ethereumDa: {chain: 'devnet', chainId: 31_337},
           kubernetes: {blockbookPublicPort: 19_139, blockbookServiceName: 'old-indexer', serviceName: 'dogecoin-testnet'}, network: 'testnet',
           rpc: {apiKey: 'retired-key', blockbookAPIUrl: 'https://old-indexer', url: 'https://rpc.example'},
           wallet: {path: '.data/wallet.json'},
@@ -52,6 +53,10 @@ describe('Blockbook removal', () => {
       }
 
       expect(fs.readFileSync(path.join(dir, '.data/setup_defaults.toml'), 'utf8')).to.include('seed_string = "preserved"')
+      if (existing) {
+        const saved = toml.parse(fs.readFileSync(path.join(dir, '.data/doge-config.toml'), 'utf8'))
+        expect((saved.ethereumDa as toml.JsonMap).chainId).to.equal('31337')
+      }
     }
 
     expect(fs.readFileSync(path.join(dir, 'rpc-calls.log'), 'utf8').trim().split('\n')).to.deep.equal(['getblockcount', 'getblockcount'])

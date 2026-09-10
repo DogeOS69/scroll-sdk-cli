@@ -3135,7 +3135,6 @@ export default class SetupPrepCharts extends Command {
       }
       else if (chartName === "metrics-exporter") {
 
-        const rollupExplorerBackendUrl = "http://rollup-explorer-backend";
         const l2RpcEndpoint = this.getConfigValue("general.L2_RPC_ENDPOINT");
         const l2TxFeeVaultAddr = this.getConfigValue("contracts.overrides.L2_TX_FEE_VAULT");
         const l2BridgeFeeRecipientAddr = this.getConfigValue("contracts.L2_BRIDGE_FEE_RECIPIENT_ADDR");
@@ -3144,14 +3143,18 @@ export default class SetupPrepCharts extends Command {
         const l1RpcEndpoint = this.getConfigValue("general.L1_RPC_ENDPOINT");
 
         if (productionYaml.metricsConfig) {
-          if (productionYaml.metricsConfig.rollup.url !== rollupExplorerBackendUrl) {
+          if (productionYaml.metricsConfig.rollup !== undefined) {
             updated = true;
             changes.push({
-              key: `metricsConfig.rollup.url`, newValue: rollupExplorerBackendUrl,
-              oldValue: productionYaml.metricsConfig.rollup.url
+              key: 'metricsConfig.rollup', newValue: 'removed',
+              oldValue: JSON.stringify(productionYaml.metricsConfig.rollup)
             });
-            productionYaml.metricsConfig.rollup.url = rollupExplorerBackendUrl;
+            delete productionYaml.metricsConfig.rollup;
           }
+
+          productionYaml.metricsConfig.l1Network ||= {};
+          productionYaml.metricsConfig.dogecoin ||= {};
+          productionYaml.metricsConfig.dogeos ||= {};
 
           if (productionYaml.metricsConfig.l1Network.url !== l1RpcEndpoint) {
             updated = true;
@@ -3219,9 +3222,6 @@ export default class SetupPrepCharts extends Command {
             l1Network: {
               L1_MESSAGE_QUEUE_PROXY_ADDR: l1MessageQueueProxyAddr,
               url: l1RpcEndpoint
-            },
-            rollup: {
-              url: rollupExplorerBackendUrl
             }
           };
           updated = true;

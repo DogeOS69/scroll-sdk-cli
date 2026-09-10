@@ -47,18 +47,13 @@ bin/run.js --help
 
 ## Documentation
 
-- [Pre-Bridge instance preparation](docs/pre-bridge-instance-preparation.md) — old-input archival, new gamma CubeSigner identity/session, native Reth genesis and handoff to the Bridge wrapper.
-- [Post-Bridge instance deployment](docs/post-bridge-instance-deployment.md) — environment-owned automation, intentional genesis hold, no mock worker, safe checkpoints and explicit signer cutover. Runtime acceptance stays in the deployment repository.
-- [Fresh devnet redeployment acceptance](docs/devnet-fresh-redeployment.md) — current operator decision: new independent CubeSigner role/key, new Bridge and fresh L2; preserve all existing policies and Kubernetes resources not deployed by this agent.
-- [L1 Interface beta.4e cold start](docs/l1-interface-beta4e-cold-start.md) — required fresh-instance opt-in, isolated storage and verified Kubernetes rollout.
-- [New Bridge / native Reth devnet runbook](docs/devnet-new-bridge-20260909.md) — verified 2026-09-09 steps, manual edits, release pins and the remaining runtime blocker.
+- [CLI setup order](docs/setup-order.md) — configuration prerequisites, native Reth genesis, `scrollsdk setup bridge-init`, service configuration and deployment handoff. Start here for command order.
+- [Configuration cleanup](docs/config-cleanup.md) — supported template fields, matching contracts images and updating an existing deployment.
+- [Pure Reth configuration](docs/reth-only-peers.md) — Reth node identities and peer configuration.
+- [Reth bootnode public P2P access](docs/bootnode-public-p2p.md) — AWS controller setup, public Service values, Helm rollout and external RPC peer export.
 - [Monitoring account balances](docs/monitoring-balances.md) — `prep-charts`
   generation for fee-oracle on L2, eth-da-submitter on Ethereum DA, and fee-wallet
   UTXO thresholds, including canonical signer validation and Secret-owned RPCs.
-- [DogeOS deployment status and runbook corrections](docs/dogeos-deployment-status.md)
-  — verified progress, current blockers, safe resume boundaries, and corrections
-  found during the from-scratch devnet deployment. This is not yet a completed
-  end-to-end deployment manual; the command reference below is not execution order.
 - [Legacy contracts placeholder compatibility](docs/contracts-placeholder-compatibility.md)
   — isolate a real DA service signer from legacy contracts account validation
   in explicitly selected DogeOS testnet/regtest L2-only deployments.
@@ -80,6 +75,18 @@ bin/run.js --help
   — the generic manual sent to signer operators. The generated
   `signer-policy-bundle/PARTNER-COMMANDS.md` is authoritative for one concrete
   deployment.
+
+### Development environment references
+
+These documents describe a specific devnet/Shadowfork environment or historical
+deployment evidence. Their CubeSigner gamma settings and cluster identifiers
+are not general setup requirements.
+The command reference below lists commands; it does not define execution order.
+
+- [Fresh devnet redeployment acceptance](docs/devnet-fresh-redeployment.md) — environment-specific replacement decisions and recorded acceptance work.
+- [L1 Interface beta.4e cold start](docs/l1-interface-beta4e-cold-start.md) — version-specific fresh-instance configuration and recorded Kubernetes rollout.
+- [New Bridge / native Reth devnet runbook](docs/devnet-new-bridge-20260909.md) — recorded 2026-09-09 steps, manual edits, release pins and runtime blocker.
+- [DogeOS deployment status and runbook corrections](docs/dogeos-deployment-status.md) — historical devnet progress and corrections; not a completed general deployment manual.
 
 # Usage
 
@@ -747,33 +754,55 @@ _See code: [src/commands/setup/attestation-signer.ts](https://github.com/dogeos6
 
 ## `scrollsdk setup bootnode-public-p2p`
 
-Enable external nodes to form P2P network with cluster bootnodes by setting up static IPs and LoadBalancer services
+See [Reth bootnode public P2P access](docs/bootnode-public-p2p.md) for execution order and deployment requirements.
 
-```
+```text
+Prepare Reth bootnode public P2P LoadBalancer values and the AWS controller; deploy the bootnode Helm releases afterwards
+
 USAGE
-  $ scrollsdk setup bootnode-public-p2p [--cluster-name <value>] [--json] [-N] [--provider aws|gcp] [--region <value>]
-    [--values-dir <value>]
+  $ scrollsdk setup bootnode-public-p2p [--cluster-name <value>]
+    [--controller-chart-version <value>] [--doge-config <value>] [--json]
+    [--namespace <value>] [-N] [--provider aws|gcp] [--region <value>]
+    [--skip-controller-setup] [--values-dir <value>]
 
 FLAGS
-  -N, --non-interactive       Run without prompts. Requires --provider flag.
-      --cluster-name=<value>  Kubernetes cluster name for resource tagging and identification
-      --json                  Output in JSON format (stdout for data, stderr for logs)
-      --provider=<option>     Cloud provider for static IP allocation (aws, gcp)
-                              <options: aws|gcp>
-      --region=<value>        Cloud provider region where resources will be created
-      --values-dir=<value>    [default: ./values] Directory containing Helm values files for configuration
+  -N, --non-interactive                   Run without prompts. Requires
+                                          --provider, --cluster-name and
+                                          --region.
+      --cluster-name=<value>              Kubernetes cluster name for resource
+                                          tagging and identification
+      --controller-chart-version=<value>  AWS controller Helm chart version; IAM
+                                          policy uses its matching appVersion
+      --doge-config=<value>               Path to Reth node configuration
+                                          (defaults to .data/doge-config.toml)
+      --json                              Output in JSON format (stdout for
+                                          data, stderr for logs)
+      --namespace=<value>                 [default: default] Namespace for the
+                                          subsequent bootnode Helm rollout
+      --provider=<option>                 Public P2P provider (AWS implemented;
+                                          GCP is not implemented)
+                                          <options: aws|gcp>
+      --region=<value>                    Cloud provider region where resources
+                                          will be created
+      --skip-controller-setup             Use an existing AWS controller; verify
+                                          readiness and prepare local values
+                                          only
+      --values-dir=<value>                [default: ./values] Directory
+                                          containing Helm values files for
+                                          configuration
 
 DESCRIPTION
-  Enable external nodes to form P2P network with cluster bootnodes by setting up static IPs and LoadBalancer services
+  Prepare Reth bootnode public P2P LoadBalancer values and the AWS controller;
+  deploy the bootnode Helm releases afterwards
 
 EXAMPLES
-  # Setup static IPs with interactive provider selection
+  # Prepare public P2P values with interactive provider selection
 
   $ scrollsdk setup bootnode-public-p2p
 
 
 
-  # Setup static IPs for AWS with specific cluster and region
+  # Configure AWS controller and public P2P values for a specific cluster
 
   $ scrollsdk setup bootnode-public-p2p --provider=aws --cluster-name=my-cluster --region=us-west-2
 
@@ -785,7 +814,7 @@ EXAMPLES
 
 
 
-  # Non-interactive mode (requires --provider)
+  # Non-interactive mode (requires provider, cluster name and region)
 
   $ scrollsdk setup bootnode-public-p2p --non-interactive --provider=aws --cluster-name=my-cluster --region=us-west-2
 
@@ -794,9 +823,9 @@ EXAMPLES
   # JSON output mode
 
   $ scrollsdk setup bootnode-public-p2p --non-interactive --json --provider=aws --cluster-name=my-cluster --region=us-west-2
-```
 
-_See code: [src/commands/setup/bootnode-public-p2p.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/bootnode-public-p2p.ts)_
+  $ scrollsdk setup bootnode-public-p2p -N --json --provider aws --cluster-name my-cluster --region us-west-2 --skip-controller-setup
+```
 
 ## `scrollsdk setup bridge-init`
 

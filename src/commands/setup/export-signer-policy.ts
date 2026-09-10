@@ -123,7 +123,11 @@ export class ExportSignerPolicyCommand extends Command {
         dogeConfig: config,
         dogeConfigPath: loaded.configPath,
         specPath: flags.spec,
-      })!
+      })
+      if (!resolved) {
+        throw new Error('Proof topology is not configured; run scrollsdk setup doge-config --proof-topology, then setup prep-charts before exporting the signer policy')
+      }
+
       const {enforcement, generation, mode} = resolved.intent
       if (config.network === 'mainnet' && enforcement === 'observe') {
         throw new Error('dogeos-core refuses attestation-signer policy_mode=observe on Dogecoin mainnet; validate real proving and select enforcement=enforce before exporting the mainnet signer policy')
