@@ -10,6 +10,7 @@ import {
   resolveImmutableProofImage,
 } from '../../utils/proof-materials.js'
 import {readProofReleasePreparation} from '../../utils/proof-release-preparation.js'
+import {readProofWorkerImageCheck} from '../../utils/proof-worker-image-check.js'
 
 export default class ProofMaterials extends Command {
   static description = 'Prepare shared proof identities for mock, or identities plus real proving artifacts for production'
@@ -19,7 +20,7 @@ export default class ProofMaterials extends Command {
     '$ scrollsdk setup proof-materials --generation mock --identity-env /build/real-identity.env --worker-identity-bundle /build/worker-identity-bundle.json',
     '$ scrollsdk setup proof-materials --generation real --software-manifest /build/real-proving-artifacts.json --identity-env /build/real-identity.env --chunk-materializer /build/materialize-chunk-oneshot --batch-materializer /build/scroll-runtime-materializer --mock-worker-image repo/mock@sha256:... --production-worker-image repo/worker@sha256:... --compiler-image repo/compiler@sha256:...',
     '$ scrollsdk setup proof-materials --generation real --bridge-artifact-dir /build/bridge --protocol-context .data/protocol_context.json',
-    '$ scrollsdk setup proof-materials --preparation-receipt .data/proof-release-preparation-v1.json --mock-worker-image repo/mock@sha256:... --production-worker-image repo/worker@sha256:... --compiler-image repo/compiler@sha256:...',
+    '$ scrollsdk setup proof-materials --preparation-receipt .data/proof-release-preparation-v1.json --production-worker-receipt .data/proof-worker-image-check-v1.json --mock-worker-image repo/mock@sha256:... --compiler-image repo/compiler@sha256:...',
   ]
 
   static flags = {
@@ -38,6 +39,7 @@ export default class ProofMaterials extends Command {
     output: Flags.string({default: DEFAULT_PROOF_MATERIALS_RECEIPT, description: 'Deployment-relative receipt path'}),
     'preparation-receipt': Flags.string({description: 'Validated proof-release-preparation-v1.json; supplies all native real-material flags'}),
     'production-worker-image': Flags.string({description: 'Real Worker release tag or digest; real only'}),
+    'production-worker-receipt': Flags.string({description: 'Validated proof-worker-image-check-v1.json; excludes --production-worker-image'}),
     'protocol-context': Flags.string({description: 'Deployment protocol_context.json required with --bridge-artifact-dir; real only'}),
     'scroll-identity-evidence': Flags.string({description: 'Native proof-scroll-identities-v1.json for mock real materialization without a real Bridge bake; excludes identity-env'}),
     'software-manifest': Flags.string({description: 'real-proving-artifacts.json written by dogeos-core --check-only; real only'}),
@@ -62,6 +64,17 @@ export default class ProofMaterials extends Command {
       const preparation = flags['preparation-receipt']
         ? readProofReleasePreparation(path.resolve(deploymentDir, flags['preparation-receipt']))
         : undefined
+      if (flags['production-worker-image'] && flags['production-worker-receipt']) {
+        throw new Error('--production-worker-image and --production-worker-receipt are mutually exclusive')
+      }
+
+      const workerImageCheck = flags['production-worker-receipt']
+        ? readProofWorkerImageCheck(path.resolve(deploymentDir, flags['production-worker-receipt']))
+        : undefined
+      if (preparation && workerImageCheck && preparation.coreRevision !== workerImageCheck.coreRevision) {
+        throw new Error('Preparation and production Worker image receipts use different dogeos-core revisions')
+      }
+
       const manualPreparationFlags = [
         'aggregate-verifying-key',
         'batch-materializer',
@@ -94,6 +107,7 @@ export default class ProofMaterials extends Command {
       if (generation === 'mock' && [
         flags['bridge-artifact-dir'],
         flags['production-worker-image'],
+        flags['production-worker-receipt'],
         flags['protocol-context'],
         flags['software-manifest'],
       ].some(Boolean)) {
@@ -155,7 +169,9 @@ export default class ProofMaterials extends Command {
         'mock-worker-image',
       )
       const productionWorkerImage = generation === 'real'
-        ? await required(flags['production-worker-image'], 'Enter the real Worker release tag or immutable digest:', 'production-worker-image')
+        ? workerImageCheck
+          ? `${workerImageCheck.image.repository}@${workerImageCheck.image.digest}`
+          : await required(flags['production-worker-image'], 'Enter the real Worker release tag or immutable digest:', 'production-worker-image')
         : undefined
 
       let bridgeArtifactDir = generation === 'real'
