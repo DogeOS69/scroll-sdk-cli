@@ -82,6 +82,13 @@ or remove active HTTP checks to make an idle deployment appear functional.
 TypeScript. It treats the Rust/OpenVM outputs as inputs and lets the dogeos-core
 compiler perform final validation.
 
+For repeatable real releases, it additionally captures the complete native
+handoff, checks the production CUDA image's compiled labels, and safely invokes
+the matching dogeos-core 11-file publisher. See the
+[real-proof release handoff workflow](proof-release-workflow.md). GPU rental,
+dstack startup, proof execution, and enforcement activation remain explicit
+operator actions.
+
 ## 3. Files in a deployment
 
 ```text
