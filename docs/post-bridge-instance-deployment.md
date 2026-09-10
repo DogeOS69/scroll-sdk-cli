@@ -89,6 +89,14 @@ prefix-based cleanup. Older/manual deployments and interrupted installs lacking
 complete receipts need a separate explicit ownership audit; the runner cannot
 infer ownership from names. A cleaned instance ID must not be reused.
 
+Signer health checks should originate from the TSO Pod, which is the actual
+signing-request caller. A Reth RPC Pod can have a different network path to
+partner infrastructure; its inability to reach a signer does not establish
+that TSO is disconnected. The environment runner uses a bounded HTTP health
+request from TSO and still verifies the expected public key and network. The
+pinned TSO image provides Bash/coreutils, not curl/wget. Do not broaden network
+permissions merely to accommodate an unrelated diagnostic Pod.
+
 Some environments retain unrelated historical resources whose names share a
 service prefix. Do not delete these merely to pass preflight. The environment
 profile can record audited `preservedDormantDeployments` (exact name, UID,
