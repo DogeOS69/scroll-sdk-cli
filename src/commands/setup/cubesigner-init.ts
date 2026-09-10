@@ -11,6 +11,7 @@ import { promisify } from 'node:util'
 import type { CubesignerRole, DogeConfig } from '../../types/doge-config.js'
 
 import { SETUP_DEFAULTS_TEMPLATE, getSetupDefaultsPath } from '../../config/constants.js'
+import { validateCubesignerRolePrefix } from '../../utils/cubesigner-role-name.js'
 import { dogeConfigToToml, loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import { normalizeCompressedSecp256k1PublicKey } from '../../utils/secp256k1-public-key.js'
@@ -254,6 +255,13 @@ export default class SetupCubesignerSetup extends Command {
     }
 
     private async createNewRolesAndKeys(count: number, rolePrefix: string): Promise<void> {
+        try {
+            validateCubesignerRolePrefix(rolePrefix)
+        } catch (error) {
+            this.jsonCtx.error('E600_INVALID_VALUE', (error as Error).message, 'VALIDATION', true,
+                { flag: '--role-prefix' })
+        }
+
         this.jsonCtx.info(`Creating ${count} new TEE role and key with prefix "${rolePrefix}"`)
 
         try {

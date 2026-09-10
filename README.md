@@ -1,5 +1,7 @@
 # Scroll SDK CLI
 
+Current configuration and migration procedure: [Pure Reth configuration and retired services](docs/config-cleanup.md).
+
 [![Twitter Follow](https://img.shields.io/twitter/follow/Scroll_ZKP?style=social)](https://twitter.com/Scroll_ZKP)
 [![Discord](https://img.shields.io/discord/984015101017346058?color=%235865F2&label=Discord&logo=discord&logoColor=%23fff)](https://discord.gg/scroll)
 
@@ -45,16 +47,13 @@ bin/run.js --help
 
 ## Documentation
 
-- [Fresh devnet redeployment acceptance](docs/devnet-fresh-redeployment.md) — current operator decision: new independent CubeSigner role/key, new Bridge and fresh L2; preserve all existing policies and Kubernetes resources not deployed by this agent.
-- [L1 Interface beta.4e cold start](docs/l1-interface-beta4e-cold-start.md) — required fresh-instance opt-in, isolated storage and verified Kubernetes rollout.
-- [New Bridge / native Reth devnet runbook](docs/devnet-new-bridge-20260909.md) — verified 2026-09-09 steps, manual edits, release pins and the remaining runtime blocker.
+- [CLI setup order](docs/setup-order.md) — configuration prerequisites, native Reth genesis, `scrollsdk setup bridge-init`, service configuration and deployment handoff. Start here for command order.
+- [Configuration cleanup](docs/config-cleanup.md) — supported template fields, matching contracts images and updating an existing deployment.
+- [Pure Reth configuration](docs/reth-only-peers.md) — Reth node identities and peer configuration.
+- [Reth bootnode public P2P access](docs/bootnode-public-p2p.md) — AWS controller setup, public Service values, Helm rollout and external RPC peer export.
 - [Monitoring account balances](docs/monitoring-balances.md) — `prep-charts`
   generation for fee-oracle on L2, eth-da-submitter on Ethereum DA, and fee-wallet
   UTXO thresholds, including canonical signer validation and Secret-owned RPCs.
-- [DogeOS deployment status and runbook corrections](docs/dogeos-deployment-status.md)
-  — verified progress, current blockers, safe resume boundaries, and corrections
-  found during the from-scratch devnet deployment. This is not yet a completed
-  end-to-end deployment manual; the command reference below is not execution order.
 - [Legacy contracts placeholder compatibility](docs/contracts-placeholder-compatibility.md)
   — isolate a real DA service signer from legacy contracts account validation
   in explicitly selected DogeOS testnet/regtest L2-only deployments.
@@ -76,6 +75,18 @@ bin/run.js --help
   — the generic manual sent to signer operators. The generated
   `signer-policy-bundle/PARTNER-COMMANDS.md` is authoritative for one concrete
   deployment.
+
+### Development environment references
+
+These documents describe a specific devnet/Shadowfork environment or historical
+deployment evidence. Their CubeSigner gamma settings and cluster identifiers
+are not general setup requirements.
+The command reference below lists commands; it does not define execution order.
+
+- [Fresh devnet redeployment acceptance](docs/devnet-fresh-redeployment.md) — environment-specific replacement decisions and recorded acceptance work.
+- [L1 Interface beta.4e cold start](docs/l1-interface-beta4e-cold-start.md) — version-specific fresh-instance configuration and recorded Kubernetes rollout.
+- [New Bridge / native Reth devnet runbook](docs/devnet-new-bridge-20260909.md) — recorded 2026-09-09 steps, manual edits, release pins and runtime blocker.
+- [DogeOS deployment status and runbook corrections](docs/dogeos-deployment-status.md) — historical devnet progress and corrections; not a completed general deployment manual.
 
 # Usage
 
@@ -252,25 +263,27 @@ _See code: [src/commands/doge/wallet/send.ts](https://github.com/dogeos69/scroll
 
 ## `scrollsdk doge wallet sync`
 
-Sync wallet UTXOs and balance (mainnet/testnet/regtest aware)
+Sync wallet UTXOs and balance using Electrs/Esplora.
 
-```
+```text
 USAGE
-  $ scrollsdk doge wallet sync [-k <value>] [-c <value>] [-p <value>]
+  $ scrollsdk doge wallet sync [-c <value>] [-p <value>] [--electrs-url <value>]
 
 FLAGS
-  -c, --config=<value>   Path to Dogecoin config file
-  -k, --api-key=<value>  NowNodes API key (overrides API key from config)
-  -p, --path=<value>     Custom path for the wallet file (overrides path from config)
-
-DESCRIPTION
-  Sync wallet UTXOs and balance (mainnet/testnet/regtest aware)
-
-EXAMPLES
-  $ scrollsdk doge:wallet sync --config .data/doge-config.toml
+  -c, --config=<value>       Path to Dogecoin config file
+  -p, --path=<value>         Wallet file path (overrides wallet.path)
+      --electrs-url=<value> Electrs/Esplora API URL
 ```
 
-_See code: [src/commands/doge/wallet/sync.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/doge/wallet/sync.ts)_
+The endpoint comes from `--electrs-url`, optional `rpc.electrsAPIUrl`, or the
+existing testnet Electrs default. Mainnet and regtest require an explicit
+endpoint. Setup does not prompt for or require an indexer configuration.
+
+```bash
+scrollsdk doge wallet sync --config .data/doge-config.toml --electrs-url http://localhost:3002
+```
+
+_See code: [src/commands/doge/wallet/sync.ts](src/commands/doge/wallet/sync.ts)_
 
 ## `scrollsdk help [COMMAND]`
 
@@ -346,17 +359,17 @@ _See code: [src/commands/helper/clear-accounts.ts](https://github.com/dogeos69/s
 
 ## `scrollsdk helper derive-enode NODEKEY`
 
-Derive enode and L2_GETH_STATIC_PEERS from a nodekey
+Derive a Reth enode and trustedPeers value from a nodekey
 
 ```
 USAGE
   $ scrollsdk helper derive-enode NODEKEY
 
 ARGUMENTS
-  NODEKEY  Nodekey of the geth ethereum node
+  NODEKEY  Reth P2P nodekey
 
 DESCRIPTION
-  Derive enode and L2_GETH_STATIC_PEERS from a nodekey
+  Derive a Reth enode and trustedPeers value from a nodekey
 
 EXAMPLES
   $ scrollsdk helper derive-enode 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
@@ -741,33 +754,55 @@ _See code: [src/commands/setup/attestation-signer.ts](https://github.com/dogeos6
 
 ## `scrollsdk setup bootnode-public-p2p`
 
-Enable external nodes to form P2P network with cluster bootnodes by setting up static IPs and LoadBalancer services
+See [Reth bootnode public P2P access](docs/bootnode-public-p2p.md) for execution order and deployment requirements.
 
-```
+```text
+Prepare Reth bootnode public P2P LoadBalancer values and the AWS controller; deploy the bootnode Helm releases afterwards
+
 USAGE
-  $ scrollsdk setup bootnode-public-p2p [--cluster-name <value>] [--json] [-N] [--provider aws|gcp] [--region <value>]
-    [--values-dir <value>]
+  $ scrollsdk setup bootnode-public-p2p [--cluster-name <value>]
+    [--controller-chart-version <value>] [--doge-config <value>] [--json]
+    [--namespace <value>] [-N] [--provider aws|gcp] [--region <value>]
+    [--skip-controller-setup] [--values-dir <value>]
 
 FLAGS
-  -N, --non-interactive       Run without prompts. Requires --provider flag.
-      --cluster-name=<value>  Kubernetes cluster name for resource tagging and identification
-      --json                  Output in JSON format (stdout for data, stderr for logs)
-      --provider=<option>     Cloud provider for static IP allocation (aws, gcp)
-                              <options: aws|gcp>
-      --region=<value>        Cloud provider region where resources will be created
-      --values-dir=<value>    [default: ./values] Directory containing Helm values files for configuration
+  -N, --non-interactive                   Run without prompts. Requires
+                                          --provider, --cluster-name and
+                                          --region.
+      --cluster-name=<value>              Kubernetes cluster name for resource
+                                          tagging and identification
+      --controller-chart-version=<value>  AWS controller Helm chart version; IAM
+                                          policy uses its matching appVersion
+      --doge-config=<value>               Path to Reth node configuration
+                                          (defaults to .data/doge-config.toml)
+      --json                              Output in JSON format (stdout for
+                                          data, stderr for logs)
+      --namespace=<value>                 [default: default] Namespace for the
+                                          subsequent bootnode Helm rollout
+      --provider=<option>                 Public P2P provider (AWS implemented;
+                                          GCP is not implemented)
+                                          <options: aws|gcp>
+      --region=<value>                    Cloud provider region where resources
+                                          will be created
+      --skip-controller-setup             Use an existing AWS controller; verify
+                                          readiness and prepare local values
+                                          only
+      --values-dir=<value>                [default: ./values] Directory
+                                          containing Helm values files for
+                                          configuration
 
 DESCRIPTION
-  Enable external nodes to form P2P network with cluster bootnodes by setting up static IPs and LoadBalancer services
+  Prepare Reth bootnode public P2P LoadBalancer values and the AWS controller;
+  deploy the bootnode Helm releases afterwards
 
 EXAMPLES
-  # Setup static IPs with interactive provider selection
+  # Prepare public P2P values with interactive provider selection
 
   $ scrollsdk setup bootnode-public-p2p
 
 
 
-  # Setup static IPs for AWS with specific cluster and region
+  # Configure AWS controller and public P2P values for a specific cluster
 
   $ scrollsdk setup bootnode-public-p2p --provider=aws --cluster-name=my-cluster --region=us-west-2
 
@@ -779,7 +814,7 @@ EXAMPLES
 
 
 
-  # Non-interactive mode (requires --provider)
+  # Non-interactive mode (requires provider, cluster name and region)
 
   $ scrollsdk setup bootnode-public-p2p --non-interactive --provider=aws --cluster-name=my-cluster --region=us-west-2
 
@@ -788,9 +823,9 @@ EXAMPLES
   # JSON output mode
 
   $ scrollsdk setup bootnode-public-p2p --non-interactive --json --provider=aws --cluster-name=my-cluster --region=us-west-2
-```
 
-_See code: [src/commands/setup/bootnode-public-p2p.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/bootnode-public-p2p.ts)_
+  $ scrollsdk setup bootnode-public-p2p -N --json --provider aws --cluster-name my-cluster --region us-west-2 --skip-controller-setup
+```
 
 ## `scrollsdk setup bridge-init`
 
@@ -939,7 +974,7 @@ _See code: [src/commands/setup/cubesigner-refresh.ts](https://github.com/dogeos6
 
 ## `scrollsdk setup db-init`
 
-Initialize databases with new users and passwords interactively or update permissions
+Initialize the Blockscout database and user, or update its permissions
 
 ```
 USAGE
@@ -955,7 +990,7 @@ FLAGS
       --update-port=<value>  Update the port of current database values
 
 DESCRIPTION
-  Initialize databases with new users and passwords interactively or update permissions
+  Initialize the Blockscout database and user, or update its permissions
 
 EXAMPLES
   $ scrollsdk setup db-init
@@ -966,7 +1001,7 @@ EXAMPLES
 
   $ scrollsdk setup db-init --clean
 
-  $ scrollsdk setup db-init --update-db-port=25061
+  $ scrollsdk setup db-init --update-port=25061
 
   $ scrollsdk setup db-init --non-interactive
 
@@ -1270,73 +1305,85 @@ _See code: [src/commands/setup/fee-oracle.ts](https://github.com/dogeos69/scroll
 
 ## `scrollsdk setup gen-keystore`
 
-Generate L2 node keys and deployment account keypairs
+Generate or reuse deployment and activity account keypairs in `config.toml`.
+The owner is a supplied wallet address; this command does not create an owner key.
 
-```
+```text
 USAGE
-  $ scrollsdk setup gen-keystore [--accounts] [--bootnode-count <value>] [--from-spec <value>] [--json] [-N]
-    [--regenerate-bootnodes] [--regenerate-sequencers] [--sequencer-count <value>] [--sequencer-password <value>]
+  $ scrollsdk setup gen-keystore [--[no-]accounts] [--json] [-N]
 
 FLAGS
-  -N, --non-interactive             Run without prompts. Uses existing keys or generates new ones based on flags.
-      --[no-]accounts               Generate account key pairs
-      --bootnode-count=<value>      [default: 2] Number of bootnodes. In non-interactive mode, generates if not enough
-                                    exist.
-      --from-spec=<value>           Path to DeploymentSpec YAML. Uses infrastructure.sequencerCount and bootnodeCount as
-                                    count defaults.
-      --json                        Output in JSON format (stdout for data, stderr for logs)
-      --regenerate-bootnodes        Force regeneration of all bootnode keys (non-interactive mode)
-      --regenerate-sequencers       Force regeneration of all sequencer keys (non-interactive mode)
-      --sequencer-count=<value>     [default: 2] Number of sequencers (including primary). In non-interactive mode,
-                                    generates if not enough exist.
-      --sequencer-password=<value>  Password for sequencer keystores (or use $ENV:VAR_NAME pattern). Defaults to a
-                                    generated random password for new sequencers in non-interactive mode.
-
-DESCRIPTION
-  Generate L2 node keys and deployment account keypairs
-
-EXAMPLES
-  $ scrollsdk setup gen-keystore
-
-  $ scrollsdk setup gen-keystore --no-accounts
-
-  $ scrollsdk setup gen-keystore --non-interactive
-
-  $ scrollsdk setup gen-keystore --non-interactive --json --sequencer-count 2 --bootnode-count 2
-
-  $ scrollsdk setup gen-keystore --non-interactive --sequencer-count 2 --bootnode-count 2
+  -N, --non-interactive  Reuse existing accounts or generate missing keys without prompts
+      --[no-]accounts    [default: true] Process deployment and activity accounts
+      --json            Output a JSON result containing public addresses
 ```
 
-_See code: [src/commands/setup/gen-keystore.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-keystore.ts)_
+```bash
+scrollsdk setup gen-keystore --non-interactive --json
+```
+
+Reth node identities are configured separately in `.data/doge-config.toml`:
+
+```bash
+scrollsdk setup l2-sequencer-reth --index 0 --signer-mode external-secret --non-interactive
+scrollsdk setup l2-bootnode-reth --count 1 --secret-mode external-secret --non-interactive
+```
+
+Legacy Geth node generation flags, keystores, passwords, and root peer projections
+have been removed. Existing private keys remain in place. See
+[the Reth configuration guide](docs/reth-only-peers.md) for the complete flow.
+
+_See code: [src/commands/setup/gen-keystore.ts](src/commands/setup/gen-keystore.ts)_
 
 ## `scrollsdk setup gen-l2-artifacts`
 
+For development without Docker, run from a prepared deployment directory:
+
+```bash
+scrollsdk setup gen-l2-artifacts --contracts-source /path/to/scroll-contracts \
+  --non-interactive --json --skip-deployment-salt-update --skip-l1-fee-vault-update
+```
+
+Requires Foundry, bash, jq and installed contract dependencies. `--contracts-source`
+is mutually exclusive with `--image-tag`. Source `volume/` is preserved; compiler
+caches are reused in `.data/contracts-build/`. See the [operation guide](docs/config-cleanup.md#developing-contract-generation-without-docker).
+
+
 Generate L2 deployment artifacts, including genesis, public config, contract config, and Helm config values
+
+Artifact generation does not require `sequencer.L2GETH_SIGNER_ADDRESS` or a
+configured Reth signer. Current contracts initialize SystemConfig with the zero
+signer and generate empty genesis `extraData`; configure the Reth runtime signer
+separately with `setup l2-sequencer-reth`.
+
+The command no longer prompts for or updates `L1_PLONK_VERIFIER_ADDR`. The old
+`--l1-plonk-verifier-addr` and `--skip-l1-plonk-verifier-update` flags are accepted
+for script compatibility and ignored. `--doge-config` is only used for legacy
+contracts placeholder validation.
 
 ```
 USAGE
-  $ scrollsdk setup gen-l2-artifacts [--base-fee-per-gas <value>] [--configs-dir <value>] [--deployment-salt <value>]
-    [--image-tag <value>] [--json] [--l1-fee-vault-addr <value>] [--l1-plonk-verifier-addr <value>]
+  $ scrollsdk setup gen-l2-artifacts [--base-fee-per-gas <value>] [--configs-dir <value>] [--contracts-source <value>] [--deployment-salt <value>]
+    [--doge-config <value>] [--image-tag <value>] [--json] [--l1-fee-vault-addr <value>]
     [--l2-bridge-fee-recipient-addr <value>] [-N] [--skip-deployment-salt-update] [--skip-l1-fee-vault-update]
-    [--skip-l1-plonk-verifier-update]
 
 FLAGS
   -N, --non-interactive                       Run without prompts. Uses config values or sensible defaults.
       --base-fee-per-gas=<value>              Base fee per gas (non-interactive mode). Uses existing config value if not
                                               provided.
       --configs-dir=<value>                   [default: values] Directory name to copy configs to
+      --contracts-source=<value>              Local scroll-contracts checkout; use Foundry instead of Docker.
       --deployment-salt=<value>               Deployment salt value (non-interactive mode). If not provided, keeps
                                               existing or auto-increments.
+      --doge-config=<value>                   Path to Dogecoin config for legacy contracts placeholder validation
+                                              (defaults to .data/doge-config.toml when present)
       --image-tag=<value>                     Specify the Docker image tag to use
       --json                                  Output in JSON format (stdout for data, stderr for logs)
       --l1-fee-vault-addr=<value>             L1 fee vault address (non-interactive mode). Defaults to OWNER_ADDR.
-      --l1-plonk-verifier-addr=<value>        L1 plonk verifier address (non-interactive mode). If not provided, one
-                                              will be deployed.
       --l2-bridge-fee-recipient-addr=<value>  L2 bridge fee recipient address (non-interactive mode). Defaults to zero
                                               address.
       --skip-deployment-salt-update           Skip deployment salt update (non-interactive mode)
       --skip-l1-fee-vault-update              Skip L1 fee vault address update (non-interactive mode)
-      --skip-l1-plonk-verifier-update         Skip L1 plonk verifier address update (non-interactive mode)
 
 DESCRIPTION
   Generate L2 deployment artifacts, including genesis, public config, contract config, and Helm config values
@@ -1613,7 +1660,7 @@ Provision proof AWS resources and persist their non-secret resource facts as pre
 ```
 USAGE
   $ scrollsdk setup proof-aws-init [--artifact-public-endpoint-url <value>] [--artifact-public-read-mode
-    direct-s3|existing-public-s3|existing-gateway] [--artifact-read-route-table-id <value>...]
+    direct-s3|shared-s3|existing-public-s3|existing-gateway] [--artifact-read-route-table-id <value>...]
     [--artifact-read-vpc-endpoint-id <value>] [--aws-profile <value>] [--aws-region <value>] [--bucket <value>]
     [--config <value>] [--coordinator-service-account <value>] [--deployment-alias <value>] [--doge-config <value>]
     [--eks-cluster <value>] [--json] [--key-prefix <value>] [--namespace <value>] [-N] [--rotate-tokens] [--secret-name
@@ -1625,9 +1672,10 @@ FLAGS
   -y, --yes                                      Apply the displayed AWS resource plan without confirmation
       --artifact-public-endpoint-url=<value>     Existing credential-free HTTPS S3-compatible gateway root; used only
                                                  with --artifact-public-read-mode=existing-gateway
-      --artifact-public-read-mode=<option>       Public proof artifact delivery: CLI-managed direct S3, operator-managed
-                                                 public S3, or an existing HTTPS gateway backed by private S3
-                                                 <options: direct-s3|existing-public-s3|existing-gateway>
+      --artifact-public-read-mode=<option>       Public artifact delivery: direct-s3 manages bucket settings; shared-s3
+                                                 adds only this prefix read grant; existing modes preserve
+                                                 operator-managed delivery
+                                                 <options: direct-s3|shared-s3|existing-public-s3|existing-gateway>
       --artifact-read-route-table-id=<value>...  Advanced override: EKS subnet route table to associate with the S3
                                                  gateway endpoint (repeatable; normally auto-discovered)
       --artifact-read-vpc-endpoint-id=<value>    Advanced override: existing S3 Gateway VPC endpoint (normally
@@ -1670,6 +1718,8 @@ EXAMPLES
   $ scrollsdk setup proof-aws-init --aws-region us-west-2 --eks-cluster dogeos-testnet --deployment-alias dev0829 --artifact-public-read-mode direct-s3 -N
 
   $ scrollsdk setup proof-aws-init --artifact-public-read-mode existing-public-s3
+
+  $ scrollsdk setup proof-aws-init --artifact-public-read-mode shared-s3 --skip-vpc-endpoint
 
   $ scrollsdk setup proof-aws-init --artifact-public-read-mode existing-gateway --artifact-public-endpoint-url https://objects.example.com
 
@@ -2129,7 +2179,7 @@ ARGUMENTS
   CASENAME  The name of the case to run
 
 FLAGS
-  -b, --blockbookurl=<value>  [default: https://doge-electrs-testnet-demo.qed.me] blockbook url
+  -b, --electrs-url=<value>  Electrs/Esplora API URL (testnet default; explicit URL required for other networks)
   -c, --outputcount=<value>   [default: 24] Number of P2PKH outputs when running the multiple-output scenario
   -m, --masterwif=<value>     [default: cftTTdqFUYi3Njx4VLZGATAFCuX8wetJddD71FGmC91wKJ2XidVY] master wif key, provide
                               test dogecoin

@@ -1,8 +1,6 @@
 export type DogecoinNetwork = 'mainnet' | 'regtest' | 'testnet'
 
 export interface DogecoinKubernetesConfig {
-  blockbookPublicPort?: number
-  blockbookServiceName?: string
   p2pPort?: number
   rpcPort?: number
   /** Explicit in-cluster consumer RPC URL; useful for an isolated shadowfork proxy. */
@@ -32,12 +30,6 @@ export interface DogecoinKubernetesEndpoints {
   zmqRawBlockUrl: string
   zmqRawTxPort: number
   zmqRawTxUrl: string
-}
-
-export interface BlockbookKubernetesEndpoints {
-  apiUrl: string
-  publicPort: number
-  serviceName: string
 }
 
 export function resolveDogecoinKubernetesEndpoints(config: DogecoinEndpointConfig): DogecoinKubernetesEndpoints {
@@ -97,16 +89,4 @@ export function resolveDogecoinKubernetesEndpoints(config: DogecoinEndpointConfi
 export function resolveDogecoinServiceRpcUrl(config: DogecoinEndpointConfig): string {
   const endpoints = resolveDogecoinKubernetesEndpoints(config)
   return `http://${endpoints.serviceName}:${endpoints.rpcPort}`
-}
-
-export function resolveBlockbookKubernetesEndpoints(config: DogecoinEndpointConfig): BlockbookKubernetesEndpoints {
-  const kubernetes = config.kubernetes || {}
-  const serviceName = kubernetes.blockbookServiceName || 'blockbook'
-  const publicPort = kubernetes.blockbookPublicPort || 19_139
-
-  return {
-    apiUrl: `http://${serviceName}:${publicPort}`,
-    publicPort,
-    serviceName,
-  }
 }

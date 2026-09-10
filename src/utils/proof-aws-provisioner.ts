@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, perfectionist/sort-classes -- Helm values and aws CLI JSON are dynamic documents; discovery helpers stay beside the VPC reconciliation flow. */
 
 import { parse as parseToml } from '@iarna/toml'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 
 import type { JsonOutputContext } from './json-output.js'
 
@@ -56,7 +57,7 @@ export interface ProofArtifactReadTransportResult {
   vpcEndpoint?: ProofArtifactVpcEndpointResult
 }
 
-export type ProofArtifactPublicReadMode = 'direct-s3' | 'existing-gateway' | 'existing-public-s3'
+export type ProofArtifactPublicReadMode = 'direct-s3' | 'existing-gateway' | 'existing-public-s3' | 'shared-s3'
 
 export interface ProofArtifactVpcEndpointPlan {
   enabled: boolean
@@ -87,6 +88,8 @@ export const PUBLIC_ARTIFACT_OBJECT_PATTERNS = [
   'witnesses/*',
   'public-outputs/*',
   'proofs/*',
+  // AdvanceL1 attestors fetch completeness evidence after the bridge witness.
+  'signer-policy-evidence/*',
 ] as const
 
 export function publicArtifactObjectResources(bucket: string, keyPrefix: string): string[] {
@@ -304,6 +307,39 @@ export function upsertProofArtifactPublicReadPolicy(
     Statement: preservedStatements,
     Version: existingPolicy.Version || '2012-10-17',
   }
+}
+
+/** Add one prefix-scoped grant without adopting or replacing any existing statement. */
+export function upsertSharedProofArtifactPublicReadPolicy(
+  existingPolicy: Record<string, any>,
+  bucket: string,
+  keyPrefix: string,
+): Record<string, any> {
+  const prefix = normalizeProofKeyPrefix(keyPrefix)
+  const resources = publicArtifactObjectResources(bucket, prefix)
+  // Include the allowed path set: newer CLI versions can add required paths
+  // without rewriting a previous release's statement or weakening conditions.
+  const sid = `${PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID}${createHash('sha256').update(JSON.stringify(resources)).digest('hex').slice(0, 24)}`
+  const statement = {
+    Action: 's3:GetObject',
+    Effect: 'Allow',
+    Principal: '*',
+    Resource: resources,
+    Sid: sid,
+  }
+  const statements = Array.isArray(existingPolicy.Statement)
+    ? [...existingPolicy.Statement]
+    : existingPolicy.Statement ? [existingPolicy.Statement] : []
+  const matching = statements.filter(item => item?.Sid === sid)
+  if (matching.length > 0) {
+    if (matching.length !== 1 || !isDeepStrictEqual(matching[0], statement)) {
+      throw new Error(`shared-s3 policy Sid ${sid} already exists with different contents; refusing to replace it`)
+    }
+
+    return existingPolicy
+  }
+
+  return {...existingPolicy, Statement: [...statements, statement], Version: existingPolicy.Version || '2012-10-17'}
 }
 
 function principalIncludesWildcard(principal: unknown): boolean {
@@ -555,13 +591,13 @@ export class ProofAwsProvisioner {
     }
 
     const {publicReadMode} = input.artifactRead
-    if (!['direct-s3', 'existing-gateway', 'existing-public-s3'].includes(publicReadMode)) {
+    if (!['direct-s3', 'existing-gateway', 'existing-public-s3', 'shared-s3'].includes(publicReadMode)) {
       throw new Error(`unsupported proof artifact public read mode: ${String(publicReadMode)}`)
     }
 
     const artifactRegion = identity.artifactRegion || identity.awsRegion
     const directS3Endpoint = proofArtifactS3Endpoint(artifactRegion)
-    const usesRegionalS3Endpoint = publicReadMode === 'direct-s3' || publicReadMode === 'existing-public-s3'
+    const usesRegionalS3Endpoint = publicReadMode !== 'existing-gateway'
     if (usesRegionalS3Endpoint && input.artifactRead.publicEndpointUrl) {
       const supplied = normalizeProofArtifactPublicEndpoint(input.artifactRead.publicEndpointUrl)
       if (supplied !== directS3Endpoint) {
@@ -586,10 +622,14 @@ export class ProofAwsProvisioner {
       )
     }
 
+    if (publicReadMode === 'shared-s3' && input.artifactRead.vpcEndpoint?.enabled) {
+      throw new Error('shared-s3 preserves shared VPC endpoint policies and routes; use --skip-vpc-endpoint')
+    }
+
     const bucketCreated = this.ensureBucket(
       artifactRegion,
       bucket,
-      publicReadMode !== 'existing-public-s3',
+      publicReadMode !== 'existing-public-s3' && publicReadMode !== 'shared-s3',
     )
     // Validate any existing public policy before creating/associating a VPC
     // endpoint or changing IAM/secrets. This keeps a rejected direct-S3
@@ -610,14 +650,16 @@ export class ProofAwsProvisioner {
     // an existing archive bucket can already expose raw DA objects through a
     // policy or gateway whose scope the proof adapter does not own.  Toggling
     // Public Access Block here can silently break that established download
-    // path.  Direct S3 is the only mode in which scroll-sdk-cli owns and
-    // reconciles anonymous-read policy.
+    // path. shared-s3 only appends a prefix-scoped statement, without taking
+    // ownership of the bucket-wide settings or any existing grants.
     if (publicReadMode === 'direct-s3') {
       this.reconcileDirectS3ArtifactRead(
         artifactRegion,
         bucket,
         keyPrefix,
       )
+    } else if (publicReadMode === 'shared-s3') {
+      this.reconcileSharedS3ArtifactRead(artifactRegion, bucket, keyPrefix)
     } else {
       this.jsonCtx.info(
         `proof-aws: preserved operator-managed bucket policy and Public Access Block settings for ${bucket} (${publicReadMode})`,
@@ -627,7 +669,7 @@ export class ProofAwsProvisioner {
     const artifactReadTransport: ProofArtifactReadTransportResult = {
       publicEndpointUrl,
       publicReadMode,
-      publicStatus: publicReadMode === 'direct-s3'
+      publicStatus: publicReadMode === 'direct-s3' || publicReadMode === 'shared-s3'
         ? 'configured-unverified'
         : 'operator-managed-unverified',
       ...(vpcEndpoint ? {vpcEndpoint} : {}),
@@ -675,7 +717,7 @@ export class ProofAwsProvisioner {
 
       if (!createIfMissing) {
         throw new Error(
-          `existing-public-s3 requires an existing accessible S3 bucket, but ${bucket} was not found`,
+          `selected public read mode requires an existing accessible S3 bucket, but ${bucket} was not found`,
         )
       }
     }
@@ -704,6 +746,47 @@ export class ProofAwsProvisioner {
     ], { region })
     this.jsonCtx.info(`proof-aws: created S3 bucket: ${bucket} (region=${region}, public access blocked, SSE-S3)`)
     return true
+  }
+
+  private reconcileSharedS3ArtifactRead(region: string, bucket: string, keyPrefix: string): void {
+    const accountId = this.aws.text(['sts', 'get-caller-identity'], {query: 'Account'})
+    this.aws.run(['s3api', 'head-bucket', '--bucket', bucket, '--expected-bucket-owner', accountId], {region})
+    // Public Access Block is effective at both levels. Never weaken either
+    // setting on behalf of one deployment sharing a bucket/account.
+    for (const args of [
+      ['s3api', 'get-public-access-block', '--bucket', bucket],
+      ['s3control', 'get-public-access-block', '--account-id', accountId],
+    ]) {
+      let config: Record<string, any>
+      try {
+        config = this.aws.json(args, {region}).PublicAccessBlockConfiguration
+      } catch (error) {
+        if (/NoSuchPublicAccessBlockConfiguration/.test(String(error))) continue
+        throw error
+      }
+
+      if (!config || typeof config.BlockPublicPolicy !== 'boolean' || typeof config.RestrictPublicBuckets !== 'boolean') {
+        throw new Error(`shared-s3 could not validate ${args[0]} Public Access Block settings`)
+      }
+
+      if (config.BlockPublicPolicy || config.RestrictPublicBuckets) {
+        throw new Error(`shared-s3 is blocked by ${args[0]} Public Access Block; settings were not changed. Use an operator-managed gateway or obtain explicit approval to change bucket/account security settings`)
+      }
+    }
+
+    const existing = this.readBucketPolicy(region, bucket)
+    const updated = upsertSharedProofArtifactPublicReadPolicy(existing, bucket, keyPrefix)
+    if (!isDeepStrictEqual(existing, updated)) {
+      // S3 has no conditional PutBucketPolicy. Detect intervening changes when
+      // possible; operators must serialize concurrent bucket-policy writers.
+      if (!isDeepStrictEqual(existing, this.readBucketPolicy(region, bucket))) {
+        throw new Error('shared-s3 bucket policy changed during provisioning; retry with serialized policy writers')
+      }
+
+      this.aws.run(['s3api', 'put-bucket-policy', '--bucket', bucket, '--expected-bucket-owner', accountId, '--policy', JSON.stringify(updated)], {region})
+    }
+
+    this.jsonCtx.info(`proof-aws: configured prefix-scoped anonymous GetObject under ${bucket}/${keyPrefix}; preserved existing statements, encryption, Public Access Block and VPC routing`)
   }
 
   private reconcileDirectS3ArtifactRead(

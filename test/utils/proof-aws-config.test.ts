@@ -120,6 +120,23 @@ describe('proof AWS config source', () => {
     })
   })
 
+  it('round-trips shared S3 mode and rejects its wrong status or endpoint', () => {
+    const config = fixture()
+    config.artifactReadTransport = {
+      publicEndpointUrl: 'https://s3.us-east-1.amazonaws.com',
+      publicReadMode: 'shared-s3',
+      publicStatus: 'configured-unverified',
+    }
+    const configPath = path.join(root, '.data/proof-aws.json')
+    writeProofAwsConfig(configPath, config)
+    expect(readProofAwsConfig(root).config.artifactReadTransport).to.deep.equal(config.artifactReadTransport)
+    config.artifactReadTransport.publicStatus = 'operator-managed-unverified'
+    expect(() => writeProofAwsConfig(configPath, config)).to.throw('must be configured-unverified')
+    config.artifactReadTransport.publicStatus = 'configured-unverified'
+    config.artifactReadTransport.publicEndpointUrl = 'https://objects.example.com'
+    expect(() => writeProofAwsConfig(configPath, config)).to.throw('must match artifactStore.region')
+  })
+
   it('accepts an operator-managed public S3 transport with the regional endpoint', () => {
     const config = fixture()
     config.artifactReadTransport = {

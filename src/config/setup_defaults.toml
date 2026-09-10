@@ -7,8 +7,6 @@ seed_string = "replace_me_with_your_seed"
 dogecoin_rpc_url = "https://dogecoin.testnet.dogeos.com"
 dogecoin_rpc_user = ""
 dogecoin_rpc_pass = ""
-dogecoin_blockbook_url = "https://dogebook-testnet.nownodes.io"
-dogecoin_blockbook_api_key = "00000000000000000000000000000000"
 
 # Bridge signer policy. If tee_pubkey / attestation_pubkeys / recovery_pubkeys
 # are omitted, generate_test_keys derives them deterministically from seed_string.

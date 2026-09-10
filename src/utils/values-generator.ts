@@ -17,10 +17,10 @@ import * as yaml from 'js-yaml'
 import type { DeploymentSpec, ImagesConfig } from '../types/deployment-spec.js'
 
 import {
-  L1_INTERFACE_BEACON_API_ENDPOINT,
   L1_INTERFACE_RPC_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
+import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY} from '../constants/docker.js'
 import {
   getBridgeFeeRateSatsPerKvb,
   getDogecoinIndexerStartHeight,
@@ -30,6 +30,7 @@ import {
 import {
   resolveDogecoinKubernetesEndpoints,
 } from './kubernetes-endpoints.js'
+import {buildProofCoordinatorIngress} from './proof-coordinator-ingress.js'
 import {
   ensureWithdrawalChartWiring,
   ensureWithdrawalProofActivationSwitch,
@@ -90,7 +91,7 @@ function generateExternalSecrets(
   secretData: Array<{ property: string; remoteKey: string; secretKey: string }>
 ): Record<string, any> | null {
   // For local k8s secrets, we don't generate external secrets
-  if (secretConfig.provider === 'kubernetes') {
+  if (secretConfig.provider === 'kubernetes' || secretData.length === 0) {
     return null
   }
 
@@ -127,33 +128,6 @@ function generateExternalSecrets(
   }
 
   return null
-}
-
-/**
- * Build peer list from sequencer and bootnode configs
- */
-function buildPeerList(spec: DeploymentSpec): string[] {
-  const peers: string[] = []
-
-  // Add sequencer enodes
-  if (spec.infrastructure.sequencers) {
-    for (const seq of spec.infrastructure.sequencers) {
-      if (seq.enodeUrl) {
-        peers.push(seq.enodeUrl)
-      }
-    }
-  }
-
-  // Add bootnode enodes
-  if (spec.infrastructure.bootnodes) {
-    for (const bn of spec.infrastructure.bootnodes) {
-      if (bn.enodeUrl) {
-        peers.push(bn.enodeUrl)
-      }
-    }
-  }
-
-  return peers
 }
 
 /**
@@ -368,9 +342,10 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
   const files: GeneratedValuesFiles = {}
 
   // Core L2 infrastructure
-  files['l2-sequencer-production.yaml'] = generateL2SequencerValues(normalizedSpec)
-  files['l2-bootnode-production.yaml'] = generateL2BootnodeValues(normalizedSpec)
-  files['l2-rpc-production.yaml'] = generateL2RpcValues(normalizedSpec)
+  files['l2-reth-sequencer-production.yaml'] = generateL2RethValues(normalizedSpec, 'sequencer')
+  files['l2-reth-bootnode-production.yaml'] = generateL2RethValues(normalizedSpec, 'bootnode')
+  files['l2-reth-rpc-production.yaml'] = generateL2RethValues(normalizedSpec, 'rpc')
+  files['l2-reth-rpc-public-production.yaml'] = generateL2RethValues(normalizedSpec, 'rpc', true)
 
   // L1 interface and private Ethereum DA devnet
   files['l1-devnet-production.yaml'] = generateL1DevnetValues(normalizedSpec)
@@ -395,22 +370,12 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
     files['proof-coordinator-production.yaml'] = generateProofCoordinatorValues(normalizedSpec)
   }
 
-  files['gas-oracle-production.yaml'] = generateGasOracleValues(normalizedSpec)
   files['fee-oracle-production.yaml'] = generateFeeOracleValues(normalizedSpec)
-  files['chain-monitor-production.yaml'] = generateChainMonitorValues(normalizedSpec)
 
   // Frontend and explorers
   files['frontends-production.yaml'] = generateFrontendsValues(normalizedSpec)
   files['frontends-config.yaml'] = generateFrontendsConfigValues(normalizedSpec)
   files['blockscout-production.yaml'] = generateBlockscoutValues(normalizedSpec)
-  files['rollup-explorer-backend-production.yaml'] = generateRollupExplorerBackendValues(normalizedSpec)
-  files['bridge-history-api-production.yaml'] = generateBridgeHistoryApiValues(normalizedSpec)
-  files['bridge-history-fetcher-production.yaml'] = generateBridgeHistoryFetcherValues(normalizedSpec)
-
-  // Admin and monitoring
-  files['admin-system-backend-production.yaml'] = generateAdminSystemBackendValues(normalizedSpec)
-  files['admin-system-cron-production.yaml'] = generateAdminSystemCronValues(normalizedSpec)
-  files['admin-system-dashboard-production.yaml'] = generateAdminSystemDashboardValues(normalizedSpec)
 
   // Contracts deployment
   files['contracts-production.yaml'] = generateContractsValues(normalizedSpec)
@@ -418,250 +383,78 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
   return files
 }
 
-/**
- * Generate L2 Sequencer values
- */
-function generateL2SequencerValues(spec: DeploymentSpec): string {
-  const secretConfig = getSecretProviderConfig(spec)
-  const peerList = buildPeerList(spec)
-
-  // Get signer address for this instance (uses __INSTANCE_INDEX__ placeholder)
-  // The actual address will be filled by the deployment process based on instance index
-  const getSignerAddress = (): string => {
-    if (spec.infrastructure.sequencers && spec.infrastructure.sequencers.length > 0) {
-      // Return placeholder that references the sequencer config
-      // In practice, this gets replaced during chart preparation
-      return '__SEQUENCER_SIGNER_ADDRESS__'
-    }
-
-    return ''
-  }
-
-  const image = resolveImage(spec, 'l2Sequencer', {
-    pullPolicy: 'IfNotPresent',
-    repository: 'scrolltech/l2geth',
-    tag: 'scroll-v5.9.6'
+/** Generate native Reth chart values. Node identities are supplied by the Reth setup commands. */
+function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | 'sequencer', publicRpc = false): string {
+  const serviceKey = {bootnode: 'l2Bootnode', rpc: 'l2Rpc', sequencer: 'l2Sequencer'} as const
+  const image = resolveImage(spec, serviceKey[role], {
+    repository: 'dogeos69/rollup-node',
+    tag: 'TODO_TAG_TO_REPLACE',
   })
+  if (/(?:^|\/)l2geth$/.test(image.repository)) {
+    throw new Error(`images.services.${serviceKey[role]} must reference a Reth image; l2geth is retired`)
+  }
 
-  const values: Record<string, any> = {
-    configMaps: {
-      env: {
-        data: {
-          CHAIN_ID: String(spec.network.l2ChainId),
-          L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK: String(spec.contracts.l1DeploymentBlock || 0),
-          L2GETH_L1_ENDPOINT: L1_INTERFACE_RPC_ENDPOINT,
-          L2GETH_PEER_LIST: JSON.stringify(peerList.length > 0 ? peerList : []),
-          L2GETH_SIGNER_ADDRESS: getSignerAddress()
-        },
-        enabled: true
-      }
-    },
-    envFrom: [
-      { configMapRef: { name: 'l2-sequencer-__INSTANCE_INDEX__-env' } },
-      { secretRef: { name: 'l2-sequencer-__INSTANCE_INDEX__-secret-env' } }
-    ],
-    global: {
-      fullnameOverride: 'l2-sequencer-__INSTANCE_INDEX__'
-    },
+  const sequencer = role === 'sequencer'
+  return yaml.dump({
+    controller: {replicas: 1, strategy: 'RollingUpdate', type: 'statefulset'},
     image,
-    initContainers: {
-      'wait-for-l1': {
-        command: ['/bin/sh', '-c', '/wait-for-l1.sh $L2GETH_L1_ENDPOINT'],
-        envFrom: [{ configMapRef: { name: 'l2-sequencer-__INSTANCE_INDEX__-env' } }],
-        image: 'scrolltech/scroll-alpine:v0.0.1',
-        volumeMounts: [{
-          mountPath: '/wait-for-l1.sh',
-          name: 'wait-for-l1-script',
-          subPath: 'wait-for-l1.sh'
-        }]
-      }
-    },
-    persistence: {
-      data: {
-        retain: true,
-        size: '1000Gi'
-      },
-      env: {
-        enabled: true,
-        name: 'l2-sequencer-__INSTANCE_INDEX__-env',
-        type: 'configMap'
-      }
-    },
-    resources: {
-      limits: { cpu: '4', memory: '8Gi' },
-      requests: { cpu: '50m', memory: '150Mi' }
-    }
-  }
-
-  // Add external secrets if not using k8s secrets directly
-  const externalSecrets = generateExternalSecrets(
-    'l2-sequencer-__INSTANCE_INDEX__-secret-env',
-    secretConfig,
-    [
-      { property: 'L2GETH_KEYSTORE', remoteKey: 'l2-sequencer-__INSTANCE_INDEX__-secret-env', secretKey: 'L2GETH_KEYSTORE' },
-      { property: 'L2GETH_PASSWORD', remoteKey: 'l2-sequencer-__INSTANCE_INDEX__-secret-env', secretKey: 'L2GETH_PASSWORD' },
-      { property: 'L2GETH_NODEKEY', remoteKey: 'l2-sequencer-__INSTANCE_INDEX__-secret-env', secretKey: 'L2GETH_NODEKEY' }
-    ]
-  )
-
-  if (externalSecrets) {
-    values.externalSecrets = externalSecrets
-  }
-
-  // Add sequencer instance metadata as comments for reference
-  if (spec.infrastructure.sequencers && spec.infrastructure.sequencers.length > 0) {
-    values._sequencerInstances = spec.infrastructure.sequencers.map(s => ({
-      enodeUrl: s.enodeUrl || 'generated-during-deployment',
-      index: s.index,
-      signerAddress: s.signerAddress
-    }))
-  }
-
-  return yaml.dump(values)
-}
-
-/**
- * Generate L2 Bootnode values
- */
-function generateL2BootnodeValues(spec: DeploymentSpec): string {
-  const secretConfig = getSecretProviderConfig(spec)
-  const peerList = buildPeerList(spec)
-
-  const image = resolveImage(spec, 'l2Bootnode', {
-    pullPolicy: 'IfNotPresent',
-    repository: 'scrolltech/l2geth',
-    tag: 'scroll-v5.9.6'
-  })
-
-  const values: Record<string, any> = {
-    configMaps: {
-      env: {
-        data: {
-          CHAIN_ID: String(spec.network.l2ChainId),
-          L2GETH_DA_BLOB_BEACON_NODE: L1_INTERFACE_BEACON_API_ENDPOINT,
-          L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK: String(spec.contracts.l1DeploymentBlock || 0),
-          L2GETH_L1_ENDPOINT: L1_INTERFACE_RPC_ENDPOINT,
-          L2GETH_PEER_LIST: JSON.stringify(peerList.length > 0 ? peerList : [])
-        },
-        enabled: true
-      }
-    },
-    envFrom: [
-      { configMapRef: { name: 'l2-bootnode-__INSTANCE_INDEX__-env' } },
-      { secretRef: { name: 'l2-bootnode-__INSTANCE_INDEX__-secret-env' } }
-    ],
-    global: {
-      fullnameOverride: 'l2-bootnode-__INSTANCE_INDEX__'
-    },
-    image,
-    initContainers: {
-      'wait-for-l1': {
-        command: ['/bin/sh', '-c', '/wait-for-l1.sh $L2GETH_L1_ENDPOINT'],
-        envFrom: [{ configMapRef: { name: 'l2-bootnode-__INSTANCE_INDEX__-env' } }],
-        image: 'scrolltech/scroll-alpine:v0.0.1',
-        volumeMounts: [{
-          mountPath: '/wait-for-l1.sh',
-          name: 'wait-for-l1-script',
-          subPath: 'wait-for-l1.sh'
-        }]
-      }
-    },
-    persistence: {
-      data: {
-        retain: true,
-        size: '1000Gi'
-      },
-      env: {
-        enabled: true,
-        mountPath: '/config/',
-        name: 'l2-bootnode-__INSTANCE_INDEX__-env',
-        type: 'configMap'
-      }
-    },
-    service: {
-      p2p: { enabled: true }
-    }
-  }
-
-  // Add external secrets if not using k8s secrets directly
-  const externalSecrets = generateExternalSecrets(
-    'l2-bootnode-__INSTANCE_INDEX__-secret-env',
-    secretConfig,
-    [
-      { property: 'L2GETH_NODEKEY', remoteKey: 'l2-bootnode-__INSTANCE_INDEX__', secretKey: 'L2GETH_NODEKEY' }
-    ]
-  )
-
-  if (externalSecrets) {
-    values.externalSecrets = externalSecrets
-  }
-
-  // Add bootnode instance metadata for reference
-  if (spec.infrastructure.bootnodes && spec.infrastructure.bootnodes.length > 0) {
-    values._bootnodeInstances = spec.infrastructure.bootnodes.map(b => ({
-      enodeUrl: b.enodeUrl || 'generated-during-deployment',
-      index: b.index,
-      publicEndpoint: b.publicEndpoint
-    }))
-  }
-
-  return yaml.dump(values)
-}
-
-/**
- * Generate L2 RPC values
- */
-function generateL2RpcValues(spec: DeploymentSpec): string {
-  const peerList = buildPeerList(spec)
-
-  const image = resolveImage(spec, 'l2Rpc', {
-    pullPolicy: 'IfNotPresent',
-    repository: 'scrolltech/l2geth',
-    tag: 'scroll-v5.9.6'
-  })
-
-  const values = {
-    configMaps: {
-      env: {
-        data: {
-          CHAIN_ID: String(spec.network.l2ChainId),
-          L2GETH_DA_BLOB_BEACON_NODE: L1_INTERFACE_BEACON_API_ENDPOINT,
-          L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK: String(spec.contracts.l1DeploymentBlock || 0),
-          L2GETH_L1_ENDPOINT: L1_INTERFACE_RPC_ENDPOINT,
-          L2GETH_PEER_LIST: JSON.stringify(peerList.length > 0 ? peerList : [])
-        },
-        enabled: true
-      }
-    },
-    envFrom: [
-      { configMapRef: { name: 'l2-rpc-env' } }
-    ],
-    global: {
-      fullnameOverride: 'l2-rpc'
-    },
-    image,
-    ingress: {
+    role,
+    waitForL1: {image: 'scrolltech/scroll-alpine:v0.0.1'},
+    ...(role === 'rpc' && {nodeKeyGenerator: {image: 'scrolltech/scroll-alpine:v0.0.1'}}),
+    env: [{name: 'RUST_BACKTRACE', value: '1'}],
+    ...(publicRpc && {ingress: {
       main: {
-        hosts: [{
-          host: spec.frontend.hosts.rpcGateway,
-          paths: [{ path: '/', pathType: 'Prefix' }]
-        }],
+        enabled: true, hosts: [{host: spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix'}]}], ingressClassName: 'nginx',
+        primary: true,
+      },
+      websocket: {
+        enabled: true, hosts: [{host: spec.frontend.hosts.rpcGatewayWs || spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix', service: {port: 8546}}]}],
         ingressClassName: 'nginx',
-        tls: [{
-          hosts: [spec.frontend.hosts.rpcGateway],
-          secretName: 'l2-rpc-tls'
-        }]
-      }
+      },
+    }}),
+    externalSecrets: {},
+    resources: {limits: {cpu: '8', memory: '32Gi'}, requests: {cpu: '1', memory: '2Gi'}},
+    reth: {
+      blobS3Url: '',
+      builderGasLimit: '10000000',
+      data: {accessMode: 'ReadWriteOnce', mountPath: '/data', retain: true, size: '1000Gi'},
+      engineLegacyStateRoot: true,
+      engineSyncAtStartup: 'true',
+      extraArgs: ['--network.legacy-geth-header-transform', 'false', ...(role === 'rpc' && !publicRpc ? ['--rpc.eth-proof-window', '100000'] : [])],
+      genesis: {chainPath: '/app/genesis/genesis.json', configMapName: 'genesis-config', mountPath: '/app/genesis/genesis.json', subPath: 'genesis.json'},
+      http: {addr: '0.0.0.0', api: role === 'rpc' && !publicRpc ? 'eth,net,web3,rpc,debug' : 'eth,net,web3,rpc', corsDomain: '*', enabled: true},
+      ipcPath: '/tmp/reth.ipc',
+      ipcPermissions: '0600',
+      l1LivenessCheckInterval: '3600',
+      l1LivenessThreshold: '2147483647',
+      l1Url: L1_INTERFACE_RPC_ENDPOINT,
+      logFormat: 'log-fmt',
+      networkId: String(spec.network.l2ChainId),
+      nodeKey: {
+        generatedPath: '/data/nodekey',
+        mode: role === 'rpc' ? 'pvcAutoGenerate' : 'secret', path: '/keys/nodekey',
+        secretKey: 'RETH_NODEKEY', secretName: '',
+      },
+      ports: {http: 8545, metrics: 6060, p2p: 30_303, ws: 8546},
+      rpc: {rollupNode: role !== 'bootnode', rollupNodeAdmin: false, trustedOnly: false},
+      sequencer: {
+        allowEmptyBlocks: sequencer, autoStart: true, blockTimeMs: '3000',
+        enabled: sequencer, feeRecipient: spec.contracts.overrides?.l2TxFeeVault || '0x5300000000000000000000000000000000000005',
+        l1InclusionMode: sequencer ? 'finalized:0' : 'finalized:2',
+        payloadBuildingDurationMs: '800',
+      },
+      service: {extra: {}, p2p: {enabled: role !== 'rpc'}},
+      signer: {
+        awsKmsKeyId: '',
+        localFile: {path: '/signer/sequencer-key', secretKey: 'RETH_SEQUENCER_SIGNER_PRIVATE_KEY', secretName: ''},
+        type: sequencer ? 'localFile' : 'none',
+      },
+      trustedPeers: '',
+      verbosity: 3,
+      ws: {addr: '0.0.0.0', api: 'eth,net,web3,rpc', enabled: role !== 'bootnode'},
     },
-    persistence: {
-      data: {
-        retain: true,
-        size: '1000Gi'
-      }
-    }
-  }
-
-  return yaml.dump(values)
+    service: {main: {annotations: {}, type: 'ClusterIP', ...(role === 'rpc' && !publicRpc && {fullname: 'l2-rpc'})}},
+  })
 }
 
 /**
@@ -1425,6 +1218,11 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
     },
     env,
     image,
+    ingress: {
+      main: spec.proofTopology?.mode === 'active' && spec.frontend.hosts.proofCoordinator
+        ? buildProofCoordinatorIngress(spec.frontend.hosts.proofCoordinator)
+        : {enabled: false},
+    },
     persistence: {
       genesis: {
         enabled: true,
@@ -1458,10 +1256,13 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
       main: {
         enabled: true,
         ports: {
-          http: {
+          http: {enabled: false},
+          prover: {
             enabled: true,
-            port: 9400,
-            protocol: 'TCP'
+            port: 7788,
+            primary: true,
+            protocol: 'TCP',
+            targetPort: 7788
           }
         }
       }
@@ -1489,58 +1290,6 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
         remoteKey: remoteSecretKey,
         secretKey: 'prover-worker-token'
       },
-    ]
-  )
-
-  if (externalSecrets) {
-    values.externalSecrets = externalSecrets
-  }
-
-  return yaml.dump(values)
-}
-
-/**
- * Generate Gas Oracle values
- */
-function generateGasOracleValues(spec: DeploymentSpec): string {
-  const secretConfig = getSecretProviderConfig(spec)
-
-  const image = resolveImage(spec, 'gasOracle', {
-    pullPolicy: 'IfNotPresent',
-    repository: 'scrolltech/gas-oracle',
-    tag: 'gas-oracle-v4.4.83'
-  })
-
-  const values: Record<string, any> = {
-    configMaps: {
-      env: {
-        data: {
-          SCROLL_GAS_ORACLE_BLOB_SCALAR: String(spec.contracts.gasOracle.blobScalar),
-          SCROLL_GAS_ORACLE_L1_RPC_URL: L1_INTERFACE_RPC_ENDPOINT,
-          SCROLL_GAS_ORACLE_L2_RPC_URL: L2_RPC_ENDPOINT,
-          SCROLL_GAS_ORACLE_SCALAR: String(spec.contracts.gasOracle.scalar)
-        },
-        enabled: true
-      }
-    },
-    envFrom: [
-      { configMapRef: { name: 'gas-oracle-env' } },
-      { secretRef: { name: 'gas-oracle-secret-env' } }
-    ],
-    image,
-    resources: {
-      limits: { cpu: '500m', memory: '2Gi' },
-      requests: { cpu: '50m', memory: '256Mi' }
-    }
-  }
-
-  const externalSecrets = generateExternalSecrets(
-    'gas-oracle-secret-env',
-    secretConfig,
-    [
-      { property: 'SCROLL_GAS_ORACLE_DB_DSN', remoteKey: 'gas-oracle-secret-env', secretKey: 'SCROLL_GAS_ORACLE_DB_DSN' },
-      { property: 'SCROLL_GAS_ORACLE_L1_SENDER_PRIVATE_KEY', remoteKey: 'gas-oracle-secret-env', secretKey: 'SCROLL_GAS_ORACLE_L1_SENDER_PRIVATE_KEY' },
-      { property: 'SCROLL_GAS_ORACLE_L2_SENDER_PRIVATE_KEY', remoteKey: 'gas-oracle-secret-env', secretKey: 'SCROLL_GAS_ORACLE_L2_SENDER_PRIVATE_KEY' }
     ]
   )
 
@@ -1602,54 +1351,6 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
       limits: { cpu: '1', memory: '512Mi' },
       requests: { cpu: '50m', memory: '256Mi' }
     }
-  }
-
-  return yaml.dump(values)
-}
-
-/**
- * Generate Chain Monitor values
- */
-function generateChainMonitorValues(spec: DeploymentSpec): string {
-  const secretConfig = getSecretProviderConfig(spec)
-
-  const image = resolveImage(spec, 'chainMonitor', {
-    pullPolicy: 'IfNotPresent',
-    repository: 'scrolltech/chain-monitor',
-    tag: 'chain-monitor-v4.4.83'
-  })
-
-  const values: Record<string, any> = {
-    configMaps: {
-      env: {
-        data: {
-          SCROLL_CHAIN_MONITOR_L1_RPC_URL: L1_INTERFACE_RPC_ENDPOINT,
-          SCROLL_CHAIN_MONITOR_L2_RPC_URL: L2_RPC_ENDPOINT
-        },
-        enabled: true
-      }
-    },
-    envFrom: [
-      { configMapRef: { name: 'chain-monitor-env' } },
-      { secretRef: { name: 'chain-monitor-secret-env' } }
-    ],
-    image,
-    resources: {
-      limits: { cpu: '500m', memory: '2Gi' },
-      requests: { cpu: '50m', memory: '256Mi' }
-    }
-  }
-
-  const externalSecrets = generateExternalSecrets(
-    'chain-monitor-secret-env',
-    secretConfig,
-    [
-      { property: 'SCROLL_CHAIN_MONITOR_DB_DSN', remoteKey: 'chain-monitor-secret-env', secretKey: 'SCROLL_CHAIN_MONITOR_DB_DSN' }
-    ]
-  )
-
-  if (externalSecrets) {
-    values.externalSecrets = externalSecrets
   }
 
   return yaml.dump(values)
@@ -1718,8 +1419,6 @@ REACT_APP_CHAIN_NAME_L2 = ${spec.network.l2ChainName}
 REACT_APP_ETH_SYMBOL = ${spec.network.tokenSymbol}
 REACT_APP_EXTERNAL_RPC_URI_L1 = ${spec.frontend.externalUrls.l1Rpc}
 REACT_APP_EXTERNAL_RPC_URI_L2 = ${spec.frontend.externalUrls.l2Rpc}
-REACT_APP_BRIDGE_API_URI = ${spec.frontend.externalUrls.bridgeApi}
-REACT_APP_ROLLUPSCAN_API_URI = ${spec.frontend.externalUrls.rollupScanApi}
 REACT_APP_EXTERNAL_EXPLORER_URI_L1 = ${spec.frontend.externalUrls.l1Explorer}
 REACT_APP_EXTERNAL_EXPLORER_URI_L2 = ${spec.frontend.externalUrls.l2Explorer}
 REACT_APP_CONNECT_WALLET_PROJECT_ID = ${spec.frontend.walletConnectProjectId || ''}`
@@ -1838,259 +1537,6 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
 }
 
 /**
- * Generate Rollup Explorer Backend values
- */
-function generateRollupExplorerBackendValues(spec: DeploymentSpec): string {
-  const secretConfig = getSecretProviderConfig(spec)
-
-  const image = resolveImage(spec, 'rollupExplorerBackend', {
-    pullPolicy: 'IfNotPresent',
-    repository: 'scrolltech/rollup-explorer-backend',
-    tag: 'rollup-explorer-backend-v4.4.83'
-  })
-
-  const values: Record<string, any> = {
-    envFrom: [
-      { secretRef: { name: 'rollup-explorer-backend-secret-env' } }
-    ],
-    image,
-    ingress: {
-      main: {
-        hosts: [{
-          host: spec.frontend.hosts.rollupExplorerApi,
-          paths: [{ path: '/', pathType: 'Prefix' }]
-        }],
-        ingressClassName: 'nginx'
-      }
-    },
-    resources: {
-      limits: { cpu: '500m', memory: '2Gi' },
-      requests: { cpu: '50m', memory: '256Mi' }
-    }
-  }
-
-  const externalSecrets = generateExternalSecrets(
-    'rollup-explorer-backend-secret-env',
-    secretConfig,
-    [
-      { property: 'SCROLL_ROLLUP_EXPLORER_DB_DSN', remoteKey: 'rollup-explorer-backend-secret-env', secretKey: 'SCROLL_ROLLUP_EXPLORER_DB_DSN' }
-    ]
-  )
-
-  if (externalSecrets) {
-    values.externalSecrets = externalSecrets
-  }
-
-  return yaml.dump(values)
-}
-
-/**
- * Generate Bridge History API values
- */
-function generateBridgeHistoryApiValues(spec: DeploymentSpec): string {
-  const secretConfig = getSecretProviderConfig(spec)
-
-  const image = resolveImage(spec, 'bridgeHistoryApi', {
-    pullPolicy: 'IfNotPresent',
-    repository: 'scrolltech/bridge-history-api',
-    tag: 'bridge-history-api-v4.4.83'
-  })
-
-  const values: Record<string, any> = {
-    envFrom: [
-      { secretRef: { name: 'bridge-history-api-secret-env' } }
-    ],
-    image,
-    ingress: {
-      main: {
-        hosts: [{
-          host: spec.frontend.hosts.bridgeHistoryApi,
-          paths: [{ path: '/', pathType: 'Prefix' }]
-        }],
-        ingressClassName: 'nginx'
-      }
-    },
-    resources: {
-      limits: { cpu: '500m', memory: '2Gi' },
-      requests: { cpu: '50m', memory: '256Mi' }
-    }
-  }
-
-  const externalSecrets = generateExternalSecrets(
-    'bridge-history-api-secret-env',
-    secretConfig,
-    [
-      { property: 'SCROLL_BRIDGE_HISTORY_DB_DSN', remoteKey: 'bridge-history-api-secret-env', secretKey: 'SCROLL_BRIDGE_HISTORY_DB_DSN' }
-    ]
-  )
-
-  if (externalSecrets) {
-    values.externalSecrets = externalSecrets
-  }
-
-  return yaml.dump(values)
-}
-
-/**
- * Generate Bridge History Fetcher values
- */
-function generateBridgeHistoryFetcherValues(spec: DeploymentSpec): string {
-  const secretConfig = getSecretProviderConfig(spec)
-
-  const image = resolveImage(spec, 'bridgeHistoryFetcher', {
-    pullPolicy: 'IfNotPresent',
-    repository: 'scrolltech/bridge-history-fetcher',
-    tag: 'bridge-history-fetcher-v4.4.83'
-  })
-
-  const values: Record<string, any> = {
-    configMaps: {
-      env: {
-        data: {
-          SCROLL_BRIDGE_HISTORY_L1_RPC_URL: L1_INTERFACE_RPC_ENDPOINT,
-          SCROLL_BRIDGE_HISTORY_L1_START_HEIGHT: String(spec.contracts.l1DeploymentBlock || 0),
-          SCROLL_BRIDGE_HISTORY_L2_RPC_URL: L2_RPC_ENDPOINT
-        },
-        enabled: true
-      }
-    },
-    envFrom: [
-      { configMapRef: { name: 'bridge-history-fetcher-env' } },
-      { secretRef: { name: 'bridge-history-fetcher-secret-env' } }
-    ],
-    image,
-    resources: {
-      limits: { cpu: '1000m', memory: '4Gi' },
-      requests: { cpu: '100m', memory: '512Mi' }
-    }
-  }
-
-  const externalSecrets = generateExternalSecrets(
-    'bridge-history-fetcher-secret-env',
-    secretConfig,
-    [
-      { property: 'SCROLL_BRIDGE_HISTORY_DB_DSN', remoteKey: 'bridge-history-fetcher-secret-env', secretKey: 'SCROLL_BRIDGE_HISTORY_DB_DSN' }
-    ]
-  )
-
-  if (externalSecrets) {
-    values.externalSecrets = externalSecrets
-  }
-
-  return yaml.dump(values)
-}
-
-/**
- * Generate Admin System Backend values
- */
-function generateAdminSystemBackendValues(spec: DeploymentSpec): string {
-  const secretConfig = getSecretProviderConfig(spec)
-
-  const values: Record<string, any> = {
-    configMaps: {
-      env: {
-        data: {
-          SCROLL_ADMIN_L1_RPC_URL: L1_INTERFACE_RPC_ENDPOINT,
-          SCROLL_ADMIN_L2_RPC_URL: L2_RPC_ENDPOINT
-        },
-        enabled: true
-      }
-    },
-    envFrom: [
-      { configMapRef: { name: 'admin-system-backend-env' } },
-      { secretRef: { name: 'admin-system-backend-secret-env' } }
-    ],
-    image: {
-      pullPolicy: 'IfNotPresent',
-      repository: 'scrolltech/admin-system-backend',
-      tag: 'admin-system-backend-v4.4.83'
-    },
-    resources: {
-      limits: { cpu: '500m', memory: '2Gi' },
-      requests: { cpu: '50m', memory: '256Mi' }
-    }
-  }
-
-  const externalSecrets = generateExternalSecrets(
-    'admin-system-backend-secret-env',
-    secretConfig,
-    [
-      { property: 'SCROLL_ADMIN_DB_DSN', remoteKey: 'admin-system-backend-secret-env', secretKey: 'SCROLL_ADMIN_DB_DSN' }
-    ]
-  )
-
-  if (externalSecrets) {
-    values.externalSecrets = externalSecrets
-  }
-
-  return yaml.dump(values)
-}
-
-/**
- * Generate Admin System Cron values
- */
-function generateAdminSystemCronValues(spec: DeploymentSpec): string {
-  const secretConfig = getSecretProviderConfig(spec)
-
-  const values: Record<string, any> = {
-    envFrom: [
-      { secretRef: { name: 'admin-system-cron-secret-env' } }
-    ],
-    image: {
-      pullPolicy: 'IfNotPresent',
-      repository: 'scrolltech/admin-system-cron',
-      tag: 'admin-system-cron-v4.4.83'
-    },
-    resources: {
-      limits: { cpu: '500m', memory: '1Gi' },
-      requests: { cpu: '50m', memory: '128Mi' }
-    }
-  }
-
-  const externalSecrets = generateExternalSecrets(
-    'admin-system-cron-secret-env',
-    secretConfig,
-    [
-      { property: 'SCROLL_ADMIN_DB_DSN', remoteKey: 'admin-system-cron-secret-env', secretKey: 'SCROLL_ADMIN_DB_DSN' }
-    ]
-  )
-
-  if (externalSecrets) {
-    values.externalSecrets = externalSecrets
-  }
-
-  return yaml.dump(values)
-}
-
-/**
- * Generate Admin System Dashboard values
- */
-function generateAdminSystemDashboardValues(spec: DeploymentSpec): string {
-  const values = {
-    image: {
-      pullPolicy: 'IfNotPresent',
-      repository: 'scrolltech/admin-system-dashboard',
-      tag: 'admin-system-dashboard-v4.4.83'
-    },
-    ingress: {
-      main: {
-        hosts: [{
-          host: spec.frontend.hosts.adminDashboard,
-          paths: [{ path: '/', pathType: 'Prefix' }]
-        }],
-        ingressClassName: 'nginx',
-        tls: [{
-          hosts: [spec.frontend.hosts.adminDashboard],
-          secretName: 'admin-dashboard-tls'
-        }]
-      }
-    }
-  }
-
-  return yaml.dump(values)
-}
-
-/**
  * Generate Contracts deployment values
  */
 function generateContractsValues(spec: DeploymentSpec): string {
@@ -2117,8 +1563,8 @@ function generateContractsValues(spec: DeploymentSpec): string {
     ],
     image: {
       pullPolicy: 'IfNotPresent',
-      repository: 'scrolltech/scroll-contracts',
-      tag: 'scroll-contracts-v0.1.0'
+      repository: DOCKER_REPOSITORY,
+      tag: `deploy-${CONTRACTS_DOCKER_DEFAULT_TAG}`
     }
   }
 

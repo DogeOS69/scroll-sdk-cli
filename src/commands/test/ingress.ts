@@ -19,10 +19,8 @@ export default class TestIngress extends Command {
   private configValues: Record<string, string> = {}
 
   private frontendToIngressMapping: Record<string, string> = {
-    BRIDGE_API_URI: 'BRIDGE_HISTORY_API_HOST',
     EXTERNAL_EXPLORER_URI_L2: 'BLOCKSCOUT_HOST',
     EXTERNAL_RPC_URI_L2: 'RPC_GATEWAY_HOST',
-    ROLLUPSCAN_API_URI: 'ROLLUP_EXPLORER_API_HOST',
   }
 
   public async run(): Promise<void> {
@@ -34,15 +32,14 @@ export default class TestIngress extends Command {
 
     const requiredNames = [
       'blockscout',
-      'bridge-history-api',
       'frontends',
       'grafana',
       'rpc',
-      'rollup-explorer-backend',
+      'tso-service',
     ]
 
     if (flags.dev) {
-      requiredNames.push('l1-devnet', 'l1-explorer')
+      requiredNames.push('l1-devnet')
     }
 
     try {
@@ -102,12 +99,6 @@ export default class TestIngress extends Command {
         // HTTP check
         try {
           switch (name) {
-          case 'bridge-history-api': {
-            httpResponse = await fetch(`http://${host}/api/txs`)
-          
-          break;
-          }
-
           case 'l1-devnet': {
             httpResponse = await fetch(`http://${host}`, {
               body: JSON.stringify({
@@ -125,8 +116,9 @@ export default class TestIngress extends Command {
           break;
           }
 
-          case 'coordinator-api': {
-            httpResponse = await fetch(`http://${host}/coordinator/v1/challenge/`, {
+          case 'proof-coordinator':
+          case 'tso-service': {
+            httpResponse = await fetch(`http://${host}/${name === 'tso-service' ? 'health' : 'healthz'}`, {
               method: 'GET',
             })
           
@@ -144,12 +136,6 @@ export default class TestIngress extends Command {
         // HTTPS check
         try {
           switch (name) {
-          case 'bridge-history-api': {
-            httpsResponse = await fetch(`https://${host}/api/txs`)
-          
-          break;
-          }
-
           case 'l1-devnet': {
             httpsResponse = await fetch(`https://${host}`, {
               body: JSON.stringify({
@@ -167,8 +153,9 @@ export default class TestIngress extends Command {
           break;
           }
 
-          case 'coordinator-api': {
-            httpsResponse = await fetch(`https://${host}/coordinator/v1/challenge/`, {
+          case 'proof-coordinator':
+          case 'tso-service': {
+            httpsResponse = await fetch(`https://${host}/${name === 'tso-service' ? 'health' : 'healthz'}`, {
               method: 'GET',
             })
           
@@ -228,12 +215,9 @@ export default class TestIngress extends Command {
     this.log(chalk.cyan('\nComparing ingresses with config.toml values:'))
 
     const configMapping: Record<string, string> = {
-      BRIDGE_API_URI: 'bridge-history-api',
-      EXTERNAL_EXPLORER_URI_L1: 'l1-explorer',
       EXTERNAL_EXPLORER_URI_L2: 'blockscout',
       EXTERNAL_RPC_URI_L1: 'l1-devnet',
       EXTERNAL_RPC_URI_L2: 'rpc',
-      ROLLUPSCAN_API_URI: 'rollup-explorer-backend',
     }
 
     for (const [configKey, ingressName] of Object.entries(configMapping)) {

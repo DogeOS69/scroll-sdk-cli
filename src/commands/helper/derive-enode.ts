@@ -5,12 +5,12 @@ import { ethers } from 'ethers'
 export default class HelperDeriveEnode extends Command {
   static args = {
     nodekey: Args.string({
-      description: 'Nodekey of the geth ethereum node',
+      description: 'Reth P2P nodekey',
       required: true,
     }),
   }
 
-  static description = 'Derive enode and L2_GETH_STATIC_PEERS from a nodekey'
+  static description = 'Derive a Reth enode and trustedPeers value from a nodekey'
 
   static examples = [
     '<%= config.bin %> <%= command.id %> 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
@@ -26,16 +26,16 @@ export default class HelperDeriveEnode extends Command {
 
     try {
       const enodeId = this.nodeKeyToEnodeId(nodekey)
-      const enode = `enode://${enodeId}@l2-sequencer-0:30303`
-      const configEntry = `L2_GETH_STATIC_PEERS = '["enode://${enodeId}@l2-sequencer-0:30303"]'`
+      const enode = `enode://${enodeId}@l2-reth-sequencer-0:30303`
+      const configEntry = `trustedPeers: "${enode}"`
 
       this.log(chalk.cyan('Enode:'))
       this.log(chalk.green(enode))
       this.log('')
-      this.log(chalk.cyan('Config.toml entry:'))
+      this.log(chalk.cyan('Reth values YAML (reth.trustedPeers):'))
       this.log(chalk.green(configEntry))
       this.log('')
-      this.log(chalk.yellow('Note: You may need to change "l2-sequencer-0" to the appropriate hostname or IP address.'))
+      this.log(chalk.yellow('Note: You may need to change "l2-reth-sequencer-0" to the appropriate hostname or IP address.'))
     } catch (error) {
       this.error(chalk.red(`Failed to derive enode: ${error}`))
     }

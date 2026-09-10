@@ -199,29 +199,6 @@ export default class WalletSend extends Command {
       'Content-Type': 'application/json',
     }
 
-    if (urlToBroadcast.includes('nownodes.io')) {
-      const sendTxUrl = `${urlToBroadcast.replace(/\/$/, '')}/sendtx/${txHex}`
-      if (rpcConfig?.apiKey) {
-        headers['api-key'] = rpcConfig.apiKey
-      }
-
-      const response = await fetch(sendTxUrl, { headers, method: 'GET' })
-      if (!response.ok) {
-        const errorBody = await response.text()
-        throw new Error(
-          `Broadcast to NowNodes failed: ${response.status} ${response.statusText}. Response: ${errorBody}`,
-        )
-      }
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = (await response.json()) as { error?: any; result?: string }
-      if (result.error || !result.result) {
-        throw new Error(`Broadcast error from NowNodes API: ${JSON.stringify(result.error || result)}`)
-      }
-
-      return result.result
-    }
-
     if (rpcConfig?.username && rpcConfig?.password) {
       const credentials = Buffer.from(`${rpcConfig.username}:${rpcConfig.password}`).toString('base64')
       headers.Authorization = `Basic ${credentials}`

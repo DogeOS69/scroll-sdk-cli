@@ -182,8 +182,6 @@ export interface DogeConfig {
     l2Url?: string
   }
   kubernetes?: {
-    blockbookPublicPort?: number
-    blockbookServiceName?: string
     p2pPort?: number
     rpcPort?: number
     /** RPC URL projected to in-cluster consumers; overrides serviceName/rpcPort URL construction. */
@@ -212,8 +210,8 @@ export interface DogeConfig {
     networkId?: number | string
   }
   rpc?: {
-    apiKey?: string
-    blockbookAPIUrl?: string
+    /** Optional Electrs/Esplora endpoint used only by wallet synchronization. */
+    electrsAPIUrl?: string
     l2Url?: string
     password?: string // for send/sync on dogocoin
     url?: string // for send/sync on dogocoin like: https://testnet.doge.xyz/
@@ -272,10 +270,6 @@ export interface DogeConfig {
       serviceAccountName?: string
       serviceAccountRoleArn?: string
     }
-  }
-  test?: {
-    mockFinalizeEnabled?: boolean
-    mockFinalizeTimeout?: number
   }
   wallet: {
     path: string

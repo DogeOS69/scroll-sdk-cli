@@ -141,11 +141,33 @@ IAM roles and token secret, configures the selected external read transport,
 and writes `.data/proof-aws.json`. It never invents a second proof-only bucket.
 Choose the public-read mode according to who owns the bucket-level policy:
 
+- `shared-s3` adds a CLI-managed read statement for this instance's required
+  DA/proof paths in an **existing bucket owned by the caller's AWS account**.
+  Use `--skip-vpc-endpoint` with it: existing VPC routes and grants are preserved.
+  Each bucket/prefix/required-path-set has a deterministic statement ID, so new
+  instances retain previous instances' access and reruns do not duplicate
+  statements. A newer CLI requiring an additional path appends a new grant and
+  preserves the old one; retired grants require a separate operator review.
+  A changed
+  statement with the same ID causes an error, not an overwrite. No existing
+  statement (including explicit denies) is removed. No public list, write,
+  delete, or segmentation-sidecar grant is added.
+  Public paths include `0x*`, `input-specs/*`, `prepared-bundles/*`, `witnesses/*`,
+  `public-outputs/*`, `proofs/*`, and `signer-policy-evidence/*`. The last path
+  carries AdvanceL1 completeness evidence fetched by attestation signers after
+  the bridge witness; omitting it causes a second artifact-fetch 403.
+  The CLI checks bucket and account Public Access Block and fails rather than
+  weakening either; inspecting these settings requires `s3:GetBucketPublicAccessBlock`
+  and `s3:GetAccountPublicAccessBlock`. Prefix-policy management requires
+  `s3:GetBucketPolicy` and `s3:PutBucketPolicy`. Encryption and bucket-wide
+  settings are unchanged. Existing unrelated grants are not audited or narrowed.
 - `existing-public-s3` uses the regional S3 endpoint and preserves the existing
   bucket policy and Public Access Block settings. Use it for a shared bucket
   whose anonymous `GetObject` policy is already managed by the operator, such
   as a testnet DA archive. The CLI still manages the selected prefix's IRSA
   roles, optional EKS S3 Gateway endpoint statement, and proof token secret.
+  It does **not** grant a newly selected prefix access; use `shared-s3` when the
+  CLI should provision that permission.
 - `direct-s3` makes the CLI manage anonymous reads for the required external
   proof paths. Use it only where the CLI is allowed to manage the bucket-wide
   Public Access Block posture. It rejects an unmanaged public `GetObject`
@@ -153,6 +175,26 @@ Choose the public-read mode according to who owns the bucket-level policy:
   or changing IAM/secrets.
 - `existing-gateway` keeps S3 private and records an operator-managed
   credential-free HTTPS gateway.
+
+For a new instance using an already configured shared public-artifact bucket:
+
+```bash
+scrollsdk setup proof-aws-init \
+  --artifact-public-read-mode shared-s3 --skip-vpc-endpoint
+```
+
+The bucket and prefix come from `ethereumDa.blobArchive.s3` in doge-config.
+Provisioning reuses the deployment's token secret unless `--rotate-tokens` is
+explicitly supplied. Public Access Block takes precedence over bucket-policy
+grants ([AWS documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html)).
+Even after successful provisioning, require HTTP 200 for an actual digest-scoped
+artifact from each external signer/worker network. Explicit denies, object
+encryption or network policies can still prevent access. The recorded status is
+`configured-unverified`, not a successful readback assertion.
+
+Serialize all writers to a shared bucket policy. The CLI rereads immediately
+before writing and aborts on an observed intervening edit, but S3 has no atomic
+conditional `PutBucketPolicy`; that check cannot eliminate concurrent-write races.
 
 `existing-public-s3` does not narrow or otherwise endorse a pre-existing broad
 policy such as `arn:aws:s3:::bucket/*`; it records that policy as

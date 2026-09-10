@@ -3,6 +3,7 @@ import * as toml from '@iarna/toml'
 import { input } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
+import {ZeroAddress, isAddress} from 'ethers'
 import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -49,7 +50,6 @@ const L1_INTERFACE_LOCAL_ENV_KEYS = new Set([
   'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL',
   'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER',
   'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS',
-  'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_API_KEY',
 ])
 
 const L1_INTERFACE_ENV_ENDPOINT_KEYS = new Set([
@@ -62,6 +62,7 @@ const L1_INTERFACE_ENV_ENDPOINT_KEYS = new Set([
 // public RPC rejects `scroll_messenger_address` (it is sourced from the
 // committed protocol context instead).
 const L1_INTERFACE_DEPRECATED_ENV_KEYS = new Set([
+  'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_API_KEY',
   'DOGEOS_L1_INTERFACE_CHAIN_ID',
   'DOGEOS_L1_INTERFACE_ETHEREUM_DA__ETH_CHAIN_ID',
   'DOGEOS_L1_INTERFACE_ETHEREUM_DA__L2_CHAIN_ID',
@@ -887,8 +888,7 @@ export default class SetupGenRpcPackage extends Command {
       this.log(chalk.blue(`Using DogeConfig file: ${dogeConfigPath}`))
 
       // Step 2: Load config.toml if present. Values YAML is the source of
-      // truth for generated env files; config.toml is only used for peer and
-      // signer fallbacks.
+      // truth for generated env files; Reth identities come from doge-config.
       const config = this.loadConfig(flags['config-path'])
       if (config) {
         this.log(chalk.green('Successfully loaded config.toml'))
@@ -919,8 +919,8 @@ export default class SetupGenRpcPackage extends Command {
         this.log(chalk.yellow('⚠️  No LoadBalancer domains found - using placeholders'))
       }
 
-      // Step 6: Generate L2 reth env file from l2-rpc-production.yaml
-      this.log(chalk.blue('Step 2: Generating L2 reth env file from l2-rpc-production.yaml...'))
+      // Step 6: Generate L2 reth env file from l2-reth-rpc-production.yaml
+      this.log(chalk.blue('Step 2: Generating L2 reth env file from l2-reth-rpc-production.yaml...'))
 
       const l2NodeEnv = this.generateL2NodeEnvFiles(config, dogeConfig, rpcPackageDir, loadBalancerDomains, namespace, flags['values-dir'])
       this.log(chalk.green(`✓ Generated l2reth.env at: ${l2NodeEnv.l2rethEnvPath}`))
@@ -1283,7 +1283,7 @@ export default class SetupGenRpcPackage extends Command {
   }
 
   private generateL2NodeEnvFiles(
-    config: any | undefined,
+    _config: any | undefined,
     dogeConfig: DogeConfig,
     rpcPackageDir: string,
     loadBalancerDomains: Record<string, string> = {},
@@ -1295,22 +1295,16 @@ export default class SetupGenRpcPackage extends Command {
     const targetDirectory = path.resolve(rpcPackageDir, 'envs', network)
     const envFilePathReth = path.join(targetDirectory, 'l2reth.env')
     const legacyGethEnvFilePath = path.join(targetDirectory, 'l2geth.env')
-    const l2RpcYamlPath = path.resolve(valuesDir, 'l2-rpc-production.yaml')
     const l2RethRpcYamlPath = path.resolve(valuesDir, 'l2-reth-rpc-production.yaml')
     const removedLegacyPaths: string[] = []
 
     // Create directory structure
     fs.mkdirSync(targetDirectory, { recursive: true })
 
-    if (!fs.existsSync(l2RpcYamlPath)) {
-      throw new Error(`l2-rpc-production.yaml not found at: ${l2RpcYamlPath}`)
-    }
-
     if (!fs.existsSync(l2RethRpcYamlPath)) {
       throw new Error(`l2-reth-rpc-production.yaml not found at: ${l2RethRpcYamlPath}`)
     }
 
-    const l2RpcEnvData = this.loadConfigMapEnvData(l2RpcYamlPath)
     const l2RethRpcValues = yaml.load(fs.readFileSync(l2RethRpcYamlPath, 'utf8')) as any
     const rawNetworkId = l2RethRpcValues?.reth?.networkId
     const networkId = rawNetworkId === undefined || rawNetworkId === null ? '' : String(rawNetworkId).trim()
@@ -1320,15 +1314,14 @@ export default class SetupGenRpcPackage extends Command {
 
     const rethBootnodePeers = this.collectRethBootnodePeers(dogeConfig, valuesDir)
     const peerListValue = this.resolveExternalPeerList(
-      l2RpcEnvData.L2GETH_PEER_LIST,
-      config,
+      l2RethRpcValues?.reth?.trustedPeers,
       loadBalancerDomains,
       rethBootnodePeers,
     )
 
-    const validSigner = this.resolveL2RethValidSigner(config)
+    const validSigner = this.resolveL2RethValidSigner(dogeConfig)
     if (!validSigner) {
-      this.warn('Unable to resolve L2RETH_VALID_SIGNER from config.toml')
+      this.warn('No Reth sequencer index 0 configured; L2RETH_VALID_SIGNER is omitted. Run setup l2-sequencer-reth --index 0 to configure it.')
     }
 
     const l2rethVars: EnvVarMap = {}
@@ -1338,7 +1331,7 @@ export default class SetupGenRpcPackage extends Command {
       l2rethVars.L2GETH_PEER_LIST = peerListValue
     }
 
-    l2rethVars.L2RETH_L1_ENDPOINT = l2RpcEnvData.L2GETH_L1_ENDPOINT || L1_INTERFACE_RPC_ENDPOINT
+    l2rethVars.L2RETH_L1_ENDPOINT = l2RethRpcValues?.reth?.l1Url || L1_INTERFACE_RPC_ENDPOINT
     l2rethVars.L2RETH_NETWORK_ID = networkId
     const blobS3Url = resolveL2RethBlobS3Url(dogeConfig)
     if (blobS3Url) {
@@ -1360,6 +1353,7 @@ export default class SetupGenRpcPackage extends Command {
         key === 'CHAIN_ID' ||
         key === 'L2RETH_DA_BLOB_BEACON_NODE' ||
         (key === 'L2RETH_BLOB_S3_URL' && !blobS3Url) ||
+        (key === 'L2RETH_VALID_SIGNER' && !validSigner) ||
         (key.startsWith('L2GETH_') && key !== 'L2GETH_PEER_LIST'),
     })
 
@@ -1464,48 +1458,24 @@ export default class SetupGenRpcPackage extends Command {
   }
 
   private resolveExternalPeerList(
-    yamlPeerListValue: string | undefined,
-    config: any | undefined,
+    rethTrustedPeers: string | undefined,
     loadBalancerDomains: Record<string, string>,
-    additionalPeers: string[] = [],
-  ): string | undefined {
-    const extraPeers = uniqueStrings(additionalPeers)
-
-    const configBootnodePeers = config?.bootnode?.L2_GETH_PUBLIC_PEERS
-    if (Array.isArray(configBootnodePeers) && configBootnodePeers.length > 0) {
-      return JSON.stringify(convertPeersToExternalDomains(uniqueStrings([...configBootnodePeers.map(String), ...extraPeers]), loadBalancerDomains))
-    }
-
-    const yamlPeers = parsePeerListValue(yamlPeerListValue)
-    if (yamlPeers) {
-      return JSON.stringify(convertPeersToExternalDomains(uniqueStrings([...yamlPeers, ...extraPeers]), loadBalancerDomains))
-    }
-
-    const staticPeers = config?.sequencer?.L2_GETH_STATIC_PEERS
-    if (Array.isArray(staticPeers) && staticPeers.length > 0) {
-      return JSON.stringify(convertPeersToExternalDomains(uniqueStrings([...staticPeers.map(String), ...extraPeers]), loadBalancerDomains))
-    }
-
-    const legacyPublicPeers = config?.sequencer?.L2_GETH_PUB_PEERS
-    if (Array.isArray(legacyPublicPeers) && legacyPublicPeers.length > 0) {
-      return JSON.stringify(convertPeersToExternalDomains(uniqueStrings([...legacyPublicPeers.map(String), ...extraPeers]), loadBalancerDomains))
-    }
-
-    if (extraPeers.length > 0) {
-      return JSON.stringify(convertPeersToExternalDomains(extraPeers, loadBalancerDomains))
-    }
-
-    return yamlPeerListValue
+    rethBootnodePeers: string[] = [],
+  ): string {
+    const peers = rethBootnodePeers.length > 0 ? rethBootnodePeers : (parsePeerListValue(rethTrustedPeers) || rethTrustedPeers?.split(',').map(peer => peer.trim()).filter(Boolean) || [])
+    return JSON.stringify(convertPeersToExternalDomains(uniqueStrings(peers), loadBalancerDomains))
   }
 
-  // The sequencer config remains the canonical signer source after retiring
-  // DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER from l1-interface values.
-  private resolveL2RethValidSigner(config: any | undefined): string | undefined {
-    if (config?.sequencer?.L2GETH_SIGNER_ADDRESS) {
-      return String(config.sequencer.L2GETH_SIGNER_ADDRESS)
+  private resolveL2RethValidSigner(dogeConfig: DogeConfig): string | undefined {
+    const instances = dogeConfig.sequencerReth?.instances || []
+    if (instances.length === 0) return undefined
+    const initial = instances.filter(instance => instance.index === 0)
+    const address = initial[0]?.signer?.address
+    if (initial.length !== 1 || !address || !isAddress(address) || address.toLowerCase() === ZeroAddress) {
+      throw new Error('A unique Reth sequencer index 0 with a valid nonzero signer.address is required in doge-config.toml. Run setup l2-sequencer-reth --index 0.')
     }
 
-    return undefined
+    return address
   }
 
   private writeEnvFile(

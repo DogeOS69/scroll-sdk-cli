@@ -22,6 +22,7 @@ import {
   resolveOrPrompt,
   validateAndExit,
 } from '../../utils/non-interactive.js'
+import {stripRetiredServiceConfig} from '../../utils/retired-services.js'
 
 type EthereumDaChain = 'devnet' | 'mainnet' | 'sepolia'
 
@@ -518,16 +519,13 @@ export default class SetupDomains extends Command {
     frontendConfig.CONNECT_WALLET_PROJECT_ID = walletProjectId || "14efbaafcf5232a47d93a68229b71028"
 
     const regtestDogecoinUrl = `${PUBLIC_URL_PROTOCOL}://${ingressConfig.DOGECOIN_HOST}`
-    const regtestBlockbookUrl = ingressConfig.BLOCKBOOK_HOST
-      ? `${PUBLIC_URL_PROTOCOL}://${ingressConfig.BLOCKBOOK_HOST}`
-      : regtestDogecoinUrl
     const defaultDogeExternalRpcUrl = selectedDogeNetwork === 'regtest'
       ? regtestDogecoinUrl
       : selectedDogeNetwork === 'mainnet'
         ? 'https://sochain.com/DOGE'
         : 'https://sochain.com/DOGETEST'
     const defaultDogeExternalExplorerUrl = selectedDogeNetwork === 'regtest'
-      ? regtestBlockbookUrl
+      ? regtestDogecoinUrl
       : defaultDogeExternalRpcUrl
 
     const dogeRpcL1 = await resolveOrPrompt(
@@ -636,12 +634,9 @@ export default class SetupDomains extends Command {
   ): void {
     const baseDomain = this.inferBaseDomainFromIngress(ingressConfig, existingConfig)
     const l1DevnetHost = existingConfig.ingress?.L1_DEVNET_HOST || ingressConfig.L1_DEVNET_HOST || `l1-devnet.${baseDomain}`
-    const l1ExplorerHost = existingConfig.ingress?.L1_EXPLORER_HOST || ingressConfig.L1_EXPLORER_HOST || `l1-explorer.${baseDomain}`
 
     ingressConfig.L1_DEVNET_HOST = l1DevnetHost
-    ingressConfig.L1_EXPLORER_HOST = l1ExplorerHost
     domainConfig.EXTERNAL_RPC_URI_L1 = domainConfig.EXTERNAL_RPC_URI_L1 || `${PUBLIC_URL_PROTOCOL}://${l1DevnetHost}`
-    domainConfig.EXTERNAL_EXPLORER_URI_L1 = domainConfig.EXTERNAL_EXPLORER_URI_L1 || `${PUBLIC_URL_PROTOCOL}://${l1ExplorerHost}`
   }
 
   private escapeRegExp(value: string): string {
@@ -852,7 +847,7 @@ export default class SetupDomains extends Command {
     // If FRONTEND_HOST exists, we infer shared URL ending from it
     const existingFrontendHost = existingConfig.ingress?.FRONTEND_HOST || ''
     const hasSharedEnding = Boolean(existingFrontendHost)
-    const hasL1DevnetIngress = Boolean(existingConfig.ingress?.L1_DEVNET_HOST || existingConfig.ingress?.L1_EXPLORER_HOST)
+    const hasL1DevnetIngress = Boolean(existingConfig.ingress?.L1_DEVNET_HOST)
     const configureL1DevnetIngress = usesAnvil || hasL1DevnetIngress
 
     // For non-interactive, infer shared ending if frontend host exists
@@ -880,33 +875,24 @@ export default class SetupDomains extends Command {
         }));
 
       domainConfig = {
-        ADMIN_SYSTEM_DASHBOARD_URI: `${protocol}://admin-system-dashboard.${urlEnding}`,
-        BRIDGE_API_URI: `${protocol}://bridge-history-api.${urlEnding}/api`,
         EXTERNAL_EXPLORER_URI_L2: `${protocol}://blockscout.${urlEnding}`,
         EXTERNAL_RPC_URI_L2: `${protocol}://rpc.${urlEnding}`,
         GRAFANA_URI: `${protocol}://grafana.${urlEnding}`,
-        ROLLUPSCAN_API_URI: `${protocol}://rollup-explorer-backend.${urlEnding}/api`,
       }
 
       if (usesAnvil) {
         domainConfig.EXTERNAL_RPC_URI_L1 = `${protocol}://l1-devnet.${urlEnding}`
-        domainConfig.EXTERNAL_EXPLORER_URI_L1 = `${protocol}://l1-explorer.${urlEnding}`
       }
 
       ingressConfig = {
-        ADMIN_SYSTEM_DASHBOARD_HOST: `admin-system-dashboard.${urlEnding}`,
-        BLOCKSCOUT_BACKEND_HOST: `blockscout-backend.${urlEnding}`,
         BLOCKSCOUT_HOST: `blockscout.${urlEnding}`,
-        BRIDGE_HISTORY_API_HOST: `bridge-history-api.${urlEnding}`,
-        COORDINATOR_API_HOST: `coordinator-api.${urlEnding}`,
         FRONTEND_HOST: frontendAtRoot ? urlEnding : `portal.${urlEnding}`,
         GRAFANA_HOST: `grafana.${urlEnding}`,
-        ROLLUP_EXPLORER_API_HOST: `rollup-explorer-backend.${urlEnding}`,
+        PROOF_COORDINATOR_HOST: (niCtx?.enabled && existingConfig.ingress?.PROOF_COORDINATOR_HOST) || `proof-coordinator.${urlEnding}`,
         RPC_GATEWAY_HOST: `rpc.${urlEnding}`,
-        ...(configureL1DevnetIngress ? { L1_DEVNET_HOST: `l1-devnet.${urlEnding}`, L1_EXPLORER_HOST: `l1-explorer.${urlEnding}` } : {}),
-        BLOCKBOOK_HOST: `blockbook.${urlEnding}`,
+        ...(configureL1DevnetIngress ? { L1_DEVNET_HOST: `l1-devnet.${urlEnding}` } : {}),
         DOGECOIN_HOST: `dogecoin.${urlEnding}`,
-        TSO_HOST: `tso.${urlEnding}`,
+        TSO_HOST: (niCtx?.enabled && existingConfig.ingress?.TSO_HOST) || `tso.${urlEnding}`,
       }
     } else {
       // Non-shared URL ending path - each host configured individually
@@ -935,35 +921,10 @@ export default class SetupDomains extends Command {
       }
 
       ingressConfig = {
-        ADMIN_SYSTEM_DASHBOARD_HOST: await resolveIngressHost(
-          'ADMIN_SYSTEM_DASHBOARD_HOST',
-          'admin-system-dashboard.scrollsdk',
-          'Admin system dashboard host'
-        ),
-        BLOCKBOOK_HOST: await resolveIngressHost(
-          'BLOCKBOOK_HOST',
-          'blockbook.scrollsdk',
-          'Blockbook indexer host'
-        ),
-        BLOCKSCOUT_BACKEND_HOST: await resolveIngressHost(
-          'BLOCKSCOUT_BACKEND_HOST',
-          'blockscout-backend.scrollsdk',
-          'Blockscout backend host'
-        ),
         BLOCKSCOUT_HOST: await resolveIngressHost(
           'BLOCKSCOUT_HOST',
           'blockscout.scrollsdk',
           'Blockscout explorer host'
-        ),
-        BRIDGE_HISTORY_API_HOST: await resolveIngressHost(
-          'BRIDGE_HISTORY_API_HOST',
-          'bridge-history-api.scrollsdk',
-          'Bridge history API host'
-        ),
-        COORDINATOR_API_HOST: await resolveIngressHost(
-          'COORDINATOR_API_HOST',
-          'coordinator-api.scrollsdk',
-          'Coordinator API host'
         ),
         DOGECOIN_HOST: await resolveIngressHost(
           'DOGECOIN_HOST',
@@ -980,10 +941,10 @@ export default class SetupDomains extends Command {
           'grafana.scrollsdk',
           'Grafana monitoring host'
         ),
-        ROLLUP_EXPLORER_API_HOST: await resolveIngressHost(
-          'ROLLUP_EXPLORER_API_HOST',
-          'rollup-explorer-backend.scrollsdk',
-          'Rollup explorer API host'
+        PROOF_COORDINATOR_HOST: await resolveIngressHost(
+          'PROOF_COORDINATOR_HOST',
+          'proof-coordinator.scrollsdk',
+          'Proof Coordinator prover API host'
         ),
         RPC_GATEWAY_HOST: await resolveIngressHost(
           'RPC_GATEWAY_HOST',
@@ -1002,11 +963,6 @@ export default class SetupDomains extends Command {
           'L1_DEVNET_HOST',
           'l1-devnet.scrollsdk',
           'L1 devnet host'
-        )
-        ingressConfig.L1_EXPLORER_HOST = await resolveIngressHost(
-          'L1_EXPLORER_HOST',
-          'l1-explorer.scrollsdk',
-          'L1 explorer host'
         )
       }
 
@@ -1038,16 +994,6 @@ export default class SetupDomains extends Command {
       }
 
       domainConfig = {
-        ADMIN_SYSTEM_DASHBOARD_URI: await resolveDomainUri(
-          'ADMIN_SYSTEM_DASHBOARD_URI',
-          `${protocol}://${ingressConfig.ADMIN_SYSTEM_DASHBOARD_HOST}`,
-          'Admin system dashboard URI'
-        ),
-        BRIDGE_API_URI: await resolveDomainUri(
-          'BRIDGE_API_URI',
-          `${protocol}://${ingressConfig.BRIDGE_HISTORY_API_HOST}/api`,
-          'Bridge history API URI'
-        ),
         EXTERNAL_EXPLORER_URI_L2: await resolveDomainUri(
           'EXTERNAL_EXPLORER_URI_L2',
           `${protocol}://${ingressConfig.BLOCKSCOUT_HOST}`,
@@ -1063,11 +1009,6 @@ export default class SetupDomains extends Command {
           `${protocol}://${ingressConfig.GRAFANA_HOST}`,
           'Grafana monitoring URI'
         ),
-        ROLLUPSCAN_API_URI: await resolveDomainUri(
-          'ROLLUPSCAN_API_URI',
-          `${protocol}://${ingressConfig.ROLLUP_EXPLORER_API_HOST}/api`,
-          'Rollup explorer API URI'
-        ),
       }
 
       if (usesAnvil) {
@@ -1075,11 +1016,6 @@ export default class SetupDomains extends Command {
           'EXTERNAL_RPC_URI_L1',
           `${protocol}://l1-devnet.scrollsdk`,
           'L1 RPC endpoint URI (Anvil)'
-        )
-        domainConfig.EXTERNAL_EXPLORER_URI_L1 = await resolveDomainUri(
-          'EXTERNAL_EXPLORER_URI_L1',
-          `${protocol}://l1-explorer.scrollsdk`,
-          'L1 block explorer URI (Anvil)'
         )
       }
     }
@@ -1121,20 +1057,7 @@ export default class SetupDomains extends Command {
       existingConfig.frontend[key] = value
     }
 
-    // Remove L1_DEVNET_HOST from ingress if not using Anvil
-    // if (generalConfig.CHAIN_NAME_L1 !== 'Anvil L1' && existingConfig.ingress.L1_DEVNET_HOST) {
-    //   delete existingConfig.ingress.L1_DEVNET_HOST
-    // }
-
-    // // Remove L1_EXPLORER_HOST from ingress if not using Anvil
-    // if (generalConfig.CHAIN_NAME_L1 !== 'Anvil L1' && existingConfig.ingress.L1_EXPLORER_HOST) {
-    //   delete existingConfig.ingress.L1_EXPLORER_HOST
-    // }
-
-
-    const l1ExplorerUri = ingressConfig.L1_EXPLORER_HOST
-      ? `${PUBLIC_URL_PROTOCOL}://${ingressConfig.L1_EXPLORER_HOST}`
-      : domainConfig.EXTERNAL_EXPLORER_URI_L1
+    const l1ExplorerUri = domainConfig.EXTERNAL_EXPLORER_URI_L1
     const l1RpcUri = ingressConfig.L1_DEVNET_HOST
       ? `${PUBLIC_URL_PROTOCOL}://${ingressConfig.L1_DEVNET_HOST}`
       : domainConfig.EXTERNAL_RPC_URI_L1
@@ -1240,10 +1163,6 @@ export default class SetupDomains extends Command {
     const clusterRpcUsername = existingDogeConfig.dogecoinClusterRpc?.username || this.generateSecureRandomString(8)
     const clusterRpcPassword = existingDogeConfig.dogecoinClusterRpc?.password || this.generateSecureRandomString(16)
     const dogecoinRpcUrl = `${PUBLIC_URL_PROTOCOL}://${ingressConfig.DOGECOIN_HOST}`
-    const blockbookApiUrl = ingressConfig.BLOCKBOOK_HOST
-      ? `${PUBLIC_URL_PROTOCOL}://${ingressConfig.BLOCKBOOK_HOST}`
-      : 'http://blockbook:19139'
-
     const dogeConfig: DogeConfig = {
       ...(existingDogeConfig as DogeConfig),
       defaults: {
@@ -1259,8 +1178,6 @@ export default class SetupDomains extends Command {
       network: 'regtest',
       rpc: {
         ...existingDogeConfig.rpc,
-        apiKey: existingDogeConfig.rpc?.apiKey || '',
-        blockbookAPIUrl: blockbookApiUrl,
         password: clusterRpcPassword,
         url: dogecoinRpcUrl,
         username: clusterRpcUsername,
@@ -1277,13 +1194,11 @@ export default class SetupDomains extends Command {
       fs.writeFileSync(setupDefaultsPath, SETUP_DEFAULTS_TEMPLATE)
     }
 
-    const setupDefaults = toml.parse(fs.readFileSync(setupDefaultsPath, 'utf8')) as toml.JsonMap
+    const setupDefaults = stripRetiredServiceConfig(toml.parse(fs.readFileSync(setupDefaultsPath, 'utf8'))) as toml.JsonMap
     setupDefaults.network = 'regtest'
     setupDefaults.dogecoin_rpc_url = dogecoinRpcUrl
     setupDefaults.dogecoin_rpc_user = clusterRpcUsername
     setupDefaults.dogecoin_rpc_pass = clusterRpcPassword
-    setupDefaults.dogecoin_blockbook_url = blockbookApiUrl
-    setupDefaults.dogecoin_blockbook_api_key = existingDogeConfig.rpc?.apiKey || ''
     fs.writeFileSync(setupDefaultsPath, toml.stringify(setupDefaults))
 
     return {

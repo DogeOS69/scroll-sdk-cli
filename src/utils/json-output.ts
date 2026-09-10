@@ -255,7 +255,6 @@ export const ERROR_CODES = {
   // Network (E3xx)
   E300_L1_RPC_UNREACHABLE: { category: 'NETWORK' as ErrorCategory, recoverable: true },
   E301_L2_RPC_UNREACHABLE: { category: 'NETWORK' as ErrorCategory, recoverable: true },
-  E302_BLOCKBOOK_UNREACHABLE: { category: 'NETWORK' as ErrorCategory, recoverable: true },
   E304_DATABASE_UNREACHABLE: { category: 'NETWORK' as ErrorCategory, recoverable: true },
 
   // Docker (E4xx)

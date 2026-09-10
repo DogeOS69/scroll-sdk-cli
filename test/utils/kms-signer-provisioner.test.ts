@@ -72,4 +72,26 @@ esac
     expect(calls).to.include('kms:Sign')
     expect(calls).to.include('--profile test-profile')
   })
+
+  it('grants the requested archive prefix when reusing a role without replacing its other policies', async () => {
+    const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
+    const roleArn = 'arn:aws:iam::123456789012:role/existing-da-role'
+    const calls: string[][] = []
+    provisioner.ensureKmsKey = () => ({keyArn: 'existing-key', keyId: 'existing-key', kmsKeyIdForConfig: 'existing-key'})
+    provisioner.fetchKmsPublicKey = () => process.env.AWS_TEST_PUBLIC_KEY
+    provisioner.awsJson = (args: string[]) => {
+      calls.push(args)
+      return args[1] === 'get-role' ? {Role: {Arn: roleArn}} : {}
+    }
+    await provisioner.provision({...getAttestationSignerKmsRole(0), service: 'eth-da-submitter'},
+      {awsRegion: 'us-west-2', eksCluster: 'test', namespace: 'default', networkAlias: 'test'},
+      {roleArn, kmsKeyId: 'existing-key', createArchiveBucket: false,
+        archive: {created: false, enabled: true, bucket: 'shared-bucket', keyPrefix: 'instances/new'}})
+    expect(calls.map(args => args[1])).to.deep.equal(['get-role', 'put-role-policy'])
+    const put = calls[1]
+    expect(put[put.indexOf('--policy-name') + 1]).to.match(/^eth-da-submitter-archive-[a-f0-9]{16}$/)
+    const policy = JSON.parse(put[put.indexOf('--policy-document') + 1])
+    expect(policy.Statement[0].Resource).to.equal('arn:aws:s3:::shared-bucket/instances/new/*')
+    expect(policy.Statement[1].Condition.StringLike['s3:prefix']).to.deep.equal(['instances/new', 'instances/new/*'])
+  })
 })
