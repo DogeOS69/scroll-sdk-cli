@@ -26,6 +26,7 @@ import {
   L1_INTERFACE_RPC_WEBSOCKET_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
+import {stripRetiredServiceConfig} from './retired-services.js'
 import { normalizeCompressedSecp256k1PublicKey } from './secp256k1-public-key.js'
 import { MANAGED_SIGNER_ROLES, buildLocalSignerConfig } from './signer-roles.js'
 
@@ -134,17 +135,11 @@ function isHttpUrl(value: string): boolean {
 }
 
 const DEFAULT_FRONTEND_SUBDOMAINS = {
-  adminDashboard: 'admin-system-dashboard',
-  blockbook: 'blockbook',
   blockscout: 'blockscout',
-  blockscoutBackend: 'blockscout-backend',
-  bridgeHistoryApi: 'bridge-history-api',
-  coordinatorApi: 'coordinator-api',
   dogecoin: 'dogecoin',
   frontend: 'portal',
   grafana: 'grafana',
   proofCoordinator: 'proof-coordinator',
-  rollupExplorerApi: 'rollup-explorer-backend',
   rpcGateway: 'rpc',
   rpcGatewayWs: 'ws-rpc',
   tso: 'tso',
@@ -312,17 +307,6 @@ function getDogecoinClusterRpc(spec: DeploymentSpec): NonNullable<DeploymentSpec
   }
 }
 
-const DEFAULT_DATABASE_NAMES = {
-  adminSystem: 'admin_system',
-  blockscout: 'blockscout',
-  bridgeHistory: 'bridge_history',
-  chainMonitor: 'chain_monitor',
-  coordinator: 'coordinator',
-  gasOracle: 'gas_oracle',
-  rollupExplorer: 'rollup_explorer',
-  rollupNode: 'rollup_node',
-} as const
-
 const DEFAULT_L1_FEE_VAULT_ADDR = '0x1111111111111111111111111111111111111111'
 const ZERO_BYTES32 = '0x0000000000000000000000000000000000000000000000000000000000000000'
 const PLACEHOLDER_L1_SCROLL_MESSENGER_ADDRESS = '0x0000000000000000000000000000000000000001'
@@ -392,6 +376,7 @@ function getEthereumDaChainId(rawSpec: DeploymentSpec): number {
  * the private key is the source of truth for those public addresses.
  */
 export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
+  spec = stripRetiredServiceConfig(spec)
   const frontend = (spec.frontend ?? {}) as Partial<DeploymentSpec['frontend']>
   const accounts = normalizeAccounts(spec.accounts)
   const baseDomain = frontend.baseDomain || spec.metadata?.name || 'localhost'
@@ -416,26 +401,19 @@ export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
   }
 
   const hosts: FrontendHosts = {
-    adminDashboard: hostFor('adminDashboard'),
     blockscout: hostFor('blockscout'),
-    bridgeHistoryApi: hostFor('bridgeHistoryApi'),
-    coordinatorApi: hostFor('coordinatorApi'),
     frontend: hostFor('frontend'),
     grafana: hostFor('grafana'),
-    rollupExplorerApi: hostFor('rollupExplorerApi'),
+    proofCoordinator: hostFor('proofCoordinator'),
     rpcGateway: hostFor('rpcGateway'),
+    tso: hostFor('tso'),
   }
 
   for (const key of [
-    'blockbook',
-    'blockscoutBackend',
     'celestia',
     'dogecoin',
     'l1Devnet',
-    'l1Explorer',
-    'proofCoordinator',
     'rpcGatewayWs',
-    'tso',
   ] as FrontendHostKey[]) {
     const host = optionalHostFor(key)
     if (host) {
@@ -445,14 +423,11 @@ export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
 
   const existingExternalUrls = (frontend.externalUrls || {}) as Partial<FrontendExternalUrls>
   const externalUrls = {
-    adminDashboard: existingExternalUrls.adminDashboard || publicUrl(protocol, hosts.adminDashboard),
-    bridgeApi: existingExternalUrls.bridgeApi || publicUrl(protocol, hosts.bridgeHistoryApi, '/api'),
     grafana: existingExternalUrls.grafana || publicUrl(protocol, hosts.grafana),
-    l1Explorer: existingExternalUrls.l1Explorer || publicUrl(protocol, hosts.blockbook || hosts.blockscout),
+    l1Explorer: existingExternalUrls.l1Explorer || (spec.dogecoin?.network === 'regtest' ? '' : `https://sochain.com/${spec.dogecoin?.network === 'mainnet' ? 'DOGE' : 'DOGETEST'}`),
     l1Rpc: existingExternalUrls.l1Rpc || publicUrl(protocol, hosts.rpcGateway),
     l2Explorer: existingExternalUrls.l2Explorer || publicUrl(protocol, hosts.blockscout),
     l2Rpc: existingExternalUrls.l2Rpc || publicUrl(protocol, hosts.rpcGateway),
-    rollupScanApi: existingExternalUrls.rollupScanApi || publicUrl(protocol, hosts.rollupExplorerApi, '/api'),
   }
 
   const verification = spec.contracts?.verification
@@ -597,14 +572,6 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
         path: 'network.l1ChainId',
       })
     }
-  }
-
-  if (!Number.isSafeInteger(spec.rollup?.maxL1MessageGasLimit) || spec.rollup.maxL1MessageGasLimit < 1) {
-    errors.push({
-      code: 'E015_INVALID_ROLLUP_CONFIG',
-      message: 'rollup.maxL1MessageGasLimit must be a positive integer',
-      path: 'rollup.maxL1MessageGasLimit',
-    })
   }
 
   // Accounts validation
@@ -1267,73 +1234,15 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
   const dbPort = dbAdmin?.vpcPort || dbAdmin?.port || 5432
 
   config.db = {
-    ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, DEFAULT_DATABASE_NAMES.adminSystem,
-      'admin_system', getDbPassword(spec, 'adminSystemPassword')
-    ),
     BLOCKSCOUT_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, DEFAULT_DATABASE_NAMES.blockscout,
-      'blockscout', getDbPassword(spec, 'blockscoutPassword')
-    ),
-    BRIDGE_HISTORY_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, DEFAULT_DATABASE_NAMES.bridgeHistory,
-      'bridge_history', getDbPassword(spec, 'bridgeHistoryPassword')
-    ),
-    CHAIN_MONITOR_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, DEFAULT_DATABASE_NAMES.chainMonitor,
-      'chain_monitor', getDbPassword(spec, 'chainMonitorPassword')
-    ),
-    COORDINATOR_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, DEFAULT_DATABASE_NAMES.coordinator,
-      'coordinator', getDbPassword(spec, 'coordinatorPassword')
-    ),
-    GAS_ORACLE_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, DEFAULT_DATABASE_NAMES.gasOracle,
-      'gas_oracle', getDbPassword(spec, 'gasOraclePassword')
-    ),
-    ROLLUP_EXPLORER_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, DEFAULT_DATABASE_NAMES.rollupExplorer,
-      'rollup_explorer', getDbPassword(spec, 'rollupExplorerPassword')
-    ),
-    ROLLUP_NODE_DB_CONNECTION_STRING: buildDbConnectionString(
-      dbHost, dbPort, DEFAULT_DATABASE_NAMES.rollupNode,
-      'rollup_node', getDbPassword(spec, 'rollupNodePassword')
+      dbHost, dbPort, 'blockscout', 'blockscout', getDbPassword(spec, 'blockscoutPassword')
     ),
   }
 
-  // Add SCROLL_DB_CONNECTION_STRING as alias
-  config.db.SCROLL_DB_CONNECTION_STRING = config.db.ROLLUP_NODE_DB_CONNECTION_STRING
-
-  // [gas-token] section
-  config['gas-token'] = {
-    ALTERNATIVE_GAS_TOKEN_ENABLED: spec.contracts.alternativeGasToken?.enabled || false,
-    EXCHANGE_RATE_UPDATE_MODE: spec.contracts.alternativeGasToken?.exchangeRateMode || 'Fixed',
-    FIXED_EXCHANGE_RATE: spec.contracts.alternativeGasToken?.fixedExchangeRate || '1',
-    GAS_ORACLE_INCORPORATE_TOKEN_EXCHANGE_RATE_ENANBLED: false,
-    TOKEN_SYMBOL_PAIR: spec.contracts.alternativeGasToken?.tokenSymbolPair || '',
-  }
-
-  if (spec.contracts.alternativeGasToken?.tokenAddress) {
-    config['gas-token'].L1_GAS_TOKEN = spec.contracts.alternativeGasToken.tokenAddress
-  }
-
-  // [rollup] section
-  config.rollup = {
-    FINALIZE_BATCH_DEADLINE_SEC: spec.rollup.finalization.batchDeadlineSec,
-    MAX_BATCH_IN_BUNDLE: spec.rollup.maxBatchInBundle,
-    MAX_BLOCK_IN_CHUNK: spec.rollup.maxBlockInChunk,
-    MAX_L1_MESSAGE_GAS_LIMIT: spec.rollup.maxL1MessageGasLimit,
-    MAX_TX_IN_CHUNK: spec.rollup.maxTxInChunk,
-    RELAY_MESSAGE_DEADLINE_SEC: spec.rollup.finalization.relayMessageDeadlineSec,
-    TEST_ENV_MOCK_FINALIZE_ENABLED: spec.test?.mockFinalizeEnabled || false,
-    TEST_ENV_MOCK_FINALIZE_TIMEOUT_SEC: spec.test?.mockFinalizeTimeoutSec || 0,
-  }
 
   // [frontend] section
   config.frontend = {
-    ADMIN_SYSTEM_DASHBOARD_URI: spec.frontend.externalUrls.adminDashboard || '',
     BASE_CHAIN: spec.network.tokenSymbol,
-    BRIDGE_API_URI: spec.frontend.externalUrls.bridgeApi,
     CONNECT_WALLET_PROJECT_ID: spec.frontend.walletConnectProjectId || '',
     ETH_SYMBOL: spec.network.tokenSymbol,
     EXTERNAL_EXPLORER_URI_L1: spec.frontend.externalUrls.l1Explorer,
@@ -1341,7 +1250,6 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     EXTERNAL_RPC_URI_L1: spec.frontend.externalUrls.l1Rpc,
     EXTERNAL_RPC_URI_L2: spec.frontend.externalUrls.l2Rpc,
     GRAFANA_URI: spec.frontend.externalUrls.grafana || '',
-    ROLLUPSCAN_API_URI: spec.frontend.externalUrls.rollupScanApi,
   }
 
   // [genesis] section
@@ -1405,28 +1313,6 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     }
   }
 
-  if (spec.infrastructure.sequencers?.length) {
-    const sequencers = [...spec.infrastructure.sequencers].sort((a, b) => a.index - b.index)
-    const primarySequencer = sequencers.find(sequencer => sequencer.index === 0) || sequencers[0]
-
-    config.sequencer = {
-      L2_GETH_STATIC_PEERS: sequencers.map(sequencer => sequencer.enodeUrl).filter(Boolean),
-    }
-
-    if (primarySequencer.signerAddress) {
-      config.sequencer.L2GETH_SIGNER_ADDRESS = primarySequencer.signerAddress
-    }
-
-    for (const sequencer of sequencers) {
-      if (sequencer.index === 0) continue
-      const section = `sequencer-${sequencer.index}`
-      config.sequencer[section] = {}
-      if (sequencer.signerAddress) {
-        config.sequencer[section].L2GETH_SIGNER_ADDRESS = sequencer.signerAddress
-      }
-    }
-  }
-
   // [coordinator] section
   config.coordinator = {
     BATCH_COLLECTION_TIME_SEC: spec.rollup.coordinator.batchCollectionTimeSec,
@@ -1436,26 +1322,14 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
 
   // [ingress] section
   config.ingress = {
-    ADMIN_SYSTEM_DASHBOARD_HOST: spec.frontend.hosts.adminDashboard,
     BLOCKSCOUT_HOST: spec.frontend.hosts.blockscout,
-    BRIDGE_HISTORY_API_HOST: spec.frontend.hosts.bridgeHistoryApi,
-    COORDINATOR_API_HOST: spec.frontend.hosts.coordinatorApi,
     FRONTEND_HOST: spec.frontend.hosts.frontend,
     GRAFANA_HOST: spec.frontend.hosts.grafana,
-    ROLLUP_EXPLORER_API_HOST: spec.frontend.hosts.rollupExplorerApi,
     RPC_GATEWAY_HOST: spec.frontend.hosts.rpcGateway,
   }
 
   if (spec.frontend.hosts.rpcGatewayWs) {
     config.ingress.RPC_GATEWAY_WS_HOST = spec.frontend.hosts.rpcGatewayWs
-  }
-
-  if (spec.frontend.hosts.blockscoutBackend) {
-    config.ingress.BLOCKSCOUT_BACKEND_HOST = spec.frontend.hosts.blockscoutBackend
-  }
-
-  if (spec.frontend.hosts.l1Explorer) {
-    config.ingress.L1_EXPLORER_HOST = spec.frontend.hosts.l1Explorer
   }
 
   if (spec.frontend.hosts.l1Devnet) {
@@ -1466,11 +1340,8 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     config.ingress.TSO_HOST = spec.frontend.hosts.tso
   }
 
-  if (
-    spec.proofCoordinator
-    && spec.proofCoordinator.enabled !== false
-    && spec.frontend.hosts.proofCoordinator
-  ) {
+  // Keep the native prover host independent of the legacy top-level service settings.
+  if (spec.frontend.hosts.proofCoordinator) {
     config.ingress.PROOF_COORDINATOR_HOST = spec.frontend.hosts.proofCoordinator
   }
 
@@ -1478,9 +1349,6 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     config.ingress.DOGECOIN_HOST = spec.frontend.hosts.dogecoin
   }
 
-  if (spec.frontend.hosts.blockbook) {
-    config.ingress.BLOCKBOOK_HOST = spec.frontend.hosts.blockbook
-  }
 
   return toml.stringify(resolveEnvRefsDeep(config) as toml.JsonMap)
 }
@@ -1543,13 +1411,6 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
     }
   }
 
-  if (spec.dogecoin.blockbook) {
-    config.rpc.blockbookAPIUrl = spec.dogecoin.blockbook.apiUrl
-    if (spec.dogecoin.blockbook.apiKey) {
-      config.rpc.apiKey = spec.dogecoin.blockbook.apiKey
-    }
-  }
-
   config.wallet = {
     path: spec.dogecoin.walletPath,
   }
@@ -1593,13 +1454,6 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
         name: role.name,
         role_id: role.roleId
       }))
-    }
-  }
-
-  if (spec.test) {
-    config.test = {
-      mockFinalizeEnabled: spec.test.mockFinalizeEnabled,
-      mockFinalizeTimeout: spec.test.mockFinalizeTimeoutSec,
     }
   }
 

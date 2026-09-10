@@ -1,5 +1,7 @@
 # Scroll SDK CLI
 
+Current configuration and migration procedure: [Pure Reth configuration and retired services](docs/config-cleanup.md).
+
 [![Twitter Follow](https://img.shields.io/twitter/follow/Scroll_ZKP?style=social)](https://twitter.com/Scroll_ZKP)
 [![Discord](https://img.shields.io/discord/984015101017346058?color=%235865F2&label=Discord&logo=discord&logoColor=%23fff)](https://discord.gg/scroll)
 
@@ -254,25 +256,27 @@ _See code: [src/commands/doge/wallet/send.ts](https://github.com/dogeos69/scroll
 
 ## `scrollsdk doge wallet sync`
 
-Sync wallet UTXOs and balance (mainnet/testnet/regtest aware)
+Sync wallet UTXOs and balance using Electrs/Esplora.
 
-```
+```text
 USAGE
-  $ scrollsdk doge wallet sync [-k <value>] [-c <value>] [-p <value>]
+  $ scrollsdk doge wallet sync [-c <value>] [-p <value>] [--electrs-url <value>]
 
 FLAGS
-  -c, --config=<value>   Path to Dogecoin config file
-  -k, --api-key=<value>  NowNodes API key (overrides API key from config)
-  -p, --path=<value>     Custom path for the wallet file (overrides path from config)
-
-DESCRIPTION
-  Sync wallet UTXOs and balance (mainnet/testnet/regtest aware)
-
-EXAMPLES
-  $ scrollsdk doge:wallet sync --config .data/doge-config.toml
+  -c, --config=<value>       Path to Dogecoin config file
+  -p, --path=<value>         Wallet file path (overrides wallet.path)
+      --electrs-url=<value> Electrs/Esplora API URL
 ```
 
-_See code: [src/commands/doge/wallet/sync.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/doge/wallet/sync.ts)_
+The endpoint comes from `--electrs-url`, optional `rpc.electrsAPIUrl`, or the
+existing testnet Electrs default. Mainnet and regtest require an explicit
+endpoint. Setup does not prompt for or require an indexer configuration.
+
+```bash
+scrollsdk doge wallet sync --config .data/doge-config.toml --electrs-url http://localhost:3002
+```
+
+_See code: [src/commands/doge/wallet/sync.ts](src/commands/doge/wallet/sync.ts)_
 
 ## `scrollsdk help [COMMAND]`
 
@@ -348,17 +352,17 @@ _See code: [src/commands/helper/clear-accounts.ts](https://github.com/dogeos69/s
 
 ## `scrollsdk helper derive-enode NODEKEY`
 
-Derive enode and L2_GETH_STATIC_PEERS from a nodekey
+Derive a Reth enode and trustedPeers value from a nodekey
 
 ```
 USAGE
   $ scrollsdk helper derive-enode NODEKEY
 
 ARGUMENTS
-  NODEKEY  Nodekey of the geth ethereum node
+  NODEKEY  Reth P2P nodekey
 
 DESCRIPTION
-  Derive enode and L2_GETH_STATIC_PEERS from a nodekey
+  Derive a Reth enode and trustedPeers value from a nodekey
 
 EXAMPLES
   $ scrollsdk helper derive-enode 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
@@ -941,7 +945,7 @@ _See code: [src/commands/setup/cubesigner-refresh.ts](https://github.com/dogeos6
 
 ## `scrollsdk setup db-init`
 
-Initialize databases with new users and passwords interactively or update permissions
+Initialize the Blockscout database and user, or update its permissions
 
 ```
 USAGE
@@ -957,7 +961,7 @@ FLAGS
       --update-port=<value>  Update the port of current database values
 
 DESCRIPTION
-  Initialize databases with new users and passwords interactively or update permissions
+  Initialize the Blockscout database and user, or update its permissions
 
 EXAMPLES
   $ scrollsdk setup db-init
@@ -968,7 +972,7 @@ EXAMPLES
 
   $ scrollsdk setup db-init --clean
 
-  $ scrollsdk setup db-init --update-db-port=25061
+  $ scrollsdk setup db-init --update-port=25061
 
   $ scrollsdk setup db-init --non-interactive
 
@@ -1272,73 +1276,85 @@ _See code: [src/commands/setup/fee-oracle.ts](https://github.com/dogeos69/scroll
 
 ## `scrollsdk setup gen-keystore`
 
-Generate L2 node keys and deployment account keypairs
+Generate or reuse deployment and activity account keypairs in `config.toml`.
+The owner is a supplied wallet address; this command does not create an owner key.
 
-```
+```text
 USAGE
-  $ scrollsdk setup gen-keystore [--accounts] [--bootnode-count <value>] [--from-spec <value>] [--json] [-N]
-    [--regenerate-bootnodes] [--regenerate-sequencers] [--sequencer-count <value>] [--sequencer-password <value>]
+  $ scrollsdk setup gen-keystore [--[no-]accounts] [--json] [-N]
 
 FLAGS
-  -N, --non-interactive             Run without prompts. Uses existing keys or generates new ones based on flags.
-      --[no-]accounts               Generate account key pairs
-      --bootnode-count=<value>      [default: 2] Number of bootnodes. In non-interactive mode, generates if not enough
-                                    exist.
-      --from-spec=<value>           Path to DeploymentSpec YAML. Uses infrastructure.sequencerCount and bootnodeCount as
-                                    count defaults.
-      --json                        Output in JSON format (stdout for data, stderr for logs)
-      --regenerate-bootnodes        Force regeneration of all bootnode keys (non-interactive mode)
-      --regenerate-sequencers       Force regeneration of all sequencer keys (non-interactive mode)
-      --sequencer-count=<value>     [default: 2] Number of sequencers (including primary). In non-interactive mode,
-                                    generates if not enough exist.
-      --sequencer-password=<value>  Password for sequencer keystores (or use $ENV:VAR_NAME pattern). Defaults to a
-                                    generated random password for new sequencers in non-interactive mode.
-
-DESCRIPTION
-  Generate L2 node keys and deployment account keypairs
-
-EXAMPLES
-  $ scrollsdk setup gen-keystore
-
-  $ scrollsdk setup gen-keystore --no-accounts
-
-  $ scrollsdk setup gen-keystore --non-interactive
-
-  $ scrollsdk setup gen-keystore --non-interactive --json --sequencer-count 2 --bootnode-count 2
-
-  $ scrollsdk setup gen-keystore --non-interactive --sequencer-count 2 --bootnode-count 2
+  -N, --non-interactive  Reuse existing accounts or generate missing keys without prompts
+      --[no-]accounts    [default: true] Process deployment and activity accounts
+      --json            Output a JSON result containing public addresses
 ```
 
-_See code: [src/commands/setup/gen-keystore.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-keystore.ts)_
+```bash
+scrollsdk setup gen-keystore --non-interactive --json
+```
+
+Reth node identities are configured separately in `.data/doge-config.toml`:
+
+```bash
+scrollsdk setup l2-sequencer-reth --index 0 --signer-mode external-secret --non-interactive
+scrollsdk setup l2-bootnode-reth --count 1 --secret-mode external-secret --non-interactive
+```
+
+Legacy Geth node generation flags, keystores, passwords, and root peer projections
+have been removed. Existing private keys remain in place. See
+[the Reth configuration guide](docs/reth-only-peers.md) for the complete flow.
+
+_See code: [src/commands/setup/gen-keystore.ts](src/commands/setup/gen-keystore.ts)_
 
 ## `scrollsdk setup gen-l2-artifacts`
 
+For development without Docker, run from a prepared deployment directory:
+
+```bash
+scrollsdk setup gen-l2-artifacts --contracts-source /path/to/scroll-contracts \
+  --non-interactive --json --skip-deployment-salt-update --skip-l1-fee-vault-update
+```
+
+Requires Foundry, bash, jq and installed contract dependencies. `--contracts-source`
+is mutually exclusive with `--image-tag`. Source `volume/` is preserved; compiler
+caches are reused in `.data/contracts-build/`. See the [operation guide](docs/config-cleanup.md#developing-contract-generation-without-docker).
+
+
 Generate L2 deployment artifacts, including genesis, public config, contract config, and Helm config values
+
+Artifact generation does not require `sequencer.L2GETH_SIGNER_ADDRESS` or a
+configured Reth signer. Current contracts initialize SystemConfig with the zero
+signer and generate empty genesis `extraData`; configure the Reth runtime signer
+separately with `setup l2-sequencer-reth`.
+
+The command no longer prompts for or updates `L1_PLONK_VERIFIER_ADDR`. The old
+`--l1-plonk-verifier-addr` and `--skip-l1-plonk-verifier-update` flags are accepted
+for script compatibility and ignored. `--doge-config` is only used for legacy
+contracts placeholder validation.
 
 ```
 USAGE
-  $ scrollsdk setup gen-l2-artifacts [--base-fee-per-gas <value>] [--configs-dir <value>] [--deployment-salt <value>]
-    [--image-tag <value>] [--json] [--l1-fee-vault-addr <value>] [--l1-plonk-verifier-addr <value>]
+  $ scrollsdk setup gen-l2-artifacts [--base-fee-per-gas <value>] [--configs-dir <value>] [--contracts-source <value>] [--deployment-salt <value>]
+    [--doge-config <value>] [--image-tag <value>] [--json] [--l1-fee-vault-addr <value>]
     [--l2-bridge-fee-recipient-addr <value>] [-N] [--skip-deployment-salt-update] [--skip-l1-fee-vault-update]
-    [--skip-l1-plonk-verifier-update]
 
 FLAGS
   -N, --non-interactive                       Run without prompts. Uses config values or sensible defaults.
       --base-fee-per-gas=<value>              Base fee per gas (non-interactive mode). Uses existing config value if not
                                               provided.
       --configs-dir=<value>                   [default: values] Directory name to copy configs to
+      --contracts-source=<value>              Local scroll-contracts checkout; use Foundry instead of Docker.
       --deployment-salt=<value>               Deployment salt value (non-interactive mode). If not provided, keeps
                                               existing or auto-increments.
+      --doge-config=<value>                   Path to Dogecoin config for legacy contracts placeholder validation
+                                              (defaults to .data/doge-config.toml when present)
       --image-tag=<value>                     Specify the Docker image tag to use
       --json                                  Output in JSON format (stdout for data, stderr for logs)
       --l1-fee-vault-addr=<value>             L1 fee vault address (non-interactive mode). Defaults to OWNER_ADDR.
-      --l1-plonk-verifier-addr=<value>        L1 plonk verifier address (non-interactive mode). If not provided, one
-                                              will be deployed.
       --l2-bridge-fee-recipient-addr=<value>  L2 bridge fee recipient address (non-interactive mode). Defaults to zero
                                               address.
       --skip-deployment-salt-update           Skip deployment salt update (non-interactive mode)
       --skip-l1-fee-vault-update              Skip L1 fee vault address update (non-interactive mode)
-      --skip-l1-plonk-verifier-update         Skip L1 plonk verifier address update (non-interactive mode)
 
 DESCRIPTION
   Generate L2 deployment artifacts, including genesis, public config, contract config, and Helm config values
@@ -2134,7 +2150,7 @@ ARGUMENTS
   CASENAME  The name of the case to run
 
 FLAGS
-  -b, --blockbookurl=<value>  [default: https://doge-electrs-testnet-demo.qed.me] blockbook url
+  -b, --electrs-url=<value>  Electrs/Esplora API URL (testnet default; explicit URL required for other networks)
   -c, --outputcount=<value>   [default: 24] Number of P2PKH outputs when running the multiple-output scenario
   -m, --masterwif=<value>     [default: cftTTdqFUYi3Njx4VLZGATAFCuX8wetJddD71FGmC91wKJ2XidVY] master wif key, provide
                               test dogecoin

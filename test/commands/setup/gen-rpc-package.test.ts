@@ -23,6 +23,8 @@ interface CommandHarness {
     valuesDir: string,
   ): { hasUnresolvedExternalPeers: boolean }
   log(): void
+  resolveExternalPeerList(peers: string, domains: Record<string, string>): string
+  resolveL2RethValidSigner(config: unknown): string | undefined
   warn(): void
 }
 
@@ -270,32 +272,34 @@ describe('setup gen-rpc-package env generation', () => {
     ])
   })
 
-  it('writes only l2reth env and combines geth and Reth bootnode peers', () => {
+  it('requires a unique valid index-zero Reth signer when sequencers are configured', () => {
+    const command = createCommandHarness()
+    for (const instances of [
+      [{index: 1, signer: {address: '0x1234567890123456789012345678901234567890'}}],
+      [{index: 0, signer: {address: '0x0000000000000000000000000000000000000000'}}],
+      [{index: 0, signer: {address: 'invalid'}}],
+      [{index: 0}, {index: 0}],
+    ]) {
+      expect(() => command.resolveL2RethValidSigner({sequencerReth: {instances}})).to.throw('unique Reth sequencer index 0')
+    }
+  })
+
+  it('uses Reth trustedPeers CSV when no Reth bootnodes are configured', () => {
+    const command = createCommandHarness()
+    expect(command.resolveExternalPeerList('enode://a@public.example:30303,enode://b@public2.example:30303', {}))
+      .to.equal('["enode://a@public.example:30303","enode://b@public2.example:30303"]')
+    expect(command.resolveExternalPeerList('', {})).to.equal('[]')
+  })
+
+  it('writes Reth env without Geth values and ignores archived root peers and signer', () => {
     const valuesDir = path.join(tmpDir, 'values')
     const rpcPackageDir = path.join(tmpDir, 'dogeos-rpc-package')
     fs.mkdirSync(valuesDir, { recursive: true })
     fs.mkdirSync(path.join(rpcPackageDir, 'envs', 'testnet'), { recursive: true })
 
     fs.writeFileSync(
-      path.join(valuesDir, 'l2-rpc-production.yaml'),
-      yaml.dump({
-        configMaps: {
-          env: {
-            data: {
-              CHAIN_ID: '6281971',
-              L2GETH_DA_BLOB_BEACON_NODE: 'http://l1-interface:5052',
-              L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK: '14023282',
-              L2GETH_L1_ENDPOINT: 'http://l1-interface:8545',
-              L2GETH_PEER_LIST: JSON.stringify(['enode://abc@l2-sequencer-0:30303']),
-            },
-          },
-        },
-      }),
-    )
-
-    fs.writeFileSync(
       path.join(valuesDir, 'l2-reth-rpc-production.yaml'),
-      yaml.dump({ reth: { networkId: '4444444' } }),
+      yaml.dump({ reth: { l1Url: 'http://reth-l1:8545', networkId: '4444444' } }),
     )
 
     fs.writeFileSync(
@@ -364,6 +368,7 @@ describe('setup gen-rpc-package env generation', () => {
           },
         },
         network: 'testnet',
+        sequencerReth: {instances: [{index: 0, signer: {address: '0x2234567890123456789012345678901234567890'}}]},
       },
       rpcPackageDir,
       {
@@ -382,11 +387,11 @@ describe('setup gen-rpc-package env generation', () => {
     expect(fs.existsSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2geth.env'))).to.equal(false)
 
     const l2rethEnv = fs.readFileSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2reth.env'), 'utf8')
-    expect(l2rethEnv).to.include('L2GETH_PEER_LIST=["enode://geth0@bootnode-0.example.com:30303","enode://geth1@bootnode-1.example.com:30303","enode://reth0@reth-bootnode-0.example.com:30303","enode://reth1@reth-bootnode-1.example.com:30303"]')
-    expect(l2rethEnv).to.include('L2RETH_L1_ENDPOINT=http://l1-interface:8545')
+    expect(l2rethEnv).to.include('L2GETH_PEER_LIST=["enode://reth0@reth-bootnode-0.example.com:30303","enode://reth1@reth-bootnode-1.example.com:30303"]')
+    expect(l2rethEnv).to.include('L2RETH_L1_ENDPOINT=http://reth-l1:8545')
     expect(l2rethEnv).to.include('L2RETH_NETWORK_ID=4444444')
     expect(l2rethEnv).to.include('L2RETH_BLOB_S3_URL=https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/rehearsal/batches')
-    expect(l2rethEnv).to.include('L2RETH_VALID_SIGNER=0x1234567890123456789012345678901234567890')
+    expect(l2rethEnv).to.include('L2RETH_VALID_SIGNER=0x2234567890123456789012345678901234567890')
     expect(l2rethEnv).not.to.include('CHAIN_ID=1')
     expect(l2rethEnv).not.to.include('L2GETH_L1_ENDPOINT=http://old-l1')
     expect(l2rethEnv).not.to.include('L2RETH_DA_BLOB_BEACON_NODE')
@@ -421,7 +426,7 @@ describe('setup gen-rpc-package env generation', () => {
 
     fs.writeFileSync(
       path.join(rpcPackageDir, 'envs', 'testnet', 'l2reth.env'),
-      'L2RETH_BLOB_S3_URL=https://stale.example/blobs\n',
+      'L2RETH_BLOB_S3_URL=https://stale.example/blobs\nL2RETH_VALID_SIGNER=0xarchived\n',
     )
 
     const command = createCommandHarness()
@@ -465,6 +470,7 @@ describe('setup gen-rpc-package env generation', () => {
     const l2rethEnv = fs.readFileSync(path.join(rpcPackageDir, 'envs', 'testnet', 'l2reth.env'), 'utf8')
     expect(l2rethEnv).to.include('L2GETH_PEER_LIST=["enode://reth0@reth-bootnode-0.example.com:30303","enode://reth1@reth-bootnode-1.example.com:30303"]')
     expect(l2rethEnv).to.include('L2RETH_NETWORK_ID=5555555')
+    expect(l2rethEnv).not.to.include('L2RETH_VALID_SIGNER')
     expect(l2rethEnv).not.to.include('legacy0')
     expect(l2rethEnv).not.to.include('legacy1')
     expect(l2rethEnv).not.to.include('LoadBalancer-Domain-For-l2-bootnode')

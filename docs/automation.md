@@ -1,5 +1,8 @@
 # CLI Automation Reference
 
+For supported database settings, removed prompts and migration commands, see
+[Configuration cleanup](config-cleanup.md).
+
 This document defines how scripts, CI jobs, and agents invoke `scrollsdk`.
 It intentionally does not define deployment order. For the official proof and
 partner-handoff workflow, use [proof-operator-runbook.md](proof-operator-runbook.md).
@@ -65,10 +68,10 @@ Keep the `$ENV:` reference quoted when passing it through a shell so the shell
 does not expand `$ENV` itself:
 
 ```bash
-scrollsdk setup gen-keystore \
-  --non-interactive \
-  --json \
-  --sequencer-password '$ENV:SEQUENCER_KEYSTORE_PASSWORD'
+scrollsdk setup l2-sequencer-reth \
+  --index 0 --signer-mode external-secret \
+  --non-interactive --json \
+  --signer-private-key '$ENV:RETH_SEQUENCER_PRIVATE_KEY'
 ```
 
 An unset or empty referenced variable is treated as unavailable. Commands must

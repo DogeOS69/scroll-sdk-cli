@@ -1,9 +1,7 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic TOML config operations */
-import * as toml from '@iarna/toml'
 import { select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
-import * as fs from 'node:fs'
-import * as path from 'node:path'
+
+import type {DogeConfig} from '../../types/doge-config.js'
 
 import {
   AWSNodeLBProvider,
@@ -12,6 +10,7 @@ import {
   SUPPORTED_PROVIDERS,
   type SupportedProvider
 } from '../../providers/index.js'
+import {loadDogeConfigWithSelection} from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 
 export default class SetupBootnodeStaticIP extends Command {
@@ -39,6 +38,7 @@ export default class SetupBootnodeStaticIP extends Command {
       description: 'Kubernetes cluster name for resource tagging and identification',
       required: false
     }),
+    'doge-config': Flags.string({description: 'Path to Reth node configuration (defaults to .data/doge-config.toml)'}),
     'json': Flags.boolean({
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)'
@@ -124,25 +124,14 @@ export default class SetupBootnodeStaticIP extends Command {
 
       this.jsonCtx.info('Step 2: Setting up static IPs...')
 
-      // Load config once and extract bootnode count
-      let config: any
-      let bootnodeCount: number
-      try {
-        config = this.loadConfig()
-        bootnodeCount = this.getBootnodeCountFromConfig(config)
-      } catch (error) {
-        this.jsonCtx.addWarning(`${error instanceof Error ? error.message : String(error)}`)
-        this.jsonCtx.info('Defaulting to 2 bootnodes')
-        bootnodeCount = 2
-        config = null
-      }
-
-      // Actually perform the static IP setup
-      await providerInstance.setupLb(flags, bootnodeCount)
+      const {config} = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk setup doge-config')
+      const bootnodeIndices = getRethBootnodeIndices(config)
+      await providerInstance.setupLb(flags, bootnodeIndices)
 
       // JSON success output
       this.jsonCtx.success({
-        bootnodeCount,
+        bootnodeCount: bootnodeIndices.length,
+        bootnodeIndices,
         clusterName: flags['cluster-name'],
         provider,
         region: flags.region,
@@ -160,34 +149,6 @@ export default class SetupBootnodeStaticIP extends Command {
   }
 
 
-  private getBootnodeCountFromConfig(config: any): number {
-    if (!config.bootnode) {
-      this.jsonCtx.info('No [bootnode] section found in config.toml, defaulting to 2 bootnodes')
-      return 2
-    }
-
-    // Count bootnodes (bootnode-0, bootnode-1, etc.)
-    let count = 0
-
-    if (config.bootnode && typeof config.bootnode === 'object') {
-      for (const key of Object.keys(config.bootnode)) {
-        if (key.startsWith('bootnode-') && config.bootnode[key] &&
-          typeof config.bootnode[key] === 'object' &&
-          Object.values(config.bootnode[key]).some(value => value !== '')) {
-          count++
-        }
-      }
-    }
-
-    // If no bootnode subsections found, default to 2
-    if (count === 0) {
-      count = 2
-    }
-
-    this.jsonCtx.info(`Found ${count} bootnode(s) in config.toml`)
-    return count
-  }
-
   private getProviderInstance(provider: SupportedProvider) {
     switch (provider) {
       case 'aws': {
@@ -204,18 +165,13 @@ export default class SetupBootnodeStaticIP extends Command {
     }
   }
 
-  private loadConfig(): any {
-    const configPath = path.join(process.cwd(), 'config.toml')
+}
 
-    if (!fs.existsSync(configPath)) {
-      throw new Error(`config.toml not found in current directory: ${process.cwd()}`)
-    }
-
-    try {
-      const configContent = fs.readFileSync(configPath, 'utf8')
-      return toml.parse(configContent) as any
-    } catch (error) {
-      throw new Error(`Failed to parse config.toml: ${error instanceof Error ? error.message : String(error)}`)
-    }
+export function getRethBootnodeIndices(config: DogeConfig): number[] {
+  const indices = config.bootnodeReth?.instances?.map(instance => instance.index) || []
+  if (indices.length === 0 || indices.some(index => !Number.isSafeInteger(index) || index < 0) || new Set(indices).size !== indices.length) {
+    throw new Error('Configure unique Reth bootnode indices with setup l2-bootnode-reth before exposing public P2P services.')
   }
-} 
+
+  return indices.sort((a, b) => a - b)
+}

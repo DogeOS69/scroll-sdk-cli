@@ -10,6 +10,7 @@ import type { DogeConfig } from '../../types/doge-config.js'
 import {getContractsPlaceholderKey} from '../../utils/contracts-placeholder.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
+import {archiveRetiredServiceFiles} from '../../utils/retired-services.js'
 import {
   getRequiredManagedSignerConfig,
   isAwsKmsSigner,
@@ -114,18 +115,14 @@ export default class SetupGenSecrets extends Command {
     const configContent = fs.readFileSync(configPath, 'utf8')
     const config = toml.parse(configContent)
 
+    for (const file of archiveRetiredServiceFiles(SECRETS_PATH)) this.jsonCtx.info(`Archived retired secret: ${file}`)
     const services = [
       'blockscout',
-      'coordinator-api',
-      'coordinator-cron',
       'fee-oracle',
-      'l2-sequencer',
       'contracts',
-      'l2-bootnode',
       'dogecoin',
       'testnet-activity-helper',
       'l1-interface',
-      'blockbook',
       'withdrawal-processor',
       'metrics-exporter',
       'eth-da-submitter',
@@ -163,24 +160,7 @@ export default class SetupGenSecrets extends Command {
 
   private generateEnvContent(service: string, config: any): { [key: string]: string } {
     const mapping: Record<string, string[]> = {
-      'admin-system-backend': [
-        'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_AUTH_DB_CONFIG_DSN',
-        'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_DB_CONFIG_DSN',
-        'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_READ_ONLY_DB_CONFIG_DSN',
-      ],
-      'admin-system-cron': [
-        'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_AUTH_DB_CONFIG_DSN',
-        'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_DB_CONFIG_DSN',
-        'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING:SCROLL_ADMIN_READ_ONLY_DB_CONFIG_DSN',
-      ],
-      'blockbook': [
-        'DOGECOIN_RPC_USER:DOGECOIN_RPC_USER',
-        'DOGECOIN_RPC_PASSWORD:DOGECOIN_RPC_PASSWORD',
-      ],
       blockscout: ['BLOCKSCOUT_DB_CONNECTION_STRING:DATABASE_URL'],
-      'bridge-history-api': ['BRIDGE_HISTORY_DB_CONNECTION_STRING:SCROLL_BRIDGE_HISTORY_DB_DSN'],
-      'bridge-history-fetcher': ['BRIDGE_HISTORY_DB_CONNECTION_STRING:SCROLL_BRIDGE_HISTORY_DB_DSN'],
-      'chain-monitor': ['CHAIN_MONITOR_DB_CONNECTION_STRING:SCROLL_CHAIN_MONITOR_DB_CONFIG_DSN'],
       'contracts': [
         'DEPLOYER_PRIVATE_KEY:DEPLOYER_PRIVATE_KEY',
         'L1_COMMIT_SENDER_PRIVATE_KEY:L1_COMMIT_SENDER_PRIVATE_KEY',
@@ -188,26 +168,10 @@ export default class SetupGenSecrets extends Command {
         'L1_GAS_ORACLE_SENDER_PRIVATE_KEY:L1_GAS_ORACLE_SENDER_PRIVATE_KEY',
         'L2_GAS_ORACLE_SENDER_PRIVATE_KEY:L2_GAS_ORACLE_SENDER_PRIVATE_KEY',
         'COORDINATOR_JWT_SECRET_KEY:COORDINATOR_JWT_SECRET_KEY',
-        'ROLLUP_EXPLORER_DB_CONNECTION_STRING:ROLLUP_EXPLORER_DB_CONNECTION_STRING',
-      ],
-      'coordinator-api': [
-        'COORDINATOR_DB_CONNECTION_STRING:SCROLL_COORDINATOR_DB_DSN',
-      ],
-      'coordinator-cron': [
-        'COORDINATOR_DB_CONNECTION_STRING:SCROLL_COORDINATOR_DB_DSN',
       ],
       'dogecoin': [
         'DOGECOIN_RPC_USER:DOGECOIN_RPC_USER',
         'DOGECOIN_RPC_PASSWORD:DOGECOIN_RPC_PASSWORD',
-      ],
-      'gas-oracle': [
-        'GAS_ORACLE_DB_CONNECTION_STRING:SCROLL_ROLLUP_DB_CONFIG_DSN',
-      ],
-      'l1-explorer': ['L1_EXPLORER_DB_CONNECTION_STRING:DATABASE_URL'],
-      'l2-sequencer': [
-        'L2GETH_KEYSTORE:L2GETH_KEYSTORE',
-        'L2GETH_PASSWORD:L2GETH_PASSWORD',
-        'L2GETH_NODEKEY:L2GETH_NODEKEY',
       ],
       'testnet-activity-helper': [
         'L2_TESTNET_ACTIVITY_HELPER_PRIVATE_KEY:private-key',
@@ -217,51 +181,7 @@ export default class SetupGenSecrets extends Command {
 
     const envFiles: { [key: string]: string } = {}
 
-    if (service === 'l2-sequencer') {
-      if (!config.sequencer) {
-        this.jsonCtx.log(chalk.yellow('No [sequencer] configuration found in config.toml. Skipping l2-sequencer secret generation.'))
-        return envFiles
-      }
-
-      let sequencerIndex = 0
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const sequencerConfig =
-          sequencerIndex === 0 ? config.sequencer : config.sequencer[`sequencer-${sequencerIndex}`]
-        if (!sequencerConfig) break
-
-        let content = ''
-        for (const pair of mapping[service] || []) {
-          const [envKey, configKey] = pair.split(':')
-          if (sequencerConfig[configKey]) {
-            content += this.envLine(envKey, sequencerConfig[configKey], `sequencer.${configKey}`)
-          }
-        }
-
-        envFiles[`l2-sequencer-${sequencerIndex}-secret.env`] = content
-        sequencerIndex++
-      }
-    } else if (service === 'l2-bootnode') {
-      if (config.bootnode) {
-        let bootnodeIndex = 0
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const bootnodeInstanceKey = `bootnode-${bootnodeIndex}`
-          const bootnodeConfig = config.bootnode[bootnodeInstanceKey]
-
-          if (!bootnodeConfig) {
-            break
-          }
-
-          const nodeKey = bootnodeConfig.L2GETH_NODEKEY === undefined ? '' : bootnodeConfig.L2GETH_NODEKEY
-          envFiles[`l2-bootnode-${bootnodeIndex}-secret.env`] =
-            this.envLine('L2GETH_NODEKEY', nodeKey, `bootnode.${bootnodeInstanceKey}.L2GETH_NODEKEY`)
-          bootnodeIndex++
-        }
-      } else {
-        this.jsonCtx.log(chalk.yellow('No [bootnode] configuration found in config.toml. Skipping l2-bootnode secret generation.'))
-      }
-    } else {
+    {
       let content = ''
       for (const pair of mapping[service] || []) {
         const [configKey, envKey] = pair.split(':')
@@ -294,13 +214,7 @@ export default class SetupGenSecrets extends Command {
     if (service === 'l1-interface') {
       let content = this.envLine('DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER', this.dogeConfig.dogecoinClusterRpc?.username || '', 'dogeConfig.dogecoinClusterRpc.username')
       content += this.envLine('DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS', this.dogeConfig.dogecoinClusterRpc?.password || '', 'dogeConfig.dogecoinClusterRpc.password')
-      content += this.envLine('DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_API_KEY', '', 'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_API_KEY')
       envFiles['l1-interface-secret.env'] = content
-    }
-
-    if (service === 'blockbook') {
-      envFiles['blockbook-secret.env'] = this.envLine('DOGECOIN_RPC_USER', this.dogeConfig.dogecoinClusterRpc?.username || '', 'dogeConfig.dogecoinClusterRpc.username')
-      envFiles['blockbook-secret.env'] += this.envLine('DOGECOIN_RPC_PASSWORD', this.dogeConfig.dogecoinClusterRpc?.password || '', 'dogeConfig.dogecoinClusterRpc.password')
     }
 
     if (service === 'dogecoin') {
@@ -434,7 +348,6 @@ export default class SetupGenSecrets extends Command {
     if (config.db && config.db[configKey]) return config.db[configKey]
     if (config.accounts && config.accounts[configKey]) return config.accounts[configKey]
     if (config.coordinator && config.coordinator[configKey]) return config.coordinator[configKey]
-    if (config.sequencer && config.sequencer[configKey]) return config.sequencer[configKey]
     return undefined
   }
 

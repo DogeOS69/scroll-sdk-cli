@@ -1,5 +1,8 @@
 # Preparing a fresh instance before Bridge initialization
 
+For current root-template fields, database initialization and retired-service
+migration, see [Configuration cleanup](config-cleanup.md).
+
 The environment-owned `scripts/deploy/pre-bridge.mjs` runner in the devnet
 deployment repository automates preparation before the existing Shadowfork
 Bridge wrapper. It invokes the installed `scrollsdk`; it introduces no direct

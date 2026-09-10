@@ -24,7 +24,6 @@ import {
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {sanitizeName} from '../../utils/kms-signer-provisioner.js'
 import {
-  resolveBlockbookKubernetesEndpoints,
   resolveDogecoinServiceRpcUrl,
 } from '../../utils/kubernetes-endpoints.js'
 import {
@@ -49,6 +48,7 @@ import {
   awsS3Endpoint,
   buildProofTopology,
 } from '../../utils/proof-topology-init.js'
+import {stripRetiredServiceConfig} from '../../utils/retired-services.js'
 
 type EthereumDaChain = 'devnet' | 'mainnet' | 'sepolia'
 
@@ -263,18 +263,13 @@ export class DogeConfigCommand extends Command {
 
     // read existing config file from user's working directory
     const existingConfigStr = fs.readFileSync(setupDefaultsPath, 'utf8');
-    const newConfig = toml.parse(existingConfigStr);
+    const newConfig = stripRetiredServiceConfig(toml.parse(existingConfigStr));
 
     newConfig.network = newDogeConfig.network;
 
     newConfig.dogecoin_rpc_url = newDogeConfig.rpc?.url || '';
     newConfig.dogecoin_rpc_user = newDogeConfig.rpc?.username || '';
     newConfig.dogecoin_rpc_pass = newDogeConfig.rpc?.password || '';
-    newConfig.dogecoin_blockbook_url = newDogeConfig.rpc?.blockbookAPIUrl ||
-      (newConfig.network === 'mainnet' ? 'https://dogebook.nownodes.io' :
-        newConfig.network === 'testnet' ? 'https://dogebook-testnet.nownodes.io' : 'http://blockbook:19139');
-    newConfig.dogecoin_blockbook_api_key = newDogeConfig.rpc?.apiKey || '';
-
     // Write to setup_defaults.toml
     fs.writeFileSync(setupDefaultsPath, toml.stringify(newConfig));
   }
@@ -425,11 +420,6 @@ export class DogeConfigCommand extends Command {
       frontend: {},
       network: network as Network,
       rpc: {
-        apiKey: '',
-        blockbookAPIUrl: resolveBlockbookKubernetesEndpoints({
-          kubernetes: existingConfig.kubernetes,
-          network: network as Network,
-        }).apiUrl,
         password: '',
         url: network === 'mainnet' ? 'https://dogecoin.mainnet.dogeos.com' :
           network === 'testnet' ? 'https://dogecoin.testnet.dogeos.com' : 'http://localhost:18332',
@@ -483,41 +473,6 @@ export class DogeConfigCommand extends Command {
     if (!newConfig.wallet) {
       newConfig.wallet = { path: `.data/doge-wallet-${network}.json` }
     }
-
-    // Handle blockbook API URL with confirmation if different from default
-    const defaultBlockbookUrl = network === 'mainnet' ? 'https://blockbook.mainnet.dogeos.com/' :
-      network === 'testnet' ? 'https://blockbook.testnet.dogeos.com/' : 'http://blockbook:19139'
-    const currentBlockbookUrl = existingConfig.rpc?.blockbookAPIUrl || defaultBlockbookUrl
-
-    newConfig.rpc!.blockbookAPIUrl = await resolveOrPrompt(
-      niCtx,
-      () => input({
-        default: currentBlockbookUrl,
-        message: `Enter Internal Blockbook API URL:`,
-      }),
-      existingConfig.rpc?.blockbookAPIUrl || currentBlockbookUrl,
-      {
-        configPath: '[rpc].blockbookAPIUrl',
-        description: 'Internal Blockbook API URL',
-        field: 'blockbookAPIUrl',
-      },
-      false
-    ) || currentBlockbookUrl
-
-    newConfig.rpc!.apiKey = await resolveOrPrompt(
-      niCtx,
-      () => input({
-        default: existingConfig.rpc?.apiKey,
-        message: 'Enter your blockbook API key:',
-      }),
-      resolveEnvValue(existingConfig.rpc?.apiKey),
-      {
-        configPath: '[rpc].apiKey',
-        description: 'Blockbook API key',
-        field: 'apiKey',
-      },
-      false
-    ) || ''
 
     // In non-interactive mode, auto-generate cluster RPC credentials if not set
     const generateClusterRpc: boolean = niCtx.enabled ? (!existingConfig.dogecoinClusterRpc?.username || !existingConfig.dogecoinClusterRpc?.password) : await confirm({
@@ -777,7 +732,6 @@ export class DogeConfigCommand extends Command {
     log(chalk.blue('\nConfiguration Summary:'))
     log(chalk.blue(`Network: ${newConfig.network}`))
     log(chalk.blue(`RPC URL: ${newConfig.rpc!.url}`))
-    log(chalk.blue(`Blockbook API URL: ${newConfig.rpc!.blockbookAPIUrl}`))
     log(chalk.blue(`Wallet Path: ${newConfig.wallet.path}`))
     if (newConfig.proof_topology) {
       log(chalk.blue(`Proof Mode: ${newConfig.proof_topology.mode}`))
@@ -807,7 +761,6 @@ export class DogeConfigCommand extends Command {
             }
           : {}),
         rpc: {
-          blockbookAPIUrl: newConfig.rpc!.blockbookAPIUrl,
           url: newConfig.rpc!.url,
         },
         wallet: {
@@ -1149,63 +1102,40 @@ export class DogeConfigCommand extends Command {
       'Content-Type': 'application/json',
     }
 
-    // Handle different RPC URL formats
-    if (rpcUrl.includes('nownodes.io')) {
-      // NowNodes API format - use getblock API
-      const infoUrl = `${rpcUrl.replace(/\/$/, '')}/`
-
-      const response = await fetch(infoUrl, {
-        headers,
-        method: 'GET'
-      })
-
-      if (!response.ok) {
-        throw new Error(`blockbook API connection failed: ${response.status} ${response.statusText}`)
-      }
-
-      const result = await response.json() as { blockbook: { bestHeight: number } }
-      if (result.blockbook && typeof result.blockbook.bestHeight === 'number') {
-        return result.blockbook.bestHeight
-      }
- 
-        throw new Error('Unable to get block height from blockbook API')
-      
-    } else {
-      // Standard Dogecoin RPC format
-      if (username && password) {
-        const credentials = Buffer.from(`${username}:${password}`).toString('base64')
-        headers.Authorization = `Basic ${credentials}`
-      }
-
-      const body = JSON.stringify({
-        id: 'test',
-        jsonrpc: '1.0',
-        method: 'getblockcount',
-        params: [],
-      })
-
-      const response = await fetch(rpcUrl, {
-        body,
-        headers,
-        method: 'POST',
-      })
-
-      if (!response.ok) {
-        throw new Error(`RPC connection failed: ${response.status} ${response.statusText}`)
-      }
-
-      const result = await response.json() as { error?: { code: number; message: string }; result?: number }
-
-      if (result.error) {
-        throw new Error(`RPC error: ${result.error.message} (Code: ${result.error.code})`)
-      }
-
-      if (typeof result.result === 'number') {
-        return result.result
-      }
-
-      throw new Error('RPC response did not contain valid block height')
+    // Standard Dogecoin RPC format
+    if (username && password) {
+      const credentials = Buffer.from(`${username}:${password}`).toString('base64')
+      headers.Authorization = `Basic ${credentials}`
     }
+
+    const body = JSON.stringify({
+      id: 'test',
+      jsonrpc: '1.0',
+      method: 'getblockcount',
+      params: [],
+    })
+
+    const response = await fetch(rpcUrl, {
+      body,
+      headers,
+      method: 'POST',
+    })
+
+    if (!response.ok) {
+      throw new Error(`RPC connection failed: ${response.status} ${response.statusText}`)
+    }
+
+    const result = await response.json() as { error?: { code: number; message: string }; result?: number }
+
+    if (result.error) {
+      throw new Error(`RPC error: ${result.error.message} (Code: ${result.error.code})`)
+    }
+
+    if (typeof result.result === 'number') {
+      return result.result
+    }
+
+    throw new Error('RPC response did not contain valid block height')
   }
 }
 

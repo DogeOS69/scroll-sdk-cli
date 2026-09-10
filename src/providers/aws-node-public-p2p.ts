@@ -10,7 +10,7 @@ import { executeCommand } from '../utils/command-executor.js'
 
 export interface NodeLBProvider {
   checkPrerequisites(): Promise<boolean>
-  setupLb(flags: any, bootnodeCount: number): Promise<string[]>
+  setupLb(flags: any, bootnodeIndices: number[]): Promise<string[]>
 }
 
 export class AWSNodeLBProvider implements NodeLBProvider {
@@ -56,7 +56,7 @@ export class AWSNodeLBProvider implements NodeLBProvider {
     return true;
   }
 
-  async setupLb(flags: any, bootnodeCount: number): Promise<string[]> {
+  async setupLb(flags: any, bootnodeIndices: number[]): Promise<string[]> {
     console.log(chalk.blue('Starting AWS P2P Loadbalancer...'));
     console.log('====================================');
 
@@ -93,14 +93,19 @@ export class AWSNodeLBProvider implements NodeLBProvider {
     console.log('');
 
     try {
+      for (const index of bootnodeIndices) {
+        const file = path.join(flags['values-dir'], `l2-reth-bootnode-production-${index}.yaml`);
+        if (!fs.existsSync(file)) throw new Error(`Missing ${file}; run setup prep-charts first`);
+      }
+
       await this.configureIamPermissions(this.accountId);
       await this.installLoadBalancerController(this.clusterName, this.region);
-      console.log(chalk.blue(`Setting up LB for ${bootnodeCount} bootnode(s)`))
+      console.log(chalk.blue(`Setting up LB for ${bootnodeIndices.length} bootnode(s)`))
 
       const valuesDir = flags['values-dir']
-      await this.updateProductionFiles(valuesDir, bootnodeCount, this.region, this.clusterName);
+      await this.updateProductionFiles(valuesDir, bootnodeIndices, this.region, this.clusterName);
 
-      const verificationPassed = await this.verifyAwsSetup(this.accountId, this.region, bootnodeCount);
+      const verificationPassed = await this.verifyAwsSetup(this.accountId, this.region, bootnodeIndices.length);
       if (verificationPassed) {
         console.log(chalk.green('🚀 AWS P2P setup completed successfully!'));
       } else {
@@ -111,8 +116,8 @@ export class AWSNodeLBProvider implements NodeLBProvider {
 
       const ns = flags.namespace || 'default';
       console.log(chalk.blue('💡 To get LoadBalancer domains after deployment:'));
-      for (let i = 0; i < bootnodeCount; i++) {
-        console.log(chalk.blue(`  kubectl get service l2-bootnode-${i}-p2p -n ${ns} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{\\"\\n\\"}'`));
+      for (const i of bootnodeIndices) {
+        console.log(chalk.blue(`  kubectl get service l2-reth-bootnode-${i}-p2p -n ${ns} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{\\"\\n\\"}'`));
       }
 
       return [];
@@ -125,10 +130,17 @@ export class AWSNodeLBProvider implements NodeLBProvider {
 
   private async configL2BootnodeP2p(doc: any, index: number, region?: string, clusterName?: string) {
 
-    if (!doc.service) doc.service = {};
-    if (!doc.service.p2p) doc.service.p2p = {};
-
-    const p2pCfg = doc.service.p2p;
+    doc.reth ||= {};
+    doc.reth.service ||= {};
+    doc.reth.service.extra ||= {};
+    doc.reth.service.extra.p2p ||= {};
+    const p2pCfg = doc.reth.service.extra.p2p;
+    p2pCfg.type = 'LoadBalancer';
+    const port = doc.reth.ports?.p2p || 30_303;
+    p2pCfg.ports = {
+      'p2p-tcp': {enabled: true, port, protocol: 'TCP', targetPort: port},
+      'p2p-udp': {enabled: true, port, protocol: 'UDP', targetPort: port},
+    };
     p2pCfg.enabled = true;
 
     if (!p2pCfg.annotations || typeof p2pCfg.annotations !== 'object') {
@@ -300,11 +312,11 @@ export class AWSNodeLBProvider implements NodeLBProvider {
     }
   }
 
-  private async updateProductionFiles(valuesDir: string, bootnodeCount: number, region: string, clusterName: string): Promise<void> {
+  private async updateProductionFiles(valuesDir: string, bootnodeIndices: number[], region: string, clusterName: string): Promise<void> {
     console.log(chalk.blue('Updating production YAML files...'));
 
-    for (let i = 0; i < bootnodeCount; i++) {
-      const prodFile = path.join(valuesDir, `l2-bootnode-production-${i}.yaml`);
+    for (const i of bootnodeIndices) {
+      const prodFile = path.join(valuesDir, `l2-reth-bootnode-production-${i}.yaml`);
 
       if (fs.existsSync(prodFile)) {
         console.log(`Updating ${prodFile}...`);

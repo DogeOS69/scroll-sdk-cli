@@ -3,7 +3,7 @@ import * as toml from '@iarna/toml'
 import { confirm } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
-import { Wallet, isAddress } from 'ethers'
+import { isAddress } from 'ethers'
 import * as yaml from 'js-yaml'
 import { execFileSync, spawn } from 'node:child_process'
 import * as fs from 'node:fs'
@@ -12,7 +12,6 @@ import * as path from 'node:path'
 import type { DogeConfig } from '../../types/doge-config.js'
 
 import {
-  L1_INTERFACE_BEACON_API_ENDPOINT,
   L1_INTERFACE_RPC_ENDPOINT,
   YAML_DUMP_OPTIONS,
 } from '../../config/constants.js'
@@ -22,7 +21,6 @@ import { GenerationTransaction } from '../../utils/generation-transaction.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {
-  resolveBlockbookKubernetesEndpoints,
   resolveDogecoinKubernetesEndpoints,
   resolveDogecoinServiceRpcUrl,
 } from '../../utils/kubernetes-endpoints.js'
@@ -39,6 +37,8 @@ import {
 } from '../../utils/proof-kubernetes-reconciler.js'
 import {assertTopologyUsesSharedArtifactStore, sharedArtifactStoreFromDogeConfig} from '../../utils/proof-shared-artifact-store.js'
 import {proofTopologyEthereumDaBlobSource} from '../../utils/proof-topology-compiler.js'
+import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
+import {archiveRetiredServiceFiles, stripRetiredServiceConfig} from '../../utils/retired-services.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {reconcileScrollMonitorBalances} from '../../utils/scroll-monitor-values.js'
 import {
@@ -72,7 +72,6 @@ import {
   deriveSequencerRethEnodeUrl,
   getSequencerRethResourceName,
   getSequencerRethValuesFileName,
-  normalizeRethNodekey,
   normalizeSignerMode,
   signerModeToConfig,
 } from './l2-sequencer-reth.js'
@@ -103,7 +102,8 @@ export function applyFrontendEnvFileValues(
   source: string,
   updates: Record<string, unknown>,
 ): {changed: boolean; content: string} {
-  const lines = source.replaceAll('\r\n', '\n').split('\n')
+  const cleaned = source.replaceAll(/^\s*(?:REACT_APP_BRIDGE_API_URI|REACT_APP_ROLLUPSCAN_API_URI|ADMIN_SYSTEM_DASHBOARD_URI)\s*=.*(?:\r?\n|$)/gm, '')
+  const lines = cleaned.replaceAll('\r\n', '\n').split('\n')
   while (lines.at(-1) === '') lines.pop()
   const positions = new Map<string, number>()
   for (const [index, line] of lines.entries()) {
@@ -111,7 +111,7 @@ export function applyFrontendEnvFileValues(
     if (match) positions.set(match[1], index)
   }
 
-  let changed = false
+  let changed = cleaned !== source
   for (const [key, rawValue] of Object.entries(updates)) {
     if (rawValue === undefined || rawValue === null) continue
     const rendered = `${key} = ${String(rawValue)}`
@@ -134,51 +134,15 @@ export function buildFrontendExternalUrlUpdates(
   getConfigValue: (key: string) => unknown,
 ): Record<string, unknown> {
   return {
-    ADMIN_SYSTEM_DASHBOARD_URI: getConfigValue('frontend.ADMIN_SYSTEM_DASHBOARD_URI'),
     GRAFANA_URI: getConfigValue('frontend.GRAFANA_URI'),
-    REACT_APP_BRIDGE_API_URI: getConfigValue('frontend.BRIDGE_API_URI'),
     REACT_APP_EXTERNAL_EXPLORER_URI_L2: getConfigValue('frontend.EXTERNAL_EXPLORER_URI_L2'),
     REACT_APP_EXTERNAL_RPC_URI_L2: getConfigValue('frontend.EXTERNAL_RPC_URI_L2'),
-    REACT_APP_ROLLUPSCAN_API_URI: getConfigValue('frontend.ROLLUPSCAN_API_URI'),
   }
 }
 
-/**
- * Build the in-cluster bootstrap peer set used during the one-way geth-to-Reth
- * cutover. Every L2 client must be able to reach either generation of
- * sequencer while both are available, so this set intentionally contains
- * sequencers only: legacy geth sequencers first, followed by Reth sequencers.
- *
- * Bootnodes are not part of this list. They have their own topology and the
- * external RPC package builds a separate geth+Reth bootnode peer set.
- */
-export function buildInitialSequencerPeers(
-  gethSequencerPeers: string[],
-  rethSequencerPeers: string[],
-): string[] {
-  const peers = new Set<string>()
-  for (const peer of [...gethSequencerPeers, ...rethSequencerPeers]) {
-    const normalized = peer.trim()
-    if (normalized !== '') peers.add(normalized)
-  }
-
-  return [...peers]
-}
-
-/** Render the shared in-cluster sequencer peers for Reth's CSV CLI value. */
-export function buildRethInitialTrustedPeers(
-  gethSequencerPeers: string[],
-  rethSequencerPeers: string[],
-): string {
-  return buildInitialSequencerPeers(gethSequencerPeers, rethSequencerPeers).join(',')
-}
-
-/** Render the shared in-cluster sequencer peers for geth's JSON env value. */
-export function buildL2GethInitialPeerList(
-  gethSequencerPeers: string[],
-  rethSequencerPeers: string[],
-): string {
-  return JSON.stringify(buildInitialSequencerPeers(gethSequencerPeers, rethSequencerPeers))
+/** Render the configured Reth sequencers as a deduplicated trusted-peers CSV. */
+export function buildRethInitialTrustedPeers(rethSequencerPeers: string[]): string {
+  return [...new Set(rethSequencerPeers.map(peer => peer.trim()).filter(Boolean))].join(',')
 }
 
 /**
@@ -1351,13 +1315,10 @@ export default class SetupPrepCharts extends Command {
   private configData: any = {}
 
   private configMapping: Record<string, ((chartName: string, productionNumber: string) => string) | string> = {
-    'ADMIN_SYSTEM_DASHBOARD_HOST': 'ingress.ADMIN_SYSTEM_DASHBOARD_HOST',
     'BLOCKSCOUT_HOST': 'ingress.BLOCKSCOUT_HOST',
-    'BRIDGE_HISTORY_API_HOST': 'ingress.BRIDGE_HISTORY_API_HOST',
     'CHAIN_ID': 'general.CHAIN_ID_L2',
     'CHAIN_ID_L1': 'general.CHAIN_ID_L1',
     'CHAIN_ID_L2': 'general.CHAIN_ID_L2',
-    'COORDINATOR_API_HOST': 'ingress.COORDINATOR_API_HOST',
     'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL': 'ethereumDa.submitterRpcUrl',
     'DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL': 'general.L2_RPC_ENDPOINT',
     'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__EXPECTED_BATCHERS': 'signers.l1CommitSender.expectedAddress',
@@ -1366,22 +1327,9 @@ export default class SetupPrepCharts extends Command {
     'FRONTEND_HOST': 'ingress.FRONTEND_HOST',
     'GRAFANA_HOST': 'ingress.GRAFANA_HOST',
     'L1_DEVNET_HOST': 'ingress.L1_DEVNET_HOST',
-    'L1_EXPLORER_HOST': 'ingress.L1_EXPLORER_HOST',
     'L1_RPC_ENDPOINT': 'general.L1_RPC_ENDPOINT',
     'L1_SCROLL_CHAIN_PROXY_ADDR': 'contractsFile.L1_SCROLL_CHAIN_PROXY_ADDR',
     'L2_RPC_ENDPOINT': 'general.L2_RPC_ENDPOINT',
-    // 'L2GETH_NODEKEY': (chartName, productionNumber) =>
-    //   chartName.startsWith('l2-bootnode') ? `bootnode.bootnode-${productionNumber}.L2GETH_NODEKEY` :
-    //     (productionNumber === '0' ? 'sequencer.L2GETH_NODEKEY' : `sequencer.sequencer-${productionNumber}.L2GETH_NODEKEY`),
-    'L2GETH_KEYSTORE': (chartName, productionNumber) =>
-      productionNumber === '0' ? 'sequencer.L2GETH_KEYSTORE' : `sequencer.sequencer-${productionNumber}.L2GETH_KEYSTORE`,
-    'L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK': 'general.L1_CONTRACT_DEPLOYMENT_BLOCK',
-    'L2GETH_PASSWORD': (chartName, productionNumber) =>
-      productionNumber === '0' ? 'sequencer.L2GETH_PASSWORD' : `sequencer.sequencer-${productionNumber}.L2GETH_PASSWORD`,
-    'L2GETH_PEER_LIST': 'sequencer.L2_GETH_STATIC_PEERS',
-    'L2GETH_SIGNER_ADDRESS': (chartName, productionNumber) =>
-      productionNumber === '0' ? 'sequencer.L2GETH_SIGNER_ADDRESS' : `sequencer.sequencer-${productionNumber}.L2GETH_SIGNER_ADDRESS`,
-    'ROLLUP_EXPLORER_API_HOST': 'ingress.ROLLUP_EXPLORER_API_HOST',
     'RPC_GATEWAY_HOST': 'ingress.RPC_GATEWAY_HOST',
     'RPC_GATEWAY_WS_HOST': 'ingress.RPC_GATEWAY_WS_HOST',
     'SCROLL_L1_RPC': 'general.L1_RPC_ENDPOINT',
@@ -1553,18 +1501,8 @@ export default class SetupPrepCharts extends Command {
     }
   }
 
-  private buildFreshL2GethPeerList(): string {
-    return buildL2GethInitialPeerList(
-      this.getLegacySequencerPeers(),
-      this.getRethSequencerPeers(),
-    )
-  }
-
   private buildFreshRethTrustedPeers(): string {
-    return buildRethInitialTrustedPeers(
-      this.getLegacySequencerPeers(),
-      this.getRethSequencerPeers(),
-    )
+    return buildRethInitialTrustedPeers(this.getRethSequencerPeers())
   }
 
   private buildSequencerRethResolvedConfig(index: number): ResolvedSequencerRethConfig {
@@ -1612,11 +1550,6 @@ export default class SetupPrepCharts extends Command {
     }
   }
 
-  private deriveLegacySequencerEnodeUrl(nodekey: string, index: number): string {
-    const wallet = new Wallet(`0x${normalizeRethNodekey(nodekey)}`)
-    const publicKeyNoPrefix = wallet.signingKey.publicKey.slice(4)
-    return `enode://${publicKeyNoPrefix}@l2-sequencer-${index}:30303`
-  }
 
   private formatUrl(baseUrl: string, path: string = ''): string {
     // Remove trailing slash from baseUrl
@@ -1689,14 +1622,6 @@ export default class SetupPrepCharts extends Command {
     
   }
 
-  private getFixedL2NodeEnvValue(chartName: string, key: string): string | undefined {
-    if (key === 'L2GETH_L1_ENDPOINT') return L1_INTERFACE_RPC_ENDPOINT
-    if (key === 'L2GETH_DA_BLOB_BEACON_NODE') return L1_INTERFACE_BEACON_API_ENDPOINT
-    if (key === 'L2GETH_PEER_LIST' && this.isL2GethNode(chartName)) {
-      return this.buildFreshL2GethPeerList()
-    }
-  }
-
   private getIngressHostConfigValue(chartName: string, ingressKey: string): string | undefined {
     const rethRpcConfigKey = getL2RethRpcIngressConfigKey(chartName, ingressKey)
     if (rethRpcConfigKey) {
@@ -1713,18 +1638,14 @@ export default class SetupPrepCharts extends Command {
     if (directValue) return directValue
 
     const alternativeMappings: Record<string, string> = {
-      'admin-system-dashboard': 'ADMIN_SYSTEM_DASHBOARD_HOST',
-      blockbook: 'BLOCKBOOK_HOST',
       blockscout: 'BLOCKSCOUT_HOST',
-      'bridge-history-api': 'BRIDGE_HISTORY_API_HOST',
-      'coordinator-api': 'COORDINATOR_API_HOST',
       dogecoin: 'DOGECOIN_HOST',
       frontends: 'FRONTEND_HOST',
       'l1-devnet': 'L1_DEVNET_HOST',
       'l2-reth-rpc': 'RPC_GATEWAY_HOST',
       'l2-rpc': 'RPC_GATEWAY_HOST',
       'l2-rpc-reth': 'RPC_GATEWAY_HOST',
-      'rollup-explorer-backend': 'ROLLUP_EXPLORER_API_HOST',
+      'proof-coordinator': 'PROOF_COORDINATOR_HOST',
       'tso-service': 'TSO_HOST',
     }
     const alternativeKey = alternativeMappings[chartName]
@@ -1739,35 +1660,6 @@ export default class SetupPrepCharts extends Command {
     }
 
     return alternativeValue
-  }
-
-  private getLegacySequencerPeers(): string[] {
-    const sequencerConfig = this.configData.sequencer
-    if (!sequencerConfig || typeof sequencerConfig !== 'object') return []
-
-    const peers = this.parsePeerList(sequencerConfig.L2_GETH_STATIC_PEERS)
-    // An explicit empty TOML array opts out of retired Geth peers while
-    // preserving archived compatibility keys. Only absent/non-array legacy
-    // settings should fall back to deriving peers from those keys.
-    if (Array.isArray(sequencerConfig.L2_GETH_STATIC_PEERS)) return peers
-    if (peers.length > 0) return peers
-
-    const derivedPeers: string[] = []
-    if (sequencerConfig.L2GETH_NODEKEY) {
-      derivedPeers.push(this.deriveLegacySequencerEnodeUrl(sequencerConfig.L2GETH_NODEKEY, 0))
-    }
-
-    for (const [key, value] of Object.entries(sequencerConfig)) {
-      const match = key.match(/^sequencer-(\d+)$/)
-      if (!match || !value || typeof value !== 'object') continue
-
-      const nodekey = (value as { L2GETH_NODEKEY?: unknown }).L2GETH_NODEKEY
-      if (typeof nodekey === 'string' && nodekey.trim() !== '') {
-        derivedPeers.push(this.deriveLegacySequencerEnodeUrl(nodekey, Number(match[1])))
-      }
-    }
-
-    return derivedPeers
   }
 
   private getNestedValue(obj: any, path: string): any {
@@ -2111,7 +2003,9 @@ export default class SetupPrepCharts extends Command {
           this.error(chalk.red("scrollConfig failed: " + error.message));
         }
 
-        let updated = false;
+        const cleanedScrollConfig = stripRetiredServiceConfig(scrollConfigToml)
+        let updated = JSON.stringify(cleanedScrollConfig) !== JSON.stringify(scrollConfigToml)
+        scrollConfigToml = cleanedScrollConfig
         for (const [key, newValue] of Object.entries(configUpdates)) {
           // Minimal/spec-first deployments may not have post-contract or
           // optional frontend fields yet. Omit unresolved inputs instead of
@@ -2214,13 +2108,13 @@ export default class SetupPrepCharts extends Command {
   }
 
   private async processMutipleInstance(valuesDir: string): Promise<{ skipped: number; updated: number }> {
-    interface ChartConfig {
-      chartName: string;
-      configKey: string;
-    }
-
     let updatedCharts = 0;
-    let skippedCharts = 0;
+    const skippedCharts = 0;
+
+    for (const file of [...archiveRetiredGethValues(valuesDir), ...archiveRetiredServiceFiles(valuesDir)]) {
+      this.jsonCtx.info(`Archived retired values: ${file}`)
+      updatedCharts++
+    }
 
     // attestation-signer is partner-operated through docker-compose. Remove
     // values left by older CLI releases so a later `helm install-all` cannot
@@ -2235,55 +2129,6 @@ export default class SetupPrepCharts extends Command {
       updatedCharts++
     }
 
-    const names: ChartConfig[] = [{
-      chartName: "l2-bootnode",
-      configKey: "bootnode"
-    }, {
-      chartName: "l2-sequencer",
-      configKey: "sequencer"
-    }];
-
-    for (const item of names) {
-      const { chartName, configKey } = item;
-
-      let releaseIndex = 0;
-      const templateFilePath = path.join(valuesDir, `${chartName}-production.yaml`);
-      if (!fs.existsSync(templateFilePath)) {
-        this.warn(chalk.yellow(`Source file not found: ${templateFilePath}, skipping ${chartName} charts`));
-        skippedCharts++;
-        continue;
-      }
-
-      if (!this.configData[configKey]) {
-        this.error(`${configKey} not found in config.toml`);
-      }
-
-      const templateContent = fs.readFileSync(templateFilePath, 'utf8');
-
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const instanceKey = `${configKey}-${releaseIndex}`
-
-        // instanceConfig is like this.configData.bootnode.bootnode-0, or this.configData.sequencer.sequencer-0
-        const instanceConfig = this.configData[configKey][instanceKey]
-
-        if (!instanceConfig && instanceKey !== "sequencer-0") {
-          // No more bootnode instances defined
-          this.log(chalk.yellow(`No more ${instanceKey} instances defined.`));
-          break
-        }
-
-        const destFilePath = path.join(valuesDir, `${chartName}-production-${releaseIndex}.yaml`);
-
-        const newYamlContent = templateContent.replaceAll('__INSTANCE_INDEX__', releaseIndex.toString());
-        fs.writeFileSync(destFilePath, newYamlContent);
-        updatedCharts++;
-
-        releaseIndex++
-      }
-
-    }
-
     return { skipped: skippedCharts, updated: updatedCharts };
   }
 
@@ -2296,7 +2141,6 @@ export default class SetupPrepCharts extends Command {
     let updatedCharts = 0
     let skippedCharts = 0
     const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(this.dogeConfig)
-    const blockbookEndpoints = resolveBlockbookKubernetesEndpoints(this.dogeConfig)
     const dogecoinInternalUrl = dogecoinEndpoints.rpcUrl
     const s3Archive = this.dogeConfig.ethereumDa?.blobArchive?.s3
     const s3PublicBaseUrl = getEthereumDaS3PublicBaseUrl(s3Archive)
@@ -2319,18 +2163,26 @@ export default class SetupPrepCharts extends Command {
 
       const yamlPath = path.join(valuesDir, file)
       const chartName = getProductionChartName(file)
+      if (this.isL2GethNode(chartName)) {
+        this.jsonCtx.info(`Skipping retired geth chart ${file}; use the Reth values files.`)
+        skippedCharts++
+        continue
+      }
+
       const productionNumber = file.match(/-production-(\d+)\.yaml$/)?.[1] || '0'
 
       this.log(`Processing ${file} for chart ${chartName}...`)
 
       const productionYamlContent = fs.readFileSync(yamlPath, 'utf8')
-      const productionYaml = yaml.load(productionYamlContent) as any
+      const originalProductionYaml = yaml.load(productionYamlContent) as any
+      const productionYaml = stripRetiredServiceConfig(originalProductionYaml)
       const rethExtraArgsSnapshot = isL2RethBlobS3Chart(chartName)
         ? snapshotRethExtraArgs(productionYaml)
         : undefined
 
-      let updated = false
+      let updated = JSON.stringify(productionYaml) !== JSON.stringify(originalProductionYaml)
       const changes: Array<{ key: string; newValue: string; oldValue: string }> = []
+      if (updated) changes.push({key: 'retired indexer settings', newValue: 'removed', oldValue: 'present'})
 
       // In the normal deployment flow every concrete Reth node uses the L2
       // chain ID as its P2P network ID. A shadowfork may intentionally override
@@ -2357,19 +2209,6 @@ export default class SetupPrepCharts extends Command {
             for (const [key, oldValue] of Object.entries(envData)) {
               if (shouldSkipL2ContractDeploymentBlockUpdate(chartName, key, this.skipL2ContractDeploymentBlock)) {
                 continue
-              }
-
-              if (this.isL2Node(chartName)) {
-                const fixedValue = this.getFixedL2NodeEnvValue(chartName, key)
-                if (fixedValue !== undefined) {
-                  if (fixedValue !== oldValue) {
-                    changes.push({ key, newValue: fixedValue, oldValue: JSON.stringify(oldValue) })
-                    envData[key] = fixedValue
-                    updated = true
-                  }
-
-                  continue
-                }
               }
 
               const configPathOrResolver = this.configMapping[key]
@@ -2783,68 +2622,7 @@ export default class SetupPrepCharts extends Command {
       }
 
       // eslint-disable-next-line unicorn/prefer-switch
-      if (chartName === 'blockbook') {
-        if (!productionYaml.blockbook || typeof productionYaml.blockbook !== 'object') {
-          productionYaml.blockbook = {}
-        }
-
-        if (productionYaml.fullnameOverride !== blockbookEndpoints.serviceName) {
-          changes.push({ key: 'fullnameOverride', newValue: blockbookEndpoints.serviceName, oldValue: String(productionYaml.fullnameOverride || 'undefined') })
-          productionYaml.fullnameOverride = blockbookEndpoints.serviceName
-          updated = true
-        }
-
-        let ingressUpdated = false;
-        if (productionYaml.ingress) {
-          const ingressValue = productionYaml.ingress;
-          ingressValue.enabled = true;
-          const configValue = this.getConfigValue('ingress.BLOCKBOOK_HOST');
-          ingressUpdated = this.processIngressHosts(ingressValue, configValue, changes);
-        } else {
-          productionYaml.ingress = {
-            annotations: {
-              "cert-manager.io/cluster-issuer": "letsencrypt-prod",
-              "nginx.ingress.kubernetes.io/ssl-redirect": "true"
-            },
-            className: "nginx",
-            enabled: true,
-            hosts: [
-              {
-                host: this.getConfigValue("ingress.BLOCKBOOK_HOST"),
-                paths: [{ path: "/", pathType: "Prefix" }]
-              }
-            ],
-          };
-          changes.push({ key: `ingress`, newValue: JSON.stringify(productionYaml.ingress), oldValue: "undefined" });
-          ingressUpdated = true;
-        }
-
-        if (ingressUpdated) {
-          updated = true;
-        }
-
-        if (productionYaml.blockbook.rpcUrl !== dogecoinEndpoints.rpcUrl) {
-          changes.push({ key: 'blockbook.rpcUrl', newValue: dogecoinEndpoints.rpcUrl, oldValue: String(productionYaml.blockbook.rpcUrl || 'undefined') })
-          productionYaml.blockbook.rpcUrl = dogecoinEndpoints.rpcUrl
-          updated = true
-        }
-
-        if (productionYaml.blockbook.messageQueueBinding !== dogecoinEndpoints.zmqRawBlockUrl) {
-          changes.push({ key: 'blockbook.messageQueueBinding', newValue: dogecoinEndpoints.zmqRawBlockUrl, oldValue: String(productionYaml.blockbook.messageQueueBinding || 'undefined') })
-          productionYaml.blockbook.messageQueueBinding = dogecoinEndpoints.zmqRawBlockUrl
-          updated = true
-        }
-
-        const oldValue = productionYaml.blockbook.blockHeight;
-        const newValue = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
-        if (oldValue !== newValue) {
-          productionYaml.blockbook.blockHeight = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
-          updated = true;
-          changes.push({ key: `blockbook.blockHeight`, newValue: newValue || 'undefined', oldValue: oldValue || 'undefined' });
-        }
-      }
-
-      else if (chartName === "l1-devnet") {
+      if (chartName === "l1-devnet") {
         if (!productionYaml.network || typeof productionYaml.network !== 'object') {
           productionYaml.network = {}
         }

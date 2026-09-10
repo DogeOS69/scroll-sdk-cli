@@ -21,6 +21,7 @@ import {
   resolveOrPrompt,
   validateAndExit,
 } from '../../utils/non-interactive.js'
+import {stripRetiredServiceConfig} from '../../utils/retired-services.js'
 
 /**
  * Quote a PostgreSQL identifier (database name, role name) to prevent injection.
@@ -45,14 +46,14 @@ function quoteLiteral(value: string): string {
 }
 
 export default class SetupDbInit extends Command {
-  static override description = 'Initialize databases with new users and passwords interactively or update permissions'
+  static override description = 'Initialize the Blockscout database and user, or update its permissions'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --update-permissions',
     '<%= config.bin %> <%= command.id %> --update-permissions --debug',
     '<%= config.bin %> <%= command.id %> --clean',
-    '<%= config.bin %> <%= command.id %> --update-db-port=25061',
+    '<%= config.bin %> <%= command.id %> --update-port=25061',
     '<%= config.bin %> <%= command.id %> --non-interactive',
     '<%= config.bin %> <%= command.id %> --non-interactive --json --clean',
   ]
@@ -155,39 +156,7 @@ export default class SetupDbInit extends Command {
       }
     }
 
-    const databases = [
-      { name: 'scroll_chain_monitor', user: 'CHAIN_MONITOR' },
-      { name: 'scroll_rollup', user: 'ROLLUP_NODE' },
-      { name: 'scroll_bridge_history', user: 'BRIDGE_HISTORY' },
-    ]
-
-    // In non-interactive mode, check if Blockscout DB string exists in config
-    const createBlockscout = await resolveConfirm(
-      niCtx,
-      () => confirm({
-        default: Boolean(existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING),
-        message: chalk.cyan('Do you want to create a database for Blockscout?')
-      }),
-      existingConfig.db?.CREATE_BLOCKSCOUT_DB ?? Boolean(existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING),
-      Boolean(existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING)
-    )
-    if (createBlockscout) {
-      databases.push({ name: 'scroll_blockscout', user: 'BLOCKSCOUT' })
-    }
-
-    // In non-interactive mode, check if L1 Explorer DB string exists in config
-    const createL1Explorer = await resolveConfirm(
-      niCtx,
-      () => confirm({
-        default: Boolean(existingConfig.db?.L1_EXPLORER_DB_CONNECTION_STRING),
-        message: chalk.cyan('Do you want to create a database for L1 Explorer?')
-      }),
-      existingConfig.db?.CREATE_L1_EXPLORER_DB ?? Boolean(existingConfig.db?.L1_EXPLORER_DB_CONNECTION_STRING),
-      Boolean(existingConfig.db?.L1_EXPLORER_DB_CONNECTION_STRING)
-    )
-    if (createL1Explorer) {
-      databases.push({ name: 'scroll_l1explorer', user: 'L1_EXPLORER' })
-    }
+    const databases = [{name: 'scroll_blockscout', user: 'BLOCKSCOUT'}]
 
     const dsnMap: Record<string, string> = {}
     const createdDatabases: string[] = []
@@ -419,7 +388,7 @@ export default class SetupDbInit extends Command {
     }
 
     const configContent = fs.readFileSync(configPath, 'utf8')
-    return toml.parse(configContent) as any
+    return stripRetiredServiceConfig(toml.parse(configContent))
   }
 
   private async initializeDatabase(conn: PgClient, dbName: string, dbUser: string, dbPassword: string, clean: boolean, niCtx?: NonInteractiveContext): Promise<void> {
@@ -554,7 +523,7 @@ export default class SetupDbInit extends Command {
     // Extract host and port from an existing DSN if available
     let defaultPrivateHost = 'localhost'
     let defaultPrivatePort = '5432'
-    const existingDsn = existingConfig.db?.SCROLL_DB_CONNECTION_STRING
+    const existingDsn = existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING
     if (existingDsn) {
       const dsnMatch = existingDsn.match(/postgres:\/\/.*:.*@(.+):(\d+)\/.*/)
       if (dsnMatch) {
@@ -597,7 +566,7 @@ export default class SetupDbInit extends Command {
     // Extract host and port from an existing DSN if available
     let defaultHost = 'localhost'
     let defaultPort = '5432'
-    const existingDsn = existingConfig.db?.SCROLL_DB_CONNECTION_STRING
+    const existingDsn = existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING
     if (existingDsn) {
       const dsnMatch = existingDsn.match(/postgres:\/\/.*:.*@(.+):(\d+)\/.*/)
       if (dsnMatch) {
@@ -689,10 +658,6 @@ export default class SetupDbInit extends Command {
 
     const dsnConfigMapping: Record<string, string[]> = {
       'BLOCKSCOUT': ['BLOCKSCOUT_DB_CONNECTION_STRING'],
-      'BRIDGE_HISTORY': ['BRIDGE_HISTORY_DB_CONNECTION_STRING'],
-      'CHAIN_MONITOR': ['CHAIN_MONITOR_DB_CONNECTION_STRING'],
-      'L1_EXPLORER': ['L1_EXPLORER_DB_CONNECTION_STRING'],
-      'ROLLUP_NODE': ['SCROLL_DB_CONNECTION_STRING', 'GAS_ORACLE_DB_CONNECTION_STRING', 'ROLLUP_NODE_DB_CONNECTION_STRING', 'ROLLUP_EXPLORER_DB_CONNECTION_STRING', 'COORDINATOR_DB_CONNECTION_STRING', 'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING']
     }
 
     for (const [user, dsn] of Object.entries(dsnMap)) {

@@ -162,20 +162,16 @@ export default class SetupTls extends Command {
       this.jsonCtx.info(`Using ClusterIssuer: ${this.selectedIssuer}`)
 
       const chartsToUpdate = [
-        'admin-system-dashboard',
         'frontends',
         'blockscout',
-        'coordinator-api',
-        'bridge-history-api',
-        'rollup-explorer-backend',
         'l2-rpc',
         'l2-reth-rpc',
         'l2-reth-rpc-public',
         'l1-devnet',
         'scroll-monitor',
         'tso-service',
+        'proof-coordinator',
         'dogecoin',
-        'blockbook'
       ]
 
       const updatedCharts: string[] = []
@@ -378,7 +374,7 @@ spec:
             kubernetes.io/ingress.class: "nginx"
             nginx.ingress.kubernetes.io/ssl-redirect: "true"
           tls:
-            - secretName: admin-system-dashboard-tls
+            - secretName: grafana-tls
               hosts:
                 - grafana.scsdk.unifra.xyz
           hosts:
@@ -472,16 +468,9 @@ spec:
             updated = true;
           }
         }
-      } else if (chart === "dogecoin") {
-        if (yamlContent.ingress) {
+      } else if (chart === "dogecoin" && yamlContent.ingress) {
           const dogecoinUpdated = this.processStandardTls(yamlContent, chart, issuer);
           if (dogecoinUpdated) {
-            updated = true;
-          }
-        }
-      } else if (chart === "blockbook" && yamlContent.ingress) {
-          const blockbookUpdated = this.processStandardTls(yamlContent, chart, issuer);
-          if (blockbookUpdated) {
             updated = true;
           }
         }

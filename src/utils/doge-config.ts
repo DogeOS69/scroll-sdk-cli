@@ -4,6 +4,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { DogeConfig, Network } from '../types/doge-config.js'
+import {stripRetiredServiceConfig} from './retired-services.js'
 
 export const DOGE_NETWORKS: readonly Network[] = ['mainnet', 'testnet', 'regtest']
 
@@ -53,7 +54,7 @@ export function loadDogeNetworkFromDogeConfig(
 }
 
 export function stripDogeConfigFileOnlyFields(config: DogeConfig): Record<string, unknown> {
-  const fileConfig = { ...config } as Record<string, unknown>
+  const fileConfig = stripRetiredServiceConfig({ ...config }) as Record<string, unknown>
 
   if (fileConfig.localSigners && typeof fileConfig.localSigners === 'object' && !Array.isArray(fileConfig.localSigners)) {
     const localSigners = { ...(fileConfig.localSigners as Record<string, unknown>) }

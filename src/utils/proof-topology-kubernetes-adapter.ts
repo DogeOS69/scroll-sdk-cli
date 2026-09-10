@@ -14,6 +14,7 @@ import {
   PROVER_WORKER_EXECUTABLE,
   writeCompiledProverWorkerBundle,
 } from './compiled-prover-worker-bundle.js'
+import {buildProofCoordinatorIngress} from './proof-coordinator-ingress.js'
 import {
   type CompileProofTopologyOptions,
   type ProofTopologyBridgeContext,
@@ -653,6 +654,7 @@ function configureCoordinatorValues(
   resourceClaim: string | undefined,
   resourcesMountPath: string,
   l2GenesisJson: string,
+  coordinatorIngressHost?: string,
 ): void {
   const values = readYaml(filePath)
   // Native compiler output is authoritative. Leaving old Figment variables in
@@ -672,16 +674,24 @@ function configureCoordinatorValues(
   values.service.main ||= {}
   values.service.main.enabled = true
   values.service.main.ports ||= {}
+  // common chart defaults include an HTTP port without a number; only expose the native prover listener.
+  values.service.main.ports.http = {enabled: false}
   values.service.main.ports.prover = {
     enabled: true,
     port: 7788,
+    primary: true,
     protocol: 'TCP',
     targetPort: 7788,
   }
   values.ingress ||= {}
   values.ingress.main ||= {}
-  // Public exposure is operator-owned, not implied by active proof mode.
-  values.ingress.main.enabled ??= false
+  // An explicit root host opts into public ingress; active mode alone does not.
+  if (coordinatorIngressHost) {
+    values.ingress.main = buildProofCoordinatorIngress(coordinatorIngressHost, values.ingress.main)
+  } else {
+    values.ingress.main.enabled ??= false
+  }
+
   annotate(values, bundleRevision)
   configureMaterials(
     values,
@@ -857,6 +867,11 @@ export function reconcileCompiledProofTopology(
 
   const proverPublicUrl = topology.deployment?.proverPublicUrl
     || derivedProverPublicUrl(options)
+  if (mode === 'active' && options.coordinatorIngressHost && proverPublicUrl
+    && new URL(proverPublicUrl).host !== options.coordinatorIngressHost) {
+    throw new Error('PROOF_COORDINATOR_HOST must match the host in proofTopology.deployment.proverPublicUrl')
+  }
+
   const effectiveTopology: ProofTopologySpec = {
     ...topology,
     deployment: {
@@ -938,6 +953,7 @@ export function reconcileCompiledProofTopology(
       selectedResourceClaim,
       resourcesMountPath,
       l2GenesisJson,
+      options.coordinatorIngressHost,
     )
   }
 
