@@ -349,6 +349,7 @@ describe('self-contained proof topology Kubernetes adapter', () => {
         .to.equal('AAECAw==')
       expect(values.initContainers['prepare-proof-runtime-materials'].args[0])
         .to.include('root_verifier_vk.b64')
+        .and.to.include('rm -f')
     }
   })
 

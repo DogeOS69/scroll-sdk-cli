@@ -272,6 +272,7 @@ function configureRuntimeProofMaterials(
     )
     commands.push(
       `install -d -m 0755 ${shellQuote(path.posix.dirname(rootVk.runtimePath))}`,
+      `rm -f ${shellQuote(rootVk.runtimePath)}`,
       `base64 -d ${shellQuote(`${RUNTIME_SEED_MOUNT}/root_verifier_vk.b64`)} > ${shellQuote(rootVk.runtimePath)}`,
       `chmod 0444 ${shellQuote(rootVk.runtimePath)}`,
     )
