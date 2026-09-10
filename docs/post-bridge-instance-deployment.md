@@ -12,6 +12,13 @@ belong in the deployment repository, not this manual.
    shared AWS infrastructure using the documented setup commands.
 2. Use `scrollsdk setup cubesigner-init` for a new role/key when required and
    the normal session commands. Never remove/replace another role/key's policies.
+   Verify the active management login's environment with `cs about` before
+   creating keys; `cubesigner-init` uses that login. Development deployments
+   should use the intended development environment (for example gamma), not a
+   production session. Use letters, digits and underscores in `--role-prefix`
+   (for example `devnet_next_tee`); hyphens are rejected before key creation.
+   `cubesigner-refresh --environment` selects the environment when logging in;
+   it does not switch an already active management login.
    The provided environment uses the approved testnet `transport_only` lane.
 3. Run `setup gen-l2-artifacts` for native Reth genesis. The `gen-configs-*`,
    `deploy-*` and `verify-*` images must use the same approved contracts revision.
