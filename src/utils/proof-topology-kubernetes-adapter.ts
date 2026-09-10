@@ -181,14 +181,15 @@ function workloadImageReference(values: Record<string, any>, label: string): str
 function proofMaterialRuntimeFile(
   deploymentDir: string,
   sourcePath: string,
+  resourcesRoot: string,
   resourcesMountPath: string,
   label: string,
 ): {hostPath: string; runtimePath: string} {
   const hostPath = deploymentFile(deploymentDir, sourcePath, label)
-  const materialsRoot = path.resolve(deploymentDir, '.data/proof-materials')
+  const materialsRoot = deploymentFile(deploymentDir, resourcesRoot, 'proof material root')
   const relative = path.relative(materialsRoot, hostPath)
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error(`${label} must remain inside .data/proof-materials`)
+    throw new Error(`${label} must remain inside ${resourcesRoot}`)
   }
 
   if (!fs.statSync(hostPath).isFile()) throw new Error(`${label} is not a regular file: ${hostPath}`)
@@ -267,6 +268,7 @@ function configureRuntimeProofMaterials(
     const rootVk = proofMaterialRuntimeFile(
       deploymentDir,
       realScroll.aggVerifyingKeyPath,
+      realScroll.resourcesRoot,
       resourcesMountPath,
       'aggregate verifying key',
     )
@@ -303,12 +305,14 @@ function configureRuntimeProofMaterials(
     const chunk = proofMaterialRuntimeFile(
       deploymentDir,
       realScroll.chunkMaterializerBinaryPath,
+      realScroll.resourcesRoot,
       resourcesMountPath,
       'Chunk materializer binary',
     )
     const batch = proofMaterialRuntimeFile(
       deploymentDir,
       realScroll.batchMaterializerBinaryPath,
+      realScroll.resourcesRoot,
       resourcesMountPath,
       'Batch materializer binary',
     )
