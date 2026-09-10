@@ -402,6 +402,7 @@ describe('proof-aws-provisioner values projection', () => {
       'arn:aws:s3:::proof-bucket/rehearsal/batches/witnesses/*',
       'arn:aws:s3:::proof-bucket/rehearsal/batches/public-outputs/*',
       'arn:aws:s3:::proof-bucket/rehearsal/batches/proofs/*',
+      'arn:aws:s3:::proof-bucket/rehearsal/batches/proof-programs/*',
     ])
     expect(JSON.stringify(resources)).not.to.include('scroll-chunk-segmentation-sidecars')
   })

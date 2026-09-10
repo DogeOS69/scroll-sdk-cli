@@ -87,6 +87,7 @@ export const PUBLIC_ARTIFACT_OBJECT_PATTERNS = [
   'witnesses/*',
   'public-outputs/*',
   'proofs/*',
+  'proof-programs/*',
 ] as const
 
 export function publicArtifactObjectResources(bucket: string, keyPrefix: string): string[] {
