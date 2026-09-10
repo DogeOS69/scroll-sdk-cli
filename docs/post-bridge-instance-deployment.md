@@ -8,6 +8,11 @@ belong in the deployment repository, not this manual.
 
 ## Prepare inputs first
 
+The environment's [Pre-Bridge preparation runner](pre-bridge-instance-preparation.md)
+automates input archival, domain synchronization, new gamma TEE identity/session
+creation and native genesis generation. Run it after explicit old-instance
+cleanup and before the Bridge wrapper. It preserves reusable environment inputs.
+
 1. Configure the instance domain, chain settings, existing KMS signers and
    shared AWS infrastructure using the documented setup commands.
 2. Use `scrollsdk setup cubesigner-init` for a new role/key when required and
@@ -69,8 +74,8 @@ for a cleared instance, not concurrent deployment in one namespace. Conflicting
 resources and old PVCs stop execution. Normal apply never cleans them up.
 
 For a later fresh instance, first clean up the previous instance using its
-recorded ownership receipt, then run the Bridge wrapper, then the post-Bridge
-apply. Use the same script's explicit cleanup mode:
+recorded ownership receipt, run pre-Bridge preparation for the new instance,
+then the Bridge wrapper and post-Bridge apply. Use the explicit cleanup mode:
 
 ```bash
 node scripts/deploy/post-bridge.mjs --instance previous-instance --cleanup --plan
