@@ -445,7 +445,7 @@ describe('proof-aws-provisioner values projection', () => {
     expect(buildProofArtifactStorePolicy('proof-bucket', 'proof-topology')).to.deep.equal({
       Statement: [
         {
-          Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+          Action: ['s3:GetObject', 's3:PutObject'],
           Effect: 'Allow',
           Resource: 'arn:aws:s3:::proof-bucket/proof-topology/*',
         },
@@ -462,6 +462,27 @@ describe('proof-aws-provisioner values projection', () => {
       ],
       Version: '2012-10-17',
     })
+    expect(buildProofArtifactStorePolicy('proof-bucket', 'proof-topology', {deleteObjects: true}))
+      .to.deep.equal({
+        Statement: [
+          {
+            Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+            Effect: 'Allow',
+            Resource: 'arn:aws:s3:::proof-bucket/proof-topology/*',
+          },
+          {
+            Action: ['s3:ListBucket'],
+            Condition: {
+              StringLike: {
+                's3:prefix': ['proof-topology', 'proof-topology/*'],
+              },
+            },
+            Effect: 'Allow',
+            Resource: 'arn:aws:s3:::proof-bucket',
+          },
+        ],
+        Version: '2012-10-17',
+      })
   })
 
   it('accepts nested proof key prefixes and rejects unsafe path syntax', () => {
