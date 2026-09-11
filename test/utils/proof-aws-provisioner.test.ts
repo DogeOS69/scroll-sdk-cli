@@ -445,7 +445,7 @@ describe('proof-aws-provisioner values projection', () => {
     expect(buildProofArtifactStorePolicy('proof-bucket', 'proof-topology')).to.deep.equal({
       Statement: [
         {
-          Action: ['s3:GetObject', 's3:PutObject'],
+          Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
           Effect: 'Allow',
           Resource: 'arn:aws:s3:::proof-bucket/proof-topology/*',
         },

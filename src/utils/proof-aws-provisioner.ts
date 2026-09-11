@@ -211,7 +211,7 @@ export function buildProofArtifactStorePolicy(bucket: string, keyPrefix: string)
   return {
     Statement: [
       {
-        Action: ['s3:GetObject', 's3:PutObject'],
+        Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
         Effect: 'Allow',
         Resource: `arn:aws:s3:::${bucket}/${prefix}/*`,
       },
@@ -796,8 +796,10 @@ export class ProofAwsProvisioner {
     }
 
     // GetObject + PutObject cover artifact transport and staging->accepted
-    // promotion (CopyObject authorizes as a read plus a write); ListBucket
-    // covers scans, restricted to the deployment's normalized object prefix.
+    // promotion (CopyObject authorizes as a read plus a write). DeleteObject is
+    // required to retire stale locator objects after a proof identity global
+    // regeneration. ListBucket covers scans, restricted to the deployment's
+    // normalized object prefix.
     this.aws.json([
       'iam',
       'put-role-policy',
