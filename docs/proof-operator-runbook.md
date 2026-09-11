@@ -439,5 +439,24 @@ partner Signers or prove their network reachability.
   written; rerun `proof-materials` to create a new receipt after any change.
 - A software/OpenVM/circuit or deployment genesis change requires regenerated
   identities and a new Bridge bake. A normal mock/real switch does not.
+- Any topology recompile that changes the compiled Worker identity-bundle
+  revision changes proof identity. Do not preserve successful rows from the
+  previous identity. Stop every Proof Coordinator and Worker, wait until no
+  proof-work lease is live, and perform the Withdrawal Processor's one-shot
+  global regeneration before resuming proof execution:
+
+  ```toml
+  [proof_execution.regenerate]
+  created_before_ms = <current epoch milliseconds when the operation is written>
+  scope = "global"
+  ```
+
+  Roll Withdrawal Processor once and require its startup log to report the
+  completed reset and control-plane-store rotation. Remove the block
+  immediately, roll Withdrawal Processor again, then restart Proof Coordinator
+  and Workers. Never leave this block in durable production values. Global
+  regeneration supersedes all matching proof rows, including successful rows,
+  and discards accepted remote receipts; it does not delete the derived
+  artifact store or alter an already-built WF transaction.
 - Feynman/Tsuki activation is determined by canonical protocol context, not by
   these deployment switches.
