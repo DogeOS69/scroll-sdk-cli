@@ -334,13 +334,14 @@ The reviewed input should contain only high-level posture and receipt
 references. The compiler derives all low-level `realScroll` data:
 
 ```yaml
+proofRelease:
+  manifest: dogeos69/dogeos-proof-release@sha256:<digest>
+
 proofTopology:
   mode: active | disabled
   generation: mock | real
   enforcement: observe | enforce
   observeRealProofDeadlineMs: 300000
-  materialsReceipt: .data/proof-materials-v1.json
-  publicationReceipt: .data/proof-program-publication-v1.json
   deployment:
     artifactStore: <named store reference>
     workerBackend: external | kubernetes | none
@@ -393,29 +394,67 @@ private policy contents are not imported.
 Proof enforcement readiness requires one matching receipt per active signer.
 Observe mode may generate the handoff without them and list them as pending.
 
-### P2: Proof output generation is not one transaction
+### P2: Seven internal stages are exposed as operator commands
 
-The supported operator sequence currently spans `doge-config`, `prep-charts`,
-`export-signer-policy`, optional `proof-worker`, and `proof-config-check`.
-The commands are useful independently, but compiler-owned outputs can describe
-different generations when one command fails or is rerun concurrently.
+The supported real-proof sequence currently spans release preparation, Worker
+image checking, material import, topology selection/compilation, `prep-charts`,
+signer-policy export, publication, and `proof-config-check`. These remain useful
+diagnostic primitives, but they should not be seven mandatory production
+operator steps. Compiler-owned outputs can also describe different generations
+when one primitive fails or is rerun concurrently.
 
-Keep the command surface small. Do not add a generic deployment workflow.
-Instead:
+Keep the command surface small and configuration-only. The production interface
+has one `setup proof-config` topic with two explicit trust-boundary operations:
 
-- enhance `setup prep-charts` so one internal generation transaction stages all
-  proof-managed chart projections, the proof deployment contract, CubeSigner
-  policy projection/mount metadata, Attestation Signer handoff bundle, and
-  provider-neutral Worker contract;
-- keep `setup export-signer-policy` as an explicit re-export command, but make
-  it consume the selected contract and use the same transaction library;
-- enhance the existing `setup proof-config-check` to validate the whole
-  generation and imported readiness receipts;
-- keep `setup proof-worker` limited to optional credential hydration and local
-  rendering of an already compiled Worker contract.
+```text
+scrollsdk setup proof-config prepare
+scrollsdk setup proof-config publish
+```
 
-No `deploy`, `install`, `cleanup`, GPU rental, or server-management command is
-introduced.
+`prepare` is locally transactional and has no external mutation. It may perform
+read-only registry pulls to resolve the selected OCI artifacts; every producer
+container itself runs without a network. Given a validated immutable proof
+release, current protocol context, existing proof-AWS facts, high-level proof
+posture, and Worker backend, it internally:
+
+1. runs the receipt-pinned CPU preparation producer;
+2. captures the native preparation handoff;
+3. validates the release-pinned production Worker image;
+4. imports proof materials;
+5. compiles the topology and all proof-managed chart projections;
+6. generates the CubeSigner policy projection/mount metadata, external
+   Attestation Signer handoff, and provider-neutral Worker contract;
+7. validates semantic managed blocks and emits an immutable S3 publication
+   plan.
+
+Every stage still writes a typed internal receipt, but the complete candidate is
+first built beneath a sibling staging directory. No active `.data` pointer or
+production values file changes until all stages succeed. `prepare` performs no
+AWS write, Kubernetes call, GPU operation, remote signer operation, or policy
+attachment.
+
+`publish` consumes only the immutable prepared receipt. It revalidates all
+local inputs, uses the release-pinned publisher image to upload the complete
+program bundle, performs authenticated and public readback, writes the
+publication receipt, finalizes the proof deployment contract, and runs the
+final configuration check. S3 publication is its only external mutation.
+
+Mock configuration finishes with `prepare`; it has no real-program publication
+step. Real configuration uses both operations so the operator can review the
+release identity, protocol-context digest, immutable images, 11 files, bundle
+ID, and target S3 prefix before `publish --apply`.
+
+The existing fine-grained setup commands remain temporarily available as
+advanced diagnostics and migration interfaces. They call the same libraries
+and produce the same receipt schemas; the two-step path must not recursively
+launch CLI commands. `export-signer-policy` remains an explicit re-export, and
+`proof-worker` remains optional credential hydration/local rendering after the
+final configuration exists.
+
+No `deploy`, `install`, `cleanup`, GPU rental, Worker launch, SSH, or
+server-management command is introduced. Environment test runners may chain
+the two commands, but the production CLI retains the S3 review boundary rather
+than hiding publication inside the offline preparation action.
 
 ## Target configuration model
 
@@ -433,11 +472,12 @@ proofTopology:
   generation: real
   enforcement: observe
   observeRealProofDeadlineMs: 300000
-  materialsReceipt: .data/proof-materials-v1.json
-  publicationReceipt: .data/proof-program-publication-v1.json
   deployment:
     artifactStore: proof-artifacts
     workerBackend: external
+
+proofRelease:
+  manifest: dogeos69/dogeos-proof-release@sha256:<digest>
 
 proofPolicy:
   partnerValidationReceipts:
@@ -456,10 +496,13 @@ release, topology, or readiness receipts.
 
 ## Generated outputs
 
-`prep-charts` should stage one generation and publish it atomically:
+`proof-config prepare` should stage one generation and publish its local
+configuration atomically:
 
 ```text
 .data/proof-config/<generation-id>/
+  proof-config-prepared-v1.json
+  publication-plan-v1.json
   proof-deployment-contract-v2.json
   proof-topology/
   worker-contract/
@@ -477,6 +520,17 @@ release, topology, or readiness receipts.
     signer-policy-manifest.json
   managed-values-digests.json
 ```
+
+After a successful real `proof-config publish`, the same immutable generation
+also contains:
+
+```text
+  proof-program-publication-v1.json
+  proof-config-final-v1.json
+```
+
+For mock generation, `proof-config-prepared-v1.json` is already final and
+records that publication is not applicable.
 
 The environment's existing production values may remain at their established
 paths. They receive the generated managed blocks only after the staged tree and
@@ -529,19 +583,35 @@ across manual servers, dstack, and future providers.
 
 ## Operator command sequence
 
-The production-facing sequence remains a series of reviewable setup commands:
+After the environment has a protocol context, proof-AWS configuration, and an
+approved immutable proof release, the production-facing real-proof sequence is
+two commands:
 
-```text
-scrollsdk setup cubesigner-init
-scrollsdk setup proof-release-prepare        # when producing a new release
-scrollsdk setup proof-worker-image-check     # for real proving
-scrollsdk setup proof-materials
-scrollsdk setup proof-bundle-publish         # when Workers fetch a bundle
-scrollsdk setup doge-config                  # high-level posture and receipt refs
-scrollsdk setup prep-charts                  # atomic proof config generation
-scrollsdk setup proof-config-check
-scrollsdk setup proof-worker                 # optional credential hydration/render
+```bash
+scrollsdk setup proof-config prepare \
+  --release <proof-release-manifest@digest> \
+  --protocol-context .data/protocol_context.json \
+  --proof-aws-config .data/proof-aws.json \
+  --mode active --generation real --enforcement observe \
+  --worker-backend external \
+  --output .data/proof-config-prepared.json \
+  --json
+
+scrollsdk setup proof-config publish \
+  --prepared .data/proof-config-prepared.json \
+  --aws-profile <profile> \
+  --apply \
+  --output .data/proof-config-final.json \
+  --json
 ```
+
+The first command accepts no cloud credential and produces the exact S3 plan to
+review. The second accepts no new release, protocol, topology, or file-path
+choices; those are frozen by the prepared receipt. Omitting `--apply` performs
+the publication preflight without writing S3.
+
+For mock/observe, only `proof-config prepare` is required and its prepared
+receipt is the final configuration receipt.
 
 CubeSigner policy build/push/test/attach/readback is an explicit operator step
 using dogeos-core policy tooling. The resulting release and attachment receipts
@@ -584,11 +654,17 @@ only the partner handoff from the already selected deployment contract.
    after dogeos-core publishes its stable producer image/release contract.
 2. Change `proof-bundle-publish` to use the receipt-pinned publisher image and
    release file mapping; remove `--core-dir` from the production path.
-3. Move derived `realScroll` identities and paths into an internal resolved
+3. Extract the existing preparation, image-check, material-import, compiler,
+   chart-projection, signer-export, publication, and validation implementations
+   into reusable typed libraries.
+4. Implement transactional `setup proof-config prepare` over those libraries,
+   including the immutable publication plan and atomic local commit.
+5. Implement `setup proof-config publish` as the sole S3-mutating step, bound
+   exclusively to a prepared receipt.
+6. Move derived `realScroll` identities and paths into an internal resolved
    type populated from receipts.
-4. Make `prep-charts` publish all proof-managed outputs in one transaction.
-5. Version the expanded proof deployment contract.
-6. Retain backward-compatible receipt import for one release, with warnings and
+7. Version the expanded proof deployment contract.
+8. Retain backward-compatible receipt import for one release, with warnings and
    an explicit migration command/path; do not silently infer missing evidence.
 
 ## Test requirements
@@ -608,6 +684,14 @@ only the partner handoff from the already selected deployment contract.
 - Verify publication uses only the receipt-pinned publisher image and versioned
   11-file mapping, with no dogeos-core checkout or implicit current-directory
   source lookup.
+- Verify `proof-config prepare` performs no AWS write or other external mutation,
+  commits no partial generation after injected failures, and freezes every
+  input accepted by `publish`.
+- Verify `proof-config publish` accepts no replacement release/protocol/topology
+  inputs, does nothing without explicit `--apply`, and is safely repeatable for
+  the same content-addressed bundle.
+- Verify mock preparation is final without publication and real preparation is
+  never reported final before publication/readback succeeds.
 - Inject failure before every staged output is committed and prove the previous
   complete generation remains unchanged.
 - Permit unrelated production-values overlays while rejecting modifications to
@@ -646,3 +730,6 @@ This design is complete when:
 9. The normal proof configuration and publication path needs no dogeos-core
    source checkout or local Rust/OpenVM toolchain; all executable tooling and
    generic materials come from one validated immutable proof release contract.
+10. A production operator needs one configuration command for mock and exactly
+    two for real: a non-mutating atomic local prepare followed by an explicitly
+    reviewed S3 publish/finalize operation.
