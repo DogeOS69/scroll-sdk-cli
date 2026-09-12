@@ -322,6 +322,38 @@ only fields owned by the proof compiler, for example:
 Unrelated chart overlays remain legal. A change to a managed field requires
 regeneration, not a manual waiver.
 
+### P0: Artifact-store values have duplicate operator inputs
+
+`setup proof-aws-init` currently reads the canonical shared artifact store from
+`doge-config.toml [ethereumDa.blobArchive.s3]`, while also accepting `--bucket`
+and `--key-prefix` as equality assertions. Even though the flags are not
+overrides, they make the operator enter the same values twice and make scripts
+look as though two configuration authorities exist.
+
+Use one source of truth:
+
+- the operator declares the bucket, artifact region, and key-prefix policy once
+  in DeploymentSpec/doge-config;
+- `proof-aws-init` accepts the config path and AWS/EKS provisioning choices,
+  reads the artifact store from that canonical section, and has no normal
+  `--bucket` or `--key-prefix` inputs;
+- if a separate proof store is supported later, it is a named canonical store
+  declared once in DeploymentSpec and referenced by topology, not a command-line
+  override;
+- `.data/proof-aws.json` may repeat the resolved bucket/region/prefix because it
+  is a generated resource receipt, but it records the source config path,
+  section, source SHA-256, and resolved-store digest. It is never edited as a
+  second desired-state file;
+- `proof-config prepare` validates that the proof-AWS receipt still matches the
+  current canonical store and fails with an instruction to rerun
+  `proof-aws-init` when it has drifted.
+
+Deprecate `--bucket` and `--key-prefix` for one compatibility release. If they
+are supplied, they may only match the canonical values and produce a deprecation
+warning; they must never become overrides. Remove them from the documented
+production interface and then from the command after environment automation has
+migrated.
+
 ### P1: Low-level proof fields are editable source intent
 
 `ProofTopologySpec.active.realScroll` exposes values such as commitments,
@@ -343,7 +375,7 @@ proofTopology:
   enforcement: observe | enforce
   observeRealProofDeadlineMs: 300000
   deployment:
-    artifactStore: <named store reference>
+    artifactStoreRef: ethereumDa.blobArchive.s3
     workerBackend: external | kubernetes | none
 ```
 
@@ -473,7 +505,7 @@ proofTopology:
   enforcement: observe
   observeRealProofDeadlineMs: 300000
   deployment:
-    artifactStore: proof-artifacts
+    artifactStoreRef: ethereumDa.blobArchive.s3
     workerBackend: external
 
 proofRelease:
@@ -591,7 +623,6 @@ two commands:
 scrollsdk setup proof-config prepare \
   --release <proof-release-manifest@digest> \
   --protocol-context .data/protocol_context.json \
-  --proof-aws-config .data/proof-aws.json \
   --mode active --generation real --enforcement observe \
   --worker-backend external \
   --output .data/proof-config-prepared.json \
@@ -605,7 +636,9 @@ scrollsdk setup proof-config publish \
   --json
 ```
 
-The first command accepts no cloud credential and produces the exact S3 plan to
+The first command reads `.data/proof-aws.json` by default; an explicit
+`--proof-aws-config` selects a non-default receipt path, not alternate bucket or
+prefix values. It accepts no cloud credential and produces the exact S3 plan to
 review. The second accepts no new release, protocol, topology, or file-path
 choices; those are frozen by the prepared receipt. Omitting `--apply` performs
 the publication preflight without writing S3.
@@ -633,10 +666,13 @@ only the partner handoff from the already selected deployment contract.
    CUDA Worker image is a preparation producer.
 4. Define the source-free `dogeos-proof-release-v1` contract and reject mixed
    producer, publisher, compiler, Worker, and program-bundle revisions.
-5. Make `export-signer-policy` resolve real verifier material from the selected
+5. Make DeploymentSpec/doge-config the only artifact-store input; deprecate
+   duplicate `proof-aws-init --bucket/--key-prefix` flags and add source
+   provenance to the generated proof-AWS receipt.
+6. Make `export-signer-policy` resolve real verifier material from the selected
    deployment contract instead of the default receipt.
-6. Make signer-policy output transactional.
-7. Add semantic managed-block digests and enforce them in
+7. Make signer-policy output transactional.
+8. Add semantic managed-block digests and enforce them in
    `proof-config-check`.
 
 ### Phase 1: receipt-backed policy configuration
@@ -690,6 +726,11 @@ only the partner handoff from the already selected deployment contract.
 - Verify `proof-config publish` accepts no replacement release/protocol/topology
   inputs, does nothing without explicit `--apply`, and is safely repeatable for
   the same content-addressed bundle.
+- Verify bucket, artifact region, and key prefix have exactly one desired-state
+  source; the proof-AWS receipt carries source provenance and stale receipts are
+  rejected after canonical configuration changes.
+- Verify deprecated bucket/prefix assertion flags cannot override canonical
+  values and are absent from the final production interface.
 - Verify mock preparation is final without publication and real preparation is
   never reported final before publication/readback succeeds.
 - Inject failure before every staged output is committed and prove the previous
@@ -733,3 +774,6 @@ This design is complete when:
 10. A production operator needs one configuration command for mock and exactly
     two for real: a non-mutating atomic local prepare followed by an explicitly
     reviewed S3 publish/finalize operation.
+11. An operator enters bucket, artifact region, and key-prefix policy exactly
+    once; every proof-AWS, topology, values, Worker, and publication value is
+    derived from that canonical store and checked through receipt provenance.
