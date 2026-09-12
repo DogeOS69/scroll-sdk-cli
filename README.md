@@ -45,6 +45,9 @@ bin/run.js --help
 
 ## Documentation
 
+- [Instance deployment orchestration design](docs/instance-deployment-orchestration-design.md)
+  — audited ownership boundaries, proposed `deploy` commands, resumable state
+  model, cleanup safety, implementation phases, and completion criteria.
 - [Fresh devnet redeployment acceptance](docs/devnet-fresh-redeployment.md) — current operator decision: new independent CubeSigner role/key, new Bridge and fresh L2; preserve all existing policies and Kubernetes resources not deployed by this agent.
 - [L1 Interface beta.4e cold start](docs/l1-interface-beta4e-cold-start.md) — required fresh-instance opt-in, isolated storage and verified Kubernetes rollout.
 - [New Bridge / native Reth devnet runbook](docs/devnet-new-bridge-20260909.md) — verified 2026-09-09 steps, manual edits, release pins and the remaining runtime blocker.
