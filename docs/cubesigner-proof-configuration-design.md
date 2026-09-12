@@ -163,6 +163,57 @@ The file digest is checked before generation and again by
 `proof-config-check`. A configured path without a generated or declared mount
 is invalid.
 
+### P0: No supported producer creates a complete preparation root
+
+`proof-release-prepare` is named like a producer, but it only validates and
+captures an already assembled native `artifact-root`. Before the command can
+run, an operator must currently obtain the five Scroll program/VK files, run
+the dogeos-core three-phase native identity probe, build both materializers,
+and bake the Bridge/Aggregation artifacts against this deployment's
+`protocol_context.json`. There is no single supported dogeos-core command or
+current release image that performs that complete operation.
+
+`setup proof-image-tools` covers only parts of the problem when matching images
+have been published: it can export a compiled Worker identity and materializer
+binaries from Worker/Coordinator images, or use a producer image to derive
+Scroll identity evidence from five caller-supplied public files. The historical
+artifact-baker image is not authority for a newer core revision, and neither
+action produces the deployment-bound Bridge bake and complete real-release
+root. The production CUDA Worker image is validated later and is not a
+preparation-root producer.
+
+Today the reliable fallback therefore requires a clean dogeos-core source
+checkout at the exact approved revision plus its pinned Rust/OpenVM toolchain.
+Environment-specific helper scripts may drive those native commands for a
+Devnet, but they are not a portable production interface and must not be
+treated as release authority.
+
+Close this gap without turning the CLI into a deployment orchestrator:
+
+1. The dogeos-core release pipeline publishes either a digest-pinned CPU
+   preparation-producer image or an immutable release bundle plus a compatible
+   CPU baker image. Its provenance binds the full core revision, toolchain,
+   producer contract, and all software inputs.
+2. Extend the existing `setup proof-image-tools` with a `prepare-real` action
+   rather than adding a workflow command group. Its operator inputs are the
+   approved producer image/release receipt, expected core revision, current
+   protocol context, and a new output directory. A Worker CUDA image, AWS,
+   Kubernetes, and GPU provider are not inputs.
+3. Run the producer offline with no credentials, GPU, host source mount, or
+   network. It emits the conventional complete `artifact-root` and a producer
+   receipt. The CLI verifies file boundaries, hashes, revision, protocol-context
+   binding, identities, and manifest relationships before publishing the local
+   output atomically.
+4. Keep `proof-release-prepare` as the next trust-boundary check and immutable
+   handoff capture. It accepts the generated root or the explicit source-build
+   fallback, but never downloads an unpinned latest bundle or silently mixes
+   files from another release.
+
+Until that producer exists, the production runbook must say plainly that full
+real-proof preparation requires the dogeos-core source checkout. Docker Hub is
+used later for the immutable production Worker image and may supply partial
+tools only when their revision exactly matches the selected release.
+
 ### P0: Attestation Signer export can read a stale proof receipt
 
 `export-signer-policy` resolves the selected proof intent, but its production
@@ -441,10 +492,13 @@ only the partner handoff from the already selected deployment contract.
 1. Add explicit CubeSigner policy mode to DeploymentSpec and doge-config.
 2. Make both values-generation paths derive mode identically; eliminate blank
    production-policy placeholders.
-3. Make `export-signer-policy` resolve real verifier material from the selected
+3. Document and validate the current source-build preparation fallback; never
+   imply that `proof-release-prepare` creates its input or that a production
+   CUDA Worker image is a preparation producer.
+4. Make `export-signer-policy` resolve real verifier material from the selected
    deployment contract instead of the default receipt.
-4. Make signer-policy output transactional.
-5. Add semantic managed-block digests and enforce them in
+5. Make signer-policy output transactional.
+6. Add semantic managed-block digests and enforce them in
    `proof-config-check`.
 
 ### Phase 1: receipt-backed policy configuration
@@ -458,11 +512,13 @@ only the partner handoff from the already selected deployment contract.
 
 ### Phase 2: simplify public proof intent
 
-1. Move derived `realScroll` identities and paths into an internal resolved
+1. Add a receipt-backed, offline `proof-image-tools prepare-real` producer path
+   after dogeos-core publishes its stable producer image/release contract.
+2. Move derived `realScroll` identities and paths into an internal resolved
    type populated from receipts.
-2. Make `prep-charts` publish all proof-managed outputs in one transaction.
-3. Version the expanded proof deployment contract.
-4. Retain backward-compatible receipt import for one release, with warnings and
+3. Make `prep-charts` publish all proof-managed outputs in one transaction.
+4. Version the expanded proof deployment contract.
+5. Retain backward-compatible receipt import for one release, with warnings and
    an explicit migration command/path; do not silently infer missing evidence.
 
 ## Test requirements
@@ -476,6 +532,9 @@ only the partner handoff from the already selected deployment contract.
   missing evidence mounts, and empty production evidence.
 - Verify `export-signer-policy` never consults the default materials receipt
   when the selected contract names another receipt.
+- Verify `prepare-real` accepts only an immutable producer/release whose full
+  core revision matches, binds output to the exact protocol-context digest, and
+  cannot access the network, credentials, host source tree, or GPU.
 - Inject failure before every staged output is committed and prove the previous
   complete generation remains unchanged.
 - Permit unrelated production-values overlays while rejecting modifications to
