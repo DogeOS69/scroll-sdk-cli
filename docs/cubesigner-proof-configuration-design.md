@@ -330,29 +330,121 @@ and `--key-prefix` as equality assertions. Even though the flags are not
 overrides, they make the operator enter the same values twice and make scripts
 look as though two configuration authorities exist.
 
-Use one source of truth:
+The duplication starts earlier than `proof-aws-init`: `setup
+eth-da-submitter` also accepts `--archive-bucket`, `--archive-region`,
+`--archive-key-prefix`, and `--archive-public-base-url`. It writes those values
+to the canonical section and may create the bucket while provisioning a new KMS
+signer role. The proof commands then consume the same store. This makes a
+service-specific signer command appear to own infrastructure that is shared by
+the DA submitter, L1 Interface, Withdrawal Processor, Proof Coordinator,
+materializers, and Workers.
 
-- the operator declares the bucket, artifact region, and key-prefix policy once
-  in DeploymentSpec/doge-config;
-- `proof-aws-init` accepts the config path and AWS/EKS provisioning choices,
-  reads the artifact store from that canonical section, and has no normal
-  `--bucket` or `--key-prefix` inputs;
-- if a separate proof store is supported later, it is a named canonical store
-  declared once in DeploymentSpec and referenced by topology, not a command-line
-  override;
-- `.data/proof-aws.json` may repeat the resolved bucket/region/prefix because it
-  is a generated resource receipt, but it records the source config path,
-  section, source SHA-256, and resolved-store digest. It is never edited as a
-  second desired-state file;
-- `proof-config prepare` validates that the proof-AWS receipt still matches the
-  current canonical store and fails with an instruction to rerun
-  `proof-aws-init` when it has drifted.
+Use one configuration authority with multiple consumers:
 
-Deprecate `--bucket` and `--key-prefix` for one compatibility release. If they
-are supplied, they may only match the canonical values and produce a deprecation
-warning; they must never become overrides. Remove them from the documented
-production interface and then from the command after environment automation has
-migrated.
+```text
+DeploymentSpec / doge-config.toml
+              |
+              +-- eth-da-submitter signer and writer access
+              +-- proof AWS roles, credentials, and public-read access
+              +-- proof topology, publication, and chart projections
+```
+
+#### Canonical operator input and derived values
+
+DeploymentSpec/doge-config is the only desired-state source for the shared
+store. The operator chooses once:
+
+- AWS region and EKS cluster for the environment;
+- the bucket and whether it is CLI-managed or externally managed;
+- the public-read mode: direct S3, an existing public S3 policy, or an existing
+  gateway;
+- a custom gateway endpoint only when the selected mode requires one.
+
+The CLI derives rather than prompts for:
+
+- a deployment-scoped key prefix from the network alias, deployment identity,
+  and protocol-context digest;
+- the standard regional S3 public base URL when no gateway is selected;
+- deterministic IAM role, Secrets Manager secret, and ServiceAccount names.
+
+The resolved prefix remains materialized in
+`ethereumDa.blobArchive.s3.keyPrefix` so all consumers see exactly the same
+value. If it cannot be derived until `protocol_context.json` exists, the early
+configuration records the prefix policy and the post-bridge configuration step
+materializes the resolved prefix atomically. It never asks the operator or an
+environment script to enter that prefix into a second command.
+
+`doge-config` generation itself does not mutate AWS. A managed/existing choice
+is reviewed intent used by the later AWS reconciliation commands. A separate
+proof store, if supported later, must be a named canonical store declared once
+in DeploymentSpec and referenced by topology; it must not be a command-line
+override.
+
+#### Eth DA submitter responsibility
+
+`setup eth-da-submitter` becomes a signer and access-consumer command. It reads
+the canonical store and is responsible only for:
+
+- creating or importing the `L1_COMMIT_SENDER` KMS key;
+- deriving and recording its Ethereum address;
+- creating a new eth-da-submitter IRSA role or validating an imported role;
+- ensuring a CLI-managed archive bucket exists and granting a CLI-created role
+  read/write access to the exact deployment prefix.
+
+It does not choose the bucket, region, prefix, public URL, or proof public-read
+posture. Its normal production interface therefore has no `--archive-*`,
+`--create-archive-bucket`, or `--disable-archive` flags.
+
+For a CLI-created role, the managed S3 policy is scoped to
+`arn:aws:s3:::<bucket>/<key-prefix>/*`, not the entire bucket. For an imported
+`--role-arn`, the CLI does not add, remove, or replace policies. It validates
+the effective KMS and S3 access and emits an actionable least-privilege policy
+document when access is missing.
+
+#### Proof AWS access responsibility
+
+Rename `setup proof-aws-init` to `setup proof-aws-access`. The latter name
+reflects an idempotent reconciliation and validation step rather than a
+one-time initializer. It reads the canonical environment and artifact-store
+configuration and is responsible only for proof-specific AWS state:
+
+- Proof Coordinator and Withdrawal Processor IRSA roles;
+- separate proof-work and prover-worker credentials in Secrets Manager;
+- the selected external artifact-read policy and, when requested, an S3
+  Gateway endpoint;
+- authenticated and public access preflight/readback;
+- a secret-free `.data/proof-aws.json` resource receipt.
+
+It does not choose or create a second bucket, configure the eth-da-submitter
+signer, generate proof materials, install charts, or start Workers. Its normal
+interface accepts a doge-config path, AWS credentials/profile, and an explicit
+apply switch; bucket, artifact region, key prefix, endpoint, and EKS cluster are
+read from canonical environment configuration rather than repeated as flags.
+
+The receipt may repeat the resolved bucket, region, and prefix because they are
+observed resource facts. It must also record the source config path and section,
+source SHA-256, resolved-store digest, generated role and secret ARNs, and
+public-read verification result. It is never edited as a second desired-state
+file. `proof-config prepare` validates that the receipt still matches the
+current canonical store and fails with an instruction to rerun
+`proof-aws-access` when it has drifted.
+
+#### Compatibility migration
+
+For one compatibility release, retain both command names and the existing
+location flags as deprecated assertions:
+
+- `proof-aws-init` is an alias of `proof-aws-access` and prints a rename
+  warning;
+- `proof-aws-init --bucket/--key-prefix` and `eth-da-submitter --archive-*`
+  cannot override canonical values and fail on any mismatch;
+- every deprecated location flag prints a warning and is absent from the
+  production documentation;
+- environment automation migrates to passing only the config path.
+
+Remove the alias and duplicate flags in the following release. The final
+production interface has exactly one store declaration, one AWS resource
+receipt, and no service-specific alternate source of artifact-store identity.
 
 ### P1: Low-level proof fields are editable source intent
 
@@ -493,6 +585,21 @@ than hiding publication inside the offline preparation action.
 The source configuration distinguishes reviewed intent from resolved facts:
 
 ```yaml
+infrastructure:
+  aws:
+    region: us-east-1
+    eksCluster: dogeos-devnet-cluster
+
+ethereumDa:
+  blobArchive:
+    s3:
+      enabled: true
+      bucket: dogeos-dev0829-proof-artifacts
+      region: us-east-1
+      managementMode: existing
+      keyPrefixPolicy: deployment-scoped
+      publicReadMode: direct-s3
+
 signing:
   cubesigner:
     mode: production_verifier_key_policy
@@ -520,6 +627,10 @@ proofPolicy:
 
 Paths are examples. DeploymentSpec and doge-config need one canonical mapping;
 they must not acquire two semantically different representations.
+`keyPrefixPolicy` is reviewed intent; the resolved doge-config additionally
+materializes the deterministic `keyPrefix` and, for standard S3 access, the
+derived `publicBaseUrl`. A custom gateway URL is an operator input only when
+`publicReadMode` selects that gateway.
 
 Receipt references are resolved relative to the deployment root. Every input
 must be a bounded regular non-symlink file, use a known schema, and carry a
@@ -615,9 +726,30 @@ across manual servers, dstack, and future providers.
 
 ## Operator command sequence
 
-After the environment has a protocol context, proof-AWS configuration, and an
-approved immutable proof release, the production-facing real-proof sequence is
-two commands:
+The shared artifact store is declared once during normal environment
+configuration. The eth-da-submitter and proof AWS commands consume that state;
+neither accepts a second bucket or prefix:
+
+```bash
+scrollsdk setup doge-config
+
+scrollsdk setup eth-da-submitter \
+  --signer-backend aws-kms
+
+scrollsdk setup proof-aws-access \
+  --doge-config .data/doge-config.toml \
+  --aws-profile <profile> \
+  --apply
+```
+
+The exact placement of `proof-aws-access` relative to bridge initialization
+depends only on prefix resolution. When the prefix includes the protocol-context
+digest, run it after `protocol_context.json` has been generated. Bucket and
+region selection still happens only once in `doge-config`.
+
+After the environment has a protocol context, a matching proof-AWS access
+receipt, and an approved immutable proof release, the production-facing proof
+configuration sequence is two commands:
 
 ```bash
 scrollsdk setup proof-config prepare \
@@ -666,13 +798,20 @@ only the partner handoff from the already selected deployment contract.
    CUDA Worker image is a preparation producer.
 4. Define the source-free `dogeos-proof-release-v1` contract and reject mixed
    producer, publisher, compiler, Worker, and program-bundle revisions.
-5. Make DeploymentSpec/doge-config the only artifact-store input; deprecate
-   duplicate `proof-aws-init --bucket/--key-prefix` flags and add source
-   provenance to the generated proof-AWS receipt.
-6. Make `export-signer-policy` resolve real verifier material from the selected
+5. Make DeploymentSpec/doge-config the only artifact-store input and derive the
+   deployment prefix and standard public URL there.
+6. Change `eth-da-submitter` into a canonical-store consumer; scope newly
+   created role access to the resolved prefix and validate rather than mutate
+   imported roles.
+7. Introduce `proof-aws-access` as the idempotent proof-resource interface;
+   retain `proof-aws-init` and all duplicate location flags for one deprecated
+   compatibility release only.
+8. Add canonical-config provenance, generated resource identities, and access
+   readback status to the proof-AWS receipt.
+9. Make `export-signer-policy` resolve real verifier material from the selected
    deployment contract instead of the default receipt.
-7. Make signer-policy output transactional.
-8. Add semantic managed-block digests and enforce them in
+10. Make signer-policy output transactional.
+11. Add semantic managed-block digests and enforce them in
    `proof-config-check`.
 
 ### Phase 1: receipt-backed policy configuration
@@ -729,8 +868,16 @@ only the partner handoff from the already selected deployment contract.
 - Verify bucket, artifact region, and key prefix have exactly one desired-state
   source; the proof-AWS receipt carries source provenance and stale receipts are
   rejected after canonical configuration changes.
-- Verify deprecated bucket/prefix assertion flags cannot override canonical
-  values and are absent from the final production interface.
+- Verify the deployment-scoped key prefix and standard regional S3 URL are
+  deterministic and identical in every generated service configuration.
+- Verify a CLI-created eth-da-submitter role is scoped to the canonical key
+  prefix, while an imported role is never modified and missing effective
+  permissions produce an actionable validation failure.
+- Verify `proof-aws-access` is idempotent, never creates a second artifact
+  store, and never configures the eth-da-submitter signer.
+- Verify deprecated proof bucket/prefix and eth-da-submitter archive flags
+  cannot override canonical values and are absent from the final production
+  interface.
 - Verify mock preparation is final without publication and real preparation is
   never reported final before publication/readback succeeds.
 - Inject failure before every staged output is committed and prove the previous
@@ -777,3 +924,8 @@ This design is complete when:
 11. An operator enters bucket, artifact region, and key-prefix policy exactly
     once; every proof-AWS, topology, values, Worker, and publication value is
     derived from that canonical store and checked through receipt provenance.
+12. `eth-da-submitter` and `proof-aws-access` consume the same canonical store,
+    apply only their own least-privilege access responsibilities, and never
+    expose competing bucket, region, prefix, or public-endpoint configuration.
+13. Existing IAM roles are validation-only inputs: configuration generation
+    never silently adds, removes, or replaces their policies.
