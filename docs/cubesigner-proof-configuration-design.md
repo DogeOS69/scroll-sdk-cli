@@ -214,6 +214,72 @@ real-proof preparation requires the dogeos-core source checkout. Docker Hub is
 used later for the immutable production Worker image and may supply partial
 tools only when their revision exactly matches the selected release.
 
+The source checkout is a temporary compatibility fallback, not an acceptable
+end-state dependency. Release compilation belongs in dogeos-core CI. An
+operator workstation must never need Rust, OpenVM, Cargo caches, circuit source,
+or a local dogeos-core repository merely to configure a DogeOS instance.
+
+### P0: Program publication still reads its contract from source
+
+`setup proof-bundle-publish` currently requires `--core-dir` so it can read the
+authoritative 11-file mapping and invoke
+`tools/real-proving/publish-real-proving-bundle.sh` from a clean checkout. This
+is another production source dependency even after the preparation root has
+already been captured.
+
+Move the publication contract into the immutable proof release:
+
+- the release manifest carries the versioned file mapping, publisher contract
+  version, publisher image digest, and full core revision;
+- the digest-pinned publisher image contains the implementation and no mutable
+  release inputs;
+- `proof-bundle-publish` consumes the validated release/materials receipt and
+  invokes that image with only the staged 11 files, selected S3 destination,
+  and temporary AWS credentials;
+- the command verifies that the publisher image, file mapping, preparation
+  receipt, topology bundle, and production Worker all identify the same release;
+- `--core-dir` is removed from the normal production interface. A source-based
+  compatibility flag may exist only during a bounded migration and must be
+  reported as legacy mode.
+
+### Required dogeos-core proof release contract
+
+The dogeos-core release pipeline should publish one signed or digest-pinned
+`dogeos-proof-release-v1.json` as the operator entry point. It names immutable
+OCI references rather than asking an operator to correlate tags:
+
+```text
+dogeos-proof-release-v1.json
+  core revision and source repository
+  Rust/OpenVM/Scroll toolchain identities
+  generic Scroll program/VK bundle digest
+  CPU preparation-producer image digest
+  S3 publisher image digest and 11-file mapping version
+  proof-topology compiler image digest
+  mock Worker image digest
+  Proof Coordinator/materializer image digest
+  supported CUDA Worker build identity inputs
+  CubeSigner policy build artifact/receipt when released together
+```
+
+The generic program bundle may be an OCI artifact, a read-only release object,
+or content-addressed files in a release bucket; its transport is not important.
+The manifest digest and per-file hashes are authoritative. Mutable tags and a
+GitHub Actions retention-limited artifact alone are insufficient.
+
+With that contract, the operator-facing preparation input is only:
+
+```text
+approved proof-release manifest reference/digest
+current protocol_context.json
+new local output directory
+```
+
+`scrollsdk` resolves the immutable producer, runs it in a networkless read-only
+container, validates the generated instance-bound bake, and later uses the
+receipt-pinned publisher image for S3 publication. No proof configuration
+command requires a dogeos-core source checkout.
+
 ### P0: Attestation Signer export can read a stale proof receipt
 
 `export-signer-policy` resolves the selected proof intent, but its production
@@ -495,10 +561,12 @@ only the partner handoff from the already selected deployment contract.
 3. Document and validate the current source-build preparation fallback; never
    imply that `proof-release-prepare` creates its input or that a production
    CUDA Worker image is a preparation producer.
-4. Make `export-signer-policy` resolve real verifier material from the selected
+4. Define the source-free `dogeos-proof-release-v1` contract and reject mixed
+   producer, publisher, compiler, Worker, and program-bundle revisions.
+5. Make `export-signer-policy` resolve real verifier material from the selected
    deployment contract instead of the default receipt.
-5. Make signer-policy output transactional.
-6. Add semantic managed-block digests and enforce them in
+6. Make signer-policy output transactional.
+7. Add semantic managed-block digests and enforce them in
    `proof-config-check`.
 
 ### Phase 1: receipt-backed policy configuration
@@ -514,11 +582,13 @@ only the partner handoff from the already selected deployment contract.
 
 1. Add a receipt-backed, offline `proof-image-tools prepare-real` producer path
    after dogeos-core publishes its stable producer image/release contract.
-2. Move derived `realScroll` identities and paths into an internal resolved
+2. Change `proof-bundle-publish` to use the receipt-pinned publisher image and
+   release file mapping; remove `--core-dir` from the production path.
+3. Move derived `realScroll` identities and paths into an internal resolved
    type populated from receipts.
-3. Make `prep-charts` publish all proof-managed outputs in one transaction.
-4. Version the expanded proof deployment contract.
-5. Retain backward-compatible receipt import for one release, with warnings and
+4. Make `prep-charts` publish all proof-managed outputs in one transaction.
+5. Version the expanded proof deployment contract.
+6. Retain backward-compatible receipt import for one release, with warnings and
    an explicit migration command/path; do not silently infer missing evidence.
 
 ## Test requirements
@@ -535,6 +605,9 @@ only the partner handoff from the already selected deployment contract.
 - Verify `prepare-real` accepts only an immutable producer/release whose full
   core revision matches, binds output to the exact protocol-context digest, and
   cannot access the network, credentials, host source tree, or GPU.
+- Verify publication uses only the receipt-pinned publisher image and versioned
+  11-file mapping, with no dogeos-core checkout or implicit current-directory
+  source lookup.
 - Inject failure before every staged output is committed and prove the previous
   complete generation remains unchanged.
 - Permit unrelated production-values overlays while rejecting modifications to
@@ -570,3 +643,6 @@ This design is complete when:
    infrastructure.
 8. No general deployment automation is added to `scroll-sdk-cli`; environment
    repositories remain free to automate the atomic setup commands for testing.
+9. The normal proof configuration and publication path needs no dogeos-core
+   source checkout or local Rust/OpenVM toolchain; all executable tooling and
+   generic materials come from one validated immutable proof release contract.
