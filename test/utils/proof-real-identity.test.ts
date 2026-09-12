@@ -157,6 +157,22 @@ describe('real bake worker identity import', () => {
     expect(() => readProofMaterials(prepared.receiptPath, root)).to.throw('content drift')
   })
 
+  it('uses a versioned proof material directory as the topology resource root', () => {
+    const input = fixture(root)
+    const prepared = prepareProofMaterials({
+      ...input.options,
+      outputReceipt: path.join(root, '.data/proof-materials-release-a.json'),
+      outputRoot: path.join(root, '.data/proof-materials/release-a'),
+    })
+    const receipt = readProofMaterials(prepared.receiptPath, root)
+    const selected = topology(receipt)
+
+    expect(selected.active?.realScroll.resourcesRoot)
+      .to.equal('.data/proof-materials/release-a')
+    expect(selected.compiler.identityFilePath)
+      .to.equal('.data/proof-materials/release-a/bridge/worker-identity-bundle.json')
+  })
+
   it('refuses legacy real receipts instead of passing the artifact manifest as an identity bundle', () => {
     const input = fixture(root)
     const prepared = prepareProofMaterials(input.options)

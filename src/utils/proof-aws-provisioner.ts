@@ -87,6 +87,7 @@ export const PUBLIC_ARTIFACT_OBJECT_PATTERNS = [
   'witnesses/*',
   'public-outputs/*',
   'proofs/*',
+  'proof-programs/*',
 ] as const
 
 export function publicArtifactObjectResources(bucket: string, keyPrefix: string): string[] {
@@ -205,12 +206,18 @@ export function proofArtifactS3Endpoint(region: string): string {
   return `https://s3.${normalized}.amazonaws.com`
 }
 
-export function buildProofArtifactStorePolicy(bucket: string, keyPrefix: string): Record<string, any> {
+export function buildProofArtifactStorePolicy(
+  bucket: string,
+  keyPrefix: string,
+  options: {deleteObjects?: boolean} = {},
+): Record<string, any> {
   const prefix = normalizeProofKeyPrefix(keyPrefix)
+  const objectActions = ['s3:GetObject', 's3:PutObject']
+  if (options.deleteObjects) objectActions.push('s3:DeleteObject')
   return {
     Statement: [
       {
-        Action: ['s3:GetObject', 's3:PutObject'],
+        Action: objectActions,
         Effect: 'Allow',
         Resource: `arn:aws:s3:::${bucket}/${prefix}/*`,
       },
@@ -633,8 +640,8 @@ export class ProofAwsProvisioner {
       ...(vpcEndpoint ? {vpcEndpoint} : {}),
     }
     const trust = this.discoverIrsaTrust(identity)
-    const withdrawalRoleArn = this.ensureIrsaRole(identity, trust, input.withdrawalRole, bucket, keyPrefix)
-    const coordinatorRoleArn = this.ensureIrsaRole(identity, trust, input.coordinatorRole, bucket, keyPrefix)
+    const withdrawalRoleArn = this.ensureIrsaRole(identity, trust, input.withdrawalRole, bucket, keyPrefix, false)
+    const coordinatorRoleArn = this.ensureIrsaRole(identity, trust, input.coordinatorRole, bucket, keyPrefix, true)
     const secretAction = this.ensureTokenSecret(identity.awsRegion, input.secretName, input.rotateTokens === true)
 
     return {
@@ -753,7 +760,8 @@ export class ProofAwsProvisioner {
     trust: { accountId: string; issuerHostPath: string },
     plan: ProofAwsRolePlan,
     bucket: string,
-    keyPrefix: string
+    keyPrefix: string,
+    deleteObjects: boolean,
   ): string {
     const roleArn = `arn:aws:iam::${trust.accountId}:role/${plan.roleName}`
     const trustPolicyDocument = JSON.stringify({
@@ -795,8 +803,10 @@ export class ProofAwsProvisioner {
     }
 
     // GetObject + PutObject cover artifact transport and staging->accepted
-    // promotion (CopyObject authorizes as a read plus a write); ListBucket
-    // covers scans, restricted to the deployment's normalized object prefix.
+    // promotion (CopyObject authorizes as a read plus a write). DeleteObject is
+    // required to retire stale locator objects after a proof identity global
+    // regeneration. ListBucket covers scans, restricted to the deployment's
+    // normalized object prefix.
     this.aws.json([
       'iam',
       'put-role-policy',
@@ -805,7 +815,7 @@ export class ProofAwsProvisioner {
       '--policy-name',
       'proof-artifact-store',
       '--policy-document',
-      JSON.stringify(buildProofArtifactStorePolicy(bucket, keyPrefix)),
+      JSON.stringify(buildProofArtifactStorePolicy(bucket, keyPrefix, {deleteObjects})),
     ])
     this.jsonCtx.info(`proof-aws: updated IAM proof artifact policy: ${plan.roleName} -> ${bucket}/${keyPrefix}/*`)
     return roleArn

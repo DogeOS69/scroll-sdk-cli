@@ -128,8 +128,11 @@ EKS-region gateway endpoint when the shared artifact bucket is cross-region.
 To let the CLI create a missing bucket, use
 `--create-archive-bucket` (the default) instead. The CLI performs
 `HeadBucket`, creates only on a not-found result, blocks all public access, and
-enables SSE-S3. It grants `s3:GetObject` and `s3:PutObject` on
-`arn:aws:s3:::<bucket>/*` when it creates or manages the submitter IAM role.
+enables SSE-S3. It grants `s3:GetObject` and `s3:PutObject` on the
+deployment-scoped object prefix when it creates or manages a proof service IAM
+role. The Proof Coordinator role additionally receives `s3:DeleteObject` on
+that prefix so it can retire stale locator objects after an operator-requested
+global proof identity regeneration; the Withdrawal Processor role does not.
 When an existing role ARN is supplied or reused, treat the role as
 operator-managed and verify its S3 permissions independently.
 

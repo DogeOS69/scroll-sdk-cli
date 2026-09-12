@@ -82,6 +82,13 @@ or remove active HTTP checks to make an idle deployment appear functional.
 TypeScript. It treats the Rust/OpenVM outputs as inputs and lets the dogeos-core
 compiler perform final validation.
 
+For repeatable real releases, it additionally captures the complete native
+handoff, checks the production CUDA image's compiled labels, and safely invokes
+the matching dogeos-core 11-file publisher. See the
+[real-proof release handoff workflow](proof-release-workflow.md). GPU rental,
+dstack startup, proof execution, and enforcement activation remain explicit
+operator actions.
+
 ## 3. Files in a deployment
 
 ```text
@@ -432,5 +439,24 @@ partner Signers or prove their network reachability.
   written; rerun `proof-materials` to create a new receipt after any change.
 - A software/OpenVM/circuit or deployment genesis change requires regenerated
   identities and a new Bridge bake. A normal mock/real switch does not.
+- Any topology recompile that changes the compiled Worker identity-bundle
+  revision changes proof identity. Do not preserve successful rows from the
+  previous identity. Stop every Proof Coordinator and Worker, wait until no
+  proof-work lease is live, and perform the Withdrawal Processor's one-shot
+  global regeneration before resuming proof execution:
+
+  ```toml
+  [proof_execution.regenerate]
+  created_before_ms = <current epoch milliseconds when the operation is written>
+  scope = "global"
+  ```
+
+  Roll Withdrawal Processor once and require its startup log to report the
+  completed reset and control-plane-store rotation. Remove the block
+  immediately, roll Withdrawal Processor again, then restart Proof Coordinator
+  and Workers. Never leave this block in durable production values. Global
+  regeneration supersedes all matching proof rows, including successful rows,
+  and discards accepted remote receipts; it does not delete the derived
+  artifact store or alter an already-built WF transaction.
 - Feynman/Tsuki activation is determined by canonical protocol context, not by
   these deployment switches.
