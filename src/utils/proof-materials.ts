@@ -349,14 +349,14 @@ function assertDirectory(filePath: string, label: string): void {
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`${label} must be a non-symlink directory: ${filePath}`)
 }
 
-function parseProducerArtifact(value: unknown, label: string): ProducerArtifact {
+function parseProducerArtifact(value: unknown, label: string, root = process.cwd()): ProducerArtifact {
   const object = mapping(value, label)
   const artifact = {
     path: requiredString(object.path, `${label}.path`),
     sha256: normalizeSha256(object.sha256, `${label}.sha256`),
     size_bytes: requiredInteger(object.size_bytes, `${label}.size_bytes`),
   }
-  const resolved = path.resolve(artifact.path)
+  const resolved = path.resolve(root, artifact.path)
   assertRegularFile(resolved, label)
   const actualSha = sha256File(resolved)
   const actualSize = fs.statSync(resolved).size
@@ -367,16 +367,18 @@ function parseProducerArtifact(value: unknown, label: string): ProducerArtifact 
 
 function readProducerManifest(filePath: string): ProducerManifest {
   const root = mapping(readJson(filePath, 'dogeos-core real-proving artifact manifest'), 'producer manifest')
+  if (root.schema !== undefined && root.schema !== 'dogeos/real-proving-artifacts/v2') throw new Error('Unsupported producer manifest schema')
+  const artifactRoot = root.schema === 'dogeos/real-proving-artifacts/v2' ? path.dirname(path.resolve(filePath)) : process.cwd()
   const artifacts = mapping(root.artifacts, 'producer manifest.artifacts')
   const producer = mapping(root.producer, 'producer manifest.producer')
   const toolchain = mapping(root.toolchain, 'producer manifest.toolchain')
   return {
     artifacts: {
-      batch_openvm_toml: parseProducerArtifact(artifacts.batch_openvm_toml, 'producer manifest.artifacts.batch_openvm_toml'),
-      batch_vmexe: parseProducerArtifact(artifacts.batch_vmexe, 'producer manifest.artifacts.batch_vmexe'),
-      chunk_openvm_toml: parseProducerArtifact(artifacts.chunk_openvm_toml, 'producer manifest.artifacts.chunk_openvm_toml'),
-      chunk_vmexe: parseProducerArtifact(artifacts.chunk_vmexe, 'producer manifest.artifacts.chunk_vmexe'),
-      root_agg_verifying_key: parseProducerArtifact(artifacts.root_agg_verifying_key, 'producer manifest.artifacts.root_agg_verifying_key'),
+      batch_openvm_toml: parseProducerArtifact(artifacts.batch_openvm_toml, 'producer manifest.artifacts.batch_openvm_toml', artifactRoot),
+      batch_vmexe: parseProducerArtifact(artifacts.batch_vmexe, 'producer manifest.artifacts.batch_vmexe', artifactRoot),
+      chunk_openvm_toml: parseProducerArtifact(artifacts.chunk_openvm_toml, 'producer manifest.artifacts.chunk_openvm_toml', artifactRoot),
+      chunk_vmexe: parseProducerArtifact(artifacts.chunk_vmexe, 'producer manifest.artifacts.chunk_vmexe', artifactRoot),
+      root_agg_verifying_key: parseProducerArtifact(artifacts.root_agg_verifying_key, 'producer manifest.artifacts.root_agg_verifying_key', artifactRoot),
     },
     dogeos_core_commit: requiredString(root.dogeos_core_commit, 'producer manifest.dogeos_core_commit'),
     producer: {commit: requiredString(producer.commit, 'producer manifest.producer.commit')},
@@ -690,7 +692,9 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
   const mockWorkerIdentity = workerIdentityPath === undefined
     ? extractMockWorkerIdentity(options.images.mockWorker)
     : fs.readFileSync(path.resolve(workerIdentityPath), 'utf8')
-  validateMockWorkerIdentity(mockWorkerIdentity, 'Worker identity bundle')
+  // An explicitly selected real bake includes bridge_guest. Validate it against
+  // the native Bridge manifest below once the probe identities are available.
+  if (options.generation !== 'real' || !options.workerIdentityBundle) validateMockWorkerIdentity(mockWorkerIdentity, 'Worker identity bundle')
 
   const refreshed = refreshExistingProofMaterialImages(
     options,
@@ -836,6 +840,7 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
       const workerIdentityPath = path.join(bridgeRoot, 'worker-identity-bundle.json')
       assertRegularFile(workerIdentityPath, 'Real bake worker-identity-bundle.json')
       validateRealWorkerIdentity(fs.readFileSync(workerIdentityPath, 'utf8'), env, native)
+      if (options.workerIdentityBundle) validateRealWorkerIdentity(mockWorkerIdentity, env, native)
       if (native.verification_key_hash !== receipt.software.identities.l2Range.verificationKeyHash) {
         throw new Error('Bridge verification key does not match the shared L2-range recursive verification key')
       }

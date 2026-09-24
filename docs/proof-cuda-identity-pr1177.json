@@ -1,0 +1,26 @@
+{
+  "binarySha256": "5f16b546f49068106442801d7fc54725e1d0b546457327541be845d0e6454079",
+  "capturedAt": "2026-09-21T04:57:02.481661+00:00",
+  "gpu": "NVIDIA GeForce RTX 3060, 8.6, 595.97",
+  "identity": {
+    "batch_aggregation_guest": {
+      "app_commit_raw": "0x004f6b1942ec005210c0cf6d83350b789ac5c78c3e700b1dffe85169a4776d110050c7d02bc389a6d63e8d4ecb86f5e76094e6900b98a7a37b38818e1817f230",
+      "app_exe_commit": "004f6b1942ec005210c0cf6d83350b789ac5c78c3e700b1dffe85169a4776d11",
+      "app_vm_commit": "0050c7d02bc389a6d63e8d4ecb86f5e76094e6900b98a7a37b38818e1817f230",
+      "embedded_inner_batch_app_commit_raw": "0x00947c849d07c8bcd58c8bde0e6af78ab8f5eab168ed17182e3880710295b8e40079ac1aec0913f8c3b41e9d8781021f32370951dd362adf3f1824f590233cb3",
+      "program_commitment_hash": "0xf9c6049ec0e8c7ae983aa5223958da3f1e330530d9f29494bd7eddb841b1d761"
+    },
+    "batch_guest": {
+      "app_commit_raw": "0x00947c849d07c8bcd58c8bde0e6af78ab8f5eab168ed17182e3880710295b8e40079ac1aec0913f8c3b41e9d8781021f32370951dd362adf3f1824f590233cb3",
+      "app_exe_commit": "00947c849d07c8bcd58c8bde0e6af78ab8f5eab168ed17182e3880710295b8e4",
+      "app_vm_commit": "0079ac1aec0913f8c3b41e9d8781021f32370951dd362adf3f1824f590233cb3"
+    },
+    "guest_openvm_toml_sha256": "0x5690cf6bae7da45d16bc8de66bf0d1931da737832d0b1e2400e9f6a8ceb9778d",
+    "image_revision": "6700d4baca0830bb5ac26bfee5a17c53aa725c42",
+    "openvm_version": "1.7",
+    "root_verifier_asm_sha256": "0xf3625cabea5bd59142fccc78a6fa90667dae3f799b12292efe010e1f0dee7d33"
+  },
+  "image": "dogeos69/prover-worker-cuda@sha256:b09760d1b1a6d619e9c18a66222839fded397ec52f8b0ea8a48ff1de5a7837c3",
+  "result": "passed",
+  "schema": "dogeos/cuda-worker-identity/v1"
+}

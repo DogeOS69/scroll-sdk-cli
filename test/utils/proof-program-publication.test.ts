@@ -4,11 +4,16 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import type {DogeConfig} from '../../src/types/doge-config.js'
+
+import {writeProofDeploymentContract} from '../../src/utils/proof-deployment-contract.js'
 import {
   planProofProgramPublication,
   publishProofProgramBundle,
 } from '../../src/utils/proof-program-publication.js'
 import {rebindProofTopologyBundleRevision} from '../../src/utils/proof-topology-compiler.js'
+import {writeSignerPolicyHandoff} from '../../src/utils/signer-policy-handoff.js'
+import {releaseFixture} from '../helpers/proof-software-release.js'
 
 const coreRevision = 'a'.repeat(40)
 const imageDigest = `sha256:${'b'.repeat(64)}`
@@ -221,6 +226,71 @@ describe('real-proof program bundle publication', () => {
     expect(publisherInvocation!.args).not.to.include('--emit-env')
     expect(publisherInvocation!.env?.AWS_PROFILE).to.equal('devnet')
     expect(publisherInvocation!.env).not.to.have.property('DOGEOS_PROVER_WORKER_TOKEN')
+  })
+
+  it('publishes from the pinned image with only temporary AWS credentials and no core checkout', async () => {
+    const release = releaseFixture(coreRevision)
+    const materials = JSON.parse(fs.readFileSync(path.join(root, '.data/proof-materials-v1.json'), 'utf8'))
+    for (const name of ['mockWorker', 'productionWorker', 'topologyCompiler'] as const) {
+      release.images[name].reference = `${materials.images[name].repository}@${materials.images[name].digest}`
+    }
+
+    const names: Record<string, string> = {'batch/app.vmexe': 'batchAppExe', 'batch/openvm.toml': 'batchAppConfig', 'chunk/app.vmexe': 'chunkAppExe', 'chunk/openvm.toml': 'chunkAppConfig', 'verifier/aggregate-vk': 'aggregateVerifyingKey'}
+    for (const [file, key] of Object.entries(names)) {
+      Object.assign(release.genericBundle.files[file], {sha256: materials.software.artifacts[key].sha256, sizeBytes: materials.software.artifacts[key].sizeBytes})
+    }
+
+    const body = JSON.stringify(release)
+    fs.writeFileSync(path.join(root, 'release.json'), body)
+    let invocation: {args: string[]; env?: NodeJS.ProcessEnv} | undefined
+    const result = await publishProofProgramBundle({
+      ...common(), anonymousRead: async url => published.get(url)!, coreDir: undefined, output: '.data/publication.json',
+      release: 'release.json', releaseSha256: digest(body),
+      run(command, args, options) {
+        expect(command).not.to.equal('git')
+        if (command === 'aws') return JSON.stringify({AccessKeyId: 'temporary-id', Expiration: new Date(Date.now() + 600_000).toISOString(), SecretAccessKey: 'temporary-secret', SessionToken: 'temporary-session'})
+        if (args[0] === 'pull') return ''
+        if (args[0] === 'image') return args.at(-1)!.includes('proof-bundle.mapping') ? 'v1-11-files' : coreRevision
+        invocation = {args, env: options?.env}
+        const mount = args[args.indexOf('--mount') + 1]
+        const staged = mount.slice('type=bind,src='.length).split(',dst=')[0]
+        const scriptArgs = args.slice(args.indexOf('--bundle-dir'))
+        scriptArgs[1] = staged
+        return run('publisher', scriptArgs, options)
+      },
+    })
+    expect(invocation!.args.filter(x => x === '--mount')).to.have.length(1)
+    expect(invocation!.args).to.include('--read-only')
+    expect(invocation!.args.join(' ')).not.to.include('temporary-secret')
+    expect(invocation!.env?.AWS_SESSION_TOKEN).to.equal('temporary-session')
+    expect(result.receipt.publisherImage).to.equal(release.images.publisher.reference)
+    expect(result.receipt.releaseSha256).to.equal(digest(body))
+    expect(JSON.stringify(result.receipt)).not.to.include('temporary-secret')
+  })
+
+  it('exports only the contract-selected receipt and keeps completed signer bundles intact on failure', () => {
+    const receiptPath = path.join(root, '.data/selected-materials.json')
+    const materials = JSON.parse(fs.readFileSync(path.join(root, '.data/proof-materials-v1.json'), 'utf8'))
+    const context = JSON.stringify({genesis: {genesis_bridge_key_hash: '0x' + '1'.repeat(40)}})
+    fs.writeFileSync(path.join(root, '.data/protocol_context.json'), context)
+    materials.bridge.protocolContextSha256 = digest(context)
+    fs.writeFileSync(receiptPath, JSON.stringify(materials))
+    fs.writeFileSync(path.join(root, '.data/proof-materials-v1.json'), '{"stale_default":true}')
+    const values = path.join(root, 'values.yaml')
+    fs.writeFileSync(values, 'env: []\n')
+    const component = {enabled: true, valuesFile: values}
+    const topology = path.join(root, '.data/generated/proof-topology')
+    writeProofDeploymentContract({deploymentDir: root, enforcement: 'observe', ethDaSubmitter: component, generation: 'real', intentSource: {kind: 'doge-config', path: path.join(root, 'config.toml'), sha256: 'c'.repeat(64)}, materialsReceipt: receiptPath, mode: 'active', proofArtifactBaseUrl: 'https://s3.us-east-1.amazonaws.com/dogeos-proof-artifacts/devnet/instance', proofCoordinator: component, proverWorker: {...component, enabled: false}, topology: {bundleDir: topology, bundleManifest: path.join(topology, 'bundle-manifest-v1.json'), bundleRevision: 'd'.repeat(64), resolvedSidecar: path.join(topology, 'resolved-v2.json')}, tsoValuesFile: values, withdrawalProcessor: component, worker: {contractFile: path.join(topology, 'prover-worker-v1.json'), kind: 'compiled-external'}})
+    const config = {attestationSigner: {activeSignerIds: ['partner'], external: [{endpoint: 'https://partner.example.com', id: 'partner', publicKey: '02' + '2'.repeat(64)}], mode: 'external'}, network: 'testnet'} as DogeConfig
+    const options = {config, deploymentDir: root, output: 'signer-bundle', protocolContext: '.data/protocol_context.json', tsoUrl: 'https://tso.example.com'}
+    const result = writeSignerPolicyHandoff(options)
+    expect(result.advanceL2Verifier?.batchProgramCommitmentHex).to.equal(materials.software.identities.batch.appCommitRaw)
+    const manifest = fs.readFileSync(path.join(result.bundleDir, 'signer-policy-manifest.json'), 'utf8')
+    expect(() => writeSignerPolicyHandoff(options)).to.throw('already exists')
+    expect(fs.readFileSync(path.join(result.bundleDir, 'signer-policy-manifest.json'), 'utf8')).to.equal(manifest)
+    fs.appendFileSync(receiptPath, ' ')
+    expect(() => writeSignerPolicyHandoff({...options, output: 'failed-bundle'})).to.throw('checksum mismatch')
+    expect(fs.existsSync(path.join(root, 'failed-bundle'))).to.equal(false)
   })
 
   it('does not write a receipt when anonymous readback differs', async () => {

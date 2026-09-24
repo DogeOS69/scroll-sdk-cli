@@ -14,6 +14,7 @@ import {
   PROVER_WORKER_EXECUTABLE,
   writeCompiledProverWorkerBundle,
 } from './compiled-prover-worker-bundle.js'
+import {readStagedSignerProofArtifactBaseUrl} from './proof-signer-policy-input.js'
 import {
   type CompileProofTopologyOptions,
   type ProofTopologyBridgeContext,
@@ -1030,7 +1031,10 @@ export function reconcileCompiledProofTopology(
       ...generatedMaterialFiles,
       ...(workerBundle?.files || []),
     ],
-    proofArtifactBaseUrl: argumentValue(bundle.worker, '--artifact-read-base-url'),
+    proofArtifactBaseUrl: mode === 'active'
+      ? readStagedSignerProofArtifactBaseUrl(fs.readFileSync(options.withdrawalConfigPath, 'utf8'))
+        ?? argumentValue(bundle.worker, '--artifact-read-base-url')
+      : undefined,
     worker: bundle.worker,
     workerBundle,
   }

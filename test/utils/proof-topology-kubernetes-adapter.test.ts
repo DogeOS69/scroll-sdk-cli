@@ -199,7 +199,11 @@ describe('self-contained proof topology Kubernetes adapter', () => {
 
   it('keeps real materialization self-contained without deploying a mock Worker', () => {
     const result = reconcileCompiledProofTopology({
-      compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active'),
+      compile() {
+        const bundle = fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active')
+        fs.appendFileSync(path.join(bundle.bundleDir, 'withdrawal-processor.toml'), 'signer_proof_artifact_base_url = "https://proofs.example.com/bucket/prefix"\n')
+        return bundle
+      },
       coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
       deploymentDir: root,
       deploymentName: 'test',
@@ -210,6 +214,7 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     })
 
     expect(result).not.to.have.property('helmSetFiles')
+    expect(result.proofArtifactBaseUrl).to.equal('https://proofs.example.com/bucket/prefix')
     const withdrawal = yaml.load(fs.readFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), 'utf8')) as any
     expect(withdrawal.configMaps.config.data['WithdrawalProcessor.toml']).to.include('mode = "active"')
     expect(withdrawal.secrets?.['proof-runtime-seed']).to.equal(undefined)

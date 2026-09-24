@@ -128,6 +128,7 @@ USAGE
 * [`scrollsdk setup cubesigner-init`](#scrollsdk-setup-cubesigner-init)
 * [`scrollsdk setup cubesigner-refresh`](#scrollsdk-setup-cubesigner-refresh)
 * [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
+* [`scrollsdk setup dstack-config`](#scrollsdk-setup-dstack-config)
 * [`scrollsdk setup disable-internal`](#scrollsdk-setup-disable-internal)
 * [`scrollsdk setup doge-config`](#scrollsdk-setup-doge-config)
 * [`scrollsdk setup dogecoin-wallet-import`](#scrollsdk-setup-dogecoin-wallet-import)
@@ -952,23 +953,26 @@ _See code: [src/commands/setup/cubesigner-refresh.ts](https://github.com/dogeos6
 
 ## `scrollsdk setup db-init`
 
-Initialize databases with new users and passwords interactively or update permissions
+Initialize Blockscout and dstack PostgreSQL databases, or update their permissions
 
 ```
 USAGE
   $ scrollsdk setup db-init [-c] [-d] [--json] [-N] [-u] [--update-port <value>]
+    [--databases blockscout|dstack] [--doge-config <value>]
 
 FLAGS
   -N, --non-interactive      Run without prompts, using config.toml values. Requires [db.admin] section with
                              PUBLIC_HOST, PUBLIC_PORT, USERNAME, PASSWORD (or $ENV: refs)
-  -c, --clean                Delete existing database and user before creating new ones
+  -c, --clean                Recreate selected databases and reset their user passwords
   -d, --debug                Show debug output including SQL queries
   -u, --update-permissions   Update permissions for existing users
       --json                 Output in JSON format (stdout for data, stderr for logs)
+      --databases=<option>   Initialize only selected services; repeat to select both
+      --doge-config=<value>  Doge config containing dstackController; defaults to .data/doge-config.toml
       --update-port=<value>  Update the port of current database values
 
 DESCRIPTION
-  Initialize databases with new users and passwords interactively or update permissions
+  Initialize Blockscout and dstack PostgreSQL databases, or update their permissions
 
 EXAMPLES
   $ scrollsdk setup db-init
@@ -979,9 +983,11 @@ EXAMPLES
 
   $ scrollsdk setup db-init --clean
 
-  $ scrollsdk setup db-init --update-db-port=25061
+  $ scrollsdk setup db-init --update-port=25061
 
   $ scrollsdk setup db-init --non-interactive
+
+  $ scrollsdk setup db-init --databases dstack --non-interactive
 
   $ scrollsdk setup db-init --non-interactive --json --clean
 ```
@@ -1411,21 +1417,79 @@ EXAMPLES
 
 _See code: [src/commands/setup/gen-rpc-package.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-rpc-package.ts)_
 
-## `scrollsdk setup gen-secrets`
+## `scrollsdk setup dstack-config`
 
-Generate local secret files from config.toml, Dogecoin config, and bridge initialization outputs
+```text
+Import Vast.ai/GCP credentials locally and configure dstack controller Secret references
 
-```
 USAGE
-  $ scrollsdk setup gen-secrets [--doge-config <value>] [--json] [-N]
+  $ scrollsdk setup dstack-config [--doge-config <value> | --spec <value>]
+    [--gcp-project-id <value>] [--gcp-service-account <value>] [--json] [-N]
+    [--project <value>] [--provider vastai|gcp...] [--vastai-api-key-file
+    <value>]
 
 FLAGS
-  -N, --non-interactive      Run without prompts. Uses config values or fails fast.
-      --doge-config=<value>  Path to Dogecoin config file (defaults to .data/doge-config.toml)
-      --json                 Output in JSON format (stdout for data, stderr for logs)
+  -N, --non-interactive              Use supplied files and existing state; fail
+                                     on missing credentials
+      --doge-config=<value>          Public TOML configuration to update
+                                     (default .data/doge-config.toml)
+      --gcp-project-id=<value>       GCP project to provision in (default
+                                     service account project_id)
+      --gcp-service-account=<value>  Path to GCP service-account JSON; imported
+                                     into private local state
+      --json                         Output metadata as JSON; never print
+                                     credentials
+      --project=<value>              Dstack project name (default main on first
+                                     import)
+      --provider=<option>...         Exact enabled provider set; repeat for
+                                     multiple providers. Omit to retain existing
+                                     and add supplied providers.
+                                     <options: vastai|gcp>
+      --spec=<value>                 Update an existing DeploymentSpec YAML
+                                     instead of doge-config TOML
+      --vastai-api-key-file=<value>  Path to a file containing only the Vast.ai
+                                     API key; avoids credentials in command
+                                     arguments
 
 DESCRIPTION
-  Generate local secret files from config.toml, Dogecoin config, and bridge initialization outputs
+  Import Vast.ai/GCP credentials locally and configure dstack controller Secret
+  references
+
+EXAMPLES
+  $ scrollsdk setup dstack-config
+
+  $ scrollsdk setup dstack-config --vastai-api-key-file /private/vastai-key --gcp-service-account /private/service-account.json -N
+
+  $ scrollsdk setup dstack-config --spec deployment-spec.yaml --provider vastai --vastai-api-key-file /private/vastai-key -N
+```
+
+_See code: [src/commands/setup/dstack-config.ts](src/commands/setup/dstack-config.ts)_
+
+See [dstack controller credential setup](docs/dstack-controller.md) for the Vast.ai/GCP workflow.
+
+## `scrollsdk setup gen-secrets`
+
+```text
+Generate local secret files from config.toml, Dogecoin config, and bridge initialization outputs
+
+USAGE
+  $ scrollsdk setup gen-secrets [--doge-config <value>] [--json] [-N] [--spec
+    <value> --dstack-only]
+
+FLAGS
+  -N, --non-interactive      Run without prompts. Uses config values or fails
+                             fast.
+      --doge-config=<value>  Path to Dogecoin config file (defaults to
+                             .data/doge-config.toml)
+      --dstack-only          Generate only dstack controller Secrets; no bridge
+                             initialization required
+      --json                 Output in JSON format (stdout for data, stderr for
+                             logs)
+      --spec=<value>         DeploymentSpec YAML for --dstack-only
+
+DESCRIPTION
+  Generate local secret files from config.toml, Dogecoin config, and bridge
+  initialization outputs
 
 EXAMPLES
   $ scrollsdk setup gen-secrets
@@ -1433,9 +1497,13 @@ EXAMPLES
   $ scrollsdk setup gen-secrets --doge-config .data/doge-config.toml
 
   $ scrollsdk setup gen-secrets --non-interactive --json --doge-config .data/doge-config.toml
+
+  $ scrollsdk setup gen-secrets --dstack-only --non-interactive
 ```
 
-_See code: [src/commands/setup/gen-secrets.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-secrets.ts)_
+_See code: [src/commands/setup/gen-secrets.ts](src/commands/setup/gen-secrets.ts)_
+
+See [dstack controller credential setup](docs/dstack-controller.md) for the Vast.ai/GCP workflow.
 
 ## `scrollsdk setup generate-from-spec`
 
@@ -1580,30 +1648,56 @@ _See code: [src/commands/setup/l2-sequencer-reth.ts](https://github.com/dogeos69
 
 ## `scrollsdk setup prep-charts`
 
+```text
 Validate Makefile and prepare Helm charts for Scroll SDK
 
-```
 USAGE
-  $ scrollsdk setup prep-charts [--doge-config <value>] [--github-token <value>] [--github-username <value>] [--json]
-    [-N] [--proof-topology-compiler-binary <value> | --proof-topology-compiler-image <value>] [--skip-auth-check]
-    [--skip-l2-contract-deployment-block] [--spec <value>] [--values-dir <value>]
+  $ scrollsdk setup prep-charts [--doge-config <value>] [--dstack-only]
+    [--github-token <value>] [--github-username <value>] [--json] [-N]
+    [--proof-materials-receipt <value>] [--proof-publication-receipt <value>]
+    [--proof-topology-compiler-binary <value> | --proof-topology-compiler-image
+    <value>] [--skip-auth-check] [--skip-l2-contract-deployment-block] [--spec
+    <value>] [--values-dir <value>]
 
 FLAGS
-  -N, --non-interactive                         Run without prompts. Auto-applies all detected changes.
+  -N, --non-interactive                         Run without prompts.
+                                                Auto-applies all detected
+                                                changes.
       --doge-config=<value>                     Path to Dogecoin config file
+      --dstack-only                             Generate only dstack controller
+                                                production values without chain
+                                                initialization or registry
+                                                checks
       --github-token=<value>                    GitHub Personal Access Token
       --github-username=<value>                 GitHub username
-      --json                                    Output in JSON format (stdout for data, stderr for logs)
-      --proof-topology-compiler-binary=<value>  Development-only local dogeos-proof-topology binary; production uses the
+      --json                                    Output in JSON format (stdout
+                                                for data, stderr for logs)
+      --proof-materials-receipt=<value>         Selected real proof-materials
+                                                receipt to bind into the
+                                                deployment contract
+      --proof-publication-receipt=<value>       Selected program-publication
+                                                receipt to bind into the
+                                                deployment contract
+      --proof-topology-compiler-binary=<value>  Development-only local
+                                                dogeos-proof-topology binary;
+                                                production uses the
                                                 digest-pinned configured image
-      --proof-topology-compiler-image=<value>   Override the digest-pinned proof-topology compiler image
-      --skip-auth-check                         Skip authentication check for individual charts
-      --skip-l2-contract-deployment-block       Do not overwrite L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK in L2 production
-                                                values files
-      --spec=<value>                            Optional DeploymentSpec proof source; conflicts with doge-config
-                                                [proof_topology]
-      --values-dir=<value>                      [default: ./values] Directory containing values files; must be inside
-                                                the deployment root for transactional generation
+      --proof-topology-compiler-image=<value>   Override the digest-pinned
+                                                proof-topology compiler image
+      --skip-auth-check                         Skip authentication check for
+                                                individual charts
+      --skip-l2-contract-deployment-block       Do not overwrite L2GETH_L1_CONTR
+                                                ACT_DEPLOYMENT_BLOCK in L2
+                                                production values files
+      --spec=<value>                            Optional DeploymentSpec for
+                                                proof topology and dstack
+                                                controller values; proof
+                                                topology conflicts with
+                                                doge-config [proof_topology]
+      --values-dir=<value>                      [default: ./values] Directory
+                                                containing values files; must be
+                                                inside the deployment root for
+                                                transactional generation
 
 DESCRIPTION
   Validate Makefile and prepare Helm charts for Scroll SDK
@@ -1612,6 +1706,8 @@ EXAMPLES
   $ scrollsdk setup prep-charts
 
   $ scrollsdk setup prep-charts --spec deployment-spec.yaml
+
+  $ scrollsdk setup prep-charts --dstack-only --non-interactive
 
   $ scrollsdk setup prep-charts --github-username=your-username --github-token=your-token
 
@@ -1622,7 +1718,9 @@ EXAMPLES
   $ scrollsdk setup prep-charts --skip-l2-contract-deployment-block
 ```
 
-_See code: [src/commands/setup/prep-charts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/prep-charts.ts)_
+_See code: [src/commands/setup/prep-charts.ts](src/commands/setup/prep-charts.ts)_
+
+See [dstack controller credential setup](docs/dstack-controller.md) for the Vast.ai/GCP workflow.
 
 ## `scrollsdk setup proof-aws-init`
 
@@ -2015,37 +2113,70 @@ _See code: [src/commands/setup/proof-worker-image-check.ts](https://github.com/d
 
 ## `scrollsdk setup push-secrets`
 
-Push secrets to the selected secret service
+```text
+Upload configured service secrets, including enabled dstack Secrets; does not deploy services or start GPU workers
 
-```
 USAGE
-  $ scrollsdk setup push-secrets [--aws-prefix <value>] [--aws-region <value>] [--aws-service-account <value>] [-c] [-d]
-    [--json] [-N] [--provider aws|vault] [-f <value>] [--skip-yaml-update] [--values-dir <value>] [--values-file
-    <value>] [--vault-path <value>] [--vault-server <value>] [--vault-token-secret-key <value>]
-    [--vault-token-secret-name <value>] [--vault-version <value>]
+  $ scrollsdk setup push-secrets [--aws-prefix <value>] [--aws-region <value>]
+    [--aws-service-account <value>] [-d] [--doge-config <value> | --spec
+    <value>] [--dry-run] [--dstack-only | -c | -f <value>] [--json]
+    [--kube-context <value>] [--namespace <value>] [-N] [--provider
+    aws|vault|kubernetes] [--skip-yaml-update] [--values-dir <value>]
+    [--values-file <value>] [--vault-path <value>] [--vault-server <value>]
+    [--vault-token-secret-key <value>] [--vault-token-secret-name <value>]
+    [--vault-version <value>]
 
 FLAGS
-  -N, --non-interactive                  Run without prompts. Auto-overrides existing secrets.
-  -c, --cubesigner-only                  Only push CubeSigner related secrets (cubesigner-signer-* files)
+  -N, --non-interactive                  Run without prompts. Auto-overrides
+                                         existing secrets.
+  -c, --cubesigner-only                  Only push CubeSigner related secrets
+                                         (cubesigner-signer-* files)
   -d, --debug                            Show debug output
-  -f, --secret-file=<value>              Local secret file to push (supports .env and .json files)
-      --aws-prefix=<value>               [default: dogeos] AWS Secrets Manager path prefix (e.g., dogeos/testnet)
-      --aws-region=<value>               AWS region for secrets (e.g., us-east-1)
-      --aws-service-account=<value>      [default: external-secrets] AWS IAM service account
-      --json                             Output in JSON format (stdout for data, stderr for logs)
-      --provider=<option>                [default: aws] Secret service provider (aws or vault)
-                                         <options: aws|vault>
-      --skip-yaml-update                 Skip updating production YAML files with new secret provider
-      --values-dir=<value>               [default: values] Directory containing the values files
-      --values-file=<value>              Specific Helm values YAML file to update after pushing secrets
+  -f, --secret-file=<value>              Local secret file to push (supports
+                                         .env and .json files)
+      --aws-prefix=<value>               [default: dogeos] AWS Secrets Manager
+                                         path prefix (e.g., dogeos/testnet)
+      --aws-region=<value>               AWS region for secrets (e.g.,
+                                         us-east-1)
+      --aws-service-account=<value>      [default: external-secrets] AWS IAM
+                                         service account
+      --doge-config=<value>              Dstack public TOML configuration
+                                         (default .data/doge-config.toml)
+      --dry-run                          Plan selected Secret uploads and
+                                         validate dstack files locally; no
+                                         remote requests or changes
+      --dstack-only                      Upload only dstack Secrets to
+                                         Kubernetes; omit to include all
+                                         configured services
+      --json                             Output in JSON format (stdout for data,
+                                         stderr for logs)
+      --kube-context=<value>             Explicit Kubernetes context required
+                                         when uploading dstack Secrets
+      --namespace=<value>                Existing Kubernetes namespace required
+                                         when uploading dstack Secrets
+      --provider=<option>                [default: aws] Destination for
+                                         .env/.json secrets (aws or vault);
+                                         kubernetes accepts dstack bundles.
+                                         Dstack always uses Kubernetes.
+                                         <options: aws|vault|kubernetes>
+      --skip-yaml-update                 Skip updating production YAML files
+                                         with new secret provider
+      --spec=<value>                     Dstack DeploymentSpec YAML
+      --values-dir=<value>               [default: values] Directory containing
+                                         the values files
+      --values-file=<value>              Specific Helm values YAML file to
+                                         update after pushing secrets
       --vault-path=<value>               [default: scroll] Vault path prefix
-      --vault-server=<value>             [default: http://vault.default.svc.cluster.local:8200] Vault server URL
+      --vault-server=<value>             [default: http://vault.default.svc.clus
+                                         ter.local:8200] Vault server URL
       --vault-token-secret-key=<value>   [default: token] Vault token secret key
-      --vault-token-secret-name=<value>  [default: vault-token] Vault token secret name
+      --vault-token-secret-name=<value>  [default: vault-token] Vault token
+                                         secret name
       --vault-version=<value>            [default: v2] Vault version
 
 DESCRIPTION
-  Push secrets to the selected secret service
+  Upload configured service secrets, including enabled dstack Secrets; does not
+  deploy services or start GPU workers
 
 EXAMPLES
   $ scrollsdk setup push-secrets
@@ -2059,9 +2190,17 @@ EXAMPLES
   $ scrollsdk setup push-secrets --cubesigner-only
 
   $ scrollsdk setup push-secrets -c --debug
+
+  $ scrollsdk setup push-secrets --provider kubernetes --dstack-only --kube-context isolated-e2e --namespace dstack-system --dry-run -N
+
+  $ scrollsdk setup push-secrets --provider aws --aws-region us-east-1 --kube-context isolated-e2e --namespace dstack-system -N
 ```
 
-_See code: [src/commands/setup/push-secrets.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/push-secrets.ts)_
+_See code: [src/commands/setup/push-secrets.ts](src/commands/setup/push-secrets.ts)_
+
+Without a scope flag, uploads all configured services including enabled dstack. `--dstack-only` uploads only dstack Secrets; it does not deploy the controller or start GPU workers.
+
+See [dstack controller credential setup](docs/dstack-controller.md) for destinations and examples.
 
 ## `scrollsdk setup tls`
 

@@ -18,6 +18,8 @@ export interface ProofProgramPublicationV1 {
   files: Record<string, ProofProgramPublicationFileV1>
   proofTopologyBundleRevision: string
   publishedAt: string
+  publisherImage?: string
+  releaseSha256?: string
   schema: typeof PROOF_PROGRAM_PUBLICATION_SCHEMA
   schemaVersion: 1
   verification: {

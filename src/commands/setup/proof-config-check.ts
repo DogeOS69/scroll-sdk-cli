@@ -9,6 +9,7 @@ import {
   resolveContractFile,
   validateProofDeploymentContract,
 } from '../../utils/proof-deployment-contract.js'
+import {proofEnforcementReadiness} from '../../utils/proof-enforcement-readiness.js'
 import {resolveProofIntent} from '../../utils/proof-intent.js'
 import {validateProofTopologyBundle} from '../../utils/proof-topology-compiler.js'
 
@@ -29,6 +30,10 @@ export default class ProofConfigCheck extends Command {
     try {
       const deploymentDir = path.resolve(flags['deployment-dir'])
       const contract = validateProofDeploymentContract(deploymentDir, flags.contract)
+      if (contract.mode === 'active' && contract.generation === 'real' && (!contract.inputs?.publication || !contract.artifactStoreReceipt)) {
+        throw new Error('Final active/real configuration requires bound materials, protocol, artifact-store and program-publication receipts; finish proof-config publish or regenerate with the selected receipts')
+      }
+
       const configPath = flags.config
         || (contract.intentSource.kind === 'doge-config'
           ? resolveContractFile(deploymentDir, contract.intentSource.path)
@@ -59,11 +64,15 @@ export default class ProofConfigCheck extends Command {
         workerBundleId = result.bundleId
       }
 
+      const readiness = proofEnforcementReadiness(deploymentDir, contract, config)
+      if (contract.enforcement === 'enforce' && !readiness.ready) throw new Error(`Proof enforcement is blocked:\n- ${readiness.blockers.join('\n- ')}`)
+      for (const blocker of readiness.blockers) output.addWarning(`Enforcement pending: ${blocker}`)
       output.logSuccess(`Verified ${contract.mode}/${contract.generation}/${contract.enforcement} proof deployment ${contract.generationId}`)
       output.success({
         bundleRevision: contract.topology.bundleRevision,
         contract: path.resolve(deploymentDir, flags.contract),
         enforcement: contract.enforcement,
+        enforcementReadiness: readiness,
         generation: contract.generation,
         generationId: contract.generationId,
         mode: contract.mode,

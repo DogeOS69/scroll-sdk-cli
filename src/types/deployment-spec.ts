@@ -1,3 +1,5 @@
+import type {CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
+import type {DstackControllerConfig} from './dstack-controller.js'
 import type {ProofTopologySpec} from './proof-topology.js'
 
 export type {
@@ -42,6 +44,9 @@ export interface DeploymentSpec {
 
   /** Dogecoin L1 configuration */
   dogecoin: DogecoinConfig
+
+  /** Optional standalone dstack controller Helm release; independent of proof identities. */
+  dstackController?: DstackControllerConfig
 
   /** Ethereum DA configuration */
   ethereumDa?: EthereumDaConfig
@@ -583,6 +588,8 @@ export interface SigningConfig {
 
   /** CubeSigner TEE key configuration */
   cubesigner?: {
+    mode?: CubesignerPolicyMode
+    policyReceipts?: CubesignerPolicyReceiptInputs
     /**
      * Reviewed, non-secret static evidence for the fail-closed CubeSigner
      * production verifier-key policy. The target key identifier is derived

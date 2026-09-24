@@ -1,0 +1,139 @@
+{
+  "createdAt": "2026-09-21T04:59:54.407749+00:00",
+  "cuda": {
+    "architectures": [
+      "86"
+    ]
+  },
+  "genericBundle": {
+    "files": {
+      "batch/app.vmexe": {
+        "asset": "batch_exe",
+        "sha256": "5f9d83b89a690b91012a7ea5a3c5d3a7dc5c54c715c6f585df77d235964870eb",
+        "sizeBytes": 36737350,
+        "url": "https://github.com/DogeOS69/dogeos-core/releases/download/proving-openvm17-0badaf7a-eef62d3/batch_exe"
+      },
+      "batch/openvm.toml": {
+        "asset": "batch_config",
+        "sha256": "53cc74fc91acd85faee7a06617e2b9d82149fee738a48f71856d56004ea94dd1",
+        "sizeBytes": 1141,
+        "url": "https://github.com/DogeOS69/dogeos-core/releases/download/proving-openvm17-0badaf7a-eef62d3/batch_config"
+      },
+      "chunk/app.vmexe": {
+        "asset": "chunk_exe",
+        "sha256": "d61608bf38ea55be280ca5ad971b53bdf9944e10652c2623aaf2eef2a8ae7972",
+        "sizeBytes": 43020693,
+        "url": "https://github.com/DogeOS69/dogeos-core/releases/download/proving-openvm17-0badaf7a-eef62d3/chunk_exe"
+      },
+      "chunk/openvm.toml": {
+        "asset": "chunk_config",
+        "sha256": "3d11fb74d57092a7da9f9064519482fa6bf60d93e3d7ca845d861c47159f2b84",
+        "sizeBytes": 2127,
+        "url": "https://github.com/DogeOS69/dogeos-core/releases/download/proving-openvm17-0badaf7a-eef62d3/chunk_config"
+      },
+      "verifier/aggregate-vk": {
+        "asset": "agg_vk",
+        "sha256": "593e2fbf17d68f4f4331592492ec7c7965aee7b057840ad1647994b784a030e5",
+        "sizeBytes": 116500,
+        "url": "https://github.com/DogeOS69/dogeos-core/releases/download/proving-openvm17-0badaf7a-eef62d3/agg_vk"
+      }
+    },
+    "openvmVersion": "1.7.0",
+    "rustToolchain": "nightly-2026-03-17",
+    "schema": "dogeos/scroll-program-bundle/v1",
+    "sourceRepository": "https://github.com/DogeOS69/scroll-zkvm-prover",
+    "sourceRevision": "0badaf7aebe407bc7e50a5eb713a0ab44668a362",
+    "upstreamManifest": {
+      "sha256": "a0652b8176358f0d46eceb5190ab24e4e71fa0d59c5a3810c3438bff022093b6",
+      "url": "https://github.com/DogeOS69/dogeos-core/releases/download/proving-openvm17-0badaf7a-eef62d3/manifest.json"
+    }
+  },
+  "images": {
+    "coordinator": {
+      "coreRevision": "6700d4baca0830bb5ac26bfee5a17c53aa725c42",
+      "reference": "dogeos69/proof-coordinator@sha256:86efa6c1db858f4d8bc3a59d31a0f94a75cd12a6f363401af36ce84ff583488e"
+    },
+    "mockWorker": {
+      "coreRevision": "6700d4baca0830bb5ac26bfee5a17c53aa725c42",
+      "reference": "dogeos69/prover-worker-mock@sha256:9931a4a4750e3aa9b48eb3a06e414938ea8d133a20f5a0801ff93d2cf504df2f"
+    },
+    "producer": {
+      "coreRevision": "6700d4baca0830bb5ac26bfee5a17c53aa725c42",
+      "reference": "dogeos69/proof-preparation-producer@sha256:9c4dabd8f6aab177ae609975d685afd45593c92df80bb255242958150f018e3b"
+    },
+    "productionWorker": {
+      "coreRevision": "6700d4baca0830bb5ac26bfee5a17c53aa725c42",
+      "reference": "dogeos69/prover-worker-cuda@sha256:b09760d1b1a6d619e9c18a66222839fded397ec52f8b0ea8a48ff1de5a7837c3"
+    },
+    "publisher": {
+      "coreRevision": "6700d4baca0830bb5ac26bfee5a17c53aa725c42",
+      "reference": "dogeos69/proof-bundle-publisher@sha256:1895d09a8ed94ac2542e164dd57b3e0641ad7923cee5f0b27eb40d7b54b532c4"
+    },
+    "topologyCompiler": {
+      "coreRevision": "6700d4baca0830bb5ac26bfee5a17c53aa725c42",
+      "reference": "dogeos69/dogeos-proof-topology@sha256:86ed9f87af9f818db62ef11c6bfbd2739bca189cab89c455e8b4f87bb6a99c61"
+    }
+  },
+  "producer": {
+    "contract": "prepare-real-v1"
+  },
+  "publisher": {
+    "contract": "v1-11-files",
+    "files": [
+      {
+        "prefix": "DOGEOS_CHUNK_VMEXE",
+        "relativePath": "chunk/app.vmexe"
+      },
+      {
+        "prefix": "DOGEOS_CHUNK_CONFIG",
+        "relativePath": "chunk/openvm.toml"
+      },
+      {
+        "prefix": "DOGEOS_BATCH_VMEXE",
+        "relativePath": "batch/app.vmexe"
+      },
+      {
+        "prefix": "DOGEOS_BATCH_CONFIG",
+        "relativePath": "batch/openvm.toml"
+      },
+      {
+        "prefix": "DOGEOS_BRIDGE_VMEXE",
+        "relativePath": "bridge/bridge-state.vmexe"
+      },
+      {
+        "prefix": "DOGEOS_BRIDGE_CONFIG",
+        "relativePath": "bridge/openvm.toml"
+      },
+      {
+        "prefix": "DOGEOS_BRIDGE_MANIFEST",
+        "relativePath": "bridge/bridge-artifact-manifest.json"
+      },
+      {
+        "prefix": "DOGEOS_AGGREGATION_VMEXE",
+        "relativePath": "bridge/batch-aggregation.vmexe"
+      },
+      {
+        "prefix": "DOGEOS_AGGREGATION_CONFIG",
+        "relativePath": "bridge/batch-aggregation-openvm.toml"
+      },
+      {
+        "prefix": "DOGEOS_TAG5_MANIFEST",
+        "relativePath": "bridge/l2-range-aggregation-topology-program.json"
+      },
+      {
+        "prefix": "DOGEOS_PROTOCOL_CONTEXT",
+        "relativePath": "protocol_context.json"
+      }
+    ]
+  },
+  "schema": "dogeos/proof-release/v1",
+  "source": {
+    "repository": "https://github.com/DogeOS69/dogeos-core",
+    "revision": "6700d4baca0830bb5ac26bfee5a17c53aa725c42"
+  },
+  "toolchain": {
+    "openvm": "1.7.0",
+    "rust": "nightly-2026-03-17",
+    "scrollRevision": "0badaf7aebe407bc7e50a5eb713a0ab44668a362"
+  }
+}

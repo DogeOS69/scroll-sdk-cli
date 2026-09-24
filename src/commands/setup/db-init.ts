@@ -12,6 +12,7 @@ const { Client } = pg
 type PgClient = InstanceType<typeof Client>
 
 import { writeConfigs } from '../../utils/config-writer.js'
+import {buildDatabaseUrl, databasePassword, parseDatabaseUrl, readDstackControllerConfig, usesDstackPostgres, writeDstackDatabaseSecret} from '../../utils/dstack-database.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import {
   type NonInteractiveContext,
@@ -45,15 +46,16 @@ function quoteLiteral(value: string): string {
 }
 
 export default class SetupDbInit extends Command {
-  static override description = 'Initialize databases with new users and passwords interactively or update permissions'
+  static override description = 'Initialize Blockscout and dstack PostgreSQL databases, or update their permissions'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --update-permissions',
     '<%= config.bin %> <%= command.id %> --update-permissions --debug',
     '<%= config.bin %> <%= command.id %> --clean',
-    '<%= config.bin %> <%= command.id %> --update-db-port=25061',
+    '<%= config.bin %> <%= command.id %> --update-port=25061',
     '<%= config.bin %> <%= command.id %> --non-interactive',
+    '<%= config.bin %> <%= command.id %> --databases dstack --non-interactive',
     '<%= config.bin %> <%= command.id %> --non-interactive --json --clean',
   ]
 
@@ -61,13 +63,19 @@ export default class SetupDbInit extends Command {
     clean: Flags.boolean({
       char: 'c',
       default: false,
-      description: 'Delete existing database and user before creating new ones',
+      description: 'Recreate selected databases and reset their user passwords',
+    }),
+    databases: Flags.string({
+      description: 'Initialize only the selected services; repeat to select both',
+      multiple: true,
+      options: ['blockscout', 'dstack'],
     }),
     debug: Flags.boolean({
       char: 'd',
       default: false,
       description: 'Show debug output including SQL queries',
     }),
+    'doge-config': Flags.string({description: 'Doge config containing dstackController; defaults to .data/doge-config.toml'}),
     json: Flags.boolean({
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)',
@@ -89,6 +97,7 @@ export default class SetupDbInit extends Command {
   }
 
   private conn: PgClient | undefined;
+  private outputContext?: JsonOutputContext
   private pgDatabase: string = "";
   private pgPassword: string = "";
   private pgUser: string = "";
@@ -100,6 +109,7 @@ export default class SetupDbInit extends Command {
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupDbInit)
     const existingConfig = await this.getExistingConfig()
+    const dstackController = readDstackControllerConfig(flags['doge-config'])
 
     // Create non-interactive and JSON output contexts
     const niCtx = createNonInteractiveContext(
@@ -108,13 +118,15 @@ export default class SetupDbInit extends Command {
       flags.json
     )
     const jsonCtx = new JsonOutputContext('setup db-init', flags.json)
+    this.outputContext = jsonCtx
 
     // Helper for logging
     const log = (msg: string) => jsonCtx.log(msg)
 
-    if (flags['update-port']) {
+    if (flags['update-port'] !== undefined) {
+      if (flags['update-port'] < 1 || flags['update-port'] > 65_535) this.error('--update-port must be between 1 and 65535')
       log(chalk.blue('Updating database port...'))
-      this.updateDatabasePort(existingConfig, flags['update-port'])
+      this.updateDatabasePort(existingConfig, flags['update-port'], flags.databases)
 
       const confirmUpdate = await resolveConfirm(
         niCtx,
@@ -126,7 +138,12 @@ export default class SetupDbInit extends Command {
       )
 
       if (confirmUpdate) {
-        if (writeConfigs(existingConfig)) {
+        if (writeConfigs(existingConfig, undefined, undefined, flags.json)) {
+          if (existingConfig.db?.DSTACK_DB_CONNECTION_STRING && (!flags.databases || flags.databases.includes('dstack'))
+            && (!dstackController || usesDstackPostgres(dstackController))) {
+            writeDstackDatabaseSecret(path.join(process.cwd(), 'secrets'), resolveEnvValue(existingConfig.db.DSTACK_DB_CONNECTION_STRING)!, dstackController)
+          }
+
           log(chalk.green('config.toml has been updated with the new database port.'))
           if (flags.json) {
             jsonCtx.success({ action: 'update-port', port: flags['update-port'], updated: true })
@@ -155,38 +172,39 @@ export default class SetupDbInit extends Command {
       }
     }
 
-    const databases = [
-      { name: 'scroll_chain_monitor', user: 'CHAIN_MONITOR' },
-      { name: 'scroll_rollup', user: 'ROLLUP_NODE' },
-      { name: 'scroll_bridge_history', user: 'BRIDGE_HISTORY' },
-    ]
+    const databases: Array<{name: string; user: string}> = []
+    const createBlockscout = flags.databases
+      ? flags.databases.includes('blockscout')
+      : await resolveConfirm(
+        niCtx,
+        () => confirm({
+          default: Boolean(existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING),
+          message: chalk.cyan('Do you want to create a database for Blockscout?'),
+        }),
+        existingConfig.db?.CREATE_BLOCKSCOUT_DB ?? Boolean(existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING),
+        Boolean(existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING),
+      )
+    if (createBlockscout) databases.push({name: 'scroll_blockscout', user: 'BLOCKSCOUT'})
 
-    // In non-interactive mode, check if Blockscout DB string exists in config
-    const createBlockscout = await resolveConfirm(
-      niCtx,
-      () => confirm({
-        default: Boolean(existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING),
-        message: chalk.cyan('Do you want to create a database for Blockscout?')
-      }),
-      existingConfig.db?.CREATE_BLOCKSCOUT_DB ?? Boolean(existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING),
-      Boolean(existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING)
-    )
-    if (createBlockscout) {
-      databases.push({ name: 'scroll_blockscout', user: 'BLOCKSCOUT' })
+    const dstackAllowed = !dstackController || usesDstackPostgres(dstackController)
+    if (flags.databases?.includes('dstack') && !dstackAllowed) {
+      this.error('dstackController is disabled or uses SQLite; PostgreSQL initialization is not applicable')
     }
 
-    // In non-interactive mode, check if L1 Explorer DB string exists in config
-    const createL1Explorer = await resolveConfirm(
-      niCtx,
-      () => confirm({
-        default: Boolean(existingConfig.db?.L1_EXPLORER_DB_CONNECTION_STRING),
-        message: chalk.cyan('Do you want to create a database for L1 Explorer?')
-      }),
-      existingConfig.db?.CREATE_L1_EXPLORER_DB ?? Boolean(existingConfig.db?.L1_EXPLORER_DB_CONNECTION_STRING),
-      Boolean(existingConfig.db?.L1_EXPLORER_DB_CONNECTION_STRING)
-    )
-    if (createL1Explorer) {
-      databases.push({ name: 'scroll_l1explorer', user: 'L1_EXPLORER' })
+    const dstackDefault = existingConfig.db?.CREATE_DSTACK_DB
+      ?? (usesDstackPostgres(dstackController) || Boolean(existingConfig.db?.DSTACK_DB_CONNECTION_STRING))
+    const createDstack = flags.databases
+      ? flags.databases.includes('dstack')
+      : dstackAllowed && await resolveConfirm(
+        niCtx,
+        () => confirm({default: Boolean(dstackDefault), message: 'Do you want to create a database for dstack?'}),
+        Boolean(dstackDefault), Boolean(dstackDefault),
+      )
+    if (createDstack) databases.push({name: 'dstack', user: 'DSTACK'})
+    if (databases.length === 0) {
+      log('No Blockscout or dstack PostgreSQL databases selected.')
+      if (flags.json) jsonCtx.success({action: 'db-init', configUpdated: false, databases: []})
+      return
     }
 
     const dsnMap: Record<string, string> = {}
@@ -257,7 +275,7 @@ export default class SetupDbInit extends Command {
           log(chalk.blue(`Setting up database: ${db.name} for user: ${db.user}`))
 
           let dbPassword: string;
-          const existingDsn = existingConfig.db?.[`${db.user}_DB_CONNECTION_STRING`];
+          const existingDsn = resolveEnvValue(existingConfig.db?.[`${db.user}_DB_CONNECTION_STRING`]);
 
           // Check for password in config (supports $ENV: pattern)
           const configPassword = resolveEnvValue(existingConfig.db?.[`${db.user}_PASSWORD`])
@@ -268,7 +286,7 @@ export default class SetupDbInit extends Command {
               dbPassword = configPassword
               log(chalk.green(`Using configured password for ${db.user}`))
             } else if (existingDsn) {
-              dbPassword = existingDsn.match(/postgres:\/\/.*:(.*)@/)?.[1] || '';
+              dbPassword = databasePassword(existingDsn);
               if (dbPassword) {
                 log(chalk.green(`Using existing password from DSN for ${db.user}`))
               } else {
@@ -286,7 +304,7 @@ export default class SetupDbInit extends Command {
               message: `An existing password was found for ${db.user}. Do you want to keep it?`
             });
             if (keepExistingPassword) {
-              dbPassword = existingDsn.match(/postgres:\/\/.*:(.*)@/)?.[1] || '';
+              dbPassword = databasePassword(existingDsn);
               log(chalk.green(`Using existing password for ${db.user}`));
             } else {
               const useRandomPassword = await confirm({
@@ -313,10 +331,13 @@ export default class SetupDbInit extends Command {
             }
           }
 
+          const dsn = buildDatabaseUrl({
+            database: db.name, dstack: db.user === 'DSTACK', host: this.vpcHost,
+            password: dbPassword, port: this.vpcPort, sslMode: resolveEnvValue(existingConfig.db?.[`${db.user}_SSL_MODE`]),
+            user: db.user.toLowerCase(),
+          })
           await this.initializeDatabase(this.conn, db.name, db.user.toLowerCase(), dbPassword, flags.clean, niCtx)
-
-          const dsn = `postgres://${db.user.toLowerCase()}:${dbPassword}@${this.vpcHost}:${this.vpcPort}/${db.name}?sslmode=require`
-          log(chalk.cyan(`DSN for ${db.user}:\n${dsn}`))
+          log(chalk.cyan(`Prepared ${db.user} connection string (credentials omitted)`))
 
           dsnMap[db.user] = dsn
           createdDatabases.push(db.name)
@@ -342,6 +363,10 @@ export default class SetupDbInit extends Command {
         )
         if (updateConfig) {
           await this.updateConfigFile(dsnMap, flags.json)
+          if (dsnMap.DSTACK) {
+            const secretFile = writeDstackDatabaseSecret(path.join(process.cwd(), 'secrets'), dsnMap.DSTACK, dstackController)
+            log(`Generated local database Secret: ${secretFile}`)
+          }
         }
 
         // Output JSON response on success
@@ -374,8 +399,7 @@ export default class SetupDbInit extends Command {
     const portNum = Number.parseInt(port, 10)
 
     // Try with SSL first (required for production databases)
-    try {
-      const sslConn = new Client({
+    const sslConn = new Client({
         database,
         host,
         password,
@@ -385,13 +409,15 @@ export default class SetupDbInit extends Command {
         },
         user
       })
+    try {
       await sslConn.connect()
       return sslConn
     } catch (sslError) {
+      await sslConn.end().catch(() => {})
       // Check if the error is specifically about SSL not being supported
       const errorMsg = sslError instanceof Error ? sslError.message : String(sslError)
       if (errorMsg.includes('does not support SSL') || errorMsg.includes('SSL connection')) {
-        this.log(chalk.yellow('SSL not supported by server, connecting without SSL...'))
+        this.logMessage(chalk.yellow('SSL not supported by server, connecting without SSL...'))
 
         // Retry without SSL (for local development databases)
         const noSslConn = new Client({
@@ -428,29 +454,29 @@ export default class SetupDbInit extends Command {
       const dbExistsResult = await conn.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [dbName])
       if (dbExistsResult.rows.length > 0) {
         if (clean) {
-          this.log(chalk.yellow(`Deleting existing database ${dbName}...`))
+          this.logMessage(chalk.yellow(`Deleting existing database ${dbName}...`))
           // Terminate all connections to the database
           await conn.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1`, [dbName])
           await conn.query(`DROP DATABASE IF EXISTS ${quoteIdent(dbName)}`)
-          this.log(chalk.green(`Database ${dbName} deleted successfully.`))
+          this.logMessage(chalk.green(`Database ${dbName} deleted successfully.`))
         } else {
-          this.log(chalk.yellow(`Database ${dbName} already exists.`))
+          this.logMessage(chalk.yellow(`Database ${dbName} already exists.`))
         }
       }
 
       if (clean || dbExistsResult.rows.length === 0) {
-        this.log(chalk.blue(`Creating database ${dbName}...`))
+        this.logMessage(chalk.blue(`Creating database ${dbName}...`))
         await conn.query(`CREATE DATABASE ${quoteIdent(dbName)}`)
-        this.log(chalk.green(`Database ${dbName} created successfully.`))
+        this.logMessage(chalk.green(`Database ${dbName} created successfully.`))
       }
 
       // Check if the user exists
       const userExistsResult = await conn.query(`SELECT 1 FROM pg_roles WHERE rolname = $1`, [dbUser])
       if (userExistsResult.rows.length > 0) {
         if (clean) {
-          this.log(chalk.yellow(`User ${dbUser} already exists. Updating password...`))
+          this.logMessage(chalk.yellow(`User ${dbUser} already exists. Updating password...`))
           await conn.query(`ALTER USER ${quoteIdent(dbUser)} WITH PASSWORD ${quoteLiteral(dbPassword)}`)
-          this.log(chalk.green(`Password updated for ${dbUser}.`))
+          this.logMessage(chalk.green(`Password updated for ${dbUser}.`))
         } else {
           // In non-interactive mode, update password if one was provided
           const changePassword = await resolveConfirm(
@@ -461,15 +487,15 @@ export default class SetupDbInit extends Command {
           )
           if (changePassword) {
             await conn.query(`ALTER USER ${quoteIdent(dbUser)} WITH PASSWORD ${quoteLiteral(dbPassword)}`)
-            this.log(chalk.green(`Password updated for ${dbUser}.`))
+            this.logMessage(chalk.green(`Password updated for ${dbUser}.`))
           } else {
-            this.log(chalk.yellow(`Password not changed for ${dbUser}. Please manually check the user's password in config.toml.`))
+            this.logMessage(chalk.yellow(`Password not changed for ${dbUser}. Please manually check the user's password in config.toml.`))
           }
         }
       } else {
-        this.log(chalk.blue(`Creating user ${dbUser}...`))
+        this.logMessage(chalk.blue(`Creating user ${dbUser}...`))
         await conn.query(`CREATE USER ${quoteIdent(dbUser)} WITH PASSWORD ${quoteLiteral(dbPassword)}`)
-        this.log(chalk.green(`User ${dbUser} created successfully.`))
+        this.logMessage(chalk.green(`User ${dbUser} created successfully.`))
       }
 
       // Update permissions
@@ -480,8 +506,13 @@ export default class SetupDbInit extends Command {
     }
   }
 
+  private logMessage(message: string): void {
+    if (this.outputContext) this.outputContext.log(message)
+    else this.log(message)
+  }
+
   private async promptForConnectionDetails(existingConfig: any, niCtx?: NonInteractiveContext): Promise<[string, string, string, string, string, string, string]> {
-    this.log(chalk.blue('First, provide connection information for the database instance. This will only be used for creating users and databases. This information will not be persisted in your configuration repo.'));
+    this.logMessage(chalk.blue('First, provide connection information for the database instance. This will only be used for creating users and databases. This information will not be persisted in your configuration repo.'));
 
     // For non-interactive mode, look for [db.admin] section in config
     const adminConfig = existingConfig.db?.admin || {}
@@ -549,18 +580,16 @@ export default class SetupDbInit extends Command {
       false
     ) || 'postgres'
 
-    this.log(chalk.blue('Now, provide connection information for pods. This will often be use localhost or a private IP. This information is stored in DSN strings in your configuration file and used in Secrets.'));
+    this.logMessage(chalk.blue('Now, provide connection information for pods. This will often be use localhost or a private IP. This information is stored in DSN strings in your configuration file and used in Secrets.'));
 
     // Extract host and port from an existing DSN if available
     let defaultPrivateHost = 'localhost'
     let defaultPrivatePort = '5432'
-    const existingDsn = existingConfig.db?.SCROLL_DB_CONNECTION_STRING
+    const existingDsn = resolveEnvValue(existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING || existingConfig.db?.DSTACK_DB_CONNECTION_STRING)
     if (existingDsn) {
-      const dsnMatch = existingDsn.match(/postgres:\/\/.*:.*@(.+):(\d+)\/.*/)
-      if (dsnMatch) {
-        defaultPrivateHost = dsnMatch[1]
-        defaultPrivatePort = dsnMatch[2]
-      }
+      const url = parseDatabaseUrl(existingDsn)
+      defaultPrivateHost = url.hostname
+      defaultPrivatePort = url.port || '5432'
     }
 
     const privateHost = await resolveOrPrompt(
@@ -589,7 +618,7 @@ export default class SetupDbInit extends Command {
   }
 
   private async promptForPublicConnectionDetails(existingConfig: any, niCtx?: NonInteractiveContext): Promise<[string, string, string, string, string]> {
-    this.log(chalk.blue('Provide connection information for the database instance. This will only be used for updating permissions.'));
+    this.logMessage(chalk.blue('Provide connection information for the database instance. This will only be used for updating permissions.'));
 
     // For non-interactive mode, look for [db.admin] section in config
     const adminConfig = existingConfig.db?.admin || {}
@@ -597,13 +626,11 @@ export default class SetupDbInit extends Command {
     // Extract host and port from an existing DSN if available
     let defaultHost = 'localhost'
     let defaultPort = '5432'
-    const existingDsn = existingConfig.db?.SCROLL_DB_CONNECTION_STRING
+    const existingDsn = resolveEnvValue(existingConfig.db?.BLOCKSCOUT_DB_CONNECTION_STRING || existingConfig.db?.DSTACK_DB_CONNECTION_STRING)
     if (existingDsn) {
-      const dsnMatch = existingDsn.match(/postgres:\/\/.*:.*@(.+):(\d+)\/.*/)
-      if (dsnMatch) {
-        defaultHost = dsnMatch[1]
-        defaultPort = dsnMatch[2]
-      }
+      const url = parseDatabaseUrl(existingDsn)
+      defaultHost = url.hostname
+      defaultPort = url.port || '5432'
     }
 
     const publicHost = await resolveOrPrompt(
@@ -688,11 +715,8 @@ export default class SetupDbInit extends Command {
     }
 
     const dsnConfigMapping: Record<string, string[]> = {
-      'BLOCKSCOUT': ['BLOCKSCOUT_DB_CONNECTION_STRING'],
-      'BRIDGE_HISTORY': ['BRIDGE_HISTORY_DB_CONNECTION_STRING'],
-      'CHAIN_MONITOR': ['CHAIN_MONITOR_DB_CONNECTION_STRING'],
-      'L1_EXPLORER': ['L1_EXPLORER_DB_CONNECTION_STRING'],
-      'ROLLUP_NODE': ['SCROLL_DB_CONNECTION_STRING', 'GAS_ORACLE_DB_CONNECTION_STRING', 'ROLLUP_NODE_DB_CONNECTION_STRING', 'ROLLUP_EXPLORER_DB_CONNECTION_STRING', 'COORDINATOR_DB_CONNECTION_STRING', 'ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING']
+      BLOCKSCOUT: ['BLOCKSCOUT_DB_CONNECTION_STRING'],
+      DSTACK: ['DSTACK_DB_CONNECTION_STRING'],
     }
 
     for (const [user, dsn] of Object.entries(dsnMap)) {
@@ -703,34 +727,34 @@ export default class SetupDbInit extends Command {
     }
 
     // Pass silent=true when in JSON mode to avoid stdout pollution
-    if (writeConfigs(config, undefined, undefined, jsonMode) && !jsonMode) {
-        this.log(chalk.green('config.toml has been updated with the new database connection strings.'))
-      }
+    if (!writeConfigs(config, undefined, undefined, jsonMode)) throw new Error('Failed to persist database connection strings to config.toml')
+    if (!jsonMode) this.logMessage(chalk.green('config.toml has been updated with the new database connection strings.'))
   }
 
-  private updateDatabasePort(config: any, newPort: number): void {
+  private updateDatabasePort(config: any, newPort: number, services?: string[]): void {
     const dbSection = config.db as Record<string, string>
     if (!dbSection) {
-      this.log(chalk.yellow('No database configurations found in config.toml'))
+      this.logMessage(chalk.yellow('No database configurations found in config.toml'))
       return
     }
 
     let changes = false
-    for (const [key, value] of Object.entries(dbSection)) {
-      if (typeof value === 'string' && value.includes('postgres://')) {
-        const updatedValue = value.replace(/:\d+\//, `:${newPort}/`)
-        if (updatedValue !== value) {
-          dbSection[key] = updatedValue
-          changes = true
-          this.log(chalk.blue(`Updated ${key}:`))
-          this.log(chalk.red(`- ${value}`))
-          this.log(chalk.green(`+ ${updatedValue}`))
-        }
+    for (const service of services ?? ['blockscout', 'dstack']) {
+      const key = `${service.toUpperCase()}_DB_CONNECTION_STRING`
+      const value = resolveEnvValue(dbSection[key])
+      if (!value) continue
+      const url = parseDatabaseUrl(value)
+      url.port = String(newPort)
+      const updatedValue = url.toString()
+      if (updatedValue !== value) {
+        dbSection[key] = updatedValue
+        changes = true
+        this.logMessage(chalk.blue(`Updated ${key} port to ${newPort} (credentials omitted)`))
       }
     }
 
     if (!changes) {
-      this.log(chalk.yellow('No database configurations were updated'))
+      this.logMessage(chalk.yellow('No database configurations were updated'))
     }
   }
 
@@ -751,42 +775,42 @@ export default class SetupDbInit extends Command {
       `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO ${quotedUser}`
     ];
 
+    let dbConn: PgClient | undefined
     try {
       // Execute queries on the original connection (usually connected to 'postgres' database)
       for (const query of queries) {
         if (debug) {
-          this.log(chalk.cyan(`Executing query: ${query}`));
+          this.logMessage(chalk.cyan(`Executing query: ${query}`));
         }
 
         const result = await conn.query(query);
         if (debug) {
-          this.log(chalk.yellow('Query result:'));
-          this.log(JSON.stringify(result, null, 2));
+          this.logMessage(chalk.yellow('Query result:'));
+          this.logMessage(JSON.stringify(result, null, 2));
         }
       }
 
       // Create a new connection to the specific database
-      const dbConn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, dbName);
+      dbConn = await this.createConnection(this.publicHost, this.publicPort, this.pgUser, this.pgPassword, dbName);
 
       // Execute schema-specific queries on the new connection
       for (const query of schemaQueries) {
         if (debug) {
-          this.log(chalk.cyan(`Executing query on ${dbName}: ${query}`));
+          this.logMessage(chalk.cyan(`Executing query on ${dbName}: ${query}`));
         }
 
         const result = await dbConn.query(query);
         if (debug) {
-          this.log(chalk.yellow('Query result:'));
-          this.log(JSON.stringify(result, null, 2));
+          this.logMessage(chalk.yellow('Query result:'));
+          this.logMessage(JSON.stringify(result, null, 2));
         }
       }
 
-      // Close the database-specific connection
-      await dbConn.end();
-
-      this.log(chalk.green(`Permissions updated for ${dbUser} on ${dbName}.`))
+      this.logMessage(chalk.green(`Permissions updated for ${dbUser} on ${dbName}.`))
     } catch (error) {
       this.error(chalk.red(`Failed to update permissions: ${error}`))
+    } finally {
+      await dbConn?.end()
     }
   }
 }

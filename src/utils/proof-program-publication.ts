@@ -11,6 +11,7 @@ import {PROOF_PROGRAM_PUBLICATION_SCHEMA} from '../types/proof-program-publicati
 import {readProofAwsConfig} from './proof-aws-config.js'
 import {proofArtifactS3Endpoint} from './proof-aws-provisioner.js'
 import {immutableProofImage, readProofMaterials} from './proof-materials.js'
+import {readProofSoftwareRelease} from './proof-software-release.js'
 import {validateProofTopologyBundle} from './proof-topology-compiler.js'
 
 export const DEFAULT_PROOF_PROGRAM_PUBLICATION_RECEIPT = '.data/proof-program-publication-v1.json'
@@ -30,7 +31,9 @@ export interface ProofProgramPublicationPlan {
   files: BundleFile[]
   proofTopologyBundleRevision: string
   publicEndpointUrl: string
-  publisherScript: string
+  publisherImage?: string
+  publisherScript?: string
+  releaseSha256?: string
   uploadEndpointUrl: string
 }
 
@@ -43,10 +46,12 @@ export type ProofProgramCommandRunner = (
 export type AnonymousObjectReader = (url: string) => Promise<{sha256: string; sizeBytes: number}>
 
 export interface PlanProofProgramPublicationOptions {
-  coreDir: string
+  coreDir?: string
   deploymentDir: string
   materialsReceipt: string
   proofAwsConfig: string
+  release?: string
+  releaseSha256?: string
   run?: ProofProgramCommandRunner
   topologyBundle: string
 }
@@ -54,6 +59,7 @@ export interface PlanProofProgramPublicationOptions {
 export interface PublishProofProgramOptions extends PlanProofProgramPublicationOptions {
   anonymousRead?: AnonymousObjectReader
   awsProfile?: string
+  expectedPlan?: ProofProgramPublicationPlan
   output: string
 }
 
@@ -183,10 +189,32 @@ export function planProofProgramPublication(options: PlanProofProgramPublication
   const materials = readProofMaterials(path.resolve(deploymentDir, options.materialsReceipt), deploymentDir)
   const coreRevision = materials.software.sourceRevisions?.dogeosCore
   if (!coreRevision) throw new Error('Proof materials do not record a dogeos-core source revision')
-  const coreDir = path.resolve(options.coreDir)
-  checkCoreRevision(coreDir, coreRevision, run)
-  const publisherScript = path.join(coreDir, 'tools/real-proving/publish-real-proving-bundle.sh')
-  const contract = publisherContract(publisherScript)
+  if (options.release && options.coreDir) throw new Error('release and legacy core-dir are mutually exclusive')
+  const release = options.release
+    ? readProofSoftwareRelease(path.resolve(deploymentDir, options.release), options.releaseSha256 ?? '')
+    : undefined
+  let publisherScript: string | undefined
+  if (release) {
+    if (release.manifest.source.revision !== coreRevision) throw new Error('Release and materials core revisions differ')
+    for (const key of ['topologyCompiler', 'mockWorker', 'productionWorker'] as const) {
+      const materialImage = materials.images[key]
+      if (!materialImage || immutableProofImage(materialImage) !== release.manifest.images[key].reference) throw new Error(`Release ${key} image differs from materials`)
+    }
+
+    const {artifacts} = materials.software
+    if (!artifacts) throw new Error('Release publication requires complete software artifacts')
+    for (const [relative, key] of [['chunk/app.vmexe', 'chunkAppExe'], ['chunk/openvm.toml', 'chunkAppConfig'], ['batch/app.vmexe', 'batchAppExe'], ['batch/openvm.toml', 'batchAppConfig'], ['verifier/aggregate-vk', 'aggregateVerifyingKey']] as const) {
+      const expected = release.manifest.genericBundle.files[relative]
+      if (artifacts[key].sha256 !== expected.sha256 || artifacts[key].sizeBytes !== expected.sizeBytes) throw new Error(`Release generic material differs: ${relative}`)
+    }
+  } else {
+    if (!options.coreDir) throw new Error('Publication requires a digest-verified release manifest; core-dir is legacy compatibility only')
+    const coreDir = path.resolve(options.coreDir)
+    checkCoreRevision(coreDir, coreRevision, run)
+    publisherScript = path.join(coreDir, 'tools/real-proving/publish-real-proving-bundle.sh')
+  }
+
+  const contract = release?.manifest.publisher.files ?? publisherContract(publisherScript!)
   const topology = validateProofTopologyBundle(path.resolve(deploymentDir, options.topologyBundle), {preflightOnly: false})
   if (topology.mode !== 'active' || topology.generation !== 'real' || !topology.worker) {
     throw new Error('Program publication requires an installable active/real topology bundle with a Worker contract')
@@ -216,7 +244,7 @@ export function planProofProgramPublication(options: PlanProofProgramPublication
     files,
     proofTopologyBundleRevision: topology.manifest.bundle_revision,
     publicEndpointUrl: trimSlash(aws.artifactReadTransport.publicEndpointUrl),
-    publisherScript,
+    ...(publisherScript ? {publisherScript} : {publisherImage: release!.manifest.images.publisher.reference, releaseSha256: release!.sha256}),
     uploadEndpointUrl: proofArtifactS3Endpoint(aws.artifactStore.region),
   }
 }
@@ -256,24 +284,49 @@ export async function publishProofProgramBundle(options: PublishProofProgramOpti
   receiptPath: string
 }> {
   const plan = planProofProgramPublication(options)
+  if (options.expectedPlan && JSON.stringify(plan) !== JSON.stringify(options.expectedPlan)) throw new Error('Publication plan changed after review')
   const receiptPath = path.resolve(options.deploymentDir, options.output)
   if (fs.existsSync(receiptPath)) throw new Error(`Refusing to overwrite proof publication receipt: ${receiptPath}`)
   fs.mkdirSync(path.dirname(receiptPath), {recursive: true})
   const staged = fs.mkdtempSync(path.join(path.dirname(receiptPath), '.proof-program-publication-'))
+  const cidFile = staged + '.cid'
   try {
     stageBundle(plan.files, staged)
     const run = options.run ?? command
     const env: NodeJS.ProcessEnv = {...process.env, AWS_REGION: plan.artifactStore.region}
     if (options.awsProfile) env.AWS_PROFILE = options.awsProfile
     delete env.DOGEOS_PROVER_WORKER_TOKEN
-    const published = parsePublisherOutput(run(plan.publisherScript, [
-      '--bundle-dir', staged,
+    const args = [
+      '--bundle-dir', plan.publisherImage ? '/bundle' : staged,
       '--bucket', plan.artifactStore.bucket,
       '--key-prefix', plan.artifactStore.keyPrefix,
       '--endpoint-url', plan.uploadEndpointUrl,
       '--public-endpoint-url', plan.publicEndpointUrl,
       '--skip-bucket-setup',
-    ], {env}))
+    ]
+    let body: string
+    if (plan.publisherImage) {
+      if (/[\n\r,]/.test(staged)) throw new Error('Unsupported publisher mount path')
+      run('docker', ['pull', plan.publisherImage])
+      const revision = run('docker', ['image', 'inspect', plan.publisherImage, '--format', '{{ index .Config.Labels "org.opencontainers.image.revision" }}']).trim()
+      if (revision !== plan.coreRevision) throw new Error('Publisher OCI revision differs from release')
+      const mapping = run('docker', ['image', 'inspect', plan.publisherImage, '--format', '{{ index .Config.Labels "dogeos.proof-bundle.mapping" }}']).trim()
+      if (mapping !== 'v1-11-files') throw new Error('Publisher image mapping contract differs from release')
+      const credentials = JSON.parse(run('aws', ['configure', 'export-credentials', '--format', 'process', ...(options.awsProfile ? ['--profile', options.awsProfile] : [])], {env})) as {AccessKeyId?: string; Expiration?: string; SecretAccessKey?: string; SessionToken?: string}
+      if (!credentials.AccessKeyId || !credentials.SecretAccessKey || !credentials.SessionToken || !credentials.Expiration || Date.parse(credentials.Expiration) <= Date.now() || !Number.isFinite(Date.parse(credentials.Expiration))) throw new Error('Publisher requires unexpired temporary AWS credentials')
+      const dockerEnv = {...process.env, AWS_ACCESS_KEY_ID: credentials.AccessKeyId, AWS_REGION: plan.artifactStore.region, AWS_SECRET_ACCESS_KEY: credentials.SecretAccessKey, AWS_SESSION_TOKEN: credentials.SessionToken}
+      body = run('docker', [
+        'run', '--rm', '--cidfile', cidFile, '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+        '--user', `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`, '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m',
+        '--mount', `type=bind,src=${staged},dst=/bundle,readonly`,
+        '-e', 'AWS_ACCESS_KEY_ID', '-e', 'AWS_SECRET_ACCESS_KEY', '-e', 'AWS_SESSION_TOKEN', '-e', 'AWS_REGION',
+        '-e', 'AWS_EC2_METADATA_DISABLED=true', plan.publisherImage, ...args,
+      ], {env: dockerEnv})
+    } else {
+      body = run(plan.publisherScript!, args, {env})
+    }
+
+    const published = parsePublisherOutput(body)
     const read = options.anonymousRead ?? anonymousObjectRead
     const files: ProofProgramPublicationV1['files'] = {}
     for (const file of plan.files) {
@@ -304,14 +357,26 @@ export async function publishProofProgramBundle(options: PublishProofProgramOpti
       files,
       proofTopologyBundleRevision: plan.proofTopologyBundleRevision,
       publishedAt: new Date().toISOString(),
+      ...(plan.releaseSha256 ? {publisherImage: plan.publisherImage, releaseSha256: plan.releaseSha256} : {}),
       schema: PROOF_PROGRAM_PUBLICATION_SCHEMA,
       schemaVersion: 1,
       verification: {anonymousHttpReadback: 'passed', authenticatedS3Readback: 'passed'},
     }
     fs.mkdirSync(path.dirname(receiptPath), {recursive: true})
-    fs.writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, {flag: 'wx', mode: 0o600})
+    const temporaryReceipt = path.join(staged, 'publication-receipt.json')
+    fs.writeFileSync(temporaryReceipt, `${JSON.stringify(receipt, null, 2)}\n`, {flag: 'wx', mode: 0o600})
+    fs.linkSync(temporaryReceipt, receiptPath)
     return {receipt, receiptPath}
   } finally {
+    if (fs.existsSync(cidFile)) {
+      const id = fs.readFileSync(cidFile, 'utf8').trim()
+      if (/^[\da-f]{64}$/.test(id)) {
+        try { (options.run ?? command)('docker', ['rm', '--force', id]) } catch { /* --rm may already have removed it. */ }
+      }
+
+      fs.rmSync(cidFile, {force: true})
+    }
+
     fs.rmSync(staged, {force: true, recursive: true})
   }
 }

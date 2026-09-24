@@ -12,7 +12,9 @@ import type {ProofTopologyEthereumDaBlobSource} from './proof-topology-compiler.
 import {DEFAULT_PROOF_AWS_CONFIG, proofAwsValuesProjection, readOptionalProofAwsConfig} from './proof-aws-config.js'
 import {applyProofAwsValues} from './proof-aws-provisioner.js'
 import {writeProofDeploymentContract} from './proof-deployment-contract.js'
+import {immutableProofImage, readProofMaterials} from './proof-materials.js'
 import {DEFAULT_PROOF_COORDINATOR_CONFIG} from './proof-signer-policy-input.js'
+import {proofFileHash, proofRegularFile} from './proof-software-release.js'
 import {reconcileCompiledProofTopology} from './proof-topology-kubernetes-adapter.js'
 import {WITHDRAWAL_NATIVE_CONFIG_RELPATH} from './withdrawal-config.js'
 
@@ -23,6 +25,7 @@ export interface ReconcileProofKubernetesOptions {
   ethereumDaBlobSource?: ProofTopologyEthereumDaBlobSource
   ethereumL1RpcUrl?: string
   intent: ResolvedProofIntent
+  materialsReceipt?: string
   network?: string
   proofAwsConfigPath?: string
   proofTopologyBridge?: {
@@ -33,6 +36,7 @@ export interface ReconcileProofKubernetesOptions {
   }
   proofTopologyCompilerBinary?: string
   proofTopologyCompilerImage?: string
+  publicationReceipt?: string
   valuesDir?: string
   withdrawalConfigPath?: string
 }
@@ -96,6 +100,16 @@ export function reconcileProofKubernetes(options: ReconcileProofKubernetesOption
   const withdrawalConfigPath = path.resolve(options.withdrawalConfigPath || path.join(deploymentDir, WITHDRAWAL_NATIVE_CONFIG_RELPATH))
   const proofAws = readOptionalProofAwsConfig(deploymentDir, options.proofAwsConfigPath || DEFAULT_PROOF_AWS_CONFIG)
   if (proofAws) assertProofAwsMatchesTopology(options.intent.proofTopology, proofAws.config)
+  if (options.materialsReceipt) {
+    const materials = readProofMaterials(path.resolve(deploymentDir, options.materialsReceipt), deploymentDir)
+    const expected = materials.bridge?.artifacts.workerIdentityBundle
+    const actual = options.intent.proofTopology.compiler.identityFilePath
+    if (!expected || !actual || proofFileHash(proofRegularFile(path.resolve(deploymentDir, actual))) !== expected.sha256) throw new Error('Selected materials receipt differs from compiler identity input')
+    if (immutableProofImage(materials.images.topologyCompiler) !== immutableProofImage(options.intent.proofTopology.compiler.image)) throw new Error('Selected materials compiler image differs from topology')
+    if (materials.images.productionWorker && options.intent.proofTopology.deployment.productionWorkerImage && immutableProofImage(materials.images.productionWorker) !== immutableProofImage(options.intent.proofTopology.deployment.productionWorkerImage)) throw new Error('Selected materials Worker image differs from topology')
+    if (proofFileHash(proofRegularFile(path.join(deploymentDir, '.data/protocol_context.json'))) !== materials.bridge?.protocolContextSha256) throw new Error('Selected materials differ from deployment protocol context')
+  }
+
   const compiled = reconcileCompiledProofTopology({
     bridge: options.proofTopologyBridge,
     compilerBinary: options.proofTopologyCompilerBinary,
@@ -130,6 +144,7 @@ export function reconcileProofKubernetes(options: ReconcileProofKubernetesOption
       ? 'compiled-compose' as const
       : 'compiled-local' as const
   const contract = writeProofDeploymentContract({
+    ...(fs.existsSync(path.join(valuesDir, 'cubesigner-signer-production.yaml')) ? {cubesignerSigner: {enabled: true, valuesFile: path.join(valuesDir, 'cubesigner-signer-production.yaml')}} : {}),
     ...(compiled.eagerMaterializerValuesPath ? {eagerMaterializer: {
       enabled: Boolean(compiled.bundle.manifest.eager_materializer),
       valuesFile: compiled.eagerMaterializerValuesPath,
@@ -139,8 +154,10 @@ export function reconcileProofKubernetes(options: ReconcileProofKubernetesOption
     ethDaSubmitter: {valuesFile: compiled.ethDaSubmitterValuesPath},
     generation: options.intent.proofTopology.generation,
     intentSource: options.intent.source,
+    materialsReceipt: options.materialsReceipt,
     mode: options.intent.proofTopology.mode,
     proofArtifactBaseUrl: compiled.proofArtifactBaseUrl,
+    proofAwsConfig: proofAws?.configPath,
     proofCoordinator: {
       // PC is a stable deployment service. In disabled mode it runs the
       // chart's minimal idle config; active mode installs compiler output.
@@ -151,6 +168,7 @@ export function reconcileProofKubernetes(options: ReconcileProofKubernetesOption
       enabled: kubernetesWorker,
       valuesFile: path.join(valuesDir, 'prover-worker-production.yaml'),
     },
+    publicationReceipt: options.publicationReceipt,
     topology: {
       bundleDir: compiled.bundle.bundleDir,
       bundleManifest: path.join(compiled.bundle.bundleDir, 'bundle-manifest-v1.json'),

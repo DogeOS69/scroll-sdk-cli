@@ -22,12 +22,14 @@ export default class ProofBundlePublish extends Command {
   static flags = {
     apply: Flags.boolean({default: false, description: 'Perform S3 writes and anonymous readback; omission prints a read-only plan'}),
     'aws-profile': Flags.string({description: 'AWS profile used by the dogeos-core publisher'}),
-    'core-dir': Flags.string({description: 'Clean dogeos-core checkout matching the materials source revision', required: true}),
+    'core-dir': Flags.string({description: 'Deprecated source-based compatibility mode; prefer release + release-sha256'}),
     'deployment-dir': Flags.string({default: '.', description: 'Deployment root'}),
     json: Flags.boolean({default: false, description: 'Output structured JSON'}),
     materials: Flags.string({default: DEFAULT_PROOF_MATERIALS_RECEIPT, description: 'Real proof-materials-v1.json'}),
     output: Flags.string({default: DEFAULT_PROOF_PROGRAM_PUBLICATION_RECEIPT, description: 'New publication receipt written only after all public GET checks pass'}),
     'proof-aws-config': Flags.string({default: DEFAULT_PROOF_AWS_CONFIG, description: 'proof-aws.json containing the canonical shared artifact store'}),
+    release: Flags.string({description: 'dogeos-proof-release-v1.json manifest'}),
+    'release-sha256': Flags.string({description: 'Expected immutable release manifest SHA-256'}),
     'topology-bundle': Flags.string({default: DEFAULT_PROOF_TOPOLOGY_OUTPUT, description: 'Installable active/real compiler bundle containing the tag-5 manifest'}),
   }
 
@@ -35,11 +37,15 @@ export default class ProofBundlePublish extends Command {
     const {flags} = await this.parse(ProofBundlePublish)
     const output = new JsonOutputContext('setup proof-bundle-publish', flags.json)
     try {
+      if (flags['core-dir']) output.addWarning('Legacy source-based publication; migrate to --release and --release-sha256')
+      if (flags.release && !flags['release-sha256']) throw new Error('release-sha256 is required with release')
       const common = {
-        coreDir: path.resolve(flags['core-dir']),
+        coreDir: flags['core-dir'] ? path.resolve(flags['core-dir']) : undefined,
         deploymentDir: path.resolve(flags['deployment-dir']),
         materialsReceipt: flags.materials,
         proofAwsConfig: flags['proof-aws-config'],
+        release: flags.release,
+        releaseSha256: flags['release-sha256'],
         topologyBundle: flags['topology-bundle'],
       }
       if (!flags.apply) {
