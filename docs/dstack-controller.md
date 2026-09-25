@@ -1,9 +1,103 @@
-# Generate dstack controller production values
+# dstack controller operator guide
 
 The CLI generates `values/dstack-controller-production.yaml` for the independent
 `scroll-sdk/charts/dstack-controller` chart (initial contract: chart `0.1.0`,
 dstack `0.21.5`). This manages the controller's deployment configuration;
 Worker fleet/task generation and GPU provisioning are separate operations.
+
+## Workflow and effects
+
+Run commands from one deployment directory so that the private state, public
+configuration, Secrets and values belong to the same deployment.
+
+| Operation | Result | External effects |
+| --- | --- | --- |
+| `setup dstack-config` | Imports Vast.ai/GCP material and records public Secret references | Local files only; does not authenticate with a provider |
+| `setup generate-from-spec --with-values` | Generates deployment configuration and initial service values | Local files only |
+| `setup db-init --databases dstack` | Creates/updates the dstack database and login, saves its connection and Secret | Connects to and modifies an existing PostgreSQL server; does not create a cloud database service |
+| `setup gen-secrets --dstack-only` | Generates native controller config, auth and selected provider/database Secrets | Local files only |
+| `setup prep-charts --dstack-only` | Generates `values/dstack-controller-production.yaml` | Local files only; no bridge initialization or registry checks |
+| `setup push-secrets --dry-run` | Validates local inputs and describes the selected upload scope | No Kubernetes, AWS or Vault requests |
+| `setup push-secrets` without `--dry-run` | Uploads the selected Secret material | Writes to Kubernetes and/or the configured secret store |
+| `helm lint` / `helm template` | Checks and renders the controller chart | Local validation only |
+| Install/upgrade the controller chart | Starts/updates the controller in the cluster | Creates/updates Kubernetes resources; separate from GPU fleet/task submission |
+
+For a real PostgreSQL deployment, prepare `config.toml`, import provider
+credentials, initialize the selected existing database, generate Secrets and
+values, inspect the local plan, upload Secrets, then install the controller
+chart. PostgreSQL stores the controller's persistent application state. Its
+database credentials, dstack admin token and upstream provider credentials are
+different materials. The CLI's credential importer currently supports Vast.ai
+and GCP; other native dstack backends require separately managed server config
+and credential Secrets.
+
+For configuration review only, use the walkthrough below. It does not require a
+database, a Kubernetes context that exists, or valid cloud credentials.
+
+## Configuration-only walkthrough
+
+Prerequisites: build the CLI with `yarn build`, have Helm available, and check out
+the `scroll-sdk` version containing `charts/dstack-controller` alongside this
+repository. Start from the **scroll-sdk-cli repository root**. The commands below
+create a temporary deployment with SQLite and a deliberately invalid Vast.ai key;
+they never initialize a database, upload Secrets or install the chart.
+
+```bash
+DSTACK_CLI="$PWD/bin/run.js"
+DSTACK_CHART="$(cd ../scroll-sdk/charts/dstack-controller && pwd)"
+DSTACK_TEST_DIR="$(mktemp -d /tmp/dstack-config-review-XXXXXX)"
+cd "$DSTACK_TEST_DIR"
+umask 077
+mkdir -p .data
+
+cat > .data/doge-config.toml <<'TOML'
+[dstackController]
+enabled = true
+[dstackController.database]
+type = "sqlite"
+TOML
+printf '%s\n' 'offline-review-key-not-valid' > vastai-api-key
+
+node "$DSTACK_CLI" setup dstack-config \
+  --vastai-api-key-file vastai-api-key --non-interactive --json
+node "$DSTACK_CLI" setup gen-secrets --dstack-only -N --json
+node "$DSTACK_CLI" setup prep-charts --dstack-only -N --json
+node "$DSTACK_CLI" setup push-secrets --dstack-only --dry-run \
+  --kube-context offline-review --namespace dstack-review -N --json
+
+helm lint --strict "$DSTACK_CHART" \
+  -f values/dstack-controller-production.yaml
+helm template dstack-controller "$DSTACK_CHART" \
+  --namespace dstack-review \
+  -f values/dstack-controller-production.yaml > controller-rendered.yaml
+printf 'Review files in %s\n' "$DSTACK_TEST_DIR"
+```
+
+This Vast.ai-only SQLite example produces **two Secret YAML files** under
+`secrets/`: `dstack-controller-config.yaml` and `dstack-controller-auth.yaml`.
+It also saves private state in `.data/dstack/credentials.json`. Production
+values contain Secret references, not credentials. Adding GCP produces a third
+Secret YAML file, and PostgreSQL adds the database Secret. The rendered controller
+manifest contains a Deployment, Service, ServiceAccount and retained PVC; no GPU
+workload is submitted.
+
+Keep this directory for review or remove it after inspection. Do not reuse its
+fake credentials or generated controller identity for a real deployment. The
+example commands are local-only by behavior; the additional no-network namespace
+used in the acceptance check below is a separate isolation measure.
+
+To review PostgreSQL configuration without initializing a database, use a fresh
+test directory, select `database.type = "postgresql"`, and supply a deliberately
+invalid connection in its private `config.toml` before `gen-secrets`:
+
+```toml
+[db]
+DSTACK_DB_CONNECTION_STRING = "postgresql+asyncpg://dstack:test-only@postgres.invalid:5432/dstack?ssl=require"
+```
+
+Secret generation does not connect to this URL. Do not run `db-init` for this
+configuration-only exercise. For an actual deployment, use the real database
+initialization workflow below or an existing managed connection.
 
 ## Import Vast.ai and GCP credentials
 
@@ -69,10 +163,18 @@ scrollsdk setup prep-charts --dstack-only --non-interactive
 For a DeploymentSpec-driven environment:
 
 ```bash
+# Run from the deployment root containing the spec and imported private state.
 scrollsdk setup gen-secrets --dstack-only --spec deployment-spec.yaml -N
-scrollsdk setup generate-from-spec --spec deployment-spec.yaml \
-  --values-only --output ./generated-deployment
+scrollsdk setup prep-charts --dstack-only --spec deployment-spec.yaml -N
 ```
+
+If starting a complete deployment from a spec, generate `config.toml` first with
+`generate-from-spec --with-values --output .`, then initialize PostgreSQL when
+required, and run the commands above. `generate-from-spec` does not support `-N`;
+use its own `--json`/`--dry-run` options as needed. An alternate `--output` directory
+receives generated configuration, not a copy of `.data/dstack/credentials.json`.
+For a new deployment root, import credentials from that root before generating
+Secrets; changing `--output` alone does not move the private state.
 
 The generated files use the configured Secret names; defaults are:
 
@@ -156,6 +258,10 @@ or install it, submit tasks, delete retired Secrets, or release GPU resources.
 
 ### Offline credential handoff verification
 
+For file generation and Helm rendering only, use the
+[configuration-only walkthrough](#configuration-only-walkthrough). The scripts
+below have broader local runtime coverage and are not required for that exercise.
+
 After `yarn build`, run `node scripts/dstack-credentials-e2e.mjs`. It requires
 Helm, Docker, the sibling controller chart (override with `DSTACK_E2E_CHART`), and
 the pinned dstack image already cached locally. It imports disposable fake
@@ -165,6 +271,20 @@ none`, renders the chart, and exercises publication/re-publication through a
 simulated kubectl process. It deletes temporary credential files afterwards.
 This checks the local handoff, not live cloud permissions or a real Kubernetes
 API server. The separate database E2E below exercises PostgreSQL/controller startup.
+
+### Configuration acceptance scope (2026-09-25)
+
+Configuration E2E passed against CLI commit `3fb1106` and `scroll-sdk` commit
+`2607aa6`. The check used committed snapshots, fake credentials, an empty
+credential home and a Linux network namespace without routes. It exercised
+both Vast.ai/GCP together, PostgreSQL and SQLite, custom Secret names/keys,
+Ingress TLS, an existing PVC, repeated generation, credential updates, stale
+Secret rejection, disabled/invalid inputs and both upload scopes in local
+dry-run. The controller chart's six offline template tests also passed.
+
+This establishes the local CLI-to-chart configuration handoff. It does not
+establish live provider authentication, database connectivity, Kubernetes
+admission, controller startup, GPU allocation or real-proof acceptance.
 
 ## DeploymentSpec input
 
@@ -208,12 +328,36 @@ scrollsdk setup generate-from-spec --spec deployment-spec.yaml \
 The existing overwrite protection applies: review existing outputs before using
 `--force`. `--dry-run --values-only` lists the file without writing it.
 
-Generated production values select external PostgreSQL, a retained 20Gi PVC,
-one controller, a digest-pinned official image, CPU/memory resources, ClusterIP
-access and no service-account token automount. They can be supplied directly
-to the chart without an additional production values overlay. PostgreSQL is
-not provisioned by the CLI; supply the database URL through the named Secret.
-For an isolated SQLite controller, set `database.type: sqlite` explicitly.
+Generated dstack production values select external PostgreSQL, a retained 20Gi
+PVC, one controller, a digest-pinned official image, CPU/memory resources,
+ClusterIP access and no service-account token automount. They can be supplied
+directly to the chart without an additional production values overlay. The CLI
+does not provision a PostgreSQL server; supply the database URL through the named
+Secret. For an isolated SQLite controller, set `database.type: sqlite` explicitly.
+
+### Whole-deployment values are an intermediate stage
+
+`generate-from-spec --with-values` creates initial configuration for all selected
+services. Unlike dstack's complete controller overrides, some chain-service
+outputs still require the normal post-initialization `prep-charts` flow:
+
+- `l2-sequencer-production.yaml` and `l2-bootnode-production.yaml` contain
+  `__INSTANCE_INDEX__`. `prep-charts` expands these into per-instance files such
+  as `l2-sequencer-production-0.yaml`. Applying the templates directly would use
+  invalid resource names.
+- `frontends-config.yaml` is a frontend configuration intermediate consumed by
+  `prep-charts`, not an independent chart.
+- Full `prep-charts` requires bridge/genesis outputs, including protocol context
+  and withdrawal-processor configuration. `--dstack-only` bypasses these unrelated
+  prerequisites only for controller configuration.
+
+In the minimal-spec acceptance check, 24 YAML files were generated: 23 service
+values plus the frontend configuration intermediate. All 23 service charts
+rendered; 21 passed strict lint directly. The two instance templates failed strict
+lint because their index placeholders remained. This was not a full
+post-bridge/genesis preparation or whole-deployment runtime acceptance. Finish
+the chain initialization and instance preparation before treating those service
+values as deployment-ready.
 
 ## Existing deployment / prep-charts
 

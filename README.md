@@ -45,6 +45,10 @@ bin/run.js --help
 
 ## Documentation
 
+- [dstack controller operator guide](docs/dstack-controller.md) — Vast.ai/GCP
+  credential import, PostgreSQL/SQLite configuration, generated production values,
+  Secret upload scope, and a temporary-directory configuration-only walkthrough
+  that does not deploy services or request cloud resources.
 - [CubeSigner and proof configuration generation design](docs/cubesigner-proof-configuration-design.md)
   — audited policy/proof provenance gaps, receipt-backed configuration,
   provider-neutral Worker handoff, validation rules, and implementation phases.

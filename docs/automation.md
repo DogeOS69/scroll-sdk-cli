@@ -11,6 +11,15 @@ scrollsdk <command> --help
 
 The root README command section is generated from the same command metadata.
 
+For dstack, follow the [controller operator guide](dstack-controller.md). Its
+[configuration-only walkthrough](dstack-controller.md#configuration-only-walkthrough)
+uses a temporary deployment directory and stops after local validation and Helm
+rendering. `setup prep-charts --dstack-only` skips chain initialization and registry
+checks. `setup push-secrets --dry-run` is a local plan; omitting `--dry-run` writes
+to the selected destinations. In full scope, enabled dstack Secrets target the
+explicit Kubernetes context/namespace while ordinary service secrets target AWS
+Secrets Manager or Vault. `--dstack-only` limits the scope to dstack.
+
 ## Non-interactive execution
 
 Commands that support automation expose:
