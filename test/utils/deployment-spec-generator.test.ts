@@ -1529,6 +1529,7 @@ describe('deployment-spec-generator', () => {
         ]);
 
       const tsoValues = yaml.load(files['tso-service-production.yaml']) as any;
+      expect(tsoValues.ingress.main.annotations['nginx.ingress.kubernetes.io/proxy-body-size']).to.equal('4m');
       const tsoEnv = Object.fromEntries(tsoValues.env.map((item: any) => [item.name, item.value]));
       expect(tsoEnv.TIMEOUT_CHECK_INTERVAL_SECONDS).to.equal('60');
       expect(tsoEnv.TSO_CORRECTNESS_MAX_PSBT_BASE64_LEN).to.equal('130048');

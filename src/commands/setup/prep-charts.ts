@@ -3377,6 +3377,26 @@ export default class SetupPrepCharts extends Command {
         }
       }
       else if (chartName === "tso-service") {
+        // Old deployment files may predate the chart default. Fill only a
+        // missing annotation; explicit operator limits (including null to
+        // remove the Helm default) and other annotations remain untouched.
+        const ingress = productionYaml.ingress?.main
+        const ingressClass = ingress?.ingressClassName
+          ?? ingress?.annotations?.['kubernetes.io/ingress.class']
+          ?? 'nginx'
+        if (ingress?.enabled !== false && ingressClass === 'nginx') {
+          productionYaml.ingress ??= {}
+          productionYaml.ingress.main ??= {}
+          const {main} = productionYaml.ingress
+          main.annotations ??= {}
+          const key = 'nginx.ingress.kubernetes.io/proxy-body-size'
+          if (!Object.hasOwn(main.annotations, key)) {
+            main.annotations[key] = '4m'
+            changes.push({key: `ingress.main.annotations.${key}`, newValue: '4m', oldValue: 'undefined'})
+            updated = true
+          }
+        }
+
         if (!productionYaml.env) {
           this.error(`${chartName}: env not found in config`);
         }

@@ -868,7 +868,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
           }),
           ...buildEthDaSubmitterPublishEnv(spec),
           ...buildEthDaSubmitterS3Env(spec),
-          DOGEOS_ETH_DA_SUBMITTER_SERVICE__CYCLE_INTERVAL_MS: '1000',
+          DOGEOS_ETH_DA_SUBMITTER_SERVICE__CYCLE_INTERVAL_MS: '10000',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__LISTEN_ADDRESS: '0.0.0.0',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__LISTEN_PORT: '3004',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__SHUTDOWN_GRACE_PERIOD_SEC: '30',
@@ -1026,6 +1026,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
     image,
     ingress: {
       main: {
+        annotations: {'nginx.ingress.kubernetes.io/proxy-body-size': '4m'},
         hosts: [{
           host: spec.frontend.hosts.tso || '',
           paths: [{ path: '/', pathType: 'Prefix' }]
