@@ -6,10 +6,69 @@ proofs, run a Worker service, or rewrite deployment configuration. Use it before
 the material import and compiler preflight in [the operator runbook](proof-operator-runbook.md).
 
 Every image must have an `org.opencontainers.image.revision` label equal to the
-explicit full `--expected-core-revision`. Tags are resolved once; execution and
+explicit full `--expected-core-revision` for diagnostic export/derive, or the
+selected immutable release revision for `prepare-real`. Tags are resolved once; execution and
 the receipt use immutable digests. Pulling/resolving requires registry access;
 tool execution has no network, credentials, GPU, capabilities or writable root
 filesystem. This isolation is not a substitute for selecting trusted images.
+
+The complete PR #1177 candidate is now published as
+[`dogeos-proof-release-pr1177.json`](dogeos-proof-release-pr1177.json), with the
+six image pins and governed five-file bundle in one validated contract. Use
+[the composed prepare/publish flow](proof-config-transactions.md) for normal
+configuration. The earlier two tools below remain diagnostic interfaces.
+
+## Historical PR #1177 diagnostic tool pins
+
+The 2026-09-21 image build and design review is recorded in
+[proof-release-pr1177-review.md](proof-release-pr1177-review.md). The corresponding
+[image inventory](proof-tool-images-pr1177.json) records the dedicated tags,
+immutable references, full core revision and GitHub Actions runs. These tools
+belong to the PR revision, not to the historical beta.4e examples below.
+
+For an explicitly selected PR tool and compatible, independently verified five-file
+input bundle, set `PROOF_TOOL_PINS` to the inventory's absolute path and
+`CANDIDATE_RELEASE` to the input bundle directory. From the deployment directory:
+
+```bash
+CORE_REVISION=$(jq -er '.coreRevision' "$PROOF_TOOL_PINS")
+PRODUCER_IMAGE=$(jq -er '.images.producer | select(.status == "published") | .reference' "$PROOF_TOOL_PINS")
+scrollsdk setup proof-image-tools --action derive-scroll \
+  --deployment-dir . --output .data/generated/proof-scroll-identities-pr1177 \
+  --expected-core-revision "$CORE_REVISION" \
+  --producer-image "$PRODUCER_IMAGE" \
+  --artifact-root "$CANDIDATE_RELEASE" --json
+```
+
+This remains five-file identity derivation. It does not produce a complete
+deployment-bound preparation root or approve real proving. The publisher image is recorded for diagnostic provenance. The new publication
+path selects its publisher and mapping through `--release` and `--release-sha256`;
+`--core-dir` remains an explicit deprecated compatibility path. The inventory
+is not a unified `dogeos-proof-release-v1` manifest or an automatic chart override.
+
+## Complete deployment-bound preparation
+
+Use the complete, validated manifest from the coherent release pipeline; the
+historical two-tool inventory above is not accepted as a release manifest.
+
+```bash
+scrollsdk setup proof-image-tools --action prepare-real \
+  --deployment-dir . --release dogeos-proof-release-v1.json \
+  --release-sha256 "$PROOF_RELEASE_SHA256" \
+  --protocol-context .data/protocol_context.json \
+  --output .data/preparation-candidate --json
+```
+
+Only protocol context and the new output directory are mounted. The CPU
+producer packages the five governed programs/VK, native materializers and the
+pinned guest builder. The container uses no network/GPU/credentials, a read-only
+root, a non-root UID, writable `/tmp` and an executable tmpfs for Cargo's build
+scripts. It emits a native Bridge/Aggregation bake, a relative-path software
+manifest, worker identities and per-file receipts. Validation completes before
+one rename makes the complete output visible.
+
+For the composed prepare/publish flow, see
+[proof configuration transactions](proof-config-transactions.md).
 
 ## Export matching binaries and a compiled identity
 

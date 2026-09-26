@@ -20,6 +20,12 @@ material receipt. Mock proof generation with **real materialization** additional
 requires non-placeholder matching identities and the real Scroll material files;
 the lightweight mock path above covers synthetic materialization only.
 
+For a complete real release, use the
+[real-proof release handoff workflow](proof-release-workflow.md). It captures all
+native paths and hashes in one preparation receipt, validates the production
+CUDA image in a second receipt, and lets this command import both without
+repeating the individual native flags.
+
 ## What is produced
 
 The command writes `.data/proof-materials-v1.json` with schema
@@ -206,6 +212,21 @@ image; use `--help` for the exact flags. Import copies regular files into
 `.data/proof-materials`, rejects symlinks and
 path traversal, recomputes every hash and identity relationship it can verify,
 and writes the same receipt as the guided path.
+
+The preferred repeatable form is:
+
+```bash
+scrollsdk setup proof-materials \
+  --generation real --non-interactive \
+  --preparation-receipt .data/proof-release-preparation-v1.json \
+  --production-worker-receipt .data/proof-worker-image-check-v1.json \
+  --mock-worker-image '<approved-image-or-digest>' \
+  --compiler-image '<approved-image-or-digest>'
+```
+
+The preparation receipt supplies the identity env, producer manifest, both
+materializers, Bridge directory, and protocol context. The Worker receipt
+supplies the digest-pinned CUDA image and must carry the same core revision.
 
 ## Required validation
 

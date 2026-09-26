@@ -44,6 +44,25 @@ infrastructure:
   bootnodeCount: 2
   # Sequencer/bootnode instance metadata is populated by `scrollsdk setup gen-keystore`.
 
+# Optional standalone dstack controller. Omit when using an existing controller
+# or a different worker deployment adapter. Secret contents are managed separately.
+# dstackController:
+#   enabled: true
+#   serverConfig:
+#     existingSecret: dstack-controller-config
+#     key: config.yml
+#   auth:
+#     existingSecret: dstack-controller-auth
+#     key: admin-token
+#   database:
+#     type: postgresql
+#     existingSecret: dstack-controller-database
+#     key: database-url
+#   persistence:
+#     size: 20Gi
+#     storageClass: gp3
+# See docs/dstack-controller.md for ingress and multi-provider credentials.
+
 network:
   l1ChainName: "DOGE"
   l2ChainName: "DogeOS Devnet"

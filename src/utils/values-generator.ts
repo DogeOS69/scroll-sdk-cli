@@ -21,12 +21,14 @@ import {
   L1_INTERFACE_RPC_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
+import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 import {
   getBridgeFeeRateSatsPerKvb,
   getDogecoinIndexerStartHeight,
   getL1GenesisBlock,
   normalizeDeploymentSpec,
 } from './deployment-spec-generator.js'
+import {DSTACK_CONTROLLER_VALUES_FILE, generateDstackControllerValues} from './dstack-controller-values.js'
 import {
   resolveDogecoinKubernetesEndpoints,
 } from './kubernetes-endpoints.js'
@@ -366,6 +368,9 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
   )) throw new Error('DeploymentSpec proof enforcement requires active real proving')
 
   const files: GeneratedValuesFiles = {}
+
+  const dstackValues = generateDstackControllerValues(normalizedSpec.dstackController)
+  if (dstackValues !== undefined) files[DSTACK_CONTROLLER_VALUES_FILE] = dstackValues
 
   // Core L2 infrastructure
   files['l2-sequencer-production.yaml'] = generateL2SequencerValues(normalizedSpec)
@@ -863,7 +868,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
           }),
           ...buildEthDaSubmitterPublishEnv(spec),
           ...buildEthDaSubmitterS3Env(spec),
-          DOGEOS_ETH_DA_SUBMITTER_SERVICE__CYCLE_INTERVAL_MS: '1000',
+          DOGEOS_ETH_DA_SUBMITTER_SERVICE__CYCLE_INTERVAL_MS: '10000',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__LISTEN_ADDRESS: '0.0.0.0',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__LISTEN_PORT: '3004',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__SHUTDOWN_GRACE_PERIOD_SEC: '30',
@@ -1021,6 +1026,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
     image,
     ingress: {
       main: {
+        annotations: {'nginx.ingress.kubernetes.io/proxy-body-size': '4m'},
         hosts: [{
           host: spec.frontend.hosts.tso || '',
           paths: [{ path: '/', pathType: 'Prefix' }]
@@ -1211,7 +1217,8 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
  */
 function generateCubesignerValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
-  const productionPolicy = spec.signing?.cubesigner?.productionPolicy
+  const policyResolution = resolveCubesignerPolicy({keys: (spec.signing?.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.keyId, materialId: key.materialId, roleId: role.roleId}))), network: spec.dogecoin.network, selection: spec.signing?.cubesigner})
+  const productionPolicy = policyResolution.policy
 
   const image = resolveImage(spec, 'cubesignerSigner', {
     pullPolicy: 'IfNotPresent',
@@ -1317,6 +1324,12 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
       size: '1Gi'
     }]
   }
+
+  const policyEnv = cubesignerPolicyEnvironment(policyResolution)
+  values.env = values.env.map((item: {name: string; value?: string}) => Object.hasOwn(policyEnv, item.name) ? {name: item.name, value: policyEnv[item.name]} : item)
+  const liveProjection = cubesignerLiveEvidenceProjection(policyResolution)
+  values.configMaps = {...values.configMaps, ...liveProjection.configMaps}
+  values.persistence = {...values.persistence, ...liveProjection.persistence}
 
   // Generate external secrets for both env and session
   const envSecrets = generateExternalSecrets(
@@ -1474,6 +1487,7 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
 
   if (explicitSecretName) values.persistence.secrets.name = explicitSecretName
   if (serviceAccountName) values.serviceAccount.name = serviceAccountName
+
 
   const externalSecrets = generateExternalSecrets(
     localSecretKey,

@@ -199,7 +199,11 @@ describe('self-contained proof topology Kubernetes adapter', () => {
 
   it('keeps real materialization self-contained without deploying a mock Worker', () => {
     const result = reconcileCompiledProofTopology({
-      compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active'),
+      compile() {
+        const bundle = fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active')
+        fs.appendFileSync(path.join(bundle.bundleDir, 'withdrawal-processor.toml'), 'signer_proof_artifact_base_url = "https://proofs.example.com/bucket/prefix"\n')
+        return bundle
+      },
       coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
       deploymentDir: root,
       deploymentName: 'test',
@@ -210,6 +214,7 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     })
 
     expect(result).not.to.have.property('helmSetFiles')
+    expect(result.proofArtifactBaseUrl).to.equal('https://proofs.example.com/bucket/prefix')
     const withdrawal = yaml.load(fs.readFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), 'utf8')) as any
     expect(withdrawal.configMaps.config.data['WithdrawalProcessor.toml']).to.include('mode = "active"')
     expect(withdrawal.secrets?.['proof-runtime-seed']).to.equal(undefined)
@@ -349,7 +354,38 @@ describe('self-contained proof topology Kubernetes adapter', () => {
         .to.equal('AAECAw==')
       expect(values.initContainers['prepare-proof-runtime-materials'].args[0])
         .to.include('root_verifier_vk.b64')
+        .and.to.include('rm -f')
     }
+  })
+
+  it('stages versioned proof releases relative to their selected resources root', () => {
+    const proofTopology = topology('active')
+    proofTopology.generation = 'real'
+    const releaseRoot = '.data/proof-materials/core-test-release'
+    fs.mkdirSync(path.join(root, releaseRoot), {recursive: true})
+    fs.cpSync(path.join(root, '.data/proof-materials/software'), path.join(root, releaseRoot, 'software'), {recursive: true})
+    proofTopology.active!.realScroll.resourcesRoot = releaseRoot
+    proofTopology.active!.realScroll.aggVerifyingKeyPath = `${releaseRoot}/software/verifier/root_verifier_vk`
+    proofTopology.active!.realScroll.batchMaterializerBinaryPath = `${releaseRoot}/software/bin/batch-materializer`
+    proofTopology.active!.realScroll.chunkMaterializerBinaryPath = `${releaseRoot}/software/bin/chunk-materializer`
+
+    reconcileCompiledProofTopology({
+      compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active'),
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      deploymentDir: root,
+      deploymentName: 'test',
+      network: 'testnet',
+      proofTopology,
+      valuesDir: path.join(root, 'values'),
+      withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
+    })
+
+    const values = yaml.load(fs.readFileSync(path.join(root, 'values/proof-coordinator-production.yaml'), 'utf8')) as any
+    const init = values.initContainers['prepare-proof-runtime-materials'].args[0] as string
+    expect(init).to.include('/app/data/proof-materials/software/verifier/root_verifier_vk')
+    expect(init).to.include('/app/data/proof-materials/software/bin/chunk-materializer')
+    expect(init).to.include('/app/data/proof-materials/software/bin/batch-materializer')
+    expect(init).not.to.include('/app/data/proof-materials/core-test-release')
   })
 
   it('keeps Kubernetes as an explicit deployment backend for local CPU Workers', () => {

@@ -157,6 +157,33 @@ describe('real bake worker identity import', () => {
     expect(() => readProofMaterials(prepared.receiptPath, root)).to.throw('content drift')
   })
 
+  it('accepts an explicitly selected real identity and rejects a different Bridge binding', () => {
+    const input = fixture(root)
+    const selected = path.join(root, 'selected-worker.json')
+    fs.writeFileSync(selected, JSON.stringify({...input.bundle, bridge_guest: {...input.bundle.bridge_guest, verification_key_hash: `0x${'f'.repeat(64)}`}}))
+    expect(() => prepareProofMaterials({...input.options, workerIdentityBundle: selected})).to.throw('does not match the identity probe')
+    fs.copyFileSync(input.bundlePath, selected)
+    const prepared = prepareProofMaterials({...input.options, workerIdentityBundle: selected})
+    const receipt = readProofMaterials(prepared.receiptPath, root)
+    expect(fs.readFileSync(path.join(root, receipt.software.compilerIdentity!.path), 'utf8')).to.equal(fs.readFileSync(selected, 'utf8'))
+  })
+
+  it('uses a versioned proof material directory as the topology resource root', () => {
+    const input = fixture(root)
+    const prepared = prepareProofMaterials({
+      ...input.options,
+      outputReceipt: path.join(root, '.data/proof-materials-release-a.json'),
+      outputRoot: path.join(root, '.data/proof-materials/release-a'),
+    })
+    const receipt = readProofMaterials(prepared.receiptPath, root)
+    const selected = topology(receipt)
+
+    expect(selected.active?.realScroll.resourcesRoot)
+      .to.equal('.data/proof-materials/release-a')
+    expect(selected.compiler.identityFilePath)
+      .to.equal('.data/proof-materials/release-a/bridge/worker-identity-bundle.json')
+  })
+
   it('refuses legacy real receipts instead of passing the artifact manifest as an identity bundle', () => {
     const input = fixture(root)
     const prepared = prepareProofMaterials(input.options)

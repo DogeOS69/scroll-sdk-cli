@@ -1,3 +1,6 @@
+import type {CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
+import type {SignerValidationInputs} from '../utils/proof-enforcement-readiness.js'
+import type {DstackControllerConfig} from './dstack-controller.js'
 import type {ProofTopologySpec} from './proof-topology.js'
 
 export type Network = 'mainnet' | 'regtest' | 'testnet'
@@ -78,6 +81,7 @@ export interface DogeConfig {
     }
     /** 'external' = partner-operated signers (descriptor-imported); legacy in-cluster configs omit this. */
     mode?: 'external'
+    policyValidation?: SignerValidationInputs
     /** Legacy in-cluster provisioning only; absent for external signers. */
     profile?: 'production-kms' | 'staging-kms' | 'staging-local'
     threshold: number
@@ -93,6 +97,8 @@ export interface DogeConfig {
     }>
   }
   cubesigner?: {
+    mode?: CubesignerPolicyMode
+    policyReceipts?: CubesignerPolicyReceiptInputs
     productionPolicy?: CubesignerProductionPolicy
     roles: CubesignerRole[]
   }
@@ -114,6 +120,8 @@ export interface DogeConfig {
     password?: string // for dogecoin that deploy on cluster
     username?: string // for dogecoin that deploy on cluster
   }
+  /** Public Helm deployment inputs; credentials remain in referenced Kubernetes Secrets. */
+  dstackController?: DstackControllerConfig
 
   ethereumDa?: {
     batch?: {

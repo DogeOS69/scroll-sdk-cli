@@ -26,6 +26,7 @@ import {
   L1_INTERFACE_RPC_WEBSOCKET_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
+import {validateDstackControllerConfig} from './dstack-controller-values.js'
 import { normalizeCompressedSecp256k1PublicKey } from './secp256k1-public-key.js'
 import { MANAGED_SIGNER_ROLES, buildLocalSignerConfig } from './signer-roles.js'
 
@@ -1211,6 +1212,16 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     }
   }
 
+  try {
+    validateDstackControllerConfig(spec.dstackController)
+  } catch (error) {
+    errors.push({
+      code: 'E015_INVALID_DSTACK_CONTROLLER_CONFIG',
+      message: error instanceof Error ? error.message : 'Invalid dstack controller configuration',
+      path: 'dstackController',
+    })
+  }
+
   return {
     errors,
     valid: errors.length === 0,
@@ -1499,6 +1510,9 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
 
   config.network = spec.dogecoin.network
 
+  validateDstackControllerConfig(spec.dstackController)
+  if (spec.dstackController !== undefined) config.dstackController = structuredClone(spec.dstackController)
+
   config.rpc = {
     password: externalRpc.password || '',
     url: externalRpc.url,
@@ -1576,6 +1590,8 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   // Add signing configuration
   if (spec.signing.cubesigner) {
     config.cubesigner = {
+      ...(spec.signing.cubesigner.mode ? {mode: spec.signing.cubesigner.mode} : {}),
+      ...(spec.signing.cubesigner.policyReceipts ? {policyReceipts: spec.signing.cubesigner.policyReceipts} : {}),
       ...(spec.signing.cubesigner.productionPolicy
         ? {productionPolicy: spec.signing.cubesigner.productionPolicy}
         : {}),

@@ -5,17 +5,24 @@ import * as path from 'node:path'
 import type {ProofEnforcement, ProofGeneration, ProofTopologyMode} from '../types/proof-topology.js'
 import type {ProofIntentSource} from './proof-intent.js'
 
+import {proofManagedValuesDigest} from './proof-managed-values.js'
+import {readProofMaterials} from './proof-materials.js'
+import {proofRegularFile} from './proof-software-release.js'
+
 export const DEFAULT_PROOF_DEPLOYMENT_CONTRACT = '.data/proof-deployment.json'
 
 export interface ProofDeploymentComponent {
   enabled: boolean
+  managedSha256: string
   valuesFile: string
   valuesIntegrity: 'required'
   valuesSha256: string
 }
 
 export interface ProofDeploymentContract {
+  artifactStoreReceipt?: {path: string; sha256: string}
   components: {
+    cubesignerSigner?: ProofDeploymentComponent
     eagerMaterializer?: ProofDeploymentComponent
     ethDaSubmitter: ProofDeploymentComponent
     proofCoordinator: ProofDeploymentComponent
@@ -28,10 +35,11 @@ export interface ProofDeploymentContract {
   generation: ProofGeneration
   generationId: string
   generator: {command: 'scrollsdk setup prep-charts'; version: 3}
+  inputs?: {materials: {path: string; sha256: string}; protocolContext: {path: string; sha256: string}; publication?: {path: string; sha256: string}}
   intentSource: ProofIntentSource
   mode: ProofTopologyMode
   proofArtifactBaseUrl?: string
-  schemaVersion: 7
+  schemaVersion: 8
   topology: {
     bundleDir: string
     bundleManifest: string
@@ -57,16 +65,20 @@ interface ComponentInput {
 
 export interface ProofDeploymentContractInput {
   contractPath?: string
+  cubesignerSigner?: ComponentInput
   deploymentDir: string
   eagerMaterializer?: ComponentInput
   enforcement: ProofEnforcement
   ethDaSubmitter: {valuesFile: string}
   generation: ProofGeneration
   intentSource: ProofIntentSource
+  materialsReceipt?: string
   mode: ProofTopologyMode
   proofArtifactBaseUrl?: string
+  proofAwsConfig?: string
   proofCoordinator: ComponentInput
   proverWorker: ComponentInput
+  publicationReceipt?: string
   topology: {bundleDir: string; bundleManifest: string; bundleRevision: string; resolvedSidecar: string}
   tsoValuesFile: string
   withdrawalProcessor: ComponentInput
@@ -92,10 +104,11 @@ function relative(root: string, filePath: string): string {
   return value.startsWith('..') || path.isAbsolute(value) ? resolved : value || '.'
 }
 
-function component(root: string, input: ComponentInput): ProofDeploymentComponent {
+function component(root: string, input: ComponentInput, name: string): ProofDeploymentComponent {
   if (!fs.existsSync(input.valuesFile)) throw new Error(`proof values file not found: ${input.valuesFile}`)
   return {
     enabled: input.enabled,
+    managedSha256: proofManagedValuesDigest(input.valuesFile, name),
     valuesFile: relative(root, input.valuesFile),
     valuesIntegrity: 'required',
     valuesSha256: sha256File(input.valuesFile),
@@ -119,14 +132,29 @@ export function writeProofDeploymentContract(input: ProofDeploymentContractInput
       : (() => { throw new Error('active topology is missing its Worker contract') })()
   const manifest = path.resolve(root, input.topology.bundleManifest)
   const sidecar = path.resolve(root, input.topology.resolvedSidecar)
+  let inputs: ProofDeploymentContract['inputs']
+  if (input.materialsReceipt) {
+    const receiptPath = proofRegularFile(path.resolve(root, input.materialsReceipt))
+    const materials = readProofMaterials(receiptPath, root)
+    if (!materials.bridge) throw new Error('Selected proof materials have no protocol-bound Bridge bake')
+    const protocol = proofRegularFile(path.resolve(root, materials.bridge.protocolContextPath))
+    inputs = {
+      materials: {path: relative(root, receiptPath), sha256: sha256File(receiptPath)},
+      protocolContext: {path: relative(root, protocol), sha256: materials.bridge.protocolContextSha256},
+      ...(input.publicationReceipt ? {publication: {path: relative(root, proofRegularFile(path.resolve(root, input.publicationReceipt))), sha256: sha256File(path.resolve(root, input.publicationReceipt))}} : {}),
+    }
+  }
+
   const stable = {
+    ...(input.proofAwsConfig ? {artifactStoreReceipt: {path: relative(root, proofRegularFile(path.resolve(root, input.proofAwsConfig))), sha256: sha256File(path.resolve(root, input.proofAwsConfig))}} : {}),
     components: {
-      ...(input.eagerMaterializer ? {eagerMaterializer: component(root, input.eagerMaterializer)} : {}),
-      ethDaSubmitter: component(root, {enabled: true, valuesFile: input.ethDaSubmitter.valuesFile}),
-      proofCoordinator: component(root, input.proofCoordinator),
-      proverWorker: component(root, input.proverWorker),
-      tsoService: component(root, {enabled: true, valuesFile: input.tsoValuesFile}),
-      withdrawalProcessor: component(root, input.withdrawalProcessor),
+      ...(input.cubesignerSigner ? {cubesignerSigner: component(root, input.cubesignerSigner, 'cubesignerSigner')} : {}),
+      ...(input.eagerMaterializer ? {eagerMaterializer: component(root, input.eagerMaterializer, 'eagerMaterializer')} : {}),
+      ethDaSubmitter: component(root, {enabled: true, valuesFile: input.ethDaSubmitter.valuesFile}, 'ethDaSubmitter'),
+      proofCoordinator: component(root, input.proofCoordinator, 'proofCoordinator'),
+      proverWorker: component(root, input.proverWorker, 'proverWorker'),
+      tsoService: component(root, {enabled: true, valuesFile: input.tsoValuesFile}, 'tsoService'),
+      withdrawalProcessor: component(root, input.withdrawalProcessor, 'withdrawalProcessor'),
     },
     enforcement: input.enforcement,
     generation: input.generation,
@@ -134,7 +162,8 @@ export function writeProofDeploymentContract(input: ProofDeploymentContractInput
     intentSource: {...input.intentSource, path: relative(root, input.intentSource.path)},
     mode: input.mode,
     ...(input.proofArtifactBaseUrl ? {proofArtifactBaseUrl: input.proofArtifactBaseUrl} : {}),
-    schemaVersion: 7 as const,
+    ...(inputs ? {inputs} : {}),
+    schemaVersion: 8 as const,
     topology: {
       bundleDir: relative(root, input.topology.bundleDir),
       bundleManifest: relative(root, manifest),
@@ -163,7 +192,7 @@ export function readProofDeploymentContract(deploymentDir = '.', contractPath = 
   const resolved = path.resolve(deploymentDir, contractPath)
   if (!fs.existsSync(resolved)) throw new Error(`proof deployment contract not found: ${resolved}; run scrollsdk setup prep-charts first`)
   const contract = JSON.parse(fs.readFileSync(resolved, 'utf8')) as ProofDeploymentContract
-  if (contract.schemaVersion !== 7) throw new Error(`${resolved}: unsupported proof deployment contract; rerun prep-charts`)
+  if (contract.schemaVersion !== 8) throw new Error(`${resolved}: unsupported proof deployment contract; rerun prep-charts`)
   return {contract, contractPath: resolved}
 }
 
@@ -184,11 +213,31 @@ export function validateProofDeploymentContract(
   if (contract.enforcement === 'enforce' && (contract.mode !== 'active' || contract.generation !== 'real')) problems.push('enforcement requires active real proving')
   for (const [name, item] of Object.entries(contract.components)) {
     const values = resolveContractFile(root, item.valuesFile)
-    // Deployment-specific overlays (for example the shadowfork RPC/network
-    // projection) are intentionally applied after prep-charts. Require every
-    // declared values file to remain present, but do not treat a byte-level
-    // values change as corruption of the compiler-owned proof artifacts.
     if (!fs.existsSync(values)) problems.push(`${name}: values file is missing`)
+    else if (proofManagedValuesDigest(values, name) !== item.managedSha256) problems.push(`${name}: proof-managed values changed; rerun prep-charts`)
+
+  }
+
+  if (contract.artifactStoreReceipt) {
+    try {
+      if (sha256File(proofRegularFile(resolveContractFile(root, contract.artifactStoreReceipt.path))) !== contract.artifactStoreReceipt.sha256) problems.push('artifact-store receipt checksum mismatch')
+    } catch { problems.push('artifact-store receipt is missing or unsafe') }
+  }
+
+  for (const [name, binding] of Object.entries(contract.inputs ?? {})) {
+    try {
+      if (sha256File(proofRegularFile(resolveContractFile(root, binding.path))) !== binding.sha256) problems.push(`${name}: selected input checksum mismatch`)
+    } catch { problems.push(`${name}: selected input is missing or unsafe`) }
+  }
+
+  if (contract.inputs) {
+    try { readProofMaterials(resolveContractFile(root, contract.inputs.materials.path), root) }
+    catch (error) { problems.push(`selected materials: ${String(error)}`) }
+  }
+
+  if (contract.worker.enabled) {
+    const file = contract.worker.contractFile && resolveContractFile(root, contract.worker.contractFile)
+    if (!file || !fs.existsSync(file) || sha256File(file) !== contract.worker.contractSha256) problems.push('Worker contract checksum mismatch')
   }
 
   const manifest = resolveContractFile(root, contract.topology.bundleManifest)

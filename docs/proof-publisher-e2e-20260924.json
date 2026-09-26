@@ -1,0 +1,16 @@
+{
+  "schema": "scrollsdk/proof-publisher-isolated-e2e/v1",
+  "result": "passed",
+  "createdAt": "2026-09-24T03:55:39.718Z",
+  "preparedReceiptSha256": "5b61eb203a1eb6ce20f718db67c29f0660c219170bb86376e8b21a9cb336677f",
+  "releaseSha256": "51645abda8736504dfb82ae16578297b66ec4b7fa26a718885c95c21aff2a2ef",
+  "publisherImage": "dogeos69/proof-bundle-publisher@sha256:1895d09a8ed94ac2542e164dd57b3e0641ad7923cee5f0b27eb40d7b54b532c4",
+  "minioImage": "quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e",
+  "fileCount": 11,
+  "verification": {
+    "authenticatedPublisherReadback": "passed",
+    "anonymousReadback": "passed",
+    "anonymousDeniedWithoutPolicy": "passed"
+  },
+  "scope": "CLI frozen plan and publisher image; isolated MinIO. No CLI apply/final contract, GPU proof, CubeSigner, or existing deployment mutation."
+}

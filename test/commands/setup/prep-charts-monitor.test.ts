@@ -159,9 +159,29 @@ describe('setup prep-charts scroll-monitor balance generation', () => {
       const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prep-monitor-'))
       try {
         const file = path.join(directory, filename)
+        const grafana = {
+          alerting: {
+            'instatus-contact-points.yaml': {
+              apiVersion: 1,
+              contactPoints: [{
+                name: 'operator-instatus',
+                orgId: 1,
+                receivers: [{
+                  disableResolveMessage: false,
+                  settings: {httpMethod: 'POST', url: '$INSTATUS_GRAFANA_WEBHOOK_URL'},
+                  type: 'webhook',
+                  uid: 'operator-instatus-webhook',
+                }],
+              }],
+            },
+          },
+          envValueFrom: {
+            INSTATUS_GRAFANA_WEBHOOK_URL: {secretKeyRef: {key: 'webhook-url', name: 'operator-instatus'}},
+          },
+        }
         fs.writeFileSync(file, yaml.dump({balanceMonitoring: {
           ethereum: {ethDaSubmitter: {address: '<TODO>'}, feeOracle: {address: '<TODO>'}},
-        }}))
+        }, grafana}))
         const config = inputs()
         const output: string[] = []
         const command: any = Object.create(PrepCharts.prototype)
@@ -170,7 +190,9 @@ describe('setup prep-charts scroll-monitor balance generation', () => {
             // Root compatibility and stale DA values must never supply monitoring identities.
             accounts: {L1_COMMIT_SENDER_ADDR: ROTATED_ADDRESS},
             ethereumDa: {chainId: 999, submitterRpcUrl: 'http://wrong-chain:8545'},
+            frontend: {GRAFANA_URI: 'https://grafana.example.com'},
             general: {CHAIN_ID_L2: config.l2ChainId, L2_RPC_ENDPOINT: config.l2RpcUrl},
+            ingress: {GRAFANA_HOST: 'grafana.example.com'},
           },
           dogeConfig: config.dogeConfig,
           jsonCtx: {info() {}, logSuccess() {}},
@@ -181,6 +203,9 @@ describe('setup prep-charts scroll-monitor balance generation', () => {
         expect(await command.processProductionYaml(directory)).to.deep.equal({skipped: 0, updated: 1})
         const first = fs.readFileSync(file, 'utf8')
         const generated = yaml.load(first) as any
+        // Preserve operator-owned native integration config and literal Secret interpolation.
+        expect(generated.grafana.envValueFrom).to.deep.equal(grafana.envValueFrom)
+        expect(generated.grafana.alerting).to.deep.equal(grafana.alerting)
         expect(generated.balanceMonitoring.ethereum.ethDaSubmitter.address).to.equal(DA_ADDRESS)
         expect(generated.balanceMonitoring.ethereum.ethDaSubmitter.expectedChainId).to.equal('1')
         expect(generated.balanceMonitoring.ethereum.ethDaSubmitter.rpcUrl).to.equal(config.dogeConfig.ethereumDa.submitterRpcUrl)

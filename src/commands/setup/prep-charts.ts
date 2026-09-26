@@ -10,6 +10,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import type { DogeConfig } from '../../types/doge-config.js'
+import type {DstackControllerConfig} from '../../types/dstack-controller.js'
 
 import {
   L1_INTERFACE_BEACON_API_ENDPOINT,
@@ -17,7 +18,11 @@ import {
   YAML_DUMP_OPTIONS,
 } from '../../config/constants.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
+import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
+import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import {DSTACK_CONTROLLER_VALUES_FILE, generateDstackControllerValues, validateDstackControllerConfig} from '../../utils/dstack-controller-values.js'
+import {readDstackControllerConfig} from '../../utils/dstack-database.js'
 import { GenerationTransaction } from '../../utils/generation-transaction.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
@@ -41,6 +46,7 @@ import {assertTopologyUsesSharedArtifactStore, sharedArtifactStoreFromDogeConfig
 import {proofTopologyEthereumDaBlobSource} from '../../utils/proof-topology-compiler.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {reconcileScrollMonitorBalances} from '../../utils/scroll-monitor-values.js'
+import {reconcileScrollMonitorStatusPage} from '../../utils/status-page-values.js'
 import {
   getRequiredManagedSignerAddress,
   getRequiredManagedSignerConfig,
@@ -238,27 +244,10 @@ export function buildCubesignerPrepEnv(
     DOGEOS_CUBESIGNER_SIGNER_TSO_URL: 'http://tso-service:3000',
     NETWORK: config.network,
   }
-  const policy = config.cubesigner?.productionPolicy
-  if (policy) {
-    env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER = policy.policyIdentifier
-    env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_ARTIFACT_DIGEST =
-      policy.policyArtifactDigest
-    env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_VERIFIER_IDENTITY_DIGEST =
-      policy.verifierIdentityDigest
-    env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROGRAM_IDENTITY_DIGEST =
-      policy.programIdentityDigest
-    env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROOF_RESOLVER_AUTHORITY =
-      policy.proofResolverAuthority
-    if (policy.liveEvidenceReportPath) {
-      env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_LIVE_EVIDENCE_REPORT_PATH =
-        policy.liveEvidenceReportPath
-    }
-
-    if (policy.liveEvidenceReportDigest) {
-      env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_LIVE_EVIDENCE_REPORT_DIGEST =
-        policy.liveEvidenceReportDigest
-    }
-  }
+  Object.assign(env, cubesignerPolicyEnvironment(resolveCubesignerPolicy({
+    keys: (config.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: config.network,
+    selection: config.cubesigner,
+  })))
 
   return env
 }
@@ -1308,6 +1297,7 @@ export default class SetupPrepCharts extends Command {
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml',
+    '<%= config.bin %> <%= command.id %> --dstack-only --non-interactive',
     '<%= config.bin %> <%= command.id %> --github-username=your-username --github-token=your-token',
     '<%= config.bin %> <%= command.id %> --values-dir=./custom-values',
     '<%= config.bin %> <%= command.id %> --skip-auth-check',
@@ -1316,6 +1306,7 @@ export default class SetupPrepCharts extends Command {
 
   static override flags = {
     'doge-config': Flags.string({ description: 'Path to Dogecoin config file' }),
+    'dstack-only': Flags.boolean({default: false, description: 'Generate only dstack controller production values without chain initialization or registry checks'}),
     'github-token': Flags.string({ description: 'GitHub Personal Access Token', required: false }),
     'github-username': Flags.string({ description: 'GitHub username', required: false }),
     json: Flags.boolean({
@@ -1327,6 +1318,8 @@ export default class SetupPrepCharts extends Command {
       default: false,
       description: 'Run without prompts. Auto-applies all detected changes.',
     }),
+    'proof-materials-receipt': Flags.string({description: 'Selected real proof-materials receipt to bind into the deployment contract'}),
+    'proof-publication-receipt': Flags.string({description: 'Selected program-publication receipt to bind into the deployment contract'}),
     'proof-topology-compiler-binary': Flags.string({
       description: 'Development-only local dogeos-proof-topology binary; production uses the digest-pinned configured image',
       exclusive: ['proof-topology-compiler-image'],
@@ -1341,7 +1334,7 @@ export default class SetupPrepCharts extends Command {
       description: 'Do not overwrite L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK in L2 production values files',
     }),
     spec: Flags.string({
-      description: 'Optional DeploymentSpec proof source; conflicts with doge-config [proof_topology]',
+      description: 'Optional DeploymentSpec for proof topology and dstack controller values; proof topology conflicts with doge-config [proof_topology]',
     }),
     'values-dir': Flags.string({ default: './values', description: 'Directory containing values files; must be inside the deployment root for transactional generation' }),
   }
@@ -1392,6 +1385,7 @@ export default class SetupPrepCharts extends Command {
 
   private contractsConfig: any = {}
   private dogeConfig: DogeConfig = {} as DogeConfig
+  private dstackController?: DstackControllerConfig
   private flags: any
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
@@ -1410,6 +1404,24 @@ export default class SetupPrepCharts extends Command {
     this.jsonMode = flags.json
     this.skipL2ContractDeploymentBlock = flags['skip-l2-contract-deployment-block']
     this.jsonCtx = new JsonOutputContext('setup prep-charts', this.jsonMode)
+
+    if (flags['dstack-only']) {
+      this.dstackController = readDstackControllerConfig(flags['doge-config'], flags.spec)
+      if (!this.dstackController || this.dstackController.enabled === false) throw new Error('An enabled dstackController configuration is required')
+      const root = process.cwd()
+      const valuesDir = path.resolve(root, flags['values-dir'])
+      const transaction = GenerationTransaction.begin(root)
+      try {
+        const generation = await this.processDstackControllerValues(transaction.toStagingPath(valuesDir))
+        const {changedFiles} = transaction.commit()
+        if (this.jsonMode) this.jsonCtx.success({changedFiles, ...generation, valuesDir})
+      } catch (error) {
+        transaction.rollback()
+        throw error
+      }
+
+      return
+    }
 
     this.jsonCtx.info('Starting chart preparation...')
 
@@ -1637,6 +1649,7 @@ export default class SetupPrepCharts extends Command {
       await this.processSequencerRethInstanceFiles(valuesDir)
     const {skipped: skippedProduction, updated: updatedProduction} =
       await this.processProductionYaml(valuesDir)
+    const dstack = await this.processDstackControllerValues(valuesDir)
     const {skipped: skippedConfig, updated: updatedConfig} =
       await this.processConfigYaml(valuesDir)
     const proof = this.proofIntent
@@ -1647,12 +1660,12 @@ export default class SetupPrepCharts extends Command {
       skippedBootnodeRethInstances,
       skippedConfig,
       skippedInstances,
-      skippedProduction,
+      skippedProduction: skippedProduction + dstack.skipped,
       skippedRethInstances,
       updatedBootnodeRethInstances,
       updatedConfig,
       updatedInstances,
-      updatedProduction,
+      updatedProduction: updatedProduction + dstack.updated,
       updatedRethInstances,
     }
   }
@@ -1821,12 +1834,18 @@ export default class SetupPrepCharts extends Command {
       'scrollsdk setup doge-config',
     )
     this.dogeConfig = config as DogeConfigType;
+    const deploymentSpec = flags.spec ? loadDeploymentSpec(path.resolve(flags.spec)) : undefined
+    this.dstackController = deploymentSpec?.dstackController ?? this.dogeConfig.dstackController
+    validateDstackControllerConfig(this.dstackController)
     this.proofIntent = resolveProofIntent({
       deploymentDir: process.cwd(),
       dogeConfig: this.dogeConfig,
       dogeConfigPath,
       required: false,
-      specPath: flags.spec,
+      // A spec selected only for controller deployment must not require a
+      // proofTopology or replace the existing doge-config proof source.
+      specPath: deploymentSpec?.dstackController !== undefined && !deploymentSpec.proofTopology
+        ? undefined : flags.spec,
     })
     const priorProofState = fs.existsSync(path.join(process.cwd(), '.data/proof-deployment.json'))
       || fs.existsSync(path.join(process.cwd(), '.data/generated/proof-topology'))
@@ -2170,6 +2189,21 @@ export default class SetupPrepCharts extends Command {
     return { skipped: skippedCharts, updated: updatedCharts };
   }
 
+  private async processDstackControllerValues(valuesDir: string): Promise<{skipped: number; updated: number}> {
+    const content = generateDstackControllerValues(this.dstackController)
+    if (content === undefined) return {skipped: 0, updated: 0}
+    const target = path.join(valuesDir, DSTACK_CONTROLLER_VALUES_FILE)
+    if (fs.existsSync(target) && fs.readFileSync(target, 'utf8') === content) return {skipped: 1, updated: 0}
+    if (!this.nonInteractive && !await confirm({message: `Generate ${DSTACK_CONTROLLER_VALUES_FILE} from dstackController configuration?`})) {
+      return {skipped: 1, updated: 0}
+    }
+
+    fs.mkdirSync(valuesDir, {recursive: true})
+    fs.writeFileSync(target, content)
+    this.jsonCtx.logSuccess(`Generated ${DSTACK_CONTROLLER_VALUES_FILE}`)
+    return {skipped: 0, updated: 1}
+  }
+
   // Generic ingress processing function
   private processIngressHosts(
     ingressConfig: any,
@@ -2292,6 +2326,8 @@ export default class SetupPrepCharts extends Command {
   ): Promise<{ skipped: number; updated: number }> {
     const productionFiles = fs.readdirSync(valuesDir)
       .filter(file => file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
+      // Status-page endpoints must reflect the source values generated in this pass.
+      .sort((a, b) => Number(getProductionChartName(a) === 'scroll-monitor') - Number(getProductionChartName(b) === 'scroll-monitor'))
 
     let updatedCharts = 0
     let skippedCharts = 0
@@ -2305,6 +2341,8 @@ export default class SetupPrepCharts extends Command {
     const l2P2PNetworkId = resolveRethP2PNetworkId(this.dogeConfig, configuredL2ChainId)
 
     for (const file of productionFiles) {
+      // This standalone chart has its own source-driven generator below.
+      if (file === DSTACK_CONTROLLER_VALUES_FILE) continue
       if (file === 'l2-reth-bootnode-production.yaml') {
         this.jsonCtx.info(`Skipping reth bootnode template ${file}`)
         skippedCharts++
@@ -2732,6 +2770,12 @@ export default class SetupPrepCharts extends Command {
           l2ChainId: configuredL2ChainId,
           l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),
         })
+        monitorChanges.push(...reconcileScrollMonitorStatusPage(productionYaml, {
+          chainId: configuredL2ChainId,
+          environment: productionYaml.statusPage?.environment,
+          networkName: this.getConfigValue('general.CHAIN_NAME_L2'),
+          valuesDir,
+        }))
         if (monitorChanges.length > 0) {
           changes.push(...monitorChanges)
           updated = true
@@ -3159,6 +3203,17 @@ export default class SetupPrepCharts extends Command {
           this.error(`${chartName}: env not found in config`);
         }
 
+        const policyResolution = resolveCubesignerPolicy({keys: (this.dogeConfig.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: this.dogeConfig.network, selection: this.dogeConfig.cubesigner})
+        for (const warning of policyResolution.warnings) this.jsonCtx.addWarning(warning)
+        const projection = cubesignerLiveEvidenceProjection(policyResolution)
+        productionYaml.configMaps ||= {}
+        productionYaml.persistence ||= {}
+        const oldProjection = JSON.stringify([productionYaml.configMaps['proof-policy-live-evidence'], productionYaml.persistence['proof-policy-live-evidence']])
+        delete productionYaml.configMaps['proof-policy-live-evidence']
+        delete productionYaml.persistence['proof-policy-live-evidence']
+        Object.assign(productionYaml.configMaps, projection.configMaps)
+        Object.assign(productionYaml.persistence, projection.persistence)
+        if (oldProjection !== JSON.stringify([productionYaml.configMaps['proof-policy-live-evidence'], productionYaml.persistence['proof-policy-live-evidence']])) updated = true
         const cubesignerChanges = [
           ...removeEnvArrayKeys(productionYaml, [
             // Retired compatibility/configuration surfaces. The signer now has
@@ -3331,6 +3386,26 @@ export default class SetupPrepCharts extends Command {
         }
       }
       else if (chartName === "tso-service") {
+        // Old deployment files may predate the chart default. Fill only a
+        // missing annotation; explicit operator limits (including null to
+        // remove the Helm default) and other annotations remain untouched.
+        const ingress = productionYaml.ingress?.main
+        const ingressClass = ingress?.ingressClassName
+          ?? ingress?.annotations?.['kubernetes.io/ingress.class']
+          ?? 'nginx'
+        if (ingress?.enabled !== false && ingressClass === 'nginx') {
+          productionYaml.ingress ??= {}
+          productionYaml.ingress.main ??= {}
+          const {main} = productionYaml.ingress
+          main.annotations ??= {}
+          const key = 'nginx.ingress.kubernetes.io/proxy-body-size'
+          if (!Object.hasOwn(main.annotations, key)) {
+            main.annotations[key] = '4m'
+            changes.push({key: `ingress.main.annotations.${key}`, newValue: '4m', oldValue: 'undefined'})
+            updated = true
+          }
+        }
+
         if (!productionYaml.env) {
           this.error(`${chartName}: env not found in config`);
         }
@@ -3695,6 +3770,7 @@ export default class SetupPrepCharts extends Command {
       ethereumDaBlobSource: proofTopologyEthereumDaBlobSource(this.dogeConfig.ethereumDa),
       ethereumL1RpcUrl: this.dogeConfig.ethereumDa?.submitterRpcUrl,
       intent: this.proofIntent,
+      materialsReceipt: this.flags['proof-materials-receipt'],
       network: this.dogeConfig.network,
       proofTopologyBridge: {
         dogecoinNetwork: this.dogeConfig.network,
@@ -3704,6 +3780,7 @@ export default class SetupPrepCharts extends Command {
       },
       proofTopologyCompilerBinary: this.flags['proof-topology-compiler-binary'],
       proofTopologyCompilerImage: this.flags['proof-topology-compiler-image'],
+      publicationReceipt: this.flags['proof-publication-receipt'],
       valuesDir,
     })
     this.jsonCtx.logSuccess(

@@ -1,0 +1,118 @@
+{
+  "description": "PR #1177 tool image pins; not a dogeos-proof-release-v1 manifest or production approval",
+  "sourceRepository": "https://github.com/DogeOS69/dogeos-core",
+  "pullRequest": "https://github.com/DogeOS69/dogeos-core/pull/1177",
+  "branch": "feat/proof-release-contract",
+  "coreRevision": "30e20987357316307d45362baebb866a9255585b",
+  "platform": "linux/amd64",
+  "images": {
+    "producer": {
+      "repository": "dogeos69/proof-release-producer",
+      "tag": "pr-1177-30e2098",
+      "status": "published",
+      "digest": "sha256:19df08b7abf3b1dee82349184cd141da5da0f9626949574019a0367cb0182e82",
+      "reference": "dogeos69/proof-release-producer@sha256:19df08b7abf3b1dee82349184cd141da5da0f9626949574019a0367cb0182e82",
+      "workflowRun": "https://github.com/DogeOS69/dogeos-core/actions/runs/35555523088",
+      "capability": "derive-scroll-identities from five caller-supplied files; no prepare-real"
+    },
+    "publisher": {
+      "repository": "dogeos69/proof-bundle-publisher",
+      "tag": "pr-1177-30e2098",
+      "status": "published",
+      "digest": "sha256:3fcbe5646bfc56f92235bcde3d450515d9d993df673b55e711a0f141eedfc2a3",
+      "reference": "dogeos69/proof-bundle-publisher@sha256:3fcbe5646bfc56f92235bcde3d450515d9d993df673b55e711a0f141eedfc2a3",
+      "workflowRun": "https://github.com/DogeOS69/dogeos-core/actions/runs/35555521369",
+      "capability": "fixed 11-file upload and authenticated readback; bucket setup disabled; CLI release-pinned image integration implemented"
+    }
+  },
+  "coherentReleaseBuild": {
+    "coreRevision": "6700d4baca0830bb5ac26bfee5a17c53aa725c42",
+    "workflowRun": "https://github.com/DogeOS69/dogeos-core/actions/runs/35559535311",
+    "status": "published",
+    "tagPattern": "proof-6700d4baca0830bb5ac26bfee5a17c53aa725c42 (CUDA appends -cuda86)",
+    "manifestArtifact": "dogeos-proof-release",
+    "genericInputsLock": "proof-scroll-inputs-pr1177.json",
+    "productionApproved": false,
+    "images": {
+      "producer": {
+        "tag": "dogeos69/proof-preparation-producer:proof-6700d4baca0830bb5ac26bfee5a17c53aa725c42",
+        "reference": "dogeos69/proof-preparation-producer@sha256:9c4dabd8f6aab177ae609975d685afd45593c92df80bb255242958150f018e3b",
+        "status": "published_runtime_gate_passed",
+        "localValidation": {
+          "result": "passed",
+          "protocolContextSha256": "1a122f01ff7da21ad245507594f0ca1e79949f0ac451e12abb69a9b38693bdfc",
+          "producerReceiptSha256": "850661d14ac9190ba9ab2e1655e10cc4578c8be24529cb8ed1144011b5253b33",
+          "verifiedFiles": 16,
+          "isolation": [
+            "network=none",
+            "read-only root",
+            "non-root uid 1000",
+            "cap-drop ALL",
+            "no-new-privileges"
+          ],
+          "scope": "Native Bridge/aggregation preparation and file verification; not GPU real-proof end-to-end",
+          "cliPreparationImport": "passed"
+        }
+      },
+      "publisher": {
+        "tag": "dogeos69/proof-bundle-publisher:proof-6700d4baca0830bb5ac26bfee5a17c53aa725c42",
+        "reference": "dogeos69/proof-bundle-publisher@sha256:1895d09a8ed94ac2542e164dd57b3e0641ad7923cee5f0b27eb40d7b54b532c4",
+        "status": "published"
+      },
+      "coordinator": {
+        "tag": "dogeos69/proof-coordinator:proof-6700d4baca0830bb5ac26bfee5a17c53aa725c42",
+        "reference": "dogeos69/proof-coordinator@sha256:86efa6c1db858f4d8bc3a59d31a0f94a75cd12a6f363401af36ce84ff583488e",
+        "status": "published"
+      },
+      "topologyCompiler": {
+        "tag": "dogeos69/dogeos-proof-topology:proof-6700d4baca0830bb5ac26bfee5a17c53aa725c42",
+        "reference": "dogeos69/dogeos-proof-topology@sha256:86ed9f87af9f818db62ef11c6bfbd2739bca189cab89c455e8b4f87bb6a99c61",
+        "status": "published"
+      },
+      "mockWorker": {
+        "tag": "dogeos69/prover-worker-mock:proof-6700d4baca0830bb5ac26bfee5a17c53aa725c42",
+        "reference": "dogeos69/prover-worker-mock@sha256:9931a4a4750e3aa9b48eb3a06e414938ea8d133a20f5a0801ff93d2cf504df2f",
+        "status": "published"
+      },
+      "productionWorker": {
+        "tag": "dogeos69/prover-worker-cuda:proof-6700d4baca0830bb5ac26bfee5a17c53aa725c42-cuda86",
+        "reference": "dogeos69/prover-worker-cuda@sha256:b09760d1b1a6d619e9c18a66222839fded397ec52f8b0ea8a48ff1de5a7837c3",
+        "status": "published"
+      }
+    },
+    "initialWorkflowConclusion": "failure",
+    "initialWorkflowFailure": "All six image jobs succeeded; CPU-only manifest verification could not initialize the CUDA Worker. Actual GPU identity was subsequently captured and finalization retriggered.",
+    "finalization": {
+      "workflowRun": "https://github.com/DogeOS69/dogeos-core/actions/runs/35562852527",
+      "checkerRevision": "d85ac570463f9f1fd0356a5ec5ca6a82621a33ea",
+      "status": "success",
+      "cudaIdentityReceipt": "https://github.com/DogeOS69/dogeos-core/blob/d85ac570463f9f1fd0356a5ec5ca6a82621a33ea/tools/proof-release/evidence/cuda-6700d4baca0830bb5ac26bfee5a17c53aa725c42.json"
+    },
+    "manifest": {
+      "path": "dogeos-proof-release-pr1177.json",
+      "sha256": "51645abda8736504dfb82ae16578297b66ec4b7fa26a718885c95c21aff2a2ef",
+      "ociReference": "dogeos69/proof-release@sha256:3bf1790f0d9babb394994227460bf60756480094e691bc23106961c6692b2a12"
+    },
+    "cliValidation": {
+      "mockPrepare": "passed",
+      "mockConfigCheck": "passed",
+      "realPrepare": "passed",
+      "realPrepareDurationMs": 458701,
+      "realPublishDryRun": "passed",
+      "preparedReceiptSha256": "5b61eb203a1eb6ce20f718db67c29f0660c219170bb86376e8b21a9cb336677f",
+      "verifiedPreparedFiles": 132,
+      "publicationFiles": 11,
+      "signerHandoffFiles": 6,
+      "s3Applied": false,
+      "realProofEndToEnd": false
+    }
+  },
+  "preparationProducerDiagnosticBuild": {
+    "coreRevision": "74ab8b1b0781538210f6c7bb5b4fa80a5f503179",
+    "tag": "pr-1177-74ab8b1",
+    "reference": "dogeos69/proof-preparation-producer@sha256:3db75f0b5382ba4611edac2ce1d01768ac8bc59f969c6e35b747ea7196547fd2",
+    "workflowRun": "https://github.com/DogeOS69/dogeos-core/actions/runs/35557330876",
+    "status": "do_not_use",
+    "reason": "CI build passed but runtime isolation exposed writable OpenVM init files and stdout parsing defects; fixed in 6700d4b and subject to the coherent release runtime gate"
+  }
+}
