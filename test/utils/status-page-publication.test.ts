@@ -115,10 +115,12 @@ describe('independent component publication', () => {
     expect(deployment('grafana').spec.template.spec.containers.find((c: any) => c.name === 'grafana').env.some((e: any) => e.name.startsWith('INSTATUS_'))).to.equal(false)
     const provision = documents.find(d => d?.kind === 'ConfigMap' && d.data?.[PUBLICATION_FILE])
     expect(provision.data[PUBLICATION_FILE]).to.contain('http://scroll-monitor-status-delivery:9110/notify/public-rpc')
-    if (process.env.SCROLL_STATUS_GRAFANA_TEST === '1') execFileSync('python3', [path.join(chart, 'tests/status_page_grafana_runtime.py'), filename], {stdio: 'pipe', timeout: 120_000})
+    // Include container startup and cleanup in the budget, and retain diagnostics
+    // when an opt-in runtime test fails (pipe output hid the original failure).
+    if (process.env.SCROLL_STATUS_GRAFANA_TEST === '1') execFileSync('python3', [path.join(chart, 'tests/status_page_grafana_runtime.py'), filename], {stdio: 'inherit', timeout: 240_000})
     values.statusPage.generated.delivery.components['public-rpc'].expr = 'vector(0)'
     expect(render).to.throw('regenerated CLI configuration')
-  }).timeout(180_000)
+  }).timeout(300_000)
 
   it('changes automatic to observe or manual without deleting receivers, and pauses missing rules', () => {
     values.statusPage.publication.components = {deposits: {mode: 'automatic', rule: {expr: 'fixture_deposit_health'}}}
@@ -169,8 +171,8 @@ describe('independent component publication', () => {
       {expected: [], input_series: [{series: 'fixture_health{instance="a"}', values: '0'}, {series: 'fixture_health{instance="b"}', values: '1'}]},
     ].map(({expected, input_series}) => ({input_series, interval: '1m', promql_expr_test: [{eval_time: '0m', exp_samples: expected, expr: expression}]}))
     fs.writeFileSync(path.join(directory, 'queries.yaml'), yaml.dump({evaluation_interval: '1m', tests}))
-    execFileSync('docker', ['run', '--rm', '--user', String(process.getuid?.() ?? 1000), '--entrypoint', 'promtool', '-v', `${directory}:/fixtures:ro`, 'prom/prometheus:v2.52.0', 'test', 'rules', '/fixtures/queries.yaml'], {stdio: 'pipe'})
-  })
+    execFileSync('docker', ['run', '--rm', '--user', String(process.getuid?.() ?? 1000), '--entrypoint', 'promtool', '-v', `${directory}:/fixtures:ro`, 'prom/prometheus:v2.52.0', 'test', 'rules', '/fixtures/queries.yaml'], {stdio: 'pipe', timeout: 120_000})
+  }).timeout(180_000)
 
   it('imports an explicit integration ID without guessing from the URL and rejects shared credentials', async () => {
     const input = path.join(directory, 'private-import.json')

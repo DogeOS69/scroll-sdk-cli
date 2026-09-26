@@ -64,7 +64,7 @@ describe('status-page built-in health', () => {
     scenario(business, replacement, null) // stale gauges cannot stand in for a new live target
     try {
       fs.writeFileSync(path.join(directory, 'queries.yaml'), yaml.dump({evaluation_interval: '1m', tests}))
-      execFileSync('docker', ['run','--rm','--user',String(process.getuid?.() ?? 1000),'--entrypoint','promtool','-v',`${directory}:/fixtures:ro`,'prom/prometheus:v2.52.0','test','rules','/fixtures/queries.yaml'], {stdio: 'pipe'})
+      execFileSync('docker', ['run','--rm','--user',String(process.getuid?.() ?? 1000),'--entrypoint','promtool','-v',`${directory}:/fixtures:ro`,'prom/prometheus:v2.52.0','test','rules','/fixtures/queries.yaml'], {stdio: 'pipe', timeout: 120_000})
     } finally { fs.rmSync(directory, {force: true, recursive: true}) }
   }).timeout(180_000)
 })

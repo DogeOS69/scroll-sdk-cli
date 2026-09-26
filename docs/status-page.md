@@ -1,5 +1,16 @@
 # Status-page configuration automation
 
+Status-page runtime acceptance is enforced by `.github/workflows/test-status-page.yml`.
+It runs the CLI tests with real Prometheus expressions, Helm rendering and Grafana
+delivery/recovery enabled, against an immutable SDK commit. The test receivers are
+local fixtures; no Instatus key or deployment credentials are required. Update the
+SDK commit pin deliberately when changing the shared configuration contract.
+
+Before enabling business components, deploy core images containing the health
+observation fixes in [core #1304](https://github.com/DogeOS69/dogeos-core/pull/1304): indexer-aligned coverage, stable canonical replay
+observation times and DA waiting time that survives retries. Generation readiness
+does not verify the deployed application image or its live metrics.
+
 The SDK template and `scroll-sdk-cli` share the `statusPage` contract in
 [SDK production example](https://github.com/DogeOS69/scroll-sdk/blob/feat/dstack-controller-chart/examples/values/scroll-monitor-production.yaml).
 The chart defaults and chart production profile expose the same inputs.
