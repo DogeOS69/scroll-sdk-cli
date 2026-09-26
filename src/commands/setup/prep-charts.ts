@@ -46,13 +46,13 @@ import {assertTopologyUsesSharedArtifactStore, sharedArtifactStoreFromDogeConfig
 import {proofTopologyEthereumDaBlobSource} from '../../utils/proof-topology-compiler.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {reconcileScrollMonitorBalances} from '../../utils/scroll-monitor-values.js'
-import {reconcileScrollMonitorStatusPage} from '../../utils/status-page-values.js'
 import {
   getRequiredManagedSignerAddress,
   getRequiredManagedSignerConfig,
   isAwsKmsSigner,
   isLocalSigner,
 } from '../../utils/signer-roles.js'
+import {reconcileScrollMonitorStatusPage} from '../../utils/status-page-values.js'
 import {
   WITHDRAWAL_NATIVE_CONFIG_RELPATH,
   buildWithdrawalDeploymentFacts,
