@@ -6,6 +6,8 @@ import * as path from 'node:path'
 import {InstatusClient, validateGrafanaWebhookUrl} from './status-page-instatus.js'
 
 interface Receipt {
+  componentId?: string
+  componentKey?: string
   environment: string
   integrationId?: string
   pageId: string
@@ -23,61 +25,85 @@ export interface WebhookPlan {
 export class StatusPageWebhook {
   readonly secretFile: string
   private readonly directory: string
+  private importedIntegrationId?: string
   private importedUrl?: string
   private receipt?: Receipt
   private readonly receiptFile: string
 
-  constructor(private readonly root: string, private readonly environment: string) {
+  constructor(private readonly root: string, private readonly environment: string, private readonly componentKey?: string) {
     if (!/^(devnet|mainnet|testnet)$/.test(environment)) throw new Error('Invalid webhook environment')
+    if (componentKey !== undefined && !/^[a-z][\da-z-]{0,40}$/.test(componentKey)) throw new Error('Invalid webhook component key')
     this.directory = path.join(root, 'secrets', 'status-page')
-    this.receiptFile = path.join(this.directory, 'binding.json')
-    this.secretFile = path.join(this.directory, 'grafana.secret.yaml')
+    this.receiptFile = path.join(this.directory, componentKey ? `${componentKey}.binding.json` : 'binding.json')
+    this.secretFile = path.join(this.directory, componentKey ? `${componentKey}.secret.yaml` : 'grafana.secret.yaml')
     this.checkPaths()
     if (!fs.existsSync(this.receiptFile)) return
     try {
       const receipt = JSON.parse(fs.readFileSync(this.receiptFile, 'utf8')) as Receipt
       if (receipt.version !== 1 || !['devnet', 'mainnet', 'testnet'].includes(receipt.environment) || typeof receipt.pageId !== 'string' || !/^[\w-]+$/.test(receipt.pageId)
         || !['creating', 'ready'].includes(receipt.status)) throw new Error('Invalid receipt')
-      if (receipt.status === 'ready') validateGrafanaWebhookUrl(receipt.url)
+      if (componentKey && (typeof receipt.componentId !== 'string' || !/^[\w-]+$/.test(receipt.componentId))) throw new Error('Invalid component receipt')
+      if (receipt.status === 'ready') {
+        validateGrafanaWebhookUrl(receipt.url)
+        if (componentKey && (typeof receipt.integrationId !== 'string' || !/^[\w-]+$/.test(receipt.integrationId))) throw new Error('Missing integration ID')
+      }
+
       this.receipt = receipt
     } catch {
       throw new Error('Cannot read the private webhook binding; restore secrets/status-page/ from backup, never recreate blindly')
     }
 
+    if (this.receipt.componentKey !== componentKey) throw new Error('The saved webhook belongs to a different component')
     if (this.receipt.environment !== environment) throw new Error('The saved webhook belongs to a different network; use that network\'s deployment directory')
   }
 
-  async apply(plan: WebhookPlan, client: InstatusClient, pageId: string, secret: {key: string; name: string}): Promise<void> {
+  async apply(plan: WebhookPlan, client: InstatusClient, pageId: string, secret: {key: string; name: string}, componentId?: string, templates?: {createTemplate: object; resolveTemplate: object}): Promise<void> {
     if (plan.action === 'unmanaged') return
+    if (this.componentKey && (!componentId || !/^[\w-]+$/.test(componentId))) throw new Error('Component webhook requires a valid component ID')
+    if (this.receipt?.componentId && this.receipt.componentId !== componentId) throw new Error('The saved webhook targets a different component ID')
+    const binding = this.componentKey ? {componentId, componentKey: this.componentKey} : {}
     if (plan.action === 'create') {
       // Durable intent precedes POST. A timeout, invalid response or crash cannot cause an automatic second POST.
-      this.save({environment: this.environment, pageId, status: 'creating', version: 1})
-      const created = await client.createGrafanaWebhook(pageId)
-      this.save({environment: this.environment, ...created, pageId, status: 'ready', version: 1})
+      this.save({...binding, environment: this.environment, pageId, status: 'creating', version: 1})
+      const created = await client.createGrafanaWebhook(pageId, componentId)
+      this.save({...binding, environment: this.environment, ...created, pageId, status: 'ready', version: 1})
     } else if (plan.action === 'import') {
-      this.save({environment: this.environment, pageId, status: 'ready', url: this.importedUrl, version: 1})
+      this.save({...binding, environment: this.environment, integrationId: this.importedIntegrationId, pageId, status: 'ready', url: this.importedUrl, version: 1})
     }
 
     if (this.receipt?.status !== 'ready' || this.receipt.pageId !== pageId) throw new Error('No matching webhook credential is available')
     const url = validateGrafanaWebhookUrl(this.receipt.url)
+    if (componentId) await client.bindGrafanaWebhook(this.receipt.integrationId!, pageId, componentId, templates)
     // JSON is valid YAML. No namespace: deployment must explicitly select Grafana's namespace.
     const manifest = {apiVersion: 'v1', data: {[secret.key]: Buffer.from(url).toString('base64')}, kind: 'Secret', metadata: {name: secret.name}, type: 'Opaque'}
     this.write(this.secretFile, `${JSON.stringify(manifest, null, 2)}\n`)
   }
 
-  plan(pageId: string, create: boolean, requested: boolean, importFile?: string): WebhookPlan {
+  plan(pageId: string, create: boolean, requested: boolean, importFile?: string, componentId?: string): WebhookPlan {
+    if (this.receipt?.componentId && componentId && this.receipt.componentId !== componentId) throw new Error('The saved webhook targets a different component ID')
     if (this.receipt && this.receipt.pageId !== pageId) throw new Error('The saved webhook belongs to a different Instatus page')
     if (importFile) {
       try {
-        this.importedUrl = validateGrafanaWebhookUrl(fs.readFileSync(path.resolve(this.root, importFile), 'utf8').trim())
+        const contents = fs.readFileSync(path.resolve(this.root, importFile), 'utf8').trim()
+        if (this.componentKey) {
+          const imported = JSON.parse(contents)
+          if (typeof imported.integrationId !== 'string' || !/^[\w-]+$/.test(imported.integrationId)) throw new Error('Missing integration ID')
+          this.importedIntegrationId = imported.integrationId
+          this.importedUrl = validateGrafanaWebhookUrl(imported.url)
+        } else this.importedUrl = validateGrafanaWebhookUrl(contents)
       } catch {
-        throw new Error('Cannot import the webhook URL file; provide the selected page\'s complete Instatus Grafana URL (contents omitted)')
+        throw new Error('Cannot import webhook credentials; component imports require private JSON with integrationId and url; legacy imports require a complete Grafana URL (contents omitted)')
       }
 
+      this.assertUniqueUrl(this.importedUrl, this.importedIntegrationId)
       return {action: 'import', secretFile: this.secretFile}
     }
 
-    if (this.receipt?.status === 'ready') return {action: 'reuse', secretFile: this.secretFile}
+    if (this.receipt?.status === 'ready') {
+      this.assertUniqueUrl(this.receipt.url!, this.receipt.integrationId)
+      return {action: 'reuse', secretFile: this.secretFile}
+    }
+
     if (this.receipt?.status === 'creating' || requested || fs.existsSync(this.secretFile)) {
       throw new Error('Webhook creation may already have succeeded or its binding is missing. Restore the private binding or use --webhook-url-file to adopt the existing URL; no replacement will be created')
     }
@@ -95,6 +121,21 @@ export class StatusPageWebhook {
     fs.mkdirSync(this.directory, {mode: 0o700, recursive: true})
     fs.chmodSync(this.directory, 0o700)
     this.write(path.join(this.directory, '.gitignore'), '*\n')
+  }
+
+  private assertUniqueUrl(url: string, integrationId?: string): void {
+    if (!fs.existsSync(this.directory)) return
+    for (const name of fs.readdirSync(this.directory)) {
+      const file = path.join(this.directory, name)
+      if (file === this.receiptFile || !(name === 'binding.json' || name.endsWith('.binding.json'))) continue
+      let other: Receipt
+      try {
+        if (fs.lstatSync(file).isSymbolicLink()) throw new Error('Unsafe binding')
+        other = JSON.parse(fs.readFileSync(file, 'utf8'))
+      } catch { throw new Error('Cannot verify other private webhook bindings; restore them before importing or reusing a URL') }
+
+      if (other.url === url || (integrationId && other.integrationId === integrationId)) throw new Error('This webhook is already bound to another component or the legacy bootstrap; use a distinct integration')
+    }
   }
 
   private checkPaths(): void {

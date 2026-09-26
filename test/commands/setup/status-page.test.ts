@@ -15,7 +15,7 @@ const ENV = 'INSTATUS_GRAFANA_WEBHOOK_URL'
 const FILE = 'instatus-contact-points.yaml'
 const ingress = (host: string) => ({enabled: true, hosts: [{host, paths: [{path: '/'}]}]})
 const target = () => ({componentIds: {}, initialStatus: 'OPERATIONAL', pageId: 'page-1', showUptime: false})
-const catalog = {components: [{description: 'Public RPC access.', endpoints: ['https://rpc.example/'], key: 'public-rpc', name: 'Public RPC'}], environment: 'testnet', pageName: 'DogeOS Testnet Status'}
+const catalog = {components: [{description: 'Public RPC access.', endpoints: ['https://rpc.example/'], key: 'public-rpc', name: 'Public RPC'}], environment: 'testnet', pageName: 'DogeOS'}
 const remote = {description: 'old', group: null, id: 'rpc-1', name: 'Public RPC', order: 0, showUptime: false, status: 'MAJOROUTAGE'}
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), {headers: {'Content-Type': 'application/json'}, status})
 
@@ -36,6 +36,21 @@ describe('status-page generation and explicit Instatus apply', () => {
     fs.rmSync(directory, {force: true, recursive: true})
   })
 
+  it('exports independent probe values offline and preserves location/image across regeneration', async () => {
+    values.statusPage.publication = {components: {'public-rpc': {rule: {builtin: true}}}}
+    write('monitor.yaml', values)
+    fs.writeFileSync(path.join(directory, 'config.toml'), '[general]\nCHAIN_ID_L2 = 291\nCHAIN_NAME_L2 = "DogeOS"\n')
+    write('probe.yaml', {image: 'registry.example/probe:v1', location: 'us-east'})
+    const transport = sinon.stub(globalThis, 'fetch').rejects(new Error('must remain offline'))
+    await StatusPage.run(['--deployment-dir', directory, '--values', 'monitor.yaml', '--probe-values', 'probe.yaml', '--json'])
+    const probe: any = yaml.load(fs.readFileSync(path.join(directory, 'probe.yaml'), 'utf8'))
+    expect(probe.image).to.equal('registry.example/probe:v1')
+    expect(probe.location).to.equal('us-east')
+    expect(probe.config.rpcUrls).to.deep.equal(['https://rpc.custom.example/', 'wss://ws.custom.example/'])
+    expect(probe.config.bridgeUrls).to.deep.equal(['https://portal.custom.example/bridge'])
+    expect(transport.called).to.equal(false)
+  })
+
   it('derives 8 components from selected files, preserves internal routing, and is idempotent', () => {
     generate()
     const {components} = values.statusPage.catalog
@@ -44,11 +59,11 @@ describe('status-page generation and explicit Instatus apply', () => {
     expect(components.find((item: any) => item.key === 'public-rpc').endpoints).to.deep.equal(['https://rpc.custom.example/', 'wss://ws.custom.example/'])
     expect(components.find((item: any) => item.key === 'block-explorer').endpoints).to.deep.equal(['https://explorer.custom.example/'])
     expect(values.statusPage.catalog.chainId).to.equal('291')
-    expect(values.statusPage.instatus.subdomain).to.equal('dogeos-testnet')
+    expect(values.statusPage.instatus.subdomain).to.equal('dogeos')
     expect(values.statusPage.instatus.initialStatus).to.equal('OPERATIONAL')
     expect(values.statusPage.grafana.contactPointName).to.equal('instatus-public')
     expect(values.statusPage.grafana.receiverUid).to.equal('instatus-public-webhook')
-    expect(JSON.stringify(values)).not.to.match(/l2scan|faucet|dogeos\.com|apiKey/)
+    expect(JSON.stringify(values)).not.to.match(/l2scan|faucet|apiKey/)
     expect(values.grafana.alerting['policies.yaml']).to.deep.equal({policies: [{receiver: 'internal'}]})
     expect(values.grafana.envValueFrom.OTHER.secretKeyRef.name).to.equal('other')
     expect(values.grafana.envValueFrom[ENV]).to.deep.equal({secretKeyRef: {key: 'url', name: 'instatus-grafana-webhook'}})
@@ -60,7 +75,8 @@ describe('status-page generation and explicit Instatus apply', () => {
     it(`supports explicit ${environment} without replacing domain strings`, () => {
       generate(environment)
       expect(values.statusPage.catalog.environment).to.equal(environment)
-      expect(values.statusPage.instatus.subdomain).to.equal(environment === 'mainnet' ? 'dogeos' : 'dogeos-devnet')
+      expect(values.statusPage.catalog.groupName).to.equal(environment === 'mainnet' ? 'Mainnet' : 'Devnet')
+      expect(values.statusPage.instatus.subdomain).to.equal('dogeos')
       expect(values.statusPage.catalog.components[6].endpoints[0]).to.equal('https://portal.custom.example/bridge')
       expect(() => generate('testnet')).to.throw('environment changed')
     })
@@ -113,10 +129,10 @@ describe('status-page generation and explicit Instatus apply', () => {
     expect(() => generate()).to.throw('different Instatus page')
   })
 
-  it('rejects a subdomain for a different environment before changing values', () => {
-    values.statusPage.instatus = {subdomain: 'dogeos'}
+  it('requires explicit migration from a separate network page', () => {
+    values.statusPage.instatus = {subdomain: 'dogeos-testnet'}
     const before = structuredClone(values)
-    expect(() => generate()).to.throw('subdomain does not match this environment')
+    expect(() => generate()).to.throw('require migration')
     expect(values).to.deep.equal(before)
   })
 
@@ -157,7 +173,7 @@ describe('status-page generation and explicit Instatus apply', () => {
 
   it('plans only GETs, preserves live outage status on update, and has no writes on the second apply', async () => {
     const fetcher = sinon.stub()
-    fetcher.onCall(0).resolves(response([{id: 'page-1', name: catalog.pageName, subdomain: 'dogeos-testnet'}]))
+    fetcher.onCall(0).resolves(response([{id: 'page-1', name: catalog.pageName, subdomain: 'dogeos'}]))
     fetcher.onCall(1).resolves(response([remote]))
     fetcher.onCall(2).resolves(response({...remote, description: 'updated'}))
     const client = new InstatusClient('fixture-key', fetcher as any)
@@ -171,7 +187,7 @@ describe('status-page generation and explicit Instatus apply', () => {
     expect(JSON.parse(request[1].body)).not.to.have.property('archived')
     expect(request[1].redirect).to.equal('error')
     expect(saveId.calledWith('public-rpc', 'rpc-1')).to.equal(true)
-    fetcher.onCall(3).resolves(response([{id: 'page-1', name: catalog.pageName, subdomain: 'dogeos-testnet'}]))
+    fetcher.onCall(3).resolves(response([{id: 'page-1', name: catalog.pageName, subdomain: 'dogeos'}]))
     fetcher.onCall(4).resolves(response([{...remote, ...plan.components[0].metadata}]))
     const second = await client.plan(catalog, target())
     expect(second.components[0].action).to.equal('unchanged')
@@ -216,7 +232,7 @@ describe('status-page generation and explicit Instatus apply', () => {
       const fetcher = sinon.stub().resolves(response([], status))
       let error = ''
       try {
-        await new InstatusClient('fixture-key', fetcher as any).plan(catalog, {...target(), subdomain: 'dogeos-testnet'})
+        await new InstatusClient('fixture-key', fetcher as any).plan(catalog, {...target(), subdomain: 'dogeos'})
       } catch (error_) { error = String(error_) }
 
       expect(error).not.to.equal('')
@@ -228,7 +244,7 @@ describe('status-page generation and explicit Instatus apply', () => {
   for (const kind of ['duplicate', 'missing-id', 'grouped', 'archived']) {
     it(`fails closed for ${kind} remote components`, async () => {
       const fetcher = sinon.stub()
-      fetcher.onCall(0).resolves(response([{id: 'page-1', name: catalog.pageName, subdomain: 'dogeos-testnet'}]))
+      fetcher.onCall(0).resolves(response([{id: 'page-1', name: catalog.pageName, subdomain: 'dogeos'}]))
       fetcher.onCall(1).resolves(response(kind === 'duplicate' ? [remote, {...remote, id: 'rpc-2'}] : [{...remote, archived: kind === 'archived', group: kind === 'grouped' ? {id: 'g'} : null}]))
       let error = ''
       try {
@@ -259,11 +275,63 @@ describe('status-page generation and explicit Instatus apply', () => {
   }
 
   const prepareCommand = () => {
-    values.statusPage.instatus = target()
+    values.statusPage.instatus = {...target(), branding: {}, workspaceSlug: ''}
     write('scroll-monitor-production.yaml', values)
     fs.writeFileSync(path.join(directory, 'config.toml'), '[general]\nCHAIN_ID_L2=291\nCHAIN_NAME_L2="DogeOS"\n')
     sinon.stub(console, 'log')
     sinon.stub(console, 'error')
+  }
+
+  for (const lostResponse of [false, true]) {
+    it(`applies only automatic component webhooks and persists independent intents (lost response: ${lostResponse})`, async () => {
+      values.statusPage.publication = {components: {'batch-publication': {mode: 'automatic', rule: {expr: 'fixture_component_health'}}, deposits: {mode: 'observe'}}}
+      prepareCommand()
+      const remotePlan: any = {components: [{action: 'unchanged', id: 'batch-id', key: 'batch-publication', metadata: {description: '', name: 'Batch Publication', order: 4, showUptime: false}}], group: {action: 'reuse', id: 'group-testnet', name: 'Testnet'}, initialStatus: 'OPERATIONAL', page: {action: 'unchanged', id: 'page-1', name: 'DogeOS'}}
+      sinon.stub(InstatusClient.prototype, 'plan').resolves(remotePlan)
+      const create = sinon.stub(InstatusClient.prototype, 'createGrafanaWebhook')
+      if (lostResponse) create.rejects(new Error('simulated lost response'))
+      else create.resolves({integrationId: 'fixture-batch', url: 'https://api.instatus.com/v3/integrations/grafana/fixture-batch'})
+      const bind = sinon.stub(InstatusClient.prototype, 'bindGrafanaWebhook').resolves()
+      const oldKey = process.env.INSTATUS_API_KEY
+      process.env.INSTATUS_API_KEY = 'fixture-key'
+      try {
+        const original = fs.readFileSync(path.join(directory, 'scroll-monitor-production.yaml'), 'utf8')
+        await runCommand({'create-webhook': true, plan: true})
+        expect(create.callCount).to.equal(0)
+        expect(fs.existsSync(path.join(directory, 'secrets'))).to.equal(false)
+        expect(fs.readFileSync(path.join(directory, 'scroll-monitor-production.yaml'), 'utf8')).to.equal(original)
+        if (lostResponse) {
+          for (let attempt = 0; attempt < 2; attempt++) {
+            let failed = false
+            try { await runCommand({apply: true, 'create-webhook': true}) } catch { failed = true }
+            expect(failed).to.equal(true)
+          }
+        } else {
+          await runCommand({apply: true, 'create-webhook': true})
+          await runCommand({apply: true, 'create-webhook': true})
+          expect(bind.callCount).to.equal(2)
+          const applied: any = yaml.load(fs.readFileSync(path.join(directory, 'scroll-monitor-production.yaml'), 'utf8'))
+          expect(applied.statusPage.generated.componentBindings).to.deep.equal({'batch-publication': {componentId: 'batch-id', pageId: 'page-1'}})
+          expect(applied.statusPage.generated.componentPublication.readiness['batch-publication'].ready).to.equal(true)
+          expect(fs.existsSync(path.join(directory, 'secrets/status-page/batch-publication.secret.yaml'))).to.equal(true)
+          expect(fs.existsSync(path.join(directory, 'secrets/status-page/deposits.secret.yaml'))).to.equal(false)
+          applied.statusPage.publication.components['batch-publication'].mode = 'observe'
+          write('scroll-monitor-production.yaml', applied)
+          await runCommand({apply: true})
+          expect(bind.callCount).to.equal(2)
+          const observed: any = yaml.load(fs.readFileSync(path.join(directory, 'scroll-monitor-production.yaml'), 'utf8'))
+          const rule = observed.grafana.alerting['instatus-component-publication.yaml'].groups[0].rules[0]
+          expect(rule.notification_settings.receiver).to.equal('grafana-default-email')
+        }
+
+        expect(create.callCount).to.equal(1)
+        expect(create.firstCall.args).to.deep.equal(['page-1', 'batch-id'])
+        expect(fs.readFileSync(path.join(directory, 'scroll-monitor-production.yaml'), 'utf8')).not.to.contain('fixture-batch')
+      } finally {
+        if (oldKey === undefined) delete process.env.INSTATUS_API_KEY
+        else process.env.INSTATUS_API_KEY = oldKey
+      }
+    })
   }
 
   it('default command is entirely offline and a second generation leaves the file identical', async () => {
@@ -281,7 +349,7 @@ describe('status-page generation and explicit Instatus apply', () => {
     prepareCommand()
     const before = fs.readFileSync(path.join(directory, 'scroll-monitor-production.yaml'), 'utf8')
     const fetcher = sinon.stub(globalThis, 'fetch')
-    fetcher.onCall(0).resolves(response([{id: 'page-1', name: catalog.pageName, subdomain: 'dogeos-testnet'}]))
+    fetcher.onCall(0).resolves(response([{id: 'page-1', name: catalog.pageName, subdomain: 'dogeos'}]))
     fetcher.onCall(1).resolves(response([]))
     const previousKey = process.env.INSTATUS_API_KEY
     process.env.INSTATUS_API_KEY = 'fixture-key'
@@ -297,8 +365,8 @@ describe('status-page generation and explicit Instatus apply', () => {
   it('--apply persists component IDs and page binding without persisting the API key', async () => {
     prepareCommand()
     const fetcher = sinon.stub(globalThis, 'fetch')
-    fetcher.onCall(0).resolves(response([{id: 'page-1', name: 'DogeOS Testnet Status', subdomain: 'dogeos-testnet'}]))
-    fetcher.onCall(1).resolves(response([]))
+    fetcher.onCall(0).resolves(response([{id: 'page-1', name: 'DogeOS', subdomain: 'dogeos'}]))
+    fetcher.onCall(1).resolves(response([{group: {id: 'testnet-group', name: 'Testnet'}, id: 'anchor', name: 'Setup placeholder'}]))
     for (let index = 0; index < 8; index++) fetcher.onCall(index + 2).resolves(response({id: `new-${index}`}))
     const previousKey = process.env.INSTATUS_API_KEY
     process.env.INSTATUS_API_KEY = 'fixture-key'
@@ -320,15 +388,15 @@ describe('status-page generation and explicit Instatus apply', () => {
   for (const lostResponse of [false, true]) {
     it(`bootstraps one webhook and never retries an ambiguous create (lost response: ${lostResponse})`, async () => {
       prepareCommand()
-      const components: any[] = []
+      const components: any[] = [{group: {id: 'testnet-group', name: 'Testnet'}, id: 'anchor', name: 'Setup placeholder'}]
       const webhookUrl = 'https://api.instatus.com/v3/integrations/grafana/private-webhook-fixture'
       let webhookPosts = 0
       const fetcher = sinon.stub(globalThis, 'fetch').callsFake(async (url, init) => {
         const route = new URL(String(url)).pathname
-        if (init?.method === 'GET' && route === '/v2/pages') return response([{id: 'page-1', name: 'DogeOS Testnet Status', subdomain: 'dogeos-testnet'}])
+        if (init?.method === 'GET' && route === '/v2/pages') return response([{id: 'page-1', name: 'DogeOS', subdomain: 'dogeos'}])
         if (init?.method === 'GET' && route === '/v2/page-1/components') return response(components)
         if (init?.method === 'POST' && route === '/v1/page-1/components') {
-          const component = {...JSON.parse(String(init.body)), id: `component-${components.length}`}
+          const component = {...JSON.parse(String(init.body)), group: {id: 'testnet-group', name: 'Testnet'}, id: `component-${components.length}`}
           components.push(component)
           return response(component)
         }
@@ -386,10 +454,10 @@ describe('status-page generation and explicit Instatus apply', () => {
   for (const loseCreationResponse of [false, true]) {
     it(`reuses one project after resetting values and redeploying (lost creation response: ${loseCreationResponse})`, async () => {
       prepareCommand()
-      values.statusPage.instatus = {...target(), email: 'operator@example.com', pageId: ''}
+      values.statusPage.instatus = {...target(), branding: {}, email: 'operator@example.com', pageId: '', workspaceSlug: ''}
       write('scroll-monitor-production.yaml', values)
       let page: any
-      const components: any[] = []
+      const components: any[] = [{group: {id: 'testnet-group', name: 'Testnet'}, id: 'anchor', name: 'Setup placeholder'}]
       let pagePosts = 0
       sinon.stub(globalThis, 'fetch').callsFake(async (url, init) => {
         const route = new URL(String(url)).pathname
@@ -404,7 +472,7 @@ describe('status-page generation and explicit Instatus apply', () => {
         }
 
         if (init?.method === 'POST' && route === '/v1/created-page/components') {
-          const component = {...body, id: `component-${components.length}`}
+          const component = {...body, group: {id: 'testnet-group', name: 'Testnet'}, id: `component-${components.length}`}
           components.push(component)
           return response(component)
         }
@@ -416,7 +484,7 @@ describe('status-page generation and explicit Instatus apply', () => {
       try {
         let error = ''
         try { await runCommand({apply: true}) } catch (error_) { error = String(error_) }
-        expect(Boolean(error)).to.equal(loseCreationResponse)
+        expect(Boolean(error)).to.equal(true) // Creation stops for dashboard group bootstrap (or a lost response).
         expect(fs.existsSync(path.join(directory, '.data/status-page-apply.lock'))).to.equal(false)
         // Simulate chart values being regenerated from the original template.
         write('scroll-monitor-production.yaml', values)
@@ -434,10 +502,10 @@ describe('status-page generation and explicit Instatus apply', () => {
       }
 
       expect(pagePosts).to.equal(1)
-      expect(page.subdomain).to.equal('dogeos-testnet')
-      expect(components).to.have.length(8)
+      expect(page.subdomain).to.equal('dogeos')
+      expect(components).to.have.length(9)
       const state = fs.readFileSync(path.join(directory, '.data/status-page-state.json'), 'utf8')
-      expect(JSON.parse(state).bindings.testnet).to.deep.equal({pageId: 'created-page', subdomain: 'dogeos-testnet'})
+      expect(JSON.parse(state).bindings.testnet).to.deep.equal({groupId: 'testnet-group', pageId: 'created-page', subdomain: 'dogeos'})
       expect(state).not.to.contain('fixture-key')
     })
   }

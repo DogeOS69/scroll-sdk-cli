@@ -4,9 +4,12 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import {isDeepStrictEqual} from 'node:util'
 
+import {reconcileComponentPublication} from './status-page-publication.js'
+
 const ENV_NAME = 'INSTATUS_GRAFANA_WEBHOOK_URL'
 const PROVISIONING_FILE = 'instatus-contact-points.yaml'
-const SUBDOMAINS: Record<string, string> = {devnet: 'dogeos-devnet', mainnet: 'dogeos', testnet: 'dogeos-testnet'}
+const GROUPS: Record<string, string> = {devnet: 'Devnet', mainnet: 'Mainnet', testnet: 'Testnet'}
+const BRAND = 'https://raw.githubusercontent.com/DogeOS69/web-images/main'
 const CATALOG = [
   ['public-rpc', 'Public RPC', 'Official HTTP JSON-RPC and enabled WebSocket interfaces.'],
   ['sequencing', 'Transaction Sequencing', 'Inclusion of accepted transactions in new blocks.'],
@@ -116,21 +119,30 @@ export function reconcileScrollMonitorStatusPage(values: any, inputs: Inputs): A
 
   const config = structuredClone(options)
   for (const key of Object.keys(config)) {
-    if (!['catalog', 'enabled', 'environment', 'generated', 'grafana', 'instatus', 'sources'].includes(key)) throw new Error('Unknown statusPage field; credentials belong in Secrets or INSTATUS_API_KEY, not values')
+    if (!['catalog', 'enabled', 'environment', 'generated', 'grafana', 'instatus', 'publication', 'sources'].includes(key)) throw new Error('Unknown statusPage field; credentials belong in Secrets or INSTATUS_API_KEY, not values')
   }
 
   config.environment = environment
   if (config.generated && config.generated.environment !== environment) throw new Error('statusPage environment changed; use a separate monitoring configuration and Instatus target for each environment')
-  config.instatus = {componentIds: {}, email: '', initialStatus: 'OPERATIONAL', pageId: '', showUptime: false, subdomain: '', ...mapping(config.instatus, 'statusPage.instatus')}
+  config.instatus = {branding: {faviconUrl: `${BRAND}/dogeos_favicon.png`, websiteUrl: 'https://www.dogeos.com/'}, componentIds: {}, email: '', groupId: '', initialStatus: 'OPERATIONAL', pageId: '', pageName: 'DogeOS', showUptime: false, subdomain: 'dogeos', workspaceSlug: '6wxpx', ...mapping(config.instatus, 'statusPage.instatus')}
   for (const key of Object.keys(config.instatus)) {
-    if (!['componentIds', 'email', 'initialStatus', 'pageId', 'showUptime', 'subdomain'].includes(key)) throw new Error('Unknown statusPage.instatus field; management API credentials belong in INSTATUS_API_KEY')
+    if (!['branding', 'componentIds', 'email', 'groupId', 'initialStatus', 'pageId', 'pageName', 'showUptime', 'subdomain', 'workspaceSlug'].includes(key)) throw new Error('Unknown statusPage.instatus field; management API credentials belong in INSTATUS_API_KEY')
   }
 
-  if (config.instatus.subdomain && config.instatus.subdomain !== SUBDOMAINS[environment]) {
-    throw new Error('statusPage.instatus.subdomain does not match this environment; expected dogeos (mainnet), dogeos-testnet (testnet), or dogeos-devnet (devnet)')
+  if (!config.instatus.subdomain) config.instatus.subdomain = 'dogeos'
+  if (['dogeos-devnet', 'dogeos-testnet'].includes(config.instatus.subdomain)) {
+    throw new Error('Separate network pages require migration to the shared dogeos page; see docs/status-page.md before replacing page, component and webhook bindings')
   }
 
-  config.instatus.subdomain = SUBDOMAINS[environment]
+  config.instatus.pageName = requiredString(config.instatus.pageName, 'statusPage.instatus.pageName')
+  const branding = mapping(config.instatus.branding, 'statusPage.instatus.branding')
+  for (const [key, value] of Object.entries(branding)) {
+    if (!['faviconUrl', 'logoUrl', 'websiteUrl'].includes(key)) throw new Error('Unknown statusPage.instatus.branding field')
+    let url: URL
+    try { url = new URL(value) } catch { throw new Error('Branding must contain public HTTPS URLs') }
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Branding must contain public HTTPS URLs without credentials, query or fragment')
+  }
+
   if (typeof config.instatus.showUptime !== 'boolean') throw new Error('statusPage.instatus.showUptime must be a boolean')
   config.sources = {
     blockscout: 'blockscout-production.yaml',
@@ -185,6 +197,30 @@ export function reconcileScrollMonitorStatusPage(values: any, inputs: Inputs): A
     throw new Error('Changing an existing statusPage Grafana identity requires explicit removal of the old contact point and generated ownership metadata first')
   }
 
+  const backendIngress = explorer['blockscout-stack']?.blockscout?.ingress
+  const explorerApiUrls = backendIngress?.enabled === true && backendIngress.hostname
+    ? [endpoint(backendIngress.hostname, sources.scheme, '/', 'Blockscout backend ingress.hostname')] : []
+  const endpoints: Record<string, string[]> = {'block-explorer': [explorerUrl], 'bridge-portal': bridgeUrls, 'public-rpc': [...rpcUrls, ...wsUrls]}
+  config.catalog = {
+    chainId: BigInt(chain).toString(),
+    components: CATALOG.map(([key, name, description]) => ({description, endpoints: endpoints[key] ?? [], key, name})),
+    environment,
+    groupName: GROUPS[environment],
+    networkName,
+    pageName: config.instatus.pageName,
+    probeSources: {explorerApiUrls},
+    provider: 'instatus',
+  }
+  if (config.publication !== undefined || config.generated?.version === 2) {
+    const candidate = structuredClone(values)
+    reconcileComponentPublication(candidate, config)
+    if (isDeepStrictEqual(config, values.statusPage) && isDeepStrictEqual(candidate.grafana, values.grafana) && isDeepStrictEqual(candidate['kube-prometheus-stack'], values['kube-prometheus-stack'])) return []
+    values.statusPage = config
+    values.grafana = candidate.grafana
+    if (candidate['kube-prometheus-stack'] !== undefined) values['kube-prometheus-stack'] = candidate['kube-prometheus-stack']
+    return [{key: 'statusPage component publication', newValue: '[component modes, rules and Secret references]', oldValue: '[previous configuration]'}]
+  }
+
   const grafana = structuredClone(mapping(values.grafana, 'grafana'))
   if (grafana.enabled === false) throw new Error('statusPage requires bundled Grafana for native provisioning')
   grafana.envValueFrom = mapping(grafana.envValueFrom, 'grafana.envValueFrom')
@@ -226,15 +262,6 @@ export function reconcileScrollMonitorStatusPage(values: any, inputs: Inputs): A
     }
   }
 
-  const endpoints: Record<string, string[]> = {'block-explorer': [explorerUrl], 'bridge-portal': bridgeUrls, 'public-rpc': [...rpcUrls, ...wsUrls]}
-  config.catalog = {
-    chainId: BigInt(chain).toString(),
-    components: CATALOG.map(([key, name, description]) => ({description, endpoints: endpoints[key] ?? [], key, name})),
-    environment,
-    networkName,
-    pageName: `${networkName}${networkName.toLowerCase().includes(environment) ? '' : ` ${environment[0].toUpperCase()}${environment.slice(1)}`} Status`,
-    provider: 'instatus',
-  }
   grafana.envValueFrom[ENV_NAME] = env
   grafana.alerting[PROVISIONING_FILE] = provisioning
   config.generated = {...config.generated, env: structuredClone(env), environment, provisioning: structuredClone(provisioning), version: 1}

@@ -5,6 +5,7 @@ import * as path from 'node:path'
 import type {InstatusPlan, InstatusTarget} from './status-page-instatus.js'
 
 interface Binding {
+  groupId?: string
   pageId: string
   subdomain: string
 }
@@ -35,6 +36,7 @@ export class StatusPageState {
         if (!/^(devnet|mainnet|testnet)$/.test(key) || !binding
           || (binding.pageId !== '' && !validId(binding.pageId))
           || (binding.subdomain !== '' && !validSubdomain(binding.subdomain))
+          || (binding.groupId !== undefined && !validId(binding.groupId))
           || (!binding.pageId && !binding.subdomain)) throw new Error('Invalid status-page binding state')
       }
 
@@ -49,23 +51,25 @@ export class StatusPageState {
   }
 
   bind(pageId: string): void {
-    this.save({pageId, subdomain: this.state.bindings[this.network]?.subdomain ?? ''})
+    this.save({...this.state.bindings[this.network], pageId, subdomain: this.state.bindings[this.network]?.subdomain ?? ''})
   }
 
   /** Record the chosen subdomain before POST, so interrupted creation cannot drift to a new name. */
   reserve(plan: InstatusPlan): void {
-    this.save({pageId: plan.page.id, subdomain: plan.page.subdomain ?? ''})
+    this.save({...(plan.group?.id ? {groupId: plan.group.id} : {}), pageId: plan.page.id, subdomain: plan.page.subdomain ?? ''})
   }
 
   restore(target: InstatusTarget): boolean {
     const binding = this.state.bindings[this.network]
     if (!binding) return false
     if ((binding.pageId && target.pageId && binding.pageId !== target.pageId)
-      || (binding.subdomain && target.subdomain && binding.subdomain !== target.subdomain)) {
-      throw new Error('This network already has an Instatus project binding; pageId/subdomain changes require an explicit migration')
+      || (binding.subdomain && target.subdomain && binding.subdomain !== target.subdomain)
+      || (binding.groupId && target.groupId && binding.groupId !== target.groupId)) {
+      throw new Error('This network already has an Instatus project binding; pageId/subdomain/groupId changes require an explicit migration')
     }
 
-    const changed = Boolean((binding.pageId && target.pageId !== binding.pageId) || (binding.subdomain && target.subdomain !== binding.subdomain))
+    const changed = Boolean((binding.groupId && target.groupId !== binding.groupId) || (binding.pageId && target.pageId !== binding.pageId) || (binding.subdomain && target.subdomain !== binding.subdomain))
+    if (binding.groupId) target.groupId = binding.groupId
     if (binding.pageId) target.pageId = binding.pageId
     if (binding.subdomain) target.subdomain = binding.subdomain
     return changed
@@ -74,7 +78,7 @@ export class StatusPageState {
   private save(binding: Binding): void {
     const restored = {...binding, componentIds: {}, initialStatus: '', showUptime: false}
     this.restore(restored)
-    binding = {pageId: restored.pageId, subdomain: restored.subdomain ?? ''}
+    binding = {...(restored.groupId ? {groupId: restored.groupId} : {}), pageId: restored.pageId, subdomain: restored.subdomain ?? ''}
     this.state.bindings[this.network] = binding
     fs.mkdirSync(path.dirname(this.file), {recursive: true})
     const temporary = `${this.file}.${randomUUID()}.tmp`

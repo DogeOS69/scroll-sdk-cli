@@ -26,6 +26,17 @@ describe('persistent status-page deployment binding', () => {
     expect(() => new StatusPageState(root, 'mainnet')).to.throw('already bound to another network')
   })
 
+  it('restores the network group independently of regenerated values and rejects retargeting', () => {
+    const state = new StatusPageState(root, 'testnet')
+    state.reserve({components: [], group: {action: 'reuse', id: 'testnet-group', name: 'Testnet'}, initialStatus: '', page: {action: 'unchanged', id: 'shared-page', name: 'DogeOS', subdomain: 'dogeos'}})
+    state.bind('shared-page')
+    const restored = {...target(), groupId: ''}
+    const reloaded = new StatusPageState(root, 'testnet')
+    expect(reloaded.restore(restored)).to.equal(true)
+    expect(restored.groupId).to.equal('testnet-group')
+    expect(() => reloaded.restore({...target(), groupId: 'mainnet-group'})).to.throw('explicit migration')
+  })
+
   it('fails on corrupted state instead of treating the deployment as new', () => {
     fs.mkdirSync(path.join(root, '.data'))
     fs.writeFileSync(path.join(root, '.data/status-page-state.json'), '{invalid')
