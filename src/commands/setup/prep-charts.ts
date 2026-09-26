@@ -46,6 +46,7 @@ import {assertTopologyUsesSharedArtifactStore, sharedArtifactStoreFromDogeConfig
 import {proofTopologyEthereumDaBlobSource} from '../../utils/proof-topology-compiler.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {reconcileScrollMonitorBalances} from '../../utils/scroll-monitor-values.js'
+import {reconcileScrollMonitorStatusPage} from '../../utils/status-page-values.js'
 import {
   getRequiredManagedSignerAddress,
   getRequiredManagedSignerConfig,
@@ -2325,6 +2326,8 @@ export default class SetupPrepCharts extends Command {
   ): Promise<{ skipped: number; updated: number }> {
     const productionFiles = fs.readdirSync(valuesDir)
       .filter(file => file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
+      // Status-page endpoints must reflect the source values generated in this pass.
+      .sort((a, b) => Number(getProductionChartName(a) === 'scroll-monitor') - Number(getProductionChartName(b) === 'scroll-monitor'))
 
     let updatedCharts = 0
     let skippedCharts = 0
@@ -2767,6 +2770,12 @@ export default class SetupPrepCharts extends Command {
           l2ChainId: configuredL2ChainId,
           l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),
         })
+        monitorChanges.push(...reconcileScrollMonitorStatusPage(productionYaml, {
+          chainId: configuredL2ChainId,
+          environment: productionYaml.statusPage?.environment,
+          networkName: this.getConfigValue('general.CHAIN_NAME_L2'),
+          valuesDir,
+        }))
         if (monitorChanges.length > 0) {
           changes.push(...monitorChanges)
           updated = true

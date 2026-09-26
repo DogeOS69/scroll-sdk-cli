@@ -2512,3 +2512,19 @@ DESCRIPTION
 
 _See code: [src/commands/test/ingress.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/test/ingress.ts)_
 <!-- commandsstop -->
+
+## Status-page configuration
+
+Use `scrollsdk setup status-page` for offline generation from a deployment,
+`--plan` for a read-only Instatus comparison, and `--apply` for explicit page/component
+reconciliation. See [the status-page workflow](docs/status-page.md) for configuration,
+Secret ownership and rollout boundaries. `setup prep-charts` also generates enabled
+status-page values during normal preparation.
+
+Use `--plan --create-webhook` followed by `--apply --create-webhook` for first
+Grafana webhook initialization. The CLI obtains the URL from Instatus and saves
+a private binding plus a Kubernetes Secret artifact under
+`secrets/status-page/`. Later `--apply` runs reuse it. Apply the
+Secret separately in the existing Grafana namespace; public routing remains
+disabled until configured. Back up this private directory; recovery/import and
+the limits of remote integration discovery are documented in the workflow above.
