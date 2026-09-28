@@ -258,9 +258,10 @@ export function reconcileScrollMonitorStatusPage(values: any, inputs: Inputs): A
   if (config.publication !== undefined || config.generated?.version === 2) {
     const candidate = structuredClone(values)
     reconcileComponentPublication(candidate, config, filename => readValues(inputs.valuesDir, filename, 'publication.nodeSync source'))
-    if (isDeepStrictEqual(config, values.statusPage) && isDeepStrictEqual(candidate.grafana, values.grafana) && isDeepStrictEqual(candidate['kube-prometheus-stack'], values['kube-prometheus-stack'])) return []
+    if (isDeepStrictEqual(config, values.statusPage) && isDeepStrictEqual(candidate.grafana, values.grafana) && isDeepStrictEqual(candidate.alloy, values.alloy) && isDeepStrictEqual(candidate['kube-prometheus-stack'], values['kube-prometheus-stack'])) return []
     values.statusPage = config
     values.grafana = candidate.grafana
+    values.alloy = candidate.alloy
     if (candidate['kube-prometheus-stack'] !== undefined) values['kube-prometheus-stack'] = candidate['kube-prometheus-stack']
     return [{key: 'statusPage component publication', newValue: '[component modes, rules and Secret references]', oldValue: '[previous configuration]'}]
   }

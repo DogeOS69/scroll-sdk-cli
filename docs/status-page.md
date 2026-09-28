@@ -477,10 +477,12 @@ continue to use the existing publication flow.
 
 ## Delivery status and order
 
-Existing network groups are ready for reuse. Planned-maintenance integration is
-last priority, after external probe delivery and real Instatus failure/recovery
-acceptance. Until implemented, deploy the component in `manual` before maintenance;
-editing its remote maintenance status alone does not pause local automation.
+Existing network groups are reused. Scheduled suppression is available through
+`publication.maintenanceWindows` (UTC start/end and selected component keys).
+Delivery resumes only after a fresh full confirmation interval. Publish the
+matching Instatus maintenance notice separately; changing remote maintenance
+status alone does not pause local automation. Management API synchronization of
+maintenance notices remains a separate, lower-priority item.
 
 The Alloy and official Node Sync changes use a coordinated SDK/CLI release. The
 acceptance workflow pins the corresponding SDK commit; push that SDK commit before
@@ -521,3 +523,42 @@ Review `scroll-sdk/docs/status-page-alloy.md` and the complete production exampl
 for source ownership, fixed defaults, DNS/ingress acceptance and the remaining
 live-provider checks. This implementation does not deploy a chain or modify Instatus
 without the separate `--apply` entry point.
+
+
+### Supplemental checks without business-image changes
+
+With `probes.mode: alloy`, configured WebSocket endpoints use the reserved
+`status-websocket` container in the existing Alloy Pod. `probes.websocketImage`
+defaults to `node:22.23.3-alpine3.23`. The CLI owns only that container/volume and
+its rollout annotation; other Alloy extras are retained. Actual chain-ID and
+block-number JSON-RPC requests must pass TLS, response-ID and quantity checks.
+Missing or stale samples cannot satisfy Public RPC readiness. This does not test
+WebSocket subscriptions or transaction submission.
+
+When official Node Sync selects one active continuously producing reference,
+Sequencing reads its latest block time directly. A stale, valid reference is
+affected; unavailable discovery/RPC is unknown. Follower failures do not by
+themselves classify the sequencer. No new dogeos-core metric is needed.
+
+Use an existing internal Slack contact point for notification acceptance. The
+SDK production example shows its Kubernetes Secret reference. Keep email/SMTP
+disabled by default. Skip dashboard, alert and public business-rule acceptance
+when the deployed application image predates its metrics; do not upgrade that
+image as part of monitor acceptance. Proof Coordinator stays No data until its
+new image is published and explicitly deployed.
+
+
+## Incident severity has no implicit default
+
+With `publication.incidents.manageTemplates: true`, each automatic component must
+set `publication.components.<key>.affectedStatus` explicitly to
+`DEGRADEDPERFORMANCE`, `PARTIALOUTAGE` or `MAJOROUTAGE`, after reviewing its rule.
+The old global `publication.incidents.affectedStatus` is rejected with migration
+instructions. Observe/manual components may leave severity empty. `--plan` shows
+component policy in the generated inputs and `--apply` updates existing templates.
+Existing open incidents must be reclassified separately on the same incident.
+
+This is a fixed per-rule template policy, not dynamic severity classification.
+Binary health alone cannot distinguish latency, partial loss and complete outage.
+Mixed built-in checks still need richer evidence and a verified incident-update
+protocol before dynamic escalation/de-escalation can be claimed.

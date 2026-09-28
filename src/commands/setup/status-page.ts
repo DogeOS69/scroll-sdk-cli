@@ -160,7 +160,7 @@ export default class StatusPage extends Command {
           const policy = options.publication?.incidents
           const name = key ? `${options.catalog.groupName} / ${options.catalog.components.find((component: any) => component.key === key).name}` : ''
           const templates = key && policy?.manageTemplates ? {
-            createTemplate: {components: [{id, status: policy.affectedStatus}], message: 'We are investigating a service disruption.', name: `${name}: service disruption`, notify: policy.notifySubscribers, status: 'INVESTIGATING'},
+            createTemplate: {components: [{id, status: options.publication.components[key].affectedStatus}], message: 'We are investigating a service disruption.', name: `${name}: service disruption`, notify: policy.notifySubscribers, status: 'INVESTIGATING'},
             resolveTemplate: {components: [{id, status: 'OPERATIONAL'}], message: 'Service has recovered after a period of continuous health verification.', name: `${name}: recovered`, notify: policy.notifySubscribers, status: 'RESOLVED'},
           } : undefined
           await item.webhook.apply(item.plan, client, options.instatus.pageId, secret, id, templates)

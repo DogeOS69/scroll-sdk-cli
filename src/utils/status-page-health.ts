@@ -40,9 +40,10 @@ export function builtinHealth(key: string, environment: string, chainId: string,
   const identity = `environment=${JSON.stringify(environment)},chain_id=${JSON.stringify(chainId)},component_key=${JSON.stringify(key)}`
   const q = (metric: string) => `${metric}{${identity}}`
   const fresh = (metric: string) => `(time() - ${metric} >= 0 and time() - ${metric} <= ${health.freshnessSeconds})`
-  if (key === 'node-sync' && nodeSyncMode === 'official') {
-    const sample = q('scroll_status_node_sync_affected')
-    const observed = q('scroll_status_node_sync_timestamp_seconds')
+  if (['node-sync', 'sequencing'].includes(key) && nodeSyncMode === 'official') {
+    const prefix = key === 'sequencing' ? 'scroll_status_sequencing' : 'scroll_status_node_sync'
+    const sample = q(`${prefix}_affected`)
+    const observed = q(`${prefix}_timestamp_seconds`)
     const valid = `(((${sample} == 0) or (${sample} == 1)) and ${fresh(observed)})`
     // One collector verifies ALL selected Pods; this is not an external probe location.
     return `(max(${valid})) and (count(${valid}) == 1) and (count(${sample}) == 1)`
@@ -80,10 +81,11 @@ export function builtinHealth(key: string, environment: string, chainId: string,
 }
 
 export function normalizeProbes(input: any = {}, catalog: any, health: any): {config: any; inputs: any; missing: Record<string, string>} {
-  const defaults = {alloyChecks: [], bridgeChecks: 'auto', explorerApiUrls: catalog.probeSources?.explorerApiUrls ?? [], explorerSelector: '', metricsTargets: [], mode: 'external', nodeDependencyChecks: [], nodeRpcUrl: '', sequencingMode: 'auto'}
+  const defaults = {alloyChecks: [], bridgeChecks: 'auto', explorerApiUrls: catalog.probeSources?.explorerApiUrls ?? [], explorerSelector: '', metricsTargets: [], mode: 'external', nodeDependencyChecks: [], nodeRpcUrl: '', sequencingMode: 'auto', websocketImage: 'node:22.23.3-alpine3.23'}
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !(key in defaults))) throw new Error('Invalid publication.probes configuration')
   const inputs = {...defaults, ...input}
   const probes = structuredClone(inputs)
+  if (typeof probes.websocketImage !== 'string' || !probes.websocketImage || /\s/.test(probes.websocketImage)) throw new Error('Invalid probes.websocketImage')
   if (!['alloy', 'external'].includes(probes.mode)) throw new Error('probes.mode must be alloy or external')
   if (!Array.isArray(probes.alloyChecks)) throw new Error('probes.alloyChecks must be a list')
   if (probes.mode === 'external' && probes.alloyChecks.length > 0) throw new Error('alloyChecks requires probes.mode: alloy')

@@ -56,7 +56,7 @@ describe('independent component publication', () => {
   })
 
   it('generates guarded delivery, explicit incident policy and a failure-sensitive heartbeat', () => {
-    values.statusPage.publication = {components: {'public-rpc': {mode: 'automatic', rule: {builtin: true}}}, delivery: {enabled: true},
+    values.statusPage.publication = {components: {'public-rpc': {affectedStatus: 'PARTIALOUTAGE', mode: 'automatic', rule: {builtin: true}}}, delivery: {enabled: true},
       health: {recoveryFor: '12m'}, heartbeat: {alertIds: ['internal-ops'], enabled: true},
       incidents: {manageTemplates: true}}
     generate()
@@ -73,6 +73,26 @@ describe('independent component publication', () => {
     generate()
     expect(file().groups[0].rules.filter((rule: any) => ['status-delivery-health','status-monitoring-heartbeat'].includes(rule.uid)).every((rule: any) => rule.isPaused)).to.equal(true)
     expect(values.statusPage.generated.delivery.components).to.deep.equal({})
+  })
+
+  it('requires reviewed per-component severity instead of implicitly treating failures as degraded performance', () => {
+    values.statusPage.publication = {components: {
+      'block-explorer': {affectedStatus: 'MAJOROUTAGE', mode: 'automatic', rule: {expr: 'fixture_explorer'}},
+      'bridge-portal': {affectedStatus: 'PARTIALOUTAGE', mode: 'automatic', rule: {expr: 'fixture_bridge'}},
+    }, incidents: {manageTemplates: true}}
+    generate()
+    expect(values.statusPage.publication.incidents).not.to.have.property('affectedStatus')
+    expect(values.statusPage.publication.components['bridge-portal'].affectedStatus).to.equal('PARTIALOUTAGE')
+    expect(values.statusPage.publication.components['block-explorer'].affectedStatus).to.equal('MAJOROUTAGE')
+    expect(generate()).to.deep.equal([])
+    delete values.statusPage.publication.components['bridge-portal'].affectedStatus
+    const before = structuredClone(values)
+    expect(generate).to.throw('explicit affectedStatus')
+    expect(values).to.deep.equal(before)
+    values.statusPage.publication.components['bridge-portal'].affectedStatus = 'OPERATIONAL'
+    expect(generate).to.throw('supported incident severity')
+    values.statusPage.publication.incidents.affectedStatus = 'DEGRADEDPERFORMANCE'
+    expect(generate).to.throw('global severity')
   })
 
   it('owns only the external probe scrape job and removes it when targets are disabled', () => {
@@ -100,6 +120,7 @@ describe('independent component publication', () => {
     values.statusPage.instatus.pageId = 'page-1'
     values.statusPage.instatus.componentIds = {'public-rpc': 'rpc-1'}
     values.statusPage.publication.components['public-rpc'].mode = 'automatic'
+    values.statusPage.publication.components['public-rpc'].affectedStatus = 'PARTIALOUTAGE'
     values.statusPage.publication.probes.mode = 'external'
     values.statusPage.publication.probes.metricsTargets = ['probe-a:9111', 'probe-b:9111']
     values.statusPage.generated = {componentBindings: {'public-rpc': {componentId: 'rpc-1', pageId: 'page-1'}}, environment: 'testnet'}
@@ -182,7 +203,7 @@ describe('independent component publication', () => {
     fs.writeFileSync(input, JSON.stringify({createTemplateId: 'create-rpc', integrationId: 'management-id-distinct-from-url', resolveTemplateId: 'resolve-rpc', url: webhookUrl('url-token')}), {mode: 0o600})
     const webhook = new StatusPageWebhook(directory, 'testnet', 'public-rpc')
     const plan = webhook.plan('page-1', false, false, input, 'rpc-id')
-    const transport = sinon.stub().callsFake(async (url: string) => new Response(JSON.stringify({id: url.split('/').at(-1), siteId: 'page-1', type: 'INCIDENT', components: [{componentId: 'rpc-id'}]})))
+    const transport = sinon.stub().callsFake(async (url: string) => new Response(JSON.stringify({components: [{componentId: 'rpc-id'}], id: url.split('/').at(-1), siteId: 'page-1', type: 'INCIDENT'})))
     const client = new InstatusClient('fake-key', transport)
     webhook.prepare()
     await webhook.apply(plan, client, 'page-1', componentIdentity('public-rpc').secret, 'rpc-id')
@@ -197,16 +218,17 @@ describe('independent component publication', () => {
   it('blocks missing template IDs, cross-component templates and ignored notification policy', async () => {
     let wrongTarget = false
     const transport = sinon.stub().callsFake(async (url: string, init: any) => new Response(JSON.stringify(init.method === 'GET'
-      ? {id: url.split('/').at(-1), siteId: 'page-1', type: 'INCIDENT', components: [{componentId: wrongTarget ? 'another-component' : 'rpc-id'}]}
-      : {integration: {id: 'integration', siteId: 'page-1', monitoringTool: 'GRAFANA', createTemplateId: 'create-id', resolveTemplateId: 'resolve-id', onFailNotifySubscribers: true, onRecoverNotifySubscribers: true}})))
+      ? {components: [{componentId: wrongTarget ? 'another-component' : 'rpc-id'}], id: url.split('/').at(-1), siteId: 'page-1', type: 'INCIDENT'}
+      : {integration: {createTemplateId: 'create-id', id: 'integration', monitoringTool: 'GRAFANA', onFailNotifySubscribers: true, onRecoverNotifySubscribers: true, resolveTemplateId: 'resolve-id', siteId: 'page-1'}})))
     const client = new InstatusClient('fake-key', transport)
     const ids = {createTemplateId: 'create-id', resolveTemplateId: 'resolve-id'}
     const policy = {createTemplate: {components: [{id: 'rpc-id', status: 'DEGRADEDPERFORMANCE'}], name: 'Disrupted', notify: false, status: 'INVESTIGATING'}, resolveTemplate: {components: [{id: 'rpc-id', status: 'OPERATIONAL'}], name: 'Recovered', notify: false, status: 'RESOLVED'}}
     const rejects = async (run: () => Promise<void>, text: string) => {
       let error = ''
-      try { await run() } catch (caught) { error = String(caught) }
+      try { await run() } catch (error_) { error = String(error_) }
       expect(error).to.contain(text)
     }
+
     await rejects(() => client.bindGrafanaWebhook('integration', 'page-1', 'rpc-id', policy), 'Restore createTemplateId')
     expect(transport.callCount).to.equal(0)
     wrongTarget = true
@@ -223,10 +245,11 @@ describe('independent component publication', () => {
       const request = JSON.parse(init.body)
       const key = request.components[0]
       if (init.method === 'PUT') {
-        for (const template of [request.createTemplate, request.resolveTemplate]) stored[template.id] = {...template, name: template.name.default.value, message: template.message.default.value, siteId: 'page-1', components: template.components.map((c: any) => ({...c, componentId: c.id}))}
-        return new Response(JSON.stringify({integration: {automaticResolve: true, isActive: true, onFailCreateIncident: true, onFailPublishIncident: true, onRecoverPublishIncident: true, onRecoverResolveIncident: true, id: `private-${key}`, siteId: 'page-1', monitoringTool: 'GRAFANA', createTemplateId: `create-${key}`, resolveTemplateId: `resolve-${key}`, onFailNotifySubscribers: request.onFailNotifySubscribers, onRecoverNotifySubscribers: request.onRecoverNotifySubscribers}}))
+        for (const template of [request.createTemplate, request.resolveTemplate]) stored[template.id] = {...template, components: template.components.map((c: any) => ({...c, componentId: c.id})), message: template.message.default.value, name: template.name.default.value, siteId: 'page-1'}
+        return new Response(JSON.stringify({integration: {automaticResolve: true, createTemplateId: `create-${key}`, id: `private-${key}`, isActive: true, monitoringTool: 'GRAFANA', onFailCreateIncident: true, onFailNotifySubscribers: request.onFailNotifySubscribers, onFailPublishIncident: true, onRecoverNotifySubscribers: request.onRecoverNotifySubscribers, onRecoverPublishIncident: true, onRecoverResolveIncident: true, resolveTemplateId: `resolve-${key}`, siteId: 'page-1'}}))
       }
-      for (const prefix of ['create', 'resolve']) stored[`${prefix}-${key}`] = {id: `${prefix}-${key}`, siteId: 'page-1', type: 'INCIDENT', components: [{componentId: key}]}
+
+      for (const prefix of ['create', 'resolve']) stored[`${prefix}-${key}`] = {components: [{componentId: key}], id: `${prefix}-${key}`, siteId: 'page-1', type: 'INCIDENT'}
       return new Response(JSON.stringify({integration: {createTemplateId: `create-${key}`, id: `private-${key}`, monitoringTool: 'GRAFANA', resolveTemplateId: `resolve-${key}`, siteId: 'page-1', uniqueUrl: webhookUrl(key)}}))
     })
     const client = new InstatusClient('fake-key', transport)

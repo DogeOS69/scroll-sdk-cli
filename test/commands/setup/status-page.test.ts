@@ -284,7 +284,7 @@ describe('status-page generation and explicit Instatus apply', () => {
 
   for (const lostResponse of [false, true]) {
     it(`applies only automatic component webhooks and persists independent intents (lost response: ${lostResponse})`, async () => {
-      values.statusPage.publication = {components: {'batch-publication': {mode: 'automatic', rule: {expr: 'fixture_component_health'}}, deposits: {mode: 'observe'}}}
+      values.statusPage.publication = {components: {'batch-publication': {affectedStatus: 'PARTIALOUTAGE', mode: 'automatic', rule: {expr: 'fixture_component_health'}}, deposits: {mode: 'observe'}}, incidents: {manageTemplates: true}}
       prepareCommand()
       const remotePlan: any = {components: [{action: 'unchanged', id: 'batch-id', key: 'batch-publication', metadata: {description: '', name: 'Batch Publication', order: 4, showUptime: false}}], group: {action: 'reuse', id: 'group-testnet', name: 'Testnet'}, initialStatus: 'OPERATIONAL', page: {action: 'unchanged', id: 'page-1', name: 'DogeOS'}}
       sinon.stub(InstatusClient.prototype, 'plan').resolves(remotePlan)
@@ -310,6 +310,7 @@ describe('status-page generation and explicit Instatus apply', () => {
           await runCommand({apply: true, 'create-webhook': true})
           await runCommand({apply: true, 'create-webhook': true})
           expect(bind.callCount).to.equal(2)
+          expect(bind.firstCall.args[3]?.createTemplate.components).to.deep.equal([{id: 'batch-id', status: 'PARTIALOUTAGE'}])
           const applied: any = yaml.load(fs.readFileSync(path.join(directory, 'scroll-monitor-production.yaml'), 'utf8'))
           expect(applied.statusPage.generated.componentBindings).to.deep.equal({'batch-publication': {componentId: 'batch-id', pageId: 'page-1'}})
           expect(applied.statusPage.generated.componentPublication.readiness['batch-publication'].ready).to.equal(true)

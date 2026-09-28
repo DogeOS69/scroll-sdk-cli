@@ -2,8 +2,9 @@
 import * as yaml from 'js-yaml'
 import {isDeepStrictEqual} from 'node:util'
 
-import {alloyHealth, alloyHeartbeat, buildAlloyProbes} from './status-page-alloy.js'
+import {alloyHealth, alloyHeartbeat, buildAlloyProbes, reconcileWebsocketContainer} from './status-page-alloy.js'
 import {builtinHealth, normalizeHealth, normalizeProbes} from './status-page-health.js'
+import {normalizeMaintenance} from './status-page-maintenance.js'
 import {normalizeNodeSync} from './status-page-node-sync.js'
 
 export const PUBLICATION_FILE = 'instatus-component-publication.yaml'
@@ -38,15 +39,17 @@ export function componentIdentity(key: ComponentKey) {
 /** Component publication owns one provisioning file, never the shared notification-policy tree. */
 export function reconcileComponentPublication(values: any, config: any, readNodeValues?: (filename: string) => any): void {
   const publication = object(config.publication, 'statusPage.publication')
-  fields(publication, ['components', 'delivery', 'health', 'heartbeat', 'incidents', 'nodeSync', 'observationContactPointName', 'probes'], 'statusPage.publication')
+  fields(publication, ['components', 'delivery', 'health', 'heartbeat', 'incidents', 'maintenanceWindows', 'nodeSync', 'observationContactPointName', 'probes'], 'statusPage.publication')
   const observation = text(publication.observationContactPointName ?? 'grafana-default-email', 'observationContactPointName')
   if (observation.startsWith('instatus-') || observation === config.grafana.contactPointName) throw new Error('Observation notifications must use an internal contact point, not Instatus')
   const components = object(publication.components, 'publication.components')
   fields(components, [...COMPONENT_KEYS], 'publication.components')
   const health = normalizeHealth(publication.health)
+  const maintenanceWindows = normalizeMaintenance(publication.maintenanceWindows, COMPONENT_KEYS)
   const delivery = {enabled: false, image: 'python:3.12.11-alpine3.22', storageClassName: '', storageSize: '1Gi', ...object(publication.delivery, 'publication.delivery')}
   fields(delivery, ['enabled', 'image', 'storageClassName', 'storageSize'], 'publication.delivery')
   if (typeof delivery.enabled !== 'boolean') throw new Error('publication.delivery.enabled must be boolean')
+  if (maintenanceWindows.length > 0 && !delivery.enabled) throw new Error('Maintenance suppression requires delivery.enabled')
   text(delivery.image, 'publication.delivery.image')
   if (typeof delivery.storageClassName !== 'string' || !/^(?:[\da-z][\d.a-z-]*)?$/.test(delivery.storageClassName)) throw new Error('Invalid delivery storage class')
   if (!/^[1-9]\d*(Mi|Gi)$/.test(delivery.storageSize)) throw new Error('Invalid delivery storage size')
@@ -54,13 +57,15 @@ export function reconcileComponentPublication(values: any, config: any, readNode
   fields(heartbeat, ['enabled', 'alertIds'], 'publication.heartbeat')
   if (typeof heartbeat.enabled !== 'boolean' || !Array.isArray(heartbeat.alertIds) || heartbeat.alertIds.some((id: unknown) => typeof id !== 'string' || !/^[\w-]+$/.test(id))) throw new Error('Invalid heartbeat configuration')
   if (heartbeat.enabled && heartbeat.alertIds.length === 0) throw new Error('Heartbeat requires Instatus monitor alert IDs for internal notifications')
-  const incidents = {affectedStatus: 'DEGRADEDPERFORMANCE', manageTemplates: false, notifySubscribers: false, ...object(publication.incidents, 'publication.incidents')}
-  fields(incidents, ['affectedStatus', 'manageTemplates', 'notifySubscribers'], 'publication.incidents')
-  if (!['DEGRADEDPERFORMANCE', 'MAJOROUTAGE', 'PARTIALOUTAGE'].includes(incidents.affectedStatus) || typeof incidents.manageTemplates !== 'boolean' || typeof incidents.notifySubscribers !== 'boolean') throw new Error('Invalid public incident policy')
+  const incidents = {manageTemplates: false, notifySubscribers: false, ...object(publication.incidents, 'publication.incidents')}
+  if ('affectedStatus' in incidents) throw new Error('Move publication.incidents.affectedStatus to components.<key>.affectedStatus after reviewing each rule; a global severity cannot represent every failure')
+  fields(incidents, ['manageTemplates', 'notifySubscribers'], 'publication.incidents')
+  if (typeof incidents.manageTemplates !== 'boolean' || typeof incidents.notifySubscribers !== 'boolean') throw new Error('Invalid public incident policy')
   const deliveryComponents: Record<string, any> = {}
   const seconds = (duration: string) => Number(duration.slice(0, -1)) * ({h: 3600, m: 60, s: 1}[duration.slice(-1)] ?? 0)
   const probes = normalizeProbes(publication.probes, config.catalog, health)
   const alloy = probes.inputs.mode === 'alloy' ? buildAlloyProbes(probes.config, config.catalog) : undefined
+  reconcileWebsocketContainer(values, alloy?.config, probes.inputs.websocketImage)
   if (alloy) {
     if (values.alloy?.enabled === false) throw new Error('Alloy probes require the bundled Alloy instance')
     for (const key of ['public-rpc', 'bridge-portal', 'block-explorer', 'sequencing', 'node-sync']) delete probes.missing[key]
@@ -69,7 +74,7 @@ export function reconcileComponentPublication(values: any, config: any, readNode
     const descriptions: Record<string, string> = {
       'block-explorer': 'Availability of the Blockscout website and public API endpoints.',
       'bridge-portal': 'Availability of the bridge website and public API endpoints.',
-      'public-rpc': 'Availability of the official HTTP JSON-RPC endpoints; expected chain ID and block-number responses.',
+      'public-rpc': 'Availability of the official HTTP and WebSocket JSON-RPC endpoints; expected chain ID and block-number responses.',
     }
     for (const component of config.catalog.components) if (descriptions[component.key]) component.description = descriptions[component.key]
   }
@@ -77,6 +82,7 @@ export function reconcileComponentPublication(values: any, config: any, readNode
   const nodeSync = normalizeNodeSync(publication.nodeSync, config.catalog.chainId, config.environment, health, readNodeValues)
   if (nodeSync.config) {
     delete probes.missing['node-sync']
+    if (probes.config.sequencingMode === 'continuous') delete probes.missing.sequencing
     // External sites do not receive private node addresses or emit competing canary evidence.
     probes.config.nodeRpcUrl = ''
     probes.config.nodeDependencyChecks = []
@@ -96,7 +102,7 @@ export function reconcileComponentPublication(values: any, config: any, readNode
   if (previous?.chainId && previous.chainId !== config.catalog.chainId) throw new Error('Component publication chain ID changed; use a separate deployment configuration')
   for (const key of COMPONENT_KEYS) {
     const input = object(components[key], `publication.components.${key}`)
-    fields(input, ['mode', 'rule'], `publication.components.${key}`)
+    fields(input, ['affectedStatus', 'mode', 'rule'], `publication.components.${key}`)
     const mode = input.mode ?? 'observe'
     if (!['automatic', 'manual', 'observe'].includes(mode)) throw new Error(`${key}: mode must be manual, observe or automatic`)
     const rule = object(input.rule, `${key}.rule`)
@@ -109,13 +115,16 @@ export function reconcileComponentPublication(values: any, config: any, readNode
     const pending = rule.for ?? health.failureFor
     if (typeof pending !== 'string' || !/^[1-9]\d*[hms]$/.test(pending)) throw new Error(`${key}.rule.for must be a positive duration`)
     if (mode === 'automatic' && !expr) throw new Error(`${key}: automatic publication requires a component health expression; missing observations cannot be published as healthy`)
-    normalized[key] = {mode, rule: builtin ? {builtin: true, for: pending} : {builtin: false, expr, for: pending}}
+    const affectedStatus = input.affectedStatus || undefined
+    if (input.affectedStatus !== undefined && (typeof input.affectedStatus !== 'string' || (input.affectedStatus !== '' && !['DEGRADEDPERFORMANCE', 'MAJOROUTAGE', 'PARTIALOUTAGE'].includes(input.affectedStatus)))) throw new Error(`${key}.affectedStatus must be a supported incident severity`)
+    if (mode === 'automatic' && incidents.manageTemplates && !affectedStatus) throw new Error(`${key}: managed automatic publication requires an explicit affectedStatus reviewed against its rule; binary health does not determine severity`)
+    normalized[key] = {...(affectedStatus ? {affectedStatus} : {}), mode, rule: builtin ? {builtin: true, for: pending} : {builtin: false, expr, for: pending}}
     const identity = componentIdentity(key)
     const componentId = config.instatus.componentIds[key]
     const binding = config.generated?.componentBindings?.[key]
     if (binding && (binding.pageId !== config.instatus.pageId || binding.componentId !== componentId)) throw new Error(`${key}: saved webhook binding targets a different page or component; restore the original binding`)
     const bound = Boolean(binding && binding.componentId)
-    readiness[key] = {...(alloy && ['block-explorer', 'bridge-portal', 'public-rpc'].includes(key) ? {coverage: 'public-entrypoint'} : {}), componentId: componentId ?? '', mode, ready: mode === 'manual' || Boolean(expr && (mode !== 'automatic' || bound)),
+    readiness[key] = {...(affectedStatus ? {affectedStatus} : {}), ...(alloy && ['block-explorer', 'bridge-portal', 'public-rpc'].includes(key) ? {coverage: 'public-entrypoint'} : {}), componentId: componentId ?? '', mode, ready: mode === 'manual' || Boolean(expr && (mode !== 'automatic' || bound)),
       reason: mode === 'manual' ? 'manual' : expr ? mode === 'automatic' && !bound ? 'apply-component-webhook' : 'configured' : (builtin ? probes.missing[key] ?? 'missing-health-input' : 'missing-health-expression'),
       ...identity}
     // Preserve a previously managed receiver when disabling publication. The rule's
@@ -208,7 +217,7 @@ export function reconcileComponentPublication(values: any, config: any, readNode
   }
 
   grafana.alerting[PUBLICATION_FILE] = provisioning
-  config.publication = {components: normalized, delivery, health, heartbeat, incidents, nodeSync: nodeSync.inputs, observationContactPointName: observation, probes: probes.inputs}
+  config.publication = {components: normalized, delivery, health, heartbeat, incidents, maintenanceWindows, nodeSync: nodeSync.inputs, observationContactPointName: observation, probes: probes.inputs}
   const scrapeName = 'status-page-external-probes'
   const stack = structuredClone(values['kube-prometheus-stack'] ?? {})
   const rawJobs = stack.prometheus?.prometheusSpec?.additionalScrapeConfigs ?? []
@@ -224,8 +233,8 @@ export function reconcileComponentPublication(values: any, config: any, readNode
     values['kube-prometheus-stack'] = stack
   }
 
-  const deliveryConfig = {chainId: config.catalog.chainId, components: deliveryComponents, environment: config.environment,
-    groupName: config.catalog.groupName, intervalSeconds: 30, orgId: config.grafana.orgId,
+  const deliveryConfig = {chainId: config.catalog.chainId, components: deliveryComponents, environment: config.environment, groupName: config.catalog.groupName,
+    intervalSeconds: 30, maintenanceWindows: maintenanceWindows.map(w => ({...w, end: Date.parse(w.end) / 1000, start: Date.parse(w.start) / 1000})), orgId: config.grafana.orgId,
     prometheusUrl: values.monitoring?.datasources?.prometheus?.url ?? 'http://prometheus-prometheus:9090'}
   config.generated = {...config.generated, alloyProbes: alloy?.config ?? null, componentPublication: structuredClone({alloyProbes: alloy?.config ?? null, chainId: config.catalog.chainId, datasourceUid, delivery: deliveryConfig, envs, inputs: config.publication, nodeSync: nodeSync.config, orgId: config.grafana.orgId, ...(probeScrape ? {probeScrape} : {}), provisioning, readiness}), delivery: deliveryConfig, environment: config.environment, nodeSync: nodeSync.config, probeConfig: probes.config, version: 2}
   values.grafana = grafana

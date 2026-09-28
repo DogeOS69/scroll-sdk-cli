@@ -49,7 +49,7 @@ describe('existing Alloy public-entrypoint probes', () => {
     expect(values.statusPage.generated.alloyProbes.targets).to.have.length(7)
   })
 
-  it('requires an external heartbeat before automatic publication and fails closed on uncovered WebSockets', () => {
+  it('requires an external heartbeat before automatic publication and generates supplemental WebSocket checks', () => {
     values.statusPage.publication.components['public-rpc'].mode = 'automatic'
     expect(generate).to.throw('heartbeat')
     values.statusPage.publication.heartbeat = {alertIds: ['ops'], enabled: true}
@@ -60,7 +60,21 @@ describe('existing Alloy public-entrypoint probes', () => {
     const source: any = yaml.load(fs.readFileSync(rpc, 'utf8'))
     source.ingress.websocket = {enabled: true, hosts: [{host: 'ws.example', paths: [{path: '/'}]}]}
     fs.writeFileSync(rpc, yaml.dump(source))
-    expect(generate).to.throw('health expression')
+    generate()
+    expect(values.statusPage.generated.alloyProbes.websocketTargets).to.have.length(1)
+    expect(values.alloy.controller.extraContainers[0].name).to.equal('status-websocket')
+    expect(values.statusPage.generated.componentPublication.readiness['public-rpc'].ready).to.equal(false)
+    expect(values.statusPage.generated.componentPublication.readiness['public-rpc'].reason).to.equal('apply-component-webhook')
+    expect(generate()).to.deep.equal([])
+    if (process.env.SCROLL_STATUS_CHART) {
+      values.statusPage.publication.components['public-rpc'].mode = 'observe'
+      generate()
+      const filename = path.join(directory, 'ws-values.yaml')
+      fs.writeFileSync(filename, yaml.dump(values))
+      const rendered = execFileSync('helm', ['template', 'scroll-monitor', process.env.SCROLL_STATUS_CHART, '-f', filename], {encoding: 'utf8', maxBuffer: 32 * 1024 * 1024})
+      expect(rendered).to.contain('name: status-websocket')
+      expect(rendered).to.contain('prometheus.scrape "status_websocket"')
+    }
   })
 
   it('rejects private URLs, credentials, external scrape targets and unsupported semantic overrides', () => {
