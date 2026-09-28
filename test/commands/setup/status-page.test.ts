@@ -9,8 +9,10 @@ import sinon from 'sinon'
 import PrepCharts from '../../../src/commands/setup/prep-charts.js'
 import StatusPage from '../../../src/commands/setup/status-page.js'
 import {InstatusClient} from '../../../src/utils/status-page-instatus.js'
+import {COMPONENT_KEYS} from '../../../src/utils/status-page-publication.js'
 import {reconcileScrollMonitorStatusPage} from '../../../src/utils/status-page-values.js'
 
+const observeComponents = () => Object.fromEntries(COMPONENT_KEYS.map(key => [key, {mode: 'observe'}]))
 const ENV = 'INSTATUS_GRAFANA_WEBHOOK_URL'
 const FILE = 'instatus-contact-points.yaml'
 const ingress = (host: string) => ({enabled: true, hosts: [{host, paths: [{path: '/'}]}]})
@@ -37,7 +39,7 @@ describe('status-page generation and explicit Instatus apply', () => {
   })
 
   it('exports independent probe values offline and preserves location/image across regeneration', async () => {
-    values.statusPage.publication = {components: {'public-rpc': {rule: {builtin: true}}}}
+    values.statusPage.publication = {components: {...observeComponents(), 'public-rpc': {mode: 'observe', rule: {builtin: true}}}}
     write('monitor.yaml', values)
     fs.writeFileSync(path.join(directory, 'config.toml'), '[general]\nCHAIN_ID_L2 = 291\nCHAIN_NAME_L2 = "DogeOS"\n')
     write('probe.yaml', {image: 'registry.example/probe:v1', location: 'us-east'})
@@ -284,7 +286,7 @@ describe('status-page generation and explicit Instatus apply', () => {
 
   for (const lostResponse of [false, true]) {
     it(`applies only automatic component webhooks and persists independent intents (lost response: ${lostResponse})`, async () => {
-      values.statusPage.publication = {components: {'batch-publication': {affectedStatus: 'PARTIALOUTAGE', mode: 'automatic', rule: {expr: 'fixture_component_health'}}, deposits: {mode: 'observe'}}, incidents: {manageTemplates: true}}
+      values.statusPage.publication = {components: {...observeComponents(), 'batch-publication': {affectedStatus: 'PARTIALOUTAGE', mode: 'automatic', rule: {expr: 'fixture_component_health'}}, deposits: {mode: 'observe'}}, incidents: {manageTemplates: true}}
       prepareCommand()
       const remotePlan: any = {components: [{action: 'unchanged', id: 'batch-id', key: 'batch-publication', metadata: {description: '', name: 'Batch Publication', order: 4, showUptime: false}}], group: {action: 'reuse', id: 'group-testnet', name: 'Testnet'}, initialStatus: 'OPERATIONAL', page: {action: 'unchanged', id: 'page-1', name: 'DogeOS'}}
       sinon.stub(InstatusClient.prototype, 'plan').resolves(remotePlan)

@@ -11,6 +11,7 @@ export const HEALTH_DEFAULTS = {
   maxRpcLatencySeconds: 2,
   minimumProbeLocations: 2,
   recoveryFor: '10m',
+  wfStallSeconds: 3600,
   withdrawalDeadlineSeconds: 0,
   withdrawalProcessorJobRegex: 'withdrawal-processor',
 }
@@ -33,6 +34,25 @@ export function normalizeHealth(input: any = {}): any {
 
   if (health.minimumProbeLocations < 2) throw new Error('Public health requires at least two independent probe locations')
   return health
+}
+
+/** WF health is independent of deposit/withdrawal snapshots. Idle queues are not outages. */
+function workflowHealth(health: any): string {
+  const selector = `{job=~${JSON.stringify(health.withdrawalProcessorJobRegex)}}`
+  const labels = 'namespace, job, instance'
+  const head = `withdrawal_processor_protocol_state_wf_tx_number${selector}`
+  const age = `withdrawal_processor_protocol_job_oldest_age_seconds{job=~${JSON.stringify(health.withdrawalProcessorJobRegex)},status=~"queued|building|built|failed_retryable|bug|proposed_to_tso|awaiting_replay"}`
+  const window = `${health.wfStallSeconds}s`
+  const current = (metric: string) => `(time() - timestamp(${metric}) >= 0 and time() - timestamp(${metric}) <= ${health.freshnessSeconds})`
+  const validHead = `(${head} >= 0 and ${head} < Inf and ${head} == floor(${head}) and ${current(head)} and on (${labels}) (up${selector} == 1))`
+  const validAge = `(${age} >= 0 and ${age} < Inf and ${current(age)})`
+  // Require the same target at both ends of the window. A new/replaced target is unknown.
+  const flat = `((max_over_time(${head}[${window}]) == bool min_over_time(${head}[${window}])) * (${head} == bool ${head} offset ${window}))`
+  const waiting = `(max by (${labels}) (${validAge}) > bool ${health.wfStallSeconds})`
+  const evidence = `((${flat} * on (${labels}) ${waiting}) and on (${labels}) ${validHead} and on (${labels}) (count by (${labels}) (${validAge}) == count by (${labels}) (${age})))`
+  const complete = `(count(${evidence}) == count(up${selector})) and (min(up${selector}) == 1) and (count(up${selector}) > 0)`
+  // A confirmed stalled writer is actionable even if another writer has lost evidence.
+  return `(max(${evidence}) == 1) or ((max(${evidence}) == 0) and (${complete}))`
 }
 
 /** Every expression is 0/1 with no dynamic labels, or absent when evidence is incomplete. */
@@ -77,7 +97,11 @@ export function builtinHealth(key: string, environment: string, chainId: string,
   // Missing age/freshness for ANY scraped writer prevents the aggregate being healthy.
   const targets = `up${selector}`
   const complete = `(count(${valid}) == count(${targets})) and (min(${targets}) == 1) and (count(${targets}) > 0)`
-  return `(max(${valid})) and (${complete})`
+  const business = `(max(${valid})) and (${complete})`
+  if (key === 'batch-publication') return business
+  const workflow = workflowHealth(health)
+  // Known failure wins over unknown. Recovery needs BOTH business and WF evidence.
+  return `((${workflow}) == 1) or ((${business}) == 1) or (((${business}) == 0) and ((${workflow}) == 0))`
 }
 
 export function normalizeProbes(input: any = {}, catalog: any, health: any): {config: any; inputs: any; missing: Record<string, string>} {
@@ -90,7 +114,13 @@ export function normalizeProbes(input: any = {}, catalog: any, health: any): {co
   if (!Array.isArray(probes.alloyChecks)) throw new Error('probes.alloyChecks must be a list')
   if (probes.mode === 'external' && probes.alloyChecks.length > 0) throw new Error('alloyChecks requires probes.mode: alloy')
   if (probes.mode === 'alloy' && probes.metricsTargets.length > 0) throw new Error('Alloy uses the existing remote-write path; remove external metricsTargets')
-  if (probes.mode === 'alloy' && inputs.bridgeChecks !== 'auto') throw new Error('Alloy does not execute JSON-path bridgeChecks; use auto for API availability and alloyChecks for explicit response patterns')
+  if (probes.mode === 'alloy' && !['auto', 'disabled'].includes(inputs.bridgeChecks)) throw new Error('Alloy does not execute JSON-path bridgeChecks; use auto for API availability, disabled for page-only checks, and alloyChecks for explicit response patterns')
+  if (probes.bridgeChecks === 'disabled') {
+    if (probes.mode !== 'alloy') throw new Error('bridgeChecks: disabled requires Alloy page-only monitoring')
+    probes.bridgeChecks = []
+    probes.bridgeApiRequired = false
+  }
+
   if (probes.bridgeChecks === 'auto') probes.bridgeChecks = catalog.probeSources?.bridgeChecks ?? []
   if (probes.sequencingMode === 'auto') probes.sequencingMode = catalog.probeSources?.sequencingMode ?? 'unconfigured'
   if (Array.isArray(probes.explorerApiUrls) && probes.explorerApiUrls.length === 0) probes.explorerApiUrls = defaults.explorerApiUrls

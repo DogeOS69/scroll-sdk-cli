@@ -339,7 +339,7 @@ API reference: [status pages](https://instatus.com/help/api/status-pages),
 
 ## Component publication v2
 
-SDK production examples provide all eight keys with `mode: observe` and
+SDK production examples provide all eight keys with `mode: automatic` and
 `rule.builtin: true`. Modes are `manual`, `observe`, `automatic`. Built-in rules
 cover public RPC, continuous sequencing, bridge browser/API, Blockscout freshness,
 official follower or optional external canary node sync, and new dogeos-core deposit/withdrawal/DA queue observations.
@@ -348,7 +348,7 @@ defines their semantics, operational limits and runtime tests.
 
 | Publication input | Ownership / default |
 | --- | --- |
-| `components.<key>.mode` | Operator; observe by default, activation is per component |
+| `components.<key>.mode` | Operator; automatic by default, explicit manual/observe remain available |
 | `components.<key>.rule` | Built-in by default; custom rules require `builtin: false`, `expr`, optional `for` |
 | `health.failureFor` / `recoveryFor` | Default 5m / 10m; per-component `rule.for` overrides failure |
 | `health.*DeadlineSeconds` | Deposit, withdrawal and batch publication: 0 means unconfigured; supply confirmed budgets |
@@ -562,3 +562,22 @@ This is a fixed per-rule template policy, not dynamic severity classification.
 Binary health alone cannot distinguish latency, partial loss and complete outage.
 Mixed built-in checks still need richer evidence and a verified incident-update
 protocol before dynamic escalation/de-escalation can be claimed.
+
+
+In Alloy mode, `publication.probes.bridgeChecks: disabled` explicitly retires the
+legacy bridge API dependency and monitors the bridge website over HTTPS only.
+The generated public description is narrowed accordingly. `auto` still requires
+API discovery; the opt-out is not inferred from an absent API or permitted for
+external browser mode. Deposits/withdrawals retain their separate health rules.
+
+### WF stalled: deposits and withdrawals
+
+Both built-in rules include `health.wfStallSeconds` (default 3600). A fresh WP target
+must show no WF sequence change over the window AND queued/in-flight work older
+than that window. Idle queues do not cause an outage. A confirmed WF stall affects
+both components even when their business snapshot is invalid or missing. A known
+business deadline violation is independently actionable. Recovery requires both
+WF and business evidence to be healthy, followed by the recovery window.
+Automatic publication is the default when mode is omitted; missing prerequisites
+are errors, never an implicit fallback to observe. Explicit existing observe modes
+remain opt-outs until migrated. SDK deposit/withdrawal examples use MAJOROUTAGE.

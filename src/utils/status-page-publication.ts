@@ -73,7 +73,7 @@ export function reconcileComponentPublication(values: any, config: any, readNode
     // Do not advertise browser rendering or indexing freshness from basic HTTP checks.
     const descriptions: Record<string, string> = {
       'block-explorer': 'Availability of the Blockscout website and public API endpoints.',
-      'bridge-portal': 'Availability of the bridge website and public API endpoints.',
+      'bridge-portal': probes.config.bridgeApiRequired === false ? 'Availability of the bridge website over HTTPS.' : 'Availability of the bridge website and public API endpoints.',
       'public-rpc': 'Availability of the official HTTP and WebSocket JSON-RPC endpoints; expected chain ID and block-number responses.',
     }
     for (const component of config.catalog.components) if (descriptions[component.key]) component.description = descriptions[component.key]
@@ -103,7 +103,7 @@ export function reconcileComponentPublication(values: any, config: any, readNode
   for (const key of COMPONENT_KEYS) {
     const input = object(components[key], `publication.components.${key}`)
     fields(input, ['affectedStatus', 'mode', 'rule'], `publication.components.${key}`)
-    const mode = input.mode ?? 'observe'
+    const mode = input.mode ?? 'automatic'
     if (!['automatic', 'manual', 'observe'].includes(mode)) throw new Error(`${key}: mode must be manual, observe or automatic`)
     const rule = object(input.rule, `${key}.rule`)
     fields(rule, ['builtin', 'expr', 'for'], `${key}.rule`)

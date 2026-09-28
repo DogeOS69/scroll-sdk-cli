@@ -8,7 +8,10 @@ import * as path from 'node:path'
 
 import {HEALTH_DEFAULTS, builtinHealth} from '../../src/utils/status-page-health.js'
 import {normalizeNodeSync} from '../../src/utils/status-page-node-sync.js'
+import {COMPONENT_KEYS} from '../../src/utils/status-page-publication.js'
 import {reconcileScrollMonitorStatusPage} from '../../src/utils/status-page-values.js'
+
+const observeComponents = () => Object.fromEntries(COMPONENT_KEYS.map(key => [key, {mode: 'observe', ...(['deposits', 'withdrawals'].includes(key) ? {affectedStatus: 'MAJOROUTAGE'} : {})}]))
 
 describe('official Node Sync', () => {
   const node = (role: string, replicas = 1) => ({controller: {replicas}, reth: {networkId: '291', sequencer: {allowEmptyBlocks: true, enabled: role === 'sequencer'}}, role})
@@ -75,7 +78,7 @@ describe('official Node Sync', () => {
       const ingress = {main: {hosts: [{host: 'service.example', paths: [{path: '/'}]}]}}
       for (const name of ['frontends-production.yaml', 'l2-reth-rpc-public-production.yaml']) fs.writeFileSync(path.join(directory, name), yaml.dump({ingress}))
       fs.writeFileSync(path.join(directory, 'blockscout-production.yaml'), yaml.dump({'blockscout-stack': {frontend: {ingress: {hostname: 'explorer.example'}}}}))
-      let values: any = {statusPage: {enabled: true, publication: {components: {'node-sync': {mode: 'observe', rule: {builtin: true}}}, nodeSync: input}}}
+      let values: any = {statusPage: {enabled: true, publication: {components: {...observeComponents(), 'node-sync': {mode: 'observe', rule: {builtin: true}}}, nodeSync: input}}}
       const generate = () => reconcileScrollMonitorStatusPage(values, {chainId: 291, environment: 'testnet', networkName: 'DogeOS', valuesDir: directory})
       generate()
       expect(values.statusPage.generated.componentPublication.readiness['node-sync'].ready).to.equal(true)

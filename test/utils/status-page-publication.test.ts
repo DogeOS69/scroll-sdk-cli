@@ -14,6 +14,8 @@ import {StatusPageWebhook} from '../../src/utils/status-page-webhook.js'
 
 const webhookUrl = (key: string) => `https://api.instatus.com/v3/integrations/grafana/private-${key}`
 
+const observeComponents = () => Object.fromEntries(COMPONENT_KEYS.map(key => [key, {mode: 'observe', ...(['deposits', 'withdrawals'].includes(key) ? {affectedStatus: 'MAJOROUTAGE'} : {})}]))
+
 describe('independent component publication', () => {
   let directory: string
   let values: any
@@ -26,11 +28,11 @@ describe('independent component publication', () => {
     fs.writeFileSync(path.join(directory, 'frontends-config.yaml'), yaml.dump({scrollConfig: 'REACT_APP_CHAIN_ID_L2 = "291"\nREACT_APP_BRIDGE_API_URI = "https://history.example/api"\n'}))
     fs.writeFileSync(path.join(directory, 'l2-reth-sequencer-production.yaml'), yaml.dump({reth: {networkId: '291', sequencer: {allowEmptyBlocks: true, blockTimeMs: '3000', enabled: true}}, role: 'sequencer'}))
     fs.writeFileSync(path.join(directory, 'blockscout-production.yaml'), yaml.dump({'blockscout-stack': {frontend: {ingress: {enabled: true, hostname: 'explorer.example'}}}}))
-    values = {grafana: {alerting: {'policies.yaml': {policies: [{receiver: 'internal'}]}}}, statusPage: {enabled: true, environment: 'testnet', instatus: {pageId: 'page-1'}, publication: {components: {}}}}
+    values = {grafana: {alerting: {'policies.yaml': {policies: [{receiver: 'internal'}]}}}, statusPage: {enabled: true, environment: 'testnet', instatus: {pageId: 'page-1'}, publication: {components: {...observeComponents(), }}}}
   })
   afterEach(() => { sinon.restore(); fs.rmSync(directory, {force: true, recursive: true}) })
 
-  it('defaults all eight components to observe without requiring secrets or inventing healthy rules', () => {
+  it('supports explicitly observing all components without secrets or invented healthy rules', () => {
     generate()
     expect(Object.keys(values.statusPage.publication.components)).to.deep.equal([...COMPONENT_KEYS])
     expect(file().contactPoints).to.deep.equal([])
@@ -40,8 +42,19 @@ describe('independent component publication', () => {
     expect(generate()).to.deep.equal([])
   })
 
+  it('defaults every omitted mode to automatic and rejects incomplete activation', () => {
+    values.statusPage.publication.components = Object.fromEntries(COMPONENT_KEYS.map(key => [key, {rule: {expr: 'fixture_health'}}]))
+    generate()
+    expect(Object.values(values.statusPage.publication.components).every((item: any) => item.mode === 'automatic')).to.equal(true)
+    expect(file().contactPoints).to.have.length(8)
+    expect(Object.values(values.statusPage.generated.componentPublication.readiness).every((item: any) => item.reason === 'apply-component-webhook')).to.equal(true)
+    expect(generate()).to.deep.equal([])
+    values.statusPage.publication.components = {}
+    expect(generate).to.throw('automatic publication requires a component health expression')
+  })
+
   it('routes only the selected component publicly, keeps unknown observations internal and preserves policy ownership', () => {
-    values.statusPage.publication.components = {'batch-publication': {mode: 'automatic', rule: {expr: 'fixture_component_health{network="testnet"}', for: '5m'}}, 'public-rpc': {mode: 'observe', rule: {expr: 'fixture_rpc_health'}}}
+    values.statusPage.publication.components = {...observeComponents(), 'batch-publication': {mode: 'automatic', rule: {expr: 'fixture_component_health{network="testnet"}', for: '5m'}}, 'public-rpc': {mode: 'observe', rule: {expr: 'fixture_rpc_health'}}}
     generate()
     expect(file().contactPoints.map((point: any) => point.name)).to.deep.equal(['instatus-batch-publication'])
     const {rules} = file().groups[0]
@@ -56,7 +69,7 @@ describe('independent component publication', () => {
   })
 
   it('generates guarded delivery, explicit incident policy and a failure-sensitive heartbeat', () => {
-    values.statusPage.publication = {components: {'public-rpc': {affectedStatus: 'PARTIALOUTAGE', mode: 'automatic', rule: {builtin: true}}}, delivery: {enabled: true},
+    values.statusPage.publication = {components: {...observeComponents(), 'public-rpc': {affectedStatus: 'PARTIALOUTAGE', mode: 'automatic', rule: {builtin: true}}}, delivery: {enabled: true},
       health: {recoveryFor: '12m'}, heartbeat: {alertIds: ['internal-ops'], enabled: true},
       incidents: {manageTemplates: true}}
     generate()
@@ -76,7 +89,7 @@ describe('independent component publication', () => {
   })
 
   it('requires reviewed per-component severity instead of implicitly treating failures as degraded performance', () => {
-    values.statusPage.publication = {components: {
+    values.statusPage.publication = {components: {...observeComponents(),
       'block-explorer': {affectedStatus: 'MAJOROUTAGE', mode: 'automatic', rule: {expr: 'fixture_explorer'}},
       'bridge-portal': {affectedStatus: 'PARTIALOUTAGE', mode: 'automatic', rule: {expr: 'fixture_bridge'}},
     }, incidents: {manageTemplates: true}}
@@ -119,6 +132,7 @@ describe('independent component publication', () => {
     values.statusPage.environment = 'testnet'
     values.statusPage.instatus.pageId = 'page-1'
     values.statusPage.instatus.componentIds = {'public-rpc': 'rpc-1'}
+    for (const item of Object.values(values.statusPage.publication.components) as any[]) item.mode = 'observe'
     values.statusPage.publication.components['public-rpc'].mode = 'automatic'
     values.statusPage.publication.components['public-rpc'].affectedStatus = 'PARTIALOUTAGE'
     values.statusPage.publication.probes.mode = 'external'
@@ -147,7 +161,7 @@ describe('independent component publication', () => {
   }).timeout(300_000)
 
   it('changes automatic to observe or manual without deleting receivers, and pauses missing rules', () => {
-    values.statusPage.publication.components = {deposits: {mode: 'automatic', rule: {expr: 'fixture_deposit_health'}}}
+    values.statusPage.publication.components = {...observeComponents(), deposits: {mode: 'automatic', rule: {expr: 'fixture_deposit_health'}}}
     generate()
     const identity = componentIdentity('deposits')
     values.statusPage.publication.components.deposits.mode = 'observe'
@@ -162,10 +176,10 @@ describe('independent component publication', () => {
 
   it('rejects invalid activation, unknown components, conflicts and binding changes without partial mutation', () => {
     for (const publication of [
-      {components: {deposits: {mode: 'automatic'}}},
-      {components: {typo: {mode: 'observe'}}},
-      {components: {deposits: {mode: 'typo'}}},
-      {components: {}, observationContactPointName: 'instatus-public'},
+      {components: {...observeComponents(), deposits: {mode: 'automatic'}}},
+      {components: {...observeComponents(), typo: {mode: 'observe'}}},
+      {components: {...observeComponents(), deposits: {mode: 'typo'}}},
+      {components: {...observeComponents(), }, observationContactPointName: 'instatus-public'},
     ]) {
       values.statusPage.publication = publication
       const before = structuredClone(values)
@@ -173,7 +187,7 @@ describe('independent component publication', () => {
       expect(values).to.deep.equal(before)
     }
 
-    values.statusPage.publication = {components: {deposits: {mode: 'observe', rule: {expr: 'fixture'}}}}
+    values.statusPage.publication = {components: {...observeComponents(), deposits: {mode: 'observe', rule: {expr: 'fixture'}}}}
     generate()
     values.statusPage.generated.componentBindings = {deposits: {componentId: 'wrong', pageId: 'another'}}
     expect(() => generate()).to.throw('different page or component')
@@ -183,7 +197,7 @@ describe('independent component publication', () => {
   })
 
   ;(process.env.SCROLL_STATUS_RUNTIME_TEST === '1' ? it : it.skip)('evaluates healthy, affected, absent, non-binary and duplicate observations with Prometheus', () => {
-    values.statusPage.publication.components = {deposits: {mode: 'observe', rule: {expr: 'fixture_health'}}}
+    values.statusPage.publication.components = {...observeComponents(), deposits: {mode: 'observe', rule: {expr: 'fixture_health'}}}
     generate()
     const expression = file().groups[0].rules[0].data[0].model.expr
     const tests = [

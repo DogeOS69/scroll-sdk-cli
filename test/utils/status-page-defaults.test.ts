@@ -5,7 +5,10 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
+import {COMPONENT_KEYS} from '../../src/utils/status-page-publication.js'
 import {reconcileScrollMonitorStatusPage} from '../../src/utils/status-page-values.js'
+
+const observeComponents = () => Object.fromEntries(COMPONENT_KEYS.map(key => [key, {mode: 'observe', ...(['deposits', 'withdrawals'].includes(key) ? {affectedStatus: 'MAJOROUTAGE'} : {})}]))
 
 describe('status-page defaults from deployment sources', () => {
   let directory: string
@@ -22,7 +25,7 @@ describe('status-page defaults from deployment sources', () => {
     write('blockscout-production.yaml', {'blockscout-stack': {frontend: {ingress: {hostname: 'explorer.example'}}}})
     frontend()
     sequencer(true)
-    values = {statusPage: {enabled: true, environment: 'devnet', publication: {components: {'bridge-portal': {rule: {builtin: true}}, sequencing: {rule: {builtin: true}}}},
+    values = {statusPage: {enabled: true, environment: 'devnet', publication: {components: {...observeComponents(), 'bridge-portal': {mode: 'observe', rule: {builtin: true}}, sequencing: {mode: 'observe', rule: {builtin: true}}}},
       sources: {frontendsConfig: 'frontends-config.yaml', sequencer: 'sequencer-0.yaml'}}}
   })
   afterEach(() => fs.rmSync(directory, {force: true, recursive: true}))

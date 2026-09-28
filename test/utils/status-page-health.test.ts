@@ -21,7 +21,7 @@ describe('status-page built-in health', () => {
 
   ;(process.env.SCROLL_STATUS_RUNTIME_TEST === '1' ? it : it.skip)('evaluates independent probes, queue eligibility and partial/stale observations in real Prometheus', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'status-health-'))
-    const health = normalizeHealth({batchPublicationDeadlineSeconds: 300, depositDeadlineSeconds: 600, withdrawalDeadlineSeconds: 900})
+    const health = normalizeHealth({batchPublicationDeadlineSeconds: 300, depositDeadlineSeconds: 600, wfStallSeconds: 300, withdrawalDeadlineSeconds: 900})
     const probe = builtinHealth('public-rpc', 'testnet', '123', health)
     const business = builtinHealth('deposits', 'testnet', '123', health)
     const tests: any[] = []
@@ -64,7 +64,9 @@ describe('status-page built-in health', () => {
       return Object.fromEntries([[`up${labels}`,'1'],[`withdrawal_processor_public_deposit_eligible_backlog${labels}`,count],
         [`withdrawal_processor_public_deposit_oldest_eligible_age_seconds${labels}`,age],
         [`withdrawal_processor_public_deposit_snapshot_timestamp_seconds${labels}`,stamp],
-        [`withdrawal_processor_public_deposit_snapshot_valid${labels}`,valid]].map(([key,value]) => [key,Array.from({length: 11}).fill(value).join(' ')]))
+        [`withdrawal_processor_public_deposit_snapshot_valid${labels}`,valid],
+        [`withdrawal_processor_protocol_state_wf_tx_number${labels}`,'580'],
+        ['withdrawal_processor_protocol_job_oldest_age_seconds{namespace="monitoring",job="withdrawal-processor",instance="writer",status="built",action_kind="advance_l2_build"}','0']].map(([key,value]) => [key,Array.from({length: 11}).fill(value).join(' ')]))
     }
 
     scenario(business, queue('0','0'), 0)
@@ -74,6 +76,24 @@ describe('status-page built-in health', () => {
     scenario(business, queue('1','601','600','0'), null)
     scenario(business, queue('1','NaN'), null)
     scenario(business, queue('-1','0'), null)
+    // Confirmed WF failure must publish even with missing/invalid business observations.
+    const wfHead = 'withdrawal_processor_protocol_state_wf_tx_number{namespace="monitoring",job="withdrawal-processor",instance="writer"}'
+    const wfAge = 'withdrawal_processor_protocol_job_oldest_age_seconds{namespace="monitoring",job="withdrawal-processor",instance="writer",status="built",action_kind="advance_l2_build"}'
+    const stalled = {...queue('0','0','600','0'), [wfAge]: '601x10'}
+    scenario(business, stalled, 1)
+    scenario(builtinHealth('withdrawals', 'testnet', '123', health), stalled, 1)
+    const noBusiness = Object.fromEntries(Object.entries(stalled).filter(([key]) => !key.includes('_public_deposit_')))
+    scenario(business, noBusiness, 1)
+    scenario(business, {...noBusiness, [wfAge]: '0x10'}, null) // no false recovery
+    scenario(business, {...queue('0','0'), [wfAge]: '601x10', [wfHead]: '580+1x10'}, 0) // progress
+    scenario(business, {...queue('0','0'), [wfAge]: '300x10'}, 0) // below stall deadline
+    scenario(business, {...queue('0','0'), [wfAge]: Array.from({length: 11}).fill('NaN').join(' ')}, null)
+    scenario(business, {...queue('0','0'), [wfHead]: '_ _ _ _ _ _ 580x4'}, null) // no full history
+    scenario(business, {...stalled, [wfHead]: '580x6 _ _ _ _'}, null) // stale head
+    const noWorkflow = Object.fromEntries(Object.entries(queue('0','0')).filter(([key]) => !key.includes('_protocol_')))
+    scenario(business, noWorkflow, null)
+    const businessFailure = Object.fromEntries(Object.entries(queue('1','601')).filter(([key]) => !key.includes('_protocol_')))
+    scenario(business, businessFailure, 1) // independent failure is still actionable
     const incomplete = queue('0','0')
     incomplete['up{namespace="monitoring",job="withdrawal-processor",instance="missing-writer"}'] = '1x10'
     scenario(business, incomplete, null)

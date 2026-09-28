@@ -8,7 +8,10 @@ import * as path from 'node:path'
 
 import {alloyHealth, alloyHeartbeat} from '../../src/utils/status-page-alloy.js'
 import {normalizeHealth} from '../../src/utils/status-page-health.js'
+import {COMPONENT_KEYS} from '../../src/utils/status-page-publication.js'
 import {reconcileScrollMonitorStatusPage} from '../../src/utils/status-page-values.js'
+
+const observeComponents = () => Object.fromEntries(COMPONENT_KEYS.map(key => [key, {mode: 'observe', ...(['deposits', 'withdrawals'].includes(key) ? {affectedStatus: 'MAJOROUTAGE'} : {})}]))
 
 describe('existing Alloy public-entrypoint probes', () => {
   let directory: string
@@ -20,7 +23,7 @@ describe('existing Alloy public-entrypoint probes', () => {
     for (const name of ['frontends-production.yaml', 'l2-reth-rpc-public-production.yaml']) fs.writeFileSync(path.join(directory, name), yaml.dump({ingress}))
     fs.writeFileSync(path.join(directory, 'frontends-config.yaml'), yaml.dump({scrollConfig: 'REACT_APP_CHAIN_ID_L2 = "291"\nREACT_APP_BRIDGE_API_URI = "https://history.example/api"\n'}))
     fs.writeFileSync(path.join(directory, 'blockscout-production.yaml'), yaml.dump({'blockscout-stack': {frontend: {ingress: {hostname: 'explorer.example'}}}}))
-    values = {statusPage: {enabled: true, publication: {components: Object.fromEntries(['public-rpc', 'bridge-portal', 'block-explorer', 'sequencing'].map(k => [k, {mode: 'observe', rule: {builtin: true}}])), probes: {explorerApiUrls: ['https://explorer-api.example/api/v2/stats'], mode: 'alloy'}}, sources: {frontendsConfig: 'frontends-config.yaml'}}}
+    values = {statusPage: {enabled: true, publication: {components: {...observeComponents(), ...Object.fromEntries(['public-rpc', 'bridge-portal', 'block-explorer', 'sequencing'].map(k => [k, {mode: 'observe', rule: {builtin: true}}]))}, probes: {explorerApiUrls: ['https://explorer-api.example/api/v2/stats'], mode: 'alloy'}}, sources: {frontendsConfig: 'frontends-config.yaml'}}}
   })
   afterEach(() => fs.rmSync(directory, {force: true, recursive: true}))
 
@@ -75,6 +78,27 @@ describe('existing Alloy public-entrypoint probes', () => {
       expect(rendered).to.contain('name: status-websocket')
       expect(rendered).to.contain('prometheus.scrape "status_websocket"')
     }
+  })
+
+  it('excludes a retired bridge API only when explicitly disabled and narrows public coverage', () => {
+    values.statusPage.publication.probes.bridgeChecks = 'disabled'
+    generate()
+    const targets = values.statusPage.generated.alloyProbes.targets.filter((t: any) => t.component_key === 'bridge-portal')
+    expect(targets).to.have.length(1)
+    expect(targets[0].check_id).to.contain('-page-')
+    expect(values.statusPage.generated.componentPublication.readiness['bridge-portal'].ready).to.equal(true)
+    expect(values.statusPage.catalog.components.find((c: any) => c.key === 'bridge-portal').description).to.equal('Availability of the bridge website over HTTPS.')
+    expect(values.statusPage.generated.componentPublication.provisioning.groups[0].rules.find((r: any) => r.uid === 'status-bridge-portal').data[0].model.expr).not.to.contain('bridge-portal-api')
+    expect(generate()).to.deep.equal([])
+    values.statusPage.publication.probes.mode = 'external'
+    expect(generate).to.throw('requires Alloy page-only')
+  })
+
+  it('still requires API evidence in auto mode when discovery is absent', () => {
+    delete values.statusPage.sources.frontendsConfig
+    generate()
+    expect(values.statusPage.generated.componentPublication.readiness['bridge-portal'].ready).to.equal(false)
+    expect(values.statusPage.generated.componentPublication.readiness['bridge-portal'].reason).to.equal('requires-public-api-endpoint')
   })
 
   it('rejects private URLs, credentials, external scrape targets and unsupported semantic overrides', () => {

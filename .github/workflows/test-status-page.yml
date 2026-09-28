@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: DogeOS69/scroll-sdk
-          ref: 3c2278d260105a38ec96bd959d59df62156edbbf
+          ref: ee9bf20eeaf7fe0a4806c2781ff78c1815224913
           path: sdk-contract
           persist-credentials: false
       - uses: actions/setup-node@v4
