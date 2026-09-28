@@ -12,6 +12,8 @@ export interface DstackCredentials {
   adminToken: string
   encryptionKey: string
   gcp?: {projectId: string; serviceAccount: string}
+  /** Optional for backward-compatible migration of existing private state. */
+  monitoringToken?: string
   project: string
   providers: DstackProvider[]
   vastaiApiKey?: string
@@ -61,6 +63,7 @@ export function validateDstackCredentials(value: DstackCredentials): void {
     || value.providers.some(provider => !['gcp', 'vastai'].includes(provider))
     || new Set(value.providers).size !== value.providers.length) throw new Error('Invalid dstack credential state providers/version')
   if (typeof value.project !== 'string' || !/^[\w-]+$/.test(value.project)) throw new Error('Invalid dstack project name')
+  if (value.monitoringToken !== undefined && (typeof value.monitoringToken !== 'string' || !/^[\da-f]{64}$/.test(value.monitoringToken))) throw new Error('Invalid stored dstack monitoring token; restore credential state from backup')
   if (typeof value.adminToken !== 'string' || value.adminToken.length < 16) throw new Error('Invalid stored dstack admin token; restore credential state from backup')
   if (typeof value.encryptionKey !== 'string' || !/^[\d+/A-Za-z]{43}=$/.test(value.encryptionKey)
     || Buffer.from(value.encryptionKey, 'base64').length !== 32) throw new Error('Invalid stored dstack encryption key; restore credential state from backup')
@@ -111,7 +114,7 @@ export function writePrivateFile(file: string, content: string): void {
 }
 
 export function newDstackCredentials(): DstackCredentials {
-  return {adminToken: randomBytes(32).toString('hex'), encryptionKey: randomBytes(32).toString('base64'), project: 'main', providers: [], version: 1}
+  return {adminToken: randomBytes(32).toString('hex'), encryptionKey: randomBytes(32).toString('base64'), monitoringToken: randomBytes(32).toString('hex'), project: 'main', providers: [], version: 1}
 }
 
 /** Public refs only; prep-charts/generate-from-spec consume these without seeing keys. */
@@ -135,6 +138,7 @@ export function dstackSecretRefs(config: DstackControllerConfig, state: DstackCr
   auth: {key: string; name: string}
   database?: {key: string; name: string}
   gcp?: {key: string; name: string}
+  monitoring?: {key: string; name: string}
   server: {key: string; name: string}
 } {
   validateDstackControllerConfig(config)
@@ -143,6 +147,7 @@ export function dstackSecretRefs(config: DstackControllerConfig, state: DstackCr
     auth: {key: config.auth?.key ?? 'admin-token', name: config.auth?.existingSecret ?? 'dstack-controller-auth'},
     database: config.database?.type === 'sqlite' ? undefined : {key: config.database?.key ?? 'database-url', name: config.database?.existingSecret ?? 'dstack-controller-database'},
     gcp: state.providers.includes('gcp') ? {key: 'service-account.json', name: config.credentialSecrets?.find(ref => ref.name === 'gcp')?.secretName ?? ''} : undefined,
+    monitoring: config.monitoring?.enabled ? {key: config.monitoring.auth?.key ?? 'token', name: config.monitoring.auth?.existingSecret ?? 'dstack-controller-monitoring'} : undefined,
     server: {key: config.serverConfig?.key ?? 'config.yml', name: config.serverConfig?.existingSecret ?? 'dstack-controller-config'},
   }
   const seen = new Set<string>()
@@ -150,7 +155,7 @@ export function dstackSecretRefs(config: DstackControllerConfig, state: DstackCr
     if (!ref) continue
     if (!/^[\da-z]([\d.a-z-]*[\da-z])?$/.test(ref.name) || ref.name.length > 253) throw new Error('Invalid or missing dstack Secret name; run setup dstack-config to configure references')
     if (!/^[\w.-]+$/.test(ref.key) || ref.key.length > 253) throw new Error('Invalid dstack Secret key')
-    if (seen.has(ref.name)) throw new Error('Dstack config, auth, database and GCP Secrets must have distinct names')
+    if (seen.has(ref.name)) throw new Error('Dstack config, auth, database, monitoring and GCP Secrets must have distinct names')
     seen.add(ref.name)
   }
 
@@ -175,16 +180,35 @@ export function renderDstackSecrets(config: DstackControllerConfig, state: Dstac
     apiVersion: 'v1', kind: 'Secret', metadata: {name: ref.name}, stringData: {[ref.key]: content}, type: 'Opaque',
   })
   const secrets = [make(refs.server, server), make(refs.auth, state.adminToken)]
+  if (refs.monitoring) {
+    if (!state.monitoringToken) throw new Error('Dstack monitoring token is missing; run setup gen-secrets --dstack-only to migrate private state')
+    secrets.push(make(refs.monitoring, state.monitoringToken))
+  }
+
   if (refs.gcp) secrets.push(make(refs.gcp, state.gcp!.serviceAccount))
   return secrets
 }
 
 export function writeDstackCredentialSecrets(config: DstackControllerConfig, directory = process.cwd()): string[] {
-  const state = readDstackCredentials(directory)
+  const state = prepareDstackMonitoringCredentials(config, directory)
   if (!state) throw new Error('Dstack credentials are missing; run setup dstack-config first')
   const secrets = renderDstackSecrets(config, state)
   const files = secrets.map(secret => path.join(directory, 'secrets', `${secret.metadata.name}.yaml`))
   for (const file of files) checkPrivatePath(file)
   for (const [index, secret] of secrets.entries()) writePrivateFile(files[index], yaml.dump(secret, {lineWidth: -1, noRefs: true}))
   return files
+}
+
+/** Upgrade legacy private state once; never rotate credentials during regeneration. */
+export function prepareDstackMonitoringCredentials(config: DstackControllerConfig, directory = process.cwd()): DstackCredentials | undefined {
+  const state = readDstackCredentials(directory)
+  if (!state) return undefined
+  const refs = dstackSecretRefs(config, state)
+  if (refs.monitoring && !state.monitoringToken) {
+    if (fs.existsSync(path.join(directory, 'secrets', `${refs.monitoring.name}.yaml`))) throw new Error('Monitoring Secret already exists but its private state is missing; restore credentials.json from backup')
+    state.monitoringToken = randomBytes(32).toString('hex')
+    writePrivateFile(path.join(directory, DSTACK_CREDENTIALS_FILE), JSON.stringify(state, null, 2) + '\n')
+  }
+
+  return state
 }

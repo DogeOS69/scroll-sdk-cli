@@ -20,6 +20,7 @@ function privateYaml(content: string): unknown {
 /** Read the exact managed files, never glob arbitrary Secret manifests. */
 export function loadDstackSecretPublication(config: DstackControllerConfig, valuesFile: string, namespace: string): DstackSecret[] {
   if (!/^[\da-z]([\da-z-]*[\da-z])?$/.test(namespace) || namespace.length > 63) throw new Error('Invalid Kubernetes namespace')
+  if (config.monitoring?.enabled && namespace !== (config.monitoring.namespace ?? 'dstack-system')) throw new Error('Dstack monitoring namespace differs from the Secret upload destination')
   const state = readDstackCredentials()
   if (!state) throw new Error('Run setup dstack-config and setup gen-secrets --dstack-only first')
   const refs = dstackSecretRefs(config, state)
@@ -28,7 +29,8 @@ export function loadDstackSecretPublication(config: DstackControllerConfig, valu
   // Values are chart input, not the public controller schema (which has enabled).
   const valuesRefs = dstackSecretRefs({
     auth: values?.auth, credentialSecrets: values?.credentialSecrets,
-    database: values?.database?.type === 'sqlite' ? {type: 'sqlite'} : values?.database, serverConfig: values?.serverConfig,
+    database: values?.database?.type === 'sqlite' ? {type: 'sqlite'} : values?.database,
+    monitoring: values?.monitoring, serverConfig: values?.serverConfig,
   }, state)
   if (JSON.stringify(refs) !== JSON.stringify(valuesRefs)) throw new Error('Dstack Secret references differ from production values; regenerate values before publishing')
   const expected = renderDstackSecrets(config, state)
@@ -94,7 +96,7 @@ export async function publishDstackSecrets(options: {
   const prefix = ['--context', options.context, '--namespace', options.namespace, '--request-timeout=30s']
   const state = readDstackCredentials()!
   const refs = dstackSecretRefs(options.config, state)
-  const liveText = await runner([...prefix, 'get', 'secret', refs.server.name, refs.auth.name, '--ignore-not-found', '-o', 'json'])
+  const liveText = await runner([...prefix, 'get', 'secret', refs.server.name, refs.auth.name, ...(refs.monitoring ? [refs.monitoring.name] : []), '--ignore-not-found', '-o', 'json'])
   let live: {items?: LiveSecret[]}
   try {
     live = JSON.parse(liveText)
@@ -104,6 +106,11 @@ export async function publishDstackSecrets(options: {
   }
 
   for (const secret of live.items!) {
+    if (refs.monitoring && secret.metadata?.name === refs.monitoring.name) {
+      const token = Buffer.from(secret.data?.[refs.monitoring.key] ?? '', 'base64').toString('utf8')
+      if (token !== state.monitoringToken) throw new Error('Existing monitoring token differs from local state; restore matching credentials before publishing')
+    }
+
     if (secret.metadata?.name === refs.auth.name) {
       const token = Buffer.from(secret.data?.[refs.auth.key] ?? '', 'base64').toString('utf8')
       if (token !== state.adminToken) throw new Error('Existing controller admin token differs from local state; restore the matching credential state before publishing')

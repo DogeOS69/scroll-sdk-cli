@@ -15,6 +15,23 @@ export interface DstackControllerConfig {
     hosts?: string[]
     tls?: Array<{hosts: string[]; secretName: string}>
   }
+  monitoring?: {
+    alerts?: {enabled?: boolean; failedRunsThreshold?: number; unavailableFor?: string}
+    auth?: {existingSecret?: string; key?: string}
+    enabled?: boolean
+    gpuHosts?: {
+      diskAvailableRatio?: number
+      enabled?: boolean
+      expectedHosts?: string[]
+      staleAfterSeconds?: number
+      unavailableFor?: string
+    }
+    interval?: string
+    /** Namespace used when installing the independent controller release. */
+    namespace?: string
+    sampleLimit?: number
+    scrapeTimeout?: string
+  }
   nodeSelector?: Record<string, string>
   persistence?: {
     accessModes?: Array<'ReadWriteMany' | 'ReadWriteOnce' | 'ReadWriteOncePod'>
