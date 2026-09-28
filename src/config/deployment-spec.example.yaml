@@ -47,6 +47,16 @@ infrastructure:
 # Optional standalone dstack controller. Omit when using an existing controller
 # or a different worker deployment adapter. Secret contents are managed separately.
 # dstackController:
+#   Optional native metrics + companion scroll-monitor-dstack.yaml overlay.
+#   monitoring:
+  #   enabled: true
+  #   namespace: dstack-system
+  #   auth: {existingSecret: dstack-controller-monitoring, key: token}
+  #   interval: 30s
+  #   scrapeTimeout: 10s
+  #   sampleLimit: 50000
+  #   alerts: {enabled: true, unavailableFor: 2m, failedRunsThreshold: 3}
+  #   gpuHosts: {enabled: false, expectedHosts: [], staleAfterSeconds: 180, unavailableFor: 5m, diskAvailableRatio: 0.1}
 #   enabled: true
 #   serverConfig:
 #     existingSecret: dstack-controller-config

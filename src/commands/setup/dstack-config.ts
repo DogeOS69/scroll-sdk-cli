@@ -101,6 +101,12 @@ export default class DstackConfig extends Command {
       if (!state.providers.includes('vastai')) delete state.vastaiApiKey
       validateDstackCredentials(state)
       const controller = configureDstackCredentialRefs((document.dstackController ?? {}) as DstackControllerConfig, state)
+      if (controller.monitoring?.enabled && !state.monitoringToken) {
+        const name = controller.monitoring.auth?.existingSecret ?? 'dstack-controller-monitoring'
+        if (fs.existsSync(path.join('secrets', `${name}.yaml`))) throw new Error('Monitoring Secret already exists but its private state is missing; restore credentials.json from backup')
+        state.monitoringToken = newDstackCredentials().monitoringToken
+      }
+
       const secrets = renderDstackSecrets(controller, state)
       if (!existing && secrets.some(secret => fs.existsSync(path.join('secrets', `${secret.metadata.name}.yaml`)))) {
         throw new Error('Dstack Secret outputs already exist but credential state is missing. Restore .data/dstack/credentials.json from backup before importing; keys will not be regenerated.')

@@ -2,6 +2,7 @@ import * as yaml from 'js-yaml'
 
 import type {DstackControllerConfig} from '../types/dstack-controller.js'
 
+export const DSTACK_MONITORING_VALUES_FILE = 'scroll-monitor-dstack.yaml'
 export const DSTACK_CONTROLLER_VALUES_FILE = 'dstack-controller-production.yaml'
 export const DSTACK_CONTROLLER_IMAGE = {
   digest: 'sha256:a502b38014dc9730ad712f60c067b84a00a4cf091982b81f9982fdc60ac6852b',
@@ -129,13 +130,46 @@ function validateServiceAccount(config: Mapping, root: string): void {
   }
 }
 
+function positiveInteger(value: unknown, label: string, minimum = 1): void {
+  if (!Number.isSafeInteger(value) || (value as number) < minimum) throw new Error(`${label} must be an integer >= ${minimum}`)
+}
+
+function validateDstackMonitoring(value: unknown): void {
+  if (value === undefined) return
+  const root = 'dstackController.monitoring'
+  const config = mapping(value, root, ['enabled', 'namespace', 'auth', 'interval', 'scrapeTimeout', 'sampleLimit', 'alerts', 'gpuHosts'])
+  if (config.enabled !== undefined) bool(config.enabled, `${root}.enabled`)
+  if (config.namespace !== undefined && (typeof config.namespace !== 'string' || config.namespace.length > 63 || !/^[\da-z]([\da-z-]*[\da-z])?$/.test(config.namespace))) throw new Error(`${root}.namespace must be a Kubernetes DNS label`)
+  for (const field of ['interval', 'scrapeTimeout']) {
+    if (config[field] !== undefined && (typeof config[field] !== 'string' || !/^[1-9]\d*s$/.test(config[field] as string))) throw new Error(`${root}.${field} must be positive whole seconds, such as 30s`)
+  }
+
+  if (Number.parseInt((config.scrapeTimeout as string) ?? '10s', 10) > Number.parseInt((config.interval as string) ?? '30s', 10)) throw new Error(`${root}.scrapeTimeout must not exceed interval`)
+  if (config.sampleLimit !== undefined) positiveInteger(config.sampleLimit, `${root}.sampleLimit`)
+  if (config.auth !== undefined) {
+    const auth = mapping(config.auth, `${root}.auth`, ['existingSecret', 'key'])
+    for (const field of ['existingSecret', 'key']) if (auth[field] !== undefined) text(auth[field], `${root}.auth.${field}`)
+  }
+
+  for (const group of ['alerts', 'gpuHosts']) {
+    if (config[group] === undefined) continue
+    const entry = mapping(config[group], `${root}.${group}`, group === 'alerts' ? ['enabled', 'unavailableFor', 'failedRunsThreshold'] : ['enabled', 'expectedHosts', 'staleAfterSeconds', 'unavailableFor', 'diskAvailableRatio'])
+    if (entry.enabled !== undefined) bool(entry.enabled, `${root}.${group}.enabled`)
+    if (entry.unavailableFor !== undefined && (typeof entry.unavailableFor !== 'string' || !/^[1-9]\d*[hms]$/.test(entry.unavailableFor))) throw new Error(`${root}.${group}.unavailableFor must be a positive duration`)
+    if (entry.failedRunsThreshold !== undefined) positiveInteger(entry.failedRunsThreshold, `${root}.${group}.failedRunsThreshold`)
+    if (entry.staleAfterSeconds !== undefined) positiveInteger(entry.staleAfterSeconds, `${root}.${group}.staleAfterSeconds`, 60)
+    if (entry.diskAvailableRatio !== undefined && (typeof entry.diskAvailableRatio !== 'number' || !Number.isFinite(entry.diskAvailableRatio) || entry.diskAvailableRatio <= 0 || entry.diskAvailableRatio >= 1)) throw new Error(`${root}.${group}.diskAvailableRatio must be between 0 and 1`)
+    if (entry.expectedHosts !== undefined && (!Array.isArray(entry.expectedHosts) || entry.expectedHosts.some(host => typeof host !== 'string' || !/^[\dA-Za-z][\w.-]{0,127}$/.test(host)) || new Set(entry.expectedHosts).size !== entry.expectedHosts.length)) throw new Error(`${root}.${group}.expectedHosts must contain unique stable host IDs`)
+  }
+}
+
 /** Validate before writing values or carrying these public inputs into doge-config. */
 export function validateDstackControllerConfig(input: unknown): void {
   if (input === undefined) return
   const root = 'dstackController'
   const config = mapping(input, root, [
     'enabled', 'auth', 'credentialSecrets', 'database', 'fullnameOverride', 'image',
-    'ingress', 'nodeSelector', 'persistence', 'podAnnotations', 'replicaCount',
+    'ingress', 'monitoring', 'nodeSelector', 'persistence', 'podAnnotations', 'replicaCount',
     'resources', 'serverConfig', 'serviceAccount', 'tolerations',
   ])
   if (config.enabled !== undefined) bool(config.enabled, `${root}.enabled`)
@@ -152,6 +186,8 @@ export function validateDstackControllerConfig(input: unknown): void {
       throw new Error(`${root}.database.type must be postgresql or sqlite`)
     }
   }
+
+  validateDstackMonitoring(config.monitoring)
 
   validateImage(config, root)
 
@@ -178,6 +214,7 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
   if (!config || config.enabled === false) return undefined
   const overrides = {...config}
   delete overrides.enabled
+  delete overrides.monitoring
   const values = {
     ...overrides,
     auth: {existingSecret: 'dstack-controller-auth', key: 'admin-token', ...config.auth},
@@ -186,6 +223,14 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
       existingSecret: config.database?.type === 'sqlite' ? '' : 'dstack-controller-database',
       key: 'database-url', type: 'postgresql', ...config.database,
     },
+    ...(config.monitoring?.enabled ? {fullnameOverride: config.fullnameOverride ?? 'dstack-controller'} : {}),
+    ...(config.monitoring ? {monitoring: {
+      auth: {existingSecret: 'dstack-controller-monitoring', key: 'token', ...config.monitoring.auth},
+      enabled: config.monitoring.enabled ?? false,
+      interval: config.monitoring.interval ?? '30s',
+      sampleLimit: config.monitoring.sampleLimit ?? 50_000,
+      scrapeTimeout: config.monitoring.scrapeTimeout ?? '10s',
+    }} : {}),
     image: config.image ? {pullPolicy: 'IfNotPresent', tag: '', ...config.image} : {...DSTACK_CONTROLLER_IMAGE},
     ingress: {enabled: false, ...config.ingress},
     persistence: {retain: true, size: '20Gi', ...config.persistence},
@@ -199,5 +244,30 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
   }
   return '# Generated from dstackController; edit the source configuration, then regenerate.\n'
     + '# Independent Helm release; Secret contents and GPU fleet/task submission are managed separately.\n'
+    + yaml.dump(values, {lineWidth: -1, noRefs: true, sortKeys: true})
+}
+
+/** Apply after scroll-monitor production values; explicit namespaces, no cluster-wide discovery. */
+export function generateDstackMonitoringValues(config?: DstackControllerConfig): string | undefined {
+  validateDstackControllerConfig(config)
+  if (!config || config.enabled === false || !config.monitoring) return undefined
+  const namespace = config.monitoring.namespace ?? 'dstack-system'
+  const enabled = config.monitoring.enabled ?? false
+  const values = {
+    dstack: {
+      alerts: {enabled: true, failedRunsThreshold: 3, unavailableFor: '2m', ...config.monitoring.alerts},
+      controllerName: config.fullnameOverride ?? 'dstack-controller',
+      enabled,
+      gpuHosts: {diskAvailableRatio: 0.1, enabled: false, expectedHosts: [], staleAfterSeconds: 180, unavailableFor: '5m', ...config.monitoring.gpuHosts},
+      namespace,
+    },
+    ...(enabled ? {'kube-prometheus-stack': {prometheus: {prometheusSpec: {
+      serviceMonitorNamespaceSelector: {
+        matchExpressions: [{key: 'kubernetes.io/metadata.name', operator: 'In', values: ['{{ .Release.Namespace }}', namespace]}],
+      },
+    }}}} : {}),
+  }
+  return '# Generated from dstackController.monitoring. Apply AFTER scroll-monitor-production.yaml.\n'
+    + '# Internal monitoring only. This overlay does not deploy the controller or GPU host agents.\n'
     + yaml.dump(values, {lineWidth: -1, noRefs: true, sortKeys: true})
 }

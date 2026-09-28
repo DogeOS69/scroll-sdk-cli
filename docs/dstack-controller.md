@@ -542,3 +542,56 @@ It requires locally available `postgres:17.9` and the pinned dstack image, and
 uses temporary credentials and an internal Docker network. It checks actual
 database initialization, repeat runs, grants, Secret export and the dstack
 server's PostgreSQL migrations/authenticated API, then removes its resources.
+
+## Internal monitoring configuration
+
+Add `dstackController.monitoring.enabled: true` to opt in. The supported block is:
+
+```yaml
+dstackController:
+  enabled: true
+  fullnameOverride: dstack-controller
+  monitoring:
+    enabled: true
+    namespace: dstack-system
+    auth: {existingSecret: dstack-controller-monitoring, key: token}
+    interval: 30s
+    scrapeTimeout: 10s
+    sampleLimit: 50000
+    alerts: {enabled: true, unavailableFor: 2m, failedRunsThreshold: 3}
+    gpuHosts:
+      enabled: false
+      expectedHosts: []
+      staleAfterSeconds: 180
+      unavailableFor: 5m
+      diskAvailableRatio: 0.1
+```
+
+Everything except the enable switch has the defaults above. Namespace must match
+the controller installation. For an existing deployment, set `fullnameOverride`
+to its existing Deployment/Service name before enabling monitoring; renaming can
+create a new PVC. Generated values use a stable default name when monitoring is on.
+
+Both `prep-charts --dstack-only` and `generate-from-spec --values-only` produce
+controller values and `values/scroll-monitor-dstack.yaml`. Apply this overlay to
+the **existing scroll-monitor release**, after its production values. It is not a
+separate chart. It restricts discovery to the monitor and controller namespaces;
+preserve other explicit namespace entries if the installation already uses them.
+
+`gen-secrets --dstack-only` generates a separate random monitoring token once,
+saves it in private `.data/dstack/credentials.json`, and writes its mode-0600
+Secret. Existing private state is migrated without rotating admin/AES keys.
+`push-secrets --dstack-only` checks values references, destination namespace and
+existing token identity before applying. Never put the token in public values.
+Both ServiceMonitor and controller use it in the controller namespace. Management
+and cloud credentials are not given to Prometheus.
+
+Disabling: keep the block with `enabled: false`, regenerate and apply both files.
+Omitting a block does not delete old generated files or uninstall monitoring.
+
+The native-only path provides controller, allocation and cached task/GPU metrics.
+It cannot establish fresh GPU or idle-host health. No public status-page mapping
+is created. Optional host Alloy examples and the exact coverage/limitations are
+in scroll-sdk's `examples/dstack-monitoring/`. Host installation, remote-write
+gateway, hardware-specific fault policy and real GPU acceptance remain explicit
+operator steps; the generator does not rent instances or deploy host agents.

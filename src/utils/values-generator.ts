@@ -28,7 +28,7 @@ import {
   getL1GenesisBlock,
   normalizeDeploymentSpec,
 } from './deployment-spec-generator.js'
-import {DSTACK_CONTROLLER_VALUES_FILE, generateDstackControllerValues} from './dstack-controller-values.js'
+import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues} from './dstack-controller-values.js'
 import {
   resolveDogecoinKubernetesEndpoints,
 } from './kubernetes-endpoints.js'
@@ -371,6 +371,9 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
 
   const dstackValues = generateDstackControllerValues(normalizedSpec.dstackController)
   if (dstackValues !== undefined) files[DSTACK_CONTROLLER_VALUES_FILE] = dstackValues
+
+  const dstackMonitoring = generateDstackMonitoringValues(normalizedSpec.dstackController)
+  if (dstackMonitoring !== undefined) files[DSTACK_MONITORING_VALUES_FILE] = dstackMonitoring
 
   // Core L2 infrastructure
   files['l2-sequencer-production.yaml'] = generateL2SequencerValues(normalizedSpec)

@@ -9,7 +9,7 @@ import type { DogeConfig } from '../../types/doge-config.js'
 
 import {getContractsPlaceholderKey} from '../../utils/contracts-placeholder.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
-import {readDstackCredentials, renderDstackSecrets, writeDstackCredentialSecrets} from '../../utils/dstack-credentials.js'
+import {prepareDstackMonitoringCredentials, readDstackCredentials, renderDstackSecrets, writeDstackCredentialSecrets} from '../../utils/dstack-credentials.js'
 import {readDstackControllerConfig, usesDstackPostgres, writeDstackDatabaseSecret} from '../../utils/dstack-database.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import {
@@ -70,7 +70,7 @@ export default class SetupGenSecrets extends Command {
       try {
         const controller = readDstackControllerConfig(flags['doge-config'], flags.spec)
         if (!controller || controller.enabled === false) throw new Error('An enabled dstackController configuration is required')
-        const state = readDstackCredentials()
+        const state = prepareDstackMonitoringCredentials(controller)
         if (!state) throw new Error('Run setup dstack-config before generating dstack Secrets')
         renderDstackSecrets(controller, state)
         const files: string[] = []

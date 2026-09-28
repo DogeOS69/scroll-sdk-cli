@@ -21,7 +21,7 @@ import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
 import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
-import {DSTACK_CONTROLLER_VALUES_FILE, generateDstackControllerValues, validateDstackControllerConfig} from '../../utils/dstack-controller-values.js'
+import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues, validateDstackControllerConfig} from '../../utils/dstack-controller-values.js'
 import {readDstackControllerConfig} from '../../utils/dstack-database.js'
 import { GenerationTransaction } from '../../utils/generation-transaction.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
@@ -2190,18 +2190,27 @@ export default class SetupPrepCharts extends Command {
   }
 
   private async processDstackControllerValues(valuesDir: string): Promise<{skipped: number; updated: number}> {
-    const content = generateDstackControllerValues(this.dstackController)
-    if (content === undefined) return {skipped: 0, updated: 0}
-    const target = path.join(valuesDir, DSTACK_CONTROLLER_VALUES_FILE)
-    if (fs.existsSync(target) && fs.readFileSync(target, 'utf8') === content) return {skipped: 1, updated: 0}
-    if (!this.nonInteractive && !await confirm({message: `Generate ${DSTACK_CONTROLLER_VALUES_FILE} from dstackController configuration?`})) {
-      return {skipped: 1, updated: 0}
+    const files = [
+      [DSTACK_CONTROLLER_VALUES_FILE, generateDstackControllerValues(this.dstackController)],
+      [DSTACK_MONITORING_VALUES_FILE, generateDstackMonitoringValues(this.dstackController)],
+    ] as const
+    const result = {skipped: 0, updated: 0}
+    for (const [name, content] of files) {
+      if (content === undefined) continue
+      const target = path.join(valuesDir, name)
+      if ((fs.existsSync(target) && fs.readFileSync(target, 'utf8') === content)
+        || (!this.nonInteractive && !await confirm({message: `Generate ${name} from dstackController configuration?`}))) {
+        result.skipped++
+        continue
+      }
+
+      fs.mkdirSync(valuesDir, {recursive: true})
+      fs.writeFileSync(target, content)
+      this.jsonCtx.logSuccess(`Generated ${name}`)
+      result.updated++
     }
 
-    fs.mkdirSync(valuesDir, {recursive: true})
-    fs.writeFileSync(target, content)
-    this.jsonCtx.logSuccess(`Generated ${DSTACK_CONTROLLER_VALUES_FILE}`)
-    return {skipped: 0, updated: 1}
+    return result
   }
 
   // Generic ingress processing function
