@@ -24,6 +24,13 @@ describe('existing Alloy public-entrypoint probes', () => {
   })
   afterEach(() => fs.rmSync(directory, {force: true, recursive: true}))
 
+  it('checks Blockscout JSON stats when discovery provides an API base URL', () => {
+    values.statusPage.publication.probes.explorerApiUrls = ['https://explorer-api.example/']
+    generate()
+    const target = values.statusPage.generated.alloyProbes.targets.find((t: any) => t.check_id.startsWith('block-explorer-api'))
+    expect(target.address).to.equal('https://explorer-api.example/api/v2/stats')
+  })
+
   it('generates public targets without another workload, distinguishes coverage and survives YAML round trips', () => {
     generate()
     const {catalog, generated} = values.statusPage

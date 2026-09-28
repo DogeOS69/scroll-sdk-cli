@@ -179,27 +179,55 @@ describe('independent component publication', () => {
 
   it('imports an explicit integration ID without guessing from the URL and rejects shared credentials', async () => {
     const input = path.join(directory, 'private-import.json')
-    fs.writeFileSync(input, JSON.stringify({integrationId: 'management-id-distinct-from-url', url: webhookUrl('url-token')}), {mode: 0o600})
+    fs.writeFileSync(input, JSON.stringify({createTemplateId: 'create-rpc', integrationId: 'management-id-distinct-from-url', resolveTemplateId: 'resolve-rpc', url: webhookUrl('url-token')}), {mode: 0o600})
     const webhook = new StatusPageWebhook(directory, 'testnet', 'public-rpc')
     const plan = webhook.plan('page-1', false, false, input, 'rpc-id')
-    const transport = sinon.stub().resolves(new Response('{}'))
+    const transport = sinon.stub().callsFake(async (url: string) => new Response(JSON.stringify({id: url.split('/').at(-1), siteId: 'page-1', type: 'INCIDENT', components: [{componentId: 'rpc-id'}]})))
     const client = new InstatusClient('fake-key', transport)
     webhook.prepare()
     await webhook.apply(plan, client, 'page-1', componentIdentity('public-rpc').secret, 'rpc-id')
-    expect(transport.firstCall.args[0]).to.equal('https://api.instatus.com/v3/integrations/management-id-distinct-from-url')
-    expect(JSON.parse(transport.firstCall.args[1].body).components).to.deep.equal(['rpc-id'])
+    expect(transport.firstCall.args[0]).to.equal('https://api.instatus.com/v1/page-1/templates/create-rpc')
+    expect(transport.getCalls().every(call => call.args[1].method === 'GET')).to.equal(true)
     const other = new StatusPageWebhook(directory, 'testnet', 'deposits')
     expect(() => other.plan('page-1', false, false, input, 'deposit-id')).to.throw('already bound')
     fs.writeFileSync(input, webhookUrl('url-token'))
     expect(() => other.plan('page-1', false, false, input, 'deposit-id')).to.throw('private JSON')
   })
 
+  it('blocks missing template IDs, cross-component templates and ignored notification policy', async () => {
+    let wrongTarget = false
+    const transport = sinon.stub().callsFake(async (url: string, init: any) => new Response(JSON.stringify(init.method === 'GET'
+      ? {id: url.split('/').at(-1), siteId: 'page-1', type: 'INCIDENT', components: [{componentId: wrongTarget ? 'another-component' : 'rpc-id'}]}
+      : {integration: {id: 'integration', siteId: 'page-1', monitoringTool: 'GRAFANA', createTemplateId: 'create-id', resolveTemplateId: 'resolve-id', onFailNotifySubscribers: true, onRecoverNotifySubscribers: true}})))
+    const client = new InstatusClient('fake-key', transport)
+    const ids = {createTemplateId: 'create-id', resolveTemplateId: 'resolve-id'}
+    const policy = {createTemplate: {components: [{id: 'rpc-id', status: 'DEGRADEDPERFORMANCE'}], name: 'Disrupted', notify: false, status: 'INVESTIGATING'}, resolveTemplate: {components: [{id: 'rpc-id', status: 'OPERATIONAL'}], name: 'Recovered', notify: false, status: 'RESOLVED'}}
+    const rejects = async (run: () => Promise<void>, text: string) => {
+      let error = ''
+      try { await run() } catch (caught) { error = String(caught) }
+      expect(error).to.contain(text)
+    }
+    await rejects(() => client.bindGrafanaWebhook('integration', 'page-1', 'rpc-id', policy), 'Restore createTemplateId')
+    expect(transport.callCount).to.equal(0)
+    wrongTarget = true
+    await rejects(() => client.bindGrafanaWebhook('integration', 'page-1', 'rpc-id', policy, ids), 'targets differ')
+    expect(transport.getCalls().every(call => call.args[1].method === 'GET')).to.equal(true)
+    wrongTarget = false
+    await rejects(() => client.bindGrafanaWebhook('integration', 'page-1', 'rpc-id', policy, ids), 'subscriber notification policy')
+  })
+
   it('uses one private journal and one remote component per integration and reuses both after restart', async () => {
-    const transport = sinon.stub().callsFake(async (_url: string, init: any) => {
+    const stored: Record<string, any> = {}
+    const transport = sinon.stub().callsFake(async (url: string, init: any) => {
+      if (init.method === 'GET') return new Response(JSON.stringify(stored[url.split('/').at(-1)!]))
       const request = JSON.parse(init.body)
-      if (init.method === 'PUT') return new Response('{}')
-      const id = request.components[0]
-      return new Response(JSON.stringify({integration: {id: `private-${id}`, monitoringTool: 'GRAFANA', siteId: 'page-1', uniqueUrl: webhookUrl(id)}}))
+      const key = request.components[0]
+      if (init.method === 'PUT') {
+        for (const template of [request.createTemplate, request.resolveTemplate]) stored[template.id] = {...template, name: template.name.default.value, message: template.message.default.value, siteId: 'page-1', components: template.components.map((c: any) => ({...c, componentId: c.id}))}
+        return new Response(JSON.stringify({integration: {automaticResolve: true, isActive: true, onFailCreateIncident: true, onFailPublishIncident: true, onRecoverPublishIncident: true, onRecoverResolveIncident: true, id: `private-${key}`, siteId: 'page-1', monitoringTool: 'GRAFANA', createTemplateId: `create-${key}`, resolveTemplateId: `resolve-${key}`, onFailNotifySubscribers: request.onFailNotifySubscribers, onRecoverNotifySubscribers: request.onRecoverNotifySubscribers}}))
+      }
+      for (const prefix of ['create', 'resolve']) stored[`${prefix}-${key}`] = {id: `${prefix}-${key}`, siteId: 'page-1', type: 'INCIDENT', components: [{componentId: key}]}
+      return new Response(JSON.stringify({integration: {createTemplateId: `create-${key}`, id: `private-${key}`, monitoringTool: 'GRAFANA', resolveTemplateId: `resolve-${key}`, siteId: 'page-1', uniqueUrl: webhookUrl(key)}}))
     })
     const client = new InstatusClient('fake-key', transport)
     for (const key of ['public-rpc', 'batch-publication'] as const) {
@@ -210,9 +238,14 @@ describe('independent component publication', () => {
         createTemplate: {components: [{id: key, status: 'DEGRADEDPERFORMANCE'}], name: `Testnet / ${key}: service disruption`, notify: false, status: 'INVESTIGATING'},
         resolveTemplate: {components: [{id: key, status: 'OPERATIONAL'}], name: `Testnet / ${key}: recovered`, notify: false, status: 'RESOLVED'},
       })
-      const binding = JSON.parse(transport.lastCall.args[1].body)
+      const binding = JSON.parse(transport.getCalls().filter(call => call.args[1].method === 'PUT').at(-1)!.args[1].body)
       expect(binding.createTemplate.components).to.deep.equal([{id: key, status: 'DEGRADEDPERFORMANCE'}])
       expect(binding.resolveTemplate.notify).to.equal(false)
+      expect(binding.onFailNotifySubscribers).to.equal(false)
+      expect(binding.onRecoverNotifySubscribers).to.equal(false)
+      expect(binding.createTemplate.name.default.value).to.equal(`Testnet / ${key}: service disruption`)
+      expect(binding.createTemplate.id).to.equal(`create-${key}`)
+      expect(binding.label).to.equal(`Testnet / ${key}: service disruption`)
       const restored = new StatusPageWebhook(directory, 'testnet', key)
       const reuse = restored.plan('page-1', true, true, undefined, key)
       expect(reuse.action).to.equal('reuse')

@@ -17,6 +17,33 @@ export interface InstatusTarget {
   workspaceSlug?: string
 }
 
+export interface InstatusIncidentTemplate {
+  components: Array<{id: string; status: string}>
+  message?: string
+  name: string
+  notify: boolean
+  status: string
+}
+
+export interface InstatusIncidentTemplates {
+  createTemplate: InstatusIncidentTemplate
+  resolveTemplate: InstatusIncidentTemplate
+}
+
+interface RemoteIncidentTemplate {
+  components: Array<{componentId: string; status: string}>
+  id: string
+  name: string
+  notify: boolean
+  siteId: string
+  status: string
+  type: string
+}
+
+function encodeIntegrationTemplate(input: InstatusIncidentTemplate, id: string) {
+  return {...input, id, message: {default: {value: input.message ?? ''}}, name: {default: {value: input.name}}, translations: {}, type: 'INCIDENT'}
+}
+
 interface RemoteComponent {
   archived?: boolean
   archivedAt?: null | string
@@ -134,16 +161,44 @@ export class InstatusClient {
     if (plan.page.action === 'update') await this.request(`/v2/${pageId}`, 'PUT', {...plan.branding, name: plan.page.name})
   }
 
-  async bindGrafanaWebhook(integrationId: string, pageId: string, componentId: string, templates?: {createTemplate: object; resolveTemplate: object}): Promise<void> {
+  async bindGrafanaWebhook(integrationId: string, pageId: string, componentId: string, templates?: InstatusIncidentTemplates, ids?: {createTemplateId?: string; resolveTemplateId?: string}): Promise<void> {
     if (!validId(integrationId) || !validId(pageId) || !validId(componentId)) throw new Error('Valid page and component IDs are required to bind a webhook')
-    // Idempotent PUT also reconciles dashboard edits before reusing a private binding.
-    await this.request(`/v3/integrations/${integrationId}`, 'PUT', {components: [componentId], integrationType: 'GRAFANA', ...templates, pageId})
+    const {createTemplateId, resolveTemplateId} = ids ?? {}
+    if (!validId(createTemplateId) || !validId(resolveTemplateId) || createTemplateId === resolveTemplateId) throw new Error('Restore createTemplateId and resolveTemplateId in the private component binding from the existing Instatus integration; do not recreate it')
+    const read = async (id: string) => {
+      const value = await this.request<RemoteIncidentTemplate>(`/v1/${pageId}/templates/${id}`)
+      if (value?.id !== id || value.siteId !== pageId || value.type !== 'INCIDENT' || value.components?.length !== 1 || value.components[0].componentId !== componentId) throw new Error('Instatus template targets differ from the saved component binding; inspect the existing integration')
+      return value
+    }
+
+    // Integration PUT uses the editor schema, unlike the public Templates API.
+    // Template IDs come from the creation receipt, never from component-name matching.
+    const current = await Promise.all([read(createTemplateId), read(resolveTemplateId)])
+    if (!templates) return // Preserve manually managed templates after checking their scope.
+    const create = templates.createTemplate
+    const resolve = templates.resolveTemplate
+    const settings = {automaticResolve: true, isActive: true, onFailCreateIncident: true, onFailNotifySubscribers: create.notify, onFailPublishIncident: true, onRecoverNotifySubscribers: resolve.notify, onRecoverPublishIncident: true, onRecoverResolveIncident: true}
+    const result = await this.request<{integration: {createTemplateId: string; id: string; monitoringTool: string; resolveTemplateId: string; siteId: string} & typeof settings}>(`/v3/integrations/${integrationId}`, 'PUT', {
+      ...settings,
+      components: [componentId], createTemplate: encodeIntegrationTemplate(create, current[0].id), integrationType: 'GRAFANA', label: create.name,
+      pageId, resolveTemplate: encodeIntegrationTemplate(resolve, current[1].id),
+    })
+    const integration = result?.integration
+    if (integration?.id !== integrationId || integration.siteId !== pageId || integration.monitoringTool !== 'GRAFANA'
+      || integration.createTemplateId !== current[0].id || integration.resolveTemplateId !== current[1].id
+      || Object.entries(settings).some(([key, value]) => integration[key as keyof typeof settings] !== value)) throw new Error('Instatus did not confirm the requested integration and subscriber notification policy')
+    for (const [id, desired] of [[current[0].id, create], [current[1].id, resolve]] as Array<[string, InstatusIncidentTemplate]>) {
+      const actual = await read(id)
+      if (actual.notify !== desired.notify || actual.name !== desired.name || actual.status !== desired.status || actual.components[0].status !== desired.components?.[0]?.status) throw new Error('Instatus did not confirm the requested component incident template')
+    }
   }
 
   async configureCronMonitor(id: string, alerts: string[], enabled = true): Promise<void> {
     if (!validId(id) || alerts.some(alert => !validId(alert))) throw new Error('Invalid heartbeat monitor or alert ID')
     await this.request(`/monitors/cron/${id}`, 'PUT', {alerts, grace: 180, onFail: {createIncident: false, createOutageDuration: false, notifySubscribers: false, publishIncident: false}, onRecover: {notifySubscribers: false, publishIncident: false, resolveIncident: false, resolveOutageDuration: false},
-      period: 60,
+      // Grafana may send a one-minute repeat at the following group interval.
+      // Allow two-minute delivery plus scheduling/network jitter before degradation.
+      period: 180,
       state: enabled ? 'ACTIVE' : 'PAUSED',
     })
   }
@@ -153,18 +208,20 @@ export class InstatusClient {
     const result = await this.request<{cronMonitor: {componentId: null | string; id: string; siteId: string; slug: string}}>('/monitors/cron', 'POST', {
       alerts, createComponent: false, grace: 180, name, onFail: {createIncident: false, createOutageDuration: false, notifySubscribers: false, publishIncident: false}, onRecover: {notifySubscribers: false, publishIncident: false, resolveIncident: false, resolveOutageDuration: false},
       pageId,
-      period: 60,
+      // Grafana may send a one-minute repeat at the following group interval.
+      // Allow two-minute delivery plus scheduling/network jitter before degradation.
+      period: 180,
     })
     const monitor = result.cronMonitor
     if (!monitor || !/^[\w-]+$/.test(monitor.id) || !/^[\w-]+$/.test(monitor.slug) || monitor.siteId !== pageId || monitor.componentId) throw new Error('Invalid heartbeat creation response; do not create a replacement')
     return {id: monitor.id, url: `https://cron.instatus.com/${monitor.slug}`}
   }
 
-  async createGrafanaWebhook(pageId: string, componentId?: string): Promise<{integrationId: string; url: string}> {
+  async createGrafanaWebhook(pageId: string, componentId?: string): Promise<{createTemplateId?: string; integrationId: string; resolveTemplateId?: string; url: string}> {
     if (!validId(pageId)) throw new Error('A valid Instatus page ID is required before creating a webhook')
     if (componentId !== undefined && !validId(componentId)) throw new Error('A valid component ID is required for a component webhook')
     // Legacy bootstrap stays unbound; component integrations have one explicit target.
-    const result = await this.request<{integration: {id: string; monitoringTool: string; siteId: string; uniqueUrl: string}}>(
+    const result = await this.request<{integration: {createTemplateId?: string; id: string; monitoringTool: string; resolveTemplateId?: string; siteId: string; uniqueUrl: string}}>(
       '/v3/integrations', 'POST', {components: componentId ? [componentId] : [], integrationType: 'GRAFANA', pageId},
     )
     const integration = result?.integration
@@ -172,7 +229,7 @@ export class InstatusClient {
       throw new Error('Instatus returned an unexpected Grafana integration; inspect the dashboard before recovery')
     }
 
-    return {integrationId: integration.id, url: validateGrafanaWebhookUrl(integration.uniqueUrl)}
+    return {...(validId(integration.createTemplateId) && validId(integration.resolveTemplateId) ? {createTemplateId: integration.createTemplateId, resolveTemplateId: integration.resolveTemplateId} : {}), integrationId: integration.id, url: validateGrafanaWebhookUrl(integration.uniqueUrl)}
   }
 
   async hasCronMonitor(pageId: string, name: string): Promise<boolean> {

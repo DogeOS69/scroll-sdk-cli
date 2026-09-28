@@ -3,14 +3,16 @@ import {randomUUID} from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import {InstatusClient, validateGrafanaWebhookUrl} from './status-page-instatus.js'
+import {InstatusClient, type InstatusIncidentTemplates, validateGrafanaWebhookUrl} from './status-page-instatus.js'
 
 interface Receipt {
   componentId?: string
   componentKey?: string
+  createTemplateId?: string
   environment: string
   integrationId?: string
   pageId: string
+  resolveTemplateId?: string
   status: 'creating' | 'ready'
   url?: string
   version: 1
@@ -26,6 +28,7 @@ export class StatusPageWebhook {
   readonly secretFile: string
   private readonly directory: string
   private importedIntegrationId?: string
+  private importedTemplateIds?: {createTemplateId: string; resolveTemplateId: string}
   private importedUrl?: string
   private receipt?: Receipt
   private readonly receiptFile: string
@@ -57,7 +60,7 @@ export class StatusPageWebhook {
     if (this.receipt.environment !== environment) throw new Error('The saved webhook belongs to a different network; use that network\'s deployment directory')
   }
 
-  async apply(plan: WebhookPlan, client: InstatusClient, pageId: string, secret: {key: string; name: string}, componentId?: string, templates?: {createTemplate: object; resolveTemplate: object}): Promise<void> {
+  async apply(plan: WebhookPlan, client: InstatusClient, pageId: string, secret: {key: string; name: string}, componentId?: string, templates?: InstatusIncidentTemplates): Promise<void> {
     if (plan.action === 'unmanaged') return
     if (this.componentKey && (!componentId || !/^[\w-]+$/.test(componentId))) throw new Error('Component webhook requires a valid component ID')
     if (this.receipt?.componentId && this.receipt.componentId !== componentId) throw new Error('The saved webhook targets a different component ID')
@@ -68,12 +71,12 @@ export class StatusPageWebhook {
       const created = await client.createGrafanaWebhook(pageId, componentId)
       this.save({...binding, environment: this.environment, ...created, pageId, status: 'ready', version: 1})
     } else if (plan.action === 'import') {
-      this.save({...binding, environment: this.environment, integrationId: this.importedIntegrationId, pageId, status: 'ready', url: this.importedUrl, version: 1})
+      this.save({...binding, ...this.importedTemplateIds, environment: this.environment, integrationId: this.importedIntegrationId, pageId, status: 'ready', url: this.importedUrl, version: 1})
     }
 
     if (this.receipt?.status !== 'ready' || this.receipt.pageId !== pageId) throw new Error('No matching webhook credential is available')
     const url = validateGrafanaWebhookUrl(this.receipt.url)
-    if (componentId) await client.bindGrafanaWebhook(this.receipt.integrationId!, pageId, componentId, templates)
+    if (componentId) await client.bindGrafanaWebhook(this.receipt.integrationId!, pageId, componentId, templates, this.receipt)
     // JSON is valid YAML. No namespace: deployment must explicitly select Grafana's namespace.
     const manifest = {apiVersion: 'v1', data: {[secret.key]: Buffer.from(url).toString('base64')}, kind: 'Secret', metadata: {name: secret.name}, type: 'Opaque'}
     this.write(this.secretFile, `${JSON.stringify(manifest, null, 2)}\n`)
@@ -88,11 +91,13 @@ export class StatusPageWebhook {
         if (this.componentKey) {
           const imported = JSON.parse(contents)
           if (typeof imported.integrationId !== 'string' || !/^[\w-]+$/.test(imported.integrationId)) throw new Error('Missing integration ID')
+          if (![imported.createTemplateId, imported.resolveTemplateId].every(id => typeof id === 'string' && /^[\w-]+$/.test(id)) || imported.createTemplateId === imported.resolveTemplateId) throw new Error('Missing template IDs')
+          this.importedTemplateIds = {createTemplateId: imported.createTemplateId, resolveTemplateId: imported.resolveTemplateId}
           this.importedIntegrationId = imported.integrationId
           this.importedUrl = validateGrafanaWebhookUrl(imported.url)
         } else this.importedUrl = validateGrafanaWebhookUrl(contents)
       } catch {
-        throw new Error('Cannot import webhook credentials; component imports require private JSON with integrationId and url; legacy imports require a complete Grafana URL (contents omitted)')
+        throw new Error('Cannot import webhook credentials; component imports require private JSON with integrationId, url, createTemplateId and resolveTemplateId; legacy imports require a complete Grafana URL (contents omitted)')
       }
 
       this.assertUniqueUrl(this.importedUrl, this.importedIntegrationId)

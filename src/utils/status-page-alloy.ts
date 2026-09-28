@@ -51,7 +51,12 @@ export function buildAlloyProbes(probes: any, catalog: any): any {
     for (const url of endpoints(key)) add(key, url, 'page', {fail_if_header_not_matches: [{header: 'Content-Type', regexp: '(?i)^text/html(;.*)?$'}]})
     const apis: string[] = key === 'bridge-portal' ? probes.bridgeChecks.map((check: any) => check.url) : probes.explorerApiUrls
     if (apis.length === 0) missing[key] = 'requires-public-api-endpoint'
-    for (const url of [...new Set(apis)].sort()) add(key, url, 'api', {fail_if_header_not_matches: jsonHeaders})
+    for (const url of [...new Set(apis)].sort()) {
+      // The backend ingress catalog contains a base URL, whose root is HTML.
+      // Explicit API paths remain available for custom endpoints.
+      const target = key === 'block-explorer' && new URL(url).pathname === '/' ? new URL('/api/v2/stats', url).toString() : url
+      add(key, target, 'api', {fail_if_header_not_matches: jsonHeaders})
+    }
   }
 
   for (const check of probes.alloyChecks) {
