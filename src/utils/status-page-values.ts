@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Helm values are dynamic YAML mappings. */
+import * as toml from '@iarna/toml'
 import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -16,7 +17,7 @@ const CATALOG = [
   ['deposits', 'Deposits', 'DOGE deposits after the required confirmations.'],
   ['withdrawals', 'Withdrawals', 'DOGE withdrawal processing and confirmation.'],
   ['batch-publication', 'Batch Publication', 'Publication of batch data to the configured data availability layer.'],
-  ['node-sync', 'Node Sync', 'Network data and services needed for supported nodes to synchronize.'],
+  ['node-sync', 'Node Sync', 'Synchronization of monitored full nodes with the canonical chain.'],
   ['bridge-portal', 'Bridge Portal', 'The bridge website and its supporting API.'],
   ['block-explorer', 'Block Explorer', 'Availability and indexing freshness of the deployed Blockscout explorer.'],
 ] as const
@@ -148,13 +149,19 @@ export function reconcileScrollMonitorStatusPage(values: any, inputs: Inputs): A
     blockscout: 'blockscout-production.yaml',
     bridgePath: '/bridge',
     frontends: 'frontends-production.yaml',
+    frontendsConfig: '',
     publicRpc: 'l2-reth-rpc-public-production.yaml',
     scheme: 'https',
+    sequencer: '',
     ...mapping(config.sources, 'statusPage.sources'),
   }
   const {sources} = config
   for (const key of Object.keys(sources)) {
-    if (!['blockscout', 'bridgePath', 'frontends', 'publicRpc', 'scheme'].includes(key)) throw new Error('Unknown statusPage.sources field')
+    if (!['blockscout', 'bridgePath', 'frontends', 'frontendsConfig', 'publicRpc', 'scheme', 'sequencer'].includes(key)) throw new Error('Unknown statusPage.sources field')
+  }
+
+  for (const name of ['frontendsConfig', 'sequencer']) {
+    if (typeof sources[name] !== 'string') throw new Error(`statusPage.sources.${name} must be a filename or empty string`)
   }
 
   if (!['http', 'https'].includes(sources.scheme)) throw new Error('statusPage.sources.scheme must be http or https')
@@ -200,6 +207,43 @@ export function reconcileScrollMonitorStatusPage(values: any, inputs: Inputs): A
   const backendIngress = explorer['blockscout-stack']?.blockscout?.ingress
   const explorerApiUrls = backendIngress?.enabled === true && backendIngress.hostname
     ? [endpoint(backendIngress.hostname, sources.scheme, '/', 'Blockscout backend ingress.hostname')] : []
+  // Optional sources are explicitly selected deployment files, not guessed domains
+  // or inactive sequencer replicas. Only non-secret evidence enters the catalog.
+  let sequencingMode = 'unconfigured'
+  let blockTimeMs: number | undefined
+  if (sources.sequencer) {
+    const selected = readValues(inputs.valuesDir, sources.sequencer, 'statusPage.sources.sequencer')
+    if (selected.role !== 'sequencer') throw new Error('Selected sequencer values must have role: sequencer')
+    const sequencer = selected.reth?.sequencer
+    const networkId = selected.reth?.networkId
+    if (networkId !== undefined && String(networkId) !== BigInt(chain).toString()) throw new Error('Selected sequencer networkId must match general.CHAIN_ID_L2')
+    if (sequencer?.enabled === true && typeof sequencer.allowEmptyBlocks === 'boolean') {
+      sequencingMode = sequencer.allowEmptyBlocks ? 'continuous' : 'on-demand'
+      const period = Number(sequencer.blockTimeMs)
+      if (Number.isSafeInteger(period) && period > 0) blockTimeMs = period
+    }
+  }
+
+  const bridgeChecks: any[] = []
+  if (sources.frontendsConfig) {
+    const selected = readValues(inputs.valuesDir, sources.frontendsConfig, 'statusPage.sources.frontendsConfig')
+    let frontend: any
+    try { frontend = toml.parse(selected.scrollConfig) } catch { throw new Error('Selected frontendsConfig must contain valid scrollConfig TOML') }
+    if (String(frontend.REACT_APP_CHAIN_ID_L2) !== BigInt(chain).toString()) throw new Error('Selected frontend chain ID must match general.CHAIN_ID_L2')
+    const base = frontend.REACT_APP_BRIDGE_API_URI
+    if (typeof base === 'string' && base.trim()) {
+      let url: URL
+      try { url = new URL(base) } catch { throw new Error('Frontend bridge API must be a public HTTP(S) URL') }
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Frontend bridge API cannot contain credentials, query or fragment')
+      endpoint(url.host, url.protocol.slice(0, -1), '/', 'Frontend bridge API')
+      url.pathname = url.pathname.replace(/\/$/, '') + '/txs'
+      url.search = new URLSearchParams({address: '0x0000000000000000000000000000000000000000', page: '1', page_size: '1'}).toString()
+      // The DogeOS frontend consumes {results: Transaction[], total: number}.
+      // Empty history is valid; never require a specific account balance/history.
+      bridgeChecks.push({path: ['results'], type: 'array', url: url.href}, {path: ['total'], type: 'number', url: url.href})
+    }
+  }
+
   const endpoints: Record<string, string[]> = {'block-explorer': [explorerUrl], 'bridge-portal': bridgeUrls, 'public-rpc': [...rpcUrls, ...wsUrls]}
   config.catalog = {
     chainId: BigInt(chain).toString(),
@@ -208,12 +252,12 @@ export function reconcileScrollMonitorStatusPage(values: any, inputs: Inputs): A
     groupName: GROUPS[environment],
     networkName,
     pageName: config.instatus.pageName,
-    probeSources: {explorerApiUrls},
+    probeSources: {...(blockTimeMs === undefined ? {} : {blockTimeMs}), bridgeChecks, explorerApiUrls, sequencingMode},
     provider: 'instatus',
   }
   if (config.publication !== undefined || config.generated?.version === 2) {
     const candidate = structuredClone(values)
-    reconcileComponentPublication(candidate, config)
+    reconcileComponentPublication(candidate, config, filename => readValues(inputs.valuesDir, filename, 'publication.nodeSync source'))
     if (isDeepStrictEqual(config, values.statusPage) && isDeepStrictEqual(candidate.grafana, values.grafana) && isDeepStrictEqual(candidate['kube-prometheus-stack'], values['kube-prometheus-stack'])) return []
     values.statusPage = config
     values.grafana = candidate.grafana

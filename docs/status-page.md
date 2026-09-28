@@ -6,10 +6,16 @@ delivery/recovery enabled, against an immutable SDK commit. The test receivers a
 local fixtures; no Instatus key or deployment credentials are required. Update the
 SDK commit pin deliberately when changing the shared configuration contract.
 
-Before enabling business components, deploy core images containing the health
-observation fixes in [core #1304](https://github.com/DogeOS69/dogeos-core/pull/1304): indexer-aligned coverage, stable canonical replay
-observation times and DA waiting time that survives retries. Generation readiness
-does not verify the deployed application image or its live metrics.
+Core images must contain the merged fixes in [core #1312](https://github.com/DogeOS69/dogeos-core/pull/1312)
+(merge `c579df82ce2c8377ccde8001c91ad10d67f040c6`) and
+[core #1314](https://github.com/DogeOS69/dogeos-core/pull/1314)
+(merge `421806bbdb83b45b230d1f2359d62d1fc39e0387`), or equivalent later changes.
+Both merges were verified on 2026-09-28. These supply indexer-confirmation-aligned
+coverage, replay ages that survive unchanged canonical rewrites, and DA waiting
+ages that survive retries. **Merging #1304 is not a deployment prerequisite.**
+Verify the built image's source revision and live metric contract; a PR merge or
+CLI configuration-ready result does not prove that the running image has it.
+Performance follow-up is handled separately and is not evidence of live acceptance.
 
 The SDK template and `scroll-sdk-cli` share the `statusPage` contract in
 [SDK production example](https://github.com/DogeOS69/scroll-sdk/blob/feat/dstack-controller-chart/examples/values/scroll-monitor-production.yaml).
@@ -110,7 +116,11 @@ to that group. Three deployments produce 24 components on the shared page.
 Only deployed, verified networks should be initialized; missing deployment data
 never results in fabricated endpoints or health.
 
-## Initialize the shared page and groups once
+## Reuse existing groups; initialize only a new page
+
+The operator confirmed that Mainnet, Testnet and Devnet groups are already created.
+Normal deployment reuses them; group creation automation is not a remaining task.
+The following bootstrap instructions apply only to a new page or a missing group.
 
 Read-only API verification resolved workspace `6wxpx` to
 `cmuh3p8v200r21mlbhhjg03nr` and its `dogeos` page to
@@ -332,7 +342,7 @@ API reference: [status pages](https://instatus.com/help/api/status-pages),
 SDK production examples provide all eight keys with `mode: observe` and
 `rule.builtin: true`. Modes are `manual`, `observe`, `automatic`. Built-in rules
 cover public RPC, continuous sequencing, bridge browser/API, Blockscout freshness,
-canary node sync, and new dogeos-core deposit/withdrawal/DA queue observations.
+official follower or optional external canary node sync, and new dogeos-core deposit/withdrawal/DA queue observations.
 The SDK [publication guide](https://github.com/DogeOS69/scroll-sdk/blob/feat/dstack-controller-chart/docs/status-page-publication.md)
 defines their semantics, operational limits and runtime tests.
 
@@ -343,10 +353,11 @@ defines their semantics, operational limits and runtime tests.
 | `health.failureFor` / `recoveryFor` | Default 5m / 10m; per-component `rule.for` overrides failure |
 | `health.*DeadlineSeconds` | Deposit, withdrawal and batch publication: 0 means unconfigured; supply confirmed budgets |
 | `health.*JobRegex` | Select complete actual application roles, excluding proof-only WP workers |
-| `probes.sequencingMode` | unconfigured; choose continuous or provide custom eligible-work expression for on-demand |
-| `probes.bridgeChecks` / `nodeDependencyChecks` | Required semantic JSON checks `{url,path,equals}`; no secret-bearing URLs |
+| `probes.sequencingMode` | auto; derive from selected sequencer allowEmptyBlocks, or explicitly override; on-demand needs a custom rule |
+| `probes.bridgeChecks` / `nodeDependencyChecks` | Bridge defaults to auto from frontend runtime config; node checks are explicit. Checks accept `{url,path,equals}` or `{url,path,type}`; no secret-bearing URLs |
 | `probes.explorerApiUrls` / `explorerSelector` | Backend ingress derived when available; operator supplies rendered data selector |
-| `probes.nodeRpcUrl` | Operator's independent canary node; per-site override supported by probe chart |
+| `nodeSync` | `official` selects active sequencer and deployed bootnode/internal RPC/public RPC values/release pairs; CLI derives private Service names, ports and replica counts. Existing configurations default to `external`. |
+| `probes.nodeRpcUrl` | Optional external mode's independent canary node; per-site override supported by probe chart |
 | `probes.metricsTargets` | Private `host:port` targets; CLI owns only the `status-page-external-probes` scrape job |
 | `delivery` | Production enabled; Python image, PVC size/storage class exposed; existing component values default direct mode |
 | `incidents` | Manage create/resolve templates in examples; default Degraded Performance, subscriber notification false |
@@ -399,3 +410,106 @@ provisioning. Retire competing legacy public routes before automatic activation.
 Apply scoped Secrets and generated Helm values through the existing deployment
 workflow. Instatus template behavior and real-account incident delivery require
 acceptance on a test target before enabling public subscriber notifications.
+
+## Defaults from selected deployment files
+
+Select `statusPage.sources.frontendsConfig` (normally `frontends-config.yaml`)
+and `statusPage.sources.sequencer` (the effective Reth sequencer values, including
+a numbered filename when applicable). Empty source strings disable inference;
+new SDK examples provide conventional filenames. The frontend chain ID and any
+sequencer networkId must match this deployment. These inputs only produce
+non-secret catalog/probe evidence; generation never deploys a release.
+
+`sequencingMode: auto` derives continuous/on-demand from an enabled sequencer's
+`allowEmptyBlocks`. `bridgeChecks: auto` reads the frontend's actual
+`REACT_APP_BRIDGE_API_URI`, calls the read-only `/txs` history route for a zero
+address, and requires an array `results` and numeric `total`. Empty history is
+valid. The browser also validates the same API contract from the Portal origin.
+`auto` remains in saved inputs so source changes are picked up on regeneration.
+Explicit lists/modes are preserved; `bridgeChecks: []` disables inference.
+
+Application polling, confirmation depths and retry timers do not establish a
+public processing deadline. The three business deadlines remain unconfigured
+until the operator supplies them. Independently operated node/probe addresses
+and the deployed explorer's rendered data selector also remain explicit inputs.
+Use status-page-probe chart 0.1.1 or newer for typed API checks.
+
+### Official Node Sync sources
+
+The existing follower fleet can supply Node Sync evidence without an independent
+canary. Set `statusPage.publication.nodeSync.mode: official`, select a `reference`
+with `{values, release, role: sequencer}`, and a `followers` list with the same
+fields and roles `bootnode`, `internal-rpc`, `public-rpc`. Select effective files
+and actual Helm release names, including separate entries for numbered releases.
+`namespace: ""` uses the monitoring release namespace; set it when nodes differ.
+An optional source `service` overrides a custom or templated Service name.
+
+The CLI reads each source through the existing bounded values-directory reader,
+validates roles and chain IDs, and generates Service names, ports and replica
+counts. The reference must have one active continuously producing sequencer;
+standby references are not automatically selected. Zero-replica followers are
+excluded. At least one follower must remain, with at most 32 follower Pods.
+Regenerate when source values, replica counts or release names change.
+
+The SDK collector discovers each Pod through EndpointSlices, checks height/lag
+and same-height hash against the sequencer, and rejects incomplete or changing
+membership and stale/reorganized reference evidence. Namespace-scoped list access
+to EndpointSlices is its only Kubernetes permission. It holds no Instatus key.
+Internal node details stay out of the public catalog and exported probe values.
+See the SDK [Node Sync guide](https://github.com/DogeOS69/scroll-sdk/blob/main/docs/status-page-node-sync.md)
+and the complete source-selection examples in scroll-monitor production values.
+
+These checks cover the selected official followers, not independent new-node
+bootstrap. Public web/RPC probes still need independent locations. To use the
+external canary mode instead, clear `reference: {}` and `followers: []`, then
+configure the probe's canary URL/dependency checks. `official` suppresses those
+external Node Sync fields on export; combining both health sources needs a custom
+expression. Component modes, internal observation alerts and verified recovery
+continue to use the existing publication flow.
+
+## Delivery status and order
+
+Existing network groups are ready for reuse. Planned-maintenance integration is
+last priority, after external probe delivery and real Instatus failure/recovery
+acceptance. Until implemented, deploy the component in `manual` before maintenance;
+editing its remote maintenance status alone does not pause local automation.
+
+The Alloy and official Node Sync changes use a coordinated SDK/CLI release. The
+acceptance workflow pins the corresponding SDK commit; push that SDK commit before
+this CLI commit so CI can fetch its templates. Local runtime acceptance does not
+establish a remote CI result before both commits are pushed. Probe image
+publication and the proposed VM deployment package remain to be implemented;
+the existing probe Helm chart and configuration export are already available.
+
+
+## Existing Alloy public-entrypoint mode
+
+New SDK examples use `statusPage.publication.probes.mode: alloy`; older inputs
+without a mode retain external deep probes. Alloy configuration is generated in
+scroll-monitor and uses its existing private remote-write path. No additional
+public probe Pod is needed. Do not pass `--probe-values` in Alloy mode.
+
+The mode checks HTTP/TLS availability, RPC chain-ID/block-number response patterns,
+and Bridge/Blockscout API availability. Readiness exposes `coverage: public-entrypoint`
+and the catalog descriptions describe that narrower scope. Browser rendering,
+indexing freshness, sequencing and WebSocket behavior are not inferred from HTTP
+success. Configured WS endpoints leave RPC unready; sequencing requires a custom
+rule. Official Node Sync and business metrics retain their existing rules.
+
+`probes.alloyChecks` optionally adds `{component, url, bodyRegex: [RE2]}` GET checks.
+`bridgeChecks: auto` derives API URLs. Explicit JSON-path overrides require external
+mode, because the pinned Alloy Blackbox component does not execute them. All checks
+must produce fresh complete results; a missing or duplicate reporter cannot recover
+an incident. `minimumProbeLocations` applies only to external mode.
+
+Automatic publication with Alloy requires `heartbeat.enabled: true` and internal
+Instatus `alertIds`. Generation/observe works without these credentials. Apply
+reuses the existing Cron monitor and writes its Secret to `secrets/status-page/`.
+The heartbeat checks Alloy telemetry as well as the existing monitoring/delivery
+chain: HTTP target failures still send pings, telemetry loss stops them. Instatus
+notifies internal destinations; it does not mark every business component down.
+
+Review `scroll-sdk/docs/status-page-alloy.md` and the complete production examples
+for source ownership, fixed defaults, DNS/ingress acceptance and the remaining
+live-provider checks. This implementation does not deploy a chain or modify Instatus
+without the separate `--apply` entry point.

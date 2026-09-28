@@ -36,10 +36,18 @@ export function normalizeHealth(input: any = {}): any {
 }
 
 /** Every expression is 0/1 with no dynamic labels, or absent when evidence is incomplete. */
-export function builtinHealth(key: string, environment: string, chainId: string, health: any): string {
+export function builtinHealth(key: string, environment: string, chainId: string, health: any, nodeSyncMode = 'external'): string {
   const identity = `environment=${JSON.stringify(environment)},chain_id=${JSON.stringify(chainId)},component_key=${JSON.stringify(key)}`
   const q = (metric: string) => `${metric}{${identity}}`
   const fresh = (metric: string) => `(time() - ${metric} >= 0 and time() - ${metric} <= ${health.freshnessSeconds})`
+  if (key === 'node-sync' && nodeSyncMode === 'official') {
+    const sample = q('scroll_status_node_sync_affected')
+    const observed = q('scroll_status_node_sync_timestamp_seconds')
+    const valid = `(((${sample} == 0) or (${sample} == 1)) and ${fresh(observed)})`
+    // One collector verifies ALL selected Pods; this is not an external probe location.
+    return `(max(${valid})) and (count(${valid}) == 1) and (count(${sample}) == 1)`
+  }
+
   if (['block-explorer', 'bridge-portal', 'node-sync', 'public-rpc', 'sequencing'].includes(key)) {
     const sample = q('scroll_status_probe_affected')
     const timestamp = q('scroll_status_probe_timestamp_seconds')
@@ -72,9 +80,17 @@ export function builtinHealth(key: string, environment: string, chainId: string,
 }
 
 export function normalizeProbes(input: any = {}, catalog: any, health: any): {config: any; inputs: any; missing: Record<string, string>} {
-  const defaults = {bridgeChecks: [], explorerApiUrls: catalog.probeSources?.explorerApiUrls ?? [], explorerSelector: '', metricsTargets: [], nodeDependencyChecks: [], nodeRpcUrl: '', sequencingMode: 'unconfigured'}
+  const defaults = {alloyChecks: [], bridgeChecks: 'auto', explorerApiUrls: catalog.probeSources?.explorerApiUrls ?? [], explorerSelector: '', metricsTargets: [], mode: 'external', nodeDependencyChecks: [], nodeRpcUrl: '', sequencingMode: 'auto'}
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !(key in defaults))) throw new Error('Invalid publication.probes configuration')
-  const probes = {...defaults, ...input}
+  const inputs = {...defaults, ...input}
+  const probes = structuredClone(inputs)
+  if (!['alloy', 'external'].includes(probes.mode)) throw new Error('probes.mode must be alloy or external')
+  if (!Array.isArray(probes.alloyChecks)) throw new Error('probes.alloyChecks must be a list')
+  if (probes.mode === 'external' && probes.alloyChecks.length > 0) throw new Error('alloyChecks requires probes.mode: alloy')
+  if (probes.mode === 'alloy' && probes.metricsTargets.length > 0) throw new Error('Alloy uses the existing remote-write path; remove external metricsTargets')
+  if (probes.mode === 'alloy' && inputs.bridgeChecks !== 'auto') throw new Error('Alloy does not execute JSON-path bridgeChecks; use auto for API availability and alloyChecks for explicit response patterns')
+  if (probes.bridgeChecks === 'auto') probes.bridgeChecks = catalog.probeSources?.bridgeChecks ?? []
+  if (probes.sequencingMode === 'auto') probes.sequencingMode = catalog.probeSources?.sequencingMode ?? 'unconfigured'
   if (Array.isArray(probes.explorerApiUrls) && probes.explorerApiUrls.length === 0) probes.explorerApiUrls = defaults.explorerApiUrls
   if (!['continuous', 'on-demand', 'unconfigured'].includes(probes.sequencingMode)) throw new Error('probes.sequencingMode must be explicitly selected')
   if (typeof probes.explorerSelector !== 'string') throw new Error('probes.explorerSelector must be a CSS selector')
@@ -91,7 +107,7 @@ export function normalizeProbes(input: any = {}, catalog: any, health: any): {co
   for (const name of ['bridgeChecks', 'nodeDependencyChecks']) {
     if (!Array.isArray(probes[name])) throw new Error(`${name} must be a list`)
     for (const check of probes[name]) {
-      if (!check || typeof check !== 'object' || Object.keys(check).some(key => !['equals', 'path', 'url'].includes(key)) || !Object.hasOwn(check, 'equals') || !Array.isArray(check.path) || !check.path.every((part: unknown) => typeof part === 'string' || Number.isSafeInteger(part))) throw new Error(`${name} requires {url, path: [JSON field names], equals: expectedValue}`)
+      if (!check || typeof check !== 'object' || Object.keys(check).some(key => !['equals', 'path', 'type', 'url'].includes(key)) || Object.hasOwn(check, 'equals') === Object.hasOwn(check, 'type') || (Object.hasOwn(check, 'type') && !['array', 'boolean', 'null', 'number', 'object', 'string'].includes(check.type)) || !Array.isArray(check.path) || !check.path.every((part: unknown) => typeof part === 'string' || (Number.isSafeInteger(part) && Number(part) >= 0))) throw new Error(`${name} requires {url, path, equals} or {url, path, type}`)
       url(check.url)
     }
   }
@@ -105,5 +121,5 @@ export function normalizeProbes(input: any = {}, catalog: any, health: any): {co
   for (const [key, deadline] of [['deposits', 'depositDeadlineSeconds'], ['withdrawals', 'withdrawalDeadlineSeconds'], ['batch-publication', 'batchPublicationDeadlineSeconds']]) if (health[deadline] === 0) missing[key] = 'requires-confirmed-processing-deadline'
   return {config: {...probes, bridgeUrls: endpoints('bridge-portal'), chainId: catalog.chainId, environment: catalog.environment, explorerUrls: endpoints('block-explorer'),
     maxBlockAgeSeconds: health.maxBlockAgeSeconds, maxIndexLagSeconds: health.maxIndexLagSeconds, maxNodeLagSeconds: health.maxNodeLagSeconds,
-    maxRpcLatencySeconds: health.maxRpcLatencySeconds, rpcUrls: endpoints('public-rpc')}, inputs: probes, missing}
+    maxRpcLatencySeconds: health.maxRpcLatencySeconds, rpcUrls: endpoints('public-rpc')}, inputs, missing}
 }

@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: DogeOS69/scroll-sdk
-          ref: 92a47d995fb31f3024d74c9e66048af5c714f244
+          ref: 353373b10aea00b977896929e934642dda743438
           path: sdk-contract
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -56,6 +56,7 @@ jobs:
           helm dependency build sdk-contract/charts/scroll-monitor
           docker pull prom/prometheus:v2.52.0
           docker pull grafana/grafana:11.1.5
+          docker pull grafana/alloy:v1.8.2
       - name: Run all status-page tests, including runtime acceptance
         env:
           SCROLL_STATUS_RUNTIME_TEST: '1'

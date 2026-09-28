@@ -40,6 +40,25 @@ describe('status-page built-in health', () => {
     const duplicate = external('0','0')
     duplicate['scroll_status_probe_affected{environment="testnet",chain_id="123",component_key="public-rpc",location="a",instance="duplicate"}'] = '0x10'
     scenario(probe, duplicate, null)
+    const official = builtinHealth('node-sync', 'testnet', '123', health, 'official')
+    const nodes = (value: string, stamp = '600'): Record<string, string> => {
+      const labels = '{environment="testnet",chain_id="123",component_key="node-sync",instance="collector"}'
+      return {[`scroll_status_node_sync_affected${labels}`]: Array.from({length: 11}).fill(value).join(' '), [`scroll_status_node_sync_timestamp_seconds${labels}`]: `${stamp}x10`}
+    }
+
+    scenario(official, nodes('0'), 0)
+    scenario(official, nodes('1'), 1)
+    scenario(official, nodes('2'), null)
+    scenario(official, nodes('NaN'), null)
+    scenario(official, nodes('0', '479'), null)
+    scenario(official, nodes('0', '601'), null)
+    scenario(official, {}, null)
+    const noTimestamp = nodes('0')
+    delete noTimestamp[Object.keys(noTimestamp).find(key => key.includes('timestamp'))!]
+    scenario(official, noTimestamp, null)
+    const duplicateCollector = nodes('0')
+    for (const [key, value] of Object.entries(nodes('0'))) duplicateCollector[key.replace('instance="collector"', 'instance="replacement"')] = value
+    scenario(official, duplicateCollector, null)
     const queue = (count: string, age: string, stamp = '600', valid = '1') => {
       const labels = '{namespace="monitoring",job="withdrawal-processor",instance="writer"}'
       return Object.fromEntries([[`up${labels}`,'1'],[`withdrawal_processor_public_deposit_eligible_backlog${labels}`,count],

@@ -23,6 +23,8 @@ describe('independent component publication', () => {
     directory = fs.mkdtempSync(path.join(os.tmpdir(), 'status-publication-'))
     const ingress = {main: {enabled: true, hosts: [{host: 'service.example', paths: [{path: '/'}]}]}}
     for (const name of ['frontends-production.yaml', 'l2-reth-rpc-public-production.yaml']) fs.writeFileSync(path.join(directory, name), yaml.dump({ingress}))
+    fs.writeFileSync(path.join(directory, 'frontends-config.yaml'), yaml.dump({scrollConfig: 'REACT_APP_CHAIN_ID_L2 = "291"\nREACT_APP_BRIDGE_API_URI = "https://history.example/api"\n'}))
+    fs.writeFileSync(path.join(directory, 'l2-reth-sequencer-production.yaml'), yaml.dump({reth: {networkId: '291', sequencer: {allowEmptyBlocks: true, blockTimeMs: '3000', enabled: true}}, role: 'sequencer'}))
     fs.writeFileSync(path.join(directory, 'blockscout-production.yaml'), yaml.dump({'blockscout-stack': {frontend: {ingress: {enabled: true, hostname: 'explorer.example'}}}}))
     values = {grafana: {alerting: {'policies.yaml': {policies: [{receiver: 'internal'}]}}}, statusPage: {enabled: true, environment: 'testnet', instatus: {pageId: 'page-1'}, publication: {components: {}}}}
   })
@@ -98,6 +100,7 @@ describe('independent component publication', () => {
     values.statusPage.instatus.pageId = 'page-1'
     values.statusPage.instatus.componentIds = {'public-rpc': 'rpc-1'}
     values.statusPage.publication.components['public-rpc'].mode = 'automatic'
+    values.statusPage.publication.probes.mode = 'external'
     values.statusPage.publication.probes.metricsTargets = ['probe-a:9111', 'probe-b:9111']
     values.statusPage.generated = {componentBindings: {'public-rpc': {componentId: 'rpc-1', pageId: 'page-1'}}, environment: 'testnet'}
     generate()

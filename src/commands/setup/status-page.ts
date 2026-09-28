@@ -78,6 +78,7 @@ export default class StatusPage extends Command {
 
       const persistProbes = () => {
         if (!flags['probe-values']) return
+        if (options.publication?.probes?.mode === 'alloy') throw new Error('--probe-values is only for external mode; Alloy checks are included in scroll-monitor')
         if (!options.generated.probeConfig) throw new Error('--probe-values requires component publication')
         const file = path.resolve(root, flags['probe-values'])
         if (file === valuesPath || (fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink())) throw new Error('Probe values must use a separate regular output file')
