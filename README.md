@@ -1477,14 +1477,16 @@ See [dstack controller credential setup](docs/dstack-controller.md) for the Vast
 Generate local secret files from config.toml, Dogecoin config, and bridge initialization outputs
 
 USAGE
-  $ scrollsdk setup gen-secrets [--doge-config <value>] [--json] [-N] [--spec
-    <value> --dstack-only]
+  $ scrollsdk setup gen-secrets [--doge-config <value>] [--dogecoin-only |
+    --dstack-only] [--json] [-N] [--spec <value>]
 
 FLAGS
   -N, --non-interactive      Run without prompts. Uses config values or fails
                              fast.
       --doge-config=<value>  Path to Dogecoin config file (defaults to
                              .data/doge-config.toml)
+      --dogecoin-only        Generate only the Dogecoin RPC Secret; no config.toml
+                             or bridge initialization required
       --dstack-only          Generate only dstack controller Secrets; no bridge
                              initialization required
       --json                 Output in JSON format (stdout for data, stderr for
@@ -1503,9 +1505,20 @@ EXAMPLES
   $ scrollsdk setup gen-secrets --non-interactive --json --doge-config .data/doge-config.toml
 
   $ scrollsdk setup gen-secrets --dstack-only --non-interactive
+
+  $ scrollsdk setup gen-secrets --dogecoin-only --non-interactive
 ```
 
 _See code: [src/commands/setup/gen-secrets.ts](src/commands/setup/gen-secrets.ts)_
+
+Before Dogecoin is deployed, use `scrollsdk setup gen-secrets --dogecoin-only -N`.
+This reads `dogecoinClusterRpc.username` and `password` from the selected Dogecoin
+config and writes only `secrets/dogecoin-secret.env` with mode `0600`. `$ENV:NAME`
+references are resolved locally. It does not connect to Dogecoin, read bridge-init
+outputs, generate other services' Secrets, or upload anything. Missing credentials
+fail before writing. The option is mutually exclusive with `--dstack-only`.
+After deploying Dogecoin and completing `bridge-init`, run the full command to
+generate the remaining service Secrets.
 
 See [dstack controller credential setup](docs/dstack-controller.md) for the Vast.ai/GCP workflow.
 
@@ -1656,7 +1669,7 @@ _See code: [src/commands/setup/l2-sequencer-reth.ts](https://github.com/dogeos69
 Validate Makefile and prepare Helm charts for Scroll SDK
 
 USAGE
-  $ scrollsdk setup prep-charts [--doge-config <value>] [--dstack-only]
+  $ scrollsdk setup prep-charts [--doge-config <value>] [--dogecoin-only | --dstack-only]
     [--github-token <value>] [--github-username <value>] [--json] [-N]
     [--proof-materials-receipt <value>] [--proof-publication-receipt <value>]
     [--proof-topology-compiler-binary <value> | --proof-topology-compiler-image
@@ -1664,6 +1677,7 @@ USAGE
     <value>] [--values-dir <value>]
 
 FLAGS
+      --dogecoin-only          Prepare only Dogecoin production values without bridge initialization
   -N, --non-interactive                         Run without prompts.
                                                 Auto-applies all detected
                                                 changes.
@@ -1725,6 +1739,25 @@ EXAMPLES
 _See code: [src/commands/setup/prep-charts.ts](src/commands/setup/prep-charts.ts)_
 
 See [dstack controller credential setup](docs/dstack-controller.md) for the Vast.ai/GCP workflow.
+
+For the initial Dogecoin deployment, run:
+
+```bash
+scrollsdk setup gen-secrets --dogecoin-only -N
+scrollsdk setup prep-charts --dogecoin-only -N
+```
+
+The chart preparation command updates only `values/dogecoin-production.yaml`
+from the selected Dogecoin config. Copy this production values template into
+place first. It supports `--doge-config` and `--values-dir`, reuses the full
+command's network and port rules, and preserves unrelated files. Both modes
+preserve all Dogecoin storage settings, including `storage.size`; they do not
+fill in a missing size or resize storage based on the selected network.
+`config.toml` is optional; when present, `ingress.DOGECOIN_HOST` updates the
+existing Dogecoin ingress. Bridge initialization, L2 artifacts, Makefile and
+registry checks are not required. This mode cannot be combined with
+`--dstack-only`, `--spec` or proof compiler inputs. It prepares local values;
+installing Dogecoin and uploading its Secret remain separate operations.
 
 ## `scrollsdk setup proof-aws-init`
 

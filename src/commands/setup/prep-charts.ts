@@ -1298,6 +1298,7 @@ export default class SetupPrepCharts extends Command {
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml',
     '<%= config.bin %> <%= command.id %> --dstack-only --non-interactive',
+    '<%= config.bin %> <%= command.id %> --dogecoin-only --non-interactive',
     '<%= config.bin %> <%= command.id %> --github-username=your-username --github-token=your-token',
     '<%= config.bin %> <%= command.id %> --values-dir=./custom-values',
     '<%= config.bin %> <%= command.id %> --skip-auth-check',
@@ -1306,6 +1307,11 @@ export default class SetupPrepCharts extends Command {
 
   static override flags = {
     'doge-config': Flags.string({ description: 'Path to Dogecoin config file' }),
+    'dogecoin-only': Flags.boolean({
+      default: false,
+      description: 'Prepare only Dogecoin production values without bridge initialization or registry checks',
+      exclusive: ['dstack-only', 'spec', 'proof-materials-receipt', 'proof-publication-receipt', 'proof-topology-compiler-binary', 'proof-topology-compiler-image'],
+    }),
     'dstack-only': Flags.boolean({default: false, description: 'Generate only dstack controller production values without chain initialization or registry checks'}),
     'github-token': Flags.string({ description: 'GitHub Personal Access Token', required: false }),
     'github-username': Flags.string({ description: 'GitHub username', required: false }),
@@ -1404,6 +1410,11 @@ export default class SetupPrepCharts extends Command {
     this.jsonMode = flags.json
     this.skipL2ContractDeploymentBlock = flags['skip-l2-contract-deployment-block']
     this.jsonCtx = new JsonOutputContext('setup prep-charts', this.jsonMode)
+
+    if (flags['dogecoin-only']) {
+      await this.prepareDogecoinOnly(flags)
+      return
+    }
 
     if (flags['dstack-only']) {
       this.dstackController = readDstackControllerConfig(flags['doge-config'], flags.spec)
@@ -1957,6 +1968,40 @@ export default class SetupPrepCharts extends Command {
     }
 
     return trimmed.split(',').map(item => item.trim()).filter(Boolean)
+  }
+
+  private async prepareDogecoinOnly(flags: Record<string, any>): Promise<void> {
+    const root = process.cwd()
+    const result = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk setup doge-config')
+    this.dogeConfig = result.config
+    // Only the optional ingress hostname comes from config.toml at bootstrap.
+    const configPath = path.join(root, 'config.toml')
+    if (fs.existsSync(configPath)) this.configData = toml.parse(fs.readFileSync(configPath, 'utf8'))
+    const valuesDir = path.resolve(root, flags['values-dir'])
+    const filename = 'dogecoin-production.yaml'
+    const transaction = GenerationTransaction.begin(root)
+    try {
+      const target = path.join(transaction.toStagingPath(valuesDir), filename)
+      if (!fs.existsSync(target)) throw new Error(`${path.join(valuesDir, filename)} not found. Copy the Dogecoin production values template before preparing charts.`)
+      const productionYaml = yaml.load(fs.readFileSync(target, 'utf8'))
+      if (!productionYaml || typeof productionYaml !== 'object' || Array.isArray(productionYaml)) {
+        throw new Error(`${filename} must contain a YAML mapping`)
+      }
+
+      const changes = this.reconcileDogecoinValues(productionYaml)
+      const apply = changes.length > 0 && (this.nonInteractive || await confirm({message: `Apply Dogecoin configuration changes to ${filename}?`}))
+      if (apply) fs.writeFileSync(target, yaml.dump(productionYaml, YAML_DUMP_OPTIONS))
+      const {changedFiles} = transaction.commit()
+      this.jsonCtx.logSuccess(apply ? `Updated ${filename}` : `No changes applied to ${filename}`)
+      if (this.jsonMode) this.jsonCtx.success({
+        generation: {changedFiles, committed: true},
+        productionCharts: {skipped: apply ? 0 : 1, updated: apply ? 1 : 0},
+        valuesDir,
+      })
+    } catch (error) {
+      transaction.rollback()
+      throw error
+    }
   }
 
   private async processBootnodeRethInstanceFiles(valuesDir: string): Promise<{ skipped: number; updated: number }> {
@@ -3538,93 +3583,9 @@ export default class SetupPrepCharts extends Command {
         }
       }
       else if (chartName === "dogecoin") {
-        const isRegtest = this.dogeConfig.network === "regtest";
-        const isTestnet = this.dogeConfig.network === "testnet";
-        if (!productionYaml.dogecoinConf || typeof productionYaml.dogecoinConf !== 'object') {
-          productionYaml.dogecoinConf = {}
-        }
-
-        if (!productionYaml.service || typeof productionYaml.service !== 'object') {
-          productionYaml.service = {}
-        }
-
-        if (!productionYaml.storage || typeof productionYaml.storage !== 'object') {
-          productionYaml.storage = {}
-        }
-
-        if (productionYaml.fullnameOverride !== dogecoinEndpoints.serviceName) {
-          const oldValue = productionYaml.fullnameOverride;
-          productionYaml.fullnameOverride = dogecoinEndpoints.serviceName;
-          updated = true;
-          changes.push({ key: `fullnameOverride`, newValue: dogecoinEndpoints.serviceName, oldValue: String(oldValue || 'undefined') });
-        }
-
-        const dogecoinConf_regtest = productionYaml.dogecoinConf?.regtest;
-        const expected_regtest = isRegtest ? 1 : 0;
-        if (dogecoinConf_regtest !== expected_regtest) {
-          productionYaml.dogecoinConf.regtest = expected_regtest;
-          updated = true;
-          changes.push({ key: `dogecoinConf.regtest`, newValue: String(expected_regtest), oldValue: String(dogecoinConf_regtest) });
-        }
-
-        const dogecoinConf_testnet = productionYaml.dogecoinConf?.testnet;
-        const expected_testnet = isTestnet ? 1 : 0;
-        if (dogecoinConf_testnet !== expected_testnet) {
-          productionYaml.dogecoinConf.testnet = expected_testnet;
-          updated = true;
-          changes.push({ key: `dogecoinConf.testnet`, newValue: String(expected_testnet), oldValue: String(dogecoinConf_testnet) });
-        }
-
-        const service_port = productionYaml.service?.port;
-        const expected_service_port = dogecoinEndpoints.p2pPort;
-        if (service_port !== expected_service_port) {
-          productionYaml.service.port = expected_service_port;
-          updated = true;
-          changes.push({ key: `service.port`, newValue: String(expected_service_port), oldValue: String(service_port) });
-        }
-
-        const service_rpcPort = productionYaml.service?.rpcPort;
-        const expected_service_rpcPort = dogecoinEndpoints.rpcPort;
-        if (service_rpcPort !== expected_service_rpcPort) {
-          productionYaml.service.rpcPort = expected_service_rpcPort;
-          updated = true;
-          changes.push({ key: `service.rpcPort`, newValue: String(expected_service_rpcPort), oldValue: String(service_rpcPort) });
-        }
-
-        const storage_size = productionYaml.storage?.size;
-        const expected_storage_size = isRegtest || isTestnet ? "50Gi" : "250Gi";
-        if (storage_size !== expected_storage_size) {
-          productionYaml.storage.size = expected_storage_size;
-          updated = true;
-          changes.push({ key: `storage.size`, newValue: String(expected_storage_size), oldValue: String(storage_size) });
-        }
-
-        // let rpcPassword = productionYaml.rpcPassword;
-        // let expectedRpcPassword = this.dogeConfig.dogecoinClusterRpc?.password;
-        // if (rpcPassword !== expectedRpcPassword) {
-        //   productionYaml.rpcPassword = expectedRpcPassword;
-        //   updated = true;
-        //   changes.push({ key: `rpcPassword`, oldValue: String(rpcPassword), newValue: String(expectedRpcPassword) });
-        // }
-
-        const rpcUser = productionYaml.dogecoinConf?.rpcuser;
-        const expectedRpcUser = this.dogeConfig.dogecoinClusterRpc?.username;
-        if (rpcUser !== expectedRpcUser) {
-          productionYaml.dogecoinConf.rpcuser = expectedRpcUser;
-          updated = true;
-          changes.push({ key: `dogecoinConf.rpcuser`, newValue: String(expectedRpcUser), oldValue: String(rpcUser) });
-        }
-
-        // Process dogecoin ingress.
-        let ingressUpdated = false;
-        if (productionYaml.ingress) {
-          const configValue = this.getConfigValue('ingress.DOGECOIN_HOST');
-          ingressUpdated = this.processIngressHosts(productionYaml.ingress, configValue, changes);
-        }
-
-        if (ingressUpdated) {
-          updated = true;
-        }
+        const dogecoinChanges = this.reconcileDogecoinValues(productionYaml)
+        changes.push(...dogecoinChanges)
+        if (dogecoinChanges.length > 0) updated = true
       }
       else if (chartName === "testnet-activity-helper") {
         const l2RpcEndpoint = this.getConfigValue("general.L2_RPC_ENDPOINT");
@@ -3751,6 +3712,71 @@ export default class SetupPrepCharts extends Command {
       files: result.files.map(file => transaction.toOriginalPath(file)),
       ...(workerBundle ? {workerBundle} : {}),
     }
+  }
+
+  /** Dogecoin bootstrap shares the same reconciliation as full chart preparation. */
+  private reconcileDogecoinValues(productionYaml: any): Array<{key: string; newValue: string; oldValue: string}> {
+    const changes: Array<{key: string; newValue: string; oldValue: string}> = []
+    const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(this.dogeConfig)
+    const isRegtest = this.dogeConfig.network === "regtest";
+    const isTestnet = this.dogeConfig.network === "testnet";
+    if (!productionYaml.dogecoinConf || typeof productionYaml.dogecoinConf !== 'object') {
+      productionYaml.dogecoinConf = {}
+    }
+
+    if (!productionYaml.service || typeof productionYaml.service !== 'object') {
+      productionYaml.service = {}
+    }
+
+    if (productionYaml.fullnameOverride !== dogecoinEndpoints.serviceName) {
+      const oldValue = productionYaml.fullnameOverride;
+      productionYaml.fullnameOverride = dogecoinEndpoints.serviceName;
+      changes.push({ key: `fullnameOverride`, newValue: dogecoinEndpoints.serviceName, oldValue: String(oldValue || 'undefined') });
+    }
+
+    const dogecoinConf_regtest = productionYaml.dogecoinConf?.regtest;
+    const expected_regtest = isRegtest ? 1 : 0;
+    if (dogecoinConf_regtest !== expected_regtest) {
+      productionYaml.dogecoinConf.regtest = expected_regtest;
+      changes.push({ key: `dogecoinConf.regtest`, newValue: String(expected_regtest), oldValue: String(dogecoinConf_regtest) });
+    }
+
+    const dogecoinConf_testnet = productionYaml.dogecoinConf?.testnet;
+    const expected_testnet = isTestnet ? 1 : 0;
+    if (dogecoinConf_testnet !== expected_testnet) {
+      productionYaml.dogecoinConf.testnet = expected_testnet;
+      changes.push({ key: `dogecoinConf.testnet`, newValue: String(expected_testnet), oldValue: String(dogecoinConf_testnet) });
+    }
+
+    const service_port = productionYaml.service?.port;
+    const expected_service_port = dogecoinEndpoints.p2pPort;
+    if (service_port !== expected_service_port) {
+      productionYaml.service.port = expected_service_port;
+      changes.push({ key: `service.port`, newValue: String(expected_service_port), oldValue: String(service_port) });
+    }
+
+    const service_rpcPort = productionYaml.service?.rpcPort;
+    const expected_service_rpcPort = dogecoinEndpoints.rpcPort;
+    if (service_rpcPort !== expected_service_rpcPort) {
+      productionYaml.service.rpcPort = expected_service_rpcPort;
+      changes.push({ key: `service.rpcPort`, newValue: String(expected_service_rpcPort), oldValue: String(service_rpcPort) });
+    }
+
+    // Storage settings belong to the deployment values; never infer or resize them here.
+    const rpcUser = productionYaml.dogecoinConf?.rpcuser;
+    const expectedRpcUser = this.dogeConfig.dogecoinClusterRpc?.username;
+    if (rpcUser !== expectedRpcUser) {
+      productionYaml.dogecoinConf.rpcuser = expectedRpcUser;
+      changes.push({ key: `dogecoinConf.rpcuser`, newValue: String(expectedRpcUser), oldValue: String(rpcUser) });
+    }
+
+    // Process dogecoin ingress.
+    if (productionYaml.ingress) {
+      const configValue = this.getConfigValue('ingress.DOGECOIN_HOST');
+      this.processIngressHosts(productionYaml.ingress, configValue, changes);
+    }
+
+    return changes
   }
 
   private reconcileProofKubernetes(valuesDir: string): ReconcileProofKubernetesResult {

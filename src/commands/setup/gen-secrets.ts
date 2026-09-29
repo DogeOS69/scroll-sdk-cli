@@ -34,6 +34,7 @@ export default class SetupGenSecrets extends Command {
     '<%= config.bin %> <%= command.id %> --doge-config .data/doge-config.toml',
     '<%= config.bin %> <%= command.id %> --non-interactive --json --doge-config .data/doge-config.toml',
     '<%= config.bin %> <%= command.id %> --dstack-only --non-interactive',
+    '<%= config.bin %> <%= command.id %> --dogecoin-only --non-interactive',
   ]
 
   static override flags = {
@@ -41,6 +42,7 @@ export default class SetupGenSecrets extends Command {
       description: 'Path to Dogecoin config file (defaults to .data/doge-config.toml)',
       required: false,
     }),
+    'dogecoin-only': Flags.boolean({default: false, description: 'Generate only the Dogecoin RPC Secret; no config.toml or bridge initialization required', exclusive: ['dstack-only']}),
     'dstack-only': Flags.boolean({default: false, description: 'Generate only dstack controller Secrets; no bridge initialization required'}),
     json: Flags.boolean({
       default: false,
@@ -105,11 +107,30 @@ export default class SetupGenSecrets extends Command {
     this.dogeConfig = dogeConfigResult.config
     this.jsonCtx.info(`Using Dogecoin config file: ${dogeConfigResult.configPath}`)
 
+    if (flags['dogecoin-only']) {
+      // Render and validate first: bootstrap must not read or overwrite other services' Secrets.
+      const files = this.generateEnvContent('dogecoin', {})
+      this.createSecretsFolder()
+      for (const [filename, content] of Object.entries(files)) {
+        const destination = path.join(process.cwd(), 'secrets', filename)
+        fs.writeFileSync(destination, content, {mode: 0o600})
+        fs.chmodSync(destination, 0o600)
+        this.jsonCtx.logSuccess(`Created ${filename}`)
+      }
+
+      if (this.jsonMode) this.jsonCtx.success({
+        dogeConfigPath: dogeConfigResult.configPath,
+        files: Object.keys(files).map(filename => path.join(process.cwd(), 'secrets', filename)),
+        secretsDir: path.join(process.cwd(), 'secrets'),
+      })
+      return
+    }
+
     const bridgeOutputPath = path.join(process.cwd(), '.data', 'output-withdrawal-processor.toml')
     if (!fs.existsSync(bridgeOutputPath)) {
       this.jsonCtx.error(
         'E103_BRIDGE_INIT_OUTPUT_MISSING',
-        `${bridgeOutputPath} not found. Run \`scrollsdk setup bridge-init\` before \`scrollsdk setup gen-secrets\`.`,
+        `${bridgeOutputPath} not found. Run \`scrollsdk setup bridge-init\` before \`scrollsdk setup gen-secrets\`. To bootstrap Dogecoin first, run \`scrollsdk setup gen-secrets --dogecoin-only\`.`,
         'CONFIGURATION',
         true,
         { path: bridgeOutputPath }
@@ -352,8 +373,13 @@ export default class SetupGenSecrets extends Command {
     }
 
     if (service === 'dogecoin') {
-      envFiles['dogecoin-secret.env'] = this.envLine('DOGECOIN_RPC_USER', this.dogeConfig.dogecoinClusterRpc?.username || '', 'dogeConfig.dogecoinClusterRpc.username')
-      envFiles['dogecoin-secret.env'] += this.envLine('DOGECOIN_RPC_PASSWORD', this.dogeConfig.dogecoinClusterRpc?.password || '', 'dogeConfig.dogecoinClusterRpc.password')
+      envFiles['dogecoin-secret.env'] = ''
+      for (const [field, envKey] of [['username', 'DOGECOIN_RPC_USER'], ['password', 'DOGECOIN_RPC_PASSWORD']] as const) {
+        const source = `dogeConfig.dogecoinClusterRpc.${field}`
+        const value = this.resolveSecretValue(this.dogeConfig.dogecoinClusterRpc?.[field], source)
+        this.requireConfigValue(value, source)
+        envFiles['dogecoin-secret.env'] += `${envKey}="${value}"\n`
+      }
     }
 
     if (service === 'metrics-exporter') {
