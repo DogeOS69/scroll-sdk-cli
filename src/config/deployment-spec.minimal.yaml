@@ -62,7 +62,6 @@ ethereumDa:
   beaconRpcUrl: "http://l1-devnet-lighthouse:5052"
   confirmationDepth: 1
   finalizationDepth: 1
-  minFinality: safe
 
 bridge:
   seedString: "dogeos-devnet-v1"

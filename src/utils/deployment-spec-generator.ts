@@ -34,19 +34,16 @@ const ETHEREUM_DA_DEFAULTS = {
   devnet: {
     beaconRpcUrl: 'http://l1-devnet-lighthouse:5052',
     chainId: 32_382,
-    minFinality: 'safe',
     submitterRpcUrl: 'http://l1-devnet:8545',
   },
   mainnet: {
     beaconRpcUrl: 'https://ethereum-beacon-api.publicnode.com',
     chainId: 1,
-    minFinality: 'finalized',
     submitterRpcUrl: 'https://eth.drpc.org',
   },
   sepolia: {
     beaconRpcUrl: 'https://ethereum-sepolia-beacon-api.publicnode.com',
     chainId: 11_155_111,
-    minFinality: 'safe',
     submitterRpcUrl: 'https://gateway.tenderly.co/public/sepolia',
   },
 } as const
@@ -1528,7 +1525,6 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
     beaconRpcUrl: spec.ethereumDa?.beaconRpcUrl || ethereumDaDefaults.beaconRpcUrl,
     chain: ethereumDaChain,
     chainId: spec.ethereumDa?.chainId || ethereumDaDefaults.chainId,
-    minFinality: spec.ethereumDa?.minFinality || ethereumDaDefaults.minFinality,
     submitterRpcUrl: spec.ethereumDa?.l1RpcUrl || ethereumDaDefaults.submitterRpcUrl,
   }
 

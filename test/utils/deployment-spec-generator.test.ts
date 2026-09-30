@@ -81,7 +81,6 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       chain: 'sepolia',
       finalizationDepth: 64,
       l1RpcUrl: 'https://gateway.tenderly.co/public/sepolia',
-      minFinality: 'finalized',
     },
     frontend: {
       baseDomain: 'example.com',
@@ -1825,6 +1824,25 @@ describe('deployment-spec-generator', () => {
       expect(withdrawalEnv.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS).to.equal('15000');
       expect(withdrawalEnv.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING).to.equal('false');
     });
+
+    for (const chain of ['devnet', 'sepolia', 'mainnet'] as const) {
+      it(`omits retired WP finality settings from generated ${chain} configs and values`, () => {
+        const spec = createMinimalSpec();
+        spec.ethereumDa = {...spec.ethereumDa, chain, confirmationDepth: 2, finalizationDepth: 96};
+        const dogeConfig = toml.parse(generateDogeConfigToml(spec)) as any;
+        expect(dogeConfig.ethereumDa).not.to.have.property('minFinality');
+        const files = generateValuesFiles(spec);
+        const wp = yaml.load(files['withdrawal-processor-production.yaml']) as any;
+        const env = Object.fromEntries(wp.env.map((item: any) => [item.name, item.value]));
+        expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_ETHEREUM_DA__MIN_FINALITY');
+        expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__SAFE_DEPTH');
+        expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__FINALIZED_DEPTH');
+        expect(env.DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__INGEST_DEPTH).to.equal('1');
+        const da = yaml.load(files['eth-da-submitter-production.yaml']) as any;
+        expect(da.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMATION_DEPTH).to.equal('2');
+        expect(da.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__FINALIZATION_DEPTH).to.equal('96');
+      });
+    }
 
     it('uses Ethereum DA inbox worker start block for withdrawal processor values', () => {
       const spec = createMinimalSpec();

@@ -169,19 +169,16 @@ const ETHEREUM_DA_DEFAULTS = {
   devnet: {
     beaconRpcUrl: 'http://l1-devnet-lighthouse:5052',
     chainId: 32_382,
-    minFinality: 'safe',
     submitterRpcUrl: 'http://l1-devnet:8545',
   },
   mainnet: {
     beaconRpcUrl: 'https://ethereum-beacon-api.publicnode.com',
     chainId: 1,
-    minFinality: 'finalized',
     submitterRpcUrl: 'https://eth.drpc.org',
   },
   sepolia: {
     beaconRpcUrl: 'https://ethereum-sepolia-beacon-api.publicnode.com',
     chainId: 11_155_111,
-    minFinality: 'safe',
     submitterRpcUrl: 'https://gateway.tenderly.co/public/sepolia',
   },
 } as const
@@ -212,10 +209,6 @@ function getDogecoinClusterRpc(spec: DeploymentSpec): NonNullable<DeploymentSpec
     password: spec.dogecoin.rpc?.password ?? '',
     username: spec.dogecoin.rpc?.username ?? '',
   }
-}
-
-function getEthereumDaMinFinality(spec: DeploymentSpec): string {
-  return getEthereumDaConfig(spec).minFinality || ETHEREUM_DA_DEFAULTS[getEthereumDaChain(spec)].minFinality
 }
 
 function getEthereumDaBatchConfig(spec: DeploymentSpec): NonNullable<NonNullable<DeploymentSpec['ethereumDa']>['batch']> {
@@ -1126,14 +1119,11 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INDEXER_SQLITE_PATH', value: '/app/data/eth-da-indexer.sqlite' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_STORE_ROOT', value: '/app/data/eth-da-blob-artifacts' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_METADATA_SQLITE_PATH', value: '/app/data/eth-da-artifact-metadata.sqlite' },
-      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__MIN_FINALITY', value: getEthereumDaMinFinality(spec) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__ENABLED', value: 'true' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__WRITER_ID', value: 'withdrawal-processor' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__CURSOR_ID', value: 'eth_da_inbox' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__START_BLOCK', value: String(getEthereumDaInboxWorkerStartBlock(spec)) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__INGEST_DEPTH', value: '1' },
-      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__SAFE_DEPTH', value: '32' },
-      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__FINALIZED_DEPTH', value: '64' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__ROLLBACK_LOOKBACK', value: '128' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__POLL_INTERVAL_MS', value: '6000' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__MAX_BLOCKS_PER_CYCLE', value: '64' },

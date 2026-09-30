@@ -171,7 +171,6 @@ export interface DogeConfig {
     chain?: 'devnet' | 'mainnet' | 'sepolia'
     chainId?: string
     l2StartBlockNumber?: number | string
-    minFinality?: 'finalized' | 'safe'
     publish?: {
       allowLivenessBudgetOverride?: boolean | string
       budgetWindow?: string

@@ -456,8 +456,6 @@ export interface EthereumDaConfig {
 
   maxFeePerGasWei?: string
 
-  minFinality?: 'finalized' | 'pending' | 'safe'
-
   minPriorityFeeWei?: string
   publish?: {
     allowLivenessBudgetOverride?: boolean

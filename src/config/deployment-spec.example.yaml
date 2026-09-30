@@ -117,7 +117,6 @@ ethereumDa:
   chainId: 11155111
   l1RpcUrl: "https://gateway.tenderly.co/public/sepolia"
   beaconRpcUrl: "https://ethereum-sepolia-beacon-api.publicnode.com"
-  minFinality: safe
   confirmationDepth: 1
   finalizationDepth: 64
 
