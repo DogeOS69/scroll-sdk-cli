@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -139,6 +140,34 @@ function scanTree(root: string, excludes: Set<string>): Map<string, TreeEntry> {
   return result
 }
 
+// Capture content rather than only mtimes: external edits can preserve size
+// and timestamps. Stream large proof files with bounded memory.
+function fingerprintTree(root: string, excludes: Set<string>): Map<string, string> {
+  const result = new Map<string, string>()
+  for (const [relative, entry] of scanTree(root, excludes)) {
+    const file = path.join(root, relative)
+    if (entry.kind === 'directory') {
+      result.set(relative, 'directory')
+    } else if (entry.kind === 'symlink') {
+      result.set(relative, `symlink:${fs.readlinkSync(file)}`)
+    } else {
+      const hash = createHash('sha256')
+      const fd = fs.openSync(file, 'r')
+      const buffer = Buffer.allocUnsafe(FILE_COMPARE_BUFFER_BYTES)
+      try {
+        let bytes: number
+        while ((bytes = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+          hash.update(buffer.subarray(0, bytes))
+        }
+      } finally { fs.closeSync(fd) }
+
+      result.set(relative, `file:${entry.mode}:${hash.digest('hex')}`)
+    }
+  }
+
+  return result
+}
+
 function sameLargeFileContent(source: string, staged: string, size: number): boolean {
   const sourceFd = fs.openSync(source, 'r')
   const stagedFd = fs.openSync(staged, 'r')
@@ -263,11 +292,13 @@ export class GenerationTransaction {
 
   private readonly cloneExcludes: Set<string>
   private finished = false
+  private readonly originalFingerprint: Map<string, string>
 
   private constructor(originalRoot: string, stagingRoot: string, cloneExcludes: Set<string>) {
     this.originalRoot = originalRoot
     this.stagingRoot = stagingRoot
     this.cloneExcludes = cloneExcludes
+    this.originalFingerprint = fingerprintTree(stagingRoot, cloneExcludes)
   }
 
   static begin(originalRoot = '.'): GenerationTransaction {
@@ -291,6 +322,13 @@ export class GenerationTransaction {
 
   commit(): {changedFiles: string[]} {
     if (this.finished) throw new Error('generation transaction is already finished')
+    const current = fingerprintTree(this.originalRoot, this.cloneExcludes)
+    const paths = new Set([...this.originalFingerprint.keys(), ...current.keys()])
+    const conflicts = [...paths].filter(relative => this.originalFingerprint.get(relative) !== current.get(relative))
+    if (conflicts.length > 0) {
+      throw new Error(`deployment files changed during generation; original files preserved; retry after other writers finish: ${conflicts.slice(0, 10).join(', ')}`)
+    }
+
     const changes = calculateChanges(this.originalRoot, this.stagingRoot, this.cloneExcludes)
     const backupRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'scrollsdk-generation-backup-'))
     const existed = new Set<string>()
