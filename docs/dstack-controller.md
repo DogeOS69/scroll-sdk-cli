@@ -545,7 +545,9 @@ server's PostgreSQL migrations/authenticated API, then removes its resources.
 
 ## Internal monitoring configuration
 
-Add `dstackController.monitoring.enabled: true` to opt in. The supported block is:
+Monitoring defaults to enabled for a configured controller, including when the
+monitoring block is omitted. Set `dstackController.monitoring.enabled: false` to
+disable it. The supported block is:
 
 ```yaml
 dstackController:
@@ -567,7 +569,7 @@ dstackController:
       diskAvailableRatio: 0.1
 ```
 
-Everything except the enable switch has the defaults above. Namespace must match
+All fields, including the enable switch, have the defaults above. Namespace must match
 the controller installation. For an existing deployment, set `fullnameOverride`
 to its existing Deployment/Service name before enabling monitoring; renaming can
 create a new PVC. Generated values use a stable default name when monitoring is on.
@@ -587,7 +589,7 @@ Both ServiceMonitor and controller use it in the controller namespace. Managemen
 and cloud credentials are not given to Prometheus.
 
 Disabling: keep the block with `enabled: false`, regenerate and apply both files.
-Omitting a block does not delete old generated files or uninstall monitoring.
+Omitting the monitoring block enables the defaults; use an explicit false to disable it.
 
 The native-only path provides controller, allocation and cached task/GPU metrics.
 It cannot establish fresh GPU or idle-host health. No public status-page mapping

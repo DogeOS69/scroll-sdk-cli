@@ -14,7 +14,7 @@ import {dstackSpec} from './dstack-controller-values.test.js'
 describe('dstack monitoring generation and credential handoff', () => {
   let directory: string
   let previous: string
-  const config = {database: {type: 'sqlite' as const}, enabled: true, monitoring: {enabled: true}}
+  const config = {database: {type: 'sqlite' as const}, enabled: true}
   beforeEach(() => {
     previous = process.cwd()
     directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dstack-monitoring-'))
@@ -41,6 +41,8 @@ describe('dstack monitoring generation and credential handoff', () => {
     })
     for (const value of Object.values(files)) expect(value).not.to.include(readDstackCredentials()!.monitoringToken!)
     expect(generateDstackMonitoringValues({monitoring: {enabled: false}})).to.include('enabled: false')
+    expect((yaml.load(generateDstackControllerValues({monitoring: {enabled: false}})!) as any).monitoring.enabled).to.equal(false)
+    expect(generateDstackMonitoringValues()).to.equal(undefined)
     expect(generateDstackMonitoringValues({enabled: false, monitoring: {enabled: true}})).to.equal(undefined)
   })
 

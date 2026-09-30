@@ -103,7 +103,7 @@ else console.log('{}');
     const server = yaml.load(secrets[0].stringData['config.yml']) as any
     expect(server.projects[0].backends.map((backend: any) => backend.type)).to.deep.equal(['vastai', 'gcp'])
     expect(server.projects[0].backends[1].creds.filename).to.equal('/etc/dstack/credentials/gcp/service-account.json')
-    expect(secrets[2].stringData['service-account.json']).to.equal(account)
+    expect(secrets.find(secret => secret.metadata.name === 'dstack-gcp-credentials')!.stringData['service-account.json']).to.equal(account)
     for (const file of [DSTACK_CREDENTIALS_FILE, ...secrets.map(secret => `secrets/${secret.metadata.name}.yaml`)]) {
       expect(fs.statSync(file).mode % 0o1000).to.equal(0o600)
     }
@@ -135,7 +135,7 @@ else console.log('{}');
     }, name: 'keep'}))
     run('dstack-config', '--spec', 'spec.yaml', '--gcp-service-account', 'account.json')
     run('gen-secrets', '--dstack-only', '--spec', 'spec.yaml')
-    expect(fs.readdirSync('secrets').sort()).to.deep.equal(['custom-auth.yaml', 'custom-gcp.yaml', 'custom-server.yaml'])
+    expect(fs.readdirSync('secrets').sort()).to.deep.equal(['custom-auth.yaml', 'custom-gcp.yaml', 'custom-server.yaml', 'dstack-controller-monitoring.yaml'])
     expect(fs.readFileSync('spec.yaml', 'utf8')).not.to.include('private_key')
     expect(readDstackControllerConfig()!.enabled).to.equal(undefined)
   })
@@ -151,18 +151,41 @@ else console.log('{}');
       calls.push({args, stdin})
       return args.includes('get') ? '{"items":[]}' : ''
     })
-    expect(result.secrets).to.deep.equal(['dstack-controller-config', 'dstack-controller-auth'])
+    expect(result.secrets).to.deep.equal(['dstack-controller-config', 'dstack-controller-auth', 'dstack-controller-monitoring'])
     expect(calls).to.have.length(3)
     expect(calls[1].args).to.include('--dry-run=server')
     expect(calls[2].args).not.to.include('--dry-run=server')
     const payload = JSON.parse(calls[2].stdin!)
-    expect(payload.items).to.have.length(2)
+    expect(payload.items).to.have.length(3)
     expect(payload.items[0].data['config.yml']).to.be.a('string')
     expect(payload.items[0]).not.to.have.property('stringData')
     for (const call of calls) {
       expect(call.args).to.include('isolated-e2e').and.to.include('dstack-system')
       expect(call.args.join(' ')).not.to.include(key)
     }
+  })
+
+  it('bootstraps when kubectl returns empty stdout for absent Secrets', async () => {
+    importBoth()
+    generate()
+    const calls: string[][] = []
+    await publication(async args => {calls.push(args); return '\n'})
+    expect(calls).to.have.length(3)
+    expect(calls[0]).to.include('--ignore-not-found')
+    expect(calls[1]).to.include('--dry-run=server')
+    expect(calls[2]).to.include('apply').and.not.to.include('--dry-run=server')
+  })
+
+  it('does not treat failed or malformed Secret reads as a fresh cluster', async () => {
+    importBoth()
+    generate()
+    for (const output of ['not-json', '{}', '{"items":null}']) {
+      let calls = 0
+      await rejects(() => publication(async () => {calls++; return output}), 'Invalid Kubernetes Secret readback')
+      expect(calls).to.equal(1)
+    }
+
+    await rejects(() => publication(async () => {throw new Error('read denied')}), 'read denied')
   })
 
   it('does not contact Kubernetes in local dry-run and rejects missing explicit destination', async () => {
@@ -184,14 +207,14 @@ else console.log('{}');
       fs.rmSync('uploads.jsonl', {force: true})
       const result = run('push-secrets', '--provider', provider, '--aws-region', 'us-east-1', '--kube-context', 'isolated-e2e', '--namespace', 'dstack-system')
       expect(result.secretsPushed).to.deep.equal(['blockscout-env'])
-      expect(result.dstack.secrets).to.have.length(3)
+      expect(result.dstack.secrets).to.have.length(4)
       const calls = uploads()
       const firstMutation = calls.findIndex(call => call.tool === 'aws' ? call.args.includes('put-secret-value') : call.args.includes('put'))
       expect(firstMutation).to.be.greaterThan(1)
       expect(calls.slice(0, firstMutation).some(call => call.args.includes('--dry-run=server'))).to.equal(true)
       const applies = calls.filter(call => call.args.includes('apply') && !call.args.includes('--dry-run=server'))
       expect(applies).to.have.length(1)
-      expect(applies[0].names).to.have.length(3)
+      expect(applies[0].names).to.have.length(4)
       expect(applies[0].args).to.include('isolated-e2e').and.to.include('dstack-system')
       const values = yaml.load(fs.readFileSync('values/blockscout-production.yaml', 'utf8')) as any
       expect(values.externalSecrets['blockscout-env'].provider).to.equal(provider)
@@ -204,7 +227,7 @@ else console.log('{}');
     legacyService()
     installUploadStubs()
     const result = run('push-secrets', '--dstack-only', '--kube-context', 'isolated-e2e', '--namespace', 'dstack-system')
-    expect(result.secrets).to.have.length(3)
+    expect(result.secrets).to.have.length(4)
     expect(uploads().every(call => call.tool === 'kubectl')).to.equal(true)
     expect(uploads().some(call => call.args.includes('put'))).to.equal(false)
   })
@@ -219,7 +242,7 @@ else console.log('{}');
     expect(uploads()).to.have.length(0)
     const plan = run('push-secrets', '--dry-run', '--kube-context', 'isolated-e2e', '--namespace', 'dstack-system')
     expect(plan.legacyFiles).to.have.length(1)
-    expect(plan.secrets).to.have.length(3)
+    expect(plan.secrets).to.have.length(4)
     expect(uploads()).to.have.length(0)
     fs.writeFileSync('reject-admission', '')
     const denied = execute('push-secrets', '--aws-region', 'us-east-1', '--kube-context', 'isolated-e2e', '--namespace', 'dstack-system', '-N', '--json')
@@ -320,7 +343,7 @@ else console.log('{}');
     importBoth()
     generate()
     const secrets = loadDstackSecretPublication(readDstackControllerConfig()!, 'values/dstack-controller-production.yaml', 'dstack-system')
-    expect(secrets.map(secret => secret.metadata.name)).to.include('custom-db').and.have.length(4)
+    expect(secrets.map(secret => secret.metadata.name)).to.include('custom-db').and.have.length(5)
     expect(secrets.at(-1)!.stringData.dsn).to.include('postgresql+asyncpg:')
   })
 

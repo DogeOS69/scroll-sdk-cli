@@ -147,7 +147,7 @@ export function dstackSecretRefs(config: DstackControllerConfig, state: DstackCr
     auth: {key: config.auth?.key ?? 'admin-token', name: config.auth?.existingSecret ?? 'dstack-controller-auth'},
     database: config.database?.type === 'sqlite' ? undefined : {key: config.database?.key ?? 'database-url', name: config.database?.existingSecret ?? 'dstack-controller-database'},
     gcp: state.providers.includes('gcp') ? {key: 'service-account.json', name: config.credentialSecrets?.find(ref => ref.name === 'gcp')?.secretName ?? ''} : undefined,
-    monitoring: config.monitoring?.enabled ? {key: config.monitoring.auth?.key ?? 'token', name: config.monitoring.auth?.existingSecret ?? 'dstack-controller-monitoring'} : undefined,
+    monitoring: config.monitoring?.enabled === false ? undefined : {key: config.monitoring?.auth?.key ?? 'token', name: config.monitoring?.auth?.existingSecret ?? 'dstack-controller-monitoring'},
     server: {key: config.serverConfig?.key ?? 'config.yml', name: config.serverConfig?.existingSecret ?? 'dstack-controller-config'},
   }
   const seen = new Set<string>()

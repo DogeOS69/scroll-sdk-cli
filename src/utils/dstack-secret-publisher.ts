@@ -20,7 +20,7 @@ function privateYaml(content: string): unknown {
 /** Read the exact managed files, never glob arbitrary Secret manifests. */
 export function loadDstackSecretPublication(config: DstackControllerConfig, valuesFile: string, namespace: string): DstackSecret[] {
   if (!/^[\da-z]([\da-z-]*[\da-z])?$/.test(namespace) || namespace.length > 63) throw new Error('Invalid Kubernetes namespace')
-  if (config.monitoring?.enabled && namespace !== (config.monitoring.namespace ?? 'dstack-system')) throw new Error('Dstack monitoring namespace differs from the Secret upload destination')
+  if (config.monitoring?.enabled !== false && namespace !== (config.monitoring?.namespace ?? 'dstack-system')) throw new Error('Dstack monitoring namespace differs from the Secret upload destination')
   const state = readDstackCredentials()
   if (!state) throw new Error('Run setup dstack-config and setup gen-secrets --dstack-only first')
   const refs = dstackSecretRefs(config, state)
@@ -99,7 +99,10 @@ export async function publishDstackSecrets(options: {
   const liveText = await runner([...prefix, 'get', 'secret', refs.server.name, refs.auth.name, ...(refs.monitoring ? [refs.monitoring.name] : []), '--ignore-not-found', '-o', 'json'])
   let live: {items?: LiveSecret[]}
   try {
-    live = JSON.parse(liveText)
+    // kubectl exits successfully with empty stdout when all explicitly named
+    // Secrets are absent and --ignore-not-found is set (fresh installation).
+    // Runner failures still reject above; malformed nonempty output is an error.
+    live = liveText.trim() ? JSON.parse(liveText) : {items: []}
     if (!Array.isArray(live.items)) throw new Error('invalid')
   } catch {
     throw new Error('Invalid Kubernetes Secret readback; contents omitted')

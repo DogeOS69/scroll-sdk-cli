@@ -223,16 +223,16 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
       existingSecret: config.database?.type === 'sqlite' ? '' : 'dstack-controller-database',
       key: 'database-url', type: 'postgresql', ...config.database,
     },
-    ...(config.monitoring?.enabled ? {fullnameOverride: config.fullnameOverride ?? 'dstack-controller'} : {}),
-    ...(config.monitoring ? {monitoring: {
-      auth: {existingSecret: 'dstack-controller-monitoring', key: 'token', ...config.monitoring.auth},
-      enabled: config.monitoring.enabled ?? false,
-      interval: config.monitoring.interval ?? '30s',
-      sampleLimit: config.monitoring.sampleLimit ?? 50_000,
-      scrapeTimeout: config.monitoring.scrapeTimeout ?? '10s',
-    }} : {}),
+    ...(config.monitoring?.enabled === false ? {} : {fullnameOverride: config.fullnameOverride ?? 'dstack-controller'}),
     image: config.image ? {pullPolicy: 'IfNotPresent', tag: '', ...config.image} : {...DSTACK_CONTROLLER_IMAGE},
     ingress: {enabled: false, ...config.ingress},
+    monitoring: {
+      auth: {existingSecret: 'dstack-controller-monitoring', key: 'token', ...config.monitoring?.auth},
+      enabled: config.monitoring?.enabled ?? true,
+      interval: config.monitoring?.interval ?? '30s',
+      sampleLimit: config.monitoring?.sampleLimit ?? 50_000,
+      scrapeTimeout: config.monitoring?.scrapeTimeout ?? '10s',
+    },
     persistence: {retain: true, size: '20Gi', ...config.persistence},
     replicaCount: config.replicaCount ?? 1,
     resources: {
@@ -250,15 +250,15 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
 /** Apply after scroll-monitor production values; explicit namespaces, no cluster-wide discovery. */
 export function generateDstackMonitoringValues(config?: DstackControllerConfig): string | undefined {
   validateDstackControllerConfig(config)
-  if (!config || config.enabled === false || !config.monitoring) return undefined
-  const namespace = config.monitoring.namespace ?? 'dstack-system'
-  const enabled = config.monitoring.enabled ?? false
+  if (!config || config.enabled === false) return undefined
+  const namespace = config.monitoring?.namespace ?? 'dstack-system'
+  const enabled = config.monitoring?.enabled ?? true
   const values = {
     dstack: {
-      alerts: {enabled: true, failedRunsThreshold: 3, unavailableFor: '2m', ...config.monitoring.alerts},
+      alerts: {enabled: true, failedRunsThreshold: 3, unavailableFor: '2m', ...config.monitoring?.alerts},
       controllerName: config.fullnameOverride ?? 'dstack-controller',
       enabled,
-      gpuHosts: {diskAvailableRatio: 0.1, enabled: false, expectedHosts: [], staleAfterSeconds: 180, unavailableFor: '5m', ...config.monitoring.gpuHosts},
+      gpuHosts: {diskAvailableRatio: 0.1, enabled: false, expectedHosts: [], staleAfterSeconds: 180, unavailableFor: '5m', ...config.monitoring?.gpuHosts},
       namespace,
     },
     ...(enabled ? {'kube-prometheus-stack': {prometheus: {prometheusSpec: {

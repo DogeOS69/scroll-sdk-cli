@@ -24,11 +24,11 @@ describe('setup prep-charts dstack controller', () => {
   it('creates production.yaml, regenerates on source change and is idempotent', async () => {
     const values = path.join(directory, 'values')
     const target = path.join(values, DSTACK_CONTROLLER_VALUES_FILE)
-    expect(await command.processDstackControllerValues(values)).to.deep.equal({skipped: 0, updated: 1})
+    expect(await command.processDstackControllerValues(values)).to.deep.equal({skipped: 0, updated: 2})
     expect(fs.readFileSync(target, 'utf8')).to.equal(generateDstackControllerValues({enabled: true}))
-    expect(await command.processDstackControllerValues(values)).to.deep.equal({skipped: 1, updated: 0})
+    expect(await command.processDstackControllerValues(values)).to.deep.equal({skipped: 2, updated: 0})
     command.dstackController.database = {type: 'sqlite'}
-    expect(await command.processDstackControllerValues(values)).to.deep.equal({skipped: 0, updated: 1})
+    expect(await command.processDstackControllerValues(values)).to.deep.equal({skipped: 1, updated: 1})
     expect(fs.readFileSync(target, 'utf8')).to.equal(generateDstackControllerValues(command.dstackController))
   })
 
