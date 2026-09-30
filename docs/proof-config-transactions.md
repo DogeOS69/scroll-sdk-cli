@@ -149,6 +149,11 @@ Use the same explicit `mode` in `signing.cubesigner` (DeploymentSpec) or
 
 - `transport_only`: non-mainnet only, reported as not production-ready. It does
   not bypass any CubeSigner-hosted key policy already attached to the key.
+  WP may independently use `active / real / enforce`; use its `plain`
+  correctness-policy transport. Both `deployment-preflight` and
+  `proof-config-check` accept this combination without CubeSigner production
+  policy receipts. Real proof materials, publication evidence and external
+  Attestation Signer validation remain required for enforcement.
 - `production_verifier_key_policy`: requires `policyReceipts`. Mixing receipts
   with manually transcribed `productionPolicy` fields is rejected.
 

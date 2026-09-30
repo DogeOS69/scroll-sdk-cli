@@ -95,8 +95,9 @@ Rules:
 
 - `transport_only` is allowed only for non-mainnet configuration and is always
   reported as not production-ready;
-- `transport_only` never counts as proof enforcement or CubeSigner-policy
-  readiness;
+- `transport_only` does not establish CubeSigner proof-verification readiness;
+  non-mainnet deployments may independently keep WP proof enforcement enabled,
+  using WP's `plain` correctness-policy transport;
 - selecting `transport_only` must warn when an imported key-readback receipt
   says that the key already has a policy attached, because local runtime mode
   does not bypass a CubeSigner-hosted key policy;
@@ -382,8 +383,9 @@ override.
 
 #### Eth DA submitter responsibility
 
-`setup eth-da-submitter` becomes a signer and access-consumer command. It reads
-the canonical store and is responsible only for:
+`setup gen-keystore --service eth-da-submitter` owns signing identity preparation.
+`setup eth-da-submitter` retains archive configuration and access setup. Together
+they cover:
 
 - creating or importing the `L1_COMMIT_SENDER` KMS key;
 - deriving and recording its Ethereum address;
@@ -488,8 +490,9 @@ also require:
 - a valid Worker bundle/image identity when the topology requires a Worker;
 - completed external Attestation Signer policy-validation receipts for every
   active signer;
-- CubeSigner `production_verifier_key_policy` with matching release and
-  attachment readback receipts;
+- matching release and attachment readback receipts when CubeSigner
+  `production_verifier_key_policy` is selected; non-mainnet `transport_only`
+  remains an independent choice and does not disable WP enforcement;
 - mounted and digest-verified live evidence when the selected policy requires
   it.
 
@@ -702,11 +705,11 @@ The contract should bind at least:
 | `disabled` | `mock` | `observe` | Staged inactive topology; no Worker. |
 | `active` | `mock` | `observe` | Internal mock generation; no real materials or Worker. |
 | `active` | `real` | `observe` | Real materials, publication when externally fetched, immutable Worker contract, artifact store; missing policy-readiness receipts are reported as pending. |
-| `active` | `real` | `enforce` | Everything required by real/observe plus matching partner-signer validation receipts and production CubeSigner policy release/attachment/live-evidence readiness. |
+| `active` | `real` | `enforce` | Everything required by real/observe plus matching partner-signer validation receipts. CubeSigner policy release/attachment/live-evidence readiness is required when `production_verifier_key_policy` is selected; non-mainnet may select `transport_only` independently. |
 
 All other combinations fail validation. In particular, mock/enforce and
-disabled/enforce are invalid, and CubeSigner `transport_only` is incompatible
-with proof enforcement.
+disabled/enforce are invalid. CubeSigner `transport_only` is allowed with either
+enforcement setting on non-mainnet, and remains forbidden on mainnet.
 
 ## Worker and compute-provider boundary
 
@@ -733,8 +736,10 @@ neither accepts a second bucket or prefix:
 ```bash
 scrollsdk setup doge-config
 
-scrollsdk setup eth-da-submitter \
+scrollsdk setup gen-keystore --service eth-da-submitter \
   --signer-backend aws-kms
+
+scrollsdk setup eth-da-submitter
 
 scrollsdk setup proof-aws-access \
   --doge-config .data/doge-config.toml \

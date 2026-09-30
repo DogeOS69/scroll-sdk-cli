@@ -58,6 +58,7 @@ function topology(
     enforcement: 'observe',
     generation: 'mock',
     mode,
+    observeRealProofDeadlineMs: 1_800_000,
   }
 }
 
@@ -455,6 +456,7 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     expect(coordinator.proofCoordinator.config.required).to.equal(true)
     expect(coordinator.proofCoordinator.config.content).to.include('generation = "mock"')
     expect(coordinator.proofCoordinator.config.content).to.include('enforcement = "observe"')
+    expect(coordinator.proofCoordinator.config.content).to.include('observe_real_proof_deadline_ms = 1800000')
     expect(coordinator.proofCoordinator.config.content).not.to.include('verifier_import_mode')
     expect(coordinator.persistence.genesis.name).to.equal('genesis-config')
     expect(coordinator.persistence.genesis.mountPath).to.equal('/app/genesis/genesis.json')

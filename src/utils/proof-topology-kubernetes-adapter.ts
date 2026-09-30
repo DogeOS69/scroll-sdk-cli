@@ -712,7 +712,12 @@ function configureAbsentCoordinatorValues(
   bundleRevision: string,
   generation: ProofTopologySpec['generation'],
   l2GenesisJson: string,
+  observeRealProofDeadlineMs: number | undefined,
 ): void {
+  if (!Number.isSafeInteger(observeRealProofDeadlineMs) || observeRealProofDeadlineMs! <= 0) {
+    throw new Error('Idle proof coordinator requires an explicit positive observeRealProofDeadlineMs')
+  }
+
   const values = readYaml(filePath)
   // The deployment keeps PC warm across proof-mode changes. A disabled
   // compiler bundle intentionally has no PC projection, so install a minimal
@@ -741,6 +746,7 @@ function configureAbsentCoordinatorValues(
     '',
     '[verifier]',
     'enforcement = "observe"',
+    `observe_real_proof_deadline_ms = ${observeRealProofDeadlineMs}`,
     '',
   ].join('\n')
   values.proofCoordinator.config.existingConfigMap = ''
@@ -927,6 +933,7 @@ export function reconcileCompiledProofTopology(
       bundle.manifest.bundle_revision,
       topology.generation,
       l2GenesisJson,
+      topology.observeRealProofDeadlineMs,
     )
   } else {
     if (!materialsDir || !coordinatorSource) {

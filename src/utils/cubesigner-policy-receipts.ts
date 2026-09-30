@@ -55,6 +55,16 @@ function receipt(root: string, reference: PolicyReceiptReference, schema: string
   return {file, value}
 }
 
+function checkCurrentProtocol(root: string, refs: CubesignerPolicyReceiptInputs, release: ObjectValue): void {
+  const context = readFile(root, refs.protocolContext, 4 * 1024 * 1024)
+  const expected = digest(release.protocolContextSha256, 'policy protocol digest')
+  if (expected !== `sha256:${proofFileHash(context)}`) throw new Error('Policy release belongs to a different protocol context')
+  const current = path.join(root, '.data/protocol_context.json')
+  if (fs.existsSync(current) && `sha256:${proofFileHash(proofRegularFile(current))}` !== expected) {
+    throw new Error('Hosted CubeSigner policy belongs to a previous Bridge; rebuild and attach it for the current .data/protocol_context.json, then import updated receipts')
+  }
+}
+
 /** Import provider readback evidence only. This function never attaches a policy. */
 export function resolveCubesignerPolicy(input: {
   deploymentDir?: string
@@ -76,10 +86,24 @@ export function resolveCubesignerPolicy(input: {
   const refs = selection?.policyReceipts
   if (mode === 'transport_only') {
     if (input.network === 'mainnet') throw new Error('CubeSigner transport_only is forbidden on mainnet')
-    const warnings = ['CubeSigner transport_only is not production-ready and cannot satisfy proof enforcement']
+    const warnings = ['CubeSigner transport_only does not independently verify proofs in CubeSigner; WP proof enforcement is configured separately']
     if (refs?.attachment) {
       const attached = receipt(root, refs.attachment, 'dogeos/cubesigner-policy-attachment/v1').value
-      if (attached.policyIdentifier) warnings.push('The key has a hosted policy attached; transport_only does not bypass that policy')
+      if (attached.policyIdentifier) {
+        const release = receipt(root, refs.release, 'dogeos/cubesigner-policy-release/v1')
+        checkCurrentProtocol(root, refs, release.value)
+        if (input.keys.length !== 1) throw new Error('Policy attachment requires the exact singleton CubeSigner key and role')
+        const bindings = {...input.keys[0], environment: refs.environment, organization: refs.organization,
+          policyIdentifier: release.value.policyIdentifier, releaseSha256: `sha256:${proofFileHash(release.file)}`}
+        for (const [field, expected] of Object.entries(bindings)) {
+          if (attached[field] !== expected) throw new Error(`Policy attachment ${field} does not match selected release/key`)
+        }
+
+        if (attached.readback !== 'verified') throw new Error('Policy attachment lacks verified provider readback')
+        warnings.push('The key has a hosted policy attached; transport_only does not bypass that policy')
+      }
+    } else {
+      warnings.push('No hosted-policy attachment receipt supplied: current remote policy/Bridge namespace has not been checked. transport_only does not bypass an attached policy; verify provider readback after every Bridge replacement.')
     }
 
     return {mode, warnings}
@@ -103,8 +127,7 @@ export function resolveCubesignerPolicy(input: {
   const wasmFile = readFile(path.dirname(release.file), {path: string(wasm.path, 'Wasm path'), sha256: artifactDigest}, 128 * 1024 * 1024)
   if (wasm.sizeBytes !== fs.statSync(wasmFile).size) throw new Error('Policy Wasm size mismatch')
   if (!fs.readFileSync(wasmFile).subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))) throw new Error('Policy artifact is not Wasm')
-  const context = readFile(root, refs.protocolContext, 4 * 1024 * 1024)
-  if (digest(r.protocolContextSha256, 'policy protocol digest') !== `sha256:${proofFileHash(context)}`) throw new Error('Policy release belongs to a different protocol context')
+  checkCurrentProtocol(root, refs, r)
   const tests = object(r.tests, 'policy tests')
   if (tests.result !== 'passed') throw new Error('Policy release tests did not pass')
   readFile(path.dirname(release.file), {path: string(tests.path, 'policy tests path'), sha256: digest(tests.sha256, 'policy tests digest')}, 16 * 1024 * 1024)

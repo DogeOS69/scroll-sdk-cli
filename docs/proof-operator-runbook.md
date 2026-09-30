@@ -6,6 +6,11 @@ services. It follows dogeos-core PR #937's two-switch model, updated for PR #113
 Withdrawal Processor, Proof Coordinator, Worker, submitter, and signer files are
 compiler outputs; do not edit them by hand.
 
+For current configuration checks before deployment, including new-instance
+S3/IAM grants and signer Docker routing, follow
+[deployment preflight](deployment-preflight.md). These checks do not replace
+proof acceptance or perform database recovery.
+
 ## 1. The three operator fields
 
 The normal source of truth is `.data/doge-config.toml`:

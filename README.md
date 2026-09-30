@@ -45,6 +45,13 @@ bin/run.js --help
 
 ## Documentation
 
+- [Deployment signing identities](docs/keystore.md) — unified Reth and service
+  key preparation, KMS reuse, and archive configuration.
+
+- [Deployment preparation and checks](docs/deployment-preflight.md) —
+  current configuration validation, optional `cubesigner checkpoint` backup/recovery, current-prefix S3/IAM
+  grants, signer Docker network checks and Kubernetes dstack availability.
+
 - [dstack controller operator guide](docs/dstack-controller.md) — Vast.ai/GCP
   credential import, PostgreSQL/SQLite configuration, generated production values,
   Secret upload scope, and a temporary-directory configuration-only walkthrough
@@ -139,14 +146,11 @@ USAGE
 * [`scrollsdk setup domains`](#scrollsdk-setup-domains)
 * [`scrollsdk setup eth-da-submitter`](#scrollsdk-setup-eth-da-submitter)
 * [`scrollsdk setup export-signer-policy`](#scrollsdk-setup-export-signer-policy)
-* [`scrollsdk setup fee-oracle`](#scrollsdk-setup-fee-oracle)
 * [`scrollsdk setup gen-keystore`](#scrollsdk-setup-gen-keystore)
 * [`scrollsdk setup gen-l2-artifacts`](#scrollsdk-setup-gen-l2-artifacts)
 * [`scrollsdk setup gen-rpc-package`](#scrollsdk-setup-gen-rpc-package)
 * [`scrollsdk setup gen-secrets`](#scrollsdk-setup-gen-secrets)
 * [`scrollsdk setup generate-from-spec`](#scrollsdk-setup-generate-from-spec)
-* [`scrollsdk setup l2-bootnode-reth`](#scrollsdk-setup-l2-bootnode-reth)
-* [`scrollsdk setup l2-sequencer-reth`](#scrollsdk-setup-l2-sequencer-reth)
 * [`scrollsdk setup prep-charts`](#scrollsdk-setup-prep-charts)
 * [`scrollsdk setup proof-aws-init`](#scrollsdk-setup-proof-aws-init)
 * [`scrollsdk setup proof-bundle-publish`](#scrollsdk-setup-proof-bundle-publish)
@@ -1173,53 +1177,51 @@ _See code: [src/commands/setup/domains.ts](https://github.com/dogeos69/scroll-sd
 
 ## `scrollsdk setup eth-da-submitter`
 
-Configure the eth-da-submitter L1_COMMIT_SENDER signer
+```text
+Configure the eth-da-submitter S3 archive and optional writer IAM permissions
 
-```
 USAGE
-  $ scrollsdk setup eth-da-submitter [--archive-bucket <value>] [--archive-key-prefix <value>] [--archive-public-base-url
-    <value>] [--archive-region <value>] [--aws-profile <value>] [--aws-region <value>] [--create-archive-bucket]
-    [--disable-archive] [--doge-config <value>] [--eks-cluster <value>] [--json] [--kms-key-id <value>] [--namespace
-    <value>] [--network-alias <value>] [-N] [--role-arn <value>] [--service-account <value>] [--signer-backend
-    local|aws-kms]
+  $ scrollsdk setup eth-da-submitter [--archive-bucket <value>]
+    [--archive-key-prefix <value>] [--archive-public-base-url <value>]
+    [--archive-region <value>] [--aws-profile <value>] [--aws-region <value>]
+    [--create-archive-bucket] [--disable-archive] [--doge-config <value>]
+    [--json] [-N] [--role-arn <value>]
 
 FLAGS
-  -N, --non-interactive                  Run without prompts. Uses existing config or provided flags.
-      --archive-bucket=<value>           S3 bucket whose read/write permissions should be granted to the
-                                         eth-da-submitter KMS IAM role.
-      --archive-key-prefix=<value>       Object key prefix under the archive bucket.
-      --archive-public-base-url=<value>  Public HTTPS base URL used by blob consumers to read archived Ethereum DA
-                                         blobs.
-      --archive-region=<value>           Region that owns the archive bucket (defaults to --aws-region).
-      --aws-profile=<value>              AWS CLI profile to use for KMS signer provisioning.
-      --aws-region=<value>               AWS region for the EKS cluster and KMS key.
-      --[no-]create-archive-bucket       Create the archive bucket if --archive-bucket is set and the bucket does not
-                                         exist.
-      --disable-archive                  Skip S3 blob archive setup for the eth-da-submitter KMS signer.
-      --doge-config=<value>              Path to Dogecoin config file (defaults to .data/doge-config.toml)
-      --eks-cluster=<value>              EKS cluster name or ARN used for IRSA trust binding.
-      --json                             Output in JSON format (stdout for data, stderr for logs)
-      --kms-key-id=<value>               Existing KMS key id, ARN, or alias for L1_COMMIT_SENDER / eth-da-submitter.
-      --namespace=<value>                [default: default] Kubernetes namespace for the KMS signer service account.
-      --network-alias=<value>            Resource alias used to derive deterministic KMS aliases and IAM role names.
-      --role-arn=<value>                 Existing IAM role ARN to annotate on the eth-da-submitter service account.
-      --service-account=<value>          [default: eth-da-submitter] Kubernetes service account used by
-                                         eth-da-submitter.
-      --signer-backend=<option>          Signer backend for L1_COMMIT_SENDER / eth-da-submitter.
-                                         <options: local|aws-kms>
+  -N, --non-interactive
+      --archive-bucket=<value>           S3 blob archive bucket.
+      --archive-key-prefix=<value>       S3 object key prefix.
+      --archive-public-base-url=<value>  Public HTTPS base URL used by blob
+                                         consumers.
+      --archive-region=<value>           Region owning the archive bucket.
+      --aws-profile=<value>              AWS profile for archive resource
+                                         operations.
+      --aws-region=<value>               Fallback archive region; existing
+                                         archive region takes precedence.
+      --[no-]create-archive-bucket       Create/reuse the bucket. Defaults to
+                                         enabled for a configured AWS KMS
+                                         submitter, disabled for a local signer.
+      --disable-archive                  Disable archive configuration without
+                                         deleting buckets or IAM policies.
+      --doge-config=<value>              Dogecoin configuration file.
+  --json
+      --role-arn=<value>                 Existing archive writer IAM role.
+                                         Defaults to the submitter signer
+                                         service-account role.
 
 DESCRIPTION
-  Configure the eth-da-submitter L1_COMMIT_SENDER signer
+  Configure the eth-da-submitter S3 archive and optional writer IAM permissions
 
 EXAMPLES
-  $ scrollsdk setup eth-da-submitter
+  $ scrollsdk setup eth-da-submitter --archive-bucket dogeos-da --archive-region us-east-1 --archive-key-prefix devnet -N
 
-  $ scrollsdk setup eth-da-submitter --signer-backend aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet
+  $ scrollsdk setup eth-da-submitter --no-create-archive-bucket --role-arn arn:aws:iam::123456789012:role/archive-writer -N
 
-  $ scrollsdk setup eth-da-submitter --non-interactive --json --signer-backend local
+  $ scrollsdk setup eth-da-submitter --disable-archive -N
 ```
 
-_See code: [src/commands/setup/eth-da-submitter.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/eth-da-submitter.ts)_
+See [deployment signing identities](docs/keystore.md) for scope, repeat execution,
+and the separate archive workflow.
 
 ## `scrollsdk setup export-signer-policy`
 
@@ -1256,84 +1258,107 @@ EXAMPLES
 
 _See code: [src/commands/setup/export-signer-policy.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/export-signer-policy.ts)_
 
-## `scrollsdk setup fee-oracle`
-
-Configure the fee-oracle L2_GAS_ORACLE_SENDER signer
-
-```
-USAGE
-  $ scrollsdk setup fee-oracle [--aws-profile <value>] [--aws-region <value>] [--doge-config <value>] [--eks-cluster
-    <value>] [--json] [--kms-key-id <value>] [--namespace <value>] [--network-alias <value>] [-N] [--role-arn <value>]
-    [--service-account <value>] [--signer-backend local|aws-kms]
-
-FLAGS
-  -N, --non-interactive          Run without prompts. Uses existing config or provided flags.
-      --aws-profile=<value>      AWS CLI profile to use for KMS signer provisioning.
-      --aws-region=<value>       AWS region for the EKS cluster and KMS key.
-      --doge-config=<value>      Path to Dogecoin config file (defaults to .data/doge-config.toml)
-      --eks-cluster=<value>      EKS cluster name or ARN used for IRSA trust binding.
-      --json                     Output in JSON format (stdout for data, stderr for logs)
-      --kms-key-id=<value>       Existing KMS key id, ARN, or alias for L2_GAS_ORACLE_SENDER / fee-oracle.
-      --namespace=<value>        [default: default] Kubernetes namespace for the KMS signer service account.
-      --network-alias=<value>    Resource alias used to derive deterministic KMS aliases and IAM role names.
-      --role-arn=<value>         Existing IAM role ARN to annotate on the fee-oracle service account.
-      --service-account=<value>  [default: fee-oracle] Kubernetes service account used by fee-oracle.
-      --signer-backend=<option>  Signer backend for L2_GAS_ORACLE_SENDER / fee-oracle.
-                                 <options: local|aws-kms>
-
-DESCRIPTION
-  Configure the fee-oracle L2_GAS_ORACLE_SENDER signer
-
-EXAMPLES
-  $ scrollsdk setup fee-oracle
-
-  $ scrollsdk setup fee-oracle --signer-backend aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet
-
-  $ scrollsdk setup fee-oracle --non-interactive --json --signer-backend local
-```
-
-_See code: [src/commands/setup/fee-oracle.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/fee-oracle.ts)_
-
 ## `scrollsdk setup gen-keystore`
 
-Generate L2 node keys and deployment account keypairs
+```text
+Prepare Reth node and service signing identities using local keys or AWS KMS
 
-```
 USAGE
-  $ scrollsdk setup gen-keystore [--accounts] [--bootnode-count <value>] [--from-spec <value>] [--json] [-N]
-    [--regenerate-bootnodes] [--regenerate-sequencers] [--sequencer-count <value>] [--sequencer-password <value>]
+  $ scrollsdk setup gen-keystore [--aws-profile <value>] [--aws-region <value>]
+    [--doge-config <value>] [--eks-cluster <value>] [-i <value>] [--json]
+    [--kms-key-id <value>] [--namespace <value>] [--network-alias <value>]
+    [--nodekey <value>] [--nodekey-secret-mode external-secret|plain] [-N]
+    [--role-arn <value>] [--service-account <value>] [--signer-mode
+    aws-kms|external-secret|plain] [--signer-private-key <value>] [--accounts]
+    [--activity-helper] [--bootnode-count <value>] [--from-spec <value>]
+    [--secret-mode external-secret|plain] [--sequencer-count <value>] [--service
+    sequencer-reth|bootnode-reth|fee-oracle|eth-da-submitter] [--signer-backend
+    local|aws-kms]
 
 FLAGS
-  -N, --non-interactive             Run without prompts. Uses existing keys or generates new ones based on flags.
-      --[no-]accounts               Generate account key pairs
-      --bootnode-count=<value>      [default: 2] Number of bootnodes. In non-interactive mode, generates if not enough
-                                    exist.
-      --from-spec=<value>           Path to DeploymentSpec YAML. Uses infrastructure.sequencerCount and bootnodeCount as
-                                    count defaults.
-      --json                        Output in JSON format (stdout for data, stderr for logs)
-      --regenerate-bootnodes        Force regeneration of all bootnode keys (non-interactive mode)
-      --regenerate-sequencers       Force regeneration of all sequencer keys (non-interactive mode)
-      --sequencer-count=<value>     [default: 2] Number of sequencers (including primary). In non-interactive mode,
-                                    generates if not enough exist.
-      --sequencer-password=<value>  Password for sequencer keystores (or use $ENV:VAR_NAME pattern). Defaults to a
-                                    generated random password for new sequencers in non-interactive mode.
+  -N, --non-interactive               Run without prompts. Generates missing
+                                      local keys.
+  -i, --index=<value>                 One sequencer index; requires --service
+                                      sequencer-reth.
+      --[no-]accounts                 Also prepare/reuse the deployer account in
+                                      config.toml and validate an existing
+                                      OWNER_ADDR.
+      --activity-helper               Also prepare the optional testnet activity
+                                      account in config.toml.
+      --aws-profile=<value>           AWS CLI profile to use for KMS signer
+                                      provisioning.
+      --aws-region=<value>            AWS region for the EKS cluster and KMS
+                                      key.
+      --bootnode-count=<value>        Prepare Reth bootnode indices 0 through
+                                      count-1; never deletes existing
+                                      identities.
+      --doge-config=<value>           Path to Dogecoin config file (defaults to
+                                      .data/doge-config.toml)
+      --eks-cluster=<value>           EKS cluster name or ARN used for IRSA
+                                      trust binding.
+      --from-spec=<value>             Use DeploymentSpec node counts after
+                                      generating doge-config from that spec.
+      --json                          Output in JSON format (stdout for data,
+                                      stderr for logs)
+      --kms-key-id=<value>            Existing KMS key id, ARN, or alias for the
+                                      reth sequencer signer.
+      --namespace=<value>             [default: default] Kubernetes namespace
+                                      for the KMS signer service account.
+      --network-alias=<value>         Resource alias used to derive
+                                      deterministic KMS aliases and IAM role
+                                      names.
+      --nodekey=<value>               Existing reth P2P nodekey private key as
+                                      64 hex chars, with or without 0x.
+      --nodekey-secret-mode=<option>  How P2P nodekey material is referenced
+                                      from values YAML. AWS KMS signer mode
+                                      only; local signer mode uses
+                                      --signer-mode.
+                                      <options: external-secret|plain>
+      --role-arn=<value>              Existing IAM role ARN to annotate on the
+                                      sequencer service account.
+      --secret-mode=<option>          Secret reference mode for the selected
+                                      Reth node.
+                                      <options: external-secret|plain>
+      --sequencer-count=<value>       Prepare Reth sequencer indices 0 through
+                                      count-1; never deletes existing
+                                      identities.
+      --service=<option>              Prepare only this service. Omit to select
+                                      services interactively; -N/--json
+                                      processes declared identities.
+                                      <options: sequencer-reth|bootnode-reth|fee
+                                      -oracle|eth-da-submitter>
+      --service-account=<value>       Kubernetes service account used by this
+                                      sequencer.
+      --signer-backend=<option>       Backend for the selected signing identity;
+                                      otherwise reuse its configured backend.
+                                      <options: local|aws-kms>
+      --signer-mode=<option>          How the reth sequencer block signer is
+                                      configured.
+                                      <options: aws-kms|external-secret|plain>
+      --signer-private-key=<value>    Existing local sequencer signer private
+                                      key, with or without 0x.
 
 DESCRIPTION
-  Generate L2 node keys and deployment account keypairs
+  Prepare Reth node and service signing identities using local keys or AWS KMS
 
 EXAMPLES
   $ scrollsdk setup gen-keystore
 
-  $ scrollsdk setup gen-keystore --no-accounts
+  $ scrollsdk setup gen-keystore -N
 
-  $ scrollsdk setup gen-keystore --non-interactive
+  $ scrollsdk setup gen-keystore --service sequencer-reth --index 0 --signer-backend aws-kms --aws-region us-east-1 --eks-cluster dogeos-devnet --network-alias devnet -N
 
-  $ scrollsdk setup gen-keystore --non-interactive --json --sequencer-count 2 --bootnode-count 2
+  $ scrollsdk setup gen-keystore --service bootnode-reth --bootnode-count 2 -N
 
-  $ scrollsdk setup gen-keystore --non-interactive --sequencer-count 2 --bootnode-count 2
+  $ scrollsdk setup gen-keystore --service fee-oracle --signer-backend local -N
+
+  $ scrollsdk setup gen-keystore --service eth-da-submitter -N
+
+  $ scrollsdk setup gen-keystore --accounts -N
 ```
 
-_See code: [src/commands/setup/gen-keystore.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-keystore.ts)_
+See [deployment signing identities](docs/keystore.md) for scope, repeat execution,
+and the separate archive workflow.
 
 ## `scrollsdk setup gen-l2-artifacts`
 
@@ -1585,83 +1610,6 @@ EXAMPLES
 ```
 
 _See code: [src/commands/setup/generate-from-spec.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/generate-from-spec.ts)_
-
-## `scrollsdk setup l2-bootnode-reth`
-
-Configure rollup-node reth bootnode P2P nodekeys
-
-```
-USAGE
-  $ scrollsdk setup l2-bootnode-reth [-c <value>] [--doge-config <value>] [--json] [--nodekey <value>...] [-N]
-    [--secret-mode external-secret|plain]
-
-FLAGS
-  -N, --non-interactive       Run without prompts. Generates missing nodekeys.
-  -c, --count=<value>         Number of reth bootnode instances to configure.
-      --doge-config=<value>   Path to Dogecoin config file (defaults to .data/doge-config.toml)
-      --json                  Output in JSON format (stdout for data, stderr for logs)
-      --nodekey=<value>...    Existing reth bootnode private key as 64 hex chars, with or without 0x. Repeat for
-                              multiple instances.
-      --secret-mode=<option>  How nodekey material is referenced from values YAML.
-                              <options: external-secret|plain>
-
-DESCRIPTION
-  Configure rollup-node reth bootnode P2P nodekeys
-
-EXAMPLES
-  $ scrollsdk setup l2-bootnode-reth --count 2
-
-  $ scrollsdk setup l2-bootnode-reth --count 2 --secret-mode external-secret --non-interactive
-
-  $ scrollsdk setup l2-bootnode-reth --count 1 --nodekey 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-```
-
-_See code: [src/commands/setup/l2-bootnode-reth.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/l2-bootnode-reth.ts)_
-
-## `scrollsdk setup l2-sequencer-reth`
-
-Configure a rollup-node reth sequencer signer key and P2P nodekey
-
-```
-USAGE
-  $ scrollsdk setup l2-sequencer-reth [--aws-profile <value>] [--aws-region <value>] [--doge-config <value>] [--eks-cluster
-    <value>] [-i <value>] [--json] [--kms-key-id <value>] [--namespace <value>] [--network-alias <value>] [--nodekey
-    <value>] [--nodekey-secret-mode external-secret|plain] [-N] [--role-arn <value>] [--service-account <value>]
-    [--signer-mode aws-kms|external-secret|plain] [--signer-private-key <value>]
-
-FLAGS
-  -N, --non-interactive               Run without prompts. Generates missing local keys.
-  -i, --index=<value>                 Sequencer instance index to configure.
-      --aws-profile=<value>           AWS CLI profile to use for KMS signer provisioning.
-      --aws-region=<value>            AWS region for the EKS cluster and KMS key.
-      --doge-config=<value>           Path to Dogecoin config file (defaults to .data/doge-config.toml)
-      --eks-cluster=<value>           EKS cluster name or ARN used for IRSA trust binding.
-      --json                          Output in JSON format (stdout for data, stderr for logs)
-      --kms-key-id=<value>            Existing KMS key id, ARN, or alias for the reth sequencer signer.
-      --namespace=<value>             [default: default] Kubernetes namespace for the KMS signer service account.
-      --network-alias=<value>         Resource alias used to derive deterministic KMS aliases and IAM role names.
-      --nodekey=<value>               Existing reth P2P nodekey private key as 64 hex chars, with or without 0x.
-      --nodekey-secret-mode=<option>  How P2P nodekey material is referenced from values YAML. AWS KMS signer mode only;
-                                      local signer mode uses --signer-mode.
-                                      <options: external-secret|plain>
-      --role-arn=<value>              Existing IAM role ARN to annotate on the sequencer service account.
-      --service-account=<value>       Kubernetes service account used by this sequencer.
-      --signer-mode=<option>          How the reth sequencer block signer is configured.
-                                      <options: aws-kms|external-secret|plain>
-      --signer-private-key=<value>    Existing local sequencer signer private key, with or without 0x.
-
-DESCRIPTION
-  Configure a rollup-node reth sequencer signer key and P2P nodekey
-
-EXAMPLES
-  $ scrollsdk setup l2-sequencer-reth --index 2
-
-  $ scrollsdk setup l2-sequencer-reth --index 2 --signer-mode external-secret --non-interactive
-
-  $ scrollsdk setup l2-sequencer-reth --index 2 --signer-mode aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet
-```
-
-_See code: [src/commands/setup/l2-sequencer-reth.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/l2-sequencer-reth.ts)_
 
 ## `scrollsdk setup prep-charts`
 

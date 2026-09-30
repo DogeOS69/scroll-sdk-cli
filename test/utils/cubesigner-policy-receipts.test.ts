@@ -68,4 +68,28 @@ describe('CubeSigner policy receipt import', () => {
     expect(resolveCubesignerPolicy({...input, selection}).warnings.join(' ')).to.include('does not bypass')
     expect(() => resolveCubesignerPolicy({...input, network: 'mainnet', selection})).to.throw('forbidden on mainnet')
   })
+
+  it('rejects a previous Bridge even when old receipts are internally consistent', () => {
+    const input = fixture()
+    fs.mkdirSync(path.join(root, '.data'))
+    fs.writeFileSync(path.join(root, '.data/protocol_context.json'), JSON.stringify({genesis: {newBridge: true}}))
+    for (const mode of ['production_verifier_key_policy', 'transport_only'] as const) {
+      expect(() => resolveCubesignerPolicy({...input, selection: {...input.selection, mode}})).to.throw('previous Bridge')
+    }
+
+    fs.copyFileSync(path.join(root, 'context.json'), path.join(root, '.data/protocol_context.json'))
+    expect(resolveCubesignerPolicy({...input, selection: {...input.selection, mode: 'transport_only'}}).mode).to.equal('transport_only')
+  })
+
+  it('validates transport-only attachment identity without requiring C2F egress', () => {
+    const input = fixture()
+    const selection = {...input.selection, mode: 'transport_only' as const}
+    expect(() => resolveCubesignerPolicy({...input, keys: [{...keys[0], keyId: 'other'}], selection})).to.throw('keyId')
+    const file = path.join(root, 'attachment.json')
+    const attachment = JSON.parse(fs.readFileSync(file, 'utf8'))
+    delete attachment.c2fEgressAuthority
+    fs.writeFileSync(file, JSON.stringify(attachment))
+    selection.policyReceipts.attachment.sha256 = `sha256:${proofFileHash(file)}`
+    expect(resolveCubesignerPolicy({...input, selection}).mode).to.equal('transport_only')
+  })
 })

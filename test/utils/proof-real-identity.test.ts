@@ -5,8 +5,11 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
+import type {DogeConfig} from '../../src/types/doge-config.js'
 import type {ProofMaterialsV1} from '../../src/types/proof-materials.js'
+import type {ProofDeploymentContract} from '../../src/utils/proof-deployment-contract.js'
 
+import {proofEnforcementReadiness} from '../../src/utils/proof-enforcement-readiness.js'
 import {prepareProofMaterials, readProofMaterials} from '../../src/utils/proof-materials.js'
 import {renderProofTopologySource} from '../../src/utils/proof-topology-compiler.js'
 import {buildProofTopology} from '../../src/utils/proof-topology-init.js'
@@ -136,6 +139,28 @@ describe('real bake worker identity import', () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'scrollsdk-real-identity-'))
   })
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
+
+  it('keeps enforcement evidence checks independent of testnet CubeSigner transport mode', () => {
+    const input = fixture(root)
+    const prepared = prepareProofMaterials(input.options)
+    const contract = {
+      enforcement: 'enforce', generation: 'real', inputs: {materials: {path: prepared.receiptPath}, protocolContext: {sha256: hash('{}')}}, mode: 'active',
+      worker: {enabled: true},
+    } as ProofDeploymentContract
+    const config = {cubesigner: {mode: 'transport_only', roles: []}, network: 'testnet'} as unknown as DogeConfig
+    const report = proofEnforcementReadiness(root, contract, config)
+    expect(report.blockers.filter(item => item.startsWith('CubeSigner:'))).to.deep.equal([])
+    expect(report.ready).to.equal(false)
+    expect(report.blockers).to.include('External Attestation Signer policy-validation receipts are missing')
+    expect(report.blockers).to.include('Program-publication receipt is not bound to the deployment contract')
+    config.network = 'mainnet'
+    expect(proofEnforcementReadiness(root, contract, config).blockers.join(' ')).to.include('forbidden on mainnet')
+    config.network = 'testnet'
+    config.cubesigner!.mode = 'production_verifier_key_policy'
+    expect(proofEnforcementReadiness(root, contract, config).blockers.join(' ')).to.include('requires release and attachment receipts')
+    delete config.cubesigner!.mode
+    expect(proofEnforcementReadiness(root, contract, config).blockers.join(' ')).to.include('explicit CubeSigner policy mode')
+  })
 
   it('preserves the real bundle through receipt reload and selects it as the compiler input', () => {
     const input = fixture(root)

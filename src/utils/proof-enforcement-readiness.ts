@@ -52,14 +52,16 @@ export function proofEnforcementReadiness(root: string, contract: ProofDeploymen
 
   if (!contract.worker.enabled || !materials.images.productionWorker) blockers.push('Production Worker image and Worker contract are required')
   try {
-    if (config.cubesigner?.mode !== 'production_verifier_key_policy') throw new Error('Enforcement requires explicit CubeSigner production_verifier_key_policy')
+    if (!config.cubesigner?.mode) throw new Error('Select an explicit CubeSigner policy mode')
     resolveCubesignerPolicy({deploymentDir: root, keys: (config.cubesigner.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: config.network, selection: config.cubesigner})
-    const policyRelease = pinnedJson(root, config.cubesigner.policyReceipts!.release)
-    const provenance = policyRelease.verifierProvenance as Record<string, unknown>
-    if (policyRelease.coreRevision !== materials.software.sourceRevisions?.dogeosCore
-      || policyRelease.protocolContextSha256 !== `sha256:${bindings.protocolContext.sha256}`
-      || provenance.bridgeProgramSha256 !== `sha256:${materials.bridge?.artifacts.appExe.sha256}`
-      || provenance.aggregateVerifyingKeySha256 !== `sha256:${materials.software.artifacts?.aggregateVerifyingKey.sha256}`) throw new Error('CubeSigner policy does not bind selected proof release/program/VK/context')
+    if (config.cubesigner.mode === 'production_verifier_key_policy') {
+      const policyRelease = pinnedJson(root, config.cubesigner.policyReceipts!.release)
+      const provenance = policyRelease.verifierProvenance as Record<string, unknown>
+      if (policyRelease.coreRevision !== materials.software.sourceRevisions?.dogeosCore
+        || policyRelease.protocolContextSha256 !== `sha256:${bindings.protocolContext.sha256}`
+        || provenance.bridgeProgramSha256 !== `sha256:${materials.bridge?.artifacts.appExe.sha256}`
+        || provenance.aggregateVerifyingKeySha256 !== `sha256:${materials.software.artifacts?.aggregateVerifyingKey.sha256}`) throw new Error('CubeSigner policy does not bind selected proof release/program/VK/context')
+    }
   } catch (error) { blockers.push(`CubeSigner: ${String(error)}`) }
 
   const signers = config.attestationSigner?.external ?? []

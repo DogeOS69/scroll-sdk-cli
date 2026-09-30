@@ -88,6 +88,7 @@ export const PUBLIC_ARTIFACT_OBJECT_PATTERNS = [
   'public-outputs/*',
   'proofs/*',
   'proof-programs/*',
+  'signer-policy-evidence/*',
 ] as const
 
 export function publicArtifactObjectResources(bucket: string, keyPrefix: string): string[] {
@@ -629,6 +630,7 @@ export class ProofAwsProvisioner {
       this.jsonCtx.info(
         `proof-aws: preserved operator-managed bucket policy and Public Access Block settings for ${bucket} (${publicReadMode})`,
       )
+      this.jsonCtx.addWarning(`New artifact prefixes do not inherit old-instance grants. Run setup artifact-access ${publicReadMode === 'existing-public-s3' ? '--public-read ' : ''}--writer-role-arn <archive-writer-role> to plan/check this instance's permissions; use --apply only after review. Gateway read permissions remain operator-managed.`)
     }
 
     const artifactReadTransport: ProofArtifactReadTransportResult = {

@@ -93,13 +93,7 @@ function normalizeArtifactReadTransport(
   }
 
   const value = raw as Partial<ProofArtifactReadTransportResult>
-  const rawPublicReadMode = value.publicReadMode as unknown
-  // v4 receipts written before `existing-public-s3` was named explicitly used
-  // `shared-s3` for the same operator-managed public S3 contract. Accept that
-  // one exact historical shape so proof-aws-init can reconcile and rewrite it;
-  // do not broaden this into a generic unknown-mode fallback.
-  const legacySharedS3 = rawPublicReadMode === 'shared-s3'
-  const publicReadMode = legacySharedS3 ? 'existing-public-s3' : rawPublicReadMode
+  const {publicReadMode} = value
   if (
     publicReadMode !== 'direct-s3'
     && publicReadMode !== 'existing-public-s3'
@@ -113,8 +107,7 @@ function normalizeArtifactReadTransport(
   const expectedStatus = publicReadMode === 'direct-s3'
     ? 'configured-unverified'
     : 'operator-managed-unverified'
-  const legacyStatus = legacySharedS3 && value.publicStatus === 'configured-unverified'
-  if (value.publicStatus !== expectedStatus && !legacyStatus) {
+  if (value.publicStatus !== expectedStatus) {
     throw new Error(`${label}.publicStatus must be ${expectedStatus} for ${publicReadMode}`)
   }
 
