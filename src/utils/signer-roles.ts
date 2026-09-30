@@ -102,7 +102,7 @@ export function getRequiredManagedSignerConfig(config: any, key: ManagedSignerKe
   if (!signer?.backend) {
     const role = MANAGED_SIGNER_ROLES[key]
     throw new Error(
-      `Missing [signers.${key}]. Run setup ${role.service} to create ${role.role} signer configuration.`
+      `Missing [signers.${key}]. Run setup gen-keystore --service ${role.service} to create ${role.role} signer configuration.`
     )
   }
 
@@ -139,7 +139,7 @@ export function getRequiredManagedSignerAddress(config: any, key: ManagedSignerK
   if (accountAddress.toLowerCase() !== signerAddress.toLowerCase()) {
     throw new Error(
       `${accountLabel} (${accountAddress}) does not match ${signerLabel} (${signerAddress}). `
-      + `Run setup ${role.service} to reconcile the ${role.role} signer before prep-charts.`,
+      + `Run setup gen-keystore --service ${role.service} to reconcile the ${role.role} signer before prep-charts.`,
     )
   }
 

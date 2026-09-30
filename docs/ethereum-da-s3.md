@@ -8,8 +8,10 @@ blob retention expires.
 The canonical configuration lives in
 `.data/doge-config.toml` under `[ethereumDa.blobArchive.s3]`. Configure it
 directly when the bucket and IAM resources are managed separately, or use
-`scrollsdk setup eth-da-submitter` to record the archive configuration while
-configuring the submitter signer.
+`scrollsdk setup eth-da-submitter` to record the archive configuration and
+configure bucket/writer access. Prepare the signer separately with
+`scrollsdk setup gen-keystore --service eth-da-submitter`. Archive setup does
+not create signing keys or modify the signer identity.
 
 When the submitter uses an AWS KMS signer,
 `scrollsdk setup eth-da-submitter` can create a missing AWS S3 bucket. Bucket
@@ -65,7 +67,7 @@ Withdrawal Processor therefore uses its `ethereum_da.inbox_worker.expected_batch
 allowlist as an ingest-time availability guard.
 
 Operators do not configure that allowlist separately. `setup prep-charts`
-resolves the `L1_COMMIT_SENDER` selected by `setup eth-da-submitter` and writes
+resolves the `L1_COMMIT_SENDER` selected by `setup gen-keystore --service eth-da-submitter` and writes
 the same address to both:
 
 ```text
@@ -79,8 +81,9 @@ eth-da-submitter KMS/local signer authority
 For an AWS KMS signer, the command also requires
 `accounts.L1_COMMIT_SENDER_ADDR` and
 `signers.l1CommitSender.expectedAddress` to match case-insensitively. A drift
-fails before values are installed. To rotate the submitter signer, reconcile
-it with `setup eth-da-submitter` and regenerate the values; do not hand-edit
+fails before values are installed. After an explicitly planned signer migration, validate the updated identity
+with `setup gen-keystore --service eth-da-submitter` and regenerate the values.
+The keystore command refuses implicit identity replacement; do not hand-edit
 the WP allowlist.
 
 This allowlist is a local, non-normative filter rather than protocol-level
@@ -105,14 +108,16 @@ For an existing bucket whose public read path and IAM policy are managed by the
 operator:
 
 ```bash
-scrollsdk setup eth-da-submitter \
+scrollsdk setup gen-keystore --service eth-da-submitter \
   --non-interactive \
   --json \
   --signer-backend aws-kms \
   --aws-region us-east-1 \
   --eks-cluster dogeos-devnet-cluster \
   --namespace default \
-  --network-alias devnet \
+  --network-alias devnet
+
+scrollsdk setup eth-da-submitter --non-interactive --json \
   --archive-bucket dogeos-eth-da-archive-devnet \
   --archive-region us-west-2 \
   --archive-key-prefix devnet/eth-da/blobs/v1 \
@@ -120,7 +125,7 @@ scrollsdk setup eth-da-submitter \
   --no-create-archive-bucket
 ```
 
-`--aws-region` selects the KMS/EKS/IRSA and Secrets Manager region.
+`--aws-region` on `gen-keystore` selects the KMS/EKS/IRSA region.
 `--archive-region` selects the S3 bucket region; the two regions may differ.
 An S3 Gateway endpoint is regional, so proof AWS setup does not associate an
 EKS-region gateway endpoint when the shared artifact bucket is cross-region.
@@ -255,7 +260,7 @@ The resolver requests
 | Field | Required | Used by | Description |
 |---|---|---|---|
 | `enabled` | yes | submitter, l1-interface, withdrawal-processor, Reth | Enables S3 upload and readback when `true`. |
-| `bucket` | yes when enabled | eth-da-submitter | Bucket name. The AWS KMS signer setup path can create it unless `--no-create-archive-bucket` is set. |
+| `bucket` | yes when enabled | eth-da-submitter | Bucket name. Archive setup can create it; creation defaults on for a configured KMS submitter and can be disabled with `--no-create-archive-bucket`. |
 | `region` | yes when enabled | eth-da-submitter | Bucket region. Must match the real bucket region. |
 | `publicBaseUrl` | yes when enabled | l1-interface, withdrawal-processor, Reth | HTTP base URL used for `GET {base}/{keyPrefix}/{0x-versioned-hash}`. |
 | `keyPrefix` | no | submitter and readers | Shared object-key prefix appended between the base URL/bucket and the versioned hash. |

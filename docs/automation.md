@@ -77,7 +77,9 @@ does not expand `$ENV` itself:
 scrollsdk setup gen-keystore \
   --non-interactive \
   --json \
-  --sequencer-password '$ENV:SEQUENCER_KEYSTORE_PASSWORD'
+  --service sequencer-reth \
+  --index 0 \
+  --signer-private-key '$ENV:SEQUENCER_PRIVATE_KEY'
 ```
 
 An unset or empty referenced variable is treated as unavailable. Commands must

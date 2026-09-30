@@ -1559,12 +1559,12 @@ export default class SetupPrepCharts extends Command {
   private buildBootnodeRethResolvedConfig(index: number): ResolvedBootnodeRethConfig {
     const instance = this.dogeConfig.bootnodeReth?.instances?.find(item => item.index === index)
     if (!instance) {
-      this.error(`bootnodeReth.instances does not contain index ${index}. Run scrollsdk setup l2-bootnode-reth first.`)
+      this.error(`bootnodeReth.instances does not contain index ${index}. Run scrollsdk setup gen-keystore --service bootnode-reth first.`)
     }
 
     const nodekey = instance.nodekey?.privateKey
     if (!nodekey) {
-      this.error(`bootnodeReth.instances[index=${index}].nodekey.privateKey is missing. Run scrollsdk setup l2-bootnode-reth first.`)
+      this.error(`bootnodeReth.instances[index=${index}].nodekey.privateKey is missing. Run scrollsdk setup gen-keystore --service bootnode-reth first.`)
     }
 
     return {
@@ -1593,17 +1593,17 @@ export default class SetupPrepCharts extends Command {
   private buildSequencerRethResolvedConfig(index: number): ResolvedSequencerRethConfig {
     const instance = this.dogeConfig.sequencerReth?.instances?.find(item => item.index === index)
     if (!instance) {
-      this.error(`sequencerReth.instances does not contain index ${index}. Run scrollsdk setup l2-sequencer-reth --index ${index} first.`)
+      this.error(`sequencerReth.instances does not contain index ${index}. Run scrollsdk setup gen-keystore --service sequencer-reth --index ${index} first.`)
     }
 
     const nodekey = instance.nodekey?.privateKey
     if (!nodekey) {
-      this.error(`sequencerReth.instances[index=${index}].nodekey.privateKey is missing. Run scrollsdk setup l2-sequencer-reth --index ${index} first.`)
+      this.error(`sequencerReth.instances[index=${index}].nodekey.privateKey is missing. Run scrollsdk setup gen-keystore --service sequencer-reth --index ${index} first.`)
     }
 
     const {signer} = instance
     if (!signer?.mode) {
-      this.error(`sequencerReth.instances[index=${index}].signer.mode is missing. Run scrollsdk setup l2-sequencer-reth --index ${index} first.`)
+      this.error(`sequencerReth.instances[index=${index}].signer.mode is missing. Run scrollsdk setup gen-keystore --service sequencer-reth --index ${index} first.`)
     }
 
     const signerMode = signerModeToConfig(normalizeSignerMode(signer.mode))
@@ -3495,7 +3495,7 @@ export default class SetupPrepCharts extends Command {
         const l1RpcEndpoint = this.getConfigValue("general.L1_RPC_ENDPOINT");
 
         if (productionYaml.metricsConfig) {
-          if (productionYaml.metricsConfig.rollup.url !== rollupExplorerBackendUrl) {
+          if (productionYaml.metricsConfig.rollup && productionYaml.metricsConfig.rollup.url !== rollupExplorerBackendUrl) {
             updated = true;
             changes.push({
               key: `metricsConfig.rollup.url`, newValue: rollupExplorerBackendUrl,

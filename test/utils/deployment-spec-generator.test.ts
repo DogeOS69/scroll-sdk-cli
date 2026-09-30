@@ -49,7 +49,7 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       fees: { depositFeeSats: '0', minWithdrawalAmountWei: '1000000000000000', withdrawalFeeWei: '0' },
       keyCounts: { attestation: 3, recovery: 1 },
       seedString: 'test-seed-string',
-      targetAmountsSats: { bridge: 10_000_000, feeWallet: 5_000_000, sequencer: 8_000_000 },
+      targetAmountsSats: { bridge: 10_000_000, feeWallet: 5_000_000, sequencer: 42_069_000 },
       thresholds: { attestation: 2, recovery: 1 },
       timelock: 86_400,
     },
@@ -369,6 +369,18 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('validateDeploymentSpec', () => {
+    it('rejects a zero contract owner', () => {
+      const spec = createMinimalSpec();
+      spec.accounts.owner.address = '0x' + '0'.repeat(40);
+      expect(validateDeploymentSpec(spec).errors.some(error => error.path === 'accounts.owner.address')).to.equal(true);
+    });
+    it('rejects the old genesis sequencing amount before generating deployment files', () => {
+      const spec = createMinimalSpec();
+      spec.bridge.targetAmountsSats!.sequencer = 420_690_000;
+      const result = validateDeploymentSpec(spec);
+      expect(result.valid).to.equal(false);
+      expect(result.errors.some(error => error.path === 'bridge.targetAmountsSats.sequencer' && error.message.includes('42069000'))).to.equal(true);
+    });
     it('passes validation for a complete spec', () => {
       const spec = createMinimalSpec();
       const result = validateDeploymentSpec(spec);

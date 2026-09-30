@@ -9,6 +9,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
+import {assertGenesisSequencerAmount} from '../../utils/bridge-constants.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
@@ -41,6 +42,8 @@ export const BRIDGE_TIMELOCK_PLACEHOLDER = 100
 export const BRIDGE_TIMELOCK_RELATIVE_BLOCKS = 259_200
 export const BRIDGE_TIMELOCK_MARGIN_BLOCKS = 100
 export const BRIDGE_TIMELOCK_MAX_BLOCK_HEIGHT = 500_000_000
+
+export {GENESIS_SEQUENCER_AMOUNT_SATS, assertGenesisSequencerAmount} from '../../utils/bridge-constants.js'
 
 export interface BridgeTimelockResolution {
   reason?: 'expired' | 'invalid' | 'missing' | 'placeholder'
@@ -1268,6 +1271,7 @@ export class BridgeInitCommand extends Command {
 
     const existingConfigStr = fs.readFileSync(paths.setupDefaultsPath, 'utf8')
     const existingConfig = toml.parse(existingConfigStr) as any
+    assertGenesisSequencerAmount(existingConfig.sequencer_target_amount)
     const existingSeed = existingConfig.seed_string || ''
     const network = this.getConfiguredDogeNetwork()
 
@@ -1566,6 +1570,7 @@ export class BridgeInitCommand extends Command {
     const network = this.getConfiguredDogeNetwork()
     this.syncSetupDefaultsNetwork(paths.setupDefaultsPath, network)
     this.resolveSetupDefaultsEnvRefs(paths.setupDefaultsPath)
+    assertGenesisSequencerAmount((toml.parse(fs.readFileSync(paths.setupDefaultsPath, 'utf8')) as any).sequencer_target_amount)
     const dogecoinHeightBeforeSetup = await this.getDogecoinCurrentHeight(paths.setupDefaultsPath)
     const ethereumDaHeightBeforeSetup = await this.getEthereumDaCurrentHeight(path.join(paths.dataDir, 'doge-config.toml'))
     const indexerStartHeight = Math.max(0, dogecoinHeightBeforeSetup - 1)

@@ -7,7 +7,6 @@ import { createNonInteractiveContext } from '../../utils/non-interactive.js'
 
 export default class SetupFeeOracle extends Command {
   static override description = 'Configure the fee-oracle L2_GAS_ORACLE_SENDER signer'
-
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --signer-backend aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet',
@@ -59,12 +58,15 @@ export default class SetupFeeOracle extends Command {
     }),
   }
 
+  static override hidden = true
+
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupFeeOracle) as any
     const nonInteractive = flags['non-interactive']
     const jsonMode = flags.json
     createNonInteractiveContext('setup fee-oracle', nonInteractive, jsonMode)
     const jsonCtx = new JsonOutputContext('setup fee-oracle', jsonMode)
+    jsonCtx.addWarning('Use setup gen-keystore --service fee-oracle instead.')
 
     const { config: dogeConfig, configPath } = await loadDogeConfigWithSelection(
       flags['doge-config'],

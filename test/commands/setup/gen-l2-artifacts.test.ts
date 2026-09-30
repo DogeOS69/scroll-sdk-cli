@@ -2,14 +2,14 @@ import {expect} from 'chai'
 import sinon from 'sinon'
 
 import {applyRethGenesisSigner, resolveGenesisImageTag} from '../../../src/commands/setup/gen-l2-artifacts.js'
-import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_TAGS_URL} from '../../../src/constants/docker.js'
+import {DOCKER_TAGS_URL} from '../../../src/constants/docker.js'
 
 describe('gen-l2-artifacts explicit image selection', () => {
   afterEach(() => sinon.restore())
 
   it('uses the default only when no tag was supplied', async () => {
     const fetchStub = sinon.stub(globalThis, 'fetch')
-    expect(await resolveGenesisImageTag()).to.equal(`gen-configs-${CONTRACTS_DOCKER_DEFAULT_TAG}`)
+    expect(await resolveGenesisImageTag()).to.equal('gen-configs-dogeos-v0.3.0-rc.2')
     expect(fetchStub.called).to.equal(false)
   })
 

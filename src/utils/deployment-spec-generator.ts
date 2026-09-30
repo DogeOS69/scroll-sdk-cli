@@ -26,6 +26,7 @@ import {
   L1_INTERFACE_RPC_WEBSOCKET_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
+import {GENESIS_SEQUENCER_AMOUNT_SATS} from './bridge-constants.js'
 import {validateDstackControllerConfig} from './dstack-controller-values.js'
 import { normalizeCompressedSecp256k1PublicKey } from './secp256k1-public-key.js'
 import { MANAGED_SIGNER_ROLES, buildLocalSignerConfig } from './signer-roles.js'
@@ -665,7 +666,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
 
   for (const field of addressFields) {
     const value = addressForValidation(field.value)
-    if (value && !ethAddressPattern.test(value)) {
+    if (value && (!ethAddressPattern.test(value) || (field.path === 'accounts.owner.address' && /^0x0{40}$/i.test(value)))) {
       errors.push({
         code: 'E004_INVALID_ADDRESS',
         message: `Invalid Ethereum address: ${value}`,
@@ -965,6 +966,14 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       message: 'legacy bridge fee fields are deprecated',
       path: 'bridge.fees',
       suggestion: 'Use depositFeeSats, withdrawalFeeWei, and minWithdrawalAmountWei.',
+    })
+  }
+
+  if (getBridgeTargetAmountsSats(spec).sequencer !== GENESIS_SEQUENCER_AMOUNT_SATS) {
+    errors.push({
+      code: 'E015_INVALID_ROLLUP_CONFIG',
+      message: `Bridge sequencer output must be ${GENESIS_SEQUENCER_AMOUNT_SATS} sat (0.42069 DOGE) for the first WF proof`,
+      path: 'bridge.targetAmountsSats.sequencer',
     })
   }
 
