@@ -1,10 +1,32 @@
 # Status-page configuration automation
 
-Status-page runtime acceptance is enforced by `.github/workflows/test-status-page.yml`.
-It runs the CLI tests with real Prometheus expressions, Helm rendering and Grafana
-delivery/recovery enabled, against an immutable SDK commit. The test receivers are
-local fixtures; no Instatus key or deployment credentials are required. Update the
-SDK commit pin deliberately when changing the shared configuration contract.
+The CLI generates deployment inputs for the evaluator shipped in scroll-monitor.
+Health rules, PromQL, default thresholds and failure/recovery confirmation live in
+that chart's Python scripts. `.github/workflows/test-status-page.yml` validates CLI
+generation, bindings and Helm rendering against an immutable matching SDK commit;
+PromQL and evaluator/runtime acceptance now run in the SDK workflow.
+
+Current publication configuration is schema v3. `generated.delivery` contains the
+network/chain, Prometheus URL, core `sourceNamespace`, components, probes and explicit
+policy overrides. No built-in health PromQL is emitted. `publication.health: {}`
+uses runtime defaults; deadline overrides and expected WP/DA instance counts must
+match the deployment. Grafana only displays results and handles internal alerts.
+Automatic publication requires the evaluator (`publication.delivery.enabled: true`).
+The evaluator alone holds component and heartbeat webhook Secrets; the management
+API key remains CLI-only. The existing Instatus Grafana-compatible webhook format
+is retained without requiring a Grafana notification.
+
+On upgrade, generation emits exact deletion provisioning for the old managed public
+Grafana rules/contact points. Preserve the release name, component bindings and
+PVC. First deploy observe mode, verify old publishers are removed and evidence is
+valid, then deploy automatic. This prevents overlapping publishers during Helm
+rollout and retains existing incident identities. See the matching SDK
+[architecture](https://github.com/DogeOS69/scroll-sdk/blob/feat/dstack-status-page/docs/status-page-architecture.md)
+and [publication guide](https://github.com/DogeOS69/scroll-sdk/blob/feat/dstack-status-page/docs/status-page-publication.md).
+
+The standalone single-webhook/Grafana instructions later in this guide document the
+legacy bootstrap path for values **without** `statusPage.publication`. They do not
+apply to schema v3 component publication.
 
 Core images must contain the merged fixes in [core #1312](https://github.com/DogeOS69/dogeos-core/pull/1312)
 (merge `c579df82ce2c8377ccde8001c91ad10d67f040c6`) and
@@ -18,7 +40,7 @@ CLI configuration-ready result does not prove that the running image has it.
 Performance follow-up is handled separately and is not evidence of live acceptance.
 
 The SDK template and `scroll-sdk-cli` share the `statusPage` contract in
-[SDK production example](https://github.com/DogeOS69/scroll-sdk/blob/feat/dstack-controller-chart/examples/values/scroll-monitor-production.yaml).
+[SDK production example](https://github.com/DogeOS69/scroll-sdk/blob/feat/dstack-status-page/examples/values/scroll-monitor-production.yaml).
 The chart defaults and chart production profile expose the same inputs.
 DogeOS uses **one shared page with Mainnet, Testnet and Devnet groups**, each with
 eight components and no L2Scan. The selected workspace is `6wxpx` (DogeOS),
@@ -69,9 +91,9 @@ ingress hosts. It never contacts Instatus. Older deployments without a
 
 Neither command deploys Helm or Kubernetes Secrets. Apply the generated monitor
 values through the deployment's existing Helm workflow. The chart validates the
-generation contract, renders the public catalog in a ConfigMap, and delegates
-contact-point provisioning to the existing Grafana chart. Production examples enable
-a component delivery verifier for durable, evidence-checked recovery. Runtime
+generation contract, renders the public catalog and evaluator configuration, and
+deploys one evaluator/publisher with a durable journal. Grafana receives only
+cleanup of previous managed public publishing resources. Runtime
 credentials are scoped webhook URLs, never the management API key.
 
 ## Inputs and ownership

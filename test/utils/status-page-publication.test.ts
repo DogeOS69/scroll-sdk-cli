@@ -35,8 +35,10 @@ describe('independent component publication', () => {
   it('supports explicitly observing all components without secrets or invented healthy rules', () => {
     generate()
     expect(Object.keys(values.statusPage.publication.components)).to.deep.equal([...COMPONENT_KEYS])
-    expect(file().contactPoints).to.deep.equal([])
-    expect(file().groups[0].rules).to.deep.equal([])
+    expect(file()).not.to.have.property('contactPoints')
+    expect(file()).not.to.have.property('groups')
+    expect(values.statusPage.generated.version).to.equal(3)
+    expect(values.statusPage.generated.delivery.health).to.deep.equal({})
     expect(values.grafana.envValueFrom).to.deep.equal({})
     expect(Object.values(values.statusPage.generated.componentPublication.readiness).every((item: any) => item.mode === 'observe' && item.reason === 'missing-health-expression' && !item.ready)).to.equal(true)
     expect(generate()).to.deep.equal([])
@@ -46,7 +48,7 @@ describe('independent component publication', () => {
     values.statusPage.publication.components = Object.fromEntries(COMPONENT_KEYS.map(key => [key, {rule: {expr: 'fixture_health'}}]))
     generate()
     expect(Object.values(values.statusPage.publication.components).every((item: any) => item.mode === 'automatic')).to.equal(true)
-    expect(file().contactPoints).to.have.length(8)
+    expect(Object.keys(values.statusPage.generated.componentPublication.envs)).to.have.length(8)
     expect(Object.values(values.statusPage.generated.componentPublication.readiness).every((item: any) => item.reason === 'apply-component-webhook')).to.equal(true)
     expect(generate()).to.deep.equal([])
     values.statusPage.publication.components = {}
@@ -56,14 +58,10 @@ describe('independent component publication', () => {
   it('routes only the selected component publicly, keeps unknown observations internal and preserves policy ownership', () => {
     values.statusPage.publication.components = {...observeComponents(), 'batch-publication': {mode: 'automatic', rule: {expr: 'fixture_component_health{network="testnet"}', for: '5m'}}, 'public-rpc': {mode: 'observe', rule: {expr: 'fixture_rpc_health'}}}
     generate()
-    expect(file().contactPoints.map((point: any) => point.name)).to.deep.equal(['instatus-batch-publication'])
-    const {rules} = file().groups[0]
-    expect(rules.find((r: any) => r.uid === 'status-batch-publication').notification_settings.receiver).to.equal('instatus-batch-publication')
-    expect(rules.filter((r: any) => r.notification_settings.receiver === 'instatus-batch-publication')).to.have.length(1)
-    expect(rules.find((r: any) => r.uid === 'status-public-rpc').notification_settings.receiver).to.equal('grafana-default-email')
-    expect(rules.find((r: any) => r.uid === 'status-batch-publication').noDataState).to.equal('KeepLast')
-    expect(rules.find((r: any) => r.uid === 'status-batch-publication').data[0].model.expr).to.contain('count(')
-    expect(file().contactPoints[0].receivers[0].disableResolveMessage).to.equal(true)
+    expect(Object.keys(values.statusPage.generated.componentPublication.envs)).to.deep.equal(['INSTATUS_BATCH_PUBLICATION_WEBHOOK_URL'])
+    expect(values.statusPage.generated.delivery.components['batch-publication'].rule).to.deep.equal({builtin: false, expr: 'fixture_component_health{network="testnet"}', for: '5m'})
+    expect(values.statusPage.generated.delivery.components['public-rpc'].mode).to.equal('observe')
+    expect(file().deleteRules.map((r: any) => r.uid)).to.include('status-batch-publication')
     expect(values.grafana.alerting['policies.yaml']).to.deep.equal({policies: [{receiver: 'internal'}]})
     expect(generate()).to.deep.equal([])
   })
@@ -74,18 +72,16 @@ describe('independent component publication', () => {
       incidents: {manageTemplates: true}}
     generate()
     expect(values.grafana.envValueFrom.INSTATUS_PUBLIC_RPC_WEBHOOK_URL).to.equal(undefined)
-    expect(values.grafana.envValueFrom.INSTATUS_MONITORING_HEARTBEAT_URL.secretKeyRef.name).to.equal('instatus-monitoring-heartbeat')
-    expect(values.statusPage.generated.delivery.components['public-rpc'].recoverySeconds).to.equal(720)
-    expect(file().contactPoints[0].receivers[0].settings.url).to.contain('-status-delivery')
-    const heartbeat = file().groups[0].rules.find((rule: any) => rule.uid === 'status-monitoring-heartbeat')
-    expect(heartbeat.noDataState).to.equal('OK')
-    expect(heartbeat.execErrState).to.equal('OK')
+    expect(values.grafana.envValueFrom.INSTATUS_MONITORING_HEARTBEAT_URL).to.equal(undefined)
+    expect(values.statusPage.generated.componentPublication.envs.INSTATUS_MONITORING_HEARTBEAT_URL.secretKeyRef.name).to.equal('instatus-monitoring-heartbeat')
+    expect(values.statusPage.generated.delivery.health).to.deep.equal({recoveryFor: '12m'})
+    expect(values.statusPage.generated.delivery.heartbeatEnabled).to.equal(true)
     expect(generate()).to.deep.equal([])
     values.statusPage.publication.components['public-rpc'].mode = 'manual'
     values.statusPage.publication.heartbeat.enabled = false
     generate()
-    expect(file().groups[0].rules.filter((rule: any) => ['status-delivery-health','status-monitoring-heartbeat'].includes(rule.uid)).every((rule: any) => rule.isPaused)).to.equal(true)
-    expect(values.statusPage.generated.delivery.components).to.deep.equal({})
+    expect(values.statusPage.generated.delivery.components['public-rpc'].mode).to.equal('manual')
+    expect(values.statusPage.generated.delivery.heartbeatEnabled).to.equal(false)
   })
 
   it('requires reviewed per-component severity instead of implicitly treating failures as degraded performance', () => {
@@ -103,7 +99,7 @@ describe('independent component publication', () => {
     expect(generate).to.throw('explicit affectedStatus')
     expect(values).to.deep.equal(before)
     values.statusPage.publication.components['bridge-portal'].affectedStatus = 'OPERATIONAL'
-    expect(generate).to.throw('supported incident severity')
+    expect(generate).to.throw('invalid affectedStatus')
     values.statusPage.publication.incidents.affectedStatus = 'DEGRADEDPERFORMANCE'
     expect(generate).to.throw('global severity')
   })
@@ -152,25 +148,47 @@ describe('independent component publication', () => {
     expect(verifier.spec.template.spec.containers[0].env[0].valueFrom.secretKeyRef.name).to.equal('instatus-public-rpc-webhook')
     expect(deployment('grafana').spec.template.spec.containers.find((c: any) => c.name === 'grafana').env.some((e: any) => e.name.startsWith('INSTATUS_'))).to.equal(false)
     const provision = documents.find(d => d?.kind === 'ConfigMap' && d.data?.[PUBLICATION_FILE])
-    expect(provision.data[PUBLICATION_FILE]).to.contain('http://scroll-monitor-status-delivery:9110/notify/public-rpc')
+    expect(provision.data[PUBLICATION_FILE]).to.contain('deleteRules:')
+    expect(provision.data[PUBLICATION_FILE]).not.to.contain('/notify/')
+    const runtime = JSON.parse(documents.find(d => d?.data?.['delivery.json']).data['delivery.json'])
+    expect(runtime.sourceNamespace).to.equal('monitoring')
+    expect(runtime.components['public-rpc'].rule).to.deep.equal({builtin: true})
     // Include container startup and cleanup in the budget, and retain diagnostics
     // when an opt-in runtime test fails (pipe output hid the original failure).
-    if (process.env.SCROLL_STATUS_GRAFANA_TEST === '1') execFileSync('python3', [path.join(chart, 'tests/status_page_grafana_runtime.py'), filename], {stdio: 'inherit', timeout: 240_000})
+
     values.statusPage.generated.delivery.components['public-rpc'].expr = 'vector(0)'
     expect(render).to.throw('regenerated CLI configuration')
   }).timeout(300_000)
 
-  it('changes automatic to observe or manual without deleting receivers, and pauses missing rules', () => {
+  it('changes automatic to observe or manual without a Grafana publisher', () => {
     values.statusPage.publication.components = {...observeComponents(), deposits: {mode: 'automatic', rule: {expr: 'fixture_deposit_health'}}}
     generate()
-    const identity = componentIdentity('deposits')
     values.statusPage.publication.components.deposits.mode = 'observe'
     generate()
-    expect(file().contactPoints[0].name).to.equal(identity.contactPointName)
-    expect(file().groups[0].rules[0].notification_settings.receiver).to.equal('grafana-default-email')
+    expect(values.statusPage.generated.delivery.components.deposits.mode).to.equal('observe')
+    expect(values.statusPage.generated.componentPublication.envs).to.deep.equal({})
     values.statusPage.publication.components.deposits = {mode: 'manual'}
     generate()
-    expect(file().groups[0].rules.every((r: any) => r.isPaused)).to.equal(true)
+    expect(values.statusPage.generated.delivery.components.deposits.mode).to.equal('manual')
+    expect(generate()).to.deep.equal([])
+  })
+
+  it('migrates exact old provisioning and secrets idempotently with Grafana disabled', () => {
+    generate()
+    const old = {apiVersion: 1, contactPoints: [{receivers: [{uid: 'instatus-deposits'}]}], groups: [{rules: [{uid: 'status-deposits'}]}]}
+    values.statusPage.generated.version = 2
+    values.statusPage.generated.componentPublication.provisioning = structuredClone(old)
+    values.grafana.alerting[PUBLICATION_FILE] = structuredClone(old)
+    const secret = {secretKeyRef: {key: 'url', name: 'instatus-deposits-webhook'}}
+    values.statusPage.generated.componentPublication.envs = {INSTATUS_DEPOSITS_WEBHOOK_URL: secret}
+    values.grafana.envValueFrom.INSTATUS_DEPOSITS_WEBHOOK_URL = secret
+    values.grafana.enabled = false
+    values.statusPage.publication.sourceNamespace = 'core-testnet'
+    generate()
+    expect(file().deleteRules.map((r: any) => r.uid)).to.include('status-deposits')
+    expect(file().deleteContactPoints.map((r: any) => r.uid)).to.include('instatus-deposits')
+    expect(values.grafana.envValueFrom).to.deep.equal({})
+    expect(values.statusPage.generated.delivery.sourceNamespace).to.equal('core-testnet')
     expect(generate()).to.deep.equal([])
   })
 
@@ -192,25 +210,9 @@ describe('independent component publication', () => {
     values.statusPage.generated.componentBindings = {deposits: {componentId: 'wrong', pageId: 'another'}}
     expect(() => generate()).to.throw('different page or component')
     delete values.statusPage.generated.componentBindings
-    file().groups[0].rules[0].notification_settings.receiver = 'edited'
+    file().deleteRules[0].uid = 'edited'
     expect(() => generate()).to.throw('configured independently')
   })
-
-  ;(process.env.SCROLL_STATUS_RUNTIME_TEST === '1' ? it : it.skip)('evaluates healthy, affected, absent, non-binary and duplicate observations with Prometheus', () => {
-    values.statusPage.publication.components = {...observeComponents(), deposits: {mode: 'observe', rule: {expr: 'fixture_health'}}}
-    generate()
-    const expression = file().groups[0].rules[0].data[0].model.expr
-    const tests = [
-      {expected: [{labels: '{}', value: 0}], input_series: [{series: 'fixture_health{instance="a"}', values: '0'}]},
-      {expected: [{labels: '{}', value: 1}], input_series: [{series: 'fixture_health{instance="a"}', values: '1'}]},
-      {expected: [], input_series: []},
-      {expected: [], input_series: [{series: 'fixture_health', values: '2'}]},
-      {expected: [], input_series: [{series: 'fixture_health', values: 'NaN'}]},
-      {expected: [], input_series: [{series: 'fixture_health{instance="a"}', values: '0'}, {series: 'fixture_health{instance="b"}', values: '1'}]},
-    ].map(({expected, input_series}) => ({input_series, interval: '1m', promql_expr_test: [{eval_time: '0m', exp_samples: expected, expr: expression}]}))
-    fs.writeFileSync(path.join(directory, 'queries.yaml'), yaml.dump({evaluation_interval: '1m', tests}))
-    execFileSync('docker', ['run', '--rm', '--user', String(process.getuid?.() ?? 1000), '--entrypoint', 'promtool', '-v', `${directory}:/fixtures:ro`, 'prom/prometheus:v2.52.0', 'test', 'rules', '/fixtures/queries.yaml'], {stdio: 'pipe', timeout: 120_000})
-  }).timeout(180_000)
 
   it('imports an explicit integration ID without guessing from the URL and rejects shared credentials', async () => {
     const input = path.join(directory, 'private-import.json')

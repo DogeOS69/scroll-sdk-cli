@@ -323,8 +323,8 @@ describe('status-page generation and explicit Instatus apply', () => {
           await runCommand({apply: true})
           expect(bind.callCount).to.equal(2)
           const observed: any = yaml.load(fs.readFileSync(path.join(directory, 'scroll-monitor-production.yaml'), 'utf8'))
-          const rule = observed.grafana.alerting['instatus-component-publication.yaml'].groups[0].rules[0]
-          expect(rule.notification_settings.receiver).to.equal('grafana-default-email')
+          expect(observed.statusPage.generated.delivery.components['batch-publication'].mode).to.equal('observe')
+          expect(observed.statusPage.generated.componentPublication.envs).to.deep.equal({})
         }
 
         expect(create.callCount).to.equal(1)

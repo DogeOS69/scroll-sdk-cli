@@ -112,7 +112,7 @@ export default class StatusPage extends Command {
       const client = new InstatusClient(process.env.INSTATUS_API_KEY ?? '')
       const plan = await client.plan(options.catalog, options.instatus)
       if (plan.group?.action === 'reuse') options.instatus.groupId = plan.group.id
-      const componentPublication = options.generated.version === 2
+      const componentPublication = [2, 3].includes(options.generated.version)
       const selected: Array<string | undefined> = componentPublication
         ? Object.entries(options.publication.components).filter(([, value]: [string, any]) => value.mode === 'automatic').map(([key]) => key)
         : [undefined]

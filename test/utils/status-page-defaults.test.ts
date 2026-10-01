@@ -58,7 +58,7 @@ describe('status-page defaults from deployment sources', () => {
     expect(values.statusPage.generated.probeConfig.sequencingMode).to.equal('on-demand')
     expect(values.statusPage.generated.componentPublication.readiness.sequencing.reason).to.contain('custom-rule')
     expect(values.statusPage.generated.probeConfig.bridgeChecks[0].url).to.contain('https://new-history.example/prefix/api/txs?')
-    expect(values.statusPage.publication.health.depositDeadlineSeconds).to.equal(0)
+    expect(values.statusPage.publication.health.depositDeadlineSeconds).to.equal(undefined)
   })
 
   it('honors manual overrides and explicit opt-out', () => {

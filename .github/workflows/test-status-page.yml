@@ -27,7 +27,7 @@ permissions:
   contents: read
 
 jobs:
-  prometheus-helm-grafana:
+  generation-helm-alloy:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: DogeOS69/scroll-sdk
-          ref: ee9bf20eeaf7fe0a4806c2781ff78c1815224913
+          ref: f19c8a3e3a9d3cc6afdd3498b9c879e4c731a02c
           path: sdk-contract
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -54,12 +54,9 @@ jobs:
           yarn install --frozen-lockfile
           pip install PyYAML==6.0.2
           helm dependency build sdk-contract/charts/scroll-monitor
-          docker pull prom/prometheus:v2.52.0
-          docker pull grafana/grafana:11.1.5
           docker pull grafana/alloy:v1.8.2
       - name: Run all status-page tests, including runtime acceptance
         env:
           SCROLL_STATUS_RUNTIME_TEST: '1'
           SCROLL_STATUS_CHART: sdk-contract/charts/scroll-monitor
-          SCROLL_STATUS_GRAFANA_TEST: '1'
         run: npx mocha 'test/utils/status-page*.test.ts' 'test/commands/setup/status-page.test.ts'

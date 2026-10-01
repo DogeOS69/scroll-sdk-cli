@@ -1,9 +1,9 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- Native Grafana provisioning and Helm values. */
+/* eslint-disable @typescript-eslint/no-explicit-any -- Deployment parameters and migration of previously managed Grafana resources. */
 import * as yaml from 'js-yaml'
 import {isDeepStrictEqual} from 'node:util'
 
-import {alloyHealth, alloyHeartbeat, buildAlloyProbes, reconcileWebsocketContainer} from './status-page-alloy.js'
-import {builtinHealth, normalizeHealth, normalizeProbes} from './status-page-health.js'
+import {buildAlloyProbes, reconcileWebsocketContainer} from './status-page-alloy.js'
+import {normalizeHealth, normalizeProbes} from './status-page-health.js'
 import {normalizeMaintenance} from './status-page-maintenance.js'
 import {normalizeNodeSync} from './status-page-node-sync.js'
 
@@ -36,17 +36,19 @@ export function componentIdentity(key: ComponentKey) {
   }
 }
 
-/** Component publication owns one provisioning file, never the shared notification-policy tree. */
+/** Resolve deployment inputs. Health rules and timing defaults live in scroll-monitor. */
 export function reconcileComponentPublication(values: any, config: any, readNodeValues?: (filename: string) => any): void {
   const publication = object(config.publication, 'statusPage.publication')
-  fields(publication, ['components', 'delivery', 'health', 'heartbeat', 'incidents', 'maintenanceWindows', 'nodeSync', 'observationContactPointName', 'probes'], 'statusPage.publication')
+  fields(publication, ['components', 'delivery', 'health', 'heartbeat', 'incidents', 'maintenanceWindows', 'nodeSync', 'observationContactPointName', 'probes', 'sourceNamespace'], 'statusPage.publication')
+  const sourceNamespace = publication.sourceNamespace ?? ''
+  if (typeof sourceNamespace !== 'string' || (sourceNamespace !== '' && !/^[\da-z](?:[\da-z-]{0,61}[\da-z])?$/.test(sourceNamespace))) throw new Error('Invalid publication.sourceNamespace')
   const observation = text(publication.observationContactPointName ?? 'grafana-default-email', 'observationContactPointName')
   if (observation.startsWith('instatus-') || observation === config.grafana.contactPointName) throw new Error('Observation notifications must use an internal contact point, not Instatus')
   const components = object(publication.components, 'publication.components')
   fields(components, [...COMPONENT_KEYS], 'publication.components')
   const health = normalizeHealth(publication.health)
   const maintenanceWindows = normalizeMaintenance(publication.maintenanceWindows, COMPONENT_KEYS)
-  const delivery = {enabled: false, image: 'python:3.12.11-alpine3.22', storageClassName: '', storageSize: '1Gi', ...object(publication.delivery, 'publication.delivery')}
+  const delivery = {enabled: true, image: 'python:3.12.11-alpine3.22', storageClassName: '', storageSize: '1Gi', ...object(publication.delivery, 'publication.delivery')}
   fields(delivery, ['enabled', 'image', 'storageClassName', 'storageSize'], 'publication.delivery')
   if (typeof delivery.enabled !== 'boolean') throw new Error('publication.delivery.enabled must be boolean')
   if (maintenanceWindows.length > 0 && !delivery.enabled) throw new Error('Maintenance suppression requires delivery.enabled')
@@ -62,7 +64,6 @@ export function reconcileComponentPublication(values: any, config: any, readNode
   fields(incidents, ['manageTemplates', 'notifySubscribers'], 'publication.incidents')
   if (typeof incidents.manageTemplates !== 'boolean' || typeof incidents.notifySubscribers !== 'boolean') throw new Error('Invalid public incident policy')
   const deliveryComponents: Record<string, any> = {}
-  const seconds = (duration: string) => Number(duration.slice(0, -1)) * ({h: 3600, m: 60, s: 1}[duration.slice(-1)] ?? 0)
   const probes = normalizeProbes(publication.probes, config.catalog, health)
   const alloy = probes.inputs.mode === 'alloy' ? buildAlloyProbes(probes.config, config.catalog) : undefined
   reconcileWebsocketContainer(values, alloy?.config, probes.inputs.websocketImage)
@@ -91,11 +92,8 @@ export function reconcileComponentPublication(values: any, config: any, readNode
   const normalized: Record<string, any> = {}
   const readiness: Record<string, any> = {}
   const envs: Record<string, any> = {}
-  const points: any[] = []
-  const rules: any[] = []
   const previous = config.generated?.componentPublication
   const grafana = structuredClone(object(values.grafana, 'grafana'))
-  if (grafana.enabled === false) throw new Error('statusPage requires bundled Grafana')
   grafana.envValueFrom = object(grafana.envValueFrom, 'grafana.envValueFrom')
   grafana.alerting = object(grafana.alerting, 'grafana.alerting')
   const datasourceUid = text(values.monitoring?.datasources?.prometheus?.uid ?? 'scroll-prometheus', 'Prometheus datasource UID')
@@ -107,117 +105,59 @@ export function reconcileComponentPublication(values: any, config: any, readNode
     if (!['automatic', 'manual', 'observe'].includes(mode)) throw new Error(`${key}: mode must be manual, observe or automatic`)
     const rule = object(input.rule, `${key}.rule`)
     fields(rule, ['builtin', 'expr', 'for'], `${key}.rule`)
-    if (rule.builtin !== undefined && typeof rule.builtin !== 'boolean') throw new Error(`${key}.rule.builtin must be boolean`)
-    const builtin = rule.builtin === true
-    if (builtin && rule.expr) throw new Error(`${key}: choose builtin or a custom expression, not both`)
-    const expr = builtin ? probes.missing[key] ? '' : alloy && ['block-explorer', 'bridge-portal', 'public-rpc'].includes(key) ? alloyHealth(key, alloy.config, health) : builtinHealth(key, config.environment, config.catalog.chainId, health, nodeSync.inputs.mode) : rule.expr === undefined || rule.expr === '' ? '' : text(rule.expr, `${key}.rule.expr`)
+    if (rule.builtin !== undefined && typeof rule.builtin !== 'boolean') throw new Error('rule.builtin must be boolean')
+    if (rule.builtin && rule.expr) throw new Error(`${key}: choose builtin or a custom expression, not both`)
+    if (rule.for !== undefined && (typeof rule.for !== 'string' || !/^[1-9]\d*[hms]$/.test(rule.for))) throw new Error(`${key}.rule.for must be a positive duration`)
+    const expr = rule.expr ? text(rule.expr, `${key}.rule.expr`) : ''
+    const missing = rule.builtin ? probes.missing[key] : expr ? undefined : 'missing-health-expression'
+    if (mode === 'automatic' && missing) throw new Error(`${key}: automatic publication requires a component health expression or configured builtin: ${missing}`)
+    if (mode === 'automatic' && !delivery.enabled) throw new Error('Automatic publication requires delivery.enabled: scroll-monitor runs the evaluator')
     if (alloy && mode === 'automatic' && !heartbeat.enabled) throw new Error('Alloy automatic publication requires heartbeat.enabled and internal Instatus heartbeat alertIds')
-    const pending = rule.for ?? health.failureFor
-    if (typeof pending !== 'string' || !/^[1-9]\d*[hms]$/.test(pending)) throw new Error(`${key}.rule.for must be a positive duration`)
-    if (mode === 'automatic' && !expr) throw new Error(`${key}: automatic publication requires a component health expression; missing observations cannot be published as healthy`)
     const affectedStatus = input.affectedStatus || undefined
-    if (input.affectedStatus !== undefined && (typeof input.affectedStatus !== 'string' || (input.affectedStatus !== '' && !['DEGRADEDPERFORMANCE', 'MAJOROUTAGE', 'PARTIALOUTAGE'].includes(input.affectedStatus)))) throw new Error(`${key}.affectedStatus must be a supported incident severity`)
-    if (mode === 'automatic' && incidents.manageTemplates && !affectedStatus) throw new Error(`${key}: managed automatic publication requires an explicit affectedStatus reviewed against its rule; binary health does not determine severity`)
-    normalized[key] = {...(affectedStatus ? {affectedStatus} : {}), mode, rule: builtin ? {builtin: true, for: pending} : {builtin: false, expr, for: pending}}
+    if (affectedStatus && !['DEGRADEDPERFORMANCE', 'MAJOROUTAGE', 'PARTIALOUTAGE'].includes(affectedStatus)) throw new Error(`${key}: invalid affectedStatus`)
+    if (mode === 'automatic' && incidents.manageTemplates && !affectedStatus) throw new Error(`${key}: automatic publication requires an explicit affectedStatus`)
+    const selected = {...(rule.for ? {for: rule.for} : {}), ...(rule.builtin ? {builtin: true} : {builtin: false, ...(expr ? {expr} : {})})}
+    normalized[key] = {...(affectedStatus ? {affectedStatus} : {}), mode, rule: selected}
     const identity = componentIdentity(key)
     const componentId = config.instatus.componentIds[key]
     const binding = config.generated?.componentBindings?.[key]
-    if (binding && (binding.pageId !== config.instatus.pageId || binding.componentId !== componentId)) throw new Error(`${key}: saved webhook binding targets a different page or component; restore the original binding`)
-    const bound = Boolean(binding && binding.componentId)
-    readiness[key] = {...(affectedStatus ? {affectedStatus} : {}), ...(alloy && ['block-explorer', 'bridge-portal', 'public-rpc'].includes(key) ? {coverage: 'public-entrypoint'} : {}), componentId: componentId ?? '', mode, ready: mode === 'manual' || Boolean(expr && (mode !== 'automatic' || bound)),
-      reason: mode === 'manual' ? 'manual' : expr ? mode === 'automatic' && !bound ? 'apply-component-webhook' : 'configured' : (builtin ? probes.missing[key] ?? 'missing-health-input' : 'missing-health-expression'),
-      ...identity}
-    // Preserve a previously managed receiver when disabling publication. The rule's
-    // direct receiver switches to the internal point; no provisioned resource is deleted.
-    if (mode === 'automatic' || previous?.envs?.[identity.envName]) {
-      envs[identity.envName] = {secretKeyRef: identity.secret}
-      points.push({name: identity.contactPointName, orgId: config.grafana.orgId, receivers: [{
-        // Native resolved also occurs on rule lifecycle changes. The delivery
-        // verifier confirms recovery independently; direct mode retains manual recovery.
-        disableResolveMessage: true,
-        settings: {httpMethod: 'POST', message: `${config.catalog.groupName}: service disruption detected.`, title: `${config.catalog.groupName} — ${config.catalog.components.find((item: any) => item.key === key).name} affected`,
-          url: delivery.enabled ? `http://{{ printf "%s-status-delivery" .Release.Name | trunc 63 | trimSuffix "-" }}:9110/notify/${key}` : `$${identity.envName}`},
-        type: 'webhook', uid: identity.receiverUid,
-      }]})
-    }
-
-    const oldRule = previous?.provisioning?.groups?.[0]?.rules?.find((item: any) => item.uid === identity.ruleUid)
-    if (!expr && !oldRule) continue
-    // A single, label-free value is the contract: 0 healthy, 1 affected, absent
-    // unknown. Reject non-binary/multiple results instead of hiding partial loss.
-    const source = expr || 'vector(0)'
-    const valid = `(count(${source}) == 1) and (count((${source}) == 0) == 1 or count((${source}) == 1) == 1)`
-    const query = `(max(${source})) and (${valid})`
-    const automatic = mode === 'automatic'
-    if (automatic && delivery.enabled) deliveryComponents[key] = {
-      componentId: componentId ?? '', expr: query, failureSeconds: seconds(pending),
-      name: config.catalog.components.find((item: any) => item.key === key).name,
-      pageId: config.instatus.pageId, recoverySeconds: seconds(health.recoveryFor), webhookEnv: identity.envName,
-    }
-    const common = {annotations: {summary: `${config.catalog.groupName} — ${key}: component health`},
-      execErrState: 'KeepLast', for: pending, isPaused: mode === 'manual' || !expr,
-      labels: {audience: automatic ? 'public-status' : 'status-observation', chain_id: config.catalog.chainId, component_key: key, environment: config.environment, managed_by: 'scroll-sdk-status-page'},
-      noDataState: 'KeepLast',
-      notification_settings: {group_by: ['alertname', 'grafana_folder'], group_interval: '1m', group_wait: '30s', receiver: automatic ? identity.contactPointName : observation, repeat_interval: '4h'},
-    }
-    const data = (expression: string) => [{datasourceUid, model: {datasource: {type: 'prometheus', uid: datasourceUid}, expr: expression, instant: true, range: false, refId: 'A'}, refId: 'A',
-      relativeTimeRange: {from: 600, to: 0}},
-    {datasourceUid: '__expr__', model: {expression: '$A > 0', refId: 'B', type: 'math'}, refId: 'B', relativeTimeRange: {from: 0, to: 0}}]
-    rules.push({...common, condition: 'B', data: data(query), title: `${config.catalog.groupName} / ${key}`, uid: identity.ruleUid},
-    {...common, condition: 'B', data: data(`absent(${query})`), execErrState: 'Alerting', labels: {...common.labels, audience: 'status-observation'},
-      noDataState: 'OK', notification_settings: {...common.notification_settings, receiver: observation},
-      title: `${config.catalog.groupName} / ${key} observation missing`, uid: `${identity.ruleUid}-missing`})
+    if (binding && (binding.pageId !== config.instatus.pageId || binding.componentId !== componentId)) throw new Error(`${key}: saved webhook binding targets a different page or component`)
+    readiness[key] = {...(affectedStatus ? {affectedStatus} : {}), ...(alloy && ['block-explorer', 'bridge-portal', 'public-rpc'].includes(key) ? {coverage: 'public-entrypoint'} : {}),
+      componentId: componentId ?? '', mode, ready: mode === 'manual' || Boolean(!missing && (mode !== 'automatic' || binding)),
+      reason: mode === 'manual' ? 'manual' : missing ?? (mode === 'automatic' && !binding ? 'apply-component-webhook' : 'configured'), ...identity}
+    deliveryComponents[key] = {componentId: componentId ?? '', mode,
+      name: config.catalog.components.find((item: any) => item.key === key).name, rule: selected, ...(missing ? {missing} : {}), pageId: config.instatus.pageId, webhookEnv: identity.envName}
+    if (mode === 'automatic') envs[identity.envName] = {secretKeyRef: identity.secret}
   }
 
-  const deliveryActive = delivery.enabled && Object.keys(deliveryComponents).length > 0
-  const heartbeatQuery = (alloy ? `(${alloyHeartbeat(alloy.config, health)})` : 'time() - max(timestamp(up)) < bool 120') + (deliveryActive ? ' and (time() - max(scroll_status_delivery_last_tick_seconds) < 120) and (max(scroll_status_delivery_error) == 0)' : '')
-  if (heartbeat.enabled || previous?.provisioning?.groups?.[0]?.rules?.some((item: any) => item.uid === 'status-monitoring-heartbeat')) {
-    envs.INSTATUS_MONITORING_HEARTBEAT_URL = {secretKeyRef: {key: 'url', name: 'instatus-monitoring-heartbeat'}}
-    points.push({name: 'instatus-monitoring-heartbeat', orgId: config.grafana.orgId, receivers: [{disableResolveMessage: true, settings: {httpMethod: 'POST', url: '$INSTATUS_MONITORING_HEARTBEAT_URL'}, type: 'webhook', uid: 'instatus-monitoring-heartbeat'}]})
-    rules.push({condition: 'B', data: [{datasourceUid, model: {expr: heartbeatQuery, instant: true, refId: 'A'}, refId: 'A', relativeTimeRange: {from: 600, to: 0}},
-        {datasourceUid: '__expr__', model: {expression: '$A > 0', refId: 'B', type: 'math'}, refId: 'B', relativeTimeRange: {from: 0, to: 0}}], execErrState: 'OK', for: '0s', isPaused: !heartbeat.enabled,
-      labels: {audience: 'monitoring-heartbeat'}, noDataState: 'OK', notification_settings: {group_by: ['alertname'], group_interval: '1m', group_wait: '0s', receiver: 'instatus-monitoring-heartbeat', repeat_interval: '1m'},
-      title: `${config.catalog.groupName} / monitoring heartbeat`,
-      uid: 'status-monitoring-heartbeat',
-    })
-  }
+  if (heartbeat.enabled) envs.INSTATUS_MONITORING_HEARTBEAT_URL = {secretKeyRef: {key: 'url', name: 'instatus-monitoring-heartbeat'}}
 
-  if (deliveryActive || previous?.provisioning?.groups?.[0]?.rules?.some((item: any) => item.uid === 'status-delivery-health')) rules.push({
-    annotations: {summary: 'Public status delivery needs operator attention'}, condition: 'B', data: [{datasourceUid, model: {expr: 'max(scroll_status_delivery_error) + max(scroll_status_delivery_pending) + (time() - max(scroll_status_delivery_last_tick_seconds) > bool 120) or absent(scroll_status_delivery_last_tick_seconds)', instant: true, refId: 'A'}, refId: 'A', relativeTimeRange: {from: 600, to: 0}},
-      {datasourceUid: '__expr__', model: {expression: '$A > 0', refId: 'B', type: 'math'}, refId: 'B', relativeTimeRange: {from: 0, to: 0}}], execErrState: 'Alerting', for: '5m',
-    isPaused: !deliveryActive, labels: {audience: 'status-observation', environment: config.environment, managed_by: 'scroll-sdk-status-page'},
-    noDataState: 'Alerting',
-    notification_settings: {group_by: ['alertname'], group_interval: '1m', group_wait: '30s', receiver: observation, repeat_interval: '1h'},
-    title: `${config.catalog.groupName} / status delivery`, uid: 'status-delivery-health',
-  })
-  const provisioning = {apiVersion: 1, contactPoints: points, groups: [{folder: 'Public status', interval: '1m', name: 'component-health', orgId: config.grafana.orgId, rules}]}
-  if (previous && previous.orgId !== config.grafana.orgId) throw new Error('Component publication Grafana orgId cannot change without explicit resource migration')
-  const previousFile = previous?.provisioning
+  // Exact, reserved IDs only: remove the old public publisher without changing
+  // internal alerts or the user's shared notification-policy tree. This cleanup
+  // remains in subsequent generations so an upgrade/restart is idempotent.
+  const oldRuleIds = [...COMPONENT_KEYS.flatMap(key => [`status-${key}`, `status-${key}-missing`]), 'status-monitoring-heartbeat', 'status-delivery-health']
+  const oldReceiverIds = [...COMPONENT_KEYS.map(key => `instatus-${key}`), 'instatus-monitoring-heartbeat']
+  const provisioning = {apiVersion: 1, deleteContactPoints: oldReceiverIds.map(uid => ({orgId: config.grafana.orgId, uid})),
+    deleteRules: oldRuleIds.map(uid => ({orgId: config.grafana.orgId, uid}))}
   const actual = grafana.alerting[PUBLICATION_FILE]
-  if (actual !== undefined && !isDeepStrictEqual(actual, provisioning) && !isDeepStrictEqual(actual, previousFile)) throw new Error('Component publication provisioning was configured independently')
-  for (const [name, env] of Object.entries(envs)) {
-    if (grafana.env?.[name] !== undefined) throw new Error('Remove plaintext component webhook environment values')
-    const actualEnv = grafana.envValueFrom[name]
-    if (actualEnv !== undefined && !isDeepStrictEqual(actualEnv, env) && !isDeepStrictEqual(actualEnv, previous?.envs?.[name])) throw new Error('Component webhook Secret reference was configured independently')
-    if (delivery.enabled && name !== 'INSTATUS_MONITORING_HEARTBEAT_URL') delete grafana.envValueFrom[name]
-    else grafana.envValueFrom[name] = env
-  }
-
+  if (actual !== undefined && !isDeepStrictEqual(actual, provisioning) && !isDeepStrictEqual(actual, previous?.provisioning)) throw new Error('Component publication provisioning was configured independently')
   for (const [filename, value] of Object.entries(grafana.alerting)) {
     if (filename === PUBLICATION_FILE) continue
     let parsed: any
     try { parsed = typeof value === 'string' ? yaml.load(value) : value } catch { throw new Error('Invalid Grafana provisioning YAML') }
-    for (const point of parsed?.contactPoints ?? []) {
-      if (points.some(p => p.name === point.name || point.receivers?.some((r: any) => r.uid === p.receivers[0].uid))) throw new Error('Component contact point collides with another provisioning file')
-    }
+    for (const point of parsed?.contactPoints ?? []) if (point.receivers?.some((r: any) => oldReceiverIds.includes(r.uid))) throw new Error('Component contact point collides with another provisioning file')
+    for (const group of parsed?.groups ?? []) if (group.rules?.some((r: any) => oldRuleIds.includes(r.uid))) throw new Error('Component health rule collides with another provisioning file')
+  }
 
-    for (const group of parsed?.groups ?? []) {
-      if (group.rules?.some((r: any) => rules.some(rule => rule.uid === r.uid))) throw new Error('Component health rule collides with another provisioning file')
-    }
+  for (const name of [...COMPONENT_KEYS.map(key => componentIdentity(key).envName), 'INSTATUS_MONITORING_HEARTBEAT_URL']) {
+    if (grafana.env?.[name] !== undefined) throw new Error('Remove plaintext component webhook environment values')
+    const actualEnv = grafana.envValueFrom[name]
+    if (actualEnv && !isDeepStrictEqual(actualEnv, previous?.envs?.[name]) && !isDeepStrictEqual(actualEnv, envs[name])) throw new Error('Component webhook Secret reference was configured independently')
+    delete grafana.envValueFrom[name]
   }
 
   grafana.alerting[PUBLICATION_FILE] = provisioning
-  config.publication = {components: normalized, delivery, health, heartbeat, incidents, maintenanceWindows, nodeSync: nodeSync.inputs, observationContactPointName: observation, probes: probes.inputs}
+  config.publication = {components: normalized, delivery, health, heartbeat, incidents, maintenanceWindows, nodeSync: nodeSync.inputs, observationContactPointName: observation, probes: probes.inputs, sourceNamespace}
   const scrapeName = 'status-page-external-probes'
   const stack = structuredClone(values['kube-prometheus-stack'] ?? {})
   const rawJobs = stack.prometheus?.prometheusSpec?.additionalScrapeConfigs ?? []
@@ -233,9 +173,10 @@ export function reconcileComponentPublication(values: any, config: any, readNode
     values['kube-prometheus-stack'] = stack
   }
 
-  const deliveryConfig = {chainId: config.catalog.chainId, components: deliveryComponents, environment: config.environment, groupName: config.catalog.groupName,
-    intervalSeconds: 30, maintenanceWindows: maintenanceWindows.map(w => ({...w, end: Date.parse(w.end) / 1000, start: Date.parse(w.start) / 1000})), orgId: config.grafana.orgId,
-    prometheusUrl: values.monitoring?.datasources?.prometheus?.url ?? 'http://prometheus-prometheus:9090'}
-  config.generated = {...config.generated, alloyProbes: alloy?.config ?? null, componentPublication: structuredClone({alloyProbes: alloy?.config ?? null, chainId: config.catalog.chainId, datasourceUid, delivery: deliveryConfig, envs, inputs: config.publication, nodeSync: nodeSync.config, orgId: config.grafana.orgId, ...(probeScrape ? {probeScrape} : {}), provisioning, readiness}), delivery: deliveryConfig, environment: config.environment, nodeSync: nodeSync.config, probeConfig: probes.config, version: 2}
+  const deliveryConfig = {alloyProbes: alloy?.config ?? null, chainId: config.catalog.chainId, components: deliveryComponents, environment: config.environment, groupName: config.catalog.groupName, health,
+    heartbeatEnabled: heartbeat.enabled, maintenanceWindows: maintenanceWindows.map(w => ({...w, end: Date.parse(w.end) / 1000, start: Date.parse(w.start) / 1000})), nodeSyncMode: nodeSync.inputs.mode, orgId: config.grafana.orgId, probeMode: probes.inputs.mode,
+    prometheusUrl: values.monitoring?.datasources?.prometheus?.url ?? 'http://prometheus-prometheus:9090', schemaVersion: 3,
+    sourceNamespace}
+  config.generated = {...config.generated, alloyProbes: alloy?.config ?? null, componentPublication: structuredClone({alloyProbes: alloy?.config ?? null, chainId: config.catalog.chainId, datasourceUid, delivery: deliveryConfig, envs, inputs: config.publication, nodeSync: nodeSync.config, orgId: config.grafana.orgId, ...(probeScrape ? {probeScrape} : {}), provisioning, readiness}), delivery: deliveryConfig, environment: config.environment, nodeSync: nodeSync.config, probeConfig: probes.config, version: 3}
   values.grafana = grafana
 }

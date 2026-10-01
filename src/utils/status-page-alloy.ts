@@ -75,58 +75,6 @@ export function buildAlloyProbes(probes: any, catalog: any): any {
   return {config, missing}
 }
 
-function evidence(target: any, health: any): {sample: string; selector: string; valid: string} {
-  const selector = `{job="status-page-alloy",environment=${JSON.stringify(target.environment)},chain_id=${JSON.stringify(target.chain_id)},component_key=${JSON.stringify(target.component_key)},check_id=${JSON.stringify(target.check_id)},status_probe_config=${JSON.stringify(target.status_probe_config)}}`
-  const sample = `probe_success${selector}`
-  const fresh = (metric: string) => `(time() - timestamp(${metric}) >= 0 and time() - timestamp(${metric}) <= ${health.freshnessSeconds})`
-  const valid = `((${sample} == 0 or ${sample} == 1) and ${fresh(sample)} and (up${selector} == 1) and ${fresh(`up${selector}`)})`
-  return {sample, selector, valid}
-}
-
-export function alloyHealth(key: string, config: any, health: any): string {
-  const targets = config.targets.filter((t: any) => t.component_key === key)
-  if (targets.length === 0 && !(key === 'public-rpc' && config.websocketTargets?.length)) return ''
-  const terms = targets.map((target: any) => {
-    const {sample, selector, valid} = evidence(target, health)
-    let value = `(1 - ${valid})`
-    let guard = `(count(${sample}) == 1) and (count(up${selector}) == 1)`
-    if (key === 'public-rpc') {
-      const duration = `probe_duration_seconds${selector}`
-      value = `clamp_max(${value} + (quantile_over_time(0.95, ${duration}[5m]) > bool ${health.maxRpcLatencySeconds}), 1)`
-      guard += ` and (count(${duration}) == 1) and (min(count_over_time(${duration}[5m])) >= 10) and (min(${duration}) >= 0) and (max(${duration}) < Inf) and (time() - min(timestamp(${duration})) <= ${health.freshnessSeconds})`
-    }
-
-    return `(max(${value}) and ${guard})`
-  })
-  // Every configured check must be present; never recover from a partial set.
-  if (key === 'public-rpc') for (const target of config.websocketTargets ?? []) terms.push(websocketHealth(target, health))
-  return `clamp_max(${terms.join(' + ')}, 1)`
-}
-
-/** Failed HTTP probes still send heartbeats; missing/duplicate/stale telemetry does not. */
-export function alloyHeartbeat(config: any, health: any): string {
-  const terms = config.targets.map((t: any) => {
-    const {sample, selector, valid} = evidence(t, health)
-    return `(count(${valid}) == 1 and count(${sample}) == 1 and count(up${selector}) == 1)`
-  })
-  for (const target of config.websocketTargets ?? []) terms.push(`(count(${websocketEvidence(target, health).valid}) == 1)` )
-  return terms.join(' and ')
-}
-
-function websocketEvidence(target: any, health: any): {selector: string; valid: string} {
-  const selector = `{job="status-page-alloy-websocket",environment=${JSON.stringify(target.environment)},chain_id=${JSON.stringify(target.chain_id)},component_key="public-rpc",check_id=${JSON.stringify(target.check_id)},status_probe_config=${JSON.stringify(target.status_probe_config)}}`
-  const sample = `scroll_status_ws_success${selector}`
-  const timestamp = `scroll_status_ws_timestamp_seconds${selector}`
-  const valid = `((${sample} == 0 or ${sample} == 1) and (time() - ${timestamp} >= 0 and time() - ${timestamp} <= ${health.freshnessSeconds})) and on () (min(up{job="status-page-alloy-websocket"}) == 1 and count(up{job="status-page-alloy-websocket"}) == 1)`
-  return {selector, valid}
-}
-
-function websocketHealth(target: any, health: any): string {
-  const {selector, valid} = websocketEvidence(target, health)
-  const duration = `scroll_status_ws_duration_seconds${selector}`
-  return `(max(clamp_max(1 - (${valid}) + (quantile_over_time(0.95, ${duration}[5m]) > bool ${health.maxRpcLatencySeconds}), 1)) and (count(${valid}) == 1) and (min(count_over_time(${duration}[5m])) >= 10))`
-}
-
 /** Reconcile only the reserved supplemental container/volume, preserving user extras. */
 export function reconcileWebsocketContainer(values: any, config: any, image: string): void {
   const enabled = Boolean(config?.websocketTargets?.length)

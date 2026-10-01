@@ -42,5 +42,5 @@ export function normalizeNodeSync(input: any = {}, chainId: string, environment:
   if (followers.length === 0 || followers.reduce((sum: number, entry: any) => sum + entry.replicas, 0) > 32) throw new Error('Node Sync requires 1..32 enabled follower Pods')
   const names = [reference, ...followers].map(entry => entry.service)
   if (new Set(names).size !== names.length) throw new Error('Node Sync sources must select distinct Services')
-  return {config: {chainId, environment, followers, maxBlockAgeSeconds: health.maxBlockAgeSeconds, maxNodeLagSeconds: health.maxNodeLagSeconds, reference}, inputs}
+  return {config: {chainId, environment, followers, ...Object.fromEntries(['maxBlockAgeSeconds', 'maxNodeLagSeconds'].filter(key => health[key] !== undefined).map(key => [key, health[key]])), reference}, inputs}
 }

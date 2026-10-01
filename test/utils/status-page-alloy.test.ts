@@ -6,8 +6,6 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import {alloyHealth, alloyHeartbeat} from '../../src/utils/status-page-alloy.js'
-import {normalizeHealth} from '../../src/utils/status-page-health.js'
 import {COMPONENT_KEYS} from '../../src/utils/status-page-publication.js'
 import {reconcileScrollMonitorStatusPage} from '../../src/utils/status-page-values.js'
 
@@ -57,8 +55,7 @@ describe('existing Alloy public-entrypoint probes', () => {
     expect(generate).to.throw('heartbeat')
     values.statusPage.publication.heartbeat = {alertIds: ['ops'], enabled: true}
     generate()
-    const heartbeat = values.statusPage.generated.componentPublication.provisioning.groups[0].rules.find((r: any) => r.uid === 'status-monitoring-heartbeat')
-    expect(heartbeat.data[0].model.expr).to.contain('probe_success')
+    expect(values.statusPage.generated.delivery.heartbeatEnabled).to.equal(true)
     const rpc = path.join(directory, 'l2-reth-rpc-public-production.yaml')
     const source: any = yaml.load(fs.readFileSync(rpc, 'utf8'))
     source.ingress.websocket = {enabled: true, hosts: [{host: 'ws.example', paths: [{path: '/'}]}]}
@@ -88,7 +85,7 @@ describe('existing Alloy public-entrypoint probes', () => {
     expect(targets[0].check_id).to.contain('-page-')
     expect(values.statusPage.generated.componentPublication.readiness['bridge-portal'].ready).to.equal(true)
     expect(values.statusPage.catalog.components.find((c: any) => c.key === 'bridge-portal').description).to.equal('Availability of the bridge website over HTTPS.')
-    expect(values.statusPage.generated.componentPublication.provisioning.groups[0].rules.find((r: any) => r.uid === 'status-bridge-portal').data[0].model.expr).not.to.contain('bridge-portal-api')
+    expect(values.statusPage.generated.delivery.alloyProbes.targets.filter((t: any) => t.component_key === 'bridge-portal')).to.have.length(1)
     expect(generate()).to.deep.equal([])
     values.statusPage.publication.probes.mode = 'external'
     expect(generate).to.throw('requires Alloy page-only')
@@ -143,44 +140,4 @@ describe('existing Alloy public-entrypoint probes', () => {
     expect(render).to.throw('regenerated CLI')
   }).timeout(180_000)
 
-  ;(process.env.SCROLL_STATUS_RUNTIME_TEST === '1' ? it : it.skip)('evaluates complete, failed, missing, duplicate and stale evidence in Prometheus', () => {
-    generate()
-    const {alloyProbes: config} = values.statusPage.generated
-    const health = normalizeHealth()
-    const expr = alloyHealth('public-rpc', config, health)
-    const tests: any[] = []
-    const series = (): Record<string, string> => Object.fromEntries(config.targets.flatMap((t: any) => {
-      const labels = `{job="status-page-alloy",environment="testnet",chain_id="291",component_key="${t.component_key}",check_id="${t.check_id}",status_probe_config="${config.revision}"}`
-      return [[`probe_success${labels}`, '1x10'], [`probe_duration_seconds${labels}`, '0.1x10'], [`up${labels}`, '1x10']]
-    }))
-    const scenario = (s: any, expected: null | number, heartbeat: null | number = 1) => tests.push({input_series: Object.entries(s).map(([series, values]) => ({series, values})), interval: '30s',
-      promql_expr_test: [{eval_time: '5m', exp_samples: expected === null ? [] : [{labels: '{}', value: expected}], expr},
-        {eval_time: '5m', exp_samples: heartbeat === null ? [] : [{labels: '{}', value: heartbeat}], expr: alloyHeartbeat(config, health)}]})
-    scenario(series(), 0)
-    const mutate = (metric: string, value?: string, match = 'public-rpc') => {
-      const s = series()
-      const key = Object.keys(s).find(k => k.startsWith(metric) && k.includes(match))!
-      if (value === undefined) delete s[key]
-      else s[key] = value
-      return s
-    }
-
-    scenario(mutate('probe_success', '0x10'), 1) // HTTP failures do not stop the heartbeat.
-    scenario(mutate('probe_duration_seconds', '3x10'), 1)
-    scenario(mutate('probe_success'), null, null)
-    scenario(mutate('probe_success', Array.from({length: 11}).fill('NaN').join(' ')), null, null)
-    scenario(mutate('probe_success', '2x10'), null, null)
-    scenario(mutate('up', '0x10'), null, null)
-    scenario(mutate('probe_success', '1x4 _x6'), null, null)
-    scenario(mutate('probe_success', 'stale'), null, null)
-    const duplicate = series()
-    const key = Object.keys(duplicate).find(k => k.startsWith('probe_success') && k.includes('public-rpc'))!
-    duplicate[key.replace('}', ',instance="duplicate"}')] = '1x10'
-    scenario(duplicate, null, null)
-    scenario({}, null, null)
-    const oldRevision = Object.fromEntries(Object.entries(series()).map(([k, v]) => [k.replace(config.revision, 'old'), v]))
-    scenario(oldRevision, null, null)
-    fs.writeFileSync(path.join(directory, 'rules.yaml'), yaml.dump({evaluation_interval: '30s', tests}))
-    execFileSync('docker', ['run', '--rm', '--user', String(process.getuid?.() ?? 1000), '--entrypoint', 'promtool', '-v', `${directory}:/fixtures:ro`, 'prom/prometheus:v2.52.0', 'test', 'rules', '/fixtures/rules.yaml'], {stdio: 'pipe', timeout: 120_000})
-  }).timeout(180_000)
 })

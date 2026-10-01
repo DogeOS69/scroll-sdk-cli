@@ -6,7 +6,6 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import {HEALTH_DEFAULTS, builtinHealth} from '../../src/utils/status-page-health.js'
 import {normalizeNodeSync} from '../../src/utils/status-page-node-sync.js'
 import {COMPONENT_KEYS} from '../../src/utils/status-page-publication.js'
 import {reconcileScrollMonitorStatusPage} from '../../src/utils/status-page-values.js'
@@ -18,7 +17,7 @@ describe('official Node Sync', () => {
   const source = (role: string) => ({release: `l2-reth-${role}`, role, values: `${role}.yaml`})
   let sources: any
   let input: any
-  const normalize = () => normalizeNodeSync(input, '291', 'testnet', HEALTH_DEFAULTS, filename => structuredClone(sources[filename]))
+  const normalize = () => normalizeNodeSync(input, '291', 'testnet', {maxBlockAgeSeconds: 120, maxNodeLagSeconds: 120}, filename => structuredClone(sources[filename]))
   beforeEach(() => {
     sources = {'bootnode.yaml': node('bootnode'), 'internal-rpc.yaml': {...node('rpc', 2), service: {main: {fullname: 'l2-rpc'}}}, 'public-rpc.yaml': node('rpc'), 'sequencer.yaml': node('sequencer')}
     input = {followers: ['bootnode', 'internal-rpc', 'public-rpc'].map(role => source(role)), mode: 'official', reference: source('sequencer')}
@@ -59,13 +58,7 @@ describe('official Node Sync', () => {
   })
 
   it('retains explicit external mode and uses separate complete/fresh collector evidence', () => {
-    expect(normalizeNodeSync(undefined, '291', 'testnet', HEALTH_DEFAULTS).config).to.equal(null)
-    const expression = builtinHealth('node-sync', 'testnet', '291', HEALTH_DEFAULTS, 'official')
-    expect(expression).to.contain('scroll_status_node_sync_affected')
-    expect(expression).to.contain('scroll_status_node_sync_timestamp_seconds')
-    expect(expression).to.contain('count(')
-    expect(expression).not.to.contain('location')
-    expect(builtinHealth('node-sync', 'testnet', '291', HEALTH_DEFAULTS)).to.contain('scroll_status_probe_affected')
+    expect(normalizeNodeSync(undefined, '291', 'testnet', {maxBlockAgeSeconds: 120, maxNodeLagSeconds: 120}).config).to.equal(null)
     input.mode = 'external'
     expect(normalize).to.throw('must not retain')
   })

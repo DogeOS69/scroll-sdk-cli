@@ -99,7 +99,7 @@ function ingressUrls(source: any, key: string, scheme: string, suffix: string, f
   }))].sort()
 }
 
-/** Generate native Grafana configuration and a public component catalog from one deployment. */
+/** Generate evaluator deployment parameters and a public catalog; retain legacy bootstrap compatibility. */
 export function reconcileScrollMonitorStatusPage(values: any, inputs: Inputs): Array<{key: string; newValue: string; oldValue: string}> {
   if (values.statusPage === undefined) return []
   const options = mapping(values.statusPage, 'statusPage')
@@ -255,7 +255,7 @@ export function reconcileScrollMonitorStatusPage(values: any, inputs: Inputs): A
     probeSources: {...(blockTimeMs === undefined ? {} : {blockTimeMs}), bridgeChecks, explorerApiUrls, sequencingMode},
     provider: 'instatus',
   }
-  if (config.publication !== undefined || config.generated?.version === 2) {
+  if (config.publication !== undefined || [2, 3].includes(config.generated?.version)) {
     const candidate = structuredClone(values)
     reconcileComponentPublication(candidate, config, filename => readValues(inputs.valuesDir, filename, 'publication.nodeSync source'))
     if (isDeepStrictEqual(config, values.statusPage) && isDeepStrictEqual(candidate.grafana, values.grafana) && isDeepStrictEqual(candidate.alloy, values.alloy) && isDeepStrictEqual(candidate['kube-prometheus-stack'], values['kube-prometheus-stack'])) return []
