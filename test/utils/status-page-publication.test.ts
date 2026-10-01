@@ -252,6 +252,29 @@ describe('independent component publication', () => {
     await rejects(() => client.bindGrafanaWebhook('integration', 'page-1', 'rpc-id', policy, ids), 'subscriber notification policy')
   })
 
+  it('rejects a provider retaining English titles that hide the network', async () => {
+    const templates = {
+      createTemplate: {components: [{id: 'rpc-id', status: 'DEGRADEDPERFORMANCE'}], message: 'Testnet RPC is affected.', name: 'Testnet / Public RPC: service disruption', notify: false, status: 'INVESTIGATING'},
+      resolveTemplate: {components: [{id: 'rpc-id', status: 'OPERATIONAL'}], message: 'Testnet RPC recovered.', name: 'Testnet / Public RPC: recovered', notify: false, status: 'RESOLVED'},
+    }
+    const transport = sinon.stub().callsFake(async (url: string, init: any) => {
+      if (init.method === 'PUT') {
+        const request = JSON.parse(init.body)
+        return new Response(JSON.stringify({integration: {...request, createTemplateId: 'create-id', id: 'integration', monitoringTool: 'GRAFANA', resolveTemplateId: 'resolve-id', siteId: 'page-1'}}))
+      }
+
+      const id = url.split('/').at(-1)
+      const desired = id === 'create-id' ? templates.createTemplate : templates.resolveTemplate
+      return new Response(JSON.stringify({...desired, components: [{componentId: 'rpc-id', status: desired.components[0].status}], id, siteId: 'page-1', translations: {message: {en: desired.message}, name: {en: 'Public RPC outage'}}, type: 'INCIDENT'}))
+    })
+    let error = ''
+    try {
+      await new InstatusClient('fake-key', transport).bindGrafanaWebhook('integration', 'page-1', 'rpc-id', templates, {createTemplateId: 'create-id', resolveTemplateId: 'resolve-id'})
+    } catch (error_) { error = String(error_) }
+
+    expect(error).to.contain('including English translations')
+  })
+
   it('uses one private journal and one remote component per integration and reuses both after restart', async () => {
     const stored: Record<string, any> = {}
     const transport = sinon.stub().callsFake(async (url: string, init: any) => {
@@ -259,7 +282,7 @@ describe('independent component publication', () => {
       const request = JSON.parse(init.body)
       const key = request.components[0]
       if (init.method === 'PUT') {
-        for (const template of [request.createTemplate, request.resolveTemplate]) stored[template.id] = {...template, components: template.components.map((c: any) => ({...c, componentId: c.id})), message: template.message.default.value, name: template.name.default.value, siteId: 'page-1'}
+        for (const template of [request.createTemplate, request.resolveTemplate]) stored[template.id] = {...template, components: template.components.map((c: any) => ({...c, componentId: c.id})), message: template.message.default.value, name: template.name.default.value, siteId: 'page-1', translations: {message: {en: template.message.en.value}, name: {en: template.name.en.value}}}
         return new Response(JSON.stringify({integration: {automaticResolve: true, createTemplateId: `create-${key}`, id: `private-${key}`, isActive: true, monitoringTool: 'GRAFANA', onFailCreateIncident: true, onFailNotifySubscribers: request.onFailNotifySubscribers, onFailPublishIncident: true, onRecoverNotifySubscribers: request.onRecoverNotifySubscribers, onRecoverPublishIncident: true, onRecoverResolveIncident: true, resolveTemplateId: `resolve-${key}`, siteId: 'page-1'}}))
       }
 
@@ -281,6 +304,8 @@ describe('independent component publication', () => {
       expect(binding.onFailNotifySubscribers).to.equal(false)
       expect(binding.onRecoverNotifySubscribers).to.equal(false)
       expect(binding.createTemplate.name.default.value).to.equal(`Testnet / ${key}: service disruption`)
+      expect(binding.createTemplate.name.en.value).to.equal(`Testnet / ${key}: service disruption`)
+      expect(binding.resolveTemplate.name.en.value).to.equal(`Testnet / ${key}: recovered`)
       expect(binding.createTemplate.id).to.equal(`create-${key}`)
       expect(binding.label).to.equal(`Testnet / ${key}: service disruption`)
       const restored = new StatusPageWebhook(directory, 'testnet', key)

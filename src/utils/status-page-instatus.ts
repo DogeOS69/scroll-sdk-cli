@@ -37,11 +37,16 @@ interface RemoteIncidentTemplate {
   notify: boolean
   siteId: string
   status: string
+  translations?: {message?: Record<string, string>; name?: Record<string, string>}
   type: string
 }
 
+const localizedTemplateText = (value: string) => ({default: {value}, en: {value}})
+
 function encodeIntegrationTemplate(input: InstatusIncidentTemplate, id: string) {
-  return {...input, id, message: {default: {value: input.message ?? ''}}, name: {default: {value: input.name}}, translations: {}, type: 'INCIDENT'}
+  // Instatus's generated English translation overrides the default text on the
+  // public page. Manage both, or an old "Deposits outage" hides the network.
+  return {...input, id, message: localizedTemplateText(input.message ?? ''), name: localizedTemplateText(input.name), translations: {}, type: 'INCIDENT'}
 }
 
 interface RemoteComponent {
@@ -189,7 +194,8 @@ export class InstatusClient {
       || Object.entries(settings).some(([key, value]) => integration[key as keyof typeof settings] !== value)) throw new Error('Instatus did not confirm the requested integration and subscriber notification policy')
     for (const [id, desired] of [[current[0].id, create], [current[1].id, resolve]] as Array<[string, InstatusIncidentTemplate]>) {
       const actual = await read(id)
-      if (actual.notify !== desired.notify || actual.name !== desired.name || actual.status !== desired.status || actual.components[0].status !== desired.components?.[0]?.status) throw new Error('Instatus did not confirm the requested component incident template')
+      if (actual.notify !== desired.notify || actual.name !== desired.name || actual.status !== desired.status || actual.components[0].status !== desired.components?.[0]?.status
+        || actual.translations?.name?.en !== desired.name || actual.translations?.message?.en !== (desired.message ?? '')) throw new Error('Instatus did not confirm the requested component incident template (including English translations)')
     }
   }
 

@@ -400,6 +400,12 @@ existing integration when importing an older binding; never recreate the
 integration to repair missing private state. Managed templates use the integration
 API editor schema, and apply verifies both template and integration subscriber
 notification flags. Template `notify: false` alone is insufficient.
+Managed incident titles and messages identify the network and component, for
+example `Testnet / Deposits: service disruption`. Apply writes and verifies both
+the default and English template text: Instatus's pre-existing English translation
+otherwise overrides the default title and can hide the network. Updating templates
+affects future events; existing incident titles need a separate metadata correction
+that preserves their component bindings, status, timestamps and test markers.
 A URL alone is not the management ID. Creation intent is persisted before POST;
 ambiguous results block duplication until receipts are restored/adopted.
 
