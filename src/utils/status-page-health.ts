@@ -36,22 +36,29 @@ export function normalizeHealth(input: any = {}): any {
   return health
 }
 
-/** WF health is independent of deposit/withdrawal snapshots. Idle queues are not outages. */
+/** WF evidence is exported by the read-only core observer, not Pod-IP history. */
 function workflowHealth(health: any): string {
   const selector = `{job=~${JSON.stringify(health.withdrawalProcessorJobRegex)}}`
   const labels = 'namespace, job, instance'
-  const head = `withdrawal_processor_protocol_state_wf_tx_number${selector}`
+  const metric = (name: string) => `withdrawal_processor_public_workflow_${name}${selector}`
   const age = `withdrawal_processor_protocol_job_oldest_age_seconds{job=~${JSON.stringify(health.withdrawalProcessorJobRegex)},status=~"queued|building|built|failed_retryable|bug|proposed_to_tso|awaiting_replay"}`
-  const window = `${health.wfStallSeconds}s`
-  const current = (metric: string) => `(time() - timestamp(${metric}) >= 0 and time() - timestamp(${metric}) <= ${health.freshnessSeconds})`
-  const validHead = `(${head} >= 0 and ${head} < Inf and ${head} == floor(${head}) and ${current(head)} and on (${labels}) (up${selector} == 1))`
-  const validAge = `(${age} >= 0 and ${age} < Inf and ${current(age)})`
-  // Require the same target at both ends of the window. A new/replaced target is unknown.
-  const flat = `((max_over_time(${head}[${window}]) == bool min_over_time(${head}[${window}])) * (${head} == bool ${head} offset ${window}))`
-  const waiting = `(max by (${labels}) (${validAge}) > bool ${health.wfStallSeconds})`
-  const evidence = `((${flat} * on (${labels}) ${waiting}) and on (${labels}) ${validHead} and on (${labels}) (count by (${labels}) (${validAge}) == count by (${labels}) (${age})))`
+  const current = (stamp: string) => `(time() - ${stamp} >= 0 and time() - ${stamp} <= ${health.freshnessSeconds})`
+  const observed = metric('snapshot_timestamp_seconds')
+  const unchanged = metric('unchanged_seconds')
+  const head = metric('head_observed_timestamp_seconds')
+  const validHead = `(${metric('snapshot_valid')} == 1 and on (${labels}) ${current(observed)} and on (${labels}) (${head} > 0 and ${head} <= time()) and on (${labels}) (${unchanged} >= 0 and ${unchanged} < Inf and ${unchanged} <= (${observed} - ${head} + 1)) and on (${labels}) (up${selector} == 1))`
+  const jobsSelector = `{job=~${JSON.stringify(health.withdrawalProcessorJobRegex)},source="jobs"}`
+  const jobs = `(withdrawal_processor_protocol_snapshot_valid${jobsSelector} == 1 and ${current(`withdrawal_processor_protocol_snapshot_timestamp_seconds${jobsSelector}`)})`
+  const validAge = `(${age} >= 0 and ${age} < Inf and ${current(`timestamp(${age})`)})`
+  const waiting = `(max by (${labels}) (${validAge}))`
+  // Idle/recent work and positive evidence of recent canonical progress need no
+  // full history window. Old overdue work is unknown until continuous core
+  // observation establishes a stall. A restart never inherits a stalled timer.
+  const healthy = `((${waiting} <= bool ${health.wfStallSeconds}) == 1) or on (${labels}) ((${waiting} > bool ${health.wfStallSeconds}) * on (${labels}) (time() - ${head} <= bool ${health.wfStallSeconds}) == 1)`
+  const stalled = `((${waiting} > bool ${health.wfStallSeconds}) * on (${labels}) (${unchanged} > bool ${health.wfStallSeconds}) == 1)`
+  const verdict = `((${stalled}) or on (${labels}) ((${healthy}) * 0))`
+  const evidence = `(${verdict} and on (${labels}) ${validHead} and on (${labels}) ${jobs} and on (${labels}) (count by (${labels}) (${validAge}) == count by (${labels}) (${age})))`
   const complete = `(count(${evidence}) == count(up${selector})) and (min(up${selector}) == 1) and (count(up${selector}) > 0)`
-  // A confirmed stalled writer is actionable even if another writer has lost evidence.
   return `(max(${evidence}) == 1) or ((max(${evidence}) == 0) and (${complete}))`
 }
 

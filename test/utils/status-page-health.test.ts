@@ -25,7 +25,7 @@ describe('status-page built-in health', () => {
     const probe = builtinHealth('public-rpc', 'testnet', '123', health)
     const business = builtinHealth('deposits', 'testnet', '123', health)
     const tests: any[] = []
-    const scenario = (expr: string, series: Record<string, string>, expected: null | number) => tests.push({input_series: Object.entries(series).map(([series, values]) => ({series, values})), interval: '1m',
+    const scenario = (expr: string, series: Record<string, string>, expected: null | number) => tests.push({input_series: Object.entries(series).map(([series, values]) => ({series, values})), interval: '1m', name: `scenario-${tests.length + 1}`,
       promql_expr_test: [{eval_time: '10m', exp_samples: expected === null ? [] : [{labels: '{}', value: expected}], expr}]})
     const external = (a: string, b: string, stamp = '600') => Object.fromEntries([['a', a], ['b', b]].flatMap(([location, value]) => {
       const labels = `{environment="testnet",chain_id="123",component_key="public-rpc",location="${location}"}`
@@ -65,7 +65,12 @@ describe('status-page built-in health', () => {
         [`withdrawal_processor_public_deposit_oldest_eligible_age_seconds${labels}`,age],
         [`withdrawal_processor_public_deposit_snapshot_timestamp_seconds${labels}`,stamp],
         [`withdrawal_processor_public_deposit_snapshot_valid${labels}`,valid],
-        [`withdrawal_processor_protocol_state_wf_tx_number${labels}`,'580'],
+        [`withdrawal_processor_public_workflow_snapshot_valid${labels}`,'1'],
+        [`withdrawal_processor_public_workflow_snapshot_timestamp_seconds${labels}`,'600'],
+        [`withdrawal_processor_public_workflow_head_observed_timestamp_seconds${labels}`,'1'],
+        [`withdrawal_processor_public_workflow_unchanged_seconds${labels}`,'599'],
+        ['withdrawal_processor_protocol_snapshot_valid{namespace="monitoring",job="withdrawal-processor",instance="writer",source="jobs"}','1'],
+        ['withdrawal_processor_protocol_snapshot_timestamp_seconds{namespace="monitoring",job="withdrawal-processor",instance="writer",source="jobs"}','600'],
         ['withdrawal_processor_protocol_job_oldest_age_seconds{namespace="monitoring",job="withdrawal-processor",instance="writer",status="built",action_kind="advance_l2_build"}','0']].map(([key,value]) => [key,Array.from({length: 11}).fill(value).join(' ')]))
     }
 
@@ -77,7 +82,8 @@ describe('status-page built-in health', () => {
     scenario(business, queue('1','NaN'), null)
     scenario(business, queue('-1','0'), null)
     // Confirmed WF failure must publish even with missing/invalid business observations.
-    const wfHead = 'withdrawal_processor_protocol_state_wf_tx_number{namespace="monitoring",job="withdrawal-processor",instance="writer"}'
+    const unchanged = 'withdrawal_processor_public_workflow_unchanged_seconds{namespace="monitoring",job="withdrawal-processor",instance="writer"}'
+    const wfHead = 'withdrawal_processor_public_workflow_head_observed_timestamp_seconds{namespace="monitoring",job="withdrawal-processor",instance="writer"}'
     const wfAge = 'withdrawal_processor_protocol_job_oldest_age_seconds{namespace="monitoring",job="withdrawal-processor",instance="writer",status="built",action_kind="advance_l2_build"}'
     const stalled = {...queue('0','0','600','0'), [wfAge]: '601x10'}
     scenario(business, stalled, 1)
@@ -85,14 +91,21 @@ describe('status-page built-in health', () => {
     const noBusiness = Object.fromEntries(Object.entries(stalled).filter(([key]) => !key.includes('_public_deposit_')))
     scenario(business, noBusiness, 1)
     scenario(business, {...noBusiness, [wfAge]: '0x10'}, null) // no false recovery
-    scenario(business, {...queue('0','0'), [wfAge]: '601x10', [wfHead]: '580+1x10'}, 0) // progress
+    scenario(business, {...queue('0','0'), [unchanged]: '0x10', [wfAge]: '601x10', [wfHead]: '590x10'}, 0) // progress
     scenario(business, {...queue('0','0'), [wfAge]: '300x10'}, 0) // below stall deadline
     scenario(business, {...queue('0','0'), [wfAge]: Array.from({length: 11}).fill('NaN').join(' ')}, null)
-    scenario(business, {...queue('0','0'), [wfHead]: '_ _ _ _ _ _ 580x4'}, null) // no full history
-    scenario(business, {...stalled, [wfHead]: '580x6 _ _ _ _'}, null) // stale head
-    const noWorkflow = Object.fromEntries(Object.entries(queue('0','0')).filter(([key]) => !key.includes('_protocol_')))
+    scenario(business, {...queue('0','0'), [unchanged]: '0x10', [wfHead]: '_ _ _ _ _ _ 590x4'}, 0) // recent persisted head needs no Pod history
+    scenario(business, {...stalled, [wfHead]: '0x10'}, null) // invalid persisted head timestamp
+    const workflowValid = 'withdrawal_processor_public_workflow_snapshot_valid{namespace="monitoring",job="withdrawal-processor",instance="writer"}'
+    scenario(business, {...queue('0','0'), [unchanged]: '0x10'}, 0) // restart + idle: known immediately
+    scenario(business, {...queue('0','0'), [unchanged]: '0x10', [wfAge]: '601x10'}, null) // old overdue work needs continuity
+    scenario(business, {...queue('0','0'), [unchanged]: '0x10', [wfAge]: '601x10', [wfHead]: '590x10'}, 0) // recent progress survives restart
+    scenario(business, {...queue('0','0'), [workflowValid]: '0x10'}, null) // consistency guard invalidates recovery
+    scenario(business, {...queue('0','0'), [wfHead]: '601x10'}, null) // clock anomaly
+    scenario(business, {...queue('0','0'), [unchanged]: Array.from({length: 11}).fill('NaN').join(' ')}, null)
+    const noWorkflow = Object.fromEntries(Object.entries(queue('0','0')).filter(([key]) => !key.includes('_protocol_') && !key.includes('_public_workflow_')))
     scenario(business, noWorkflow, null)
-    const businessFailure = Object.fromEntries(Object.entries(queue('1','601')).filter(([key]) => !key.includes('_protocol_')))
+    const businessFailure = Object.fromEntries(Object.entries(queue('1','601')).filter(([key]) => !key.includes('_protocol_') && !key.includes('_public_workflow_')))
     scenario(business, businessFailure, 1) // independent failure is still actionable
     const incomplete = queue('0','0')
     incomplete['up{namespace="monitoring",job="withdrawal-processor",instance="missing-writer"}'] = '1x10'
