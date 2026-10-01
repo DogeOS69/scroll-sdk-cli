@@ -128,7 +128,7 @@ export default class StatusPage extends Command {
         return {key, plan: webhookPlan, webhook}
       })
       const heartbeat = (options.publication?.heartbeat?.enabled || options.generated.heartbeatBoundPageId) ? new StatusPageHeartbeat(root, options.environment, options.catalog.chainId) : undefined
-      const heartbeatPlan = await heartbeat?.plan(client, plan.page.id, options.catalog.groupName, options.generated.heartbeatRequested === true, options.publication.heartbeat.enabled)
+      const heartbeatPlan = await heartbeat?.plan(client, plan.page.id, options.catalog.groupName, options.generated.heartbeatRequested === true, options.publication.heartbeat.enabled, options.publication.heartbeat.publicIncident)
       const webhookPlans = webhooks.map(({key, plan: webhookPlan}) => ({component: key ?? 'legacy-bootstrap', ...webhookPlan}))
       if (flags.apply) {
         for (const item of webhooks) if (item.plan.action !== 'unmanaged') item.webhook.prepare()

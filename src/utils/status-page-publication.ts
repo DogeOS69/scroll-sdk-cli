@@ -55,9 +55,9 @@ export function reconcileComponentPublication(values: any, config: any, readNode
   text(delivery.image, 'publication.delivery.image')
   if (typeof delivery.storageClassName !== 'string' || !/^(?:[\da-z][\d.a-z-]*)?$/.test(delivery.storageClassName)) throw new Error('Invalid delivery storage class')
   if (!/^[1-9]\d*(Mi|Gi)$/.test(delivery.storageSize)) throw new Error('Invalid delivery storage size')
-  const heartbeat = {alertIds: [], enabled: false, ...object(publication.heartbeat, 'publication.heartbeat')}
-  fields(heartbeat, ['enabled', 'alertIds'], 'publication.heartbeat')
-  if (typeof heartbeat.enabled !== 'boolean' || !Array.isArray(heartbeat.alertIds) || heartbeat.alertIds.some((id: unknown) => typeof id !== 'string' || !/^[\w-]+$/.test(id))) throw new Error('Invalid heartbeat configuration')
+  const heartbeat = {alertIds: [], enabled: false, publicIncident: true, ...object(publication.heartbeat, 'publication.heartbeat')}
+  fields(heartbeat, ['enabled', 'alertIds', 'publicIncident'], 'publication.heartbeat')
+  if (typeof heartbeat.publicIncident !== 'boolean' || typeof heartbeat.enabled !== 'boolean' || !Array.isArray(heartbeat.alertIds) || heartbeat.alertIds.some((id: unknown) => typeof id !== 'string' || !/^[\w-]+$/.test(id))) throw new Error('Invalid heartbeat configuration')
   if (heartbeat.enabled && heartbeat.alertIds.length === 0) throw new Error('Heartbeat requires Instatus monitor alert IDs for internal notifications')
   const incidents = {manageTemplates: false, notifySubscribers: false, ...object(publication.incidents, 'publication.incidents')}
   if ('affectedStatus' in incidents) throw new Error('Move publication.incidents.affectedStatus to components.<key>.affectedStatus after reviewing each rule; a global severity cannot represent every failure')

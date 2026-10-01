@@ -44,6 +44,24 @@ describe('independent monitoring heartbeat', () => {
     expect(fs.statSync(restarted.secretFile).mode % 0o1000).to.equal(0o600)
     expect(fs.statSync(path.join(directory, 'secrets/status-page')).mode % 0o1000).to.equal(0o700)
   })
+  it('publishes network-scoped monitoring loss independently of business components', async () => {
+    const transport = sinon.stub().callsFake(async (_url: string, init: RequestInit) => {
+      if (init.method === 'POST') return new Response(JSON.stringify({cronMonitor: {componentId: null, id: 'cron-1', siteId: 'page-1', slug: 'private-slug'}}))
+      if (init.method === 'PUT') return new Response('{}')
+      return new Response(JSON.stringify({cronMonitors: [], totalPages: 1}))
+    })
+    const client = new InstatusClient('fake', transport)
+    const heartbeat = new StatusPageHeartbeat(directory, 'testnet', '123')
+    const plan = await heartbeat.plan(client, 'page-1', 'Testnet', false, true, true)
+    expect(plan.name).to.contain('Testnet 123 monitoring')
+    expect(plan.publicIncident).to.equal(true)
+    heartbeat.prepare()
+    await heartbeat.apply(plan, client, 'page-1', ['ops-alert'])
+    const update = JSON.parse(transport.lastCall.args[1].body)
+    expect(update.onFail).to.include({createIncident: true, notifySubscribers: false, publishIncident: true})
+    expect(update.onRecover).to.include({publishIncident: true, resolveIncident: true})
+    expect(update).not.to.have.property('componentId')
+  })
   it('blocks a second create after an ambiguous response or lost binding', async () => {
     const client = new InstatusClient('fake', sinon.stub().callsFake(async (_url: string, init: RequestInit) => {
       if (init.method === 'POST') throw new Error('unknown outcome')

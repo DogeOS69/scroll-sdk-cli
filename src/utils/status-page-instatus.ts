@@ -199,11 +199,11 @@ export class InstatusClient {
     }
   }
 
-  async configureCronMonitor(id: string, alerts: string[], enabled = true): Promise<void> {
+  async configureCronMonitor(id: string, alerts: string[], enabled = true, publicIncident = false): Promise<void> {
     if (!validId(id) || alerts.some(alert => !validId(alert))) throw new Error('Invalid heartbeat monitor or alert ID')
-    await this.request(`/monitors/cron/${id}`, 'PUT', {alerts, grace: 180, onFail: {createIncident: false, createOutageDuration: false, notifySubscribers: false, publishIncident: false}, onRecover: {notifySubscribers: false, publishIncident: false, resolveIncident: false, resolveOutageDuration: false},
-      // Grafana may send a one-minute repeat at the following group interval.
-      // Allow two-minute delivery plus scheduling/network jitter before degradation.
+    await this.request(`/monitors/cron/${id}`, 'PUT', {alerts, grace: 180, onFail: {createIncident: publicIncident, createOutageDuration: false, notifySubscribers: false, publishIncident: publicIncident}, onRecover: {notifySubscribers: false, publishIncident: publicIncident, resolveIncident: publicIncident, resolveOutageDuration: false},
+      // Independent of the evaluator: missing evidence or process failure stops
+      // its pings. Publish monitoring loss without changing business components.
       period: 180,
       state: enabled ? 'ACTIVE' : 'PAUSED',
     })

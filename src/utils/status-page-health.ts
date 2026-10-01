@@ -3,14 +3,15 @@
 const HEALTH_FIELDS = new Set(['batchPublicationDeadlineSeconds', 'depositDeadlineSeconds', 'ethDaSubmitterJobRegex',
   'failureFor', 'freshnessSeconds', 'maxBlockAgeSeconds', 'maxIndexLagSeconds', 'maxNodeLagSeconds',
   'maxRpcLatencySeconds', 'minimumProbeLocations', 'recoveryFor', 'wfStallSeconds', 'withdrawalDeadlineSeconds',
-  'withdrawalProcessorJobRegex', 'withdrawalProcessorExpectedTargets', 'ethDaSubmitterExpectedTargets'])
+  'withdrawalProcessorJobRegex', 'withdrawalProcessorExpectedTargets', 'ethDaSubmitterExpectedTargets',
+  'withdrawalProcessorStatefulSet', 'kubeStateMetricsJobRegex', 'tsoJobRegex', 'tsoExpectedTargets'])
 
 export function normalizeHealth(input: any = {}): any {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('statusPage.publication.health must be a mapping')
   if (Object.keys(input).some(key => !HEALTH_FIELDS.has(key))) throw new Error('Unknown statusPage.publication.health field')
   const health = {...input}
   for (const [key, value] of Object.entries(health)) {
-    if (key.endsWith('JobRegex')) {
+    if (key.endsWith('JobRegex') || key.endsWith('StatefulSet')) {
       if (typeof value !== 'string' || !value || value.length > 256) throw new Error(`${key} must be a configured Prometheus job regex`)
       continue
     }
@@ -21,7 +22,7 @@ export function normalizeHealth(input: any = {}): any {
     } else if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || (key !== 'maxRpcLatencySeconds' && !Number.isInteger(value))) throw new Error(`${key} must be a positive number`)
   }
 
-  if (health.withdrawalProcessorExpectedTargets > 32 || health.ethDaSubmitterExpectedTargets > 32) throw new Error('At most 32 expected service targets')
+  if (health.withdrawalProcessorExpectedTargets > 32 || health.ethDaSubmitterExpectedTargets > 32 || health.tsoExpectedTargets > 32) throw new Error('At most 32 expected service targets')
   if (health.minimumProbeLocations < 2) throw new Error('Public health requires at least two independent probe locations')
   return health
 }

@@ -432,14 +432,20 @@ A URL alone is not the management ID. Creation intent is persisted before POST;
 ambiguous results block duplication until receipts are restored/adopted.
 
 Optional Cron Monitor uses `heartbeat.json` and `heartbeat.secret.yaml` in the same
-private directory. It creates no public component/incident, alerts only internal
-destinations, and detects lost Grafana/Prometheus or failed delivery through a
-missing heartbeat. Grafana requests one-minute repeats; actual notifications can
-arrive every two minutes because of Alertmanager group scheduling. The monitor
-allows a three-minute period plus three-minute grace, avoiding false degradation
-from normal scheduling jitter. First successful ping activates monitoring. Disable and apply
-to pause the provider monitor; deploy to pause the retained Grafana heartbeat rule.
-Restore its receipt after an ambiguous response, rather than creating another monitor.
+private directory. With `publication.heartbeat.publicIncident: true` (the default),
+it publishes a network-named monitoring-loss incident when fresh complete evidence
+or confirmed delivery is unavailable. It creates no business component binding and
+does not notify public subscribers; configured internal alert IDs still apply.
+Set `publicIncident: false` only for an explicit internal-only policy: the public
+page will then retain the last known business state without a freshness warning.
+
+The evaluator sends heartbeats directly every 30 seconds while evidence is
+complete and no delivery is pending. Instatus enforces a three-minute period plus
+three-minute grace independently of Grafana, Prometheus, or the evaluator process.
+The first successful ping activates the provider timer and must be checked during
+activation. Disable and apply to pause the provider monitor. Restore its receipt
+after an ambiguous response rather than creating another monitor. The public
+monitoring warning does not mean deposits or withdrawals are confirmed failed.
 
 Generated rules preserve global notification policies and existing unrelated
 provisioning. Retire competing legacy public routes before automatic activation.

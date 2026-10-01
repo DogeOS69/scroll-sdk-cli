@@ -5,7 +5,7 @@ import * as path from 'node:path'
 
 import {InstatusClient} from './status-page-instatus.js'
 
-export interface HeartbeatPlan {action: 'create' | 'reuse'; name: string; secretFile: string; state: 'ACTIVE' | 'PAUSED'}
+export interface HeartbeatPlan {action: 'create' | 'reuse'; name: string; publicIncident: boolean; secretFile: string; state: 'ACTIVE' | 'PAUSED'}
 
 /** The cron slug is a credential: never include remote responses in plan output. */
 export class StatusPageHeartbeat {
@@ -38,22 +38,22 @@ export class StatusPageHeartbeat {
     }
 
     if (this.receipt?.status !== 'ready') throw new Error('Missing heartbeat receipt')
-    await client.configureCronMonitor(this.receipt.id!, alertIds, enabled)
+    await client.configureCronMonitor(this.receipt.id!, alertIds, enabled, plan.publicIncident)
     this.write(this.secretFile, JSON.stringify({apiVersion: 'v1', data: {url: Buffer.from(this.receipt.url!).toString('base64')}, kind: 'Secret', metadata: {name: 'instatus-monitoring-heartbeat'}, type: 'Opaque'}, null, 2) + '\n')
   }
 
-  async plan(client: InstatusClient, pageId: string, groupName: string, requested: boolean, enabled = true): Promise<HeartbeatPlan> {
+  async plan(client: InstatusClient, pageId: string, groupName: string, requested: boolean, enabled = true, publicIncident = false): Promise<HeartbeatPlan> {
     const state = enabled ? 'ACTIVE' : 'PAUSED'
     const name = `DogeOS ${groupName} ${this.chainId} monitoring heartbeat`
     if (this.receipt && this.receipt.pageId !== pageId) throw new Error('Heartbeat targets a different page')
     if (this.receipt?.status === 'ready') {
       await client.verifyCronMonitor(this.receipt.id!, pageId, name)
-      return {action: 'reuse', name, secretFile: this.secretFile, state}
+      return {action: 'reuse', name, publicIncident, secretFile: this.secretFile, state}
     }
 
     if (this.receipt || requested || fs.existsSync(this.secretFile)) throw new Error('Heartbeat creation may already have succeeded; restore heartbeat.json from private backup before retrying')
     if (pageId && await client.hasCronMonitor(pageId, name)) throw new Error('A matching heartbeat already exists; restore its private receipt instead of creating a duplicate')
-    return {action: 'create', name, secretFile: this.secretFile, state}
+    return {action: 'create', name, publicIncident, secretFile: this.secretFile, state}
   }
 
   prepare(): void {
