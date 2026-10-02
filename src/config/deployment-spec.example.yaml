@@ -304,11 +304,11 @@ rollup:
 contracts:
   deploymentSalt: "salt-000"
   gasOracle:
-    blobScalar: 18
-    commitScalar: 38720000000 # Required by Galileo contracts; independent of legacy scalar.
+    blobScalar: 7400000000
+    commitScalar: 600000000 # Required by Galileo contracts; independent of legacy scalar.
     scalar: 938846
     penaltyThreshold: 1515986167
-    penaltyFactor: 2273979251
+    penaltyFactor: 10000
   alternativeGasToken:
     enabled: false
     exchangeRateMode: Fixed

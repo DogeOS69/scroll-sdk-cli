@@ -240,13 +240,15 @@ function buildEthDaSubmitterBatchEnv(spec: DeploymentSpec): Record<string, strin
   const batch = getEthereumDaBatchConfig(spec)
   const {cutover} = batch
   const env: Record<string, string> = {
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION: batch.compression ?? 'auto',
     DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_JSON_PATH: '/app/genesis/genesis.json',
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_BLOCKS_PER_CHUNK: String(batch.maxBlocksPerChunk ?? 128),
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_CHUNKS_PER_BATCH: String(batch.maxChunksPerBatch ?? 1),
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: String(batch.maxL2GasPerChunk ?? 6_000_000),
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_BATCH_BYTES_SIZE: String(batch.maxUncompressedBatchBytesSize ?? 131_072),
   }
+  // Preserve the legacy spec's explicit overrides, but do not invent runtime
+  // policy defaults. Production policy belongs in the service values template.
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION', batch.compression)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_BLOCKS_PER_CHUNK', batch.maxBlocksPerChunk)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_CHUNKS_PER_BATCH', batch.maxChunksPerBatch)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK', batch.maxL2GasPerChunk)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_BATCH_BYTES_SIZE', batch.maxUncompressedBatchBytesSize)
 
   if (cutover) {
     env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__LAST_BATCH_HASH = cutover.lastBatchHash
@@ -853,7 +855,9 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
           ...(ethereumDa.maxFeePerGasWei ? {
             DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_FEE_PER_GAS_WEI: ethereumDa.maxFeePerGasWei,
           } : {}),
-          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MIN_PRIORITY_FEE_WEI: ethereumDa.minPriorityFeeWei || '2000000000',
+          ...(ethereumDa.minPriorityFeeWei === undefined ? {} : {
+            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MIN_PRIORITY_FEE_WEI: ethereumDa.minPriorityFeeWei,
+          }),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SIGNER_BACKEND: 'local',
           DOGEOS_ETH_DA_SUBMITTER_L2__CONFIRMATIONS: String(ethereumDa.l2Confirmations ?? 0),

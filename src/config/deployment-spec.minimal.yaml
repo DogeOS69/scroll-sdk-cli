@@ -137,11 +137,11 @@ rollup:
 contracts:
   deploymentSalt: "dogeos-devnet-v1"
   gasOracle:
-    blobScalar: 1
-    commitScalar: 38720000000
+    blobScalar: 7400000000
+    commitScalar: 600000000
     scalar: 1
     penaltyThreshold: 100
-    penaltyFactor: 10
+    penaltyFactor: 10000
 
 genesis:
   maxEthSupplyWei: "100000000000000000000000000000"

@@ -837,9 +837,9 @@ describe('deployment-spec-generator', () => {
       }
     });
 
-    it('includes the contracts-template commit scalar for specs predating Galileo', () => {
+    it('uses the calibrated commit scalar when a spec omits it', () => {
       const config = toml.parse(generateConfigToml(createMinimalSpec())) as any;
-      expect(config.contracts.COMMIT_SCALAR).to.equal(38_720_000_000);
+      expect(config.contracts.COMMIT_SCALAR).to.equal(600_000_000);
       expect(config.contracts.SCALAR).to.equal(1);
     });
 
@@ -1500,7 +1500,7 @@ describe('deployment-spec-generator', () => {
       expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_JSON_PATH).to.equal('/app/genesis/genesis.json');
       expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT');
       expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_RELAYED_DEPOSIT_QUEUE_HASH');
-      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK).to.equal('6000000');
+      expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK');
       expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_FEE_PER_GAS_WEI');
 
       const l1InterfaceValuesForRuntime = yaml.load(files['l1-interface-production.yaml']) as any;
@@ -1732,12 +1732,12 @@ describe('deployment-spec-generator', () => {
       expect(envData.DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT).to.equal('8200000');
     });
 
-    it('defaults Ethereum DA submitter batch compression to auto', () => {
+    it('leaves batch compression to the template unless explicitly configured', () => {
       const defaultSpec = createMinimalSpec();
       const defaultFiles = generateValuesFiles(defaultSpec);
       const defaultSubmitterValues = yaml.load(defaultFiles['eth-da-submitter-production.yaml']) as any;
 
-      expect(defaultSubmitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION).to.equal('auto');
+      expect(defaultSubmitterValues.configMaps.env.data).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION');
       const explicitSpec = createMinimalSpec();
       explicitSpec.ethereumDa!.batch = { compression: 'none' };
       const explicitFiles = generateValuesFiles(explicitSpec);
