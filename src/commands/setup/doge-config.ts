@@ -21,6 +21,7 @@ import {
   dogeConfigToToml,
   normalizeDogeNetwork,
 } from '../../utils/doge-config.js'
+import {configureGrafanaAdmin, writeGrafanaPrivateFile} from '../../utils/grafana-admin.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {sanitizeName} from '../../utils/kms-signer-provisioner.js'
 import {
@@ -557,6 +558,9 @@ export class DogeConfigCommand extends Command {
       ) || ''
     }
 
+    newConfig.grafana = await configureGrafanaAdmin(existingConfig.grafana, niCtx.enabled)
+    log(chalk.green('✓ Grafana admin credentials configured (password omitted)'))
+
     newConfig.wallet!.path = await resolveOrPrompt(
       niCtx,
       () => input({
@@ -765,7 +769,7 @@ export class DogeConfigCommand extends Command {
       fs.mkdirSync(configDir, { recursive: true })
     }
 
-    fs.writeFileSync(resolvedPath, dogeConfigToToml(newConfig))
+    writeGrafanaPrivateFile(resolvedPath, dogeConfigToToml(newConfig))
     this.removeLegacyDogeConfigFromMainConfig(mainConfigPath, flags.json, log)
 
     log(chalk.green(`\nConfiguration for ${newConfig.network} network saved to ${resolvedPath}`))

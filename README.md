@@ -1048,6 +1048,32 @@ _See code: [src/commands/setup/disable-internal.ts](https://github.com/dogeos69/
 
 Configure Dogecoin/DA settings and optionally initialize compiler-backed proof topology
 
+The base configuration flow also configures Grafana's admin username (default
+`admin`) and password. It offers secure password generation or masked manual
+entry, and preserves an existing password unless you choose to replace it.
+Non-interactive runs generate a password only when none is configured. The
+`--proof-topology` shortcut for an existing configuration leaves these credentials
+unchanged.
+
+Credentials are stored in the selected doge-config file under `[grafana]` as
+`adminUser` and `adminPassword`. You can set `adminPassword = "$ENV:GRAFANA_ADMIN_PASSWORD"`
+to keep an environment reference in the configuration; it is resolved by
+`setup gen-secrets`. Local credential files use mode `0600`, are excluded from Git
+before writing, and cannot overwrite Git-tracked files.
+
+The normal `setup gen-secrets` flow generates `secrets/grafana-admin.yaml`, matching
+the scroll-monitor example's `grafana.admin.existingSecret: grafana-admin`, with
+keys `admin-user` and `admin-password`. `setup prep-charts` writes that reference
+into scroll-monitor values and removes inline admin credentials. Optional
+`[grafana]` fields `existingSecret`, `userKey`, and `passwordKey` customize both
+outputs. Configurations without `[grafana]` retain their existing behavior.
+
+Apply the generated Secret in the scroll-monitor release namespace before
+installation, for example `kubectl -n <monitoring-namespace> apply -f secrets/grafana-admin.yaml`.
+This YAML is applied directly; `setup push-secrets` handles ENV/JSON files and does
+not publish it. These commands prepare bootstrap credentials and do not reset the
+password in an already running Grafana database.
+
 ```
 USAGE
   $ scrollsdk setup doge-config [-c <value>] [--json] [-N] [--proof-artifact-source existing-s3|prepared-aws

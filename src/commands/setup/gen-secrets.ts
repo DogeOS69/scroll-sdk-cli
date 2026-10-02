@@ -11,6 +11,7 @@ import {getContractsPlaceholderKey} from '../../utils/contracts-placeholder.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import {prepareDstackMonitoringCredentials, readDstackCredentials, renderDstackSecrets, writeDstackCredentialSecrets} from '../../utils/dstack-credentials.js'
 import {readDstackControllerConfig, usesDstackPostgres, writeDstackDatabaseSecret} from '../../utils/dstack-database.js'
+import {writeGrafanaAdminSecret} from '../../utils/grafana-admin.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import {
   getRequiredManagedSignerConfig,
@@ -170,6 +171,8 @@ export default class SetupGenSecrets extends Command {
     const configContent = fs.readFileSync(configPath, 'utf8')
     const config = toml.parse(configContent)
 
+    if (this.dogeConfig.grafana) this.createGrafanaSecret()
+
     const controller = this.dogeConfig.dstackController
     if (controller && controller.enabled !== false && readDstackCredentials()) {
       for (const file of writeDstackCredentialSecrets(controller)) this.jsonCtx.logSuccess(`Created ${path.basename(file)}`)
@@ -213,6 +216,17 @@ export default class SetupGenSecrets extends Command {
       const envFile = path.join(SECRETS_PATH, filename)
       fs.writeFileSync(envFile, content)
       this.jsonCtx.log(chalk.green(`Created ${filename}`))
+    }
+  }
+
+  private createGrafanaSecret(): string {
+    try {
+      if (!this.dogeConfig.grafana) throw new Error('Run setup doge-config to configure Grafana admin credentials first')
+      const file = writeGrafanaAdminSecret(this.dogeConfig.grafana)
+      this.jsonCtx.logSuccess(`Created ${path.basename(file)}; apply it in the scroll-monitor release namespace before installation`)
+      return file
+    } catch (error) {
+      return this.jsonCtx.error('E_GRAFANA_SECRET_GENERATION', (error as Error).message, 'CONFIGURATION', true)
     }
   }
 

@@ -188,6 +188,14 @@ export interface DogeConfig {
     l2Explorer?: string
     l2Url?: string
   }
+  /** Grafana bootstrap credentials; adminPassword also accepts $ENV:VAR_NAME. */
+  grafana?: {
+    adminPassword?: string
+    adminUser?: string
+    existingSecret?: string
+    passwordKey?: string
+    userKey?: string
+  }
   kubernetes?: {
     blockbookPublicPort?: number
     blockbookServiceName?: string

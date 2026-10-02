@@ -194,7 +194,7 @@ describe('setup prep-charts scroll-monitor balance generation', () => {
             general: {CHAIN_ID_L2: config.l2ChainId, L2_RPC_ENDPOINT: config.l2RpcUrl},
             ingress: {GRAFANA_HOST: 'grafana.example.com'},
           },
-          dogeConfig: config.dogeConfig,
+          dogeConfig: {...config.dogeConfig, grafana: {adminPassword: 'nonfunctional-monitor-fixture'}},
           jsonCtx: {info() {}, logSuccess() {}},
           jsonMode: false,
           log(message: string) { output.push(message) },
@@ -206,6 +206,10 @@ describe('setup prep-charts scroll-monitor balance generation', () => {
         // Preserve operator-owned native integration config and literal Secret interpolation.
         expect(generated.grafana.envValueFrom).to.deep.equal(grafana.envValueFrom)
         expect(generated.grafana.alerting).to.deep.equal(grafana.alerting)
+        expect(generated.grafana.admin).to.deep.equal({
+          existingSecret: 'grafana-admin', passwordKey: 'admin-password', userKey: 'admin-user',
+        })
+        expect(first + output.join('\n')).not.to.include('nonfunctional-monitor-fixture')
         expect(generated.balanceMonitoring.ethereum.ethDaSubmitter.address).to.equal(DA_ADDRESS)
         expect(generated.balanceMonitoring.ethereum.ethDaSubmitter.expectedChainId).to.equal('1')
         expect(generated.balanceMonitoring.ethereum.ethDaSubmitter.rpcUrl).to.equal(config.dogeConfig.ethereumDa.submitterRpcUrl)
