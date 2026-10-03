@@ -21,6 +21,7 @@ import {
   dogeConfigToToml,
   normalizeDogeNetwork,
 } from '../../utils/doge-config.js'
+import {configureGrafanaAdmin, writeGrafanaPrivateFile} from '../../utils/grafana-admin.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {sanitizeName} from '../../utils/kms-signer-provisioner.js'
 import {
@@ -84,25 +85,21 @@ interface InitializedProofTopology {
 const ETHEREUM_DA_DEFAULTS: Record<EthereumDaChain, {
   beaconRpcUrl: string
   chainId: string
-  minFinality: 'finalized' | 'safe'
   submitterRpcUrl: string
 }> = {
   devnet: {
     beaconRpcUrl: 'http://l1-devnet-lighthouse:5052',
     chainId: '32382',
-    minFinality: 'safe',
     submitterRpcUrl: 'http://l1-devnet:8545',
   },
   mainnet: {
     beaconRpcUrl: 'https://ethereum-beacon-api.publicnode.com',
     chainId: '1',
-    minFinality: 'finalized',
     submitterRpcUrl: 'https://eth.drpc.org',
   },
   sepolia: {
     beaconRpcUrl: 'https://ethereum-sepolia-beacon-api.publicnode.com',
     chainId: '11155111',
-    minFinality: 'safe',
     submitterRpcUrl: 'https://gateway.tenderly.co/public/sepolia',
   },
 }
@@ -561,6 +558,9 @@ export class DogeConfigCommand extends Command {
       ) || ''
     }
 
+    newConfig.grafana = await configureGrafanaAdmin(existingConfig.grafana, niCtx.enabled)
+    log(chalk.green('✓ Grafana admin credentials configured (password omitted)'))
+
     newConfig.wallet!.path = await resolveOrPrompt(
       niCtx,
       () => input({
@@ -728,7 +728,6 @@ export class DogeConfigCommand extends Command {
       beaconRpcUrl: ethereumDaBeaconRpcUrl,
       chain: ethereumDaChain,
       chainId: ethereumDaChainId,
-      minFinality: ethereumDaDefaults.minFinality,
       submitterRpcUrl: ethereumDaSubmitterRpcUrl,
     }
 
@@ -770,7 +769,7 @@ export class DogeConfigCommand extends Command {
       fs.mkdirSync(configDir, { recursive: true })
     }
 
-    fs.writeFileSync(resolvedPath, dogeConfigToToml(newConfig))
+    writeGrafanaPrivateFile(resolvedPath, dogeConfigToToml(newConfig))
     this.removeLegacyDogeConfigFromMainConfig(mainConfigPath, flags.json, log)
 
     log(chalk.green(`\nConfiguration for ${newConfig.network} network saved to ${resolvedPath}`))

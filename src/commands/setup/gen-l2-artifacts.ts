@@ -11,6 +11,7 @@ import * as path from 'node:path'
 
 import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
 import { writeConfigs } from '../../utils/config-writer.js'
+import {inspectContractOwner} from '../../utils/contract-owner.js'
 import {getContractsPlaceholderKey} from '../../utils/contracts-placeholder.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
@@ -43,7 +44,7 @@ export function applyRethGenesisSigner(config: any, dogeConfig: any): boolean {
   const primaryInstances = Array.isArray(instances) ? instances.filter(instance => instance.index === 0) : []
   const address = primaryInstances[0]?.signer?.address
   if (primaryInstances.length !== 1 || typeof address !== 'string' || !ethers.isAddress(address)) {
-    throw new Error('sequencerReth.instances must contain exactly one index-0 signer with a valid address. Run setup l2-sequencer-reth --index 0 before generating genesis; refusing to use a stale legacy signer.')
+    throw new Error('sequencerReth.instances must contain exactly one index-0 signer with a valid address. Run setup gen-keystore --service sequencer-reth --index 0 before generating genesis; refusing to use a stale legacy signer.')
   }
 
   // The contracts generator still names this input L2GETH_SIGNER_ADDRESS.
@@ -985,11 +986,13 @@ export default class SetupGenL2Artifacts extends Command {
     }
 
     const config = toml.parse(fs.readFileSync(configPath, 'utf8')) as any
+    const owner = inspectContractOwner(config.accounts)
+    for (const warning of owner.warnings) this.jsonCtx.addWarning(warning)
     const signerAddress = config.sequencer?.L2GETH_SIGNER_ADDRESS
     if (typeof signerAddress !== 'string' || !ethers.isAddress(signerAddress)) {
       this.jsonCtx.error(
         'E002_MISSING_REQUIRED_FIELD',
-        'A valid genesis signer is required. For Reth, run setup l2-sequencer-reth --index 0 and supply its doge-config file. Legacy deployments must set sequencer.L2GETH_SIGNER_ADDRESS in config.toml.',
+        'A valid genesis signer is required. For Reth, run setup gen-keystore --service sequencer-reth --index 0 and supply its doge-config file. Legacy deployments must set sequencer.L2GETH_SIGNER_ADDRESS in config.toml.',
         'VALIDATION',
         true,
         { path: 'sequencer.L2GETH_SIGNER_ADDRESS' }

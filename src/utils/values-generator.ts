@@ -21,12 +21,14 @@ import {
   L1_INTERFACE_RPC_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
+import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 import {
   getBridgeFeeRateSatsPerKvb,
   getDogecoinIndexerStartHeight,
   getL1GenesisBlock,
   normalizeDeploymentSpec,
 } from './deployment-spec-generator.js'
+import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues} from './dstack-controller-values.js'
 import {
   resolveDogecoinKubernetesEndpoints,
 } from './kubernetes-endpoints.js'
@@ -167,19 +169,16 @@ const ETHEREUM_DA_DEFAULTS = {
   devnet: {
     beaconRpcUrl: 'http://l1-devnet-lighthouse:5052',
     chainId: 32_382,
-    minFinality: 'safe',
     submitterRpcUrl: 'http://l1-devnet:8545',
   },
   mainnet: {
     beaconRpcUrl: 'https://ethereum-beacon-api.publicnode.com',
     chainId: 1,
-    minFinality: 'finalized',
     submitterRpcUrl: 'https://eth.drpc.org',
   },
   sepolia: {
     beaconRpcUrl: 'https://ethereum-sepolia-beacon-api.publicnode.com',
     chainId: 11_155_111,
-    minFinality: 'safe',
     submitterRpcUrl: 'https://gateway.tenderly.co/public/sepolia',
   },
 } as const
@@ -212,10 +211,6 @@ function getDogecoinClusterRpc(spec: DeploymentSpec): NonNullable<DeploymentSpec
   }
 }
 
-function getEthereumDaMinFinality(spec: DeploymentSpec): string {
-  return getEthereumDaConfig(spec).minFinality || ETHEREUM_DA_DEFAULTS[getEthereumDaChain(spec)].minFinality
-}
-
 function getEthereumDaBatchConfig(spec: DeploymentSpec): NonNullable<NonNullable<DeploymentSpec['ethereumDa']>['batch']> {
   return getEthereumDaConfig(spec).batch ?? {}
 }
@@ -245,13 +240,15 @@ function buildEthDaSubmitterBatchEnv(spec: DeploymentSpec): Record<string, strin
   const batch = getEthereumDaBatchConfig(spec)
   const {cutover} = batch
   const env: Record<string, string> = {
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION: batch.compression ?? 'auto',
     DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_JSON_PATH: '/app/genesis/genesis.json',
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_BLOCKS_PER_CHUNK: String(batch.maxBlocksPerChunk ?? 128),
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_CHUNKS_PER_BATCH: String(batch.maxChunksPerBatch ?? 1),
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: String(batch.maxL2GasPerChunk ?? 6_000_000),
-    DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_BATCH_BYTES_SIZE: String(batch.maxUncompressedBatchBytesSize ?? 131_072),
   }
+  // Preserve the legacy spec's explicit overrides, but do not invent runtime
+  // policy defaults. Production policy belongs in the service values template.
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION', batch.compression)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_BLOCKS_PER_CHUNK', batch.maxBlocksPerChunk)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_CHUNKS_PER_BATCH', batch.maxChunksPerBatch)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK', batch.maxL2GasPerChunk)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_BATCH_BYTES_SIZE', batch.maxUncompressedBatchBytesSize)
 
   if (cutover) {
     env.DOGEOS_ETH_DA_SUBMITTER_BATCH__CUTOVER__LAST_BATCH_HASH = cutover.lastBatchHash
@@ -366,6 +363,12 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
   )) throw new Error('DeploymentSpec proof enforcement requires active real proving')
 
   const files: GeneratedValuesFiles = {}
+
+  const dstackValues = generateDstackControllerValues(normalizedSpec.dstackController)
+  if (dstackValues !== undefined) files[DSTACK_CONTROLLER_VALUES_FILE] = dstackValues
+
+  const dstackMonitoring = generateDstackMonitoringValues(normalizedSpec.dstackController)
+  if (dstackMonitoring !== undefined) files[DSTACK_MONITORING_VALUES_FILE] = dstackMonitoring
 
   // Core L2 infrastructure
   files['l2-sequencer-production.yaml'] = generateL2SequencerValues(normalizedSpec)
@@ -852,7 +855,9 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
           ...(ethereumDa.maxFeePerGasWei ? {
             DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_FEE_PER_GAS_WEI: ethereumDa.maxFeePerGasWei,
           } : {}),
-          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MIN_PRIORITY_FEE_WEI: ethereumDa.minPriorityFeeWei || '2000000000',
+          ...(ethereumDa.minPriorityFeeWei === undefined ? {} : {
+            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MIN_PRIORITY_FEE_WEI: ethereumDa.minPriorityFeeWei,
+          }),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SIGNER_BACKEND: 'local',
           DOGEOS_ETH_DA_SUBMITTER_L2__CONFIRMATIONS: String(ethereumDa.l2Confirmations ?? 0),
@@ -863,7 +868,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
           }),
           ...buildEthDaSubmitterPublishEnv(spec),
           ...buildEthDaSubmitterS3Env(spec),
-          DOGEOS_ETH_DA_SUBMITTER_SERVICE__CYCLE_INTERVAL_MS: '1000',
+          DOGEOS_ETH_DA_SUBMITTER_SERVICE__CYCLE_INTERVAL_MS: '10000',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__LISTEN_ADDRESS: '0.0.0.0',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__LISTEN_PORT: '3004',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__SHUTDOWN_GRACE_PERIOD_SEC: '30',
@@ -1021,6 +1026,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
     image,
     ingress: {
       main: {
+        annotations: {'nginx.ingress.kubernetes.io/proxy-body-size': '4m'},
         hosts: [{
           host: spec.frontend.hosts.tso || '',
           paths: [{ path: '/', pathType: 'Prefix' }]
@@ -1117,14 +1123,11 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INDEXER_SQLITE_PATH', value: '/app/data/eth-da-indexer.sqlite' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_STORE_ROOT', value: '/app/data/eth-da-blob-artifacts' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__ARTIFACT_METADATA_SQLITE_PATH', value: '/app/data/eth-da-artifact-metadata.sqlite' },
-      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__MIN_FINALITY', value: getEthereumDaMinFinality(spec) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__ENABLED', value: 'true' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__WRITER_ID', value: 'withdrawal-processor' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__CURSOR_ID', value: 'eth_da_inbox' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__START_BLOCK', value: String(getEthereumDaInboxWorkerStartBlock(spec)) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__INGEST_DEPTH', value: '1' },
-      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__SAFE_DEPTH', value: '32' },
-      { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__FINALIZED_DEPTH', value: '64' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__ROLLBACK_LOOKBACK', value: '128' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__POLL_INTERVAL_MS', value: '6000' },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__MAX_BLOCKS_PER_CYCLE', value: '64' },
@@ -1211,7 +1214,8 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
  */
 function generateCubesignerValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
-  const productionPolicy = spec.signing?.cubesigner?.productionPolicy
+  const policyResolution = resolveCubesignerPolicy({keys: (spec.signing?.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.keyId, materialId: key.materialId, roleId: role.roleId}))), network: spec.dogecoin.network, selection: spec.signing?.cubesigner})
+  const productionPolicy = policyResolution.policy
 
   const image = resolveImage(spec, 'cubesignerSigner', {
     pullPolicy: 'IfNotPresent',
@@ -1317,6 +1321,12 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
       size: '1Gi'
     }]
   }
+
+  const policyEnv = cubesignerPolicyEnvironment(policyResolution)
+  values.env = values.env.map((item: {name: string; value?: string}) => Object.hasOwn(policyEnv, item.name) ? {name: item.name, value: policyEnv[item.name]} : item)
+  const liveProjection = cubesignerLiveEvidenceProjection(policyResolution)
+  values.configMaps = {...values.configMaps, ...liveProjection.configMaps}
+  values.persistence = {...values.persistence, ...liveProjection.persistence}
 
   // Generate external secrets for both env and session
   const envSecrets = generateExternalSecrets(
@@ -1474,6 +1484,7 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
 
   if (explicitSecretName) values.persistence.secrets.name = explicitSecretName
   if (serviceAccountName) values.serviceAccount.name = serviceAccountName
+
 
   const externalSecrets = generateExternalSecrets(
     localSecretKey,

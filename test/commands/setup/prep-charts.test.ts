@@ -363,7 +363,7 @@ describe('setup prep-charts external attestation signer routing', () => {
 })
 
 describe('setup prep-charts CubeSigner production config', () => {
-  it('projects dynamic network and reviewed policy evidence without replacing template policy', () => {
+  it('projects network and policy evidence while restoring the canonical policy mode', () => {
     const env = buildCubesignerPrepEnv({
       cubesigner: {
         productionPolicy: {
@@ -387,7 +387,7 @@ describe('setup prep-charts CubeSigner production config', () => {
       NETWORK: 'testnet',
     })
     expect(env).not.to.have.property('DOGEOS_CUBESIGNER_SIGNER_MAX_PSBT_BASE64_LEN')
-    expect(env).not.to.have.property('DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE')
+    expect(env).to.have.property('DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE', 'production_verifier_key_policy')
     expect(env).not.to.have.property('DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT')
     expect(env).not.to.have.property('DOGEOS_CUBESIGNER_SIGNER_PROTOCOL_CONTEXT_JSON')
     expect(env).not.to.have.property('DOGEOS_CUBESIGNER_SIGNER_SIGNATURE_MODE')

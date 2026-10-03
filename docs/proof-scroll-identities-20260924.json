@@ -1,0 +1,23 @@
+{
+  "schema": "dogeos/proof-scroll-identities/v1",
+  "schema_version": 1,
+  "openvm_version": "1.7",
+  "core_revision": "6700d4baca0830bb5ac26bfee5a17c53aa725c42",
+  "artifacts": {
+    "aggregate_verification_key": {
+      "sha256": "593e2fbf17d68f4f4331592492ec7c7965aee7b057840ad1647994b784a030e5",
+      "size_bytes": 116500
+    }
+  },
+  "chunk": {
+    "verification_key_hash": "0x2c3e61d80239f4d725c8911b52514038c68a238325d4169ebd5fe54f1240cd86",
+    "program_commitment_hash": "0xfa6e1b089dcf228f8d56745ecd268337d28eba1dd50a760809ae7dc5ead72d17",
+    "program_commitment_le_raw": "0x58e2c73d41d61223e235465e593e626eec1b201b0c3cef3ef912150ad1f55a593bfd2f7624b51c513cb6873df01bfa673e3e2d24205a3868016c6464ef8a694b"
+  },
+  "batch": {
+    "verification_key_hash": "0xb8423d2f1e62f6a6fabf682c3a5d0a1a3bf6703c24869405bad58cd027191a9f",
+    "program_commitment_hash": "0x9f8d5152a39c2923380b46b7bb00748d73a0fc9050fbfecdced0cb68dffff40e",
+    "program_commitment_le_raw": "0xd148fa32e1644c5c1782546bf5270b306b49253bc7b8b652d7d36e651d8ba4742990880f5a2046743a5d425c40bb726a5262c65b68fdf72900d74c70fc3c945f",
+    "recursive_app_commit_raw": "0x00947c849d07c8bcd58c8bde0e6af78ab8f5eab168ed17182e3880710295b8e40079ac1aec0913f8c3b41e9d8781021f32370951dd362adf3f1824f590233cb3"
+  }
+}

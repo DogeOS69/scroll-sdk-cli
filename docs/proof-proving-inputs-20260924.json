@@ -1,0 +1,47 @@
+{
+  "schema": "scrollsdk/proving-input-release-verification/v1",
+  "verifiedAt": "2026-09-24T03:53:38.672708+00:00",
+  "releaseUrl": "https://github.com/DogeOS69/dogeos-core/releases/tag/proving-openvm17-0badaf7a-d4e65b65",
+  "manifestSha256": "1ad8be98f1f818a211c70adb799d71c65497101a7b5a308093c05f02925b4ec2",
+  "artifacts": {
+    "chunk_exe": {
+      "sha256": "d61608bf38ea55be280ca5ad971b53bdf9944e10652c2623aaf2eef2a8ae7972",
+      "sizeBytes": 43020693
+    },
+    "chunk_config": {
+      "sha256": "3d11fb74d57092a7da9f9064519482fa6bf60d93e3d7ca845d861c47159f2b84",
+      "sizeBytes": 2127
+    },
+    "batch_exe": {
+      "sha256": "5f9d83b89a690b91012a7ea5a3c5d3a7dc5c54c715c6f585df77d235964870eb",
+      "sizeBytes": 36737350
+    },
+    "batch_config": {
+      "sha256": "53cc74fc91acd85faee7a06617e2b9d82149fee738a48f71856d56004ea94dd1",
+      "sizeBytes": 1141
+    },
+    "agg_vk": {
+      "sha256": "593e2fbf17d68f4f4331592492ec7c7965aee7b057840ad1647994b784a030e5",
+      "sizeBytes": 116500
+    },
+    "chunk_materializer": {
+      "sha256": "80618fc4f0f8e9a7a5ccce87571e93ae1ada82538295bc6427ba5b341dd14270",
+      "sizeBytes": 11177768
+    },
+    "batch_materializer": {
+      "sha256": "5659b899c9fb6558bf1a9f2414de0f1bfcdc9c87ee3712165713f43de1da9e5e",
+      "sizeBytes": 17098976
+    }
+  },
+  "fiveCircuitFilesMatchExistingLock": true,
+  "existingLock": "proof-scroll-inputs-pr1177.json",
+  "nativeIdentity": {
+    "result": "passed",
+    "coreRevision": "6700d4baca0830bb5ac26bfee5a17c53aa725c42",
+    "receiptSha256": "2ceaaed8709ff35d3f24a9d8fdbcb28eb31a7fe3b8f1034a5d87b33c3fe245a4",
+    "evidence": "proof-scroll-identities-20260924.json",
+    "matchedIdentityCount": 7
+  },
+  "scope": "New release files and native identity; no real proof or production approval. Keep the existing immutable six-image manifest; do not substitute the two new core materializers into it.",
+  "isolatedGpuRun": "https://github.com/DogeOS69/dogeos-core/actions/runs/35953123367"
+}

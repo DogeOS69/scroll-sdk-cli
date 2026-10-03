@@ -35,7 +35,8 @@ timelock = 100
 # ]
 
 fee_rate_sat_per_kvb = 1_000_000
-sequencer_target_amount = 420_690_000
+# Fixed by the WF circuit/builder; changing this prevents the first WF proof.
+sequencer_target_amount = 42_069_000
 fee_wallet_target_amount = 500_000_000
 bridge_target_amount = 5_000_000_000
 confirmations_required = 1

@@ -3,11 +3,21 @@ import { expect } from 'chai'
 import BridgeInitCommand, {
   BRIDGE_TIMELOCK_MARGIN_BLOCKS,
   BRIDGE_TIMELOCK_RELATIVE_BLOCKS,
+  assertGenesisSequencerAmount,
   buildEthereumDaProtocolSeedConfig,
   buildInitialSystemSignerChoices,
   resolveBridgeTimelock,
   resolveInitialSystemSignerFromDogeConfig,
 } from '../../../src/commands/setup/bridge-init.js'
+
+describe('genesis sequencing output invariant', () => {
+  it('accepts the builder value and rejects incompatible genesis funding before broadcast', () => {
+    expect(() => assertGenesisSequencerAmount(42_069_000)).not.to.throw()
+    for (const amount of [420_690_000, 100_000_000, 0, undefined, '42069000']) {
+      expect(() => assertGenesisSequencerAmount(amount)).to.throw('cannot prove its first WF transition')
+    }
+  })
+})
 
 describe('setup bridge-init explicit Kubernetes context', () => {
   it('offers a context flag with KUBE_CONTEXT environment fallback', () => {

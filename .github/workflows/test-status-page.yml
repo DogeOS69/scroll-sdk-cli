@@ -1,0 +1,62 @@
+name: Status page acceptance
+
+on:
+  pull_request:
+    paths:
+      - src/utils/status-page*.ts
+      - src/commands/setup/status-page.ts
+      - src/commands/setup/prep-charts.ts
+      - test/utils/status-page*.test.ts
+      - test/commands/setup/status-page.test.ts
+      - package.json
+      - yarn.lock
+      - .github/workflows/test-status-page.yml
+  push:
+    paths:
+      - src/utils/status-page*.ts
+      - src/commands/setup/status-page.ts
+      - src/commands/setup/prep-charts.ts
+      - test/utils/status-page*.test.ts
+      - test/commands/setup/status-page.test.ts
+      - package.json
+      - yarn.lock
+      - .github/workflows/test-status-page.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generation-helm-alloy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      # Update this immutable SDK pin when changing the shared generation contract.
+      - uses: actions/checkout@v4
+        with:
+          repository: DogeOS69/scroll-sdk
+          ref: f19c8a3e3a9d3cc6afdd3498b9c879e4c731a02c
+          path: sdk-contract
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: yarn
+      - uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.17.3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: |
+          yarn install --frozen-lockfile
+          pip install PyYAML==6.0.2
+          helm dependency build sdk-contract/charts/scroll-monitor
+          docker pull grafana/alloy:v1.8.2
+      - name: Run all status-page tests, including runtime acceptance
+        env:
+          SCROLL_STATUS_RUNTIME_TEST: '1'
+          SCROLL_STATUS_CHART: sdk-contract/charts/scroll-monitor
+        run: npx mocha 'test/utils/status-page*.test.ts' 'test/commands/setup/status-page.test.ts'

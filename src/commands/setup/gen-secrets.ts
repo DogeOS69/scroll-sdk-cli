@@ -9,7 +9,10 @@ import type { DogeConfig } from '../../types/doge-config.js'
 
 import {getContractsPlaceholderKey} from '../../utils/contracts-placeholder.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
-import { JsonOutputContext } from '../../utils/json-output.js'
+import {prepareDstackMonitoringCredentials, readDstackCredentials, renderDstackSecrets, writeDstackCredentialSecrets} from '../../utils/dstack-credentials.js'
+import {readDstackControllerConfig, usesDstackPostgres, writeDstackDatabaseSecret} from '../../utils/dstack-database.js'
+import {writeGrafanaAdminSecret} from '../../utils/grafana-admin.js'
+import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import {
   getRequiredManagedSignerConfig,
   isAwsKmsSigner,
@@ -24,8 +27,6 @@ import {
   signerModeToConfig,
 } from './l2-sequencer-reth.js'
 
-const SECRETS_PATH = path.join(process.cwd(), 'secrets')
-
 export default class SetupGenSecrets extends Command {
   static override description = 'Generate local secret files from config.toml, Dogecoin config, and bridge initialization outputs'
 
@@ -33,6 +34,8 @@ export default class SetupGenSecrets extends Command {
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --doge-config .data/doge-config.toml',
     '<%= config.bin %> <%= command.id %> --non-interactive --json --doge-config .data/doge-config.toml',
+    '<%= config.bin %> <%= command.id %> --dstack-only --non-interactive',
+    '<%= config.bin %> <%= command.id %> --dogecoin-only --non-interactive',
   ]
 
   static override flags = {
@@ -40,6 +43,8 @@ export default class SetupGenSecrets extends Command {
       description: 'Path to Dogecoin config file (defaults to .data/doge-config.toml)',
       required: false,
     }),
+    'dogecoin-only': Flags.boolean({default: false, description: 'Generate only the Dogecoin RPC Secret; no config.toml or bridge initialization required', exclusive: ['dstack-only']}),
+    'dstack-only': Flags.boolean({default: false, description: 'Generate only dstack controller Secrets; no bridge initialization required'}),
     json: Flags.boolean({
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)',
@@ -49,6 +54,7 @@ export default class SetupGenSecrets extends Command {
       default: false,
       description: 'Run without prompts. Uses config values or fails fast.',
     }),
+    spec: Flags.string({dependsOn: ['dstack-only'], description: 'DeploymentSpec YAML for --dstack-only', exclusive: ['doge-config']}),
   }
 
   private dogeConfig: DogeConfig = {} as DogeConfig
@@ -63,6 +69,37 @@ export default class SetupGenSecrets extends Command {
     this.jsonMode = flags.json
     this.jsonCtx = new JsonOutputContext('setup gen-secrets', this.jsonMode)
 
+    if (flags['dstack-only']) {
+      try {
+        const controller = readDstackControllerConfig(flags['doge-config'], flags.spec)
+        if (!controller || controller.enabled === false) throw new Error('An enabled dstackController configuration is required')
+        const state = prepareDstackMonitoringCredentials(controller)
+        if (!state) throw new Error('Run setup dstack-config before generating dstack Secrets')
+        renderDstackSecrets(controller, state)
+        const files: string[] = []
+        if (usesDstackPostgres(controller)) {
+          if (!fs.existsSync('config.toml')) throw new Error('Run setup db-init --databases dstack first, or explicitly select SQLite')
+          let config: toml.JsonMap
+          try {
+            config = toml.parse(fs.readFileSync('config.toml', 'utf8'))
+          } catch {
+            throw new Error('Cannot parse config.toml; contents omitted')
+          }
+
+          const url = this.requireConfigValue((config.db as Record<string, unknown> | undefined)?.DSTACK_DB_CONNECTION_STRING, 'db.DSTACK_DB_CONNECTION_STRING (run setup db-init --databases dstack first)')
+          files.push(writeDstackDatabaseSecret(path.join(process.cwd(), 'secrets'), this.resolveSecretValue(url, 'db.DSTACK_DB_CONNECTION_STRING'), controller))
+        }
+
+        files.push(...writeDstackCredentialSecrets(controller))
+        this.jsonCtx.logSuccess('Dstack Secret files generated locally; no cluster changes made.')
+        if (this.jsonMode) this.jsonCtx.success({files, secretsDir: path.join(process.cwd(), 'secrets')})
+        return
+      } catch (error) {
+        if (error instanceof CliExitError) throw error
+        this.jsonCtx.error('E_DSTACK_SECRET_GENERATION', (error as Error).message, 'CONFIGURATION', true)
+      }
+    }
+
     const dogeConfigResult = await loadDogeConfigWithSelection(
       flags['doge-config'],
       'scrollsdk setup doge-config'
@@ -71,11 +108,30 @@ export default class SetupGenSecrets extends Command {
     this.dogeConfig = dogeConfigResult.config
     this.jsonCtx.info(`Using Dogecoin config file: ${dogeConfigResult.configPath}`)
 
+    if (flags['dogecoin-only']) {
+      // Render and validate first: bootstrap must not read or overwrite other services' Secrets.
+      const files = this.generateEnvContent('dogecoin', {})
+      this.createSecretsFolder()
+      for (const [filename, content] of Object.entries(files)) {
+        const destination = path.join(process.cwd(), 'secrets', filename)
+        fs.writeFileSync(destination, content, {mode: 0o600})
+        fs.chmodSync(destination, 0o600)
+        this.jsonCtx.logSuccess(`Created ${filename}`)
+      }
+
+      if (this.jsonMode) this.jsonCtx.success({
+        dogeConfigPath: dogeConfigResult.configPath,
+        files: Object.keys(files).map(filename => path.join(process.cwd(), 'secrets', filename)),
+        secretsDir: path.join(process.cwd(), 'secrets'),
+      })
+      return
+    }
+
     const bridgeOutputPath = path.join(process.cwd(), '.data', 'output-withdrawal-processor.toml')
     if (!fs.existsSync(bridgeOutputPath)) {
       this.jsonCtx.error(
         'E103_BRIDGE_INIT_OUTPUT_MISSING',
-        `${bridgeOutputPath} not found. Run \`scrollsdk setup bridge-init\` before \`scrollsdk setup gen-secrets\`.`,
+        `${bridgeOutputPath} not found. Run \`scrollsdk setup bridge-init\` before \`scrollsdk setup gen-secrets\`. To bootstrap Dogecoin first, run \`scrollsdk setup gen-secrets --dogecoin-only\`.`,
         'CONFIGURATION',
         true,
         { path: bridgeOutputPath }
@@ -100,6 +156,7 @@ export default class SetupGenSecrets extends Command {
   }
 
   private async createEnvFiles(): Promise<void> {
+    const SECRETS_PATH = path.join(process.cwd(), 'secrets')
     const configPath = path.join(process.cwd(), 'config.toml')
     if (!fs.existsSync(configPath)) {
       this.jsonCtx.error(
@@ -113,6 +170,20 @@ export default class SetupGenSecrets extends Command {
 
     const configContent = fs.readFileSync(configPath, 'utf8')
     const config = toml.parse(configContent)
+
+    if (this.dogeConfig.grafana) this.createGrafanaSecret()
+
+    const controller = this.dogeConfig.dstackController
+    if (controller && controller.enabled !== false && readDstackCredentials()) {
+      for (const file of writeDstackCredentialSecrets(controller)) this.jsonCtx.logSuccess(`Created ${path.basename(file)}`)
+    }
+
+    const dstackUrl = (config.db as Record<string, unknown> | undefined)?.DSTACK_DB_CONNECTION_STRING
+    if (usesDstackPostgres(controller) || (!controller && dstackUrl)) {
+      const value = this.requireConfigValue(dstackUrl, 'db.DSTACK_DB_CONNECTION_STRING (run setup db-init --databases dstack first)')
+      const file = writeDstackDatabaseSecret(SECRETS_PATH, this.resolveSecretValue(value, 'db.DSTACK_DB_CONNECTION_STRING'), controller)
+      this.jsonCtx.logSuccess(`Created ${path.basename(file)}`)
+    }
 
     const services = [
       'blockscout',
@@ -148,7 +219,19 @@ export default class SetupGenSecrets extends Command {
     }
   }
 
+  private createGrafanaSecret(): string {
+    try {
+      if (!this.dogeConfig.grafana) throw new Error('Run setup doge-config to configure Grafana admin credentials first')
+      const file = writeGrafanaAdminSecret(this.dogeConfig.grafana)
+      this.jsonCtx.logSuccess(`Created ${path.basename(file)}; apply it in the scroll-monitor release namespace before installation`)
+      return file
+    } catch (error) {
+      return this.jsonCtx.error('E_GRAFANA_SECRET_GENERATION', (error as Error).message, 'CONFIGURATION', true)
+    }
+  }
+
   private createSecretsFolder(): void {
+    const SECRETS_PATH = path.join(process.cwd(), 'secrets')
     if (fs.existsSync(SECRETS_PATH)) {
       this.jsonCtx.log(chalk.yellow('Secrets folder already exists'))
     } else {
@@ -304,8 +387,13 @@ export default class SetupGenSecrets extends Command {
     }
 
     if (service === 'dogecoin') {
-      envFiles['dogecoin-secret.env'] = this.envLine('DOGECOIN_RPC_USER', this.dogeConfig.dogecoinClusterRpc?.username || '', 'dogeConfig.dogecoinClusterRpc.username')
-      envFiles['dogecoin-secret.env'] += this.envLine('DOGECOIN_RPC_PASSWORD', this.dogeConfig.dogecoinClusterRpc?.password || '', 'dogeConfig.dogecoinClusterRpc.password')
+      envFiles['dogecoin-secret.env'] = ''
+      for (const [field, envKey] of [['username', 'DOGECOIN_RPC_USER'], ['password', 'DOGECOIN_RPC_PASSWORD']] as const) {
+        const source = `dogeConfig.dogecoinClusterRpc.${field}`
+        const value = this.resolveSecretValue(this.dogeConfig.dogecoinClusterRpc?.[field], source)
+        this.requireConfigValue(value, source)
+        envFiles['dogecoin-secret.env'] += `${envKey}="${value}"\n`
+      }
     }
 
     if (service === 'metrics-exporter') {

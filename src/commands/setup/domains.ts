@@ -40,7 +40,6 @@ interface EthereumDaConfig {
   beaconRpcUrl: string
   chain: EthereumDaChain
   chainId: string
-  minFinality: 'finalized' | 'safe'
   submitterRpcUrl: string
 }
 
@@ -568,8 +567,7 @@ export default class SetupDomains extends Command {
       !ethereumDaConfig.chain ||
       !ethereumDaConfig.chainId ||
       !ethereumDaConfig.submitterRpcUrl ||
-      !ethereumDaConfig.beaconRpcUrl ||
-      !ethereumDaConfig.minFinality
+      !ethereumDaConfig.beaconRpcUrl
     ) {
       this.error(
         `${dogeConfigPath} is missing [ethereumDa] settings. Run "scrollsdk setup doge-config" before "scrollsdk setup domains".`
@@ -585,7 +583,6 @@ export default class SetupDomains extends Command {
     logKeyValue('chainId', ethereumDaConfig.chainId)
     logKeyValue('submitterRpcUrl', ethereumDaConfig.submitterRpcUrl)
     logKeyValue('beaconRpcUrl', ethereumDaConfig.beaconRpcUrl)
-    logKeyValue('minFinality', ethereumDaConfig.minFinality)
 
     // Final confirmation - in non-interactive mode, always proceed
     const confirmUpdate = await resolveConfirm(

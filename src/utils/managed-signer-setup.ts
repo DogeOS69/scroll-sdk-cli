@@ -33,6 +33,7 @@ import {
 } from './signer-roles.js'
 
 export interface ManagedSignerCommandOptions {
+  configureArchive?: boolean
   dogeConfig: DogeConfig
   dogeConfigPath: string
   flags: any
@@ -86,14 +87,17 @@ export async function setupManagedSigner(options: ManagedSignerCommandOptions): 
     dogeConfig.accounts[accountAddressKey(role) as keyof NonNullable<DogeConfig['accounts']>] = account.address
     dogeConfig.accounts[accountPrivateKeyKey(role) as keyof NonNullable<DogeConfig['accounts']>] = account.privateKey
 
-    if (signerKey === 'l1CommitSender') {
+    if (signerKey === 'l1CommitSender' && options.configureArchive !== false) {
       await resolveBlobArchive(options, resolveEnvValue(flags['aws-region']))
     }
   } else {
     const completeExisting = getCompleteExistingKmsSigner(dogeConfig, signerKey)
     const shouldProvision = shouldConfigureKmsSigner(options, completeExisting)
     if (!shouldProvision && completeExisting) {
-      address = completeExisting.expectedAddress as string
+      address = options.configureArchive === false
+        ? new KmsSignerProvisioner(jsonCtx, flags['aws-profile']).inspectAddress(completeExisting.kmsRegion!, completeExisting.kmsKeyId!)
+        : completeExisting.expectedAddress as string
+      if (address.toLowerCase() !== completeExisting.expectedAddress!.toLowerCase()) throw new Error(`${role.service}: KMS public key does not match the saved address`)
       signerConfig = completeExisting
       jsonCtx.info(`${role.service}: keeping existing ${role.role} AWS KMS signer from ${relativePath(dogeConfigPath)} (${address})`)
     } else {
@@ -101,7 +105,7 @@ export async function setupManagedSigner(options: ManagedSignerCommandOptions): 
       const identity = await resolveKmsIdentity(options, identityDefaults)
       const provisionInput = resolveKmsSignerInput(options, role, identity, completeExisting)
       logKmsProvisionPlan(role, identity, provisionInput, jsonCtx)
-      const archive = role.service === 'eth-da-submitter'
+      const archive = role.service === 'eth-da-submitter' && options.configureArchive !== false
         ? await resolveBlobArchive(options, identity.awsRegion)
         : { created: false, enabled: false }
       const provisioner = new KmsSignerProvisioner(jsonCtx, flags['aws-profile'])
@@ -112,6 +116,8 @@ export async function setupManagedSigner(options: ManagedSignerCommandOptions): 
         roleArn: provisionInput.roleArn,
         serviceAccount: provisionInput.serviceAccount,
       })
+      const savedAddress = dogeConfig.accounts?.[accountAddressKey(role) as keyof NonNullable<DogeConfig['accounts']>] || existingSigner?.expectedAddress
+      if (options.configureArchive === false && savedAddress && String(savedAddress).toLowerCase() !== provisioned.address.toLowerCase()) throw new Error(`${role.service}: refusing to change the existing signing address`)
       address = provisioned.address
       signerConfig = provisioned.signerConfig
     }
@@ -138,7 +144,8 @@ export async function setupManagedSigner(options: ManagedSignerCommandOptions): 
 
   if (shouldUpdate) {
     fs.mkdirSync(path.dirname(dogeConfigPath), { recursive: true })
-    fs.writeFileSync(dogeConfigPath, dogeConfigToToml(dogeConfig), 'utf8')
+    fs.writeFileSync(dogeConfigPath, dogeConfigToToml(dogeConfig), {mode: 0o600})
+    fs.chmodSync(dogeConfigPath, 0o600)
     jsonCtx.logSuccess(`Updated ${relativePath(dogeConfigPath)}`)
   }
 
@@ -168,32 +175,26 @@ function generateLocalAccount(): LocalAccount {
 }
 
 async function resolveLocalSignerAccount(options: ManagedSignerCommandOptions): Promise<LocalAccount> {
-  const { dogeConfig, nonInteractive, signerKey } = options
+  const { dogeConfig, signerKey } = options
   const role = MANAGED_SIGNER_ROLES[signerKey]
   const privateKeyKey = accountPrivateKeyKey(role) as keyof NonNullable<DogeConfig['accounts']>
   const addressKey = accountAddressKey(role) as keyof NonNullable<DogeConfig['accounts']>
   const existingPrivateKey = dogeConfig.accounts?.[privateKeyKey]
   const existingAddress = dogeConfig.accounts?.[addressKey]
 
-  if (existingPrivateKey && existingAddress) {
-    if (nonInteractive) {
-      return {
-        address: String(existingAddress),
-        privateKey: String(existingPrivateKey),
-      }
+  if (existingPrivateKey) {
+    let wallet: Wallet
+    try { wallet = new Wallet(resolveEnvValue(String(existingPrivateKey)) || '') }
+    catch { throw new Error(`${role.role} private key is invalid or its environment reference is unresolved`) }
+
+    if (existingAddress && wallet.address.toLowerCase() !== String(existingAddress).toLowerCase()) {
+      throw new Error(`${role.role} address does not match its private key`)
     }
 
-    const keepExisting = await confirm({
-      default: true,
-      message: `Reuse existing ${role.role} local private key from doge-config.toml?`,
-    })
-    if (keepExisting) {
-      return {
-        address: String(existingAddress),
-        privateKey: String(existingPrivateKey),
-      }
-    }
+    return {address: wallet.address, privateKey: String(existingPrivateKey)}
   }
+
+  if (existingAddress) throw new Error(`${role.role} has an address but no local private key; import its key or configure its KMS identity`)
 
   return generateLocalAccount()
 }
@@ -255,8 +256,8 @@ function hasKmsProvisioningInput(options: ManagedSignerCommandOptions): boolean 
     flags['eks-cluster'] ||
     flags['network-alias'] ||
     hasFlag('namespace') ||
-    flags['kms-key-id'] ||
-    flags['role-arn'] ||
+    hasFlag('kms-key-id') ||
+    hasFlag('role-arn') ||
     hasFlag('service-account') ||
     (
       signerKey === 'l1CommitSender' &&
@@ -441,7 +442,7 @@ function logKmsProvisionPlan(
     : `    IAM role name: ${getDefaultKmsRoleName(role, identity)}`)
 }
 
-async function resolveBlobArchive(
+export async function resolveBlobArchive(
   options: ManagedSignerCommandOptions,
   awsRegion: string | undefined
 ): Promise<BlobArchivePlan> {

@@ -49,7 +49,7 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       fees: { depositFeeSats: '0', minWithdrawalAmountWei: '1000000000000000', withdrawalFeeWei: '0' },
       keyCounts: { attestation: 3, recovery: 1 },
       seedString: 'test-seed-string',
-      targetAmountsSats: { bridge: 10_000_000, feeWallet: 5_000_000, sequencer: 8_000_000 },
+      targetAmountsSats: { bridge: 10_000_000, feeWallet: 5_000_000, sequencer: 42_069_000 },
       thresholds: { attestation: 2, recovery: 1 },
       timelock: 86_400,
     },
@@ -81,7 +81,6 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       chain: 'sepolia',
       finalizationDepth: 64,
       l1RpcUrl: 'https://gateway.tenderly.co/public/sepolia',
-      minFinality: 'finalized',
     },
     frontend: {
       baseDomain: 'example.com',
@@ -370,6 +369,18 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('validateDeploymentSpec', () => {
+    it('rejects a zero contract owner', () => {
+      const spec = createMinimalSpec();
+      spec.accounts.owner.address = '0x' + '0'.repeat(40);
+      expect(validateDeploymentSpec(spec).errors.some(error => error.path === 'accounts.owner.address')).to.equal(true);
+    });
+    it('rejects the old genesis sequencing amount before generating deployment files', () => {
+      const spec = createMinimalSpec();
+      spec.bridge.targetAmountsSats!.sequencer = 420_690_000;
+      const result = validateDeploymentSpec(spec);
+      expect(result.valid).to.equal(false);
+      expect(result.errors.some(error => error.path === 'bridge.targetAmountsSats.sequencer' && error.message.includes('42069000'))).to.equal(true);
+    });
     it('passes validation for a complete spec', () => {
       const spec = createMinimalSpec();
       const result = validateDeploymentSpec(spec);
@@ -826,9 +837,9 @@ describe('deployment-spec-generator', () => {
       }
     });
 
-    it('includes the contracts-template commit scalar for specs predating Galileo', () => {
+    it('uses the calibrated commit scalar when a spec omits it', () => {
       const config = toml.parse(generateConfigToml(createMinimalSpec())) as any;
-      expect(config.contracts.COMMIT_SCALAR).to.equal(38_720_000_000);
+      expect(config.contracts.COMMIT_SCALAR).to.equal(600_000_000);
       expect(config.contracts.SCALAR).to.equal(1);
     });
 
@@ -1489,7 +1500,7 @@ describe('deployment-spec-generator', () => {
       expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_JSON_PATH).to.equal('/app/genesis/genesis.json');
       expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT');
       expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_RELAYED_DEPOSIT_QUEUE_HASH');
-      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK).to.equal('6000000');
+      expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK');
       expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_FEE_PER_GAS_WEI');
 
       const l1InterfaceValuesForRuntime = yaml.load(files['l1-interface-production.yaml']) as any;
@@ -1529,6 +1540,7 @@ describe('deployment-spec-generator', () => {
         ]);
 
       const tsoValues = yaml.load(files['tso-service-production.yaml']) as any;
+      expect(tsoValues.ingress.main.annotations['nginx.ingress.kubernetes.io/proxy-body-size']).to.equal('4m');
       const tsoEnv = Object.fromEntries(tsoValues.env.map((item: any) => [item.name, item.value]));
       expect(tsoEnv.TIMEOUT_CHECK_INTERVAL_SECONDS).to.equal('60');
       expect(tsoEnv.TSO_CORRECTNESS_MAX_PSBT_BASE64_LEN).to.equal('130048');
@@ -1720,12 +1732,12 @@ describe('deployment-spec-generator', () => {
       expect(envData.DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT).to.equal('8200000');
     });
 
-    it('defaults Ethereum DA submitter batch compression to auto', () => {
+    it('leaves batch compression to the template unless explicitly configured', () => {
       const defaultSpec = createMinimalSpec();
       const defaultFiles = generateValuesFiles(defaultSpec);
       const defaultSubmitterValues = yaml.load(defaultFiles['eth-da-submitter-production.yaml']) as any;
 
-      expect(defaultSubmitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION).to.equal('auto');
+      expect(defaultSubmitterValues.configMaps.env.data).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION');
       const explicitSpec = createMinimalSpec();
       explicitSpec.ethereumDa!.batch = { compression: 'none' };
       const explicitFiles = generateValuesFiles(explicitSpec);
@@ -1824,6 +1836,25 @@ describe('deployment-spec-generator', () => {
       expect(withdrawalEnv.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS).to.equal('15000');
       expect(withdrawalEnv.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING).to.equal('false');
     });
+
+    for (const chain of ['devnet', 'sepolia', 'mainnet'] as const) {
+      it(`omits retired WP finality settings from generated ${chain} configs and values`, () => {
+        const spec = createMinimalSpec();
+        spec.ethereumDa = {...spec.ethereumDa, chain, confirmationDepth: 2, finalizationDepth: 96};
+        const dogeConfig = toml.parse(generateDogeConfigToml(spec)) as any;
+        expect(dogeConfig.ethereumDa).not.to.have.property('minFinality');
+        const files = generateValuesFiles(spec);
+        const wp = yaml.load(files['withdrawal-processor-production.yaml']) as any;
+        const env = Object.fromEntries(wp.env.map((item: any) => [item.name, item.value]));
+        expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_ETHEREUM_DA__MIN_FINALITY');
+        expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__SAFE_DEPTH');
+        expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__FINALIZED_DEPTH');
+        expect(env.DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__INGEST_DEPTH).to.equal('1');
+        const da = yaml.load(files['eth-da-submitter-production.yaml']) as any;
+        expect(da.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMATION_DEPTH).to.equal('2');
+        expect(da.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__FINALIZATION_DEPTH).to.equal('96');
+      });
+    }
 
     it('uses Ethereum DA inbox worker start block for withdrawal processor values', () => {
       const spec = createMinimalSpec();

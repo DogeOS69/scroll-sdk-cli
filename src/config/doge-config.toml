@@ -10,7 +10,6 @@ password = "devnet"                                            # Optional
 beaconRpcUrl = "https://ethereum-sepolia-beacon-api.publicnode.com"
 chain = "sepolia"
 chainId = "11155111"
-minFinality = "safe"
 submitterRpcUrl = "https://gateway.tenderly.co/public/sepolia"
 
 # Wallet Configuration

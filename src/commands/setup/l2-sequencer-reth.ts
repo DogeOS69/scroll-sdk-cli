@@ -17,7 +17,7 @@ import {
   sanitizeName,
   truncateIamRoleName,
 } from '../../utils/kms-signer-provisioner.js'
-import { createNonInteractiveContext, resolveEnvValue } from '../../utils/non-interactive.js'
+import { resolveEnvValue } from '../../utils/non-interactive.js'
 
 type RethSecretMode = 'external-secret' | 'plain'
 type RethSignerBackend = 'aws_kms' | 'local'
@@ -378,7 +378,6 @@ function removeExternalSecret(yamlData: any, secretName: string): void {
 
 export default class SetupL2SequencerReth extends Command {
   static override description = 'Configure a rollup-node reth sequencer signer key and P2P nodekey'
-
   static override examples = [
     '<%= config.bin %> <%= command.id %> --index 2',
     '<%= config.bin %> <%= command.id %> --index 2 --signer-mode external-secret --non-interactive',
@@ -410,13 +409,10 @@ export default class SetupL2SequencerReth extends Command {
     'signer-private-key': Flags.string({ description: 'Existing local sequencer signer private key, with or without 0x.' }),
   }
 
-  public async run(): Promise<void> {
-    const { flags } = await this.parse(SetupL2SequencerReth) as any
-    const nonInteractive = flags['non-interactive']
-    const jsonMode = flags.json
-    createNonInteractiveContext('setup l2-sequencer-reth', nonInteractive, jsonMode)
-    const jsonCtx = new JsonOutputContext('setup l2-sequencer-reth', jsonMode)
+  static override hidden = true
 
+  public async prepareIdentity(flags: any, jsonCtx: JsonOutputContext): Promise<Record<string, unknown>> {
+    const nonInteractive = flags['non-interactive']
     const { config: dogeConfig, configPath } = await loadDogeConfigWithSelection(
       flags['doge-config'],
       'scrollsdk setup doge-config'
@@ -444,12 +440,12 @@ export default class SetupL2SequencerReth extends Command {
     }
 
     this.updateDogeConfig(dogeConfig, index, resolved)
-    fs.writeFileSync(configPath, dogeConfigToToml(dogeConfig), 'utf8')
+    fs.writeFileSync(configPath, dogeConfigToToml(dogeConfig), {mode: 0o600})
+    fs.chmodSync(configPath, 0o600)
     jsonCtx.logSuccess(`Updated ${path.relative(process.cwd(), configPath) || configPath}`)
     jsonCtx.info(`Run scrollsdk setup prep-charts to write ${getSequencerRethValuesFileName(index)} from doge-config.toml.`)
 
-    if (jsonMode) {
-      jsonCtx.success({
+    return {
         dogeConfigPath: configPath,
         index,
         nodekeySecretMode,
@@ -459,8 +455,15 @@ export default class SetupL2SequencerReth extends Command {
           kmsKeyId: signer.kmsKeyId,
         },
         signerMode: mode,
-      })
     }
+  }
+
+  public async run(): Promise<void> {
+    const { flags } = await this.parse(SetupL2SequencerReth) as any
+    const jsonCtx = new JsonOutputContext('setup l2-sequencer-reth', flags.json)
+    jsonCtx.addWarning('Use setup gen-keystore --service sequencer-reth instead.')
+    const result = await this.prepareIdentity(flags, jsonCtx)
+    if (flags.json) jsonCtx.success(result)
   }
 
   private getExistingInstance(dogeConfig: DogeConfig, index: number): RethInstanceConfig | undefined {
@@ -634,6 +637,13 @@ export default class SetupL2SequencerReth extends Command {
       }
     }
 
+    if (existing?.signer?.mode === 'aws_kms' && existing.signer.kmsKeyId && existing.signer.kmsRegion &&
+        !['aws-region', 'eks-cluster', 'network-alias', 'namespace', 'kms-key-id', 'role-arn', 'service-account'].some(name => this.hasFlag(name))) {
+      const address = new KmsSignerProvisioner(jsonCtx, flags['aws-profile']).inspectAddress(existing.signer.kmsRegion, existing.signer.kmsKeyId)
+      if (existing.signer.address && address.toLowerCase() !== existing.signer.address.toLowerCase()) throw new Error('Sequencer KMS public key does not match its configured address')
+      return {...existing.signer, address, backend: 'aws_kms', privateKey: undefined}
+    }
+
     const identity = await this.resolveKmsIdentity(flags, existing, index, nonInteractive, jsonCtx)
     const role = {
       ...SEQUENCER_RETH_ROLE,
@@ -661,6 +671,7 @@ export default class SetupL2SequencerReth extends Command {
       roleArn,
       serviceAccount: resolveEnvValue(flags['service-account']) || existing?.signer?.serviceAccountName || getSequencerRethResourceName(index),
     })
+    if (existing?.signer?.address && existing.signer.address.toLowerCase() !== provisioned.address.toLowerCase()) throw new Error('Refusing to change the existing sequencer signing address')
     return {
       address: provisioned.address,
       backend: 'aws_kms',

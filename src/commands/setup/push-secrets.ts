@@ -9,6 +9,8 @@ import * as path from 'node:path'
 import { promisify } from 'node:util'
 
 import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
+import {readDstackControllerConfig} from '../../utils/dstack-database.js'
+import {publishDstackSecrets} from '../../utils/dstack-secret-publisher.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import { resolveEnvValue } from '../../utils/non-interactive.js'
 
@@ -31,6 +33,18 @@ interface PushedSecret {
   name: string
   properties: string[]
   sourceFile: string
+}
+
+type DstackUploadOptions = Parameters<typeof publishDstackSecrets>[0]
+
+function selectedLegacyFiles(cubesignerOnly: boolean, secretFile?: string): string[] {
+  const {filename, secretsDir} = resolveSecretFile(secretFile)
+  if (!fs.existsSync(secretsDir)) return []
+  const allowed = new Set(['cubesigner-signer-session.json', 'cubesigner-signer.env'])
+  if (cubesignerOnly && filename && !allowed.has(filename)) throw new Error('The selected file is not a singleton CubeSigner Secret')
+  return fs.readdirSync(secretsDir)
+    .filter(file => (file.endsWith('.env') || file.endsWith('.json')) && (!filename || file === filename) && (!cubesignerOnly || allowed.has(file)))
+    .sort().map(file => path.join(secretsDir, file))
 }
 
 // Chart-local aliases (e.g. Reth's "secret-env") need not equal AWS names.
@@ -107,7 +121,8 @@ class AWSSecretService implements SecretService {
     private region: string,
     private prefixName: string,
     private debug: boolean,
-    private nonInteractive: boolean = false
+    private nonInteractive: boolean = false,
+    private log: (message: string) => void = console.log,
   ) {
     // In non-interactive mode, always override all by default
     if (nonInteractive) {
@@ -135,13 +150,13 @@ class AWSSecretService implements SecretService {
       const envFiles = availableFiles.filter(file =>
         file === 'cubesigner-signer.env' && (!filename || file === filename))
       if (sessionFiles.length === 0 && envFiles.length === 0) {
-        console.log(chalk.yellow('No singleton CubeSigner session or env secret files found'))
+        this.log(chalk.yellow('No singleton CubeSigner session or env secret files found'))
         return []
       }
 
       for (const file of sessionFiles) {
         const secretName = path.basename(file, '.json')
-        console.log(chalk.cyan(`Processing CubeSigner session secret: ${secretName}`))
+        this.log(chalk.cyan(`Processing CubeSigner session secret: ${secretName}`))
         const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
         if (await this.createOrUpdateSecret({ 'session.json': content }, secretName)) {
           pushedSecrets.push({ name: secretName, properties: ['session.json'], sourceFile: path.join(secretsDir, file) })
@@ -150,7 +165,7 @@ class AWSSecretService implements SecretService {
 
       for (const file of envFiles) {
         const secretName = 'cubesigner-signer-env'
-        console.log(chalk.cyan(`Processing CubeSigner key secret: ${secretName}`))
+        this.log(chalk.cyan(`Processing CubeSigner key secret: ${secretName}`))
         const data = await this.convertEnvToDict(path.join(secretsDir, file))
         if (await this.createOrUpdateSecret(data, secretName)) {
           pushedSecrets.push({name: secretName, properties: Object.keys(data), sourceFile: path.join(secretsDir, file)})
@@ -171,7 +186,7 @@ class AWSSecretService implements SecretService {
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
 
-      console.log(chalk.cyan(`Processing JSON secret: ${secretName}`))
+      this.log(chalk.cyan(`Processing JSON secret: ${secretName}`))
       const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
 
       const propertyName = getJsonPropertyName(secretName, file)
@@ -191,7 +206,7 @@ class AWSSecretService implements SecretService {
     for (const file of envFiles) {
       const baseName = path.basename(file, '.env')
       const secretName = `${baseName}-env`
-      console.log(chalk.cyan(`Processing ENV secret: ${secretName}`))
+      this.log(chalk.cyan(`Processing ENV secret: ${secretName}`))
       const data = await this.convertEnvToDict(path.join(secretsDir, file))
       if (await this.createOrUpdateSecret(data, secretName)) {
         pushedSecrets.push({ name: secretName, properties: Object.keys(data), sourceFile: path.join(secretsDir, file) })
@@ -204,7 +219,7 @@ class AWSSecretService implements SecretService {
       //   // we should use unified secret name for all sequencer instances like CHARTNAME-N-SECRET-ENV for mutilple instances
       //   const secretName = `l2-sequencer-${sequencerIndex}-secret-env`
 
-      //   console.log(chalk.cyan(`Processing L2 Sequencer secret: ${secretName}`))
+      //   this.log(chalk.cyan(`Processing L2 Sequencer secret: ${secretName}`))
       //   const data = await this.convertEnvToDict(path.join(secretsDir, file))
       //   await this.createOrUpdateSecret(data, secretName)
 
@@ -225,7 +240,7 @@ class AWSSecretService implements SecretService {
       //   // external manager file path: hello/foo-env
 
       //   const secretName = `${baseName}-env`
-      //   console.log(chalk.cyan(`Processing ENV secret: ${secretName}`))
+      //   this.log(chalk.cyan(`Processing ENV secret: ${secretName}`))
       //   const data = await this.convertEnvToDict(path.join(secretsDir, file))
       //   await this.createOrUpdateSecret(data, secretName)
       // }
@@ -234,7 +249,7 @@ class AWSSecretService implements SecretService {
 
     // Push combined L2 Sequencer secrets
     // if (Object.keys(l2SequencerSecrets).length > 0) {
-    //   console.log(chalk.cyan(`Processing combined L2 Sequencer secrets: l2-sequencer-secret-env`))
+    //   this.log(chalk.cyan(`Processing combined L2 Sequencer secrets: l2-sequencer-secret-env`))
     //   await this.createOrUpdateSecret(l2SequencerSecrets, 'l2-sequencer-secret-env')
     // }
     return pushedSecrets
@@ -263,13 +278,13 @@ class AWSSecretService implements SecretService {
     const jsonContent = JSON.stringify(content)
     const escapedJsonContent = jsonContent.replaceAll("'", "'\\''")
     if (Object.keys(content).length === 0) {
-      console.log(chalk.red(`Skipping secret: ${secretName} because it is empty`))
+      this.log(chalk.red(`Skipping secret: ${secretName} because it is empty`))
       return false
     }
 
     if (await this.secretExists(secretName)) {
       if (this.overrideAll) {
-        console.log(chalk.yellow(`Overriding existing secret: ${fullSecretName} (ALL mode)`))
+        this.log(chalk.yellow(`Overriding existing secret: ${fullSecretName} (ALL mode)`))
       } else {
         const shouldOverride = await select({
           choices: [
@@ -281,26 +296,26 @@ class AWSSecretService implements SecretService {
         })
 
         if (shouldOverride === 'no') {
-          console.log(chalk.yellow(`Skipping secret: ${fullSecretName}`))
+          this.log(chalk.yellow(`Skipping secret: ${fullSecretName}`))
           return false
         }
 
         if (shouldOverride === 'all') {
           this.overrideAll = true
-          console.log(chalk.yellow('Will override all existing secrets from now on.'))
+          this.log(chalk.yellow('Will override all existing secrets from now on.'))
         }
       }
 
       const command = `aws secretsmanager put-secret-value --secret-id "${fullSecretName}" --secret-string '${escapedJsonContent}' --region ${this.region}`
       if (this.debug) {
-        console.log(chalk.yellow('--- Debug Output ---'))
-        console.log(chalk.cyan(`Command: ${command}`))
-        console.log(chalk.yellow('-------------------'))
+        this.log(chalk.yellow('--- Debug Output ---'))
+        this.log(chalk.cyan(`Command: ${command}`))
+        this.log(chalk.yellow('-------------------'))
       }
 
       try {
         await execAsync(command)
-        console.log(chalk.green(`Successfully updated secret: ${fullSecretName}`))
+        this.log(chalk.green(`Successfully updated secret: ${fullSecretName}`))
         return true
       } catch (error) {
         console.error(chalk.red(`Failed to update secret: ${fullSecretName}`))
@@ -310,14 +325,14 @@ class AWSSecretService implements SecretService {
     } else {
       const command = `aws secretsmanager create-secret --name "${fullSecretName}" --secret-string '${escapedJsonContent}' --region ${this.region}`
       if (this.debug) {
-        console.log(chalk.yellow('--- Debug Output ---'))
-        console.log(chalk.cyan(`Command: ${command}`))
-        console.log(chalk.yellow('-------------------'))
+        this.log(chalk.yellow('--- Debug Output ---'))
+        this.log(chalk.cyan(`Command: ${command}`))
+        this.log(chalk.yellow('-------------------'))
       }
 
       try {
         await execAsync(command)
-        console.log(chalk.green(`Successfully created secret: ${fullSecretName}`))
+        this.log(chalk.green(`Successfully created secret: ${fullSecretName}`))
         return true
       } catch (error) {
         console.error(chalk.red(`Failed to create secret: ${fullSecretName}`))
@@ -349,7 +364,7 @@ class HashicorpVaultDevService implements SecretService {
   private overrideAll: boolean = false
   private pathPrefix: string
 
-  constructor(debug: boolean, pathPrefix: string = 'scroll', nonInteractive: boolean = false) {
+  constructor(debug: boolean, pathPrefix: string = 'scroll', nonInteractive: boolean = false, private log: (message: string) => void = console.log) {
     this.debug = debug
     this.pathPrefix = pathPrefix
     this.nonInteractive = nonInteractive
@@ -362,23 +377,23 @@ class HashicorpVaultDevService implements SecretService {
   async pushSecrets(cubesignerOnly: boolean = false, secretFile?: string): Promise<PushedSecret[]> {
     const pushedSecrets: PushedSecret[] = []
     if (!(await this.isVaultPodRunning())) {
-      console.log(chalk.yellow('Vault pod is not running. Please install Vault using the following commands:'))
-      console.log(chalk.cyan('helm repo add hashicorp https://helm.releases.hashicorp.com'))
-      console.log(chalk.cyan('helm repo update'))
-      console.log(chalk.cyan('helm install vault hashicorp/vault --set "server.dev.enabled=true"'))
-      console.log(chalk.yellow('After installing Vault, please run this command again.'))
+      this.log(chalk.yellow('Vault pod is not running. Please install Vault using the following commands:'))
+      this.log(chalk.cyan('helm repo add hashicorp https://helm.releases.hashicorp.com'))
+      this.log(chalk.cyan('helm repo update'))
+      this.log(chalk.cyan('helm install vault hashicorp/vault --set "server.dev.enabled=true"'))
+      this.log(chalk.yellow('After installing Vault, please run this command again.'))
       return []
     }
 
     // Check if the KV secrets engine is already enabled
     const isEnabled = await this.isSecretEngineEnabled(this.pathPrefix)
     if (isEnabled) {
-      console.log(chalk.yellow(`KV secrets engine already enabled at path '${this.pathPrefix}'`))
+      this.log(chalk.yellow(`KV secrets engine already enabled at path '${this.pathPrefix}'`))
     } else {
       // Enable the KV secrets engine only if it's not already enabled
       try {
         await this.runCommand(`vault secrets enable -path=${this.pathPrefix} kv-v2`)
-        console.log(chalk.green(`KV secrets engine enabled at path '${this.pathPrefix}'`))
+        this.log(chalk.green(`KV secrets engine enabled at path '${this.pathPrefix}'`))
       } catch (error: unknown) {
         if (error instanceof Error) {
           // If the error is about the path already in use, we can ignore it
@@ -386,7 +401,7 @@ class HashicorpVaultDevService implements SecretService {
             throw error
           }
 
-          console.log(chalk.yellow(`KV secrets engine already enabled at path '${this.pathPrefix}'`))
+          this.log(chalk.yellow(`KV secrets engine already enabled at path '${this.pathPrefix}'`))
         } else {
           // If it's not an Error instance, rethrow it
           throw error
@@ -412,13 +427,13 @@ class HashicorpVaultDevService implements SecretService {
       const envFiles = availableFiles.filter(file =>
         file === 'cubesigner-signer.env' && (!filename || file === filename))
       if (sessionFiles.length === 0 && envFiles.length === 0) {
-        console.log(chalk.yellow('No singleton CubeSigner session or env secret files found'))
+        this.log(chalk.yellow('No singleton CubeSigner session or env secret files found'))
         return []
       }
 
       for (const file of sessionFiles) {
         const secretName = path.basename(file, '.json')
-        console.log(chalk.cyan(`Processing CubeSigner session secret: ${this.pathPrefix}/${secretName}`))
+        this.log(chalk.cyan(`Processing CubeSigner session secret: ${this.pathPrefix}/${secretName}`))
         const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
         if (await this.pushJsonToVault(secretName, content, 'session.json')) {
           pushedSecrets.push({ name: secretName, properties: ['session.json'], sourceFile: path.join(secretsDir, file) })
@@ -427,14 +442,14 @@ class HashicorpVaultDevService implements SecretService {
 
       for (const file of envFiles) {
         const secretName = 'cubesigner-signer-env'
-        console.log(chalk.cyan(`Processing CubeSigner key secret: ${this.pathPrefix}/${secretName}`))
+        this.log(chalk.cyan(`Processing CubeSigner key secret: ${this.pathPrefix}/${secretName}`))
         const data = await this.convertEnvToDict(path.join(secretsDir, file))
         if (await this.pushToVault(secretName, data)) {
           pushedSecrets.push({name: secretName, properties: Object.keys(data), sourceFile: path.join(secretsDir, file)})
         }
       }
 
-      console.log(chalk.green('All singleton CubeSigner secrets have been processed and populated in Vault.'))
+      this.log(chalk.green('All singleton CubeSigner secrets have been processed and populated in Vault.'))
       return pushedSecrets
     }
 
@@ -450,7 +465,7 @@ class HashicorpVaultDevService implements SecretService {
     for (const file of jsonFiles) {
       const secretName = path.basename(file, '.json')
 
-      console.log(chalk.cyan(`Processing JSON secret: ${this.pathPrefix}/${secretName}`))
+      this.log(chalk.cyan(`Processing JSON secret: ${this.pathPrefix}/${secretName}`))
       const content = await fs.promises.readFile(path.join(secretsDir, file), 'utf8')
 
       const propertyName = getJsonPropertyName(secretName, file)
@@ -472,7 +487,7 @@ class HashicorpVaultDevService implements SecretService {
     for (const file of envFiles) {
       const baseName = path.basename(file, '.env')
       const secretName = `${baseName}-env`
-      console.log(chalk.cyan(`Processing ENV secret: ${this.pathPrefix}/${secretName}`))
+      this.log(chalk.cyan(`Processing ENV secret: ${this.pathPrefix}/${secretName}`))
       const data = await this.convertEnvToDict(path.join(secretsDir, file))
       if (await this.pushToVault(secretName, data)) {
         pushedSecrets.push({ name: secretName, properties: Object.keys(data), sourceFile: path.join(secretsDir, file) })
@@ -484,7 +499,7 @@ class HashicorpVaultDevService implements SecretService {
       //   const sequencerIndex = baseName.match(/l2-sequencer-(\d+)-secret/)?.[1] || '0'
       //   const secretName = `l2-sequencer-${sequencerIndex}-secret-env`
 
-      //   console.log(chalk.cyan(`Processing L2 Sequencer secret: ${this.pathPrefix}/${secretName}`))
+      //   this.log(chalk.cyan(`Processing L2 Sequencer secret: ${this.pathPrefix}/${secretName}`))
       //   const data = await this.convertEnvToDict(path.join(secretsDir, file))
       //   await this.pushToVault(secretName, data)
 
@@ -499,7 +514,7 @@ class HashicorpVaultDevService implements SecretService {
       //   }
       // } else {
       //   const secretName = `${baseName}-env`
-      //   console.log(chalk.cyan(`Processing ENV secret: ${this.pathPrefix}/${secretName}`))
+      //   this.log(chalk.cyan(`Processing ENV secret: ${this.pathPrefix}/${secretName}`))
       //   const data = await this.convertEnvToDict(path.join(secretsDir, file))
       //   await this.pushToVault(secretName, data)
       // }
@@ -507,11 +522,11 @@ class HashicorpVaultDevService implements SecretService {
 
     // Push combined L2 Sequencer secrets for backward compatibility
     // if (Object.keys(l2SequencerSecrets).length > 0) {
-    //   console.log(chalk.cyan(`Processing combined L2 Sequencer secrets: ${this.pathPrefix}/l2-sequencer-secret-env`))
+    //   this.log(chalk.cyan(`Processing combined L2 Sequencer secrets: ${this.pathPrefix}/l2-sequencer-secret-env`))
     //   await this.pushToVault('l2-sequencer-secret-env', l2SequencerSecrets)
     // }
 
-    console.log(chalk.green('All secrets have been processed and populated in Vault.'))
+    this.log(chalk.green('All secrets have been processed and populated in Vault.'))
     return pushedSecrets
   }
 
@@ -563,14 +578,14 @@ class HashicorpVaultDevService implements SecretService {
       const command = `vault kv put ${this.pathPrefix}/${secretName} ${propertyName}='${escapedJson}'`
 
       if (this.debug) {
-        console.log(chalk.yellow('--- Debug Output ---'))
-        console.log(chalk.cyan(`Secret Name: ${secretName}`))
-        console.log(chalk.cyan(`Command: ${command}`))
-        console.log(chalk.yellow('-------------------'))
+        this.log(chalk.yellow('--- Debug Output ---'))
+        this.log(chalk.cyan(`Secret Name: ${secretName}`))
+        this.log(chalk.cyan(`Command: ${command}`))
+        this.log(chalk.yellow('-------------------'))
       }
 
       if (!jsonContent) {
-        console.log(chalk.red(`Skipping secret: ${secretName} because it is empty`))
+        this.log(chalk.red(`Skipping secret: ${secretName} because it is empty`))
         return false
       }
 
@@ -579,7 +594,7 @@ class HashicorpVaultDevService implements SecretService {
         await this.runCommand(`vault kv get ${this.pathPrefix}/${secretName}`)
         // Secret exists, ask for override
         if (this.overrideAll) {
-          console.log(chalk.yellow(`Overriding existing secret: ${this.pathPrefix}/${secretName} (ALL mode)`))
+          this.log(chalk.yellow(`Overriding existing secret: ${this.pathPrefix}/${secretName} (ALL mode)`))
         } else {
           const shouldOverride = await select({
             choices: [
@@ -591,13 +606,13 @@ class HashicorpVaultDevService implements SecretService {
           })
 
           if (shouldOverride === 'no') {
-            console.log(chalk.yellow(`Skipping secret: ${this.pathPrefix}/${secretName}`))
+            this.log(chalk.yellow(`Skipping secret: ${this.pathPrefix}/${secretName}`))
             return false
           }
 
           if (shouldOverride === 'all') {
             this.overrideAll = true
-            console.log(chalk.yellow('Will override all existing secrets from now on.'))
+            this.log(chalk.yellow('Will override all existing secrets from now on.'))
           }
         }
       } catch {
@@ -605,7 +620,7 @@ class HashicorpVaultDevService implements SecretService {
       }
 
       await this.runCommand(command)
-      console.log(
+      this.log(
         chalk.green(`Successfully pushed JSON secret: ${this.pathPrefix}/${secretName} with property ${propertyName}`),
       )
       return true
@@ -622,17 +637,17 @@ class HashicorpVaultDevService implements SecretService {
       .join(' ')
 
     if (!kvPairs) {
-      console.log(chalk.red(`Skipping secret: ${secretName} because it is empty`))
+      this.log(chalk.red(`Skipping secret: ${secretName} because it is empty`))
       return false
     }
 
     const command = `vault kv put ${this.pathPrefix}/${secretName} ${kvPairs}`
 
     if (this.debug) {
-      console.log(chalk.yellow('--- Debug Output ---'))
-      console.log(chalk.cyan(`Secret Name: ${secretName}`))
-      console.log(chalk.cyan(`Command: ${command}`))
-      console.log(chalk.yellow('-------------------'))
+      this.log(chalk.yellow('--- Debug Output ---'))
+      this.log(chalk.cyan(`Secret Name: ${secretName}`))
+      this.log(chalk.cyan(`Command: ${command}`))
+      this.log(chalk.yellow('-------------------'))
     }
 
     try {
@@ -641,7 +656,7 @@ class HashicorpVaultDevService implements SecretService {
         await this.runCommand(`vault kv get ${this.pathPrefix}/${secretName}`)
         // Secret exists, ask for override
         if (this.overrideAll) {
-          console.log(chalk.yellow(`Overriding existing secret: ${this.pathPrefix}/${secretName} (ALL mode)`))
+          this.log(chalk.yellow(`Overriding existing secret: ${this.pathPrefix}/${secretName} (ALL mode)`))
         } else {
           const shouldOverride = await select({
             choices: [
@@ -653,13 +668,13 @@ class HashicorpVaultDevService implements SecretService {
           })
 
           if (shouldOverride === 'no') {
-            console.log(chalk.yellow(`Skipping secret: ${this.pathPrefix}/${secretName}`))
+            this.log(chalk.yellow(`Skipping secret: ${this.pathPrefix}/${secretName}`))
             return false
           }
 
           if (shouldOverride === 'all') {
             this.overrideAll = true
-            console.log(chalk.yellow('Will override all existing secrets from now on.'))
+            this.log(chalk.yellow('Will override all existing secrets from now on.'))
           }
         }
       } catch {
@@ -667,7 +682,7 @@ class HashicorpVaultDevService implements SecretService {
       }
 
       await this.runCommand(command)
-      console.log(chalk.green(`Successfully pushed secret: ${this.pathPrefix}/${secretName}`))
+      this.log(chalk.green(`Successfully pushed secret: ${this.pathPrefix}/${secretName}`))
       return true
     } catch (error) {
       console.error(chalk.red(`Failed to push secret: ${this.pathPrefix}/${secretName}`))
@@ -688,7 +703,7 @@ class HashicorpVaultDevService implements SecretService {
 }
 
 export default class SetupPushSecrets extends Command {
-  static override description = 'Push secrets to the selected secret service'
+  static override description = 'Upload configured service secrets, including enabled dstack Secrets; does not deploy services or start GPU workers'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
@@ -697,6 +712,8 @@ export default class SetupPushSecrets extends Command {
     '<%= config.bin %> <%= command.id %> --secret-file secrets/l2-reth-bootnode-0-secret.env --values-file values/l2-reth-bootnode-production-0.yaml',
     '<%= config.bin %> <%= command.id %> --cubesigner-only',
     '<%= config.bin %> <%= command.id %> -c --debug',
+    '<%= config.bin %> <%= command.id %> --provider kubernetes --dstack-only --kube-context isolated-e2e --namespace dstack-system --dry-run -N',
+    '<%= config.bin %> <%= command.id %> --provider aws --aws-region us-east-1 --kube-context isolated-e2e --namespace dstack-system -N',
   ]
 
   static override flags = {
@@ -722,10 +739,15 @@ export default class SetupPushSecrets extends Command {
       default: false,
       description: 'Show debug output',
     }),
+    'doge-config': Flags.string({description: 'Dstack public TOML configuration (default .data/doge-config.toml)', exclusive: ['spec']}),
+    'dry-run': Flags.boolean({default: false, description: 'Plan selected Secret uploads and validate dstack files locally; no remote requests or changes'}),
+    'dstack-only': Flags.boolean({default: false, description: 'Upload only dstack Secrets to Kubernetes; omit to include all configured services', exclusive: ['cubesigner-only', 'secret-file']}),
     json: Flags.boolean({
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)',
     }),
+    'kube-context': Flags.string({description: 'Explicit Kubernetes context required when uploading dstack Secrets'}),
+    namespace: Flags.string({description: 'Existing Kubernetes namespace required when uploading dstack Secrets'}),
     'non-interactive': Flags.boolean({
       char: 'N',
       default: false,
@@ -734,8 +756,8 @@ export default class SetupPushSecrets extends Command {
     // Secret service provider
     provider: Flags.string({
       default: DEFAULT_SECRET_PROVIDER,
-      description: 'Secret service provider (aws or vault)',
-      options: ['aws', 'vault'],
+      description: 'Destination for .env/.json secrets (aws or vault); kubernetes accepts dstack bundles. Dstack always uses Kubernetes.',
+      options: ['aws', 'vault', 'kubernetes'],
     }),
     'secret-file': Flags.string({
       char: 'f',
@@ -746,6 +768,7 @@ export default class SetupPushSecrets extends Command {
       default: false,
       description: 'Skip updating production YAML files with new secret provider',
     }),
+    spec: Flags.string({description: 'Dstack DeploymentSpec YAML', exclusive: ['doge-config']}),
     'values-dir': Flags.string({
       default: 'values',
       description: 'Directory containing the values files',
@@ -791,6 +814,33 @@ export default class SetupPushSecrets extends Command {
     this.jsonMode = flags.json
     this.jsonCtx = new JsonOutputContext('setup push-secrets', this.jsonMode)
 
+    let dstack: DstackUploadOptions | undefined
+    let legacyFiles: string[]
+    try {
+      legacyFiles = flags['dstack-only'] ? [] : selectedLegacyFiles(flags['cubesigner-only'], flags['secret-file'])
+      dstack = await this.prepareDstackUpload()
+      if (flags.provider === 'kubernetes' && legacyFiles.length > 0) {
+        throw new Error('The selected scope includes .env/.json secrets. Use --provider aws or vault for those files; enabled dstack Secrets will still upload to Kubernetes. Use --dstack-only to narrow the scope.')
+      }
+
+      if (flags['dry-run']) {
+        const plan = dstack ? await publishDstackSecrets({...dstack, dryRun: true}) : undefined
+        this.jsonCtx.info(`Local upload plan: ${legacyFiles.length} .env/.json files to ${flags.provider}; ${plan?.secrets.length ?? 0} dstack Secrets to Kubernetes.`)
+        if (this.jsonMode) this.jsonCtx.success({...plan, dryRun: true, legacyFiles, provider: flags.provider})
+        return
+      }
+
+      if (legacyFiles.length === 0) {
+        const result = dstack ? await publishDstackSecrets(dstack) : {secrets: []}
+        this.jsonCtx.logSuccess(dstack ? 'Dstack Secrets uploaded to Kubernetes. No controller deployment, restart or GPU task was started.' : 'No selected Secret files to upload.')
+        if (this.jsonMode) this.jsonCtx.success(result)
+        return
+      }
+    } catch (error) {
+      if (error instanceof CliExitError) throw error
+      this.jsonCtx.error('E_SECRET_UPLOAD_PREFLIGHT', (error as Error).message, 'CONFIGURATION', true)
+    }
+
     this.jsonCtx.info('Starting secret push process...')
 
     if (flags['cubesigner-only']) {
@@ -813,11 +863,11 @@ export default class SetupPushSecrets extends Command {
 
     if (secretService === 'aws') {
       credentials = this.nonInteractive ? this.getAWSCredentialsFromFlags(flags) : await this.getAWSCredentials()
-      service = new AWSSecretService(credentials.secretRegion, credentials.prefixName, flags.debug, this.nonInteractive)
+      service = new AWSSecretService(credentials.secretRegion, credentials.prefixName, flags.debug, this.nonInteractive, message => this.jsonCtx.log(message))
       provider = 'aws'
     } else if (secretService === 'vault') {
       credentials = this.nonInteractive ? this.getVaultCredentialsFromFlags(flags) : await this.getVaultCredentials()
-      service = new HashicorpVaultDevService(flags.debug, credentials.path, this.nonInteractive)
+      service = new HashicorpVaultDevService(flags.debug, credentials.path, this.nonInteractive, message => this.jsonCtx.log(message))
       provider = 'vault'
     } else {
       this.jsonCtx.error(
@@ -830,6 +880,8 @@ export default class SetupPushSecrets extends Command {
     }
 
     try {
+      // Check Kubernetes identity/admission before mutating AWS/Vault.
+      if (dstack) await publishDstackSecrets({...dstack, preflightOnly: true})
       const pushedSecrets = await service.pushSecrets(flags['cubesigner-only'], flags['secret-file'])
       const pushedSecretNames = pushedSecrets.map(secret => secret.name)
       this.jsonCtx.logSuccess('Secrets pushed successfully')
@@ -855,7 +907,9 @@ export default class SetupPushSecrets extends Command {
         this.jsonCtx.info('Skipped updating production YAML files')
       }
 
-      this.jsonCtx.logSuccess('Secret push process completed.')
+      const dstackResult = dstack ? await publishDstackSecrets(dstack) : undefined
+      if (dstackResult) this.jsonCtx.logSuccess('Dstack Secrets uploaded to Kubernetes. No controller deployment, restart or GPU task was started.')
+      this.jsonCtx.logSuccess('Secret upload process completed.')
 
       // JSON output
       if (this.jsonMode) {
@@ -865,6 +919,7 @@ export default class SetupPushSecrets extends Command {
             prefixName: credentials.prefixName || credentials.path,
             region: credentials.secretRegion,
           },
+          ...(dstackResult ? {dstack: dstackResult} : {}),
           provider,
           secretsPushed: pushedSecretNames,
           yamlUpdated: shouldUpdateYaml,
@@ -998,6 +1053,26 @@ export default class SetupPushSecrets extends Command {
     }
   }
 
+  private async prepareDstackUpload(): Promise<DstackUploadOptions | undefined> {
+    const {flags} = this
+    // Existing narrow scopes must not read or upload unrelated dstack credentials.
+    if (flags['cubesigner-only'] || flags['secret-file']) return undefined
+    const controller = readDstackControllerConfig(flags['doge-config'], flags.spec)
+    if (!controller || controller.enabled === false) {
+      if (flags['dstack-only']) throw new Error('An enabled dstackController configuration is required')
+      return undefined
+    }
+
+    if (!flags['kube-context'] || !flags.namespace) throw new Error('--kube-context and --namespace are required when enabled dstack Secrets are included, including dry-run')
+    const options: DstackUploadOptions = {
+      config: controller, context: flags['kube-context'], namespace: flags.namespace,
+      // --values-file belongs to the explicitly selected legacy service in full mode.
+      valuesFile: flags['dstack-only'] ? flags['values-file'] ?? path.join(flags['values-dir'], 'dstack-controller-production.yaml') : path.join(flags['values-dir'], 'dstack-controller-production.yaml'),
+    }
+    await publishDstackSecrets({...options, dryRun: true})
+    return options
+  }
+
   private async readCubeSignerConfigFromYaml(): Promise<Record<string, string>> {
     const valuesDir = path.join(process.cwd(), 'values', 'values')
     if (!fs.existsSync(valuesDir)) {
@@ -1010,7 +1085,7 @@ export default class SetupPushSecrets extends Command {
       this.error(chalk.red(`${yamlFile} not found in values/values directory`))
     }
 
-    this.log(chalk.cyan(`Reading configuration from ${yamlFile}`))
+    this.jsonCtx.log(chalk.cyan(`Reading configuration from ${yamlFile}`))
 
     const content = fs.readFileSync(yamlPath, 'utf8')
     const yamlContent = yaml.load(content) as any
@@ -1116,7 +1191,7 @@ export default class SetupPushSecrets extends Command {
     let matchedSecrets = 0
 
     for (const yamlFile of yamlFiles) {
-      this.log(chalk.cyan(`Processing ${yamlFile.displayName}`))
+      this.jsonCtx.log(chalk.cyan(`Processing ${yamlFile.displayName}`))
 
       // Extract sequencer index from filename if it matches the pattern
       // const sequencerMatch = yamlFile.match(/l2-sequencer-production-(\d+)\.yaml$/)
@@ -1143,9 +1218,9 @@ export default class SetupPushSecrets extends Command {
       if (updated) {
         const newContent = yaml.dump(yamlContent, YAML_DUMP_OPTIONS)
         fs.writeFileSync(yamlFile.yamlPath, newContent)
-        this.log(chalk.green(`Updated externalSecrets provider in ${chalk.cyan(yamlFile.displayName)}`))
+        this.jsonCtx.log(chalk.green(`Updated externalSecrets provider in ${chalk.cyan(yamlFile.displayName)}`))
       } else if (matchedInFile) {
-        this.log(chalk.yellow(`No changes needed in ${chalk.cyan(yamlFile.displayName)}`))
+        this.jsonCtx.log(chalk.yellow(`No changes needed in ${chalk.cyan(yamlFile.displayName)}`))
       }
     }
 

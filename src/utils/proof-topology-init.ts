@@ -80,6 +80,28 @@ function artifactStore(value: ProofTopologyArtifactStoreConfig): ProofTopologyAr
   }
 }
 
+function proofMaterialsRoot(materials: ProofMaterialsV1): string {
+  const primary = materials.software.artifacts?.aggregateVerifyingKey
+    ?? materials.software.materializationArtifacts?.aggregateVerifyingKey
+    ?? materials.software.compilerIdentity
+    ?? materials.bridge?.artifacts.appExe
+  if (!primary) return '.data/proof-materials'
+
+  const normalized = primary.path.replaceAll('\\', '/')
+  const marker = normalized.includes('/software/') ? '/software/' : '/bridge/'
+  const markerIndex = normalized.indexOf(marker)
+  if (markerIndex <= 0) {
+    throw new Error(`proof material path does not use the expected software/bridge layout: ${primary.path}`)
+  }
+
+  const root = normalized.slice(0, markerIndex)
+  if (root !== '.data/proof-materials' && !root.startsWith('.data/proof-materials/')) {
+    throw new Error(`proof material root must remain inside .data/proof-materials: ${root}`)
+  }
+
+  return root
+}
+
 export function buildProofTopology(options: BuildProofTopologyOptions): ProofTopologySpec {
   const generation = options.generation ?? 'mock'
   const mode = options.mode ?? 'disabled'
@@ -123,7 +145,7 @@ export function buildProofTopology(options: BuildProofTopologyOptions): ProofTop
   }
 
   const workerLaunch = options.runtime.workerLaunch ?? (generation === 'mock' ? 'local_cpu' : 'external')
-  const root = '.data/proof-materials'
+  const root = proofMaterialsRoot(materials)
   const {artifacts} = materials.software
   const realScroll = {
     ...(materializationArtifacts ? {

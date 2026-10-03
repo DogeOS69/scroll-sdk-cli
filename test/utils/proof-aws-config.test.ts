@@ -136,6 +136,24 @@ describe('proof AWS config source', () => {
     })
   })
 
+  it('rejects unsupported public read modes without rewriting the receipt', () => {
+    const configPath = path.join(root, '.data/proof-aws.json')
+    const config = {
+      ...fixture(),
+      artifactReadTransport: {
+        publicEndpointUrl: 'https://s3.us-east-1.amazonaws.com',
+        publicReadMode: 'shared-s3',
+        publicStatus: 'configured-unverified',
+      },
+    }
+    fs.mkdirSync(path.dirname(configPath), {recursive: true})
+    fs.writeFileSync(configPath, `${JSON.stringify(config, undefined, 2)}\n`)
+
+    const original = fs.readFileSync(configPath, 'utf8')
+    expect(() => readProofAwsConfig(root)).to.throw('publicReadMode must be')
+    expect(fs.readFileSync(configPath, 'utf8')).to.equal(original)
+  })
+
   it('rejects a non-regional endpoint for an operator-managed public S3 transport', () => {
     const config = fixture()
     config.artifactReadTransport = {

@@ -26,6 +26,8 @@ import {
   L1_INTERFACE_RPC_WEBSOCKET_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
+import {GENESIS_SEQUENCER_AMOUNT_SATS} from './bridge-constants.js'
+import {validateDstackControllerConfig} from './dstack-controller-values.js'
 import { normalizeCompressedSecp256k1PublicKey } from './secp256k1-public-key.js'
 import { MANAGED_SIGNER_ROLES, buildLocalSignerConfig } from './signer-roles.js'
 
@@ -33,19 +35,16 @@ const ETHEREUM_DA_DEFAULTS = {
   devnet: {
     beaconRpcUrl: 'http://l1-devnet-lighthouse:5052',
     chainId: 32_382,
-    minFinality: 'safe',
     submitterRpcUrl: 'http://l1-devnet:8545',
   },
   mainnet: {
     beaconRpcUrl: 'https://ethereum-beacon-api.publicnode.com',
     chainId: 1,
-    minFinality: 'finalized',
     submitterRpcUrl: 'https://eth.drpc.org',
   },
   sepolia: {
     beaconRpcUrl: 'https://ethereum-sepolia-beacon-api.publicnode.com',
     chainId: 11_155_111,
-    minFinality: 'safe',
     submitterRpcUrl: 'https://gateway.tenderly.co/public/sepolia',
   },
 } as const
@@ -667,7 +666,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
 
   for (const field of addressFields) {
     const value = addressForValidation(field.value)
-    if (value && !ethAddressPattern.test(value)) {
+    if (value && (!ethAddressPattern.test(value) || (field.path === 'accounts.owner.address' && /^0x0{40}$/i.test(value)))) {
       errors.push({
         code: 'E004_INVALID_ADDRESS',
         message: `Invalid Ethereum address: ${value}`,
@@ -970,6 +969,14 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     })
   }
 
+  if (getBridgeTargetAmountsSats(spec).sequencer !== GENESIS_SEQUENCER_AMOUNT_SATS) {
+    errors.push({
+      code: 'E015_INVALID_ROLLUP_CONFIG',
+      message: `Bridge sequencer output must be ${GENESIS_SEQUENCER_AMOUNT_SATS} sat (0.42069 DOGE) for the first WF proof`,
+      path: 'bridge.targetAmountsSats.sequencer',
+    })
+  }
+
   // Bridge thresholds validation
   if (spec.bridge?.thresholds && !spec.bridge.initialAttestationKeyset) {
     const { attestation } = spec.bridge.thresholds
@@ -1211,6 +1218,16 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     }
   }
 
+  try {
+    validateDstackControllerConfig(spec.dstackController)
+  } catch (error) {
+    errors.push({
+      code: 'E015_INVALID_DSTACK_CONTROLLER_CONFIG',
+      message: error instanceof Error ? error.message : 'Invalid dstack controller configuration',
+      path: 'dstackController',
+    })
+  }
+
   return {
     errors,
     valid: errors.length === 0,
@@ -1354,7 +1371,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
   // [contracts] section
   config.contracts = {
     BLOB_SCALAR: spec.contracts.gasOracle.blobScalar,
-    COMMIT_SCALAR: spec.contracts.gasOracle.commitScalar ?? 38_720_000_000,
+    COMMIT_SCALAR: spec.contracts.gasOracle.commitScalar ?? 600_000_000,
     DEPLOYMENT_SALT: spec.contracts.deploymentSalt,
     DEPOSIT_FEE: bridgeFees.depositFeeSats,
     L1_FEE_VAULT_ADDR: DEFAULT_L1_FEE_VAULT_ADDR,
@@ -1499,6 +1516,9 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
 
   config.network = spec.dogecoin.network
 
+  validateDstackControllerConfig(spec.dstackController)
+  if (spec.dstackController !== undefined) config.dstackController = structuredClone(spec.dstackController)
+
   config.rpc = {
     password: externalRpc.password || '',
     url: externalRpc.url,
@@ -1514,7 +1534,6 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
     beaconRpcUrl: spec.ethereumDa?.beaconRpcUrl || ethereumDaDefaults.beaconRpcUrl,
     chain: ethereumDaChain,
     chainId: spec.ethereumDa?.chainId || ethereumDaDefaults.chainId,
-    minFinality: spec.ethereumDa?.minFinality || ethereumDaDefaults.minFinality,
     submitterRpcUrl: spec.ethereumDa?.l1RpcUrl || ethereumDaDefaults.submitterRpcUrl,
   }
 
@@ -1576,6 +1595,8 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   // Add signing configuration
   if (spec.signing.cubesigner) {
     config.cubesigner = {
+      ...(spec.signing.cubesigner.mode ? {mode: spec.signing.cubesigner.mode} : {}),
+      ...(spec.signing.cubesigner.policyReceipts ? {policyReceipts: spec.signing.cubesigner.policyReceipts} : {}),
       ...(spec.signing.cubesigner.productionPolicy
         ? {productionPolicy: spec.signing.cubesigner.productionPolicy}
         : {}),

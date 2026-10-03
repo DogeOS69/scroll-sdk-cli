@@ -173,14 +173,15 @@ function runtimePath(
   deploymentDir: string,
   value: string | undefined,
   container: boolean,
+  resourcesRoot = '.data/proof-materials',
 ): string | undefined {
   if (!value) return undefined
   const host = resolveInside(deploymentDir, value, 'proof material path')
   if (!container) return host
-  const materialRoot = path.resolve(deploymentDir, '.data/proof-materials')
+  const materialRoot = resolveInside(deploymentDir, resourcesRoot, 'proof material root')
   const relative = path.relative(materialRoot, host)
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error(`proof material path must remain inside .data/proof-materials: ${value}`)
+    throw new Error(`proof material path must remain inside ${resourcesRoot}: ${value}`)
   }
 
   return path.posix.join('/app/data/proof-materials', relative.replaceAll(path.sep, '/'))
@@ -222,7 +223,9 @@ function realScrollSource(
   ]
   for (const [field, serialized] of paths) {
     const selected = value[field]
-    if (typeof selected === 'string') result[serialized] = runtimePath(deploymentDir, selected, container)!
+    if (typeof selected === 'string') {
+      result[serialized] = runtimePath(deploymentDir, selected, container, value.resourcesRoot)!
+    }
   }
 
   const scalar: Array<[keyof ProofTopologyRealScrollConfig, string]> = [
@@ -694,8 +697,8 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
         ...(deployment.publicS3EndpointUrl ? {public_s3_endpoint_url: deployment.publicS3EndpointUrl} : {}),
         ...(options.proofTopology.active?.realScroll && options.proofTopology.generation === 'real' && options.proofTopology.active.realScroll.resourcesRoot
           ? {
-              bridge_staged_app_config: runtimePath(deploymentDir, options.proofTopology.active.realScroll.resourcesRoot + '/bridge/openvm.toml', container),
-              bridge_staged_app_exe: runtimePath(deploymentDir, options.proofTopology.active.realScroll.resourcesRoot + '/bridge/bridge-state.vmexe', container),
+              bridge_staged_app_config: runtimePath(deploymentDir, options.proofTopology.active.realScroll.resourcesRoot + '/bridge/openvm.toml', container, options.proofTopology.active.realScroll.resourcesRoot),
+              bridge_staged_app_exe: runtimePath(deploymentDir, options.proofTopology.active.realScroll.resourcesRoot + '/bridge/bridge-state.vmexe', container, options.proofTopology.active.realScroll.resourcesRoot),
             }
           : {}),
       },
@@ -734,7 +737,11 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
           '--rm',
           ...(hostUser ? ['--user', hostUser] : []),
           '-v', `${deploymentDir}:/deployment:ro`,
-          '-v', `${path.join(deploymentDir, '.data/proof-materials')}:/app/data/proof-materials:ro`,
+          '-v', `${resolveInside(
+            deploymentDir,
+            options.proofTopology.active?.realScroll.resourcesRoot ?? '.data/proof-materials',
+            'proof material root',
+          )}:/app/data/proof-materials:ro`,
           '-v', `${inputDir}:/input:ro`,
           '-v', `${stagingRoot}:/output`,
           options.compilerImage ?? imageReference(options.proofTopology.compiler.image),

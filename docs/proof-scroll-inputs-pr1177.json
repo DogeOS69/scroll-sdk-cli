@@ -1,0 +1,43 @@
+{
+  "schema": "dogeos/scroll-program-bundle/v1",
+  "sourceRepository": "https://github.com/DogeOS69/scroll-zkvm-prover",
+  "sourceRevision": "0badaf7aebe407bc7e50a5eb713a0ab44668a362",
+  "rustToolchain": "nightly-2026-03-17",
+  "openvmVersion": "1.7.0",
+  "upstreamManifest": {
+    "url": "https://github.com/DogeOS69/dogeos-core/releases/download/proving-openvm17-0badaf7a-eef62d3/manifest.json",
+    "sha256": "a0652b8176358f0d46eceb5190ab24e4e71fa0d59c5a3810c3438bff022093b6"
+  },
+  "files": {
+    "chunk/app.vmexe": {
+      "asset": "chunk_exe",
+      "url": "https://github.com/DogeOS69/dogeos-core/releases/download/proving-openvm17-0badaf7a-eef62d3/chunk_exe",
+      "sha256": "d61608bf38ea55be280ca5ad971b53bdf9944e10652c2623aaf2eef2a8ae7972",
+      "sizeBytes": 43020693
+    },
+    "chunk/openvm.toml": {
+      "asset": "chunk_config",
+      "url": "https://github.com/DogeOS69/dogeos-core/releases/download/proving-openvm17-0badaf7a-eef62d3/chunk_config",
+      "sha256": "3d11fb74d57092a7da9f9064519482fa6bf60d93e3d7ca845d861c47159f2b84",
+      "sizeBytes": 2127
+    },
+    "batch/app.vmexe": {
+      "asset": "batch_exe",
+      "url": "https://github.com/DogeOS69/dogeos-core/releases/download/proving-openvm17-0badaf7a-eef62d3/batch_exe",
+      "sha256": "5f9d83b89a690b91012a7ea5a3c5d3a7dc5c54c715c6f585df77d235964870eb",
+      "sizeBytes": 36737350
+    },
+    "batch/openvm.toml": {
+      "asset": "batch_config",
+      "url": "https://github.com/DogeOS69/dogeos-core/releases/download/proving-openvm17-0badaf7a-eef62d3/batch_config",
+      "sha256": "53cc74fc91acd85faee7a06617e2b9d82149fee738a48f71856d56004ea94dd1",
+      "sizeBytes": 1141
+    },
+    "verifier/aggregate-vk": {
+      "asset": "agg_vk",
+      "url": "https://github.com/DogeOS69/dogeos-core/releases/download/proving-openvm17-0badaf7a-eef62d3/agg_vk",
+      "sha256": "593e2fbf17d68f4f4331592492ec7c7965aee7b057840ad1647994b784a030e5",
+      "sizeBytes": 116500
+    }
+  }
+}
