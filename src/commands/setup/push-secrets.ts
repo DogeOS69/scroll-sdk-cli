@@ -13,6 +13,7 @@ import {readDstackControllerConfig} from '../../utils/dstack-database.js'
 import {publishDstackSecrets} from '../../utils/dstack-secret-publisher.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import { resolveEnvValue } from '../../utils/non-interactive.js'
+import {isRetiredServiceFile, stripRetiredServiceConfig} from '../../utils/retired-services.js'
 
 const execAsync = promisify(exec)
 
@@ -176,7 +177,7 @@ class AWSSecretService implements SecretService {
     }
 
     // Process JSON files
-    let jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json'));
+    let jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json') && !isRetiredGethSecretFile(file) && !isRetiredServiceFile(file));
     if (filename && filename.endsWith('.json')) {
       jsonFiles = jsonFiles.filter((f) => f === filename)
     } else if (filename) {
@@ -196,7 +197,7 @@ class AWSSecretService implements SecretService {
     }
 
     // Process ENV files
-    let envFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.env'))
+    let envFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.env') && !isRetiredGethSecretFile(file) && !isRetiredServiceFile(file))
     if (filename && filename.endsWith('.env')) {
       envFiles = envFiles.filter((f) => f === filename)
     } else if (filename) {
@@ -212,46 +213,8 @@ class AWSSecretService implements SecretService {
         pushedSecrets.push({ name: secretName, properties: Object.keys(data), sourceFile: path.join(secretsDir, file) })
       }
 
-      // Special handling for l2-sequencer-N-secret.env files
-      // if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
-      //   const sequencerIndex = baseName.match(/l2-sequencer-(\d+)-secret/)?.[1] || '0'
-
-      //   // we should use unified secret name for all sequencer instances like CHARTNAME-N-SECRET-ENV for mutilple instances
-      //   const secretName = `l2-sequencer-${sequencerIndex}-secret-env`
-
-      //   this.log(chalk.cyan(`Processing L2 Sequencer secret: ${secretName}`))
-      //   const data = await this.convertEnvToDict(path.join(secretsDir, file))
-      //   await this.createOrUpdateSecret(data, secretName)
-
-      //   // Also add to combined secret with index suffix for backward compatibility
-      //   for (const [key, value] of Object.entries(data)) {
-      //     // If key already has index suffix, use it as is, otherwise add index suffix
-      //     if (key.endsWith(`_${sequencerIndex}`)) {
-      //       l2SequencerSecrets[key] = value
-      //     } else {
-      //       l2SequencerSecrets[`${key}_${sequencerIndex}`] = value
-      //     }
-      //   }
-      // } else 
-      // {
-      //   //`secretName` is env file name. And the path of this secret is prefix/secretName
-      //   // foo.env
-      //   // prefix: hello
-      //   // external manager file path: hello/foo-env
-
-      //   const secretName = `${baseName}-env`
-      //   this.log(chalk.cyan(`Processing ENV secret: ${secretName}`))
-      //   const data = await this.convertEnvToDict(path.join(secretsDir, file))
-      //   await this.createOrUpdateSecret(data, secretName)
-      // }
-
     }
 
-    // Push combined L2 Sequencer secrets
-    // if (Object.keys(l2SequencerSecrets).length > 0) {
-    //   this.log(chalk.cyan(`Processing combined L2 Sequencer secrets: l2-sequencer-secret-env`))
-    //   await this.createOrUpdateSecret(l2SequencerSecrets, 'l2-sequencer-secret-env')
-    // }
     return pushedSecrets
   }
 
@@ -270,7 +233,7 @@ class AWSSecretService implements SecretService {
       }
     }
 
-    return result
+    return stripRetiredServiceConfig(result)
   }
 
   private async createOrUpdateSecret(content: Record<string, string>, secretName: string): Promise<boolean> {
@@ -454,7 +417,7 @@ class HashicorpVaultDevService implements SecretService {
     }
 
     // Process JSON files
-    let jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json'));
+    let jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json') && !isRetiredGethSecretFile(file) && !isRetiredServiceFile(file));
 
     if (filename && filename.endsWith('.json')) {
       jsonFiles = jsonFiles.filter(f => f === filename);
@@ -475,7 +438,7 @@ class HashicorpVaultDevService implements SecretService {
     }
 
     // Process ENV files
-    let envFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.env'))
+    let envFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.env') && !isRetiredGethSecretFile(file) && !isRetiredServiceFile(file))
 
     if (filename && filename.endsWith('.env')) {
       envFiles = envFiles.filter(f => f === filename);
@@ -493,38 +456,7 @@ class HashicorpVaultDevService implements SecretService {
         pushedSecrets.push({ name: secretName, properties: Object.keys(data), sourceFile: path.join(secretsDir, file) })
       }
 
-      // I don't know why combine all sequencer secrets, but it is not safe to do so, so I just comment it out
-      // Special handling for l2-sequencer-N-secret.env files
-      // if (/^l2-sequencer-\d+-secret$/.test(baseName)) {
-      //   const sequencerIndex = baseName.match(/l2-sequencer-(\d+)-secret/)?.[1] || '0'
-      //   const secretName = `l2-sequencer-${sequencerIndex}-secret-env`
-
-      //   this.log(chalk.cyan(`Processing L2 Sequencer secret: ${this.pathPrefix}/${secretName}`))
-      //   const data = await this.convertEnvToDict(path.join(secretsDir, file))
-      //   await this.pushToVault(secretName, data)
-
-      //   // Also add to combined secret with index suffix for backward compatibility
-      //   for (const [key, value] of Object.entries(data)) {
-      //     // If key already has index suffix, use it as is, otherwise add index suffix
-      //     if (key.endsWith(`_${sequencerIndex}`)) {
-      //       l2SequencerSecrets[key] = value
-      //     } else {
-      //       l2SequencerSecrets[`${key}_${sequencerIndex}`] = value
-      //     }
-      //   }
-      // } else {
-      //   const secretName = `${baseName}-env`
-      //   this.log(chalk.cyan(`Processing ENV secret: ${this.pathPrefix}/${secretName}`))
-      //   const data = await this.convertEnvToDict(path.join(secretsDir, file))
-      //   await this.pushToVault(secretName, data)
-      // }
     }
-
-    // Push combined L2 Sequencer secrets for backward compatibility
-    // if (Object.keys(l2SequencerSecrets).length > 0) {
-    //   this.log(chalk.cyan(`Processing combined L2 Sequencer secrets: ${this.pathPrefix}/l2-sequencer-secret-env`))
-    //   await this.pushToVault('l2-sequencer-secret-env', l2SequencerSecrets)
-    // }
 
     this.log(chalk.green('All secrets have been processed and populated in Vault.'))
     return pushedSecrets
@@ -548,7 +480,7 @@ class HashicorpVaultDevService implements SecretService {
       }
     }
 
-    return result
+    return stripRetiredServiceConfig(result)
   }
 
   private async isSecretEngineEnabled(path: string): Promise<boolean> {
@@ -880,6 +812,10 @@ export default class SetupPushSecrets extends Command {
     }
 
     try {
+      if (flags['secret-file'] && (isRetiredGethSecretFile(flags['secret-file']) || isRetiredServiceFile(flags['secret-file']))) {
+        this.error('This service secret is retired. Generate current secrets with setup gen-secrets.')
+      }
+
       // Check Kubernetes identity/admission before mutating AWS/Vault.
       if (dstack) await publishDstackSecrets({...dstack, preflightOnly: true})
       const pushedSecrets = await service.pushSecrets(flags['cubesigner-only'], flags['secret-file'])
@@ -1254,4 +1190,9 @@ export default class SetupPushSecrets extends Command {
       )
     }
   }
+}
+
+/** Preserve old local key material, but never republish it during a Reth deployment. */
+export function isRetiredGethSecretFile(file: string): boolean {
+  return /^l2-(?:sequencer|bootnode)(?:-\d+)?-secret(?:-env)?\.(?:env|json)$/.test(path.basename(file))
 }

@@ -15,6 +15,7 @@ import {inspectContractOwner} from '../../utils/contract-owner.js'
 import {getContractsPlaceholderKey} from '../../utils/contracts-placeholder.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
+import {generateLocalContractsArtifacts, validateContractsSource} from '../../utils/local-contracts.js'
 import {
   resolveEnvValue,
 } from '../../utils/non-interactive.js'
@@ -63,6 +64,7 @@ export default class SetupGenL2Artifacts extends Command {
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --image-tag gen-configs-v0.2.0-debug',
     '<%= config.bin %> <%= command.id %> --configs-dir ./configs-override',
+    '<%= config.bin %> <%= command.id %> --contracts-source ../scroll-contracts --non-interactive --skip-deployment-salt-update',
   ]
 
   static override flags: any = {
@@ -73,6 +75,10 @@ export default class SetupGenL2Artifacts extends Command {
       default: 'values',
       description: 'Directory name to copy configs to',
       required: false,
+    }),
+    'contracts-source': Flags.string({
+      description: 'Generate with a local scroll-contracts checkout and Foundry instead of Docker',
+      exclusive: ['image-tag'],
     }),
     'deployment-salt': Flags.string({
       description: 'Deployment salt value (non-interactive mode). If not provided, keeps existing or auto-increments.',
@@ -92,7 +98,8 @@ export default class SetupGenL2Artifacts extends Command {
       description: 'L1 fee vault address (non-interactive mode). Defaults to OWNER_ADDR.',
     }),
     'l1-plonk-verifier-addr': Flags.string({
-      description: 'L1 plonk verifier address (non-interactive mode). If not provided, one will be deployed.',
+      description: 'Deprecated compatibility flag; ignored. Contracts manage the verifier address.',
+      hidden: true,
     }),
     'l2-bridge-fee-recipient-addr': Flags.string({
       description: 'L2 bridge fee recipient address (non-interactive mode). Defaults to zero address.',
@@ -111,8 +118,8 @@ export default class SetupGenL2Artifacts extends Command {
       description: 'Skip L1 fee vault address update (non-interactive mode)',
     }),
     'skip-l1-plonk-verifier-update': Flags.boolean({
-      default: true,
-      description: 'Skip L1 plonk verifier address update (non-interactive mode)',
+      description: 'Deprecated compatibility flag; ignored. Contracts manage the verifier address.',
+      hidden: true,
     }),
   }
 
@@ -128,8 +135,20 @@ export default class SetupGenL2Artifacts extends Command {
     this.jsonMode = flags.json
     this.jsonCtx = new JsonOutputContext('setup gen-l2-artifacts', this.jsonMode)
 
-    const imageTag = await this.getDockerImageTag(flags['image-tag'])
-    this.jsonCtx.info(`Using Docker image tag: ${imageTag}`)
+    let contractsSource: string | undefined
+    let imageTag: string | undefined
+    if (flags['contracts-source']) {
+      try {
+        contractsSource = validateContractsSource(flags['contracts-source'])
+      } catch (error) {
+        this.jsonCtx.error('E601_INVALID_VALUE', `Cannot use local contracts source: ${error instanceof Error ? error.message : String(error)}`, 'PREREQUISITE', true)
+      }
+
+      this.jsonCtx.info(`Using local contracts source: ${contractsSource}`)
+    } else {
+      imageTag = await this.getDockerImageTag(flags['image-tag'])
+      this.jsonCtx.info(`Using Docker image tag: ${imageTag}`)
+    }
 
     const configsDir = flags['configs-dir']
     this.jsonCtx.info(`Using configuration directory: ${configsDir}`)
@@ -148,16 +167,22 @@ export default class SetupGenL2Artifacts extends Command {
     this.jsonCtx.info('Checking L2_BRIDGE_FEE_RECIPIENT_ADDR...')
     await this.updateL2BridgeFeeRecipientAddr(flags)
 
-    this.jsonCtx.info('Checking L1_PLONK_VERIFIER_ADDR...')
-    await this.updateL1PlonkVerifierAddr(flags)
-
     await this.updateBaseFeePerGas(flags)
 
     this.resolveConfigEnvRefsInPlace()
     this.validateConfigForArtifactGeneration()
 
-    this.jsonCtx.info('Running docker command to generate L2 artifacts...')
-    await this.runDockerCommand(imageTag)
+    if (contractsSource) {
+      this.jsonCtx.info('Running local Foundry scripts to generate L2 artifacts...')
+      try {
+        await generateLocalContractsArtifacts(contractsSource, process.cwd(), this.jsonMode ? process.stderr : process.stdout)
+      } catch (error) {
+        this.jsonCtx.error('E900_UNEXPECTED_ERROR', `Local artifact generation failed: ${error instanceof Error ? error.message : String(error)}`, 'INTERNAL', true)
+      }
+    } else {
+      this.jsonCtx.info('Running docker command to generate L2 artifacts...')
+      await this.runDockerCommand(imageTag!)
+    }
 
     const publicConfigPath = path.join(process.cwd(), 'config.public.toml')
     if (fs.existsSync(publicConfigPath)) {
@@ -174,7 +199,7 @@ export default class SetupGenL2Artifacts extends Command {
         )
       }
     } else {
-      this.jsonCtx.addWarning('config.public.toml not found after docker command.')
+      this.jsonCtx.addWarning('config.public.toml not found after artifact generation.')
     }
 
     this.jsonCtx.info('Processing generated YAML files...')
@@ -187,7 +212,7 @@ export default class SetupGenL2Artifacts extends Command {
       this.jsonCtx.success({
         configsDir,
         genesisPath: path.join(path.resolve(configsDir), 'genesis.yaml'),
-        imageTag,
+        ...(contractsSource ? {backend: 'local', contractsSource} : {backend: 'docker', imageTag}),
         yamlFilesProcessed: true,
       })
     }
@@ -266,9 +291,6 @@ export default class SetupGenL2Artifacts extends Command {
       { source: 'admin-system-backend-config.yaml', target: 'admin-system-backend-config.yaml' },
       { source: 'admin-system-backend-config.yaml', target: 'admin-system-cron-config.yaml' },
       { source: 'balance-checker-config.yaml', target: 'balance-checker-config.yaml' },
-      { source: 'bridge-history-config.yaml', target: 'bridge-history-api-config.yaml' },
-      { source: 'bridge-history-config.yaml', target: 'bridge-history-fetcher-config.yaml' },
-      { source: 'chain-monitor-config.yaml', target: 'chain-monitor-config.yaml' },
       { source: 'frontend-config.yaml', target: 'frontends-config.yaml' },
       { source: 'genesis.yaml', target: 'genesis.yaml' },
       { source: 'gas-oracle-config.yaml', target: 'gas-oracle-config.yaml' },
@@ -819,92 +841,6 @@ export default class SetupGenL2Artifacts extends Command {
         }
       } else {
         this.jsonCtx.log(chalk.yellow('L1_FEE_VAULT_ADDR not updated'))
-      }
-    }
-  }
-
-  private async updateL1PlonkVerifierAddr(flags: any): Promise<void> {
-    const configPath = path.join(process.cwd(), 'config.toml')
-    if (!fs.existsSync(configPath)) {
-      this.jsonCtx.addWarning('config.toml not found. Skipping L1_PLONK_VERIFIER_ADDR update.')
-      return
-    }
-
-    const configContent = fs.readFileSync(configPath, 'utf8')
-    const config = toml.parse(configContent)
-
-    const currentAddr = (config.contracts as any)?.L1_PLONK_VERIFIER_ADDR || ''
-
-    if (this.nonInteractive) {
-      // Non-interactive mode: skip by default (--skip-l1-plonk-verifier-update is true by default)
-      // Only update if explicitly provided via flag
-      if (flags['skip-l1-plonk-verifier-update'] && !flags['l1-plonk-verifier-addr']) {
-        this.jsonCtx.info('Skipping L1_PLONK_VERIFIER_ADDR update (will be auto-deployed)')
-        return
-      }
-
-      const newAddr = resolveEnvValue(flags['l1-plonk-verifier-addr'])
-      if (newAddr) {
-        if (!ethers.isAddress(newAddr)) {
-          this.jsonCtx.error(
-            'E600_INVALID_ADDRESS',
-            `Invalid L1_PLONK_VERIFIER_ADDR: ${newAddr}`,
-            'VALIDATION',
-            true,
-            { address: newAddr }
-          )
-        }
-
-        if (!config.contracts) {
-          config.contracts = {}
-        }
-
-        ; (config.contracts as any).L1_PLONK_VERIFIER_ADDR = newAddr
-
-        if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
-          this.jsonCtx.logSuccess(`L1_PLONK_VERIFIER_ADDR updated in config.toml to "${newAddr}"`)
-        }
-      } else {
-        this.jsonCtx.info('L1_PLONK_VERIFIER_ADDR not provided, will be auto-deployed')
-      }
-    } else {
-      this.jsonCtx.log(chalk.yellow('Note: If you do not set L1_PLONK_VERIFIER_ADDR, one will be automatically deployed.'))
-
-      const updatePlonkVerifier = await confirm({
-        default: false,
-        message: 'Would you like to set a value for L1_PLONK_VERIFIER_ADDR?',
-      })
-
-      if (updatePlonkVerifier) {
-        this.jsonCtx.log(chalk.cyan(`The current L1_PLONK_VERIFIER_ADDR is: ${currentAddr}`))
-
-        let isValidAddress = false
-        let newAddr = ''
-
-        while (!isValidAddress) {
-          newAddr = await input({
-            default: currentAddr,
-            message: 'Enter the L1_PLONK_VERIFIER_ADDR:',
-          })
-
-          if (ethers.isAddress(newAddr)) {
-            isValidAddress = true
-          } else {
-            this.jsonCtx.log(chalk.red('Invalid Ethereum address. Please try again.'))
-          }
-        }
-
-        if (!config.contracts) {
-          config.contracts = {}
-        }
-
-        ; (config.contracts as any).L1_PLONK_VERIFIER_ADDR = newAddr
-
-        if (writeConfigs(config, undefined, undefined, this.jsonMode)) {
-          this.jsonCtx.log(chalk.green(`L1_PLONK_VERIFIER_ADDR updated in config.toml to "${newAddr}"`))
-        }
-      } else {
-        this.jsonCtx.log(chalk.yellow('L1_PLONK_VERIFIER_ADDR not updated'))
       }
     }
   }

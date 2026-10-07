@@ -20,7 +20,6 @@ import PrepCharts, {
   buildFeeOraclePrepEnv,
   buildFrontendExternalUrlUpdates,
   buildL1InterfaceBlobSourcePrepEnv,
-  buildL2GethInitialPeerList,
   buildRethInitialTrustedPeers,
   buildTsoSigners,
   buildWithdrawalBlobSourcePrepEnv,
@@ -64,7 +63,7 @@ const VALID_PREP_CUTOVER = {
 describe('setup prep-charts generated frontend config', () => {
   it('updates DeploymentSpec env-file values without serializing undefined', () => {
     const first = applyFrontendEnvFileValues(
-      '# Frontend Configuration\nREACT_APP_ROLLUP = Old Name\n',
+      '# Frontend Configuration\nREACT_APP_ROLLUP = Old Name\nREACT_APP_ROLLUPSCAN_API_URI = https://old-rollup/api\nADMIN_SYSTEM_DASHBOARD_URI = https://old-admin\n',
       {
         REACT_APP_CONNECT_WALLET_PROJECT_ID: undefined,
         REACT_APP_DOGE_NETWORK: 'testnet',
@@ -86,6 +85,12 @@ describe('setup prep-charts generated frontend config', () => {
     })).to.deep.equal({changed: false, content: first.content})
   })
 
+  it('removes a retired bridge API from existing frontend env payloads idempotently', () => {
+    const result = applyFrontendEnvFileValues('REACT_APP_BRIDGE_API_URI = "https://retired.example/api"\nREACT_APP_ROLLUP = DogeOS\n', {})
+    expect(result).to.deep.equal({changed: true, content: 'REACT_APP_ROLLUP = DogeOS\n'})
+    expect(applyFrontendEnvFileValues(result.content, {})).to.deep.equal({changed: false, content: result.content})
+  })
+
   it('projects every deployment-owned external URL', () => {
     const values: Record<string, string> = {
       'frontend.ADMIN_SYSTEM_DASHBOARD_URI': 'https://admin.testnet.example',
@@ -97,12 +102,9 @@ describe('setup prep-charts generated frontend config', () => {
     }
 
     expect(buildFrontendExternalUrlUpdates(key => values[key])).to.deep.equal({
-      ADMIN_SYSTEM_DASHBOARD_URI: 'https://admin.testnet.example',
       GRAFANA_URI: 'https://grafana.testnet.example',
-      REACT_APP_BRIDGE_API_URI: 'https://bridge.testnet.example/api',
       REACT_APP_EXTERNAL_EXPLORER_URI_L2: 'https://explorer.testnet.example',
       REACT_APP_EXTERNAL_RPC_URI_L2: 'https://rpc.testnet.example',
-      REACT_APP_ROLLUPSCAN_API_URI: 'https://rollup.testnet.example/api',
     })
   })
 })
@@ -167,63 +169,18 @@ describe('setup prep-charts ConfigMap file mounts', () => {
 })
 
 describe('setup prep-charts Reth initial peer topology', () => {
-  it('honors an explicit empty Geth peer array without reviving legacy node keys', () => {
+  it('ignores archived root Geth keys and peer lists even when populated', () => {
     const harness: any = Object.create(PrepCharts.prototype)
-    harness.configData = { sequencer: { L2_GETH_STATIC_PEERS: [], L2GETH_NODEKEY: 'archived-key' } }
-    harness.deriveLegacySequencerEnodeUrl = () => 'enode://legacy@l2-sequencer-0:30303'
-    expect(harness.getLegacySequencerPeers()).to.deep.equal([])
-    harness.configData.sequencer.L2_GETH_STATIC_PEERS = ['enode://explicit@peer:30303']
-    expect(harness.getLegacySequencerPeers()).to.deep.equal(['enode://explicit@peer:30303'])
-    delete harness.configData.sequencer.L2_GETH_STATIC_PEERS
-    expect(harness.getLegacySequencerPeers()).to.deep.equal(['enode://legacy@l2-sequencer-0:30303'])
+    harness.configData = {sequencer: {L2_GETH_STATIC_PEERS: ['enode://old@old:30303'], L2GETH_NODEKEY: 'archived-key'}}
+    harness.dogeConfig = {sequencerReth: {instances: [{enodeUrl: 'enode://reth@l2-reth-sequencer-0:30303', index: 0}]}}
+    expect(harness.buildFreshRethTrustedPeers()).to.equal('enode://reth@l2-reth-sequencer-0:30303')
+    harness.dogeConfig = {}
+    expect(harness.buildFreshRethTrustedPeers()).to.equal('')
   })
 
-  const gethSequencers = [
-    'enode://geth0@l2-sequencer-0:30303',
-    'enode://geth1@l2-sequencer-1:30303',
-  ]
-  const rethSequencers = [
-    'enode://reth0@l2-reth-sequencer-0:30303',
-    'enode://reth1@l2-reth-sequencer-1:30303',
-    'enode://geth1@l2-sequencer-1:30303',
-  ]
-  const combinedSequencers = [
-    'enode://geth0@l2-sequencer-0:30303',
-    'enode://geth1@l2-sequencer-1:30303',
-    'enode://reth0@l2-reth-sequencer-0:30303',
-    'enode://reth1@l2-reth-sequencer-1:30303',
-  ]
-
-  it('renders geth and Reth sequencers as Reth trusted-peers CSV', () => {
-    expect(buildRethInitialTrustedPeers(gethSequencers, rethSequencers)).to.equal(
-      combinedSequencers.join(',')
-    )
-  })
-
-  it('renders the same deduplicated sequencers as a geth peer-list JSON array', () => {
-    expect(buildL2GethInitialPeerList(gethSequencers, rethSequencers)).to.equal(
-      JSON.stringify(combinedSequencers)
-    )
-  })
-
-  it('ignores blank peer entries for both client formats', () => {
-    const gethSequencers = [
-      'enode://geth0@l2-sequencer-0:30303',
-      ' ',
-    ]
-    const rethSequencers = [
-      'enode://reth0@l2-reth-sequencer-0:30303',
-      '',
-    ]
-
-    expect(buildRethInitialTrustedPeers(gethSequencers, rethSequencers)).to.equal([
-      'enode://geth0@l2-sequencer-0:30303',
-      'enode://reth0@l2-reth-sequencer-0:30303',
-    ].join(','))
-    expect(buildL2GethInitialPeerList(gethSequencers, rethSequencers)).to.equal(JSON.stringify([
-      'enode://geth0@l2-sequencer-0:30303',
-      'enode://reth0@l2-reth-sequencer-0:30303',
-    ]))
+  it('deduplicates and trims Reth trusted peers', () => {
+    expect(buildRethInitialTrustedPeers([' enode://reth@peer:30303 ', '', ' ', 'enode://reth@peer:30303']))
+      .to.equal('enode://reth@peer:30303')
   })
 })
 

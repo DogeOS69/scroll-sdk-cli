@@ -58,7 +58,7 @@ describe('setup db-init active services', () => {
     const saved = await run()
     expect(command.initializeDatabase.args.map((args: any[]) => args[1])).to.deep.equal(['scroll_blockscout', 'dstack'])
     expect(saved.db.DSTACK_DB_CONNECTION_STRING).to.match(/^postgresql\+asyncpg:\/\/dstack:.+@private-db:5432\/dstack\?ssl=require$/)
-    expect(saved.db.SCROLL_DB_CONNECTION_STRING).to.equal(config.db.SCROLL_DB_CONNECTION_STRING)
+    expect(saved.db).not.to.have.property('SCROLL_DB_CONNECTION_STRING')
     expect(toml.parse(fs.readFileSync('config.public.toml', 'utf8'))).not.to.have.property('db')
     const secret = yaml.load(fs.readFileSync('secrets/dstack-controller-database.yaml', 'utf8')) as any
     expect(secret.stringData['database-url']).to.equal(saved.db.DSTACK_DB_CONNECTION_STRING)

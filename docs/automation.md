@@ -1,5 +1,8 @@
 # CLI Automation Reference
 
+For supported database settings, removed prompts and migration commands, see
+[Configuration cleanup](config-cleanup.md).
+
 This document defines how scripts, CI jobs, and agents invoke `scrollsdk`.
 It intentionally does not define deployment order. For the official proof and
 partner-handoff workflow, use [proof-operator-runbook.md](proof-operator-runbook.md).

@@ -22,6 +22,7 @@ import {
   resolveOrPrompt,
   validateAndExit,
 } from '../../utils/non-interactive.js'
+import {stripRetiredServiceConfig} from '../../utils/retired-services.js'
 
 /**
  * Quote a PostgreSQL identifier (database name, role name) to prevent injection.
@@ -445,7 +446,7 @@ export default class SetupDbInit extends Command {
     }
 
     const configContent = fs.readFileSync(configPath, 'utf8')
-    return toml.parse(configContent) as any
+    return stripRetiredServiceConfig(toml.parse(configContent))
   }
 
   private async initializeDatabase(conn: PgClient, dbName: string, dbUser: string, dbPassword: string, clean: boolean, niCtx?: NonInteractiveContext): Promise<void> {

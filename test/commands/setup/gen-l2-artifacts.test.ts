@@ -1,8 +1,11 @@
 import {expect} from 'chai'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import sinon from 'sinon'
 
-import {applyRethGenesisSigner, resolveGenesisImageTag} from '../../../src/commands/setup/gen-l2-artifacts.js'
-import {DOCKER_TAGS_URL} from '../../../src/constants/docker.js'
+import SetupGenL2Artifacts, {applyRethGenesisSigner, resolveGenesisImageTag} from '../../../src/commands/setup/gen-l2-artifacts.js'
+import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_TAGS_URL} from '../../../src/constants/docker.js'
 
 describe('gen-l2-artifacts explicit image selection', () => {
   afterEach(() => sinon.restore())
@@ -75,6 +78,62 @@ describe('gen-l2-artifacts Reth genesis signer', () => {
       const config = {sequencer: {L2GETH_SIGNER_ADDRESS: oldAddress}}
       expect(() => applyRethGenesisSigner(config, {sequencerReth: {instances}})).to.throw('refusing to use a stale legacy signer')
       expect(config.sequencer.L2GETH_SIGNER_ADDRESS).to.equal(oldAddress)
+    })
+  }
+})
+
+
+describe('gen-l2-artifacts integrated preflight', () => {
+  let previousCwd: string
+  let root: string
+  const address = '0x62154f72A4381dF73904667F20834aeD34e97dcB'
+  const accounts = `[accounts]\nOWNER_ADDR = "${address}"\n`
+
+  beforeEach(() => {
+    previousCwd = process.cwd()
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'genesis-preflight-'))
+    process.chdir(root)
+  })
+  afterEach(() => {
+    sinon.restore()
+    process.chdir(previousCwd)
+    fs.rmSync(root, {force: true, recursive: true})
+  })
+
+  function command() {
+    const cmd = Object.create(SetupGenL2Artifacts.prototype)
+    cmd.parse = async () => ({flags: {'configs-dir': 'values', 'json': true,
+      'l1-plonk-verifier-addr': 'obsolete-input', 'non-interactive': true}})
+    for (const name of ['updateDeploymentSalt', 'updateL1FeeVaultAddr',
+      'updateL2BridgeFeeRecipientAddr', 'updateBaseFeePerGas', 'processYamlFiles']) sinon.stub(cmd, name).resolves()
+    sinon.stub(process.stdout, 'write').returns(true)
+    sinon.stub(process.stderr, 'write').returns(true)
+    return {cmd, docker: sinon.stub(cmd, 'runDockerCommand').resolves()}
+  }
+
+  it('keeps owner and Reth signer validation while ignoring the retired verifier flag', async () => {
+    fs.writeFileSync('config.toml', accounts)
+    fs.mkdirSync('.data')
+    fs.writeFileSync('.data/doge-config.toml', `[[sequencerReth.instances]]\nindex = 0\n[sequencerReth.instances.signer]\naddress = "${address}"\n`)
+    const {cmd, docker} = command()
+    await cmd.run()
+    expect(docker.calledOnceWithExactly(`gen-configs-${CONTRACTS_DOCKER_DEFAULT_TAG}`)).to.equal(true)
+    const written = fs.readFileSync('config.toml', 'utf8')
+    expect(written).to.include('L2GETH_SIGNER_ADDRESS')
+    expect(written).not.to.include('L1_PLONK_VERIFIER_ADDR')
+  })
+
+  for (const scenario of [
+    {body: accounts, label: 'missing signer'},
+    {body: `[sequencer]\nL2GETH_SIGNER_ADDRESS = "${address}"\n`, label: 'missing owner'},
+  ]) {
+    it(`rejects ${scenario.label} before running the generator`, async () => {
+      fs.writeFileSync('config.toml', scenario.body)
+      const {cmd, docker} = command()
+      let failure: unknown
+      try { await cmd.run() } catch (error) { failure = error }
+      expect(failure).to.be.instanceOf(Error)
+      expect(docker.called).to.equal(false)
     })
   }
 })

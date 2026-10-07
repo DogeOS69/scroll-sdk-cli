@@ -14,7 +14,6 @@ import { toString as qrCodeToString } from 'qrcode'
 import { parseTomlConfig } from '../../utils/config-parser.js'
 import {
   BlockExplorerParams,
-  Withdrawal,
   addressLink,
   awaitERC20Balance,
   // awaitTx,
@@ -26,10 +25,8 @@ import {
   // getGasOracleL2BaseFee,
   getL2TokenFromL1Address,
   // getPendingQueueIndex,
-  getWithdrawals,
   l1ETHGatewayABI,
   l1GatewayRouterABI,
-  l1MessengerRelayMessageWithProofABI,
   l2ETHGatewayABI,
   l2GatewayRouterWithdrawERC20ABI,
   scrollERC20ABI,
@@ -122,14 +119,12 @@ export default class TestE2e extends Command {
     [Layer.L2]: { blockExplorerURI: '' },
   }
 
-  private bridgeApiUrl!: string
   private fundingWallet!: ethers.Wallet
   private l1ETHGateway!: string
   private l1GasTokenAddress: string = ''
   private l1GasTokenGateway: string = ''
   private l1GatewayRouter!: string
   private l1MessegeQueueProxyAddress!: string
-  private l1Messenger!: string
   private l1Provider!: ethers.JsonRpcProvider
   private l1Rpc!: string
   private l2ETHGateway!: string
@@ -138,10 +133,6 @@ export default class TestE2e extends Command {
   private l2Rpc!: string
 
   private manualFunding: boolean = false
-
-  private mockFinalizeEnabled!: boolean
-
-  private mockFinalizeTimeout!: number
 
   private results: {
     bridgeERC20L1ToL2: {
@@ -164,14 +155,6 @@ export default class TestE2e extends Command {
     bridgeFundsL2ToL1: {
       complete: boolean
       l2WithdrawTx?: string
-    }
-    claimERC20OnL1: {
-      complete: boolean
-      l1ClaimTx?: string
-    }
-    claimETHOnL1: {
-      complete: boolean
-      l1ClaimTx?: string
     }
     deployERC20OnL1: {
       address?: string
@@ -196,8 +179,6 @@ export default class TestE2e extends Command {
       bridgeERC20L2ToL1: { complete: false },
       bridgeFundsL1ToL2: { complete: false },
       bridgeFundsL2ToL1: { complete: false },
-      claimERC20OnL1: { complete: false },
-      claimETHOnL1: { complete: false },
       deployERC20OnL1: { complete: false },
       deployERC20OnL2: { complete: false },
       fundWalletOnL1: { complete: false },
@@ -277,11 +258,7 @@ export default class TestE2e extends Command {
       this.l1GatewayRouter = contractsConfig.L1_GATEWAY_ROUTER_PROXY_ADDR
       this.l2GatewayRouter = contractsConfig.L2_GATEWAY_ROUTER_PROXY_ADDR
       this.l1MessegeQueueProxyAddress = contractsConfig.L1_MESSAGE_QUEUE_V2_PROXY_ADDR
-      this.l1Messenger = contractsConfig.L1_SCROLL_MESSENGER_PROXY_ADDR
-      this.mockFinalizeEnabled = config?.general.TEST_ENV_MOCK_FINALIZE_ENABLED === 'true'
-      this.mockFinalizeTimeout = config?.general.TEST_ENV_MOCK_FINALIZE_TIMEOUT_SEC ?? 0
       // TODO: make this work for pod mode
-      this.bridgeApiUrl = config?.frontend.BRIDGE_API_URI
 
       this.l1Provider = new ethers.JsonRpcProvider(l1RpcUrl)
       this.l2Provider = new ethers.JsonRpcProvider(l2RpcUrl)
@@ -667,59 +644,6 @@ export default class TestE2e extends Command {
     }
   }
 
-  private async claimERC20OnL1(): Promise<void> {
-    try {
-      // Implement claiming ERC20 on L1
-      this.logResult('Claiming ERC20 on L1', 'info')
-
-      if (this.mockFinalizeEnabled) {
-        this.logResult(
-          `Config shows finalization timeout enabled at ${this.mockFinalizeTimeout} seconds. May need to wait...`,
-        )
-      } else {
-        this.logResult(`Proof generation can take up to 1h. Please wait...`)
-      }
-
-      if (this.results.bridgeERC20L2ToL1.l2WithdrawTx === undefined) {
-        throw new BridgingError('L2 deposit ETH transaction hash is undefined. Cannot claim funds on L1.')
-      }
-
-      const txHash = await this.findAndExecuteWithdrawal(this.results.bridgeERC20L2ToL1.l2WithdrawTx)
-
-      this.results.claimERC20OnL1.complete = true
-      this.results.claimERC20OnL1.l1ClaimTx = txHash
-    } catch (error) {
-      throw new Error(`Error claiming ERC20 on L1: ${error instanceof Error ? error.message : 'Unknown error'}`)
-    }
-  }
-
-  private async claimFundsOnL1(): Promise<void> {
-    try {
-      // Implement claiming funds on L1
-      this.logResult('Claiming funds on L1', 'info')
-
-      // TODO: Why is this not working?
-      if (this.mockFinalizeEnabled) {
-        this.logResult(
-          `Config shows finalization timeout enabled at ${this.mockFinalizeTimeout} seconds. May need to wait...`,
-        )
-      } else {
-        this.logResult(`Proof generation can take up to 1h. Please wait...`)
-      }
-
-      if (this.results.bridgeFundsL2ToL1.l2WithdrawTx === undefined) {
-        throw new BridgingError('L2 deposit ETH transaction hash is undefined. Cannot claim funds on L1.')
-      }
-
-      const txHash = await this.findAndExecuteWithdrawal(this.results.bridgeFundsL2ToL1.l2WithdrawTx)
-
-      this.results.claimETHOnL1.complete = true
-      this.results.claimETHOnL1.l1ClaimTx = txHash
-    } catch (error) {
-      throw new Error(`Error claiming funds on L1: ${error instanceof Error ? error.message : 'Unknown error'}`)
-    }
-  }
-
   private async completeL1ERC20Deposit(): Promise<void> {
     try {
       this.logResult('Waiting for L1 ERC20 deposit to complete on L2...', 'info')
@@ -847,96 +771,6 @@ export default class TestE2e extends Command {
     } catch (error) {
       throw new DeploymentError(
         `Failed to deploy ERC20 on L2: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      )
-    }
-  }
-
-  private async findAndExecuteWithdrawal(txHash: string) {
-    try {
-      let unclaimedWithdrawal
-      let found = false
-
-      while (!unclaimedWithdrawal?.claim_info) {
-        let withdrawals: Withdrawal[] = []
-
-        try {
-           
-          withdrawals = await getWithdrawals(this.wallet.address, this.bridgeApiUrl)
-        } catch (error) {
-          const url = `${this.bridgeApiUrl}/withdrawals?address=${this.wallet.address}`
-          this.logResult(
-            `Warning: Failed to get withdrawals from ${url}. Continuing... Error: ${error instanceof Error ? error.message : 'Unknown error'
-            }`,
-            'warning',
-          )
-        }
-
-        // Check to see if the bridged tx is among unclaimed withdrawals if so, set withdrawalFound to true.
-        for (const withdrawal of withdrawals) {
-          if (withdrawal.hash === txHash) {
-            unclaimedWithdrawal = withdrawal
-            !found && this.logResult(`Found matching withdrawal for transaction: ${txHash}`, 'success')
-            found = true
-            break
-          }
-        }
-
-        const l1TxHash = unclaimedWithdrawal?.counterpart_chain_tx.hash
-        if (l1TxHash) {
-          this.logTx(l1TxHash, 'This withdrawal has already been claimed', Layer.L1)
-          return
-        }
-
-        if (!unclaimedWithdrawal) {
-          this.logResult(`Withdrawal not found yet. Waiting...`, 'info')
-
-          await new Promise((resolve) => { setTimeout(resolve, 60_000) }) // Wait for 20 seconds before checking again
-        } else if (!unclaimedWithdrawal?.claim_info) {
-          this.logResult(`Withdrawal seen, but waiting for finalization. Waiting...`, 'info')
-
-          await new Promise((resolve) => { setTimeout(resolve, 60_000) }) // Wait for 20 seconds before checking again
-        }
-      }
-
-      if (!unclaimedWithdrawal.claim_info.claimable) {
-        throw new Error(`Claim found, but marked as "unclaimable".`)
-      }
-
-      if (!unclaimedWithdrawal?.claim_info) {
-        throw new Error(`No claim info in claim withdrawal.`)
-      }
-
-      //
-
-      // Now build and make the withdrawal claim
-
-      // Create the contract instance
-      const l1Messenger = new ethers.Contract(
-        this.l1Messenger,
-        l1MessengerRelayMessageWithProofABI,
-        this.wallet.connect(this.l1Provider),
-      )
-
-      // const value = amount + ethers.parseEther(`${gasLimit*l2BaseFee} wei`);
-      await this.logAddress(await l1Messenger.getAddress(), `Calling relayMessageWithProof on`, Layer.L1)
-
-      const { from, message, nonce, proof, to, value } = unclaimedWithdrawal.claim_info
-
-      const tx = await l1Messenger.relayMessageWithProof(from, to, value, nonce, message, {
-        batchIndex: proof.batch_index,
-        merkleProof: proof.merkle_proof,
-      })
-
-      await this.logTx(tx.hash, 'Transaction sent', Layer.L1)
-      const receipt = await tx.wait()
-      const blockNumber = receipt?.blockNumber
-
-      this.logResult(`Transaction mined in block: ${chalk.cyan(blockNumber)}`, 'success')
-
-      return receipt.hash
-    } catch (error) {
-      throw new Error(
-        `Error finding and executing withdrawal on L1: ${error instanceof Error ? error.message : 'Unknown error'}`,
       )
     }
   }
@@ -1456,26 +1290,6 @@ export default class TestE2e extends Command {
       //   }
       //   await this.shortPause()
       //   await this.saveProgress()
-      // }
-
-      // this.logSection('Claiming ETH and ERC20 on L1')
-
-      // if (this.results.claimETHOnL1.complete && this.results.claimERC20OnL1.complete) {
-      //   this.logResult('Skipping section...', 'info')
-      // } else {
-      //   if (this.altGasTokenEnabled) {
-      //     this.logResult('Skipping ETH Claim in alternative gas token mode', 'info')
-      //   } else if (!this.results.claimETHOnL1.complete) {
-      //     await this.claimFundsOnL1()
-      //     await this.shortPause()
-      //     await this.saveProgress()
-      //   }
-
-      //   if (!this.results.claimERC20OnL1.complete) {
-      //     await this.claimERC20OnL1()
-      //     await this.shortPause()
-      //     await this.saveProgress()
-      //   }
       // }
 
       this.logResult('E2E Test completed successfully', 'success')
