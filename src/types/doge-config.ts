@@ -1,3 +1,6 @@
+import type {CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
+import type {SignerValidationInputs} from '../utils/proof-enforcement-readiness.js'
+import type {DstackControllerConfig} from './dstack-controller.js'
 import type {ProofTopologySpec} from './proof-topology.js'
 
 export type Network = 'mainnet' | 'regtest' | 'testnet'
@@ -78,6 +81,7 @@ export interface DogeConfig {
     }
     /** 'external' = partner-operated signers (descriptor-imported); legacy in-cluster configs omit this. */
     mode?: 'external'
+    policyValidation?: SignerValidationInputs
     /** Legacy in-cluster provisioning only; absent for external signers. */
     profile?: 'production-kms' | 'staging-kms' | 'staging-local'
     threshold: number
@@ -93,6 +97,8 @@ export interface DogeConfig {
     }>
   }
   cubesigner?: {
+    mode?: CubesignerPolicyMode
+    policyReceipts?: CubesignerPolicyReceiptInputs
     productionPolicy?: CubesignerProductionPolicy
     roles: CubesignerRole[]
   }
@@ -114,6 +120,8 @@ export interface DogeConfig {
     password?: string // for dogecoin that deploy on cluster
     username?: string // for dogecoin that deploy on cluster
   }
+  /** Public Helm deployment inputs; credentials remain in referenced Kubernetes Secrets. */
+  dstackController?: DstackControllerConfig
 
   ethereumDa?: {
     batch?: {
@@ -163,7 +171,6 @@ export interface DogeConfig {
     chain?: 'devnet' | 'mainnet' | 'sepolia'
     chainId?: string
     l2StartBlockNumber?: number | string
-    minFinality?: 'finalized' | 'safe'
     publish?: {
       allowLivenessBudgetOverride?: boolean | string
       budgetWindow?: string
@@ -181,9 +188,15 @@ export interface DogeConfig {
     l2Explorer?: string
     l2Url?: string
   }
+  /** Grafana bootstrap credentials; adminPassword also accepts $ENV:VAR_NAME. */
+  grafana?: {
+    adminPassword?: string
+    adminUser?: string
+    existingSecret?: string
+    passwordKey?: string
+    userKey?: string
+  }
   kubernetes?: {
-    blockbookPublicPort?: number
-    blockbookServiceName?: string
     p2pPort?: number
     rpcPort?: number
     /** RPC URL projected to in-cluster consumers; overrides serviceName/rpcPort URL construction. */
@@ -212,8 +225,8 @@ export interface DogeConfig {
     networkId?: number | string
   }
   rpc?: {
-    apiKey?: string
-    blockbookAPIUrl?: string
+    /** Optional Electrs/Esplora endpoint used only by wallet synchronization. */
+    electrsAPIUrl?: string
     l2Url?: string
     password?: string // for send/sync on dogocoin
     url?: string // for send/sync on dogocoin like: https://testnet.doge.xyz/
@@ -272,10 +285,6 @@ export interface DogeConfig {
       serviceAccountName?: string
       serviceAccountRoleArn?: string
     }
-  }
-  test?: {
-    mockFinalizeEnabled?: boolean
-    mockFinalizeTimeout?: number
   }
   wallet: {
     path: string

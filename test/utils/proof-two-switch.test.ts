@@ -64,17 +64,6 @@ describe('PR #937 two-switch proof adapter', () => {
       root_agg_verifying_key: path.join(producer, 'root-vk'),
     }
     for (const [name, filePath] of Object.entries(files)) fs.writeFileSync(filePath, name)
-    const manifest = path.join(root, 'producer.json')
-    fs.writeFileSync(manifest, JSON.stringify({
-      artifacts: Object.fromEntries(Object.entries(files).map(([name, filePath]) => [name, {
-        path: filePath,
-        sha256: sha256(filePath),
-        size_bytes: fs.statSync(filePath).size,
-      }])),
-      dogeos_core_commit: 'core-revision',
-      producer: {commit: 'producer-revision'},
-      toolchain: {openvm_tag: 'v1.4.0', rust: 'nightly-test'},
-    }))
     const hex32 = (character: string) => `0x${character.repeat(64)}`
     const hex64 = (character: string) => `0x${character.repeat(128)}`
     const identityEnv = path.join(root, 'identity.env')
@@ -111,7 +100,14 @@ describe('PR #937 two-switch proof adapter', () => {
         topologyCompiler: image('e', 'dogeos69/dogeos-proof-topology'),
       },
       mockWorkerIdentity,
-      producerManifest: manifest,
+      scrollArtifacts: {
+        aggregateVerifyingKey: files.root_agg_verifying_key,
+        batchAppConfig: files.batch_openvm_toml,
+        batchAppExe: files.batch_vmexe,
+        chunkAppConfig: files.chunk_openvm_toml,
+        chunkAppExe: files.chunk_vmexe,
+        coreRevision: 'c'.repeat(40),
+      },
     })
 
     expect(prepared.receipt.software.identities.bridge.appCommitRaw).to.equal(hex64('6'))
@@ -215,9 +211,7 @@ describe('PR #937 two-switch proof adapter', () => {
         },
         identities: {batch: identity, bridge: identity, chunk: identity, l2Range: identity},
         identitySource: 'real_identity_probe',
-        openvmVersion: 'v1',
-        rustToolchain: 'nightly',
-        sourceRevisions: {dogeosCore: 'core', scrollZkvmProver: 'producer'},
+        sourceRevisions: {dogeosCore: 'core'},
       },
     }))
     expect(() => readProofMaterials(receiptPath, root)).not.to.throw()
@@ -457,7 +451,7 @@ describe('PR #937 two-switch proof adapter', () => {
       refreshExistingImages: true,
     })
 
-    expect(refreshed.receipt.images.mockWorker.digest).to.equal(`sha256:${'3'.repeat(64)}`)
+    expect(refreshed.receipt.images.mockWorker!.digest).to.equal(`sha256:${'3'.repeat(64)}`)
     expect(refreshed.receipt.images.topologyCompiler.digest).to.equal(`sha256:${'4'.repeat(64)}`)
     expect(refreshed.receipt.software).to.deep.equal(prepared.receipt.software)
     expect(fs.readFileSync(marker, 'utf8')).to.equal('preserve')

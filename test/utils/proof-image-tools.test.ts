@@ -4,7 +4,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import {runProofImageTools} from '../../src/utils/proof-image-tools.js'
+import {exportCoordinatorMaterializers, runProofImageTools} from '../../src/utils/proof-image-tools.js'
 
 const revision = 'a'.repeat(40)
 const image = `example/proof@sha256:${'b'.repeat(64)}`
@@ -48,12 +48,6 @@ describe('offline proof image tools', () => {
     if (args[0] === 'create') return container
     if (args[0] === 'cp') fs.writeFileSync(args[2], 'native executable fixture')
     if (args.includes('--print-identity-json')) return workerIdentity
-    if (args.includes('derive-scroll-identities')) {
-      const mount = args.find(arg => arg.endsWith('dst=/output'))!
-      const output = mount.slice('type=bind,src='.length, -',dst=/output'.length)
-      fs.writeFileSync(path.join(output, 'proof-scroll-identities-v1.json'), JSON.stringify({schema: 'dogeos/proof-scroll-identities/v1'}))
-    }
-
     return ''
   }
 
@@ -120,21 +114,17 @@ describe('offline proof image tools', () => {
     expect(calls).to.deep.equal([])
   })
 
-  it('derives using only five read-only staged artifacts and records their fingerprints', () => {
-    const artifacts = path.join(root, 'artifacts')
-    for (const file of ['chunk/app.vmexe', 'chunk/openvm.toml', 'batch/app.vmexe', 'batch/openvm.toml', 'verifier/aggregate-vk']) {
-      const target = path.join(artifacts, file)
-      fs.mkdirSync(path.dirname(target), {recursive: true})
-      fs.writeFileSync(target, file)
-    }
-
-    fs.writeFileSync(path.join(artifacts, 'private.env'), 'must not mount')
-    const result = runProofImageTools({action: 'derive-scroll', artifactRoot: artifacts, deploymentDir: root, expectedRevision: revision, output: 'derived', producerImage: image, run})
-    expect(Object.keys(result.receipt.inputs!)).to.have.length(5)
-    expect(Object.keys(result.receipt.files)).to.deep.equal(['proof-scroll-identities-v1.json'])
-    const execution = calls.find(args => args[0] === 'run')!
-    expect(execution.join(' ')).not.to.include(artifacts)
-    expect(execution.some(arg => arg.endsWith('dst=/input,readonly'))).to.equal(true)
-    expect(fs.readdirSync(result.outputDir)).to.have.length(2)
+  it('copies the release coordinator materializers after checking its revision, never starting it', () => {
+    const output = path.join(root, 'materializers')
+    const copied = exportCoordinatorMaterializers({expectedRevision: revision, image, outputDir: output, run})
+    expect(copied).to.deep.equal({
+      batchMaterializer: path.join(output, 'scroll-runtime-materializer'),
+      chunkMaterializer: path.join(output, 'materialize-chunk-oneshot'),
+    })
+    expect(calls.map(args => args[0])).to.deep.equal(['pull', 'image', 'create', 'cp', 'cp', 'rm'])
+    expect(calls.some(args => args[0] === 'run' || args[0] === 'start')).to.equal(false)
+    expect(() => exportCoordinatorMaterializers({expectedRevision: 'e'.repeat(40), image, outputDir: path.join(root, 'other'), run}))
+      .to.throw('does not match expected')
+    expect(fs.existsSync(path.join(root, 'other'))).to.equal(false)
   })
 })

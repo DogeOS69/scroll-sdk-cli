@@ -93,6 +93,9 @@
     ],
     "topicSeparator": " ",
     "topics": {
+      "cubesigner": {
+        "description": "Maintain CubeSigner identities and signing sessions"
+      },
       "helper": {
         "description": "Useful tools for setting up and interacting with your chain"
       },

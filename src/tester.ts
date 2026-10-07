@@ -5,14 +5,12 @@ import {
 	getFinalizedBlockHeight,
 	getGasOracleL2BaseFee,
 	getPendingQueueIndex,
-	getWithdrawals,
 	txLink
 } from './utils/onchain/index.js';
 
 const EXTERNAL_RPC_URI_L1 = "https://alien-flashy-arm.ethereum-sepolia.quiknode.pro/2aeb75414e5ee0e930b64c2e7feff59efb537f30"
 const EXTERNAL_RPC_URI_L2 = "https://sepolia-rpc.scroll.io/"
 const L1_MESSAGE_QUEUE_V2_PROXY_ADDR = "0xF0B2293F5D834eAe920c6974D50957A1732de763";
-const BRIDGE_API_URI = "https://sepolia-api-bridge-v2.scroll.io/api"
 
 async function testGetFinalizedBlockHeight() {
 	try {
@@ -79,16 +77,6 @@ async function testTxLink() {
 	}
 }
 
-async function testGetWithdrawals() {
-	try {
-		const results = await getWithdrawals("0x98110937b5D6C5FCB0BA99480e585D2364e9809C", BRIDGE_API_URI)
-		console.log(results);
-	} catch (error) {
-		console.error('Error in testGetWithdrawals:', error);
-	}
-
-}
-
 async function testAwaitERC20Balance() {
 	try {
 		const results = await awaitERC20Balance("0x98110937b5D6C5FCB0BA99480e585D2364e9809C", "0x92e717f0564811A79A8d3E8F3cF1D65Ca06d2FA0", EXTERNAL_RPC_URI_L2)
@@ -109,7 +97,6 @@ async function main() {
 	await testGetGasOracleL2BaseFee();
 	await testAwaitTx();
 	await testTxLink();
-	await testGetWithdrawals();
 	await testAwaitERC20Balance()
 	console.log('Test completed.');
 }

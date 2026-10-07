@@ -123,4 +123,39 @@ describe('generation transaction', () => {
     expect(fs.readFileSync(operationalFile, 'utf8')).to.equal('large operational artifact fixture\n')
     expect(result.changedFiles).to.deep.equal([path.join(root, 'values/existing.yaml')])
   })
+
+  for (const action of ['create', 'edit', 'delete'] as const) {
+    it(`preserves concurrent ${action} operations and refuses the entire generation`, () => {
+      const transaction = GenerationTransaction.begin(root)
+      const original = path.join(root, 'values/existing.yaml')
+      fs.writeFileSync(transaction.toStagingPath(original), 'generated\n')
+      const external = path.join(root, 'values/remove.yaml')
+      if (action === 'create') fs.writeFileSync(path.join(root, 'receipt.json'), 'provider receipt')
+      if (action === 'edit') {
+        const stat = fs.statSync(external)
+        fs.writeFileSync(external, 'operator!\n') // Same length; preserve timestamps too.
+        fs.utimesSync(external, stat.atime, stat.mtime)
+      }
+
+      if (action === 'delete') fs.rmSync(external)
+      try {
+        expect(() => transaction.commit()).to.throw('deployment files changed during generation')
+        expect(fs.readFileSync(original, 'utf8')).to.equal('before\n')
+        if (action === 'create') expect(fs.readFileSync(path.join(root, 'receipt.json'), 'utf8')).to.equal('provider receipt')
+        if (action === 'edit') expect(fs.readFileSync(external, 'utf8')).to.equal('operator!\n')
+        if (action === 'delete') expect(fs.existsSync(external)).to.equal(false)
+      } finally { transaction.rollback() }
+    })
+  }
+
+  it('permits concurrent writes to explicitly excluded operational evidence', () => {
+    fs.writeFileSync(path.join(root, '.scrollsdkignore'), 'journal.md\n')
+    const transaction = GenerationTransaction.begin(root)
+    fs.writeFileSync(path.join(root, 'journal.md'), 'step completed\n')
+    fs.writeFileSync(transaction.toStagingPath(path.join(root, 'values/existing.yaml')), 'generated\n')
+    transaction.commit()
+    expect(fs.readFileSync(path.join(root, 'journal.md'), 'utf8')).to.equal('step completed\n')
+    expect(fs.readFileSync(path.join(root, 'values/existing.yaml'), 'utf8')).to.equal('generated\n')
+  })
+
 })

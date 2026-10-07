@@ -1,3 +1,4 @@
+import {parse} from '@iarna/toml'
 import {expect} from 'chai'
 
 import type {SignerPolicyBundleInput} from '../../src/utils/signer-policy-bundle.js'
@@ -46,6 +47,31 @@ function envMap(rendered: string): Record<string, string> {
 }
 
 describe('signer policy bundle V2', () => {
+  it('provides enforce-compatible quorum examples for all three RPC source sets', () => {
+    const examples = renderSignerOperatorPolicyTemplate().split('\n')
+      .filter(line => /^# (\[|[_a-z]+ = )/.test(line))
+      .map(line => line.slice(2)).join('\n')
+    const policy = parse(examples) as unknown as {
+      advance_l1_policy: {terminal_anchor_sources: SourceSet}
+      advance_l2_policy: {ethereum_sources: SourceSet; l2_sources: SourceSet}
+    }
+    interface SourceSet {
+      posture: string
+      required_agreement: number
+      sources: {rpc_url: string; trust_domain_id: string}[]
+    }
+
+    for (const sourceSet of [policy.advance_l1_policy.terminal_anchor_sources,
+      policy.advance_l2_policy.ethereum_sources, policy.advance_l2_policy.l2_sources]) {
+      expect(sourceSet.posture).to.equal('quorum')
+      expect(sourceSet.required_agreement).to.be.at.least(2)
+      expect(new Set(sourceSet.sources.map(source => source.trust_domain_id)).size)
+        .to.be.at.least(sourceSet.required_agreement)
+      expect(new Set(sourceSet.sources.map(source => source.rpc_url)).size)
+        .to.equal(sourceSet.sources.length)
+    }
+  })
+
   it('renders partner-owned RPC and rotation policy without bridge-owned verifier fields', () => {
     const policy = renderSignerOperatorPolicyTemplate()
     expect(policy).to.include('[advance_l1_policy.terminal_anchor_sources]')

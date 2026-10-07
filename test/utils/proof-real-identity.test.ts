@@ -5,8 +5,11 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
+import type {DogeConfig} from '../../src/types/doge-config.js'
 import type {ProofMaterialsV1} from '../../src/types/proof-materials.js'
+import type {ProofDeploymentContract} from '../../src/utils/proof-deployment-contract.js'
 
+import {proofEnforcementReadiness} from '../../src/utils/proof-enforcement-readiness.js'
 import {prepareProofMaterials, readProofMaterials} from '../../src/utils/proof-materials.js'
 import {renderProofTopologySource} from '../../src/utils/proof-topology-compiler.js'
 import {buildProofTopology} from '../../src/utils/proof-topology-init.js'
@@ -101,19 +104,15 @@ function fixture(root: string) {
       identityEnv: write('identity.env', Object.entries(env).map(([key, value]) => `export ${key}=${value}`).join('\n')),
       images: {mockWorker: image('mock'), productionWorker: image('real'), topologyCompiler: image('compiler')},
       mockWorkerIdentity: write('mock-worker.json', JSON.stringify(mockBundle)),
-      producerManifest: write('producer.json', JSON.stringify({
-        artifacts: {
-          batch_openvm_toml: artifact('software/batch.toml'),
-          batch_vmexe: artifact('software/batch.vmexe'),
-          chunk_openvm_toml: artifact('software/chunk.toml'),
-          chunk_vmexe: artifact('software/chunk.vmexe'),
-          root_agg_verifying_key: artifact('software/root-vk'),
-        },
-        dogeos_core_commit: 'core-revision',
-        producer: {commit: 'producer-revision'},
-        toolchain: {openvm_tag: 'v1.7', rust: 'nightly-test'},
-      })),
       protocolContext: write('protocol_context.json', '{}'),
+      scrollArtifacts: {
+        aggregateVerifyingKey: artifact('software/root-vk').path,
+        batchAppConfig: artifact('software/batch.toml').path,
+        batchAppExe: artifact('software/batch.vmexe').path,
+        chunkAppConfig: artifact('software/chunk.toml').path,
+        chunkAppExe: artifact('software/chunk.vmexe').path,
+        coreRevision: 'c'.repeat(40),
+      },
     },
   }
 }
@@ -137,6 +136,28 @@ describe('real bake worker identity import', () => {
   })
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
+  it('keeps enforcement evidence checks independent of testnet CubeSigner transport mode', () => {
+    const input = fixture(root)
+    const prepared = prepareProofMaterials(input.options)
+    const contract = {
+      enforcement: 'enforce', generation: 'real', inputs: {materials: {path: prepared.receiptPath}, protocolContext: {sha256: hash('{}')}}, mode: 'active',
+      worker: {enabled: true},
+    } as ProofDeploymentContract
+    const config = {cubesigner: {mode: 'transport_only', roles: []}, network: 'testnet'} as unknown as DogeConfig
+    const report = proofEnforcementReadiness(root, contract, config)
+    expect(report.blockers.filter(item => item.startsWith('CubeSigner:'))).to.deep.equal([])
+    expect(report.ready).to.equal(false)
+    expect(report.blockers).to.include('External Attestation Signer policy-validation receipts are missing')
+    expect(report.blockers).to.include('Program-publication receipt is not bound to the deployment contract')
+    config.network = 'mainnet'
+    expect(proofEnforcementReadiness(root, contract, config).blockers.join(' ')).to.include('forbidden on mainnet')
+    config.network = 'testnet'
+    config.cubesigner!.mode = 'production_verifier_key_policy'
+    expect(proofEnforcementReadiness(root, contract, config).blockers.join(' ')).to.include('requires release and attachment receipts')
+    delete config.cubesigner!.mode
+    expect(proofEnforcementReadiness(root, contract, config).blockers.join(' ')).to.include('explicit CubeSigner policy mode')
+  })
+
   it('preserves the real bundle through receipt reload and selects it as the compiler input', () => {
     const input = fixture(root)
     const prepared = prepareProofMaterials(input.options)
@@ -155,6 +176,33 @@ describe('real bake worker identity import', () => {
     expect(active.real_scroll).to.have.property('chunk_program_commitment_hex', raw('1'))
     fs.appendFileSync(imported, ' ')
     expect(() => readProofMaterials(prepared.receiptPath, root)).to.throw('content drift')
+  })
+
+  it('accepts an explicitly selected real identity and rejects a different Bridge binding', () => {
+    const input = fixture(root)
+    const selected = path.join(root, 'selected-worker.json')
+    fs.writeFileSync(selected, JSON.stringify({...input.bundle, bridge_guest: {...input.bundle.bridge_guest, verification_key_hash: `0x${'f'.repeat(64)}`}}))
+    expect(() => prepareProofMaterials({...input.options, workerIdentityBundle: selected})).to.throw('does not match the identity probe')
+    fs.copyFileSync(input.bundlePath, selected)
+    const prepared = prepareProofMaterials({...input.options, workerIdentityBundle: selected})
+    const receipt = readProofMaterials(prepared.receiptPath, root)
+    expect(fs.readFileSync(path.join(root, receipt.software.compilerIdentity!.path), 'utf8')).to.equal(fs.readFileSync(selected, 'utf8'))
+  })
+
+  it('uses a versioned proof material directory as the topology resource root', () => {
+    const input = fixture(root)
+    const prepared = prepareProofMaterials({
+      ...input.options,
+      outputReceipt: path.join(root, '.data/proof-materials-release-a.json'),
+      outputRoot: path.join(root, '.data/proof-materials/release-a'),
+    })
+    const receipt = readProofMaterials(prepared.receiptPath, root)
+    const selected = topology(receipt)
+
+    expect(selected.active?.realScroll.resourcesRoot)
+      .to.equal('.data/proof-materials/release-a')
+    expect(selected.compiler.identityFilePath)
+      .to.equal('.data/proof-materials/release-a/bridge/worker-identity-bundle.json')
   })
 
   it('refuses legacy real receipts instead of passing the artifact manifest as an identity bundle', () => {

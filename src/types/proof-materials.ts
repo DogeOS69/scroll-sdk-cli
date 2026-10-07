@@ -35,7 +35,8 @@ export interface ProofMaterialsV1 {
   }
   generatedAt: string
   images: {
-    mockWorker: ProofTopologyImageReference
+    /** Plain mock only: the image the compiler identity was extracted from. */
+    mockWorker?: ProofTopologyImageReference
     productionWorker?: ProofTopologyImageReference
     topologyCompiler: ProofTopologyImageReference
   }
@@ -67,13 +68,10 @@ export interface ProofMaterialsV1 {
       batchMaterializer: ProofMaterialFileV1
       chunkMaterializer: ProofMaterialFileV1
     }
-    openvmVersion?: string
-    rustToolchain?: string
-    /** Native Scroll derivation evidence; mock materialization only, not a Bridge bake. */
+    /** Native Scroll derivation evidence from the retired derive-scroll tool; read-only compatibility. */
     scrollIdentityEvidence?: ProofMaterialFileV1
     sourceRevisions?: {
       dogeosCore: string
-      scrollZkvmProver: string
     }
   }
 }

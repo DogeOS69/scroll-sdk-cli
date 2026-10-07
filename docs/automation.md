@@ -1,5 +1,8 @@
 # CLI Automation Reference
 
+For supported database settings, removed prompts and migration commands, see
+[Configuration cleanup](config-cleanup.md).
+
 This document defines how scripts, CI jobs, and agents invoke `scrollsdk`.
 It intentionally does not define deployment order. For the official proof and
 partner-handoff workflow, use [proof-operator-runbook.md](proof-operator-runbook.md).
@@ -10,6 +13,15 @@ scrollsdk <command> --help
 ```
 
 The root README command section is generated from the same command metadata.
+
+For dstack, follow the [controller operator guide](dstack-controller.md). Its
+[configuration-only walkthrough](dstack-controller.md#configuration-only-walkthrough)
+uses a temporary deployment directory and stops after local validation and Helm
+rendering. `setup prep-charts --dstack-only` skips chain initialization and registry
+checks. `setup push-secrets --dry-run` is a local plan; omitting `--dry-run` writes
+to the selected destinations. In full scope, enabled dstack Secrets target the
+explicit Kubernetes context/namespace while ordinary service secrets target AWS
+Secrets Manager or Vault. `--dstack-only` limits the scope to dstack.
 
 ## Non-interactive execution
 
@@ -68,7 +80,9 @@ does not expand `$ENV` itself:
 scrollsdk setup gen-keystore \
   --non-interactive \
   --json \
-  --sequencer-password '$ENV:SEQUENCER_KEYSTORE_PASSWORD'
+  --service sequencer-reth \
+  --index 0 \
+  --signer-private-key '$ENV:SEQUENCER_PRIVATE_KEY'
 ```
 
 An unset or empty referenced variable is treated as unavailable. Commands must

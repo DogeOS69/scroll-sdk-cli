@@ -9,6 +9,7 @@ import sinon from 'sinon';
 
 import type { DeploymentSpec } from '../../src/types/deployment-spec.js';
 
+import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY} from '../../src/constants/docker.js';
 import {
   generateAllConfigs,
   generateConfigToml,
@@ -22,6 +23,7 @@ import {
   validateDeploymentSpec,
   writeGeneratedConfigs,
 } from '../../src/utils/deployment-spec-generator.js';
+import { deriveTsoUrl } from '../../src/utils/signer-policy-derivation.js';
 import { generateValuesFiles } from '../../src/utils/values-generator.js';
 
 const TEST_PRIVATE_KEYS = {
@@ -49,7 +51,7 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       fees: { depositFeeSats: '0', minWithdrawalAmountWei: '1000000000000000', withdrawalFeeWei: '0' },
       keyCounts: { attestation: 3, recovery: 1 },
       seedString: 'test-seed-string',
-      targetAmountsSats: { bridge: 10_000_000, feeWallet: 5_000_000, sequencer: 8_000_000 },
+      targetAmountsSats: { bridge: 10_000_000, feeWallet: 5_000_000, sequencer: 42_069_000 },
       thresholds: { attestation: 2, recovery: 1 },
       timelock: 86_400,
     },
@@ -60,14 +62,7 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
     database: {
       admin: { database: 'postgres', host: 'db.local', password: 'adminpw', port: 5432, username: 'postgres' },
       credentials: {
-        adminSystemPassword: 'pw1',
         blockscoutPassword: 'pw2',
-        bridgeHistoryPassword: 'pw3',
-        chainMonitorPassword: 'pw4',
-        coordinatorPassword: 'pw5',
-        gasOraclePassword: 'pw6',
-        rollupExplorerPassword: 'pw7',
-        rollupNodePassword: 'pw8',
       },
     },
     dogecoin: {
@@ -81,28 +76,20 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       chain: 'sepolia',
       finalizationDepth: 64,
       l1RpcUrl: 'https://gateway.tenderly.co/public/sepolia',
-      minFinality: 'finalized',
     },
     frontend: {
       baseDomain: 'example.com',
       externalUrls: {
-        adminDashboard: 'https://admin.example.com',
-        bridgeApi: 'https://bridge-api.example.com',
         grafana: 'https://grafana.example.com',
         l1Explorer: 'https://l1-explorer.example.com',
         l1Rpc: 'https://l1-rpc.example.com',
         l2Explorer: 'https://l2-explorer.example.com',
         l2Rpc: 'https://l2-rpc.example.com',
-        rollupScanApi: 'https://rollupscan.example.com',
       },
       hosts: {
-        adminDashboard: 'admin.example.com',
         blockscout: 'blockscout.example.com',
-        bridgeHistoryApi: 'bridge-history.example.com',
-        coordinatorApi: 'coordinator.example.com',
         frontend: 'app.example.com',
         grafana: 'grafana.example.com',
-        rollupExplorerApi: 'rollup-explorer.example.com',
         rpcGateway: 'rpc.example.com',
       },
     },
@@ -122,11 +109,6 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
     },
     rollup: {
       coordinator: { batchCollectionTimeSec: 60, bundleCollectionTimeSec: 120, chunkCollectionTimeSec: 30 },
-      finalization: { batchDeadlineSec: 3600, relayMessageDeadlineSec: 7200 },
-      maxBatchInBundle: 20,
-      maxBlockInChunk: 100,
-      maxL1MessageGasLimit: 10_000_000,
-      maxTxInChunk: 100,
     },
     signing: { cubesigner: { roles: [] } },
     version: '1.0',
@@ -325,9 +307,7 @@ describe('deployment-spec-generator', () => {
         subdomains: {
           blockbook: 'blockbook',
           blockscout: 'blockscout',
-          bridgeHistoryApi: 'bridge-history-api',
           frontend: 'portal',
-          rollupExplorerApi: 'rollup-explorer-backend',
           rpcGateway: 'rpc',
         },
       };
@@ -337,8 +317,7 @@ describe('deployment-spec-generator', () => {
       expect(normalized.frontend.hosts.frontend).to.equal('portal.testnet.dogeos.io');
       expect(normalized.frontend.hosts.blockscout).to.equal('blockscout.testnet.dogeos.io');
       expect(normalized.frontend.externalUrls.l2Explorer).to.equal('https://blockscout.testnet.dogeos.io');
-      expect(normalized.frontend.externalUrls.bridgeApi).to.equal('https://bridge-history-api.testnet.dogeos.io/api');
-      expect(normalized.frontend.externalUrls.rollupScanApi).to.equal('https://rollup-explorer-backend.testnet.dogeos.io/api');
+      expect(normalized.frontend.externalUrls).not.to.have.property('rollupScanApi');
     });
 
     it('fills contract verification explorer URLs from frontend URLs', () => {
@@ -354,7 +333,8 @@ describe('deployment-spec-generator', () => {
 
       const normalized = normalizeDeploymentSpec(spec);
 
-      expect(normalized.contracts.verification?.l1ExplorerUri).to.equal('https://blockbook.testnet.dogeos.io');
+      expect(normalized.contracts.verification?.l1ExplorerUri).to.equal('https://sochain.com/DOGETEST');
+      expect(normalized.frontend.hosts).not.to.have.property('blockbook');
       expect(normalized.contracts.verification?.l2ExplorerUri).to.equal('https://blockscout.testnet.dogeos.io');
     });
 
@@ -370,6 +350,18 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('validateDeploymentSpec', () => {
+    it('rejects a zero contract owner', () => {
+      const spec = createMinimalSpec();
+      spec.accounts.owner.address = '0x' + '0'.repeat(40);
+      expect(validateDeploymentSpec(spec).errors.some(error => error.path === 'accounts.owner.address')).to.equal(true);
+    });
+    it('rejects the old genesis sequencing amount before generating deployment files', () => {
+      const spec = createMinimalSpec();
+      spec.bridge.targetAmountsSats!.sequencer = 420_690_000;
+      const result = validateDeploymentSpec(spec);
+      expect(result.valid).to.equal(false);
+      expect(result.errors.some(error => error.path === 'bridge.targetAmountsSats.sequencer' && error.message.includes('42069000'))).to.equal(true);
+    });
     it('passes validation for a complete spec', () => {
       const spec = createMinimalSpec();
       const result = validateDeploymentSpec(spec);
@@ -826,9 +818,9 @@ describe('deployment-spec-generator', () => {
       }
     });
 
-    it('includes the contracts-template commit scalar for specs predating Galileo', () => {
+    it('uses the calibrated commit scalar when a spec omits it', () => {
       const config = toml.parse(generateConfigToml(createMinimalSpec())) as any;
-      expect(config.contracts.COMMIT_SCALAR).to.equal(38_720_000_000);
+      expect(config.contracts.COMMIT_SCALAR).to.equal(600_000_000);
       expect(config.contracts.SCALAR).to.equal(1);
     });
 
@@ -897,16 +889,15 @@ describe('deployment-spec-generator', () => {
       const spec = createMinimalSpec();
       const output = generateConfigToml(spec);
 
-      expect(output).to.include('ADMIN_SYSTEM_BACKEND_DB_CONNECTION_STRING');
+      expect(Object.keys((toml.parse(output) as any).db)).to.deep.equal(['BLOCKSCOUT_DB_CONNECTION_STRING']);
       expect(output).to.include('postgres://');
       expect(output).to.include('db.local:5432');
-      expect(output).to.include('/admin_system?sslmode=disable');
-      expect(output).to.include('/rollup_node?sslmode=disable');
+      expect(output).to.include('/blockscout?sslmode=disable');
     });
 
     it('URL-encodes passwords in connection strings', () => {
       const spec = createMinimalSpec();
-      spec.database.credentials!.rollupNodePassword = 'p@ss/word';
+      spec.database.credentials!.blockscoutPassword = 'p@ss/word';
       const output = generateConfigToml(spec);
 
       expect(output).to.include('p%40ss%2Fword');
@@ -914,7 +905,7 @@ describe('deployment-spec-generator', () => {
 
     it('resolves $ENV references in connection strings', () => {
       const spec = createMinimalSpec();
-      spec.database.credentials!.rollupNodePassword = '$ENV:DB_PASSWORD';
+      spec.database.credentials!.blockscoutPassword = '$ENV:DB_PASSWORD';
       process.env.DB_PASSWORD = 'resolved-db-password';
       const output = generateConfigToml(spec);
 
@@ -922,15 +913,34 @@ describe('deployment-spec-generator', () => {
       expect(output).not.to.include('$ENV:DB_PASSWORD');
     });
 
-    it('includes rollup configuration', () => {
+    it('omits retired gas-token settings even when importing an old alternative-token spec', () => {
       const spec = createMinimalSpec();
-      spec.rollup.maxL1MessageGasLimit = 1_000_000;
-      const output = generateConfigToml(spec);
-      const parsed = toml.parse(output) as any;
+      (spec.contracts as any).alternativeGasToken = {enabled: true, tokenAddress: '0x1111111111111111111111111111111111111111'};
+      Object.assign(spec.rollup, {maxBatchInBundle: 20, maxBlockInChunk: 100, maxTxInChunk: 100});
+      const normalized = normalizeDeploymentSpec(spec);
+      expect(normalized.contracts).not.to.have.property('alternativeGasToken');
+      expect(normalized.rollup).not.to.have.property('maxTxInChunk');
+      expect(normalized.rollup).not.to.have.property('maxBlockInChunk');
+      expect(normalized.rollup).not.to.have.property('maxBatchInBundle');
+      const config = toml.parse(generateConfigToml(spec)) as any;
+      expect(config).not.to.have.property('gas-token');
+      expect(config).not.to.have.property('rollup');
+    });
 
-      expect(parsed.rollup.MAX_L1_MESSAGE_GAS_LIMIT).to.equal(1_000_000);
-      expect(output).to.include('MAX_BATCH_IN_BUNDLE');
-      expect(output).to.include('FINALIZE_BATCH_DEADLINE_SEC');
+    it('discards legacy L1 rollup inputs and mock flags from imported specs', () => {
+      const spec = createMinimalSpec();
+      Object.assign(spec.rollup, {
+        finalization: {batchDeadlineSec: 1, relayMessageDeadlineSec: 2},
+        maxL1MessageGasLimit: 0,
+      });
+      Object.assign(spec, {test: {mockFinalizeEnabled: true, mockFinalizeTimeoutSec: 30}});
+      const normalized = normalizeDeploymentSpec(spec);
+      expect(normalized.rollup).not.to.have.property('finalization');
+      expect(normalized.rollup).not.to.have.property('maxL1MessageGasLimit');
+      expect(normalized).not.to.have.property('test');
+      expect(validateDeploymentSpec(spec).valid).to.equal(true);
+      expect(toml.parse(generateConfigToml(spec))).not.to.have.property('rollup');
+      expect(toml.parse(generateDogeConfigToml(spec))).not.to.have.property('test');
     });
 
     it('uses a fixed L1 fee vault address instead of reading it from the spec', () => {
@@ -946,7 +956,7 @@ describe('deployment-spec-generator', () => {
       const spec = createMinimalSpec();
       const output = generateConfigToml(spec);
 
-      expect(output).to.include('ADMIN_SYSTEM_DASHBOARD_URI = "https://admin.example.com"');
+      expect(output).not.to.include('ADMIN_SYSTEM_DASHBOARD_URI');
       expect(output).to.include('GRAFANA_URI = "https://grafana.example.com"');
     });
 
@@ -961,7 +971,7 @@ describe('deployment-spec-generator', () => {
     it('includes optional ingress hosts when present', () => {
       const spec = createMinimalSpec();
       spec.frontend.hosts.rpcGatewayWs = 'ws.example.com';
-      spec.frontend.hosts.blockscoutBackend = 'blockscout-be.example.com';
+      Object.assign(spec.frontend.hosts, {blockscoutBackend: 'blockscout-be.example.com'});
       spec.frontend.hosts.proofCoordinator = 'proof-coordinator.example.com';
       spec.proofCoordinator = {
         artifactStore: {bucket: 'dogeos-proofs', region: 'us-west-2'},
@@ -972,8 +982,50 @@ describe('deployment-spec-generator', () => {
 
       expect(output).to.include('RPC_GATEWAY_WS_HOST');
       expect(output).to.include('ws.example.com');
-      expect(output).to.include('BLOCKSCOUT_BACKEND_HOST');
+      expect(output).not.to.include('BLOCKSCOUT_BACKEND_HOST');
       expect(output).to.include('PROOF_COORDINATOR_HOST = "proof-coordinator.example.com"');
+    });
+
+    it('uses one Blockscout host and carries TSO hosts through config, values and signer URL derivation', () => {
+      const spec = createMinimalSpec();
+      Object.assign(spec.frontend.hosts, {
+        adminDashboard: 'old-admin', blockscoutBackend: 'old-backend',
+        coordinatorApi: 'old-coordinator', l1Explorer: 'old-l1-explorer',
+        rollupExplorerApi: 'old-rollup', tso: 'signer-callback.example.com',
+      });
+      Object.assign(spec.frontend.externalUrls, {adminDashboard: 'https://old-admin', rollupScanApi: 'https://old-rollup/api'});
+      const config = toml.parse(generateConfigToml(spec)) as any;
+      const files = generateValuesFiles(spec);
+      const blockscout = (yaml.load(files['blockscout-production.yaml']) as any)['blockscout-stack'];
+      expect(config.ingress.TSO_HOST).to.equal('signer-callback.example.com');
+      expect(config.ingress.BLOCKSCOUT_HOST).to.equal('blockscout.example.com');
+      for (const key of ['ADMIN_SYSTEM_DASHBOARD_HOST', 'BLOCKSCOUT_BACKEND_HOST', 'COORDINATOR_API_HOST', 'L1_EXPLORER_HOST', 'ROLLUP_EXPLORER_API_HOST']) expect(config.ingress).not.to.have.property(key);
+      expect(config.frontend.EXTERNAL_EXPLORER_URI_L1).to.equal(spec.frontend.externalUrls.l1Explorer);
+      expect(blockscout.blockscout.ingress.hostname).to.equal(config.ingress.BLOCKSCOUT_HOST);
+      expect(blockscout.blockscout.ingress.paths[0].path).to.equal('/api');
+      expect(blockscout.frontend.ingress.hostname).to.equal(config.ingress.BLOCKSCOUT_HOST);
+      expect(blockscout.frontend.ingress.paths[0].path).to.equal('/');
+      expect(blockscout.frontend.env.NEXT_PUBLIC_API_HOST).to.equal(config.ingress.BLOCKSCOUT_HOST);
+      const tso = (yaml.load(files['tso-service-production.yaml']) as any).ingress.main;
+      expect(tso.hosts[0].host).to.equal(config.ingress.TSO_HOST);
+      expect(tso.tls[0].hosts).to.deep.equal([config.ingress.TSO_HOST]);
+      expect(Object.keys(files).join(' ')).not.to.match(/admin-system-dashboard|coordinator-api|rollup-explorer-backend|l1-explorer/);
+      expect(files['frontends-config.yaml']).not.to.match(/old-admin|old-rollup|ROLLUPSCAN_API_URI/);
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tso-host-'));
+      try {
+        const configPath = path.join(dir, 'config.toml');
+        fs.writeFileSync(configPath, generateConfigToml(spec));
+        expect(deriveTsoUrl(configPath)?.value).to.equal('https://signer-callback.example.com');
+      } finally {
+        fs.rmSync(dir, {force: true, recursive: true});
+      }
+    });
+
+    it('derives a TSO host even when existing hosts omit it', () => {
+      const spec = createMinimalSpec();
+      expect(normalizeDeploymentSpec(spec).frontend.hosts.tso).to.equal('tso.example.com');
+      expect((toml.parse(generateConfigToml(spec)) as any).ingress.TSO_HOST).to.equal('tso.example.com');
+      expect((toml.parse(generateConfigToml(spec)) as any).ingress.PROOF_COORDINATOR_HOST).to.equal('proof-coordinator.example.com');
     });
 
     it('includes verifier digests when present', () => {
@@ -1013,12 +1065,12 @@ describe('deployment-spec-generator', () => {
       const output = generateConfigToml(spec);
 
       expect(output).to.include('FRONTEND_HOST = "portal.testnet.dogeos.io"');
-      expect(output).to.include('ADMIN_SYSTEM_DASHBOARD_HOST = "admin-system-dashboard.testnet.dogeos.io"');
-      expect(output).to.include('BRIDGE_HISTORY_API_HOST = "bridge-history-api.testnet.dogeos.io"');
-      expect(output).to.include('COORDINATOR_API_HOST = "coordinator-api.testnet.dogeos.io"');
-      expect(output).to.include('ROLLUP_EXPLORER_API_HOST = "rollup-explorer-backend.testnet.dogeos.io"');
-      expect(output).to.include('BRIDGE_API_URI = "https://bridge-history-api.testnet.dogeos.io/api"');
-      expect(output).to.include('ROLLUPSCAN_API_URI = "https://rollup-explorer-backend.testnet.dogeos.io/api"');
+      expect(output).not.to.include('ADMIN_SYSTEM_DASHBOARD_HOST');
+      expect(output).not.to.include('BRIDGE_HISTORY_API_HOST');
+      expect(output).not.to.include('COORDINATOR_API_HOST');
+      expect(output).not.to.include('ROLLUP_EXPLORER_API_HOST');
+      expect(output).not.to.include('BRIDGE_API_URI');
+      expect(output).not.to.include('ROLLUPSCAN_API_URI');
       expect(output).to.include('EXTERNAL_EXPLORER_URI_L2 = "https://blockscout.testnet.dogeos.io"');
       expect(output).to.include('EXPLORER_URI_L2 = "https://blockscout.testnet.dogeos.io"');
     });
@@ -1032,7 +1084,7 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('vpc-db.internal:5433');
     });
 
-    it('includes sequencer signer metadata when present in spec', () => {
+    it('does not regenerate archived Geth metadata from spec', () => {
       const spec = createMinimalSpec();
       spec.infrastructure.sequencers = [
         {
@@ -1048,12 +1100,9 @@ describe('deployment-spec-generator', () => {
       ];
       const output = generateConfigToml(spec);
 
-      expect(output).to.include('[sequencer]');
-      expect(output).to.include('L2GETH_SIGNER_ADDRESS = "0x1234567890123456789012345678901234567890"');
-      expect(output).to.include('[sequencer.sequencer-1]');
-      expect(output).to.include('L2GETH_SIGNER_ADDRESS = "0x2234567890123456789012345678901234567890"');
-      expect(output).to.include('l2-sequencer-0:30303');
-      expect(output).to.include('l2-sequencer-1:30303');
+      expect(output).not.to.include('[sequencer');
+      expect(output).not.to.include('L2GETH_');
+      expect(output).not.to.include('l2-sequencer-');
     });
   });
 
@@ -1144,14 +1193,14 @@ describe('deployment-spec-generator', () => {
       expect(parsed.ethereumDa.blobArchive.s3.treatForbiddenAsMissing).to.equal(false);
     });
 
-    it('includes blockbook config when present', () => {
+    it('drops retired blockbook config from imported specs', () => {
       const spec = createMinimalSpec();
-      spec.dogecoin.blockbook = { apiKey: 'key123', apiUrl: 'https://blockbook.example.com' };
+      (spec.dogecoin as any).blockbook = { apiKey: 'key123', apiUrl: 'https://blockbook.example.com' };
       const output = generateDogeConfigToml(spec);
 
-      expect(output).to.include('blockbookAPIUrl');
-      expect(output).to.include('https://blockbook.example.com');
-      expect(output).to.include('apiKey');
+      expect(output).not.to.include('blockbook');
+      expect(output).not.to.include('https://blockbook.example.com');
+      expect(output).not.to.include('key123');
     });
 
     it('includes cubesigner TEE config when present', () => {
@@ -1194,12 +1243,7 @@ describe('deployment-spec-generator', () => {
       expect(output).not.to.have.property('awsSigner');
     });
 
-    it('includes test config when present', () => {
-      const spec = createMinimalSpec({ test: { mockFinalizeEnabled: true, mockFinalizeTimeoutSec: 30 } });
-      const output = generateDogeConfigToml(spec);
 
-      expect(output).to.include('mockFinalizeEnabled');
-    });
   });
 
   describe('generateSetupDefaultsToml', () => {
@@ -1340,7 +1384,6 @@ describe('deployment-spec-generator', () => {
         chainId: 11_155_111,
       };
       spec.network.l2ChainId = 412_346;
-      spec.rollup.maxL1MessageGasLimit = 1_000_000;
 
       const parsed = toml.parse(generateProtocolSeedToml(spec)) as any;
 
@@ -1383,6 +1426,36 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateValuesFiles', () => {
+    it('omits retired service charts and database projections', () => {
+      const spec = createMinimalSpec();
+      const config = generateConfigToml(spec);
+      expect(config).not.to.match(/BRIDGE_HISTORY_DB|CHAIN_MONITOR_DB|L1_EXPLORER_DB/);
+      expect(Object.keys((toml.parse(config) as any).db)).to.deep.equal(['BLOCKSCOUT_DB_CONNECTION_STRING']);
+      const files = generateValuesFiles(spec);
+      expect(Object.keys(files).join(' ')).not.to.match(/blockbook|bridge-history|chain-monitor|l1-explorer/);
+      expect(files).to.have.property('frontends-production.yaml');
+      expect(Object.values(files).join('\n')).not.to.match(/SCROLL_.*_DB_(?:CONFIG_)?DSN/);
+      expect(Object.keys(files).join(' ')).not.to.match(/gas-oracle-production|admin-system-(?:backend|cron)-production|rollup-explorer-backend-production/);
+    });
+
+    it('keeps public Reth RPC separate from the internal witness endpoint', () => {
+      const files = generateValuesFiles(createMinimalSpec());
+      const internal = yaml.load(files['l2-reth-rpc-production.yaml']) as any;
+      const external = yaml.load(files['l2-reth-rpc-public-production.yaml']) as any;
+      expect(internal.service.main.fullname).to.equal('l2-rpc');
+      expect(internal).not.to.have.property('ingress');
+      expect(internal.reth.http.api).to.include('debug');
+      expect(external.reth.http.api).not.to.include('debug');
+      expect(external.ingress.main.enabled).to.equal(true);
+      expect(external.service.main).not.to.have.property('fullname');
+    });
+
+    it('rejects explicit retired Geth images', () => {
+      const spec = createMinimalSpec();
+      spec.images = {services: {l2Rpc: {repository: 'scrolltech/l2geth', tag: 'old'}}};
+      expect(() => generateValuesFiles(spec)).to.throw('l2geth is retired');
+    });
+
     it('projects reviewed CubeSigner production policy evidence and key binding', () => {
       const spec = createMinimalSpec();
       spec.signing!.cubesigner!.productionPolicy = {
@@ -1476,12 +1549,20 @@ describe('deployment-spec-generator', () => {
       expect(files['dogecoin-production.yaml']).to.include('value: cluster-rpc-pass');
       expect(files['dogecoin-production.yaml']).not.to.include('external-rpc-user');
       expect(files['dogecoin-production.yaml']).not.to.include('external-rpc-pass');
-      expect(files['l2-rpc-production.yaml']).to.include('L2GETH_DA_BLOB_BEACON_NODE: http://l1-interface:5052');
-      expect(files['l2-rpc-production.yaml']).to.include('L2GETH_L1_ENDPOINT: http://l1-interface:8545');
-      expect(files['l2-bootnode-production.yaml']).to.include('L2GETH_DA_BLOB_BEACON_NODE: http://l1-interface:5052');
-      expect(files['l2-bootnode-production.yaml']).to.include('L2GETH_L1_ENDPOINT: http://l1-interface:8545');
-      expect(files['l2-sequencer-production.yaml']).to.include('L2GETH_L1_ENDPOINT: http://l1-interface:8545');
+      for (const role of ['rpc', 'bootnode', 'sequencer']) {
+        expect(files).not.to.have.property(`l2-${role}-production.yaml`);
+        const node = yaml.load(files[`l2-reth-${role}-production.yaml`]) as any;
+        expect(node.role).to.equal(role);
+        expect(node.image.repository).to.equal('dogeos69/rollup-node');
+        expect(node.reth.l1Url).to.equal('http://l1-interface:8545');
+        expect(node.reth.trustedPeers).to.equal('');
+        expect(node.reth.extraArgs.slice(0, 2)).to.deep.equal(['--network.legacy-geth-header-transform', 'false']);
+        expect(node).not.to.have.property('configMaps');
+      }
+
       expect(files['contracts-production.yaml']).to.include('SCROLL_L1_FEE_VAULT_ADDR: \'0x1111111111111111111111111111111111111111\'');
+      const contractsValues = yaml.load(files['contracts-production.yaml']) as any;
+      expect(contractsValues.image).to.include({repository: DOCKER_REPOSITORY, tag: `deploy-${CONTRACTS_DOCKER_DEFAULT_TAG}`});
 
       const submitterValues = yaml.load(files['eth-da-submitter-production.yaml']) as any;
       const submitterEnv = submitterValues.configMaps.env.data;
@@ -1489,7 +1570,7 @@ describe('deployment-spec-generator', () => {
       expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_JSON_PATH).to.equal('/app/genesis/genesis.json');
       expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_WITHDRAW_ROOT');
       expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_RELAYED_DEPOSIT_QUEUE_HASH');
-      expect(submitterEnv.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK).to.equal('6000000');
+      expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK');
       expect(submitterEnv).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_FEE_PER_GAS_WEI');
 
       const l1InterfaceValuesForRuntime = yaml.load(files['l1-interface-production.yaml']) as any;
@@ -1529,6 +1610,7 @@ describe('deployment-spec-generator', () => {
         ]);
 
       const tsoValues = yaml.load(files['tso-service-production.yaml']) as any;
+      expect(tsoValues.ingress.main.annotations['nginx.ingress.kubernetes.io/proxy-body-size']).to.equal('4m');
       const tsoEnv = Object.fromEntries(tsoValues.env.map((item: any) => [item.name, item.value]));
       expect(tsoEnv.TIMEOUT_CHECK_INTERVAL_SECONDS).to.equal('60');
       expect(tsoEnv.TSO_CORRECTNESS_MAX_PSBT_BASE64_LEN).to.equal('130048');
@@ -1720,12 +1802,12 @@ describe('deployment-spec-generator', () => {
       expect(envData.DOGEOS_L1_INTERFACE_DOGECOIN_INDEXER__START_HEIGHT).to.equal('8200000');
     });
 
-    it('defaults Ethereum DA submitter batch compression to auto', () => {
+    it('leaves batch compression to the template unless explicitly configured', () => {
       const defaultSpec = createMinimalSpec();
       const defaultFiles = generateValuesFiles(defaultSpec);
       const defaultSubmitterValues = yaml.load(defaultFiles['eth-da-submitter-production.yaml']) as any;
 
-      expect(defaultSubmitterValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION).to.equal('auto');
+      expect(defaultSubmitterValues.configMaps.env.data).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_BATCH__COMPRESSION');
       const explicitSpec = createMinimalSpec();
       explicitSpec.ethereumDa!.batch = { compression: 'none' };
       const explicitFiles = generateValuesFiles(explicitSpec);
@@ -1824,6 +1906,25 @@ describe('deployment-spec-generator', () => {
       expect(withdrawalEnv.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TIMEOUT_MS).to.equal('15000');
       expect(withdrawalEnv.DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__TREAT_FORBIDDEN_AS_MISSING).to.equal('false');
     });
+
+    for (const chain of ['devnet', 'sepolia', 'mainnet'] as const) {
+      it(`omits retired WP finality settings from generated ${chain} configs and values`, () => {
+        const spec = createMinimalSpec();
+        spec.ethereumDa = {...spec.ethereumDa, chain, confirmationDepth: 2, finalizationDepth: 96};
+        const dogeConfig = toml.parse(generateDogeConfigToml(spec)) as any;
+        expect(dogeConfig.ethereumDa).not.to.have.property('minFinality');
+        const files = generateValuesFiles(spec);
+        const wp = yaml.load(files['withdrawal-processor-production.yaml']) as any;
+        const env = Object.fromEntries(wp.env.map((item: any) => [item.name, item.value]));
+        expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_ETHEREUM_DA__MIN_FINALITY');
+        expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__SAFE_DEPTH');
+        expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__FINALIZED_DEPTH');
+        expect(env.DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__INGEST_DEPTH).to.equal('1');
+        const da = yaml.load(files['eth-da-submitter-production.yaml']) as any;
+        expect(da.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMATION_DEPTH).to.equal('2');
+        expect(da.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__FINALIZATION_DEPTH).to.equal('96');
+      });
+    }
 
     it('uses Ethereum DA inbox worker start block for withdrawal processor values', () => {
       const spec = createMinimalSpec();

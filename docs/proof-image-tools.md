@@ -4,162 +4,86 @@
 It does not implement commitments in TypeScript, initialize a Bridge, generate
 proofs, run a Worker service, or rewrite deployment configuration. Use it before
 the material import and compiler preflight in [the operator runbook](proof-operator-runbook.md).
+For normal configuration, [the composed prepare/publish flow](proof-config-transactions.md)
+runs both actions for you from one release manifest.
 
 Every image must have an `org.opencontainers.image.revision` label equal to the
-explicit full `--expected-core-revision`. Tags are resolved once; execution and
-the receipt use immutable digests. Pulling/resolving requires registry access;
-tool execution has no network, credentials, GPU, capabilities or writable root
-filesystem. This isolation is not a substitute for selecting trusted images.
+explicit full `--expected-core-revision` for `export`, or to the release
+manifest's `revision` for `prepare-real`. Tags are resolved once; execution and
+receipts use immutable digests. Pulling requires registry access; the tools
+themselves run with no network, credentials or GPU. This isolation is not a
+substitute for selecting trusted images.
+
+## Bake a deployment with the release producer
+
+dogeos-core's `proof-release.yml` publishes `dogeos-proof-release-v1.json`
+(`schema`, `revision` and five digest-pinned images keyed by image name) as the
+`proof-release-<tag>` pre-release.
+
+```bash
+scrollsdk setup proof-image-tools --action prepare-real \
+  --deployment-dir . --release dogeos-proof-release-v1.json \
+  --release-sha256 "$PROOF_RELEASE_SHA256" \
+  --protocol-context .data/protocol_context.json \
+  --output .data/preparation-candidate --json
+```
+
+The CLI checks the `proof-preparation-producer` revision label, then runs the
+producer exactly as dogeos-core documents it:
+
+```bash
+docker run --rm --network none \
+  --mount type=bind,src=<copy of protocol_context.json>,dst=/in/protocol_context.json,readonly \
+  --mount type=bind,src=<staging dir>,dst=/out \
+  <producer> /in/protocol_context.json /out/artifacts
+```
+
+Only the protocol context and a new staging directory are mounted. The
+producer runs the runbook's `--emit-bridge-identity --stage-bridge-artifact`
+bake, so dogeos-core's bake guard still refuses identity drift, and chowns its
+output to the staging directory's owner. The output uses the Worker
+`ARTIFACT_ROOT` layout: `chunk/`, `batch/`, `verifier/aggregate-vk`,
+`protocol_context.json`, `bridge/` and `real-identity.env` with the 11 identity
+exports. The CLI refuses symlinks and empty files, checks that the baked
+protocol context is the input and that `bridge/worker-identity-bundle.json`
+carries the release revision, then writes
+`proof-release-preparation-v1.json` and makes the directory visible with one
+rename.
 
 ## Export matching binaries and a compiled identity
 
 ```bash
 scrollsdk setup proof-image-tools --action export \
-  --deployment-dir . --output .data/generated/proof-image-tools-beta4e \
-  --expected-core-revision eef62d3e40a387b1f53b24825c2e85af54facbc8 \
-  --worker-image dogeos69/prover-worker-mock@sha256:e5de8a3782b88590eda0083977cf882c61b1eb2994fdd647e464984cb1f69a38 \
-  --coordinator-image dogeos69/proof-coordinator@sha256:33fcd96d753612ab23a1b0f65139ea66e53e9d61ee9a80d815059a7f63099073 \
+  --deployment-dir . --output .data/generated/proof-image-tools-<release> \
+  --expected-core-revision <full-40-character-core-sha> \
+  --worker-image dogeos69/prover-worker-mock@sha256:<digest> \
+  --coordinator-image dogeos69/proof-coordinator@sha256:<digest> \
   --json
 ```
 
 This runs only `prover-worker --print-identity-json`, verifies its structure and
-compiled revision, and copies two binaries from a new **stopped** PC container:
+compiled revision, and copies two binaries from a new **stopped** Proof
+Coordinator container:
 
 - `worker-identity-bundle.json`
 - `materialize-chunk-oneshot`
 - `scroll-runtime-materializer`
 - `image-tools-receipt.json` (source revision, image digests and file hashes)
 
-The temporary PC container is removed after copying. Existing output directories
-are never overwritten. Use a new output name for each attempt.
+The temporary container is removed after copying. Existing output directories
+are never overwritten. The materializers are not part of the producer bake:
+they ship in the release's `proof-coordinator` image, which is also the image
+whose init container installs them at runtime.
 
-**Verified 2026-09-09:** beta.4e exports successfully, but the mock image contains
-an all-zero `batch_guest`. Inspection mode reports this as a warning. Add
-`--require-real-materialization` to reject this placeholder with a nonzero exit
-and no final output directory. A non-placeholder value alone is not certification:
-the imported native identity, material files and compiler cross-checks must also
-agree. Runtime environment overrides cannot change compiled Worker identities.
+A standard mock Worker build carries an all-zero `batch_guest` placeholder;
+inspection mode reports it as a warning and `--require-real-materialization`
+rejects it with no final output directory. Mock proving with real
+materialization does not need a mock image: use the bake's
+`real-identity.env` and its `bridge/worker-identity-bundle.json` without the
+`bridge_guest` section (the compiler requires mock bundles to omit it), which
+is the release Worker's own `--print-identity-json`.
 
-## Derive candidate Scroll identity evidence on CPU
-
-The following is a **historical inspection command**, not approval to deploy an
-old release. The producer is from PR #935, not beta.4e. The candidate package and
-its verified provenance are documented in [the bridge-preserving upgrade notes](next-devnet-preserve-bridge.md).
-Set `CANDIDATE_RELEASE` to its extracted `proof-release` directory first.
-
-```bash
-scrollsdk setup proof-image-tools --action derive-scroll \
-  --deployment-dir . --output .data/generated/proof-scroll-identities-pr935-inspection \
-  --expected-core-revision aa856ab3f9718f914326bd3fc4b0ea8f809016f8 \
-  --producer-image dogeos69/proof-artifact-baker@sha256:29bda56763c1b1adc5e6b5ee8d090c11deab4904ff54201cf88ca6b3cf80fc88 \
-  --artifact-root "$CANDIDATE_RELEASE" --json
-```
-
-The native `/usr/local/libexec/dogeos-proof-release-producer
-derive-scroll-identities` receives only five staged public files:
-`chunk/app.vmexe`, `chunk/openvm.toml`, `batch/app.vmexe`, `batch/openvm.toml`,
-and `verifier/aggregate-vk`. Neighboring files, source trees and deployment
-secrets are not mounted. It produces `proof-scroll-identities-v1.json`; the
-receipt records all five input hashes and the output hash. CLI checks the native
-output schema but does not convert it into an approved Worker identity bundle.
-
-Actual devnet inspection on 2026-09-09 completed in 179 seconds on CPU. The
-derived file SHA-256 is
-`7a09451ec218275a5ec794b8a657172fb4e7c378a0cad1e834195ae737fc9f9a`.
-The beta.4e exported materializer SHA-256 values are
-`c1b4bc963b3d36da8d9942f58d5cea7dc31fcdf3f9de90ca173448de9927fddc`
-(Chunk) and `32d1b9d0f19a168af13dc01e216bdaa3c629b06189ff280564cc3449dadbd1be`
-(Batch). Strict export was also run: it correctly exited 1 with
-`E717_PROOF_IMAGE_TOOL_FAILED` for the placeholder Batch and created no final
-output directory. TypeScript build and 196 proof/deployment tests passed;
-targeted lint has no errors and one complexity warning.
-
-## Current release gap and the next activation gate
-
-**Mock-scope correction:** the full three-phase real-proving workflow below is
-not a prerequisite for this devnet's internal mock producer. Core's
-`identity_ingest.rs` requires a non-placeholder **Batch** commit for
-`withdrawal_mock_prover_real_materialize`; `worker_identity.rs` explicitly
-supports injecting `DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW` at compile time. Build
-the CPU export binary from the exact beta.4e revision with that native-derived
-Batch value, retaining the release's compiled Aggregation identity. Do not bake
-a new real Bridge guest or pretend this mock bundle approves real proving.
-
-The CLI now accepts `setup proof-materials --generation mock
---scroll-identity-evidence PATH --worker-identity-bundle PATH` as an alternative
-to `--identity-env`. It imports native Chunk/Batch identities, takes Aggregation
-from the compiled Worker bundle, and explicitly retains the topology-only mock
-Bridge identity. It checks the native schema, OpenVM version, aggregate VK file
-hash/size, program hashes and Batch/Worker agreement. The native evidence is
-copied and hashed in the receipt with source `dogeos_core_scroll_identity_v1`;
-this source is **refused for generation=real**. Normal compiler/runtime checks
-still apply. This avoids requiring real Bridge env fields for a mock deployment.
-
-CPU fallback, with an unmodified checkout of the approved core revision in
-`CORE_BUILD`, the native JSON in `SCROLL_IDENTITIES`, and a new `OUTPUT_DIR`:
-
-```bash
-test "$(git -C "$CORE_BUILD" rev-parse HEAD)" = eef62d3e40a387b1f53b24825c2e85af54facbc8
-git -C "$CORE_BUILD" diff --exit-code HEAD
-BATCH_COMMIT=$(jq -er '.batch.recursive_app_commit_raw' "$SCROLL_IDENTITIES")
-(
-  cd "$CORE_BUILD"
-  env -u DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW \
-    CARGO_BUILD_JOBS=4 GIT_COMMIT=eef62d3e40a387b1f53b24825c2e85af54facbc8 \
-    DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW="$BATCH_COMMIT" \
-    cargo +nightly-2026-03-17 build --locked --release --package prover_worker \
-      --no-default-features --features dev-mock-prover,bridge-worker --bin prover-worker
-)
-mkdir "$OUTPUT_DIR"
-"$CORE_BUILD/target/release/prover-worker" --print-identity-json \
-  > "$OUTPUT_DIR/worker-identity-bundle.json"
-```
-
-No daemon is started. Record the source SHA, build inputs and executable hash
-with this locally generated bundle; do not claim it was exported from the
-unmodified published mock image. The `mockWorker` image reference remains a
-release reference, not a deployment contract: the current compiler emits no
-mock Worker service. Current-native verifier/materializer preflight must pass
-before activating this candidate on the cluster.
-
-Import with new material/output destinations (do not overwrite old receipts):
-
-```bash
-scrollsdk setup proof-materials --generation mock --non-interactive \
-  --scroll-identity-evidence "$SCROLL_IDENTITIES" \
-  --worker-identity-bundle "$OUTPUT_DIR/worker-identity-bundle.json" \
-  --aggregate-verifying-key "$CANDIDATE_RELEASE/verifier/aggregate-vk" \
-  --chunk-materializer .data/generated/proof-image-tools-beta4e/materialize-chunk-oneshot \
-  --batch-materializer .data/generated/proof-image-tools-beta4e/scroll-runtime-materializer \
-  --materials-dir .data/proof-materials/beta4e \
-  --output .data/proof-materials-beta4e.json \
-  --mock-worker-image dogeos69/prover-worker-mock@sha256:e5de8a3782b88590eda0083977cf882c61b1eb2994fdd647e464984cb1f69a38 \
-  --compiler-image dogeos69/dogeos-proof-topology@sha256:c48946dc0af058d839cf064034c805e681fa8439e377ba8ecf4afbbefb02620a \
-  --json
-```
-
-The inspected Docker Hub repositories contain a historical CPU artifact baker,
-beta.4e PC materializers and beta.4e mock Worker. No matching beta.4e CPU identity
-producer was found in that inspection. The historical producer's outputs cannot
-certify a beta.4e Batch/Aggregation build.
-
-Core already has the source workflow:
-`tools/real-proving/run-local-real-verifier-e2e.sh --check-only ENV_FILE`
-derives Batch and then Aggregation identities through the CPU identity probe,
-rebuilding with the derived compile-time commitments. The resulting matching
-Worker can export its native JSON. `check-real-verifier-start.sh` checks verifier
-construction without generating a proof. These workflows still need their
-documented inputs and matching toolchain; a stock mock Worker invocation is not
-a replacement for that derivation.
-
-**Core packaging follow-up (record only; no core source changes made):** publish
-the current CPU identity/probe and verifier-start tooling, with provenance and
-an interface consuming the approved Scroll inputs, or provide the corresponding
-matching build outputs. Do not invent commitments or reuse the old aggregation
-identity merely to pass compilation.
-
-After matching native identities and validation are available, import them with
-`setup proof-materials`, compile `withdrawal_mock_prover_real_materialize`, and
-follow the preserved-Bridge cutover. The target remains internal `mock + observe`
-with real materialization, eager producer and no Worker deployment. Neither of
-the commands above completes that activation or the end-to-end checklist.
+The former `derive-scroll` action and `--scroll-identity-evidence` import were
+retired with the `derive-scroll-identities` producer entrypoint: the same
+values are in the bake's `real-identity.env`. Existing material receipts with
+source `dogeos_core_scroll_identity_v1` still load.

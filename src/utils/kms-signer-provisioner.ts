@@ -112,6 +112,10 @@ export class KmsSignerProvisioner {
     private readonly profile?: string
   ) {}
 
+  inspectAddress(region: string, keyId: string): string {
+    return deriveEthereumAddressFromSpkiDer(this.fetchKmsPublicKey(region, keyId))
+  }
+
   async provision(
     role: KmsSignerProvisionRole,
     identity: KmsProvisionIdentity,
@@ -146,6 +150,28 @@ export class KmsSignerProvisioner {
       serviceAccount,
     })
 
+    // Reusing a role must not silently skip the requested archive grant.
+    // Add a location-specific policy; do not replace its KMS/trust/other archive policies.
+    if (input.roleArn && input.archive?.enabled && input.archive.bucket) {
+      const roleName = input.roleArn.split('/').at(-1) as string
+      const existing = this.awsJson(['iam', 'get-role', '--role-name', roleName])
+      if (existing.Role?.Arn !== input.roleArn) throw new Error('Existing IAM role ARN does not match the requested archive role')
+      const prefix = (input.archive.keyPrefix || '').replaceAll(/^\/+|\/+$/g, '')
+      if (/[*?]/.test(prefix)) throw new Error('Archive key prefix must not contain IAM wildcard characters')
+      const bucketArn = `arn:aws:s3:::${input.archive.bucket}`
+      const suffix = keccak256(Buffer.from(`${input.archive.bucket}/${prefix}`)).slice(2, 18)
+      this.awsJson(['iam', 'put-role-policy', '--role-name', roleName,
+        '--policy-name', `eth-da-submitter-archive-${suffix}`, '--policy-document', JSON.stringify({
+          Statement: [
+            {Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: `${bucketArn}/${prefix ? prefix + '/' : ''}*`},
+            {Action: ['s3:ListBucket'], Effect: 'Allow', Resource: bucketArn,
+              ...(prefix ? {Condition: {StringLike: {'s3:prefix': [prefix, prefix + '/*']}}} : {})},
+          ],
+          Version: '2012-10-17',
+        })])
+      this.jsonCtx.info(`${role.service}: granted requested archive prefix on existing IAM role ${roleName}`)
+    }
+
     return {
       address: expectedAddress,
       aliasName,
@@ -169,6 +195,20 @@ export class KmsSignerProvisioner {
         serviceAccountName: serviceAccount,
         serviceAccountRoleArn: roleArn,
       },
+    }
+  }
+
+  async provisionArchive(archive: BlobArchivePlan, options: {createBucket: boolean; roleArn?: string}): Promise<void> {
+    if (!archive.enabled || !archive.bucket) return
+    const match = options.roleArn?.match(/^arn:aws[\w-]*:iam::\d{12}:role\/(?:.*\/)?([^/]+)$/)
+    if (options.roleArn && !match) throw new Error('Invalid archive writer IAM role ARN')
+    if (options.createBucket) archive.created = this.ensureS3Bucket(archive.region || 'us-east-1', archive.bucket, 'eth-da-submitter')
+    if (match) {
+      this.awsJson(['iam', 'put-role-policy', '--role-name', match[1], '--policy-name', 'eth-da-submitter-s3-archive', '--policy-document', JSON.stringify({
+        Statement: [{Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: `arn:aws:s3:::${archive.bucket}/*`}],
+        Version: '2012-10-17',
+      })])
+      this.jsonCtx.info('Updated the archive writer policy; signing key and role trust are unchanged.')
     }
   }
 

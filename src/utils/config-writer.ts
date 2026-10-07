@@ -3,6 +3,8 @@ import chalk from 'chalk'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import {stripRetiredServiceConfig} from './retired-services.js'
+
 type TomlPrimitive = Date | bigint | boolean | null | number | string
 type TomlValue = TomlObject | TomlPrimitive | TomlValue[]
 interface TomlObject { [key: string]: TomlValue }
@@ -80,6 +82,12 @@ export function writeConfigs(
             mainConfigObjectForProcessing = convertBigIntsToStringsRecursive(updatedMainConfigOrString) as TomlObject;
             // Then stringify the processed object for writing.
             mainConfigStringToWrite = toml.stringify(mainConfigObjectForProcessing as toml.JsonMap);
+        }
+
+        const cleanedConfig = stripRetiredServiceConfig(mainConfigObjectForProcessing);
+        if (JSON.stringify(cleanedConfig) !== JSON.stringify(mainConfigObjectForProcessing)) {
+            mainConfigObjectForProcessing = cleanedConfig;
+            mainConfigStringToWrite = toml.stringify(cleanedConfig as toml.JsonMap);
         }
 
         const publicConfig = deepClone(mainConfigObjectForProcessing);

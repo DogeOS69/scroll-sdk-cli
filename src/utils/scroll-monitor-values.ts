@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Helm values are dynamic YAML mappings. */
 import type {DogeConfig} from '../types/doge-config.js'
 
+import {grafanaAdminReference} from './grafana-admin.js'
 import {getRequiredManagedSignerAddress} from './signer-roles.js'
 
 interface MonitorChange {
@@ -13,6 +14,29 @@ interface MonitorInputs {
   dogeConfig: Pick<DogeConfig, 'accounts' | 'ethereumDa' | 'signers'>
   l2ChainId: unknown
   l2RpcUrl: unknown
+}
+
+/** Bootstrap credentials belong in a Secret, never in Helm values or change previews. */
+export function reconcileScrollMonitorGrafana(values: any, config?: DogeConfig['grafana']): MonitorChange[] {
+  if (!config) return []
+  const grafana = structuredClone(mapping(values.grafana, 'grafana'))
+  const admin = mapping(grafana.admin, 'grafana.admin')
+  const changes: MonitorChange[] = []
+  for (const [key, value] of Object.entries(grafanaAdminReference(config))) {
+    if (admin[key] === value) continue
+    changes.push({key: `grafana.admin.${key}`, newValue: value, oldValue: String(admin[key])})
+    admin[key] = value
+  }
+
+  for (const key of ['adminUser', 'adminPassword']) {
+    if (!(key in grafana)) continue
+    delete grafana[key]
+    changes.push({key: `grafana.${key}`, newValue: '[stored in Secret]', oldValue: '[redacted]'})
+  }
+
+  grafana.admin = admin
+  if (changes.length > 0) values.grafana = grafana
+  return changes
 }
 
 function mapping(value: any, label: string): Record<string, any> {

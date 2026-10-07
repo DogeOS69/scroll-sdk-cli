@@ -10,9 +10,9 @@ export class GCPNodeStaticIPProvider implements NodeLBProvider {
     return false;
   }
 
-  async setupLb(flags: any, bootnodeCount: number): Promise<string[]> {
+  async setupLb(flags: any, bootnodeIndices: number[]): Promise<string[]> {
     console.log(chalk.blue('Starting GCP Node Static IP Setup...'));
-    console.log(chalk.blue(`Will setup static IPs for ${bootnodeCount} bootnode(s)`));
+    console.log(chalk.blue(`Will setup static IPs for ${bootnodeIndices.length} bootnode(s)`));
     console.log(chalk.red('GCP provider is not yet implemented'));
     throw new Error('GCP provider is not yet implemented. Please use AWS provider for now.');
   }

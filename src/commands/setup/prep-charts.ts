@@ -3,26 +3,29 @@ import * as toml from '@iarna/toml'
 import { confirm } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
-import { Wallet, isAddress } from 'ethers'
+import { isAddress } from 'ethers'
 import * as yaml from 'js-yaml'
 import { execFileSync, spawn } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import type { DogeConfig } from '../../types/doge-config.js'
+import type {DstackControllerConfig} from '../../types/dstack-controller.js'
 
 import {
-  L1_INTERFACE_BEACON_API_ENDPOINT,
   L1_INTERFACE_RPC_ENDPOINT,
   YAML_DUMP_OPTIONS,
 } from '../../config/constants.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
+import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
+import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues, validateDstackControllerConfig} from '../../utils/dstack-controller-values.js'
+import {readDstackControllerConfig} from '../../utils/dstack-database.js'
 import { GenerationTransaction } from '../../utils/generation-transaction.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {
-  resolveBlockbookKubernetesEndpoints,
   resolveDogecoinKubernetesEndpoints,
   resolveDogecoinServiceRpcUrl,
 } from '../../utils/kubernetes-endpoints.js'
@@ -39,14 +42,17 @@ import {
 } from '../../utils/proof-kubernetes-reconciler.js'
 import {assertTopologyUsesSharedArtifactStore, sharedArtifactStoreFromDogeConfig} from '../../utils/proof-shared-artifact-store.js'
 import {proofTopologyEthereumDaBlobSource} from '../../utils/proof-topology-compiler.js'
+import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
+import {archiveRetiredServiceFiles, stripRetiredServiceConfig} from '../../utils/retired-services.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
-import {reconcileScrollMonitorBalances} from '../../utils/scroll-monitor-values.js'
+import {reconcileScrollMonitorBalances, reconcileScrollMonitorGrafana} from '../../utils/scroll-monitor-values.js'
 import {
   getRequiredManagedSignerAddress,
   getRequiredManagedSignerConfig,
   isAwsKmsSigner,
   isLocalSigner,
 } from '../../utils/signer-roles.js'
+import {reconcileScrollMonitorStatusPage} from '../../utils/status-page-values.js'
 import {
   WITHDRAWAL_NATIVE_CONFIG_RELPATH,
   buildWithdrawalDeploymentFacts,
@@ -72,7 +78,6 @@ import {
   deriveSequencerRethEnodeUrl,
   getSequencerRethResourceName,
   getSequencerRethValuesFileName,
-  normalizeRethNodekey,
   normalizeSignerMode,
   signerModeToConfig,
 } from './l2-sequencer-reth.js'
@@ -103,7 +108,8 @@ export function applyFrontendEnvFileValues(
   source: string,
   updates: Record<string, unknown>,
 ): {changed: boolean; content: string} {
-  const lines = source.replaceAll('\r\n', '\n').split('\n')
+  const cleaned = source.replaceAll(/^\s*(?:REACT_APP_BRIDGE_API_URI|REACT_APP_ROLLUPSCAN_API_URI|ADMIN_SYSTEM_DASHBOARD_URI)\s*=.*(?:\r?\n|$)/gm, '')
+  const lines = cleaned.replaceAll('\r\n', '\n').split('\n')
   while (lines.at(-1) === '') lines.pop()
   const positions = new Map<string, number>()
   for (const [index, line] of lines.entries()) {
@@ -111,7 +117,7 @@ export function applyFrontendEnvFileValues(
     if (match) positions.set(match[1], index)
   }
 
-  let changed = false
+  let changed = cleaned !== source
   for (const [key, rawValue] of Object.entries(updates)) {
     if (rawValue === undefined || rawValue === null) continue
     const rendered = `${key} = ${String(rawValue)}`
@@ -134,51 +140,15 @@ export function buildFrontendExternalUrlUpdates(
   getConfigValue: (key: string) => unknown,
 ): Record<string, unknown> {
   return {
-    ADMIN_SYSTEM_DASHBOARD_URI: getConfigValue('frontend.ADMIN_SYSTEM_DASHBOARD_URI'),
     GRAFANA_URI: getConfigValue('frontend.GRAFANA_URI'),
-    REACT_APP_BRIDGE_API_URI: getConfigValue('frontend.BRIDGE_API_URI'),
     REACT_APP_EXTERNAL_EXPLORER_URI_L2: getConfigValue('frontend.EXTERNAL_EXPLORER_URI_L2'),
     REACT_APP_EXTERNAL_RPC_URI_L2: getConfigValue('frontend.EXTERNAL_RPC_URI_L2'),
-    REACT_APP_ROLLUPSCAN_API_URI: getConfigValue('frontend.ROLLUPSCAN_API_URI'),
   }
 }
 
-/**
- * Build the in-cluster bootstrap peer set used during the one-way geth-to-Reth
- * cutover. Every L2 client must be able to reach either generation of
- * sequencer while both are available, so this set intentionally contains
- * sequencers only: legacy geth sequencers first, followed by Reth sequencers.
- *
- * Bootnodes are not part of this list. They have their own topology and the
- * external RPC package builds a separate geth+Reth bootnode peer set.
- */
-export function buildInitialSequencerPeers(
-  gethSequencerPeers: string[],
-  rethSequencerPeers: string[],
-): string[] {
-  const peers = new Set<string>()
-  for (const peer of [...gethSequencerPeers, ...rethSequencerPeers]) {
-    const normalized = peer.trim()
-    if (normalized !== '') peers.add(normalized)
-  }
-
-  return [...peers]
-}
-
-/** Render the shared in-cluster sequencer peers for Reth's CSV CLI value. */
-export function buildRethInitialTrustedPeers(
-  gethSequencerPeers: string[],
-  rethSequencerPeers: string[],
-): string {
-  return buildInitialSequencerPeers(gethSequencerPeers, rethSequencerPeers).join(',')
-}
-
-/** Render the shared in-cluster sequencer peers for geth's JSON env value. */
-export function buildL2GethInitialPeerList(
-  gethSequencerPeers: string[],
-  rethSequencerPeers: string[],
-): string {
-  return JSON.stringify(buildInitialSequencerPeers(gethSequencerPeers, rethSequencerPeers))
+/** Render the configured Reth sequencers as a deduplicated trusted-peers CSV. */
+export function buildRethInitialTrustedPeers(rethSequencerPeers: string[]): string {
+  return [...new Set(rethSequencerPeers.map(peer => peer.trim()).filter(Boolean))].join(',')
 }
 
 /**
@@ -238,27 +208,10 @@ export function buildCubesignerPrepEnv(
     DOGEOS_CUBESIGNER_SIGNER_TSO_URL: 'http://tso-service:3000',
     NETWORK: config.network,
   }
-  const policy = config.cubesigner?.productionPolicy
-  if (policy) {
-    env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER = policy.policyIdentifier
-    env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_ARTIFACT_DIGEST =
-      policy.policyArtifactDigest
-    env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_VERIFIER_IDENTITY_DIGEST =
-      policy.verifierIdentityDigest
-    env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROGRAM_IDENTITY_DIGEST =
-      policy.programIdentityDigest
-    env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROOF_RESOLVER_AUTHORITY =
-      policy.proofResolverAuthority
-    if (policy.liveEvidenceReportPath) {
-      env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_LIVE_EVIDENCE_REPORT_PATH =
-        policy.liveEvidenceReportPath
-    }
-
-    if (policy.liveEvidenceReportDigest) {
-      env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_LIVE_EVIDENCE_REPORT_DIGEST =
-        policy.liveEvidenceReportDigest
-    }
-  }
+  Object.assign(env, cubesignerPolicyEnvironment(resolveCubesignerPolicy({
+    keys: (config.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: config.network,
+    selection: config.cubesigner,
+  })))
 
   return env
 }
@@ -1308,6 +1261,8 @@ export default class SetupPrepCharts extends Command {
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml',
+    '<%= config.bin %> <%= command.id %> --dstack-only --non-interactive',
+    '<%= config.bin %> <%= command.id %> --dogecoin-only --non-interactive',
     '<%= config.bin %> <%= command.id %> --github-username=your-username --github-token=your-token',
     '<%= config.bin %> <%= command.id %> --values-dir=./custom-values',
     '<%= config.bin %> <%= command.id %> --skip-auth-check',
@@ -1316,6 +1271,12 @@ export default class SetupPrepCharts extends Command {
 
   static override flags = {
     'doge-config': Flags.string({ description: 'Path to Dogecoin config file' }),
+    'dogecoin-only': Flags.boolean({
+      default: false,
+      description: 'Prepare only Dogecoin production values without bridge initialization or registry checks',
+      exclusive: ['dstack-only', 'spec', 'proof-materials-receipt', 'proof-publication-receipt', 'proof-topology-compiler-binary', 'proof-topology-compiler-image'],
+    }),
+    'dstack-only': Flags.boolean({default: false, description: 'Generate only dstack controller production values without chain initialization or registry checks'}),
     'github-token': Flags.string({ description: 'GitHub Personal Access Token', required: false }),
     'github-username': Flags.string({ description: 'GitHub username', required: false }),
     json: Flags.boolean({
@@ -1327,6 +1288,8 @@ export default class SetupPrepCharts extends Command {
       default: false,
       description: 'Run without prompts. Auto-applies all detected changes.',
     }),
+    'proof-materials-receipt': Flags.string({description: 'Selected real proof-materials receipt to bind into the deployment contract'}),
+    'proof-publication-receipt': Flags.string({description: 'Selected program-publication receipt to bind into the deployment contract'}),
     'proof-topology-compiler-binary': Flags.string({
       description: 'Development-only local dogeos-proof-topology binary; production uses the digest-pinned configured image',
       exclusive: ['proof-topology-compiler-image'],
@@ -1341,7 +1304,7 @@ export default class SetupPrepCharts extends Command {
       description: 'Do not overwrite L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK in L2 production values files',
     }),
     spec: Flags.string({
-      description: 'Optional DeploymentSpec proof source; conflicts with doge-config [proof_topology]',
+      description: 'Optional DeploymentSpec for proof topology and dstack controller values; proof topology conflicts with doge-config [proof_topology]',
     }),
     'values-dir': Flags.string({ default: './values', description: 'Directory containing values files; must be inside the deployment root for transactional generation' }),
   }
@@ -1351,13 +1314,10 @@ export default class SetupPrepCharts extends Command {
   private configData: any = {}
 
   private configMapping: Record<string, ((chartName: string, productionNumber: string) => string) | string> = {
-    'ADMIN_SYSTEM_DASHBOARD_HOST': 'ingress.ADMIN_SYSTEM_DASHBOARD_HOST',
     'BLOCKSCOUT_HOST': 'ingress.BLOCKSCOUT_HOST',
-    'BRIDGE_HISTORY_API_HOST': 'ingress.BRIDGE_HISTORY_API_HOST',
     'CHAIN_ID': 'general.CHAIN_ID_L2',
     'CHAIN_ID_L1': 'general.CHAIN_ID_L1',
     'CHAIN_ID_L2': 'general.CHAIN_ID_L2',
-    'COORDINATOR_API_HOST': 'ingress.COORDINATOR_API_HOST',
     'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL': 'ethereumDa.submitterRpcUrl',
     'DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL': 'general.L2_RPC_ENDPOINT',
     'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__EXPECTED_BATCHERS': 'signers.l1CommitSender.expectedAddress',
@@ -1366,22 +1326,9 @@ export default class SetupPrepCharts extends Command {
     'FRONTEND_HOST': 'ingress.FRONTEND_HOST',
     'GRAFANA_HOST': 'ingress.GRAFANA_HOST',
     'L1_DEVNET_HOST': 'ingress.L1_DEVNET_HOST',
-    'L1_EXPLORER_HOST': 'ingress.L1_EXPLORER_HOST',
     'L1_RPC_ENDPOINT': 'general.L1_RPC_ENDPOINT',
     'L1_SCROLL_CHAIN_PROXY_ADDR': 'contractsFile.L1_SCROLL_CHAIN_PROXY_ADDR',
     'L2_RPC_ENDPOINT': 'general.L2_RPC_ENDPOINT',
-    // 'L2GETH_NODEKEY': (chartName, productionNumber) =>
-    //   chartName.startsWith('l2-bootnode') ? `bootnode.bootnode-${productionNumber}.L2GETH_NODEKEY` :
-    //     (productionNumber === '0' ? 'sequencer.L2GETH_NODEKEY' : `sequencer.sequencer-${productionNumber}.L2GETH_NODEKEY`),
-    'L2GETH_KEYSTORE': (chartName, productionNumber) =>
-      productionNumber === '0' ? 'sequencer.L2GETH_KEYSTORE' : `sequencer.sequencer-${productionNumber}.L2GETH_KEYSTORE`,
-    'L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK': 'general.L1_CONTRACT_DEPLOYMENT_BLOCK',
-    'L2GETH_PASSWORD': (chartName, productionNumber) =>
-      productionNumber === '0' ? 'sequencer.L2GETH_PASSWORD' : `sequencer.sequencer-${productionNumber}.L2GETH_PASSWORD`,
-    'L2GETH_PEER_LIST': 'sequencer.L2_GETH_STATIC_PEERS',
-    'L2GETH_SIGNER_ADDRESS': (chartName, productionNumber) =>
-      productionNumber === '0' ? 'sequencer.L2GETH_SIGNER_ADDRESS' : `sequencer.sequencer-${productionNumber}.L2GETH_SIGNER_ADDRESS`,
-    'ROLLUP_EXPLORER_API_HOST': 'ingress.ROLLUP_EXPLORER_API_HOST',
     'RPC_GATEWAY_HOST': 'ingress.RPC_GATEWAY_HOST',
     'RPC_GATEWAY_WS_HOST': 'ingress.RPC_GATEWAY_WS_HOST',
     'SCROLL_L1_RPC': 'general.L1_RPC_ENDPOINT',
@@ -1392,6 +1339,7 @@ export default class SetupPrepCharts extends Command {
 
   private contractsConfig: any = {}
   private dogeConfig: DogeConfig = {} as DogeConfig
+  private dstackController?: DstackControllerConfig
   private flags: any
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
@@ -1410,6 +1358,29 @@ export default class SetupPrepCharts extends Command {
     this.jsonMode = flags.json
     this.skipL2ContractDeploymentBlock = flags['skip-l2-contract-deployment-block']
     this.jsonCtx = new JsonOutputContext('setup prep-charts', this.jsonMode)
+
+    if (flags['dogecoin-only']) {
+      await this.prepareDogecoinOnly(flags)
+      return
+    }
+
+    if (flags['dstack-only']) {
+      this.dstackController = readDstackControllerConfig(flags['doge-config'], flags.spec)
+      if (!this.dstackController || this.dstackController.enabled === false) throw new Error('An enabled dstackController configuration is required')
+      const root = process.cwd()
+      const valuesDir = path.resolve(root, flags['values-dir'])
+      const transaction = GenerationTransaction.begin(root)
+      try {
+        const generation = await this.processDstackControllerValues(transaction.toStagingPath(valuesDir))
+        const {changedFiles} = transaction.commit()
+        if (this.jsonMode) this.jsonCtx.success({changedFiles, ...generation, valuesDir})
+      } catch (error) {
+        transaction.rollback()
+        throw error
+      }
+
+      return
+    }
 
     this.jsonCtx.info('Starting chart preparation...')
 
@@ -1536,12 +1507,12 @@ export default class SetupPrepCharts extends Command {
   private buildBootnodeRethResolvedConfig(index: number): ResolvedBootnodeRethConfig {
     const instance = this.dogeConfig.bootnodeReth?.instances?.find(item => item.index === index)
     if (!instance) {
-      this.error(`bootnodeReth.instances does not contain index ${index}. Run scrollsdk setup l2-bootnode-reth first.`)
+      this.error(`bootnodeReth.instances does not contain index ${index}. Run scrollsdk setup gen-keystore --service bootnode-reth first.`)
     }
 
     const nodekey = instance.nodekey?.privateKey
     if (!nodekey) {
-      this.error(`bootnodeReth.instances[index=${index}].nodekey.privateKey is missing. Run scrollsdk setup l2-bootnode-reth first.`)
+      this.error(`bootnodeReth.instances[index=${index}].nodekey.privateKey is missing. Run scrollsdk setup gen-keystore --service bootnode-reth first.`)
     }
 
     return {
@@ -1553,34 +1524,24 @@ export default class SetupPrepCharts extends Command {
     }
   }
 
-  private buildFreshL2GethPeerList(): string {
-    return buildL2GethInitialPeerList(
-      this.getLegacySequencerPeers(),
-      this.getRethSequencerPeers(),
-    )
-  }
-
   private buildFreshRethTrustedPeers(): string {
-    return buildRethInitialTrustedPeers(
-      this.getLegacySequencerPeers(),
-      this.getRethSequencerPeers(),
-    )
+    return buildRethInitialTrustedPeers(this.getRethSequencerPeers())
   }
 
   private buildSequencerRethResolvedConfig(index: number): ResolvedSequencerRethConfig {
     const instance = this.dogeConfig.sequencerReth?.instances?.find(item => item.index === index)
     if (!instance) {
-      this.error(`sequencerReth.instances does not contain index ${index}. Run scrollsdk setup l2-sequencer-reth --index ${index} first.`)
+      this.error(`sequencerReth.instances does not contain index ${index}. Run scrollsdk setup gen-keystore --service sequencer-reth --index ${index} first.`)
     }
 
     const nodekey = instance.nodekey?.privateKey
     if (!nodekey) {
-      this.error(`sequencerReth.instances[index=${index}].nodekey.privateKey is missing. Run scrollsdk setup l2-sequencer-reth --index ${index} first.`)
+      this.error(`sequencerReth.instances[index=${index}].nodekey.privateKey is missing. Run scrollsdk setup gen-keystore --service sequencer-reth --index ${index} first.`)
     }
 
     const {signer} = instance
     if (!signer?.mode) {
-      this.error(`sequencerReth.instances[index=${index}].signer.mode is missing. Run scrollsdk setup l2-sequencer-reth --index ${index} first.`)
+      this.error(`sequencerReth.instances[index=${index}].signer.mode is missing. Run scrollsdk setup gen-keystore --service sequencer-reth --index ${index} first.`)
     }
 
     const signerMode = signerModeToConfig(normalizeSignerMode(signer.mode))
@@ -1612,11 +1573,6 @@ export default class SetupPrepCharts extends Command {
     }
   }
 
-  private deriveLegacySequencerEnodeUrl(nodekey: string, index: number): string {
-    const wallet = new Wallet(`0x${normalizeRethNodekey(nodekey)}`)
-    const publicKeyNoPrefix = wallet.signingKey.publicKey.slice(4)
-    return `enode://${publicKeyNoPrefix}@l2-sequencer-${index}:30303`
-  }
 
   private formatUrl(baseUrl: string, path: string = ''): string {
     // Remove trailing slash from baseUrl
@@ -1637,6 +1593,7 @@ export default class SetupPrepCharts extends Command {
       await this.processSequencerRethInstanceFiles(valuesDir)
     const {skipped: skippedProduction, updated: updatedProduction} =
       await this.processProductionYaml(valuesDir)
+    const dstack = await this.processDstackControllerValues(valuesDir)
     const {skipped: skippedConfig, updated: updatedConfig} =
       await this.processConfigYaml(valuesDir)
     const proof = this.proofIntent
@@ -1647,12 +1604,12 @@ export default class SetupPrepCharts extends Command {
       skippedBootnodeRethInstances,
       skippedConfig,
       skippedInstances,
-      skippedProduction,
+      skippedProduction: skippedProduction + dstack.skipped,
       skippedRethInstances,
       updatedBootnodeRethInstances,
       updatedConfig,
       updatedInstances,
-      updatedProduction,
+      updatedProduction: updatedProduction + dstack.updated,
       updatedRethInstances,
     }
   }
@@ -1689,14 +1646,6 @@ export default class SetupPrepCharts extends Command {
     
   }
 
-  private getFixedL2NodeEnvValue(chartName: string, key: string): string | undefined {
-    if (key === 'L2GETH_L1_ENDPOINT') return L1_INTERFACE_RPC_ENDPOINT
-    if (key === 'L2GETH_DA_BLOB_BEACON_NODE') return L1_INTERFACE_BEACON_API_ENDPOINT
-    if (key === 'L2GETH_PEER_LIST' && this.isL2GethNode(chartName)) {
-      return this.buildFreshL2GethPeerList()
-    }
-  }
-
   private getIngressHostConfigValue(chartName: string, ingressKey: string): string | undefined {
     const rethRpcConfigKey = getL2RethRpcIngressConfigKey(chartName, ingressKey)
     if (rethRpcConfigKey) {
@@ -1713,18 +1662,14 @@ export default class SetupPrepCharts extends Command {
     if (directValue) return directValue
 
     const alternativeMappings: Record<string, string> = {
-      'admin-system-dashboard': 'ADMIN_SYSTEM_DASHBOARD_HOST',
-      blockbook: 'BLOCKBOOK_HOST',
       blockscout: 'BLOCKSCOUT_HOST',
-      'bridge-history-api': 'BRIDGE_HISTORY_API_HOST',
-      'coordinator-api': 'COORDINATOR_API_HOST',
       dogecoin: 'DOGECOIN_HOST',
       frontends: 'FRONTEND_HOST',
       'l1-devnet': 'L1_DEVNET_HOST',
       'l2-reth-rpc': 'RPC_GATEWAY_HOST',
       'l2-rpc': 'RPC_GATEWAY_HOST',
       'l2-rpc-reth': 'RPC_GATEWAY_HOST',
-      'rollup-explorer-backend': 'ROLLUP_EXPLORER_API_HOST',
+      'proof-coordinator': 'PROOF_COORDINATOR_HOST',
       'tso-service': 'TSO_HOST',
     }
     const alternativeKey = alternativeMappings[chartName]
@@ -1739,35 +1684,6 @@ export default class SetupPrepCharts extends Command {
     }
 
     return alternativeValue
-  }
-
-  private getLegacySequencerPeers(): string[] {
-    const sequencerConfig = this.configData.sequencer
-    if (!sequencerConfig || typeof sequencerConfig !== 'object') return []
-
-    const peers = this.parsePeerList(sequencerConfig.L2_GETH_STATIC_PEERS)
-    // An explicit empty TOML array opts out of retired Geth peers while
-    // preserving archived compatibility keys. Only absent/non-array legacy
-    // settings should fall back to deriving peers from those keys.
-    if (Array.isArray(sequencerConfig.L2_GETH_STATIC_PEERS)) return peers
-    if (peers.length > 0) return peers
-
-    const derivedPeers: string[] = []
-    if (sequencerConfig.L2GETH_NODEKEY) {
-      derivedPeers.push(this.deriveLegacySequencerEnodeUrl(sequencerConfig.L2GETH_NODEKEY, 0))
-    }
-
-    for (const [key, value] of Object.entries(sequencerConfig)) {
-      const match = key.match(/^sequencer-(\d+)$/)
-      if (!match || !value || typeof value !== 'object') continue
-
-      const nodekey = (value as { L2GETH_NODEKEY?: unknown }).L2GETH_NODEKEY
-      if (typeof nodekey === 'string' && nodekey.trim() !== '') {
-        derivedPeers.push(this.deriveLegacySequencerEnodeUrl(nodekey, Number(match[1])))
-      }
-    }
-
-    return derivedPeers
   }
 
   private getNestedValue(obj: any, path: string): any {
@@ -1821,12 +1737,18 @@ export default class SetupPrepCharts extends Command {
       'scrollsdk setup doge-config',
     )
     this.dogeConfig = config as DogeConfigType;
+    const deploymentSpec = flags.spec ? loadDeploymentSpec(path.resolve(flags.spec)) : undefined
+    this.dstackController = deploymentSpec?.dstackController ?? this.dogeConfig.dstackController
+    validateDstackControllerConfig(this.dstackController)
     this.proofIntent = resolveProofIntent({
       deploymentDir: process.cwd(),
       dogeConfig: this.dogeConfig,
       dogeConfigPath,
       required: false,
-      specPath: flags.spec,
+      // A spec selected only for controller deployment must not require a
+      // proofTopology or replace the existing doge-config proof source.
+      specPath: deploymentSpec?.dstackController !== undefined && !deploymentSpec.proofTopology
+        ? undefined : flags.spec,
     })
     const priorProofState = fs.existsSync(path.join(process.cwd(), '.data/proof-deployment.json'))
       || fs.existsSync(path.join(process.cwd(), '.data/generated/proof-topology'))
@@ -1938,6 +1860,40 @@ export default class SetupPrepCharts extends Command {
     }
 
     return trimmed.split(',').map(item => item.trim()).filter(Boolean)
+  }
+
+  private async prepareDogecoinOnly(flags: Record<string, any>): Promise<void> {
+    const root = process.cwd()
+    const result = await loadDogeConfigWithSelection(flags['doge-config'], 'scrollsdk setup doge-config')
+    this.dogeConfig = result.config
+    // Only the optional ingress hostname comes from config.toml at bootstrap.
+    const configPath = path.join(root, 'config.toml')
+    if (fs.existsSync(configPath)) this.configData = toml.parse(fs.readFileSync(configPath, 'utf8'))
+    const valuesDir = path.resolve(root, flags['values-dir'])
+    const filename = 'dogecoin-production.yaml'
+    const transaction = GenerationTransaction.begin(root)
+    try {
+      const target = path.join(transaction.toStagingPath(valuesDir), filename)
+      if (!fs.existsSync(target)) throw new Error(`${path.join(valuesDir, filename)} not found. Copy the Dogecoin production values template before preparing charts.`)
+      const productionYaml = yaml.load(fs.readFileSync(target, 'utf8'))
+      if (!productionYaml || typeof productionYaml !== 'object' || Array.isArray(productionYaml)) {
+        throw new Error(`${filename} must contain a YAML mapping`)
+      }
+
+      const changes = this.reconcileDogecoinValues(productionYaml)
+      const apply = changes.length > 0 && (this.nonInteractive || await confirm({message: `Apply Dogecoin configuration changes to ${filename}?`}))
+      if (apply) fs.writeFileSync(target, yaml.dump(productionYaml, YAML_DUMP_OPTIONS))
+      const {changedFiles} = transaction.commit()
+      this.jsonCtx.logSuccess(apply ? `Updated ${filename}` : `No changes applied to ${filename}`)
+      if (this.jsonMode) this.jsonCtx.success({
+        generation: {changedFiles, committed: true},
+        productionCharts: {skipped: apply ? 0 : 1, updated: apply ? 1 : 0},
+        valuesDir,
+      })
+    } catch (error) {
+      transaction.rollback()
+      throw error
+    }
   }
 
   private async processBootnodeRethInstanceFiles(valuesDir: string): Promise<{ skipped: number; updated: number }> {
@@ -2111,7 +2067,9 @@ export default class SetupPrepCharts extends Command {
           this.error(chalk.red("scrollConfig failed: " + error.message));
         }
 
-        let updated = false;
+        const cleanedScrollConfig = stripRetiredServiceConfig(scrollConfigToml)
+        let updated = JSON.stringify(cleanedScrollConfig) !== JSON.stringify(scrollConfigToml)
+        scrollConfigToml = cleanedScrollConfig
         for (const [key, newValue] of Object.entries(configUpdates)) {
           // Minimal/spec-first deployments may not have post-contract or
           // optional frontend fields yet. Omit unresolved inputs instead of
@@ -2170,6 +2128,30 @@ export default class SetupPrepCharts extends Command {
     return { skipped: skippedCharts, updated: updatedCharts };
   }
 
+  private async processDstackControllerValues(valuesDir: string): Promise<{skipped: number; updated: number}> {
+    const files = [
+      [DSTACK_CONTROLLER_VALUES_FILE, generateDstackControllerValues(this.dstackController)],
+      [DSTACK_MONITORING_VALUES_FILE, generateDstackMonitoringValues(this.dstackController)],
+    ] as const
+    const result = {skipped: 0, updated: 0}
+    for (const [name, content] of files) {
+      if (content === undefined) continue
+      const target = path.join(valuesDir, name)
+      if ((fs.existsSync(target) && fs.readFileSync(target, 'utf8') === content)
+        || (!this.nonInteractive && !await confirm({message: `Generate ${name} from dstackController configuration?`}))) {
+        result.skipped++
+        continue
+      }
+
+      fs.mkdirSync(valuesDir, {recursive: true})
+      fs.writeFileSync(target, content)
+      this.jsonCtx.logSuccess(`Generated ${name}`)
+      result.updated++
+    }
+
+    return result
+  }
+
   // Generic ingress processing function
   private processIngressHosts(
     ingressConfig: any,
@@ -2214,13 +2196,13 @@ export default class SetupPrepCharts extends Command {
   }
 
   private async processMutipleInstance(valuesDir: string): Promise<{ skipped: number; updated: number }> {
-    interface ChartConfig {
-      chartName: string;
-      configKey: string;
-    }
-
     let updatedCharts = 0;
-    let skippedCharts = 0;
+    const skippedCharts = 0;
+
+    for (const file of [...archiveRetiredGethValues(valuesDir), ...archiveRetiredServiceFiles(valuesDir)]) {
+      this.jsonCtx.info(`Archived retired values: ${file}`)
+      updatedCharts++
+    }
 
     // attestation-signer is partner-operated through docker-compose. Remove
     // values left by older CLI releases so a later `helm install-all` cannot
@@ -2235,55 +2217,6 @@ export default class SetupPrepCharts extends Command {
       updatedCharts++
     }
 
-    const names: ChartConfig[] = [{
-      chartName: "l2-bootnode",
-      configKey: "bootnode"
-    }, {
-      chartName: "l2-sequencer",
-      configKey: "sequencer"
-    }];
-
-    for (const item of names) {
-      const { chartName, configKey } = item;
-
-      let releaseIndex = 0;
-      const templateFilePath = path.join(valuesDir, `${chartName}-production.yaml`);
-      if (!fs.existsSync(templateFilePath)) {
-        this.warn(chalk.yellow(`Source file not found: ${templateFilePath}, skipping ${chartName} charts`));
-        skippedCharts++;
-        continue;
-      }
-
-      if (!this.configData[configKey]) {
-        this.error(`${configKey} not found in config.toml`);
-      }
-
-      const templateContent = fs.readFileSync(templateFilePath, 'utf8');
-
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const instanceKey = `${configKey}-${releaseIndex}`
-
-        // instanceConfig is like this.configData.bootnode.bootnode-0, or this.configData.sequencer.sequencer-0
-        const instanceConfig = this.configData[configKey][instanceKey]
-
-        if (!instanceConfig && instanceKey !== "sequencer-0") {
-          // No more bootnode instances defined
-          this.log(chalk.yellow(`No more ${instanceKey} instances defined.`));
-          break
-        }
-
-        const destFilePath = path.join(valuesDir, `${chartName}-production-${releaseIndex}.yaml`);
-
-        const newYamlContent = templateContent.replaceAll('__INSTANCE_INDEX__', releaseIndex.toString());
-        fs.writeFileSync(destFilePath, newYamlContent);
-        updatedCharts++;
-
-        releaseIndex++
-      }
-
-    }
-
     return { skipped: skippedCharts, updated: updatedCharts };
   }
 
@@ -2292,11 +2225,12 @@ export default class SetupPrepCharts extends Command {
   ): Promise<{ skipped: number; updated: number }> {
     const productionFiles = fs.readdirSync(valuesDir)
       .filter(file => file.endsWith('-production.yaml') || file.match(/-production-\d+\.yaml$/))
+      // Status-page endpoints must reflect the source values generated in this pass.
+      .sort((a, b) => Number(getProductionChartName(a) === 'scroll-monitor') - Number(getProductionChartName(b) === 'scroll-monitor'))
 
     let updatedCharts = 0
     let skippedCharts = 0
     const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(this.dogeConfig)
-    const blockbookEndpoints = resolveBlockbookKubernetesEndpoints(this.dogeConfig)
     const dogecoinInternalUrl = dogecoinEndpoints.rpcUrl
     const s3Archive = this.dogeConfig.ethereumDa?.blobArchive?.s3
     const s3PublicBaseUrl = getEthereumDaS3PublicBaseUrl(s3Archive)
@@ -2305,6 +2239,8 @@ export default class SetupPrepCharts extends Command {
     const l2P2PNetworkId = resolveRethP2PNetworkId(this.dogeConfig, configuredL2ChainId)
 
     for (const file of productionFiles) {
+      // This standalone chart has its own source-driven generator below.
+      if (file === DSTACK_CONTROLLER_VALUES_FILE) continue
       if (file === 'l2-reth-bootnode-production.yaml') {
         this.jsonCtx.info(`Skipping reth bootnode template ${file}`)
         skippedCharts++
@@ -2319,18 +2255,26 @@ export default class SetupPrepCharts extends Command {
 
       const yamlPath = path.join(valuesDir, file)
       const chartName = getProductionChartName(file)
+      if (this.isL2GethNode(chartName)) {
+        this.jsonCtx.info(`Skipping retired geth chart ${file}; use the Reth values files.`)
+        skippedCharts++
+        continue
+      }
+
       const productionNumber = file.match(/-production-(\d+)\.yaml$/)?.[1] || '0'
 
       this.log(`Processing ${file} for chart ${chartName}...`)
 
       const productionYamlContent = fs.readFileSync(yamlPath, 'utf8')
-      const productionYaml = yaml.load(productionYamlContent) as any
+      const originalProductionYaml = yaml.load(productionYamlContent) as any
+      const productionYaml = stripRetiredServiceConfig(originalProductionYaml)
       const rethExtraArgsSnapshot = isL2RethBlobS3Chart(chartName)
         ? snapshotRethExtraArgs(productionYaml)
         : undefined
 
-      let updated = false
+      let updated = JSON.stringify(productionYaml) !== JSON.stringify(originalProductionYaml)
       const changes: Array<{ key: string; newValue: string; oldValue: string }> = []
+      if (updated) changes.push({key: 'retired indexer settings', newValue: 'removed', oldValue: 'present'})
 
       // In the normal deployment flow every concrete Reth node uses the L2
       // chain ID as its P2P network ID. A shadowfork may intentionally override
@@ -2357,19 +2301,6 @@ export default class SetupPrepCharts extends Command {
             for (const [key, oldValue] of Object.entries(envData)) {
               if (shouldSkipL2ContractDeploymentBlockUpdate(chartName, key, this.skipL2ContractDeploymentBlock)) {
                 continue
-              }
-
-              if (this.isL2Node(chartName)) {
-                const fixedValue = this.getFixedL2NodeEnvValue(chartName, key)
-                if (fixedValue !== undefined) {
-                  if (fixedValue !== oldValue) {
-                    changes.push({ key, newValue: fixedValue, oldValue: JSON.stringify(oldValue) })
-                    envData[key] = fixedValue
-                    updated = true
-                  }
-
-                  continue
-                }
               }
 
               const configPathOrResolver = this.configMapping[key]
@@ -2727,11 +2658,20 @@ export default class SetupPrepCharts extends Command {
       }
 
       if (chartName === 'scroll-monitor') {
+        const grafanaChanges = reconcileScrollMonitorGrafana(productionYaml, this.dogeConfig.grafana)
+        changes.push(...grafanaChanges)
+        if (grafanaChanges.length > 0) updated = true
         const monitorChanges = reconcileScrollMonitorBalances(productionYaml, {
           dogeConfig: this.dogeConfig,
           l2ChainId: configuredL2ChainId,
           l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),
         })
+        monitorChanges.push(...reconcileScrollMonitorStatusPage(productionYaml, {
+          chainId: configuredL2ChainId,
+          environment: productionYaml.statusPage?.environment,
+          networkName: this.getConfigValue('general.CHAIN_NAME_L2'),
+          valuesDir,
+        }))
         if (monitorChanges.length > 0) {
           changes.push(...monitorChanges)
           updated = true
@@ -2783,68 +2723,7 @@ export default class SetupPrepCharts extends Command {
       }
 
       // eslint-disable-next-line unicorn/prefer-switch
-      if (chartName === 'blockbook') {
-        if (!productionYaml.blockbook || typeof productionYaml.blockbook !== 'object') {
-          productionYaml.blockbook = {}
-        }
-
-        if (productionYaml.fullnameOverride !== blockbookEndpoints.serviceName) {
-          changes.push({ key: 'fullnameOverride', newValue: blockbookEndpoints.serviceName, oldValue: String(productionYaml.fullnameOverride || 'undefined') })
-          productionYaml.fullnameOverride = blockbookEndpoints.serviceName
-          updated = true
-        }
-
-        let ingressUpdated = false;
-        if (productionYaml.ingress) {
-          const ingressValue = productionYaml.ingress;
-          ingressValue.enabled = true;
-          const configValue = this.getConfigValue('ingress.BLOCKBOOK_HOST');
-          ingressUpdated = this.processIngressHosts(ingressValue, configValue, changes);
-        } else {
-          productionYaml.ingress = {
-            annotations: {
-              "cert-manager.io/cluster-issuer": "letsencrypt-prod",
-              "nginx.ingress.kubernetes.io/ssl-redirect": "true"
-            },
-            className: "nginx",
-            enabled: true,
-            hosts: [
-              {
-                host: this.getConfigValue("ingress.BLOCKBOOK_HOST"),
-                paths: [{ path: "/", pathType: "Prefix" }]
-              }
-            ],
-          };
-          changes.push({ key: `ingress`, newValue: JSON.stringify(productionYaml.ingress), oldValue: "undefined" });
-          ingressUpdated = true;
-        }
-
-        if (ingressUpdated) {
-          updated = true;
-        }
-
-        if (productionYaml.blockbook.rpcUrl !== dogecoinEndpoints.rpcUrl) {
-          changes.push({ key: 'blockbook.rpcUrl', newValue: dogecoinEndpoints.rpcUrl, oldValue: String(productionYaml.blockbook.rpcUrl || 'undefined') })
-          productionYaml.blockbook.rpcUrl = dogecoinEndpoints.rpcUrl
-          updated = true
-        }
-
-        if (productionYaml.blockbook.messageQueueBinding !== dogecoinEndpoints.zmqRawBlockUrl) {
-          changes.push({ key: 'blockbook.messageQueueBinding', newValue: dogecoinEndpoints.zmqRawBlockUrl, oldValue: String(productionYaml.blockbook.messageQueueBinding || 'undefined') })
-          productionYaml.blockbook.messageQueueBinding = dogecoinEndpoints.zmqRawBlockUrl
-          updated = true
-        }
-
-        const oldValue = productionYaml.blockbook.blockHeight;
-        const newValue = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
-        if (oldValue !== newValue) {
-          productionYaml.blockbook.blockHeight = this.dogeConfig.defaults?.dogecoinIndexerStartHeight;
-          updated = true;
-          changes.push({ key: `blockbook.blockHeight`, newValue: newValue || 'undefined', oldValue: oldValue || 'undefined' });
-        }
-      }
-
-      else if (chartName === "l1-devnet") {
+      if (chartName === "l1-devnet") {
         if (!productionYaml.network || typeof productionYaml.network !== 'object') {
           productionYaml.network = {}
         }
@@ -3159,6 +3038,17 @@ export default class SetupPrepCharts extends Command {
           this.error(`${chartName}: env not found in config`);
         }
 
+        const policyResolution = resolveCubesignerPolicy({keys: (this.dogeConfig.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: this.dogeConfig.network, selection: this.dogeConfig.cubesigner})
+        for (const warning of policyResolution.warnings) this.jsonCtx.addWarning(warning)
+        const projection = cubesignerLiveEvidenceProjection(policyResolution)
+        productionYaml.configMaps ||= {}
+        productionYaml.persistence ||= {}
+        const oldProjection = JSON.stringify([productionYaml.configMaps['proof-policy-live-evidence'], productionYaml.persistence['proof-policy-live-evidence']])
+        delete productionYaml.configMaps['proof-policy-live-evidence']
+        delete productionYaml.persistence['proof-policy-live-evidence']
+        Object.assign(productionYaml.configMaps, projection.configMaps)
+        Object.assign(productionYaml.persistence, projection.persistence)
+        if (oldProjection !== JSON.stringify([productionYaml.configMaps['proof-policy-live-evidence'], productionYaml.persistence['proof-policy-live-evidence']])) updated = true
         const cubesignerChanges = [
           ...removeEnvArrayKeys(productionYaml, [
             // Retired compatibility/configuration surfaces. The signer now has
@@ -3331,6 +3221,26 @@ export default class SetupPrepCharts extends Command {
         }
       }
       else if (chartName === "tso-service") {
+        // Old deployment files may predate the chart default. Fill only a
+        // missing annotation; explicit operator limits (including null to
+        // remove the Helm default) and other annotations remain untouched.
+        const ingress = productionYaml.ingress?.main
+        const ingressClass = ingress?.ingressClassName
+          ?? ingress?.annotations?.['kubernetes.io/ingress.class']
+          ?? 'nginx'
+        if (ingress?.enabled !== false && ingressClass === 'nginx') {
+          productionYaml.ingress ??= {}
+          productionYaml.ingress.main ??= {}
+          const {main} = productionYaml.ingress
+          main.annotations ??= {}
+          const key = 'nginx.ingress.kubernetes.io/proxy-body-size'
+          if (!Object.hasOwn(main.annotations, key)) {
+            main.annotations[key] = '4m'
+            changes.push({key: `ingress.main.annotations.${key}`, newValue: '4m', oldValue: 'undefined'})
+            updated = true
+          }
+        }
+
         if (!productionYaml.env) {
           this.error(`${chartName}: env not found in config`);
         }
@@ -3357,7 +3267,6 @@ export default class SetupPrepCharts extends Command {
       }
       else if (chartName === "metrics-exporter") {
 
-        const rollupExplorerBackendUrl = "http://rollup-explorer-backend";
         const l2RpcEndpoint = this.getConfigValue("general.L2_RPC_ENDPOINT");
         const l2TxFeeVaultAddr = this.getConfigValue("contracts.overrides.L2_TX_FEE_VAULT");
         const l2BridgeFeeRecipientAddr = this.getConfigValue("contracts.L2_BRIDGE_FEE_RECIPIENT_ADDR");
@@ -3366,14 +3275,18 @@ export default class SetupPrepCharts extends Command {
         const l1RpcEndpoint = this.getConfigValue("general.L1_RPC_ENDPOINT");
 
         if (productionYaml.metricsConfig) {
-          if (productionYaml.metricsConfig.rollup.url !== rollupExplorerBackendUrl) {
+          if (productionYaml.metricsConfig.rollup !== undefined) {
             updated = true;
             changes.push({
-              key: `metricsConfig.rollup.url`, newValue: rollupExplorerBackendUrl,
-              oldValue: productionYaml.metricsConfig.rollup.url
+              key: 'metricsConfig.rollup', newValue: 'removed',
+              oldValue: JSON.stringify(productionYaml.metricsConfig.rollup)
             });
-            productionYaml.metricsConfig.rollup.url = rollupExplorerBackendUrl;
+            delete productionYaml.metricsConfig.rollup;
           }
+
+          productionYaml.metricsConfig.l1Network ||= {};
+          productionYaml.metricsConfig.dogecoin ||= {};
+          productionYaml.metricsConfig.dogeos ||= {};
 
           if (productionYaml.metricsConfig.l1Network.url !== l1RpcEndpoint) {
             updated = true;
@@ -3441,9 +3354,6 @@ export default class SetupPrepCharts extends Command {
             l1Network: {
               L1_MESSAGE_QUEUE_PROXY_ADDR: l1MessageQueueProxyAddr,
               url: l1RpcEndpoint
-            },
-            rollup: {
-              url: rollupExplorerBackendUrl
             }
           };
           updated = true;
@@ -3454,93 +3364,9 @@ export default class SetupPrepCharts extends Command {
         }
       }
       else if (chartName === "dogecoin") {
-        const isRegtest = this.dogeConfig.network === "regtest";
-        const isTestnet = this.dogeConfig.network === "testnet";
-        if (!productionYaml.dogecoinConf || typeof productionYaml.dogecoinConf !== 'object') {
-          productionYaml.dogecoinConf = {}
-        }
-
-        if (!productionYaml.service || typeof productionYaml.service !== 'object') {
-          productionYaml.service = {}
-        }
-
-        if (!productionYaml.storage || typeof productionYaml.storage !== 'object') {
-          productionYaml.storage = {}
-        }
-
-        if (productionYaml.fullnameOverride !== dogecoinEndpoints.serviceName) {
-          const oldValue = productionYaml.fullnameOverride;
-          productionYaml.fullnameOverride = dogecoinEndpoints.serviceName;
-          updated = true;
-          changes.push({ key: `fullnameOverride`, newValue: dogecoinEndpoints.serviceName, oldValue: String(oldValue || 'undefined') });
-        }
-
-        const dogecoinConf_regtest = productionYaml.dogecoinConf?.regtest;
-        const expected_regtest = isRegtest ? 1 : 0;
-        if (dogecoinConf_regtest !== expected_regtest) {
-          productionYaml.dogecoinConf.regtest = expected_regtest;
-          updated = true;
-          changes.push({ key: `dogecoinConf.regtest`, newValue: String(expected_regtest), oldValue: String(dogecoinConf_regtest) });
-        }
-
-        const dogecoinConf_testnet = productionYaml.dogecoinConf?.testnet;
-        const expected_testnet = isTestnet ? 1 : 0;
-        if (dogecoinConf_testnet !== expected_testnet) {
-          productionYaml.dogecoinConf.testnet = expected_testnet;
-          updated = true;
-          changes.push({ key: `dogecoinConf.testnet`, newValue: String(expected_testnet), oldValue: String(dogecoinConf_testnet) });
-        }
-
-        const service_port = productionYaml.service?.port;
-        const expected_service_port = dogecoinEndpoints.p2pPort;
-        if (service_port !== expected_service_port) {
-          productionYaml.service.port = expected_service_port;
-          updated = true;
-          changes.push({ key: `service.port`, newValue: String(expected_service_port), oldValue: String(service_port) });
-        }
-
-        const service_rpcPort = productionYaml.service?.rpcPort;
-        const expected_service_rpcPort = dogecoinEndpoints.rpcPort;
-        if (service_rpcPort !== expected_service_rpcPort) {
-          productionYaml.service.rpcPort = expected_service_rpcPort;
-          updated = true;
-          changes.push({ key: `service.rpcPort`, newValue: String(expected_service_rpcPort), oldValue: String(service_rpcPort) });
-        }
-
-        const storage_size = productionYaml.storage?.size;
-        const expected_storage_size = isRegtest || isTestnet ? "50Gi" : "250Gi";
-        if (storage_size !== expected_storage_size) {
-          productionYaml.storage.size = expected_storage_size;
-          updated = true;
-          changes.push({ key: `storage.size`, newValue: String(expected_storage_size), oldValue: String(storage_size) });
-        }
-
-        // let rpcPassword = productionYaml.rpcPassword;
-        // let expectedRpcPassword = this.dogeConfig.dogecoinClusterRpc?.password;
-        // if (rpcPassword !== expectedRpcPassword) {
-        //   productionYaml.rpcPassword = expectedRpcPassword;
-        //   updated = true;
-        //   changes.push({ key: `rpcPassword`, oldValue: String(rpcPassword), newValue: String(expectedRpcPassword) });
-        // }
-
-        const rpcUser = productionYaml.dogecoinConf?.rpcuser;
-        const expectedRpcUser = this.dogeConfig.dogecoinClusterRpc?.username;
-        if (rpcUser !== expectedRpcUser) {
-          productionYaml.dogecoinConf.rpcuser = expectedRpcUser;
-          updated = true;
-          changes.push({ key: `dogecoinConf.rpcuser`, newValue: String(expectedRpcUser), oldValue: String(rpcUser) });
-        }
-
-        // Process dogecoin ingress.
-        let ingressUpdated = false;
-        if (productionYaml.ingress) {
-          const configValue = this.getConfigValue('ingress.DOGECOIN_HOST');
-          ingressUpdated = this.processIngressHosts(productionYaml.ingress, configValue, changes);
-        }
-
-        if (ingressUpdated) {
-          updated = true;
-        }
+        const dogecoinChanges = this.reconcileDogecoinValues(productionYaml)
+        changes.push(...dogecoinChanges)
+        if (dogecoinChanges.length > 0) updated = true
       }
       else if (chartName === "testnet-activity-helper") {
         const l2RpcEndpoint = this.getConfigValue("general.L2_RPC_ENDPOINT");
@@ -3669,6 +3495,71 @@ export default class SetupPrepCharts extends Command {
     }
   }
 
+  /** Dogecoin bootstrap shares the same reconciliation as full chart preparation. */
+  private reconcileDogecoinValues(productionYaml: any): Array<{key: string; newValue: string; oldValue: string}> {
+    const changes: Array<{key: string; newValue: string; oldValue: string}> = []
+    const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(this.dogeConfig)
+    const isRegtest = this.dogeConfig.network === "regtest";
+    const isTestnet = this.dogeConfig.network === "testnet";
+    if (!productionYaml.dogecoinConf || typeof productionYaml.dogecoinConf !== 'object') {
+      productionYaml.dogecoinConf = {}
+    }
+
+    if (!productionYaml.service || typeof productionYaml.service !== 'object') {
+      productionYaml.service = {}
+    }
+
+    if (productionYaml.fullnameOverride !== dogecoinEndpoints.serviceName) {
+      const oldValue = productionYaml.fullnameOverride;
+      productionYaml.fullnameOverride = dogecoinEndpoints.serviceName;
+      changes.push({ key: `fullnameOverride`, newValue: dogecoinEndpoints.serviceName, oldValue: String(oldValue || 'undefined') });
+    }
+
+    const dogecoinConf_regtest = productionYaml.dogecoinConf?.regtest;
+    const expected_regtest = isRegtest ? 1 : 0;
+    if (dogecoinConf_regtest !== expected_regtest) {
+      productionYaml.dogecoinConf.regtest = expected_regtest;
+      changes.push({ key: `dogecoinConf.regtest`, newValue: String(expected_regtest), oldValue: String(dogecoinConf_regtest) });
+    }
+
+    const dogecoinConf_testnet = productionYaml.dogecoinConf?.testnet;
+    const expected_testnet = isTestnet ? 1 : 0;
+    if (dogecoinConf_testnet !== expected_testnet) {
+      productionYaml.dogecoinConf.testnet = expected_testnet;
+      changes.push({ key: `dogecoinConf.testnet`, newValue: String(expected_testnet), oldValue: String(dogecoinConf_testnet) });
+    }
+
+    const service_port = productionYaml.service?.port;
+    const expected_service_port = dogecoinEndpoints.p2pPort;
+    if (service_port !== expected_service_port) {
+      productionYaml.service.port = expected_service_port;
+      changes.push({ key: `service.port`, newValue: String(expected_service_port), oldValue: String(service_port) });
+    }
+
+    const service_rpcPort = productionYaml.service?.rpcPort;
+    const expected_service_rpcPort = dogecoinEndpoints.rpcPort;
+    if (service_rpcPort !== expected_service_rpcPort) {
+      productionYaml.service.rpcPort = expected_service_rpcPort;
+      changes.push({ key: `service.rpcPort`, newValue: String(expected_service_rpcPort), oldValue: String(service_rpcPort) });
+    }
+
+    // Storage settings belong to the deployment values; never infer or resize them here.
+    const rpcUser = productionYaml.dogecoinConf?.rpcuser;
+    const expectedRpcUser = this.dogeConfig.dogecoinClusterRpc?.username;
+    if (rpcUser !== expectedRpcUser) {
+      productionYaml.dogecoinConf.rpcuser = expectedRpcUser;
+      changes.push({ key: `dogecoinConf.rpcuser`, newValue: String(expectedRpcUser), oldValue: String(rpcUser) });
+    }
+
+    // Process dogecoin ingress.
+    if (productionYaml.ingress) {
+      const configValue = this.getConfigValue('ingress.DOGECOIN_HOST');
+      this.processIngressHosts(productionYaml.ingress, configValue, changes);
+    }
+
+    return changes
+  }
+
   private reconcileProofKubernetes(valuesDir: string): ReconcileProofKubernetesResult {
     if (!this.proofIntent) throw new Error('proof topology is not configured')
     const coordinatorIngressHost = this.getConfigValue('ingress.PROOF_COORDINATOR_HOST')
@@ -3695,6 +3586,7 @@ export default class SetupPrepCharts extends Command {
       ethereumDaBlobSource: proofTopologyEthereumDaBlobSource(this.dogeConfig.ethereumDa),
       ethereumL1RpcUrl: this.dogeConfig.ethereumDa?.submitterRpcUrl,
       intent: this.proofIntent,
+      materialsReceipt: this.flags['proof-materials-receipt'],
       network: this.dogeConfig.network,
       proofTopologyBridge: {
         dogecoinNetwork: this.dogeConfig.network,
@@ -3704,6 +3596,7 @@ export default class SetupPrepCharts extends Command {
       },
       proofTopologyCompilerBinary: this.flags['proof-topology-compiler-binary'],
       proofTopologyCompilerImage: this.flags['proof-topology-compiler-image'],
+      publicationReceipt: this.flags['proof-publication-receipt'],
       valuesDir,
     })
     this.jsonCtx.logSuccess(

@@ -10,6 +10,8 @@ import {
   writeGeneratedConfigs
 } from '../../utils/deployment-spec-generator.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
+import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
+import {archiveRetiredServiceFiles} from '../../utils/retired-services.js'
 import { type GeneratedValuesFiles, generateValuesFiles } from '../../utils/values-generator.js'
 
 function parseEnvValue(rawValue: string): string {
@@ -388,6 +390,7 @@ export default class GenerateFromSpec extends Command {
     }
 
     if (valuesFiles) {
+      for (const file of [...archiveRetiredGethValues(valuesDir), ...archiveRetiredServiceFiles(valuesDir)]) jsonCtx.info(`Archived retired values: ${file}`)
       for (const [filename, content] of Object.entries(valuesFiles)) {
         fs.writeFileSync(path.join(valuesDir, filename), content)
         writtenFiles.push(`values/${filename}`)

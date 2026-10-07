@@ -44,6 +44,30 @@ describe('signer init partner-owned V2 policy', () => {
 
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
+  it('reuses the existing local key, release approvals, and reviewed policy without --force', async () => {
+    const out = path.join(root, 'existing-signer')
+    const args = ['signer', 'init', '--id', 'existing-signer', '--network', 'testnet',
+      '--endpoint', 'https://existing-signer.example:4040', '--out', out]
+    const first = await runCommand([...args,
+      '--allowed-release-version', '0.3.0-beta.5c',
+      '--allowed-git-commit', '0123456789abcdef0123456789abcdef01234567'])
+    expect(first.error).to.equal(undefined)
+    const envFile = path.join(out, 'attestation-signer.env')
+    const descriptorFile = path.join(out, 'descriptor.json')
+    const policyFile = path.join(out, 'attestation-signer.toml')
+    const originalEnv = fs.readFileSync(envFile, 'utf8')
+    const originalDescriptor = fs.readFileSync(descriptorFile, 'utf8')
+    const reviewed = '# Operator-approved policy must survive regeneration.\n'
+    fs.writeFileSync(policyFile, reviewed)
+
+    const second = await runCommand(args)
+    expect(second.error).to.equal(undefined)
+    expect(fs.readFileSync(envFile, 'utf8') === originalEnv).to.equal(true)
+    expect(fs.readFileSync(descriptorFile, 'utf8')).to.equal(originalDescriptor)
+    expect(fs.readFileSync(policyFile, 'utf8')).to.equal(reviewed)
+    expect(fs.statSync(envFile).mode % 0o1000).to.equal(0o600)
+  })
+
   it('creates the current policy template once and preserves operator edits under --force', async () => {
     const out = path.join(root, 'partner-a')
     const args = [

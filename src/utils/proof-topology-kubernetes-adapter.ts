@@ -14,6 +14,8 @@ import {
   PROVER_WORKER_EXECUTABLE,
   writeCompiledProverWorkerBundle,
 } from './compiled-prover-worker-bundle.js'
+import {buildProofCoordinatorIngress} from './proof-coordinator-ingress.js'
+import {readStagedSignerProofArtifactBaseUrl} from './proof-signer-policy-input.js'
 import {
   type CompileProofTopologyOptions,
   type ProofTopologyBridgeContext,
@@ -181,14 +183,15 @@ function workloadImageReference(values: Record<string, any>, label: string): str
 function proofMaterialRuntimeFile(
   deploymentDir: string,
   sourcePath: string,
+  resourcesRoot: string,
   resourcesMountPath: string,
   label: string,
 ): {hostPath: string; runtimePath: string} {
   const hostPath = deploymentFile(deploymentDir, sourcePath, label)
-  const materialsRoot = path.resolve(deploymentDir, '.data/proof-materials')
+  const materialsRoot = deploymentFile(deploymentDir, resourcesRoot, 'proof material root')
   const relative = path.relative(materialsRoot, hostPath)
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error(`${label} must remain inside .data/proof-materials`)
+    throw new Error(`${label} must remain inside ${resourcesRoot}`)
   }
 
   if (!fs.statSync(hostPath).isFile()) throw new Error(`${label} is not a regular file: ${hostPath}`)
@@ -267,11 +270,13 @@ function configureRuntimeProofMaterials(
     const rootVk = proofMaterialRuntimeFile(
       deploymentDir,
       realScroll.aggVerifyingKeyPath,
+      realScroll.resourcesRoot,
       resourcesMountPath,
       'aggregate verifying key',
     )
     commands.push(
       `install -d -m 0755 ${shellQuote(path.posix.dirname(rootVk.runtimePath))}`,
+      `rm -f ${shellQuote(rootVk.runtimePath)}`,
       `base64 -d ${shellQuote(`${RUNTIME_SEED_MOUNT}/root_verifier_vk.b64`)} > ${shellQuote(rootVk.runtimePath)}`,
       `chmod 0444 ${shellQuote(rootVk.runtimePath)}`,
     )
@@ -302,12 +307,14 @@ function configureRuntimeProofMaterials(
     const chunk = proofMaterialRuntimeFile(
       deploymentDir,
       realScroll.chunkMaterializerBinaryPath,
+      realScroll.resourcesRoot,
       resourcesMountPath,
       'Chunk materializer binary',
     )
     const batch = proofMaterialRuntimeFile(
       deploymentDir,
       realScroll.batchMaterializerBinaryPath,
+      realScroll.resourcesRoot,
       resourcesMountPath,
       'Batch materializer binary',
     )
@@ -653,6 +660,7 @@ function configureCoordinatorValues(
   resourceClaim: string | undefined,
   resourcesMountPath: string,
   l2GenesisJson: string,
+  coordinatorIngressHost?: string,
 ): void {
   const values = readYaml(filePath)
   // Native compiler output is authoritative. Leaving old Figment variables in
@@ -672,16 +680,24 @@ function configureCoordinatorValues(
   values.service.main ||= {}
   values.service.main.enabled = true
   values.service.main.ports ||= {}
+  // common chart defaults include an HTTP port without a number; only expose the native prover listener.
+  values.service.main.ports.http = {enabled: false}
   values.service.main.ports.prover = {
     enabled: true,
     port: 7788,
+    primary: true,
     protocol: 'TCP',
     targetPort: 7788,
   }
   values.ingress ||= {}
   values.ingress.main ||= {}
-  // Public exposure is operator-owned, not implied by active proof mode.
-  values.ingress.main.enabled ??= false
+  // An explicit root host opts into public ingress; active mode alone does not.
+  if (coordinatorIngressHost) {
+    values.ingress.main = buildProofCoordinatorIngress(coordinatorIngressHost, values.ingress.main)
+  } else {
+    values.ingress.main.enabled ??= false
+  }
+
   annotate(values, bundleRevision)
   configureMaterials(
     values,
@@ -706,7 +722,12 @@ function configureAbsentCoordinatorValues(
   bundleRevision: string,
   generation: ProofTopologySpec['generation'],
   l2GenesisJson: string,
+  observeRealProofDeadlineMs: number | undefined,
 ): void {
+  if (!Number.isSafeInteger(observeRealProofDeadlineMs) || observeRealProofDeadlineMs! <= 0) {
+    throw new Error('Idle proof coordinator requires an explicit positive observeRealProofDeadlineMs')
+  }
+
   const values = readYaml(filePath)
   // The deployment keeps PC warm across proof-mode changes. A disabled
   // compiler bundle intentionally has no PC projection, so install a minimal
@@ -735,6 +756,7 @@ function configureAbsentCoordinatorValues(
     '',
     '[verifier]',
     'enforcement = "observe"',
+    `observe_real_proof_deadline_ms = ${observeRealProofDeadlineMs}`,
     '',
   ].join('\n')
   values.proofCoordinator.config.existingConfigMap = ''
@@ -857,6 +879,11 @@ export function reconcileCompiledProofTopology(
 
   const proverPublicUrl = topology.deployment?.proverPublicUrl
     || derivedProverPublicUrl(options)
+  if (mode === 'active' && options.coordinatorIngressHost && proverPublicUrl
+    && new URL(proverPublicUrl).host !== options.coordinatorIngressHost) {
+    throw new Error('PROOF_COORDINATOR_HOST must match the host in proofTopology.deployment.proverPublicUrl')
+  }
+
   const effectiveTopology: ProofTopologySpec = {
     ...topology,
     deployment: {
@@ -921,6 +948,7 @@ export function reconcileCompiledProofTopology(
       bundle.manifest.bundle_revision,
       topology.generation,
       l2GenesisJson,
+      topology.observeRealProofDeadlineMs,
     )
   } else {
     if (!materialsDir || !coordinatorSource) {
@@ -938,6 +966,7 @@ export function reconcileCompiledProofTopology(
       selectedResourceClaim,
       resourcesMountPath,
       l2GenesisJson,
+      options.coordinatorIngressHost,
     )
   }
 
@@ -1025,7 +1054,10 @@ export function reconcileCompiledProofTopology(
       ...generatedMaterialFiles,
       ...(workerBundle?.files || []),
     ],
-    proofArtifactBaseUrl: argumentValue(bundle.worker, '--artifact-read-base-url'),
+    proofArtifactBaseUrl: mode === 'active'
+      ? readStagedSignerProofArtifactBaseUrl(fs.readFileSync(options.withdrawalConfigPath, 'utf8'))
+        ?? argumentValue(bundle.worker, '--artifact-read-base-url')
+      : undefined,
     worker: bundle.worker,
     workerBundle,
   }

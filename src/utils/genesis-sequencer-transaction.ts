@@ -4,7 +4,6 @@ import * as toml from '@iarna/toml'
 import {Transaction} from 'bitcoinjs-lib'
 import * as fs from 'node:fs'
 
-import {getTx} from './dogeos-utils.js'
 
 export interface GenesisSequencerTransaction {
   txHex: string
@@ -130,28 +129,10 @@ async function fetchRawTransactionFromRpc(
     }
   }
 
-  const blockbookUrl = typeof setupDefaults.dogecoin_blockbook_url === 'string'
-    ? setupDefaults.dogecoin_blockbook_url.trim()
-    : ''
-  if (blockbookUrl) {
-    try {
-      const transaction = await getTx(txid, blockbookUrl)
-      if (typeof transaction.hex === 'string' && transaction.hex.trim()) return transaction.hex
-      throw new Error('transaction response did not contain raw hex')
-    } catch (error) {
-      const rpcReason = rpcError instanceof Error ? rpcError.message : String(rpcError || 'RPC URL not configured')
-      const blockbookReason = error instanceof Error ? error.message : String(error)
-      throw new Error(
-        `could not obtain genesis sequencer transaction ${txid} from Dogecoin RPC (${rpcReason}) `
-        + `or Blockbook (${blockbookReason})`,
-      )
-    }
-  }
-
   const rpcReason = rpcError instanceof Error ? rpcError.message : String(rpcError || 'RPC URL not configured')
   throw new Error(
     `could not obtain genesis sequencer transaction ${txid} from Dogecoin RPC (${rpcReason}); `
-    + 'configure dogecoin_rpc_url or dogecoin_blockbook_url in .data/setup_defaults.toml',
+    + 'configure dogecoin_rpc_url in .data/setup_defaults.toml',
   )
 }
 
@@ -164,7 +145,7 @@ export interface EnsureGenesisSequencerTransactionOptions {
 /**
  * Ensure the bridge-init output contains the raw genesis transaction required
  * by Withdrawal Processor witness materialization. Existing bytes are always
- * revalidated; legacy deployments are backfilled from RPC/Blockbook once and
+ * revalidated; legacy deployments are backfilled from Dogecoin RPC once and
  * then remain self-contained for later prep-charts runs.
  */
 export async function ensureGenesisSequencerTransaction(

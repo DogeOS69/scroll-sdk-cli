@@ -45,7 +45,7 @@ Never send funds to or grant on-chain permissions to this address.
 
 The actual service identity remains exclusively in `.data/doge-config.toml`:
 `[signers.l1CommitSender]` and its `[accounts]` address projection. Configure
-it using `setup eth-da-submitter`, including the real KMS key and IAM role.
+it using `setup gen-keystore --service eth-da-submitter`, including the real KMS key and IAM role.
 Do not copy the placeholder into that file. KMS mode has no local private key.
 
 Run `setup gen-l2-artifacts --doge-config .data/doge-config.toml` with the
@@ -111,7 +111,7 @@ verify existing deterministic contract predictions with the new deploy image.
 
 Reproducible configuration sequence:
 
-1. Run `setup fee-oracle --signer-backend aws-kms` with the existing key and
+1. Run `setup gen-keystore --service fee-oracle --signer-backend aws-kms` with the existing key and
    a role trusting this deployment's EKS OIDC and fee-oracle ServiceAccount.
    When the key and cluster regions differ, supply a pre-provisioned matching
    `--role-arn`; `--aws-region` selects the key region in that path. Do not reuse

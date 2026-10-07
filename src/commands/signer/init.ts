@@ -94,7 +94,7 @@ export class SignerInitCommand extends Command {
     backend: Flags.string({ default: 'local', description: 'Key backend', options: ['local', 'aws-kms'] }),
     'create-key': Flags.boolean({ default: false, description: 'aws-kms backend: create the ECC_SECG_P256K1 signing key in your AWS account instead of passing --kms-key-id' }),
     endpoint: Flags.string({ description: 'HTTP(S) base URL reachable from the bridge operator/TSO network; use a TLS domain in production or a private IP in an isolated mock/VPN test (can be filled later via signer preflight)' }),
-    force: Flags.boolean({ default: false, description: 'Overwrite an existing env file in the output directory' }),
+    force: Flags.boolean({ default: false, description: 'Overwrite an existing env file; generates a NEW signing key for the local backend. Do not use to preserve a local identity. Partner-owned TOML is always retained.' }),
     id: Flags.string({ description: 'Stable signer identifier (DNS-label shaped, agreed with the bridge operator)', required: true }),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
     'kms-key-id': Flags.string({ description: 'aws-kms backend: key id, ARN, or alias/... of your existing ECC_SECG_P256K1 signing key' }),

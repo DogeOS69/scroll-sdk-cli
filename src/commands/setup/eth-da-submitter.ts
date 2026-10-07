@@ -1,119 +1,55 @@
-import { Command, Flags } from '@oclif/core'
+import {Command, Flags} from '@oclif/core'
+import fs from 'node:fs'
 
-import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
-import { JsonOutputContext } from '../../utils/json-output.js'
-import { setupManagedSigner } from '../../utils/managed-signer-setup.js'
-import { createNonInteractiveContext } from '../../utils/non-interactive.js'
+import {dogeConfigToToml, loadDogeConfigWithSelection} from '../../utils/doge-config.js'
+import {CliExitError, JsonOutputContext} from '../../utils/json-output.js'
+import {KmsSignerProvisioner} from '../../utils/kms-signer-provisioner.js'
+import {resolveBlobArchive} from '../../utils/managed-signer-setup.js'
 
 export default class SetupEthDaSubmitter extends Command {
-  static override description = 'Configure the eth-da-submitter L1_COMMIT_SENDER signer'
-
+  static override description = 'Configure the eth-da-submitter S3 archive and optional writer IAM permissions'
   static override examples = [
-    '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --signer-backend aws-kms --aws-region us-west-2 --eks-cluster dogeos-testnet --network-alias testnet',
-    '<%= config.bin %> <%= command.id %> --non-interactive --json --signer-backend local',
+    '<%= config.bin %> <%= command.id %> --archive-bucket dogeos-da --archive-region us-east-1 --archive-key-prefix devnet -N',
+    '<%= config.bin %> <%= command.id %> --no-create-archive-bucket --role-arn arn:aws:iam::123456789012:role/archive-writer -N',
+    '<%= config.bin %> <%= command.id %> --disable-archive -N',
   ]
 
   static override flags = {
-    'archive-bucket': Flags.string({
-      description: 'S3 bucket whose read/write permissions should be granted to the eth-da-submitter KMS IAM role.',
-    }),
-    'archive-key-prefix': Flags.string({
-      description: 'Object key prefix under the archive bucket.',
-    }),
-    'archive-public-base-url': Flags.string({
-      description: 'Public HTTPS base URL used by blob consumers to read archived Ethereum DA blobs.',
-    }),
-    'archive-region': Flags.string({
-      description: 'Region that owns the archive bucket (defaults to --aws-region).',
-    }),
-    'aws-profile': Flags.string({
-      description: 'AWS CLI profile to use for KMS signer provisioning.',
-    }),
-    'aws-region': Flags.string({
-      description: 'AWS region for the EKS cluster and KMS key.',
-    }),
-    'create-archive-bucket': Flags.boolean({
-      allowNo: true,
-      default: true,
-      description: 'Create the archive bucket if --archive-bucket is set and the bucket does not exist.',
-    }),
-    'disable-archive': Flags.boolean({
-      default: false,
-      description: 'Skip S3 blob archive setup for the eth-da-submitter KMS signer.',
-    }),
-    'doge-config': Flags.string({
-      description: 'Path to Dogecoin config file (defaults to .data/doge-config.toml)',
-    }),
-    'eks-cluster': Flags.string({
-      description: 'EKS cluster name or ARN used for IRSA trust binding.',
-    }),
-    json: Flags.boolean({
-      default: false,
-      description: 'Output in JSON format (stdout for data, stderr for logs)',
-    }),
-    'kms-key-id': Flags.string({
-      description: 'Existing KMS key id, ARN, or alias for L1_COMMIT_SENDER / eth-da-submitter.',
-    }),
-    namespace: Flags.string({
-      default: 'default',
-      description: 'Kubernetes namespace for the KMS signer service account.',
-    }),
-    'network-alias': Flags.string({
-      description: 'Resource alias used to derive deterministic KMS aliases and IAM role names.',
-    }),
-    'non-interactive': Flags.boolean({
-      char: 'N',
-      default: false,
-      description: 'Run without prompts. Uses existing config or provided flags.',
-    }),
-    'role-arn': Flags.string({
-      description: 'Existing IAM role ARN to annotate on the eth-da-submitter service account.',
-    }),
-    'service-account': Flags.string({
-      default: 'eth-da-submitter',
-      description: 'Kubernetes service account used by eth-da-submitter.',
-    }),
-    'signer-backend': Flags.string({
-      description: 'Signer backend for L1_COMMIT_SENDER / eth-da-submitter.',
-      options: ['local', 'aws-kms'],
-    }),
+    'archive-bucket': Flags.string({description: 'S3 blob archive bucket.'}),
+    'archive-key-prefix': Flags.string({description: 'S3 object key prefix.'}),
+    'archive-public-base-url': Flags.string({description: 'Public HTTPS base URL used by blob consumers.'}),
+    'archive-region': Flags.string({description: 'Region owning the archive bucket.'}),
+    'aws-profile': Flags.string({description: 'AWS profile for archive resource operations.'}),
+    'aws-region': Flags.string({description: 'Fallback archive region; existing archive region takes precedence.'}),
+    'create-archive-bucket': Flags.boolean({allowNo: true, description: 'Create/reuse the bucket. Defaults to enabled for a configured AWS KMS submitter, disabled for a local signer.'}),
+    'disable-archive': Flags.boolean({default: false, description: 'Disable archive configuration without deleting buckets or IAM policies.'}),
+    'doge-config': Flags.string({description: 'Dogecoin configuration file.'}),
+    json: Flags.boolean({default: false}),
+    'non-interactive': Flags.boolean({char: 'N', default: false}),
+    'role-arn': Flags.string({description: 'Existing archive writer IAM role. Defaults to the submitter signer service-account role.'}),
   }
 
-  public async run(): Promise<void> {
-    const { flags } = await this.parse(SetupEthDaSubmitter) as any
-    const nonInteractive = flags['non-interactive']
-    const jsonMode = flags.json
-    createNonInteractiveContext('setup eth-da-submitter', nonInteractive, jsonMode)
-    const jsonCtx = new JsonOutputContext('setup eth-da-submitter', jsonMode)
+  async run(): Promise<void> {
+    const {flags} = await this.parse(SetupEthDaSubmitter)
+    const output = new JsonOutputContext('setup eth-da-submitter', flags.json)
+    try {
+      const {config, configPath} = await loadDogeConfigWithSelection(flags['doge-config'])
+      const signer = config.signers?.l1CommitSender
+      const archive = await resolveBlobArchive({dogeConfig: config, dogeConfigPath: configPath, flags, hasFlag: name => this.argv.some(arg => arg === `--${name}` || arg.startsWith(`--${name}=`)), jsonCtx: output, jsonMode: flags.json, nonInteractive: flags['non-interactive'], signerKey: 'l1CommitSender'}, flags['aws-region'] || signer?.kmsRegion)
+      const roleArn = flags['role-arn'] || signer?.serviceAccountRoleArn
+      const createBucket = flags['create-archive-bucket'] ?? signer?.backend === 'aws_kms'
+      if (archive.enabled) {
+        await new KmsSignerProvisioner(output, flags['aws-profile']).provisionArchive(archive, {createBucket, roleArn})
+        if (!roleArn) output.addWarning('No archive writer IAM role selected; writer access must be provided separately.')
+      }
 
-    const { config: dogeConfig, configPath } = await loadDogeConfigWithSelection(
-      flags['doge-config'],
-      'scrollsdk setup doge-config'
-    )
-    jsonCtx.info(`Using Dogecoin config file: ${configPath}`)
-
-    const result = await setupManagedSigner({
-      dogeConfig,
-      dogeConfigPath: configPath,
-      flags,
-      hasFlag: (name: string) => this.hasFlag(name),
-      jsonCtx,
-      jsonMode,
-      nonInteractive,
-      signerKey: 'l1CommitSender',
-    })
-
-    if (jsonMode) {
-      jsonCtx.success({
-        address: result.address,
-        dogeConfigPath: configPath,
-        signer: result.signerConfig,
-      })
+      fs.writeFileSync(configPath, dogeConfigToToml(config), {mode: 0o600})
+      fs.chmodSync(configPath, 0o600)
+      output.logSuccess('Archive configuration saved. Signing identities are managed by setup gen-keystore --service eth-da-submitter.')
+      output.success({archive, dogeConfigPath: configPath, writerRoleArn: roleArn})
+    } catch (error) {
+      if (error instanceof CliExitError) throw error
+      output.error('E621_ARCHIVE_CONFIGURATION_FAILED', error instanceof Error ? error.message : 'Archive configuration failed', 'CONFIGURATION', true)
     }
-  }
-
-  private hasFlag(name: string): boolean {
-    return this.argv.some(arg => arg === `--${name}` || arg.startsWith(`--${name}=`))
   }
 }

@@ -9,7 +9,7 @@ import type { DogeConfig } from '../../types/doge-config.js'
 
 import { dogeConfigToToml, loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
-import { createNonInteractiveContext, resolveEnvValue } from '../../utils/non-interactive.js'
+import { resolveEnvValue } from '../../utils/non-interactive.js'
 import { normalizeRethNodekey } from './l2-sequencer-reth.js'
 
 export type RethBootnodeSecretMode = 'external-secret' | 'plain'
@@ -157,7 +157,6 @@ function removeExternalSecret(yamlData: any, secretName: string): void {
 
 export default class SetupL2BootnodeReth extends Command {
   static override description = 'Configure rollup-node reth bootnode P2P nodekeys'
-
   static override examples = [
     '<%= config.bin %> <%= command.id %> --count 2',
     '<%= config.bin %> <%= command.id %> --count 2 --secret-mode external-secret --non-interactive',
@@ -179,13 +178,10 @@ export default class SetupL2BootnodeReth extends Command {
     }),
   }
 
-  public async run(): Promise<void> {
-    const { flags } = await this.parse(SetupL2BootnodeReth) as any
-    const nonInteractive = flags['non-interactive']
-    const jsonMode = flags.json
-    createNonInteractiveContext('setup l2-bootnode-reth', nonInteractive, jsonMode)
-    const jsonCtx = new JsonOutputContext('setup l2-bootnode-reth', jsonMode)
+  static override hidden = true
 
+  public async prepareIdentity(flags: any, jsonCtx: JsonOutputContext): Promise<Record<string, unknown>> {
+    const nonInteractive = flags['non-interactive']
     const { config: dogeConfig, configPath } = await loadDogeConfigWithSelection(
       flags['doge-config'],
       'scrollsdk setup doge-config'
@@ -194,7 +190,7 @@ export default class SetupL2BootnodeReth extends Command {
     const nodekeyFlags = Array.isArray(flags.nodekey) ? flags.nodekey : flags.nodekey ? [flags.nodekey] : []
     const resolvedInstances: ResolvedBootnodeRethConfig[] = []
 
-    for (let index = 0; index < count; index++) {
+    for (const index of flags.indices || Array.from({length: count}, (_, i) => i)) {
       const existing = this.getExistingInstance(dogeConfig, index)
       const nodekey = await this.resolveNodekey(index, resolveEnvValue(nodekeyFlags[index]), existing, nonInteractive)
       const secretMode = await this.resolveSecretMode(flags['secret-mode'], existing, index, nonInteractive)
@@ -209,12 +205,12 @@ export default class SetupL2BootnodeReth extends Command {
     }
 
     this.updateDogeConfig(dogeConfig, resolvedInstances)
-    fs.writeFileSync(configPath, dogeConfigToToml(dogeConfig), 'utf8')
+    fs.writeFileSync(configPath, dogeConfigToToml(dogeConfig), {mode: 0o600})
+    fs.chmodSync(configPath, 0o600)
     jsonCtx.logSuccess(`Updated ${path.relative(process.cwd(), configPath) || configPath}`)
     jsonCtx.info(`Run scrollsdk setup prep-charts to write ${count} l2-bootnode-reth values file(s) from doge-config.toml.`)
 
-    if (jsonMode) {
-      jsonCtx.success({
+    return {
         count,
         dogeConfigPath: configPath,
         instances: resolvedInstances.map(instance => ({
@@ -222,8 +218,15 @@ export default class SetupL2BootnodeReth extends Command {
           index: instance.index,
           secretMode: instance.secretMode,
         })),
-      })
     }
+  }
+
+  public async run(): Promise<void> {
+    const { flags } = await this.parse(SetupL2BootnodeReth) as any
+    const jsonCtx = new JsonOutputContext('setup l2-bootnode-reth', flags.json)
+    jsonCtx.addWarning('Use setup gen-keystore --service bootnode-reth instead.')
+    const result = await this.prepareIdentity(flags, jsonCtx)
+    if (flags.json) jsonCtx.success(result)
   }
 
   private getExistingInstance(dogeConfig: DogeConfig, index: number): BootnodeRethInstanceConfig | undefined {
@@ -268,12 +271,12 @@ export default class SetupL2BootnodeReth extends Command {
   ): Promise<string> {
     if (flagValue) return normalizeRethNodekey(flagValue)
     const existingNodekey = existing?.nodekey?.privateKey
-    if (existingNodekey && nonInteractive) return normalizeRethNodekey(existingNodekey)
+    if (existingNodekey && nonInteractive) return normalizeRethNodekey(resolveEnvValue(existingNodekey)!)
     if (nonInteractive) return normalizeRethNodekey(Wallet.createRandom().privateKey)
 
     if (existingNodekey) {
       return normalizeRethNodekey(await textInput({
-        default: normalizeRethNodekey(existingNodekey),
+        default: normalizeRethNodekey(resolveEnvValue(existingNodekey)!),
         message: `Reth bootnode ${index} P2P nodekey:`,
         required: true,
       }))

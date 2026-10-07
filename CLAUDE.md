@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Public repository and secrets
+
+Read and follow [AGENTS.md](AGENTS.md) before making changes. This repository is
+public: never commit or publish private keys, API keys, tokens, passwords, or
+other credentials, including in generated configs, examples, fixtures, logs,
+documentation, or package artifacts. Use placeholders or external secret
+references and review the staged changes before committing or pushing.
+
 ## Project Overview
 
 Scroll SDK CLI (`scrollsdk`) is a tool for configuring, managing, and testing DogeOS/Scroll SDK deployments. It's built with the [oclif](https://oclif.io) CLI framework in TypeScript and manages Kubernetes-based blockchain infrastructure including L1 (Dogecoin), L2 (EVM rollup), Celestia DA, and bridge services.
