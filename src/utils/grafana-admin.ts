@@ -10,7 +10,8 @@ import type {DogeConfig} from '../types/doge-config.js'
 import {checkPrivatePath, writePrivateFile} from './dstack-credentials.js'
 
 type GrafanaConfig = NonNullable<DogeConfig['grafana']>
-const defaultPrompts = {confirm, input, password}
+type GrafanaPrompts = {confirm: typeof confirm; input: typeof input; password: typeof password}
+const defaultPrompts: GrafanaPrompts = {confirm, input, password}
 
 export function grafanaAdminReference(config: GrafanaConfig) {
   const reference = {
@@ -36,7 +37,7 @@ export function grafanaAdminReference(config: GrafanaConfig) {
 export async function configureGrafanaAdmin(
   existing: GrafanaConfig = {},
   nonInteractive: boolean,
-  prompts = defaultPrompts,
+  prompts: GrafanaPrompts = defaultPrompts,
 ): Promise<GrafanaConfig> {
   const config = {...existing}
   grafanaAdminReference(config)

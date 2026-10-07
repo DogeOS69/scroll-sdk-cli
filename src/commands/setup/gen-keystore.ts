@@ -158,7 +158,12 @@ export function validateKeystoreIdentities(config: any, tasks: IdentityTask[], f
 
 // Collect all interactive choices before validation, file writes, or AWS calls.
 // Execution then uses the same deterministic adapters as automation.
-export const keystorePrompts = {checkbox, input, password, select}
+export const keystorePrompts: {
+  checkbox: typeof checkbox
+  input: typeof input
+  password: typeof password
+  select: typeof select
+} = {checkbox, input, password, select}
 interface PlannedIdentity {flags: any; task: IdentityTask}
 
 async function promptKey(label: string, required: boolean): Promise<string | undefined> {
