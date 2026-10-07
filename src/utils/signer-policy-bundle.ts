@@ -82,13 +82,18 @@ export function renderSignerOperatorPolicyTemplate(): string {
 # rpc_url = "https://ethereum-b.example"
 # timeout_ms = 10000
 
-# Deliberate 1-of-1 L2 source; prefer quorum when independent sources exist.
+# Enforce requires quorum with at least two independent trust domains for
+# every source set. explicit_single_source is only allowed in observe mode.
 # [advance_l2_policy.l2_sources]
-# posture = "explicit_single_source"
-# required_agreement = 1
+# posture = "quorum"
+# required_agreement = 2
 # [[advance_l2_policy.l2_sources.sources]]
-# trust_domain_id = "partner-l2-source"
-# rpc_url = "https://l2-rpc.partner.example"
+# trust_domain_id = "l2-operator-a"
+# rpc_url = "https://l2-a.example"
+# timeout_ms = 10000
+# [[advance_l2_policy.l2_sources.sources]]
+# trust_domain_id = "l2-operator-b"
+# rpc_url = "https://l2-b.example"
 # timeout_ms = 10000
 `
 }

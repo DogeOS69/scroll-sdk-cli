@@ -1,38 +1,50 @@
 # Proof configuration generations
 
-The source-free path uses a **complete** `dogeos-proof-release-v1.json` and its
-SHA-256. The manifest binds six immutable images, one core revision, the five
-generic Scroll files, Rust/OpenVM/Scroll provenance and the exact publication
-mapping. The historical two-image inventory is not a substitute.
+The source-free path uses dogeos-core's `dogeos-proof-release-v1.json` and its
+SHA-256. dogeos-core `proof-release.yml` (PR #1335) publishes it as the
+`proof-release-<tag>` pre-release. The manifest is only a schema, one core
+revision and five images from that revision, pinned by digest and keyed by
+image name:
 
-PR #1177 remains unmerged. Consult [the build inventory](proof-tool-images-pr1177.json)
-for verified build status. Passing unit tests or publishing candidate images is
-not production policy approval or a real-proof end-to-end result.
+| Key | Used for |
+|---|---|
+| `proof-preparation-producer` | Offline bake of the deployment's Bridge and aggregation guests |
+| `prover-worker-cuda` | Production Worker; its commitment labels must equal the bake's |
+| `proof-coordinator` | Pinned in PC values; source of both materializers |
+| `dogeos-proof-topology` | Topology compiler |
+| `proof-bundle-publisher` | The 11-file S3 program publisher |
 
-The PR #1177 candidate is available as
-[`dogeos-proof-release-pr1177.json`](dogeos-proof-release-pr1177.json), SHA-256
-`51645abda8736504dfb82ae16578297b66ec4b7fa26a718885c95c21aff2a2ef`.
-All six images were built at core revision
-`6700d4baca0830bb5ac26bfee5a17c53aa725c42`; finalization at the later tooling/evidence
-commit validates those unchanged image digests. The GPU identity receipt is a
-native startup/identity check, not a real-proof end-to-end result.
+There is no mock Worker image: Proof Coordinator produces mock proofs in
+process. Both generations bake the deployment:
 
-The anticipated input release arrived on 2026-09-24 as
-[`proving-openvm17-0badaf7a-d4e65b65`](https://github.com/DogeOS69/dogeos-core/releases/tag/proving-openvm17-0badaf7a-d4e65b65).
-Its manifest SHA-256 is
-`1ad8be98f1f818a211c70adb799d71c65497101a7b5a308093c05f02925b4ec2`.
-All seven downloads passed size/hash checks. Its five circuit files are identical
-to the candidate's existing lock, and the current CLI producer independently
-derived all seven matching manifest identities. See the
-[verification record](proof-proving-inputs-20260924.json).
-The two updated materializers belong to core `d4e65b65`; they must not replace
-the binaries in the coherent six-image candidate. The existing release manifest
-and its hash remain immutable. The new input release is not itself a complete
-six-image proof software release or evidence of a successful GPU proof.
+- `generation = real` imports the bake as complete real materials, checks the
+  CUDA image labels and freezes the S3 program publication plan.
+- `generation = mock` keeps proving mock but materializes for real
+  (`withdrawal_mock_prover_real_materialize`): it imports `real-identity.env`
+  and compiles with the bake's `worker-identity-bundle.json` minus
+  `bridge_guest`, which is the release Worker's own `--print-identity-json`.
+  A plain synthetic mock is not a release configuration; use
+  `setup proof-materials --mock-worker-image` for it.
 
-The user selected **isolated E2E only** on 2026-09-24. Do not publish to or update
-the existing devnet/testnet deployments as part of this validation. Production
-environment/policy selection remains a separate step.
+Earlier manifests (for example `dogeos-proof-release-pr1177.json`, with
+`genericBundle`, `publisher` and `cuda` sections) are historical and are
+rejected by the current validator.
+
+**Isolated E2E, 2026-10-03.** Core `7d87706931c1517979a10724396b694283e3385a`
+(PR #1335): coordinator, compiler and publisher built by `docker-build.yml`;
+CUDA (`cuda_arch=86`) by `prover-worker-cuda-image.yml`, whose smoke job
+checked the commitment labels; the producer built locally from
+`Dockerfile.proof-producer`. Its build-time identities equal those in the PR:
+batch `0x00947c84…90233cb3`, aggregation `0x0033fb4d…1817f230`, bridge VK
+`0x6475dc70…c00486f6`. On a copy of the devnet deployment, `proof-config
+prepare` with `generation = real` baked the devnet protocol context offline,
+passed the CUDA label check, copied materializers byte-identical to the
+coordinator image's, compiled an installable topology and froze an 11-file
+plan in 7 min 10 s. `publish` without `--apply` revalidated the plan.
+`generation = mock` selected `withdrawal_mock_prover_real_materialize`, rendered
+no Worker contract, compiled with a `bridge_guest`-free bundle carrying the
+release commitments, and passed `proof-config-check` (7 min 57 s). Nothing was
+written to S3 or Kubernetes, and no GPU proof was run.
 
 ## Existing deployment inputs
 
@@ -83,12 +95,17 @@ scrollsdk setup proof-config prepare \
   --output proof-generations/candidate-001 --json
 ```
 
-Preparation pulls the digest-pinned images and runs the CPU producer without
-network, credentials, GPU access or a writable root filesystem. Host compilation
-was performed in CI; the bundled guest builder bakes the instance-bound programs
-inside the isolated container. Preparation then checks the Worker image, imports
-materials, compiles topology and values, generates the external signer handoff
-when external signers are configured, and freezes the S3 publication plan.
+Preparation pulls the digest-pinned images and, for real generation, runs the
+`proof-preparation-producer` on the deployment's protocol context with
+`--network none` (see [image tools](proof-image-tools.md)). The image carries the
+pinned Scroll programs, a Worker compiled against the derived commitments and an
+offline Cargo closure, so it bakes the instance-bound Bridge and aggregation
+guests with no source checkout. Preparation then checks the CUDA Worker image
+labels against the bake's commitments, copies the two materializers out of a
+stopped `proof-coordinator` container, imports materials, compiles topology and
+values, generates the external signer handoff when external signers are
+configured, and freezes the S3 publication plan, whose publisher is
+`images["proof-bundle-publisher"]`.
 
 All files are staged in a sibling temporary directory. A per-output lock rejects
 concurrent preparation for the same destination. Native failures and input drift

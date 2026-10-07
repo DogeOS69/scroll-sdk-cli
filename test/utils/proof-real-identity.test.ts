@@ -104,19 +104,15 @@ function fixture(root: string) {
       identityEnv: write('identity.env', Object.entries(env).map(([key, value]) => `export ${key}=${value}`).join('\n')),
       images: {mockWorker: image('mock'), productionWorker: image('real'), topologyCompiler: image('compiler')},
       mockWorkerIdentity: write('mock-worker.json', JSON.stringify(mockBundle)),
-      producerManifest: write('producer.json', JSON.stringify({
-        artifacts: {
-          batch_openvm_toml: artifact('software/batch.toml'),
-          batch_vmexe: artifact('software/batch.vmexe'),
-          chunk_openvm_toml: artifact('software/chunk.toml'),
-          chunk_vmexe: artifact('software/chunk.vmexe'),
-          root_agg_verifying_key: artifact('software/root-vk'),
-        },
-        dogeos_core_commit: 'core-revision',
-        producer: {commit: 'producer-revision'},
-        toolchain: {openvm_tag: 'v1.7', rust: 'nightly-test'},
-      })),
       protocolContext: write('protocol_context.json', '{}'),
+      scrollArtifacts: {
+        aggregateVerifyingKey: artifact('software/root-vk').path,
+        batchAppConfig: artifact('software/batch.toml').path,
+        batchAppExe: artifact('software/batch.vmexe').path,
+        chunkAppConfig: artifact('software/chunk.toml').path,
+        chunkAppExe: artifact('software/chunk.vmexe').path,
+        coreRevision: 'c'.repeat(40),
+      },
     },
   }
 }

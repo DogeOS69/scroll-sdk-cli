@@ -35,7 +35,8 @@ export function prepareRealProofRelease(options: PrepareRealOptions): {outputDir
   const stage = fs.mkdtempSync(path.join(path.dirname(target), '.proof-prepare-real-'))
   const candidate = path.join(stage, 'output/artifacts')
   const run = options.run ?? docker
-  const image = selected.manifest.images.producer.reference
+  const {revision} = selected.manifest
+  const image = selected.manifest.images['proof-preparation-producer']
   const cid = path.join(stage, 'container.id')
   try {
     if (/[\n\r,]/.test(stage)) throw new Error('Unsupported container mount path')
@@ -43,51 +44,27 @@ export function prepareRealProofRelease(options: PrepareRealOptions): {outputDir
     fs.mkdirSync(path.join(stage, 'output'))
     fs.copyFileSync(context, path.join(stage, 'input/protocol_context.json'))
     run(['pull', image])
-    const revision = run(['image', 'inspect', image, '--format', '{{ index .Config.Labels "org.opencontainers.image.revision" }}']).trim()
-    if (revision !== selected.manifest.source.revision) throw new Error('Producer OCI revision differs from release')
-    const contract = run(['image', 'inspect', image, '--format', '{{ index .Config.Labels "dogeos.proof-release-producer.contract" }}']).trim()
-    if (contract !== 'prepare-real-v1') throw new Error('Producer image does not implement prepare-real-v1')
+    const imageRevision = run(['image', 'inspect', image, '--format', '{{ index .Config.Labels "org.opencontainers.image.revision" }}']).trim()
+    if (imageRevision !== revision) throw new Error('Producer OCI revision differs from release')
+    // The producer's own invocation: offline, writing a new directory it chowns to the mount's owner.
     run([
-      'run', '--rm', '--cidfile', cid, '--network', 'none', '--read-only', '--cap-drop', 'ALL',
-      '--security-opt', 'no-new-privileges', '--user', `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
-      '--tmpfs', '/tmp:rw,nosuid,nodev,size=8g', '--tmpfs', '/app/target:rw,exec,nosuid,nodev,size=16g',
-      '--mount', `type=bind,src=${path.join(stage, 'input')},dst=/input,readonly`,
-      '--mount', `type=bind,src=${path.join(stage, 'output')},dst=/output`,
-      '--entrypoint', '/usr/local/libexec/dogeos-proof-release-producer', image,
-      'prepare-real', '--protocol-context', '/input/protocol_context.json', '--output', '/output/artifacts',
+      'run', '--rm', '--cidfile', cid, '--network', 'none',
+      '--mount', `type=bind,src=${path.join(stage, 'input/protocol_context.json')},dst=/in/protocol_context.json,readonly`,
+      '--mount', `type=bind,src=${path.join(stage, 'output')},dst=/out`,
+      image, '/in/protocol_context.json', '/out/artifacts',
     ])
-    const receipt = JSON.parse(fs.readFileSync(proofRegularFile(path.join(candidate, 'producer-receipt.json'), 4 * 1024 * 1024), 'utf8')) as {
-      coreRevision: string; files: Record<string, {sha256: string; sizeBytes: number}>; protocolContextSha256: string; schema: string
-    }
-    if (receipt.schema !== 'dogeos/proof-preparation/v1' || receipt.coreRevision !== selected.manifest.source.revision || receipt.protocolContextSha256 !== contextHash) throw new Error('Producer receipt release/protocol binding mismatch')
-    const seen = new Set<string>()
     const walk = (dir: string): void => {
       for (const entry of fs.readdirSync(dir, {withFileTypes: true})) {
         const file = path.join(dir, entry.name)
         if (entry.isSymbolicLink()) throw new Error('Producer output contains a symlink')
         if (entry.isDirectory()) walk(file)
-        else {
-          const name = path.relative(candidate, file).split(path.sep).join('/')
-          if (name === 'producer-receipt.json') continue
-          proofRegularFile(file)
-          const expected = receipt.files[name]
-          if (!expected || proofFileHash(file) !== expected.sha256 || fs.statSync(file).size !== expected.sizeBytes) throw new Error(`Producer output hash/size mismatch: ${name}`)
-          seen.add(name)
-        }
+        else proofRegularFile(file)
       }
     }
 
     walk(candidate)
-    if (Object.keys(receipt.files).some(name => !seen.has(name))) throw new Error('Producer receipt names missing or unsafe files')
     if (proofFileHash(path.join(candidate, 'protocol_context.json')) !== contextHash) throw new Error('Baked protocol context differs from selected input')
-    for (const [file, expected] of Object.entries(selected.manifest.genericBundle.files)) {
-      const actual = receipt.files[file]
-      if (!actual || actual.sha256 !== expected.sha256 || actual.sizeBytes !== expected.sizeBytes) throw new Error(`Generic release file mismatch: ${file}`)
-    }
-
-    const worker = JSON.parse(fs.readFileSync(path.join(candidate, 'bridge/worker-identity-bundle.json'), 'utf8')) as {image_revision: string}
-    if (worker.image_revision !== selected.manifest.source.revision) throw new Error('Baked Worker identity revision mismatch')
-    const preparation = captureProofReleasePreparation({artifactRoot: candidate, expectedCoreRevision: selected.manifest.source.revision, output: path.join(candidate, 'proof-release-preparation-v1.json')})
+    const preparation = captureProofReleasePreparation({artifactRoot: candidate, expectedCoreRevision: revision, output: path.join(candidate, 'proof-release-preparation-v1.json')})
     const rebase = (value: unknown): unknown => {
       if (typeof value === 'string' && value.startsWith(candidate + path.sep)) return target + value.slice(candidate.length)
       if (Array.isArray(value)) return value.map(item => rebase(item))

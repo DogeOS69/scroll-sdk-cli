@@ -106,9 +106,7 @@ describe('real-proof program bundle publication', () => {
           l2Range: identity('3', '5'),
         },
         identitySource: 'real_identity_probe',
-        openvmVersion: 'v1.7.0',
-        rustToolchain: 'nightly-2026-03-17',
-        sourceRevisions: {dogeosCore: coreRevision, scrollZkvmProver: 'producer'},
+        sourceRevisions: {dogeosCore: coreRevision},
       },
     }, null, 2)}\n`)
 
@@ -231,13 +229,8 @@ describe('real-proof program bundle publication', () => {
   it('publishes from the pinned image with only temporary AWS credentials and no core checkout', async () => {
     const release = releaseFixture(coreRevision)
     const materials = JSON.parse(fs.readFileSync(path.join(root, '.data/proof-materials-v1.json'), 'utf8'))
-    for (const name of ['mockWorker', 'productionWorker', 'topologyCompiler'] as const) {
-      release.images[name].reference = `${materials.images[name].repository}@${materials.images[name].digest}`
-    }
-
-    const names: Record<string, string> = {'batch/app.vmexe': 'batchAppExe', 'batch/openvm.toml': 'batchAppConfig', 'chunk/app.vmexe': 'chunkAppExe', 'chunk/openvm.toml': 'chunkAppConfig', 'verifier/aggregate-vk': 'aggregateVerifyingKey'}
-    for (const [file, key] of Object.entries(names)) {
-      Object.assign(release.genericBundle.files[file], {sha256: materials.software.artifacts[key].sha256, sizeBytes: materials.software.artifacts[key].sizeBytes})
+    for (const [key, name] of [['productionWorker', 'prover-worker-cuda'], ['topologyCompiler', 'dogeos-proof-topology']] as const) {
+      release.images[name] = `${materials.images[key].repository}@${materials.images[key].digest}`
     }
 
     const body = JSON.stringify(release)
@@ -263,7 +256,7 @@ describe('real-proof program bundle publication', () => {
     expect(invocation!.args).to.include('--read-only')
     expect(invocation!.args.join(' ')).not.to.include('temporary-secret')
     expect(invocation!.env?.AWS_SESSION_TOKEN).to.equal('temporary-session')
-    expect(result.receipt.publisherImage).to.equal(release.images.publisher.reference)
+    expect(result.receipt.publisherImage).to.equal(release.images['proof-bundle-publisher'])
     expect(result.receipt.releaseSha256).to.equal(digest(body))
     expect(JSON.stringify(result.receipt)).not.to.include('temporary-secret')
   })

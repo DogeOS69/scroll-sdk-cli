@@ -5,7 +5,19 @@ import path from 'node:path'
 import {parseImmutableProofImage} from './proof-materials.js'
 
 export const PROOF_RELEASE_SCHEMA = 'dogeos/proof-release/v1'
-export const PROOF_RELEASE_IMAGE_NAMES = ['producer', 'publisher', 'topologyCompiler', 'mockWorker', 'coordinator', 'productionWorker'] as const
+/**
+ * dogeos-core proof-release.yml pins these five images by digest, keyed by image name. Mock proofs
+ * are produced inside proof-coordinator; mock generation takes its compiler identity from the bake.
+ */
+export const PROOF_RELEASE_IMAGE_NAMES = [
+  'proof-preparation-producer',
+  'prover-worker-cuda',
+  'proof-coordinator',
+  'dogeos-proof-topology',
+  'proof-bundle-publisher',
+] as const
+export type ProofReleaseImageName = typeof PROOF_RELEASE_IMAGE_NAMES[number]
+/** The publisher's fixed 11-file mapping (`dogeos.proof-bundle.mapping=v1-11-files`). */
 export const PROOF_PUBLICATION_FILES = [
   ['DOGEOS_CHUNK_VMEXE', 'chunk/app.vmexe'],
   ['DOGEOS_CHUNK_CONFIG', 'chunk/openvm.toml'],
@@ -19,26 +31,12 @@ export const PROOF_PUBLICATION_FILES = [
   ['DOGEOS_TAG5_MANIFEST', 'bridge/l2-range-aggregation-topology-program.json'],
   ['DOGEOS_PROTOCOL_CONTEXT', 'protocol_context.json'],
 ] as const
-const GENERIC_FILES = ['chunk/app.vmexe', 'chunk/openvm.toml', 'batch/app.vmexe', 'batch/openvm.toml', 'verifier/aggregate-vk']
 
 export interface ProofSoftwareRelease {
-  createdAt: string
-  cuda: {architectures: string[]}
-  genericBundle: {
-    files: Record<string, {asset: string; sha256: string; sizeBytes: number; url: string}>
-    openvmVersion: string
-    rustToolchain: string
-    schema: 'dogeos/scroll-program-bundle/v1'
-    sourceRepository: string
-    sourceRevision: string
-    upstreamManifest: {sha256: string; url: string}
-  }
-  images: Record<typeof PROOF_RELEASE_IMAGE_NAMES[number], {coreRevision: string; reference: string}>
-  producer: {contract: 'prepare-real-v1'}
-  publisher: {contract: 'v1-11-files'; files: Array<{prefix: string; relativePath: string}>}
+  /** repository@sha256 references; each image's revision label equals `revision`. */
+  images: Record<ProofReleaseImageName, string>
+  revision: string
   schema: typeof PROOF_RELEASE_SCHEMA
-  source: {repository: string; revision: string}
-  toolchain: {openvm: string; rust: string; scrollRevision: string}
 }
 
 export function proofFileHash(file: string): string {
@@ -73,71 +71,14 @@ function text(value: unknown, label: string, pattern?: RegExp): string {
   return value
 }
 
-function https(value: unknown, label: string): string {
-  const result = text(value, label)
-  const url = new URL(result)
-  if (url.protocol !== 'https:' || url.username || url.password || url.hash || url.search) throw new Error(`${label} must be a credential-free HTTPS URL`)
-  return result
-}
-
 export function validateProofSoftwareRelease(value: unknown): ProofSoftwareRelease {
   const root = object(value, 'proof release')
-  exactKeys(root, ['schema', 'createdAt', 'source', 'toolchain', 'genericBundle', 'images', 'producer', 'publisher', 'cuda'], 'proof release')
+  exactKeys(root, ['schema', 'revision', 'images'], 'proof release')
   if (root.schema !== PROOF_RELEASE_SCHEMA) throw new Error('Unsupported proof release schema')
-  if (!Number.isFinite(Date.parse(text(root.createdAt, 'createdAt')))) throw new Error('Invalid release timestamp')
-  const source = object(root.source, 'source')
-  exactKeys(source, ['repository', 'revision'], 'source')
-  if (source.repository !== 'https://github.com/DogeOS69/dogeos-core') throw new Error('Unexpected proof release source repository')
-  const revision = text(source.revision, 'core revision', /^[\da-f]{40}$/)
+  text(root.revision, 'core revision', /^[\da-f]{40}$/)
   const images = object(root.images, 'images')
   exactKeys(images, PROOF_RELEASE_IMAGE_NAMES, 'images')
-  for (const name of PROOF_RELEASE_IMAGE_NAMES) {
-    const image = object(images[name], name)
-    exactKeys(image, ['reference', 'coreRevision'], name)
-    parseImmutableProofImage(text(image.reference, `${name} reference`), name)
-    if (image.coreRevision !== revision) throw new Error(`${name} core revision differs from release`)
-  }
-
-  const producer = object(root.producer, 'producer')
-  exactKeys(producer, ['contract'], 'producer')
-  if (producer.contract !== 'prepare-real-v1') throw new Error('Release lacks complete prepare-real producer')
-  const publisher = object(root.publisher, 'publisher')
-  exactKeys(publisher, ['contract', 'files'], 'publisher')
-  if (publisher.contract !== 'v1-11-files' || !Array.isArray(publisher.files) || publisher.files.length !== 11) throw new Error('Unsupported publisher contract')
-  for (const [index, item] of publisher.files.entries()) {
-    const file = object(item, 'publication file')
-    exactKeys(file, ['prefix', 'relativePath'], 'publication file')
-    const [prefix, relativePath] = PROOF_PUBLICATION_FILES[index]
-    if (file.prefix !== prefix || file.relativePath !== relativePath) throw new Error('Release publication file mapping differs from v1-11-files')
-  }
-
-  const bundle = object(root.genericBundle, 'genericBundle')
-  exactKeys(bundle, ['schema', 'sourceRepository', 'sourceRevision', 'rustToolchain', 'openvmVersion', 'upstreamManifest', 'files'], 'genericBundle')
-  if (bundle.schema !== 'dogeos/scroll-program-bundle/v1' || bundle.sourceRepository !== 'https://github.com/DogeOS69/scroll-zkvm-prover') throw new Error('Unsupported generic program provenance')
-  text(bundle.sourceRevision, 'Scroll revision', /^[\da-f]{40}$/)
-  text(bundle.rustToolchain, 'Rust toolchain', /^nightly-\d{4}-\d{2}-\d{2}$/)
-  text(bundle.openvmVersion, 'OpenVM version', /^\d+\.\d+\.\d+$/)
-  const upstream = object(bundle.upstreamManifest, 'upstreamManifest')
-  exactKeys(upstream, ['url', 'sha256'], 'upstreamManifest')
-  https(upstream.url, 'upstream manifest URL')
-  text(upstream.sha256, 'upstream manifest digest', /^[\da-f]{64}$/)
-  const files = object(bundle.files, 'generic files')
-  exactKeys(files, GENERIC_FILES, 'generic files')
-  for (const [name, item] of Object.entries(files)) {
-    const file = object(item, name)
-    exactKeys(file, ['asset', 'url', 'sha256', 'sizeBytes'], name)
-    text(file.asset, `${name} asset`, /^[\w.-]+$/)
-    https(file.url, `${name} URL`)
-    text(file.sha256, `${name} digest`, /^[\da-f]{64}$/)
-    if (!Number.isSafeInteger(file.sizeBytes) || Number(file.sizeBytes) <= 0) throw new Error(`Invalid ${name} size`)
-  }
-
-  const toolchain = object(root.toolchain, 'toolchain')
-  exactKeys(toolchain, ['rust', 'openvm', 'scrollRevision'], 'toolchain')
-  if (toolchain.rust !== bundle.rustToolchain || toolchain.openvm !== bundle.openvmVersion || toolchain.scrollRevision !== bundle.sourceRevision) throw new Error('Toolchain differs from program provenance')
-  const cuda = object(root.cuda, 'cuda')
-  exactKeys(cuda, ['architectures'], 'cuda')
-  if (!Array.isArray(cuda.architectures) || cuda.architectures.length === 0 || cuda.architectures.some(item => typeof item !== 'string' || !/^\d{2,3}$/.test(item))) throw new Error('Explicit CUDA architectures required')
+  for (const name of PROOF_RELEASE_IMAGE_NAMES) parseImmutableProofImage(text(images[name], `${name} reference`), name)
   return root as unknown as ProofSoftwareRelease
 }
 

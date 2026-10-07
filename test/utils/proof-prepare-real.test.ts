@@ -24,49 +24,55 @@ describe('offline complete real preparation', () => {
   function runner(mutate?: (out: string) => void): (args: string[]) => string {
     return args => {
       if (args[0] === 'pull') return ''
-      if (args[0] === 'image') return args.at(-1)!.includes('image.revision') ? 'a'.repeat(40) : 'prepare-real-v1'
+      if (args[0] === 'image') return 'a'.repeat(40)
       if (args[0] === 'rm') return ''
       expect(args[0]).to.equal('run')
-      expect(args).to.include.members(['none', '--read-only', 'ALL', 'no-new-privileges', '--user'])
+      expect(args).to.include.members(['--rm', '--network', 'none', `example/proof-preparation-producer@sha256:${'b'.repeat(64)}`, '/in/protocol_context.json', '/out/artifacts'])
       expect(args).not.to.include('--gpus')
       expect(args.filter(arg => arg.startsWith('type=bind'))).to.have.length(2)
-      const mount = args.find(arg => arg.includes('dst=/output'))!
+      expect(args.find(arg => arg.includes('dst=/in/protocol_context.json'))).to.match(/,readonly$/)
+      const mount = args.find(arg => arg.includes('dst=/out'))!
       const out = path.join(mount.split('src=')[1].split(',')[0], 'artifacts')
-      const files: Record<string, {sha256: string; sizeBytes: number}> = {}
       const write = (name: string, body = name) => {
         const file = path.join(out, name)
         fs.mkdirSync(path.dirname(file), {recursive: true})
         fs.writeFileSync(file, body)
-        files[name] = {sha256: proofFileHash(file), sizeBytes: Buffer.byteLength(body)}
       }
 
-      for (const name of Object.keys(releaseFixture().genericBundle.files)) write(name)
+      for (const name of ['chunk/app.vmexe', 'chunk/openvm.toml', 'batch/app.vmexe', 'batch/openvm.toml', 'verifier/aggregate-vk']) write(name)
       write('protocol_context.json', '{}')
-      write('real-proving-artifacts.json', JSON.stringify({dogeos_core_commit: 'a'.repeat(40)}))
-      write('bin/materialize-chunk-oneshot')
-      write('bin/scroll-runtime-materializer')
       for (const name of ['bridge-state.vmexe', 'openvm.toml', 'batch-aggregation.vmexe', 'batch-aggregation-openvm.toml', 'bridge-artifact-manifest.json']) write('bridge/' + name)
       write('bridge/worker-identity-bundle.json', JSON.stringify({image_revision: 'a'.repeat(40)}))
       const names = ['DOGEOS_CHUNK_VK_HASH', 'DOGEOS_CHUNK_PROGRAM_COMMITMENT', 'DOGEOS_CHUNK_PROGRAM_COMMITMENT_RAW', 'DOGEOS_BATCH_VK_HASH', 'DOGEOS_BATCH_PROGRAM_COMMITMENT', 'DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW', 'DOGEOS_BATCH_SCROLL_PROGRAM_COMMITMENT_RAW', 'DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW', 'DOGEOS_BRIDGE_VK_HASH', 'DOGEOS_BRIDGE_PROGRAM_COMMITMENT', 'DOGEOS_BRIDGE_APP_COMMIT_RAW']
-      write('identity-full.env', names.map(name => `export ${name}=0x${'a'.repeat(name.endsWith('_RAW') ? 128 : 64)}`).join('\n'))
-      fs.writeFileSync(path.join(out, 'producer-receipt.json'), JSON.stringify({coreRevision: 'a'.repeat(40), files, protocolContextSha256: proofFileHash(path.join(root, 'protocol.json')), schema: 'dogeos/proof-preparation/v1'}))
+      write('real-identity.env', names.map(name => `export ${name}=0x${'a'.repeat(name.endsWith('_RAW') ? 128 : 64)}`).join('\n'))
       mutate?.(out)
       return ''
     }
   }
 
-  it('stages only context, uses a pinned producer and atomically captures a relocatable handoff', () => {
+  it('stages only context, uses the pinned producer and atomically captures a relocatable handoff', () => {
     const result = prepareRealProofRelease({...options(), run: runner()})
-    expect(readProofReleasePreparation(result.preparationReceipt).files.protocolContext.path).to.equal(path.join(root, 'result/protocol_context.json'))
+    const preparation = readProofReleasePreparation(result.preparationReceipt)
+    expect(preparation.coreRevision).to.equal('a'.repeat(40))
+    expect(preparation.files.protocolContext.path).to.equal(path.join(root, 'result/protocol_context.json'))
+    expect(preparation.files.scroll.chunkAppExe.path).to.equal(path.join(root, 'result/chunk/app.vmexe'))
     expect(fs.readdirSync(root).some(name => name.startsWith('.proof-prepare'))).to.equal(false)
   })
 
-  for (const problem of ['tamper', 'extra', 'symlink', 'native-failure']) {
+  it('rejects a producer whose revision label differs from the release', () => {
+    const run = runner()
+    expect(() => prepareRealProofRelease({...options(), run: args => args[0] === 'image' ? 'e'.repeat(40) : run(args)})).to.throw('revision differs')
+    expect(fs.existsSync(path.join(root, 'result'))).to.equal(false)
+  })
+
+  for (const problem of ['context', 'revision', 'missing', 'empty', 'symlink', 'native-failure']) {
     it(`keeps the final output absent after ${problem}`, () => {
       const run = runner(out => {
         if (problem === 'native-failure') throw new Error('injected native failure')
-        if (problem === 'tamper') fs.appendFileSync(path.join(out, 'chunk/app.vmexe'), '!')
-        if (problem === 'extra') fs.writeFileSync(path.join(out, 'unexpected'), '!')
+        if (problem === 'context') fs.writeFileSync(path.join(out, 'protocol_context.json'), '{"other":1}')
+        if (problem === 'revision') fs.writeFileSync(path.join(out, 'bridge/worker-identity-bundle.json'), JSON.stringify({image_revision: 'e'.repeat(40)}))
+        if (problem === 'missing') fs.rmSync(path.join(out, 'verifier/aggregate-vk'))
+        if (problem === 'empty') fs.writeFileSync(path.join(out, 'bridge/openvm.toml'), '')
         if (problem === 'symlink') fs.symlinkSync(path.join(out, 'protocol_context.json'), path.join(out, 'link'))
       })
       expect(() => prepareRealProofRelease({...options(), run})).to.throw()

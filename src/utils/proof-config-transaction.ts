@@ -2,6 +2,7 @@ import * as toml from '@iarna/toml'
 import * as yaml from 'js-yaml'
 import {createHash} from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 import type {DogeConfig} from '../types/doge-config.js'
@@ -17,6 +18,7 @@ import {readProofAwsConfig} from './proof-aws-config.js'
 import {proofArtifactS3Endpoint} from './proof-aws-provisioner.js'
 import {validateProofDeploymentContract} from './proof-deployment-contract.js'
 import {proofEnforcementReadiness} from './proof-enforcement-readiness.js'
+import {exportCoordinatorMaterializers} from './proof-image-tools.js'
 import {resolveProofIntent} from './proof-intent.js'
 import {reconcileProofKubernetes} from './proof-kubernetes-reconciler.js'
 import {parseImmutableProofImage, parseProofIdentityEnv, prepareProofMaterials} from './proof-materials.js'
@@ -84,7 +86,7 @@ function portablePlan(plan: ProofProgramPublicationPlan, root: string): ProofPro
 /** A complete candidate is made visible by one rename. Active deployment files
  * are inputs only; no AWS/Kubernetes/provider mutation occurs in preparation. */
 export function prepareProofConfig(options: {
-  deploymentDir: string; output: string; prepareReal?: typeof prepareRealProofRelease; release: string; releaseSha256: string
+  deploymentDir: string; exportMaterializers?: typeof exportCoordinatorMaterializers; output: string; prepareReal?: typeof prepareRealProofRelease; release: string; releaseSha256: string
   request: ProofConfigRequest
 }): {directory: string; publicationPlan?: ProofProgramPublicationPlan; receipt: string; receiptSha256: string; warnings: string[]} {
   const root = fs.realpathSync(options.deploymentDir)
@@ -105,6 +107,8 @@ export function prepareProofConfig(options: {
   const lock = target + '.prepare-lock'
   fs.mkdirSync(lock, {mode: 0o700})
   const stage = fs.mkdtempSync(path.join(path.dirname(target), '.proof-config-'))
+  // Materializers and the mock identity are copied into the materials tree; extraction stays outside the candidate.
+  let toolDir: string | undefined
   try {
     for (const input of ['.data/doge-config.toml', '.data/protocol_context.json', '.data/proof-aws.json', 'values', 'withdrawal-processor', 'proof-coordinator', 'eth-da-submitter']) {
       const source = path.join(root, input)
@@ -134,24 +138,49 @@ export function prepareProofConfig(options: {
     const {config: aws} = readProofAwsConfig(stage)
     assertTopologyUsesSharedArtifactStore(aws.artifactStore, sharedArtifactStoreFromDogeConfig(config), 'proof AWS')
     fs.copyFileSync(selected.path, path.join(stage, 'dogeos-proof-release-v1.json'))
-    const {images} = selected.manifest
-    let real: Parameters<typeof prepareProofMaterials>[0] | undefined
+    const {images, revision} = selected.manifest
+    const topologyCompiler = parseImmutableProofImage(images['dogeos-proof-topology'], 'compiler')
+    // Both generations bake the deployment: mock proving still materializes for real,
+    // so it needs the release identities and the coordinator's materializers.
+    const prepared = (options.prepareReal ?? prepareRealProofRelease)({deploymentDir: stage, output: '.data/preparation', protocolContext: '.data/protocol_context.json', release: 'dogeos-proof-release-v1.json', releaseSha256: selected.sha256})
+    const preparation = readProofReleasePreparation(prepared.preparationReceipt)
+    const identities = parseProofIdentityEnv(fs.readFileSync(preparation.files.identityEnv.path, 'utf8'))
+    toolDir = fs.mkdtempSync(path.join(os.tmpdir(), 'proof-config-tools-'))
+    const materializers = (options.exportMaterializers ?? exportCoordinatorMaterializers)({expectedRevision: revision, image: images['proof-coordinator'], outputDir: toolDir})
+    const {scroll} = preparation.files
+    let materialOptions: Parameters<typeof prepareProofMaterials>[0]
     if (request.generation === 'real') {
-      const prepared = (options.prepareReal ?? prepareRealProofRelease)({deploymentDir: stage, output: '.data/preparation', protocolContext: '.data/protocol_context.json', release: 'dogeos-proof-release-v1.json', releaseSha256: selected.sha256})
-      const preparation = readProofReleasePreparation(prepared.preparationReceipt)
-      const identities = parseProofIdentityEnv(fs.readFileSync(preparation.files.identityEnv.path, 'utf8'))
-      checkProofWorkerImage({expectedBatchAggregationProgramCommitmentRaw: identities.DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW, expectedBatchProgramCommitmentRaw: identities.DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW, expectedCoreRevision: selected.manifest.source.revision, image: parseImmutableProofImage(images.productionWorker.reference, 'production Worker'), output: path.join(stage, '.data/proof-worker-image-check-v1.json')})
-      real = {
-        batchMaterializer: preparation.files.batchMaterializer.path, bridgeArtifactDir: path.dirname(preparation.files.bridge.nativeManifest.path), chunkMaterializer: preparation.files.chunkMaterializer.path,
+      const productionWorker = parseImmutableProofImage(images['prover-worker-cuda'], 'production Worker')
+      checkProofWorkerImage({expectedBatchAggregationProgramCommitmentRaw: identities.DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW, expectedBatchProgramCommitmentRaw: identities.DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW, expectedCoreRevision: revision, image: productionWorker, output: path.join(stage, '.data/proof-worker-image-check-v1.json')})
+      materialOptions = {
+        ...materializers, bridgeArtifactDir: path.dirname(preparation.files.bridge.nativeManifest.path),
         deploymentDir: stage,
         generation: 'real',
-        identityEnv: preparation.files.identityEnv.path, images: {mockWorker: parseImmutableProofImage(images.mockWorker.reference, 'mock Worker'), productionWorker: parseImmutableProofImage(images.productionWorker.reference, 'production Worker'), topologyCompiler: parseImmutableProofImage(images.topologyCompiler.reference, 'compiler')},
-        producerManifest: preparation.files.producerManifest.path, protocolContext: path.join(stage, '.data/protocol_context.json'),
+        identityEnv: preparation.files.identityEnv.path, images: {productionWorker, topologyCompiler},
+        protocolContext: path.join(stage, '.data/protocol_context.json'),
+        scrollArtifacts: {
+          aggregateVerifyingKey: scroll.aggregateVerifyingKey.path, batchAppConfig: scroll.batchAppConfig.path, batchAppExe: scroll.batchAppExe.path,
+          chunkAppConfig: scroll.chunkAppConfig.path, chunkAppExe: scroll.chunkAppExe.path, coreRevision: preparation.coreRevision,
+        },
         workerIdentityBundle: preparation.files.bridge.workerIdentityBundle.path,
+      }
+    } else {
+      // One bundle shape (W26): the bake's bundle without bridge_guest is the release
+      // Worker's own --print-identity-json, which the compiler requires for mock.
+      const mockIdentity = JSON.parse(fs.readFileSync(preparation.files.bridge.workerIdentityBundle.path, 'utf8')) as Record<string, unknown>
+      delete mockIdentity.bridge_guest
+      const workerIdentityBundle = path.join(toolDir, 'worker-identity.json')
+      fs.writeFileSync(workerIdentityBundle, JSON.stringify(mockIdentity) + '\n', {flag: 'wx', mode: 0o600})
+      materialOptions = {
+        ...materializers, aggregateVerifyingKey: scroll.aggregateVerifyingKey.path,
+        deploymentDir: stage,
+        generation: 'mock',
+        identityEnv: preparation.files.identityEnv.path, images: {topologyCompiler},
+        workerIdentityBundle,
       }
     }
 
-    const materials = prepareProofMaterials(real ?? {deploymentDir: stage, generation: 'mock', images: {mockWorker: parseImmutableProofImage(images.mockWorker.reference, 'mock Worker'), topologyCompiler: parseImmutableProofImage(images.topologyCompiler.reference, 'compiler')}})
+    const materials = prepareProofMaterials(materialOptions)
     config.proof_topology = buildProofTopology({artifactStore: {bucket: aws.artifactStore.bucket, endpointUrl: proofArtifactS3Endpoint(aws.artifactStore.region), forcePathStyle: false, kind: 's3_compatible', region: aws.artifactStore.region}, deploymentName: request.deploymentName, enforcement: request.enforcement, generation: request.generation, materials: materials.receipt, mode: request.mode, runtime: {...runtime, artifactKeyPrefix: aws.artifactStore.keyPrefix, publicS3EndpointUrl: aws.artifactReadTransport.publicEndpointUrl}})
     fs.writeFileSync(configPath, dogeConfigToToml(config))
     const cubeFile = path.join(stage, 'values/cubesigner-signer-production.yaml')
@@ -169,7 +198,7 @@ export function prepareProofConfig(options: {
     // Pin the coordinator image that owns the receipt-verified materializers.
     const pcFile = path.join(stage, 'values/proof-coordinator-production.yaml')
     const pcValues = yaml.load(fs.readFileSync(pcFile, 'utf8')) as Record<string, unknown>
-    pcValues.image = {...pcValues.image as object, ...parseImmutableProofImage(images.coordinator.reference, 'coordinator'), tag: ''}
+    pcValues.image = {...pcValues.image as object, ...parseImmutableProofImage(images['proof-coordinator'], 'coordinator'), tag: ''}
     fs.writeFileSync(pcFile, yaml.dump(pcValues, {lineWidth: -1, noRefs: true}))
     const intent = resolveProofIntent({deploymentDir: stage, dogeConfig: config, dogeConfigPath: configPath, required: true})!
     reconcileProofKubernetes({deploymentDir: stage, ethereumDaBlobSource: proofTopologyEthereumDaBlobSource(config.ethereumDa), ethereumL1RpcUrl: config.ethereumDa?.submitterRpcUrl, intent, materialsReceipt: request.generation === 'real' ? '.data/proof-materials-v1.json' : undefined, proofTopologyBridge: {dogecoinNetwork: config.network, dogecoinRpcPassword: String(config.dogecoinClusterRpc?.password ?? ''), dogecoinRpcUrl: resolveDogecoinServiceRpcUrl(config), dogecoinRpcUser: String(config.dogecoinClusterRpc?.username ?? '')}})
@@ -203,6 +232,7 @@ export function prepareProofConfig(options: {
     fs.renameSync(stage, target)
     return {directory: target, publicationPlan, receipt: path.join(target, PREPARED), receiptSha256: proofFileHash(path.join(target, PREPARED)), warnings}
   } finally {
+    if (toolDir) fs.rmSync(toolDir, {force: true, recursive: true})
     fs.rmSync(stage, {force: true, recursive: true})
     fs.rmdirSync(lock)
   }

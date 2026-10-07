@@ -10,22 +10,50 @@ change Kubernetes, or activate proof enforcement. Only the final
 `proof-bundle-publish --apply` command writes to S3, and it never changes the
 shared bucket policy.
 
-## 1. Produce the native files
+## 1. Bake the deployment with the release producer
 
-Use the approved dogeos-core revision's native preparation tools. The CLI does
-not reproduce OpenVM commitment, VK, identity-probe, verifier, or Bridge-bake
-algorithms in TypeScript.
+dogeos-core's opt-in `proof-release.yml` publishes
+`dogeos-proof-release-v1.json` (and its `.sha256`) as the
+`proof-release-<tag>` pre-release. It pins five images from one revision by
+digest:
 
-Place the resulting files in this conventional layout:
+```json
+{"schema": "dogeos/proof-release/v1", "revision": "<40-hex core commit>",
+ "images": {"proof-preparation-producer": "dogeos69/proof-preparation-producer@sha256:…",
+            "prover-worker-cuda": "dogeos69/prover-worker-cuda@sha256:…",
+            "proof-coordinator": "dogeos69/proof-coordinator@sha256:…",
+            "dogeos-proof-topology": "dogeos69/dogeos-proof-topology@sha256:…",
+            "proof-bundle-publisher": "dogeos69/proof-bundle-publisher@sha256:…"}}
+```
+
+There is no mock Worker image: Proof Coordinator produces mock proofs in
+process, and mock generation compiles with the bake's
+`bridge/worker-identity-bundle.json` minus `bridge_guest`, which is the release
+Worker's own `--print-identity-json`.
+
+`setup proof-config prepare` runs the whole chain below from that manifest.
+To run only the bake, use:
+
+```bash
+scrollsdk setup proof-image-tools --action prepare-real \
+  --release dogeos-proof-release-v1.json --release-sha256 <sha256> \
+  --protocol-context .data/protocol_context.json \
+  --output .data/preparation --json
+```
+
+It checks the producer's revision label against `revision`, then runs the
+producer's own entrypoint with the network off:
+`docker run --rm --network none <producer> /in/protocol_context.json /out/artifacts`.
+The output is the Worker `ARTIFACT_ROOT` layout:
 
 ```text
-release-root/
-├── identity-full.env
-├── real-proving-artifacts.json
+.data/preparation/
+├── chunk/{app.vmexe,openvm.toml}
+├── batch/{app.vmexe,openvm.toml}
+├── verifier/aggregate-vk
 ├── protocol_context.json
-├── bin/
-│   ├── materialize-chunk-oneshot
-│   └── scroll-runtime-materializer
+├── real-identity.env          # the 11 identity exports
+├── proof-release-preparation-v1.json
 └── bridge/
     ├── bridge-state.vmexe
     ├── openvm.toml
@@ -35,27 +63,24 @@ release-root/
     └── batch-aggregation-openvm.toml
 ```
 
-The five Scroll software files referenced by
-`real-proving-artifacts.json` may live elsewhere. The producer manifest carries
-their absolute paths, sizes, and SHA-256 values; `proof-materials` verifies and
-copies them later.
-
-Capture the native handoff:
+The command refuses symlinks, empty files, a baked protocol context that
+differs from the input, and a Bridge bake whose `image_revision` is not the
+release revision. To capture an output tree that was baked by hand with the
+same producer, run:
 
 ```bash
 scrollsdk setup proof-release-prepare \
-  --artifact-root /secure/build/release-root \
+  --artifact-root /secure/build/bake \
   --expected-core-revision <full-40-character-core-sha> \
   --output .data/proof-release-preparation-v1.json \
   --json
 ```
 
-Use `--chunk-materializer`, `--batch-materializer`, `--identity-env`,
-`--producer-manifest`, or `--protocol-context` only when a native build cannot
-use the conventional layout. The command refuses symlinks, empty files,
-malformed identity exports, producer/core revision drift, changed files, and an
-existing output receipt. It records absolute paths because this is a local
-build handoff, not an artifact to distribute to Workers.
+The receipt records absolute paths because it is a local build handoff, not
+an artifact to distribute to Workers. The materializers are not part of the
+bake: they ship in the release's `proof-coordinator` image, and
+`setup proof-image-tools --action export` copies them out of a stopped
+container.
 
 ## 2. Build and validate the production Worker image
 
@@ -82,14 +107,16 @@ smoke and proof are still required on the selected provider.
 
 ## 3. Import the complete real materials
 
-The two receipts replace the long list of native file and mutable image flags:
+The two receipts replace the long list of native file and mutable image flags.
+The materializers come from the release coordinator image:
 
 ```bash
 scrollsdk setup proof-materials \
   --generation real --non-interactive \
   --preparation-receipt .data/proof-release-preparation-v1.json \
   --production-worker-receipt .data/proof-worker-image-check-v1.json \
-  --mock-worker-image '<approved-mock-worker-image-or-digest>' \
+  --chunk-materializer <export-dir>/materialize-chunk-oneshot \
+  --batch-materializer <export-dir>/scroll-runtime-materializer \
   --compiler-image '<approved-topology-compiler-image-or-digest>' \
   --materials-dir .data/proof-materials/<release-name> \
   --output .data/proof-materials-<release-name>.json \
@@ -178,7 +205,3 @@ After publication, render/hydrate the normal Worker handoff and run
 offer, renting a GPU, and enabling real enforcement remain separately approved
 operator actions. A label check and successful S3 publication are preparation
 evidence; they are not proof-generation acceptance.
-
-When dogeos-core publishes a stable CPU preparation image/entrypoint, it may be
-added as a producer for step 1. Until then, the CLI captures and validates the
-native output without taking ownership of core's build algorithms.

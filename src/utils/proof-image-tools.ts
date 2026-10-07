@@ -7,16 +7,15 @@ import {immutableProofImage, resolveImmutableProofImage, validateMockWorkerIdent
 
 export type ProofToolRunner = (args: string[]) => string
 
-const INPUT_FILES = ['chunk/app.vmexe', 'chunk/openvm.toml', 'batch/app.vmexe', 'batch/openvm.toml', 'verifier/aggregate-vk'] as const
+/** Proof Coordinator image binaries, in its /usr/local/bin. */
+export const COORDINATOR_MATERIALIZERS = {batchMaterializer: 'scroll-runtime-materializer', chunkMaterializer: 'materialize-chunk-oneshot'} as const
 
 export interface ProofImageToolsOptions {
-  action: 'derive-scroll' | 'export'
-  artifactRoot?: string
+  action: 'export'
   coordinatorImage?: string
   deploymentDir: string
   expectedRevision: string
   output: string
-  producerImage?: string
   requireRealMaterialization?: boolean
   run?: ProofToolRunner
   workerImage?: string
@@ -28,7 +27,6 @@ export interface ProofImageToolsReceipt {
   coreRevision: string
   files: Record<string, {sha256: string; sizeBytes: number}>
   images: Record<string, string>
-  inputs?: Record<string, {sha256: string; sizeBytes: number}>
   // These tools do not certify a complete proof topology or change its mode.
   schema: 'dogeos/proof-image-tools/v1'
 }
@@ -44,6 +42,36 @@ function fingerprint(file: string): {sha256: string; sizeBytes: number} {
   const stat = fs.lstatSync(file)
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size === 0) throw new Error(`Expected a nonempty regular proof material file: ${file}`)
   return {sha256: createHash('sha256').update(fs.readFileSync(file)).digest('hex'), sizeBytes: stat.size}
+}
+
+/** Copy the materializers out of a NEW stopped container; Proof Coordinator never starts. */
+function copyCoordinatorMaterializers(reference: string, outputDir: string, run: ProofToolRunner): Record<keyof typeof COORDINATOR_MATERIALIZERS, string> {
+  const container = run(['create', '--network', 'none', reference]).trim()
+  if (!/^[\da-f]{64}$/.test(container)) throw new Error('Docker create did not return a container ID')
+  try {
+    const copied = {} as Record<keyof typeof COORDINATOR_MATERIALIZERS, string>
+    for (const [key, binary] of Object.entries(COORDINATOR_MATERIALIZERS) as Array<[keyof typeof COORDINATOR_MATERIALIZERS, string]>) {
+      const destination = path.join(outputDir, binary)
+      run(['cp', `${container}:/usr/local/bin/${binary}`, destination])
+      fingerprint(destination)
+      fs.chmodSync(destination, 0o700)
+      copied[key] = destination
+    }
+
+    return copied
+  } finally {
+    run(['rm', container])
+  }
+}
+
+/** The release's coordinator owns the materializers the topology compiler validates and Kubernetes installs. */
+export function exportCoordinatorMaterializers(options: {expectedRevision: string; image: string; outputDir: string; run?: ProofToolRunner}): Record<keyof typeof COORDINATOR_MATERIALIZERS, string> {
+  const run = options.run ?? docker
+  run(['pull', options.image])
+  const revision = run(['image', 'inspect', options.image, '--format', '{{ index .Config.Labels "org.opencontainers.image.revision" }}']).trim()
+  if (revision !== options.expectedRevision) throw new Error(`coordinator image revision ${revision} does not match expected ${options.expectedRevision}`)
+  fs.mkdirSync(options.outputDir, {mode: 0o700, recursive: true})
+  return copyCoordinatorMaterializers(options.image, options.outputDir, run)
 }
 
 /** No daemon, GPU, network, protocol context or credentials are mounted. */
@@ -118,66 +146,19 @@ export function runProofImageTools(options: ProofImageToolsOptions): {outputDir:
   }
 
   try {
-    if (options.action === 'export') {
-      const worker = image(options.workerImage, 'worker')
-      const coordinator = image(options.coordinatorImage, 'coordinator')
-      const identity = execute('/usr/local/bin/prover-worker', worker, ['--print-identity-json'])
-      validateMockWorkerIdentity(identity, 'native Worker identity output')
-      const parsed = JSON.parse(identity) as {batch_guest: {app_commit_raw: string}; image_revision: string}
-      if (parsed.image_revision !== options.expectedRevision) throw new Error('Worker compiled identity revision disagrees with image revision')
-      receipt.batchIdentityPlaceholder = /^0x0{128}$/.test(parsed.batch_guest.app_commit_raw)
-      if (options.requireRealMaterialization && receipt.batchIdentityPlaceholder) {
-        throw new Error('Worker image has a placeholder batch_guest; export needs a CPU identity-tool build with derived Batch/Aggregation commitments. Runtime environment overrides cannot fix compiled identities.')
-      }
-
-      fs.writeFileSync(path.join(staged, 'worker-identity-bundle.json'), identity, {mode: 0o600})
-      // Copy only known binaries from a NEW stopped container. Never start PC.
-      const container = run(['create', '--network', 'none', coordinator]).trim()
-      if (!/^[\da-f]{64}$/.test(container)) throw new Error('Docker create did not return a container ID')
-      try {
-        for (const binary of ['materialize-chunk-oneshot', 'scroll-runtime-materializer']) {
-          const destination = path.join(staged, binary)
-          run(['cp', `${container}:/usr/local/bin/${binary}`, destination])
-          fingerprint(destination)
-          fs.chmodSync(destination, 0o700)
-        }
-      } finally {
-        run(['rm', container])
-      }
-    } else {
-      const producer = image(options.producerImage, 'producer')
-      if (!options.artifactRoot) throw new Error('artifactRoot is required for derive-scroll')
-      const root = fs.realpathSync(options.artifactRoot)
-      if ([root, staged].some(value => /[\n\r,]/.test(value))) throw new Error('Docker mount paths must not contain commas or newlines')
-      receipt.inputs = {}
-      // Stage only the five public artifacts, not arbitrary neighboring files.
-      const inputDir = path.join(staged, 'input')
-      fs.mkdirSync(inputDir)
-      for (const file of INPUT_FILES) {
-        const source = path.join(root, file)
-        if (!fs.realpathSync(source).startsWith(root + path.sep)) throw new Error(`Artifact path escapes its root: ${file}`)
-        receipt.inputs[file] = fingerprint(source)
-        const destination = path.join(inputDir, file)
-        fs.mkdirSync(path.dirname(destination), {recursive: true})
-        fs.copyFileSync(source, destination)
-      }
-
-      const outputDir = path.join(staged, 'derived')
-      fs.mkdirSync(outputDir)
-      execute('/usr/local/libexec/dogeos-proof-release-producer', producer, [
-        'derive-scroll-identities',
-        '--chunk-app-vmexe', '/input/chunk/app.vmexe', '--chunk-openvm-config', '/input/chunk/openvm.toml',
-        '--batch-app-vmexe', '/input/batch/app.vmexe', '--batch-openvm-config', '/input/batch/openvm.toml',
-        '--aggregate-vk', '/input/verifier/aggregate-vk', '--output', '/output/proof-scroll-identities-v1.json',
-      ], ['--mount', `type=bind,src=${inputDir},dst=/input,readonly`, '--mount', `type=bind,src=${outputDir},dst=/output`])
-      const produced = path.join(outputDir, 'proof-scroll-identities-v1.json')
-      fingerprint(produced)
-      const evidence = JSON.parse(fs.readFileSync(produced, 'utf8')) as {schema?: string}
-      if (evidence.schema !== 'dogeos/proof-scroll-identities/v1') throw new Error('Native producer returned an unsupported identity schema')
-      fs.renameSync(produced, path.join(staged, 'proof-scroll-identities-v1.json'))
-      fs.rmdirSync(outputDir)
-      fs.rmSync(inputDir, {recursive: true})
+    const worker = image(options.workerImage, 'worker')
+    const coordinator = image(options.coordinatorImage, 'coordinator')
+    const identity = execute('/usr/local/bin/prover-worker', worker, ['--print-identity-json'])
+    validateMockWorkerIdentity(identity, 'native Worker identity output')
+    const parsed = JSON.parse(identity) as {batch_guest: {app_commit_raw: string}; image_revision: string}
+    if (parsed.image_revision !== options.expectedRevision) throw new Error('Worker compiled identity revision disagrees with image revision')
+    receipt.batchIdentityPlaceholder = /^0x0{128}$/.test(parsed.batch_guest.app_commit_raw)
+    if (options.requireRealMaterialization && receipt.batchIdentityPlaceholder) {
+      throw new Error('Worker image has a placeholder batch_guest; export needs a release mock built with the producer\'s Batch/Aggregation commitments. Runtime environment overrides cannot fix compiled identities.')
     }
+
+    fs.writeFileSync(path.join(staged, 'worker-identity-bundle.json'), identity, {mode: 0o600})
+    copyCoordinatorMaterializers(coordinator, staged, run)
 
     for (const file of fs.readdirSync(staged)) receipt.files[file] = fingerprint(path.join(staged, file))
     fs.writeFileSync(path.join(staged, 'image-tools-receipt.json'), `${JSON.stringify(receipt, null, 2)}\n`, {mode: 0o600})

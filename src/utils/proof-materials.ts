@@ -37,30 +37,6 @@ const IDENTITY_ENV_FIELDS = new Set([
   'DOGEOS_CHUNK_VK_HASH',
 ])
 
-interface ProducerArtifact {
-  path: string
-  sha256: string
-  size_bytes: number
-}
-
-interface ProducerManifest {
-  artifacts: {
-    batch_openvm_toml: ProducerArtifact
-    batch_vmexe: ProducerArtifact
-    chunk_openvm_toml: ProducerArtifact
-    chunk_vmexe: ProducerArtifact
-    root_agg_verifying_key: ProducerArtifact
-  }
-  dogeos_core_commit: string
-  producer: {
-    commit: string
-  }
-  toolchain: {
-    openvm_tag: string
-    rust: string
-  }
-}
-
 interface NativeBridgeManifest {
   advance_l2_batch_aggregation_app_commit_raw: string
   advance_l2_batch_aggregation_app_config_sha256: string
@@ -89,7 +65,8 @@ export interface PrepareProofMaterialsOptions {
   generation: 'mock' | 'real'
   identityEnv?: string
   images: {
-    mockWorker: ProofTopologyImageReference
+    /** Plain mock only: source of the compiler identity when no identity bundle is supplied. */
+    mockWorker?: ProofTopologyImageReference
     productionWorker?: ProofTopologyImageReference
     topologyCompiler: ProofTopologyImageReference
   }
@@ -97,10 +74,17 @@ export interface PrepareProofMaterialsOptions {
   mockWorkerIdentity?: string
   outputReceipt?: string
   outputRoot?: string
-  producerManifest?: string
   protocolContext?: string
   refreshExistingImages?: boolean
-  scrollIdentityEvidence?: string
+  /** Real only: the prepare-real output's Scroll programs and its dogeos-core revision. */
+  scrollArtifacts?: {
+    aggregateVerifyingKey: string
+    batchAppConfig: string
+    batchAppExe: string
+    chunkAppConfig: string
+    chunkAppExe: string
+    coreRevision: string
+  }
   /**
    * Canonical worker-identity-bundle.json emitted by the matching dogeos-core
    * bake. Required when mock proving uses real Scroll materialization because
@@ -349,46 +333,6 @@ function assertDirectory(filePath: string, label: string): void {
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`${label} must be a non-symlink directory: ${filePath}`)
 }
 
-function parseProducerArtifact(value: unknown, label: string, root = process.cwd()): ProducerArtifact {
-  const object = mapping(value, label)
-  const artifact = {
-    path: requiredString(object.path, `${label}.path`),
-    sha256: normalizeSha256(object.sha256, `${label}.sha256`),
-    size_bytes: requiredInteger(object.size_bytes, `${label}.size_bytes`),
-  }
-  const resolved = path.resolve(root, artifact.path)
-  assertRegularFile(resolved, label)
-  const actualSha = sha256File(resolved)
-  const actualSize = fs.statSync(resolved).size
-  if (actualSha !== artifact.sha256) throw new Error(`${label} SHA-256 mismatch: expected ${artifact.sha256}, got ${actualSha}`)
-  if (actualSize !== artifact.size_bytes) throw new Error(`${label} size mismatch: expected ${artifact.size_bytes}, got ${actualSize}`)
-  return {...artifact, path: resolved}
-}
-
-function readProducerManifest(filePath: string): ProducerManifest {
-  const root = mapping(readJson(filePath, 'dogeos-core real-proving artifact manifest'), 'producer manifest')
-  if (root.schema !== undefined && root.schema !== 'dogeos/real-proving-artifacts/v2') throw new Error('Unsupported producer manifest schema')
-  const artifactRoot = root.schema === 'dogeos/real-proving-artifacts/v2' ? path.dirname(path.resolve(filePath)) : process.cwd()
-  const artifacts = mapping(root.artifacts, 'producer manifest.artifacts')
-  const producer = mapping(root.producer, 'producer manifest.producer')
-  const toolchain = mapping(root.toolchain, 'producer manifest.toolchain')
-  return {
-    artifacts: {
-      batch_openvm_toml: parseProducerArtifact(artifacts.batch_openvm_toml, 'producer manifest.artifacts.batch_openvm_toml', artifactRoot),
-      batch_vmexe: parseProducerArtifact(artifacts.batch_vmexe, 'producer manifest.artifacts.batch_vmexe', artifactRoot),
-      chunk_openvm_toml: parseProducerArtifact(artifacts.chunk_openvm_toml, 'producer manifest.artifacts.chunk_openvm_toml', artifactRoot),
-      chunk_vmexe: parseProducerArtifact(artifacts.chunk_vmexe, 'producer manifest.artifacts.chunk_vmexe', artifactRoot),
-      root_agg_verifying_key: parseProducerArtifact(artifacts.root_agg_verifying_key, 'producer manifest.artifacts.root_agg_verifying_key', artifactRoot),
-    },
-    dogeos_core_commit: requiredString(root.dogeos_core_commit, 'producer manifest.dogeos_core_commit'),
-    producer: {commit: requiredString(producer.commit, 'producer manifest.producer.commit')},
-    toolchain: {
-      openvm_tag: requiredString(toolchain.openvm_tag, 'producer manifest.toolchain.openvm_tag'),
-      rust: requiredString(toolchain.rust, 'producer manifest.toolchain.rust'),
-    },
-  }
-}
-
 export function parseProofIdentityEnv(body: string): Record<string, string> {
   const result: Record<string, string> = {}
   for (const [index, raw] of body.split(/\r?\n/).entries()) {
@@ -601,7 +545,7 @@ function refreshExistingProofMaterialImages(
   }
 
   if (options.generation !== 'mock' || options.identityEnv || options.bridgeArtifactDir
-    || options.producerManifest || options.chunkMaterializer || options.batchMaterializer
+    || options.scrollArtifacts || options.chunkMaterializer || options.batchMaterializer
     || options.protocolContext || options.images.productionWorker) {
     throw new Error('Existing proof materials only support an image-only refresh in generation=mock')
   }
@@ -626,45 +570,6 @@ function refreshExistingProofMaterialImages(
   return {receipt, receiptPath}
 }
 
-/** Consume native Scroll output without inventing a real Bridge identity. */
-function mockScrollIdentityEnv(file: string, workerBody: string, aggregateVk: string): Record<string, string> {
-  const evidence = mapping(JSON.parse(fs.readFileSync(file, 'utf8')), 'Scroll identity evidence')
-  if (evidence.schema !== 'dogeos/proof-scroll-identities/v1' || evidence.schema_version !== 1) throw new Error('Unsupported native Scroll identity schema')
-  const worker = mapping(JSON.parse(workerBody), 'Worker identity')
-  if (evidence.openvm_version !== worker.openvm_version) throw new Error('Scroll and Worker OpenVM versions differ')
-  const artifacts = mapping(evidence.artifacts, 'Scroll identity artifacts')
-  const vk = mapping(artifacts.aggregate_verification_key, 'Scroll aggregate VK artifact')
-  const vkSha = requiredString(vk.sha256, 'Scroll aggregate VK sha256').replace(/^sha256:/, '')
-  if (normalizeSha256(vkSha, 'Scroll aggregate VK sha256') !== sha256File(aggregateVk)
-    || vk.size_bytes !== fs.statSync(aggregateVk).size) throw new Error('Scroll identity evidence aggregate VK differs from supplied file')
-  const chunk = mapping(evidence.chunk, 'Scroll chunk identity')
-  const batch = mapping(evidence.batch, 'Scroll batch identity')
-  for (const [name, value] of [['chunk', chunk], ['batch', batch]] as const) {
-    const raw = canonicalHex(value.program_commitment_le_raw, 64, `${name} program commitment`)
-    if (canonicalHex(value.program_commitment_hash, 32, `${name} commitment hash`) !== sha256Bytes(raw)) throw new Error(`${name} native commitment hash mismatch`)
-    canonicalHex(value.verification_key_hash, 32, `${name} verification key hash`)
-  }
-
-  const aggregation = mockWorkerAggregationIdentity(workerBody, 'Worker identity')
-  const mockBridge = syntheticMockProofIdentities().bridge
-  const env = {
-    DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW: aggregation.appCommitRaw,
-    DOGEOS_BATCH_PROGRAM_COMMITMENT: String(batch.program_commitment_hash),
-    DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW: canonicalHex(batch.recursive_app_commit_raw, 64, 'native Batch recursive app commitment'),
-    DOGEOS_BATCH_SCROLL_PROGRAM_COMMITMENT_RAW: String(batch.program_commitment_le_raw),
-    DOGEOS_BATCH_VK_HASH: String(batch.verification_key_hash),
-    // Mock Bridge identity is explicitly topology-only; no Bridge guest is baked.
-    DOGEOS_BRIDGE_APP_COMMIT_RAW: mockBridge.appCommitRaw,
-    DOGEOS_BRIDGE_PROGRAM_COMMITMENT: mockBridge.programCommitmentHash,
-    DOGEOS_BRIDGE_VK_HASH: mockBridge.verificationKeyHash,
-    DOGEOS_CHUNK_PROGRAM_COMMITMENT: String(chunk.program_commitment_hash),
-    DOGEOS_CHUNK_PROGRAM_COMMITMENT_RAW: String(chunk.program_commitment_le_raw),
-    DOGEOS_CHUNK_VK_HASH: String(chunk.verification_key_hash),
-  }
-  validateRealMaterializationWorkerIdentity(workerBody, env, 'Worker identity bundle')
-  return env
-}
-
 export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
   receipt: ProofMaterialsV1
   receiptPath: string
@@ -676,11 +581,7 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
     if (image) immutableProofImage(image)
   }
 
-  if (options.scrollIdentityEvidence && (options.generation !== 'mock' || options.identityEnv || options.refreshExistingImages)) {
-    throw new Error('--scroll-identity-evidence is mock-only and cannot be combined with identity-env or image-only refresh')
-  }
-
-  if (options.generation === 'mock' && (options.identityEnv || options.scrollIdentityEvidence)
+  if (options.generation === 'mock' && options.identityEnv
     && !options.workerIdentityBundle && !options.mockWorkerIdentity) {
     throw new Error(
       'Mock proving with real materialization requires --worker-identity-bundle from the matching dogeos-core bake; '
@@ -689,8 +590,12 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
   }
 
   const workerIdentityPath = options.workerIdentityBundle ?? options.mockWorkerIdentity
+  if (workerIdentityPath === undefined && !options.images.mockWorker) {
+    throw new Error('Proof materials need a worker identity bundle or a mock Worker image to extract one from')
+  }
+
   const mockWorkerIdentity = workerIdentityPath === undefined
-    ? extractMockWorkerIdentity(options.images.mockWorker)
+    ? extractMockWorkerIdentity(options.images.mockWorker!)
     : fs.readFileSync(path.resolve(workerIdentityPath), 'utf8')
   // An explicitly selected real bake includes bridge_guest. Validate it against
   // the native Bridge manifest below once the probe identities are available.
@@ -714,21 +619,21 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
     throw new Error('Real proof materials require --identity-env')
   }
 
-  if (options.scrollIdentityEvidence) {
-    if (!options.aggregateVerifyingKey) throw new Error('Native Scroll identity import requires --aggregate-verifying-key')
-    env = mockScrollIdentityEnv(options.scrollIdentityEvidence, mockWorkerIdentity, options.aggregateVerifyingKey)
-  }
-
-  let producer: ProducerManifest | undefined
+  let scroll: PrepareProofMaterialsOptions['scrollArtifacts']
   let aggregateVerifyingKey: string | undefined
   let chunkMaterializer: string | undefined
   let batchMaterializer: string | undefined
   if (options.generation === 'real') {
-    if (!options.producerManifest) throw new Error('Real proof materials require --software-manifest')
+    if (!options.scrollArtifacts) throw new Error('Real proof materials require the prepare-real Scroll programs (--artifact-root)')
     if (!options.chunkMaterializer) throw new Error('Real proof materials require --chunk-materializer')
     if (!options.batchMaterializer) throw new Error('Real proof materials require --batch-materializer')
-    producer = readProducerManifest(path.resolve(options.producerManifest))
-    aggregateVerifyingKey = producer.artifacts.root_agg_verifying_key.path
+    if (!/^[\da-f]{40}$/.test(options.scrollArtifacts.coreRevision)) throw new Error('Real proof materials require the full dogeos-core revision')
+    scroll = options.scrollArtifacts
+    aggregateVerifyingKey = path.resolve(scroll.aggregateVerifyingKey)
+    for (const [file, label] of [
+      [scroll.chunkAppExe, 'Chunk vmexe'], [scroll.chunkAppConfig, 'Chunk OpenVM config'],
+      [scroll.batchAppExe, 'Batch vmexe'], [scroll.batchAppConfig, 'Batch OpenVM config'], [aggregateVerifyingKey, 'Aggregate verifying key'],
+    ]) assertRegularFile(path.resolve(file), label)
     chunkMaterializer = path.resolve(options.chunkMaterializer)
     batchMaterializer = path.resolve(options.batchMaterializer)
     assertRegularFile(chunkMaterializer, 'Chunk materializer')
@@ -784,30 +689,21 @@ export function prepareProofMaterials(options: PrepareProofMaterialsOptions): {
           MOCK_WORKER_IDENTITY_RELATIVE_PATH,
         ),
         identities,
-        identitySource: options.scrollIdentityEvidence ? 'dogeos_core_scroll_identity_v1' : env ? 'real_identity_probe' : 'dogeos_core_synthetic_mock_v1',
+        identitySource: env ? 'real_identity_probe' : 'dogeos_core_synthetic_mock_v1',
       },
     }
 
-    if (options.scrollIdentityEvidence) {
-      receipt.software.scrollIdentityEvidence = copyMaterial(deploymentDir, outputRoot, options.scrollIdentityEvidence, 'software/identity/scroll-identities.json')
-    }
-
-    if (producer && chunkMaterializer && batchMaterializer) {
+    if (scroll && aggregateVerifyingKey && chunkMaterializer && batchMaterializer) {
       receipt.software.artifacts = {
-        aggregateVerifyingKey: copyMaterial(deploymentDir, outputRoot, producer.artifacts.root_agg_verifying_key.path, 'software/verifier/root_verifier_vk'),
-        batchAppConfig: copyMaterial(deploymentDir, outputRoot, producer.artifacts.batch_openvm_toml.path, 'software/batch/openvm.toml'),
-        batchAppExe: copyMaterial(deploymentDir, outputRoot, producer.artifacts.batch_vmexe.path, 'software/batch/app.vmexe'),
+        aggregateVerifyingKey: copyMaterial(deploymentDir, outputRoot, aggregateVerifyingKey, 'software/verifier/root_verifier_vk'),
+        batchAppConfig: copyMaterial(deploymentDir, outputRoot, path.resolve(scroll.batchAppConfig), 'software/batch/openvm.toml'),
+        batchAppExe: copyMaterial(deploymentDir, outputRoot, path.resolve(scroll.batchAppExe), 'software/batch/app.vmexe'),
         batchMaterializer: copyMaterial(deploymentDir, outputRoot, batchMaterializer, 'software/bin/batch-materializer'),
-        chunkAppConfig: copyMaterial(deploymentDir, outputRoot, producer.artifacts.chunk_openvm_toml.path, 'software/chunk/openvm.toml'),
-        chunkAppExe: copyMaterial(deploymentDir, outputRoot, producer.artifacts.chunk_vmexe.path, 'software/chunk/app.vmexe'),
+        chunkAppConfig: copyMaterial(deploymentDir, outputRoot, path.resolve(scroll.chunkAppConfig), 'software/chunk/openvm.toml'),
+        chunkAppExe: copyMaterial(deploymentDir, outputRoot, path.resolve(scroll.chunkAppExe), 'software/chunk/app.vmexe'),
         chunkMaterializer: copyMaterial(deploymentDir, outputRoot, chunkMaterializer, 'software/bin/chunk-materializer'),
       }
-      receipt.software.openvmVersion = producer.toolchain.openvm_tag
-      receipt.software.rustToolchain = producer.toolchain.rust
-      receipt.software.sourceRevisions = {
-        dogeosCore: producer.dogeos_core_commit,
-        scrollZkvmProver: producer.producer.commit,
-      }
+      receipt.software.sourceRevisions = {dogeosCore: scroll.coreRevision}
     } else if (env && aggregateVerifyingKey && chunkMaterializer && batchMaterializer) {
       receipt.software.materializationArtifacts = {
         aggregateVerifyingKey: copyMaterial(
@@ -934,7 +830,9 @@ export function readProofMaterials(receiptPath: string, deploymentDir = path.dir
   const receipt: ProofMaterialsV1 = {
     generatedAt: requiredString(root.generatedAt, 'proof material receipt.generatedAt'),
     images: {
-      mockWorker: imageReference(images.mockWorker, 'proof material receipt.images.mockWorker'),
+      ...(images.mockWorker === undefined ? {} : {
+        mockWorker: imageReference(images.mockWorker, 'proof material receipt.images.mockWorker'),
+      }),
       ...(images.productionWorker === undefined ? {} : {
         productionWorker: imageReference(images.productionWorker, 'proof material receipt.images.productionWorker'),
       }),
@@ -980,13 +878,8 @@ export function readProofMaterials(receiptPath: string, deploymentDir = path.dir
       chunkAppExe: proofMaterialFile(artifacts.chunkAppExe, 'software.artifacts.chunkAppExe'),
       chunkMaterializer: proofMaterialFile(artifacts.chunkMaterializer, 'software.artifacts.chunkMaterializer'),
     }
-    receipt.software.openvmVersion = requiredString(software.openvmVersion, 'software.openvmVersion')
-    receipt.software.rustToolchain = requiredString(software.rustToolchain, 'software.rustToolchain')
-    receipt.software.sourceRevisions = {
-      dogeosCore: requiredString(revisions.dogeosCore, 'software.sourceRevisions.dogeosCore'),
-      scrollZkvmProver: requiredString(revisions.scrollZkvmProver, 'software.sourceRevisions.scrollZkvmProver'),
-    }
-  } else if (software.openvmVersion !== undefined || software.rustToolchain !== undefined || software.sourceRevisions !== undefined) {
+    receipt.software.sourceRevisions = {dogeosCore: requiredString(revisions.dogeosCore, 'software.sourceRevisions.dogeosCore')}
+  } else if (software.sourceRevisions !== undefined) {
     throw new Error('Identity-only proof material receipt must not contain incomplete real-release metadata')
   }
 

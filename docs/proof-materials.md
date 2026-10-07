@@ -196,19 +196,23 @@ scrollsdk setup proof-materials \
   --batch-materializer /secure/build/scroll-runtime-materializer
 ```
 
-For real operation, run the producer/probe/baker first, then import the full
+For real operation, bake the deployment with the release producer
+(`setup proof-image-tools --action prepare-real`) first, then import the full
 result:
 
 ```bash
 scrollsdk setup proof-materials \
   --generation real \
-  --software-manifest /secure/build/real-proving-artifacts.json \
-  --identity-env /secure/build/real-identity.env \
-  --bridge-artifact-dir /secure/build/bridge-artifact
+  --artifact-root /secure/build/bake \
+  --expected-core-revision <full-40-character-core-sha> \
+  --identity-env /secure/build/bake/real-identity.env \
+  --bridge-artifact-dir /secure/build/bake/bridge \
+  --protocol-context .data/protocol_context.json
 ```
 
-The real path also requires the two materializer binaries and production Worker
-image; use `--help` for the exact flags. Import copies regular files into
+The real path also requires the two materializer binaries from the release
+`proof-coordinator` image (`setup proof-image-tools --action export`) and the
+production Worker image; use `--help` for the exact flags. Import copies regular files into
 `.data/proof-materials`, rejects symlinks and
 path traversal, recomputes every hash and identity relationship it can verify,
 and writes the same receipt as the guided path.

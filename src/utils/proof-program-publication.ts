@@ -11,7 +11,7 @@ import {PROOF_PROGRAM_PUBLICATION_SCHEMA} from '../types/proof-program-publicati
 import {readProofAwsConfig} from './proof-aws-config.js'
 import {proofArtifactS3Endpoint} from './proof-aws-provisioner.js'
 import {immutableProofImage, readProofMaterials} from './proof-materials.js'
-import {readProofSoftwareRelease} from './proof-software-release.js'
+import {PROOF_PUBLICATION_FILES, readProofSoftwareRelease} from './proof-software-release.js'
 import {validateProofTopologyBundle} from './proof-topology-compiler.js'
 
 export const DEFAULT_PROOF_PROGRAM_PUBLICATION_RECEIPT = '.data/proof-program-publication-v1.json'
@@ -195,18 +195,13 @@ export function planProofProgramPublication(options: PlanProofProgramPublication
     : undefined
   let publisherScript: string | undefined
   if (release) {
-    if (release.manifest.source.revision !== coreRevision) throw new Error('Release and materials core revisions differ')
-    for (const key of ['topologyCompiler', 'mockWorker', 'productionWorker'] as const) {
+    if (release.manifest.revision !== coreRevision) throw new Error('Release and materials core revisions differ')
+    for (const [key, name] of [['topologyCompiler', 'dogeos-proof-topology'], ['productionWorker', 'prover-worker-cuda']] as const) {
       const materialImage = materials.images[key]
-      if (!materialImage || immutableProofImage(materialImage) !== release.manifest.images[key].reference) throw new Error(`Release ${key} image differs from materials`)
+      if (!materialImage || immutableProofImage(materialImage) !== release.manifest.images[name]) throw new Error(`Release ${name} image differs from materials`)
     }
 
-    const {artifacts} = materials.software
-    if (!artifacts) throw new Error('Release publication requires complete software artifacts')
-    for (const [relative, key] of [['chunk/app.vmexe', 'chunkAppExe'], ['chunk/openvm.toml', 'chunkAppConfig'], ['batch/app.vmexe', 'batchAppExe'], ['batch/openvm.toml', 'batchAppConfig'], ['verifier/aggregate-vk', 'aggregateVerifyingKey']] as const) {
-      const expected = release.manifest.genericBundle.files[relative]
-      if (artifacts[key].sha256 !== expected.sha256 || artifacts[key].sizeBytes !== expected.sizeBytes) throw new Error(`Release generic material differs: ${relative}`)
-    }
+    if (!materials.software.artifacts) throw new Error('Release publication requires complete software artifacts')
   } else {
     if (!options.coreDir) throw new Error('Publication requires a digest-verified release manifest; core-dir is legacy compatibility only')
     const coreDir = path.resolve(options.coreDir)
@@ -214,7 +209,7 @@ export function planProofProgramPublication(options: PlanProofProgramPublication
     publisherScript = path.join(coreDir, 'tools/real-proving/publish-real-proving-bundle.sh')
   }
 
-  const contract = release?.manifest.publisher.files ?? publisherContract(publisherScript!)
+  const contract = release ? PROOF_PUBLICATION_FILES.map(([prefix, relativePath]) => ({prefix, relativePath})) : publisherContract(publisherScript!)
   const topology = validateProofTopologyBundle(path.resolve(deploymentDir, options.topologyBundle), {preflightOnly: false})
   if (topology.mode !== 'active' || topology.generation !== 'real' || !topology.worker) {
     throw new Error('Program publication requires an installable active/real topology bundle with a Worker contract')
@@ -244,7 +239,7 @@ export function planProofProgramPublication(options: PlanProofProgramPublication
     files,
     proofTopologyBundleRevision: topology.manifest.bundle_revision,
     publicEndpointUrl: trimSlash(aws.artifactReadTransport.publicEndpointUrl),
-    ...(publisherScript ? {publisherScript} : {publisherImage: release!.manifest.images.publisher.reference, releaseSha256: release!.sha256}),
+    ...(publisherScript ? {publisherScript} : {publisherImage: release!.manifest.images['proof-bundle-publisher'], releaseSha256: release!.sha256}),
     uploadEndpointUrl: proofArtifactS3Endpoint(aws.artifactStore.region),
   }
 }

@@ -7,20 +7,19 @@ import {proofFileHash, readProofSoftwareRelease, validateProofSoftwareRelease} f
 import {releaseFixture} from '../helpers/proof-software-release.js'
 
 describe('immutable proof software release', () => {
-  it('rejects mixed revisions, mutable images, missing inputs and changed mappings', () => {
+  it('rejects short revisions, mutable images, missing or unknown images and other schemas', () => {
     expect(validateProofSoftwareRelease(releaseFixture()).schema).to.equal('dogeos/proof-release/v1')
-    const mixed = releaseFixture()
-    mixed.images.publisher.coreRevision = 'e'.repeat(40)
-    expect(() => validateProofSoftwareRelease(mixed)).to.throw('core revision differs')
+    expect(() => validateProofSoftwareRelease(releaseFixture('a'.repeat(39)))).to.throw('Invalid core revision')
     const mutable = releaseFixture()
-    mutable.images.producer.reference = 'example/producer:latest'
+    mutable.images['proof-preparation-producer'] = 'example/producer:latest'
     expect(() => validateProofSoftwareRelease(mutable)).to.throw('repository@sha256')
-    const mapping = releaseFixture()
-    mapping.publisher.files[0].relativePath = '../secret'
-    expect(() => validateProofSoftwareRelease(mapping)).to.throw('mapping differs')
-    const missing = releaseFixture()
-    delete missing.genericBundle.files['batch/app.vmexe']
+    const missing = releaseFixture() as unknown as {images: Record<string, string>}
+    delete missing.images['prover-worker-cuda']
     expect(() => validateProofSoftwareRelease(missing)).to.throw('missing or unknown')
+    const unknown = releaseFixture() as unknown as {images: Record<string, string>}
+    unknown.images.producer = `example/producer@sha256:${'b'.repeat(64)}`
+    expect(() => validateProofSoftwareRelease(unknown)).to.throw('missing or unknown')
+    expect(() => validateProofSoftwareRelease({...releaseFixture(), genericBundle: {}})).to.throw('missing or unknown')
     expect(() => validateProofSoftwareRelease({...releaseFixture(), schema: 'future'})).to.throw('Unsupported')
   })
 

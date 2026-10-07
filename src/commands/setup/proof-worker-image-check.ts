@@ -15,7 +15,7 @@ export default class ProofWorkerImageCheck extends Command {
 
   static examples = [
     '<%= config.bin %> <%= command.id %> --image dogeos69/prover-worker-cuda:TAG --preparation-receipt .data/proof-release-preparation-v1.json',
-    '<%= config.bin %> <%= command.id %> --image repo/worker@sha256:... --identity-env /build/identity-full.env --expected-core-revision <40-hex-sha>',
+    '<%= config.bin %> <%= command.id %> --image repo/worker@sha256:... --identity-env /build/bake/real-identity.env --expected-core-revision <40-hex-sha>',
   ]
 
   static flags = {

@@ -17,12 +17,9 @@ const CORE_REVISION = /^[\da-f]{40}$/
 
 export interface CaptureProofReleasePreparationOptions {
   artifactRoot: string
-  batchMaterializer?: string
-  chunkMaterializer?: string
   expectedCoreRevision: string
   identityEnv?: string
   output: string
-  producerManifest?: string
   protocolContext?: string
 }
 
@@ -90,10 +87,11 @@ function readJson(file: string, label: string): unknown {
   }
 }
 
-function producerCoreRevision(file: string): string {
-  const manifest = mapping(readJson(file, 'real-proving producer manifest'), 'real-proving producer manifest')
-  const revision = requiredString(manifest.dogeos_core_commit, 'real-proving producer manifest.dogeos_core_commit')
-  if (!CORE_REVISION.test(revision)) throw new Error('real-proving producer manifest.dogeos_core_commit must be a full lowercase Git SHA')
+/** The producer compiles its revision into the Worker that writes this bundle. */
+function bakeCoreRevision(file: string): string {
+  const bundle = mapping(readJson(file, 'Bridge bake worker-identity-bundle.json'), 'Bridge bake worker-identity-bundle.json')
+  const revision = requiredString(bundle.image_revision, 'worker-identity-bundle.json image_revision')
+  if (!CORE_REVISION.test(revision)) throw new Error('worker-identity-bundle.json image_revision must be a full lowercase Git SHA')
   return revision
 }
 
@@ -126,43 +124,38 @@ export function captureProofReleasePreparation(
     throw new Error(`Artifact root must be a non-symlink directory: ${root}`)
   }
 
-  const identityEnv = regularFile(options.identityEnv ?? path.join(root, 'identity-full.env'), 'Full identity env')
+  const identityEnv = regularFile(options.identityEnv ?? path.join(root, 'real-identity.env'), 'Real identity env')
   parseProofIdentityEnv(fs.readFileSync(identityEnv, 'utf8'))
-  const producerManifest = regularFile(
-    options.producerManifest ?? path.join(root, 'real-proving-artifacts.json'),
-    'Real-proving producer manifest',
-  )
-  const actualRevision = producerCoreRevision(producerManifest)
+  const bridge = path.join(root, 'bridge')
+  const workerIdentityBundle = fingerprint(path.join(bridge, 'worker-identity-bundle.json'), 'Worker identity bundle')
+  const actualRevision = bakeCoreRevision(workerIdentityBundle.path)
   if (actualRevision !== options.expectedCoreRevision) {
-    throw new Error(`Producer manifest core revision ${actualRevision} does not match expected ${options.expectedCoreRevision}`)
+    throw new Error(`Bridge bake core revision ${actualRevision} does not match expected ${options.expectedCoreRevision}`)
   }
 
-  const bridge = path.join(root, 'bridge')
   const receipt: ProofReleasePreparationV1 = {
     coreRevision: options.expectedCoreRevision,
     files: {
-      batchMaterializer: fingerprint(
-        options.batchMaterializer ?? path.join(root, 'bin/scroll-runtime-materializer'),
-        'Batch materializer',
-      ),
       bridge: {
         appConfig: fingerprint(path.join(bridge, 'openvm.toml'), 'Bridge OpenVM config'),
         appExe: fingerprint(path.join(bridge, 'bridge-state.vmexe'), 'Bridge app vmexe'),
         l2RangeAppConfig: fingerprint(path.join(bridge, 'batch-aggregation-openvm.toml'), 'L2-range OpenVM config'),
         l2RangeAppExe: fingerprint(path.join(bridge, 'batch-aggregation.vmexe'), 'L2-range app vmexe'),
         nativeManifest: fingerprint(path.join(bridge, 'bridge-artifact-manifest.json'), 'Bridge artifact manifest'),
-        workerIdentityBundle: fingerprint(path.join(bridge, 'worker-identity-bundle.json'), 'Worker identity bundle'),
+        workerIdentityBundle,
       },
-      chunkMaterializer: fingerprint(
-        options.chunkMaterializer ?? path.join(root, 'bin/materialize-chunk-oneshot'),
-        'Chunk materializer',
-      ),
-      identityEnv: fingerprint(identityEnv, 'Full identity env'),
-      producerManifest: fingerprint(producerManifest, 'Real-proving producer manifest'),
+      identityEnv: fingerprint(identityEnv, 'Real identity env'),
       protocolContext: fingerprint(
         options.protocolContext ?? path.join(root, 'protocol_context.json'),
         'Deployment protocol context',
       ),
+      scroll: {
+        aggregateVerifyingKey: fingerprint(path.join(root, 'verifier/aggregate-vk'), 'Aggregate verifying key'),
+        batchAppConfig: fingerprint(path.join(root, 'batch/openvm.toml'), 'Batch OpenVM config'),
+        batchAppExe: fingerprint(path.join(root, 'batch/app.vmexe'), 'Batch app vmexe'),
+        chunkAppConfig: fingerprint(path.join(root, 'chunk/openvm.toml'), 'Chunk OpenVM config'),
+        chunkAppExe: fingerprint(path.join(root, 'chunk/app.vmexe'), 'Chunk app vmexe'),
+      },
     },
     generatedAt: new Date().toISOString(),
     schema: PROOF_RELEASE_PREPARATION_SCHEMA,
@@ -187,10 +180,10 @@ export function validateProofReleasePreparation(raw: unknown, label: string): Pr
   if (!CORE_REVISION.test(coreRevision)) throw new Error(`${label}.coreRevision must be a full lowercase Git SHA`)
   const files = mapping(root.files, `${label}.files`)
   const bridge = mapping(files.bridge, `${label}.files.bridge`)
+  const scroll = mapping(files.scroll, `${label}.files.scroll`)
   const receipt: ProofReleasePreparationV1 = {
     coreRevision,
     files: {
-      batchMaterializer: preparationFile(files.batchMaterializer, `${label}.files.batchMaterializer`),
       bridge: {
         appConfig: preparationFile(bridge.appConfig, `${label}.files.bridge.appConfig`),
         appExe: preparationFile(bridge.appExe, `${label}.files.bridge.appExe`),
@@ -199,19 +192,23 @@ export function validateProofReleasePreparation(raw: unknown, label: string): Pr
         nativeManifest: preparationFile(bridge.nativeManifest, `${label}.files.bridge.nativeManifest`),
         workerIdentityBundle: preparationFile(bridge.workerIdentityBundle, `${label}.files.bridge.workerIdentityBundle`),
       },
-      chunkMaterializer: preparationFile(files.chunkMaterializer, `${label}.files.chunkMaterializer`),
       identityEnv: preparationFile(files.identityEnv, `${label}.files.identityEnv`),
-      producerManifest: preparationFile(files.producerManifest, `${label}.files.producerManifest`),
       protocolContext: preparationFile(files.protocolContext, `${label}.files.protocolContext`),
+      scroll: {
+        aggregateVerifyingKey: preparationFile(scroll.aggregateVerifyingKey, `${label}.files.scroll.aggregateVerifyingKey`),
+        batchAppConfig: preparationFile(scroll.batchAppConfig, `${label}.files.scroll.batchAppConfig`),
+        batchAppExe: preparationFile(scroll.batchAppExe, `${label}.files.scroll.batchAppExe`),
+        chunkAppConfig: preparationFile(scroll.chunkAppConfig, `${label}.files.scroll.chunkAppConfig`),
+        chunkAppExe: preparationFile(scroll.chunkAppExe, `${label}.files.scroll.chunkAppExe`),
+      },
     },
     generatedAt: requiredString(root.generatedAt, `${label}.generatedAt`),
     schema: PROOF_RELEASE_PREPARATION_SCHEMA,
     schemaVersion: 1,
   }
   parseProofIdentityEnv(fs.readFileSync(receipt.files.identityEnv.path, 'utf8'))
-  const manifestRevision = producerCoreRevision(receipt.files.producerManifest.path)
-  if (manifestRevision !== receipt.coreRevision) {
-    throw new Error(`${label} producer manifest revision does not match coreRevision`)
+  if (bakeCoreRevision(receipt.files.bridge.workerIdentityBundle.path) !== receipt.coreRevision) {
+    throw new Error(`${label} Bridge bake revision does not match coreRevision`)
   }
 
   return receipt

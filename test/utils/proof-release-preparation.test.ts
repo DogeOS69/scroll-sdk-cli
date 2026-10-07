@@ -38,16 +38,14 @@ describe('proof release preparation receipt', () => {
       DOGEOS_CHUNK_PROGRAM_COMMITMENT_RAW: hex64('a'),
       DOGEOS_CHUNK_VK_HASH: hex32('b'),
     }
-    write('identity-full.env', Object.entries(identities).map(([key, value]) => `export ${key}=${value}`).join('\n'))
-    write('real-proving-artifacts.json', JSON.stringify({dogeos_core_commit: revision}))
+    write('real-identity.env', Object.entries(identities).map(([key, value]) => `export ${key}=${value}`).join('\n'))
     write('protocol_context.json', '{}')
-    write('bin/materialize-chunk-oneshot')
-    write('bin/scroll-runtime-materializer')
+    for (const file of ['chunk/app.vmexe', 'chunk/openvm.toml', 'batch/app.vmexe', 'batch/openvm.toml', 'verifier/aggregate-vk']) write(file)
+    write('bridge/worker-identity-bundle.json', JSON.stringify({image_revision: revision}))
     for (const file of [
       'bridge-state.vmexe',
       'openvm.toml',
       'bridge-artifact-manifest.json',
-      'worker-identity-bundle.json',
       'batch-aggregation.vmexe',
       'batch-aggregation-openvm.toml',
     ]) write(`bridge/${file}`)
@@ -55,7 +53,7 @@ describe('proof release preparation receipt', () => {
 
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
-  it('captures all native handoff paths and detects later drift', () => {
+  it('captures the prepare-real output tree and detects later drift', () => {
     const output = path.join(root, 'receipt.json')
     const result = captureProofReleasePreparation({
       artifactRoot: artifacts,
@@ -65,6 +63,7 @@ describe('proof release preparation receipt', () => {
     expect(result.receipt.schema).to.equal('scrollsdk/proof-release-preparation/v1')
     expect(result.receipt.files.bridge.workerIdentityBundle.path)
       .to.equal(path.join(artifacts, 'bridge/worker-identity-bundle.json'))
+    expect(result.receipt.files.scroll.aggregateVerifyingKey.path).to.equal(path.join(artifacts, 'verifier/aggregate-vk'))
     expect(readProofReleasePreparation(output).coreRevision).to.equal(revision)
 
     fs.appendFileSync(path.join(artifacts, 'protocol_context.json'), ' ')
@@ -87,8 +86,8 @@ describe('proof release preparation receipt', () => {
     expect(() => captureProofReleasePreparation({artifactRoot: artifacts, expectedCoreRevision: revision, output}))
       .to.throw('Refusing to overwrite')
 
-    fs.unlinkSync(path.join(artifacts, 'bin/materialize-chunk-oneshot'))
-    fs.symlinkSync(path.join(artifacts, 'bin/scroll-runtime-materializer'), path.join(artifacts, 'bin/materialize-chunk-oneshot'))
+    fs.unlinkSync(path.join(artifacts, 'chunk/app.vmexe'))
+    fs.symlinkSync(path.join(artifacts, 'batch/app.vmexe'), path.join(artifacts, 'chunk/app.vmexe'))
     expect(() => captureProofReleasePreparation({
       artifactRoot: artifacts,
       expectedCoreRevision: revision,
