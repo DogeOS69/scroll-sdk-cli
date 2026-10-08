@@ -391,6 +391,30 @@ function resourceMayOverlapPrefix(resource: unknown, bucket: string, keyPrefix: 
     || wildcardMatches(objectPattern, `${managedPrefix}0xexample`)
 }
 
+/**
+ * First Allow statement, other than `ownedSids`, that grants any action to
+ * an anonymous principal on objects overlapping `bucket/keyPrefix` without
+ * a VPC endpoint restriction: a public read or write the caller does not own.
+ */
+export function findUnmanagedAnonymousGrant(
+  policy: Record<string, any>,
+  bucket: string,
+  keyPrefix: string,
+  ownedSids: readonly string[],
+): Record<string, any> | undefined {
+  const statements = Array.isArray(policy.Statement)
+    ? policy.Statement
+    : policy.Statement ? [policy.Statement] : []
+  return statements.find((statement: any) =>
+    statement?.Effect === 'Allow'
+    && !ownedSids.includes(statement?.Sid)
+    && principalIncludesWildcard(statement.Principal)
+    && !isVpcEndpointRestricted(statement)
+    && (Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource])
+      .some((resource: unknown) => resourceMayOverlapPrefix(resource, bucket, keyPrefix))
+  )
+}
+
 export function assertNoUnmanagedPublicProofBucketGrant(
   policy: Record<string, any>,
   bucket: string,

@@ -2,7 +2,7 @@ import {Command, Flags} from '@oclif/core'
 
 import type {ArchiveStoreKind} from '../../utils/artifact-access.js'
 
-import {applyArtifactAccess, checkArtifactWriter, planArtifactAccess} from '../../utils/artifact-access.js'
+import {applyArtifactAccess, checkArtifactAccess, planArtifactAccess} from '../../utils/artifact-access.js'
 import {readArtifactStore, readOptionalArtifactStore} from '../../utils/artifact-stores.js'
 import {AwsCliRunner} from '../../utils/aws-cli.js'
 import {JsonOutputContext} from '../../utils/json-output.js'
@@ -40,15 +40,12 @@ export default class ArtifactAccess extends Command {
       const recordedVpce = proofAws?.artifactReadTransport.vpcEndpoint?.vpcEndpointId
       // A gateway endpoint only serves buckets in its own region.
       const vpcEndpointId = flags['vpc-endpoint-id'] ?? (proofAws?.kubernetes.awsRegion === store.region ? recordedVpce : undefined)
-      if (!vpcEndpointId) output.addWarning(`No S3 Gateway VPC endpoint for ${store.region}; the VPC endpoint read statement is left unchanged`)
+      if (!vpcEndpointId) output.addWarning(`No S3 Gateway VPC endpoint for ${store.region} recorded or supplied; the existing VPC endpoint read statement is kept and must be usable whenever public read is off`)
       const sidecarStore = kind === 'da' && flags['writer-role-arn'] ? readOptionalArtifactStore('proof', flags['deployment-dir'], flags['doge-config']) : undefined
       if (kind === 'da' && flags['writer-role-arn'] && !sidecarStore) output.addWarning('proofArtifacts.s3 is not configured; the DA writer gets no segmentation-sidecar grant')
       const aws = new AwsCliRunner(flags['aws-profile'])
       const plan = planArtifactAccess(aws, kind, store, {publicRead: flags['public-read'], sidecarStore, vpcEndpointId, writerRoleArn: flags['writer-role-arn']})
-      if (flags.check) {
-        if (plan.bucketPolicy.changed || plan.versioning.changed) throw new Error('Bucket policy or versioning differs from the requested state; review the plan, then --apply')
-        checkArtifactWriter(aws, plan)
-      }
+      if (flags.check) checkArtifactAccess(aws, plan)
 
       if (flags.apply) applyArtifactAccess(aws, plan)
       output.addWarning('Policy checks do not certify live access: verify unsigned reads of actual objects and writes from the workload; explicit denies, endpoint policies and KMS can still block access.')

@@ -116,6 +116,20 @@ statements are preserved, even explicit Deny statements. Policy changes observed
 between planning and writing stop the operation. AWS has no bucket-policy
 compare-and-swap; serialize concurrent policy updates.
 
+The plan fails closed, before any write, when:
+
+- another statement grants anonymous access to the prefix (for example a legacy
+  `ScrollSdkArtifactRead*` grant from the previous `artifact-access`, or a
+  public write). Remove it from the bucket policy yourself; the CLI never
+  deletes statements it does not own;
+- public read would be off but no usable VPC endpoint read statement exists
+  for the prefix: the endpoint must be an available S3 Gateway endpoint in the
+  bucket's region (supply it with `--vpc-endpoint-id` if none is recorded).
+
+`--check` also fails when the managed writer inline policy differs from the
+planned one (for example the old bucket-wide grant, or an extra DeleteObject).
+It does not audit other policies attached to the role.
+
 The command checks bucket/account public policy restrictions before adding a
 public statement. If the account disallows public policies, have its owner
 configure delivery or use an existing gateway.

@@ -3,7 +3,7 @@ import {isDeepStrictEqual} from 'node:util'
 import type {ArtifactStore} from './artifact-stores.js'
 import type {AwsCliRunner} from './aws-cli.js'
 
-import {DENY_INSECURE_TRANSPORT_SID, denyInsecureTransportStatement, normalizeProofBucketName, normalizeProofKeyPrefix} from './proof-aws-provisioner.js'
+import {DENY_INSECURE_TRANSPORT_SID, denyInsecureTransportStatement, findUnmanagedAnonymousGrant, normalizeProofBucketName, normalizeProofKeyPrefix} from './proof-aws-provisioner.js'
 
 type Document = Record<string, unknown>
 type Aws = Pick<AwsCliRunner, 'json' | 'run' | 'text'>
@@ -163,6 +163,45 @@ function assertPublicAccessBlock(aws: Aws, bucket: string, region: string): void
   }
 }
 
+/**
+ * The requested posture only holds if no statement the CLI does not own also
+ * grants anonymous access to the prefix (e.g. a legacy setup artifact-access
+ * ScrollSdkArtifactRead* grant, or a public write). Such statements are never
+ * deleted silently; the operator removes them.
+ */
+function assertNoUnmanagedAnonymousGrant(policy: Document, kind: ArchiveStoreKind, bucket: string, keyPrefix: string): void {
+  const sids = ARCHIVE_POLICY_SIDS[kind]
+  const unmanaged = findUnmanagedAnonymousGrant(policy, bucket, keyPrefix, [sids.publicRead, sids.vpceRead])
+  if (!unmanaged) return
+  const sid = typeof unmanaged.Sid === 'string' ? unmanaged.Sid : '<without Sid>'
+  const legacy = sid.startsWith('ScrollSdkArtifactRead') ? ' (a legacy setup artifact-access grant)' : ''
+  throw new Error(
+    `Bucket policy statement ${sid}${legacy} grants anonymous ${JSON.stringify(unmanaged.Action)} on s3://${bucket}/${keyPrefix} `
+    + `outside the CLI-managed statements, so the requested access posture would not hold. Remove that statement from the bucket policy, then rerun.`,
+  )
+}
+
+/**
+ * Without the public statement, credential-free reads by our services depend
+ * on the VPC endpoint statement: it must exist for this prefix and name an
+ * available S3 Gateway endpoint in the bucket's region.
+ */
+function assertClusterReadPath(aws: Aws, policy: Document, kind: ArchiveStoreKind, bucket: string, keyPrefix: string, region: string): void {
+  const sids = ARCHIVE_POLICY_SIDS[kind]
+  const statements = statementsOf(policy)
+  if (statements.some(item => item.Sid === sids.publicRead)) return
+  const vpce = statements.find(item => item.Sid === sids.vpceRead)
+  const endpointId = (vpce?.Condition as any)?.StringEquals?.['aws:SourceVpce']
+  if (!vpce || vpce.Resource !== objectArn(bucket, keyPrefix) || typeof endpointId !== 'string') {
+    throw new Error(`Refusing a ${kind} bucket policy without public read and without a VPC endpoint read statement for s3://${bucket}/${keyPrefix}: our services would lose read access. Pass --vpc-endpoint-id for the cluster's ${region} S3 Gateway endpoint`)
+  }
+
+  const endpoint = aws.json(['ec2', 'describe-vpc-endpoints', '--vpc-endpoint-ids', endpointId], {region})?.VpcEndpoints?.[0]
+  if (endpoint?.VpcEndpointType !== 'Gateway' || endpoint?.ServiceName !== `com.amazonaws.${region}.s3` || endpoint?.State !== 'available') {
+    throw new Error(`VPC endpoint ${endpointId} is not an available ${region} S3 Gateway endpoint (type=${String(endpoint?.VpcEndpointType)} service=${String(endpoint?.ServiceName)} state=${String(endpoint?.State)}); our services could not read s3://${bucket}/${keyPrefix} without public read`)
+  }
+}
+
 export function planArtifactAccess(aws: Aws, kind: ArchiveStoreKind, store: ArtifactStore, options: ArtifactAccessOptions): ArtifactAccessPlan {
   const bucket = normalizeProofBucketName(store.bucket)
   const keyPrefix = normalizeProofKeyPrefix(store.keyPrefix)
@@ -175,6 +214,8 @@ export function planArtifactAccess(aws: Aws, kind: ArchiveStoreKind, store: Arti
 
   const before = bucketPolicy(aws, plan)
   const after = buildArchiveBucketPolicy(before, kind, bucket, keyPrefix, options)
+  assertNoUnmanagedAnonymousGrant(after, kind, bucket, keyPrefix)
+  assertClusterReadPath(aws, after, kind, bucket, keyPrefix, store.region)
   plan.bucketPolicy = {after, before, changed: !isDeepStrictEqual(before, after)}
   const status = versioningStatus(aws, plan)
   plan.versioning = {before: status, changed: status !== 'Enabled'}
@@ -215,9 +256,16 @@ export function applyArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
   }
 }
 
-/** IAM simulation is diagnostic, not proof of live S3 access (SCP, bucket,
- * endpoint policies and KMS can still deny an actual workload request). */
-export function checkArtifactWriter(aws: Aws, plan: ArtifactAccessPlan): void {
+/**
+ * Read-only check: bucket policy, versioning and the managed writer policy
+ * must already equal the plan, then IAM simulation confirms the writer's
+ * actions. Simulation is diagnostic, not proof of live S3 access (SCP, bucket,
+ * endpoint policies and KMS can still deny an actual workload request), and
+ * other policies attached to the role are not audited.
+ */
+export function checkArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
+  if (plan.bucketPolicy.changed || plan.versioning.changed) throw new Error('Bucket policy or versioning differs from the requested state; review the plan, then --apply')
+  if (plan.writerPolicy?.changed) throw new Error(`Writer inline policy ${plan.writerPolicy.name} on ${plan.writerPolicy.roleName} differs from the managed policy; review the plan, then --apply`)
   if (!plan.writerPolicy) return
   for (const statement of statementsOf(plan.writerPolicy.after)) {
     const actions = (Array.isArray(statement.Action) ? statement.Action : [statement.Action]) as string[]
