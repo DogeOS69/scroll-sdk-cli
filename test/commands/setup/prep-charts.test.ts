@@ -12,6 +12,7 @@ import PrepCharts, {
   applyFeeOracleCurrentEnv,
   applyFrontendEnvFileValues,
   applyL2RethRpcPublicIngressPolicy,
+  applyTsoPublicEdgePaths,
   applyL2RethRpcRuntimeValues,
   applyRethBlobS3Url,
   applyRethNetworkId,
@@ -270,6 +271,34 @@ describe('setup prep-charts retired CubeSigner instance cleanup', () => {
     } finally {
       fs.rmSync(valuesDir, { force: true, recursive: true })
     }
+  })
+})
+
+describe('setup prep-charts TSO public edge', () => {
+  it('narrows an existing catch-all route to /health and /signer, keeping host, TLS and annotations', () => {
+    const values: any = {ingress: {main: {
+      annotations: {'alb.ingress.kubernetes.io/certificate-arn': 'arn:aws:acm:us-east-1:123456789012:certificate/x', 'nginx.ingress.kubernetes.io/proxy-body-size': '16m'},
+      enabled: true,
+      hosts: [{host: 'tso.example.com', paths: [{path: '/', pathType: 'Prefix'}]}],
+      ingressClassName: 'alb',
+      tls: [{hosts: ['tso.example.com'], secretName: 'tso-tls'}],
+    }}}
+    const before = structuredClone(values)
+    const changes = applyTsoPublicEdgePaths(values)
+    expect(changes.map(change => change.key)).to.deep.equal(['ingress.main.hosts[0].paths'])
+    expect(values.ingress.main.hosts).to.deep.equal([{host: 'tso.example.com', paths: [{path: '/health', pathType: 'Exact'}, {path: '/signer', pathType: 'Prefix'}]}])
+    expect({...values.ingress.main, hosts: undefined}).to.deep.equal({...before.ingress.main, hosts: undefined})
+    expect(applyTsoPublicEdgePaths(values)).to.deep.equal([])
+  })
+
+  it('also narrows extra or exact legacy routes and leaves disabled ingresses alone', () => {
+    const values: any = {ingress: {
+      legacy: {enabled: false, hosts: [{host: 'old', paths: [{path: '/', pathType: 'Prefix'}]}]},
+      main: {hosts: [{host: 'tso', paths: [{path: '/health', pathType: 'Exact'}, {path: '/propose', pathType: 'Exact'}]}]},
+    }}
+    applyTsoPublicEdgePaths(values)
+    expect(values.ingress.main.hosts[0].paths.map((entry: {path: string}) => entry.path)).to.deep.equal(['/health', '/signer'])
+    expect(values.ingress.legacy.hosts[0].paths).to.deep.equal([{path: '/', pathType: 'Prefix'}])
   })
 })
 

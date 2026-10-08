@@ -1053,6 +1053,36 @@ export function applyL2RethRpcRuntimeValues(
   return changes
 }
 
+/** The TSO's only public routes: health and the transport-signed signer routes. */
+export const TSO_PUBLIC_INGRESS_PATHS = [
+  {path: '/health', pathType: 'Exact'},
+  {path: '/signer', pathType: 'Prefix'},
+] as const
+
+/**
+ * Reconcile every enabled TSO ingress host to the public-edge allowlist.
+ * Existing values arrays override the chart default, so an older `/` route
+ * would otherwise keep /propose, /register-*, /status and the unprefixed
+ * callbacks public. Hosts, TLS and controller annotations are preserved.
+ */
+export function applyTsoPublicEdgePaths(productionYaml: any): PrepChartChange[] {
+  const changes: PrepChartChange[] = []
+  const ingresses = productionYaml.ingress
+  if (!ingresses || typeof ingresses !== 'object') return changes
+  for (const [ingressKey, ingress] of Object.entries(ingresses as Record<string, any>)) {
+    if (!ingress || typeof ingress !== 'object' || ingress.enabled === false || !Array.isArray(ingress.hosts)) continue
+    for (const [index, host] of ingress.hosts.entries()) {
+      if (!host || typeof host !== 'object') continue
+      const desired = TSO_PUBLIC_INGRESS_PATHS.map(entry => ({...entry}))
+      if (JSON.stringify(host.paths) === JSON.stringify(desired)) continue
+      changes.push({key: `ingress.${ingressKey}.hosts[${index}].paths`, newValue: JSON.stringify(desired), oldValue: JSON.stringify(host.paths ?? null)})
+      host.paths = desired
+    }
+  }
+
+  return changes
+}
+
 export function applyL2RethRpcPublicIngressPolicy(productionYaml: any): PrepChartChange[] {
   const changes: PrepChartChange[] = []
   const { ingress } = productionYaml
@@ -3233,6 +3263,12 @@ export default class SetupPrepCharts extends Command {
         }
       }
       else if (chartName === "tso-service") {
+        const edgeChanges = applyTsoPublicEdgePaths(productionYaml)
+        if (edgeChanges.length > 0) {
+          changes.push(...edgeChanges)
+          updated = true
+        }
+
         // Old deployment files may predate the chart default. Fill only a
         // missing annotation; explicit operator limits (including null to
         // remove the Helm default) and other annotations remain untouched.
