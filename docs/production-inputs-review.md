@@ -135,16 +135,41 @@ policy, S3 artifacts and local images remain available for review. Private logs,
 signing sessions and AWS credentials remain outside the repositories and must
 not be published.
 
-## PR image validation in progress
+## GitHub Actions development-image validation
 
-The core PR now provides an explicit `proof-release-preview` option in the
-existing **Build and Push Docker Images** workflow. The
-[actual CI run](https://github.com/DogeOS69/dogeos-core/actions/runs/37742120516)
-builds revision `d0c9ce11a3c2a3ebc111bfb7f1d77e78c730ff3a`. It must publish all
-five release images plus the separate policy compiler, pass their gates, and
-emit a revision-checked digest manifest before this run can replace the local
-validation inputs above. At this checkpoint publication and CLI consumption
-are still in progress; the earlier local result does not establish CI success.
+[Actions run 37752996863](https://github.com/DogeOS69/dogeos-core/actions/runs/37752996863)
+succeeded for core revision `b52c856b6185e585ea8a01639f4c460e6d85f8a1`.
+It built and published all seven core tool images: bridge-genesis tools, the
+five proof-release images, and the policy compiler. Every newly published tag
+starts with `dev-`; the workflow does not publish version or `latest` aliases.
+The handoff contains the five-image manifest, its checksum, the core revision,
+and separate compiler and bridge-genesis selectors. All seven OCI revisions
+were checked, and CLI execution used immutable digests.
+
+A new deployment in `/tmp/scrollsdk-ci-dev-37752996863` used a dedicated test
+key/role and new shadowfork bridge transactions. Core tool steps used the CI
+images without a host core checkout. L2 genesis used the existing local
+`scroll-contracts` backend; this is not a claim of container-only contract
+artifact generation, and no contracts repository changes were made.
+
+| Step | Observed result |
+| --- | --- |
+| Bridge initialization | All five stages used the CI bridge-genesis digest through the new `--image` option. All 11 bridge transactions were confirmed. An independent pre-bake check verified the exact 42,069,000-koinu output, sequencer P2PKH script, txid/vout, confirmation and unspent status. |
+| Installed CLI | Proof and policy steps ran from the packed CLI without a `src` directory, using already installed Node dependencies. |
+| Offline preparation | `prepare-real` passed in 484 seconds with network disabled and only the context/output mounts. Image-tool export, CUDA identity comparison and real material generation passed. |
+| Fresh S3 input | The first chart-preparation attempt correctly rejected missing canonical `ethereumDa.blobArchive.s3`. Supplying the authorized test bucket and independent subprefix in the deployment input allowed the remaining commands to proceed. |
+| Publication | The CI publisher uploaded all 11 files and verified authenticated S3 and anonymous HTTPS readback. Bucket policy remained unchanged. Charts, secrets and signer handoffs were regenerated with the publication receipt. |
+| Policy compilation | The CI compiler produced a 1,086,699-byte deployment-specific Wasm. SHA256: `1e91e82adcb7fcb362c4e78d3dc9096ba9b2fb7714c82ce258538590b38b7b6b`. Its resolver includes the exact deployment prefix. |
+| Policy binding | `scrollsdk_ci_37752996863/v0` was uploaded, its remote hash verified, the empty request denied, and the dedicated test key attached with verified provider-ID readback. |
+| Rendering and regression | All 12 generated service/node values rendered with the SDK charts. CLI tests: 861 passed, 15 pending; targeted lint: zero errors, one existing warning. |
+| Final activation gate | `proof-config-check` returned `E712_PROOF_DEPLOYMENT_INVALID`: the publication input is bound, but the workload IAM/artifact-store receipt is absent. The gate was retained; the combined high-level preparation/publication transaction was not executed. |
+
+The CI artifact handoff and redacted summary are under `handoff/` and
+`evidence/summary.json` in that temporary root. The test signing session was
+revoked and the dedicated Anvil stopped. Key/role/policy and published artifacts
+remain for review. Resolver allowlist preview still requires an organization
+change; this run made no organization configuration writes and does not claim
+hosted proof delivery, strict proof acceptance, GPU proving or a service rollout.
 
 ## Production conditions still outside this acceptance
 
