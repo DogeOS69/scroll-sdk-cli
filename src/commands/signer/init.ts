@@ -75,6 +75,52 @@ export function renderSignerReleasePins(options: {
   ]
 }
 
+/**
+ * Wrap the signer's --print-identity output into descriptor.json after
+ * checking it belongs to this signer's network and attestation key.
+ */
+function writeDescriptor(identityFile: string, expected: {id: string; network: string; publicKey: string}, descriptorFile: string): Record<string, string> {
+  const source = path.resolve(identityFile)
+  let raw: unknown
+  try {
+    raw = JSON.parse(fs.readFileSync(source, 'utf8'))
+  } catch (error) {
+    throw new Error(`${source}: failed to read identity: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  const identity = validateAttestationSignerIdentity(raw, source)
+  if (identity.network !== expected.network) throw new Error(`${source}: network ${identity.network} does not match --network ${expected.network}`)
+  if (identity.publicKey !== expected.publicKey) throw new Error(`${source}: publicKey ${identity.publicKey} does not match this signer's key ${expected.publicKey}`)
+  const descriptor = {...identity, id: expected.id}
+  fs.writeFileSync(descriptorFile, `${JSON.stringify(descriptor, null, 2)}\n`)
+  return descriptor
+}
+
+/**
+ * The attestation key an existing signer env already records, re-validated
+ * read-only: the local WIF's key, or the recorded KMS key's GetPublicKey
+ * (which must still equal ATTESTATION_SIGNER_KMS_EXPECTED_SIGNER_ID).
+ */
+function recordedPublicKey(env: string, secretFile: string, flags: {'aws-profile'?: string; 'kms-key-id'?: string; network: string}): {backend: string; kmsKeyId?: string; publicKey: string} {
+  const network = readEnvValue(env, 'ATTESTATION_SIGNER_NETWORK')
+  if (network !== flags.network) throw new Error(`${secretFile} is for network ${String(network)}, not --network ${flags.network}`)
+  const backend = readEnvValue(env, 'ATTESTATION_SIGNER_BACKEND')
+  if (backend === 'aws_kms') {
+    const kmsKeyId = readEnvValue(env, 'ATTESTATION_SIGNER_KMS_KEY_ID')
+    const region = readEnvValue(env, 'ATTESTATION_SIGNER_KMS_REGION')
+    const expected = readEnvValue(env, 'ATTESTATION_SIGNER_KMS_EXPECTED_SIGNER_ID')
+    if (!kmsKeyId || !region || !expected) throw new Error(`${secretFile} does not record a complete KMS signer (key id, region, expected signer id)`)
+    if (flags['kms-key-id'] && flags['kms-key-id'] !== kmsKeyId) throw new Error(`--kms-key-id ${flags['kms-key-id']} differs from the recorded ${kmsKeyId}; pass --force to reprovision`)
+    const publicKey = assertCompressedSecp256k1PublicKey(fetchKmsCompressedPublicKey(kmsKeyId, region, flags['aws-profile']), 'KMS public key')
+    if (publicKey !== expected.toLowerCase()) throw new Error(`KMS key ${kmsKeyId} now has public key ${publicKey}, not the recorded ${expected}`)
+    return {backend: 'aws-kms', kmsKeyId, publicKey}
+  }
+
+  const wif = readEnvValue(env, 'ATTESTATION_SIGNER_WIF')
+  if (backend !== 'local' || !wif) throw new Error(`${secretFile} records no usable signer backend`)
+  return {backend: 'local', publicKey: PrivateKey.fromWIF(wif).toPublicKey().toString().toLowerCase()}
+}
+
 export class SignerInitCommand extends Command {
   static description = 'Signer-operator tool: create key material, secret deployment env, and a partner-owned V2 policy template; with --identity, wrap the signer\'s --print-identity output into the public descriptor. Run on your infrastructure; secrets and AWS calls never leave it. Send the descriptor before genesis, then deploy and preflight only after receiving the canonical-context policy bundle.'
 
@@ -112,6 +158,21 @@ export class SignerInitCommand extends Command {
       const descriptorFile = path.join(outDir, 'descriptor.json')
       fs.mkdirSync(outDir, { recursive: true })
       const existingEnv = fs.existsSync(secretFile) ? fs.readFileSync(secretFile, 'utf8') : ''
+      if (flags.identity && flags['create-key']) {
+        throw new Error('--create-key cannot be combined with --identity: the identity was printed from an existing key')
+      }
+
+      // Second pass of onboarding: the signer already exists, so wrapping its
+      // identity is read-only. Reuse the recorded backend; never reprovision
+      // or rewrite the key env.
+      if (flags.identity && existingEnv && !flags.force) {
+        const recorded = recordedPublicKey(existingEnv, secretFile, flags)
+        writeDescriptor(flags.identity, {id: flags.id, network: flags.network, publicKey: recorded.publicKey}, descriptorFile)
+        if (flags.json) json.success({backend: recorded.backend, descriptorFile, id: flags.id, kmsKeyId: recorded.kmsKeyId, publicKey: recorded.publicKey, secretFile})
+        else this.log(chalk.green(`Descriptor written to ${descriptorFile} — send THIS file to the bridge operator.`))
+        return
+      }
+
 
       const backendLines: string[] = []
       let publicKey: string
@@ -199,22 +260,9 @@ export class SignerInitCommand extends Command {
       // The descriptor is the signer's own --print-identity output plus id.
       // It carries the transport key, which only the signer binary holds, so
       // without --identity no descriptor is written yet.
-      let descriptor: Record<string, string> | undefined
-      if (flags.identity) {
-        const source = path.resolve(flags.identity)
-        let raw: unknown
-        try {
-          raw = JSON.parse(fs.readFileSync(source, 'utf8'))
-        } catch (error) {
-          throw new Error(`${source}: failed to read identity: ${error instanceof Error ? error.message : String(error)}`)
-        }
-
-        const identity = validateAttestationSignerIdentity(raw, source)
-        if (identity.network !== flags.network) throw new Error(`${source}: network ${identity.network} does not match --network ${flags.network}`)
-        if (identity.publicKey !== publicKey) throw new Error(`${source}: publicKey ${identity.publicKey} does not match this signer's key ${publicKey}`)
-        descriptor = {...identity, id: flags.id}
-        fs.writeFileSync(descriptorFile, `${JSON.stringify(descriptor, null, 2)}\n`)
-      }
+      const descriptor = flags.identity
+        ? writeDescriptor(flags.identity, {id: flags.id, network: flags.network, publicKey}, descriptorFile)
+        : undefined
 
       const result = {
         allowedGitCommit: flags['allowed-git-commit'] || readEnvValue(existingEnv, 'ATTESTATION_SIGNER_ALLOWED_GIT_COMMIT'),
