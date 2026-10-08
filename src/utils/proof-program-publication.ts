@@ -8,10 +8,10 @@ import type {ProofProgramPublicationV1} from '../types/proof-program-publication
 import type {ValidatedProofTopologyBundle} from './proof-topology-compiler.js'
 
 import {PROOF_PROGRAM_PUBLICATION_SCHEMA} from '../types/proof-program-publication.js'
+import {readProofArtifactStore} from './artifact-stores.js'
 import {readProofAwsConfig} from './proof-aws-config.js'
 import {proofArtifactS3Endpoint} from './proof-aws-provisioner.js'
 import {immutableProofImage, readProofMaterials} from './proof-materials.js'
-import {readSharedArtifactStore} from './proof-shared-artifact-store.js'
 import {PROOF_PUBLICATION_FILES, readProofSoftwareRelease} from './proof-software-release.js'
 import {validateProofTopologyBundle} from './proof-topology-compiler.js'
 
@@ -233,7 +233,7 @@ export function planProofProgramPublication(options: PlanProofProgramPublication
   let store: {bucket: string; keyPrefix: string; region: string}
   let publicEndpointUrl: string
   if (options.artifactSource === 'doge-config') {
-    const shared = readSharedArtifactStore(deploymentDir, options.dogeConfig).store
+    const shared = readProofArtifactStore(deploymentDir, options.dogeConfig).store
     const endpoint = proofArtifactS3Endpoint(shared.region)
     if (shared.endpointUrl && trimSlash(shared.endpointUrl) !== endpoint) throw new Error('doge-config publication requires the regional AWS S3 endpoint; use proof-aws for an explicitly configured public gateway')
     store = shared

@@ -21,36 +21,40 @@ blocked and SSE-S3 (`AES256`) enabled. The CLI does **not** create an anonymous
 read bucket policy, CloudFront distribution, or other public read transport.
 Operators must configure and verify the `publicBaseUrl` transport separately.
 
-This is also the canonical object store for proof topology. dogeos-core does
-not expose a second S3 client for segmentation sidecars: raw DA blobs and proof
-artifacts use the same bucket, region, and key prefix, with different logical
-object keys. `setup proof-aws-init` reads this table and refuses an independent
-proof bucket/prefix.
+## Three buckets
 
-For a prefix such as `rehearsal/batches`, the relevant namespaces are:
+A deployment uses three dedicated, versioned buckets, each with one writer:
+
+| Bucket | doge-config | Writer | Readers | Managed by |
+|---|---|---|---|---|
+| DA archive | `[ethereumDa.blobArchive.s3]` | eth-da-submitter (put, no delete) | everyone: our services through the S3 VPC endpoint statement, RPC operators through the public statement (the kill switch) | `setup artifact-access --store da` |
+| Proof artifacts | `[proofArtifacts.s3]` | proof-coordinator (put, delete for its recovery path), withdrawal-processor (put), eth-da-submitter (sidecar namespace only) | external Workers and attestation signers by key (public, unadvertised); the only artifact origin in signer and CubeSigner allowlists | `setup proof-aws-init` |
+| Bootstrap snapshots | `[snapshots.s3]` | deploy role (put) | our init containers through the VPC endpoint; public read off unless requested | `setup artifact-access --store snapshot` |
+
+For a DA prefix such as `mainnet/batches` and a proof prefix such as
+`mainnet/proofs`, the namespaces are:
 
 ```text
-rehearsal/batches/0x<versioned-hash>                         raw DA blob
-rehearsal/batches/scroll-chunk-segmentation-sidecars/...    internal sidecar
-rehearsal/batches/input-specs/...                           Worker input
-rehearsal/batches/prepared-bundles/...                      Worker input
-rehearsal/batches/witnesses/...                             Worker/signer input
-rehearsal/batches/public-outputs/...                        Worker output
-rehearsal/batches/proofs/...                                proof bytes
+da:    mainnet/batches/0x<versioned-hash>                        raw DA blob
+proof: mainnet/proofs/scroll-chunk-segmentation-sidecars/...     internal sidecar
+proof: mainnet/proofs/input-specs/...                            Worker input
+proof: mainnet/proofs/prepared-bundles/...                       Worker input
+proof: mainnet/proofs/witnesses/...                              Worker/signer input
+proof: mainnet/proofs/public-outputs/...                         Worker output
+proof: mainnet/proofs/proofs/...                                 proof bytes
 ```
 
-The bucket can still apply different read permissions to those object-key
-patterns. In direct-S3 mode, never grant anonymous `GetObject` to the entire
+In the proof bucket, never grant anonymous `GetObject` to the entire
 `<keyPrefix>/*`: the segmentation-sidecar namespace is internal. List, write,
 and delete remain authenticated even for externally readable objects.
 
 `setup proof-aws-init` distinguishes bucket-policy ownership from object-key
-layout. Use `--artifact-public-read-mode existing-public-s3` when the canonical
-archive bucket already has an operator-managed anonymous S3 policy. In that
-mode the command does not change the bucket-wide Public Access Block settings
-or the existing public-read policy; it only manages deployment-scoped proof
-resources and, when selected, the prefix-scoped EKS Gateway endpoint grant.
-Use `direct-s3` only when the CLI owns the bucket's public-access posture, or
+layout. Use `--artifact-public-read-mode existing-public-s3` when the proof
+bucket already has an operator-managed anonymous S3 policy. In that mode the
+command does not change the bucket-wide Public Access Block settings or the
+existing public-read policy; it only manages deployment-scoped proof resources
+and, when selected, the prefix-scoped EKS Gateway endpoint grant. Use
+`direct-s3` only when the CLI owns the bucket's public-access posture, or
 `existing-gateway` when S3 remains private behind an HTTPS gateway.
 
 After configuring the archive, run `scrollsdk setup prep-charts`. It reads
@@ -128,14 +132,19 @@ scrollsdk setup eth-da-submitter --non-interactive --json \
 `--aws-region` on `gen-keystore` selects the KMS/EKS/IRSA region.
 `--archive-region` selects the S3 bucket region; the two regions may differ.
 An S3 Gateway endpoint is regional, so proof AWS setup does not associate an
-EKS-region gateway endpoint when the shared artifact bucket is cross-region.
+EKS-region gateway endpoint when a bucket is cross-region.
 
 To let the CLI create a missing bucket, use
 `--create-archive-bucket` (the default) instead. The CLI performs
 `HeadBucket`, creates only on a not-found result, blocks all public access, and
-enables SSE-S3. It grants `s3:GetObject` and `s3:PutObject` on the
-deployment-scoped object prefix when it creates or manages a proof service IAM
-role. The Proof Coordinator role additionally receives `s3:DeleteObject` on
+enables SSE-S3 and versioning. With `--role-arn` (or the submitter's service
+account role) it writes the inline policy `eth-da-submitter-s3-archive`:
+`s3:GetObject` and `s3:PutObject` on the archive prefix and, when
+`[proofArtifacts.s3]` is configured, on the proof store's
+`scroll-chunk-segmentation-sidecars/` namespace. `setup artifact-access --store
+da` plans and checks the same policy. `setup proof-aws-init` grants
+`s3:GetObject` and `s3:PutObject` on the proof prefix when it creates or
+manages a proof service IAM role. The Proof Coordinator role additionally receives `s3:DeleteObject` on
 that prefix so it can retire stale locator objects after an operator-requested
 global proof identity regeneration; the Withdrawal Processor role does not.
 When an existing role ARN is supplied or reused, treat the role as
@@ -296,8 +305,8 @@ sync S3 settings into `eth-da-submitter`, `l1-interface`,
 `scrollsdk setup gen-rpc-package` after that when producing an external RPC
 package.
 
-Proof setup with `--artifact-public-read-mode existing-gateway` does not
-modify the shared bucket policy or its Public Access Block settings. Those
-controls may already be serving raw DA consumers and remain the operator's
-responsibility. Use `direct-s3` only when scroll-sdk-cli is meant to own the
-narrowly scoped anonymous-read statement.
+Public read of the DA archive is one bucket-policy statement,
+`ScrollSdkDaArchivePublicRead`, managed with `setup artifact-access --store da
+--public-read` / `--no-public-read`. Removing it cuts anonymous egress while
+our services keep reading through `ScrollSdkDaArchiveReadViaVpcEndpoint`
+(same-region buckets only).

@@ -29,7 +29,7 @@ export default class ProofBundlePublish extends Command {
     json: Flags.boolean({default: false, description: 'Output structured JSON'}),
     materials: Flags.string({default: DEFAULT_PROOF_MATERIALS_RECEIPT, description: 'Real proof-materials-v1.json'}),
     output: Flags.string({default: DEFAULT_PROOF_PROGRAM_PUBLICATION_RECEIPT, description: 'New publication receipt written only after all public GET checks pass'}),
-    'proof-aws-config': Flags.string({default: DEFAULT_PROOF_AWS_CONFIG, description: 'proof-aws.json containing the canonical shared artifact store'}),
+    'proof-aws-config': Flags.string({default: DEFAULT_PROOF_AWS_CONFIG, description: 'proof-aws.json containing the canonical proof artifact store'}),
     release: Flags.string({description: 'dogeos-proof-release-v1.json manifest'}),
     'release-sha256': Flags.string({description: 'Expected immutable release manifest SHA-256'}),
     'topology-bundle': Flags.string({default: DEFAULT_PROOF_TOPOLOGY_OUTPUT, description: 'Installable active/real compiler bundle containing the tag-5 manifest'}),

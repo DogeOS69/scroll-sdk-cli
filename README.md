@@ -1822,8 +1822,8 @@ FLAGS
       --aws-profile=<value>                      AWS CLI profile used for provisioning
       --aws-region=<value>                       AWS region containing EKS and the proof token secret (auto-detected
                                                  when omitted)
-      --bucket=<value>                           Advanced consistency assertion for the shared artifact bucket; the
-                                                 value is read from doge-config
+      --bucket=<value>                           Advanced consistency assertion for the proof artifact bucket; the
+                                                 value is read from doge-config proofArtifacts.s3
       --config=<value>                           [default: .data/proof-aws.json] Output config file consumed by setup
                                                  prep-charts
       --coordinator-service-account=<value>      Kubernetes service account used by proof-coordinator (default:
@@ -1831,12 +1831,12 @@ FLAGS
       --deployment-alias=<value>                 Unique deployment instance alias used to derive deterministic bucket
                                                  and IAM role names
       --doge-config=<value>                      [default: .data/doge-config.toml] DogeOS config containing the
-                                                 canonical ethereumDa.blobArchive.s3 store
+                                                 canonical proofArtifacts.s3 store
       --eks-cluster=<value>                      EKS cluster name used by the IRSA trust policies (selected
                                                  interactively when omitted)
       --json                                     Output structured JSON
-      --key-prefix=<value>                       Advanced consistency assertion for the shared artifact key prefix; the
-                                                 value is read from doge-config
+      --key-prefix=<value>                       Advanced consistency assertion for the proof artifact key prefix; the
+                                                 value is read from doge-config proofArtifacts.s3
       --namespace=<value>                        Kubernetes namespace of the proof workloads (default: default)
       --rotate-tokens                            Replace the proof-work/prover-worker tokens in an existing secret (both
                                                  workloads must be restarted afterwards)
@@ -1883,7 +1883,7 @@ FLAGS
   --materials=<value>         [default: .data/proof-materials-v1.json] Real proof-materials-v1.json
   --output=<value>            [default: .data/proof-program-publication-v1.json] New publication receipt written only
                               after all public GET checks pass
-  --proof-aws-config=<value>  [default: .data/proof-aws.json] proof-aws.json containing the canonical shared artifact
+  --proof-aws-config=<value>  [default: .data/proof-aws.json] proof-aws.json containing the canonical proof artifact
                               store
   --topology-bundle=<value>   [default: .data/generated/proof-topology] Installable active/real compiler bundle
                               containing the tag-5 manifest

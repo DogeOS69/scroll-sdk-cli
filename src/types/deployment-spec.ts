@@ -69,6 +69,9 @@ export interface DeploymentSpec {
   /** Network and chain configuration */
   network: NetworkConfig
 
+  /** Proof artifact bucket (doge-config proofArtifacts.s3): coordinator/WP artifact store and the only signer artifact origin. */
+  proofArtifacts?: {s3?: ArtifactBucketConfig}
+
   /** Optional proof-coordinator deployment values generation */
   proofCoordinator?: ProofCoordinatorConfig
 
@@ -83,6 +86,9 @@ export interface DeploymentSpec {
 
   /** Signing configuration */
   signing: SigningConfig
+
+  /** Bootstrap snapshot bucket (doge-config snapshots.s3), written by the deploy role. */
+  snapshots?: {s3?: Omit<ArtifactBucketConfig, 'endpointUrl' | 'forcePathStyle' | 'publicBaseUrl'>}
 
   /** Optional test/development settings */
   test?: TestConfig
@@ -466,6 +472,16 @@ export interface EthereumDaS3ArchiveConfig {
   timeoutMs?: number
   treatForbiddenAsMissing?: boolean
   uploadingTimeoutMs?: number
+}
+
+/** One dedicated S3 bucket and key prefix. */
+export interface ArtifactBucketConfig {
+  bucket: string
+  endpointUrl?: string
+  forcePathStyle?: boolean
+  keyPrefix: string
+  publicBaseUrl?: string
+  region: string
 }
 
 export interface EthereumDaInboxWorkerConfig {

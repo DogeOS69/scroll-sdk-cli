@@ -8,7 +8,7 @@ import type { JsonOutputContext } from './json-output.js'
 import { AwsCliRunner } from './aws-cli.js'
 
 export interface ProofAwsIdentity {
-  /** Region containing the shared DA/proof artifact bucket. */
+  /** Region containing the proof artifact bucket. */
   artifactRegion?: string
   /** Region containing EKS and the deployment-scoped Secrets Manager secret. */
   awsRegion: string
@@ -76,12 +76,12 @@ export const PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID = 'ScrollSdkProofArtifactPubl
 export const PROOF_ARTIFACT_VPCE_POLICY_SID = 'ScrollSdkProofArtifactReadViaVpcEndpoint'
 
 /**
- * Logical object namespaces read without AWS credentials by DA clients,
- * external proof Workers, or partner Attestation Signers. The segmentation
- * sidecar namespace is deliberately absent because it is a PC-internal input.
+ * Logical object namespaces read without AWS credentials by external proof
+ * Workers or partner Attestation Signers. DA blobs live in the separate DA
+ * archive bucket. The segmentation sidecar namespace is deliberately absent
+ * because it is a PC-internal input.
  */
 export const PUBLIC_ARTIFACT_OBJECT_PATTERNS = [
-  '0x*',
   'input-specs/*',
   'prepared-bundles/*',
   'witnesses/*',
@@ -610,6 +610,10 @@ export class ProofAwsProvisioner {
       )
     }
 
+    // Every deployment bucket is versioned, so an overwrite never loses the
+    // previous object. Idempotent; independent of who owns the read policy.
+    this.aws.run(['s3api', 'put-bucket-versioning', '--bucket', bucket, '--versioning-configuration', 'Status=Enabled'], {region: artifactRegion})
+
     const vpcEndpoint = input.artifactRead.vpcEndpoint?.enabled
       ? this.ensureVpcEndpointArtifactRead(identity, bucket, keyPrefix, input.artifactRead.vpcEndpoint)
       : undefined
@@ -630,7 +634,7 @@ export class ProofAwsProvisioner {
       this.jsonCtx.info(
         `proof-aws: preserved operator-managed bucket policy and Public Access Block settings for ${bucket} (${publicReadMode})`,
       )
-      this.jsonCtx.addWarning(`New artifact prefixes do not inherit old-instance grants. Run setup artifact-access ${publicReadMode === 'existing-public-s3' ? '--public-read ' : ''}--writer-role-arn <archive-writer-role> to plan/check this instance's permissions; use --apply only after review. Gateway read permissions remain operator-managed.`)
+      this.jsonCtx.addWarning('New artifact prefixes do not inherit old-instance grants. Public read of this proof prefix remains operator-managed in this mode. Grant the eth-da-submitter its segmentation-sidecar put with setup artifact-access --store da --writer-role-arn <eth-da-submitter-role>.')
     }
 
     const artifactReadTransport: ProofArtifactReadTransportResult = {

@@ -1,6 +1,7 @@
 import {Command, Flags} from '@oclif/core'
 import fs from 'node:fs'
 
+import {proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
 import {dogeConfigToToml, loadDogeConfigWithSelection} from '../../utils/doge-config.js'
 import {CliExitError, JsonOutputContext} from '../../utils/json-output.js'
 import {KmsSignerProvisioner} from '../../utils/kms-signer-provisioner.js'
@@ -39,7 +40,10 @@ export default class SetupEthDaSubmitter extends Command {
       const roleArn = flags['role-arn'] || signer?.serviceAccountRoleArn
       const createBucket = flags['create-archive-bucket'] ?? signer?.backend === 'aws_kms'
       if (archive.enabled) {
-        await new KmsSignerProvisioner(output, flags['aws-profile']).provisionArchive(archive, {createBucket, roleArn})
+        // With a proof artifact store configured, the writer also gets its
+        // segmentation-sidecar namespace there.
+        const sidecar = config.proofArtifacts?.s3 ? {sidecarStore: proofArtifactStoreFromDogeConfig(config)} : {}
+        await new KmsSignerProvisioner(output, flags['aws-profile']).provisionArchive(archive, {createBucket, roleArn, ...sidecar})
         if (!roleArn) output.addWarning('No archive writer IAM role selected; writer access must be provided separately.')
       }
 

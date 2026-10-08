@@ -177,7 +177,7 @@ the full command, controller setup and deployment boundary.
 
 After importing the real preparation receipt and compiling the active/real
 topology, the complete 11-file bundle can be published without creating EKS
-workload roles. Use the canonical `ethereumDa.blobArchive.s3` bucket, prefix,
+workload roles. Use the canonical `proofArtifacts.s3` bucket, prefix,
 region and regional AWS endpoint already present in `doge-config`:
 
 ```bash

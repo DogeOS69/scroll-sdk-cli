@@ -1,13 +1,22 @@
 import {expect} from 'chai'
 
-import {appendArtifactPublicRead, applyArtifactAccess, checkArtifactWriter, planArtifactAccess} from '../../src/utils/artifact-access.js'
+import {
+  ARCHIVE_POLICY_SIDS,
+  applyArtifactAccess,
+  buildArchiveBucketPolicy,
+  buildArchiveWriterPolicy,
+  checkArtifactWriter,
+  planArtifactAccess,
+} from '../../src/utils/artifact-access.js'
 
-const store = {bucket: 'test-artifacts', forcePathStyle: false, keyPrefix: 'instances/new', region: 'us-east-1'}
-const roleArn = 'arn:aws:iam::123456789012:role/archive-writer'
-const oldStatement = {Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: 'arn:aws:s3:::test-artifacts/instances/old/*', Sid: 'OldInstance'}
+const da = {bucket: 'dogeos-da-archive', forcePathStyle: false, keyPrefix: 'mainnet/batches', region: 'us-east-1'}
+const proof = {bucket: 'dogeos-proof-artifacts', forcePathStyle: false, keyPrefix: 'mainnet/proofs', region: 'us-east-1'}
+const roleArn = 'arn:aws:iam::123456789012:role/eth-da-submitter'
+const operatorStatement = {Action: 's3:GetObject', Effect: 'Allow', Principal: {AWS: 'arn:aws:iam::999999999999:root'}, Resource: 'arn:aws:s3:::dogeos-da-archive/mainnet/batches/*', Sid: 'PartnerRead'}
 
 function fixture() {
-  let bucket = {Statement: [oldStatement], Version: '2012-10-17'} as Record<string, unknown>
+  let bucket = {Statement: [operatorStatement], Version: '2012-10-17'} as Record<string, unknown>
+  let versioning: string | undefined
   let inline: unknown
   let deny = false
   let block = false
@@ -15,6 +24,7 @@ function fixture() {
   const aws = {
     json(args: string[]): any {
       if (args[1] === 'get-public-access-block') return {PublicAccessBlockConfiguration: {BlockPublicPolicy: block, RestrictPublicBuckets: false}}
+      if (args[1] === 'get-bucket-versioning') return versioning ? {Status: versioning} : {}
       if (args[1] === 'get-role') return {Role: {Arn: roleArn}}
       if (args[1] === 'get-role-policy') {
         if (!inline) throw new Error('NoSuchEntity')
@@ -27,9 +37,26 @@ function fixture() {
     run(args: string[]): string {
       if (args[1] === 'head-bucket') return ''
       writes.push(args)
-      if (args[1] === 'put-bucket-policy') bucket = JSON.parse(args[args.indexOf('--policy') + 1])
-      else if (args[1] === 'put-role-policy') inline = JSON.parse(args[args.indexOf('--policy-document') + 1])
-      else throw new Error(`Unexpected AWS mutation: ${args[1]}`)
+      switch (args[1]) {
+      case 'put-bucket-policy': {
+      bucket = JSON.parse(args[args.indexOf('--policy') + 1])
+      break;
+      }
+
+      case 'put-bucket-versioning': {
+      versioning = 'Enabled'
+      break;
+      }
+
+      case 'put-role-policy': {
+      inline = JSON.parse(args[args.indexOf('--policy-document') + 1])
+      break;
+      }
+
+      default: { throw new Error(`Unexpected AWS mutation: ${args[1]}`)
+      }
+      }
+
       return ''
     },
     text(args: string[]): string {
@@ -41,32 +68,41 @@ function fixture() {
   return {aws, get block() {return block}, set block(value: boolean) {block = value}, get bucket() {return bucket}, get deny() {return deny}, set deny(value: boolean) {deny = value}, get inline() {return inline}, writes}
 }
 
-describe('artifact prefix access reconciliation', () => {
-  it('plans without writes, preserves old statements, applies and becomes idempotent', () => {
+function sids(policy: Record<string, unknown>): string[] {
+  return (policy.Statement as Array<{Sid: string}>).map(statement => statement.Sid)
+}
+
+describe('DA archive and snapshot bucket access', () => {
+  it('plans without writes, then enables versioning, VPC-endpoint and public reads and the writer grant idempotently', () => {
     const f = fixture()
-    const options = {publicRead: true, writerRoleArn: roleArn}
-    const plan = planArtifactAccess(f.aws, store, options)
+    const options = {publicRead: true, sidecarStore: proof, vpcEndpointId: 'vpce-0abc', writerRoleArn: roleArn}
+    const plan = planArtifactAccess(f.aws, 'da', da, options)
     expect(f.writes).to.deep.equal([])
+    expect(plan.versioning.changed).to.equal(true)
     applyArtifactAccess(f.aws, plan)
-    expect(f.writes).to.have.length(2)
-    expect((f.bucket.Statement as unknown[])[0]).to.deep.equal(oldStatement)
-    const publicGrant = (f.bucket.Statement as any[])[1]
-    expect(publicGrant.Action).to.equal('s3:GetObject')
-    expect(publicGrant.Resource).to.include('arn:aws:s3:::test-artifacts/instances/new/witnesses/*')
-    expect(publicGrant.Resource).to.include('arn:aws:s3:::test-artifacts/instances/new/signer-policy-evidence/*')
-    expect(publicGrant.Resource.some((value: string) => value.includes('segmentation'))).to.equal(false)
+    expect(f.writes.map(args => args[1])).to.deep.equal(['put-bucket-versioning', 'put-bucket-policy', 'put-role-policy'])
+    expect(sids(f.bucket)).to.deep.equal(['PartnerRead', 'ScrollSdkDenyInsecureTransport', ARCHIVE_POLICY_SIDS.da.publicRead, ARCHIVE_POLICY_SIDS.da.vpceRead])
     expect(JSON.stringify(f.inline)).not.to.include('DeleteObject')
-    const again = planArtifactAccess(f.aws, store, options)
-    expect(again.bucketPolicy?.changed).to.equal(false)
-    expect(again.writerPolicy?.changed).to.equal(false)
-    applyArtifactAccess(f.aws, again)
-    expect(f.writes).to.have.length(2)
+    expect(JSON.stringify(f.inline)).not.to.include('ListBucket')
+    const again = planArtifactAccess(f.aws, 'da', da, options)
+    expect([again.bucketPolicy.changed, again.versioning.changed, again.writerPolicy?.changed]).to.deep.equal([false, false, false])
     checkArtifactWriter(f.aws, again)
   })
 
-  it('fails on policy drift before either mutation', () => {
+  it('kill switch removes only the public statement and keeps VPC-endpoint reads', () => {
     const f = fixture()
-    const plan = planArtifactAccess(f.aws, store, {publicRead: true, writerRoleArn: roleArn})
+    applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, {publicRead: true, vpcEndpointId: 'vpce-0abc'}))
+    applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, {publicRead: false}))
+    expect(sids(f.bucket)).to.deep.equal(['PartnerRead', 'ScrollSdkDenyInsecureTransport', ARCHIVE_POLICY_SIDS.da.vpceRead])
+    // Omitting both flags leaves the owned statements as they are.
+    expect(planArtifactAccess(f.aws, 'da', da, {}).bucketPolicy.changed).to.equal(false)
+    applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, {publicRead: true}))
+    expect(sids(f.bucket)).to.include(ARCHIVE_POLICY_SIDS.da.publicRead)
+  })
+
+  it('fails on policy drift before any mutation', () => {
+    const f = fixture()
+    const plan = planArtifactAccess(f.aws, 'da', da, {publicRead: true, sidecarStore: proof, writerRoleArn: roleArn})
     ;(f.bucket.Statement as unknown[]).push({Effect: 'Deny', Sid: 'ConcurrentEdit'})
     expect(() => applyArtifactAccess(f.aws, plan)).to.throw('changed after planning')
     expect(f.writes).to.have.length(0)
@@ -75,31 +111,44 @@ describe('artifact prefix access reconciliation', () => {
   it('does not disable account/bucket public access protection', () => {
     const f = fixture()
     f.block = true
-    expect(() => planArtifactAccess(f.aws, store, {publicRead: true})).to.throw('Public Access Block')
+    expect(() => planArtifactAccess(f.aws, 'da', da, {publicRead: true})).to.throw('Public Access Block')
+    // Removing public read needs no public-policy permission.
+    expect(() => planArtifactAccess(f.aws, 'da', da, {publicRead: false})).not.to.throw()
     expect(f.writes).to.have.length(0)
   })
 
-  it('refuses renamed/foreign roles and changed same-name inline policies', () => {
+  it('refuses renamed/foreign roles and malformed endpoint ids', () => {
     const f = fixture()
-    expect(() => planArtifactAccess(f.aws, store, {writerRoleArn: roleArn.replace('123456789012', '000000000000')})).to.throw('does not match')
-    const plan = planArtifactAccess(f.aws, store, {writerRoleArn: roleArn})
-    applyArtifactAccess(f.aws, plan)
-    ;(f.inline as any).Statement[0].Action.push('s3:DeleteObject')
-    expect(() => planArtifactAccess(f.aws, store, {writerRoleArn: roleArn})).to.throw('differs')
+    expect(() => planArtifactAccess(f.aws, 'da', da, {sidecarStore: proof, writerRoleArn: roleArn.replace('123456789012', '000000000000')})).to.throw('does not match')
+    expect(() => planArtifactAccess(f.aws, 'da', da, {vpcEndpointId: 'not-an-endpoint'})).to.throw('vpce-')
   })
 
-  it('fails IAM checks on an explicit denial and does not repair unrelated policies', () => {
+  it('fails IAM checks on an explicit denial', () => {
     const f = fixture()
-    const plan = planArtifactAccess(f.aws, store, {writerRoleArn: roleArn})
+    const plan = planArtifactAccess(f.aws, 'da', da, {sidecarStore: proof, writerRoleArn: roleArn})
     f.deny = true
     expect(() => checkArtifactWriter(f.aws, plan)).to.throw('did not allow')
     expect(f.writes).to.have.length(0)
   })
 
-  it('validates prefixes and never rewrites a conflicting owned Sid', () => {
-    expect(() => appendArtifactPublicRead({}, store.bucket, 'instances/*')).to.throw('wildcards')
-    const policy = appendArtifactPublicRead({}, store.bucket, store.keyPrefix)
-    ;(policy.Statement as any[])[0].Effect = 'Deny'
-    expect(() => appendArtifactPublicRead(policy, store.bucket, store.keyPrefix)).to.throw('differs')
+  it('scopes writers: DA blobs plus the proof sidecar namespace; snapshot deploy role put-only', () => {
+    expect(buildArchiveWriterPolicy('da', da, proof)).to.deep.equal({
+      Statement: [
+        {Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: 'arn:aws:s3:::dogeos-da-archive/mainnet/batches/*', Sid: 'DaArchivePut'},
+        {Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: 'arn:aws:s3:::dogeos-proof-artifacts/mainnet/proofs/scroll-chunk-segmentation-sidecars/*', Sid: 'SegmentationSidecarPut'},
+      ],
+      Version: '2012-10-17',
+    })
+    // Without a proof store (proof disabled) the DA writer only gets the archive.
+    expect((buildArchiveWriterPolicy('da', da).Statement as unknown[])).to.have.length(1)
+    expect(buildArchiveWriterPolicy('snapshot', {bucket: 'dogeos-snapshots', keyPrefix: 'mainnet/history'})).to.deep.equal({
+      Statement: [{Action: 's3:PutObject', Effect: 'Allow', Resource: 'arn:aws:s3:::dogeos-snapshots/mainnet/history/*', Sid: 'SnapshotPut'}],
+      Version: '2012-10-17',
+    })
+  })
+
+  it('keeps snapshot public read off unless requested', () => {
+    const policy = buildArchiveBucketPolicy({}, 'snapshot', 'dogeos-snapshots', 'mainnet/history', {vpcEndpointId: 'vpce-0abc'})
+    expect(sids(policy)).to.deep.equal(['ScrollSdkDenyInsecureTransport', ARCHIVE_POLICY_SIDS.snapshot.vpceRead])
   })
 })

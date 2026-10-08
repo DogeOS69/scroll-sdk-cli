@@ -2,6 +2,7 @@ import {confirm, input, select} from '@inquirer/prompts'
 import {Command, Flags} from '@oclif/core'
 import * as path from 'node:path'
 
+import {readProofArtifactStore} from '../../utils/artifact-stores.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { sanitizeName, truncateIamRoleName } from '../../utils/kms-signer-provisioner.js'
 import {
@@ -20,7 +21,6 @@ import {
   normalizeProofBucketName,
   proofArtifactS3Endpoint,
 } from '../../utils/proof-aws-provisioner.js'
-import {readSharedArtifactStore} from '../../utils/proof-shared-artifact-store.js'
 
 export const PROOF_AWS_INIT_NEXT_STEPS =
   'run scrollsdk setup proof-materials, then scrollsdk setup doge-config --proof-topology, '
@@ -47,14 +47,14 @@ export default class ProofAwsInit extends Command {
     'artifact-read-vpc-endpoint-id': Flags.string({description: 'Advanced override: existing S3 Gateway VPC endpoint (normally auto-discovered or created)'}),
     'aws-profile': Flags.string({ description: 'AWS CLI profile used for provisioning' }),
     'aws-region': Flags.string({description: 'AWS region containing EKS and the proof token secret (auto-detected when omitted)'}),
-    bucket: Flags.string({ description: 'Advanced consistency assertion for the shared artifact bucket; the value is read from doge-config' }),
+    bucket: Flags.string({ description: 'Advanced consistency assertion for the proof artifact bucket; the value is read from doge-config proofArtifacts.s3' }),
     config: Flags.string({ default: DEFAULT_PROOF_AWS_CONFIG, description: 'Output config file consumed by setup prep-charts' }),
     'coordinator-service-account': Flags.string({description: 'Kubernetes service account used by proof-coordinator (default: proof-coordinator)'}),
     'deployment-alias': Flags.string({description: 'Unique deployment instance alias used to derive deterministic bucket and IAM role names'}),
-    'doge-config': Flags.string({default: '.data/doge-config.toml', description: 'DogeOS config containing the canonical ethereumDa.blobArchive.s3 store'}),
+    'doge-config': Flags.string({default: '.data/doge-config.toml', description: 'DogeOS config containing the canonical proofArtifacts.s3 store'}),
     'eks-cluster': Flags.string({description: 'EKS cluster name used by the IRSA trust policies (selected interactively when omitted)'}),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
-    'key-prefix': Flags.string({description: 'Advanced consistency assertion for the shared artifact key prefix; the value is read from doge-config'}),
+    'key-prefix': Flags.string({description: 'Advanced consistency assertion for the proof artifact key prefix; the value is read from doge-config proofArtifacts.s3'}),
     namespace: Flags.string({description: 'Kubernetes namespace of the proof workloads (default: default)'}),
     'non-interactive': Flags.boolean({char: 'N', default: false, description: 'Run without prompts; missing values must be discoverable, already configured, or passed as flags'}),
     'rotate-tokens': Flags.boolean({ default: false, description: 'Replace the proof-work/prover-worker tokens in an existing secret (both workloads must be restarted afterwards)' }),
@@ -70,7 +70,7 @@ export default class ProofAwsInit extends Command {
     try {
       const nonInteractive = flags['non-interactive'] || flags.json
       const existing = readOptionalProofAwsConfig('.', flags.config)?.config
-      const shared = readSharedArtifactStore('.', flags['doge-config']).store
+      const shared = readProofArtifactStore('.', flags['doge-config']).store
       const discovery = new ProofAwsDiscovery(flags['aws-profile'])
       const awsRegion = await this.resolveRequiredValue({
         defaultValue: existing?.kubernetes.awsRegion || discovery.configuredRegion(),
@@ -102,7 +102,7 @@ export default class ProofAwsInit extends Command {
       const cluster = sanitizeName(eksCluster)
       const bucket = normalizeProofBucketName(shared.bucket)
       if (flags.bucket && normalizeProofBucketName(flags.bucket) !== bucket) {
-        throw new Error(`--bucket must match canonical ethereumDa.blobArchive.s3.bucket (${bucket})`)
+        throw new Error(`--bucket must match canonical proofArtifacts.s3.bucket (${bucket})`)
       }
 
       const defaultPublicReadMode = existing?.artifactReadTransport.publicReadMode || 'direct-s3'
@@ -168,7 +168,7 @@ export default class ProofAwsInit extends Command {
 
       if (shared.region !== awsRegion && advancedVpcInput) {
         throw new Error(
-          `S3 Gateway endpoint overrides cannot be used because EKS is in ${awsRegion} while the shared artifact bucket is in ${shared.region}`,
+          `S3 Gateway endpoint overrides cannot be used because EKS is in ${awsRegion} while the proof artifact bucket is in ${shared.region}`,
         )
       }
 
@@ -183,7 +183,7 @@ export default class ProofAwsInit extends Command {
       const namespace = flags.namespace || existing?.kubernetes.namespace || 'default'
       const {keyPrefix} = shared
       if (flags['key-prefix'] && flags['key-prefix'] !== keyPrefix) {
-        throw new Error(`--key-prefix must match canonical ethereumDa.blobArchive.s3.keyPrefix (${keyPrefix})`)
+        throw new Error(`--key-prefix must match canonical proofArtifacts.s3.keyPrefix (${keyPrefix})`)
       }
 
       const sameDeployment = existing?.kubernetes.deploymentAlias === deploymentAlias

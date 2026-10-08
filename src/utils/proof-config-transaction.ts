@@ -11,6 +11,7 @@ import type {ProofDeploymentContract} from './proof-deployment-contract.js'
 import type {ProofProgramPublicationPlan} from './proof-program-publication.js'
 import type {ProofTopologyRuntimeInput} from './proof-topology-init.js'
 
+import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from './artifact-stores.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 import {dogeConfigToToml} from './doge-config.js'
 import {resolveDogecoinServiceRpcUrl} from './kubernetes-endpoints.js'
@@ -25,7 +26,6 @@ import {parseImmutableProofImage, parseProofIdentityEnv, prepareProofMaterials} 
 import {prepareRealProofRelease} from './proof-prepare-real.js'
 import {planProofProgramPublication, publishProofProgramBundle} from './proof-program-publication.js'
 import {readProofReleasePreparation} from './proof-release-preparation.js'
-import {assertTopologyUsesSharedArtifactStore, sharedArtifactStoreFromDogeConfig} from './proof-shared-artifact-store.js'
 import {proofFileHash, proofRegularFile, readProofSoftwareRelease} from './proof-software-release.js'
 import {proofTopologyEthereumDaBlobSource, validateProofTopologyBundle} from './proof-topology-compiler.js'
 import {buildProofTopology} from './proof-topology-init.js'
@@ -136,7 +136,7 @@ export function prepareProofConfig(options: {
     }
 
     const {config: aws} = readProofAwsConfig(stage)
-    assertTopologyUsesSharedArtifactStore(aws.artifactStore, sharedArtifactStoreFromDogeConfig(config), 'proof AWS')
+    assertTopologyUsesProofArtifactStore(aws.artifactStore, proofArtifactStoreFromDogeConfig(config), 'proof AWS')
     fs.copyFileSync(selected.path, path.join(stage, 'dogeos-proof-release-v1.json'))
     const {images, revision} = selected.manifest
     const topologyCompiler = parseImmutableProofImage(images['dogeos-proof-topology'], 'compiler')

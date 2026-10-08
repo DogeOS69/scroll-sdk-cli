@@ -17,6 +17,7 @@ import {
   YAML_DUMP_OPTIONS,
 } from '../../config/constants.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
+import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
 import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
@@ -40,7 +41,6 @@ import {
   assertProofAwsMatchesTopology,
   reconcileProofKubernetes,
 } from '../../utils/proof-kubernetes-reconciler.js'
-import {assertTopologyUsesSharedArtifactStore, sharedArtifactStoreFromDogeConfig} from '../../utils/proof-shared-artifact-store.js'
 import {proofTopologyEthereumDaBlobSource} from '../../utils/proof-topology-compiler.js'
 import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles, stripRetiredServiceConfig} from '../../utils/retired-services.js'
@@ -1769,14 +1769,14 @@ export default class SetupPrepCharts extends Command {
     }
 
     if (this.proofIntent) {
-      const sharedArtifactStore = sharedArtifactStoreFromDogeConfig(this.dogeConfig)
+      const proofArtifactStore = proofArtifactStoreFromDogeConfig(this.dogeConfig)
       const topologyArtifactStore = this.proofIntent.proofTopology.active?.artifactStore
       if (topologyArtifactStore?.kind === 's3_compatible') {
-        assertTopologyUsesSharedArtifactStore({
+        assertTopologyUsesProofArtifactStore({
           bucket: topologyArtifactStore.bucket,
           keyPrefix: this.proofIntent.proofTopology.deployment.artifactKeyPrefix,
           region: topologyArtifactStore.region,
-        }, sharedArtifactStore)
+        }, proofArtifactStore)
       }
 
       const proofAws = readOptionalProofAwsConfig(process.cwd())

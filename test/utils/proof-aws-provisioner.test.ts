@@ -132,6 +132,9 @@ describe('proof-aws-provisioner values projection', () => {
     )
     expect(publicAccessBlock).to.equal(undefined)
 
+    const versioning = calls.find(call => call.args[0] === 's3api' && call.args[1] === 'put-bucket-versioning')
+    expect(versioning?.args).to.include('Status=Enabled')
+
     const rolePolicies = calls.filter(call => call.args[0] === 'iam' && call.args[1] === 'put-role-policy')
     expect(rolePolicies).to.have.length(2)
     for (const call of rolePolicies) {
@@ -396,7 +399,6 @@ describe('proof-aws-provisioner values projection', () => {
   it('separates public external-consumer keys from the internal sidecar namespace', () => {
     const resources = publicArtifactObjectResources('proof-bucket', 'rehearsal/batches')
     expect(resources).to.deep.equal([
-      'arn:aws:s3:::proof-bucket/rehearsal/batches/0x*',
       'arn:aws:s3:::proof-bucket/rehearsal/batches/input-specs/*',
       'arn:aws:s3:::proof-bucket/rehearsal/batches/prepared-bundles/*',
       'arn:aws:s3:::proof-bucket/rehearsal/batches/witnesses/*',
@@ -406,6 +408,8 @@ describe('proof-aws-provisioner values projection', () => {
       'arn:aws:s3:::proof-bucket/rehearsal/batches/signer-policy-evidence/*',
     ])
     expect(JSON.stringify(resources)).not.to.include('scroll-chunk-segmentation-sidecars')
+    // DA blobs (0x<versioned hash>) live in the separate DA archive bucket.
+    expect(JSON.stringify(resources)).not.to.include('/0x')
   })
 
   it('rejects an EKS-region gateway endpoint for a cross-region artifact bucket', () => {

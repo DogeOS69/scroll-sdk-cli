@@ -1,18 +1,51 @@
-import {createHash} from 'node:crypto'
 import {isDeepStrictEqual} from 'node:util'
 
+import type {ArtifactStore} from './artifact-stores.js'
 import type {AwsCliRunner} from './aws-cli.js'
-import type {SharedArtifactStore} from './proof-shared-artifact-store.js'
 
-import {buildProofArtifactStorePolicy, normalizeProofBucketName, normalizeProofKeyPrefix, publicArtifactObjectResources} from './proof-aws-provisioner.js'
+import {normalizeProofBucketName, normalizeProofKeyPrefix} from './proof-aws-provisioner.js'
 
 type Document = Record<string, unknown>
 type Aws = Pick<AwsCliRunner, 'json' | 'run' | 'text'>
+
+/** Buckets this command owns. The proof artifact bucket is owned by proof-aws-init. */
+export type ArchiveStoreKind = 'da' | 'snapshot'
+
+/** Key namespace eth-da-submitter writes in the proof artifact store. */
+export const SEGMENTATION_SIDECAR_NAMESPACE = 'scroll-chunk-segmentation-sidecars'
+
+/**
+ * Stable statement ids. Each bucket is dedicated to one store, so ids are not
+ * prefix-scoped: the kill switch is "remove the PublicRead statement", and
+ * our services keep reading through the VPC endpoint statement.
+ */
+export const ARCHIVE_POLICY_SIDS = {
+  da: {publicRead: 'ScrollSdkDaArchivePublicRead', vpceRead: 'ScrollSdkDaArchiveReadViaVpcEndpoint'},
+  snapshot: {publicRead: 'ScrollSdkSnapshotPublicRead', vpceRead: 'ScrollSdkSnapshotReadViaVpcEndpoint'},
+} as const
+export const DENY_INSECURE_TRANSPORT_SID = 'ScrollSdkDenyInsecureTransport'
+// The DA name is the one setup eth-da-submitter has always used, so both
+// commands manage, and narrow in place, the same inline policy.
+export const ARCHIVE_WRITER_POLICY_NAMES = {da: 'eth-da-submitter-s3-archive', snapshot: 'ScrollSdkSnapshotWrite'} as const
+
+export interface ArtifactAccessOptions {
+  /** true adds the anonymous read statement, false removes it (kill switch), undefined leaves it. */
+  publicRead?: boolean
+  /** da only: the proof artifact store, when configured; the DA writer also puts its sidecar namespace there. */
+  sidecarStore?: ArtifactStore
+  /** S3 Gateway endpoint our services read through; undefined leaves the statement as is. */
+  vpcEndpointId?: string
+  /** da: the eth-da-submitter IRSA role; snapshot: the deploy role. */
+  writerRoleArn?: string
+}
+
 export interface ArtifactAccessPlan {
   bucket: string
-  bucketPolicy?: {after: Document; before: Document; changed: boolean}
+  bucketPolicy: {after: Document; before: Document; changed: boolean}
   keyPrefix: string
+  kind: ArchiveStoreKind
   region: string
+  versioning: {before: string; changed: boolean}
   writerPolicy?: {after: Document; before?: Document; changed: boolean; name: string; roleArn: string; roleName: string}
 }
 
@@ -21,13 +54,21 @@ function document(value: unknown): Document {
   return value as Document
 }
 
-function bucketPolicy(aws: Aws, store: Pick<SharedArtifactStore, 'bucket' | 'region'>): Document {
+function statementsOf(policy: Document): Document[] {
+  return (policy.Statement === undefined ? [] : Array.isArray(policy.Statement) ? policy.Statement : [policy.Statement]).map(item => document(item))
+}
+
+function bucketPolicy(aws: Aws, store: Pick<ArtifactAccessPlan, 'bucket' | 'region'>): Document {
   try {
     return document(JSON.parse(aws.text(['s3api', 'get-bucket-policy', '--bucket', store.bucket], {query: 'Policy', region: store.region})))
   } catch (error) {
     if (String(error).includes('NoSuchBucketPolicy')) return {Statement: [], Version: '2012-10-17'}
     throw error
   }
+}
+
+function versioningStatus(aws: Aws, store: Pick<ArtifactAccessPlan, 'bucket' | 'region'>): string {
+  return String(aws.json(['s3api', 'get-bucket-versioning', '--bucket', store.bucket], {region: store.region})?.Status ?? 'Disabled')
 }
 
 function rolePolicy(aws: Aws, roleName: string, name: string): Document | undefined {
@@ -40,19 +81,73 @@ function rolePolicy(aws: Aws, roleName: string, name: string): Document | undefi
   }
 }
 
-/** Add only this prefix's public object namespaces; never replace another
- * instance's grants, remove Deny statements, or alter Public Access Block. */
-export function appendArtifactPublicRead(existing: Document, bucket: string, keyPrefix: string): Document {
-  const resources = publicArtifactObjectResources(normalizeProofBucketName(bucket), normalizeProofKeyPrefix(keyPrefix))
-  const sid = `ScrollSdkArtifactRead${createHash('sha256').update(`${bucket}/${keyPrefix}`).digest('hex').slice(0, 24)}`
-  const statements = existing.Statement === undefined ? [] : Array.isArray(existing.Statement) ? existing.Statement : [existing.Statement]
-  const statement = {Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: resources, Sid: sid}
-  const previous = statements.filter(item => document(item).Sid === sid)
-  if (previous.length > 1 || (previous.length === 1 && !isDeepStrictEqual(previous[0], statement))) {
-    throw new Error(`Existing bucket policy statement ${sid} differs; review it before changing permissions`)
+function objectArn(bucket: string, keyPrefix: string | undefined): string {
+  return keyPrefix ? `arn:aws:s3:::${bucket}/${keyPrefix}/*` : `arn:aws:s3:::${bucket}/*`
+}
+
+/**
+ * Reconcile the CLI-owned statements of a DA archive or snapshot bucket
+ * policy. Statements with other Sids are preserved verbatim.
+ */
+export function buildArchiveBucketPolicy(
+  existing: Document,
+  kind: ArchiveStoreKind,
+  bucket: string,
+  keyPrefix: string,
+  options: Pick<ArtifactAccessOptions, 'publicRead' | 'vpcEndpointId'>,
+): Document {
+  const sids = ARCHIVE_POLICY_SIDS[kind]
+  const resource = objectArn(normalizeProofBucketName(bucket), normalizeProofKeyPrefix(keyPrefix))
+  const current = new Map(statementsOf(existing).filter(item => typeof item.Sid === 'string').map(item => [item.Sid as string, item]))
+  const desired: Record<string, Document | undefined> = {
+    [DENY_INSECURE_TRANSPORT_SID]: {
+      Action: 's3:*',
+      Condition: {Bool: {'aws:SecureTransport': 'false'}},
+      Effect: 'Deny',
+      Principal: '*',
+      Resource: [`arn:aws:s3:::${bucket}`, `arn:aws:s3:::${bucket}/*`],
+      Sid: DENY_INSECURE_TRANSPORT_SID,
+    },
+    [sids.publicRead]: options.publicRead === undefined
+      ? current.get(sids.publicRead)
+      : options.publicRead ? {Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: resource, Sid: sids.publicRead} : undefined,
+    [sids.vpceRead]: options.vpcEndpointId === undefined
+      ? current.get(sids.vpceRead)
+      : {
+          Action: 's3:GetObject',
+          Condition: {StringEquals: {'aws:SourceVpce': options.vpcEndpointId}},
+          Effect: 'Allow',
+          Principal: '*',
+          Resource: resource,
+          Sid: sids.vpceRead,
+        },
+  }
+  const owned = new Set(Object.keys(desired))
+  const statements = [
+    ...statementsOf(existing).filter(item => !owned.has(item.Sid as string)),
+    ...Object.values(desired).filter((item): item is Document => item !== undefined),
+  ]
+  return {...existing, Statement: statements, Version: existing.Version ?? '2012-10-17'}
+}
+
+/**
+ * Writer identity policy. The DA writer (eth-da-submitter) puts DA blobs and
+ * its segmentation sidecars, and reads back an existing occupant after a
+ * conditional put; it never lists or deletes. The snapshot writer (deploy
+ * role) only puts.
+ */
+export function buildArchiveWriterPolicy(kind: ArchiveStoreKind, store: {bucket: string; keyPrefix?: string}, sidecarStore?: Pick<ArtifactStore, 'bucket' | 'keyPrefix'>): Document {
+  if (kind === 'snapshot') {
+    return {Statement: [{Action: 's3:PutObject', Effect: 'Allow', Resource: objectArn(store.bucket, store.keyPrefix), Sid: 'SnapshotPut'}], Version: '2012-10-17'}
   }
 
-  return {...existing, Statement: previous.length > 0 ? statements : [...statements, statement], Version: existing.Version ?? '2012-10-17'}
+  return {
+    Statement: [
+      {Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: objectArn(store.bucket, store.keyPrefix), Sid: 'DaArchivePut'},
+      ...(sidecarStore ? [{Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: objectArn(sidecarStore.bucket, `${sidecarStore.keyPrefix}/${SEGMENTATION_SIDECAR_NAMESPACE}`), Sid: 'SegmentationSidecarPut'}] : []),
+    ],
+    Version: '2012-10-17',
+  }
 }
 
 function assertPublicAccessBlock(aws: Aws, bucket: string, region: string): void {
@@ -68,7 +163,7 @@ function assertPublicAccessBlock(aws: Aws, bucket: string, region: string): void
       const config = aws.json([...args], {region}).PublicAccessBlockConfiguration
       if (!config || typeof config !== 'object') throw new Error(`Missing ${scope} Public Access Block response`)
       if (config.BlockPublicPolicy || config.RestrictPublicBuckets) {
-        throw new Error(`${scope} Public Access Block prevents public artifact policy/read access; use an existing gateway or have the owner configure public access`)
+        throw new Error(`${scope} Public Access Block prevents public read; have the bucket owner allow public bucket policies (ACLs stay blocked)`)
       }
     } catch (error) {
       if (!String(error).includes('NoSuchPublicAccessBlockConfiguration')) throw error
@@ -76,29 +171,31 @@ function assertPublicAccessBlock(aws: Aws, bucket: string, region: string): void
   }
 }
 
-export function planArtifactAccess(aws: Aws, store: SharedArtifactStore, options: {publicRead?: boolean; writerRoleArn?: string}): ArtifactAccessPlan {
+export function planArtifactAccess(aws: Aws, kind: ArchiveStoreKind, store: ArtifactStore, options: ArtifactAccessOptions): ArtifactAccessPlan {
   const bucket = normalizeProofBucketName(store.bucket)
   const keyPrefix = normalizeProofKeyPrefix(store.keyPrefix)
-  if (!options.publicRead && !options.writerRoleArn) throw new Error('Select --public-read and/or --writer-role-arn')
-  const plan: ArtifactAccessPlan = {bucket, keyPrefix, region: store.region}
+  if (options.vpcEndpointId !== undefined && !/^vpce-[\da-f]+$/i.test(options.vpcEndpointId)) throw new Error('Expected an S3 Gateway VPC endpoint id (vpce-...)')
+  const plan = {bucket, keyPrefix, kind, region: store.region} as ArtifactAccessPlan
   if (options.publicRead) {
-    if (store.endpointUrl && ![`https://s3.${store.region}.amazonaws.com`, 'https://s3.amazonaws.com'].includes(store.endpointUrl)) throw new Error('Public S3 policy repair requires the AWS S3 endpoint; configure a custom gateway with its owner')
+    if (store.endpointUrl && ![`https://s3.${store.region}.amazonaws.com`, 'https://s3.amazonaws.com'].includes(store.endpointUrl)) throw new Error('Public S3 policy requires the AWS S3 endpoint; configure a custom gateway with its owner')
     assertPublicAccessBlock(aws, bucket, store.region)
-    const before = bucketPolicy(aws, store)
-    const after = appendArtifactPublicRead(before, bucket, keyPrefix)
-    plan.bucketPolicy = {after, before, changed: !isDeepStrictEqual(before, after)}
   }
+
+  const before = bucketPolicy(aws, plan)
+  const after = buildArchiveBucketPolicy(before, kind, bucket, keyPrefix, options)
+  plan.bucketPolicy = {after, before, changed: !isDeepStrictEqual(before, after)}
+  const status = versioningStatus(aws, plan)
+  plan.versioning = {before: status, changed: status !== 'Enabled'}
 
   if (options.writerRoleArn) {
     if (!/^arn:aws:iam::\d{12}:role\/[\w+,./=@-]+$/.test(options.writerRoleArn)) throw new Error('Expected an AWS IAM writer role ARN')
     const roleName = options.writerRoleArn.split('/').at(-1)!
     const role = aws.json(['iam', 'get-role', '--role-name', roleName]).Role
     if (role?.Arn !== options.writerRoleArn) throw new Error('Writer role ARN does not match AWS readback')
-    const name = `ScrollSdkArtifactWrite-${createHash('sha256').update(`${bucket}/${keyPrefix}`).digest('hex').slice(0, 24)}`
-    const before = rolePolicy(aws, roleName, name)
-    const after = buildProofArtifactStorePolicy(bucket, keyPrefix)
-    if (before && !isDeepStrictEqual(before, after)) throw new Error(`Existing inline policy ${name} differs; review it before changing permissions`)
-    plan.writerPolicy = {after, before, changed: !isDeepStrictEqual(before, after), name, roleArn: options.writerRoleArn, roleName}
+    const name = ARCHIVE_WRITER_POLICY_NAMES[kind]
+    const writerBefore = rolePolicy(aws, roleName, name)
+    const writerAfter = buildArchiveWriterPolicy(kind, {bucket, keyPrefix}, options.sidecarStore)
+    plan.writerPolicy = {after: writerAfter, before: writerBefore, changed: !isDeepStrictEqual(writerBefore, writerAfter), name, roleArn: options.writerRoleArn, roleName}
   }
 
   return plan
@@ -107,9 +204,14 @@ export function planArtifactAccess(aws: Aws, store: SharedArtifactStore, options
 export function applyArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
   // Re-read every mutation target before the first write. AWS bucket policy
   // replacement has no compare-and-swap; serialize policy updates operationally.
-  if (plan.bucketPolicy && !isDeepStrictEqual(bucketPolicy(aws, plan), plan.bucketPolicy.before)) throw new Error('Bucket policy changed after planning; rerun artifact-access')
+  if (!isDeepStrictEqual(bucketPolicy(aws, plan), plan.bucketPolicy.before)) throw new Error('Bucket policy changed after planning; rerun artifact-access')
   if (plan.writerPolicy && !isDeepStrictEqual(rolePolicy(aws, plan.writerPolicy.roleName, plan.writerPolicy.name), plan.writerPolicy.before)) throw new Error('Writer policy changed after planning; rerun artifact-access')
-  if (plan.bucketPolicy?.changed) {
+  if (plan.versioning.changed) {
+    aws.run(['s3api', 'put-bucket-versioning', '--bucket', plan.bucket, '--versioning-configuration', 'Status=Enabled'], {region: plan.region})
+    if (versioningStatus(aws, plan) !== 'Enabled') throw new Error('Bucket versioning readback mismatch')
+  }
+
+  if (plan.bucketPolicy.changed) {
     aws.run(['s3api', 'put-bucket-policy', '--bucket', plan.bucket, '--policy', JSON.stringify(plan.bucketPolicy.after)], {region: plan.region})
     if (!isDeepStrictEqual(bucketPolicy(aws, plan), plan.bucketPolicy.after)) throw new Error('Bucket policy readback mismatch')
   }
@@ -125,16 +227,14 @@ export function applyArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
  * endpoint policies and KMS can still deny an actual workload request). */
 export function checkArtifactWriter(aws: Aws, plan: ArtifactAccessPlan): void {
   if (!plan.writerPolicy) return
-  const resources = [
-    {actions: ['s3:GetObject', 's3:PutObject'], context: [], resource: `arn:aws:s3:::${plan.bucket}/${plan.keyPrefix}/0xpreflight`},
-    {actions: ['s3:ListBucket'], context: ['--context-entries', JSON.stringify([{ContextKeyName: 's3:prefix', ContextKeyType: 'string', ContextKeyValues: [plan.keyPrefix]}])], resource: `arn:aws:s3:::${plan.bucket}`},
-  ]
-  for (const {actions, context, resource} of resources) {
-    const result = aws.json(['iam', 'simulate-principal-policy', '--policy-source-arn', plan.writerPolicy.roleArn, '--action-names', ...actions, '--resource-arns', resource, ...context])
+  for (const statement of statementsOf(plan.writerPolicy.after)) {
+    const actions = (Array.isArray(statement.Action) ? statement.Action : [statement.Action]) as string[]
+    const resource = String(statement.Resource).replace(/\*$/, '0xpreflight')
+    const result = aws.json(['iam', 'simulate-principal-policy', '--policy-source-arn', plan.writerPolicy.roleArn, '--action-names', ...actions, '--resource-arns', resource])
     const rows = result.EvaluationResults
     for (const action of actions) {
       const matches = Array.isArray(rows) ? rows.filter(row => row.EvalActionName === action && row.EvalResourceName === resource) : []
-      if (matches.length !== 1 || matches[0].EvalDecision !== 'allowed' || matches[0].MissingContextValues?.length) throw new Error(`Writer IAM simulation did not allow ${action} on the current artifact prefix; run artifact-access --writer-role-arn ... --apply and check external denies`)
+      if (matches.length !== 1 || matches[0].EvalDecision !== 'allowed' || matches[0].MissingContextValues?.length) throw new Error(`Writer IAM simulation did not allow ${action} on ${resource}; run artifact-access --writer-role-arn ... --apply and check external denies`)
     }
   }
 }
