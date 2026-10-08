@@ -7,6 +7,7 @@ import BridgeInitCommand, {
   bridgeSetupHelperAddress,
   buildEthereumDaProtocolSeedConfig,
   buildInitialSystemSignerChoices,
+  resolveBridgeGenesisImage,
   resolveBridgeTimelock,
   resolveInitialSystemSignerFromDogeConfig,
 } from '../../../src/commands/setup/bridge-init.js'
@@ -326,5 +327,23 @@ describe('setup bridge-init protocol seed sequencer signer selection', () => {
         value: 'custom',
       },
     ])
+  })
+})
+
+
+describe('bridge genesis immutable image selection', () => {
+  it('preserves a CI digest and supports legacy tags', () => {
+    const image = `dogeos69/bridge-genesis-tools@sha256:${'a'.repeat(64)}`
+    expect(resolveBridgeGenesisImage(image)).to.equal(image)
+    expect(resolveBridgeGenesisImage(`docker.io/${image}`)).to.equal(`docker.io/${image}`)
+    expect(resolveBridgeGenesisImage('dev-preview-fixture')).to.equal('docker.io/dogeos69/bridge-genesis-tools:dev-preview-fixture')
+  })
+
+  it('rejects malformed digests, unrelated repositories and injected image options', () => {
+    for (const image of ['dogeos69/bridge-genesis-tools@sha256:abc', `unrelated/tool@sha256:${'a'.repeat(64)}`, 'tag --privileged', 'repo:tag']) {
+      expect(() => resolveBridgeGenesisImage(image)).to.throw()
+    }
+
+    expect(BridgeInitCommand.flags.image.exclusive).to.include('image-tag')
   })
 })

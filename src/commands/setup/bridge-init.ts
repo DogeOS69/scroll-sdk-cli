@@ -47,6 +47,20 @@ export const BRIDGE_TIMELOCK_MAX_BLOCK_HEIGHT = 500_000_000
 
 export {GENESIS_SEQUENCER_AMOUNT_SATS, assertGenesisSequencerAmount} from '../../utils/bridge-constants.js'
 
+/** Preserve immutable CI references; legacy tags still use the official repository. */
+export function resolveBridgeGenesisImage(reference: string): string {
+  if (reference.includes('@')) {
+    if (!/^(?:docker\.io\/)?dogeos69\/bridge-genesis-tools@sha256:[\da-f]{64}$/.test(reference)) {
+      throw new Error('Expected dogeos69/bridge-genesis-tools pinned by SHA-256 digest')
+    }
+
+    return reference
+  }
+
+  if (!/^\w[\w.-]{0,127}$/.test(reference)) throw new Error('Invalid bridge-genesis-tools image tag')
+  return `docker.io/dogeos69/bridge-genesis-tools:${reference}`
+}
+
 /** Matches generate_test_keys: SHA-256(seed), compressed SEC1 public key, P2PKH. */
 export function bridgeSetupHelperAddress(seed: string, network: string): string {
   if (!['mainnet', 'regtest', 'testnet'].includes(network)) throw new Error('Unsupported Dogecoin network')
@@ -275,6 +289,10 @@ export class BridgeInitCommand extends Command {
       description: 'Where to query the Ethereum DA start height: cluster pod or direct RPC from this machine.',
       options: ['cluster', 'direct'],
     }),
+    image: Flags.string({
+      description: 'Immutable bridge-genesis-tools image reference (dogeos69/bridge-genesis-tools@sha256:...).',
+      exclusive: ['image-tag'],
+    }),
     'image-tag': Flags.string({
       description: 'Specify the Docker image tag to use (defaults to dev-20260707-043e7f3)',
       required: false,
@@ -361,8 +379,9 @@ export class BridgeInitCommand extends Command {
       )
     }
 
-    imageTag = await this.getDockerImageTag(imageTag)
-    this.jsonCtx.info(`Using Docker image tag: ${imageTag}`)
+    if (flags.image && !flags.image.includes('@')) throw new Error('--image requires an immutable SHA-256 reference; use --image-tag for tags')
+    imageTag = flags.image ?? await this.getDockerImageTag(imageTag)
+    this.jsonCtx.info(`Using Docker image: ${resolveBridgeGenesisImage(imageTag)}`)
     this.jsonCtx.info(`Using Docker platform: ${this.dockerPlatform}`)
 
     if (needsPrepare) {
@@ -432,7 +451,7 @@ export class BridgeInitCommand extends Command {
 
   async runDockerCommand(imageTag: string, command: string[]): Promise<void> {
     const docker = new Docker();
-    const image = `docker.io/dogeos69/bridge-genesis-tools:${imageTag}`;
+    const image = resolveBridgeGenesisImage(imageTag);
     const hostUser =
       typeof process.getuid === 'function' && typeof process.getgid === 'function'
         ? `${process.getuid()}:${process.getgid()}`
