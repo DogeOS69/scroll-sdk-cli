@@ -121,6 +121,9 @@ function recordedPublicKey(env: string, secretFile: string, flags: {'aws-profile
   return {backend: 'local', publicKey: PrivateKey.fromWIF(wif).toPublicKey().toString().toLowerCase()}
 }
 
+/** Where the partner-kit compose mounts the operator's transport.key. */
+export const TRANSPORT_KEY_CONTAINER_PATH = '/etc/dogeos-partner/transport.key'
+
 export class SignerInitCommand extends Command {
   static description = 'Signer-operator tool: create key material, secret deployment env, and a partner-owned V2 policy template; with --identity, wrap the signer\'s --print-identity output into the public descriptor. Run on your infrastructure; secrets and AWS calls never leave it. Send the descriptor before genesis, then deploy and preflight only after receiving the canonical-context policy bundle.'
 
@@ -246,6 +249,11 @@ export class SignerInitCommand extends Command {
         ...releasePinLines,
         `ATTESTATION_SIGNER_NETWORK=${flags.network}`,
         `ATTESTATION_SIGNER_POLICY_MODE=${flags.network === 'mainnet' ? 'enforce' : 'observe'}`,
+        '# The signer dials out to the TSO and signs every request with a separate',
+        '# transport key: transport.key next to the compose file (32-byte hex,',
+        '# mode 0600, generated with `openssl rand -hex 32`), mounted read-only here.',
+        `ATTESTATION_SIGNER_TSO_TRANSPORT_KEY_FILE=${TRANSPORT_KEY_CONTAINER_PATH}`,
+        'ATTESTATION_SIGNER_TSO_DELIVERY=pull',
       ]
       fs.writeFileSync(secretFile, `${envLines.join('\n')}\n`, { mode: 0o600 })
 

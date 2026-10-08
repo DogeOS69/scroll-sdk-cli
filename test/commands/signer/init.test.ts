@@ -125,6 +125,10 @@ describe('signer init descriptor', () => {
     const descriptor = JSON.parse(fs.readFileSync(path.join(out, 'descriptor.json'), 'utf8'))
     expect(descriptor).to.deep.equal({...identity, id: 'partner-a'})
     expect(descriptor).not.to.have.property('endpoint')
+    // The env selects pull delivery and the mounted transport key file.
+    const env = fs.readFileSync(path.join(out, 'attestation-signer.env'), 'utf8')
+    expect(env).to.include('ATTESTATION_SIGNER_TSO_DELIVERY=pull')
+    expect(env).to.include('ATTESTATION_SIGNER_TSO_TRANSPORT_KEY_FILE=/etc/dogeos-partner/transport.key')
   })
 })
 

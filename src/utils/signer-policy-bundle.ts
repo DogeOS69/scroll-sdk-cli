@@ -168,10 +168,20 @@ ${signerSelections}
 
 \`\`\`bash
 export DOGE_NETWORK='${input.network}'
+# 1. Signing key and env (add the KMS flags for a KMS backend). The env selects
+#    pull delivery and the transport key file below.
 scrollsdk signer init --id "$SIGNER_ID" --network "$DOGE_NETWORK"
-# Generate the transport key with attestation_signer, then print the identity
-# (one JSON line) and wrap it into the descriptor:
-attestation_signer --print-identity > "signer-$SIGNER_ID/identity.json"
+# 2. Transport key: a separate secret that authenticates this signer to the
+#    TSO. Generate it locally; it never leaves your host.
+(umask 077 && openssl rand -hex 32 > "signer-$SIGNER_ID/transport.key")
+cp "signer-$SIGNER_ID/attestation-signer.env" "signer-$SIGNER_ID/attestation-signer.toml" \\
+  "signer-$SIGNER_ID/transport.key" docker-compose/
+chmod 600 docker-compose/attestation-signer.env docker-compose/transport.key
+# 3. Print the identity with the real backend, network and transport key
+#    (the same compose service and mounts the runtime uses):
+docker compose --project-directory docker-compose run --rm --no-deps -T attestation-signer \\
+  -c /etc/dogeos-partner/attestation-signer.toml --print-identity > "signer-$SIGNER_ID/identity.json"
+# 4. Wrap it into the descriptor (read-only for an existing signer):
 scrollsdk signer init --id "$SIGNER_ID" --network "$DOGE_NETWORK" \\
   --identity "signer-$SIGNER_ID/identity.json"
 \`\`\`
@@ -180,6 +190,9 @@ Send \`signer-$SIGNER_ID/descriptor.json\` to the bridge operator for
 \`scrollsdk setup attestation-signer --threshold <T>\`. Do not start the current
 signer yet: dogeos-core requires canonical protocol context in every mode, and
 that context is generated after the descriptor keyset is fixed.
+
+Keep \`transport.key\` with the signing env: the TSO pins its public key, so
+losing it means a coordinated config change. Never send it to anyone.
 
 For KMS add its backend flags. Production operators must also pass the approved
 \`--allowed-release-version\` and full \`--allowed-git-commit\`.
@@ -194,7 +207,8 @@ Incomplete optional policy starts fail-closed and leaves \`/ready\` at HTTP 503.
 export SIGNER_ID='<your signer id>'
 cp "signer-$SIGNER_ID/attestation-signer.env" docker-compose/
 cp "signer-$SIGNER_ID/attestation-signer.toml" docker-compose/
-chmod 600 docker-compose/attestation-signer.env
+cp "signer-$SIGNER_ID/transport.key" docker-compose/
+chmod 600 docker-compose/attestation-signer.env docker-compose/transport.key
 mkdir -p docker-compose/policy
 cp signer-policy-bundle/signer-policy.env docker-compose/signer-policy.env
 cp signer-policy-bundle/protocol_context.json docker-compose/policy/protocol_context.json

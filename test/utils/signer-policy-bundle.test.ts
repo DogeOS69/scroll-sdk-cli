@@ -122,7 +122,13 @@ describe('signer policy bundle V2', () => {
     for (const expected of [
       `| \`partner-a\` | \`02${'66'.repeat(32)}\` | \`02${'88'.repeat(32)}\` |`,
       'https://tso.bridge.example',
-      'attestation_signer --print-identity',
+      // The transport key is generated locally, kept 0600 and mounted into the
+      // same compose service that prints the identity and later runs.
+      '(umask 077 && openssl rand -hex 32 > "signer-$SIGNER_ID/transport.key")',
+      'chmod 600 docker-compose/attestation-signer.env docker-compose/transport.key',
+      'run --rm --no-deps -T attestation-signer',
+      '--print-identity > "signer-$SIGNER_ID/identity.json"',
+      'cp "signer-$SIGNER_ID/transport.key" docker-compose/',
       '--identity "signer-$SIGNER_ID/identity.json"',
       'https://proofs.bridge.example/proof-topology',
       'requires canonical protocol context in every mode',
