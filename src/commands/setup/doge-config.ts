@@ -682,6 +682,7 @@ export class DogeConfigCommand extends Command {
     ) || ethereumDaDefaults.chainId
 
     newConfig.ethereumDa = {
+      ...existingEthereumDa,
       beaconRpcUrl: ethereumDaBeaconRpcUrl,
       chain: ethereumDaChain,
       chainId: ethereumDaChainId,

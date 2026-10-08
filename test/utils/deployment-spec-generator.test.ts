@@ -1426,6 +1426,25 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateValuesFiles', () => {
+    it('projects explicit fresh-genesis intent to both replay owners and keeps validation enabled', () => {
+      const spec = createMinimalSpec()
+      let config = toml.parse(generateDogeConfigToml(spec)) as any
+      expect(config.defaults.freshGenesisInit).to.equal(undefined)
+      spec.bridge.freshGenesisInit = true
+      config = toml.parse(generateDogeConfigToml(spec)) as any
+      expect(config.defaults.freshGenesisInit).to.equal(true)
+      const values = generateValuesFiles(spec)
+      const l1i = yaml.load(values['l1-interface-production.yaml']) as any
+      const wp = yaml.load(values['withdrawal-processor-production.yaml']) as any
+      expect(l1i.configMaps.env.data.DOGEOS_L1_INTERFACE_REPLAY_READ__FRESH_GENESIS_INIT).to.equal('true')
+      expect(l1i.configMaps.env.data.DOGEOS_L1_INTERFACE_REPLAY_READ__REQUIRE_FULL_VALIDATION).to.equal('true')
+      expect(wp.env.find((entry: any) => entry.name === 'DOGEOS_WITHDRAWAL_FRESH_GENESIS_INIT')?.value).to.equal('true')
+      expect(wp.env.some((entry: any) => /UTXO_MANAGER_INTERMEDIATE|TSO_TIMEOUT_MINUTES|WF_WITHDRAWAL_PARITY_V1|MAX_DEPOSITS_PER_ADVANCE_L1/.test(entry.name))).to.equal(false)
+      spec.ethereumDa = {...spec.ethereumDa, l2StartBlockNumber: 1}
+      expect(validateDeploymentSpec(spec).errors.some(error => error.path === 'bridge.freshGenesisInit')).to.equal(true)
+      expect(() => generateValuesFiles(spec)).to.throw('snapshot continuation')
+    })
+
     it('omits retired service charts and database projections', () => {
       const spec = createMinimalSpec();
       const config = generateConfigToml(spec);
@@ -1578,14 +1597,14 @@ describe('deployment-spec-generator', () => {
       expect(l1InterfaceValuesForRuntime).not.to.have.property('probes');
       expect(l1InterfaceRuntimeEnv.DOGEOS_L1_INTERFACE_L1_GAS_LIMIT).to.equal('30000000');
       expect(l1InterfaceRuntimeEnv.DOGEOS_L1_INTERFACE_REPLAY_READ__MAINTAINER_ENABLED).to.equal('true');
-      expect(l1InterfaceRuntimeEnv.DOGEOS_L1_INTERFACE_REPLAY_READ__REQUIRE_FULL_VALIDATION).to.equal('false');
+      expect(l1InterfaceRuntimeEnv.DOGEOS_L1_INTERFACE_REPLAY_READ__REQUIRE_FULL_VALIDATION).to.equal('true');
 
       const withdrawalValuesForRuntime = yaml.load(files['withdrawal-processor-production.yaml']) as any;
       const withdrawalRuntimeEnv = Object.fromEntries(withdrawalValuesForRuntime.env.map((item: any) => [item.name, item.value]));
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_INITIAL_BRIDGE_REDEEM_SCRIPT_HEX).to.equal('');
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_MAX_WITHDRAWAL_OUTPUTS_PER_TX).to.equal('256');
-      expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_MAX_DEPOSITS_PER_ADVANCE_L1).to.equal('32');
-      expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_CLEANUP_TIMEOUT_SECS).to.equal('3600');
+      expect(withdrawalRuntimeEnv).not.to.have.property('DOGEOS_WITHDRAWAL_MAX_DEPOSITS_PER_ADVANCE_L1');
+      expect(withdrawalRuntimeEnv).not.to.have.property('DOGEOS_WITHDRAWAL_CLEANUP_TIMEOUT_SECS');
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_ROTATE_SEQUENCER_SIGNER_V2).to.equal('false');
       expect(withdrawalRuntimeEnv).not.to.have.property('DOGEOS_WITHDRAWAL_COORDINATOR_POLL_INTERVAL_SECS');
       expect(Object.fromEntries(Object.entries(withdrawalRuntimeEnv).filter(([key]) => key.startsWith('DOGEOS_WITHDRAWAL_PROOF_')))).to.deep.equal({});
@@ -1600,7 +1619,7 @@ describe('deployment-spec-generator', () => {
         subPath: 'WithdrawalProcessor.toml',
         type: 'configMap',
       });
-      expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__STRATEGY).to.equal('band');
+      expect(withdrawalRuntimeEnv).not.to.have.property('DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__STRATEGY');
       expect(withdrawalValuesForRuntime.externalSecrets['withdrawal-processor-secret-env'].data.map((item: any) => item.secretKey))
         .to.include.members([
           'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER',

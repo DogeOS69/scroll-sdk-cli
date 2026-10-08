@@ -185,6 +185,7 @@ export interface WithdrawalDeploymentFactsInput {
       publicBaseUrl?: unknown
     }
   }
+  freshGenesisInit?: boolean
   genesisSequencerTxHex: unknown
   initialBridgeRedeemScriptHex: unknown
   l2BootstrapNextStartingBlockHeight?: unknown
@@ -206,6 +207,14 @@ export interface WithdrawalDeploymentFacts {
  * overwrite their matching keys; template-owned strategy and limits survive.
  */
 export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsInput): WithdrawalDeploymentFacts {
+  if (input.freshGenesisInit !== undefined && typeof input.freshGenesisInit !== 'boolean') {
+    throw new TypeError('defaults.freshGenesisInit must be a boolean')
+  }
+
+  if (input.freshGenesisInit && input.l2BootstrapNextStartingBlockHeight !== undefined) {
+    throw new Error('freshGenesisInit cannot be combined with snapshot continuation (l2BootstrapNextStartingBlockHeight)')
+  }
+
   const {s3} = input.ethereumDa
   const s3Enabled = s3?.enabled === true && nonEmpty(s3.publicBaseUrl) !== undefined
   const expectedBatcher = nonEmpty(input.ethereumDa.expectedBatcherAddress)
@@ -239,6 +248,7 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
       }),
       l1_rpc_url: nonEmpty(input.ethereumDa.l1RpcUrl),
     },
+    fresh_genesis_init: input.freshGenesisInit ?? false,
     genesis_sequencer_tx_hex: nonEmpty(input.genesisSequencerTxHex),
     initial_bridge_redeem_script_hex: nonEmpty(input.initialBridgeRedeemScriptHex),
     l2_bootstrap_next_starting_block_height: asInteger(
@@ -271,7 +281,8 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
  * stay; figment still honors ad-hoc env overrides applied outside values.
  */
 export function stripMigratedWithdrawalEnv(
-  values: Record<string, any>
+  values: Record<string, any>,
+  freshGenesisInit?: boolean,
 ): Array<{ key: string; newValue: string; oldValue: string }> {
   if (!Array.isArray(values.env)) return []
   const changes: Array<{ key: string; newValue: string; oldValue: string }> = []
@@ -281,7 +292,19 @@ export function stripMigratedWithdrawalEnv(
     if (!name.startsWith('DOGEOS_WITHDRAWAL_')) continue
     // beta.4e's explicit storage-initialization opt-in is an operator-owned
     // runtime switch, not a field emitted by the pinned topology compiler.
-    if (name === 'DOGEOS_WITHDRAWAL_FRESH_GENESIS_INIT') continue
+    if (name === 'DOGEOS_WITHDRAWAL_FRESH_GENESIS_INIT') {
+      if (freshGenesisInit !== undefined) {
+        if (entry.valueFrom !== undefined) throw new Error('freshGenesisInit has conflicting native and secret-backed environment authorities')
+        const value = String(freshGenesisInit)
+        if (entry.value !== value) {
+          changes.push({key: `env.${name}`, newValue: value, oldValue: String(entry.value ?? 'undefined')})
+          entry.value = value
+        }
+      }
+
+      continue
+    }
+
     if (entry.valueFrom !== undefined) continue
     if (isWithdrawalProofActivationEnv(name)) continue
     changes.push({

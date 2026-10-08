@@ -331,6 +331,14 @@ function resolveImage(
  */
 export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles {
   const normalizedSpec = normalizeDeploymentSpec(spec)
+  if (normalizedSpec.bridge.freshGenesisInit !== undefined && typeof normalizedSpec.bridge.freshGenesisInit !== 'boolean') {
+    throw new TypeError('bridge.freshGenesisInit must be a boolean')
+  }
+
+  if (normalizedSpec.bridge.freshGenesisInit && normalizedSpec.ethereumDa?.l2StartBlockNumber !== undefined) {
+    throw new Error('Fresh genesis initialization cannot be combined with snapshot continuation')
+  }
+
   if (normalizedSpec.proofTopology?.enforcement === 'enforce' && (
     normalizedSpec.proofTopology.mode !== 'active'
     || normalizedSpec.proofTopology.generation !== 'real'
@@ -471,7 +479,7 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'l1Interface', {
     pullPolicy: 'Always',
     repository: 'dogeos69/l1-interface',
-    tag: '0.2.0-rc.4'
+    tag: 'v0.3.0-beta.5c'
   })
 
   const values: Record<string, any> = {
@@ -497,9 +505,10 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
           DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK: String(getL1GenesisBlock(spec)),
           DOGEOS_L1_INTERFACE_NETWORK_STR: spec.dogecoin.network,
           DOGEOS_L1_INTERFACE_REPLAY_READ__ENABLED: 'true',
+          DOGEOS_L1_INTERFACE_REPLAY_READ__FRESH_GENESIS_INIT: String(spec.bridge.freshGenesisInit ?? false),
           DOGEOS_L1_INTERFACE_REPLAY_READ__MAINTAINER_ENABLED: 'true',
           DOGEOS_L1_INTERFACE_REPLAY_READ__PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
-          DOGEOS_L1_INTERFACE_REPLAY_READ__REQUIRE_FULL_VALIDATION: 'false',
+          DOGEOS_L1_INTERFACE_REPLAY_READ__REQUIRE_FULL_VALIDATION: 'true',
           DOGEOS_L1_INTERFACE_REPLAY_READ__SQLITE_PATH: '/data/replay.sqlite',
           ...(l2StartBlockNumber === undefined ? {} : {
             DOGEOS_L1_INTERFACE_REPLAY_READ__L2_BOOTSTRAP_NEXT_STARTING_BLOCK_HEIGHT: String(l2StartBlockNumber),
@@ -802,7 +811,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'tsoService', {
     pullPolicy: 'Always',
     repository: 'dogeos69/tso-service',
-    tag: '0.2.0-rc.4'
+    tag: 'v0.3.0-beta.5c'
   })
 
   const values = {
@@ -855,7 +864,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'withdrawalProcessor', {
     pullPolicy: 'Always',
     repository: 'dogeos69/withdrawal-processor',
-    tag: '0.2.0-rc.4'
+    tag: 'v0.3.0-beta.5c'
   })
 
   const values: Record<string, any> = {
@@ -870,19 +879,13 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_FEE_RATE_SAT_PER_KVB', value: String(getBridgeFeeRateSatsPerKvb(spec)) },
       { name: 'DOGEOS_WITHDRAWAL_DEBUG_SKIP_BROADCAST', value: 'false' },
       { name: 'DOGEOS_WITHDRAWAL_DEBUG_SKIP_TSO_POLLING', value: 'false' },
-      { name: 'DOGEOS_WITHDRAWAL_TSO_TIMEOUT_MINUTES', value: '30' },
-      { name: 'DOGEOS_WITHDRAWAL_CLEANUP_TIMEOUT_SECS', value: '3600' },
       { name: 'DOGEOS_WITHDRAWAL_ROTATE_KEY_V2', value: 'true' },
       { name: 'DOGEOS_WITHDRAWAL_ROTATE_SEQUENCER_SIGNER_V2', value: 'false' },
       { name: 'DOGEOS_WITHDRAWAL_ADVANCE_L1_BUILDER_V2', value: 'true' },
       { name: 'DOGEOS_WITHDRAWAL_ADVANCE_L2_BUILDER_V2', value: 'true' },
-      { name: 'DOGEOS_WITHDRAWAL_WF_WITHDRAWAL_PARITY_V1', value: 'true' },
-      { name: 'DOGEOS_WITHDRAWAL_REQUIRE_CHANGE_TRACKING', value: 'false' },
-      { name: 'DOGEOS_WITHDRAWAL_STRICT_L2_VALIDATION', value: 'false' },
-      { name: 'DOGEOS_WITHDRAWAL_STRICT_L1_VALIDATION', value: 'false' },
       { name: 'DOGEOS_WITHDRAWAL_LEAF_VERIFICATION_REQUIRED', value: 'false' },
-      { name: 'DOGEOS_WITHDRAWAL_MAX_DEPOSITS_PER_ADVANCE_L1', value: '32' },
       { name: 'DOGEOS_WITHDRAWAL_REPLAY_SQLITE_PATH', value: '/app/data/replay.sqlite' },
+      { name: 'DOGEOS_WITHDRAWAL_FRESH_GENESIS_INIT', value: String(spec.bridge.freshGenesisInit ?? false) },
       { name: 'DOGEOS_WITHDRAWAL_PROTOCOL_CONTEXT_JSON', value: '/app/protocol_context.json' },
       ...(l2StartBlockNumber === undefined ? [] : [{
         name: 'DOGEOS_WITHDRAWAL_L2_BOOTSTRAP_NEXT_STARTING_BLOCK_HEIGHT',
@@ -898,19 +901,6 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__CONFIRMATIONS', value: '12' },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__POLL_INTERVAL_MS', value: '1000' },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__LOG_QUERY_BATCH_SIZE', value: '10000' },
-      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__HIGH_THRESH_SATS', value: '10000000000' },
-      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_MIN_CONFIRMATIONS', value: '10' },
-      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__ALLOW_INFLIGHT_BRIDGE_OUTPUTS', value: 'true' },
-      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__PREFER_INFLIGHT_BRIDGE_OUTPUTS', value: 'false' },
-      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__STRATEGY', value: 'band' },
-      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__MAX_INPUTS', value: '60' },
-      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__DUST_FLOOR_SATS', value: '1000000' },
-      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__TARGET_ACTIVE_UTXOS', value: '100' },
-      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__TARGET_SIZE_RATIO', value: '1.0' },
-      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__SWEEP_FLOOR_RATIO', value: '0.5' },
-      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__BALANCE_BAND_RATIO', value: '0.10' },
-      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__MAX_BALANCE_ADDITIONS', value: '3' },
-      { name: 'DOGEOS_WITHDRAWAL_UTXO_MANAGER_INTERMEDIATE__BRIDGE_STRATEGY__BAND__FLOOR_ABSOLUTE_SATS', value: '1000000' },
       // Ethereum DA resolver/indexer inputs for AdvanceL2 builder v2.
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL', value: getEthereumDaSubmitterRpcUrl(spec) },
       { name: 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INDEXER_SQLITE_PATH', value: '/app/data/eth-da-indexer.sqlite' },

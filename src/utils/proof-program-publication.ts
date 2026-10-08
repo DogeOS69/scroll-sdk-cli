@@ -11,6 +11,7 @@ import {PROOF_PROGRAM_PUBLICATION_SCHEMA} from '../types/proof-program-publicati
 import {readProofAwsConfig} from './proof-aws-config.js'
 import {proofArtifactS3Endpoint} from './proof-aws-provisioner.js'
 import {immutableProofImage, readProofMaterials} from './proof-materials.js'
+import {readSharedArtifactStore} from './proof-shared-artifact-store.js'
 import {PROOF_PUBLICATION_FILES, readProofSoftwareRelease} from './proof-software-release.js'
 import {validateProofTopologyBundle} from './proof-topology-compiler.js'
 
@@ -46,8 +47,10 @@ export type ProofProgramCommandRunner = (
 export type AnonymousObjectReader = (url: string) => Promise<{sha256: string; sizeBytes: number}>
 
 export interface PlanProofProgramPublicationOptions {
+  artifactSource?: 'doge-config' | 'proof-aws'
   coreDir?: string
   deploymentDir: string
+  dogeConfig?: string
   materialsReceipt: string
   proofAwsConfig: string
   release?: string
@@ -227,20 +230,33 @@ export function planProofProgramPublication(options: PlanProofProgramPublication
     return {prefix, relativePath, sha256: sha256(source), sizeBytes: fs.statSync(source).size, source}
   })
   const id = bundleId(files)
-  const {config: aws} = readProofAwsConfig(deploymentDir, options.proofAwsConfig)
+  let store: {bucket: string; keyPrefix: string; region: string}
+  let publicEndpointUrl: string
+  if (options.artifactSource === 'doge-config') {
+    const shared = readSharedArtifactStore(deploymentDir, options.dogeConfig).store
+    const endpoint = proofArtifactS3Endpoint(shared.region)
+    if (shared.endpointUrl && trimSlash(shared.endpointUrl) !== endpoint) throw new Error('doge-config publication requires the regional AWS S3 endpoint; use proof-aws for an explicitly configured public gateway')
+    store = shared
+    publicEndpointUrl = endpoint
+  } else {
+    const {config: aws} = readProofAwsConfig(deploymentDir, options.proofAwsConfig)
+    store = aws.artifactStore
+    publicEndpointUrl = aws.artifactReadTransport.publicEndpointUrl
+  }
+
   return {
     artifactStore: {
-      bucket: aws.artifactStore.bucket,
-      keyPrefix: `${aws.artifactStore.keyPrefix}/proof-programs/${id}`,
-      region: aws.artifactStore.region,
+      bucket: store.bucket,
+      keyPrefix: `${store.keyPrefix}/proof-programs/${id}`,
+      region: store.region,
     },
     bundleId: id,
     coreRevision,
     files,
     proofTopologyBundleRevision: topology.manifest.bundle_revision,
-    publicEndpointUrl: trimSlash(aws.artifactReadTransport.publicEndpointUrl),
+    publicEndpointUrl: trimSlash(publicEndpointUrl),
     ...(publisherScript ? {publisherScript} : {publisherImage: release!.manifest.images['proof-bundle-publisher'], releaseSha256: release!.sha256}),
-    uploadEndpointUrl: proofArtifactS3Endpoint(aws.artifactStore.region),
+    uploadEndpointUrl: proofArtifactS3Endpoint(store.region),
   }
 }
 

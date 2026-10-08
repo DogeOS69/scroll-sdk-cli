@@ -2848,8 +2848,10 @@ export default class SetupPrepCharts extends Command {
           "DOGEOS_L1_INTERFACE_L1_GAS_LIMIT": "30000000",
           "DOGEOS_L1_INTERFACE_L1_GENESIS_BLOCK": String(Math.max(0, l1GenesisBlock)),
           "DOGEOS_L1_INTERFACE_NETWORK_STR": this.withdrawalProcessorConfig.network_str,
+          "DOGEOS_L1_INTERFACE_REPLAY_READ__FRESH_GENESIS_INIT": String(this.dogeConfig.defaults?.freshGenesisInit ?? false),
           "DOGEOS_L1_INTERFACE_REPLAY_READ__L2_BOOTSTRAP_NEXT_STARTING_BLOCK_HEIGHT": this.dogeConfig.defaults?.l2BootstrapNextStartingBlockHeight,
           "DOGEOS_L1_INTERFACE_REPLAY_READ__PROTOCOL_CONTEXT_JSON": "/app/protocol_context.json",
+          "DOGEOS_L1_INTERFACE_REPLAY_READ__REQUIRE_FULL_VALIDATION": "true",
         }
 
         const l1InterfaceCleanupChanges = [
@@ -2946,6 +2948,7 @@ export default class SetupPrepCharts extends Command {
               publicBaseUrl: s3PublicBaseUrl,
             },
           },
+          freshGenesisInit: this.dogeConfig.defaults?.freshGenesisInit,
           genesisSequencerTxHex: this.withdrawalProcessorConfig.genesis_sequencer_tx_hex,
           initialBridgeRedeemScriptHex: this.bridgeConfig.redeem_script_hex,
           l2BootstrapNextStartingBlockHeight: this.dogeConfig.defaults?.l2BootstrapNextStartingBlockHeight,
@@ -2991,7 +2994,7 @@ export default class SetupPrepCharts extends Command {
           updated = true
         }
 
-        const migratedEnvChanges = stripMigratedWithdrawalEnv(productionYaml)
+        const migratedEnvChanges = stripMigratedWithdrawalEnv(productionYaml, this.dogeConfig.defaults?.freshGenesisInit)
         if (migratedEnvChanges.length > 0) {
           changes.push(...migratedEnvChanges)
           updated = true

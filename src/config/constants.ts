@@ -22,19 +22,16 @@ export const getSetupDefaultsPath = (): string => path.resolve(process.cwd(), SE
 // Get project root directory from this file location
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-// Calculate project root and source config directory
-const projectRoot = path.resolve(__dirname, '../../')
-const srcConfigDir = path.join(projectRoot, 'src/config')
 
 // Read setup defaults template from file
 export const getSetupDefaultsTemplate = (): string => {
-  const templatePath = path.join(srcConfigDir, 'setup_defaults.toml')
+  const templatePath = path.join(__dirname, 'setup_defaults.toml')
   return fs.readFileSync(templatePath, 'utf8')
 }
 
 // Read doge config template from file
 export const getDogeConfigTemplate = (): string => {
-  const templatePath = path.join(srcConfigDir, 'doge-config.toml')
+  const templatePath = path.join(__dirname, 'doge-config.toml')
   return fs.readFileSync(templatePath, 'utf8')
 }
 

@@ -21,9 +21,11 @@ export default class ProofBundlePublish extends Command {
 
   static flags = {
     apply: Flags.boolean({default: false, description: 'Perform S3 writes and anonymous readback; omission prints a read-only plan'}),
+    'artifact-source': Flags.string({default: 'proof-aws', description: 'Use provisioned proof AWS resource facts, or the canonical doge-config AWS S3 store without requiring Kubernetes IAM resources', options: ['proof-aws', 'doge-config']}),
     'aws-profile': Flags.string({description: 'AWS profile used by the dogeos-core publisher'}),
     'core-dir': Flags.string({description: 'Deprecated source-based compatibility mode; prefer release + release-sha256'}),
     'deployment-dir': Flags.string({default: '.', description: 'Deployment root'}),
+    'doge-config': Flags.string({default: '.data/doge-config.toml', description: 'Canonical S3 configuration when artifact-source=doge-config'}),
     json: Flags.boolean({default: false, description: 'Output structured JSON'}),
     materials: Flags.string({default: DEFAULT_PROOF_MATERIALS_RECEIPT, description: 'Real proof-materials-v1.json'}),
     output: Flags.string({default: DEFAULT_PROOF_PROGRAM_PUBLICATION_RECEIPT, description: 'New publication receipt written only after all public GET checks pass'}),
@@ -40,8 +42,10 @@ export default class ProofBundlePublish extends Command {
       if (flags['core-dir']) output.addWarning('Legacy source-based publication; migrate to --release and --release-sha256')
       if (flags.release && !flags['release-sha256']) throw new Error('release-sha256 is required with release')
       const common = {
+        artifactSource: flags['artifact-source'] as 'doge-config' | 'proof-aws',
         coreDir: flags['core-dir'] ? path.resolve(flags['core-dir']) : undefined,
         deploymentDir: path.resolve(flags['deployment-dir']),
+        dogeConfig: flags['doge-config'],
         materialsReceipt: flags.materials,
         proofAwsConfig: flags['proof-aws-config'],
         release: flags.release,

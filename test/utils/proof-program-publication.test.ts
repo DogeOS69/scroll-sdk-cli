@@ -208,6 +208,22 @@ describe('real-proof program bundle publication', () => {
     expect(publisherInvocation).to.equal(undefined)
   })
 
+  it('uses the same canonical S3 publication plan without provisioning workload IAM resources', () => {
+    const expected = planProofProgramPublication(common())
+    fs.rmSync(path.join(root, '.data/proof-aws.json'))
+    fs.writeFileSync(path.join(root, '.data/doge-config.toml'), '[ethereumDa.blobArchive.s3]\nenabled = true\nbucket = "dogeos-proof-artifacts"\nkeyPrefix = "devnet/instance"\nregion = "us-east-1"\nendpointUrl = "https://s3.us-east-1.amazonaws.com"\n')
+    const actual = planProofProgramPublication({...common(), artifactSource: 'doge-config'})
+    expect(actual).to.deep.equal(expected)
+    expect(publisherInvocation).to.equal(undefined)
+  })
+
+  it('does not silently redirect an explicitly non-AWS store to AWS', () => {
+    fs.rmSync(path.join(root, '.data/proof-aws.json'))
+    fs.writeFileSync(path.join(root, '.data/doge-config.toml'), '[ethereumDa.blobArchive.s3]\nenabled = true\nbucket = "dogeos-proof-artifacts"\nkeyPrefix = "devnet/instance"\nregion = "us-east-1"\nendpointUrl = "https://storage.example.com"\n')
+    expect(() => planProofProgramPublication({...common(), artifactSource: 'doge-config'})).to.throw('regional AWS S3 endpoint')
+    expect(publisherInvocation).to.equal(undefined)
+  })
+
   it('publishes through the core script, preserves bucket policy and anonymously verifies every object', async () => {
     const result = await publishProofProgramBundle({
       ...common(),

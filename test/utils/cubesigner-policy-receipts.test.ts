@@ -43,6 +43,24 @@ describe('CubeSigner policy receipt import', () => {
     const mount = cubesignerLiveEvidenceProjection(result).persistence['proof-policy-live-evidence']
     expect(mount).to.include({mountPath: '/app/proof-policy/live-evidence.json', readOnly: true, subPath: 'live-evidence.json'})
   })
+  it('accepts the CubeSigner initial version v0', () => {
+    const input = fixture()
+    for (const name of ['live.json', 'release.json', 'attachment.json']) {
+      const file = path.join(root, name)
+      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replaceAll('dogeos-bridge/v2', 'dogeos-bridge/v0'))
+    }
+
+    const refs = input.selection.policyReceipts
+    refs.liveEvidence.sha256 = `sha256:${proofFileHash(path.join(root, refs.liveEvidence.path))}`
+    refs.release.sha256 = `sha256:${proofFileHash(path.join(root, refs.release.path))}`
+    const file = path.join(root, refs.attachment.path)
+    const attachment = JSON.parse(fs.readFileSync(file, 'utf8'))
+    attachment.releaseSha256 = refs.release.sha256
+    fs.writeFileSync(file, JSON.stringify(attachment))
+    refs.attachment.sha256 = `sha256:${proofFileHash(file)}`
+    expect(resolveCubesignerPolicy(input).policy?.policyIdentifier).to.equal('dogeos-bridge/v0')
+  })
+
   it('rejects another key, organization, changed context and changed Wasm', () => {
     const input = fixture()
     expect(() => resolveCubesignerPolicy({...input, keys: [{...keys[0], keyId: 'key-2'}]})).to.throw('keyId')

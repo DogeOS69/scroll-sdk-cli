@@ -643,6 +643,14 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   }
 
   // Dogecoin network validation
+  if (spec.bridge?.freshGenesisInit !== undefined && typeof spec.bridge.freshGenesisInit !== 'boolean') {
+    errors.push({code: 'E601_INVALID_VALUE', message: 'bridge.freshGenesisInit must be a boolean', path: 'bridge.freshGenesisInit'})
+  }
+
+  if (spec.bridge?.freshGenesisInit && spec.ethereumDa?.l2StartBlockNumber !== undefined) {
+    errors.push({code: 'E601_INVALID_VALUE', message: 'Fresh genesis initialization cannot be combined with snapshot continuation', path: 'bridge.freshGenesisInit'})
+  }
+
   if (spec.dogecoin?.network && spec.metadata.environment === 'mainnet' && spec.dogecoin.network !== 'mainnet') {
     warnings.push({
       message: 'Deployment environment is mainnet but dogecoin network is not mainnet',
@@ -1437,6 +1445,7 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   config.defaults = {
     dogecoinIndexerStartHeight: String(getDogecoinIndexerStartHeight(spec)),
     l1GenesisBlock: String(getL1GenesisBlock(spec)),
+    ...(spec.bridge.freshGenesisInit === undefined ? {} : {freshGenesisInit: spec.bridge.freshGenesisInit}),
   }
 
   if (spec.ethereumDa?.inboxWorker?.startBlock !== undefined) {

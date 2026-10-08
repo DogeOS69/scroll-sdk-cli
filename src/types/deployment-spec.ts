@@ -498,6 +498,9 @@ export interface BridgeConfig {
     withdrawalFeeWei?: string
   }
 
+  /** Authorize empty WP/L1I replay volumes for a new bridge. Never use for snapshot continuation. */
+  freshGenesisInit?: boolean
+
   /** Bootstrap-only attestation cohort. Runtime RotateKey state must be read from the chain, not inferred from this field. */
   initialAttestationKeyset?: {
     signerIds: string[]

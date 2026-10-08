@@ -2,9 +2,11 @@
 import * as toml from '@iarna/toml'
 import { input, select } from '@inquirer/prompts'
 import { Command, Flags } from '@oclif/core'
+import bitcore from 'bitcore-lib-doge'
 import Docker from 'dockerode'
 import * as yaml from 'js-yaml'
 import { execFileSync } from 'node:child_process'
+import {createHash} from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
@@ -44,6 +46,17 @@ export const BRIDGE_TIMELOCK_MARGIN_BLOCKS = 100
 export const BRIDGE_TIMELOCK_MAX_BLOCK_HEIGHT = 500_000_000
 
 export {GENESIS_SEQUENCER_AMOUNT_SATS, assertGenesisSequencerAmount} from '../../utils/bridge-constants.js'
+
+/** Matches generate_test_keys: SHA-256(seed), compressed SEC1 public key, P2PKH. */
+export function bridgeSetupHelperAddress(seed: string, network: string): string {
+  if (!['mainnet', 'regtest', 'testnet'].includes(network)) throw new Error('Unsupported Dogecoin network')
+  const selected = network === 'regtest' ? bitcore.Networks.regtest
+    : network === 'mainnet' ? bitcore.Networks.livenet : bitcore.Networks.testnet
+  // bitcore's Buffer constructor selects an uncompressed key. Hex selects the
+  // compressed representation used by dogeos-core's PrivateKey::from_slice.
+  const key = new bitcore.PrivateKey(createHash('sha256').update(seed).digest('hex'), selected)
+  return key.toAddress().toString()
+}
 
 export interface BridgeTimelockResolution {
   reason?: 'expired' | 'invalid' | 'missing' | 'placeholder'
@@ -257,6 +270,11 @@ export class BridgeInitCommand extends Command {
       default: 'linux/amd64',
       description: 'Docker platform for bridge-genesis-tools image.',
     }),
+    'ethereum-da-probe': Flags.string({
+      default: 'cluster',
+      description: 'Where to query the Ethereum DA start height: cluster pod or direct RPC from this machine.',
+      options: ['cluster', 'direct'],
+    }),
     'image-tag': Flags.string({
       description: 'Specify the Docker image tag to use (defaults to dev-20260707-043e7f3)',
       required: false,
@@ -294,6 +312,7 @@ export class BridgeInitCommand extends Command {
   }
 
   private dockerPlatform: string = 'linux/amd64'
+  private ethereumDaProbe: string = 'cluster'
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
   private kubeContext?: string
@@ -306,6 +325,7 @@ export class BridgeInitCommand extends Command {
     this.nonInteractive = flags['non-interactive']
     this.jsonMode = flags.json
     this.dockerPlatform = flags['docker-platform']
+    this.ethereumDaProbe = flags['ethereum-da-probe']
     this.kubeContext = flags['kube-context']
     this.jsonCtx = new JsonOutputContext('setup bridge-init', this.jsonMode)
 
@@ -350,6 +370,8 @@ export class BridgeInitCommand extends Command {
     }
 
     let postprocessResult: BridgeInitPostprocessResult = { outputFiles: [] }
+    const helperAddress = seed ? bridgeSetupHelperAddress(seed, this.getConfiguredDogeNetwork()) : undefined
+    if (helperAddress) this.jsonCtx.info(`Fund the setup helper P2PKH address and record its confirmed UTXOs in setup_defaults.toml: ${helperAddress}`)
 
     switch (step) {
       case 'all': {
@@ -396,12 +418,12 @@ export class BridgeInitCommand extends Command {
       confirmedBlockHash: postprocessResult.confirmedBlockHash,
       confirmedBlockHeight: postprocessResult.confirmedBlockHeight,
       genesisJsonPath: paths.genesisJsonPath,
+      helperAddress,
       imageTag,
       outputFiles: postprocessResult.outputFiles,
       protocolContextPath: paths.protocolContextPath,
       protocolContextYamlPath: paths.protocolContextYamlPath,
       protocolSeedPath: paths.protocolSeedPath,
-      seed,
       setupDefaultsPath: paths.setupDefaultsPath,
       step,
       withdrawalProcessorSecretPath: paths.withdrawalProcessorSecretPath,
@@ -479,7 +501,7 @@ export class BridgeInitCommand extends Command {
       })
 
       const logTarget = this.jsonMode ? process.stderr : process.stdout
-      stream.pipe(logTarget)
+      docker.modem.demuxStream(stream, logTarget, logTarget)
 
       try {
         // Wait for the container to finish
@@ -906,9 +928,20 @@ export class BridgeInitCommand extends Command {
     // every environment.
     let body: string
     try {
-      body = this.queryEthereumDaRpcViaClusterPod(rpcUrl)
+      if (this.ethereumDaProbe === 'direct') {
+        const response = await fetch(rpcUrl, {
+          body: JSON.stringify({id: 'bridge-init-pre-setup-ethereum-da-height', jsonrpc: '2.0', method: 'eth_blockNumber', params: []}),
+          headers: {'Content-Type': 'application/json'},
+          method: 'POST',
+          signal: AbortSignal.timeout(30_000),
+        })
+        if (!response.ok) throw new Error(`Ethereum DA RPC returned HTTP ${response.status}`)
+        body = await response.text()
+      } else {
+        body = this.queryEthereumDaRpcViaClusterPod(rpcUrl)
+      }
     } catch (error) {
-      if (ethereumDaChain === 'devnet') {
+      if (ethereumDaChain === 'devnet' && this.ethereumDaProbe === 'cluster') {
         this.jsonCtx.addWarning(
           `Could not query Ethereum DA height via in-cluster curl pod (${error instanceof Error ? error.message : String(error)}); ` +
           'falling back to embedded indexer start block 0 for the fresh devnet chain'
@@ -918,7 +951,7 @@ export class BridgeInitCommand extends Command {
 
       this.jsonCtx.error(
         'E400_ETHEREUM_DA_RPC_UNREACHABLE',
-        `Failed to query Ethereum DA RPC via in-cluster curl pod: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to query Ethereum DA RPC using ${this.ethereumDaProbe} probe: ${error instanceof Error ? error.message : String(error)}`,
         'NETWORK',
         true,
         {
@@ -1309,7 +1342,7 @@ export class BridgeInitCommand extends Command {
   private queryEthereumDaRpcViaClusterPod(rpcUrl: string): string {
     const namespace = process.env.NAMESPACE ?? 'default'
     const podName = `bridge-init-eth-da-height-${Date.now()}`
-    this.jsonCtx.info(`Querying eth_blockNumber from ${rpcUrl} via curl pod ${podName} in namespace ${namespace}`)
+    this.jsonCtx.info(`Querying Ethereum DA eth_blockNumber via curl pod ${podName} in namespace ${namespace}`)
 
     const output = execFileSync(
       'kubectl',
@@ -1569,6 +1602,12 @@ export class BridgeInitCommand extends Command {
 
     const network = this.getConfiguredDogeNetwork()
     this.syncSetupDefaultsNetwork(paths.setupDefaultsPath, network)
+    const {path: currentDogeConfigPath} = this.getRequiredDogeConfig(paths.dataDir)
+    const currentDogeConfig = toml.parse(fs.readFileSync(currentDogeConfigPath, 'utf8')) as any
+    if (currentDogeConfig.defaults?.l2BootstrapNextStartingBlockHeight !== undefined) {
+      this.error('Bridge setup creates a new genesis and cannot run in a snapshot-continuation deployment. Use a new deployment directory.')
+    }
+
     this.resolveSetupDefaultsEnvRefs(paths.setupDefaultsPath)
     assertGenesisSequencerAmount((toml.parse(fs.readFileSync(paths.setupDefaultsPath, 'utf8')) as any).sequencer_target_amount)
     const dogecoinHeightBeforeSetup = await this.getDogecoinCurrentHeight(paths.setupDefaultsPath)
@@ -1680,6 +1719,9 @@ export class BridgeInitCommand extends Command {
       dogeConfigForUpdate.defaults.dogecoinIndexerStartHeight = String(blockHeight)
       dogeConfigForUpdate.defaults.ethereumDaEmbeddedIndexerStartBlock = String(ethereumDaEmbeddedIndexerStartBlock)
       dogeConfigForUpdate.defaults.l1GenesisBlock = String(Math.max(0, blockHeight + 1))
+      // Successful --step 2-setup explicitly creates a new bridge. Merely
+      // re-rendering config or observing a missing DB never opts into seeding.
+      dogeConfigForUpdate.defaults.freshGenesisInit = true
       if (dogeConfigForUpdate.localSigners) {
         delete dogeConfigForUpdate.localSigners.network
       }
@@ -1692,7 +1734,13 @@ export class BridgeInitCommand extends Command {
       )
     } catch (configError) {
       if (configError instanceof CliExitError) throw configError
-      this.jsonCtx.addWarning(`Failed to update doge-config with block height: ${configError}`)
+      this.jsonCtx.error(
+        'E602_BRIDGE_LIFECYCLE_WRITE_FAILED',
+        'Setup transaction completed, but saving its replay heights and fresh-genesis state failed. Recover these values from the existing transaction before continuing; do not rerun setup.',
+        'CONFIGURATION',
+        true,
+        {path: path.join(dataDir, 'doge-config.toml')}
+      )
     }
   }
 

@@ -117,7 +117,7 @@ export function resolveCubesignerPolicy(input: {
   const attachment = receipt(root, refs.attachment, 'dogeos/cubesigner-policy-attachment/v1').value
   const r = release.value
   string(r.coreRevision, 'policy core revision', /^[\da-f]{40}$/)
-  const identifier = string(r.policyIdentifier, 'immutable policy identifier', /^[\da-z][\d._a-z-]{2,63}\/v[1-9]\d{0,8}$/)
+  const identifier = string(r.policyIdentifier, 'immutable policy identifier', /^[\da-z][\d._a-z-]{2,63}\/v(?:0|[1-9]\d{0,8})$/)
   if (r.sdkVersion !== SDK_VERSION || r.requestContract !== REQUEST_CONTRACT) throw new Error('Policy SDK/request contract mismatch')
   const authority = string(r.proofResolverAuthority, 'proof resolver authority')
   const url = new URL(authority)

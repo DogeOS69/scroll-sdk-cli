@@ -1,6 +1,7 @@
 declare module 'bitcore-lib-doge' {
   export const Networks: {
     livenet: unknown
+    regtest: unknown
     testnet: unknown
   }
 

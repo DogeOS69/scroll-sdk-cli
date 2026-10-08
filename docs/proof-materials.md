@@ -171,7 +171,15 @@ There are two supported mock preparations:
   the Worker still emits mock proofs and enforcement can remain `observe`.
 
 The second form is the correct pre-production rehearsal when materializer
-correctness or per-chunk performance is under test.
+correctness or per-chunk performance is under test. Its identity bundle must be
+the release worker's shared `--print-identity-json` document, without the
+`bridge_guest` section. Export it with `setup proof-image-tools --action export
+--require-real-materialization` from the matching release tool image. A full
+Bridge bake bundle is intended for `--generation real` and is rejected by the
+mock compiler. The complete `setup proof-config prepare` transaction performs
+this projection itself and pins the PC image owning the imported materializers;
+when importing manually, select that same PC image digest in chart values.
+A mock preparation or a successful bake is not an accepted real proof.
 
 On Kubernetes, these imported files are also deployment evidence. The adapter
 does not place the multi-megabyte materializer executables in ConfigMaps;

@@ -34,6 +34,21 @@ const FACTS_INPUT = {
 }
 
 describe('withdrawal-config deployment block', () => {
+  it('requires explicit fresh initialization and rejects snapshot continuation', () => {
+    const fresh = {...FACTS_INPUT, l2BootstrapNextStartingBlockHeight: undefined}
+    expect(buildWithdrawalDeploymentFacts(fresh).facts.fresh_genesis_init).to.equal(false)
+    expect(buildWithdrawalDeploymentFacts({...fresh, freshGenesisInit: true}).facts.fresh_genesis_init).to.equal(true)
+    expect(() => buildWithdrawalDeploymentFacts({...FACTS_INPUT, freshGenesisInit: true})).to.throw('snapshot continuation')
+  })
+
+  it('updates a stale fresh-init env projection when the deployment lifecycle is explicit', () => {
+    const values = {env: [{name: 'DOGEOS_WITHDRAWAL_FRESH_GENESIS_INIT', value: 'false'}]}
+    stripMigratedWithdrawalEnv(values, true)
+    expect(values.env[0].value).to.equal('true')
+    stripMigratedWithdrawalEnv(values, false)
+    expect(values.env[0].value).to.equal('false')
+  })
+
   it('builds typed TOML facts from string inputs', () => {
     const { deletePaths, facts } = buildWithdrawalDeploymentFacts(FACTS_INPUT)
     expect(deletePaths).to.include.deep.members([

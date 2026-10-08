@@ -35,7 +35,12 @@ describe('Blockbook removal', () => {
       fs.mkdirSync(path.join(dir, '.data'), {recursive: true})
       if (existing) {
         fs.writeFileSync(path.join(dir, '.data/doge-config.toml'), toml.stringify({
-          ethereumDa: {chain: 'devnet', chainId: 31_337},
+          ethereumDa: {
+            batch: {cutover: {enabled: true, l2StartBlockNumber: 42}},
+            blobArchive: {s3: {enabled: true, keyPrefix: 'canonical-da'}},
+            chain: 'devnet', chainId: 31_337,
+            l2StartBlockNumber: 42,
+          },
           kubernetes: {blockbookPublicPort: 19_139, blockbookServiceName: 'old-indexer', serviceName: 'dogecoin-testnet'}, network: 'testnet',
           rpc: {apiKey: 'retired-key', blockbookAPIUrl: 'https://old-indexer', url: 'https://rpc.example'},
           wallet: {path: '.data/wallet.json'},
@@ -56,6 +61,9 @@ describe('Blockbook removal', () => {
       if (existing) {
         const saved = toml.parse(fs.readFileSync(path.join(dir, '.data/doge-config.toml'), 'utf8'))
         expect((saved.ethereumDa as toml.JsonMap).chainId).to.equal('31337')
+        expect((saved.ethereumDa as toml.JsonMap).blobArchive).to.deep.equal({s3: {enabled: true, keyPrefix: 'canonical-da'}})
+        expect((saved.ethereumDa as toml.JsonMap).batch).to.deep.equal({cutover: {enabled: true, l2StartBlockNumber: 42}})
+        expect((saved.ethereumDa as toml.JsonMap).l2StartBlockNumber).to.equal(42)
       }
     }
 

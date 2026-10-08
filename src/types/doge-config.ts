@@ -113,6 +113,8 @@ export interface DogeConfig {
   defaults?: {
     dogecoinIndexerStartHeight?: string
     ethereumDaEmbeddedIndexerStartBlock?: string
+    /** Explicit fresh-bridge replay initialization; never inferred from a missing DB. */
+    freshGenesisInit?: boolean
     l1GenesisBlock?: string
     l2BootstrapNextStartingBlockHeight?: string
   }

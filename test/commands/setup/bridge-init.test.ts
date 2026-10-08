@@ -4,11 +4,21 @@ import BridgeInitCommand, {
   BRIDGE_TIMELOCK_MARGIN_BLOCKS,
   BRIDGE_TIMELOCK_RELATIVE_BLOCKS,
   assertGenesisSequencerAmount,
+  bridgeSetupHelperAddress,
   buildEthereumDaProtocolSeedConfig,
   buildInitialSystemSignerChoices,
   resolveBridgeTimelock,
   resolveInitialSystemSignerFromDogeConfig,
 } from '../../../src/commands/setup/bridge-init.js'
+
+describe('bridge setup funding address', () => {
+  it('uses the compressed public key required by the core setup transaction', () => {
+    expect(bridgeSetupHelperAddress('fixture-bridge-seed', 'testnet')).to.equal('nZ2DpLoWvSLNKNxvV4ZggtDTDL8fih8G7P')
+    expect(bridgeSetupHelperAddress('fixture-bridge-seed', 'regtest')).to.equal('mkM1r8CwW5QcgWgkSDu3idfsxKcnMswcV7')
+    expect(bridgeSetupHelperAddress('fixture-bridge-seed', 'mainnet')).not.to.equal('nZ2DpLoWvSLNKNxvV4ZggtDTDL8fih8G7P')
+    expect(() => bridgeSetupHelperAddress('fixture-bridge-seed', 'unknown')).to.throw('Unsupported Dogecoin network')
+  })
+})
 
 describe('genesis sequencing output invariant', () => {
   it('accepts the builder value and rejects incompatible genesis funding before broadcast', () => {

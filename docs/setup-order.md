@@ -9,6 +9,8 @@ storage required by your chosen deployment separately.
 
 See [Local setup-order validation](setup-order-validation.md) for executed checks,
 findings and the cloud/proof/runtime steps that remain unverified.
+The newer [production input review](production-inputs-review.md) records the
+cross-repository corrections and shadowfork configuration rehearsal.
 
 Bridge initialization uses **`scrollsdk setup bridge-init`** with the configured
 Dogecoin network's actual funding and confirmation process.
@@ -24,7 +26,10 @@ deployment's reviewed `Makefile`. Keep the native TOML files at
 `proof-coordinator/ProofCoordinator.toml`. `prep-charts` updates those files;
 it does not bootstrap all application templates from an empty directory.
 Select the services, node counts and chart versions in the Makefile for this
-deployment; historical SDK Makefile examples may still contain retired targets.
+deployment. Keep command logs outside the deployment directory (or list their
+paths in `.scrollsdkignore`), since configuration generation detects concurrent
+changes to its input files. Local `.data/contracts-build` caches can also be
+excluded; required configuration and proof materials must remain included.
 Copy templates only when creating the directory, before generating identities
 or artifacts, so later copies do not overwrite generated values.
 
@@ -105,10 +110,19 @@ requirements. Bridge outputs, including `.data/protocol_context.json`, must exis
 before preparing dependent service values and Secrets.
 The funding inputs are `base_funding_utxos` in `.data/setup_defaults.toml`; replace
 the template placeholders with confirmed, unspent outputs controlled by the
-helper derived from this instance's seed. Ethereum DA height discovery uses a
-temporary Kubernetes curl pod, so configure access to the intended cluster as
-well as its reachable Ethereum execution RPC. The CLI's fresh Ethereum devnet
-fallback to start block zero is not a successful cluster/RPC check.
+helper derived from this instance's seed. Stage 1 returns the compressed-P2PKH helper funding address without exposing
+the seed. Ethereum DA height discovery defaults to a temporary Kubernetes curl
+pod; configure the intended cluster, or explicitly use
+`--ethereum-da-probe direct` when the operator machine can reach the configured
+RPC. Direct mode queries the actual height and fails on an unreachable RPC.
+The cluster mode's fresh Ethereum devnet fallback to start block zero is not a
+successful cluster/RPC check.
+
+After successful stage 2, the CLI records both replay start heights and sets
+`defaults.freshGenesisInit = true`. `prep-charts` projects this explicit new-bridge
+state into both WP and L1I. Existing deployments default to false when this field
+is absent; a snapshot continuation cannot also request fresh-genesis
+initialization. Regenerating protocol context alone does not enable it.
 
 ## 4. Prepare proof and service configuration
 
@@ -158,6 +172,124 @@ The AWS command requires the cluster name and region; use
 `--skip-controller-setup` when the controller is already managed by the
 environment. See [Reth bootnode public P2P access](bootnode-public-p2p.md) for
 the full command, controller setup and deployment boundary.
+
+## Publish proof programs to an existing AWS S3 store
+
+After importing the real preparation receipt and compiling the active/real
+topology, the complete 11-file bundle can be published without creating EKS
+workload roles. Use the canonical `ethereumDa.blobArchive.s3` bucket, prefix,
+region and regional AWS endpoint already present in `doge-config`:
+
+```bash
+scrollsdk setup proof-bundle-publish --artifact-source doge-config \
+  --release dogeos-proof-release-v1.json --release-sha256 "$RELEASE_SHA256" --json
+scrollsdk setup proof-bundle-publish --artifact-source doge-config \
+  --release dogeos-proof-release-v1.json --release-sha256 "$RELEASE_SHA256" \
+  --aws-profile "$PUBLICATION_PROFILE" --apply --json
+```
+
+The publication profile must return unexpired temporary credentials. The CLI
+uses the immutable publisher image, preserves bucket policy, and writes a receipt
+only after authenticated and anonymous reads match all 11 source files. This
+explicit mode supports direct regional AWS S3; a non-AWS endpoint is rejected.
+The default `--artifact-source proof-aws` continues to use `.data/proof-aws.json`
+and its configured public transport. Neither publishing mode proves that the
+runtime workloads have IAM permissions; provision and validate those separately
+before rollout. The combined `proof-config prepare`/`publish` workflow still
+requires the provisioned resource facts.
+
+The standalone publisher does not modify the deployment contract. Bind its
+receipt explicitly when regenerating values, then regenerate secrets:
+
+```bash
+scrollsdk setup prep-charts \
+  --proof-materials-receipt .data/proof-materials-v1.json \
+  --proof-publication-receipt .data/proof-program-publication-v1.json
+scrollsdk setup gen-secrets
+scrollsdk setup proof-config-check --json
+```
+
+For active/real deployments the final check also requires the artifact-store
+resource receipt. Successful standalone publication does not satisfy that
+separate requirement or any production signer evidence requirement.
+
+## CubeSigner Wasm preparation and attachment
+
+When the correctness signer uses the hosted verifier policy, generate an actual
+Wasm after Bridge preparation. `export-signer-policy` generates the partner
+attestation-signer handoff; it does not compile this CubeSigner Wasm.
+
+```bash
+scrollsdk setup cubesigner-policy build \
+  --compiler-image "$POLICY_COMPILER_IMAGE" \
+  --expected-core-revision "$CORE_REVISION" \
+  --preparation-receipt .data/preparation/proof-release-preparation-v1.json \
+  --protocol-context .data/protocol_context.json \
+  --resolver-base-url "$PROOF_RESOLVER_BASE_URL" \
+  --output .data/cubesigner-policy-build --json
+```
+
+The compiler image must be pinned by digest and match the preparation revision.
+`PROOF_RESOLVER_BASE_URL` must equal the generated WP
+`proof_system.signer_proof_artifact_base_url`, normalized to end in `/`.
+For S3 this includes the configured key prefix, for example
+`https://<bucket>.s3.<region>.amazonaws.com/<deployment-prefix>/`.
+Proof references contain logical keys; the storage layer adds that prefix.
+Using only the bucket root when a prefix is configured produces a URL mismatch.
+This is not a signed URL or the DA archive's independently configured public
+base. The command checks
+the receipt/context identity and runs the compiler without network or a core
+source checkout. Output contains the real Wasm, build receipt, compiler digest,
+and input copies. Keep each generation in a new directory.
+
+The CubeSigner organization must also permit HTTP egress to this resolver.
+Preview the addition, then apply the reviewed change:
+
+```bash
+scrollsdk setup cubesigner-policy resolver \
+  --base-url "$PROOF_RESOLVER_BASE_URL" --organization "$CUBESIGNER_ORG_ID" --json
+scrollsdk setup cubesigner-policy resolver \
+  --base-url "$PROOF_RESOLVER_BASE_URL" --organization "$CUBESIGNER_ORG_ID" \
+  --apply --output .data/cubesigner-policy-resolver.json --json
+```
+
+This uses the existing management session and preserves all other allowed
+authorities and configuration fields. The setting applies to the organization;
+it is separate from the bucket's anonymous read policy. Provider readback
+confirms the configuration, while a hosted policy request must still verify
+actual HTTPS delivery. The provider has no atomic compare-and-swap API: serialize
+organization configuration changes during this step. Without `--apply`, the
+command performs read-only inspection.
+The management identity must be authorized to update organization settings;
+read access or ownership of a signing key is insufficient. HTTP 403
+`UserRoleUnprivileged` requires an organization administrator to perform the
+change. Do not treat testnet proof-failure fallback as evidence that the resolver
+is reachable.
+
+```bash
+scrollsdk setup cubesigner-policy deploy \
+  --build-receipt .data/cubesigner-policy-build/build-receipt.json \
+  --build-receipt-sha256 "$POLICY_BUILD_RECEIPT_SHA256" \
+  --name "$POLICY_NAME" --organization "$CUBESIGNER_ORG_ID" \
+  --key-id "$CUBESIGNER_KEY_ID" \
+  --output .data/cubesigner-policy-deployment --json
+```
+
+This command performs remote writes using the current `cs` login. It verifies
+the uploaded Wasm SHA-256, invokes the hosted policy to reject an empty request,
+attaches a concrete version (including the provider's initial `v0`), and verifies
+the key policy by readback. CubeSigner returns the canonical
+`NamedPolicy#…/vN` on the key, so the command resolves and verifies that provider
+ID as well as the readable `name/vN`; the attachment receipt records both.
+An unrelated existing policy causes a refusal before
+upload; use an explicit migration workflow for that case. The saved upload
+receipt permits retry after interruption without creating another policy.
+
+Build/deployment receipts establish compilation and attachment only. They are
+not replacements for the production policy release and live-evidence receipts
+required by `proof-config-check`: validate actual proof retrieval, a valid proof,
+invalid proof rejection, and the native signing route. Testnet's post-structural
+proof fallback must not be recorded as strict proof-verification success.
 
 ## 5. Upload and deploy
 
