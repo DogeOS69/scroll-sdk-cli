@@ -171,6 +171,34 @@ remain for review. Resolver allowlist preview still requires an organization
 change; this run made no organization configuration writes and does not claim
 hosted proof delivery, strict proof acceptance, GPU proving or a service rollout.
 
+## Workload identity continuation
+
+The same CI-image deployment was continued on 2026-10-08 using an isolated
+namespace in the existing devnet EKS cluster. This supersedes the missing-IAM
+result above; the historical deployments were not changed.
+
+| Check | Observed result |
+| --- | --- |
+| AWS provisioning | The packed CLI's `proof-aws-init` created separate WP and Proof Coordinator IRSA roles plus a deployment-specific token secret, and wrote the actual `dogeos/proof-aws/v4` resource receipt. Existing bucket policy remained unchanged. |
+| Workload identities | Two temporary EKS Pods used ServiceAccounts extracted from the generated Helm manifests. Both acquired their expected assumed-role identity through IRSA, without operator AWS credentials in the Pods. |
+| Artifact access | Both Pods passed PutObject, byte-identical GetObject, CopyObject and prefix-scoped ListBucket. Writes and listing outside the deployment prefix were denied. Coordinator deletion succeeded; WP deletion was denied, matching the generated policies. |
+| Idempotence | A second `proof-aws-init` succeeded with identical resource receipt bytes and the same Secrets Manager version; no token rotation occurred. |
+| Receipt binding | `prep-charts` bound the AWS receipt. The topology revision changed, so the old publication receipt no longer matched. Republishing through the CI publisher to a new receipt, regenerating charts/secrets and exporting a new versioned signer handoff resolved the mismatch. All 11 authenticated and anonymous publication readbacks passed. |
+| Configuration check | `proof-config-check` passed for `active/real/observe` with the actual artifact-store and current publication receipts. Enforcement readiness remained false because explicit CubeSigner policy evidence and external signer validation receipts were still missing. All 12 Helm renders passed again. |
+| Rejected test input | The first combined `proof-config prepare` rejected a loopback TSO URL in the test request. No partial candidate was exposed and the original deployment's 35 selected configuration/values files remained byte-identical. The request was corrected to use the TSO host already selected in `config.toml`. |
+| Combined transaction | With the corrected input, `proof-config prepare` passed in 405 seconds, the read-only publication plan passed, and `proof-config publish --apply` passed in 132 seconds. All 11 authenticated and anonymous reads passed. The candidate's final `proof-config-check` passed in observe mode with the same production-evidence blockers. Both required receipts are bound and the publication topology matches. All 12 candidate Helm renders passed. |
+| Input stability | All 13 preparation artifact hashes matched the previous bake, so this IAM continuation did not change the existing policy's program, verifier or protocol-context inputs. The original deployment's 35 selected configuration/values files remained byte-identical after the combined transaction. |
+| CubeSigner egress | A new real `resolver --apply` attempt still returned HTTP 403 `UserRoleUnprivileged`. Successful organization mutation and hosted resolver access remain unverified. |
+| Cleanup | Probe Pods and exact probe object keys were removed and absence verified. The isolated namespace, ServiceAccounts, IAM roles and token secret remain available for continued deployment testing. |
+
+Evidence is under `evidence/iam-probe-results.json`,
+`evidence/iam-idempotence.json`, `evidence/44-config-check-iam.json`,
+`evidence/combined-flow.json` and
+`evidence/resolver-continuation-error.json` in the CI-image temporary root.
+The probes validate workload identity and S3 permissions, not a running proof
+service or a successful withdrawal. The resource receipt itself remains a
+record of provisioned configuration, not a substitute for these live tests.
+
 ## Production conditions still outside this acceptance
 
 The fresh configuration/artifact rehearsal and actual Wasm binding do not
@@ -180,9 +208,8 @@ inputs. The new policy's testnet fallback permits proof failure after structural
 checks. Six expected hosted verdicts therefore do not demonstrate strict
 mainnet proof acceptance or a valid proof for the new bridge.
 
-Remaining prerequisites are resolver egress permission, actual AWS workload
-identities for the selected prefix, the combined preparation/publication
-transaction and final configuration gate, valid/invalid new-bridge GPU proofs,
+Remaining prerequisites are resolver egress permission, the production
+CubeSigner policy evidence chain, valid/invalid new-bridge GPU proofs,
 external signer enforce receipts, and a running cross-service/Kubernetes
 acceptance. The host used for this test has no GPU. A production release must
 publish matching images and charts, supply those inputs and evidence, and pass
