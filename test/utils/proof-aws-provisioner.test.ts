@@ -8,6 +8,7 @@ import {
   applyProofAwsValues,
   assertNoUnmanagedPublicProofBucketGrant,
   buildProofArtifactStorePolicy,
+  denyInsecureTransportStatement,
   normalizeProofArtifactPublicEndpoint,
   normalizeProofBucketName,
   normalizeProofKeyPrefix,
@@ -381,6 +382,7 @@ describe('proof-aws-provisioner values projection', () => {
     const policy = JSON.parse(putBucketPolicy?.args[putBucketPolicy.args.indexOf('--policy') + 1] as string)
     expect(policy.Statement).to.deep.equal([
       operatorStatement,
+      denyInsecureTransportStatement('proof-bucket'),
       {
         Action: 's3:GetObject',
         Effect: 'Allow',
@@ -581,6 +583,7 @@ describe('proof-aws-provisioner values projection', () => {
     )
     expect(enabled.Statement).to.deep.equal([
       operatorStatement,
+      denyInsecureTransportStatement('proof-bucket'),
       {
         Action: 's3:GetObject',
         Effect: 'Allow',
@@ -604,7 +607,9 @@ describe('proof-aws-provisioner values projection', () => {
       'proof-topology',
       false,
     )
-    expect(disabled.Statement).to.deep.equal([operatorStatement])
+    // Disabling public read keeps the bucket TLS-only.
+    expect(disabled.Statement).to.deep.equal([operatorStatement, denyInsecureTransportStatement('proof-bucket')])
+    expect(denyInsecureTransportStatement('proof-bucket')).to.deep.include({Effect: 'Deny', Sid: 'ScrollSdkDenyInsecureTransport'})
   })
 
   it('ignores public grants on sibling prefixes and rejects grants overlapping the managed prefix', () => {

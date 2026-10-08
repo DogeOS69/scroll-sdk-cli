@@ -3,7 +3,7 @@ import {isDeepStrictEqual} from 'node:util'
 import type {ArtifactStore} from './artifact-stores.js'
 import type {AwsCliRunner} from './aws-cli.js'
 
-import {normalizeProofBucketName, normalizeProofKeyPrefix} from './proof-aws-provisioner.js'
+import {DENY_INSECURE_TRANSPORT_SID, denyInsecureTransportStatement, normalizeProofBucketName, normalizeProofKeyPrefix} from './proof-aws-provisioner.js'
 
 type Document = Record<string, unknown>
 type Aws = Pick<AwsCliRunner, 'json' | 'run' | 'text'>
@@ -23,7 +23,6 @@ export const ARCHIVE_POLICY_SIDS = {
   da: {publicRead: 'ScrollSdkDaArchivePublicRead', vpceRead: 'ScrollSdkDaArchiveReadViaVpcEndpoint'},
   snapshot: {publicRead: 'ScrollSdkSnapshotPublicRead', vpceRead: 'ScrollSdkSnapshotReadViaVpcEndpoint'},
 } as const
-export const DENY_INSECURE_TRANSPORT_SID = 'ScrollSdkDenyInsecureTransport'
 // The DA name is the one setup eth-da-submitter has always used, so both
 // commands manage, and narrow in place, the same inline policy.
 export const ARCHIVE_WRITER_POLICY_NAMES = {da: 'eth-da-submitter-s3-archive', snapshot: 'ScrollSdkSnapshotWrite'} as const
@@ -100,14 +99,7 @@ export function buildArchiveBucketPolicy(
   const resource = objectArn(normalizeProofBucketName(bucket), normalizeProofKeyPrefix(keyPrefix))
   const current = new Map(statementsOf(existing).filter(item => typeof item.Sid === 'string').map(item => [item.Sid as string, item]))
   const desired: Record<string, Document | undefined> = {
-    [DENY_INSECURE_TRANSPORT_SID]: {
-      Action: 's3:*',
-      Condition: {Bool: {'aws:SecureTransport': 'false'}},
-      Effect: 'Deny',
-      Principal: '*',
-      Resource: [`arn:aws:s3:::${bucket}`, `arn:aws:s3:::${bucket}/*`],
-      Sid: DENY_INSECURE_TRANSPORT_SID,
-    },
+    [DENY_INSECURE_TRANSPORT_SID]: denyInsecureTransportStatement(bucket),
     [sids.publicRead]: options.publicRead === undefined
       ? current.get(sids.publicRead)
       : options.publicRead ? {Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: resource, Sid: sids.publicRead} : undefined,

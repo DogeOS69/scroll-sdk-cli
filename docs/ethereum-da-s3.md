@@ -53,8 +53,8 @@ layout. Use `--artifact-public-read-mode existing-public-s3` when the proof
 bucket already has an operator-managed anonymous S3 policy. In that mode the
 command does not change the bucket-wide Public Access Block settings or the
 existing public-read policy; it only manages deployment-scoped proof resources
-and, when selected, the prefix-scoped EKS Gateway endpoint grant. Use
-`direct-s3` only when the CLI owns the bucket's public-access posture, or
+and, when selected, the prefix-scoped EKS Gateway endpoint grant. `direct-s3` only when the CLI owns the bucket's public-access posture (it then
+also adds the TLS-only `ScrollSdkDenyInsecureTransport` statement), or
 `existing-gateway` when S3 remains private behind an HTTPS gateway.
 
 After configuring the archive, run `scrollsdk setup prep-charts`. It reads

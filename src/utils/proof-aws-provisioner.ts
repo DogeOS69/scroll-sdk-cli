@@ -74,6 +74,19 @@ export interface ProofArtifactVpcEndpointResult {
 export const PROOF_SECRET_PROPERTIES = ['proof-work-token', 'prover-worker-token'] as const
 export const PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID = 'ScrollSdkProofArtifactPublicRead'
 export const PROOF_ARTIFACT_VPCE_POLICY_SID = 'ScrollSdkProofArtifactReadViaVpcEndpoint'
+export const DENY_INSECURE_TRANSPORT_SID = 'ScrollSdkDenyInsecureTransport'
+
+/** TLS-only: deny every request to the bucket that is not over HTTPS. */
+export function denyInsecureTransportStatement(bucket: string): Record<string, any> {
+  return {
+    Action: 's3:*',
+    Condition: {Bool: {'aws:SecureTransport': 'false'}},
+    Effect: 'Deny',
+    Principal: '*',
+    Resource: [`arn:aws:s3:::${bucket}`, `arn:aws:s3:::${bucket}/*`],
+    Sid: DENY_INSECURE_TRANSPORT_SID,
+  }
+}
 
 /**
  * Logical object namespaces read without AWS credentials by external proof
@@ -295,8 +308,14 @@ export function upsertProofArtifactPublicReadPolicy(
     ? [...existingPolicy.Statement]
     : existingPolicy.Statement ? [existingPolicy.Statement] : []
   const preservedStatements = statements.filter(
-    statement => statement?.Sid !== PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID,
+    statement => statement?.Sid !== PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID && statement?.Sid !== DENY_INSECURE_TRANSPORT_SID,
   )
+  // direct-s3 is the mode in which the CLI owns the bucket posture: TLS-only
+  // is added with public read and never removed by disabling it.
+  if (enabled || statements.some(statement => statement?.Sid === DENY_INSECURE_TRANSPORT_SID)) {
+    preservedStatements.push(denyInsecureTransportStatement(bucket))
+  }
+
   if (enabled) {
     preservedStatements.push({
       Action: 's3:GetObject',
