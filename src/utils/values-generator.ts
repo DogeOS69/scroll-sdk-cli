@@ -829,9 +829,10 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
     ingress: {
       main: {
         annotations: {'nginx.ingress.kubernetes.io/proxy-body-size': '4m'},
+        // Public edge: /health and the transport-signed /signer/* routes only.
         hosts: [{
           host: spec.frontend.hosts.tso || '',
-          paths: [{ path: '/', pathType: 'Prefix' }]
+          paths: [{ path: '/health', pathType: 'Exact' }, { path: '/signer', pathType: 'Prefix' }]
         }],
         ingressClassName: 'nginx',
         tls: spec.frontend.hosts.tso ? [{

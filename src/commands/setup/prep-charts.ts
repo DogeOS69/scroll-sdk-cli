@@ -82,12 +82,17 @@ import {
   signerModeToConfig,
 } from './l2-sequencer-reth.js'
 
-export interface TsoSignerEndpoint {
+/** One TSO signer directory entry (WP tsoSigners -> [[tso_signers]]). */
+export interface TsoSignerEntry {
+  delivery: 'pull' | 'push'
   network: string
-  publicKeyOverride?: string
-  role: 'Attestation' | 'Correctness'
+  publicKeyOverride: string
+  /** Exactly one role today; a list so one key can later serve two scripts. */
+  roles: Array<'Attestation' | 'Correctness'>
   signatureMode: 'ecdsa' | 'shadowfork_sentinel'
-  uri: string
+  transportPubkey?: string
+  /** Push delivery only. */
+  uri?: string
 }
 
 interface PrepChartGenerationResult {
@@ -152,18 +157,19 @@ export function buildRethInitialTrustedPeers(rethSequencerPeers: string[]): stri
 }
 
 /**
- * The descriptor endpoint is the routing contract: preserve the partner's
- * exact IP/domain and project it into the TSO registration list alongside the
- * in-cluster TEE signers. Always return the full list so a missing/stale values
- * array cannot silently disconnect external signers.
+ * Build the whole TSO signer directory so a missing/stale values array cannot
+ * silently drop a signer. The in-cluster CubeSigner is pushed to over its
+ * Service. Every imported external attestation signer (active or not, so
+ * upcoming rotation keys are already registered) dials out to the TSO: pull
+ * delivery, no URI, with both descriptor keys pinned.
  */
-export function buildTsoSigners(config: Pick<DogeConfig, 'cubesigner' | 'network' | 'signerUrls'>): TsoSignerEndpoint[] {
+export function buildTsoSigners(config: Pick<DogeConfig, 'attestationSigner' | 'cubesigner' | 'network'>): TsoSignerEntry[] {
   const cubesignerRoles = config.cubesigner?.roles || []
   if (cubesignerRoles.length > 1) {
     throw new Error('CubeSigner supports exactly one TEE role and one in-cluster deployment')
   }
 
-  const teeSigners: TsoSignerEndpoint[] = cubesignerRoles.length === 0 ? [] : (() => {
+  const teeSigners: TsoSignerEntry[] = cubesignerRoles.length === 0 ? [] : (() => {
     const publicKeyOverride = cubesignerRoles[0]?.keys?.[0]?.public_key_compressed
     if (!publicKeyOverride) {
       throw new Error(
@@ -173,20 +179,23 @@ export function buildTsoSigners(config: Pick<DogeConfig, 'cubesigner' | 'network
     }
 
     return [{
+      delivery: 'push',
       network: config.network,
       publicKeyOverride,
       // TSO's public registration contract calls the TEE signer "Correctness".
       // "Tee" is its internal script role and is intentionally not accepted here.
-      role: 'Correctness',
+      roles: ['Correctness'],
       signatureMode: 'ecdsa',
       uri: 'http://cubesigner-signer:3000',
     }]
   })()
-  const attestationSigners: TsoSignerEndpoint[] = (config.signerUrls || []).map(uri => ({
+  const attestationSigners: TsoSignerEntry[] = (config.attestationSigner?.external || []).map(signer => ({
+    delivery: 'pull',
     network: config.network,
-    role: 'Attestation',
+    publicKeyOverride: signer.publicKey,
+    roles: ['Attestation'],
     signatureMode: 'ecdsa',
-    uri,
+    transportPubkey: signer.transportPubkey,
   }))
   return [...teeSigners, ...attestationSigners]
 }

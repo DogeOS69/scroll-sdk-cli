@@ -18,7 +18,7 @@ export function writeSignerPolicyHandoff(options: {
   const contract = validateProofDeploymentContract(root, options.contractPath)
   const {enforcement, generation, mode} = contract
   if (options.config.network === 'mainnet' && enforcement !== 'enforce') throw new Error('Mainnet signer policy requires enforcement')
-  const signers = options.config.attestationSigner?.external?.map(({endpoint, id, publicKey}) => ({endpoint, id, publicKey}))
+  const signers = options.config.attestationSigner?.external?.map(({id, publicKey, transportPubkey}) => ({id, publicKey, transportPubkey}))
   if (options.config.attestationSigner?.mode !== 'external' || !signers?.length) throw new Error('External attestation signers are not configured')
   if (generation === 'real' && !contract.inputs) throw new Error('Selected contract has no bound materials receipt; rerun prep-charts with --proof-materials-receipt')
   const context = proofRegularFile(path.resolve(root, options.protocolContext))

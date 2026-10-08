@@ -274,8 +274,18 @@ describe('setup prep-charts retired CubeSigner instance cleanup', () => {
 })
 
 describe('setup prep-charts external attestation signer routing', () => {
-  it('preserves descriptor IP/domain endpoints in the TSO signer list', () => {
+  it('registers every imported external signer as a pinned pull signer beside the pushed CubeSigner', () => {
     expect(buildTsoSigners({
+      attestationSigner: {
+        activeSignerIds: ['partner-a'],
+        external: [
+          {id: 'partner-a', publicKey: `02${'22'.repeat(32)}`, transportPubkey: `03${'33'.repeat(32)}`},
+          // Imported but not yet active (e.g. an upcoming rotation key) is still registered.
+          {id: 'partner-b', publicKey: `02${'44'.repeat(32)}`, transportPubkey: `03${'55'.repeat(32)}`},
+        ],
+        mode: 'external',
+        threshold: 1,
+      },
       cubesigner: { roles: [
         {
           keys: [{
@@ -291,20 +301,17 @@ describe('setup prep-charts external attestation signer routing', () => {
         },
       ] },
       network: 'testnet',
-      signerUrls: [
-        'https://signer.partner-a.example:4040',
-        'http://10.20.30.40:4040',
-      ],
     })).to.deep.equal([
       {
+        delivery: 'push',
         network: 'testnet',
         publicKeyOverride: `02${'11'.repeat(32)}`,
-        role: 'Correctness',
+        roles: ['Correctness'],
         signatureMode: 'ecdsa',
         uri: 'http://cubesigner-signer:3000',
       },
-      { network: 'testnet', role: 'Attestation', signatureMode: 'ecdsa', uri: 'https://signer.partner-a.example:4040' },
-      { network: 'testnet', role: 'Attestation', signatureMode: 'ecdsa', uri: 'http://10.20.30.40:4040' },
+      {delivery: 'pull', network: 'testnet', publicKeyOverride: `02${'22'.repeat(32)}`, roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: `03${'33'.repeat(32)}`},
+      {delivery: 'pull', network: 'testnet', publicKeyOverride: `02${'44'.repeat(32)}`, roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: `03${'55'.repeat(32)}`},
     ])
   })
 

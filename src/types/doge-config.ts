@@ -47,13 +47,14 @@ export interface DogeConfig {
     backend?: 'aws_kms' | 'local'
     /**
      * Partner-operated signers imported from attestation-signer descriptors.
-     * The bridge operator never deploys these; endpoints are wired into TSO
-     * and publicKeys into the bridge redeem script.
+     * The bridge operator never deploys these. publicKeys enter the bridge
+     * redeem script; both keys are pinned in the TSO signer directory, and the
+     * signers dial out to the TSO (pull delivery, no endpoint).
      */
     external?: Array<{
-      endpoint: string
       id: string
       publicKey: string
+      transportPubkey: string
     }>
     /** Legacy in-cluster provisioning only; absent for external signers. */
     instances?: Array<{
@@ -257,7 +258,6 @@ export interface DogeConfig {
       }
     }>
   }
-  signerUrls?: string[]
   signers?: {
     l1CommitSender?: {
       backend: 'aws_kms' | 'local'

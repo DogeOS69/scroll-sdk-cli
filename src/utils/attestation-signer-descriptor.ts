@@ -2,13 +2,14 @@
  * Attestation-signer descriptor — the exchange contract between a signer
  * operator (a partner deploying attestation_signer on their own
  * infrastructure) and the bridge operator (who generates the bridge from the
- * collected descriptors and wires the endpoints into TSO).
+ * collected descriptors and registers them in the TSO signer directory).
  *
- * The descriptor is deployment-agnostic: it carries only what the bridge
- * operator needs — a stable id, the network, the signer HTTP endpoint, and
- * the compressed secp256k1 public key that enters the bridge redeem script.
- * How the signer is hosted (docker-compose, Kubernetes, bare metal) is the
- * operator's concern and never appears here.
+ * The descriptor is the signer's `--print-identity` JSON plus a stable id:
+ * the network, the compressed secp256k1 attestation public key that enters
+ * the bridge redeem script, and the compressed secp256k1 transport public key
+ * that authenticates the signer's requests to the TSO. Signers dial out to
+ * the TSO, so the descriptor carries no endpoint. How the signer is hosted is
+ * the operator's concern and never appears here.
  */
 import bitcore from 'bitcore-lib-doge'
 import fs from 'node:fs'
@@ -20,15 +21,19 @@ export const ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA = 'dogeos/attestation-signer-d
 
 export const ATTESTATION_SIGNER_NETWORKS = ['mainnet', 'regtest', 'testnet'] as const
 
-export interface AttestationSignerDescriptor {
-  /** Signer HTTP base URL, e.g. https://signer.partner.example:4040 (no path). */
-  endpoint: string
-  /** Stable operator-chosen identifier (DNS-label shaped, unique per bridge). */
-  id: string
+/** `attestation_signer --print-identity` output: the descriptor minus id. */
+export interface AttestationSignerIdentity {
   network: (typeof ATTESTATION_SIGNER_NETWORKS)[number]
-  /** Compressed secp256k1 public key, 66 hex chars starting 02/03. */
+  /** Compressed secp256k1 attestation public key, 66 hex chars starting 02/03. */
   publicKey: string
   schema: typeof ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA
+  /** Compressed secp256k1 transport public key, 66 hex chars starting 02/03. */
+  transportPubkey: string
+}
+
+export interface AttestationSignerDescriptor extends AttestationSignerIdentity {
+  /** Stable operator-chosen identifier (DNS-label shaped, unique per bridge). */
+  id: string
 }
 
 const ID_PATTERN = /^[\da-z]([\da-z-]{0,62}[\da-z])?$/
@@ -59,14 +64,6 @@ export function assertCompressedSecp256k1PublicKey(value: string, source: string
   return normalized
 }
 
-/**
- * Placeholder written by `signer init` when --endpoint is not known yet.
- * It is a syntactically valid URL, so validation must reject it explicitly —
- * otherwise a forgotten placeholder descriptor would import cleanly and put
- * a junk endpoint into tsoSigners.
- */
-export const ENDPOINT_PLACEHOLDER = 'https://REPLACE-WITH-YOUR-SIGNER-ENDPOINT'
-
 function isLoopbackOrUnspecifiedUrlHost(urlHostname: string): boolean {
   const rawHostname = urlHostname.toLowerCase()
   const hostname = rawHostname.startsWith('[') && rawHostname.endsWith(']')
@@ -90,10 +87,6 @@ export function normalizeExternalHttpBaseUrl(
     url = new URL(value)
   } catch {
     throw new Error(`${source}: endpoint must be an absolute http(s) URL`)
-  }
-
-  if (url.hostname === new URL(ENDPOINT_PLACEHOLDER).hostname) {
-    throw new Error(`${source}: endpoint is still the signer-init placeholder; run scrollsdk signer preflight --endpoint <real-url> to finalize the descriptor`)
   }
 
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
@@ -122,7 +115,7 @@ export function normalizeSignerEndpoint(
   })
 }
 
-export function validateAttestationSignerDescriptor(raw: unknown, source: string): AttestationSignerDescriptor {
+export function validateAttestationSignerIdentity(raw: unknown, source: string): AttestationSignerIdentity {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     throw new Error(`${source}: descriptor must be a JSON object`)
   }
@@ -132,15 +125,10 @@ export function validateAttestationSignerDescriptor(raw: unknown, source: string
     throw new Error(`${source}: schema must be ${ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA} (got ${JSON.stringify(value.schema)})`)
   }
 
-  for (const field of ['endpoint', 'id', 'network', 'publicKey'] as const) {
+  for (const field of ['network', 'publicKey', 'transportPubkey'] as const) {
     if (typeof value[field] !== 'string' || value[field].trim() === '') {
       throw new Error(`${source}: ${field} must be a non-empty string`)
     }
-  }
-
-  const id = (value.id as string).trim()
-  if (!ID_PATTERN.test(id)) {
-    throw new Error(`${source}: id must be DNS-label shaped (lowercase letters, digits, dashes; max 64 chars)`)
   }
 
   const network = (value.network as string).trim()
@@ -148,13 +136,28 @@ export function validateAttestationSignerDescriptor(raw: unknown, source: string
     throw new Error(`${source}: network must be one of ${ATTESTATION_SIGNER_NETWORKS.join(', ')}`)
   }
 
-  return {
-    endpoint: normalizeSignerEndpoint((value.endpoint as string).trim(), source),
-    id,
-    network: network as AttestationSignerDescriptor['network'],
-    publicKey: assertCompressedSecp256k1PublicKey((value.publicKey as string).trim(), source),
-    schema: ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA,
+  const publicKey = assertCompressedSecp256k1PublicKey((value.publicKey as string).trim(), source)
+  const transportPubkey = assertCompressedSecp256k1PublicKey((value.transportPubkey as string).trim(), `${source} transportPubkey`)
+  if (transportPubkey === publicKey) {
+    throw new Error(`${source}: transportPubkey must differ from publicKey; the transport key is separate from the signing key`)
   }
+
+  return {
+    network: network as AttestationSignerIdentity['network'],
+    publicKey,
+    schema: ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA,
+    transportPubkey,
+  }
+}
+
+export function validateAttestationSignerDescriptor(raw: unknown, source: string): AttestationSignerDescriptor {
+  const identity = validateAttestationSignerIdentity(raw, source)
+  const {id} = raw as Record<string, unknown>
+  if (typeof id !== 'string' || !ID_PATTERN.test(id.trim())) {
+    throw new Error(`${source}: id must be DNS-label shaped (lowercase letters, digits, dashes; max 64 chars)`)
+  }
+
+  return {...identity, id: id.trim()}
 }
 
 export function loadAttestationSignerDescriptor(filePath: string): AttestationSignerDescriptor {

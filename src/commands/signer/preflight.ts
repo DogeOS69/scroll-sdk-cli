@@ -6,9 +6,7 @@ import path from 'node:path'
 import type { AttestationSignerDescriptor } from '../../utils/attestation-signer-descriptor.js'
 
 import {
-  ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA,
   ATTESTATION_SIGNER_NETWORKS,
-  ENDPOINT_PLACEHOLDER,
   fetchSignerHealth,
   fetchSignerJson,
   loadAttestationSignerDescriptor,
@@ -74,23 +72,20 @@ export function assertProductionSignerV2Ready(options: {
 }
 
 export class SignerPreflightCommand extends Command {
-  static description = 'Probe a deployed attestation-signer and verify its runtime identity. Add --require-production-ready after selecting enforcement=enforce to require dogeos-core attestation_evidence_v2 and all four production capabilities.'
+  static description = 'Probe your running attestation-signer from your own infrastructure and verify its runtime identity against your descriptor. Signers dial out to the TSO, so the probe targets the signer\'s local HTTP port. Add --require-production-ready after selecting enforcement=enforce to require dogeos-core attestation_evidence_v2 and all four production capabilities.'
 
   static examples = [
-    '$ scrollsdk signer preflight --dir signer-partner-a-signer-0 --endpoint https://signer.partner-a.example:4040',
-    '$ scrollsdk signer preflight --endpoint https://signer.partner-a.example:4040 --id partner-a-signer-0 --out descriptor.json',
-    '$ scrollsdk signer preflight --endpoint https://signer.partner-a.example:4040 --id partner-a-signer-0 --expected-public-key 02ab...',
+    '$ scrollsdk signer preflight --dir signer-partner-a-signer-0',
+    '$ scrollsdk signer preflight --endpoint http://10.0.0.5:4040 --expected-public-key 02ab... --network mainnet',
     '$ scrollsdk signer preflight --dir signer-partner-a-signer-0 --require-production-ready',
   ]
 
   static flags = {
-    dir: Flags.string({ description: 'signer init output directory; provides id/network/expected key from descriptor.json and receives the finalized descriptor' }),
-    endpoint: Flags.string({ description: 'Signer HTTP base URL to probe (with --dir, defaults to the descriptor endpoint if already set)' }),
+    dir: Flags.string({ description: 'signer init output directory; its descriptor.json provides the expected network and public key' }),
+    endpoint: Flags.string({ default: 'http://127.0.0.1:4040', description: 'Signer local HTTP base URL to probe (the partner-kit compose publishes 4040 on the host)' }),
     'expected-public-key': Flags.string({ description: 'Fail unless the runtime public key equals this compressed secp256k1 key (with --dir, defaults to the descriptor publicKey)' }),
-    id: Flags.string({ description: 'Stable signer identifier for the emitted descriptor (required without --dir)' }),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
     network: Flags.string({ description: 'Expected Dogecoin network (defaults to descriptor network with --dir, else to the network reported by /health)', options: [...ATTESTATION_SIGNER_NETWORKS] }),
-    out: Flags.string({ description: 'Write the descriptor JSON to this path (default with --dir: its descriptor.json; otherwise print to stdout)' }),
     'require-production-ready': Flags.boolean({default: false, description: 'Also require /ready and /policy to prove all four attestation_evidence_v2 production capabilities are serving'}),
   }
 
@@ -102,22 +97,13 @@ export class SignerPreflightCommand extends Command {
       let dirDescriptorFile: string | undefined
       if (flags.dir) {
         dirDescriptorFile = path.join(path.resolve(flags.dir), 'descriptor.json')
-        if (!fs.existsSync(dirDescriptorFile)) throw new Error(`${dirDescriptorFile} not found; is --dir a signer init output directory?`)
-        // Placeholder endpoints are expected here — that is exactly what
-        // preflight finalizes — so parse leniently and only reuse fields.
-        const raw = JSON.parse(fs.readFileSync(dirDescriptorFile, 'utf8')) as AttestationSignerDescriptor
-        fromDir = raw
+        if (!fs.existsSync(dirDescriptorFile)) throw new Error(`${dirDescriptorFile} not found; run scrollsdk signer init --identity first`)
+        fromDir = loadAttestationSignerDescriptor(dirDescriptorFile)
       }
 
-      const id = flags.id || fromDir?.id
-      if (!id) throw new Error('--id is required (or pass --dir pointing at a signer init directory)')
-
-      const endpointInput = flags.endpoint
-        || (fromDir && fromDir.endpoint !== ENDPOINT_PLACEHOLDER ? fromDir.endpoint : undefined)
-      if (!endpointInput) throw new Error('--endpoint is required (the descriptor does not carry a real endpoint yet)')
-      const endpoint = normalizeSignerEndpoint(endpointInput, '--endpoint')
-
-      const health = await fetchSignerHealth(endpoint)
+      const probe = {allowLoopback: true}
+      const endpoint = normalizeSignerEndpoint(flags.endpoint, '--endpoint', probe)
+      const health = await fetchSignerHealth(endpoint, undefined, probe)
       json.logSuccess(`Signer at ${endpoint} is healthy; runtime public key ${health.publicKey}`)
 
       const expected = (flags['expected-public-key'] || fromDir?.publicKey)?.toLowerCase()
@@ -138,8 +124,8 @@ export class SignerPreflightCommand extends Command {
       let productionReady = false
       if (flags['require-production-ready']) {
         const [ready, policy] = await Promise.all([
-          fetchSignerJson(endpoint, '/ready'),
-          fetchSignerJson(endpoint, '/policy'),
+          fetchSignerJson(endpoint, '/ready', undefined, probe),
+          fetchSignerJson(endpoint, '/policy', undefined, probe),
         ])
         if (policy.status !== 200) throw new Error(`${policy.url} returned HTTP ${policy.status}`)
         assertProductionSignerV2Ready({
@@ -153,27 +139,8 @@ export class SignerPreflightCommand extends Command {
         json.logSuccess('Signer reports fail-closed attestation_evidence_v2 production readiness')
       }
 
-      const descriptor = {
-        endpoint,
-        id,
-        network,
-        publicKey: health.publicKey,
-        schema: ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA,
-      }
-      const rendered = `${JSON.stringify(descriptor, null, 2)}\n`
-      const outPath = flags.out ? path.resolve(flags.out) : dirDescriptorFile
-      if (outPath) {
-        fs.writeFileSync(outPath, rendered)
-        // Re-validate the finalized file end-to-end (placeholder rejection included).
-        loadAttestationSignerDescriptor(outPath)
-        if (flags.json) json.success({descriptor, descriptorFile: outPath, productionReady})
-        else this.log(chalk.green(`Descriptor written to ${outPath} — send this file to the bridge operator.`))
-      } else if (flags.json) {
-        json.success({descriptor, productionReady})
-      } else {
-        this.log(rendered)
-        this.log(chalk.green('Preflight passed — send the descriptor above to the bridge operator.'))
-      }
+      if (flags.json) json.success({endpoint, network, productionReady, publicKey: health.publicKey})
+      else this.log(chalk.green('Preflight passed.'))
     } catch (error) {
       json.error('E803_SIGNER_PREFLIGHT_FAILED', error instanceof Error ? error.message : String(error), 'CONFIGURATION', true)
     }

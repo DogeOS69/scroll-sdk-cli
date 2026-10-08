@@ -1009,6 +1009,7 @@ describe('deployment-spec-generator', () => {
       const tso = (yaml.load(files['tso-service-production.yaml']) as any).ingress.main;
       expect(tso.hosts[0].host).to.equal(config.ingress.TSO_HOST);
       expect(tso.tls[0].hosts).to.deep.equal([config.ingress.TSO_HOST]);
+      expect(tso.hosts[0].paths).to.deep.equal([{path: '/health', pathType: 'Exact'}, {path: '/signer', pathType: 'Prefix'}]);
       expect(Object.keys(files).join(' ')).not.to.match(/admin-system-dashboard|coordinator-api|rollup-explorer-backend|l1-explorer/);
       expect(files['frontends-config.yaml']).not.to.match(/old-admin|old-rollup|ROLLUPSCAN_API_URI/);
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tso-host-'));

@@ -32,8 +32,8 @@ function input(
     network: 'testnet',
     signerProofArtifactBaseUrl: mode === 'disabled' ? undefined : 'https://proofs.bridge.example/proof-topology',
     signers: [
-      {endpoint: 'https://signer.partner-a.example:4040', id: 'partner-a', publicKey: `02${'66'.repeat(32)}`},
-      {endpoint: 'http://10.20.30.40:4040', id: 'partner-b', publicKey: `03${'77'.repeat(32)}`},
+      {id: 'partner-a', publicKey: `02${'66'.repeat(32)}`, transportPubkey: `02${'88'.repeat(32)}`},
+      {id: 'partner-b', publicKey: `03${'77'.repeat(32)}`, transportPubkey: `03${'99'.repeat(32)}`},
     ],
     tsoUrl: 'https://tso.bridge.example',
   }
@@ -120,15 +120,19 @@ describe('signer policy bundle V2', () => {
   it('documents the protocol-context bootstrap boundary and enforcement readiness check', () => {
     const commands = renderPartnerCommands(input('active', 'real', 'enforce'))
     for (const expected of [
-      'https://signer.partner-a.example:4040',
+      `| \`partner-a\` | \`02${'66'.repeat(32)}\` | \`02${'88'.repeat(32)}\` |`,
       'https://tso.bridge.example',
+      'attestation_signer --print-identity',
+      '--identity "signer-$SIGNER_ID/identity.json"',
       'https://proofs.bridge.example/proof-topology',
       'requires canonical protocol context in every mode',
       'cp "signer-$SIGNER_ID/attestation-signer.toml" docker-compose/',
       'advance-l2-agg-verifying-key.bin',
       '--require-production-ready',
-      'kubectl -n <namespace> run signer-reachability-partner-a',
     ]) expect(commands).to.include(expected)
+    // Signers dial out: no inbound signer URL or reachability probe remains.
+    expect(commands).not.to.include('--endpoint')
+    expect(commands).not.to.include('signer-reachability')
     expect(commands).not.to.include('verifier-registry.toml')
     expect(commands).not.to.include('source-set.toml')
   })

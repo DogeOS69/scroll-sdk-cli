@@ -4,9 +4,9 @@ export const ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE = 'advance-l2-agg-verifyin
 export const ADVANCE_L2_AGG_VERIFYING_KEY_CONTAINER_PATH = `/etc/dogeos/${ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE}`
 
 export interface SignerPolicyBundleSigner {
-  endpoint: string
   id: string
   publicKey: string
+  transportPubkey: string
 }
 
 export interface SignerAdvanceL2VerifierMaterial {
@@ -128,18 +128,13 @@ export function renderSignerPolicyEnv(input: SignerPolicyBundleInput): string {
 export function renderPartnerCommands(input: SignerPolicyBundleInput): string {
   const profile = signerRuntimePolicyProfile(input.enforcement)
   const signerRows = input.signers
-    .map(signer => `| \`${signer.id}\` | \`${signer.endpoint}\` | \`${signer.publicKey}\` |`)
+    .map(signer => `| \`${signer.id}\` | \`${signer.publicKey}\` | \`${signer.transportPubkey}\` |`)
     .join('\n')
   const signerSelections = input.signers.map(signer => `### \`${signer.id}\`
 
 \`\`\`bash
 export SIGNER_ID='${signer.id}'
-export SIGNER_ENDPOINT='${signer.endpoint}'
 \`\`\``).join('\n\n')
-  const clusterProbes = input.signers.map(signer => `# ${signer.id}
-kubectl -n <namespace> run signer-reachability-${signer.id} --rm -i --restart=Never \\
-  --image=curlimages/curl:8.20.0 -- \\
-  curl -fsS '${signer.endpoint}/health'`).join('\n\n')
   const verifierCopy = input.advanceL2Verifier
     ? `cp signer-policy-bundle/${input.advanceL2Verifier.aggVerifyingKeyFile} docker-compose/policy/${ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE}`
     : ''
@@ -155,15 +150,15 @@ Network \`${input.network}\`; proof posture
 
 | Purpose | Address |
 |---|---|
-| signer → TSO callbacks | \`${input.tsoUrl}\` |
+| signer → TSO (dial-out: poll, submit, reject under /signer/) | \`${input.tsoUrl}\` |
 ${input.mode === 'disabled' ? '' : `| signer → proof artifact HTTPS root | \`${input.signerProofArtifactBaseUrl}\` |`}
 
-| Signer id | TSO → signer URL | Genesis public key |
+| Signer id | Genesis public key | Transport public key |
 |---|---|---|
 ${signerRows}
 
-The signer URL must be reachable from TSO. Use TLS in production; do not use
-localhost, a Docker-only hostname, or a Kubernetes service name.
+Signers dial out to the TSO over HTTPS and sign every request with their
+transport key. Operators expose nothing inbound.
 
 ## Phase A — create identity before genesis
 
@@ -173,10 +168,12 @@ ${signerSelections}
 
 \`\`\`bash
 export DOGE_NETWORK='${input.network}'
-scrollsdk signer init \\
-  --id "$SIGNER_ID" \\
-  --network "$DOGE_NETWORK" \\
-  --endpoint "$SIGNER_ENDPOINT"
+scrollsdk signer init --id "$SIGNER_ID" --network "$DOGE_NETWORK"
+# Generate the transport key with attestation_signer, then print the identity
+# (one JSON line) and wrap it into the descriptor:
+attestation_signer --print-identity > "signer-$SIGNER_ID/identity.json"
+scrollsdk signer init --id "$SIGNER_ID" --network "$DOGE_NETWORK" \\
+  --identity "signer-$SIGNER_ID/identity.json"
 \`\`\`
 
 Send \`signer-$SIGNER_ID/descriptor.json\` to the bridge operator for
@@ -205,17 +202,10 @@ ${verifierCopy}
 
 docker compose --project-directory docker-compose config --quiet
 docker compose --project-directory docker-compose up -d
-curl -fsS "$SIGNER_ENDPOINT/health"
 ${preflight}
 \`\`\`
 
-The signer must call \`${input.tsoUrl}\` and, in proof modes, GET concrete
+The signer must reach \`${input.tsoUrl}\` and, in proof modes, GET concrete
 artifact URLs from requests. The CLI does not probe a fabricated object key.
-
-## Bridge-operator reachability check
-
-\`\`\`bash
-${clusterProbes}
-\`\`\`
 `
 }
