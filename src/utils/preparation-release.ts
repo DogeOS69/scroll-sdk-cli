@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import type {DeploymentSpec} from '../types/deployment-spec.js'
 
-import {digest, privateWrite} from './preparation-io.js'
+import {digest, localPath, privateWrite} from './preparation-io.js'
 import {parseImmutableProofImage} from './proof-materials.js'
 import {readProofSoftwareRelease, validateProofSoftwareRelease} from './proof-software-release.js'
 
@@ -61,7 +61,10 @@ export async function downloadProofRelease(version: string, options: ProofReleas
   if (!match || digest(text) !== match[1]) throw new Error('Official proof release manifest digest mismatch')
   validateProofSoftwareRelease(JSON.parse(text))
   const cache = options.cacheDirectory ?? path.join(os.homedir(), '.cache/scrollsdk/proof-releases')
-  const manifest = path.resolve(cache, match[1], MANIFEST)
+  fs.mkdirSync(cache, {mode: 0o700, recursive: true})
+  // The operator's cache root may live on another volume via a symlink. Freeze
+  // its physical path, while still rejecting links within the artifact cache.
+  const manifest = localPath(fs.realpathSync(cache), path.join(match[1], MANIFEST))
   if (!fs.existsSync(manifest)) privateWrite(manifest, text)
   readProofSoftwareRelease(manifest, match[1])
   return {manifest, sha256: match[1]}

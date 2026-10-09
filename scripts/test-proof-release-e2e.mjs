@@ -29,6 +29,12 @@ for (const file of ['withdrawal-processor/WithdrawalProcessor.toml', 'proof-coor
   fs.mkdirSync(path.dirname(path.join(root, file)), {recursive: true});
   fs.writeFileSync(path.join(root, file), contents);
 }
+// A deployed environment derives this allowlist from its provisioned submitter.
+// Use an explicit public fixture address here; no KMS key or account is created.
+const wpFile = path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml');
+const wp = toml.parse(fs.readFileSync(wpFile, 'utf8'));
+wp.ethereum_da.inbox_worker.expected_batchers = ['0x' + '11'.repeat(20)];
+fs.writeFileSync(wpFile, toml.stringify(wp));
 const spec = await resolvePreparationProofRelease({
   metadata: {name: 'real-release-rehearsal'},
   preparation: {bridge: {mode: 'production'}, proofRelease: {version}, proofMaterials: {mode: 'real'}},
@@ -53,7 +59,21 @@ assert.equal(materials.software.sourceRevisions.dogeosCore, selected.manifest.re
 assert.ok(materials.software.compilerIdentity);
 assert.ok(materials.bridge.artifacts.workerIdentityBundle);
 const topology = toml.parse(fs.readFileSync(path.join(root, '.data/doge-config.toml'), 'utf8')).proof_topology;
-const bundle = compileProofTopology({deploymentDir: root, deploymentName: spec.metadata.name, network: 'testnet', proofTopology: topology});
+// Compilation needs the same runtime context supplied by setup proof-topology-compile.
+// These nonfunctional endpoints are rendered only; this rehearsal makes no RPC calls.
+const bundle = compileProofTopology({
+  deploymentDir: root, deploymentName: spec.metadata.name, network: 'testnet', proofTopology: topology,
+  ethereumL1RpcUrl: 'https://ethereum-sepolia.example.invalid',
+  ethereumDaBlobSource: {beaconNodeUrl: 'https://beacon-sepolia.example.invalid'},
+  bridge: {dogecoinNetwork: 'testnet', dogecoinRpcUrl: 'http://dogecoin-node:44555',
+    dogecoinRpcUser: 'nonfunctional-rehearsal', dogecoinRpcPassword: 'nonfunctional-rehearsal-password'},
+});
+assert.equal(bundle.mode, 'active');
+assert.equal(bundle.generation, 'real');
+assert.equal(bundle.enforcement, 'enforce');
+assert.equal(bundle.manifest.installable_service_configs, true);
+assert.equal(bundle.manifest.preflight_only, false);
+assert.deepEqual(bundle.worker.image, materials.images.productionWorker);
 fs.writeFileSync(path.join(root, 'validation.json'), JSON.stringify({
   schema: 'scrollsdk/proof-release-consumer-validation/v1', coreRevision: selected.manifest.revision,
   releaseSha256: selected.sha256, sdkRevision: revision,
