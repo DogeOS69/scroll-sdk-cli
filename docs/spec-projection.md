@@ -25,7 +25,9 @@ overhead is a decimal uint256 string in wei; it is different from genesis
 `baseFeePerGasWei`. Gas limit must be a safe integer of at least 5000.
 
 The generated Reth values use 30,000,000 gas, a 2000 ms block interval and a
-1400 ms payload build window. The same genesis gas limit enters `config.toml`
+1400 ms payload build window. Empty blocks are disabled by default
+(`reth.sequencer.allowEmptyBlocks: false`); the sequencer produces blocks when
+there is eligible work. The same genesis gas limit enters `config.toml`
 for rc.5 genesis generation. During prep, an explicit `genesis.GAS_LIMIT` in
 that file also sets the concrete Reth nodes' builder gas limit. If the field is
 absent from an older deployment, prep preserves its values setting. Prep does

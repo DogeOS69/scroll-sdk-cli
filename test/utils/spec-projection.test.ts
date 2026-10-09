@@ -280,6 +280,7 @@ describe('spec intent through configuration and values projection', () => {
     expect(config.contracts.L2_BASE_FEE_OVERHEAD).to.equal('420000000000')
     expect(reth.builderGasLimit).to.equal('30000000')
     expect(reth.sequencer.blockTimeMs).to.equal('2000')
+    expect(reth.sequencer.allowEmptyBlocks).to.equal(false)
     expect(reth.sequencer.payloadBuildingDurationMs).to.equal('1400')
     spec.genesis.gasLimit = 40_000_000
     spec.contracts.l2BaseFeeOverheadWei = '0'

@@ -456,7 +456,7 @@ function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | '
       ports: {http: 8545, metrics: 6060, p2p: 30_303, ws: 8546},
       rpc: {rollupNode: role !== 'bootnode', rollupNodeAdmin: false, trustedOnly: false},
       sequencer: {
-        allowEmptyBlocks: sequencer, autoStart: true, blockTimeMs: String(L2_BLOCK_TIME_MS),
+        allowEmptyBlocks: false, autoStart: true, blockTimeMs: String(L2_BLOCK_TIME_MS),
         enabled: sequencer, feeRecipient: spec.contracts.overrides?.l2TxFeeVault || L2_TX_FEE_VAULT,
         l1InclusionMode: sequencer ? 'finalized:0' : 'finalized:2',
         payloadBuildingDurationMs: String(L2_PAYLOAD_BUILDING_DURATION_MS),
