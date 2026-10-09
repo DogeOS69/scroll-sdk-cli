@@ -127,18 +127,18 @@ export class CommandPreparationRunner implements PreparationRunner {
 
       case 'proof-release-bake': {
         const release = p.proofRelease!
-        await command(['proof-image-tools', '--action', 'prepare-real', '--release', requiredFile(root, release.manifest, 'approved proof release manifest'), '--release-sha256', release.sha256, '--protocol-context', '.data/protocol_context.json', '--output', '.data/proof-release-preparation']); break
+        await command(['proof-image-tools', '--action', 'prepare-real', '--release', requiredFile(root, release.manifest, 'approved proof release manifest'), '--release-sha256', release.sha256!, '--protocol-context', '.data/protocol_context.json', '--output', '.data/proof-release-preparation']); break
       }
 
       case 'proof-materializer-export': {
         const release = p.proofRelease!
-        const selected = readProofSoftwareRelease(requiredFile(root, release.manifest, 'approved proof release manifest'), release.sha256)
+        const selected = readProofSoftwareRelease(requiredFile(root, release.manifest, 'approved proof release manifest'), release.sha256!)
         this.exportMaterializers({expectedRevision: selected.manifest.revision, image: selected.manifest.images['proof-coordinator'], outputDir: localPath(root, '.data/proof-release-materializers')}); break
       }
 
       case 'proof-worker-check': {
         const release = p.proofRelease!
-        const selected = readProofSoftwareRelease(requiredFile(root, release.manifest, 'approved proof release manifest'), release.sha256)
+        const selected = readProofSoftwareRelease(requiredFile(root, release.manifest, 'approved proof release manifest'), release.sha256!)
         await command(['proof-worker-image-check', '--image', selected.manifest.images['prover-worker-cuda'], '--preparation-receipt', '.data/proof-release-preparation/proof-release-preparation-v1.json', '--output', '.data/proof-worker-image-check-v1.json']); break
       }
 

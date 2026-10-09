@@ -225,7 +225,7 @@ export default class GenerateFromSpec extends Command {
     // Load and validate the spec
     let spec
     try {
-      spec = resolvePreparationProofRelease(loadDeploymentSpec(specPath), path.resolve(flags.output))
+      spec = await resolvePreparationProofRelease(loadDeploymentSpec(specPath), path.resolve(flags.output))
     } catch (error) {
       jsonCtx.error(
         'E602_INVALID_SPEC',

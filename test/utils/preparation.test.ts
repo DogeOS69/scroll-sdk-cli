@@ -64,7 +64,7 @@ describe('resumable preparation plan', () => {
 
   it('plans without execution, waits for input, resumes and skips every completed step', async () => {
     fs.mkdirSync(deployment, {mode: 0o755})
-    const plan = makePlan()
+    const plan = await makePlan()
     expect(fs.statSync(deployment).mode.toString(8).slice(-3)).to.equal('700')
     expect(fs.existsSync(path.join(deployment, 'config.toml'))).to.equal(false)
     expect(fs.readFileSync(path.join(deployment, '.gitignore'), 'utf8')).to.include('/withdrawal-processor/\n')
@@ -80,7 +80,7 @@ describe('resumable preparation plan', () => {
     const count = calls.length
     expect((await applyPreparation(deployment, runner)).status).to.equal('prepared')
     expect(calls).to.have.length(count)
-    expect(makePlan().id).to.equal(plan.id)
+    expect((await makePlan()).id).to.equal(plan.id)
   })
 
   it('retains a private environment file reference and reloads it on resume without shell evaluation', async () => {
@@ -88,7 +88,7 @@ describe('resumable preparation plan', () => {
     const file = path.join(root, 'environment')
     fs.writeFileSync(file, `${name}='$(touch NEVER_EXECUTE)'\n`)
     try {
-      const plan = createPreparationPlan({envFile: file, output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml')})
+      const plan = await createPreparationPlan({envFile: file, output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml')})
       expect(plan.envFile).to.equal(file)
       expect(process.env[name]).to.equal('$(touch NEVER_EXECUTE)')
       delete process.env[name]
@@ -108,7 +108,7 @@ describe('resumable preparation plan', () => {
     expect(() => validatePreparation(spec)).to.throw('initializeDatabase or databaseUrlEnv')
     spec.preparation!.dstack.databaseUrlEnv = 'PREPARATION_TEST_DATABASE_URL'
     expect(() => validatePreparation(spec)).not.to.throw()
-    const plan = makePlan()
+    const plan = await makePlan()
     fs.writeFileSync(path.join(deployment, 'config.toml'), '[db]\n')
     const runner = new CommandPreparationRunner(async () => {throw new Error('Must not invoke a credential importer')})
     try {
@@ -123,7 +123,7 @@ describe('resumable preparation plan', () => {
     spec.dstackController = {database: {type: 'sqlite'}, enabled: true}
     spec.preparation!.dstack = {mode: 'import', providers: ['vastai'], vastaiApiKeyEnv: 'PREPARATION_TEST_VASTAI_KEY'}
     validatePreparation(spec)
-    const plan = makePlan()
+    const plan = await makePlan()
     const calls: string[][] = []
     const runner = new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)})
     const step = {effect: 'local', id: 'dstack', retry: 'safe', title: 'dstack'} as const
@@ -156,7 +156,7 @@ describe('resumable preparation plan', () => {
     spec.preparation!.proofMaterials = {mode: 'real'}
     spec.preparation!.proofPublication = {}
     fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
-    const plan = makePlan()
+    const plan = await makePlan()
     const expanded = JSON.parse(fs.readFileSync(path.join(deployment, '.scrollsdk/intent.json'), 'utf8')) as DeploymentSpec
     expect(expanded.proofTopology!.compiler.image.repository).to.equal('example.invalid/dogeos-proof-topology')
     expect(expanded.proofTopology!.deployment.productionWorkerImage!.repository).to.equal('example.invalid/prover-worker-cuda')
@@ -173,13 +173,13 @@ describe('resumable preparation plan', () => {
     expect(calls[1]).to.include('.data/proof-release-preparation/proof-release-preparation-v1.json')
     const conflict = structuredClone(expanded)
     conflict.proofTopology!.deployment.productionWorkerImage!.repository = 'different.invalid/worker'
-    expect(() => resolvePreparationProofRelease(conflict, deployment)).to.throw('conflicts')
+    await rejected(() => resolvePreparationProofRelease(conflict, deployment), 'conflicts')
     fs.appendFileSync(file, ' ')
-    expect(() => resolvePreparationProofRelease(spec, deployment)).to.throw('digest mismatch')
+    await rejected(() => resolvePreparationProofRelease(spec, deployment), 'digest mismatch')
   })
 
   it('never automatically replays a failed broadcast', async () => {
-    makePlan(); let broadcasts = 0
+    await makePlan(); let broadcasts = 0
     const runner = {async run(step: any) {if (step.id === 'helper-setup') {broadcasts++; throw new Error('connection lost after sending')}}}
     expect((await applyPreparation(deployment, runner)).status).to.equal('recovery-required')
     expect((await applyPreparation(deployment, runner)).status).to.equal('recovery-required')
@@ -187,7 +187,7 @@ describe('resumable preparation plan', () => {
   })
 
   it('rejects changed plan input and changed completed artifacts', async () => {
-    makePlan()
+    await makePlan()
     await applyPreparation(deployment, {async run() {fs.writeFileSync(path.join(deployment, 'config.toml'), 'network = "testnet"')}})
     fs.writeFileSync(path.join(deployment, 'config.toml'), 'network = "mainnet"')
     await rejected(() => applyPreparation(deployment, {async run() {throw new Error('must not execute')}}), 'changed outside')
@@ -214,7 +214,7 @@ describe('resumable preparation plan', () => {
   })
 
   it('excludes concurrent apply and releases the lock while waiting', async () => {
-    makePlan()
+    await makePlan()
     let release!: () => void
     const barrier = new Promise<void>(resolve => {release = resolve})
     const running = applyPreparation(deployment, {async run() {await barrier; throw new AwaitingInput({message: 'waiting'})}})
@@ -224,7 +224,7 @@ describe('resumable preparation plan', () => {
   })
 
   it('runs actual bootstrap and identity commands before waiting for a partner descriptor', async () => {
-    makePlan()
+    await makePlan()
     const first = await applyPreparation(deployment, new CommandPreparationRunner())
     expect(first.status).to.equal('waiting')
     expect(first.currentStep).to.equal('descriptors')

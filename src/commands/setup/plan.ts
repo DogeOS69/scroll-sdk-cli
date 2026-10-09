@@ -17,7 +17,7 @@ export default class SetupPlan extends Command {
     const {flags} = await this.parse(SetupPlan)
     const output = new JsonOutputContext('setup plan', flags.json)
     try {
-      const plan = createPreparationPlan({envFile: flags['env-file'], output: flags.output, sdkDirectory: flags['sdk-dir'], spec: flags.spec})
+      const plan = await createPreparationPlan({envFile: flags['env-file'], output: flags.output, sdkDirectory: flags['sdk-dir'], spec: flags.spec})
       if (!flags.json) {
         output.info(`Preparation plan: ${plan.deploymentName}`)
         for (const step of plan.steps) output.info(`  [${step.effect}] ${step.id}: ${step.title}`)

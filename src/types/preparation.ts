@@ -51,6 +51,6 @@ export interface PreparationConfig {
   }
   proofPublication?: {awsProfile?: string; release?: string; releaseSha256?: string}
   /** Approved software release; plan validates the manifest and derives image pins. */
-  proofRelease?: {manifest: string; sha256: string}
+  proofRelease?: {manifest?: string; sha256?: string; version?: string}
   secretUpload?: {awsPrefix?: string; awsRegion?: string; kubeContext?: string; namespace?: string; provider: 'aws' | 'vault'}
 }

@@ -133,7 +133,7 @@ export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kin
   "$.preparation.proofAws": {"keys":["awsProfile","publicEndpointUrl","publicReadMode"],"kind":"object"},
   "$.preparation.proofMaterials": {"keys":["batchMaterializer","chunkMaterializer","mockWorkerImage","mode","preparationReceipt","productionWorkerReceipt","receipt"],"kind":"object"},
   "$.preparation.proofPublication": {"keys":["awsProfile","release","releaseSha256"],"kind":"object"},
-  "$.preparation.proofRelease": {"keys":["manifest","sha256"],"kind":"object"},
+  "$.preparation.proofRelease": {"keys":["manifest","sha256","version"],"kind":"object"},
   "$.preparation.secretUpload": {"keys":["awsPrefix","awsRegion","kubeContext","namespace","provider"],"kind":"object"},
   "$.proofArtifacts": {"keys":["s3"],"kind":"object"},
   "$.proofArtifacts.s3": {"keys":["bucket","endpointUrl","forcePathStyle","keyPrefix","publicBaseUrl","region"],"kind":"object"},

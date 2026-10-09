@@ -210,7 +210,7 @@ interface. There is deliberately no force-retry switch for broadcasts.
 | `archive.action: configure/create` | Reconcile archive configuration/writer permissions; create permits bucket creation. Optional `awsProfile` and `writerRoleArn`. |
 | `proofAws` | Provision proof AWS resources using the declared EKS cluster, region, store and explicit `publicReadMode`; optional gateway endpoint/profile. |
 | `proofMaterials.mode: mock` | Invoke the material tool using the topology compiler pin and explicit `mockWorkerImage`, then derive topology identities from the receipt. |
-| `proofRelease` | Select an approved manifest path and SHA256. Plan derives compiler/Worker pins; apply runs the context-bound producer, exports materializers and checks the CUDA image before importing real materials. |
+| `proofRelease` | Select a version. Plan downloads the official manifest/checksum and freezes compiler/Worker pins; apply runs the context-bound producer, exports materializers and checks the CUDA image before importing real materials. |
 | `proofMaterials.mode: real` | With `proofRelease`, consume the generated receipts and materializers. Without it, import explicitly supplied `preparationReceipt`, materializers and Worker receipt. |
 | `proofMaterials.mode: existing` | Consume the specified receipt; without a receipt, consume the explicitly staged compiler identity and existing topology. Production acceptance still depends on final proof checks. |
 | `proofPublication` | Publish the manifest selected by `release` and `releaseSha256`, then reconcile values again with the publication receipt. Uses proof AWS resource facts. An empty object selects publication from `proofRelease`; an explicit release/hash pair remains supported. |
@@ -292,9 +292,12 @@ confirmation, AWS permissions, real proofs or cluster deployment acceptance.
 
 ## Generated proof identities and external completion evidence
 
-The SDK starter uses `preparation.proofRelease: {manifest, sha256}` plus
-`proofMaterials: {mode: real}`. The manifest must exist at plan time and pins all
-five proof images. Apply generates `.data/proof-release-preparation/` from the
+The SDK starter uses `preparation.proofRelease: {version: v0.3.0-beta.6}` plus
+`proofMaterials: {mode: real}`. Plan obtains the manifest and checksum from the official core GitHub release and
+pins all five proof images. Missing releases/assets fail before resource changes;
+the release owner must publish them. The operator does not locate or compute a
+digest. Optional `GH_TOKEN` / `GITHUB_TOKEN` supports private GitHub access.
+For an offline approved release, use `{manifest, sha256}` instead of `version`. Apply generates `.data/proof-release-preparation/` from the
 canonical protocol context, including `bridge/worker-identity-bundle.json`;
 exports the coordinator materializers; checks the production CUDA image; and
 imports `.data/proof-materials-v1.json`. Operators do not invent identity hashes

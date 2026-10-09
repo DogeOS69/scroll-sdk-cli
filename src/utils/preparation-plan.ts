@@ -159,12 +159,12 @@ function fingerprint(root: string): Record<string, string> {
   return files
 }
 
-export function createPreparationPlan(options: {envFile?: string; output: string; sdkDirectory: string; spec: string}): PreparationPlan {
+export async function createPreparationPlan(options: {envFile?: string; output: string; sdkDirectory: string; spec: string}): Promise<PreparationPlan> {
   const envFile = options.envFile ? path.resolve(options.envFile) : undefined
   loadPreparationEnv(envFile)
   let spec: DeploymentSpec
   try {spec = resolveDeploymentSpecEnvRefs(loadDeploymentSpec(path.resolve(options.spec)))} catch {throw new Error('Cannot load DeploymentSpec; check field names, YAML syntax and environment references (values omitted)')}
-  spec = resolvePreparationProofRelease(spec, options.output)
+  spec = await resolvePreparationProofRelease(spec, options.output)
   const validation = validateDeploymentSpec(spec)
   if (!validation.valid) throw new Error(`Invalid spec fields: ${validation.errors.map(e => `${e.path} (${e.code})`).join(', ')}`)
   validatePreparation(spec)
