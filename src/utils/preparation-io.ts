@@ -22,7 +22,7 @@ export function localPath(root: string, relative: string): string {
 }
 
 export class AwaitingInput extends Error {
-  constructor(public readonly details: {address?: string; amountSats?: number; file?: string; markerScript?: string; message: string}) {super(details.message)}
+  constructor(public readonly details: {address?: string; amountSats?: number; file?: string; fundingRequests?: Array<{address: string; amountSats: number; role: string}>; inputTemplate?: Record<string, unknown>; markerScript?: string; message: string}) {super(details.message)}
 }
 
 

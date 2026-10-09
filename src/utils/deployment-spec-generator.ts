@@ -282,11 +282,24 @@ function getBridgeTargetAmountsSats(spec: DeploymentSpec): { bridge: number; fee
   }
 }
 
-function getBridgeFees(spec: DeploymentSpec): { depositFeeSats: string; minWithdrawalAmountWei: string; withdrawalFeeWei: string } {
+function getBridgeFees(spec: DeploymentSpec): { depositFeeWei: string; minWithdrawalAmountWei: string; withdrawalFeeWei: string } {
+  const {fees} = spec.bridge
+  // The legacy deposit field was copied directly into contracts.DEPOSIT_FEE (wei).
+  // Only the explicitly named satoshi field needs conversion to L2's 18 decimals.
+  const deposit = fees.depositFeeSats ?? fees.deposit ?? '0'
+  if (typeof deposit !== 'string' || !/^\d+$/.test(deposit)) {
+    throw new Error('bridge.fees deposit must be a nonnegative decimal integer string')
+  }
+
+  const depositFeeWei = BigInt(deposit) * (fees.depositFeeSats === undefined ? 1n : 10_000_000_000n)
+  if (depositFeeWei >= 2n ** 256n) {
+    throw new Error('bridge.fees deposit exceeds uint256 after conversion to wei')
+  }
+
   return {
-    depositFeeSats: spec.bridge.fees.depositFeeSats ?? spec.bridge.fees.deposit ?? '0',
-    minWithdrawalAmountWei: spec.bridge.fees.minWithdrawalAmountWei ?? spec.bridge.fees.minWithdrawalAmount ?? '0',
-    withdrawalFeeWei: spec.bridge.fees.withdrawalFeeWei ?? spec.bridge.fees.withdrawal ?? '0',
+    depositFeeWei: depositFeeWei.toString(),
+    minWithdrawalAmountWei: fees.minWithdrawalAmountWei ?? fees.minWithdrawalAmount ?? '0',
+    withdrawalFeeWei: fees.withdrawalFeeWei ?? fees.withdrawal ?? '0',
   }
 }
 
@@ -449,6 +462,18 @@ export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
   return {
     ...spec,
     ...(accounts ? { accounts } : {}),
+    ...(spec.proofTopology ? {proofTopology: {
+      ...spec.proofTopology,
+      deployment: {
+        ...spec.proofTopology.deployment,
+        proverPublicUrl: spec.proofTopology.deployment?.proverPublicUrl ?? publicUrl(protocol, hosts.proofCoordinator!),
+      },
+    }} : {}),
+    ...(spec.dstackController?.enabled !== false && spec.dstackController?.ingress?.enabled === true
+      && spec.dstackController.ingress.hosts === undefined ? {dstackController: {
+        ...spec.dstackController,
+        ingress: {...spec.dstackController.ingress, hosts: [buildHost(baseDomain, 'dstack')]},
+      }} : {}),
     contracts: {
       ...spec.contracts,
       ...(verification ? { verification } : {}),
@@ -978,11 +1003,23 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     })
   }
 
+  if (spec.bridge?.fees) {
+    try {
+      getBridgeFees(spec)
+    } catch (error) {
+      errors.push({
+        code: 'E015_INVALID_ROLLUP_CONFIG',
+        message: (error as Error).message,
+        path: 'bridge.fees',
+      })
+    }
+  }
+
   if (spec.bridge?.fees?.deposit !== undefined || spec.bridge?.fees?.withdrawal !== undefined || spec.bridge?.fees?.minWithdrawalAmount !== undefined) {
     warnings.push({
       message: 'legacy bridge fee fields are deprecated',
       path: 'bridge.fees',
-      suggestion: 'Use depositFeeSats, withdrawalFeeWei, and minWithdrawalAmountWei.',
+      suggestion: 'Use depositFeeSats (convert legacy deposit wei to sats), withdrawalFeeWei, and minWithdrawalAmountWei.',
     })
   }
 
@@ -1274,7 +1311,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     L2_RPC_ENDPOINT,
   }
 
-  if (spec.rollup.verifierDigests) {
+  if (spec.rollup?.verifierDigests) {
     config.general.VERIFIER_DIGEST_1 = spec.rollup.verifierDigests.digest1
     config.general.VERIFIER_DIGEST_2 = spec.rollup.verifierDigests.digest2
   }
@@ -1332,7 +1369,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     BLOB_SCALAR: spec.contracts.gasOracle.blobScalar,
     COMMIT_SCALAR: spec.contracts.gasOracle.commitScalar ?? 600_000_000,
     DEPLOYMENT_SALT: spec.contracts.deploymentSalt,
-    DEPOSIT_FEE: bridgeFees.depositFeeSats,
+    DEPOSIT_FEE: bridgeFees.depositFeeWei,
     L1_FEE_VAULT_ADDR: DEFAULT_L1_FEE_VAULT_ADDR,
     L2_BASE_FEE_OVERHEAD: spec.contracts.l2BaseFeeOverheadWei ?? L2_BASE_FEE_OVERHEAD_WEI,
     L2_BRIDGE_FEE_RECIPIENT_ADDR: spec.bridge.feeRecipient,
@@ -1381,13 +1418,6 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
       VERIFIER_TYPE_L1: spec.contracts.verification.l1VerifierType,
       VERIFIER_TYPE_L2: spec.contracts.verification.l2VerifierType,
     }
-  }
-
-  // [coordinator] section
-  config.coordinator = {
-    BATCH_COLLECTION_TIME_SEC: spec.rollup.coordinator.batchCollectionTimeSec,
-    BUNDLE_COLLECTION_TIME_SEC: spec.rollup.coordinator.bundleCollectionTimeSec,
-    CHUNK_COLLECTION_TIME_SEC: spec.rollup.coordinator.chunkCollectionTimeSec,
   }
 
   // [ingress] section
@@ -1445,7 +1475,7 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
       name: spec.metadata.name,
       ...(spec.proofCoordinator ? {coordinator: structuredClone(spec.proofCoordinator)} : {}),
       ...((host || spec.proofTopology.deployment.proverPublicUrl) ? {
-        proverPublicUrl: host ? `${spec.frontend.protocol ?? 'https'}://${host}` : spec.proofTopology.deployment.proverPublicUrl,
+        proverPublicUrl: spec.proofTopology.deployment.proverPublicUrl ?? `${spec.frontend.protocol ?? 'https'}://${host}`,
       } : {}),
     }
   }

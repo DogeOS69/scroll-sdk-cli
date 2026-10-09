@@ -7,7 +7,9 @@ They do not install Helm releases or claim that a running chain has passed accep
 A complete operator starter is available in the scroll-sdk repository at
 `examples/deployment-spec.example.yaml`, with the companion guide
 `examples/deployment-spec.md`. It selects testnet production Bridge preparation
-and disabled/mock/observe proofs; its marked deployment inputs must be filled.
+and active/real/enforce proofs; it generates real identities from an approved
+proof release after the protocol context exists. Partner enforcing-policy evidence
+return is still a separate integration boundary, documented in the SDK guide.
 
 ## Prepare the private environment file
 
@@ -34,6 +36,7 @@ the spec's environment references even when a later step would not use them.
 | `DOGECOIN_CLUSTER_RPC_USERNAME`, `DOGECOIN_CLUSTER_RPC_PASSWORD` | `dogecoin.clusterRpc` | Credentials used by deployed services. |
 | `DOGECOIN_SEQUENCER_KEY`, `DOGECOIN_FEE_WALLET_KEY` | Production Bridge `sequencerKeyEnv` / `feeWalletKeyEnv` | Independently provisioned Dogecoin WIF keys matching the declared public keys and network. |
 | `SEQUENCER_SIGNING_KEY` | Optional `identities.sequencers[0].signer.privateKeyEnv` import | L2 Reth signer private key, distinct from the Dogecoin sequencer key. Omit for create/KMS. |
+| `VASTAI_API_KEY` | `preparation.dstack.vastaiApiKeyEnv` | Vast.ai key string; no separate credential file is needed. |
 | `DSTACK_DATABASE_URL` | Optional `preparation.dstack.databaseUrlEnv` | Existing `postgresql+asyncpg` connection URL using `ssl`, not `sslmode`. Omit for SQLite or database initialization. |
 
 Environment variable names are selected by the spec; these are the names used
@@ -41,7 +44,7 @@ by the shipped examples and this guide. Add an entry for every custom reference.
 Adding a variable alone does not select an import operation or override a spec
 field: the spec must explicitly reference it. Keep each value on one line, place
 comments on separate lines, and do not use shell substitutions. AWS credentials
-use the normal provider chain; dstack provider credentials, partner descriptors
+use the normal provider chain; GCP credential files, partner descriptors
 and Bridge funding outpoints use their separately declared files.
 
 ## Commands
@@ -107,8 +110,7 @@ preparation:
         - REPLACE_WITH_FIRST_RECOVERY_PUBLIC_KEY
         - REPLACE_WITH_SECOND_RECOVERY_PUBLIC_KEY
       ethereumAnchor:
-        blockNumber: 123456
-        transactionIndex: 0
+        blockTag: finalized
   proofMaterials:
     mode: existing
     receipt: .data/proof-materials-v1.json
@@ -136,7 +138,10 @@ The beta.6 production order is defined in
 The workflow:
 
 1. Prepares service identities, descriptors, actual L2 genesis and protocol seed.
-2. Checks the Ethereum RPC chain ID and the declared DA anchor block/index.
+2. Checks the Ethereum RPC chain ID, selects the finalized DA boundary once
+   (transaction index 0), and persists its exact height/hash. Explicit historical
+   block/index overrides remain available; an unavailable finalized tag never
+   falls back to latest. Resumes reuse the saved boundary.
 3. Displays the independently managed sequencer and fee-wallet addresses and
    required amounts. The genesis sequencer output must be exactly **42,069,000
    satoshis (0.42069 DOGE)**. Fund them using the deployment wallet.
@@ -148,8 +153,10 @@ The workflow:
    a confirmed marked funding output, verifies it, then generates the canonical
    protocol context and continues service/proof configuration.
 
-The workflow creates an initially empty JSON input file at the selected
-`fundingFile`. Fill only known outpoints, then rerun `apply`:
+The default funding input is `.scrollsdk/inputs/bridge-funding.json`; omit
+`fundingFile` unless a custom location is needed. No file is required at plan
+time. Apply creates it at the funding wait and prints both wallet addresses,
+amounts and a JSON template. Fill only real outpoints, then rerun `apply`:
 
 ```json
 {
@@ -203,10 +210,11 @@ interface. There is deliberately no force-retry switch for broadcasts.
 | `archive.action: configure/create` | Reconcile archive configuration/writer permissions; create permits bucket creation. Optional `awsProfile` and `writerRoleArn`. |
 | `proofAws` | Provision proof AWS resources using the declared EKS cluster, region, store and explicit `publicReadMode`; optional gateway endpoint/profile. |
 | `proofMaterials.mode: mock` | Invoke the material tool using the topology compiler pin and explicit `mockWorkerImage`, then derive topology identities from the receipt. |
-| `proofMaterials.mode: real` | Import `preparationReceipt` plus Chunk/Batch materializers and optional Worker image receipt; Bridge-bound artifacts must already match this deployment. |
+| `proofRelease` | Select an approved manifest path and SHA256. Plan derives compiler/Worker pins; apply runs the context-bound producer, exports materializers and checks the CUDA image before importing real materials. |
+| `proofMaterials.mode: real` | With `proofRelease`, consume the generated receipts and materializers. Without it, import explicitly supplied `preparationReceipt`, materializers and Worker receipt. |
 | `proofMaterials.mode: existing` | Consume the specified receipt; without a receipt, consume the explicitly staged compiler identity and existing topology. Production acceptance still depends on final proof checks. |
-| `proofPublication` | Publish the manifest selected by `release` and `releaseSha256`, then reconcile values again with the publication receipt. Uses proof AWS resource facts. |
-| `dstack.mode: import` | Import the selected `providers` and credential file references; optional project/GCP project; does not rent GPUs. |
+| `proofPublication` | Publish the manifest selected by `release` and `releaseSha256`, then reconcile values again with the publication receipt. Uses proof AWS resource facts. An empty object selects publication from `proofRelease`; an explicit release/hash pair remains supported. |
+| `dstack.mode: import` | Import the selected `providers` and credential file/environment references; optional project/GCP project; does not rent GPUs. |
 | `dstack.mode: external` | Use externally managed controller credential Secrets; does not import provider credentials. |
 | `dstack.databaseUrlEnv` | Import an existing PostgreSQL asyncpg URL through an environment variable; mutually exclusive with `initializeDatabase`. |
 | `dstack.initializeDatabase` | Initialize dstack on the existing PostgreSQL server; does not create a cloud database service. |
@@ -223,7 +231,7 @@ preparation:
   dstack:
     mode: import
     providers: [vastai]
-    vastaiApiKeyFile: /private/vastai-api-key
+    vastaiApiKeyEnv: VASTAI_API_KEY
     initializeDatabase: true
 ```
 
@@ -281,3 +289,21 @@ Private generated files and child logs remain in the reported temporary director
 only sanitized step outcomes and RPC method names are printed. Docker must be
 available. This verifies orchestration and artifact compatibility, not real chain
 confirmation, AWS permissions, real proofs or cluster deployment acceptance.
+
+## Generated proof identities and external completion evidence
+
+The SDK starter uses `preparation.proofRelease: {manifest, sha256}` plus
+`proofMaterials: {mode: real}`. The manifest must exist at plan time and pins all
+five proof images. Apply generates `.data/proof-release-preparation/` from the
+canonical protocol context, including `bridge/worker-identity-bundle.json`;
+exports the coordinator materializers; checks the production CUDA image; and
+imports `.data/proof-materials-v1.json`. Operators do not invent identity hashes
+or copy a generic compiler identity from another deployment. Image/receipt
+mismatches fail validation. These image checks do not execute a GPU proof.
+
+The current workflow exports signer policy but does not yet import the returned
+partner validation references and regenerate their bound configuration. An
+`enforce` run without that evidence fails its final check; it must not be reported
+as successfully prepared. See `docs/proof-config-transactions.md` for the external
+evidence requirements. Completed local/mock rehearsals do not establish this
+real/enforce acceptance path.

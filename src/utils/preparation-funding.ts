@@ -105,7 +105,10 @@ export async function prepareProductionWallets(root: string, spec: DeploymentSpe
   for (const role of ['sequencer', 'feeWallet'] as const) {
     const amount = role === 'sequencer' ? GENESIS_SEQUENCER_AMOUNT_SATS : setup.fee_wallet_target_amount
     try {facts[role] = await inspectFunding(data[role], {address: addresses[role], confirmations: spec.bridge.confirmationsRequired, exact: role === 'sequencer', minimumSats: amount}, rpc)} catch (error) {
-      if (error instanceof AwaitingInput) throw new AwaitingInput({...error.details, address: addresses[role], amountSats: amount, file, message: `${role}: ${error.message}. Record ${role}.txid and ${role}.vout in the funding input`})
+      if (error instanceof AwaitingInput) throw new AwaitingInput({...error.details, address: addresses[role], amountSats: amount, file, fundingRequests: [
+        {address: addresses.sequencer, amountSats: GENESIS_SEQUENCER_AMOUNT_SATS, role: 'sequencer'},
+        {address: addresses.feeWallet, amountSats: setup.fee_wallet_target_amount, role: 'feeWallet'},
+      ], inputTemplate: {feeWallet: {txid: 'REPLACE_WITH_FEE_WALLET_TXID', vout: 'REPLACE_WITH_OUTPUT_INDEX'}, sequencer: {txid: 'REPLACE_WITH_SEQUENCER_TXID', vout: 'REPLACE_WITH_OUTPUT_INDEX'}}, message: `${role}: ${error.message}. Record ${role}.txid and ${role}.vout in the funding input`})
       throw error
     }
   }
@@ -147,7 +150,7 @@ export async function prepareProductionBridgeFunding(root: string, spec: Deploym
   if (await rpc('getblockcount', []) >= spec.bridge.timelock) throw new AwaitingInput({message: 'Recovery timelock is no longer in the future'})
   let funded: FundingFact
   try {funded = await inspectFunding(data.bridge, {address: bridge.p2sh_address, confirmations: spec.bridge.confirmationsRequired, marker: true, minimumSats: setup.bridge_target_amount}, rpc)} catch (error) {
-    if (error instanceof AwaitingInput) throw new AwaitingInput({...error.details, address: bridge.p2sh_address, amountSats: setup.bridge_target_amount, file, markerScript: BRIDGE_FUNDING_MARKER, message: `${error.message}. Record bridge.txid and bridge.vout in the funding input`})
+    if (error instanceof AwaitingInput) throw new AwaitingInput({...error.details, address: bridge.p2sh_address, amountSats: setup.bridge_target_amount, file, inputTemplate: {bridge: {txid: 'REPLACE_WITH_BRIDGE_FUNDING_TXID', vout: 'REPLACE_WITH_OUTPUT_INDEX'}}, markerScript: BRIDGE_FUNDING_MARKER, message: `${error.message}. Record bridge.txid and bridge.vout in the funding input`})
     throw error
   }
 
@@ -191,30 +194,48 @@ export function verifyProductionBridge(bridge: any, point: {txid: string; vout: 
   if (bridge.script_pubkey_hex !== script || bitcore.Script.fromAddress(bridge.p2sh_address).toHex() !== script) throw new Error('Bridge address, scriptPubKey and redeem script disagree')
 }
 
-export async function prepareEthereumAnchor(root: string, spec: DeploymentSpec): Promise<void> {
+export async function prepareEthereumAnchor(root: string, spec: DeploymentSpec, injectedRpc?: Rpc): Promise<void> {
   const anchor = spec.preparation!.bridge.production!.ethereumAnchor
   const endpoint = spec.ethereumDa!.l1RpcUrl
-  const rpc = async (method: string, params: unknown[]): Promise<any> => {
+  const rpc = injectedRpc ?? (async (method: string, params: unknown[]): Promise<any> => {
     try {
       const response = await fetch(endpoint!, {body: JSON.stringify({id: 1, jsonrpc: '2.0', method, params}), headers: {'content-type': 'application/json'}, method: 'POST', signal: AbortSignal.timeout(15_000)})
       const body = await response.json() as any
       if (!response.ok || body.error || body.result === undefined) throw new Error('RPC failure')
       return body.result
     } catch {throw new AwaitingInput({message: `Ethereum ${method} failed; check the selected RPC`})}
-  }
+  })
 
   if (Number.parseInt(await rpc('eth_chainId', []), 16) !== spec.ethereumDa!.chainId) throw new Error('Ethereum RPC chain ID does not match spec')
-  const block = await rpc('eth_getBlockByNumber', [`0x${anchor.blockNumber.toString(16)}`, false])
-  if (!block || !/^0x[\da-f]{64}$/i.test(block.hash) || Number.parseInt(block.number, 16) !== anchor.blockNumber || !Array.isArray(block.transactions) || anchor.transactionIndex > Math.max(0, block.transactions.length - 1)) throw new AwaitingInput({message: 'The selected Ethereum DA anchor is unavailable or has an invalid transaction index'})
+  const receiptPath = path.join(root, '.data/production-ethereum-anchor.json')
+  const saved = fs.existsSync(receiptPath) ? JSON.parse(fs.readFileSync(receiptPath, 'utf8')) : undefined
+  if (saved && (saved.chainId !== spec.ethereumDa!.chainId || !Number.isSafeInteger(saved.blockNumber) || saved.blockNumber < 0
+    || !Number.isSafeInteger(saved.transactionIndex) || saved.transactionIndex < 0 || !/^0x[\da-f]{64}$/i.test(saved.blockHash))) throw new Error('Saved Ethereum anchor is invalid')
+  const selectedNumber = saved?.blockNumber ?? anchor.blockNumber
+  const selector = selectedNumber === undefined ? 'finalized' : `0x${selectedNumber.toString(16)}`
+  const transactionIndex = saved?.transactionIndex ?? anchor.transactionIndex ?? 0
+  const block = await rpc('eth_getBlockByNumber', [selector, false])
+  const blockNumber = Number.parseInt(block?.number, 16)
+  if (!block || !/^0x[\da-f]{64}$/i.test(block.hash) || !Number.isSafeInteger(blockNumber) || blockNumber < 0
+    || selectedNumber !== undefined && blockNumber !== selectedNumber || !Array.isArray(block.transactions)
+    || transactionIndex > Math.max(0, block.transactions.length - 1)) throw new AwaitingInput({message: 'Ethereum DA anchor is unavailable or has an invalid transaction index; finalized selection requires an RPC supporting the finalized tag'})
+  if (saved && saved.blockHash !== block.hash) throw new Error('Saved Ethereum anchor is no longer canonical; reconcile before continuing')
+  if (!saved && anchor.blockTag === 'finalized') {
+    const canonical = await rpc('eth_getBlockByNumber', [`0x${blockNumber.toString(16)}`, false])
+    if (canonical?.hash !== block.hash) throw new AwaitingInput({message: 'Finalized Ethereum anchor changed during selection; retry with a consistent RPC'})
+  }
+
+  // Persist before updating derived files so a partial retry cannot move the boundary.
+  if (!saved) writeJson(receiptPath, {blockHash: block.hash, blockNumber, chainId: spec.ethereumDa!.chainId, transactionIndex})
   const file = path.join(root, '.data/protocol_seed.toml')
   const seed = toml.parse(fs.readFileSync(file, 'utf8')) as any
   seed.chain_anchors.initial_ethereum_block_hash = block.hash
-  seed.chain_anchors.initial_tx_index = anchor.transactionIndex
+  seed.chain_anchors.initial_tx_index = transactionIndex
   delete seed.chain_anchors.initial_tx_blob_index
   privateWrite(file, toml.stringify(seed))
   const configPath = path.join(root, '.data/doge-config.toml')
   const config = toml.parse(fs.readFileSync(configPath, 'utf8')) as any
   config.defaults ??= {}
-  config.defaults.ethereumDaEmbeddedIndexerStartBlock = String(anchor.blockNumber)
+  config.defaults.ethereumDaEmbeddedIndexerStartBlock = String(blockNumber)
   privateWrite(configPath, toml.stringify(config))
 }

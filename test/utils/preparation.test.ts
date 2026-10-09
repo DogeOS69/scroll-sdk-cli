@@ -6,6 +6,7 @@ import {expect} from 'chai'
 import {Wallet} from 'ethers'
 import * as yaml from 'js-yaml'
 import {execFileSync} from 'node:child_process'
+import {createHash} from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -15,10 +16,12 @@ import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 import type {Rpc} from '../../src/utils/preparation-funding.js'
 
 import {generateSetupDefaultsToml} from '../../src/utils/deployment-spec-generator.js'
-import {BRIDGE_FUNDING_MARKER, inspectFunding, publicKeyAddress, verifyDogecoinNetwork} from '../../src/utils/preparation-funding.js'
+import {BRIDGE_FUNDING_MARKER, inspectFunding, prepareEthereumAnchor, publicKeyAddress, verifyDogecoinNetwork} from '../../src/utils/preparation-funding.js'
 import {AwaitingInput, loadPreparationEnv} from '../../src/utils/preparation-io.js'
 import {applyPreparation, createPreparationPlan, preparationSteps, validatePreparation} from '../../src/utils/preparation-plan.js'
+import {resolvePreparationProofRelease} from '../../src/utils/preparation-release.js'
 import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
+import {PROOF_RELEASE_IMAGE_NAMES} from '../../src/utils/proof-software-release.js'
 
 const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 function fixture(): DeploymentSpec {
@@ -113,6 +116,66 @@ describe('resumable preparation plan', () => {
       await runner.run({effect: 'local', id: 'dstack', retry: 'safe', title: 'dstack'}, spec, deployment, plan)
       expect((toml.parse(fs.readFileSync(path.join(deployment, 'config.toml'), 'utf8')) as any).db.DSTACK_DB_CONNECTION_STRING).to.equal('$ENV:PREPARATION_TEST_DATABASE_URL')
     } finally {delete process.env.PREPARATION_TEST_DATABASE_URL}
+  })
+
+  it('waits for a Vast.ai environment key and passes only its name to the importer', async () => {
+    const spec = fixture()
+    spec.dstackController = {database: {type: 'sqlite'}, enabled: true}
+    spec.preparation!.dstack = {mode: 'import', providers: ['vastai'], vastaiApiKeyEnv: 'PREPARATION_TEST_VASTAI_KEY'}
+    validatePreparation(spec)
+    const plan = makePlan()
+    const calls: string[][] = []
+    const runner = new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)})
+    const step = {effect: 'local', id: 'dstack', retry: 'safe', title: 'dstack'} as const
+    try {
+      delete process.env.PREPARATION_TEST_VASTAI_KEY
+      await rejected(() => runner.run(step, spec, deployment, plan), 'Set PREPARATION_TEST_VASTAI_KEY')
+      expect(calls).to.have.length(0)
+      process.env.PREPARATION_TEST_VASTAI_KEY = 'NONFUNCTIONAL_VASTAI_TEST_KEY'
+      await runner.run(step, spec, deployment, plan)
+      expect(calls[0]).to.include.members(['--vastai-api-key-env', 'PREPARATION_TEST_VASTAI_KEY'])
+      expect(calls[0].join(' ')).not.to.include(process.env.PREPARATION_TEST_VASTAI_KEY)
+      spec.preparation!.dstack.vastaiApiKeyFile = 'input-key'
+      expect(() => validatePreparation(spec)).to.throw('not both')
+    } finally {delete process.env.PREPARATION_TEST_VASTAI_KEY}
+  })
+
+  it('derives real images from one pinned release and plans generation after protocol context', async () => {
+    const spec = yaml.load(fs.readFileSync(path.join(root, 'intent.yaml'), 'utf8')) as DeploymentSpec
+    spec.proofTopology!.generation = 'real'
+    spec.proofTopology!.enforcement = 'enforce'
+    spec.proofTopology!.mode = 'active'
+    spec.proofCoordinator = {artifactStore: {bucket: 'test-proof-artifacts', region: 'us-west-2'}, enabled: true, s3AuthMode: 'ambient'}
+    spec.proofTopology!.active!.artifactStore = {bucket: 'test-proof-artifacts', endpointUrl: 'https://s3.us-west-2.amazonaws.com', kind: 's3_compatible', region: 'us-west-2'}
+    delete (spec.proofTopology as any).compiler
+    const release = {images: Object.fromEntries(PROOF_RELEASE_IMAGE_NAMES.map(name => [name, `example.invalid/${name}@sha256:${'b'.repeat(64)}`])), revision: 'a'.repeat(40), schema: 'dogeos/proof-release/v1'}
+    const file = path.join(root, 'proof-release.json')
+    const text = JSON.stringify(release)
+    fs.writeFileSync(file, text)
+    spec.preparation!.proofRelease = {manifest: '../proof-release.json', sha256: createHash('sha256').update(text).digest('hex')}
+    spec.preparation!.proofMaterials = {mode: 'real'}
+    spec.preparation!.proofPublication = {}
+    fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
+    const plan = makePlan()
+    const expanded = JSON.parse(fs.readFileSync(path.join(deployment, '.scrollsdk/intent.json'), 'utf8')) as DeploymentSpec
+    expect(expanded.proofTopology!.compiler.image.repository).to.equal('example.invalid/dogeos-proof-topology')
+    expect(expanded.proofTopology!.deployment.productionWorkerImage!.repository).to.equal('example.invalid/prover-worker-cuda')
+    const ids = plan.steps.map(step => step.id)
+    expect(ids.indexOf('proof-release-bake')).to.be.greaterThan(ids.indexOf('protocol-context'))
+    expect(ids.indexOf('proof-worker-check')).to.be.lessThan(ids.indexOf('proof-materials'))
+    const calls: string[][] = []
+    const exports: any[] = []
+    const runner = new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)}, options => {exports.push(options); return {batchMaterializer: 'batch', chunkMaterializer: 'chunk'}})
+    for (const id of ['proof-release-bake', 'proof-materializer-export', 'proof-worker-check']) await runner.run(plan.steps.find(step => step.id === id)!, expanded, deployment, plan)
+    expect(calls[0]).to.include.members(['prepare-real', '.data/protocol_context.json', file])
+    expect(exports[0].image).to.equal(release.images['proof-coordinator'])
+    expect(calls[1]).to.include(release.images['prover-worker-cuda'])
+    expect(calls[1]).to.include('.data/proof-release-preparation/proof-release-preparation-v1.json')
+    const conflict = structuredClone(expanded)
+    conflict.proofTopology!.deployment.productionWorkerImage!.repository = 'different.invalid/worker'
+    expect(() => resolvePreparationProofRelease(conflict, deployment)).to.throw('conflicts')
+    fs.appendFileSync(file, ' ')
+    expect(() => resolvePreparationProofRelease(spec, deployment)).to.throw('digest mismatch')
   })
 
   it('never automatically replays a failed broadcast', async () => {
@@ -242,5 +305,67 @@ describe('production funding validation', () => {
     expect((await inspectFunding(marked.point, {...marked.request, marker: true}, marked.rpc)).txid).to.equal(marked.point.txid)
     marked.tx.addOutput(Buffer.from(BRIDGE_FUNDING_MARKER, 'hex'), 0n)
     await rejected(() => inspectFunding({...marked.point, txid: marked.tx.getId()}, {...marked.request, marker: true}, marked.rpc), 'OP_RETURN')
+  })
+})
+
+describe('Ethereum DA anchor selection', () => {
+  let root: string
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'ethereum-anchor-test-'))
+    fs.mkdirSync(path.join(root, '.data'))
+    fs.writeFileSync(path.join(root, '.data/protocol_seed.toml'), '[chain_anchors]\n')
+    fs.writeFileSync(path.join(root, '.data/doge-config.toml'), 'network = "testnet"\n')
+  })
+  afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
+  const specFor = (anchor: any): DeploymentSpec => {
+    const spec = fixture()
+    spec.ethereumDa!.chainId = 11_155_111
+    spec.preparation!.bridge.production = {ethereumAnchor: anchor} as any
+    return spec
+  }
+
+  it('pins finalized once and reuses it even if finalized advances', async () => {
+    const calls: unknown[][] = []
+    let latest = 100
+    const rpc: Rpc = async (method, params) => {
+      if (method === 'eth_chainId') return '0xaa36a7'
+      calls.push(params)
+      const height = params[0] === 'finalized' ? latest : Number.parseInt(params[0] as string, 16)
+      return {hash: '0x' + height.toString(16).padStart(64, '0'), number: '0x' + height.toString(16), transactions: []}
+    }
+
+    const spec = specFor({blockTag: 'finalized'})
+    await prepareEthereumAnchor(root, spec, rpc)
+    latest = 200
+    await prepareEthereumAnchor(root, spec, rpc)
+    expect(calls.filter(call => call[0] === 'finalized')).to.have.length(1)
+    const saved = JSON.parse(fs.readFileSync(path.join(root, '.data/production-ethereum-anchor.json'), 'utf8'))
+    expect(saved.blockNumber).to.equal(100)
+    expect(saved.transactionIndex).to.equal(0)
+    const seed = toml.parse(fs.readFileSync(path.join(root, '.data/protocol_seed.toml'), 'utf8')) as any
+    expect(seed.chain_anchors.initial_ethereum_block_hash).to.equal(saved.blockHash)
+    expect(seed.chain_anchors.initial_tx_index).to.equal(0)
+    const config = toml.parse(fs.readFileSync(path.join(root, '.data/doge-config.toml'), 'utf8')) as any
+    expect(config.defaults.ethereumDaEmbeddedIndexerStartBlock).to.equal('100')
+    const changed: Rpc = async method => method === 'eth_chainId' ? '0xaa36a7' : {hash: '0x' + 'f'.repeat(64), number: '0x64', transactions: []}
+    await rejected(() => prepareEthereumAnchor(root, spec, changed), 'no longer canonical')
+  })
+  it('does not substitute latest for an unavailable finalized block or a wrong chain', async () => {
+    const spec = specFor({blockTag: 'finalized'})
+    await rejected(() => prepareEthereumAnchor(root, spec, async method => method === 'eth_chainId' ? '0x1' : null), 'chain ID')
+    await rejected(() => prepareEthereumAnchor(root, spec, async method => method === 'eth_chainId' ? '0xaa36a7' : null), 'unavailable')
+    expect(fs.existsSync(path.join(root, '.data/production-ethereum-anchor.json'))).to.equal(false)
+  })
+  it('retains explicit historical block and transaction index selection', async () => {
+    const spec = specFor({blockNumber: 100, transactionIndex: 1})
+    const rpc: Rpc = async (method, params) => {
+      if (method === 'eth_chainId') return '0xaa36a7'
+      expect(params).to.deep.equal(['0x64', false])
+      return {hash: '0x' + 'e'.repeat(64), number: '0x64', transactions: ['first', 'second']}
+    }
+
+    await prepareEthereumAnchor(root, spec, rpc)
+    const saved = JSON.parse(fs.readFileSync(path.join(root, '.data/production-ethereum-anchor.json'), 'utf8'))
+    expect(saved.transactionIndex).to.equal(1)
   })
 })

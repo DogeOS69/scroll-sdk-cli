@@ -185,7 +185,7 @@ function fromDeploymentSpec(specPath: string): ResolvedProofIntent {
     network: spec.dogecoin.network,
     proofCoordinator: spec.proofCoordinator,
     proofTopology: spec.proofTopology,
-    proverPublicUrl: host ? `${spec.frontend.protocol ?? 'https'}://${host}` : spec.proofTopology.deployment.proverPublicUrl,
+    proverPublicUrl: spec.proofTopology.deployment.proverPublicUrl ?? `${spec.frontend.protocol ?? 'https'}://${host}`,
     source: {kind: 'deployment-spec', path: specPath, sha256: sha256File(specPath)},
     warnings: validation.warnings.map(warning => `${warning.path}: ${warning.message}`),
   }

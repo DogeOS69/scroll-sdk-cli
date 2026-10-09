@@ -76,7 +76,7 @@ describe('dstack controller production values', () => {
     for (const config of [
       {enabled: 'false'}, {replicaCount: 2}, {auth: {existingSecret: ''}},
       {auth: {token: 'test-secret-do-not-print'}}, {database: {url: 'postgres://secret'}},
-      {image: {tag: 'latest'}}, {ingress: {enabled: true}},
+      {image: {tag: 'latest'}}, {ingress: {enabled: true, hosts: []}},
       {credentialSecrets: [{name: 'gcp', secretName: 'a'}, {name: 'gcp', secretName: 'b'}]},
       {persistence: {retain: 'false'}}, {serviceAccount: {automountServiceAccountToken: 'false'}},
       {resources: {requests: {memory: 1}}}, {tolerations: [{effect: 'wrong'}]},

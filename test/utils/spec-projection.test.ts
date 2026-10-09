@@ -68,6 +68,40 @@ function proofFixture(): DeploymentSpec {
 }
 
 describe('spec intent through configuration and values projection', () => {
+  it('derives proof and dstack endpoints from one base domain while preserving explicit overrides', () => {
+    const spec = proofFixture()
+    spec.frontend = {baseDomain: 'deployment.example.invalid', protocol: 'https', subdomains: {proofCoordinator: 'proof'}} as any
+    delete spec.proofTopology!.deployment.proverPublicUrl
+    spec.dstackController = {enabled: true, ingress: {enabled: true}}
+    const normalized = normalizeDeploymentSpec(spec)
+    expect(normalized.proofTopology!.deployment.proverPublicUrl).to.equal('https://proof.deployment.example.invalid')
+    expect(normalized.dstackController!.ingress!.hosts).to.deep.equal(['dstack.deployment.example.invalid'])
+    expect(validateDeploymentSpec(spec).valid).to.equal(true)
+    const doge = toml.parse(generateAllConfigs(spec)['doge-config.toml']) as any
+    expect(doge.proof_topology.deployment.proverPublicUrl).to.equal('https://proof.deployment.example.invalid')
+    const dstack = parseValues(spec, 'dstack-controller')
+    expect(dstack.ingress.hosts).to.deep.equal(['dstack.deployment.example.invalid'])
+    spec.proofTopology!.deployment.proverPublicUrl = 'https://external-proof.example.invalid'
+    spec.dstackController!.ingress!.hosts = ['external-dstack.example.invalid']
+    const override = normalizeDeploymentSpec(spec)
+    expect(override.proofTopology!.deployment.proverPublicUrl).to.equal('https://external-proof.example.invalid')
+    expect(override.dstackController!.ingress!.hosts).to.deep.equal(['external-dstack.example.invalid'])
+    const overriddenDoge = toml.parse(generateAllConfigs(spec)['doge-config.toml']) as any
+    expect(overriddenDoge.proofDeployment.proverPublicUrl).to.equal('https://external-proof.example.invalid')
+    expect(spec.proofTopology!.deployment.proverPublicUrl).to.equal('https://external-proof.example.invalid')
+  })
+
+  it('drops retired coordinator timing from old specs and accepts specs without rollup', () => {
+    const spec = fixture()
+    delete spec.rollup
+    expect(validateDeploymentSpec(spec).valid).to.equal(true)
+    expect(toml.parse(generateAllConfigs(spec)['config.toml'])).not.to.have.property('coordinator')
+    const legacy = {...spec, rollup: {coordinator: {batchCollectionTimeSec: 60, bundleCollectionTimeSec: 180, chunkCollectionTimeSec: 30}}} as any
+    expect(validateDeploymentSpec(legacy).valid).to.equal(true)
+    expect(normalizeDeploymentSpec(legacy)).not.to.have.property('rollup')
+    expect(toml.parse(generateAllConfigs(legacy)['config.toml'])).not.to.have.property('coordinator')
+  })
+
   for (const publicBaseUrl of [undefined, 'https://blob-gateway.example.invalid']) {
     it(`projects the ${publicBaseUrl ? 'explicit gateway' : 'derived AWS'} blob read URL consistently`, () => {
       const spec = proofFixture()

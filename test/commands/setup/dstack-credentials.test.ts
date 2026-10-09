@@ -90,6 +90,23 @@ else console.log('{}');
     fs.rmSync(directory, {force: true, recursive: true})
   })
 
+  it('imports a Vast.ai key from an environment variable without exposing it', () => {
+    const variable = 'DSTACK_TEST_VASTAI_KEY'
+    process.env[variable] = key
+    try {
+      run('dstack-config', '--vastai-api-key-env', variable)
+      expect(readDstackCredentials()!.vastaiApiKey).to.equal(key)
+      expect(fs.readFileSync('.data/doge-config.toml', 'utf8')).not.to.include(key)
+      expect(fs.statSync(DSTACK_CREDENTIALS_FILE).mode % 0o1000).to.equal(0o600)
+      const conflicting = execute('dstack-config', '--vastai-api-key-env', variable, '--vastai-api-key-file', 'vast-key', '-N', '--json')
+      expect(conflicting.status).not.to.equal(0)
+      expect(conflicting.stdout + conflicting.stderr).not.to.include(key)
+      delete process.env[variable]
+      const absent = execute('dstack-config', '--vastai-api-key-env', variable, '-N', '--json')
+      expect(absent.status).not.to.equal(0)
+    } finally {delete process.env[variable]}
+  })
+
   it('imports both providers, wires values and generates Secrets without bridge/database initialization', () => {
     importBoth()
     generate()

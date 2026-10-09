@@ -9,7 +9,8 @@ export interface PreparationConfig {
     image: string
     mode: 'helper' | 'production'
     production?: {
-      ethereumAnchor: {blockNumber: number; transactionIndex: number}
+      /** Resolve finalized once on apply, or select an explicit historical boundary. */
+      ethereumAnchor: {blockNumber?: number; blockTag?: 'finalized'; transactionIndex?: number}
       feeWalletKeyEnv: string
       feeWalletPublicKey: string
       recoveryPublicKeys: string[]
@@ -27,6 +28,8 @@ export interface PreparationConfig {
     mode: 'external' | 'import'
     project?: string
     providers?: Array<'gcp' | 'vastai'>
+    /** Name of an environment variable; mutually exclusive with vastaiApiKeyFile. */
+    vastaiApiKeyEnv?: string
     vastaiApiKeyFile?: string
   }
   genesis?: {contractsSource?: string}
@@ -46,6 +49,8 @@ export interface PreparationConfig {
     productionWorkerReceipt?: string
     receipt?: string
   }
-  proofPublication?: {awsProfile?: string; release: string; releaseSha256: string}
+  proofPublication?: {awsProfile?: string; release?: string; releaseSha256?: string}
+  /** Approved software release; plan validates the manifest and derives image pins. */
+  proofRelease?: {manifest: string; sha256: string}
   secretUpload?: {awsPrefix?: string; awsRegion?: string; kubeContext?: string; namespace?: string; provider: 'aws' | 'vault'}
 }

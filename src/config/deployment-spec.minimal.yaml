@@ -91,7 +91,7 @@ bridge:
     bridge: 1000000000         # 10 DOGE
   confirmationsRequired: 1
   fees:
-    depositFeeSats: "10000"
+    depositFeeSats: "100000000" # 1 DOGE (Dogecoin uses 8 decimals)
     withdrawalFeeWei: "100000000000000000" # 0.1 DOGE (L2 uses 18 decimals)
     minWithdrawalAmountWei: "1000000000000000000" # 1 DOGE
   feeRecipient: "0x0000000000000000000000000000000000000000"
@@ -124,12 +124,6 @@ frontend:
     rpcGateway: rpc
     blockscout: blockscout
     grafana: grafana
-
-rollup:
-  coordinator:
-    chunkCollectionTimeSec: 30    # Faster for devnet
-    batchCollectionTimeSec: 60
-    bundleCollectionTimeSec: 180
 
 contracts:
   l2BaseFeeOverheadWei: "420000000000"

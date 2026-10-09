@@ -38,6 +38,17 @@ field, prep leaves the existing chart policy alone. This projection does not
 grant writer permission, fund an account or execute a fee update. Other sampling
 and update-policy settings remain template-owned.
 
+## Bridge fee units
+
+The examples select a 1 DOGE deposit fee (`depositFeeSats: "100000000"`),
+a 0.1 DOGE withdrawal fee (`withdrawalFeeWei: "100000000000000000"`) and
+a 1 DOGE minimum withdrawal (`minWithdrawalAmountWei: "1000000000000000000"`).
+The generator multiplies deposit satoshis by 10^10 when writing
+`contracts.DEPOSIT_FEE`, which uses L2 wei. Zero and integer precision are
+preserved. The deprecated `fees.deposit` field retains its historical direct
+wei meaning; converting to `depositFeeSats` requires dividing by 10^10.
+These are explicit example policies, not a new fallback for omitted fees.
+
 ## Preserved service intent
 
 `dogecoin.kubernetes` is copied into doge-config, including custom service and
@@ -301,3 +312,16 @@ The example specs match the SDK's `config.toml.example` withdrawal policy:
 `withdrawalFeeWei: "100000000000000000"` is 0.1 DOGE and
 `minWithdrawalAmountWei: "1000000000000000000"` is 1 DOGE. L2 native amounts use
 18 decimals, independently of Dogecoin L1's satoshi denomination.
+
+## Derived endpoints and retired coordinator timing
+
+Set `frontend.baseDomain` once. If omitted, `proofTopology.deployment.proverPublicUrl`
+is derived from the selected frontend protocol and proof-coordinator host.
+An enabled dstack ingress without explicit hosts uses `dstack.<baseDomain>`.
+Explicit URL/host overrides take precedence; an explicit empty host list is still
+invalid. These defaults are spec projections, not chart-default changes.
+
+The retired `rollup.coordinator` collection timers are ignored when importing old
+specs and no longer appear in generated config. `rollup` is optional and only
+retains the supported verifier-digest overrides. The beta.6 native proof service
+configuration is owned by its pinned compiler and templates.

@@ -107,9 +107,6 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       l2ChainName: 'DogeOS Testnet',
       tokenSymbol: 'ETH',
     },
-    rollup: {
-      coordinator: { batchCollectionTimeSec: 60, bundleCollectionTimeSec: 120, chunkCollectionTimeSec: 30 },
-    },
     signing: { cubesigner: { roles: [] } },
     version: '1.0',
     ...overrides,
@@ -806,6 +803,41 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateConfigToml', () => {
+    it('converts deposit satoshis to contract wei without changing withdrawal amounts', () => {
+      const spec = createMinimalSpec();
+      spec.bridge.fees = {depositFeeSats: '100000000', minWithdrawalAmountWei: '1000000000000000000', withdrawalFeeWei: '100000000000000000'};
+      const config = toml.parse(generateConfigToml(spec)) as any;
+      expect(config.contracts.DEPOSIT_FEE).to.equal('1000000000000000000');
+      expect(config.contracts.WITHDRAWAL_FEE).to.equal('100000000000000000');
+      expect(config.contracts.MIN_WITHDRAWAL_AMOUNT).to.equal('1000000000000000000');
+    });
+
+    it('preserves satoshi precision for zero, one satoshi and amounts above Number precision', () => {
+      for (const [sats, wei] of [['0', '0'], ['1', '10000000000'], ['9007199254740993', '90071992547409930000000000']]) {
+        const spec = createMinimalSpec();
+        spec.bridge.fees.depositFeeSats = sats;
+        expect((toml.parse(generateConfigToml(spec)) as any).contracts.DEPOSIT_FEE).to.equal(wei);
+      }
+    });
+
+    it('preserves legacy deposit wei and lets the explicit satoshi field take precedence', () => {
+      const spec = createMinimalSpec();
+      delete spec.bridge.fees.depositFeeSats;
+      spec.bridge.fees.deposit = '1000000000000000000';
+      expect((toml.parse(generateConfigToml(spec)) as any).contracts.DEPOSIT_FEE).to.equal('1000000000000000000');
+      spec.bridge.fees.depositFeeSats = '1';
+      expect((toml.parse(generateConfigToml(spec)) as any).contracts.DEPOSIT_FEE).to.equal('10000000000');
+    });
+
+    it('rejects malformed or overflowing deposit amounts before writing configuration', () => {
+      for (const value of ['-1', '1.5', '1e8', '', (2n ** 256n).toString()]) {
+        const spec = createMinimalSpec();
+        spec.bridge.fees.depositFeeSats = value;
+        expect(validateDeploymentSpec(spec).errors.some(error => error.path === 'bridge.fees')).to.equal(true);
+        expect(() => generateConfigToml(spec)).to.throw('bridge.fees');
+      }
+    });
+
     it('always includes the mandatory native DOGE predeploy, preserving optional overrides', () => {
       for (const overrides of [undefined, {l2Wdoge: '0x5300000000000000000000000000000000000004'}]) {
         const spec = createMinimalSpec();
@@ -914,12 +946,12 @@ describe('deployment-spec-generator', () => {
     it('omits retired gas-token settings even when importing an old alternative-token spec', () => {
       const spec = createMinimalSpec();
       (spec.contracts as any).alternativeGasToken = {enabled: true, tokenAddress: '0x1111111111111111111111111111111111111111'};
-      Object.assign(spec.rollup, {maxBatchInBundle: 20, maxBlockInChunk: 100, maxTxInChunk: 100});
+      Object.assign(spec.rollup ??= {}, {maxBatchInBundle: 20, maxBlockInChunk: 100, maxTxInChunk: 100});
       const normalized = normalizeDeploymentSpec(spec);
       expect(normalized.contracts).not.to.have.property('alternativeGasToken');
-      expect(normalized.rollup).not.to.have.property('maxTxInChunk');
-      expect(normalized.rollup).not.to.have.property('maxBlockInChunk');
-      expect(normalized.rollup).not.to.have.property('maxBatchInBundle');
+      expect(normalized.rollup ?? {}).not.to.have.property('maxTxInChunk');
+      expect(normalized.rollup ?? {}).not.to.have.property('maxBlockInChunk');
+      expect(normalized.rollup ?? {}).not.to.have.property('maxBatchInBundle');
       const config = toml.parse(generateConfigToml(spec)) as any;
       expect(config).not.to.have.property('gas-token');
       expect(config).not.to.have.property('rollup');
@@ -927,14 +959,14 @@ describe('deployment-spec-generator', () => {
 
     it('discards legacy L1 rollup inputs and mock flags from imported specs', () => {
       const spec = createMinimalSpec();
-      Object.assign(spec.rollup, {
+      Object.assign(spec.rollup ??= {}, {
         finalization: {batchDeadlineSec: 1, relayMessageDeadlineSec: 2},
         maxL1MessageGasLimit: 0,
       });
       Object.assign(spec, {test: {mockFinalizeEnabled: true, mockFinalizeTimeoutSec: 30}});
       const normalized = normalizeDeploymentSpec(spec);
-      expect(normalized.rollup).not.to.have.property('finalization');
-      expect(normalized.rollup).not.to.have.property('maxL1MessageGasLimit');
+      expect(normalized.rollup ?? {}).not.to.have.property('finalization');
+      expect(normalized.rollup ?? {}).not.to.have.property('maxL1MessageGasLimit');
       expect(normalized).not.to.have.property('test');
       expect(validateDeploymentSpec(spec).valid).to.equal(true);
       expect(toml.parse(generateConfigToml(spec))).not.to.have.property('rollup');
@@ -1031,7 +1063,7 @@ describe('deployment-spec-generator', () => {
 
     it('includes verifier digests when present', () => {
       const spec = createMinimalSpec();
-      spec.rollup.verifierDigests = { digest1: '0xabc', digest2: '0xdef' };
+      (spec.rollup ??= {}).verifierDigests = { digest1: '0xabc', digest2: '0xdef' };
       const output = generateConfigToml(spec);
 
       expect(output).to.include('VERIFIER_DIGEST_1');

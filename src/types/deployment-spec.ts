@@ -90,7 +90,7 @@ export interface DeploymentSpec {
   proofTopology?: ProofTopologySpec
 
   /** Rollup parameters */
-  rollup: RollupConfig
+  rollup?: RollupConfig
 
   /** Signing configuration */
   signing: SigningConfig
@@ -544,8 +544,9 @@ export interface BridgeConfig {
 
   /** Deposit is Dogecoin-side sats; withdrawal/min withdrawal are EVM-side wei. */
   fees: {
-    /** @deprecated Use depositFeeSats. */
+    /** @deprecated Legacy L2 wei value. Convert to satoshis when migrating to depositFeeSats. */
     deposit?: string
+    /** Dogecoin satoshis; multiplied by 10^10 for contracts.DEPOSIT_FEE (L2 wei). */
     depositFeeSats?: string
     /** @deprecated Use minWithdrawalAmountWei. */
     minWithdrawalAmount?: string
@@ -718,13 +719,6 @@ export interface FrontendConfig {
 }
 
 export interface RollupConfig {
-  /** Coordinator timing */
-  coordinator: {
-    batchCollectionTimeSec: number
-    bundleCollectionTimeSec: number
-    chunkCollectionTimeSec: number
-  }
-
   /** Verifier digests (hex) */
   verifierDigests?: {
     digest1: string

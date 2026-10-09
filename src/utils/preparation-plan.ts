@@ -9,6 +9,7 @@ import {resolveBridgeGenesisImage} from '../commands/setup/bridge-init.js'
 import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec} from './deployment-spec-generator.js'
 import {usesDstackPostgres} from './dstack-database.js'
 import {AwaitingInput, digest, loadPreparationEnv, localPath, privateWrite, writeJson} from './preparation-io.js'
+import {resolvePreparationProofRelease} from './preparation-release.js'
 import {planSpecBootstrap} from './spec-bootstrap.js'
 
 export interface PreparationStep {effect: 'chain' | 'cloud' | 'local' | 'read'; id: string; retry: 'reconcile' | 'safe'; title: string}
@@ -53,6 +54,12 @@ export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
 
   add('protocol-context', 'Generate canonical protocol context')
   add('external-inputs', 'Import declared external runtime and policy inputs')
+  if (p.proofRelease) {
+    add('proof-release-bake', 'Bake real proof identities for this protocol context')
+    add('proof-materializer-export', 'Export materializers from the release coordinator image')
+    add('proof-worker-check', 'Check the release CUDA Worker against the baked identities')
+  }
+
   add('proof-materials', 'Prepare or consume proof materials for the selected mode')
   add('charts', 'Compile topology and reconcile service configuration')
   if (p.proofPublication) {
@@ -78,9 +85,13 @@ export function validatePreparation(spec: DeploymentSpec): void {
   for (const file of p.attestationDescriptors) if (typeof file !== 'string' || !file.trim()) throw new Error('Descriptor paths must be non-empty')
   if (!['existing', 'mock', 'real'].includes(p.proofMaterials?.mode)) throw new Error('preparation.proofMaterials.mode is required')
   if (p.proofMaterials.mode === 'mock' && !p.proofMaterials.mockWorkerImage) throw new Error('Mock material preparation requires mockWorkerImage')
-  if (p.proofMaterials.mode === 'real' && (!p.proofMaterials.preparationReceipt || !p.proofMaterials.chunkMaterializer || !p.proofMaterials.batchMaterializer)) throw new Error('Real material preparation requires a preparation receipt and both materializers')
+  if (p.proofRelease && (p.proofMaterials.mode !== 'real' || spec.proofTopology?.generation !== 'real')) throw new Error('proofRelease requires real proof material preparation and real topology generation')
+  if (p.proofRelease && [p.proofMaterials.preparationReceipt, p.proofMaterials.productionWorkerReceipt, p.proofMaterials.chunkMaterializer, p.proofMaterials.batchMaterializer].some(Boolean)) throw new Error('proofRelease derives material inputs; do not also supply preparation/Worker receipts or materializer paths')
+  if (p.proofMaterials.mode === 'real' && !p.proofRelease && (!p.proofMaterials.preparationReceipt || !p.proofMaterials.chunkMaterializer || !p.proofMaterials.batchMaterializer)) throw new Error('Real material preparation requires a preparation receipt and both materializers')
   if (p.proofMaterials.mode !== 'existing' && p.proofMaterials.mode !== spec.proofTopology?.generation) throw new Error('Material preparation must match proofTopology.generation')
-  if (p.proofPublication && (!/^[\da-f]{64}$/.test(p.proofPublication.releaseSha256) || spec.proofTopology?.generation !== 'real')) throw new Error('Publication requires a pinned release manifest and real generation')
+  if (p.proofPublication && !(p.proofPublication.release ?? p.proofRelease?.manifest)) throw new Error('Publication requires a proof release manifest')
+  if (p.proofPublication && Boolean(p.proofPublication.release) !== Boolean(p.proofPublication.releaseSha256)) throw new Error('Publication release and releaseSha256 must be supplied together')
+  if (p.proofPublication && (!/^[\da-f]{64}$/.test(p.proofPublication.releaseSha256 ?? p.proofRelease?.sha256 ?? '') || spec.proofTopology?.generation !== 'real')) throw new Error('Publication requires a pinned release manifest and real generation')
   if (p.archive && !['configure', 'create'].includes(p.archive.action)) throw new Error('Archive action must be configure or create')
   if (p.proofAws && !['direct-s3', 'existing-gateway', 'existing-public-s3'].includes(p.proofAws.publicReadMode)) throw new Error('Invalid proof public-read mode')
   if (p.secretUpload?.provider === 'aws' && !p.secretUpload.awsRegion && !spec.infrastructure.aws?.region) throw new Error('AWS Secret upload requires an explicit region in secretUpload or infrastructure.aws')
@@ -90,7 +101,9 @@ export function validatePreparation(spec: DeploymentSpec): void {
   if (p.secretUpload && !['aws', 'vault'].includes(p.secretUpload.provider)) throw new Error('Secret upload provider must be aws or vault')
   if (spec.dstackController && spec.dstackController.enabled !== false && !p.dstack) throw new Error('Enabled dstack requires preparation.dstack with explicit import or external credentials mode')
   if (p.dstack && !['external', 'import'].includes(p.dstack.mode)) throw new Error('Dstack preparation mode must be import or external')
-  if (p.dstack?.mode === 'import' && (!p.dstack.providers?.length || p.dstack.providers.includes('vastai') && !p.dstack.vastaiApiKeyFile || p.dstack.providers.includes('gcp') && !p.dstack.gcpServiceAccountFile)) throw new Error('Dstack import requires providers and their credential file references')
+  if (p.dstack?.mode === 'import' && (!p.dstack.providers?.length || p.dstack.providers.includes('vastai') && !p.dstack.vastaiApiKeyFile && !p.dstack.vastaiApiKeyEnv || p.dstack.providers.includes('gcp') && !p.dstack.gcpServiceAccountFile)) throw new Error('Dstack import requires providers and their credential file or environment references')
+  if (p.dstack?.vastaiApiKeyEnv && !/^[A-Z_a-z]\w*$/.test(p.dstack.vastaiApiKeyEnv)) throw new Error('Dstack vastaiApiKeyEnv must name an environment variable')
+  if (p.dstack?.vastaiApiKeyEnv && p.dstack.vastaiApiKeyFile) throw new Error('Choose vastaiApiKeyEnv or vastaiApiKeyFile, not both')
   if (p.dstack?.databaseUrlEnv && !/^[A-Z_a-z]\w*$/.test(p.dstack.databaseUrlEnv)) throw new Error('Dstack databaseUrlEnv must name an environment variable')
   if (p.dstack?.databaseUrlEnv && p.dstack.initializeDatabase) throw new Error('Choose existing dstack databaseUrlEnv or initializeDatabase')
   if (usesDstackPostgres(spec.dstackController) && !p.dstack?.initializeDatabase && !p.dstack?.databaseUrlEnv) throw new Error('PostgreSQL dstack requires initializeDatabase or databaseUrlEnv')
@@ -107,7 +120,13 @@ export function validatePreparation(spec: DeploymentSpec): void {
 
     const policy = p.bridge.production
     if (!policy) throw new Error('preparation.bridge.production must declare independently managed Dogecoin wallets and recovery keys')
-    for (const value of [policy.ethereumAnchor?.blockNumber, policy.ethereumAnchor?.transactionIndex]) if (!Number.isSafeInteger(value) || value < 0) throw new Error('Production Bridge requires an explicit Ethereum anchor blockNumber and transactionIndex')
+    const anchor = policy.ethereumAnchor
+    if (anchor?.blockTag !== undefined) {
+      if (anchor.blockTag !== 'finalized' || anchor.blockNumber !== undefined || anchor.transactionIndex !== undefined) throw new Error('Use ethereumAnchor.blockTag: finalized alone, or explicit blockNumber and transactionIndex')
+    } else if (!anchor || [anchor.blockNumber, anchor.transactionIndex].some(value => !Number.isSafeInteger(value) || value! < 0)) {
+      throw new Error('Production Bridge requires ethereumAnchor.blockTag: finalized or explicit blockNumber and transactionIndex')
+    }
+
     for (const value of [policy.sequencerPublicKey, policy.feeWalletPublicKey, spec.bridge.teePubkey]) publicKey(value)
     if (policy.sequencerPublicKey.toLowerCase() === policy.feeWalletPublicKey.toLowerCase()) throw new Error('Production sequencer and fee wallet must have different keys')
     for (const name of [policy.sequencerKeyEnv, policy.feeWalletKeyEnv]) if (!/^[A-Z_a-z]\w*$/.test(name)) throw new Error('Production wallet key references must name environment variables')
@@ -145,6 +164,7 @@ export function createPreparationPlan(options: {envFile?: string; output: string
   loadPreparationEnv(envFile)
   let spec: DeploymentSpec
   try {spec = resolveDeploymentSpecEnvRefs(loadDeploymentSpec(path.resolve(options.spec)))} catch {throw new Error('Cannot load DeploymentSpec; check field names, YAML syntax and environment references (values omitted)')}
+  spec = resolvePreparationProofRelease(spec, options.output)
   const validation = validateDeploymentSpec(spec)
   if (!validation.valid) throw new Error(`Invalid spec fields: ${validation.errors.map(e => `${e.path} (${e.code})`).join(', ')}`)
   validatePreparation(spec)

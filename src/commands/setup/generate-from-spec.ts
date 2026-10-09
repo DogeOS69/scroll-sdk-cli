@@ -10,6 +10,7 @@ import {
   writeGeneratedConfigs
 } from '../../utils/deployment-spec-generator.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
+import {resolvePreparationProofRelease} from '../../utils/preparation-release.js'
 import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles} from '../../utils/retired-services.js'
 import {mergeBootstrapValues, planSpecBootstrap} from '../../utils/spec-bootstrap.js'
@@ -224,7 +225,7 @@ export default class GenerateFromSpec extends Command {
     // Load and validate the spec
     let spec
     try {
-      spec = loadDeploymentSpec(specPath)
+      spec = resolvePreparationProofRelease(loadDeploymentSpec(specPath), path.resolve(flags.output))
     } catch (error) {
       jsonCtx.error(
         'E602_INVALID_SPEC',

@@ -139,7 +139,7 @@ bridge:
     bridge: 5000000000
   confirmationsRequired: 1
   fees:
-    depositFeeSats: "1000000000000000000"
+    depositFeeSats: "100000000" # 1 DOGE (Dogecoin uses 8 decimals)
     withdrawalFeeWei: "100000000000000000" # 0.1 DOGE (L2 uses 18 decimals)
     minWithdrawalAmountWei: "1000000000000000000" # 1 DOGE
   feeRecipient: "0x0000000000000000000000000000000000000000"
@@ -283,10 +283,6 @@ rollup:
   verifierDigests:
     digest1: "0x0000000000000000000000000000000000000000000000000000000000000001"
     digest2: "0x0000000000000000000000000000000000000000000000000000000000000002"
-  coordinator:
-    chunkCollectionTimeSec: 3600
-    batchCollectionTimeSec: 1800
-    bundleCollectionTimeSec: 600
 
 contracts:
   l2BaseFeeOverheadWei: "420000000000"

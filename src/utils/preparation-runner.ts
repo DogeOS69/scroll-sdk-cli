@@ -12,7 +12,9 @@ import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
 import {parseDatabaseUrl} from './dstack-database.js'
 import {checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
 import {AwaitingInput, localPath, privateWrite} from './preparation-io.js'
+import {exportCoordinatorMaterializers} from './proof-image-tools.js'
 import {readProofMaterials} from './proof-materials.js'
+import {readProofSoftwareRelease} from './proof-software-release.js'
 import {buildProofTopology} from './proof-topology-init.js'
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../bin/run.js')
@@ -41,7 +43,7 @@ function requiredFile(root: string, input: string | undefined, label: string): s
 const optional = (name: string, value: string | undefined): string[] => value ? [`--${name}`, value] : []
 
 export class CommandPreparationRunner implements PreparationRunner {
-  constructor(private readonly invoke: Invoke = invokePreparationCommand) {}
+  constructor(private readonly invoke: Invoke = invokePreparationCommand, private readonly exportMaterializers = exportCoordinatorMaterializers) {}
   async run(step: PreparationStep, spec: DeploymentSpec, root: string, plan: PreparationPlan): Promise<void> {
     const p = spec.preparation!
     const command = (args: string[], environment?: Record<string, string>) => this.invoke(root, step.id, args, environment)
@@ -79,6 +81,11 @@ export class CommandPreparationRunner implements PreparationRunner {
 
         if (d?.mode === 'external') break
         const args = ['dstack-config', '-N', ...(d?.providers ?? []).flatMap(provider => ['--provider', provider]), ...optional('project', d?.project), ...optional('gcp-project-id', d?.gcpProjectId)]
+        if (d?.vastaiApiKeyEnv) {
+          if (!process.env[d.vastaiApiKeyEnv]?.trim()) throw new AwaitingInput({message: `Set ${d.vastaiApiKeyEnv} to the Vast.ai API key, then rerun apply`})
+          args.push('--vastai-api-key-env', d.vastaiApiKeyEnv)
+        }
+
         if (d?.vastaiApiKeyFile) args.push('--vastai-api-key-file', requiredFile(root, d.vastaiApiKeyFile, 'Vast.ai key file'))
         if (d?.gcpServiceAccountFile) args.push('--gcp-service-account', requiredFile(root, d.gcpServiceAccountFile, 'GCP service account file'))
         await command(args); break
@@ -118,8 +125,30 @@ export class CommandPreparationRunner implements PreparationRunner {
         break
       }
 
+      case 'proof-release-bake': {
+        const release = p.proofRelease!
+        await command(['proof-image-tools', '--action', 'prepare-real', '--release', requiredFile(root, release.manifest, 'approved proof release manifest'), '--release-sha256', release.sha256, '--protocol-context', '.data/protocol_context.json', '--output', '.data/proof-release-preparation']); break
+      }
+
+      case 'proof-materializer-export': {
+        const release = p.proofRelease!
+        const selected = readProofSoftwareRelease(requiredFile(root, release.manifest, 'approved proof release manifest'), release.sha256)
+        this.exportMaterializers({expectedRevision: selected.manifest.revision, image: selected.manifest.images['proof-coordinator'], outputDir: localPath(root, '.data/proof-release-materializers')}); break
+      }
+
+      case 'proof-worker-check': {
+        const release = p.proofRelease!
+        const selected = readProofSoftwareRelease(requiredFile(root, release.manifest, 'approved proof release manifest'), release.sha256)
+        await command(['proof-worker-image-check', '--image', selected.manifest.images['prover-worker-cuda'], '--preparation-receipt', '.data/proof-release-preparation/proof-release-preparation-v1.json', '--output', '.data/proof-worker-image-check-v1.json']); break
+      }
+
       case 'proof-materials': {
-        const m = p.proofMaterials
+        const m = p.proofRelease ? {...p.proofMaterials,
+          batchMaterializer: '.data/proof-release-materializers/scroll-runtime-materializer',
+          chunkMaterializer: '.data/proof-release-materializers/materialize-chunk-oneshot',
+          preparationReceipt: '.data/proof-release-preparation/proof-release-preparation-v1.json',
+          productionWorkerReceipt: '.data/proof-worker-image-check-v1.json',
+        } : p.proofMaterials
         const receipt = m.receipt ?? '.data/proof-materials-v1.json'
         localPath(root, receipt)
         if (m.mode === 'existing' && !m.receipt) {
@@ -159,7 +188,7 @@ export class CommandPreparationRunner implements PreparationRunner {
 
       case 'proof-publish': {
         const publication = p.proofPublication!
-        await command(['proof-bundle-publish', '--apply', '--release', requiredFile(root, publication.release, 'proof release manifest'), '--release-sha256', publication.releaseSha256, '--materials', p.proofMaterials.receipt ?? '.data/proof-materials-v1.json', ...optional('aws-profile', publication.awsProfile)]); break
+        await command(['proof-bundle-publish', '--apply', '--release', requiredFile(root, publication.release ?? p.proofRelease?.manifest, 'proof release manifest'), '--release-sha256', (publication.releaseSha256 ?? p.proofRelease?.sha256)!, '--materials', p.proofMaterials.receipt ?? '.data/proof-materials-v1.json', ...optional('aws-profile', publication.awsProfile)]); break
       }
 
       case 'secrets': {
