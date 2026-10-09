@@ -831,7 +831,12 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
         annotations: {'nginx.ingress.kubernetes.io/proxy-body-size': '4m'},
         hosts: [{
           host: spec.frontend.hosts.tso || '',
-          paths: [{ path: '/', pathType: 'Prefix' }]
+          paths: [
+            {path: '/health', pathType: 'Exact'},
+            {path: '/submit-attestation-signatures', pathType: 'Exact'},
+            {path: '/submit-correctness-signatures', pathType: 'Exact'},
+            {path: '/reject-signatures', pathType: 'Exact'},
+          ]
         }],
         ingressClassName: 'nginx',
         tls: spec.frontend.hosts.tso ? [{

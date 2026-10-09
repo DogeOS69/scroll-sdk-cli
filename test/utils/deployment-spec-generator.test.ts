@@ -1008,6 +1008,12 @@ describe('deployment-spec-generator', () => {
       expect(blockscout.frontend.env.NEXT_PUBLIC_API_HOST).to.equal(config.ingress.BLOCKSCOUT_HOST);
       const tso = (yaml.load(files['tso-service-production.yaml']) as any).ingress.main;
       expect(tso.hosts[0].host).to.equal(config.ingress.TSO_HOST);
+      expect(tso.hosts[0].paths).to.deep.equal([
+        {path: '/health', pathType: 'Exact'},
+        {path: '/submit-attestation-signatures', pathType: 'Exact'},
+        {path: '/submit-correctness-signatures', pathType: 'Exact'},
+        {path: '/reject-signatures', pathType: 'Exact'},
+      ]);
       expect(tso.tls[0].hosts).to.deep.equal([config.ingress.TSO_HOST]);
       expect(Object.keys(files).join(' ')).not.to.match(/admin-system-dashboard|coordinator-api|rollup-explorer-backend|l1-explorer/);
       expect(files['frontends-config.yaml']).not.to.match(/old-admin|old-rollup|ROLLUPSCAN_API_URI/);
