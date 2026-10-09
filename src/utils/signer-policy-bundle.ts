@@ -157,6 +157,64 @@ export const TRANSPORT_KEY_COMMANDS = [
   ')',
 ].join('\n')
 
+function indented(block: string): string {
+  return block.split('\n').map(line => (line ? `  ${line}` : line)).join('\n')
+}
+
+/**
+ * Phase A as one set -eu subshell: any failing step (including the transport
+ * key block) aborts before the identity is printed or wrapped. Per-deployment
+ * input comes from SIGNER_ID, DOGE_NETWORK and SIGNER_INIT_FLAGS (backend and
+ * release-pin flags), so the partner-kit README carries the same text.
+ */
+export const PARTNER_PHASE_A_COMMANDS = [
+  '(',
+  '  set -eu',
+  '  # 1. Signing key and env, once (a rerun keeps them). The env selects pull',
+  '  #    delivery and the transport key file.',
+  '  [ -e "signer-$SIGNER_ID/attestation-signer.env" ] \\',
+  // eslint-disable-next-line no-template-curly-in-string -- shell parameter expansion
+  '    || scrollsdk signer init --id "$SIGNER_ID" --network "$DOGE_NETWORK" ${SIGNER_INIT_FLAGS:-}',
+  '  # 2. Signing env and policy next to the Compose file, then the transport key:',
+  '  #    created locally only if absent, validated, installed.',
+  '  cp "signer-$SIGNER_ID/attestation-signer.env" "signer-$SIGNER_ID/attestation-signer.toml" docker-compose/',
+  '  chmod 600 docker-compose/attestation-signer.env',
+  indented(TRANSPORT_KEY_COMMANDS),
+  '  # 3. Print the identity with the real backend, network and transport key',
+  '  #    (the same Compose service and mounts the runtime uses).',
+  '  docker compose --project-directory docker-compose run --rm --no-deps -T attestation-signer \\',
+  '    -c /etc/dogeos-partner/attestation-signer.toml --print-identity > "signer-$SIGNER_ID/identity.json.new"',
+  '  mv "signer-$SIGNER_ID/identity.json.new" "signer-$SIGNER_ID/identity.json"',
+  '  # 4. Wrap it into descriptor.json (read-only for the existing signer).',
+  '  scrollsdk signer init --id "$SIGNER_ID" --network "$DOGE_NETWORK" --identity "signer-$SIGNER_ID/identity.json"',
+  ')',
+].join('\n')
+
+/**
+ * Phase B as one set -eu subshell: the signer is configured and started only
+ * if every step succeeds, so a bad transport key never reaches `up -d`.
+ * PREFLIGHT_FLAGS adds --require-production-ready in enforce mode.
+ */
+export const PARTNER_PHASE_B_COMMANDS = [
+  '(',
+  '  set -eu',
+  '  cp "signer-$SIGNER_ID/attestation-signer.env" "signer-$SIGNER_ID/attestation-signer.toml" docker-compose/',
+  '  chmod 600 docker-compose/attestation-signer.env',
+  indented(TRANSPORT_KEY_COMMANDS),
+  '  mkdir -p docker-compose/policy',
+  '  cp signer-policy-bundle/signer-policy.env docker-compose/signer-policy.env',
+  '  cp signer-policy-bundle/protocol_context.json docker-compose/policy/protocol_context.json',
+  `  # Production bundles also carry the aggregate verifying key.`,
+  `  if [ -e signer-policy-bundle/${ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE} ]; then`,
+  `    cp signer-policy-bundle/${ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE} docker-compose/policy/${ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE}`,
+  '  fi',
+  '  docker compose --project-directory docker-compose config --quiet',
+  '  docker compose --project-directory docker-compose up -d',
+  // eslint-disable-next-line no-template-curly-in-string -- shell parameter expansion
+  '  scrollsdk signer preflight --dir "signer-$SIGNER_ID" ${PREFLIGHT_FLAGS:-}',
+  ')',
+].join('\n')
+
 export function renderPartnerCommands(input: SignerPolicyBundleInput): string {
   const profile = signerRuntimePolicyProfile(input.enforcement)
   const signerRows = input.signers
@@ -167,12 +225,6 @@ export function renderPartnerCommands(input: SignerPolicyBundleInput): string {
 \`\`\`bash
 export SIGNER_ID='${signer.id}'
 \`\`\``).join('\n\n')
-  const verifierCopy = input.advanceL2Verifier
-    ? `cp signer-policy-bundle/${input.advanceL2Verifier.aggVerifyingKeyFile} docker-compose/policy/${ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE}`
-    : ''
-  const preflight = input.enforcement === 'enforce'
-    ? 'scrollsdk signer preflight --dir "signer-$SIGNER_ID" --require-production-ready'
-    : 'scrollsdk signer preflight --dir "signer-$SIGNER_ID"'
 
   return `# Partner attestation-signer commands
 
@@ -200,23 +252,9 @@ ${signerSelections}
 
 \`\`\`bash
 export DOGE_NETWORK='${input.network}'
-# 1. Signing key and env (add the KMS flags for a KMS backend). The env selects
-#    pull delivery and the transport key file below.
-scrollsdk signer init --id "$SIGNER_ID" --network "$DOGE_NETWORK"
-# 2. Copy the signing env and policy next to the Compose file. The transport
-#    key is a separate secret that authenticates this signer to the TSO: the
-#    block creates it locally only if absent, validates the whole file and
-#    installs it, failing as a unit.
-cp "signer-$SIGNER_ID/attestation-signer.env" "signer-$SIGNER_ID/attestation-signer.toml" docker-compose/
-chmod 600 docker-compose/attestation-signer.env
-${TRANSPORT_KEY_COMMANDS}
-# 3. Print the identity with the real backend, network and transport key
-#    (the same compose service and mounts the runtime uses):
-docker compose --project-directory docker-compose run --rm --no-deps -T attestation-signer \\
-  -c /etc/dogeos-partner/attestation-signer.toml --print-identity > "signer-$SIGNER_ID/identity.json"
-# 4. Wrap it into the descriptor (read-only for an existing signer):
-scrollsdk signer init --id "$SIGNER_ID" --network "$DOGE_NETWORK" \\
-  --identity "signer-$SIGNER_ID/identity.json"
+# KMS backend and production release pins, for example:
+# export SIGNER_INIT_FLAGS='--backend aws-kms --kms-key-id <arn> --kms-region <region> --allowed-release-version <v> --allowed-git-commit <sha>'
+${PARTNER_PHASE_A_COMMANDS}
 \`\`\`
 
 Send \`signer-$SIGNER_ID/descriptor.json\` to the bridge operator for
@@ -231,8 +269,10 @@ coordinated step: move the old file aside, create a new key, send the new
 descriptor, and switch the runtime key only after the bridge operator has
 updated the TSO signer directory.
 
-For KMS add its backend flags. Production operators must also pass the approved
-\`--allowed-release-version\` and full \`--allowed-git-commit\`.
+For KMS set \`SIGNER_INIT_FLAGS\` to its backend flags. Production operators
+must also pass the approved \`--allowed-release-version\` and full
+\`--allowed-git-commit\` there. Each phase is one block that stops at the first
+failing step.
 
 ## Phase B — install bundle and start signer
 
@@ -242,18 +282,7 @@ Incomplete optional policy starts fail-closed and leaves \`/ready\` at HTTP 503.
 
 \`\`\`bash
 export SIGNER_ID='<your signer id>'
-cp "signer-$SIGNER_ID/attestation-signer.env" docker-compose/
-cp "signer-$SIGNER_ID/attestation-signer.toml" docker-compose/
-chmod 600 docker-compose/attestation-signer.env
-${TRANSPORT_KEY_COMMANDS}
-mkdir -p docker-compose/policy
-cp signer-policy-bundle/signer-policy.env docker-compose/signer-policy.env
-cp signer-policy-bundle/protocol_context.json docker-compose/policy/protocol_context.json
-${verifierCopy}
-
-docker compose --project-directory docker-compose config --quiet
-docker compose --project-directory docker-compose up -d
-${preflight}
+${input.enforcement === 'enforce' ? "export PREFLIGHT_FLAGS='--require-production-ready'\n" : ''}${PARTNER_PHASE_B_COMMANDS}
 \`\`\`
 
 The signer must reach \`${input.tsoUrl}\` and, in proof modes, GET concrete

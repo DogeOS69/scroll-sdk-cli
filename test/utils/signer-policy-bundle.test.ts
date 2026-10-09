@@ -9,6 +9,8 @@ import type {SignerPolicyBundleInput} from '../../src/utils/signer-policy-bundle
 
 import {
   ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE,
+  PARTNER_PHASE_A_COMMANDS,
+  PARTNER_PHASE_B_COMMANDS,
   TRANSPORT_KEY_COMMANDS,
   renderPartnerCommands,
   renderSignerOperatorPolicyTemplate,
@@ -127,20 +129,22 @@ describe('signer policy bundle V2', () => {
     for (const expected of [
       `| \`partner-a\` | \`02${'66'.repeat(32)}\` | \`02${'88'.repeat(32)}\` |`,
       'https://tso.bridge.example',
-      // The transport key is generated locally, kept 0600 and mounted into the
-      // same compose service that prints the identity and later runs.
-      TRANSPORT_KEY_COMMANDS,
-      'run --rm --no-deps -T attestation-signer',
-      '--print-identity > "signer-$SIGNER_ID/identity.json"',
-      '--identity "signer-$SIGNER_ID/identity.json"',
+      // Each phase is one fail-propagating block, carried verbatim.
+      PARTNER_PHASE_A_COMMANDS,
+      PARTNER_PHASE_B_COMMANDS,
+      "export PREFLIGHT_FLAGS='--require-production-ready'",
       'https://proofs.bridge.example/proof-topology',
       'requires canonical protocol context in every mode',
-      'cp "signer-$SIGNER_ID/attestation-signer.toml" docker-compose/',
       'advance-l2-agg-verifying-key.bin',
-      '--require-production-ready',
     ]) expect(commands).to.include(expected)
     // Phase A and Phase B install the runtime key only through the validated block.
-    expect(commands.split(TRANSPORT_KEY_COMMANDS)).to.have.length(3)
+    expect(PARTNER_PHASE_A_COMMANDS).to.include('--print-identity')
+    expect(PARTNER_PHASE_B_COMMANDS).to.include('up -d')
+    for (const phase of [PARTNER_PHASE_A_COMMANDS, PARTNER_PHASE_B_COMMANDS]) {
+      expect(phase.startsWith('(\n  set -eu\n')).to.equal(true)
+      expect(phase).to.include(TRANSPORT_KEY_COMMANDS.split('\n').map(line => `  ${line}`).join('\n'))
+    }
+
     expect(commands).not.to.match(/cp [^\n]*transport\.key"? docker-compose\/(?:\n|$)/)
     // Signers dial out: no inbound signer URL or reachability probe remains.
     expect(commands).not.to.include('--endpoint')
@@ -198,4 +202,78 @@ describe('partner transport key commands', () => {
       fs.rmSync(root, {force: true, recursive: true})
     }
   })
+})
+
+describe('partner phase commands', () => {
+  let root: string
+  const key = `${'ab'.repeat(32)}\n`
+
+  function setup(): {bin: string; log: string; runtime: string; source: string} {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'partner-phase-'))
+    for (const dir of ['signer-partner-a', 'docker-compose', 'signer-policy-bundle', 'bin']) fs.mkdirSync(path.join(root, dir))
+    fs.writeFileSync(path.join(root, 'signer-partner-a/attestation-signer.env'), 'ATTESTATION_SIGNER_BACKEND=local\n')
+    fs.writeFileSync(path.join(root, 'signer-partner-a/attestation-signer.toml'), '# policy\n')
+    fs.writeFileSync(path.join(root, 'signer-policy-bundle/signer-policy.env'), '# bundle\n')
+    fs.writeFileSync(path.join(root, 'signer-policy-bundle/protocol_context.json'), '{}\n')
+    const log = path.join(root, 'calls.log')
+    // Stub docker and scrollsdk: log every call; print-identity emits a line.
+    for (const tool of ['docker', 'scrollsdk']) {
+      fs.writeFileSync(path.join(root, 'bin', tool), `#!/bin/sh\necho "${tool} $*" >> "${log}"\ncase "$*" in *--print-identity*) echo '{"identity":true}' ;; esac\n`, {mode: 0o755})
+    }
+
+    const runtime = path.join(root, 'docker-compose/transport.key')
+    fs.writeFileSync(runtime, key, {mode: 0o600})
+    return {bin: path.join(root, 'bin'), log, runtime, source: path.join(root, 'signer-partner-a/transport.key')}
+  }
+
+  function run(commands: string, bin: string) {
+    return spawnSync('bash', ['-c', commands], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {...process.env, DOGE_NETWORK: 'testnet', PATH: `${bin}${path.delimiter}${process.env.PATH}`, SIGNER_ID: 'partner-a'},
+    })
+  }
+
+  const calls = (log: string): string => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '')
+
+  afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
+
+  it('run Phase A and Phase B through identity, descriptor and start with a valid key', () => {
+    const {bin, log, runtime, source} = setup()
+    fs.writeFileSync(source, key, {mode: 0o600})
+    expect(run(PARTNER_PHASE_A_COMMANDS, bin).status).to.equal(0)
+    expect(fs.readFileSync(path.join(root, 'signer-partner-a/identity.json'), 'utf8')).to.equal('{"identity":true}\n')
+    expect(run(PARTNER_PHASE_B_COMMANDS, bin).status).to.equal(0)
+    const logged = calls(log)
+    expect(logged).to.include('--print-identity')
+    expect(logged).to.include('--identity signer-partner-a/identity.json')
+    expect(logged).to.include('up -d')
+    expect(logged).to.include('scrollsdk signer preflight')
+    // The existing env means the first signer init is skipped on this run.
+    expect(logged).not.to.match(/scrollsdk signer init --id partner-a --network testnet\s*$/m)
+    expect(fs.readFileSync(runtime, 'utf8')).to.equal(key)
+  })
+
+  for (const [label, prepare] of [
+    ['a corrupt source key', (source: string) => fs.writeFileSync(source, `${key}garbage\n`)],
+    ['an empty source key', (source: string) => fs.writeFileSync(source, '')],
+    ['a failing key generator', (_source: string, bin: string) => fs.writeFileSync(path.join(bin, 'openssl'), '#!/bin/sh\nexit 1\n', {mode: 0o755})],
+  ] as const) {
+    it(`stop both phases on ${label}: nonzero, runtime key intact, no identity, no start`, () => {
+      const {bin, log, runtime, source} = setup()
+      prepare(source, bin)
+      for (const phase of [PARTNER_PHASE_A_COMMANDS, PARTNER_PHASE_B_COMMANDS]) {
+        const result = run(phase, bin)
+        expect(result.status).not.to.equal(0)
+        expect(fs.readFileSync(runtime, 'utf8')).to.equal(key)
+      }
+
+      const logged = calls(log)
+      expect(logged).not.to.include('docker')
+      expect(logged).not.to.include('--identity')
+      expect(logged).not.to.include('preflight')
+      expect(fs.existsSync(path.join(root, 'signer-partner-a/identity.json'))).to.equal(false)
+      expect(fs.existsSync(path.join(root, 'docker-compose/policy'))).to.equal(false)
+    })
+  }
 })
