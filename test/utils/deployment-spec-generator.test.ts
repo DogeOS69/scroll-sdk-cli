@@ -101,7 +101,6 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
     infrastructure: { bootnodeCount: 1, provider: 'local', sequencerCount: 1 },
     metadata: { environment: 'testnet', name: 'test-deployment' },
     network: {
-      l1ChainId: 111_111,
       l1ChainName: 'DOGE',
       l2ChainId: 534_351,
       l2ChainName: 'DogeOS Testnet',
@@ -402,11 +401,11 @@ describe('deployment-spec-generator', () => {
       expect(result.errors.some(e => e.code === 'E003_MISSING_PROVIDER_CONFIG')).to.be.true;
     });
 
-    it('fails when chain IDs are missing', () => {
+    it('fails when the L2 chain ID is missing', () => {
       const spec = createMinimalSpec();
-      (spec.network as any).l1ChainId = undefined;
+      (spec.network as any).l2ChainId = undefined;
       const result = validateDeploymentSpec(spec);
-      expect(result.errors.some(e => e.path === 'network')).to.be.true;
+      expect(result.errors.some(e => e.path === 'network.l2ChainId')).to.be.true;
     });
 
     it('allows deployer address to be omitted when it can be derived from private key', () => {
@@ -660,18 +659,24 @@ describe('deployment-spec-generator', () => {
       )).to.be.true;
     });
 
-    it('fails when l1 chain ID does not match dogecoin network', () => {
-      const spec = createMinimalSpec();
-      spec.dogecoin.network = 'mainnet';
-      spec.network.l1ChainId = 111_111;
+    it('rejects a manually supplied L1 chain ID even when it matches the network', () => {
+      for (const chainId of [111_111, 1]) {
+        const spec = createMinimalSpec();
+        (spec.network as any).l1ChainId = chainId;
+        const result = validateDeploymentSpec(spec);
+        expect(result.valid).to.be.false;
+        expect(result.errors.some(error => error.path === 'network.l1ChainId' && error.message.includes('derived automatically'))).to.be.true;
+      }
+    });
 
-      const result = validateDeploymentSpec(spec);
-
-      expect(result.valid).to.be.false;
-      expect(result.errors.some(error =>
-        error.code === 'E010_DOGECOIN_NETWORK_MISMATCH' &&
-        error.path === 'network.l1ChainId'
-      )).to.be.true;
+    it('requires an explicit supported Dogecoin network instead of a chain ID', () => {
+      for (const network of [undefined, 'invalid-network']) {
+        const spec = createMinimalSpec();
+        (spec.dogecoin as any).network = network;
+        const result = validateDeploymentSpec(spec);
+        expect(result.valid).to.be.false;
+        expect(result.errors.some(error => error.path === 'dogecoin.network')).to.be.true;
+      }
     });
 
     it('warns when cubesigner TEE role is not set yet', () => {
@@ -803,6 +808,22 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateConfigToml', () => {
+    for (const [network, chainId] of [['mainnet', 1], ['testnet', 111_111], ['regtest', 5_555_555]] as const) {
+      it(`derives the ${network} L1 chain ID consistently across configuration and values`, () => {
+        const spec = createMinimalSpec();
+        spec.dogecoin.network = network;
+        expect(validateDeploymentSpec(spec).valid).to.be.true;
+        expect(normalizeDeploymentSpec(spec).network).not.to.have.property('l1ChainId');
+        const configs = generateAllConfigs(spec);
+        expect((toml.parse(configs['config.toml']) as any).general.CHAIN_ID_L1).to.equal(chainId);
+        expect((toml.parse(configs['protocol_seed.toml']) as any).protocol.dogecoin_chain_id).to.equal(chainId);
+        const values = generateValuesFiles(spec);
+        expect((yaml.load(values['contracts-production.yaml']) as any).configMaps.env.data.SCROLL_CHAIN_ID_L1).to.equal(String(chainId));
+        const frontends = (yaml.load(values['frontends-config.yaml']) as any).configMaps['frontend-config'].data['frontend-config'];
+        expect(frontends).to.include(`REACT_APP_CHAIN_ID_L1 = ${chainId}\n`);
+      });
+    }
+
     it('converts deposit satoshis to contract wei without changing withdrawal amounts', () => {
       const spec = createMinimalSpec();
       spec.bridge.fees = {depositFeeSats: '100000000', minWithdrawalAmountWei: '1000000000000000000', withdrawalFeeWei: '100000000000000000'};

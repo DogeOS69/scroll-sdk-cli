@@ -9,6 +9,8 @@ import type {DogeConfig} from '../../src/types/doge-config.js'
 import type {ProofMaterialsV1} from '../../src/types/proof-materials.js'
 import type {ProofDeploymentContract} from '../../src/utils/proof-deployment-contract.js'
 
+import {importSignerReceipts} from '../../src/utils/preparation-signer-receipts.js'
+import {writeProofDeploymentContract} from '../../src/utils/proof-deployment-contract.js'
 import {proofEnforcementReadiness} from '../../src/utils/proof-enforcement-readiness.js'
 import {prepareProofMaterials, readProofMaterials} from '../../src/utils/proof-materials.js'
 import {renderProofTopologySource} from '../../src/utils/proof-topology-compiler.js'
@@ -156,6 +158,53 @@ describe('real bake worker identity import', () => {
     expect(proofEnforcementReadiness(root, contract, config).blockers.join(' ')).to.include('requires release and attachment receipts')
     delete config.cubesigner!.mode
     expect(proofEnforcementReadiness(root, contract, config).blockers.join(' ')).to.include('explicit CubeSigner policy mode')
+  })
+
+  it('waits for partner receipts, rejects mismatched evidence and imports checked bytes', async () => {
+    const prepared = prepareProofMaterials(fixture(root).options)
+    const write = (relative: string, content: string) => {
+      const file = path.join(root, relative)
+      fs.mkdirSync(path.dirname(file), {recursive: true})
+      fs.writeFileSync(file, content)
+      return file
+    }
+
+    const aws = write('.data/proof-aws.json', JSON.stringify({
+      artifactReadTransport: {publicEndpointUrl: 'https://s3.us-west-2.amazonaws.com', publicReadMode: 'existing-public-s3', publicStatus: 'operator-managed-unverified'},
+      artifactStore: {bucket: 'proof-bucket', keyPrefix: 'proofs', region: 'us-west-2'},
+      kubernetes: {awsRegion: 'us-west-2', deploymentAlias: 'test', eksCluster: 'test', namespace: 'test'},
+      schema: 'dogeos/proof-aws/v4', secret: {name: 'test-secret', region: 'us-west-2'},
+      serviceAccounts: {proofCoordinator: {name: 'proof-coordinator', roleArn: 'arn:aws:iam::123456789012:role/test-pc'}, withdrawalProcessor: {name: 'withdrawal-processor', roleArn: 'arn:aws:iam::123456789012:role/test-wp'}},
+    }))
+    const publication = write('.data/publication.json', JSON.stringify({artifactStore: {bucket: 'proof-bucket', keyPrefix: 'proofs/proof-programs/test', region: 'us-west-2'}, bundleId: 'test', coreRevision: 'c'.repeat(40), proofTopologyBundleRevision: 'b'.repeat(64), schema: 'scrollsdk/proof-program-publication/v1', verification: {anonymousHttpReadback: 'passed', authenticatedS3Readback: 'passed'}}))
+    const configPath = write('.data/doge-config.toml', toml.stringify({attestationSigner: {activeSignerIds: ['partner-a', 'partner-b'], external: [{id: 'partner-a', publicKey: 'public-key-a'}, {id: 'partner-b', publicKey: 'public-key-b'}], mode: 'external'}, cubesigner: {mode: 'transport_only', roles: []}, network: 'testnet', wallet: {path: '.data/wallet.json'}}))
+    const component = (name: string) => ({enabled: true, valuesFile: write(`values/${name}.yaml`, 'env: []\n')})
+    const manifest = write('.data/topology/bundle-manifest-v1.json', '{}')
+    writeProofDeploymentContract({deploymentDir: root, enforcement: 'enforce', ethDaSubmitter: component('eth-da-submitter'), generation: 'real', intentSource: {kind: 'doge-config', path: configPath, sha256: hash(fs.readFileSync(configPath))}, materialsReceipt: prepared.receiptPath, mode: 'active', proofAwsConfig: aws, proofCoordinator: component('proof-coordinator'), proverWorker: {...component('prover-worker'), enabled: false}, publicationReceipt: publication, topology: {bundleDir: path.dirname(manifest), bundleManifest: manifest, bundleRevision: 'b'.repeat(64), resolvedSidecar: write('.data/topology/resolved-v2.json', '{}')}, tsoValuesFile: component('tso-service').valuesFile, withdrawalProcessor: component('withdrawal-processor'), worker: {contractFile: write('.data/topology/prover-worker-v1.json', '{}'), kind: 'compiled-external'}})
+    const policy = JSON.stringify({deployment: {topologyRevision: 'b'.repeat(64)}, enforcement: 'enforce', protocolContext: {sha256: `sha256:${hash('{}')}`}})
+    write('signer-policy-bundle/signer-policy.json', policy)
+    const bundle = JSON.stringify({files: [{file: 'signer-policy.json', sha256: `sha256:${hash(policy)}`, sizeBytes: Buffer.byteLength(policy)}], schema: 'dogeos/attestation-signer-policy-manifest/v1'})
+    write('signer-policy-bundle/signer-policy-manifest.json', bundle)
+    const receipt = (index: number) => ({bundleManifestSha256: `sha256:${hash(bundle)}`, coreRevision: 'c'.repeat(40), policyMode: 'enforce', publicKey: index === 1 ? 'public-key-a' : 'public-key-b', redactedConfigSha256: `sha256:${'d'.repeat(64)}`, result: 'passed', schema: 'dogeos/attestation-signer-policy-validation/v1', signerId: index === 1 ? 'partner-a' : 'partner-b', validatedAt: new Date().toISOString()})
+    const attempt = async () => {try {await importSignerReceipts(root); return ''} catch (error) {return (error as Error).message}}
+    expect(await attempt()).to.include('Waiting for partner')
+    const request = JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/inputs/signer-receipts/request.json'), 'utf8'))
+    expect(request.receipts.map((item: {signerId: string}) => item.signerId)).to.deep.equal(['partner-a', 'partner-b'])
+    write('.scrollsdk/inputs/signer-receipts/1.json', JSON.stringify(receipt(1)))
+    expect(await attempt()).to.include('partner-b')
+    const original = fs.readFileSync(configPath, 'utf8')
+    for (const change of [{bundleManifestSha256: `sha256:${'f'.repeat(64)}`}, {publicKey: 'wrong-key'}, {coreRevision: 'e'.repeat(40)}, {policyMode: 'observe'}, {result: 'failed'}, {signerId: 'partner-a'}, {validatedAt: 'invalid'}]) {
+      write('.scrollsdk/inputs/signer-receipts/2.json', JSON.stringify({...receipt(2), ...change}))
+      expect(await attempt()).to.include('Partner validation cannot be accepted')
+      expect(fs.readFileSync(configPath, 'utf8')).to.equal(original)
+      expect(fs.existsSync(path.join(root, '.data/signer-policy-validation'))).to.equal(false)
+    }
+
+    write('.scrollsdk/inputs/signer-receipts/2.json', JSON.stringify(receipt(2)))
+    expect(await attempt()).to.equal('')
+    const config = toml.parse(fs.readFileSync(configPath, 'utf8')) as unknown as DogeConfig
+    expect(config.attestationSigner!.policyValidation!.receipts).to.have.length(2)
+    for (const ref of config.attestationSigner!.policyValidation!.receipts) expect(hash(fs.readFileSync(path.join(root, ref.path)))).to.equal(ref.sha256)
   })
 
   it('preserves the real bundle through receipt reload and selects it as the compiler input', () => {

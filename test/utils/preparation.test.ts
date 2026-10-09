@@ -83,6 +83,27 @@ describe('resumable preparation plan', () => {
     expect((await makePlan()).id).to.equal(plan.id)
   })
 
+  it('locks SDK HEAD when omitted and keeps using it after checkout HEAD changes', async () => {
+    const file = path.join(root, 'intent.yaml')
+    const spec = yaml.load(fs.readFileSync(file, 'utf8')) as DeploymentSpec
+    const revision = spec.templates!.sdkRevision
+    delete spec.templates
+    fs.writeFileSync(file, yaml.dump(spec))
+    const plan = await makePlan()
+    const frozen = JSON.parse(fs.readFileSync(path.join(deployment, '.scrollsdk/intent.json'), 'utf8'))
+    expect(frozen.templates.sdkRevision).to.equal(revision)
+    fs.writeFileSync(path.join(sdk, 'examples/values/scroll-monitor-production.yaml'), '# changed commit\n')
+    execFileSync('git', ['-C', sdk, 'add', 'examples'], {stdio: 'pipe'})
+    execFileSync('git', ['-C', sdk, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Changed'], {stdio: 'pipe'})
+    const runner = new CommandPreparationRunner()
+    await runner.run(plan.steps[0], frozen, deployment, plan)
+    expect(JSON.parse(fs.readFileSync(path.join(deployment, '.data/spec-bootstrap.json'), 'utf8')).sdkRevision).to.equal(revision)
+    expect(fs.readFileSync(path.join(deployment, 'values/scroll-monitor-production.yaml'), 'utf8')).to.equal('# fixture\n')
+    spec.templates = {sdkRevision: revision}
+    fs.writeFileSync(file, yaml.dump(spec))
+    expect((await makePlan()).id).to.equal(plan.id)
+  })
+
   it('retains a private environment file reference and reloads it on resume without shell evaluation', async () => {
     const name = 'PREPARATION_TEST_PRIVATE_VALUE'
     const file = path.join(root, 'environment')
@@ -205,6 +226,35 @@ describe('resumable preparation plan', () => {
     expect(() => validatePreparation(spec)).to.throw('S3 proof artifact store')
     spec.proofTopology!.active!.artifactStore = {bucket: 'test-proof-bucket', endpointUrl: 'https://s3.example.invalid', kind: 's3_compatible', region: 'us-west-2'}
     expect(() => validatePreparation(spec)).not.to.throw()
+  })
+
+  it('selects explicit proof AWS effects and retains publication during evidence regeneration', async () => {
+    const spec = fixture()
+    spec.infrastructure.aws = {accountId: '123456789012', eksClusterName: 'test-cluster', region: 'us-west-2'}
+    spec.preparation!.proofAws = {action: 'create', publicReadMode: 'direct-s3'}
+    validatePreparation(spec)
+    expect(preparationSteps(spec).find(step => step.id === 'proof-aws')!.effect).to.equal('cloud')
+    const plan = await makePlan()
+    const calls: string[][] = []
+    const runner = new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)})
+    await runner.run(preparationSteps(spec).find(step => step.id === 'proof-aws')!, spec, deployment, plan)
+    expect(calls[0]).to.include.members(['proof-aws-init', '--yes', '--artifact-public-read-mode', 'direct-s3'])
+    spec.preparation!.proofAws.action = 'reuse'
+    expect(() => validatePreparation(spec)).to.throw('existing-public-s3')
+    spec.preparation!.proofAws.publicReadMode = 'existing-public-s3'
+    validatePreparation(spec)
+    expect(preparationSteps(spec).find(step => step.id === 'proof-aws')!.effect).to.equal('read')
+    spec.preparation!.inputs = [{destination: '.data/proof-aws.json', source: '../proof-aws.json'}]
+    expect(() => validatePreparation(spec)).to.throw('generates its own receipt')
+    delete spec.preparation!.inputs
+    spec.proofTopology!.enforcement = 'enforce'
+    spec.preparation!.proofPublication = {}
+    const steps = preparationSteps(spec)
+    expect(steps.map(step => step.id).slice(-4)).to.deep.equal(['signer-policy', 'signer-receipts', 'charts-validated', 'proof-check'])
+    fs.mkdirSync(path.join(deployment, '.data'), {recursive: true})
+    fs.writeFileSync(path.join(deployment, '.data/proof-materials-v1.json'), '{}')
+    await runner.run(steps.find(step => step.id === 'charts-validated')!, spec, deployment, plan)
+    expect(calls[1]).to.include.members(['prep-charts', '--proof-materials-receipt', '.data/proof-materials-v1.json', '--proof-publication-receipt', '.data/proof-program-publication-v1.json'])
   })
 
   it('rejects external inputs that replace the canonical protocol context', () => {

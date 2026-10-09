@@ -38,6 +38,15 @@ field, prep leaves the existing chart policy alone. This projection does not
 grant writer permission, fund an account or execute a fee update. Other sampling
 and update-policy settings remain template-owned.
 
+## Dogecoin network selection
+
+The operator selects only `dogecoin.network: mainnet`, `testnet` or `regtest`.
+The CLI derives the protocol L1 chain ID as 1, 111111 or 5555555 respectively
+for contract/genesis configuration, protocol seed, frontend and contract Helm
+values. `network.l1ChainId` is no longer a supported spec field; remove it from
+existing specs. `network.l2ChainId` remains operator-selected, and the separate
+Ethereum DA chain ID keeps its existing configuration.
+
 ## Bridge fee units
 
 The examples select a 1 DOGE deposit fee (`depositFeeSats: "100000000"`),
@@ -200,7 +209,8 @@ scrollsdk setup gen-keystore --plan --json
 scrollsdk setup gen-keystore -N --json
 ```
 
-The spec must contain `templates.sdkRevision` (a full 40-character SDK commit),
+The spec may override `templates.sdkRevision` with a full 40-character SDK commit.
+Otherwise `--sdk-dir` committed HEAD is selected and locked by plan. The spec requires
 `identities`, `proofTopology`, and explicit Reth image tags for RPC and each
 selected node role. The commit must exist in `--sdk-dir`. Missing bootstrap
 inputs are reported together before files are written. The CLI reads committed

@@ -336,7 +336,7 @@ function getDbPassword(spec: DeploymentSpec, key: keyof NonNullable<DeploymentSp
   return spec.database.credentials?.[key] || ''
 }
 
-function resolveDogecoinChainId(network: DeploymentSpec['dogecoin']['network']): number {
+export function resolveDogecoinChainId(network: DeploymentSpec['dogecoin']['network']): number {
   switch (network) {
     case 'mainnet': {
       return 1
@@ -348,6 +348,10 @@ function resolveDogecoinChainId(network: DeploymentSpec['dogecoin']['network']):
 
     case 'regtest': {
       return 5_555_555
+    }
+
+    default: {
+      throw new Error('dogecoin.network must be mainnet, testnet or regtest')
     }
   }
 }
@@ -620,24 +624,21 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     })
   }
 
-  // Network validation
-  if (!spec.network?.l1ChainId || !spec.network?.l2ChainId) {
+  // The Dogecoin L1 chain ID is a protocol constant derived from dogecoin.network.
+  if (!spec.network?.l2ChainId) {
     errors.push({
       code: 'E002_MISSING_REQUIRED_FIELD',
-      message: 'L1 and L2 chain IDs are required',
-      path: 'network'
+      message: 'L2 chain ID is required',
+      path: 'network.l2ChainId',
     })
   }
 
-  if (spec.dogecoin?.network && spec.network?.l1ChainId) {
-    const expectedDogecoinChainId = resolveDogecoinChainId(spec.dogecoin.network)
-    if (spec.network.l1ChainId !== expectedDogecoinChainId) {
-      errors.push({
-        code: 'E010_DOGECOIN_NETWORK_MISMATCH',
-        message: `network.l1ChainId (${spec.network.l1ChainId}) does not match dogecoin.network ${spec.dogecoin.network} (${expectedDogecoinChainId})`,
-        path: 'network.l1ChainId',
-      })
-    }
+  if (!['mainnet', 'regtest', 'testnet'].includes(spec.dogecoin?.network)) {
+    errors.push({
+      code: 'E010_DOGECOIN_NETWORK_MISMATCH',
+      message: 'dogecoin.network must be mainnet, testnet or regtest; the L1 chain ID is derived automatically',
+      path: 'dogecoin.network',
+    })
   }
 
   // Accounts validation
@@ -1174,7 +1175,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       })
     }
 
-    if (proofCoordinator.s3AuthMode === 'irsa') {
+    if (proofCoordinator.s3AuthMode === 'irsa' && !['create', 'reuse'].includes(spec.preparation?.proofAws?.action ?? '')) {
       for (const [path, annotations] of [
         ['proofCoordinator.serviceAccount.annotations', proofCoordinator.serviceAccount?.annotations],
         [
@@ -1301,7 +1302,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
 
   // [general] section
   config.general = {
-    CHAIN_ID_L1: spec.network.l1ChainId,
+    CHAIN_ID_L1: resolveDogecoinChainId(spec.dogecoin.network),
     CHAIN_ID_L2: spec.network.l2ChainId,
     CHAIN_NAME_L1: spec.network.l1ChainName,
     CHAIN_NAME_L2: spec.network.l2ChainName,

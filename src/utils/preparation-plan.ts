@@ -10,7 +10,8 @@ import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec
 import {usesDstackPostgres} from './dstack-database.js'
 import {AwaitingInput, digest, loadPreparationEnv, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolvePreparationProofRelease} from './preparation-release.js'
-import {planSpecBootstrap} from './spec-bootstrap.js'
+import {planSpecBootstrap, resolveSdkRevision} from './spec-bootstrap.js'
+import {resolveCubesignerIdentity} from './spec-cubesigner.js'
 
 export interface PreparationStep {effect: 'chain' | 'cloud' | 'local' | 'read'; id: string; retry: 'reconcile' | 'safe'; title: string}
 export interface PreparationPlan {deploymentName: string; envFile?: string; id: string; schema: 'scrollsdk/preparation/v1'; sdkDirectory: string; specHash: string; steps: PreparationStep[]}
@@ -30,7 +31,7 @@ export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
   add('bootstrap', 'Generate configuration from pinned SDK templates')
   add('identities', 'Prepare declared service identities and deployment account', JSON.stringify(spec.identities).includes('aws_kms') ? 'cloud' : 'local')
   if (p.archive) add('archive', 'Reconcile declared DA archive resources and writer access', 'cloud')
-  if (p.proofAws) add('proof-aws', 'Provision proof artifact store and workload access', 'cloud')
+  if (p.proofAws) add('proof-aws', p.proofAws.action === 'reuse' ? 'Discover existing proof artifact store and workload access' : 'Provision proof artifact store and workload access', p.proofAws.action === 'reuse' ? 'read' : 'cloud')
   if (spec.dstackController && spec.dstackController.enabled !== false) {
     add('dstack', 'Prepare dstack controller credentials and config')
     if (p.dstack?.initializeDatabase) add('dstack-db', 'Initialize dstack in the existing PostgreSQL server', 'cloud')
@@ -69,6 +70,11 @@ export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
 
   add('secrets', 'Generate private runtime Secrets')
   add('signer-policy', 'Export partner signer policy bundle')
+  if (spec.proofTopology?.enforcement === 'enforce') {
+    add('signer-receipts', 'Wait for and validate partner policy receipts')
+    add('charts-validated', 'Regenerate configuration with validated partner evidence')
+  }
+
   add('proof-check', 'Validate proof configuration and required evidence')
   if (p.secretUpload) add('secret-upload', 'Upload declared runtime Secrets', 'cloud')
   return steps
@@ -93,6 +99,9 @@ export function validatePreparation(spec: DeploymentSpec): void {
   if (p.proofPublication && Boolean(p.proofPublication.release) !== Boolean(p.proofPublication.releaseSha256)) throw new Error('Publication release and releaseSha256 must be supplied together')
   if (p.proofPublication && (!/^[\da-f]{64}$/.test(p.proofPublication.releaseSha256 ?? p.proofRelease?.sha256 ?? '') || spec.proofTopology?.generation !== 'real')) throw new Error('Publication requires a pinned release manifest and real generation')
   if (p.archive && !['configure', 'create'].includes(p.archive.action)) throw new Error('Archive action must be configure or create')
+  if (p.proofAws && !['create', 'reuse'].includes(p.proofAws.action)) throw new Error('proofAws.action must select create or reuse')
+  if (p.proofAws?.action === 'reuse' && p.proofAws.publicReadMode === 'direct-s3') throw new Error('Reuse proof resources with existing-public-s3 or existing-gateway; direct-s3 manages bucket policy')
+  if (p.proofAws?.action === 'create' && (p.proofAws.coordinatorRoleName || p.proofAws.withdrawalRoleName)) throw new Error('Existing role names require proofAws.action: reuse')
   if (p.proofAws && !['direct-s3', 'existing-gateway', 'existing-public-s3'].includes(p.proofAws.publicReadMode)) throw new Error('Invalid proof public-read mode')
   if (p.secretUpload?.provider === 'aws' && !p.secretUpload.awsRegion && !spec.infrastructure.aws?.region) throw new Error('AWS Secret upload requires an explicit region in secretUpload or infrastructure.aws')
   if (p.secretUpload && spec.dstackController?.enabled !== false && spec.dstackController && !p.secretUpload.kubeContext) throw new Error('Dstack Secret upload requires an explicit Kubernetes context')
@@ -136,6 +145,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
   }
 
   for (const item of p.inputs ?? []) {
+    if (p.proofAws && item.destination === '.data/proof-aws.json') throw new Error('proofAws generates its own receipt; remove proof-aws.json from external inputs')
     if (!item.source || !/^(\.data|secrets)\//.test(item.destination) || /(?:^|\/)(?:doge-config\.toml|setup_defaults\.toml|protocol_seed\.toml|protocol_context\.json|GenerateBridgeInfo\.toml|bridge\.json|production-.*\.json|output-.*|genesis\.json)$/.test(item.destination)) throw new Error('External inputs may not overwrite managed Bridge or deployment state')
     localPath('/deployment', item.destination)
   }
@@ -164,6 +174,8 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   loadPreparationEnv(envFile)
   let spec: DeploymentSpec
   try {spec = resolveDeploymentSpecEnvRefs(loadDeploymentSpec(path.resolve(options.spec)))} catch {throw new Error('Cannot load DeploymentSpec; check field names, YAML syntax and environment references (values omitted)')}
+  spec.templates = {sdkRevision: resolveSdkRevision(options.sdkDirectory, spec.templates?.sdkRevision)}
+  spec = resolveCubesignerIdentity(spec)
   spec = await resolvePreparationProofRelease(spec, options.output)
   const validation = validateDeploymentSpec(spec)
   if (!validation.valid) throw new Error(`Invalid spec fields: ${validation.errors.map(e => `${e.path} (${e.code})`).join(', ')}`)

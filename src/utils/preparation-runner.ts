@@ -12,6 +12,8 @@ import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
 import {parseDatabaseUrl} from './dstack-database.js'
 import {checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
 import {AwaitingInput, localPath, privateWrite} from './preparation-io.js'
+import {reuseProofAws} from './preparation-proof-aws.js'
+import {importSignerReceipts} from './preparation-signer-receipts.js'
 import {exportCoordinatorMaterializers} from './proof-image-tools.js'
 import {readProofMaterials} from './proof-materials.js'
 import {readProofSoftwareRelease} from './proof-software-release.js'
@@ -63,7 +65,8 @@ export class CommandPreparationRunner implements PreparationRunner {
       }
 
       case 'proof-aws': {
-        await command(['proof-aws-init', '-N', '--yes', '--aws-region', spec.infrastructure.aws!.region, '--eks-cluster', spec.infrastructure.aws!.eksClusterName!, '--namespace', spec.infrastructure.namespace ?? 'default', '--deployment-alias', spec.metadata.name, '--artifact-public-read-mode', p.proofAws!.publicReadMode, ...optional('artifact-public-endpoint-url', p.proofAws!.publicEndpointUrl), ...optional('aws-profile', p.proofAws!.awsProfile)]); break
+        if (p.proofAws!.action === 'reuse') {reuseProofAws(root, spec); break}
+        await command(['proof-aws-init', '-N', '--yes', '--aws-region', spec.infrastructure.aws!.region, '--eks-cluster', spec.infrastructure.aws!.eksClusterName!, '--namespace', spec.infrastructure.namespace ?? 'default', '--deployment-alias', spec.metadata.name, '--artifact-public-read-mode', p.proofAws!.publicReadMode, ...optional('artifact-public-endpoint-url', p.proofAws!.publicEndpointUrl), ...optional('aws-profile', p.proofAws!.awsProfile), ...optional('secret-name', p.proofAws!.secretName), ...optional('coordinator-service-account', spec.proofCoordinator?.serviceAccount?.name), ...optional('withdrawal-service-account', spec.proofCoordinator?.withdrawalProcessorServiceAccount?.name)]); break
       }
 
       case 'dstack': {
@@ -178,11 +181,11 @@ export class CommandPreparationRunner implements PreparationRunner {
         break
       }
 
-      case 'charts': case 'charts-published': {
+      case 'charts': case 'charts-published': case 'charts-validated': {
         const args = ['prep-charts', '-N', '--skip-auth-check', '--skip-l2-contract-deployment-block']
         const receipt = p.proofMaterials.receipt ?? '.data/proof-materials-v1.json'
         if (fs.existsSync(path.resolve(root, receipt))) args.push('--proof-materials-receipt', receipt)
-        if (step.id === 'charts-published') args.push('--proof-publication-receipt', '.data/proof-program-publication-v1.json')
+        if (p.proofPublication && step.id !== 'charts') args.push('--proof-publication-receipt', '.data/proof-program-publication-v1.json')
         await command(args); break
       }
 
@@ -202,6 +205,7 @@ export class CommandPreparationRunner implements PreparationRunner {
       }
 
       case 'signer-policy': {await command(['export-signer-policy']); break}
+      case 'signer-receipts': {await importSignerReceipts(root); break}
       case 'proof-check': {await command(['proof-config-check']); break}
       case 'secret-upload': {
         const upload = p.secretUpload!

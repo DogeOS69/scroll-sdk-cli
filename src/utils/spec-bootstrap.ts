@@ -30,10 +30,17 @@ export function mergeBootstrapValues(template: string | undefined, generated: st
   return yaml.dump(merge(yaml.load(template), yaml.load(generated)), {lineWidth: -1, noRefs: true})
 }
 
+/** Resolve a checkout once; callers persist this full commit in the frozen plan. */
+export function resolveSdkRevision(sdkDirectory: string, override?: string): string {
+  if (override !== undefined && !/^[\da-f]{40}$/.test(override)) throw new Error('templates.sdkRevision must be a full SDK commit hash when supplied')
+  try {
+    return execFileSync('git', ['-C', sdkDirectory, 'rev-parse', '--verify', `${override ?? 'HEAD'}^{commit}`], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).trim()
+  } catch {throw new Error('Cannot resolve SDK commit in --sdk-dir')}
+}
+
 /** Build a reviewable file plan from committed templates, never a mutable working tree. */
 export function planSpecBootstrap(spec: DeploymentSpec, sdkDirectory?: string): Record<string, string> {
   const errors: string[] = []
-  if (!spec.templates?.sdkRevision || !/^[\da-f]{40}$/.test(spec.templates.sdkRevision)) errors.push('templates.sdkRevision must pin a full SDK commit hash')
   if (!sdkDirectory) errors.push('--sdk-dir must point to a local SDK checkout containing that commit')
   if (!spec.identities) errors.push('identities must explicitly declare service and node identity operations')
   if (!spec.proofTopology) errors.push('proofTopology must explicitly select disabled/active, mock/real and observe/enforce')
@@ -43,7 +50,7 @@ export function planSpecBootstrap(spec: DeploymentSpec, sdkDirectory?: string): 
   }
 
   if (errors.length > 0) throw new Error(`Bootstrap inputs are incomplete:\n- ${errors.join('\n- ')}`)
-  const revision = spec.templates!.sdkRevision
+  const revision = resolveSdkRevision(sdkDirectory!, spec.templates?.sdkRevision)
   const git = (...args: string[]): string => execFileSync('git', ['-C', sdkDirectory!, ...args], {encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe']})
   let listing: string
   try {listing = git('ls-tree', '-r', revision, '--', 'examples/')} catch {throw new Error('Pinned SDK commit is unavailable in --sdk-dir')}

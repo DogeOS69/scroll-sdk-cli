@@ -1,6 +1,6 @@
 # Environment variable placeholders: see deployment.env.example beside this file.
 # Fresh-directory bootstrap and explicit local/KMS identity intent:
-# See docs/spec-projection.md. --bootstrap requires templates.sdkRevision,
+# See docs/spec-projection.md. --bootstrap requires --sdk-dir (committed HEAD by default),
 # complete identities, proofTopology and explicit approved Reth image tags.
 # DogeOS Deployment Specification
 # Deployment intent used to generate configuration. Prepare cloud resources separately.
@@ -73,7 +73,6 @@ infrastructure:
 network:
   l1ChainName: "DOGE"
   l2ChainName: "DogeOS Devnet"
-  l1ChainId: 111111
   l2ChainId: 221122
   tokenSymbol: DOGE
 
@@ -96,6 +95,7 @@ accounts:
     address: "$ENV:OWNER_ADDRESS"
 
 dogecoin:
+  # L1 chain ID is derived from this network; do not specify network.l1ChainId.
   network: testnet
   # Synthetic L1 starts using real Dogecoin block parents at this height.
   # The Dogecoin indexer start height should be lower; bridge-init derives it as H - 1.

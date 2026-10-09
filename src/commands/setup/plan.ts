@@ -9,7 +9,7 @@ export default class SetupPlan extends Command {
     'env-file': Flags.string({description: 'Private NAME=value file; referenced again by apply, never executed as shell'}),
     json: Flags.boolean({default: false}),
     output: Flags.string({description: 'New private deployment directory', required: true}),
-    'sdk-dir': Flags.string({description: 'SDK checkout containing templates.sdkRevision', required: true}),
+    'sdk-dir': Flags.string({description: 'SDK checkout; plan locks committed HEAD unless templates.sdkRevision overrides it', required: true}),
     spec: Flags.string({description: 'DeploymentSpec YAML; environment references must resolve in this process', required: true}),
   }
 

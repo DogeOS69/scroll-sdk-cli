@@ -8,8 +8,8 @@ A complete operator starter is available in the scroll-sdk repository at
 `examples/deployment-spec.example.yaml`, with the companion guide
 `examples/deployment-spec.md`. It selects testnet production Bridge preparation
 and active/real/enforce proofs; it generates real identities from an approved
-proof release after the protocol context exists. Partner enforcing-policy evidence
-return is still a separate integration boundary, documented in the SDK guide.
+proof release after the protocol context exists. Apply waits for partner enforcing-policy receipts, verifies them and regenerates
+the configuration before the final enforcing check.
 
 ## Prepare the private environment file
 
@@ -85,8 +85,10 @@ private directory/file permissions. The terminal/JSON summary excludes credentia
 
 ## Additional spec intent
 
-The existing `templates`, `identities`, `proofTopology`, image pins and service
-configuration remain required. Add `preparation`, with explicit operations and
+The existing `identities`, `proofTopology`, image pins and service configuration
+remain required. `templates` is optional: plan locks the committed HEAD of
+`--sdk-dir`; `templates.sdkRevision` is an explicit full-commit override. Apply
+uses that frozen revision even after the checkout changes. Add `preparation`, with explicit operations and
 external file references. Paths are relative to the deployment directory unless
 absolute; they are not relative to the source spec. Descriptor and material files
 may arrive after planning. User-supplied artifacts are inputs, not generated facts.
@@ -117,9 +119,11 @@ preparation:
 ```
 
 The image digest above was pulled as `v0.3.0-beta.6` during local verification.
-Select and review the intended release for your environment. `bridge.teePubkey`,
-`bridge.thresholds.recovery` and a future block-height `bridge.timelock` must also
-be explicit. Attestation public keys and their order come from the imported
+Select and review the intended release for your environment. Select
+`signing.cubesigner.identity: {roleId: ...}` (plus `keyId` for multi-key roles);
+plan uses the authenticated `cs` CLI to query membership and normalize/freeze the
+TEE public key. An explicit `bridge.teePubkey` remains supported. The recovery
+threshold and future block-height `bridge.timelock` must also be explicit. Attestation public keys and their order come from the imported
 partner descriptors and selected initial keyset. Recovery and TEE keys are never
 derived from `bridge.seedString` in production mode. Omit that test-helper field
 from a production spec; production output contains no helper funding placeholders.
@@ -208,7 +212,8 @@ interface. There is deliberately no force-retry switch for broadcasts.
 | Spec field | Effect |
 | --- | --- |
 | `archive.action: configure/create` | Reconcile archive configuration/writer permissions; create permits bucket creation. Optional `awsProfile` and `writerRoleArn`. |
-| `proofAws` | Provision proof AWS resources using the declared EKS cluster, region, store and explicit `publicReadMode`; optional gateway endpoint/profile. |
+| `proofAws.action: create` | Provision/reconcile the declared proof store, workload roles and token Secret; generate `.data/proof-aws.json`. Explicit `publicReadMode` selects delivery policy. Role ARNs are generated, not hand-entered. |
+| `proofAws.action: reuse` | Query existing resources only, verify account/region/EKS trust/current Secret metadata, and generate the same resource record. Use `existing-public-s3` or `existing-gateway`. Optional `coordinatorRoleName`, `withdrawalRoleName`, `secretName` select existing resources; otherwise names derive from alias/cluster. Permissions and external reachability are still checked by publication. |
 | `proofMaterials.mode: mock` | Invoke the material tool using the topology compiler pin and explicit `mockWorkerImage`, then derive topology identities from the receipt. |
 | `proofRelease` | Select a version. Plan downloads the official manifest/checksum and freezes compiler/Worker pins; apply runs the context-bound producer, exports materializers and checks the CUDA image before importing real materials. |
 | `proofMaterials.mode: real` | With `proofRelease`, consume the generated receipts and materializers. Without it, import explicitly supplied `preparationReceipt`, materializers and Worker receipt. |
@@ -243,9 +248,9 @@ Receipt-derived topology currently requires an S3 proof artifact store. For a
 local-filesystem proof store, supply an existing explicit topology and compiler
 identity without a material receipt.
 
-Complete real proof baking, CubeSigner account/session authorization and partner
-Phase A remain producer/owner operations. Their files can be declared as inputs;
-apply waits for them instead of inventing facts. The workflow does not create an
+Real proof baking is performed by apply using the selected producer image.
+CubeSigner account/session authorization and partner Phase A remain owner
+operations. Apply waits for external inputs instead of inventing facts. The workflow does not create an
 EKS cluster, rent GPU capacity or install releases.
 
 ## State and outcomes
@@ -304,9 +309,35 @@ imports `.data/proof-materials-v1.json`. Operators do not invent identity hashes
 or copy a generic compiler identity from another deployment. Image/receipt
 mismatches fail validation. These image checks do not execute a GPU proof.
 
-The current workflow exports signer policy but does not yet import the returned
-partner validation references and regenerate their bound configuration. An
-`enforce` run without that evidence fails its final check; it must not be reported
-as successfully prepared. See `docs/proof-config-transactions.md` for the external
-evidence requirements. Completed local/mock rehearsals do not establish this
-real/enforce acceptance path.
+For enforce, apply exports the signer policy and pauses at `signer-receipts`.
+`.scrollsdk/inputs/signer-receipts/request.json` identifies each active signer and
+its numbered receipt filename. Send `signer-policy-bundle/` to each partner and
+save their returned validation receipts at those paths. Rerun `setup apply`.
+It computes hashes, checks all active signer identities, bundle/revision/policy
+bindings and successful validation, imports the accepted bytes into managed
+state, regenerates charts with the publication receipt and runs the final check.
+Missing evidence produces `waiting`; mismatched evidence produces `failed` and
+may be corrected in the inbox before retrying. Completed cloud and proof steps
+are preserved. See `docs/proof-config-transactions.md` for receipt semantics.
+Synthetic receipt tests are not evidence of real partner acceptance.
+
+## Real release consumer verification
+
+Once the core release workflow has published all five images and the manifest,
+run this separate rehearsal with a canonical public protocol-context fixture:
+
+```bash
+npm run build
+node scripts/test-proof-release-e2e.mjs v0.3.0-beta.6-proofexp.20261009.1 \
+  /path/to/dogeos-core/crates/dogeos_protocol/test-data/protocol-context-corpus/valid-canonical.json \
+  /path/to/scroll-sdk
+```
+
+It creates a private temporary deployment, resolves the actual release by version,
+bakes real Bridge identities with the producer, exports release materializers,
+checks the CUDA image, imports real materials and compiles the active/real/enforce
+topology. The output directory contains private step logs and `validation.json`
+only after success. Docker needs enough free image storage. `DOCKER_HOST` may
+select a dedicated test daemon; its bind mounts must see the temporary paths.
+This rehearsal does not publish S3 objects, run a GPU proof or validate a partner's
+runtime policy. A queued/running core build is not a passing rehearsal result.

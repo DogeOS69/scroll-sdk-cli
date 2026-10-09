@@ -36,6 +36,7 @@ export function validateDeploymentSpecFields(value: unknown): ValidationError[] 
       const child = displayPath ? `${displayPath}.${key}` : key
       if (shape.kind === 'record') visit(item, `${schemaPath}.*`, child)
       else if (shape.keys?.includes(key)) visit(item, `${schemaPath}.${key}`, child)
+      else if (child === 'network.l1ChainId') error(child, 'has been removed; select dogecoin.network (mainnet, testnet or regtest) and the L1 chain ID is derived automatically')
       else error(child, child === 'proofSystem' ? 'proofSystem has been removed; use compiler-backed proofTopology' : 'is not a supported DeploymentSpec field')
     }
   }

@@ -156,7 +156,7 @@ describe('spec identity and template workflow', () => {
   it('lists all missing bootstrap inputs without generating outputs', () => {
     const spec = fixture()
     delete spec.identities
-    expect(() => planSpecBootstrap(spec)).to.throw('templates.sdkRevision')
+    expect(() => planSpecBootstrap(spec)).to.throw('--sdk-dir')
     let message = ''
     try {planSpecBootstrap(spec)} catch (error) {message = (error as Error).message}
     for (const input of ['--sdk-dir', 'identities', 'proofTopology', 'images.services.l2Rpc.tag', 'images.services.l2Sequencer.tag', 'images.services.l2Bootnode.tag']) expect(message).to.include(input)
@@ -184,12 +184,16 @@ describe('spec identity and template workflow', () => {
     spec.proofTopology = {mode: 'disabled'} as any
     spec.images = {services: Object.fromEntries(['l2Rpc', 'l2Sequencer', 'l2Bootnode'].map(key => [key, {tag: 'explicit-test-release'}]))}
     fs.writeFileSync(path.join(sdk, 'examples/values/scroll-monitor-production.yaml'), '# dirty file must not be used\n')
+    const explicit = planSpecBootstrap(spec, sdk)
+    const revision = spec.templates.sdkRevision
+    delete spec.templates
     const plan = planSpecBootstrap(spec, sdk)
+    expect(plan).to.deep.equal(explicit)
     expect(plan['values/scroll-monitor-production.yaml']).to.equal('# pinned fixture\n')
     expect(plan.Makefile).to.include('for index in 0 1; do')
     expect(plan.Makefile).not.to.include('values/l2-reth-bootnode-production-1.yaml')
     expect(plan).not.to.have.property('values/genesis.yaml')
-    expect(JSON.parse(plan['.data/spec-bootstrap.json']).sdkRevision).to.equal(spec.templates.sdkRevision)
+    expect(JSON.parse(plan['.data/spec-bootstrap.json']).sdkRevision).to.equal(revision)
     const main = generateAllConfigs(fixture())
     expect(main['doge-config.toml']).to.include('[identityIntent.feeOracle]')
   })

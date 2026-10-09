@@ -14,6 +14,7 @@ import {resolvePreparationProofRelease} from '../../utils/preparation-release.js
 import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles} from '../../utils/retired-services.js'
 import {mergeBootstrapValues, planSpecBootstrap} from '../../utils/spec-bootstrap.js'
+import {resolveCubesignerIdentity} from '../../utils/spec-cubesigner.js'
 import { type GeneratedValuesFiles, generateValuesFiles } from '../../utils/values-generator.js'
 
 function parseEnvValue(rawValue: string): string {
@@ -116,7 +117,7 @@ export default class GenerateFromSpec extends Command {
       default: '.',
       description: 'Output directory for generated files',
     }),
-    'sdk-dir': Flags.string({description: 'Local SDK checkout for --bootstrap; reads templates.sdkRevision, ignoring working-tree edits.'}),
+    'sdk-dir': Flags.string({description: 'Local SDK checkout for --bootstrap; defaults to committed HEAD; templates.sdkRevision optionally overrides it.'}),
     spec: Flags.string({
       char: 's',
       description: 'Path to DeploymentSpec YAML file',
@@ -225,7 +226,7 @@ export default class GenerateFromSpec extends Command {
     // Load and validate the spec
     let spec
     try {
-      spec = await resolvePreparationProofRelease(loadDeploymentSpec(specPath), path.resolve(flags.output))
+      spec = await resolvePreparationProofRelease(resolveCubesignerIdentity(loadDeploymentSpec(specPath)), path.resolve(flags.output))
     } catch (error) {
       jsonCtx.error(
         'E602_INVALID_SPEC',

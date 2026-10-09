@@ -36,9 +36,14 @@ export interface PreparationConfig {
   /** Other separately produced runtime inputs, copied before final preparation. */
   inputs?: Array<{destination: string; source: string}>
   proofAws?: {
+    action: 'create' | 'reuse'
     awsProfile?: string
+    /** Existing role names; omitted names are derived from deployment alias and cluster. */
+    coordinatorRoleName?: string
     publicEndpointUrl?: string
     publicReadMode: 'direct-s3' | 'existing-gateway' | 'existing-public-s3'
+    secretName?: string
+    withdrawalRoleName?: string
   }
   proofMaterials: {
     batchMaterializer?: string

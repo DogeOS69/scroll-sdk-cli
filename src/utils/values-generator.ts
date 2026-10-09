@@ -28,6 +28,7 @@ import {
   getDogecoinIndexerStartHeight,
   getL1GenesisBlock,
   normalizeDeploymentSpec,
+  resolveDogecoinChainId,
 } from './deployment-spec-generator.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues} from './dstack-controller-values.js'
 import {ethereumDaRuntimeEnv} from './ethereum-da-runtime.js'
@@ -1415,7 +1416,7 @@ function generateFrontendsConfigValues(spec: DeploymentSpec): string {
       'frontend-config': {
         data: {
           'frontend-config': `# Frontend Configuration
-REACT_APP_CHAIN_ID_L1 = ${spec.network.l1ChainId}
+REACT_APP_CHAIN_ID_L1 = ${resolveDogecoinChainId(spec.dogecoin.network)}
 REACT_APP_CHAIN_ID_L2 = ${spec.network.l2ChainId}
 REACT_APP_CHAIN_NAME_L1 = ${spec.network.l1ChainName}
 REACT_APP_CHAIN_NAME_L2 = ${spec.network.l2ChainName}
@@ -1549,7 +1550,7 @@ function generateContractsValues(spec: DeploymentSpec): string {
     configMaps: {
       env: {
         data: {
-          SCROLL_CHAIN_ID_L1: String(spec.network.l1ChainId),
+          SCROLL_CHAIN_ID_L1: String(resolveDogecoinChainId(spec.dogecoin.network)),
           SCROLL_CHAIN_ID_L2: String(spec.network.l2ChainId),
           SCROLL_DEPLOYMENT_SALT: spec.contracts.deploymentSalt,
           SCROLL_L1_FEE_VAULT_ADDR: DEFAULT_L1_FEE_VAULT_ADDR,

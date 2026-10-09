@@ -98,8 +98,8 @@ export interface DeploymentSpec {
   /** Bootstrap snapshot bucket (doge-config snapshots.s3), written by the deploy role. */
   snapshots?: {s3?: Omit<ArtifactBucketConfig, 'endpointUrl' | 'forcePathStyle' | 'publicBaseUrl'>}
 
-  /** Pinned SDK templates used by generate-from-spec --bootstrap. */
-  templates?: {sdkRevision: string}
+  /** Optional SDK commit override; plan defaults to --sdk-dir HEAD and freezes the resolved commit. */
+  templates?: {sdkRevision?: string}
 
   /** Optional test/development settings */
   test?: TestConfig
@@ -273,9 +273,6 @@ export interface NetworkConfig {
 
   /** Deprecated DA Publisher endpoint for Celestia-backed deployments. */
   daPublisherEndpoint?: string
-
-  /** L1 chain ID */
-  l1ChainId: number
 
   /** L1 chain name (displayed in UIs) */
   l1ChainName: string
@@ -623,6 +620,8 @@ export interface SigningConfig {
 
   /** CubeSigner TEE key configuration */
   cubesigner?: {
+    /** Read-only CubeSigner identity lookup during plan. Omit keyId only for a single-key role. */
+    identity?: {keyId?: string; roleId: string}
     mode?: CubesignerPolicyMode
     policyReceipts?: CubesignerPolicyReceiptInputs
     /**
