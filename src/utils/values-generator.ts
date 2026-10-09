@@ -811,7 +811,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'tsoService', {
     pullPolicy: 'Always',
     repository: 'dogeos69/tso-service',
-    tag: 'v0.3.0-beta.5c'
+    tag: 'v0.3.0-beta.6'
   })
 
   const values = {

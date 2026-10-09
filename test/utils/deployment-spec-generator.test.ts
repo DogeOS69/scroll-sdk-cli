@@ -1427,6 +1427,25 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateValuesFiles', () => {
+    it('pairs the default TSO image with the beta.6 pull signer ingress routes', () => {
+      const files = generateValuesFiles(createMinimalSpec());
+      const tso = yaml.load(files['tso-service-production.yaml']) as any;
+
+      expect(tso.image).to.include({repository: 'dogeos69/tso-service', tag: 'v0.3.0-beta.6'});
+      expect(tso.ingress.main.hosts[0].paths).to.deep.equal([
+        {path: '/health', pathType: 'Exact'},
+        {path: '/signer', pathType: 'Prefix'},
+      ]);
+    });
+
+    it('preserves an explicit TSO image override', () => {
+      const image = {pullPolicy: 'IfNotPresent' as const, repository: 'registry.example.com/tso-service', tag: 'v0.3.0-beta.6-custom'};
+      const files = generateValuesFiles(createMinimalSpec({images: {services: {tsoService: image}}}));
+      const tso = yaml.load(files['tso-service-production.yaml']) as any;
+
+      expect(tso.image).to.deep.equal(image);
+    });
+
     it('projects explicit fresh-genesis intent to both replay owners and keeps validation enabled', () => {
       const spec = createMinimalSpec()
       let config = toml.parse(generateDogeConfigToml(spec)) as any
