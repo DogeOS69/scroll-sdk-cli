@@ -1438,6 +1438,11 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
     }
   }
 
+  for (const key of ['proofArtifacts', 'snapshots'] as const) {
+    const s3 = spec[key]?.s3
+    if (s3) config[key] = {s3: Object.fromEntries(Object.entries(s3).filter(([, value]) => value !== undefined))}
+  }
+
   config.wallet = {
     path: spec.dogecoin.walletPath,
   }

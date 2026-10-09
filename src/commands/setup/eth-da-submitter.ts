@@ -1,6 +1,7 @@
 import {Command, Flags} from '@oclif/core'
 import fs from 'node:fs'
 
+import {proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
 import {dogeConfigToToml, loadDogeConfigWithSelection} from '../../utils/doge-config.js'
 import {CliExitError, JsonOutputContext} from '../../utils/json-output.js'
 import {KmsSignerProvisioner} from '../../utils/kms-signer-provisioner.js'
@@ -16,7 +17,7 @@ export default class SetupEthDaSubmitter extends Command {
 
   static override flags = {
     'archive-bucket': Flags.string({description: 'S3 blob archive bucket.'}),
-    'archive-key-prefix': Flags.string({description: 'Deployment S3 prefix shared by DA and proof objects; core owns the relative object paths.'}),
+    'archive-key-prefix': Flags.string({description: 'Deployment prefix for raw DA blobs; proof sidecars use proofArtifacts.s3. Core owns the relative object paths.'}),
     'archive-public-base-url': Flags.string({description: 'Public HTTPS base URL used by blob consumers.'}),
     'archive-region': Flags.string({description: 'Region owning the archive bucket.'}),
     'aws-profile': Flags.string({description: 'AWS profile for archive resource operations.'}),
@@ -39,7 +40,10 @@ export default class SetupEthDaSubmitter extends Command {
       const roleArn = flags['role-arn'] || signer?.serviceAccountRoleArn
       const createBucket = flags['create-archive-bucket'] ?? signer?.backend === 'aws_kms'
       if (archive.enabled) {
-        await new KmsSignerProvisioner(output, flags['aws-profile']).provisionArchive(archive, {createBucket, roleArn})
+        // With a proof artifact store configured, the writer also gets its
+        // segmentation-sidecar namespace there.
+        const sidecar = config.proofArtifacts?.s3 ? {sidecarStore: proofArtifactStoreFromDogeConfig(config)} : {}
+        await new KmsSignerProvisioner(output, flags['aws-profile']).provisionArchive(archive, {createBucket, roleArn, ...sidecar})
         if (!roleArn) output.addWarning('No archive writer IAM role selected; writer access must be provided separately.')
       }
 

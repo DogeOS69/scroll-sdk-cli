@@ -1,14 +1,25 @@
 import {parse} from '@iarna/toml'
 import {expect} from 'chai'
+import {spawnSync} from 'node:child_process'
+import {createECDH} from 'node:crypto'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 import type {SignerPolicyBundleInput} from '../../src/utils/signer-policy-bundle.js'
 
 import {
   ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE,
+  INSTALL_TRANSPORT_KEY_COMMANDS,
+  PARTNER_PHASE_A_COMMANDS,
+  PARTNER_PHASE_B_COMMANDS,
+  TRANSPORT_KEY_COMMANDS,
   renderPartnerCommands,
   renderSignerOperatorPolicyTemplate,
   renderSignerPolicyEnv,
 } from '../../src/utils/signer-policy-bundle.js'
+
+const calls = (log: string): string => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '')
 
 function input(
   mode: 'active' | 'disabled',
@@ -32,8 +43,8 @@ function input(
     network: 'testnet',
     signerProofArtifactBaseUrl: mode === 'disabled' ? undefined : 'https://proofs.bridge.example/proof-topology',
     signers: [
-      {endpoint: 'https://signer.partner-a.example:4040', id: 'partner-a', publicKey: `02${'66'.repeat(32)}`},
-      {endpoint: 'http://10.20.30.40:4040', id: 'partner-b', publicKey: `03${'77'.repeat(32)}`},
+      {id: 'partner-a', publicKey: `02${'66'.repeat(32)}`, transportPubkey: `02${'88'.repeat(32)}`},
+      {id: 'partner-b', publicKey: `03${'77'.repeat(32)}`, transportPubkey: `03${'99'.repeat(32)}`},
     ],
     tsoUrl: 'https://tso.bridge.example',
   }
@@ -120,16 +131,209 @@ describe('signer policy bundle V2', () => {
   it('documents the protocol-context bootstrap boundary and enforcement readiness check', () => {
     const commands = renderPartnerCommands(input('active', 'real', 'enforce'))
     for (const expected of [
-      'https://signer.partner-a.example:4040',
+      `| \`partner-a\` | \`02${'66'.repeat(32)}\` | \`02${'88'.repeat(32)}\` |`,
       'https://tso.bridge.example',
+      // Each phase is one fail-propagating block, carried verbatim.
+      PARTNER_PHASE_A_COMMANDS,
+      PARTNER_PHASE_B_COMMANDS,
+      "export PREFLIGHT_FLAGS='--require-production-ready'",
       'https://proofs.bridge.example/proof-topology',
       'requires canonical protocol context in every mode',
-      'cp "signer-$SIGNER_ID/attestation-signer.toml" docker-compose/',
       'advance-l2-agg-verifying-key.bin',
-      '--require-production-ready',
-      'kubectl -n <namespace> run signer-reachability-partner-a',
     ]) expect(commands).to.include(expected)
+    // Phase A and Phase B install the runtime key only through the validated block.
+    expect(PARTNER_PHASE_A_COMMANDS).to.include('--print-identity')
+    expect(PARTNER_PHASE_B_COMMANDS).to.include('up -d')
+    for (const [phase, keyCommands] of [[PARTNER_PHASE_A_COMMANDS, TRANSPORT_KEY_COMMANDS],
+      [PARTNER_PHASE_B_COMMANDS, INSTALL_TRANSPORT_KEY_COMMANDS]]) {
+      expect(phase.startsWith('(\n  set -eu\n')).to.equal(true)
+      expect(phase).to.include(keyCommands.split('\n').map(line => `  ${line}`).join('\n'))
+    }
+
+    expect(commands).not.to.match(/cp [^\n]*transport\.key"? docker-compose\/(?:\n|$)/)
+    // Signers dial out: no inbound signer URL or reachability probe remains.
+    expect(commands).not.to.include('--endpoint')
+    expect(commands).not.to.include('signer-reachability')
     expect(commands).not.to.include('verifier-registry.toml')
     expect(commands).not.to.include('source-set.toml')
+  })
+})
+
+describe('partner transport key commands', () => {
+  it('create once, validate the whole file, install atomically, and fail as a unit', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'transport-key-'))
+    try {
+      fs.mkdirSync(path.join(root, 'signer-partner-a'))
+      fs.mkdirSync(path.join(root, 'docker-compose'))
+      const source = path.join(root, 'signer-partner-a/transport.key')
+      const runtime = path.join(root, 'docker-compose/transport.key')
+      const run = (extraPath?: string) => spawnSync('bash', ['-c', TRANSPORT_KEY_COMMANDS], {
+        cwd: root,
+        encoding: 'utf8',
+        env: {...process.env, PATH: extraPath ? `${extraPath}${path.delimiter}${process.env.PATH}` : process.env.PATH, SIGNER_ID: 'partner-a'},
+      })
+
+      expect(run().status).to.equal(0)
+      const key = fs.readFileSync(source, 'utf8')
+      expect(/^[\da-f]{64}\n$/.test(key)).to.equal(true)
+      expect(fs.readFileSync(runtime, 'utf8') === key).to.equal(true)
+      for (const file of [source, runtime]) expect(fs.statSync(file).mode % 0o1000).to.equal(0o600)
+      expect(run().status).to.equal(0)
+      expect(fs.readFileSync(source, 'utf8') === key).to.equal(true)
+      expect(fs.readFileSync(runtime, 'utf8') === key).to.equal(true)
+
+      // Corrupt or empty sources fail and never reach the runtime key.
+      for (const corrupt of ['', `${key}garbage\n`, `\n${key.trim()}`, key.toUpperCase(), key.trim(), `${key.slice(0, 63)}g\n`]) {
+        fs.writeFileSync(source, corrupt)
+        const result = run()
+        expect(result.status).not.to.equal(0)
+        expect(result.stderr).to.include('must be exactly one line of 64 hex characters')
+        expect(fs.readFileSync(source, 'utf8') === corrupt).to.equal(true)
+        expect(fs.readFileSync(runtime, 'utf8') === key).to.equal(true)
+      }
+
+      // A lost source must never silently replace an existing runtime key.
+      fs.rmSync(source)
+      expect(run().status).not.to.equal(0)
+      expect(fs.existsSync(source)).to.equal(false)
+      expect(fs.readFileSync(runtime, 'utf8') === key).to.equal(true)
+      fs.rmSync(runtime)
+      // On first initialization a failed generator leaves no installed key.
+      const bin = path.join(root, 'bin')
+      fs.mkdirSync(bin)
+      fs.writeFileSync(path.join(bin, 'openssl'), '#!/bin/sh\nexit 1\n', {mode: 0o755})
+      expect(run(bin).status).not.to.equal(0)
+      expect(fs.existsSync(source)).to.equal(false)
+      expect(fs.existsSync(runtime)).to.equal(false)
+      // The next successful run recovers from the leftover temp file.
+      expect(run().status).to.equal(0)
+      expect(/^[\da-f]{64}\n$/.test(fs.readFileSync(source, 'utf8'))).to.equal(true)
+    } finally {
+      fs.rmSync(root, {force: true, recursive: true})
+    }
+  })
+})
+
+describe('partner phase commands', () => {
+  let root: string
+  let key: string
+  let transportPubkey: string
+
+  function setup(): {bin: string; log: string; runtime: string; source: string} {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'partner-phase-'))
+    const transport = createECDH('secp256k1')
+    transport.generateKeys()
+    key = `${transport.getPrivateKey('hex').padStart(64, '0')}\n`
+    transportPubkey = transport.getPublicKey('hex', 'compressed')
+    for (const dir of ['signer-partner-a', 'docker-compose', 'signer-policy-bundle', 'bin']) fs.mkdirSync(path.join(root, dir))
+    fs.writeFileSync(path.join(root, 'signer-partner-a/attestation-signer.env'), 'ATTESTATION_SIGNER_BACKEND=local\n')
+    fs.writeFileSync(path.join(root, 'signer-partner-a/attestation-signer.toml'), '# policy\n')
+    fs.writeFileSync(path.join(root, 'signer-partner-a/descriptor.json'), JSON.stringify({transportPubkey}))
+    fs.writeFileSync(path.join(root, 'signer-policy-bundle/signer-policy.env'), '# bundle\n')
+    fs.writeFileSync(path.join(root, 'signer-policy-bundle/protocol_context.json'), '{}\n')
+    const log = path.join(root, 'calls.log')
+    // Stub docker and scrollsdk: log every call; print-identity emits a line.
+    for (const tool of ['docker', 'scrollsdk']) {
+      fs.writeFileSync(path.join(root, 'bin', tool), `#!/bin/sh\necho "${tool} $*" >> "${log}"\ncase "$*" in *--print-identity*) echo '{"identity":true}' ;; esac\n`, {mode: 0o755})
+    }
+
+    const runtime = path.join(root, 'docker-compose/transport.key')
+    fs.writeFileSync(runtime, key, {mode: 0o600})
+    return {bin: path.join(root, 'bin'), log, runtime, source: path.join(root, 'signer-partner-a/transport.key')}
+  }
+
+  function run(commands: string, bin: string) {
+    return spawnSync('bash', ['-c', commands], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {...process.env, DOGE_NETWORK: 'testnet', PATH: `${bin}${path.delimiter}${process.env.PATH}`, SIGNER_ID: 'partner-a'},
+    })
+  }
+
+
+  afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
+
+  it('run Phase A and Phase B through identity, descriptor and start with a valid key', () => {
+    const {bin, log, runtime, source} = setup()
+    fs.writeFileSync(source, key, {mode: 0o600})
+    expect(run(PARTNER_PHASE_A_COMMANDS, bin).status).to.equal(0)
+    expect(fs.readFileSync(path.join(root, 'signer-partner-a/identity.json'), 'utf8')).to.equal('{"identity":true}\n')
+    expect(run(PARTNER_PHASE_B_COMMANDS, bin).status).to.equal(0)
+    const logged = calls(log)
+    expect(logged).to.include('--print-identity')
+    expect(logged).to.include('--identity signer-partner-a/identity.json')
+    expect(logged).to.include('up -d')
+    expect(logged).to.include('scrollsdk signer preflight')
+    // The existing env means the first signer init is skipped on this run.
+    expect(logged).not.to.match(/scrollsdk signer init --id partner-a --network testnet\s*$/m)
+    expect(fs.readFileSync(runtime, 'utf8') === key).to.equal(true)
+  })
+
+  for (const [label, prepare] of [
+    ['a corrupt source key', (source: string) => fs.writeFileSync(source, `${key}garbage\n`, {mode: 0o600})],
+    ['an empty source key', (source: string) => fs.writeFileSync(source, '')],
+    ['a missing source key', (_source: string) => {}],
+  ] as const) {
+    it(`stop both phases on ${label}: nonzero, runtime key intact, no identity, no start`, () => {
+      const {bin, log, runtime, source} = setup()
+      prepare(source)
+      for (const phase of [PARTNER_PHASE_A_COMMANDS, PARTNER_PHASE_B_COMMANDS]) {
+        const result = run(phase, bin)
+        expect(result.status).not.to.equal(0)
+        expect(fs.readFileSync(runtime, 'utf8') === key).to.equal(true)
+      }
+
+      const logged = calls(log)
+      expect(logged).not.to.include('docker')
+      expect(logged).not.to.include('--identity')
+      expect(logged).not.to.include('preflight')
+      expect(fs.existsSync(path.join(root, 'signer-partner-a/identity.json'))).to.equal(false)
+      expect(fs.existsSync(path.join(root, 'docker-compose/policy'))).to.equal(false)
+    })
+  }
+
+  for (const scenario of ['missing key', 'missing descriptor', 'malformed descriptor', 'missing public key', 'mismatched key', 'invalid scalar'] as const) {
+    it(`rejects Phase B with ${scenario} before replacing the runtime key or starting Docker`, () => {
+      const {bin, log, runtime, source} = setup()
+      fs.writeFileSync(source, key, {mode: 0o600})
+      const descriptor = path.join(root, 'signer-partner-a/descriptor.json')
+      if (scenario === 'missing key') fs.rmSync(source)
+      if (scenario === 'missing descriptor') fs.rmSync(descriptor)
+      if (scenario === 'malformed descriptor') fs.writeFileSync(descriptor, '{')
+      if (scenario === 'missing public key') fs.writeFileSync(descriptor, '{}')
+      if (scenario === 'invalid scalar') fs.writeFileSync(source, `${'00'.repeat(32)}\n`)
+      if (scenario === 'mismatched key') {
+        const other = createECDH('secp256k1')
+        other.generateKeys()
+        fs.writeFileSync(source, `${other.getPrivateKey('hex').padStart(64, '0')}\n`)
+      }
+
+      const before = fs.existsSync(source) ? fs.readFileSync(source) : undefined
+      expect(run(PARTNER_PHASE_B_COMMANDS, bin).status).not.to.equal(0)
+      expect(fs.readFileSync(runtime, 'utf8') === key).to.equal(true)
+      expect(fs.existsSync(source)).to.equal(before !== undefined)
+      if (before) expect(fs.readFileSync(source).equals(before)).to.equal(true)
+      expect(calls(log)).to.equal('')
+      expect(fs.existsSync(path.join(root, 'docker-compose/policy'))).to.equal(false)
+    })
+  }
+
+  it('preserves a registered key on repeated Phase B installs', () => {
+    const {bin, runtime, source} = setup()
+    fs.writeFileSync(source, key, {mode: 0o600})
+    for (let i = 0; i < 2; i++) {
+      expect(run(PARTNER_PHASE_B_COMMANDS, bin).status).to.equal(0)
+      expect(fs.readFileSync(runtime, 'utf8') === key).to.equal(true)
+      expect(fs.statSync(runtime).mode % 0o1000).to.equal(0o600)
+    }
+  })
+
+  it('does not recreate a lost source in Phase A even when only its descriptor remains', () => {
+    const {bin, log, runtime, source} = setup()
+    fs.rmSync(runtime)
+    expect(run(PARTNER_PHASE_A_COMMANDS, bin).status).not.to.equal(0)
+    expect(fs.existsSync(source)).to.equal(false)
+    expect(fs.existsSync(runtime)).to.equal(false)
+    expect(calls(log)).to.equal('')
   })
 })

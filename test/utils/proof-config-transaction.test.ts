@@ -17,7 +17,7 @@ describe('proof configuration transaction', () => {
     fs.mkdirSync(path.join(root, 'values'))
     fs.writeFileSync(path.join(root, 'values/proof-coordinator-production.yaml'), 'image: {repository: original}\n')
     fs.writeFileSync(path.join(root, '.data/protocol_context.json'), '{}')
-    fs.writeFileSync(path.join(root, '.data/doge-config.toml'), 'network = "regtest"\n[ethereumDa.blobArchive.s3]\nenabled=true\nbucket="dogeos-proof-artifacts"\nregion="us-east-1"\nkeyPrefix="devnet/instance"\n')
+    fs.writeFileSync(path.join(root, '.data/doge-config.toml'), 'network = "regtest"\n[proofArtifacts.s3]\nbucket="dogeos-proof-artifacts"\nregion="us-east-1"\nkeyPrefix="devnet/instance"\n')
     fs.writeFileSync(path.join(root, '.data/proof-aws.json'), JSON.stringify({
       artifactReadTransport: {publicEndpointUrl: 'https://s3.us-east-1.amazonaws.com', publicReadMode: 'existing-public-s3', publicStatus: 'operator-managed-unverified'}, artifactStore: {bucket: 'dogeos-proof-artifacts', keyPrefix: 'devnet/instance', region: 'us-east-1'},
       kubernetes: {awsRegion: 'us-east-1', deploymentAlias: 'devnet', eksCluster: 'cluster', namespace: 'default'}, schema: 'dogeos/proof-aws/v4',

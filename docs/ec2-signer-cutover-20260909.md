@@ -1,5 +1,11 @@
 # EC2 attestation signer cutover — verified 2026-09-09
 
+This is a historical deployment record. Its inbound signer addresses and
+TSO-to-signer health probes predate beta.6 pull delivery. For current onboarding,
+use [setup order](setup-order.md) and the
+[partner kit](https://github.com/DogeOS69/scroll-sdk/tree/feat/signer-edge-buckets/partner-kit/attestation-signer):
+external signers dial out and do not require a remotely accessible HTTP port.
+
 The user explicitly authorized replacing the old services on `ec2-dev`.
 This procedure retains their data and the existing KMS identities. It does not
 change the Bridge/genesis or claim full withdrawal/proof acceptance.

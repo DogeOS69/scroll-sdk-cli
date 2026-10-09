@@ -8,6 +8,7 @@ import {
   applyProofAwsValues,
   assertNoUnmanagedPublicProofBucketGrant,
   buildProofArtifactStorePolicy,
+  denyInsecureTransportStatement,
   normalizeProofArtifactPublicEndpoint,
   normalizeProofBucketName,
   normalizeProofKeyPrefix,
@@ -132,6 +133,9 @@ describe('proof-aws-provisioner values projection', () => {
       call => call.args[0] === 's3api' && call.args[1] === 'put-public-access-block',
     )
     expect(publicAccessBlock).to.equal(undefined)
+
+    const versioning = calls.find(call => call.args[0] === 's3api' && call.args[1] === 'put-bucket-versioning')
+    expect(versioning?.args).to.include('Status=Enabled')
 
     const rolePolicies = calls.filter(call => call.args[0] === 'iam' && call.args[1] === 'put-role-policy')
     expect(rolePolicies).to.have.length(2)
@@ -379,6 +383,7 @@ describe('proof-aws-provisioner values projection', () => {
     const policy = JSON.parse(putBucketPolicy?.args[putBucketPolicy.args.indexOf('--policy') + 1] as string)
     expect(policy.Statement).to.deep.equal([
       operatorStatement,
+      denyInsecureTransportStatement('proof-bucket'),
       {
         Action: 's3:GetObject',
         Effect: 'Allow',
@@ -397,7 +402,6 @@ describe('proof-aws-provisioner values projection', () => {
   it('separates public external-consumer keys from the internal sidecar namespace', () => {
     const resources = publicArtifactObjectResources('proof-bucket', 'rehearsal/batches')
     expect(resources).to.deep.equal([
-      'arn:aws:s3:::proof-bucket/rehearsal/batches/0x*',
       'arn:aws:s3:::proof-bucket/rehearsal/batches/input-specs/*',
       'arn:aws:s3:::proof-bucket/rehearsal/batches/prepared-bundles/*',
       'arn:aws:s3:::proof-bucket/rehearsal/batches/witnesses/*',
@@ -407,6 +411,8 @@ describe('proof-aws-provisioner values projection', () => {
       'arn:aws:s3:::proof-bucket/rehearsal/batches/signer-policy-evidence/*',
     ])
     expect(JSON.stringify(resources)).not.to.include('scroll-chunk-segmentation-sidecars')
+    // DA blobs (0x<versioned hash>) live in the separate DA archive bucket.
+    expect(JSON.stringify(resources)).not.to.include('/0x')
   })
 
   it('rejects an EKS-region gateway endpoint for a cross-region artifact bucket', () => {
@@ -579,6 +585,7 @@ describe('proof-aws-provisioner values projection', () => {
     )
     expect(enabled.Statement).to.deep.equal([
       operatorStatement,
+      denyInsecureTransportStatement('proof-bucket'),
       {
         Action: 's3:GetObject',
         Effect: 'Allow',
@@ -602,18 +609,20 @@ describe('proof-aws-provisioner values projection', () => {
       'proof-topology',
       false,
     )
-    expect(disabled.Statement).to.deep.equal([operatorStatement])
+    // Disabling public read keeps the bucket TLS-only.
+    expect(disabled.Statement).to.deep.equal([operatorStatement, denyInsecureTransportStatement('proof-bucket')])
+    expect(denyInsecureTransportStatement('proof-bucket')).to.deep.include({Effect: 'Deny', Sid: 'ScrollSdkDenyInsecureTransport'})
   })
 
   it('keeps sibling public grants through updates and removes only the selected deployment', () => {
     const first = upsertProofArtifactPublicReadPolicy({}, 'proof-bucket', 'deployments/a', true)
     const both = upsertProofArtifactPublicReadPolicy(first, 'proof-bucket', 'deployments/b', true)
-    expect(both.Statement).to.have.length(2)
-    expect(both.Statement[0]).to.deep.equal(first.Statement[0])
+    expect(both.Statement).to.have.length(3)
+    for (const statement of first.Statement) expect(both.Statement).to.deep.include(statement)
     expect(() => assertNoUnmanagedPublicProofBucketGrant(both, 'proof-bucket', 'deployments/b')).not.to.throw()
     expect(upsertProofArtifactPublicReadPolicy(both, 'proof-bucket', 'deployments/b', true)).to.deep.equal(both)
     expect(upsertProofArtifactPublicReadPolicy(both, 'proof-bucket', 'deployments/b', false)).to.deep.equal(first)
-    expect(publicArtifactObjectResources('proof-bucket', 'deployments/b')).to.include('arn:aws:s3:::proof-bucket/deployments/b/0x*')
+    expect(publicArtifactObjectResources('proof-bucket', 'deployments/b')).not.to.include('arn:aws:s3:::proof-bucket/deployments/b/0x*')
     expect(JSON.stringify(both)).not.to.match(/segmentation|locators|staging|recovery|eager-chunk-proofs/)
   })
 
@@ -626,28 +635,41 @@ describe('proof-aws-provisioner values projection', () => {
     expect(changed.Statement[1].Condition.StringEquals['aws:SourceVpce']).to.equal('vpce-bbb')
   })
 
+  it('narrows this prefix from the old combined DA/proof policy without losing sibling grants', () => {
+    const original = upsertProofArtifactPublicReadPolicy({}, 'proof-bucket', 'deployments/a', true)
+    original.Statement.find((statement: any) => statement.Effect === 'Allow').Resource.push('arn:aws:s3:::proof-bucket/deployments/a/0x*')
+    const both = upsertProofArtifactPublicReadPolicy(original, 'proof-bucket', 'deployments/b', true)
+    expect(() => assertNoUnmanagedPublicProofBucketGrant(both, 'proof-bucket', 'deployments/a')).not.to.throw()
+    const narrowed = upsertProofArtifactPublicReadPolicy(both, 'proof-bucket', 'deployments/a', true)
+    expect(narrowed.Statement.find((statement: any) => statement.Sid === proofArtifactPolicySid('public', 'proof-bucket', 'deployments/a')).Resource)
+      .to.deep.equal(publicArtifactObjectResources('proof-bucket', 'deployments/a'))
+    expect(narrowed.Statement).to.deep.include(both.Statement.find((statement: any) => statement.Sid === proofArtifactPolicySid('public', 'proof-bucket', 'deployments/b')))
+    expect(narrowed.Statement).to.deep.include(denyInsecureTransportStatement('proof-bucket'))
+  })
+
   it('migrates a fixed legacy Sid only for the exact deployment, including nested prefixes', () => {
     for (const kind of ['public', 'vpce'] as const) {
       const update = (policy: any, prefix: string) => kind === 'public'
         ? upsertProofArtifactPublicReadPolicy(policy, 'proof-bucket', prefix, true)
         : upsertProofArtifactVpcEndpointReadPolicy(policy, 'proof-bucket', prefix, 'vpce-aaa')
       const first = update({}, 'deployments/a')
-      first.Statement[0].Sid = kind === 'public' ? 'ScrollSdkProofArtifactPublicRead' : 'ScrollSdkProofArtifactReadViaVpcEndpoint'
+      const grant = first.Statement.find((statement: any) => statement.Effect === 'Allow')
+      grant.Sid = kind === 'public' ? 'ScrollSdkProofArtifactPublicRead' : 'ScrollSdkProofArtifactReadViaVpcEndpoint'
       for (const other of ['deployments/b', 'deployments']) {
         const unchanged = update(first, other)
-        expect(unchanged.Statement).to.have.length(2)
-        expect(unchanged.Statement[0]).to.deep.equal(first.Statement[0])
+        expect(unchanged.Statement).to.have.length(first.Statement.length + 1)
+        expect(unchanged.Statement).to.deep.include(grant)
       }
 
       const migrated = update(first, 'deployments/a')
-      expect(migrated.Statement).to.have.length(1)
-      expect(migrated.Statement[0].Sid).to.equal(proofArtifactPolicySid(kind, 'proof-bucket', 'deployments/a'))
+      expect(migrated.Statement).to.have.length(first.Statement.length)
+      expect(migrated.Statement.find((statement: any) => statement.Effect === 'Allow').Sid).to.equal(proofArtifactPolicySid(kind, 'proof-bucket', 'deployments/a'))
     }
   })
 
   it('refuses a conflicting per-prefix Sid and does not trust a legacy Sid on a broad public grant', () => {
     const policy = upsertProofArtifactPublicReadPolicy({}, 'proof-bucket', 'deployments/a', true)
-    policy.Statement[0].Effect = 'Deny'
+    policy.Statement.find((statement: any) => statement.Effect === 'Allow').Effect = 'Deny'
     expect(() => upsertProofArtifactPublicReadPolicy(policy, 'proof-bucket', 'deployments/a', true)).to.throw('differs')
     const broad = {Statement: [{Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: 'arn:aws:s3:::proof-bucket/*', Sid: 'ScrollSdkProofArtifactPublicRead'}]}
     expect(() => assertNoUnmanagedPublicProofBucketGrant(broad, 'proof-bucket', 'deployments/a')).to.throw('overlapping')

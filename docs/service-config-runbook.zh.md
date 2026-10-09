@@ -21,7 +21,7 @@ Secret 管理服务中；示例中的 `$ENV:VAR_NAME` 表示运行时环境变�
 | proof-coordinator | 调度证明和材料；mock generation 在进程内生成 mock proof。 |
 | prover-worker | real generation 的独立 Worker；镜像身份必须与所选 release 和 bake 相符。 |
 | attestation-signer | 合作方运营的证据校验和签名服务；合作方负责其 RPC quorum 与轮换策略。 |
-| tso-service | 使用登记的 attestation signer；须从实际调用网络验证 signer 可达性。 |
+| tso-service | 登记 attestation/transport 公钥，接受外部 signer 主动发起的签名 poll 和回调；不主动连接这些外部 signer。 |
 
 ## 身份与 Bridge 前置准备
 
@@ -40,9 +40,14 @@ scrollsdk setup gen-keystore --service eth-da-submitter -N
 Geth keystore 或强制重新生成流程覆盖现有 Reth 身份。
 详见 [keystore](keystore.md)。
 
-合作方在自己的运行环境执行 `scrollsdk signer init`，准备 signer 的公开
-descriptor 和 endpoint。桥运营方收集 descriptor 后执行
+合作方在自己的运行环境完成 `signer init`、`--print-identity`、
+`signer init --identity`，生成包含 attestation 和 transport 公钥的公开
+descriptor。beta.6 使用 pull delivery，signer 主动连接 TSO；无需提供 signer
+endpoint，也无需开放入站签名端口。桥运营方收集 descriptor 后执行
 `scrollsdk setup attestation-signer`，在 Bridge 创世前确定初始 keyset。
+Partner kit 的 `4040`（本机 preflight）和 `9100`（本机 metrics）默认仅绑定
+`127.0.0.1`；远程监控是独立的可选私网配置。验收时检查本机 readiness、
+TSO 收到的 poll 和签名回调，不再从 TSO 网络探测 signer HTTP。
 `signer init --force` 会为 local backend 生成新密钥；保留身份的重跑不要加它。
 
 完成账户、signer、CubeSigner 配置后，执行 `setup gen-l2-artifacts`，再按

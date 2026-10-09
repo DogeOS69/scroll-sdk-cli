@@ -185,8 +185,8 @@ and artifacts. Relevant examples:
   transaction only after every output succeeds;
 - `export-signer-policy` regenerates the bundle from current deployment facts;
 - `proof-aws-init` is designed to reuse matching cloud resources. It records an
-  existing `[ethereumDa.blobArchive.s3]` bucket/region/keyPrefix as the one
-  shared DA/proof object namespace rather than creating a second proof store.
+  existing `[proofArtifacts.s3]` bucket/region/keyPrefix as the proof
+  artifact store; the DA archive is a separate bucket.
   EKS/Secrets Manager may be in a different region from that bucket; in that
   case it deliberately skips the regional S3 Gateway endpoint. It records an
   explicit operator-managed public HTTPS endpoint for external Workers and

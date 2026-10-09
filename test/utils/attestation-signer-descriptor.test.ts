@@ -11,28 +11,43 @@ import {
   loadAttestationSignerDescriptor,
   normalizeSignerEndpoint,
   validateAttestationSignerDescriptor,
+  validateAttestationSignerIdentity,
 } from '../../src/utils/attestation-signer-descriptor.js'
 
-// Deterministic valid compressed secp256k1 key (generator point G).
+// Deterministic valid compressed secp256k1 keys (G and 2G).
 const VALID_PUBKEY = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'
+const TRANSPORT_PUBKEY = '02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5'
 
 function validDescriptor(): Record<string, unknown> {
   return {
-    endpoint: 'https://signer.partner.example:4040',
     id: 'partner-a-signer-0',
     network: 'testnet',
     publicKey: VALID_PUBKEY,
     schema: ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA,
+    transportPubkey: TRANSPORT_PUBKEY,
   }
 }
 
 describe('attestation-signer descriptor contract', () => {
-  it('accepts a well-formed descriptor and normalizes endpoint + key case', () => {
-    const raw = { ...validDescriptor(), endpoint: 'https://signer.partner.example:4040/', publicKey: VALID_PUBKEY.toUpperCase() }
+  it('accepts a well-formed descriptor and normalizes key case', () => {
+    const raw = { ...validDescriptor(), publicKey: VALID_PUBKEY.toUpperCase(), transportPubkey: TRANSPORT_PUBKEY.toUpperCase() }
     const descriptor = validateAttestationSignerDescriptor(raw, 'test')
-    expect(descriptor.endpoint).to.equal('https://signer.partner.example:4040')
-    expect(descriptor.publicKey).to.equal(VALID_PUBKEY)
-    expect(descriptor.id).to.equal('partner-a-signer-0')
+    expect(descriptor).to.deep.equal(validDescriptor())
+  })
+
+  it('accepts --print-identity output as the descriptor minus id', () => {
+    const identity = validDescriptor()
+    delete identity.id
+    expect(validateAttestationSignerIdentity(identity, 'test')).to.deep.equal(identity)
+    expect(() => validateAttestationSignerDescriptor(identity, 'test')).to.throw(/DNS-label/)
+  })
+
+  it('requires a distinct, valid transport key', () => {
+    const withoutTransport = validDescriptor()
+    delete withoutTransport.transportPubkey
+    expect(() => validateAttestationSignerDescriptor(withoutTransport, 'test')).to.throw(/transportPubkey must be a non-empty string/)
+    expect(() => validateAttestationSignerDescriptor({ ...validDescriptor(), transportPubkey: '02deadbeef' }, 'test')).to.throw(/transportPubkey.*compressed/)
+    expect(() => validateAttestationSignerDescriptor({ ...validDescriptor(), transportPubkey: VALID_PUBKEY }, 'test')).to.throw(/must differ/)
   })
 
   it('rejects a wrong or missing schema marker', () => {
@@ -48,13 +63,6 @@ describe('attestation-signer descriptor contract', () => {
     expect(() => assertCompressedSecp256k1PublicKey(`02${'ff'.repeat(32)}`, 'test')).to.throw(/not a valid secp256k1 point/)
   })
 
-  it('rejects a descriptor still carrying the signer-init endpoint placeholder', () => {
-    expect(() => validateAttestationSignerDescriptor(
-      { ...validDescriptor(), endpoint: 'https://REPLACE-WITH-YOUR-SIGNER-ENDPOINT' },
-      'test'
-    )).to.throw(/placeholder/)
-  })
-
   it('rejects endpoints with paths, queries, credentials, or non-http schemes', () => {
     expect(() => normalizeSignerEndpoint('https://a.example/sign', 'test')).to.throw(/bare base URL/)
     expect(() => normalizeSignerEndpoint('https://a.example/?x=1', 'test')).to.throw(/bare base URL/)
@@ -64,17 +72,10 @@ describe('attestation-signer descriptor contract', () => {
     expect(normalizeSignerEndpoint('http://10.0.0.5:4040', 'test')).to.equal('http://10.0.0.5:4040')
   })
 
-  it('rejects loopback and unspecified hosts that TSO can never reach cross-operator', () => {
-    for (const endpoint of [
-      'http://localhost:4040',
-      'http://signer.localhost:4040',
-      'http://127.0.0.1:4040',
-      'http://0.0.0.0:4040',
-      'http://[::1]:4040',
-      'http://[::]:4040',
-    ]) {
-      expect(() => validateAttestationSignerDescriptor({ ...validDescriptor(), endpoint }, 'test'))
-        .to.throw('cannot be reached from the bridge operator\'s TSO network')
+  it('rejects loopback probe endpoints unless explicitly allowed', () => {
+    for (const endpoint of ['http://localhost:4040', 'http://127.0.0.1:4040', 'http://[::1]:4040']) {
+      expect(() => normalizeSignerEndpoint(endpoint, 'test')).to.throw(/loopback/)
+      expect(normalizeSignerEndpoint(endpoint, 'test', { allowLoopback: true })).to.equal(new URL(endpoint).origin)
     }
   })
 

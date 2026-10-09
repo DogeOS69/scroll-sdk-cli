@@ -1,5 +1,11 @@
 # Next-devnet upgrade: preserve the existing Bridge
 
+This is a historical deployment record. Its inbound signer addresses and
+TSO-to-signer health probes predate beta.6 pull delivery. For current onboarding,
+use [setup order](setup-order.md) and the
+[partner kit](https://github.com/DogeOS69/scroll-sdk/tree/feat/signer-edge-buckets/partner-kit/attestation-signer):
+external signers dial out and do not require a remotely accessible HTTP port.
+
 **Historical checkpoint:** the operator subsequently authorized a complete fresh
 deployment with a new independent CubeSigner role/key and fresh L2. Follow
 [the current redeployment plan](devnet-fresh-redeployment.md). Do not change

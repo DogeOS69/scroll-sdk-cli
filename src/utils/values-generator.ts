@@ -811,7 +811,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'tsoService', {
     pullPolicy: 'Always',
     repository: 'dogeos69/tso-service',
-    tag: 'v0.3.0-beta.5c'
+    tag: 'v0.3.0-beta.6'
   })
 
   const values = {
@@ -829,14 +829,10 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
     ingress: {
       main: {
         annotations: {'nginx.ingress.kubernetes.io/proxy-body-size': '4m'},
+        // Public edge: /health and the transport-signed /signer/* routes only.
         hosts: [{
           host: spec.frontend.hosts.tso || '',
-          paths: [
-            {path: '/health', pathType: 'Exact'},
-            {path: '/submit-attestation-signatures', pathType: 'Exact'},
-            {path: '/submit-correctness-signatures', pathType: 'Exact'},
-            {path: '/reject-signatures', pathType: 'Exact'},
-          ]
+          paths: [{ path: '/health', pathType: 'Exact' }, { path: '/signer', pathType: 'Prefix' }]
         }],
         ingressClassName: 'nginx',
         tls: spec.frontend.hosts.tso ? [{

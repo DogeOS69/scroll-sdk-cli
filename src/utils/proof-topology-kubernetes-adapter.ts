@@ -806,10 +806,9 @@ function applySubmitterPatch(
   if (patchS3 && typeof patchS3 === 'object' && !Array.isArray(patchS3)) {
     const s3 = patchS3 as Record<string, unknown>
     if (s3.enabled === true) {
-      // dogeos-core intentionally uses one submitter [s3] client for raw DA
-      // blobs and segmentation sidecars. Refuse to let compiler output point
-      // that shared client at a different namespace from the deployment-owned
-      // ethereumDa.blobArchive.s3 projection already present in the values.
+      // [s3] is the DA archive writer, owned by ethereumDa.blobArchive.s3.
+      // The compiler addresses the sidecar through [segmentation_sidecar.s3];
+      // refuse compiler output that would repoint the DA archive.
       for (const field of ['bucket', 'region', 'key_prefix'] as const) {
         const key = envName('s3', field)
         if (String(data[key] ?? '') !== String(s3[field] ?? '')) {
@@ -828,6 +827,20 @@ function applySubmitterPatch(
     const table = patch[section]
     if (!table || typeof table !== 'object' || Array.isArray(table)) continue
     for (const [field, value] of Object.entries(table)) {
+      // The sidecar's own S3 target (the proof artifact store) is a nested
+      // table: [segmentation_sidecar.s3] -> SEGMENTATION_SIDECAR__S3__<FIELD>.
+      if (section === 'segmentation_sidecar' && field === 's3' && value && typeof value === 'object' && !Array.isArray(value)) {
+        for (const [s3Field, s3Value] of Object.entries(value)) {
+          if (!['boolean', 'number', 'string'].includes(typeof s3Value)) {
+            throw new Error(`${patchPath}: [${section}.s3].${s3Field} must be a scalar`)
+          }
+
+          data[envName(section, `s3__${s3Field}`)] = String(s3Value)
+        }
+
+        continue
+      }
+
       if (!['boolean', 'number', 'string'].includes(typeof value)) {
         throw new Error(`${patchPath}: [${section}].${field} must be a scalar`)
       }

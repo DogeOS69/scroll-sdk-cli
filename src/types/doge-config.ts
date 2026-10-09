@@ -47,13 +47,14 @@ export interface DogeConfig {
     backend?: 'aws_kms' | 'local'
     /**
      * Partner-operated signers imported from attestation-signer descriptors.
-     * The bridge operator never deploys these; endpoints are wired into TSO
-     * and publicKeys into the bridge redeem script.
+     * The bridge operator never deploys these. publicKeys enter the bridge
+     * redeem script; both keys are pinned in the TSO signer directory, and the
+     * signers dial out to the TSO (pull delivery, no endpoint).
      */
     external?: Array<{
-      endpoint: string
       id: string
       publicKey: string
+      transportPubkey: string
     }>
     /** Legacy in-cluster provisioning only; absent for external signers. */
     instances?: Array<{
@@ -218,6 +219,17 @@ export interface DogeConfig {
   network: Network
   /** Compiler-backed proof topology when DeploymentSpec is not used. */
   proof_topology?: ProofTopologySpec
+  /** Proof artifact bucket: coordinator/WP artifact_store and the only signer artifact origin. */
+  proofArtifacts?: {
+    s3?: {
+      bucket?: string
+      endpointUrl?: string
+      forcePathStyle?: boolean | string
+      keyPrefix?: string
+      publicBaseUrl?: string
+      region?: string
+    }
+  }
   /** Reth-specific network settings that are intentionally independent of the EVM chain ID. */
   reth?: {
     /**
@@ -257,7 +269,6 @@ export interface DogeConfig {
       }
     }>
   }
-  signerUrls?: string[]
   signers?: {
     l1CommitSender?: {
       backend: 'aws_kms' | 'local'
@@ -286,6 +297,14 @@ export interface DogeConfig {
       service: 'eth-da-submitter' | 'fee-oracle'
       serviceAccountName?: string
       serviceAccountRoleArn?: string
+    }
+  }
+  /** Bootstrap snapshot bucket (replay / l1-interface history databases); written by the deploy role. */
+  snapshots?: {
+    s3?: {
+      bucket?: string
+      keyPrefix?: string
+      region?: string
     }
   }
   wallet: {

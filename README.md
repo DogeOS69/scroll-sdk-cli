@@ -747,7 +747,7 @@ _See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/
 
 ## `scrollsdk setup attestation-signer`
 
-Import signer-init descriptors from partner-operated attestation-signers and select the bootstrap bridge keyset. This command consumes only endpoint + public key and never provisions keys, deployments, or network probes. Current dogeos-core runtime preflight occurs after partners install the post-genesis canonical-context bundle.
+Import signer-init descriptors from partner-operated attestation-signers and select the bootstrap bridge keyset. This command consumes only the attestation and transport public keys and never provisions keys, deployments, or network probes. Signers dial out to the TSO, so no signer endpoint is imported. Current dogeos-core runtime preflight occurs after partners install the post-genesis canonical-context bundle.
 
 ```
 USAGE
@@ -766,8 +766,9 @@ FLAGS
 
 DESCRIPTION
   Import signer-init descriptors from partner-operated attestation-signers and select the bootstrap bridge keyset. This
-  command consumes only endpoint + public key and never provisions keys, deployments, or network probes. Current
-  dogeos-core runtime preflight occurs after partners install the post-genesis canonical-context bundle.
+  command consumes only the attestation and transport public keys and never provisions keys, deployments, or
+  network probes. Signers dial out to the TSO, so no signer endpoint is imported. Current dogeos-core runtime
+  preflight occurs after partners install the post-genesis canonical-context bundle.
 
 EXAMPLES
   $ scrollsdk setup attestation-signer --descriptor partner-a.json --descriptor partner-b.json --descriptor ours.json --threshold 2
@@ -1257,7 +1258,8 @@ USAGE
 FLAGS
   -N, --non-interactive
       --archive-bucket=<value>           S3 blob archive bucket.
-      --archive-key-prefix=<value>       S3 object key prefix.
+      --archive-key-prefix=<value>       Deployment prefix for raw DA blobs; proof sidecars use proofArtifacts.s3.
+                                        Core owns the relative object paths.
       --archive-public-base-url=<value>  Public HTTPS base URL used by blob
                                          consumers.
       --archive-region=<value>           Region owning the archive bucket.
@@ -1822,8 +1824,8 @@ FLAGS
       --aws-profile=<value>                      AWS CLI profile used for provisioning
       --aws-region=<value>                       AWS region containing EKS and the proof token secret (auto-detected
                                                  when omitted)
-      --bucket=<value>                           Advanced consistency assertion for the shared artifact bucket; the
-                                                 value is read from doge-config
+      --bucket=<value>                           Advanced consistency assertion for the proof artifact bucket; the
+                                                 value is read from doge-config proofArtifacts.s3
       --config=<value>                           [default: .data/proof-aws.json] Output config file consumed by setup
                                                  prep-charts
       --coordinator-service-account=<value>      Kubernetes service account used by proof-coordinator (default:
@@ -1831,12 +1833,12 @@ FLAGS
       --deployment-alias=<value>                 Unique deployment instance alias used to derive deterministic bucket
                                                  and IAM role names
       --doge-config=<value>                      [default: .data/doge-config.toml] DogeOS config containing the
-                                                 canonical ethereumDa.blobArchive.s3 store
+                                                 canonical proofArtifacts.s3 store
       --eks-cluster=<value>                      EKS cluster name used by the IRSA trust policies (selected
                                                  interactively when omitted)
       --json                                     Output structured JSON
-      --key-prefix=<value>                       Advanced consistency assertion for the shared artifact key prefix; the
-                                                 value is read from doge-config
+      --key-prefix=<value>                       Advanced consistency assertion for the proof artifact key prefix; the
+                                                 value is read from doge-config proofArtifacts.s3
       --namespace=<value>                        Kubernetes namespace of the proof workloads (default: default)
       --rotate-tokens                            Replace the proof-work/prover-worker tokens in an existing secret (both
                                                  workloads must be restarted afterwards)
@@ -1883,7 +1885,7 @@ FLAGS
   --materials=<value>         [default: .data/proof-materials-v1.json] Real proof-materials-v1.json
   --output=<value>            [default: .data/proof-program-publication-v1.json] New publication receipt written only
                               after all public GET checks pass
-  --proof-aws-config=<value>  [default: .data/proof-aws.json] proof-aws.json containing the canonical shared artifact
+  --proof-aws-config=<value>  [default: .data/proof-aws.json] proof-aws.json containing the canonical proof artifact
                               store
   --topology-bundle=<value>   [default: .data/generated/proof-topology] Installable active/real compiler bundle
                               containing the tag-5 manifest
@@ -2335,13 +2337,13 @@ _See code: [src/commands/setup/verify-contracts.ts](https://github.com/dogeos69/
 
 ## `scrollsdk signer init`
 
-Signer-operator tool: create key material, a public descriptor, secret deployment env, and a partner-owned V2 policy template. Run on your infrastructure; secrets and AWS calls never leave it. Send the descriptor before genesis, then deploy and preflight only after receiving the canonical-context policy bundle.
+Signer-operator tool: create key material, secret deployment env, and a partner-owned V2 policy template; with --identity, wrap the signer's --print-identity output into the public descriptor. Run on your infrastructure; secrets and AWS calls never leave it. Send the descriptor before genesis, then deploy and preflight only after receiving the canonical-context policy bundle.
 
 ```
 USAGE
   $ scrollsdk signer init --id <value> [--allowed-git-commit <value>] [--allowed-release-version <value>]
     [--allowed-signing-policy-version <value>] [--aws-profile <value>] [--backend local|aws-kms] [--create-key]
-    [--endpoint <value>] [--force] [--json] [--kms-key-id <value>] [--kms-region <value>] [--network
+    [--force] [--identity <value>] [--json] [--kms-key-id <value>] [--kms-region <value>] [--network
     mainnet|regtest|testnet] [--out <value>]
 
 FLAGS
@@ -2356,12 +2358,12 @@ FLAGS
                                             <options: local|aws-kms>
   --create-key                              aws-kms backend: create the ECC_SECG_P256K1 signing key in your AWS account
                                             instead of passing --kms-key-id
-  --endpoint=<value>                        HTTP(S) base URL reachable from the bridge operator/TSO network; use a TLS
-                                            domain in production or a private IP in an isolated mock/VPN test (can be
-                                            filled later via signer preflight)
   --force                                   Overwrite an existing env file in the output directory
   --id=<value>                              (required) Stable signer identifier (DNS-label shaped, agreed with the
                                             bridge operator)
+  --identity=<value>                        File holding the one-line JSON from `attestation_signer --print-identity`;
+                                            its network and public key must match this signer. Writes descriptor.json
+                                            (identity + id)
   --json                                    Output structured JSON
   --kms-key-id=<value>                      aws-kms backend: key id, ARN, or alias/... of your existing ECC_SECG_P256K1
                                             signing key
@@ -2371,16 +2373,19 @@ FLAGS
   --out=<value>                             Output directory (default: ./signer-<id>)
 
 DESCRIPTION
-  Signer-operator tool: create key material, a public descriptor, secret deployment env, and a partner-owned V2 policy
-  template. Run on your infrastructure; secrets and AWS calls never leave it. Send the descriptor before genesis, then
-  deploy and preflight only after receiving the canonical-context policy bundle.
+  Signer-operator tool: create key material, secret deployment env, and a partner-owned V2 policy template; with
+  --identity, wrap the signer's --print-identity output into the public descriptor. Run on your infrastructure; secrets
+  and AWS calls never leave it. Send the descriptor before genesis, then deploy and preflight only after receiving the
+  canonical-context policy bundle.
 
 EXAMPLES
-  $ scrollsdk signer init --id partner-a-signer-0 --network testnet --endpoint https://signer.partner-a.example:4040
+  $ scrollsdk signer init --id partner-a-signer-0 --network testnet
 
-  $ scrollsdk signer init --id partner-a-signer-0 --network mainnet --endpoint https://signer.partner-a.example:4040 --backend aws-kms --kms-key-id arn:aws:kms:... --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567
+  $ scrollsdk signer init --id partner-a-signer-0 --network testnet --identity signer-partner-a-signer-0/identity.json
 
-  $ scrollsdk signer init --id partner-a-signer-0 --network testnet --endpoint https://signer.partner-a.example:4040 --backend aws-kms --create-key --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567
+  $ scrollsdk signer init --id partner-a-signer-0 --network mainnet --backend aws-kms --kms-key-id arn:aws:kms:... --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567
+
+  $ scrollsdk signer init --id partner-a-signer-0 --network testnet --backend aws-kms --create-key --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567
 ```
 
 _See code: [src/commands/signer/init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/signer/init.ts)_
@@ -2414,40 +2419,37 @@ _See code: [src/commands/signer/kms-pubkey.ts](https://github.com/dogeos69/scrol
 
 ## `scrollsdk signer preflight`
 
-Probe a deployed attestation-signer and verify its runtime identity. Add --require-production-ready after selecting enforcement=enforce to require dogeos-core attestation_evidence_v2 and all four production capabilities.
+Probe your running attestation-signer from your own infrastructure and verify its runtime identity against your descriptor. Signers dial out to the TSO, so the probe targets the signer's local HTTP port. Add --require-production-ready after selecting enforcement=enforce to require dogeos-core attestation_evidence_v2 and all four production capabilities.
 
 ```
 USAGE
-  $ scrollsdk signer preflight [--dir <value>] [--endpoint <value>] [--expected-public-key <value>] [--id <value>]
-    [--json] [--network mainnet|regtest|testnet] [--out <value>] [--require-production-ready]
+  $ scrollsdk signer preflight [--dir <value>] [--endpoint <value>] [--expected-public-key <value>] [--json]
+    [--network mainnet|regtest|testnet] [--require-production-ready]
 
 FLAGS
-  --dir=<value>                  signer init output directory; provides id/network/expected key from descriptor.json and
-                                 receives the finalized descriptor
-  --endpoint=<value>             Signer HTTP base URL to probe (with --dir, defaults to the descriptor endpoint if
-                                 already set)
+  --dir=<value>                  signer init output directory; its descriptor.json provides the expected network and
+                                 public key
+  --endpoint=<value>             [default: http://127.0.0.1:4040] Signer local HTTP base URL to probe (the partner-kit
+                                 compose binds 4040 to host loopback; no inbound signer access is required)
   --expected-public-key=<value>  Fail unless the runtime public key equals this compressed secp256k1 key (with --dir,
                                  defaults to the descriptor publicKey)
-  --id=<value>                   Stable signer identifier for the emitted descriptor (required without --dir)
   --json                         Output structured JSON
   --network=<option>             Expected Dogecoin network (defaults to descriptor network with --dir, else to the
                                  network reported by /health)
                                  <options: mainnet|regtest|testnet>
-  --out=<value>                  Write the descriptor JSON to this path (default with --dir: its descriptor.json;
-                                 otherwise print to stdout)
   --require-production-ready     Also require /ready and /policy to prove all four attestation_evidence_v2 production
                                  capabilities are serving
 
 DESCRIPTION
-  Probe a deployed attestation-signer and verify its runtime identity. Add --require-production-ready after selecting
-  enforcement=enforce to require dogeos-core attestation_evidence_v2 and all four production capabilities.
+  Probe your running attestation-signer from your own infrastructure and verify its runtime identity against your
+  descriptor. Signers dial out to the TSO, so the probe targets the signer's local HTTP port. Add
+  --require-production-ready after selecting enforcement=enforce to require dogeos-core attestation_evidence_v2 and all
+  four production capabilities.
 
 EXAMPLES
-  $ scrollsdk signer preflight --dir signer-partner-a-signer-0 --endpoint https://signer.partner-a.example:4040
+  $ scrollsdk signer preflight --dir signer-partner-a-signer-0
 
-  $ scrollsdk signer preflight --endpoint https://signer.partner-a.example:4040 --id partner-a-signer-0 --out descriptor.json
-
-  $ scrollsdk signer preflight --endpoint https://signer.partner-a.example:4040 --id partner-a-signer-0 --expected-public-key 02ab...
+  $ scrollsdk signer preflight --endpoint http://127.0.0.1:4040 --expected-public-key 02ab... --network mainnet
 
   $ scrollsdk signer preflight --dir signer-partner-a-signer-0 --require-production-ready
 ```

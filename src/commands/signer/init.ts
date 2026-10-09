@@ -9,11 +9,9 @@ import {
   fetchKmsCompressedPublicKey,
 } from '../../utils/attestation-kms.js'
 import {
-  ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA,
   ATTESTATION_SIGNER_NETWORKS,
-  ENDPOINT_PLACEHOLDER,
   assertCompressedSecp256k1PublicKey,
-  normalizeSignerEndpoint,
+  validateAttestationSignerIdentity,
 } from '../../utils/attestation-signer-descriptor.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {renderSignerOperatorPolicyTemplate} from '../../utils/signer-policy-bundle.js'
@@ -77,13 +75,63 @@ export function renderSignerReleasePins(options: {
   ]
 }
 
+/**
+ * Wrap the signer's --print-identity output into descriptor.json after
+ * checking it belongs to this signer's network and attestation key.
+ */
+function writeDescriptor(identityFile: string, expected: {id: string; network: string; publicKey: string}, descriptorFile: string): Record<string, string> {
+  const source = path.resolve(identityFile)
+  let raw: unknown
+  try {
+    raw = JSON.parse(fs.readFileSync(source, 'utf8'))
+  } catch (error) {
+    throw new Error(`${source}: failed to read identity: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  const identity = validateAttestationSignerIdentity(raw, source)
+  if (identity.network !== expected.network) throw new Error(`${source}: network ${identity.network} does not match --network ${expected.network}`)
+  if (identity.publicKey !== expected.publicKey) throw new Error(`${source}: publicKey ${identity.publicKey} does not match this signer's key ${expected.publicKey}`)
+  const descriptor = {...identity, id: expected.id}
+  fs.writeFileSync(descriptorFile, `${JSON.stringify(descriptor, null, 2)}\n`)
+  return descriptor
+}
+
+/**
+ * The attestation key an existing signer env already records, re-validated
+ * read-only: the local WIF's key, or the recorded KMS key's GetPublicKey
+ * (which must still equal ATTESTATION_SIGNER_KMS_EXPECTED_SIGNER_ID).
+ */
+function recordedPublicKey(env: string, secretFile: string, flags: {'aws-profile'?: string; 'kms-key-id'?: string; network: string}): {backend: string; kmsKeyId?: string; publicKey: string} {
+  const network = readEnvValue(env, 'ATTESTATION_SIGNER_NETWORK')
+  if (network !== flags.network) throw new Error(`${secretFile} is for network ${String(network)}, not --network ${flags.network}`)
+  const backend = readEnvValue(env, 'ATTESTATION_SIGNER_BACKEND')
+  if (backend === 'aws_kms') {
+    const kmsKeyId = readEnvValue(env, 'ATTESTATION_SIGNER_KMS_KEY_ID')
+    const region = readEnvValue(env, 'ATTESTATION_SIGNER_KMS_REGION')
+    const expected = readEnvValue(env, 'ATTESTATION_SIGNER_KMS_EXPECTED_SIGNER_ID')
+    if (!kmsKeyId || !region || !expected) throw new Error(`${secretFile} does not record a complete KMS signer (key id, region, expected signer id)`)
+    if (flags['kms-key-id'] && flags['kms-key-id'] !== kmsKeyId) throw new Error(`--kms-key-id ${flags['kms-key-id']} differs from the recorded ${kmsKeyId}; pass --force to reprovision`)
+    const publicKey = assertCompressedSecp256k1PublicKey(fetchKmsCompressedPublicKey(kmsKeyId, region, flags['aws-profile']), 'KMS public key')
+    if (publicKey !== expected.toLowerCase()) throw new Error(`KMS key ${kmsKeyId} now has public key ${publicKey}, not the recorded ${expected}`)
+    return {backend: 'aws-kms', kmsKeyId, publicKey}
+  }
+
+  const wif = readEnvValue(env, 'ATTESTATION_SIGNER_WIF')
+  if (backend !== 'local' || !wif) throw new Error(`${secretFile} records no usable signer backend`)
+  return {backend: 'local', publicKey: PrivateKey.fromWIF(wif).toPublicKey().toString().toLowerCase()}
+}
+
+/** Where the partner-kit compose mounts the operator's transport.key. */
+export const TRANSPORT_KEY_CONTAINER_PATH = '/etc/dogeos-partner/transport.key'
+
 export class SignerInitCommand extends Command {
-  static description = 'Signer-operator tool: create key material, a public descriptor, secret deployment env, and a partner-owned V2 policy template. Run on your infrastructure; secrets and AWS calls never leave it. Send the descriptor before genesis, then deploy and preflight only after receiving the canonical-context policy bundle.'
+  static description = 'Signer-operator tool: create key material, secret deployment env, and a partner-owned V2 policy template; with --identity, wrap the signer\'s --print-identity output into the public descriptor. Run on your infrastructure; secrets and AWS calls never leave it. Send the descriptor before genesis, then deploy and preflight only after receiving the canonical-context policy bundle.'
 
   static examples = [
-    '$ scrollsdk signer init --id partner-a-signer-0 --network testnet --endpoint https://signer.partner-a.example:4040',
-    '$ scrollsdk signer init --id partner-a-signer-0 --network mainnet --endpoint https://signer.partner-a.example:4040 --backend aws-kms --kms-key-id arn:aws:kms:... --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567',
-    '$ scrollsdk signer init --id partner-a-signer-0 --network testnet --endpoint https://signer.partner-a.example:4040 --backend aws-kms --create-key --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567',
+    '$ scrollsdk signer init --id partner-a-signer-0 --network testnet',
+    '$ scrollsdk signer init --id partner-a-signer-0 --network testnet --identity signer-partner-a-signer-0/identity.json',
+    '$ scrollsdk signer init --id partner-a-signer-0 --network mainnet --backend aws-kms --kms-key-id arn:aws:kms:... --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567',
+    '$ scrollsdk signer init --id partner-a-signer-0 --network testnet --backend aws-kms --create-key --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567',
   ]
 
   static flags = {
@@ -93,9 +141,9 @@ export class SignerInitCommand extends Command {
     'aws-profile': Flags.string({ description: 'AWS CLI profile for KMS calls (aws-kms backend)' }),
     backend: Flags.string({ default: 'local', description: 'Key backend', options: ['local', 'aws-kms'] }),
     'create-key': Flags.boolean({ default: false, description: 'aws-kms backend: create the ECC_SECG_P256K1 signing key in your AWS account instead of passing --kms-key-id' }),
-    endpoint: Flags.string({ description: 'HTTP(S) base URL reachable from the bridge operator/TSO network; use a TLS domain in production or a private IP in an isolated mock/VPN test (can be filled later via signer preflight)' }),
     force: Flags.boolean({ default: false, description: 'Overwrite an existing env file; generates a NEW signing key for the local backend. Do not use to preserve a local identity. Partner-owned TOML is always retained.' }),
     id: Flags.string({ description: 'Stable signer identifier (DNS-label shaped, agreed with the bridge operator)', required: true }),
+    identity: Flags.string({ description: 'File holding the one-line JSON from `attestation_signer --print-identity`; its network and public key must match this signer. Writes descriptor.json (identity + id)' }),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
     'kms-key-id': Flags.string({ description: 'aws-kms backend: key id, ARN, or alias/... of your existing ECC_SECG_P256K1 signing key' }),
     'kms-region': Flags.string({ description: 'aws-kms backend: AWS region of the key' }),
@@ -113,6 +161,21 @@ export class SignerInitCommand extends Command {
       const descriptorFile = path.join(outDir, 'descriptor.json')
       fs.mkdirSync(outDir, { recursive: true })
       const existingEnv = fs.existsSync(secretFile) ? fs.readFileSync(secretFile, 'utf8') : ''
+      if (flags.identity && flags['create-key']) {
+        throw new Error('--create-key cannot be combined with --identity: the identity was printed from an existing key')
+      }
+
+      // Second pass of onboarding: the signer already exists, so wrapping its
+      // identity is read-only. Reuse the recorded backend; never reprovision
+      // or rewrite the key env.
+      if (flags.identity && existingEnv && !flags.force) {
+        const recorded = recordedPublicKey(existingEnv, secretFile, flags)
+        writeDescriptor(flags.identity, {id: flags.id, network: flags.network, publicKey: recorded.publicKey}, descriptorFile)
+        if (flags.json) json.success({backend: recorded.backend, descriptorFile, id: flags.id, kmsKeyId: recorded.kmsKeyId, publicKey: recorded.publicKey, secretFile})
+        else this.log(chalk.green(`Descriptor written to ${descriptorFile} — send THIS file to the bridge operator.`))
+        return
+      }
+
 
       const backendLines: string[] = []
       let publicKey: string
@@ -186,6 +249,11 @@ export class SignerInitCommand extends Command {
         ...releasePinLines,
         `ATTESTATION_SIGNER_NETWORK=${flags.network}`,
         `ATTESTATION_SIGNER_POLICY_MODE=${flags.network === 'mainnet' ? 'enforce' : 'observe'}`,
+        '# The signer dials out to the TSO and signs every request with a separate',
+        '# transport key: transport.key next to the compose file (32-byte hex,',
+        '# mode 0600, generated with `openssl rand -hex 32`), mounted read-only here.',
+        `ATTESTATION_SIGNER_TSO_TRANSPORT_KEY_FILE=${TRANSPORT_KEY_CONTAINER_PATH}`,
+        'ATTESTATION_SIGNER_TSO_DELIVERY=pull',
       ]
       fs.writeFileSync(secretFile, `${envLines.join('\n')}\n`, { mode: 0o600 })
 
@@ -197,23 +265,19 @@ export class SignerInitCommand extends Command {
         fs.writeFileSync(policyFile, renderSignerOperatorPolicyTemplate())
       }
 
-      const endpoint = flags.endpoint ? normalizeSignerEndpoint(flags.endpoint, '--endpoint') : ENDPOINT_PLACEHOLDER
-      const descriptor = {
-        endpoint,
-        id: flags.id,
-        network: flags.network,
-        publicKey,
-        schema: ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA,
-      }
-      fs.writeFileSync(descriptorFile, `${JSON.stringify(descriptor, null, 2)}\n`)
+      // The descriptor is the signer's own --print-identity output plus id.
+      // It carries the transport key, which only the signer binary holds, so
+      // without --identity no descriptor is written yet.
+      const descriptor = flags.identity
+        ? writeDescriptor(flags.identity, {id: flags.id, network: flags.network, publicKey}, descriptorFile)
+        : undefined
 
       const result = {
         allowedGitCommit: flags['allowed-git-commit'] || readEnvValue(existingEnv, 'ATTESTATION_SIGNER_ALLOWED_GIT_COMMIT'),
         allowedReleaseVersion: flags['allowed-release-version'] || readEnvValue(existingEnv, 'ATTESTATION_SIGNER_ALLOWED_RELEASE_VERSION'),
         allowedSigningPolicyVersion: flags['allowed-signing-policy-version'],
         backend: flags.backend,
-        descriptorFile,
-        endpoint,
+        descriptorFile: descriptor ? descriptorFile : undefined,
         id: flags.id,
         kmsKeyId,
         policyFile,
@@ -225,10 +289,11 @@ export class SignerInitCommand extends Command {
       else {
         this.log(chalk.green(`Deployment env written to ${secretFile}${flags.backend === 'local' ? ' (keep this private; it holds the signing key)' : ''}.`))
         this.log(chalk.green(`${createdPolicyTemplate ? 'Partner-owned V2 policy template written' : 'Existing partner-owned V2 policy preserved'} at ${policyFile}.`))
-        this.log(chalk.green(`Descriptor written to ${descriptorFile} — send THIS file to the bridge operator.`))
-        this.log(chalk.green('Next: send the descriptor to the bridge operator. Start the signer after receiving the canonical post-genesis policy bundle.'))
-        if (endpoint === ENDPOINT_PLACEHOLDER) {
-          this.log(chalk.yellow('Endpoint is a placeholder; signer preflight will fill it in after deployment.'))
+        if (descriptor) {
+          this.log(chalk.green(`Descriptor written to ${descriptorFile} — send THIS file to the bridge operator.`))
+          this.log(chalk.green('Next: send the descriptor to the bridge operator. Start the signer after receiving the canonical post-genesis policy bundle.'))
+        } else {
+          this.log(chalk.yellow('Next: generate the transport key with attestation_signer, save its `--print-identity` line to a file, and re-run signer init with --identity <file> to write descriptor.json.'))
         }
       }
     } catch (error) {

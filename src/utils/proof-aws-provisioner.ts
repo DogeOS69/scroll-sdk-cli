@@ -8,7 +8,7 @@ import type { JsonOutputContext } from './json-output.js'
 import { AwsCliRunner } from './aws-cli.js'
 
 export interface ProofAwsIdentity {
-  /** Region containing the shared DA/proof artifact bucket. */
+  /** Region containing the proof artifact bucket. */
   artifactRegion?: string
   /** Region containing EKS and the deployment-scoped Secrets Manager secret. */
   awsRegion: string
@@ -74,14 +74,27 @@ export interface ProofArtifactVpcEndpointResult {
 export const PROOF_SECRET_PROPERTIES = ['proof-work-token', 'prover-worker-token'] as const
 export const PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID = 'ScrollSdkProofArtifactPublicRead'
 export const PROOF_ARTIFACT_VPCE_POLICY_SID = 'ScrollSdkProofArtifactReadViaVpcEndpoint'
+export const DENY_INSECURE_TRANSPORT_SID = 'ScrollSdkDenyInsecureTransport'
+
+/** TLS-only: deny every request to the bucket that is not over HTTPS. */
+export function denyInsecureTransportStatement(bucket: string): Record<string, any> {
+  return {
+    Action: 's3:*',
+    Condition: {Bool: {'aws:SecureTransport': 'false'}},
+    Effect: 'Deny',
+    Principal: '*',
+    Resource: [`arn:aws:s3:::${bucket}`, `arn:aws:s3:::${bucket}/*`],
+    Sid: DENY_INSECURE_TRANSPORT_SID,
+  }
+}
 
 /**
- * Logical object namespaces read without AWS credentials by DA clients,
- * external proof Workers, or partner Attestation Signers. The segmentation
- * sidecar namespace is deliberately absent because it is a PC-internal input.
+ * Logical object namespaces read without AWS credentials by external proof
+ * Workers or partner Attestation Signers. DA blobs live in the separate DA
+ * archive bucket. The segmentation sidecar namespace is deliberately absent
+ * because it is a PC-internal input.
  */
 export const PUBLIC_ARTIFACT_OBJECT_PATTERNS = [
-  '0x*',
   'input-specs/*',
   'prepared-bundles/*',
   'witnesses/*',
@@ -112,6 +125,9 @@ function ownedReadStatement(statement: any, bucket: string, prefix: string, kind
   const resources = Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource]
   const scopedResource = `arn:aws:s3:::${bucket}/${prefix}/*`
   const expectedResources = kind === 'public' ? publicArtifactObjectResources(bucket, prefix) : [scopedResource]
+  // Before core #1482 the proof store also held raw DA blobs. Recognize that
+  // exact old grant when narrowing this deployment to proof-only reads.
+  if (kind === 'public') expectedResources.push(`arn:aws:s3:::${bucket}/${prefix}/0x*`)
   // Old direct-read policies may have exposed this exact prefix wholesale.
   // Never infer ownership of a child deployment from a startsWith comparison.
   if (kind === 'public' && statement.Sid === legacySid) expectedResources.push(scopedResource)
@@ -314,6 +330,14 @@ export function upsertProofArtifactPublicReadPolicy(
 ): Record<string, any> {
   const prefix = normalizeProofKeyPrefix(keyPrefix)
   const preservedStatements = preserveOtherReadStatements(existingPolicy, bucket, prefix, 'public')
+  // TLS-only applies to the bucket; read grants remain deployment-scoped.
+  const tlsIndex = preservedStatements.findIndex(statement => statement?.Sid === DENY_INSECURE_TRANSPORT_SID)
+  if (tlsIndex >= 0) {
+    preservedStatements[tlsIndex] = denyInsecureTransportStatement(bucket)
+  } else if (enabled) {
+    preservedStatements.push(denyInsecureTransportStatement(bucket))
+  }
+
   if (enabled) {
     preservedStatements.push({
       Action: 's3:GetObject',
@@ -387,6 +411,30 @@ function resourceMayOverlapPrefix(resource: unknown, bucket: string, keyPrefix: 
     || literalPrefix.startsWith(managedPrefix)
     || wildcardMatches(objectPattern, `${managedPrefix}proofs/example`)
     || wildcardMatches(objectPattern, `${managedPrefix}0xexample`)
+}
+
+/**
+ * First Allow statement, other than `ownedSids`, that grants any action to
+ * an anonymous principal on objects overlapping `bucket/keyPrefix` without
+ * a VPC endpoint restriction: a public read or write the caller does not own.
+ */
+export function findUnmanagedAnonymousGrant(
+  policy: Record<string, any>,
+  bucket: string,
+  keyPrefix: string,
+  ownedSids: readonly string[],
+): Record<string, any> | undefined {
+  const statements = Array.isArray(policy.Statement)
+    ? policy.Statement
+    : policy.Statement ? [policy.Statement] : []
+  return statements.find((statement: any) =>
+    statement?.Effect === 'Allow'
+    && !ownedSids.includes(statement?.Sid)
+    && principalIncludesWildcard(statement.Principal)
+    && !isVpcEndpointRestricted(statement)
+    && (Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource])
+      .some((resource: unknown) => resourceMayOverlapPrefix(resource, bucket, keyPrefix))
+  )
 }
 
 export function assertNoUnmanagedPublicProofBucketGrant(
@@ -629,6 +677,10 @@ export class ProofAwsProvisioner {
       )
     }
 
+    // Every deployment bucket is versioned, so an overwrite never loses the
+    // previous object. Idempotent; independent of who owns the read policy.
+    this.aws.run(['s3api', 'put-bucket-versioning', '--bucket', bucket, '--versioning-configuration', 'Status=Enabled'], {region: artifactRegion})
+
     const vpcEndpoint = input.artifactRead.vpcEndpoint?.enabled
       ? this.ensureVpcEndpointArtifactRead(identity, bucket, keyPrefix, input.artifactRead.vpcEndpoint)
       : undefined
@@ -649,7 +701,7 @@ export class ProofAwsProvisioner {
       this.jsonCtx.info(
         `proof-aws: preserved operator-managed bucket policy and Public Access Block settings for ${bucket} (${publicReadMode})`,
       )
-      this.jsonCtx.addWarning(`New artifact prefixes do not inherit old-instance grants. Run setup artifact-access ${publicReadMode === 'existing-public-s3' ? '--public-read ' : ''}--writer-role-arn <archive-writer-role> to plan/check this instance's permissions; use --apply only after review. Gateway read permissions remain operator-managed.`)
+      this.jsonCtx.addWarning('New artifact prefixes do not inherit old-instance grants. Public read of this proof prefix remains operator-managed in this mode. Grant the eth-da-submitter its segmentation-sidecar put with setup artifact-access --store da --writer-role-arn <eth-da-submitter-role>.')
     }
 
     const artifactReadTransport: ProofArtifactReadTransportResult = {

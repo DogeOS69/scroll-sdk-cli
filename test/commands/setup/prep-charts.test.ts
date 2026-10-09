@@ -15,6 +15,7 @@ import PrepCharts, {
   applyL2RethRpcRuntimeValues,
   applyRethBlobS3Url,
   applyRethNetworkId,
+  applyTsoPublicEdgePaths,
   buildCubesignerPrepEnv,
   buildEthDaSubmitterPrepEnv,
   buildFeeOraclePrepEnv,
@@ -273,9 +274,47 @@ describe('setup prep-charts retired CubeSigner instance cleanup', () => {
   })
 })
 
+describe('setup prep-charts TSO public edge', () => {
+  it('narrows an existing catch-all route to /health and /signer, keeping host, TLS and annotations', () => {
+    const values: any = {ingress: {main: {
+      annotations: {'alb.ingress.kubernetes.io/certificate-arn': 'arn:aws:acm:us-east-1:123456789012:certificate/x', 'nginx.ingress.kubernetes.io/proxy-body-size': '16m'},
+      enabled: true,
+      hosts: [{host: 'tso.example.com', paths: [{path: '/', pathType: 'Prefix'}]}],
+      ingressClassName: 'alb',
+      tls: [{hosts: ['tso.example.com'], secretName: 'tso-tls'}],
+    }}}
+    const before = structuredClone(values)
+    const changes = applyTsoPublicEdgePaths(values)
+    expect(changes.map(change => change.key)).to.deep.equal(['ingress.main.hosts[0].paths'])
+    expect(values.ingress.main.hosts).to.deep.equal([{host: 'tso.example.com', paths: [{path: '/health', pathType: 'Exact'}, {path: '/signer', pathType: 'Prefix'}]}])
+    expect({...values.ingress.main, hosts: undefined}).to.deep.equal({...before.ingress.main, hosts: undefined})
+    expect(applyTsoPublicEdgePaths(values)).to.deep.equal([])
+  })
+
+  it('also narrows extra or exact legacy routes and leaves disabled ingresses alone', () => {
+    const values: any = {ingress: {
+      legacy: {enabled: false, hosts: [{host: 'old', paths: [{path: '/', pathType: 'Prefix'}]}]},
+      main: {hosts: [{host: 'tso', paths: [{path: '/health', pathType: 'Exact'}, {path: '/propose', pathType: 'Exact'}]}]},
+    }}
+    applyTsoPublicEdgePaths(values)
+    expect(values.ingress.main.hosts[0].paths.map((entry: {path: string}) => entry.path)).to.deep.equal(['/health', '/signer'])
+    expect(values.ingress.legacy.hosts[0].paths).to.deep.equal([{path: '/', pathType: 'Prefix'}])
+  })
+})
+
 describe('setup prep-charts external attestation signer routing', () => {
-  it('preserves descriptor IP/domain endpoints in the TSO signer list', () => {
+  it('registers every imported external signer as a pinned pull signer beside the pushed CubeSigner', () => {
     expect(buildTsoSigners({
+      attestationSigner: {
+        activeSignerIds: ['partner-a'],
+        external: [
+          {id: 'partner-a', publicKey: `02${'22'.repeat(32)}`, transportPubkey: `03${'33'.repeat(32)}`},
+          // Imported but not yet active (e.g. an upcoming rotation key) is still registered.
+          {id: 'partner-b', publicKey: `02${'44'.repeat(32)}`, transportPubkey: `03${'55'.repeat(32)}`},
+        ],
+        mode: 'external',
+        threshold: 1,
+      },
       cubesigner: { roles: [
         {
           keys: [{
@@ -291,20 +330,17 @@ describe('setup prep-charts external attestation signer routing', () => {
         },
       ] },
       network: 'testnet',
-      signerUrls: [
-        'https://signer.partner-a.example:4040',
-        'http://10.20.30.40:4040',
-      ],
     })).to.deep.equal([
       {
+        delivery: 'push',
         network: 'testnet',
         publicKeyOverride: `02${'11'.repeat(32)}`,
-        role: 'Correctness',
+        roles: ['Correctness'],
         signatureMode: 'ecdsa',
         uri: 'http://cubesigner-signer:3000',
       },
-      { network: 'testnet', role: 'Attestation', signatureMode: 'ecdsa', uri: 'https://signer.partner-a.example:4040' },
-      { network: 'testnet', role: 'Attestation', signatureMode: 'ecdsa', uri: 'http://10.20.30.40:4040' },
+      {delivery: 'pull', network: 'testnet', publicKeyOverride: `02${'22'.repeat(32)}`, roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: `03${'33'.repeat(32)}`},
+      {delivery: 'pull', network: 'testnet', publicKeyOverride: `02${'44'.repeat(32)}`, roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: `03${'55'.repeat(32)}`},
     ])
   })
 

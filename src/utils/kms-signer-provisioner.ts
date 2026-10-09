@@ -3,9 +3,11 @@ import { getAddress, keccak256 } from 'ethers'
 import { execFileSync } from 'node:child_process'
 import { createPublicKey } from 'node:crypto'
 
+import type { ArtifactStore } from './artifact-stores.js'
 import type { JsonOutputContext } from './json-output.js'
 import type { ManagedSignerConfig, ManagedSignerRole } from './signer-roles.js'
 
+import { ARCHIVE_WRITER_POLICY_NAMES, buildArchiveWriterPolicy } from './artifact-access.js'
 import {normalizeS3ArchiveKeyPrefix} from './s3-archive.js'
 
 export type KmsSignerProvisionRole = Pick<
@@ -108,7 +110,7 @@ export function deriveEthereumAddressFromSpkiDer(publicKeyBase64: string): strin
   return getAddress(`0x${hash.slice(-40)}`)
 }
 
-/** Submitter blob and sidecar objects share the native deployment prefix. */
+/** Prefix-scoped archive access for the legacy combined signer provisioner. */
 function archiveStorePolicy(bucket: string, keyPrefix?: string): Record<string, any> {
   const prefix = normalizeS3ArchiveKeyPrefix(keyPrefix)
   const bucketArn = `arn:aws:s3:::${bucket}`
@@ -207,14 +209,16 @@ export class KmsSignerProvisioner {
     }
   }
 
-  async provisionArchive(archive: BlobArchivePlan, options: {createBucket: boolean; roleArn?: string}): Promise<void> {
+  async provisionArchive(archive: BlobArchivePlan, options: {createBucket: boolean; roleArn?: string; sidecarStore?: Pick<ArtifactStore, 'bucket' | 'keyPrefix'>}): Promise<void> {
     if (!archive.enabled || !archive.bucket) return
     archive.keyPrefix = normalizeS3ArchiveKeyPrefix(archive.keyPrefix)
     const match = options.roleArn?.match(/^arn:aws[\w-]*:iam::\d{12}:role\/(?:.*\/)?([^/]+)$/)
     if (options.roleArn && !match) throw new Error('Invalid archive writer IAM role ARN')
     if (options.createBucket) archive.created = this.ensureS3Bucket(archive.region || 'us-east-1', archive.bucket, 'eth-da-submitter')
     if (match) {
-      this.awsJson(['iam', 'put-role-policy', '--role-name', match[1], '--policy-name', 'eth-da-submitter-s3-archive', '--policy-document', JSON.stringify(archiveStorePolicy(archive.bucket, archive.keyPrefix))])
+      // Same document setup artifact-access --store da plans and checks.
+      const policy = buildArchiveWriterPolicy('da', {bucket: archive.bucket, keyPrefix: archive.keyPrefix}, options.sidecarStore)
+      this.awsJson(['iam', 'put-role-policy', '--role-name', match[1], '--policy-name', ARCHIVE_WRITER_POLICY_NAMES.da, '--policy-document', JSON.stringify(policy)])
       this.jsonCtx.info('Updated the archive writer policy; signing key and role trust are unchanged.')
     }
   }
@@ -465,7 +469,8 @@ export class KmsSignerProvisioner {
       '--server-side-encryption-configuration',
       JSON.stringify({ Rules: [{ ApplyServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }] }),
     ], { region })
-    this.jsonCtx.info(`${service}: created S3 archive bucket: ${bucket} (region=${region}, public access blocked, SSE-S3)`)
+    this.aws(['s3api', 'put-bucket-versioning', '--bucket', bucket, '--versioning-configuration', 'Status=Enabled'], { region })
+    this.jsonCtx.info(`${service}: created S3 archive bucket: ${bucket} (region=${region}, public access blocked, SSE-S3, versioned)`)
     return true
   }
 

@@ -81,14 +81,15 @@ esac
     await provisioner.provisionArchive(archive, {createBucket: false, roleArn: 'arn:aws:iam::123456789012:role/archive-writer'})
     const policy = JSON.parse(calls[0][calls[0].indexOf('--policy-document') + 1])
     expect(archive.keyPrefix).to.equal('instances/new')
-    expect(policy.Statement[0]).to.deep.equal({Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: 'arn:aws:s3:::shared-bucket/instances/new/*'})
-    expect(policy.Statement[1].Condition.StringLike['s3:prefix']).to.deep.equal(['instances/new', 'instances/new/*'])
+    expect(policy.Statement[0]).to.deep.equal({Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: 'arn:aws:s3:::shared-bucket/instances/new/*', Sid: 'DaArchivePut'})
+    expect(policy.Statement).to.have.length(1)
     expect(JSON.stringify(policy)).not.to.include('DeleteObject')
+    expect(JSON.stringify(policy)).not.to.include('ListBucket')
 
     await provisioner.provisionArchive({...archive, keyPrefix: ''}, {createBucket: false, roleArn: 'arn:aws:iam::123456789012:role/root-archive-writer'})
     const rootPolicy = JSON.parse(calls[1][calls[1].indexOf('--policy-document') + 1])
     expect(rootPolicy.Statement[0].Resource).to.equal('arn:aws:s3:::shared-bucket/*')
-    expect(rootPolicy.Statement[1]).not.to.have.property('Condition')
+    expect(rootPolicy.Statement).to.have.length(1)
   })
 
   it('scopes newly created signer roles to the configured archive prefix', async () => {
@@ -100,6 +101,25 @@ esac
     expect(calls).to.include('arn:aws:s3:::shared-bucket/instances/new/*')
     expect(calls).not.to.include('arn:aws:s3:::shared-bucket/*')
     expect(calls).to.include('s3:ListBucket')
+  })
+
+  it('grants both native sidecar keys in the independent proof bucket', async () => {
+    const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
+    const calls: string[][] = []
+    provisioner.awsJson = (args: string[]) => { calls.push(args); return {} }
+    await provisioner.provisionArchive({bucket: 'da-bucket', created: false, enabled: true, keyPrefix: '/deployments//one/'}, {
+      createBucket: false,
+      roleArn: 'arn:aws:iam::123456789012:role/archive-writer',
+      sidecarStore: {bucket: 'proof-bucket', keyPrefix: 'deployments/one'},
+    })
+    const policy = JSON.parse(calls[0][calls[0].indexOf('--policy-document') + 1])
+    expect(policy.Statement[0].Resource).to.equal('arn:aws:s3:::da-bucket/deployments/one/*')
+    expect(policy.Statement[1].Resource).to.deep.equal([
+      'arn:aws:s3:::proof-bucket/deployments/one/scroll-chunk-segmentation-sidecars/*',
+      'arn:aws:s3:::proof-bucket/deployments/one/scroll-chunk-segmentation-sidecars-by-height/*',
+    ])
+    expect(JSON.stringify(policy)).not.to.include('arn:aws:s3:::proof-bucket/deployments/one/*')
+    expect(JSON.stringify(policy)).not.to.match(/s3:(DeleteObject|ListBucket)/)
   })
 
   it('rejects unsafe archive prefixes before any AWS operation', async () => {

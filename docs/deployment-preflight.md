@@ -79,36 +79,63 @@ from local configuration alone. `transport_only` does not require C2F egress.
 `proof-aws-init --artifact-public-read-mode existing-public-s3` intentionally
 preserves the bucket policy. It does **not** imply a new prefix is readable.
 
-Use the canonical `ethereumDa.blobArchive.s3` bucket/region/prefix and the actual
-archive writer role. There is no second bucket/prefix input to keep in sync:
+The DA archive (`ethereumDa.blobArchive.s3`) and the bootstrap snapshot bucket
+(`snapshots.s3`) are managed by `setup artifact-access --store da|snapshot`.
+The proof artifact bucket (`proofArtifacts.s3`) is managed by
+`proof-aws-init`. Configure the writer role for each store:
 
 ```bash
-scrollsdk setup artifact-access --public-read \
+# Plan, then apply the reviewed changes:
+scrollsdk setup artifact-access --store da --public-read \
   --writer-role-arn arn:aws:iam::123456789012:role/eth-da-submitter --json
-
-# Apply the reviewed additions:
-scrollsdk setup artifact-access --public-read \
+scrollsdk setup artifact-access --store da --public-read \
   --writer-role-arn arn:aws:iam::123456789012:role/eth-da-submitter --apply --json
 
 # Read-only policy/IAM checks before starting the workload:
-scrollsdk setup artifact-access --public-read \
+scrollsdk setup artifact-access --store da --public-read \
   --writer-role-arn arn:aws:iam::123456789012:role/eth-da-submitter --check --json
+
+# DA kill switch: remove public reads; our services keep reading through the
+# S3 VPC endpoint statement.
+scrollsdk setup artifact-access --store da --no-public-read --apply --json
+
+# Snapshots: deploy role writes; public read stays off unless requested.
+scrollsdk setup artifact-access --store snapshot \
+  --writer-role-arn arn:aws:iam::123456789012:role/deploy --apply --json
 ```
 
-The plan adds a deterministic, prefix-specific bucket statement granting only
-GetObject on raw DA and public proof namespaces (including signer policy
-evidence), plus an independent writer inline policy for GetObject/PutObject and
-prefix-restricted ListBucket. No public list/write/delete, role trust changes,
-old-prefix removal, or Public Access Block changes are made. Existing policies
-are preserved, even explicit Deny statements. Conflicting same-name policies and
-policy changes observed between planning and writing stop the operation. AWS
-has no bucket-policy compare-and-swap; serialize concurrent policy updates.
+The command enables versioning and owns three bucket-policy statements by Sid:
+`ScrollSdkDenyInsecureTransport` (TLS-only), `ScrollSdk<Store>ReadViaVpcEndpoint<scope>`
+(GetObject from the S3 Gateway endpoint recorded by `proof-aws-init`, or
+`--vpc-endpoint-id`), and `ScrollSdk<Store>PublicRead<scope>` (anonymous GetObject,
+added by `--public-read`, removed by `--no-public-read`). `<scope>` is a
+deterministic hash of the bucket and deployment prefix, so other deployments
+retain their grants. Only the TLS-only statement is bucket-wide. The DA writer inline
+policy `eth-da-submitter-s3-archive` grants GetObject/PutObject on the DA
+prefix and on the proof store's `scroll-chunk-segmentation-sidecars/` and
+`scroll-chunk-segmentation-sidecars-by-height/` namespaces;
+the snapshot writer gets PutObject only. No list or delete is granted. Other
+statements are preserved, even explicit Deny statements. Policy changes observed
+between planning and writing stop the operation. AWS has no bucket-policy
+compare-and-swap; serialize concurrent policy updates.
 
-The command checks bucket/account public policy restrictions before proposing
-public grants. If the account disallows public policies, have its owner configure
-delivery or use an existing gateway. For a gateway, omit `--public-read` and
-manage its read authorization separately. Private segmentation sidecars are not
-included in the public grant.
+The plan fails closed, before any write, when:
+
+- another statement grants anonymous access to the prefix (for example a legacy
+  `ScrollSdkArtifactRead*` grant from the previous `artifact-access`, or a
+  public write). Remove it from the bucket policy yourself; the CLI never
+  deletes statements it does not own;
+- public read would be off but no usable VPC endpoint read statement exists
+  for the prefix: the endpoint must be an available S3 Gateway endpoint in the
+  bucket's region (supply it with `--vpc-endpoint-id` if none is recorded).
+
+`--check` also fails when the managed writer inline policy differs from the
+planned one (for example the old bucket-wide grant, or an extra DeleteObject).
+It does not audit other policies attached to the role.
+
+The command checks bucket/account public policy restrictions before adding a
+public statement. If the account disallows public policies, have its owner
+configure delivery or use an existing gateway.
 
 `--check` requires the exact CLI-managed public statement; equivalent arbitrary
 operator statements are not inferred. Writer checks use IAM simulation. These

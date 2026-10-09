@@ -211,7 +211,7 @@ describe('real-proof program bundle publication', () => {
   it('uses the same canonical S3 publication plan without provisioning workload IAM resources', () => {
     const expected = planProofProgramPublication(common())
     fs.rmSync(path.join(root, '.data/proof-aws.json'))
-    fs.writeFileSync(path.join(root, '.data/doge-config.toml'), '[ethereumDa.blobArchive.s3]\nenabled = true\nbucket = "dogeos-proof-artifacts"\nkeyPrefix = "devnet/instance"\nregion = "us-east-1"\nendpointUrl = "https://s3.us-east-1.amazonaws.com"\n')
+    fs.writeFileSync(path.join(root, '.data/doge-config.toml'), '[proofArtifacts.s3]\nbucket = "dogeos-proof-artifacts"\nkeyPrefix = "devnet/instance"\nregion = "us-east-1"\nendpointUrl = "https://s3.us-east-1.amazonaws.com"\n')
     const actual = planProofProgramPublication({...common(), artifactSource: 'doge-config'})
     expect(actual).to.deep.equal(expected)
     expect(publisherInvocation).to.equal(undefined)
@@ -219,7 +219,7 @@ describe('real-proof program bundle publication', () => {
 
   it('does not silently redirect an explicitly non-AWS store to AWS', () => {
     fs.rmSync(path.join(root, '.data/proof-aws.json'))
-    fs.writeFileSync(path.join(root, '.data/doge-config.toml'), '[ethereumDa.blobArchive.s3]\nenabled = true\nbucket = "dogeos-proof-artifacts"\nkeyPrefix = "devnet/instance"\nregion = "us-east-1"\nendpointUrl = "https://storage.example.com"\n')
+    fs.writeFileSync(path.join(root, '.data/doge-config.toml'), '[proofArtifacts.s3]\nbucket = "dogeos-proof-artifacts"\nkeyPrefix = "devnet/instance"\nregion = "us-east-1"\nendpointUrl = "https://storage.example.com"\n')
     expect(() => planProofProgramPublication({...common(), artifactSource: 'doge-config'})).to.throw('regional AWS S3 endpoint')
     expect(publisherInvocation).to.equal(undefined)
   })
@@ -290,7 +290,7 @@ describe('real-proof program bundle publication', () => {
     const component = {enabled: true, valuesFile: values}
     const topology = path.join(root, '.data/generated/proof-topology')
     writeProofDeploymentContract({deploymentDir: root, enforcement: 'observe', ethDaSubmitter: component, generation: 'real', intentSource: {kind: 'doge-config', path: path.join(root, 'config.toml'), sha256: 'c'.repeat(64)}, materialsReceipt: receiptPath, mode: 'active', proofArtifactBaseUrl: 'https://s3.us-east-1.amazonaws.com/dogeos-proof-artifacts/devnet/instance', proofCoordinator: component, proverWorker: {...component, enabled: false}, topology: {bundleDir: topology, bundleManifest: path.join(topology, 'bundle-manifest-v1.json'), bundleRevision: 'd'.repeat(64), resolvedSidecar: path.join(topology, 'resolved-v2.json')}, tsoValuesFile: values, withdrawalProcessor: component, worker: {contractFile: path.join(topology, 'prover-worker-v1.json'), kind: 'compiled-external'}})
-    const config = {attestationSigner: {activeSignerIds: ['partner'], external: [{endpoint: 'https://partner.example.com', id: 'partner', publicKey: '02' + '2'.repeat(64)}], mode: 'external'}, network: 'testnet'} as DogeConfig
+    const config = {attestationSigner: {activeSignerIds: ['partner'], external: [{id: 'partner', publicKey: '02' + '2'.repeat(64), transportPubkey: '03' + '3'.repeat(64)}], mode: 'external'}, network: 'testnet'} as DogeConfig
     const options = {config, deploymentDir: root, output: 'signer-bundle', protocolContext: '.data/protocol_context.json', tsoUrl: 'https://tso.example.com'}
     const result = writeSignerPolicyHandoff(options)
     expect(result.advanceL2Verifier?.batchProgramCommitmentHex).to.equal(materials.software.identities.batch.appCommitRaw)

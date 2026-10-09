@@ -7,6 +7,28 @@ infrastructure bootstrap script or evidence of production deployment acceptance.
 Provision the RPC endpoints, Kubernetes infrastructure, DNS, signer access and
 storage required by your chosen deployment separately.
 
+Use core images and the topology compiler containing
+[dogeos-core #1483](https://github.com/DogeOS69/dogeos-core/pull/1483) and
+[#1482](https://github.com/DogeOS69/dogeos-core/pull/1482), together with the
+matching charts and partner kit from
+[scroll-sdk #141](https://github.com/DogeOS69/scroll-sdk/pull/141).
+External signer descriptors now include `transportPubkey`; regenerate old
+descriptors with `--print-identity` and import them before `prep-charts`.
+The generated signer directory pins both keys and uses pull delivery for
+external signers, with only `/health` and `/signer` exposed publicly. The
+in-cluster CubeSigner remains push delivery. Coordinate the core, chart and
+partner-signer upgrade; the old unsigned external callbacks are no longer
+public routes.
+
+Configure `[proofArtifacts.s3]` separately from `[ethereumDa.blobArchive.s3]`.
+The compiler owns `[segmentation_sidecar.s3]` and points it at the proof store;
+the submitter's `[s3]` continues to archive raw DA blobs. After selecting these
+stores, reconcile the submitter writer with `setup eth-da-submitter` or
+`setup artifact-access --store da --writer-role-arn <role-arn> --apply` so both
+native sidecar namespaces are writable. See the
+[S3 reference](ethereum-da-s3.md#three-buckets) for permissions and deployment
+prefixes. These configuration changes do not copy historical objects.
+
 See [Local setup-order validation](setup-order-validation.md) for executed checks,
 findings and the cloud/proof/runtime steps that remain unverified.
 The newer [production input review](production-inputs-review.md) records the
@@ -44,7 +66,7 @@ Configure the following before generating genesis or initializing Bridge:
 | Dogecoin RPC, Ethereum DA and domains | `scrollsdk setup doge-config`, then `scrollsdk setup domains` | Use the intended network and service endpoints. |
 | Application signers | `scrollsdk setup eth-da-submitter`; `scrollsdk setup fee-oracle` | Select local or AWS KMS signing in each command. Configure DA archive settings; the fee oracle public address is needed for genesis. |
 | Reth node identities | `scrollsdk setup l2-sequencer-reth --index 0`; `scrollsdk setup l2-bootnode-reth` | Configure additional instances as needed; see [Pure Reth configuration](reth-only-peers.md). |
-| Attestation signer inputs | Each signer operator runs `scrollsdk signer init --id <id> --network <network> --endpoint <url>` on their own infrastructure, then the bridge operator runs `scrollsdk setup attestation-signer` | Collect the public descriptors in `descriptors/` or pass `--descriptor` for each file. This signer identity flow is independent of DA/Fee Oracle KMS provisioning. |
+| Attestation signer inputs | Each signer operator runs `scrollsdk signer init --id <id> --network <network>`, then `attestation_signer --print-identity` and `scrollsdk signer init ... --identity <file>` on their own infrastructure to produce the descriptor (attestation + transport public keys, no endpoint: signers dial out to the TSO), then the bridge operator runs `scrollsdk setup attestation-signer` | Collect the public descriptors in `descriptors/` or pass `--descriptor` for each file. This signer identity flow is independent of DA/Fee Oracle KMS provisioning. |
 | TEE identity and session | `scrollsdk setup cubesigner-init`, then `scrollsdk setup cubesigner-refresh` | Use the intended CubeSigner environment and identity lifecycle; gamma is not a universal requirement. |
 
 These are configuration tasks, not a script to rerun blindly on an existing
@@ -177,7 +199,7 @@ the full command, controller setup and deployment boundary.
 
 After importing the real preparation receipt and compiling the active/real
 topology, the complete 11-file bundle can be published without creating EKS
-workload roles. Use the canonical `ethereumDa.blobArchive.s3` bucket, prefix,
+workload roles. Use the canonical `proofArtifacts.s3` bucket, prefix,
 region and regional AWS endpoint already present in `doge-config`:
 
 ```bash

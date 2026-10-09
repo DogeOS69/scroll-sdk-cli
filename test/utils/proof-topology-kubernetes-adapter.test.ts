@@ -68,8 +68,10 @@ function fakeBundle(root: string, mode: 'active' | 'disabled', generation: 'mock
   fs.writeFileSync(
     path.join(root, 'eth-da-submitter.patch.toml'),
     mode === 'active'
-      ? '[s3]\nenabled = true\nbucket = "dogeos-da-archive"\nregion = "us-west-2"\nkey_prefix = "testnet/batches"\n\n[segmentation_sidecar]\nenabled = true\ns3 = true\n'
-      : '[s3]\nenabled = false\n\n[segmentation_sidecar]\nenabled = false\ns3 = false\n',
+      // The compiler owns only the sidecar and its own target (the proof
+      // artifact store); [s3] stays the deployment's DA archive.
+      ? '[segmentation_sidecar]\nenabled = true\n\n[segmentation_sidecar.s3]\nbucket = "dogeos-proof-artifacts"\nregion = "us-west-2"\nkey_prefix = "testnet/proofs"\nforce_path_style = false\n'
+      : '[segmentation_sidecar]\nenabled = false\n',
   )
   if (mode === 'active') {
     fs.writeFileSync(path.join(root, 'proof-coordinator.toml'), 'coordinator_id = "compiled"\n')
@@ -560,13 +562,34 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     expect(env.DOGEOS_ETH_DA_SUBMITTER_SEGMENTATION_SIDECAR__ENABLED).to.equal('false')
   })
 
-  it('rejects an active compiler patch that retargets the shared raw-DA/proof store', () => {
+  it('projects the sidecar target into the proof store and leaves the DA archive writer alone', () => {
+    reconcileCompiledProofTopology({
+      compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active'),
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      deploymentDir: root,
+      deploymentName: 'test',
+      network: 'testnet',
+      proofTopology: topology('active'),
+      valuesDir: path.join(root, 'values'),
+      withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
+    })
+
+    const env = (yaml.load(fs.readFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), 'utf8')) as any).configMaps.env.data
+    expect(env.DOGEOS_ETH_DA_SUBMITTER_S3__BUCKET).to.equal('dogeos-da-archive')
+    expect(env.DOGEOS_ETH_DA_SUBMITTER_S3__KEY_PREFIX).to.equal('testnet/batches')
+    expect(env.DOGEOS_ETH_DA_SUBMITTER_SEGMENTATION_SIDECAR__ENABLED).to.equal('true')
+    expect(env.DOGEOS_ETH_DA_SUBMITTER_SEGMENTATION_SIDECAR__S3__BUCKET).to.equal('dogeos-proof-artifacts')
+    expect(env.DOGEOS_ETH_DA_SUBMITTER_SEGMENTATION_SIDECAR__S3__KEY_PREFIX).to.equal('testnet/proofs')
+    expect(env.DOGEOS_ETH_DA_SUBMITTER_SEGMENTATION_SIDECAR__S3__FORCE_PATH_STYLE).to.equal('false')
+  })
+
+  it('rejects an active compiler patch that retargets the DA archive writer', () => {
     expect(() => reconcileCompiledProofTopology({
       compile() {
         const bundle = fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active')
         fs.writeFileSync(
           path.join(bundle.bundleDir, 'eth-da-submitter.patch.toml'),
-          '[s3]\nenabled = true\nbucket = "different-proof-bucket"\nregion = "us-west-2"\nkey_prefix = "testnet/batches"\n\n[segmentation_sidecar]\nenabled = true\ns3 = true\n',
+          '[s3]\nenabled = true\nbucket = "different-proof-bucket"\nregion = "us-west-2"\nkey_prefix = "testnet/batches"\n\n[segmentation_sidecar]\nenabled = true\n',
         )
         return bundle
       },

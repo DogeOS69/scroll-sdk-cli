@@ -528,7 +528,7 @@ export async function resolveBlobArchive(
   })).trim()
   const keyPrefix = normalizeS3ArchiveKeyPrefix(await textInput({
     default: defaultKeyPrefix,
-    message: 'Deployment S3 key prefix (core owns the object paths below it; optional for DA-only):',
+    message: 'DA archive deployment prefix (core owns the object paths; empty uses the bucket root):',
   }))
   const publicBaseUrl = flagPublicBaseUrl || (
     bucket === existingArchive?.bucket && region === existingArchive?.region

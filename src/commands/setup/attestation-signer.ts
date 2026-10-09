@@ -23,7 +23,7 @@ function positiveInteger(raw: string | undefined, fallback: number, name: string
 }
 
 export class AttestationSignerCommand extends Command {
-  static description = 'Import signer-init descriptors from partner-operated attestation-signers and select the bootstrap bridge keyset. This command consumes only endpoint + public key and never provisions keys, deployments, or network probes. Current dogeos-core runtime preflight occurs after partners install the post-genesis canonical-context bundle.'
+  static description = 'Import signer-init descriptors from partner-operated attestation-signers and select the bootstrap bridge keyset. This command consumes only the attestation and transport public keys and never provisions keys, deployments, or network probes. Signers dial out to the TSO, so no signer endpoint is imported. Current dogeos-core runtime preflight occurs after partners install the post-genesis canonical-context bundle.'
 
   static examples = [
     '$ scrollsdk setup attestation-signer --descriptor partner-a.json --descriptor partner-b.json --descriptor ours.json --threshold 2',
@@ -66,21 +66,19 @@ export class AttestationSignerCommand extends Command {
       config.attestationSigner = {
         activeSignerIds,
         external: descriptors.map(descriptor => ({
-          endpoint: descriptor.endpoint,
           id: descriptor.id,
           publicKey: descriptor.publicKey,
+          transportPubkey: descriptor.transportPubkey,
         })),
         mode: 'external',
         threshold,
       }
-      config.signerUrls = activeSignerIds.map(id => byId.get(id)!.endpoint)
       fs.writeFileSync(loaded.configPath, dogeConfigToToml(config))
       this.writeInitialBridgeConfig(descriptors, activeSignerIds, threshold)
 
       const result = {
         activeSignerIds,
         signerCount: descriptors.length,
-        signerUrls: config.signerUrls,
         signers: config.attestationSigner.external,
         threshold,
       }
@@ -112,15 +110,17 @@ export class AttestationSignerCommand extends Command {
 
     const descriptors = files.map(file => loadAttestationSignerDescriptor(file))
     const ids = new Set<string>()
+    // Attestation and transport keys share one namespace: no key may appear
+    // twice in any role, so every signer holds its own keys.
     const pubkeys = new Set<string>()
-    const endpoints = new Set<string>()
     for (const descriptor of descriptors) {
       if (ids.has(descriptor.id)) throw new Error(`duplicate signer id across descriptors: ${descriptor.id}`)
-      if (pubkeys.has(descriptor.publicKey)) throw new Error(`duplicate publicKey across descriptors (${descriptor.id}); every signer must hold its own key`)
-      if (endpoints.has(descriptor.endpoint)) throw new Error(`duplicate endpoint across descriptors (${descriptor.id}); every signer must be independently reachable`)
+      for (const key of [descriptor.publicKey, descriptor.transportPubkey]) {
+        if (pubkeys.has(key)) throw new Error(`duplicate public key across descriptors (${descriptor.id}); every signer must hold its own attestation and transport keys`)
+        pubkeys.add(key)
+      }
+
       ids.add(descriptor.id)
-      pubkeys.add(descriptor.publicKey)
-      endpoints.add(descriptor.endpoint)
     }
 
     return descriptors

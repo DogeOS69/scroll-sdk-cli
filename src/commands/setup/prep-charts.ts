@@ -17,6 +17,7 @@ import {
   YAML_DUMP_OPTIONS,
 } from '../../config/constants.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
+import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
 import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
@@ -40,7 +41,6 @@ import {
   assertProofAwsMatchesTopology,
   reconcileProofKubernetes,
 } from '../../utils/proof-kubernetes-reconciler.js'
-import {assertTopologyUsesSharedArtifactStore, sharedArtifactStoreFromDogeConfig} from '../../utils/proof-shared-artifact-store.js'
 import {proofTopologyEthereumDaBlobSource} from '../../utils/proof-topology-compiler.js'
 import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles, stripRetiredServiceConfig} from '../../utils/retired-services.js'
@@ -82,12 +82,17 @@ import {
   signerModeToConfig,
 } from './l2-sequencer-reth.js'
 
-export interface TsoSignerEndpoint {
+/** One TSO signer directory entry (WP tsoSigners -> [[tso_signers]]). */
+export interface TsoSignerEntry {
+  delivery: 'pull' | 'push'
   network: string
-  publicKeyOverride?: string
-  role: 'Attestation' | 'Correctness'
+  publicKeyOverride: string
+  /** Exactly one role today; a list so one key can later serve two scripts. */
+  roles: Array<'Attestation' | 'Correctness'>
   signatureMode: 'ecdsa' | 'shadowfork_sentinel'
-  uri: string
+  transportPubkey?: string
+  /** Push delivery only. */
+  uri?: string
 }
 
 interface PrepChartGenerationResult {
@@ -152,18 +157,19 @@ export function buildRethInitialTrustedPeers(rethSequencerPeers: string[]): stri
 }
 
 /**
- * The descriptor endpoint is the routing contract: preserve the partner's
- * exact IP/domain and project it into the TSO registration list alongside the
- * in-cluster TEE signers. Always return the full list so a missing/stale values
- * array cannot silently disconnect external signers.
+ * Build the whole TSO signer directory so a missing/stale values array cannot
+ * silently drop a signer. The in-cluster CubeSigner is pushed to over its
+ * Service. Every imported external attestation signer (active or not, so
+ * upcoming rotation keys are already registered) dials out to the TSO: pull
+ * delivery, no URI, with both descriptor keys pinned.
  */
-export function buildTsoSigners(config: Pick<DogeConfig, 'cubesigner' | 'network' | 'signerUrls'>): TsoSignerEndpoint[] {
+export function buildTsoSigners(config: Pick<DogeConfig, 'attestationSigner' | 'cubesigner' | 'network'>): TsoSignerEntry[] {
   const cubesignerRoles = config.cubesigner?.roles || []
   if (cubesignerRoles.length > 1) {
     throw new Error('CubeSigner supports exactly one TEE role and one in-cluster deployment')
   }
 
-  const teeSigners: TsoSignerEndpoint[] = cubesignerRoles.length === 0 ? [] : (() => {
+  const teeSigners: TsoSignerEntry[] = cubesignerRoles.length === 0 ? [] : (() => {
     const publicKeyOverride = cubesignerRoles[0]?.keys?.[0]?.public_key_compressed
     if (!publicKeyOverride) {
       throw new Error(
@@ -173,20 +179,23 @@ export function buildTsoSigners(config: Pick<DogeConfig, 'cubesigner' | 'network
     }
 
     return [{
+      delivery: 'push',
       network: config.network,
       publicKeyOverride,
       // TSO's public registration contract calls the TEE signer "Correctness".
       // "Tee" is its internal script role and is intentionally not accepted here.
-      role: 'Correctness',
+      roles: ['Correctness'],
       signatureMode: 'ecdsa',
       uri: 'http://cubesigner-signer:3000',
     }]
   })()
-  const attestationSigners: TsoSignerEndpoint[] = (config.signerUrls || []).map(uri => ({
+  const attestationSigners: TsoSignerEntry[] = (config.attestationSigner?.external || []).map(signer => ({
+    delivery: 'pull',
     network: config.network,
-    role: 'Attestation',
+    publicKeyOverride: signer.publicKey,
+    roles: ['Attestation'],
     signatureMode: 'ecdsa',
-    uri,
+    transportPubkey: signer.transportPubkey,
   }))
   return [...teeSigners, ...attestationSigners]
 }
@@ -1044,6 +1053,36 @@ export function applyL2RethRpcRuntimeValues(
   return changes
 }
 
+/** The TSO's only public routes: health and the transport-signed signer routes. */
+export const TSO_PUBLIC_INGRESS_PATHS = [
+  {path: '/health', pathType: 'Exact'},
+  {path: '/signer', pathType: 'Prefix'},
+] as const
+
+/**
+ * Reconcile every enabled TSO ingress host to the public-edge allowlist.
+ * Existing values arrays override the chart default, so an older `/` route
+ * would otherwise keep /propose, /register-*, /status and the unprefixed
+ * callbacks public. Hosts, TLS and controller annotations are preserved.
+ */
+export function applyTsoPublicEdgePaths(productionYaml: any): PrepChartChange[] {
+  const changes: PrepChartChange[] = []
+  const ingresses = productionYaml.ingress
+  if (!ingresses || typeof ingresses !== 'object') return changes
+  for (const [ingressKey, ingress] of Object.entries(ingresses as Record<string, any>)) {
+    if (!ingress || typeof ingress !== 'object' || ingress.enabled === false || !Array.isArray(ingress.hosts)) continue
+    for (const [index, host] of ingress.hosts.entries()) {
+      if (!host || typeof host !== 'object') continue
+      const desired = TSO_PUBLIC_INGRESS_PATHS.map(entry => ({...entry}))
+      if (JSON.stringify(host.paths) === JSON.stringify(desired)) continue
+      changes.push({key: `ingress.${ingressKey}.hosts[${index}].paths`, newValue: JSON.stringify(desired), oldValue: JSON.stringify(host.paths ?? null)})
+      host.paths = desired
+    }
+  }
+
+  return changes
+}
+
 export function applyL2RethRpcPublicIngressPolicy(productionYaml: any): PrepChartChange[] {
   const changes: PrepChartChange[] = []
   const { ingress } = productionYaml
@@ -1760,14 +1799,14 @@ export default class SetupPrepCharts extends Command {
     }
 
     if (this.proofIntent) {
-      const sharedArtifactStore = sharedArtifactStoreFromDogeConfig(this.dogeConfig)
+      const proofArtifactStore = proofArtifactStoreFromDogeConfig(this.dogeConfig)
       const topologyArtifactStore = this.proofIntent.proofTopology.active?.artifactStore
       if (topologyArtifactStore?.kind === 's3_compatible') {
-        assertTopologyUsesSharedArtifactStore({
+        assertTopologyUsesProofArtifactStore({
           bucket: topologyArtifactStore.bucket,
           keyPrefix: this.proofIntent.proofTopology.deployment.artifactKeyPrefix,
           region: topologyArtifactStore.region,
-        }, sharedArtifactStore)
+        }, proofArtifactStore)
       }
 
       const proofAws = readOptionalProofAwsConfig(process.cwd())
@@ -3224,6 +3263,12 @@ export default class SetupPrepCharts extends Command {
         }
       }
       else if (chartName === "tso-service") {
+        const edgeChanges = applyTsoPublicEdgePaths(productionYaml)
+        if (edgeChanges.length > 0) {
+          changes.push(...edgeChanges)
+          updated = true
+        }
+
         // Old deployment files may predate the chart default. Fill only a
         // missing annotation; explicit operator limits (including null to
         // remove the Helm default) and other annotations remain untouched.

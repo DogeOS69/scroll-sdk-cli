@@ -134,23 +134,25 @@ and deployment-bound Bridge bake were used.
 
 ## 4. Normal setup
 
-### Step 1: establish the shared DA/proof object namespace
+### Step 1: establish the proof artifact store
 
-`eth-da-submitter` has one `[s3]` client. Raw EIP-4844 blobs and proof-system
-objects therefore share the canonical bucket, region, and key prefix recorded
-under `[ethereumDa.blobArchive.s3]` in `.data/doge-config.toml`; logical object
-keys separate raw blobs, segmentation sidecars, Worker inputs, and proofs.
+Raw EIP-4844 blobs and proof-system objects live in separate buckets. The DA
+archive is `[ethereumDa.blobArchive.s3]`; the proof artifact store (chunk
+inputs, segmentation sidecars, materializer outputs, proofs) is
+`[proofArtifacts.s3]` in `.data/doge-config.toml`. eth-da-submitter writes DA
+blobs to the first and only its segmentation sidecars to the second. See
+[ethereum-da-s3.md](ethereum-da-s3.md#three-buckets).
 
-Configure the archive first, for example with `setup eth-da-submitter`, and
-then run:
+Configure `[proofArtifacts.s3]` (bucket, region, keyPrefix) first, and then
+run:
 
 ```bash
 scrollsdk setup proof-aws-init
 ```
 
-This reuses the configured DA bucket/prefix, creates or reconciles the proof
+This uses the configured proof bucket/prefix, creates or reconciles the proof
 IAM roles and token secret, configures the selected external read transport,
-and writes `.data/proof-aws.json`. It never invents a second proof-only bucket.
+and writes `.data/proof-aws.json`. The DA archive configuration is independent.
 Choose the public-read mode according to who owns the bucket-level policy:
 
 - `existing-public-s3` uses the regional S3 endpoint and preserves the existing
