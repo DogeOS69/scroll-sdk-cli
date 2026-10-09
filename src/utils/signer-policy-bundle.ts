@@ -129,33 +129,71 @@ export function renderSignerPolicyEnv(input: SignerPolicyBundleInput): string {
  * Create the operator's transport key once, validate the whole file, and
  * install it next to the Compose file, as one block that fails as a unit: a
  * corrupt key or a failed generator returns nonzero and leaves the runtime
- * key untouched. A rerun reuses the key whose public half the TSO directory
- * may already pin; rotation is a separate, explicit step. The partner-kit
- * README carries the same lines.
+ * key untouched. Creation is allowed only during the first Phase A. Phase B
+ * requires the existing key and descriptor; both phases check any existing
+ * descriptor before installing the key. The partner-kit carries the same text.
  */
-export const TRANSPORT_KEY_COMMANDS = [
-  '(',
-  '  set -eu',
-  '  key="signer-$SIGNER_ID/transport.key"',
-  '  # Create only when absent: write a temp file, then link it in exclusively.',
-  '  if [ ! -e "$key" ]; then',
-  '    umask 077',
-  '    openssl rand -hex 32 > "$key.new"',
-  '    ln "$key.new" "$key"',
-  '    rm -f "$key.new"',
-  '  fi',
-  '  # The whole file must be exactly 64 lowercase hex characters and a newline.',
-  '  if [ "$(wc -c < "$key")" -ne 65 ] || [ "$(tail -c 1 "$key" | wc -l)" -ne 1 ] \\',
-  '    || ! head -c 64 "$key" | grep -Eqx \'[0-9a-f]{64}\'; then',
-  '    echo "$key must be exactly one line of 64 hex characters; restore it (rotation is a separate step)" >&2',
-  '    exit 1',
-  '  fi',
-  '  # Install atomically: the runtime key is replaced only by a validated copy.',
-  '  cp "$key" docker-compose/transport.key.new',
-  '  chmod 600 docker-compose/transport.key.new',
-  '  mv -f docker-compose/transport.key.new docker-compose/transport.key',
-  ')',
-].join('\n')
+function transportKeyCommands(initialize: boolean): string {
+  return [
+    '(',
+    '  set -eu',
+    '  key="signer-$SIGNER_ID/transport.key"',
+    '  descriptor="signer-$SIGNER_ID/descriptor.json"',
+    ...(initialize ? [
+      '  # Only first-time initialization may create a key; never recover by rotating.',
+      '  if [ ! -e "$key" ]; then',
+      '    if [ -e "$descriptor" ] || [ -e docker-compose/transport.key ]; then',
+      '      echo "Transport key missing; restore the registered key before continuing" >&2',
+      '      exit 1',
+      '    fi',
+      '    umask 077',
+      '    openssl rand -hex 32 > "$key.new"',
+      '    ln "$key.new" "$key"',
+      '    rm -f "$key.new"',
+      '  fi',
+    ] : [
+      '  # Registration is complete: missing inputs must never generate a new key.',
+      '  if [ ! -f "$key" ] || [ ! -f "$descriptor" ]; then',
+      '    echo "Transport key or descriptor missing; restore the registered files before continuing" >&2',
+      '    exit 1',
+      '  fi',
+    ]),
+    '  # The whole file must be exactly 64 lowercase hex characters and a newline.',
+    '  if [ "$(wc -c < "$key")" -ne 65 ] || [ "$(tail -c 1 "$key" | wc -l)" -ne 1 ] \\',
+    '    || ! head -c 64 "$key" | grep -Eqx \'[0-9a-f]{64}\'; then',
+    '    echo "$key must be exactly one line of 64 hex characters; restore it (rotation is a separate step)" >&2',
+    '    exit 1',
+    '  fi',
+    '  # Node is already required by scrollsdk. Derive the compressed secp256k1',
+    '  # public key locally; never print the private key or pass it in argv.',
+    "  node --input-type=commonjs -e '",
+    '    const fs = require("node:fs");',
+    '    const {createECDH} = require("node:crypto");',
+    '    try {',
+    '      const key = createECDH("secp256k1");',
+    '      key.setPrivateKey(Buffer.from(fs.readFileSync(process.argv[1], "utf8").trim(), "hex"));',
+    '      if (fs.existsSync(process.argv[2])) {',
+    '        const descriptor = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));',
+    '        if (typeof descriptor.transportPubkey !== "string" ||',
+    '            descriptor.transportPubkey.toLowerCase() !== key.getPublicKey("hex", "compressed")) {',
+    '          throw new Error();',
+    '        }',
+    '      }',
+    '    } catch {',
+    '      console.error("Transport key invalid or does not match descriptor; restore the registered files");',
+    '      process.exit(1);',
+    '    }',
+    `  ' "$key" "$descriptor"`,
+    '  # Install atomically: the runtime key is replaced only by a validated copy.',
+    '  cp "$key" docker-compose/transport.key.new',
+    '  chmod 600 docker-compose/transport.key.new',
+    '  mv -f docker-compose/transport.key.new docker-compose/transport.key',
+    ')',
+  ].join('\n')
+}
+
+export const TRANSPORT_KEY_COMMANDS = transportKeyCommands(true)
+export const INSTALL_TRANSPORT_KEY_COMMANDS = transportKeyCommands(false)
 
 function indented(block: string): string {
   return block.split('\n').map(line => (line ? `  ${line}` : line)).join('\n')
@@ -192,7 +230,8 @@ export const PARTNER_PHASE_A_COMMANDS = [
 
 /**
  * Phase B as one set -eu subshell: the signer is configured and started only
- * if every step succeeds, so a bad transport key never reaches `up -d`.
+ * if every step succeeds. The existing key must match its descriptor; a
+ * missing or mismatched key never reaches `up -d` or replaces the runtime key.
  * PREFLIGHT_FLAGS adds --require-production-ready in enforce mode.
  */
 export const PARTNER_PHASE_B_COMMANDS = [
@@ -200,7 +239,7 @@ export const PARTNER_PHASE_B_COMMANDS = [
   '  set -eu',
   '  cp "signer-$SIGNER_ID/attestation-signer.env" "signer-$SIGNER_ID/attestation-signer.toml" docker-compose/',
   '  chmod 600 docker-compose/attestation-signer.env',
-  indented(TRANSPORT_KEY_COMMANDS),
+  indented(INSTALL_TRANSPORT_KEY_COMMANDS),
   '  mkdir -p docker-compose/policy',
   '  cp signer-policy-bundle/signer-policy.env docker-compose/signer-policy.env',
   '  cp signer-policy-bundle/protocol_context.json docker-compose/policy/protocol_context.json',
