@@ -335,7 +335,7 @@ node scripts/test-preparation-e2e.mjs /path/to/scroll-sdk \
   /private/test-spec.yaml /private/compiler-identity.json
 ```
 
-It runs real rc.4 genesis and beta.6 Bridge/compiler containers, verifies both
+It runs real rc.5 genesis and beta.6 Bridge/compiler containers, verifies both
 funding pauses, resumes to `prepared`, then reruns to verify completion is stable.
 Private generated files and child logs remain in the reported temporary directory;
 only sanitized step outcomes and RPC method names are printed. Docker must be

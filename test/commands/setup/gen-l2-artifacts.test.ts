@@ -12,7 +12,7 @@ describe('gen-l2-artifacts explicit image selection', () => {
 
   it('uses the default only when no tag was supplied', async () => {
     const fetchStub = sinon.stub(globalThis, 'fetch')
-    expect(await resolveGenesisImageTag()).to.equal('gen-configs-dogeos-v0.3.0-rc.4')
+    expect(await resolveGenesisImageTag()).to.equal('gen-configs-dogeos-v0.3.0-rc.5')
     expect(fetchStub.called).to.equal(false)
   })
 

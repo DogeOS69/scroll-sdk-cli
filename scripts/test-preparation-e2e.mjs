@@ -201,7 +201,7 @@ try {
     if (calls.some(name => name === 'sendrawtransaction'))
         throw Error('Production preparation broadcast a transaction');
     fs.writeFileSync(root + '/evidence.json', JSON.stringify({
-        scope: 'Real rc.4 genesis and beta.6 artifact/compiler commands; synthetic read-only chain RPC; no chain broadcasts or cloud operations', completed: true, rpcMethods: [...new Set(calls)]
+        scope: 'Real rc.5 genesis and beta.6 artifact/compiler commands; synthetic read-only chain RPC; no chain broadcasts or cloud operations', completed: true, rpcMethods: [...new Set(calls)]
     }, null, 2));
     console.log(JSON.stringify({
         root, completed: true

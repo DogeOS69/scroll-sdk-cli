@@ -6,7 +6,7 @@ For resumable orchestration of the full preparation sequence, see
 
 DeploymentSpec generation and `setup prep-charts` share the following inputs.
 The core service image fallback is `v0.3.0-beta.6`; explicit image overrides
-remain authoritative. Contracts use `dogeos-v0.3.0-rc.4`. Reth is independently
+remain authoritative. Contracts use `dogeos-v0.3.0-rc.5`. Reth is independently
 released and still requires an explicit approved image tag.
 
 ## Fresh-chain gas and fee policy
@@ -26,7 +26,7 @@ overhead is a decimal uint256 string in wei; it is different from genesis
 
 The generated Reth values use 30,000,000 gas, a 2000 ms block interval and a
 1400 ms payload build window. The same genesis gas limit enters `config.toml`
-for rc.4 genesis generation. During prep, an explicit `genesis.GAS_LIMIT` in
+for rc.5 genesis generation. During prep, an explicit `genesis.GAS_LIMIT` in
 that file also sets the concrete Reth nodes' builder gas limit. If the field is
 absent from an older deployment, prep preserves its values setting. Prep does
 not rewrite the operator's existing block interval/build window or image pin.
