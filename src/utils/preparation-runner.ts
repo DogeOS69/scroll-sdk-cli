@@ -18,6 +18,7 @@ import {exportCoordinatorMaterializers} from './proof-image-tools.js'
 import {readProofMaterials} from './proof-materials.js'
 import {readProofSoftwareRelease} from './proof-software-release.js'
 import {buildProofTopology} from './proof-topology-init.js'
+import {resolveSpecProofStorage} from './spec-proof-storage.js'
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../bin/run.js')
 export type Invoke = (root: string, step: string, args: string[], environment?: Record<string, string>) => Promise<void>
@@ -167,7 +168,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         }
 
         const materials = readProofMaterials(requiredFile(root, receipt, 'proof materials receipt'), root)
-        const previous = spec.proofTopology!
+        const previous = resolveSpecProofStorage(spec).proofTopology!
         const topology = buildProofTopology({artifactStore: previous.active!.artifactStore, deploymentName: spec.metadata.name, enforcement: previous.enforcement, generation: previous.generation, materials, mode: previous.mode, runtime: {
           artifactKeyPrefix: previous.deployment.artifactKeyPrefix, blockWitnessDir: previous.active!.realScroll.chunkBlockWitnessDir, observeRealProofDeadlineMs: previous.observeRealProofDeadlineMs,
           proofCoordinatorPublicUrl: previous.deployment.proverPublicUrl!, publicS3EndpointUrl: previous.deployment.publicS3EndpointUrl,

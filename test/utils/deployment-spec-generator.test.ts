@@ -106,6 +106,7 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       l2ChainName: 'DogeOS Testnet',
       tokenSymbol: 'ETH',
     },
+    proofArtifacts: {s3: {bucket: 'dogeos-proofs', keyPrefix: 'proof-topology', region: 'us-west-2'}},
     signing: { cubesigner: { roles: [] } },
     version: '1.0',
     ...overrides,
@@ -148,7 +149,6 @@ function createProofTopology(
       image: image('a', 'dogeos69/dogeos-proof-topology'),
     },
     deployment: {
-      artifactKeyPrefix: 'proof-topology',
       mockWorkerImage: image('b', 'dogeos69/prover-worker-mock'),
       productionWorkerImage: image('c', 'dogeos69/prover-worker'),
     },
@@ -780,10 +780,6 @@ describe('deployment-spec-generator', () => {
     it('allows proof infrastructure to be prepared while proof mode is disabled', () => {
       const spec = createMinimalSpec({
         proofCoordinator: {
-          artifactStore: {
-            bucket: 'dogeos-proofs',
-            region: 'us-west-2',
-          },
           s3AuthMode: 'ambient',
         },
         proofTopology: createProofTopology(),
@@ -1027,7 +1023,6 @@ describe('deployment-spec-generator', () => {
       Object.assign(spec.frontend.hosts, {blockscoutBackend: 'blockscout-be.example.com'});
       spec.frontend.hosts.proofCoordinator = 'proof-coordinator.example.com';
       spec.proofCoordinator = {
-        artifactStore: {bucket: 'dogeos-proofs', region: 'us-west-2'},
         s3AuthMode: 'ambient',
       };
       spec.proofTopology = createProofTopology();
@@ -1760,13 +1755,9 @@ describe('deployment-spec-generator', () => {
         provider: 'aws',
         sequencerCount: 1,
       };
+      spec.proofArtifacts!.s3!.endpointUrl = 'http://minio.scrollsdk:9000';
       spec.proofCoordinator = {
-        artifactStore: {
-          bucket: 'dogeos-proofs',
-          endpointUrl: 'http://minio.scrollsdk:9000',
-          publicS3EndpointUrl: 'https://proof-artifacts.example.com',
-          region: 'us-west-2',
-        },
+        artifactStore: {publicS3EndpointUrl: 'https://proof-artifacts.example.com'},
         proofWorkBaseUrl: 'http://withdrawal-processor:3000',
         s3AuthMode: 'irsa',
         serviceAccount: {
@@ -1857,10 +1848,6 @@ describe('deployment-spec-generator', () => {
     it('prepares mode-independent proof-coordinator values in disabled mode', () => {
       const spec = createMinimalSpec({
         proofCoordinator: {
-          artifactStore: {
-            bucket: 'dogeos-proofs',
-            region: 'us-west-2',
-          },
           s3AuthMode: 'ambient',
         },
         proofTopology: createProofTopology(),

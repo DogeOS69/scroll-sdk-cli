@@ -18,7 +18,9 @@ import {ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA} from '../../src/utils/attestation-
 import {generateAllConfigs, normalizeDeploymentSpec, validateDeploymentSpec} from '../../src/utils/deployment-spec-generator.js'
 import {dogeConfigToToml} from '../../src/utils/doge-config.js'
 import {resolveDogecoinKubernetesEndpoints} from '../../src/utils/kubernetes-endpoints.js'
+import {createPreparationPlan} from '../../src/utils/preparation-plan.js'
 import {resolveProofIntent} from '../../src/utils/proof-intent.js'
+import {resolveSpecProofStorage} from '../../src/utils/spec-proof-storage.js'
 import {generateValuesFiles} from '../../src/utils/values-generator.js'
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -43,13 +45,12 @@ function proofFixture(): DeploymentSpec {
   spec.proofArtifacts = {s3: {bucket: 'audit-proofs', keyPrefix: 'proofs', region: 'us-west-2'}}
   spec.ethereumDa!.blobArchive = {s3: {bucket: 'audit-blobs', enabled: true, keyPrefix: 'blobs', publicBaseUrl: 'https://blobs.audit.invalid', region: 'us-west-2'}}
   spec.proofCoordinator = {
-    artifactStore: {bucket: 'audit-proofs', keyPrefix: 'proofs', region: 'us-west-2'},
     s3AuthMode: 'ambient',
     secrets: {name: 'custom-proof-secret', proverWorkerTokenProperty: 'custom-worker-token'},
   }
   spec.proofTopology = {
     active: {
-      artifactStore: {bucket: 'audit-proofs', kind: 's3_compatible', region: 'us-west-2'},
+      artifactStore: {kind: 's3_compatible'},
       profile: 'withdrawal_mock_prover',
       realScroll: {
         batchProgramCommitmentHashHex: 'a'.repeat(64), batchProgramCommitmentHex: 'b'.repeat(128), batchVerificationKeyHashHex: 'c'.repeat(64),
@@ -61,13 +62,82 @@ function proofFixture(): DeploymentSpec {
       workerLaunch: 'external',
     },
     compiler: {identityFilePath: '.data/proof-materials/identity.json', image: {digest: `sha256:${'a'.repeat(64)}`, repository: 'example.invalid/compiler'}},
-    deployment: {artifactKeyPrefix: 'proofs', proverPublicUrl: 'https://proof.audit.invalid'},
+    deployment: {proverPublicUrl: 'https://proof.audit.invalid'},
     enforcement: 'observe', generation: 'mock', mode: 'disabled', observeRealProofDeadlineMs: 1_800_000,
   }
   return spec
 }
 
 describe('spec intent through configuration and values projection', () => {
+  it('projects one proof store into native config, Helm values and compiler input without duplicating source intent', () => {
+    const spec = proofFixture()
+    spec.infrastructure.aws = {accountId: '123456789012', eksClusterName: 'test-cluster', region: 'us-east-1'}
+    delete spec.proofArtifacts!.s3!.region
+    delete spec.proofTopology!.active!.artifactStore
+    const original = structuredClone(spec)
+    const normalized = normalizeDeploymentSpec(spec)
+    const resolved = resolveSpecProofStorage(normalized)
+    expect(resolved.proofCoordinator!.artifactStore).to.include({bucket: 'audit-proofs', forcePathStyle: false, keyPrefix: 'proofs', region: 'us-east-1'})
+    expect(resolved.proofTopology!.active!.artifactStore).to.include({bucket: 'audit-proofs', endpointUrl: 'https://s3.us-east-1.amazonaws.com', forcePathStyle: false, kind: 's3_compatible', region: 'us-east-1'})
+    expect(resolved.proofTopology!.deployment.artifactKeyPrefix).to.equal('proofs')
+    const configs = generateAllConfigs(spec)
+    const config = toml.parse(configs['doge-config.toml']) as any
+    expect(config.proofArtifacts.s3.region).to.equal('us-east-1')
+    expect(config.proofDeployment.coordinator.artifactStore).to.deep.equal(resolved.proofCoordinator!.artifactStore)
+    expect(config.proof_topology.active.artifactStore).to.deep.equal(resolved.proofTopology!.active!.artifactStore)
+    const values = yaml.load(generateValuesFiles(spec)['proof-coordinator-production.yaml']) as any
+    expect(values.env).to.deep.include({name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__REGION', value: 'us-east-1'})
+    expect(values.env).to.deep.include({name: 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__BUCKET', value: 'audit-proofs'})
+    expect(normalized.proofCoordinator).not.to.have.property('artifactStore')
+    expect(normalized.proofTopology!.deployment).not.to.have.property('artifactKeyPrefix')
+    expect(spec).to.deep.equal(original)
+  })
+
+  it('uses the proof store region and custom endpoint over AWS defaults for every S3 consumer', () => {
+    const spec = proofFixture()
+    spec.infrastructure.aws = {accountId: '123456789012', eksClusterName: 'test-cluster', region: 'us-east-1'}
+    Object.assign(spec.proofArtifacts!.s3!, {endpointUrl: 'https://object-store.example.invalid', forcePathStyle: true, region: 'eu-west-1'})
+    const resolved = resolveSpecProofStorage(normalizeDeploymentSpec(spec))
+    for (const store of [resolved.proofCoordinator!.artifactStore, resolved.proofTopology!.active!.artifactStore]) {
+      expect(store).to.include({endpointUrl: 'https://object-store.example.invalid', forcePathStyle: true, region: 'eu-west-1'})
+    }
+  })
+
+  it('rejects all removed proof coordinates even when they equal the canonical store', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'proof-store-input-'))
+    try {
+      for (const [prefix, fields] of [
+        ['proofCoordinator.artifactStore', ['bucket', 'region', 'keyPrefix', 'endpointUrl', 'forcePathStyle']],
+        ['proofTopology.active.artifactStore', ['bucket', 'region', 'keyPrefix', 'endpointUrl', 'forcePathStyle']],
+        ['proofTopology.deployment', ['artifactKeyPrefix']],
+      ] as const) {
+        for (const field of fields) {
+          const spec = proofFixture()
+          const object = prefix.split('.').reduce((parent, key) => {
+            parent[key] ??= {}
+            return parent[key]
+          }, spec as any)
+          object[field] = field === 'bucket' ? 'audit-proofs' : field === 'region' ? 'us-west-2' : field === 'forcePathStyle' ? false : 'proofs'
+          const error = validateDeploymentSpec(spec).errors.find(error => error.path === `${prefix}.${field}`)
+          expect(error?.message).to.include('only at proofArtifacts.s3')
+          const file = path.join(root, 'spec.yaml')
+          fs.writeFileSync(file, yaml.dump(spec))
+          let message = ''
+          try {await createPreparationPlan({output: path.join(root, 'deployment'), sdkDirectory: '/nonexistent-sdk', spec: file})} catch (error) {message = (error as Error).message}
+          expect(message).to.include(`${prefix}.${field}`)
+          expect(message).to.include('only at proofArtifacts.s3')
+          expect(fs.existsSync(path.join(root, 'deployment'))).to.equal(false)
+        }
+      }
+    } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+
+  it('reports missing canonical proof storage at its one input location', () => {
+    const spec = proofFixture()
+    delete spec.proofArtifacts
+    expect(validateDeploymentSpec(spec).errors.map(error => error.path)).to.include.members(['proofArtifacts.s3.bucket', 'proofArtifacts.s3.region', 'proofArtifacts.s3.keyPrefix'])
+  })
+
   it('derives proof and dstack endpoints from one base domain while preserving explicit overrides', () => {
     const spec = proofFixture()
     spec.frontend = {baseDomain: 'deployment.example.invalid', protocol: 'https', subdomains: {proofCoordinator: 'proof'}} as any
@@ -151,12 +221,10 @@ describe('spec intent through configuration and values projection', () => {
     } finally {fs.rmSync(root, {force: true, recursive: true})}
   })
 
-  it('rejects a shared DA/proof bucket for each proof input, even with different prefixes', () => {
+  it('rejects a shared DA/proof bucket even with different prefixes', () => {
     expect(validateDeploymentSpec(proofFixture()).valid).to.equal(true)
     for (const mutate of [
       (spec: DeploymentSpec) => {spec.proofArtifacts!.s3!.bucket = 'audit-blobs'},
-      (spec: DeploymentSpec) => {spec.proofTopology!.active!.artifactStore.bucket = 'audit-blobs'},
-      (spec: DeploymentSpec) => {spec.proofCoordinator!.artifactStore.bucket = 'audit-blobs'},
     ]) {
       const spec = proofFixture()
       mutate(spec)

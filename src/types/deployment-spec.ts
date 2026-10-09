@@ -1,7 +1,7 @@
 import type {CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
 import type {DstackControllerConfig} from './dstack-controller.js'
 import type {PreparationConfig} from './preparation.js'
-import type {ProofTopologySpec} from './proof-topology.js'
+import type {ActiveProofTopologySpec, ProofTopologyArtifactStoreConfig, ProofTopologyDeploymentConfig, ProofTopologySpec} from './proof-topology.js'
 
 export type {
   ActiveProofTopologySpec,
@@ -78,16 +78,26 @@ export interface DeploymentSpec {
   preparation?: PreparationConfig
 
   /** Proof artifact bucket (doge-config proofArtifacts.s3): coordinator/WP artifact store and the only signer artifact origin. */
-  proofArtifacts?: {s3?: ArtifactBucketConfig}
+  proofArtifacts?: {s3?: {region?: string} & Omit<ArtifactBucketConfig, 'region'>}
 
   /** Optional proof-coordinator deployment values generation */
-  proofCoordinator?: ProofCoordinatorConfig
+  proofCoordinator?: {
+    /** Consumer tuning only. Storage coordinates come exclusively from proofArtifacts.s3. */
+    artifactStore?: Pick<ProofCoordinatorConfig['artifactStore'], 'maxReadBodyBytes' | 'publicS3EndpointUrl'>
+  } & Omit<ProofCoordinatorConfig, 'artifactStore'>
 
   /**
    * Versioned proof-topology compiler source. Both active profiles may be
    * staged while disabled; changing only `mode` selects the compiled topology.
    */
-  proofTopology?: ProofTopologySpec
+  proofTopology?: {
+    active?: {
+      /** Defaults to S3 when proofArtifacts.s3 is configured. */
+      artifactStore?: Pick<ProofTopologyArtifactStoreConfig, 'kind' | 'maxReadBodyBytes'>
+    } & Omit<ActiveProofTopologySpec, 'artifactStore'>
+    /** Artifact prefix is derived from proofArtifacts.s3.keyPrefix. */
+    deployment: Omit<ProofTopologyDeploymentConfig, 'artifactKeyPrefix'>
+  } & Omit<ProofTopologySpec, 'active' | 'deployment'>
 
   /** Rollup parameters */
   rollup?: RollupConfig

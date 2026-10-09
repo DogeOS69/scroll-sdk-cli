@@ -2,6 +2,14 @@ import type {ValidationError} from '../types/deployment-spec.js'
 
 import {deploymentSpecFields} from '../generated/deployment-spec-fields.js'
 
+const derivedProofFields = new Set([
+  ...['bucket', 'region', 'keyPrefix', 'endpointUrl', 'forcePathStyle'].map(field => `proofCoordinator.artifactStore.${field}`),
+  ...['bucket', 'region', 'keyPrefix', 'endpointUrl', 'forcePathStyle'].map(field => `proofTopology.active.artifactStore.${field}`),
+  'proofTopology.deployment.artifactKeyPrefix',
+])
+
+export class DeploymentSpecFieldError extends Error {}
+
 /** Field/structure validation only; semantic and required-input checks remain in the generator. */
 export function validateDeploymentSpecFields(value: unknown): ValidationError[] {
   const errors: ValidationError[] = []
@@ -36,6 +44,7 @@ export function validateDeploymentSpecFields(value: unknown): ValidationError[] 
       const child = displayPath ? `${displayPath}.${key}` : key
       if (shape.kind === 'record') visit(item, `${schemaPath}.*`, child)
       else if (shape.keys?.includes(key)) visit(item, `${schemaPath}.${key}`, child)
+      else if (derivedProofFields.has(child)) error(child, 'is derived; configure proof storage only at proofArtifacts.s3')
       else if (child === 'network.l1ChainId') error(child, 'has been removed; select dogecoin.network (mainnet, testnet or regtest) and the L1 chain ID is derived automatically')
       else error(child, child === 'proofSystem' ? 'proofSystem has been removed; use compiler-backed proofTopology' : 'is not a supported DeploymentSpec field')
     }
@@ -52,5 +61,5 @@ export function validateDeploymentSpecFields(value: unknown): ValidationError[] 
 
 export function assertDeploymentSpecFields(value: unknown): void {
   const errors = validateDeploymentSpecFields(value)
-  if (errors.length > 0) throw new Error(errors.map(({message, path}) => `${path}: ${message}`).join('; '))
+  if (errors.length > 0) throw new DeploymentSpecFieldError(errors.map(({message, path}) => `${path}: ${message}`).join('; '))
 }

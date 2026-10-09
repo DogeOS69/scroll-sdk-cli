@@ -30,7 +30,7 @@ function fixture(): DeploymentSpec {
   spec.bridge.confirmationsRequired = 2
   spec.images = {services: Object.fromEntries(['l2Rpc', 'l2Sequencer', 'l2Bootnode'].map(key => [key, {tag: 'explicit-test-release'}]))}
   spec.identities = {bootnodes: [{index: 0, nodekey: {action: 'create'}}], ethDaSubmitter: {action: 'create', backend: 'local'}, feeOracle: {action: 'create', backend: 'local'}, sequencers: [{index: 0, nodekey: {action: 'create'}, signer: {action: 'create', backend: 'local'}}]}
-  spec.proofTopology = {active: {artifactStore: {kind: 'local_fs'}, profile: 'withdrawal_mock_prover', realScroll: {} as any, workerLaunch: 'local_cpu'}, compiler: {identityFilePath: '.data/compiler.json', image: {digest: `sha256:${'a'.repeat(64)}`, repository: 'example.invalid/compiler'}}, deployment: {artifactKeyPrefix: 'proof', proverPublicUrl: 'https://proof.example.invalid'}, enforcement: 'observe', generation: 'mock', mode: 'disabled', observeRealProofDeadlineMs: 1000}
+  spec.proofTopology = {active: {artifactStore: {kind: 'local_fs'}, profile: 'withdrawal_mock_prover', realScroll: {} as any, workerLaunch: 'local_cpu'}, compiler: {identityFilePath: '.data/compiler.json', image: {digest: `sha256:${'a'.repeat(64)}`, repository: 'example.invalid/compiler'}}, deployment: {proverPublicUrl: 'https://proof.example.invalid'}, enforcement: 'observe', generation: 'mock', mode: 'disabled', observeRealProofDeadlineMs: 1000}
   spec.preparation = {attestationDescriptors: ['descriptors/partner.json'], bridge: {image: `dogeos69/bridge-genesis-tools@sha256:${'b'.repeat(64)}`, mode: 'helper'}, proofMaterials: {mode: 'existing'}}
   return spec
 }
@@ -166,8 +166,9 @@ describe('resumable preparation plan', () => {
     spec.proofTopology!.generation = 'real'
     spec.proofTopology!.enforcement = 'enforce'
     spec.proofTopology!.mode = 'active'
-    spec.proofCoordinator = {artifactStore: {bucket: 'test-proof-artifacts', region: 'us-west-2'}, enabled: true, s3AuthMode: 'ambient'}
-    spec.proofTopology!.active!.artifactStore = {bucket: 'test-proof-artifacts', endpointUrl: 'https://s3.us-west-2.amazonaws.com', kind: 's3_compatible', region: 'us-west-2'}
+    spec.proofCoordinator = {enabled: true, s3AuthMode: 'ambient'}
+    spec.proofArtifacts = {s3: {bucket: 'test-proof-artifacts', keyPrefix: 'proof', region: 'us-west-2'}}
+    spec.proofTopology!.active!.artifactStore = {kind: 's3_compatible'}
     delete (spec.proofTopology as any).compiler
     const release = {images: Object.fromEntries(PROOF_RELEASE_IMAGE_NAMES.map(name => [name, `example.invalid/${name}@sha256:${'b'.repeat(64)}`])), revision: 'a'.repeat(40), schema: 'dogeos/proof-release/v1'}
     const file = path.join(root, 'proof-release.json')
@@ -224,7 +225,8 @@ describe('resumable preparation plan', () => {
     expect(() => validatePreparation(spec)).not.to.throw()
     spec.preparation!.proofMaterials = {mockWorkerImage: 'example.invalid/mock:test', mode: 'mock'}
     expect(() => validatePreparation(spec)).to.throw('S3 proof artifact store')
-    spec.proofTopology!.active!.artifactStore = {bucket: 'test-proof-bucket', endpointUrl: 'https://s3.example.invalid', kind: 's3_compatible', region: 'us-west-2'}
+    spec.proofArtifacts = {s3: {bucket: 'test-proof-bucket', endpointUrl: 'https://s3.example.invalid', keyPrefix: 'proof', region: 'us-west-2'}}
+    spec.proofTopology!.active!.artifactStore = {kind: 's3_compatible'}
     expect(() => validatePreparation(spec)).not.to.throw()
   })
 

@@ -14,6 +14,7 @@ import {
   resolveEnvRefsDeep,
   validateDeploymentSpec,
 } from './deployment-spec-generator.js'
+import {resolveSpecProofStorage} from './spec-proof-storage.js'
 
 export const DEFAULT_DEPLOYMENT_SPEC_FILES = ['deployment-spec.yaml', 'deployment-spec.yml'] as const
 export const DEFAULT_DOGE_CONFIG_FILE = '.data/doge-config.toml'
@@ -173,7 +174,8 @@ function fromDeploymentSpec(specPath: string): ResolvedProofIntent {
   const validation = validateDeploymentSpec(spec)
   if (!validation.valid) throw new Error(`${specPath}: ${validation.errors.map(error => `${error.path}: ${error.message}`).join('; ')}`)
   if (!spec.proofTopology) throw new Error(`${specPath}: proofTopology is required`)
-  validateTopology(spec.proofTopology, specPath)
+  const resolved = resolveSpecProofStorage(spec)
+  validateTopology(resolved.proofTopology!, specPath)
   const host = spec.frontend.hosts.proofCoordinator
   return {
     deploymentName: spec.metadata.name,
@@ -183,8 +185,8 @@ function fromDeploymentSpec(specPath: string): ResolvedProofIntent {
       mode: spec.proofTopology.mode,
     },
     network: spec.dogecoin.network,
-    proofCoordinator: spec.proofCoordinator,
-    proofTopology: spec.proofTopology,
+    proofCoordinator: resolved.proofCoordinator,
+    proofTopology: resolved.proofTopology!,
     proverPublicUrl: spec.proofTopology.deployment.proverPublicUrl ?? `${spec.frontend.protocol ?? 'https'}://${host}`,
     source: {kind: 'deployment-spec', path: specPath, sha256: sha256File(specPath)},
     warnings: validation.warnings.map(warning => `${warning.path}: ${warning.message}`),

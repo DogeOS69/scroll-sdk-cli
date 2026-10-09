@@ -37,6 +37,7 @@ import {buildS3PublicBaseUrl} from './s3-archive.js'
 import { normalizeCompressedSecp256k1PublicKey } from './secp256k1-public-key.js'
 import { MANAGED_SIGNER_ROLES, buildLocalSignerConfig } from './signer-roles.js'
 import {resolveSpecIdentities} from './spec-identities.js'
+import {resolveSpecProofStorage} from './spec-proof-storage.js'
 
 const ETHEREUM_DA_DEFAULTS = {
   devnet: {
@@ -465,6 +466,10 @@ export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
 
   return {
     ...spec,
+    ...(spec.proofArtifacts?.s3 ? {proofArtifacts: {s3: {
+      ...spec.proofArtifacts.s3,
+      region: spec.proofArtifacts.s3.region ?? spec.infrastructure?.aws?.region,
+    }}} : {}),
     ...(accounts ? { accounts } : {}),
     ...(spec.proofTopology ? {proofTopology: {
       ...spec.proofTopology,
@@ -507,7 +512,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   const warnings: ValidationWarning[] = []
 
   try {
-    assertSeparateDaProofBuckets(spec, resolveInlineEnvRefs)
+    assertSeparateDaProofBuckets({ethereumDa: spec.ethereumDa, proofArtifacts: spec.proofArtifacts}, resolveInlineEnvRefs)
   } catch (error) {
     errors.push({code: 'E012_INVALID_ETHEREUM_DA_CONFIG', message: error instanceof Error ? error.message : 'Invalid artifact bucket configuration', path: 'ethereumDa.blobArchive.s3.bucket'})
   }
@@ -1056,7 +1061,17 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     }
   }
 
-  const { proofCoordinator, proofTopology } = spec
+  const {proofCoordinator, proofTopology} = resolveSpecProofStorage(spec)
+  if (proofCoordinator || proofTopology?.active?.artifactStore.kind === 's3_compatible') {
+    for (const field of ['bucket', 'region', 'keyPrefix'] as const) {
+      if (!spec.proofArtifacts?.s3?.[field]?.trim()) errors.push({
+        code: 'E013_INVALID_PROOF_COORDINATOR_CONFIG',
+        message: `proofArtifacts.s3.${field} is required for the shared proof store`,
+        path: `proofArtifacts.s3.${field}`,
+      })
+    }
+  }
+
   if ((spec as {proofSystem?: unknown} & DeploymentSpec).proofSystem !== undefined) {
     errors.push({
       code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
@@ -1162,16 +1177,16 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     if (!artifactStore?.bucket) {
       errors.push({
         code: 'E013_INVALID_PROOF_COORDINATOR_CONFIG',
-        message: 'proofCoordinator.artifactStore.bucket is required when proofCoordinator is enabled',
-        path: 'proofCoordinator.artifactStore.bucket'
+        message: 'proofArtifacts.s3.bucket is required when proofCoordinator is enabled',
+        path: 'proofArtifacts.s3.bucket'
       })
     }
 
     if (!artifactStore?.region) {
       errors.push({
         code: 'E013_INVALID_PROOF_COORDINATOR_CONFIG',
-        message: 'proofCoordinator.artifactStore.region is required when proofCoordinator is enabled',
-        path: 'proofCoordinator.artifactStore.region'
+        message: 'proofArtifacts.s3.region or infrastructure.aws.region is required when proofCoordinator is enabled',
+        path: 'proofArtifacts.s3.region'
       })
     }
 
@@ -1470,11 +1485,12 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   const identityIntent = resolveSpecIdentities(spec)
   if (identityIntent) config.identityIntent = identityIntent
   if (spec.proofTopology) {
-    config.proof_topology = structuredClone(spec.proofTopology)
+    const resolvedProof = resolveSpecProofStorage(spec)
+    config.proof_topology = structuredClone(resolvedProof.proofTopology)
     const host = spec.frontend.hosts.proofCoordinator
     config.proofDeployment = {
       name: spec.metadata.name,
-      ...(spec.proofCoordinator ? {coordinator: structuredClone(spec.proofCoordinator)} : {}),
+      ...(resolvedProof.proofCoordinator ? {coordinator: structuredClone(resolvedProof.proofCoordinator)} : {}),
       ...((host || spec.proofTopology.deployment.proverPublicUrl) ? {
         proverPublicUrl: spec.proofTopology.deployment.proverPublicUrl ?? `${spec.frontend.protocol ?? 'https'}://${host}`,
       } : {}),

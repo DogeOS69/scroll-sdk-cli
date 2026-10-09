@@ -37,12 +37,12 @@ wp.ethereum_da.inbox_worker.expected_batchers = ['0x' + '11'.repeat(20)];
 fs.writeFileSync(wpFile, toml.stringify(wp));
 const spec = await resolvePreparationProofRelease({
   metadata: {name: 'real-release-rehearsal'},
+  proofArtifacts: {s3: {bucket: 'nonfunctional-proof-rehearsal', region: 'us-west-2', keyPrefix: 'test/proofs'}},
   preparation: {bridge: {mode: 'production'}, proofRelease: {version}, proofMaterials: {mode: 'real'}},
   proofTopology: {
     mode: 'active', generation: 'real', enforcement: 'enforce', observeRealProofDeadlineMs: 1800000,
-    deployment: {artifactKeyPrefix: 'test/proofs', proverPublicUrl: 'https://proof.example.invalid'},
+    deployment: {proverPublicUrl: 'https://proof.example.invalid'},
     active: {profile: 'real_scroll_withdrawal_full_topology', workerLaunch: 'external',
-      artifactStore: {kind: 's3_compatible', bucket: 'nonfunctional-proof-rehearsal', region: 'us-west-2', endpointUrl: 'https://s3.us-west-2.amazonaws.com'},
       realScroll: {chunkWitnessSource: 'rpc', chunkWitnessRpcUrl: 'http://l2-rpc:8545'}},
   },
 }, root);

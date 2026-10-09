@@ -37,6 +37,7 @@ import {
 } from './kubernetes-endpoints.js'
 import {buildProofCoordinatorIngress} from './proof-coordinator-ingress.js'
 import {buildS3PublicBaseUrl} from './s3-archive.js'
+import {resolveSpecProofStorage} from './spec-proof-storage.js'
 import {
   ensureWithdrawalChartWiring,
   ensureWithdrawalProofActivationSwitch,
@@ -1155,7 +1156,7 @@ function isNonLoopbackPlainHttp(rawUrl: string): boolean {
  * Generate Proof Coordinator values
  */
 function generateProofCoordinatorValues(spec: DeploymentSpec): string {
-  const { proofCoordinator } = spec
+  const {proofCoordinator} = resolveSpecProofStorage(spec)
   if (!proofCoordinator || proofCoordinator.enabled === false) {
     throw new Error('proofCoordinator values requested but proofCoordinator is not enabled')
   }

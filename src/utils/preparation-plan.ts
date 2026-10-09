@@ -6,12 +6,14 @@ import path from 'node:path'
 import type {DeploymentSpec} from '../types/deployment-spec.js'
 
 import {resolveBridgeGenesisImage} from '../commands/setup/bridge-init.js'
+import {DeploymentSpecFieldError} from './deployment-spec-fields.js'
 import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec} from './deployment-spec-generator.js'
 import {usesDstackPostgres} from './dstack-database.js'
 import {AwaitingInput, digest, loadPreparationEnv, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolvePreparationProofRelease} from './preparation-release.js'
 import {planSpecBootstrap, resolveSdkRevision} from './spec-bootstrap.js'
 import {resolveCubesignerIdentity} from './spec-cubesigner.js'
+import {resolveSpecProofStorage} from './spec-proof-storage.js'
 
 export interface PreparationStep {effect: 'chain' | 'cloud' | 'local' | 'read'; id: string; retry: 'reconcile' | 'safe'; title: string}
 export interface PreparationPlan {deploymentName: string; envFile?: string; id: string; schema: 'scrollsdk/preparation/v1'; sdkDirectory: string; specHash: string; steps: PreparationStep[]}
@@ -106,7 +108,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
   if (p.secretUpload?.provider === 'aws' && !p.secretUpload.awsRegion && !spec.infrastructure.aws?.region) throw new Error('AWS Secret upload requires an explicit region in secretUpload or infrastructure.aws')
   if (p.secretUpload && spec.dstackController?.enabled !== false && spec.dstackController && !p.secretUpload.kubeContext) throw new Error('Dstack Secret upload requires an explicit Kubernetes context')
   if (p.proofAws?.publicReadMode === 'existing-gateway' && !p.proofAws.publicEndpointUrl) throw new Error('Existing proof gateway requires publicEndpointUrl')
-  if ((p.proofMaterials.mode !== 'existing' || p.proofMaterials.receipt) && spec.proofTopology?.active?.artifactStore.kind !== 's3_compatible') throw new Error('Topology derived from a material receipt requires the declared S3 proof artifact store')
+  if ((p.proofMaterials.mode !== 'existing' || p.proofMaterials.receipt) && resolveSpecProofStorage(spec).proofTopology?.active?.artifactStore.kind !== 's3_compatible') throw new Error('Topology derived from a material receipt requires the declared S3 proof artifact store')
   if (p.secretUpload && !['aws', 'vault'].includes(p.secretUpload.provider)) throw new Error('Secret upload provider must be aws or vault')
   if (spec.dstackController && spec.dstackController.enabled !== false && !p.dstack) throw new Error('Enabled dstack requires preparation.dstack with explicit import or external credentials mode')
   if (p.dstack && !['external', 'import'].includes(p.dstack.mode)) throw new Error('Dstack preparation mode must be import or external')
@@ -173,7 +175,11 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   const envFile = options.envFile ? path.resolve(options.envFile) : undefined
   loadPreparationEnv(envFile)
   let spec: DeploymentSpec
-  try {spec = resolveDeploymentSpecEnvRefs(loadDeploymentSpec(path.resolve(options.spec)))} catch {throw new Error('Cannot load DeploymentSpec; check field names, YAML syntax and environment references (values omitted)')}
+  try {spec = resolveDeploymentSpecEnvRefs(loadDeploymentSpec(path.resolve(options.spec)))} catch (error) {
+    if (error instanceof DeploymentSpecFieldError) throw error
+    throw new Error('Cannot load DeploymentSpec; check field names, YAML syntax and environment references (values omitted)')
+  }
+
   spec.templates = {sdkRevision: resolveSdkRevision(options.sdkDirectory, spec.templates?.sdkRevision)}
   spec = resolveCubesignerIdentity(spec)
   spec = await resolvePreparationProofRelease(spec, options.output)

@@ -166,6 +166,12 @@ signing:
 # `prep-charts` passes it to the pinned
 # dogeos-core compiler; TypeScript does not derive proof identities.
 #
+# proofArtifacts:
+#   s3:
+#     bucket: replace-with-unique-proof-bucket
+#     keyPrefix: proof-topology
+#     # region defaults to infrastructure.aws.region
+#
 # proofTopology:
 #   # Service lifecycle, proof implementation and authorization policy are
 #   # independent. Start disabled/mock/observe, then use active/mock/observe.
@@ -193,9 +199,6 @@ signing:
 #     workerLaunch: external # local_cpu | local_cuda | external
 #     artifactStore:
 #       kind: s3_compatible
-#       bucket: dogeos-devnet-proof-artifacts
-#       region: us-west-2
-#       endpointUrl: https://s3.us-west-2.amazonaws.com
 #       maxReadBodyBytes: 536870912
 #     # Required identity/path fields are imported from producer evidence by
 #     # `setup proof-materials`; see docs/proof-materials.md. They are shown
@@ -223,7 +226,6 @@ signing:
 #     workerDeploymentBackend: docker_compose # docker_compose | kubernetes
 #     protocolContextPath: /app/protocol_context.json
 #     generatedMaterialsRoot: /app/data/proof-topology
-#     artifactKeyPrefix: proof-topology
 #     proofWorkBind: 0.0.0.0:9300
 #     proofWorkPublicUrl: http://withdrawal-processor:9300
 #     proverBind: 0.0.0.0:7788
@@ -242,10 +244,6 @@ signing:
 #
 # Kubernetes identities and Secret coordinates remain deployment-owned.
 # proofCoordinator:
-#   artifactStore:
-#     bucket: dogeos-devnet-proof-artifacts
-#     region: us-west-2
-#     keyPrefix: proof-topology
 #   s3AuthMode: irsa
 #   serviceAccount:
 #     name: proof-coordinator
