@@ -130,10 +130,8 @@ describe('signer policy bundle V2', () => {
       // The transport key is generated locally, kept 0600 and mounted into the
       // same compose service that prints the identity and later runs.
       TRANSPORT_KEY_COMMANDS,
-      'chmod 600 docker-compose/attestation-signer.env docker-compose/transport.key',
       'run --rm --no-deps -T attestation-signer',
       '--print-identity > "signer-$SIGNER_ID/identity.json"',
-      'cp "signer-$SIGNER_ID/transport.key" docker-compose/',
       '--identity "signer-$SIGNER_ID/identity.json"',
       'https://proofs.bridge.example/proof-topology',
       'requires canonical protocol context in every mode',
@@ -141,6 +139,9 @@ describe('signer policy bundle V2', () => {
       'advance-l2-agg-verifying-key.bin',
       '--require-production-ready',
     ]) expect(commands).to.include(expected)
+    // Phase A and Phase B install the runtime key only through the validated block.
+    expect(commands.split(TRANSPORT_KEY_COMMANDS)).to.have.length(3)
+    expect(commands).not.to.match(/cp [^\n]*transport\.key"? docker-compose\/(?:\n|$)/)
     // Signers dial out: no inbound signer URL or reachability probe remains.
     expect(commands).not.to.include('--endpoint')
     expect(commands).not.to.include('signer-reachability')
@@ -150,23 +151,49 @@ describe('signer policy bundle V2', () => {
 })
 
 describe('partner transport key commands', () => {
-  it('create the key once (0600), keep its bytes on rerun, and reject a corrupt key', () => {
+  it('create once, validate the whole file, install atomically, and fail as a unit', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'transport-key-'))
     try {
       fs.mkdirSync(path.join(root, 'signer-partner-a'))
-      const run = () => spawnSync('bash', ['-c', TRANSPORT_KEY_COMMANDS], {cwd: root, encoding: 'utf8', env: {...process.env, SIGNER_ID: 'partner-a'}})
-      const key = path.join(root, 'signer-partner-a/transport.key')
+      fs.mkdirSync(path.join(root, 'docker-compose'))
+      const source = path.join(root, 'signer-partner-a/transport.key')
+      const runtime = path.join(root, 'docker-compose/transport.key')
+      const run = (extraPath?: string) => spawnSync('bash', ['-c', TRANSPORT_KEY_COMMANDS], {
+        cwd: root,
+        encoding: 'utf8',
+        env: {...process.env, PATH: extraPath ? `${extraPath}${path.delimiter}${process.env.PATH}` : process.env.PATH, SIGNER_ID: 'partner-a'},
+      })
+
       expect(run().status).to.equal(0)
-      const first = fs.readFileSync(key, 'utf8')
-      expect(first).to.match(/^[\da-f]{64}\n$/)
-      expect(fs.statSync(key).mode % 0o1000).to.equal(0o600)
+      const key = fs.readFileSync(source, 'utf8')
+      expect(key).to.match(/^[\da-f]{64}\n$/)
+      expect(fs.readFileSync(runtime, 'utf8')).to.equal(key)
+      for (const file of [source, runtime]) expect(fs.statSync(file).mode % 0o1000).to.equal(0o600)
       expect(run().status).to.equal(0)
-      expect(fs.readFileSync(key, 'utf8')).to.equal(first)
-      fs.writeFileSync(key, '')
-      const corrupt = run()
-      expect(corrupt.status).not.to.equal(0)
-      expect(corrupt.stderr).to.include('not a 32-byte hex key')
-      expect(fs.readFileSync(key, 'utf8')).to.equal('')
+      expect(fs.readFileSync(source, 'utf8')).to.equal(key)
+      expect(fs.readFileSync(runtime, 'utf8')).to.equal(key)
+
+      // Corrupt or empty sources fail and never reach the runtime key.
+      for (const corrupt of ['', `${key}garbage\n`, `\n${key.trim()}`, key.toUpperCase(), key.trim(), `${key.slice(0, 63)}g\n`]) {
+        fs.writeFileSync(source, corrupt)
+        const result = run()
+        expect(result.status, JSON.stringify(corrupt)).not.to.equal(0)
+        expect(result.stderr).to.include('must be exactly one line of 64 hex characters')
+        expect(fs.readFileSync(source, 'utf8')).to.equal(corrupt)
+        expect(fs.readFileSync(runtime, 'utf8')).to.equal(key)
+      }
+
+      // A failed generator returns nonzero and leaves no key and the runtime key intact.
+      fs.rmSync(source)
+      const bin = path.join(root, 'bin')
+      fs.mkdirSync(bin)
+      fs.writeFileSync(path.join(bin, 'openssl'), '#!/bin/sh\nexit 1\n', {mode: 0o755})
+      expect(run(bin).status).not.to.equal(0)
+      expect(fs.existsSync(source)).to.equal(false)
+      expect(fs.readFileSync(runtime, 'utf8')).to.equal(key)
+      // The next successful run recovers from the leftover temp file.
+      expect(run().status).to.equal(0)
+      expect(fs.readFileSync(source, 'utf8')).to.match(/^[\da-f]{64}\n$/)
     } finally {
       fs.rmSync(root, {force: true, recursive: true})
     }

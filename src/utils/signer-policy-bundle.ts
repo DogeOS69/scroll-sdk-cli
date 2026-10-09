@@ -126,14 +126,35 @@ export function renderSignerPolicyEnv(input: SignerPolicyBundleInput): string {
 }
 
 /**
- * Create the operator's transport key once and validate it on every run. A
- * rerun after an interrupted onboarding must reuse the key whose public half
- * the TSO directory may already pin; rotation is a separate, explicit step.
+ * Create the operator's transport key once, validate the whole file, and
+ * install it next to the Compose file, as one block that fails as a unit: a
+ * corrupt key or a failed generator returns nonzero and leaves the runtime
+ * key untouched. A rerun reuses the key whose public half the TSO directory
+ * may already pin; rotation is a separate, explicit step. The partner-kit
+ * README carries the same lines.
  */
 export const TRANSPORT_KEY_COMMANDS = [
-  'TRANSPORT_KEY="signer-$SIGNER_ID/transport.key"',
-  '[ -e "$TRANSPORT_KEY" ] || (umask 077 && set -C && openssl rand -hex 32 > "$TRANSPORT_KEY")',
-  'grep -Eqx \'[0-9a-f]{64}\' "$TRANSPORT_KEY" || { echo "$TRANSPORT_KEY is not a 32-byte hex key; restore it (rotation is a separate step)" >&2; false; }',
+  '(',
+  '  set -eu',
+  '  key="signer-$SIGNER_ID/transport.key"',
+  '  # Create only when absent: write a temp file, then link it in exclusively.',
+  '  if [ ! -e "$key" ]; then',
+  '    umask 077',
+  '    openssl rand -hex 32 > "$key.new"',
+  '    ln "$key.new" "$key"',
+  '    rm -f "$key.new"',
+  '  fi',
+  '  # The whole file must be exactly 64 lowercase hex characters and a newline.',
+  '  if [ "$(wc -c < "$key")" -ne 65 ] || [ "$(tail -c 1 "$key" | wc -l)" -ne 1 ] \\',
+  '    || ! head -c 64 "$key" | grep -Eqx \'[0-9a-f]{64}\'; then',
+  '    echo "$key must be exactly one line of 64 hex characters; restore it (rotation is a separate step)" >&2',
+  '    exit 1',
+  '  fi',
+  '  # Install atomically: the runtime key is replaced only by a validated copy.',
+  '  cp "$key" docker-compose/transport.key.new',
+  '  chmod 600 docker-compose/transport.key.new',
+  '  mv -f docker-compose/transport.key.new docker-compose/transport.key',
+  ')',
 ].join('\n')
 
 export function renderPartnerCommands(input: SignerPolicyBundleInput): string {
@@ -182,13 +203,13 @@ export DOGE_NETWORK='${input.network}'
 # 1. Signing key and env (add the KMS flags for a KMS backend). The env selects
 #    pull delivery and the transport key file below.
 scrollsdk signer init --id "$SIGNER_ID" --network "$DOGE_NETWORK"
-# 2. Transport key: a separate secret that authenticates this signer to the
-#    TSO. Generated locally only if absent (exclusive create, never
-#    overwritten); an existing key is reused and validated.
+# 2. Copy the signing env and policy next to the Compose file. The transport
+#    key is a separate secret that authenticates this signer to the TSO: the
+#    block creates it locally only if absent, validates the whole file and
+#    installs it, failing as a unit.
+cp "signer-$SIGNER_ID/attestation-signer.env" "signer-$SIGNER_ID/attestation-signer.toml" docker-compose/
+chmod 600 docker-compose/attestation-signer.env
 ${TRANSPORT_KEY_COMMANDS}
-cp "signer-$SIGNER_ID/attestation-signer.env" "signer-$SIGNER_ID/attestation-signer.toml" \\
-  "signer-$SIGNER_ID/transport.key" docker-compose/
-chmod 600 docker-compose/attestation-signer.env docker-compose/transport.key
 # 3. Print the identity with the real backend, network and transport key
 #    (the same compose service and mounts the runtime uses):
 docker compose --project-directory docker-compose run --rm --no-deps -T attestation-signer \\
@@ -223,8 +244,8 @@ Incomplete optional policy starts fail-closed and leaves \`/ready\` at HTTP 503.
 export SIGNER_ID='<your signer id>'
 cp "signer-$SIGNER_ID/attestation-signer.env" docker-compose/
 cp "signer-$SIGNER_ID/attestation-signer.toml" docker-compose/
-cp "signer-$SIGNER_ID/transport.key" docker-compose/
-chmod 600 docker-compose/attestation-signer.env docker-compose/transport.key
+chmod 600 docker-compose/attestation-signer.env
+${TRANSPORT_KEY_COMMANDS}
 mkdir -p docker-compose/policy
 cp signer-policy-bundle/signer-policy.env docker-compose/signer-policy.env
 cp signer-policy-bundle/protocol_context.json docker-compose/policy/protocol_context.json
