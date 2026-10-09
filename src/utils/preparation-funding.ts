@@ -90,6 +90,15 @@ export function checkPrivateKey(publicKey: string, variable: string): void {
 export async function verifyDogecoinNetwork(network: string, rpc: Rpc): Promise<void> {
   const expected = network === 'mainnet' ? 'main' : network === 'testnet' ? 'test' : 'regtest'
   const info = await rpc('getblockchaininfo', [])
+  // Private testnet shadowforks report their own chain name. Bind them to the
+  // canonical Dogecoin testnet genesis instead of accepting the name blindly.
+  // Source: dogecoin/dogecoin v1.14.9 src/chainparams.cpp (CTestNetParams).
+  if (network === 'testnet' && info?.chain === 'shadowfork') {
+    const genesis = await rpc('getblockhash', [0])
+    if (genesis === 'bb0a78264637406b6360aad926284d544d7049f45189db5664f3c4d07350559e') return
+    throw new AwaitingInput({message: 'Dogecoin shadowfork genesis does not match the selected testnet network'})
+  }
+
   if (info?.chain !== expected) throw new AwaitingInput({message: 'Dogecoin RPC network does not match the selected spec network'})
 }
 

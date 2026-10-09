@@ -348,7 +348,9 @@ The SDK starter uses `preparation.proofRelease: {version: v0.3.0-beta.6}` plus
 `proofMaterials: {mode: real}`. Plan obtains the manifest and checksum from the official core GitHub release and
 pins all five proof images. Missing releases/assets fail before resource changes;
 the release owner must publish them. The operator does not locate or compute a
-digest. Optional `GH_TOKEN` / `GITHUB_TOKEN` supports private GitHub access.
+digest. Private GitHub access uses `GH_TOKEN`, then `GITHUB_TOKEN`, then the
+existing `gh auth login` session for github.com. Credentials are not stored in
+the plan or downloaded release files.
 For an offline approved release, use `{manifest, sha256}` instead of `version`. Apply generates `.data/proof-release-preparation/` from the
 canonical protocol context, including `bridge/worker-identity-bundle.json`;
 exports the coordinator materializers; checks the production CUDA image; and

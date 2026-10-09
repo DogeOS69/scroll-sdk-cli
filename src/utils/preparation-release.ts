@@ -1,3 +1,4 @@
+import {execFileSync} from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -14,6 +15,16 @@ const MANIFEST = 'dogeos-proof-release-v1.json'
 export interface ProofReleaseLookupOptions {
   cacheDirectory?: string
   fetch?: typeof fetch
+  githubToken?: () => string | undefined
+}
+
+/** Reuse the operator's github.com login without writing or logging the token. */
+function githubCliToken(): string | undefined {
+  try {
+    return execFileSync('gh', ['auth', 'token', '--hostname', 'github.com'], {
+      encoding: 'utf8', maxBuffer: 64 * 1024, stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000,
+    }).trim() || undefined
+  } catch {return undefined}
 }
 
 /** Resolve a human version through the official release; the checksum is publisher-owned. */
@@ -21,7 +32,7 @@ export async function downloadProofRelease(version: string, options: ProofReleas
   if (!/^v\d+\.\d+\.\d+(?:-[\d.A-Za-z-]+)?$/.test(version)) throw new Error('proofRelease.version must be an explicit version such as v0.3.0-beta.6')
   const tag = `proof-release-${version}`
   const base = `https://api.github.com/repos/${RELEASE_REPOSITORY}/releases`
-  const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN
+  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN || (options.githubToken ?? githubCliToken)()
   const request = async (url: string, accept: string, limit: number): Promise<string> => {
     let response: Response
     try {

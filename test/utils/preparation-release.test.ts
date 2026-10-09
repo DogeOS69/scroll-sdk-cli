@@ -24,10 +24,44 @@ async function rejected(action: () => Promise<unknown>, message: string): Promis
 
 describe('official preparation proof release', () => {
   let root: string
-  beforeEach(() => {root = fs.mkdtempSync(path.join(os.tmpdir(), 'proof-release-lookup-'))})
-  afterEach(() => {fs.rmSync(root, {force: true, recursive: true})})
+  let originalToken: string | undefined
+  let originalGithubToken: string | undefined
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'proof-release-lookup-'))
+    originalToken = process.env.GH_TOKEN
+    originalGithubToken = process.env.GITHUB_TOKEN
+    process.env.GH_TOKEN = 'NONFUNCTIONAL_TEST_TOKEN'
+    delete process.env.GITHUB_TOKEN
+  })
+  afterEach(() => {
+    fs.rmSync(root, {force: true, recursive: true})
+    if (originalToken === undefined) delete process.env.GH_TOKEN
+    else process.env.GH_TOKEN = originalToken
+    if (originalGithubToken === undefined) delete process.env.GITHUB_TOKEN
+    else process.env.GITHUB_TOKEN = originalGithubToken
+  })
 
   const responseFor = (url: string) => url.includes('/tags/') ? JSON.stringify(metadata) : url.endsWith('/1') ? manifestText : `${sha256}  ${name}\n`
+
+  it('uses the GitHub CLI login for private releases and retains explicit token precedence', async () => {
+    delete process.env.GH_TOKEN
+    let lookups = 0
+    const authorizations: Array<null | string> = []
+    const fetcher = (async (input: Request | URL | string, init?: RequestInit) => {
+      authorizations.push(new Headers(init?.headers).get('Authorization'))
+      return new Response(responseFor(String(input)))
+    }) as typeof fetch
+    const githubToken = () => {lookups++; return 'NONFUNCTIONAL_CLI_TOKEN'}
+    const first = await downloadProofRelease('v0.3.0-beta.6', {cacheDirectory: root, fetch: fetcher, githubToken})
+    expect(authorizations).to.deep.equal(Array.from({length: 3}).fill('Bearer NONFUNCTIONAL_CLI_TOKEN'))
+    expect(lookups).to.equal(1)
+    expect(JSON.stringify(first)).not.to.include('NONFUNCTIONAL_CLI_TOKEN')
+    process.env.GH_TOKEN = 'NONFUNCTIONAL_EXPLICIT_TOKEN'
+    authorizations.length = 0
+    await downloadProofRelease('v0.3.0-beta.6', {cacheDirectory: root, fetch: fetcher, githubToken})
+    expect(lookups).to.equal(1)
+    expect(authorizations).to.deep.equal(Array.from({length: 3}).fill('Bearer NONFUNCTIONAL_EXPLICIT_TOKEN'))
+  })
 
   it('resolves a version, verifies the published checksum and freezes only local pins', async () => {
     const calls: string[] = []

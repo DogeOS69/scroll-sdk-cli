@@ -343,6 +343,22 @@ describe('production funding validation', () => {
     await rejected(() => verifyDogecoinNetwork('mainnet', async () => ({chain: 'test'})), 'does not match')
   })
 
+  it('accepts a testnet shadowfork only after verifying its canonical genesis', async () => {
+    const genesis = 'bb0a78264637406b6360aad926284d544d7049f45189db5664f3c4d07350559e'
+    const rpc: Rpc = async (method, params) => {
+      if (method === 'getblockchaininfo') return {chain: 'shadowfork'}
+      expect(method).to.equal('getblockhash')
+      expect(params).to.deep.equal([0])
+      return genesis
+    }
+
+    await verifyDogecoinNetwork('testnet', rpc)
+    await rejected(() => verifyDogecoinNetwork('mainnet', rpc), 'does not match')
+    await rejected(() => verifyDogecoinNetwork('regtest', rpc), 'does not match')
+    await rejected(() => verifyDogecoinNetwork('testnet', async method => method === 'getblockchaininfo' ? {chain: 'shadowfork'} : '0'.repeat(64)), 'genesis does not match')
+    await rejected(() => verifyDogecoinNetwork('testnet', async method => method === 'getblockchaininfo' ? {chain: 'unknown'} : genesis), 'does not match')
+  })
+
   it('derives confirmed amount and block facts from the actual transaction', async () => {
     const f = fixtureTx()
     const result = await inspectFunding(f.point, f.request, f.rpc)
