@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, perfectionist/sort-classes -- Helm values and aws CLI JSON are dynamic documents; discovery helpers stay beside the VPC reconciliation flow. */
 
 import { parse as parseToml } from '@iarna/toml'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 
 import type { JsonOutputContext } from './json-output.js'
 
@@ -98,6 +98,46 @@ export function publicArtifactObjectResources(bucket: string, keyPrefix: string)
   )
 }
 
+/** A bucket policy is shared by every deployment; statement ownership is per prefix. */
+export function proofArtifactPolicySid(kind: 'public' | 'vpce', bucket: string, keyPrefix: string): string {
+  const prefix = normalizeProofKeyPrefix(keyPrefix)
+  const base = kind === 'public' ? PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID : PROOF_ARTIFACT_VPCE_POLICY_SID
+  return `${base}${createHash('sha256').update(`${bucket}/${prefix}`).digest('hex').slice(0, 24)}`
+}
+
+function ownedReadStatement(statement: any, bucket: string, prefix: string, kind: 'public' | 'vpce'): boolean {
+  const legacySid = kind === 'public' ? PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID : PROOF_ARTIFACT_VPCE_POLICY_SID
+  if (statement?.Sid !== legacySid && statement?.Sid !== proofArtifactPolicySid(kind, bucket, prefix)) return false
+  const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action]
+  const resources = Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource]
+  const scopedResource = `arn:aws:s3:::${bucket}/${prefix}/*`
+  const expectedResources = kind === 'public' ? publicArtifactObjectResources(bucket, prefix) : [scopedResource]
+  // Old direct-read policies may have exposed this exact prefix wholesale.
+  // Never infer ownership of a child deployment from a startsWith comparison.
+  if (kind === 'public' && statement.Sid === legacySid) expectedResources.push(scopedResource)
+  if (statement.Effect !== 'Allow' || statement.Principal !== '*' || actions.length !== 1 || actions[0] !== 's3:GetObject'
+    || statement.NotAction !== undefined || statement.NotResource !== undefined || statement.NotPrincipal !== undefined
+    || resources.length === 0 || resources.some((resource: unknown) => typeof resource !== 'string' || !expectedResources.includes(resource))) return false
+  if (kind === 'public') return statement.Condition === undefined
+  const condition = statement.Condition
+  return condition && Object.keys(condition).length === 1 && condition.StringEquals
+    && Object.keys(condition.StringEquals).length === 1
+    && typeof condition.StringEquals['aws:SourceVpce'] === 'string'
+}
+
+function preserveOtherReadStatements(existingPolicy: Record<string, any>, bucket: string, prefix: string, kind: 'public' | 'vpce'): any[] {
+  const statements = Array.isArray(existingPolicy.Statement) ? existingPolicy.Statement : existingPolicy.Statement ? [existingPolicy.Statement] : []
+  const sid = proofArtifactPolicySid(kind, bucket, prefix)
+  const matching = statements.filter((statement: any) => statement?.Sid === sid)
+  if (matching.length > 1 || matching.some((statement: any) => !ownedReadStatement(statement, bucket, prefix, kind))) {
+    throw new Error(`Bucket policy statement ${sid} differs from its managed read grant; review it before changing permissions`)
+  }
+
+  // Migrate a legacy fixed Sid only when ALL its resources belong to this
+  // deployment. A sibling's legacy grant or an operator's broad grant survives.
+  return statements.filter((statement: any) => !ownedReadStatement(statement, bucket, prefix, kind))
+}
+
 export interface ProofAwsValuesProjection {
   artifactRegion: string
   bucket: string
@@ -149,6 +189,10 @@ export function normalizeProofKeyPrefix(value: string): string {
     || hasWhitespace
   ) {
     throw new Error('proof artifact key prefix must not contain whitespace, wildcards, backslashes, #, braces, or control characters')
+  }
+
+  if (segments.some(segment => !/^[\w.-]+$/.test(segment))) {
+    throw new Error("proof artifact key prefix segments may contain only ASCII letters, numbers, '.', '_', or '-'")
   }
 
   return prefix
@@ -244,37 +288,15 @@ export function upsertProofArtifactVpcEndpointReadPolicy(
   vpcEndpointId: string
 ): Record<string, any> {
   const prefix = normalizeProofKeyPrefix(keyPrefix)
-  const statements = Array.isArray(existingPolicy.Statement)
-    ? [...existingPolicy.Statement]
-    : existingPolicy.Statement ? [existingPolicy.Statement] : []
+  const preservedStatements = preserveOtherReadStatements(existingPolicy, bucket, prefix, 'vpce')
   const readStatement = {
     Action: 's3:GetObject',
     Condition: { StringEquals: { 'aws:SourceVpce': vpcEndpointId } },
     Effect: 'Allow',
     Principal: '*',
     Resource: `arn:aws:s3:::${bucket}/${prefix}/*`,
-    Sid: PROOF_ARTIFACT_VPCE_POLICY_SID,
+    Sid: proofArtifactPolicySid('vpce', bucket, prefix),
   }
-  const bucketResourcePrefix = `arn:aws:s3:::${bucket}/`
-  const replaceableReadStatement = (statement: any): boolean => {
-    if (statement?.Sid === PROOF_ARTIFACT_VPCE_POLICY_SID) return true
-    const actions = Array.isArray(statement?.Action) ? statement.Action : [statement?.Action]
-    const resources = Array.isArray(statement?.Resource) ? statement.Resource : [statement?.Resource]
-    const condition = statement?.Condition
-    const stringEquals = condition?.StringEquals
-    return statement?.Effect === 'Allow'
-      && statement?.Principal === '*'
-      && actions.length === 1
-      && actions[0] === 's3:GetObject'
-      && resources.length === 1
-      && typeof resources[0] === 'string'
-      && resources[0].startsWith(bucketResourcePrefix)
-      && condition && Object.keys(condition).length === 1
-      && stringEquals && Object.keys(stringEquals).length === 1
-      && stringEquals['aws:SourceVpce'] === vpcEndpointId
-  }
-
-  const preservedStatements = statements.filter(statement => !replaceableReadStatement(statement))
   preservedStatements.push(readStatement)
 
   return {
@@ -291,19 +313,14 @@ export function upsertProofArtifactPublicReadPolicy(
   enabled: boolean,
 ): Record<string, any> {
   const prefix = normalizeProofKeyPrefix(keyPrefix)
-  const statements = Array.isArray(existingPolicy.Statement)
-    ? [...existingPolicy.Statement]
-    : existingPolicy.Statement ? [existingPolicy.Statement] : []
-  const preservedStatements = statements.filter(
-    statement => statement?.Sid !== PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID,
-  )
+  const preservedStatements = preserveOtherReadStatements(existingPolicy, bucket, prefix, 'public')
   if (enabled) {
     preservedStatements.push({
       Action: 's3:GetObject',
       Effect: 'Allow',
       Principal: '*',
       Resource: publicArtifactObjectResources(bucket, prefix),
-      Sid: PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID,
+      Sid: proofArtifactPolicySid('public', bucket, prefix),
     })
   }
 
@@ -377,6 +394,8 @@ export function assertNoUnmanagedPublicProofBucketGrant(
   bucket: string,
   keyPrefix: string,
 ): void {
+  // Validate managed-statement conflicts before provisioning can change AWS.
+  preserveOtherReadStatements(policy, bucket, normalizeProofKeyPrefix(keyPrefix), 'public')
   const statements = Array.isArray(policy.Statement)
     ? policy.Statement
     : policy.Statement ? [policy.Statement] : []
@@ -384,7 +403,7 @@ export function assertNoUnmanagedPublicProofBucketGrant(
     statement?.Effect === 'Allow'
     && principalIncludesWildcard(statement.Principal)
     && actionCanGetObject(statement.Action)
-    && statement?.Sid !== PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID
+    && !ownedReadStatement(statement, bucket, normalizeProofKeyPrefix(keyPrefix), 'public')
     && !isVpcEndpointRestricted(statement)
     && (Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource])
       .some((resource: unknown) => resourceMayOverlapPrefix(resource, bucket, keyPrefix))
@@ -721,6 +740,7 @@ export class ProofAwsProvisioner {
     keyPrefix: string,
   ): void {
     const existingPolicy = this.readBucketPolicy(region, bucket)
+    const updatedPolicy = upsertProofArtifactPublicReadPolicy(existingPolicy, bucket, keyPrefix, true)
 
     this.aws.run([
       's3api',
@@ -731,12 +751,6 @@ export class ProofAwsProvisioner {
       'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false',
     ], {region})
 
-    const updatedPolicy = upsertProofArtifactPublicReadPolicy(
-      existingPolicy,
-      bucket,
-      keyPrefix,
-      true,
-    )
     if (JSON.stringify(existingPolicy) !== JSON.stringify(updatedPolicy)) {
       if (updatedPolicy.Statement.length === 0) {
         this.aws.run(['s3api', 'delete-bucket-policy', '--bucket', bucket], {region})

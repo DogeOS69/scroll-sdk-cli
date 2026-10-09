@@ -1,3 +1,13 @@
+/** Match eth-da-submitter's native prefix normalization; never rewrite object keys. */
+export function normalizeS3ArchiveKeyPrefix(value = ''): string {
+  const segments = value.trim().split('/').filter(Boolean)
+  if (segments.some(segment => segment === '.' || segment === '..' || !/^[\w.-]+$/.test(segment))) {
+    throw new Error("S3 archive key prefix segments may contain only ASCII letters, numbers, '.', '_', or '-'; . and .. are not allowed")
+  }
+
+  return segments.join('/')
+}
+
 export interface S3ArchiveUrlConfig {
   bucket?: string
   keyPrefix?: string

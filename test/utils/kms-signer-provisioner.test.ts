@@ -73,6 +73,57 @@ esac
     expect(calls).to.include('--profile test-profile')
   })
 
+  it('uses the native normalized prefix for standalone archive grants and supports an explicit bucket-root archive', async () => {
+    const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
+    const calls: string[][] = []
+    provisioner.awsJson = (args: string[]) => { calls.push(args); return {} }
+    const archive = {bucket: 'shared-bucket', created: false, enabled: true, keyPrefix: ' /instances//new/ '}
+    await provisioner.provisionArchive(archive, {createBucket: false, roleArn: 'arn:aws:iam::123456789012:role/archive-writer'})
+    const policy = JSON.parse(calls[0][calls[0].indexOf('--policy-document') + 1])
+    expect(archive.keyPrefix).to.equal('instances/new')
+    expect(policy.Statement[0]).to.deep.equal({Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: 'arn:aws:s3:::shared-bucket/instances/new/*'})
+    expect(policy.Statement[1].Condition.StringLike['s3:prefix']).to.deep.equal(['instances/new', 'instances/new/*'])
+    expect(JSON.stringify(policy)).not.to.include('DeleteObject')
+
+    await provisioner.provisionArchive({...archive, keyPrefix: ''}, {createBucket: false, roleArn: 'arn:aws:iam::123456789012:role/root-archive-writer'})
+    const rootPolicy = JSON.parse(calls[1][calls[1].indexOf('--policy-document') + 1])
+    expect(rootPolicy.Statement[0].Resource).to.equal('arn:aws:s3:::shared-bucket/*')
+    expect(rootPolicy.Statement[1]).not.to.have.property('Condition')
+  })
+
+  it('scopes newly created signer roles to the configured archive prefix', async () => {
+    const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true))
+    await provisioner.provision({...getAttestationSignerKmsRole(0), service: 'eth-da-submitter'},
+      {awsRegion: 'us-west-2', eksCluster: 'test', namespace: 'default', networkAlias: 'test'},
+      {archive: {bucket: 'shared-bucket', created: false, enabled: true, keyPrefix: 'instances/new'}, createArchiveBucket: false})
+    const calls = fs.readFileSync(process.env.AWS_TEST_LOG as string, 'utf8')
+    expect(calls).to.include('arn:aws:s3:::shared-bucket/instances/new/*')
+    expect(calls).not.to.include('arn:aws:s3:::shared-bucket/*')
+    expect(calls).to.include('s3:ListBucket')
+  })
+
+  it('rejects unsafe archive prefixes before any AWS operation', async () => {
+    const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
+    let calls = 0
+    provisioner.awsJson = () => { calls++; return {} }
+    provisioner.ensureS3Bucket = () => { calls++; return false }
+    provisioner.ensureKmsKey = () => { calls++; throw new Error('unexpected KMS call') }
+    for (const keyPrefix of ['instances/*', 'instances/../other', 'instances/%2f', 'instances/a b']) {
+      for (const standalone of [true, false]) {
+        const archive = {bucket: 'shared-bucket', created: false, enabled: true, keyPrefix}
+        let failure: unknown
+        try {
+          await (standalone ? provisioner.provisionArchive(archive, {createBucket: true}) : provisioner.provision(getAttestationSignerKmsRole(0),
+            {awsRegion: 'us-west-2', eksCluster: 'test', namespace: 'default', networkAlias: 'test'}, {archive}));
+        } catch (error) { failure = error }
+
+        expect(String(failure)).to.include('S3 archive key prefix')
+      }
+    }
+
+    expect(calls).to.equal(0)
+  })
+
   it('grants the requested archive prefix when reusing a role without replacing its other policies', async () => {
     const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
     const roleArn = 'arn:aws:iam::123456789012:role/existing-da-role'

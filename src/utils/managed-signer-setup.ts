@@ -20,7 +20,7 @@ import {
   truncateIamRoleName,
 } from './kms-signer-provisioner.js'
 import { resolveEnvValue } from './non-interactive.js'
-import { buildS3PublicBaseUrl } from './s3-archive.js'
+import { buildS3PublicBaseUrl, normalizeS3ArchiveKeyPrefix } from './s3-archive.js'
 import {
   MANAGED_SIGNER_ROLES,
   type ManagedSignerBackend,
@@ -465,7 +465,7 @@ export async function resolveBlobArchive(
 
   const defaultBucket = flagBucket || archiveDefaults?.bucket
   const defaultRegion = flagRegion || archiveDefaults?.region || awsRegion || 'us-east-1'
-  const defaultKeyPrefix = flagKeyPrefix || archiveDefaults?.keyPrefix || ''
+  const defaultKeyPrefix = normalizeS3ArchiveKeyPrefix(flagKeyPrefix || archiveDefaults?.keyPrefix || '')
   const archiveLocationChanged = Boolean(flagBucket || flagRegion) && (
     defaultBucket !== archiveDefaults?.bucket ||
     defaultRegion !== archiveDefaults?.region
@@ -526,10 +526,10 @@ export async function resolveBlobArchive(
     message: 'S3 archive bucket region:',
     required: true,
   })).trim()
-  const keyPrefix = (await textInput({
+  const keyPrefix = normalizeS3ArchiveKeyPrefix(await textInput({
     default: defaultKeyPrefix,
-    message: 'S3 object key prefix (optional):',
-  })).trim()
+    message: 'Deployment S3 key prefix (core owns the object paths below it; optional for DA-only):',
+  }))
   const publicBaseUrl = flagPublicBaseUrl || (
     bucket === existingArchive?.bucket && region === existingArchive?.region
       ? existingArchive?.publicBaseUrl

@@ -16,7 +16,7 @@ export default class SetupEthDaSubmitter extends Command {
 
   static override flags = {
     'archive-bucket': Flags.string({description: 'S3 blob archive bucket.'}),
-    'archive-key-prefix': Flags.string({description: 'S3 object key prefix.'}),
+    'archive-key-prefix': Flags.string({description: 'Deployment S3 prefix shared by DA and proof objects; core owns the relative object paths.'}),
     'archive-public-base-url': Flags.string({description: 'Public HTTPS base URL used by blob consumers.'}),
     'archive-region': Flags.string({description: 'Region owning the archive bucket.'}),
     'aws-profile': Flags.string({description: 'AWS profile for archive resource operations.'}),

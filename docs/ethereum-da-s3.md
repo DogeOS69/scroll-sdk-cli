@@ -27,17 +27,42 @@ artifacts use the same bucket, region, and key prefix, with different logical
 object keys. `setup proof-aws-init` reads this table and refuses an independent
 proof bucket/prefix.
 
-For a prefix such as `rehearsal/batches`, the relevant namespaces are:
+The CLI selects a **deployment prefix**, not a directory name for each artifact
+type. The physical object key is `<keyPrefix>/<core-relative-key>`.
+For example, two deployments can use `deployments/testnet-001` and
+`deployments/testnet-002` in the same bucket. Core owns the paths below each
+prefix; the CLI does not insert `da-blobs/`, rename sidecars or regroup indexes.
+
+For a prefix such as `deployments/testnet-001`, the namespaces include:
 
 ```text
-rehearsal/batches/0x<versioned-hash>                         raw DA blob
-rehearsal/batches/scroll-chunk-segmentation-sidecars/...    internal sidecar
-rehearsal/batches/input-specs/...                           Worker input
-rehearsal/batches/prepared-bundles/...                      Worker input
-rehearsal/batches/witnesses/...                             Worker/signer input
-rehearsal/batches/public-outputs/...                        Worker output
-rehearsal/batches/proofs/...                                proof bytes
+deployments/testnet-001/0x<versioned-hash>                    raw DA blob
+deployments/testnet-001/scroll-chunk-segmentation-sidecars/   internal sidecar
+deployments/testnet-001/scroll-chunk-segmentation-sidecars-by-height/ discovery index
+deployments/testnet-001/scroll-chunk-bundle-locators/         material locators
+deployments/testnet-001/input-specs/                         Worker input
+deployments/testnet-001/prepared-bundles/                    Worker input
+deployments/testnet-001/witnesses/                           Worker/signer input
+deployments/testnet-001/public-outputs/                      Worker output
+deployments/testnet-001/proofs/                              accepted proof bytes
+deployments/testnet-001/eager-chunk-proofs/                   eager result records
+deployments/testnet-001/signer-policy-evidence/               signer evidence
+deployments/testnet-001/staging/                             pending Worker uploads
+deployments/testnet-001/recovery/                            recovery objects
+deployments/testnet-001/proof-programs/<bundle-id>/           published program bundle
 ```
+
+The selected core release/profile determines which objects are produced. This
+list is not a public-read allowlist or an instruction to move existing objects.
+Existing deployments retain their prefix and native keys. Changing the prefix
+selects a different namespace; this command does not migrate historical blobs,
+proof references, or publication receipts.
+
+Archive setup normalizes surrounding/repeated slashes in the same way as the
+native submitter. Prefix segments may contain ASCII letters, digits, `.`, `_`
+and `-`; `.` and `..` segments are rejected. Shared proof prefixes must already
+be non-empty normalized paths. An empty prefix remains supported for DA-only
+bucket-root archives.
 
 The bucket can still apply different read permissions to those object-key
 patterns. In direct-S3 mode, never grant anonymous `GetObject` to the entire
@@ -52,6 +77,13 @@ or the existing public-read policy; it only manages deployment-scoped proof
 resources and, when selected, the prefix-scoped EKS Gateway endpoint grant.
 Use `direct-s3` only when the CLI owns the bucket's public-access posture, or
 `existing-gateway` when S3 remains private behind an HTTPS gateway.
+
+CLI-managed direct-read and VPC-endpoint-read statements are identified per
+bucket and deployment prefix. Repeating setup for one prefix preserves the
+other prefixes' statements. Legacy fixed statement IDs are migrated only when
+their resources match the selected deployment. Operator-managed broad VPC
+grants and grants for other deployments are preserved, not silently narrowed;
+their effective access remains the operator's responsibility.
 
 After configuring the archive, run `scrollsdk setup prep-charts`. It reads
 `.data/doge-config.toml` and projects the settings into `eth-da-submitter`,
@@ -120,7 +152,7 @@ scrollsdk setup gen-keystore --service eth-da-submitter \
 scrollsdk setup eth-da-submitter --non-interactive --json \
   --archive-bucket dogeos-eth-da-archive-devnet \
   --archive-region us-west-2 \
-  --archive-key-prefix devnet/eth-da/blobs/v1 \
+  --archive-key-prefix deployments/testnet-001 \
   --archive-public-base-url https://dogeos-eth-da-archive-devnet.s3.us-west-2.amazonaws.com \
   --no-create-archive-bucket
 ```
@@ -138,8 +170,13 @@ deployment-scoped object prefix when it creates or manages a proof service IAM
 role. The Proof Coordinator role additionally receives `s3:DeleteObject` on
 that prefix so it can retire stale locator objects after an operator-requested
 global proof identity regeneration; the Withdrawal Processor role does not.
-When an existing role ARN is supplied or reused, treat the role as
-operator-managed and verify its S3 permissions independently.
+Submitter archive setup also grants GetObject/PutObject and prefix-scoped
+ListBucket using the configured archive prefix, including when it creates a
+signer role. It does not grant DeleteObject. With an empty DA-only prefix this
+necessarily covers the bucket root. Existing unrelated IAM policies are not
+removed; effective access may be broader than the generated grant. When an
+existing role ARN is supplied or reused, verify its effective permissions
+independently.
 
 The command writes the resolved values back to `.data/doge-config.toml`; it
 does not directly update Helm values. Run:
