@@ -9,10 +9,11 @@ import path from 'node:path'
 import {writeConfigs} from '../../utils/config-writer.js'
 import {inspectContractOwner} from '../../utils/contract-owner.js'
 import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
-import {loadDogeConfigWithSelection} from '../../utils/doge-config.js'
+import {dogeConfigToToml, loadDogeConfigWithSelection} from '../../utils/doge-config.js'
 import {CliExitError, JsonOutputContext} from '../../utils/json-output.js'
 import {normalizeSignerBackend, setupManagedSigner} from '../../utils/managed-signer-setup.js'
 import {resolveEnvValue} from '../../utils/non-interactive.js'
+import {resolveSpecIdentities, specIdentityFlags} from '../../utils/spec-identities.js'
 import SetupL2BootnodeReth from './l2-bootnode-reth.js'
 import SetupL2SequencerReth, {normalizeSignerMode} from './l2-sequencer-reth.js'
 
@@ -274,8 +275,9 @@ export default class SetupGenKeystore extends Command {
     accounts: Flags.boolean({allowNo: true, description: 'Prepare/reuse deployer; default an empty OWNER_ADDR to deployer and check owner signing access.'}),
     'activity-helper': Flags.boolean({default: false, description: 'Also prepare the optional testnet activity account in config.toml.'}),
     'bootnode-count': Flags.integer({description: 'Prepare Reth bootnode indices 0 through count-1; never deletes existing identities.'}),
-    'from-spec': Flags.string({description: 'Use DeploymentSpec node counts after generating doge-config from that spec.'}),
+    'from-spec': Flags.string({description: 'Apply explicit identity intent and node counts from a DeploymentSpec.'}),
     index: Flags.integer({char: 'i', description: 'One sequencer index; requires --service sequencer-reth.'}),
+    plan: Flags.boolean({default: false, description: 'Report selected identity operations without generating keys, writing files or calling AWS.'}),
     'secret-mode': Flags.string({description: 'Secret reference mode for the selected Reth node.', options: ['external-secret', 'plain']}),
     'sequencer-count': Flags.integer({description: 'Prepare Reth sequencer indices 0 through count-1; never deletes existing identities.'}),
     service: Flags.string({description: 'Prepare only this service. Omit to select services interactively; -N/--json processes declared identities.', options: [...KEYSTORE_SERVICES]}),
@@ -286,23 +288,56 @@ export default class SetupGenKeystore extends Command {
     const {flags} = await this.parse(SetupGenKeystore) as any
     const output = new JsonOutputContext('setup gen-keystore', flags.json)
     try {
+      let specIntent
       flags.accounts ??= !flags.service && fs.existsSync('config.toml')
       if (flags['from-spec']) {
         const spec = loadDeploymentSpec(path.resolve(flags['from-spec']))
-        if (!flags.service || flags.service === 'sequencer-reth') flags['sequencer-count'] ??= spec.infrastructure.sequencerCount
+        specIntent = resolveSpecIdentities(spec)
+        if ((!flags.service || flags.service === 'sequencer-reth') && flags.index === undefined) flags['sequencer-count'] ??= spec.infrastructure.sequencerCount
         if (!flags.service || flags.service === 'bootnode-reth') flags['bootnode-count'] ??= spec.infrastructure.bootnodeCount
       }
 
       const {config, configPath} = await loadDogeConfigWithSelection(flags['doge-config'])
+      const identityIntent = specIntent ?? config.identityIntent
+      if (identityIntent) {
+        if ((!flags.service || flags.service === 'sequencer-reth') && flags.index === undefined) flags['sequencer-count'] ??= identityIntent.sequencers.length
+        if (!flags.service || flags.service === 'bootnode-reth') flags['bootnode-count'] ??= identityIntent.bootnodes.length
+      }
+
       const main = fs.existsSync('config.toml') ? toml.parse(fs.readFileSync('config.toml', 'utf8')) : {}
       inheritServiceIdentity(config, main)
-      const accountsOnly = !flags.service && !flags['from-spec'] && flags['sequencer-count'] === undefined && flags['bootnode-count'] === undefined && this.argv.some(arg => arg === '--accounts' || arg === '--activity-helper')
-      const plans = accountsOnly ? [] : flags['non-interactive'] || flags.json
-        ? planKeystore(config, flags).map(task => ({flags, task}))
+      const accountsOnly = !flags.service && !flags['from-spec'] && !['sequencer-count', 'bootnode-count'].some(name => this.argv.some(arg => arg === `--${name}` || arg.startsWith(`--${name}=`))) && this.argv.some(arg => arg === '--accounts' || arg === '--activity-helper')
+      const plans = accountsOnly ? [] : flags['non-interactive'] || flags.json || identityIntent || flags.plan
+        ? planKeystore(config, flags).flatMap(task => identityIntent && task.indices ? task.indices.map(index => ({...task, indices: [index]})) : [task])
+          .map(task => {
+            const intentFlags = identityIntent ? specIdentityFlags(identityIntent, task, config) : {}
+            if (identityIntent) {
+              const identityFlagNames = ['signer-backend', 'signer-mode', 'signer-private-key', 'nodekey', 'secret-mode', 'nodekey-secret-mode', 'kms-key-id', 'role-arn', 'service-account', 'aws-region', 'eks-cluster', 'network-alias', 'namespace']
+              for (const key of identityFlagNames) {
+                if (this.argv.some(arg => arg === `--${key}` || arg.startsWith(`--${key}=`)) && flags[key] !== intentFlags[key]) throw new Error(`--${key} conflicts with saved/spec identity intent; declare the setting in identities`)
+              }
+            }
+
+            return {flags: {...flags, ...intentFlags}, task}
+          })
         : await interactivePlan(config, flags, accountsOnly)
       const tasks = plans.map(plan => plan.task)
+      if (flags.plan) {
+        const report = {accounts: flags.accounts, identities: plans.map(({flags: selected, task}) => ({...task, backend: selected['signer-backend'], kmsKeyId: selected['kms-key-id'], roleArn: selected['role-arn']})), identityIntent, resourceChanges: false}
+        if (!flags.json) output.info(JSON.stringify(report, null, 2))
+        output.success(report)
+        return
+      }
+
       if (tasks.length === 0 && !flags.accounts && !flags['activity-helper']) throw new Error('No configured identities. Select --service, supply node counts, or use --accounts for the deployer.')
       for (const plan of plans) validateKeystoreIdentities(config, [plan.task], plan.flags)
+      if (identityIntent) {
+        const saved = toml.parse(fs.readFileSync(configPath, 'utf8')) as any
+        saved.identityIntent = identityIntent
+        fs.writeFileSync(configPath, dogeConfigToToml(saved), {mode: 0o600})
+        fs.chmodSync(configPath, 0o600)
+      }
+
       output.info(`Service identities selected: ${tasks.length > 0 ? tasks.map(task => task.service + (task.index === undefined ? task.indices ? ` [${task.indices.join(', ')}]` : '' : ` [${task.index}]`)).join('; ') : 'none (deployment accounts only)'}`)
       const accounts = this.prepareAccounts(flags)
       const reports: Record<string, unknown>[] = []

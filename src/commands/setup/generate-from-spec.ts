@@ -12,6 +12,7 @@ import {
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles} from '../../utils/retired-services.js'
+import {mergeBootstrapValues, planSpecBootstrap} from '../../utils/spec-bootstrap.js'
 import { type GeneratedValuesFiles, generateValuesFiles } from '../../utils/values-generator.js'
 
 function parseEnvValue(rawValue: string): string {
@@ -88,6 +89,7 @@ export default class GenerateFromSpec extends Command {
   ]
 
   static override flags = {
+    bootstrap: Flags.boolean({default: false, description: 'Prepare pinned SDK templates and generated values as well as TOML; no cloud or chain operations.'}),
     'config-only': Flags.boolean({
       default: false,
       description: 'Only generate config.toml and .data/*.toml. This is the default.',
@@ -113,6 +115,7 @@ export default class GenerateFromSpec extends Command {
       default: '.',
       description: 'Output directory for generated files',
     }),
+    'sdk-dir': Flags.string({description: 'Local SDK checkout for --bootstrap; reads templates.sdkRevision, ignoring working-tree edits.'}),
     spec: Flags.string({
       char: 's',
       description: 'Path to DeploymentSpec YAML file',
@@ -131,6 +134,8 @@ export default class GenerateFromSpec extends Command {
   public async run(): Promise<void> {
     const { flags } = await this.parse(GenerateFromSpec)
     const jsonCtx = new JsonOutputContext('setup generate-from-spec', flags.json)
+    if (flags.bootstrap && (flags['config-only'] || flags['values-only'])) throw new Error('--bootstrap cannot be combined with --config-only or --values-only')
+    if (flags['sdk-dir'] && !flags.bootstrap) throw new Error('--sdk-dir requires --bootstrap')
 
     // Validate conflicting flags
     if (flags['config-only'] && flags['values-only']) {
@@ -274,7 +279,8 @@ export default class GenerateFromSpec extends Command {
 
     // Check what files would be generated
     const generateConfigs = !flags['values-only']
-    const generateValues = flags['with-values'] || flags['values-only']
+    const generateValues = flags.bootstrap || flags['with-values'] || flags['values-only']
+    const bootstrapFiles = flags.bootstrap ? planSpecBootstrap(spec, flags['sdk-dir']) : {}
 
     let configs: GeneratedConfigs | null = null
     let valuesFiles: GeneratedValuesFiles | null = null
@@ -287,6 +293,9 @@ export default class GenerateFromSpec extends Command {
     if (generateValues) {
       jsonCtx.info('Generating Helm values files...')
       valuesFiles = generateValuesFiles(spec)
+      if (flags.bootstrap) {
+        for (const [file, content] of Object.entries(valuesFiles)) valuesFiles[file] = mergeBootstrapValues(bootstrapFiles[`values/${file}`], content)
+      }
     }
 
     // Dry run - just show what would be generated
@@ -310,6 +319,7 @@ export default class GenerateFromSpec extends Command {
       }
 
       jsonCtx.success({
+        bootstrapFiles: Object.keys(bootstrapFiles),
         configFiles: configs ? ['config.toml', 'doge-config.toml', 'setup_defaults.toml', 'protocol_seed.toml'] : [],
         dryRun: true,
         outputDir,
@@ -325,6 +335,7 @@ export default class GenerateFromSpec extends Command {
 
     // Check for existing files
     const existingFiles: string[] = []
+    for (const file of Object.keys(bootstrapFiles)) if (fs.existsSync(path.join(outputDir, file))) existingFiles.push(file)
     if (!flags.force) {
       if (configs) {
         if (fs.existsSync(path.join(outputDir, 'config.toml'))) {
@@ -379,6 +390,12 @@ export default class GenerateFromSpec extends Command {
 
     // Write configuration files
     const writtenFiles: string[] = []
+    for (const [file, content] of Object.entries(bootstrapFiles)) {
+      const target = path.join(outputDir, file)
+      fs.mkdirSync(path.dirname(target), {mode: 0o700, recursive: true})
+      fs.writeFileSync(target, content, {mode: 0o600})
+      writtenFiles.push(file)
+    }
 
     if (configs) {
       writeGeneratedConfigs(configs, outputDir, dataDir)

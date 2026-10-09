@@ -943,9 +943,11 @@ describe('deployment-spec-generator', () => {
       expect(toml.parse(generateDogeConfigToml(spec))).not.to.have.property('test');
     });
 
-    it('uses a fixed L1 fee vault address instead of reading it from the spec', () => {
+    it('uses a fixed L1 fee vault address and rejects an unsupported spec override', () => {
       const spec = createMinimalSpec() as any;
       spec.contracts.l1FeeVaultAddr = '0x2222222222222222222222222222222222222222';
+      expect(() => generateConfigToml(spec)).to.throw('contracts.l1FeeVaultAddr');
+      delete spec.contracts.l1FeeVaultAddr;
       const output = generateConfigToml(spec);
 
       expect(output).to.include('L1_FEE_VAULT_ADDR = "0x1111111111111111111111111111111111111111"');
@@ -1317,6 +1319,8 @@ describe('deployment-spec-generator', () => {
         txid: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         vout: 1,
       }];
+      expect(() => generateSetupDefaultsToml(spec)).to.throw('bridge.baseFundingUtxos');
+      delete spec.bridge.baseFundingUtxos;
       const output = generateSetupDefaultsToml(spec);
 
       expect(output).to.include('[[base_funding_utxos]]');
@@ -1683,7 +1687,7 @@ describe('deployment-spec-generator', () => {
       const feeOracleEnv = feeOracleValues.configMaps.env.data;
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL).to.equal('https://gateway.tenderly.co/public/sepolia');
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_L2__CHAIN_ID).to.equal(String(spec.network.l2ChainId));
-      expect(feeOracleEnv).not.to.have.property('DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE');
+      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE).to.equal('live');
       expect(feeOracleEnv).not.to.have.property('DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__FORMULA');
       expect(feeOracleEnv).not.to.have.property('DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__PRICE_UNAVAILABLE_FALLBACK');
       expect(feeOracleValues.envFrom).to.deep.equal([

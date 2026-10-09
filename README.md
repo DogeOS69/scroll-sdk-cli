@@ -50,6 +50,7 @@ bin/run.js --help
 - [核心服务配置（中文）](docs/service-config-runbook.zh.md) — 当前 signer、Bridge、proof 与服务部署流程。
 - [Branch integration decisions](docs/branch-integration.md) — resolutions for the v0.3.0 branch consolidation.
 
+- [Spec plan/apply preparation](docs/spec-preparation.md) — two entry commands, resumable external inputs and beta.6 production Bridge funding.
 - [CLI setup order](docs/setup-order.md) — configuration prerequisites, native Reth genesis, `scrollsdk setup bridge-init`, service configuration and deployment handoff. Start here for command order.
 - [Configuration cleanup](docs/config-cleanup.md) — supported template fields, matching contracts images and updating an existing deployment.
 - [Pure Reth configuration](docs/reth-only-peers.md) — Reth node identities and peer configuration.

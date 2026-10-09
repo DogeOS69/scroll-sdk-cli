@@ -26,11 +26,16 @@ import {
   L1_INTERFACE_RPC_WEBSOCKET_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
+import {L2_BASE_FEE_OVERHEAD_WEI, L2_GENESIS_GAS_LIMIT, L2_TX_FEE_VAULT} from '../constants/deployment.js'
+import {assertSeparateDaProofBuckets} from './artifact-bucket-validation.js'
 import {GENESIS_SEQUENCER_AMOUNT_SATS} from './bridge-constants.js'
+import {assertDeploymentSpecFields, validateDeploymentSpecFields} from './deployment-spec-fields.js'
 import {validateDstackControllerConfig} from './dstack-controller-values.js'
+import {ETHEREUM_DA_RUNTIME_FIELDS} from './ethereum-da-runtime.js'
 import {stripRetiredServiceConfig} from './retired-services.js'
 import { normalizeCompressedSecp256k1PublicKey } from './secp256k1-public-key.js'
 import { MANAGED_SIGNER_ROLES, buildLocalSignerConfig } from './signer-roles.js'
+import {resolveSpecIdentities} from './spec-identities.js'
 
 const ETHEREUM_DA_DEFAULTS = {
   devnet: {
@@ -57,6 +62,7 @@ export function loadDeploymentSpec(filePath: string): DeploymentSpec {
   const content = fs.readFileSync(filePath, 'utf8')
   const spec = yaml.load(content) as DeploymentSpec
 
+  assertDeploymentSpecFields(stripRetiredServiceConfig(spec))
   if (!spec.version) {
     throw new Error('DeploymentSpec must have a version field')
   }
@@ -376,6 +382,8 @@ function getEthereumDaChainId(rawSpec: DeploymentSpec): number {
  */
 export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
   spec = stripRetiredServiceConfig(spec)
+  assertDeploymentSpecFields(spec)
+  resolveSpecIdentities(spec)
   const frontend = (spec.frontend ?? {}) as Partial<DeploymentSpec['frontend']>
   const accounts = normalizeAccounts(spec.accounts)
   const baseDomain = frontend.baseDomain || spec.metadata?.name || 'localhost'
@@ -458,9 +466,42 @@ export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
  * Validate a DeploymentSpec
  */
 export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResult {
+  const fieldErrors = validateDeploymentSpecFields(stripRetiredServiceConfig(rawSpec))
+  if (fieldErrors.length > 0) return {errors: fieldErrors, valid: false, warnings: []}
+  try { resolveSpecIdentities(rawSpec) } catch (error) {
+    return {errors: [{code: 'E017_INVALID_IDENTITY_INTENT', message: error instanceof Error ? error.message : 'Invalid identity intent', path: 'identities'}], valid: false, warnings: []}
+  }
+
   const spec = normalizeDeploymentSpec(rawSpec)
   const errors: ValidationError[] = []
   const warnings: ValidationWarning[] = []
+
+  try {
+    assertSeparateDaProofBuckets(spec, resolveInlineEnvRefs)
+  } catch (error) {
+    errors.push({code: 'E012_INVALID_ETHEREUM_DA_CONFIG', message: error instanceof Error ? error.message : 'Invalid artifact bucket configuration', path: 'ethereumDa.blobArchive.s3.bucket'})
+  }
+
+  const keyset = spec.bridge?.initialAttestationKeyset
+  if (keyset && (!Array.isArray(keyset.signerIds) || keyset.signerIds.length === 0
+    || keyset.signerIds.some(id => typeof id !== 'string' || !/^[\da-z](?:[\da-z-]*[\da-z])?$/.test(id) || id.length > 63)
+    || new Set(keyset.signerIds).size !== keyset.signerIds.length
+    || !Number.isSafeInteger(keyset.threshold) || keyset.threshold < 1 || keyset.threshold > keyset.signerIds.length)) {
+    errors.push({code: 'E005_INVALID_THRESHOLD', message: 'initialAttestationKeyset requires unique signer IDs and a threshold between 1 and the selected signer count', path: 'bridge.initialAttestationKeyset'})
+  }
+
+  if (spec.genesis?.gasLimit !== undefined && (!Number.isSafeInteger(spec.genesis.gasLimit) || spec.genesis.gasLimit < 5000)) {
+    errors.push({code: 'E015_INVALID_ROLLUP_CONFIG', message: 'genesis.gasLimit must be a safe integer of at least 5000', path: 'genesis.gasLimit'})
+  }
+
+  const overhead = spec.contracts?.l2BaseFeeOverheadWei
+  if (overhead !== undefined && (typeof overhead !== 'string' || !/^\d+$/.test(overhead) || BigInt(overhead) >= 2n ** 256n)) {
+    errors.push({code: 'E015_INVALID_ROLLUP_CONFIG', message: 'contracts.l2BaseFeeOverheadWei must be a decimal uint256 wei string', path: 'contracts.l2BaseFeeOverheadWei'})
+  }
+
+  if (spec.feeOracle?.contractWriteMode !== undefined && !['dry_run', 'live'].includes(spec.feeOracle.contractWriteMode)) {
+    errors.push({code: 'E015_INVALID_ROLLUP_CONFIG', message: 'feeOracle.contractWriteMode must be dry_run or live', path: 'feeOracle.contractWriteMode'})
+  }
 
   const pushInvalidEthereumDaConfigError = (path: string, message: string): void => {
     errors.push({
@@ -1280,6 +1321,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
   // [genesis] section
   config.genesis = {
     BASE_FEE_PER_GAS: genesis.baseFeePerGasWei,
+    GAS_LIMIT: spec.genesis.gasLimit ?? L2_GENESIS_GAS_LIMIT,
     L2_DEPLOYER_INITIAL_BALANCE: genesis.deployerInitialBalanceWei,
     L2_MAX_ETH_SUPPLY: genesis.maxEthSupplyWei,
   }
@@ -1291,6 +1333,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     DEPLOYMENT_SALT: spec.contracts.deploymentSalt,
     DEPOSIT_FEE: bridgeFees.depositFeeSats,
     L1_FEE_VAULT_ADDR: DEFAULT_L1_FEE_VAULT_ADDR,
+    L2_BASE_FEE_OVERHEAD: spec.contracts.l2BaseFeeOverheadWei ?? L2_BASE_FEE_OVERHEAD_WEI,
     L2_BRIDGE_FEE_RECIPIENT_ADDR: spec.bridge.feeRecipient,
     MIN_WITHDRAWAL_AMOUNT: bridgeFees.minWithdrawalAmountWei,
     PENALTY_FACTOR: spec.contracts.gasOracle.penaltyFactor,
@@ -1302,6 +1345,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
   // Native DOGE is a mandatory protocol predeploy, not an operator-selected address.
   config.contracts.overrides = {
     L2_NATIVE_DOGE_TOKEN: '0x530000000000000000000000000000000000d09e',
+    L2_TX_FEE_VAULT,
   }
   if (spec.contracts.overrides) {
     if (spec.contracts.overrides.l2MessageQueue) {
@@ -1391,6 +1435,30 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   const ethereumDaDefaults = ETHEREUM_DA_DEFAULTS[ethereumDaChain]
 
   config.network = spec.dogecoin.network
+  const identityIntent = resolveSpecIdentities(spec)
+  if (identityIntent) config.identityIntent = identityIntent
+  if (spec.proofTopology) {
+    config.proof_topology = structuredClone(spec.proofTopology)
+    const host = spec.frontend.hosts.proofCoordinator
+    config.proofDeployment = {
+      name: spec.metadata.name,
+      ...(spec.proofCoordinator ? {coordinator: structuredClone(spec.proofCoordinator)} : {}),
+      ...((host || spec.proofTopology.deployment.proverPublicUrl) ? {
+        proverPublicUrl: host ? `${spec.frontend.protocol ?? 'https'}://${host}` : spec.proofTopology.deployment.proverPublicUrl,
+      } : {}),
+    }
+  }
+
+  if (spec.dogecoin.kubernetes) config.kubernetes = structuredClone(spec.dogecoin.kubernetes)
+  if (spec.bridge.initialAttestationKeyset) {
+    config.attestationSigner = {
+      activeSignerIds: [...spec.bridge.initialAttestationKeyset.signerIds],
+      mode: 'external',
+      threshold: spec.bridge.initialAttestationKeyset.threshold,
+    }
+  }
+
+  config.feeOracle = {contractWriteMode: spec.feeOracle?.contractWriteMode ?? 'live'}
 
   validateDstackControllerConfig(spec.dstackController)
   if (spec.dstackController !== undefined) config.dstackController = structuredClone(spec.dstackController)
@@ -1415,6 +1483,10 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
 
   if (spec.ethereumDa?.l2StartBlockNumber !== undefined) {
     config.ethereumDa.l2StartBlockNumber = spec.ethereumDa.l2StartBlockNumber
+  }
+
+  for (const field of ETHEREUM_DA_RUNTIME_FIELDS) {
+    if (spec.ethereumDa?.[field] !== undefined) config.ethereumDa[field] = spec.ethereumDa[field]
   }
 
   if (spec.ethereumDa?.batch) {
@@ -1504,8 +1576,8 @@ export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
   const targetAmountsSats = getBridgeTargetAmountsSats(spec)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
   const config: Record<string, any> = {
-    attestation_key_count: spec.bridge.keyCounts.attestation,
-    attestation_threshold: spec.bridge.thresholds.attestation,
+    attestation_key_count: spec.bridge.initialAttestationKeyset?.signerIds.length ?? spec.bridge.keyCounts.attestation,
+    attestation_threshold: spec.bridge.initialAttestationKeyset?.threshold ?? spec.bridge.thresholds.attestation,
     bridge_target_amount: targetAmountsSats.bridge,
     confirmations_required: spec.bridge.confirmationsRequired,
     deposit_eth_recipient_address_hex: optionalAccountAddress(spec, 'deployer'),
@@ -1517,7 +1589,7 @@ export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
     network: spec.dogecoin.network,
     recovery_key_count: spec.bridge.keyCounts.recovery,
     recovery_threshold: spec.bridge.thresholds.recovery,
-    seed_string: spec.bridge.seedString,
+    ...(spec.preparation?.bridge.mode !== 'production' && spec.bridge.seedString ? {seed_string: spec.bridge.seedString} : {}),
     sequencer_target_amount: targetAmountsSats.sequencer,
     timelock: spec.bridge.timelock,
   }
@@ -1531,6 +1603,8 @@ export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
       config.tee_pubkey = normalizeCompressedSecp256k1PublicKey(teePubkey, 'signing.cubesigner.roles[0].keys[0].publicKey')
     }
   }
+
+  if (spec.preparation?.bridge.mode === 'production') return toml.stringify(resolveEnvRefsDeep(config) as toml.JsonMap)
 
   return `${toml.stringify(resolveEnvRefsDeep(config) as toml.JsonMap)}
 [[base_funding_utxos]]

@@ -83,6 +83,7 @@ export async function setupManagedSigner(options: ManagedSignerCommandOptions): 
     const account = await resolveLocalSignerAccount(options)
     address = account.address
     signerConfig = buildLocalSignerConfig(role)
+    if (flags['expected-address'] && address.toLowerCase() !== String(flags['expected-address']).toLowerCase()) throw new Error(`${role.service}: signer address does not match identity intent`)
     dogeConfig.accounts ||= {}
     dogeConfig.accounts[accountAddressKey(role) as keyof NonNullable<DogeConfig['accounts']>] = account.address
     dogeConfig.accounts[accountPrivateKeyKey(role) as keyof NonNullable<DogeConfig['accounts']>] = account.privateKey
@@ -122,6 +123,7 @@ export async function setupManagedSigner(options: ManagedSignerCommandOptions): 
       signerConfig = provisioned.signerConfig
     }
 
+    if (flags['expected-address'] && address.toLowerCase() !== String(flags['expected-address']).toLowerCase()) throw new Error(`${role.service}: KMS address does not match identity intent`)
     dogeConfig.accounts ||= {}
     dogeConfig.accounts[accountAddressKey(role) as keyof NonNullable<DogeConfig['accounts']>] = address
     delete dogeConfig.accounts[accountPrivateKeyKey(role) as keyof NonNullable<DogeConfig['accounts']>]

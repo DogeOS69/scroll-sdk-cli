@@ -1,6 +1,7 @@
 import {Command, Flags} from '@oclif/core'
 import fs from 'node:fs'
 
+import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
 import {proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
 import {dogeConfigToToml, loadDogeConfigWithSelection} from '../../utils/doge-config.js'
 import {CliExitError, JsonOutputContext} from '../../utils/json-output.js'
@@ -40,6 +41,7 @@ export default class SetupEthDaSubmitter extends Command {
       const roleArn = flags['role-arn'] || signer?.serviceAccountRoleArn
       const createBucket = flags['create-archive-bucket'] ?? signer?.backend === 'aws_kms'
       if (archive.enabled) {
+        assertSeparateDaProofBuckets(config)
         // With a proof artifact store configured, the writer also gets its
         // segmentation-sidecar namespace there.
         const sidecar = config.proofArtifacts?.s3 ? {sidecarStore: proofArtifactStoreFromDogeConfig(config)} : {}

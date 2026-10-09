@@ -17,12 +17,14 @@ import {
   YAML_DUMP_OPTIONS,
 } from '../../config/constants.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
+import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
 import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues, validateDstackControllerConfig} from '../../utils/dstack-controller-values.js'
 import {readDstackControllerConfig} from '../../utils/dstack-database.js'
+import {type EthereumDaRuntimeConfig, ethereumDaRuntimeEnv} from '../../utils/ethereum-da-runtime.js'
 import { GenerationTransaction } from '../../utils/generation-transaction.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
@@ -625,6 +627,7 @@ export function buildEthDaSubmitterPrepEnv(input: {
   ethereumRpcUrl: string | undefined
   l2RpcUrl: string | undefined
   l2StartBlockNumber?: number | string | undefined
+  runtime?: EthereumDaRuntimeConfig
   s3Bucket?: string | undefined
   s3Enabled?: boolean | string | undefined
   s3EndpointUrl?: string | undefined
@@ -638,6 +641,7 @@ export function buildEthDaSubmitterPrepEnv(input: {
     DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: input.l2RpcUrl,
     DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER: optionalConfigString(input.l2StartBlockNumber),
     DOGEOS_ETH_DA_SUBMITTER_PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
+    ...ethereumDaRuntimeEnv(input.runtime ?? {}),
   }
 
   const {batch} = input
@@ -1358,7 +1362,7 @@ export default class SetupPrepCharts extends Command {
     'CHAIN_ID_L1': 'general.CHAIN_ID_L1',
     'CHAIN_ID_L2': 'general.CHAIN_ID_L2',
     'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL': 'ethereumDa.submitterRpcUrl',
-    'DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL': 'general.L2_RPC_ENDPOINT',
+    'DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL': () => this.dogeConfig.ethereumDa?.l2RpcUrl ? 'ethereumDa.l2RpcUrl' : 'general.L2_RPC_ENDPOINT',
     'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__EXPECTED_BATCHERS': 'signers.l1CommitSender.expectedAddress',
     'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL': 'ethereumDa.submitterRpcUrl',
     // Add ingress host mappings
@@ -1776,6 +1780,7 @@ export default class SetupPrepCharts extends Command {
       'scrollsdk setup doge-config',
     )
     this.dogeConfig = config as DogeConfigType;
+    assertSeparateDaProofBuckets(this.dogeConfig)
     const deploymentSpec = flags.spec ? loadDeploymentSpec(path.resolve(flags.spec)) : undefined
     this.dstackController = deploymentSpec?.dstackController ?? this.dogeConfig.dstackController
     validateDstackControllerConfig(this.dstackController)
@@ -2320,6 +2325,18 @@ export default class SetupPrepCharts extends Command {
       // these values afterward to isolate the dev P2P network from production.
       // Numbered bootnode/sequencer files normalize to their base chart names.
       if (isL2RethBlobS3Chart(chartName)) {
+        const genesisGasLimit = this.getConfigValue('genesis.GAS_LIMIT')
+        if (genesisGasLimit !== undefined) {
+          const gasLimit = Number(genesisGasLimit)
+          if (!Number.isSafeInteger(gasLimit) || gasLimit < 5000) throw new Error('genesis.GAS_LIMIT must be a safe integer of at least 5000')
+          productionYaml.reth ||= {}
+          if (productionYaml.reth.builderGasLimit !== String(gasLimit)) {
+            changes.push({key: 'reth.builderGasLimit', newValue: String(gasLimit), oldValue: String(productionYaml.reth.builderGasLimit)})
+            productionYaml.reth.builderGasLimit = String(gasLimit)
+            updated = true
+          }
+        }
+
         const sharedRethChanges = [
           ...applyRethNetworkId(productionYaml, l2P2PNetworkId),
           ...applyRethBlobS3Url(productionYaml, s3PublicBlobUrl),
@@ -2798,6 +2815,10 @@ export default class SetupPrepCharts extends Command {
           l2RpcUrl: this.getConfigValue("general.L2_RPC_ENDPOINT"),
         })
 
+        if (this.dogeConfig.feeOracle?.contractWriteMode !== undefined) {
+          todoMappings.DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE = this.dogeConfig.feeOracle.contractWriteMode
+        }
+
         const signerConfig = this.requireSigner('l2GasOracleSender')
         if (isAwsKmsSigner(signerConfig)) {
           Object.assign(todoMappings, {
@@ -3135,6 +3156,7 @@ export default class SetupPrepCharts extends Command {
           ethereumRpcUrl: this.getConfigValue("ethereumDa.submitterRpcUrl"),
           l2RpcUrl: this.getConfigValue("general.L2_RPC_ENDPOINT"),
           l2StartBlockNumber: this.dogeConfig.ethereumDa?.l2StartBlockNumber,
+          runtime: this.dogeConfig.ethereumDa,
           s3Bucket: s3Archive?.bucket,
           s3Enabled: s3Archive?.enabled,
           s3EndpointUrl: s3Archive?.endpointUrl,

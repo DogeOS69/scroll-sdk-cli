@@ -1,3 +1,7 @@
+# Environment variable placeholders: see deployment.env.example beside this file.
+# Fresh-directory bootstrap and explicit local/KMS identity intent:
+# See docs/spec-projection.md. --bootstrap requires templates.sdkRevision,
+# complete identities, proofTopology and explicit approved Reth image tags.
 # DogeOS Minimal Deployment Specification
 # This is a minimal example that relies on generator defaults where possible.
 # See deployment-spec.example.yaml for full options.
@@ -37,7 +41,8 @@ database:
     vpcPort: 5432
 
 accounts:
-  # Deployment/activity accounts: setup gen-keystore. Service signers: setup eth-da-submitter / setup fee-oracle.
+  # Deployment/activity accounts: setup gen-keystore.
+  # Service signers: setup gen-keystore --service <eth-da-submitter|fee-oracle>.
   owner:
     # Use a wallet/multisig you can sign with; deployment does not prove control.
     address: "$ENV:OWNER_ADDRESS"
@@ -104,6 +109,10 @@ signing:
   # Current dogeos-core requires canonical protocol context in every mode, so
   # runtime preflight occurs after the post-genesis signer bundle is installed.
 
+# Use dry_run explicitly for a configuration-only fee-oracle rehearsal.
+feeOracle:
+  contractWriteMode: live
+
 frontend:
   protocol: https
   baseDomain: scrollsdk
@@ -123,6 +132,7 @@ rollup:
     bundleCollectionTimeSec: 180
 
 contracts:
+  l2BaseFeeOverheadWei: "420000000000"
   deploymentSalt: "dogeos-devnet-v1"
   gasOracle:
     blobScalar: 7400000000
@@ -132,6 +142,7 @@ contracts:
     penaltyFactor: 10000
 
 genesis:
+  gasLimit: 30000000
   maxEthSupplyWei: "100000000000000000000000000000"
   deployerInitialBalanceWei: "1000000000000000000000000"
   baseFeePerGasWei: 1000000000

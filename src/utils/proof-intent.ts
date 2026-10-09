@@ -7,6 +7,7 @@ import type {ProofCoordinatorConfig} from '../types/deployment-spec.js'
 import type {DogeConfig, Network} from '../types/doge-config.js'
 import type {ProofTopologySpec} from '../types/proof-topology.js'
 
+import {assertSeparateDaProofBuckets} from './artifact-bucket-validation.js'
 import {
   loadDeploymentSpec,
   resolveDeploymentSpecEnvRefs,
@@ -146,6 +147,7 @@ function validateTopology(topology: ProofTopologySpec, source: string): void {
 }
 
 function fromDogeConfig(configPath: string, config: DogeConfig): ResolvedProofIntent {
+  assertSeparateDaProofBuckets(config)
   const raw = config.proof_topology
   if (!raw) throw new Error(`${configPath}: [proof_topology] is required`)
   validateShape(raw, configPath)
@@ -153,13 +155,14 @@ function fromDogeConfig(configPath: string, config: DogeConfig): ResolvedProofIn
   validateTopology(topology, configPath)
   const coordinator = topology.deployment.coordinatorId
   return {
-    deploymentName: coordinator?.endsWith('-proof-coordinator')
+    deploymentName: config.proofDeployment?.name ?? (coordinator?.endsWith('-proof-coordinator')
       ? coordinator.slice(0, -'-proof-coordinator'.length)
-      : `dogeos-${config.network}`,
+      : `dogeos-${config.network}`),
     intent: {enforcement: topology.enforcement, generation: topology.generation, mode: topology.mode},
     network: config.network,
+    proofCoordinator: config.proofDeployment?.coordinator,
     proofTopology: topology,
-    proverPublicUrl: topology.deployment.proverPublicUrl,
+    proverPublicUrl: config.proofDeployment?.proverPublicUrl ?? topology.deployment.proverPublicUrl,
     source: {kind: 'doge-config', path: configPath, sha256: sha256File(configPath)},
     warnings: [],
   }
@@ -200,17 +203,17 @@ export function resolveProofIntent(options: {
   const explicitSpec = options.specPath ? path.resolve(deploymentDir, options.specPath) : undefined
   if (explicitSpec) return fromDeploymentSpec(explicitSpec)
   if (options.dogeConfig?.proof_topology) return fromDogeConfig(configPath, options.dogeConfig)
+  if (fs.existsSync(configPath)) {
+    const parsed = toml.parse(fs.readFileSync(configPath, 'utf8')) as unknown as DogeConfig
+    if (parsed.proof_topology) return fromDogeConfig(configPath, parsed)
+  }
+
   for (const name of DEFAULT_DEPLOYMENT_SPEC_FILES) {
     const candidate = path.join(deploymentDir, name)
     if (fs.existsSync(candidate)) {
       const raw = loadDeploymentSpec(candidate)
       if (raw.proofTopology) return fromDeploymentSpec(candidate)
     }
-  }
-
-  if (fs.existsSync(configPath)) {
-    const parsed = toml.parse(fs.readFileSync(configPath, 'utf8')) as unknown as DogeConfig
-    if (parsed.proof_topology) return fromDogeConfig(configPath, parsed)
   }
 
   if (options.required) throw new Error('No proof topology found; run scrollsdk setup doge-config --proof-topology')

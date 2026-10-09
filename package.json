@@ -112,7 +112,9 @@
     "url": "git+https://github.com/dogeos69/scroll-sdk-cli.git"
   },
   "scripts": {
-    "build": "shx rm -rf dist && shx rm -f oclif.manifest.json && tsc -b && shx cp src/config/*.toml dist/config/",
+    "build": "npm run spec:fields:check && shx rm -rf dist && shx rm -f oclif.manifest.json && tsc -b && shx cp src/config/*.toml dist/config/",
+    "spec:fields": "node scripts/generate-spec-fields.mjs",
+    "spec:fields:check": "node scripts/generate-spec-fields.mjs --check",
     "watch": "tsc -b --watch",
     "dev": "tsc -b --watch",
     "lint": "eslint . --ext .ts",

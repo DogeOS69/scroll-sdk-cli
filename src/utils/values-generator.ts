@@ -20,6 +20,7 @@ import {
   L1_INTERFACE_RPC_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
+import {CORE_DOCKER_DEFAULT_TAG, L2_BLOCK_TIME_MS, L2_GENESIS_GAS_LIMIT, L2_PAYLOAD_BUILDING_DURATION_MS, L2_TX_FEE_VAULT} from '../constants/deployment.js'
 import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY} from '../constants/docker.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 import {
@@ -29,6 +30,7 @@ import {
   normalizeDeploymentSpec,
 } from './deployment-spec-generator.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues} from './dstack-controller-values.js'
+import {ethereumDaRuntimeEnv} from './ethereum-da-runtime.js'
 import {
   resolveDogecoinKubernetesEndpoints,
 } from './kubernetes-endpoints.js'
@@ -427,7 +429,7 @@ function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | '
     resources: {limits: {cpu: '8', memory: '32Gi'}, requests: {cpu: '1', memory: '2Gi'}},
     reth: {
       blobS3Url: '',
-      builderGasLimit: '10000000',
+      builderGasLimit: String(spec.genesis.gasLimit ?? L2_GENESIS_GAS_LIMIT),
       data: {accessMode: 'ReadWriteOnce', mountPath: '/data', retain: true, size: '1000Gi'},
       engineLegacyStateRoot: true,
       engineSyncAtStartup: 'true',
@@ -449,10 +451,10 @@ function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | '
       ports: {http: 8545, metrics: 6060, p2p: 30_303, ws: 8546},
       rpc: {rollupNode: role !== 'bootnode', rollupNodeAdmin: false, trustedOnly: false},
       sequencer: {
-        allowEmptyBlocks: sequencer, autoStart: true, blockTimeMs: '3000',
-        enabled: sequencer, feeRecipient: spec.contracts.overrides?.l2TxFeeVault || '0x5300000000000000000000000000000000000005',
+        allowEmptyBlocks: sequencer, autoStart: true, blockTimeMs: String(L2_BLOCK_TIME_MS),
+        enabled: sequencer, feeRecipient: spec.contracts.overrides?.l2TxFeeVault || L2_TX_FEE_VAULT,
         l1InclusionMode: sequencer ? 'finalized:0' : 'finalized:2',
-        payloadBuildingDurationMs: '800',
+        payloadBuildingDurationMs: String(L2_PAYLOAD_BUILDING_DURATION_MS),
       },
       service: {extra: {}, p2p: {enabled: role !== 'rpc'}},
       signer: {
@@ -479,7 +481,7 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'l1Interface', {
     pullPolicy: 'Always',
     repository: 'dogeos69/l1-interface',
-    tag: 'v0.3.0-beta.5c'
+    tag: CORE_DOCKER_DEFAULT_TAG
   })
 
   const values: Record<string, any> = {
@@ -641,7 +643,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'ethDaSubmitter', {
     pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/eth-da-submitter',
-    tag: 'latest'
+    tag: CORE_DOCKER_DEFAULT_TAG
   })
 
   const values: Record<string, any> = {
@@ -649,22 +651,20 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
       env: {
         data: {
           ...buildEthDaSubmitterBatchEnv(spec),
-          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMATION_DEPTH: String(ethereumDa.confirmationDepth ?? 1),
-          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMER_POLL_INTERVAL_MS: String(ethereumDa.confirmerPollIntervalMs ?? 12_000),
-          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__FINALIZATION_DEPTH: String(ethereumDa.finalizationDepth ?? 64),
-          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_BLOB_BASE_FEE_WEI: ethereumDa.maxBlobBaseFeeWei || '50000000000',
-          DOGEOS_ETH_DA_SUBMITTER_PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
-          ...(ethereumDa.maxFeePerGasWei ? {
-            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_FEE_PER_GAS_WEI: ethereumDa.maxFeePerGasWei,
-          } : {}),
-          ...(ethereumDa.minPriorityFeeWei === undefined ? {} : {
-            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MIN_PRIORITY_FEE_WEI: ethereumDa.minPriorityFeeWei,
+          ...ethereumDaRuntimeEnv({
+            confirmationDepth: 1,
+            confirmerPollIntervalMs: 12_000,
+            fetchLimit: 128,
+            finalizationDepth: 64,
+            l2Confirmations: 0,
+            l2RpcUrl: L2_RPC_ENDPOINT,
+            maxBlobBaseFeeWei: '50000000000',
+            submitterDbPath: '/app/data/submitter.sqlite',
+            ...ethereumDa,
           }),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SIGNER_BACKEND: 'local',
-          DOGEOS_ETH_DA_SUBMITTER_L2__CONFIRMATIONS: String(ethereumDa.l2Confirmations ?? 0),
-          DOGEOS_ETH_DA_SUBMITTER_L2__FETCH_LIMIT: String(ethereumDa.fetchLimit ?? 128),
-          DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: ethereumDa.l2RpcUrl || L2_RPC_ENDPOINT,
+          DOGEOS_ETH_DA_SUBMITTER_PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
           ...(l2StartBlockNumber === undefined ? {} : {
             DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER: String(l2StartBlockNumber),
           }),
@@ -675,8 +675,6 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__LISTEN_PORT: '3004',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__SHUTDOWN_GRACE_PERIOD_SEC: '30',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__STATUS_POLL_INTERVAL_MS: '5000',
-          DOGEOS_ETH_DA_SUBMITTER_STORE__LIFECYCLE_DB_PATH: ethereumDa.lifecycleDbPath || ethereumDa.submitterDbPath || '/app/data/submitter.sqlite',
-          DOGEOS_ETH_DA_SUBMITTER_STORE__SUBMITTER_DB_PATH: ethereumDa.submitterDbPath || '/app/data/submitter.sqlite'
         },
         enabled: true
       }
@@ -811,7 +809,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'tsoService', {
     pullPolicy: 'Always',
     repository: 'dogeos69/tso-service',
-    tag: 'v0.3.0-beta.6'
+    tag: CORE_DOCKER_DEFAULT_TAG
   })
 
   const values = {
@@ -865,7 +863,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'withdrawalProcessor', {
     pullPolicy: 'Always',
     repository: 'dogeos69/withdrawal-processor',
-    tag: 'v0.3.0-beta.5c'
+    tag: CORE_DOCKER_DEFAULT_TAG
   })
 
   const values: Record<string, any> = {
@@ -1004,7 +1002,7 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'cubesignerSigner', {
     pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/cubesigner-signer',
-    tag: 'v0.3.0-beta.2'
+    tag: CORE_DOCKER_DEFAULT_TAG
   })
 
   const values: Record<string, any> = {
@@ -1175,7 +1173,7 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'proofCoordinator', {
     pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/proof-coordinator',
-    tag: '0.3.0-beta.1d-rc2'
+    tag: CORE_DOCKER_DEFAULT_TAG
   })
 
   const env: Array<Record<string, any>> = [
@@ -1309,7 +1307,7 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'feeOracle', {
     pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/fee-oracle',
-    tag: 'TODO_TAG_TO_REPLACE'
+    tag: CORE_DOCKER_DEFAULT_TAG
   })
 
   const values = {
@@ -1319,6 +1317,7 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
           DOGEOS_FEE_ORACLE_DATABASE__CONNECTION_POOL_SIZE: '10',
           DOGEOS_FEE_ORACLE_DATABASE__SQLITE_PATH: '/data/fee_oracle.db',
           ...buildFeeOracleEthereumDaEnv(spec),
+          DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE: spec.feeOracle?.contractWriteMode ?? 'live',
           DOGEOS_FEE_ORACLE_L2__CHAIN_ID: String(spec.network.l2ChainId),
           DOGEOS_FEE_ORACLE_L2__CONFIRMATIONS: '3',
           DOGEOS_FEE_ORACLE_L2__GAS_ORACLE_CONTRACT: spec.contracts.overrides?.l1GasPriceOracle || '<TODO>',

@@ -1,5 +1,9 @@
+# Environment variable placeholders: see deployment.env.example beside this file.
+# Fresh-directory bootstrap and explicit local/KMS identity intent:
+# See docs/spec-projection.md. --bootstrap requires templates.sdkRevision,
+# complete identities, proofTopology and explicit approved Reth image tags.
 # DogeOS Deployment Specification
-# This file is the single source of truth for a DogeOS deployment.
+# Deployment intent used to generate configuration. Prepare cloud resources separately.
 # Use $ENV:VAR_NAME to reference environment variables for secrets.
 
 version: "1.0"
@@ -14,16 +18,13 @@ metadata:
     team: infrastructure
 
 infrastructure:
+  # Reference an existing cluster; generate-from-spec does not create clusters or nodes.
   provider: aws
   aws:
     region: us-west-2
     accountId: "123456789012"
     eksClusterName: dogeos-devnet-cluster
     secretsPrefix: dogeos-devnet
-    # Cluster creation settings (used when --create-cluster is specified)
-    nodeType: m5.2xlarge        # EC2 instance type for worker nodes
-    nodeCount: 3                # Number of worker nodes
-    kubernetesVersion: "1.29"   # Kubernetes version
   # For GCP deployments:
   # provider: gcp
   # gcp:
@@ -31,10 +32,6 @@ infrastructure:
   #   region: us-central1
   #   gkeClusterName: dogeos-devnet-cluster
   #   secretsProject: my-gcp-project  # optional, defaults to project
-  #   # Cluster creation settings (used when --create-cluster is specified)
-  #   machineType: e2-standard-8  # GCE machine type for nodes
-  #   nodeCount: 3                # Number of nodes
-  #   kubernetesVersion: latest   # GKE version (or specific like "1.29")
   # For local/Kind deployments:
   # provider: local
   # local:
@@ -91,7 +88,8 @@ database:
     vpcPort: 5432
 
 accounts:
-  # Deployment/activity accounts: setup gen-keystore. Service signers: setup eth-da-submitter / setup fee-oracle.
+  # Deployment/activity accounts: setup gen-keystore.
+  # Service signers: setup gen-keystore --service <eth-da-submitter|fee-oracle>.
   # Public addresses are derived from generated/imported private keys.
   owner:
     # Use a wallet/multisig you can sign with; deployment does not prove control.
@@ -163,7 +161,9 @@ signing:
 # The compiler-backed proof topology is optional. The recommended non-spec flow
 # imports producer output with `setup proof-materials`, then lets `setup
 # doge-config --proof-topology` write this table. DeploymentSpec users may
-# provide the same strict table directly. `prep-charts` passes it to the pinned
+# provide the same strict table directly. Generation retains it in doge-config;
+# paths are relative to the deployment output directory, not the spec file.
+# `prep-charts` passes it to the pinned
 # dogeos-core compiler; TypeScript does not derive proof identities.
 #
 # proofTopology:
@@ -256,6 +256,10 @@ signing:
 #     annotations:
 #       eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/dogeos-withdrawal-processor-proof"
 
+# Use dry_run explicitly for a configuration-only fee-oracle rehearsal.
+feeOracle:
+  contractWriteMode: live
+
 frontend:
   protocol: https
   baseDomain: scrollsdk
@@ -285,6 +289,7 @@ rollup:
     bundleCollectionTimeSec: 600
 
 contracts:
+  l2BaseFeeOverheadWei: "420000000000"
   deploymentSalt: "salt-000"
   gasOracle:
     blobScalar: 7400000000
@@ -304,6 +309,7 @@ contracts:
     l2ExplorerUri: "http://blockscout.scrollsdk"
 
 genesis:
+  gasLimit: 30000000
   maxEthSupplyWei: "226156424291633194186662080095093570025917938800079226639565593765455331328"
   deployerInitialBalanceWei: "5000000000000000000"
   baseFeePerGasWei: 100000000

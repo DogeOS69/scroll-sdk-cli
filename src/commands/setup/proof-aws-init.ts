@@ -219,7 +219,7 @@ export default class ProofAwsInit extends Command {
         this.log('Proof AWS resource plan:')
         this.log(`  EKS/secret AWS region:  ${awsRegion}`)
         this.log(`  EKS cluster/namespace:  ${eksCluster} / ${namespace}`)
-        this.log(`  Shared DA/proof store:  s3://${bucket}/${keyPrefix} (${shared.region})`)
+        this.log(`  Proof artifact store:  s3://${bucket}/${keyPrefix} (${shared.region})`)
         this.log(`  Public read mode:       ${publicReadMode}`)
         this.log(`  External artifact endpoint: ${publicEndpointUrl}`)
         this.log(`  EKS S3 Gateway route:   ${configureVpcEndpoint ? 'auto-discover/create' : 'skipped'}`)

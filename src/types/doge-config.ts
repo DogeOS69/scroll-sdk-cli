@@ -1,5 +1,7 @@
 import type {CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
+import type {EthereumDaRuntimeConfig} from '../utils/ethereum-da-runtime.js'
 import type {SignerValidationInputs} from '../utils/proof-enforcement-readiness.js'
+import type {DeploymentIdentityIntent, ProofCoordinatorConfig} from './deployment-spec.js'
 import type {DstackControllerConfig} from './dstack-controller.js'
 import type {ProofTopologySpec} from './proof-topology.js'
 
@@ -125,7 +127,6 @@ export interface DogeConfig {
   }
   /** Public Helm deployment inputs; credentials remain in referenced Kubernetes Secrets. */
   dstackController?: DstackControllerConfig
-
   ethereumDa?: {
     batch?: {
       compression?: 'auto' | 'none'
@@ -185,7 +186,9 @@ export interface DogeConfig {
       targetBlobsPerTx?: number | string
     }
     submitterRpcUrl?: string
-  }
+  } & EthereumDaRuntimeConfig
+
+  feeOracle?: {contractWriteMode?: 'dry_run' | 'live'}
   frontend?: {
     bridgeUrl?: string
     l2Explorer?: string
@@ -199,6 +202,7 @@ export interface DogeConfig {
     passwordKey?: string
     userKey?: string
   }
+  identityIntent?: DeploymentIdentityIntent
   kubernetes?: {
     p2pPort?: number
     rpcPort?: number
@@ -217,7 +221,7 @@ export interface DogeConfig {
     }>
   }
   network: Network
-  /** Compiler-backed proof topology when DeploymentSpec is not used. */
+  /** Compiler-backed proof topology, including intent projected from DeploymentSpec. */
   proof_topology?: ProofTopologySpec
   /** Proof artifact bucket: coordinator/WP artifact_store and the only signer artifact origin. */
   proofArtifacts?: {
@@ -229,6 +233,12 @@ export interface DogeConfig {
       publicBaseUrl?: string
       region?: string
     }
+  }
+  /** Deployment context retained alongside generated proof topology. Paths stay deployment-relative. */
+  proofDeployment?: {
+    coordinator?: ProofCoordinatorConfig
+    name: string
+    proverPublicUrl?: string
   }
   /** Reth-specific network settings that are intentionally independent of the EVM chain ID. */
   reth?: {
