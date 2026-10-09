@@ -737,7 +737,7 @@ describe('deployment-spec-generator', () => {
 
       expect(result.valid).to.be.false;
       expect(result.errors.some(error =>
-        error.path === 'signing.attestationSigner' && error.message.includes('partner-operated docker-compose')
+        error.path === 'signing.attestationSigner' && error.message.includes('attestationSigners')
       )).to.be.true;
     });
 

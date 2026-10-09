@@ -17,6 +17,7 @@ import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import { protocolIdSidecarPath } from '../../utils/signer-policy-derivation.js'
+import {withdrawalSequencerKms} from '../../utils/withdrawal-signers.js'
 
 type BridgeInitStep = '1-prepare' | '2-setup' | '3-bridge-info' | '4-fund' | '5-protocol-context' | 'all'
 
@@ -1194,7 +1195,8 @@ export class BridgeInitCommand extends Command {
       'fee_signer_key',
       paths.withdrawalProcessorTomlPath
     )
-    const sequencerSignerKey = this.getRequiredStringValue(
+    const kms = withdrawalSequencerKms(withdrawalProcessorToml)
+    const sequencerSignerKey = kms ? undefined : this.getRequiredStringValue(
       withdrawalProcessorToml,
       'sequencer_signer_key',
       paths.withdrawalProcessorTomlPath
@@ -1204,9 +1206,10 @@ export class BridgeInitCommand extends Command {
     const existingContent = fs.existsSync(paths.withdrawalProcessorSecretPath)
       ? fs.readFileSync(paths.withdrawalProcessorSecretPath, 'utf8')
       : ''
-    const nextContent = this.upsertEnvValues(existingContent, {
+    const sourceContent = kms ? existingContent.split('\n').filter(line => !/^\s*(?:export\s+)?DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY\s*=/.test(line)).join('\n') : existingContent
+    const nextContent = this.upsertEnvValues(sourceContent, {
       DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY: feeSignerKey,
-      DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY: sequencerSignerKey,
+      ...(sequencerSignerKey ? {DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY: sequencerSignerKey} : {}),
     })
     fs.writeFileSync(paths.withdrawalProcessorSecretPath, nextContent)
     this.jsonCtx.info(`Updated withdrawal processor signer keys in ${paths.withdrawalProcessorSecretPath}`)

@@ -11,7 +11,9 @@ import type {DeploymentSpec} from '../types/deployment-spec.js'
 import {bridgeSetupHelperAddress} from '../commands/setup/bridge-init.js'
 import {GENESIS_SEQUENCER_AMOUNT_SATS} from './bridge-constants.js'
 import {resolveEnvValue} from './non-interactive.js'
+import {FEE_WALLET_KEY_ENV, productionFeeWallet} from './preparation-fee-wallet.js'
 import {AwaitingInput, localPath, privateWrite, writeJson} from './preparation-io.js'
+import {productionSequencer} from './preparation-sequencer-kms.js'
 
 export const BRIDGE_FUNDING_MARKER = '6a4901' + '00'.repeat(72)
 export type Rpc = (method: string, params: unknown[]) => Promise<any>
@@ -94,11 +96,13 @@ export async function verifyDogecoinNetwork(network: string, rpc: Rpc): Promise<
 export async function prepareProductionWallets(root: string, spec: DeploymentSpec, rpc: Rpc): Promise<void> {
   const policy = spec.preparation!.bridge.production!
   await verifyDogecoinNetwork(spec.dogecoin.network, rpc)
-  checkPrivateKey(policy.sequencerPublicKey, policy.sequencerKeyEnv)
-  checkPrivateKey(policy.feeWalletPublicKey, policy.feeWalletKeyEnv)
+  const sequencer = productionSequencer(root, spec)
+  if (!sequencer.kms) checkPrivateKey(sequencer.publicKey, policy.sequencerKeyEnv!)
+  const feeWallet = productionFeeWallet(root, spec)
+  if (feeWallet.publicKey === sequencer.publicKey.toLowerCase()) throw new Error('Production sequencer and fee wallet must have different keys')
   if (await rpc('getblockcount', []) >= spec.bridge.timelock) throw new AwaitingInput({message: 'Recovery timelock is not in the future; use a reviewed future block height in a new plan'})
   const {data, file} = fundingInput(root, spec)
-  const addresses = {feeWallet: publicKeyAddress(policy.feeWalletPublicKey, spec.dogecoin.network), sequencer: publicKeyAddress(policy.sequencerPublicKey, spec.dogecoin.network)}
+  const addresses = {feeWallet: feeWallet.address, sequencer: publicKeyAddress(sequencer.publicKey, spec.dogecoin.network)}
   const setupPath = path.join(root, '.data/setup_defaults.toml')
   const setup = toml.parse(fs.readFileSync(setupPath, 'utf8')) as any
   const facts: Record<string, FundingFact> = {}
@@ -125,9 +129,9 @@ export async function prepareProductionWallets(root: string, spec: DeploymentSpe
   }}))
   privateWrite(path.join(root, '.data/output-withdrawal-processor.toml'), toml.stringify({
     bridge_address: '', bridge_script_hex: '',
-    fee_signer_key: `$ENV:${policy.feeWalletKeyEnv}`, genesis_sequencer_tx_hex: facts.sequencer.rawTransaction,
+    fee_signer_key: `$ENV:${FEE_WALLET_KEY_ENV}`, genesis_sequencer_tx_hex: facts.sequencer.rawTransaction,
     genesis_sequencer_txid: facts.sequencer.txid, genesis_sequencer_vout: facts.sequencer.vout, network_str: spec.dogecoin.network,
-    sequencer_signer_key: `$ENV:${policy.sequencerKeyEnv}`,
+    ...(sequencer.kms ? {sequencer_signer_kms: sequencer.kms} : {sequencer_signer_key: `$ENV:${policy.sequencerKeyEnv}`}),
   }))
   writeJson(path.join(root, '.data/output-test-data.json'), {
     confirmed_block_hash: facts.sequencer.blockHash, confirmed_block_height: facts.sequencer.blockHeight,
@@ -141,12 +145,11 @@ export async function prepareProductionBridgeFunding(root: string, spec: Deploym
   const bridge = JSON.parse(fs.readFileSync(path.join(root, '.data/bridge.json'), 'utf8'))
   const setup = toml.parse(fs.readFileSync(path.join(root, '.data/setup_defaults.toml'), 'utf8')) as any
   const facts = JSON.parse(fs.readFileSync(path.join(root, '.data/production-wallet-funding.json'), 'utf8'))
-  const policy = spec.preparation!.bridge.production!
   await verifyDogecoinNetwork(spec.dogecoin.network, rpc)
   verifyProductionBridge(bridge, facts.sequencer)
-  const current = await inspectFunding(facts.sequencer, {address: publicKeyAddress(policy.sequencerPublicKey, spec.dogecoin.network), confirmations: spec.bridge.confirmationsRequired, exact: true, minimumSats: GENESIS_SEQUENCER_AMOUNT_SATS}, rpc)
+  const current = await inspectFunding(facts.sequencer, {address: publicKeyAddress(productionSequencer(root, spec).publicKey, spec.dogecoin.network), confirmations: spec.bridge.confirmationsRequired, exact: true, minimumSats: GENESIS_SEQUENCER_AMOUNT_SATS}, rpc)
   if (current.blockHash !== facts.sequencer.blockHash) throw new Error('Sequencer confirmation anchor changed; review the reorganization before continuing')
-  await inspectFunding(facts.feeWallet, {address: publicKeyAddress(policy.feeWalletPublicKey, spec.dogecoin.network), confirmations: spec.bridge.confirmationsRequired, minimumSats: setup.fee_wallet_target_amount}, rpc)
+  await inspectFunding(facts.feeWallet, {address: productionFeeWallet(root, spec).address, confirmations: spec.bridge.confirmationsRequired, minimumSats: setup.fee_wallet_target_amount}, rpc)
   if (await rpc('getblockcount', []) >= spec.bridge.timelock) throw new AwaitingInput({message: 'Recovery timelock is no longer in the future'})
   let funded: FundingFact
   try {funded = await inspectFunding(data.bridge, {address: bridge.p2sh_address, confirmations: spec.bridge.confirmationsRequired, marker: true, minimumSats: setup.bridge_target_amount}, rpc)} catch (error) {

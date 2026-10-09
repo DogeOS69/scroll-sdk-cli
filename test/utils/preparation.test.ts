@@ -31,7 +31,9 @@ function fixture(): DeploymentSpec {
   spec.images = {services: Object.fromEntries(['l2Rpc', 'l2Sequencer', 'l2Bootnode'].map(key => [key, {tag: 'explicit-test-release'}]))}
   spec.identities = {bootnodes: [{index: 0, nodekey: {action: 'create'}}], ethDaSubmitter: {action: 'create', backend: 'local'}, feeOracle: {action: 'create', backend: 'local'}, sequencers: [{index: 0, nodekey: {action: 'create'}, signer: {action: 'create', backend: 'local'}}]}
   spec.proofTopology = {active: {artifactStore: {kind: 'local_fs'}, profile: 'withdrawal_mock_prover', realScroll: {} as any, workerLaunch: 'local_cpu'}, compiler: {identityFilePath: '.data/compiler.json', image: {digest: `sha256:${'a'.repeat(64)}`, repository: 'example.invalid/compiler'}}, deployment: {proverPublicUrl: 'https://proof.example.invalid'}, enforcement: 'observe', generation: 'mock', mode: 'disabled', observeRealProofDeadlineMs: 1000}
-  spec.preparation = {attestationDescriptors: ['descriptors/partner.json'], bridge: {image: `dogeos69/bridge-genesis-tools@sha256:${'b'.repeat(64)}`, mode: 'helper'}, proofMaterials: {mode: 'existing'}}
+  spec.preparation = {bridge: {image: `dogeos69/bridge-genesis-tools@sha256:${'b'.repeat(64)}`, mode: 'helper'}, proofMaterials: {mode: 'existing'}}
+  spec.attestationSigners = Array.from({length: 3}, (_, index) => ({attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), name: `partner-${index}`, transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()}))
+  spec.bridge.initialAttestationKeyset = {signerIds: spec.attestationSigners.map(signer => signer.name), threshold: 2}
   return spec
 }
 
@@ -275,14 +277,24 @@ describe('resumable preparation plan', () => {
     expect(fs.existsSync(path.join(deployment, '.scrollsdk/apply.lock'))).to.equal(false)
   })
 
-  it('runs actual bootstrap and identity commands before waiting for a partner descriptor', async () => {
+  it('runs actual bootstrap and identity commands with signer public keys from the frozen spec', async () => {
     await makePlan()
-    const first = await applyPreparation(deployment, new CommandPreparationRunner())
+    const actual = new CommandPreparationRunner()
+    const runner = {async run(step: any, spec: DeploymentSpec, output: string, plan: any) {
+      if (step.id === 'genesis') throw new AwaitingInput({message: 'Stop before container execution'})
+      await actual.run(step, spec, output, plan)
+    }}
+    const first = await applyPreparation(deployment, runner)
     expect(first.status).to.equal('waiting')
-    expect(first.currentStep).to.equal('descriptors')
+    expect(first.currentStep).to.equal('genesis')
     const doge = fs.readFileSync(path.join(deployment, '.data/doge-config.toml'), 'utf8')
     expect((toml.parse(doge) as any).sequencerReth.instances).to.have.length(1)
-    const second = await applyPreparation(deployment, new CommandPreparationRunner())
+    const frozen = JSON.parse(fs.readFileSync(path.join(deployment, '.scrollsdk/intent.json'), 'utf8'))
+    const publicKeys = frozen.attestationSigners.map((signer: any) => signer.attestationPubkey)
+    expect((toml.parse(doge) as any).attestationSigner.external.map((signer: any) => signer.publicKey)).to.deep.equal(publicKeys)
+    expect(toml.parse(fs.readFileSync(path.join(deployment, '.data/setup_defaults.toml'), 'utf8')).attestation_pubkeys).to.deep.equal(publicKeys)
+    expect(fs.existsSync(path.join(deployment, 'descriptors'))).to.equal(false)
+    const second = await applyPreparation(deployment, runner)
     expect(second.status).to.equal('waiting')
     expect(fs.readFileSync(path.join(deployment, '.data/doge-config.toml'), 'utf8')).to.equal(doge)
   })
@@ -300,7 +312,7 @@ describe('resumable preparation plan', () => {
     p.mode = 'production'
     const key = () => new bitcore.PrivateKey(null, bitcore.Networks.testnet).toPublicKey().toString()
     spec.bridge.teePubkey = key(); spec.bridge.timelock = 999_999
-    p.production = {ethereumAnchor: {blockNumber: 100, transactionIndex: 0}, feeWalletKeyEnv: 'PROD_FEE_KEY', feeWalletPublicKey: key(), recoveryPublicKeys: [key(), key()], sequencerKeyEnv: 'PROD_SEQUENCER_KEY', sequencerPublicKey: key()}
+    p.production = {ethereumAnchor: {blockNumber: 100, transactionIndex: 0}, recoveryPublicKeys: [key(), key()], sequencerKeyEnv: 'PROD_SEQUENCER_KEY', sequencerPublicKey: key()}
     delete spec.bridge.seedString
     validatePreparation(spec)
     const setup = toml.parse(generateSetupDefaultsToml(spec))

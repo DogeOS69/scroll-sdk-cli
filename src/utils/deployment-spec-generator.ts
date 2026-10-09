@@ -36,6 +36,7 @@ import {stripRetiredServiceConfig} from './retired-services.js'
 import {buildS3PublicBaseUrl} from './s3-archive.js'
 import { normalizeCompressedSecp256k1PublicKey } from './secp256k1-public-key.js'
 import { MANAGED_SIGNER_ROLES, buildLocalSignerConfig } from './signer-roles.js'
+import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {resolveSpecIdentities} from './spec-identities.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
 
@@ -511,6 +512,10 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   const errors: ValidationError[] = []
   const warnings: ValidationWarning[] = []
 
+  try {resolveSpecAttestationSigners(spec, Boolean(spec.preparation))} catch (error) {
+    errors.push({code: 'E601_INVALID_VALUE', message: error instanceof Error ? error.message : 'Invalid attestation signer identities', path: 'attestationSigners'})
+  }
+
   try {
     assertSeparateDaProofBuckets({ethereumDa: spec.ethereumDa, proofArtifacts: spec.proofArtifacts}, resolveInlineEnvRefs)
   } catch (error) {
@@ -824,7 +829,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   if (spec.signing?.attestationSigner) {
     errors.push({
       code: 'E601_INVALID_VALUE',
-      message: 'signing.attestationSigner is retired: attestation signers are partner-operated docker-compose services and are imported from descriptors after config generation',
+      message: 'signing.attestationSigner is retired: declare partner public identities in attestationSigners',
       path: 'signing.attestationSigner',
     })
   }
@@ -1040,7 +1045,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   // Bridge thresholds validation
   if (spec.bridge?.thresholds && !spec.bridge.initialAttestationKeyset) {
     const { attestation } = spec.bridge.thresholds
-    const attestationKeyCount = spec.bridge.keyCounts?.attestation || 0
+    const attestationKeyCount = spec.attestationSigners?.length ?? spec.bridge.keyCounts?.attestation ?? 0
     if (attestation > attestationKeyCount) {
       errors.push({
         code: 'E005_INVALID_THRESHOLD',
@@ -1498,7 +1503,9 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   }
 
   if (spec.dogecoin.kubernetes) config.kubernetes = structuredClone(spec.dogecoin.kubernetes)
-  if (spec.bridge.initialAttestationKeyset) {
+  const attestation = resolveSpecAttestationSigners(spec, Boolean(spec.preparation))
+  if (attestation) config.attestationSigner = attestation
+  else if (spec.bridge.initialAttestationKeyset) {
     config.attestationSigner = {
       activeSignerIds: [...spec.bridge.initialAttestationKeyset.signerIds],
       mode: 'external',
@@ -1621,12 +1628,14 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
  */
 export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
   const spec = normalizeDeploymentSpec(rawSpec)
+  const attestation = resolveSpecAttestationSigners(spec, Boolean(spec.preparation))
   const externalRpc = getDogecoinExternalRpc(spec)
   const targetAmountsSats = getBridgeTargetAmountsSats(spec)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
   const config: Record<string, any> = {
-    attestation_key_count: spec.bridge.initialAttestationKeyset?.signerIds.length ?? spec.bridge.keyCounts.attestation,
-    attestation_threshold: spec.bridge.initialAttestationKeyset?.threshold ?? spec.bridge.thresholds.attestation,
+    attestation_key_count: attestation?.activeSignerIds.length ?? spec.bridge.initialAttestationKeyset?.signerIds.length ?? spec.bridge.keyCounts.attestation,
+    attestation_threshold: attestation?.threshold ?? spec.bridge.initialAttestationKeyset?.threshold ?? spec.bridge.thresholds.attestation,
+    ...(attestation ? {attestation_pubkeys: attestation.activeSignerIds.map(id => attestation.external.find(signer => signer.id === id)!.publicKey)} : {}),
     bridge_target_amount: targetAmountsSats.bridge,
     confirmations_required: spec.bridge.confirmationsRequired,
     deposit_eth_recipient_address_hex: optionalAccountAddress(spec, 'deployer'),

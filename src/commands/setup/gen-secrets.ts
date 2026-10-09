@@ -19,6 +19,7 @@ import {
   isAwsKmsSigner,
   isLocalSigner,
 } from '../../utils/signer-roles.js'
+import {withdrawalSequencerKms} from '../../utils/withdrawal-signers.js'
 import { RETH_BOOTNODE_NODEKEY_ENV, getBootnodeRethResourceName } from './l2-bootnode-reth.js'
 import {
   RETH_NODEKEY_ENV,
@@ -324,7 +325,7 @@ export default class SetupGenSecrets extends Command {
       if (fs.existsSync(withdrawalProcessorTomlPath)) {
         const withdrawalProcessorToml = toml.parse(fs.readFileSync(withdrawalProcessorTomlPath, 'utf8'))
         content += this.envLine('DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY', withdrawalProcessorToml.fee_signer_key, 'output-withdrawal-processor.fee_signer_key')
-        content += this.envLine('DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY', withdrawalProcessorToml.sequencer_signer_key, 'output-withdrawal-processor.sequencer_signer_key')
+        if (!withdrawalSequencerKms(withdrawalProcessorToml)) content += this.envLine('DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY', withdrawalProcessorToml.sequencer_signer_key, 'output-withdrawal-processor.sequencer_signer_key')
       } else {
         this.jsonCtx.error(
           'E101_CONFIG_NOT_FOUND',

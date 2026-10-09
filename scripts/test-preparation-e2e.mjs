@@ -7,9 +7,9 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 // Container integration test. Inputs are private test fixtures, never live deployment files.
 const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const [sdk, baselineSpec, descriptor, compilerIdentity] = process.argv.slice(2).map(value => path.resolve(value));
+const [sdk, baselineSpec, compilerIdentity] = process.argv.slice(2).map(value => path.resolve(value));
 if (!compilerIdentity)
-    throw Error('Usage: node scripts/test-preparation-e2e.mjs SDK_CHECKOUT TEST_SPEC PARTNER_DESCRIPTOR COMPILER_IDENTITY');
+    throw Error('Usage: node scripts/test-preparation-e2e.mjs SDK_CHECKOUT TEST_SPEC COMPILER_IDENTITY');
 const require = createRequire(cli + '/package.json'), yaml = require('js-yaml'), toml = require('@iarna/toml'), { Wallet } = require('ethers'), bitcore = require('bitcore-lib-doge'), { Transaction } = require('bitcoinjs-lib');
 process.umask(0o077);
 const root = fs.mkdtempSync('/tmp/preparation-production-e2e-'), deployment = root + '/deployment';
@@ -72,8 +72,8 @@ const environment = {
     ...process.env, OCLIF_TEST_ROOT: cli
 };
 delete environment.PREP_SEQ_KEY;
-delete environment.PREP_FEE_KEY;
-fs.writeFileSync(root + '/environment', `PREP_SEQ_KEY=${seq.toWIF()}\nPREP_FEE_KEY=${fee.toWIF()}\n`);
+delete environment.DOGECOIN_FEE_WALLET_KEY;
+fs.writeFileSync(root + '/environment', `PREP_SEQ_KEY=${seq.toWIF()}\nDOGECOIN_FEE_WALLET_KEY=${fee.toWIF()}\n`);
 let spec;
 try { spec = yaml.load(fs.readFileSync(baselineSpec, 'utf8')); }
 catch { throw Error('Cannot read the private test spec; contents omitted'); }
@@ -119,16 +119,18 @@ spec.bridge.teePubkey = new bitcore.PrivateKey(null, bitcore.Networks.testnet).t
 spec.bridge.timelock = 999999;
 delete spec.bridge.seedString;
 spec.bridge.confirmationsRequired = 2;
+spec.attestationSigners = Array.from({length: spec.bridge.keyCounts.attestation}, (_, index) => ({name: `partner-${index}`, attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()}));
+spec.bridge.initialAttestationKeyset = {signerIds: spec.attestationSigners.map(s => s.name), threshold: spec.bridge.thresholds.attestation};
 const image = 'dogeos69/bridge-genesis-tools@sha256:27e646fd5d9c340926df82f47f7d352fd5333de4e6178c5a8c56aa9637769262';
 fs.writeFileSync(root + '/vast-key', 'NONFUNCTIONAL_TEST_VAST_KEY');
 spec.preparation = {
     dstack: {
         mode: 'import', providers: ['vastai'], vastaiApiKeyFile: root + '/vast-key'
-    }, attestationDescriptors: [descriptor], bridge: {
+    }, bridge: {
         mode: 'production', image, production: {
             ethereumAnchor: {
                 blockNumber: 100, transactionIndex: 0
-            }, sequencerPublicKey: seq.toPublicKey().toString(), sequencerKeyEnv: 'PREP_SEQ_KEY', feeWalletPublicKey: fee.toPublicKey().toString(), feeWalletKeyEnv: 'PREP_FEE_KEY', recoveryPublicKeys: Array.from({
+            }, sequencerPublicKey: seq.toPublicKey().toString(), sequencerKeyEnv: 'PREP_SEQ_KEY', recoveryPublicKeys: Array.from({
                 length: spec.bridge.keyCounts.recovery
             }, () => new bitcore.PrivateKey(null, bitcore.Networks.testnet).toPublicKey().toString())
         }

@@ -34,7 +34,8 @@ the spec's environment references even when a later step would not use them.
 | `OWNER_ADDRESS` | `accounts.owner.address` | Public Ethereum/L2 owner or multisig address; no private key. |
 | `DOGECOIN_EXTERNAL_RPC_USERNAME`, `DOGECOIN_EXTERNAL_RPC_PASSWORD` | `dogecoin.externalRpc` | Credentials for the RPC reached by the operator. |
 | `DOGECOIN_CLUSTER_RPC_USERNAME`, `DOGECOIN_CLUSTER_RPC_PASSWORD` | `dogecoin.clusterRpc` | Credentials used by deployed services. |
-| `DOGECOIN_SEQUENCER_KEY`, `DOGECOIN_FEE_WALLET_KEY` | Production Bridge `sequencerKeyEnv` / `feeWalletKeyEnv` | Independently provisioned Dogecoin WIF keys matching the declared public keys and network. |
+| `DOGECOIN_FEE_WALLET_KEY` | Production Bridge, fixed environment variable | Compressed Dogecoin WIF for the selected network; apply derives the public key/address. Fee-wallet KMS is not supported by beta.6-kms. |
+| `DOGECOIN_SEQUENCER_KEY` | Optional local Bridge `sequencerKeyEnv` | Omit when selecting `sequencerKms`; local mode requires the matching `sequencerPublicKey`. |
 | `SEQUENCER_SIGNING_KEY` | Optional `identities.sequencers[0].signer.privateKeyEnv` import | L2 Reth signer private key, distinct from the Dogecoin sequencer key. Omit for create/KMS. |
 | `VASTAI_API_KEY` | `preparation.dstack.vastaiApiKeyEnv` | Vast.ai key string; no separate credential file is needed. |
 | `DSTACK_DATABASE_URL` | Optional `preparation.dstack.databaseUrlEnv` | Existing `postgresql+asyncpg` connection URL using `ssl`, not `sslmode`. Omit for SQLite or database initialization. |
@@ -44,7 +45,7 @@ by the shipped examples and this guide. Add an entry for every custom reference.
 Adding a variable alone does not select an import operation or override a spec
 field: the spec must explicitly reference it. Keep each value on one line, place
 comments on separate lines, and do not use shell substitutions. AWS credentials
-use the normal provider chain; GCP credential files, partner descriptors
+use the normal provider chain; GCP credential files
 and Bridge funding outpoints use their separately declared files.
 
 ## Commands
@@ -90,24 +91,41 @@ remain required. `templates` is optional: plan locks the committed HEAD of
 `--sdk-dir`; `templates.sdkRevision` is an explicit full-commit override. Apply
 uses that frozen revision even after the checkout changes. Add `preparation`, with explicit operations and
 external file references. Paths are relative to the deployment directory unless
-absolute; they are not relative to the source spec. Descriptor and material files
-may arrive after planning. User-supplied artifacts are inputs, not generated facts.
+absolute; they are not relative to the source spec. Material files may arrive
+after planning. Signer identities belong in the top-level `attestationSigners`
+list and must be filled before plan. Copy the paired attestation/transport public
+keys from approved Governance records; no descriptor file handoff is required.
+Governance API synchronization is not part of this workflow: the operator copies
+approved public identities into the spec. Names must be unique stable identifiers;
+both keys must be distinct compressed secp256k1 public keys. The network is
+inherited from `dogecoin.network`.
+
+`bridge.initialAttestationKeyset.signerIds` selects names and fixes their Bridge
+key order; its `threshold` defines the required signature count. If this selection
+is omitted, all entries are selected in list order, using
+`bridge.thresholds.attestation`. Plan freezes these public identities along with
+the rest of the intent. Apply writes the selected Bridge keyset and the TSO signer
+directory without waiting for descriptor files.
+User-supplied artifacts are inputs, not generated facts.
 
 A production Bridge example (replace public-key placeholders before planning):
 
 ```yaml
+attestationSigners:
+  - name: partner-a
+    attestationPubkey: REPLACE_WITH_PARTNER_A_ATTESTATION_PUBLIC_KEY
+    transportPubkey: REPLACE_WITH_PARTNER_A_TRANSPORT_PUBLIC_KEY
+  # Add one entry per approved signer; the Bridge threshold must fit the selection.
+
 preparation:
-  attestationDescriptors:
-    - /private/partner-a/descriptor.json
   bridge:
     mode: production
     image: dogeos69/bridge-genesis-tools@sha256:27e646fd5d9c340926df82f47f7d352fd5333de4e6178c5a8c56aa9637769262
     fundingFile: .scrollsdk/inputs/bridge-funding.json
     production:
-      sequencerPublicKey: REPLACE_WITH_COMPRESSED_DOGECOIN_SEQUENCER_PUBKEY
-      sequencerKeyEnv: DOGECOIN_SEQUENCER_KEY
-      feeWalletPublicKey: REPLACE_WITH_COMPRESSED_FEE_WALLET_PUBKEY
-      feeWalletKeyEnv: DOGECOIN_FEE_WALLET_KEY
+      sequencerKms: {action: create}
+      # Fee wallet: set DOGECOIN_FEE_WALLET_KEY in private deployment.env.
+      # Apply derives its public key and funding address automatically.
       recoveryPublicKeys:
         - REPLACE_WITH_FIRST_RECOVERY_PUBLIC_KEY
         - REPLACE_WITH_SECOND_RECOVERY_PUBLIC_KEY
@@ -123,17 +141,46 @@ Select and review the intended release for your environment. Select
 `signing.cubesigner.identity: {roleId: ...}` (plus `keyId` for multi-key roles);
 plan uses the authenticated `cs` CLI to query membership and normalize/freeze the
 TEE public key. An explicit `bridge.teePubkey` remains supported. The recovery
-threshold and future block-height `bridge.timelock` must also be explicit. Attestation public keys and their order come from the imported
-partner descriptors and selected initial keyset. Recovery and TEE keys are never
+threshold and future block-height `bridge.timelock` must also be explicit. Attestation public keys and their order come from
+`attestationSigners` and the selected initial keyset. Recovery and TEE keys are never
 derived from `bridge.seedString` in production mode. Omit that test-helper field
 from a production spec; production output contains no helper funding placeholders.
 
 The two Dogecoin wallet identities are distinct from the L2 Reth signer and the
-Ethereum DA/fee-oracle identities. This production adapter currently imports
-independently managed local Dogecoin wallet keys through the named environment
-variables; it verifies that each key matches its declared compressed public key.
-It does not provision a WP Dogecoin KMS signer. Runtime Secret generation resolves
-those private references; the public construction manifest retains references.
+Ethereum DA/fee-oracle identities. With
+`images.services.withdrawalProcessor: {repository: dogeos69/withdrawal-processor, tag: v0.3.0-beta.6-kms}`,
+select `sequencerKms: {action: create}`. Apply creates or reuses
+`alias/dogeos/<metadata.name>/<eksClusterName>/bridge-sequencer`, pins the key ARN
+and compressed public key in `.data/bridge-sequencer-kms.json`, and derives the
+funding address. No sequencer private key is exported or requested.
+
+For an existing key, use `sequencerKms: {action: reuse, keyId: <key ARN or alias>}`.
+The workload role comes from the selected proof AWS receipt, or from an explicit
+`sequencerKms.roleArn`. Reuse queries the key, checks role trust and simulates its
+`kms:GetPublicKey` / `kms:Sign` permissions without changing AWS resources.
+`region` defaults to `infrastructure.aws.region`; `awsProfile` is optional.
+Create adds a dedicated KMS policy to the same WP role used for proof access;
+it preserves the role's proof-store policies and does not replace its trust.
+Without proof AWS resources or an explicit role, create provisions a dedicated
+WP IRSA role. Proof/KMS role mismatches fail instead of overwriting annotations.
+
+`sequencerKms` is mutually exclusive with `sequencerPublicKey` and
+`sequencerKeyEnv`. Local sequencing still accepts that pair. For the fee wallet,
+set only `DOGECOIN_FEE_WALLET_KEY` in the private environment file. Spec fields
+`feeWalletPublicKey` and `feeWalletKeyEnv` are not accepted. Apply validates its
+compressed WIF and Dogecoin network, derives the public key and funding address,
+and pins that public identity in `.data/bridge-fee-wallet.json` before cloud
+provisioning. No private key is written to that record. Resume rejects a changed
+fee-wallet key so funding cannot silently switch to another wallet.
+Runtime native TOML receives `[sequencer_signer_kms]` with `key_id`, `region` and
+`expected_pubkey`; the sequencer WIF entry is absent from Secrets/ExternalSecrets.
+The funding, confirmation and Bridge construction steps are unchanged.
+
+The image was checked against OCI source revision
+`7a9bc0761f4b35e7c32fcdfbcc491294471d826b`: only sequencing supports KMS.
+The fee wallet still requires a local key. Plan makes no KMS calls; apply performs
+the declared resource operations. AWS access and runtime signing require a live
+deployment test in addition to the local adapter tests.
 
 ## Production funding and resume
 
@@ -141,7 +188,8 @@ The beta.6 production order is defined in
 [core's pinned production guide](https://github.com/DogeOS69/dogeos-core/blob/56007d3c413ad07f33d0e08b272004089c911f78/docs/bridge-genesis-deployment.md).
 The workflow:
 
-1. Prepares service identities, descriptors, actual L2 genesis and protocol seed.
+1. Projects the declared public signer identities and prepares service identities,
+   actual L2 genesis and protocol seed.
 2. Checks the Ethereum RPC chain ID, selects the finalized DA boundary once
    (transaction index 0), and persists its exact height/hash. Explicit historical
    block/index overrides remain available; an unavailable finalized tag never
@@ -232,7 +280,7 @@ mode. For an imported Vast.ai credential:
 
 ```yaml
 preparation:
-  # ...bridge, descriptors and proof inputs as above...
+  # ...bridge and proof inputs as above; attestationSigners is top-level...
   dstack:
     mode: import
     providers: [vastai]
@@ -275,17 +323,16 @@ remain blocked regardless. Runtime deployment acceptance remains a separate step
 
 ## Container integration verification
 
-The integration driver uses a mock/observe test spec, a public partner descriptor
-and the matching public compiler identity as fixture inputs. It replaces wallet
-identities with disposable keys and uses a local synthetic Dogecoin/Ethereum RPC;
+The integration driver uses a mock/observe test spec and the matching public
+compiler identity as fixture inputs. It generates disposable wallet and public
+signer identities and uses a local synthetic Dogecoin/Ethereum RPC;
 it never broadcasts or provisions cloud resources. Use fixtures for the pinned
 SDK/core versions and SQLite dstack configuration, not a live deployment spec.
 
 ```bash
 npm run build
 node scripts/test-preparation-e2e.mjs /path/to/scroll-sdk \
-  /private/test-spec.yaml /private/partner-descriptor.json \
-  /private/compiler-identity.json
+  /private/test-spec.yaml /private/compiler-identity.json
 ```
 
 It runs real rc.4 genesis and beta.6 Bridge/compiler containers, verifies both

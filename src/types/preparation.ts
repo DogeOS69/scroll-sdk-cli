@@ -1,7 +1,6 @@
 /** Inputs to the resumable preparation workflow; credentials are file/env references. */
 export interface PreparationConfig {
   archive?: {action: 'configure' | 'create'; awsProfile?: string; writerRoleArn?: string}
-  attestationDescriptors: string[]
   bridge: {
     /** Mutable, operator-supplied outpoints; relative to the deployment directory. */
     fundingFile?: string
@@ -11,11 +10,19 @@ export interface PreparationConfig {
     production?: {
       /** Resolve finalized once on apply, or select an explicit historical boundary. */
       ethereumAnchor: {blockNumber?: number; blockTag?: 'finalized'; transactionIndex?: number}
-      feeWalletKeyEnv: string
-      feeWalletPublicKey: string
       recoveryPublicKeys: string[]
-      sequencerKeyEnv: string
-      sequencerPublicKey: string
+      /** Local signing inputs; mutually exclusive with sequencerKms. */
+      sequencerKeyEnv?: string
+      /** Apply resolves and pins the public key; no exported private key is needed. */
+      sequencerKms?: {
+        action: 'create' | 'reuse'
+        awsProfile?: string
+        keyId?: string
+        region?: string
+        /** Defaults to the proof AWS withdrawal role when selected. */
+        roleArn?: string
+      }
+      sequencerPublicKey?: string
     }
   }
   databases?: Array<'blockscout'>

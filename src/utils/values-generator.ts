@@ -37,6 +37,7 @@ import {
 } from './kubernetes-endpoints.js'
 import {buildProofCoordinatorIngress} from './proof-coordinator-ingress.js'
 import {buildS3PublicBaseUrl} from './s3-archive.js'
+import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
 import {
   ensureWithdrawalChartWiring,
@@ -859,6 +860,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
  * Generate Withdrawal Processor values
  */
 function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
+  const attestation = resolveSpecAttestationSigners(spec, Boolean(spec.preparation))
   const secretConfig = getSecretProviderConfig(spec)
   const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
   const ethereumDaSubmitterAddress = spec.accounts.l1CommitSender?.address
@@ -867,7 +869,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'withdrawalProcessor', {
     pullPolicy: 'Always',
     repository: 'dogeos69/withdrawal-processor',
-    tag: CORE_DOCKER_DEFAULT_TAG
+    tag: spec.preparation?.bridge.production?.sequencerKms ? 'v0.3.0-beta.6-kms' : CORE_DOCKER_DEFAULT_TAG
   })
 
   const values: Record<string, any> = {
@@ -956,6 +958,10 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   }
 
   ensureWithdrawalChartWiring(values)
+  if (attestation) values.tsoSigners = attestation.external.map(signer => ({
+    delivery: 'pull', network: spec.dogecoin.network, publicKeyOverride: signer.publicKey,
+    roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: signer.transportPubkey,
+  }))
   ensureWithdrawalProofActivationSwitch(
     values,
     spec.proofTopology?.mode ?? 'disabled',
@@ -984,7 +990,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { property: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER' },
       { property: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS' },
       { property: 'DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY' },
-      { property: 'DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY' },
+      ...(spec.preparation?.bridge.production?.sequencerKms ? [] : [{ property: 'DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY' }]),
     ]
   )
 

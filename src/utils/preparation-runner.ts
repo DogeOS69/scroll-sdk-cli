@@ -10,9 +10,11 @@ import type {PreparationPlan, PreparationRunner, PreparationStep} from './prepar
 
 import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
 import {parseDatabaseUrl} from './dstack-database.js'
+import {productionFeeWallet} from './preparation-fee-wallet.js'
 import {checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
 import {AwaitingInput, localPath, privateWrite} from './preparation-io.js'
 import {reuseProofAws} from './preparation-proof-aws.js'
+import {prepareSequencerKms, productionSequencer} from './preparation-sequencer-kms.js'
 import {importSignerReceipts} from './preparation-signer-receipts.js'
 import {exportCoordinatorMaterializers} from './proof-image-tools.js'
 import {readProofMaterials} from './proof-materials.js'
@@ -61,6 +63,10 @@ export class CommandPreparationRunner implements PreparationRunner {
         await command(['gen-keystore', '-N']); break
       }
 
+      case 'bridge-sequencer-kms': {prepareSequencerKms(root, spec); break}
+
+      case 'bridge-fee-wallet': {productionFeeWallet(root, spec); break}
+
       case 'archive': {
         await command(['eth-da-submitter', '-N', p.archive!.action === 'create' ? '--create-archive-bucket' : '--no-create-archive-bucket', ...optional('aws-profile', p.archive!.awsProfile), ...optional('role-arn', p.archive!.writerRoleArn)]); break
       }
@@ -97,11 +103,6 @@ export class CommandPreparationRunner implements PreparationRunner {
 
       case 'dstack-db': case 'blockscout-db': {
         await command(['db-init', '-N', '--databases', step.id === 'dstack-db' ? 'dstack' : 'blockscout']); break
-      }
-
-      case 'descriptors': {
-        const args = p.attestationDescriptors.flatMap(file => ['--descriptor', requiredFile(root, file, 'partner descriptor')])
-        await command(['attestation-signer', ...args]); break
       }
 
       case 'genesis': {
@@ -198,8 +199,9 @@ export class CommandPreparationRunner implements PreparationRunner {
       case 'secrets': {
         const policy = p.bridge.production
         if (p.bridge.mode === 'production' && policy) {
-          checkPrivateKey(policy.sequencerPublicKey, policy.sequencerKeyEnv)
-          checkPrivateKey(policy.feeWalletPublicKey, policy.feeWalletKeyEnv)
+          const sequencer = productionSequencer(root, spec)
+          if (!sequencer.kms) checkPrivateKey(sequencer.publicKey, policy.sequencerKeyEnv!)
+          productionFeeWallet(root, spec)
         }
 
         await command(['gen-secrets', '-N']); break

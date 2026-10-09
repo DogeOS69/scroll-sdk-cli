@@ -33,6 +33,7 @@ import {
   resolveDogecoinServiceRpcUrl,
 } from '../../utils/kubernetes-endpoints.js'
 import { parseHelmUpgradeRecipes } from '../../utils/makefile-helm.js'
+import {readPreparedSequencerKms} from '../../utils/preparation-sequencer-kms.js'
 import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
 import {
   type ResolvedProofIntent,
@@ -64,6 +65,7 @@ import {
   mergeWithdrawalManagedDeploymentBlock,
   stripMigratedWithdrawalEnv,
 } from '../../utils/withdrawal-config.js'
+import {reconcileWithdrawalSignerValues, withdrawalSequencerKms} from '../../utils/withdrawal-signers.js'
 import {
   RETH_BOOTNODE_NODEKEY_ENV,
   type ResolvedBootnodeRethConfig,
@@ -3029,6 +3031,24 @@ export default class SetupPrepCharts extends Command {
         }
 
         const previousSource = fs.readFileSync(nativeConfigPath, 'utf8')
+        const sequencerKms = withdrawalSequencerKms(this.withdrawalProcessorConfig)
+        if (sequencerKms) {
+          facts.sequencer_signer_kms = sequencerKms
+          deletePaths.push(['sequencer_signer_key'])
+          const prepared = readPreparedSequencerKms(process.cwd())
+          if (prepared) {
+            if (prepared.keyArn !== sequencerKms.key_id || prepared.publicKey !== sequencerKms.expected_pubkey || prepared.region !== sequencerKms.region) throw new Error('Withdrawal KMS config differs from the prepared Bridge identity')
+            const proofRole = readOptionalProofAwsConfig(process.cwd())?.config.serviceAccounts.withdrawalProcessor
+            if (proofRole && (proofRole.roleArn !== prepared.roleArn || proofRole.name !== prepared.serviceAccount)) throw new Error('Withdrawal KMS and proof access must share one service account and IAM role')
+            productionYaml.serviceAccount ??= {}
+            productionYaml.serviceAccount.create = true
+            productionYaml.serviceAccount.name = prepared.serviceAccount
+            productionYaml.serviceAccount.annotations ??= {}
+            productionYaml.serviceAccount.annotations['eks.amazonaws.com/role-arn'] = prepared.roleArn
+            updated = true
+          }
+        } else deletePaths.push(['sequencer_signer_kms'])
+        if (reconcileWithdrawalSignerValues(productionYaml, this.withdrawalProcessorConfig)) updated = true
         const mergedSource = mergeWithdrawalManagedDeploymentBlock(previousSource, facts, {deletePaths})
         if (mergedSource !== previousSource) {
           fs.writeFileSync(nativeConfigPath, mergedSource)

@@ -11,6 +11,7 @@ import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec
 import {usesDstackPostgres} from './dstack-database.js'
 import {AwaitingInput, digest, loadPreparationEnv, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolvePreparationProofRelease} from './preparation-release.js'
+import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {planSpecBootstrap, resolveSdkRevision} from './spec-bootstrap.js'
 import {resolveCubesignerIdentity} from './spec-cubesigner.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
@@ -31,16 +32,17 @@ export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
   const steps: PreparationStep[] = []
   const add = (id: string, title: string, effect: PreparationStep['effect'] = 'local', retry: PreparationStep['retry'] = 'safe') => steps.push({effect, id, retry, title})
   add('bootstrap', 'Generate configuration from pinned SDK templates')
-  add('identities', 'Prepare declared service identities and deployment account', JSON.stringify(spec.identities).includes('aws_kms') ? 'cloud' : 'local')
+  if (p.bridge.mode === 'production') add('bridge-fee-wallet', 'Derive and pin the fee-wallet public identity from DOGECOIN_FEE_WALLET_KEY')
+  add('identities', 'Prepare declared service identities and deployment account', JSON.stringify(spec.identities ?? {}).includes('aws_kms') ? 'cloud' : 'local')
   if (p.archive) add('archive', 'Reconcile declared DA archive resources and writer access', 'cloud')
   if (p.proofAws) add('proof-aws', p.proofAws.action === 'reuse' ? 'Discover existing proof artifact store and workload access' : 'Provision proof artifact store and workload access', p.proofAws.action === 'reuse' ? 'read' : 'cloud')
+  if (p.bridge.production?.sequencerKms) add('bridge-sequencer-kms', 'Prepare and pin the Bridge sequencer KMS key and withdrawal signing access', p.bridge.production.sequencerKms.action === 'create' ? 'cloud' : 'read')
   if (spec.dstackController && spec.dstackController.enabled !== false) {
     add('dstack', 'Prepare dstack controller credentials and config')
     if (p.dstack?.initializeDatabase) add('dstack-db', 'Initialize dstack in the existing PostgreSQL server', 'cloud')
   }
 
   if (p.databases?.includes('blockscout')) add('blockscout-db', 'Initialize Blockscout in the existing PostgreSQL server', 'cloud')
-  add('descriptors', 'Import partner public descriptors')
   add('genesis', 'Generate native L2 genesis and contract artifacts')
   add('bridge-prepare', 'Compute protocol seed from genesis')
   if (p.bridge.mode === 'production') {
@@ -86,11 +88,12 @@ export function validatePreparation(spec: DeploymentSpec): void {
   const p = spec.preparation
   if (!p) throw new Error('preparation is required for setup plan; plain generate-from-spec remains available')
   if (!['helper', 'production'].includes(p.bridge?.mode)) throw new Error('preparation.bridge.mode must explicitly select production or helper')
+  if (p.bridge.mode !== 'production' && p.bridge.production) throw new Error('Production Bridge inputs require preparation.bridge.mode: production')
   if (!p.bridge.image?.includes('@sha256:')) throw new Error('preparation.bridge.image must select an immutable bridge-genesis-tools digest')
   resolveBridgeGenesisImage(p.bridge.image)
   if (!Number.isSafeInteger(spec.bridge.confirmationsRequired) || spec.bridge.confirmationsRequired < 1) throw new Error('Preparation requires at least one funding confirmation')
-  if (!Array.isArray(p.attestationDescriptors) || p.attestationDescriptors.length === 0) throw new Error('preparation.attestationDescriptors must name the partner descriptor files (they may arrive later)')
-  for (const file of p.attestationDescriptors) if (typeof file !== 'string' || !file.trim()) throw new Error('Descriptor paths must be non-empty')
+  if ('attestationDescriptors' in p) throw new Error('Remove preparation.attestationDescriptors; declare public identities in attestationSigners')
+  resolveSpecAttestationSigners(spec, true)
   if (!['existing', 'mock', 'real'].includes(p.proofMaterials?.mode)) throw new Error('preparation.proofMaterials.mode is required')
   if (p.proofMaterials.mode === 'mock' && !p.proofMaterials.mockWorkerImage) throw new Error('Mock material preparation requires mockWorkerImage')
   if (p.proofRelease && (p.proofMaterials.mode !== 'real' || spec.proofTopology?.generation !== 'real')) throw new Error('proofRelease requires real proof material preparation and real topology generation')
@@ -138,9 +141,23 @@ export function validatePreparation(spec: DeploymentSpec): void {
       throw new Error('Production Bridge requires ethereumAnchor.blockTag: finalized or explicit blockNumber and transactionIndex')
     }
 
-    for (const value of [policy.sequencerPublicKey, policy.feeWalletPublicKey, spec.bridge.teePubkey]) publicKey(value)
-    if (policy.sequencerPublicKey.toLowerCase() === policy.feeWalletPublicKey.toLowerCase()) throw new Error('Production sequencer and fee wallet must have different keys')
-    for (const name of [policy.sequencerKeyEnv, policy.feeWalletKeyEnv]) if (!/^[A-Z_a-z]\w*$/.test(name)) throw new Error('Production wallet key references must name environment variables')
+    if ('feeWalletPublicKey' in policy || 'feeWalletKeyEnv' in policy) throw new Error('Remove feeWalletPublicKey and feeWalletKeyEnv from spec; apply derives the fee-wallet identity from DOGECOIN_FEE_WALLET_KEY in deployment.env')
+    publicKey(spec.bridge.teePubkey)
+    if (policy.sequencerKms) {
+      const kms = policy.sequencerKms
+      if (policy.sequencerPublicKey !== undefined || policy.sequencerKeyEnv !== undefined) throw new Error('sequencerKms replaces sequencerPublicKey and sequencerKeyEnv; remove the local sequencer inputs')
+      if (!['create', 'reuse'].includes(kms.action)) throw new Error('sequencerKms.action must be create or reuse')
+      if (spec.infrastructure.provider !== 'aws' || !spec.infrastructure.aws?.region || !spec.infrastructure.aws.eksClusterName) throw new Error('Bridge sequencer KMS requires AWS region and an existing EKS cluster')
+      if (kms.region !== undefined && !kms.region.trim()) throw new Error('sequencerKms.region must not be empty')
+      if (kms.action === 'create' && kms.keyId !== undefined) throw new Error('sequencerKms create derives an alias; use reuse to select an existing key')
+      if (kms.action === 'reuse' && (!kms.keyId?.trim() || !kms.roleArn && !p.proofAws)) throw new Error('sequencerKms reuse requires keyId and an existing roleArn or proofAws withdrawal role')
+      if (kms.roleArn !== undefined && !/^arn:aws:iam::\d{12}:role\/[\w+,./=@-]+$/.test(kms.roleArn)) throw new Error('sequencerKms.roleArn must be an IAM role ARN')
+      if (spec.images?.services?.withdrawalProcessor?.tag === 'v0.3.0-beta.6') throw new Error('Bridge sequencer KMS requires withdrawal-processor:v0.3.0-beta.6-kms or another KMS-enabled image')
+    } else {
+      publicKey(policy.sequencerPublicKey)
+      if (!policy.sequencerKeyEnv || !/^[A-Z_a-z]\w*$/.test(policy.sequencerKeyEnv)) throw new Error('Production wallet key references must name environment variables')
+    }
+
     if (!Array.isArray(policy.recoveryPublicKeys) || new Set(policy.recoveryPublicKeys.map(key => key.toLowerCase())).size !== policy.recoveryPublicKeys.length || policy.recoveryPublicKeys.length < spec.bridge.thresholds.recovery || spec.bridge.thresholds.recovery < 1) throw new Error('Recovery keys must be unique and satisfy the threshold')
     policy.recoveryPublicKeys.forEach(value => publicKey(value))
     if (!Number.isSafeInteger(spec.bridge.timelock) || spec.bridge.timelock <= 100 || spec.bridge.timelock >= 500_000_000) throw new Error('Production Bridge needs an explicit recovery timelock block height')
@@ -148,7 +165,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
 
   for (const item of p.inputs ?? []) {
     if (p.proofAws && item.destination === '.data/proof-aws.json') throw new Error('proofAws generates its own receipt; remove proof-aws.json from external inputs')
-    if (!item.source || !/^(\.data|secrets)\//.test(item.destination) || /(?:^|\/)(?:doge-config\.toml|setup_defaults\.toml|protocol_seed\.toml|protocol_context\.json|GenerateBridgeInfo\.toml|bridge\.json|production-.*\.json|output-.*|genesis\.json)$/.test(item.destination)) throw new Error('External inputs may not overwrite managed Bridge or deployment state')
+    if (!item.source || !/^(\.data|secrets)\//.test(item.destination) || /(?:^|\/)(?:doge-config\.toml|setup_defaults\.toml|protocol_seed\.toml|protocol_context\.json|GenerateBridgeInfo\.toml|bridge\.json|bridge-sequencer-kms\.json|bridge-fee-wallet\.json|production-.*\.json|output-.*|genesis\.json)$/.test(item.destination)) throw new Error('External inputs may not overwrite managed Bridge or deployment state')
     localPath('/deployment', item.destination)
   }
 
