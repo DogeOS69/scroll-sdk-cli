@@ -747,7 +747,7 @@ _See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/
 
 ## `scrollsdk setup attestation-signer`
 
-Import signer-init descriptors from partner-operated attestation-signers and select the bootstrap bridge keyset. This command consumes only endpoint + public key and never provisions keys, deployments, or network probes. Current dogeos-core runtime preflight occurs after partners install the post-genesis canonical-context bundle.
+Import signer-init descriptors from partner-operated attestation-signers and select the bootstrap bridge keyset. This command consumes only the attestation and transport public keys and never provisions keys, deployments, or network probes. Signers dial out to the TSO, so no signer endpoint is imported. Current dogeos-core runtime preflight occurs after partners install the post-genesis canonical-context bundle.
 
 ```
 USAGE
@@ -766,8 +766,9 @@ FLAGS
 
 DESCRIPTION
   Import signer-init descriptors from partner-operated attestation-signers and select the bootstrap bridge keyset. This
-  command consumes only endpoint + public key and never provisions keys, deployments, or network probes. Current
-  dogeos-core runtime preflight occurs after partners install the post-genesis canonical-context bundle.
+  command consumes only the attestation and transport public keys and never provisions keys, deployments, or
+  network probes. Signers dial out to the TSO, so no signer endpoint is imported. Current dogeos-core runtime
+  preflight occurs after partners install the post-genesis canonical-context bundle.
 
 EXAMPLES
   $ scrollsdk setup attestation-signer --descriptor partner-a.json --descriptor partner-b.json --descriptor ours.json --threshold 2
@@ -2429,7 +2430,7 @@ FLAGS
   --dir=<value>                  signer init output directory; its descriptor.json provides the expected network and
                                  public key
   --endpoint=<value>             [default: http://127.0.0.1:4040] Signer local HTTP base URL to probe (the partner-kit
-                                 compose publishes 4040 on the host)
+                                 compose binds 4040 to host loopback; no inbound signer access is required)
   --expected-public-key=<value>  Fail unless the runtime public key equals this compressed secp256k1 key (with --dir,
                                  defaults to the descriptor publicKey)
   --json                         Output structured JSON
@@ -2448,7 +2449,7 @@ DESCRIPTION
 EXAMPLES
   $ scrollsdk signer preflight --dir signer-partner-a-signer-0
 
-  $ scrollsdk signer preflight --endpoint http://10.0.0.5:4040 --expected-public-key 02ab... --network mainnet
+  $ scrollsdk signer preflight --endpoint http://127.0.0.1:4040 --expected-public-key 02ab... --network mainnet
 
   $ scrollsdk signer preflight --dir signer-partner-a-signer-0 --require-production-ready
 ```

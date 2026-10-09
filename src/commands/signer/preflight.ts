@@ -76,13 +76,13 @@ export class SignerPreflightCommand extends Command {
 
   static examples = [
     '$ scrollsdk signer preflight --dir signer-partner-a-signer-0',
-    '$ scrollsdk signer preflight --endpoint http://10.0.0.5:4040 --expected-public-key 02ab... --network mainnet',
+    '$ scrollsdk signer preflight --endpoint http://127.0.0.1:4040 --expected-public-key 02ab... --network mainnet',
     '$ scrollsdk signer preflight --dir signer-partner-a-signer-0 --require-production-ready',
   ]
 
   static flags = {
     dir: Flags.string({ description: 'signer init output directory; its descriptor.json provides the expected network and public key' }),
-    endpoint: Flags.string({ default: 'http://127.0.0.1:4040', description: 'Signer local HTTP base URL to probe (the partner-kit compose publishes 4040 on the host)' }),
+    endpoint: Flags.string({ default: 'http://127.0.0.1:4040', description: 'Signer local HTTP base URL to probe (the partner kit binds 4040 to host loopback; no inbound signer access is required)' }),
     'expected-public-key': Flags.string({ description: 'Fail unless the runtime public key equals this compressed secp256k1 key (with --dir, defaults to the descriptor publicKey)' }),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
     network: Flags.string({ description: 'Expected Dogecoin network (defaults to descriptor network with --dir, else to the network reported by /health)', options: [...ATTESTATION_SIGNER_NETWORKS] }),
