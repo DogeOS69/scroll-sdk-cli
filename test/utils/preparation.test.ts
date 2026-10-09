@@ -21,6 +21,7 @@ import {AwaitingInput, loadPreparationEnv} from '../../src/utils/preparation-io.
 import {applyPreparation, createPreparationPlan, preparationSteps, validatePreparation} from '../../src/utils/preparation-plan.js'
 import {resolvePreparationProofRelease} from '../../src/utils/preparation-release.js'
 import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
+import {buildProofAwsConfig, writeProofAwsConfig} from '../../src/utils/proof-aws-config.js'
 import {PROOF_RELEASE_IMAGE_NAMES} from '../../src/utils/proof-software-release.js'
 
 const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -259,6 +260,48 @@ describe('resumable preparation plan', () => {
     fs.writeFileSync(path.join(deployment, '.data/proof-materials-v1.json'), '{}')
     await runner.run(steps.find(step => step.id === 'charts-validated')!, spec, deployment, plan)
     expect(calls[1]).to.include.members(['prep-charts', '--proof-materials-receipt', '.data/proof-materials-v1.json', '--proof-publication-receipt', '.data/proof-program-publication-v1.json'])
+  })
+
+  it('binds provisioned proof delivery before chart generation without hiding explicit drift', async () => {
+    const spec = fixture()
+    const plan = await makePlan()
+    const configFile = path.join(deployment, '.data/doge-config.toml')
+    const aws = buildProofAwsConfig({
+      coordinatorServiceAccount: 'proof-coordinator',
+      identity: {artifactRegion: 'us-east-1', awsRegion: 'us-east-1', deploymentAlias: 'test', eksCluster: 'test', namespace: 'default'},
+      keyPrefix: 'proofs',
+      provisioned: {
+        artifactReadTransport: {publicEndpointUrl: 'https://objects.example.invalid', publicReadMode: 'existing-gateway', publicStatus: 'operator-managed-unverified'},
+        bucket: 'test-proof-artifacts', bucketCreated: false,
+        coordinatorRoleArn: 'arn:aws:iam::123456789012:role/proof-coordinator', secretAction: 'reused', secretName: 'test-proof-token',
+        withdrawalRoleArn: 'arn:aws:iam::123456789012:role/withdrawal-processor',
+      },
+      withdrawalServiceAccount: 'withdrawal-processor',
+    })
+    writeProofAwsConfig(path.join(deployment, '.data/proof-aws.json'), aws)
+    const config: any = {preserved: 'operator-setting', proof_topology: {active: {artifactStore: {bucket: aws.artifactStore.bucket, kind: 's3_compatible', region: aws.artifactStore.region}}, deployment: {artifactKeyPrefix: aws.artifactStore.keyPrefix}}}
+    fs.writeFileSync(configFile, toml.stringify(config))
+    let calls = 0
+    const runner = new CommandPreparationRunner(async () => {
+      const prepared: any = toml.parse(fs.readFileSync(configFile, 'utf8'))
+      expect(prepared.proof_topology.deployment.publicS3EndpointUrl).to.equal(aws.artifactReadTransport.publicEndpointUrl)
+      expect(prepared.preserved).to.equal('operator-setting')
+      calls++
+    })
+    const charts = preparationSteps(spec).find(step => step.id === 'charts')!
+    await runner.run(charts, spec, deployment, plan)
+    await runner.run(charts, spec, deployment, plan)
+    expect(calls).to.equal(2)
+    config.proof_topology.deployment.publicS3EndpointUrl = 'https://wrong.example.invalid'
+    fs.writeFileSync(configFile, toml.stringify(config))
+    await rejected(() => runner.run(charts, spec, deployment, plan), 'publicS3EndpointUrl does not match')
+    delete config.proof_topology.deployment.publicS3EndpointUrl
+    config.proof_topology.active.artifactStore.bucket = 'wrong-bucket'
+    const before = toml.stringify(config)
+    fs.writeFileSync(configFile, before)
+    await rejected(() => runner.run(charts, spec, deployment, plan), 'artifact bucket')
+    expect(fs.readFileSync(configFile, 'utf8')).to.equal(before)
+    expect(calls).to.equal(2)
   })
 
   it('rejects external inputs that replace the canonical protocol context', () => {

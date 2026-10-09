@@ -1,13 +1,33 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- AWS CLI discovery responses. */
+import * as toml from '@iarna/toml'
+import fs from 'node:fs'
 import path from 'node:path'
 
 import type {DeploymentSpec} from '../types/deployment-spec.js'
+import type {ProofTopologySpec} from '../types/proof-topology.js'
 
 import {readProofArtifactStore} from './artifact-stores.js'
 import {AwsCliRunner} from './aws-cli.js'
 import {sanitizeName, truncateIamRoleName} from './kms-signer-provisioner.js'
-import {buildProofAwsConfig, defaultProofSecretName, writeProofAwsConfig} from './proof-aws-config.js'
+import {privateWrite} from './preparation-io.js'
+import {buildProofAwsConfig, defaultProofSecretName, readOptionalProofAwsConfig, writeProofAwsConfig} from './proof-aws-config.js'
 import {proofArtifactS3Endpoint} from './proof-aws-provisioner.js'
+import {assertProofAwsMatchesTopology} from './proof-kubernetes-reconciler.js'
+
+/** Bind derived delivery facts after materialization, including on a resumed charts step. */
+export function bindPreparedProofAws(root: string): void {
+  const prepared = readOptionalProofAwsConfig(root)
+  if (!prepared) return
+  const file = path.join(root, '.data/doge-config.toml')
+  const config = toml.parse(fs.readFileSync(file, 'utf8'))
+  const topology = config.proof_topology as unknown as ProofTopologySpec | undefined
+  if (topology?.active?.artifactStore?.kind !== 's3_compatible') return
+  const missingEndpoint = topology.deployment.publicS3EndpointUrl === undefined
+  if (missingEndpoint) topology.deployment.publicS3EndpointUrl = prepared.config.artifactReadTransport.publicEndpointUrl
+  // Explicit intent and store coordinates must still match the provisioned facts.
+  assertProofAwsMatchesTopology(topology, prepared.config)
+  if (missingEndpoint) privateWrite(file, toml.stringify(config))
+}
 
 /** Existing-resource mode performs metadata queries only; never creates or repairs resources. */
 export function reuseProofAws(root: string, spec: DeploymentSpec, aws = new AwsCliRunner(spec.preparation!.proofAws!.awsProfile)): void {

@@ -13,7 +13,7 @@ import {parseDatabaseUrl} from './dstack-database.js'
 import {productionFeeWallet} from './preparation-fee-wallet.js'
 import {checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
 import {AwaitingInput, localPath, privateWrite} from './preparation-io.js'
-import {reuseProofAws} from './preparation-proof-aws.js'
+import {bindPreparedProofAws, reuseProofAws} from './preparation-proof-aws.js'
 import {prepareSequencerKms, productionSequencer} from './preparation-sequencer-kms.js'
 import {importSignerReceipts} from './preparation-signer-receipts.js'
 import {exportCoordinatorMaterializers} from './proof-image-tools.js'
@@ -184,6 +184,7 @@ export class CommandPreparationRunner implements PreparationRunner {
       }
 
       case 'charts': case 'charts-published': case 'charts-validated': {
+        bindPreparedProofAws(root)
         const args = ['prep-charts', '-N', '--skip-auth-check', '--skip-l2-contract-deployment-block']
         const receipt = p.proofMaterials.receipt ?? '.data/proof-materials-v1.json'
         if (fs.existsSync(path.resolve(root, receipt))) args.push('--proof-materials-receipt', receipt)
