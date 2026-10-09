@@ -1,6 +1,6 @@
 # DogeOS configuration cleanup and retired services
 
-Updated 2026-10-08. This is the current configuration procedure for the local
+Updated 2026-10-09. This is the current configuration procedure for the local
 CLI and the matching `scroll-contracts` workspace. Existing deployment status
 reports describe their historical deployments; use this page for the supported
 configuration fields and prompts.
@@ -9,12 +9,12 @@ For the general command sequence, see [CLI setup order](setup-order.md).
 
 ## Matching contracts release
 
-The CLI defaults to `dogeos-v0.3.0-rc.3` in
+The CLI defaults to `dogeos-v0.3.0-rc.4` in
 `dogeos69/scroll-stack-contracts`:
 
-- `gen-configs-dogeos-v0.3.0-rc.3`
-- `deploy-dogeos-v0.3.0-rc.3`
-- `verify-dogeos-v0.3.0-rc.3`
+- `gen-configs-dogeos-v0.3.0-rc.4`
+- `deploy-dogeos-v0.3.0-rc.4`
+- `verify-dogeos-v0.3.0-rc.4`
 
 `CONTRACTS_DOCKER_DEFAULT_TAG` supplies the common tag. Explicit image overrides
 and existing deployment values should be reviewed when upgrading. The original

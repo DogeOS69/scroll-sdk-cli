@@ -7,6 +7,28 @@ infrastructure bootstrap script or evidence of production deployment acceptance.
 Provision the RPC endpoints, Kubernetes infrastructure, DNS, signer access and
 storage required by your chosen deployment separately.
 
+Use core images and the topology compiler containing
+[dogeos-core #1483](https://github.com/DogeOS69/dogeos-core/pull/1483) and
+[#1482](https://github.com/DogeOS69/dogeos-core/pull/1482), together with the
+matching charts and partner kit from
+[scroll-sdk #141](https://github.com/DogeOS69/scroll-sdk/pull/141).
+External signer descriptors now include `transportPubkey`; regenerate old
+descriptors with `--print-identity` and import them before `prep-charts`.
+The generated signer directory pins both keys and uses pull delivery for
+external signers, with only `/health` and `/signer` exposed publicly. The
+in-cluster CubeSigner remains push delivery. Coordinate the core, chart and
+partner-signer upgrade; the old unsigned external callbacks are no longer
+public routes.
+
+Configure `[proofArtifacts.s3]` separately from `[ethereumDa.blobArchive.s3]`.
+The compiler owns `[segmentation_sidecar.s3]` and points it at the proof store;
+the submitter's `[s3]` continues to archive raw DA blobs. After selecting these
+stores, reconcile the submitter writer with `setup eth-da-submitter` or
+`setup artifact-access --store da --writer-role-arn <role-arn> --apply` so both
+native sidecar namespaces are writable. See the
+[S3 reference](ethereum-da-s3.md#three-buckets) for permissions and deployment
+prefixes. These configuration changes do not copy historical objects.
+
 See [Local setup-order validation](setup-order-validation.md) for executed checks,
 findings and the cloud/proof/runtime steps that remain unverified.
 The newer [production input review](production-inputs-review.md) records the
@@ -71,7 +93,7 @@ scrollsdk setup gen-l2-artifacts
 ```
 
 The generator, deployer and verification images use `gen-configs-<revision>`,
-`deploy-<revision>` and `verify-<revision>` with the same approved release tag or full contracts revision. The default is `dogeos-v0.3.0-rc.3`.
+`deploy-<revision>` and `verify-<revision>` with the same approved release tag or full contracts revision. The default is `dogeos-v0.3.0-rc.4`.
 Choose a new deployment salt for a new instance. Owner and index-0 Reth signer checks must pass first. This produces
 `values/genesis.yaml`, which Bridge preparation consumes.
 

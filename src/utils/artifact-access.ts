@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto'
 import {isDeepStrictEqual} from 'node:util'
 
 import type {ArtifactStore} from './artifact-stores.js'
@@ -11,18 +12,27 @@ type Aws = Pick<AwsCliRunner, 'json' | 'run' | 'text'>
 /** Buckets this command owns. The proof artifact bucket is owned by proof-aws-init. */
 export type ArchiveStoreKind = 'da' | 'snapshot'
 
-/** Key namespace eth-da-submitter writes in the proof artifact store. */
-export const SEGMENTATION_SIDECAR_NAMESPACE = 'scroll-chunk-segmentation-sidecars'
+/** Core publishes both the exact-key sidecar and its height-ordered discovery copy. */
+export const SEGMENTATION_SIDECAR_NAMESPACES = [
+  'scroll-chunk-segmentation-sidecars',
+  'scroll-chunk-segmentation-sidecars-by-height',
+] as const
 
 /**
- * Stable statement ids. Each bucket is dedicated to one store, so ids are not
- * prefix-scoped: the kill switch is "remove the PublicRead statement", and
- * our services keep reading through the VPC endpoint statement.
+ * Legacy statement ids, also used as the bases for deployment-scoped ids.
+ * Turning off public reads must not remove another deployment's grants.
  */
 export const ARCHIVE_POLICY_SIDS = {
   da: {publicRead: 'ScrollSdkDaArchivePublicRead', vpceRead: 'ScrollSdkDaArchiveReadViaVpcEndpoint'},
   snapshot: {publicRead: 'ScrollSdkSnapshotPublicRead', vpceRead: 'ScrollSdkSnapshotReadViaVpcEndpoint'},
 } as const
+
+export function archivePolicySids(kind: ArchiveStoreKind, bucket: string, keyPrefix: string): {publicRead: string; vpceRead: string} {
+  const suffix = createHash('sha256').update(`${normalizeProofBucketName(bucket)}/${normalizeProofKeyPrefix(keyPrefix)}`).digest('hex').slice(0, 24)
+  const bases = ARCHIVE_POLICY_SIDS[kind]
+  return {publicRead: `${bases.publicRead}${suffix}`, vpceRead: `${bases.vpceRead}${suffix}`}
+}
+
 // The DA name is the one setup eth-da-submitter has always used, so both
 // commands manage, and narrow in place, the same inline policy.
 export const ARCHIVE_WRITER_POLICY_NAMES = {da: 'eth-da-submitter-s3-archive', snapshot: 'ScrollSdkSnapshotWrite'} as const
@@ -95,7 +105,7 @@ export function buildArchiveBucketPolicy(
   keyPrefix: string,
   options: Pick<ArtifactAccessOptions, 'publicRead' | 'vpcEndpointId'>,
 ): Document {
-  const sids = ARCHIVE_POLICY_SIDS[kind]
+  const sids = archivePolicySids(kind, bucket, keyPrefix)
   const resource = objectArn(normalizeProofBucketName(bucket), normalizeProofKeyPrefix(keyPrefix))
   const publicRead = {Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: resource, Sid: sids.publicRead}
   const vpceRead = (endpointId: unknown): Document => ({
@@ -106,7 +116,22 @@ export function buildArchiveBucketPolicy(
     Resource: resource,
     Sid: sids.vpceRead,
   })
-  const current = new Map(statementsOf(existing).filter(item => typeof item.Sid === 'string').map(item => [item.Sid as string, item]))
+  // Adopt a fixed legacy Sid only if its complete statement is the canonical
+  // grant for this prefix. Other prefixes and operator policies stay intact.
+  const statements = statementsOf(existing).map(item => {
+    for (const field of ['publicRead', 'vpceRead'] as const) {
+      if (item.Sid !== ARCHIVE_POLICY_SIDS[kind][field]) continue
+      const canonical = field === 'publicRead' ? publicRead : vpceRead((item.Condition as any)?.StringEquals?.['aws:SourceVpce'])
+      if (isDeepStrictEqual({...item, Sid: sids[field]}, canonical)) return {...item, Sid: sids[field]}
+    }
+
+    return item
+  })
+  for (const sid of Object.values(sids)) {
+    if (statements.filter(item => item.Sid === sid).length > 1) throw new Error(`Duplicate bucket policy statement ${sid}; review it before changing permissions`)
+  }
+
+  const current = new Map(statements.filter(item => typeof item.Sid === 'string').map(item => [item.Sid as string, item]))
   // A preserved owned statement is trusted only in its exact canonical shape;
   // anything else under an owned Sid (e.g. an added PutObject) must be
   // reconciled explicitly, never carried forward under the CLI's name.
@@ -129,11 +154,15 @@ export function buildArchiveBucketPolicy(
       : vpceRead(options.vpcEndpointId),
   }
   const owned = new Set(Object.keys(desired))
-  const statements = [
-    ...statementsOf(existing).filter(item => !owned.has(item.Sid as string)),
-    ...Object.values(desired).filter((item): item is Document => item !== undefined),
-  ]
-  return {...existing, Statement: statements, Version: existing.Version ?? '2012-10-17'}
+  const pending = new Map(Object.entries(desired))
+  const reconciled = statements.flatMap(item => {
+    if (!owned.has(item.Sid as string)) return [item]
+    const replacement = pending.get(item.Sid as string)
+    pending.delete(item.Sid as string)
+    return replacement ? [replacement] : []
+  })
+  reconciled.push(...[...pending.values()].filter((item): item is Document => item !== undefined))
+  return {...existing, Statement: reconciled, Version: existing.Version ?? '2012-10-17'}
 }
 
 /**
@@ -150,7 +179,7 @@ export function buildArchiveWriterPolicy(kind: ArchiveStoreKind, store: {bucket:
   return {
     Statement: [
       {Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: objectArn(store.bucket, store.keyPrefix), Sid: 'DaArchivePut'},
-      ...(sidecarStore ? [{Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: objectArn(sidecarStore.bucket, `${sidecarStore.keyPrefix}/${SEGMENTATION_SIDECAR_NAMESPACE}`), Sid: 'SegmentationSidecarPut'}] : []),
+      ...(sidecarStore ? [{Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: SEGMENTATION_SIDECAR_NAMESPACES.map(namespace => objectArn(sidecarStore.bucket, `${sidecarStore.keyPrefix}/${namespace}`)), Sid: 'SegmentationSidecarPut'}] : []),
     ],
     Version: '2012-10-17',
   }
@@ -184,7 +213,7 @@ function assertPublicAccessBlock(aws: Aws, bucket: string, region: string): void
  * deleted silently; the operator removes them.
  */
 function assertNoUnmanagedAnonymousGrant(policy: Document, kind: ArchiveStoreKind, bucket: string, keyPrefix: string): void {
-  const sids = ARCHIVE_POLICY_SIDS[kind]
+  const sids = archivePolicySids(kind, bucket, keyPrefix)
   const unmanaged = findUnmanagedAnonymousGrant(policy, bucket, keyPrefix, [sids.publicRead, sids.vpceRead])
   if (!unmanaged) return
   const sid = typeof unmanaged.Sid === 'string' ? unmanaged.Sid : '<without Sid>'
@@ -201,7 +230,7 @@ function assertNoUnmanagedAnonymousGrant(policy: Document, kind: ArchiveStoreKin
  * available S3 Gateway endpoint in the bucket's region.
  */
 function assertClusterReadPath(aws: Aws, policy: Document, kind: ArchiveStoreKind, bucket: string, keyPrefix: string, region: string): void {
-  const sids = ARCHIVE_POLICY_SIDS[kind]
+  const sids = archivePolicySids(kind, bucket, keyPrefix)
   const statements = statementsOf(policy)
   if (statements.some(item => item.Sid === sids.publicRead)) return
   const vpce = statements.find(item => item.Sid === sids.vpceRead)
@@ -283,12 +312,14 @@ export function checkArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
   if (!plan.writerPolicy) return
   for (const statement of statementsOf(plan.writerPolicy.after)) {
     const actions = (Array.isArray(statement.Action) ? statement.Action : [statement.Action]) as string[]
-    const resource = String(statement.Resource).replace(/\*$/, '0xpreflight')
-    const result = aws.json(['iam', 'simulate-principal-policy', '--policy-source-arn', plan.writerPolicy.roleArn, '--action-names', ...actions, '--resource-arns', resource])
-    const rows = result.EvaluationResults
-    for (const action of actions) {
-      const matches = Array.isArray(rows) ? rows.filter(row => row.EvalActionName === action && row.EvalResourceName === resource) : []
-      if (matches.length !== 1 || matches[0].EvalDecision !== 'allowed' || matches[0].MissingContextValues?.length) throw new Error(`Writer IAM simulation did not allow ${action} on ${resource}; run artifact-access --writer-role-arn ... --apply and check external denies`)
+    for (const pattern of Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource]) {
+      const resource = String(pattern).replace(/\*$/, '0xpreflight')
+      const result = aws.json(['iam', 'simulate-principal-policy', '--policy-source-arn', plan.writerPolicy.roleArn, '--action-names', ...actions, '--resource-arns', resource])
+      const rows = result.EvaluationResults
+      for (const action of actions) {
+        const matches = Array.isArray(rows) ? rows.filter(row => row.EvalActionName === action && row.EvalResourceName === resource) : []
+        if (matches.length !== 1 || matches[0].EvalDecision !== 'allowed' || matches[0].MissingContextValues?.length) throw new Error(`Writer IAM simulation did not allow ${action} on ${resource}; run artifact-access --writer-role-arn ... --apply and check external denies`)
+      }
     }
   }
 }

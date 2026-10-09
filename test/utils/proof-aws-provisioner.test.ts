@@ -12,6 +12,7 @@ import {
   normalizeProofArtifactPublicEndpoint,
   normalizeProofBucketName,
   normalizeProofKeyPrefix,
+  proofArtifactPolicySid,
   proofArtifactS3Endpoint,
   publicArtifactObjectResources,
   upsertProofArtifactPublicReadPolicy,
@@ -388,7 +389,7 @@ describe('proof-aws-provisioner values projection', () => {
         Effect: 'Allow',
         Principal: '*',
         Resource: publicArtifactObjectResources('proof-bucket', 'proof-topology'),
-        Sid: 'ScrollSdkProofArtifactPublicRead',
+        Sid: proofArtifactPolicySid('public', 'proof-bucket', 'proof-topology'),
       },
     ])
   })
@@ -494,7 +495,7 @@ describe('proof-aws-provisioner values projection', () => {
 
   it('accepts nested proof key prefixes and rejects unsafe path syntax', () => {
     expect(normalizeProofKeyPrefix('releases/v1')).to.equal('releases/v1')
-    for (const invalid of ['', '/proof-topology', 'proof-topology/', 'proof//topology', 'proof/../topology', 'proof/*', 'proof topology', 'proof#topology']) {
+    for (const invalid of ['', '/proof-topology', 'proof-topology/', 'proof//topology', 'proof/../topology', 'proof/*', 'proof topology', 'proof#topology', 'proof%2Ftopology', 'proof:topology', 'proof/中文']) {
       expect(() => normalizeProofKeyPrefix(invalid)).to.throw('proof artifact key prefix')
     }
   })
@@ -526,7 +527,7 @@ describe('proof-aws-provisioner values projection', () => {
         Effect: 'Allow',
         Principal: '*',
         Resource: 'arn:aws:s3:::proof-bucket/proof-topology/*',
-        Sid: 'ScrollSdkProofArtifactReadViaVpcEndpoint',
+        Sid: proofArtifactPolicySid('vpce', 'proof-bucket', 'proof-topology'),
       },
     ])
 
@@ -540,7 +541,7 @@ describe('proof-aws-provisioner values projection', () => {
     expect(rerun.Statement[1].Condition.StringEquals['aws:SourceVpce']).to.equal('vpce-fedcba98765432100')
   })
 
-  it('migrates an equivalent legacy bucket-wide VPC endpoint read without retaining broad access', () => {
+  it('preserves operator-managed bucket-wide VPC endpoint grants while adding the deployment grant', () => {
     const updated = upsertProofArtifactVpcEndpointReadPolicy(
       {
         Statement: [
@@ -561,11 +562,12 @@ describe('proof-aws-provisioner values projection', () => {
       'vpce-0123456789abcdef0'
     )
 
-    expect(updated.Statement).to.have.length(2)
+    expect(updated.Statement).to.have.length(3)
     expect(updated.Statement[0].Sid).to.equal('OperatorGuard')
-    expect(updated.Statement[1].Sid).to.equal('ScrollSdkProofArtifactReadViaVpcEndpoint')
-    expect(updated.Statement[1].Resource).to.equal('arn:aws:s3:::proof-bucket/proof-topology/*')
-    expect(JSON.stringify(updated)).not.to.include('arn:aws:s3:::proof-bucket/*')
+    expect(updated.Statement[1].Sid).to.equal('WorkerAnonymousReadViaVpcEndpoint')
+    expect(updated.Statement[2].Sid).to.equal(proofArtifactPolicySid('vpce', 'proof-bucket', 'proof-topology'))
+    expect(updated.Statement[2].Resource).to.equal('arn:aws:s3:::proof-bucket/proof-topology/*')
+    expect(updated.Statement[1].Resource).to.equal('arn:aws:s3:::proof-bucket/*')
   })
 
   it('upserts and removes only the CLI-managed direct S3 public read statement', () => {
@@ -589,7 +591,7 @@ describe('proof-aws-provisioner values projection', () => {
         Effect: 'Allow',
         Principal: '*',
         Resource: publicArtifactObjectResources('proof-bucket', 'proof-topology'),
-        Sid: 'ScrollSdkProofArtifactPublicRead',
+        Sid: proofArtifactPolicySid('public', 'proof-bucket', 'proof-topology'),
       },
     ])
 
@@ -610,6 +612,67 @@ describe('proof-aws-provisioner values projection', () => {
     // Disabling public read keeps the bucket TLS-only.
     expect(disabled.Statement).to.deep.equal([operatorStatement, denyInsecureTransportStatement('proof-bucket')])
     expect(denyInsecureTransportStatement('proof-bucket')).to.deep.include({Effect: 'Deny', Sid: 'ScrollSdkDenyInsecureTransport'})
+  })
+
+  it('keeps sibling public grants through updates and removes only the selected deployment', () => {
+    const first = upsertProofArtifactPublicReadPolicy({}, 'proof-bucket', 'deployments/a', true)
+    const both = upsertProofArtifactPublicReadPolicy(first, 'proof-bucket', 'deployments/b', true)
+    expect(both.Statement).to.have.length(3)
+    for (const statement of first.Statement) expect(both.Statement).to.deep.include(statement)
+    expect(() => assertNoUnmanagedPublicProofBucketGrant(both, 'proof-bucket', 'deployments/b')).not.to.throw()
+    expect(upsertProofArtifactPublicReadPolicy(both, 'proof-bucket', 'deployments/b', true)).to.deep.equal(both)
+    expect(upsertProofArtifactPublicReadPolicy(both, 'proof-bucket', 'deployments/b', false)).to.deep.equal(first)
+    expect(publicArtifactObjectResources('proof-bucket', 'deployments/b')).not.to.include('arn:aws:s3:::proof-bucket/deployments/b/0x*')
+    expect(JSON.stringify(both)).not.to.match(/segmentation|locators|staging|recovery|eager-chunk-proofs/)
+  })
+
+  it('keeps other prefixes on the same VPC endpoint when changing a deployment endpoint', () => {
+    const first = upsertProofArtifactVpcEndpointReadPolicy({}, 'proof-bucket', 'deployments/a', 'vpce-aaa')
+    const both = upsertProofArtifactVpcEndpointReadPolicy(first, 'proof-bucket', 'deployments/b', 'vpce-aaa')
+    const changed = upsertProofArtifactVpcEndpointReadPolicy(both, 'proof-bucket', 'deployments/b', 'vpce-bbb')
+    expect(changed.Statement).to.have.length(2)
+    expect(changed.Statement[0]).to.deep.equal(first.Statement[0])
+    expect(changed.Statement[1].Condition.StringEquals['aws:SourceVpce']).to.equal('vpce-bbb')
+  })
+
+  it('narrows this prefix from the old combined DA/proof policy without losing sibling grants', () => {
+    const original = upsertProofArtifactPublicReadPolicy({}, 'proof-bucket', 'deployments/a', true)
+    original.Statement.find((statement: any) => statement.Effect === 'Allow').Resource.push('arn:aws:s3:::proof-bucket/deployments/a/0x*')
+    const both = upsertProofArtifactPublicReadPolicy(original, 'proof-bucket', 'deployments/b', true)
+    expect(() => assertNoUnmanagedPublicProofBucketGrant(both, 'proof-bucket', 'deployments/a')).not.to.throw()
+    const narrowed = upsertProofArtifactPublicReadPolicy(both, 'proof-bucket', 'deployments/a', true)
+    expect(narrowed.Statement.find((statement: any) => statement.Sid === proofArtifactPolicySid('public', 'proof-bucket', 'deployments/a')).Resource)
+      .to.deep.equal(publicArtifactObjectResources('proof-bucket', 'deployments/a'))
+    expect(narrowed.Statement).to.deep.include(both.Statement.find((statement: any) => statement.Sid === proofArtifactPolicySid('public', 'proof-bucket', 'deployments/b')))
+    expect(narrowed.Statement).to.deep.include(denyInsecureTransportStatement('proof-bucket'))
+  })
+
+  it('migrates a fixed legacy Sid only for the exact deployment, including nested prefixes', () => {
+    for (const kind of ['public', 'vpce'] as const) {
+      const update = (policy: any, prefix: string) => kind === 'public'
+        ? upsertProofArtifactPublicReadPolicy(policy, 'proof-bucket', prefix, true)
+        : upsertProofArtifactVpcEndpointReadPolicy(policy, 'proof-bucket', prefix, 'vpce-aaa')
+      const first = update({}, 'deployments/a')
+      const grant = first.Statement.find((statement: any) => statement.Effect === 'Allow')
+      grant.Sid = kind === 'public' ? 'ScrollSdkProofArtifactPublicRead' : 'ScrollSdkProofArtifactReadViaVpcEndpoint'
+      for (const other of ['deployments/b', 'deployments']) {
+        const unchanged = update(first, other)
+        expect(unchanged.Statement).to.have.length(first.Statement.length + 1)
+        expect(unchanged.Statement).to.deep.include(grant)
+      }
+
+      const migrated = update(first, 'deployments/a')
+      expect(migrated.Statement).to.have.length(first.Statement.length)
+      expect(migrated.Statement.find((statement: any) => statement.Effect === 'Allow').Sid).to.equal(proofArtifactPolicySid(kind, 'proof-bucket', 'deployments/a'))
+    }
+  })
+
+  it('refuses a conflicting per-prefix Sid and does not trust a legacy Sid on a broad public grant', () => {
+    const policy = upsertProofArtifactPublicReadPolicy({}, 'proof-bucket', 'deployments/a', true)
+    policy.Statement.find((statement: any) => statement.Effect === 'Allow').Effect = 'Deny'
+    expect(() => upsertProofArtifactPublicReadPolicy(policy, 'proof-bucket', 'deployments/a', true)).to.throw('differs')
+    const broad = {Statement: [{Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: 'arn:aws:s3:::proof-bucket/*', Sid: 'ScrollSdkProofArtifactPublicRead'}]}
+    expect(() => assertNoUnmanagedPublicProofBucketGrant(broad, 'proof-bucket', 'deployments/a')).to.throw('overlapping')
   })
 
   it('ignores public grants on sibling prefixes and rejects grants overlapping the managed prefix', () => {

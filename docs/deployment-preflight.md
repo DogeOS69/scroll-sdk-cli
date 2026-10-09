@@ -82,7 +82,7 @@ preserves the bucket policy. It does **not** imply a new prefix is readable.
 The DA archive (`ethereumDa.blobArchive.s3`) and the bootstrap snapshot bucket
 (`snapshots.s3`) are managed by `setup artifact-access --store da|snapshot`.
 The proof artifact bucket (`proofArtifacts.s3`) is managed by
-`proof-aws-init`. Each bucket has one writer:
+`proof-aws-init`. Configure the writer role for each store:
 
 ```bash
 # Plan, then apply the reviewed changes:
@@ -105,12 +105,15 @@ scrollsdk setup artifact-access --store snapshot \
 ```
 
 The command enables versioning and owns three bucket-policy statements by Sid:
-`ScrollSdkDenyInsecureTransport` (TLS-only), `ScrollSdk<Store>ReadViaVpcEndpoint`
+`ScrollSdkDenyInsecureTransport` (TLS-only), `ScrollSdk<Store>ReadViaVpcEndpoint<scope>`
 (GetObject from the S3 Gateway endpoint recorded by `proof-aws-init`, or
-`--vpc-endpoint-id`), and `ScrollSdk<Store>PublicRead` (anonymous GetObject,
-added by `--public-read`, removed by `--no-public-read`). The DA writer inline
+`--vpc-endpoint-id`), and `ScrollSdk<Store>PublicRead<scope>` (anonymous GetObject,
+added by `--public-read`, removed by `--no-public-read`). `<scope>` is a
+deterministic hash of the bucket and deployment prefix, so other deployments
+retain their grants. Only the TLS-only statement is bucket-wide. The DA writer inline
 policy `eth-da-submitter-s3-archive` grants GetObject/PutObject on the DA
-prefix and on the proof store's `scroll-chunk-segmentation-sidecars/` namespace;
+prefix and on the proof store's `scroll-chunk-segmentation-sidecars/` and
+`scroll-chunk-segmentation-sidecars-by-height/` namespaces;
 the snapshot writer gets PutObject only. No list or delete is granted. Other
 statements are preserved, even explicit Deny statements. Policy changes observed
 between planning and writing stop the operation. AWS has no bucket-policy

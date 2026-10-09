@@ -8,6 +8,7 @@ import type { JsonOutputContext } from './json-output.js'
 import type { ManagedSignerConfig, ManagedSignerRole } from './signer-roles.js'
 
 import { ARCHIVE_WRITER_POLICY_NAMES, buildArchiveWriterPolicy } from './artifact-access.js'
+import {normalizeS3ArchiveKeyPrefix} from './s3-archive.js'
 
 export type KmsSignerProvisionRole = Pick<
   ManagedSignerRole,
@@ -109,6 +110,20 @@ export function deriveEthereumAddressFromSpkiDer(publicKeyBase64: string): strin
   return getAddress(`0x${hash.slice(-40)}`)
 }
 
+/** Prefix-scoped archive access for the legacy combined signer provisioner. */
+function archiveStorePolicy(bucket: string, keyPrefix?: string): Record<string, any> {
+  const prefix = normalizeS3ArchiveKeyPrefix(keyPrefix)
+  const bucketArn = `arn:aws:s3:::${bucket}`
+  return {
+    Statement: [
+      {Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: `${bucketArn}/${prefix ? prefix + '/' : ''}*`},
+      {Action: ['s3:ListBucket'], Effect: 'Allow', Resource: bucketArn,
+        ...(prefix ? {Condition: {StringLike: {'s3:prefix': [prefix, prefix + '/*']}}} : {})},
+    ],
+    Version: '2012-10-17',
+  }
+}
+
 export class KmsSignerProvisioner {
   constructor(
     private readonly jsonCtx: JsonOutputContext,
@@ -125,6 +140,7 @@ export class KmsSignerProvisioner {
     input: KmsProvisionInput = {}
   ): Promise<KmsProvisionResult> {
     this.validateIdentity(identity)
+    if (input.archive?.enabled) input.archive.keyPrefix = normalizeS3ArchiveKeyPrefix(input.archive.keyPrefix)
 
     const safeNetworkAlias = sanitizeName(identity.networkAlias)
     const safeEksCluster = sanitizeName(identity.eksCluster)
@@ -143,6 +159,7 @@ export class KmsSignerProvisioner {
     const expectedAddress = deriveEthereumAddressFromSpkiDer(publicKeyBase64)
     const roleArn = input.roleArn || this.ensureIamRole({
       archiveBucket: input.archive?.enabled ? input.archive.bucket : undefined,
+      archiveKeyPrefix: input.archive?.keyPrefix,
       awsRegion: identity.awsRegion,
       eksCluster: identity.eksCluster,
       keyArn: keyInfo.keyArn,
@@ -159,19 +176,10 @@ export class KmsSignerProvisioner {
       const roleName = input.roleArn.split('/').at(-1) as string
       const existing = this.awsJson(['iam', 'get-role', '--role-name', roleName])
       if (existing.Role?.Arn !== input.roleArn) throw new Error('Existing IAM role ARN does not match the requested archive role')
-      const prefix = (input.archive.keyPrefix || '').replaceAll(/^\/+|\/+$/g, '')
-      if (/[*?]/.test(prefix)) throw new Error('Archive key prefix must not contain IAM wildcard characters')
-      const bucketArn = `arn:aws:s3:::${input.archive.bucket}`
+      const prefix = normalizeS3ArchiveKeyPrefix(input.archive.keyPrefix)
       const suffix = keccak256(Buffer.from(`${input.archive.bucket}/${prefix}`)).slice(2, 18)
       this.awsJson(['iam', 'put-role-policy', '--role-name', roleName,
-        '--policy-name', `eth-da-submitter-archive-${suffix}`, '--policy-document', JSON.stringify({
-          Statement: [
-            {Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: `${bucketArn}/${prefix ? prefix + '/' : ''}*`},
-            {Action: ['s3:ListBucket'], Effect: 'Allow', Resource: bucketArn,
-              ...(prefix ? {Condition: {StringLike: {'s3:prefix': [prefix, prefix + '/*']}}} : {})},
-          ],
-          Version: '2012-10-17',
-        })])
+        '--policy-name', `eth-da-submitter-archive-${suffix}`, '--policy-document', JSON.stringify(archiveStorePolicy(input.archive.bucket, prefix))])
       this.jsonCtx.info(`${role.service}: granted requested archive prefix on existing IAM role ${roleName}`)
     }
 
@@ -203,12 +211,13 @@ export class KmsSignerProvisioner {
 
   async provisionArchive(archive: BlobArchivePlan, options: {createBucket: boolean; roleArn?: string; sidecarStore?: Pick<ArtifactStore, 'bucket' | 'keyPrefix'>}): Promise<void> {
     if (!archive.enabled || !archive.bucket) return
+    archive.keyPrefix = normalizeS3ArchiveKeyPrefix(archive.keyPrefix)
     const match = options.roleArn?.match(/^arn:aws[\w-]*:iam::\d{12}:role\/(?:.*\/)?([^/]+)$/)
     if (options.roleArn && !match) throw new Error('Invalid archive writer IAM role ARN')
     if (options.createBucket) archive.created = this.ensureS3Bucket(archive.region || 'us-east-1', archive.bucket, 'eth-da-submitter')
     if (match) {
       // Same document setup artifact-access --store da plans and checks.
-      const policy = buildArchiveWriterPolicy('da', {bucket: archive.bucket, keyPrefix: archive.keyPrefix?.replaceAll(/^\/+|\/+$/g, '')}, options.sidecarStore)
+      const policy = buildArchiveWriterPolicy('da', {bucket: archive.bucket, keyPrefix: archive.keyPrefix}, options.sidecarStore)
       this.awsJson(['iam', 'put-role-policy', '--role-name', match[1], '--policy-name', ARCHIVE_WRITER_POLICY_NAMES.da, '--policy-document', JSON.stringify(policy)])
       this.jsonCtx.info('Updated the archive writer policy; signing key and role trust are unchanged.')
     }
@@ -250,6 +259,7 @@ export class KmsSignerProvisioner {
 
   private ensureIamRole(options: {
     archiveBucket?: string
+    archiveKeyPrefix?: string
     awsRegion: string
     eksCluster: string
     keyArn: string
@@ -351,14 +361,7 @@ export class KmsSignerProvisioner {
         '--policy-name',
         'eth-da-submitter-s3-archive',
         '--policy-document',
-        JSON.stringify({
-          Statement: [{
-            Action: ['s3:GetObject', 's3:PutObject'],
-            Effect: 'Allow',
-            Resource: `arn:aws:s3:::${options.archiveBucket}/*`,
-          }],
-          Version: '2012-10-17',
-        }),
+        JSON.stringify(archiveStorePolicy(options.archiveBucket, options.archiveKeyPrefix)),
       ])
       this.jsonCtx.info(`${options.service}: updated IAM S3 archive policy: ${options.roleName} -> ${options.archiveBucket}`)
     }

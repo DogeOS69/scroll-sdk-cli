@@ -310,11 +310,14 @@ describe('unified keystore preparation', () => {
     expect(aws.callCount).to.equal(1)
     expect(aws.firstCall.args[0].slice(0, 4)).to.deep.equal(['iam', 'put-role-policy', '--role-name', 'submitter'])
     expect(aws.firstCall.args[0]).to.include('eth-da-submitter-s3-archive')
-    // Scoped to the DA prefix and the proof sidecar namespace, never the whole bucket.
+    // Scoped to the DA prefix and both proof sidecar namespaces, never the whole bucket.
     const policy = JSON.parse(aws.firstCall.args[0].at(-1))
-    expect(policy.Statement.map((statement: {Resource: string}) => statement.Resource)).to.deep.equal([
+    expect(policy.Statement.map((statement: {Resource: string | string[]}) => statement.Resource)).to.deep.equal([
       'arn:aws:s3:::archive/mainnet/batches/*',
-      'arn:aws:s3:::proofs/mainnet/proofs/scroll-chunk-segmentation-sidecars/*',
+      [
+        'arn:aws:s3:::proofs/mainnet/proofs/scroll-chunk-segmentation-sidecars/*',
+        'arn:aws:s3:::proofs/mainnet/proofs/scroll-chunk-segmentation-sidecars-by-height/*',
+      ],
     ])
   })
 })

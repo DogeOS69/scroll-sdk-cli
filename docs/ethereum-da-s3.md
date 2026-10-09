@@ -23,7 +23,8 @@ Operators must configure and verify the `publicBaseUrl` transport separately.
 
 ## Three buckets
 
-A deployment uses three dedicated, versioned buckets, each with one writer:
+Configure the DA archive, proof artifacts and bootstrap snapshots independently.
+Each store has its own writer permissions and versioned bucket:
 
 | Bucket | doge-config | Writer | Readers | Managed by |
 |---|---|---|---|---|
@@ -31,18 +32,42 @@ A deployment uses three dedicated, versioned buckets, each with one writer:
 | Proof artifacts | `[proofArtifacts.s3]` | proof-coordinator (put, delete for its recovery path), withdrawal-processor (put), eth-da-submitter (sidecar namespace only) | external Workers and attestation signers by key (public, unadvertised); the only artifact origin in signer and CubeSigner allowlists | `setup proof-aws-init` |
 | Bootstrap snapshots | `[snapshots.s3]` | deploy role (put) | our init containers through the VPC endpoint; public read off unless requested | `setup artifact-access --store snapshot` |
 
-For a DA prefix such as `mainnet/batches` and a proof prefix such as
-`mainnet/proofs`, the namespaces are:
+The CLI selects a **deployment prefix**, not a directory name for each artifact
+type. The physical object key is `<keyPrefix>/<core-relative-key>`.
+For example, two deployments can use `deployments/testnet-001` and
+`deployments/testnet-002` in the same bucket. Core owns the paths below each
+prefix; the CLI does not insert `da-blobs/`, rename sidecars or regroup indexes.
+
+For independently configured DA and proof prefixes, core owns these namespaces:
 
 ```text
-da:    mainnet/batches/0x<versioned-hash>                        raw DA blob
-proof: mainnet/proofs/scroll-chunk-segmentation-sidecars/...     internal sidecar
-proof: mainnet/proofs/input-specs/...                            Worker input
-proof: mainnet/proofs/prepared-bundles/...                       Worker input
-proof: mainnet/proofs/witnesses/...                              Worker/signer input
-proof: mainnet/proofs/public-outputs/...                         Worker output
-proof: mainnet/proofs/proofs/...                                 proof bytes
+da:    <da-prefix>/0x<versioned-hash>                    raw DA blob
+proof: <proof-prefix>/scroll-chunk-segmentation-sidecars/   internal sidecar
+proof: <proof-prefix>/scroll-chunk-segmentation-sidecars-by-height/ discovery index
+proof: <proof-prefix>/scroll-chunk-bundle-locators/         material locators
+proof: <proof-prefix>/input-specs/                         Worker input
+proof: <proof-prefix>/prepared-bundles/                    Worker input
+proof: <proof-prefix>/witnesses/                           Worker/signer input
+proof: <proof-prefix>/public-outputs/                      Worker output
+proof: <proof-prefix>/proofs/                              accepted proof bytes
+proof: <proof-prefix>/eager-chunk-proofs/                   eager result records
+proof: <proof-prefix>/signer-policy-evidence/               signer evidence
+proof: <proof-prefix>/staging/                             pending Worker uploads
+proof: <proof-prefix>/recovery/                            recovery objects
+proof: <proof-prefix>/proof-programs/<bundle-id>/           published program bundle
 ```
+
+The selected core release/profile determines which objects are produced. This
+list is not a public-read allowlist or an instruction to move existing objects.
+Existing deployments retain their prefix and native keys. Changing the prefix
+selects a different namespace; this command does not migrate historical blobs,
+proof references, or publication receipts.
+
+Archive setup normalizes surrounding/repeated slashes in the same way as the
+native submitter. Prefix segments may contain ASCII letters, digits, `.`, `_`
+and `-`; `.` and `..` segments are rejected. Proof prefixes must already
+be non-empty normalized paths. An empty prefix remains supported for DA-only
+bucket-root archives.
 
 In the proof bucket, never grant anonymous `GetObject` to the entire
 `<keyPrefix>/*`: the segmentation-sidecar namespace is internal. List, write,
@@ -56,6 +81,13 @@ existing public-read policy; it only manages deployment-scoped proof resources
 and, when selected, the prefix-scoped EKS Gateway endpoint grant. `direct-s3` only when the CLI owns the bucket's public-access posture (it then
 also adds the TLS-only `ScrollSdkDenyInsecureTransport` statement), or
 `existing-gateway` when S3 remains private behind an HTTPS gateway.
+
+CLI-managed direct-read and VPC-endpoint-read statements are identified per
+bucket and deployment prefix. Repeating setup for one prefix preserves the
+other prefixes' statements. Legacy fixed statement IDs are migrated only when
+their resources match the selected deployment. Operator-managed broad VPC
+grants and grants for other deployments are preserved, not silently narrowed;
+their effective access remains the operator's responsibility.
 
 After configuring the archive, run `scrollsdk setup prep-charts`. It reads
 `.data/doge-config.toml` and projects the settings into `eth-da-submitter`,
@@ -124,7 +156,7 @@ scrollsdk setup gen-keystore --service eth-da-submitter \
 scrollsdk setup eth-da-submitter --non-interactive --json \
   --archive-bucket dogeos-eth-da-archive-devnet \
   --archive-region us-west-2 \
-  --archive-key-prefix devnet/eth-da/blobs/v1 \
+  --archive-key-prefix deployments/testnet-001 \
   --archive-public-base-url https://dogeos-eth-da-archive-devnet.s3.us-west-2.amazonaws.com \
   --no-create-archive-bucket
 ```
@@ -141,14 +173,19 @@ enables SSE-S3 and versioning. With `--role-arn` (or the submitter's service
 account role) it writes the inline policy `eth-da-submitter-s3-archive`:
 `s3:GetObject` and `s3:PutObject` on the archive prefix and, when
 `[proofArtifacts.s3]` is configured, on the proof store's
-`scroll-chunk-segmentation-sidecars/` namespace. `setup artifact-access --store
+`scroll-chunk-segmentation-sidecars/` and
+`scroll-chunk-segmentation-sidecars-by-height/` namespaces. `setup artifact-access --store
 da` plans and checks the same policy. `setup proof-aws-init` grants
 `s3:GetObject` and `s3:PutObject` on the proof prefix when it creates or
 manages a proof service IAM role. The Proof Coordinator role additionally receives `s3:DeleteObject` on
 that prefix so it can retire stale locator objects after an operator-requested
 global proof identity regeneration; the Withdrawal Processor role does not.
-When an existing role ARN is supplied or reused, treat the role as
-operator-managed and verify its S3 permissions independently.
+The archive-setup writer policy grants neither ListBucket nor DeleteObject.
+With an empty DA-only prefix, its GetObject/PutObject grant covers the bucket
+root. Existing unrelated IAM policies and legacy provisioning grants are not
+removed; effective access may be broader than the generated grant. When an
+existing role ARN is supplied or reused, verify its effective permissions
+independently.
 
 The command writes the resolved values back to `.data/doge-config.toml`; it
 does not directly update Helm values. Run:
@@ -306,7 +343,13 @@ sync S3 settings into `eth-da-submitter`, `l1-interface`,
 package.
 
 Public read of the DA archive is one bucket-policy statement,
-`ScrollSdkDaArchivePublicRead`, managed with `setup artifact-access --store da
+`ScrollSdkDaArchivePublicRead<scope>`, managed with `setup artifact-access --store da
 --public-read` / `--no-public-read`. Removing it cuts anonymous egress while
-our services keep reading through `ScrollSdkDaArchiveReadViaVpcEndpoint`
+our services keep reading through `ScrollSdkDaArchiveReadViaVpcEndpoint<scope>`
 (same-region buckets only).
+
+Read-policy statement ids include a deterministic bucket/prefix hash. Updating
+one deployment or disabling its public reads preserves sibling deployments.
+A fixed legacy Sid is migrated only when its complete grant matches the selected
+prefix; other grants remain unchanged and overlapping unmanaged public grants
+require operator review. The TLS-only statement applies to the entire bucket.

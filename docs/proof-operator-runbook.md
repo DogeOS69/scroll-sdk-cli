@@ -150,9 +150,9 @@ run:
 scrollsdk setup proof-aws-init
 ```
 
-This reuses the configured DA bucket/prefix, creates or reconciles the proof
+This uses the configured proof bucket/prefix, creates or reconciles the proof
 IAM roles and token secret, configures the selected external read transport,
-and writes `.data/proof-aws.json`. It never invents a second proof-only bucket.
+and writes `.data/proof-aws.json`. The DA archive configuration is independent.
 Choose the public-read mode according to who owns the bucket-level policy:
 
 - `existing-public-s3` uses the regional S3 endpoint and preserves the existing

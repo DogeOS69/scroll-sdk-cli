@@ -1257,7 +1257,8 @@ USAGE
 FLAGS
   -N, --non-interactive
       --archive-bucket=<value>           S3 blob archive bucket.
-      --archive-key-prefix=<value>       S3 object key prefix.
+      --archive-key-prefix=<value>       Deployment prefix for raw DA blobs; proof sidecars use proofArtifacts.s3.
+                                        Core owns the relative object paths.
       --archive-public-base-url=<value>  Public HTTPS base URL used by blob
                                          consumers.
       --archive-region=<value>           Region owning the archive bucket.

@@ -10,6 +10,7 @@ import { JsonOutputContext } from '../../src/utils/json-output.js'
 import {
   getDefaultKmsAlias,
   getDefaultKmsRoleName,
+  resolveBlobArchive,
   resolveKmsSignerInput,
   setupManagedSigner,
 } from '../../src/utils/managed-signer-setup.js'
@@ -101,6 +102,18 @@ describe('managed signer setup', () => {
     expect(parsed.ethereumDa.blobArchive.s3.region).to.equal('us-east-1')
     expect(parsed.ethereumDa.blobArchive.s3.keyPrefix).to.equal('devnet/eth-da/blobs/v1')
     expect(parsed.ethereumDa.blobArchive.s3.publicBaseUrl).to.equal('https://dogeos-da.s3.us-east-1.amazonaws.com')
+  })
+
+  it('records one normalized deployment prefix without adding a CLI-owned object directory', async () => {
+    const options = {...signerCommandOptions({
+      'archive-bucket': 'example-archive',
+      'archive-key-prefix': ' /deployments//testnet-001/ ',
+      'archive-region': 'us-east-1',
+    }), nonInteractive: true}
+    const archive = await resolveBlobArchive(options, 'us-east-1')
+    expect(archive.keyPrefix).to.equal('deployments/testnet-001')
+    expect(options.dogeConfig.ethereumDa?.blobArchive?.s3?.keyPrefix).to.equal(archive.keyPrefix)
+    expect(archive.publicBaseUrl).to.equal('https://example-archive.s3.us-east-1.amazonaws.com')
   })
 
   it('syncs fee-oracle local signer address to config.toml accounts.L2_GAS_ORACLE_SENDER_ADDR', async () => {

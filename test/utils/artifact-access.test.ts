@@ -3,6 +3,7 @@ import {expect} from 'chai'
 import {
   ARCHIVE_POLICY_SIDS,
   applyArtifactAccess,
+  archivePolicySids,
   buildArchiveBucketPolicy,
   buildArchiveWriterPolicy,
   checkArtifactAccess,
@@ -83,6 +84,52 @@ function sids(policy: Record<string, unknown>): string[] {
 }
 
 describe('DA archive and snapshot bucket access', () => {
+  for (const kind of ['da', 'snapshot'] as const) {
+    it(`preserves other deployments when configuring and disabling ${kind} reads`, () => {
+      const a = {...da, keyPrefix: 'deployments/one'}
+      const b = {...da, keyPrefix: 'deployments/two'}
+      const f = fixture()
+      applyArtifactAccess(f.aws, planArtifactAccess(f.aws, kind, a, {publicRead: true, vpcEndpointId: 'vpce-0abc'}))
+      const first = structuredClone(f.bucket.Statement as Array<Record<string, unknown>>)
+      applyArtifactAccess(f.aws, planArtifactAccess(f.aws, kind, b, {publicRead: true, vpcEndpointId: 'vpce-0abc'}))
+      applyArtifactAccess(f.aws, planArtifactAccess(f.aws, kind, b, {publicRead: false}))
+      for (const statement of first) expect(f.bucket.Statement).to.deep.include(statement)
+      expect(sids(f.bucket)).to.include(archivePolicySids(kind, a.bucket, a.keyPrefix).publicRead)
+      expect(sids(f.bucket)).not.to.include(archivePolicySids(kind, b.bucket, b.keyPrefix).publicRead)
+      checkArtifactAccess(f.aws, planArtifactAccess(f.aws, kind, a, {publicRead: true}))
+      checkArtifactAccess(f.aws, planArtifactAccess(f.aws, kind, b, {publicRead: false}))
+    })
+  }
+
+  it('migrates only canonical legacy grants for this prefix', () => {
+    const legacy = {Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: `arn:aws:s3:::${da.bucket}/${da.keyPrefix}/*`, Sid: ARCHIVE_POLICY_SIDS.da.publicRead}
+    const adopted = buildArchiveBucketPolicy({Statement: [legacy]}, 'da', da.bucket, da.keyPrefix, {})
+    expect(sids(adopted)).not.to.include(legacy.Sid)
+    expect(adopted.Statement).to.deep.include({...legacy, Sid: archivePolicySids('da', da.bucket, da.keyPrefix).publicRead})
+    const sibling = buildArchiveBucketPolicy({Statement: [legacy]}, 'da', da.bucket, 'deployments/other', {publicRead: true})
+    expect(sibling.Statement).to.deep.include(legacy)
+    const f = fixture()
+    ;(f.bucket.Statement as unknown[]).push({...legacy, Resource: `arn:aws:s3:::${da.bucket}/*`})
+    expect(() => planArtifactAccess(f.aws, 'da', da, {publicRead: false, vpcEndpointId: 'vpce-0abc'})).to.throw('outside the CLI-managed statements')
+  })
+
+  it('checks IAM permission for the height-ordered discovery copy as well as the primary sidecar', () => {
+    const f = fixture()
+    const options = {publicRead: true, sidecarStore: proof, writerRoleArn: roleArn}
+    applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, options))
+    const {json} = f.aws
+    f.aws.json = (args: string[]) => {
+      const result = json(args)
+      if (args[1] === 'simulate-principal-policy' && args.some(arg => arg.includes('/scroll-chunk-segmentation-sidecars-by-height/'))) {
+        for (const row of result.EvaluationResults) row.EvalDecision = 'implicitDeny'
+      }
+
+      return result
+    }
+
+    expect(() => checkArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, options))).to.throw('scroll-chunk-segmentation-sidecars-by-height/')
+  })
+
   it('plans without writes, then enables versioning, VPC-endpoint and public reads and the writer grant idempotently', () => {
     const f = fixture()
     const options = {publicRead: true, sidecarStore: proof, vpcEndpointId: 'vpce-0abc', writerRoleArn: roleArn}
@@ -91,7 +138,7 @@ describe('DA archive and snapshot bucket access', () => {
     expect(plan.versioning.changed).to.equal(true)
     applyArtifactAccess(f.aws, plan)
     expect(f.writes.map(args => args[1])).to.deep.equal(['put-bucket-versioning', 'put-bucket-policy', 'put-role-policy'])
-    expect(sids(f.bucket)).to.deep.equal(['PartnerRead', 'ScrollSdkDenyInsecureTransport', ARCHIVE_POLICY_SIDS.da.publicRead, ARCHIVE_POLICY_SIDS.da.vpceRead])
+    expect(sids(f.bucket)).to.deep.equal(['PartnerRead', 'ScrollSdkDenyInsecureTransport', archivePolicySids('da', da.bucket, da.keyPrefix).publicRead, archivePolicySids('da', da.bucket, da.keyPrefix).vpceRead])
     expect(JSON.stringify(f.inline)).not.to.include('DeleteObject')
     expect(JSON.stringify(f.inline)).not.to.include('ListBucket')
     const again = planArtifactAccess(f.aws, 'da', da, options)
@@ -103,11 +150,11 @@ describe('DA archive and snapshot bucket access', () => {
     const f = fixture()
     applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, {publicRead: true, vpcEndpointId: 'vpce-0abc'}))
     applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, {publicRead: false}))
-    expect(sids(f.bucket)).to.deep.equal(['PartnerRead', 'ScrollSdkDenyInsecureTransport', ARCHIVE_POLICY_SIDS.da.vpceRead])
+    expect(sids(f.bucket)).to.deep.equal(['PartnerRead', 'ScrollSdkDenyInsecureTransport', archivePolicySids('da', da.bucket, da.keyPrefix).vpceRead])
     // Omitting both flags leaves the owned statements as they are.
     expect(planArtifactAccess(f.aws, 'da', da, {}).bucketPolicy.changed).to.equal(false)
     applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, {publicRead: true}))
-    expect(sids(f.bucket)).to.include(ARCHIVE_POLICY_SIDS.da.publicRead)
+    expect(sids(f.bucket)).to.include(archivePolicySids('da', da.bucket, da.keyPrefix).publicRead)
   })
 
   it('fails on policy drift before any mutation', () => {
@@ -181,7 +228,7 @@ describe('DA archive and snapshot bucket access', () => {
   })
 
   it('trusts preserved owned statements only in their canonical shape', () => {
-    const vpceSid = ARCHIVE_POLICY_SIDS.da.vpceRead
+    const vpceSid = archivePolicySids('da', da.bucket, da.keyPrefix).vpceRead
     const resource = 'arn:aws:s3:::dogeos-da-archive/mainnet/batches/*'
     // 1. Public read on, endpoint omitted: an owned-Sid anonymous write with no
     //    endpoint condition must not be carried forward.
@@ -197,7 +244,7 @@ describe('DA archive and snapshot bucket access', () => {
     expect(() => planArtifactAccess(f2.aws, 'da', da, {publicRead: false})).to.throw('--vpc-endpoint-id')
     // A tampered public-read statement is rejected the same way.
     const f3 = fixture()
-    ;(f3.bucket.Statement as unknown[]).push({Action: 's3:*', Effect: 'Allow', Principal: '*', Resource: resource, Sid: ARCHIVE_POLICY_SIDS.da.publicRead})
+    ;(f3.bucket.Statement as unknown[]).push({Action: 's3:*', Effect: 'Allow', Principal: '*', Resource: resource, Sid: archivePolicySids('da', da.bucket, da.keyPrefix).publicRead})
     expect(() => planArtifactAccess(f3.aws, 'da', da, {vpcEndpointId: 'vpce-0abc'})).to.throw('--public-read or --no-public-read')
     expect(f1.writes).to.have.length(writes)
     expect(f2.writes).to.have.length(0)
@@ -223,7 +270,7 @@ describe('DA archive and snapshot bucket access', () => {
     expect(buildArchiveWriterPolicy('da', da, proof)).to.deep.equal({
       Statement: [
         {Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: 'arn:aws:s3:::dogeos-da-archive/mainnet/batches/*', Sid: 'DaArchivePut'},
-        {Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: 'arn:aws:s3:::dogeos-proof-artifacts/mainnet/proofs/scroll-chunk-segmentation-sidecars/*', Sid: 'SegmentationSidecarPut'},
+        {Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: ['arn:aws:s3:::dogeos-proof-artifacts/mainnet/proofs/scroll-chunk-segmentation-sidecars/*', 'arn:aws:s3:::dogeos-proof-artifacts/mainnet/proofs/scroll-chunk-segmentation-sidecars-by-height/*'], Sid: 'SegmentationSidecarPut'},
       ],
       Version: '2012-10-17',
     })
@@ -237,6 +284,6 @@ describe('DA archive and snapshot bucket access', () => {
 
   it('keeps snapshot public read off unless requested', () => {
     const policy = buildArchiveBucketPolicy({}, 'snapshot', 'dogeos-snapshots', 'mainnet/history', {vpcEndpointId: 'vpce-0abc'})
-    expect(sids(policy)).to.deep.equal(['ScrollSdkDenyInsecureTransport', ARCHIVE_POLICY_SIDS.snapshot.vpceRead])
+    expect(sids(policy)).to.deep.equal(['ScrollSdkDenyInsecureTransport', archivePolicySids('snapshot', 'dogeos-snapshots', 'mainnet/history').vpceRead])
   })
 })
