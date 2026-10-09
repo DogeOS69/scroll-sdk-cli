@@ -180,6 +180,32 @@ describe('DA archive and snapshot bucket access', () => {
     expect(() => planArtifactAccess(f.aws, 'da', da, {publicRead: false, vpcEndpointId: 'vpce-0abc'})).not.to.throw()
   })
 
+  it('trusts preserved owned statements only in their canonical shape', () => {
+    const vpceSid = ARCHIVE_POLICY_SIDS.da.vpceRead
+    const resource = 'arn:aws:s3:::dogeos-da-archive/mainnet/batches/*'
+    // 1. Public read on, endpoint omitted: an owned-Sid anonymous write with no
+    //    endpoint condition must not be carried forward.
+    const f1 = fixture()
+    applyArtifactAccess(f1.aws, planArtifactAccess(f1.aws, 'da', da, {publicRead: true}))
+    ;(f1.bucket.Statement as unknown[]).push({Action: 's3:PutObject', Effect: 'Allow', Principal: '*', Resource: resource, Sid: vpceSid})
+    const writes = f1.writes.length
+    expect(() => planArtifactAccess(f1.aws, 'da', da, {publicRead: true})).to.throw(`${vpceSid} is not the canonical CLI statement`)
+    // 2. Public read off, endpoint omitted: a PutObject-only statement on the
+    //    right prefix and a usable endpoint is not a read path.
+    const f2 = fixture()
+    ;(f2.bucket.Statement as unknown[]).push({Action: 's3:PutObject', Condition: {StringEquals: {'aws:SourceVpce': 'vpce-0abc'}}, Effect: 'Allow', Principal: '*', Resource: resource, Sid: vpceSid})
+    expect(() => planArtifactAccess(f2.aws, 'da', da, {publicRead: false})).to.throw('--vpc-endpoint-id')
+    // A tampered public-read statement is rejected the same way.
+    const f3 = fixture()
+    ;(f3.bucket.Statement as unknown[]).push({Action: 's3:*', Effect: 'Allow', Principal: '*', Resource: resource, Sid: ARCHIVE_POLICY_SIDS.da.publicRead})
+    expect(() => planArtifactAccess(f3.aws, 'da', da, {vpcEndpointId: 'vpce-0abc'})).to.throw('--public-read or --no-public-read')
+    expect(f1.writes).to.have.length(writes)
+    expect(f2.writes).to.have.length(0)
+    // Passing the option explicitly reconciles the statement to canonical.
+    applyArtifactAccess(f2.aws, planArtifactAccess(f2.aws, 'da', da, {publicRead: false, vpcEndpointId: 'vpce-0abc'}))
+    checkArtifactAccess(f2.aws, planArtifactAccess(f2.aws, 'da', da, {publicRead: false}))
+  })
+
   it('refuses to turn public read off without a usable same-region VPC endpoint read path', () => {
     const f = fixture()
     applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, {publicRead: true}))

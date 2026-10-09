@@ -125,6 +125,17 @@ export function renderSignerPolicyEnv(input: SignerPolicyBundleInput): string {
   ].join('\n')
 }
 
+/**
+ * Create the operator's transport key once and validate it on every run. A
+ * rerun after an interrupted onboarding must reuse the key whose public half
+ * the TSO directory may already pin; rotation is a separate, explicit step.
+ */
+export const TRANSPORT_KEY_COMMANDS = [
+  'TRANSPORT_KEY="signer-$SIGNER_ID/transport.key"',
+  '[ -e "$TRANSPORT_KEY" ] || (umask 077 && set -C && openssl rand -hex 32 > "$TRANSPORT_KEY")',
+  'grep -Eqx \'[0-9a-f]{64}\' "$TRANSPORT_KEY" || { echo "$TRANSPORT_KEY is not a 32-byte hex key; restore it (rotation is a separate step)" >&2; false; }',
+].join('\n')
+
 export function renderPartnerCommands(input: SignerPolicyBundleInput): string {
   const profile = signerRuntimePolicyProfile(input.enforcement)
   const signerRows = input.signers
@@ -172,8 +183,9 @@ export DOGE_NETWORK='${input.network}'
 #    pull delivery and the transport key file below.
 scrollsdk signer init --id "$SIGNER_ID" --network "$DOGE_NETWORK"
 # 2. Transport key: a separate secret that authenticates this signer to the
-#    TSO. Generate it locally; it never leaves your host.
-(umask 077 && openssl rand -hex 32 > "signer-$SIGNER_ID/transport.key")
+#    TSO. Generated locally only if absent (exclusive create, never
+#    overwritten); an existing key is reused and validated.
+${TRANSPORT_KEY_COMMANDS}
 cp "signer-$SIGNER_ID/attestation-signer.env" "signer-$SIGNER_ID/attestation-signer.toml" \\
   "signer-$SIGNER_ID/transport.key" docker-compose/
 chmod 600 docker-compose/attestation-signer.env docker-compose/transport.key
@@ -193,6 +205,10 @@ that context is generated after the descriptor keyset is fixed.
 
 Keep \`transport.key\` with the signing env: the TSO pins its public key, so
 losing it means a coordinated config change. Never send it to anyone.
+Rerunning these commands never replaces it. Rotation is an explicit,
+coordinated step: move the old file aside, create a new key, send the new
+descriptor, and switch the runtime key only after the bridge operator has
+updated the TSO signer directory.
 
 For KMS add its backend flags. Production operators must also pass the approved
 \`--allowed-release-version\` and full \`--allowed-git-commit\`.

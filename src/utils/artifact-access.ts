@@ -97,22 +97,36 @@ export function buildArchiveBucketPolicy(
 ): Document {
   const sids = ARCHIVE_POLICY_SIDS[kind]
   const resource = objectArn(normalizeProofBucketName(bucket), normalizeProofKeyPrefix(keyPrefix))
+  const publicRead = {Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: resource, Sid: sids.publicRead}
+  const vpceRead = (endpointId: unknown): Document => ({
+    Action: 's3:GetObject',
+    Condition: {StringEquals: {'aws:SourceVpce': endpointId}},
+    Effect: 'Allow',
+    Principal: '*',
+    Resource: resource,
+    Sid: sids.vpceRead,
+  })
   const current = new Map(statementsOf(existing).filter(item => typeof item.Sid === 'string').map(item => [item.Sid as string, item]))
+  // A preserved owned statement is trusted only in its exact canonical shape;
+  // anything else under an owned Sid (e.g. an added PutObject) must be
+  // reconciled explicitly, never carried forward under the CLI's name.
+  const preserved = (sid: string, canonical: (item: Document) => Document, flag: string): Document | undefined => {
+    const item = current.get(sid)
+    if (item && !isDeepStrictEqual(item, canonical(item))) {
+      throw new Error(`Bucket policy statement ${sid} is not the canonical CLI statement for s3://${bucket}/${keyPrefix}; reconcile it explicitly with ${flag}`)
+    }
+
+    return item
+  }
+
   const desired: Record<string, Document | undefined> = {
     [DENY_INSECURE_TRANSPORT_SID]: denyInsecureTransportStatement(bucket),
     [sids.publicRead]: options.publicRead === undefined
-      ? current.get(sids.publicRead)
-      : options.publicRead ? {Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: resource, Sid: sids.publicRead} : undefined,
+      ? preserved(sids.publicRead, () => publicRead, '--public-read or --no-public-read')
+      : options.publicRead ? publicRead : undefined,
     [sids.vpceRead]: options.vpcEndpointId === undefined
-      ? current.get(sids.vpceRead)
-      : {
-          Action: 's3:GetObject',
-          Condition: {StringEquals: {'aws:SourceVpce': options.vpcEndpointId}},
-          Effect: 'Allow',
-          Principal: '*',
-          Resource: resource,
-          Sid: sids.vpceRead,
-        },
+      ? preserved(sids.vpceRead, item => vpceRead((item.Condition as any)?.StringEquals?.['aws:SourceVpce']), '--vpc-endpoint-id')
+      : vpceRead(options.vpcEndpointId),
   }
   const owned = new Set(Object.keys(desired))
   const statements = [

@@ -1,10 +1,15 @@
 import {parse} from '@iarna/toml'
 import {expect} from 'chai'
+import {spawnSync} from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 import type {SignerPolicyBundleInput} from '../../src/utils/signer-policy-bundle.js'
 
 import {
   ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE,
+  TRANSPORT_KEY_COMMANDS,
   renderPartnerCommands,
   renderSignerOperatorPolicyTemplate,
   renderSignerPolicyEnv,
@@ -124,7 +129,7 @@ describe('signer policy bundle V2', () => {
       'https://tso.bridge.example',
       // The transport key is generated locally, kept 0600 and mounted into the
       // same compose service that prints the identity and later runs.
-      '(umask 077 && openssl rand -hex 32 > "signer-$SIGNER_ID/transport.key")',
+      TRANSPORT_KEY_COMMANDS,
       'chmod 600 docker-compose/attestation-signer.env docker-compose/transport.key',
       'run --rm --no-deps -T attestation-signer',
       '--print-identity > "signer-$SIGNER_ID/identity.json"',
@@ -141,5 +146,29 @@ describe('signer policy bundle V2', () => {
     expect(commands).not.to.include('signer-reachability')
     expect(commands).not.to.include('verifier-registry.toml')
     expect(commands).not.to.include('source-set.toml')
+  })
+})
+
+describe('partner transport key commands', () => {
+  it('create the key once (0600), keep its bytes on rerun, and reject a corrupt key', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'transport-key-'))
+    try {
+      fs.mkdirSync(path.join(root, 'signer-partner-a'))
+      const run = () => spawnSync('bash', ['-c', TRANSPORT_KEY_COMMANDS], {cwd: root, encoding: 'utf8', env: {...process.env, SIGNER_ID: 'partner-a'}})
+      const key = path.join(root, 'signer-partner-a/transport.key')
+      expect(run().status).to.equal(0)
+      const first = fs.readFileSync(key, 'utf8')
+      expect(first).to.match(/^[\da-f]{64}\n$/)
+      expect(fs.statSync(key).mode % 0o1000).to.equal(0o600)
+      expect(run().status).to.equal(0)
+      expect(fs.readFileSync(key, 'utf8')).to.equal(first)
+      fs.writeFileSync(key, '')
+      const corrupt = run()
+      expect(corrupt.status).not.to.equal(0)
+      expect(corrupt.stderr).to.include('not a 32-byte hex key')
+      expect(fs.readFileSync(key, 'utf8')).to.equal('')
+    } finally {
+      fs.rmSync(root, {force: true, recursive: true})
+    }
   })
 })
