@@ -35,6 +35,7 @@ import {
   resolveDogecoinKubernetesEndpoints,
 } from './kubernetes-endpoints.js'
 import {buildProofCoordinatorIngress} from './proof-coordinator-ingress.js'
+import {buildS3PublicBaseUrl} from './s3-archive.js'
 import {
   ensureWithdrawalChartWiring,
   ensureWithdrawalProofActivationSwitch,
@@ -286,10 +287,11 @@ function buildEthDaSubmitterS3Env(spec: DeploymentSpec): Record<string, string> 
 
 function buildEthereumDaS3BlobSourceEnv(prefix: string, spec: DeploymentSpec): Record<string, string> {
   const s3 = getEthereumDaS3ArchiveConfig(spec)
-  if (!isEthereumDaS3ArchiveEnabled(spec) || !s3.publicBaseUrl) return {}
+  const publicBaseUrl = buildS3PublicBaseUrl(s3)
+  if (!isEthereumDaS3ArchiveEnabled(spec) || !publicBaseUrl) return {}
 
   const env: Record<string, string> = {
-    [`${prefix}__BLOB_SOURCE__AWS_S3__URL`]: s3.publicBaseUrl,
+    [`${prefix}__BLOB_SOURCE__AWS_S3__URL`]: publicBaseUrl,
   }
 
   addStringEnvIfDefined(env, `${prefix}__BLOB_SOURCE__AWS_S3__KEY_PREFIX`, s3.keyPrefix)

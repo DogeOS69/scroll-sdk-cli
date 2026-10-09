@@ -68,6 +68,22 @@ function proofFixture(): DeploymentSpec {
 }
 
 describe('spec intent through configuration and values projection', () => {
+  for (const publicBaseUrl of [undefined, 'https://blob-gateway.example.invalid']) {
+    it(`projects the ${publicBaseUrl ? 'explicit gateway' : 'derived AWS'} blob read URL consistently`, () => {
+      const spec = proofFixture()
+      spec.ethereumDa!.blobArchive!.s3!.publicBaseUrl = publicBaseUrl
+      const expected = publicBaseUrl ?? 'https://audit-blobs.s3.us-west-2.amazonaws.com'
+      expect(validateDeploymentSpec(spec).valid).to.equal(true)
+      const config = toml.parse(generateAllConfigs(spec)['doge-config.toml']) as any
+      expect(config.ethereumDa.blobArchive.s3.publicBaseUrl).to.equal(expected)
+      const l1 = parseValues(spec, 'l1-interface')
+      expect(l1.configMaps.env.data.DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL).to.equal(expected)
+      expect(l1.configMaps.env.data.DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__KEY_PREFIX).to.equal('blobs')
+      const wp = parseValues(spec, 'withdrawal-processor')
+      expect(wp.env.find((entry: any) => entry.name === 'DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__AWS_S3__URL').value).to.equal(expected)
+    })
+  }
+
   it('retains proof intent after generating from an external custom-named spec and removing the source', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'spec-proof-handoff-'))
     try {

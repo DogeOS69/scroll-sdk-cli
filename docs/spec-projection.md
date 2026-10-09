@@ -286,3 +286,18 @@ identities only. Archive IAM/S3 reconciliation is separate:
 `setup eth-da-submitter` configures archive access after signer preparation.
 Partner attestation descriptors and CubeSigner sessions likewise come from their
 own owners and setup steps; spec intent does not fabricate those credentials.
+
+## Blob archive read URL and example fee units
+
+For an enabled AWS S3 blob archive, `bucket` and `region` are required.
+`publicBaseUrl` is optional: configuration and values generation derive
+`https://<bucket>.s3.<region>.amazonaws.com` when it is omitted. An explicit
+`publicBaseUrl` overrides the read origin, for example for a CDN or public gateway
+serving the same objects. Keep `keyPrefix` separate; consumers append it. This
+configuration does not grant bucket access. A custom S3-compatible write endpoint
+is not necessarily its public read origin; provide the read URL explicitly there.
+
+The example specs match the SDK's `config.toml.example` withdrawal policy:
+`withdrawalFeeWei: "100000000000000000"` is 0.1 DOGE and
+`minWithdrawalAmountWei: "1000000000000000000"` is 1 DOGE. L2 native amounts use
+18 decimals, independently of Dogecoin L1's satoshi denomination.

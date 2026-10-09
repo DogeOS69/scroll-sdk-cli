@@ -477,7 +477,7 @@ describe('deployment-spec-generator', () => {
       )).to.be.true;
     });
 
-    it('fails when enabled Ethereum DA S3 archive is missing publicBaseUrl', () => {
+    it('accepts bucket and region without an explicit S3 publicBaseUrl', () => {
       const spec = createMinimalSpec();
       spec.ethereumDa!.blobArchive = {
         s3: {
@@ -489,11 +489,9 @@ describe('deployment-spec-generator', () => {
 
       const result = validateDeploymentSpec(spec);
 
-      expect(result.valid).to.be.false;
-      expect(result.errors.some(error =>
-        error.code === 'E002_MISSING_REQUIRED_FIELD' &&
-        error.path === 'ethereumDa.blobArchive.s3.publicBaseUrl'
-      )).to.be.true;
+      expect(result.valid).to.be.true;
+      const config = toml.parse(generateDogeConfigToml(spec)) as any;
+      expect(config.ethereumDa.blobArchive.s3.publicBaseUrl).to.equal('https://dogeos-da.s3.us-east-1.amazonaws.com');
     });
 
     it('fails when Ethereum DA inbox worker start block is negative', () => {

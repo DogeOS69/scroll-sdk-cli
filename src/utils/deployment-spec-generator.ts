@@ -33,6 +33,7 @@ import {assertDeploymentSpecFields, validateDeploymentSpecFields} from './deploy
 import {validateDstackControllerConfig} from './dstack-controller-values.js'
 import {ETHEREUM_DA_RUNTIME_FIELDS} from './ethereum-da-runtime.js'
 import {stripRetiredServiceConfig} from './retired-services.js'
+import {buildS3PublicBaseUrl} from './s3-archive.js'
 import { normalizeCompressedSecp256k1PublicKey } from './secp256k1-public-key.js'
 import { MANAGED_SIGNER_ROLES, buildLocalSignerConfig } from './signer-roles.js'
 import {resolveSpecIdentities} from './spec-identities.js'
@@ -816,7 +817,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
 
   const ethereumDaS3Archive = spec.ethereumDa?.blobArchive?.s3
   if (ethereumDaS3Archive?.enabled === true) {
-    for (const field of ['bucket', 'region', 'publicBaseUrl'] as const) {
+    for (const field of ['bucket', 'region'] as const) {
       if (!ethereumDaS3Archive[field]) {
         errors.push({
           code: 'E002_MISSING_REQUIRED_FIELD',
@@ -1505,7 +1506,8 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   if (ethereumDaS3Archive) {
     config.ethereumDa.blobArchive = {
       s3: Object.fromEntries(
-        Object.entries(ethereumDaS3Archive).filter(([, value]) => value !== undefined)
+        Object.entries({...ethereumDaS3Archive, ...(ethereumDaS3Archive.enabled === true
+          ? {publicBaseUrl: buildS3PublicBaseUrl(ethereumDaS3Archive)} : {})}).filter(([, value]) => value !== undefined)
       ),
     }
   }

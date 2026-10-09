@@ -140,8 +140,8 @@ bridge:
   confirmationsRequired: 1
   fees:
     depositFeeSats: "1000000000000000000"
-    withdrawalFeeWei: "100000000000000"
-    minWithdrawalAmountWei: "1000000000000000"
+    withdrawalFeeWei: "100000000000000000" # 0.1 DOGE (L2 uses 18 decimals)
+    minWithdrawalAmountWei: "1000000000000000000" # 1 DOGE
   feeRecipient: "0x0000000000000000000000000000000000000000"
 
 signing:
