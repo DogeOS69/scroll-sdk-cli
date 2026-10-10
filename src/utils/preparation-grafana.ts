@@ -2,13 +2,14 @@ import * as toml from '@iarna/toml'
 import * as yaml from 'js-yaml'
 import fs from 'node:fs'
 import path from 'node:path'
+import {isDeepStrictEqual} from 'node:util'
 
 import type {DogeConfig} from '../types/doge-config.js'
 
 import {configureGrafanaAdmin, grafanaAdminReference, writeGrafanaPrivateFile} from './grafana-admin.js'
 import {reconcileScrollMonitorGrafana} from './scroll-monitor-values.js'
 
-/** Prepare the admin identity before gen-secrets in a fresh spec deployment. */
+/** Prepare the admin identity before charts bind the deployment config hash. */
 export async function prepareGrafanaAdmin(root: string): Promise<void> {
   root = fs.realpathSync(root)
   const valuesFile = path.join(root, 'values/scroll-monitor-production.yaml')
@@ -25,8 +26,8 @@ export async function prepareGrafanaAdmin(root: string): Promise<void> {
     throw new Error('Grafana Secret already exists without its admin identity; restore grafana credentials in .data/doge-config.toml before resuming')
   }
 
-  config.grafana = await configureGrafanaAdmin({...reference, ...existing}, true)
-  writeGrafanaPrivateFile(file, toml.stringify(config as unknown as toml.JsonMap))
+  config.grafana = await configureGrafanaAdmin({...resolved, ...existing}, true)
+  if (!isDeepStrictEqual({...config.grafana}, {...existing})) writeGrafanaPrivateFile(file, toml.stringify(config as unknown as toml.JsonMap))
   if (reconcileScrollMonitorGrafana(values, config.grafana).length > 0) {
     fs.writeFileSync(valuesFile, yaml.dump(values, {lineWidth: -1, noRefs: true}))
   }

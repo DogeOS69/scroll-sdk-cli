@@ -51,18 +51,21 @@ export function reconcileMonitoringSlack(values: Record<string, any>, config?: M
       if (next.grafana.enabled === false) throw new Error('monitoring.slack requires bundled Grafana')
       const contactPointName = next.grafanaAlerting?.defaultContactPoint?.name || 'slack-alerts'
       const existing = next.grafana.alerting[PROVISIONING_FILE]?.contactPoints?.flatMap((point: any) => point.receivers ?? []).find((receiver: any) => receiver.uid === 'dogeos-spec-slack')
+      const settings = {...existing?.settings, url: `$${ENV_NAME}`}
+      for (const field of ['text', 'title']) {
+        const template = `{{ template "scroll-monitor.slack.${field}" . }}`
+        // The Grafana subchart evaluates provisioning with Helm's tpl first.
+        // Leave Grafana notification expressions literal for its own runtime.
+        if (settings[field] === undefined || settings[field] === template) settings[field] = '{{ `' + template + '` }}'
+      }
+
       next.grafana.envValueFrom[ENV_NAME] = {secretKeyRef: reference}
       next.grafana.alerting[PROVISIONING_FILE] = {
         apiVersion: 1,
         contactPoints: [{name: contactPointName, orgId: 1, receivers: [{
           disableResolveMessage: false,
           ...existing,
-          settings: {
-            text: '{{ template "scroll-monitor.slack.text" . }}',
-            title: '{{ template "scroll-monitor.slack.title" . }}',
-            ...existing?.settings,
-            url: `$${ENV_NAME}`,
-          },
+          settings,
           type: 'slack', uid: 'dogeos-spec-slack',
         }]}],
       }

@@ -210,6 +210,9 @@ export class CommandPreparationRunner implements PreparationRunner {
         }
 
         bindPreparedProofAws(root)
+        // Proof contracts bind the complete doge-config file. Prepare credentials
+        // before compiling that binding, never between compilation and export.
+        await prepareGrafanaAdmin(root)
         const args = ['prep-charts', '-N', '--skip-auth-check', '--skip-l2-contract-deployment-block']
         const receipt = p.proofMaterials.receipt ?? '.data/proof-materials-v1.json'
         if (fs.existsSync(path.resolve(root, receipt))) args.push('--proof-materials-receipt', receipt)
@@ -230,7 +233,6 @@ export class CommandPreparationRunner implements PreparationRunner {
           productionFeeWallet(root, spec)
         }
 
-        await prepareGrafanaAdmin(root)
         await command(['gen-secrets', '-N']); break
       }
 

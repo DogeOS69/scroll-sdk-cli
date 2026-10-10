@@ -444,6 +444,31 @@ describe('resumable preparation plan', () => {
     expect(calls).to.equal(2)
   })
 
+  it('prepares Grafana before proof compilation and keeps the bound config stable through secret generation', async () => {
+    const spec = fixture()
+    const plan = await makePlan()
+    const file = path.join(deployment, '.data/doge-config.toml')
+    fs.mkdirSync(path.dirname(file), {recursive: true})
+    fs.mkdirSync(path.join(deployment, 'values'), {recursive: true})
+    fs.writeFileSync(file, toml.stringify({bootnodeReth: {instances: [{index: 0}]}}))
+    fs.writeFileSync(path.join(deployment, 'values/scroll-monitor-production.yaml'), 'grafana:\n  enabled: true\n  admin:\n    existingSecret: grafana-admin\n')
+    let compiled = ''
+    const runner = new CommandPreparationRunner(async (_root, _step, args) => {
+      if (args[0] === 'prep-charts') {
+        compiled = fs.readFileSync(file, 'utf8')
+        expect((toml.parse(compiled).grafana as any).adminPassword).to.have.length(32)
+      } else if (args[0] === 'gen-secrets') {
+        expect(fs.readFileSync(file, 'utf8')).to.equal(compiled)
+      }
+    })
+    const steps = preparationSteps(spec)
+    await runner.run(steps.find(step => step.id === 'charts')!, spec, deployment, plan)
+    const first = compiled
+    await runner.run(steps.find(step => step.id === 'secrets')!, spec, deployment, plan)
+    await runner.run(steps.find(step => step.id === 'charts')!, spec, deployment, plan)
+    expect(compiled).to.equal(first)
+  })
+
   it('restores missing bootnodes before charts without repeating other identity preparation', async () => {
     const spec = fixture()
     spec.identities!.bootnodes!.push({index: 1, nodekey: {action: 'create'}})

@@ -1,5 +1,6 @@
 import {expect} from 'chai'
 import * as yaml from 'js-yaml'
+import {execFileSync, spawnSync} from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -24,6 +25,23 @@ describe('spec Slack notification wiring', () => {
     expect(values.grafana.envValueFrom).not.to.have.property('DOGEOS_SLACK_WEBHOOK_URL')
     expect(values.grafana.envValueFrom).to.have.property('UNRELATED')
     expect(values.grafana.alerting['dogeos-slack.yaml'].deleteContactPoints).to.deep.equal([{orgId: 1, uid: 'dogeos-spec-slack'}])
+  })
+
+  it('preserves Grafana notification expressions through Helm tpl, including existing generated values', function () {
+    if (spawnSync('helm', ['version', '--short']).status !== 0) this.skip()
+    const values: any = {grafana: {alerting: {'dogeos-slack.yaml': {contactPoints: [{receivers: [{settings: {text: '{{ template "scroll-monitor.slack.text" . }}', title: 'Operator title'}, uid: 'dogeos-spec-slack'}]}]}}}}
+    reconcileMonitoringSlack(values, {slack: {enabled: true}})
+    fs.mkdirSync(path.join(root, 'templates'))
+    fs.writeFileSync(path.join(root, 'Chart.yaml'), 'apiVersion: v2\nname: notification-test\nversion: 0.1.0\n')
+    fs.writeFileSync(path.join(root, 'values.yaml'), yaml.dump(values))
+    fs.writeFileSync(path.join(root, 'templates/config.yaml'), 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: notification-test\ndata:\n  provisioning: |\n{{ tpl (toYaml .Values.grafana.alerting) . | indent 4 }}\n')
+    const rendered = yaml.load(execFileSync('helm', ['template', 'notification-test', root], {encoding: 'utf8'})) as any
+    const provisioning = yaml.load(rendered.data.provisioning) as any
+    const {settings} = provisioning['dogeos-slack.yaml'].contactPoints[0].receivers[0]
+    expect(settings.text).to.equal('{{ template "scroll-monitor.slack.text" . }}')
+    expect(settings.title).to.equal('Operator title')
+    expect(settings.url).to.equal('$DOGEOS_SLACK_WEBHOOK_URL')
+    expect(reconcileMonitoringSlack(values, {slack: {enabled: true}})).to.deep.equal([])
   })
 
   it('rejects missing, placeholder and untrusted webhook inputs without echoing them', () => {
