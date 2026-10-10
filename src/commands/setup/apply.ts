@@ -1,5 +1,6 @@
 import {Command, Flags} from '@oclif/core'
 
+import {DEFAULT_DEPLOYMENT} from '../../utils/deployment-paths.js'
 import {JsonOutputContext} from '../../utils/json-output.js'
 import {applyPreparation} from '../../utils/preparation-plan.js'
 import {CommandPreparationRunner} from '../../utils/preparation-runner.js'
@@ -7,7 +8,7 @@ import {CommandPreparationRunner} from '../../utils/preparation-runner.js'
 export default class SetupApply extends Command {
   static description = 'Apply or resume a saved preparation plan; waits for external inputs and never automatically repeats ambiguous broadcasts'
   static flags = {
-    dir: Flags.string({description: 'Deployment directory created by setup plan', required: true}),
+    dir: Flags.string({aliases: ['deployment-dir'], default: DEFAULT_DEPLOYMENT, description: 'Deployment directory created by setup plan, relative to the working directory'}),
     'dogecoin-routing-spec': Flags.string({dependsOn: ['refresh-runtime'], description: 'With refresh-runtime, import only dogecoin.kubernetes from this spec and cluster RPC credentials from the environment'}),
     json: Flags.boolean({default: false}),
     'refresh-runtime': Flags.boolean({default: false, description: 'Archive runtime evidence and regenerate from charts; preserve identities, genesis, funding and baked proof materials'}),

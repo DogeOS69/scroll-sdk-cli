@@ -5,7 +5,7 @@ import bitcore from 'bitcore-lib-doge'
 import {expect} from 'chai'
 import {Wallet} from 'ethers'
 import * as yaml from 'js-yaml'
-import {execFileSync} from 'node:child_process'
+import {execFileSync, spawnSync} from 'node:child_process'
 import {createHash} from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -65,6 +65,48 @@ describe('resumable preparation plan', () => {
   })
   afterEach(() => {fs.rmSync(root, {force: true, recursive: true})})
   const makePlan = () => createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml')})
+
+  it('runs plan and resumes apply with conventional paths, and supports explicit overrides', async function () {
+    this.timeout(60_000)
+    fs.renameSync(sdk, path.join(root, 'scroll-sdk'))
+    const instance = path.join(root, 'instance')
+    fs.mkdirSync(instance)
+    const spec = fixture()
+    spec.accounts.owner.address = '$ENV:DEPLOYMENT_PATH_TEST_OWNER'
+    fs.writeFileSync(path.join(instance, 'deployment-spec.yaml'), yaml.dump(spec))
+    const owner = Wallet.createRandom().address
+    const envFile = path.join(instance, 'deployment.env')
+    fs.writeFileSync(envFile, `DEPLOYMENT_PATH_TEST_OWNER=${owner}\n`)
+    const env = {...process.env}
+    delete env.DEPLOYMENT_PATH_TEST_OWNER
+    const command = (args: string[]) => spawnSync(process.execPath, [path.join(cli, 'bin/run.js'), 'setup', ...args, '--json'], {cwd: instance, encoding: 'utf8', env})
+    const planned = command(['plan'])
+    expect(planned.status, planned.stderr + planned.stdout).to.equal(0)
+    const output = path.join(instance, 'deployment')
+    const plan = JSON.parse(fs.readFileSync(path.join(output, '.scrollsdk/plan.json'), 'utf8'))
+    expect(plan.envFile).to.equal(envFile)
+    expect(plan.sdkDirectory).to.equal(path.join(root, 'scroll-sdk'))
+    expect(JSON.parse(fs.readFileSync(path.join(output, '.scrollsdk/intent.json'), 'utf8')).accounts.owner.address).to.equal(owner)
+
+    // Complete synthetic steps in-process; the actual CLI resume must not run
+    // any cloud, Docker, chain or Kubernetes operations in this path test.
+    try {await applyPreparation(output, {async run() {}})} finally {delete process.env.DEPLOYMENT_PATH_TEST_OWNER}
+    for (const args of [['apply'], ['apply', '--deployment-dir', 'deployment']]) {
+      const applied = command(args)
+      expect(applied.status, applied.stderr + applied.stdout).to.equal(0)
+      expect(JSON.parse(applied.stdout).data.status).to.equal('prepared')
+    }
+
+    const custom = command(['plan', '--spec', 'deployment-spec.yaml', '--env-file', 'deployment.env', '--sdk-dir', '../scroll-sdk', '--output', 'custom output'])
+    expect(custom.status, custom.stderr + custom.stdout).to.equal(0)
+    expect(fs.existsSync(path.join(instance, 'custom output/.scrollsdk/plan.json'))).to.equal(true)
+    const missing = command(['plan', '--env-file', 'missing.env', '--output', 'must-not-exist'])
+    expect(missing.status).not.to.equal(0)
+    expect(fs.existsSync(path.join(instance, 'must-not-exist'))).to.equal(false)
+    const generated = command(['generate-from-spec', '--dry-run'])
+    expect(generated.status, generated.stderr + generated.stdout).to.equal(0)
+    expect(fs.existsSync(path.join(instance, 'config.toml'))).to.equal(false)
+  })
 
   it('refreshes only the runtime tail, archives previous evidence and preserves pinned deployment artifacts', async () => {
     await makePlan()

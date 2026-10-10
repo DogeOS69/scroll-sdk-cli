@@ -2,6 +2,7 @@ import { Command, Flags } from '@oclif/core'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import {DEFAULT_SDK, DEFAULT_SPEC, deploymentEnvFile} from '../../utils/deployment-paths.js'
 import {
   type GeneratedConfigs,
   generateAllConfigs,
@@ -10,45 +11,13 @@ import {
   writeGeneratedConfigs
 } from '../../utils/deployment-spec-generator.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
+import {loadPreparationEnv} from '../../utils/preparation-io.js'
 import {resolvePreparationProofRelease} from '../../utils/preparation-release.js'
 import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles} from '../../utils/retired-services.js'
 import {mergeBootstrapValues, planSpecBootstrap} from '../../utils/spec-bootstrap.js'
 import {resolveCubesignerIdentity} from '../../utils/spec-cubesigner.js'
 import { type GeneratedValuesFiles, generateValuesFiles } from '../../utils/values-generator.js'
-
-function parseEnvValue(rawValue: string): string {
-  const trimmed = rawValue.trim()
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1)
-  }
-
-  return trimmed
-}
-
-function loadEnvFile(filePath: string): string[] {
-  const loadedKeys: string[] = []
-  const content = fs.readFileSync(filePath, 'utf8')
-
-  for (const line of content.split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-
-    const match = trimmed.match(/^(?:export\s+)?([\w.-]+)\s*=\s*(.*)$/)
-    if (!match) continue
-
-    const key = match[1]
-    if (process.env[key] !== undefined) continue
-
-    process.env[key] = parseEnvValue(match[2])
-    loadedKeys.push(key)
-  }
-
-  return loadedKeys
-}
 
 function collectEnvRefs(content: string): string[] {
   const refs = new Set<string>()
@@ -62,32 +31,28 @@ function collectEnvRefs(content: string): string[] {
   return [...refs].sort()
 }
 
-function uniquePaths(paths: string[]): string[] {
-  return [...new Set(paths.map(candidate => path.resolve(candidate)))]
-}
-
 export default class GenerateFromSpec extends Command {
   static override description = 'Generate configuration files from a DeploymentSpec YAML file'
 
   static override examples = [
     '# Generate configs in current directory',
-    '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml',
+    '<%= config.bin %> <%= command.id %>',
     '',
     '# Generate configs to specific output directory',
-    '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml --output ./my-deployment',
+    '<%= config.bin %> <%= command.id %> --output ./my-deployment',
     '',
     '# Generate with JSON output for automation',
-    '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml --json',
+    '<%= config.bin %> <%= command.id %> --json',
     '',
     '# Load private keys/passwords from an env file before deriving account addresses',
-    '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml --env-file .env.local',
+    '<%= config.bin %> <%= command.id %> --env-file custom.env',
     '',
     '# Dry run - validate and show what would be generated',
-    '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml --dry-run',
+    '<%= config.bin %> <%= command.id %> --dry-run',
     '',
     '# Generate Helm values files explicitly',
-    '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml --with-values',
-    '<%= config.bin %> <%= command.id %> --spec deployment-spec.yaml --values-only',
+    '<%= config.bin %> <%= command.id %> --with-values',
+    '<%= config.bin %> <%= command.id %> --values-only',
   ]
 
   static override flags = {
@@ -101,7 +66,7 @@ export default class GenerateFromSpec extends Command {
       description: 'Validate spec and show what would be generated without writing files',
     }),
     'env-file': Flags.string({
-      description: 'Load dotenv-style environment variables before parsing the spec. Defaults to .env.local/.env next to the spec and current directory when present.',
+      description: 'Private NAME=value file (default: ./deployment.env when present); process environment takes precedence.',
     }),
     force: Flags.boolean({
       char: 'f',
@@ -117,11 +82,11 @@ export default class GenerateFromSpec extends Command {
       default: '.',
       description: 'Output directory for generated files',
     }),
-    'sdk-dir': Flags.string({description: 'Local SDK checkout for --bootstrap; defaults to committed HEAD; templates.sdkRevision optionally overrides it.'}),
+    'sdk-dir': Flags.string({description: 'Local SDK checkout for --bootstrap (default: ../scroll-sdk); locks committed HEAD unless templates.sdkRevision overrides it.'}),
     spec: Flags.string({
       char: 's',
+      default: DEFAULT_SPEC,
       description: 'Path to DeploymentSpec YAML file',
-      required: true,
     }),
     'values-only': Flags.boolean({
       default: false,
@@ -187,40 +152,16 @@ export default class GenerateFromSpec extends Command {
     const specContent = fs.readFileSync(specPath, 'utf8')
     const envRefs = collectEnvRefs(specContent)
 
-    const envFiles = flags['env-file']
-      ? [path.resolve(flags['env-file'])]
-      : uniquePaths([
-        path.join(path.dirname(specPath), '.env.local'),
-        path.join(path.dirname(specPath), '.env'),
-        path.join(process.cwd(), '.env.local'),
-        path.join(process.cwd(), '.env'),
-      ])
-
-    const loadedEnvFiles: string[] = []
-    for (const envFile of envFiles) {
-      if (fs.existsSync(envFile)) {
-        const loadedKeys = loadEnvFile(envFile)
-        loadedEnvFiles.push(envFile)
-        jsonCtx.info(`Loaded env file: ${envFile} (${loadedKeys.length} new variable(s))`)
-      } else if (flags['env-file']) {
-        jsonCtx.error(
-          'E601_FILE_NOT_FOUND',
-          `Env file not found: ${envFile}`,
-          'CONFIGURATION',
-          true,
-          { path: envFile }
-        )
-      }
+    const envFile = deploymentEnvFile(flags['env-file'])
+    try {
+      loadPreparationEnv(envFile)
+      if (envFile) jsonCtx.info(`Loaded env file: ${envFile}`)
+    } catch {
+      jsonCtx.error('E601_FILE_NOT_FOUND', 'Cannot read or parse the deployment environment file', 'CONFIGURATION', true)
     }
 
-    if (!flags['env-file'] && loadedEnvFiles.length === 0 && envRefs.length > 0) {
-      const exampleEnvPath = path.join(process.cwd(), '.env.example')
-      const suggestion = fs.existsSync(exampleEnvPath)
-        ? `Create .env from .env.example, fill real values, then rerun this command. Example: cp .env.example .env`
-        : `Create .env or .env.local with the required variables, or pass --env-file /path/to/env.`
-      jsonCtx.addWarning(
-        `No env file loaded. Looked for: ${envFiles.join(', ')}. Spec references ${envRefs.length} env variable(s): ${envRefs.join(', ')}. ${suggestion}`
-      )
+    if (!envFile && envRefs.some(key => process.env[key] === undefined)) {
+      jsonCtx.addWarning('No deployment.env found. Fill deployment.env or export the required variables, then rerun this command.')
     }
 
     // Load and validate the spec
@@ -282,7 +223,7 @@ export default class GenerateFromSpec extends Command {
     // Check what files would be generated
     const generateConfigs = !flags['values-only']
     const generateValues = flags.bootstrap || flags['with-values'] || flags['values-only']
-    const bootstrapFiles = flags.bootstrap ? planSpecBootstrap(spec, flags['sdk-dir']) : {}
+    const bootstrapFiles = flags.bootstrap ? planSpecBootstrap(spec, flags['sdk-dir'] ?? DEFAULT_SDK) : {}
 
     let configs: GeneratedConfigs | null = null
     let valuesFiles: GeneratedValuesFiles | null = null

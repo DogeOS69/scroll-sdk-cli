@@ -71,15 +71,33 @@ or automatically rent a GPU.
 
 
 ```bash
-scrollsdk setup plan --spec ./deployment-spec.yaml \
-  --output /private/deployment --sdk-dir /path/to/scroll-sdk \
-  --env-file /private/deployment.env
-scrollsdk setup apply --dir /private/deployment
+# From the private working directory containing the edited inputs:
+scrollsdk setup plan
+scrollsdk setup apply
 ```
 
-`--env-file` is optional. It is parsed as `NAME=value` data, never sourced as a
-shell script. Existing process environment variables take precedence. The file
-reference is retained for subsequent apply invocations. Keep it private and
+| Path | Convention | Optional override |
+| --- | --- | --- |
+| Spec | `./deployment-spec.yaml` | `plan --spec <file>` |
+| Private environment | `./deployment.env` when present | `plan --env-file <file>` |
+| SDK checkout | `../scroll-sdk` | `plan --sdk-dir <directory>` |
+| Output | `./deployment/` | `plan --output <directory>` |
+| Plan to apply | `./deployment/` | `apply --dir <directory>` (alias `--deployment-dir`) |
+
+Paths are relative to the working directory; keep running plan/apply there.
+A custom plan output requires the matching apply override. Plan prints that command.
+The lower-level `generate-from-spec` command uses the same spec and environment
+conventions, writes to `.` by default, and uses `../scroll-sdk` for `--bootstrap`.
+It does not search `.env` or `.env.local`; select another filename explicitly.
+After entering the generated deployment or its runtime copy, `proof-worker`,
+`proof-config-check` and `monitoring-secrets` use `.` for `--deployment-dir`.
+Monitoring reuses the plan's environment-file reference, falling back to
+`deployment.env` in the deployment directory only if no reference was saved.
+
+`--env-file` is optional. An absent conventional file permits process-environment
+inputs; an explicitly selected missing file is an error. The file is parsed as
+`NAME=value` data, never sourced as a shell script. Existing process environment
+variables take precedence. The file reference is retained for subsequent apply invocations. Keep it private and
 available when applying. Planning resolves spec environment references into a
 private intent snapshot; wallet import references still identify environment
 variable names resolved at execution time.
@@ -504,8 +522,7 @@ Generation emits Secret references only; `gen-secrets` writes the private Slack
 Secret and rejects missing/placeholder values without exposing them. Preparation
 with `secretUpload.kubeContext` also runs `setup monitoring-secrets --apply` for
 Grafana/Slack Secrets; an AWS JSON/env upload by itself does not create them.
-For manual upload, run `setup monitoring-secrets --env-file /private/deployment.env
---apply --kube-context CONTEXT --namespace NAMESPACE` from the generated directory,
+For manual upload, run `setup monitoring-secrets --apply --kube-context CONTEXT --namespace NAMESPACE` from the generated directory,
 then `make install-scroll-monitor`. Webhook rotation requires restarting Grafana
 after Secret upload. Explicitly disabling Slack removes only the spec-owned
 receiver; no test message is sent by this command. The existing monitor YAML selects Grafana or Prometheus/Alertmanager; generation

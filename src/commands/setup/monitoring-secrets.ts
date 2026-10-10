@@ -6,6 +6,7 @@ import path from 'node:path'
 
 import type {DogeConfig} from '../../types/doge-config.js'
 
+import {savedDeploymentEnvFile} from '../../utils/deployment-paths.js'
 import {writeGrafanaAdminSecret} from '../../utils/grafana-admin.js'
 import {JsonOutputContext} from '../../utils/json-output.js'
 import {writeMonitoringSlackSecret} from '../../utils/monitoring-slack.js'
@@ -17,7 +18,7 @@ export default class MonitoringSecrets extends Command {
   static override flags = {
     apply: Flags.boolean({default: false, dependsOn: ['kube-context', 'namespace']}),
     'deployment-dir': Flags.string({default: '.'}),
-    'env-file': Flags.string({description: 'Private literal NAME=value file containing SLACK_WEBHOOK_URL when enabled'}),
+    'env-file': Flags.string({description: 'Private NAME=value file; defaults to the saved plan reference, then deployment.env in the deployment directory'}),
     json: Flags.boolean({default: false}),
     'kube-context': Flags.string(),
     namespace: Flags.string(),
@@ -28,7 +29,7 @@ export default class MonitoringSecrets extends Command {
     const output = new JsonOutputContext('setup monitoring-secrets', flags.json)
     try {
       const root = fs.realpathSync(path.resolve(flags['deployment-dir']))
-      loadPreparationEnv(flags['env-file'])
+      loadPreparationEnv(savedDeploymentEnvFile(root, flags['env-file']))
       // Validate Slack input before generating an unrelated admin identity.
       const read = () => toml.parse(fs.readFileSync(path.join(root, '.data/doge-config.toml'), 'utf8')) as unknown as DogeConfig
       const files: string[] = []
