@@ -54,16 +54,24 @@ describe('bounded proof-worker capacity', () => {
     expect(rentalEnvelope(resolveProofWorkers({maxDurationHours: 8, rentalBudgetUsd: 8}))).to.equal(7.07)
     expect(() => resolveProofWorkers({maxDurationHours: 48})).to.throw('rental envelope')
     expect(rentalEnvelope(resolveProofWorkers({maxDurationHours: 48, rentalBudgetUsd: 40}))).to.equal(39.07)
-    for (const bad of [{maxDurationHours: 49, rentalBudgetUsd: 100}, {idleTimeoutMinutes: 0}, {count: 0}, {memoryGb: 8}, {minReliability: 0.5}, {rentalBudgetUsd: Number.NaN}]) expect(() => resolveProofWorkers(bad)).to.throw()
+    for (const bad of [{idleTimeoutMinutes: 0}, {count: 0}, {memoryGb: 8}, {minReliability: 0.5}, {rentalBudgetUsd: Number.NaN}]) expect(() => resolveProofWorkers(bad)).to.throw()
   })
-  it('carries a two-day rental into both the task duration and the watchdog deadline', () => {
-    const {input} = fixturePlan()
-    input.spec.proofWorkers = {maxDurationHours: 48, rentalBudgetUsd: 40}
-    const plan = capacityPlan(input)
-    expect(plan.workers[0].task.max_duration).to.equal(172_800)
-    expect(plan.wallTimeoutSeconds).to.equal(175_800)
-    expect(plan.rentalEnvelopeUsd).to.equal(39.07)
-    expect(JSON.stringify(watchdogManifest(plan, 1000))).to.contain('175800')
+  it('carries operator durations into the task and watchdog without a CLI policy cap', () => {
+    for (const [hours, seconds, envelope] of [[0.1, 360, 0.75], [48, 172_800, 39.07], [49, 176_400, 39.87], [168, 604_800, 135.07], [720, 2_592_000, 576.67]]) {
+      const {input} = fixturePlan()
+      input.spec.proofWorkers = {maxDurationHours: hours, rentalBudgetUsd: 1000}
+      const plan = capacityPlan(input)
+      expect(plan.config.maxDurationHours).to.equal(hours)
+      expect(plan.workers[0].task.max_duration).to.equal(seconds)
+      expect(plan.wallTimeoutSeconds).to.equal(seconds + 3000)
+      expect(plan.rentalEnvelopeUsd).to.equal(envelope)
+      expect(JSON.stringify(watchdogManifest(plan, 1000))).to.contain(String(seconds + 3000))
+    }
+  })
+  it('rejects invalid durations instead of producing a zero or non-finite task timeout', () => {
+    for (const maxDurationHours of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_VALUE, 1 / 7200]) {
+      expect(() => resolveProofWorkers({maxDurationHours})).to.throw('positive finite duration')
+    }
   })
   it('uses unique worker identities, an exact GPU and zero minimum fleet size', () => {
     const {input} = fixturePlan()
