@@ -168,11 +168,12 @@ export function validateDstackControllerConfig(input: unknown): void {
   if (input === undefined) return
   const root = 'dstackController'
   const config = mapping(input, root, [
-    'enabled', 'auth', 'credentialSecrets', 'database', 'fullnameOverride', 'image',
+    'enabled', 'auth', 'credentialSecrets', 'database', 'defaultCredentialsEnabled', 'fullnameOverride', 'image',
     'ingress', 'monitoring', 'nodeSelector', 'persistence', 'podAnnotations', 'replicaCount',
     'resources', 'serverConfig', 'serviceAccount', 'tolerations',
   ])
   if (config.enabled !== undefined) bool(config.enabled, `${root}.enabled`)
+  if (config.defaultCredentialsEnabled !== undefined) bool(config.defaultCredentialsEnabled, `${root}.defaultCredentialsEnabled`)
   if (config.replicaCount !== undefined && ![0, 1].includes(config.replicaCount as number)) {
     throw new Error(`${root}.replicaCount must be 0 or 1`)
   }
@@ -223,6 +224,9 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
       existingSecret: config.database?.type === 'sqlite' ? '' : 'dstack-controller-database',
       key: 'database-url', type: 'postgresql', ...config.database,
     },
+    // IRSA must not fall back to the controller node's instance role.
+    ...(config.defaultCredentialsEnabled && config.serviceAccount?.annotations?.['eks.amazonaws.com/role-arn']
+      ? {extraEnv: [{name: 'AWS_EC2_METADATA_DISABLED', value: 'true'}]} : {}),
     ...(config.monitoring?.enabled === false ? {} : {fullnameOverride: config.fullnameOverride ?? 'dstack-controller'}),
     image: config.image ? {pullPolicy: 'IfNotPresent', tag: '', ...config.image} : {...DSTACK_CONTROLLER_IMAGE},
     ingress: {enabled: false, ...config.ingress},

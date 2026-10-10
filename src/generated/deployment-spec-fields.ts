@@ -30,7 +30,7 @@ export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kin
   "$.dogecoin.externalRpc": {"keys":["password","url","username"],"kind":"object"},
   "$.dogecoin.kubernetes": {"keys":["p2pPort","rpcPort","serviceName","zmqHashBlockPort","zmqHashTxPort","zmqRawBlockPort","zmqRawTxPort"],"kind":"object"},
   "$.dogecoin.rpc": {"keys":["password","url","username"],"kind":"object"},
-  "$.dstackController": {"keys":["auth","credentialSecrets","database","enabled","fullnameOverride","image","ingress","monitoring","nodeSelector","persistence","podAnnotations","replicaCount","resources","serverConfig","serviceAccount","tolerations"],"kind":"object"},
+  "$.dstackController": {"keys":["auth","credentialSecrets","database","defaultCredentialsEnabled","enabled","fullnameOverride","image","ingress","monitoring","nodeSelector","persistence","podAnnotations","replicaCount","resources","serverConfig","serviceAccount","tolerations"],"kind":"object"},
   "$.dstackController.auth": {"keys":["existingSecret","key"],"kind":"object"},
   "$.dstackController.credentialSecrets": {"kind":"array"},
   "$.dstackController.credentialSecrets[]": {"keys":["name","secretName"],"kind":"object"},

@@ -335,6 +335,35 @@ directly to the chart without an additional production values overlay. The CLI
 does not provision a PostgreSQL server; supply the database URL through the named
 Secret. For an isolated SQLite controller, set `database.type: sqlite` explicitly.
 
+### AWS worker credentials through IRSA
+
+Chart 0.1.3 supports cloud SDK default credentials with an explicit opt-in:
+
+```yaml
+dstackController:
+  enabled: true
+  defaultCredentialsEnabled: true
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/your-dstack-role
+```
+
+The CLI carries this setting through spec, doge-config TOML and regenerated Helm
+values. It stays false unless explicitly selected, even on an AWS cluster or when
+a role annotation is present. For this IRSA combination, generation also sets
+`AWS_EC2_METADATA_DISABLED=true` to prevent falling back to the node instance role.
+Kubernetes API token automount remains false; IRSA uses its own projected token.
+Default credentials without an IRSA annotation do not impose that metadata setting.
+
+The switch also enables automatic backend discovery in dstack 0.21.5. Configure
+the native AWS backend with `creds.type: default` in the referenced projects Secret,
+and grant the role only its intended provider permissions. This does not create
+an IAM role or AWS backend. The credential importer currently handles Vast.ai/GCP;
+for externally managed AWS controller Secrets, select `preparation.dstack.mode:
+external` in a plan/apply spec and provide those Secrets separately. Default
+Vast.ai deployments need no change. Hand-edited generated values are replaced on
+regeneration; keep this intent in the source configuration.
+
 ### Whole-deployment values are an intermediate stage
 
 `generate-from-spec --with-values` creates initial configuration for all selected

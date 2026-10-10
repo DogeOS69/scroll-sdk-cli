@@ -36,6 +36,9 @@ describe('dstack controller production values', () => {
     expect(values.persistence).to.deep.equal({retain: true, size: '20Gi'})
     expect(values.ingress.enabled).to.equal(false)
     expect(values.serviceAccount.automountServiceAccountToken).to.equal(false)
+    // Let the chart supply its disabled default when no opt-in was declared.
+    expect(values).not.to.have.property('defaultCredentialsEnabled')
+    expect(values).not.to.have.property('extraEnv')
     expect(values).not.to.have.property('enabled')
     expect(values).not.to.have.property('externalSecrets')
     expect(values).not.to.have.property('env')
@@ -72,9 +75,39 @@ describe('dstack controller production values', () => {
     expect(values.image).to.deep.equal({...image, pullPolicy: 'IfNotPresent'})
   })
 
+  it('carries explicit IRSA opt-in through spec and TOML, disabling instance metadata fallback', () => {
+    const controller: DstackControllerConfig = {
+      defaultCredentialsEnabled: true,
+      serviceAccount: {annotations: {'eks.amazonaws.com/role-arn': 'arn:aws:iam::123456789012:role/test-dstack'}},
+    }
+    const spec = dstackSpec(controller)
+    expect(validateDeploymentSpec(spec).errors.filter(error => error.path.startsWith('dstackController'))).to.deep.equal([])
+    const saved = toml.parse(generateDogeConfigToml(spec)).dstackController as DstackControllerConfig
+    expect(saved).to.deep.equal(controller)
+    const source = generateValuesFiles(spec)[DSTACK_CONTROLLER_VALUES_FILE]
+    expect(generateDstackControllerValues(saved)).to.equal(source)
+    const values = yaml.load(source) as any
+    expect(values.defaultCredentialsEnabled).to.equal(true)
+    expect(values.extraEnv).to.deep.equal([{name: 'AWS_EC2_METADATA_DISABLED', value: 'true'}])
+    expect(values.serviceAccount.annotations).to.deep.equal(controller.serviceAccount!.annotations)
+    expect(values.serviceAccount.automountServiceAccountToken).to.equal(false)
+  })
+
+  it('does not infer opt-in from AWS infrastructure or a role annotation, or assume all default credentials are IRSA', () => {
+    for (const config of [{}, {defaultCredentialsEnabled: false}, {serviceAccount: {annotations: {'eks.amazonaws.com/role-arn': 'arn:aws:iam::123456789012:role/test-dstack'}}}]) {
+      const spec = dstackSpec(config)
+      spec.infrastructure.provider = 'aws'
+      expect((yaml.load(generateValuesFiles(spec)[DSTACK_CONTROLLER_VALUES_FILE]) as any).defaultCredentialsEnabled ?? false).to.equal(false)
+    }
+
+    const values = yaml.load(generateDstackControllerValues({defaultCredentialsEnabled: true})!) as any
+    expect(values.defaultCredentialsEnabled).to.equal(true)
+    expect(values).not.to.have.property('extraEnv')
+  })
+
   it('rejects invalid settings and plaintext credential fields before generation', () => {
     for (const config of [
-      {enabled: 'false'}, {replicaCount: 2}, {auth: {existingSecret: ''}},
+      {enabled: 'false'}, {defaultCredentialsEnabled: 'true'}, {replicaCount: 2}, {auth: {existingSecret: ''}},
       {auth: {token: 'test-secret-do-not-print'}}, {database: {url: 'postgres://secret'}},
       {image: {tag: 'latest'}}, {ingress: {enabled: true, hosts: []}},
       {credentialSecrets: [{name: 'gcp', secretName: 'a'}, {name: 'gcp', secretName: 'b'}]},
