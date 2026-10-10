@@ -42,6 +42,19 @@ export interface ResolvedProofIntent {
   warnings: string[]
 }
 
+// Temporarily disabled: whole-file hashes also change for unrelated settings
+// such as Grafana credentials. Keep recording the hash for provenance and keep
+// this check available for re-enabling after its scope is reviewed.
+const CHECK_PROOF_INTENT_SOURCE_HASH = false
+
+export function validateProofIntentBinding(
+  contract: {intentSource: ProofIntentSource} & ProofTopologyIntent,
+  intent: Pick<ResolvedProofIntent, 'intent' | 'source'>,
+): void {
+  if (CHECK_PROOF_INTENT_SOURCE_HASH && intent.source.sha256 !== contract.intentSource.sha256) throw new Error('proof intent changed after prep-charts; rerun prep-charts')
+  if (intent.intent.mode !== contract.mode || intent.intent.generation !== contract.generation || intent.intent.enforcement !== contract.enforcement) throw new Error('proof mode/generation/enforcement do not match the generated deployment contract')
+}
+
 function sha256File(filePath: string): string {
   return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
 }

@@ -12,6 +12,7 @@ import {
   validateProofDeploymentContract,
   writeProofDeploymentContract,
 } from '../../src/utils/proof-deployment-contract.js'
+import {validateProofIntentBinding} from '../../src/utils/proof-intent.js'
 
 describe('proof deployment contract schema v8', () => {
   let root: string
@@ -141,6 +142,24 @@ describe('proof deployment contract schema v8', () => {
     }})
     expect(contract.worker.enabled).to.equal(true)
     expect(() => validateProofDeploymentContract(root)).not.to.throw()
+  })
+
+  it('temporarily permits config-file edits without replacing recorded provenance', () => {
+    const settings = input('active')
+    fs.writeFileSync(settings.intentSource.path, 'network = "testnet"\n')
+    const hash = () => createHash('sha256').update(fs.readFileSync(settings.intentSource.path)).digest('hex')
+    settings.intentSource.sha256 = hash()
+    const contract = writeProofDeploymentContract(settings)
+    fs.appendFileSync(settings.intentSource.path, '\n[grafana]\nadminUser = "operator"\n')
+    const intent = {intent: {enforcement: contract.enforcement, generation: contract.generation, mode: contract.mode}, source: {...settings.intentSource, sha256: hash()}}
+    expect(intent.source.sha256).not.to.equal(contract.intentSource.sha256)
+    expect(() => validateProofIntentBinding(contract, intent)).not.to.throw()
+    expect(validateProofDeploymentContract(root).intentSource.sha256).to.equal(settings.intentSource.sha256)
+
+    // Suspending the whole-file check must not allow proof policy switches to drift.
+    for (const changed of [{mode: 'disabled' as const}, {generation: 'real' as const}, {enforcement: 'enforce' as const}]) {
+      expect(() => validateProofIntentBinding(contract, {...intent, intent: {...intent.intent, ...changed}})).to.throw('proof mode/generation/enforcement')
+    }
   })
 
   it('detects proof environment drift while permitting unrelated overlays', () => {
