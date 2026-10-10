@@ -37,6 +37,7 @@ import { parseHelmUpgradeRecipes } from '../../utils/makefile-helm.js'
 import {reconcileMonitoringSlack} from '../../utils/monitoring-slack.js'
 import {readPreparedSequencerKms} from '../../utils/preparation-sequencer-kms.js'
 import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
+import {resolveProofReceiptSelection} from '../../utils/proof-deployment-contract.js'
 import {
   type ResolvedProofIntent,
   resolveProofIntent,
@@ -1396,6 +1397,15 @@ export default class SetupPrepCharts extends Command {
 
     // Load configs before processing yaml files
     await this.loadConfigs(flags)
+
+    if (this.proofIntent?.intent.generation === 'real') {
+      const receipts = resolveProofReceiptSelection(process.cwd(), {
+        materialsReceipt: flags['proof-materials-receipt'],
+        publicationReceipt: flags['proof-publication-receipt'],
+      })
+      this.flags['proof-materials-receipt'] = receipts.materialsReceipt
+      this.flags['proof-publication-receipt'] = receipts.publicationReceipt
+    }
 
     if (flags['github-username'] && flags['github-token']) {
       try {
