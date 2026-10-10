@@ -30,7 +30,9 @@ export default class ProofWorkers extends Command {
         out.info('No resources allocated. Envelope excludes storage, traffic and tax; provider/API outages can delay deletion. After coordinator and controller are ready, run scrollsdk setup proof-worker, then scrollsdk setup proof-workers apply.')
         out.success({config: plan.config, planId: plan.id, rentalEnvelopeUsd: plan.rentalEnvelopeUsd, session: plan.session, target: plan.target, workers: plan.workers.map(w => w.name)})
       } else {
-        out.success(operateWorkerCapacity(root, args.action as 'apply' | 'destroy' | 'status'))
+        const result = operateWorkerCapacity(root, args.action as 'apply' | 'destroy' | 'status')
+        if (!flags.json) this.log(JSON.stringify(result, null, 2))
+        out.success(result)
       }
     } catch (error) {out.error('E760_PROOF_WORKERS_FAILED', error instanceof Error ? error.message : 'Worker operation failed', 'CONFIGURATION', true)}
   }
