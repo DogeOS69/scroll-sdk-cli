@@ -52,7 +52,18 @@ describe('bounded proof-worker capacity', () => {
     expect(() => resolveProofWorkers({rentalBudgetUsd: 2})).to.throw('rental envelope')
     expect(() => resolveProofWorkers({maxDurationHours: 8})).to.throw('rental envelope')
     expect(rentalEnvelope(resolveProofWorkers({maxDurationHours: 8, rentalBudgetUsd: 8}))).to.equal(7.07)
-    for (const bad of [{maxDurationHours: 9}, {idleTimeoutMinutes: 0}, {count: 0}, {memoryGb: 8}, {minReliability: 0.5}, {rentalBudgetUsd: Number.NaN}]) expect(() => resolveProofWorkers(bad)).to.throw()
+    expect(() => resolveProofWorkers({maxDurationHours: 48})).to.throw('rental envelope')
+    expect(rentalEnvelope(resolveProofWorkers({maxDurationHours: 48, rentalBudgetUsd: 40}))).to.equal(39.07)
+    for (const bad of [{maxDurationHours: 49, rentalBudgetUsd: 100}, {idleTimeoutMinutes: 0}, {count: 0}, {memoryGb: 8}, {minReliability: 0.5}, {rentalBudgetUsd: Number.NaN}]) expect(() => resolveProofWorkers(bad)).to.throw()
+  })
+  it('carries a two-day rental into both the task duration and the watchdog deadline', () => {
+    const {input} = fixturePlan()
+    input.spec.proofWorkers = {maxDurationHours: 48, rentalBudgetUsd: 40}
+    const plan = capacityPlan(input)
+    expect(plan.workers[0].task.max_duration).to.equal(172_800)
+    expect(plan.wallTimeoutSeconds).to.equal(175_800)
+    expect(plan.rentalEnvelopeUsd).to.equal(39.07)
+    expect(JSON.stringify(watchdogManifest(plan, 1000))).to.contain('175800')
   })
   it('uses unique worker identities, an exact GPU and zero minimum fleet size', () => {
     const {input} = fixturePlan()

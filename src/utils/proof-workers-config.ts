@@ -18,7 +18,7 @@ export function resolveProofWorkers(input: ProofWorkersConfig): Required<ProofWo
 
   integer('count', 1, 8); integer('cpu', 8, 256); integer('memoryGb', 64, 2048); integer('diskGb', 200, 4096)
   integer('startupTimeoutMinutes', 5, 60); integer('stopTimeoutMinutes', 13, 30); integer('idleTimeoutMinutes', 1, 10)
-  if (!Number.isFinite(config.maxDurationHours) || config.maxDurationHours < 0.25 || config.maxDurationHours > 8) throw new Error('proofWorkers.maxDurationHours must be between 0.25 and 8')
+  if (!Number.isFinite(config.maxDurationHours) || config.maxDurationHours < 0.25 || config.maxDurationHours > 48) throw new Error('proofWorkers.maxDurationHours must be between 0.25 and 48')
   if (!Number.isFinite(config.minReliability) || config.minReliability < 0.95 || config.minReliability > 1) throw new Error('proofWorkers.minReliability must be between 0.95 and 1')
   for (const key of ['maxPricePerHourUsd', 'rentalBudgetUsd'] as const) if (!Number.isFinite(config[key]) || config[key] <= 0) throw new Error(`proofWorkers.${key} must be positive`)
   if (!Array.isArray(config.regions) || config.regions.length === 0 || config.regions.some(r => typeof r !== 'string' || !/^[a-z][\da-z-]+$/.test(r))) throw new Error('proofWorkers.regions must contain explicit Vast.ai region names')
