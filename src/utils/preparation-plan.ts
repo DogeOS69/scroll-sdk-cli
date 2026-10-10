@@ -12,6 +12,7 @@ import {usesDstackPostgres} from './dstack-database.js'
 import {AwaitingInput, digest, loadPreparationEnv, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolvePreparationProofRelease} from './preparation-release.js'
 import {refreshPreparationRuntime} from './preparation-runtime-refresh.js'
+import {rentalEnvelope, resolveProofWorkers} from './proof-workers-config.js'
 import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {planSpecBootstrap, resolveSdkRevision} from './spec-bootstrap.js'
 import {resolveCubesignerIdentity} from './spec-cubesigner.js'
@@ -84,11 +85,21 @@ export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
 
   add('proof-check', 'Validate proof configuration and required evidence')
   if (p.secretUpload) add('secret-upload', 'Upload declared runtime Secrets', 'cloud')
+  if (spec.proofWorkers) {
+    const workers = resolveProofWorkers(spec.proofWorkers)
+    add('proof-workers-intent', `GPU capacity declared for separate proof-workers apply: ${workers.count} x ${workers.gpu}, ${workers.maxDurationHours}h, USD ${rentalEnvelope(workers)} rental envelope (no allocation now)`)
+  }
+
   return steps
 }
 
 export function validatePreparation(spec: DeploymentSpec): void {
   const p = spec.preparation
+  if (spec.proofWorkers) {
+    resolveProofWorkers(spec.proofWorkers)
+    if (!spec.dstackController || spec.dstackController.enabled === false || spec.proofTopology?.generation !== 'real') throw new Error('proofWorkers requires enabled dstackController and real proving')
+  }
+
   if (!p) throw new Error('preparation is required for setup plan; plain generate-from-spec remains available')
   if (!['helper', 'production'].includes(p.bridge?.mode)) throw new Error('preparation.bridge.mode must explicitly select production or helper')
   if (p.bridge.mode !== 'production' && p.bridge.production) throw new Error('Production Bridge inputs require preparation.bridge.mode: production')

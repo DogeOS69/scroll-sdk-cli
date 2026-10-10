@@ -3,6 +3,7 @@ import type {MonitoringConfig} from '../utils/monitoring-slack.js'
 import type {DstackControllerConfig} from './dstack-controller.js'
 import type {PreparationConfig} from './preparation.js'
 import type {ActiveProofTopologySpec, ProofTopologyArtifactStoreConfig, ProofTopologyDeploymentConfig, ProofTopologySpec} from './proof-topology.js'
+import type {ProofWorkersConfig} from './proof-workers.js'
 
 export type {
   ActiveProofTopologySpec,
@@ -109,6 +110,9 @@ export interface DeploymentSpec {
     /** Artifact prefix is derived from proofArtifacts.s3.keyPrefix. */
     deployment: Omit<ProofTopologyDeploymentConfig, 'artifactKeyPrefix'>
   } & Omit<ProofTopologySpec, 'active' | 'deployment'>
+
+  /** GPU capacity is planned/applied after the coordinator is deployed. */
+  proofWorkers?: ProofWorkersConfig
 
   /** Rollup parameters */
   rollup?: RollupConfig

@@ -1,6 +1,6 @@
 // Generated from DeploymentSpec and its referenced types. Run npm run spec:fields.
 export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kind: 'array' | 'object' | 'record'}> = {
-  "$": {"keys":["accounts","attestationSigners","bridge","celestia","contracts","database","dogecoin","dstackController","ethereumDa","feeOracle","frontend","genesis","identities","images","infrastructure","metadata","monitoring","network","preparation","proofArtifacts","proofCoordinator","proofTopology","rollup","signing","snapshots","templates","test","version"],"kind":"object"},
+  "$": {"keys":["accounts","attestationSigners","bridge","celestia","contracts","database","dogecoin","dstackController","ethereumDa","feeOracle","frontend","genesis","identities","images","infrastructure","metadata","monitoring","network","preparation","proofArtifacts","proofCoordinator","proofTopology","proofWorkers","rollup","signing","snapshots","templates","test","version"],"kind":"object"},
   "$.accounts": {"keys":["deployer","l1CommitSender","l2GasOracleSender","owner"],"kind":"object"},
   "$.accounts.deployer": {"keys":["address","privateKey"],"kind":"object"},
   "$.accounts.l1CommitSender": {"keys":["address","privateKey"],"kind":"object"},
@@ -164,6 +164,8 @@ export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kin
   "$.proofTopology.deployment.workerResources.requests": {"kind":"record"},
   "$.proofTopology.deployment.workerTolerations": {"kind":"array"},
   "$.proofTopology.deployment.workerTolerations[]": {"keys":["effect","key","operator","tolerationSeconds","value"],"kind":"object"},
+  "$.proofWorkers": {"keys":["backend","count","cpu","diskGb","gpu","idleTimeoutMinutes","maxDurationHours","maxPricePerHourUsd","memoryGb","minReliability","regions","rentalBudgetUsd","startupTimeoutMinutes","stopTimeoutMinutes"],"kind":"object"},
+  "$.proofWorkers.regions": {"kind":"array"},
   "$.rollup": {"keys":["verifierDigests"],"kind":"object"},
   "$.rollup.verifierDigests": {"keys":["digest1","digest2"],"kind":"object"},
   "$.signing": {"keys":["attestationSigner","cubesigner","tsoServiceUrl"],"kind":"object"},

@@ -543,3 +543,32 @@ Custom Secret names and data keys follow the existing values template.
 bypass the external store for Grafana. Keep the private deployment directory in
 backup, and use Grafana's supported admin-password workflow for an existing
 Grafana database; changing a bootstrap Secret is not password rotation.
+
+## Apply GPU capacity after service deployment
+
+An optional `proofWorkers` spec block declares GPU intent. Preparation validates
+its limits and shows the rental envelope, but does not rent GPUs. After installing
+the coordinator/controller and publishing the bound proof artifacts, run from the
+generated deployment or `runtime/` directory:
+
+```bash
+scrollsdk setup proof-worker
+scrollsdk setup proof-workers plan
+scrollsdk setup proof-workers apply
+scrollsdk setup proof-workers status
+scrollsdk setup proof-workers destroy
+```
+
+`plan` and `status` do not mutate cloud resources. The separate capacity `apply`
+starts a persistent in-cluster watchdog before submitting through dstack 0.21.5.
+Defaults: one RTX 3090, 8 CPUs, 64 GB RAM, 200 GB disk, 2 hours (8 hours maximum),
+$0.80/instance-hour ceiling, $3 rental admission budget, 30-minute startup,
+13-minute drain and 5-minute idle teardown. The default $2.27 rental envelope
+includes those overheads and two polling minutes; storage, traffic, tax and
+failed/delayed provider deletion are not a guaranteed billing cap. No retries or
+unlimited sessions are generated. Exact CUDA image compatibility is checked.
+
+The SDK's `examples/proof-workers.md` documents the complete spec, an eight-hour
+two-worker example, ownership checks, cancellation, new sessions and outage
+boundaries. It reuses `.scrollsdk/intent.json`, existing controller credentials and
+the compiler Worker contract without additional input files or path flags.
