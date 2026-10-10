@@ -23,6 +23,7 @@ import type {
 } from '../types/deployment-spec.js'
 
 import {
+  DEFAULT_WALLET_CONNECT_PROJECT_ID,
   L1_INTERFACE_RPC_ENDPOINT,
   L1_INTERFACE_RPC_WEBSOCKET_ENDPOINT,
   L2_RPC_ENDPOINT,
@@ -1379,7 +1380,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
   // [frontend] section
   config.frontend = {
     BASE_CHAIN: spec.network.tokenSymbol,
-    CONNECT_WALLET_PROJECT_ID: spec.frontend.walletConnectProjectId || '',
+    CONNECT_WALLET_PROJECT_ID: spec.frontend.walletConnectProjectId || DEFAULT_WALLET_CONNECT_PROJECT_ID,
     ETH_SYMBOL: spec.network.tokenSymbol,
     EXTERNAL_EXPLORER_URI_L1: spec.frontend.externalUrls.l1Explorer,
     EXTERNAL_EXPLORER_URI_L2: spec.frontend.externalUrls.l2Explorer,

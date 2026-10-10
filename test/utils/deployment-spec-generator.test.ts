@@ -10,6 +10,7 @@ import sinon from 'sinon';
 
 import type { DeploymentSpec } from '../../src/types/deployment-spec.js';
 
+import {DEFAULT_WALLET_CONNECT_PROJECT_ID} from '../../src/config/constants.js';
 import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY} from '../../src/constants/docker.js';
 import {
   generateAllConfigs,
@@ -805,6 +806,18 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateConfigToml', () => {
+    for (const supplied of [undefined, '', 'operator-public-project-id']) {
+      it(`propagates the WalletConnect ${supplied ? 'override' : 'default'} into TOML and frontend values (${String(supplied)})`, () => {
+        const spec = createMinimalSpec();
+        spec.frontend.walletConnectProjectId = supplied;
+        const expected = supplied || DEFAULT_WALLET_CONNECT_PROJECT_ID;
+        expect((toml.parse(generateConfigToml(spec)) as any).frontend.CONNECT_WALLET_PROJECT_ID).to.equal(expected);
+        const values = generateValuesFiles(spec);
+        const frontends = (yaml.load(values['frontends-config.yaml']) as any).configMaps['frontend-config'].data['frontend-config'];
+        expect(frontends).to.include(`REACT_APP_CONNECT_WALLET_PROJECT_ID = ${expected}`);
+      });
+    }
+
     for (const [network, chainId] of [['mainnet', 1], ['testnet', 111_111], ['regtest', 5_555_555]] as const) {
       it(`derives the ${network} L1 chain ID consistently across configuration and values`, () => {
         const spec = createMinimalSpec();

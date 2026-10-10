@@ -18,6 +18,7 @@ import * as yaml from 'js-yaml'
 import type { DeploymentSpec, ImagesConfig } from '../types/deployment-spec.js'
 
 import {
+  DEFAULT_WALLET_CONNECT_PROJECT_ID,
   L1_INTERFACE_RPC_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
@@ -1443,7 +1444,7 @@ REACT_APP_EXTERNAL_RPC_URI_L1 = ${spec.frontend.externalUrls.l1Rpc}
 REACT_APP_EXTERNAL_RPC_URI_L2 = ${spec.frontend.externalUrls.l2Rpc}
 REACT_APP_EXTERNAL_EXPLORER_URI_L1 = ${spec.frontend.externalUrls.l1Explorer}
 REACT_APP_EXTERNAL_EXPLORER_URI_L2 = ${spec.frontend.externalUrls.l2Explorer}
-REACT_APP_CONNECT_WALLET_PROJECT_ID = ${spec.frontend.walletConnectProjectId || ''}`
+REACT_APP_CONNECT_WALLET_PROJECT_ID = ${spec.frontend.walletConnectProjectId || DEFAULT_WALLET_CONNECT_PROJECT_ID}`
         },
         enabled: true
       }
