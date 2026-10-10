@@ -117,11 +117,16 @@ export async function prepareProductionWallets(root: string, spec: DeploymentSpe
   const facts: Record<string, FundingFact> = {}
   for (const role of ['sequencer', 'feeWallet'] as const) {
     const amount = role === 'sequencer' ? GENESIS_SEQUENCER_AMOUNT_SATS : setup.fee_wallet_target_amount
-    try {facts[role] = await inspectFunding(data[role], {address: addresses[role], confirmations: spec.bridge.confirmationsRequired, exact: role === 'sequencer', minimumSats: amount}, rpc)} catch (error) {
+    try {
+      if (role === 'sequencer' && data[role] && data[role].vout !== 0) {
+        throw new AwaitingInput({message: 'Initial sequencer funding must use output vout 0; construct the sequencer payment first and place change after it. Do not relabel an existing output; existing nonzero deployments need a reviewed migration.'})
+      }
+
+      facts[role] = await inspectFunding(data[role], {address: addresses[role], confirmations: spec.bridge.confirmationsRequired, exact: role === 'sequencer', minimumSats: amount}, rpc)} catch (error) {
       if (error instanceof AwaitingInput) throw new AwaitingInput({...error.details, address: addresses[role], amountSats: amount, file, fundingRequests: [
-        {address: addresses.sequencer, amountSats: GENESIS_SEQUENCER_AMOUNT_SATS, role: 'sequencer'},
+        {address: addresses.sequencer, amountSats: GENESIS_SEQUENCER_AMOUNT_SATS, role: 'sequencer', vout: 0},
         {address: addresses.feeWallet, amountSats: setup.fee_wallet_target_amount, role: 'feeWallet'},
-      ], inputTemplate: {feeWallet: {txid: 'REPLACE_WITH_FEE_WALLET_TXID', vout: 'REPLACE_WITH_OUTPUT_INDEX'}, sequencer: {txid: 'REPLACE_WITH_SEQUENCER_TXID', vout: 'REPLACE_WITH_OUTPUT_INDEX'}}, message: `${role}: ${error.message}. Record ${role}.txid and ${role}.vout in the funding input`})
+      ], inputTemplate: {feeWallet: {txid: 'REPLACE_WITH_FEE_WALLET_TXID', vout: 'REPLACE_WITH_OUTPUT_INDEX'}, sequencer: {txid: 'REPLACE_WITH_SEQUENCER_TXID', vout: 0}}, message: `${role}: ${error.message}. Record ${role}.txid and ${role}.vout in the funding input`})
       throw error
     }
   }

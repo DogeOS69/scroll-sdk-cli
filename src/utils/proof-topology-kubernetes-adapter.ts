@@ -622,6 +622,7 @@ export function configureEagerMaterializerValues(
   filePath: string,
   bundle: ValidatedProofTopologyBundle,
   topology: ProofTopologySpec,
+  coordinatorAccount?: ProofCoordinatorConfig['serviceAccount'],
 ): void {
   const values = readYaml(filePath)
   values.controller ||= {}
@@ -630,6 +631,15 @@ export function configureEagerMaterializerValues(
     const content = fs.readFileSync(path.join(bundle.bundleDir, bundle.manifest.eager_materializer), 'utf8')
     const config = toml.parse(content) as Record<string, any>
     values.eagerMaterializer = {config: content}
+    // The producer uses the same proof object namespace as the coordinator.
+    // Reuse its provisioned IRSA identity unless the operator supplied one.
+    if (config.artifact_store?.kind === 's3'
+      && coordinatorAccount?.annotations?.['eks.amazonaws.com/role-arn']
+      && !values.serviceAccount?.annotations?.['eks.amazonaws.com/role-arn']
+      && values.serviceAccount?.create !== false) {
+      values.serviceAccount = {...values.serviceAccount, create: false, name: coordinatorAccount.name || 'proof-coordinator'}
+    }
+
     values.env = (Array.isArray(values.env) ? values.env : []).filter(
       (item: any) => !String(item?.name || '').startsWith('DOGEOS_EAGER_MATERIALIZER_'),
     )
@@ -923,7 +933,8 @@ export function reconcileCompiledProofTopology(
   }
 
   if (bundle.manifest.eager_materializer || fs.existsSync(eagerValuesPath)) {
-    configureEagerMaterializerValues(eagerValuesPath, bundle, effectiveTopology)
+    const account = readYaml(coordinatorValuesPath).serviceAccount
+    configureEagerMaterializerValues(eagerValuesPath, bundle, effectiveTopology, account?.annotations?.['eks.amazonaws.com/role-arn'] ? account : options.proofCoordinator?.serviceAccount)
   }
 
   const wpSource = path.join(bundle.bundleDir, bundle.manifest.withdrawal_processor)

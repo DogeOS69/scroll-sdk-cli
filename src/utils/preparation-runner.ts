@@ -4,6 +4,7 @@ import {spawn} from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
+import {isDeepStrictEqual} from 'node:util'
 
 import type {DeploymentSpec} from '../types/deployment-spec.js'
 import type {PreparationPlan, PreparationRunner, PreparationStep} from './preparation-plan.js'
@@ -12,6 +13,7 @@ import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
 import {parseDatabaseUrl} from './dstack-database.js'
 import {productionFeeWallet} from './preparation-fee-wallet.js'
 import {checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
+import {prepareGrafanaAdmin} from './preparation-grafana.js'
 import {AwaitingInput, localPath, privateWrite} from './preparation-io.js'
 import {bindPreparedProofAws, reuseProofAws} from './preparation-proof-aws.js'
 import {prepareSequencerKms, productionSequencer} from './preparation-sequencer-kms.js'
@@ -69,6 +71,10 @@ export class CommandPreparationRunner implements PreparationRunner {
 
       case 'archive': {
         await command(['eth-da-submitter', '-N', p.archive!.action === 'create' ? '--create-archive-bucket' : '--no-create-archive-bucket', ...optional('aws-profile', p.archive!.awsProfile), ...optional('role-arn', p.archive!.writerRoleArn)]); break
+      }
+
+      case 'archive-access': {
+        await command(['artifact-access', '--store', 'da', '--apply', ...(p.archive!.publicRead ? ['--public-read', '--allow-bucket-public-policy'] : ['--no-public-read']), ...optional('aws-profile', p.archive!.awsProfile)]); break
       }
 
       case 'proof-aws': {
@@ -184,6 +190,20 @@ export class CommandPreparationRunner implements PreparationRunner {
       }
 
       case 'charts': case 'charts-published': case 'charts-validated': {
+        if (step.id === 'charts' && spec.identities?.bootnodes?.length) {
+          const file = localPath(root, '.data/doge-config.toml')
+          const before = toml.parse(fs.readFileSync(file, 'utf8')) as any
+          const existing = before.bootnodeReth?.instances ?? []
+          if (spec.identities.bootnodes.some(node => !existing.some((saved: {index: number}) => saved.index === node.index))) {
+            // Recover old per-instance preparation that accidentally dropped earlier
+            // bootnodes. These are local P2P keys, never transaction-signing keys.
+            await command(['gen-keystore', '-N', '--service', 'bootnode-reth', '--no-accounts'])
+            const after = (toml.parse(fs.readFileSync(file, 'utf8')) as any).bootnodeReth?.instances ?? []
+            if (existing.some((saved: {index: number}) => !isDeepStrictEqual(after.find((node: {index: number}) => node.index === saved.index), saved))
+              || spec.identities.bootnodes.some(node => !after.some((saved: {index: number}) => saved.index === node.index))) throw new Error('Bootnode recovery did not preserve existing identities and restore the declared node set')
+          }
+        }
+
         bindPreparedProofAws(root)
         const args = ['prep-charts', '-N', '--skip-auth-check', '--skip-l2-contract-deployment-block']
         const receipt = p.proofMaterials.receipt ?? '.data/proof-materials-v1.json'
@@ -205,6 +225,7 @@ export class CommandPreparationRunner implements PreparationRunner {
           productionFeeWallet(root, spec)
         }
 
+        await prepareGrafanaAdmin(root)
         await command(['gen-secrets', '-N']); break
       }
 
@@ -213,7 +234,10 @@ export class CommandPreparationRunner implements PreparationRunner {
       case 'proof-check': {await command(['proof-config-check']); break}
       case 'secret-upload': {
         const upload = p.secretUpload!
-        await command(['push-secrets', '-N', '--provider', upload.provider, ...optional('aws-region', upload.awsRegion ?? spec.infrastructure.aws?.region), ...optional('aws-prefix', upload.awsPrefix), ...optional('kube-context', upload.kubeContext), ...optional('namespace', upload.namespace ?? spec.infrastructure.namespace ?? 'default')]); break
+        if (spec.monitoring?.slack?.enabled && !upload.kubeContext) throw new AwaitingInput({message: 'Set preparation.secretUpload.kubeContext to upload monitoring Secrets'})
+        await command(['push-secrets', '-N', '--provider', upload.provider, ...optional('aws-region', upload.awsRegion ?? spec.infrastructure.aws?.region), ...optional('aws-prefix', upload.awsPrefix), ...optional('kube-context', upload.kubeContext), ...optional('namespace', upload.namespace ?? spec.infrastructure.namespace ?? 'default')])
+        if (upload.kubeContext) await command(['monitoring-secrets', '--apply', '--kube-context', upload.kubeContext, '--namespace', upload.namespace ?? spec.infrastructure.namespace ?? 'default'])
+        break
       }
 
       default: {throw new Error(`Unsupported preparation step: ${step.id}`)}

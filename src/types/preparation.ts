@@ -1,6 +1,6 @@
 /** Inputs to the resumable preparation workflow; credentials are file/env references. */
 export interface PreparationConfig {
-  archive?: {action: 'configure' | 'create'; awsProfile?: string; writerRoleArn?: string}
+  archive?: {action: 'configure' | 'create'; awsProfile?: string; publicRead?: boolean; writerRoleArn?: string}
   bridge: {
     /** Mutable, operator-supplied outpoints; relative to the deployment directory. */
     fundingFile?: string

@@ -1,3 +1,4 @@
+import {validateMonitoring} from './monitoring-slack.js'
 /**
  * DeploymentSpec Generator
  *
@@ -26,12 +27,13 @@ import {
   L1_INTERFACE_RPC_WEBSOCKET_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
-import {L2_BASE_FEE_OVERHEAD_WEI, L2_GENESIS_GAS_LIMIT, L2_TX_FEE_VAULT} from '../constants/deployment.js'
+import {GENESIS_PREDEPLOYS, L2_BASE_FEE_OVERHEAD_WEI, L2_GENESIS_GAS_LIMIT} from '../constants/deployment.js'
 import {assertSeparateDaProofBuckets} from './artifact-bucket-validation.js'
 import {GENESIS_SEQUENCER_AMOUNT_SATS} from './bridge-constants.js'
 import {assertDeploymentSpecFields, validateDeploymentSpecFields} from './deployment-spec-fields.js'
 import {validateDstackControllerConfig} from './dstack-controller-values.js'
 import {ETHEREUM_DA_RUNTIME_FIELDS} from './ethereum-da-runtime.js'
+import {feeVaultRecipientHash} from './fee-vault-recipient.js'
 import {stripRetiredServiceConfig} from './retired-services.js'
 import {buildS3PublicBaseUrl} from './s3-archive.js'
 import { normalizeCompressedSecp256k1PublicKey } from './secp256k1-public-key.js'
@@ -511,6 +513,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   const spec = normalizeDeploymentSpec(rawSpec)
   const errors: ValidationError[] = []
   const warnings: ValidationWarning[] = []
+  try {validateMonitoring(spec.monitoring)} catch {errors.push({code: 'E601_INVALID_VALUE', message: 'monitoring.slack.enabled must be a boolean', path: 'monitoring.slack.enabled'})}
 
   try {resolveSpecAttestationSigners(spec, Boolean(spec.preparation))} catch (error) {
     errors.push({code: 'E601_INVALID_VALUE', message: error instanceof Error ? error.message : 'Invalid attestation signer identities', path: 'attestationSigners'})
@@ -717,6 +720,14 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
         message: `Invalid Ethereum address: ${value}`,
         path: field.path
       })
+    }
+  }
+
+  if (spec.contracts?.feeVaultDogeRecipientAddress === undefined) {
+    warnings.push({message: 'Fee-vault withdrawal recipient is not selected', path: 'contracts.feeVaultDogeRecipientAddress', suggestion: 'Set a Dogecoin P2PKH recipient before deploying L2 contracts; the template zero address is not deployable.'})
+  } else {
+    try {feeVaultRecipientHash(spec.contracts.feeVaultDogeRecipientAddress, spec.dogecoin.network)} catch {
+      errors.push({code: 'E004_INVALID_ADDRESS', message: 'Fee-vault recipient must be a Dogecoin P2PKH address for the selected network', path: 'contracts.feeVaultDogeRecipientAddress'})
     }
   }
 
@@ -1382,7 +1393,8 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     BASE_FEE_PER_GAS: genesis.baseFeePerGasWei,
     GAS_LIMIT: spec.genesis.gasLimit ?? L2_GENESIS_GAS_LIMIT,
     L2_DEPLOYER_INITIAL_BALANCE: genesis.deployerInitialBalanceWei,
-    L2_MAX_ETH_SUPPLY: genesis.maxEthSupplyWei,
+    L2_MAX_NATIVE_DOGE_SUPPLY: genesis.maxEthSupplyWei,
+    TIMESTAMP: 0,
   }
 
   // [contracts] section
@@ -1391,6 +1403,9 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     COMMIT_SCALAR: spec.contracts.gasOracle.commitScalar ?? 600_000_000,
     DEPLOYMENT_SALT: spec.contracts.deploymentSalt,
     DEPOSIT_FEE: bridgeFees.depositFeeWei,
+    FEE_VAULT_DOGE_RECIPIENT_ADDR: spec.contracts.feeVaultDogeRecipientAddress
+      ? feeVaultRecipientHash(spec.contracts.feeVaultDogeRecipientAddress, spec.dogecoin.network)
+      : '0x0000000000000000000000000000000000000000',
     L1_FEE_VAULT_ADDR: DEFAULT_L1_FEE_VAULT_ADDR,
     L2_BASE_FEE_OVERHEAD: spec.contracts.l2BaseFeeOverheadWei ?? L2_BASE_FEE_OVERHEAD_WEI,
     L2_BRIDGE_FEE_RECIPIENT_ADDR: spec.bridge.feeRecipient,
@@ -1401,11 +1416,8 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     WITHDRAWAL_FEE: bridgeFees.withdrawalFeeWei,
   }
 
-  // Native DOGE is a mandatory protocol predeploy, not an operator-selected address.
-  config.contracts.overrides = {
-    L2_NATIVE_DOGE_TOKEN: '0x530000000000000000000000000000000000d09e',
-    L2_TX_FEE_VAULT,
-  }
+  // Omitting an override makes the contracts generator omit that predeploy entirely.
+  config.contracts.overrides = {...GENESIS_PREDEPLOYS}
   if (spec.contracts.overrides) {
     if (spec.contracts.overrides.l2MessageQueue) {
       config.contracts.overrides.L2_MESSAGE_QUEUE = spec.contracts.overrides.l2MessageQueue
@@ -1486,6 +1498,8 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   const ethereumDaChain = getEthereumDaChain(spec)
   const ethereumDaDefaults = ETHEREUM_DA_DEFAULTS[ethereumDaChain]
 
+  validateMonitoring(spec.monitoring)
+  if (spec.monitoring) config.monitoring = structuredClone(spec.monitoring)
   config.network = spec.dogecoin.network
   const identityIntent = resolveSpecIdentities(spec)
   if (identityIntent) config.identityIntent = identityIntent

@@ -13,6 +13,7 @@ import {prepareDstackMonitoringCredentials, readDstackCredentials, renderDstackS
 import {readDstackControllerConfig, usesDstackPostgres, writeDstackDatabaseSecret} from '../../utils/dstack-database.js'
 import {writeGrafanaAdminSecret} from '../../utils/grafana-admin.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
+import {writeMonitoringSlackSecret} from '../../utils/monitoring-slack.js'
 import {archiveRetiredServiceFiles} from '../../utils/retired-services.js'
 import {
   getRequiredManagedSignerConfig,
@@ -174,6 +175,7 @@ export default class SetupGenSecrets extends Command {
     const config = toml.parse(configContent)
 
     if (this.dogeConfig.grafana) this.createGrafanaSecret()
+    writeMonitoringSlackSecret(this.dogeConfig.monitoring, fs.realpathSync(process.cwd()))
 
     const controller = this.dogeConfig.dstackController
     if (controller && controller.enabled !== false && readDstackCredentials()) {

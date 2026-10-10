@@ -4,6 +4,19 @@
 the existing setup commands, persist completed steps and stop for external inputs.
 They do not install Helm releases or claim that a running chain has passed acceptance.
 
+After preparation, install the frontend and monitoring releases from the generated
+directory with `make install-frontends` and `make install-scroll-monitor`, passing
+explicit `KUBE_CONTEXT` and `NAMESPACE`. Monitoring belongs early in the Helm
+deployment sequence because it supplies Prometheus Operator CRDs. The `secrets`
+step initializes the bundled Grafana admin credentials once and preserves them on
+resume. `secrets/grafana-admin.env` is uploaded by `setup push-secrets` to AWS
+Secrets Manager or Vault, like Dogecoin RPC credentials. The monitor chart's
+ExternalSecret synchronizes the referenced Kubernetes Secret; do not upload a
+standalone Grafana admin YAML.
+See the SDK's `examples/deployment-spec.md` for the two releases' values and
+verification. Do not rerun `install-all` to add missing releases after contracts
+have already been deployed.
+
 A complete operator starter is available in the scroll-sdk repository at
 `examples/deployment-spec.example.yaml`, with the companion guide
 `examples/deployment-spec.md`. It selects testnet production Bridge preparation
@@ -49,6 +62,13 @@ use the normal provider chain; GCP credential files
 and Bridge funding outpoints use their separately declared files.
 
 ## Commands
+
+The complete bridge-operator sequence (inputs, funding, external Secrets,
+installation order, partner handoff, GPU startup and runtime acceptance) is in
+[`scroll-sdk/examples/bridge-operator-deployment.md`](https://github.com/DogeOS69/scroll-sdk/blob/feat/spec-preparation-examples/examples/bridge-operator-deployment.md).
+`plan` / `apply` are preparation entrypoints; they do not replace Helm installation
+or automatically rent a GPU.
+
 
 ```bash
 scrollsdk setup plan --spec ./deployment-spec.yaml \
@@ -184,6 +204,12 @@ deployment test in addition to the local adapter tests.
 
 ## Production funding and resume
 
+New deployments require the initial sequencer payment at **vout 0**. Build it as
+the first output and place change afterwards; inspect the final signed transaction
+before broadcasting. Apply rejects nonzero sequencer output indices. Existing
+nonzero deployments require a separately reviewed recovery path; do not rewrite
+an already funded outpoint.
+
 The beta.6 production order is defined in
 [core's pinned production guide](https://github.com/DogeOS69/dogeos-core/blob/56007d3c413ad07f33d0e08b272004089c911f78/docs/bridge-genesis-deployment.md).
 The workflow:
@@ -257,6 +283,20 @@ interface. There is deliberately no force-retry switch for broadcasts.
 
 ## Optional preparation operations
 
+For the standard AWS deployment, declare
+`preparation.archive: {action: create, publicRead: true}`. Apply first resolves
+the separate proof bucket, then creates/reuses the raw-blob bucket and grants
+the DA writer access to its blobs and the proof bucket's segmentation sidecars.
+It applies prefix-scoped anonymous blob GET and TLS-only bucket policies;
+anonymous writes remain denied. Explicit `publicRead: true` also allows public
+bucket policies while retaining blocked ACLs. Account-level public access
+protection is never changed, and unrelated anonymous grants stop the operation.
+Use `action: configure` for an existing bucket. Omitting `publicRead` preserves
+the existing read policy; `false` removes this deployment's public grant and
+requires a usable S3 VPC endpoint read path. External signers need their own
+reachable delivery path when anonymous reads are disabled.
+
+
 | Spec field | Effect |
 | --- | --- |
 | `archive.action: configure/create` | Reconcile archive configuration/writer permissions; create permits bucket creation. Optional `awsProfile` and `writerRoleArn`. |
@@ -321,6 +361,59 @@ migration. After an abrupt process termination, inspect the lock's host/PID and
 any child/provider activity before removing a stale lock; interrupted broadcasts
 remain blocked regardless. Runtime deployment acceptance remains a separate step.
 
+After a CLI runtime-generation fix, `setup apply --dir /private/deployment
+--refresh-runtime` archives the previous publication receipt and signer bundle,
+then resumes at `charts`. It preserves the frozen plan, identities, genesis,
+funding outpoints and baked proof materials. Publication is performed and read
+back again; signer receipts must match the resulting bundle. It never reruns
+cloud resource creation or Bridge funding. If older per-instance preparation lost
+a declared bootnode entry, chart preparation restores the missing local P2P
+identity and verifies that every existing bootnode identity is unchanged. Managed
+artifact drift still stops the run.
+
+For a corrected internal Dogecoin route, additionally pass
+`--dogecoin-routing-spec /private/deployment-spec.yaml`. This imports **only**
+`dogecoin.kubernetes`, requires the same Dogecoin network, and reads the conventional
+`DOGECOIN_CLUSTER_RPC_USERNAME` / `DOGECOIN_CLUSTER_RPC_PASSWORD` environment entries.
+Other spec changes are not imported. The runtime override is recorded in private
+`.scrollsdk/runtime-refresh/` history; it does not replace the original intent.
+
+## Contracts configuration source
+
+The contracts portion of generated `config.toml` follows
+[`docker/templates/config.toml` at contracts rc.5](https://github.com/DogeOS69/scroll-contracts/blob/be94674ec64383c1cea61770e64d3b1586bd298e/docker/templates/config.toml),
+checked against that revision's `Configuration.sol`, `GenerateGenesis.s.sol` and
+`DeployScroll.s.sol`. The generator supplies the following values; operators
+should not have to copy protocol addresses into the spec:
+
+| Input | Generated configuration |
+| --- | --- |
+| Canonical protocol defaults | All six `contracts.overrides` predeploy addresses, including the message queue and gas oracle |
+| Stable genesis timestamp | `genesis.TIMESTAMP = 0`, never the generation time |
+| Spec supply intent | `genesis.L2_MAX_NATIVE_DOGE_SUPPLY`, using the existing `genesis.maxEthSupplyWei` input name |
+| Gas policy | Explicit genesis gas limit and base fee; Galileo scalars and penalty factor; L2 system-config base fee overhead |
+| Prepared identities | Deployer/owner addresses and the L2 gas oracle service's public address, including KMS identities |
+| Fee-vault withdrawal destination | `contracts.feeVaultDogeRecipientAddress` is a Dogecoin P2PKH address. The CLI validates the network and derives its hash160 for `FEE_VAULT_DOGE_RECIPIENT_ADDR`. This is not an EVM account or an automatic choice of the Bridge fee-wallet. |
+| Optional components | Blockscout database, explorer verification, Ethereum devnet and public service hostnames are configured only for the selected components |
+
+Keep the fee-vault recipient key under separate custody. The spec needs only its
+public receiving address; services and attestation signers do not need that key.
+An omitted recipient retains the upstream template's zero placeholder and emits
+a warning: it must be selected before deploying L2 contracts.
+
+`setup gen-l2-artifacts` passes `config.toml` to
+`dogeos69/scroll-stack-contracts:gen-configs-dogeos-v0.3.0-rc.5`. The contracts
+image produces `genesis.yaml`; the CLI checks mandatory predeploy code before
+copying the result to `values/genesis.yaml`. It never synthesizes or patches
+contract bytecode or genesis storage. A regression fixture records every field
+and predeploy address from the pinned contracts template, with explicit
+exceptions for optional components. Review and refresh it when the contracts
+release changes.
+
+Do not replace genesis in an already prepared deployment without regenerating
+its protocol context, proof materials and signer handoff. Use a new preparation
+directory and preserve existing identities and funding records for review.
+
 ## Container integration verification
 
 The integration driver uses a mock/observe test spec and the matching public
@@ -370,6 +463,17 @@ may be corrected in the inbox before retrying. Completed cloud and proof steps
 are preserved. See `docs/proof-config-transactions.md` for receipt semantics.
 Synthetic receipt tests are not evidence of real partner acceptance.
 
+The contracts deployment environment uses rc.5's `DEPLOYER_PRIVATE_KEY`,
+`L1_RPC_ENDPOINT`, and `L2_RPC_ENDPOINT` names. Both spec generation and
+`setup prep-charts` set Foundry's `ETH_GAS_PRICE` to twice the configured
+`L2_BASE_FEE_OVERHEAD`. The deployment activates this fee floor before its final
+transactions, so an estimate taken against the initial genesis state can leave
+those transactions underpriced. A zero configured floor leaves Foundry's
+automatic estimation enabled. This does not require enabling empty blocks.
+After an interrupted broadcast, reconcile saved transactions and on-chain
+receipts before retrying; the full rc.5 script is not a read-only verification
+command and may fail after ownership has already moved to the configured owner.
+
 ## Real release consumer verification
 
 Once the core release workflow has published all five images and the manifest,
@@ -390,3 +494,35 @@ only after success. Docker needs enough free image storage. `DOCKER_HOST` may
 select a dedicated test daemon; its bind mounts must see the temporary paths.
 This rehearsal does not publish S3 objects, run a GPU proof or validate a partner's
 runtime policy. A queued/running core build is not a passing rehearsal result.
+
+
+## Slack notifications
+
+`monitoring.slack.enabled: true` enables the spec-owned Grafana `slack-alerts`
+integration. Supply the fixed `SLACK_WEBHOOK_URL` in private `deployment.env`.
+Generation emits Secret references only; `gen-secrets` writes the private Slack
+Secret and rejects missing/placeholder values without exposing them. Preparation
+with `secretUpload.kubeContext` also runs `setup monitoring-secrets --apply` for
+Grafana/Slack Secrets; an AWS JSON/env upload by itself does not create them.
+For manual upload, run `setup monitoring-secrets --env-file /private/deployment.env
+--apply --kube-context CONTEXT --namespace NAMESPACE` from the generated directory,
+then `make install-scroll-monitor`. Webhook rotation requires restarting Grafana
+after Secret upload. Explicitly disabling Slack removes only the spec-owned
+receiver; no test message is sent by this command. The existing monitor YAML selects Grafana or Prometheus/Alertmanager; generation
+only patches notification wiring and preserves other template values. See the SDK operator guide for the
+full examples and delivery behavior.
+
+
+## Grafana admin secret storage
+
+Fresh spec preparation generates a random admin password once, preserves it on
+resume, and writes `secrets/grafana-admin.env` (0600). The ordinary `setup
+push-secrets` uploads it to AWS Secrets Manager or Vault exactly like Dogecoin
+RPC credentials. The default remote name is `<prefix>/grafana-admin-env`.
+`values/scroll-monitor-production.yaml` contains only ExternalSecret references;
+scroll-monitor 0.1.44-dogeos synchronizes `grafana-admin` for the Grafana chart.
+Custom Secret names and data keys follow the existing values template.
+`setup monitoring-secrets --apply` applies only Slack to Kubernetes; it does not
+bypass the external store for Grafana. Keep the private deployment directory in
+backup, and use Grafana's supported admin-password workflow for an existing
+Grafana database; changing a bootstrap Secret is not password rotation.

@@ -198,6 +198,19 @@ describe('production Bridge sequencer KMS', () => {
     expect((waiting as AwaitingInput).details.fundingRequests?.[0].address).to.equal(publicKeyAddress(productionSequencer(root, spec).publicKey, 'testnet'))
     expect((waiting as AwaitingInput).details.fundingRequests?.[0].amountSats).to.equal(42_069_000)
 
+    expect((waiting as AwaitingInput).details.inputTemplate?.sequencer).to.deep.include({vout: 0})
+    fs.writeFileSync(path.join(root, '.scrollsdk/inputs/bridge-funding.json'), JSON.stringify({sequencer: {txid: 'a'.repeat(64), vout: 1}}))
+    let wrongOutput: unknown
+    try {await prepareProductionWallets(root, spec, async method => {
+      if (method === 'getblockchaininfo') return {chain: 'test'}
+      if (method === 'getblockcount') return 1000
+      throw new Error('Funding inspection should stop before transaction RPC')
+    })} catch (error) {wrongOutput = error}
+
+    expect(wrongOutput).to.be.instanceOf(AwaitingInput)
+    expect(String(wrongOutput)).to.include('Initial sequencer funding must use output vout 0')
+    expect(fs.existsSync(path.join(root, '.data/production-wallet-funding.json'))).to.equal(false)
+
     const requests = (waiting as AwaitingInput).details.fundingRequests!
     const transaction = new Transaction()
     transaction.addInput(Buffer.alloc(32, 1), 0)
@@ -286,6 +299,7 @@ describe('production Bridge sequencer KMS', () => {
     spec.bridge.initialAttestationKeyset = {signerIds: ['partner-a'], threshold: 1}
     prepareSequencerKms(root, spec, runner())
     const sequencer = productionSequencer(root, spec)
+    spec.contracts.feeVaultDogeRecipientAddress = publicKeyAddress(feeKey().toPublicKey().toString(), 'testnet')
     const configs = generateAllConfigs(spec)
     const main = toml.parse(configs['config.toml']) as any
     const doge = toml.parse(configs['doge-config.toml']) as any

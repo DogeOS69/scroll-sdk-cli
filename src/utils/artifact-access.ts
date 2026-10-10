@@ -38,6 +38,8 @@ export function archivePolicySids(kind: ArchiveStoreKind, bucket: string, keyPre
 export const ARCHIVE_WRITER_POLICY_NAMES = {da: 'eth-da-submitter-s3-archive', snapshot: 'ScrollSdkSnapshotWrite'} as const
 
 export interface ArtifactAccessOptions {
+  /** Explicitly allow bucket public policies; account-level protection is never changed. */
+  allowBucketPublicPolicy?: boolean
   /** true adds the anonymous read statement, false removes it (kill switch), undefined leaves it. */
   publicRead?: boolean
   /** da only: the proof artifact store, when configured; the DA writer also puts its sidecar namespace there. */
@@ -53,6 +55,7 @@ export interface ArtifactAccessPlan {
   bucketPolicy: {after: Document; before: Document; changed: boolean}
   keyPrefix: string
   kind: ArchiveStoreKind
+  publicAccessBlock?: {after: Document; before: Document}
   region: string
   versioning: {before: string; changed: boolean}
   writerPolicy?: {after: Document; before?: Document; changed: boolean; name: string; roleArn: string; roleName: string}
@@ -185,7 +188,8 @@ export function buildArchiveWriterPolicy(kind: ArchiveStoreKind, store: {bucket:
   }
 }
 
-function assertPublicAccessBlock(aws: Aws, bucket: string, region: string): void {
+function assertPublicAccessBlock(aws: Aws, bucket: string, region: string, allowBucketPublicPolicy = false): ArtifactAccessPlan['publicAccessBlock'] {
+  let change: ArtifactAccessPlan['publicAccessBlock']
   const account = aws.text(['sts', 'get-caller-identity'], {query: 'Account'})
   // Account-level protection must be checked for the bucket owner, not an
   // unrelated caller account with cross-account read access.
@@ -198,12 +202,19 @@ function assertPublicAccessBlock(aws: Aws, bucket: string, region: string): void
       const config = aws.json([...args], {region}).PublicAccessBlockConfiguration
       if (!config || typeof config !== 'object') throw new Error(`Missing ${scope} Public Access Block response`)
       if (config.BlockPublicPolicy || config.RestrictPublicBuckets) {
+        if (scope === 'bucket' && allowBucketPublicPolicy) {
+          change = {after: {BlockPublicAcls: true, BlockPublicPolicy: false, IgnorePublicAcls: true, RestrictPublicBuckets: false}, before: config}
+          continue
+        }
+
         throw new Error(`${scope} Public Access Block prevents public read; have the bucket owner allow public bucket policies (ACLs stay blocked)`)
       }
     } catch (error) {
       if (!String(error).includes('NoSuchPublicAccessBlockConfiguration')) throw error
     }
   }
+
+  return change
 }
 
 /**
@@ -250,14 +261,22 @@ export function planArtifactAccess(aws: Aws, kind: ArchiveStoreKind, store: Arti
   const keyPrefix = normalizeProofKeyPrefix(store.keyPrefix)
   if (options.vpcEndpointId !== undefined && !/^vpce-[\da-f]+$/i.test(options.vpcEndpointId)) throw new Error('Expected an S3 Gateway VPC endpoint id (vpce-...)')
   const plan = {bucket, keyPrefix, kind, region: store.region} as ArtifactAccessPlan
+  if (options.allowBucketPublicPolicy && options.publicRead !== true) throw new Error('Allowing bucket public policies requires explicit public read')
   if (options.publicRead) {
     if (store.endpointUrl && ![`https://s3.${store.region}.amazonaws.com`, 'https://s3.amazonaws.com'].includes(store.endpointUrl)) throw new Error('Public S3 policy requires the AWS S3 endpoint; configure a custom gateway with its owner')
-    assertPublicAccessBlock(aws, bucket, store.region)
+    plan.publicAccessBlock = assertPublicAccessBlock(aws, bucket, store.region, options.allowBucketPublicPolicy)
   }
 
   const before = bucketPolicy(aws, plan)
   const after = buildArchiveBucketPolicy(before, kind, bucket, keyPrefix, options)
   assertNoUnmanagedAnonymousGrant(after, kind, bucket, keyPrefix)
+  if (plan.publicAccessBlock) {
+    // Relaxing the bucket-wide block must not activate unrelated public grants.
+    const sids = archivePolicySids(kind, bucket, keyPrefix)
+    if (statementsOf(after).some(statement => statement.Effect === 'Allow' && ('NotPrincipal' in statement || 'NotResource' in statement))) throw new Error('Refusing to allow bucket public policies with negated allow statements')
+    if (findUnmanagedAnonymousGrant(after, bucket, null, [sids.publicRead, sids.vpceRead])) throw new Error('Refusing to allow bucket public policies with unrelated anonymous grants')
+  }
+
   assertClusterReadPath(aws, after, kind, bucket, keyPrefix, store.region)
   plan.bucketPolicy = {after, before, changed: !isDeepStrictEqual(before, after)}
   const status = versioningStatus(aws, plan)
@@ -282,6 +301,16 @@ export function applyArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
   // replacement has no compare-and-swap; serialize policy updates operationally.
   if (!isDeepStrictEqual(bucketPolicy(aws, plan), plan.bucketPolicy.before)) throw new Error('Bucket policy changed after planning; rerun artifact-access')
   if (plan.writerPolicy && !isDeepStrictEqual(rolePolicy(aws, plan.writerPolicy.roleName, plan.writerPolicy.name), plan.writerPolicy.before)) throw new Error('Writer policy changed after planning; rerun artifact-access')
+  if (plan.publicAccessBlock) {
+    const before = aws.json(['s3api', 'get-public-access-block', '--bucket', plan.bucket], {region: plan.region}).PublicAccessBlockConfiguration
+    if (!isDeepStrictEqual(before, plan.publicAccessBlock.before)) throw new Error('Bucket Public Access Block changed after planning; rerun artifact-access')
+    // Recheck account-level protection before any mutation.
+    assertPublicAccessBlock(aws, plan.bucket, plan.region, true)
+    aws.run(['s3api', 'put-public-access-block', '--bucket', plan.bucket, '--public-access-block-configuration', JSON.stringify(plan.publicAccessBlock.after)], {region: plan.region})
+    const after = aws.json(['s3api', 'get-public-access-block', '--bucket', plan.bucket], {region: plan.region}).PublicAccessBlockConfiguration
+    if (!isDeepStrictEqual(after, plan.publicAccessBlock.after)) throw new Error('Bucket Public Access Block readback mismatch')
+  }
+
   if (plan.versioning.changed) {
     aws.run(['s3api', 'put-bucket-versioning', '--bucket', plan.bucket, '--versioning-configuration', 'Status=Enabled'], {region: plan.region})
     if (versioningStatus(aws, plan) !== 'Enabled') throw new Error('Bucket versioning readback mismatch')
@@ -307,6 +336,7 @@ export function applyArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
  * other policies attached to the role are not audited.
  */
 export function checkArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
+  if (plan.publicAccessBlock) throw new Error('Bucket Public Access Block differs from the requested state; review the plan, then --apply')
   if (plan.bucketPolicy.changed || plan.versioning.changed) throw new Error('Bucket policy or versioning differs from the requested state; review the plan, then --apply')
   if (plan.writerPolicy?.changed) throw new Error(`Writer inline policy ${plan.writerPolicy.name} on ${plan.writerPolicy.roleName} differs from the managed policy; review the plan, then --apply`)
   if (!plan.writerPolicy) return

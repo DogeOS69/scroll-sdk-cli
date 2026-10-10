@@ -6,7 +6,10 @@ declare module 'bitcore-lib-doge' {
   }
 
   export class Address {
-    constructor(address: string)
+    hashBuffer: Buffer
+    type: string
+    constructor(address: Buffer | string, network?: unknown, type?: string)
+    static fromString(address: string, network?: unknown, type?: string): Address
     toString(): string
   }
 

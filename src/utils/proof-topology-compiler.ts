@@ -12,6 +12,7 @@ import type {
   ProofTopologySpec,
 } from '../types/proof-topology.js'
 
+import {removeRetiredBatchWitnessSources} from './proof-coordinator-config.js'
 import {buildS3PublicBaseUrl} from './s3-archive.js'
 
 export const DEFAULT_PROOF_TOPOLOGY_OUTPUT = '.data/generated/proof-topology'
@@ -650,6 +651,9 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
     const submitterName = 'eth-da-submitter-base.toml'
     copyInput(path.resolve(deploymentDir, options.withdrawalProcessorBaseConfig ?? 'withdrawal-processor/WithdrawalProcessor.toml'), path.join(inputDir, wpName), 'Withdrawal Processor base config', true)
     copyInput(path.resolve(deploymentDir, options.proofCoordinatorBaseConfig ?? 'proof-coordinator/ProofCoordinator.toml'), path.join(inputDir, pcName), 'Proof Coordinator base config', true)
+    // Clean previous CLI output before the compiler consumes it as a base.
+    const pcInput = path.join(inputDir, pcName)
+    fs.writeFileSync(pcInput, removeRetiredBatchWitnessSources(fs.readFileSync(pcInput, 'utf8')), {mode: 0o600})
     const hasSubmitter = copyInput(path.resolve(deploymentDir, options.ethDaSubmitterBaseConfig ?? 'eth-da-submitter/EthDASubmitter.toml'), path.join(inputDir, submitterName), 'eth-da-submitter base config', false)
     const bridgePasswordName = 'dogecoin-rpc-password'
     if (options.bridge) fs.writeFileSync(path.join(inputDir, bridgePasswordName), options.bridge.dogecoinRpcPassword, {mode: 0o600})

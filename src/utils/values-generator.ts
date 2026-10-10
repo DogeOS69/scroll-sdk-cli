@@ -1,3 +1,4 @@
+import {reconcileMonitoringSlack} from './monitoring-slack.js'
 /**
  * Helm Values Generator
  *
@@ -22,6 +23,7 @@ import {
 } from '../config/constants.js'
 import {CORE_DOCKER_DEFAULT_TAG, L2_BLOCK_TIME_MS, L2_GENESIS_GAS_LIMIT, L2_PAYLOAD_BUILDING_DURATION_MS, L2_TX_FEE_VAULT} from '../constants/deployment.js'
 import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY} from '../constants/docker.js'
+import {contractsDeploymentGasPrice} from './contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 import {
   getBridgeFeeRateSatsPerKvb,
@@ -143,7 +145,6 @@ function generateExternalSecrets(
  */
 type ServiceImageKey = keyof NonNullable<ImagesConfig['services']>
 
-const DEFAULT_L1_FEE_VAULT_ADDR = '0x1111111111111111111111111111111111111111'
 
 const ETHEREUM_DA_DEFAULTS = {
   devnet: {
@@ -336,7 +337,7 @@ function resolveImage(
 /**
  * Generate all Helm values files from a DeploymentSpec
  */
-export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles {
+export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: string): GeneratedValuesFiles {
   const normalizedSpec = normalizeDeploymentSpec(spec)
   if (normalizedSpec.bridge.freshGenesisInit !== undefined && typeof normalizedSpec.bridge.freshGenesisInit !== 'boolean') {
     throw new TypeError('bridge.freshGenesisInit must be a boolean')
@@ -352,6 +353,12 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
   )) throw new Error('DeploymentSpec proof enforcement requires active real proving')
 
   const files: GeneratedValuesFiles = {}
+  if (normalizedSpec.monitoring?.slack?.enabled && !monitoringTemplate) throw new Error('Slack generation requires values/scroll-monitor-production.yaml in the output directory or SDK templates from --bootstrap')
+  if (normalizedSpec.monitoring?.slack && monitoringTemplate) {
+    const monitor = yaml.load(monitoringTemplate) as Record<string, any> ?? {}
+    reconcileMonitoringSlack(monitor, normalizedSpec.monitoring)
+    files['scroll-monitor-production.yaml'] = yaml.dump(monitor, {lineWidth: -1, noRefs: true})
+  }
 
   const dstackValues = generateDstackControllerValues(normalizedSpec.dstackController)
   if (dstackValues !== undefined) files[DSTACK_CONTROLLER_VALUES_FILE] = dstackValues
@@ -422,12 +429,16 @@ function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | '
     env: [{name: 'RUST_BACKTRACE', value: '1'}],
     ...(publicRpc && {ingress: {
       main: {
+        annotations: {'cert-manager.io/cluster-issuer': 'letsencrypt-prod'},
         enabled: true, hosts: [{host: spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix'}]}], ingressClassName: 'nginx',
         primary: true,
+        tls: [{hosts: [spec.frontend.hosts.rpcGateway], secretName: 'l2-reth-rpc-public-tls'}],
       },
       websocket: {
+        annotations: {'cert-manager.io/cluster-issuer': 'letsencrypt-prod'},
         enabled: true, hosts: [{host: spec.frontend.hosts.rpcGatewayWs || spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix', service: {port: 8546}}]}],
         ingressClassName: 'nginx',
+        tls: [{hosts: [spec.frontend.hosts.rpcGatewayWs || spec.frontend.hosts.rpcGateway], secretName: 'l2-reth-rpc-public-websocket-tls'}],
       },
     }}),
     externalSecrets: {},
@@ -831,7 +842,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
     image,
     ingress: {
       main: {
-        annotations: {'nginx.ingress.kubernetes.io/proxy-body-size': '4m'},
+        annotations: {'cert-manager.io/cluster-issuer': 'letsencrypt-prod', 'nginx.ingress.kubernetes.io/proxy-body-size': '4m'},
         // Public edge: /health and the transport-signed /signer/* routes only.
         hosts: [{
           host: spec.frontend.hosts.tso || '',
@@ -840,7 +851,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
         ingressClassName: 'nginx',
         tls: spec.frontend.hosts.tso ? [{
           hosts: [spec.frontend.hosts.tso],
-          secretName: 'tso-tls'
+          secretName: 'tso-service-tls'
         }] : []
       }
     },
@@ -1552,24 +1563,25 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
  */
 function generateContractsValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
+  // The deployment initializes L2SystemConfig before its final transactions.
+  // Foundry's pre-deployment gas estimate does not include that new fee floor.
+  const deploymentGasPrice = contractsDeploymentGasPrice(spec.contracts.l2BaseFeeOverheadWei)
 
   const values: Record<string, any> = {
     configMaps: {
-      env: {
+      'contracts-deployment-env': {
         data: {
-          SCROLL_CHAIN_ID_L1: String(resolveDogecoinChainId(spec.dogecoin.network)),
-          SCROLL_CHAIN_ID_L2: String(spec.network.l2ChainId),
-          SCROLL_DEPLOYMENT_SALT: spec.contracts.deploymentSalt,
-          SCROLL_L1_FEE_VAULT_ADDR: DEFAULT_L1_FEE_VAULT_ADDR,
-          SCROLL_L1_RPC: L1_INTERFACE_RPC_ENDPOINT,
-          SCROLL_L2_RPC: L2_RPC_ENDPOINT,
-          SCROLL_OWNER_ADDR: spec.accounts.owner.address
+          CHAIN_ID_L1: String(resolveDogecoinChainId(spec.dogecoin.network)),
+          CHAIN_ID_L2: String(spec.network.l2ChainId),
+          ...(deploymentGasPrice && {ETH_GAS_PRICE: deploymentGasPrice}),
+          L1_RPC_ENDPOINT: L1_INTERFACE_RPC_ENDPOINT,
+          L2_RPC_ENDPOINT
         },
         enabled: true
       }
     },
     envFrom: [
-      { configMapRef: { name: 'contracts-env' } },
+      { configMapRef: { name: 'contracts-deployment-env' } },
       { secretRef: { name: 'contracts-secret-env' } }
     ],
     image: {
@@ -1583,7 +1595,7 @@ function generateContractsValues(spec: DeploymentSpec): string {
     'contracts-secret-env',
     secretConfig,
     [
-      { property: 'SCROLL_DEPLOYER_PRIVATE_KEY', remoteKey: 'contracts-secret-env', secretKey: 'SCROLL_DEPLOYER_PRIVATE_KEY' }
+      { property: 'DEPLOYER_PRIVATE_KEY', remoteKey: 'contracts-secret-env', secretKey: 'DEPLOYER_PRIVATE_KEY' }
     ]
   )
 

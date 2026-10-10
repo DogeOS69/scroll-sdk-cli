@@ -14,6 +14,7 @@ import { writeConfigs } from '../../utils/config-writer.js'
 import {inspectContractOwner} from '../../utils/contract-owner.js'
 import {getContractsPlaceholderKey} from '../../utils/contracts-placeholder.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
+import {validateGenesisPredeploys} from '../../utils/genesis-predeploys.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import {generateLocalContractsArtifacts, validateContractsSource} from '../../utils/local-contracts.js'
 import {
@@ -202,6 +203,8 @@ export default class SetupGenL2Artifacts extends Command {
       this.jsonCtx.addWarning('config.public.toml not found after artifact generation.')
     }
 
+    // Validate the fresh output, never an older copy in values/.
+    validateGenesisPredeploys(path.join(process.cwd(), 'genesis.yaml'))
     this.jsonCtx.info('Processing generated YAML files...')
     await this.processYamlFiles(configsDir)
 

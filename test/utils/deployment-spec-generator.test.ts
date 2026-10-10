@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Test mocking */
 import * as toml from '@iarna/toml';
+import bitcore from 'bitcore-lib-doge';
 import { expect } from 'chai';
 import * as yaml from 'js-yaml';
 import * as fs from 'node:fs';
@@ -814,7 +815,7 @@ describe('deployment-spec-generator', () => {
         expect((toml.parse(configs['config.toml']) as any).general.CHAIN_ID_L1).to.equal(chainId);
         expect((toml.parse(configs['protocol_seed.toml']) as any).protocol.dogecoin_chain_id).to.equal(chainId);
         const values = generateValuesFiles(spec);
-        expect((yaml.load(values['contracts-production.yaml']) as any).configMaps.env.data.SCROLL_CHAIN_ID_L1).to.equal(String(chainId));
+        expect((yaml.load(values['contracts-production.yaml']) as any).configMaps['contracts-deployment-env'].data.CHAIN_ID_L1).to.equal(String(chainId));
         const frontends = (yaml.load(values['frontends-config.yaml']) as any).configMaps['frontend-config'].data['frontend-config'];
         expect(frontends).to.include(`REACT_APP_CHAIN_ID_L1 = ${chainId}\n`);
       });
@@ -855,13 +856,55 @@ describe('deployment-spec-generator', () => {
       }
     });
 
-    it('always includes the mandatory native DOGE predeploy, preserving optional overrides', () => {
+    it('includes canonical predeploys without requiring operator overrides', () => {
       for (const overrides of [undefined, {l2Wdoge: '0x5300000000000000000000000000000000000004'}]) {
         const spec = createMinimalSpec();
         spec.contracts.overrides = overrides;
         const config = toml.parse(generateConfigToml(spec)) as any;
         expect(config.contracts.overrides.L2_NATIVE_DOGE_TOKEN).to.equal('0x530000000000000000000000000000000000d09e');
+        expect(config.contracts.overrides.L1_GAS_PRICE_ORACLE).to.equal('0x5300000000000000000000000000000000000002');
+        expect(config.contracts.overrides.L2_MESSAGE_QUEUE).to.equal('0x5300000000000000000000000000000000000000');
+        expect(config.contracts.overrides.L2_WHITELIST).to.equal('0x5300000000000000000000000000000000000003');
+        expect(config.contracts.overrides.L2_WDOGE).to.equal('0x5300000000000000000000000000000000000004');
         if (overrides) expect(config.contracts.overrides.L2_WDOGE).to.equal(overrides.l2Wdoge);
+      }
+    });
+
+    it('covers every unconditional field in the pinned rc.5 contracts template', () => {
+      const baseline = JSON.parse(fs.readFileSync(new URL('../fixtures/contracts-rc5-template.json', import.meta.url), 'utf8'));
+      const spec = createMinimalSpec();
+      spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toAddress().toString();
+      const config = toml.parse(generateConfigToml(spec)) as any;
+      for (const field of baseline.fields as string[]) {
+        if (Object.keys(baseline.conditionalFields).some(prefix => field === prefix || field.startsWith(prefix + '.'))) continue;
+        expect(field.split('.').reduce((value, key) => value?.[key], config), field).not.to.equal(undefined);
+      }
+
+      expect(config.contracts.overrides).to.deep.equal(baseline.predeploys);
+      expect(config.genesis.TIMESTAMP).to.equal(0);
+      expect(config.genesis.L2_MAX_NATIVE_DOGE_SUPPLY).to.equal(spec.genesis.maxEthSupplyWei);
+      expect(config.genesis).not.to.have.property('L2_MAX_ETH_SUPPLY');
+    });
+
+    it('encodes the selected Dogecoin fee-vault recipient as hash160 without selecting the fee-wallet', () => {
+      const spec = createMinimalSpec();
+      const address = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toAddress();
+      spec.contracts.feeVaultDogeRecipientAddress = address.toString();
+      const config = toml.parse(generateConfigToml(spec)) as any;
+      expect(config.contracts.FEE_VAULT_DOGE_RECIPIENT_ADDR).to.equal('0x' + address.hashBuffer.toString('hex'));
+      delete spec.contracts.feeVaultDogeRecipientAddress;
+      expect((toml.parse(generateConfigToml(spec)) as any).contracts.FEE_VAULT_DOGE_RECIPIENT_ADDR).to.equal('0x' + '0'.repeat(40));
+      expect(validateDeploymentSpec(spec).warnings.some(warning => warning.path === 'contracts.feeVaultDogeRecipientAddress')).to.equal(true);
+    });
+
+    it('rejects fee-vault recipients for the wrong network, P2SH recipients, EVM addresses and placeholders', () => {
+      const spec = createMinimalSpec();
+      const wrongNetwork = new bitcore.PrivateKey(null, bitcore.Networks.livenet).toAddress().toString();
+      const p2sh = new bitcore.Address(Buffer.alloc(20, 1), bitcore.Networks.testnet, 'scripthash').toString();
+      for (const address of [wrongNetwork, p2sh, '0x' + '1'.repeat(40), 'REPLACE_WITH_DOGECOIN_P2PKH_ADDRESS']) {
+        spec.contracts.feeVaultDogeRecipientAddress = address;
+        expect(validateDeploymentSpec(spec).errors.some(error => error.path === 'contracts.feeVaultDogeRecipientAddress')).to.equal(true);
+        expect(() => generateConfigToml(spec)).to.throw('Dogecoin P2PKH address');
       }
     });
 
@@ -1477,6 +1520,22 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateValuesFiles', () => {
+    it('requests trusted TLS certificates for public RPC and pull signer endpoints', () => {
+      const spec = createMinimalSpec();
+      spec.frontend.hosts.tso = 'tso.example.invalid';
+      const files = generateValuesFiles(spec);
+      const rpc = yaml.load(files['l2-reth-rpc-public-production.yaml']) as any;
+      const tso = yaml.load(files['tso-service-production.yaml']) as any;
+      for (const [ingress, host, secretName] of [
+        [rpc.ingress.main, spec.frontend.hosts.rpcGateway, 'l2-reth-rpc-public-tls'],
+        [rpc.ingress.websocket, spec.frontend.hosts.rpcGatewayWs || spec.frontend.hosts.rpcGateway, 'l2-reth-rpc-public-websocket-tls'],
+        [tso.ingress.main, spec.frontend.hosts.tso, 'tso-service-tls'],
+      ]) {
+        expect(ingress.annotations['cert-manager.io/cluster-issuer']).to.equal('letsencrypt-prod');
+        expect(ingress.tls).to.deep.equal([{hosts: [host], secretName}]);
+      }
+    });
+
     it('pairs the default TSO image with the beta.6 pull signer ingress routes', () => {
       const files = generateValuesFiles(createMinimalSpec());
       const tso = yaml.load(files['tso-service-production.yaml']) as any;
@@ -1649,9 +1708,18 @@ describe('deployment-spec-generator', () => {
         expect(node).not.to.have.property('configMaps');
       }
 
-      expect(files['contracts-production.yaml']).to.include('SCROLL_L1_FEE_VAULT_ADDR: \'0x1111111111111111111111111111111111111111\'');
       const contractsValues = yaml.load(files['contracts-production.yaml']) as any;
       expect(contractsValues.image).to.include({repository: DOCKER_REPOSITORY, tag: `deploy-${CONTRACTS_DOCKER_DEFAULT_TAG}`});
+      expect(contractsValues.configMaps['contracts-deployment-env'].data).to.deep.equal({
+        CHAIN_ID_L1: String((toml.parse(generateConfigToml(spec)) as any).general.CHAIN_ID_L1), CHAIN_ID_L2: String(spec.network.l2ChainId),
+        ETH_GAS_PRICE: '840000000000',
+        L1_RPC_ENDPOINT: 'http://l1-interface:8545', L2_RPC_ENDPOINT: 'http://l2-rpc:8545',
+      });
+      expect(contractsValues.envFrom).to.deep.include({configMapRef: {name: 'contracts-deployment-env'}});
+      expect(contractsValues.externalSecrets['contracts-secret-env'].data).to.deep.equal([{
+        remoteRef: {key: 'dogeos-test/contracts-secret-env', property: 'DEPLOYER_PRIVATE_KEY'},
+        secretKey: 'DEPLOYER_PRIVATE_KEY',
+      }]);
 
       const submitterValues = yaml.load(files['eth-da-submitter-production.yaml']) as any;
       const submitterEnv = submitterValues.configMaps.env.data;
@@ -2127,3 +2195,19 @@ metadata:
     });
   });
 });
+
+
+describe('monitoring template projection', () => {
+  it('requires the complete operator template and preserves its unrelated values', () => {
+    const spec = createMinimalSpec({monitoring: {slack: {enabled: true}}})
+    expect(() => generateValuesFiles(spec)).to.throw('requires values/scroll-monitor-production.yaml')
+    const template = {balanceMonitoring: {feeWallet: {minimumDoge: 456}}, diskAlerts: {warningFor: '7m'}, grafana: {resources: {limits: {memory: '3Gi'}}}}
+    const files = generateValuesFiles(spec, yaml.dump(template))
+    const monitor = yaml.load(files['scroll-monitor-production.yaml']) as any
+    expect(monitor.grafana.resources).to.deep.equal(template.grafana.resources)
+    expect(monitor.diskAlerts).to.deep.equal(template.diskAlerts)
+    expect(monitor.balanceMonitoring).to.deep.equal(template.balanceMonitoring)
+    expect(monitor.grafana.envValueFrom.DOGEOS_SLACK_WEBHOOK_URL.secretKeyRef.name).to.equal('scroll-monitor-slack')
+    expect((toml.parse(generateDogeConfigToml(spec)) as any).monitoring).to.deep.equal(spec.monitoring)
+  })
+})

@@ -285,6 +285,8 @@ rollup:
     digest2: "0x0000000000000000000000000000000000000000000000000000000000000002"
 
 contracts:
+  # Dogecoin P2PKH recipient of fee-vault withdrawals, not an EVM address.
+  feeVaultDogeRecipientAddress: REPLACE_WITH_DOGECOIN_P2PKH_ADDRESS
   l2BaseFeeOverheadWei: "420000000000"
   deploymentSalt: "salt-000"
   gasOracle:

@@ -17,6 +17,7 @@ export default class ArtifactAccess extends Command {
   ]
 
   static flags = {
+    'allow-bucket-public-policy': Flags.boolean({default: false, description: 'Explicitly allow bucket public policies for --public-read; retain blocked ACLs and account-level protections'}),
     apply: Flags.boolean({default: false, description: 'Apply the displayed changes and verify AWS readback', exclusive: ['check']}),
     'aws-profile': Flags.string({description: 'AWS CLI profile'}),
     check: Flags.boolean({default: false, description: 'Fail if the bucket policy or versioning differ from the requested state or writer IAM simulation denies access; no writes'}),
@@ -44,7 +45,7 @@ export default class ArtifactAccess extends Command {
       const sidecarStore = kind === 'da' && flags['writer-role-arn'] ? readOptionalArtifactStore('proof', flags['deployment-dir'], flags['doge-config']) : undefined
       if (kind === 'da' && flags['writer-role-arn'] && !sidecarStore) output.addWarning('proofArtifacts.s3 is not configured; the DA writer gets no segmentation-sidecar grant')
       const aws = new AwsCliRunner(flags['aws-profile'])
-      const plan = planArtifactAccess(aws, kind, store, {publicRead: flags['public-read'], sidecarStore, vpcEndpointId, writerRoleArn: flags['writer-role-arn']})
+      const plan = planArtifactAccess(aws, kind, store, {allowBucketPublicPolicy: flags['allow-bucket-public-policy'], publicRead: flags['public-read'], sidecarStore, vpcEndpointId, writerRoleArn: flags['writer-role-arn']})
       if (flags.check) checkArtifactAccess(aws, plan)
 
       if (flags.apply) applyArtifactAccess(aws, plan)

@@ -294,9 +294,15 @@ export default class GenerateFromSpec extends Command {
 
     if (generateValues) {
       jsonCtx.info('Generating Helm values files...')
-      valuesFiles = generateValuesFiles(spec)
+      // Operator monitoring policies/resources remain template-owned. Existing
+      // values take precedence over the bootstrap copy when regenerating.
+      const monitorFile = path.join(outputDir, 'values/scroll-monitor-production.yaml')
+      const monitorTemplate = fs.existsSync(monitorFile) ? fs.readFileSync(monitorFile, 'utf8') : bootstrapFiles['values/scroll-monitor-production.yaml']
+      valuesFiles = generateValuesFiles(spec, monitorTemplate)
       if (flags.bootstrap) {
-        for (const [file, content] of Object.entries(valuesFiles)) valuesFiles[file] = mergeBootstrapValues(bootstrapFiles[`values/${file}`], content)
+        for (const [file, content] of Object.entries(valuesFiles)) {
+          if (file !== 'scroll-monitor-production.yaml') valuesFiles[file] = mergeBootstrapValues(bootstrapFiles[`values/${file}`], content)
+        }
       }
     }
 

@@ -480,6 +480,23 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     expect((yaml.load(fs.readFileSync(file, 'utf8')) as any).controller.replicas).to.equal(0)
   })
 
+  it('gives an S3 eager producer the existing coordinator identity and preserves explicit identities', () => {
+    const bundle = fakeBundle(path.join(root, 'eager-irsa-bundle'), 'active')
+    bundle.manifest.eager_materializer = 'eager-materializer.toml'
+    fs.writeFileSync(path.join(bundle.bundleDir, bundle.manifest.eager_materializer), '[service]\nlisten_port = 3007\nstate_dir = "/app/data"\n[materializer]\nl2_genesis_json = "/app/genesis/genesis.json"\n[artifact_store]\nkind = "s3"\n')
+    const file = path.join(root, 'values/eager-materializer-production.yaml')
+    const coordinator = {annotations: {'eks.amazonaws.com/role-arn': 'coordinator-role'}, name: 'custom-coordinator'}
+    fs.writeFileSync(file, yaml.dump({serviceAccount: {annotations: {}, create: true, name: 'eager-materializer'}}))
+    configureEagerMaterializerValues(file, bundle, topology('active'), coordinator)
+    expect((yaml.load(fs.readFileSync(file, 'utf8')) as any).serviceAccount).to.include({create: false, name: 'custom-coordinator'})
+    fs.writeFileSync(file, yaml.dump({serviceAccount: {annotations: {'eks.amazonaws.com/role-arn': 'operator-role'}, create: true, name: 'operator-eager'}}))
+    configureEagerMaterializerValues(file, bundle, topology('active'), coordinator)
+    expect((yaml.load(fs.readFileSync(file, 'utf8')) as any).serviceAccount).to.deep.equal({annotations: {'eks.amazonaws.com/role-arn': 'operator-role'}, create: true, name: 'operator-eager'})
+    fs.writeFileSync(file, yaml.dump({serviceAccount: {create: false, name: 'operator-existing'}}))
+    configureEagerMaterializerValues(file, bundle, topology('active'), coordinator)
+    expect((yaml.load(fs.readFileSync(file, 'utf8')) as any).serviceAccount.name).to.equal('operator-existing')
+  })
+
   it('keeps PC running with a minimal beta.1-compatible idle config when disabled', () => {
     reconcileCompiledProofTopology({
       compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'disabled'),

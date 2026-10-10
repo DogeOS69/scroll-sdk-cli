@@ -129,6 +129,8 @@ frontend:
     grafana: grafana
 
 contracts:
+  # Dogecoin P2PKH recipient of fee-vault withdrawals, not an EVM address.
+  feeVaultDogeRecipientAddress: REPLACE_WITH_DOGECOIN_P2PKH_ADDRESS
   l2BaseFeeOverheadWei: "420000000000"
   deploymentSalt: "dogeos-devnet-v1"
   gasOracle:
@@ -143,3 +145,8 @@ genesis:
   maxEthSupplyWei: "100000000000000000000000000000"
   deployerInitialBalanceWei: "1000000000000000000000000"
   baseFeePerGasWei: 1000000000
+
+# Enable after filling SLACK_WEBHOOK_URL in private deployment.env.
+monitoring:
+  slack:
+    enabled: false

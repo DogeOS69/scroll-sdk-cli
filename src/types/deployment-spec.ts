@@ -1,4 +1,5 @@
 import type {CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
+import type {MonitoringConfig} from '../utils/monitoring-slack.js'
 import type {DstackControllerConfig} from './dstack-controller.js'
 import type {PreparationConfig} from './preparation.js'
 import type {ActiveProofTopologySpec, ProofTopologyArtifactStoreConfig, ProofTopologyDeploymentConfig, ProofTopologySpec} from './proof-topology.js'
@@ -77,6 +78,9 @@ export interface DeploymentSpec {
 
   /** Deployment metadata */
   metadata: DeploymentMetadata
+
+  /** Notification intent only; Slack credentials use fixed SLACK_WEBHOOK_URL. */
+  monitoring?: MonitoringConfig
 
   /** Network and chain configuration */
   network: NetworkConfig
@@ -745,10 +749,12 @@ export interface RollupConfig {
 export interface ContractsConfig {
   /** Deployment salt for deterministic addresses */
   deploymentSalt: string
+  /** Dogecoin P2PKH recipient of fee-vault withdrawals; required before deploying L2 contracts. */
+  feeVaultDogeRecipientAddress?: string
   /** Gas oracle settings */
   gasOracle: {
     blobScalar: number
-    /** Galileo commit scalar. Defaults to the contracts template value 38_720_000_000. */
+    /** Galileo commit scalar. Defaults to the rc.5 contracts template value 600_000_000. */
     commitScalar?: number
     penaltyFactor: number
     penaltyThreshold: number

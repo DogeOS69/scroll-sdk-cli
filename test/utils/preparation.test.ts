@@ -28,6 +28,7 @@ const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 function fixture(): DeploymentSpec {
   const spec = yaml.load(fs.readFileSync(path.join(cli, 'src/config/deployment-spec.minimal.yaml'), 'utf8').replaceAll('$ENV:OWNER_ADDRESS', Wallet.createRandom().address).replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')) as DeploymentSpec
   spec.infrastructure = {bootnodeCount: 1, provider: 'local', sequencerCount: 1}
+  spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toAddress().toString()
   spec.bridge.confirmationsRequired = 2
   spec.images = {services: Object.fromEntries(['l2Rpc', 'l2Sequencer', 'l2Bootnode'].map(key => [key, {tag: 'explicit-test-release'}]))}
   spec.identities = {bootnodes: [{index: 0, nodekey: {action: 'create'}}], ethDaSubmitter: {action: 'create', backend: 'local'}, feeOracle: {action: 'create', backend: 'local'}, sequencers: [{index: 0, nodekey: {action: 'create'}, signer: {action: 'create', backend: 'local'}}]}
@@ -65,6 +66,81 @@ describe('resumable preparation plan', () => {
   afterEach(() => {fs.rmSync(root, {force: true, recursive: true})})
   const makePlan = () => createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml')})
 
+  it('refreshes only the runtime tail, archives previous evidence and preserves pinned deployment artifacts', async () => {
+    await makePlan()
+    const calls: string[] = []
+    const runner = {async run(step: {id: string}) {
+      calls.push(step.id)
+      if (step.id === 'bootstrap') {
+        fs.mkdirSync(path.join(deployment, '.data'), {recursive: true})
+        fs.writeFileSync(path.join(deployment, '.data/doge-config.toml'), 'network = "testnet"\n')
+        fs.writeFileSync(path.join(deployment, '.data/genesis.json'), '{"pinned":true}')
+        fs.writeFileSync(path.join(deployment, '.data/proof-program-publication-v1.json'), '{"testEvidence":true}')
+        fs.mkdirSync(path.join(deployment, 'signer-policy-bundle'))
+        fs.writeFileSync(path.join(deployment, 'signer-policy-bundle/signer-policy.json'), '{"oldVersion":true}')
+      }
+    }}
+    await applyPreparation(deployment, runner)
+    const intent = fs.readFileSync(path.join(deployment, '.scrollsdk/intent.json'))
+    calls.length = 0
+    await applyPreparation(deployment, runner, undefined, {refreshRuntime: true})
+    expect(calls[0]).to.equal('charts')
+    expect(calls).not.to.include('identities')
+    expect(calls).not.to.include('genesis')
+    expect(calls).not.to.include('helper-setup')
+    expect(fs.readFileSync(path.join(deployment, '.scrollsdk/intent.json')).equals(intent)).to.equal(true)
+    expect(fs.readFileSync(path.join(deployment, '.data/genesis.json'), 'utf8')).to.equal('{"pinned":true}')
+    expect(fs.existsSync(path.join(deployment, '.data/proof-program-publication-v1.json'))).to.equal(false)
+    const history = path.join(deployment, '.scrollsdk/runtime-refresh')
+    const saved = path.join(history, fs.readdirSync(history)[0], 'proof-program-publication-v1.json')
+    expect(fs.readFileSync(saved, 'utf8')).to.equal('{"testEvidence":true}')
+    expect(fs.existsSync(path.join(deployment, 'signer-policy-bundle'))).to.equal(false)
+    expect(fs.readFileSync(path.join(path.dirname(saved), 'signer-policy-bundle/signer-policy.json'), 'utf8')).to.equal('{"oldVersion":true}')
+    fs.appendFileSync(path.join(deployment, '.data/genesis.json'), ' ')
+    await rejected(() => applyPreparation(deployment, runner, undefined, {refreshRuntime: true}), 'outside the workflow')
+  })
+
+  it('refuses runtime refresh before immutable preparation has completed', async () => {
+    await makePlan()
+    await rejected(() => applyPreparation(deployment, {async run() {throw new Error('must not run')}}, undefined, {refreshRuntime: true}), 'completed preparation')
+    await rejected(() => applyPreparation(deployment, {async run() {}}, undefined, {dogecoinRoutingSpec: 'unused.yaml'}), '--refresh-runtime')
+  })
+
+  it('imports only validated runtime routing and preserves all unrelated generated configuration', async () => {
+    await makePlan()
+    const runner = {async run(step: {id: string}) {
+      if (step.id === 'bootstrap') {
+        fs.mkdirSync(path.join(deployment, '.data'), {recursive: true})
+        fs.writeFileSync(path.join(deployment, '.data/doge-config.toml'), 'deployment_name = "pinned-name"\n[kubernetes]\nserviceName = "old-node"\n[attestationSigner.policyValidation]\nstale = true\n')
+      }
+    }}
+    await applyPreparation(deployment, runner)
+    const document = JSON.parse(fs.readFileSync(path.join(deployment, '.scrollsdk/intent.json'), 'utf8'))
+    document.dogecoin.kubernetes = {p2pPort: 32_003, rpcPort: 32_002, serviceName: 'shadowfork-test'}
+    document.metadata.name = 'not-imported'
+    const routing = path.join(root, 'routing.yaml')
+    fs.writeFileSync(routing, yaml.dump(document))
+    const oldUser = process.env.DOGECOIN_CLUSTER_RPC_USERNAME; const oldPassword = process.env.DOGECOIN_CLUSTER_RPC_PASSWORD
+    process.env.DOGECOIN_CLUSTER_RPC_USERNAME = 'NONFUNCTIONAL_TEST_USER'
+    process.env.DOGECOIN_CLUSTER_RPC_PASSWORD = 'NONFUNCTIONAL_TEST_PASSWORD'
+    try {
+      await applyPreparation(deployment, runner, undefined, {dogecoinRoutingSpec: routing, refreshRuntime: true})
+      const configFile = path.join(deployment, '.data/doge-config.toml')
+      const config = toml.parse(fs.readFileSync(configFile, 'utf8')) as any
+      expect(config.kubernetes).to.deep.equal(document.dogecoin.kubernetes)
+      expect(config.deployment_name).to.equal('pinned-name')
+      expect(config.dogecoinClusterRpc.username).to.equal('NONFUNCTIONAL_TEST_USER')
+      expect(config.attestationSigner).not.to.have.property('policyValidation')
+      const before = fs.readFileSync(configFile)
+      document.dogecoin.network = 'unsupported-chain'; fs.writeFileSync(routing, yaml.dump(document))
+      await rejected(() => applyPreparation(deployment, runner, undefined, {dogecoinRoutingSpec: routing, refreshRuntime: true}), 'planned Dogecoin network')
+      expect(fs.readFileSync(configFile).equals(before)).to.equal(true)
+    } finally {
+      if (oldUser === undefined) delete process.env.DOGECOIN_CLUSTER_RPC_USERNAME; else process.env.DOGECOIN_CLUSTER_RPC_USERNAME = oldUser
+      if (oldPassword === undefined) delete process.env.DOGECOIN_CLUSTER_RPC_PASSWORD; else process.env.DOGECOIN_CLUSTER_RPC_PASSWORD = oldPassword
+    }
+  })
+
   it('plans without execution, waits for input, resumes and skips every completed step', async () => {
     fs.mkdirSync(deployment, {mode: 0o755})
     const plan = await makePlan()
@@ -90,6 +166,8 @@ describe('resumable preparation plan', () => {
     const file = path.join(root, 'intent.yaml')
     const spec = yaml.load(fs.readFileSync(file, 'utf8')) as DeploymentSpec
     const revision = spec.templates!.sdkRevision
+    // This case verifies the unmodified committed template, without overlays.
+    delete spec.monitoring
     delete spec.templates
     fs.writeFileSync(file, yaml.dump(spec))
     const plan = await makePlan()
@@ -262,6 +340,26 @@ describe('resumable preparation plan', () => {
     expect(calls[1]).to.include.members(['prep-charts', '--proof-materials-receipt', '.data/proof-materials-v1.json', '--proof-publication-receipt', '.data/proof-program-publication-v1.json'])
   })
 
+  it('resolves proof storage before DA permissions and applies only explicit public-read intent', async () => {
+    const spec = fixture()
+    spec.preparation!.proofAws = {action: 'create', publicReadMode: 'direct-s3'}
+    spec.preparation!.archive = {action: 'create', publicRead: true}
+    const ids = preparationSteps(spec).map(step => step.id)
+    expect(ids.indexOf('proof-aws')).to.be.lessThan(ids.indexOf('archive'))
+    expect(ids.indexOf('archive')).to.be.lessThan(ids.indexOf('charts'))
+    expect(ids.indexOf('archive')).to.be.lessThan(ids.indexOf('archive-access'))
+    const calls: string[][] = []
+    const runner = new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)})
+    const plan = await makePlan()
+    await runner.run(preparationSteps(spec).find(step => step.id === 'archive-access')!, spec, deployment, plan)
+    expect(calls[0]).to.include.members(['artifact-access', '--public-read', '--allow-bucket-public-policy', '--apply'])
+    spec.preparation!.archive.publicRead = false
+    await runner.run(preparationSteps(spec).find(step => step.id === 'archive-access')!, spec, deployment, plan)
+    expect(calls[1]).to.include('--no-public-read').and.not.to.include('--allow-bucket-public-policy')
+    delete spec.preparation!.archive.publicRead
+    expect(preparationSteps(spec).some(step => step.id === 'archive-access')).to.equal(false)
+  })
+
   it('binds provisioned proof delivery before chart generation without hiding explicit drift', async () => {
     const spec = fixture()
     const plan = await makePlan()
@@ -279,7 +377,7 @@ describe('resumable preparation plan', () => {
       withdrawalServiceAccount: 'withdrawal-processor',
     })
     writeProofAwsConfig(path.join(deployment, '.data/proof-aws.json'), aws)
-    const config: any = {preserved: 'operator-setting', proof_topology: {active: {artifactStore: {bucket: aws.artifactStore.bucket, kind: 's3_compatible', region: aws.artifactStore.region}}, deployment: {artifactKeyPrefix: aws.artifactStore.keyPrefix}}}
+    const config: any = {bootnodeReth: {instances: [{index: 0}]}, preserved: 'operator-setting', proof_topology: {active: {artifactStore: {bucket: aws.artifactStore.bucket, kind: 's3_compatible', region: aws.artifactStore.region}}, deployment: {artifactKeyPrefix: aws.artifactStore.keyPrefix}}}
     fs.writeFileSync(configFile, toml.stringify(config))
     let calls = 0
     const runner = new CommandPreparationRunner(async () => {
@@ -302,6 +400,28 @@ describe('resumable preparation plan', () => {
     await rejected(() => runner.run(charts, spec, deployment, plan), 'artifact bucket')
     expect(fs.readFileSync(configFile, 'utf8')).to.equal(before)
     expect(calls).to.equal(2)
+  })
+
+  it('restores missing bootnodes before charts without repeating other identity preparation', async () => {
+    const spec = fixture()
+    spec.identities!.bootnodes!.push({index: 1, nodekey: {action: 'create'}})
+    const plan = await makePlan()
+    const file = path.join(deployment, '.data/doge-config.toml')
+    fs.mkdirSync(path.dirname(file), {recursive: true})
+    const existing = {index: 1, nodekey: {privateKey: 'NONFUNCTIONAL_TEST_KEY'}}
+    fs.writeFileSync(file, toml.stringify({bootnodeReth: {instances: [existing]}}))
+    const calls: string[][] = []
+    const runner = new CommandPreparationRunner(async (_root, _step, args) => {
+      calls.push(args)
+      if (args[0] === 'gen-keystore') {
+        expect(args).to.include.members(['--service', 'bootnode-reth', '--no-accounts'])
+        fs.writeFileSync(file, toml.stringify({bootnodeReth: {instances: [{index: 0}, existing]}}))
+      }
+    })
+    const charts = preparationSteps(spec).find(step => step.id === 'charts')!
+    await runner.run(charts, spec, deployment, plan)
+    await runner.run(charts, spec, deployment, plan)
+    expect(calls.map(args => args[0])).to.deep.equal(['gen-keystore', 'prep-charts', 'prep-charts'])
   })
 
   it('rejects external inputs that replace the canonical protocol context', () => {

@@ -11,6 +11,7 @@ import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec
 import {usesDstackPostgres} from './dstack-database.js'
 import {AwaitingInput, digest, loadPreparationEnv, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolvePreparationProofRelease} from './preparation-release.js'
+import {refreshPreparationRuntime} from './preparation-runtime-refresh.js'
 import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {planSpecBootstrap, resolveSdkRevision} from './spec-bootstrap.js'
 import {resolveCubesignerIdentity} from './spec-cubesigner.js'
@@ -34,8 +35,10 @@ export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
   add('bootstrap', 'Generate configuration from pinned SDK templates')
   if (p.bridge.mode === 'production') add('bridge-fee-wallet', 'Derive and pin the fee-wallet public identity from DOGECOIN_FEE_WALLET_KEY')
   add('identities', 'Prepare declared service identities and deployment account', JSON.stringify(spec.identities ?? {}).includes('aws_kms') ? 'cloud' : 'local')
-  if (p.archive) add('archive', 'Reconcile declared DA archive resources and writer access', 'cloud')
   if (p.proofAws) add('proof-aws', p.proofAws.action === 'reuse' ? 'Discover existing proof artifact store and workload access' : 'Provision proof artifact store and workload access', p.proofAws.action === 'reuse' ? 'read' : 'cloud')
+  // Archive writer access also covers segmentation sidecars in the resolved proof bucket.
+  if (p.archive) add('archive', 'Reconcile declared DA archive resources and writer access', 'cloud')
+  if (p.archive?.publicRead !== undefined) add('archive-access', 'Reconcile explicit DA blob read access', 'cloud')
   if (p.bridge.production?.sequencerKms) add('bridge-sequencer-kms', 'Prepare and pin the Bridge sequencer KMS key and withdrawal signing access', p.bridge.production.sequencerKms.action === 'create' ? 'cloud' : 'read')
   if (spec.dstackController && spec.dstackController.enabled !== false) {
     add('dstack', 'Prepare dstack controller credentials and config')
@@ -104,6 +107,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
   if (p.proofPublication && Boolean(p.proofPublication.release) !== Boolean(p.proofPublication.releaseSha256)) throw new Error('Publication release and releaseSha256 must be supplied together')
   if (p.proofPublication && (!/^[\da-f]{64}$/.test(p.proofPublication.releaseSha256 ?? p.proofRelease?.sha256 ?? '') || spec.proofTopology?.generation !== 'real')) throw new Error('Publication requires a pinned release manifest and real generation')
   if (p.archive && !['configure', 'create'].includes(p.archive.action)) throw new Error('Archive action must be configure or create')
+  if (p.archive?.publicRead !== undefined && typeof p.archive.publicRead !== 'boolean') throw new Error('Archive publicRead must be a boolean')
   if (p.proofAws && !['create', 'reuse'].includes(p.proofAws.action)) throw new Error('proofAws.action must select create or reuse')
   if (p.proofAws?.action === 'reuse' && p.proofAws.publicReadMode === 'direct-s3') throw new Error('Reuse proof resources with existing-public-s3 or existing-gateway; direct-s3 manages bucket policy')
   if (p.proofAws?.action === 'create' && (p.proofAws.coordinatorRoleName || p.proofAws.withdrawalRoleName)) throw new Error('Existing role names require proofAws.action: reuse')
@@ -228,7 +232,8 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
 }
 
 export interface PreparationRunner {run(step: PreparationStep, spec: DeploymentSpec, root: string, plan: PreparationPlan): Promise<void>}
-export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}): Promise<PreparationState> {
+export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}, options: {dogecoinRoutingSpec?: string; refreshRuntime?: boolean} = {}): Promise<PreparationState> {
+  if (options.dogecoinRoutingSpec && !options.refreshRuntime) throw new Error('Dogecoin routing updates require --refresh-runtime')
   const root = fs.realpathSync(rootInput)
   const directory = localPath(root, WORKFLOW_DIR)
   const plan = JSON.parse(fs.readFileSync(localPath(root, `${WORKFLOW_DIR}/plan.json`), 'utf8')) as PreparationPlan
@@ -249,6 +254,11 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
   fs.writeFileSync(fd, JSON.stringify({host: os.hostname(), pid: process.pid})); fs.closeSync(fd)
   try {
     for (const [file, hash] of Object.entries(state.files)) if (!fs.existsSync(localPath(root, file)) || digest(fs.readFileSync(localPath(root, file))) !== hash) throw new Error(`Prepared artifact changed outside the workflow: ${file}`)
+    if (options.refreshRuntime) {
+      refreshPreparationRuntime(root, plan, state, spec, options.dogecoinRoutingSpec)
+      state.files = fingerprint(root); writeJson(statePath, state)
+    }
+
     for (const step of plan.steps) {
       if (state.steps[step.id] === 'completed') continue
       if (state.steps[step.id] === 'recovery-required' || state.steps[step.id] === 'running' && step.retry === 'reconcile') {

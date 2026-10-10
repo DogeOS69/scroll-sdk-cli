@@ -12,6 +12,8 @@ import {fileURLToPath} from 'node:url'
 import {DSTACK_CREDENTIALS_FILE, readDstackCredentials, writePrivateFile} from '../../../src/utils/dstack-credentials.js'
 import {readDstackControllerConfig} from '../../../src/utils/dstack-database.js'
 import {loadDstackSecretPublication, publishDstackSecrets, runSecretKubectl} from '../../../src/utils/dstack-secret-publisher.js'
+import {writeGrafanaAdminSecret} from '../../../src/utils/grafana-admin.js'
+import {reconcileScrollMonitorGrafana} from '../../../src/utils/scroll-monitor-values.js'
 
 const cli = fileURLToPath(new URL('../../../bin/run.js', import.meta.url))
 const privateKey = generateKeyPairSync('rsa', {modulusLength: 2048}).privateKey.export({format: 'pem', type: 'pkcs8'}).toString()
@@ -272,6 +274,31 @@ else console.log('{}');
     const incomplete = execute('push-secrets', '--aws-region', 'us-east-1', '--kube-context', 'isolated-e2e', '--namespace', 'dstack-system', '-N', '--json')
     expect(incomplete.status).not.to.equal(0)
     expect(uploads()).to.have.length(0)
+  })
+
+  it('uploads Grafana through AWS/Vault and reconciles ExternalSecret references like Dogecoin', () => {
+    const password = 'nonfunctional-grafana-store-fixture'
+    writeGrafanaAdminSecret({adminPassword: password})
+    const values = {grafana: {ingress: {enabled: true}}}
+    reconcileScrollMonitorGrafana(values, {adminPassword: password})
+    fs.mkdirSync('values', {recursive: true})
+    fs.writeFileSync('values/scroll-monitor-production.yaml', yaml.dump(values))
+    installUploadStubs()
+    for (const provider of ['aws', 'vault']) {
+      const result = run('push-secrets', '--provider', provider, '--secret-file', 'secrets/grafana-admin.env', '--values-file', 'values/scroll-monitor-production.yaml', '--aws-region', 'us-east-1', '--aws-prefix', 'operator-instance')
+      expect(result.secretsPushed).to.deep.equal(['grafana-admin-env'])
+      expect(JSON.stringify(result)).not.to.include(password)
+      const rendered = yaml.load(fs.readFileSync('values/scroll-monitor-production.yaml', 'utf8')) as any
+      const external = rendered.externalSecrets['grafana-admin']
+      expect(external.provider).to.equal(provider)
+      expect(external.data.map((item: any) => item.remoteRef.property)).to.deep.equal(['admin-user', 'admin-password'])
+      expect(external.data.every((item: any) => item.remoteRef.key.endsWith('/grafana-admin-env'))).to.equal(true)
+      expect(rendered.grafana.admin.existingSecret).to.equal('grafana-admin')
+      expect(rendered.grafana.ingress.enabled).to.equal(true)
+      expect(JSON.stringify(rendered)).not.to.include(password)
+    }
+
+    expect(uploads().some(call => call.tool === 'kubectl' && call.args.includes('apply'))).to.equal(false)
   })
 
   it('preserves --secret-file and --cubesigner-only scopes even with invalid unrelated dstack config', () => {

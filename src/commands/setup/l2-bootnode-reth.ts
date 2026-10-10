@@ -190,9 +190,10 @@ export default class SetupL2BootnodeReth extends Command {
     const nodekeyFlags = Array.isArray(flags.nodekey) ? flags.nodekey : flags.nodekey ? [flags.nodekey] : []
     const resolvedInstances: ResolvedBootnodeRethConfig[] = []
 
-    for (const index of flags.indices || Array.from({length: count}, (_, i) => i)) {
+    const indices: number[] = flags.indices || Array.from({length: count}, (_, i) => i)
+    for (const [position, index] of indices.entries()) {
       const existing = this.getExistingInstance(dogeConfig, index)
-      const nodekey = await this.resolveNodekey(index, resolveEnvValue(nodekeyFlags[index]), existing, nonInteractive)
+      const nodekey = await this.resolveNodekey(index, resolveEnvValue(nodekeyFlags[flags.indices ? position : index]), existing, nonInteractive)
       const secretMode = await this.resolveSecretMode(flags['secret-mode'], existing, index, nonInteractive)
       const enodeUrl = deriveBootnodeRethEnodeUrl(nodekey, index)
       resolvedInstances.push({
@@ -204,7 +205,7 @@ export default class SetupL2BootnodeReth extends Command {
       })
     }
 
-    this.updateDogeConfig(dogeConfig, resolvedInstances)
+    this.updateDogeConfig(dogeConfig, resolvedInstances, Boolean(flags.indices))
     fs.writeFileSync(configPath, dogeConfigToToml(dogeConfig), {mode: 0o600})
     fs.chmodSync(configPath, 0o600)
     jsonCtx.logSuccess(`Updated ${path.relative(process.cwd(), configPath) || configPath}`)
@@ -320,15 +321,17 @@ export default class SetupL2BootnodeReth extends Command {
     })
   }
 
-  private updateDogeConfig(dogeConfig: DogeConfig, resolvedInstances: ResolvedBootnodeRethConfig[]): void {
+  private updateDogeConfig(dogeConfig: DogeConfig, resolvedInstances: ResolvedBootnodeRethConfig[], scoped = false): void {
     dogeConfig.bootnodeReth ||= {}
-    dogeConfig.bootnodeReth.instances = resolvedInstances.map(instance => ({
+    const selected = new Set(resolvedInstances.map(instance => instance.index))
+    const retained = scoped ? (dogeConfig.bootnodeReth.instances ?? []).filter(instance => !selected.has(instance.index)) : []
+    dogeConfig.bootnodeReth.instances = [...retained, ...resolvedInstances.map(instance => ({
       enodeUrl: instance.enodeUrl,
       index: instance.index,
       nodekey: {
         privateKey: instance.nodekey,
         secretMode: instance.secretMode,
       },
-    }))
+    }))].sort((a, b) => a.index - b.index)
   }
 }

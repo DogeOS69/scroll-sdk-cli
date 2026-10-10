@@ -19,6 +19,7 @@ import {
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
+import {contractsDeploymentGasPrice} from '../../utils/contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
 import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
@@ -33,6 +34,7 @@ import {
   resolveDogecoinServiceRpcUrl,
 } from '../../utils/kubernetes-endpoints.js'
 import { parseHelmUpgradeRecipes } from '../../utils/makefile-helm.js'
+import {reconcileMonitoringSlack} from '../../utils/monitoring-slack.js'
 import {readPreparedSequencerKms} from '../../utils/preparation-sequencer-kms.js'
 import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
 import {
@@ -414,52 +416,6 @@ export function reconcileGrafanaIngressHost(
   }
 
   return changes
-}
-
-/** Replace a generated Proof Coordinator batch-materializer RPC without
- * taking ownership of any other compiler-rendered TOML. */
-export function reconcileProofCoordinatorBatchL2Rpc(
-  source: string,
-  desiredUrl: string | undefined,
-): {changed: boolean; content: string} {
-  if (!desiredUrl) return {changed: false, content: source}
-  // Parse first so malformed native config still fails at its normal boundary.
-  toml.parse(source)
-  const lines = source.replaceAll('\r\n', '\n').split('\n')
-  const section = /^\s*\[materializer\.scroll_batch\.subprocess]\s*$/
-  const nextSection = /^\s*\[/
-  const assignment = /^(\s*)l2_rpc_url\s*=.*$/
-  const sectionIndex = lines.findIndex(line => section.test(line))
-  if (sectionIndex < 0) return {changed: false, content: source}
-  let end = lines.length
-  for (let index = sectionIndex + 1; index < lines.length; index++) {
-    if (nextSection.test(lines[index])) {
-      end = index
-      break
-    }
-  }
-
-  const matches: number[] = []
-  for (let index = sectionIndex + 1; index < end; index++) {
-    if (assignment.test(lines[index])) matches.push(index)
-  }
-
-  if (matches.length > 1) {
-    throw new Error('Proof Coordinator batch materializer contains duplicate l2_rpc_url assignments')
-  }
-
-  const rendered = `l2_rpc_url = ${JSON.stringify(desiredUrl)}`
-  if (matches.length === 1) {
-    const index = matches[0]
-    const indentation = lines[index].match(assignment)?.[1] || ''
-    if (lines[index] === `${indentation}${rendered}`) return {changed: false, content: source}
-    lines[index] = `${indentation}${rendered}`
-  } else {
-    const indentation = lines[sectionIndex].match(/^(\s*)/)?.[1] || ''
-    lines.splice(sectionIndex + 1, 0, `${indentation}${rendered}`)
-  }
-
-  return {changed: true, content: lines.join('\n')}
 }
 
 /** Remove values files for the retired in-cluster attestation-signer chart. */
@@ -1077,6 +1033,15 @@ export function applyTsoPublicEdgePaths(productionYaml: any): PrepChartChange[] 
   if (!ingresses || typeof ingresses !== 'object') return changes
   for (const [ingressKey, ingress] of Object.entries(ingresses as Record<string, any>)) {
     if (!ingress || typeof ingress !== 'object' || ingress.enabled === false || !Array.isArray(ingress.hosts)) continue
+    // Spec selects ingress-nginx; example ALB settings must not survive the merge.
+    if (ingress.ingressClassName === 'nginx' && ingress.annotations) {
+      for (const key of Object.keys(ingress.annotations)) {
+        if (!key.startsWith('alb.ingress.kubernetes.io/')) continue
+        changes.push({key: `ingress.${ingressKey}.annotations.${key}`, newValue: 'removed', oldValue: String(ingress.annotations[key])})
+        delete ingress.annotations[key]
+      }
+    }
+
     for (const [index, host] of ingress.hosts.entries()) {
       if (!host || typeof host !== 'object') continue
       const desired = TSO_PUBLIC_INGRESS_PATHS.map(entry => ({...entry}))
@@ -2322,6 +2287,17 @@ export default class SetupPrepCharts extends Command {
       const changes: Array<{ key: string; newValue: string; oldValue: string }> = []
       if (updated) changes.push({key: 'retired indexer settings', newValue: 'removed', oldValue: 'present'})
 
+      if (chartName === 'contracts') {
+        const env = productionYaml.configMaps?.['contracts-deployment-env']?.data
+        const price = contractsDeploymentGasPrice(this.getConfigValue('contracts.L2_BASE_FEE_OVERHEAD'))
+        if (env && env.ETH_GAS_PRICE !== price) {
+          changes.push({key: 'contracts ETH_GAS_PRICE', newValue: price ?? 'automatic', oldValue: String(env.ETH_GAS_PRICE ?? 'automatic')})
+          if (price) env.ETH_GAS_PRICE = price
+          else delete env.ETH_GAS_PRICE
+          updated = true
+        }
+      }
+
       // In the normal deployment flow every concrete Reth node uses the L2
       // chain ID as its P2P network ID. A shadowfork may intentionally override
       // these values afterward to isolate the dev P2P network from production.
@@ -2716,7 +2692,7 @@ export default class SetupPrepCharts extends Command {
       }
 
       if (chartName === 'scroll-monitor') {
-        const grafanaChanges = reconcileScrollMonitorGrafana(productionYaml, this.dogeConfig.grafana)
+        const grafanaChanges = [...reconcileScrollMonitorGrafana(productionYaml, this.dogeConfig.grafana), ...reconcileMonitoringSlack(productionYaml, this.dogeConfig.monitoring)]
         changes.push(...grafanaChanges)
         if (grafanaChanges.length > 0) updated = true
         const monitorChanges = reconcileScrollMonitorBalances(productionYaml, {
@@ -3658,15 +3634,6 @@ export default class SetupPrepCharts extends Command {
       network: this.dogeConfig.network,
     })
     const coordinatorConfigPath = path.resolve('proof-coordinator/ProofCoordinator.toml')
-    if (fs.existsSync(coordinatorConfigPath)) {
-      const current = fs.readFileSync(coordinatorConfigPath, 'utf8')
-      const reconciled = reconcileProofCoordinatorBatchL2Rpc(
-        current,
-        this.getConfigValue('frontend.EXTERNAL_RPC_URI_L2'),
-      )
-      if (reconciled.changed) fs.writeFileSync(coordinatorConfigPath, reconciled.content)
-    }
-
     const result = reconcileProofKubernetes({
       coordinatorConfigPath,
       coordinatorIngressHost: typeof coordinatorIngressHost === 'string'
