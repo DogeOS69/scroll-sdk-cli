@@ -7,7 +7,7 @@ import {createWorkerCapacityPlan} from '../../utils/proof-workers-plan.js'
 
 export default class ProofWorkers extends Command {
   static args = {action: Args.string({default: 'status', options: ['plan', 'apply', 'status', 'destroy']})}
-  static description = 'Plan, submit, inspect or destroy bounded Vast.ai GPU workers through the deployed dstack controller'
+  static description = 'Plan, submit, inspect or destroy bounded AWS or Vast.ai GPU workers through the deployed dstack controller'
   static flags = {
     'deployment-dir': Flags.string({default: '.', description: 'Generated deployment/runtime directory'}),
     json: Flags.boolean({default: false}),

@@ -15,4 +15,11 @@ jobs:
           cache: yarn
       - run: yarn
       - run: yarn build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate native dstack worker models and lifecycle offline
+        run: |
+          python -m pip install 'dstack==0.21.5'
+          python scripts/test-proof-workers-controller.py
       - run: yarn test
