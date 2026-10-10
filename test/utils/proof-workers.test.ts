@@ -56,6 +56,48 @@ describe('bounded proof-worker capacity', () => {
     expect(rentalEnvelope(resolveProofWorkers({maxDurationHours: 48, rentalBudgetUsd: 40}))).to.equal(39.07)
     for (const bad of [{idleTimeoutMinutes: 0}, {count: 0}, {memoryGb: 8}, {minReliability: 0.5}, {rentalBudgetUsd: Number.NaN}]) expect(() => resolveProofWorkers(bad)).to.throw()
   })
+  const awsConfig = {backend: 'aws', cpu: 16, gpu: 'L4', maxPricePerHourUsd: 1.5, regions: ['us-east-1'], rentalBudgetUsd: 5} as const
+  const aws = () => ({...awsConfig, regions: [...awsConfig.regions]})
+  it('requires explicit AWS placement and budgets instead of inheriting Vast defaults', () => {
+    for (const field of ['cpu', 'gpu', 'regions', 'maxPricePerHourUsd', 'rentalBudgetUsd'] as const) {
+      const config = aws()
+      delete (config as Partial<typeof config>)[field]
+      expect(() => resolveProofWorkers(config)).to.throw('AWS proofWorkers requires')
+    }
+
+    expect(() => resolveProofWorkers({...aws(), cpu: 8})).to.throw('cpu >= 16')
+    expect(() => resolveProofWorkers({...aws(), regions: ['us-texas']})).to.throw('AWS region')
+    expect(() => resolveProofWorkers({...aws(), rentalBudgetUsd: 3})).to.throw('rental envelope')
+    expect(rentalEnvelope(resolveProofWorkers(aws()))).to.equal(4.25)
+  })
+  it('selects only AWS L4 on-demand capacity with CUDA 89 and distinct worker names', () => {
+    const {input, plan: vast} = fixturePlan()
+    input.spec.proofWorkers = aws()
+    expect(() => capacityPlan(input)).to.throw('incompatible')
+    input.imageCheck.cudaArchitectures.push('89')
+    const plan = capacityPlan(input)
+    const {fleet, name, task} = plan.workers[0]
+    for (const config of [fleet, task]) {
+      expect(config.backends).to.deep.equal(['aws'])
+      expect(config.regions).to.deep.equal(['us-east-1'])
+      expect(config.instance_types).to.deep.equal(['g6.4xlarge'])
+      expect(config.spot_policy).to.equal('on-demand')
+      expect(config.max_price).to.equal(1.5)
+      expect(config.resources).to.deep.equal({cpu: 'x86:16..', disk: '200GB..', gpu: {count: 1, memory: '22GB..', name: 'L4'}, memory: '64GB..'})
+      expect(config).not.to.have.property('backend_options')
+    }
+
+    expect(name).to.match(/^sdk-aws-/)
+    expect((task.commands as string[])[0]).to.contain("= '89'").and.contain(`--worker-id' 'test-deployment-initial-aws-`)
+    expect(plan.id).not.to.equal(vast.id)
+    expect(vast.workers[0].name).to.match(/^sdk-[\da-f]{16}-0$/)
+    expect(vast.workers[0].fleet.backend_options).to.deep.equal([{min_reliability: 0.95, offer_order: 'price', type: 'vastai'}])
+    expect(vast.workers[0].task.backends).to.deep.equal(['vastai'])
+  })
+  it('preserves the serialized Vast plan from the deployed SDK revision', () => {
+    // Captured from PR #78 at a9af2807, including its plan ID and worker names.
+    expect(digest(JSON.stringify(fixturePlan().plan))).to.equal('e76ff8a447c9b9ba4d1e3f5ee0282644550ceb4e87a71d64d3a9da4fd5c7b2bf')
+  })
   it('carries operator durations into the task and watchdog without a CLI policy cap', () => {
     for (const [hours, seconds, envelope] of [[0.1, 360, 0.75], [48, 172_800, 39.07], [49, 176_400, 39.87], [168, 604_800, 135.07], [720, 2_592_000, 576.67]]) {
       const {input} = fixturePlan()

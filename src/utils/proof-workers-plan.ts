@@ -82,13 +82,15 @@ export function capacityPlan(input: {generationId: string; imageCheck: ProofWork
   const seed = {config, deployment: spec.metadata.name, generationId: input.generationId, project, session, target: input.target}
   const id = digest(JSON.stringify(seed))
   const secretName = `scrollsdk_worker_${id.slice(0, 16)}`
-  const resources = {cpu: `${config.cpu}..`, disk: `${config.diskGb}GB..`, gpu: {count: 1, memory: '24GB..', name: config.gpu}, memory: `${config.memoryGb}GB..`}
+  const aws = config.backend === 'aws'
+  const providerOptions = aws ? {instance_types: ['g6.4xlarge']} : {}
+  const resources = {cpu: `${aws ? 'x86:' : ''}${config.cpu}..`, disk: `${config.diskGb}GB..`, gpu: {count: 1, memory: config.gpu === 'L4' ? '22GB..' : '24GB..', name: config.gpu}, memory: `${config.memoryGb}GB..`}
   const workers = Array.from({length: config.count}, (_, index) => {
-    const name = `sdk-${id.slice(0, 16)}-${index}`
-    const fleet = {backend_options: [{min_reliability: config.minReliability, offer_order: 'price', type: 'vastai'}], backends: ['vastai'], idle_duration: config.idleTimeoutMinutes * 60, max_price: config.maxPricePerHourUsd,
+    const name = `sdk-${aws ? 'aws-' : ''}${id.slice(0, 16)}-${index}`
+    const fleet = {...(aws ? {spot_policy: 'on-demand'} : {backend_options: [{min_reliability: config.minReliability, offer_order: 'price', type: 'vastai'}]}), ...providerOptions, backends: [config.backend], idle_duration: config.idleTimeoutMinutes * 60, max_price: config.maxPricePerHourUsd,
       name: `${name}-gpu`, nodes: '0..1', regions: config.regions, resources, retry: false,
       tags: {'scrollsdk-plan': id}, type: 'fleet'}
-    const task = {backends: ['vastai'], commands: [workerCommand(worker, publication, `${spec.metadata.name}-${session}-${id.slice(0, 8)}-${index}`, GPU_ARCHITECTURES[config.gpu])], env: {DOGEOS_PROVER_WORKER_READY_FILE: '/dogeos/artifacts/prover-worker-ready-v1.json', DOGEOS_PROVER_WORKER_TOKEN: '${{ secrets.' + secretName + ' }}', NVIDIA_DRIVER_CAPABILITIES: 'compute,utility', SCROLLSDK_WORKER_PLAN_ID: id}, fleets: [fleet.name], idle_duration: config.idleTimeoutMinutes * 60, image, max_duration: Math.floor(config.maxDurationHours * 3600), max_price: config.maxPricePerHourUsd,
+    const task = {...providerOptions, backends: [config.backend], commands: [workerCommand(worker, publication, `${spec.metadata.name}-${session}-${aws ? 'aws-' : ''}${id.slice(0, 8)}-${index}`, GPU_ARCHITECTURES[config.gpu])], env: {DOGEOS_PROVER_WORKER_READY_FILE: '/dogeos/artifacts/prover-worker-ready-v1.json', DOGEOS_PROVER_WORKER_TOKEN: '${{ secrets.' + secretName + ' }}', NVIDIA_DRIVER_CAPABILITIES: 'compute,utility', SCROLLSDK_WORKER_PLAN_ID: id}, fleets: [fleet.name], idle_duration: config.idleTimeoutMinutes * 60, image, max_duration: Math.floor(config.maxDurationHours * 3600), max_price: config.maxPricePerHourUsd,
       name, nodes: 1, regions: config.regions,
       resources, retry: false, spot_policy: 'on-demand',
       stop_duration: config.stopTimeoutMinutes * 60,
