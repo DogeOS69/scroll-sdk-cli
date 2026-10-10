@@ -348,6 +348,76 @@ describe('status-page generation and explicit Instatus apply', () => {
     expect((yaml.load(first) as any).statusPage.catalog.components).to.have.length(8)
   })
 
+  for (const source of ['conventional', 'saved', 'override', 'process']) {
+    it(`loads the ${source} management credential without exporting unrelated variables`, async () => {
+      prepareCommand()
+      const previousKey = process.env.INSTATUS_API_KEY
+      const unrelated = process.env.STATUS_PAGE_UNUSED_TEST_SECRET
+      delete process.env.INSTATUS_API_KEY
+      delete process.env.STATUS_PAGE_UNUSED_TEST_SECRET
+      fs.writeFileSync(path.join(directory, 'deployment.env'), 'INSTATUS_API_KEY=fixture-conventional-key\nSTATUS_PAGE_UNUSED_TEST_SECRET=fixture-unused\n')
+      let expected = 'fixture-conventional-key'
+      const flags: any = {plan: true}
+      if (source === 'saved' || source === 'override') {
+        fs.mkdirSync(path.join(directory, '.scrollsdk'))
+        const saved = path.join(directory, 'saved.env')
+        fs.writeFileSync(saved, 'INSTATUS_API_KEY=fixture-saved-key\n')
+        fs.writeFileSync(path.join(directory, '.scrollsdk/plan.json'), JSON.stringify({envFile: saved}))
+        expected = 'fixture-saved-key'
+      }
+
+      if (source === 'override') {
+        flags['env-file'] = path.join(directory, 'override.env')
+        fs.writeFileSync(flags['env-file'], 'INSTATUS_API_KEY="fixture-override-key"\n')
+        expected = 'fixture-override-key'
+      }
+
+      if (source === 'process') {process.env.INSTATUS_API_KEY = 'fixture-process-key'; expected = 'fixture-process-key'}
+      const before = fs.readFileSync(path.join(directory, 'scroll-monitor-production.yaml'), 'utf8')
+      const transport = sinon.stub(globalThis, 'fetch')
+      transport.onCall(0).resolves(response([{id: 'page-1', name: catalog.pageName, subdomain: 'dogeos'}]))
+      transport.onCall(1).resolves(response([]))
+      try {
+        await runCommand(flags)
+        expect(transport.callCount).eq(2)
+        expect(transport.getCalls().every(call => new Headers(call.args[1]?.headers).get('authorization') === `Bearer ${expected}`)).eq(true)
+        expect(process.env).not.to.have.property('STATUS_PAGE_UNUSED_TEST_SECRET')
+        expect(fs.readFileSync(path.join(directory, 'scroll-monitor-production.yaml'), 'utf8')).eq(before)
+      } finally {
+        if (previousKey === undefined) delete process.env.INSTATUS_API_KEY
+        else process.env.INSTATUS_API_KEY = previousKey
+        if (unrelated === undefined) delete process.env.STATUS_PAGE_UNUSED_TEST_SECRET
+        else process.env.STATUS_PAGE_UNUSED_TEST_SECRET = unrelated
+      }
+    })
+  }
+
+  for (const source of ['saved', 'explicit']) {
+    it(`rejects a missing ${source} credential file without falling back or contacting Instatus`, async () => {
+      prepareCommand()
+      const missing = path.join(directory, 'missing.env')
+      fs.writeFileSync(path.join(directory, 'deployment.env'), 'INSTATUS_API_KEY=fixture-must-not-fallback\n')
+      const flags: any = {plan: true}
+      if (source === 'saved') {
+        fs.mkdirSync(path.join(directory, '.scrollsdk'))
+        fs.writeFileSync(path.join(directory, '.scrollsdk/plan.json'), JSON.stringify({envFile: missing}))
+      } else flags['env-file'] = missing
+      const transport = sinon.stub(globalThis, 'fetch').rejects(new Error('must not contact provider'))
+      let error = ''
+      try {await runCommand(flags)} catch (error_) {error = String(error_)}
+      expect(error).contain('Cannot load status-page credentials').and.not.contain('fixture-must-not-fallback')
+      expect(transport.called).eq(false)
+    })
+  }
+
+  it('does not read a malformed private env file for offline generation', async () => {
+    prepareCommand()
+    fs.writeFileSync(path.join(directory, 'deployment.env'), 'not a NAME=value file')
+    const transport = sinon.stub(globalThis, 'fetch').rejects(new Error('must remain offline'))
+    await runCommand({})
+    expect(transport.called).eq(false)
+  })
+
   it('--plan makes only GETs and leaves the local input unchanged', async () => {
     prepareCommand()
     const before = fs.readFileSync(path.join(directory, 'scroll-monitor-production.yaml'), 'utf8')
@@ -372,7 +442,8 @@ describe('status-page generation and explicit Instatus apply', () => {
     fetcher.onCall(1).resolves(response([{group: {id: 'testnet-group', name: 'Testnet'}, id: 'anchor', name: 'Setup placeholder'}]))
     for (let index = 0; index < 8; index++) fetcher.onCall(index + 2).resolves(response({id: `new-${index}`}))
     const previousKey = process.env.INSTATUS_API_KEY
-    process.env.INSTATUS_API_KEY = 'fixture-key'
+    delete process.env.INSTATUS_API_KEY
+    fs.writeFileSync(path.join(directory, 'deployment.env'), 'INSTATUS_API_KEY=fixture-key\n')
     try { await runCommand({apply: true}) } finally {
       if (previousKey === undefined) delete process.env.INSTATUS_API_KEY
       else process.env.INSTATUS_API_KEY = previousKey

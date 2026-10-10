@@ -10,7 +10,7 @@ import * as path from 'node:path'
 
 import type { DogeConfig, Network } from '../../types/doge-config.js'
 
-import { L1_INTERFACE_RPC_ENDPOINT, L2_RPC_ENDPOINT, SETUP_DEFAULTS_TEMPLATE, YAML_DUMP_OPTIONS, getSetupDefaultsPath } from '../../config/constants.js'
+import { DEFAULT_WALLET_CONNECT_PROJECT_ID, L1_INTERFACE_RPC_ENDPOINT, L2_RPC_ENDPOINT, SETUP_DEFAULTS_TEMPLATE, YAML_DUMP_OPTIONS, getSetupDefaultsPath } from '../../config/constants.js'
 import { writeConfigs } from '../../utils/config-writer.js'
 import { dogeConfigToToml, loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
@@ -504,10 +504,10 @@ export default class SetupDomains extends Command {
     const walletProjectId = await resolveOrPrompt(
       niCtx,
       () => input({
-        default: existingConfig.frontend?.CONNECT_WALLET_PROJECT_ID || "14efbaafcf5232a47d93a68229b71028",
+        default: existingConfig.frontend?.CONNECT_WALLET_PROJECT_ID || DEFAULT_WALLET_CONNECT_PROJECT_ID,
         message: 'Enter the WalletConnect Project ID for the frontend ([frontend].CONNECT_WALLET_PROJECT_ID):',
       }),
-      existingConfig.frontend?.CONNECT_WALLET_PROJECT_ID || "14efbaafcf5232a47d93a68229b71028",
+      existingConfig.frontend?.CONNECT_WALLET_PROJECT_ID || DEFAULT_WALLET_CONNECT_PROJECT_ID,
       {
         configPath: '[frontend].CONNECT_WALLET_PROJECT_ID',
         description: 'WalletConnect project ID',
@@ -515,7 +515,7 @@ export default class SetupDomains extends Command {
       },
       false
     )
-    frontendConfig.CONNECT_WALLET_PROJECT_ID = walletProjectId || "14efbaafcf5232a47d93a68229b71028"
+    frontendConfig.CONNECT_WALLET_PROJECT_ID = walletProjectId || DEFAULT_WALLET_CONNECT_PROJECT_ID
 
     const regtestDogecoinUrl = `${PUBLIC_URL_PROTOCOL}://${ingressConfig.DOGECOIN_HOST}`
     const defaultDogeExternalRpcUrl = selectedDogeNetwork === 'regtest'

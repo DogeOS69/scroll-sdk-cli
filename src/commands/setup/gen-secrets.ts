@@ -13,12 +13,14 @@ import {prepareDstackMonitoringCredentials, readDstackCredentials, renderDstackS
 import {readDstackControllerConfig, usesDstackPostgres, writeDstackDatabaseSecret} from '../../utils/dstack-database.js'
 import {writeGrafanaAdminSecret} from '../../utils/grafana-admin.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
+import {writeMonitoringSlackSecret} from '../../utils/monitoring-slack.js'
 import {archiveRetiredServiceFiles} from '../../utils/retired-services.js'
 import {
   getRequiredManagedSignerConfig,
   isAwsKmsSigner,
   isLocalSigner,
 } from '../../utils/signer-roles.js'
+import {withdrawalSequencerKms} from '../../utils/withdrawal-signers.js'
 import { RETH_BOOTNODE_NODEKEY_ENV, getBootnodeRethResourceName } from './l2-bootnode-reth.js'
 import {
   RETH_NODEKEY_ENV,
@@ -173,6 +175,7 @@ export default class SetupGenSecrets extends Command {
     const config = toml.parse(configContent)
 
     if (this.dogeConfig.grafana) this.createGrafanaSecret()
+    writeMonitoringSlackSecret(this.dogeConfig.monitoring, fs.realpathSync(process.cwd()))
 
     const controller = this.dogeConfig.dstackController
     if (controller && controller.enabled !== false && readDstackCredentials()) {
@@ -324,7 +327,7 @@ export default class SetupGenSecrets extends Command {
       if (fs.existsSync(withdrawalProcessorTomlPath)) {
         const withdrawalProcessorToml = toml.parse(fs.readFileSync(withdrawalProcessorTomlPath, 'utf8'))
         content += this.envLine('DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY', withdrawalProcessorToml.fee_signer_key, 'output-withdrawal-processor.fee_signer_key')
-        content += this.envLine('DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY', withdrawalProcessorToml.sequencer_signer_key, 'output-withdrawal-processor.sequencer_signer_key')
+        if (!withdrawalSequencerKms(withdrawalProcessorToml)) content += this.envLine('DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY', withdrawalProcessorToml.sequencer_signer_key, 'output-withdrawal-processor.sequencer_signer_key')
       } else {
         this.jsonCtx.error(
           'E101_CONFIG_NOT_FOUND',

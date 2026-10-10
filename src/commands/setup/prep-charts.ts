@@ -17,12 +17,15 @@ import {
   YAML_DUMP_OPTIONS,
 } from '../../config/constants.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
+import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
+import {contractsDeploymentGasPrice} from '../../utils/contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
 import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues, validateDstackControllerConfig} from '../../utils/dstack-controller-values.js'
 import {readDstackControllerConfig} from '../../utils/dstack-database.js'
+import {type EthereumDaRuntimeConfig, ethereumDaRuntimeEnv} from '../../utils/ethereum-da-runtime.js'
 import { GenerationTransaction } from '../../utils/generation-transaction.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
@@ -31,7 +34,10 @@ import {
   resolveDogecoinServiceRpcUrl,
 } from '../../utils/kubernetes-endpoints.js'
 import { parseHelmUpgradeRecipes } from '../../utils/makefile-helm.js'
+import {reconcileMonitoringSlack} from '../../utils/monitoring-slack.js'
+import {readPreparedSequencerKms} from '../../utils/preparation-sequencer-kms.js'
 import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
+import {resolveProofReceiptSelection} from '../../utils/proof-deployment-contract.js'
 import {
   type ResolvedProofIntent,
   resolveProofIntent,
@@ -62,6 +68,7 @@ import {
   mergeWithdrawalManagedDeploymentBlock,
   stripMigratedWithdrawalEnv,
 } from '../../utils/withdrawal-config.js'
+import {reconcileWithdrawalSignerValues, withdrawalSequencerKms} from '../../utils/withdrawal-signers.js'
 import {
   RETH_BOOTNODE_NODEKEY_ENV,
   type ResolvedBootnodeRethConfig,
@@ -412,52 +419,6 @@ export function reconcileGrafanaIngressHost(
   return changes
 }
 
-/** Replace a generated Proof Coordinator batch-materializer RPC without
- * taking ownership of any other compiler-rendered TOML. */
-export function reconcileProofCoordinatorBatchL2Rpc(
-  source: string,
-  desiredUrl: string | undefined,
-): {changed: boolean; content: string} {
-  if (!desiredUrl) return {changed: false, content: source}
-  // Parse first so malformed native config still fails at its normal boundary.
-  toml.parse(source)
-  const lines = source.replaceAll('\r\n', '\n').split('\n')
-  const section = /^\s*\[materializer\.scroll_batch\.subprocess]\s*$/
-  const nextSection = /^\s*\[/
-  const assignment = /^(\s*)l2_rpc_url\s*=.*$/
-  const sectionIndex = lines.findIndex(line => section.test(line))
-  if (sectionIndex < 0) return {changed: false, content: source}
-  let end = lines.length
-  for (let index = sectionIndex + 1; index < lines.length; index++) {
-    if (nextSection.test(lines[index])) {
-      end = index
-      break
-    }
-  }
-
-  const matches: number[] = []
-  for (let index = sectionIndex + 1; index < end; index++) {
-    if (assignment.test(lines[index])) matches.push(index)
-  }
-
-  if (matches.length > 1) {
-    throw new Error('Proof Coordinator batch materializer contains duplicate l2_rpc_url assignments')
-  }
-
-  const rendered = `l2_rpc_url = ${JSON.stringify(desiredUrl)}`
-  if (matches.length === 1) {
-    const index = matches[0]
-    const indentation = lines[index].match(assignment)?.[1] || ''
-    if (lines[index] === `${indentation}${rendered}`) return {changed: false, content: source}
-    lines[index] = `${indentation}${rendered}`
-  } else {
-    const indentation = lines[sectionIndex].match(/^(\s*)/)?.[1] || ''
-    lines.splice(sectionIndex + 1, 0, `${indentation}${rendered}`)
-  }
-
-  return {changed: true, content: lines.join('\n')}
-}
-
 /** Remove values files for the retired in-cluster attestation-signer chart. */
 export function removeRetiredAttestationSignerValues(valuesDir: string): string[] {
   if (!fs.existsSync(valuesDir)) return []
@@ -625,6 +586,7 @@ export function buildEthDaSubmitterPrepEnv(input: {
   ethereumRpcUrl: string | undefined
   l2RpcUrl: string | undefined
   l2StartBlockNumber?: number | string | undefined
+  runtime?: EthereumDaRuntimeConfig
   s3Bucket?: string | undefined
   s3Enabled?: boolean | string | undefined
   s3EndpointUrl?: string | undefined
@@ -638,6 +600,7 @@ export function buildEthDaSubmitterPrepEnv(input: {
     DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: input.l2RpcUrl,
     DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER: optionalConfigString(input.l2StartBlockNumber),
     DOGEOS_ETH_DA_SUBMITTER_PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
+    ...ethereumDaRuntimeEnv(input.runtime ?? {}),
   }
 
   const {batch} = input
@@ -1071,6 +1034,15 @@ export function applyTsoPublicEdgePaths(productionYaml: any): PrepChartChange[] 
   if (!ingresses || typeof ingresses !== 'object') return changes
   for (const [ingressKey, ingress] of Object.entries(ingresses as Record<string, any>)) {
     if (!ingress || typeof ingress !== 'object' || ingress.enabled === false || !Array.isArray(ingress.hosts)) continue
+    // Spec selects ingress-nginx; example ALB settings must not survive the merge.
+    if (ingress.ingressClassName === 'nginx' && ingress.annotations) {
+      for (const key of Object.keys(ingress.annotations)) {
+        if (!key.startsWith('alb.ingress.kubernetes.io/')) continue
+        changes.push({key: `ingress.${ingressKey}.annotations.${key}`, newValue: 'removed', oldValue: String(ingress.annotations[key])})
+        delete ingress.annotations[key]
+      }
+    }
+
     for (const [index, host] of ingress.hosts.entries()) {
       if (!host || typeof host !== 'object') continue
       const desired = TSO_PUBLIC_INGRESS_PATHS.map(entry => ({...entry}))
@@ -1358,7 +1330,7 @@ export default class SetupPrepCharts extends Command {
     'CHAIN_ID_L1': 'general.CHAIN_ID_L1',
     'CHAIN_ID_L2': 'general.CHAIN_ID_L2',
     'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL': 'ethereumDa.submitterRpcUrl',
-    'DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL': 'general.L2_RPC_ENDPOINT',
+    'DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL': () => this.dogeConfig.ethereumDa?.l2RpcUrl ? 'ethereumDa.l2RpcUrl' : 'general.L2_RPC_ENDPOINT',
     'DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__EXPECTED_BATCHERS': 'signers.l1CommitSender.expectedAddress',
     'DOGEOS_WITHDRAWAL_ETHEREUM_DA__L1_RPC_URL': 'ethereumDa.submitterRpcUrl',
     // Add ingress host mappings
@@ -1425,6 +1397,15 @@ export default class SetupPrepCharts extends Command {
 
     // Load configs before processing yaml files
     await this.loadConfigs(flags)
+
+    if (this.proofIntent?.intent.generation === 'real') {
+      const receipts = resolveProofReceiptSelection(process.cwd(), {
+        materialsReceipt: flags['proof-materials-receipt'],
+        publicationReceipt: flags['proof-publication-receipt'],
+      })
+      this.flags['proof-materials-receipt'] = receipts.materialsReceipt
+      this.flags['proof-publication-receipt'] = receipts.publicationReceipt
+    }
 
     if (flags['github-username'] && flags['github-token']) {
       try {
@@ -1776,6 +1757,7 @@ export default class SetupPrepCharts extends Command {
       'scrollsdk setup doge-config',
     )
     this.dogeConfig = config as DogeConfigType;
+    assertSeparateDaProofBuckets(this.dogeConfig)
     const deploymentSpec = flags.spec ? loadDeploymentSpec(path.resolve(flags.spec)) : undefined
     this.dstackController = deploymentSpec?.dstackController ?? this.dogeConfig.dstackController
     validateDstackControllerConfig(this.dstackController)
@@ -2315,11 +2297,34 @@ export default class SetupPrepCharts extends Command {
       const changes: Array<{ key: string; newValue: string; oldValue: string }> = []
       if (updated) changes.push({key: 'retired indexer settings', newValue: 'removed', oldValue: 'present'})
 
+      if (chartName === 'contracts') {
+        const env = productionYaml.configMaps?.['contracts-deployment-env']?.data
+        const price = contractsDeploymentGasPrice(this.getConfigValue('contracts.L2_BASE_FEE_OVERHEAD'))
+        if (env && env.ETH_GAS_PRICE !== price) {
+          changes.push({key: 'contracts ETH_GAS_PRICE', newValue: price ?? 'automatic', oldValue: String(env.ETH_GAS_PRICE ?? 'automatic')})
+          if (price) env.ETH_GAS_PRICE = price
+          else delete env.ETH_GAS_PRICE
+          updated = true
+        }
+      }
+
       // In the normal deployment flow every concrete Reth node uses the L2
       // chain ID as its P2P network ID. A shadowfork may intentionally override
       // these values afterward to isolate the dev P2P network from production.
       // Numbered bootnode/sequencer files normalize to their base chart names.
       if (isL2RethBlobS3Chart(chartName)) {
+        const genesisGasLimit = this.getConfigValue('genesis.GAS_LIMIT')
+        if (genesisGasLimit !== undefined) {
+          const gasLimit = Number(genesisGasLimit)
+          if (!Number.isSafeInteger(gasLimit) || gasLimit < 5000) throw new Error('genesis.GAS_LIMIT must be a safe integer of at least 5000')
+          productionYaml.reth ||= {}
+          if (productionYaml.reth.builderGasLimit !== String(gasLimit)) {
+            changes.push({key: 'reth.builderGasLimit', newValue: String(gasLimit), oldValue: String(productionYaml.reth.builderGasLimit)})
+            productionYaml.reth.builderGasLimit = String(gasLimit)
+            updated = true
+          }
+        }
+
         const sharedRethChanges = [
           ...applyRethNetworkId(productionYaml, l2P2PNetworkId),
           ...applyRethBlobS3Url(productionYaml, s3PublicBlobUrl),
@@ -2697,7 +2702,7 @@ export default class SetupPrepCharts extends Command {
       }
 
       if (chartName === 'scroll-monitor') {
-        const grafanaChanges = reconcileScrollMonitorGrafana(productionYaml, this.dogeConfig.grafana)
+        const grafanaChanges = [...reconcileScrollMonitorGrafana(productionYaml, this.dogeConfig.grafana), ...reconcileMonitoringSlack(productionYaml, this.dogeConfig.monitoring)]
         changes.push(...grafanaChanges)
         if (grafanaChanges.length > 0) updated = true
         const monitorChanges = reconcileScrollMonitorBalances(productionYaml, {
@@ -2797,6 +2802,10 @@ export default class SetupPrepCharts extends Command {
           l2ChainId: this.getConfigValue("general.CHAIN_ID_L2"),
           l2RpcUrl: this.getConfigValue("general.L2_RPC_ENDPOINT"),
         })
+
+        if (this.dogeConfig.feeOracle?.contractWriteMode !== undefined) {
+          todoMappings.DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE = this.dogeConfig.feeOracle.contractWriteMode
+        }
 
         const signerConfig = this.requireSigner('l2GasOracleSender')
         if (isAwsKmsSigner(signerConfig)) {
@@ -3008,6 +3017,24 @@ export default class SetupPrepCharts extends Command {
         }
 
         const previousSource = fs.readFileSync(nativeConfigPath, 'utf8')
+        const sequencerKms = withdrawalSequencerKms(this.withdrawalProcessorConfig)
+        if (sequencerKms) {
+          facts.sequencer_signer_kms = sequencerKms
+          deletePaths.push(['sequencer_signer_key'])
+          const prepared = readPreparedSequencerKms(process.cwd())
+          if (prepared) {
+            if (prepared.keyArn !== sequencerKms.key_id || prepared.publicKey !== sequencerKms.expected_pubkey || prepared.region !== sequencerKms.region) throw new Error('Withdrawal KMS config differs from the prepared Bridge identity')
+            const proofRole = readOptionalProofAwsConfig(process.cwd())?.config.serviceAccounts.withdrawalProcessor
+            if (proofRole && (proofRole.roleArn !== prepared.roleArn || proofRole.name !== prepared.serviceAccount)) throw new Error('Withdrawal KMS and proof access must share one service account and IAM role')
+            productionYaml.serviceAccount ??= {}
+            productionYaml.serviceAccount.create = true
+            productionYaml.serviceAccount.name = prepared.serviceAccount
+            productionYaml.serviceAccount.annotations ??= {}
+            productionYaml.serviceAccount.annotations['eks.amazonaws.com/role-arn'] = prepared.roleArn
+            updated = true
+          }
+        } else deletePaths.push(['sequencer_signer_kms'])
+        if (reconcileWithdrawalSignerValues(productionYaml, this.withdrawalProcessorConfig)) updated = true
         const mergedSource = mergeWithdrawalManagedDeploymentBlock(previousSource, facts, {deletePaths})
         if (mergedSource !== previousSource) {
           fs.writeFileSync(nativeConfigPath, mergedSource)
@@ -3135,6 +3162,7 @@ export default class SetupPrepCharts extends Command {
           ethereumRpcUrl: this.getConfigValue("ethereumDa.submitterRpcUrl"),
           l2RpcUrl: this.getConfigValue("general.L2_RPC_ENDPOINT"),
           l2StartBlockNumber: this.dogeConfig.ethereumDa?.l2StartBlockNumber,
+          runtime: this.dogeConfig.ethereumDa,
           s3Bucket: s3Archive?.bucket,
           s3Enabled: s3Archive?.enabled,
           s3EndpointUrl: s3Archive?.endpointUrl,
@@ -3616,15 +3644,6 @@ export default class SetupPrepCharts extends Command {
       network: this.dogeConfig.network,
     })
     const coordinatorConfigPath = path.resolve('proof-coordinator/ProofCoordinator.toml')
-    if (fs.existsSync(coordinatorConfigPath)) {
-      const current = fs.readFileSync(coordinatorConfigPath, 'utf8')
-      const reconciled = reconcileProofCoordinatorBatchL2Rpc(
-        current,
-        this.getConfigValue('frontend.EXTERNAL_RPC_URI_L2'),
-      )
-      if (reconciled.changed) fs.writeFileSync(coordinatorConfigPath, reconciled.content)
-    }
-
     const result = reconcileProofKubernetes({
       coordinatorConfigPath,
       coordinatorIngressHost: typeof coordinatorIngressHost === 'string'

@@ -6,7 +6,10 @@ declare module 'bitcore-lib-doge' {
   }
 
   export class Address {
-    constructor(address: string)
+    hashBuffer: Buffer
+    type: string
+    constructor(address: Buffer | string, network?: unknown, type?: string)
+    static fromString(address: string, network?: unknown, type?: string): Address
     toString(): string
   }
 
@@ -25,15 +28,18 @@ declare module 'bitcore-lib-doge' {
 
   export class PublicKey {
     compressed: boolean
+    constructor(data: string)
 
     static fromString(str: string): PublicKey
-    toAddress(): Address
+    toAddress(network?: unknown): Address
     toString(): string
   }
 
   export class Script {
     static buildDataOut(data: Buffer): Script
     static buildPublicKeyHashOut(address: Address | string): Script
+    static fromAddress(address: string): Script
+    toHex(): string
     toString(): string
   }
 

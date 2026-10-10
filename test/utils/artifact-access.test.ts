@@ -21,6 +21,7 @@ function fixture() {
   let inline: unknown
   let deny = false
   let block = false
+  let bucketBlock: Record<string, boolean> | undefined
   // S3 Gateway endpoints by id; vpce-0abc is a usable us-east-1 endpoint.
   const endpoints: Record<string, unknown> = {
     'vpce-0abc': {ServiceName: 'com.amazonaws.us-east-1.s3', State: 'available', VpcEndpointType: 'Gateway'},
@@ -29,7 +30,7 @@ function fixture() {
   const writes: string[][] = []
   const aws = {
     json(args: string[]): any {
-      if (args[1] === 'get-public-access-block') return {PublicAccessBlockConfiguration: {BlockPublicPolicy: block, RestrictPublicBuckets: false}}
+      if (args[1] === 'get-public-access-block') return {PublicAccessBlockConfiguration: structuredClone(args[0] === 's3api' && bucketBlock ? bucketBlock : {BlockPublicPolicy: block, RestrictPublicBuckets: false})}
       if (args[1] === 'get-bucket-versioning') return versioning ? {Status: versioning} : {}
       if (args[1] === 'get-role') return {Role: {Arn: roleArn}}
       if (args[1] === 'describe-vpc-endpoints') {
@@ -49,6 +50,11 @@ function fixture() {
       if (args[1] === 'head-bucket') return ''
       writes.push(args)
       switch (args[1]) {
+      case 'put-public-access-block': {
+      bucketBlock = JSON.parse(args[args.indexOf('--public-access-block-configuration') + 1])
+      break;
+      }
+
       case 'put-bucket-policy': {
       bucket = JSON.parse(args[args.indexOf('--policy') + 1])
       break;
@@ -76,7 +82,7 @@ function fixture() {
       throw new Error(`Unexpected AWS text read: ${args[1]}`)
     },
   }
-  return {aws, get block() {return block}, set block(value: boolean) {block = value}, get bucket() {return bucket}, get deny() {return deny}, set deny(value: boolean) {deny = value}, get inline() {return inline}, set inline(value: unknown) {inline = value}, writes}
+  return {aws, get block() {return block}, set block(value: boolean) {block = value}, get bucket() {return bucket}, get bucketBlock() {return bucketBlock}, set bucketBlock(value: Record<string, boolean> | undefined) {bucketBlock = value}, get deny() {return deny}, set deny(value: boolean) {deny = value}, get inline() {return inline}, set inline(value: unknown) {inline = value}, writes}
 }
 
 function sids(policy: Record<string, unknown>): string[] {
@@ -171,6 +177,54 @@ describe('DA archive and snapshot bucket access', () => {
     expect(() => planArtifactAccess(f.aws, 'da', da, {publicRead: true})).to.throw('Public Access Block')
     // Removing public read needs no public-policy permission.
     expect(() => planArtifactAccess(f.aws, 'da', da, {publicRead: false, vpcEndpointId: 'vpce-0abc'})).not.to.throw()
+    expect(f.writes).to.have.length(0)
+  })
+
+  it('plans explicit bucket policy permission without writes and preserves blocked ACLs on apply', () => {
+    const f = fixture()
+    f.bucketBlock = {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+    const options = {allowBucketPublicPolicy: true, publicRead: true}
+    const plan = planArtifactAccess(f.aws, 'da', da, options)
+    expect(f.writes).to.have.length(0)
+    expect(() => checkArtifactAccess(f.aws, plan)).to.throw('Public Access Block differs')
+    applyArtifactAccess(f.aws, plan)
+    expect(f.bucketBlock).to.deep.equal({BlockPublicAcls: true, BlockPublicPolicy: false, IgnorePublicAcls: true, RestrictPublicBuckets: false})
+    expect(planArtifactAccess(f.aws, 'da', da, options).publicAccessBlock).to.equal(undefined)
+    checkArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, options))
+  })
+
+  it('retains account protection and rejects bucket-wide exposure of unrelated prefixes', () => {
+    const f = fixture()
+    f.block = true
+    expect(() => planArtifactAccess(f.aws, 'da', da, {allowBucketPublicPolicy: true, publicRead: true})).to.throw('account Public Access Block')
+    f.block = false
+    f.bucketBlock = {BlockPublicPolicy: true, RestrictPublicBuckets: true}
+    ;(f.bucket.Statement as unknown[]).push({Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: `arn:aws:s3:::${da.bucket}/unrelated/*`, Sid: 'UnrelatedPublicGrant'})
+    expect(() => planArtifactAccess(f.aws, 'da', da, {allowBucketPublicPolicy: true, publicRead: true})).to.throw('unrelated anonymous grants')
+    expect(f.writes).to.have.length(0)
+  })
+
+  it('rejects public block drift before any writes and requires explicit public-read intent', () => {
+    const f = fixture()
+    expect(() => planArtifactAccess(f.aws, 'da', da, {allowBucketPublicPolicy: true})).to.throw('requires explicit public read')
+    f.bucketBlock = {BlockPublicPolicy: true, RestrictPublicBuckets: true}
+    const plan = planArtifactAccess(f.aws, 'da', da, {allowBucketPublicPolicy: true, publicRead: true})
+    f.bucketBlock = {BlockPublicPolicy: false, RestrictPublicBuckets: true}
+    expect(() => applyArtifactAccess(f.aws, plan)).to.throw('Public Access Block changed')
+    expect(f.writes).to.have.length(0)
+  })
+
+  it('rejects negated grants and rechecks account protection immediately before applying', () => {
+    const f = fixture()
+    f.bucketBlock = {BlockPublicPolicy: true, RestrictPublicBuckets: true}
+    const options = {allowBucketPublicPolicy: true, publicRead: true}
+    const plan = planArtifactAccess(f.aws, 'da', da, options)
+    f.block = true
+    expect(() => applyArtifactAccess(f.aws, plan)).to.throw('account Public Access Block')
+    expect(f.writes).to.have.length(0)
+    f.block = false
+    ;(f.bucket.Statement as unknown[]).push({Action: 's3:GetObject', Effect: 'Allow', NotPrincipal: {AWS: roleArn}, Resource: '*', Sid: 'NegatedGrant'})
+    expect(() => planArtifactAccess(f.aws, 'da', da, options)).to.throw('negated allow statements')
     expect(f.writes).to.have.length(0)
   })
 

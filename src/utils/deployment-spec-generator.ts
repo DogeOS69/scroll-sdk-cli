@@ -1,3 +1,4 @@
+import {validateMonitoring} from './monitoring-slack.js'
 /**
  * DeploymentSpec Generator
  *
@@ -22,15 +23,25 @@ import type {
 } from '../types/deployment-spec.js'
 
 import {
+  DEFAULT_WALLET_CONNECT_PROJECT_ID,
   L1_INTERFACE_RPC_ENDPOINT,
   L1_INTERFACE_RPC_WEBSOCKET_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
+import {GENESIS_PREDEPLOYS, L2_BASE_FEE_OVERHEAD_WEI, L2_GENESIS_GAS_LIMIT} from '../constants/deployment.js'
+import {assertSeparateDaProofBuckets} from './artifact-bucket-validation.js'
 import {GENESIS_SEQUENCER_AMOUNT_SATS} from './bridge-constants.js'
+import {assertDeploymentSpecFields, validateDeploymentSpecFields} from './deployment-spec-fields.js'
 import {validateDstackControllerConfig} from './dstack-controller-values.js'
+import {ETHEREUM_DA_RUNTIME_FIELDS} from './ethereum-da-runtime.js'
+import {feeVaultRecipientHash} from './fee-vault-recipient.js'
 import {stripRetiredServiceConfig} from './retired-services.js'
+import {buildS3PublicBaseUrl} from './s3-archive.js'
 import { normalizeCompressedSecp256k1PublicKey } from './secp256k1-public-key.js'
 import { MANAGED_SIGNER_ROLES, buildLocalSignerConfig } from './signer-roles.js'
+import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
+import {resolveSpecIdentities} from './spec-identities.js'
+import {resolveSpecProofStorage} from './spec-proof-storage.js'
 
 const ETHEREUM_DA_DEFAULTS = {
   devnet: {
@@ -57,6 +68,7 @@ export function loadDeploymentSpec(filePath: string): DeploymentSpec {
   const content = fs.readFileSync(filePath, 'utf8')
   const spec = yaml.load(content) as DeploymentSpec
 
+  assertDeploymentSpecFields(stripRetiredServiceConfig(spec))
   if (!spec.version) {
     throw new Error('DeploymentSpec must have a version field')
   }
@@ -275,11 +287,24 @@ function getBridgeTargetAmountsSats(spec: DeploymentSpec): { bridge: number; fee
   }
 }
 
-function getBridgeFees(spec: DeploymentSpec): { depositFeeSats: string; minWithdrawalAmountWei: string; withdrawalFeeWei: string } {
+function getBridgeFees(spec: DeploymentSpec): { depositFeeWei: string; minWithdrawalAmountWei: string; withdrawalFeeWei: string } {
+  const {fees} = spec.bridge
+  // The legacy deposit field was copied directly into contracts.DEPOSIT_FEE (wei).
+  // Only the explicitly named satoshi field needs conversion to L2's 18 decimals.
+  const deposit = fees.depositFeeSats ?? fees.deposit ?? '0'
+  if (typeof deposit !== 'string' || !/^\d+$/.test(deposit)) {
+    throw new Error('bridge.fees deposit must be a nonnegative decimal integer string')
+  }
+
+  const depositFeeWei = BigInt(deposit) * (fees.depositFeeSats === undefined ? 1n : 10_000_000_000n)
+  if (depositFeeWei >= 2n ** 256n) {
+    throw new Error('bridge.fees deposit exceeds uint256 after conversion to wei')
+  }
+
   return {
-    depositFeeSats: spec.bridge.fees.depositFeeSats ?? spec.bridge.fees.deposit ?? '0',
-    minWithdrawalAmountWei: spec.bridge.fees.minWithdrawalAmountWei ?? spec.bridge.fees.minWithdrawalAmount ?? '0',
-    withdrawalFeeWei: spec.bridge.fees.withdrawalFeeWei ?? spec.bridge.fees.withdrawal ?? '0',
+    depositFeeWei: depositFeeWei.toString(),
+    minWithdrawalAmountWei: fees.minWithdrawalAmountWei ?? fees.minWithdrawalAmount ?? '0',
+    withdrawalFeeWei: fees.withdrawalFeeWei ?? fees.withdrawal ?? '0',
   }
 }
 
@@ -316,7 +341,7 @@ function getDbPassword(spec: DeploymentSpec, key: keyof NonNullable<DeploymentSp
   return spec.database.credentials?.[key] || ''
 }
 
-function resolveDogecoinChainId(network: DeploymentSpec['dogecoin']['network']): number {
+export function resolveDogecoinChainId(network: DeploymentSpec['dogecoin']['network']): number {
   switch (network) {
     case 'mainnet': {
       return 1
@@ -328,6 +353,10 @@ function resolveDogecoinChainId(network: DeploymentSpec['dogecoin']['network']):
 
     case 'regtest': {
       return 5_555_555
+    }
+
+    default: {
+      throw new Error('dogecoin.network must be mainnet, testnet or regtest')
     }
   }
 }
@@ -376,6 +405,8 @@ function getEthereumDaChainId(rawSpec: DeploymentSpec): number {
  */
 export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
   spec = stripRetiredServiceConfig(spec)
+  assertDeploymentSpecFields(spec)
+  resolveSpecIdentities(spec)
   const frontend = (spec.frontend ?? {}) as Partial<DeploymentSpec['frontend']>
   const accounts = normalizeAccounts(spec.accounts)
   const baseDomain = frontend.baseDomain || spec.metadata?.name || 'localhost'
@@ -439,7 +470,23 @@ export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
 
   return {
     ...spec,
+    ...(spec.proofArtifacts?.s3 ? {proofArtifacts: {s3: {
+      ...spec.proofArtifacts.s3,
+      region: spec.proofArtifacts.s3.region ?? spec.infrastructure?.aws?.region,
+    }}} : {}),
     ...(accounts ? { accounts } : {}),
+    ...(spec.proofTopology ? {proofTopology: {
+      ...spec.proofTopology,
+      deployment: {
+        ...spec.proofTopology.deployment,
+        proverPublicUrl: spec.proofTopology.deployment?.proverPublicUrl ?? publicUrl(protocol, hosts.proofCoordinator!),
+      },
+    }} : {}),
+    ...(spec.dstackController?.enabled !== false && spec.dstackController?.ingress?.enabled === true
+      && spec.dstackController.ingress.hosts === undefined ? {dstackController: {
+        ...spec.dstackController,
+        ingress: {...spec.dstackController.ingress, hosts: [buildHost(baseDomain, 'dstack')]},
+      }} : {}),
     contracts: {
       ...spec.contracts,
       ...(verification ? { verification } : {}),
@@ -458,9 +505,47 @@ export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
  * Validate a DeploymentSpec
  */
 export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResult {
+  const fieldErrors = validateDeploymentSpecFields(stripRetiredServiceConfig(rawSpec))
+  if (fieldErrors.length > 0) return {errors: fieldErrors, valid: false, warnings: []}
+  try { resolveSpecIdentities(rawSpec) } catch (error) {
+    return {errors: [{code: 'E017_INVALID_IDENTITY_INTENT', message: error instanceof Error ? error.message : 'Invalid identity intent', path: 'identities'}], valid: false, warnings: []}
+  }
+
   const spec = normalizeDeploymentSpec(rawSpec)
   const errors: ValidationError[] = []
   const warnings: ValidationWarning[] = []
+  try {validateMonitoring(spec.monitoring)} catch {errors.push({code: 'E601_INVALID_VALUE', message: 'monitoring.slack.enabled must be a boolean', path: 'monitoring.slack.enabled'})}
+
+  try {resolveSpecAttestationSigners(spec, Boolean(spec.preparation))} catch (error) {
+    errors.push({code: 'E601_INVALID_VALUE', message: error instanceof Error ? error.message : 'Invalid attestation signer identities', path: 'attestationSigners'})
+  }
+
+  try {
+    assertSeparateDaProofBuckets({ethereumDa: spec.ethereumDa, proofArtifacts: spec.proofArtifacts}, resolveInlineEnvRefs)
+  } catch (error) {
+    errors.push({code: 'E012_INVALID_ETHEREUM_DA_CONFIG', message: error instanceof Error ? error.message : 'Invalid artifact bucket configuration', path: 'ethereumDa.blobArchive.s3.bucket'})
+  }
+
+  const keyset = spec.bridge?.initialAttestationKeyset
+  if (keyset && (!Array.isArray(keyset.signerIds) || keyset.signerIds.length === 0
+    || keyset.signerIds.some(id => typeof id !== 'string' || !/^[\da-z](?:[\da-z-]*[\da-z])?$/.test(id) || id.length > 63)
+    || new Set(keyset.signerIds).size !== keyset.signerIds.length
+    || !Number.isSafeInteger(keyset.threshold) || keyset.threshold < 1 || keyset.threshold > keyset.signerIds.length)) {
+    errors.push({code: 'E005_INVALID_THRESHOLD', message: 'initialAttestationKeyset requires unique signer IDs and a threshold between 1 and the selected signer count', path: 'bridge.initialAttestationKeyset'})
+  }
+
+  if (spec.genesis?.gasLimit !== undefined && (!Number.isSafeInteger(spec.genesis.gasLimit) || spec.genesis.gasLimit < 5000)) {
+    errors.push({code: 'E015_INVALID_ROLLUP_CONFIG', message: 'genesis.gasLimit must be a safe integer of at least 5000', path: 'genesis.gasLimit'})
+  }
+
+  const overhead = spec.contracts?.l2BaseFeeOverheadWei
+  if (overhead !== undefined && (typeof overhead !== 'string' || !/^\d+$/.test(overhead) || BigInt(overhead) >= 2n ** 256n)) {
+    errors.push({code: 'E015_INVALID_ROLLUP_CONFIG', message: 'contracts.l2BaseFeeOverheadWei must be a decimal uint256 wei string', path: 'contracts.l2BaseFeeOverheadWei'})
+  }
+
+  if (spec.feeOracle?.contractWriteMode !== undefined && !['dry_run', 'live'].includes(spec.feeOracle.contractWriteMode)) {
+    errors.push({code: 'E015_INVALID_ROLLUP_CONFIG', message: 'feeOracle.contractWriteMode must be dry_run or live', path: 'feeOracle.contractWriteMode'})
+  }
 
   const pushInvalidEthereumDaConfigError = (path: string, message: string): void => {
     errors.push({
@@ -553,24 +638,21 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     })
   }
 
-  // Network validation
-  if (!spec.network?.l1ChainId || !spec.network?.l2ChainId) {
+  // The Dogecoin L1 chain ID is a protocol constant derived from dogecoin.network.
+  if (!spec.network?.l2ChainId) {
     errors.push({
       code: 'E002_MISSING_REQUIRED_FIELD',
-      message: 'L1 and L2 chain IDs are required',
-      path: 'network'
+      message: 'L2 chain ID is required',
+      path: 'network.l2ChainId',
     })
   }
 
-  if (spec.dogecoin?.network && spec.network?.l1ChainId) {
-    const expectedDogecoinChainId = resolveDogecoinChainId(spec.dogecoin.network)
-    if (spec.network.l1ChainId !== expectedDogecoinChainId) {
-      errors.push({
-        code: 'E010_DOGECOIN_NETWORK_MISMATCH',
-        message: `network.l1ChainId (${spec.network.l1ChainId}) does not match dogecoin.network ${spec.dogecoin.network} (${expectedDogecoinChainId})`,
-        path: 'network.l1ChainId',
-      })
-    }
+  if (!['mainnet', 'regtest', 'testnet'].includes(spec.dogecoin?.network)) {
+    errors.push({
+      code: 'E010_DOGECOIN_NETWORK_MISMATCH',
+      message: 'dogecoin.network must be mainnet, testnet or regtest; the L1 chain ID is derived automatically',
+      path: 'dogecoin.network',
+    })
   }
 
   // Accounts validation
@@ -639,6 +721,14 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
         message: `Invalid Ethereum address: ${value}`,
         path: field.path
       })
+    }
+  }
+
+  if (spec.contracts?.feeVaultDogeRecipientAddress === undefined) {
+    warnings.push({message: 'Fee-vault withdrawal recipient is not selected', path: 'contracts.feeVaultDogeRecipientAddress', suggestion: 'Set a Dogecoin P2PKH recipient before deploying L2 contracts; the template zero address is not deployable.'})
+  } else {
+    try {feeVaultRecipientHash(spec.contracts.feeVaultDogeRecipientAddress, spec.dogecoin.network)} catch {
+      errors.push({code: 'E004_INVALID_ADDRESS', message: 'Fee-vault recipient must be a Dogecoin P2PKH address for the selected network', path: 'contracts.feeVaultDogeRecipientAddress'})
     }
   }
 
@@ -751,7 +841,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   if (spec.signing?.attestationSigner) {
     errors.push({
       code: 'E601_INVALID_VALUE',
-      message: 'signing.attestationSigner is retired: attestation signers are partner-operated docker-compose services and are imported from descriptors after config generation',
+      message: 'signing.attestationSigner is retired: declare partner public identities in attestationSigners',
       path: 'signing.attestationSigner',
     })
   }
@@ -775,7 +865,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
 
   const ethereumDaS3Archive = spec.ethereumDa?.blobArchive?.s3
   if (ethereumDaS3Archive?.enabled === true) {
-    for (const field of ['bucket', 'region', 'publicBaseUrl'] as const) {
+    for (const field of ['bucket', 'region'] as const) {
       if (!ethereumDaS3Archive[field]) {
         errors.push({
           code: 'E002_MISSING_REQUIRED_FIELD',
@@ -936,11 +1026,23 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     })
   }
 
+  if (spec.bridge?.fees) {
+    try {
+      getBridgeFees(spec)
+    } catch (error) {
+      errors.push({
+        code: 'E015_INVALID_ROLLUP_CONFIG',
+        message: (error as Error).message,
+        path: 'bridge.fees',
+      })
+    }
+  }
+
   if (spec.bridge?.fees?.deposit !== undefined || spec.bridge?.fees?.withdrawal !== undefined || spec.bridge?.fees?.minWithdrawalAmount !== undefined) {
     warnings.push({
       message: 'legacy bridge fee fields are deprecated',
       path: 'bridge.fees',
-      suggestion: 'Use depositFeeSats, withdrawalFeeWei, and minWithdrawalAmountWei.',
+      suggestion: 'Use depositFeeSats (convert legacy deposit wei to sats), withdrawalFeeWei, and minWithdrawalAmountWei.',
     })
   }
 
@@ -955,7 +1057,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   // Bridge thresholds validation
   if (spec.bridge?.thresholds && !spec.bridge.initialAttestationKeyset) {
     const { attestation } = spec.bridge.thresholds
-    const attestationKeyCount = spec.bridge.keyCounts?.attestation || 0
+    const attestationKeyCount = spec.attestationSigners?.length ?? spec.bridge.keyCounts?.attestation ?? 0
     if (attestation > attestationKeyCount) {
       errors.push({
         code: 'E005_INVALID_THRESHOLD',
@@ -976,7 +1078,17 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     }
   }
 
-  const { proofCoordinator, proofTopology } = spec
+  const {proofCoordinator, proofTopology} = resolveSpecProofStorage(spec)
+  if (proofCoordinator || proofTopology?.active?.artifactStore.kind === 's3_compatible') {
+    for (const field of ['bucket', 'region', 'keyPrefix'] as const) {
+      if (!spec.proofArtifacts?.s3?.[field]?.trim()) errors.push({
+        code: 'E013_INVALID_PROOF_COORDINATOR_CONFIG',
+        message: `proofArtifacts.s3.${field} is required for the shared proof store`,
+        path: `proofArtifacts.s3.${field}`,
+      })
+    }
+  }
+
   if ((spec as {proofSystem?: unknown} & DeploymentSpec).proofSystem !== undefined) {
     errors.push({
       code: 'E014_INVALID_PROOF_SYSTEM_CONFIG',
@@ -1082,20 +1194,20 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     if (!artifactStore?.bucket) {
       errors.push({
         code: 'E013_INVALID_PROOF_COORDINATOR_CONFIG',
-        message: 'proofCoordinator.artifactStore.bucket is required when proofCoordinator is enabled',
-        path: 'proofCoordinator.artifactStore.bucket'
+        message: 'proofArtifacts.s3.bucket is required when proofCoordinator is enabled',
+        path: 'proofArtifacts.s3.bucket'
       })
     }
 
     if (!artifactStore?.region) {
       errors.push({
         code: 'E013_INVALID_PROOF_COORDINATOR_CONFIG',
-        message: 'proofCoordinator.artifactStore.region is required when proofCoordinator is enabled',
-        path: 'proofCoordinator.artifactStore.region'
+        message: 'proofArtifacts.s3.region or infrastructure.aws.region is required when proofCoordinator is enabled',
+        path: 'proofArtifacts.s3.region'
       })
     }
 
-    if (proofCoordinator.s3AuthMode === 'irsa') {
+    if (proofCoordinator.s3AuthMode === 'irsa' && !['create', 'reuse'].includes(spec.preparation?.proofAws?.action ?? '')) {
       for (const [path, annotations] of [
         ['proofCoordinator.serviceAccount.annotations', proofCoordinator.serviceAccount?.annotations],
         [
@@ -1222,7 +1334,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
 
   // [general] section
   config.general = {
-    CHAIN_ID_L1: spec.network.l1ChainId,
+    CHAIN_ID_L1: resolveDogecoinChainId(spec.dogecoin.network),
     CHAIN_ID_L2: spec.network.l2ChainId,
     CHAIN_NAME_L1: spec.network.l1ChainName,
     CHAIN_NAME_L2: spec.network.l2ChainName,
@@ -1232,7 +1344,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     L2_RPC_ENDPOINT,
   }
 
-  if (spec.rollup.verifierDigests) {
+  if (spec.rollup?.verifierDigests) {
     config.general.VERIFIER_DIGEST_1 = spec.rollup.verifierDigests.digest1
     config.general.VERIFIER_DIGEST_2 = spec.rollup.verifierDigests.digest2
   }
@@ -1268,7 +1380,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
   // [frontend] section
   config.frontend = {
     BASE_CHAIN: spec.network.tokenSymbol,
-    CONNECT_WALLET_PROJECT_ID: spec.frontend.walletConnectProjectId || '',
+    CONNECT_WALLET_PROJECT_ID: spec.frontend.walletConnectProjectId || DEFAULT_WALLET_CONNECT_PROJECT_ID,
     ETH_SYMBOL: spec.network.tokenSymbol,
     EXTERNAL_EXPLORER_URI_L1: spec.frontend.externalUrls.l1Explorer,
     EXTERNAL_EXPLORER_URI_L2: spec.frontend.externalUrls.l2Explorer,
@@ -1280,8 +1392,10 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
   // [genesis] section
   config.genesis = {
     BASE_FEE_PER_GAS: genesis.baseFeePerGasWei,
+    GAS_LIMIT: spec.genesis.gasLimit ?? L2_GENESIS_GAS_LIMIT,
     L2_DEPLOYER_INITIAL_BALANCE: genesis.deployerInitialBalanceWei,
-    L2_MAX_ETH_SUPPLY: genesis.maxEthSupplyWei,
+    L2_MAX_NATIVE_DOGE_SUPPLY: genesis.maxEthSupplyWei,
+    TIMESTAMP: 0,
   }
 
   // [contracts] section
@@ -1289,8 +1403,12 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     BLOB_SCALAR: spec.contracts.gasOracle.blobScalar,
     COMMIT_SCALAR: spec.contracts.gasOracle.commitScalar ?? 600_000_000,
     DEPLOYMENT_SALT: spec.contracts.deploymentSalt,
-    DEPOSIT_FEE: bridgeFees.depositFeeSats,
+    DEPOSIT_FEE: bridgeFees.depositFeeWei,
+    FEE_VAULT_DOGE_RECIPIENT_ADDR: spec.contracts.feeVaultDogeRecipientAddress
+      ? feeVaultRecipientHash(spec.contracts.feeVaultDogeRecipientAddress, spec.dogecoin.network)
+      : '0x0000000000000000000000000000000000000000',
     L1_FEE_VAULT_ADDR: DEFAULT_L1_FEE_VAULT_ADDR,
+    L2_BASE_FEE_OVERHEAD: spec.contracts.l2BaseFeeOverheadWei ?? L2_BASE_FEE_OVERHEAD_WEI,
     L2_BRIDGE_FEE_RECIPIENT_ADDR: spec.bridge.feeRecipient,
     MIN_WITHDRAWAL_AMOUNT: bridgeFees.minWithdrawalAmountWei,
     PENALTY_FACTOR: spec.contracts.gasOracle.penaltyFactor,
@@ -1299,10 +1417,8 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     WITHDRAWAL_FEE: bridgeFees.withdrawalFeeWei,
   }
 
-  // Native DOGE is a mandatory protocol predeploy, not an operator-selected address.
-  config.contracts.overrides = {
-    L2_NATIVE_DOGE_TOKEN: '0x530000000000000000000000000000000000d09e',
-  }
+  // Omitting an override makes the contracts generator omit that predeploy entirely.
+  config.contracts.overrides = {...GENESIS_PREDEPLOYS}
   if (spec.contracts.overrides) {
     if (spec.contracts.overrides.l2MessageQueue) {
       config.contracts.overrides.L2_MESSAGE_QUEUE = spec.contracts.overrides.l2MessageQueue
@@ -1336,13 +1452,6 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
       VERIFIER_TYPE_L1: spec.contracts.verification.l1VerifierType,
       VERIFIER_TYPE_L2: spec.contracts.verification.l2VerifierType,
     }
-  }
-
-  // [coordinator] section
-  config.coordinator = {
-    BATCH_COLLECTION_TIME_SEC: spec.rollup.coordinator.batchCollectionTimeSec,
-    BUNDLE_COLLECTION_TIME_SEC: spec.rollup.coordinator.bundleCollectionTimeSec,
-    CHUNK_COLLECTION_TIME_SEC: spec.rollup.coordinator.chunkCollectionTimeSec,
   }
 
   // [ingress] section
@@ -1390,7 +1499,36 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   const ethereumDaChain = getEthereumDaChain(spec)
   const ethereumDaDefaults = ETHEREUM_DA_DEFAULTS[ethereumDaChain]
 
+  validateMonitoring(spec.monitoring)
+  if (spec.monitoring) config.monitoring = structuredClone(spec.monitoring)
   config.network = spec.dogecoin.network
+  const identityIntent = resolveSpecIdentities(spec)
+  if (identityIntent) config.identityIntent = identityIntent
+  if (spec.proofTopology) {
+    const resolvedProof = resolveSpecProofStorage(spec)
+    config.proof_topology = structuredClone(resolvedProof.proofTopology)
+    const host = spec.frontend.hosts.proofCoordinator
+    config.proofDeployment = {
+      name: spec.metadata.name,
+      ...(resolvedProof.proofCoordinator ? {coordinator: structuredClone(resolvedProof.proofCoordinator)} : {}),
+      ...((host || spec.proofTopology.deployment.proverPublicUrl) ? {
+        proverPublicUrl: spec.proofTopology.deployment.proverPublicUrl ?? `${spec.frontend.protocol ?? 'https'}://${host}`,
+      } : {}),
+    }
+  }
+
+  if (spec.dogecoin.kubernetes) config.kubernetes = structuredClone(spec.dogecoin.kubernetes)
+  const attestation = resolveSpecAttestationSigners(spec, Boolean(spec.preparation))
+  if (attestation) config.attestationSigner = attestation
+  else if (spec.bridge.initialAttestationKeyset) {
+    config.attestationSigner = {
+      activeSignerIds: [...spec.bridge.initialAttestationKeyset.signerIds],
+      mode: 'external',
+      threshold: spec.bridge.initialAttestationKeyset.threshold,
+    }
+  }
+
+  config.feeOracle = {contractWriteMode: spec.feeOracle?.contractWriteMode ?? 'live'}
 
   validateDstackControllerConfig(spec.dstackController)
   if (spec.dstackController !== undefined) config.dstackController = structuredClone(spec.dstackController)
@@ -1417,6 +1555,10 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
     config.ethereumDa.l2StartBlockNumber = spec.ethereumDa.l2StartBlockNumber
   }
 
+  for (const field of ETHEREUM_DA_RUNTIME_FIELDS) {
+    if (spec.ethereumDa?.[field] !== undefined) config.ethereumDa[field] = spec.ethereumDa[field]
+  }
+
   if (spec.ethereumDa?.batch) {
     config.ethereumDa.batch = Object.fromEntries(
       Object.entries(spec.ethereumDa.batch).filter(([, value]) => value !== undefined)
@@ -1433,7 +1575,8 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   if (ethereumDaS3Archive) {
     config.ethereumDa.blobArchive = {
       s3: Object.fromEntries(
-        Object.entries(ethereumDaS3Archive).filter(([, value]) => value !== undefined)
+        Object.entries({...ethereumDaS3Archive, ...(ethereumDaS3Archive.enabled === true
+          ? {publicBaseUrl: buildS3PublicBaseUrl(ethereumDaS3Archive)} : {})}).filter(([, value]) => value !== undefined)
       ),
     }
   }
@@ -1500,12 +1643,14 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
  */
 export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
   const spec = normalizeDeploymentSpec(rawSpec)
+  const attestation = resolveSpecAttestationSigners(spec, Boolean(spec.preparation))
   const externalRpc = getDogecoinExternalRpc(spec)
   const targetAmountsSats = getBridgeTargetAmountsSats(spec)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
   const config: Record<string, any> = {
-    attestation_key_count: spec.bridge.keyCounts.attestation,
-    attestation_threshold: spec.bridge.thresholds.attestation,
+    attestation_key_count: attestation?.activeSignerIds.length ?? spec.bridge.initialAttestationKeyset?.signerIds.length ?? spec.bridge.keyCounts.attestation,
+    attestation_threshold: attestation?.threshold ?? spec.bridge.initialAttestationKeyset?.threshold ?? spec.bridge.thresholds.attestation,
+    ...(attestation ? {attestation_pubkeys: attestation.activeSignerIds.map(id => attestation.external.find(signer => signer.id === id)!.publicKey)} : {}),
     bridge_target_amount: targetAmountsSats.bridge,
     confirmations_required: spec.bridge.confirmationsRequired,
     deposit_eth_recipient_address_hex: optionalAccountAddress(spec, 'deployer'),
@@ -1517,7 +1662,7 @@ export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
     network: spec.dogecoin.network,
     recovery_key_count: spec.bridge.keyCounts.recovery,
     recovery_threshold: spec.bridge.thresholds.recovery,
-    seed_string: spec.bridge.seedString,
+    ...(spec.preparation?.bridge.mode !== 'production' && spec.bridge.seedString ? {seed_string: spec.bridge.seedString} : {}),
     sequencer_target_amount: targetAmountsSats.sequencer,
     timelock: spec.bridge.timelock,
   }
@@ -1531,6 +1676,8 @@ export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
       config.tee_pubkey = normalizeCompressedSecp256k1PublicKey(teePubkey, 'signing.cubesigner.roles[0].keys[0].publicKey')
     }
   }
+
+  if (spec.preparation?.bridge.mode === 'production') return toml.stringify(resolveEnvRefsDeep(config) as toml.JsonMap)
 
   return `${toml.stringify(resolveEnvRefsDeep(config) as toml.JsonMap)}
 [[base_funding_utxos]]

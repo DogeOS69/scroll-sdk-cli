@@ -34,7 +34,6 @@ import PrepCharts, {
   migrateCubesignerPolicySdkVersion,
   migrateCubesignerRequestContract,
   reconcileGrafanaIngressHost,
-  reconcileProofCoordinatorBatchL2Rpc,
   removeConfigMapEnvKeys,
   removeEnvArrayKeys,
   removeL2GethBlobS3ExtraParams,
@@ -125,27 +124,7 @@ describe('setup prep-charts environment URL reconciliation', () => {
     expect(ingress.tls[0].hosts).to.deep.equal(['grafana.testnet.example'])
   })
 
-  it('replaces only the batch materializer L2 RPC in generated coordinator TOML', () => {
-    const source = [
-      'coordinator_id = "pc"',
-      '',
-      '  [materializer.scroll_batch.subprocess]',
-      '  binary_path = "/usr/local/bin/materializer"',
-      '  l2_rpc_url = "https://rpc.devnet.example"',
-      '',
-      '    [materializer.scroll_batch.subprocess.ethereum_da]',
-      '    l1_rpc_url = "https://l1.example"',
-      '',
-    ].join('\n')
-    const result = reconcileProofCoordinatorBatchL2Rpc(source, 'https://rpc.testnet.example')
-    expect(result.changed).to.equal(true)
-    expect(result.content).to.include('  l2_rpc_url = "https://rpc.testnet.example"')
-    expect(result.content).to.include('    l1_rpc_url = "https://l1.example"')
-    expect(reconcileProofCoordinatorBatchL2Rpc(
-      result.content,
-      'https://rpc.testnet.example',
-    ).changed).to.equal(false)
-  })
+
 })
 
 describe('setup prep-charts ConfigMap file mounts', () => {
@@ -275,6 +254,17 @@ describe('setup prep-charts retired CubeSigner instance cleanup', () => {
 })
 
 describe('setup prep-charts TSO public edge', () => {
+  it('removes inherited ALB annotations when the selected controller is nginx', () => {
+    const values: any = {ingress: {main: {
+      annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>', 'cert-manager.io/cluster-issuer': 'custom-issuer'},
+      hosts: [{host: 'tso.example.com', paths: []}],
+      ingressClassName: 'nginx',
+    }}}
+    applyTsoPublicEdgePaths(values)
+    expect(values.ingress.main.annotations).to.deep.equal({'cert-manager.io/cluster-issuer': 'custom-issuer'})
+    expect(applyTsoPublicEdgePaths(values)).to.deep.equal([])
+  })
+
   it('narrows an existing catch-all route to /health and /signer, keeping host, TLS and annotations', () => {
     const values: any = {ingress: {main: {
       annotations: {'alb.ingress.kubernetes.io/certificate-arn': 'arn:aws:acm:us-east-1:123456789012:certificate/x', 'nginx.ingress.kubernetes.io/proxy-body-size': '16m'},
@@ -618,7 +608,7 @@ describe('setup prep-charts eth-da-submitter updates', () => {
       configMaps: {
         env: {
           data: {
-            DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE: '122880',
+            DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE: '123011',
           },
         },
       },
@@ -629,7 +619,7 @@ describe('setup prep-charts eth-da-submitter updates', () => {
       l2RpcUrl: 'http://l2-rpc:8545',
     }))
 
-    expect(values.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE).to.equal('122880')
+    expect(values.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE).to.equal('123011')
     expect(changes.map(change => change.key)).not.to.include(
       'configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE',
     )

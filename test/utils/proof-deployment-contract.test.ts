@@ -1,4 +1,5 @@
 import {expect} from 'chai'
+import {createHash} from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -7,9 +8,11 @@ import type {ProofDeploymentContractInput} from '../../src/utils/proof-deploymen
 
 import {
   readProofDeploymentContract,
+  resolveProofReceiptSelection,
   validateProofDeploymentContract,
   writeProofDeploymentContract,
 } from '../../src/utils/proof-deployment-contract.js'
+import {validateProofIntentBinding} from '../../src/utils/proof-intent.js'
 
 describe('proof deployment contract schema v8', () => {
   let root: string
@@ -60,6 +63,62 @@ describe('proof deployment contract schema v8', () => {
     }
   }
 
+  function bindReceipts() {
+    const contract = writeProofDeploymentContract(input('active'))
+    const binding = (name: string) => {
+      const file = `.data/${name}.json`
+      fs.writeFileSync(path.join(root, file), `${name}\n`)
+      return {path: file, sha256: createHash('sha256').update(`${name}\n`).digest('hex')}
+    }
+
+    contract.inputs = {materials: binding('materials'), protocolContext: binding('protocol'), publication: binding('publication')}
+    const stable = {...contract} as Partial<typeof contract>
+    delete stable.generatedAt
+    delete stable.generationId
+    contract.generationId = createHash('sha256').update(JSON.stringify(stable)).digest('hex')
+    fs.writeFileSync(path.join(root, '.data/proof-deployment.json'), JSON.stringify(contract))
+    return contract
+  }
+
+  it('retains selected receipts during regeneration even when output values need reconciliation', () => {
+    bindReceipts()
+    fs.rmSync(path.join(root, 'values/proof-coordinator-production.yaml'))
+    expect(resolveProofReceiptSelection(root, {})).to.deep.equal({materialsReceipt: '.data/materials.json', publicationReceipt: '.data/publication.json'})
+  })
+
+  it('does not inherit an old publication when explicit materials start a new generation', () => {
+    bindReceipts()
+    fs.rmSync(path.join(root, '.data/publication.json'))
+    expect(resolveProofReceiptSelection(root, {materialsReceipt: 'new-materials.json'})).to.deep.equal({materialsReceipt: 'new-materials.json'})
+    expect(resolveProofReceiptSelection(root, {publicationReceipt: 'new-publication.json'})).to.deep.equal({materialsReceipt: '.data/materials.json', publicationReceipt: 'new-publication.json'})
+  })
+
+  it('fails closed if a retained receipt or protocol context changed', () => {
+    for (const name of ['materials', 'protocol', 'publication']) {
+      bindReceipts()
+      fs.appendFileSync(path.join(root, `.data/${name}.json`), 'drift')
+      expect(() => resolveProofReceiptSelection(root, {})).to.throw('checksum mismatch')
+    }
+  })
+
+  it('rejects modified contract bindings and missing retained input files', () => {
+    const contract = bindReceipts()
+    contract.inputs!.publication!.path = '.data/other.json'
+    fs.writeFileSync(path.join(root, '.data/proof-deployment.json'), JSON.stringify(contract))
+    expect(() => resolveProofReceiptSelection(root, {})).to.throw('generation ID')
+    bindReceipts()
+    fs.rmSync(path.join(root, '.data/materials.json'))
+    expect(() => resolveProofReceiptSelection(root, {})).to.throw()
+  })
+
+  it('allows initial generation without receipts but rejects a publication without materials', () => {
+    expect(resolveProofReceiptSelection(root, {})).to.deep.equal({})
+    expect(() => resolveProofReceiptSelection(root, {publicationReceipt: 'publication.json'})).to.throw('requires selected proof materials')
+    writeProofDeploymentContract(input('active'))
+    expect(resolveProofReceiptSelection(root, {})).to.deep.equal({})
+    expect(() => resolveProofReceiptSelection(root, {publicationReceipt: 'publication.json'})).to.throw('requires selected proof materials')
+  })
+
   it('records the three switches and only the compiler bundle revision', () => {
     const contract = writeProofDeploymentContract(input('active'))
     expect(contract).to.include({enforcement: 'observe', generation: 'mock', mode: 'active', schemaVersion: 8})
@@ -83,6 +142,24 @@ describe('proof deployment contract schema v8', () => {
     }})
     expect(contract.worker.enabled).to.equal(true)
     expect(() => validateProofDeploymentContract(root)).not.to.throw()
+  })
+
+  it('temporarily permits config-file edits without replacing recorded provenance', () => {
+    const settings = input('active')
+    fs.writeFileSync(settings.intentSource.path, 'network = "testnet"\n')
+    const hash = () => createHash('sha256').update(fs.readFileSync(settings.intentSource.path)).digest('hex')
+    settings.intentSource.sha256 = hash()
+    const contract = writeProofDeploymentContract(settings)
+    fs.appendFileSync(settings.intentSource.path, '\n[grafana]\nadminUser = "operator"\n')
+    const intent = {intent: {enforcement: contract.enforcement, generation: contract.generation, mode: contract.mode}, source: {...settings.intentSource, sha256: hash()}}
+    expect(intent.source.sha256).not.to.equal(contract.intentSource.sha256)
+    expect(() => validateProofIntentBinding(contract, intent)).not.to.throw()
+    expect(validateProofDeploymentContract(root).intentSource.sha256).to.equal(settings.intentSource.sha256)
+
+    // Suspending the whole-file check must not allow proof policy switches to drift.
+    for (const changed of [{mode: 'disabled' as const}, {generation: 'real' as const}, {enforcement: 'enforce' as const}]) {
+      expect(() => validateProofIntentBinding(contract, {...intent, intent: {...intent.intent, ...changed}})).to.throw('proof mode/generation/enforcement')
+    }
   })
 
   it('detects proof environment drift while permitting unrelated overlays', () => {

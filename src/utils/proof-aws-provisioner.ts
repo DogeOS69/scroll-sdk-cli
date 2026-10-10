@@ -387,7 +387,7 @@ function actionCanGetObject(action: unknown): boolean {
   )
 }
 
-function resourceMayOverlapPrefix(resource: unknown, bucket: string, keyPrefix: string): boolean {
+function resourceMayOverlapPrefix(resource: unknown, bucket: string, keyPrefix: null | string): boolean {
   if (resource === '*') return true
   if (typeof resource !== 'string') return false
 
@@ -396,6 +396,7 @@ function resourceMayOverlapPrefix(resource: unknown, bucket: string, keyPrefix: 
 
   const objectPattern = match.groups.object
   if (objectPattern === undefined) return false
+  if (keyPrefix === null) return true
 
   const managedPrefix = `${normalizeProofKeyPrefix(keyPrefix)}/`
   if (!objectPattern.includes('*') && !objectPattern.includes('?')) {
@@ -417,11 +418,12 @@ function resourceMayOverlapPrefix(resource: unknown, bucket: string, keyPrefix: 
  * First Allow statement, other than `ownedSids`, that grants any action to
  * an anonymous principal on objects overlapping `bucket/keyPrefix` without
  * a VPC endpoint restriction: a public read or write the caller does not own.
+ * A null keyPrefix checks every object prefix in the bucket.
  */
 export function findUnmanagedAnonymousGrant(
   policy: Record<string, any>,
   bucket: string,
-  keyPrefix: string,
+  keyPrefix: null | string,
   ownedSids: readonly string[],
 ): Record<string, any> | undefined {
   const statements = Array.isArray(policy.Statement)

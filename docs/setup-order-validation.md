@@ -1,7 +1,7 @@
 # Local setup-order validation
 
 > Historical validation at the revisions below; it does not certify the current
-> integrated CLI or its rc.4 default contracts images. Current identity setup is
+> integrated CLI or its rc.5 default contracts images. Current identity setup is
 > described in [keystore](keystore.md) and [setup order](setup-order.md).
 
 Validated on 2026-09-11 against the working CLI and contracts revision

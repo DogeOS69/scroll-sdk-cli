@@ -2,6 +2,8 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 function isRetiredKey(key: string, parent = ''): boolean {
+  if (parent === 'rollup' && key === 'coordinator') return true
+  if (['BATCH_COLLECTION_TIME_SEC', 'BUNDLE_COLLECTION_TIME_SEC', 'CHUNK_COLLECTION_TIME_SEC'].includes(key)) return true
   if (parent === 'rollup' && ['FINALIZE_BATCH_DEADLINE_SEC', 'MAX_BATCH_IN_BUNDLE', 'MAX_BLOCK_IN_CHUNK', 'MAX_L1_MESSAGE_GAS_LIMIT', 'MAX_TX_IN_CHUNK', 'RELAY_MESSAGE_DEADLINE_SEC', 'TEST_ENV_MOCK_FINALIZE_ENABLED', 'TEST_ENV_MOCK_FINALIZE_TIMEOUT_SEC', 'finalization', 'maxBatchInBundle', 'maxBlockInChunk', 'maxL1MessageGasLimit', 'maxTxInChunk'].includes(key)) return true
   if (['TEST_ENV_MOCK_FINALIZE_ENABLED', 'TEST_ENV_MOCK_FINALIZE_TIMEOUT_SEC'].includes(key)) return true
   if (parent === 'test' && ['mockFinalizeEnabled', 'mockFinalizeTimeout', 'mockFinalizeTimeoutSec'].includes(key)) return true
@@ -34,7 +36,7 @@ export function stripRetiredServiceConfig<T>(config: T): T {
     return Object.fromEntries(Object.entries(value).filter(([key]) =>
       !isRetiredKey(key, parent))
       .map(([key, item]) => [key, strip(item, key)])
-      .filter(([key, item]) => !(['rollup', 'test'].includes(key as string) && item && typeof item === 'object' && Object.keys(item).length === 0)))
+      .filter(([key, item]) => !(['coordinator', 'rollup', 'test'].includes(key as string) && item && typeof item === 'object' && Object.keys(item).length === 0)))
   }
 
   return strip(config) as T

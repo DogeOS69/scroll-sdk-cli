@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Test mocking */
 import * as toml from '@iarna/toml';
+import bitcore from 'bitcore-lib-doge';
 import { expect } from 'chai';
 import * as yaml from 'js-yaml';
 import * as fs from 'node:fs';
@@ -9,6 +10,7 @@ import sinon from 'sinon';
 
 import type { DeploymentSpec } from '../../src/types/deployment-spec.js';
 
+import {DEFAULT_WALLET_CONNECT_PROJECT_ID} from '../../src/config/constants.js';
 import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY} from '../../src/constants/docker.js';
 import {
   generateAllConfigs,
@@ -101,15 +103,12 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
     infrastructure: { bootnodeCount: 1, provider: 'local', sequencerCount: 1 },
     metadata: { environment: 'testnet', name: 'test-deployment' },
     network: {
-      l1ChainId: 111_111,
       l1ChainName: 'DOGE',
       l2ChainId: 534_351,
       l2ChainName: 'DogeOS Testnet',
       tokenSymbol: 'ETH',
     },
-    rollup: {
-      coordinator: { batchCollectionTimeSec: 60, bundleCollectionTimeSec: 120, chunkCollectionTimeSec: 30 },
-    },
+    proofArtifacts: {s3: {bucket: 'dogeos-proofs', keyPrefix: 'proof-topology', region: 'us-west-2'}},
     signing: { cubesigner: { roles: [] } },
     version: '1.0',
     ...overrides,
@@ -152,7 +151,6 @@ function createProofTopology(
       image: image('a', 'dogeos69/dogeos-proof-topology'),
     },
     deployment: {
-      artifactKeyPrefix: 'proof-topology',
       mockWorkerImage: image('b', 'dogeos69/prover-worker-mock'),
       productionWorkerImage: image('c', 'dogeos69/prover-worker'),
     },
@@ -405,11 +403,11 @@ describe('deployment-spec-generator', () => {
       expect(result.errors.some(e => e.code === 'E003_MISSING_PROVIDER_CONFIG')).to.be.true;
     });
 
-    it('fails when chain IDs are missing', () => {
+    it('fails when the L2 chain ID is missing', () => {
       const spec = createMinimalSpec();
-      (spec.network as any).l1ChainId = undefined;
+      (spec.network as any).l2ChainId = undefined;
       const result = validateDeploymentSpec(spec);
-      expect(result.errors.some(e => e.path === 'network')).to.be.true;
+      expect(result.errors.some(e => e.path === 'network.l2ChainId')).to.be.true;
     });
 
     it('allows deployer address to be omitted when it can be derived from private key', () => {
@@ -477,7 +475,7 @@ describe('deployment-spec-generator', () => {
       )).to.be.true;
     });
 
-    it('fails when enabled Ethereum DA S3 archive is missing publicBaseUrl', () => {
+    it('accepts bucket and region without an explicit S3 publicBaseUrl', () => {
       const spec = createMinimalSpec();
       spec.ethereumDa!.blobArchive = {
         s3: {
@@ -489,11 +487,9 @@ describe('deployment-spec-generator', () => {
 
       const result = validateDeploymentSpec(spec);
 
-      expect(result.valid).to.be.false;
-      expect(result.errors.some(error =>
-        error.code === 'E002_MISSING_REQUIRED_FIELD' &&
-        error.path === 'ethereumDa.blobArchive.s3.publicBaseUrl'
-      )).to.be.true;
+      expect(result.valid).to.be.true;
+      const config = toml.parse(generateDogeConfigToml(spec)) as any;
+      expect(config.ethereumDa.blobArchive.s3.publicBaseUrl).to.equal('https://dogeos-da.s3.us-east-1.amazonaws.com');
     });
 
     it('fails when Ethereum DA inbox worker start block is negative', () => {
@@ -665,18 +661,24 @@ describe('deployment-spec-generator', () => {
       )).to.be.true;
     });
 
-    it('fails when l1 chain ID does not match dogecoin network', () => {
-      const spec = createMinimalSpec();
-      spec.dogecoin.network = 'mainnet';
-      spec.network.l1ChainId = 111_111;
+    it('rejects a manually supplied L1 chain ID even when it matches the network', () => {
+      for (const chainId of [111_111, 1]) {
+        const spec = createMinimalSpec();
+        (spec.network as any).l1ChainId = chainId;
+        const result = validateDeploymentSpec(spec);
+        expect(result.valid).to.be.false;
+        expect(result.errors.some(error => error.path === 'network.l1ChainId' && error.message.includes('derived automatically'))).to.be.true;
+      }
+    });
 
-      const result = validateDeploymentSpec(spec);
-
-      expect(result.valid).to.be.false;
-      expect(result.errors.some(error =>
-        error.code === 'E010_DOGECOIN_NETWORK_MISMATCH' &&
-        error.path === 'network.l1ChainId'
-      )).to.be.true;
+    it('requires an explicit supported Dogecoin network instead of a chain ID', () => {
+      for (const network of [undefined, 'invalid-network']) {
+        const spec = createMinimalSpec();
+        (spec.dogecoin as any).network = network;
+        const result = validateDeploymentSpec(spec);
+        expect(result.valid).to.be.false;
+        expect(result.errors.some(error => error.path === 'dogecoin.network')).to.be.true;
+      }
     });
 
     it('warns when cubesigner TEE role is not set yet', () => {
@@ -737,7 +739,7 @@ describe('deployment-spec-generator', () => {
 
       expect(result.valid).to.be.false;
       expect(result.errors.some(error =>
-        error.path === 'signing.attestationSigner' && error.message.includes('partner-operated docker-compose')
+        error.path === 'signing.attestationSigner' && error.message.includes('attestationSigners')
       )).to.be.true;
     });
 
@@ -780,10 +782,6 @@ describe('deployment-spec-generator', () => {
     it('allows proof infrastructure to be prepared while proof mode is disabled', () => {
       const spec = createMinimalSpec({
         proofCoordinator: {
-          artifactStore: {
-            bucket: 'dogeos-proofs',
-            region: 'us-west-2',
-          },
           s3AuthMode: 'ambient',
         },
         proofTopology: createProofTopology(),
@@ -808,13 +806,118 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateConfigToml', () => {
-    it('always includes the mandatory native DOGE predeploy, preserving optional overrides', () => {
+    for (const supplied of [undefined, '', 'operator-public-project-id']) {
+      it(`propagates the WalletConnect ${supplied ? 'override' : 'default'} into TOML and frontend values (${String(supplied)})`, () => {
+        const spec = createMinimalSpec();
+        spec.frontend.walletConnectProjectId = supplied;
+        const expected = supplied || DEFAULT_WALLET_CONNECT_PROJECT_ID;
+        expect((toml.parse(generateConfigToml(spec)) as any).frontend.CONNECT_WALLET_PROJECT_ID).to.equal(expected);
+        const values = generateValuesFiles(spec);
+        const frontends = (yaml.load(values['frontends-config.yaml']) as any).configMaps['frontend-config'].data['frontend-config'];
+        expect(frontends).to.include(`REACT_APP_CONNECT_WALLET_PROJECT_ID = ${expected}`);
+      });
+    }
+
+    for (const [network, chainId] of [['mainnet', 1], ['testnet', 111_111], ['regtest', 5_555_555]] as const) {
+      it(`derives the ${network} L1 chain ID consistently across configuration and values`, () => {
+        const spec = createMinimalSpec();
+        spec.dogecoin.network = network;
+        expect(validateDeploymentSpec(spec).valid).to.be.true;
+        expect(normalizeDeploymentSpec(spec).network).not.to.have.property('l1ChainId');
+        const configs = generateAllConfigs(spec);
+        expect((toml.parse(configs['config.toml']) as any).general.CHAIN_ID_L1).to.equal(chainId);
+        expect((toml.parse(configs['protocol_seed.toml']) as any).protocol.dogecoin_chain_id).to.equal(chainId);
+        const values = generateValuesFiles(spec);
+        expect((yaml.load(values['contracts-production.yaml']) as any).configMaps['contracts-deployment-env'].data.CHAIN_ID_L1).to.equal(String(chainId));
+        const frontends = (yaml.load(values['frontends-config.yaml']) as any).configMaps['frontend-config'].data['frontend-config'];
+        expect(frontends).to.include(`REACT_APP_CHAIN_ID_L1 = ${chainId}\n`);
+      });
+    }
+
+    it('converts deposit satoshis to contract wei without changing withdrawal amounts', () => {
+      const spec = createMinimalSpec();
+      spec.bridge.fees = {depositFeeSats: '100000000', minWithdrawalAmountWei: '1000000000000000000', withdrawalFeeWei: '100000000000000000'};
+      const config = toml.parse(generateConfigToml(spec)) as any;
+      expect(config.contracts.DEPOSIT_FEE).to.equal('1000000000000000000');
+      expect(config.contracts.WITHDRAWAL_FEE).to.equal('100000000000000000');
+      expect(config.contracts.MIN_WITHDRAWAL_AMOUNT).to.equal('1000000000000000000');
+    });
+
+    it('preserves satoshi precision for zero, one satoshi and amounts above Number precision', () => {
+      for (const [sats, wei] of [['0', '0'], ['1', '10000000000'], ['9007199254740993', '90071992547409930000000000']]) {
+        const spec = createMinimalSpec();
+        spec.bridge.fees.depositFeeSats = sats;
+        expect((toml.parse(generateConfigToml(spec)) as any).contracts.DEPOSIT_FEE).to.equal(wei);
+      }
+    });
+
+    it('preserves legacy deposit wei and lets the explicit satoshi field take precedence', () => {
+      const spec = createMinimalSpec();
+      delete spec.bridge.fees.depositFeeSats;
+      spec.bridge.fees.deposit = '1000000000000000000';
+      expect((toml.parse(generateConfigToml(spec)) as any).contracts.DEPOSIT_FEE).to.equal('1000000000000000000');
+      spec.bridge.fees.depositFeeSats = '1';
+      expect((toml.parse(generateConfigToml(spec)) as any).contracts.DEPOSIT_FEE).to.equal('10000000000');
+    });
+
+    it('rejects malformed or overflowing deposit amounts before writing configuration', () => {
+      for (const value of ['-1', '1.5', '1e8', '', (2n ** 256n).toString()]) {
+        const spec = createMinimalSpec();
+        spec.bridge.fees.depositFeeSats = value;
+        expect(validateDeploymentSpec(spec).errors.some(error => error.path === 'bridge.fees')).to.equal(true);
+        expect(() => generateConfigToml(spec)).to.throw('bridge.fees');
+      }
+    });
+
+    it('includes canonical predeploys without requiring operator overrides', () => {
       for (const overrides of [undefined, {l2Wdoge: '0x5300000000000000000000000000000000000004'}]) {
         const spec = createMinimalSpec();
         spec.contracts.overrides = overrides;
         const config = toml.parse(generateConfigToml(spec)) as any;
         expect(config.contracts.overrides.L2_NATIVE_DOGE_TOKEN).to.equal('0x530000000000000000000000000000000000d09e');
+        expect(config.contracts.overrides.L1_GAS_PRICE_ORACLE).to.equal('0x5300000000000000000000000000000000000002');
+        expect(config.contracts.overrides.L2_MESSAGE_QUEUE).to.equal('0x5300000000000000000000000000000000000000');
+        expect(config.contracts.overrides.L2_WHITELIST).to.equal('0x5300000000000000000000000000000000000003');
+        expect(config.contracts.overrides.L2_WDOGE).to.equal('0x5300000000000000000000000000000000000004');
         if (overrides) expect(config.contracts.overrides.L2_WDOGE).to.equal(overrides.l2Wdoge);
+      }
+    });
+
+    it('covers every unconditional field in the pinned rc.5 contracts template', () => {
+      const baseline = JSON.parse(fs.readFileSync(new URL('../fixtures/contracts-rc5-template.json', import.meta.url), 'utf8'));
+      const spec = createMinimalSpec();
+      spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toAddress().toString();
+      const config = toml.parse(generateConfigToml(spec)) as any;
+      for (const field of baseline.fields as string[]) {
+        if (Object.keys(baseline.conditionalFields).some(prefix => field === prefix || field.startsWith(prefix + '.'))) continue;
+        expect(field.split('.').reduce((value, key) => value?.[key], config), field).not.to.equal(undefined);
+      }
+
+      expect(config.contracts.overrides).to.deep.equal(baseline.predeploys);
+      expect(config.genesis.TIMESTAMP).to.equal(0);
+      expect(config.genesis.L2_MAX_NATIVE_DOGE_SUPPLY).to.equal(spec.genesis.maxEthSupplyWei);
+      expect(config.genesis).not.to.have.property('L2_MAX_ETH_SUPPLY');
+    });
+
+    it('encodes the selected Dogecoin fee-vault recipient as hash160 without selecting the fee-wallet', () => {
+      const spec = createMinimalSpec();
+      const address = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toAddress();
+      spec.contracts.feeVaultDogeRecipientAddress = address.toString();
+      const config = toml.parse(generateConfigToml(spec)) as any;
+      expect(config.contracts.FEE_VAULT_DOGE_RECIPIENT_ADDR).to.equal('0x' + address.hashBuffer.toString('hex'));
+      delete spec.contracts.feeVaultDogeRecipientAddress;
+      expect((toml.parse(generateConfigToml(spec)) as any).contracts.FEE_VAULT_DOGE_RECIPIENT_ADDR).to.equal('0x' + '0'.repeat(40));
+      expect(validateDeploymentSpec(spec).warnings.some(warning => warning.path === 'contracts.feeVaultDogeRecipientAddress')).to.equal(true);
+    });
+
+    it('rejects fee-vault recipients for the wrong network, P2SH recipients, EVM addresses and placeholders', () => {
+      const spec = createMinimalSpec();
+      const wrongNetwork = new bitcore.PrivateKey(null, bitcore.Networks.livenet).toAddress().toString();
+      const p2sh = new bitcore.Address(Buffer.alloc(20, 1), bitcore.Networks.testnet, 'scripthash').toString();
+      for (const address of [wrongNetwork, p2sh, '0x' + '1'.repeat(40), 'REPLACE_WITH_DOGECOIN_P2PKH_ADDRESS']) {
+        spec.contracts.feeVaultDogeRecipientAddress = address;
+        expect(validateDeploymentSpec(spec).errors.some(error => error.path === 'contracts.feeVaultDogeRecipientAddress')).to.equal(true);
+        expect(() => generateConfigToml(spec)).to.throw('Dogecoin P2PKH address');
       }
     });
 
@@ -916,12 +1019,12 @@ describe('deployment-spec-generator', () => {
     it('omits retired gas-token settings even when importing an old alternative-token spec', () => {
       const spec = createMinimalSpec();
       (spec.contracts as any).alternativeGasToken = {enabled: true, tokenAddress: '0x1111111111111111111111111111111111111111'};
-      Object.assign(spec.rollup, {maxBatchInBundle: 20, maxBlockInChunk: 100, maxTxInChunk: 100});
+      Object.assign(spec.rollup ??= {}, {maxBatchInBundle: 20, maxBlockInChunk: 100, maxTxInChunk: 100});
       const normalized = normalizeDeploymentSpec(spec);
       expect(normalized.contracts).not.to.have.property('alternativeGasToken');
-      expect(normalized.rollup).not.to.have.property('maxTxInChunk');
-      expect(normalized.rollup).not.to.have.property('maxBlockInChunk');
-      expect(normalized.rollup).not.to.have.property('maxBatchInBundle');
+      expect(normalized.rollup ?? {}).not.to.have.property('maxTxInChunk');
+      expect(normalized.rollup ?? {}).not.to.have.property('maxBlockInChunk');
+      expect(normalized.rollup ?? {}).not.to.have.property('maxBatchInBundle');
       const config = toml.parse(generateConfigToml(spec)) as any;
       expect(config).not.to.have.property('gas-token');
       expect(config).not.to.have.property('rollup');
@@ -929,23 +1032,25 @@ describe('deployment-spec-generator', () => {
 
     it('discards legacy L1 rollup inputs and mock flags from imported specs', () => {
       const spec = createMinimalSpec();
-      Object.assign(spec.rollup, {
+      Object.assign(spec.rollup ??= {}, {
         finalization: {batchDeadlineSec: 1, relayMessageDeadlineSec: 2},
         maxL1MessageGasLimit: 0,
       });
       Object.assign(spec, {test: {mockFinalizeEnabled: true, mockFinalizeTimeoutSec: 30}});
       const normalized = normalizeDeploymentSpec(spec);
-      expect(normalized.rollup).not.to.have.property('finalization');
-      expect(normalized.rollup).not.to.have.property('maxL1MessageGasLimit');
+      expect(normalized.rollup ?? {}).not.to.have.property('finalization');
+      expect(normalized.rollup ?? {}).not.to.have.property('maxL1MessageGasLimit');
       expect(normalized).not.to.have.property('test');
       expect(validateDeploymentSpec(spec).valid).to.equal(true);
       expect(toml.parse(generateConfigToml(spec))).not.to.have.property('rollup');
       expect(toml.parse(generateDogeConfigToml(spec))).not.to.have.property('test');
     });
 
-    it('uses a fixed L1 fee vault address instead of reading it from the spec', () => {
+    it('uses a fixed L1 fee vault address and rejects an unsupported spec override', () => {
       const spec = createMinimalSpec() as any;
       spec.contracts.l1FeeVaultAddr = '0x2222222222222222222222222222222222222222';
+      expect(() => generateConfigToml(spec)).to.throw('contracts.l1FeeVaultAddr');
+      delete spec.contracts.l1FeeVaultAddr;
       const output = generateConfigToml(spec);
 
       expect(output).to.include('L1_FEE_VAULT_ADDR = "0x1111111111111111111111111111111111111111"');
@@ -974,7 +1079,6 @@ describe('deployment-spec-generator', () => {
       Object.assign(spec.frontend.hosts, {blockscoutBackend: 'blockscout-be.example.com'});
       spec.frontend.hosts.proofCoordinator = 'proof-coordinator.example.com';
       spec.proofCoordinator = {
-        artifactStore: {bucket: 'dogeos-proofs', region: 'us-west-2'},
         s3AuthMode: 'ambient',
       };
       spec.proofTopology = createProofTopology();
@@ -1031,7 +1135,7 @@ describe('deployment-spec-generator', () => {
 
     it('includes verifier digests when present', () => {
       const spec = createMinimalSpec();
-      spec.rollup.verifierDigests = { digest1: '0xabc', digest2: '0xdef' };
+      (spec.rollup ??= {}).verifierDigests = { digest1: '0xabc', digest2: '0xdef' };
       const output = generateConfigToml(spec);
 
       expect(output).to.include('VERIFIER_DIGEST_1');
@@ -1317,6 +1421,8 @@ describe('deployment-spec-generator', () => {
         txid: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         vout: 1,
       }];
+      expect(() => generateSetupDefaultsToml(spec)).to.throw('bridge.baseFundingUtxos');
+      delete spec.bridge.baseFundingUtxos;
       const output = generateSetupDefaultsToml(spec);
 
       expect(output).to.include('[[base_funding_utxos]]');
@@ -1427,6 +1533,22 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateValuesFiles', () => {
+    it('requests trusted TLS certificates for public RPC and pull signer endpoints', () => {
+      const spec = createMinimalSpec();
+      spec.frontend.hosts.tso = 'tso.example.invalid';
+      const files = generateValuesFiles(spec);
+      const rpc = yaml.load(files['l2-reth-rpc-public-production.yaml']) as any;
+      const tso = yaml.load(files['tso-service-production.yaml']) as any;
+      for (const [ingress, host, secretName] of [
+        [rpc.ingress.main, spec.frontend.hosts.rpcGateway, 'l2-reth-rpc-public-tls'],
+        [rpc.ingress.websocket, spec.frontend.hosts.rpcGatewayWs || spec.frontend.hosts.rpcGateway, 'l2-reth-rpc-public-websocket-tls'],
+        [tso.ingress.main, spec.frontend.hosts.tso, 'tso-service-tls'],
+      ]) {
+        expect(ingress.annotations['cert-manager.io/cluster-issuer']).to.equal('letsencrypt-prod');
+        expect(ingress.tls).to.deep.equal([{hosts: [host], secretName}]);
+      }
+    });
+
     it('pairs the default TSO image with the beta.6 pull signer ingress routes', () => {
       const files = generateValuesFiles(createMinimalSpec());
       const tso = yaml.load(files['tso-service-production.yaml']) as any;
@@ -1599,9 +1721,18 @@ describe('deployment-spec-generator', () => {
         expect(node).not.to.have.property('configMaps');
       }
 
-      expect(files['contracts-production.yaml']).to.include('SCROLL_L1_FEE_VAULT_ADDR: \'0x1111111111111111111111111111111111111111\'');
       const contractsValues = yaml.load(files['contracts-production.yaml']) as any;
       expect(contractsValues.image).to.include({repository: DOCKER_REPOSITORY, tag: `deploy-${CONTRACTS_DOCKER_DEFAULT_TAG}`});
+      expect(contractsValues.configMaps['contracts-deployment-env'].data).to.deep.equal({
+        CHAIN_ID_L1: String((toml.parse(generateConfigToml(spec)) as any).general.CHAIN_ID_L1), CHAIN_ID_L2: String(spec.network.l2ChainId),
+        ETH_GAS_PRICE: '840000000000',
+        L1_RPC_ENDPOINT: 'http://l1-interface:8545', L2_RPC_ENDPOINT: 'http://l2-rpc:8545',
+      });
+      expect(contractsValues.envFrom).to.deep.include({configMapRef: {name: 'contracts-deployment-env'}});
+      expect(contractsValues.externalSecrets['contracts-secret-env'].data).to.deep.equal([{
+        remoteRef: {key: 'dogeos-test/contracts-secret-env', property: 'DEPLOYER_PRIVATE_KEY'},
+        secretKey: 'DEPLOYER_PRIVATE_KEY',
+      }]);
 
       const submitterValues = yaml.load(files['eth-da-submitter-production.yaml']) as any;
       const submitterEnv = submitterValues.configMaps.env.data;
@@ -1683,7 +1814,7 @@ describe('deployment-spec-generator', () => {
       const feeOracleEnv = feeOracleValues.configMaps.env.data;
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL).to.equal('https://gateway.tenderly.co/public/sepolia');
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_L2__CHAIN_ID).to.equal(String(spec.network.l2ChainId));
-      expect(feeOracleEnv).not.to.have.property('DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE');
+      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE).to.equal('live');
       expect(feeOracleEnv).not.to.have.property('DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__FORMULA');
       expect(feeOracleEnv).not.to.have.property('DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__PRICE_UNAVAILABLE_FALLBACK');
       expect(feeOracleValues.envFrom).to.deep.equal([
@@ -1705,13 +1836,9 @@ describe('deployment-spec-generator', () => {
         provider: 'aws',
         sequencerCount: 1,
       };
+      spec.proofArtifacts!.s3!.endpointUrl = 'http://minio.scrollsdk:9000';
       spec.proofCoordinator = {
-        artifactStore: {
-          bucket: 'dogeos-proofs',
-          endpointUrl: 'http://minio.scrollsdk:9000',
-          publicS3EndpointUrl: 'https://proof-artifacts.example.com',
-          region: 'us-west-2',
-        },
+        artifactStore: {publicS3EndpointUrl: 'https://proof-artifacts.example.com'},
         proofWorkBaseUrl: 'http://withdrawal-processor:3000',
         s3AuthMode: 'irsa',
         serviceAccount: {
@@ -1802,10 +1929,6 @@ describe('deployment-spec-generator', () => {
     it('prepares mode-independent proof-coordinator values in disabled mode', () => {
       const spec = createMinimalSpec({
         proofCoordinator: {
-          artifactStore: {
-            bucket: 'dogeos-proofs',
-            region: 'us-west-2',
-          },
           s3AuthMode: 'ambient',
         },
         proofTopology: createProofTopology(),
@@ -2085,3 +2208,19 @@ metadata:
     });
   });
 });
+
+
+describe('monitoring template projection', () => {
+  it('requires the complete operator template and preserves its unrelated values', () => {
+    const spec = createMinimalSpec({monitoring: {slack: {enabled: true}}})
+    expect(() => generateValuesFiles(spec)).to.throw('requires values/scroll-monitor-production.yaml')
+    const template = {balanceMonitoring: {feeWallet: {minimumDoge: 456}}, diskAlerts: {warningFor: '7m'}, grafana: {resources: {limits: {memory: '3Gi'}}}}
+    const files = generateValuesFiles(spec, yaml.dump(template))
+    const monitor = yaml.load(files['scroll-monitor-production.yaml']) as any
+    expect(monitor.grafana.resources).to.deep.equal(template.grafana.resources)
+    expect(monitor.diskAlerts).to.deep.equal(template.diskAlerts)
+    expect(monitor.balanceMonitoring).to.deep.equal(template.balanceMonitoring)
+    expect(monitor.grafana.envValueFrom.DOGEOS_SLACK_WEBHOOK_URL.secretKeyRef.name).to.equal('scroll-monitor-slack')
+    expect((toml.parse(generateDogeConfigToml(spec)) as any).monitoring).to.deep.equal(spec.monitoring)
+  })
+})

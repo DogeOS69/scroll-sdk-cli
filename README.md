@@ -50,6 +50,7 @@ bin/run.js --help
 - [核心服务配置（中文）](docs/service-config-runbook.zh.md) — 当前 signer、Bridge、proof 与服务部署流程。
 - [Branch integration decisions](docs/branch-integration.md) — resolutions for the v0.3.0 branch consolidation.
 
+- [Spec plan/apply preparation](docs/spec-preparation.md) — two entry commands, resumable external inputs and beta.6 production Bridge funding.
 - [CLI setup order](docs/setup-order.md) — configuration prerequisites, native Reth genesis, `scrollsdk setup bridge-init`, service configuration and deployment handoff. Start here for command order.
 - [Configuration cleanup](docs/config-cleanup.md) — supported template fields, matching contracts images and updating an existing deployment.
 - [Pure Reth configuration](docs/reth-only-peers.md) — Reth node identities and peer configuration.
@@ -1641,17 +1642,17 @@ Generate configuration files from a DeploymentSpec YAML file
 
 ```
 USAGE
-  $ scrollsdk setup generate-from-spec -s <value> [--config-only] [--dry-run] [--env-file <value>] [-f] [--json] [-o <value>]
+  $ scrollsdk setup generate-from-spec [-s <value>] [--config-only] [--dry-run] [--env-file <value>] [-f] [--json] [-o <value>]
     [--values-only] [--with-values]
 
 FLAGS
   -f, --force             Overwrite existing files without warning
   -o, --output=<value>    [default: .] Output directory for generated files
-  -s, --spec=<value>      (required) Path to DeploymentSpec YAML file
+  -s, --spec=<value>      [default: deployment-spec.yaml] Path to DeploymentSpec YAML file
       --config-only       Only generate config.toml and .data/*.toml. This is the default.
       --dry-run           Validate spec and show what would be generated without writing files
-      --env-file=<value>  Load dotenv-style environment variables before parsing the spec. Defaults to .env.local/.env
-                          next to the spec and current directory when present.
+      --env-file=<value>  Private NAME=value file (default: ./deployment.env when present);
+                          process environment takes precedence.
       --json              Output in JSON format (stdout for data, stderr for logs)
       --values-only       Only generate values/*.yaml Helm files
       --with-values       Also generate values/*.yaml Helm files
@@ -1662,39 +1663,39 @@ DESCRIPTION
 EXAMPLES
   # Generate configs in current directory
 
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml
+  $ scrollsdk setup generate-from-spec
 
 
 
   # Generate configs to specific output directory
 
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --output ./my-deployment
+  $ scrollsdk setup generate-from-spec --output ./my-deployment
 
 
 
   # Generate with JSON output for automation
 
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --json
+  $ scrollsdk setup generate-from-spec --json
 
 
 
   # Load private keys/passwords from an env file before deriving account addresses
 
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --env-file .env.local
+  $ scrollsdk setup generate-from-spec --env-file custom.env
 
 
 
   # Dry run - validate and show what would be generated
 
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --dry-run
+  $ scrollsdk setup generate-from-spec --dry-run
 
 
 
   # Generate Helm values files explicitly
 
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --with-values
+  $ scrollsdk setup generate-from-spec --with-values
 
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --values-only
+  $ scrollsdk setup generate-from-spec --values-only
 ```
 
 _See code: [src/commands/setup/generate-from-spec.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/generate-from-spec.ts)_

@@ -196,6 +196,47 @@ export function readProofDeploymentContract(deploymentDir = '.', contractPath = 
   return {contract, contractPath: resolved}
 }
 
+/** Preserve selected inputs on ordinary regeneration, without requiring old output values to match. */
+export function resolveProofReceiptSelection(
+  deploymentDir: string,
+  selection: {materialsReceipt?: string; publicationReceipt?: string},
+): {materialsReceipt?: string; publicationReceipt?: string} {
+  // Explicit materials start a new generation; its publication must be selected explicitly too.
+  if (selection.materialsReceipt) return selection
+  const target = path.resolve(deploymentDir, DEFAULT_PROOF_DEPLOYMENT_CONTRACT)
+  if (!fs.existsSync(target)) {
+    if (selection.publicationReceipt) throw new Error('A proof publication receipt requires selected proof materials')
+    return selection
+  }
+
+  proofRegularFile(target)
+  const {contract} = readProofDeploymentContract(deploymentDir)
+  const stable = {...contract} as Partial<ProofDeploymentContract>
+  delete stable.generatedAt
+  delete stable.generationId
+  if (sha256Json(stable) !== contract.generationId) throw new Error('Cannot retain proof inputs: generation ID does not match contract contents')
+  if (!contract.inputs) {
+    if (selection.publicationReceipt) throw new Error('A proof publication receipt requires selected proof materials')
+    return selection
+  }
+
+  const bindings = {
+    materials: contract.inputs.materials,
+    protocolContext: contract.inputs.protocolContext,
+    ...(!selection.publicationReceipt && contract.inputs.publication ? {publication: contract.inputs.publication} : {}),
+  }
+  for (const [name, binding] of Object.entries(bindings)) {
+    if (!binding || sha256File(proofRegularFile(resolveContractFile(deploymentDir, binding.path))) !== binding.sha256) {
+      throw new Error(`Cannot retain proof inputs: ${name} checksum mismatch; explicitly select reviewed receipts`)
+    }
+  }
+
+  return {
+    materialsReceipt: contract.inputs.materials.path,
+    publicationReceipt: selection.publicationReceipt ?? contract.inputs.publication?.path,
+  }
+}
+
 export function validateProofDeploymentContract(
   deploymentDir = '.',
   contractPath = DEFAULT_PROOF_DEPLOYMENT_CONTRACT,

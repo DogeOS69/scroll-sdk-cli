@@ -17,6 +17,7 @@ import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import { protocolIdSidecarPath } from '../../utils/signer-policy-derivation.js'
+import {withdrawalSequencerKms} from '../../utils/withdrawal-signers.js'
 
 type BridgeInitStep = '1-prepare' | '2-setup' | '3-bridge-info' | '4-fund' | '5-protocol-context' | 'all'
 
@@ -310,10 +311,12 @@ export class BridgeInitCommand extends Command {
       default: false,
       description: 'Run without prompts. Requires --seed for --step all or --step 1-prepare.',
     }),
+    production: Flags.boolean({default: false, description: 'Use only public artifact stages (1, 3, 5); never run deterministic helper setup or funding.'}),
     seed: Flags.string({
       char: 's',
       description: 'seed which will regenerate the sequencer and fee wallet',
     }),
+    'seed-env': Flags.string({description: 'Environment variable containing the helper seed; avoids passing its value in argv.', exclusive: ['seed']}),
     step: Flags.string({
       default: 'all',
       description: [
@@ -347,9 +350,10 @@ export class BridgeInitCommand extends Command {
     this.kubeContext = flags['kube-context']
     this.jsonCtx = new JsonOutputContext('setup bridge-init', this.jsonMode)
 
-    let { seed } = flags
+    let seed = flags.seed ?? (flags['seed-env'] ? process.env[flags['seed-env']] : undefined)
     let imageTag = flags['image-tag']
     const step = this.normalizeStep(flags.step)
+    if (flags.production && !['1-prepare', '3-bridge-info', '5-protocol-context'].includes(step)) throw new Error('Production mode permits only artifact stages 1, 3 and 5; fund outpoints with the deployment wallet')
     const needsPrepare = step === 'all' || step === '1-prepare'
     const dataDir = path.join(process.cwd(), '.data')
     const secretsDir = path.join(process.cwd(), 'secrets')
@@ -369,7 +373,7 @@ export class BridgeInitCommand extends Command {
     }
 
     // In non-interactive mode, require seed only for steps that prepare setup_defaults.toml.
-    if (this.nonInteractive && needsPrepare && !seed) {
+    if (this.nonInteractive && needsPrepare && !flags.production && !seed) {
       this.jsonCtx.error(
         'E601_MISSING_FIELD',
         '--seed flag is required in non-interactive mode for --step all or --step 1-prepare',
@@ -385,11 +389,15 @@ export class BridgeInitCommand extends Command {
     this.jsonCtx.info(`Using Docker platform: ${this.dockerPlatform}`)
 
     if (needsPrepare) {
-      seed = await this.prepareBridgeInit(seed, paths)
+      if (flags.production) {
+        this.copyGenesisYamlToData(paths.dataDir)
+        this.assertAttestationPubkeysReady(paths.setupDefaultsPath)
+        await this.updateProtocolSeed(paths.dataDir, this.getConfiguredDogeNetwork(), path.join(process.cwd(), 'config.toml'))
+      } else seed = await this.prepareBridgeInit(seed, paths)
     }
 
     let postprocessResult: BridgeInitPostprocessResult = { outputFiles: [] }
-    const helperAddress = seed ? bridgeSetupHelperAddress(seed, this.getConfiguredDogeNetwork()) : undefined
+    const helperAddress = seed && !flags.production ? bridgeSetupHelperAddress(seed, this.getConfiguredDogeNetwork()) : undefined
     if (helperAddress) this.jsonCtx.info(`Fund the setup helper P2PKH address and record its confirmed UTXOs in setup_defaults.toml: ${helperAddress}`)
 
     switch (step) {
@@ -1187,7 +1195,8 @@ export class BridgeInitCommand extends Command {
       'fee_signer_key',
       paths.withdrawalProcessorTomlPath
     )
-    const sequencerSignerKey = this.getRequiredStringValue(
+    const kms = withdrawalSequencerKms(withdrawalProcessorToml)
+    const sequencerSignerKey = kms ? undefined : this.getRequiredStringValue(
       withdrawalProcessorToml,
       'sequencer_signer_key',
       paths.withdrawalProcessorTomlPath
@@ -1197,9 +1206,10 @@ export class BridgeInitCommand extends Command {
     const existingContent = fs.existsSync(paths.withdrawalProcessorSecretPath)
       ? fs.readFileSync(paths.withdrawalProcessorSecretPath, 'utf8')
       : ''
-    const nextContent = this.upsertEnvValues(existingContent, {
+    const sourceContent = kms ? existingContent.split('\n').filter(line => !/^\s*(?:export\s+)?DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY\s*=/.test(line)).join('\n') : existingContent
+    const nextContent = this.upsertEnvValues(sourceContent, {
       DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY: feeSignerKey,
-      DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY: sequencerSignerKey,
+      ...(sequencerSignerKey ? {DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY: sequencerSignerKey} : {}),
     })
     fs.writeFileSync(paths.withdrawalProcessorSecretPath, nextContent)
     this.jsonCtx.info(`Updated withdrawal processor signer keys in ${paths.withdrawalProcessorSecretPath}`)

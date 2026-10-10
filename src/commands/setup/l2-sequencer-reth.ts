@@ -428,6 +428,7 @@ export default class SetupL2SequencerReth extends Command {
     const nodekey = await this.resolveNodekey(flags, existing, nonInteractive)
     const nodekeySecretMode = await this.resolveNodekeySecretMode(flags, existing, signerMode, index, nonInteractive, jsonCtx)
     const signer = await this.resolveSigner(flags, existing, signerBackend, index, nonInteractive, jsonCtx)
+    if (flags['expected-address'] && signer.address?.toLowerCase() !== String(flags['expected-address']).toLowerCase()) throw new Error('Sequencer signer address does not match identity intent')
     const secretName = `${getSequencerRethResourceName(index)}-secret-env`
 
     const resolved: ResolvedSequencerRethConfig = {

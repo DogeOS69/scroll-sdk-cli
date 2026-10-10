@@ -34,6 +34,31 @@ export function reconcileScrollMonitorGrafana(values: any, config?: DogeConfig['
     changes.push({key: `grafana.${key}`, newValue: '[stored in Secret]', oldValue: '[redacted]'})
   }
 
+  const reference = grafanaAdminReference(config)
+  const externalSecrets = mapping(values.externalSecrets, 'externalSecrets')
+  const previous = externalSecrets[reference.existingSecret]
+  const external = structuredClone(mapping(previous, `externalSecrets.${reference.existingSecret}`))
+  external.provider ??= 'aws'
+  external.serviceAccount ??= 'external-secrets'
+  external.refreshInterval ??= '2m'
+  const data = Array.isArray(external.data) ? external.data : []
+  // Keep provider, path, region and unrelated keys selected by the operator.
+  for (const secretKey of [reference.userKey, reference.passwordKey]) {
+    const item = data.find((entry: any) => entry.secretKey === secretKey)
+    if (item) {
+      item.remoteRef = {...item.remoteRef, property: secretKey}
+    } else {
+      data.push({remoteRef: {key: `${reference.existingSecret}-env`, property: secretKey}, secretKey})
+    }
+  }
+
+  external.data = data
+  if (JSON.stringify(previous) !== JSON.stringify(external)) {
+    externalSecrets[reference.existingSecret] = external
+    values.externalSecrets = externalSecrets
+    changes.push({key: `externalSecrets.${reference.existingSecret}`, newValue: '[external admin Secret reference]', oldValue: '[reference]'})
+  }
+
   grafana.admin = admin
   if (changes.length > 0) values.grafana = grafana
   return changes

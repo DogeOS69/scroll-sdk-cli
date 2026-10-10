@@ -44,6 +44,18 @@ describe('independent component publication', () => {
     expect(generate()).to.deep.equal([])
   })
 
+  it('preserves the SDK delivery resource configuration during regeneration', () => {
+    const resources = {limits: {cpu: '1000m', memory: '256Mi'}, requests: {cpu: '100m', memory: '64Mi'}}
+    values.statusPage.publication.delivery = {resources}
+    generate()
+    expect(values.statusPage.publication.delivery.resources).to.deep.equal(resources)
+    expect(generate()).to.deep.equal([])
+    values.statusPage.publication.delivery.resources.requests.memory = 'invalid'
+    expect(generate).to.throw('Invalid delivery resource quantity')
+    values.statusPage.publication.delivery.resources = {token: 'not-a-resource'}
+    expect(generate).to.throw('Unknown publication.delivery.resources field')
+  })
+
   it('defaults every omitted mode to automatic and rejects incomplete activation', () => {
     values.statusPage.publication.components = Object.fromEntries(COMPONENT_KEYS.map(key => [key, {rule: {expr: 'fixture_health'}}]))
     generate()

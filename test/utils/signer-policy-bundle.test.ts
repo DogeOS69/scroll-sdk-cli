@@ -257,6 +257,7 @@ describe('partner phase commands', () => {
     const {bin, log, runtime, source} = setup()
     fs.writeFileSync(source, key, {mode: 0o600})
     expect(run(PARTNER_PHASE_A_COMMANDS, bin).status).to.equal(0)
+    expect(fs.statSync(path.join(root, 'docker-compose/policy')).uid).to.equal(process.getuid!())
     expect(fs.readFileSync(path.join(root, 'signer-partner-a/identity.json'), 'utf8')).to.equal('{"identity":true}\n')
     expect(run(PARTNER_PHASE_B_COMMANDS, bin).status).to.equal(0)
     const logged = calls(log)

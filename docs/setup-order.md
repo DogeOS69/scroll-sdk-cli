@@ -7,6 +7,11 @@ infrastructure bootstrap script or evidence of production deployment acceptance.
 Provision the RPC endpoints, Kubernetes infrastructure, DNS, signer access and
 storage required by your chosen deployment separately.
 
+For configuration generated from a deployment spec, see the
+[spec projection reference](spec-projection.md) for defaults, preserved inputs
+and the remaining setup steps. The [plan/apply workflow](spec-preparation.md)
+orchestrates those steps and resumes after external funding and partner handoffs.
+
 Use core images and the topology compiler containing
 [dogeos-core #1483](https://github.com/DogeOS69/dogeos-core/pull/1483) and
 [#1482](https://github.com/DogeOS69/dogeos-core/pull/1482), together with the
@@ -34,10 +39,15 @@ findings and the cloud/proof/runtime steps that remain unverified.
 The newer [production input review](production-inputs-review.md) records the
 cross-repository corrections and shadowfork configuration rehearsal.
 
-Bridge initialization uses **`scrollsdk setup bridge-init`** with the configured
-Dogecoin network's actual funding and confirmation process.
+Production Bridge initialization follows the [plan/apply production flow](spec-preparation.md#production-funding-and-resume).
+The legacy full `bridge-init` command uses a deterministic test helper.
 
 ## 1. Prepare configuration and identities
+
+For the spec path, use `generate-from-spec --bootstrap --sdk-dir` with the
+[pinned template and identity inputs](spec-projection.md#start-a-fresh-directory-from-a-pinned-sdk-template),
+then run `gen-keystore --plan` and apply `gen-keystore`. The manual command path
+can instead prepare the following files explicitly.
 
 Prepare the deployment layout before running setup. A lone `config.toml` is not
 sufficient for chart preparation. Use the matching `scroll-sdk` release's
@@ -64,7 +74,7 @@ Configure the following before generating genesis or initializing Bridge:
 | --- | --- | --- |
 | Deployment/activity accounts | `scrollsdk setup gen-keystore --accounts`; add `--activity-helper` if needed | Preserve the selected owner; an empty owner defaults to deployer. |
 | Dogecoin RPC, Ethereum DA and domains | `scrollsdk setup doge-config`, then `scrollsdk setup domains` | Use the intended network and service endpoints. |
-| Application signers | `scrollsdk setup eth-da-submitter`; `scrollsdk setup fee-oracle` | Select local or AWS KMS signing in each command. Configure DA archive settings; the fee oracle public address is needed for genesis. |
+| Application signers | `scrollsdk setup gen-keystore --service eth-da-submitter`; `scrollsdk setup gen-keystore --service fee-oracle` | Select local or AWS KMS signing, or consume the saved spec identity intent. The fee oracle public address is needed for genesis. Configure DA archive access separately with `setup eth-da-submitter`. |
 | Reth node identities | `scrollsdk setup l2-sequencer-reth --index 0`; `scrollsdk setup l2-bootnode-reth` | Configure additional instances as needed; see [Pure Reth configuration](reth-only-peers.md). |
 | Attestation signer inputs | Each signer operator runs `scrollsdk signer init --id <id> --network <network>`, then `attestation_signer --print-identity` and `scrollsdk signer init ... --identity <file>` on their own infrastructure to produce the descriptor (attestation + transport public keys, no endpoint: signers dial out to the TSO), then the bridge operator runs `scrollsdk setup attestation-signer` | Collect the public descriptors in `descriptors/` or pass `--descriptor` for each file. This signer identity flow is independent of DA/Fee Oracle KMS provisioning. |
 | TEE identity and session | `scrollsdk setup cubesigner-init`, then `scrollsdk setup cubesigner-refresh` | Use the intended CubeSigner environment and identity lifecycle; gamma is not a universal requirement. |
@@ -93,7 +103,7 @@ scrollsdk setup gen-l2-artifacts
 ```
 
 The generator, deployer and verification images use `gen-configs-<revision>`,
-`deploy-<revision>` and `verify-<revision>` with the same approved release tag or full contracts revision. The default is `dogeos-v0.3.0-rc.4`.
+`deploy-<revision>` and `verify-<revision>` with the same approved release tag or full contracts revision. The default is `dogeos-v0.3.0-rc.5`.
 Choose a new deployment salt for a new instance. Owner and index-0 Reth signer checks must pass first. This produces
 `values/genesis.yaml`, which Bridge preparation consumes.
 
@@ -102,6 +112,15 @@ instead of building the generator Docker image. This option applies to contract
 artifact generation; Bridge initialization still uses its own tools image.
 
 ## 3. Initialize Bridge using the CLI
+
+For production, use [plan/apply with `bridge.mode: production`](spec-preparation.md).
+It binds independently funded sequencer outpoints, generates the final Bridge
+address and verifies marked funding before producing the canonical protocol context.
+`bridge-init --production` exposes only artifact stages 1, 3 and 5.
+
+The sequence below is the **test-helper flow** for testnet/regtest. Core beta.6
+labels `generate_test_keys` as test scaffolding; do not use its deterministic
+wallet derivation for production.
 
 ```bash
 scrollsdk setup bridge-init

@@ -49,7 +49,18 @@ export function reconcileComponentPublication(values: any, config: any, readNode
   const health = normalizeHealth(publication.health)
   const maintenanceWindows = normalizeMaintenance(publication.maintenanceWindows, COMPONENT_KEYS)
   const delivery = {enabled: true, image: 'python:3.12.11-alpine3.22', storageClassName: '', storageSize: '1Gi', ...object(publication.delivery, 'publication.delivery')}
-  fields(delivery, ['enabled', 'image', 'storageClassName', 'storageSize'], 'publication.delivery')
+  fields(delivery, ['enabled', 'image', 'storageClassName', 'storageSize', 'resources'], 'publication.delivery')
+  if ('resources' in delivery) {
+    const resources = object(delivery.resources, 'publication.delivery.resources')
+    fields(resources, ['requests', 'limits'], 'publication.delivery.resources')
+    for (const [kind, quantities] of Object.entries(resources)) {
+      for (const [resource, quantity] of Object.entries(object(quantities, `publication.delivery.resources.${kind}`))) {
+        if (!/^[\w./-]+$/.test(resource) || !['number', 'string'].includes(typeof quantity)
+          || !/^(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+|[EGKMPT]i|[EGMPTkmnu])?$/.test(String(quantity))) throw new Error('Invalid delivery resource quantity')
+      }
+    }
+  }
+
   if (typeof delivery.enabled !== 'boolean') throw new Error('publication.delivery.enabled must be boolean')
   if (maintenanceWindows.length > 0 && !delivery.enabled) throw new Error('Maintenance suppression requires delivery.enabled')
   text(delivery.image, 'publication.delivery.image')

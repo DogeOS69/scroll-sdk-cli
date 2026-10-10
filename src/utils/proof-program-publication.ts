@@ -323,7 +323,15 @@ export async function publishProofProgramBundle(options: PublishProofProgramOpti
       if (revision !== plan.coreRevision) throw new Error('Publisher OCI revision differs from release')
       const mapping = run('docker', ['image', 'inspect', plan.publisherImage, '--format', '{{ index .Config.Labels "dogeos.proof-bundle.mapping" }}']).trim()
       if (mapping !== 'v1-11-files') throw new Error('Publisher image mapping contract differs from release')
-      const credentials = JSON.parse(run('aws', ['configure', 'export-credentials', '--format', 'process', ...(options.awsProfile ? ['--profile', options.awsProfile] : [])], {env})) as {AccessKeyId?: string; Expiration?: string; SecretAccessKey?: string; SessionToken?: string}
+      const profile = options.awsProfile ? ['--profile', options.awsProfile] : []
+      let credentials = JSON.parse(run('aws', ['configure', 'export-credentials', '--format', 'process', ...profile], {env})) as {AccessKeyId?: string; Expiration?: string; SecretAccessKey?: string; SessionToken?: string}
+      if (credentials.AccessKeyId && credentials.SecretAccessKey && !credentials.SessionToken && !credentials.Expiration) {
+        // An IAM-user profile is valid operator authentication. Exchange it
+        // on the host; the publisher container only receives temporary keys.
+        const session = JSON.parse(run('aws', ['sts', 'get-session-token', '--duration-seconds', '3600', '--output', 'json', ...profile], {env}))
+        credentials = session.Credentials ?? {}
+      }
+
       if (!credentials.AccessKeyId || !credentials.SecretAccessKey || !credentials.SessionToken || !credentials.Expiration || Date.parse(credentials.Expiration) <= Date.now() || !Number.isFinite(Date.parse(credentials.Expiration))) throw new Error('Publisher requires unexpired temporary AWS credentials')
       const dockerEnv = {...process.env, AWS_ACCESS_KEY_ID: credentials.AccessKeyId, AWS_REGION: plan.artifactStore.region, AWS_SECRET_ACCESS_KEY: credentials.SecretAccessKey, AWS_SESSION_TOKEN: credentials.SessionToken}
       body = run('docker', [
