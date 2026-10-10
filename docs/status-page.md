@@ -58,7 +58,7 @@ Run these commands from the deployment directory, using a CLI build containing
 scrollsdk setup status-page
 
 # Optional: read Instatus and print create/update/unchanged actions.
-# Does not modify local files or Instatus; requires INSTATUS_API_KEY in the environment.
+# Does not modify local files or Instatus; reads INSTATUS_API_KEY from the private deployment.env or process environment.
 scrollsdk setup status-page --plan
 
 # Explicit remote mutation; creates or reconciles the selected page and components.
@@ -182,7 +182,15 @@ page to a workspace. The DogeOS defaults always require the existing page inside
   `INSTATUS_GRAFANA_WEBHOOK_URL`; the generated receiver retains that literal
   environment reference. This URL is not an existing scroll-monitor URL.
 - **Management API key:** The CLI reads `INSTATUS_API_KEY` only for `--plan` and
-  `--apply`. Supply it through the shell/CI secret environment. It is not a CLI
+  `--apply`. Fill it in the private `deployment.env` from the environment example;
+  no extra `export` is required. The command uses the environment-file reference
+  saved in `.scrollsdk/plan.json`, or `deployment.env` in the deployment directory
+  when no reference was saved. `--env-file /private/custom.env` explicitly overrides
+  the file selection; a pre-existing shell/CI `INSTATUS_API_KEY` takes precedence
+  over file content. A missing saved/explicit file fails instead of silently
+  selecting another file. Only this variable is imported for status-page management;
+  unrelated deployment credentials are not loaded into the process. Offline
+  generation does not load the file or require the key. The key is not a CLI
   argument, not saved in YAML, and not injected into the running chart.
 
 Grafana holds the credential for the Instatus endpoint it pushes to. Instatus

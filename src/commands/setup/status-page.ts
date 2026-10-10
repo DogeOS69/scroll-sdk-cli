@@ -7,7 +7,9 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import {YAML_DUMP_OPTIONS} from '../../config/constants.js'
+import {savedDeploymentEnvFile} from '../../utils/deployment-paths.js'
 import {JsonOutputContext} from '../../utils/json-output.js'
+import {loadPreparationEnv} from '../../utils/preparation-io.js'
 import {StatusPageHeartbeat} from '../../utils/status-page-heartbeat.js'
 import {InstatusClient} from '../../utils/status-page-instatus.js'
 import {ComponentKey, componentIdentity} from '../../utils/status-page-publication.js'
@@ -23,6 +25,7 @@ export default class StatusPage extends Command {
     config: Flags.string({default: 'config.toml', description: 'Chain config, relative to deployment directory'}),
     'create-webhook': Flags.boolean({default: false, description: 'With --plan/--apply, initialize a Grafana integration if no private binding exists; subsequent applies reuse it', exclusive: ['webhook-url-file']}),
     'deployment-dir': Flags.string({default: '.', description: 'Deployment root'}),
+    'env-file': Flags.string({description: 'Private NAME=value file for --plan/--apply; defaults to the saved preparation plan reference, then deployment.env in the deployment directory'}),
     json: Flags.boolean({default: false, description: 'Output structured JSON'}),
     plan: Flags.boolean({default: false, description: 'Read-only remote comparison; do not write local files or Instatus', exclusive: ['apply']}),
     'probe-values': Flags.string({description: 'Write values for the independent status-page-probe chart; --plan never writes'}),
@@ -107,6 +110,12 @@ export default class StatusPage extends Command {
         output.logSuccess(`Generated ${options.catalog.components.length} components and native Grafana configuration in ${valuesPath}`)
         output.success({catalog: options.catalog, changed: changes.length > 0 || restored, mode: 'generate', publication: options.generated.componentPublication?.readiness, valuesPath})
         return
+      }
+
+      try {
+        loadPreparationEnv(savedDeploymentEnvFile(root, flags['env-file']), ['INSTATUS_API_KEY'])
+      } catch {
+        throw new Error('Cannot load status-page credentials; check the saved preparation plan and deployment.env, or select --env-file')
       }
 
       const client = new InstatusClient(process.env.INSTATUS_API_KEY ?? '')

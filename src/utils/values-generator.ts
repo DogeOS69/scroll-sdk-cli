@@ -336,7 +336,8 @@ function resolveImage(
 }
 
 /**
- * Generate all Helm values files from a DeploymentSpec
+ * Project DeploymentSpec inputs; callers merge these into committed SDK values
+ * with mergeBootstrapValues to retain runtime policy and operator overrides.
  */
 export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: string): GeneratedValuesFiles {
   const normalizedSpec = normalizeDeploymentSpec(spec)
@@ -354,7 +355,7 @@ export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: s
   )) throw new Error('DeploymentSpec proof enforcement requires active real proving')
 
   const files: GeneratedValuesFiles = {}
-  if (normalizedSpec.monitoring?.slack?.enabled && !monitoringTemplate) throw new Error('Slack generation requires values/scroll-monitor-production.yaml in the output directory or SDK templates from --bootstrap')
+  if (normalizedSpec.monitoring?.slack?.enabled && !monitoringTemplate) throw new Error('Slack generation requires values/scroll-monitor-production.yaml in the output directory or the selected SDK templates')
   if (normalizedSpec.monitoring?.slack && monitoringTemplate) {
     const monitor = yaml.load(monitoringTemplate) as Record<string, any> ?? {}
     reconcileMonitoringSlack(monitor, normalizedSpec.monitoring)

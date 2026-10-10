@@ -8,26 +8,49 @@ const REQUIRED_TEMPLATES = [
   'Makefile.example', 'withdrawal-processor/WithdrawalProcessor.toml',
   'proof-coordinator/ProofCoordinator.toml', 'values/scroll-monitor-production.yaml',
   'values/metrics-exporter-production.yaml',
+  'values/l2-reth-sequencer-production.yaml', 'values/l2-reth-bootnode-production.yaml',
+  'values/l2-reth-rpc-production.yaml', 'values/l2-reth-rpc-public-production.yaml',
+  'values/eth-da-submitter-production.yaml', 'values/fee-oracle-production.yaml',
 ]
 
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 
-/** Keep template-owned policies/resources while projecting explicit generated service inputs. */
-export function mergeBootstrapValues(template: string | undefined, generated: string): string {
-  if (!template) return generated
-  const merge = (base: unknown, override: unknown, key = ''): unknown => {
-    if (key === 'env' && Array.isArray(base) && Array.isArray(override)) {
-      const entries = new Map(base.filter(entry => object(entry)).map(entry => [entry.name, entry]))
-      for (const entry of override.filter(entry => object(entry))) entries.set(entry.name, entry)
-      return [...entries.values()]
-    }
+// These are runtime policy defaults in the projection, not spec-owned inputs.
+// Preserve an operator's complete argument list, including an intentionally empty
+// list: concatenating flags can change their meaning or introduce duplicates.
+const RETH_INPUT_PATHS = new Set([
+  'reth.networkId', 'reth.builderGasLimit', 'reth.l1Url', 'reth.sequencer',
+  'reth.sequencer.enabled', 'reth.sequencer.feeRecipient',
+])
+const FEE_ORACLE_INPUTS = new Set([
+  'DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL', 'DOGEOS_FEE_ORACLE_L2__CHAIN_ID',
+  'DOGEOS_FEE_ORACLE_L2__GAS_ORACLE_CONTRACT', 'DOGEOS_FEE_ORACLE_L2__RPC_URL',
+])
+function templateOwned(path: string): boolean {
+  if (path === 'resources') return true
+  if (path.startsWith('reth.')) return !RETH_INPUT_PATHS.has(path)
+  const env = path.slice('configMaps.env.data.'.length)
+  return path.startsWith('configMaps.env.data.DOGEOS_FEE_ORACLE_') && !FEE_ORACLE_INPUTS.has(env)
+}
 
-    if (!object(base) || !object(override)) return override
-    return Object.fromEntries([...new Set([...Object.keys(base), ...Object.keys(override)])].map(field => [field,
-      Object.hasOwn(override, field) ? merge(base[field], override[field], field) : base[field]]))
+function mergeValues(base: unknown, override: unknown, project: boolean, explicitPaths: readonly string[] = [], path = ''): unknown {
+  if (project && base !== undefined && !explicitPaths.includes(path) && templateOwned(path)) return base
+  if (path.split('.').at(-1) === 'env' && Array.isArray(base) && Array.isArray(override)) {
+    const entries = new Map(base.filter(entry => object(entry)).map(entry => [entry.name, entry]))
+    for (const entry of override.filter(entry => object(entry))) entries.set(entry.name, entry)
+    return [...entries.values()]
   }
 
-  return yaml.dump(merge(yaml.load(template), yaml.load(generated)), {lineWidth: -1, noRefs: true})
+  if (!object(base) || !object(override)) return override
+  return Object.fromEntries([...new Set([...Object.keys(base), ...Object.keys(override)])].map(field => [field,
+    Object.hasOwn(override, field) ? mergeValues(base[field], override[field], project, explicitPaths, path ? `${path}.${field}` : field) : base[field]]))
+}
+
+/** Merge operator edits onto SDK defaults, then project deployment inputs. */
+export function mergeBootstrapValues(template: string | undefined, generated: string, existing?: string, explicitPaths: readonly string[] = []): string {
+  let base = template ? yaml.load(template) : undefined
+  if (existing !== undefined) base = mergeValues(base, yaml.load(existing), false)
+  return yaml.dump(mergeValues(base, yaml.load(generated), true, explicitPaths), {lineWidth: -1, noRefs: true})
 }
 
 /** Resolve a checkout once; callers persist this full commit in the frozen plan. */
@@ -50,8 +73,19 @@ export function planSpecBootstrap(spec: DeploymentSpec, sdkDirectory?: string): 
   }
 
   if (errors.length > 0) throw new Error(`Bootstrap inputs are incomplete:\n- ${errors.join('\n- ')}`)
-  const revision = resolveSdkRevision(sdkDirectory!, spec.templates?.sdkRevision)
-  const git = (...args: string[]): string => execFileSync('git', ['-C', sdkDirectory!, ...args], {encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe']})
+  const {files, hashes, revision} = loadSdkTemplateFiles(sdkDirectory!, spec.templates?.sdkRevision)
+  files.Makefile = adaptNodeCounts(files.Makefile, spec)
+  files['.data/spec-bootstrap.json'] = JSON.stringify({
+    pendingStages: ['identity provisioning/import', 'contract and genesis generation', 'Bridge initialization and canonical protocol context', 'proof materials, compilation and publication', 'secret preparation and chart reconciliation'], schema: 'dogeos/spec-bootstrap/v1', sdkRevision: revision,
+    templateHashes: hashes,
+  }, null, 2) + '\n'
+  return files
+}
+
+/** Read committed SDK templates for every values-generation entry point. */
+export function loadSdkTemplateFiles(sdkDirectory: string, revisionOverride?: string): {files: Record<string, string>; hashes: Record<string, string>; revision: string} {
+  const revision = resolveSdkRevision(sdkDirectory, revisionOverride)
+  const git = (...args: string[]): string => execFileSync('git', ['-C', sdkDirectory, ...args], {encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe']})
   let listing: string
   try {listing = git('ls-tree', '-r', revision, '--', 'examples/')} catch {throw new Error('Pinned SDK commit is unavailable in --sdk-dir')}
   const sourceFiles = new Map(listing.trim().split('\n').filter(Boolean).map(line => {
@@ -70,12 +104,7 @@ export function planSpecBootstrap(spec: DeploymentSpec, sdkDirectory?: string): 
     files[file === 'Makefile.example' ? 'Makefile' : file] = content
   }
 
-  files.Makefile = adaptNodeCounts(files.Makefile, spec)
-  files['.data/spec-bootstrap.json'] = JSON.stringify({
-    pendingStages: ['identity provisioning/import', 'contract and genesis generation', 'Bridge initialization and canonical protocol context', 'proof materials, compilation and publication', 'secret preparation and chart reconciliation'], schema: 'dogeos/spec-bootstrap/v1', sdkRevision: revision,
-    templateHashes: hashes,
-  }, null, 2) + '\n'
-  return files
+  return {files, hashes, revision}
 }
 
 function adaptNodeCounts(source: string, spec: DeploymentSpec): string {

@@ -15,7 +15,7 @@ import {loadPreparationEnv} from '../../utils/preparation-io.js'
 import {resolvePreparationProofRelease} from '../../utils/preparation-release.js'
 import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles} from '../../utils/retired-services.js'
-import {mergeBootstrapValues, planSpecBootstrap} from '../../utils/spec-bootstrap.js'
+import {loadSdkTemplateFiles, mergeBootstrapValues, planSpecBootstrap} from '../../utils/spec-bootstrap.js'
 import {resolveCubesignerIdentity} from '../../utils/spec-cubesigner.js'
 import { type GeneratedValuesFiles, generateValuesFiles } from '../../utils/values-generator.js'
 
@@ -82,7 +82,7 @@ export default class GenerateFromSpec extends Command {
       default: '.',
       description: 'Output directory for generated files',
     }),
-    'sdk-dir': Flags.string({description: 'Local SDK checkout for --bootstrap (default: ../scroll-sdk); locks committed HEAD unless templates.sdkRevision overrides it.'}),
+    'sdk-dir': Flags.string({description: 'Local SDK checkout for Helm values generation (default: ../scroll-sdk); uses committed HEAD unless templates.sdkRevision overrides it.'}),
     spec: Flags.string({
       char: 's',
       default: DEFAULT_SPEC,
@@ -102,7 +102,7 @@ export default class GenerateFromSpec extends Command {
     const { flags } = await this.parse(GenerateFromSpec)
     const jsonCtx = new JsonOutputContext('setup generate-from-spec', flags.json)
     if (flags.bootstrap && (flags['config-only'] || flags['values-only'])) throw new Error('--bootstrap cannot be combined with --config-only or --values-only')
-    if (flags['sdk-dir'] && !flags.bootstrap) throw new Error('--sdk-dir requires --bootstrap')
+    if (flags['sdk-dir'] && !(flags.bootstrap || flags['with-values'] || flags['values-only'])) throw new Error('--sdk-dir requires --bootstrap, --with-values or --values-only')
 
     // Validate conflicting flags
     if (flags['config-only'] && flags['values-only']) {
@@ -224,6 +224,7 @@ export default class GenerateFromSpec extends Command {
     const generateConfigs = !flags['values-only']
     const generateValues = flags.bootstrap || flags['with-values'] || flags['values-only']
     const bootstrapFiles = flags.bootstrap ? planSpecBootstrap(spec, flags['sdk-dir'] ?? DEFAULT_SDK) : {}
+    const templateFiles = flags.bootstrap ? bootstrapFiles : generateValues ? loadSdkTemplateFiles(flags['sdk-dir'] ?? DEFAULT_SDK, spec.templates?.sdkRevision).files : {}
 
     let configs: GeneratedConfigs | null = null
     let valuesFiles: GeneratedValuesFiles | null = null
@@ -235,15 +236,31 @@ export default class GenerateFromSpec extends Command {
 
     if (generateValues) {
       jsonCtx.info('Generating Helm values files...')
-      // Operator monitoring policies/resources remain template-owned. Existing
-      // values take precedence over the bootstrap copy when regenerating.
-      const monitorFile = path.join(outputDir, 'values/scroll-monitor-production.yaml')
-      const monitorTemplate = fs.existsSync(monitorFile) ? fs.readFileSync(monitorFile, 'utf8') : bootstrapFiles['values/scroll-monitor-production.yaml']
+      // Use the same pinned defaults for bootstrap and direct generation. Preserve
+      // local runtime policies on regeneration while refreshing spec-owned inputs.
+      const existingValues = (file: string): string | undefined => {
+        const target = path.join(valuesDir, file)
+        return fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : undefined
+      }
+
+      const monitor = 'scroll-monitor-production.yaml'
+      const monitorTemplate = mergeBootstrapValues(templateFiles[`values/${monitor}`], '{}', existingValues(monitor))
       valuesFiles = generateValuesFiles(spec, monitorTemplate)
-      if (flags.bootstrap) {
-        for (const [file, content] of Object.entries(valuesFiles)) {
-          if (file !== 'scroll-monitor-production.yaml') valuesFiles[file] = mergeBootstrapValues(bootstrapFiles[`values/${file}`], content)
-        }
+      for (const [file, content] of Object.entries(valuesFiles)) {
+        if (file === monitor) continue // Monitoring reconciles its own template above.
+        const template = templateFiles[`values/${file}`]
+        const explicitPolicies: string[] = []
+        if (file === 'fee-oracle-production.yaml' && spec.feeOracle?.contractWriteMode !== undefined) explicitPolicies.push('configMaps.env.data.DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE')
+        if (file === 'dstack-controller-production.yaml' && spec.dstackController?.resources !== undefined) explicitPolicies.push('resources')
+        valuesFiles[file] = mergeBootstrapValues(template, content, existingValues(file), explicitPolicies)
+      }
+
+      // Bootstrap also copies values with no spec projection (for example,
+      // monitoring without Slack intent). Retain operator edits to those too.
+      for (const [file, template] of Object.entries(bootstrapFiles)) {
+        if (!file.startsWith('values/') || Object.hasOwn(valuesFiles, file.slice('values/'.length))) continue
+        const existing = existingValues(file.slice('values/'.length))
+        if (existing !== undefined) bootstrapFiles[file] = mergeBootstrapValues(template, '{}', existing)
       }
     }
 

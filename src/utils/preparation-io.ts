@@ -27,7 +27,7 @@ export class AwaitingInput extends Error {
 
 
 /** Load credentials as data; never evaluate shell syntax or print values. */
-export function loadPreparationEnv(file?: string): void {
+export function loadPreparationEnv(file?: string, names?: readonly string[]): void {
   if (!file) return
   let content: string
   try {content = fs.readFileSync(file, 'utf8')} catch {throw new Error('Cannot read the declared preparation environment file')}
@@ -36,6 +36,7 @@ export function loadPreparationEnv(file?: string): void {
     if (!trimmed || trimmed.startsWith('#')) continue
     const entry = trimmed.match(/^(?:export\s+)?([A-Z_a-z]\w*)=(.*)$/)
     if (!entry) throw new Error('Environment file must contain NAME=value entries')
+    if (names && !names.includes(entry[1])) continue
     let value = entry[2].trim()
     if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) value = value.slice(1, -1)
     if (process.env[entry[1]] === undefined) process.env[entry[1]] = value

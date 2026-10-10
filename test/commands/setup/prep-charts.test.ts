@@ -608,7 +608,7 @@ describe('setup prep-charts eth-da-submitter updates', () => {
       configMaps: {
         env: {
           data: {
-            DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE: '122880',
+            DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE: '123011',
           },
         },
       },
@@ -619,7 +619,7 @@ describe('setup prep-charts eth-da-submitter updates', () => {
       l2RpcUrl: 'http://l2-rpc:8545',
     }))
 
-    expect(values.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE).to.equal('122880')
+    expect(values.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE).to.equal('123011')
     expect(changes.map(change => change.key)).not.to.include(
       'configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE',
     )

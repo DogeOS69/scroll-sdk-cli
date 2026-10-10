@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Integration fixtures exercise dynamic deployment TOML and provider boundaries. */
 import * as toml from '@iarna/toml'
+import bitcore from 'bitcore-lib-doge'
 import {expect} from 'chai'
 import {Wallet} from 'ethers'
 import * as yaml from 'js-yaml'
@@ -18,12 +19,14 @@ import {generateAllConfigs, validateDeploymentSpec} from '../../src/utils/deploy
 import {KmsSignerProvisioner} from '../../src/utils/kms-signer-provisioner.js'
 import {mergeBootstrapValues, planSpecBootstrap} from '../../src/utils/spec-bootstrap.js'
 import {resolveSpecIdentities} from '../../src/utils/spec-identities.js'
+import {createSdkFixture} from '../helpers/sdk-templates.js'
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 function fixture(): DeploymentSpec {
   const spec = yaml.load(fs.readFileSync(path.join(cliRoot, 'src/config/deployment-spec.minimal.yaml'), 'utf8')
     .replaceAll('$ENV:OWNER_ADDRESS', '0x0000000000000000000000000000000000000001')
     .replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')) as DeploymentSpec
+  spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toAddress().toString()
   spec.infrastructure = {aws: {accountId: '123456789012', eksClusterName: 'test-cluster', region: 'us-west-2'}, bootnodeCount: 1, provider: 'aws', sequencerCount: 2}
   spec.identities = {
     bootnodes: [{index: 0, nodekey: {action: 'create'}}],
@@ -57,7 +60,9 @@ describe('spec identity and template workflow', () => {
   })
   async function generate(spec: DeploymentSpec): Promise<void> {
     fs.writeFileSync('intent.yaml', yaml.dump(spec))
-    await Generate.run(['--spec', 'intent.yaml', '--with-values', '--json'], cliRoot)
+    const sdk = path.join(directory, 'sdk')
+    if (!fs.existsSync(sdk)) createSdkFixture(sdk)
+    await Generate.run(['--spec', 'intent.yaml', '--with-values', '--sdk-dir', sdk, '--json'], cliRoot)
   }
 
   it('generates without resources, plans without keys, applies mixed local identities and preserves them on rerun', async () => {
@@ -174,7 +179,7 @@ describe('spec identity and template workflow', () => {
   it('reads pinned templates instead of dirty files and adapts the Makefile to node counts', () => {
     const sdk = path.join(directory, 'sdk')
     fs.mkdirSync(sdk)
-    const files = ['withdrawal-processor/WithdrawalProcessor.toml', 'proof-coordinator/ProofCoordinator.toml', 'values/scroll-monitor-production.yaml', 'values/metrics-exporter-production.yaml']
+    const files = ['withdrawal-processor/WithdrawalProcessor.toml', 'proof-coordinator/ProofCoordinator.toml', 'values/scroll-monitor-production.yaml', 'values/metrics-exporter-production.yaml', ...['l2-reth-sequencer', 'l2-reth-bootnode', 'l2-reth-rpc', 'l2-reth-rpc-public', 'eth-da-submitter', 'fee-oracle'].map(service => `values/${service}-production.yaml`)]
     for (const file of files) {fs.mkdirSync(path.dirname(path.join(sdk, 'examples', file)), {recursive: true}); fs.writeFileSync(path.join(sdk, 'examples', file), '# pinned fixture\n')}
     fs.writeFileSync(path.join(sdk, 'examples/Makefile.example'), 'REQUIRED = \\\n\tvalues/l2-reth-sequencer-production-0.yaml \\\n\tvalues/l2-reth-sequencer-production-1.yaml \\\n\tvalues/l2-reth-bootnode-production-0.yaml \\\n\tvalues/l2-reth-bootnode-production-1.yaml \\\n\tvalues/genesis.yaml\ninstall-l2-reth-sequencer:\n\t@true\ninstall-l2-reth-bootnode:\n\t@true\ndelete-l2-reth-sequencer:\n\t@true\ndelete-l2-reth-bootnode:\n\t@true\n')
     const git = (...args: string[]) => execFileSync('git', ['-C', sdk, ...args], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).trim()

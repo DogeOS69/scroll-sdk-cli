@@ -23,6 +23,7 @@ import {resolvePreparationProofRelease} from '../../src/utils/preparation-releas
 import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
 import {buildProofAwsConfig, writeProofAwsConfig} from '../../src/utils/proof-aws-config.js'
 import {PROOF_RELEASE_IMAGE_NAMES} from '../../src/utils/proof-software-release.js'
+import {createSdkFixture} from '../helpers/sdk-templates.js'
 
 const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 function fixture(): DeploymentSpec {
@@ -53,14 +54,8 @@ describe('resumable preparation plan', () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'preparation-test-'))
     sdk = path.join(root, 'sdk'); deployment = path.join(root, 'deployment')
-    for (const file of ['withdrawal-processor/WithdrawalProcessor.toml', 'proof-coordinator/ProofCoordinator.toml', 'values/scroll-monitor-production.yaml', 'values/metrics-exporter-production.yaml']) {
-      const target = path.join(sdk, 'examples', file); fs.mkdirSync(path.dirname(target), {recursive: true}); fs.writeFileSync(target, '# fixture\n')
-    }
-
-    fs.writeFileSync(path.join(sdk, 'examples/Makefile.example'), ['install-l2-reth-sequencer:', '\t@true', 'delete-l2-reth-sequencer:', '\t@true', 'install-l2-reth-bootnode:', '\t@true', 'delete-l2-reth-bootnode:', '\t@true'].join('\n'))
-    const git = (...args: string[]) => execFileSync('git', ['-C', sdk, ...args], {stdio: 'pipe'}).toString().trim()
-    git('init'); git('add', 'examples'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture')
-    const spec = fixture(); spec.templates = {sdkRevision: git('rev-parse', 'HEAD')}
+    const revision = createSdkFixture(sdk)
+    const spec = fixture(); spec.templates = {sdkRevision: revision}
     fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
   })
   afterEach(() => {fs.rmSync(root, {force: true, recursive: true})})

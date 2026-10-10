@@ -197,9 +197,11 @@ or full deposit/block/proof/withdrawal acceptance.
 
 ## Start a fresh directory from a pinned SDK template
 
-Plain generation remains a pure projection into TOML; `--with-values` also emits
-service values. For a fresh deployment, `--bootstrap` provides the required SDK
-base files as well:
+Plain generation remains a pure projection into TOML. All Helm values modes
+(`--bootstrap`, `--with-values`, and `--values-only`) load committed templates
+from `../scroll-sdk`, or the checkout selected with `--sdk-dir`. An explicit
+`templates.sdkRevision` selects that commit; otherwise the checkout HEAD is used.
+For a fresh deployment, `--bootstrap` provides the required SDK base files as well:
 
 ```bash
 scrollsdk setup generate-from-spec --spec /private/intent.yaml \
@@ -214,8 +216,8 @@ scrollsdk setup gen-keystore -N --json
 The spec may override `templates.sdkRevision` with a full 40-character SDK commit.
 Otherwise `--sdk-dir` committed HEAD is selected and locked by plan. The spec requires
 `identities`, `proofTopology`, and explicit Reth image tags for RPC and each
-selected node role. The commit must exist in `--sdk-dir`. Missing bootstrap
-inputs are reported together before files are written. The CLI reads committed
+selected node role when bootstrapping. The commit must exist in `--sdk-dir`.
+Missing bootstrap inputs are reported together before files are written. The CLI reads committed
 Git objects, ignoring local edits; it does not fetch, install charts, provision
 AWS resources or send transactions. The tag check rejects placeholders; release
 approval and binary compatibility remain the operator's responsibility.
@@ -223,9 +225,19 @@ approval and binary compatibility remain the operator's responsibility.
 Bootstrap provides the Makefile, WP/PC native TOML, monitoring base values and
 SDK example helpers. It merges generated service inputs into the pinned values,
 retaining template-owned policies such as fee-oracle sampling/update settings,
-resource requests, storage and placement. Explicit generated values win; named
-environment entries merge by name. Makefile node install/delete targets and
-required values follow the declared sequencer/bootnode counts. Review chart pins,
+resource requests, Reth storage and placement. Existing output values override the
+committed template before deployment inputs are projected. The complete
+`reth.extraArgs` list is preserved (including an intentional empty list), as are
+Reth timing, `allowEmptyBlocks`, and fee-oracle sampling policies. Fresh templates
+disable empty blocks; an operator can enable them in the values file and retain
+that choice across regeneration. Explicit spec deployment inputs such as chain ID,
+genesis gas limit, RPC endpoints, images and fee recipient still take precedence.
+Explicit fee-oracle write mode, submitter policy overrides and dstack resource
+intent also take precedence. Named environment entries merge by name. These merge
+rules also apply to `--with-values` and `--values-only`; missing runtime policy
+templates fail before writing output. Use `--force` to regenerate existing files.
+Direct values generation does not copy Makefile/native configuration helpers.
+Makefile node install/delete targets and required values follow the declared sequencer/bootnode counts. Review chart pins,
 enabled optional services and operational policy before installation. The optional
 capacity-manager service has no standard SDK release here; configuring dstack
 does not implicitly configure capacity management.
