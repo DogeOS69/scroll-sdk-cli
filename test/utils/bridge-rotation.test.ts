@@ -1,13 +1,16 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Synthetic dynamic TOML/Helm fixtures. */
 import {expect} from 'chai'
-import {createECDH} from 'node:crypto'
+import {createECDH, createHash} from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import sinon from 'sinon'
 
+import RotationCheck from '../../src/commands/bridge/rotation/check.js'
 import {type RotationChainState, assertRotationAdmission, assertRotationSpecUnchanged, bridgeHash, createRotationProposal, encodeBridgeScript, parseBridgeScript, proposalDigest, validateRotationEnvelope} from '../../src/utils/bridge-rotation.js'
 import {rotationPayload, submitFrozenRotation} from '../../src/utils/bridge-rotation-execution.js'
-import {assertRotationReceipts, assertStageUnchanged, enableRotationRoute, loadRotationPlan, mergeRotationRegistrations, rotationJson, saveRotationPlan} from '../../src/utils/bridge-rotation-files.js'
+import {assertRotationReceipts, assertStageUnchanged, enableRotationRoute, loadRotationPlan, mergeRotationRegistrations, rotationJson, saveRotationPlan, writeRotationHandoffNotes} from '../../src/utils/bridge-rotation-files.js'
+import {BridgeRotationRuntime} from '../../src/utils/bridge-rotation-runtime.js'
 import {rotationStatus} from '../../src/utils/bridge-rotation-status.js'
 
 const key = () => {const ec = createECDH('secp256k1'); ec.generateKeys(); return ec.getPublicKey('hex', 'compressed')}
@@ -20,6 +23,26 @@ function fixture() {
 }
 
 describe('attestation rotation proposals', () => {
+  it('binds rotation instructions and reference into the handoff manifest', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rotation-handoff-'))
+    try {
+      const {spec, state} = fixture(); const envelope = createRotationProposal(spec, state)
+      fs.writeFileSync(path.join(root, 'protocol_context.json'), '{}')
+      writeRotationHandoffNotes(root, envelope)
+      const manifest = JSON.parse(fs.readFileSync(path.join(root, 'signer-policy-manifest.json'), 'utf8'))
+      expect(manifest.files.map((f: any) => f.file)).include.members(['rotation-reference.json', 'PARTNER-COMMANDS.md', 'protocol_context.json'])
+      for (const file of manifest.files) {
+        const bytes = fs.readFileSync(path.join(root, file.file))
+        expect(file.sha256).eq(`sha256:${createHash('sha256').update(bytes).digest('hex')}`)
+        expect(file.sizeBytes).eq(bytes.length)
+      }
+
+      const notes = fs.readFileSync(path.join(root, 'PARTNER-COMMANDS.md'), 'utf8')
+      expect(notes).include('verify-handoff.sh').and.include('not genesis onboarding')
+      expect(notes).not.include('scrollsdk signer init')
+      expect(JSON.parse(fs.readFileSync(path.join(root, 'rotation-reference.json'), 'utf8')).proposalSha256).eq(envelope.sha256)
+    } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
   it('isolates explicit rotation directories and reads historical status without the editable spec', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rotation-directories-'))
     try {
@@ -125,6 +148,46 @@ describe('attestation rotation proposals', () => {
       fs.unlinkSync(path.join(dir, 'receipts', 'old-2.json'))
       expect(() => assertRotationReceipts(dir, e)).throw('every current')
     } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+  it('check reports blockers then readiness without ever posting to WP or creating a submission journal', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rotation-check-'))
+    const previousExitCode = process.exitCode
+    const sandbox = sinon.createSandbox()
+    try {
+      const {old, spec, state} = fixture(); const envelope = createRotationProposal(spec, state)
+      rotationJson(path.join(root, '.data/protocol_context.json'), {})
+      fs.writeFileSync(path.join(root, '.data/doge-config.toml'), 'network = "testnet"\n')
+      const dir = saveRotationPlan(root, envelope, 'rotation')
+      rotationJson(path.join(dir, 'rotation-spec.yaml'), spec)
+      sandbox.stub(BridgeRotationRuntime.prototype, 'readState').resolves(state)
+      sandbox.stub(BridgeRotationRuntime.prototype, 'readIntent').resolves()
+      const post = sandbox.stub(BridgeRotationRuntime.prototype, 'post').rejects(new Error('No POST is allowed'))
+      sandbox.stub(RotationCheck.prototype, 'log')
+      const args = ['--dir', root, '--rotation-dir', 'rotation', '--context', 'test-context']
+      await RotationCheck.run(args)
+      expect(process.exitCode).eq(2)
+      let report = JSON.parse(fs.readFileSync(path.join(dir, 'check.json'), 'utf8'))
+      expect(report.readyForSubmissionChecks).eq(false)
+      expect(report.checks.filter((c: any) => !c.passed).map((c: any) => c.name)).deep.eq(['stage', 'operator-receipts'])
+      rotationJson(path.join(dir, 'stage.json'), {files: {}, proposalSha256: envelope.sha256, status: 'applied'})
+      const now = new Date().toISOString()
+      old.attestation.keys.forEach((signerAttestationPubkey, i) => rotationJson(path.join(dir, 'receipts', `old-${i}.json`), {approvedAt: now, proposalSha256: envelope.sha256, schema: 'dogeos/rotation-approval/v1', signerAttestationPubkey, targetKeyHash: envelope.proposal.target.keyHash}))
+      spec.attestation.signers.forEach((s, i) => rotationJson(path.join(dir, 'receipts', `new-${i}.json`), {advanceL1: true, advanceL2: true, checkedAt: now, proposalSha256: envelope.sha256, schema: 'dogeos/rotation-readiness/v1', signerAttestationPubkey: s.attestationPubkey, transportPubkey: s.transportPubkey, tsoConnected: true}))
+      process.exitCode = 0
+      await RotationCheck.run(args)
+      report = JSON.parse(fs.readFileSync(path.join(dir, 'check.json'), 'utf8'))
+      expect(report.readyForSubmissionChecks).eq(true)
+      expect(report.submitted).eq(false); expect(report.wpPreviewPerformed).eq(false)
+      expect(post.callCount).eq(0)
+      expect(fs.existsSync(path.join(dir, 'submission.json'))).eq(false)
+      rotationJson(path.join(dir, 'submission.json'), {status: 'ambiguous'})
+      await RotationCheck.run(args)
+      report = JSON.parse(fs.readFileSync(path.join(dir, 'check.json'), 'utf8'))
+      expect(report.readyForSubmissionChecks).eq(false)
+      expect(report.submitted).eq(null)
+      expect(report.submissionAttemptedByThisCommand).eq(false)
+      expect(post.callCount).eq(0)
+    } finally {sandbox.restore(); process.exitCode = previousExitCode; fs.rmSync(root, {force: true, recursive: true})}
   })
   it('journals before network IO and reuses identical payload after timeout and proof gate 503', async () => {
     const {spec, state} = fixture(); const e = createRotationProposal(spec, state)

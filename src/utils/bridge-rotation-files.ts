@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Operator TOML and Helm values are dynamic documents. */
 import * as toml from '@iarna/toml'
 import * as yaml from 'js-yaml'
+import {createHash} from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -68,6 +69,19 @@ export function loadRotationPlan(root: string, specFile = 'rotation-spec.yaml', 
 }
 
 export interface RotationStageReceipt {files: Record<string, string>; proposalSha256: string; status: 'applied' | 'prepared'}
+
+/** A rotation handoff must not tell an initialized partner to create another key. */
+export function writeRotationHandoffNotes(output: string, envelope: RotationEnvelope): void {
+  const p = validateRotationEnvelope(envelope)
+  rotationJson(path.join(output, 'rotation-reference.json'), {currentKeyHash: p.current.keyHash, note: 'The deployment bundle protocol context retains genesis identity. Current/target bridge scripts are in the independently approved rotation proposal. No signer-owned rotation policy is imported.', proposalSha256: envelope.sha256, targetKeyHash: p.target.keyHash})
+  writeRotationFile(path.join(output, 'PARTNER-COMMANDS.md'), `# Existing-bridge rotation handoff\n\nThis package is for rotation ${p.name}, proposal SHA-256 ${envelope.sha256}.\nIt is not genesis onboarding. Do not run signer init, replace registered keys,\nor copy the old database. Old instances must remain available.\n\nUse the matching SDK partner-kit guide docs/rotation-walkthrough.md.\nThe signer operator needs Docker and Bash, not scroll-sdk-cli.\nObtain the approved image digest, release/commit/policy pins and SDK tool\nrevision through your authenticated Governance/operator channel.\n\nIn your NEW signer workspace, with identity.json from core --print-identity:\n\n1. Obtain the manifest digest from the bridge operator's stage output through\n   the authenticated channel; do not trust a digest downloaded alongside files.\n2. Run bash "$KIT/scripts/verify-handoff.sh" ./received-policy-bundle "$BUNDLE_SHA256" ./identity.json.\n3. Review signer-policy.json, the separate proposal, and your own RPC trust\n   sources. Retain your operator-owned RPC env values as well as TOML; copying\n   TOML alone does not retain env-based source sets.\n4. Copy signer-policy.env next to docker-compose.yml. Copy protocol_context.json\n   and advance-l2-agg-verifying-key.bin into ./policy/. Preserve the received\n   bundle as an immutable record.\n5. Set a NEW COMPOSE_PROJECT_NAME and use host ports 0 if sharing the old host.\n   Configure approved release pins, then docker compose config --quiet and\n   docker compose up -d.\n6. Verify AdvanceL1/AdvanceL2 capabilities and authenticated TSO polling.\n   Produce a readiness receipt with rotation.sh ready --identity identity.json.\n   Its remaining review inputs and their sources are listed in the guide.\n\nThe immutable protocol_context.json still describes genesis; rotation-reference.json\nbinds the current and proposed bridge identities. Do not rewrite genesis context.\nNo command in this package submits a RotateKey transaction.\n`)
+  const files = fs.readdirSync(output).filter(file => file !== 'signer-policy-manifest.json').sort().map(file => {
+    const content = fs.readFileSync(path.join(output, file))
+    return {file, sha256: `sha256:${createHash('sha256').update(content).digest('hex')}`, sizeBytes: content.length}
+  })
+  rotationJson(path.join(output, 'signer-policy-manifest.json'), {files, schema: 'dogeos/attestation-signer-policy-manifest/v1'})
+}
+
 function assertCurrentRegistrations(external: NonNullable<NonNullable<DogeConfig['attestationSigner']>['external']>, tsoSigners: any[], p: RotationProposal): void {
   const current = parseBridgeScript(p.current.redeemScriptHex)
   if (!tsoSigners.some((s: any) => s.roles?.length === 1 && s.roles[0] === 'Correctness')) throw new Error('Existing TSO Correctness registration is required and must be retained')
@@ -129,7 +143,7 @@ export function prepareRotationStage(runtime: string, dir: string, envelope: Rot
     try {
       const output = path.join(temporary, 'package')
       writeSignerPolicyHandoff({config, deploymentDir: runtime, output, protocolContext: '.data/protocol_context.json', tsoUrl})
-      rotationJson(path.join(output, 'rotation-reference.json'), {currentKeyHash: p.current.keyHash, note: 'The deployment bundle protocol context retains genesis identity. Current/target bridge scripts are in the independently approved rotation proposal. No signer-owned rotation policy is imported.', proposalSha256: envelope.sha256, targetKeyHash: p.target.keyHash})
+      writeRotationHandoffNotes(output, envelope)
       fs.renameSync(output, handoff)
     } finally {fs.rmSync(temporary, {force: true, recursive: true})}
   }
@@ -158,15 +172,21 @@ export interface RotationApproval {approvedAt: string; proposalSha256: string; s
 export interface RotationReadiness {advanceL1: true; advanceL2: true; checkedAt: string; proposalSha256: string; schema: 'dogeos/rotation-readiness/v1'; signerAttestationPubkey: string; transportPubkey: string; tsoConnected: true}
 export function assertRotationReceipts(dir: string, envelope: RotationEnvelope): void {
   const p = validateRotationEnvelope(envelope)
-  const files = fs.readdirSync(path.join(dir, 'receipts')).filter(f => f.endsWith('.json'))
-  const receipts = files.map(file => readRotationJson<RotationApproval | RotationReadiness>(path.join(dir, 'receipts', file)))
+  const folder = path.join(dir, 'receipts')
+  const files = fs.existsSync(folder) ? fs.readdirSync(folder).filter(f => f.endsWith('.json')) : []
+  let receipts: (RotationApproval | RotationReadiness)[]
+  try {receipts = files.map(file => readRotationJson<RotationApproval | RotationReadiness>(path.join(folder, file)))} catch {throw new Error('Invalid receipt JSON; inspect receipts locally without publishing their contents')}
+  if (receipts.some(r => !r || typeof r !== 'object')) throw new Error('Each receipt must be a JSON object')
+  const missing: string[] = []
   for (const key of parseBridgeScript(p.current.redeemScriptHex).attestation.keys) {
-    if (!receipts.some(r => r.schema === 'dogeos/rotation-approval/v1' && r.proposalSha256 === envelope.sha256 && r.signerAttestationPubkey === key && r.targetKeyHash === p.target.keyHash && Number.isFinite(Date.parse(r.approvedAt)))) throw new Error('An approval receipt is required from every current signer')
+    if (!receipts.some(r => r.schema === 'dogeos/rotation-approval/v1' && r.proposalSha256 === envelope.sha256 && r.signerAttestationPubkey === key && r.targetKeyHash === p.target.keyHash && Number.isFinite(Date.parse(r.approvedAt)))) missing.push(`current approval ${key}`)
   }
 
   for (const signer of p.target.signers) {
-    if (!receipts.some(r => r.schema === 'dogeos/rotation-readiness/v1' && r.proposalSha256 === envelope.sha256 && r.signerAttestationPubkey === signer.attestationPubkey && r.transportPubkey === signer.transportPubkey && r.advanceL1 === true && r.advanceL2 === true && r.tsoConnected === true && Number.isFinite(Date.parse(r.checkedAt)))) throw new Error('A readiness receipt is required from every target signer')
+    if (!receipts.some(r => r.schema === 'dogeos/rotation-readiness/v1' && r.proposalSha256 === envelope.sha256 && r.signerAttestationPubkey === signer.attestationPubkey && r.transportPubkey === signer.transportPubkey && r.advanceL1 === true && r.advanceL2 === true && r.tsoConnected === true && Number.isFinite(Date.parse(r.checkedAt)))) missing.push(`target readiness ${signer.name}`)
   }
+
+  if (missing.length > 0) throw new Error(`An approval receipt is required from every current signer and a readiness receipt is required from every target signer. Missing: ${missing.join('; ')}. Place authenticated operator receipts in the rotation directory's receipts/ folder`)
 }
 
 export function equalFrozenPayload(a: unknown, b: unknown): boolean {return canonicalJson(a) === canonicalJson(b)}
