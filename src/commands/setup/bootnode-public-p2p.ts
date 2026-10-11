@@ -13,8 +13,10 @@ import {
 import {loadDogeConfigWithSelection} from '../../utils/doge-config.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 
+const DEPRECATION_NOTICE = 'setup bootnode-public-p2p is deprecated and is not part of setup apply. It generates legacy P2P values incompatible with the current l2-reth chart. Configure reth.p2pExternal only for selected public bootnodes, with approved sourceRanges, subnets and EIP allocations; keep allowOpenPeering false. See docs/bootnode-public-p2p.md.'
+
 export default class SetupBootnodeStaticIP extends Command {
-  static override description = 'Prepare Reth bootnode public P2P LoadBalancer values and the AWS controller; deploy the bootnode Helm releases afterwards'
+  static override description = `Deprecated: prepare legacy Reth bootnode public P2P values and the AWS controller\n\n${DEPRECATION_NOTICE}`
 
   static override examples = [
     '# Prepare public P2P values with interactive provider selection',
@@ -77,6 +79,9 @@ export default class SetupBootnodeStaticIP extends Command {
     this.nonInteractive = flags['non-interactive']
     this.jsonMode = flags.json
     this.jsonCtx = new JsonOutputContext('setup bootnode-public-p2p', this.jsonMode)
+    this.jsonCtx.addWarning(DEPRECATION_NOTICE)
+    // Keep JSON stdout parseable while warning before any provider operation.
+    if (this.jsonMode) this.jsonCtx.info(`Warning: ${DEPRECATION_NOTICE}`)
 
     // In non-interactive mode, require --provider
     if (this.nonInteractive && !flags.provider) {

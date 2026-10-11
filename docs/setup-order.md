@@ -206,13 +206,12 @@ For Blockscout, run `scrollsdk setup db-init` only when its database or permissi
 need initialization, before generating its Secrets and deploying it.
 `BLOCKSCOUT_DB_CONNECTION_STRING` is the only retained database setting.
 
-For external Reth/RPC nodes, run `scrollsdk setup bootnode-public-p2p` after
-`prep-charts` creates the indexed bootnode values and before deploying those
-bootnode releases. Identity generation alone does not enable public P2P.
-The AWS command requires the cluster name and region; use
-`--skip-controller-setup` when the controller is already managed by the
-environment. See [Reth bootnode public P2P access](bootnode-public-p2p.md) for
-the full command, controller setup and deployment boundary.
+`scrollsdk setup bootnode-public-p2p` is deprecated and is not part of
+`setup apply`. For external Reth/RPC peers, configure `reth.p2pExternal`
+only in the selected bootnodes' indexed values after `prep-charts`, with
+approved source CIDRs, subnets and EIP allocations. Identity generation alone
+does not enable public P2P. See [Reth bootnode public P2P access](bootnode-public-p2p.md)
+for the configuration and deployment boundary.
 
 ## Publish proof programs to an existing AWS S3 store
 

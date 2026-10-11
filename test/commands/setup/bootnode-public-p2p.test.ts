@@ -43,6 +43,8 @@ describe('setup bootnode-public-p2p CLI integration', () => {
     const result = run(['--namespace', 'nodes'])
     expect(result.status, result.stderr).to.equal(0)
     const output = JSON.parse(result.stdout)
+    expect(result.stderr).to.include('setup bootnode-public-p2p is deprecated')
+    expect(output.warnings.join(' ')).to.include('not part of setup apply')
     expect(output.data).to.include({bootnodeCount: 2, deployed: false, namespace: 'nodes'})
     expect(output.data.bootnodeIndices).to.deep.equal([0, 3])
     for (const index of [0, 3]) {
@@ -78,18 +80,15 @@ describe('setup bootnode-public-p2p CLI integration', () => {
     expect(calls().some(item => ['curl', 'eksctl', 'helm'].includes(item.tool) || item.args[0] === 'iam')).to.equal(false)
   })
 
-  it('renders a dedicated public Service with the actual Reth chart', function () {
+  it('keeps deprecated output rejected by the current Reth chart', function () {
     const chart = path.resolve('../scroll-sdk/charts/l2-reth')
     if (!fs.existsSync(chart) || spawnSync('helm', ['version']).status !== 0) this.skip()
     const result = run(['--skip-controller-setup'])
     expect(result.status, result.stderr).to.equal(0)
     for (const index of [0, 3]) {
       const rendered = spawnSync('helm', ['template', `l2-reth-bootnode-${index}`, chart, '-n', 'nodes', '-f', file(index)], {encoding: 'utf8'})
-      expect(rendered.status, rendered.stderr).to.equal(0)
-      const resources = yaml.loadAll(rendered.stdout) as {kind: string; metadata: {name: string}; spec: {ports: {port: number; protocol: string}[]; type: string}}[]
-      const service = resources.find(item => item?.kind === 'Service' && item.metadata.name === `l2-reth-bootnode-${index}-p2p`)!
-      expect(service.spec.type).to.equal('LoadBalancer')
-      expect(service.spec.ports.map(port => [port.protocol, port.port])).to.deep.equal([['TCP', 30_303 + index], ['UDP', 30_303 + index]])
+      expect(rendered.status).not.to.equal(0)
+      expect(rendered.stderr).to.include('reth.service.extra.p2p must stay internal; expose P2P with reth.p2pExternal')
     }
   })
 

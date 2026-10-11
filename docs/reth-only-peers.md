@@ -13,8 +13,9 @@ There is no longer an empty-array switch or a Geth peer fallback.
 ## Setup flow
 
 For external nodes, also follow [Reth bootnode public P2P access](bootnode-public-p2p.md):
-run `setup bootnode-public-p2p` after `prep-charts`, deploy the bootnode releases,
-then export public peers with `setup gen-rpc-package` once LB endpoints exist.
+the `setup bootnode-public-p2p` command is deprecated. Configure
+`reth.p2pExternal` for selected bootnodes after `prep-charts`, deploy those
+releases, then export public peers with `setup gen-rpc-package` once LB endpoints exist.
 
 This is the node-configuration subset of [CLI setup order](setup-order.md),
 not a complete deployment sequence.

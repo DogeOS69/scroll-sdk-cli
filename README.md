@@ -54,7 +54,7 @@ bin/run.js --help
 - [CLI setup order](docs/setup-order.md) — configuration prerequisites, native Reth genesis, `scrollsdk setup bridge-init`, service configuration and deployment handoff. Start here for command order.
 - [Configuration cleanup](docs/config-cleanup.md) — supported template fields, matching contracts images and updating an existing deployment.
 - [Pure Reth configuration](docs/reth-only-peers.md) — Reth node identities and peer configuration.
-- [Reth bootnode public P2P access](docs/bootnode-public-p2p.md) — AWS controller setup, public Service values, Helm rollout and external RPC peer export.
+- [Reth bootnode public P2P access](docs/bootnode-public-p2p.md) — selected bootnode exposure and external RPC peer export; `setup bootnode-public-p2p` is deprecated.
 - [Deployment signing identities](docs/keystore.md) — unified Reth and service
   key preparation, KMS reuse, and archive configuration.
 
@@ -781,10 +781,10 @@ _See code: [src/commands/setup/attestation-signer.ts](https://github.com/dogeos6
 
 ## `scrollsdk setup bootnode-public-p2p`
 
-See [Reth bootnode public P2P access](docs/bootnode-public-p2p.md) for execution order and deployment requirements.
+**Deprecated.** Not invoked by `setup apply`. Configure `reth.p2pExternal` for selected bootnodes instead. See [Reth bootnode public P2P access](docs/bootnode-public-p2p.md).
 
 ```text
-Prepare Reth bootnode public P2P LoadBalancer values and the AWS controller; deploy the bootnode Helm releases afterwards
+Deprecated: prepare legacy Reth bootnode public P2P values and the AWS controller
 
 USAGE
   $ scrollsdk setup bootnode-public-p2p [--cluster-name <value>]
