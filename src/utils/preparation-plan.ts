@@ -12,7 +12,6 @@ import {usesDstackPostgres} from './dstack-database.js'
 import {AwaitingInput, digest, loadPreparationEnv, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolvePreparationProofRelease} from './preparation-release.js'
 import {refreshPreparationRuntime} from './preparation-runtime-refresh.js'
-import {assertPrivateArtifactMode} from './private-artifact-access.js'
 import {rentalEnvelope, resolveProofWorkers} from './proof-workers-config.js'
 import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {planSpecBootstrap, resolveSdkRevision} from './spec-bootstrap.js'
@@ -121,10 +120,12 @@ export function validatePreparation(spec: DeploymentSpec): void {
   if (p.archive && !['configure', 'create'].includes(p.archive.action)) throw new Error('Archive action must be configure or create')
   if (p.archive?.publicRead !== undefined && typeof p.archive.publicRead !== 'boolean') throw new Error('Archive publicRead must be a boolean')
   if (p.proofAws && !['create', 'reuse'].includes(p.proofAws.action)) throw new Error('proofAws.action must select create or reuse')
+  if (p.proofAws?.action === 'reuse' && p.proofAws.publicReadMode === 'direct-s3') throw new Error('Reuse proof resources with existing-public-s3 or existing-gateway; direct-s3 manages bucket policy')
   if (p.proofAws?.action === 'create' && (p.proofAws.coordinatorRoleName || p.proofAws.withdrawalRoleName)) throw new Error('Existing role names require proofAws.action: reuse')
-  if (p.proofAws) assertPrivateArtifactMode(p.proofAws.publicReadMode)
+  if (p.proofAws && !['direct-s3', 'existing-gateway', 'existing-public-s3'].includes(p.proofAws.publicReadMode)) throw new Error('Invalid proof public-read mode')
   if (p.secretUpload?.provider === 'aws' && !p.secretUpload.awsRegion && !spec.infrastructure.aws?.region) throw new Error('AWS Secret upload requires an explicit region in secretUpload or infrastructure.aws')
   if (p.secretUpload && spec.dstackController?.enabled !== false && spec.dstackController && !p.secretUpload.kubeContext) throw new Error('Dstack Secret upload requires an explicit Kubernetes context')
+  if (p.proofAws?.publicReadMode === 'existing-gateway' && !p.proofAws.publicEndpointUrl) throw new Error('Existing proof gateway requires publicEndpointUrl')
   if ((p.proofMaterials.mode !== 'existing' || p.proofMaterials.receipt) && resolveSpecProofStorage(spec).proofTopology?.active?.artifactStore.kind !== 's3_compatible') throw new Error('Topology derived from a material receipt requires the declared S3 proof artifact store')
   if (p.secretUpload && !['aws', 'vault'].includes(p.secretUpload.provider)) throw new Error('Secret upload provider must be aws or vault')
   if (spec.dstackController && spec.dstackController.enabled !== false && !p.dstack) throw new Error('Enabled dstack requires preparation.dstack with explicit import or external credentials mode')

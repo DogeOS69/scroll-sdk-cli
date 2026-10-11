@@ -48,7 +48,7 @@ export interface PreparationConfig {
     /** Existing role names; omitted names are derived from deployment alias and cluster. */
     coordinatorRoleName?: string
     publicEndpointUrl?: string
-    publicReadMode: 'private-s3'
+    publicReadMode: 'direct-s3' | 'existing-gateway' | 'existing-public-s3'
     secretName?: string
     withdrawalRoleName?: string
   }

@@ -95,17 +95,16 @@ function normalizeArtifactReadTransport(
   const value = raw as Partial<ProofArtifactReadTransportResult>
   const {publicReadMode} = value
   if (
-    publicReadMode !== 'private-s3'
-    && publicReadMode !== 'direct-s3'
+    publicReadMode !== 'direct-s3'
     && publicReadMode !== 'existing-public-s3'
     && publicReadMode !== 'existing-gateway'
   ) {
     throw new Error(
-      `${label}.publicReadMode must be private-s3 (legacy delivery receipts may be inspected but cannot authorize provisioning)`,
+      `${label}.publicReadMode must be direct-s3, existing-public-s3, or existing-gateway`,
     )
   }
 
-  const expectedStatus = publicReadMode === 'direct-s3' || publicReadMode === 'private-s3'
+  const expectedStatus = publicReadMode === 'direct-s3'
     ? 'configured-unverified'
     : 'operator-managed-unverified'
   if (value.publicStatus !== expectedStatus) {
@@ -221,7 +220,7 @@ export function validateProofAwsConfig(raw: unknown, label: string): ProofAwsCon
     `${label}.artifactReadTransport`,
   )
   if (
-    (artifactReadTransport.publicReadMode === 'private-s3' || artifactReadTransport.publicReadMode === 'direct-s3'
+    (artifactReadTransport.publicReadMode === 'direct-s3'
       || artifactReadTransport.publicReadMode === 'existing-public-s3')
     && artifactReadTransport.publicEndpointUrl !== proofArtifactS3Endpoint(artifactRegion)
   ) {

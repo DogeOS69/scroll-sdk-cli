@@ -153,29 +153,35 @@ scrollsdk setup proof-aws-init
 This uses the configured proof bucket/prefix, creates or reconciles the proof
 IAM roles and token secret, configures the selected external read transport,
 and writes `.data/proof-aws.json`. The DA archive configuration is independent.
-Proof artifacts use `private-s3` (the default). All four S3 Public Access Block
-settings stay enabled; the CLI removes only the selected deployment's exact
-previous anonymous grant. Unrelated public grants, ambiguous policies and
-CloudFront delivery grants require operator review before any bucket-wide
-change. `direct-s3`, `existing-public-s3` and anonymous gateways are rejected.
-Reuse verifies AWS permissions without changing them. DA blobs are the only
-store for which public object reads may be enabled; snapshots also stay private.
+Choose the public-read mode according to who owns the bucket-level policy:
 
-IRSA authorizes the EKS workloads. A fixed `aws:SourceVpce` grant can allow
-unsigned GETs originating through the selected private endpoint; this is not
-Internet-wide access. beta.6/beta.6a partner signers and some Worker download
-paths use unsigned HTTPS, so external consumers require an independently
-controlled private read route. The CLI does not provision that external route.
-An S3 Gateway endpoint cannot be used directly from on-premises/Vast through
-VPN, peering or a transit gateway. Validate every consumer's exact-object read
-before activation; do not restore public proof reads as a workaround.
-See [AWS gateway endpoint limitations](https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-s3.html).
+- `existing-public-s3` uses the regional S3 endpoint and preserves the existing
+  bucket policy and Public Access Block settings. Use it for a shared bucket
+  whose anonymous `GetObject` policy is already managed by the operator, such
+  as a testnet DA archive. The CLI still manages the selected prefix's IRSA
+  roles, optional EKS S3 Gateway endpoint statement, and proof token secret.
+- `direct-s3` makes the CLI manage anonymous reads for the required external
+  proof paths. Use it only where the CLI is allowed to manage the bucket-wide
+  Public Access Block posture. It rejects an unmanaged public `GetObject`
+  statement that overlaps the selected prefix before creating a VPC endpoint
+  or changing IAM/secrets.
+- `existing-gateway` keeps S3 private and records an operator-managed
+  credential-free HTTPS gateway.
 
-The regional HTTPS endpoint recorded as `publicEndpointUrl` is a core transport
-coordinate, not an anonymous authorization grant. Object writes and native S3
-reads use scoped IAM; worker output PUTs may use time-limited signed URLs.
-Publication still checks the unsigned read route used by the runtime and fails
-if the caller has no such private route. This check must not be skipped.
+`existing-public-s3` does not narrow or otherwise endorse a pre-existing broad
+policy such as `arn:aws:s3:::bucket/*`; it records that policy as
+operator-managed and unverified. Review that policy independently.
+If the bucket is in a different AWS region from EKS, the command keeps the
+EKS/Secrets region separate from the artifact region and skips the regional S3
+Gateway endpoint; cross-region access uses the normal S3 endpoint or an
+operator-managed gateway. It does not prepare proof programs.
+
+When `existing-gateway` is selected, the bucket policy and S3 Public Access
+Block settings remain entirely operator-managed: `proof-aws-init` does not
+change either one. This matters when the shared archive bucket already serves
+raw DA objects publicly. The operator must verify that the supplied HTTPS
+endpoint permits the required exact-key reads; selecting this mode is not
+evidence that the route is reachable or that the bucket is private.
 
 The resulting `dogeos/proof-aws/v4` document records these independently as
 `artifactStore.region`, `kubernetes.awsRegion`, and `secret.region`. The latter

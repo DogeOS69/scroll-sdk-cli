@@ -4,7 +4,6 @@ import {isDeepStrictEqual} from 'node:util'
 import type {ArtifactStore} from './artifact-stores.js'
 import type {AwsCliRunner} from './aws-cli.js'
 
-import {PRIVATE_ARTIFACT_PUBLIC_ACCESS_BLOCK, assertPrivateArtifactBucket, assertPrivateArtifactPolicy} from './private-artifact-access.js'
 import {DENY_INSECURE_TRANSPORT_SID, denyInsecureTransportStatement, findUnmanagedAnonymousGrant, normalizeProofBucketName, normalizeProofKeyPrefix} from './proof-aws-provisioner.js'
 
 type Document = Record<string, unknown>
@@ -109,8 +108,6 @@ export function buildArchiveBucketPolicy(
   keyPrefix: string,
   options: Pick<ArtifactAccessOptions, 'publicRead' | 'vpcEndpointId'>,
 ): Document {
-  if (kind !== 'da' && options.publicRead === true) throw new Error('Only the DA blob archive may allow public reads; snapshots must stay private')
-  if (kind === 'snapshot') options = {...options, publicRead: false}
   const sids = archivePolicySids(kind, bucket, keyPrefix)
   const resource = objectArn(normalizeProofBucketName(bucket), normalizeProofKeyPrefix(keyPrefix))
   const publicRead = {Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: resource, Sid: sids.publicRead}
@@ -260,7 +257,6 @@ function assertClusterReadPath(aws: Aws, policy: Document, kind: ArchiveStoreKin
 }
 
 export function planArtifactAccess(aws: Aws, kind: ArchiveStoreKind, store: ArtifactStore, options: ArtifactAccessOptions): ArtifactAccessPlan {
-  if (kind !== 'da' && (options.publicRead === true || options.allowBucketPublicPolicy)) throw new Error('Only the DA blob archive may allow public reads; snapshots must stay private')
   const bucket = normalizeProofBucketName(store.bucket)
   const keyPrefix = normalizeProofKeyPrefix(store.keyPrefix)
   if (options.vpcEndpointId !== undefined && !/^vpce-[\da-f]+$/i.test(options.vpcEndpointId)) throw new Error('Expected an S3 Gateway VPC endpoint id (vpce-...)')
@@ -274,14 +270,7 @@ export function planArtifactAccess(aws: Aws, kind: ArchiveStoreKind, store: Arti
   const before = bucketPolicy(aws, plan)
   const after = buildArchiveBucketPolicy(before, kind, bucket, keyPrefix, options)
   assertNoUnmanagedAnonymousGrant(after, kind, bucket, keyPrefix)
-  if (kind === 'snapshot') {
-    assertPrivateArtifactPolicy(after)
-    let block: Record<string, boolean> = {}
-    try {block = aws.json(['s3api', 'get-public-access-block', '--bucket', bucket], {region: store.region}).PublicAccessBlockConfiguration ?? {}} catch (error) {if (!String(error).includes('NoSuchPublicAccessBlockConfiguration')) throw error}
-    if (!isDeepStrictEqual(block, PRIVATE_ARTIFACT_PUBLIC_ACCESS_BLOCK)) plan.publicAccessBlock = {after: {...PRIVATE_ARTIFACT_PUBLIC_ACCESS_BLOCK}, before: block}
-  }
-
-  if (kind === 'da' && plan.publicAccessBlock) {
+  if (plan.publicAccessBlock) {
     // Relaxing the bucket-wide block must not activate unrelated public grants.
     const sids = archivePolicySids(kind, bucket, keyPrefix)
     if (statementsOf(after).some(statement => statement.Effect === 'Allow' && ('NotPrincipal' in statement || 'NotResource' in statement))) throw new Error('Refusing to allow bucket public policies with negated allow statements')
@@ -308,21 +297,15 @@ export function planArtifactAccess(aws: Aws, kind: ArchiveStoreKind, store: Arti
 }
 
 export function applyArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
-  if (plan.kind === 'snapshot') {
-    assertPrivateArtifactPolicy(plan.bucketPolicy.after)
-    if (plan.publicAccessBlock && !isDeepStrictEqual(plan.publicAccessBlock.after, PRIVATE_ARTIFACT_PUBLIC_ACCESS_BLOCK)) throw new Error('Snapshot access plan must block public access')
-  }
-
   // Re-read every mutation target before the first write. AWS bucket policy
   // replacement has no compare-and-swap; serialize policy updates operationally.
   if (!isDeepStrictEqual(bucketPolicy(aws, plan), plan.bucketPolicy.before)) throw new Error('Bucket policy changed after planning; rerun artifact-access')
   if (plan.writerPolicy && !isDeepStrictEqual(rolePolicy(aws, plan.writerPolicy.roleName, plan.writerPolicy.name), plan.writerPolicy.before)) throw new Error('Writer policy changed after planning; rerun artifact-access')
   if (plan.publicAccessBlock) {
-    let before: Record<string, boolean> = {}
-    try {before = aws.json(['s3api', 'get-public-access-block', '--bucket', plan.bucket], {region: plan.region}).PublicAccessBlockConfiguration ?? {}} catch (error) {if (plan.kind !== 'snapshot' || !String(error).includes('NoSuchPublicAccessBlockConfiguration')) throw error}
+    const before = aws.json(['s3api', 'get-public-access-block', '--bucket', plan.bucket], {region: plan.region}).PublicAccessBlockConfiguration
     if (!isDeepStrictEqual(before, plan.publicAccessBlock.before)) throw new Error('Bucket Public Access Block changed after planning; rerun artifact-access')
     // Recheck account-level protection before any mutation.
-    if (plan.kind === 'da') assertPublicAccessBlock(aws, plan.bucket, plan.region, true)
+    assertPublicAccessBlock(aws, plan.bucket, plan.region, true)
     aws.run(['s3api', 'put-public-access-block', '--bucket', plan.bucket, '--public-access-block-configuration', JSON.stringify(plan.publicAccessBlock.after)], {region: plan.region})
     const after = aws.json(['s3api', 'get-public-access-block', '--bucket', plan.bucket], {region: plan.region}).PublicAccessBlockConfiguration
     if (!isDeepStrictEqual(after, plan.publicAccessBlock.after)) throw new Error('Bucket Public Access Block readback mismatch')
@@ -338,7 +321,6 @@ export function applyArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
     if (!isDeepStrictEqual(bucketPolicy(aws, plan), plan.bucketPolicy.after)) throw new Error('Bucket policy readback mismatch')
   }
 
-  if (plan.kind === 'snapshot') assertPrivateArtifactBucket(aws, plan.bucket, plan.region)
   const writer = plan.writerPolicy
   if (writer?.changed) {
     aws.run(['iam', 'put-role-policy', '--role-name', writer.roleName, '--policy-name', writer.name, '--policy-document', JSON.stringify(writer.after)])

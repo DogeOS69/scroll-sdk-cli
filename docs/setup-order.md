@@ -231,7 +231,7 @@ scrollsdk setup proof-bundle-publish --artifact-source doge-config \
 
 The publication profile must return unexpired temporary credentials. The CLI
 uses the immutable publisher image, preserves bucket policy, and writes a receipt
-only after authenticated reads and runtime-style unsigned reads through an authorized private route match all 11 source files. Only DA blobs may allow anonymous Internet reads. This
+only after authenticated and anonymous reads match all 11 source files. This
 explicit mode supports direct regional AWS S3; a non-AWS endpoint is rejected.
 The default `--artifact-source proof-aws` continues to use `.data/proof-aws.json`
 and its configured public transport. Neither publishing mode proves that the

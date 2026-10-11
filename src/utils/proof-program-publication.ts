@@ -356,11 +356,7 @@ export async function publishProofProgramBundle(options: PublishProofProgramOpti
         throw new Error(`Publisher output does not bind the staged ${file.relativePath}`)
       }
 
-      let anonymous: {sha256: string; sizeBytes: number}
-      try {anonymous = await read(url)} catch {
-        throw new Error(`Artifact readback failed for ${file.relativePath}. Proof S3 remains private: run publication/readback through an authorized private network route and validate signer/Worker access. Do not enable anonymous Internet reads to bypass this check.`)
-      }
-
+      const anonymous = await read(url)
       if (anonymous.sha256 !== file.sha256 || anonymous.sizeBytes !== file.sizeBytes) {
         throw new Error(`Anonymous artifact readback mismatch: ${file.relativePath}`)
       }

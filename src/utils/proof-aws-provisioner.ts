@@ -6,7 +6,6 @@ import { createHash, randomBytes } from 'node:crypto'
 import type { JsonOutputContext } from './json-output.js'
 
 import { AwsCliRunner } from './aws-cli.js'
-import {PRIVATE_ARTIFACT_PUBLIC_ACCESS_BLOCK, assertPrivateArtifactBucket, assertPrivateArtifactMode, assertPrivateArtifactPolicy} from './private-artifact-access.js'
 
 export interface ProofAwsIdentity {
   /** Region containing the proof artifact bucket. */
@@ -57,7 +56,7 @@ export interface ProofArtifactReadTransportResult {
   vpcEndpoint?: ProofArtifactVpcEndpointResult
 }
 
-export type ProofArtifactPublicReadMode = 'direct-s3' | 'existing-gateway' | 'existing-public-s3' | 'private-s3'
+export type ProofArtifactPublicReadMode = 'direct-s3' | 'existing-gateway' | 'existing-public-s3'
 
 export interface ProofArtifactVpcEndpointPlan {
   enabled: boolean
@@ -464,7 +463,7 @@ export function assertNoUnmanagedPublicProofBucketGrant(
       `cannot enable direct-s3 proof reads while bucket policy statement `
       + `${String(unsafe.Sid || '<without Sid>')} grants unmanaged public GetObject access overlapping `
       + `s3://${bucket}/${normalizeProofKeyPrefix(keyPrefix)}; use a dedicated proof bucket, remove the statement, `
-      + 'then use private-s3; public proof provisioning is not supported',
+      + 'or select existing-public-s3 to preserve the operator-managed bucket policy',
     )
   }
 }
@@ -629,17 +628,34 @@ export class ProofAwsProvisioner {
     const keyPrefix = normalizeProofKeyPrefix(input.keyPrefix)
     const bucket = normalizeProofBucketName(input.bucket)
     if (!input.artifactRead) {
-      throw new Error('proof artifact private access configuration is required')
+      throw new Error('proof artifact public read configuration is required')
     }
 
     const {publicReadMode} = input.artifactRead
-    assertPrivateArtifactMode(publicReadMode)
-    const artifactRegion = identity.artifactRegion || identity.awsRegion
-    const publicEndpointUrl = proofArtifactS3Endpoint(artifactRegion)
-    if (input.artifactRead.publicEndpointUrl && normalizeProofArtifactPublicEndpoint(input.artifactRead.publicEndpointUrl) !== publicEndpointUrl) {
-      throw new Error('private-s3 endpoint is derived from the artifact region; anonymous gateway overrides are not supported')
+    if (!['direct-s3', 'existing-gateway', 'existing-public-s3'].includes(publicReadMode)) {
+      throw new Error(`unsupported proof artifact public read mode: ${String(publicReadMode)}`)
     }
 
+    const artifactRegion = identity.artifactRegion || identity.awsRegion
+    const directS3Endpoint = proofArtifactS3Endpoint(artifactRegion)
+    const usesRegionalS3Endpoint = publicReadMode === 'direct-s3' || publicReadMode === 'existing-public-s3'
+    if (usesRegionalS3Endpoint && input.artifactRead.publicEndpointUrl) {
+      const supplied = normalizeProofArtifactPublicEndpoint(input.artifactRead.publicEndpointUrl)
+      if (supplied !== directS3Endpoint) {
+        throw new Error(
+          `${publicReadMode} proof artifact endpoint is derived as ${directS3Endpoint}; `
+          + 'do not supply a different public endpoint',
+        )
+      }
+    }
+
+    if (publicReadMode === 'existing-gateway' && !input.artifactRead.publicEndpointUrl) {
+      throw new Error('existing-gateway proof artifact reads require publicEndpointUrl')
+    }
+
+    const publicEndpointUrl = usesRegionalS3Endpoint
+      ? directS3Endpoint
+      : normalizeProofArtifactPublicEndpoint(input.artifactRead.publicEndpointUrl as string)
     if (input.artifactRead.vpcEndpoint?.enabled && artifactRegion !== identity.awsRegion) {
       throw new Error(
         `cannot configure an ${identity.awsRegion} S3 Gateway endpoint for artifact bucket region ${artifactRegion}; `
@@ -647,25 +663,55 @@ export class ProofAwsProvisioner {
       )
     }
 
-    const bucketCreated = this.ensureBucket(artifactRegion, bucket, true)
-    // Remove only our exact old grant. Refuse unrelated public access before
-    // changing versioning, VPC routing, IAM, secrets or bucket-wide protection.
-    assertPrivateArtifactPolicy(upsertProofArtifactPublicReadPolicy(this.readBucketPolicy(artifactRegion, bucket), bucket, keyPrefix, false))
+    const bucketCreated = this.ensureBucket(
+      artifactRegion,
+      bucket,
+      publicReadMode !== 'existing-public-s3',
+    )
+    // Validate any existing public policy before creating/associating a VPC
+    // endpoint or changing IAM/secrets. This keeps a rejected direct-S3
+    // adoption from leaving unrelated AWS resources half-provisioned.
+    if (publicReadMode === 'direct-s3') {
+      assertNoUnmanagedPublicProofBucketGrant(
+        this.readBucketPolicy(artifactRegion, bucket),
+        bucket,
+        keyPrefix,
+      )
+    }
 
     // Every deployment bucket is versioned, so an overwrite never loses the
     // previous object. Idempotent; independent of who owns the read policy.
     this.aws.run(['s3api', 'put-bucket-versioning', '--bucket', bucket, '--versioning-configuration', 'Status=Enabled'], {region: artifactRegion})
 
-    this.reconcilePrivateS3ArtifactRead(artifactRegion, bucket, keyPrefix)
     const vpcEndpoint = input.artifactRead.vpcEndpoint?.enabled
       ? this.ensureVpcEndpointArtifactRead(identity, bucket, keyPrefix, input.artifactRead.vpcEndpoint)
       : undefined
-    assertPrivateArtifactBucket(this.aws, bucket, artifactRegion)
+    // `existing-gateway` is explicitly operator-managed.  In that mode the
+    // CLI must not rewrite either the bucket policy or Public Access Block:
+    // an existing archive bucket can already expose raw DA objects through a
+    // policy or gateway whose scope the proof adapter does not own.  Toggling
+    // Public Access Block here can silently break that established download
+    // path.  Direct S3 is the only mode in which scroll-sdk-cli owns and
+    // reconciles anonymous-read policy.
+    if (publicReadMode === 'direct-s3') {
+      this.reconcileDirectS3ArtifactRead(
+        artifactRegion,
+        bucket,
+        keyPrefix,
+      )
+    } else {
+      this.jsonCtx.info(
+        `proof-aws: preserved operator-managed bucket policy and Public Access Block settings for ${bucket} (${publicReadMode})`,
+      )
+      this.jsonCtx.addWarning('New artifact prefixes do not inherit old-instance grants. Public read of this proof prefix remains operator-managed in this mode. Grant the eth-da-submitter its segmentation-sidecar put with setup artifact-access --store da --writer-role-arn <eth-da-submitter-role>.')
+    }
 
     const artifactReadTransport: ProofArtifactReadTransportResult = {
       publicEndpointUrl,
       publicReadMode,
-      publicStatus: 'configured-unverified',
+      publicStatus: publicReadMode === 'direct-s3'
+        ? 'configured-unverified'
+        : 'operator-managed-unverified',
       ...(vpcEndpoint ? {vpcEndpoint} : {}),
     }
     const trust = this.discoverIrsaTrust(identity)
@@ -742,15 +788,13 @@ export class ProofAwsProvisioner {
     return true
   }
 
-  private reconcilePrivateS3ArtifactRead(
+  private reconcileDirectS3ArtifactRead(
     region: string,
     bucket: string,
     keyPrefix: string,
   ): void {
     const existingPolicy = this.readBucketPolicy(region, bucket)
-    const updatedPolicy = upsertProofArtifactPublicReadPolicy(existingPolicy, bucket, keyPrefix, false)
-    assertPrivateArtifactPolicy(updatedPolicy)
-    if (!updatedPolicy.Statement.some((statement: any) => statement.Sid === DENY_INSECURE_TRANSPORT_SID)) updatedPolicy.Statement.push(denyInsecureTransportStatement(bucket))
+    const updatedPolicy = upsertProofArtifactPublicReadPolicy(existingPolicy, bucket, keyPrefix, true)
 
     this.aws.run([
       's3api',
@@ -758,7 +802,7 @@ export class ProofAwsProvisioner {
       '--bucket',
       bucket,
       '--public-access-block-configuration',
-      JSON.stringify(PRIVATE_ARTIFACT_PUBLIC_ACCESS_BLOCK),
+      'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false',
     ], {region})
 
     if (JSON.stringify(existingPolicy) !== JSON.stringify(updatedPolicy)) {
@@ -776,8 +820,9 @@ export class ProofAwsProvisioner {
       }
     }
 
-    assertPrivateArtifactBucket(this.aws, bucket, region)
-    this.jsonCtx.info(`proof-aws: private S3 access configured for ${bucket}/${keyPrefix}; anonymous Internet access blocked`)
+    this.jsonCtx.info(
+      `proof-aws: configured anonymous GetObject for required external-consumer paths under ${bucket}/${keyPrefix}; list/write/delete remain private`,
+    )
   }
 
   private ensureIrsaRole(

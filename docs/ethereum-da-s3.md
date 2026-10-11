@@ -69,15 +69,18 @@ and `-`; `.` and `..` segments are rejected. Proof prefixes must already
 be non-empty normalized paths. An empty prefix remains supported for DA-only
 bucket-root archives.
 
-Proof artifacts and snapshots must not allow anonymous Internet reads.
-`setup proof-aws-init` defaults to `private-s3`, blocks all public S3 access,
-and removes only this deployment's exact previous anonymous grant. Other
-public grants require operator review. The old `direct-s3`,
-`existing-public-s3` and anonymous-gateway provisioning modes are rejected.
-Only `artifact-access --store da --public-read` can enable public blob reads.
-A fixed VPC endpoint grant is a private network read path, not public access.
-External beta.6a signers/Workers need their own controlled private route;
-see [the proof runbook](proof-operator-runbook.md).
+In the proof bucket, never grant anonymous `GetObject` to the entire
+`<keyPrefix>/*`: the segmentation-sidecar namespace is internal. List, write,
+and delete remain authenticated even for externally readable objects.
+
+`setup proof-aws-init` distinguishes bucket-policy ownership from object-key
+layout. Use `--artifact-public-read-mode existing-public-s3` when the proof
+bucket already has an operator-managed anonymous S3 policy. In that mode the
+command does not change the bucket-wide Public Access Block settings or the
+existing public-read policy; it only manages deployment-scoped proof resources
+and, when selected, the prefix-scoped EKS Gateway endpoint grant. `direct-s3` only when the CLI owns the bucket's public-access posture (it then
+also adds the TLS-only `ScrollSdkDenyInsecureTransport` statement), or
+`existing-gateway` when S3 remains private behind an HTTPS gateway.
 
 CLI-managed direct-read and VPC-endpoint-read statements are identified per
 bucket and deployment prefix. Repeating setup for one prefix preserves the

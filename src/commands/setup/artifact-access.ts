@@ -25,7 +25,7 @@ export default class ArtifactAccess extends Command {
     'doge-config': Flags.string({default: '.data/doge-config.toml', description: 'doge-config holding ethereumDa.blobArchive.s3, proofArtifacts.s3 and snapshots.s3'}),
     json: Flags.boolean({default: false}),
     'proof-aws-config': Flags.string({default: '.data/proof-aws.json', description: 'proof-aws-init output; its S3 Gateway VPC endpoint is reused when --vpc-endpoint-id is omitted'}),
-    'public-read': Flags.boolean({allowNo: true, description: 'DA blobs only: add (--public-read) or remove (--no-public-read) anonymous GetObject; snapshots always stay private; omitted leaves it unchanged. Removing it on the DA archive is the kill switch: our services keep reading through the VPC endpoint'}),
+    'public-read': Flags.boolean({allowNo: true, description: 'Add (--public-read) or remove (--no-public-read) the anonymous GetObject statement; omitted leaves it unchanged. Removing it on the DA archive is the kill switch: our services keep reading through the VPC endpoint'}),
     store: Flags.string({description: 'Bucket to manage', options: ['da', 'snapshot'], required: true}),
     'vpc-endpoint-id': Flags.string({description: 'S3 Gateway VPC endpoint the cluster reads through (same region as the bucket)'}),
     'writer-role-arn': Flags.string({description: 'The only writer: the eth-da-submitter IRSA role (da) or the deploy role (snapshot); its trust and other policies are preserved'}),

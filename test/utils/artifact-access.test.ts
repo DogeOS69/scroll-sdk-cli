@@ -90,21 +90,7 @@ function sids(policy: Record<string, unknown>): string[] {
 }
 
 describe('DA archive and snapshot bucket access', () => {
-  it('never permits snapshot public reads, and removes its old grant while blocking public policies and ACLs', () => {
-    const f = fixture()
-    const store = {...da, bucket: 'private-snapshots', keyPrefix: 'snapshots'}
-    expect(() => planArtifactAccess(f.aws, 'snapshot', store, {publicRead: true})).to.throw('Only the DA blob archive')
-    expect(f.writes).to.deep.equal([])
-    ;(f.bucket.Statement as unknown[]).push({Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: 'arn:aws:s3:::private-snapshots/snapshots/*', Sid: archivePolicySids('snapshot', store.bucket, store.keyPrefix).publicRead})
-    const plan = planArtifactAccess(f.aws, 'snapshot', store, {vpcEndpointId: 'vpce-0abc'})
-    expect(() => checkArtifactAccess(f.aws, plan)).to.throw('differs')
-    applyArtifactAccess(f.aws, plan)
-    expect(f.bucketBlock).to.deep.equal({BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true})
-    expect(sids(f.bucket)).not.to.include(archivePolicySids('snapshot', store.bucket, store.keyPrefix).publicRead)
-    checkArtifactAccess(f.aws, planArtifactAccess(f.aws, 'snapshot', store, {}))
-  })
-
-  for (const kind of ['da'] as const) {
+  for (const kind of ['da', 'snapshot'] as const) {
     it(`preserves other deployments when configuring and disabling ${kind} reads`, () => {
       const a = {...da, keyPrefix: 'deployments/one'}
       const b = {...da, keyPrefix: 'deployments/two'}

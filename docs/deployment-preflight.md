@@ -76,9 +76,8 @@ from local configuration alone. `transport_only` does not require C2F egress.
 
 ## 3. Reconcile each new artifact prefix
 
-`proof-aws-init` uses `private-s3`. Proof and snapshot buckets must remain
-private; only the DA blob archive may grant anonymous Internet reads. Private
-external-consumer access must be validated independently (see the proof runbook).
+`proof-aws-init --artifact-public-read-mode existing-public-s3` intentionally
+preserves the bucket policy. It does **not** imply a new prefix is readable.
 
 The DA archive (`ethereumDa.blobArchive.s3`) and the bootstrap snapshot bucket
 (`snapshots.s3`) are managed by `setup artifact-access --store da|snapshot`.

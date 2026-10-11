@@ -63,7 +63,7 @@ producer、CUDA Worker、coordinator、topology compiler、publisher。
 不能再用旧版单个 mock/production 参数代替。
 
 1. 配置共享 artifact store 与 `setup proof-aws-init` 的读取方式。已有共享桶
-   使用 `private-s3`，校验四项 Public Access Block 和 bucket policy。只有 blob 允许匿名公网读取；proof/snapshot 保持私有。外部 beta.6a signer/Worker 的无凭证读取需要单独验证私有访问通路；需要补充权限时，通过
+   使用 `existing-public-s3` 或 `existing-gateway`；需要补充权限时，通过
    `setup artifact-access` 先查看计划，再显式使用 `--apply`。
 2. 按 [proof configuration transactions](proof-config-transactions.md) 准备
    request、release manifest 和 SHA-256，运行 `setup proof-config prepare`。
