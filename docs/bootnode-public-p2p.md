@@ -1,8 +1,20 @@
 # Reth bootnode public P2P access
 
-`setup l2-bootnode-reth` prepares node identities. To let external RPC nodes
-connect to those bootnodes, also run `setup bootnode-public-p2p` after
-`setup prep-charts` has produced the indexed bootnode values.
+> **Deprecated command:** `scrollsdk setup bootnode-public-p2p` is retained
+> with a warning and is not invoked by `setup apply`. It generates legacy
+> `reth.service.extra.p2p` values that the current l2-reth chart rejects.
+> For new deployments, keep public P2P disabled by default. Enable
+> `reth.p2pExternal` only in the selected bootnodes' indexed values, with
+> approved partner egress CIDRs in `sourceRanges`, subnets, EIP allocations
+> and `allowOpenPeering: false`. Follow the SDK l2-reth chart's activation
+> checklist before the Helm rollout and verify source restrictions afterwards.
+> The command behavior and examples below are retained as legacy reference.
+
+## Legacy workflow (deprecated)
+
+`setup l2-bootnode-reth` prepares node identities. The legacy workflow used
+`setup bootnode-public-p2p` after `setup prep-charts` produced the indexed
+bootnode values. Do not use this workflow with the current l2-reth chart.
 
 ```text
 setup l2-bootnode-reth

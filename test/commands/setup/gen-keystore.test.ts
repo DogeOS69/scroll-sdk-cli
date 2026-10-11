@@ -305,13 +305,19 @@ describe('unified keystore preparation', () => {
     archive.restore()
     const provisioner: any = new KmsSignerProvisioner(new JsonOutputContext('test', true))
     sinon.stub(provisioner, 'ensureS3Bucket').returns(false)
-    const aws = sinon.stub(provisioner, 'awsJson').returns({})
+    const aws = sinon.stub(provisioner, 'awsJson').callsFake((args: any) => {
+      if (args[1] === 'list-role-policies') return {PolicyNames: []}
+      if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
+      if (args[1] === 'put-role-policy') return {}
+      throw new Error('Unexpected AWS mutation or API')
+    })
     await provisioner.provisionArchive({bucket: 'archive', created: false, enabled: true, keyPrefix: 'mainnet/batches', region: 'us-east-1'}, {createBucket: true, roleArn: 'arn:aws:iam::123456789012:role/path/submitter', sidecarStore: {bucket: 'proofs', keyPrefix: 'mainnet/proofs'}})
-    expect(aws.callCount).to.equal(1)
-    expect(aws.firstCall.args[0].slice(0, 4)).to.deep.equal(['iam', 'put-role-policy', '--role-name', 'submitter'])
-    expect(aws.firstCall.args[0]).to.include('eth-da-submitter-s3-archive')
+    expect(aws.getCalls().map(call => call.args[0][1])).to.deep.equal(['list-role-policies', 'list-attached-role-policies', 'put-role-policy'])
+    const update = aws.lastCall.args[0]
+    expect(update.slice(0, 4)).to.deep.equal(['iam', 'put-role-policy', '--role-name', 'submitter'])
+    expect(update).to.include('eth-da-submitter-s3-archive')
     // Scoped to the DA prefix and both proof sidecar namespaces, never the whole bucket.
-    const policy = JSON.parse(aws.firstCall.args[0].at(-1))
+    const policy = JSON.parse(update.at(-1))
     expect(policy.Statement.map((statement: {Resource: string | string[]}) => statement.Resource)).to.deep.equal([
       'arn:aws:s3:::archive/mainnet/batches/*',
       [

@@ -1,13 +1,13 @@
-/** Build the public prover route while retaining operator annotations and TLS secret. */
+import {reconcilePublicServiceIngress} from './public-service-ingress.js'
+
+/** Build the public prover route without overriding the operator's controller. */
 export function buildProofCoordinatorIngress(host: string, existing: Record<string, any> = {}): Record<string, any> {
-  return {
+  return reconcilePublicServiceIngress({
     ...existing,
     enabled: true,
     hosts: [{
       host,
       paths: [{path: '/', pathType: 'Prefix', service: {port: 7788}}],
     }],
-    ingressClassName: existing.ingressClassName || 'nginx',
-    tls: [{hosts: [host], secretName: existing.tls?.[0]?.secretName || 'proof-coordinator-tls'}],
-  }
+  }, 'proof-coordinator')
 }

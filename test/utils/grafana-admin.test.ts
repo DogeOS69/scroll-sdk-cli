@@ -1,5 +1,4 @@
 import {expect} from 'chai'
-import * as yaml from 'js-yaml'
 import {execFileSync} from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -32,10 +31,8 @@ describe('Grafana admin configuration', () => {
     const config = await configureGrafanaAdmin({adminPassword: '$ENV:GRAFANA_TEST_PASSWORD'}, true)
     expect(config.adminPassword).to.equal('$ENV:GRAFANA_TEST_PASSWORD')
     const file = writeGrafanaAdminSecret(config, root)
-    expect(yaml.load(fs.readFileSync(file, 'utf8'))).to.deep.equal({
-      apiVersion: 'v1', kind: 'Secret', metadata: {name: 'grafana-admin'},
-      stringData: {'admin-password': process.env.GRAFANA_TEST_PASSWORD, 'admin-user': 'admin'}, type: 'Opaque',
-    })
+    expect(fs.readFileSync(file, 'utf8')).to.equal('admin-password="nonfunctional-env-fixture"\nadmin-user="admin"\n')
+    expect(file).to.equal(path.join(root, 'secrets/grafana-admin.env'))
     expect(fs.statSync(file).mode % 0o1000).to.equal(0o600)
   })
 
@@ -77,9 +74,7 @@ describe('Grafana admin configuration', () => {
     const values = {grafana: {adminPassword: 'nonfunctional-legacy-fixture', ingress: {enabled: true}}}
     const changes = reconcileScrollMonitorGrafana(values, config)
     const file = writeGrafanaAdminSecret(config, root)
-    expect(yaml.load(fs.readFileSync(file, 'utf8'))).to.deep.include({
-      metadata: {name: 'custom-grafana'}, stringData: {password: config.adminPassword, user: 'operator'},
-    })
+    expect(fs.readFileSync(file, 'utf8')).to.equal('password="nonfunctional-custom-fixture"\nuser="operator"\n')
     expect(values.grafana).to.deep.equal({
       admin: {existingSecret: 'custom-grafana', passwordKey: 'password', userKey: 'user'}, ingress: {enabled: true},
     })
@@ -136,7 +131,7 @@ describe('Grafana admin configuration', () => {
       sinon.stub(internals, 'generateEnvContent').returns({})
       sinon.stub(internals, 'generateRethEnvFiles').returns({})
       await internals.createEnvFiles()
-      expect(fs.existsSync('secrets/grafana-admin.yaml')).to.equal(true)
+      expect(fs.existsSync('secrets/grafana-admin.env')).to.equal(true)
       expect(JSON.stringify(log.args)).not.to.include(internals.dogeConfig.grafana.adminPassword)
     } finally {
       process.chdir(previous)

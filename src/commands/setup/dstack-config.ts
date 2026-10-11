@@ -31,7 +31,8 @@ export default class DstackConfig extends Command {
     project: Flags.string({description: 'Dstack project name (default main on first import)'}),
     provider: Flags.string({description: 'Exact enabled provider set; repeat for multiple providers. Omit to retain existing and add supplied providers.', multiple: true, options: ['vastai', 'gcp']}),
     spec: Flags.string({description: 'Update an existing DeploymentSpec YAML instead of doge-config TOML', exclusive: ['doge-config']}),
-    'vastai-api-key-file': Flags.string({description: 'Path to a file containing only the Vast.ai API key; avoids credentials in command arguments'}),
+    'vastai-api-key-env': Flags.string({description: 'Environment variable containing the Vast.ai API key', exclusive: ['vastai-api-key-file']}),
+    'vastai-api-key-file': Flags.string({description: 'Path to a file containing only the Vast.ai API key; avoids credentials in command arguments', exclusive: ['vastai-api-key-env']}),
   }
 
   protected override async catch(error: Error): Promise<void> {
@@ -61,6 +62,15 @@ export default class DstackConfig extends Command {
       const existing = readDstackCredentials()
       const state = existing ?? newDstackCredentials()
       const supplied: DstackProvider[] = []
+      if (flags['vastai-api-key-env']) {
+        const name = flags['vastai-api-key-env']
+        if (!/^[A-Z_a-z]\w*$/.test(name)) throw new Error('--vastai-api-key-env must name an environment variable')
+        const value = process.env[name]?.trim()
+        if (!value) throw new Error('The selected Vast.ai API key environment variable is empty or unset')
+        state.vastaiApiKey = value
+        supplied.push('vastai')
+      }
+
       if (flags['vastai-api-key-file']) {
         state.vastaiApiKey = fs.readFileSync(path.resolve(flags['vastai-api-key-file']), 'utf8').trim()
         supplied.push('vastai')

@@ -16,6 +16,16 @@ interface MonitorInputs {
   l2RpcUrl: unknown
 }
 
+/** Only verifier-policy deployments promise a Permitted explain-tree observation. */
+export function reconcileScrollMonitorCubesigner(values: any, resolved = 'production_verifier_key_policy'): MonitorChange[] {
+  if (!['production_verifier_key_policy', 'transport_only'].includes(resolved)) throw new Error('Invalid CubeSigner monitoring policy mode')
+  values.serviceAlerts ??= {}
+  if (values.serviceAlerts.cubesignerPolicyMode === resolved) return []
+  const change = {key: 'serviceAlerts.cubesignerPolicyMode', newValue: resolved, oldValue: String(values.serviceAlerts.cubesignerPolicyMode)}
+  values.serviceAlerts.cubesignerPolicyMode = resolved
+  return [change]
+}
+
 /** Bootstrap credentials belong in a Secret, never in Helm values or change previews. */
 export function reconcileScrollMonitorGrafana(values: any, config?: DogeConfig['grafana']): MonitorChange[] {
   if (!config) return []
@@ -32,6 +42,31 @@ export function reconcileScrollMonitorGrafana(values: any, config?: DogeConfig['
     if (!(key in grafana)) continue
     delete grafana[key]
     changes.push({key: `grafana.${key}`, newValue: '[stored in Secret]', oldValue: '[redacted]'})
+  }
+
+  const reference = grafanaAdminReference(config)
+  const externalSecrets = mapping(values.externalSecrets, 'externalSecrets')
+  const previous = externalSecrets[reference.existingSecret]
+  const external = structuredClone(mapping(previous, `externalSecrets.${reference.existingSecret}`))
+  external.provider ??= 'aws'
+  external.serviceAccount ??= 'external-secrets'
+  external.refreshInterval ??= '2m'
+  const data = Array.isArray(external.data) ? external.data : []
+  // Keep provider, path, region and unrelated keys selected by the operator.
+  for (const secretKey of [reference.userKey, reference.passwordKey]) {
+    const item = data.find((entry: any) => entry.secretKey === secretKey)
+    if (item) {
+      item.remoteRef = {...item.remoteRef, property: secretKey}
+    } else {
+      data.push({remoteRef: {key: `${reference.existingSecret}-env`, property: secretKey}, secretKey})
+    }
+  }
+
+  external.data = data
+  if (JSON.stringify(previous) !== JSON.stringify(external)) {
+    externalSecrets[reference.existingSecret] = external
+    values.externalSecrets = externalSecrets
+    changes.push({key: `externalSecrets.${reference.existingSecret}`, newValue: '[external admin Secret reference]', oldValue: '[reference]'})
   }
 
   grafana.admin = admin

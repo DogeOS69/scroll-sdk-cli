@@ -242,7 +242,7 @@ describe('real-proof program bundle publication', () => {
     expect(publisherInvocation!.env).not.to.have.property('DOGEOS_PROVER_WORKER_TOKEN')
   })
 
-  it('publishes from the pinned image with only temporary AWS credentials and no core checkout', async () => {
+  for (const iamUserProfile of [false, true]) it(`publishes from the pinned image with temporary credentials (${iamUserProfile ? 'STS exchange' : 'existing session'}) and no core checkout`, async () => {
     const release = releaseFixture(coreRevision)
     const materials = JSON.parse(fs.readFileSync(path.join(root, '.data/proof-materials-v1.json'), 'utf8'))
     for (const [key, name] of [['productionWorker', 'prover-worker-cuda'], ['topologyCompiler', 'dogeos-proof-topology']] as const) {
@@ -252,12 +252,20 @@ describe('real-proof program bundle publication', () => {
     const body = JSON.stringify(release)
     fs.writeFileSync(path.join(root, 'release.json'), body)
     let invocation: {args: string[]; env?: NodeJS.ProcessEnv} | undefined
+    let sessionRequests = 0
     const result = await publishProofProgramBundle({
       ...common(), anonymousRead: async url => published.get(url)!, coreDir: undefined, output: '.data/publication.json',
       release: 'release.json', releaseSha256: digest(body),
       run(command, args, options) {
         expect(command).not.to.equal('git')
-        if (command === 'aws') return JSON.stringify({AccessKeyId: 'temporary-id', Expiration: new Date(Date.now() + 600_000).toISOString(), SecretAccessKey: 'temporary-secret', SessionToken: 'temporary-session'})
+        if (command === 'aws') {
+          const temporary = {AccessKeyId: 'temporary-id', Expiration: new Date(Date.now() + 600_000).toISOString(), SecretAccessKey: 'temporary-secret', SessionToken: 'temporary-session'}
+          if (args[0] === 'configure') return JSON.stringify(iamUserProfile ? {AccessKeyId: 'NONFUNCTIONAL_LONG_TERM_ID', SecretAccessKey: 'NONFUNCTIONAL_LONG_TERM_SECRET'} : temporary)
+          expect(args).to.deep.equal(['sts', 'get-session-token', '--duration-seconds', '3600', '--output', 'json'])
+          sessionRequests++
+          return JSON.stringify({Credentials: temporary})
+        }
+
         if (args[0] === 'pull') return ''
         if (args[0] === 'image') return args.at(-1)!.includes('proof-bundle.mapping') ? 'v1-11-files' : coreRevision
         invocation = {args, env: options?.env}
@@ -272,6 +280,8 @@ describe('real-proof program bundle publication', () => {
     expect(invocation!.args).to.include('--read-only')
     expect(invocation!.args.join(' ')).not.to.include('temporary-secret')
     expect(invocation!.env?.AWS_SESSION_TOKEN).to.equal('temporary-session')
+    expect(invocation!.env?.AWS_SECRET_ACCESS_KEY).to.equal('temporary-secret')
+    expect(sessionRequests).to.equal(iamUserProfile ? 1 : 0)
     expect(result.receipt.publisherImage).to.equal(release.images['proof-bundle-publisher'])
     expect(result.receipt.releaseSha256).to.equal(digest(body))
     expect(JSON.stringify(result.receipt)).not.to.include('temporary-secret')

@@ -6,6 +6,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import type { JsonOutputContext } from './json-output.js'
 
 import { AwsCliRunner } from './aws-cli.js'
+import {auditRolePolicies} from './iam-role-policy-audit.js'
 
 export interface ProofAwsIdentity {
   /** Region containing the proof artifact bucket. */
@@ -270,7 +271,7 @@ export function proofArtifactS3Endpoint(region: string): string {
 export function buildProofArtifactStorePolicy(
   bucket: string,
   keyPrefix: string,
-  options: {deleteObjects?: boolean} = {},
+  options: {deleteObjects?: boolean; listObjects?: boolean} = {},
 ): Record<string, any> {
   const prefix = normalizeProofKeyPrefix(keyPrefix)
   const objectActions = ['s3:GetObject', 's3:PutObject']
@@ -282,7 +283,7 @@ export function buildProofArtifactStorePolicy(
         Effect: 'Allow',
         Resource: `arn:aws:s3:::${bucket}/${prefix}/*`,
       },
-      {
+      ...(options.listObjects ? [{
         Action: ['s3:ListBucket'],
         Condition: {
           StringLike: {
@@ -291,7 +292,7 @@ export function buildProofArtifactStorePolicy(
         },
         Effect: 'Allow',
         Resource: `arn:aws:s3:::${bucket}`,
-      },
+      }] : []),
     ],
     Version: '2012-10-17',
   }
@@ -387,7 +388,7 @@ function actionCanGetObject(action: unknown): boolean {
   )
 }
 
-function resourceMayOverlapPrefix(resource: unknown, bucket: string, keyPrefix: string): boolean {
+function resourceMayOverlapPrefix(resource: unknown, bucket: string, keyPrefix: null | string): boolean {
   if (resource === '*') return true
   if (typeof resource !== 'string') return false
 
@@ -396,6 +397,7 @@ function resourceMayOverlapPrefix(resource: unknown, bucket: string, keyPrefix: 
 
   const objectPattern = match.groups.object
   if (objectPattern === undefined) return false
+  if (keyPrefix === null) return true
 
   const managedPrefix = `${normalizeProofKeyPrefix(keyPrefix)}/`
   if (!objectPattern.includes('*') && !objectPattern.includes('?')) {
@@ -417,11 +419,12 @@ function resourceMayOverlapPrefix(resource: unknown, bucket: string, keyPrefix: 
  * First Allow statement, other than `ownedSids`, that grants any action to
  * an anonymous principal on objects overlapping `bucket/keyPrefix` without
  * a VPC endpoint restriction: a public read or write the caller does not own.
+ * A null keyPrefix checks every object prefix in the bucket.
  */
 export function findUnmanagedAnonymousGrant(
   policy: Record<string, any>,
   bucket: string,
-  keyPrefix: string,
+  keyPrefix: null | string,
   ownedSids: readonly string[],
 ): Record<string, any> | undefined {
   const statements = Array.isArray(policy.Statement)
@@ -851,6 +854,7 @@ export class ProofAwsProvisioner {
 
     try {
       this.aws.json(['iam', 'get-role', '--role-name', plan.roleName])
+      auditRolePolicies(this.aws, plan.roleName, buildProofArtifactStorePolicy(bucket, keyPrefix, {deleteObjects, listObjects: deleteObjects}), ['proof-artifact-store'])
       this.aws.json(['iam', 'update-assume-role-policy', '--role-name', plan.roleName, '--policy-document', trustPolicyDocument])
       this.jsonCtx.info(`proof-aws: updated IAM role trust policy: ${plan.roleName}`)
     } catch (error) {
@@ -873,7 +877,9 @@ export class ProofAwsProvisioner {
     // GetObject + PutObject cover artifact transport and staging->accepted
     // promotion (CopyObject authorizes as a read plus a write). DeleteObject is
     // required to retire stale locator objects after a proof identity global
-    // regeneration. ListBucket covers scans, restricted to the deployment's
+    // regeneration. Only the coordinator lists for recovery scans. WP uses
+    // exact-key readers/publishers and must not receive ListBucket. All scans
+    // are restricted to the deployment's
     // normalized object prefix.
     this.aws.json([
       'iam',
@@ -883,7 +889,7 @@ export class ProofAwsProvisioner {
       '--policy-name',
       'proof-artifact-store',
       '--policy-document',
-      JSON.stringify(buildProofArtifactStorePolicy(bucket, keyPrefix, {deleteObjects})),
+      JSON.stringify(buildProofArtifactStorePolicy(bucket, keyPrefix, {deleteObjects, listObjects: deleteObjects})),
     ])
     this.jsonCtx.info(`proof-aws: updated IAM proof artifact policy: ${plan.roleName} -> ${bucket}/${keyPrefix}/*`)
     return roleArn

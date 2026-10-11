@@ -1,7 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- YAML helper tests use dynamic values objects */
+import * as toml from '@iarna/toml'
 import { expect } from 'chai'
+import {Wallet} from 'ethers'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
-import {
+import SetupL2BootnodeReth, {
   applyBootnodeRethValues,
   deriveBootnodeRethEnodeUrl,
   getBootnodeRethValuesFileName,
@@ -9,6 +14,35 @@ import {
 
 describe('setup l2-bootnode-reth', () => {
   const nodekey = '1111111111111111111111111111111111111111111111111111111111111111'
+
+  it('imports the explicitly supplied key for a scoped nonzero bootnode index', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bootnode-import-'))
+    try {
+      const file = path.join(root, 'doge-config.toml')
+      fs.writeFileSync(file, 'network = "testnet"\n[wallet]\npath = "unused-test-wallet"\n', {mode: 0o600})
+      const imported = Wallet.createRandom().privateKey.slice(2)
+      const command = Object.create(SetupL2BootnodeReth.prototype)
+      command.argv = ['--secret-mode', 'external-secret']
+      await command.prepareIdentity({'count': 1, 'doge-config': file, 'indices': [1], 'nodekey': imported, 'non-interactive': true, 'secret-mode': 'external-secret'}, {info() {}, logSuccess() {}})
+      const config = toml.parse(fs.readFileSync(file, 'utf8')) as any
+      expect(config.bootnodeReth.instances).to.have.length(1)
+      expect(config.bootnodeReth.instances[0].index).to.equal(1)
+      expect(config.bootnodeReth.instances[0].nodekey.privateKey).to.equal(imported)
+    } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+
+  it('retains previously prepared nodekeys across per-instance spec tasks and retries', () => {
+    const config: any = {}
+    const update = (SetupL2BootnodeReth.prototype as any).updateDogeConfig
+    const first = {enodeUrl: 'enode://first', index: 0, nodekey: Wallet.createRandom().privateKey, secretMode: 'external-secret'}
+    const second = {enodeUrl: 'enode://second', index: 1, nodekey: Wallet.createRandom().privateKey, secretMode: 'external-secret'}
+    update.call({}, config, [first], true)
+    update.call({}, config, [second], true)
+    update.call({}, config, [second], true)
+    expect(config.bootnodeReth.instances.map((node: any) => node.index)).to.deep.equal([0, 1])
+    expect(config.bootnodeReth.instances[0].nodekey.privateKey).to.equal(first.nodekey)
+    expect(config.bootnodeReth.instances[1].nodekey.privateKey).to.equal(second.nodekey)
+  })
 
   it('derives filenames and enode URLs', () => {
     expect(getBootnodeRethValuesFileName(2)).to.equal('l2-reth-bootnode-production-2.yaml')

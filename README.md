@@ -50,10 +50,11 @@ bin/run.js --help
 - [核心服务配置（中文）](docs/service-config-runbook.zh.md) — 当前 signer、Bridge、proof 与服务部署流程。
 - [Branch integration decisions](docs/branch-integration.md) — resolutions for the v0.3.0 branch consolidation.
 
+- [Spec plan/apply preparation](docs/spec-preparation.md) — two entry commands, resumable external inputs and beta.6 production Bridge funding.
 - [CLI setup order](docs/setup-order.md) — configuration prerequisites, native Reth genesis, `scrollsdk setup bridge-init`, service configuration and deployment handoff. Start here for command order.
 - [Configuration cleanup](docs/config-cleanup.md) — supported template fields, matching contracts images and updating an existing deployment.
 - [Pure Reth configuration](docs/reth-only-peers.md) — Reth node identities and peer configuration.
-- [Reth bootnode public P2P access](docs/bootnode-public-p2p.md) — AWS controller setup, public Service values, Helm rollout and external RPC peer export.
+- [Reth bootnode public P2P access](docs/bootnode-public-p2p.md) — selected bootnode exposure and external RPC peer export; `setup bootnode-public-p2p` is deprecated.
 - [Deployment signing identities](docs/keystore.md) — unified Reth and service
   key preparation, KMS reuse, and archive configuration.
 
@@ -780,10 +781,10 @@ _See code: [src/commands/setup/attestation-signer.ts](https://github.com/dogeos6
 
 ## `scrollsdk setup bootnode-public-p2p`
 
-See [Reth bootnode public P2P access](docs/bootnode-public-p2p.md) for execution order and deployment requirements.
+**Deprecated.** Not invoked by `setup apply`. Configure `reth.p2pExternal` for selected bootnodes instead. See [Reth bootnode public P2P access](docs/bootnode-public-p2p.md).
 
 ```text
-Prepare Reth bootnode public P2P LoadBalancer values and the AWS controller; deploy the bootnode Helm releases afterwards
+Deprecated: prepare legacy Reth bootnode public P2P values and the AWS controller
 
 USAGE
   $ scrollsdk setup bootnode-public-p2p [--cluster-name <value>]
@@ -1220,14 +1221,11 @@ Set up domain configurations for external services
 
 ```
 USAGE
-  $ scrollsdk setup domains [--cluster-issuer <value>] [--json] [--no-bootstrap-tls] [-N] [--values-dir <value>]
+  $ scrollsdk setup domains [--json] [-N] [--values-dir <value>]
 
 FLAGS
   -N, --non-interactive         Run without prompts, using config.toml values
-      --cluster-issuer=<value>  [default: letsencrypt-prod] ClusterIssuer name to write into bootstrap chart TLS
-                                annotations
       --json                    Output in JSON format (stdout for data, stderr for logs)
-      --no-bootstrap-tls        Do not write TLS settings into bootstrap dogecoin/l1-devnet values
       --values-dir=<value>      [default: values] Directory containing Helm values files to prepare for bootstrap charts
 
 DESCRIPTION
@@ -1641,17 +1639,17 @@ Generate configuration files from a DeploymentSpec YAML file
 
 ```
 USAGE
-  $ scrollsdk setup generate-from-spec -s <value> [--config-only] [--dry-run] [--env-file <value>] [-f] [--json] [-o <value>]
+  $ scrollsdk setup generate-from-spec [-s <value>] [--config-only] [--dry-run] [--env-file <value>] [-f] [--json] [-o <value>]
     [--values-only] [--with-values]
 
 FLAGS
   -f, --force             Overwrite existing files without warning
   -o, --output=<value>    [default: .] Output directory for generated files
-  -s, --spec=<value>      (required) Path to DeploymentSpec YAML file
+  -s, --spec=<value>      [default: deployment-spec.yaml] Path to DeploymentSpec YAML file
       --config-only       Only generate config.toml and .data/*.toml. This is the default.
       --dry-run           Validate spec and show what would be generated without writing files
-      --env-file=<value>  Load dotenv-style environment variables before parsing the spec. Defaults to .env.local/.env
-                          next to the spec and current directory when present.
+      --env-file=<value>  Private NAME=value file (default: ./deployment.env when present);
+                          process environment takes precedence.
       --json              Output in JSON format (stdout for data, stderr for logs)
       --values-only       Only generate values/*.yaml Helm files
       --with-values       Also generate values/*.yaml Helm files
@@ -1662,39 +1660,39 @@ DESCRIPTION
 EXAMPLES
   # Generate configs in current directory
 
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml
+  $ scrollsdk setup generate-from-spec
 
 
 
   # Generate configs to specific output directory
 
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --output ./my-deployment
+  $ scrollsdk setup generate-from-spec --output ./my-deployment
 
 
 
   # Generate with JSON output for automation
 
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --json
+  $ scrollsdk setup generate-from-spec --json
 
 
 
   # Load private keys/passwords from an env file before deriving account addresses
 
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --env-file .env.local
+  $ scrollsdk setup generate-from-spec --env-file custom.env
 
 
 
   # Dry run - validate and show what would be generated
 
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --dry-run
+  $ scrollsdk setup generate-from-spec --dry-run
 
 
 
   # Generate Helm values files explicitly
 
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --with-values
+  $ scrollsdk setup generate-from-spec --with-values
 
-  $ scrollsdk setup generate-from-spec --spec deployment-spec.yaml --values-only
+  $ scrollsdk setup generate-from-spec --values-only
 ```
 
 _See code: [src/commands/setup/generate-from-spec.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/generate-from-spec.ts)_
@@ -2277,41 +2275,29 @@ See [dstack controller credential setup](docs/dstack-controller.md) for destinat
 
 ## `scrollsdk setup tls`
 
-Update TLS configuration in Helm charts
+Configure ACM TLS on enabled AWS ALB ingresses in local deployment values.
+Requires an issued certificate in the ALB region covering the enabled hosts.
+No Kubernetes access, cert-manager or ingress-nginx is required.
 
-```
+```text
 USAGE
-  $ scrollsdk setup tls [--cluster-issuer <value>] [--create-issuer] [-d] [--issuer-email <value>] [--json]
-    [--kube-context <value>] [-N] [--values-dir <value>]
+  $ scrollsdk setup tls [--certificate-arn <value>] [-N] [--json] [--values-dir <value>]
 
 FLAGS
-  -N, --non-interactive         Run without prompts. Requires --cluster-issuer or (--create-issuer with --issuer-email)
-  -d, --debug                   Show debug output and confirm before making changes
-      --cluster-issuer=<value>  Specify the ClusterIssuer to use (for non-interactive mode)
-      --create-issuer           Create a letsencrypt-prod ClusterIssuer if none exists (for non-interactive mode)
-      --issuer-email=<value>    Email address for the ClusterIssuer (required with --create-issuer)
-      --json                    Output in JSON format (stdout for data, stderr for logs)
-      --kube-context=<value>    Explicit Kubernetes context for issuer checks and creation
-      --values-dir=<value>      [default: values] Directory containing the values files
-
-DESCRIPTION
-  Update TLS configuration in Helm charts
-
-EXAMPLES
-  $ scrollsdk setup tls
-
-  $ scrollsdk setup tls --debug
-
-  $ scrollsdk setup tls --values-dir custom-values
-
-  $ scrollsdk setup tls --non-interactive --cluster-issuer letsencrypt-prod
-
-  $ scrollsdk setup tls --non-interactive --json --cluster-issuer letsencrypt-prod
-
-  $ scrollsdk setup tls --non-interactive --create-issuer --issuer-email admin@example.com
+  -N, --non-interactive          Require an explicit certificate ARN without prompting
+      --certificate-arn=<value> Issued ACM certificate ARN(s), comma-separated
+      --json                    Output updated file paths as JSON
+      --values-dir=<value>      [default: values] Deployment Helm values directory
 ```
 
-_See code: [src/commands/setup/tls.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/tls.ts)_
+```bash
+scrollsdk setup tls --certificate-arn "$ACM_CERTIFICATE_ARN" --non-interactive
+```
+
+Disabled ingresses remain disabled. Set individual certificates in values when
+a single certificate set does not cover every enabled host. Review and install
+these values through the normal Helm process; DNS/controller migration is an
+operator action.
 
 ## `scrollsdk setup verify-contracts`
 

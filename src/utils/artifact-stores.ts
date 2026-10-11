@@ -4,6 +4,7 @@ import * as path from 'node:path'
 
 import type {DogeConfig} from '../types/doge-config.js'
 
+import {assertSeparateDaProofBuckets} from './artifact-bucket-validation.js'
 import {normalizeProofBucketName, normalizeProofKeyPrefix} from './proof-aws-provisioner.js'
 
 export const DEFAULT_DOGE_CONFIG_PATH = '.data/doge-config.toml'
@@ -66,6 +67,7 @@ export function artifactStoreFromDogeConfig(
   kind: ArtifactStoreKind,
   label = `doge-config ${ARTIFACT_STORE_SECTIONS[kind]}`,
 ): ArtifactStore {
+  assertSeparateDaProofBuckets(dogeConfig)
   const s3 = section(dogeConfig, kind)
   const bucket = configuredString(s3?.bucket)
   const region = configuredString(s3?.region)

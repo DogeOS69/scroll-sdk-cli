@@ -10,7 +10,7 @@ import {
   validateProofDeploymentContract,
 } from '../../utils/proof-deployment-contract.js'
 import {proofEnforcementReadiness} from '../../utils/proof-enforcement-readiness.js'
-import {resolveProofIntent} from '../../utils/proof-intent.js'
+import {resolveProofIntent, validateProofIntentBinding} from '../../utils/proof-intent.js'
 import {validateProofTopologyBundle} from '../../utils/proof-topology-compiler.js'
 
 export default class ProofConfigCheck extends Command {
@@ -46,12 +46,7 @@ export default class ProofConfigCheck extends Command {
         required: true,
         specPath: flags.spec || (contract.intentSource.kind === 'deployment-spec' ? contract.intentSource.path : undefined),
       })!
-      if (intent.source.sha256 !== contract.intentSource.sha256) throw new Error('proof intent changed after prep-charts; rerun prep-charts')
-      if (
-        intent.intent.mode !== contract.mode
-        || intent.intent.generation !== contract.generation
-        || intent.intent.enforcement !== contract.enforcement
-      ) throw new Error('proof mode/generation/enforcement do not match the generated deployment contract')
+      validateProofIntentBinding(contract, intent)
       const bundle = validateProofTopologyBundle(resolveContractFile(deploymentDir, contract.topology.bundleDir), {preflightOnly: false})
       if (bundle.manifest.bundle_revision !== contract.topology.bundleRevision) throw new Error('compiler bundle revision does not match deployment contract')
       let workerBundleId: string | undefined

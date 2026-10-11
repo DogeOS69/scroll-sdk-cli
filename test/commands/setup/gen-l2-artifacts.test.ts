@@ -5,14 +5,22 @@ import * as path from 'node:path'
 import sinon from 'sinon'
 
 import SetupGenL2Artifacts, {applyRethGenesisSigner, resolveGenesisImageTag} from '../../../src/commands/setup/gen-l2-artifacts.js'
+import {GENESIS_PREDEPLOYS} from '../../../src/constants/deployment.js'
 import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_TAGS_URL} from '../../../src/constants/docker.js'
+import {validateGenesisPredeploys} from '../../../src/utils/genesis-predeploys.js'
+
+function genesisOutput() {
+  return {scrollConfig: {alloc: Object.fromEntries([
+    ...Object.values(GENESIS_PREDEPLOYS), '0x0000f90827f1c53a10cb7a02335b175320002935',
+  ].map(address => [address, {code: '0x60006000'}]))}}
+}
 
 describe('gen-l2-artifacts explicit image selection', () => {
   afterEach(() => sinon.restore())
 
   it('uses the default only when no tag was supplied', async () => {
     const fetchStub = sinon.stub(globalThis, 'fetch')
-    expect(await resolveGenesisImageTag()).to.equal('gen-configs-dogeos-v0.3.0-rc.4')
+    expect(await resolveGenesisImageTag()).to.equal('gen-configs-dogeos-v0.3.0-rc.5')
     expect(fetchStub.called).to.equal(false)
   })
 
@@ -93,6 +101,7 @@ describe('gen-l2-artifacts integrated preflight', () => {
     previousCwd = process.cwd()
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'genesis-preflight-'))
     process.chdir(root)
+    fs.writeFileSync('genesis.yaml', JSON.stringify(genesisOutput()))
   })
   afterEach(() => {
     sinon.restore()
@@ -121,6 +130,41 @@ describe('gen-l2-artifacts integrated preflight', () => {
     const written = fs.readFileSync('config.toml', 'utf8')
     expect(written).to.include('L2GETH_SIGNER_ADDRESS')
     expect(written).not.to.include('L1_PLONK_VERIFIER_ADDR')
+  })
+
+  it('rejects freshly generated output without the gas oracle before copying or reporting success', async () => {
+    fs.writeFileSync('config.toml', `${accounts}[sequencer]\nL2GETH_SIGNER_ADDRESS = "${address}"\n`)
+    const output = genesisOutput()
+    delete output.scrollConfig.alloc[GENESIS_PREDEPLOYS.L1_GAS_PRICE_ORACLE]
+    fs.writeFileSync('genesis.yaml', JSON.stringify(output))
+    const {cmd, docker} = command()
+    let failure: unknown
+    try { await cmd.run() } catch (error) { failure = error }
+    expect(docker.calledOnce).to.equal(true)
+    expect((failure as Error).message).to.include('L1_GAS_PRICE_ORACLE')
+    expect(cmd.processYamlFiles.called).to.equal(false)
+  })
+
+  it('accepts JSON-string scrollConfig and unprefixed allocation addresses', () => {
+    const {alloc} = genesisOutput().scrollConfig
+    const output = {alloc: Object.fromEntries(Object.entries(alloc).map(([key, value]) => [key.slice(2), value]))}
+    fs.writeFileSync('genesis.yaml', JSON.stringify({scrollConfig: JSON.stringify(output)}))
+    expect(() => validateGenesisPredeploys('genesis.yaml')).not.to.throw()
+  })
+
+  for (const code of [undefined, '0x', '0x00', '0x0', 'not-code']) {
+    it(`rejects a missing or non-executable message queue (${code})`, () => {
+      const output = genesisOutput()
+      output.scrollConfig.alloc[GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE] = {code: code as string}
+      fs.writeFileSync('genesis.yaml', JSON.stringify(output))
+      expect(() => validateGenesisPredeploys('genesis.yaml')).to.throw('L2_MESSAGE_QUEUE')
+    })
+  }
+
+  it('does not disclose malformed configuration in parser errors', () => {
+    fs.writeFileSync('genesis.yaml', 'scrollConfig: [private-input')
+    expect(() => validateGenesisPredeploys('genesis.yaml')).to.throw('valid genesis alloc')
+    expect(() => validateGenesisPredeploys('genesis.yaml')).not.to.throw('private-input')
   })
 
   for (const scenario of [

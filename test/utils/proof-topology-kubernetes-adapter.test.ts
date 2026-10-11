@@ -203,7 +203,7 @@ describe('self-contained proof topology Kubernetes adapter', () => {
   it('enables a configured prover ingress with matching worker URL, TLS and numeric ingress port', () => {
     const file = path.join(root, 'values/proof-coordinator-production.yaml')
     const values = yaml.load(fs.readFileSync(file, 'utf8')) as any
-    values.ingress.main = {annotations: {keep: 'operator'}, enabled: false, tls: [{hosts: ['old.example'], secretName: 'custom-proof-tls'}]}
+    values.ingress.main = {annotations: {'alb.ingress.kubernetes.io/certificate-arn': 'arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000', keep: 'operator'}, enabled: false, ingressClassName: 'alb', tls: [{hosts: ['old.example'], secretName: 'custom-proof-tls'}]}
     fs.writeFileSync(file, yaml.dump(values))
     reconcileCompiledProofTopology({
       compile(options) {
@@ -222,10 +222,27 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     const actual = yaml.load(fs.readFileSync(file, 'utf8')) as any
     expect(actual.ingress.main.enabled).to.equal(true)
     expect(actual.ingress.main.hosts[0]).to.deep.equal({host: 'proof-coordinator.example.com', paths: [{path: '/', pathType: 'Prefix', service: {port: 7788}}]})
-    expect(actual.ingress.main.tls).to.deep.equal([{hosts: ['proof-coordinator.example.com'], secretName: 'custom-proof-tls'}])
+    expect(actual.ingress.main.tls).to.equal(undefined)
     expect(actual.ingress.main.annotations.keep).to.equal('operator')
     expect(actual.service.main.ports.prover.port).to.equal(7788)
     expect(actual.service.main.ports.http.enabled).to.equal(false)
+  })
+
+  it('rejects an unconfigured ALB certificate before compiling or changing files', () => {
+    const file = path.join(root, 'values/proof-coordinator-production.yaml')
+    const before = fs.readFileSync(file, 'utf8')
+    expect(() => reconcileCompiledProofTopology({
+      compile() {throw new Error('compiler must not be called')},
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      coordinatorIngressHost: 'proof-coordinator.example.com',
+      deploymentDir: root,
+      deploymentName: 'test',
+      network: 'testnet',
+      proofTopology: topology('active'),
+      valuesDir: path.join(root, 'values'),
+      withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
+    })).to.throw('certificate-arn')
+    expect(fs.readFileSync(file, 'utf8')).to.equal(before)
   })
 
   it('rejects a worker URL that differs from the configured ingress before compiling or changing files', () => {
@@ -478,6 +495,23 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     delete bundle.manifest.eager_materializer
     configureEagerMaterializerValues(file, bundle, topology('disabled'))
     expect((yaml.load(fs.readFileSync(file, 'utf8')) as any).controller.replicas).to.equal(0)
+  })
+
+  it('gives an S3 eager producer the existing coordinator identity and preserves explicit identities', () => {
+    const bundle = fakeBundle(path.join(root, 'eager-irsa-bundle'), 'active')
+    bundle.manifest.eager_materializer = 'eager-materializer.toml'
+    fs.writeFileSync(path.join(bundle.bundleDir, bundle.manifest.eager_materializer), '[service]\nlisten_port = 3007\nstate_dir = "/app/data"\n[materializer]\nl2_genesis_json = "/app/genesis/genesis.json"\n[artifact_store]\nkind = "s3"\n')
+    const file = path.join(root, 'values/eager-materializer-production.yaml')
+    const coordinator = {annotations: {'eks.amazonaws.com/role-arn': 'coordinator-role'}, name: 'custom-coordinator'}
+    fs.writeFileSync(file, yaml.dump({serviceAccount: {annotations: {}, create: true, name: 'eager-materializer'}}))
+    configureEagerMaterializerValues(file, bundle, topology('active'), coordinator)
+    expect((yaml.load(fs.readFileSync(file, 'utf8')) as any).serviceAccount).to.include({create: false, name: 'custom-coordinator'})
+    fs.writeFileSync(file, yaml.dump({serviceAccount: {annotations: {'eks.amazonaws.com/role-arn': 'operator-role'}, create: true, name: 'operator-eager'}}))
+    configureEagerMaterializerValues(file, bundle, topology('active'), coordinator)
+    expect((yaml.load(fs.readFileSync(file, 'utf8')) as any).serviceAccount).to.deep.equal({annotations: {'eks.amazonaws.com/role-arn': 'operator-role'}, create: true, name: 'operator-eager'})
+    fs.writeFileSync(file, yaml.dump({serviceAccount: {create: false, name: 'operator-existing'}}))
+    configureEagerMaterializerValues(file, bundle, topology('active'), coordinator)
+    expect((yaml.load(fs.readFileSync(file, 'utf8')) as any).serviceAccount.name).to.equal('operator-existing')
   })
 
   it('keeps PC running with a minimal beta.1-compatible idle config when disabled', () => {

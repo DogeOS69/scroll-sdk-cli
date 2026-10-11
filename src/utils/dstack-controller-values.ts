@@ -2,6 +2,8 @@ import * as yaml from 'js-yaml'
 
 import type {DstackControllerConfig} from '../types/dstack-controller.js'
 
+import {reconcileDeploymentIngresses} from './public-service-ingress.js'
+
 export const DSTACK_MONITORING_VALUES_FILE = 'scroll-monitor-dstack.yaml'
 export const DSTACK_CONTROLLER_VALUES_FILE = 'dstack-controller-production.yaml'
 export const DSTACK_CONTROLLER_IMAGE = {
@@ -168,11 +170,12 @@ export function validateDstackControllerConfig(input: unknown): void {
   if (input === undefined) return
   const root = 'dstackController'
   const config = mapping(input, root, [
-    'enabled', 'auth', 'credentialSecrets', 'database', 'fullnameOverride', 'image',
+    'enabled', 'auth', 'credentialSecrets', 'database', 'defaultCredentialsEnabled', 'fullnameOverride', 'image',
     'ingress', 'monitoring', 'nodeSelector', 'persistence', 'podAnnotations', 'replicaCount',
     'resources', 'serverConfig', 'serviceAccount', 'tolerations',
   ])
   if (config.enabled !== undefined) bool(config.enabled, `${root}.enabled`)
+  if (config.defaultCredentialsEnabled !== undefined) bool(config.defaultCredentialsEnabled, `${root}.defaultCredentialsEnabled`)
   if (config.replicaCount !== undefined && ![0, 1].includes(config.replicaCount as number)) {
     throw new Error(`${root}.replicaCount must be 0 or 1`)
   }
@@ -223,9 +226,12 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
       existingSecret: config.database?.type === 'sqlite' ? '' : 'dstack-controller-database',
       key: 'database-url', type: 'postgresql', ...config.database,
     },
+    // IRSA must not fall back to the controller node's instance role.
+    ...(config.defaultCredentialsEnabled && config.serviceAccount?.annotations?.['eks.amazonaws.com/role-arn']
+      ? {extraEnv: [{name: 'AWS_EC2_METADATA_DISABLED', value: 'true'}]} : {}),
     ...(config.monitoring?.enabled === false ? {} : {fullnameOverride: config.fullnameOverride ?? 'dstack-controller'}),
     image: config.image ? {pullPolicy: 'IfNotPresent', tag: '', ...config.image} : {...DSTACK_CONTROLLER_IMAGE},
-    ingress: {enabled: false, ...config.ingress},
+    ingress: {className: 'alb', enabled: false, ...config.ingress},
     monitoring: {
       auth: {existingSecret: 'dstack-controller-monitoring', key: 'token', ...config.monitoring?.auth},
       enabled: config.monitoring?.enabled ?? true,
@@ -242,6 +248,7 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
     serverConfig: {existingSecret: 'dstack-controller-config', key: 'config.yml', ...config.serverConfig},
     serviceAccount: {automountServiceAccountToken: false, create: true, ...config.serviceAccount},
   }
+  reconcileDeploymentIngresses(values, 'dstack-controller', false)
   return '# Generated from dstackController; edit the source configuration, then regenerate.\n'
     + '# Independent Helm release; Secret contents and GPU fleet/task submission are managed separately.\n'
     + yaml.dump(values, {lineWidth: -1, noRefs: true, sortKeys: true})

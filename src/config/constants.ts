@@ -12,6 +12,9 @@ import {fileURLToPath} from 'node:url'
 export const SETUP_DEFAULTS_TOML_PATH = '.data/setup_defaults.toml'
 export const GENERATE_BRIDGE_INFO_FILE = '.data/GenerateBridgeInfo.toml'
 
+// Public WalletConnect client identifier already used by setup domains.
+export const DEFAULT_WALLET_CONNECT_PROJECT_ID = '14efbaafcf5232a47d93a68229b71028'
+
 // Get absolute path for setup defaults TOML
 export const getSetupDefaultsPath = (): string => path.resolve(process.cwd(), SETUP_DEFAULTS_TOML_PATH)
 

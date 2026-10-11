@@ -1,4 +1,9 @@
-# Devnet TLS and signer handoff checkpoint
+# Historical Devnet TLS and signer handoff checkpoint
+
+This September checkpoint describes the former nginx/cert-manager setup.
+Current deployments use ACM and AWS ALB; do not run the historical issuer
+commands below. Use `scrollsdk setup tls --certificate-arn "$ACM_CERTIFICATE_ARN"
+--non-interactive` on generated values instead.
 
 The instance is still the new Bridge documented in
 [the instance runbook](devnet-new-bridge-20260909.md). This is a partial handoff,

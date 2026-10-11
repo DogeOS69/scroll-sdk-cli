@@ -1,3 +1,4 @@
+import {reconcileMonitoringSlack} from './monitoring-slack.js'
 /**
  * Helm Values Generator
  *
@@ -17,22 +18,31 @@ import * as yaml from 'js-yaml'
 import type { DeploymentSpec, ImagesConfig } from '../types/deployment-spec.js'
 
 import {
+  DEFAULT_WALLET_CONNECT_PROJECT_ID,
   L1_INTERFACE_RPC_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
+import {CORE_DOCKER_DEFAULT_TAG, L2_BLOCK_TIME_MS, L2_GENESIS_GAS_LIMIT, L2_PAYLOAD_BUILDING_DURATION_MS, L2_TX_FEE_VAULT} from '../constants/deployment.js'
 import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY} from '../constants/docker.js'
+import {contractsDeploymentGasPrice} from './contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 import {
   getBridgeFeeRateSatsPerKvb,
   getDogecoinIndexerStartHeight,
   getL1GenesisBlock,
   normalizeDeploymentSpec,
+  resolveDogecoinChainId,
 } from './deployment-spec-generator.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues} from './dstack-controller-values.js'
+import {ethereumDaRuntimeEnv} from './ethereum-da-runtime.js'
+import {FRONTEND_COMMAND, FRONTEND_L1_UPSTREAM, frontendDepositEnv, reconcileFrontendConfig} from './frontend-deposit-config.js'
 import {
   resolveDogecoinKubernetesEndpoints,
 } from './kubernetes-endpoints.js'
-import {buildProofCoordinatorIngress} from './proof-coordinator-ingress.js'
+import {buildS3PublicBaseUrl} from './s3-archive.js'
+import {reconcileScrollMonitorCubesigner} from './scroll-monitor-values.js'
+import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
+import {resolveSpecProofStorage} from './spec-proof-storage.js'
 import {
   ensureWithdrawalChartWiring,
   ensureWithdrawalProofActivationSwitch,
@@ -137,7 +147,6 @@ function generateExternalSecrets(
  */
 type ServiceImageKey = keyof NonNullable<ImagesConfig['services']>
 
-const DEFAULT_L1_FEE_VAULT_ADDR = '0x1111111111111111111111111111111111111111'
 
 const ETHEREUM_DA_DEFAULTS = {
   devnet: {
@@ -284,10 +293,11 @@ function buildEthDaSubmitterS3Env(spec: DeploymentSpec): Record<string, string> 
 
 function buildEthereumDaS3BlobSourceEnv(prefix: string, spec: DeploymentSpec): Record<string, string> {
   const s3 = getEthereumDaS3ArchiveConfig(spec)
-  if (!isEthereumDaS3ArchiveEnabled(spec) || !s3.publicBaseUrl) return {}
+  const publicBaseUrl = buildS3PublicBaseUrl(s3)
+  if (!isEthereumDaS3ArchiveEnabled(spec) || !publicBaseUrl) return {}
 
   const env: Record<string, string> = {
-    [`${prefix}__BLOB_SOURCE__AWS_S3__URL`]: s3.publicBaseUrl,
+    [`${prefix}__BLOB_SOURCE__AWS_S3__URL`]: publicBaseUrl,
   }
 
   addStringEnvIfDefined(env, `${prefix}__BLOB_SOURCE__AWS_S3__KEY_PREFIX`, s3.keyPrefix)
@@ -327,9 +337,10 @@ function resolveImage(
 }
 
 /**
- * Generate all Helm values files from a DeploymentSpec
+ * Project DeploymentSpec inputs; callers merge these into committed SDK values
+ * with mergeBootstrapValues to retain runtime policy and operator overrides.
  */
-export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles {
+export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: string): GeneratedValuesFiles {
   const normalizedSpec = normalizeDeploymentSpec(spec)
   if (normalizedSpec.bridge.freshGenesisInit !== undefined && typeof normalizedSpec.bridge.freshGenesisInit !== 'boolean') {
     throw new TypeError('bridge.freshGenesisInit must be a boolean')
@@ -345,6 +356,13 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
   )) throw new Error('DeploymentSpec proof enforcement requires active real proving')
 
   const files: GeneratedValuesFiles = {}
+  if (normalizedSpec.monitoring?.slack?.enabled && !monitoringTemplate) throw new Error('Slack generation requires values/scroll-monitor-production.yaml in the output directory or the selected SDK templates')
+  if (monitoringTemplate) {
+    const monitor = yaml.load(monitoringTemplate) as Record<string, any> ?? {}
+    reconcileMonitoringSlack(monitor, normalizedSpec.monitoring)
+    reconcileScrollMonitorCubesigner(monitor, normalizedSpec.signing.cubesigner?.mode)
+    files['scroll-monitor-production.yaml'] = yaml.dump(monitor, {lineWidth: -1, noRefs: true})
+  }
 
   const dstackValues = generateDstackControllerValues(normalizedSpec.dstackController)
   if (dstackValues !== undefined) files[DSTACK_CONTROLLER_VALUES_FILE] = dstackValues
@@ -359,7 +377,7 @@ export function generateValuesFiles(spec: DeploymentSpec): GeneratedValuesFiles 
   files['l2-reth-rpc-public-production.yaml'] = generateL2RethValues(normalizedSpec, 'rpc', true)
 
   // L1 interface and private Ethereum DA devnet
-  files['l1-devnet-production.yaml'] = generateL1DevnetValues(normalizedSpec)
+  if (getEthereumDaChain(normalizedSpec) === 'devnet') files['l1-devnet-production.yaml'] = generateL1DevnetValues(normalizedSpec)
   files['l1-interface-production.yaml'] = generateL1InterfaceValues(normalizedSpec)
 
   // DA and Dogecoin
@@ -415,19 +433,18 @@ function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | '
     env: [{name: 'RUST_BACKTRACE', value: '1'}],
     ...(publicRpc && {ingress: {
       main: {
-        enabled: true, hosts: [{host: spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix'}]}], ingressClassName: 'nginx',
+        enabled: true, hosts: [{host: spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix'}]}],
         primary: true,
       },
       websocket: {
         enabled: true, hosts: [{host: spec.frontend.hosts.rpcGatewayWs || spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix', service: {port: 8546}}]}],
-        ingressClassName: 'nginx',
       },
     }}),
     externalSecrets: {},
     resources: {limits: {cpu: '8', memory: '32Gi'}, requests: {cpu: '1', memory: '2Gi'}},
     reth: {
       blobS3Url: '',
-      builderGasLimit: '10000000',
+      builderGasLimit: String(spec.genesis.gasLimit ?? L2_GENESIS_GAS_LIMIT),
       data: {accessMode: 'ReadWriteOnce', mountPath: '/data', retain: true, size: '1000Gi'},
       engineLegacyStateRoot: true,
       engineSyncAtStartup: 'true',
@@ -449,10 +466,10 @@ function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | '
       ports: {http: 8545, metrics: 6060, p2p: 30_303, ws: 8546},
       rpc: {rollupNode: role !== 'bootnode', rollupNodeAdmin: false, trustedOnly: false},
       sequencer: {
-        allowEmptyBlocks: sequencer, autoStart: true, blockTimeMs: '3000',
-        enabled: sequencer, feeRecipient: spec.contracts.overrides?.l2TxFeeVault || '0x5300000000000000000000000000000000000005',
+        allowEmptyBlocks: false, autoStart: true, blockTimeMs: String(L2_BLOCK_TIME_MS),
+        enabled: sequencer, feeRecipient: spec.contracts.overrides?.l2TxFeeVault || L2_TX_FEE_VAULT,
         l1InclusionMode: sequencer ? 'finalized:0' : 'finalized:2',
-        payloadBuildingDurationMs: '800',
+        payloadBuildingDurationMs: String(L2_PAYLOAD_BUILDING_DURATION_MS),
       },
       service: {extra: {}, p2p: {enabled: role !== 'rpc'}},
       signer: {
@@ -479,7 +496,7 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'l1Interface', {
     pullPolicy: 'Always',
     repository: 'dogeos69/l1-interface',
-    tag: 'v0.3.0-beta.5c'
+    tag: CORE_DOCKER_DEFAULT_TAG
   })
 
   const values: Record<string, any> = {
@@ -621,8 +638,7 @@ function generateL1DevnetValues(spec: DeploymentSpec): string {
             host: spec.frontend.hosts.l1Devnet,
             paths: [{ path: '/', pathType: 'Prefix' }],
           }],
-          ingressClassName: 'nginx',
-        },
+          },
       },
     })
   }
@@ -641,7 +657,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'ethDaSubmitter', {
     pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/eth-da-submitter',
-    tag: 'latest'
+    tag: CORE_DOCKER_DEFAULT_TAG
   })
 
   const values: Record<string, any> = {
@@ -649,22 +665,20 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
       env: {
         data: {
           ...buildEthDaSubmitterBatchEnv(spec),
-          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMATION_DEPTH: String(ethereumDa.confirmationDepth ?? 1),
-          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMER_POLL_INTERVAL_MS: String(ethereumDa.confirmerPollIntervalMs ?? 12_000),
-          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__FINALIZATION_DEPTH: String(ethereumDa.finalizationDepth ?? 64),
-          DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_BLOB_BASE_FEE_WEI: ethereumDa.maxBlobBaseFeeWei || '50000000000',
-          DOGEOS_ETH_DA_SUBMITTER_PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
-          ...(ethereumDa.maxFeePerGasWei ? {
-            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MAX_FEE_PER_GAS_WEI: ethereumDa.maxFeePerGasWei,
-          } : {}),
-          ...(ethereumDa.minPriorityFeeWei === undefined ? {} : {
-            DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MIN_PRIORITY_FEE_WEI: ethereumDa.minPriorityFeeWei,
+          ...ethereumDaRuntimeEnv({
+            confirmationDepth: 1,
+            confirmerPollIntervalMs: 12_000,
+            fetchLimit: 128,
+            finalizationDepth: 64,
+            l2Confirmations: 0,
+            l2RpcUrl: L2_RPC_ENDPOINT,
+            maxBlobBaseFeeWei: '50000000000',
+            submitterDbPath: '/app/data/submitter.sqlite',
+            ...ethereumDa,
           }),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: getEthereumDaSubmitterRpcUrl(spec),
           DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SIGNER_BACKEND: 'local',
-          DOGEOS_ETH_DA_SUBMITTER_L2__CONFIRMATIONS: String(ethereumDa.l2Confirmations ?? 0),
-          DOGEOS_ETH_DA_SUBMITTER_L2__FETCH_LIMIT: String(ethereumDa.fetchLimit ?? 128),
-          DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: ethereumDa.l2RpcUrl || L2_RPC_ENDPOINT,
+          DOGEOS_ETH_DA_SUBMITTER_PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
           ...(l2StartBlockNumber === undefined ? {} : {
             DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER: String(l2StartBlockNumber),
           }),
@@ -675,8 +689,6 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__LISTEN_PORT: '3004',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__SHUTDOWN_GRACE_PERIOD_SEC: '30',
           DOGEOS_ETH_DA_SUBMITTER_SERVICE__STATUS_POLL_INTERVAL_MS: '5000',
-          DOGEOS_ETH_DA_SUBMITTER_STORE__LIFECYCLE_DB_PATH: ethereumDa.lifecycleDbPath || ethereumDa.submitterDbPath || '/app/data/submitter.sqlite',
-          DOGEOS_ETH_DA_SUBMITTER_STORE__SUBMITTER_DB_PATH: ethereumDa.submitterDbPath || '/app/data/submitter.sqlite'
         },
         enabled: true
       }
@@ -811,7 +823,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'tsoService', {
     pullPolicy: 'Always',
     repository: 'dogeos69/tso-service',
-    tag: 'v0.3.0-beta.6'
+    tag: CORE_DOCKER_DEFAULT_TAG
   })
 
   const values = {
@@ -828,17 +840,11 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
     image,
     ingress: {
       main: {
-        annotations: {'nginx.ingress.kubernetes.io/proxy-body-size': '4m'},
         // Public edge: /health and the transport-signed /signer/* routes only.
         hosts: [{
           host: spec.frontend.hosts.tso || '',
           paths: [{ path: '/health', pathType: 'Exact' }, { path: '/signer', pathType: 'Prefix' }]
         }],
-        ingressClassName: 'nginx',
-        tls: spec.frontend.hosts.tso ? [{
-          hosts: [spec.frontend.hosts.tso],
-          secretName: 'tso-tls'
-        }] : []
       }
     },
     resources: {
@@ -857,6 +863,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
  * Generate Withdrawal Processor values
  */
 function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
+  const attestation = resolveSpecAttestationSigners(spec, Boolean(spec.preparation))
   const secretConfig = getSecretProviderConfig(spec)
   const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
   const ethereumDaSubmitterAddress = spec.accounts.l1CommitSender?.address
@@ -865,7 +872,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'withdrawalProcessor', {
     pullPolicy: 'Always',
     repository: 'dogeos69/withdrawal-processor',
-    tag: 'v0.3.0-beta.5c'
+    tag: spec.preparation?.bridge.production?.sequencerKms ? 'v0.3.0-beta.6-kms' : CORE_DOCKER_DEFAULT_TAG
   })
 
   const values: Record<string, any> = {
@@ -954,6 +961,10 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   }
 
   ensureWithdrawalChartWiring(values)
+  if (attestation) values.tsoSigners = attestation.external.map(signer => ({
+    delivery: 'pull', network: spec.dogecoin.network, publicKeyOverride: signer.publicKey,
+    roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: signer.transportPubkey,
+  }))
   ensureWithdrawalProofActivationSwitch(
     values,
     spec.proofTopology?.mode ?? 'disabled',
@@ -982,7 +993,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
       { property: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER' },
       { property: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS' },
       { property: 'DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY' },
-      { property: 'DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY' },
+      ...(spec.preparation?.bridge.production?.sequencerKms ? [] : [{ property: 'DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY', remoteKey: 'withdrawal-processor-secret-env', secretKey: 'DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY' }]),
     ]
   )
 
@@ -1004,7 +1015,7 @@ function generateCubesignerValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'cubesignerSigner', {
     pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/cubesigner-signer',
-    tag: 'v0.3.0-beta.2'
+    tag: CORE_DOCKER_DEFAULT_TAG
   })
 
   const values: Record<string, any> = {
@@ -1154,7 +1165,7 @@ function isNonLoopbackPlainHttp(rawUrl: string): boolean {
  * Generate Proof Coordinator values
  */
 function generateProofCoordinatorValues(spec: DeploymentSpec): string {
-  const { proofCoordinator } = spec
+  const {proofCoordinator} = resolveSpecProofStorage(spec)
   if (!proofCoordinator || proofCoordinator.enabled === false) {
     throw new Error('proofCoordinator values requested but proofCoordinator is not enabled')
   }
@@ -1175,7 +1186,7 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'proofCoordinator', {
     pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/proof-coordinator',
-    tag: '0.3.0-beta.1d-rc2'
+    tag: CORE_DOCKER_DEFAULT_TAG
   })
 
   const env: Array<Record<string, any>> = [
@@ -1221,7 +1232,7 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
     image,
     ingress: {
       main: spec.proofTopology?.mode === 'active' && spec.frontend.hosts.proofCoordinator
-        ? buildProofCoordinatorIngress(spec.frontend.hosts.proofCoordinator)
+        ? {enabled: true, hosts: [{host: spec.frontend.hosts.proofCoordinator, paths: [{path: '/', pathType: 'Prefix', service: {port: 7788}}]}]}
         : {enabled: false},
     },
     persistence: {
@@ -1309,7 +1320,7 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'feeOracle', {
     pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/fee-oracle',
-    tag: 'TODO_TAG_TO_REPLACE'
+    tag: CORE_DOCKER_DEFAULT_TAG
   })
 
   const values = {
@@ -1319,6 +1330,7 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
           DOGEOS_FEE_ORACLE_DATABASE__CONNECTION_POOL_SIZE: '10',
           DOGEOS_FEE_ORACLE_DATABASE__SQLITE_PATH: '/data/fee_oracle.db',
           ...buildFeeOracleEthereumDaEnv(spec),
+          DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE: spec.feeOracle?.contractWriteMode ?? 'live',
           DOGEOS_FEE_ORACLE_L2__CHAIN_ID: String(spec.network.l2ChainId),
           DOGEOS_FEE_ORACLE_L2__CONFIRMATIONS: '3',
           DOGEOS_FEE_ORACLE_L2__GAS_ORACLE_CONTRACT: spec.contracts.overrides?.l1GasPriceOracle || '<TODO>',
@@ -1365,19 +1377,12 @@ function generateFrontendsValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'frontends', {
     pullPolicy: 'Always',
     repository: 'dogeos69/scroll-sdk-frontends',
-    tag: '3.0.2-beta.1'
+    tag: '0.3.0-test.20261011.4'
   })
 
   const values = {
-    command: [
-      '/bin/bash',
-      '-cx',
-      `grep -v '^#' /app/conf/frontend-config | awk -F' = ' 'NF==2 {printf "export %s=\\"%s\\"\\n", $1, $2}' | sed 's/""/"/g' > /usr/share/nginx/html/.env
-cat /usr/share/nginx/html/.env
-source /usr/share/nginx/html/.env
-sed -i "s|src=\\"/runtime-env.js\\"|src=\\"/runtime-env.js?rand=$RANDOM\\"|" index.html
-exec /usr/local/bin/entrypoint.sh`
-    ],
+    command: [...FRONTEND_COMMAND],
+    env: {L1_INTERFACE_UPSTREAM: FRONTEND_L1_UPSTREAM},
     image,
     ingress: {
       main: {
@@ -1385,11 +1390,6 @@ exec /usr/local/bin/entrypoint.sh`
           host: spec.frontend.hosts.frontend,
           paths: [{ path: '/', pathType: 'Prefix' }]
         }],
-        ingressClassName: 'nginx',
-        tls: [{
-          hosts: [spec.frontend.hosts.frontend],
-          secretName: 'frontends-tls'
-        }]
       }
     },
     persistence: {
@@ -1409,28 +1409,23 @@ exec /usr/local/bin/entrypoint.sh`
  * Generate Frontends Config values (the configmap content)
  */
 function generateFrontendsConfigValues(spec: DeploymentSpec): string {
-  const values = {
-    configMaps: {
-      'frontend-config': {
-        data: {
-          'frontend-config': `# Frontend Configuration
-REACT_APP_CHAIN_ID_L1 = ${spec.network.l1ChainId}
-REACT_APP_CHAIN_ID_L2 = ${spec.network.l2ChainId}
-REACT_APP_CHAIN_NAME_L1 = ${spec.network.l1ChainName}
-REACT_APP_CHAIN_NAME_L2 = ${spec.network.l2ChainName}
-REACT_APP_ETH_SYMBOL = ${spec.network.tokenSymbol}
-REACT_APP_EXTERNAL_RPC_URI_L1 = ${spec.frontend.externalUrls.l1Rpc}
-REACT_APP_EXTERNAL_RPC_URI_L2 = ${spec.frontend.externalUrls.l2Rpc}
-REACT_APP_EXTERNAL_EXPLORER_URI_L1 = ${spec.frontend.externalUrls.l1Explorer}
-REACT_APP_EXTERNAL_EXPLORER_URI_L2 = ${spec.frontend.externalUrls.l2Explorer}
-REACT_APP_CONNECT_WALLET_PROJECT_ID = ${spec.frontend.walletConnectProjectId || ''}`
-        },
-        enabled: true
-      }
-    }
-  }
-
+  const values = {}
+  reconcileFrontendConfig(values, {
+    ...frontendDepositEnv(),
+    REACT_APP_BASE_CHAIN: spec.network.l1ChainName,
+    REACT_APP_CHAIN_ID_L1: resolveDogecoinChainId(spec.dogecoin.network),
+    REACT_APP_CHAIN_ID_L2: spec.network.l2ChainId,
+    REACT_APP_CONNECT_WALLET_PROJECT_ID: spec.frontend.walletConnectProjectId || DEFAULT_WALLET_CONNECT_PROJECT_ID,
+    REACT_APP_DOGE_NETWORK: spec.dogecoin.network,
+    REACT_APP_ETH_SYMBOL: spec.network.tokenSymbol,
+    REACT_APP_EXTERNAL_EXPLORER_URI_L1: spec.frontend.externalUrls.l1Explorer,
+    REACT_APP_EXTERNAL_EXPLORER_URI_L2: spec.frontend.externalUrls.l2Explorer,
+    REACT_APP_EXTERNAL_RPC_URI_L1: spec.frontend.externalUrls.l1Rpc,
+    REACT_APP_EXTERNAL_RPC_URI_L2: spec.frontend.externalUrls.l2Rpc,
+    REACT_APP_ROLLUP: spec.network.l2ChainName,
+  })
   return yaml.dump(values)
+
 }
 
 /**
@@ -1472,22 +1467,8 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
           { name: 'DATABASE_URL', valueFrom: { secretKeyRef: { key: 'DATABASE_URL', name: 'blockscout-secret-env' } } }
         ],
         ingress: {
-          annotations: {
-            'cert-manager.io/cluster-issuer': 'letsencrypt-prod',
-            'nginx.ingress.kubernetes.io/cors-allow-headers': 'updated-gas-oracle, Content-Type, Authorization',
-            'nginx.ingress.kubernetes.io/cors-allow-methods': 'GET, POST, OPTIONS',
-            'nginx.ingress.kubernetes.io/cors-allow-origin': `https://${spec.frontend.hosts.blockscout}`,
-            'nginx.ingress.kubernetes.io/cors-max-age': '86400',
-            'nginx.ingress.kubernetes.io/enable-cors': 'true'
-          },
-          className: 'nginx',
-          enabled: true,
           hostname: spec.frontend.hosts.blockscout,
           paths: [{ path: '/api', pathType: 'Prefix' }],
-          tls: {
-            enabled: true,
-            secretName: 'blockscout-tls'
-          }
         }
       },
       frontend: {
@@ -1507,17 +1488,8 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
           PROMETHEUS_METRICS_ENABLED: 'false'
         },
         ingress: {
-          annotations: {
-            'cert-manager.io/cluster-issuer': 'letsencrypt-prod'
-          },
-          className: 'nginx',
-          enabled: true,
           hostname: spec.frontend.hosts.blockscout,
           paths: [{ path: '/', pathType: 'Prefix' }],
-          tls: {
-            enabled: true,
-            secretName: 'blockscout-front-tls'
-          }
         }
       }
     }
@@ -1543,24 +1515,25 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
  */
 function generateContractsValues(spec: DeploymentSpec): string {
   const secretConfig = getSecretProviderConfig(spec)
+  // The deployment initializes L2SystemConfig before its final transactions.
+  // Foundry's pre-deployment gas estimate does not include that new fee floor.
+  const deploymentGasPrice = contractsDeploymentGasPrice(spec.contracts.l2BaseFeeOverheadWei)
 
   const values: Record<string, any> = {
     configMaps: {
-      env: {
+      'contracts-deployment-env': {
         data: {
-          SCROLL_CHAIN_ID_L1: String(spec.network.l1ChainId),
-          SCROLL_CHAIN_ID_L2: String(spec.network.l2ChainId),
-          SCROLL_DEPLOYMENT_SALT: spec.contracts.deploymentSalt,
-          SCROLL_L1_FEE_VAULT_ADDR: DEFAULT_L1_FEE_VAULT_ADDR,
-          SCROLL_L1_RPC: L1_INTERFACE_RPC_ENDPOINT,
-          SCROLL_L2_RPC: L2_RPC_ENDPOINT,
-          SCROLL_OWNER_ADDR: spec.accounts.owner.address
+          CHAIN_ID_L1: String(resolveDogecoinChainId(spec.dogecoin.network)),
+          CHAIN_ID_L2: String(spec.network.l2ChainId),
+          ...(deploymentGasPrice && {ETH_GAS_PRICE: deploymentGasPrice}),
+          L1_RPC_ENDPOINT: L1_INTERFACE_RPC_ENDPOINT,
+          L2_RPC_ENDPOINT
         },
         enabled: true
       }
     },
     envFrom: [
-      { configMapRef: { name: 'contracts-env' } },
+      { configMapRef: { name: 'contracts-deployment-env' } },
       { secretRef: { name: 'contracts-secret-env' } }
     ],
     image: {
@@ -1574,7 +1547,7 @@ function generateContractsValues(spec: DeploymentSpec): string {
     'contracts-secret-env',
     secretConfig,
     [
-      { property: 'SCROLL_DEPLOYER_PRIVATE_KEY', remoteKey: 'contracts-secret-env', secretKey: 'SCROLL_DEPLOYER_PRIVATE_KEY' }
+      { property: 'DEPLOYER_PRIVATE_KEY', remoteKey: 'contracts-secret-env', secretKey: 'DEPLOYER_PRIVATE_KEY' }
     ]
   )
 

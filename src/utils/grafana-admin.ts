@@ -1,5 +1,4 @@
 import {confirm, input, password} from '@inquirer/prompts'
-import * as yaml from 'js-yaml'
 import {spawnSync} from 'node:child_process'
 import {randomBytes} from 'node:crypto'
 import * as fs from 'node:fs'
@@ -107,15 +106,17 @@ export function writeGrafanaAdminSecret(config: GrafanaConfig, directory = proce
     return value
   }
 
-  const secret = {
-    apiVersion: 'v1', kind: 'Secret', metadata: {name: reference.existingSecret},
-    stringData: {
-      [reference.passwordKey]: resolve('adminPassword'),
-      [reference.userKey]: resolve('adminUser', 'admin'),
-    },
-    type: 'Opaque',
+  // Match Dogecoin's local ENV -> push-secrets -> external secret store flow.
+  const entries = {
+    [reference.passwordKey]: resolve('adminPassword'),
+    [reference.userKey]: resolve('adminUser', 'admin'),
   }
-  const file = path.join(directory, 'secrets', `${reference.existingSecret}.yaml`)
-  writeGrafanaPrivateFile(file, yaml.dump(secret, {lineWidth: -1, noRefs: true}))
+  for (const value of Object.values(entries)) {
+    if (/[\n\r]/.test(value)) throw new Error('Grafana credentials must be single-line values for secret-store upload')
+  }
+
+  const file = path.join(directory, 'secrets', `${reference.existingSecret}.env`)
+  const content = Object.entries(entries).map(([key, value]) => `${key}="${value}"\n`).join('')
+  writeGrafanaPrivateFile(file, content)
   return file
 }

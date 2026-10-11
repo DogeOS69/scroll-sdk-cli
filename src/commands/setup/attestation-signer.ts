@@ -55,7 +55,8 @@ export class AttestationSignerCommand extends Command {
 
       const byId = new Map(descriptors.map(descriptor => [descriptor.id, descriptor]))
       const requestedActive = csv(flags['active-signer-ids'])
-      const activeSignerIds = requestedActive.length > 0 ? requestedActive : descriptors.map(descriptor => descriptor.id)
+      const activeSignerIds = requestedActive.length > 0 ? requestedActive
+        : config.attestationSigner?.activeSignerIds ?? descriptors.map(descriptor => descriptor.id)
       if (new Set(activeSignerIds).size !== activeSignerIds.length || activeSignerIds.some(id => !byId.has(id))) {
         throw new Error('active-signer-ids must be unique members of the imported descriptor set')
       }

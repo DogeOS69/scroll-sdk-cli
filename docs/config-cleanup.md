@@ -9,12 +9,12 @@ For the general command sequence, see [CLI setup order](setup-order.md).
 
 ## Matching contracts release
 
-The CLI defaults to `dogeos-v0.3.0-rc.4` in
+The CLI defaults to `dogeos-v0.3.0-rc.5` in
 `dogeos69/scroll-stack-contracts`:
 
-- `gen-configs-dogeos-v0.3.0-rc.4`
-- `deploy-dogeos-v0.3.0-rc.4`
-- `verify-dogeos-v0.3.0-rc.4`
+- `gen-configs-dogeos-v0.3.0-rc.5`
+- `deploy-dogeos-v0.3.0-rc.5`
+- `verify-dogeos-v0.3.0-rc.5`
 
 `CONTRACTS_DOCKER_DEFAULT_TAG` supplies the common tag. Explicit image overrides
 and existing deployment values should be reviewed when upgrading. The original
@@ -201,11 +201,11 @@ proof reconciliation retains existing ingress annotations, ingress class and TLS
 secret while updating the primary route. Disabled mode does not newly enable
 the ingress and retains existing operator settings.
 
-`setup tls -N --cluster-issuer letsencrypt-prod` handles both services and writes
-cert-manager annotations and TLS hosts, using `tso-service-tls` and
-`proof-coordinator-tls`. It updates local values; apply the reviewed values through
-the normal Helm rollout. DNS and an ingress controller must route these public
-hostnames to the cluster. `test ingress` checks TSO at `/health` and Proof Coordinator at `/healthz`.
+`setup tls -N --certificate-arn "$ACM_CERTIFICATE_ARN"` configures enabled
+ALB ingresses in local values. It does not install cert-manager, issue
+certificates, or contact Kubernetes. Apply reviewed values through Helm.
+TSO and Coordinator require separate ALBs. `test ingress` checks TSO at
+`/health` and Coordinator at `/healthz`.
 
 ## Updating an existing deployment directory
 

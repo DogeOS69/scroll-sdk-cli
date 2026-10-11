@@ -78,7 +78,9 @@ describe('setup prep-charts Dogecoin bootstrap', () => {
     expect(generated.fullnameOverride).to.equal('custom-doge')
     expect(generated.service).to.deep.equal({port: 19_002, rpcPort: 19_001})
     expect(generated.ingress.hosts[0].host).to.equal('doge.example')
-    expect(generated.ingress.tls[0].hosts).to.deep.equal(['doge.example'])
+    expect(generated.ingress.tls).to.deep.equal([])
+    expect(generated.ingress.enabled).to.equal(false)
+    expect(generated.ingress.className).to.equal('alb')
     expect(fs.readFileSync(path.join(root, 'values/dogecoin-production.yaml'), 'utf8')).to.equal(original)
   })
 

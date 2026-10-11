@@ -8,6 +8,7 @@ import type { JsonOutputContext } from './json-output.js'
 import type { ManagedSignerConfig, ManagedSignerRole } from './signer-roles.js'
 
 import { ARCHIVE_WRITER_POLICY_NAMES, buildArchiveWriterPolicy } from './artifact-access.js'
+import {auditRolePolicies} from './iam-role-policy-audit.js'
 import {normalizeS3ArchiveKeyPrefix} from './s3-archive.js'
 
 export type KmsSignerProvisionRole = Pick<
@@ -117,8 +118,6 @@ function archiveStorePolicy(bucket: string, keyPrefix?: string): Record<string, 
   return {
     Statement: [
       {Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: `${bucketArn}/${prefix ? prefix + '/' : ''}*`},
-      {Action: ['s3:ListBucket'], Effect: 'Allow', Resource: bucketArn,
-        ...(prefix ? {Condition: {StringLike: {'s3:prefix': [prefix, prefix + '/*']}}} : {})},
     ],
     Version: '2012-10-17',
   }
@@ -157,6 +156,9 @@ export class KmsSignerProvisioner {
     const keyInfo = this.ensureKmsKey(identity.awsRegion, aliasName, input.kmsKeyId, role)
     const publicKeyBase64 = this.fetchKmsPublicKey(identity.awsRegion, keyInfo.kmsKeyIdForConfig)
     const expectedAddress = deriveEthereumAddressFromSpkiDer(publicKeyBase64)
+    if (input.roleArn) auditRolePolicies({json: args => this.awsJson(args)}, input.roleArn.split('/').at(-1) as string, {
+      Statement: [{Action: ['kms:GetPublicKey', 'kms:Sign'], Effect: 'Allow', Resource: keyInfo.keyArn}],
+    }, [], ['kms'])
     const roleArn = input.roleArn || this.ensureIamRole({
       archiveBucket: input.archive?.enabled ? input.archive.bucket : undefined,
       archiveKeyPrefix: input.archive?.keyPrefix,
@@ -178,6 +180,7 @@ export class KmsSignerProvisioner {
       if (existing.Role?.Arn !== input.roleArn) throw new Error('Existing IAM role ARN does not match the requested archive role')
       const prefix = normalizeS3ArchiveKeyPrefix(input.archive.keyPrefix)
       const suffix = keccak256(Buffer.from(`${input.archive.bucket}/${prefix}`)).slice(2, 18)
+      auditRolePolicies({json: args => this.awsJson(args)}, roleName, archiveStorePolicy(input.archive.bucket, prefix), [`eth-da-submitter-archive-${suffix}`])
       this.awsJson(['iam', 'put-role-policy', '--role-name', roleName,
         '--policy-name', `eth-da-submitter-archive-${suffix}`, '--policy-document', JSON.stringify(archiveStorePolicy(input.archive.bucket, prefix))])
       this.jsonCtx.info(`${role.service}: granted requested archive prefix on existing IAM role ${roleName}`)
@@ -218,6 +221,7 @@ export class KmsSignerProvisioner {
     if (match) {
       // Same document setup artifact-access --store da plans and checks.
       const policy = buildArchiveWriterPolicy('da', {bucket: archive.bucket, keyPrefix: archive.keyPrefix}, options.sidecarStore)
+      auditRolePolicies({json: args => this.awsJson(args)}, match[1], policy, [ARCHIVE_WRITER_POLICY_NAMES.da])
       this.awsJson(['iam', 'put-role-policy', '--role-name', match[1], '--policy-name', ARCHIVE_WRITER_POLICY_NAMES.da, '--policy-document', JSON.stringify(policy)])
       this.jsonCtx.info('Updated the archive writer policy; signing key and role trust are unchanged.')
     }
@@ -307,6 +311,14 @@ export class KmsSignerProvisioner {
     const trustPolicyDocument = JSON.stringify(trustPolicy)
     try {
       this.awsJson(['iam', 'get-role', '--role-name', options.roleName])
+      // Identity-only preparation does not know the archive/sidecar intent.
+      // Audit S3 when configuring the archive, not against an empty S3 scope.
+      auditRolePolicies({json: args => this.awsJson(args)}, options.roleName, {
+        Statement: [
+          {Action: ['kms:GetPublicKey', 'kms:Sign'], Effect: 'Allow', Resource: options.keyArn},
+          ...(options.archiveBucket ? archiveStorePolicy(options.archiveBucket, options.archiveKeyPrefix).Statement : []),
+        ],
+      }, [`${options.service}-kms-sign`, ...(options.archiveBucket ? ['eth-da-submitter-s3-archive'] : [])], options.archiveBucket ? ['s3', 'kms'] : ['kms'])
       this.awsJson([
         'iam',
         'update-assume-role-policy',

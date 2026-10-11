@@ -102,4 +102,15 @@ describe('setup prep-charts dstack controller', () => {
       process.chdir(originalDirectory)
     }
   })
+  it('preserves a certificate configured in values across dstack preparation', async () => {
+    const values = path.join(directory, 'values')
+    const certificate = 'arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000'
+    command.dstackController.ingress = {annotations: {'alb.ingress.kubernetes.io/certificate-arn': certificate}, className: 'alb', enabled: true, hosts: ['dstack.example.invalid']}
+    await command.processDstackControllerValues(values)
+    command.dstackController.ingress.annotations['alb.ingress.kubernetes.io/certificate-arn'] = '<TODO>'
+    await command.processDstackControllerValues(values)
+    expect(fs.readFileSync(path.join(values, DSTACK_CONTROLLER_VALUES_FILE), 'utf8')).to.include(certificate)
+    expect(fs.readFileSync(path.join(values, DSTACK_CONTROLLER_VALUES_FILE), 'utf8')).not.to.include('<TODO>')
+  })
+
 })

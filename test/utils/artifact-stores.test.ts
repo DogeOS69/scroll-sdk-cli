@@ -58,4 +58,12 @@ describe('deployment artifact stores', () => {
       .to.throw('proofArtifacts.s3 must define bucket, region, and a non-empty keyPrefix')
     expect(() => artifactStoreFromDogeConfig({}, 'snapshot')).to.throw('snapshots.s3 must define')
   })
+
+  it('rejects shared buckets when reading either store despite separate prefixes', () => {
+    const config = structuredClone(dogeConfig)
+    config.proofArtifacts.s3.bucket = config.ethereumDa.blobArchive.s3.bucket
+    for (const kind of ['da', 'proof'] as const) {
+      expect(() => artifactStoreFromDogeConfig(config, kind)).to.throw('separate prefixes do not provide separate buckets')
+    }
+  })
 })

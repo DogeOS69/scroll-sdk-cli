@@ -34,7 +34,6 @@ import PrepCharts, {
   migrateCubesignerPolicySdkVersion,
   migrateCubesignerRequestContract,
   reconcileGrafanaIngressHost,
-  reconcileProofCoordinatorBatchL2Rpc,
   removeConfigMapEnvKeys,
   removeEnvArrayKeys,
   removeL2GethBlobS3ExtraParams,
@@ -125,27 +124,7 @@ describe('setup prep-charts environment URL reconciliation', () => {
     expect(ingress.tls[0].hosts).to.deep.equal(['grafana.testnet.example'])
   })
 
-  it('replaces only the batch materializer L2 RPC in generated coordinator TOML', () => {
-    const source = [
-      'coordinator_id = "pc"',
-      '',
-      '  [materializer.scroll_batch.subprocess]',
-      '  binary_path = "/usr/local/bin/materializer"',
-      '  l2_rpc_url = "https://rpc.devnet.example"',
-      '',
-      '    [materializer.scroll_batch.subprocess.ethereum_da]',
-      '    l1_rpc_url = "https://l1.example"',
-      '',
-    ].join('\n')
-    const result = reconcileProofCoordinatorBatchL2Rpc(source, 'https://rpc.testnet.example')
-    expect(result.changed).to.equal(true)
-    expect(result.content).to.include('  l2_rpc_url = "https://rpc.testnet.example"')
-    expect(result.content).to.include('    l1_rpc_url = "https://l1.example"')
-    expect(reconcileProofCoordinatorBatchL2Rpc(
-      result.content,
-      'https://rpc.testnet.example',
-    ).changed).to.equal(false)
-  })
+
 })
 
 describe('setup prep-charts ConfigMap file mounts', () => {
@@ -618,7 +597,7 @@ describe('setup prep-charts eth-da-submitter updates', () => {
       configMaps: {
         env: {
           data: {
-            DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE: '122880',
+            DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE: '123011',
           },
         },
       },
@@ -629,7 +608,7 @@ describe('setup prep-charts eth-da-submitter updates', () => {
       l2RpcUrl: 'http://l2-rpc:8545',
     }))
 
-    expect(values.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE).to.equal('122880')
+    expect(values.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE).to.equal('123011')
     expect(changes.map(change => change.key)).not.to.include(
       'configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE',
     )
@@ -957,39 +936,20 @@ describe('setup prep-charts split L2 reth RPC updates', () => {
     expect(getL2RethRpcIngressConfigKey('l2-reth-rpc-public', 'websocket')).to.equal('RPC_GATEWAY_WS_HOST')
   })
 
-  it('enables public ingresses and configures the production cluster issuer', () => {
-    const values: any = {
-      ingress: {
-        main: {
-          annotations: {},
-          enabled: false,
-          hosts: [{ host: 'rpc.example.com' }],
-          tls: [{ hosts: ['stale.example.com'] }],
-        },
-        websocket: {
-          enabled: false,
-          hosts: [{ host: 'ws.rpc.example.com' }],
-          tls: [{ hosts: ['stale-ws.example.com'] }],
-        },
-      },
+  it('preserves disabled public ingress and selects ACM ALB without cert-manager TLS', () => {
+    const values: any = {ingress: {
+      main: {enabled: false, hosts: [{host: 'rpc.example.com'}], tls: [{secretName: 'old'}]},
+      websocket: {enabled: false, hosts: [{host: 'ws.example.com'}]},
+    }}
+    expect(applyL2RethRpcPublicIngressPolicy(values)).not.to.deep.equal([])
+    for (const ingress of Object.values(values.ingress) as any[]) {
+      expect(ingress.enabled).to.equal(false)
+      expect(ingress.ingressClassName).to.equal('alb')
+      expect(ingress.tls).to.equal(undefined)
+      expect(ingress.annotations['cert-manager.io/cluster-issuer']).to.equal(undefined)
     }
 
-    const changes = applyL2RethRpcPublicIngressPolicy(values)
-
-    expect(values.ingress.main.enabled).to.equal(true)
-    expect(values.ingress.websocket.enabled).to.equal(true)
-    expect(values.ingress.main.annotations['cert-manager.io/cluster-issuer']).to.equal('letsencrypt-prod')
-    expect(values.ingress.websocket.annotations['cert-manager.io/cluster-issuer']).to.equal('letsencrypt-prod')
-    expect(values.ingress.main.tls[0].hosts).to.deep.equal(['rpc.example.com'])
-    expect(values.ingress.websocket.tls[0].hosts).to.deep.equal(['ws.rpc.example.com'])
-    expect(changes.map(change => change.key)).to.have.members([
-      'ingress.main.enabled',
-      'ingress.main.annotations.cert-manager.io/cluster-issuer',
-      'ingress.main.tls[0].hosts',
-      'ingress.websocket.enabled',
-      'ingress.websocket.annotations.cert-manager.io/cluster-issuer',
-      'ingress.websocket.tls[0].hosts',
-    ])
+    expect(applyL2RethRpcPublicIngressPolicy(values)).to.deep.equal([])
   })
 
   it('applies shared runtime values to either RPC values document', () => {

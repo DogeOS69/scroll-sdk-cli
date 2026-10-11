@@ -5,8 +5,17 @@ digest-pinned deployment input and a publicly readable program bundle. It is
 designed so a new core image cut changes release inputs, not the operator's
 sequence of hand-written paths.
 
-The commands in this document do not rent a GPU, start dstack, deploy a Worker,
-change Kubernetes, or activate proof enforcement. Only the final
+For the spec-based workflow, select `preparation.proofRelease.version` and use
+`setup plan` / `setup apply`. Plan downloads the official manifest and checksum,
+verifies them, and locks the five image digests. Apply runs the producer, exports
+the coordinator materializers, checks the published CUDA Worker commitments,
+and generates the compiler identity from the actual bake. Operators do not
+construct `compiler-identity.json` or transcribe a release checksum. The commands
+below describe the individual stages for inspection or an existing deployment.
+
+The individual image/material commands below do not rent a GPU, start dstack,
+deploy a Worker, change Kubernetes, or activate proof enforcement. Among these
+individual commands, only the final
 `proof-bundle-publish --apply` command writes to S3, and it never changes the
 shared bucket policy.
 
@@ -84,10 +93,12 @@ container.
 
 ## 2. Build and validate the production Worker image
 
-The CUDA image build remains an explicit dogeos-core CI/release action. It may
-consume paid build capacity and is intentionally not dispatched by scrollsdk.
-Pass the preparation receipt's Batch and Aggregation raw commitments to the
-approved `prover-worker-cuda-image.yml` workflow.
+The selected proof release already includes the CUDA image built and checked by
+dogeos-core CI. Operators consuming that release validate its pinned image; they
+do not dispatch another CUDA build. Building a new release remains a core
+maintainer action and is intentionally not dispatched by scrollsdk. The core
+release workflow passes the producer's Batch and Aggregation raw commitments
+to `prover-worker-cuda-image.yml` before publishing the release manifest.
 
 After the image is published, validate it without a GPU:
 
@@ -205,3 +216,36 @@ After publication, render/hydrate the normal Worker handoff and run
 offer, renting a GPU, and enabling real enforcement remain separately approved
 operator actions. A label check and successful S3 publication are preparation
 evidence; they are not proof-generation acceptance.
+
+## Real published-image regression
+
+The beta.6 experiment release
+`v0.3.0-beta.6-proofexp.20261009.1` was consumed successfully on 2026-10-10.
+Its [publication workflow](https://github.com/DogeOS69/dogeos-core/actions/runs/37938858630)
+and [release manifest](https://github.com/DogeOS69/dogeos-core/releases/tag/proof-release-v0.3.0-beta.6-proofexp.20261009.1)
+pin core revision `5c2e9e05ddf4fe17e471b8a02a0cefa2e7d7dec8`.
+
+From this CLI checkout, after building it, run the consumer rehearsal with an
+existing public protocol context and SDK checkout:
+
+```bash
+node scripts/test-proof-release-e2e.mjs \
+  v0.3.0-beta.6-proofexp.20261009.1 \
+  /path/to/deployment/.data/protocol_context.json \
+  /path/to/scroll-sdk
+```
+
+The script creates a temporary deployment, verifies the official release,
+executes the actual offline producer, exports materializers, checks the CUDA
+Worker, imports real materials and compiles an installable real/enforce bundle.
+It uses nonfunctional RPC endpoints and a public fixture submitter address for
+compiler runtime inputs. It neither contacts those endpoints nor provisions a
+signer. The generated compiler identity is
+`.data/proof-materials/software/identity/worker-identity.json`.
+
+The observed run passed producer, export, Worker and material checks first;
+final compilation passed after completing the script's runtime fixture and
+reusing those generated artifacts. Its bundle revision was
+`a84a79fdcb0e05fb9ac835ba9282c0b941693af3d0f018a538f744de464685f2`.
+This is real image/configuration evidence, not GPU proof execution, S3
+publication, partner acceptance or complete deployment readiness.

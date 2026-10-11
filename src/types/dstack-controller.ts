@@ -3,6 +3,8 @@ export interface DstackControllerConfig {
   auth?: {existingSecret?: string; key?: string}
   credentialSecrets?: Array<{name: string; secretName: string}>
   database?: {existingSecret?: string; key?: string; type?: 'postgresql' | 'sqlite'}
+  /** Opt into cloud SDK credentials and automatic discovery; requires chart >= 0.1.3. */
+  defaultCredentialsEnabled?: boolean
   /** Opt in by adding this block; false skips generation without deleting existing files. */
   enabled?: boolean
   fullnameOverride?: string
