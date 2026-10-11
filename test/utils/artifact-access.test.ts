@@ -30,6 +30,8 @@ function fixture() {
   const writes: string[][] = []
   const aws = {
     json(args: string[]): any {
+      if (args[1] === 'list-role-policies') return {PolicyNames: inline ? ['eth-da-submitter-s3-archive'] : []}
+      if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
       if (args[1] === 'get-public-access-block') return {PublicAccessBlockConfiguration: structuredClone(args[0] === 's3api' && bucketBlock ? bucketBlock : {BlockPublicPolicy: block, RestrictPublicBuckets: false})}
       if (args[1] === 'get-bucket-versioning') return versioning ? {Status: versioning} : {}
       if (args[1] === 'get-role') return {Role: {Arn: roleArn}}

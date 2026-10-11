@@ -387,7 +387,7 @@ Spec projects the TSO/prover hostname and required route/backend only. Controlle
 class and annotations come from the SDK values template plus operator overrides.
 All three generation entry points (`--bootstrap`, `--with-values`, `--values-only`)
 reconcile this policy after merging: the SDK ALB default remains ALB, while an
-explicit nginx selection removes inherited ALB annotations. ALB reconciliation
+explicit nginx selection is rejected and must be migrated in operator values. ALB reconciliation
 removes stale nginx/cert-manager annotations and Kubernetes TLS Secret entries.
 No ACM, WAF, DNS or load-balancer resource is provisioned by this projection.
 
@@ -395,5 +395,6 @@ Bootstrap permits editable certificate placeholders. `setup prep-charts` and
 proof topology ingress enablement require actual ACM certificate ARNs and reject
 unresolved annotations, shared ALB groups and proof idle timeouts below 120 s.
 Set these operator values before preparing charts; WAF is optional and should
-remain absent when unused. These checks are scoped to TSO and Proof Coordinator;
-other HTTP ingress and bootnode P2P NLB policies remain separate.
+remain absent when unused. ACM/controller checks cover all generated HTTP ingress; the independent-ALB
+and proof idle-timeout checks apply to TSO/Coordinator. Bootnode P2P NLBs remain
+separate. Production TSO/WP NetworkPolicy must be enabled with resolved peers.

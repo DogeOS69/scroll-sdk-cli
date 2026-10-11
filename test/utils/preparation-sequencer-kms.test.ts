@@ -44,6 +44,12 @@ describe('production Bridge sequencer KMS', () => {
   function response(args: string[]): any {
     calls.push(args)
     switch (args[1]) {
+      case 'list-role-policies': { return {PolicyNames: []}
+      }
+
+      case 'list-attached-role-policies': { return {AttachedPolicies: []}
+      }
+
       case 'get-caller-identity': { return {Account: account}
       }
 
@@ -316,7 +322,9 @@ describe('production Bridge sequencer KMS', () => {
     expect(generated).not.to.include('DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY')
     delete spec.images
     expect((yaml.load(generateValuesFiles(spec)['withdrawal-processor-production.yaml']) as any).image.tag).to.equal('v0.3.0-beta.6-kms')
-    fs.writeFileSync(valuesFile, generated)
+    const installable = yaml.load(generated) as any
+    installable.networkPolicy = {allowFrom: {proofCoordinator: [{podSelector: {matchLabels: {app: 'proof-coordinator'}}}], tso: [{podSelector: {matchLabels: {app: 'tso'}}}]}, enabled: true}
+    fs.writeFileSync(valuesFile, yaml.dump(installable))
     const command: any = new PrepCharts([], await Config.load({root: cliRoot}))
     Object.assign(command, {
       bridgeConfig: {redeem_script_hex: '51'}, configData: {...main, ethereumDa: doge.ethereumDa},

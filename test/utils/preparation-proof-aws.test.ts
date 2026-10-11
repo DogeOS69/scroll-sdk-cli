@@ -28,6 +28,12 @@ describe('existing proof AWS discovery', () => {
       case 'describe-cluster': { return {cluster: {identity: {oidc: {issuer: `https://${issuer}`}}}}
       }
 
+      case 'list-role-policies': { return {PolicyNames: []}
+      }
+
+      case 'list-attached-role-policies': { return {AttachedPolicies: []}
+      }
+
       case 'get-open-id-connect-provider': case 'head-bucket': { return {}
  }
 
@@ -54,7 +60,7 @@ describe('existing proof AWS discovery', () => {
     expect(config.serviceAccounts.proofCoordinator.roleArn).to.equal(`arn:aws:iam::${account}:role/dogeos-test-cluster-proof-coordinator`)
     expect(config.secret.name).to.equal('scroll/test/proof-coordinator-secrets')
     expect(config.artifactReadTransport.publicStatus).to.equal('operator-managed-unverified')
-    expect(calls.map(args => args[1])).to.deep.equal(['get-caller-identity', 'describe-cluster', 'get-open-id-connect-provider', 'head-bucket', 'get-bucket-location', 'get-role', 'get-role', 'describe-secret'])
+    expect(calls.map(args => args[1])).to.deep.equal(['get-caller-identity', 'describe-cluster', 'get-open-id-connect-provider', 'head-bucket', 'get-bucket-location', 'get-role', 'list-role-policies', 'list-attached-role-policies', 'get-role', 'list-role-policies', 'list-attached-role-policies', 'describe-secret'])
   })
 
   for (const scenario of ['account', 'bucket-region', 'trust', 'secret']) {

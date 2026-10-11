@@ -20,6 +20,8 @@ describe('KMS signer provisioner', () => {
 set -euo pipefail
 printf '%s\\n' "$*" >> "$AWS_TEST_LOG"
 case "$*" in
+  "iam list-role-policies"*) printf '%s\\n' '{"PolicyNames":[]}' ;;
+  "iam list-attached-role-policies"*) printf '%s\\n' '{"AttachedPolicies":[]}' ;;
   "kms list-aliases"*) printf '%s\\n' '{"Aliases":[]}' ;;
   "kms create-key"*) printf '%s\\n' '{"KeyMetadata":{"Arn":"arn:aws:kms:us-west-2:123456789012:key/key-123","KeyId":"key-123"}}' ;;
   "kms create-alias"*) printf '%s\\n' '{}' ;;
@@ -76,7 +78,7 @@ esac
   it('uses the native normalized prefix for standalone archive grants and supports an explicit bucket-root archive', async () => {
     const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
     const calls: string[][] = []
-    provisioner.awsJson = (args: string[]) => { calls.push(args); return {} }
+    provisioner.awsJson = (args: string[]) => { if (args[1] === 'list-role-policies') return {PolicyNames: []}; if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}; calls.push(args); return {} }
     const archive = {bucket: 'shared-bucket', created: false, enabled: true, keyPrefix: ' /instances//new/ '}
     await provisioner.provisionArchive(archive, {createBucket: false, roleArn: 'arn:aws:iam::123456789012:role/archive-writer'})
     const policy = JSON.parse(calls[0][calls[0].indexOf('--policy-document') + 1])
@@ -100,13 +102,13 @@ esac
     const calls = fs.readFileSync(process.env.AWS_TEST_LOG as string, 'utf8')
     expect(calls).to.include('arn:aws:s3:::shared-bucket/instances/new/*')
     expect(calls).not.to.include('arn:aws:s3:::shared-bucket/*')
-    expect(calls).to.include('s3:ListBucket')
+    expect(calls).not.to.include('s3:ListBucket')
   })
 
   it('grants both native sidecar keys in the independent proof bucket', async () => {
     const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
     const calls: string[][] = []
-    provisioner.awsJson = (args: string[]) => { calls.push(args); return {} }
+    provisioner.awsJson = (args: string[]) => { if (args[1] === 'list-role-policies') return {PolicyNames: []}; if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}; calls.push(args); return {} }
     await provisioner.provisionArchive({bucket: 'da-bucket', created: false, enabled: true, keyPrefix: '/deployments//one/'}, {
       createBucket: false,
       roleArn: 'arn:aws:iam::123456789012:role/archive-writer',
@@ -151,6 +153,8 @@ esac
     provisioner.ensureKmsKey = () => ({keyArn: 'existing-key', keyId: 'existing-key', kmsKeyIdForConfig: 'existing-key'})
     provisioner.fetchKmsPublicKey = () => process.env.AWS_TEST_PUBLIC_KEY
     provisioner.awsJson = (args: string[]) => {
+      if (args[1] === 'list-role-policies') return {PolicyNames: []}
+      if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
       calls.push(args)
       return args[1] === 'get-role' ? {Role: {Arn: roleArn}} : {}
     }
@@ -164,6 +168,7 @@ esac
     expect(put[put.indexOf('--policy-name') + 1]).to.match(/^eth-da-submitter-archive-[\da-f]{16}$/)
     const policy = JSON.parse(put[put.indexOf('--policy-document') + 1])
     expect(policy.Statement[0].Resource).to.equal('arn:aws:s3:::shared-bucket/instances/new/*')
-    expect(policy.Statement[1].Condition.StringLike['s3:prefix']).to.deep.equal(['instances/new', 'instances/new/*'])
+    expect(policy.Statement).to.have.length(1)
+    expect(policy.Statement[0].Action).to.deep.equal(['s3:GetObject', 's3:PutObject'])
   })
 })

@@ -6,6 +6,7 @@ import type {DeploymentSpec} from '../types/deployment-spec.js'
 
 import {deriveCompressedSecp256k1PublicKeyFromSpkiDer} from './attestation-kms.js'
 import {AwsCliRunner} from './aws-cli.js'
+import {auditRolePolicies} from './iam-role-policy-audit.js'
 import {sanitizeName, truncateIamRoleName} from './kms-signer-provisioner.js'
 import {productionFeeWallet} from './preparation-fee-wallet.js'
 import {digest, localPath, writeJson} from './preparation-io.js'
@@ -106,8 +107,9 @@ export function prepareSequencerKms(root: string, spec: DeploymentSpec, runner?:
   const contains = (value: unknown, expected: string) => value === expected || Array.isArray(value) && value.includes(expected)
   const statements = Array.isArray(trust?.Statement) ? trust.Statement : [trust?.Statement]
   if (role?.Arn !== roleArn || !statements.some((s: any) => s?.Effect === 'Allow' && contains(s.Action, 'sts:AssumeRoleWithWebIdentity') && contains(s.Principal?.Federated, provider) && contains(s.Condition?.StringEquals?.[`${issuerPath}:aud`], 'sts.amazonaws.com') && contains(s.Condition?.StringEquals?.[`${issuerPath}:sub`], subject))) throw new Error('Bridge KMS IAM role does not trust the selected EKS service account')
+  const policy = {Statement: [{Action: ['kms:GetPublicKey', 'kms:Sign'], Effect: 'Allow', Resource: metadata.Arn}], Version: '2012-10-17'}
+  auditRolePolicies(aws, roleName, policy, intent.action === 'create' ? ['dogeos-bridge-sequencer-kms'] : [], ['kms'])
   if (intent.action === 'create') {
-    const policy = {Statement: [{Action: ['kms:GetPublicKey', 'kms:Sign'], Effect: 'Allow', Resource: metadata.Arn}], Version: '2012-10-17'}
     call(['iam', 'put-role-policy', '--role-name', roleName, '--policy-name', 'dogeos-bridge-sequencer-kms', '--policy-document', JSON.stringify(policy)])
   } else {
     const evaluation = call(['iam', 'simulate-principal-policy', '--policy-source-arn', roleArn, '--action-names', 'kms:GetPublicKey', 'kms:Sign', '--resource-arns', metadata.Arn]).EvaluationResults ?? []

@@ -1221,14 +1221,11 @@ Set up domain configurations for external services
 
 ```
 USAGE
-  $ scrollsdk setup domains [--cluster-issuer <value>] [--json] [--no-bootstrap-tls] [-N] [--values-dir <value>]
+  $ scrollsdk setup domains [--json] [-N] [--values-dir <value>]
 
 FLAGS
   -N, --non-interactive         Run without prompts, using config.toml values
-      --cluster-issuer=<value>  [default: letsencrypt-prod] ClusterIssuer name to write into bootstrap chart TLS
-                                annotations
       --json                    Output in JSON format (stdout for data, stderr for logs)
-      --no-bootstrap-tls        Do not write TLS settings into bootstrap dogecoin/l1-devnet values
       --values-dir=<value>      [default: values] Directory containing Helm values files to prepare for bootstrap charts
 
 DESCRIPTION
@@ -2278,41 +2275,29 @@ See [dstack controller credential setup](docs/dstack-controller.md) for destinat
 
 ## `scrollsdk setup tls`
 
-Update TLS configuration in Helm charts
+Configure ACM TLS on enabled AWS ALB ingresses in local deployment values.
+Requires an issued certificate in the ALB region covering the enabled hosts.
+No Kubernetes access, cert-manager or ingress-nginx is required.
 
-```
+```text
 USAGE
-  $ scrollsdk setup tls [--cluster-issuer <value>] [--create-issuer] [-d] [--issuer-email <value>] [--json]
-    [--kube-context <value>] [-N] [--values-dir <value>]
+  $ scrollsdk setup tls [--certificate-arn <value>] [-N] [--json] [--values-dir <value>]
 
 FLAGS
-  -N, --non-interactive         Run without prompts. Requires --cluster-issuer or (--create-issuer with --issuer-email)
-  -d, --debug                   Show debug output and confirm before making changes
-      --cluster-issuer=<value>  Specify the ClusterIssuer to use (for non-interactive mode)
-      --create-issuer           Create a letsencrypt-prod ClusterIssuer if none exists (for non-interactive mode)
-      --issuer-email=<value>    Email address for the ClusterIssuer (required with --create-issuer)
-      --json                    Output in JSON format (stdout for data, stderr for logs)
-      --kube-context=<value>    Explicit Kubernetes context for issuer checks and creation
-      --values-dir=<value>      [default: values] Directory containing the values files
-
-DESCRIPTION
-  Update TLS configuration in Helm charts
-
-EXAMPLES
-  $ scrollsdk setup tls
-
-  $ scrollsdk setup tls --debug
-
-  $ scrollsdk setup tls --values-dir custom-values
-
-  $ scrollsdk setup tls --non-interactive --cluster-issuer letsencrypt-prod
-
-  $ scrollsdk setup tls --non-interactive --json --cluster-issuer letsencrypt-prod
-
-  $ scrollsdk setup tls --non-interactive --create-issuer --issuer-email admin@example.com
+  -N, --non-interactive          Require an explicit certificate ARN without prompting
+      --certificate-arn=<value> Issued ACM certificate ARN(s), comma-separated
+      --json                    Output updated file paths as JSON
+      --values-dir=<value>      [default: values] Deployment Helm values directory
 ```
 
-_See code: [src/commands/setup/tls.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/tls.ts)_
+```bash
+scrollsdk setup tls --certificate-arn "$ACM_CERTIFICATE_ARN" --non-interactive
+```
+
+Disabled ingresses remain disabled. Set individual certificates in values when
+a single certificate set does not cover every enabled host. Review and install
+these values through the normal Helm process; DNS/controller migration is an
+operator action.
 
 ## `scrollsdk setup verify-contracts`
 

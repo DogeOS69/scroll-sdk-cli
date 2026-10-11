@@ -22,13 +22,9 @@ describe('public service ingress controller policy', () => {
     expect(input.tls).to.have.length(1)
   })
 
-  it('supports explicitly selected nginx after merging an ALB SDK template', () => {
-    const merged = yaml.load(mergeBootstrapValues(yaml.dump({ingress: {main: base()}}), '{}', yaml.dump({ingress: {main: {annotations: {'cert-manager.io/cluster-issuer': 'operator'}, ingressClassName: 'nginx', tls: [{secretName: 'operator-tls'}]}}}))) as any
-    const actual = reconcilePublicServiceIngress(merged.ingress.main, 'tso-service')
-    expect(Object.keys(actual.annotations).some(key => key.startsWith(alb))).to.equal(false)
-    expect(actual.annotations['cert-manager.io/cluster-issuer']).to.equal('operator')
-    expect(actual.annotations['nginx.ingress.kubernetes.io/proxy-body-size']).to.equal('16m')
-    expect(actual.tls).to.deep.equal([{hosts: ['tso.example.invalid'], secretName: 'operator-tls'}])
+  it('rejects explicit legacy controllers instead of silently moving an existing edge', () => {
+    const merged = yaml.load(mergeBootstrapValues(yaml.dump({ingress: {main: base()}}), '{}', yaml.dump({ingress: {main: {ingressClassName: 'nginx'}}}))) as any
+    expect(() => reconcilePublicServiceIngress(merged.ingress.main, 'tso-service')).to.throw('unsupported')
   })
 
   for (const value of [undefined, '<TODO>', '$ENV:ACM_CERTIFICATE', 'REPLACE_WITH_CERTIFICATE', 'not-an-arn']) {

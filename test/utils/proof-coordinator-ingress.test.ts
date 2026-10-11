@@ -11,7 +11,7 @@ import {buildProofCoordinatorIngress} from '../../src/utils/proof-coordinator-in
 const chart = path.resolve('../scroll-sdk/charts/proof-coordinator')
 
 describe('Proof Coordinator ingress chart contract', () => {
-  for (const controller of ['alb', 'nginx']) it(`renders a numeric backend and the selected ${controller} TLS contract`, function () {
+  for (const controller of ['alb']) it(`renders a numeric backend and the selected ${controller} TLS contract`, function () {
     if (!fs.existsSync(path.join(chart, 'charts/common-1.5.1.tgz'))) this.skip()
     try {execFileSync('helm', ['version', '--short'], {stdio: 'ignore'})} catch {this.skip()}
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proof-ingress-helm-'))

@@ -448,11 +448,10 @@ dstackController:
   enabled: true
   ingress:
     enabled: true
-    className: nginx
+    className: alb
     hosts: [dstack.example.com]
-    tls:
-      - secretName: dstack-tls
-        hosts: [dstack.example.com]
+    annotations:
+      alb.ingress.kubernetes.io/certificate-arn: REPLACE_WITH_ISSUED_ACM_CERTIFICATE_ARN
   credentialSecrets:
     - name: gcp
       secretName: dstack-gcp-credentials

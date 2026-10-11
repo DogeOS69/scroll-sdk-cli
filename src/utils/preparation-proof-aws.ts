@@ -8,10 +8,11 @@ import type {ProofTopologySpec} from '../types/proof-topology.js'
 
 import {readProofArtifactStore} from './artifact-stores.js'
 import {AwsCliRunner} from './aws-cli.js'
+import {auditRolePolicies} from './iam-role-policy-audit.js'
 import {sanitizeName, truncateIamRoleName} from './kms-signer-provisioner.js'
 import {privateWrite} from './preparation-io.js'
 import {buildProofAwsConfig, defaultProofSecretName, readOptionalProofAwsConfig, writeProofAwsConfig} from './proof-aws-config.js'
-import {proofArtifactS3Endpoint} from './proof-aws-provisioner.js'
+import {buildProofArtifactStorePolicy, proofArtifactS3Endpoint} from './proof-aws-provisioner.js'
 import {assertProofAwsMatchesTopology} from './proof-kubernetes-reconciler.js'
 
 /** Bind derived delivery facts after materialization, including on a resumed charts step. */
@@ -60,6 +61,8 @@ export function reuseProofAws(root: string, spec: DeploymentSpec, aws = new AwsC
       && contains(statement.Action, 'sts:AssumeRoleWithWebIdentity') && contains(statement.Principal?.Federated, provider)
       && contains(statement.Condition?.StringEquals?.[`${issuerPath}:aud`], 'sts.amazonaws.com')
       && contains(statement.Condition?.StringEquals?.[`${issuerPath}:sub`], `system:serviceaccount:${identity.namespace}:${serviceAccount}`))) throw new Error(`Existing proof role ${name} does not bind the selected EKS service account`)
+    const coordinator = serviceAccount === coordinatorServiceAccount
+    auditRolePolicies(aws, name, buildProofArtifactStorePolicy(shared.bucket, shared.keyPrefix, {deleteObjects: coordinator, listObjects: coordinator}))
     return role.Arn
   }
 

@@ -16,7 +16,7 @@ import {frontendDepositEnv, mergeFrontendConfigDocuments, readFrontendDepositIde
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {loadPreparationEnv} from '../../utils/preparation-io.js'
 import {resolvePreparationProofRelease} from '../../utils/preparation-release.js'
-import {reconcilePublicServiceValues} from '../../utils/public-service-ingress.js'
+import {reconcileDeploymentIngresses} from '../../utils/public-service-ingress.js'
 import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles} from '../../utils/retired-services.js'
 import {loadSdkTemplateFiles, mergeBootstrapValues, planSpecBootstrap} from '../../utils/spec-bootstrap.js'
@@ -251,7 +251,13 @@ export default class GenerateFromSpec extends Command {
       const monitorTemplate = mergeBootstrapValues(templateFiles[`values/${monitor}`], '{}', existingValues(monitor))
       valuesFiles = generateValuesFiles(spec, monitorTemplate)
       for (const [file, content] of Object.entries(valuesFiles)) {
-        if (file === monitor) continue // Monitoring reconciles its own template above.
+        if (file === monitor) {
+          const values = yaml.load(content) as Record<string, any>
+          reconcileDeploymentIngresses(values, 'scroll-monitor', false)
+          valuesFiles[file] = yaml.dump(values, {lineWidth: -1, noRefs: true})
+          continue
+        }
+
         const template = templateFiles[`values/${file}`]
         if (file === 'frontends-config.yaml') {
           const existing = existingValues(file)
@@ -277,10 +283,10 @@ export default class GenerateFromSpec extends Command {
         if (file === 'fee-oracle-production.yaml' && spec.feeOracle?.contractWriteMode !== undefined) explicitPolicies.push('configMaps.env.data.DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE')
         if (file === 'dstack-controller-production.yaml' && spec.dstackController?.resources !== undefined) explicitPolicies.push('resources')
         valuesFiles[file] = mergeBootstrapValues(template, content, existingValues(file), explicitPolicies)
-        if (file === 'tso-service-production.yaml' || file === 'proof-coordinator-production.yaml') {
+        {
           const values = yaml.load(valuesFiles[file]) as Record<string, any>
           // Bootstrap produces editable templates; preparation validates ACM inputs.
-          reconcilePublicServiceValues(values, file === 'tso-service-production.yaml' ? 'tso-service' : 'proof-coordinator', false)
+          reconcileDeploymentIngresses(values, file.replace(/-production.*$/, ''), false)
           valuesFiles[file] = yaml.dump(values, {lineWidth: -1, noRefs: true})
         }
       }
@@ -293,8 +299,9 @@ export default class GenerateFromSpec extends Command {
       })
       reconcileFrontendConfig(frontendConfig, frontendDepositEnv(identity))
       valuesFiles['frontends-config.yaml'] = yaml.dump(frontendConfig, {lineWidth: -1})
-      const frontendValues = yaml.load(valuesFiles['frontends-production.yaml'])
+      const frontendValues = yaml.load(valuesFiles['frontends-production.yaml']) as Record<string, any>
       reconcileFrontendProduction(frontendValues)
+      reconcileDeploymentIngresses(frontendValues, 'frontends', false)
       valuesFiles['frontends-production.yaml'] = yaml.dump(frontendValues, {lineWidth: -1})
       if (!identity) jsonCtx.info('Frontend deposits remain disabled until Bridge proof materials are prepared; prep-charts will fill the deployment identity.')
 

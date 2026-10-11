@@ -42,6 +42,8 @@ describe('proof-aws-provisioner values projection', () => {
     }
     const aws = {
       json(args: string[], options: AwsCliOptions = {}): any {
+        if (args[1] === 'list-role-policies') return {PolicyNames: []}
+        if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
         calls.push({ args, kind: 'json', options })
         if (args[0] === 'ec2' && args[1] === 'describe-vpc-endpoints') {
           return {
@@ -142,8 +144,13 @@ describe('proof-aws-provisioner values projection', () => {
     for (const call of rolePolicies) {
       const policyDocument = JSON.parse(call.args[call.args.indexOf('--policy-document') + 1])
       expect(policyDocument.Statement[0].Resource).to.equal('arn:aws:s3:::proof-bucket/proof-topology/*')
-      expect(policyDocument.Statement[1].Condition.StringLike['s3:prefix'])
-        .to.deep.equal(['proof-topology', 'proof-topology/*'])
+      if (call.args[call.args.indexOf('--role-name') + 1] === 'coordinator-role') {
+        expect(policyDocument.Statement[1].Condition.StringLike['s3:prefix']).to.deep.equal(['proof-topology', 'proof-topology/*'])
+        expect(policyDocument.Statement[0].Action).to.include('s3:DeleteObject')
+      } else {
+        expect(policyDocument.Statement).to.have.length(1)
+        expect(policyDocument.Statement[0].Action).to.deep.equal(['s3:GetObject', 's3:PutObject'])
+      }
     }
   })
 
@@ -151,6 +158,8 @@ describe('proof-aws-provisioner values projection', () => {
     const calls: Array<{args: string[]; kind: 'json' | 'run' | 'text'}> = []
     const aws = {
       json(args: string[]): any {
+        if (args[1] === 'list-role-policies') return {PolicyNames: []}
+        if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
         calls.push({args, kind: 'json'})
         return {}
       },
@@ -192,6 +201,8 @@ describe('proof-aws-provisioner values projection', () => {
     const calls: Array<{args: string[]; kind: 'json' | 'run' | 'text'}> = []
     const aws = {
       json(args: string[]): any {
+        if (args[1] === 'list-role-policies') return {PolicyNames: []}
+        if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
         calls.push({args, kind: 'json'})
         if (args[0] === 'eks' && args[1] === 'describe-cluster') {
           return {
@@ -335,6 +346,8 @@ describe('proof-aws-provisioner values projection', () => {
     }
     const aws = {
       json(args: string[]): any {
+        if (args[1] === 'list-role-policies') return {PolicyNames: []}
+        if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
         calls.push({args, kind: 'json'})
         return {}
       },
@@ -457,20 +470,10 @@ describe('proof-aws-provisioner values projection', () => {
           Effect: 'Allow',
           Resource: 'arn:aws:s3:::proof-bucket/proof-topology/*',
         },
-        {
-          Action: ['s3:ListBucket'],
-          Condition: {
-            StringLike: {
-              's3:prefix': ['proof-topology', 'proof-topology/*'],
-            },
-          },
-          Effect: 'Allow',
-          Resource: 'arn:aws:s3:::proof-bucket',
-        },
       ],
       Version: '2012-10-17',
     })
-    expect(buildProofArtifactStorePolicy('proof-bucket', 'proof-topology', {deleteObjects: true}))
+    expect(buildProofArtifactStorePolicy('proof-bucket', 'proof-topology', {deleteObjects: true, listObjects: true}))
       .to.deep.equal({
         Statement: [
           {
@@ -717,6 +720,8 @@ describe('proof-aws-provisioner values projection', () => {
     const calls: Array<{args: string[]; kind: 'json' | 'run' | 'text'}> = []
     const aws = {
       json(args: string[]): any {
+        if (args[1] === 'list-role-policies') return {PolicyNames: []}
+        if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
         calls.push({args, kind: 'json'})
         return {}
       },
@@ -765,6 +770,8 @@ describe('proof-aws-provisioner values projection', () => {
     const calls: Array<{args: string[]; kind: 'json' | 'run' | 'text'}> = []
     const aws = {
       json(args: string[]): any {
+        if (args[1] === 'list-role-policies') return {PolicyNames: []}
+        if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
         calls.push({args, kind: 'json'})
         return {}
       },

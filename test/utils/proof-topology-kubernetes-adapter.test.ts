@@ -203,7 +203,7 @@ describe('self-contained proof topology Kubernetes adapter', () => {
   it('enables a configured prover ingress with matching worker URL, TLS and numeric ingress port', () => {
     const file = path.join(root, 'values/proof-coordinator-production.yaml')
     const values = yaml.load(fs.readFileSync(file, 'utf8')) as any
-    values.ingress.main = {annotations: {keep: 'operator'}, enabled: false, ingressClassName: 'nginx', tls: [{hosts: ['old.example'], secretName: 'custom-proof-tls'}]}
+    values.ingress.main = {annotations: {'alb.ingress.kubernetes.io/certificate-arn': 'arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000', keep: 'operator'}, enabled: false, ingressClassName: 'alb', tls: [{hosts: ['old.example'], secretName: 'custom-proof-tls'}]}
     fs.writeFileSync(file, yaml.dump(values))
     reconcileCompiledProofTopology({
       compile(options) {
@@ -222,7 +222,7 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     const actual = yaml.load(fs.readFileSync(file, 'utf8')) as any
     expect(actual.ingress.main.enabled).to.equal(true)
     expect(actual.ingress.main.hosts[0]).to.deep.equal({host: 'proof-coordinator.example.com', paths: [{path: '/', pathType: 'Prefix', service: {port: 7788}}]})
-    expect(actual.ingress.main.tls).to.deep.equal([{hosts: ['proof-coordinator.example.com'], secretName: 'custom-proof-tls'}])
+    expect(actual.ingress.main.tls).to.equal(undefined)
     expect(actual.ingress.main.annotations.keep).to.equal('operator')
     expect(actual.service.main.ports.prover.port).to.equal(7788)
     expect(actual.service.main.ports.http.enabled).to.equal(false)

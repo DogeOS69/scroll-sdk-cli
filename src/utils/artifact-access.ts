@@ -4,6 +4,7 @@ import {isDeepStrictEqual} from 'node:util'
 import type {ArtifactStore} from './artifact-stores.js'
 import type {AwsCliRunner} from './aws-cli.js'
 
+import {auditRolePolicies} from './iam-role-policy-audit.js'
 import {DENY_INSECURE_TRANSPORT_SID, denyInsecureTransportStatement, findUnmanagedAnonymousGrant, normalizeProofBucketName, normalizeProofKeyPrefix} from './proof-aws-provisioner.js'
 
 type Document = Record<string, unknown>
@@ -290,6 +291,7 @@ export function planArtifactAccess(aws: Aws, kind: ArchiveStoreKind, store: Arti
     const name = ARCHIVE_WRITER_POLICY_NAMES[kind]
     const writerBefore = rolePolicy(aws, roleName, name)
     const writerAfter = buildArchiveWriterPolicy(kind, {bucket, keyPrefix}, options.sidecarStore)
+    if (kind === 'da') auditRolePolicies(aws, roleName, writerAfter, [name])
     plan.writerPolicy = {after: writerAfter, before: writerBefore, changed: !isDeepStrictEqual(writerBefore, writerAfter), name, roleArn: options.writerRoleArn, roleName}
   }
 
@@ -297,6 +299,7 @@ export function planArtifactAccess(aws: Aws, kind: ArchiveStoreKind, store: Arti
 }
 
 export function applyArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
+  if (plan.kind === 'da' && plan.writerPolicy) auditRolePolicies(aws, plan.writerPolicy.roleName, plan.writerPolicy.after, [plan.writerPolicy.name])
   // Re-read every mutation target before the first write. AWS bucket policy
   // replacement has no compare-and-swap; serialize policy updates operationally.
   if (!isDeepStrictEqual(bucketPolicy(aws, plan), plan.bucketPolicy.before)) throw new Error('Bucket policy changed after planning; rerun artifact-access')
@@ -333,13 +336,14 @@ export function applyArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
  * must already equal the plan, then IAM simulation confirms the writer's
  * actions. Simulation is diagnostic, not proof of live S3 access (SCP, bucket,
  * endpoint policies and KMS can still deny an actual workload request), and
- * other policies attached to the role are not audited.
+ * the DA role policy inventory is audited during planning and checked again here.
  */
 export function checkArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
   if (plan.publicAccessBlock) throw new Error('Bucket Public Access Block differs from the requested state; review the plan, then --apply')
   if (plan.bucketPolicy.changed || plan.versioning.changed) throw new Error('Bucket policy or versioning differs from the requested state; review the plan, then --apply')
   if (plan.writerPolicy?.changed) throw new Error(`Writer inline policy ${plan.writerPolicy.name} on ${plan.writerPolicy.roleName} differs from the managed policy; review the plan, then --apply`)
   if (!plan.writerPolicy) return
+  if (plan.kind === 'da') auditRolePolicies(aws, plan.writerPolicy.roleName, plan.writerPolicy.after, [plan.writerPolicy.name])
   for (const statement of statementsOf(plan.writerPolicy.after)) {
     const actions = (Array.isArray(statement.Action) ? statement.Action : [statement.Action]) as string[]
     for (const pattern of Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource]) {

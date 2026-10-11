@@ -22,6 +22,7 @@ import {
   resolveOrPrompt,
   validateAndExit,
 } from '../../utils/non-interactive.js'
+import {reconcileDeploymentIngresses, reconcilePublicServiceIngress} from '../../utils/public-service-ingress.js'
 import {stripRetiredServiceConfig} from '../../utils/retired-services.js'
 
 type EthereumDaChain = 'devnet' | 'mainnet' | 'sepolia'
@@ -32,8 +33,6 @@ interface BootstrapChartResult {
 }
 
 interface BootstrapOptions {
-  clusterIssuer: string
-  includeTls: boolean
   valuesDir: string
 }
 
@@ -45,19 +44,15 @@ interface EthereumDaConfig {
 }
 
 interface DogecoinBootstrapValuesInput {
-  clusterIssuer: string
   clusterRpcPassword: string
   clusterRpcUsername: string
   host: string
-  includeTls: boolean
   network: Network
 }
 
 interface L1DevnetBootstrapValuesInput {
   chainId: number
-  clusterIssuer: string
   host: string
-  includeTls: boolean
 }
 
 const PUBLIC_URL_PROTOCOL = 'https'
@@ -148,15 +143,13 @@ export function buildDogecoinBootstrapValues(
     retainPvcOnUninstall: true,
     size: isRegtest || isTestnet ? '50Gi' : '250Gi',
   }
-  values.ingress = buildStandardIngressValues({
+  const ingressDefaults = buildStandardIngressValues({
     chartName: 'dogecoin',
-    clusterIssuer: input.clusterIssuer,
-    extraAnnotations: {
-      'nginx.ingress.kubernetes.io/backend-protocol': 'TCP',
-    },
     host: input.host,
-    includeTls: input.includeTls,
   })
+  values.ingress = {...ingressDefaults, ...values.ingress, hosts: ingressDefaults.hosts}
+  if (values.ingress.enabled === undefined) values.ingress.enabled = false
+  reconcileDeploymentIngresses(values, 'dogecoin', false)
   values.env = upsertPlainEnvValues(values.env, {
     DOGECOIN_RPC_PASSWORD: input.clusterRpcPassword,
     DOGECOIN_RPC_USER: input.clusterRpcUsername,
@@ -184,86 +177,33 @@ export function buildL1DevnetBootstrapValues(
     chainId: input.chainId,
     networkId: input.chainId,
   }
+  const main = buildNestedIngressValues({chartName: 'l1-devnet', host: input.host})
   values.ingress = {
     ...values.ingress,
-    main: buildNestedIngressValues({
-      chartName: 'l1-devnet',
-      clusterIssuer: input.clusterIssuer,
-      host: input.host,
-      includeTls: input.includeTls,
-    }),
+    main: {...main, ...values.ingress?.main, hosts: main.hosts},
   }
 
+  reconcileDeploymentIngresses(values, 'l1-devnet', false)
   return values
 }
 
 function buildStandardIngressValues(input: {
   chartName: string
-  clusterIssuer: string
-  extraAnnotations?: Record<string, string>
   host: string
-  includeTls: boolean
 }): Record<string, any> {
-  const annotations = {
-    ...input.extraAnnotations,
-    ...(input.includeTls
-      ? {
-        'cert-manager.io/cluster-issuer': input.clusterIssuer,
-        'nginx.ingress.kubernetes.io/ssl-redirect': 'true',
-      }
-      : {}),
-  }
-  const ingress: Record<string, any> = {
-    annotations,
-    className: 'nginx',
-    enabled: true,
-    hosts: [{
-      host: input.host,
-      paths: [{ path: '/', pathType: 'Prefix' }],
-    }],
-  }
-
-  if (input.includeTls) {
-    ingress.tls = [{
-      hosts: [input.host],
-      secretName: `${input.chartName}-tls`,
-    }]
-  } else {
-    delete ingress.tls
-  }
-
-  return ingress
+  const ingress = buildNestedIngressValues(input)
+  const {ingressClassName, ...rest} = ingress
+  return {...rest, className: ingressClassName, enabled: false}
 }
 
 function buildNestedIngressValues(input: {
   chartName: string
-  clusterIssuer: string
   host: string
-  includeTls: boolean
 }): Record<string, any> {
-  const ingress: Record<string, any> = {
-    hosts: [{
-      host: input.host,
-      paths: [{ path: '/', pathType: 'Prefix' }],
-    }],
-    ingressClassName: 'nginx',
-  }
-
-  if (input.includeTls) {
-    ingress.annotations = {
-      'cert-manager.io/cluster-issuer': input.clusterIssuer,
-      'nginx.ingress.kubernetes.io/ssl-redirect': 'true',
-    }
-    ingress.tls = [{
-      hosts: [input.host],
-      secretName: `${input.chartName}-tls`,
-    }]
-  } else {
-    delete ingress.annotations
-    delete ingress.tls
-  }
-
-  return ingress
+  return reconcilePublicServiceIngress({
+    annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>'},
+    hosts: [{host: input.host, paths: [{path: '/', pathType: 'Prefix'}]}],
+  }, input.chartName, false)
 }
 
 function upsertPlainEnvValues(
@@ -299,17 +239,9 @@ export default class SetupDomains extends Command {
   ]
 
   static override flags = {
-    'cluster-issuer': Flags.string({
-      default: 'letsencrypt-prod',
-      description: 'ClusterIssuer name to write into bootstrap chart TLS annotations',
-    }),
     json: Flags.boolean({
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)',
-    }),
-    'no-bootstrap-tls': Flags.boolean({
-      default: false,
-      description: 'Do not write TLS settings into bootstrap dogecoin/l1-devnet values',
     }),
     'non-interactive': Flags.boolean({
       char: 'N',
@@ -338,8 +270,6 @@ export default class SetupDomains extends Command {
     )
     const jsonCtx = new JsonOutputContext('setup domains', flags.json)
     const bootstrapOptions: BootstrapOptions = {
-      clusterIssuer: flags['cluster-issuer'],
-      includeTls: !flags['no-bootstrap-tls'],
       valuesDir: flags['values-dir'],
     }
 
@@ -744,11 +674,9 @@ export default class SetupDomains extends Command {
       const dogecoinValues = buildDogecoinBootstrapValues(
         this.readYamlObject(dogecoinValuesPath),
         {
-          clusterIssuer: options.clusterIssuer,
           clusterRpcPassword: regtestConfig.clusterRpcPassword,
           clusterRpcUsername: regtestConfig.clusterRpcUsername,
           host: ingressConfig.DOGECOIN_HOST,
-          includeTls: options.includeTls,
           network: selectedDogeNetwork,
         }
       )
@@ -768,9 +696,7 @@ export default class SetupDomains extends Command {
         this.readYamlObject(l1DevnetValuesPath),
         {
           chainId: ethereumDaChainId,
-          clusterIssuer: options.clusterIssuer,
           host: ingressConfig.L1_DEVNET_HOST,
-          includeTls: options.includeTls,
         }
       )
       this.writeYamlObject(l1DevnetValuesPath, l1DevnetValues)

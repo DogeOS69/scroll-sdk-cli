@@ -177,13 +177,15 @@ account role) it writes the inline policy `eth-da-submitter-s3-archive`:
 `scroll-chunk-segmentation-sidecars-by-height/` namespaces. `setup artifact-access --store
 da` plans and checks the same policy. `setup proof-aws-init` grants
 `s3:GetObject` and `s3:PutObject` on the proof prefix when it creates or
-manages a proof service IAM role. The Proof Coordinator role additionally receives `s3:DeleteObject` on
+manages a proof service IAM role. The Proof Coordinator role additionally receives prefix-conditioned `s3:ListBucket` and `s3:DeleteObject` on
 that prefix so it can retire stale locator objects after an operator-requested
 global proof identity regeneration; the Withdrawal Processor role does not.
 The archive-setup writer policy grants neither ListBucket nor DeleteObject.
 With an empty DA-only prefix, its GetObject/PutObject grant covers the bucket
 root. Existing unrelated IAM policies and legacy provisioning grants are not
-removed; effective access may be broader than the generated grant. When an
+removed; the CLI inventories inline and attached policies and rejects excess
+S3 grants before reconciling or reusing the role. Resource policies and other
+AWS controls still require a runtime access check. When an
 existing role ARN is supplied or reused, verify its effective permissions
 independently.
 

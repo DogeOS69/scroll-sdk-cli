@@ -64,8 +64,8 @@ describe('spec values runtime policy across entry points', () => {
       expect(values.ingress.main.ingressClassName).to.equal('alb')
       expect(values.ingress.main.tls).to.equal(undefined)
       expect(values.ingress.main.annotations['alb.ingress.kubernetes.io/certificate-arn']).to.equal('<TODO>')
-      values.ingress.main.ingressClassName = 'nginx'
-      values.ingress.main.annotations['cert-manager.io/cluster-issuer'] = 'operator-issuer'
+      values.ingress.main.ingressClassName = 'alb'
+      values.ingress.main.annotations['alb.ingress.kubernetes.io/certificate-arn'] = 'operator-certificate'
       values.ingress.main.tls = [{secretName: 'operator-tls'}]
       fs.writeFileSync(path.join(directory, 'values', `${service}-production.yaml`), yaml.dump(values))
     }
@@ -73,10 +73,10 @@ describe('spec values runtime policy across entry points', () => {
     await run(mode, directory, '--sdk-dir', sdk, '--force')
     for (const service of ['tso-service', 'proof-coordinator']) {
       const {main} = read(directory, service).ingress
-      expect(main.ingressClassName).to.equal('nginx')
-      expect(Object.keys(main.annotations).some(key => key.startsWith('alb.'))).to.equal(false)
-      expect(main.annotations['cert-manager.io/cluster-issuer']).to.equal('operator-issuer')
-      expect(main.tls[0].secretName).to.equal('operator-tls')
+      expect(main.ingressClassName).to.equal('alb')
+      expect(Object.keys(main.annotations).some(key => key.startsWith('nginx.'))).to.equal(false)
+      expect(main.annotations['alb.ingress.kubernetes.io/certificate-arn']).to.equal('operator-certificate')
+      expect(main.tls).to.equal(undefined)
     }
   })
 

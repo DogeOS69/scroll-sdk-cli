@@ -2,6 +2,8 @@ import * as yaml from 'js-yaml'
 
 import type {DstackControllerConfig} from '../types/dstack-controller.js'
 
+import {reconcileDeploymentIngresses} from './public-service-ingress.js'
+
 export const DSTACK_MONITORING_VALUES_FILE = 'scroll-monitor-dstack.yaml'
 export const DSTACK_CONTROLLER_VALUES_FILE = 'dstack-controller-production.yaml'
 export const DSTACK_CONTROLLER_IMAGE = {
@@ -229,7 +231,7 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
       ? {extraEnv: [{name: 'AWS_EC2_METADATA_DISABLED', value: 'true'}]} : {}),
     ...(config.monitoring?.enabled === false ? {} : {fullnameOverride: config.fullnameOverride ?? 'dstack-controller'}),
     image: config.image ? {pullPolicy: 'IfNotPresent', tag: '', ...config.image} : {...DSTACK_CONTROLLER_IMAGE},
-    ingress: {enabled: false, ...config.ingress},
+    ingress: {className: 'alb', enabled: false, ...config.ingress},
     monitoring: {
       auth: {existingSecret: 'dstack-controller-monitoring', key: 'token', ...config.monitoring?.auth},
       enabled: config.monitoring?.enabled ?? true,
@@ -246,6 +248,7 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
     serverConfig: {existingSecret: 'dstack-controller-config', key: 'config.yml', ...config.serverConfig},
     serviceAccount: {automountServiceAccountToken: false, create: true, ...config.serviceAccount},
   }
+  reconcileDeploymentIngresses(values, 'dstack-controller', false)
   return '# Generated from dstackController; edit the source configuration, then regenerate.\n'
     + '# Independent Helm release; Secret contents and GPU fleet/task submission are managed separately.\n'
     + yaml.dump(values, {lineWidth: -1, noRefs: true, sortKeys: true})

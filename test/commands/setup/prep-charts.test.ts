@@ -254,17 +254,6 @@ describe('setup prep-charts retired CubeSigner instance cleanup', () => {
 })
 
 describe('setup prep-charts TSO public edge', () => {
-  it('removes inherited ALB annotations when the selected controller is nginx', () => {
-    const values: any = {ingress: {main: {
-      annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>', 'cert-manager.io/cluster-issuer': 'custom-issuer'},
-      hosts: [{host: 'tso.example.com', paths: []}],
-      ingressClassName: 'nginx',
-    }}}
-    applyTsoPublicEdgePaths(values)
-    expect(values.ingress.main.annotations).to.deep.equal({'cert-manager.io/cluster-issuer': 'custom-issuer'})
-    expect(applyTsoPublicEdgePaths(values)).to.deep.equal([])
-  })
-
   it('narrows an existing catch-all route to /health and /signer, keeping host, TLS and annotations', () => {
     const values: any = {ingress: {main: {
       annotations: {'alb.ingress.kubernetes.io/certificate-arn': 'arn:aws:acm:us-east-1:123456789012:certificate/x', 'nginx.ingress.kubernetes.io/proxy-body-size': '16m'},
@@ -947,39 +936,20 @@ describe('setup prep-charts split L2 reth RPC updates', () => {
     expect(getL2RethRpcIngressConfigKey('l2-reth-rpc-public', 'websocket')).to.equal('RPC_GATEWAY_WS_HOST')
   })
 
-  it('enables public ingresses and configures the production cluster issuer', () => {
-    const values: any = {
-      ingress: {
-        main: {
-          annotations: {},
-          enabled: false,
-          hosts: [{ host: 'rpc.example.com' }],
-          tls: [{ hosts: ['stale.example.com'] }],
-        },
-        websocket: {
-          enabled: false,
-          hosts: [{ host: 'ws.rpc.example.com' }],
-          tls: [{ hosts: ['stale-ws.example.com'] }],
-        },
-      },
+  it('preserves disabled public ingress and selects ACM ALB without cert-manager TLS', () => {
+    const values: any = {ingress: {
+      main: {enabled: false, hosts: [{host: 'rpc.example.com'}], tls: [{secretName: 'old'}]},
+      websocket: {enabled: false, hosts: [{host: 'ws.example.com'}]},
+    }}
+    expect(applyL2RethRpcPublicIngressPolicy(values)).not.to.deep.equal([])
+    for (const ingress of Object.values(values.ingress) as any[]) {
+      expect(ingress.enabled).to.equal(false)
+      expect(ingress.ingressClassName).to.equal('alb')
+      expect(ingress.tls).to.equal(undefined)
+      expect(ingress.annotations['cert-manager.io/cluster-issuer']).to.equal(undefined)
     }
 
-    const changes = applyL2RethRpcPublicIngressPolicy(values)
-
-    expect(values.ingress.main.enabled).to.equal(true)
-    expect(values.ingress.websocket.enabled).to.equal(true)
-    expect(values.ingress.main.annotations['cert-manager.io/cluster-issuer']).to.equal('letsencrypt-prod')
-    expect(values.ingress.websocket.annotations['cert-manager.io/cluster-issuer']).to.equal('letsencrypt-prod')
-    expect(values.ingress.main.tls[0].hosts).to.deep.equal(['rpc.example.com'])
-    expect(values.ingress.websocket.tls[0].hosts).to.deep.equal(['ws.rpc.example.com'])
-    expect(changes.map(change => change.key)).to.have.members([
-      'ingress.main.enabled',
-      'ingress.main.annotations.cert-manager.io/cluster-issuer',
-      'ingress.main.tls[0].hosts',
-      'ingress.websocket.enabled',
-      'ingress.websocket.annotations.cert-manager.io/cluster-issuer',
-      'ingress.websocket.tls[0].hosts',
-    ])
+    expect(applyL2RethRpcPublicIngressPolicy(values)).to.deep.equal([])
   })
 
   it('applies shared runtime values to either RPC values document', () => {

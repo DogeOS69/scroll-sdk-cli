@@ -433,16 +433,11 @@ function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | '
     env: [{name: 'RUST_BACKTRACE', value: '1'}],
     ...(publicRpc && {ingress: {
       main: {
-        annotations: {'cert-manager.io/cluster-issuer': 'letsencrypt-prod'},
-        enabled: true, hosts: [{host: spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix'}]}], ingressClassName: 'nginx',
+        enabled: true, hosts: [{host: spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix'}]}],
         primary: true,
-        tls: [{hosts: [spec.frontend.hosts.rpcGateway], secretName: 'l2-reth-rpc-public-tls'}],
       },
       websocket: {
-        annotations: {'cert-manager.io/cluster-issuer': 'letsencrypt-prod'},
         enabled: true, hosts: [{host: spec.frontend.hosts.rpcGatewayWs || spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix', service: {port: 8546}}]}],
-        ingressClassName: 'nginx',
-        tls: [{hosts: [spec.frontend.hosts.rpcGatewayWs || spec.frontend.hosts.rpcGateway], secretName: 'l2-reth-rpc-public-websocket-tls'}],
       },
     }}),
     externalSecrets: {},
@@ -643,8 +638,7 @@ function generateL1DevnetValues(spec: DeploymentSpec): string {
             host: spec.frontend.hosts.l1Devnet,
             paths: [{ path: '/', pathType: 'Prefix' }],
           }],
-          ingressClassName: 'nginx',
-        },
+          },
       },
     })
   }
@@ -1396,11 +1390,6 @@ function generateFrontendsValues(spec: DeploymentSpec): string {
           host: spec.frontend.hosts.frontend,
           paths: [{ path: '/', pathType: 'Prefix' }]
         }],
-        ingressClassName: 'nginx',
-        tls: [{
-          hosts: [spec.frontend.hosts.frontend],
-          secretName: 'frontends-tls'
-        }]
       }
     },
     persistence: {
@@ -1478,22 +1467,8 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
           { name: 'DATABASE_URL', valueFrom: { secretKeyRef: { key: 'DATABASE_URL', name: 'blockscout-secret-env' } } }
         ],
         ingress: {
-          annotations: {
-            'cert-manager.io/cluster-issuer': 'letsencrypt-prod',
-            'nginx.ingress.kubernetes.io/cors-allow-headers': 'updated-gas-oracle, Content-Type, Authorization',
-            'nginx.ingress.kubernetes.io/cors-allow-methods': 'GET, POST, OPTIONS',
-            'nginx.ingress.kubernetes.io/cors-allow-origin': `https://${spec.frontend.hosts.blockscout}`,
-            'nginx.ingress.kubernetes.io/cors-max-age': '86400',
-            'nginx.ingress.kubernetes.io/enable-cors': 'true'
-          },
-          className: 'nginx',
-          enabled: true,
           hostname: spec.frontend.hosts.blockscout,
           paths: [{ path: '/api', pathType: 'Prefix' }],
-          tls: {
-            enabled: true,
-            secretName: 'blockscout-tls'
-          }
         }
       },
       frontend: {
@@ -1513,17 +1488,8 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
           PROMETHEUS_METRICS_ENABLED: 'false'
         },
         ingress: {
-          annotations: {
-            'cert-manager.io/cluster-issuer': 'letsencrypt-prod'
-          },
-          className: 'nginx',
-          enabled: true,
           hostname: spec.frontend.hosts.blockscout,
           paths: [{ path: '/', pathType: 'Prefix' }],
-          tls: {
-            enabled: true,
-            secretName: 'blockscout-front-tls'
-          }
         }
       }
     }

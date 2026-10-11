@@ -8,6 +8,7 @@ import * as yaml from 'js-yaml'
 import { execFileSync, spawn } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import {isDeepStrictEqual} from 'node:util'
 
 import type { DogeConfig } from '../../types/doge-config.js'
 import type {DstackControllerConfig} from '../../types/dstack-controller.js'
@@ -49,11 +50,12 @@ import {
   reconcileProofKubernetes,
 } from '../../utils/proof-kubernetes-reconciler.js'
 import {proofTopologyEthereumDaBlobSource} from '../../utils/proof-topology-compiler.js'
-import {reconcilePublicServiceValues} from '../../utils/public-service-ingress.js'
+import {reconcileDeploymentIngresses} from '../../utils/public-service-ingress.js'
 import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles, stripRetiredServiceConfig} from '../../utils/retired-services.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {reconcileScrollMonitorBalances, reconcileScrollMonitorCubesigner, reconcileScrollMonitorGrafana} from '../../utils/scroll-monitor-values.js'
+import {validateServiceNetworkPolicy} from '../../utils/service-network-policy.js'
 import {
   getRequiredManagedSignerAddress,
   getRequiredManagedSignerConfig,
@@ -1049,53 +1051,9 @@ export function applyTsoPublicEdgePaths(productionYaml: any): PrepChartChange[] 
 }
 
 export function applyL2RethRpcPublicIngressPolicy(productionYaml: any): PrepChartChange[] {
-  const changes: PrepChartChange[] = []
-  const { ingress } = productionYaml
-  if (!ingress || typeof ingress !== 'object') return changes
-
-  for (const ingressKey of ['main', 'websocket']) {
-    const ingressValue = ingress[ingressKey]
-    if (!ingressValue || typeof ingressValue !== 'object') continue
-
-    if (ingressValue.enabled !== true) {
-      changes.push({
-        key: `ingress.${ingressKey}.enabled`,
-        newValue: 'true',
-        oldValue: String(ingressValue.enabled ?? 'undefined'),
-      })
-      ingressValue.enabled = true
-    }
-
-    ingressValue.annotations ||= {}
-    const issuerKey = 'cert-manager.io/cluster-issuer'
-    if (ingressValue.annotations[issuerKey] !== 'letsencrypt-prod') {
-      changes.push({
-        key: `ingress.${ingressKey}.annotations.${issuerKey}`,
-        newValue: 'letsencrypt-prod',
-        oldValue: String(ingressValue.annotations[issuerKey] ?? 'undefined'),
-      })
-      ingressValue.annotations[issuerKey] = 'letsencrypt-prod'
-    }
-
-    const ingressHosts = Array.isArray(ingressValue.hosts)
-      ? ingressValue.hosts.map((host: { host?: unknown }) => host.host).filter((host: unknown): host is string => typeof host === 'string')
-      : []
-    if (ingressHosts.length === 0 || !Array.isArray(ingressValue.tls)) continue
-
-    for (const [tlsIndex, tlsEntry] of ingressValue.tls.entries()) {
-      if (!tlsEntry || typeof tlsEntry !== 'object') continue
-      const oldTlsHosts = Array.isArray(tlsEntry.hosts) ? tlsEntry.hosts : []
-      if (JSON.stringify(oldTlsHosts) === JSON.stringify(ingressHosts)) continue
-      changes.push({
-        key: `ingress.${ingressKey}.tls[${tlsIndex}].hosts`,
-        newValue: JSON.stringify(ingressHosts),
-        oldValue: JSON.stringify(oldTlsHosts),
-      })
-      tlsEntry.hosts = ingressHosts
-    }
-  }
-
-  return changes
+  const previous = JSON.stringify(productionYaml.ingress)
+  reconcileDeploymentIngresses(productionYaml, 'l2-reth-rpc-public', false)
+  return previous === JSON.stringify(productionYaml.ingress) ? [] : [{key: 'ingress', newValue: 'ALB', oldValue: 'previous controller settings'}]
 }
 
 export function removeL2GethBlobS3ExtraParams(productionYaml: any): PrepChartChange[] {
@@ -2078,9 +2036,23 @@ export default class SetupPrepCharts extends Command {
       [DSTACK_MONITORING_VALUES_FILE, generateDstackMonitoringValues(this.dstackController)],
     ] as const
     const result = {skipped: 0, updated: 0}
-    for (const [name, content] of files) {
-      if (content === undefined) continue
+    for (const [name, generated] of files) {
+      if (generated === undefined) continue
+      let content = generated
       const target = path.join(valuesDir, name)
+      if (name === DSTACK_CONTROLLER_VALUES_FILE) {
+        const values = yaml.load(content) as any
+        const existing = fs.existsSync(target) ? yaml.load(fs.readFileSync(target, 'utf8')) as any : undefined
+        if (existing?.ingress) {
+          values.ingress.annotations = {...values.ingress.annotations, ...existing.ingress.annotations}
+          values.ingress.className = existing.ingress.className ?? values.ingress.className
+        }
+
+        reconcileDeploymentIngresses(values, 'dstack-controller')
+        // Keep the generated header and byte stability when no operator overlay applies.
+        if (!isDeepStrictEqual(values, yaml.load(content))) content = yaml.dump(values, {lineWidth: -1, noRefs: true, sortKeys: true})
+      }
+
       if ((fs.existsSync(target) && fs.readFileSync(target, 'utf8') === content)
         || (!this.nonInteractive && !await confirm({message: `Generate ${name} from dstackController configuration?`}))) {
         result.skipped++
@@ -2458,14 +2430,6 @@ export default class SetupPrepCharts extends Command {
         const blockscout_host = this.getConfigValue("ingress.BLOCKSCOUT_HOST");
         const blockscout_url = this.getConfigValue("frontend.EXTERNAL_EXPLORER_URI_L2");
 
-        if (blockscout?.ingress?.annotations?.["nginx.ingress.kubernetes.io/cors-allow-origin"]) {
-          const oldValue = blockscout.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"];
-          if (oldValue !== blockscout_url) {
-            changes.push({ key: `ingress.blockscout.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"]`, newValue: blockscout_url, oldValue });
-            blockscout.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"] = blockscout_url;
-            ingressUpdated = true;
-          }
-        }
 
         if (blockscout?.ingress?.hostname) {
           const oldValue = blockscout.ingress.hostname;
@@ -2475,19 +2439,6 @@ export default class SetupPrepCharts extends Command {
             ingressUpdated = true;
           }
         }
-
-        // only enable tls if use command scrollsdk setup tls
-        // if setup:tls was executed, all http protocol will be updated to https
-        // so we don't support disable tls for now
-
-        // if (blockscout?.ingress?.tls?.enabled) {
-        //   if (blockscout.ingress.tls.enabled !== false) {
-        //     const oldValue = blockscout.ingress.tls.enabled;
-        //     blockscout.ingress.tls.enabled = false; // Ensure it's boolean false
-        //     changes.push({ key: `ingress.blockscout.tls.enabled`, oldValue: String(oldValue), newValue: "false" });
-        //     ingressUpdated = true;
-        //   }
-        // }
 
         if (frontend?.env?.NEXT_PUBLIC_API_HOST) {
           const oldValue = frontend.env.NEXT_PUBLIC_API_HOST;
@@ -2525,14 +2476,6 @@ export default class SetupPrepCharts extends Command {
           }
         }
 
-        if (frontend?.ingress?.annotations?.["nginx.ingress.kubernetes.io/cors-allow-origin"]) {
-          const oldValue = frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"];
-          if (oldValue !== blockscout_url) {
-            changes.push({ key: `frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"]`, newValue: blockscout_url, oldValue });
-            frontend.ingress.annotations["nginx.ingress.kubernetes.io/cors-allow-origin"] = blockscout_url;
-            ingressUpdated = true;
-          }
-        }
 
         if (frontend?.ingress?.hostname) {
           const oldValue = frontend.ingress.hostname;
@@ -3368,10 +3311,11 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
-      if (chartName === 'tso-service' || chartName === 'proof-coordinator') {
-        const previous = JSON.stringify(productionYaml.ingress)
-        reconcilePublicServiceValues(productionYaml, chartName)
-        if (previous !== JSON.stringify(productionYaml.ingress)) {
+      {
+        const previous = JSON.stringify(productionYaml)
+        reconcileDeploymentIngresses(productionYaml, chartName)
+        validateServiceNetworkPolicy(productionYaml, chartName)
+        if (previous !== JSON.stringify(productionYaml)) {
           changes.push({key: 'ingress', newValue: 'reconciled controller settings', oldValue: 'previous controller settings'})
           updated = true
         }
@@ -3498,6 +3442,9 @@ export default class SetupPrepCharts extends Command {
   /** Dogecoin bootstrap shares the same reconciliation as full chart preparation. */
   private reconcileDogecoinValues(productionYaml: any): Array<{key: string; newValue: string; oldValue: string}> {
     const changes: Array<{key: string; newValue: string; oldValue: string}> = []
+    const oldIngress = JSON.stringify(productionYaml.ingress)
+    reconcileDeploymentIngresses(productionYaml, 'dogecoin')
+    if (oldIngress !== JSON.stringify(productionYaml.ingress)) changes.push({key: 'ingress', newValue: 'ALB', oldValue: 'previous controller settings'})
     const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(this.dogeConfig)
     const isRegtest = this.dogeConfig.network === "regtest";
     const isTestnet = this.dogeConfig.network === "testnet";

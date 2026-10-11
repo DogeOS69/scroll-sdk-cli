@@ -17,6 +17,16 @@ See the SDK's `examples/deployment-spec.md` for the two releases' values and
 verification. Do not rerun `install-all` to add missing releases after contracts
 have already been deployed.
 
+The SDK templates disable Grafana and Dogecoin ingress by default. The CLI
+preserves the ingress switches in deployment values; generating domains does
+not enable public access. Use local port forwarding, or explicitly configure
+and enable ingress in the relevant values file. Existing operator choices are
+preserved on regeneration. Blockscout values may be generated for later use,
+but `make install-all` does not install Blockscout or its contract verifier.
+Prepare its database and values, then opt in with `make install-blockscout`.
+These defaults come from the committed SDK revision selected by plan/bootstrap;
+an older checkout or an existing deployment retains its own settings.
+
 A complete operator starter is available in the scroll-sdk repository at
 `examples/deployment-spec.example.yaml`, with the companion guide
 `examples/deployment-spec.md`. It selects testnet production Bridge preparation
@@ -572,3 +582,32 @@ The SDK's `examples/proof-workers.md` documents the complete spec, an eight-hour
 two-worker example, ownership checks, cancellation, new sessions and outage
 boundaries. It reuses `.scrollsdk/intent.json`, existing controller credentials and
 the compiler Worker contract without additional input files or path flags.
+
+## ALB edges, internal isolation and workload permissions
+
+The current SDK examples require AWS Load Balancer Controller for HTTPS;
+ingress-nginx and cert-manager are not required. Set issued ACM certificate
+ARNs on enabled ingress values, or run `setup tls --certificate-arn
+"$ACM_CERTIFICATE_ARN" -N` for a certificate covering all enabled hosts.
+Explicit nginx selections now fail with a migration instruction. This changes
+local configuration only; migrate live DNS/controllers separately.
+
+Production TSO/WP NetworkPolicy is enabled. Before the charts stage, fill the
+TSO ALB subnet CIDRs and review same-namespace caller selectors. Empty selectors,
+unrestricted CIDRs and disabled isolation are rejected by prep-charts. Verify
+the cluster CNI enforces the rendered rules before launch. Metrics/API share a
+port, so monitoring peers also have management-port reachability.
+
+WP and eth-da-submitter receive scoped S3 GetObject/PutObject, without listing
+or deletion; Coordinator additionally receives prefix-scoped ListBucket and
+DeleteObject for recovery. Role reconciliation/reuse audits other inline and
+attached policies and rejects unprovable excess S3 grants. KMS reconciliation
+also audits signing grants against the exact key. The caller needs IAM list/get
+policy access; unknown policies are not removed automatically. This audit is
+not an effective-permission proof: resource policies, permission boundaries
+and node credentials still need a runtime check.
+
+See the SDK's `examples/network-and-iam.md` for the permission matrix, optional
+Blockscout ALB group configuration and pre-launch network checks. Anonymous
+proof reads required by signers/workers remain supported; snapshot changes
+are deferred.
