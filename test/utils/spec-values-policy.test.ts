@@ -52,6 +52,34 @@ describe('spec values runtime policy across entry points', () => {
     await Generate.run([mode, '--output', directory, '--json', ...args], cli)
   }
 
+  for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`keeps public edge controller policy in templates and operator values through ${mode}`, async () => {
+    spec.proofTopology!.mode = 'active'
+    spec.frontend.hosts = {...spec.frontend.hosts, proofCoordinator: 'proof.example.invalid'}
+    spec.proofCoordinator = {s3AuthMode: 'ambient'}
+    spec.proofArtifacts = {s3: {bucket: 'example-proof-bucket', keyPrefix: 'proofs', region: 'us-east-1'}}
+    const directory = path.join(root, 'deployment')
+    await run(mode, directory, '--sdk-dir', sdk)
+    for (const service of ['tso-service', 'proof-coordinator']) {
+      const values = read(directory, service)
+      expect(values.ingress.main.ingressClassName).to.equal('alb')
+      expect(values.ingress.main.tls).to.equal(undefined)
+      expect(values.ingress.main.annotations['alb.ingress.kubernetes.io/certificate-arn']).to.equal('<TODO>')
+      values.ingress.main.ingressClassName = 'nginx'
+      values.ingress.main.annotations['cert-manager.io/cluster-issuer'] = 'operator-issuer'
+      values.ingress.main.tls = [{secretName: 'operator-tls'}]
+      fs.writeFileSync(path.join(directory, 'values', `${service}-production.yaml`), yaml.dump(values))
+    }
+
+    await run(mode, directory, '--sdk-dir', sdk, '--force')
+    for (const service of ['tso-service', 'proof-coordinator']) {
+      const {main} = read(directory, service).ingress
+      expect(main.ingressClassName).to.equal('nginx')
+      expect(Object.keys(main.annotations).some(key => key.startsWith('alb.'))).to.equal(false)
+      expect(main.annotations['cert-manager.io/cluster-issuer']).to.equal('operator-issuer')
+      expect(main.tls[0].secretName).to.equal('operator-tls')
+    }
+  })
+
   it('uses identical committed policy in bootstrap, with-values and values-only using the conventional SDK path', async () => {
     fs.writeFileSync(path.join(sdk, 'examples/values/l2-reth-rpc-production.yaml'), 'reth: {extraArgs: []}\n')
     const outputs = []
@@ -101,6 +129,10 @@ describe('spec values runtime policy across entry points', () => {
     edit('l2-reth-rpc', values => {values.reth.extraArgs = []})
     edit('eth-da-submitter', values => {values.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_OPEN_L2_TIME = '3h'})
     edit('fee-oracle', values => {values.configMaps.env.data[feeMode] = 'dry_run'})
+    edit('frontends', values => {
+      values.env.L1_INTERFACE_UPSTREAM = 'reviewed-proxy.namespace.svc:9090'
+      values.command = ['/operator-reviewed-entrypoint.sh']
+    })
     fs.writeFileSync(path.join(directory, 'values/scroll-monitor-production.yaml'), 'grafana: {enabled: true}\n')
     spec.network.l2ChainId = 123_456
     spec.genesis.gasLimit = 40_000_000
@@ -120,6 +152,8 @@ describe('spec values runtime policy across entry points', () => {
     expect(da.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL).to.equal('https://operator-selected.example.invalid')
     expect(read(directory, 'fee-oracle').configMaps.env.data[feeMode]).to.equal('dry_run')
     expect(read(directory, 'scroll-monitor').grafana.enabled).to.equal(true)
+    expect(read(directory, 'frontends').env.L1_INTERFACE_UPSTREAM).to.equal('reviewed-proxy.namespace.svc:9090')
+    expect(read(directory, 'frontends').command).to.deep.equal(['/operator-reviewed-entrypoint.sh'])
     const before = fs.readFileSync(path.join(directory, 'values/l2-reth-sequencer-production.yaml'), 'utf8')
     spec.feeOracle = {contractWriteMode: 'live'}
     await run(mode, directory, '--force')

@@ -16,6 +16,16 @@ interface MonitorInputs {
   l2RpcUrl: unknown
 }
 
+/** Only verifier-policy deployments promise a Permitted explain-tree observation. */
+export function reconcileScrollMonitorCubesigner(values: any, resolved = 'production_verifier_key_policy'): MonitorChange[] {
+  if (!['production_verifier_key_policy', 'transport_only'].includes(resolved)) throw new Error('Invalid CubeSigner monitoring policy mode')
+  values.serviceAlerts ??= {}
+  if (values.serviceAlerts.cubesignerPolicyMode === resolved) return []
+  const change = {key: 'serviceAlerts.cubesignerPolicyMode', newValue: resolved, oldValue: String(values.serviceAlerts.cubesignerPolicyMode)}
+  values.serviceAlerts.cubesignerPolicyMode = resolved
+  return [change]
+}
+
 /** Bootstrap credentials belong in a Secret, never in Helm values or change previews. */
 export function reconcileScrollMonitorGrafana(values: any, config?: DogeConfig['grafana']): MonitorChange[] {
   if (!config) return []

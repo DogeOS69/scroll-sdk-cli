@@ -9,6 +9,37 @@ The core service image fallback is `v0.3.0-beta.6`; explicit image overrides
 remain authoritative. Contracts use `dogeos-v0.3.0-rc.5`. Reth is independently
 released and still requires an explicit approved image tag.
 
+## Frontend live deposit destination
+
+Frontend values target the dynamic deposit API in
+`dogeos69/scroll-sdk-frontends:0.3.0-test.20261011.4`. Explicit spec image overrides
+remain authoritative and must support that API.
+
+`generate-from-spec` and `prep-charts` emit one `scrollConfig` payload, removing
+the retired static `REACT_APP_DOGE_BRIDGE_ADDRESS` and any duplicate legacy
+`configMaps.frontend-config` payload. Existing unrelated frontend fields survive.
+The public configuration includes `REACT_APP_DEPOSIT_API_PATH=/api/deposit`,
+`REACT_APP_DOGEOS_PROTOCOL_ID` and `REACT_APP_DOGEOS_GENESIS_STATE_HASH`.
+
+These identities are deployment outputs, not spec inputs. The protocol ID is
+derived from local `.data/protocol_context.json`, checked against its optional
+sidecar and the selected network. The protocol genesis state hash comes from
+the selected checksum-validated proof-materials receipt and native Bridge
+manifest; it is not the EVM state root. Missing materials leave both fields empty
+and deposits disabled during initial generation. Real-proof `prep-charts` requires
+them. Receipt selection follows the explicit/spec selection or retained proof
+deployment contract, with `.data/proof-materials-v1.json` as the initial default.
+
+Production values provide the container-only `env.L1_INTERFACE_UPSTREAM`, default
+`l1-interface:9090`, and load runtime values without printing them. A reviewed
+internal `host:port` override in the values template is preserved. No public admin
+API or Ethereum RPC URL belongs in this setting. Backend readiness must enforce
+full replay validation and the frontend's synchronization contract.
+
+Bridge rotation changes the address obtained from replay, not these identity
+bindings. It does not require rewriting frontend values. See the SDK's
+`examples/frontend-configuration.md` for deployment and cache checks.
+
 ## Fresh-chain gas and fee policy
 
 ```yaml
@@ -349,3 +380,20 @@ The retired `rollup.coordinator` collection timers are ignored when importing ol
 specs and no longer appear in generated config. `rollup` is optional and only
 retains the supported verifier-digest overrides. The beta.6 native proof service
 configuration is owned by its pinned compiler and templates.
+
+### TSO and Proof Coordinator public ingress
+
+Spec projects the TSO/prover hostname and required route/backend only. Controller
+class and annotations come from the SDK values template plus operator overrides.
+All three generation entry points (`--bootstrap`, `--with-values`, `--values-only`)
+reconcile this policy after merging: the SDK ALB default remains ALB, while an
+explicit nginx selection removes inherited ALB annotations. ALB reconciliation
+removes stale nginx/cert-manager annotations and Kubernetes TLS Secret entries.
+No ACM, WAF, DNS or load-balancer resource is provisioned by this projection.
+
+Bootstrap permits editable certificate placeholders. `setup prep-charts` and
+proof topology ingress enablement require actual ACM certificate ARNs and reject
+unresolved annotations, shared ALB groups and proof idle timeouts below 120 s.
+Set these operator values before preparing charts; WAF is optional and should
+remain absent when unused. These checks are scoped to TSO and Proof Coordinator;
+other HTTP ingress and bootnode P2P NLB policies remain separate.

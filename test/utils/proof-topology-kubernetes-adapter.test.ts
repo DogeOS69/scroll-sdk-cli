@@ -203,7 +203,7 @@ describe('self-contained proof topology Kubernetes adapter', () => {
   it('enables a configured prover ingress with matching worker URL, TLS and numeric ingress port', () => {
     const file = path.join(root, 'values/proof-coordinator-production.yaml')
     const values = yaml.load(fs.readFileSync(file, 'utf8')) as any
-    values.ingress.main = {annotations: {keep: 'operator'}, enabled: false, tls: [{hosts: ['old.example'], secretName: 'custom-proof-tls'}]}
+    values.ingress.main = {annotations: {keep: 'operator'}, enabled: false, ingressClassName: 'nginx', tls: [{hosts: ['old.example'], secretName: 'custom-proof-tls'}]}
     fs.writeFileSync(file, yaml.dump(values))
     reconcileCompiledProofTopology({
       compile(options) {
@@ -226,6 +226,23 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     expect(actual.ingress.main.annotations.keep).to.equal('operator')
     expect(actual.service.main.ports.prover.port).to.equal(7788)
     expect(actual.service.main.ports.http.enabled).to.equal(false)
+  })
+
+  it('rejects an unconfigured ALB certificate before compiling or changing files', () => {
+    const file = path.join(root, 'values/proof-coordinator-production.yaml')
+    const before = fs.readFileSync(file, 'utf8')
+    expect(() => reconcileCompiledProofTopology({
+      compile() {throw new Error('compiler must not be called')},
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      coordinatorIngressHost: 'proof-coordinator.example.com',
+      deploymentDir: root,
+      deploymentName: 'test',
+      network: 'testnet',
+      proofTopology: topology('active'),
+      valuesDir: path.join(root, 'values'),
+      withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
+    })).to.throw('certificate-arn')
+    expect(fs.readFileSync(file, 'utf8')).to.equal(before)
   })
 
   it('rejects a worker URL that differs from the configured ingress before compiling or changing files', () => {

@@ -1,4 +1,5 @@
 import { Command, Flags } from '@oclif/core'
+import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
@@ -7,12 +8,15 @@ import {
   type GeneratedConfigs,
   generateAllConfigs,
   loadDeploymentSpec,
+  resolveDogecoinChainId,
   validateDeploymentSpec,
   writeGeneratedConfigs
 } from '../../utils/deployment-spec-generator.js'
+import {frontendDepositEnv, mergeFrontendConfigDocuments, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {loadPreparationEnv} from '../../utils/preparation-io.js'
 import {resolvePreparationProofRelease} from '../../utils/preparation-release.js'
+import {reconcilePublicServiceValues} from '../../utils/public-service-ingress.js'
 import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles} from '../../utils/retired-services.js'
 import {loadSdkTemplateFiles, mergeBootstrapValues, planSpecBootstrap} from '../../utils/spec-bootstrap.js'
@@ -249,11 +253,50 @@ export default class GenerateFromSpec extends Command {
       for (const [file, content] of Object.entries(valuesFiles)) {
         if (file === monitor) continue // Monitoring reconciles its own template above.
         const template = templateFiles[`values/${file}`]
+        if (file === 'frontends-config.yaml') {
+          const existing = existingValues(file)
+          valuesFiles[file] = yaml.dump(mergeFrontendConfigDocuments(
+            template ? yaml.load(template) : undefined,
+            existing ? yaml.load(existing) : undefined,
+            yaml.load(content),
+          ), {lineWidth: -1})
+          continue
+        }
+
+        if (file === 'frontends-production.yaml') {
+          // Upstream and startup command belong to the template/operator, not spec intent.
+          // Reconciliation below supplies defaults and upgrades the known SDK loader.
+          const projection = yaml.load(content) as {command?: unknown; env?: Record<string, unknown>}
+          delete projection.command
+          if (projection.env) delete projection.env.L1_INTERFACE_UPSTREAM
+          valuesFiles[file] = mergeBootstrapValues(template, yaml.dump(projection), existingValues(file))
+          continue
+        }
+
         const explicitPolicies: string[] = []
         if (file === 'fee-oracle-production.yaml' && spec.feeOracle?.contractWriteMode !== undefined) explicitPolicies.push('configMaps.env.data.DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE')
         if (file === 'dstack-controller-production.yaml' && spec.dstackController?.resources !== undefined) explicitPolicies.push('resources')
         valuesFiles[file] = mergeBootstrapValues(template, content, existingValues(file), explicitPolicies)
+        if (file === 'tso-service-production.yaml' || file === 'proof-coordinator-production.yaml') {
+          const values = yaml.load(valuesFiles[file]) as Record<string, any>
+          // Bootstrap produces editable templates; preparation validates ACM inputs.
+          reconcilePublicServiceValues(values, file === 'tso-service-production.yaml' ? 'tso-service' : 'proof-coordinator', false)
+          valuesFiles[file] = yaml.dump(values, {lineWidth: -1, noRefs: true})
+        }
       }
+
+      const frontendConfig = yaml.load(valuesFiles['frontends-config.yaml'])
+      const identity = readFrontendDepositIdentity(outputDir, {
+        dogecoinChainId: resolveDogecoinChainId(spec.dogecoin.network),
+        l2ChainId: spec.network.l2ChainId,
+        materialsReceipt: spec.preparation?.proofMaterials?.receipt,
+      })
+      reconcileFrontendConfig(frontendConfig, frontendDepositEnv(identity))
+      valuesFiles['frontends-config.yaml'] = yaml.dump(frontendConfig, {lineWidth: -1})
+      const frontendValues = yaml.load(valuesFiles['frontends-production.yaml'])
+      reconcileFrontendProduction(frontendValues)
+      valuesFiles['frontends-production.yaml'] = yaml.dump(frontendValues, {lineWidth: -1})
+      if (!identity) jsonCtx.info('Frontend deposits remain disabled until Bridge proof materials are prepared; prep-charts will fill the deployment identity.')
 
       // Bootstrap also copies values with no spec projection (for example,
       // monitoring without Slack intent). Retain operator edits to those too.

@@ -10,6 +10,7 @@ import {readProofArtifactStore} from './artifact-stores.js'
 import {AwsCliRunner} from './aws-cli.js'
 import {sanitizeName, truncateIamRoleName} from './kms-signer-provisioner.js'
 import {privateWrite} from './preparation-io.js'
+import {assertPrivateArtifactBucket, assertPrivateArtifactMode} from './private-artifact-access.js'
 import {buildProofAwsConfig, defaultProofSecretName, readOptionalProofAwsConfig, writeProofAwsConfig} from './proof-aws-config.js'
 import {proofArtifactS3Endpoint} from './proof-aws-provisioner.js'
 import {assertProofAwsMatchesTopology} from './proof-kubernetes-reconciler.js'
@@ -32,9 +33,11 @@ export function bindPreparedProofAws(root: string): void {
 /** Existing-resource mode performs metadata queries only; never creates or repairs resources. */
 export function reuseProofAws(root: string, spec: DeploymentSpec, aws = new AwsCliRunner(spec.preparation!.proofAws!.awsProfile)): void {
   const intent = spec.preparation!.proofAws!
-  if (intent.action !== 'reuse' || intent.publicReadMode === 'direct-s3') throw new Error('Read-only discovery requires reuse and an existing public delivery mode')
+  if (intent.action !== 'reuse') throw new Error('Read-only discovery requires reuse')
+  assertPrivateArtifactMode(intent.publicReadMode)
   const infrastructure = spec.infrastructure.aws!
   const shared = readProofArtifactStore(root, '.data/doge-config.toml').store
+  if (intent.publicEndpointUrl && intent.publicEndpointUrl !== proofArtifactS3Endpoint(shared.region)) throw new Error('private-s3 endpoint is derived from the artifact region')
   const identity = {artifactRegion: shared.region, awsRegion: infrastructure.region, deploymentAlias: spec.metadata.name, eksCluster: infrastructure.eksClusterName!, namespace: spec.infrastructure.namespace ?? 'default'}
   const alias = sanitizeName(identity.deploymentAlias)
   const cluster = sanitizeName(identity.eksCluster)
@@ -49,6 +52,7 @@ export function reuseProofAws(root: string, spec: DeploymentSpec, aws = new AwsC
   aws.json(['s3api', 'head-bucket', '--bucket', shared.bucket, '--expected-bucket-owner', account], {region: shared.region})
   const location = aws.json(['s3api', 'get-bucket-location', '--bucket', shared.bucket], {region: shared.region}).LocationConstraint
   if ((location === 'EU' ? 'eu-west-1' : location || 'us-east-1') !== shared.region) throw new Error('Existing proof bucket region differs from the declared store')
+  assertPrivateArtifactBucket(aws, shared.bucket, shared.region)
   const coordinatorServiceAccount = spec.proofCoordinator?.serviceAccount?.name ?? 'proof-coordinator'
   const withdrawalServiceAccount = spec.proofCoordinator?.withdrawalProcessorServiceAccount?.name ?? 'withdrawal-processor'
   const getRole = (name: string, serviceAccount: string): string => {
@@ -69,7 +73,7 @@ export function reuseProofAws(root: string, spec: DeploymentSpec, aws = new AwsC
   const secret = aws.json(['secretsmanager', 'describe-secret', '--secret-id', secretName], options)
   if (secret.Name !== secretName || secret.DeletedDate || !Object.values(secret.VersionIdsToStages ?? {}).some(stages => Array.isArray(stages) && stages.includes('AWSCURRENT'))) throw new Error('Existing proof token secret must have a current version and must not be scheduled for deletion')
   writeProofAwsConfig(path.join(root, '.data/proof-aws.json'), buildProofAwsConfig({coordinatorServiceAccount, identity, keyPrefix: shared.keyPrefix, provisioned: {
-    artifactReadTransport: {publicEndpointUrl: intent.publicReadMode === 'existing-gateway' ? intent.publicEndpointUrl! : proofArtifactS3Endpoint(shared.region), publicReadMode: intent.publicReadMode, publicStatus: 'operator-managed-unverified'},
+    artifactReadTransport: {publicEndpointUrl: proofArtifactS3Endpoint(shared.region), publicReadMode: intent.publicReadMode, publicStatus: 'configured-unverified'},
     bucket: shared.bucket, bucketCreated: false, coordinatorRoleArn, secretAction: 'reused', secretName, withdrawalRoleArn,
   }, withdrawalServiceAccount}))
 }

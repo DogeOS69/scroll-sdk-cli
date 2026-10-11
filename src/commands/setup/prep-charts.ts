@@ -26,6 +26,7 @@ import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues, validateDstackControllerConfig} from '../../utils/dstack-controller-values.js'
 import {readDstackControllerConfig} from '../../utils/dstack-database.js'
 import {type EthereumDaRuntimeConfig, ethereumDaRuntimeEnv} from '../../utils/ethereum-da-runtime.js'
+import {frontendDepositEnv, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
 import { GenerationTransaction } from '../../utils/generation-transaction.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
@@ -48,10 +49,11 @@ import {
   reconcileProofKubernetes,
 } from '../../utils/proof-kubernetes-reconciler.js'
 import {proofTopologyEthereumDaBlobSource} from '../../utils/proof-topology-compiler.js'
+import {reconcilePublicServiceValues} from '../../utils/public-service-ingress.js'
 import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles, stripRetiredServiceConfig} from '../../utils/retired-services.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
-import {reconcileScrollMonitorBalances, reconcileScrollMonitorGrafana} from '../../utils/scroll-monitor-values.js'
+import {reconcileScrollMonitorBalances, reconcileScrollMonitorCubesigner, reconcileScrollMonitorGrafana} from '../../utils/scroll-monitor-values.js'
 import {
   getRequiredManagedSignerAddress,
   getRequiredManagedSignerConfig,
@@ -120,7 +122,7 @@ export function applyFrontendEnvFileValues(
   source: string,
   updates: Record<string, unknown>,
 ): {changed: boolean; content: string} {
-  const cleaned = source.replaceAll(/^\s*(?:REACT_APP_BRIDGE_API_URI|REACT_APP_ROLLUPSCAN_API_URI|ADMIN_SYSTEM_DASHBOARD_URI)\s*=.*(?:\r?\n|$)/gm, '')
+  const cleaned = source.replaceAll(/^\s*(?:REACT_APP_DOGE_BRIDGE_ADDRESS|REACT_APP_BRIDGE_API_URI|REACT_APP_ROLLUPSCAN_API_URI|ADMIN_SYSTEM_DASHBOARD_URI)\s*=.*(?:\r?\n|$)/gm, '')
   const lines = cleaned.replaceAll('\r\n', '\n').split('\n')
   while (lines.at(-1) === '') lines.pop()
   const positions = new Map<string, number>()
@@ -1034,15 +1036,6 @@ export function applyTsoPublicEdgePaths(productionYaml: any): PrepChartChange[] 
   if (!ingresses || typeof ingresses !== 'object') return changes
   for (const [ingressKey, ingress] of Object.entries(ingresses as Record<string, any>)) {
     if (!ingress || typeof ingress !== 'object' || ingress.enabled === false || !Array.isArray(ingress.hosts)) continue
-    // Spec selects ingress-nginx; example ALB settings must not survive the merge.
-    if (ingress.ingressClassName === 'nginx' && ingress.annotations) {
-      for (const key of Object.keys(ingress.annotations)) {
-        if (!key.startsWith('alb.ingress.kubernetes.io/')) continue
-        changes.push({key: `ingress.${ingressKey}.annotations.${key}`, newValue: 'removed', oldValue: String(ingress.annotations[key])})
-        delete ingress.annotations[key]
-      }
-    }
-
     for (const [index, host] of ingress.hosts.entries()) {
       if (!host || typeof host !== 'object') continue
       const desired = TSO_PUBLIC_INGRESS_PATHS.map(entry => ({...entry}))
@@ -2023,15 +2016,19 @@ export default class SetupPrepCharts extends Command {
             skippedCharts++;
           }
         }
-      } else {
+      } else if (chartName !== 'frontends') {
         this.jsonCtx.info(`No changes needed in ${file}`);
         skippedCharts++;
       }
 
       if (chartName === "frontends") {
-        const {scrollConfig} = yamlData;
-        const generatedFrontendConfig =
-          yamlData.configMaps?.['frontend-config']?.data?.['frontend-config']
+        const identity = readFrontendDepositIdentity(process.cwd(), {
+          dogecoinChainId: Number(this.getConfigValue('general.CHAIN_ID_L1')) || undefined,
+          l2ChainId: Number(this.getConfigValue('general.CHAIN_ID_L2')) || undefined,
+          materialsReceipt: this.flags?.['proof-materials-receipt'],
+          required: this.proofIntent?.intent.generation === 'real',
+        })
+        if (!identity) this.jsonCtx.addWarning('Frontend deposits are disabled: prepare Bridge proof materials and rerun prep-charts to populate deployment identity.')
 
         let sharedHost = this.getConfigValue("ingress.FRONTEND_HOST")
         if (sharedHost && sharedHost.startsWith("portal.")) {
@@ -2041,8 +2038,10 @@ export default class SetupPrepCharts extends Command {
         const configUpdates = {
           ...buildFrontendExternalUrlUpdates(key => this.getConfigValue(key)),
           REACT_APP_BASE_CHAIN: this.getConfigValue("general.CHAIN_NAME_L1"),
+          REACT_APP_CHAIN_ID_L1: this.getConfigValue('general.CHAIN_ID_L1'),
+          REACT_APP_CHAIN_ID_L2: this.getConfigValue('general.CHAIN_ID_L2'),
           REACT_APP_CONNECT_WALLET_PROJECT_ID: this.getConfigValue("frontend.CONNECT_WALLET_PROJECT_ID"),
-          REACT_APP_DOGE_BRIDGE_ADDRESS: this.withdrawalProcessorConfig.bridge_address,
+          ...frontendDepositEnv(identity),
           REACT_APP_DOGE_NETWORK: this.dogeConfig.network,
           REACT_APP_ETH_SYMBOL: this.getConfigValue("frontend.ETH_SYMBOL"),
           REACT_APP_EXTERNAL_DOCS_URI: this.formatUrl("https://docs." + sharedHost, "/en/home"),
@@ -2056,92 +2055,16 @@ export default class SetupPrepCharts extends Command {
           REACT_APP_ROLLUP: this.getConfigValue("general.CHAIN_NAME_L2"),
         };
 
-        if (typeof scrollConfig !== 'string') {
-          if (typeof generatedFrontendConfig !== 'string') {
-            this.jsonCtx.info(`No supported frontend config payload found in ${file}`)
-            skippedCharts++
-            continue
-          }
-
-          const generatedUpdate = applyFrontendEnvFileValues(
-            generatedFrontendConfig,
-            configUpdates,
-          )
-          if (!generatedUpdate.changed) {
-            this.jsonCtx.info(`No changes needed in ${file}`)
-            skippedCharts++
-            continue
-          }
-
-          yamlData.configMaps['frontend-config'].data['frontend-config'] =
-            generatedUpdate.content
+        const before = JSON.stringify(yamlData)
+        reconcileFrontendConfig(yamlData, configUpdates)
+        if (JSON.stringify(yamlData) === before) {
+          skippedCharts++
+        } else if (this.nonInteractive || await confirm({message: `Apply frontend configuration changes to ${file}?`})) {
           fs.writeFileSync(yamlPath, yaml.dump(yamlData, YAML_DUMP_OPTIONS))
           this.jsonCtx.logSuccess(`Updated ${file}`)
           updatedCharts++
-          continue
-        }
-
-        let scrollConfigToml: any = {};
-        try {
-          scrollConfigToml = toml.parse(scrollConfig);
-        } catch (error: any) {
-          this.error(chalk.red("scrollConfig failed: " + error.message));
-        }
-
-        const cleanedScrollConfig = stripRetiredServiceConfig(scrollConfigToml)
-        let updated = JSON.stringify(cleanedScrollConfig) !== JSON.stringify(scrollConfigToml)
-        scrollConfigToml = cleanedScrollConfig
-        for (const [key, newValue] of Object.entries(configUpdates)) {
-          // Minimal/spec-first deployments may not have post-contract or
-          // optional frontend fields yet. Omit unresolved inputs instead of
-          // inserting `undefined`, which @iarna/toml cannot serialize.
-          if (newValue === undefined || newValue === null) continue
-
-          const oldValue = scrollConfigToml[key];
-          if (!oldValue || oldValue !== newValue) {
-            changes.push({ key, newValue: String(newValue), oldValue: String(oldValue || '') });
-            scrollConfigToml[key] = newValue;
-            updated = true;
-          }
-        }
-
-        if (updated) {
-          if (!this.jsonMode) {
-            this.log(`\nFor ${chalk.cyan(file)}:`);
-            this.log(chalk.green('Changes:'));
-            for (const change of changes) {
-              this.log(`  ${chalk.yellow(change.key)}: ${change.oldValue} -> ${change.newValue}`);
-            }
-          }
-
-          let shouldUpdate = this.nonInteractive
-          if (!this.nonInteractive) {
-            shouldUpdate = await confirm({ message: `Do you want to apply these changes to ${file}?` });
-          }
-
-          if (shouldUpdate) {
-            // Preserve the literal block scalar format for scrollConfig
-            const tomlConfigString = toml.stringify(scrollConfigToml);
-
-            // Manually construct to get exact "scrollConfig: |" format (not "scrollConfig: |-")
-            const indentedToml = tomlConfigString
-              .trim()
-              .split('\n')
-              .map(line => `  ${line}`)
-              .join('\n');
-
-            const yamlContent = `scrollConfig: |\n${indentedToml}\n`;
-
-            fs.writeFileSync(yamlPath, yamlContent);
-            this.jsonCtx.logSuccess(`Updated ${file}`);
-            updatedCharts++;
-          } else {
-            this.jsonCtx.info(`Skipped updating ${file}`);
-            skippedCharts++;
-          }
         } else {
-          this.jsonCtx.info(`No changes needed in ${file}`);
-          skippedCharts++;
+          skippedCharts++
         }
       }
     }
@@ -2296,6 +2219,15 @@ export default class SetupPrepCharts extends Command {
       let updated = JSON.stringify(productionYaml) !== JSON.stringify(originalProductionYaml)
       const changes: Array<{ key: string; newValue: string; oldValue: string }> = []
       if (updated) changes.push({key: 'retired indexer settings', newValue: 'removed', oldValue: 'present'})
+
+      if (chartName === 'frontends') {
+        const before = JSON.stringify(productionYaml)
+        reconcileFrontendProduction(productionYaml)
+        if (JSON.stringify(productionYaml) !== before) {
+          updated = true
+          changes.push({key: 'frontend deposit proxy', newValue: 'configured internal upstream and runtime loader', oldValue: 'previous configuration'})
+        }
+      }
 
       if (chartName === 'contracts') {
         const env = productionYaml.configMaps?.['contracts-deployment-env']?.data
@@ -2702,6 +2634,9 @@ export default class SetupPrepCharts extends Command {
       }
 
       if (chartName === 'scroll-monitor') {
+        const policyChanges = reconcileScrollMonitorCubesigner(productionYaml, this.dogeConfig.cubesigner?.mode)
+        changes.push(...policyChanges)
+        if (policyChanges.length > 0) updated = true
         const grafanaChanges = [...reconcileScrollMonitorGrafana(productionYaml, this.dogeConfig.grafana), ...reconcileMonitoringSlack(productionYaml, this.dogeConfig.monitoring)]
         changes.push(...grafanaChanges)
         if (grafanaChanges.length > 0) updated = true
@@ -3297,26 +3232,6 @@ export default class SetupPrepCharts extends Command {
           updated = true
         }
 
-        // Old deployment files may predate the chart default. Fill only a
-        // missing annotation; explicit operator limits (including null to
-        // remove the Helm default) and other annotations remain untouched.
-        const ingress = productionYaml.ingress?.main
-        const ingressClass = ingress?.ingressClassName
-          ?? ingress?.annotations?.['kubernetes.io/ingress.class']
-          ?? 'nginx'
-        if (ingress?.enabled !== false && ingressClass === 'nginx') {
-          productionYaml.ingress ??= {}
-          productionYaml.ingress.main ??= {}
-          const {main} = productionYaml.ingress
-          main.annotations ??= {}
-          const key = 'nginx.ingress.kubernetes.io/proxy-body-size'
-          if (!Object.hasOwn(main.annotations, key)) {
-            main.annotations[key] = '4m'
-            changes.push({key: `ingress.main.annotations.${key}`, newValue: '4m', oldValue: 'undefined'})
-            updated = true
-          }
-        }
-
         if (!productionYaml.env) {
           this.error(`${chartName}: env not found in config`);
         }
@@ -3450,6 +3365,15 @@ export default class SetupPrepCharts extends Command {
           productionYaml.config.externalRpcUriL2 = l2RpcEndpoint;
           updated = true;
           changes.push({ key: `config.externalRpcUriL2`, newValue: l2RpcEndpoint, oldValue: productionYaml.config?.externalRpcUriL2 });
+        }
+      }
+
+      if (chartName === 'tso-service' || chartName === 'proof-coordinator') {
+        const previous = JSON.stringify(productionYaml.ingress)
+        reconcilePublicServiceValues(productionYaml, chartName)
+        if (previous !== JSON.stringify(productionYaml.ingress)) {
+          changes.push({key: 'ingress', newValue: 'reconciled controller settings', oldValue: 'previous controller settings'})
+          updated = true
         }
       }
 

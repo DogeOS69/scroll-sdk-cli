@@ -5,6 +5,7 @@ import * as path from 'node:path'
 import {readProofArtifactStore} from '../../utils/artifact-stores.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { sanitizeName, truncateIamRoleName } from '../../utils/kms-signer-provisioner.js'
+import {assertPrivateArtifactMode} from '../../utils/private-artifact-access.js'
 import {
   DEFAULT_PROOF_AWS_CONFIG,
   LEGACY_SHARED_PROOF_SECRET_NAME,
@@ -17,7 +18,6 @@ import {ProofAwsDiscovery} from '../../utils/proof-aws-discovery.js'
 import {
   type ProofArtifactPublicReadMode,
   ProofAwsProvisioner,
-  normalizeProofArtifactPublicEndpoint,
   normalizeProofBucketName,
   proofArtifactS3Endpoint,
 } from '../../utils/proof-aws-provisioner.js'
@@ -30,18 +30,16 @@ export default class ProofAwsInit extends Command {
   static override description = 'Provision proof AWS resources and persist their non-secret resource facts as prep-charts input; never read or modify generated Helm values'
 
   static override examples = [
-    '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --aws-region us-west-2 --eks-cluster dogeos-testnet --deployment-alias dev0829 --artifact-public-read-mode direct-s3 -N',
-    '<%= config.bin %> <%= command.id %> --artifact-public-read-mode existing-public-s3',
-    '<%= config.bin %> <%= command.id %> --artifact-public-read-mode existing-gateway --artifact-public-endpoint-url https://objects.example.com',
+    '<%= config.bin %> <%= command.id %> --aws-region us-west-2 --eks-cluster dogeos-testnet --deployment-alias dev0829 -N --yes',
     '<%= config.bin %> <%= command.id %> --rotate-tokens',
   ]
 
   static override flags = {
-    'artifact-public-endpoint-url': Flags.string({description: 'Existing credential-free HTTPS S3-compatible gateway root; used only with --artifact-public-read-mode=existing-gateway'}),
+    'artifact-public-endpoint-url': Flags.string({description: 'Consistency assertion for the regional S3 endpoint; does not enable public access'}),
     'artifact-public-read-mode': Flags.string({
-      description: 'Public proof artifact delivery: CLI-managed direct S3, operator-managed public S3, or an existing HTTPS gateway backed by private S3',
-      options: ['direct-s3', 'existing-public-s3', 'existing-gateway'],
+      default: 'private-s3',
+      description: 'Proof artifacts stay private; only the DA blob bucket may allow anonymous Internet reads',
+      options: ['private-s3'],
     }),
     'artifact-read-route-table-id': Flags.string({description: 'Advanced override: EKS subnet route table to associate with the S3 gateway endpoint (repeatable; normally auto-discovered)', multiple: true}),
     'artifact-read-vpc-endpoint-id': Flags.string({description: 'Advanced override: existing S3 Gateway VPC endpoint (normally auto-discovered or created)'}),
@@ -105,57 +103,13 @@ export default class ProofAwsInit extends Command {
         throw new Error(`--bucket must match canonical proofArtifacts.s3.bucket (${bucket})`)
       }
 
-      const defaultPublicReadMode = existing?.artifactReadTransport.publicReadMode || 'direct-s3'
-      let publicReadMode = flags['artifact-public-read-mode'] as ProofArtifactPublicReadMode | undefined
-      if (!publicReadMode) {
-        if (nonInteractive) {
-          if (!existing?.artifactReadTransport.publicReadMode) {
-            throw new Error(
-              '--artifact-public-read-mode is required in non-interactive mode when .data/proof-aws.json does not provide it',
-            )
-          }
-
-          publicReadMode = existing.artifactReadTransport.publicReadMode
-        } else {
-          publicReadMode = await select({
-            choices: [
-              {
-                name: 'Direct AWS S3 (public GetObject only for required DA/proof object paths)',
-                value: 'direct-s3',
-              },
-              {
-                name: 'Existing public AWS S3 policy (preserve bucket-wide public access settings)',
-                value: 'existing-public-s3',
-              },
-              {
-                name: 'Existing HTTPS gateway (keep the S3 bucket private)',
-                value: 'existing-gateway',
-              },
-            ],
-            default: defaultPublicReadMode,
-            message: 'How should external Workers and partner Signers read proof artifacts?',
-          }) as ProofArtifactPublicReadMode
-        }
+      const publicReadMode = flags['artifact-public-read-mode'] as ProofArtifactPublicReadMode
+      assertPrivateArtifactMode(publicReadMode)
+      const publicEndpointUrl = proofArtifactS3Endpoint(shared.region)
+      if (flags['artifact-public-endpoint-url'] && flags['artifact-public-endpoint-url'] !== publicEndpointUrl) {
+        throw new Error('private-s3 uses the regional S3 endpoint; anonymous gateways are not supported')
       }
 
-      if (publicReadMode !== 'existing-gateway' && flags['artifact-public-endpoint-url']) {
-        throw new Error(
-          '--artifact-public-endpoint-url is only valid with --artifact-public-read-mode=existing-gateway',
-        )
-      }
-
-      const publicEndpointUrl = publicReadMode === 'direct-s3' || publicReadMode === 'existing-public-s3'
-        ? proofArtifactS3Endpoint(shared.region)
-        : await this.resolveRequiredValue({
-            defaultValue: existing?.artifactReadTransport.publicReadMode === 'existing-gateway'
-              ? existing.artifactReadTransport.publicEndpointUrl
-              : undefined,
-            explicit: flags['artifact-public-endpoint-url'],
-            flag: '--artifact-public-endpoint-url',
-            message: 'Enter the existing credential-free HTTPS S3-compatible gateway root:',
-            nonInteractive,
-            normalize: normalizeProofArtifactPublicEndpoint,
-          })
       const advancedVpcInput = Boolean(
         flags['artifact-read-vpc-endpoint-id']
         || flags['artifact-read-route-table-id']?.length,
@@ -220,7 +174,7 @@ export default class ProofAwsInit extends Command {
         this.log(`  EKS/secret AWS region:  ${awsRegion}`)
         this.log(`  EKS cluster/namespace:  ${eksCluster} / ${namespace}`)
         this.log(`  Proof artifact store:  s3://${bucket}/${keyPrefix} (${shared.region})`)
-        this.log(`  Public read mode:       ${publicReadMode}`)
+        this.log(`  Artifact access mode:       ${publicReadMode}`)
         this.log(`  External artifact endpoint: ${publicEndpointUrl}`)
         this.log(`  EKS S3 Gateway route:   ${configureVpcEndpoint ? 'auto-discover/create' : 'skipped'}`)
         this.log(`  Secrets Manager secret: ${secretName}`)
@@ -288,15 +242,7 @@ export default class ProofAwsInit extends Command {
         `${configResult.changed ? 'Wrote' : 'Reused'} proof AWS config ${configResult.filePath}; `
         + PROOF_AWS_INIT_NEXT_STEPS,
       )
-      const publicReadWarning = result.artifactReadTransport.publicReadMode === 'direct-s3'
-        ? `anonymous GetObject is limited to the required external-consumer object paths under s3://${result.bucket}/${keyPrefix}; the segmentation sidecar, list/write/delete remain private, but external reachability is unverified`
-        : result.artifactReadTransport.publicReadMode === 'existing-public-s3'
-          ? `the existing public S3 policy and bucket-wide Public Access Block settings are operator-managed and were preserved; verify anonymous GetObject for every required external-consumer path under s3://${result.bucket}/${keyPrefix}`
-          : `the partner/external artifact route ${result.artifactReadTransport.publicEndpointUrl} is operator-managed and unverified; scroll-sdk-cli did not change the bucket policy or Public Access Block settings`
-      json.addWarning(publicReadWarning)
-      json.addWarning(
-        'require HTTP 200 for one exact digest-scoped object from every external Worker and partner Signer network before activation',
-      )
+      json.addWarning('Proof and witness objects are private. beta.6/beta.6a signers and Worker GETs use unsigned HTTPS, so they need a controlled private network read path; IRSA on EKS does not authorize external readers. Validate exact-object reads from every consumer before activation. Do not make the proof bucket public to bypass a failed read.')
       if (result.artifactReadTransport.vpcEndpoint) {
         json.addWarning(
           `EKS-internal credential-free GET and route-table associations are configured via ${result.artifactReadTransport.vpcEndpoint.vpcEndpointId}, but this private route does not provide access to partner Signers outside the VPC`,

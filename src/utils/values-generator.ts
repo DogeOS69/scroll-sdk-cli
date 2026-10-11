@@ -35,11 +35,12 @@ import {
 } from './deployment-spec-generator.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues} from './dstack-controller-values.js'
 import {ethereumDaRuntimeEnv} from './ethereum-da-runtime.js'
+import {FRONTEND_COMMAND, FRONTEND_L1_UPSTREAM, frontendDepositEnv, reconcileFrontendConfig} from './frontend-deposit-config.js'
 import {
   resolveDogecoinKubernetesEndpoints,
 } from './kubernetes-endpoints.js'
-import {buildProofCoordinatorIngress} from './proof-coordinator-ingress.js'
 import {buildS3PublicBaseUrl} from './s3-archive.js'
+import {reconcileScrollMonitorCubesigner} from './scroll-monitor-values.js'
 import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
 import {
@@ -356,9 +357,10 @@ export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: s
 
   const files: GeneratedValuesFiles = {}
   if (normalizedSpec.monitoring?.slack?.enabled && !monitoringTemplate) throw new Error('Slack generation requires values/scroll-monitor-production.yaml in the output directory or the selected SDK templates')
-  if (normalizedSpec.monitoring?.slack && monitoringTemplate) {
+  if (monitoringTemplate) {
     const monitor = yaml.load(monitoringTemplate) as Record<string, any> ?? {}
     reconcileMonitoringSlack(monitor, normalizedSpec.monitoring)
+    reconcileScrollMonitorCubesigner(monitor, normalizedSpec.signing.cubesigner?.mode)
     files['scroll-monitor-production.yaml'] = yaml.dump(monitor, {lineWidth: -1, noRefs: true})
   }
 
@@ -844,17 +846,11 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
     image,
     ingress: {
       main: {
-        annotations: {'cert-manager.io/cluster-issuer': 'letsencrypt-prod', 'nginx.ingress.kubernetes.io/proxy-body-size': '4m'},
         // Public edge: /health and the transport-signed /signer/* routes only.
         hosts: [{
           host: spec.frontend.hosts.tso || '',
           paths: [{ path: '/health', pathType: 'Exact' }, { path: '/signer', pathType: 'Prefix' }]
         }],
-        ingressClassName: 'nginx',
-        tls: spec.frontend.hosts.tso ? [{
-          hosts: [spec.frontend.hosts.tso],
-          secretName: 'tso-service-tls'
-        }] : []
       }
     },
     resources: {
@@ -1242,7 +1238,7 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
     image,
     ingress: {
       main: spec.proofTopology?.mode === 'active' && spec.frontend.hosts.proofCoordinator
-        ? buildProofCoordinatorIngress(spec.frontend.hosts.proofCoordinator)
+        ? {enabled: true, hosts: [{host: spec.frontend.hosts.proofCoordinator, paths: [{path: '/', pathType: 'Prefix', service: {port: 7788}}]}]}
         : {enabled: false},
     },
     persistence: {
@@ -1387,19 +1383,12 @@ function generateFrontendsValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'frontends', {
     pullPolicy: 'Always',
     repository: 'dogeos69/scroll-sdk-frontends',
-    tag: '3.0.2-beta.1'
+    tag: '0.3.0-test.20261011.4'
   })
 
   const values = {
-    command: [
-      '/bin/bash',
-      '-cx',
-      `grep -v '^#' /app/conf/frontend-config | awk -F' = ' 'NF==2 {printf "export %s=\\"%s\\"\\n", $1, $2}' | sed 's/""/"/g' > /usr/share/nginx/html/.env
-cat /usr/share/nginx/html/.env
-source /usr/share/nginx/html/.env
-sed -i "s|src=\\"/runtime-env.js\\"|src=\\"/runtime-env.js?rand=$RANDOM\\"|" index.html
-exec /usr/local/bin/entrypoint.sh`
-    ],
+    command: [...FRONTEND_COMMAND],
+    env: {L1_INTERFACE_UPSTREAM: FRONTEND_L1_UPSTREAM},
     image,
     ingress: {
       main: {
@@ -1431,28 +1420,23 @@ exec /usr/local/bin/entrypoint.sh`
  * Generate Frontends Config values (the configmap content)
  */
 function generateFrontendsConfigValues(spec: DeploymentSpec): string {
-  const values = {
-    configMaps: {
-      'frontend-config': {
-        data: {
-          'frontend-config': `# Frontend Configuration
-REACT_APP_CHAIN_ID_L1 = ${resolveDogecoinChainId(spec.dogecoin.network)}
-REACT_APP_CHAIN_ID_L2 = ${spec.network.l2ChainId}
-REACT_APP_CHAIN_NAME_L1 = ${spec.network.l1ChainName}
-REACT_APP_CHAIN_NAME_L2 = ${spec.network.l2ChainName}
-REACT_APP_ETH_SYMBOL = ${spec.network.tokenSymbol}
-REACT_APP_EXTERNAL_RPC_URI_L1 = ${spec.frontend.externalUrls.l1Rpc}
-REACT_APP_EXTERNAL_RPC_URI_L2 = ${spec.frontend.externalUrls.l2Rpc}
-REACT_APP_EXTERNAL_EXPLORER_URI_L1 = ${spec.frontend.externalUrls.l1Explorer}
-REACT_APP_EXTERNAL_EXPLORER_URI_L2 = ${spec.frontend.externalUrls.l2Explorer}
-REACT_APP_CONNECT_WALLET_PROJECT_ID = ${spec.frontend.walletConnectProjectId || DEFAULT_WALLET_CONNECT_PROJECT_ID}`
-        },
-        enabled: true
-      }
-    }
-  }
-
+  const values = {}
+  reconcileFrontendConfig(values, {
+    ...frontendDepositEnv(),
+    REACT_APP_BASE_CHAIN: spec.network.l1ChainName,
+    REACT_APP_CHAIN_ID_L1: resolveDogecoinChainId(spec.dogecoin.network),
+    REACT_APP_CHAIN_ID_L2: spec.network.l2ChainId,
+    REACT_APP_CONNECT_WALLET_PROJECT_ID: spec.frontend.walletConnectProjectId || DEFAULT_WALLET_CONNECT_PROJECT_ID,
+    REACT_APP_DOGE_NETWORK: spec.dogecoin.network,
+    REACT_APP_ETH_SYMBOL: spec.network.tokenSymbol,
+    REACT_APP_EXTERNAL_EXPLORER_URI_L1: spec.frontend.externalUrls.l1Explorer,
+    REACT_APP_EXTERNAL_EXPLORER_URI_L2: spec.frontend.externalUrls.l2Explorer,
+    REACT_APP_EXTERNAL_RPC_URI_L1: spec.frontend.externalUrls.l1Rpc,
+    REACT_APP_EXTERNAL_RPC_URI_L2: spec.frontend.externalUrls.l2Rpc,
+    REACT_APP_ROLLUP: spec.network.l2ChainName,
+  })
   return yaml.dump(values)
+
 }
 
 /**

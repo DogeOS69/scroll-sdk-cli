@@ -907,6 +907,11 @@ export function reconcileCompiledProofTopology(
     throw new Error('PROOF_COORDINATOR_HOST must match the host in proofTopology.deployment.proverPublicUrl')
   }
 
+  // Fail before invoking the compiler or replacing generated files.
+  if (mode === 'active' && options.coordinatorIngressHost) {
+    buildProofCoordinatorIngress(options.coordinatorIngressHost, readYaml(coordinatorValuesPath).ingress?.main)
+  }
+
   const effectiveTopology: ProofTopologySpec = {
     ...topology,
     deployment: {

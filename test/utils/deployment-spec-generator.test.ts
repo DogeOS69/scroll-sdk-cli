@@ -813,8 +813,8 @@ describe('deployment-spec-generator', () => {
         const expected = supplied || DEFAULT_WALLET_CONNECT_PROJECT_ID;
         expect((toml.parse(generateConfigToml(spec)) as any).frontend.CONNECT_WALLET_PROJECT_ID).to.equal(expected);
         const values = generateValuesFiles(spec);
-        const frontends = (yaml.load(values['frontends-config.yaml']) as any).configMaps['frontend-config'].data['frontend-config'];
-        expect(frontends).to.include(`REACT_APP_CONNECT_WALLET_PROJECT_ID = ${expected}`);
+        const frontends = (yaml.load(values['frontends-config.yaml']) as any).scrollConfig;
+        expect(frontends).to.include(`REACT_APP_CONNECT_WALLET_PROJECT_ID = "${expected}"`);
       });
     }
 
@@ -829,8 +829,8 @@ describe('deployment-spec-generator', () => {
         expect((toml.parse(configs['protocol_seed.toml']) as any).protocol.dogecoin_chain_id).to.equal(chainId);
         const values = generateValuesFiles(spec);
         expect((yaml.load(values['contracts-production.yaml']) as any).configMaps['contracts-deployment-env'].data.CHAIN_ID_L1).to.equal(String(chainId));
-        const frontends = (yaml.load(values['frontends-config.yaml']) as any).configMaps['frontend-config'].data['frontend-config'];
-        expect(frontends).to.include(`REACT_APP_CHAIN_ID_L1 = ${chainId}\n`);
+        const frontends = (yaml.load(values['frontends-config.yaml']) as any).scrollConfig;
+        expect(frontends).to.include(`REACT_APP_CHAIN_ID_L1 = "${chainId}"\n`);
       });
     }
 
@@ -1112,7 +1112,7 @@ describe('deployment-spec-generator', () => {
       expect(blockscout.frontend.env.NEXT_PUBLIC_API_HOST).to.equal(config.ingress.BLOCKSCOUT_HOST);
       const tso = (yaml.load(files['tso-service-production.yaml']) as any).ingress.main;
       expect(tso.hosts[0].host).to.equal(config.ingress.TSO_HOST);
-      expect(tso.tls[0].hosts).to.deep.equal([config.ingress.TSO_HOST]);
+      expect(tso).not.to.have.property('tls'); // Controller and TLS come from operator values.
       expect(tso.hosts[0].paths).to.deep.equal([{path: '/health', pathType: 'Exact'}, {path: '/signer', pathType: 'Prefix'}]);
       expect(Object.keys(files).join(' ')).not.to.match(/admin-system-dashboard|coordinator-api|rollup-explorer-backend|l1-explorer/);
       expect(files['frontends-config.yaml']).not.to.match(/old-admin|old-rollup|ROLLUPSCAN_API_URI/);
@@ -1533,16 +1533,17 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateValuesFiles', () => {
-    it('requests trusted TLS certificates for public RPC and pull signer endpoints', () => {
+    it('requests public RPC TLS while leaving TSO controller policy to its template', () => {
       const spec = createMinimalSpec();
       spec.frontend.hosts.tso = 'tso.example.invalid';
       const files = generateValuesFiles(spec);
       const rpc = yaml.load(files['l2-reth-rpc-public-production.yaml']) as any;
       const tso = yaml.load(files['tso-service-production.yaml']) as any;
+      expect(tso.ingress.main).not.to.have.property('ingressClassName');
+      expect(tso.ingress.main).not.to.have.property('tls');
       for (const [ingress, host, secretName] of [
         [rpc.ingress.main, spec.frontend.hosts.rpcGateway, 'l2-reth-rpc-public-tls'],
         [rpc.ingress.websocket, spec.frontend.hosts.rpcGatewayWs || spec.frontend.hosts.rpcGateway, 'l2-reth-rpc-public-websocket-tls'],
-        [tso.ingress.main, spec.frontend.hosts.tso, 'tso-service-tls'],
       ]) {
         expect(ingress.annotations['cert-manager.io/cluster-issuer']).to.equal('letsencrypt-prod');
         expect(ingress.tls).to.deep.equal([{hosts: [host], secretName}]);
@@ -1780,7 +1781,7 @@ describe('deployment-spec-generator', () => {
         ]);
 
       const tsoValues = yaml.load(files['tso-service-production.yaml']) as any;
-      expect(tsoValues.ingress.main.annotations['nginx.ingress.kubernetes.io/proxy-body-size']).to.equal('4m');
+      expect(tsoValues.ingress.main).not.to.have.property('annotations');
       const tsoEnv = Object.fromEntries(tsoValues.env.map((item: any) => [item.name, item.value]));
       expect(tsoEnv.TIMEOUT_CHECK_INTERVAL_SECONDS).to.equal('60');
       expect(tsoEnv.TSO_CORRECTNESS_MAX_PSBT_BASE64_LEN).to.equal('130048');
@@ -2220,7 +2221,16 @@ describe('monitoring template projection', () => {
     expect(monitor.grafana.resources).to.deep.equal(template.grafana.resources)
     expect(monitor.diskAlerts).to.deep.equal(template.diskAlerts)
     expect(monitor.balanceMonitoring).to.deep.equal(template.balanceMonitoring)
+    expect(monitor.serviceAlerts.cubesignerPolicyMode).eq('production_verifier_key_policy')
     expect(monitor.grafana.envValueFrom.DOGEOS_SLACK_WEBHOOK_URL.secretKeyRef.name).to.equal('scroll-monitor-slack')
     expect((toml.parse(generateDogeConfigToml(spec)) as any).monitoring).to.deep.equal(spec.monitoring)
+  })
+
+  it('projects explicit transport-only policy even without Slack intent', () => {
+    const spec = createMinimalSpec()
+    spec.signing.cubesigner = {mode: 'transport_only', roles: []}
+    const files = generateValuesFiles(spec, 'serviceAlerts: {enabled: true}\n')
+    const monitor = yaml.load(files['scroll-monitor-production.yaml']) as any
+    expect(monitor.serviceAlerts).to.deep.equal({cubesignerPolicyMode: 'transport_only', enabled: true})
   })
 })

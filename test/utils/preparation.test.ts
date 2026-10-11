@@ -216,7 +216,7 @@ describe('resumable preparation plan', () => {
     const runner = new CommandPreparationRunner()
     await runner.run(plan.steps[0], frozen, deployment, plan)
     expect(JSON.parse(fs.readFileSync(path.join(deployment, '.data/spec-bootstrap.json'), 'utf8')).sdkRevision).to.equal(revision)
-    expect(fs.readFileSync(path.join(deployment, 'values/scroll-monitor-production.yaml'), 'utf8')).to.equal('# fixture\n')
+    expect(fs.readFileSync(path.join(deployment, 'values/scroll-monitor-production.yaml'), 'utf8')).to.equal('grafana:\n  enabled: false\n')
     spec.templates = {sdkRevision: revision}
     fs.writeFileSync(file, yaml.dump(spec))
     expect((await makePlan()).id).to.equal(plan.id)
@@ -348,20 +348,26 @@ describe('resumable preparation plan', () => {
     expect(() => validatePreparation(spec)).not.to.throw()
   })
 
+  for (const publicReadMode of ['direct-s3', 'existing-public-s3', 'existing-gateway']) {
+    it(`rejects public proof intent ${publicReadMode}`, () => {
+      const spec = fixture()
+      spec.preparation!.proofAws = {action: 'create', publicReadMode} as any
+      expect(() => validatePreparation(spec)).to.throw('Only the DA blob archive')
+    })
+  }
+
   it('selects explicit proof AWS effects and retains publication during evidence regeneration', async () => {
     const spec = fixture()
     spec.infrastructure.aws = {accountId: '123456789012', eksClusterName: 'test-cluster', region: 'us-west-2'}
-    spec.preparation!.proofAws = {action: 'create', publicReadMode: 'direct-s3'}
+    spec.preparation!.proofAws = {action: 'create', publicReadMode: 'private-s3'}
     validatePreparation(spec)
     expect(preparationSteps(spec).find(step => step.id === 'proof-aws')!.effect).to.equal('cloud')
     const plan = await makePlan()
     const calls: string[][] = []
     const runner = new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)})
     await runner.run(preparationSteps(spec).find(step => step.id === 'proof-aws')!, spec, deployment, plan)
-    expect(calls[0]).to.include.members(['proof-aws-init', '--yes', '--artifact-public-read-mode', 'direct-s3'])
+    expect(calls[0]).to.include.members(['proof-aws-init', '--yes', '--artifact-public-read-mode', 'private-s3'])
     spec.preparation!.proofAws.action = 'reuse'
-    expect(() => validatePreparation(spec)).to.throw('existing-public-s3')
-    spec.preparation!.proofAws.publicReadMode = 'existing-public-s3'
     validatePreparation(spec)
     expect(preparationSteps(spec).find(step => step.id === 'proof-aws')!.effect).to.equal('read')
     spec.preparation!.inputs = [{destination: '.data/proof-aws.json', source: '../proof-aws.json'}]
@@ -379,7 +385,7 @@ describe('resumable preparation plan', () => {
 
   it('resolves proof storage before DA permissions and applies only explicit public-read intent', async () => {
     const spec = fixture()
-    spec.preparation!.proofAws = {action: 'create', publicReadMode: 'direct-s3'}
+    spec.preparation!.proofAws = {action: 'create', publicReadMode: 'private-s3'}
     spec.preparation!.archive = {action: 'create', publicRead: true}
     const ids = preparationSteps(spec).map(step => step.id)
     expect(ids.indexOf('proof-aws')).to.be.lessThan(ids.indexOf('archive'))

@@ -11,7 +11,7 @@ trees; branches contained in that historical head need no further code merge.
 | Older account-only `gen-keystore` implementation | Retain the current unified Reth/service identity entrypoint and explicit account selection. |
 | Older contracts defaults and genesis preflight | Retain rc.3 defaults and owner/Reth signer checks; add the local Foundry backend and retire unused verifier prompts. |
 | Retired database filtering | Preserve active Blockscout/dstack DSNs, passwords and selection flags; remove retired service settings. |
-| Proposed `proof-aws-init --artifact-public-read-mode shared-s3` | Keep `existing-public-s3` plus the current `artifact-access` plan/apply workflow, which already handles scoped grants and drift checks. Do not reintroduce a second bucket-policy writer. |
+| Proposed `proof-aws-init --artifact-public-read-mode shared-s3` | Use `private-s3` for proofs. Public S3/gateway provisioning modes are rejected. `artifact-access` permits public reads only for DA blobs; snapshots remain private. |
 | `feat/partner-attestation-signer` at `1b89949` | All code matches current ancestor `2b64cbc`; its only tree difference is the Chinese service runbook. Restore an updated runbook using the current APIs. |
 | `feat/refactor_kms_tmp` at `1bbaf9a` | Retire the experimental Geth/deployment-state architecture. Preserve its original tip under a local archive tag; do not import the prototype commands. |
 

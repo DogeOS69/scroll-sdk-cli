@@ -346,7 +346,7 @@ Use one configuration authority with multiple consumers:
 DeploymentSpec / doge-config.toml
               |
               +-- eth-da-submitter signer and writer access
-              +-- proof AWS roles, credentials, and public-read access
+              +-- proof AWS roles, credentials, and private read access
               +-- proof topology, publication, and chart projections
 ```
 
@@ -357,9 +357,8 @@ store. The operator chooses once:
 
 - AWS region and EKS cluster for the environment;
 - the bucket and whether it is CLI-managed or externally managed;
-- the public-read mode: direct S3, an existing public S3 policy, or an existing
-  gateway;
-- a custom gateway endpoint only when the selected mode requires one.
+- `private-s3` for proof artifacts; only the separate DA blob archive can be public.
+  External beta.6a unsigned readers need a separately validated private route.
 
 The CLI derives rather than prompts for:
 
@@ -393,7 +392,7 @@ they cover:
 - ensuring a CLI-managed archive bucket exists and granting a CLI-created role
   read/write access to the exact deployment prefix.
 
-It does not choose the bucket, region, prefix, public URL, or proof public-read
+It does not choose the bucket, region, prefix, public URL, or proof private-read
 posture. Its normal production interface therefore has no `--archive-*`,
 `--create-archive-bucket`, or `--disable-archive` flags.
 
@@ -426,7 +425,7 @@ read from canonical environment configuration rather than repeated as flags.
 The receipt may repeat the resolved bucket, region, and prefix because they are
 observed resource facts. It must also record the source config path and section,
 source SHA-256, resolved-store digest, generated role and secret ARNs, and
-public-read verification result. It is never edited as a second desired-state
+artifact-read verification result. It is never edited as a second desired-state
 file. `proof-config prepare` validates that the receipt still matches the
 current canonical store and fails with an instruction to rerun
 `proof-aws-access` when it has drifted.
@@ -601,7 +600,7 @@ ethereumDa:
       region: us-east-1
       managementMode: existing
       keyPrefixPolicy: deployment-scoped
-      publicReadMode: direct-s3
+      publicReadMode: private-s3
 
 signing:
   cubesigner:

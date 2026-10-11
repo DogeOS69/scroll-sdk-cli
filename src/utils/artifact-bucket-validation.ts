@@ -6,11 +6,13 @@ export function assertSeparateDaProofBuckets(config: {
   proofCoordinator?: {artifactStore?: {bucket?: string}}
   proofDeployment?: {coordinator?: {artifactStore?: {bucket?: string}}}
   proofTopology?: {active?: {artifactStore?: {bucket?: string}}}
+  snapshots?: {s3?: {bucket?: string}}
 }, resolve: (value: string) => string = value => value): void {
   const name = (value: string | undefined): string | undefined => typeof value === 'string' ? resolve(value).trim() : undefined
   const daBucket = name(config.ethereumDa?.blobArchive?.s3?.bucket)
   if (!daBucket) return
   for (const [label, bucket] of [
+    ['snapshots.s3.bucket', config.snapshots?.s3?.bucket],
     ['proofArtifacts.s3.bucket', config.proofArtifacts?.s3?.bucket],
     ['proofTopology.active.artifactStore.bucket', config.proofTopology?.active?.artifactStore?.bucket],
     ['proof_topology.active.artifactStore.bucket', config.proof_topology?.active?.artifactStore?.bucket],

@@ -6,11 +6,23 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 
 import PrepCharts from '../../../src/commands/setup/prep-charts.js'
-import {reconcileScrollMonitorBalances} from '../../../src/utils/scroll-monitor-values.js'
+import {reconcileScrollMonitorBalances, reconcileScrollMonitorCubesigner} from '../../../src/utils/scroll-monitor-values.js'
 
 const ORACLE_ADDRESS = `0x${'11'.repeat(20)}`
 const DA_ADDRESS = `0x${'22'.repeat(20)}`
 const ROTATED_ADDRESS = `0x${'33'.repeat(20)}`
+
+describe('scroll-monitor CubeSigner policy expectation', () => {
+  it('follows explicit transport mode and restores verification checks for production or implicit mode', () => {
+    const values: any = {serviceAlerts: {enabled: true}}
+    reconcileScrollMonitorCubesigner(values, 'transport_only')
+    expect(values.serviceAlerts).to.deep.equal({cubesignerPolicyMode: 'transport_only', enabled: true})
+    expect(reconcileScrollMonitorCubesigner(values, 'transport_only')).to.deep.equal([])
+    reconcileScrollMonitorCubesigner(values)
+    expect(values.serviceAlerts.cubesignerPolicyMode).eq('production_verifier_key_policy')
+    expect(() => reconcileScrollMonitorCubesigner(values, 'typo')).to.throw('Invalid CubeSigner')
+  })
+})
 
 function inputs(): any {
   return {

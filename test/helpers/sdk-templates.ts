@@ -20,7 +20,9 @@ export function createSdkFixture(directory: string): string {
       DOGEOS_FEE_ORACLE_PRICE_ORACLE__CACHE_DURATION: '17',
     }}}},
     'metrics-exporter-production.yaml': {},
+    'proof-coordinator-production.yaml': {ingress: {main: {annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>'}, enabled: false, ingressClassName: 'alb'}}},
     'scroll-monitor-production.yaml': {grafana: {enabled: false}},
+    'tso-service-production.yaml': {ingress: {main: {annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>'}, enabled: true, ingressClassName: 'alb'}}},
   }
   for (const role of ['sequencer', 'bootnode', 'rpc', 'rpc-public']) {
     templates[`l2-reth-${role}-production.yaml`] = {

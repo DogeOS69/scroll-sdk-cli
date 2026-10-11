@@ -13,7 +13,7 @@ describe('existing proof AWS discovery', () => {
   let root: string
   const account = '123456789012'
   const issuer = 'oidc.eks.us-west-2.amazonaws.com/id/TEST'
-  const spec = {infrastructure: {aws: {accountId: account, eksClusterName: 'cluster', region: 'us-west-2'}, namespace: 'test'}, metadata: {name: 'test'}, preparation: {proofAws: {action: 'reuse', publicReadMode: 'existing-public-s3'}}} as DeploymentSpec
+  const spec = {infrastructure: {aws: {accountId: account, eksClusterName: 'cluster', region: 'us-west-2'}, namespace: 'test'}, metadata: {name: 'test'}, preparation: {proofAws: {action: 'reuse', publicReadMode: 'private-s3'}}} as DeploymentSpec
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'proof-aws-discovery-'))
     fs.mkdirSync(path.join(root, '.data'))
@@ -22,6 +22,8 @@ describe('existing proof AWS discovery', () => {
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
   function response(args: string[]): any {
     switch (args[1]) {
+      case 'get-public-access-block': {return {PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}}}
+      case 'get-bucket-policy': {return JSON.stringify({Statement: []})}
       case 'get-caller-identity': { return {Account: account}
       }
 
@@ -49,12 +51,12 @@ describe('existing proof AWS discovery', () => {
 
   it('discovers role ARNs and secret metadata without AWS writes or secret value reads', () => {
     const calls: string[][] = []
-    reuseProofAws(root, spec, {json(args: string[]) {calls.push(args); return response(args)}} as any)
+    reuseProofAws(root, spec, {json(args: string[]) {calls.push(args); return response(args)}, text(args: string[]) {calls.push(args); return response(args)}} as any)
     const {config} = readProofAwsConfig(root)
     expect(config.serviceAccounts.proofCoordinator.roleArn).to.equal(`arn:aws:iam::${account}:role/dogeos-test-cluster-proof-coordinator`)
     expect(config.secret.name).to.equal('scroll/test/proof-coordinator-secrets')
-    expect(config.artifactReadTransport.publicStatus).to.equal('operator-managed-unverified')
-    expect(calls.map(args => args[1])).to.deep.equal(['get-caller-identity', 'describe-cluster', 'get-open-id-connect-provider', 'head-bucket', 'get-bucket-location', 'get-role', 'get-role', 'describe-secret'])
+    expect(config.artifactReadTransport.publicStatus).to.equal('configured-unverified')
+    expect(calls.map(args => args[1])).to.deep.equal(['get-caller-identity', 'describe-cluster', 'get-open-id-connect-provider', 'head-bucket', 'get-bucket-location', 'get-public-access-block', 'get-bucket-policy', 'get-role', 'get-role', 'describe-secret'])
   })
 
   for (const scenario of ['account', 'bucket-region', 'trust', 'secret']) {
@@ -66,7 +68,7 @@ describe('existing proof AWS discovery', () => {
         if (scenario === 'trust' && args[1] === 'get-role') result.Role.AssumeRolePolicyDocument.Statement[0].Condition.StringEquals[`${issuer}:sub`] = 'system:serviceaccount:other:proof-coordinator'
         if (scenario === 'secret' && args[1] === 'describe-secret') result.DeletedDate = '2026-01-01'
         return result
-      }} as any)).to.throw()
+      }, text(args: string[]) {return response(args)}} as any)).to.throw()
       expect(fs.existsSync(path.join(root, '.data/proof-aws.json'))).to.equal(false)
     })
   }
