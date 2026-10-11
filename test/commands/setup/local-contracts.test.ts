@@ -7,6 +7,7 @@ import * as path from 'node:path'
 import {PassThrough} from 'node:stream'
 import {promisify} from 'node:util'
 
+import {GENESIS_PREDEPLOYS} from '../../../src/constants/deployment.js'
 import {generateLocalContractsArtifacts} from '../../../src/utils/local-contracts.js'
 
 const execFileAsync = promisify(execFile)
@@ -81,7 +82,10 @@ describe('local contracts generation', () => {
     for (const tool of ['forge', 'jq']) fs.writeFileSync(path.join(bin, tool), '#!/bin/sh\nexit 0\n', {mode: 0o755})
     fs.writeFileSync(path.join(bin, 'docker'), '#!/bin/sh\nexit 99\n', {mode: 0o755})
     setScript(`echo generator-log
-      ${outputFiles.map(file => `echo '# generated' > volume/${file}`).join('\n')}`)
+      ${outputFiles.filter(file => file !== 'genesis.yaml').map(file => `echo '# generated' > volume/${file}`).join('\n')}
+      cat > volume/genesis.yaml <<'GENESIS'
+${JSON.stringify({scrollConfig: {alloc: Object.fromEntries(['0x0000f90827f1c53a10cb7a02335b175320002935', GENESIS_PREDEPLOYS.L1_GAS_PRICE_ORACLE, GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE, GENESIS_PREDEPLOYS.L2_NATIVE_DOGE_TOKEN].map(address => [address, {code: '0x6000'}]))}})}
+GENESIS`)
     const preload = path.join(dir, 'no-fetch.mjs')
     fs.writeFileSync(preload, "globalThis.fetch = async () => {throw new Error('Image resolution is forbidden')};")
     const result = await execFileAsync(process.execPath, ['--import', preload, cli, 'setup', 'gen-l2-artifacts', '--contracts-source', source, '-N', '--json', '--skip-deployment-salt-update', '--skip-l1-fee-vault-update'], {cwd: deployment, env: {...process.env, PATH: `${bin}:${process.env.PATH}`}, timeout: 30_000})

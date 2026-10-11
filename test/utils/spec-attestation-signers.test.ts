@@ -19,6 +19,7 @@ function fixture(): DeploymentSpec {
   const spec = normalizeDeploymentSpec(yaml.load(fs.readFileSync(path.join(cliRoot, 'src/config/deployment-spec.minimal.yaml'), 'utf8')
     .replaceAll('$ENV:OWNER_ADDRESS', '0x0000000000000000000000000000000000000001')
     .replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')) as DeploymentSpec)
+  spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toAddress().toString()
   spec.attestationSigners = Array.from({length: 4}, (_, index) => ({attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), name: `partner-${index}`, transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()}))
   spec.bridge.initialAttestationKeyset = {signerIds: ['partner-2', 'partner-0', 'partner-1'], threshold: 2}
   return spec
