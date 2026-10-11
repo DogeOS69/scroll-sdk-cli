@@ -3,7 +3,7 @@ import {expect} from 'chai'
 import * as yaml from 'js-yaml'
 
 import {buildProofCoordinatorIngress} from '../../src/utils/proof-coordinator-ingress.js'
-import {reconcilePublicServiceIngress} from '../../src/utils/public-service-ingress.js'
+import {reconcileDeploymentIngresses, reconcilePublicServiceIngress} from '../../src/utils/public-service-ingress.js'
 import {mergeBootstrapValues} from '../../src/utils/spec-bootstrap.js'
 
 const alb = 'alb.ingress.kubernetes.io/'
@@ -37,6 +37,17 @@ describe('public service ingress controller policy', () => {
     expect(reconcilePublicServiceIngress({}, 'tso-service', false).ingressClassName).to.equal('alb')
     expect(reconcilePublicServiceIngress({enabled: false}, 'proof-coordinator').enabled).to.equal(false)
     expect(() => buildProofCoordinatorIngress('proof.example.invalid', {enabled: false})).to.throw('certificate-arn')
+  })
+
+  it('defaults an unspecified L1 devnet edge to disabled and validates an explicit opt-in', () => {
+    const values: any = {ingress: {main: {annotations: {[`${alb}certificate-arn`]: '<TODO>'}, hosts: [{host: 'l1.example.invalid'}], ingressClassName: 'alb'}}}
+    expect(() => reconcileDeploymentIngresses(values, 'l1-devnet')).not.to.throw()
+    expect(values.ingress.main.enabled).to.equal(false)
+    values.ingress.main.enabled = true
+    expect(() => reconcileDeploymentIngresses(values, 'l1-devnet')).to.throw('certificate-arn')
+    values.ingress.main.annotations[`${alb}certificate-arn`] = certificate
+    expect(() => reconcileDeploymentIngresses(values, 'l1-devnet')).not.to.throw()
+    expect(values.ingress.main.enabled).to.equal(true)
   })
 
   it('rejects shared ALB groups and optional annotations left as placeholders', () => {

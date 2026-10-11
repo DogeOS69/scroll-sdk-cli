@@ -591,6 +591,11 @@ ARNs on enabled ingress values, or run `setup tls --certificate-arn
 "$ACM_CERTIFICATE_ARN" -N` for a certificate covering all enabled hosts.
 Explicit nginx selections now fail with a migration instruction. This changes
 local configuration only; migrate live DNS/controllers separately.
+L1 devnet is excluded from production preparation. Its values are generated
+only for `ethereumDa.chain: devnet`; `prep-charts` skips leftover L1 devnet
+values when using external Ethereum. Private devnet clients use the internal
+Service with ingress disabled by default. Public development access requires
+an explicit ingress opt-in and a hostname/certificate.
 
 Production TSO/WP NetworkPolicy is enabled. Before the charts stage, fill the
 TSO ALB subnet CIDRs and review same-namespace caller selectors. Empty selectors,
@@ -602,7 +607,10 @@ WP and eth-da-submitter receive scoped S3 GetObject/PutObject, without listing
 or deletion; Coordinator additionally receives prefix-scoped ListBucket and
 DeleteObject for recovery. Role reconciliation/reuse audits other inline and
 attached policies and rejects unprovable excess S3 grants. KMS reconciliation
-also audits signing grants against the exact key. The caller needs IAM list/get
+also audits signing grants against the exact key. Identity-only preparation
+defers S3 auditing to archive preparation, which has the full archive/sidecar
+intent and can distinguish legitimate existing grants from excess access.
+The caller needs IAM list/get
 policy access; unknown policies are not removed automatically. This audit is
 not an effective-permission proof: resource policies, permission boundaries
 and node credentials still need a runtime check.

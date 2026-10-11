@@ -1533,20 +1533,18 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateValuesFiles', () => {
-    it('requests public RPC TLS while leaving TSO controller policy to its template', () => {
+    it('projects public RPC and TSO routes while leaving controller and TLS policy to templates', () => {
       const spec = createMinimalSpec();
       spec.frontend.hosts.tso = 'tso.example.invalid';
       const files = generateValuesFiles(spec);
       const rpc = yaml.load(files['l2-reth-rpc-public-production.yaml']) as any;
       const tso = yaml.load(files['tso-service-production.yaml']) as any;
-      expect(tso.ingress.main).not.to.have.property('ingressClassName');
-      expect(tso.ingress.main).not.to.have.property('tls');
-      for (const [ingress, host, secretName] of [
-        [rpc.ingress.main, spec.frontend.hosts.rpcGateway, 'l2-reth-rpc-public-tls'],
-        [rpc.ingress.websocket, spec.frontend.hosts.rpcGatewayWs || spec.frontend.hosts.rpcGateway, 'l2-reth-rpc-public-websocket-tls'],
-      ]) {
-        expect(ingress.annotations['cert-manager.io/cluster-issuer']).to.equal('letsencrypt-prod');
-        expect(ingress.tls).to.deep.equal([{hosts: [host], secretName}]);
+      expect(rpc.ingress.main.hosts[0].host).to.equal(spec.frontend.hosts.rpcGateway);
+      expect(tso.ingress.main.hosts[0].host).to.equal('tso.example.invalid');
+      for (const ingress of [rpc.ingress.main, rpc.ingress.websocket, tso.ingress.main]) {
+        expect(ingress).not.to.have.property('ingressClassName');
+        expect(ingress).not.to.have.property('annotations');
+        expect(ingress).not.to.have.property('tls');
       }
     });
 
@@ -1681,7 +1679,7 @@ describe('deployment-spec-generator', () => {
 
       expect(files).to.have.property('eth-da-submitter-production.yaml');
       expect(files).to.have.property('fee-oracle-production.yaml');
-      expect(files).to.have.property('l1-devnet-production.yaml');
+      expect(files).not.to.have.property('l1-devnet-production.yaml');
       expect(files).to.have.property('withdrawal-processor-production.yaml');
       expect(files).not.to.have.property('ethereum-production.yaml');
       expect(files).not.to.have.property('celestia-node-production.yaml');
@@ -1693,8 +1691,6 @@ describe('deployment-spec-generator', () => {
       expect(files['eth-da-submitter-production.yaml']).to.include('DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY');
       expect(files['eth-da-submitter-production.yaml']).to.include('dogeos-test/eth-da-submitter-secret-env');
       expect(files['eth-da-submitter-production.yaml']).to.include('DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL');
-      expect(files['l1-devnet-production.yaml']).to.include('chainId: 11155111');
-      expect(files['l1-devnet-production.yaml']).to.include('networkId: 11155111');
       expect(files['l1-interface-production.yaml']).to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL');
       expect(files['l1-interface-production.yaml']).not.to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__ETH_CHAIN_ID');
       expect(files['l1-interface-production.yaml']).not.to.include('DOGEOS_L1_INTERFACE_ETHEREUM_DA__L2_CHAIN_ID');

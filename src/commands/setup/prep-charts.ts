@@ -2171,6 +2171,12 @@ export default class SetupPrepCharts extends Command {
 
       const yamlPath = path.join(valuesDir, file)
       const chartName = getProductionChartName(file)
+      if (chartName === 'l1-devnet' && this.dogeConfig.ethereumDa?.chain !== 'devnet') {
+        this.jsonCtx.info(`Skipping development-only chart ${file}; Ethereum DA is not a private devnet.`)
+        skippedCharts++
+        continue
+      }
+
       if (this.isL2GethNode(chartName)) {
         this.jsonCtx.info(`Skipping retired geth chart ${file}; use the Reth values files.`)
         skippedCharts++

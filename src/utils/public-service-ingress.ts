@@ -81,7 +81,7 @@ export function deploymentIngresses(values: Record<string, any>): Record<string,
 /** Normalize only edge settings; leave operator enable switches and routes intact. */
 export function reconcileDeploymentIngresses(values: Record<string, any>, service: string, validate = true): void {
   for (const ingress of deploymentIngresses(values)) {
-    if (['dogecoin', 'dstack-controller', 'scroll-monitor'].includes(service) && ingress.enabled === undefined) ingress.enabled = false
+    if (['dogecoin', 'dstack-controller', 'l1-devnet', 'scroll-monitor'].includes(service) && ingress.enabled === undefined) ingress.enabled = false
     const standard = Object.hasOwn(ingress, 'className') || ['blockscout', 'dogecoin', 'dstack-controller'].includes(service)
     const normalized = reconcilePublicServiceIngress({...ingress, ingressClassName: ingress.ingressClassName ?? ingress.className}, service, validate)
     if (standard) {

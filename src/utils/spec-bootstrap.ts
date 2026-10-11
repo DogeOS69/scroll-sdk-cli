@@ -74,6 +74,11 @@ export function planSpecBootstrap(spec: DeploymentSpec, sdkDirectory?: string): 
 
   if (errors.length > 0) throw new Error(`Bootstrap inputs are incomplete:\n- ${errors.join('\n- ')}`)
   const {files, hashes, revision} = loadSdkTemplateFiles(sdkDirectory!, spec.templates?.sdkRevision)
+  if (spec.ethereumDa?.chain !== 'devnet') {
+    delete files['values/l1-devnet-production.yaml']
+    delete hashes['values/l1-devnet-production.yaml']
+  }
+
   files.Makefile = adaptNodeCounts(files.Makefile, spec)
   files['.data/spec-bootstrap.json'] = JSON.stringify({
     pendingStages: ['identity provisioning/import', 'contract and genesis generation', 'Bridge initialization and canonical protocol context', 'proof materials, compilation and publication', 'secret preparation and chart reconciliation'], schema: 'dogeos/spec-bootstrap/v1', sdkRevision: revision,

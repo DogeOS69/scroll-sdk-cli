@@ -311,12 +311,14 @@ export class KmsSignerProvisioner {
     const trustPolicyDocument = JSON.stringify(trustPolicy)
     try {
       this.awsJson(['iam', 'get-role', '--role-name', options.roleName])
+      // Identity-only preparation does not know the archive/sidecar intent.
+      // Audit S3 when configuring the archive, not against an empty S3 scope.
       auditRolePolicies({json: args => this.awsJson(args)}, options.roleName, {
         Statement: [
           {Action: ['kms:GetPublicKey', 'kms:Sign'], Effect: 'Allow', Resource: options.keyArn},
           ...(options.archiveBucket ? archiveStorePolicy(options.archiveBucket, options.archiveKeyPrefix).Statement : []),
         ],
-      }, [`${options.service}-kms-sign`, ...(options.archiveBucket ? ['eth-da-submitter-s3-archive'] : [])], ['s3', 'kms'])
+      }, [`${options.service}-kms-sign`, ...(options.archiveBucket ? ['eth-da-submitter-s3-archive'] : [])], options.archiveBucket ? ['s3', 'kms'] : ['kms'])
       this.awsJson([
         'iam',
         'update-assume-role-policy',

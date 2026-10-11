@@ -12,6 +12,7 @@ import sinon from 'sinon'
 import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 
 import Generate from '../../src/commands/setup/generate-from-spec.js'
+import {reconcileDeploymentIngresses} from '../../src/utils/public-service-ingress.js'
 import {mergeBootstrapValues} from '../../src/utils/spec-bootstrap.js'
 import {createSdkFixture} from '../helpers/sdk-templates.js'
 
@@ -51,6 +52,33 @@ describe('spec values runtime policy across entry points', () => {
     fs.writeFileSync('deployment-spec.yaml', yaml.dump(spec))
     await Generate.run([mode, '--output', directory, '--json', ...args], cli)
   }
+
+  for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`excludes L1 devnet from external Ethereum deployments through ${mode}`, async () => {
+    spec.ethereumDa = {...spec.ethereumDa, chain: 'sepolia'}
+    const directory = path.join(root, 'deployment')
+    await run(mode, directory, '--sdk-dir', sdk)
+    expect(fs.existsSync(path.join(directory, 'values/l1-devnet-production.yaml'))).to.equal(false)
+    spec.ethereumDa.chain = 'mainnet'
+    await run(mode, directory, '--sdk-dir', sdk, '--force')
+    expect(fs.existsSync(path.join(directory, 'values/l1-devnet-production.yaml'))).to.equal(false)
+  })
+
+  for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`generates L1 devnet only on explicit selection through ${mode}`, async () => {
+    spec.ethereumDa = {...spec.ethereumDa, chain: 'devnet'}
+    const directory = path.join(root, 'deployment')
+    await run(mode, directory, '--sdk-dir', sdk)
+    const values = read(directory, 'l1-devnet')
+    expect(values.ingress.main.enabled).to.equal(false)
+    expect(() => reconcileDeploymentIngresses(values, 'l1-devnet')).not.to.throw()
+
+    // An operator can opt in, and regeneration must retain that choice.
+    values.ingress.main.enabled = true
+    fs.writeFileSync(path.join(directory, 'values/l1-devnet-production.yaml'), yaml.dump(values))
+    await run(mode, directory, '--sdk-dir', sdk, '--force')
+    const enabled = read(directory, 'l1-devnet')
+    expect(enabled.ingress.main.enabled).to.equal(true)
+    expect(() => reconcileDeploymentIngresses(enabled, 'l1-devnet')).to.throw('certificate-arn')
+  })
 
   for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`keeps public edge controller policy in templates and operator values through ${mode}`, async () => {
     spec.proofTopology!.mode = 'active'

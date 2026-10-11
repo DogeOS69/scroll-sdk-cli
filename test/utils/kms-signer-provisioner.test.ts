@@ -105,6 +105,66 @@ esac
     expect(calls).not.to.include('s3:ListBucket')
   })
 
+  for (const extraKmsGrant of [false, true]) it(`reuses an identity role with existing archive grants, extra KMS grant=${extraKmsGrant}`, async () => {
+    const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
+    const calls: string[][] = []
+    provisioner.ensureKmsKey = () => ({keyArn: 'existing-key', keyId: 'existing-key', kmsKeyIdForConfig: 'existing-key'})
+    provisioner.fetchKmsPublicKey = () => process.env.AWS_TEST_PUBLIC_KEY
+    provisioner.awsText = (args: string[]) => args[0] === 'sts' ? '123456789012' : 'https://oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE'
+    provisioner.awsJson = (args: string[]) => {
+      calls.push(args)
+      if (args[1] === 'list-role-policies') return {PolicyNames: ['eth-da-submitter-s3-archive', ...(extraKmsGrant ? ['extra-kms'] : [])]}
+      if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
+      if (args[1] === 'get-role-policy') return {PolicyDocument: {Statement: [args.at(-1) === 'extra-kms'
+        ? {Action: ['kms:Sign'], Effect: 'Allow', Resource: '*'}
+        : {Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: ['arn:aws:s3:::example-blob/da/*', 'arn:aws:s3:::example-proof/proofs/scroll-chunk-segmentation-sidecars/*']}]}}
+      return {}
+    }
+
+    let failure: unknown
+    try {
+      // A fresh directory has no saved role ARN, but the deterministic role exists.
+      await provisioner.provision({...getAttestationSignerKmsRole(0), service: 'eth-da-submitter'},
+        {awsRegion: 'us-west-2', eksCluster: 'test', namespace: 'default', networkAlias: 'test'},
+        {archive: {enabled: false}})
+    } catch (error) { failure = error }
+
+    if (extraKmsGrant) {
+      expect(String(failure)).to.include('extra or unprovable kms grant')
+      expect(calls.some(args => args[1] === 'put-role-policy')).to.equal(false)
+    } else {
+      expect(failure).to.equal(undefined)
+      const writes = calls.filter(args => args[1] === 'put-role-policy')
+      expect(writes).to.have.length(1)
+      expect(writes[0][writes[0].indexOf('--policy-name') + 1]).to.equal('eth-da-submitter-kms-sign')
+      expect(calls.some(args => args[1] === 'delete-role-policy')).to.equal(false)
+    }
+  })
+
+  it('still rejects extra S3 grants when preparing the archive with its full intent', async () => {
+    const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
+    const calls: string[][] = []
+    provisioner.awsJson = (args: string[]) => {
+      calls.push(args)
+      if (args[1] === 'list-role-policies') return {PolicyNames: ['unrelated-bucket-access']}
+      if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
+      if (args[1] === 'get-role-policy') return {PolicyDocument: {Statement: [{Action: ['s3:PutObject'], Effect: 'Allow', Resource: 'arn:aws:s3:::unrelated-bucket/*'}]}}
+      throw new Error('Unexpected AWS call')
+    }
+
+    let failure: unknown
+    try {
+      await provisioner.provisionArchive({bucket: 'example-blob', created: false, enabled: true, keyPrefix: 'da'}, {
+        createBucket: false,
+        roleArn: 'arn:aws:iam::123456789012:role/example-da',
+        sidecarStore: {bucket: 'example-proof', keyPrefix: 'proofs'},
+      })
+    } catch (error) { failure = error }
+
+    expect(String(failure)).to.include('extra or unprovable s3 grant')
+    expect(calls.some(args => args[1] === 'put-role-policy')).to.equal(false)
+  })
+
   it('grants both native sidecar keys in the independent proof bucket', async () => {
     const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
     const calls: string[][] = []

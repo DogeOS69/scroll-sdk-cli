@@ -377,7 +377,7 @@ export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: s
   files['l2-reth-rpc-public-production.yaml'] = generateL2RethValues(normalizedSpec, 'rpc', true)
 
   // L1 interface and private Ethereum DA devnet
-  files['l1-devnet-production.yaml'] = generateL1DevnetValues(normalizedSpec)
+  if (getEthereumDaChain(normalizedSpec) === 'devnet') files['l1-devnet-production.yaml'] = generateL1DevnetValues(normalizedSpec)
   files['l1-interface-production.yaml'] = generateL1InterfaceValues(normalizedSpec)
 
   // DA and Dogecoin

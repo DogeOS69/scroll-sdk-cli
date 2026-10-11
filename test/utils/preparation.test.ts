@@ -216,7 +216,9 @@ describe('resumable preparation plan', () => {
     const runner = new CommandPreparationRunner()
     await runner.run(plan.steps[0], frozen, deployment, plan)
     expect(JSON.parse(fs.readFileSync(path.join(deployment, '.data/spec-bootstrap.json'), 'utf8')).sdkRevision).to.equal(revision)
-    expect(fs.readFileSync(path.join(deployment, 'values/scroll-monitor-production.yaml'), 'utf8')).to.equal('grafana:\n  enabled: false\n')
+    // Check the pinned template's policy; generated service alerts may add keys.
+    const monitor = yaml.load(fs.readFileSync(path.join(deployment, 'values/scroll-monitor-production.yaml'), 'utf8')) as {grafana: {enabled: boolean}}
+    expect(monitor.grafana).to.deep.equal({enabled: false})
     spec.templates = {sdkRevision: revision}
     fs.writeFileSync(file, yaml.dump(spec))
     expect((await makePlan()).id).to.equal(plan.id)

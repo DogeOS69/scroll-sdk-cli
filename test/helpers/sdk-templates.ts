@@ -19,6 +19,7 @@ export function createSdkFixture(directory: string): string {
       DOGEOS_FEE_ORACLE_ETHEREUM_DA__MIN_PRIORITY_FEE_PER_GAS_WEI: '100000000',
       DOGEOS_FEE_ORACLE_PRICE_ORACLE__CACHE_DURATION: '17',
     }}}},
+    'l1-devnet-production.yaml': {ingress: {main: {annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>'}, enabled: false, hosts: [{host: ''}], ingressClassName: 'alb'}}},
     'metrics-exporter-production.yaml': {},
     'proof-coordinator-production.yaml': {ingress: {main: {annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>'}, enabled: false, ingressClassName: 'alb'}}},
     'scroll-monitor-production.yaml': {grafana: {enabled: false}},
