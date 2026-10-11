@@ -53,6 +53,30 @@ describe('spec values runtime policy across entry points', () => {
     await Generate.run([mode, '--output', directory, '--json', ...args], cli)
   }
 
+  it('does not copy an unselected capacity-manager template into ordinary deployments', async () => {
+    const directory = path.join(root, 'ordinary')
+    await run('--bootstrap', directory, '--sdk-dir', sdk)
+    expect(fs.existsSync(path.join(directory, 'values/capacity-manager-production.yaml'))).to.equal(false)
+  })
+
+  for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`includes an unprepared capacity-manager template only when selected through ${mode}`, async () => {
+    spec.proofTopology!.mode = 'active'
+    spec.proofTopology!.generation = 'real'
+    spec.proofTopology!.active!.profile = 'real_scroll_withdrawal_full_topology'
+    spec.proofTopology!.active!.workerLaunch = 'external'
+    spec.proofTopology!.deployment.productionWorkerImage = {digest: `sha256:${'b'.repeat(64)}`, repository: 'example.invalid/worker'}
+    spec.proofCoordinator = {s3AuthMode: 'ambient'}
+    spec.proofArtifacts = {s3: {bucket: 'example-proof-bucket', keyPrefix: 'proofs', region: 'us-east-1'}}
+    spec.dstackController = {enabled: true}
+    spec.capacityManager = {fleets: ['test-fleet'], gpu: 'L4', image: {digest: `sha256:${'c'.repeat(64)}`, repository: 'example.invalid/manager'}, project: 'test-project', provider: 'aws', regions: ['us-east-1']}
+    const directory = path.join(root, 'managed')
+    await run(mode, directory, '--sdk-dir', sdk)
+    const values = read(directory, 'capacity-manager')
+    expect(values.prepared).to.equal(false)
+    expect(values.image).to.deep.equal(spec.capacityManager.image)
+    expect(values.dstackAuth).to.deep.equal({existingSecret: 'capacity-manager-dstack-auth', key: 'token'})
+  })
+
   for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`excludes L1 devnet from external Ethereum deployments through ${mode}`, async () => {
     spec.ethereumDa = {...spec.ethereumDa, chain: 'sepolia'}
     const directory = path.join(root, 'deployment')

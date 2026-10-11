@@ -79,6 +79,11 @@ export function planSpecBootstrap(spec: DeploymentSpec, sdkDirectory?: string): 
     delete hashes['values/l1-devnet-production.yaml']
   }
 
+  if (!spec.capacityManager) {
+    delete files['values/capacity-manager-production.yaml']
+    delete hashes['values/capacity-manager-production.yaml']
+  }
+
   files.Makefile = adaptNodeCounts(files.Makefile, spec)
   files['.data/spec-bootstrap.json'] = JSON.stringify({
     pendingStages: ['identity provisioning/import', 'contract and genesis generation', 'Bridge initialization and canonical protocol context', 'proof materials, compilation and publication', 'secret preparation and chart reconciliation'], schema: 'dogeos/spec-bootstrap/v1', sdkRevision: revision,

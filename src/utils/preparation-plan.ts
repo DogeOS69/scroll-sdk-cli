@@ -6,6 +6,7 @@ import path from 'node:path'
 import type {DeploymentSpec} from '../types/deployment-spec.js'
 
 import {resolveBridgeGenesisImage} from '../commands/setup/bridge-init.js'
+import {resolveCapacityManager} from './capacity-manager.js'
 import {DeploymentSpecFieldError} from './deployment-spec-fields.js'
 import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec} from './deployment-spec-generator.js'
 import {usesDstackPostgres} from './dstack-database.js'
@@ -90,10 +91,13 @@ export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
     add('proof-workers-intent', `GPU capacity declared for separate proof-workers apply: ${workers.count} x ${workers.gpu}, ${workers.maxDurationHours}h, USD ${rentalEnvelope(workers)} rental envelope (no allocation now)`)
   }
 
+  if (spec.capacityManager) add('capacity-manager', 'Prepare Core capacity-manager values for separate Helm installation (no allocation now)')
+
   return steps
 }
 
 export function validatePreparation(spec: DeploymentSpec): void {
+  if (spec.capacityManager) resolveCapacityManager(spec)
   const p = spec.preparation
   if (spec.proofWorkers) {
     resolveProofWorkers(spec.proofWorkers)

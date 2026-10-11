@@ -619,3 +619,25 @@ See the SDK's `examples/network-and-iam.md` for the permission matrix, optional
 Blockscout ALB group configuration and pre-launch network checks. Anonymous
 proof reads required by signers/workers remain supported; snapshot changes
 are deferred.
+
+## Core capacity manager
+
+Declare `capacityManager` instead of `proofWorkers` to select queue-driven
+long-running capacity. `setup apply` prepares values at its final stage, after
+proof publication and verification; it does not allocate GPUs. Use
+`setup capacity-manager prepare` to repeat generation, `credentials` after the
+controller/proof service Secrets exist, and `status` to inspect the manager
+Deployment. Installation remains an explicit `make install-capacity-manager`.
+
+The paired SDK PR supplies the new Chart, image build workflow,
+`examples/capacity-manager-spec.example.yaml` and `examples/capacity-manager.md`.
+Use their matching versions, including WP Chart 0.1.26. A published manager image
+digest and a dedicated preconfigured dstack project/fleet are required. This
+uses the existing compiler Worker image, contract and verified public program
+publication, preserving the proof release rather than rebuilding its circuits.
+
+Provider choice is manual (AWS or Vast), not automatic failover. The example
+keeps one warm worker, caps at two, and uses instance price/hourly budget limits.
+These are not rental-duration caps or total-invoice guarantees. The state PVC
+is retained; pausing/uninstalling the manager does not stop remote billing.
+Follow the SDK's drain/retirement procedure before switching owners/providers.

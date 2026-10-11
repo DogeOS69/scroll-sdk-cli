@@ -1,5 +1,6 @@
 import type {CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
 import type {MonitoringConfig} from '../utils/monitoring-slack.js'
+import type {CapacityManagerConfig} from './capacity-manager.js'
 import type {DstackControllerConfig} from './dstack-controller.js'
 import type {PreparationConfig} from './preparation.js'
 import type {ActiveProofTopologySpec, ProofTopologyArtifactStoreConfig, ProofTopologyDeploymentConfig, ProofTopologySpec} from './proof-topology.js'
@@ -41,6 +42,9 @@ export interface DeploymentSpec {
   }>
   /** Bridge configuration */
   bridge: BridgeConfig
+  /** Core-managed long-running worker capacity; no GPU allocation during setup apply. */
+  capacityManager?: CapacityManagerConfig
+
   /** Deprecated Celestia DA configuration retained for legacy specs only. */
   celestia?: CelestiaConfig
 

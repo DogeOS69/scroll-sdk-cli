@@ -231,6 +231,7 @@ export default class GenerateFromSpec extends Command {
     const templateFiles = flags.bootstrap ? bootstrapFiles : generateValues ? loadSdkTemplateFiles(flags['sdk-dir'] ?? DEFAULT_SDK, spec.templates?.sdkRevision).files : {}
 
     let configs: GeneratedConfigs | null = null
+    if (spec.capacityManager && generateValues && !templateFiles['values/capacity-manager-production.yaml']) throw new Error('Selected SDK revision lacks capacity-manager templates; use the paired capacity-manager SDK branch')
     let valuesFiles: GeneratedValuesFiles | null = null
 
     if (generateConfigs) {

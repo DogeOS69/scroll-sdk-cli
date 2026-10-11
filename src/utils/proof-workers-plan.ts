@@ -72,6 +72,7 @@ export function workerCommand(worker: ProverWorkerContractV1, publication: Proof
 
 export function capacityPlan(input: {generationId: string; imageCheck: ProofWorkerImageCheckV1; publication: ProofProgramPublicationV1; session: string; spec: DeploymentSpec; target: WorkerCapacityPlan['target']; tokenFile: string; worker: ProverWorkerContractV1}): WorkerCapacityPlan {
   const {imageCheck, publication, session, spec, worker} = input
+  if (spec.capacityManager) throw new Error('capacityManager owns GPU capacity; remove it and drain its workers before using the SDK launcher')
   if (!spec.proofWorkers) throw new Error('Declare proofWorkers in the deployment spec before planning GPU capacity')
   const config = resolveProofWorkers(spec.proofWorkers)
   if (!/^[\da-z][\da-z-]{0,23}$/.test(session)) throw new Error('Session must be a lowercase name of at most 24 characters')

@@ -56,6 +56,11 @@ export class CommandPreparationRunner implements PreparationRunner {
     const command = (args: string[], environment?: Record<string, string>) => this.invoke(root, step.id, args, environment)
     const bridgeArgs = ['-N', '--image', p.bridge.image, '--ethereum-da-probe', 'direct', ...(p.bridge.mode === 'production' ? ['--production'] : [])]
     switch (step.id) {
+      case 'capacity-manager': {
+        await command(['capacity-manager', 'prepare'])
+        break
+      }
+
       case 'proof-workers-intent': {
         // Capacity apply runs only after the operator installs the services.
         break
