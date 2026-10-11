@@ -43,6 +43,7 @@ describe('Core capacity manager', () => {
     const input = fixture()
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-prepare-'))
     input.spec.infrastructure = {namespace: 'chain'} as any
+    input.spec.proofTopology!.deployment.workerSecretName = 'dedicated-worker-secret'
     try {
       writeJson(path.join(root, '.scrollsdk/intent.json'), input.spec)
       writeJson(path.join(root, '.data/worker.json'), input.worker)
@@ -61,6 +62,7 @@ describe('Core capacity manager', () => {
       expect(result.namespace).to.equal('chain')
       expect(values.persistence.size).to.equal('4Gi')
       expect(values.wpAuth.existingSecret).to.equal('deployment-proof-secrets')
+      expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), 'utf8')).workerSecret).to.equal('dedicated-worker-secret')
       expect(values.manager.dstack.serverUrl).to.equal('http://dstack-controller.dstack-system.svc:3000')
       const wp = yaml.load(fs.readFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), 'utf8')) as any
       expect(wp.networkPolicy.allowFrom.proofCoordinator).to.have.length(1)

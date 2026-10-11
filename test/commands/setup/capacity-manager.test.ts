@@ -13,14 +13,14 @@ describe('setup capacity-manager credentials', () => {
       fs.mkdirSync(path.join(root, '.scrollsdk/capacity-manager'), {recursive: true})
       fs.mkdirSync(path.join(root, 'values'))
       const log = path.join(root, 'calls.jsonl')
-      fs.writeFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), JSON.stringify({dstack: {auth: {existingSecret: 'dstack-auth', key: 'admin-token'}, deployment: 'dstack-controller', namespace: 'dstack-system'}, namespace: 'chain', project: 'test-project', proofSecret: 'proof-secrets', schema: 'scrollsdk/capacity-manager/v1', valuesFile: 'values/capacity-manager-production.yaml', workerTokenSecret: 'cm_worker_test'}))
+      fs.writeFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), JSON.stringify({dstack: {auth: {existingSecret: 'dstack-auth', key: 'admin-token'}, deployment: 'dstack-controller', namespace: 'dstack-system'}, namespace: 'chain', project: 'test-project', proofSecret: 'proof-secrets', schema: 'scrollsdk/capacity-manager/v1', valuesFile: 'values/capacity-manager-production.yaml', workerSecret: 'dedicated-worker-secret', workerTokenSecret: 'cm_worker_test'}))
       fs.writeFileSync(path.join(root, 'values/capacity-manager-production.yaml'), 'manager:\n  workerTokenSecret: cm_worker_test\n  dstack:\n    project: test-project\n    fleets: [test-fleet]\n')
       fs.writeFileSync(path.join(root, 'kubectl'), `#!/usr/bin/env node
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 const input = args.includes('exec') || args.includes('apply') ? fs.readFileSync(0, 'utf8') : '';
 fs.appendFileSync(process.env.CM_TEST_LOG, JSON.stringify({args, input}) + '\\n');
-if(args.includes('get') && args.includes('proof-secrets')) console.log(JSON.stringify({data:{'prover-worker-token':Buffer.from('NONFUNCTIONAL_WORKER_TOKEN').toString('base64')}}));
+if(args.includes('get') && args.includes('dedicated-worker-secret')) console.log(JSON.stringify({data:{'prover-worker-token':Buffer.from('NONFUNCTIONAL_WORKER_TOKEN').toString('base64')}}));
 else if(args.includes('get') && args.includes('dstack-auth')) console.log(JSON.stringify({data:{'admin-token':Buffer.from('NONFUNCTIONAL_DSTACK_TOKEN').toString('base64')}}));
 else if(args.includes('get')) process.stdout.write('');
 else console.log('{"updated":true}');

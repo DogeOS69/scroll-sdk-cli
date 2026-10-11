@@ -47,7 +47,7 @@ export default class CapacityManager extends Command {
         return Buffer.from(secret.data[key], 'base64').toString('utf8').trim()
       }
 
-      const workerToken = readSecret(plan.namespace, plan.proofSecret, 'prover-worker-token')
+      const workerToken = readSecret(plan.namespace, plan.workerSecret, 'prover-worker-token')
       const dstackToken = readSecret(plan.dstack.namespace, plan.dstack.auth.existingSecret, plan.dstack.auth.key)
       const existing = run(plan.namespace, ['get', 'secret', 'capacity-manager-dstack-auth', '--ignore-not-found', '-o', 'json'])
       if (existing.trim() && JSON.parse(existing).metadata?.labels?.['app.kubernetes.io/managed-by'] !== 'scrollsdk-capacity-manager') throw new Error('Refusing to overwrite an independently managed capacity-manager-dstack-auth Secret')

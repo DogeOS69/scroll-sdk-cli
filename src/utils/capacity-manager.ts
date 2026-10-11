@@ -89,6 +89,6 @@ export function prepareCapacityManager(root: string, readContract = validateProo
   wp.networkPolicy.allowFrom.capacityManager = [{podSelector: {matchLabels: {'app.kubernetes.io/name': 'capacity-manager'}}}]
   fs.writeFileSync(wpFile, yaml.dump(wp, {lineWidth: -1, noRefs: true}))
   fs.writeFileSync(file, content)
-  writeJson(previousFile, {dstack: {auth: controller.auth, deployment: dstackName, namespace: dstackNamespace}, fingerprint, generationId: contract.generationId, namespace: spec.infrastructure.namespace ?? 'default', project: projected.manager.dstack.project, proofSecret: coordinator.persistence.secrets.name, schema: 'scrollsdk/capacity-manager/v1', valuesFile: CAPACITY_MANAGER_VALUES, workerTokenSecret: projected.manager.workerTokenSecret})
+  writeJson(previousFile, {dstack: {auth: controller.auth, deployment: dstackName, namespace: dstackNamespace}, fingerprint, generationId: contract.generationId, namespace: spec.infrastructure.namespace ?? 'default', project: projected.manager.dstack.project, proofSecret: coordinator.persistence.secrets.name, schema: 'scrollsdk/capacity-manager/v1', valuesFile: CAPACITY_MANAGER_VALUES, workerSecret: spec.proofTopology?.deployment.workerSecretName ?? coordinator.persistence.secrets.name, workerTokenSecret: projected.manager.workerTokenSecret})
   return {namespace: spec.infrastructure.namespace ?? 'default', project: projected.manager.dstack.project, valuesFile: file}
 }
