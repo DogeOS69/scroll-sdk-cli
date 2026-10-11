@@ -15,7 +15,8 @@ import {reconcileScrollMonitorStatusPage} from '../../../src/utils/status-page-v
 const observeComponents = () => Object.fromEntries(COMPONENT_KEYS.map(key => [key, {mode: 'observe'}]))
 const ENV = 'INSTATUS_GRAFANA_WEBHOOK_URL'
 const FILE = 'instatus-contact-points.yaml'
-const ingress = (host: string) => ({enabled: true, hosts: [{host, paths: [{path: '/'}]}]})
+const annotations = {'alb.ingress.kubernetes.io/certificate-arn': 'arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000'}
+const ingress = (host: string) => ({annotations, enabled: true, hosts: [{host, paths: [{path: '/'}]}]})
 const target = () => ({componentIds: {}, initialStatus: 'OPERATIONAL', pageId: 'page-1', showUptime: false})
 const catalog = {components: [{description: 'Public RPC access.', endpoints: ['https://rpc.example/'], key: 'public-rpc', name: 'Public RPC'}], environment: 'testnet', pageName: 'DogeOS'}
 const remote = {description: 'old', group: null, id: 'rpc-1', name: 'Public RPC', order: 0, showUptime: false, status: 'MAJOROUTAGE'}
@@ -31,7 +32,7 @@ describe('status-page generation and explicit Instatus apply', () => {
     values = {grafana: {alerting: {'policies.yaml': {policies: [{receiver: 'internal'}]}}, envValueFrom: {OTHER: {secretKeyRef: {key: 'k', name: 'other'}}}}, statusPage: {enabled: true, environment: 'testnet'}}
     write('frontends-production.yaml', {ingress: {main: ingress('portal.custom.example')}})
     write('l2-reth-rpc-public-production.yaml', {ingress: {main: ingress('rpc.custom.example'), websocket: ingress('ws.custom.example')}})
-    write('blockscout-production.yaml', {'blockscout-stack': {blockscout: {env: {}}, frontend: {env: {}, ingress: {enabled: true, hostname: 'explorer.custom.example'}}}})
+    write('blockscout-production.yaml', {'blockscout-stack': {blockscout: {env: {}}, frontend: {env: {}, ingress: {annotations, enabled: true, hostname: 'explorer.custom.example'}}}})
   })
   afterEach(() => {
     sinon.restore()

@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import {deploymentIngresses, reconcileDeploymentIngresses} from '../../utils/public-service-ingress.js'
+import {isRetiredServiceFile} from '../../utils/retired-services.js'
 
 export default class SetupTls extends Command {
   static override description = 'Configure ACM TLS on enabled AWS ALB ingresses in deployment values (no cluster changes)'
@@ -22,7 +23,7 @@ export default class SetupTls extends Command {
     if (!certificate && !flags['non-interactive']) certificate = await input({message: 'Issued ACM certificate ARN covering the enabled ingress hosts:'})
     if (!certificate) throw new Error('--certificate-arn is required; ALB terminates TLS using ACM, without cert-manager or an ingress-nginx controller')
     const writes: Array<{content: string; file: string}> = []
-    for (const name of fs.readdirSync(flags['values-dir']).filter(name => /-production(?:-\d+)?\.yaml$/.test(name))) {
+    for (const name of fs.readdirSync(flags['values-dir']).filter(name => /-production(?:-\d+)?\.yaml$/.test(name) && !isRetiredServiceFile(name))) {
       const file = path.join(flags['values-dir'], name)
       const original = fs.readFileSync(file, 'utf8')
       const values = yaml.load(original) as Record<string, any>

@@ -44,20 +44,22 @@ describe('active service ingress configuration', () => {
     try {
       fs.mkdirSync(path.join(root, 'bin'))
       fs.mkdirSync(path.join(root, 'values'))
-      fs.writeFileSync(path.join(root, 'bin/kubectl'), '#!/bin/sh\nif [ "$1" = get ] && [ "$2" = clusterissuer ]; then echo letsencrypt-prod; else exit 99; fi\n', {mode: 0o755})
+      fs.writeFileSync(path.join(root, 'bin/kubectl'), '#!/bin/sh\nexit 99\n', {mode: 0o755})
       const retired = ['admin-system-dashboard', 'coordinator-api', 'rollup-explorer-backend', 'l1-explorer']
       for (const service of ['tso-service', 'proof-coordinator', ...retired]) {
         fs.writeFileSync(path.join(root, 'values', `${service}-production.yaml`), yaml.dump({ingress: {main: {enabled: true, hosts: [{host: `${service}.example.com`, paths: [{path: '/'}]}]}}}))
       }
 
       const before = retired.map(service => fs.readFileSync(path.join(root, 'values', `${service}-production.yaml`), 'utf8'))
-      await execFileAsync('node', [cli, 'setup', 'tls', '-N', '--json', '--cluster-issuer', 'letsencrypt-prod'], {
+      const certificate = 'arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000'
+      await execFileAsync('node', [cli, 'setup', 'tls', '-N', '--json', '--certificate-arn', certificate], {
         cwd: root, env: {...process.env, PATH: `${path.join(root, 'bin')}:${process.env.PATH}`},
       })
       for (const service of ['tso-service', 'proof-coordinator']) {
         const values = yaml.load(fs.readFileSync(path.join(root, 'values', `${service}-production.yaml`), 'utf8')) as any
-        expect(values.ingress.main.annotations['cert-manager.io/cluster-issuer']).to.equal('letsencrypt-prod')
-        expect(values.ingress.main.tls).to.deep.equal([{hosts: [`${service}.example.com`], secretName: `${service}-tls`}])
+        expect(values.ingress.main.annotations['alb.ingress.kubernetes.io/certificate-arn']).to.equal(certificate)
+        expect(values.ingress.main.annotations).not.to.have.property('cert-manager.io/cluster-issuer')
+        expect(values.ingress.main.tls).to.equal(undefined)
       }
 
       expect(retired.map(service => fs.readFileSync(path.join(root, 'values', `${service}-production.yaml`), 'utf8'))).to.deep.equal(before)

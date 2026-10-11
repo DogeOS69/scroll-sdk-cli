@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Inspect generated native config and Helm values. */
 import * as toml from '@iarna/toml'
 import {Config} from '@oclif/core'
+import bitcore from 'bitcore-lib-doge'
 import {expect} from 'chai'
 import * as yaml from 'js-yaml'
 import {execFileSync, spawnSync} from 'node:child_process'
@@ -30,6 +31,7 @@ function fixture(): DeploymentSpec {
     .replaceAll('$ENV:OWNER_ADDRESS', '0x0000000000000000000000000000000000000001')
     .replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')
   const spec = normalizeDeploymentSpec(yaml.load(text) as DeploymentSpec)
+  spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toAddress().toString()
   spec.infrastructure = {bootnodeCount: 1, provider: 'local', sequencerCount: 1}
   spec.bridge.seedString = 'NONFUNCTIONAL_TEST_SEED'
   return spec
