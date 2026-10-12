@@ -46,3 +46,8 @@ export function ethereumDaRuntimeEnv(config: EthereumDaRuntimeConfig): Record<st
 
   return env
 }
+
+/** Deployment environment, not the Ethereum RPC chain (core PR #1466). */
+export function defaultMaxPendingBlobTxs(environment: string): number {
+  return environment === 'mainnet' ? 8 : 10
+}

@@ -565,6 +565,7 @@ export function buildEthDaSubmitterPrepEnv(input: {
   ethereumRpcUrl: string | undefined
   l2RpcUrl: string | undefined
   l2StartBlockNumber?: number | string | undefined
+  maxPendingBlobTxs?: number | string
   runtime?: EthereumDaRuntimeConfig
   s3Bucket?: string | undefined
   s3Enabled?: boolean | string | undefined
@@ -579,6 +580,7 @@ export function buildEthDaSubmitterPrepEnv(input: {
     DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: input.l2RpcUrl,
     DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER: optionalConfigString(input.l2StartBlockNumber),
     DOGEOS_ETH_DA_SUBMITTER_PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
+    DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS: optionalConfigString(input.maxPendingBlobTxs),
     ...ethereumDaRuntimeEnv(input.runtime ?? {}),
   }
 
@@ -3019,6 +3021,7 @@ export default class SetupPrepCharts extends Command {
           ethereumRpcUrl: this.getConfigValue("ethereumDa.submitterRpcUrl"),
           l2RpcUrl: this.getConfigValue("general.L2_RPC_ENDPOINT"),
           l2StartBlockNumber: this.dogeConfig.ethereumDa?.l2StartBlockNumber,
+          maxPendingBlobTxs: this.dogeConfig.ethereumDa?.publish?.maxPendingBlobTxs,
           runtime: this.dogeConfig.ethereumDa,
           s3Bucket: s3Archive?.bucket,
           s3Enabled: s3Archive?.enabled,

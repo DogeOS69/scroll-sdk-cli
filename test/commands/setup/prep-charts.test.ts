@@ -592,6 +592,19 @@ describe('setup prep-charts eth-da-submitter updates', () => {
     expect(env).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_S3__MAX_RETRIES')
   })
 
+  it('reconciles the persisted pending blob cap without resetting manual values when absent', () => {
+    const key = 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS'
+    const values: any = {configMaps: {env: {data: {[key]: '4'}}}}
+    const input = {ethereumRpcUrl: 'https://eth.example.invalid', l2RpcUrl: 'http://l2-rpc:8545'}
+    for (const cap of [8, 10, 12]) {
+      applyConfigMapEnvValues(values, buildEthDaSubmitterPrepEnv({...input, maxPendingBlobTxs: cap}))
+      expect(values.configMaps.env.data[key]).to.equal(String(cap))
+    }
+
+    applyConfigMapEnvValues(values, buildEthDaSubmitterPrepEnv(input))
+    expect(values.configMaps.env.data[key]).to.equal('12')
+  })
+
   it('preserves the template-owned uncompressed chunk byte limit', () => {
     const values: any = {
       configMaps: {
