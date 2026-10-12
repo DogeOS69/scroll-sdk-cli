@@ -39,6 +39,9 @@ export interface DeploymentSpec {
     name: string
     transportPubkey: string
   }>
+  /** Explicit per-bootnode public TCP P2P exposure; omitted nodes remain private when supplied. */
+  bootnodePublicP2p?: BootnodePublicP2p[]
+
   /** Bridge configuration */
   bridge: BridgeConfig
   /** Deprecated Celestia DA configuration retained for legacy specs only. */
@@ -899,4 +902,13 @@ export interface ValidationWarning {
   message: string
   path: string
   suggestion?: string
+}
+
+/** AWS P2P-only NLB intent. Partner source addresses are CIDRs, not enodes. */
+export interface BootnodePublicP2p {
+  eipAllocations?: string[]
+  enabled: boolean
+  index: number
+  sourceRanges?: string[]
+  subnets?: string[]
 }

@@ -3,7 +3,9 @@
 > **Deprecated command:** `scrollsdk setup bootnode-public-p2p` is retained
 > with a warning and is not invoked by `setup apply`. It generates legacy
 > `reth.service.extra.p2p` values that the current l2-reth chart rejects.
-> For new deployments, keep public P2P disabled by default. Enable
+> For spec deployments, use [bootnodePublicP2p](spec-bootnode-public-p2p.md);
+> plan/apply generates the selected indexed values and enforces a source allowlist.
+> For manual deployments, keep public P2P disabled by default. Enable
 > `reth.p2pExternal` only in the selected bootnodes' indexed values, with
 > approved partner egress CIDRs in `sourceRanges`, subnets, EIP allocations
 > and `allowOpenPeering: false`. Follow the SDK l2-reth chart's activation

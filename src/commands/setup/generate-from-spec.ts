@@ -3,6 +3,7 @@ import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import {projectBootnodePublicP2p} from '../../utils/bootnode-public-p2p.js'
 import {DEFAULT_SDK, DEFAULT_SPEC, deploymentEnvFile} from '../../utils/deployment-paths.js'
 import {
   type GeneratedConfigs,
@@ -307,6 +308,8 @@ export default class GenerateFromSpec extends Command {
       reconcileDeploymentIngresses(frontendValues, 'frontends', false)
       valuesFiles['frontends-production.yaml'] = yaml.dump(frontendValues, {lineWidth: -1})
       if (!identity) jsonCtx.info('Frontend deposits remain disabled until Bridge proof materials are prepared; prep-charts will fill the deployment identity.')
+
+      projectBootnodePublicP2p(valuesFiles, spec, existingValues)
 
       // Bootstrap also copies values with no spec projection (for example,
       // monitoring without Slack intent). Retain operator edits to those too.

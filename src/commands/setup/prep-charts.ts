@@ -20,6 +20,7 @@ import {
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
+import {applyBootnodePublicP2p, validateBootnodePublicP2p} from '../../utils/bootnode-public-p2p.js'
 import {contractsDeploymentGasPrice} from '../../utils/contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
 import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
@@ -1845,6 +1846,7 @@ export default class SetupPrepCharts extends Command {
 
   private async processBootnodeRethInstanceFiles(valuesDir: string): Promise<{ skipped: number; updated: number }> {
     const instances = this.dogeConfig.bootnodeReth?.instances ?? []
+    validateBootnodePublicP2p(this.dogeConfig.bootnodePublicP2p, instances.map(instance => instance.index))
     if (instances.length === 0) return { skipped: 0, updated: 0 }
 
     let updatedCharts = 0
@@ -2273,6 +2275,7 @@ export default class SetupPrepCharts extends Command {
         const previousRethValues = JSON.stringify(productionYaml)
         const resolved = this.buildBootnodeRethResolvedConfig(Number(productionNumber))
         applyBootnodeRethValues(productionYaml, resolved)
+        applyBootnodePublicP2p(productionYaml, Number(productionNumber), this.dogeConfig.bootnodePublicP2p)
         productionYaml.reth ||= {}
         const trustedPeers = this.buildFreshRethTrustedPeers()
         if (productionYaml.reth.trustedPeers !== trustedPeers) {

@@ -1,3 +1,4 @@
+import {validateBootnodePublicP2p} from './bootnode-public-p2p.js'
 import {validateMonitoring} from './monitoring-slack.js'
 /**
  * DeploymentSpec Generator
@@ -522,6 +523,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
 
   const spec = normalizeDeploymentSpec(rawSpec)
   const errors: ValidationError[] = []
+  try {validateBootnodePublicP2p(spec.bootnodePublicP2p, Array.from({length: spec.infrastructure?.bootnodeCount ?? 0}, (_, index) => index), spec.infrastructure?.provider)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'bootnodePublicP2p'})}
   const warnings: ValidationWarning[] = []
   try {specAwsSecretPrefix(spec)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'preparation.secretUpload.awsPrefix'})}
   try {validateMonitoring(spec.monitoring)} catch {errors.push({code: 'E601_INVALID_VALUE', message: 'monitoring.slack.enabled must be a boolean', path: 'monitoring.slack.enabled'})}
@@ -1511,6 +1513,8 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
 
   validateMonitoring(spec.monitoring)
   if (spec.monitoring) config.monitoring = structuredClone(spec.monitoring)
+  validateBootnodePublicP2p(spec.bootnodePublicP2p, Array.from({length: spec.infrastructure.bootnodeCount}, (_, index) => index), spec.infrastructure.provider)
+  if (spec.bootnodePublicP2p !== undefined) config.bootnodePublicP2p = structuredClone(spec.bootnodePublicP2p)
   config.network = spec.dogecoin.network
   const identityIntent = resolveSpecIdentities(spec)
   if (identityIntent) config.identityIntent = identityIntent

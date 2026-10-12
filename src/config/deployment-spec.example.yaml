@@ -70,6 +70,10 @@ infrastructure:
 #     storageClass: gp3
 # See docs/dstack-controller.md for ingress and multi-provider credentials.
 
+# Public bootnode P2P stays disabled until selected nodes have approved source CIDRs.
+# See docs/spec-bootnode-public-p2p.md for activation inputs.
+bootnodePublicP2p: []
+
 network:
   l1ChainName: "DOGE"
   l2ChainName: "DogeOS Devnet"
