@@ -6,6 +6,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import type {ProofCoordinatorConfig} from '../types/deployment-spec.js'
+import type {DogeConfig} from '../types/doge-config.js'
 import type {ProofTopologySpec} from '../types/proof-topology.js'
 
 import {YAML_DUMP_OPTIONS} from '../config/constants.js'
@@ -14,6 +15,7 @@ import {
   PROVER_WORKER_EXECUTABLE,
   writeCompiledProverWorkerBundle,
 } from './compiled-prover-worker-bundle.js'
+import {proofCoordinatorRpcKeys, readEthereumRpcSecretStore, reconcileEthereumRpcSecrets} from './ethereum-rpc-secrets.js'
 import {buildProofCoordinatorIngress} from './proof-coordinator-ingress.js'
 import {readStagedSignerProofArtifactBaseUrl} from './proof-signer-policy-input.js'
 import {
@@ -58,6 +60,7 @@ export interface ReconcileCompiledProofTopologyOptions {
   deploymentName: string
   ethereumDaBlobSource?: ProofTopologyEthereumDaBlobSource
   ethereumL1RpcUrl?: string
+  ethereumRpcSecretStore?: DogeConfig['ethereumRpcSecretStore']
   network: string
   proofCoordinator?: ProofCoordinatorConfig
   proofTopology: ProofTopologySpec
@@ -998,6 +1001,10 @@ export function reconcileCompiledProofTopology(
       options.coordinatorIngressHost,
     )
   }
+
+  const rpcValues = readYaml(coordinatorValuesPath)
+  const rpcKeys = coordinatorSource ? proofCoordinatorRpcKeys(fs.readFileSync(options.coordinatorConfigPath, 'utf8')) : []
+  if (reconcileEthereumRpcSecrets(rpcValues, 'proof-coordinator', options.ethereumRpcSecretStore ?? readEthereumRpcSecretStore(options.deploymentDir), rpcKeys)) writeYaml(coordinatorValuesPath, rpcValues)
 
   if (!fs.existsSync(workerValuesPath)) {
     throw new Error(`Prover Worker values template not found: ${workerValuesPath}`)

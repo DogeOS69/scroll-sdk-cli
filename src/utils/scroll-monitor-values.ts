@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Helm values are dynamic YAML mappings. */
 import type {DogeConfig} from '../types/doge-config.js'
 
+import {resolveEthereumRpc} from './ethereum-rpc-secrets.js'
 import {grafanaAdminReference} from './grafana-admin.js'
 import {getRequiredManagedSignerAddress} from './signer-roles.js'
 
@@ -94,8 +95,8 @@ function chainId(value: unknown, label: string): string {
 }
 
 function rpcUrl(value: unknown, label: string): string {
-  const text = typeof value === 'string' ? value.trim() : ''
   try {
+    const text = resolveEthereumRpc(value, label)
     const parsed = new URL(text)
     if (['http:', 'https:'].includes(parsed.protocol) && !text.includes('<TODO>')) return text
   } catch {

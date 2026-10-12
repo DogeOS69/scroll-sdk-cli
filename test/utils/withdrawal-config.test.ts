@@ -174,7 +174,7 @@ ${WITHDRAWAL_DEPLOYMENT_END}
     })
     const parsed = toml.parse(remerged) as any
     expect(parsed.ethereum_da.blob_source.aws_s3).to.equal(undefined)
-    expect(parsed.ethereum_da.blob_source.beacon_node.url).to.equal('https://beacon.example.com')
+    expect(parsed.ethereum_da.blob_source.beacon_node.url).to.equal('http://ethereum-beacon.invalid')
   })
 
   it('fails closed when the block drifted below a hand-maintained table', () => {

@@ -200,6 +200,28 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     }
   }
 
+  it('uses the selected custom config Secret provider instead of an unrelated default config', () => {
+    fs.writeFileSync(path.join(root, '.data/doge-config.toml'), '[ethereumRpcSecretStore]\nprovider="aws"\nprefix="wrong-default"\n')
+    reconcileCompiledProofTopology({
+      compile() {
+        const bundle = fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active')
+        fs.appendFileSync(path.join(bundle.bundleDir, 'proof-coordinator.toml'), '[materializer.bridge.ethereum_da]\nl1_rpc_url="http://ethereum-rpc.invalid"\n')
+        return bundle
+      },
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      deploymentDir: root,
+      deploymentName: 'test',
+      ethereumRpcSecretStore: {prefix: 'local', provider: 'kubernetes'},
+      network: 'testnet',
+      proofTopology: topology('active'),
+      valuesDir: path.join(root, 'values'),
+      withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
+    })
+    const values = yaml.load(fs.readFileSync(path.join(root, 'values/proof-coordinator-production.yaml'), 'utf8')) as any
+    expect(values.externalSecrets ?? {}).not.to.have.property('proof-coordinator-rpc-env')
+    expect(values.envFrom).to.deep.include({secretRef: {name: 'proof-coordinator-rpc-env'}})
+  })
+
   it('enables a configured prover ingress with matching worker URL, TLS and numeric ingress port', () => {
     const file = path.join(root, 'values/proof-coordinator-production.yaml')
     const values = yaml.load(fs.readFileSync(file, 'utf8')) as any

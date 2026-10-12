@@ -2,6 +2,7 @@ import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import type {DogeConfig} from '../types/doge-config.js'
 import type {ProofTopologySpec} from '../types/proof-topology.js'
 import type {CompiledProverWorkerBundleResult} from './compiled-prover-worker-bundle.js'
 import type {ProofAwsConfig} from './proof-aws-config.js'
@@ -24,6 +25,7 @@ export interface ReconcileProofKubernetesOptions {
   deploymentDir?: string
   ethereumDaBlobSource?: ProofTopologyEthereumDaBlobSource
   ethereumL1RpcUrl?: string
+  ethereumRpcSecretStore?: DogeConfig['ethereumRpcSecretStore']
   intent: ResolvedProofIntent
   materialsReceipt?: string
   network?: string
@@ -120,6 +122,7 @@ export function reconcileProofKubernetes(options: ReconcileProofKubernetesOption
     deploymentName: options.intent.deploymentName,
     ethereumDaBlobSource: options.ethereumDaBlobSource,
     ethereumL1RpcUrl: options.ethereumL1RpcUrl,
+    ethereumRpcSecretStore: options.ethereumRpcSecretStore,
     network: options.intent.network,
     proofCoordinator: options.intent.proofCoordinator,
     proofTopology: options.intent.proofTopology,

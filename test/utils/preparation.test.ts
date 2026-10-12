@@ -337,9 +337,22 @@ describe('resumable preparation plan', () => {
     await rejected(() => applyPreparation(deployment, {async run() {}}), 'frozen intent changed')
   })
 
+  it('uploads to the same cluster-scoped prefix used by generated references', async () => {
+    const spec = fixture()
+    spec.infrastructure = {...spec.infrastructure, aws: {accountId: '123456789012', eksClusterName: 'test-cluster', region: 'us-east-1'}, namespace: 'partner', provider: 'aws'}
+    spec.preparation!.secretUpload = {provider: 'aws'}
+    const calls: string[][] = []
+    const runner = new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)})
+    await runner.run(preparationSteps(spec).find(step => step.id === 'secret-upload')!, spec, deployment, await makePlan())
+    expect(calls[0][calls[0].indexOf('--aws-prefix') + 1]).to.equal(`dogeos/test-cluster/partner/${spec.metadata.name}`)
+    spec.preparation!.secretUpload.awsPrefix = 'conflicting'
+    spec.infrastructure.aws!.secretsPrefix = 'another'
+    expect(() => validatePreparation(spec)).to.throw('must match')
+  })
+
   it('rejects incomplete cloud destinations before any resources are created', () => {
     const spec = fixture()
-    spec.preparation!.secretUpload = {provider: 'aws'}
+    spec.preparation!.secretUpload = {awsPrefix: 'explicit-local-test', provider: 'aws'}
     expect(() => validatePreparation(spec)).to.throw('explicit region')
     spec.preparation!.secretUpload.awsRegion = 'us-west-2'
     expect(() => validatePreparation(spec)).not.to.throw()

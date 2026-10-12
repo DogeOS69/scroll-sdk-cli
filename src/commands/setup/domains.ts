@@ -509,8 +509,8 @@ export default class SetupDomains extends Command {
     logSection('New Ethereum DA configurations:')
     logKeyValue('chain', ethereumDaConfig.chain)
     logKeyValue('chainId', ethereumDaConfig.chainId)
-    logKeyValue('submitterRpcUrl', ethereumDaConfig.submitterRpcUrl)
-    logKeyValue('beaconRpcUrl', ethereumDaConfig.beaconRpcUrl)
+    logKeyValue('submitterRpcUrl', '[private endpoint omitted]')
+    logKeyValue('beaconRpcUrl', '[private endpoint omitted]')
 
     // Final confirmation - in non-interactive mode, always proceed
     const confirmUpdate = await resolveConfirm(

@@ -124,7 +124,7 @@ describe('spec values runtime policy across entry points', () => {
       const da = read(directory, 'eth-da-submitter').configMaps.env.data
       expect(da.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE).to.equal('123011')
       expect(da.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_OPEN_L2_TIME).to.equal('2h')
-      expect(da.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL).to.equal(spec.ethereumDa!.l1RpcUrl)
+      expect(da.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL).to.equal(undefined)
       const fee = read(directory, 'fee-oracle').configMaps.env.data
       expect(fee.DOGEOS_FEE_ORACLE_ETHEREUM_DA__MIN_PRIORITY_FEE_PER_GAS_WEI).to.equal('100000000')
       expect(fee.DOGEOS_FEE_ORACLE_ETHEREUM_DA__ADVANCE_L2_ACCOUNTING__ENABLED).to.equal('false')
@@ -177,7 +177,7 @@ describe('spec values runtime policy across entry points', () => {
     const da = read(directory, 'eth-da-submitter').configMaps.env.data
     expect(da.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_OPEN_L2_TIME).to.equal('3h')
     expect(da.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__MIN_PRIORITY_FEE_WEI).to.equal('123456789')
-    expect(da.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL).to.equal('https://operator-selected.example.invalid')
+    expect(da.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL).to.equal(undefined)
     expect(read(directory, 'fee-oracle').configMaps.env.data[feeMode]).to.equal('dry_run')
     expect(read(directory, 'scroll-monitor').grafana.enabled).to.equal(true)
     expect(read(directory, 'frontends').env.L1_INTERFACE_UPSTREAM).to.equal('reviewed-proxy.namespace.svc:9090')

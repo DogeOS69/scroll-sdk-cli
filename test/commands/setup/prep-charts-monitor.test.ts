@@ -195,6 +195,7 @@ describe('setup prep-charts scroll-monitor balance generation', () => {
           ethereum: {ethDaSubmitter: {address: '<TODO>'}, feeOracle: {address: '<TODO>'}},
         }, grafana}))
         const config = inputs()
+        config.dogeConfig.ethereumRpcSecretStore = {prefix: 'dogeos/fixture/default/bridge', provider: 'aws'}
         const output: string[] = []
         const command: any = Object.create(PrepCharts.prototype)
         Object.assign(command, {
@@ -224,7 +225,7 @@ describe('setup prep-charts scroll-monitor balance generation', () => {
         expect(first + output.join('\n')).not.to.include('nonfunctional-monitor-fixture')
         expect(generated.balanceMonitoring.ethereum.ethDaSubmitter.address).to.equal(DA_ADDRESS)
         expect(generated.balanceMonitoring.ethereum.ethDaSubmitter.expectedChainId).to.equal('1')
-        expect(generated.balanceMonitoring.ethereum.ethDaSubmitter.rpcUrl).to.equal(config.dogeConfig.ethereumDa.submitterRpcUrl)
+        expect(generated.balanceMonitoring.ethereum.ethDaSubmitter.rpcUrl).to.equal('')
         expect(generated.balanceMonitoring.ethereum.feeOracle.rpcUrl).to.equal(config.l2RpcUrl)
         expect(output.join('\n')).not.to.contain('key=secret')
         expect(await command.processProductionYaml(directory)).to.deep.equal({skipped: 1, updated: 0})

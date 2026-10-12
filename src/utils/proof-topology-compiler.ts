@@ -12,6 +12,7 @@ import type {
   ProofTopologySpec,
 } from '../types/proof-topology.js'
 
+import {ETHEREUM_BEACON_PLACEHOLDER, ETHEREUM_RPC_PLACEHOLDER, resolveEthereumRpc, sanitizeEthereumRpcToml} from './ethereum-rpc-secrets.js'
 import {removeRetiredBatchWitnessSources} from './proof-coordinator-config.js'
 import {buildS3PublicBaseUrl} from './s3-archive.js'
 
@@ -81,7 +82,7 @@ export function proofTopologyEthereumDaBlobSource(
         url: publicBaseUrl,
       },
     } : {}),
-    beaconNodeUrl,
+    beaconNodeUrl: resolveEthereumRpc(beaconNodeUrl, 'Ethereum beacon RPC'),
   }
 }
 
@@ -449,7 +450,7 @@ export function projectProofCoordinatorEthereumDa(
     const existing = tableAt(ethereumDa, ['blob_source']) || {}
     delete existing.anvil
     existing.timeout_ms = source.timeoutMs ?? 10_000
-    existing.beacon_node = {url: source.beaconNodeUrl}
+    existing.beacon_node = {url: ETHEREUM_BEACON_PLACEHOLDER}
     if (source.awsS3) {
       existing.aws_s3 = {
         ...(source.awsS3.keyPrefix ? {key_prefix: source.awsS3.keyPrefix} : {}),
@@ -655,6 +656,11 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
     const pcInput = path.join(inputDir, pcName)
     fs.writeFileSync(pcInput, removeRetiredBatchWitnessSources(fs.readFileSync(pcInput, 'utf8')), {mode: 0o600})
     const hasSubmitter = copyInput(path.resolve(deploymentDir, options.ethDaSubmitterBaseConfig ?? 'eth-da-submitter/EthDASubmitter.toml'), path.join(inputDir, submitterName), 'eth-da-submitter base config', false)
+    for (const file of [wpName, pcName, ...(hasSubmitter ? [submitterName] : [])]) {
+      const target = path.join(inputDir, file)
+      fs.writeFileSync(target, sanitizeEthereumRpcToml(fs.readFileSync(target, 'utf8')), {mode: 0o600})
+    }
+
     const bridgePasswordName = 'dogecoin-rpc-password'
     if (options.bridge) fs.writeFileSync(path.join(inputDir, bridgePasswordName), options.bridge.dogecoinRpcPassword, {mode: 0o600})
     const mountedInput = (name: string): string => container ? `/input/${name}` : path.join(inputDir, name)
@@ -684,7 +690,7 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
         l2_genesis_json: deployment.l2GenesisJson ?? '/app/genesis/genesis.json',
         prover_bind: deployment.proverBind ?? '0.0.0.0:7788',
         prover_public_url: proverPublicUrl,
-        ...(options.ethereumL1RpcUrl ? {ethereum_l1_rpc_url: options.ethereumL1RpcUrl} : {}),
+        ...(options.ethereumL1RpcUrl ? {ethereum_l1_rpc_url: ETHEREUM_RPC_PLACEHOLDER} : {}),
         ...(options.bridge ? {bridge: {
           dogecoin_network: options.bridge.dogecoinNetwork,
           dogecoin_rpc_password_file: mountedInput(bridgePasswordName),

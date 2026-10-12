@@ -60,7 +60,7 @@ export interface DeploymentSpec {
   ethereumDa?: EthereumDaConfig
 
   /** Explicit fee-oracle write policy. Fresh spec deployments default to live. */
-  feeOracle?: {contractWriteMode?: 'dry_run' | 'live'}
+  feeOracle?: {contractWriteMode?: 'dry_run' | 'live'; ethereumRpcUrl?: string}
 
   /** Frontend and ingress configuration */
   frontend: FrontendConfig
