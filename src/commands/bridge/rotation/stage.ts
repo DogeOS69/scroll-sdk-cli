@@ -1,9 +1,10 @@
 import {Command, Flags} from '@oclif/core'
 import {execFileSync} from 'node:child_process'
+import {createHash} from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import {loadRotationPlan, prepareRotationStage, rotationJson, runtimeDirectory} from '../../../utils/bridge-rotation-files.js'
+import {loadRotationPlan, prepareRotationStage, rotationCommand, rotationJson, runtimeDirectory} from '../../../utils/bridge-rotation-files.js'
 import {BridgeRotationRuntime} from '../../../utils/bridge-rotation-runtime.js'
 
 export default class RotationStage extends Command {
@@ -24,6 +25,7 @@ export default class RotationStage extends Command {
     } catch {throw new Error('WP staging did not finish; inspect the private stage log and rerun stage. No rotation was submitted')} finally {fs.closeSync(log)}
 
     receipt.status = 'applied'; rotationJson(path.join(dir, 'stage.json'), receipt)
-    this.log(JSON.stringify({directory: dir, next: 'Distribute the public proposal and signer-deployment package. Collect authenticated approvals and readiness receipts before apply. Never distribute private-backup or stage-private.log.', proposalSha256: envelope.sha256, status: 'staged'}, null, 2))
+    const manifestSha256 = createHash('sha256').update(fs.readFileSync(path.join(dir, 'signer-deployment/signer-policy-manifest.json'))).digest('hex')
+    this.log(JSON.stringify({directory: dir, manifestSha256, next: rotationCommand('check', {context: runtime.context, dir: root, namespace: runtime.namespace, rotationDir: dir, spec: path.resolve(flags['rotation-dir'] ? dir : root, flags.spec)}), note: 'Send signer-deployment/ and its manifestSha256 through the authenticated channel. Collect operator receipts in receipts/, then run bridge rotation check. Never distribute private-backup or stage-private.log.', proposalSha256: envelope.sha256, status: 'staged'}, null, 2))
   }
 }

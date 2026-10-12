@@ -1,5 +1,14 @@
 # Scroll SDK CLI
 
+
+For existing-bridge attestation rotation, see the SDK's
+[bridge and signer operator walkthrough](https://github.com/DogeOS69/scroll-sdk/blob/feat/rotation-operator-workflow/partner-kit/attestation-signer/docs/rotation-walkthrough.md).
+The bridge operator runs `bridge rotation init --rotation-dir ... --identity NAME=FILE`
+to import core public identities, followed by `plan`, `stage`, and `check` with
+the same rotation directory. `check` reports missing approvals/readiness and
+live admission without WP build/propose requests. Only `apply` submits the
+rotation. Signer operators use standalone Docker scripts; they do not need this CLI.
+
 Current configuration and migration procedure: [Pure Reth configuration and retired services](docs/config-cleanup.md).
 
 [![Twitter Follow](https://img.shields.io/twitter/follow/Scroll_ZKP?style=social)](https://twitter.com/Scroll_ZKP)

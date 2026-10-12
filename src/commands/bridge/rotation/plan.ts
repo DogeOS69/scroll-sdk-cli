@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import {createRotationProposal, validateRotationSpec} from '../../../utils/bridge-rotation.js'
-import {loadRotationPlan, rotationDirectory, runtimeDirectory, saveRotationPlan} from '../../../utils/bridge-rotation-files.js'
+import {loadRotationPlan, rotationCommand, rotationDirectory, runtimeDirectory, saveRotationPlan} from '../../../utils/bridge-rotation-files.js'
 import {BridgeRotationRuntime} from '../../../utils/bridge-rotation-runtime.js'
 
 export default class RotationPlan extends Command {
@@ -15,11 +15,12 @@ export default class RotationPlan extends Command {
     const root = path.resolve(flags.dir)
     const runtime = new BridgeRotationRuntime({context: flags.context, deploymentDir: runtimeDirectory(root), namespace: flags.namespace})
     const state = await runtime.readState()
-    const spec = validateRotationSpec(yaml.load(fs.readFileSync(path.resolve(root, flags['rotation-dir'] ?? '.', flags.spec), 'utf8')))
+    const specFile = path.resolve(root, flags['rotation-dir'] ?? '.', flags.spec)
+    const spec = validateRotationSpec(yaml.load(fs.readFileSync(specFile, 'utf8')))
     const existing = path.join(flags['rotation-dir'] ? path.resolve(root, flags['rotation-dir']) : rotationDirectory(root, spec.name), 'proposal.json')
     const envelope = fs.existsSync(existing) ? loadRotationPlan(root, flags.spec, flags['rotation-dir']).envelope : createRotationProposal(spec, state)
     if (envelope.proposal.current.keyHash !== state.currentKeyHash || envelope.proposal.deployment.protocolContextSha256 !== state.protocolContextSha256) throw new Error('Current bridge changed; create and approve a new proposal')
     const directory = saveRotationPlan(root, envelope, flags['rotation-dir'])
-    this.log(JSON.stringify({directory, next: `scrollsdk bridge rotation stage --rotation-dir ${JSON.stringify(directory)}`, overlapActive: Boolean(state.deprecating && state.wfTxNumber + 1 < state.deprecating.deprecationWfTxNumber), proposalSha256: envelope.sha256, targetAddress: envelope.proposal.target.address, timelock: envelope.proposal.timelock}, null, 2))
+    this.log(JSON.stringify({directory, next: rotationCommand('stage', {context: runtime.context, dir: root, namespace: runtime.namespace, rotationDir: directory, spec: specFile}), overlapActive: Boolean(state.deprecating && state.wfTxNumber + 1 < state.deprecating.deprecationWfTxNumber), proposalSha256: envelope.sha256, targetAddress: envelope.proposal.target.address, timelock: envelope.proposal.timelock}, null, 2))
   }
 }
