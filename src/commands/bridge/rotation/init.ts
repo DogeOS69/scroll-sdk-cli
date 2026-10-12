@@ -4,7 +4,7 @@ import * as yaml from 'js-yaml'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import {runtimeDirectory, writeRotationFile} from '../../../utils/bridge-rotation-files.js'
+import {rotationCommand, runtimeDirectory, writeRotationFile} from '../../../utils/bridge-rotation-files.js'
 import {rotationSpecFromIdentities} from '../../../utils/bridge-rotation-onboarding.js'
 
 export default class RotationInit extends Command {
@@ -33,6 +33,6 @@ export default class RotationInit extends Command {
     })
     const spec = rotationSpecFromIdentities(path.basename(dir), network, identities, flags.threshold, flags.timelock as 'preserve' | 'refresh')
     writeRotationFile(path.join(dir, 'rotation-spec.yaml'), yaml.dump(spec, {lineWidth: -1, noRefs: true}))
-    this.log(JSON.stringify({directory: dir, next: `scrollsdk bridge rotation plan --rotation-dir ${JSON.stringify(dir)}`, signers: spec.attestation.signers.map(s => s.name), threshold: spec.attestation.threshold ?? 'inherit current bridge', timelock: flags.timelock}, null, 2))
+    this.log(JSON.stringify({directory: dir, next: rotationCommand('plan', {dir: root, rotationDir: dir}), signers: spec.attestation.signers.map(s => s.name), threshold: spec.attestation.threshold ?? 'inherit current bridge', timelock: flags.timelock}, null, 2))
   }
 }

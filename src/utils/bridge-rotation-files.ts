@@ -36,6 +36,15 @@ export function runtimeDirectory(root: string): string {
   return matches[0]
 }
 
+/** Copyable follow-up commands retain the deployment and quote operator-owned paths for a shell. */
+export function rotationCommand(action: 'check' | 'plan' | 'stage', options: {context?: string; dir: string; namespace?: string; rotationDir: string; spec?: string}): string {
+  const args = ['--dir', path.resolve(options.dir), '--rotation-dir', path.resolve(options.dir, options.rotationDir)]
+  if (options.spec) args.push('--spec', options.spec)
+  if (options.context) args.push('--context', options.context)
+  if (options.namespace) args.push('--namespace', options.namespace)
+  return `scrollsdk bridge rotation ${action} ${args.map(value => "'" + value.replaceAll("'", "'\"'\"'") + "'").join(' ')}`
+}
+
 export function rotationDirectory(root: string, name: string): string {
   if (!/^[\da-z][\da-z-]{0,62}$/.test(name)) throw new Error('Invalid rotation name')
   return path.join(root, 'rotations', name)

@@ -1,5 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Synthetic dynamic TOML/Helm fixtures. */
+import * as toml from '@iarna/toml'
 import {expect} from 'chai'
+import * as yaml from 'js-yaml'
+import {execFileSync} from 'node:child_process'
 import {createECDH, createHash} from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -7,6 +10,9 @@ import path from 'node:path'
 import sinon from 'sinon'
 
 import RotationCheck from '../../src/commands/bridge/rotation/check.js'
+import RotationInit from '../../src/commands/bridge/rotation/init.js'
+import RotationPlan from '../../src/commands/bridge/rotation/plan.js'
+import RotationStage from '../../src/commands/bridge/rotation/stage.js'
 import {type RotationChainState, assertRotationAdmission, assertRotationSpecUnchanged, bridgeHash, createRotationProposal, encodeBridgeScript, parseBridgeScript, proposalDigest, validateRotationEnvelope} from '../../src/utils/bridge-rotation.js'
 import {rotationPayload, submitFrozenRotation} from '../../src/utils/bridge-rotation-execution.js'
 import {assertRotationReceipts, assertStageUnchanged, enableRotationRoute, loadRotationPlan, mergeRotationRegistrations, rotationJson, saveRotationPlan, writeRotationHandoffNotes} from '../../src/utils/bridge-rotation-files.js'
@@ -22,7 +28,88 @@ function fixture() {
   return {old, spec, state}
 }
 
+function commandArgs(command: string): string[] {
+  return execFileSync('bash', ['-c', 'scrollsdk() { printf \'%s\\0\' "$@"; }; eval "$1"', '--', command], {encoding: 'utf8'}).split('\0').slice(3, -1)
+}
+
 describe('attestation rotation proposals', () => {
+  it('runs emitted init/plan/stage commands outside the deployment and retains selected context and spec', async () => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'rotation-command-chain-'))
+    const root = path.join(temp, "operator's $workspace"); const runtime = path.join(root, 'runtime')
+    const caller = path.join(temp, 'caller'); fs.mkdirSync(caller)
+    const previousCwd = process.cwd(); const previousPath = process.env.PATH; const previousExitCode = process.exitCode
+    const sandbox = sinon.createSandbox()
+    try {
+      const {old, spec, state} = fixture()
+      rotationJson(path.join(runtime, '.data/protocol_context.json'), {})
+      const external = old.attestation.keys.map((publicKey, i) => ({id: `old-${i}`, publicKey, transportPubkey: key()}))
+      fs.writeFileSync(path.join(runtime, '.data/doge-config.toml'), toml.stringify({attestationSigner: {external, mode: 'external'}, network: 'testnet'}))
+      const identities = spec.attestation.signers.map(signer => {
+        const file = `${signer.name}.json`
+        rotationJson(path.join(root, file), {network: 'testnet', publicKey: signer.attestationPubkey, schema: 'dogeos/attestation-signer-descriptor/v1', transportPubkey: signer.transportPubkey})
+        return `${signer.name}=${file}`
+      })
+      const initLog = sandbox.stub(RotationInit.prototype, 'log')
+      const planLog = sandbox.stub(RotationPlan.prototype, 'log')
+      const stageLog = sandbox.stub(RotationStage.prototype, 'log')
+      sandbox.stub(RotationCheck.prototype, 'log')
+      sandbox.stub(BridgeRotationRuntime.prototype, 'readState').callsFake(async function (this: BridgeRotationRuntime) {
+        expect(this.context).eq('selected-test-context'); expect(this.namespace).eq('selected-namespace')
+        return state
+      })
+      sandbox.stub(BridgeRotationRuntime.prototype, 'readIntent').resolves(null)
+      const post = sandbox.stub(BridgeRotationRuntime.prototype, 'post').rejects(new Error('No WP POST allowed'))
+      process.chdir(caller)
+      await RotationInit.run(['--dir', root, '--rotation-dir', 'rotations/rotation-3', ...identities.flatMap(identity => ['--identity', identity])])
+      const init = JSON.parse(String(initLog.lastCall.args[0]))
+      await RotationPlan.run([...commandArgs(init.next), '--context', 'selected-test-context', '--namespace', 'selected-namespace'])
+      const plan = JSON.parse(String(planLog.lastCall.args[0])); const dir = plan.directory
+      const stageArgs = commandArgs(plan.next)
+      expect(stageArgs[stageArgs.indexOf('--dir') + 1]).eq(root)
+      expect(stageArgs[stageArgs.indexOf('--spec') + 1]).eq(path.join(dir, 'rotation-spec.yaml'))
+      const {envelope} = loadRotationPlan(root, 'rotation-spec.yaml', dir)
+      // Reuse an already exported fixture handoff; this test exercises command chaining, not proof compilation.
+      rotationJson(path.join(dir, 'signer-deployment/rotation-reference.json'), {proposalSha256: envelope.sha256})
+      rotationJson(path.join(dir, 'signer-deployment/signer-policy-manifest.json'), {files: [], schema: 'dogeos/attestation-signer-policy-manifest/v1'})
+      fs.mkdirSync(path.join(runtime, 'withdrawal-processor')); fs.mkdirSync(path.join(runtime, 'values'))
+      fs.writeFileSync(path.join(runtime, 'withdrawal-processor/WithdrawalProcessor.toml'), 'rotate_key_v2 = false\n')
+      const values = {configMaps: {config: {data: {'WithdrawalProcessor.toml': 'rotate_key_v2 = false\n'}}}, tsoSigners: [...external.map(s => ({delivery: 'pull', network: 'testnet', publicKeyOverride: s.publicKey, roles: ['Attestation'], transportPubkey: s.transportPubkey})), {roles: ['Correctness']}]}
+      fs.writeFileSync(path.join(runtime, 'values/withdrawal-processor-production.yaml'), yaml.dump(values))
+      const bin = path.join(temp, 'bin'); fs.mkdirSync(bin)
+      for (const name of ['make', 'kubectl']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 0\n', {mode: 0o700})
+      process.env.PATH = `${bin}:${previousPath}`
+      await RotationStage.run(stageArgs)
+      const stage = JSON.parse(String(stageLog.lastCall.args[0]))
+      await RotationCheck.run(commandArgs(stage.next))
+      const report = JSON.parse(fs.readFileSync(path.join(dir, 'check.json'), 'utf8'))
+      expect(report.checks.filter((check: any) => !check.passed).map((check: any) => check.name)).deep.eq(['operator-receipts'])
+      expect(process.exitCode).eq(2); expect(post.called).eq(false)
+      expect(fs.existsSync(path.join(dir, 'submission.json'))).eq(false)
+      expect(fs.existsSync(path.join(caller, 'rotations'))).eq(false)
+    } finally {
+      sandbox.restore(); process.chdir(previousCwd); process.env.PATH = previousPath; process.exitCode = previousExitCode
+      fs.rmSync(temp, {force: true, recursive: true})
+    }
+  })
+
+  it('keeps a custom deployment-root spec readable when plan selects the default rotation directory', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rotation-root-spec-'))
+    const sandbox = sinon.createSandbox()
+    try {
+      const {spec, state} = fixture()
+      rotationJson(path.join(root, '.data/protocol_context.json'), {})
+      fs.writeFileSync(path.join(root, '.data/doge-config.toml'), 'network = "testnet"\n')
+      const specFile = path.join(root, 'reviewed-intent.yaml'); rotationJson(specFile, spec)
+      sandbox.stub(BridgeRotationRuntime.prototype, 'readState').resolves(state)
+      const output = sandbox.stub(RotationPlan.prototype, 'log')
+      await RotationPlan.run(['--dir', root, '--spec', 'reviewed-intent.yaml', '--context', 'test-context'])
+      const result = JSON.parse(String(output.lastCall.args[0]))
+      const args = commandArgs(result.next)
+      expect(args[args.indexOf('--spec') + 1]).eq(specFile)
+      expect(loadRotationPlan(root, args[args.indexOf('--spec') + 1], result.directory).envelope.proposal.name).eq(spec.name)
+    } finally {sandbox.restore(); fs.rmSync(root, {force: true, recursive: true})}
+  })
+
   it('binds rotation instructions and reference into the handoff manifest', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rotation-handoff-'))
     try {
