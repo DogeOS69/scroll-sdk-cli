@@ -108,6 +108,23 @@ describe('spec values runtime policy across entry points', () => {
     }
   })
 
+  for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`reconciles the environment pending blob cap through ${mode}`, async () => {
+    const key = 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS'
+    const template = path.join(sdk, 'examples/values/eth-da-submitter-production.yaml')
+    const values = yaml.load(fs.readFileSync(template, 'utf8')) as any
+    values.configMaps.env.data[key] = '4' // An older SDK must not override spec defaults.
+    fs.writeFileSync(template, yaml.dump(values))
+    const directory = path.join(root, 'deployment')
+    await run(mode, directory, '--sdk-dir', sdk)
+    expect(read(directory, 'eth-da-submitter').configMaps.env.data[key]).to.equal('10')
+    spec.metadata.environment = 'mainnet'
+    await run(mode, directory, '--force')
+    expect(read(directory, 'eth-da-submitter').configMaps.env.data[key]).to.equal('8')
+    spec.ethereumDa!.publish = {maxPendingBlobTxs: 12}
+    await run(mode, directory, '--force')
+    expect(read(directory, 'eth-da-submitter').configMaps.env.data[key]).to.equal('12')
+  })
+
   it('uses identical committed policy in bootstrap, with-values and values-only using the conventional SDK path', async () => {
     fs.writeFileSync(path.join(sdk, 'examples/values/l2-reth-rpc-production.yaml'), 'reth: {extraArgs: []}\n')
     const outputs = []

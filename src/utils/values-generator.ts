@@ -36,7 +36,7 @@ import {
   resolveDogecoinChainId,
 } from './deployment-spec-generator.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues} from './dstack-controller-values.js'
-import {ethereumDaRuntimeEnv} from './ethereum-da-runtime.js'
+import {defaultMaxPendingBlobTxs, ethereumDaRuntimeEnv} from './ethereum-da-runtime.js'
 import {FRONTEND_COMMAND, FRONTEND_L1_UPSTREAM, frontendDepositEnv, reconcileFrontendConfig} from './frontend-deposit-config.js'
 import {
   resolveDogecoinKubernetesEndpoints,
@@ -249,9 +249,7 @@ function buildEthDaSubmitterBatchEnv(spec: DeploymentSpec): Record<string, strin
 }
 
 function buildEthDaSubmitterPublishEnv(spec: DeploymentSpec): Record<string, string> {
-  const {publish} = getEthereumDaConfig(spec)
-  if (!publish) return {}
-
+  const publish = getEthereumDaConfig(spec).publish ?? {}
   const env: Record<string, string> = {}
   addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__ALLOW_LIVENESS_BUDGET_OVERRIDE', publish.allowLivenessBudgetOverride)
   addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__BUDGET_WINDOW', publish.budgetWindow)
@@ -259,7 +257,7 @@ function buildEthDaSubmitterPublishEnv(spec: DeploymentSpec): Record<string, str
   addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_BATCH_WAIT', publish.maxBatchWait)
   addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_BLOBS_PER_TX', publish.maxBlobsPerTx)
   addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_LIVENESS_DELAY', publish.maxLivenessDelay)
-  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS', publish.maxPendingBlobTxs)
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS', publish.maxPendingBlobTxs ?? defaultMaxPendingBlobTxs(spec.metadata.environment))
   addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__TARGET_BLOBS_PER_TX', publish.targetBlobsPerTx)
 
   return env

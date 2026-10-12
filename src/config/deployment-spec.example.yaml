@@ -110,6 +110,9 @@ dogecoin:
   walletPath: ".data/doge-wallet.json"
 
 ethereumDa:
+  # Pending blob transactions default to 8 for metadata.environment=mainnet,
+  # otherwise 10, independently of the Ethereum DA chain selected below.
+  # Optional override: publish: {maxPendingBlobTxs: 10}
   chain: sepolia
   chainId: 11155111
   l1RpcUrl: "$ENV:ETHEREUM_RPC_URL"

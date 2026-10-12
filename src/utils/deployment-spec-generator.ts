@@ -33,7 +33,7 @@ import {assertSeparateDaProofBuckets} from './artifact-bucket-validation.js'
 import {GENESIS_SEQUENCER_AMOUNT_SATS} from './bridge-constants.js'
 import {assertDeploymentSpecFields, validateDeploymentSpecFields} from './deployment-spec-fields.js'
 import {validateDstackControllerConfig} from './dstack-controller-values.js'
-import {ETHEREUM_DA_RUNTIME_FIELDS} from './ethereum-da-runtime.js'
+import {ETHEREUM_DA_RUNTIME_FIELDS, defaultMaxPendingBlobTxs} from './ethereum-da-runtime.js'
 import {feeVaultRecipientHash} from './fee-vault-recipient.js'
 import {stripRetiredServiceConfig} from './retired-services.js'
 import {buildS3PublicBaseUrl} from './s3-archive.js'
@@ -1581,10 +1581,9 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
     )
   }
 
-  if (spec.ethereumDa?.publish) {
-    config.ethereumDa.publish = Object.fromEntries(
-      Object.entries(spec.ethereumDa.publish).filter(([, value]) => value !== undefined)
-    )
+  config.ethereumDa.publish = {
+    ...Object.fromEntries(Object.entries(spec.ethereumDa?.publish ?? {}).filter(([, value]) => value !== undefined)),
+    maxPendingBlobTxs: spec.ethereumDa?.publish?.maxPendingBlobTxs ?? defaultMaxPendingBlobTxs(spec.metadata.environment),
   }
 
   const ethereumDaS3Archive = spec.ethereumDa?.blobArchive?.s3
