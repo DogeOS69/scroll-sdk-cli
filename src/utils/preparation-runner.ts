@@ -23,6 +23,7 @@ import {readProofMaterials} from './proof-materials.js'
 import {readProofSoftwareRelease} from './proof-software-release.js'
 import {buildProofTopology} from './proof-topology-init.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
+import {specAwsSecretPrefix} from './spec-secret-prefix.js'
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../bin/run.js')
 export type Invoke = (root: string, step: string, args: string[], environment?: Record<string, string>) => Promise<void>
@@ -242,7 +243,7 @@ export class CommandPreparationRunner implements PreparationRunner {
       case 'secret-upload': {
         const upload = p.secretUpload!
         if (spec.monitoring?.slack?.enabled && !upload.kubeContext) throw new AwaitingInput({message: 'Set preparation.secretUpload.kubeContext to upload monitoring Secrets'})
-        await command(['push-secrets', '-N', '--provider', upload.provider, ...optional('aws-region', upload.awsRegion ?? spec.infrastructure.aws?.region), ...optional('aws-prefix', upload.awsPrefix), ...optional('kube-context', upload.kubeContext), ...optional('namespace', upload.namespace ?? spec.infrastructure.namespace ?? 'default')])
+        await command(['push-secrets', '-N', '--provider', upload.provider, ...optional('aws-region', upload.awsRegion ?? spec.infrastructure.aws?.region), ...optional('aws-prefix', upload.provider === 'aws' ? specAwsSecretPrefix(spec) : undefined), ...optional('kube-context', upload.kubeContext), ...optional('namespace', upload.namespace ?? spec.infrastructure.namespace ?? 'default')])
         if (upload.kubeContext) await command(['monitoring-secrets', '--apply', '--kube-context', upload.kubeContext, '--namespace', upload.namespace ?? spec.infrastructure.namespace ?? 'default'])
         break
       }

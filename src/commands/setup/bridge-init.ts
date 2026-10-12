@@ -14,6 +14,7 @@ import { getSetupDefaultsPath } from '../../config/constants.js'
 import {assertGenesisSequencerAmount} from '../../utils/bridge-constants.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
+import {resolveEthereumRpc} from '../../utils/ethereum-rpc-secrets.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import { protocolIdSidecarPath } from '../../utils/signer-policy-derivation.js'
@@ -937,7 +938,7 @@ export class BridgeInitCommand extends Command {
     const config = this.getRequiredTomlConfig(configPath)
     const ethereumDaChain = this.getNestedValue(config, 'ethereumDa.chain')
 
-    const rpcUrl = this.getNestedValue(config, 'ethereumDa.submitterRpcUrl') ?? this.getNestedValue(config, 'ethereumDa.l1RpcUrl')
+    const rpcUrl = resolveEthereumRpc(this.getNestedValue(config, 'ethereumDa.submitterRpcUrl') ?? this.getNestedValue(config, 'ethereumDa.l1RpcUrl'), 'ethereumDa.submitterRpcUrl')
 
     if (typeof rpcUrl !== 'string' || rpcUrl.length === 0) {
       this.jsonCtx.error(
@@ -967,10 +968,10 @@ export class BridgeInitCommand extends Command {
       } else {
         body = this.queryEthereumDaRpcViaClusterPod(rpcUrl)
       }
-    } catch (error) {
+    } catch {
       if (ethereumDaChain === 'devnet' && this.ethereumDaProbe === 'cluster') {
         this.jsonCtx.addWarning(
-          `Could not query Ethereum DA height via in-cluster curl pod (${error instanceof Error ? error.message : String(error)}); ` +
+          `Could not query Ethereum DA height via in-cluster curl pod ([details omitted]); ` +
           'falling back to embedded indexer start block 0 for the fresh devnet chain'
         )
         return 0
@@ -978,11 +979,11 @@ export class BridgeInitCommand extends Command {
 
       this.jsonCtx.error(
         'E400_ETHEREUM_DA_RPC_UNREACHABLE',
-        `Failed to query Ethereum DA RPC using ${this.ethereumDaProbe} probe: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to query Ethereum DA RPC using ${this.ethereumDaProbe} probe: [details omitted]`,
         'NETWORK',
         true,
         {
-          rpcUrl,
+          rpcUrl: '[private endpoint omitted]',
           suggestion: `Check [ethereumDa].submitterRpcUrl in ${configPath} and that kubectl can reach the cluster (override the namespace with NAMESPACE=...). The RPC must be reachable from inside the cluster before bridge-init can record the withdrawal processor Ethereum DA start block.`,
         }
       )
@@ -994,20 +995,20 @@ export class BridgeInitCommand extends Command {
     } catch {
       this.jsonCtx.error(
         'E400_ETHEREUM_DA_RPC_FAILED',
-        `Ethereum DA RPC eth_blockNumber returned a non-JSON response: ${body.slice(0, 512)}`,
+        `Ethereum DA RPC eth_blockNumber returned a non-JSON response: [body omitted]`,
         'NETWORK',
         true,
-        { rpcUrl }
+        { rpcUrl: '[private endpoint omitted]' }
       )
     }
 
     if (result.error) {
       this.jsonCtx.error(
         'E400_ETHEREUM_DA_RPC_FAILED',
-        `Ethereum DA RPC eth_blockNumber failed: ${result.error.message || JSON.stringify(result.error)}`,
+        `Ethereum DA RPC eth_blockNumber failed: [provider error omitted]`,
         'NETWORK',
         true,
-        { code: result.error.code, rpcUrl }
+        { code: result.error.code, rpcUrl: '[private endpoint omitted]' }
       )
     }
 
@@ -1015,10 +1016,10 @@ export class BridgeInitCommand extends Command {
     if (typeof heightHex !== 'string' || !/^0x[\dA-Fa-f]+$/.test(heightHex)) {
       this.jsonCtx.error(
         'E400_ETHEREUM_DA_RPC_FAILED',
-        `Ethereum DA RPC eth_blockNumber returned an invalid block height: ${JSON.stringify(heightHex)}`,
+        `Ethereum DA RPC eth_blockNumber returned an invalid block height: [value omitted]`,
         'NETWORK',
         true,
-        { rpcUrl }
+        { rpcUrl: '[private endpoint omitted]' }
       )
     }
 
@@ -1026,10 +1027,10 @@ export class BridgeInitCommand extends Command {
     if (!Number.isSafeInteger(height) || height < 0) {
       this.jsonCtx.error(
         'E400_ETHEREUM_DA_RPC_FAILED',
-        `Ethereum DA RPC eth_blockNumber returned an unsafe block height: ${JSON.stringify(heightHex)}`,
+        `Ethereum DA RPC eth_blockNumber returned an unsafe block height: [value omitted]`,
         'NETWORK',
         true,
-        { rpcUrl }
+        { rpcUrl: '[private endpoint omitted]' }
       )
     }
 
@@ -1384,11 +1385,11 @@ export class BridgeInitCommand extends Command {
         '--attach',
         '--rm',
         '--quiet',
-        '--env', `ETH_RPC_URL=${rpcUrl}`,
-        '--command', '--', 'sh', '-lc',
-        'curl -fsS "$ETH_RPC_URL" -H "content-type: application/json" --data \'{"jsonrpc":"2.0","id":"bridge-init-pre-setup-ethereum-da-height","method":"eth_blockNumber","params":[]}\'',
+        '--stdin',
+        '--command', '--', 'curl', '-fsS', '--config', '-', '-H', 'content-type: application/json', '--data',
+        '{"jsonrpc":"2.0","id":"bridge-init-pre-setup-ethereum-da-height","method":"eth_blockNumber","params":[]}',
       ],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 }
+      { encoding: 'utf8', input: `url = ${JSON.stringify(rpcUrl)}\n`, stdio: ['pipe', 'pipe', 'pipe'], timeout: 120_000 }
     )
 
     // --quiet suppresses kubectl chatter, but be defensive: keep only the
@@ -1398,7 +1399,7 @@ export class BridgeInitCommand extends Command {
       .map((line) => line.trim())
       .find((line) => line.startsWith('{'))
     if (!jsonLine) {
-      throw new Error(`curl pod produced no JSON-RPC response; output: ${output.slice(0, 512)}`)
+      throw new Error('curl pod produced no JSON-RPC response (output omitted)')
     }
 
     return jsonLine

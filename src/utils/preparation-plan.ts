@@ -17,6 +17,7 @@ import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {planSpecBootstrap, resolveSdkRevision} from './spec-bootstrap.js'
 import {resolveCubesignerIdentity} from './spec-cubesigner.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
+import {specAwsSecretPrefix} from './spec-secret-prefix.js'
 
 export interface PreparationStep {effect: 'chain' | 'cloud' | 'local' | 'read'; id: string; retry: 'reconcile' | 'safe'; title: string}
 export interface PreparationPlan {deploymentName: string; envFile?: string; id: string; schema: 'scrollsdk/preparation/v1'; sdkDirectory: string; specHash: string; steps: PreparationStep[]}
@@ -100,6 +101,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
     if (!spec.dstackController || spec.dstackController.enabled === false || spec.proofTopology?.generation !== 'real') throw new Error('proofWorkers requires enabled dstackController and real proving')
   }
 
+  specAwsSecretPrefix(spec)
   if (!p) throw new Error('preparation is required for setup plan; plain generate-from-spec remains available')
   if (!['helper', 'production'].includes(p.bridge?.mode)) throw new Error('preparation.bridge.mode must explicitly select production or helper')
   if (p.bridge.mode !== 'production' && p.bridge.production) throw new Error('Production Bridge inputs require preparation.bridge.mode: production')

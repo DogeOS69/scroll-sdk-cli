@@ -35,7 +35,10 @@ describe('contracts Secret required legacy configuration fields', () => {
       'COORDINATOR_JWT_SECRET_KEY="test-jwt"',
       '',
     ].join('\n'))
-    expect(command.generateEnvContent('fee-oracle', config)).to.deep.equal({})
-    expect(command.generateEnvContent('eth-da-submitter', config)).to.deep.equal({})
+    for (const service of ['fee-oracle', 'eth-da-submitter']) {
+      const rpcFile = command.generateEnvContent(service, config)[`${service}-secret.env`]
+      expect(rpcFile).to.include('RPC_URL=')
+      expect(rpcFile).not.to.include('PRIVATE_KEY')
+    }
   })
 })

@@ -2,6 +2,7 @@
 import * as toml from '@iarna/toml'
 import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
+import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
@@ -11,6 +12,7 @@ import {getContractsPlaceholderKey} from '../../utils/contracts-placeholder.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import {prepareDstackMonitoringCredentials, readDstackCredentials, renderDstackSecrets, writeDstackCredentialSecrets} from '../../utils/dstack-credentials.js'
 import {readDstackControllerConfig, usesDstackPostgres, writeDstackDatabaseSecret} from '../../utils/dstack-database.js'
+import {ethereumRpcSecretLines, ethereumRpcSecretName, proofCoordinatorRpcKeys} from '../../utils/ethereum-rpc-secrets.js'
 import {writeGrafanaAdminSecret} from '../../utils/grafana-admin.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import {writeMonitoringSlackSecret} from '../../utils/monitoring-slack.js'
@@ -200,13 +202,26 @@ export default class SetupGenSecrets extends Command {
       'withdrawal-processor',
       'metrics-exporter',
       'eth-da-submitter',
+      'proof-coordinator',
+      'scroll-monitor',
     ]
 
     for (const service of services) {
       const envFiles = this.generateEnvContent(service, config)
+      if (['proof-coordinator', 'scroll-monitor'].includes(service) && Object.keys(envFiles).length === 0) {
+        const file = path.join(SECRETS_PATH, ethereumRpcSecretName(service).replace(/-env$/, '.env'))
+        if (fs.existsSync(file)) {
+          const archive = path.join(SECRETS_PATH, '.retired-ethereum-rpc')
+          fs.mkdirSync(archive, {mode: 0o700, recursive: true})
+          fs.renameSync(file, path.join(archive, `${path.basename(file)}.${Date.now()}`))
+          this.jsonCtx.info(`Archived unused ${path.basename(file)}; it will not be uploaded`)
+        }
+      }
+
       for (const [filename, content] of Object.entries(envFiles)) {
         const envFile = path.join(SECRETS_PATH, filename)
-        fs.writeFileSync(envFile, content)
+        fs.writeFileSync(envFile, content, {mode: 0o600})
+        fs.chmodSync(envFile, 0o600)
         this.jsonCtx.log(chalk.green(`Created ${filename}`))
       }
     }
@@ -214,7 +229,8 @@ export default class SetupGenSecrets extends Command {
     const rethEnvFiles = this.generateRethEnvFiles()
     for (const [filename, content] of Object.entries(rethEnvFiles)) {
       const envFile = path.join(SECRETS_PATH, filename)
-      fs.writeFileSync(envFile, content)
+      fs.writeFileSync(envFile, content, {mode: 0o600})
+      fs.chmodSync(envFile, 0o600)
       this.jsonCtx.log(chalk.green(`Created ${filename}`))
     }
   }
@@ -344,6 +360,7 @@ export default class SetupGenSecrets extends Command {
     if (service === 'eth-da-submitter') {
       const signer = this.requireSigner('l1CommitSender')
       if (isAwsKmsSigner(signer)) {
+        envFiles['eth-da-submitter-secret.env'] = ethereumRpcSecretLines(service, this.dogeConfig)
         return envFiles
       }
 
@@ -356,6 +373,24 @@ export default class SetupGenSecrets extends Command {
         submitterPrivateKey,
         'dogeConfig.accounts.L1_COMMIT_SENDER_PRIVATE_KEY'
       )
+    }
+
+    if (service === 'scroll-monitor') {
+      const valuesFile = path.join(process.cwd(), 'values/scroll-monitor-production.yaml')
+      if (fs.existsSync(valuesFile)) {
+        const values = yaml.load(fs.readFileSync(valuesFile, 'utf8')) as any
+        const balance = values?.balanceMonitoring
+        const name = balance?.exporter?.envFromSecret
+        if (balance?.enabled === false || balance?.exporter?.enabled === false || (name && name !== ethereumRpcSecretName(service))) return envFiles
+      }
+    }
+
+    const pcFile = path.join(process.cwd(), 'proof-coordinator/ProofCoordinator.toml')
+    const selectedKeys = service === 'proof-coordinator' ? (fs.existsSync(pcFile) ? proofCoordinatorRpcKeys(fs.readFileSync(pcFile, 'utf8')) : []) : undefined
+    const rpcLines = ethereumRpcSecretLines(service, this.dogeConfig, selectedKeys)
+    if (rpcLines) {
+      const filename = ethereumRpcSecretName(service).replace(/-env$/, '.env')
+      envFiles[filename] = (envFiles[filename] ?? '') + rpcLines
     }
 
     return envFiles

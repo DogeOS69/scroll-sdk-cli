@@ -12,6 +12,7 @@ import {
   validateDeploymentSpec,
   writeGeneratedConfigs
 } from '../../utils/deployment-spec-generator.js'
+import {reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
 import {frontendDepositEnv, mergeFrontendConfigDocuments, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {loadPreparationEnv} from '../../utils/preparation-io.js'
@@ -21,6 +22,7 @@ import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles} from '../../utils/retired-services.js'
 import {loadSdkTemplateFiles, mergeBootstrapValues, planSpecBootstrap} from '../../utils/spec-bootstrap.js'
 import {resolveCubesignerIdentity} from '../../utils/spec-cubesigner.js'
+import {getSecretProviderConfig} from '../../utils/values-generator.js'
 import { type GeneratedValuesFiles, generateValuesFiles } from '../../utils/values-generator.js'
 
 function collectEnvRefs(content: string): string[] {
@@ -287,6 +289,7 @@ export default class GenerateFromSpec extends Command {
           const values = yaml.load(valuesFiles[file]) as Record<string, any>
           // Bootstrap produces editable templates; preparation validates ACM inputs.
           reconcileDeploymentIngresses(values, file.replace(/-production.*$/, ''), false)
+          reconcileEthereumRpcSecrets(values, file.replace(/-production.*$/, ''), getSecretProviderConfig(spec))
           valuesFiles[file] = yaml.dump(values, {lineWidth: -1, noRefs: true})
         }
       }

@@ -17,7 +17,7 @@ monitoring values.
 | eth-da-submitter | `accounts.L1_COMMIT_SENDER_ADDR`; verified against `signers.l1CommitSender.expectedAddress` for KMS | doge-config: `ethereumDa.submitterRpcUrl` | doge-config: `ethereumDa.chainId` | 0.1 ETH on Ethereum DA |
 | fee_wallet | Existing Withdrawal Processor fee-wallet UTXO metric | Existing Prometheus scrape | Dogecoin deployment network | 100 DOGE |
 
-The fee-oracle samples Ethereum DA gas prices but **spends on L2**. Its balance
+The fee-oracle samples gas prices through its independent Ethereum endpoint but **spends on L2**. Its balance
 must be queried through the L2 RPC. The two monitored native balances are
 reported in units of 10^18 base units. The exporter checks `eth_chainId` before
 accepting an `eth_getBalance` result.
@@ -44,11 +44,12 @@ balanceMonitoring:
       minimumEth: 5
     ethDaSubmitter:
       address: "0x2222222222222222222222222222222222222222"
-      rpcUrl: https://ethereum.example/rpc
+      rpcUrl: "" # supplied by SCROLL_BALANCE_ETH_DA_SUBMITTER_RPC_URL in the Secret
       expectedChainId: "1"
       minimumEth: 0.1
   exporter:
     enabled: true
+    envFromSecret: scroll-monitor-balance-env
 ```
 
 Helm maps the three fee-oracle connection fields to
@@ -58,7 +59,12 @@ are `SCROLL_BALANCE_ETH_DA_SUBMITTER_ADDRESS`,
 `SCROLL_BALANCE_ETH_DA_SUBMITTER_RPC_URL`, and
 `SCROLL_BALANCE_ETH_DA_SUBMITTER_EXPECTED_CHAIN_ID`.
 
-Repeated generation refreshes addresses, RPC URLs, and expected chain IDs from
+The DA RPC is exported to `secrets/scroll-monitor-balance.env`, uploaded to the
+configured external secret store, and supplied through `envFromSecret`. A custom
+operator-owned balance Secret is preserved when the corresponding `rpcUrl` is
+empty. No provider URL is copied into the public values.
+
+Repeated generation refreshes addresses, RPC references, and expected chain IDs from
 the deployment configuration, including after signer rotation. Missing signer
 configuration, inconsistent KMS addresses, invalid RPC URLs, and invalid chain
 IDs stop generation. Existing nonnegative numeric thresholds, exporter resource

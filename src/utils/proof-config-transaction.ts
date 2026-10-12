@@ -201,7 +201,7 @@ export function prepareProofConfig(options: {
     pcValues.image = {...pcValues.image as object, ...parseImmutableProofImage(images['proof-coordinator'], 'coordinator'), tag: ''}
     fs.writeFileSync(pcFile, yaml.dump(pcValues, {lineWidth: -1, noRefs: true}))
     const intent = resolveProofIntent({deploymentDir: stage, dogeConfig: config, dogeConfigPath: configPath, required: true})!
-    reconcileProofKubernetes({deploymentDir: stage, ethereumDaBlobSource: proofTopologyEthereumDaBlobSource(config.ethereumDa), ethereumL1RpcUrl: config.ethereumDa?.submitterRpcUrl, intent, materialsReceipt: request.generation === 'real' ? '.data/proof-materials-v1.json' : undefined, proofTopologyBridge: {dogecoinNetwork: config.network, dogecoinRpcPassword: String(config.dogecoinClusterRpc?.password ?? ''), dogecoinRpcUrl: resolveDogecoinServiceRpcUrl(config), dogecoinRpcUser: String(config.dogecoinClusterRpc?.username ?? '')}})
+    reconcileProofKubernetes({deploymentDir: stage, ethereumDaBlobSource: proofTopologyEthereumDaBlobSource(config.ethereumDa), ethereumL1RpcUrl: config.ethereumDa?.submitterRpcUrl, ethereumRpcSecretStore: config.ethereumRpcSecretStore, intent, materialsReceipt: request.generation === 'real' ? '.data/proof-materials-v1.json' : undefined, proofTopologyBridge: {dogecoinNetwork: config.network, dogecoinRpcPassword: String(config.dogecoinClusterRpc?.password ?? ''), dogecoinRpcUrl: resolveDogecoinServiceRpcUrl(config), dogecoinRpcUser: String(config.dogecoinClusterRpc?.username ?? '')}})
     const contract = validateProofDeploymentContract(stage)
     validateProofTopologyBundle(path.join(stage, contract.topology.bundleDir), {preflightOnly: false})
     if (config.attestationSigner?.mode === 'external') {

@@ -45,14 +45,18 @@ the copy before running plan. For example, with an existing `/private` directory
 install -m 600 /path/to/scroll-sdk-cli/src/config/deployment.env.example /private/deployment.env
 ```
 
-Every assignment is an intentionally unusable placeholder. Fill the entries
-referenced by your selected spec, and remove unused entries. Both shipped spec
-examples reference all six base variables below; if a configuration branch is
+Secret assignments are intentionally unusable placeholders; Ethereum RPC entries
+start with public provider defaults. Replace them with your production provider
+URLs, including any API keys, in this private file. Fill the entries
+referenced by your selected spec, and remove unused entries. The full spec
+example references the provider variables below; if a configuration branch is
 unused, remove its environment references from the spec as well. Planning resolves
 the spec's environment references even when a later step would not use them.
 
 | Variables | Where they are used | What the operator supplies |
 | --- | --- | --- |
+| `ETHEREUM_RPC_URL`, `ETHEREUM_BEACON_RPC_URL` | `ethereumDa.l1RpcUrl`, `ethereumDa.beaconRpcUrl` | Private execution and beacon endpoint URLs for the selected DA network. |
+| `FEE_ORACLE_ETHEREUM_RPC_URL` | `feeOracle.ethereumRpcUrl` | Independent Ethereum fee-sampling endpoint; defaults to Ethereum mainnet even for devnet DA. |
 | `DB_ADMIN_PASSWORD` | `database.admin.password` | Existing PostgreSQL administrator password. |
 | `OWNER_ADDRESS` | `accounts.owner.address` | Public Ethereum/L2 owner or multisig address; no private key. |
 | `DOGECOIN_EXTERNAL_RPC_USERNAME`, `DOGECOIN_EXTERNAL_RPC_PASSWORD` | `dogecoin.externalRpc` | Credentials for the RPC reached by the operator. |
@@ -70,6 +74,34 @@ field: the spec must explicitly reference it. Keep each value on one line, place
 comments on separate lines, and do not use shell substitutions. AWS credentials
 use the normal provider chain; GCP credential files
 and Bridge funding outpoints use their separately declared files.
+
+## Ethereum provider Secrets and deployment isolation
+
+Provider URLs remain environment references in the frozen intent and private
+Doge config. Local preparation resolves them only when making an RPC request;
+`setup gen-secrets` exports resolved URLs to mode-600 files under `secrets/`.
+`setup push-secrets` uploads those files and the existing chart ExternalSecrets
+supply runtime environment variables. This covers eth-da-submitter, fee-oracle,
+l1-interface, withdrawal-processor, proof-coordinator and DA balance monitoring.
+Attestation signer configuration is managed separately. Frontend public URLs
+never inherit the server provider credentials.
+
+The default AWS prefix is
+`dogeos/<eksClusterName>/<namespace>/<metadata.name>` (`namespace` defaults to
+`default`). Values generation, `apply` and standalone uploads from the deployment
+directory use the same destination persisted in `.data/doge-config.toml`.
+Without that file, standalone uploads can read `deployment-spec.yaml`; without
+sufficient deployment context or an explicit `--aws-prefix`, they refuse to use
+a shared fallback. An explicit `infrastructure.aws.secretsPrefix` is preserved.
+If `preparation.secretUpload.awsPrefix` is also set, it must match. Use distinct
+explicit prefixes for independent deployments: choosing the same explicit prefix
+still authorizes updating the same Secrets. No existing cloud Secrets are renamed
+or migrated by changing these defaults.
+
+After editing a provider URL in `deployment.env`, rerun `setup gen-secrets` and
+`setup push-secrets` from the deployment directory, then restart the consumers to
+load the changed Secret environment. Fee-oracle balance monitoring still uses
+the L2 RPC; its fee sampling RPC is independent of that balance check and of DA.
 
 ## Commands
 

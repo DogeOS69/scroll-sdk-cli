@@ -14,11 +14,11 @@ import {publishDstackSecrets} from '../../utils/dstack-secret-publisher.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import { resolveEnvValue } from '../../utils/non-interactive.js'
 import {isRetiredServiceFile, stripRetiredServiceConfig} from '../../utils/retired-services.js'
+import {remoteSecretPrefix, resolveAwsSecretPrefix, savedAwsSecretPrefix} from '../../utils/spec-secret-prefix.js'
 
 const execAsync = promisify(exec)
 
 const DEFAULT_SECRET_PROVIDER = 'aws'
-const DEFAULT_AWS_PREFIX = 'dogeos'
 const DEFAULT_AWS_SERVICE_ACCOUNT = 'external-secrets'
 const DEFAULT_VAULT_PATH = 'scroll'
 const DEFAULT_VAULT_SERVER = 'http://vault.default.svc.cluster.local:8200'
@@ -651,8 +651,7 @@ export default class SetupPushSecrets extends Command {
   static override flags = {
     // AWS specific flags
     'aws-prefix': Flags.string({
-      default: DEFAULT_AWS_PREFIX,
-      description: 'AWS Secrets Manager path prefix (e.g., dogeos/testnet)',
+      description: 'AWS Secrets Manager path prefix (defaults to generated deployment configuration; no shared fallback)',
     }),
     'aws-region': Flags.string({
       description: 'AWS region for secrets (e.g., us-east-1)',
@@ -885,10 +884,11 @@ export default class SetupPushSecrets extends Command {
 
   private async getAWSCredentials(): Promise<Record<string, string>> {
     return {
-      prefixName: await input({
-        default: DEFAULT_AWS_PREFIX,
+      prefixName: resolveAwsSecretPrefix(await input({
+        default: savedAwsSecretPrefix(),
         message: chalk.cyan('Enter a path prefix for AWS Secrets Manager (e.g., my-app/staging or dogeos/testnet):'),
-      }),
+        required: true,
+      })),
       secretRegion: await input({
         message: chalk.cyan('Enter AWS secret region(e.g.,us-east-1):'),
         required: true,
@@ -913,7 +913,7 @@ export default class SetupPushSecrets extends Command {
     }
 
     return {
-      prefixName: resolveEnvValue(flags['aws-prefix']) || DEFAULT_AWS_PREFIX,
+      prefixName: resolveAwsSecretPrefix(resolveEnvValue(flags['aws-prefix'])),
       secretRegion,
       serviceAccount: resolveEnvValue(flags['aws-service-account']) || DEFAULT_AWS_SERVICE_ACCOUNT,
     }
@@ -1052,12 +1052,7 @@ export default class SetupPushSecrets extends Command {
 
       // Parse prefixName from remoteRef.key
       const data = sessionSecret.data?.[0]
-      if (data?.remoteRef?.key) {
-        const keyParts = data.remoteRef.key.split('/')
-        config.prefixName = keyParts.length > 1 ? keyParts[0] : 'dogeos';
-      } else {
-        config.prefixName = 'dogeos'
-      }
+      config.prefixName = data?.remoteRef?.key ? resolveAwsSecretPrefix(remoteSecretPrefix(data.remoteRef.key)) : resolveAwsSecretPrefix();
     } else if (sessionSecret.provider === 'vault') {
       config.server = sessionSecret.server || 'http://vault.default.svc.cluster.local:8200'
       config.path = sessionSecret.path || 'scroll'

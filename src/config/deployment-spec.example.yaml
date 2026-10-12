@@ -24,7 +24,7 @@ infrastructure:
     region: us-west-2
     accountId: "123456789012"
     eksClusterName: dogeos-devnet-cluster
-    secretsPrefix: dogeos-devnet
+    # Secret prefix defaults to dogeos/<eksClusterName>/<namespace>/<metadata.name>.
   # For GCP deployments:
   # provider: gcp
   # gcp:
@@ -112,8 +112,8 @@ dogecoin:
 ethereumDa:
   chain: sepolia
   chainId: 11155111
-  l1RpcUrl: "https://gateway.tenderly.co/public/sepolia"
-  beaconRpcUrl: "https://ethereum-sepolia-beacon-api.publicnode.com"
+  l1RpcUrl: "$ENV:ETHEREUM_RPC_URL"
+  beaconRpcUrl: "$ENV:ETHEREUM_BEACON_RPC_URL"
   confirmationDepth: 1
   finalizationDepth: 64
 
@@ -258,6 +258,7 @@ signing:
 
 # Use dry_run explicitly for a configuration-only fee-oracle rehearsal.
 feeOracle:
+  ethereumRpcUrl: "$ENV:FEE_ORACLE_ETHEREUM_RPC_URL"
   contractWriteMode: live
 
 frontend:

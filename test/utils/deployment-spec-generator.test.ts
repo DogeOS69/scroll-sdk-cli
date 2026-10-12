@@ -21,6 +21,7 @@ import {
   hasEnvRef,
   loadDeploymentSpec,
   normalizeDeploymentSpec,
+  resolveDeploymentSpecEnvRefs,
   resolveInlineEnvRefs,
   validateDeploymentSpec,
   writeGeneratedConfigs,
@@ -262,6 +263,23 @@ describe('deployment-spec-generator', () => {
       expect(hasEnvRef('$ENV:My_Var_123')).to.be.true;
     });
   });
+
+  it('freezes Ethereum references without credentials and retains refreshable references in private config', () => {
+    const spec = createMinimalSpec()
+    spec.ethereumDa!.l1RpcUrl = '$ENV:ETHEREUM_RPC_URL'
+    spec.ethereumDa!.beaconRpcUrl = '$ENV:ETHEREUM_BEACON_RPC_URL'
+    spec.feeOracle = {ethereumRpcUrl: '$ENV:FEE_ORACLE_ETHEREUM_RPC_URL'}
+    process.env.ETHEREUM_RPC_URL = 'https://da.example.invalid/FAKE_TEST_KEY'
+    process.env.ETHEREUM_BEACON_RPC_URL = 'https://beacon.example.invalid/FAKE_TEST_KEY'
+    process.env.FEE_ORACLE_ETHEREUM_RPC_URL = 'https://fees.example.invalid/FAKE_FEE_KEY'
+    const frozen = resolveDeploymentSpecEnvRefs(spec)
+    expect(JSON.stringify(frozen)).not.include('FAKE_TEST_KEY').not.include('FAKE_FEE_KEY')
+    expect(frozen.ethereumDa!.l1RpcUrl).eq('$ENV:ETHEREUM_RPC_URL')
+    const privateConfig: any = toml.parse(generateDogeConfigToml(frozen))
+    expect(privateConfig.ethereumDa.submitterRpcUrl).eq('$ENV:ETHEREUM_RPC_URL')
+    expect(privateConfig.feeOracle.ethereumRpcUrl).eq('$ENV:FEE_ORACLE_ETHEREUM_RPC_URL')
+    expect(JSON.stringify(generateValuesFiles(frozen))).not.include('FAKE_TEST_KEY').not.include('FAKE_FEE_KEY')
+  })
 
   describe('normalizeDeploymentSpec', () => {
     it('derives account addresses from literal private keys', () => {
@@ -1809,7 +1827,7 @@ describe('deployment-spec-generator', () => {
 
       const feeOracleValues = yaml.load(files['fee-oracle-production.yaml']) as any;
       const feeOracleEnv = feeOracleValues.configMaps.env.data;
-      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL).to.equal('https://gateway.tenderly.co/public/sepolia');
+      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL).to.equal(undefined);
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_L2__CHAIN_ID).to.equal(String(spec.network.l2ChainId));
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE).to.equal('live');
       expect(feeOracleEnv).not.to.have.property('DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__FORMULA');
@@ -1822,7 +1840,7 @@ describe('deployment-spec-generator', () => {
       expect(files['fee-oracle-production.yaml']).not.to.include('DOGEOS_FEE_ORACLE_DOGECOIN__');
       expect(files['fee-oracle-production.yaml']).not.to.include('DOGEOS_FEE_ORACLE_CELESTIA__');
       expect(files['fee-oracle-production.yaml']).not.to.include('FEE_ORACLE_DOGE_RPC_URL');
-      expect(feeOracleValues).not.to.have.property('externalSecrets');
+      expect(feeOracleValues.externalSecrets['fee-oracle-secret-env'].data[0].secretKey).to.equal('DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL');
     });
 
     it('generates proof-coordinator production values from deployment scalars', () => {
@@ -2216,7 +2234,7 @@ describe('monitoring template projection', () => {
     const monitor = yaml.load(files['scroll-monitor-production.yaml']) as any
     expect(monitor.grafana.resources).to.deep.equal(template.grafana.resources)
     expect(monitor.diskAlerts).to.deep.equal(template.diskAlerts)
-    expect(monitor.balanceMonitoring).to.deep.equal(template.balanceMonitoring)
+    expect(monitor.balanceMonitoring.feeWallet).to.deep.equal(template.balanceMonitoring.feeWallet)
     expect(monitor.serviceAlerts.cubesignerPolicyMode).eq('production_verifier_key_policy')
     expect(monitor.grafana.envValueFrom.DOGEOS_SLACK_WEBHOOK_URL.secretKeyRef.name).to.equal('scroll-monitor-slack')
     expect((toml.parse(generateDogeConfigToml(spec)) as any).monitoring).to.deep.equal(spec.monitoring)

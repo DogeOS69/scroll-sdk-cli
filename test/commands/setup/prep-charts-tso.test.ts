@@ -29,7 +29,7 @@ describe('setup prep-charts ALB edges', () => {
       const command: any = Object.create(PrepCharts.prototype)
       Object.assign(command, {
         configData: {general: {CHAIN_ID_L2: 1234}, ingress: {PROOF_COORDINATOR_HOST: 'proof.example.invalid', TSO_HOST: 'tso.example.invalid'}},
-        dogeConfig: {network: 'testnet'},
+        dogeConfig: {ethereumRpcSecretStore: {prefix: 'dogeos/fixture/default/bridge', provider: 'aws'}, network: 'testnet'},
         jsonCtx: {info() {}, logSuccess() {}},
         jsonMode: true,
         log() {},

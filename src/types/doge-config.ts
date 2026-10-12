@@ -188,7 +188,8 @@ export interface DogeConfig {
     submitterRpcUrl?: string
   } & EthereumDaRuntimeConfig
 
-  feeOracle?: {contractWriteMode?: 'dry_run' | 'live'}
+  ethereumRpcSecretStore?: {awsRegion?: string; gcpProject?: string; prefix: string; provider: string}
+  feeOracle?: {contractWriteMode?: 'dry_run' | 'live'; ethereumRpcUrl?: string}
   frontend?: {
     bridgeUrl?: string
     l2Explorer?: string

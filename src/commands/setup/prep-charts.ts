@@ -27,6 +27,7 @@ import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues, validateDstackControllerConfig} from '../../utils/dstack-controller-values.js'
 import {readDstackControllerConfig} from '../../utils/dstack-database.js'
 import {type EthereumDaRuntimeConfig, ethereumDaRuntimeEnv} from '../../utils/ethereum-da-runtime.js'
+import {ETHEREUM_RPC_KEYS, proofCoordinatorRpcKeys, readEthereumRpcSecretStore, reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
 import {frontendDepositEnv, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
 import { GenerationTransaction } from '../../utils/generation-transaction.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
@@ -462,32 +463,6 @@ const FEE_ORACLE_LEGACY_CONFIGMAP_KEYS = new Set([
   'DOGEOS_FEE_ORACLE__ETHEREUM_DA__CONTRACT_WRITE_MODE',
   'DOGEOS_FEE_ORACLE_PRICE_ORACLE__UPDATE_ON_EACH_CYCLE',
 ])
-
-function removeNamedSecretRef(productionYaml: any, secretName: string, changes: PrepChartChange[]): void {
-  if (!Array.isArray(productionYaml.envFrom)) return
-
-  const nextEnvFrom = productionYaml.envFrom.filter((item: any) => item?.secretRef?.name !== secretName)
-  if (nextEnvFrom.length === productionYaml.envFrom.length) return
-
-  if (nextEnvFrom.length > 0) {
-    productionYaml.envFrom = nextEnvFrom
-  } else {
-    delete productionYaml.envFrom
-  }
-
-  changes.push({ key: `envFrom.${secretName}`, newValue: 'removed', oldValue: 'present' })
-}
-
-function removeExternalSecret(productionYaml: any, secretName: string, changes: PrepChartChange[]): void {
-  if (!productionYaml.externalSecrets?.[secretName]) return
-
-  delete productionYaml.externalSecrets[secretName]
-  if (Object.keys(productionYaml.externalSecrets).length === 0) {
-    delete productionYaml.externalSecrets
-  }
-
-  changes.push({ key: `externalSecrets.${secretName}`, newValue: 'removed', oldValue: 'present' })
-}
 
 function ensureNamedSecretRef(productionYaml: any, secretName: string, changes: PrepChartChange[]): void {
   productionYaml.envFrom ||= []
@@ -2715,8 +2690,6 @@ export default class SetupPrepCharts extends Command {
           feeOracleChanges.push(...removeConfigMapEnvKeys(productionYaml, [
             'DOGEOS_FEE_ORACLE_WALLET__PRIVATE_KEY_ENV',
           ]))
-          removeNamedSecretRef(productionYaml, 'fee-oracle-secret-env', feeOracleChanges)
-          removeExternalSecret(productionYaml, 'fee-oracle-secret-env', feeOracleChanges)
 
           productionYaml.serviceAccount ||= {}
           const previousServiceAccount = JSON.stringify(productionYaml.serviceAccount)
@@ -3131,22 +3104,6 @@ export default class SetupPrepCharts extends Command {
             updated = true
           }
 
-          if (Array.isArray(productionYaml.envFrom)) {
-            const nextEnvFrom = productionYaml.envFrom.filter((item: any) => item?.secretRef?.name !== 'eth-da-submitter-secret-env')
-            if (nextEnvFrom.length !== productionYaml.envFrom.length) {
-              productionYaml.envFrom = nextEnvFrom
-              updated = true
-              changes.push({ key: 'envFrom.eth-da-submitter-secret-env', newValue: 'removed', oldValue: 'present' })
-            }
-          }
-
-          if (productionYaml.externalSecrets?.['eth-da-submitter-secret-env']) {
-            delete productionYaml.externalSecrets['eth-da-submitter-secret-env']
-            if (Object.keys(productionYaml.externalSecrets).length === 0) delete productionYaml.externalSecrets
-            updated = true
-            changes.push({ key: 'externalSecrets.eth-da-submitter-secret-env', newValue: 'removed', oldValue: 'present' })
-          }
-
           productionYaml.serviceAccount ||= {}
           const previousServiceAccount = JSON.stringify(productionYaml.serviceAccount)
           productionYaml.serviceAccount.create = true
@@ -3324,6 +3281,32 @@ export default class SetupPrepCharts extends Command {
         if (previous !== JSON.stringify(productionYaml)) {
           changes.push({key: 'ingress', newValue: 'reconciled controller settings', oldValue: 'previous controller settings'})
           updated = true
+        }
+      }
+
+      const pcRpcFile = path.resolve(path.dirname(path.resolve(valuesDir)), 'proof-coordinator/ProofCoordinator.toml')
+      const selectedRpcKeys = chartName === 'proof-coordinator' && fs.existsSync(pcRpcFile) ? proofCoordinatorRpcKeys(fs.readFileSync(pcRpcFile, 'utf8')) : undefined
+      if (reconcileEthereumRpcSecrets(productionYaml, chartName, this.dogeConfig.ethereumRpcSecretStore ?? readEthereumRpcSecretStore(), selectedRpcKeys)) {
+        updated = true
+        changes.push({key: 'ethereumRpcSecrets', newValue: 'Secret references', oldValue: '[previous configuration]'})
+      }
+
+      if (['eth-da-submitter', 'fee-oracle'].includes(chartName)) {
+        const signerKey = chartName === 'fee-oracle' ? 'l2GasOracleSender' : 'l1CommitSender'
+        if (this.dogeConfig.signers?.[signerKey]?.backend === 'aws_kms') {
+          const secret = productionYaml.externalSecrets?.[`${chartName}-secret-env`]
+          const privateKey = chartName === 'fee-oracle' ? 'DOGEOS_FEE_ORACLE_PRIVATE_KEY' : 'DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__SUBMITTER_PRIVATE_KEY'
+          if (secret?.data?.some((item: any) => item.secretKey === privateKey)) {
+            secret.data = secret.data.filter((item: any) => item.secretKey !== privateKey)
+            updated = true
+            changes.push({key: 'externalSecrets.signer', newValue: 'KMS; RPC Secret retained', oldValue: '[previous configuration]'})
+          }
+        }
+      }
+
+      if (ETHEREUM_RPC_KEYS[chartName]) {
+        for (const change of changes) {
+          change.oldValue = '[redacted]'; change.newValue = '[reconciled]'
         }
       }
 
@@ -3529,6 +3512,7 @@ export default class SetupPrepCharts extends Command {
       deploymentDir: process.cwd(),
       ethereumDaBlobSource: proofTopologyEthereumDaBlobSource(this.dogeConfig.ethereumDa),
       ethereumL1RpcUrl: this.dogeConfig.ethereumDa?.submitterRpcUrl,
+      ethereumRpcSecretStore: this.dogeConfig.ethereumRpcSecretStore,
       intent: this.proofIntent,
       materialsReceipt: this.flags['proof-materials-receipt'],
       network: this.dogeConfig.network,

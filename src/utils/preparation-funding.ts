@@ -10,6 +10,7 @@ import type {DeploymentSpec} from '../types/deployment-spec.js'
 
 import {bridgeSetupHelperAddress} from '../commands/setup/bridge-init.js'
 import {GENESIS_SEQUENCER_AMOUNT_SATS} from './bridge-constants.js'
+import {resolveEthereumRpc} from './ethereum-rpc-secrets.js'
 import {resolveEnvValue} from './non-interactive.js'
 import {FEE_WALLET_KEY_ENV, productionFeeWallet} from './preparation-fee-wallet.js'
 import {AwaitingInput, localPath, privateWrite, writeJson} from './preparation-io.js'
@@ -213,7 +214,7 @@ export function verifyProductionBridge(bridge: any, point: {txid: string; vout: 
 
 export async function prepareEthereumAnchor(root: string, spec: DeploymentSpec, injectedRpc?: Rpc): Promise<void> {
   const anchor = spec.preparation!.bridge.production!.ethereumAnchor
-  const endpoint = spec.ethereumDa!.l1RpcUrl
+  const endpoint = resolveEthereumRpc(spec.ethereumDa!.l1RpcUrl, 'ethereumDa.l1RpcUrl')
   const rpc = injectedRpc ?? (async (method: string, params: unknown[]): Promise<any> => {
     try {
       const response = await fetch(endpoint!, {body: JSON.stringify({id: 1, jsonrpc: '2.0', method, params}), headers: {'content-type': 'application/json'}, method: 'POST', signal: AbortSignal.timeout(15_000)})

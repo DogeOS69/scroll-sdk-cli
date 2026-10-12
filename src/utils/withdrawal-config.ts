@@ -1,3 +1,4 @@
+import {ETHEREUM_BEACON_PLACEHOLDER, ETHEREUM_RPC_PLACEHOLDER} from './ethereum-rpc-secrets.js'
 /* eslint-disable @typescript-eslint/no-explicit-any -- Helm values and native TOML are dynamic documents. */
 
 import * as toml from '@iarna/toml'
@@ -219,7 +220,7 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
   const s3Enabled = s3?.enabled === true && nonEmpty(s3.publicBaseUrl) !== undefined
   const expectedBatcher = nonEmpty(input.ethereumDa.expectedBatcherAddress)
   const inboxStartBlock = asInteger(input.ethereumDa.inboxWorkerStartBlock, 'defaults.ethereumDaEmbeddedIndexerStartBlock')
-  const beaconRpcUrl = nonEmpty(input.ethereumDa.beaconRpcUrl)
+  const beaconRpcUrl = nonEmpty(input.ethereumDa.beaconRpcUrl) ? ETHEREUM_BEACON_PLACEHOLDER : undefined
   const facts = {
     dogecoin_indexer: {
       start_height: Math.max(0, input.dogecoinIndexerStartHeight),
@@ -246,7 +247,7 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
           start_block: inboxStartBlock,
         },
       }),
-      l1_rpc_url: nonEmpty(input.ethereumDa.l1RpcUrl),
+      l1_rpc_url: nonEmpty(input.ethereumDa.l1RpcUrl) ? ETHEREUM_RPC_PLACEHOLDER : undefined,
     },
     fresh_genesis_init: input.freshGenesisInit ?? false,
     genesis_sequencer_tx_hex: nonEmpty(input.genesisSequencerTxHex),

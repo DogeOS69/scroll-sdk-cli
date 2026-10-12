@@ -2205,8 +2205,9 @@ FLAGS
   -d, --debug                            Show debug output
   -f, --secret-file=<value>              Local secret file to push (supports
                                          .env and .json files)
-      --aws-prefix=<value>               [default: dogeos] AWS Secrets Manager
-                                         path prefix (e.g., dogeos/testnet)
+      --aws-prefix=<value>               AWS Secrets Manager path prefix; uses
+                                         generated deployment configuration
+                                         without a shared fallback
       --aws-region=<value>               AWS region for secrets (e.g.,
                                          us-east-1)
       --aws-service-account=<value>      [default: external-secrets] AWS IAM

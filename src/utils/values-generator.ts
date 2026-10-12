@@ -1,4 +1,6 @@
+import {reconcileEthereumRpcSecrets} from './ethereum-rpc-secrets.js'
 import {reconcileMonitoringSlack} from './monitoring-slack.js'
+import {specAwsSecretPrefix} from './spec-secret-prefix.js'
 /**
  * Helm Values Generator
  *
@@ -67,12 +69,12 @@ interface SecretProviderConfig {
 /**
  * Get secret provider configuration from spec
  */
-function getSecretProviderConfig(spec: DeploymentSpec): SecretProviderConfig {
+export function getSecretProviderConfig(spec: DeploymentSpec): SecretProviderConfig {
   switch (spec.infrastructure.provider) {
     case 'aws': {
       return {
         awsRegion: spec.infrastructure.aws?.region || 'us-west-2',
-        prefix: spec.infrastructure.aws?.secretsPrefix || 'scroll',
+        prefix: specAwsSecretPrefix(spec),
         provider: 'aws'
       }
     }
@@ -87,7 +89,7 @@ function getSecretProviderConfig(spec: DeploymentSpec): SecretProviderConfig {
 
     default: {
       return {
-        prefix: 'scroll',
+        prefix: specAwsSecretPrefix(spec),
         provider: spec.infrastructure.local?.useK8sSecrets === false ? 'aws' : 'kubernetes'
       }
     }
@@ -408,6 +410,11 @@ export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: s
 
   // Contracts deployment
   files['contracts-production.yaml'] = generateContractsValues(normalizedSpec)
+
+  for (const [file, content] of Object.entries(files)) {
+    const values = yaml.load(content) as Record<string, any>
+    if (reconcileEthereumRpcSecrets(values, file.replace(/-production.*$/, ''), getSecretProviderConfig(normalizedSpec))) files[file] = yaml.dump(values, {lineWidth: -1, noRefs: true})
+  }
 
   return files
 }

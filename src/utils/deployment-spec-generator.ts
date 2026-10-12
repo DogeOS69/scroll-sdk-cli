@@ -42,6 +42,7 @@ import { MANAGED_SIGNER_ROLES, buildLocalSignerConfig } from './signer-roles.js'
 import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {resolveSpecIdentities} from './spec-identities.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
+import {specAwsSecretPrefix} from './spec-secret-prefix.js'
 
 const ETHEREUM_DA_DEFAULTS = {
   devnet: {
@@ -131,9 +132,17 @@ export function resolveEnvRefsDeep(value: unknown): unknown {
   return value
 }
 
-/** Resolve every $ENV reference before handing a DeploymentSpec to external compilers. */
+/** Resolve identity inputs while retaining private endpoint references in frozen intent. */
 export function resolveDeploymentSpecEnvRefs(spec: DeploymentSpec): DeploymentSpec {
-  return normalizeDeploymentSpec(resolveEnvRefsDeep(spec) as DeploymentSpec)
+  const resolved = normalizeDeploymentSpec(resolveEnvRefsDeep(spec) as DeploymentSpec)
+  // Provider URLs are resolved only for local RPC calls or private Secret export.
+  for (const field of ['l1RpcUrl', 'beaconRpcUrl'] as const) {
+    const value = spec.ethereumDa?.[field]
+    if (value?.includes('$ENV:') && resolved.ethereumDa) resolved.ethereumDa[field] = value
+  }
+
+  if (spec.feeOracle?.ethereumRpcUrl?.includes('$ENV:') && resolved.feeOracle) resolved.feeOracle.ethereumRpcUrl = spec.feeOracle.ethereumRpcUrl
+  return resolved
 }
 
 function isHttpUrl(value: string): boolean {
@@ -514,6 +523,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   const spec = normalizeDeploymentSpec(rawSpec)
   const errors: ValidationError[] = []
   const warnings: ValidationWarning[] = []
+  try {specAwsSecretPrefix(spec)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'preparation.secretUpload.awsPrefix'})}
   try {validateMonitoring(spec.monitoring)} catch {errors.push({code: 'E601_INVALID_VALUE', message: 'monitoring.slack.enabled must be a boolean', path: 'monitoring.slack.enabled'})}
 
   try {resolveSpecAttestationSigners(spec, Boolean(spec.preparation))} catch (error) {
@@ -1528,7 +1538,13 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
     }
   }
 
-  config.feeOracle = {contractWriteMode: spec.feeOracle?.contractWriteMode ?? 'live'}
+  config.ethereumRpcSecretStore = {
+    prefix: spec.infrastructure.provider === 'gcp' ? (spec.infrastructure.gcp?.secretsProject ?? spec.infrastructure.gcp?.project ?? 'default-project') : specAwsSecretPrefix(spec),
+    provider: spec.infrastructure.provider === 'local' ? (spec.infrastructure.local?.useK8sSecrets === false ? 'aws' : 'kubernetes') : spec.infrastructure.provider,
+    ...(spec.infrastructure.provider === 'aws' ? {awsRegion: spec.infrastructure.aws?.region ?? 'us-west-2'} : {}),
+    ...(spec.infrastructure.provider === 'gcp' ? {gcpProject: spec.infrastructure.gcp?.project} : {}),
+  }
+  config.feeOracle = {contractWriteMode: spec.feeOracle?.contractWriteMode ?? 'live', ethereumRpcUrl: spec.feeOracle?.ethereumRpcUrl ?? 'https://ethereum-rpc.publicnode.com'}
 
   validateDstackControllerConfig(spec.dstackController)
   if (spec.dstackController !== undefined) config.dstackController = structuredClone(spec.dstackController)
@@ -1635,7 +1651,14 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
     }
   }
 
-  return toml.stringify(resolveEnvRefsDeep(config) as toml.JsonMap)
+  const resolved = resolveEnvRefsDeep(config) as toml.JsonMap
+  // Keep the three provider references refreshable through deployment.env.
+  for (const [field, source] of [['submitterRpcUrl', spec.ethereumDa?.l1RpcUrl], ['beaconRpcUrl', spec.ethereumDa?.beaconRpcUrl]] as const) {
+    if (source?.includes('$ENV:')) (resolved.ethereumDa as toml.JsonMap)[field] = source
+  }
+
+  if (spec.feeOracle?.ethereumRpcUrl?.includes('$ENV:')) (resolved.feeOracle as toml.JsonMap).ethereumRpcUrl = spec.feeOracle.ethereumRpcUrl
+  return toml.stringify(resolved)
 }
 
 /**

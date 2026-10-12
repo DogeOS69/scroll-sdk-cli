@@ -93,7 +93,7 @@ timeout_ms = 10000
       parsed.materializer.scroll_batch.subprocess.ethereum_da.blob_source,
     ]) {
       expect(source).not.to.have.property('anvil')
-      expect(source.beacon_node.url).to.equal('https://beacon.example.com')
+      expect(source.beacon_node.url).to.equal('http://ethereum-beacon.invalid')
       expect(source.aws_s3).to.deep.equal({
         key_prefix: 'rehearsal/batches',
         url: 'https://archive.example.com',

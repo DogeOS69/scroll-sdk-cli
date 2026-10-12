@@ -66,7 +66,7 @@ export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kin
   "$.ethereumDa.blobArchive.s3": {"keys":["bucket","enabled","endpointUrl","forcePathStyle","initialBackoffMs","keyPrefix","maxBackoffMs","maxRetries","pollIntervalMs","publicBaseUrl","region","timeoutMs","treatForbiddenAsMissing","uploadingTimeoutMs"],"kind":"object"},
   "$.ethereumDa.inboxWorker": {"keys":["startBlock"],"kind":"object"},
   "$.ethereumDa.publish": {"keys":["allowLivenessBudgetOverride","budgetWindow","highBacklogThreshold","maxBatchWait","maxBlobsPerTx","maxLivenessDelay","maxPendingBlobTxs","targetBlobsPerTx"],"kind":"object"},
-  "$.feeOracle": {"keys":["contractWriteMode"],"kind":"object"},
+  "$.feeOracle": {"keys":["contractWriteMode","ethereumRpcUrl"],"kind":"object"},
   "$.frontend": {"keys":["baseDomain","externalUrls","hosts","protocol","subdomains","walletConnectProjectId"],"kind":"object"},
   "$.frontend.externalUrls": {"keys":["grafana","l1Explorer","l1Rpc","l2Explorer","l2Rpc"],"kind":"object"},
   "$.frontend.hosts": {"keys":["blockscout","celestia","dogecoin","frontend","grafana","l1Devnet","proofCoordinator","rpcGateway","rpcGatewayWs","tso"],"kind":"object"},
