@@ -75,6 +75,7 @@ bin/run.js --help
   credential import, PostgreSQL/SQLite configuration, generated production values,
   Secret upload scope, and a temporary-directory configuration-only walkthrough
   that does not deploy services or request cloud resources.
+- [CubeSigner policy governance design](docs/cubesigner-policy-governance.md) — proposed publish, Council approval, resume and verification workflow; not implemented.
 - [CubeSigner and proof configuration generation design](docs/cubesigner-proof-configuration-design.md)
   — audited policy/proof provenance gaps, receipt-backed configuration,
   provider-neutral Worker handoff, validation rules, and implementation phases.
