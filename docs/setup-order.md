@@ -192,7 +192,9 @@ After all required Bridge and service signer inputs are ready:
 ```bash
 scrollsdk setup prep-charts
 scrollsdk setup gen-secrets
-scrollsdk setup export-deployment-kit --kit-version <version>
+scrollsdk setup export-deployment-kit
+# publish deployment-kit-<version>/ unchanged at an immutable https URL, then:
+scrollsdk setup export-deployment-kit --published-url <URL>
 scrollsdk setup proof-config-check
 ```
 
@@ -343,6 +345,14 @@ procedure: core configuration and nodes, contracts, dependent services, and
 partner signer handoff. Complete the signer handoff before enabling Withdrawal
 Processor proposals for the new protocol. Mock proof generation is internal to
 Proof Coordinator; it does not require a separate mock worker.
+
+For an enforcing deployment, the deployment is **not accepted until**
+`scrollsdk setup proof-config-check --live --kube-context <context> --namespace
+<namespace>` passes after the rollout. It requires the published kit and a fresh
+authenticated TSO poll (within the last 60 seconds) from every Attestation
+signer in the WP `tsoSigners`. A failure means liveness, not safety: an
+enforcing WP with offline signers stalls signing; it never signs anything
+wrong.
 
 Where genesis hold is enabled, release it with the environment's `start-l1-sync`
 operation after service/signer readiness, then verify synchronization, L2

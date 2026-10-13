@@ -41,17 +41,13 @@ export function refreshPreparationRuntime(root: string, plan: PreparationPlan, s
   }
 
   const attestation = config.attestationSigner as toml.JsonMap | undefined
-  if (attestation) delete attestation.policyValidation
+  // A refreshed deployment re-runs the kit steps; unchanged inputs give the same kit.
+  if (attestation) delete attestation.deploymentKit
   const history = localPath(root, `.scrollsdk/runtime-refresh/${Date.now()}-${process.pid}`)
   fs.mkdirSync(history, {mode: 0o700, recursive: true})
-  for (const relative of ['.scrollsdk/state.json', '.data/doge-config.toml', '.data/proof-program-publication-v1.json', 'signer-policy-bundle']) {
+  for (const relative of ['.scrollsdk/state.json', '.data/doge-config.toml', '.data/proof-program-publication-v1.json']) {
     const source = localPath(root, relative)
-    if (!fs.existsSync(source)) continue
-    const destination = path.join(history, path.basename(relative))
-    // Handoffs are immutable versions; move the old version into history so
-    // the signer-policy step can create a new one without overwriting evidence.
-    if (relative === 'signer-policy-bundle') fs.renameSync(source, destination)
-    else fs.cpSync(source, destination, {recursive: true})
+    if (fs.existsSync(source)) fs.cpSync(source, path.join(history, path.basename(relative)), {recursive: true})
   }
 
   writeJson(path.join(history, 'request.json'), {

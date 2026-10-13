@@ -338,27 +338,31 @@ a stale pre-#937 bundle and fails generation or validation.
 ### Step 5: export the signer deployment kit
 
 After the final `prep-charts` pass of an active/real/enforce deployment, export
-one immutable, versioned deployment kit for the external Attestation Signer
-operators:
+the deployment kit for the external Attestation Signer operators (`setup apply`
+does this itself for enforcing specs):
 
 Wait for `prep-charts` to finish before starting this command. Chart preparation
 transactionally replaces `.data`; a concurrently created kit export can be
 discarded by that replacement.
 
 ```bash
-scrollsdk setup export-deployment-kit --kit-version 1
+scrollsdk setup export-deployment-kit
+# publish deployment-kit-<version>/ unchanged at an immutable https URL, then record it:
+scrollsdk setup export-deployment-kit --published-url <URL>
 ```
 
 The command derives the public TSO URL from `config.toml [ingress].TSO_HOST`,
 the canonical protocol identity from `.data/protocol_context.json`, and the
 signer-readable proof artifact base URL from the generated Withdrawal
-Processor configuration. Use `--tso-url`, `--protocol-context`, or
-`--signer-proof-artifact-base-url` only when deliberately overriding those
-sources. It refuses an existing output directory: a changed endpoint or
-verifier is a new kit version, never an overwrite. Publish the directory (or an
-archive of it) unchanged at an immutable URL and copy the printed
+Processor configuration. The kit version is derived from those signer-relevant
+inputs: a rerun is a no-op, and a changed endpoint or verifier is a new kit
+version in a new directory, never an overwrite. Publish the directory (or an
+archive of it) unchanged at an immutable URL, copy the printed
 `protocol_instance_id`, kit version and manifest SHA-256 into the deployment
-record.
+record, and record the URL with `--published-url`. Only the canonical kit built
+from the deployment inputs can be recorded; to change an endpoint, update the
+deployment input and export again. `proof-config-check` requires the recorded
+kit for enforcement.
 
 ### Step 6: validate the deployment contract
 
@@ -421,8 +425,12 @@ After a clean observation window, edit only:
 +enforcement = "enforce"
 ```
 
-Regenerate and deploy WP/PC configuration, export the matching signer policy,
-and have every partner apply it. This switch does not change Worker image,
+Regenerate and deploy WP/PC configuration, export and publish the deployment
+kit (`export-deployment-kit`, then `--published-url`), and have every partner
+import it. The switch is not accepted until `scrollsdk setup proof-config-check
+--live --kube-context <context> --namespace <namespace>` passes: every
+Attestation signer in the WP `tsoSigners` must show a fresh authenticated TSO
+poll. A failure means liveness, not safety; signing stalls until they poll. This switch does not change Worker image,
 program identity, or artifact prefix.
 
 ## 6. Partner signer handoff

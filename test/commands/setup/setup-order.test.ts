@@ -64,7 +64,7 @@ network_str = "testnet"
 
   it('explains the missing proof topology before kit export and writes no kit', async () => {
     try {
-      await execute(process.execPath, [cli, 'setup', 'export-deployment-kit', '--kit-version', '1', '--json'], {cwd: root})
+      await execute(process.execPath, [cli, 'setup', 'export-deployment-kit', '--json'], {cwd: root})
       expect.fail('Expected missing proof topology to fail')
     } catch (error) {
       const output = error as {stderr: string} & Error
@@ -72,6 +72,6 @@ network_str = "testnet"
       expect(output.stderr).not.to.include('Cannot read properties of undefined')
     }
 
-    expect(fs.existsSync(path.join(root, 'deployment-kit-1'))).to.equal(false)
+    expect(fs.readdirSync(root).filter(name => name.startsWith('deployment-kit-'))).to.deep.equal([])
   })
 })

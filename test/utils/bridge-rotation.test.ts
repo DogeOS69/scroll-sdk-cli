@@ -3,7 +3,7 @@ import * as toml from '@iarna/toml'
 import {expect} from 'chai'
 import * as yaml from 'js-yaml'
 import {execFileSync} from 'node:child_process'
-import {createECDH, createHash} from 'node:crypto'
+import {createECDH} from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -15,7 +15,7 @@ import RotationPlan from '../../src/commands/bridge/rotation/plan.js'
 import RotationStage from '../../src/commands/bridge/rotation/stage.js'
 import {type RotationChainState, assertRotationAdmission, assertRotationSpecUnchanged, bridgeHash, createRotationProposal, encodeBridgeScript, parseBridgeScript, proposalDigest, validateRotationEnvelope} from '../../src/utils/bridge-rotation.js'
 import {rotationPayload, submitFrozenRotation} from '../../src/utils/bridge-rotation-execution.js'
-import {assertRotationReceipts, assertStageUnchanged, enableRotationRoute, loadRotationPlan, mergeRotationRegistrations, rotationJson, saveRotationPlan, writeRotationHandoffNotes} from '../../src/utils/bridge-rotation-files.js'
+import {assertRotationReceipts, assertStageUnchanged, enableRotationRoute, loadRotationPlan, mergeRotationRegistrations, rotationJson, saveRotationPlan} from '../../src/utils/bridge-rotation-files.js'
 import {BridgeRotationRuntime} from '../../src/utils/bridge-rotation-runtime.js'
 import {rotationStatus} from '../../src/utils/bridge-rotation-status.js'
 
@@ -67,10 +67,7 @@ describe('attestation rotation proposals', () => {
       const stageArgs = commandArgs(plan.next)
       expect(stageArgs[stageArgs.indexOf('--dir') + 1]).eq(root)
       expect(stageArgs[stageArgs.indexOf('--spec') + 1]).eq(path.join(dir, 'rotation-spec.yaml'))
-      const {envelope} = loadRotationPlan(root, 'rotation-spec.yaml', dir)
-      // Reuse an already exported fixture handoff; this test exercises command chaining, not proof compilation.
-      rotationJson(path.join(dir, 'signer-deployment/rotation-reference.json'), {proposalSha256: envelope.sha256})
-      rotationJson(path.join(dir, 'signer-deployment/signer-policy-manifest.json'), {files: [], schema: 'dogeos/attestation-signer-policy-manifest/v1'})
+      loadRotationPlan(root, 'rotation-spec.yaml', dir)
       fs.mkdirSync(path.join(runtime, 'withdrawal-processor')); fs.mkdirSync(path.join(runtime, 'values'))
       fs.writeFileSync(path.join(runtime, 'withdrawal-processor/WithdrawalProcessor.toml'), 'rotate_key_v2 = false\n')
       const values = {configMaps: {config: {data: {'WithdrawalProcessor.toml': 'rotate_key_v2 = false\n'}}}, tsoSigners: [...external.map(s => ({delivery: 'pull', network: 'testnet', publicKeyOverride: s.publicKey, roles: ['Attestation'], transportPubkey: s.transportPubkey})), {roles: ['Correctness']}]}
@@ -110,26 +107,6 @@ describe('attestation rotation proposals', () => {
     } finally {sandbox.restore(); fs.rmSync(root, {force: true, recursive: true})}
   })
 
-  it('binds rotation instructions and reference into the handoff manifest', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rotation-handoff-'))
-    try {
-      const {spec, state} = fixture(); const envelope = createRotationProposal(spec, state)
-      fs.writeFileSync(path.join(root, 'protocol_context.json'), '{}')
-      writeRotationHandoffNotes(root, envelope)
-      const manifest = JSON.parse(fs.readFileSync(path.join(root, 'signer-policy-manifest.json'), 'utf8'))
-      expect(manifest.files.map((f: any) => f.file)).include.members(['rotation-reference.json', 'PARTNER-COMMANDS.md', 'protocol_context.json'])
-      for (const file of manifest.files) {
-        const bytes = fs.readFileSync(path.join(root, file.file))
-        expect(file.sha256).eq(`sha256:${createHash('sha256').update(bytes).digest('hex')}`)
-        expect(file.sizeBytes).eq(bytes.length)
-      }
-
-      const notes = fs.readFileSync(path.join(root, 'PARTNER-COMMANDS.md'), 'utf8')
-      expect(notes).include('verify-handoff.sh').and.include('not genesis onboarding')
-      expect(notes).not.include('scrollsdk signer init')
-      expect(JSON.parse(fs.readFileSync(path.join(root, 'rotation-reference.json'), 'utf8')).proposalSha256).eq(envelope.sha256)
-    } finally {fs.rmSync(root, {force: true, recursive: true})}
-  })
   it('isolates explicit rotation directories and reads historical status without the editable spec', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rotation-directories-'))
     try {

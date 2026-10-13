@@ -6,7 +6,7 @@ import type {DogeConfig} from '../types/doge-config.js'
 
 import {normalizeExternalHttpBaseUrl} from './attestation-signer-descriptor.js'
 import {resolveDogecoinChainId} from './deployment-spec-generator.js'
-import {resolveContractFile, validateProofDeploymentContract} from './proof-deployment-contract.js'
+import {type ProofDeploymentContract, resolveContractFile, validateProofDeploymentContract} from './proof-deployment-contract.js'
 import {readProofMaterials} from './proof-materials.js'
 import {normalizeSignerProofArtifactBaseUrl} from './proof-signer-policy-input.js'
 import {proofRegularFile} from './proof-software-release.js'
@@ -17,8 +17,13 @@ import {protocolIdSidecarPath} from './signer-policy-derivation.js'
 export const DEPLOYMENT_KIT_SCHEMA = 'dogeos/deployment-kit/v1'
 export const DEPLOYMENT_KIT_MANIFEST_SCHEMA = 'dogeos/deployment-kit-manifest/v1'
 export const DEPLOYMENT_KIT_MANIFEST_FILE = 'deployment-kit-manifest.json'
-const KIT_VERSION = /^[\dA-Za-z][\w.-]{0,63}$/
+export const DEPLOYMENT_KIT_VERSION = /^k-[\da-f]{12}$/
 const sha256 = (body: Buffer | string): string => createHash('sha256').update(body).digest('hex')
+
+/** `deployment-kit-<version>`: the canonical kit directory, directly under the deployment. */
+export function deploymentKitDirectory(version: string): string {
+  return `deployment-kit-${version}`
+}
 
 export interface DeploymentKitRecord {
   kitDir: string
@@ -27,6 +32,30 @@ export interface DeploymentKitRecord {
   manifestSha256: string
   network: string
   protocolInstanceId: string
+}
+
+/** The kit's exact files (name -> bytes) and identity, built from the deployment inputs without writing. */
+export interface DeploymentKitContent {
+  files: Map<string, Buffer>
+  manifestSha256: string
+  network: string
+  protocolInstanceId: string
+  version: string
+}
+
+export interface DeploymentKitInputs {
+  config: DogeConfig
+  contract: ProofDeploymentContract
+  deploymentDir: string
+  protocolContext: string
+  signerProofArtifactBaseUrl?: string
+  tsoUrl: string
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(item => canonicalJson(item)).join(',')}]`
+  if (value !== null && typeof value === 'object') return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`).join(',')}}`
+  return JSON.stringify(value)
 }
 
 /**
@@ -44,17 +73,14 @@ function protocolInstanceIdFor(context: Buffer, contextPath: string, network: Do
 }
 
 /**
- * Export the bridge-owned, reusable deployment kit for signer operators from
- * the selected deployment contract and its verified proof-materials record.
- * It carries no signer roster, current Bridge key or rotation material, and
- * an existing output directory is never overwritten.
+ * The deployment kit for signer operators, built from the selected contract and
+ * its verified proof-materials record. It carries no signer roster, current
+ * Bridge key or rotation material. Its version is derived from the
+ * signer-relevant fields alone, so the same inputs always give the same kit.
  */
-export function writeDeploymentKit(options: {
-  config: DogeConfig; contractPath?: string; deploymentDir: string; kitVersion: string; output: string; protocolContext: string; signerProofArtifactBaseUrl?: string; tsoUrl: string
-}): DeploymentKitRecord {
+export function deploymentKitContent(options: DeploymentKitInputs): DeploymentKitContent {
   const root = path.resolve(options.deploymentDir)
-  if (!KIT_VERSION.test(options.kitVersion)) throw new Error('Kit version must be 1-64 letters, digits, ".", "_" or "-", starting with a letter or digit')
-  const contract = validateProofDeploymentContract(root, options.contractPath)
+  const {contract} = options
   const {enforcement, generation, mode} = contract
   if (mode !== 'active' || generation !== 'real' || enforcement !== 'enforce') throw new Error(`Deployment kits require an active/real/enforce contract; selected contract is ${mode}/${generation}/${enforcement}`)
   if (!contract.inputs) throw new Error('Selected contract has no bound materials receipt; rerun prep-charts with --proof-materials-receipt')
@@ -77,49 +103,84 @@ export function writeDeploymentKit(options: {
   const aggregation = materials.software.identities.l2Range.appCommitRaw
   if (!/^0x[\da-f]{128}$/.test(batch) || !/^0x[\da-f]{128}$/.test(aggregation)) throw new Error('Selected verifier commitments are malformed')
   const advanceL2Verifier = {aggVerifyingKeyFile: ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE, aggVerifyingKeySha256: `sha256:${sha256(vk)}`, batchProgramCommitmentHex: batch, l2RangeAggregationProgramCommitmentHex: aggregation}
+  const signerFields = {
+    advance_l2_verifier: {agg_verifying_key_file: advanceL2Verifier.aggVerifyingKeyFile, agg_verifying_key_sha256: advanceL2Verifier.aggVerifyingKeySha256, batch_program_commitment_hex: batch, l2_range_aggregation_program_commitment_hex: aggregation},
+    // The same origin renderSignerPolicyEnv writes to ATTESTATION_SIGNER_ARTIFACT_ALLOWED_ORIGINS.
+    artifact_origins: [new URL(signerProofArtifactBaseUrl).origin],
+    network,
+    policy_mode: enforcement,
+    protocol_context_sha256: `sha256:${contextHash}`,
+    protocol_instance_id: protocolInstanceId,
+    tso_url: tsoUrl,
+  }
+  const version = `k-${sha256(canonicalJson(signerFields)).slice(0, 12)}`
+  const kit = {
+    advance_l2_verifier: signerFields.advance_l2_verifier,
+    artifact_origins: signerFields.artifact_origins,
+    kit_version: version,
+    network,
+    policy_mode: enforcement,
+    protocol_context: {file: 'protocol_context.json', sha256: signerFields.protocol_context_sha256},
+    protocol_instance_id: protocolInstanceId,
+    schema: DEPLOYMENT_KIT_SCHEMA,
+    tso_url: tsoUrl,
+  }
+  const files = new Map<string, Buffer>([
+    ['deployment-kit.env', Buffer.from(renderSignerPolicyEnv({advanceL2Verifier, enforcement, generation, mode, network, signerProofArtifactBaseUrl, tsoUrl}))],
+    ['deployment-kit.json', Buffer.from(JSON.stringify(kit, null, 2) + '\n')],
+    ['protocol_context.json', context],
+    [ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE, vk],
+  ])
+  const entries = [...files.keys()].sort().map(file => ({file, sha256: `sha256:${sha256(files.get(file)!)}`, sizeBytes: files.get(file)!.length}))
+  const manifest = Buffer.from(JSON.stringify({files: entries, schema: DEPLOYMENT_KIT_MANIFEST_SCHEMA}, null, 2) + '\n')
+  files.set(DEPLOYMENT_KIT_MANIFEST_FILE, manifest)
+  return {files, manifestSha256: sha256(manifest), network, protocolInstanceId, version}
+}
 
-  const target = path.resolve(root, options.output)
+/**
+ * Read-only: the directory must hold exactly the kit's files, each a regular
+ * file (no symlink in any path component) with byte-identical content.
+ */
+export function verifyDeploymentKit(directory: string, content: DeploymentKitContent): void {
+  const stat = fs.lstatSync(directory, {throwIfNoEntry: false})
+  if (!stat?.isDirectory()) throw new Error(`Deployment kit directory is missing: ${directory}`)
+  const names = fs.readdirSync(directory).sort()
+  if (names.join('\n') !== [...content.files.keys()].sort().join('\n')) throw new Error(`Deployment kit ${directory} does not hold exactly the kit files`)
+  for (const [name, body] of content.files) {
+    if (!fs.readFileSync(proofRegularFile(path.join(directory, name))).equals(body)) throw new Error(`Deployment kit file differs from the deployment inputs: ${name}`)
+  }
+}
+
+/**
+ * Write the kit into `deployment-kit-<version>` (or `output`). The same inputs
+ * give the same kit, so an existing directory with exactly that content is a
+ * no-op; any other existing directory is refused and never overwritten.
+ */
+export function writeDeploymentKit(options: {contractPath?: string; output?: string} & Omit<DeploymentKitInputs, 'contract'>): DeploymentKitRecord {
+  const root = path.resolve(options.deploymentDir)
+  const contract = validateProofDeploymentContract(root, options.contractPath)
+  const content = deploymentKitContent({...options, contract})
+  const target = path.resolve(root, options.output ?? deploymentKitDirectory(content.version))
+  const record = {kitDir: target, kitVersion: content.version, manifestSha256: content.manifestSha256, network: content.network, protocolInstanceId: content.protocolInstanceId}
   fs.mkdirSync(path.dirname(target), {recursive: true})
   if (fs.realpathSync(path.dirname(target)) !== path.dirname(target)) throw new Error('Deployment kit output parent contains a symlink')
-  // Claim the output directory atomically: an existing one, even empty, is never reused.
+  // Claim the output directory atomically; an existing one must already be this exact kit.
   try {
     fs.mkdirSync(target)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('Deployment kit output already exists; kits are never overwritten, select a new kit version')
-    throw error
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    try {verifyDeploymentKit(target, content)} catch {throw new Error(`Deployment kit output ${target} already exists with other content; kits are never overwritten`)}
+    return record
   }
 
   let complete = false
   try {
-    const files: Array<{file: string; sha256: string; sizeBytes: number}> = []
-    const write = (file: string, body: Buffer | string) => {
-      fs.writeFileSync(path.join(target, file), body, {flag: 'wx'})
-      files.push({file, sha256: `sha256:${sha256(body)}`, sizeBytes: Buffer.byteLength(body)})
-    }
-
-    write('protocol_context.json', context)
-    write(ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE, vk)
-    const kit = {
-      advance_l2_verifier: {agg_verifying_key_file: advanceL2Verifier.aggVerifyingKeyFile, agg_verifying_key_sha256: advanceL2Verifier.aggVerifyingKeySha256, batch_program_commitment_hex: batch, l2_range_aggregation_program_commitment_hex: aggregation},
-      // The same origin renderSignerPolicyEnv writes to ATTESTATION_SIGNER_ARTIFACT_ALLOWED_ORIGINS.
-      artifact_origins: [new URL(signerProofArtifactBaseUrl).origin],
-      deployment: {generation_id: contract.generationId, inputs: contract.inputs, topology_revision: contract.topology.bundleRevision},
-      kit_version: options.kitVersion,
-      network,
-      policy_mode: enforcement,
-      protocol_context: {file: 'protocol_context.json', sha256: `sha256:${contextHash}`},
-      protocol_instance_id: protocolInstanceId,
-      schema: DEPLOYMENT_KIT_SCHEMA,
-      tso_url: tsoUrl,
-    }
-    write('deployment-kit.json', JSON.stringify(kit, null, 2) + '\n')
-    write('deployment-kit.env', renderSignerPolicyEnv({advanceL2Verifier, enforcement, generation, mode, network, signerProofArtifactBaseUrl, tsoUrl}))
-    if (validateProofDeploymentContract(root, options.contractPath).generationId !== contract.generationId) throw new Error('Selected proof inputs changed during deployment kit export')
     // The manifest is written last, so an interrupted export never leaves a complete-looking kit.
-    const manifest = JSON.stringify({files: files.sort((a, b) => (a.file < b.file ? -1 : 1)), schema: DEPLOYMENT_KIT_MANIFEST_SCHEMA}, null, 2) + '\n'
-    write(DEPLOYMENT_KIT_MANIFEST_FILE, manifest)
+    for (const [name, body] of content.files) if (name !== DEPLOYMENT_KIT_MANIFEST_FILE) fs.writeFileSync(path.join(target, name), body, {flag: 'wx'})
+    if (validateProofDeploymentContract(root, options.contractPath).generationId !== contract.generationId) throw new Error('Selected proof inputs changed during deployment kit export')
+    fs.writeFileSync(path.join(target, DEPLOYMENT_KIT_MANIFEST_FILE), content.files.get(DEPLOYMENT_KIT_MANIFEST_FILE)!, {flag: 'wx'})
     complete = true
-    return {kitDir: target, kitVersion: options.kitVersion, manifestSha256: sha256(manifest), network, protocolInstanceId}
+    return record
   } finally {
     if (!complete) fs.rmSync(target, {force: true, recursive: true})
   }

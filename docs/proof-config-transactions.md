@@ -185,20 +185,21 @@ The validated schemas are:
 | --- | --- |
 | `dogeos/cubesigner-policy-release/v1` | Full core revision, immutable `name/vN`, SDK `0.4.281`, request contract, Wasm path/size/SHA, passed test report/hash, HTTPS resolver authority, protocol-context digest, program/verifier identities, Bridge program and aggregate VK provenance. |
 | `dogeos/cubesigner-policy-attachment/v1` | Environment/organization, exact key/material/role IDs, release and artifact hashes, immutable policy identifier, verified provider readback and C2F egress authority. |
-| `dogeos/attestation-signer-policy-validation/v1` | Active signer ID/public key, exported bundle-manifest hash, core revision, enforcing policy mode, redacted final-config digest, passed validation result and timestamp. |
 
 Release/attachment timestamps and content hashes are checked. Symlinks and
 parent-directory symlinks are rejected. Live evidence is size-bounded,
 digest-verified and projected into a generated read-only ConfigMap mount at
 `/app/proof-policy/live-evidence.json`.
 
-Partner validation references belong in
-`attestationSigner.policyValidation = {bundleManifest, receipts}` in doge-config.
-Receipts describe actual externally performed verification. They are not
-templates to fill with a fabricated success. No provider or partner secret is
-needed in these receipts. A pending candidate can be used for the partner
-handoff; once real evidence exists, prepare a new generation with those explicit
-references. The receipt must describe the same topology/context/release.
+External Attestation Signer evidence for enforcement is the published
+deployment kit, recorded in `[attestationSigner.deploymentKit]` (version, path,
+manifest SHA-256 and https URL) by `setup apply` or `export-deployment-kit
+--published-url`. The enforcement check rebuilds the kit from the current
+deployment inputs and requires the recorded kit to match it byte for byte. A
+prepared candidate never carries the current kit's record: a new proof
+configuration may change the signer-relevant inputs, so `publish` completes with
+the kit pending, and the new kit is exported and published after activation.
+After rollout, `proof-config-check --live` is the final acceptance check.
 
 One-release migration behavior keeps missing-mode legacy configuration on the
 fail-closed production runtime default and reports a warning. It never silently
@@ -223,7 +224,7 @@ and rejects enforcing configurations with missing or mismatched evidence.
 
 For advanced manual generation, select materials explicitly with
 `setup prep-charts --proof-materials-receipt PATH` and, after publication,
-`--proof-publication-receipt PATH`. `setup export-deployment-kit --kit-version <v> --contract PATH`
+`--proof-publication-receipt PATH`. `setup export-deployment-kit --contract PATH`
 uses only those bound materials. It never falls back to the default receipt.
 Kit exports require a new versioned output directory and never overwrite one;
 failed exports leave prior kits intact.
