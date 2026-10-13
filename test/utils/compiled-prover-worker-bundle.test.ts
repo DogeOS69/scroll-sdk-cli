@@ -121,8 +121,7 @@ describe('compiled prover-worker bundle', () => {
     const manifest = JSON.parse(fs.readFileSync(result.manifestFile, 'utf8'))
     expect(manifest.credentialState).to.equal('pending')
     expect(manifest).not.to.have.property('topologyDigest')
-    expect(fs.readFileSync(path.join(bundleDir, '.gitignore'), 'utf8'))
-      .to.equal('prover-worker.token\n.runtime/\n')
+    expect(fs.existsSync(path.join(bundleDir, '.gitignore'))).to.equal(false)
     expect(manifest.files['prover-worker-compose'].sha256).to.match(/^[\da-f]{64}$/)
     expect(manifest.requiredResources).to.deep.include({
       path: 'chunk/app.vmexe',

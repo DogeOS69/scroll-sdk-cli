@@ -225,7 +225,6 @@ Credentials are generated into the deployment directory, outside Helm values:
 
 ```text
 secrets/status-page/
-  .gitignore              # Ignores all files in this directory.
   binding.json            # Private creation journal, page binding, integration ID and URL.
   grafana.secret.yaml     # Kubernetes Secret using webhookSecretRef.name/key.
 ```

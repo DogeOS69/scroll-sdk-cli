@@ -1,6 +1,7 @@
 import {reconcileEthereumRpcSecrets} from './ethereum-rpc-secrets.js'
 import {reconcileMonitoringSlack} from './monitoring-slack.js'
 import {specAwsSecretPrefix} from './spec-secret-prefix.js'
+import {tsoSignerNetwork} from './tso-signer-network.js'
 /**
  * Helm Values Generator
  *
@@ -867,7 +868,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
 /**
  * Generate Withdrawal Processor values
  */
-function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
+export function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
   const attestation = resolveSpecAttestationSigners(spec, Boolean(spec.preparation))
   const secretConfig = getSecretProviderConfig(spec)
   const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
@@ -967,7 +968,7 @@ function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
 
   ensureWithdrawalChartWiring(values)
   if (attestation) values.tsoSigners = attestation.external.map(signer => ({
-    delivery: 'pull', network: spec.dogecoin.network, publicKeyOverride: signer.publicKey,
+    delivery: 'pull', network: tsoSignerNetwork(spec.dogecoin.network), publicKeyOverride: signer.publicKey,
     roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: signer.transportPubkey,
   }))
   ensureWithdrawalProofActivationSwitch(

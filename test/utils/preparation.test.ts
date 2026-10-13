@@ -183,7 +183,7 @@ describe('resumable preparation plan', () => {
     const plan = await makePlan()
     expect(fs.statSync(deployment).mode.toString(8).slice(-3)).to.equal('700')
     expect(fs.existsSync(path.join(deployment, 'config.toml'))).to.equal(false)
-    expect(fs.readFileSync(path.join(deployment, '.gitignore'), 'utf8')).to.include('/withdrawal-processor/\n')
+    expect(fs.existsSync(path.join(deployment, '.gitignore'))).to.equal(false)
     expect(fs.statSync(path.join(deployment, '.scrollsdk/intent.json')).mode.toString(8).slice(-3)).to.equal('600')
     const calls: string[] = []; let ready = false
     const runner = {async run(step: any) {calls.push(step.id); if (step.id === 'helper-funding' && !ready) throw new AwaitingInput({message: 'fund helper'}); fs.mkdirSync(path.join(deployment, 'values'), {recursive: true}); fs.writeFileSync(path.join(deployment, 'values/state.yaml'), step.id)}}
