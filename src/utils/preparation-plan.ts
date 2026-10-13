@@ -236,7 +236,6 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   if (fs.existsSync(root) && fs.readdirSync(root).length > 0) throw new Error('setup plan requires an empty output directory')
   fs.mkdirSync(root, {mode: 0o700, recursive: true})
   fs.chmodSync(root, 0o700)
-  privateWrite(path.join(root, '.gitignore'), '/.scrollsdk/\n/.data/\n/secrets/\n/config.toml\n/config-contracts.toml\n/values/\n/signer-policy-bundle/\n/withdrawal-processor/\n/proof-coordinator/\n/eth-da-submitter/\n')
   privateWrite(path.join(root, '.scrollsdkignore'), '.scrollsdk/\n.data/contracts-build/\n')
   privateWrite(path.join(directory, 'intent.json'), specText)
   writeJson(path.join(directory, 'plan.json'), plan)

@@ -125,7 +125,6 @@ export class StatusPageWebhook {
     if (tracked.stdout.trim()) throw new Error('The webhook credential directory contains Git-tracked files; remove them from the index before proceeding')
     fs.mkdirSync(this.directory, {mode: 0o700, recursive: true})
     fs.chmodSync(this.directory, 0o700)
-    this.write(path.join(this.directory, '.gitignore'), '*\n')
   }
 
   private assertUniqueUrl(url: string, integrationId?: string): void {
@@ -144,7 +143,7 @@ export class StatusPageWebhook {
   }
 
   private checkPaths(): void {
-    for (const file of [path.join(this.root, 'secrets'), this.directory, this.receiptFile, this.secretFile, path.join(this.directory, '.gitignore')]) {
+    for (const file of [path.join(this.root, 'secrets'), this.directory, this.receiptFile, this.secretFile]) {
       try {
         if (fs.lstatSync(file).isSymbolicLink()) throw new Error('Webhook credential paths must not be symbolic links')
       } catch (error) {

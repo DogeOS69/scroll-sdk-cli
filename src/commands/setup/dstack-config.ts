@@ -126,10 +126,6 @@ export default class DstackConfig extends Command {
       // Serialize and validate all destinations before writing state or public references.
       const publicContent = flags.spec ? yaml.dump(document, {lineWidth: -1, noRefs: true}) : toml.stringify(document as toml.JsonMap)
       checkPrivatePath(DSTACK_CREDENTIALS_FILE)
-      checkPrivatePath('.gitignore')
-      let ignore = fs.existsSync('.gitignore') ? fs.readFileSync('.gitignore', 'utf8') : ''
-      for (const entry of ['/.data/dstack/', '/secrets/']) if (!ignore.split('\n').includes(entry)) ignore += `${ignore.endsWith('\n') || !ignore ? '' : '\n'}${entry}\n`
-      fs.writeFileSync('.gitignore', ignore)
       writePrivateFile(DSTACK_CREDENTIALS_FILE, JSON.stringify(state, null, 2) + '\n')
       writePrivateFile(file, publicContent)
       output.logSuccess('Dstack credentials imported locally. Run setup gen-secrets --dstack-only, then regenerate chart values.')
