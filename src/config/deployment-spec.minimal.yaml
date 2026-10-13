@@ -23,6 +23,10 @@ infrastructure:
   bootnodeCount: 1
   # Use `setup gen-keystore --from-spec deployment-spec.yaml` to prepare Reth identities in doge-config.
 
+# Public bootnode P2P stays disabled until selected nodes have approved source CIDRs.
+# See docs/spec-bootnode-public-p2p.md for activation inputs.
+bootnodePublicP2p: []
+
 network:
   l1ChainName: "DOGE"
   l2ChainName: "DogeOS Devnet"

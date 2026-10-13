@@ -1,6 +1,6 @@
 // Generated from DeploymentSpec and its referenced types. Run npm run spec:fields.
 export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kind: 'array' | 'object' | 'record'}> = {
-  "$": {"keys":["accounts","attestationSigners","bridge","celestia","contracts","database","dogecoin","dstackController","ethereumDa","feeOracle","frontend","genesis","identities","images","infrastructure","metadata","monitoring","network","preparation","proofArtifacts","proofCoordinator","proofTopology","proofWorkers","rollup","signing","snapshots","templates","test","version"],"kind":"object"},
+  "$": {"keys":["accounts","attestationSigners","bootnodePublicP2p","bridge","celestia","contracts","database","dogecoin","dstackController","ethereumDa","feeOracle","frontend","genesis","identities","images","infrastructure","metadata","monitoring","network","preparation","proofArtifacts","proofCoordinator","proofTopology","proofWorkers","rollup","signing","snapshots","templates","test","version"],"kind":"object"},
   "$.accounts": {"keys":["deployer","l1CommitSender","l2GasOracleSender","owner"],"kind":"object"},
   "$.accounts.deployer": {"keys":["address","privateKey"],"kind":"object"},
   "$.accounts.l1CommitSender": {"keys":["address","privateKey"],"kind":"object"},
@@ -8,6 +8,11 @@ export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kin
   "$.accounts.owner": {"keys":["address"],"kind":"object"},
   "$.attestationSigners": {"kind":"array"},
   "$.attestationSigners[]": {"keys":["attestationPubkey","name","transportPubkey"],"kind":"object"},
+  "$.bootnodePublicP2p": {"kind":"array"},
+  "$.bootnodePublicP2p[]": {"keys":["eipAllocations","enabled","index","sourceRanges","subnets"],"kind":"object"},
+  "$.bootnodePublicP2p[].eipAllocations": {"kind":"array"},
+  "$.bootnodePublicP2p[].sourceRanges": {"kind":"array"},
+  "$.bootnodePublicP2p[].subnets": {"kind":"array"},
   "$.bridge": {"keys":["confirmationsRequired","feeRateSatPerKvb","feeRateSatsPerKvb","feeRecipient","fees","freshGenesisInit","initialAttestationKeyset","keyCounts","seedString","targetAmounts","targetAmountsSats","teePubkey","thresholds","timelock"],"kind":"object"},
   "$.bridge.fees": {"keys":["deposit","depositFeeSats","minWithdrawalAmount","minWithdrawalAmountWei","withdrawal","withdrawalFeeWei"],"kind":"object"},
   "$.bridge.initialAttestationKeyset": {"keys":["signerIds","threshold"],"kind":"object"},

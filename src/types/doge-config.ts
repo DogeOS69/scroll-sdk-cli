@@ -1,7 +1,7 @@
 import type {CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
 import type {EthereumDaRuntimeConfig} from '../utils/ethereum-da-runtime.js'
 import type {SignerValidationInputs} from '../utils/proof-enforcement-readiness.js'
-import type {DeploymentIdentityIntent, ProofCoordinatorConfig} from './deployment-spec.js'
+import type {BootnodePublicP2p, DeploymentIdentityIntent, ProofCoordinatorConfig} from './deployment-spec.js'
 import type {DstackControllerConfig} from './dstack-controller.js'
 import type {ProofTopologySpec} from './proof-topology.js'
 
@@ -89,6 +89,7 @@ export interface DogeConfig {
     profile?: 'production-kms' | 'staging-kms' | 'staging-local'
     threshold: number
   }
+  bootnodePublicP2p?: BootnodePublicP2p[]
   bootnodeReth?: {
     instances?: Array<{
       enodeUrl?: string

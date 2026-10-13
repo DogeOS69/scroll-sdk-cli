@@ -53,6 +53,25 @@ describe('spec values runtime policy across entry points', () => {
     await Generate.run([mode, '--output', directory, '--json', ...args], cli)
   }
 
+  for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`projects bootnode source restrictions through ${mode} and retains them on regeneration`, async () => {
+    spec.infrastructure = {...spec.infrastructure, aws: {accountId: '123456789012', eksClusterName: 'fixture-cluster', region: 'us-east-1'}, bootnodeCount: 2, provider: 'aws'}
+    spec.identities!.bootnodes.push({index: 1, nodekey: {action: 'create'}})
+    spec.bootnodePublicP2p = [{eipAllocations: ['eipalloc-0123456789abcdef0'], enabled: true, index: 1, sourceRanges: ['203.0.113.10/32'], subnets: ['subnet-0123456789abcdef0']}]
+    const directory = path.join(root, 'deployment')
+    await run(mode, directory, '--sdk-dir', sdk)
+    const file = path.join(directory, 'values/l2-reth-bootnode-production-1.yaml')
+    const selected = yaml.load(fs.readFileSync(file, 'utf8')) as any
+    expect(selected.reth.p2pExternal.sourceRanges).to.deep.equal(['203.0.113.10/32'])
+    expect((yaml.load(fs.readFileSync(path.join(directory, 'values/l2-reth-bootnode-production-0.yaml'), 'utf8')) as any).reth.p2pExternal.enabled).to.equal(false)
+    selected.resources = {requests: {cpu: '42m'}}
+    fs.writeFileSync(file, yaml.dump(selected))
+    await run(mode, directory, '--sdk-dir', sdk, '--force')
+    expect((yaml.load(fs.readFileSync(file, 'utf8')) as any).resources).to.deep.equal(selected.resources)
+    spec.bootnodePublicP2p = []
+    await run(mode, directory, '--sdk-dir', sdk, '--force')
+    expect((yaml.load(fs.readFileSync(file, 'utf8')) as any).reth.p2pExternal.enabled).to.equal(false)
+  })
+
   for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`excludes L1 devnet from external Ethereum deployments through ${mode}`, async () => {
     spec.ethereumDa = {...spec.ethereumDa, chain: 'sepolia'}
     const directory = path.join(root, 'deployment')
