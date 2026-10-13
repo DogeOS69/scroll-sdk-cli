@@ -158,6 +158,34 @@ describe('bridge rotation register', () => {
     expect(clean.calls.some(call => call[0] === 'make' && call[1] === 'install-withdrawal-processor')).to.equal(false)
   })
 
+  it('installs again on a rerun after a failed install, without rewriting values', async () => {
+    const rotation = registrable()
+    const {calls, cluster, run} = setup(rotation, [correctness, ...rotation.current.signers.map(signer => entry(signer))])
+    const failInstall = (command: string, args: string[]) => {
+      if (command === 'make' && args[0] === 'install-withdrawal-processor') throw new Error('cluster unreachable')
+      return run(command, args)
+    }
+
+    let error: unknown
+    try {await registerRotation({cluster, rotation, run: failInstall})} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain('re-run register')
+    const saved = fs.readFileSync(path.join(root, WP_VALUES_FILE), 'utf8')
+    calls.length = 0
+    expect(await registerRotation({cluster, rotation, run, async sleep() {}})).to.deep.equal({added: [], installed: true, registered: true})
+    expect(calls.map(call => call.slice(0, 2).join(' '))).to.deep.equal(['make -s', 'helm template', 'make install-withdrawal-processor', 'kubectl --context'])
+    expect(fs.readFileSync(path.join(root, WP_VALUES_FILE), 'utf8')).to.equal(saved)
+  })
+
+  it('treats an entry with another signature mode or an extra field as a conflict', () => {
+    const rotation = registrable()
+    const signer = rotation.target.signers[0]
+    for (const existing of [{...entry(signer), signatureMode: 'shadowfork_sentinel'}, {...entry(signer), uri: 'http://signer:3000'}, {...entry(signer), roles: ['Attestation', 'Correctness']}]) {
+      expect(() => mergeRotationSigners([existing], rotation)).to.throw('conflicts')
+    }
+
+    expect(mergeRotationSigners([entry(signer)], rotation).added).to.not.include(signer.public_key)
+  })
+
   it('refuses a stale predecessor before touching values', async () => {
     const rotation = registrable()
     const {calls, cluster, run} = setup(rotation, [correctness])

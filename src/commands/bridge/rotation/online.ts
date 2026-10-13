@@ -2,7 +2,7 @@ import {Command} from '@oclif/core'
 
 import {assertDeploymentIdentity} from '../../../utils/rotation-export.js'
 import {rotationArgs, rotationFlags, rotationSetup, tsoFlag} from '../../../utils/rotation-flags.js'
-import {checkOnline} from '../../../utils/rotation-operations.js'
+import {ONLINE_CHECK_LIMITS, checkOnline} from '../../../utils/rotation-operations.js'
 
 export default class RotationOnline extends Command {
   static args = rotationArgs
@@ -16,7 +16,7 @@ export default class RotationOnline extends Command {
     const status = await cluster.wpStatus()
     assertDeploymentIdentity(rotation, status)
     const result = await checkOnline(cluster, rotation, status)
-    this.log(JSON.stringify({...result, note: 'A fresh poll proves an authenticated transport-key poll only; it does not prove the release, enforce mode, RPC health or that old signers loaded the allowlist entry.'}, null, 2))
+    this.log(JSON.stringify({...result, note: ONLINE_CHECK_LIMITS}, null, 2))
     if (!result.passed) process.exitCode = 1
   }
 }

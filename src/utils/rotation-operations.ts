@@ -25,6 +25,8 @@ export const runTool: Run = (command, args, cwd) => execFileSync(command, args, 
  * no-op, and a key already registered with another transport key (or the
  * reverse, or another role/delivery/network) is an error.
  */
+const REGISTRATION_FIELDS = ['delivery', 'network', 'publicKeyOverride', 'roles', 'signatureMode', 'transportPubkey'].join(',')
+
 export function mergeRotationSigners(existing: unknown, rotation: RotationExport): {added: string[]; signers: any[]} {
   if (!Array.isArray(existing)) throw new Error(`${WP_VALUES_FILE} has no tsoSigners list`)
   const signers = [...existing]
@@ -38,9 +40,12 @@ export function mergeRotationSigners(existing: unknown, rotation: RotationExport
       continue
     }
 
-    const same = (entry: any) => String(entry.publicKeyOverride).toLowerCase() === signer.public_key && String(entry.transportPubkey).toLowerCase() === signer.transport_pubkey
-      && entry.delivery === 'pull' && entry.network === network && Array.isArray(entry.roles) && entry.roles.length === 1 && entry.roles[0] === 'Attestation'
-    if (matches.length > 1 || !same(matches[0])) throw new Error(`Signer ${signer.label} (${signer.public_key}) conflicts with an existing tsoSigners entry (another transport key, public key, role or network); nothing was written`)
+    // An existing entry must be exactly the registration this command would add.
+    const same = (entry: any) => Object.keys(entry).sort().join(',') === REGISTRATION_FIELDS
+      && String(entry.publicKeyOverride).toLowerCase() === signer.public_key && String(entry.transportPubkey).toLowerCase() === signer.transport_pubkey
+      && entry.delivery === 'pull' && entry.network === network && entry.signatureMode === 'ecdsa'
+      && Array.isArray(entry.roles) && entry.roles.length === 1 && entry.roles[0] === 'Attestation'
+    if (matches.length > 1 || !same(matches[0])) throw new Error(`Signer ${signer.label} (${signer.public_key}) conflicts with an existing tsoSigners entry (another transport key, public key, role, network, signature mode or field); nothing was written`)
   }
 
   return {added, signers}
@@ -66,7 +71,11 @@ export async function registerRotation(options: RegisterOptions): Promise<Regist
   let values: any
   try {values = yaml.load(fs.readFileSync(file, 'utf8'))} catch {throw new Error(`Cannot read ${WP_VALUES_FILE}`)}
   const {added, signers} = mergeRotationSigners(values?.tsoSigners, rotation)
-  if (added.length > 0) {
+  const wanted = rotationSigners(rotation).map(signer => signer.public_key)
+  const live = new Set(status.registered_signer_pubkeys.map(key => key.toLowerCase()))
+  // Install when keys were added, or when an earlier install failed after the values were saved.
+  const install = added.length > 0 || wanted.some(key => !live.has(key))
+  if (install) {
     const merged = yaml.dump({...values, tsoSigners: signers}, {lineWidth: -1, noRefs: true})
     // Render the merged values with the chart's own guards before writing anything.
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'rotation-register-'))
@@ -75,25 +84,27 @@ export async function registerRotation(options: RegisterOptions): Promise<Regist
       try {run('helm', ['template', 'withdrawal-processor', ...wpChart(cluster.deploymentDir, run), '--namespace', cluster.namespace, '--values', path.join(scratch, 'values.yaml')], cluster.deploymentDir)} catch {throw new Error('helm template rejected the merged tsoSigners; nothing was written')}
     } finally {fs.rmSync(scratch, {force: true, recursive: true})}
 
-    const temporary = `${file}.tmp-${process.pid}`
-    // eslint-disable-next-line no-bitwise -- keep the values file permissions
-    fs.writeFileSync(temporary, merged, {flag: 'wx', mode: fs.statSync(file).mode & 0o777})
-    fs.renameSync(temporary, file)
+    if (added.length > 0) {
+      const temporary = `${file}.tmp-${process.pid}`
+      // eslint-disable-next-line no-bitwise -- keep the values file permissions
+      fs.writeFileSync(temporary, merged, {flag: 'wx', mode: fs.statSync(file).mode & 0o777})
+      fs.renameSync(temporary, file)
+    }
+
     try {
       run('make', ['install-withdrawal-processor', `KUBE_CONTEXT=${cluster.context}`, `NAMESPACE=${cluster.namespace}`], cluster.deploymentDir)
       run('kubectl', ['--context', cluster.context, '-n', cluster.namespace, 'rollout', 'status', 'statefulset/withdrawal-processor', '--timeout=300s'], cluster.deploymentDir)
-    } catch {throw new Error(`${WP_VALUES_FILE} was updated but the WP install or rollout failed; fix it and re-run register (a re-run is a no-op merge)`)}
+    } catch {throw new Error(`The WP install or rollout failed${added.length > 0 ? ` after ${WP_VALUES_FILE} was updated` : ''}; fix it and re-run register, which installs again until the WP reports every key`)}
   }
 
   // The WP only reports keys the TSO confirmed to it; wait for every export key.
   const now = options.now ?? Date.now
   const sleep = options.sleep ?? (ms => new Promise(resolve => {setTimeout(resolve, ms)}))
   const deadline = now() + (options.waitSeconds ?? 300) * 1000
-  const wanted = rotationSigners(rotation).map(signer => signer.public_key)
   for (;;) {
     const registered = new Set((await cluster.wpStatus()).registered_signer_pubkeys.map(key => key.toLowerCase()))
     const missing = wanted.filter(key => !registered.has(key))
-    if (missing.length === 0) return {added, installed: added.length > 0, registered: true}
+    if (missing.length === 0) return {added, installed: install, registered: true}
     if (now() >= deadline) throw new Error(`The WP does not report these keys as registered yet: ${missing.join(', ')}`)
     await sleep(5000)
   }
@@ -113,6 +124,9 @@ export function parseLastPolls(metrics: string): Map<string, number> {
 
   return polls
 }
+
+/** What a passing online check does not prove; printed with every online result. */
+export const ONLINE_CHECK_LIMITS = 'Point-in-time: each key made a transport-key-authenticated TSO poll in the last 60 s. It does not prove the signer release, enforce vs observe mode, RPC or key-backend health, that old signers loaded the allowlist entry, or that the new set can sign. If the WP defers dispatch, the handoff happens later without another check.'
 
 export interface OnlineResult {
   current: {fresh: number; required: number}

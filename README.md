@@ -11,7 +11,10 @@ deployment directory:
    the WP reports every key as registered. Re-running it is a no-op.
 2. `scrollsdk bridge rotation online <export>`: passes when every target
    signer, and at least M of the live current signers, polled the TSO in the
-   last 60 seconds.
+   last 60 seconds. It is point-in-time and proves only an authenticated
+   poll: not the release, enforce mode, RPC or key-backend health, the old
+   signers' allowlist entry, or real signing. A deferred WP dispatch happens
+   later without another check.
 3. `scrollsdk bridge rotation send <export> --preview`: the same checks, then a
    non-durable WP build. `send <export>` submits once (`/propose`). Re-running
    `send` reports the stored intent instead of resubmitting.

@@ -2,7 +2,7 @@ import {Command, Flags} from '@oclif/core'
 import fs from 'node:fs'
 
 import {rotationArgs, rotationFlags, rotationSetup, tsoFlag} from '../../../utils/rotation-flags.js'
-import {besideExport, sendRotation} from '../../../utils/rotation-operations.js'
+import {ONLINE_CHECK_LIMITS, besideExport, sendRotation} from '../../../utils/rotation-operations.js'
 
 export default class RotationSend extends Command {
   static args = rotationArgs
@@ -22,6 +22,6 @@ export default class RotationSend extends Command {
 
     const file = besideExport(args.export, outcome.kind === 'preview' ? 'preview' : 'send')
     fs.writeFileSync(file, `${JSON.stringify(outcome.response, null, 2)}\n`, {mode: 0o600})
-    this.log(JSON.stringify({response: outcome.response, saved: file, ...(outcome.kind === 'proposed' ? {httpStatus: outcome.status, next: 'Re-run send with the same export to see the stored intent state.'} : {note: 'Preview only; nothing was stored.'})}, null, 2))
+    this.log(JSON.stringify({onlineCheck: ONLINE_CHECK_LIMITS, response: outcome.response, saved: file, ...(outcome.kind === 'proposed' ? {httpStatus: outcome.status, next: 'Re-run send with the same export to see the stored intent state.'} : {note: 'Preview only; nothing was stored.'})}, null, 2))
   }
 }
