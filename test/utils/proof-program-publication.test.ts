@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import sinon from 'sinon'
 
 import type {DogeConfig} from '../../src/types/doge-config.js'
 
@@ -405,6 +406,66 @@ describe('real-proof program bundle publication', () => {
     expect(fs.existsSync(path.join(root, 'kits/deployment-kit-1'))).to.equal(false)
     fs.writeFileSync(sidecar, '2A9DFFC0D2ECBED48F6CCC16F2E9ABD11DFBAC38FE71D2C0CD6FBB0E8D24A6CE\n')
     expect(writeDeploymentKit(options).protocolInstanceId).to.equal('0x2a9dffc0d2ecbed48f6ccc16f2e9abd11dfbac38fe71d2c0cd6fbb0e8d24a6ce')
+  })
+
+  it('publishes the verifying key bytes it hashed even if the source changes during export', () => {
+    const {materials, options} = deploymentKitFixture()
+    const vkPath = path.join(root, materials.software.artifacts.aggregateVerifyingKey.path)
+    const original = fs.readFileSync(vkPath)
+    const read = fs.readFileSync
+    let reads = 0
+    let tampered = false
+    // The selected materials are hashed twice before the export reads the key itself (contract
+    // validation, then the materials receipt). Change the source right after that third read and
+    // restore it before the final contract check re-hashes it.
+    sinon.stub(fs, 'readFileSync').callsFake(((file: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+      if (file === vkPath && ++reads === 4) fs.writeFileSync(vkPath, original)
+      const result = (read as (...args: unknown[]) => unknown)(file, ...rest)
+      if (file === vkPath && reads === 3) {
+        tampered = true
+        fs.writeFileSync(vkPath, Buffer.concat([original, Buffer.from('tampered')]))
+      }
+
+      return result
+    }) as typeof fs.readFileSync)
+    try {
+      writeDeploymentKit(options)
+    } finally {sinon.restore()}
+
+    expect(tampered).to.equal(true)
+    const kitDir = path.join(root, 'kits/deployment-kit-1')
+    const kit = JSON.parse(fs.readFileSync(path.join(kitDir, 'deployment-kit.json'), 'utf8'))
+    const vk = fs.readFileSync(path.join(kitDir, 'advance-l2-agg-verifying-key.bin'))
+    expect(vk).to.deep.equal(original)
+    expect(kit.advance_l2_verifier.agg_verifying_key_sha256).to.equal(`sha256:${digest(vk)}`)
+  })
+
+  it('claims the output directory before writing, so a concurrently created directory is never replaced', () => {
+    const {options} = deploymentKitFixture()
+    const kitDir = path.join(root, 'kits/deployment-kit-1')
+    const write = fs.writeFileSync
+    let concurrent: unknown
+    sinon.stub(fs, 'writeFileSync').callsFake(((...args: unknown[]) => {
+      if (concurrent === undefined) {
+        try {
+          fs.mkdirSync(kitDir)
+          concurrent = 'created'
+        } catch (error) {
+          concurrent = (error as NodeJS.ErrnoException).code
+        }
+      }
+
+      return (write as (...values: unknown[]) => unknown)(...args)
+    }) as typeof fs.writeFileSync)
+    try {
+      writeDeploymentKit(options)
+    } finally {sinon.restore()}
+
+    expect(concurrent).to.equal('EEXIST')
+    fs.rmSync(kitDir, {recursive: true})
+    fs.mkdirSync(kitDir)
+    expect(() => writeDeploymentKit(options)).to.throw('never overwritten')
+    expect(fs.readdirSync(kitDir)).to.deep.equal([])
   })
 
   it('refuses a non-enforcing contract and an unsafe kit version', () => {
