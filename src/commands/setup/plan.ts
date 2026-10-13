@@ -12,17 +12,18 @@ export default class SetupPlan extends Command {
     output: Flags.string({default: DEFAULT_DEPLOYMENT, description: 'New private deployment directory'}),
     'sdk-dir': Flags.string({default: DEFAULT_SDK, description: 'SDK checkout; plan locks committed HEAD unless templates.sdkRevision overrides it'}),
     spec: Flags.string({default: DEFAULT_SPEC, description: 'DeploymentSpec YAML; environment references must resolve in this process'}),
+    until: Flags.string({description: 'Stop after generating genesis; prepare only required identities and inputs', options: ['genesis']}),
   }
 
   async run(): Promise<void> {
     const {flags} = await this.parse(SetupPlan)
     const output = new JsonOutputContext('setup plan', flags.json)
     try {
-      const plan = await createPreparationPlan({envFile: deploymentEnvFile(flags['env-file']), output: flags.output, sdkDirectory: flags['sdk-dir'], spec: flags.spec})
+      const plan = await createPreparationPlan({envFile: deploymentEnvFile(flags['env-file']), output: flags.output, sdkDirectory: flags['sdk-dir'], spec: flags.spec, until: flags.until as 'genesis' | undefined})
       if (!flags.json) {
         output.info(`Preparation plan: ${plan.deploymentName}`)
         for (const step of plan.steps) output.info(`  [${step.effect}] ${step.id}: ${step.title}`)
-        output.info(`Plan saved. Continue with: scrollsdk setup apply${flags.output === DEFAULT_DEPLOYMENT ? '' : ` --dir '${flags.output.replaceAll("'", "'\\''")}'`}`)
+        output.info(`Plan saved${plan.until ? ' (genesis only; later deployment inputs are not validated)' : ''}. Continue with: scrollsdk setup apply${flags.output === DEFAULT_DEPLOYMENT ? '' : ` --dir '${flags.output.replaceAll("'", "'\\''")}'`}`)
       }
 
       output.success(plan)

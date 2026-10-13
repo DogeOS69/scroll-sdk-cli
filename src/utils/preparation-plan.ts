@@ -1,4 +1,5 @@
 import bitcore from 'bitcore-lib-doge'
+import * as yaml from 'js-yaml'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -9,6 +10,7 @@ import {resolveBridgeGenesisImage} from '../commands/setup/bridge-init.js'
 import {DeploymentSpecFieldError} from './deployment-spec-fields.js'
 import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec} from './deployment-spec-generator.js'
 import {usesDstackPostgres} from './dstack-database.js'
+import {genesisIntent} from './preparation-genesis.js'
 import {AwaitingInput, digest, loadPreparationEnv, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolvePreparationProofRelease} from './preparation-release.js'
 import {refreshPreparationRuntime} from './preparation-runtime-refresh.js'
@@ -20,20 +22,24 @@ import {resolveSpecProofStorage} from './spec-proof-storage.js'
 import {specAwsSecretPrefix} from './spec-secret-prefix.js'
 
 export interface PreparationStep {effect: 'chain' | 'cloud' | 'local' | 'read'; id: string; retry: 'reconcile' | 'safe'; title: string}
-export interface PreparationPlan {deploymentName: string; envFile?: string; id: string; schema: 'scrollsdk/preparation/v1'; sdkDirectory: string; specHash: string; steps: PreparationStep[]}
+export interface PreparationPlan {deploymentName: string; envFile?: string; id: string; schema: 'scrollsdk/preparation/v1'; sdkDirectory: string; specHash: string; steps: PreparationStep[]; until?: 'genesis'}
 export interface PreparationState {
   currentStep?: string
   files: Record<string, string>
   planId: string
-  status: 'failed' | 'pending' | 'prepared' | 'recovery-required' | 'running' | 'waiting'
+  status: 'failed' | 'paused' | 'pending' | 'prepared' | 'recovery-required' | 'running' | 'waiting'
   steps: Record<string, 'completed' | 'failed' | 'recovery-required' | 'running'>
   waiting?: AwaitingInput['details']
 }
 export const WORKFLOW_DIR = '.scrollsdk'
-export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
+export function preparationSteps(spec: DeploymentSpec, until?: 'genesis'): PreparationStep[] {
   const p = spec.preparation!
   const steps: PreparationStep[] = []
   const add = (id: string, title: string, effect: PreparationStep['effect'] = 'local', retry: PreparationStep['retry'] = 'safe') => steps.push({effect, id, retry, title})
+  add('genesis-config', 'Prepare only genesis inputs')
+  add('genesis-identities', 'Prepare deployer, primary sequencer and Fee Oracle identities required by genesis', spec.identities?.sequencers?.find(node => node.index === 0)?.signer.backend === 'aws_kms' || spec.identities?.feeOracle.backend === 'aws_kms' ? 'cloud' : 'local')
+  add('genesis', 'Generate native L2 genesis and contract artifacts')
+  if (until === 'genesis') return steps
   add('bootstrap', 'Generate configuration from pinned SDK templates')
   if (p.bridge.mode === 'production') add('bridge-fee-wallet', 'Derive and pin the fee-wallet public identity from DOGECOIN_FEE_WALLET_KEY')
   add('identities', 'Prepare declared service identities and deployment account', JSON.stringify(spec.identities ?? {}).includes('aws_kms') ? 'cloud' : 'local')
@@ -48,7 +54,6 @@ export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
   }
 
   if (p.databases?.includes('blockscout')) add('blockscout-db', 'Initialize Blockscout in the existing PostgreSQL server', 'cloud')
-  add('genesis', 'Generate native L2 genesis and contract artifacts')
   add('bridge-prepare', 'Compute protocol seed from genesis')
   if (p.bridge.mode === 'production') {
     add('ethereum-anchor', 'Validate and bind the selected Ethereum DA anchor', 'read')
@@ -205,31 +210,63 @@ function fingerprint(root: string): Record<string, string> {
   return files
 }
 
-export async function createPreparationPlan(options: {envFile?: string; output: string; sdkDirectory: string; spec: string}): Promise<PreparationPlan> {
+export async function createPreparationPlan(options: {envFile?: string; output: string; sdkDirectory: string; spec: string; until?: 'genesis'}): Promise<PreparationPlan> {
   const envFile = options.envFile ? path.resolve(options.envFile) : undefined
   loadPreparationEnv(envFile)
   let spec: DeploymentSpec
-  try {spec = resolveDeploymentSpecEnvRefs(loadDeploymentSpec(path.resolve(options.spec)))} catch (error) {
+  try {spec = options.until === 'genesis'
+    ? yaml.load(fs.readFileSync(path.resolve(options.spec), 'utf8')) as DeploymentSpec
+    : resolveDeploymentSpecEnvRefs(loadDeploymentSpec(path.resolve(options.spec)))} catch (error) {
     if (error instanceof DeploymentSpecFieldError) throw error
     throw new Error('Cannot load DeploymentSpec; check field names, YAML syntax and environment references (values omitted)')
   }
 
+  if (options.until) spec = genesisIntent(spec)
   spec.templates = {sdkRevision: resolveSdkRevision(options.sdkDirectory, spec.templates?.sdkRevision)}
-  spec = resolveCubesignerIdentity(spec)
-  spec = await resolvePreparationProofRelease(spec, options.output)
-  const validation = validateDeploymentSpec(spec)
-  if (!validation.valid) throw new Error(`Invalid spec fields: ${validation.errors.map(e => `${e.path} (${e.code})`).join(', ')}`)
-  validatePreparation(spec)
-  planSpecBootstrap(spec, options.sdkDirectory)
+  if (!options.until) {
+    spec = resolveCubesignerIdentity(spec)
+    spec = await resolvePreparationProofRelease(spec, options.output)
+    const validation = validateDeploymentSpec(spec)
+    if (!validation.valid) throw new Error(`Invalid spec fields: ${validation.errors.map(e => `${e.path} (${e.code})`).join(', ')}`)
+    validatePreparation(spec)
+    genesisIntent(spec)
+    planSpecBootstrap(spec, options.sdkDirectory)
+  }
+
   const root = path.resolve(options.output)
   if (fs.existsSync(root) && fs.lstatSync(root).isSymbolicLink()) throw new Error('Deployment root cannot be a symlink')
   const specText = JSON.stringify(spec, null, 2) + '\n'
-  const body = {...(envFile ? {envFile} : {}), deploymentName: spec.metadata.name, schema: 'scrollsdk/preparation/v1' as const, sdkDirectory: fs.realpathSync(options.sdkDirectory), specHash: digest(specText), steps: preparationSteps(spec)}
+  const body = {...(options.until ? {until: options.until} : {}), ...(envFile ? {envFile} : {}), deploymentName: spec.metadata.name, schema: 'scrollsdk/preparation/v1' as const, sdkDirectory: fs.realpathSync(options.sdkDirectory), specHash: digest(specText), steps: preparationSteps(spec, options.until)}
   const plan = {...body, id: digest(JSON.stringify(body))}
   const directory = path.join(root, WORKFLOW_DIR)
   if (fs.existsSync(path.join(directory, 'state.json'))) {
     const current = JSON.parse(fs.readFileSync(path.join(directory, 'plan.json'), 'utf8')) as PreparationPlan
     if (current.id === plan.id) return current
+    if (current.until === 'genesis' && !options.until) {
+      // Explicit plan promotion is the only allowed change to frozen intent.
+      // Apply's lock also excludes promotion while a generator/provider is running.
+      const lock = path.join(directory, 'apply.lock')
+      let fd: number
+      try {fd = fs.openSync(lock, 'wx', 0o600)} catch {throw new Error('Another apply or plan promotion owns .scrollsdk/apply.lock')}
+      fs.closeSync(fd)
+      try {
+        const {id: oldId, ...oldBody} = current
+        const oldText = fs.readFileSync(path.join(directory, 'intent.json'), 'utf8')
+        const state = JSON.parse(fs.readFileSync(path.join(directory, 'state.json'), 'utf8')) as PreparationState
+        if (digest(JSON.stringify(oldBody)) !== oldId || digest(oldText) !== current.specHash || state.planId !== oldId) throw new Error('Genesis plan or state changed')
+        if (state.status !== 'paused' || state.steps.genesis !== 'completed') throw new Error('Finish the genesis-only plan before expanding it')
+        if (JSON.stringify(genesisIntent(JSON.parse(oldText))) !== JSON.stringify(genesisIntent(spec))) throw new Error('Genesis inputs changed; restore the original inputs before continuing this deployment')
+        for (const [file, hash] of Object.entries(state.files)) if (!fs.existsSync(localPath(root, file)) || digest(fs.readFileSync(localPath(root, file))) !== hash) throw new Error(`Prepared artifact changed outside the workflow: ${file}`)
+        // Preserve a complete recovery record before replacing the plan metadata.
+        writeJson(path.join(directory, 'genesis-checkpoint.json'), {intent: JSON.parse(oldText), plan: current, state})
+        privateWrite(path.join(directory, 'intent.json'), specText)
+        writeJson(path.join(directory, 'plan.json'), plan)
+        state.planId = plan.id; state.status = 'pending'; delete state.waiting; delete state.currentStep
+        writeJson(path.join(directory, 'state.json'), state)
+        return plan
+      } finally {fs.unlinkSync(lock)}
+    }
+
     throw new Error('An existing preparation plan is immutable; supply external inputs and rerun apply, or choose a new deployment directory for a different spec')
   }
 
@@ -245,7 +282,8 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
 }
 
 export interface PreparationRunner {run(step: PreparationStep, spec: DeploymentSpec, root: string, plan: PreparationPlan): Promise<void>}
-export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}, options: {dogecoinRoutingSpec?: string; refreshRuntime?: boolean} = {}): Promise<PreparationState> {
+export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}, options: {dogecoinRoutingSpec?: string; refreshRuntime?: boolean; until?: 'genesis'} = {}): Promise<PreparationState> {
+  if (options.until && options.refreshRuntime) throw new Error('--until cannot be combined with --refresh-runtime')
   if (options.dogecoinRoutingSpec && !options.refreshRuntime) throw new Error('Dogecoin routing updates require --refresh-runtime')
   const root = fs.realpathSync(rootInput)
   const directory = localPath(root, WORKFLOW_DIR)
@@ -255,8 +293,11 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
   if (plan.schema !== 'scrollsdk/preparation/v1' || digest(JSON.stringify(body)) !== id || digest(text) !== plan.specHash) throw new Error('Preparation plan or frozen intent changed')
   loadPreparationEnv(plan.envFile)
   const spec = JSON.parse(text) as DeploymentSpec
-  validatePreparation(spec)
-  if (JSON.stringify(preparationSteps(spec)) !== JSON.stringify(plan.steps)) throw new Error('CLI workflow changed; this plan requires its original CLI version')
+  if (plan.until) genesisIntent(spec)
+  else validatePreparation(spec)
+  if (plan.until && options.refreshRuntime) throw new Error('Expand the genesis plan before refreshing runtime')
+  const until = options.until ?? plan.until
+  if (JSON.stringify(preparationSteps(spec, plan.until)) !== JSON.stringify(plan.steps)) throw new Error('CLI workflow changed; this plan requires its original CLI version')
   const statePath = localPath(root, `${WORKFLOW_DIR}/state.json`)
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as PreparationState
   if (state.planId !== id) throw new Error('Workflow state does not match plan')
@@ -272,8 +313,18 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
       state.files = fingerprint(root); writeJson(statePath, state)
     }
 
+    const pause = (): PreparationState => {
+      state.status = 'paused'; state.currentStep = 'genesis'
+      state.waiting = {message: plan.until ? 'Genesis is ready. Complete remaining spec inputs, run setup plan without --until, then setup apply to continue.' : 'Genesis is ready. Run setup apply without --until to continue.'}
+      writeJson(statePath, state); return state
+    }
+
     for (const step of plan.steps) {
-      if (state.steps[step.id] === 'completed') continue
+      if (state.steps[step.id] === 'completed') {
+        if (until === step.id) return pause()
+        continue
+      }
+
       if (state.steps[step.id] === 'recovery-required' || state.steps[step.id] === 'running' && step.retry === 'reconcile') {
         state.status = 'recovery-required'; state.currentStep = step.id
         state.waiting = {message: 'A transaction may already have been broadcast. Reconcile on-chain results and partial artifacts; this workflow will not replay this step automatically'}
@@ -301,6 +352,7 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
       }
 
       state.files = fingerprint(root); writeJson(statePath, state)
+      if (until === step.id) return pause()
     }
 
     state.status = 'prepared'; delete state.currentStep; delete state.waiting

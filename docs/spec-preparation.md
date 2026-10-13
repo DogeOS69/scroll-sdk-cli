@@ -401,10 +401,54 @@ CubeSigner account/session authorization and partner Phase A remain owner
 operations. Apply waits for external inputs instead of inventing facts. The workflow does not create an
 EKS cluster, rent GPU capacity or install releases.
 
+### Generate genesis first and stop
+
+When later service or Bridge inputs are not ready, start with a genesis-only plan:
+
+```bash
+scrollsdk setup plan --until genesis
+scrollsdk setup apply
+```
+
+The plan records the stopping boundary, so apply stops automatically even if
+`--until` is omitted. It prepares the real deployer account, primary L2 sequencer
+identity and Fee Oracle identity, then invokes the contracts generator and exports
+`deployment/.data/genesis.json` alongside `deployment/values/genesis.yaml`.
+The result is `status: paused` with exit code 0, not a completed deployment.
+An existing full plan can also be stopped with `scrollsdk setup apply --until genesis`.
+
+Genesis-only planning validates chain/network, genesis economics, owner and
+contract recipients, deployment salt, and the necessary identity intents. It does
+not query CubeSigner or download a proof release, and does not require signer
+public keys, recovery keys, Dogecoin RPC credentials, fee-wallet WIF, PostgreSQL,
+Vast credentials, ingress certificates, or runtime image tags. It needs a local
+SDK checkout and Docker for the contracts generator (or the explicit local
+contracts backend). KMS identities still require AWS access: apply may create or
+reuse the primary sequencer and Fee Oracle KMS keys and their IAM/IRSA resources.
+It does not provision archive/proof buckets, prepare dstack, fund wallets,
+initialize the Bridge, or install services at this boundary.
+
+After reviewing genesis, complete the remaining fields in the original spec and
+run the regular commands:
+
+```bash
+scrollsdk setup plan
+scrollsdk setup apply
+```
+
+Plan expands the saved genesis-only plan after full validation. It requires the
+same genesis inputs and pinned SDK revision, verifies the saved artifacts, and
+preserves all completed genesis steps and identities. Changed genesis inputs or
+modified artifacts are rejected; do not delete the deployment directory to work
+around that check. Repeating a genesis-only apply is safe and does not advance.
+For a full plan paused by an apply flag alone, resume with `setup apply` without
+the flag; no new plan is needed. Plans created by an older CLI workflow still
+require their original CLI version.
+
 ## State and outcomes
 
 JSON output returns `status`, `currentStep`, `completed` and optional `waiting`
-instructions. Exit codes: `0` prepared, `2` waiting for external input, `1` failed
+instructions. Exit codes: `0` prepared or intentionally paused, `2` waiting for external input, `1` failed
 or requiring reconciliation. A successfully printed JSON result with
 `status: waiting` is not a completed deployment.
 
@@ -414,7 +458,7 @@ concurrent execution. Unexpected edits to recorded artifacts stop the run;
 external funding inputs remain editable under `.scrollsdk/inputs/`. Do not edit
 generated TOML to bypass the state checks.
 
-The initial interface is for fresh deployments. Saved plans are immutable: the
+The initial interface is for fresh deployments. Saved plans are immutable except for the validated genesis-only expansion described above: the
 same spec can be planned again, but a changed spec requires a new deployment
 directory. It does not implement in-place upgrades, key rotation or destructive
 migration. After an abrupt process termination, inspect the lock's host/PID and

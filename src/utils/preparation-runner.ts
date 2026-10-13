@@ -13,6 +13,7 @@ import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
 import {parseDatabaseUrl} from './dstack-database.js'
 import {productionFeeWallet} from './preparation-fee-wallet.js'
 import {checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
+import {exportGenesisJson, writeGenesisInputs} from './preparation-genesis.js'
 import {prepareGrafanaAdmin} from './preparation-grafana.js'
 import {AwaitingInput, localPath, privateWrite} from './preparation-io.js'
 import {bindPreparedProofAws, reuseProofAws} from './preparation-proof-aws.js'
@@ -55,15 +56,41 @@ export class CommandPreparationRunner implements PreparationRunner {
   async run(step: PreparationStep, spec: DeploymentSpec, root: string, plan: PreparationPlan): Promise<void> {
     const p = spec.preparation!
     const command = (args: string[], environment?: Record<string, string>) => this.invoke(root, step.id, args, environment)
-    const bridgeArgs = ['-N', '--image', p.bridge.image, '--ethereum-da-probe', 'direct', ...(p.bridge.mode === 'production' ? ['--production'] : [])]
+    const bridgeArgs = ['-N', '--image', p.bridge?.image, '--ethereum-da-probe', 'direct', ...(p.bridge?.mode === 'production' ? ['--production'] : [])]
     switch (step.id) {
       case 'proof-workers-intent': {
         // Capacity apply runs only after the operator installs the services.
         break
       }
 
+      case 'genesis-config': {writeGenesisInputs(root, spec); break}
+      case 'genesis-identities': {
+        await command(['gen-keystore', '-N', '--service', 'sequencer-reth', '--index', '0', '--accounts'])
+        await command(['gen-keystore', '-N', '--service', 'fee-oracle', '--no-accounts'])
+        break
+      }
+
       case 'bootstrap': {
+        // Generation replaces TOML. Preserve the identities already used by genesis,
+        // including on retry after a partially completed bootstrap.
+        const configPath = localPath(root, 'config.toml')
+        const dogePath = localPath(root, '.data/doge-config.toml')
+        const before = toml.parse(fs.readFileSync(configPath, 'utf8')) as any
+        const doge = toml.parse(fs.readFileSync(dogePath, 'utf8')) as any
+        const savedPath = localPath(root, '.data/genesis-identities.json')
+        if (!fs.existsSync(savedPath)) privateWrite(savedPath, JSON.stringify({accounts: Object.fromEntries(Object.entries(before.accounts ?? {}).filter(([key]) => /^(DEPLOYER_|OWNER_ADDR$|L2_GAS_ORACLE_SENDER_)/.test(key))), dogeAccounts: doge.accounts, feeOracle: doge.feeOracle, sequencer: before.sequencer, sequencerReth: doge.sequencerReth, signers: before.signers, signersDoge: doge.signers}))
+        const saved = JSON.parse(fs.readFileSync(savedPath, 'utf8'))
         await command(['generate-from-spec', '--spec', '.scrollsdk/intent.json', '--output', '.', '--bootstrap', '--sdk-dir', plan.sdkDirectory, '--force'])
+        const after = toml.parse(fs.readFileSync(configPath, 'utf8')) as any
+        after.accounts = {...after.accounts, ...saved.accounts}
+        if (saved.sequencer) after.sequencer = saved.sequencer
+        if (saved.signers?.l2GasOracleSender) after.signers = {...after.signers, l2GasOracleSender: saved.signers.l2GasOracleSender}
+        privateWrite(configPath, toml.stringify(after))
+        const next = toml.parse(fs.readFileSync(dogePath, 'utf8')) as any
+        if (saved.dogeAccounts) next.accounts = {...next.accounts, ...saved.dogeAccounts}
+        if (saved.signersDoge?.l2GasOracleSender) next.signers = {...next.signers, l2GasOracleSender: saved.signersDoge.l2GasOracleSender}
+        if (saved.sequencerReth) next.sequencerReth = saved.sequencerReth
+        privateWrite(dogePath, toml.stringify(next))
         break
       }
 
@@ -118,11 +145,12 @@ export class CommandPreparationRunner implements PreparationRunner {
       }
 
       case 'genesis': {
-        await command(['gen-l2-artifacts', '-N', '--skip-deployment-salt-update', ...(p.genesis?.contractsSource ? ['--contracts-source', path.resolve(root, p.genesis.contractsSource)] : ['--image-tag', CONTRACTS_DOCKER_DEFAULT_TAG])]); break
+        await command(['gen-l2-artifacts', '-N', '--skip-deployment-salt-update', ...(p.genesis?.contractsSource ? ['--contracts-source', path.resolve(root, p.genesis.contractsSource)] : ['--image-tag', CONTRACTS_DOCKER_DEFAULT_TAG])]);
+        exportGenesisJson(root); break
       }
 
       case 'bridge-prepare': {
-        await command(['bridge-init', '--step', '1-prepare', ...bridgeArgs, ...(p.bridge.mode === 'helper' ? ['--seed-env', 'SCROLLSDK_PREPARATION_HELPER_SEED'] : [])], p.bridge.mode === 'helper' ? {SCROLLSDK_PREPARATION_HELPER_SEED: spec.bridge.seedString!} : undefined); break
+        await command(['bridge-init', '--step', '1-prepare', ...bridgeArgs, ...(p.bridge?.mode === 'helper' ? ['--seed-env', 'SCROLLSDK_PREPARATION_HELPER_SEED'] : [])], p.bridge?.mode === 'helper' ? {SCROLLSDK_PREPARATION_HELPER_SEED: spec.bridge.seedString!} : undefined); break
       }
 
       case 'ethereum-anchor': {await prepareEthereumAnchor(root, spec); break}
@@ -228,7 +256,7 @@ export class CommandPreparationRunner implements PreparationRunner {
 
       case 'secrets': {
         const policy = p.bridge.production
-        if (p.bridge.mode === 'production' && policy) {
+        if (p.bridge?.mode === 'production' && policy) {
           const sequencer = productionSequencer(root, spec)
           if (!sequencer.kms) checkPrivateKey(sequencer.publicKey, policy.sequencerKeyEnv!)
           productionFeeWallet(root, spec)

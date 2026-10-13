@@ -61,6 +61,108 @@ describe('resumable preparation plan', () => {
   afterEach(() => {fs.rmSync(root, {force: true, recursive: true})})
   const makePlan = () => createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml')})
 
+  for (const network of ['mainnet', 'testnet'] as const) it(`generates ${network} genesis with the real rc.5 image and preserves the checkpoint`, async function () {
+    if (process.env.SCROLLSDK_TEST_GENESIS_DOCKER !== '1') this.skip()
+    this.timeout(300_000)
+    const file = path.join(root, 'intent.yaml')
+    const spec = yaml.load(fs.readFileSync(file, 'utf8')) as DeploymentSpec
+    spec.dogecoin.network = network
+    spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, network === 'mainnet' ? bitcore.Networks.livenet : bitcore.Networks.testnet).toAddress().toString()
+    fs.writeFileSync(file, yaml.dump(spec))
+    await createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: file, until: 'genesis'})
+    const runner = new CommandPreparationRunner()
+    const state = await applyPreparation(deployment, runner)
+    expect(state.status, `Failed step: ${state.currentStep}; inspect private fixture logs`).to.equal('paused')
+    const generated = fs.readFileSync(path.join(deployment, '.data/genesis.json'), 'utf8')
+    expect(JSON.parse(generated).config.chainId).to.equal(spec.network.l2ChainId)
+    const wrapped = yaml.load(fs.readFileSync(path.join(deployment, 'values/genesis.yaml'), 'utf8')) as any
+    expect(JSON.parse(generated)).to.deep.equal(typeof wrapped.scrollConfig === 'string' ? JSON.parse(wrapped.scrollConfig) : wrapped.scrollConfig)
+    const before = toml.parse(fs.readFileSync(path.join(deployment, 'config.toml'), 'utf8')) as any
+    const identity = toml.parse(fs.readFileSync(path.join(deployment, '.data/doge-config.toml'), 'utf8')) as any
+    await applyPreparation(deployment, runner)
+    expect(fs.readFileSync(path.join(deployment, '.data/genesis.json'), 'utf8')).to.equal(generated)
+    if (network === 'mainnet') return // This fixture has no production policy receipts for later runtime generation.
+    // A full plan uses the same genesis inputs.
+    spec.preparation!.bridge.mode = 'production'
+    spec.preparation!.bridge.production = {ethereumAnchor: {blockTag: 'finalized'}, recoveryPublicKeys: Array.from({length: 3}, () => new bitcore.PrivateKey().toPublicKey().toString()), sequencerKeyEnv: 'TEST_SEQUENCER_KEY', sequencerPublicKey: new bitcore.PrivateKey().toPublicKey().toString()} as any
+    spec.bridge.timelock = 999_999
+    spec.bridge.teePubkey = new bitcore.PrivateKey().toPublicKey().toString()
+    fs.writeFileSync(file, yaml.dump(spec))
+    const full = await makePlan()
+    const frozen = JSON.parse(fs.readFileSync(path.join(deployment, '.scrollsdk/intent.json'), 'utf8'))
+    await runner.run(full.steps.find(step => step.id === 'bootstrap')!, frozen, deployment, full)
+    const after = toml.parse(fs.readFileSync(path.join(deployment, 'config.toml'), 'utf8')) as any
+    const identityAfter = toml.parse(fs.readFileSync(path.join(deployment, '.data/doge-config.toml'), 'utf8')) as any
+    expect(after.accounts.DEPLOYER_PRIVATE_KEY).to.equal(before.accounts.DEPLOYER_PRIVATE_KEY)
+    expect(identityAfter.sequencerReth).to.deep.equal(identity.sequencerReth)
+    expect(identityAfter.signers.l2GasOracleSender).to.deep.equal(identity.signers.l2GasOracleSender)
+    expect(fs.readFileSync(path.join(deployment, '.data/genesis.json'), 'utf8')).to.equal(generated)
+  })
+
+  it('plans only genesis without CubeSigner, proof release or unrelated environment inputs', async () => {
+    const partial = fixture()
+    partial.signing.cubesigner = {identity: {roleId: 'REPLACE_WITH_ROLE'}} as any
+    partial.database.admin = {password: '$ENV:UNSET_GENESIS_STAGE_DB_PASSWORD'} as any
+    partial.preparation!.proofRelease = {version: 'not-a-real-release'} as any
+    partial.attestationSigners = []
+    fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(partial))
+    const plan = await createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml'), until: 'genesis'})
+    expect(plan.steps.map(step => step.id)).to.deep.equal(['genesis-config', 'genesis-identities', 'genesis'])
+    const frozen = JSON.parse(fs.readFileSync(path.join(deployment, '.scrollsdk/intent.json'), 'utf8'))
+    expect(frozen.signing.cubesigner).to.equal(undefined)
+    expect(frozen.database.admin).to.equal(undefined)
+    const calls: string[] = []
+    const runner = {async run(step: any) {calls.push(step.id)}}
+    expect((await applyPreparation(deployment, runner)).status).to.equal('paused')
+    expect((await applyPreparation(deployment, runner)).status).to.equal('paused')
+    expect(calls).to.deep.equal(plan.steps.map(step => step.id))
+    await rejected(() => applyPreparation(deployment, runner, undefined, {refreshRuntime: true}), 'Expand the genesis plan')
+  })
+
+  it('stops a full plan at genesis and resumes only later stages', async () => {
+    const plan = await makePlan()
+    const calls: string[] = []
+    const runner = {async run(step: any) {calls.push(step.id)}}
+    expect((await applyPreparation(deployment, runner, undefined, {until: 'genesis'})).status).to.equal('paused')
+    expect(calls).to.deep.equal(['genesis-config', 'genesis-identities', 'genesis'])
+    await applyPreparation(deployment, runner, undefined, {until: 'genesis'})
+    expect(calls).to.have.length(3)
+    expect((await applyPreparation(deployment, runner)).status).to.equal('prepared')
+    expect(calls).to.deep.equal(plan.steps.map(step => step.id))
+  })
+
+  it('promotes a completed genesis plan and refuses drift in genesis inputs or artifacts', async () => {
+    await createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml'), until: 'genesis'})
+    await rejected(makePlan, 'Finish the genesis-only plan')
+    await applyPreparation(deployment, {async run(step) {
+      if (step.id === 'genesis') {fs.mkdirSync(path.join(deployment, '.data')); fs.writeFileSync(path.join(deployment, '.data/genesis.json'), '{"fixed":true}')}
+    }})
+    const file = path.join(root, 'intent.yaml')
+    const original = fs.readFileSync(file, 'utf8')
+    const changed = yaml.load(original) as DeploymentSpec
+    changed.genesis.gasLimit = 31_000_000
+    fs.writeFileSync(file, yaml.dump(changed))
+    await rejected(makePlan, 'Genesis inputs changed')
+    fs.writeFileSync(file, original)
+    fs.appendFileSync(path.join(deployment, '.data/genesis.json'), ' ')
+    await rejected(makePlan, 'artifact changed')
+    fs.writeFileSync(path.join(deployment, '.data/genesis.json'), '{"fixed":true}')
+    await makePlan()
+    const calls: string[] = []
+    expect((await applyPreparation(deployment, {async run(step) {calls.push(step.id)}})).status).to.equal('prepared')
+    expect(calls[0]).to.equal('bootstrap')
+    expect(calls).not.to.include('genesis')
+    expect(calls).not.to.include('genesis-identities')
+  })
+
+  it('does not report a generator failure as an intentional stop', async () => {
+    await makePlan()
+    const state = await applyPreparation(deployment, {async run(step) {if (step.id === 'genesis') throw new Error('fixture generation failure')}}, undefined, {until: 'genesis'})
+    expect(state.status).to.equal('failed')
+    expect(state.steps.bootstrap).to.equal(undefined)
+    await rejected(() => applyPreparation(deployment, {async run() {}}, undefined, {refreshRuntime: true, until: 'genesis'}), 'cannot be combined')
+  })
+
   it('runs plan and resumes apply with conventional paths, and supports explicit overrides', async function () {
     this.timeout(60_000)
     fs.renameSync(sdk, path.join(root, 'scroll-sdk'))
@@ -214,7 +316,8 @@ describe('resumable preparation plan', () => {
     execFileSync('git', ['-C', sdk, 'add', 'examples'], {stdio: 'pipe'})
     execFileSync('git', ['-C', sdk, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Changed'], {stdio: 'pipe'})
     const runner = new CommandPreparationRunner()
-    await runner.run(plan.steps[0], frozen, deployment, plan)
+    await runner.run(plan.steps.find(step => step.id === 'genesis-config')!, frozen, deployment, plan)
+    await runner.run(plan.steps.find(step => step.id === 'bootstrap')!, frozen, deployment, plan)
     expect(JSON.parse(fs.readFileSync(path.join(deployment, '.data/spec-bootstrap.json'), 'utf8')).sdkRevision).to.equal(revision)
     // Check the pinned template's policy; generated service alerts may add keys.
     const monitor = yaml.load(fs.readFileSync(path.join(deployment, 'values/scroll-monitor-production.yaml'), 'utf8')) as {grafana: {enabled: boolean}}
@@ -521,12 +624,13 @@ describe('resumable preparation plan', () => {
     await makePlan()
     const actual = new CommandPreparationRunner()
     const runner = {async run(step: any, spec: DeploymentSpec, output: string, plan: any) {
-      if (step.id === 'genesis') throw new AwaitingInput({message: 'Stop before container execution'})
+      if (step.id === 'genesis') return // Container is covered separately; exercise the remaining real bootstrap.
+      if (step.id === 'bridge-prepare') throw new AwaitingInput({message: 'Stop before Bridge execution'})
       await actual.run(step, spec, output, plan)
     }}
     const first = await applyPreparation(deployment, runner)
-    expect(first.status).to.equal('waiting')
-    expect(first.currentStep).to.equal('genesis')
+    expect(first.status, first.status === 'failed' ? fs.readFileSync(path.join(deployment, '.scrollsdk/logs', `${first.currentStep}.log`), 'utf8') : '').to.equal('waiting')
+    expect(first.currentStep).to.equal('bridge-prepare')
     const doge = fs.readFileSync(path.join(deployment, '.data/doge-config.toml'), 'utf8')
     expect((toml.parse(doge) as any).sequencerReth.instances).to.have.length(1)
     const frozen = JSON.parse(fs.readFileSync(path.join(deployment, '.scrollsdk/intent.json'), 'utf8'))

@@ -16,6 +16,7 @@ export function resolveCubesignerIdentity(input: DeploymentSpec, query: Lookup =
   const reference = input.signing?.cubesigner?.identity
   if (!reference) return input
   if (typeof reference.roleId !== 'string' || !reference.roleId.trim() || reference.keyId !== undefined && (typeof reference.keyId !== 'string' || !reference.keyId.trim())) throw new Error('CubeSigner identity requires roleId and an optional non-empty keyId')
+  if (/replace_with|todo|\$env:/i.test(reference.roleId)) throw new Error('signing.cubesigner.identity.roleId must be a real Role# UUID; replace the example placeholder before full deployment planning')
   if (input.signing.cubesigner?.roles?.length) throw new Error('Choose CubeSigner identity lookup or explicit roles, not both')
   const role = query(['role', 'get', `--role-id=${reference.roleId}`])
   if (role.role_id !== reference.roleId || !Array.isArray(role.keys)) throw new Error('CubeSigner returned an unexpected role')
