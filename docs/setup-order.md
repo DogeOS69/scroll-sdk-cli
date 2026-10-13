@@ -255,6 +255,12 @@ separate requirement or any production signer evidence requirement.
 
 ## CubeSigner Wasm preparation and attachment
 
+The commands below describe the existing standalone preparation path. Governed
+updates to a key with `RequireRoleSession` and a versioned verifier need a
+separate publish/approval/resume workflow; the current `deploy` command refuses
+that compound policy. See the [CubeSigner policy governance design](cubesigner-policy-governance.md)
+for the proposed integration, which is not implemented yet.
+
 When the correctness signer uses the hosted verifier policy, generate an actual
 Wasm after Bridge preparation. `export-signer-policy` generates the partner
 attestation-signer handoff; it does not compile this CubeSigner Wasm.
