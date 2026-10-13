@@ -49,8 +49,16 @@ import PrepCharts, {
   snapshotRethExtraArgs,
   validateDogeConfigEthereumDaForPrep,
 } from '../../../src/commands/setup/prep-charts.js'
+import {validateRotationExport} from '../../../src/utils/rotation-export.js'
+import {mergeRotationSigners} from '../../../src/utils/rotation-operations.js'
 import {tsoSignerNetwork} from '../../../src/utils/tso-signer-network.js'
 import { ensureWithdrawalProofActivationSwitch } from '../../../src/utils/withdrawal-config.js'
+
+// The governance portal's mainnet rotation export golden: 3 current signers rotating to 4 targets.
+const ROTATION = validateRotationExport(JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), '../../fixtures/rotation-export/mainnet-example.json'), 'utf8')))
+const rotationEntry = (signer: {public_key: string; transport_pubkey: string}) => ({delivery: 'pull', network: 'dogecoin', publicKeyOverride: signer.public_key, roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: signer.transport_pubkey})
+const importedOriginals = ROTATION.current.signers.map((signer, index) => ({id: `old-${index}`, publicKey: signer.public_key, transportPubkey: signer.transport_pubkey}))
+const importedConfig = {attestationSigner: {activeSignerIds: importedOriginals.map(signer => signer.id), external: importedOriginals, mode: 'external' as const, threshold: 2}, network: 'mainnet' as const}
 
 const VALID_PREP_CUTOVER = {
   lastBatchHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
@@ -366,7 +374,33 @@ describe('setup prep-charts external attestation signer routing', () => {
     expect(mergeTsoSigners([staleTee, pull(imported.publicKeyOverride, imported.transportPubkey, 'mainnet'), registeredByRotation], [tee, imported]))
       .to.deep.equal([tee, imported, registeredByRotation])
     expect(mergeTsoSigners([], [tee, imported])).to.deep.equal([tee, imported])
-    expect(() => mergeTsoSigners([pull(imported.publicKeyOverride, `03${'88'.repeat(32)}`)], [tee, imported])).to.throw('another key')
+    // Once WP values hold attestation entries they are the registry: imported descriptors are not consulted.
+    const registered = pull(imported.publicKeyOverride, `03${'88'.repeat(32)}`)
+    expect(mergeTsoSigners([registered], [tee, imported])).to.deep.equal([tee, registered])
+  })
+
+  it('seeds attestation entries from the imported signers on initial onboarding only', () => {
+    const tee = {delivery: 'push' as const, network: 'dogecoin', publicKeyOverride: `02${'11'.repeat(32)}`, roles: ['Correctness' as const], signatureMode: 'ecdsa' as const, uri: 'http://cubesigner-signer:3000'}
+    const built = buildTsoSigners(importedConfig)
+    // No WP array yet, or one holding only a stale Correctness entry: seed every imported signer.
+    expect(mergeTsoSigners([], [tee, ...built])).to.deep.equal([tee, ...ROTATION.current.signers.map(signer => rotationEntry(signer))])
+    expect(mergeTsoSigners([{...tee, publicKeyOverride: `02${'99'.repeat(32)}`}], [tee, ...built])).to.deep.equal([tee, ...ROTATION.current.signers.map(signer => rotationEntry(signer))])
+  })
+
+  it('does not re-add retired signers after rotate and retire', () => {
+    const tee = {delivery: 'push' as const, network: 'dogecoin', publicKeyOverride: `02${'11'.repeat(32)}`, roles: ['Correctness' as const], signatureMode: 'ecdsa' as const, uri: 'http://cubesigner-signer:3000'}
+    // dogeConfig keeps the 3 originally imported signers; the rotation commands never update it.
+    const prep = (wp: unknown[]) => mergeTsoSigners(wp, [tee, ...buildTsoSigners(importedConfig)])
+    const onboarded = prep([])
+    // Rotate: registration adds the 4 target signers; prep-charts keeps all 7.
+    const rotated = mergeRotationSigners(onboarded, ROTATION).signers
+    expect(prep(rotated)).to.deep.equal(rotated)
+    // Retire: the operator removes the 3 old keys from the WP values.
+    const target = ROTATION.target.signers.map(signer => rotationEntry(signer))
+    const retired = rotated.filter(entry => !ROTATION.current.signers.some(signer => signer.public_key === entry.publicKeyOverride))
+    expect(retired).to.deep.equal([tee, ...target])
+    // The next prep-charts keeps exactly the 4 target entries.
+    expect(prep(retired)).to.deep.equal([tee, ...target])
   })
 
   it('rejects a stale multi-role CubeSigner configuration', () => {

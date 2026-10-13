@@ -166,22 +166,17 @@ export function buildFrontendExternalUrlUpdates(
 }
 
 /**
- * The WP tsoSigners are the attestation registry: rotation registration adds
- * keys there, and nothing but a retire step removes them. Rebuild the
- * Correctness (CubeSigner) entry, keep every existing attestation entry (with
- * the WP network name), and add only imported signers not yet registered.
+ * The WP tsoSigners are the only attestation registry once onboarded: rotation
+ * registration adds keys there and retirement removes them there, while
+ * `attestationSigner.external` keeps the original imported set. So the
+ * imported signers seed the attestation entries only while WP values have none
+ * (initial onboarding); after that every existing attestation entry is kept
+ * as is (with the WP network name) and nothing is re-added, so a retired key
+ * stays retired. The Correctness (CubeSigner) entry is always rebuilt.
  */
 export function mergeTsoSigners(existing: unknown[], built: TsoSignerEntry[]): TsoSignerEntry[] {
   const kept = (existing as TsoSignerEntry[]).filter(entry => entry?.roles?.includes('Attestation')).map(entry => ({...entry, network: tsoSignerNetwork(entry.network)}))
-  const attestation = [...kept]
-  for (const entry of built.filter(item => item.roles.includes('Attestation'))) {
-    const match = kept.find(item => item.publicKeyOverride?.toLowerCase() === entry.publicKeyOverride.toLowerCase() || (entry.transportPubkey && item.transportPubkey?.toLowerCase() === entry.transportPubkey.toLowerCase()))
-    if (!match) attestation.push(entry)
-    else if (match.publicKeyOverride?.toLowerCase() !== entry.publicKeyOverride.toLowerCase() || match.transportPubkey?.toLowerCase() !== entry.transportPubkey?.toLowerCase()) {
-      throw new Error(`tsoSigners already registers ${entry.publicKeyOverride} or its transport key with another key; reconcile the WP values before preparing charts`)
-    }
-  }
-
+  const attestation = kept.length > 0 ? kept : built.filter(item => item.roles.includes('Attestation'))
   return [...built.filter(item => !item.roles.includes('Attestation')), ...attestation]
 }
 
@@ -2972,8 +2967,8 @@ export default class SetupPrepCharts extends Command {
         }
 
         // Rebuild the Correctness entry but keep registered attestation keys
-        // (rotation registration adds them here). Create the array when absent:
-        // descriptor import must always reach TSO values.
+        // (rotation registration adds them here, retirement removes them).
+        // Create the array when absent: the imported signers seed it once.
         const existingSigners = Array.isArray(productionYaml.tsoSigners) ? productionYaml.tsoSigners : []
         const newSigners = mergeTsoSigners(existingSigners, buildTsoSigners(this.dogeConfig))
         if (JSON.stringify(existingSigners) !== JSON.stringify(newSigners)) {
