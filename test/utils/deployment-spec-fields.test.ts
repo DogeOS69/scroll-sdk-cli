@@ -14,7 +14,7 @@ import {generateValuesFiles} from '../../src/utils/values-generator.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 function fixture(): DeploymentSpec {
-  return yaml.load(fs.readFileSync(path.join(root, 'src/config/deployment-spec.minimal.yaml'), 'utf8')
+  return yaml.load(fs.readFileSync(path.join(root, 'test/fixtures/deployment-spec/minimal.yaml'), 'utf8')
     .replaceAll('$ENV:OWNER_ADDRESS', '0x0000000000000000000000000000000000000001')
     .replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')) as DeploymentSpec
 }
@@ -47,8 +47,8 @@ describe('DeploymentSpec field validation', () => {
       proofTopology: {deployment: {workerNodeSelector: {'custom.org/gpu': 'yes'}, workerResources: {limits: {'example.org/device': 1, memory: '1Gi'}}}},
     })
     expect(errors).to.deep.equal([])
-    for (const file of ['deployment-spec.minimal.yaml', 'deployment-spec.example.yaml']) {
-      const spec = yaml.load(fs.readFileSync(path.join(root, 'src/config', file), 'utf8'))
+    for (const file of ['minimal.yaml', 'full.yaml']) {
+      const spec = yaml.load(fs.readFileSync(path.join(root, 'test/fixtures/deployment-spec', file), 'utf8'))
       expect(validateDeploymentSpecFields(spec), file).to.deep.equal([])
     }
   })

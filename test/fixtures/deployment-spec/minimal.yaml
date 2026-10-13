@@ -1,10 +1,6 @@
-# Environment variable placeholders: see deployment.env.example beside this file.
-# Fresh-directory bootstrap and explicit local/KMS identity intent:
-# See docs/spec-projection.md. --bootstrap requires --sdk-dir (committed HEAD by default),
-# complete identities, proofTopology and explicit approved Reth image tags.
-# DogeOS Minimal Deployment Specification
-# This is a minimal example that relies on generator defaults where possible.
-# See deployment-spec.example.yaml for full options.
+# Test fixture for DeploymentSpec validation and configuration generation.
+# Tests replace environment references and infrastructure inputs before use.
+# Operator templates live in scroll-sdk/examples; this is not a deployment starter.
 
 version: "1.0"
 
@@ -150,7 +146,8 @@ contracts:
 genesis:
   gasLimit: 30000000
   maxEthSupplyWei: "100000000000000000000000000000"
-  deployerInitialBalanceWei: "1000000000000000000000000"
+  # 1,000 native DOGE; L2 balances use 18 decimal places.
+  deployerInitialBalanceWei: "1000000000000000000000"
   baseFeePerGasWei: 1000000000
 
 # Enable after filling SLACK_WEBHOOK_URL in private deployment.env.
