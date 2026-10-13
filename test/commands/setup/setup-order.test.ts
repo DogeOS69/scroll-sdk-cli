@@ -62,9 +62,9 @@ network_str = "testnet"
     })
   }
 
-  it('explains the missing proof topology before policy export and writes no bundle', async () => {
+  it('explains the missing proof topology before kit export and writes no kit', async () => {
     try {
-      await execute(process.execPath, [cli, 'setup', 'export-signer-policy', '--json'], {cwd: root})
+      await execute(process.execPath, [cli, 'setup', 'export-deployment-kit', '--kit-version', '1', '--json'], {cwd: root})
       expect.fail('Expected missing proof topology to fail')
     } catch (error) {
       const output = error as {stderr: string} & Error
@@ -72,6 +72,6 @@ network_str = "testnet"
       expect(output.stderr).not.to.include('Cannot read properties of undefined')
     }
 
-    expect(fs.existsSync(path.join(root, 'signer-policy-bundle'))).to.equal(false)
+    expect(fs.existsSync(path.join(root, 'deployment-kit-1'))).to.equal(false)
   })
 })

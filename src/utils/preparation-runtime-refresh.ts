@@ -49,7 +49,7 @@ export function refreshPreparationRuntime(root: string, plan: PreparationPlan, s
     if (!fs.existsSync(source)) continue
     const destination = path.join(history, path.basename(relative))
     // Handoffs are immutable versions; move the old version into history so
-    // export-signer-policy can create a new one without overwriting evidence.
+    // the signer-policy step can create a new one without overwriting evidence.
     if (relative === 'signer-policy-bundle') fs.renameSync(source, destination)
     else fs.cpSync(source, destination, {recursive: true})
   }

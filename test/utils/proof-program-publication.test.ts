@@ -6,18 +6,21 @@ import path from 'node:path'
 
 import type {DogeConfig} from '../../src/types/doge-config.js'
 
+import {writeDeploymentKit} from '../../src/utils/deployment-kit.js'
 import {writeProofDeploymentContract} from '../../src/utils/proof-deployment-contract.js'
 import {
   planProofProgramPublication,
   publishProofProgramBundle,
 } from '../../src/utils/proof-program-publication.js'
 import {rebindProofTopologyBundleRevision} from '../../src/utils/proof-topology-compiler.js'
+import {protocolIdSidecarPath} from '../../src/utils/signer-policy-derivation.js'
 import {writeSignerPolicyHandoff} from '../../src/utils/signer-policy-handoff.js'
 import {releaseFixture} from '../helpers/proof-software-release.js'
 
 const coreRevision = 'a'.repeat(40)
 const imageDigest = `sha256:${'b'.repeat(64)}`
 const raw = (character: string) => `0x${character.repeat(128)}`
+const hash = (byte: string, size: number) => `0x${byte.repeat(size)}`
 const digest = (body: Buffer | string) => crypto.createHash('sha256').update(body).digest('hex')
 const commitment = (value: string) => `0x${digest(Buffer.from(value.slice(2), 'hex'))}`
 
@@ -310,6 +313,105 @@ describe('real-proof program bundle publication', () => {
     fs.appendFileSync(receiptPath, ' ')
     expect(() => writeSignerPolicyHandoff({...options, output: 'failed-bundle'})).to.throw('checksum mismatch')
     expect(fs.existsSync(path.join(root, 'failed-bundle'))).to.equal(false)
+  })
+
+  function deploymentKitFixture(enforcement: 'enforce' | 'observe' = 'enforce') {
+    const context = JSON.stringify({
+      genesis: {
+        genesis_batch_hash: hash('a1', 32), genesis_bridge_key_hash: hash('33', 20),
+        genesis_sequencer_outpoint: {txid: hash('22', 32), vout: 0}, genesis_state_root: hash('a2', 32),
+        initial_confirmed_block_hash: hash('44', 32), initial_confirmed_block_number: 100,
+        initial_ethereum_block_hash: hash('55', 32), initial_system_signer: hash('a3', 20), initial_tx_index: 200,
+      },
+      protocol: {dogecoin_chain_id: 0x0D_06_0B_1E, eth_chain_id: 31_337, l2_chain_id: 534_352, protocol_version: 2},
+    })
+    const receiptPath = path.join(root, '.data/proof-materials-v1.json')
+    const materials = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
+    fs.writeFileSync(path.join(root, '.data/protocol_context.json'), context)
+    materials.bridge.protocolContextSha256 = digest(context)
+    fs.writeFileSync(receiptPath, JSON.stringify(materials))
+    const values = path.join(root, 'values.yaml')
+    fs.writeFileSync(values, 'env: []\n')
+    const component = {enabled: true, valuesFile: values}
+    const topology = path.join(root, '.data/generated/proof-topology')
+    writeProofDeploymentContract({deploymentDir: root, enforcement, ethDaSubmitter: component, generation: 'real', intentSource: {kind: 'doge-config', path: path.join(root, 'config.toml'), sha256: 'c'.repeat(64)}, materialsReceipt: receiptPath, mode: 'active', proofArtifactBaseUrl: 'https://s3.us-east-1.amazonaws.com/dogeos-proof-artifacts/devnet/instance', proofCoordinator: component, proverWorker: {...component, enabled: false}, topology: {bundleDir: topology, bundleManifest: path.join(topology, 'bundle-manifest-v1.json'), bundleRevision: 'd'.repeat(64), resolvedSidecar: path.join(topology, 'resolved-v2.json')}, tsoValuesFile: values, withdrawalProcessor: component, worker: {contractFile: path.join(topology, 'prover-worker-v1.json'), kind: 'compiled-external'}})
+    // No external signer roster: the kit must not depend on one.
+    const config = {network: 'testnet'} as DogeConfig
+    return {context, materials, options: {config, deploymentDir: root, kitVersion: '1', output: 'kits/deployment-kit-1', protocolContext: '.data/protocol_context.json', tsoUrl: 'https://tso.example.com'}}
+  }
+
+  it('exports a deployment kit whose manifest binds every file and whose identity is the manifest digest', () => {
+    const {context, materials, options} = deploymentKitFixture()
+    const record = writeDeploymentKit(options)
+    const kitDir = path.join(root, 'kits/deployment-kit-1')
+    expect(record.kitDir).to.equal(kitDir)
+    expect(fs.readdirSync(kitDir).sort()).to.deep.equal(['advance-l2-agg-verifying-key.bin', 'deployment-kit-manifest.json', 'deployment-kit.env', 'deployment-kit.json', 'protocol_context.json'])
+    const manifestBytes = fs.readFileSync(path.join(kitDir, 'deployment-kit-manifest.json'))
+    expect(record.manifestSha256).to.equal(digest(manifestBytes))
+    const manifest = JSON.parse(manifestBytes.toString('utf8'))
+    expect(manifest.schema).to.equal('dogeos/deployment-kit-manifest/v1')
+    expect(manifest.files.map((entry: {file: string}) => entry.file)).to.deep.equal(['advance-l2-agg-verifying-key.bin', 'deployment-kit.env', 'deployment-kit.json', 'protocol_context.json'])
+    for (const entry of manifest.files) {
+      const body = fs.readFileSync(path.join(kitDir, entry.file))
+      expect(entry).to.deep.equal({file: entry.file, sha256: `sha256:${digest(body)}`, sizeBytes: body.length})
+    }
+
+    const kit = JSON.parse(fs.readFileSync(path.join(kitDir, 'deployment-kit.json'), 'utf8'))
+    const vk = fs.readFileSync(path.join(root, materials.software.artifacts.aggregateVerifyingKey.path))
+    const contract = JSON.parse(fs.readFileSync(path.join(root, '.data/proof-deployment.json'), 'utf8'))
+    expect(kit).to.deep.equal({
+      advance_l2_verifier: {agg_verifying_key_file: 'advance-l2-agg-verifying-key.bin', agg_verifying_key_sha256: `sha256:${digest(vk)}`, batch_program_commitment_hex: materials.software.identities.batch.appCommitRaw, l2_range_aggregation_program_commitment_hex: materials.software.identities.l2Range.appCommitRaw},
+      artifact_origins: ['https://s3.us-east-1.amazonaws.com'],
+      deployment: {generation_id: contract.generationId, inputs: contract.inputs, topology_revision: contract.topology.bundleRevision},
+      kit_version: '1',
+      network: 'testnet',
+      policy_mode: 'enforce',
+      protocol_context: {file: 'protocol_context.json', sha256: `sha256:${digest(context)}`},
+      protocol_instance_id: '0x2a9dffc0d2ecbed48f6ccc16f2e9abd11dfbac38fe71d2c0cd6fbb0e8d24a6ce',
+      schema: 'dogeos/deployment-kit/v1',
+      tso_url: 'https://tso.example.com',
+    })
+    expect(record).to.include({kitVersion: '1', network: 'testnet', protocolInstanceId: kit.protocol_instance_id})
+    const env = Object.fromEntries(fs.readFileSync(path.join(kitDir, 'deployment-kit.env'), 'utf8').split('\n').filter(line => line && !line.startsWith('#')).map(line => line.split(/=(.*)/s).slice(0, 2)))
+    expect(env).to.deep.equal({
+      ATTESTATION_SIGNER_ADVANCE_L2_AGG_VERIFYING_KEY_PATH: '/etc/dogeos/advance-l2-agg-verifying-key.bin',
+      ATTESTATION_SIGNER_ADVANCE_L2_BATCH_PROGRAM_COMMITMENT_HEX: kit.advance_l2_verifier.batch_program_commitment_hex,
+      ATTESTATION_SIGNER_ARTIFACT_ALLOWED_ORIGINS: kit.artifact_origins[0],
+      ATTESTATION_SIGNER_L2_RANGE_AGGREGATION_PROGRAM_COMMITMENT_HEX: kit.advance_l2_verifier.l2_range_aggregation_program_commitment_hex,
+      ATTESTATION_SIGNER_NETWORK: 'testnet',
+      ATTESTATION_SIGNER_POLICY_MODE: 'enforce',
+      ATTESTATION_SIGNER_PROTOCOL_CONTEXT_JSON: '/etc/dogeos/protocol_context.json',
+      ATTESTATION_SIGNER_TSO_URL: 'https://tso.example.com',
+    })
+    expect(fs.readFileSync(path.join(kitDir, 'protocol_context.json'), 'utf8')).to.equal(context)
+    expect(fs.readFileSync(path.join(kitDir, 'advance-l2-agg-verifying-key.bin'))).to.deep.equal(vk)
+  })
+
+  it('never overwrites an existing kit directory', () => {
+    const {options} = deploymentKitFixture()
+    writeDeploymentKit(options)
+    const manifest = path.join(root, 'kits/deployment-kit-1/deployment-kit-manifest.json')
+    const before = fs.readFileSync(manifest, 'utf8')
+    expect(() => writeDeploymentKit({...options, kitVersion: '2'})).to.throw('never overwritten')
+    expect(fs.readFileSync(manifest, 'utf8')).to.equal(before)
+    expect(fs.readdirSync(path.join(root, 'kits'))).to.deep.equal(['deployment-kit-1'])
+  })
+
+  it('cross-checks the protocol id sidecar written by bridge-init', () => {
+    const {options} = deploymentKitFixture()
+    const sidecar = protocolIdSidecarPath(path.join(root, '.data/protocol_context.json'))
+    fs.writeFileSync(sidecar, `0x${'0'.repeat(63)}1\n`)
+    expect(() => writeDeploymentKit(options)).to.throw('sidecar differs')
+    expect(fs.existsSync(path.join(root, 'kits/deployment-kit-1'))).to.equal(false)
+    fs.writeFileSync(sidecar, '2A9DFFC0D2ECBED48F6CCC16F2E9ABD11DFBAC38FE71D2C0CD6FBB0E8D24A6CE\n')
+    expect(writeDeploymentKit(options).protocolInstanceId).to.equal('0x2a9dffc0d2ecbed48f6ccc16f2e9abd11dfbac38fe71d2c0cd6fbb0e8d24a6ce')
+  })
+
+  it('refuses a non-enforcing contract and an unsafe kit version', () => {
+    const {options} = deploymentKitFixture('observe')
+    expect(() => writeDeploymentKit(options)).to.throw('active/real/enforce')
+    expect(() => writeDeploymentKit({...options, kitVersion: '../1'})).to.throw('Kit version')
+    expect(fs.existsSync(path.join(root, 'kits'))).to.equal(false)
   })
 
   it('does not write a receipt when anonymous readback differs', async () => {

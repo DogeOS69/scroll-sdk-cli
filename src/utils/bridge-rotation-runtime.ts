@@ -1,5 +1,4 @@
 import * as toml from '@iarna/toml'
-import {keccak256} from 'ethers'
 import * as yaml from 'js-yaml'
 import {execFileSync, spawn} from 'node:child_process'
 import {createHash} from 'node:crypto'
@@ -13,6 +12,7 @@ import type {RotationIntentObservation} from './bridge-rotation-status.js'
 import {savedDeploymentEnvFile} from './deployment-paths.js'
 import {resolveDogecoinChainId} from './deployment-spec-generator.js'
 import {loadPreparationEnv} from './preparation-io.js'
+import {protocolOpeningId} from './protocol-opening-id.js'
 
 export type {RotationChainState} from './bridge-rotation.js'
 
@@ -47,29 +47,6 @@ function hex(value: unknown, bytes: number): string {
 }
 
 function sha256(value: Buffer | string): string {return createHash('sha256').update(value).digest('hex')}
-
-/** Core canonical encoding: BE integers/RPC txid, but consensus-order Dogecoin block hash. */
-export function rotationProtocolOpeningId(context: unknown): string {
-  const source = object(context)
-  const protocol = object(source.protocol)
-  const genesis = object(source.genesis)
-  const outpoint = object(genesis.genesis_sequencer_outpoint)
-  const numeric = (value: unknown, size: number): Buffer => {
-    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Error('Invalid protocol context integer')
-    const result = Buffer.alloc(size)
-    if (size === 8) result.writeBigUInt64BE(BigInt(value))
-    else result.writeUIntBE(value, 0, size)
-    return result
-  }
-
-  const bytes = (value: unknown, count: number): Buffer => Buffer.from(hex(value, count), 'hex')
-  return keccak256(Buffer.concat([
-    numeric(protocol.protocol_version, 2), numeric(protocol.dogecoin_chain_id, 4), numeric(protocol.l2_chain_id, 4), numeric(protocol.eth_chain_id, 8),
-    bytes(outpoint.txid, 32), numeric(outpoint.vout, 4), bytes(genesis.genesis_bridge_key_hash, 20), numeric(genesis.initial_confirmed_block_number, 4),
-    bytes(genesis.initial_confirmed_block_hash, 32).reverse(), bytes(genesis.initial_ethereum_block_hash, 32), numeric(genesis.initial_tx_index, 4),
-    bytes(genesis.genesis_batch_hash, 32), bytes(genesis.genesis_state_root, 32), bytes(genesis.initial_system_signer, 20),
-  ])).slice(2)
-}
 
 /** Captures errors privately in memory: never relay kubectl stderr, URLs, or RPC bodies. */
 async function executeKubectl(args: string[], input?: string): Promise<string> {
@@ -175,7 +152,7 @@ export class BridgeRotationRuntime {
     const rows = await this.sql('SELECT s.wf_tx_number,s.state_hash,s.state_json,m.protocol_id,m.validated_tip_state_hash FROM dogeos_state_snapshots s JOIN replay_manifest m ON m.id=1 AND s.wf_tx_number=m.validated_up_to WHERE s.is_canonical=1', true)
     if (rows.length !== 1) throw new Error('Replay has no unique validated canonical head')
     const row = rows[0]
-    if (hex(row.protocol_id, 32) !== rotationProtocolOpeningId(context)) throw new Error('Replay protocol binding differs from deployment context')
+    if (hex(row.protocol_id, 32) !== protocolOpeningId(context)) throw new Error('Replay protocol binding differs from deployment context')
     if (hex(row.state_hash, 32) !== hex(row.validated_tip_state_hash, 32)) throw new Error('Replay head state hash differs from validated manifest')
     const state = object(JSON.parse(String(row.state_json)))
     const wfTxNumber = uint(row.wf_tx_number, 'WF number')

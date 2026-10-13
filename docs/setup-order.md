@@ -192,11 +192,11 @@ After all required Bridge and service signer inputs are ready:
 ```bash
 scrollsdk setup prep-charts
 scrollsdk setup gen-secrets
-scrollsdk setup export-signer-policy
+scrollsdk setup export-deployment-kit --kit-version <version>
 scrollsdk setup proof-config-check
 ```
 
-Wait for `prep-charts` to finish before exporting the signer policy. If ingress
+Wait for `prep-charts` to finish before exporting the deployment kit. If ingress
 TLS is needed, run `scrollsdk setup tls` against the generated values and review
 the final configuration before deployment. TSO and active Proof Coordinator
 ingress use `TSO_HOST` and `PROOF_COORDINATOR_HOST`; see the
@@ -256,8 +256,8 @@ separate requirement or any production signer evidence requirement.
 ## CubeSigner Wasm preparation and attachment
 
 When the correctness signer uses the hosted verifier policy, generate an actual
-Wasm after Bridge preparation. `export-signer-policy` generates the partner
-attestation-signer handoff; it does not compile this CubeSigner Wasm.
+Wasm after Bridge preparation. `export-deployment-kit` generates the signer
+deployment kit; it does not compile this CubeSigner Wasm.
 
 ```bash
 scrollsdk setup cubesigner-policy build \

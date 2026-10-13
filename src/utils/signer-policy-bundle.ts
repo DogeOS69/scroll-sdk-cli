@@ -98,7 +98,7 @@ export function renderSignerOperatorPolicyTemplate(): string {
 `
 }
 
-export function renderSignerPolicyEnv(input: SignerPolicyBundleInput): string {
+export function renderSignerPolicyEnv(input: Omit<SignerPolicyBundleInput, 'signers'>): string {
   const profile = signerRuntimePolicyProfile(input.enforcement)
   const artifactOrigin = input.mode === 'active' && input.signerProofArtifactBaseUrl
     ? new URL(input.signerProofArtifactBaseUrl).origin

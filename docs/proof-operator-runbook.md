@@ -335,17 +335,18 @@ materials, and required resources. It does not contain or consume the retired
 `DOGEOS_PROOF_TOPOLOGY_DIGEST` fields. Their presence is treated as evidence of
 a stale pre-#937 bundle and fails generation or validation.
 
-### Step 5: export the partner signer policy bundle
+### Step 5: export the signer deployment kit
 
-After the final `prep-charts` pass, regenerate the complete bundle distributed
-to every external Attestation Signer operator:
+After the final `prep-charts` pass of an active/real/enforce deployment, export
+one immutable, versioned deployment kit for the external Attestation Signer
+operators:
 
 Wait for `prep-charts` to finish before starting this command. Chart preparation
-transactionally replaces `.data`; a concurrently created signer-policy export
-can be discarded by that replacement.
+transactionally replaces `.data`; a concurrently created kit export can be
+discarded by that replacement.
 
 ```bash
-scrollsdk setup export-signer-policy
+scrollsdk setup export-deployment-kit --kit-version 1
 ```
 
 The command derives the public TSO URL from `config.toml [ingress].TSO_HOST`,
@@ -353,8 +354,11 @@ the canonical protocol identity from `.data/protocol_context.json`, and the
 signer-readable proof artifact base URL from the generated Withdrawal
 Processor configuration. Use `--tso-url`, `--protocol-context`, or
 `--signer-proof-artifact-base-url` only when deliberately overriding those
-sources. Do not reuse a bundle generated for another deployment or an earlier
-protocol context.
+sources. It refuses an existing output directory: a changed endpoint or
+verifier is a new kit version, never an overwrite. Publish the directory (or an
+archive of it) unchanged at an immutable URL and copy the printed
+`protocol_instance_id`, kit version and manifest SHA-256 into the deployment
+record.
 
 ### Step 6: validate the deployment contract
 

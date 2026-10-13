@@ -172,7 +172,7 @@ USAGE
 * [`scrollsdk setup dogecoin-wallet-import`](#scrollsdk-setup-dogecoin-wallet-import)
 * [`scrollsdk setup domains`](#scrollsdk-setup-domains)
 * [`scrollsdk setup eth-da-submitter`](#scrollsdk-setup-eth-da-submitter)
-* [`scrollsdk setup export-signer-policy`](#scrollsdk-setup-export-signer-policy)
+* [`scrollsdk setup export-deployment-kit`](#scrollsdk-setup-export-deployment-kit)
 * [`scrollsdk setup gen-keystore`](#scrollsdk-setup-gen-keystore)
 * [`scrollsdk setup gen-l2-artifacts`](#scrollsdk-setup-gen-l2-artifacts)
 * [`scrollsdk setup gen-rpc-package`](#scrollsdk-setup-gen-rpc-package)
@@ -1299,19 +1299,25 @@ EXAMPLES
 See [deployment signing identities](docs/keystore.md) for scope, repeat execution,
 and the separate archive workflow.
 
-## `scrollsdk setup export-signer-policy`
+## `scrollsdk setup export-deployment-kit`
 
-Export the dogeos-core attestation_evidence_v2 policy selected by the current proof topology. The bundle contains bridge-owned protocol/verifier inputs; each signer operator keeps its RPC source sets, rotation allowlists, keys, and release pins.
+Export a versioned signer deployment kit from the selected proof deployment contract and its bound materials receipt; publish it unchanged and record its manifest SHA-256
 
 ```
 USAGE
-  $ scrollsdk setup export-signer-policy [-c <value>] [--json] [--out <value>] [--protocol-context <value>]
-    [--signer-proof-artifact-base-url <value>] [--spec <value>] [--tso-url <value>]
+  $ scrollsdk setup export-deployment-kit --kit-version <value> [-c <value>] [--contract <value>] [--json] [--out
+    <value>] [--protocol-context <value>] [--signer-proof-artifact-base-url <value>] [--spec <value>] [--tso-url
+    <value>]
 
 FLAGS
   -c, --config=<value>                          Path to doge-config.toml
+      --contract=<value>                        [default: .data/proof-deployment.json] Selected deployment contract;
+                                                binds the materials receipt and protocol context
       --json                                    Output structured JSON
-      --out=<value>                             [default: signer-policy-bundle] Bundle output directory
+      --kit-version=<value>                     (required) Kit version recorded in the kit; never reuse a published
+                                                version
+      --out=<value>                             Kit output directory; must not exist [default:
+                                                deployment-kit-<kit-version>]
       --protocol-context=<value>                [default: .data/protocol_context.json] Canonical protocol_context.json
                                                 produced by setup bridge-init
       --signer-proof-artifact-base-url=<value>  Public GET base used by signers; default: compiler output in
@@ -1322,17 +1328,24 @@ FLAGS
                                                 [ingress].TSO_HOST
 
 DESCRIPTION
-  Export the dogeos-core attestation_evidence_v2 policy selected by the current proof topology. The bundle contains
-  bridge-owned protocol/verifier inputs; each signer operator keeps its RPC source sets, rotation allowlists, keys, and
-  release pins.
+  Export a versioned signer deployment kit from the selected proof deployment contract and its bound materials receipt;
+  publish it unchanged and record its manifest SHA-256
 
 EXAMPLES
-  $ scrollsdk setup export-signer-policy
+  $ scrollsdk setup export-deployment-kit --kit-version 1
 
-  $ scrollsdk setup export-signer-policy --tso-url https://tso.dogeos.example
+  $ scrollsdk setup export-deployment-kit --kit-version 2 --out kits/deployment-kit-2 --tso-url https://tso.dogeos.example
 ```
 
-_See code: [src/commands/setup/export-signer-policy.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/export-signer-policy.ts)_
+The kit directory holds `deployment-kit.json`, `deployment-kit.env`,
+`protocol_context.json`, `advance-l2-agg-verifying-key.bin` and
+`deployment-kit-manifest.json`. Its identity is the SHA-256 of
+`deployment-kit-manifest.json`, which the command prints with the network,
+`protocol_instance_id` and kit version for the deployment record. The kit holds
+no signer roster, current Bridge key or rotation material, so an ordinary
+attestation rotation needs no new kit.
+
+_See code: [src/commands/setup/export-deployment-kit.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/export-deployment-kit.ts)_
 
 ## `scrollsdk setup gen-keystore`
 

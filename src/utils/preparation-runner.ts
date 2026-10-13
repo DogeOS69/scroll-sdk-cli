@@ -17,7 +17,7 @@ import {prepareGrafanaAdmin} from './preparation-grafana.js'
 import {AwaitingInput, localPath, privateWrite} from './preparation-io.js'
 import {bindPreparedProofAws, reuseProofAws} from './preparation-proof-aws.js'
 import {prepareSequencerKms, productionSequencer} from './preparation-sequencer-kms.js'
-import {importSignerReceipts} from './preparation-signer-receipts.js'
+import {exportSignerPolicyBundle, importSignerReceipts} from './preparation-signer-receipts.js'
 import {exportCoordinatorMaterializers} from './proof-image-tools.js'
 import {readProofMaterials} from './proof-materials.js'
 import {readProofSoftwareRelease} from './proof-software-release.js'
@@ -237,7 +237,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         await command(['gen-secrets', '-N']); break
       }
 
-      case 'signer-policy': {await command(['export-signer-policy']); break}
+      case 'signer-policy': {await exportSignerPolicyBundle(root); break}
       case 'signer-receipts': {await importSignerReceipts(root); break}
       case 'proof-check': {await command(['proof-config-check']); break}
       case 'secret-upload': {

@@ -6,7 +6,20 @@ import {loadDogeConfigWithSelection} from './doge-config.js'
 import {AwaitingInput, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {validateProofDeploymentContract} from './proof-deployment-contract.js'
 import {proofEnforcementReadiness} from './proof-enforcement-readiness.js'
+import {resolveProofIntent, validateProofIntentBinding} from './proof-intent.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
+import {deriveTsoUrl} from './signer-policy-derivation.js'
+import {writeSignerPolicyHandoff} from './signer-policy-handoff.js'
+
+/** Partner policy bundle that the policy-validation receipts below bind to. */
+export async function exportSignerPolicyBundle(root: string): Promise<void> {
+  const {config, configPath} = await loadDogeConfigWithSelection(localPath(root, '.data/doge-config.toml'), 'setup apply')
+  const intent = resolveProofIntent({deploymentDir: root, dogeConfig: config, dogeConfigPath: configPath, required: true})!
+  validateProofIntentBinding(validateProofDeploymentContract(root), intent)
+  const tsoUrl = deriveTsoUrl(localPath(root, 'config.toml'))?.value
+  if (!tsoUrl) throw new Error('config.toml has no [ingress].TSO_HOST')
+  writeSignerPolicyHandoff({config, deploymentDir: root, output: 'signer-policy-bundle', protocolContext: '.data/protocol_context.json', tsoUrl})
+}
 
 /** Mutable inbox stays outside managed fingerprints. Only verified receipts become managed inputs. */
 export async function importSignerReceipts(root: string): Promise<void> {
