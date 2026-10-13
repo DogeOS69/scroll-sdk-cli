@@ -12,7 +12,7 @@ import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 import {buildTsoSigners} from '../../src/commands/setup/prep-charts.js'
 import {generateDogeConfigToml, generateSetupDefaultsToml, normalizeDeploymentSpec, validateDeploymentSpec} from '../../src/utils/deployment-spec-generator.js'
 import {resolveSpecAttestationSigners} from '../../src/utils/spec-attestation-signers.js'
-import {generateValuesFiles} from '../../src/utils/values-generator.js'
+import {generateValuesFiles, generateWithdrawalProcessorValues} from '../../src/utils/values-generator.js'
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 function fixture(): DeploymentSpec {
@@ -44,6 +44,16 @@ describe('spec attestation signer public identities', () => {
       expect(signer).to.include({delivery: 'pull', network: spec.dogecoin.network, publicKeyOverride: spec.attestationSigners![index].attestationPubkey, transportPubkey: spec.attestationSigners![index].transportPubkey})
       expect(signer).not.to.have.property('uri')
     }
+  })
+
+  it('writes the WP network name (dogecoin) into tsoSigners for a mainnet spec, matching prep-charts', () => {
+    const spec = fixture()
+    spec.dogecoin.network = 'mainnet'
+    const doge = toml.parse(generateDogeConfigToml(spec)) as any
+    // Only the WP values: the full set refuses the example's devnet CubeSigner mode on mainnet.
+    const values = yaml.load(generateWithdrawalProcessorValues(spec)) as any
+    expect(values.tsoSigners.map((signer: any) => signer.network)).to.deep.equal(values.tsoSigners.map(() => 'dogecoin'))
+    expect(values.tsoSigners).to.deep.equal(buildTsoSigners({attestationSigner: doge.attestationSigner, network: doge.network}))
   })
 
   it('defaults to all declared signers and the bridge threshold when no subset is selected', () => {

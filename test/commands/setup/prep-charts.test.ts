@@ -46,9 +46,9 @@ import PrepCharts, {
   scrubWithdrawalLegacyProofEnv,
   shouldSkipL2ContractDeploymentBlockUpdate,
   snapshotRethExtraArgs,
-  tsoSignerNetwork,
   validateDogeConfigEthereumDaForPrep,
 } from '../../../src/commands/setup/prep-charts.js'
+import {tsoSignerNetwork} from '../../../src/utils/tso-signer-network.js'
 import { ensureWithdrawalProofActivationSwitch } from '../../../src/utils/withdrawal-config.js'
 
 const VALID_PREP_CUTOVER = {
