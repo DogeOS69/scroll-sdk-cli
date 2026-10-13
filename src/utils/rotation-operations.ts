@@ -13,9 +13,9 @@ import {tsoSignerNetwork} from './tso-signer-network.js'
 
 export const WP_VALUES_FILE = 'values/withdrawal-processor-production.yaml'
 
-/** Runs an external tool (helm, make, kubectl); injectable for tests. Throws on failure. */
-export type Run = (command: string, args: string[], cwd: string) => string
-export const runTool: Run = (command, args, cwd) => execFileSync(command, args, {cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'], timeout: 600_000})
+/** Runs an external tool (helm, make, kubectl) with extra env; injectable for tests. Throws on failure. */
+export type Run = (command: string, args: string[], cwd: string, env: Record<string, string>) => string
+export const runTool: Run = (command, args, cwd, env) => execFileSync(command, args, {cwd, encoding: 'utf8', env: {...process.env, ...env}, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'], timeout: 600_000})
 
 // ---------------------------------------------------------------- register
 
@@ -52,8 +52,8 @@ export function mergeRotationSigners(existing: unknown, rotation: RotationExport
 }
 
 /** The WP chart and version the deployment Makefile installs, so `helm template` renders the same release. */
-function wpChart(deploymentDir: string, run: Run): string[] {
-  const printed = run('make', ['-s', '--no-print-directory', '--eval=rotation-print-wp-chart: ; @echo $(WITHDRAWAL_PROCESSOR_CHART) $(WITHDRAWAL_PROCESSOR_CHART_VERSION)', 'rotation-print-wp-chart'], deploymentDir).trim().split(/\s+/)
+function wpChart(deploymentDir: string, run: Run, env: Record<string, string>): string[] {
+  const printed = run('make', ['-s', '--no-print-directory', '--eval=rotation-print-wp-chart: ; @echo $(WITHDRAWAL_PROCESSOR_CHART) $(WITHDRAWAL_PROCESSOR_CHART_VERSION)', 'rotation-print-wp-chart'], deploymentDir, env).trim().split(/\s+/)
   if (printed.length !== 2 || !printed[0]) throw new Error('Cannot read WITHDRAWAL_PROCESSOR_CHART and its version from the deployment Makefile')
   return [printed[0], '--version', printed[1]]
 }
@@ -64,6 +64,8 @@ export interface RegisterResult {added: string[]; installed: boolean; registered
 export async function registerRotation(options: RegisterOptions): Promise<RegisterResult> {
   const {cluster, rotation} = options
   const run = options.run ?? runTool
+  // Every helm call, including one inside an older Makefile without --kube-context, targets the checked cluster.
+  const env = {HELM_KUBECONTEXT: cluster.context}
   const status = await cluster.wpStatus()
   assertDeploymentIdentity(rotation, status)
   assertPredecessor(rotation, status)
@@ -81,7 +83,7 @@ export async function registerRotation(options: RegisterOptions): Promise<Regist
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'rotation-register-'))
     try {
       fs.writeFileSync(path.join(scratch, 'values.yaml'), merged, {mode: 0o600})
-      try {run('helm', ['template', 'withdrawal-processor', ...wpChart(cluster.deploymentDir, run), '--namespace', cluster.namespace, '--values', path.join(scratch, 'values.yaml')], cluster.deploymentDir)} catch {throw new Error('helm template rejected the merged tsoSigners; nothing was written')}
+      try {run('helm', ['template', 'withdrawal-processor', ...wpChart(cluster.deploymentDir, run, env), '--kube-context', cluster.context, '--namespace', cluster.namespace, '--values', path.join(scratch, 'values.yaml')], cluster.deploymentDir, env)} catch {throw new Error('helm template rejected the merged tsoSigners; nothing was written')}
     } finally {fs.rmSync(scratch, {force: true, recursive: true})}
 
     if (added.length > 0) {
@@ -92,8 +94,8 @@ export async function registerRotation(options: RegisterOptions): Promise<Regist
     }
 
     try {
-      run('make', ['install-withdrawal-processor', `KUBE_CONTEXT=${cluster.context}`, `NAMESPACE=${cluster.namespace}`], cluster.deploymentDir)
-      run('kubectl', ['--context', cluster.context, '-n', cluster.namespace, 'rollout', 'status', 'statefulset/withdrawal-processor', '--timeout=300s'], cluster.deploymentDir)
+      run('make', ['install-withdrawal-processor', `KUBE_CONTEXT=${cluster.context}`, `NAMESPACE=${cluster.namespace}`], cluster.deploymentDir, env)
+      run('kubectl', ['--context', cluster.context, '-n', cluster.namespace, 'rollout', 'status', 'statefulset/withdrawal-processor', '--timeout=300s'], cluster.deploymentDir, env)
     } catch {throw new Error(`The WP install or rollout failed${added.length > 0 ? ` after ${WP_VALUES_FILE} was updated` : ''}; fix it and re-run register, which installs again until the WP reports every key`)}
   }
 
@@ -162,7 +164,9 @@ export const INTENT_EXIT_CODES: Record<string, number> = {bound: 2, completed: 0
 /** The stored intent must be this export's request; otherwise the key was reused for another rotation. */
 export function assertIntentMatches(rotation: RotationExport, intent: RotateKeyIntent): void {
   const request = rotation.wp_rotate_key_request
-  if (intent.payload.new_key_hash.toLowerCase() !== request.new_key_hash || intent.payload.new_bridge_redeem_script_hex.toLowerCase() !== request.new_bridge_redeem_script_hex || intent.payload.grace_wf_txs !== request.grace_wf_txs) throw new Error(`The WP already stores a different rotation under idempotency key ${request.idempotency_key}; do not resubmit`)
+  // A null-grace request is stored with the grace the WP resolved, so only a stated grace is compared.
+  const graceDiffers = request.grace_wf_txs !== null && intent.payload.grace_wf_txs !== request.grace_wf_txs
+  if (intent.payload.new_key_hash.toLowerCase() !== request.new_key_hash || intent.payload.new_bridge_redeem_script_hex.toLowerCase() !== request.new_bridge_redeem_script_hex || graceDiffers) throw new Error(`The WP already stores a different rotation under idempotency key ${request.idempotency_key}; do not resubmit`)
 }
 
 export type SendOutcome =

@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic export mutations and Helm fixtures. */
+import {address} from 'bitcoinjs-lib'
 import {expect} from 'chai'
 import * as yaml from 'js-yaml'
 import {createECDH} from 'node:crypto'
@@ -8,8 +9,8 @@ import path from 'node:path'
 
 import type {RotateKeyIntent, RotationCluster} from '../../src/utils/rotation-cluster.js'
 
-import {type RotateKeyStatus, type RotationExport, assertDeploymentIdentity, assertPredecessor, validateRotationExport} from '../../src/utils/rotation-export.js'
-import {WP_VALUES_FILE, mergeRotationSigners, onlineCheck, parseLastPolls, registerRotation, sendRotation} from '../../src/utils/rotation-operations.js'
+import {type RotateKeyStatus, type RotationExport, assertDeploymentIdentity, assertPredecessor, assertTransportKeys, validateRotationExport} from '../../src/utils/rotation-export.js'
+import {WP_VALUES_FILE, assertIntentMatches, mergeRotationSigners, onlineCheck, parseLastPolls, registerRotation, sendRotation} from '../../src/utils/rotation-operations.js'
 
 // The governance portal's export goldens (dogeos-gov-portal #125, vectors/rotation-export/).
 const fixture = (name: string) => JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), '../fixtures/rotation-export', name), 'utf8'))
@@ -51,10 +52,12 @@ describe('bridge rotation export validation', () => {
     ['threshold', v => {v.target.threshold = 2}, 'threshold'],
     ['transport encoding', v => {v.target.signers[0].transport_pubkey = `04${'11'.repeat(32)}`}, 'transport key'],
     ['transport key off the curve', v => {v.target.signers[0].transport_pubkey = `03${'03'.repeat(32)}`}, 'not a valid secp256k1 point'],
-    ['transport key equal to its public key', v => {v.target.signers[1].transport_pubkey = v.target.signers[1].public_key}, 'attestation key as its transport key'],
-    ['transport key shared across sets', v => {v.target.signers[0].transport_pubkey = v.current.signers[0].transport_pubkey}, 'not unique'],
+    ['transport key equal to its public key', v => {v.target.signers[1].transport_pubkey = v.target.signers[1].public_key}, "is a signer's public key"],
+    ['transport key equal to another signer public key', v => {v.target.signers[1].transport_pubkey = v.current.signers[0].public_key}, "is a signer's public key"],
+    ['transport key shared by two public keys', v => {v.target.signers[0].transport_pubkey = v.current.signers[0].transport_pubkey}, 'same transport key'],
     ['p2sh address', v => {v.target.p2sh_address = GOLDEN.bridge_json.p2sh_address.replace('A', 'B')}, 'p2sh_address'],
-    ['grace null', v => {v.grace_wf_txs = null; v.wp_rotate_key_request.grace_wf_txs = null}, 'grace_wf_txs'],
+    ['grace null with a stated request grace', v => {v.grace_wf_txs = null}, 'grace_wf_txs'],
+    ['request grace null with a stated grace', v => {v.wp_rotate_key_request.grace_wf_txs = null}, 'grace_wf_txs'],
     ['grace over ceiling', v => {v.grace_wf_txs = 260_001; v.wp_rotate_key_request.grace_wf_txs = 260_001}, 'grace_wf_txs'],
     ['allowlist for another hash', v => {v.allowlist_entry = v.current.key_hash}, 'allowlist_entry'],
     ['allowlist grace mismatch', v => {v.allowlist_entry = `${v.target.key_hash}:20161`}, 'allowlist_entry'],
@@ -70,6 +73,56 @@ describe('bridge rotation export validation', () => {
       expect(() => validateRotationExport(value)).to.throw(message)
     })
   }
+})
+
+function nullGrace() {
+  const value = golden()
+  value.grace_wf_txs = null
+  value.wp_rotate_key_request.grace_wf_txs = null
+  return value
+}
+
+describe('bridge rotation export: null grace, regtest and kept signers', () => {
+  it('accepts a null grace only with a bare entry, and keeps null in the WP request', () => {
+    const rotation = validateRotationExport(nullGrace())
+    expect(rotation.grace_wf_txs).to.equal(null)
+    expect(rotation.wp_rotate_key_request.grace_wf_txs).to.equal(null)
+    const exact = nullGrace()
+    exact.allowlist_entry = EXACT_GRACE.allowlist_entry
+    expect(() => validateRotationExport(exact)).to.throw('allowlist_entry')
+    const zero = structuredClone(EXACT_GRACE)
+    zero.grace_wf_txs = 0
+    zero.wp_rotate_key_request.grace_wf_txs = 0
+    zero.allowlist_entry = `${zero.target.key_hash}:0`
+    expect(() => validateRotationExport(zero)).to.throw('at least 1')
+  })
+
+  it('matches a stored intent from a null-grace request whatever grace the WP resolved', () => {
+    const rotation = validateRotationExport(nullGrace())
+    const intent = (change: Partial<RotateKeyIntent['payload']>): RotateKeyIntent => ({activation_wf_tx_number: null, deprecation_wf_tx_number: null, job_status: null,
+      payload: {grace_wf_txs: 10, new_bridge_redeem_script_hex: rotation.target.redeem_script_hex, new_key_hash: rotation.target.key_hash, ...change}, signed_txid: null, status: 'pending'})
+    assertIntentMatches(rotation, intent({}))
+    assertIntentMatches(rotation, intent({grace_wf_txs: 20_160}))
+    expect(() => assertIntentMatches(rotation, intent({new_key_hash: rotation.current.key_hash}))).to.throw('different rotation')
+    expect(() => assertIntentMatches(rotation, intent({new_bridge_redeem_script_hex: rotation.current.redeem_script_hex}))).to.throw('different rotation')
+  })
+
+  it('accepts a regtest export, with the testnet P2SH version, against a regtest WP', () => {
+    const value = golden()
+    value.network = 'regtest'
+    value.target.p2sh_address = address.toBase58Check(Buffer.from(value.target.key_hash.slice(2), 'hex'), 196)
+    const rotation = validateRotationExport(value)
+    assertDeploymentIdentity(rotation, status(rotation, {network: 'regtest'}))
+    expect(() => assertDeploymentIdentity(rotation, status(rotation, {network: 'dogecoin'}))).to.throw('network')
+    expect(() => validateRotationExport({...value, target: {...value.target, p2sh_address: GOLDEN.target.p2sh_address}})).to.throw('p2sh_address')
+  })
+
+  it('lets a signer kept in both sets carry the same transport key, but not a different one', () => {
+    const kept = GOLDEN.current.signers[0]
+    assertTransportKeys([...GOLDEN.current.signers, ...GOLDEN.target.signers, kept])
+    expect(() => assertTransportKeys([...GOLDEN.current.signers, ...GOLDEN.target.signers, {...kept, transport_pubkey: GOLDEN.target.signers[0].transport_pubkey}])).to.throw('same transport key')
+    expect(() => assertTransportKeys([...GOLDEN.current.signers, ...GOLDEN.target.signers, {...kept, transport_pubkey: key()}])).to.throw('different transport key in the other set')
+  })
 })
 
 describe('bridge rotation deployment identity and predecessor checks', () => {
@@ -101,24 +154,30 @@ describe('bridge rotation register', () => {
   function setup(rotation: RotationExport, tsoSigners: unknown[]) {
     fs.writeFileSync(path.join(root, WP_VALUES_FILE), yaml.dump({image: {tag: 'x'}, tsoSigners}))
     const calls: string[][] = []
+    const envs: Record<string, string>[] = []
     let registered: string[] = []
     const cluster = {context: 'ctx', deploymentDir: root, namespace: 'ns', async wpStatus() {return status(rotation, {registered_signer_pubkeys: registered})}} as unknown as RotationCluster
-    const run = (command: string, args: string[]) => {
+    const run = (command: string, args: string[], _cwd?: string, env: Record<string, string> = {}) => {
       calls.push([command, ...args])
+      envs.push(env)
       if (command === 'make' && args[0] === '-s') return 'oci://chart/withdrawal-processor 0.1.25\n'
       // After rollout the WP reports what the TSO registered: every key in the values.
       if (command === 'kubectl') registered = (yaml.load(fs.readFileSync(path.join(root, WP_VALUES_FILE), 'utf8')) as any).tsoSigners.map((s: any) => s.publicKeyOverride)
       return ''
     }
 
-    return {calls, cluster, run}
+    return {calls, cluster, envs, run}
   }
 
 
   it('merges target keys, renders before writing, installs, and is a no-op on rerun', async () => {
     const rotation = validateRotationExport(golden())
-    const {calls, cluster, run} = setup(rotation, [correctness, ...rotation.current.signers.map(signer => entry(signer))])
+    const {calls, cluster, envs, run} = setup(rotation, [correctness, ...rotation.current.signers.map(signer => entry(signer))])
     const result = await registerRotation({cluster, rotation, run, async sleep() {}})
+    // Every tool call targets the checked context, even through an older Makefile without --kube-context.
+    expect(envs).to.have.length(4)
+    expect(envs.every(env => env.HELM_KUBECONTEXT === 'ctx')).to.equal(true)
+    expect(calls[1]).to.include.members(['--kube-context', 'ctx'])
     expect(result).to.deep.equal({added: rotation.target.signers.map(s => s.public_key), installed: true, registered: true})
     expect(calls.map(call => call.slice(0, 2).join(' '))).to.deep.equal(['make -s', 'helm template', 'make install-withdrawal-processor', 'kubectl --context'])
     expect(calls[1]).to.include.members(['oci://chart/withdrawal-processor', '--version', '0.1.25', '--namespace', 'ns'])
@@ -234,7 +293,7 @@ describe('bridge rotation send', () => {
   const fresh = () => [...rotation.current.signers, ...rotation.target.signers].map(s => `tso_core_signer_last_poll_timestamp_seconds{signer_pubkey="${s.public_key}"} ${Math.floor(Date.now() / 1000)}`).join('\n')
   const stored = (change: Partial<RotateKeyIntent['payload']> = {}, state = 'completed'): RotateKeyIntent => ({
     activation_wf_tx_number: 41, deprecation_wf_tx_number: 20_201, job_status: 'completed',
-    payload: {grace_wf_txs: rotation.grace_wf_txs, new_bridge_redeem_script_hex: rotation.target.redeem_script_hex, new_key_hash: rotation.target.key_hash, ...change}, signed_txid: 'aa'.repeat(32), status: state,
+    payload: {grace_wf_txs: 20_160, new_bridge_redeem_script_hex: rotation.target.redeem_script_hex, new_key_hash: rotation.target.key_hash, ...change}, signed_txid: 'aa'.repeat(32), status: state,
   })
 
   function cluster(intent: RotateKeyIntent | null, post: (route: string) => Promise<{body: unknown; status: number}> = async () => ({body: {status: 'pending'}, status: 202})) {
@@ -273,7 +332,7 @@ describe('bridge rotation send', () => {
   })
 
   it('treats a stored payload mismatch as an error', async () => {
-    for (const change of [{grace_wf_txs: rotation.grace_wf_txs + 1}, {new_key_hash: rotation.current.key_hash}, {new_bridge_redeem_script_hex: rotation.current.redeem_script_hex}]) {
+    for (const change of [{grace_wf_txs: 20_161}, {new_key_hash: rotation.current.key_hash}, {new_bridge_redeem_script_hex: rotation.current.redeem_script_hex}]) {
       const mismatch = cluster(stored(change, 'pending'))
       let error: unknown
       try {await sendRotation({cluster: mismatch.cluster, preview: false, rotation})} catch (error_) {error = error_}

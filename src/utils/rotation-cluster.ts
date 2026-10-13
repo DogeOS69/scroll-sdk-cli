@@ -83,7 +83,10 @@ export class RotationCluster {
   async wpStatus(): Promise<RotateKeyStatus> {
     const response = await this.request(this.wpUrl, 'withdrawal-processor-0', `${ROTATE_KEY}/status`)
     if (response.status === 404) throw new Error('The WP rotate-key routes are not enabled (HTTP 404); deploy a WP with rotate_key_v2 and the status routes first')
-    return wpJson(response, 'status') as RotateKeyStatus
+    const status = wpJson(response, 'status') as RotateKeyStatus
+    // A missing field must never read as "no deprecating key" or "no active intent".
+    if (!('deprecating' in status) || !('active_intent' in status) || !Array.isArray(status.registered_signer_pubkeys) || !Array.isArray(status.current_attestation?.pubkeys)) throw new Error('WP rotate-key status is missing required fields')
+    return status
   }
 
   private async request(base: string | undefined, pod: string, route: string, init: RequestInit = {}): Promise<{status: number; text: string}> {
