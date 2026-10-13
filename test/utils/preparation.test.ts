@@ -376,6 +376,34 @@ describe('resumable preparation plan', () => {
     expect([fs.readFileSync(planPath, 'utf8'), fs.readFileSync(statePath, 'utf8')]).to.deep.equal(before)
   })
 
+  it('migrates a completed enforcing plan and then runs only the two deployment-kit steps', async () => {
+    await makePlan()
+    // Freeze an enforcing plan as an earlier CLI wrote it, with every step completed.
+    const intentPath = path.join(deployment, '.scrollsdk/intent.json')
+    const spec = JSON.parse(fs.readFileSync(intentPath, 'utf8')) as DeploymentSpec
+    spec.proofTopology!.enforcement = 'enforce'
+    const intent = JSON.stringify(spec, null, 2) + '\n'
+    fs.writeFileSync(intentPath, intent)
+    const current = preparationSteps(spec)
+    const index = current.findIndex(step => step.id === 'deployment-kit')
+    const retired = ['signer-policy', 'signer-receipts', 'charts-validated'].map(id => ({effect: 'local' as const, id, retry: 'safe' as const, title: id}))
+    const planPath = path.join(deployment, '.scrollsdk/plan.json')
+    const plan = JSON.parse(fs.readFileSync(planPath, 'utf8')) as PreparationPlan
+    const body: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, specHash: createHash('sha256').update(intent).digest('hex'), steps: [...current.slice(0, index), ...retired, ...current.slice(index + 2)]}
+    delete body.id
+    const old = {...body, id: createHash('sha256').update(JSON.stringify(body)).digest('hex')}
+    fs.writeFileSync(planPath, JSON.stringify(old))
+    const statePath = path.join(deployment, '.scrollsdk/state.json')
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+    fs.writeFileSync(statePath, JSON.stringify({...state, planId: old.id, status: 'prepared', steps: Object.fromEntries(old.steps.map(step => [step.id, 'completed']))}))
+    const calls: string[] = []
+    expect((await applyPreparation(deployment, {async run(step) {calls.push(step.id)}})).status).to.equal('prepared')
+    expect(calls).to.deep.equal(['deployment-kit', 'deployment-kit-published'])
+    const migrated = JSON.parse(fs.readFileSync(planPath, 'utf8')) as PreparationPlan
+    expect(migrated.steps).to.deep.equal(current)
+    expect(JSON.parse(fs.readFileSync(statePath, 'utf8')).planId).to.equal(migrated.id)
+  })
+
   it('maps an enforcing plan\'s retired steps to the two deployment-kit steps where signer-policy was', () => {
     const spec = fixture()
     spec.proofTopology!.enforcement = 'enforce'

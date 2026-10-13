@@ -192,6 +192,7 @@ After all required Bridge and service signer inputs are ready:
 ```bash
 scrollsdk setup prep-charts
 scrollsdk setup gen-secrets
+# enforcing (active/real/enforce) deployments only:
 scrollsdk setup export-deployment-kit
 # publish deployment-kit-<version>/ unchanged at an immutable https URL, then:
 scrollsdk setup export-deployment-kit --published-url <URL>

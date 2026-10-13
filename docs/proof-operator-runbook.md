@@ -438,7 +438,9 @@ program identity, or artifact prefix.
 Attestation Signers are partner-operated and may be outside AWS. They need:
 
 - their own descriptor and signing key;
-- the exported `observe` or `enforce` policy bundle;
+- for an enforcing deployment, its published deployment kit and the kit's
+  manifest SHA-256 from the governance record (observe and mock deployments have
+  no kit);
 - static verifier/program material distributed by the operator;
 - credential-free HTTPS GET access to exact proof artifact objects.
 

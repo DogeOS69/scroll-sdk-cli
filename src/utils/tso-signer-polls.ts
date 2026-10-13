@@ -32,7 +32,12 @@ export function registeredAttestationKeys(deploymentDir: string): string[] {
   let values: any
   try {values = yaml.load(fs.readFileSync(path.join(deploymentDir, WP_VALUES_FILE), 'utf8'))} catch {throw new Error(`Cannot read ${WP_VALUES_FILE}`)}
   if (!Array.isArray(values?.tsoSigners)) throw new Error(`${WP_VALUES_FILE} has no tsoSigners list`)
-  const keys = values.tsoSigners.filter((entry: any) => Array.isArray(entry?.roles) && entry.roles.includes('Attestation')).map((entry: any) => {
+  // Validate every entry before selecting by role, so a malformed entry is never silently skipped.
+  for (const entry of values.tsoSigners) {
+    if (!entry || typeof entry !== 'object' || !Array.isArray(entry.roles) || entry.roles.some((role: unknown) => typeof role !== 'string')) throw new Error(`${WP_VALUES_FILE}: a tsoSigners entry has no roles list`)
+  }
+
+  const keys = values.tsoSigners.filter((entry: any) => entry.roles.includes('Attestation')).map((entry: any) => {
     const key = String(entry.publicKeyOverride ?? '').toLowerCase()
     if (!/^0[23][\da-f]{64}$/.test(key)) throw new Error(`${WP_VALUES_FILE}: an Attestation entry has no compressed publicKeyOverride`)
     return key
@@ -48,6 +53,20 @@ export function signerLiveness(keys: string[], metrics: string, nowSeconds: numb
   const polls = parseLastPolls(metrics)
   const signers = keys.map(publicKey => ({fresh: isFreshPoll(polls.get(publicKey), nowSeconds), lastPoll: polls.get(publicKey) ?? null, publicKey}))
   return {passed: signers.every(signer => signer.fresh), signers}
+}
+
+/**
+ * The post-rollout acceptance check behind `proof-config-check --live`: for an
+ * enforcing deployment, every registered Attestation signer has a fresh
+ * authenticated TSO poll. A failure means liveness, not safety.
+ */
+export async function liveSignerAcceptance(options: {context?: string; deploymentDir: string; enforcement: string; namespace: string; now: () => number; readMetrics: (target: {context: string; namespace: string}) => Promise<string>}): Promise<SignerLiveness> {
+  if (options.enforcement !== 'enforce') throw new Error('--live applies to enforcing deployments; observe and mock deployments have no signer kit')
+  if (!options.context) throw new Error('--live requires --kube-context')
+  const keys = registeredAttestationKeys(options.deploymentDir)
+  const live = signerLiveness(keys, await options.readMetrics({context: options.context, namespace: options.namespace}), Math.floor(options.now() / 1000))
+  if (!live.passed) throw new Error(`Not accepted: these registered Attestation signers have no fresh authenticated TSO poll (last 60 s): ${live.signers.filter(signer => !signer.fresh).map(signer => signer.publicKey).join(', ')}. Signing stalls until they poll; nothing is signed incorrectly`)
+  return live
 }
 
 /** TSO `/metrics` over a short-lived loopback port-forward to `tso-service-0`. */

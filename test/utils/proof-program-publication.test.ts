@@ -6,12 +6,16 @@ import os from 'node:os'
 import path from 'node:path'
 import sinon from 'sinon'
 
+import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 import type {DogeConfig} from '../../src/types/doge-config.js'
+import type {PreparationPlan} from '../../src/utils/preparation-plan.js'
 
 import {ExportDeploymentKitCommand} from '../../src/commands/setup/export-deployment-kit.js'
 import {writeDeploymentKit} from '../../src/utils/deployment-kit.js'
 import {deploymentKitBlockers, recordDeploymentKitPublication, withoutPendingDeploymentKit} from '../../src/utils/deployment-kit-record.js'
 import {awaitDeploymentKitPublication, exportPreparationDeploymentKit} from '../../src/utils/preparation-deployment-kit.js'
+import {AwaitingInput} from '../../src/utils/preparation-io.js'
+import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
 import {writeProofDeploymentContract} from '../../src/utils/proof-deployment-contract.js'
 import {
   planProofProgramPublication,
@@ -416,6 +420,24 @@ describe('real-proof program bundle publication', () => {
     expect(fs.readdirSync(path.join(root, 'empty-target'))).to.deep.equal([])
   })
 
+  it('re-validates the selected inputs on a no-op rerun too', () => {
+    const {options} = deploymentKitFixture()
+    const first = writeDeploymentKit(options)
+    const receipt = path.join(root, '.data/proof-materials-v1.json')
+    const readdir = fs.readdirSync
+    let changed = false
+    // The materials receipt changes while the existing kit is being verified.
+    sinon.stub(fs, 'readdirSync').callsFake(((directory: fs.PathLike, ...rest: unknown[]) => {
+      if (directory === first.kitDir && !changed) {changed = true; fs.appendFileSync(receipt, ' ')}
+      return (readdir as (...args: unknown[]) => unknown)(directory, ...rest)
+    }) as typeof fs.readdirSync)
+    try {
+      expect(() => writeDeploymentKit(options)).to.throw()
+    } finally {sinon.restore()}
+
+    expect(changed).to.equal(true)
+  })
+
   it('cross-checks the protocol id sidecar written by bridge-init', () => {
     const {context, options} = deploymentKitFixture()
     const id = protocolOpeningId(JSON.parse(context))
@@ -505,6 +527,24 @@ describe('real-proof program bundle publication', () => {
     for (const file of kitFiles) {
       expect(fs.readFileSync(path.join(applied.kitDir, file)).equals(fs.readFileSync(path.join(direct.kitDir, file))), file).to.equal(true)
     }
+  })
+
+  it('runs the two setup apply kit steps through the runner: wait, record, then resume as a no-op', async () => {
+    deploymentKitFixture()
+    const runner = new CommandPreparationRunner(async () => {throw new Error('no CLI subprocess for kit steps')})
+    const step = (id: string) => ({effect: 'local' as const, id, retry: 'safe' as const, title: id})
+    const run = async (id: string) => {try {await runner.run(step(id), {preparation: {bridge: {image: 'unused', mode: 'helper'}}} as unknown as DeploymentSpec, root, {} as PreparationPlan); return ''} catch (error) {return error instanceof AwaitingInput ? `waiting: ${error.message}` : String(error)}}
+    expect(await run('deployment-kit')).to.equal('')
+    expect(await run('deployment-kit-published')).to.match(/^waiting: Waiting for the deployment kit/)
+    const request = JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/inputs/deployment-kit/request.json'), 'utf8'))
+    fs.writeFileSync(path.join(root, '.scrollsdk/inputs/deployment-kit/published.json'), JSON.stringify({manifest_sha256: request.manifestSha256, url: 'https://kits.example.com/k.tgz'}))
+    expect(await run('deployment-kit-published')).to.equal('')
+    const recorded = fs.readFileSync(path.join(root, '.data/doge-config.toml'))
+    // Resume: both steps are no-ops and the record is unchanged.
+    expect(await run('deployment-kit')).to.equal('')
+    expect(await run('deployment-kit-published')).to.equal('')
+    expect(fs.readFileSync(path.join(root, '.data/doge-config.toml')).equals(recorded)).to.equal(true)
+    expect(deploymentKitBlockers(root, contractFor(), readConfig())).to.deep.equal([])
   })
 
   it('waits for the publication record, then records it and passes offline kit readiness', async () => {

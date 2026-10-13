@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import {WP_VALUES_FILE, isFreshPoll, parseLastPolls, registeredAttestationKeys, signerLiveness} from '../../src/utils/tso-signer-polls.js'
+import {WP_VALUES_FILE, isFreshPoll, liveSignerAcceptance, parseLastPolls, registeredAttestationKeys, signerLiveness} from '../../src/utils/tso-signer-polls.js'
 
 const key = (byte: string) => `02${byte.repeat(32)}`
 const metrics = (entries: [string, number][]) => ['# HELP tso_core_signer_last_poll_timestamp_seconds x', '# TYPE tso_core_signer_last_poll_timestamp_seconds gauge',
@@ -29,6 +29,24 @@ describe('TSO signer poll liveness', () => {
     expect(signerLiveness(keys, metrics([[keys[0], now], [keys[1], now + 6]]), now).passed).to.equal(false)
   })
 
+  it('accepts an enforcing deployment only when every registered Attestation signer polls (proof-config-check --live)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tso-signer-live-'))
+    try {
+      fs.mkdirSync(path.join(root, 'values'))
+      const keys = [key('11'), key('22')]
+      fs.writeFileSync(path.join(root, WP_VALUES_FILE), yaml.dump({tsoSigners: [{publicKeyOverride: key('99'), roles: ['Correctness']}, ...keys.map(publicKeyOverride => ({publicKeyOverride, roles: ['Attestation']}))]}))
+      const targets: unknown[] = []
+      const check = (entries: [string, number][], change: {context?: string; enforcement?: string} = {}) => liveSignerAcceptance({context: 'ctx', deploymentDir: root, enforcement: 'enforce', namespace: 'ns', now: () => now * 1000, async readMetrics(target) {targets.push(target); return metrics(entries)}, ...change})
+      const failure = async (entries: [string, number][], change = {}) => {try {await check(entries, change); return ''} catch (error) {return (error as Error).message}}
+      expect((await check(keys.map(publicKey => [publicKey, now]))).passed).to.equal(true)
+      expect(targets).to.deep.equal([{context: 'ctx', namespace: 'ns'}])
+      expect(await failure([[keys[0], now]])).to.include('Not accepted').and.include(keys[1])
+      expect(await failure([[keys[0], now], [keys[1], now - 61]])).to.include(keys[1])
+      expect(await failure(keys.map(publicKey => [publicKey, now]), {enforcement: 'observe'})).to.include('enforcing deployments')
+      expect(await failure(keys.map(publicKey => [publicKey, now]), {context: undefined})).to.include('--kube-context')
+    } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+
   it('reads the Attestation keys of the WP tsoSigners and rejects an empty or malformed registry', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tso-signer-polls-'))
     try {
@@ -40,6 +58,8 @@ describe('TSO signer poll liveness', () => {
       expect(() => registeredAttestationKeys(root)).to.throw('registers no Attestation signers')
       write([{publicKeyOverride: 'not-a-key', roles: ['Attestation']}])
       expect(() => registeredAttestationKeys(root)).to.throw('no compressed publicKeyOverride')
+      write([{publicKeyOverride: key('AB'), roles: ['Attestation']}, {publicKeyOverride: key('CD'), roles: 'Attestation'}])
+      expect(() => registeredAttestationKeys(root)).to.throw('has no roles list')
       write()
       expect(() => registeredAttestationKeys(root)).to.throw('has no tsoSigners list')
     } finally {fs.rmSync(root, {force: true, recursive: true})}

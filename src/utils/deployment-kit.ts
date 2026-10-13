@@ -162,6 +162,10 @@ export function writeDeploymentKit(options: {contractPath?: string; output?: str
   const content = deploymentKitContent({...options, contract})
   const target = path.resolve(root, options.output ?? deploymentKitDirectory(content.version))
   const record = {kitDir: target, kitVersion: content.version, manifestSha256: content.manifestSha256, network: content.network, protocolInstanceId: content.protocolInstanceId}
+  const assertInputsUnchanged = () => {
+    if (validateProofDeploymentContract(root, options.contractPath).generationId !== contract.generationId) throw new Error('Selected proof inputs changed during deployment kit export')
+  }
+
   fs.mkdirSync(path.dirname(target), {recursive: true})
   if (fs.realpathSync(path.dirname(target)) !== path.dirname(target)) throw new Error('Deployment kit output parent contains a symlink')
   // Claim the output directory atomically; an existing one must already be this exact kit.
@@ -170,6 +174,7 @@ export function writeDeploymentKit(options: {contractPath?: string; output?: str
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
     try {verifyDeploymentKit(target, content)} catch {throw new Error(`Deployment kit output ${target} already exists with other content; kits are never overwritten`)}
+    assertInputsUnchanged()
     return record
   }
 
@@ -177,7 +182,7 @@ export function writeDeploymentKit(options: {contractPath?: string; output?: str
   try {
     // The manifest is written last, so an interrupted export never leaves a complete-looking kit.
     for (const [name, body] of content.files) if (name !== DEPLOYMENT_KIT_MANIFEST_FILE) fs.writeFileSync(path.join(target, name), body, {flag: 'wx'})
-    if (validateProofDeploymentContract(root, options.contractPath).generationId !== contract.generationId) throw new Error('Selected proof inputs changed during deployment kit export')
+    assertInputsUnchanged()
     fs.writeFileSync(path.join(target, DEPLOYMENT_KIT_MANIFEST_FILE), content.files.get(DEPLOYMENT_KIT_MANIFEST_FILE)!, {flag: 'wx'})
     complete = true
     return record
