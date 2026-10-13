@@ -11,17 +11,13 @@ import type {RotateKeyIntent, RotationCluster} from '../../src/utils/rotation-cl
 import {type RotateKeyStatus, type RotationExport, assertDeploymentIdentity, assertPredecessor, validateRotationExport} from '../../src/utils/rotation-export.js'
 import {WP_VALUES_FILE, mergeRotationSigners, onlineCheck, parseLastPolls, registerRotation, sendRotation} from '../../src/utils/rotation-operations.js'
 
-// The governance portal's export golden (dogeos-gov-portal #121, vectors/rotation-export/mainnet-example.json).
-const GOLDEN = JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), '../fixtures/rotation-export/mainnet-example.json'), 'utf8'))
+// The governance portal's export goldens (dogeos-gov-portal #125, vectors/rotation-export/).
+const fixture = (name: string) => JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), '../fixtures/rotation-export', name), 'utf8'))
+const GOLDEN = fixture('mainnet-example.json')
+const EXACT_GRACE = fixture('mainnet-example-exact-grace.json')
 const golden = (): any => structuredClone(GOLDEN)
 const key = () => {const ec = createECDH('secp256k1'); ec.generateKeys(); return ec.getPublicKey('hex', 'compressed')}
 
-/** The golden reuses transport keys across sets; registration needs distinct ones. */
-function registrable(): RotationExport {
-  const value = golden()
-  for (const signer of [...value.current.signers, ...value.target.signers]) signer.transport_pubkey = key()
-  return validateRotationExport(value)
-}
 
 function status(rotation: RotationExport, change: Partial<RotateKeyStatus> = {}): RotateKeyStatus {
   return {
@@ -35,11 +31,13 @@ const metrics = (entries: [string, number][]) => ['# HELP tso_core_signer_last_p
   ...entries.map(([pubkey, at]) => `tso_core_signer_last_poll_timestamp_seconds{signer_pubkey="${pubkey}"} ${at}`), 'tso_core_other_metric 1'].join('\n')
 
 describe('bridge rotation export validation', () => {
-  it('accepts the portal golden, and its exact-grace allowlist form', () => {
+  it('accepts the portal goldens, bare and exact-grace', () => {
     const rotation = validateRotationExport(golden())
     expect(rotation.wp_rotate_key_request.idempotency_key).to.equal(`${GOLDEN.protocol_instance_id.slice(2)}-DGP-0012-rev2`)
-    // Synthesized until the portal publishes an exact-grace golden.
-    expect(validateRotationExport({...golden(), allowlist_entry: `${GOLDEN.target.key_hash}:20160`}).allowlist_entry).to.equal(`${GOLDEN.target.key_hash}:20160`)
+    expect(validateRotationExport(EXACT_GRACE).allowlist_entry).to.equal(`${GOLDEN.target.key_hash}:20160`)
+    const graceMismatch = structuredClone(EXACT_GRACE)
+    graceMismatch.allowlist_entry = `${GOLDEN.target.key_hash}:20161`
+    expect(() => validateRotationExport(graceMismatch)).to.throw('allowlist_entry')
   })
 
   const mutations: [string, (value: any) => void, string][] = [
@@ -52,6 +50,9 @@ describe('bridge rotation export validation', () => {
     ['target signer missing', v => {v.target.signers.pop()}, 'attestation keys'],
     ['threshold', v => {v.target.threshold = 2}, 'threshold'],
     ['transport encoding', v => {v.target.signers[0].transport_pubkey = `04${'11'.repeat(32)}`}, 'transport key'],
+    ['transport key off the curve', v => {v.target.signers[0].transport_pubkey = `03${'03'.repeat(32)}`}, 'not a valid secp256k1 point'],
+    ['transport key equal to its public key', v => {v.target.signers[1].transport_pubkey = v.target.signers[1].public_key}, 'attestation key as its transport key'],
+    ['transport key shared across sets', v => {v.target.signers[0].transport_pubkey = v.current.signers[0].transport_pubkey}, 'not unique'],
     ['p2sh address', v => {v.target.p2sh_address = GOLDEN.bridge_json.p2sh_address.replace('A', 'B')}, 'p2sh_address'],
     ['grace null', v => {v.grace_wf_txs = null; v.wp_rotate_key_request.grace_wf_txs = null}, 'grace_wf_txs'],
     ['grace over ceiling', v => {v.grace_wf_txs = 260_001; v.wp_rotate_key_request.grace_wf_txs = 260_001}, 'grace_wf_txs'],
@@ -115,7 +116,7 @@ describe('bridge rotation register', () => {
 
 
   it('merges target keys, renders before writing, installs, and is a no-op on rerun', async () => {
-    const rotation = registrable()
+    const rotation = validateRotationExport(golden())
     const {calls, cluster, run} = setup(rotation, [correctness, ...rotation.current.signers.map(signer => entry(signer))])
     const result = await registerRotation({cluster, rotation, run, async sleep() {}})
     expect(result).to.deep.equal({added: rotation.target.signers.map(s => s.public_key), installed: true, registered: true})
@@ -132,7 +133,7 @@ describe('bridge rotation register', () => {
   })
 
   it('refuses a transport-key conflict, and a helm template failure, without writing anything', async () => {
-    const rotation = registrable()
+    const rotation = validateRotationExport(golden())
     const conflicting = {...entry(rotation.target.signers[0]), transportPubkey: key()}
     const {calls, cluster, run} = setup(rotation, [correctness, ...rotation.current.signers.map(signer => entry(signer)), conflicting])
     const before = fs.readFileSync(path.join(root, WP_VALUES_FILE), 'utf8')
@@ -159,7 +160,7 @@ describe('bridge rotation register', () => {
   })
 
   it('installs again on a rerun after a failed install, without rewriting values', async () => {
-    const rotation = registrable()
+    const rotation = validateRotationExport(golden())
     const {calls, cluster, run} = setup(rotation, [correctness, ...rotation.current.signers.map(signer => entry(signer))])
     const failInstall = (command: string, args: string[]) => {
       if (command === 'make' && args[0] === 'install-withdrawal-processor') throw new Error('cluster unreachable')
@@ -177,7 +178,7 @@ describe('bridge rotation register', () => {
   })
 
   it('treats an entry with another signature mode or an extra field as a conflict', () => {
-    const rotation = registrable()
+    const rotation = validateRotationExport(golden())
     const signer = rotation.target.signers[0]
     for (const existing of [{...entry(signer), signatureMode: 'shadowfork_sentinel'}, {...entry(signer), uri: 'http://signer:3000'}, {...entry(signer), roles: ['Attestation', 'Correctness']}]) {
       expect(() => mergeRotationSigners([existing], rotation)).to.throw('conflicts')
@@ -187,7 +188,7 @@ describe('bridge rotation register', () => {
   })
 
   it('refuses a stale predecessor before touching values', async () => {
-    const rotation = registrable()
+    const rotation = validateRotationExport(golden())
     const {calls, cluster, run} = setup(rotation, [correctness])
     cluster.wpStatus = async () => status(rotation, {current_key_hash: rotation.target.key_hash})
     let error: unknown

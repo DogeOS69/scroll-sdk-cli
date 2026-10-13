@@ -69,8 +69,7 @@ function side(value: unknown, label: 'current' | 'target'): RotationExport['curr
     return {
       label: signer.label,
       public_key: assertCompressedSecp256k1PublicKey(text(signer.public_key, /^0[23][\da-f]{64}$/, `${label} public key`), `${label} public key`),
-      // The portal checks only the encoding of transport keys, as here; the TSO validates the point.
-      transport_pubkey: text(signer.transport_pubkey, /^0[23][\da-f]{64}$/, `${label} transport key`),
+      transport_pubkey: assertCompressedSecp256k1PublicKey(text(signer.transport_pubkey, /^0[23][\da-f]{64}$/, `${label} transport key`), `${label} transport key`),
     }
   })
   if (signers.map(s => s.public_key).join(',') !== parsed.attestation.keys.join(',')) throw new Error(`Rotation export: ${label}.signers differ from the attestation keys of its redeem script`)
@@ -90,6 +89,14 @@ export function validateRotationExport(input: unknown): RotationExport {
   const p2sh = address.toBase58Check(Buffer.from(targetSide.key_hash.slice(2), 'hex'), source.network === 'mainnet' ? 22 : 196)
   if (object(source.target, 'target').p2sh_address !== p2sh) throw new Error('Rotation export: target.p2sh_address is not the target script P2SH on this network')
   const target = {...targetSide, p2sh_address: p2sh}
+  // The portal's transport-key rules: never the signer's own key, and unique across both sets.
+  const transports = new Set<string>()
+  for (const signer of [...current.signers, ...target.signers]) {
+    if (signer.transport_pubkey === signer.public_key) throw new Error(`Rotation export: ${signer.label} uses its attestation key as its transport key`)
+    if (transports.has(signer.transport_pubkey)) throw new Error(`Rotation export: transport key of ${signer.label} is not unique across current and target signers`)
+    transports.add(signer.transport_pubkey)
+  }
+
   const graceWfTxs = grace(source.grace_wf_txs, 'grace_wf_txs')
   const entry = text(source.allowlist_entry, /^0x[\da-f]{40}(?::\d+)?$/, 'allowlist_entry')
   const [entryHash, entryGrace] = entry.split(':')
