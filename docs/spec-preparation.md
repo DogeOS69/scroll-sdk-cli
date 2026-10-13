@@ -4,6 +4,11 @@
 the existing setup commands, persist completed steps and stop for external inputs.
 They do not install Helm releases or claim that a running chain has passed acceptance.
 
+The CLI does not create or modify `.gitignore` in generated deployment directories
+or bundles. Operators manage Git ignore rules; existing `.gitignore` files are
+left untouched. `.scrollsdkignore` remains the CLI deployment-sync exclusion file
+and is independent of Git.
+
 After preparation, install the frontend and monitoring releases from the generated
 directory with `make install-frontends` and `make install-scroll-monitor`, passing
 explicit `KUBE_CONTEXT` and `NAMESPACE`. Monitoring belongs early in the Helm

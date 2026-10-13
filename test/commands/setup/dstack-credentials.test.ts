@@ -127,10 +127,12 @@ else console.log('{}');
       expect(fs.statSync(file).mode % 0o1000).to.equal(0o600)
     }
 
-    expect(fs.readFileSync('.gitignore', 'utf8')).to.include('/.data/dstack/').and.to.include('/secrets/')
+    expect(fs.existsSync('.gitignore')).to.equal(false)
   })
 
   it('retains admin/AES identity across reruns and key updates, requiring Secret regeneration', async () => {
+    const ignore = '# Operator-owned rules\n/local-only/\n'
+    fs.writeFileSync('.gitignore', ignore)
     importBoth()
     generate()
     const before = readDstackCredentials()!
@@ -139,6 +141,7 @@ else console.log('{}');
     fs.writeFileSync('vast-key', 'replacement-key')
     run('dstack-config', '--vastai-api-key-file', 'vast-key')
     const after = readDstackCredentials()!
+    expect(fs.readFileSync('.gitignore', 'utf8')).to.equal(ignore)
     expect(after.adminToken).to.equal(before.adminToken)
     expect(after.encryptionKey).to.equal(before.encryptionKey)
     expect(after.gcp).to.deep.equal(before.gcp)
