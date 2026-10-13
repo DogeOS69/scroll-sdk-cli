@@ -298,7 +298,7 @@ describe('production Bridge sequencer KMS', () => {
 
   it('keeps native KMS configuration and IRSA through repeated chart preparation', async () => {
     const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-    const minimal = normalizeDeploymentSpec(yaml.load(fs.readFileSync(path.join(cliRoot, 'src/config/deployment-spec.minimal.yaml'), 'utf8')
+    const minimal = normalizeDeploymentSpec(yaml.load(fs.readFileSync(path.join(cliRoot, 'test/fixtures/deployment-spec/minimal.yaml'), 'utf8')
       .replaceAll('$ENV:OWNER_ADDRESS', '0x0000000000000000000000000000000000000001')
       .replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')) as DeploymentSpec)
     spec = {...minimal, ...spec, bridge: {...minimal.bridge, ...spec.bridge}, dogecoin: {...minimal.dogecoin, ...spec.dogecoin}}

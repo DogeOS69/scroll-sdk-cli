@@ -33,7 +33,7 @@ describe('spec values runtime policy across entry points', () => {
     revision = createSdkFixture(sdk)
     fs.mkdirSync(path.join(root, 'operator'))
     process.chdir(path.join(root, 'operator'))
-    spec = yaml.load(fs.readFileSync(path.join(cli, 'src/config/deployment-spec.minimal.yaml'), 'utf8')
+    spec = yaml.load(fs.readFileSync(path.join(cli, 'test/fixtures/deployment-spec/minimal.yaml'), 'utf8')
       .replaceAll('$ENV:OWNER_ADDRESS', '0x0000000000000000000000000000000000000001')
       .replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')) as DeploymentSpec
     delete spec.feeOracle

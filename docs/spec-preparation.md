@@ -32,22 +32,26 @@ Prepare its database and values, then opt in with `make install-blockscout`.
 These defaults come from the committed SDK revision selected by plan/bootstrap;
 an older checkout or an existing deployment retains its own settings.
 
-A complete operator starter is available in the scroll-sdk repository at
-`examples/deployment-spec.example.yaml`, with the companion guide
-`examples/deployment-spec.md`. It selects testnet production Bridge preparation
-and active/real/enforce proofs; it generates real identities from an approved
-proof release after the protocol context exists. Apply waits for partner enforcing-policy receipts, verifies them and regenerates
+The canonical operator spec and environment templates live in the scroll-sdk
+repository: [deployment-spec.example.yaml](https://github.com/DogeOS69/scroll-sdk/blob/v0.3.0-develop/examples/deployment-spec.example.yaml)
+and [deployment.env.example](https://github.com/DogeOS69/scroll-sdk/blob/v0.3.0-develop/examples/deployment.env.example),
+with the companion guide `examples/deployment-spec.md`. The CLI keeps test inputs
+under `test/fixtures/deployment-spec/`; those are not operator templates.
+
+The SDK example selects testnet production Bridge preparation and active/real/enforce
+proofs; it generates real identities from an approved proof release after the protocol
+context exists. Apply waits for partner enforcing-policy receipts, verifies them and regenerates
 the configuration before the final enforcing check.
 
 ## Prepare the private environment file
 
-Start with [deployment.env.example](../src/config/deployment.env.example). The
-same operator template is available as `examples/deployment.env.example` in
-scroll-sdk. Copy it to your private directory outside either checkout, then edit
-the copy before running plan. For example, with an existing `/private` directory:
+Copy `examples/deployment.env.example` from the same scroll-sdk checkout used
+for your spec and Helm templates. Copy it to your private directory outside either
+checkout, then edit the copy before running plan. For example, with an existing
+`/private` directory:
 
 ```bash
-install -m 600 /path/to/scroll-sdk-cli/src/config/deployment.env.example /private/deployment.env
+install -m 600 /path/to/scroll-sdk/examples/deployment.env.example /private/deployment.env
 ```
 
 Secret assignments are intentionally unusable placeholders; Ethereum RPC entries
