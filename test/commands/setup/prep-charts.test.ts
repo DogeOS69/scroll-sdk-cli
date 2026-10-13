@@ -31,6 +31,7 @@ import PrepCharts, {
   getL2RethRpcIngressConfigKey,
   getProductionChartName,
   isL2RethBlobS3Chart,
+  mergeTsoSigners,
   migrateCubesignerPolicySdkVersion,
   migrateCubesignerRequestContract,
   reconcileGrafanaIngressHost,
@@ -353,6 +354,19 @@ describe('setup prep-charts external attestation signer routing', () => {
     expect(tsoSignerNetwork('testnet')).to.equal('testnet')
     expect(tsoSignerNetwork('regtest')).to.equal('regtest')
     expect(tsoSignerNetwork('mainnet')).to.equal('dogecoin')
+  })
+
+  it('keeps registered attestation signers instead of rebuilding them from imported descriptors', () => {
+    const tee = {delivery: 'push' as const, network: 'dogecoin', publicKeyOverride: `02${'11'.repeat(32)}`, roles: ['Correctness' as const], signatureMode: 'ecdsa' as const, uri: 'http://cubesigner-signer:3000'}
+    const pull = (pub: string, transport: string, network = 'dogecoin') => ({delivery: 'pull' as const, network, publicKeyOverride: pub, roles: ['Attestation' as const], signatureMode: 'ecdsa' as const, transportPubkey: transport})
+    const registeredByRotation = pull(`02${'66'.repeat(32)}`, `03${'77'.repeat(32)}`)
+    const imported = pull(`02${'22'.repeat(32)}`, `03${'33'.repeat(32)}`)
+    const staleTee = {...tee, publicKeyOverride: `02${'99'.repeat(32)}`}
+    // A stale CubeSigner entry is rebuilt; a rotation-registered key and a pre-fix mainnet spelling survive.
+    expect(mergeTsoSigners([staleTee, pull(imported.publicKeyOverride, imported.transportPubkey, 'mainnet'), registeredByRotation], [tee, imported]))
+      .to.deep.equal([tee, imported, registeredByRotation])
+    expect(mergeTsoSigners([], [tee, imported])).to.deep.equal([tee, imported])
+    expect(() => mergeTsoSigners([pull(imported.publicKeyOverride, `03${'88'.repeat(32)}`)], [tee, imported])).to.throw('another key')
   })
 
   it('rejects a stale multi-role CubeSigner configuration', () => {

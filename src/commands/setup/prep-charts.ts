@@ -165,6 +165,26 @@ export function buildFrontendExternalUrlUpdates(
   }
 }
 
+/**
+ * The WP tsoSigners are the attestation registry: rotation registration adds
+ * keys there, and nothing but a retire step removes them. Rebuild the
+ * Correctness (CubeSigner) entry, keep every existing attestation entry (with
+ * the WP network name), and add only imported signers not yet registered.
+ */
+export function mergeTsoSigners(existing: unknown[], built: TsoSignerEntry[]): TsoSignerEntry[] {
+  const kept = (existing as TsoSignerEntry[]).filter(entry => entry?.roles?.includes('Attestation')).map(entry => ({...entry, network: tsoSignerNetwork(entry.network)}))
+  const attestation = [...kept]
+  for (const entry of built.filter(item => item.roles.includes('Attestation'))) {
+    const match = kept.find(item => item.publicKeyOverride?.toLowerCase() === entry.publicKeyOverride.toLowerCase() || (entry.transportPubkey && item.transportPubkey?.toLowerCase() === entry.transportPubkey.toLowerCase()))
+    if (!match) attestation.push(entry)
+    else if (match.publicKeyOverride?.toLowerCase() !== entry.publicKeyOverride.toLowerCase() || match.transportPubkey?.toLowerCase() !== entry.transportPubkey?.toLowerCase()) {
+      throw new Error(`tsoSigners already registers ${entry.publicKeyOverride} or its transport key with another key; reconcile the WP values before preparing charts`)
+    }
+  }
+
+  return [...built.filter(item => !item.roles.includes('Attestation')), ...attestation]
+}
+
 /** Render the configured Reth sequencers as a deduplicated trusted-peers CSV. */
 export function buildRethInitialTrustedPeers(rethSequencerPeers: string[]): string {
   return [...new Set(rethSequencerPeers.map(peer => peer.trim()).filter(Boolean))].join(',')
@@ -2951,10 +2971,11 @@ export default class SetupPrepCharts extends Command {
           updated = true
         }
 
-        // Rebuild all TSO signers so stale roles do not remain. Create the
-        // array when absent: descriptor import must always reach TSO values.
+        // Rebuild the Correctness entry but keep registered attestation keys
+        // (rotation registration adds them here). Create the array when absent:
+        // descriptor import must always reach TSO values.
         const existingSigners = Array.isArray(productionYaml.tsoSigners) ? productionYaml.tsoSigners : []
-        const newSigners = buildTsoSigners(this.dogeConfig)
+        const newSigners = mergeTsoSigners(existingSigners, buildTsoSigners(this.dogeConfig))
         if (JSON.stringify(existingSigners) !== JSON.stringify(newSigners)) {
           productionYaml.tsoSigners = newSigners
           updated = true;
