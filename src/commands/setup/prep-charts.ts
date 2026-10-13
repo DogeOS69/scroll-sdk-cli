@@ -176,7 +176,17 @@ export function buildRethInitialTrustedPeers(rethSequencerPeers: string[]): stri
  * upcoming rotation keys are already registered) dials out to the TSO: pull
  * delivery, no URI, with both descriptor keys pinned.
  */
+/**
+ * WP parses `tsoSigners[].network` as a nintondo Dogecoin `Network`, whose
+ * serde names are lowercase variant names: mainnet is `dogecoin`, not
+ * `mainnet`. Other services keep reading the DogeConfig spelling.
+ */
+export function tsoSignerNetwork(network: string): string {
+  return network === 'mainnet' ? 'dogecoin' : network
+}
+
 export function buildTsoSigners(config: Pick<DogeConfig, 'attestationSigner' | 'cubesigner' | 'network'>): TsoSignerEntry[] {
+  const network = tsoSignerNetwork(config.network)
   const cubesignerRoles = config.cubesigner?.roles || []
   if (cubesignerRoles.length > 1) {
     throw new Error('CubeSigner supports exactly one TEE role and one in-cluster deployment')
@@ -193,7 +203,7 @@ export function buildTsoSigners(config: Pick<DogeConfig, 'attestationSigner' | '
 
     return [{
       delivery: 'push',
-      network: config.network,
+      network,
       publicKeyOverride,
       // TSO's public registration contract calls the TEE signer "Correctness".
       // "Tee" is its internal script role and is intentionally not accepted here.
@@ -204,7 +214,7 @@ export function buildTsoSigners(config: Pick<DogeConfig, 'attestationSigner' | '
   })()
   const attestationSigners: TsoSignerEntry[] = (config.attestationSigner?.external || []).map(signer => ({
     delivery: 'pull',
-    network: config.network,
+    network,
     publicKeyOverride: signer.publicKey,
     roles: ['Attestation'],
     signatureMode: 'ecdsa',

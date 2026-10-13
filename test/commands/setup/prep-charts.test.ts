@@ -46,6 +46,7 @@ import PrepCharts, {
   scrubWithdrawalLegacyProofEnv,
   shouldSkipL2ContractDeploymentBlockUpdate,
   snapshotRethExtraArgs,
+  tsoSignerNetwork,
   validateDogeConfigEthereumDaForPrep,
 } from '../../../src/commands/setup/prep-charts.js'
 import { ensureWithdrawalProofActivationSwitch } from '../../../src/utils/withdrawal-config.js'
@@ -321,6 +322,37 @@ describe('setup prep-charts external attestation signer routing', () => {
       {delivery: 'pull', network: 'testnet', publicKeyOverride: `02${'22'.repeat(32)}`, roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: `03${'33'.repeat(32)}`},
       {delivery: 'pull', network: 'testnet', publicKeyOverride: `02${'44'.repeat(32)}`, roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: `03${'55'.repeat(32)}`},
     ])
+  })
+
+  it('writes the WP network name for mainnet signers (dogecoin, not mainnet)', () => {
+    const signers = buildTsoSigners({
+      attestationSigner: {
+        activeSignerIds: ['partner-a'],
+        external: [{id: 'partner-a', publicKey: `02${'22'.repeat(32)}`, transportPubkey: `03${'33'.repeat(32)}`}],
+        mode: 'external',
+        threshold: 1,
+      },
+      cubesigner: {roles: [{
+        keys: [{
+          key_id: 'Key#tee',
+          key_type: 'Secp256k1',
+          material_id: 'material-0',
+          public_key: 'uncompressed-key',
+          public_key_compressed: `02${'11'.repeat(32)}`,
+          purpose: 'BridgeCorrectness',
+        }],
+        name: 'tee-0',
+        role_id: 'role-0',
+      }]},
+      network: 'mainnet',
+    })
+    expect(signers.map(signer => signer.network)).to.deep.equal(['dogecoin', 'dogecoin'])
+  })
+
+  it('passes testnet and regtest through unchanged', () => {
+    expect(tsoSignerNetwork('testnet')).to.equal('testnet')
+    expect(tsoSignerNetwork('regtest')).to.equal('regtest')
+    expect(tsoSignerNetwork('mainnet')).to.equal('dogecoin')
   })
 
   it('rejects a stale multi-role CubeSigner configuration', () => {
