@@ -1,6 +1,7 @@
 import {keccak256} from 'ethers'
 
 type ObjectValue = Record<string, unknown>
+
 function object(value: unknown): ObjectValue {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid protocol context')
   return value as ObjectValue
@@ -11,8 +12,11 @@ function hex(value: unknown, bytes: number): string {
   return value.replace(/^0x/, '').toLowerCase()
 }
 
-/** Core canonical encoding: BE integers/RPC txid, but consensus-order Dogecoin block hash. */
-export function rotationProtocolOpeningId(context: unknown): string {
+/**
+ * The protocol instance id (`protocol_id`) of a canonical protocol context.
+ * Core canonical encoding: BE integers/RPC txid, but consensus-order Dogecoin block hash.
+ */
+export function protocolOpeningId(context: unknown): string {
   const source = object(context)
   const protocol = object(source.protocol)
   const genesis = object(source.genesis)

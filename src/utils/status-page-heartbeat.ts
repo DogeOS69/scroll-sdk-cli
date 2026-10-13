@@ -62,11 +62,10 @@ export class StatusPageHeartbeat {
     if (result.error || (result.status !== 0 && !(result.status === 128 && result.stderr.includes('not a git repository'))) || result.stdout.trim()) throw new Error('Heartbeat credentials must be in an untracked private directory')
     fs.mkdirSync(this.directory, {mode: 0o700, recursive: true})
     fs.chmodSync(this.directory, 0o700)
-    this.write(path.join(this.directory, '.gitignore'), '*\n')
   }
 
   private checkPaths(): void {
-    for (const file of [path.join(this.root, 'secrets'), this.directory, this.receiptFile, this.secretFile, path.join(this.directory, '.gitignore')]) {
+    for (const file of [path.join(this.root, 'secrets'), this.directory, this.receiptFile, this.secretFile]) {
       try { if (fs.lstatSync(file).isSymbolicLink()) throw new Error('Heartbeat credential paths must not be symbolic links') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     }
   }

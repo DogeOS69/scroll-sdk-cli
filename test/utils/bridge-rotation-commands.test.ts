@@ -10,7 +10,8 @@ import path from 'node:path'
 import type {RotateKeyIntent, RotationCluster} from '../../src/utils/rotation-cluster.js'
 
 import {type RotateKeyStatus, type RotationExport, assertDeploymentIdentity, assertPredecessor, assertTransportKeys, validateRotationExport} from '../../src/utils/rotation-export.js'
-import {WP_VALUES_FILE, assertIntentMatches, mergeRotationSigners, onlineCheck, parseLastPolls, registerRotation, sendRotation} from '../../src/utils/rotation-operations.js'
+import {assertIntentMatches, mergeRotationSigners, onlineCheck, registerRotation, sendRotation} from '../../src/utils/rotation-operations.js'
+import {WP_VALUES_FILE, parseLastPolls} from '../../src/utils/tso-signer-polls.js'
 
 // The governance portal's export goldens (dogeos-gov-portal #125, vectors/rotation-export/).
 const fixture = (name: string) => JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), '../fixtures/rotation-export', name), 'utf8'))

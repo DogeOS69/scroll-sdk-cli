@@ -10,8 +10,7 @@ import type {RotateKeyStatus, RotationExport} from './rotation-export.js'
 
 import {assertDeploymentIdentity, assertPredecessor, rotationSigners} from './rotation-export.js'
 import {tsoSignerNetwork} from './tso-signer-network.js'
-
-export const WP_VALUES_FILE = 'values/withdrawal-processor-production.yaml'
+import {WP_VALUES_FILE, isFreshPoll, parseLastPolls} from './tso-signer-polls.js'
 
 /** Runs an external tool (helm, make, kubectl) with extra env; injectable for tests. Throws on failure. */
 export type Run = (command: string, args: string[], cwd: string, env: Record<string, string>) => string
@@ -114,19 +113,6 @@ export async function registerRotation(options: RegisterOptions): Promise<Regist
 
 // ---------------------------------------------------------------- online
 
-const POLL_METRIC = /^tso_core_signer_last_poll_timestamp_seconds{signer_pubkey="([\dA-Fa-f]+)"}\s+(\S+)\s*$/
-
-/** `tso_core_signer_last_poll_timestamp_seconds{signer_pubkey}` samples, by lowercase key. */
-export function parseLastPolls(metrics: string): Map<string, number> {
-  const polls = new Map<string, number>()
-  for (const line of metrics.split('\n')) {
-    const match = POLL_METRIC.exec(line.trim())
-    if (match) polls.set(match[1].toLowerCase(), Number(match[2]))
-  }
-
-  return polls
-}
-
 /** What a passing online check does not prove; printed with every online result. */
 export const ONLINE_CHECK_LIMITS = 'Point-in-time: each key made a transport-key-authenticated TSO poll in the last 60 s. It does not prove the signer release, enforce vs observe mode, RPC or key-backend health, that old signers loaded the allowlist entry, or that the new set can sign. If the WP defers dispatch, the handoff happens later without another check.'
 
@@ -143,8 +129,8 @@ export interface OnlineResult {
  */
 export function onlineCheck(rotation: RotationExport, status: RotateKeyStatus, polls: Map<string, number>, nowSeconds: number): OnlineResult {
   const entry = (publicKey: string, set: 'current' | 'target') => {
-    const lastPoll = polls.get(publicKey.toLowerCase()) ?? null
-    return {fresh: lastPoll !== null && lastPoll >= nowSeconds - 60 && lastPoll <= nowSeconds + 5, lastPoll, publicKey: publicKey.toLowerCase(), set}
+    const lastPoll = polls.get(publicKey.toLowerCase())
+    return {fresh: isFreshPoll(lastPoll, nowSeconds), lastPoll: lastPoll ?? null, publicKey: publicKey.toLowerCase(), set}
   }
 
   const current = status.current_attestation.pubkeys.map(key => entry(key, 'current'))

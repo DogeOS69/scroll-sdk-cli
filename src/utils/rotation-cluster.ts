@@ -5,6 +5,8 @@ import path from 'node:path'
 
 import type {RotateKeyRequest, RotateKeyStatus} from './rotation-export.js'
 
+import {WP_VALUES_FILE} from './tso-signer-polls.js'
+
 /** WP `GET /protocol-actions/rotate-key/intents/{key}` (dogeos-core #1535). */
 export interface RotateKeyIntent {
   activation_wf_tx_number: null | number
@@ -101,7 +103,7 @@ export class RotationCluster {
 /** The deployment directory: `--dir` itself, or its `runtime/` or `deployment/` child, holding the WP values. */
 export function deploymentDirectory(root: string): string {
   const resolved = path.resolve(root)
-  const match = [resolved, path.join(resolved, 'runtime'), path.join(resolved, 'deployment')].find(directory => fs.existsSync(path.join(directory, 'values/withdrawal-processor-production.yaml')))
+  const match = [resolved, path.join(resolved, 'runtime'), path.join(resolved, 'deployment')].find(directory => fs.existsSync(path.join(directory, WP_VALUES_FILE)))
   if (!match) throw new Error('No deployment found: expected values/withdrawal-processor-production.yaml under --dir, --dir/runtime or --dir/deployment')
   return match
 }

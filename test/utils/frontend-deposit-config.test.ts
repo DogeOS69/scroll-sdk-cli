@@ -10,9 +10,9 @@ import path from 'node:path'
 import sinon from 'sinon'
 
 import PrepCharts from '../../src/commands/setup/prep-charts.js'
-import {rotationProtocolOpeningId} from '../../src/utils/bridge-rotation-runtime.js'
 import {FRONTEND_COMMAND, frontendDepositEnv, mergeFrontendConfigDocuments, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../src/utils/frontend-deposit-config.js'
 import {syntheticMockProofIdentities} from '../../src/utils/proof-materials.js'
+import {protocolOpeningId} from '../../src/utils/protocol-opening-id.js'
 
 const hex = (n: string, size = 32) => `0x${n.repeat(size)}`
 const context = {
@@ -64,7 +64,7 @@ describe('frontend dynamic deposit configuration', () => {
 
   it('uses protocol identity and the bound protocol genesis hash, not the EVM state root', () => {
     const identity = readFrontendDepositIdentity(root, {l2ChainId: 534_352, required: true})!
-    expect(identity).to.deep.equal({genesisStateHash: genesisHash, protocolId: `0x${rotationProtocolOpeningId(context)}`})
+    expect(identity).to.deep.equal({genesisStateHash: genesisHash, protocolId: `0x${protocolOpeningId(context)}`})
     expect(identity.genesisStateHash).not.eq(context.genesis.genesis_state_root)
     const values: any = {scrollConfig: 'REACT_APP_DOGE_BRIDGE_ADDRESS = "old-address"\nREACT_APP_MOAT_ADDRESS = "keep"\n'}
     reconcileFrontendConfig(values, frontendDepositEnv(identity))

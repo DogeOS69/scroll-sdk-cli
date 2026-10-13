@@ -8,7 +8,6 @@ import type {ProverWorkerContractV1} from './proof-topology-compiler.js'
 
 export const COMPILED_PROVER_WORKER_BUNDLE_MANIFEST = 'bundle-manifest.json'
 export const COMPILED_PROVER_WORKER_CONTRACT = 'prover-worker-v1.json'
-export const COMPILED_PROVER_WORKER_GITIGNORE = '.gitignore'
 export const COMPILED_PROVER_WORKER_LAUNCHER = 'prover-worker-compose'
 export const COMPILED_PROVER_WORKER_TOKEN_FILE = 'prover-worker.token'
 export const COMPILED_PROVER_WORKER_PROTOCOL_CONTEXT = 'protocol_context.json'
@@ -460,15 +459,6 @@ export function writeCompiledProverWorkerBundle(
   ].join('\n')
   fs.writeFileSync(envPath, env)
 
-  // The credential is hydrated after deterministic generation. Keep it out of
-  // source control even when operators check in the generated bundle for
-  // review or copy it through a deployment repository.
-  const gitignorePath = path.join(bundleDir, COMPILED_PROVER_WORKER_GITIGNORE)
-  fs.writeFileSync(
-    gitignorePath,
-    `${COMPILED_PROVER_WORKER_TOKEN_FILE}\n.runtime/\n`,
-  )
-
   const copiedContract = path.join(bundleDir, COMPILED_PROVER_WORKER_CONTRACT)
   fs.copyFileSync(contractFile, copiedContract)
   const copiedProtocolContext = path.join(bundleDir, COMPILED_PROVER_WORKER_PROTOCOL_CONTEXT)
@@ -522,7 +512,6 @@ export function writeCompiledProverWorkerBundle(
           composePath,
           launcherPath,
           envPath,
-          gitignorePath,
           copiedContract,
           copiedProtocolContext,
           ...filesRecursively(materialsTarget).map(file => file.absolute),

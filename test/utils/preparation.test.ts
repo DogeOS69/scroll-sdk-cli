@@ -18,7 +18,7 @@ import type {Rpc} from '../../src/utils/preparation-funding.js'
 import {generateSetupDefaultsToml} from '../../src/utils/deployment-spec-generator.js'
 import {BRIDGE_FUNDING_MARKER, inspectFunding, prepareEthereumAnchor, publicKeyAddress, verifyDogecoinNetwork} from '../../src/utils/preparation-funding.js'
 import {AwaitingInput, loadPreparationEnv} from '../../src/utils/preparation-io.js'
-import {applyPreparation, createPreparationPlan, preparationSteps, validatePreparation} from '../../src/utils/preparation-plan.js'
+import {type PreparationPlan, applyPreparation, createPreparationPlan, migrateSignerHandoffSteps, preparationSteps, validatePreparation} from '../../src/utils/preparation-plan.js'
 import {resolvePreparationProofRelease} from '../../src/utils/preparation-release.js'
 import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
 import {buildProofAwsConfig, writeProofAwsConfig} from '../../src/utils/proof-aws-config.js'
@@ -113,8 +113,9 @@ describe('resumable preparation plan', () => {
         fs.writeFileSync(path.join(deployment, '.data/doge-config.toml'), 'network = "testnet"\n')
         fs.writeFileSync(path.join(deployment, '.data/genesis.json'), '{"pinned":true}')
         fs.writeFileSync(path.join(deployment, '.data/proof-program-publication-v1.json'), '{"testEvidence":true}')
-        fs.mkdirSync(path.join(deployment, 'signer-policy-bundle'))
-        fs.writeFileSync(path.join(deployment, 'signer-policy-bundle/signer-policy.json'), '{"oldVersion":true}')
+        // A published kit is immutable and content-addressed; refresh leaves it in place.
+        fs.mkdirSync(path.join(deployment, 'deployment-kit-k-0123456789ab'))
+        fs.writeFileSync(path.join(deployment, 'deployment-kit-k-0123456789ab/deployment-kit.json'), '{"kept":true}')
       }
     }}
     await applyPreparation(deployment, runner)
@@ -131,8 +132,7 @@ describe('resumable preparation plan', () => {
     const history = path.join(deployment, '.scrollsdk/runtime-refresh')
     const saved = path.join(history, fs.readdirSync(history)[0], 'proof-program-publication-v1.json')
     expect(fs.readFileSync(saved, 'utf8')).to.equal('{"testEvidence":true}')
-    expect(fs.existsSync(path.join(deployment, 'signer-policy-bundle'))).to.equal(false)
-    expect(fs.readFileSync(path.join(path.dirname(saved), 'signer-policy-bundle/signer-policy.json'), 'utf8')).to.equal('{"oldVersion":true}')
+    expect(fs.readFileSync(path.join(deployment, 'deployment-kit-k-0123456789ab/deployment-kit.json'), 'utf8')).to.equal('{"kept":true}')
     fs.appendFileSync(path.join(deployment, '.data/genesis.json'), ' ')
     await rejected(() => applyPreparation(deployment, runner, undefined, {refreshRuntime: true}), 'outside the workflow')
   })
@@ -148,7 +148,7 @@ describe('resumable preparation plan', () => {
     const runner = {async run(step: {id: string}) {
       if (step.id === 'bootstrap') {
         fs.mkdirSync(path.join(deployment, '.data'), {recursive: true})
-        fs.writeFileSync(path.join(deployment, '.data/doge-config.toml'), 'deployment_name = "pinned-name"\n[kubernetes]\nserviceName = "old-node"\n[attestationSigner.policyValidation]\nstale = true\n')
+        fs.writeFileSync(path.join(deployment, '.data/doge-config.toml'), 'deployment_name = "pinned-name"\n[kubernetes]\nserviceName = "old-node"\n[attestationSigner.deploymentKit]\nversion = "k-0123456789ab"\n')
       }
     }}
     await applyPreparation(deployment, runner)
@@ -167,7 +167,7 @@ describe('resumable preparation plan', () => {
       expect(config.kubernetes).to.deep.equal(document.dogecoin.kubernetes)
       expect(config.deployment_name).to.equal('pinned-name')
       expect(config.dogecoinClusterRpc.username).to.equal('NONFUNCTIONAL_TEST_USER')
-      expect(config.attestationSigner).not.to.have.property('policyValidation')
+      expect(config.attestationSigner).not.to.have.property('deploymentKit')
       const before = fs.readFileSync(configFile)
       document.dogecoin.network = 'unsupported-chain'; fs.writeFileSync(routing, yaml.dump(document))
       await rejected(() => applyPreparation(deployment, runner, undefined, {dogecoinRoutingSpec: routing, refreshRuntime: true}), 'planned Dogecoin network')
@@ -183,7 +183,7 @@ describe('resumable preparation plan', () => {
     const plan = await makePlan()
     expect(fs.statSync(deployment).mode.toString(8).slice(-3)).to.equal('700')
     expect(fs.existsSync(path.join(deployment, 'config.toml'))).to.equal(false)
-    expect(fs.readFileSync(path.join(deployment, '.gitignore'), 'utf8')).to.include('/withdrawal-processor/\n')
+    expect(fs.existsSync(path.join(deployment, '.gitignore'))).to.equal(false)
     expect(fs.statSync(path.join(deployment, '.scrollsdk/intent.json')).mode.toString(8).slice(-3)).to.equal('600')
     const calls: string[] = []; let ready = false
     const runner = {async run(step: any) {calls.push(step.id); if (step.id === 'helper-funding' && !ready) throw new AwaitingInput({message: 'fund helper'}); fs.mkdirSync(path.join(deployment, 'values'), {recursive: true}); fs.writeFileSync(path.join(deployment, 'values/state.yaml'), step.id)}}
@@ -320,6 +320,100 @@ describe('resumable preparation plan', () => {
     await rejected(() => resolvePreparationProofRelease(spec, deployment), 'digest mismatch')
   })
 
+  /** Rewrite the fresh plan as an earlier CLI froze it: the retired signer-policy step after secrets. */
+  function freezeOldPlan(completed: string[]): {old: PreparationPlan; statePath: string} {
+    const planPath = path.join(deployment, '.scrollsdk/plan.json')
+    const statePath = path.join(deployment, '.scrollsdk/state.json')
+    const plan = JSON.parse(fs.readFileSync(planPath, 'utf8')) as PreparationPlan
+    const steps = [...plan.steps]
+    steps.splice(steps.findIndex(step => step.id === 'secrets') + 1, 0, {effect: 'local', id: 'signer-policy', retry: 'safe', title: 'Export partner signer policy bundle'})
+    const body: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, steps}
+    delete body.id
+    const old = {...body, id: createHash('sha256').update(JSON.stringify(body)).digest('hex')}
+    fs.writeFileSync(planPath, JSON.stringify(old, null, 2) + '\n')
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+    fs.writeFileSync(statePath, JSON.stringify({...state, planId: old.id, steps: Object.fromEntries(completed.map(id => [id, 'completed']))}, null, 2) + '\n')
+    return {old, statePath}
+  }
+
+  it('migrates a frozen plan with the retired signer-policy steps in place, keeping completed irreversible steps', async () => {
+    const fresh = await makePlan()
+    const {old, statePath} = freezeOldPlan(['bootstrap', 'identities', 'genesis', 'bridge-prepare', 'helper-setup', 'secrets', 'signer-policy'])
+    const calls: string[] = []
+    expect((await applyPreparation(deployment, {async run(step) {calls.push(step.id)}})).status).to.equal('prepared')
+    // Irreversible chain steps never rerun; only steps after the completed prefix run.
+    for (const id of ['bootstrap', 'identities', 'genesis', 'bridge-prepare', 'helper-setup', 'secrets', 'signer-policy']) expect(calls).not.to.include(id)
+    const migrated = JSON.parse(fs.readFileSync(path.join(deployment, '.scrollsdk/plan.json'), 'utf8'))
+    expect(migrated.id).to.equal(fresh.id)
+    expect(migrated.id).to.not.equal(old.id)
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+    expect(state.planId).to.equal(fresh.id)
+    expect(state.steps).to.not.have.property('signer-policy')
+    expect(state.steps['helper-setup']).to.equal('completed')
+  })
+
+  it('recovers a migration interrupted after the state was written', async () => {
+    const fresh = await makePlan()
+    const {statePath} = freezeOldPlan(['bootstrap'])
+    // The state already moved to the migrated id; plan.json is still the old one.
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+    fs.writeFileSync(statePath, JSON.stringify({...state, planId: fresh.id}))
+    expect((await applyPreparation(deployment, {async run() {}})).status).to.equal('prepared')
+    expect(JSON.parse(fs.readFileSync(path.join(deployment, '.scrollsdk/plan.json'), 'utf8')).id).to.equal(fresh.id)
+  })
+
+  it('refuses an unrelated workflow change without migrating anything', async () => {
+    await makePlan()
+    const {old, statePath} = freezeOldPlan(['bootstrap'])
+    const planPath = path.join(deployment, '.scrollsdk/plan.json')
+    const body: {id?: string} & Omit<PreparationPlan, 'id'> = {...old, steps: old.steps.filter(step => step.id !== 'genesis')}
+    delete body.id
+    fs.writeFileSync(planPath, JSON.stringify({...body, id: createHash('sha256').update(JSON.stringify(body)).digest('hex')}))
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+    fs.writeFileSync(statePath, JSON.stringify({...state, planId: createHash('sha256').update(JSON.stringify(body)).digest('hex')}))
+    const before = [fs.readFileSync(planPath, 'utf8'), fs.readFileSync(statePath, 'utf8')]
+    await rejected(() => applyPreparation(deployment, {async run() {throw new Error('must not run')}}), 'CLI workflow changed')
+    expect([fs.readFileSync(planPath, 'utf8'), fs.readFileSync(statePath, 'utf8')]).to.deep.equal(before)
+  })
+
+  it('migrates a completed enforcing plan and then runs only the two deployment-kit steps', async () => {
+    await makePlan()
+    // Freeze an enforcing plan as an earlier CLI wrote it, with every step completed.
+    const intentPath = path.join(deployment, '.scrollsdk/intent.json')
+    const spec = JSON.parse(fs.readFileSync(intentPath, 'utf8')) as DeploymentSpec
+    spec.proofTopology!.enforcement = 'enforce'
+    const intent = JSON.stringify(spec, null, 2) + '\n'
+    fs.writeFileSync(intentPath, intent)
+    const current = preparationSteps(spec)
+    const index = current.findIndex(step => step.id === 'deployment-kit')
+    const retired = ['signer-policy', 'signer-receipts', 'charts-validated'].map(id => ({effect: 'local' as const, id, retry: 'safe' as const, title: id}))
+    const planPath = path.join(deployment, '.scrollsdk/plan.json')
+    const plan = JSON.parse(fs.readFileSync(planPath, 'utf8')) as PreparationPlan
+    const body: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, specHash: createHash('sha256').update(intent).digest('hex'), steps: [...current.slice(0, index), ...retired, ...current.slice(index + 2)]}
+    delete body.id
+    const old = {...body, id: createHash('sha256').update(JSON.stringify(body)).digest('hex')}
+    fs.writeFileSync(planPath, JSON.stringify(old))
+    const statePath = path.join(deployment, '.scrollsdk/state.json')
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+    fs.writeFileSync(statePath, JSON.stringify({...state, planId: old.id, status: 'prepared', steps: Object.fromEntries(old.steps.map(step => [step.id, 'completed']))}))
+    const calls: string[] = []
+    expect((await applyPreparation(deployment, {async run(step) {calls.push(step.id)}})).status).to.equal('prepared')
+    expect(calls).to.deep.equal(['deployment-kit', 'deployment-kit-published'])
+    const migrated = JSON.parse(fs.readFileSync(planPath, 'utf8')) as PreparationPlan
+    expect(migrated.steps).to.deep.equal(current)
+    expect(JSON.parse(fs.readFileSync(statePath, 'utf8')).planId).to.equal(migrated.id)
+  })
+
+  it('maps an enforcing plan\'s retired steps to the two deployment-kit steps where signer-policy was', () => {
+    const spec = fixture()
+    spec.proofTopology!.enforcement = 'enforce'
+    const steps = preparationSteps(spec)
+    const index = steps.findIndex(step => step.id === 'deployment-kit')
+    const oldSteps = [...steps.slice(0, index), {effect: 'local' as const, id: 'signer-policy', retry: 'safe' as const, title: 'x'}, {effect: 'local' as const, id: 'signer-receipts', retry: 'safe' as const, title: 'x'}, {effect: 'local' as const, id: 'charts-validated', retry: 'safe' as const, title: 'x'}, ...steps.slice(index + 2)]
+    const plan = {deploymentName: 'x', id: 'old', schema: 'scrollsdk/preparation/v1' as const, sdkDirectory: '/sdk', specHash: 'h', steps: oldSteps}
+    expect(migrateSignerHandoffSteps(plan, spec).steps).to.deep.equal(steps)
+  })
+
   it('never automatically replays a failed broadcast', async () => {
     await makePlan(); let broadcasts = 0
     const runner = {async run(step: any) {if (step.id === 'helper-setup') {broadcasts++; throw new Error('connection lost after sending')}}}
@@ -385,10 +479,10 @@ describe('resumable preparation plan', () => {
     spec.proofTopology!.enforcement = 'enforce'
     spec.preparation!.proofPublication = {}
     const steps = preparationSteps(spec)
-    expect(steps.map(step => step.id).slice(-4)).to.deep.equal(['signer-policy', 'signer-receipts', 'charts-validated', 'proof-check'])
+    expect(steps.map(step => step.id).slice(-4)).to.deep.equal(['secrets', 'deployment-kit', 'deployment-kit-published', 'proof-check'])
     fs.mkdirSync(path.join(deployment, '.data'), {recursive: true})
     fs.writeFileSync(path.join(deployment, '.data/proof-materials-v1.json'), '{}')
-    await runner.run(steps.find(step => step.id === 'charts-validated')!, spec, deployment, plan)
+    await runner.run(steps.find(step => step.id === 'charts-published')!, spec, deployment, plan)
     expect(calls[1]).to.include.members(['prep-charts', '--proof-materials-receipt', '.data/proof-materials-v1.json', '--proof-publication-receipt', '.data/proof-program-publication-v1.json'])
   })
 

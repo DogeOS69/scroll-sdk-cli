@@ -189,8 +189,9 @@ gcp` selects the exact provider set; without this option non-interactive imports
 retain previous providers and add supplied ones. Interactive mode asks for the
 provider set. Deselecting a provider does not terminate fleets or GPU instances.
 
-The importer adds `/.data/dstack/` and `/secrets/` to the deployment `.gitignore`.
-Do not commit source credential files either. It refuses corrupt state and will
+The importer does not create or modify `.gitignore`; operators manage repository
+ignore rules. Keep credential state, generated Secrets and source credential
+files out of version control. It refuses corrupt state and will
 not generate new identity keys when local controller Secret outputs exist but
 state has been lost. For an existing controller, restore its matching private
 state; this command is not an importer for arbitrary existing dstack databases

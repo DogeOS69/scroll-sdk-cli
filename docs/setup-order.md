@@ -103,7 +103,7 @@ scrollsdk setup gen-l2-artifacts
 ```
 
 The generator, deployer and verification images use `gen-configs-<revision>`,
-`deploy-<revision>` and `verify-<revision>` with the same approved release tag or full contracts revision. The default is `dogeos-v0.3.0-rc.5`.
+`deploy-<revision>` and `verify-<revision>` with the same approved release tag or full contracts revision. The default is `dogeos-v0.3.0-rc.6`.
 Choose a new deployment salt for a new instance. Owner and index-0 Reth signer checks must pass first. This produces
 `values/genesis.yaml`, which Bridge preparation consumes.
 
@@ -192,11 +192,14 @@ After all required Bridge and service signer inputs are ready:
 ```bash
 scrollsdk setup prep-charts
 scrollsdk setup gen-secrets
-scrollsdk setup export-signer-policy
+# enforcing (active/real/enforce) deployments only:
+scrollsdk setup export-deployment-kit
+# publish deployment-kit-<version>/ unchanged at an immutable https URL, then:
+scrollsdk setup export-deployment-kit --published-url <URL>
 scrollsdk setup proof-config-check
 ```
 
-Wait for `prep-charts` to finish before exporting the signer policy. If ingress
+Wait for `prep-charts` to finish before exporting the deployment kit. If ingress
 TLS is needed, run `scrollsdk setup tls` against the generated values and review
 the final configuration before deployment. TSO and active Proof Coordinator
 ingress use `TSO_HOST` and `PROOF_COORDINATOR_HOST`; see the
@@ -256,8 +259,8 @@ separate requirement or any production signer evidence requirement.
 ## CubeSigner Wasm preparation and attachment
 
 When the correctness signer uses the hosted verifier policy, generate an actual
-Wasm after Bridge preparation. `export-signer-policy` generates the partner
-attestation-signer handoff; it does not compile this CubeSigner Wasm.
+Wasm after Bridge preparation. `export-deployment-kit` generates the signer
+deployment kit; it does not compile this CubeSigner Wasm.
 
 ```bash
 scrollsdk setup cubesigner-policy build \
@@ -343,6 +346,14 @@ procedure: core configuration and nodes, contracts, dependent services, and
 partner signer handoff. Complete the signer handoff before enabling Withdrawal
 Processor proposals for the new protocol. Mock proof generation is internal to
 Proof Coordinator; it does not require a separate mock worker.
+
+For an enforcing deployment, the deployment is **not accepted until**
+`scrollsdk setup proof-config-check --live --kube-context <context> --namespace
+<namespace>` passes after the rollout. It requires the published kit and a fresh
+authenticated TSO poll (within the last 60 seconds) from every Attestation
+signer in the WP `tsoSigners`. A failure means liveness, not safety: an
+enforcing WP with offline signers stalls signing; it never signs anything
+wrong.
 
 Where genesis hold is enabled, release it with the environment's `start-l1-sync`
 operation after service/signer readiness, then verify synchronization, L2

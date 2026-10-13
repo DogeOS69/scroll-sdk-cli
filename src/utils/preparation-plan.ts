@@ -78,10 +78,9 @@ export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
   }
 
   add('secrets', 'Generate private runtime Secrets')
-  add('signer-policy', 'Export partner signer policy bundle')
   if (spec.proofTopology?.enforcement === 'enforce') {
-    add('signer-receipts', 'Wait for and validate partner policy receipts')
-    add('charts-validated', 'Regenerate configuration with validated partner evidence')
+    add('deployment-kit', 'Export the signer deployment kit')
+    add('deployment-kit-published', 'Wait for the deployment kit publication record')
   }
 
   add('proof-check', 'Validate proof configuration and required evidence')
@@ -201,7 +200,8 @@ function fingerprint(root: string): Record<string, string> {
     else throw new Error(`Unsupported managed artifact: ${relative}`)
   }
 
-  for (const name of ['config.toml', 'config-contracts.toml', 'Makefile', '.data', 'values', 'secrets', 'withdrawal-processor', 'proof-coordinator', 'eth-da-submitter', 'signer-policy-bundle']) visit(name)
+  const kits = fs.readdirSync(root).filter(name => DEPLOYMENT_KIT_DIRECTORY.test(name)).sort()
+  for (const name of ['config.toml', 'config-contracts.toml', 'Makefile', '.data', 'values', 'secrets', 'withdrawal-processor', 'proof-coordinator', 'eth-da-submitter', ...kits]) visit(name)
   return files
 }
 
@@ -236,7 +236,6 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   if (fs.existsSync(root) && fs.readdirSync(root).length > 0) throw new Error('setup plan requires an empty output directory')
   fs.mkdirSync(root, {mode: 0o700, recursive: true})
   fs.chmodSync(root, 0o700)
-  privateWrite(path.join(root, '.gitignore'), '/.scrollsdk/\n/.data/\n/secrets/\n/config.toml\n/config-contracts.toml\n/values/\n/signer-policy-bundle/\n/withdrawal-processor/\n/proof-coordinator/\n/eth-da-submitter/\n')
   privateWrite(path.join(root, '.scrollsdkignore'), '.scrollsdk/\n.data/contracts-build/\n')
   privateWrite(path.join(directory, 'intent.json'), specText)
   writeJson(path.join(directory, 'plan.json'), plan)
@@ -244,28 +243,57 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   return plan
 }
 
+const DEPLOYMENT_KIT_DIRECTORY = /^deployment-kit-k-[\da-f]{12}$/
+/** Steps of the retired signer-policy bundle and partner receipts. */
+const SIGNER_HANDOFF_STEPS = new Set(['charts-validated', 'signer-policy', 'signer-receipts'])
+
+/**
+ * Plans frozen by an earlier CLI listed the retired signer-policy steps. Replace
+ * only those IDs, in place: an enforcing plan gets the two deployment-kit steps
+ * where `signer-policy` was; everything else is untouched.
+ */
+export function migrateSignerHandoffSteps(plan: PreparationPlan, spec: DeploymentSpec): PreparationPlan {
+  if (!plan.steps.some(step => SIGNER_HANDOFF_STEPS.has(step.id))) return plan
+  const kitSteps = preparationSteps(spec).filter(step => step.id === 'deployment-kit' || step.id === 'deployment-kit-published')
+  const steps = plan.steps.flatMap(step => step.id === 'signer-policy' ? kitSteps : SIGNER_HANDOFF_STEPS.has(step.id) ? [] : [step])
+  const body: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, steps}
+  delete body.id
+  return {...body, id: digest(JSON.stringify(body))}
+}
+
 export interface PreparationRunner {run(step: PreparationStep, spec: DeploymentSpec, root: string, plan: PreparationPlan): Promise<void>}
 export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}, options: {dogecoinRoutingSpec?: string; refreshRuntime?: boolean} = {}): Promise<PreparationState> {
   if (options.dogecoinRoutingSpec && !options.refreshRuntime) throw new Error('Dogecoin routing updates require --refresh-runtime')
   const root = fs.realpathSync(rootInput)
   const directory = localPath(root, WORKFLOW_DIR)
-  const plan = JSON.parse(fs.readFileSync(localPath(root, `${WORKFLOW_DIR}/plan.json`), 'utf8')) as PreparationPlan
+  let plan = JSON.parse(fs.readFileSync(localPath(root, `${WORKFLOW_DIR}/plan.json`), 'utf8')) as PreparationPlan
   const text = fs.readFileSync(localPath(root, `${WORKFLOW_DIR}/intent.json`), 'utf8')
   const {id, ...body} = plan
   if (plan.schema !== 'scrollsdk/preparation/v1' || digest(JSON.stringify(body)) !== id || digest(text) !== plan.specHash) throw new Error('Preparation plan or frozen intent changed')
   loadPreparationEnv(plan.envFile)
   const spec = JSON.parse(text) as DeploymentSpec
   validatePreparation(spec)
-  if (JSON.stringify(preparationSteps(spec)) !== JSON.stringify(plan.steps)) throw new Error('CLI workflow changed; this plan requires its original CLI version')
+  const migrated = migrateSignerHandoffSteps(plan, spec)
+  if (JSON.stringify(preparationSteps(spec)) !== JSON.stringify(migrated.steps)) throw new Error('CLI workflow changed; this plan requires its original CLI version')
   const statePath = localPath(root, `${WORKFLOW_DIR}/state.json`)
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as PreparationState
-  if (state.planId !== id) throw new Error('Workflow state does not match plan')
+  // A migration interrupted after writing state.json leaves state on the migrated id.
+  if (state.planId !== id && state.planId !== migrated.id) throw new Error('Workflow state does not match plan')
   const lock = path.join(directory, 'apply.lock')
   // Never steal an ambiguous lock. An interrupted process leaves an explicit recovery record.
   let fd: number
   try {fd = fs.openSync(lock, 'wx', 0o600)} catch {throw new Error('Another apply owns .scrollsdk/apply.lock; if interrupted, verify its recorded host/PID is no longer running before removing that lock')}
   fs.writeFileSync(fd, JSON.stringify({host: os.hostname(), pid: process.pid})); fs.closeSync(fd)
   try {
+    if (migrated.id !== id) {
+      // State first, then the plan: a crash between them is recovered on the next run.
+      for (const step of SIGNER_HANDOFF_STEPS) delete state.steps[step]
+      state.planId = migrated.id
+      writeJson(statePath, state)
+      writeJson(localPath(root, `${WORKFLOW_DIR}/plan.json`), migrated)
+      plan = migrated
+    }
+
     for (const [file, hash] of Object.entries(state.files)) if (!fs.existsSync(localPath(root, file)) || digest(fs.readFileSync(localPath(root, file))) !== hash) throw new Error(`Prepared artifact changed outside the workflow: ${file}`)
     if (options.refreshRuntime) {
       refreshPreparationRuntime(root, plan, state, spec, options.dogecoinRoutingSpec)
