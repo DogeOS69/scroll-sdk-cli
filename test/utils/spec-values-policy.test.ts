@@ -127,7 +127,7 @@ describe('spec values runtime policy across entry points', () => {
     }
   })
 
-  for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`reconciles the environment pending blob cap through ${mode}`, async () => {
+  for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`reconciles the Ethereum DA chain pending blob cap through ${mode}`, async () => {
     const key = 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS'
     const template = path.join(sdk, 'examples/values/eth-da-submitter-production.yaml')
     const values = yaml.load(fs.readFileSync(template, 'utf8')) as any
@@ -137,6 +137,11 @@ describe('spec values runtime policy across entry points', () => {
     await run(mode, directory, '--sdk-dir', sdk)
     expect(read(directory, 'eth-da-submitter').configMaps.env.data[key]).to.equal('10')
     spec.metadata.environment = 'mainnet'
+    await run(mode, directory, '--force')
+    expect(read(directory, 'eth-da-submitter').configMaps.env.data[key]).to.equal('10')
+    spec.metadata.environment = 'devnet'
+    spec.ethereumDa!.chain = 'mainnet'
+    spec.ethereumDa!.chainId = 1
     await run(mode, directory, '--force')
     expect(read(directory, 'eth-da-submitter').configMaps.env.data[key]).to.equal('8')
     spec.ethereumDa!.publish = {maxPendingBlobTxs: 12}

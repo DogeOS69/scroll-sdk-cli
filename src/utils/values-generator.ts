@@ -258,7 +258,7 @@ function buildEthDaSubmitterPublishEnv(spec: DeploymentSpec): Record<string, str
   addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_BATCH_WAIT', publish.maxBatchWait)
   addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_BLOBS_PER_TX', publish.maxBlobsPerTx)
   addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_LIVENESS_DELAY', publish.maxLivenessDelay)
-  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS', publish.maxPendingBlobTxs ?? defaultMaxPendingBlobTxs(spec.metadata.environment))
+  addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS', publish.maxPendingBlobTxs ?? defaultMaxPendingBlobTxs(getEthereumDaChain(spec)))
   addStringEnvIfDefined(env, 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__TARGET_BLOBS_PER_TX', publish.targetBlobsPerTx)
 
   return env

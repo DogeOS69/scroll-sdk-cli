@@ -1248,24 +1248,29 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateDogeConfigToml', () => {
-    for (const [environment, expected] of [['mainnet', 8], ['testnet', 10], ['devnet', 10]] as const) {
-      it(`uses the ${environment} pending blob cap in both persisted config and values`, () => {
-        const spec = createMinimalSpec();
-        spec.metadata.environment = environment;
-        // A mainnet RPC can be used on a non-mainnet deployment; it must not
-        // select the production cap on its own.
-        spec.ethereumDa = {...spec.ethereumDa, chain: 'mainnet'};
-        const config = toml.parse(generateDogeConfigToml(spec)) as any;
-        const values = yaml.load(generateValuesFiles(spec)['eth-da-submitter-production.yaml']) as any;
-        expect(config.ethereumDa.publish.maxPendingBlobTxs).to.equal(expected);
-        expect(values.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS).to.equal(String(expected));
+    for (const environment of ['mainnet', 'testnet', 'devnet'] as const) {
+      for (const chain of ['mainnet', 'sepolia', 'devnet', undefined] as const) {
+        const expected = chain === 'mainnet' || (chain === undefined && environment === 'mainnet') ? 8 : 10;
+        it(`uses the ${chain ?? 'default'} DA chain pending blob cap for a ${environment} deployment`, () => {
+          const spec = createMinimalSpec();
+          spec.metadata.environment = environment;
+          spec.ethereumDa = {
+            ...spec.ethereumDa,
+            chain,
+            chainId: chain === 'mainnet' ? 1 : chain === 'sepolia' ? 11_155_111 : chain === 'devnet' ? 32_382 : undefined,
+          };
+          const config = toml.parse(generateDogeConfigToml(spec)) as any;
+          const values = yaml.load(generateValuesFiles(spec)['eth-da-submitter-production.yaml']) as any;
+          expect(config.ethereumDa.publish.maxPendingBlobTxs).to.equal(expected);
+          expect(values.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS).to.equal(String(expected));
 
-        spec.ethereumDa.publish = {maxBatchWait: '30m', maxPendingBlobTxs: 12};
-        const overridden = toml.parse(generateDogeConfigToml(spec)) as any;
-        const overriddenValues = yaml.load(generateValuesFiles(spec)['eth-da-submitter-production.yaml']) as any;
-        expect(overridden.ethereumDa.publish).to.include({maxBatchWait: '30m', maxPendingBlobTxs: 12});
-        expect(overriddenValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS).to.equal('12');
-      });
+          spec.ethereumDa.publish = {maxBatchWait: '30m', maxPendingBlobTxs: 12};
+          const overridden = toml.parse(generateDogeConfigToml(spec)) as any;
+          const overriddenValues = yaml.load(generateValuesFiles(spec)['eth-da-submitter-production.yaml']) as any;
+          expect(overridden.ethereumDa.publish).to.include({maxBatchWait: '30m', maxPendingBlobTxs: 12});
+          expect(overriddenValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS).to.equal('12');
+        });
+      }
     }
 
     it('does not duplicate proof topology into doge-config', () => {
