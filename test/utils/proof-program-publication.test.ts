@@ -8,12 +8,14 @@ import sinon from 'sinon'
 import type {DogeConfig} from '../../src/types/doge-config.js'
 
 import {writeDeploymentKit} from '../../src/utils/deployment-kit.js'
+import {exportSignerPolicyBundle} from '../../src/utils/preparation-signer-receipts.js'
 import {writeProofDeploymentContract} from '../../src/utils/proof-deployment-contract.js'
 import {
   planProofProgramPublication,
   publishProofProgramBundle,
 } from '../../src/utils/proof-program-publication.js'
 import {rebindProofTopologyBundleRevision} from '../../src/utils/proof-topology-compiler.js'
+import {protocolOpeningId} from '../../src/utils/protocol-opening-id.js'
 import {protocolIdSidecarPath} from '../../src/utils/signer-policy-derivation.js'
 import {writeSignerPolicyHandoff} from '../../src/utils/signer-policy-handoff.js'
 import {releaseFixture} from '../helpers/proof-software-release.js'
@@ -324,7 +326,8 @@ describe('real-proof program bundle publication', () => {
         initial_confirmed_block_hash: hash('44', 32), initial_confirmed_block_number: 100,
         initial_ethereum_block_hash: hash('55', 32), initial_system_signer: hash('a3', 20), initial_tx_index: 200,
       },
-      protocol: {dogecoin_chain_id: 0x0D_06_0B_1E, eth_chain_id: 31_337, l2_chain_id: 534_352, protocol_version: 2},
+      // Dogecoin testnet, matching the fixture's doge-config network.
+      protocol: {dogecoin_chain_id: 111_111, eth_chain_id: 31_337, l2_chain_id: 534_352, protocol_version: 2},
     })
     const receiptPath = path.join(root, '.data/proof-materials-v1.json')
     const materials = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
@@ -368,7 +371,7 @@ describe('real-proof program bundle publication', () => {
       network: 'testnet',
       policy_mode: 'enforce',
       protocol_context: {file: 'protocol_context.json', sha256: `sha256:${digest(context)}`},
-      protocol_instance_id: '0x2a9dffc0d2ecbed48f6ccc16f2e9abd11dfbac38fe71d2c0cd6fbb0e8d24a6ce',
+      protocol_instance_id: `0x${protocolOpeningId(JSON.parse(context))}`,
       schema: 'dogeos/deployment-kit/v1',
       tso_url: 'https://tso.example.com',
     })
@@ -399,13 +402,14 @@ describe('real-proof program bundle publication', () => {
   })
 
   it('cross-checks the protocol id sidecar written by bridge-init', () => {
-    const {options} = deploymentKitFixture()
+    const {context, options} = deploymentKitFixture()
+    const id = protocolOpeningId(JSON.parse(context))
     const sidecar = protocolIdSidecarPath(path.join(root, '.data/protocol_context.json'))
     fs.writeFileSync(sidecar, `0x${'0'.repeat(63)}1\n`)
     expect(() => writeDeploymentKit(options)).to.throw('sidecar differs')
     expect(fs.existsSync(path.join(root, 'kits/deployment-kit-1'))).to.equal(false)
-    fs.writeFileSync(sidecar, '2A9DFFC0D2ECBED48F6CCC16F2E9ABD11DFBAC38FE71D2C0CD6FBB0E8D24A6CE\n')
-    expect(writeDeploymentKit(options).protocolInstanceId).to.equal('0x2a9dffc0d2ecbed48f6ccc16f2e9abd11dfbac38fe71d2c0cd6fbb0e8d24a6ce')
+    fs.writeFileSync(sidecar, `${id.toUpperCase()}\n`)
+    expect(writeDeploymentKit(options).protocolInstanceId).to.equal(`0x${id}`)
   })
 
   it('publishes the verifying key bytes it hashed even if the source changes during export', () => {
@@ -468,11 +472,45 @@ describe('real-proof program bundle publication', () => {
     expect(fs.readdirSync(kitDir)).to.deep.equal([])
   })
 
+  it('refuses a kit whose configured network differs from the protocol context chain', () => {
+    const {options} = deploymentKitFixture()
+    for (const network of ['mainnet', 'regtest']) {
+      expect(() => writeDeploymentKit({...options, config: {network} as DogeConfig})).to.throw(`configured network ${network}`)
+    }
+
+    expect(fs.existsSync(path.join(root, 'kits'))).to.equal(false)
+  })
+
   it('refuses a non-enforcing contract and an unsafe kit version', () => {
     const {options} = deploymentKitFixture('observe')
     expect(() => writeDeploymentKit(options)).to.throw('active/real/enforce')
     expect(() => writeDeploymentKit({...options, kitVersion: '../1'})).to.throw('Kit version')
     expect(fs.existsSync(path.join(root, 'kits'))).to.equal(false)
+  })
+
+  it('setup apply writes the same signer-policy bundle in-process, independent of the working directory', async () => {
+    const {options} = deploymentKitFixture('observe')
+    const external = [{id: 'partner', publicKey: '02' + '2'.repeat(64), transportPubkey: '03' + '3'.repeat(64)}]
+    fs.writeFileSync(path.join(root, '.data/doge-config.toml'), [
+      'network = "testnet"', '[wallet]', 'path = ".data/wallet.json"',
+      '[attestationSigner]', 'mode = "external"', 'activeSignerIds = ["partner"]',
+      '[[attestationSigner.external]]', `id = "partner"`, `publicKey = "${external[0].publicKey}"`, `transportPubkey = "${external[0].transportPubkey}"`,
+      '[proof_topology]', 'mode = "active"', 'generation = "real"', 'enforcement = "observe"', 'observeRealProofDeadlineMs = 60000',
+      '[proof_topology.compiler]', 'identityFilePath = "compiler-identity.json"', `image = {repository = "example/compiler", digest = "${imageDigest}"}`,
+      '[proof_topology.deployment]', 'artifactKeyPrefix = "devnet/instance"', `productionWorkerImage = {repository = "example/production", digest = "${imageDigest}"}`,
+      '[proof_topology.active]', 'profile = "real_scroll_default"',
+      '[proof_topology.active.artifactStore]', 'kind = "s3_compatible"', 'bucket = "dogeos-proof-artifacts"', 'region = "us-east-1"',
+      '[proof_topology.active.realScroll]',
+      '',
+    ].join('\n'))
+    fs.writeFileSync(path.join(root, 'config.toml'), '[ingress]\nTSO_HOST = "tso.example.com"\n')
+    const cwd = process.cwd()
+    process.chdir(os.tmpdir())
+    try {await exportSignerPolicyBundle(root)} finally {process.chdir(cwd)}
+    const direct = writeSignerPolicyHandoff({config: {attestationSigner: {activeSignerIds: ['partner'], external, mode: 'external'}, network: 'testnet'} as DogeConfig, deploymentDir: root, output: 'direct-bundle', protocolContext: options.protocolContext, tsoUrl: 'https://tso.example.com'})
+    for (const file of direct.files) {
+      expect(fs.readFileSync(path.join(root, 'signer-policy-bundle', file), 'utf8'), file).to.equal(fs.readFileSync(path.join(direct.bundleDir, file), 'utf8'))
+    }
   })
 
   it('does not write a receipt when anonymous readback differs', async () => {

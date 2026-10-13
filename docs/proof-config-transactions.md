@@ -223,10 +223,10 @@ and rejects enforcing configurations with missing or mismatched evidence.
 
 For advanced manual generation, select materials explicitly with
 `setup prep-charts --proof-materials-receipt PATH` and, after publication,
-`--proof-publication-receipt PATH`. `setup export-signer-policy --contract PATH`
+`--proof-publication-receipt PATH`. `setup export-deployment-kit --kit-version <v> --contract PATH`
 uses only those bound materials. It never falls back to the default receipt.
-Signer exports require a new versioned output directory and are staged before
-one rename; failed exports leave prior bundles intact.
+Kit exports require a new versioned output directory and never overwrite one;
+failed exports leave prior kits intact.
 
 `setup proof-bundle-publish --release FILE --release-sha256 SHA` uses the immutable
 publisher image. `--core-dir` remains a deprecated diagnostic compatibility path.

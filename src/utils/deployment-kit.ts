@@ -5,6 +5,7 @@ import path from 'node:path'
 import type {DogeConfig} from '../types/doge-config.js'
 
 import {normalizeExternalHttpBaseUrl} from './attestation-signer-descriptor.js'
+import {resolveDogecoinChainId} from './deployment-spec-generator.js'
 import {resolveContractFile, validateProofDeploymentContract} from './proof-deployment-contract.js'
 import {readProofMaterials} from './proof-materials.js'
 import {normalizeSignerProofArtifactBaseUrl} from './proof-signer-policy-input.js'
@@ -29,6 +30,20 @@ export interface DeploymentKitRecord {
 }
 
 /**
+ * The protocol instance id of the bound context. The kit names the doge-config
+ * network, so the context must be for that network; bridge-init's sidecar,
+ * when present, must agree.
+ */
+function protocolInstanceIdFor(context: Buffer, contextPath: string, network: DogeConfig['network']): string {
+  const protocol = JSON.parse(context.toString('utf8'))
+  if (protocol?.protocol?.dogecoin_chain_id !== resolveDogecoinChainId(network)) throw new Error(`Protocol context Dogecoin chain id does not match the configured network ${network}`)
+  const protocolInstanceId = `0x${protocolOpeningId(protocol)}`
+  const sidecar = protocolIdSidecarPath(contextPath)
+  if (fs.existsSync(sidecar) && `0x${fs.readFileSync(sidecar, 'utf8').trim().replace(/^0x/, '').toLowerCase()}` !== protocolInstanceId) throw new Error('Protocol id sidecar differs from the protocol context')
+  return protocolInstanceId
+}
+
+/**
  * Export the bridge-owned, reusable deployment kit for signer operators from
  * the selected deployment contract and its verified proof-materials record.
  * It carries no signer roster, current Bridge key or rotation material, and
@@ -48,9 +63,8 @@ export function writeDeploymentKit(options: {
   const context = fs.readFileSync(proofRegularFile(contextPath))
   const contextHash = sha256(context)
   if (contextHash !== contract.inputs.protocolContext.sha256) throw new Error('Protocol context differs from selected proof deployment contract')
-  const protocolInstanceId = `0x${protocolOpeningId(JSON.parse(context.toString('utf8')))}`
-  const sidecar = protocolIdSidecarPath(contextPath)
-  if (fs.existsSync(sidecar) && `0x${fs.readFileSync(sidecar, 'utf8').trim().replace(/^0x/, '').toLowerCase()}` !== protocolInstanceId) throw new Error('Protocol id sidecar differs from the protocol context')
+  const {network} = options.config
+  const protocolInstanceId = protocolInstanceIdFor(context, contextPath, network)
   const tsoUrl = normalizeExternalHttpBaseUrl(options.tsoUrl, 'TSO URL', {remoteNetwork: 'signer operator network'})
   const artifact = options.signerProofArtifactBaseUrl ?? contract.proofArtifactBaseUrl
   if (!artifact) throw new Error('Selected proof contract has no signer artifact URL')
@@ -63,7 +77,6 @@ export function writeDeploymentKit(options: {
   const aggregation = materials.software.identities.l2Range.appCommitRaw
   if (!/^0x[\da-f]{128}$/.test(batch) || !/^0x[\da-f]{128}$/.test(aggregation)) throw new Error('Selected verifier commitments are malformed')
   const advanceL2Verifier = {aggVerifyingKeyFile: ADVANCE_L2_AGG_VERIFYING_KEY_BUNDLE_FILE, aggVerifyingKeySha256: `sha256:${sha256(vk)}`, batchProgramCommitmentHex: batch, l2RangeAggregationProgramCommitmentHex: aggregation}
-  const {network} = options.config
 
   const target = path.resolve(root, options.output)
   fs.mkdirSync(path.dirname(target), {recursive: true})
