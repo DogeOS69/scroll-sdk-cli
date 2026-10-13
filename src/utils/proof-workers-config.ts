@@ -1,6 +1,6 @@
 import type {ProofWorkersConfig} from '../types/proof-workers.js'
 
-export const GPU_ARCHITECTURES = {A100: '80', A6000: '86', RTX3090: '86', RTX4090: '89'} as const
+export const GPU_ARCHITECTURES = {A100: '80', A6000: '86', L4: '89', RTX3090: '86', RTX4090: '89'} as const
 export const PROOF_WORKER_DEFAULTS: Required<ProofWorkersConfig> = {
   backend: 'vastai', count: 1, cpu: 8, diskGb: 200, gpu: 'RTX3090', idleTimeoutMinutes: 5,
   maxDurationHours: 2, maxPricePerHourUsd: 0.8, memoryGb: 64, minReliability: 0.95,
@@ -10,7 +10,12 @@ export const PROOF_WORKER_DEFAULTS: Required<ProofWorkersConfig> = {
 
 export function resolveProofWorkers(input: ProofWorkersConfig): Required<ProofWorkersConfig> {
   const config = {...PROOF_WORKER_DEFAULTS, ...input}
-  if (config.backend !== 'vastai' || !(config.gpu in GPU_ARCHITECTURES)) throw new Error('proofWorkers requires Vast.ai and an explicitly supported GPU model')
+  if (!['aws', 'vastai'].includes(config.backend) || !(config.gpu in GPU_ARCHITECTURES)) throw new Error('proofWorkers requires AWS or Vast.ai and an explicitly supported GPU model')
+  if (config.backend === 'aws') {
+    if (input.gpu !== 'L4' || !Number.isSafeInteger(input.cpu) || input.cpu! < 16) throw new Error('AWS proofWorkers requires gpu: L4 and cpu >= 16 for g6.4xlarge')
+    if (input.regions === undefined || input.maxPricePerHourUsd === undefined || input.rentalBudgetUsd === undefined) throw new Error('AWS proofWorkers requires explicit regions, maxPricePerHourUsd and rentalBudgetUsd')
+  }
+
   const integer = (key: keyof ProofWorkersConfig, min: number, max: number) => {
     const value = config[key]
     if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min || value > max) throw new Error(`proofWorkers.${key} must be an integer from ${min} to ${max}`)
@@ -21,7 +26,8 @@ export function resolveProofWorkers(input: ProofWorkersConfig): Required<ProofWo
   if (!Number.isFinite(config.maxDurationHours) || !Number.isFinite(config.maxDurationHours * 3600) || config.maxDurationHours * 3600 < 1) throw new Error('proofWorkers.maxDurationHours must be a positive finite duration of at least one second')
   if (!Number.isFinite(config.minReliability) || config.minReliability < 0.95 || config.minReliability > 1) throw new Error('proofWorkers.minReliability must be between 0.95 and 1')
   for (const key of ['maxPricePerHourUsd', 'rentalBudgetUsd'] as const) if (!Number.isFinite(config[key]) || config[key] <= 0) throw new Error(`proofWorkers.${key} must be positive`)
-  if (!Array.isArray(config.regions) || config.regions.length === 0 || config.regions.some(r => typeof r !== 'string' || !/^[a-z][\da-z-]+$/.test(r))) throw new Error('proofWorkers.regions must contain explicit Vast.ai region names')
+  const regionPattern = config.backend === 'aws' ? /^[a-z]{2}(?:-[a-z]+)+-\d+$/ : /^[a-z][\da-z-]+$/
+  if (!Array.isArray(config.regions) || config.regions.length === 0 || config.regions.some(r => typeof r !== 'string' || !regionPattern.test(r))) throw new Error(`proofWorkers.regions must contain explicit ${config.backend === 'aws' ? 'AWS' : 'Vast.ai'} region names`)
   const estimate = rentalEnvelope(config)
   if (estimate > config.rentalBudgetUsd) throw new Error(`proofWorkers rental envelope USD ${estimate.toFixed(2)} exceeds rentalBudgetUsd; include startup, drain, idle and two cleanup polling minutes`)
   return config

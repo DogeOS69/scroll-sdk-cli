@@ -96,6 +96,24 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(run.configuration.stop_duration, 780)
         self.assertFalse(run.configuration.retry)
 
+    def test_native_aws_l4_models_and_repeated_apply(self):
+        worker = self.plan['workers'][0]
+        worker['fleet'].pop('backend_options')
+        for config in (worker['fleet'], worker['task']):
+            config.update(backends=['aws'], regions=['us-east-1'], instance_types=['g6.4xlarge'],
+                          spot_policy='on-demand', max_price=1.5)
+            config['resources'] = {'cpu': 'x86:16..', 'memory': '64GB..', 'disk': '200GB..',
+                                   'gpu': {'name': 'L4', 'count': 1, 'memory': '22GB..'}}
+        self.apply()
+        self.apply()
+        for config in (self.client.fleet.spec.configuration, self.client.run.run_spec.configuration):
+            self.assertEqual(config.instance_types, ['g6.4xlarge'])
+            self.assertEqual([backend.value for backend in config.backends], ['aws'])
+            self.assertEqual(config.spot_policy.value, 'on-demand')
+        self.assertEqual(self.client.fleet.spec.configuration.resources.cpu.arch.value, 'x86')
+        self.assertEqual(self.client.calls.count('create-fleet'), 1)
+        self.assertEqual(self.client.calls.count('create-run'), 1)
+
     def test_repeat_apply_preserves_one_allocation(self):
         self.apply()
         self.apply()
