@@ -13,6 +13,7 @@ import RotationCheck from '../../src/commands/bridge/rotation/check.js'
 import RotationInit from '../../src/commands/bridge/rotation/init.js'
 import RotationPlan from '../../src/commands/bridge/rotation/plan.js'
 import RotationStage from '../../src/commands/bridge/rotation/stage.js'
+import {buildTsoSigners} from '../../src/commands/setup/prep-charts.js'
 import {type RotationChainState, assertRotationAdmission, assertRotationSpecUnchanged, bridgeHash, createRotationProposal, encodeBridgeScript, parseBridgeScript, proposalDigest, validateRotationEnvelope} from '../../src/utils/bridge-rotation.js'
 import {rotationPayload, submitFrozenRotation} from '../../src/utils/bridge-rotation-execution.js'
 import {assertRotationReceipts, assertStageUnchanged, enableRotationRoute, loadRotationPlan, mergeRotationRegistrations, rotationJson, saveRotationPlan} from '../../src/utils/bridge-rotation-files.js'
@@ -168,6 +169,16 @@ describe('attestation rotation proposals', () => {
     values.tsoSigners.unshift({delivery: 'pull', network: 'testnet', publicKeyOverride: external[0].publicKey, roles: ['Attestation'], transportPubkey: external[0].transportPubkey})
     p.target.signers[0].name = 'old-0'
     expect(() => mergeRotationRegistrations(config, values, p)).throw('conflicts')
+  })
+  it('stages a mainnet rotation against the WP network name the chart registrations use (dogecoin)', () => {
+    const {old, spec, state} = fixture(); const p = createRotationProposal(spec, {...state, network: 'mainnet'}).proposal
+    const external = old.attestation.keys.map((publicKey, i) => ({id: `old-${i}`, publicKey, transportPubkey: key()}))
+    const config: any = {attestationSigner: {external, mode: 'external'}, network: 'mainnet'}
+    const values: any = {configMaps: {config: {data: {'WithdrawalProcessor.toml': 'rotate_key_v2 = false\n'}}}, tsoSigners: buildTsoSigners(config)}
+    values.tsoSigners.push({delivery: 'push', roles: ['Correctness']})
+    mergeRotationRegistrations(config, values, p)
+    expect(p.network).eq('mainnet')
+    expect(values.tsoSigners.filter((s: any) => s.roles[0] === 'Attestation').map((s: any) => s.network)).deep.eq(Array.from({length: 6}, () => 'dogecoin'))
   })
   it('preserves native compiler markers and comments when enabling the rotation route', () => {
     const source = '# base\nrotate_key_v2 = false # deliberate\n# BEGIN scrollsdk managed deployment configuration\n[proof_system]\nmode = "production"\n# END scrollsdk managed deployment configuration\n'

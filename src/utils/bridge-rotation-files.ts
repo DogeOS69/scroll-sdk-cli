@@ -8,6 +8,7 @@ import type {DogeConfig} from '../types/doge-config.js'
 import type {RotationEnvelope, RotationProposal} from './bridge-rotation.js'
 
 import {assertRotationSpecUnchanged, canonicalJson, parseBridgeScript, proposalDigest, validateRotationEnvelope} from './bridge-rotation.js'
+import {tsoSignerNetwork} from './tso-signer-network.js'
 
 function parsePrivateToml(source: string): toml.JsonMap {
   try {return toml.parse(source)} catch {throw new Error('Invalid private deployment TOML; inspect the local file without publishing its contents')}
@@ -83,7 +84,7 @@ function assertCurrentRegistrations(external: NonNullable<NonNullable<DogeConfig
     const member = external.find(s => s.publicKey.toLowerCase().replace(/^0x/, '') === key)
     if (!member) throw new Error('Current signer is absent from deployment registry')
     const registrations = tsoSigners.filter((s: any) => s.publicKeyOverride?.toLowerCase().replace(/^0x/, '') === key)
-    if (registrations.length !== 1 || registrations[0].transportPubkey !== member.transportPubkey || registrations[0].delivery !== 'pull' || registrations[0].network !== p.network || registrations[0].roles?.length !== 1 || registrations[0].roles[0] !== 'Attestation') throw new Error('Current signer TSO registration is missing or mismatched; reconcile runtime values before staging')
+    if (registrations.length !== 1 || registrations[0].transportPubkey !== member.transportPubkey || registrations[0].delivery !== 'pull' || registrations[0].network !== tsoSignerNetwork(p.network) || registrations[0].roles?.length !== 1 || registrations[0].roles[0] !== 'Attestation') throw new Error('Current signer TSO registration is missing or mismatched; reconcile runtime values before staging')
   }
 
 }
@@ -111,8 +112,8 @@ export function mergeRotationRegistrations(config: DogeConfig, values: any, p: R
     if (existing && (existing.id !== signer.name || existing.publicKey !== signer.attestationPubkey || existing.transportPubkey !== signer.transportPubkey)) throw new Error('Target identity conflicts with an existing signer registration')
     if (!existing) registry.external.push({id: signer.name, publicKey: signer.attestationPubkey, transportPubkey: signer.transportPubkey})
     const registered = values.tsoSigners.find((s: any) => s.publicKeyOverride === signer.attestationPubkey || s.transportPubkey === signer.transportPubkey)
-    if (registered && (registered.publicKeyOverride !== signer.attestationPubkey || registered.transportPubkey !== signer.transportPubkey || registered.delivery !== 'pull' || registered.network !== p.network || !registered.roles?.includes('Attestation'))) throw new Error('Target identity conflicts with TSO registration')
-    if (!registered) values.tsoSigners.push({delivery: 'pull', network: p.network, publicKeyOverride: signer.attestationPubkey, roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: signer.transportPubkey})
+    if (registered && (registered.publicKeyOverride !== signer.attestationPubkey || registered.transportPubkey !== signer.transportPubkey || registered.delivery !== 'pull' || registered.network !== tsoSignerNetwork(p.network) || !registered.roles?.includes('Attestation'))) throw new Error('Target identity conflicts with TSO registration')
+    if (!registered) values.tsoSigners.push({delivery: 'pull', network: tsoSignerNetwork(p.network), publicKeyOverride: signer.attestationPubkey, roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: signer.transportPubkey})
   }
 
   const native = values.configMaps?.config?.data?.['WithdrawalProcessor.toml']
