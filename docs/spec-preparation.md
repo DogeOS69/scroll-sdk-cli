@@ -462,13 +462,15 @@ An omitted recipient retains the upstream template's zero placeholder and emits
 a warning: it must be selected before deploying L2 contracts.
 
 `setup gen-l2-artifacts` passes `config.toml` to
-`dogeos69/scroll-stack-contracts:gen-configs-dogeos-v0.3.0-rc.5`. The contracts
+`dogeos69/scroll-stack-contracts:gen-configs-dogeos-v0.3.0-rc.6`. The contracts
 image produces `genesis.yaml`; the CLI checks mandatory predeploy code before
 copying the result to `values/genesis.yaml`. It never synthesizes or patches
 contract bytecode or genesis storage. A regression fixture records every field
 and predeploy address from the pinned contracts template, with explicit
-exceptions for optional components. Review and refresh it when the contracts
-release changes.
+exceptions for optional components. The rc.6 release leaves that rc.5
+configuration template unchanged; its genesis generator now omits zero-valued
+storage allocations. Review and refresh
+the fixture when the contracts template changes.
 
 Do not replace genesis in an already prepared deployment without regenerating
 its protocol context, proof materials and signer handoff. Use a new preparation
@@ -488,7 +490,7 @@ node scripts/test-preparation-e2e.mjs /path/to/scroll-sdk \
   /private/test-spec.yaml /private/compiler-identity.json
 ```
 
-It runs real rc.5 genesis and beta.6 Bridge/compiler containers, verifies both
+It runs the default contracts genesis and beta.6 Bridge/compiler containers, verifies both
 funding pauses, resumes to `prepared`, then reruns to verify completion is stable.
 Private generated files and child logs remain in the reported temporary directory;
 only sanitized step outcomes and RPC method names are printed. Docker must be
