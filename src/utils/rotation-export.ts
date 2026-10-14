@@ -10,6 +10,8 @@ export const MAX_ROTATION_GRACE = 260_000
 
 export interface RotationExportSigner {label: string; public_key: string; transport_pubkey: string}
 export interface RotateKeyRequest {grace_wf_txs: null | number; idempotency_key: string; new_bridge_redeem_script_hex: string; new_key_hash: string}
+/** A Dogecoin outpoint as the WP takes it: `0x` and the txid in RPC (display) byte order. */
+export interface LivenessOutpoint {txid: string; vout: number}
 /** `dogeos/rotation-export/v1`, as the governance portal writes it. Unknown fields are ignored. */
 export interface RotationExport {
   allowlist_entry: string
@@ -99,6 +101,21 @@ export function assertTransportKeys(signers: RotationExportSigner[]): void {
   }
 }
 
+/**
+ * The WP role-separation preflight: across the current and target scripts together, every key
+ * holds one role (attestation, TEE or recovery). A key may keep its role in both scripts.
+ */
+export function assertRoleSeparation(currentScript: string, targetScript: string): void {
+  const roles = new Map<string, Set<string>>()
+  for (const parsed of [parseBridgeScript(currentScript), parseBridgeScript(targetScript)]) {
+    const keyed: [string, string][] = [...parsed.attestation.keys.map((key): [string, string] => [key, 'attestation']), [parsed.tee, 'TEE'], ...parsed.recovery.keys.map((key): [string, string] => [key, 'recovery'])]
+    for (const [key, role] of keyed) roles.set(key, (roles.get(key) ?? new Set()).add(role))
+  }
+
+  const order = ['attestation', 'TEE', 'recovery']
+  for (const [key, held] of roles) if (held.size > 1) throw new Error(`Rotation export: key ${key} holds more than one role across the current and target scripts (${order.filter(role => held.has(role)).join(', ')})`)
+}
+
 /** Self-consistency of an export, using the existing bridge script parser. Run before anything else. */
 export function validateRotationExport(input: unknown): RotationExport {
   const source = object(input, 'export')
@@ -113,6 +130,7 @@ export function validateRotationExport(input: unknown): RotationExport {
   if (object(source.target, 'target').p2sh_address !== p2sh) throw new Error('Rotation export: target.p2sh_address is not the target script P2SH on this network')
   const target = {...targetSide, p2sh_address: p2sh}
   assertTransportKeys([...current.signers, ...target.signers])
+  assertRoleSeparation(current.redeem_script_hex, target.redeem_script_hex)
 
   const graceWfTxs = grace(source.grace_wf_txs, 'grace_wf_txs')
   const entry = text(source.allowlist_entry, /^0x[\da-f]{40}(?::\d+)?$/, 'allowlist_entry')
@@ -130,6 +148,24 @@ export function validateRotationExport(input: unknown): RotationExport {
     schema: ROTATION_EXPORT_SCHEMA, target,
     wp_rotate_key_request: {grace_wf_txs: graceWfTxs, idempotency_key: request.idempotency_key, new_bridge_redeem_script_hex: target.redeem_script_hex, new_key_hash: target.key_hash},
   }
+}
+
+/** A WP-reported outpoint: `{txid: "0x<64 hex>", vout: u32}`. */
+export function isOutpoint(value: unknown): value is LivenessOutpoint {
+  const outpoint = value as LivenessOutpoint | null | undefined
+  return typeof outpoint?.txid === 'string' && /^0x[\da-f]{64}$/i.test(outpoint.txid) && Number.isSafeInteger(outpoint.vout) && outpoint.vout >= 0 && outpoint.vout <= 0xFF_FF_FF_FF
+}
+
+/** `<txid>:<vout>` as `dogecoin-cli` prints it; a `0x` prefix is accepted. */
+export function parseLivenessOutpoint(value: string): LivenessOutpoint {
+  const match = /^(?:0x)?([\da-f]{64}):(\d{1,10})$/i.exec(value)
+  if (!match || Number(match[2]) > 0xFF_FF_FF_FF) throw new Error('--liveness-outpoint must be <txid>:<vout>, the txid as 64 hex characters')
+  return {txid: `0x${match[1].toLowerCase()}`, vout: Number(match[2])}
+}
+
+/** `<txid>:<vout>` without `0x`, the form `dogecoin-cli` prints. */
+export function formatOutpoint(outpoint: LivenessOutpoint): string {
+  return `${outpoint.txid.replace(/^0x/i, '').toLowerCase()}:${outpoint.vout}`
 }
 
 export function readRotationExport(file: string): RotationExport {
