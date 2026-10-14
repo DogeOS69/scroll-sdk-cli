@@ -60,7 +60,7 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
     },
     contracts: {
       deploymentSalt: '0xabcdef',
-      gasOracle: { blobScalar: 1, penaltyFactor: 1, penaltyThreshold: 100, scalar: 1 },
+      gasOracle: { blobScalar: 1, penaltyFactor: 1, scalar: 1 },
     },
     database: {
       admin: { database: 'postgres', host: 'db.local', password: 'adminpw', port: 5432, username: 'postgres' },
@@ -901,8 +901,26 @@ describe('deployment-spec-generator', () => {
       }
     });
 
-    it('covers every unconditional field in the pinned rc.5 contracts template', () => {
-      const baseline = JSON.parse(fs.readFileSync(new URL('../fixtures/contracts-rc5-template.json', import.meta.url), 'utf8'));
+    for (const fixture of ['full', 'minimal']) {
+      it(`matches the contracts template defaults when generating the ${fixture} fixture`, () => {
+        const baseline = JSON.parse(fs.readFileSync(new URL('../fixtures/contracts-template.json', import.meta.url), 'utf8'));
+        const contents = fs.readFileSync(new URL(`../fixtures/deployment-spec/${fixture}.yaml`, import.meta.url), 'utf8');
+        const spec = yaml.load(contents
+          .replaceAll('$ENV:OWNER_ADDRESS', '0x0000000000000000000000000000000000000001')
+          .replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')) as DeploymentSpec;
+        spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toAddress().toString();
+        const config = toml.parse(generateConfigToml(spec)) as any;
+        for (const [field, expected] of Object.entries(baseline.defaults)) {
+          const actual = field.split('.').reduce((value, key) => value?.[key], config);
+          expect(String(actual), field).to.equal(String(expected));
+        }
+
+        expect(config.contracts).not.to.have.property('PENALTY_THRESHOLD');
+      });
+    }
+
+    it('covers every unconditional field in the pinned contracts template', () => {
+      const baseline = JSON.parse(fs.readFileSync(new URL('../fixtures/contracts-template.json', import.meta.url), 'utf8'));
       const spec = createMinimalSpec();
       spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toAddress().toString();
       const config = toml.parse(generateConfigToml(spec)) as any;
@@ -1071,7 +1089,7 @@ describe('deployment-spec-generator', () => {
       delete spec.contracts.l1FeeVaultAddr;
       const output = generateConfigToml(spec);
 
-      expect(output).to.include('L1_FEE_VAULT_ADDR = "0x1111111111111111111111111111111111111111"');
+      expect(output).to.include('L1_FEE_VAULT_ADDR = "0x0000000000000000000000000000000000000001"');
       expect(output).not.to.include('L1_FEE_VAULT_ADDR = "0x2222222222222222222222222222222222222222"');
     });
 
