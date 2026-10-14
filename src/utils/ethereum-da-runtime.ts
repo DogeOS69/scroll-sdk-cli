@@ -1,3 +1,5 @@
+import type {EthereumDaConfig} from '../types/deployment-spec.js'
+
 /** Shared submitter settings carried by DeploymentSpec and doge-config. */
 export interface EthereumDaRuntimeConfig {
   confirmationDepth?: number | string
@@ -47,7 +49,7 @@ export function ethereumDaRuntimeEnv(config: EthereumDaRuntimeConfig): Record<st
   return env
 }
 
-/** Deployment environment, not the Ethereum RPC chain (core PR #1466). */
-export function defaultMaxPendingBlobTxs(environment: string): number {
-  return environment === 'mainnet' ? 8 : 10
+/** Ethereum DA network, independent of the deployment environment label. */
+export function defaultMaxPendingBlobTxs(ethereumDaChain: NonNullable<EthereumDaConfig['chain']>): number {
+  return ethereumDaChain === 'mainnet' ? 8 : 10
 }

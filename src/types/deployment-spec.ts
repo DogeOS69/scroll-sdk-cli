@@ -512,6 +512,7 @@ export interface EthereumDaConfig {
     maxBatchWait?: string
     maxBlobsPerTx?: number
     maxLivenessDelay?: string
+    /** Defaults to 8 for Ethereum DA mainnet and 10 for other DA networks. */
     maxPendingBlobTxs?: number
     targetBlobsPerTx?: number
   }

@@ -1586,7 +1586,7 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
 
   config.ethereumDa.publish = {
     ...Object.fromEntries(Object.entries(spec.ethereumDa?.publish ?? {}).filter(([, value]) => value !== undefined)),
-    maxPendingBlobTxs: spec.ethereumDa?.publish?.maxPendingBlobTxs ?? defaultMaxPendingBlobTxs(spec.metadata.environment),
+    maxPendingBlobTxs: spec.ethereumDa?.publish?.maxPendingBlobTxs ?? defaultMaxPendingBlobTxs(ethereumDaChain),
   }
 
   const ethereumDaS3Archive = spec.ethereumDa?.blobArchive?.s3
