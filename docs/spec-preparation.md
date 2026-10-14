@@ -32,23 +32,26 @@ Prepare its database and values, then opt in with `make install-blockscout`.
 These defaults come from the committed SDK revision selected by plan/bootstrap;
 an older checkout or an existing deployment retains its own settings.
 
-A complete operator starter is available in the scroll-sdk repository at
-`examples/deployment-spec.example.yaml`, with the companion guide
-`examples/deployment-spec.md`. It selects testnet production Bridge preparation
-and active/real/enforce proofs; it generates real identities from an approved
-proof release after the protocol context exists. Apply exports the signer
-deployment kit and waits for its publication record before the final enforcing
-check.
+The canonical operator spec and environment templates live in the scroll-sdk
+repository: [deployment-spec.example.yaml](https://github.com/DogeOS69/scroll-sdk/blob/v0.3.0-develop/examples/deployment-spec.example.yaml)
+and [deployment.env.example](https://github.com/DogeOS69/scroll-sdk/blob/v0.3.0-develop/examples/deployment.env.example),
+with the companion guide `examples/deployment-spec.md`. The CLI keeps test inputs
+under `test/fixtures/deployment-spec/`; those are not operator templates.
+
+The SDK example selects testnet production Bridge preparation and active/real/enforce
+proofs; it generates real identities from an approved proof release after the protocol
+context exists. Apply exports the signer deployment kit and waits for its publication
+record before the final enforcing check.
 
 ## Prepare the private environment file
 
-Start with [deployment.env.example](../src/config/deployment.env.example). The
-same operator template is available as `examples/deployment.env.example` in
-scroll-sdk. Copy it to your private directory outside either checkout, then edit
-the copy before running plan. For example, with an existing `/private` directory:
+Copy `examples/deployment.env.example` from the same scroll-sdk checkout used
+for your spec and Helm templates. Copy it to your private directory outside either
+checkout, then edit the copy before running plan. For example, with an existing
+`/private` directory:
 
 ```bash
-install -m 600 /path/to/scroll-sdk-cli/src/config/deployment.env.example /private/deployment.env
+install -m 600 /path/to/scroll-sdk/examples/deployment.env.example /private/deployment.env
 ```
 
 Secret assignments are intentionally unusable placeholders; Ethereum RPC entries
@@ -65,6 +68,7 @@ the spec's environment references even when a later step would not use them.
 | `FEE_ORACLE_ETHEREUM_RPC_URL` | `feeOracle.ethereumRpcUrl` | Independent Ethereum fee-sampling endpoint; defaults to Ethereum mainnet even for devnet DA. |
 | `DB_ADMIN_PASSWORD` | `database.admin.password` | Existing PostgreSQL administrator password. |
 | `OWNER_ADDRESS` | `accounts.owner.address` | Public Ethereum/L2 owner or multisig address; no private key. |
+| `DEPLOYER_PRIVATE_KEY` | Optional `accounts.deployer.privateKey` import | EVM private key: `0x` followed by 64 hexadecimal characters. The CLI derives the deployer address. |
 | `DOGECOIN_EXTERNAL_RPC_USERNAME`, `DOGECOIN_EXTERNAL_RPC_PASSWORD` | `dogecoin.externalRpc` | Credentials for the RPC reached by the operator. |
 | `DOGECOIN_CLUSTER_RPC_USERNAME`, `DOGECOIN_CLUSTER_RPC_PASSWORD` | `dogecoin.clusterRpc` | Credentials used by deployed services. |
 | `DOGECOIN_FEE_WALLET_KEY` | Production Bridge, fixed environment variable | Compressed Dogecoin WIF for the selected network; apply derives the public key/address. Fee-wallet KMS is not supported by beta.6-kms. |
@@ -80,6 +84,20 @@ field: the spec must explicitly reference it. Keep each value on one line, place
 comments on separate lines, and do not use shell substitutions. AWS credentials
 use the normal provider chain; GCP credential files
 and Bridge funding outpoints use their separately declared files.
+
+### Optionally supply an existing deployer key
+
+Before the first `setup plan` / `setup apply`, uncomment the optional
+`accounts.deployer.privateKey: "$ENV:DEPLOYER_PRIVATE_KEY"` entry in your copy of
+the SDK spec, and the matching `DEPLOYER_PRIVATE_KEY` entry in your private
+`deployment.env`. Replace the environment placeholder with your EVM private key;
+Dogecoin WIF and KMS key IDs are not accepted here. Keep the key in the private
+environment file, and let the CLI derive its address.
+
+Leave both entries commented to have apply generate a random deployer identity
+and reuse the saved identity on resume. Setting the environment variable alone
+does not enable import. This choice is for a fresh deployment; changing it after
+genesis has been generated is not a deployer rotation procedure.
 
 ## Ethereum provider Secrets and deployment isolation
 
@@ -459,7 +477,7 @@ should not have to copy protocol addresses into the spec:
 | Spec supply intent | `genesis.L2_MAX_NATIVE_DOGE_SUPPLY`, using the existing `genesis.maxEthSupplyWei` input name |
 | Gas policy | Explicit genesis gas limit and base fee; Galileo scalars and penalty factor; L2 system-config base fee overhead |
 | Prepared identities | Deployer/owner addresses and the L2 gas oracle service's public address, including KMS identities |
-| Fee-vault withdrawal destination | `contracts.feeVaultDogeRecipientAddress` is a Dogecoin P2PKH address. The CLI validates the network and derives its hash160 for `FEE_VAULT_DOGE_RECIPIENT_ADDR`. This is not an EVM account or an automatic choice of the Bridge fee-wallet. |
+| Fee-vault withdrawal destination | Required: `contracts.feeVaultDogeRecipientAddress` is a Dogecoin P2PKH address. Plan rejects a missing or invalid recipient before SDK resolution, CubeSigner lookup or proof-release downloads; apply also rejects saved plans missing it before running any step. The CLI validates the network and derives its hash160 for `FEE_VAULT_DOGE_RECIPIENT_ADDR`. This is not an EVM account or an automatic choice of the Bridge fee-wallet. |
 | Optional components | Blockscout database, explorer verification, Ethereum devnet and public service hostnames are configured only for the selected components |
 
 Keep the fee-vault recipient key under separate custody. The spec needs only its

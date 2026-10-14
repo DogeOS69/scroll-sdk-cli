@@ -1165,7 +1165,7 @@ describe.skip('setup prep-charts legacy generation transaction fixture', () => {
         sequencer_address: 'fixture-sequencer',
       }))
       const spec = yaml.load(fs.readFileSync(
-        path.join(originalCwd, 'src/config/deployment-spec.example.yaml'),
+        path.join(originalCwd, 'test/fixtures/deployment-spec/full.yaml'),
         'utf8',
       )) as any
       spec.proofTopology = {

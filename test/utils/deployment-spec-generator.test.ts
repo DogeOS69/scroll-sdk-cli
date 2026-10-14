@@ -60,7 +60,8 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
     },
     contracts: {
       deploymentSalt: '0xabcdef',
-      gasOracle: { blobScalar: 1, penaltyFactor: 1, penaltyThreshold: 100, scalar: 1 },
+      feeVaultDogeRecipientAddress: new bitcore.Address(Buffer.alloc(20, 1), bitcore.Networks.testnet, 'pubkeyhash').toString(),
+      gasOracle: { blobScalar: 1, penaltyFactor: 1, scalar: 1 },
     },
     database: {
       admin: { database: 'postgres', host: 'db.local', password: 'adminpw', port: 5432, username: 'postgres' },
@@ -840,6 +841,7 @@ describe('deployment-spec-generator', () => {
       it(`derives the ${network} L1 chain ID consistently across configuration and values`, () => {
         const spec = createMinimalSpec();
         spec.dogecoin.network = network;
+        spec.contracts.feeVaultDogeRecipientAddress = new bitcore.Address(Buffer.alloc(20, 1), network === 'mainnet' ? bitcore.Networks.livenet : bitcore.Networks.testnet, 'pubkeyhash').toString();
         expect(validateDeploymentSpec(spec).valid).to.be.true;
         expect(normalizeDeploymentSpec(spec).network).not.to.have.property('l1ChainId');
         const configs = generateAllConfigs(spec);
@@ -901,8 +903,26 @@ describe('deployment-spec-generator', () => {
       }
     });
 
-    it('covers every unconditional field in the pinned rc.5 contracts template', () => {
-      const baseline = JSON.parse(fs.readFileSync(new URL('../fixtures/contracts-rc5-template.json', import.meta.url), 'utf8'));
+    for (const fixture of ['full', 'minimal']) {
+      it(`matches the contracts template defaults when generating the ${fixture} fixture`, () => {
+        const baseline = JSON.parse(fs.readFileSync(new URL('../fixtures/contracts-template.json', import.meta.url), 'utf8'));
+        const contents = fs.readFileSync(new URL(`../fixtures/deployment-spec/${fixture}.yaml`, import.meta.url), 'utf8');
+        const spec = yaml.load(contents
+          .replaceAll('$ENV:OWNER_ADDRESS', '0x0000000000000000000000000000000000000001')
+          .replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')) as DeploymentSpec;
+        spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toAddress().toString();
+        const config = toml.parse(generateConfigToml(spec)) as any;
+        for (const [field, expected] of Object.entries(baseline.defaults)) {
+          const actual = field.split('.').reduce((value, key) => value?.[key], config);
+          expect(String(actual), field).to.equal(String(expected));
+        }
+
+        expect(config.contracts).not.to.have.property('PENALTY_THRESHOLD');
+      });
+    }
+
+    it('covers every unconditional field in the pinned contracts template', () => {
+      const baseline = JSON.parse(fs.readFileSync(new URL('../fixtures/contracts-template.json', import.meta.url), 'utf8'));
       const spec = createMinimalSpec();
       spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toAddress().toString();
       const config = toml.parse(generateConfigToml(spec)) as any;
@@ -925,7 +945,13 @@ describe('deployment-spec-generator', () => {
       expect(config.contracts.FEE_VAULT_DOGE_RECIPIENT_ADDR).to.equal('0x' + address.hashBuffer.toString('hex'));
       delete spec.contracts.feeVaultDogeRecipientAddress;
       expect((toml.parse(generateConfigToml(spec)) as any).contracts.FEE_VAULT_DOGE_RECIPIENT_ADDR).to.equal('0x' + '0'.repeat(40));
-      expect(validateDeploymentSpec(spec).warnings.some(warning => warning.path === 'contracts.feeVaultDogeRecipientAddress')).to.equal(true);
+      const validation = validateDeploymentSpec(spec);
+      expect(validation.valid).to.equal(false);
+      expect(validation.errors).to.deep.include({
+        code: 'E002_MISSING_REQUIRED_FIELD',
+        message: 'Set contracts.feeVaultDogeRecipientAddress to a Dogecoin P2PKH withdrawal recipient for the selected network; it is required for contract deployment.',
+        path: 'contracts.feeVaultDogeRecipientAddress',
+      });
     });
 
     it('rejects fee-vault recipients for the wrong network, P2SH recipients, EVM addresses and placeholders', () => {
@@ -1071,7 +1097,7 @@ describe('deployment-spec-generator', () => {
       delete spec.contracts.l1FeeVaultAddr;
       const output = generateConfigToml(spec);
 
-      expect(output).to.include('L1_FEE_VAULT_ADDR = "0x1111111111111111111111111111111111111111"');
+      expect(output).to.include('L1_FEE_VAULT_ADDR = "0x0000000000000000000000000000000000000001"');
       expect(output).not.to.include('L1_FEE_VAULT_ADDR = "0x2222222222222222222222222222222222222222"');
     });
 
@@ -1230,24 +1256,29 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateDogeConfigToml', () => {
-    for (const [environment, expected] of [['mainnet', 8], ['testnet', 10], ['devnet', 10]] as const) {
-      it(`uses the ${environment} pending blob cap in both persisted config and values`, () => {
-        const spec = createMinimalSpec();
-        spec.metadata.environment = environment;
-        // A mainnet RPC can be used on a non-mainnet deployment; it must not
-        // select the production cap on its own.
-        spec.ethereumDa = {...spec.ethereumDa, chain: 'mainnet'};
-        const config = toml.parse(generateDogeConfigToml(spec)) as any;
-        const values = yaml.load(generateValuesFiles(spec)['eth-da-submitter-production.yaml']) as any;
-        expect(config.ethereumDa.publish.maxPendingBlobTxs).to.equal(expected);
-        expect(values.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS).to.equal(String(expected));
+    for (const environment of ['mainnet', 'testnet', 'devnet'] as const) {
+      for (const chain of ['mainnet', 'sepolia', 'devnet', undefined] as const) {
+        const expected = chain === 'mainnet' || (chain === undefined && environment === 'mainnet') ? 8 : 10;
+        it(`uses the ${chain ?? 'default'} DA chain pending blob cap for a ${environment} deployment`, () => {
+          const spec = createMinimalSpec();
+          spec.metadata.environment = environment;
+          spec.ethereumDa = {
+            ...spec.ethereumDa,
+            chain,
+            chainId: chain === 'mainnet' ? 1 : chain === 'sepolia' ? 11_155_111 : chain === 'devnet' ? 32_382 : undefined,
+          };
+          const config = toml.parse(generateDogeConfigToml(spec)) as any;
+          const values = yaml.load(generateValuesFiles(spec)['eth-da-submitter-production.yaml']) as any;
+          expect(config.ethereumDa.publish.maxPendingBlobTxs).to.equal(expected);
+          expect(values.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS).to.equal(String(expected));
 
-        spec.ethereumDa.publish = {maxBatchWait: '30m', maxPendingBlobTxs: 12};
-        const overridden = toml.parse(generateDogeConfigToml(spec)) as any;
-        const overriddenValues = yaml.load(generateValuesFiles(spec)['eth-da-submitter-production.yaml']) as any;
-        expect(overridden.ethereumDa.publish).to.include({maxBatchWait: '30m', maxPendingBlobTxs: 12});
-        expect(overriddenValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS).to.equal('12');
-      });
+          spec.ethereumDa.publish = {maxBatchWait: '30m', maxPendingBlobTxs: 12};
+          const overridden = toml.parse(generateDogeConfigToml(spec)) as any;
+          const overriddenValues = yaml.load(generateValuesFiles(spec)['eth-da-submitter-production.yaml']) as any;
+          expect(overridden.ethereumDa.publish).to.include({maxBatchWait: '30m', maxPendingBlobTxs: 12});
+          expect(overriddenValues.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS).to.equal('12');
+        });
+      }
     }
 
     it('does not duplicate proof topology into doge-config', () => {

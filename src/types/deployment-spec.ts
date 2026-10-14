@@ -512,6 +512,7 @@ export interface EthereumDaConfig {
     maxBatchWait?: string
     maxBlobsPerTx?: number
     maxLivenessDelay?: string
+    /** Defaults to 8 for Ethereum DA mainnet and 10 for other DA networks. */
     maxPendingBlobTxs?: number
     targetBlobsPerTx?: number
   }
@@ -756,15 +757,14 @@ export interface RollupConfig {
 export interface ContractsConfig {
   /** Deployment salt for deterministic addresses */
   deploymentSalt: string
-  /** Dogecoin P2PKH recipient of fee-vault withdrawals; required before deploying L2 contracts. */
+  /** Dogecoin P2PKH recipient of fee-vault withdrawals; required by full spec validation and setup plan/apply. */
   feeVaultDogeRecipientAddress?: string
   /** Gas oracle settings */
   gasOracle: {
     blobScalar: number
-    /** Galileo commit scalar. Defaults to the rc.5 contracts template value 600_000_000. */
+    /** Galileo commit scalar. Defaults to the contracts template value 600_000_000. */
     commitScalar?: number
     penaltyFactor: number
-    penaltyThreshold: number
     scalar: number
   }
 

@@ -341,7 +341,7 @@ function getDogecoinClusterRpc(spec: DeploymentSpec): NonNullable<DeploymentSpec
   }
 }
 
-const DEFAULT_L1_FEE_VAULT_ADDR = '0x1111111111111111111111111111111111111111'
+const DEFAULT_L1_FEE_VAULT_ADDR = '0x0000000000000000000000000000000000000001'
 const ZERO_BYTES32 = '0x0000000000000000000000000000000000000000000000000000000000000000'
 const PLACEHOLDER_L1_SCROLL_MESSENGER_ADDRESS = '0x0000000000000000000000000000000000000001'
 const PLACEHOLDER_L2_MESSENGER_ADDRESS = '0x0000000000000000000000000000000000000002'
@@ -737,7 +737,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   }
 
   if (spec.contracts?.feeVaultDogeRecipientAddress === undefined) {
-    warnings.push({message: 'Fee-vault withdrawal recipient is not selected', path: 'contracts.feeVaultDogeRecipientAddress', suggestion: 'Set a Dogecoin P2PKH recipient before deploying L2 contracts; the template zero address is not deployable.'})
+    errors.push({code: 'E002_MISSING_REQUIRED_FIELD', message: 'Set contracts.feeVaultDogeRecipientAddress to a Dogecoin P2PKH withdrawal recipient for the selected network; it is required for contract deployment.', path: 'contracts.feeVaultDogeRecipientAddress'})
   } else {
     try {feeVaultRecipientHash(spec.contracts.feeVaultDogeRecipientAddress, spec.dogecoin.network)} catch {
       errors.push({code: 'E004_INVALID_ADDRESS', message: 'Fee-vault recipient must be a Dogecoin P2PKH address for the selected network', path: 'contracts.feeVaultDogeRecipientAddress'})
@@ -1424,7 +1424,6 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     L2_BRIDGE_FEE_RECIPIENT_ADDR: spec.bridge.feeRecipient,
     MIN_WITHDRAWAL_AMOUNT: bridgeFees.minWithdrawalAmountWei,
     PENALTY_FACTOR: spec.contracts.gasOracle.penaltyFactor,
-    PENALTY_THRESHOLD: spec.contracts.gasOracle.penaltyThreshold,
     SCALAR: spec.contracts.gasOracle.scalar,
     WITHDRAWAL_FEE: bridgeFees.withdrawalFeeWei,
   }
@@ -1587,7 +1586,7 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
 
   config.ethereumDa.publish = {
     ...Object.fromEntries(Object.entries(spec.ethereumDa?.publish ?? {}).filter(([, value]) => value !== undefined)),
-    maxPendingBlobTxs: spec.ethereumDa?.publish?.maxPendingBlobTxs ?? defaultMaxPendingBlobTxs(spec.metadata.environment),
+    maxPendingBlobTxs: spec.ethereumDa?.publish?.maxPendingBlobTxs ?? defaultMaxPendingBlobTxs(ethereumDaChain),
   }
 
   const ethereumDaS3Archive = spec.ethereumDa?.blobArchive?.s3

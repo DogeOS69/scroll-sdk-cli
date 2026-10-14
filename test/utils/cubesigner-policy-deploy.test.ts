@@ -16,7 +16,7 @@ describe('CubeSigner policy deployment', () => {
     const wasm = path.join(root, 'cubesigner_verifier_policy.wasm')
     fs.writeFileSync(wasm, Buffer.from([0, 97, 115, 109, 13, 0, 1, 0]))
     const buildReceipt = path.join(root, 'build-receipt.json')
-    fs.writeFileSync(buildReceipt, JSON.stringify({checks: {componentImportSubset: 'passed'}, pins: {protocolContextSha256: 'a'.repeat(64)}, schema: 'dogeos/cubesigner-policy-build-receipt/v1', wasm: {path: path.basename(wasm), sha256: proofFileHash(wasm), sizeBytes: 8}}))
+    fs.writeFileSync(buildReceipt, JSON.stringify({compilerImage: `ghcr.io/dogeos69/cubesigner-policy-compiler@sha256:${'1'.repeat(64)}`, coreRevision: 'a'.repeat(40), schema: 'dogeos/cubesigner-policy-build-receipt/v2', wasm: {path: path.basename(wasm), sha256: proofFileHash(wasm), sizeBytes: 8}}))
     const calls: string[][] = []
     let policy: string[] = []
     const args = {buildReceipt, buildReceiptSha256: proofFileHash(buildReceipt), keyId: 'Key#fixture', name: 'test-policy', organization: 'Org#fixture', output: path.join(root, 'deployment'), run(_program: string, argv: string[]) {
