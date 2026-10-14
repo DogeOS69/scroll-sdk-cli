@@ -1,6 +1,6 @@
 import type {CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
+import type {DeploymentKitPublication} from '../utils/deployment-kit-record.js'
 import type {EthereumDaRuntimeConfig} from '../utils/ethereum-da-runtime.js'
-import type {SignerValidationInputs} from '../utils/proof-enforcement-readiness.js'
 import type {BootnodePublicP2p, DeploymentIdentityIntent, ProofCoordinatorConfig} from './deployment-spec.js'
 import type {DstackControllerConfig} from './dstack-controller.js'
 import type {ProofTopologySpec} from './proof-topology.js'
@@ -47,6 +47,8 @@ export interface DogeConfig {
     activeSignerIds: string[]
     /** Legacy in-cluster provisioning only; absent for external signers. */
     backend?: 'aws_kms' | 'local'
+    /** The published deployment kit for the external signers; see deployment-kit-record.ts. */
+    deploymentKit?: DeploymentKitPublication
     /**
      * Partner-operated signers imported from attestation-signer descriptors.
      * The bridge operator never deploys these. publicKeys enter the bridge
@@ -68,6 +70,7 @@ export interface DogeConfig {
       roleArn?: string
       serviceAccount: string
     }>
+    /** 'external' = partner-operated signers (descriptor-imported); legacy in-cluster configs omit this. */
     kms?: {
       awsProfile?: string
       eksCluster?: string
@@ -82,9 +85,7 @@ export interface DogeConfig {
       networkAlias?: string
       region: string
     }
-    /** 'external' = partner-operated signers (descriptor-imported); legacy in-cluster configs omit this. */
     mode?: 'external'
-    policyValidation?: SignerValidationInputs
     /** Legacy in-cluster provisioning only; absent for external signers. */
     profile?: 'production-kms' | 'staging-kms' | 'staging-local'
     threshold: number

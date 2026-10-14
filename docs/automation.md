@@ -138,7 +138,7 @@ Do not discard stderr in CI logs. Parse stdout separately while retaining
 stderr as an artifact:
 
 ```bash
-response="$(scrollsdk setup export-signer-policy --json 2>scrollsdk.stderr.log)"
+response="$(scrollsdk setup export-deployment-kit --json 2>scrollsdk.stderr.log)"
 printf '%s\n' "$response" | jq .
 ```
 
@@ -149,7 +149,7 @@ process status and the JSON `success` field. A wrapper must never continue to a
 state-changing downstream step merely because stdout was parseable.
 
 ```bash
-if ! response="$(scrollsdk setup export-signer-policy --json 2>scrollsdk.stderr.log)"; then
+if ! response="$(scrollsdk setup export-deployment-kit --json 2>scrollsdk.stderr.log)"; then
   printf '%s\n' "$response" | jq . >&2
   exit 1
 fi
@@ -183,7 +183,8 @@ and artifacts. Relevant examples:
 - `prep-charts` rewrites marked proof/verifier blocks, rebuilds managed values,
   preserves unrelated native TOML settings, and commits the complete generation
   transaction only after every output succeeds;
-- `export-signer-policy` regenerates the bundle from current deployment facts;
+- `export-deployment-kit` writes a new kit from current deployment facts and
+  refuses an existing output directory;
 - `proof-aws-init` is designed to reuse matching cloud resources. It records an
   existing `[proofArtifacts.s3]` bucket/region/keyPrefix as the proof
   artifact store; the DA archive is a separate bucket.

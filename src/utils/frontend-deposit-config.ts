@@ -3,9 +3,9 @@ import {createHash} from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import {rotationProtocolOpeningId} from './bridge-rotation-runtime.js'
 import {resolveProofReceiptSelection} from './proof-deployment-contract.js'
 import {DEFAULT_PROOF_MATERIALS_RECEIPT, readProofMaterials} from './proof-materials.js'
+import {protocolOpeningId} from './protocol-opening-id.js'
 import {stripRetiredServiceConfig} from './retired-services.js'
 import {protocolIdSidecarPath} from './signer-policy-derivation.js'
 
@@ -47,7 +47,7 @@ export function readFrontendDepositIdentity(root: string, options: {dogecoinChai
   const context = JSON.parse(contextBytes.toString('utf8'))
   if (options.dogecoinChainId !== undefined && context.protocol?.dogecoin_chain_id !== options.dogecoinChainId) throw new Error('Frontend Dogecoin chain ID differs from the prepared protocol context')
   if (options.l2ChainId !== undefined && context.protocol?.l2_chain_id !== options.l2ChainId) throw new Error('Frontend L2 chain ID differs from the prepared protocol context')
-  const protocolId = hash(rotationProtocolOpeningId(context))
+  const protocolId = hash(protocolOpeningId(context))
   const sidecar = protocolIdSidecarPath(contextPath)
   if (fs.existsSync(sidecar) && hash(fs.readFileSync(sidecar, 'utf8').trim()) !== protocolId) throw new Error('Frontend protocol ID sidecar differs from the protocol context')
   const genesisStateHash = hash(receipt.bridge.genesisStateHash)

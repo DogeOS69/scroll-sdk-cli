@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Operator TOML and Helm values are dynamic documents. */
 import * as toml from '@iarna/toml'
 import * as yaml from 'js-yaml'
-import {createHash} from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -9,8 +8,7 @@ import type {DogeConfig} from '../types/doge-config.js'
 import type {RotationEnvelope, RotationProposal} from './bridge-rotation.js'
 
 import {assertRotationSpecUnchanged, canonicalJson, parseBridgeScript, proposalDigest, validateRotationEnvelope} from './bridge-rotation.js'
-import {deriveTsoUrl} from './signer-policy-derivation.js'
-import {writeSignerPolicyHandoff} from './signer-policy-handoff.js'
+import {tsoSignerNetwork} from './tso-signer-network.js'
 
 function parsePrivateToml(source: string): toml.JsonMap {
   try {return toml.parse(source)} catch {throw new Error('Invalid private deployment TOML; inspect the local file without publishing its contents')}
@@ -79,18 +77,6 @@ export function loadRotationPlan(root: string, specFile = 'rotation-spec.yaml', 
 
 export interface RotationStageReceipt {files: Record<string, string>; proposalSha256: string; status: 'applied' | 'prepared'}
 
-/** A rotation handoff must not tell an initialized partner to create another key. */
-export function writeRotationHandoffNotes(output: string, envelope: RotationEnvelope): void {
-  const p = validateRotationEnvelope(envelope)
-  rotationJson(path.join(output, 'rotation-reference.json'), {currentKeyHash: p.current.keyHash, note: 'The deployment bundle protocol context retains genesis identity. Current/target bridge scripts are in the independently approved rotation proposal. No signer-owned rotation policy is imported.', proposalSha256: envelope.sha256, targetKeyHash: p.target.keyHash})
-  writeRotationFile(path.join(output, 'PARTNER-COMMANDS.md'), `# Existing-bridge rotation handoff\n\nThis package is for rotation ${p.name}, proposal SHA-256 ${envelope.sha256}.\nIt is not genesis onboarding. Do not run signer init, replace registered keys,\nor copy the old database. Old instances must remain available.\n\nUse the matching SDK partner-kit guide docs/rotation-walkthrough.md.\nThe signer operator needs Docker and Bash, not scroll-sdk-cli.\nObtain the approved image digest, release/commit/policy pins and SDK tool\nrevision through your authenticated Governance/operator channel.\n\nIn your NEW signer workspace, with identity.json from core --print-identity:\n\n1. Obtain the manifest digest from the bridge operator's stage output through\n   the authenticated channel; do not trust a digest downloaded alongside files.\n2. Run bash "$KIT/scripts/verify-handoff.sh" ./received-policy-bundle "$BUNDLE_SHA256" ./identity.json.\n3. Review signer-policy.json, the separate proposal, and your own RPC trust\n   sources. Retain your operator-owned RPC env values as well as TOML; copying\n   TOML alone does not retain env-based source sets.\n4. Copy signer-policy.env next to docker-compose.yml. Copy protocol_context.json\n   and advance-l2-agg-verifying-key.bin into ./policy/. Preserve the received\n   bundle as an immutable record.\n5. Set a NEW COMPOSE_PROJECT_NAME and use host ports 0 if sharing the old host.\n   Configure approved release pins, then docker compose config --quiet and\n   docker compose up -d.\n6. Verify AdvanceL1/AdvanceL2 capabilities and authenticated TSO polling.\n   Produce a readiness receipt with rotation.sh ready --identity identity.json.\n   Its remaining review inputs and their sources are listed in the guide.\n\nThe immutable protocol_context.json still describes genesis; rotation-reference.json\nbinds the current and proposed bridge identities. Do not rewrite genesis context.\nNo command in this package submits a RotateKey transaction.\n`)
-  const files = fs.readdirSync(output).filter(file => file !== 'signer-policy-manifest.json').sort().map(file => {
-    const content = fs.readFileSync(path.join(output, file))
-    return {file, sha256: `sha256:${createHash('sha256').update(content).digest('hex')}`, sizeBytes: content.length}
-  })
-  rotationJson(path.join(output, 'signer-policy-manifest.json'), {files, schema: 'dogeos/attestation-signer-policy-manifest/v1'})
-}
-
 function assertCurrentRegistrations(external: NonNullable<NonNullable<DogeConfig['attestationSigner']>['external']>, tsoSigners: any[], p: RotationProposal): void {
   const current = parseBridgeScript(p.current.redeemScriptHex)
   if (!tsoSigners.some((s: any) => s.roles?.length === 1 && s.roles[0] === 'Correctness')) throw new Error('Existing TSO Correctness registration is required and must be retained')
@@ -98,7 +84,7 @@ function assertCurrentRegistrations(external: NonNullable<NonNullable<DogeConfig
     const member = external.find(s => s.publicKey.toLowerCase().replace(/^0x/, '') === key)
     if (!member) throw new Error('Current signer is absent from deployment registry')
     const registrations = tsoSigners.filter((s: any) => s.publicKeyOverride?.toLowerCase().replace(/^0x/, '') === key)
-    if (registrations.length !== 1 || registrations[0].transportPubkey !== member.transportPubkey || registrations[0].delivery !== 'pull' || registrations[0].network !== p.network || registrations[0].roles?.length !== 1 || registrations[0].roles[0] !== 'Attestation') throw new Error('Current signer TSO registration is missing or mismatched; reconcile runtime values before staging')
+    if (registrations.length !== 1 || registrations[0].transportPubkey !== member.transportPubkey || registrations[0].delivery !== 'pull' || registrations[0].network !== tsoSignerNetwork(p.network) || registrations[0].roles?.length !== 1 || registrations[0].roles[0] !== 'Attestation') throw new Error('Current signer TSO registration is missing or mismatched; reconcile runtime values before staging')
   }
 
 }
@@ -126,8 +112,8 @@ export function mergeRotationRegistrations(config: DogeConfig, values: any, p: R
     if (existing && (existing.id !== signer.name || existing.publicKey !== signer.attestationPubkey || existing.transportPubkey !== signer.transportPubkey)) throw new Error('Target identity conflicts with an existing signer registration')
     if (!existing) registry.external.push({id: signer.name, publicKey: signer.attestationPubkey, transportPubkey: signer.transportPubkey})
     const registered = values.tsoSigners.find((s: any) => s.publicKeyOverride === signer.attestationPubkey || s.transportPubkey === signer.transportPubkey)
-    if (registered && (registered.publicKeyOverride !== signer.attestationPubkey || registered.transportPubkey !== signer.transportPubkey || registered.delivery !== 'pull' || registered.network !== p.network || !registered.roles?.includes('Attestation'))) throw new Error('Target identity conflicts with TSO registration')
-    if (!registered) values.tsoSigners.push({delivery: 'pull', network: p.network, publicKeyOverride: signer.attestationPubkey, roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: signer.transportPubkey})
+    if (registered && (registered.publicKeyOverride !== signer.attestationPubkey || registered.transportPubkey !== signer.transportPubkey || registered.delivery !== 'pull' || registered.network !== tsoSignerNetwork(p.network) || !registered.roles?.includes('Attestation'))) throw new Error('Target identity conflicts with TSO registration')
+    if (!registered) values.tsoSigners.push({delivery: 'pull', network: tsoSignerNetwork(p.network), publicKeyOverride: signer.attestationPubkey, roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: signer.transportPubkey})
   }
 
   const native = values.configMaps?.config?.data?.['WithdrawalProcessor.toml']
@@ -141,21 +127,6 @@ export function prepareRotationStage(runtime: string, dir: string, envelope: Rot
   const config = parsePrivateToml(fs.readFileSync(path.join(runtime, filenames[0]), 'utf8')) as unknown as DogeConfig
   const values = parsePrivateYaml(fs.readFileSync(path.join(runtime, filenames[1]), 'utf8')) as any
   mergeRotationRegistrations(config, values, p)
-  const handoff = path.join(dir, 'signer-deployment')
-  if (fs.existsSync(handoff)) {
-    const reference = readRotationJson<{proposalSha256: string}>(path.join(handoff, 'rotation-reference.json'))
-    if (reference.proposalSha256 !== envelope.sha256) throw new Error('Existing handoff belongs to another proposal')
-  } else {
-    const tsoUrl = deriveTsoUrl(path.join(runtime, 'config.toml'))?.value
-    if (!tsoUrl) throw new Error('Missing TSO ingress URL in config.toml')
-    const temporary = fs.mkdtempSync(path.join(dir, '.handoff-'))
-    try {
-      const output = path.join(temporary, 'package')
-      writeSignerPolicyHandoff({config, deploymentDir: runtime, output, protocolContext: '.data/protocol_context.json', tsoUrl})
-      writeRotationHandoffNotes(output, envelope)
-      fs.renameSync(output, handoff)
-    } finally {fs.rmSync(temporary, {force: true, recursive: true})}
-  }
 
   const nativeBase = enableRotationRoute(fs.readFileSync(path.join(runtime, filenames[2]), 'utf8'))
   const next = [toml.stringify(config as unknown as toml.JsonMap), yaml.dump(values, {lineWidth: -1, noRefs: true}), nativeBase]

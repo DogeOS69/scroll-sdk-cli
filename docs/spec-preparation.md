@@ -40,8 +40,8 @@ under `test/fixtures/deployment-spec/`; those are not operator templates.
 
 The SDK example selects testnet production Bridge preparation and active/real/enforce
 proofs; it generates real identities from an approved proof release after the protocol
-context exists. Apply waits for partner enforcing-policy receipts, verifies them and regenerates
-the configuration before the final enforcing check.
+context exists. Apply exports the signer deployment kit and waits for its publication
+record before the final enforcing check.
 
 ## Prepare the private environment file
 
@@ -537,17 +537,22 @@ imports `.data/proof-materials-v1.json`. Operators do not invent identity hashes
 or copy a generic compiler identity from another deployment. Image/receipt
 mismatches fail validation. These image checks do not execute a GPU proof.
 
-For enforce, apply exports the signer policy and pauses at `signer-receipts`.
-`.scrollsdk/inputs/signer-receipts/request.json` identifies each active signer and
-its numbered receipt filename. Send `signer-policy-bundle/` to each partner and
-save their returned validation receipts at those paths. Rerun `setup apply`.
-It computes hashes, checks all active signer identities, bundle/revision/policy
-bindings and successful validation, imports the accepted bytes into managed
-state, regenerates charts with the publication receipt and runs the final check.
-Missing evidence produces `waiting`; mismatched evidence produces `failed` and
-may be corrected in the inbox before retrying. Completed cloud and proof steps
-are preserved. See `docs/proof-config-transactions.md` for receipt semantics.
-Synthetic receipt tests are not evidence of real partner acceptance.
+For enforce, apply exports the signer deployment kit (`deployment-kit`, the
+same writer as `setup export-deployment-kit`) and pauses at
+`deployment-kit-published`. `.scrollsdk/inputs/deployment-kit/request.json`
+names the kit directory, version and manifest SHA-256. Publish that directory
+unchanged at an immutable https URL, put the URL and manifest SHA-256 on the
+deployment's governance record, then save
+`{"url": "<https URL>", "manifest_sha256": "<sha>"}` as
+`.scrollsdk/inputs/deployment-kit/published.json` and rerun `setup apply`. It
+records the publication in `[attestationSigner.deploymentKit]` and runs the
+final check. The kit version is derived from the signer-relevant inputs, so a
+rerun or a runtime refresh with unchanged inputs reuses the same kit and
+publication. Observe and mock deployments have no kit. Plans created by an
+earlier CLI migrate in place: their `signer-policy`, `signer-receipts` and
+`charts-validated` steps are replaced by the two kit steps, and completed steps
+are kept. After rollout, run `setup proof-config-check --live` as the final
+acceptance check.
 
 The contracts deployment environment uses rc.5's `DEPLOYER_PRIVATE_KEY`,
 `L1_RPC_ENDPOINT`, and `L2_RPC_ENDPOINT` names. Both spec generation and
