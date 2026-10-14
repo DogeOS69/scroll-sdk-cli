@@ -68,6 +68,7 @@ the spec's environment references even when a later step would not use them.
 | `FEE_ORACLE_ETHEREUM_RPC_URL` | `feeOracle.ethereumRpcUrl` | Independent Ethereum fee-sampling endpoint; defaults to Ethereum mainnet even for devnet DA. |
 | `DB_ADMIN_PASSWORD` | `database.admin.password` | Existing PostgreSQL administrator password. |
 | `OWNER_ADDRESS` | `accounts.owner.address` | Public Ethereum/L2 owner or multisig address; no private key. |
+| `DEPLOYER_PRIVATE_KEY` | Optional `accounts.deployer.privateKey` import | EVM private key: `0x` followed by 64 hexadecimal characters. The CLI derives the deployer address. |
 | `DOGECOIN_EXTERNAL_RPC_USERNAME`, `DOGECOIN_EXTERNAL_RPC_PASSWORD` | `dogecoin.externalRpc` | Credentials for the RPC reached by the operator. |
 | `DOGECOIN_CLUSTER_RPC_USERNAME`, `DOGECOIN_CLUSTER_RPC_PASSWORD` | `dogecoin.clusterRpc` | Credentials used by deployed services. |
 | `DOGECOIN_FEE_WALLET_KEY` | Production Bridge, fixed environment variable | Compressed Dogecoin WIF for the selected network; apply derives the public key/address. Fee-wallet KMS is not supported by beta.6-kms. |
@@ -83,6 +84,20 @@ field: the spec must explicitly reference it. Keep each value on one line, place
 comments on separate lines, and do not use shell substitutions. AWS credentials
 use the normal provider chain; GCP credential files
 and Bridge funding outpoints use their separately declared files.
+
+### Optionally supply an existing deployer key
+
+Before the first `setup plan` / `setup apply`, uncomment the optional
+`accounts.deployer.privateKey: "$ENV:DEPLOYER_PRIVATE_KEY"` entry in your copy of
+the SDK spec, and the matching `DEPLOYER_PRIVATE_KEY` entry in your private
+`deployment.env`. Replace the environment placeholder with your EVM private key;
+Dogecoin WIF and KMS key IDs are not accepted here. Keep the key in the private
+environment file, and let the CLI derive its address.
+
+Leave both entries commented to have apply generate a random deployer identity
+and reuse the saved identity on resume. Setting the environment variable alone
+does not enable import. This choice is for a fresh deployment; changing it after
+genesis has been generated is not a deployer rotation procedure.
 
 ## Ethereum provider Secrets and deployment isolation
 
