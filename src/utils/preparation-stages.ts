@@ -7,7 +7,7 @@ export type PreparationStage = typeof PREPARATION_STAGES[number]
 export function stagedPreparationSteps(legacy: PreparationStep[]): PreparationStep[] {
   const order: Record<PreparationStage, string[]> = {
     aws: ['identities', 'proof-aws', 'archive', 'archive-access', 'bridge-sequencer-kms', 'dstack', 'dstack-db', 'blockscout-db'],
-    'bridge-funding': ['bridge-fee-wallet', 'bridge-prepare', 'ethereum-anchor', 'production-wallets', 'helper-funding', 'helper-setup', 'bridge-info', 'production-funding', 'helper-fund'],
+    'bridge-funding': ['bridge-fee-wallet', 'bridge-prepare', 'ethereum-anchor', 'managed-helper-prepare', 'managed-helper-funding', 'managed-helper-setup', 'production-wallets', 'helper-funding', 'helper-setup', 'bridge-info', 'production-funding', 'helper-fund', 'managed-helper-fund', 'managed-helper-verify'],
     genesis: ['bootstrap', 'genesis-local'],
     'proof-materials': ['protocol-context', 'external-inputs', 'proof-release-bake', 'proof-materializer-export', 'proof-worker-check', 'proof-materials', 'charts', 'proof-publish', 'charts-published', 'signer-policy', 'signer-receipts'],
     render: ['charts-validated', 'render-final', 'secrets', 'proof-check', 'proof-workers-intent'],

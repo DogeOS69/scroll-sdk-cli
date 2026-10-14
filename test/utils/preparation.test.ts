@@ -157,11 +157,42 @@ describe('resumable preparation plan', () => {
     expect(fs.existsSync(path.join(instance, 'config.toml'))).to.equal(false)
   })
 
+  it('defaults new production plans to one helper handoff and never replays an ambiguous helper broadcast', async () => {
+    const spec = fixture()
+    spec.preparation!.bridge.mode = 'production'
+    spec.preparation!.bridge.production = {
+      ethereumAnchor: {blockTag: 'finalized'},
+      recoveryPublicKeys: Array.from({length: spec.bridge.thresholds.recovery}, () => new bitcore.PrivateKey().toPublicKey().toString()),
+      sequencerKeyEnv: 'DISPOSABLE_SEQUENCER_KEY', sequencerPublicKey: new bitcore.PrivateKey().toPublicKey().toString(),
+    }
+    spec.bridge.teePubkey = new bitcore.PrivateKey().toPublicKey().toString()
+    spec.bridge.timelock = 10_000_000
+    fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
+    const plan = await createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml'), staged: true})
+    const saved = JSON.parse(fs.readFileSync(path.join(deployment, '.scrollsdk/intent.json'), 'utf8'))
+    expect(saved.preparation.bridge.production.funding).to.equal('helper')
+    expect(plan.steps.map(step => step.id)).not.to.include.members(['production-wallets', 'production-funding'])
+    let funded = false
+    let broadcasts = 0
+    const runner = {async run(step: {id: string}) {
+      if (step.id === 'managed-helper-funding' && !funded) throw new AwaitingInput({message: 'Supply helper.txid and helper.vout'})
+      if (step.id === 'managed-helper-setup') {broadcasts++; throw new Error('Connection lost after send')}
+    }}
+    await applyPreparation(deployment, runner, undefined, {stage: 'genesis'})
+    await applyPreparation(deployment, runner, undefined, {stage: 'aws'})
+    expect((await applyPreparation(deployment, runner, undefined, {stage: 'bridge-funding'})).currentStep).to.equal('managed-helper-funding')
+    funded = true
+    expect((await applyPreparation(deployment, runner, undefined, {stage: 'bridge-funding'})).status).to.equal('recovery-required')
+    expect((await applyPreparation(deployment, runner, undefined, {stage: 'bridge-funding'})).status).to.equal('recovery-required')
+    expect(broadcasts).to.equal(1)
+  })
+
   it('executes only the selected stage and resumes both production funding handoffs without replaying earlier work', async () => {
     const spec = fixture()
     spec.preparation!.bridge.mode = 'production'
     spec.preparation!.bridge.production = {
       ethereumAnchor: {blockTag: 'finalized'},
+      funding: 'external',
       recoveryPublicKeys: Array.from({length: spec.bridge.thresholds.recovery}, () => new bitcore.PrivateKey().toPublicKey().toString()),
       sequencerKeyEnv: 'DISPOSABLE_SEQUENCER_KEY', sequencerPublicKey: new bitcore.PrivateKey().toPublicKey().toString(),
     }

@@ -79,7 +79,7 @@ the spec's environment references even when a later step would not use them.
 | `DEPLOYER_PRIVATE_KEY` | Optional `accounts.deployer.privateKey` import | EVM private key: `0x` followed by 64 hexadecimal characters. The CLI derives the deployer address. |
 | `DOGECOIN_EXTERNAL_RPC_USERNAME`, `DOGECOIN_EXTERNAL_RPC_PASSWORD` | `dogecoin.externalRpc` | Credentials for the RPC reached by the operator. |
 | `DOGECOIN_CLUSTER_RPC_USERNAME`, `DOGECOIN_CLUSTER_RPC_PASSWORD` | `dogecoin.clusterRpc` | Credentials used by deployed services. |
-| `DOGECOIN_FEE_WALLET_KEY` | Production Bridge, fixed environment variable | Compressed Dogecoin WIF for the selected network; apply derives the public key/address. Fee-wallet KMS is not supported by beta.6-kms. |
+| `DOGECOIN_FEE_WALLET_KEY` | Optional with helper funding; required with external funding | Compressed Dogecoin WIF for the selected network. Omit for a helper-derived local fee wallet. Fee-wallet KMS is not supported by beta.6-kms. |
 | `DOGECOIN_SEQUENCER_KEY` | Optional local Bridge `sequencerKeyEnv` | Omit when selecting `sequencerKms`; local mode requires the matching `sequencerPublicKey`. |
 | `SEQUENCER_SIGNING_KEY` | Optional `identities.sequencers[0].signer.privateKeyEnv` import | L2 Reth signer private key, distinct from the Dogecoin sequencer key. Omit for create/KMS. |
 | `VASTAI_API_KEY` | `preparation.dstack.vastaiApiKeyEnv` | Vast.ai key string; no separate credential file is needed. |
@@ -150,9 +150,8 @@ scrollsdk setup plan
 scrollsdk setup genesis
 scrollsdk setup aws
 scrollsdk setup bridge-funding
-# Fund the two wallets, record their outpoints, then rerun this same stage.
-scrollsdk setup bridge-funding
-# Fund the final Bridge with its OP_RETURN marker, record it, then rerun.
+# Fund the displayed helper address and record helper.txid/vout, then rerun.
+# Core distributes to the wallets and funds the final Bridge automatically.
 scrollsdk setup bridge-funding
 scrollsdk setup proof-materials
 # For enforce mode: collect the requested partner receipts, then rerun.
@@ -198,7 +197,7 @@ generation so a retry uses the same identity.
 | --- | --- | --- |
 | `setup genesis` | Bootstrap pinned templates; pin the deployer; generate local genesis and contract addresses. | No AWS calls, funding or service identity creation. |
 | `setup aws` | Prepare declared service identities, proof store/IAM/token, archive access, Bridge sequencer KMS, controller credentials and selected existing databases. | Resource facts are saved automatically; no copy back into the spec. No GPU allocation. |
-| `setup bridge-funding` | Bind genesis/DA anchor; verify sequencer and fee-wallet funding; derive namespace/final Bridge; verify marked Bridge funding. | Two operator wallet handoffs; rerun this stage to resume. Production mode does not broadcast payments. |
+| `setup bridge-funding` | Bind genesis/DA anchor; verify helper funding; invoke Core setup and marked funding; verify all resulting outpoints. | One operator wallet handoff. Setup and Bridge funding broadcast transactions and require manual reconciliation after ambiguous failures. |
 | `setup proof-materials` | Generate protocol context; import declared inputs; bake/import proof materials; compile/publish proof configuration; export signer bundle and validate enforce receipts. | Preliminary chart compilation is needed to bind the signer bundle. Wait for receipts within this stage. |
 | `setup render` | Render final values/native configuration with the accepted receipts; generate private Secrets; run proof checks. | Helm releases remain uninstalled. |
 | `setup upload-secrets` | Upload using the saved provider, region, namespace and Secret prefix. | AWS defaults to the deployment-specific prefix; no retyping it. |
@@ -258,12 +257,13 @@ attestationSigners:
 preparation:
   bridge:
     mode: production
-    image: dogeos69/bridge-genesis-tools@sha256:27e646fd5d9c340926df82f47f7d352fd5333de4e6178c5a8c56aa9637769262
+    image: dogeos69/bridge-genesis-tools@sha256:1de7db81356ea733fe4194e3813dd05b29b6028e27941272d2c3f1f1848b06fb
     fundingFile: .scrollsdk/inputs/bridge-funding.json
     production:
+      funding: helper # Default for new plans; requires a reviewed fixed Core helper image.
       sequencerKms: {action: create}
-      # Fee wallet: set DOGECOIN_FEE_WALLET_KEY in private deployment.env.
-      # Apply derives its public key and funding address automatically.
+      # Optional: DOGECOIN_FEE_WALLET_KEY in deployment.env preserves an existing wallet.
+      # Otherwise Core derives it from a private, deployment-specific helper seed.
       recoveryPublicKeys:
         - REPLACE_WITH_FIRST_RECOVERY_PUBLIC_KEY
         - REPLACE_WITH_SECOND_RECOVERY_PUBLIC_KEY
@@ -274,15 +274,20 @@ preparation:
     receipt: .data/proof-materials-v1.json
 ```
 
-The image digest above was pulled as `v0.3.0-beta.6` during local verification.
-Select and review the intended release for your environment. Select
+The image digest above is the temporary amd64 build `test-pr1573-3ca0cf16f`,
+verified against a disposable regtest node after the Core #1573 marker fix.
+The old `v0.3.0-beta.6` helper emits a 71-byte funding payload instead of the
+required 73 bytes and must not be used for this path. Select and review the
+intended release for your environment; this example does not change an existing
+plan's frozen image or funded outpoints. Select
 `signing.cubesigner.identity: {roleId: ...}` (plus `keyId` for multi-key roles);
 plan uses the authenticated `cs` CLI to query membership and normalize/freeze the
 TEE public key. An explicit `bridge.teePubkey` remains supported. The recovery
 threshold and future block-height `bridge.timelock` must also be explicit. Attestation public keys and their order come from
 `attestationSigners` and the selected initial keyset. Recovery and TEE keys are never
 derived from `bridge.seedString` in production mode. Omit that test-helper field
-from a production spec; production output contains no helper funding placeholders.
+from a production spec. Helper funding uses a random seed saved privately in
+`.data/bridge-helper-seed`, separate from the independently managed Bridge keys.
 
 The two Dogecoin wallet identities are distinct from the L2 Reth signer and the
 Ethereum DA/fee-oracle identities. With
@@ -304,7 +309,9 @@ WP IRSA role. Proof/KMS role mismatches fail instead of overwriting annotations.
 
 `sequencerKms` is mutually exclusive with `sequencerPublicKey` and
 `sequencerKeyEnv`. Local sequencing still accepts that pair. For the fee wallet,
-set only `DOGECOIN_FEE_WALLET_KEY` in the private environment file. Spec fields
+optionally set `DOGECOIN_FEE_WALLET_KEY` in the private environment file when using
+helper funding; external funding requires it. If omitted with helper funding,
+the wallet is deterministically derived from the saved helper seed. Spec fields
 `feeWalletPublicKey` and `feeWalletKeyEnv` are not accepted. Apply validates its
 compressed WIF and Dogecoin network, derives the public key and funding address,
 and pins that public identity in `.data/bridge-fee-wallet.json` at the start of
@@ -312,7 +319,8 @@ and pins that public identity in `.data/bridge-fee-wallet.json` at the start of
 fee-wallet key so funding cannot silently switch to another wallet.
 Runtime native TOML receives `[sequencer_signer_kms]` with `key_id`, `region` and
 `expected_pubkey`; the sequencer WIF entry is absent from Secrets/ExternalSecrets.
-The funding, confirmation and Bridge construction steps are unchanged.
+Core may rewrite its construction manifest during funding; the CLI restores the
+pinned KMS backend after both helper actions and never invents a sequencer WIF.
 
 The image was checked against OCI source revision
 `7a9bc0761f4b35e7c32fcdfbcc491294471d826b`: only sequencing supports KMS.
@@ -322,11 +330,89 @@ deployment test in addition to the local adapter tests.
 
 ## Production funding and resume
 
-New deployments require the initial sequencer payment at **vout 0**. Build it as
+New `setup plan` plans default to `preparation.bridge.production.funding: helper`.
+The choice is frozen into the plan. Existing plans without that field retain
+external funding; they are not silently migrated after outpoints or bridge
+addresses have been fixed. Use a new deployment directory for a different
+funding path. This creates a different sequencer outpoint, namespace and bridge.
+
+**Release prerequisite:** the old beta.6 image emits the obsolete
+71-byte marker (`6a4701` + 70 zero bytes), but its protocol decoder requires
+73 bytes (`6a4901` + 72 zero bytes). The CLI blocks that known image before
+helper funding. Select a reviewed fixed Core release before using this path.
+The isolated Docker test reproduces the bug with the old image and passes the
+full funding verification with the fixed temporary image shown above. Run it
+against a candidate digest with `RUN_HELPER_DOCKER_TESTS=1
+HELPER_DOCKER_IMAGE=dogeos69/bridge-genesis-tools@sha256:... yarn mocha
+test/utils/preparation-helper.test.ts`. Confirmation alone is insufficient;
+the generated marker and all funding outputs must also pass validation.
+
+With a compatible image, the operator sequence is:
+
+1. Run `scrollsdk setup bridge-funding`. The CLI keeps the KMS/local sequencer,
+   TEE, attestation and recovery identities selected by the spec. It supplies
+   their public keys to Core. For the fee wallet, an existing
+   `DOGECOIN_FEE_WALLET_KEY` is preserved; otherwise Core derives a local key
+   from the saved helper seed. No private Bridge keys are generated by helper.
+2. Send the displayed amount to the displayed helper P2PKH address. This is an
+   ordinary payment; the operator does not construct an OP_RETURN. The requested
+   amount includes sequencer funding, ten fee-wallet outputs, bridge funding and
+   both transaction fees. Fees for the operator's payment are additional.
+3. In `deployment/.scrollsdk/inputs/bridge-funding.json`, supply only:
+
+   ```json
+   {
+     "helper": {
+       "txid": "REPLACE_WITH_HELPER_FUNDING_TXID",
+       "vout": "REPLACE_WITH_OUTPUT_INDEX"
+     }
+   }
+   ```
+
+   Replace `vout` with the actual numeric output index paying the helper.
+   The helper input itself does not need to be vout 0.
+4. Rerun `scrollsdk setup bridge-funding`. After confirmation checks, Core
+   broadcasts its setup transaction: sequencer at **vout 0**, ten fee-wallet
+   outputs, and helper-controlled funds reserved for Bridge funding. The CLI
+   derives the final bridge address, invokes Core `fund-bridge`, and verifies
+   the marked Bridge output. Test deposit-seed transactions are disabled.
+5. Continue with `scrollsdk setup proof-materials`. No additional funding
+   txid/vout needs to be entered. All child outpoints are recorded by Core.
+
+Keep `.data/bridge-helper-seed` private and backed up: it controls helper change
+and, when no external fee key was supplied, the fee wallet. Generated runtime
+Secrets contain the fee-wallet WIF and follow the normal `upload-secrets` path;
+the helper seed is not uploaded as a runtime Secret. Changing or removing the
+original wallet identity on resume is rejected.
+
+Core setup/funding are broadcasts, not safe-to-repeat rendering commands.
+Completed steps are skipped. An interrupted/failed broadcast becomes
+`recovery-required`; inspect the private logs and on-chain results before
+reconciliation. Do not delete workflow state or blindly repeat `setup`.
+
+### Explicit external-wallet funding
+
+Set `preparation.bridge.production.funding: external` to retain the manual
+sequencer/fee-wallet and marked Bridge funding handoffs below. Saved older plans
+continue using this path.
+
+By default, the CLI requires the initial sequencer payment at **vout 0**. Build it as
 the first output and place change afterwards; inspect the final signed transaction
-before broadcasting. Apply rejects nonzero sequencer output indices. Existing
-nonzero deployments require a separately reviewed recovery path; do not rewrite
-an already funded outpoint.
+before broadcasting. To accept an actual nonzero funding output, use:
+
+```bash
+scrollsdk setup bridge-funding --allow-nonzero-sequencer-vout
+```
+
+The same flag is available on `setup apply` for legacy plans. It is an invocation
+option, so an existing plan does not need to be recreated. Include it on retries
+until wallet funding is accepted; the validated outpoint is then saved for later
+steps. Address, amount, confirmations, unspent status and canonical-chain checks
+remain enabled. Record the actual output index, never relabel an existing output.
+
+This flag only relaxes the CLI check. Some beta.6 WP builds compare the genesis
+output index against a compiled circuit default of zero; permitting a nonzero
+index here does not establish compatibility with the selected WP/proof release.
 
 The beta.6 production order is defined in
 [core's pinned production guide](https://github.com/DogeOS69/dogeos-core/blob/56007d3c413ad07f33d0e08b272004089c911f78/docs/bridge-genesis-deployment.md).
@@ -375,8 +461,8 @@ requires the recommended marker rather than accepting arbitrary WF-shaped
 payloads. It also rechecks the sequencer anchor, fee-wallet funding and future recovery
 timelock before accepting Bridge funding.
 
-No automatic wallet scan or wallet signing/broadcast is performed in production
-mode. The external wallet constructs and sends the payments. Confirmation waits
+No automatic wallet scan or wallet signing/broadcast is performed in external
+funding mode. The external wallet constructs and sends the payments. Confirmation waits
 return a resumable result instead of holding an interactive prompt open.
 
 ## Test-helper compatibility

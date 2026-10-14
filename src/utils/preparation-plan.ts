@@ -10,6 +10,7 @@ import {DeploymentSpecFieldError} from './deployment-spec-fields.js'
 import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec} from './deployment-spec-generator.js'
 import {usesDstackPostgres} from './dstack-database.js'
 import {feeVaultRecipientHash} from './fee-vault-recipient.js'
+import {usesManagedHelper} from './preparation-helper-identity.js'
 import {AwaitingInput, digest, loadPreparationEnv, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolvePreparationProofRelease} from './preparation-release.js'
 import {refreshPreparationRuntime} from './preparation-runtime-refresh.js'
@@ -56,9 +57,18 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
   add('bridge-prepare', 'Compute protocol seed from genesis')
   if (p.bridge.mode === 'production') {
     add('ethereum-anchor', 'Validate and bind the selected Ethereum DA anchor', 'read')
-    add('production-wallets', 'Wait for and verify sequencer and fee-wallet funding', 'read')
-    add('bridge-info', 'Derive the namespace and final Bridge address')
-    add('production-funding', 'Wait for and verify marked Bridge funding', 'read')
+    if (usesManagedHelper(spec)) {
+      add('managed-helper-prepare', 'Prepare helper distribution with independently managed Bridge public keys')
+      add('managed-helper-funding', 'Wait for and verify helper funding', 'read')
+      add('managed-helper-setup', 'Broadcast helper distribution transaction', 'chain', 'reconcile')
+      add('bridge-info', 'Derive the namespace and final Bridge address')
+      add('managed-helper-fund', 'Broadcast marked Bridge funding from helper outputs', 'chain', 'reconcile')
+      add('managed-helper-verify', 'Verify helper distribution and marked Bridge funding', 'read')
+    } else {
+      add('production-wallets', 'Wait for and verify sequencer and fee-wallet funding', 'read')
+      add('bridge-info', 'Derive the namespace and final Bridge address')
+      add('production-funding', 'Wait for and verify marked Bridge funding', 'read')
+    }
   } else {
     add('helper-funding', 'Wait for and verify test-helper funding', 'read')
     add('helper-setup', 'Broadcast test-helper setup transaction', 'chain', 'reconcile')
@@ -156,6 +166,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
 
     const policy = p.bridge.production
     if (!policy) throw new Error('preparation.bridge.production must declare independently managed Dogecoin wallets and recovery keys')
+    if (policy.funding !== undefined && !['external', 'helper'].includes(policy.funding)) throw new Error('production.funding must be helper or external')
     const anchor = policy.ethereumAnchor
     if (anchor?.blockTag !== undefined) {
       if (anchor.blockTag !== 'finalized' || anchor.blockNumber !== undefined || anchor.transactionIndex !== undefined) throw new Error('Use ethereumAnchor.blockTag: finalized alone, or explicit blockNumber and transactionIndex')
@@ -222,6 +233,8 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   // Reject a missing/invalid withdrawal destination before SDK lookup, CubeSigner
   // authentication or proof-release downloads. Apply rechecks it on saved plans.
   feeVaultRecipientHash(spec.contracts?.feeVaultDogeRecipientAddress ?? '', spec.dogecoin.network)
+  // Persist the choice in new plans. Previously saved plans keep their original funding path.
+  if (spec.preparation?.bridge.mode === 'production' && spec.preparation.bridge.production) spec.preparation.bridge.production.funding ??= 'helper'
   spec.templates = {sdkRevision: resolveSdkRevision(options.sdkDirectory, spec.templates?.sdkRevision)}
   spec = resolveCubesignerIdentity(spec)
   spec = await resolvePreparationProofRelease(spec, options.output)

@@ -129,7 +129,7 @@ export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kin
   "$.preparation": {"keys":["archive","bridge","databases","dstack","genesis","inputs","proofAws","proofMaterials","proofPublication","proofRelease","secretUpload"],"kind":"object"},
   "$.preparation.archive": {"keys":["action","awsProfile","publicRead","writerRoleArn"],"kind":"object"},
   "$.preparation.bridge": {"keys":["fundingFile","image","mode","production"],"kind":"object"},
-  "$.preparation.bridge.production": {"keys":["ethereumAnchor","recoveryPublicKeys","sequencerKeyEnv","sequencerKms","sequencerPublicKey"],"kind":"object"},
+  "$.preparation.bridge.production": {"keys":["ethereumAnchor","funding","recoveryPublicKeys","sequencerKeyEnv","sequencerKms","sequencerPublicKey"],"kind":"object"},
   "$.preparation.bridge.production.ethereumAnchor": {"keys":["blockNumber","blockTag","transactionIndex"],"kind":"object"},
   "$.preparation.bridge.production.recoveryPublicKeys": {"kind":"array"},
   "$.preparation.bridge.production.sequencerKms": {"keys":["action","awsProfile","keyId","region","roleArn"],"kind":"object"},

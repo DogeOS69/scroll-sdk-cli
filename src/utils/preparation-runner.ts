@@ -12,9 +12,11 @@ import type {PreparationPlan, PreparationRunner, PreparationStep} from './prepar
 import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
 import {parseDatabaseUrl} from './dstack-database.js'
 import {productionFeeWallet} from './preparation-fee-wallet.js'
-import {checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
+import {type FundingOptions, checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
 import {prepareLocalGenesis} from './preparation-genesis.js'
 import {prepareGrafanaAdmin} from './preparation-grafana.js'
+import {assertHelperFundingImage, prepareManagedHelper, prepareManagedHelperFunding, verifyManagedHelperFunding} from './preparation-helper.js'
+import {helperFeeWalletWif, usesManagedHelper} from './preparation-helper-identity.js'
 import {AwaitingInput, localPath, privateWrite} from './preparation-io.js'
 import {bindPreparedProofAws, reuseProofAws} from './preparation-proof-aws.js'
 import {prepareSequencerKms, productionSequencer} from './preparation-sequencer-kms.js'
@@ -52,10 +54,13 @@ function requiredFile(root: string, input: string | undefined, label: string): s
 const optional = (name: string, value: string | undefined): string[] => value ? [`--${name}`, value] : []
 
 export class CommandPreparationRunner implements PreparationRunner {
-  constructor(private readonly invoke: Invoke = invokePreparationCommand, private readonly exportMaterializers = exportCoordinatorMaterializers) {}
+  constructor(private readonly invoke: Invoke = invokePreparationCommand, private readonly exportMaterializers = exportCoordinatorMaterializers, private readonly fundingOptions: FundingOptions = {}) {}
   async run(step: PreparationStep, spec: DeploymentSpec, root: string, plan: PreparationPlan): Promise<void> {
     const p = spec.preparation!
-    const command = (args: string[], environment?: Record<string, string>) => this.invoke(root, step.id, args, environment)
+    const command = (args: string[], environment?: Record<string, string>) => this.invoke(root, step.id, args, {
+      ...(usesManagedHelper(spec) && fs.existsSync(path.join(root, '.data/bridge-helper-seed')) && !process.env.DOGECOIN_FEE_WALLET_KEY ? {DOGECOIN_FEE_WALLET_KEY: helperFeeWalletWif(root, spec)} : {}),
+      ...environment,
+    })
     const bridgeArgs = ['-N', '--image', p.bridge.image, '--ethereum-da-probe', 'direct', ...(p.bridge.mode === 'production' ? ['--production'] : [])]
     switch (step.id) {
       case 'proof-workers-intent': {
@@ -129,7 +134,16 @@ export class CommandPreparationRunner implements PreparationRunner {
       }
 
       case 'ethereum-anchor': {await prepareEthereumAnchor(root, spec); break}
-      case 'production-wallets': {await prepareProductionWallets(root, spec, dogecoinRpc(root)); break}
+      case 'managed-helper-prepare': {assertHelperFundingImage(p.bridge.image); prepareManagedHelper(root, spec); break}
+      case 'managed-helper-funding': {await prepareManagedHelperFunding(root, spec, dogecoinRpc(root)); break}
+      case 'managed-helper-setup':
+      case 'managed-helper-fund': {
+        await command(['bridge-init', '--step', step.id === 'managed-helper-setup' ? '2-setup' : '4-fund', ...bridgeArgs.filter(arg => arg !== '--production'), '--managed-helper-wallets'])
+        break
+      }
+
+      case 'managed-helper-verify': {await verifyManagedHelperFunding(root, spec, dogecoinRpc(root)); break}
+      case 'production-wallets': {await prepareProductionWallets(root, spec, dogecoinRpc(root), this.fundingOptions); break}
       case 'production-funding': {await prepareProductionBridgeFunding(root, spec, dogecoinRpc(root)); break}
       case 'helper-funding': {await prepareHelperFunding(root, spec, dogecoinRpc(root)); break}
       case 'helper-setup': {await command(['bridge-init', '--step', '2-setup', ...bridgeArgs]); break}
