@@ -227,8 +227,8 @@ export async function sendRotation(options: SendOptions): Promise<SendOutcome> {
     response = await cluster.postWp('/propose', request)
   } catch {throw new Error('The /propose request failed: the submission may already be stored. Re-run send with the same export; it reports the stored intent instead of resubmitting')}
 
-  // The WP validates the request, including the liveness outpoint, before it stores anything.
-  if (response.status === 422) throw new Error(`/propose was refused (HTTP 422${wpError(response.body)}); nothing was stored. Fix the cause, then re-run send`)
+  // Validation, including the liveness outpoint, runs before the store; a later dispatch error can also be a 422.
+  if (response.status === 422) throw new Error(`/propose was refused (HTTP 422${wpError(response.body)}). If it was refused at validation, nothing was stored; fix the cause and re-run send. Re-running send first looks up the intent and reports it if one was stored`)
   if (response.status !== 200 && response.status !== 202) throw new Error(`/propose returned HTTP ${response.status}${wpError(response.body)}. The submission may already be stored. Re-run send with the same export; it reports the stored intent instead of resubmitting`)
   return {kind: 'proposed', response: response.body, status: response.status}
 }

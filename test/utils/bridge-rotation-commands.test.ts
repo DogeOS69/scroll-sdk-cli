@@ -412,7 +412,7 @@ describe('bridge rotation send', () => {
     expect((error as Error).message).to.equal(`WP preview (/build) returned HTTP 422: ${reason}; nothing was stored`)
     const proposed = cluster(null, async () => ({body: {error: reason}, status: 422}))
     try {await sendRotation({cluster: proposed.cluster, livenessOutpoint: OUTPOINT, preview: false, rotation})} catch (error_) {error = error_}
-    expect((error as Error).message).to.equal(`/propose was refused (HTTP 422: ${reason}); nothing was stored. Fix the cause, then re-run send`)
+    expect((error as Error).message).to.equal(`/propose was refused (HTTP 422: ${reason}). If it was refused at validation, nothing was stored; fix the cause and re-run send. Re-running send first looks up the intent and reports it if one was stored`)
   })
 
   it('reports an existing intent without an outpoint, and refuses one stored with another outpoint', async () => {
