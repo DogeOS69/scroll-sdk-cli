@@ -6,9 +6,9 @@ import os from 'node:os'
 import path from 'node:path'
 
 import type {RotateKeyIntent, RotationCluster} from './rotation-cluster.js'
-import type {RotateKeyStatus, RotationExport} from './rotation-export.js'
+import type {LivenessOutpoint, RotateKeyStatus, RotationExport} from './rotation-export.js'
 
-import {assertDeploymentIdentity, assertPredecessor, rotationSigners} from './rotation-export.js'
+import {assertDeploymentIdentity, assertPredecessor, formatOutpoint, rotationSigners} from './rotation-export.js'
 import {tsoSignerNetwork} from './tso-signer-network.js'
 import {WP_VALUES_FILE, isFreshPoll, parseLastPolls} from './tso-signer-polls.js'
 
@@ -147,12 +147,35 @@ export async function checkOnline(cluster: RotationCluster, rotation: RotationEx
 
 export const INTENT_EXIT_CODES: Record<string, number> = {bound: 2, completed: 0, failed_terminal: 1, pending: 2, superseded: 1}
 
-/** The stored intent must be this export's request; otherwise the key was reused for another rotation. */
-export function assertIntentMatches(rotation: RotationExport, intent: RotateKeyIntent): void {
+/** The bridge-funding marker a liveness funding transaction carries as its only, zero-value OP_RETURN. */
+export const BRIDGE_FUNDING_MARKER_HEX = `6a4901${'00'.repeat(72)}`
+
+/** Why a new intent needs a liveness outpoint, and how to create one. */
+export function livenessFundingHelp(rotation: RotationExport): string {
+  return `A new rotation intent needs --liveness-outpoint <txid:vout>: a confirmed, unspent output of at least 1 DOGE paying the target P2SH address ${rotation.target.p2sh_address}, `
+    + `in a transaction that is not a deposit and whose only OP_RETURN is the zero-value bridge-funding marker ${BRIDGE_FUNDING_MARKER_HEX} (6a 49 01 and 72 zero bytes). `
+    + 'Only the target signers can spend it, so the rotation proves they are live. Fund it, wait for the deposit confirmation depth, then re-run send with --liveness-outpoint'
+}
+
+/**
+ * The stored intent must be this export's request, and the outpoint given on the command line
+ * if any; otherwise the key was reused for another rotation or another funding output.
+ */
+export function assertIntentMatches(rotation: RotationExport, intent: RotateKeyIntent, livenessOutpoint?: LivenessOutpoint): void {
   const request = rotation.wp_rotate_key_request
   // A null-grace request is stored with the grace the WP resolved, so only a stated grace is compared.
   const graceDiffers = request.grace_wf_txs !== null && intent.payload.grace_wf_txs !== request.grace_wf_txs
-  if (intent.payload.new_key_hash.toLowerCase() !== request.new_key_hash || intent.payload.new_bridge_redeem_script_hex.toLowerCase() !== request.new_bridge_redeem_script_hex || graceDiffers) throw new Error(`The WP already stores a different rotation under idempotency key ${request.idempotency_key}; do not resubmit`)
+  const stored = intent.payload.liveness_outpoint ? formatOutpoint(intent.payload.liveness_outpoint) : null
+  const outpointDiffers = livenessOutpoint !== undefined && stored !== formatOutpoint(livenessOutpoint)
+  if (intent.payload.new_key_hash.toLowerCase() !== request.new_key_hash || intent.payload.new_bridge_redeem_script_hex.toLowerCase() !== request.new_bridge_redeem_script_hex || graceDiffers || outpointDiffers) {
+    throw new Error(`The WP already stores a different rotation under idempotency key ${request.idempotency_key} (stored liveness outpoint ${stored ?? 'none'}${livenessOutpoint ? `, requested ${formatOutpoint(livenessOutpoint)}` : ''}); do not resubmit`)
+  }
+}
+
+/** The WP's error text from a non-2xx body (`{"error": "..."}`), if any. */
+function wpError(body: unknown): string {
+  const error = (body as {error?: unknown} | undefined)?.error
+  return typeof error === 'string' ? `: ${error}` : ''
 }
 
 export type SendOutcome =
@@ -160,32 +183,35 @@ export type SendOutcome =
   | {kind: 'preview'; response: unknown}
   | {kind: 'proposed'; response: unknown; status: number}
 
-export interface SendOptions {cluster: RotationCluster; now?: () => number; preview: boolean; rotation: RotationExport}
+export interface SendOptions {cluster: RotationCluster; livenessOutpoint?: LivenessOutpoint; now?: () => number; preview: boolean; rotation: RotationExport}
 
 /**
- * Report an existing intent and stop, or, for a new intent, run the predecessor, overlap and
- * online checks and then POST `/build` (preview, non-durable) or `/propose` (durable).
+ * Report an existing intent and stop, or, for a new intent, require a liveness outpoint, run the
+ * predecessor, overlap and online checks and then POST `/build` (preview, non-durable) or
+ * `/propose` (durable). The WP validates the outpoint over Dogecoin RPC on both routes.
  */
 export async function sendRotation(options: SendOptions): Promise<SendOutcome> {
-  const {cluster, rotation} = options
+  const {cluster, livenessOutpoint, rotation} = options
   const status = await cluster.wpStatus()
   assertDeploymentIdentity(rotation, status)
-  const request = rotation.wp_rotate_key_request
-  const intent = await cluster.wpIntent(request.idempotency_key)
+  const intent = await cluster.wpIntent(rotation.wp_rotate_key_request.idempotency_key)
   if (intent) {
     // A pending or bound intent is driven by the WP scheduler; re-running only reports.
-    assertIntentMatches(rotation, intent)
+    assertIntentMatches(rotation, intent, livenessOutpoint)
     return {exitCode: INTENT_EXIT_CODES[intent.status] ?? 1, intent, kind: 'existing'}
   }
 
+  if (!livenessOutpoint) throw new Error(livenessFundingHelp(rotation))
   assertPredecessor(rotation, status)
   if (status.deprecating) throw new Error(`A previous rotation is still in its grace window (deprecating ${status.deprecating.key_hash} until WF ${status.deprecating.deprecation_wf_tx_number})`)
   if (status.active_intent) throw new Error(`The WP already has an active rotation intent ${status.active_intent.idempotency_key} (${status.active_intent.status})`)
   const online = await checkOnline(cluster, rotation, status, options.now)
   if (!online.passed) throw new Error(`Online check failed: ${online.current.fresh}/${online.current.required} current and ${online.signers.filter(s => s.set === 'target' && s.fresh).length}/${rotation.target.signers.length} target signers polled in the last 60 s; run bridge rotation online for details`)
+  const request = {...rotation.wp_rotate_key_request, liveness_outpoint: livenessOutpoint}
   if (options.preview) {
     const response = await cluster.postWp('/build', request)
-    if (response.status !== 200) throw new Error(`WP preview (/build) returned HTTP ${response.status}; nothing was stored`)
+    // A 422 carries the WP's reason, such as a liveness outpoint that is unconfirmed, spent or not bridge-funding shaped.
+    if (response.status !== 200) throw new Error(`WP preview (/build) returned HTTP ${response.status}${wpError(response.body)}; nothing was stored`)
     return {kind: 'preview', response: response.body}
   }
 
@@ -194,7 +220,7 @@ export async function sendRotation(options: SendOptions): Promise<SendOutcome> {
     response = await cluster.postWp('/propose', request)
   } catch {throw new Error('The /propose request failed: the submission may already be stored. Re-run send with the same export; it reports the stored intent instead of resubmitting')}
 
-  if (response.status !== 200 && response.status !== 202) throw new Error(`/propose returned HTTP ${response.status}: the submission may already be stored. Re-run send with the same export; it reports the stored intent instead of resubmitting`)
+  if (response.status !== 200 && response.status !== 202) throw new Error(`/propose returned HTTP ${response.status}${wpError(response.body)}. The submission may already be stored. Re-run send with the same export; it reports the stored intent instead of resubmitting`)
   return {kind: 'proposed', response: response.body, status: response.status}
 }
 

@@ -15,13 +15,24 @@ deployment directory:
    poll: not the release, enforce mode, RPC or key-backend health, the old
    signers' allowlist entry, or real signing. A deferred WP dispatch happens
    later without another check.
-3. `scrollsdk bridge rotation send <export> --preview`: the same checks, then a
-   non-durable WP build. `send <export>` submits once (`/propose`). Re-running
-   `send` reports the stored intent instead of resubmitting.
+3. Fund the liveness output. The RotateKey spends one extra input that only the
+   target signers can sign, which proves the new set is live. Pay at least
+   1 DOGE to the export's `target.p2sh_address`, in a transaction that is not a
+   deposit and whose only OP_RETURN is the zero-value bridge-funding marker
+   `6a 49 01` followed by 72 zero bytes. Wait for the deposit confirmation
+   depth. (A CLI command for this step is still to come.)
+4. `scrollsdk bridge rotation send <export> --liveness-outpoint <txid>:<vout> --preview`:
+   the same checks, then a non-durable WP build. The WP validates the outpoint
+   over Dogecoin RPC; a rejection (HTTP 422) is printed with the WP's reason.
+   `send <export> --liveness-outpoint <txid>:<vout>` submits once (`/propose`).
+   A new intent needs `--liveness-outpoint`. Re-running `send` reports the
+   stored intent and its outpoint instead of resubmitting.
 
 Each command first checks the export against itself and the WP deployment
-(`protocol_instance_id` and network). `register` and a new `send` also require
-the live bridge to still be the export's current bridge. Signer operators use
+(`protocol_instance_id` and network), and rejects an export where any key holds
+different roles (attestation, TEE, recovery) across the current and target
+scripts. `register` and a new `send` also require the live bridge to still be
+the export's current bridge. Signer operators use
 the standalone Docker kit; they do not need this CLI.
 
 Current configuration and migration procedure: [Pure Reth configuration and retired services](docs/config-cleanup.md).

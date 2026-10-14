@@ -3,16 +3,20 @@ import {execFileSync, spawn} from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import type {RotateKeyRequest, RotateKeyStatus} from './rotation-export.js'
+import type {LivenessOutpoint, RotateKeyRequest, RotateKeyStatus} from './rotation-export.js'
 
 import {WP_VALUES_FILE} from './tso-signer-polls.js'
+
+/** The `/build` and `/propose` body: the export's request plus the operator's liveness outpoint. */
+export type RotateKeyIntentRequest = {liveness_outpoint: LivenessOutpoint} & RotateKeyRequest
 
 /** WP `GET /protocol-actions/rotate-key/intents/{key}` (dogeos-core #1535). */
 export interface RotateKeyIntent {
   activation_wf_tx_number: null | number
   deprecation_wf_tx_number: null | number
   job_status: null | string
-  payload: {grace_wf_txs: number; new_bridge_redeem_script_hex: string; new_key_hash: string}
+  /** `liveness_outpoint` is null only for an intent stored before the liveness requirement. */
+  payload: {grace_wf_txs: number; liveness_outpoint?: LivenessOutpoint | null; new_bridge_redeem_script_hex: string; new_key_hash: string}
   signed_txid: null | string
   status: string
 }
@@ -63,7 +67,7 @@ export class RotationCluster {
     return this.contextValue
   }
 
-  async postWp(route: '/build' | '/propose', body: RotateKeyRequest): Promise<{body: unknown; status: number}> {
+  async postWp(route: '/build' | '/propose', body: RotateKeyIntentRequest): Promise<{body: unknown; status: number}> {
     const response = await this.request(this.wpUrl, 'withdrawal-processor-0', `${ROTATE_KEY}${route}`, {body: JSON.stringify(body), headers: {'content-type': 'application/json'}, method: 'POST'})
     let parsed: unknown
     try {parsed = JSON.parse(response.text)} catch {parsed = undefined}
