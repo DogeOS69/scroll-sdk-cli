@@ -884,7 +884,7 @@ export function generateWithdrawalProcessorValues(spec: DeploymentSpec): string 
   const image = resolveImage(spec, 'withdrawalProcessor', {
     pullPolicy: 'Always',
     repository: 'dogeos69/withdrawal-processor',
-    tag: spec.preparation?.bridge.production?.sequencerKms ? 'v0.3.0-beta.6-kms' : CORE_DOCKER_DEFAULT_TAG
+    tag: CORE_DOCKER_DEFAULT_TAG
   })
 
   const values: Record<string, any> = {
