@@ -1,9 +1,9 @@
 import {Command, Flags} from '@oclif/core'
 import fs from 'node:fs'
 
-import {formatOutpoint, parseLivenessOutpoint} from '../../../utils/rotation-export.js'
+import {parseLivenessOutpoint} from '../../../utils/rotation-export.js'
 import {rotationArgs, rotationFlags, rotationSetup, tsoFlag} from '../../../utils/rotation-flags.js'
-import {ONLINE_CHECK_LIMITS, besideExport, sendRotation} from '../../../utils/rotation-operations.js'
+import {ONLINE_CHECK_LIMITS, besideExport, existingIntentReport, sendRotation} from '../../../utils/rotation-operations.js'
 
 export default class RotationSend extends Command {
   static args = rotationArgs
@@ -25,8 +25,7 @@ export default class RotationSend extends Command {
     const {cluster, rotation} = rotationSetup(args.export, flags)
     const outcome = await sendRotation({cluster, livenessOutpoint, preview: flags.preview, rotation})
     if (outcome.kind === 'existing') {
-      const stored = outcome.intent.payload.liveness_outpoint
-      this.log(JSON.stringify({idempotencyKey: rotation.wp_rotate_key_request.idempotency_key, intent: outcome.intent, livenessOutpoint: stored ? formatOutpoint(stored) : null, note: 'Already stored; the WP drives it. Nothing was resubmitted.'}, null, 2))
+      this.log(JSON.stringify(existingIntentReport(rotation, outcome.intent), null, 2))
       process.exitCode = outcome.exitCode
       return
     }

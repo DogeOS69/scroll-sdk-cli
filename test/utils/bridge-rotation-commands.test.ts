@@ -11,7 +11,7 @@ import type {RotateKeyIntent, RotationCluster} from '../../src/utils/rotation-cl
 
 import {type BridgeScript, bridgeHash, parseBridgeScript} from '../../src/utils/bridge-rotation.js'
 import {type RotateKeyStatus, type RotationExport, assertDeploymentIdentity, assertPredecessor, assertRoleSeparation, assertTransportKeys, parseLivenessOutpoint, validateRotationExport} from '../../src/utils/rotation-export.js'
-import {BRIDGE_FUNDING_MARKER_HEX, assertIntentMatches, mergeRotationSigners, onlineCheck, registerRotation, sendRotation} from '../../src/utils/rotation-operations.js'
+import {BRIDGE_FUNDING_MARKER_HEX, assertIntentMatches, existingIntentReport, mergeRotationSigners, onlineCheck, registerRotation, sendRotation} from '../../src/utils/rotation-operations.js'
 import {WP_VALUES_FILE, parseLastPolls} from '../../src/utils/tso-signer-polls.js'
 
 // The governance portal's export goldens (dogeos-gov-portal #125, vectors/rotation-export/).
@@ -414,6 +414,12 @@ describe('bridge rotation send', () => {
     }
 
     expect(existing.posts).to.deep.equal([])
+  })
+
+  it('prints the stored liveness outpoint of an existing intent as <txid>:<vout>, or null for an older intent', () => {
+    expect(existingIntentReport(rotation, stored({liveness_outpoint: {txid: `0x${'1F'.repeat(32)}`, vout: 1}}))).to.deep.include({idempotencyKey: rotation.wp_rotate_key_request.idempotency_key, livenessOutpoint: `${'1f'.repeat(32)}:1`})
+    expect(existingIntentReport(rotation, stored({liveness_outpoint: null})).livenessOutpoint).to.equal(null)
+    expect(existingIntentReport(rotation, stored()).livenessOutpoint).to.equal(null)
   })
 
   it('reports an existing intent and never resubmits it, even with --preview', async () => {

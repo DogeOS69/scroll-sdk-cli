@@ -224,6 +224,12 @@ export async function sendRotation(options: SendOptions): Promise<SendOutcome> {
   return {kind: 'proposed', response: response.body, status: response.status}
 }
 
+/** What `send` prints for an intent already stored: the intent and its liveness outpoint as `<txid>:<vout>`, or null. */
+export function existingIntentReport(rotation: RotationExport, intent: RotateKeyIntent): Record<string, unknown> {
+  const stored = intent.payload.liveness_outpoint
+  return {idempotencyKey: rotation.wp_rotate_key_request.idempotency_key, intent, livenessOutpoint: stored ? formatOutpoint(stored) : null, note: 'Already stored; the WP drives it. Nothing was resubmitted.'}
+}
+
 /** Sibling file of the export, e.g. `rotation-export.send.json`. */
 export function besideExport(exportFile: string, suffix: string): string {
   const parsed = path.parse(path.resolve(exportFile))
