@@ -541,11 +541,44 @@ policy Wasm building is a separate `setup cubesigner-policy build` command using
 a pinned private GHCR compiler image. The compiler takes only an output directory;
 the CLI verifies the exported Wasm and its SHA-256 and writes a v2 build receipt.
 See [the CubeSigner setup guide](setup-order.md#cubesigner-wasm-preparation-and-attachment)
-for registry authentication and the implemented interface. The preparation stages
-do not automatically build, upload or attach that policy; the proof release
-manifest does not select its compiler. Import required policy evidence through
-explicit external inputs. The workflow does not create an EKS cluster, rent GPU
-capacity or install releases.
+for registry authentication and the implemented interface. For staged deployments
+with `signing.cubesigner` configured (except explicit `mode: transport_only`),
+`setup proof-materials` first exports the policy Wasm using the existing
+`setup cubesigner-policy build` command. It never publishes or attaches a policy.
+
+The proof release manifest does not select the private policy compiler. On the
+first run, the stage writes `.scrollsdk/inputs/cubesigner-policy/compiler.json`
+under the deployment directory and waits. Replace its placeholders with the
+immutable compiler image reference and full Core commit supplied by the approved
+Core release owner:
+
+```json
+{
+  "compilerImage": "ghcr.io/dogeos69/cubesigner-policy-compiler@sha256:REPLACE_WITH_RELEASE_IMAGE_DIGEST",
+  "expectedCoreRevision": "REPLACE_WITH_RELEASE_CORE_COMMIT"
+}
+```
+
+These are release provenance, not values an operator invents or the proof
+producer's image digest. Authenticate Docker to private GHCR with a token granting
+`read:packages`; keep the token out of this file. Rerun `scrollsdk setup proof-materials`.
+The compiler exports offline, checks the image revision and Wasm checksum, and
+writes `.data/cubesigner-policy/{cubesigner_verifier_policy.wasm,cubesigner_verifier_policy.wasm.sha256,build-receipt.json}`.
+An interrupted step reuses a matching verified export; conflicting output is never
+overwritten. Earlier staged plans acquire this local step without replaying
+genesis, AWS provisioning or funding. No spec structure change is needed.
+
+`.data/cubesigner-policy-governance-handoff.json` records the Wasm hash and build
+provenance for the governance handoff. It is **not** approval or attachment
+evidence. Use the approved governance tools to publish, propose the exact
+attachment, collect Council approval and complete attachment with provider
+readback. Preserve `RequireRoleSession`. Import required policy evidence through
+the configured `signing.cubesigner.policyReceipts` and external inputs before
+production configuration validation; building Wasm alone does not make the key
+ready to sign. This stage does not invent governance commands, approve on behalf
+of Council members, or configure the organization resolver.
+
+The workflow does not create an EKS cluster, rent GPU capacity or install releases.
 
 ## State and outcomes
 

@@ -9,7 +9,7 @@ export function stagedPreparationSteps(legacy: PreparationStep[]): PreparationSt
     aws: ['identities', 'proof-aws', 'archive', 'archive-access', 'bridge-sequencer-kms', 'dstack', 'dstack-db', 'blockscout-db'],
     'bridge-funding': ['bridge-fee-wallet', 'bridge-prepare', 'ethereum-anchor', 'managed-helper-prepare', 'managed-helper-funding', 'managed-helper-setup', 'production-wallets', 'helper-funding', 'helper-setup', 'bridge-info', 'production-funding', 'helper-fund', 'managed-helper-fund', 'managed-helper-verify'],
     genesis: ['bootstrap', 'genesis-local'],
-    'proof-materials': ['protocol-context', 'external-inputs', 'proof-release-bake', 'proof-materializer-export', 'proof-worker-check', 'proof-materials', 'charts', 'proof-publish', 'charts-published', 'deployment-kit', 'deployment-kit-published'],
+    'proof-materials': ['cubesigner-policy-build', 'protocol-context', 'external-inputs', 'proof-release-bake', 'proof-materializer-export', 'proof-worker-check', 'proof-materials', 'charts', 'proof-publish', 'charts-published', 'deployment-kit', 'deployment-kit-published'],
     render: ['render-final', 'secrets', 'proof-check', 'proof-workers-intent'],
     'upload-secrets': ['secret-upload'],
   }

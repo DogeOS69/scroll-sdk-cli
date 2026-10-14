@@ -11,6 +11,7 @@ import type {PreparationPlan, PreparationRunner, PreparationStep} from './prepar
 
 import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
 import {parseDatabaseUrl} from './dstack-database.js'
+import {prepareCubesignerPolicy} from './preparation-cubesigner-policy.js'
 import {awaitDeploymentKitPublication, exportPreparationDeploymentKit} from './preparation-deployment-kit.js'
 import {productionFeeWallet} from './preparation-fee-wallet.js'
 import {checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
@@ -159,6 +160,8 @@ export class CommandPreparationRunner implements PreparationRunner {
 
         break
       }
+
+      case 'cubesigner-policy-build': {await prepareCubesignerPolicy(root, command); break}
 
       case 'proof-release-bake': {
         const release = p.proofRelease!

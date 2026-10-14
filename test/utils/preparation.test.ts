@@ -510,6 +510,37 @@ describe('resumable preparation plan', () => {
     await rejected(() => resolvePreparationProofRelease(spec, deployment), 'digest mismatch')
   })
 
+  it('adds the policy export to a funded staged plan and resumes without repeating prior stages', async () => {
+    await makePlan()
+    const intentPath = path.join(deployment, '.scrollsdk/intent.json')
+    const spec = JSON.parse(fs.readFileSync(intentPath, 'utf8')) as DeploymentSpec
+    spec.signing = {...spec.signing, cubesigner: {}}
+    const intent = JSON.stringify(spec, null, 2) + '\n'
+    fs.writeFileSync(intentPath, intent)
+    const planPath = path.join(deployment, '.scrollsdk/plan.json')
+    const statePath = path.join(deployment, '.scrollsdk/state.json')
+    const original = JSON.parse(fs.readFileSync(planPath, 'utf8')) as PreparationPlan
+    const steps = preparationSteps(spec, true).filter(step => step.id !== 'cubesigner-policy-build')
+    const body = {deploymentName: original.deploymentName, schema: 'scrollsdk/preparation/v2', sdkDirectory: original.sdkDirectory, specHash: createHash('sha256').update(intent).digest('hex'), steps}
+    const old = {...body, id: createHash('sha256').update(JSON.stringify(body)).digest('hex')}
+    fs.writeFileSync(planPath, JSON.stringify(old))
+    const completed = steps.filter(step => ['aws', 'bridge-funding', 'genesis'].includes(step.stage!))
+    fs.writeFileSync(statePath, JSON.stringify({files: {}, planId: old.id, status: 'stage-complete', steps: Object.fromEntries(completed.map(step => [step.id, 'completed']))}))
+    const calls: string[] = []
+    let ready = false
+    const runner = {async run(step: {id: string}) {
+      calls.push(step.id)
+      if (step.id === 'cubesigner-policy-build' && !ready) throw new AwaitingInput({message: 'Supply approved compiler'})
+    }}
+    const waiting = await applyPreparation(deployment, runner, undefined, {stage: 'proof-materials'})
+    expect(waiting.status).to.equal('waiting')
+    expect(calls).to.deep.equal(['cubesigner-policy-build'])
+    ready = true
+    expect((await applyPreparation(deployment, runner, undefined, {stage: 'proof-materials'})).status).to.equal('stage-complete')
+    expect(calls).not.to.include.members(completed.map(step => step.id))
+    expect(calls.filter(id => id === 'cubesigner-policy-build')).to.have.length(2)
+  })
+
   for (const prior of ['funded', 'completed', 'interrupted-migration'] as const) it(`migrates a ${prior} staged plan to kit publication without repeating funding`, async () => {
     await makePlan()
     const intentPath = path.join(deployment, '.scrollsdk/intent.json')
@@ -709,6 +740,7 @@ describe('resumable preparation plan', () => {
       expect(args[args.indexOf('--kube-context') + 1]).to.equal('selected-cluster')
       expect(args[args.indexOf('--namespace') + 1]).to.equal('selected-namespace')
     }
+
     expect(calls[1][0]).to.equal('monitoring-secrets')
   })
 

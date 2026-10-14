@@ -10,6 +10,7 @@ import {DeploymentSpecFieldError} from './deployment-spec-fields.js'
 import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec} from './deployment-spec-generator.js'
 import {usesDstackPostgres} from './dstack-database.js'
 import {feeVaultRecipientHash} from './fee-vault-recipient.js'
+import {needsPreparationPolicy} from './preparation-cubesigner-policy.js'
 import {usesManagedHelper} from './preparation-helper-identity.js'
 import {AwaitingInput, digest, loadPreparationEnv, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolvePreparationProofRelease} from './preparation-release.js'
@@ -77,6 +78,7 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
     add('helper-fund', 'Broadcast test-helper Bridge/deposit-seed transactions', 'chain', 'reconcile')
   }
 
+  if (staged && needsPreparationPolicy(spec)) add('cubesigner-policy-build', 'Export the release CubeSigner policy Wasm for governance review')
   add('protocol-context', 'Generate canonical protocol context')
   add('external-inputs', 'Import declared external runtime and policy inputs')
   if (p.proofRelease) {
@@ -290,6 +292,16 @@ export function migrateSignerHandoffSteps(plan: PreparationPlan, spec: Deploymen
   return {...body, id: digest(JSON.stringify(body))}
 }
 
+/** Add only the local policy export to older staged plans, preserving every existing step. */
+export function migratePolicyBuildStep(plan: PreparationPlan, spec: DeploymentSpec): PreparationPlan {
+  if (plan.schema !== 'scrollsdk/preparation/v2' || !needsPreparationPolicy(spec) || plan.steps.some(step => step.id === 'cubesigner-policy-build')) return plan
+  const current = preparationSteps(spec, true)
+  if (JSON.stringify(current.filter(step => step.id !== 'cubesigner-policy-build')) !== JSON.stringify(plan.steps)) return plan
+  const next: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, steps: current}
+  delete next.id
+  return {...next, id: digest(JSON.stringify(next))}
+}
+
 export interface PreparationRunner {run(step: PreparationStep, spec: DeploymentSpec, root: string, plan: PreparationPlan): Promise<void>}
 export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}, options: {dogecoinRoutingSpec?: string; refreshRuntime?: boolean; stage?: PreparationStage} = {}): Promise<PreparationState> {
   if (options.dogecoinRoutingSpec && !options.refreshRuntime) throw new Error('Dogecoin routing updates require --refresh-runtime')
@@ -303,7 +315,7 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
   const spec = JSON.parse(text) as DeploymentSpec
   validatePreparation(spec)
   const staged = plan.schema === 'scrollsdk/preparation/v2'
-  const migrated = migrateSignerHandoffSteps(plan, spec)
+  const migrated = migratePolicyBuildStep(migrateSignerHandoffSteps(plan, spec), spec)
   if (JSON.stringify(preparationSteps(spec, staged)) !== JSON.stringify(migrated.steps)) throw new Error('CLI workflow changed; this plan requires its original CLI version')
   const statePath = localPath(root, `${WORKFLOW_DIR}/state.json`)
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as PreparationState

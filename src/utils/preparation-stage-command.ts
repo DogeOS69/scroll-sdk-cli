@@ -4,6 +4,7 @@ import type {PreparationStage} from './preparation-stages.js'
 
 import {DEFAULT_DEPLOYMENT} from './deployment-paths.js'
 import {JsonOutputContext} from './json-output.js'
+import {POLICY_OUTPUT} from './preparation-cubesigner-policy.js'
 import {applyPreparation} from './preparation-plan.js'
 import {CommandPreparationRunner} from './preparation-runner.js'
 import {stageCommand} from './preparation-stages.js'
@@ -18,7 +19,8 @@ export async function runPreparationStage(stage: PreparationStage, directory: st
   try {
     const state = await applyPreparation(directory, new CommandPreparationRunner(), step => output.info(`${step.id}: ${step.title}`), {stage})
     const nextCommand = state.nextStage ? stageCommand(state.nextStage, directory === DEFAULT_DEPLOYMENT ? undefined : directory) : undefined
-    const report = {completed: Object.keys(state.steps).filter(id => state.steps[id] === 'completed'), currentStep: state.currentStep, nextCommand, stage, status: state.status, waiting: state.waiting}
+    const policyBuild = state.steps['cubesigner-policy-build'] === 'completed' ? {directory: `${directory}/${POLICY_OUTPUT}`, governanceHandoff: `${directory}/.data/cubesigner-policy-governance-handoff.json`, status: 'built-not-published-or-attached'} : undefined
+    const report = {completed: Object.keys(state.steps).filter(id => state.steps[id] === 'completed'), currentStep: state.currentStep, nextCommand, policyBuild, stage, status: state.status, waiting: state.waiting}
     if (!json) {
       output.info(JSON.stringify(report, null, 2))
       if (nextCommand) output.info(`Continue with: ${nextCommand}`)
