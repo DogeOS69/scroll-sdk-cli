@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import {type PolicyToolRunner, runPolicyTool} from './cubesigner-policy-build.js'
+import {POLICY_BUILD_RECEIPT_SCHEMA, type PolicyToolRunner, runPolicyTool} from './cubesigner-policy-build.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
 
 type Json = Record<string, unknown>
@@ -35,7 +35,7 @@ export function deployCubesignerPolicy(options: {
   const receiptFile = proofRegularFile(options.buildReceipt, 1024 * 1024)
   if (proofFileHash(receiptFile) !== options.buildReceiptSha256.replace(/^sha256:/, '')) throw new Error('Policy build receipt digest mismatch')
   const build = JSON.parse(fs.readFileSync(receiptFile, 'utf8'))
-  if (build.schema !== 'dogeos/cubesigner-policy-build-receipt/v1' || build.wasm.path !== 'cubesigner_verifier_policy.wasm' || build.checks.componentImportSubset !== 'passed') throw new Error('Invalid policy build receipt')
+  if (build.schema !== POLICY_BUILD_RECEIPT_SCHEMA || build.wasm?.path !== 'cubesigner_verifier_policy.wasm') throw new Error('Invalid policy build receipt')
   const wasm = proofRegularFile(path.join(path.dirname(receiptFile), build.wasm.path), 128 * 1024 * 1024)
   const wasmSha256 = proofFileHash(wasm)
   if (wasmSha256 !== build.wasm.sha256 || fs.statSync(wasm).size !== build.wasm.sizeBytes) throw new Error('Wasm changed after compilation')
@@ -78,7 +78,7 @@ export function deployCubesignerPolicy(options: {
   run('cs', ['key', '--org-id', options.organization, 'set-policy', '--key-id', options.keyId, '--policy', JSON.stringify(providerIdentifier)])
   const readback = cs(['key', 'get', '--key-id', options.keyId])
   if (!Array.isArray(readback.policy) || readback.policy.length !== 1 || readback.policy[0] !== providerIdentifier) throw new Error('Key policy readback mismatch; inspect the key before retrying')
-  const attachment = {buildReceiptSha256: proofFileHash(receiptFile), checkedAt: new Date().toISOString(), keyId: options.keyId, materialId: readback.material_id, organization: options.organization, policyArtifactDigest: `sha256:${wasmSha256}`, policyIdentifier: identifier, protocolContextSha256: build.pins.protocolContextSha256, providerPolicyIdentifier: providerIdentifier, readback: 'verified', schema: 'dogeos/cubesigner-policy-deployment/v1', smoke: {emptyRequest: 'Deny'}}
+  const attachment = {buildReceiptSha256: proofFileHash(receiptFile), checkedAt: new Date().toISOString(), compilerImage: build.compilerImage, coreRevision: build.coreRevision, keyId: options.keyId, materialId: readback.material_id, organization: options.organization, policyArtifactDigest: `sha256:${wasmSha256}`, policyIdentifier: identifier, providerPolicyIdentifier: providerIdentifier, readback: 'verified', schema: 'dogeos/cubesigner-policy-deployment/v2', smoke: {emptyRequest: 'Deny'}}
   fs.writeFileSync(attachmentFile, JSON.stringify(attachment, null, 2) + '\n', {flag: 'wx', mode: 0o600})
   return {attachmentReceipt: attachmentFile, policyIdentifier: identifier, wasmSha256}
 }

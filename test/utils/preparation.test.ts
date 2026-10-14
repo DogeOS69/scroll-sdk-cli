@@ -27,7 +27,7 @@ import {createSdkFixture} from '../helpers/sdk-templates.js'
 
 const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 function fixture(): DeploymentSpec {
-  const spec = yaml.load(fs.readFileSync(path.join(cli, 'src/config/deployment-spec.minimal.yaml'), 'utf8').replaceAll('$ENV:OWNER_ADDRESS', Wallet.createRandom().address).replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')) as DeploymentSpec
+  const spec = yaml.load(fs.readFileSync(path.join(cli, 'test/fixtures/deployment-spec/minimal.yaml'), 'utf8').replaceAll('$ENV:OWNER_ADDRESS', Wallet.createRandom().address).replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')) as DeploymentSpec
   spec.infrastructure = {bootnodeCount: 1, provider: 'local', sequencerCount: 1}
   spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toAddress().toString()
   spec.bridge.confirmationsRequired = 2
@@ -60,6 +60,58 @@ describe('resumable preparation plan', () => {
   })
   afterEach(() => {fs.rmSync(root, {force: true, recursive: true})})
   const makePlan = () => createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml')})
+
+  for (const recipient of [undefined, '', 'REPLACE_WITH_DOGECOIN_P2PKH_ADDRESS', `0x${'1'.repeat(40)}`]) {
+    it(`rejects the ${recipient === undefined ? 'missing' : 'invalid ' + recipient} fee-vault recipient before planning external inputs`, async () => {
+      const spec = fixture()
+      if (recipient === undefined) delete spec.contracts.feeVaultDogeRecipientAddress
+      else spec.contracts.feeVaultDogeRecipientAddress = recipient
+      fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
+      // A nonexistent SDK path makes the ordering observable: recipient checking
+      // must happen before SDK resolution, CubeSigner lookup or release downloads.
+      await rejected(() => createPreparationPlan({output: deployment, sdkDirectory: path.join(root, 'missing-sdk'), spec: path.join(root, 'intent.yaml')}), 'contracts.feeVaultDogeRecipientAddress')
+      expect(fs.existsSync(deployment)).to.equal(false)
+    })
+  }
+
+  it('rejects a legacy saved plan without a fee-vault recipient before running any step', async () => {
+    const plan = await makePlan()
+    const directory = path.join(deployment, '.scrollsdk')
+    const spec = JSON.parse(fs.readFileSync(path.join(directory, 'intent.json'), 'utf8'))
+    delete spec.contracts.feeVaultDogeRecipientAddress
+    const text = JSON.stringify(spec, null, 2) + '\n'
+    const {id: previousId, ...body} = plan
+    expect(previousId).to.be.a('string')
+    body.specHash = createHash('sha256').update(text).digest('hex')
+    const id = createHash('sha256').update(JSON.stringify(body)).digest('hex')
+    fs.writeFileSync(path.join(directory, 'intent.json'), text)
+    fs.writeFileSync(path.join(directory, 'plan.json'), JSON.stringify({...body, id}))
+    const stateFile = path.join(directory, 'state.json')
+    const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
+    state.planId = id
+    fs.writeFileSync(stateFile, JSON.stringify(state))
+    const before = fs.readFileSync(stateFile, 'utf8')
+    let calls = 0
+    await rejected(() => applyPreparation(deployment, {async run() {calls++}}), 'contracts.feeVaultDogeRecipientAddress')
+    expect(calls).to.equal(0)
+    expect(fs.readFileSync(stateFile, 'utf8')).to.equal(before)
+    expect(fs.existsSync(path.join(directory, 'apply.lock'))).to.equal(false)
+  })
+
+  it('rejects a missing recipient through the actual plan and generation commands without writing output', () => {
+    const spec = fixture()
+    delete spec.contracts.feeVaultDogeRecipientAddress
+    const input = path.join(root, 'intent.yaml')
+    fs.writeFileSync(input, yaml.dump(spec))
+    for (const command of ['plan', 'generate-from-spec']) {
+      const output = path.join(root, command)
+      const sdkArgs = command === 'plan' ? ['--sdk-dir', sdk] : []
+      const result = spawnSync(process.execPath, [path.join(cli, 'bin/run.js'), 'setup', command, '--spec', input, ...sdkArgs, '--output', output, '--json'], {cwd: root, encoding: 'utf8'})
+      expect(result.status).not.to.equal(0)
+      expect(result.stdout + result.stderr).to.include('contracts.feeVaultDogeRecipientAddress')
+      expect(fs.existsSync(output)).to.equal(false)
+    }
+  })
 
   it('runs plan and resumes apply with conventional paths, and supports explicit overrides', async function () {
     this.timeout(60_000)

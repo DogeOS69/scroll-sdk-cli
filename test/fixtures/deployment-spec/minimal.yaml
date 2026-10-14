@@ -1,10 +1,6 @@
-# Environment variable placeholders: see deployment.env.example beside this file.
-# Fresh-directory bootstrap and explicit local/KMS identity intent:
-# See docs/spec-projection.md. --bootstrap requires --sdk-dir (committed HEAD by default),
-# complete identities, proofTopology and explicit approved Reth image tags.
-# DogeOS Minimal Deployment Specification
-# This is a minimal example that relies on generator defaults where possible.
-# See deployment-spec.example.yaml for full options.
+# Test fixture for DeploymentSpec validation and configuration generation.
+# Tests replace environment references and infrastructure inputs before use.
+# Operator templates live in scroll-sdk/examples; this is not a deployment starter.
 
 version: "1.0"
 
@@ -66,8 +62,8 @@ dogecoin:
   walletPath: ".data/doge-wallet.json"
 
 ethereumDa:
-  # Pending blob transactions default to 8 for metadata.environment=mainnet,
-  # otherwise 10, independently of the Ethereum DA chain selected below.
+  # Pending blob transactions default to 8 for Ethereum DA mainnet, otherwise 10.
+  # The DA chain below selects the default, not metadata.environment.
   # Optional override: publish: {maxPendingBlobTxs: 10}
   chain: devnet
   chainId: 32382
@@ -143,15 +139,15 @@ contracts:
   gasOracle:
     blobScalar: 7400000000
     commitScalar: 600000000
-    scalar: 1
-    penaltyThreshold: 100
+    scalar: 938846
     penaltyFactor: 10000
 
 genesis:
   gasLimit: 30000000
-  maxEthSupplyWei: "100000000000000000000000000000"
-  deployerInitialBalanceWei: "1000000000000000000000000"
-  baseFeePerGasWei: 1000000000
+  maxEthSupplyWei: "226156424291633194186662080095093570025917938800079226639565593765455331328"
+  # 10 native DOGE; matches scroll-contracts/docker/templates/config.toml.
+  deployerInitialBalanceWei: "10000000000000000000"
+  baseFeePerGasWei: 100000000
 
 # Enable after filling SLACK_WEBHOOK_URL in private deployment.env.
 monitoring:
