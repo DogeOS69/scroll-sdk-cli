@@ -29,7 +29,7 @@ function githubCliToken(): string | undefined {
 
 /** Resolve a human version through the official release; the checksum is publisher-owned. */
 export async function downloadProofRelease(version: string, options: ProofReleaseLookupOptions = {}): Promise<{manifest: string; sha256: string}> {
-  if (!/^v\d+\.\d+\.\d+(?:-[\d.A-Za-z-]+)?$/.test(version)) throw new Error('proofRelease.version must be an explicit version such as v0.3.0-beta.6')
+  if (!/^v\d+\.\d+\.\d+(?:-[\d.A-Za-z-]+)?$/.test(version)) throw new Error('proofRelease.version must be an explicit version such as v0.3.0-beta.7')
   const tag = `proof-release-${version}`
   const base = `https://api.github.com/repos/${RELEASE_REPOSITORY}/releases`
   const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN || (options.githubToken ?? githubCliToken)()
