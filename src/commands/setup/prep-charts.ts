@@ -165,6 +165,21 @@ export function buildFrontendExternalUrlUpdates(
   }
 }
 
+/**
+ * The WP tsoSigners are the only attestation registry once onboarded: rotation
+ * registration adds keys there and retirement removes them there, while
+ * `attestationSigner.external` keeps the original imported set. So the
+ * imported signers seed the attestation entries only while WP values have none
+ * (initial onboarding); after that every existing attestation entry is kept
+ * as is (with the WP network name) and nothing is re-added, so a retired key
+ * stays retired. The Correctness (CubeSigner) entry is always rebuilt.
+ */
+export function mergeTsoSigners(existing: unknown[], built: TsoSignerEntry[]): TsoSignerEntry[] {
+  const kept = (existing as TsoSignerEntry[]).filter(entry => entry?.roles?.includes('Attestation')).map(entry => ({...entry, network: tsoSignerNetwork(entry.network)}))
+  const attestation = kept.length > 0 ? kept : built.filter(item => item.roles.includes('Attestation'))
+  return [...built.filter(item => !item.roles.includes('Attestation')), ...attestation]
+}
+
 /** Render the configured Reth sequencers as a deduplicated trusted-peers CSV. */
 export function buildRethInitialTrustedPeers(rethSequencerPeers: string[]): string {
   return [...new Set(rethSequencerPeers.map(peer => peer.trim()).filter(Boolean))].join(',')
@@ -2951,10 +2966,11 @@ export default class SetupPrepCharts extends Command {
           updated = true
         }
 
-        // Rebuild all TSO signers so stale roles do not remain. Create the
-        // array when absent: descriptor import must always reach TSO values.
+        // Rebuild the Correctness entry but keep registered attestation keys
+        // (rotation registration adds them here, retirement removes them).
+        // Create the array when absent: the imported signers seed it once.
         const existingSigners = Array.isArray(productionYaml.tsoSigners) ? productionYaml.tsoSigners : []
-        const newSigners = buildTsoSigners(this.dogeConfig)
+        const newSigners = mergeTsoSigners(existingSigners, buildTsoSigners(this.dogeConfig))
         if (JSON.stringify(existingSigners) !== JSON.stringify(newSigners)) {
           productionYaml.tsoSigners = newSigners
           updated = true;

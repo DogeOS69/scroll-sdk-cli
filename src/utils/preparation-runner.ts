@@ -11,6 +11,7 @@ import type {PreparationPlan, PreparationRunner, PreparationStep} from './prepar
 
 import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
 import {parseDatabaseUrl} from './dstack-database.js'
+import {awaitDeploymentKitPublication, exportPreparationDeploymentKit} from './preparation-deployment-kit.js'
 import {productionFeeWallet} from './preparation-fee-wallet.js'
 import {checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
 import {prepareLocalGenesis} from './preparation-genesis.js'
@@ -20,7 +21,6 @@ import {helperFeeWalletWif, usesManagedHelper} from './preparation-helper-identi
 import {AwaitingInput, localPath, privateWrite} from './preparation-io.js'
 import {bindPreparedProofAws, reuseProofAws} from './preparation-proof-aws.js'
 import {prepareSequencerKms, productionSequencer} from './preparation-sequencer-kms.js'
-import {importSignerReceipts} from './preparation-signer-receipts.js'
 import {exportCoordinatorMaterializers} from './proof-image-tools.js'
 import {readProofMaterials} from './proof-materials.js'
 import {readProofSoftwareRelease} from './proof-software-release.js'
@@ -212,7 +212,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         break
       }
 
-      case 'charts': case 'charts-published': case 'charts-validated': case 'render-final': {
+      case 'charts': case 'charts-published': case 'render-final': {
         if (step.id === 'charts' && spec.identities?.bootnodes?.length) {
           const file = localPath(root, '.data/doge-config.toml')
           const before = toml.parse(fs.readFileSync(file, 'utf8')) as any
@@ -254,8 +254,8 @@ export class CommandPreparationRunner implements PreparationRunner {
         await command(['gen-secrets', '-N']); break
       }
 
-      case 'signer-policy': {await command(['export-signer-policy']); break}
-      case 'signer-receipts': {await importSignerReceipts(root); break}
+      case 'deployment-kit': {await exportPreparationDeploymentKit(root); break}
+      case 'deployment-kit-published': {await awaitDeploymentKitPublication(root, step.stage ? 'scrollsdk setup proof-materials' : 'scrollsdk setup apply'); break}
       case 'proof-check': {await command(['proof-config-check']); break}
       case 'secret-upload': {
         const upload = p.secretUpload ?? (spec.infrastructure.provider === 'aws' ? {provider: 'aws' as const} : undefined)

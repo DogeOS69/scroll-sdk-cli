@@ -1,13 +1,39 @@
 # Scroll SDK CLI
 
 
-For existing-bridge attestation rotation, see the SDK's
-[bridge and signer operator walkthrough](https://github.com/DogeOS69/scroll-sdk/blob/feat/rotation-operator-workflow/partner-kit/attestation-signer/docs/rotation-walkthrough.md).
-The bridge operator runs `bridge rotation init --rotation-dir ... --identity NAME=FILE`
-to import core public identities, followed by `plan`, `stage`, and `check` with
-the same rotation directory. `check` reports missing approvals/readiness and
-live admission without WP build/propose requests. Only `apply` submits the
-rotation. Signer operators use standalone Docker scripts; they do not need this CLI.
+For an attestation-signer rotation, download the proposal's rotation export
+(`dogeos/rotation-export/v1`) from the governance portal, then, from the
+deployment directory:
+
+1. `scrollsdk bridge rotation register <export>`: merges every current and
+   target signer into the WP `tsoSigners` (never removes one), renders the
+   chart with `helm template` before writing, installs the WP and waits until
+   the WP reports every key as registered. Re-running it is a no-op.
+2. `scrollsdk bridge rotation online <export>`: passes when every target
+   signer, and at least M of the live current signers, polled the TSO in the
+   last 60 seconds. It is point-in-time and proves only an authenticated
+   poll: not the release, enforce mode, RPC or key-backend health, the old
+   signers' allowlist entry, or real signing. A deferred WP dispatch happens
+   later without another check.
+3. Fund the liveness output. The RotateKey spends one extra input that only the
+   target signers can sign, which proves the new set is live. Pay at least
+   1 DOGE to the export's `target.p2sh_address`, in a transaction that is not a
+   deposit and whose only OP_RETURN is the zero-value bridge-funding marker
+   `6a 49 01` followed by 72 zero bytes. Wait for the deposit confirmation
+   depth. (A CLI command for this step is still to come.)
+4. `scrollsdk bridge rotation send <export> --liveness-outpoint <txid>:<vout> --preview`:
+   the same checks, then a non-durable WP build. The WP validates the outpoint
+   over Dogecoin RPC; a rejection (HTTP 422) is printed with the WP's reason.
+   `send <export> --liveness-outpoint <txid>:<vout>` submits once (`/propose`).
+   A new intent needs `--liveness-outpoint`. Re-running `send` reports the
+   stored intent and its outpoint instead of resubmitting.
+
+Each command first checks the export against itself and the WP deployment
+(`protocol_instance_id` and network), and rejects an export where any key holds
+different roles (attestation, TEE, recovery) across the current and target
+scripts. `register` and a new `send` also require the live bridge to still be
+the export's current bridge. Signer operators use
+the standalone Docker kit; they do not need this CLI.
 
 Current configuration and migration procedure: [Pure Reth configuration and retired services](docs/config-cleanup.md).
 
@@ -105,9 +131,9 @@ bin/run.js --help
 - [Ethereum DA S3 archive reference](docs/ethereum-da-s3.md) — S3 upload and
   public readback configuration.
 - [Partner attestation-signer kit](https://github.com/dogeos69/scroll-sdk/tree/v0.3.0-develop/partner-kit/attestation-signer)
-  — the generic manual sent to signer operators. The generated
-  `signer-policy-bundle/PARTNER-COMMANDS.md` is authoritative for one concrete
-  deployment.
+  — the generic manual for signer operators. They import the deployment's
+  published `deployment-kit-<version>/` with the manifest SHA-256 from its
+  governance record.
 
 ### Development environment references
 
@@ -172,7 +198,7 @@ USAGE
 * [`scrollsdk setup dogecoin-wallet-import`](#scrollsdk-setup-dogecoin-wallet-import)
 * [`scrollsdk setup domains`](#scrollsdk-setup-domains)
 * [`scrollsdk setup eth-da-submitter`](#scrollsdk-setup-eth-da-submitter)
-* [`scrollsdk setup export-signer-policy`](#scrollsdk-setup-export-signer-policy)
+* [`scrollsdk setup export-deployment-kit`](#scrollsdk-setup-export-deployment-kit)
 * [`scrollsdk setup gen-keystore`](#scrollsdk-setup-gen-keystore)
 * [`scrollsdk setup gen-l2-artifacts`](#scrollsdk-setup-gen-l2-artifacts)
 * [`scrollsdk setup gen-rpc-package`](#scrollsdk-setup-gen-rpc-package)
@@ -1299,21 +1325,29 @@ EXAMPLES
 See [deployment signing identities](docs/keystore.md) for scope, repeat execution,
 and the separate archive workflow.
 
-## `scrollsdk setup export-signer-policy`
+## `scrollsdk setup export-deployment-kit`
 
-Export the dogeos-core attestation_evidence_v2 policy selected by the current proof topology. The bundle contains bridge-owned protocol/verifier inputs; each signer operator keeps its RPC source sets, rotation allowlists, keys, and release pins.
+Export the signer deployment kit from the selected proof deployment contract and its bound materials receipt; its version is derived from the signer-relevant inputs. Publish it unchanged, then record the publication with --published-url
 
 ```
 USAGE
-  $ scrollsdk setup export-signer-policy [-c <value>] [--json] [--out <value>] [--protocol-context <value>]
-    [--signer-proof-artifact-base-url <value>] [--spec <value>] [--tso-url <value>]
+  $ scrollsdk setup export-deployment-kit [-c <value>] [--contract <value>] [--json] [--out <value>]
+    [--protocol-context <value>] [--published-url <value>] [--signer-proof-artifact-base-url <value>] [--spec <value>]
+    [--tso-url <value>]
 
 FLAGS
   -c, --config=<value>                          Path to doge-config.toml
+      --contract=<value>                        [default: .data/proof-deployment.json] Selected deployment contract;
+                                                binds the materials receipt and protocol context
       --json                                    Output structured JSON
-      --out=<value>                             [default: signer-policy-bundle] Bundle output directory
+      --out=<value>                             Kit output directory [default: deployment-kit-<kit version>]; an
+                                                existing one must already hold this exact kit
       --protocol-context=<value>                [default: .data/protocol_context.json] Canonical protocol_context.json
                                                 produced by setup bridge-init
+      --published-url=<value>                   https URL where this exact kit is published; records it in
+                                                doge-config [attestationSigner.deploymentKit]. Uses the deployment
+                                                inputs only: not with --out, --tso-url or
+                                                --signer-proof-artifact-base-url
       --signer-proof-artifact-base-url=<value>  Public GET base used by signers; default: compiler output in
                                                 withdrawal-processor/WithdrawalProcessor.toml
       --spec=<value>                            Optional DeploymentSpec proof source; conflicts with doge-config
@@ -1322,17 +1356,30 @@ FLAGS
                                                 [ingress].TSO_HOST
 
 DESCRIPTION
-  Export the dogeos-core attestation_evidence_v2 policy selected by the current proof topology. The bundle contains
-  bridge-owned protocol/verifier inputs; each signer operator keeps its RPC source sets, rotation allowlists, keys, and
-  release pins.
+  Export the signer deployment kit from the selected proof deployment contract and its bound materials receipt; its
+  version is derived from the signer-relevant inputs. Publish it unchanged, then record the publication with
+  --published-url
 
 EXAMPLES
-  $ scrollsdk setup export-signer-policy
+  $ scrollsdk setup export-deployment-kit
 
-  $ scrollsdk setup export-signer-policy --tso-url https://tso.dogeos.example
+  $ scrollsdk setup export-deployment-kit --published-url https://downloads.dogeos.example/deployment-kit-k-0123456789ab.tar.gz
 ```
 
-_See code: [src/commands/setup/export-signer-policy.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/export-signer-policy.ts)_
+The kit directory holds `deployment-kit.json`, `deployment-kit.env`,
+`protocol_context.json`, `advance-l2-agg-verifying-key.bin` and
+`deployment-kit-manifest.json`. Its identity is the SHA-256 of
+`deployment-kit-manifest.json`, which the command prints with the network,
+`protocol_instance_id` and kit version for the deployment record. The version,
+`k-<12 hex>`, is derived from the signer-relevant fields (network, protocol
+instance, TSO URL, artifact origin, policy mode, protocol context and verifier
+material), so the same inputs always give the same kit and a rerun is a no-op;
+a changed endpoint or verifier gives a new version. The kit holds no signer
+roster, current Bridge key or rotation material, so an ordinary attestation
+rotation needs no new kit. `setup apply` produces the same kit for enforcing
+deployments.
+
+_See code: [src/commands/setup/export-deployment-kit.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/export-deployment-kit.ts)_
 
 ## `scrollsdk setup gen-keystore`
 
@@ -1911,22 +1958,28 @@ _See code: [src/commands/setup/proof-bundle-publish.ts](https://github.com/dogeo
 
 ## `scrollsdk setup proof-config-check`
 
-Validate generated proof configs, bundle revision, two switches, and Worker bundle without contacting Kubernetes
+Validate generated proof configs, bundle revision, two switches, Worker bundle and the published deployment kit; --live also requires every registered Attestation signer to be polling the TSO (the final acceptance check after rollout)
 
 ```
 USAGE
-  $ scrollsdk setup proof-config-check [-c <value>] [--contract <value>] [--deployment-dir <value>] [--json] [--spec
-  <value>]
+  $ scrollsdk setup proof-config-check [-c <value>] [--contract <value>] [--deployment-dir <value>] [--json]
+    [--kube-context <value> --live] [--namespace <value> ] [--spec <value>]
 
 FLAGS
   -c, --config=<value>          doge-config.toml path
       --contract=<value>        [default: .data/proof-deployment.json] Proof deployment contract path
       --deployment-dir=<value>  [default: .] Deployment root
       --json                    Output structured JSON
+      --kube-context=<value>    Kubernetes context for --live
+      --live                    After rollout: also require a fresh authenticated TSO poll from every Attestation
+                                signer in the WP tsoSigners
+      --namespace=<value>       [default: default] Kubernetes namespace for --live
       --spec=<value>            Optional DeploymentSpec proof source
 
 DESCRIPTION
-  Validate generated proof configs, bundle revision, two switches, and Worker bundle without contacting Kubernetes
+  Validate generated proof configs, bundle revision, two switches, Worker bundle and the published deployment kit;
+  --live also requires every registered Attestation signer to be polling the TSO (the final acceptance check after
+  rollout)
 ```
 
 _See code: [src/commands/setup/proof-config-check.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-config-check.ts)_

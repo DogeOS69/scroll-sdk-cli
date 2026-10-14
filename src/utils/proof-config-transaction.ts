@@ -13,6 +13,7 @@ import type {ProofTopologyRuntimeInput} from './proof-topology-init.js'
 
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from './artifact-stores.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
+import {withoutPendingDeploymentKit} from './deployment-kit-record.js'
 import {dogeConfigToToml} from './doge-config.js'
 import {resolveDogecoinServiceRpcUrl} from './kubernetes-endpoints.js'
 import {readProofAwsConfig} from './proof-aws-config.js'
@@ -30,8 +31,6 @@ import {proofFileHash, proofRegularFile, readProofSoftwareRelease} from './proof
 import {proofTopologyEthereumDaBlobSource, validateProofTopologyBundle} from './proof-topology-compiler.js'
 import {buildProofTopology} from './proof-topology-init.js'
 import {checkProofWorkerImage} from './proof-worker-image-check.js'
-import {deriveTsoUrl} from './signer-policy-derivation.js'
-import {writeSignerPolicyHandoff} from './signer-policy-handoff.js'
 
 export interface ProofConfigRequest {
   deploymentName: string
@@ -39,7 +38,6 @@ export interface ProofConfigRequest {
   generation: ProofGeneration
   mode: ProofTopologyMode
   runtime: ProofTopologyRuntimeInput
-  tsoUrl?: string
 }
 const PREPARED = 'proof-config-prepared.json'
 const PREPARED_CONTRACT = '.data/proof-deployment-prepared.json'
@@ -130,10 +128,9 @@ export function prepareProofConfig(options: {
       }
     }
 
-    const signerValidation = config.attestationSigner?.policyValidation
-    if (signerValidation) {
-      for (const ref of [signerValidation.bundleManifest, ...signerValidation.receipts]) ref.path = path.resolve(root, ref.path)
-    }
+    // A new proof configuration needs its own kit, exported and published after
+    // activation; the candidate never carries the current kit's record.
+    if (config.attestationSigner) delete config.attestationSigner.deploymentKit
 
     const {config: aws} = readProofAwsConfig(stage)
     assertTopologyUsesProofArtifactStore(aws.artifactStore, proofArtifactStoreFromDogeConfig(config), 'proof AWS')
@@ -204,12 +201,6 @@ export function prepareProofConfig(options: {
     reconcileProofKubernetes({deploymentDir: stage, ethereumDaBlobSource: proofTopologyEthereumDaBlobSource(config.ethereumDa), ethereumL1RpcUrl: config.ethereumDa?.submitterRpcUrl, ethereumRpcSecretStore: config.ethereumRpcSecretStore, intent, materialsReceipt: request.generation === 'real' ? '.data/proof-materials-v1.json' : undefined, proofTopologyBridge: {dogecoinNetwork: config.network, dogecoinRpcPassword: String(config.dogecoinClusterRpc?.password ?? ''), dogecoinRpcUrl: resolveDogecoinServiceRpcUrl(config), dogecoinRpcUser: String(config.dogecoinClusterRpc?.username ?? '')}})
     const contract = validateProofDeploymentContract(stage)
     validateProofTopologyBundle(path.join(stage, contract.topology.bundleDir), {preflightOnly: false})
-    if (config.attestationSigner?.mode === 'external') {
-      const tsoUrl = request.tsoUrl ?? deriveTsoUrl(path.join(root, 'config.toml'))?.value
-      if (!tsoUrl) throw new Error('External signer handoff requires request.tsoUrl or config.toml [ingress].TSO_HOST')
-      writeSignerPolicyHandoff({config, deploymentDir: stage, output: 'signer-policy-bundle', protocolContext: '.data/protocol_context.json', tsoUrl})
-    }
-
     let publicationPlan: ProofProgramPublicationPlan | undefined
     if (request.generation === 'real' && request.mode === 'active') {
       publicationPlan = portablePlan(planProofProgramPublication({deploymentDir: stage, materialsReceipt: '.data/proof-materials-v1.json', proofAwsConfig: '.data/proof-aws.json', release: 'dogeos-proof-release-v1.json', releaseSha256: selected.sha256, topologyBundle: contract.topology.bundleDir}), stage)
@@ -260,7 +251,8 @@ export async function publishProofConfig(options: {apply: boolean; awsProfile?: 
     if (fs.existsSync(path.join(root, '.data/proof-deployment.json')) || fs.existsSync(path.join(root, '.data/proof-program-publication-v1.json'))) throw new Error('Prepared configuration was already published or has a publication receipt; refusing repeated mutation')
     const config = toml.parse(fs.readFileSync(path.join(root, contract.intentSource.path), 'utf8')) as unknown as DogeConfig
     const before = proofEnforcementReadiness(root, contract, config)
-    const pending = before.blockers.filter(item => item !== 'Program-publication receipt is not bound to the deployment contract')
+    // The kit for this configuration is exported and published after activation.
+    const pending = withoutPendingDeploymentKit(before.blockers).filter(item => item !== 'Program-publication receipt is not bound to the deployment contract')
     if (contract.enforcement === 'enforce' && pending.length > 0) throw new Error(`Enforcement evidence is incomplete before publication: ${pending.join('; ')}`)
     const expectedPlan = {...prepared.publicationPlan, files: prepared.publicationPlan.files.map(item => ({...item, source: path.resolve(root, item.source)}))}
     const publication = await publishProofProgramBundle({...common, awsProfile: options.awsProfile, expectedPlan, output: '.data/proof-program-publication-v1.json'})
@@ -275,7 +267,8 @@ export async function publishProofConfig(options: {apply: boolean; awsProfile?: 
     }
 
     const readiness = proofEnforcementReadiness(root, final, config)
-    if (contract.enforcement === 'enforce' && !readiness.ready) throw new Error(`Published but final enforcement checks failed: ${readiness.blockers.join('; ')}`)
+    const failed = withoutPendingDeploymentKit(readiness.blockers)
+    if (contract.enforcement === 'enforce' && failed.length > 0) throw new Error(`Published but final enforcement checks failed: ${failed.join('; ')}`)
     validateProofDeploymentContract(root, prepared.contract)
     jsonWrite(path.join(root, '.data/proof-deployment.json'), final)
     return {apply: true, contract: path.join(root, '.data/proof-deployment.json'), enforcementReadiness: readiness, publication: publication.receiptPath}

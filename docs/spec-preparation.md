@@ -47,9 +47,9 @@ under `test/fixtures/deployment-spec/`; those are not operator templates.
 
 The SDK example selects testnet production Bridge preparation and active/real/enforce
 proofs; it generates real identities from an approved proof release after the protocol
-context exists. `setup proof-materials` waits for partner enforcing-policy receipts and verifies
-them. `setup render` regenerates
-the configuration before the final enforcing check.
+context exists. `setup proof-materials` exports the signer deployment kit and waits
+for its publication record. `setup render` regenerates configuration and Secrets
+before the final enforcing check; no partner policy receipts are collected.
 
 ## Prepare the private environment file
 
@@ -154,7 +154,7 @@ scrollsdk setup bridge-funding
 # Core distributes to the wallets and funds the final Bridge automatically.
 scrollsdk setup bridge-funding
 scrollsdk setup proof-materials
-# For enforce mode: collect the requested partner receipts, then rerun.
+# For enforce mode: publish the kit via Governance and save published.json, then rerun.
 scrollsdk setup proof-materials
 scrollsdk setup render
 scrollsdk setup upload-secrets
@@ -198,8 +198,8 @@ generation so a retry uses the same identity.
 | `setup genesis` | Bootstrap pinned templates; pin the deployer; generate local genesis and contract addresses. | No AWS calls, funding or service identity creation. |
 | `setup aws` | Prepare declared service identities, proof store/IAM/token, archive access, Bridge sequencer KMS, controller credentials and selected existing databases. | Resource facts are saved automatically; no copy back into the spec. No GPU allocation. |
 | `setup bridge-funding` | Bind genesis/DA anchor; verify helper funding; invoke Core setup and marked funding; verify all resulting outpoints. | One operator wallet handoff. Setup and Bridge funding broadcast transactions and require manual reconciliation after ambiguous failures. |
-| `setup proof-materials` | Generate protocol context; import declared inputs; bake/import proof materials; compile/publish proof configuration; export signer bundle and validate enforce receipts. | Preliminary chart compilation is needed to bind the signer bundle. Wait for receipts within this stage. |
-| `setup render` | Render final values/native configuration with the accepted receipts; generate private Secrets; run proof checks. | Helm releases remain uninstalled. |
+| `setup proof-materials` | Generate protocol context; import declared inputs; bake/import proof materials; compile/publish proof configuration; export the deployment kit and record its publication. | Preliminary chart compilation is needed to bind the kit. Wait for its immutable URL and manifest digest within this stage. |
+| `setup render` | Render final values/native configuration with the recorded kit publication; generate private Secrets; run proof checks. | Helm releases remain uninstalled. |
 | `setup upload-secrets` | Upload using the saved provider, region, namespace and Secret prefix. | AWS defaults to the deployment-specific prefix; no retyping it. |
 
 `setup proof-materials --generation ...` and other explicit material flags retain
@@ -213,8 +213,10 @@ Planning validates the spec and pinned SDK templates, writes the private plan,
 and lists local, read-only, cloud and chain steps. It does not provision resources
 or send transactions. Running a stage authorizes its operations listed
 in that saved plan, including expressly selected cloud provisioning and test-helper
-broadcasts. Production Bridge mode delegates payments to the operator's wallet;
-the CLI verifies those payments without signing or broadcasting funding transactions.
+broadcasts. In the default managed-helper production path, the operator funds the helper
+once; the CLI verifies that payment and invokes Core to broadcast distribution
+and marked Bridge funding. The explicit external path only verifies payments
+made by the operator.
 
 The output directory must be empty. Keep it outside a source checkout. Plans,
 resolved intent, state and logs live under `.scrollsdk/`; these may contain
@@ -534,18 +536,16 @@ local-filesystem proof store, supply an existing explicit topology and compiler
 identity without a material receipt.
 
 Real proof baking is performed by `setup proof-materials` using the selected producer image.
-CubeSigner account/session authorization and partner Phase A remain owner
-operations. CubeSigner policy Wasm building is a separate `setup cubesigner-policy
-build` operation requiring its own pinned compiler image; the preparation stages
-do not build, upload or attach that policy. The proof release manifest does not
-select a CubeSigner policy compiler. Import required policy evidence through the
-declared external inputs. The current CLI policy-build adapter expects a request
-and receipt interface; it needs separate compatibility work for the current
-[core #1458 at 8e3163c](https://github.com/DogeOS69/dogeos-core/pull/1458)
-compiler that accepts an optional output directory and emits only
-Wasm. Do not assume that publishing that compiler image makes this adapter
-compatible. The workflow waits for external inputs instead of inventing facts. The workflow does not create an
-EKS cluster, rent GPU capacity or install releases.
+CubeSigner account/session authorization remains an owner operation. CubeSigner
+policy Wasm building is a separate `setup cubesigner-policy build` command using
+a pinned private GHCR compiler image. The compiler takes only an output directory;
+the CLI verifies the exported Wasm and its SHA-256 and writes a v2 build receipt.
+See [the CubeSigner setup guide](setup-order.md#cubesigner-wasm-preparation-and-attachment)
+for registry authentication and the implemented interface. The preparation stages
+do not automatically build, upload or attach that policy; the proof release
+manifest does not select its compiler. Import required policy evidence through
+explicit external inputs. The workflow does not create an EKS cluster, rent GPU
+capacity or install releases.
 
 ## State and outcomes
 
@@ -571,10 +571,11 @@ any child/provider activity before removing a stale lock; interrupted broadcasts
 remain blocked regardless. Runtime deployment acceptance remains a separate step.
 
 For legacy v1 plans only, after a CLI runtime-generation fix, `setup apply --dir /private/deployment
---refresh-runtime` archives the previous publication receipt and signer bundle,
+--refresh-runtime` archives the previous state, config and proof publication receipt,
 then resumes at `charts`. It preserves the frozen plan, identities, genesis,
 funding outpoints and baked proof materials. Publication is performed and read
-back again; signer receipts must match the resulting bundle. It never reruns
+back again; unchanged signer inputs reuse the same deployment kit and its
+publication record, while changed inputs require a new kit publication. It never reruns
 cloud resource creation or Bridge funding. If older per-instance preparation lost
 a declared bootnode entry, chart preparation restores the missing local P2P
 identity and verifies that every existing bootnode identity is unchanged. Managed
@@ -664,17 +665,25 @@ imports `.data/proof-materials-v1.json`. Operators do not invent identity hashes
 or copy a generic compiler identity from another deployment. Image/receipt
 mismatches fail validation. These image checks do not execute a GPU proof.
 
-For enforce, apply exports the signer policy and pauses at `signer-receipts`.
-`.scrollsdk/inputs/signer-receipts/request.json` identifies each active signer and
-its numbered receipt filename. Send `signer-policy-bundle/` to each partner and
-save their returned validation receipts at those paths. Rerun `setup apply`.
-It computes hashes, checks all active signer identities, bundle/revision/policy
-bindings and successful validation, imports the accepted bytes into managed
-state, regenerates charts with the publication receipt and runs the final check.
-Missing evidence produces `waiting`; mismatched evidence produces `failed` and
-may be corrected in the inbox before retrying. Completed cloud and proof steps
-are preserved. See `docs/proof-config-transactions.md` for receipt semantics.
-Synthetic receipt tests are not evidence of real partner acceptance.
+For enforce, `setup proof-materials` exports the signer deployment kit (`deployment-kit`, the
+same writer as `setup export-deployment-kit`) and pauses at
+`deployment-kit-published`. `.scrollsdk/inputs/deployment-kit/request.json`
+names the kit directory, version and manifest SHA-256. Publish that directory
+unchanged at an immutable https URL, put the URL and manifest SHA-256 on the
+deployment's governance record, then save
+`{"url": "<https URL>", "manifest_sha256": "<sha>"}` as
+`.scrollsdk/inputs/deployment-kit/published.json` and rerun `setup proof-materials`. It
+records the publication in `[attestationSigner.deploymentKit]` and completes
+that stage. Then run `setup render` to regenerate values and Secrets and run the
+final check. Legacy v1 plans resume with `setup apply`. The kit version is derived from the signer-relevant inputs, so a
+rerun or a runtime refresh with unchanged inputs reuses the same kit and
+publication. Observe and mock deployments have no kit. Plans created by an
+earlier CLI migrate in place: their `signer-policy`, `signer-receipts` and
+`charts-validated` steps are replaced by the kit steps (and `render-final`
+for staged plans). Completed genesis, cloud provisioning and funding steps are
+kept; no funding transaction is replayed. Old receipts do not satisfy the new
+publication requirement. After rollout, run `setup proof-config-check --live` as the final
+acceptance check.
 
 The contracts deployment environment uses rc.5's `DEPLOYER_PRIVATE_KEY`,
 `L1_RPC_ENDPOINT`, and `L2_RPC_ENDPOINT` names. Both spec generation and

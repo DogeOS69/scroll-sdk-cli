@@ -6,14 +6,10 @@ import type {PolicyReceiptReference} from './cubesigner-policy-receipts.js'
 import type {ProofDeploymentContract} from './proof-deployment-contract.js'
 
 import {resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
+import {deploymentKitBlockers} from './deployment-kit-record.js'
 import {readProofAwsConfig} from './proof-aws-config.js'
 import {readProofMaterials} from './proof-materials.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
-
-export interface SignerValidationInputs {
-  bundleManifest: PolicyReceiptReference
-  receipts: PolicyReceiptReference[]
-}
 
 function pinnedJson(root: string, reference: PolicyReceiptReference): Record<string, unknown> {
   const file = proofRegularFile(path.resolve(root, reference.path), 4 * 1024 * 1024)
@@ -64,40 +60,6 @@ export function proofEnforcementReadiness(root: string, contract: ProofDeploymen
     }
   } catch (error) { blockers.push(`CubeSigner: ${String(error)}`) }
 
-  const signers = config.attestationSigner?.external ?? []
-  const active = config.attestationSigner?.activeSignerIds ?? []
-  const validation = config.attestationSigner?.policyValidation
-  if (validation) {
-    try {
-      const bundle = pinnedJson(root, validation.bundleManifest)
-      if (bundle.schema !== 'dogeos/attestation-signer-policy-manifest/v1') throw new Error('Invalid signer bundle manifest')
-      const bundleDir = path.dirname(path.resolve(root, validation.bundleManifest.path))
-      const files = bundle.files as Array<{file: string; sha256: string; sizeBytes: number}>
-      if (!Array.isArray(files) || !files.some(item => item.file === 'signer-policy.json')) throw new Error('Signer bundle manifest has no policy')
-      for (const file of files) {
-        if (path.basename(file.file) !== file.file) throw new Error('Unsafe signer bundle file path')
-        const full = proofRegularFile(path.join(bundleDir, file.file))
-        if (`sha256:${proofFileHash(full)}` !== file.sha256 || fs.statSync(full).size !== file.sizeBytes) throw new Error('Signer bundle file drift')
-      }
-
-      const policy = JSON.parse(fs.readFileSync(path.join(bundleDir, 'signer-policy.json'), 'utf8'))
-      if (policy.protocolContext?.sha256 !== `sha256:${bindings.protocolContext.sha256}` || policy.deployment?.topologyRevision !== contract.topology.bundleRevision || policy.enforcement !== 'enforce') throw new Error('Signer handoff differs from selected enforcing topology/context')
-      const receipts = validation.receipts.map(reference => pinnedJson(root, reference))
-      if (new Set(receipts.map(item => item.signerId)).size !== receipts.length) throw new Error('Duplicate signer-validation receipt')
-      if (active.length === 0 || active.some(id => !signers.some(signer => signer.id === id))) throw new Error('Active signer set is empty or unresolved')
-      for (const id of active) {
-        const signer = signers.find(item => item.id === id)!
-        const receipt = receipts.find(item => item.signerId === id)
-        if (!receipt || receipt.schema !== 'dogeos/attestation-signer-policy-validation/v1'
-          || receipt.publicKey !== signer.publicKey || receipt.policyMode !== 'enforce'
-          || receipt.bundleManifestSha256 !== `sha256:${validation.bundleManifest.sha256.replace(/^sha256:/, '')}`
-          || receipt.coreRevision !== materials.software.sourceRevisions?.dogeosCore
-          || receipt.result !== 'passed' || !/^sha256:[\da-f]{64}$/.test(String(receipt.redactedConfigSha256))
-          || !Number.isFinite(Date.parse(String(receipt.validatedAt))) || Date.parse(String(receipt.validatedAt)) > Date.now() + 300_000) throw new Error(`Missing or mismatched validation receipt for signer ${id}`)
-      }
-    } catch (error) { blockers.push(`External signer: ${String(error)}`) }
-  }
-  else {blockers.push('External Attestation Signer policy-validation receipts are missing')}
-
+  blockers.push(...deploymentKitBlockers(root, contract, config))
   return {blockers, ready: blockers.length === 0}
 }
