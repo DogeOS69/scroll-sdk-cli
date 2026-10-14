@@ -8,10 +8,10 @@ export interface PreparationConfig {
     image: string
     mode: 'helper' | 'production'
     production?: {
-      /** New plans default to helper distribution; external retains manual wallet funding. */
-      funding?: 'external' | 'helper'
       /** Resolve finalized once on apply, or select an explicit historical boundary. */
       ethereumAnchor: {blockNumber?: number; blockTag?: 'finalized'; transactionIndex?: number}
+      /** New plans default to helper distribution; external retains manual wallet funding. */
+      funding?: 'external' | 'helper'
       recoveryPublicKeys: string[]
       /** Local signing inputs; mutually exclusive with sequencerKms. */
       sequencerKeyEnv?: string
