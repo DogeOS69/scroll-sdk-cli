@@ -370,6 +370,8 @@ With a compatible image, the operator sequence is:
    ```
 
    Replace `vout` with the actual numeric output index paying the helper.
+   A decimal string such as `"0"` is also accepted. Transaction IDs may include
+   a `0x` prefix; the CLI normalizes the input before querying RPC or saving facts.
    The helper input itself does not need to be vout 0.
 4. Rerun `scrollsdk setup bridge-funding`. After confirmation checks, Core
    broadcasts its setup transaction: sequencer at **vout 0**, ten fee-wallet
@@ -396,23 +398,14 @@ Set `preparation.bridge.production.funding: external` to retain the manual
 sequencer/fee-wallet and marked Bridge funding handoffs below. Saved older plans
 continue using this path.
 
-By default, the CLI requires the initial sequencer payment at **vout 0**. Build it as
-the first output and place change afterwards; inspect the final signed transaction
-before broadcasting. To accept an actual nonzero funding output, use:
+Supply the actual sequencer output index; the CLI accepts zero and nonzero
+indices without an opt-in flag. Address, amount, confirmations, unspent status
+and canonical-chain checks remain enabled. Never relabel an existing output.
 
-```bash
-scrollsdk setup bridge-funding --allow-nonzero-sequencer-vout
-```
-
-The same flag is available on `setup apply` for legacy plans. It is an invocation
-option, so an existing plan does not need to be recreated. Include it on retries
-until wallet funding is accepted; the validated outpoint is then saved for later
-steps. Address, amount, confirmations, unspent status and canonical-chain checks
-remain enabled. Record the actual output index, never relabel an existing output.
-
-This flag only relaxes the CLI check. Some beta.6 WP builds compare the genesis
-output index against a compiled circuit default of zero; permitting a nonzero
-index here does not establish compatibility with the selected WP/proof release.
+Some beta.6 WP builds compare the genesis output index against a compiled
+circuit default of zero. Accepting an input here does not establish compatibility
+with the selected WP/proof release. Helper distribution avoids this mismatch by
+constructing its sequencer output at vout 0.
 
 The beta.6 production order is defined in
 [core's pinned production guide](https://github.com/DogeOS69/dogeos-core/blob/56007d3c413ad07f33d0e08b272004089c911f78/docs/bridge-genesis-deployment.md).

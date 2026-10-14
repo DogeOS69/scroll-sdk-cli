@@ -1,6 +1,5 @@
 import {Flags} from '@oclif/core'
 
-import type {FundingOptions} from './preparation-funding.js'
 import type {PreparationStage} from './preparation-stages.js'
 
 import {DEFAULT_DEPLOYMENT} from './deployment-paths.js'
@@ -9,19 +8,16 @@ import {applyPreparation} from './preparation-plan.js'
 import {CommandPreparationRunner} from './preparation-runner.js'
 import {stageCommand} from './preparation-stages.js'
 
-export const allowNonzeroSequencerVoutFlag = Flags.boolean({default: false, description: 'Allow a nonzero initial sequencer funding output index; Core/WP compatibility must be checked separately'})
-
 export const preparationStageFlags = {
   dir: Flags.string({aliases: ['deployment-dir'], default: DEFAULT_DEPLOYMENT, description: 'Saved deployment directory created by setup plan'}),
   json: Flags.boolean({default: false, description: 'Output structured stage status and the next command'}),
 }
 
-export async function runPreparationStage(stage: PreparationStage, directory: string, json: boolean, fundingOptions: FundingOptions = {}): Promise<void> {
+export async function runPreparationStage(stage: PreparationStage, directory: string, json: boolean): Promise<void> {
   const output = new JsonOutputContext(`setup ${stage}`, json)
   try {
-    const state = await applyPreparation(directory, new CommandPreparationRunner(undefined, undefined, fundingOptions), step => output.info(`${step.id}: ${step.title}`), {stage})
-    let nextCommand = state.nextStage ? stageCommand(state.nextStage, directory === DEFAULT_DEPLOYMENT ? undefined : directory) : undefined
-    if (nextCommand && state.nextStage === 'bridge-funding' && fundingOptions.allowNonzeroSequencerVout) nextCommand += ' --allow-nonzero-sequencer-vout'
+    const state = await applyPreparation(directory, new CommandPreparationRunner(), step => output.info(`${step.id}: ${step.title}`), {stage})
+    const nextCommand = state.nextStage ? stageCommand(state.nextStage, directory === DEFAULT_DEPLOYMENT ? undefined : directory) : undefined
     const report = {completed: Object.keys(state.steps).filter(id => state.steps[id] === 'completed'), currentStep: state.currentStep, nextCommand, stage, status: state.status, waiting: state.waiting}
     if (!json) {
       output.info(JSON.stringify(report, null, 2))

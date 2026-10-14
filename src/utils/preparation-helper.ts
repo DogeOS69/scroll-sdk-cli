@@ -69,6 +69,12 @@ export function helperFundingAmount(config: any): number {
 
 export async function prepareManagedHelperFunding(root: string, spec: DeploymentSpec, rpc: Rpc): Promise<void> {
   const {data, file} = fundingInput(root, spec)
+  const inputTemplate = {helper: {txid: 'REPLACE_WITH_HELPER_FUNDING_TXID', vout: 'REPLACE_WITH_OUTPUT_INDEX'}}
+  if (Object.keys(data).length === 0) {
+    Object.assign(data, inputTemplate)
+    writeJson(file, data)
+  }
+
   const address = bridgeSetupHelperAddress(helperSeed(root), spec.dogecoin.network)
   const config = readToml(root, 'setup_defaults.toml')
   const amountSats = helperFundingAmount(config)
@@ -81,8 +87,8 @@ export async function prepareManagedHelperFunding(root: string, spec: Deployment
     writeJson(path.join(root, '.data/helper-funding.json'), fact)
   } catch (error) {
     if (error instanceof AwaitingInput) throw new AwaitingInput({...error.details, address, amountSats, file,
-      inputTemplate: {helper: {txid: 'REPLACE_WITH_HELPER_FUNDING_TXID', vout: 'REPLACE_WITH_OUTPUT_INDEX'}},
-      message: `${error.message}. Fund this helper address and record helper.txid and helper.vout; Core distributes the funds and adds the Bridge marker automatically`})
+      inputTemplate,
+      message: `${error.message}. Edit helper.txid and helper.vout in ${file}; vout must be the numeric output index paying the displayed helper address. Core distributes the funds and adds the Bridge marker automatically`})
     throw error
   }
 }

@@ -96,6 +96,23 @@ describe('managed helper funding', () => {
     expect(waiting).to.be.instanceOf(AwaitingInput)
     expect(waiting.details.amountSats).to.equal(1_142_925_000)
     expect(Object.keys(waiting.details.inputTemplate)).to.deep.equal(['helper'])
+    expect(JSON.parse(fs.readFileSync(waiting.details.file, 'utf8'))).to.deep.equal(waiting.details.inputTemplate)
+  })
+
+  it('preserves partially filled helper input on retry', async () => {
+    prepareManagedHelper(root, spec)
+    const file = path.join(root, '.scrollsdk/inputs/bridge-funding.json')
+    const partial = {helper: {txid: 'a'.repeat(64), vout: 'REPLACE_WITH_OUTPUT_INDEX'}}
+    writeJson(file, partial)
+    let waiting: unknown
+    try {await prepareManagedHelperFunding(root, spec, async method => {
+      if (method === 'getblockchaininfo') return {chain: 'regtest'}
+      if (method === 'getblockcount') return 1000
+      throw new Error('Invalid output index must not reach transaction RPC')
+    })} catch (error) {waiting = error}
+
+    expect(waiting).to.be.instanceOf(AwaitingInput)
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).to.deep.equal(partial)
   })
 
   it('accepts correctly marked funding, validates all child outputs and keeps the Ethereum anchor', async () => {

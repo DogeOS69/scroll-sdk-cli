@@ -18,7 +18,6 @@ import {productionSequencer} from './preparation-sequencer-kms.js'
 
 export const BRIDGE_FUNDING_MARKER = '6a4901' + '00'.repeat(72)
 export type Rpc = (method: string, params: unknown[]) => Promise<any>
-export interface FundingOptions {allowNonzeroSequencerVout?: boolean}
 export interface FundingFact {amountSats: number; blockHash: string; blockHeight: number; rawTransaction: string; txid: string; vout: number}
 const networkOf = (network: string): any => network === 'mainnet' ? bitcore.Networks.livenet : network === 'regtest' ? bitcore.Networks.regtest : bitcore.Networks.testnet
 export function publicKeyAddress(publicKey: string, network: string): string {
@@ -41,11 +40,19 @@ export function dogecoinRpc(root: string): Rpc {
   }
 }
 
+function normalizeFundingPoint(input: unknown): {txid: string; vout: number} {
+  const point = input as any
+  const txid = typeof point?.txid === 'string' ? point.txid.trim().replace(/^0x/i, '').toLowerCase() : ''
+  if (!/^[\da-f]{64}$/.test(txid)) throw new AwaitingInput({message: 'Funding txid must contain 64 hexadecimal characters (optional 0x prefix)'})
+  const vout = typeof point.vout === 'string' && /^\d+$/.test(point.vout.trim()) ? Number(point.vout.trim()) : point.vout
+  if (!Number.isSafeInteger(vout) || vout < 0 || vout > 0xFF_FF_FF_FF) throw new AwaitingInput({message: 'Funding vout must be an integer from 0 to 4294967295; a decimal string such as "0" is also accepted'})
+  return {txid, vout}
+}
+
 /** Bind raw bytes, live unspent output and canonical confirmation block to the request. */
 export async function inspectFunding(input: unknown, request: {address: string; confirmations: number; exact?: boolean; marker?: boolean; minimumSats: number}, rpc: Rpc): Promise<FundingFact> {
-  const point = input as any
-  if (!point || typeof point.txid !== 'string' || !/^[\da-f]{64}$/i.test(point.txid) || !Number.isSafeInteger(point.vout) || point.vout < 0 || point.vout > 0xFF_FF_FF_FF) throw new AwaitingInput({message: 'Supply a valid funding txid and vout'})
-  const txid = point.txid.toLowerCase()
+  const point = normalizeFundingPoint(input)
+  const {txid} = point
   const live = await rpc('gettxout', [txid, point.vout, true])
   if (!live) throw new AwaitingInput({message: 'Funding output is absent or already spent'})
   if (!Number.isSafeInteger(live.confirmations) || live.confirmations < request.confirmations) throw new AwaitingInput({message: `Funding output needs at least ${request.confirmations} confirmations`})
@@ -104,7 +111,7 @@ export async function verifyDogecoinNetwork(network: string, rpc: Rpc): Promise<
   if (info?.chain !== expected) throw new AwaitingInput({message: 'Dogecoin RPC network does not match the selected spec network'})
 }
 
-export async function prepareProductionWallets(root: string, spec: DeploymentSpec, rpc: Rpc, options: FundingOptions = {}): Promise<void> {
+export async function prepareProductionWallets(root: string, spec: DeploymentSpec, rpc: Rpc): Promise<void> {
   const policy = spec.preparation!.bridge.production!
   await verifyDogecoinNetwork(spec.dogecoin.network, rpc)
   const sequencer = productionSequencer(root, spec)
@@ -120,15 +127,11 @@ export async function prepareProductionWallets(root: string, spec: DeploymentSpe
   for (const role of ['sequencer', 'feeWallet'] as const) {
     const amount = role === 'sequencer' ? GENESIS_SEQUENCER_AMOUNT_SATS : setup.fee_wallet_target_amount
     try {
-      if (!options.allowNonzeroSequencerVout && role === 'sequencer' && data[role] && data[role].vout !== 0) {
-        throw new AwaitingInput({message: 'Initial sequencer funding must use output vout 0; construct the sequencer payment first and place change after it. To accept an actual nonzero output, rerun with --allow-nonzero-sequencer-vout. This only relaxes the CLI check; verify Core/WP compatibility separately. Do not relabel an existing output.'})
-      }
-
       facts[role] = await inspectFunding(data[role], {address: addresses[role], confirmations: spec.bridge.confirmationsRequired, exact: role === 'sequencer', minimumSats: amount}, rpc)} catch (error) {
       if (error instanceof AwaitingInput) throw new AwaitingInput({...error.details, address: addresses[role], amountSats: amount, file, fundingRequests: [
-        {address: addresses.sequencer, amountSats: GENESIS_SEQUENCER_AMOUNT_SATS, role: 'sequencer', ...(options.allowNonzeroSequencerVout ? {} : {vout: 0})},
+        {address: addresses.sequencer, amountSats: GENESIS_SEQUENCER_AMOUNT_SATS, role: 'sequencer'},
         {address: addresses.feeWallet, amountSats: setup.fee_wallet_target_amount, role: 'feeWallet'},
-      ], inputTemplate: {feeWallet: {txid: 'REPLACE_WITH_FEE_WALLET_TXID', vout: 'REPLACE_WITH_OUTPUT_INDEX'}, sequencer: {txid: 'REPLACE_WITH_SEQUENCER_TXID', vout: options.allowNonzeroSequencerVout ? 'REPLACE_WITH_OUTPUT_INDEX' : 0}}, message: `${role}: ${error.message}. Record ${role}.txid and ${role}.vout in the funding input`})
+      ], inputTemplate: {feeWallet: {txid: 'REPLACE_WITH_FEE_WALLET_TXID', vout: 'REPLACE_WITH_OUTPUT_INDEX'}, sequencer: {txid: 'REPLACE_WITH_SEQUENCER_TXID', vout: 'REPLACE_WITH_OUTPUT_INDEX'}}, message: `${role}: ${error.message}. Record ${role}.txid and ${role}.vout in the funding input`})
       throw error
     }
   }

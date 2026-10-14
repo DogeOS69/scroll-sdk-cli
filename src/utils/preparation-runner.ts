@@ -12,7 +12,7 @@ import type {PreparationPlan, PreparationRunner, PreparationStep} from './prepar
 import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
 import {parseDatabaseUrl} from './dstack-database.js'
 import {productionFeeWallet} from './preparation-fee-wallet.js'
-import {type FundingOptions, checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
+import {checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
 import {prepareLocalGenesis} from './preparation-genesis.js'
 import {prepareGrafanaAdmin} from './preparation-grafana.js'
 import {assertHelperFundingImage, prepareManagedHelper, prepareManagedHelperFunding, verifyManagedHelperFunding} from './preparation-helper.js'
@@ -54,7 +54,7 @@ function requiredFile(root: string, input: string | undefined, label: string): s
 const optional = (name: string, value: string | undefined): string[] => value ? [`--${name}`, value] : []
 
 export class CommandPreparationRunner implements PreparationRunner {
-  constructor(private readonly invoke: Invoke = invokePreparationCommand, private readonly exportMaterializers = exportCoordinatorMaterializers, private readonly fundingOptions: FundingOptions = {}) {}
+  constructor(private readonly invoke: Invoke = invokePreparationCommand, private readonly exportMaterializers = exportCoordinatorMaterializers) {}
   async run(step: PreparationStep, spec: DeploymentSpec, root: string, plan: PreparationPlan): Promise<void> {
     const p = spec.preparation!
     const command = (args: string[], environment?: Record<string, string>) => this.invoke(root, step.id, args, {
@@ -143,7 +143,7 @@ export class CommandPreparationRunner implements PreparationRunner {
       }
 
       case 'managed-helper-verify': {await verifyManagedHelperFunding(root, spec, dogecoinRpc(root)); break}
-      case 'production-wallets': {await prepareProductionWallets(root, spec, dogecoinRpc(root), this.fundingOptions); break}
+      case 'production-wallets': {await prepareProductionWallets(root, spec, dogecoinRpc(root)); break}
       case 'production-funding': {await prepareProductionBridgeFunding(root, spec, dogecoinRpc(root)); break}
       case 'helper-funding': {await prepareHelperFunding(root, spec, dogecoinRpc(root)); break}
       case 'helper-setup': {await command(['bridge-init', '--step', '2-setup', ...bridgeArgs]); break}

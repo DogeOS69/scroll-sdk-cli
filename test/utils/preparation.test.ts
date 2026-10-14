@@ -806,6 +806,29 @@ describe('production funding validation', () => {
     await rejected(() => inspectFunding({...f.point, txid: 'a'.repeat(64)}, f.request, f.rpc), 'does not match')
     await rejected(() => inspectFunding(f.point, f.request, async (method, args) => method === 'gettxout' ? null : f.rpc(method, args)), 'already spent')
   })
+  it('normalizes pasted txids and decimal output indices before RPC and persistence', async () => {
+    const f = fixtureTx()
+    for (const prefix of ['', '0x', '0X']) {
+      const result = await inspectFunding({txid: ` ${prefix}${f.point.txid.toUpperCase()} `, vout: ' 0 '}, f.request, async (method, args) => {
+        if (method === 'gettxout') expect(args).to.deep.equal([f.point.txid, 0, true])
+        if (method === 'getrawtransaction') expect(args).to.deep.equal([f.point.txid, true])
+        return f.rpc(method, args)
+      })
+      expect(result.txid).to.equal(f.point.txid)
+      expect(result.vout).to.equal(0)
+    }
+  })
+  it('rejects malformed txids and non-integer or out-of-range indices before RPC', async () => {
+    const f = fixtureTx()
+    const noRpc: Rpc = async () => {throw new Error('Invalid funding input must not query RPC')}
+    for (const txid of [null, 123, '', '0x' + 'a'.repeat(63), 'g'.repeat(64), '0x0x' + 'a'.repeat(64)]) {
+      await rejected(() => inspectFunding({txid, vout: 0}, f.request, noRpc), 'Funding txid')
+    }
+
+    for (const vout of ['', ' ', '0.0', '1e2', '0x0', '-1', '4294967296', -1, 0.5, 4_294_967_296, null, false, [], {}]) {
+      await rejected(() => inspectFunding({txid: f.point.txid, vout}, f.request, noRpc), 'Funding vout')
+    }
+  })
   it('requires confirmations and exact genesis amount', async () => {
     const f = fixtureTx()
     await rejected(() => inspectFunding(f.point, {...f.request, confirmations: 7}, f.rpc), 'confirmations')
