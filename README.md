@@ -1,13 +1,28 @@
 # Scroll SDK CLI
 
 
-For existing-bridge attestation rotation, see the SDK's
-[bridge and signer operator walkthrough](https://github.com/DogeOS69/scroll-sdk/blob/feat/rotation-operator-workflow/partner-kit/attestation-signer/docs/rotation-walkthrough.md).
-The bridge operator runs `bridge rotation init --rotation-dir ... --identity NAME=FILE`
-to import core public identities, followed by `plan`, `stage`, and `check` with
-the same rotation directory. `check` reports missing approvals/readiness and
-live admission without WP build/propose requests. Only `apply` submits the
-rotation. Signer operators use standalone Docker scripts; they do not need this CLI.
+For an attestation-signer rotation, download the proposal's rotation export
+(`dogeos/rotation-export/v1`) from the governance portal, then, from the
+deployment directory:
+
+1. `scrollsdk bridge rotation register <export>`: merges every current and
+   target signer into the WP `tsoSigners` (never removes one), renders the
+   chart with `helm template` before writing, installs the WP and waits until
+   the WP reports every key as registered. Re-running it is a no-op.
+2. `scrollsdk bridge rotation online <export>`: passes when every target
+   signer, and at least M of the live current signers, polled the TSO in the
+   last 60 seconds. It is point-in-time and proves only an authenticated
+   poll: not the release, enforce mode, RPC or key-backend health, the old
+   signers' allowlist entry, or real signing. A deferred WP dispatch happens
+   later without another check.
+3. `scrollsdk bridge rotation send <export> --preview`: the same checks, then a
+   non-durable WP build. `send <export>` submits once (`/propose`). Re-running
+   `send` reports the stored intent instead of resubmitting.
+
+Each command first checks the export against itself and the WP deployment
+(`protocol_instance_id` and network). `register` and a new `send` also require
+the live bridge to still be the export's current bridge. Signer operators use
+the standalone Docker kit; they do not need this CLI.
 
 Current configuration and migration procedure: [Pure Reth configuration and retired services](docs/config-cleanup.md).
 
