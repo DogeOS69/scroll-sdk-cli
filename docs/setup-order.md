@@ -255,32 +255,57 @@ separate requirement or any production signer evidence requirement.
 
 ## CubeSigner Wasm preparation and attachment
 
-When the correctness signer uses the hosted verifier policy, generate an actual
-Wasm after Bridge preparation. `export-signer-policy` generates the partner
-attestation-signer handoff; it does not compile this CubeSigner Wasm.
+When the correctness signer uses the hosted verifier policy, export its Wasm
+from the core release's policy compiler image. `export-signer-policy` generates
+the partner attestation-signer handoff; it does not produce this CubeSigner Wasm.
+
+The policy's release values (artifact origin and base path, program commitment,
+aggregation VK, namespace) are constants committed in the core release, so the
+compiler image takes no inputs. It runs without network, writes
+`cubesigner_verifier_policy.wasm` and `cubesigner_verifier_policy.wasm.sha256`,
+and is reproducible: the same image always yields the same Wasm.
+
+The image is published only to the private GitHub package
+`ghcr.io/dogeos69/cubesigner-policy-compiler` (tagged with the core release tag),
+because the Wasm is compiled against the private Cubist policy SDK. Pulling it
+requires a GitHub token with the `read:packages` scope from an account with
+access to the package. Log in once on the operator host, reading the token from
+an environment variable or secret store rather than the command line:
+
+```bash
+printf '%s' "$GHCR_READ_PACKAGES_TOKEN" | docker login ghcr.io -u "$GITHUB_USER" --password-stdin
+```
+
+Clusters never run this image (the Wasm is uploaded to CubeSigner), so they need
+no pull secret for it. If another host must pull it, give it the same kind of
+token as a registry credential (for Kubernetes, an `imagePullSecrets` entry of
+type `kubernetes.io/dockerconfigjson` for `ghcr.io`).
 
 ```bash
 scrollsdk setup cubesigner-policy build \
-  --compiler-image "$POLICY_COMPILER_IMAGE" \
+  --compiler-image "ghcr.io/dogeos69/cubesigner-policy-compiler@sha256:$POLICY_COMPILER_DIGEST" \
   --expected-core-revision "$CORE_REVISION" \
-  --preparation-receipt .data/preparation/proof-release-preparation-v1.json \
-  --protocol-context .data/protocol_context.json \
-  --resolver-base-url "$PROOF_RESOLVER_BASE_URL" \
   --output .data/cubesigner-policy-build --json
 ```
 
-The compiler image must be pinned by digest and match the preparation revision.
-`PROOF_RESOLVER_BASE_URL` must equal the generated WP
+The compiler image must be pinned by digest, and its
+`org.opencontainers.image.revision` label must equal `--expected-core-revision`.
+The command runs it with no network, a read-only root filesystem and no
+capabilities, checks the Wasm against the image's `.sha256` and the WebAssembly
+component header, and writes `build-receipt.json`
+(`dogeos/cubesigner-policy-build-receipt/v2`: compiler image, core revision,
+Wasm path, sha256 and size) next to the Wasm. Keep each generation in a new
+directory.
+
+`PROOF_RESOLVER_BASE_URL` below must equal the artifact origin and base path
+compiled into that release's policy, and the generated WP
 `proof_system.signer_proof_artifact_base_url`, normalized to end in `/`.
 For S3 this includes the configured key prefix, for example
 `https://<bucket>.s3.<region>.amazonaws.com/<deployment-prefix>/`.
 Proof references contain logical keys; the storage layer adds that prefix.
 Using only the bucket root when a prefix is configured produces a URL mismatch.
 This is not a signed URL or the DA archive's independently configured public
-base. The command checks
-the receipt/context identity and runs the compiler without network or a core
-source checkout. Output contains the real Wasm, build receipt, compiler digest,
-and input copies. Keep each generation in a new directory.
+base.
 
 The CubeSigner organization must also permit HTTP egress to this resolver.
 Preview the addition, then apply the reviewed change:
