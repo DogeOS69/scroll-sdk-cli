@@ -1,0 +1,71 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Local plan/values and Kubernetes API documents. */
+import {Args, Command, Flags} from '@oclif/core'
+import * as yaml from 'js-yaml'
+import fs from 'node:fs'
+import path from 'node:path'
+import {fileURLToPath} from 'node:url'
+
+import {CAPACITY_MANAGER_PLAN, assertSdkWorkersRetired, prepareCapacityManager} from '../../utils/capacity-manager.js'
+import {DEFAULT_DEPLOYMENT} from '../../utils/deployment-paths.js'
+import {JsonOutputContext} from '../../utils/json-output.js'
+import {localPath} from '../../utils/preparation-io.js'
+import {capacityExec} from '../../utils/proof-workers-lifecycle.js'
+
+export default class CapacityManager extends Command {
+  static args = {action: Args.string({default: 'prepare', options: ['prepare', 'credentials', 'status']})}
+  static description = 'Prepare Core capacity-manager configuration and credentials; install separately with Helm to start renting workers'
+  static flags = {'deployment-dir': Flags.string({aliases: ['dir'], default: DEFAULT_DEPLOYMENT}), json: Flags.boolean({default: false}), 'kube-context': Flags.string({description: 'Explicit Kubernetes context; otherwise uses the saved spec target'}), namespace: Flags.string({description: 'Must match the namespace saved during rendering'})}
+
+  async run(): Promise<void> {
+    const {args, flags} = await this.parse(CapacityManager)
+    const out = new JsonOutputContext('setup capacity-manager', flags.json)
+    try {
+      const root = path.resolve(flags['deployment-dir'])
+      if (args.action === 'prepare') {
+        const result = prepareCapacityManager(root)
+        out.info('No GPU allocation. Install WP with the generated network policy, then explicitly run make install-capacity-manager.')
+        out.success(result)
+        return
+      }
+
+      const plan = JSON.parse(fs.readFileSync(localPath(root, CAPACITY_MANAGER_PLAN), 'utf8'))
+      if (plan.schema !== 'scrollsdk/capacity-manager/v1') throw new Error('Unsupported capacity-manager plan')
+      if (flags.namespace && flags.namespace !== plan.namespace) throw new Error('Namespace differs from prepared capacity-manager values; regenerate for the intended namespace')
+      if (plan.dstack.namespace !== plan.namespace) throw new Error('Dstack and capacity-manager must use the same namespace; rerun setup render')
+      const selectedContext = flags['kube-context'] || plan.kubeContext
+      const context = selectedContext ? ['--context', selectedContext] : []
+      const run = (namespace: string, args: string[], input?: string) => {
+        try {return capacityExec([...context, '--namespace', namespace, ...args], input)} catch {
+          throw new Error('Capacity-manager Kubernetes/dstack operation failed (private response omitted). Check the saved context, dstack rollout, synchronized proof Secrets, and configured project/fleets; retry make install-capacity-manager after fixing the cause.')
+        }
+      }
+
+      if (args.action === 'status') {
+        const result = run(plan.namespace, ['get', 'deployment', 'capacity-manager', '--ignore-not-found', '-o', 'json'])
+        const deployment = result.trim() ? JSON.parse(result) : undefined
+        out.success({present: Boolean(deployment), readyReplicas: deployment?.status?.readyReplicas ?? 0, replicas: deployment?.spec?.replicas ?? 0})
+        return
+      }
+
+      assertSdkWorkersRetired(root)
+      const values = yaml.load(fs.readFileSync(localPath(root, plan.valuesFile), 'utf8')) as any
+      if (values.manager.dstack.project !== plan.project || values.manager.workerTokenSecret !== plan.workerTokenSecret) throw new Error('Regenerate the capacity-manager plan after changing its credential bindings')
+      const readSecret = (namespace: string, name: string, key: string) => {
+        const response = run(namespace, ['get', 'secret', name, '-o', 'json'])
+        let secret
+        try {secret = JSON.parse(response)} catch {throw new Error('Invalid Kubernetes Secret readback; private response omitted')}
+        if (!secret.data?.[key]) throw new Error('Required credential Secret/key is missing')
+        return Buffer.from(secret.data[key], 'base64').toString('utf8').trim()
+      }
+
+      run(plan.namespace, ['rollout', 'status', `deployment/${plan.dstack.deployment}`, '--timeout=120s'])
+      const workerToken = readSecret(plan.namespace, plan.workerSecret, 'prover-worker-token')
+      if (values.dstackAuth?.existingSecret !== plan.dstack.auth.existingSecret || values.dstackAuth?.key !== plan.dstack.auth.key) throw new Error('Dstack credential bindings changed; rerun setup render')
+      // Both releases mount the same Secret; no token readback/copy is necessary.
+      const adapter = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../config/capacity-manager-credentials.py'), 'utf8')
+      run(plan.dstack.namespace, ['exec', '-i', `deployment/${plan.dstack.deployment}`, '-c', 'controller', '--', '/root/.local/share/uv/tools/dstack/bin/python', '-c', adapter], JSON.stringify({fleets: values.manager.dstack.fleets, project: plan.project, secretName: plan.workerTokenSecret, token: workerToken}))
+      out.info('Prepared credential references only. No workers started; explicitly install the capacity-manager release after reviewing the generated policy.')
+      out.success({namespace: plan.namespace, project: plan.project, updated: true})
+    } catch (error) {out.error('E761_CAPACITY_MANAGER_FAILED', error instanceof Error ? error.message : 'Capacity manager preparation failed', 'CONFIGURATION', true)}
+  }
+}

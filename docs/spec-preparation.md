@@ -199,7 +199,7 @@ generation so a retry uses the same identity.
 | `setup aws` | Prepare declared service identities, proof store/IAM/token, archive access, Bridge sequencer KMS, controller credentials and selected existing databases. | Resource facts are saved automatically; no copy back into the spec. No GPU allocation. |
 | `setup bridge-funding` | Bind genesis/DA anchor; verify helper funding; invoke Core setup and marked funding; verify all resulting outpoints. | One operator wallet handoff. Setup and Bridge funding broadcast transactions and require manual reconciliation after ambiguous failures. |
 | `setup proof-materials` | Generate protocol context; import declared inputs; bake/import proof materials; compile/publish proof configuration; export the deployment kit and record its publication. | Preliminary chart compilation is needed to bind the kit. Wait for its immutable URL and manifest digest within this stage. |
-| `setup render` | Render final values/native configuration with the recorded kit publication; generate private Secrets; run proof checks. | Helm releases remain uninstalled. |
+| `setup render` | Render final values/native configuration with the recorded kit publication; generate private Secrets; prepare optional capacity-manager values and WP access; run proof checks. | Helm releases remain uninstalled. |
 | `setup upload-secrets` | Upload using the saved provider, region, namespace and Secret prefix. | AWS defaults to the deployment-specific prefix; no retyping it. |
 
 `setup proof-materials --generation ...` and other explicit material flags retain
@@ -846,3 +846,94 @@ See the SDK's `examples/network-and-iam.md` for the permission matrix, optional
 Blockscout ALB group configuration and pre-launch network checks. Anonymous
 proof reads required by signers/workers remain supported; snapshot changes
 are deferred.
+
+## Core capacity-manager with staged preparation
+
+SDK PR #145 supplies the independent chart, production template and Makefile
+installation target. Use an SDK checkout/revision containing that PR; planning
+rejects a missing capacity-manager template before provisioning resources. The
+CLI reuses the capacity preparation from CLI PR #80.
+
+Declare `capacityManager` in the spec **instead of** `proofWorkers`. Keep
+`dstackController.enabled: true` and active real proving. For example (merge into
+the spec, replacing the image and fleet references with approved values):
+
+```yaml
+capacityManager:
+  image:
+    repository: ghcr.io/dogeos69/capacity-manager
+    digest: REPLACE_WITH_PUBLISHED_SHA256_DIGEST
+  provider: aws
+  gpu: L4
+  project: dogeos-aws-provers
+  fleets: [dogeos-aws-l4]
+  regions: [us-east-1]
+  instanceTypes: [g6.4xlarge]
+  minWorkers: 1
+  maxWorkers: 2
+  maxPricePerHourUsd: 1.50
+  maxHourlyCostUsd: 3.00
+```
+
+These prices are example ceilings, not provider quotations. `L40S` is also
+supported with a compatible checked Worker image (CUDA architecture 89); select
+its fleet, instance type and price ceilings explicitly using the SDK's qualified
+AWS profile guidance. SDK DevNet profiles are not copied into a new deployment.
+The manager image must be a compatible, separately published immutable image;
+this workflow neither builds nor publishes it.
+
+- `setup proof-materials` prepares and verifies the Worker programs and publication.
+- `setup render` uses `prep-charts` to generate
+  `values/capacity-manager-production.yaml` from those verified inputs, plus a
+  same-namespace WP NetworkPolicy peer for the manager. It saves the spec's
+  Kubernetes context and namespace for later credential/status commands.
+- `setup upload-secrets` uses the normal secret destination. It does not connect
+  to dstack or rent GPU workers.
+- Install the supporting releases manually, including WP with the generated
+  NetworkPolicy, proof token Secrets, and the dstack controller. Prepare an
+  isolated dstack project and fleet according to the SDK runbook.
+- No separate capacity-manager preparation or credential command is required.
+  Make synchronizes the referenced Worker token to the selected dstack project
+  before Helm installs the manager. Its controller token is referenced in place.
+- From `deployment/`, review the generated values and run
+  `make install-capacity-manager`. **This explicit installation starts Core's
+  capacity reconciliation and may rent paid workers.** `install-all` excludes it.
+
+`setup capacity-manager` defaults to `./deployment` (override with `--dir`), and
+`credentials` (used automatically by Make) / `status` use the saved spec context unless `--kube-context` is
+explicitly supplied. `scrollsdk setup capacity-manager status` reports the manager
+Deployment, not proof-worker acceptance. There is no SDK rental-duration cap on
+Core's continuous manager. Follow the SDK drain/retirement instructions: pausing
+or uninstalling the manager alone does not establish that remote billing stopped.
+
+Do not switch an existing frozen deployment by editing its intent JSON. This is
+an opt-in for newly planned deployments; a live controller handoff requires the
+SDK's explicit retirement procedure. The two capacity owners are mutually
+exclusive, and preparation refuses an unretired SDK Worker session.
+
+### Shared namespace and automatic capacity credentials
+
+All spec-managed releases, including dstack and capacity-manager, use
+`infrastructure.namespace` (default `default`). A conflicting
+`dstackController.monitoring.namespace` is rejected. Do not set a separate
+`DSTACK_NAMESPACE`.
+
+`gen-secrets` generates existing controller credentials; capacity-manager reuses
+the same dstack auth Secret and the prepared proof-work Secret. `push-secrets`
+keeps the existing publication destinations: proof tokens in the external store,
+and controller Secrets in Kubernetes. It does not need a running dstack server.
+No extra capacity-manager admin-token Secret is created.
+
+After uploading Secrets, install dstack and the proof services with the generated
+Makefile. Then run `make install-capacity-manager`. That target first waits for
+dstack's rollout, reads the referenced worker token from Kubernetes (after the
+proof chart's ExternalSecret has synchronized), and registers it in the selected
+dstack project via its API. It then installs the manager. Failure to synchronize
+stops the recipe before Helm; retry the same Make target after fixing the cause.
+This synchronization is idempotent and never creates a fleet or starts a worker.
+The project and named fleets must already exist. The Helm installation can start
+paid GPU allocation according to the declared policy.
+
+The generated Makefile passes its context and namespace explicitly. Namespace
+changes require regenerating the values, since service DNS and Secret references
+are bound to that namespace.

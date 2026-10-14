@@ -258,7 +258,7 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
 export function generateDstackMonitoringValues(config?: DstackControllerConfig): string | undefined {
   validateDstackControllerConfig(config)
   if (!config || config.enabled === false) return undefined
-  const namespace = config.monitoring?.namespace ?? 'dstack-system'
+  const namespace = config.monitoring?.namespace ?? 'default'
   const enabled = config.monitoring?.enabled ?? true
   const values = {
     dstack: {

@@ -20,7 +20,7 @@ function privateYaml(content: string): unknown {
 /** Read the exact managed files, never glob arbitrary Secret manifests. */
 export function loadDstackSecretPublication(config: DstackControllerConfig, valuesFile: string, namespace: string): DstackSecret[] {
   if (!/^[\da-z]([\da-z-]*[\da-z])?$/.test(namespace) || namespace.length > 63) throw new Error('Invalid Kubernetes namespace')
-  if (config.monitoring?.enabled !== false && namespace !== (config.monitoring?.namespace ?? 'dstack-system')) throw new Error('Dstack monitoring namespace differs from the Secret upload destination')
+  if (config.monitoring?.enabled !== false && namespace !== (config.monitoring?.namespace ?? 'default')) throw new Error('Dstack monitoring namespace differs from the Secret upload destination')
   const state = readDstackCredentials()
   if (!state) throw new Error('Run setup dstack-config and setup gen-secrets --dstack-only first')
   const refs = dstackSecretRefs(config, state)

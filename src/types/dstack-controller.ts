@@ -30,7 +30,7 @@ export interface DstackControllerConfig {
       unavailableFor?: string
     }
     interval?: string
-    /** Namespace used when installing the independent controller release. */
+    /** Derived from infrastructure.namespace in spec deployments; explicit values must match. */
     namespace?: string
     sampleLimit?: number
     scrapeTimeout?: string

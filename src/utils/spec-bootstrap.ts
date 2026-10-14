@@ -81,6 +81,12 @@ export function planSpecBootstrap(spec: DeploymentSpec, sdkDirectory?: string): 
     delete hashes['values/l1-devnet-production.yaml']
   }
 
+  if (spec.capacityManager && !files['values/capacity-manager-production.yaml']) throw new Error('Selected SDK revision lacks capacity-manager templates; use SDK PR #145 or a release containing it')
+  if (!spec.capacityManager) {
+    delete files['values/capacity-manager-production.yaml']
+    delete hashes['values/capacity-manager-production.yaml']
+  }
+
   files.Makefile = bindMakefileTarget(adaptNodeCounts(files.Makefile, spec), spec)
   files['.data/spec-bootstrap.json'] = JSON.stringify({
     pendingStages: ['identity provisioning/import', 'contract and genesis generation', 'Bridge initialization and canonical protocol context', 'proof materials, compilation and publication', 'secret preparation and chart reconciliation'], schema: 'dogeos/spec-bootstrap/v1', sdkRevision: revision,
@@ -104,6 +110,8 @@ export function loadSdkTemplateFiles(sdkDirectory: string, revisionOverride?: st
   const files: Record<string, string> = {}
   const hashes: Record<string, string> = {}
   for (const [file, mode] of sourceFiles) {
+    // Qualified DevNet profiles contain deployment-specific endpoints and are opt-in overlays.
+    if (file.startsWith('values/capacity-manager-devnet-')) continue
     if (!(file === 'Makefile.example' || file.endsWith('.sh') && !file.includes('/') || /^(?:values|withdrawal-processor|proof-coordinator)\//.test(file))) continue
     if (!['100644', '100755'].includes(mode) || file.split('/').includes('..')) throw new Error(`Unsupported SDK template entry: ${file}`)
     const content = git('show', `${revision}:examples/${file}`)

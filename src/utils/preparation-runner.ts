@@ -10,6 +10,7 @@ import type {DeploymentSpec} from '../types/deployment-spec.js'
 import type {PreparationPlan, PreparationRunner, PreparationStep} from './preparation-plan.js'
 
 import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
+import {prepareCapacityManager} from './capacity-manager.js'
 import {parseDatabaseUrl} from './dstack-database.js'
 import {prepareCubesignerPolicy} from './preparation-cubesigner-policy.js'
 import {awaitDeploymentKitPublication, exportPreparationDeploymentKit} from './preparation-deployment-kit.js'
@@ -65,6 +66,8 @@ export class CommandPreparationRunner implements PreparationRunner {
     })
     const bridgeArgs = ['-N', '--image', p.bridge.image, '--ethereum-da-probe', 'direct', ...(p.bridge.mode === 'production' ? ['--production'] : [])]
     switch (step.id) {
+      case 'capacity-manager': {prepareCapacityManager(root); break}
+
       case 'proof-workers-intent': {
         // Capacity apply runs only after the operator installs the services.
         break

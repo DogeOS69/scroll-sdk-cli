@@ -41,11 +41,12 @@ describe('bounded proof-worker capacity', () => {
 
   it('freezes the current context without requiring automatic Secret upload and uses the controller namespace', () => {
     const {input} = fixturePlan()
-    expect(workerControllerLocation(input.spec, undefined, () => 'current-context')).to.deep.equal({context: 'current-context', namespace: 'dstack-system'})
-    input.spec.dstackController = {monitoring: {namespace: 'gpu-control'}}
+    expect(workerControllerLocation(input.spec, undefined, () => 'current-context')).to.deep.equal({context: 'current-context', namespace: 'default'})
+    input.spec.infrastructure = {...input.spec.infrastructure, namespace: 'chain'}
+    input.spec.dstackController = {monitoring: {namespace: 'chain'}}
     input.spec.preparation!.secretUpload = {kubeContext: 'upload-context', namespace: 'chain', provider: 'aws'}
-    expect(workerControllerLocation(input.spec, undefined, () => {throw new Error('must not query')})).to.deep.equal({context: 'upload-context', namespace: 'gpu-control'})
-    expect(workerControllerLocation(input.spec, 'override', () => '')).to.deep.equal({context: 'override', namespace: 'gpu-control'})
+    expect(workerControllerLocation(input.spec, undefined, () => {throw new Error('must not query')})).to.deep.equal({context: 'upload-context', namespace: 'chain'})
+    expect(workerControllerLocation(input.spec, 'override', () => '')).to.deep.equal({context: 'override', namespace: 'chain'})
   })
   it('reserves startup, drain, idle and cleanup polling within the budget', () => {
     expect(rentalEnvelope(resolveProofWorkers({}))).to.equal(2.27)

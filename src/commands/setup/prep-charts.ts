@@ -21,6 +21,7 @@ import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
 import {applyBootnodePublicP2p, validateBootnodePublicP2p} from '../../utils/bootnode-public-p2p.js'
+import {prepareCapacityManagerIfSelected} from '../../utils/capacity-manager.js'
 import {contractsDeploymentGasPrice} from '../../utils/contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
 import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
@@ -64,6 +65,7 @@ import {
   isAwsKmsSigner,
   isLocalSigner,
 } from '../../utils/signer-roles.js'
+import {specDstackController} from '../../utils/spec-kubernetes-target.js'
 import {reconcileScrollMonitorStatusPage} from '../../utils/status-page-values.js'
 import {tsoSignerNetwork} from '../../utils/tso-signer-network.js'
 import {
@@ -1389,6 +1391,7 @@ export default class SetupPrepCharts extends Command {
 
       process.chdir(transaction.stagingRoot)
       generation = await this.generateCharts(stagedValuesDir)
+      prepareCapacityManagerIfSelected(transaction.stagingRoot)
       process.chdir(deploymentRoot)
       changedFiles = transaction.commit().changedFiles
     } catch (error) {
@@ -1705,7 +1708,7 @@ export default class SetupPrepCharts extends Command {
     this.dogeConfig = config as DogeConfigType;
     assertSeparateDaProofBuckets(this.dogeConfig)
     const deploymentSpec = flags.spec ? loadDeploymentSpec(path.resolve(flags.spec)) : undefined
-    this.dstackController = deploymentSpec?.dstackController ?? this.dogeConfig.dstackController
+    this.dstackController = deploymentSpec ? specDstackController(deploymentSpec) : this.dogeConfig.dstackController
     validateDstackControllerConfig(this.dstackController)
     this.proofIntent = resolveProofIntent({
       deploymentDir: process.cwd(),

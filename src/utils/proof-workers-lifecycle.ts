@@ -65,6 +65,12 @@ function operateWorkerCapacityUnlocked(root: string, action: 'apply' | 'destroy'
       ...(state ? {cleanupDeadline: new Date((state.startedAt + plan.wallTimeoutSeconds) * 1000).toISOString()} : {})}
   }
 
+  if (action === 'apply') {
+    if (fs.existsSync(localPath(root, '.scrollsdk/capacity-manager/plan.json'))) throw new Error('capacity-manager owns this deployment; SDK worker apply is disabled')
+    const intent = localPath(root, '.scrollsdk/intent.json')
+    if (fs.existsSync(intent) && JSON.parse(fs.readFileSync(intent, 'utf8')).capacityManager) throw new Error('capacityManager is selected; SDK worker apply is disabled')
+  }
+
   if (action === 'destroy') {
     state = {...state, planId: plan.id, startedAt: state?.startedAt ?? now, status: 'cleanup-requested'}
     writeJson(stateFile, state)

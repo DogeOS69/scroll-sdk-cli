@@ -1,6 +1,6 @@
 // Generated from DeploymentSpec and its referenced types. Run npm run spec:fields.
 export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kind: 'array' | 'object' | 'record'}> = {
-  "$": {"keys":["accounts","attestationSigners","bootnodePublicP2p","bridge","celestia","contracts","database","dogecoin","dstackController","ethereumDa","feeOracle","frontend","genesis","identities","images","infrastructure","metadata","monitoring","network","preparation","proofArtifacts","proofCoordinator","proofTopology","proofWorkers","rollup","signing","snapshots","templates","test","version"],"kind":"object"},
+  "$": {"keys":["accounts","attestationSigners","bootnodePublicP2p","bridge","capacityManager","celestia","contracts","database","dogecoin","dstackController","ethereumDa","feeOracle","frontend","genesis","identities","images","infrastructure","metadata","monitoring","network","preparation","proofArtifacts","proofCoordinator","proofTopology","proofWorkers","rollup","signing","snapshots","templates","test","version"],"kind":"object"},
   "$.accounts": {"keys":["deployer","l1CommitSender","l2GasOracleSender","owner"],"kind":"object"},
   "$.accounts.deployer": {"keys":["address","privateKey"],"kind":"object"},
   "$.accounts.l1CommitSender": {"keys":["address","privateKey"],"kind":"object"},
@@ -21,6 +21,11 @@ export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kin
   "$.bridge.targetAmounts": {"keys":["bridge","feeWallet","sequencer"],"kind":"object"},
   "$.bridge.targetAmountsSats": {"keys":["bridge","feeWallet","sequencer"],"kind":"object"},
   "$.bridge.thresholds": {"keys":["attestation","recovery"],"kind":"object"},
+  "$.capacityManager": {"keys":["fleets","gpu","image","instanceTypes","maxHourlyCostUsd","maxPricePerHourUsd","maxWorkers","minWorkers","project","provider","regions","scaleDownTtlSeconds","targetDrainSeconds","workerIdPrefix"],"kind":"object"},
+  "$.capacityManager.fleets": {"kind":"array"},
+  "$.capacityManager.image": {"keys":["digest","repository"],"kind":"object"},
+  "$.capacityManager.instanceTypes": {"kind":"array"},
+  "$.capacityManager.regions": {"kind":"array"},
   "$.celestia": {"keys":["authToken","indexerStartBlock","mnemonic","namespace","signerAddress","tendermintRpcUrl"],"kind":"object"},
   "$.contracts": {"keys":["deploymentSalt","feeVaultDogeRecipientAddress","gasOracle","l1DeploymentBlock","l2BaseFeeOverheadWei","overrides","verification"],"kind":"object"},
   "$.contracts.gasOracle": {"keys":["blobScalar","commitScalar","penaltyFactor","scalar"],"kind":"object"},

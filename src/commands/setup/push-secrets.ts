@@ -644,8 +644,8 @@ export default class SetupPushSecrets extends Command {
     '<%= config.bin %> <%= command.id %> --secret-file secrets/l2-reth-bootnode-0-secret.env --values-file values/l2-reth-bootnode-production-0.yaml',
     '<%= config.bin %> <%= command.id %> --cubesigner-only',
     '<%= config.bin %> <%= command.id %> -c --debug',
-    '<%= config.bin %> <%= command.id %> --provider kubernetes --dstack-only --kube-context isolated-e2e --namespace dstack-system --dry-run -N',
-    '<%= config.bin %> <%= command.id %> --provider aws --aws-region us-east-1 --kube-context isolated-e2e --namespace dstack-system -N',
+    '<%= config.bin %> <%= command.id %> --provider kubernetes --dstack-only --kube-context isolated-e2e --namespace default --dry-run -N',
+    '<%= config.bin %> <%= command.id %> --provider aws --aws-region us-east-1 --kube-context isolated-e2e --namespace default -N',
   ]
 
   static override flags = {

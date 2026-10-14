@@ -70,7 +70,7 @@ else console.log('{}');
   }
 
   const publication = (runner: (args: string[], stdin?: string) => Promise<string>, dryRun = false) => publishDstackSecrets({
-    config: readDstackControllerConfig()!, context: 'isolated-e2e', dryRun, namespace: 'dstack-system', runner, valuesFile: 'values/dstack-controller-production.yaml',
+    config: readDstackControllerConfig()!, context: 'isolated-e2e', dryRun, namespace: 'default', runner, valuesFile: 'values/dstack-controller-production.yaml',
   })
   const rejects = async (operation: () => Promise<unknown>, message: string) => {
     try {await operation(); expect.fail('expected rejection')} catch (error) {expect((error as Error).message).to.include(message)}
@@ -118,7 +118,7 @@ else console.log('{}');
     expect(publicContent).to.include('keep').and.not.to.include(key).and.not.to.include('private_key')
     expect(state.providers).to.deep.equal(['vastai', 'gcp'])
     expect(config.credentialSecrets).to.deep.equal([{name: 'gcp', secretName: 'dstack-gcp-credentials'}])
-    const secrets = loadDstackSecretPublication(config, 'values/dstack-controller-production.yaml', 'dstack-system')
+    const secrets = loadDstackSecretPublication(config, 'values/dstack-controller-production.yaml', 'default')
     const server = yaml.load(secrets[0].stringData['config.yml']) as any
     expect(server.projects[0].backends.map((backend: any) => backend.type)).to.deep.equal(['vastai', 'gcp'])
     expect(server.projects[0].backends[1].creds.filename).to.equal('/etc/dstack/credentials/gcp/service-account.json')
@@ -147,7 +147,7 @@ else console.log('{}');
     expect(after.gcp).to.deep.equal(before.gcp)
     await rejects(() => publication(async () => {throw new Error('must not contact cluster')}), 'Stale dstack Secret file')
     generate()
-    run('push-secrets', '--provider', 'kubernetes', '--dstack-only', '--dry-run', '--kube-context', 'isolated-e2e', '--namespace', 'dstack-system')
+    run('push-secrets', '--provider', 'kubernetes', '--dstack-only', '--dry-run', '--kube-context', 'isolated-e2e', '--namespace', 'default')
   })
 
   it('updates an explicit spec, preserves custom refs and keeps public config free of secrets', () => {
@@ -182,7 +182,7 @@ else console.log('{}');
     expect(payload.items[0].data['config.yml']).to.be.a('string')
     expect(payload.items[0]).not.to.have.property('stringData')
     for (const call of calls) {
-      expect(call.args).to.include('isolated-e2e').and.to.include('dstack-system')
+      expect(call.args).to.include('isolated-e2e').and.to.include('default')
       expect(call.args.join(' ')).not.to.include(key)
     }
   })
@@ -227,7 +227,7 @@ else console.log('{}');
     installUploadStubs()
     for (const provider of ['aws', 'vault']) {
       fs.rmSync('uploads.jsonl', {force: true})
-      const result = run('push-secrets', '--provider', provider, '--aws-region', 'us-east-1', '--aws-prefix', 'isolated-test/cluster/default/bridge', '--kube-context', 'isolated-e2e', '--namespace', 'dstack-system')
+      const result = run('push-secrets', '--provider', provider, '--aws-region', 'us-east-1', '--aws-prefix', 'isolated-test/cluster/default/bridge', '--kube-context', 'isolated-e2e', '--namespace', 'default')
       expect(result.secretsPushed).to.deep.equal(['blockscout-env'])
       expect(result.dstack.secrets).to.have.length(4)
       const calls = uploads()
@@ -237,7 +237,7 @@ else console.log('{}');
       const applies = calls.filter(call => call.args.includes('apply') && !call.args.includes('--dry-run=server'))
       expect(applies).to.have.length(1)
       expect(applies[0].names).to.have.length(4)
-      expect(applies[0].args).to.include('isolated-e2e').and.to.include('dstack-system')
+      expect(applies[0].args).to.include('isolated-e2e').and.to.include('default')
       const values = yaml.load(fs.readFileSync('values/blockscout-production.yaml', 'utf8')) as any
       expect(values.externalSecrets['blockscout-env'].provider).to.equal(provider)
     }
@@ -248,7 +248,7 @@ else console.log('{}');
     generate()
     legacyService()
     installUploadStubs()
-    const result = run('push-secrets', '--dstack-only', '--kube-context', 'isolated-e2e', '--namespace', 'dstack-system')
+    const result = run('push-secrets', '--dstack-only', '--kube-context', 'isolated-e2e', '--namespace', 'default')
     expect(result.secrets).to.have.length(4)
     expect(uploads().every(call => call.tool === 'kubectl')).to.equal(true)
     expect(uploads().some(call => call.args.includes('put'))).to.equal(false)
@@ -262,19 +262,19 @@ else console.log('{}');
     const missing = execute('push-secrets', '--aws-region', 'us-east-1', '--aws-prefix', 'isolated-test/cluster/default/bridge', '-N', '--json')
     expect(missing.status).not.to.equal(0)
     expect(uploads()).to.have.length(0)
-    const plan = run('push-secrets', '--dry-run', '--kube-context', 'isolated-e2e', '--namespace', 'dstack-system')
+    const plan = run('push-secrets', '--dry-run', '--kube-context', 'isolated-e2e', '--namespace', 'default')
     expect(plan.legacyFiles).to.have.length(1)
     expect(plan.secrets).to.have.length(4)
     expect(uploads()).to.have.length(0)
     fs.writeFileSync('reject-admission', '')
-    const denied = execute('push-secrets', '--aws-region', 'us-east-1', '--aws-prefix', 'isolated-test/cluster/default/bridge', '--kube-context', 'isolated-e2e', '--namespace', 'dstack-system', '-N', '--json')
+    const denied = execute('push-secrets', '--aws-region', 'us-east-1', '--aws-prefix', 'isolated-test/cluster/default/bridge', '--kube-context', 'isolated-e2e', '--namespace', 'default', '-N', '--json')
     expect(denied.status).not.to.equal(0)
     expect(uploads()).to.have.length(2)
     expect(uploads().every(call => call.tool === 'kubectl' && (!call.args.includes('apply') || call.args.includes('--dry-run=server')))).to.equal(true)
     fs.unlinkSync('reject-admission')
     fs.unlinkSync('uploads.jsonl')
     fs.unlinkSync('secrets/dstack-controller-auth.yaml')
-    const incomplete = execute('push-secrets', '--aws-region', 'us-east-1', '--aws-prefix', 'isolated-test/cluster/default/bridge', '--kube-context', 'isolated-e2e', '--namespace', 'dstack-system', '-N', '--json')
+    const incomplete = execute('push-secrets', '--aws-region', 'us-east-1', '--aws-prefix', 'isolated-test/cluster/default/bridge', '--kube-context', 'isolated-e2e', '--namespace', 'default', '-N', '--json')
     expect(incomplete.status).not.to.equal(0)
     expect(uploads()).to.have.length(0)
   })
@@ -351,7 +351,7 @@ else console.log('{}');
     generate()
     legacyService()
     installUploadStubs()
-    const result = execute('push-secrets', '--provider', 'kubernetes', '--kube-context', 'isolated-e2e', '--namespace', 'dstack-system', '-N', '--json')
+    const result = execute('push-secrets', '--provider', 'kubernetes', '--kube-context', 'isolated-e2e', '--namespace', 'default', '-N', '--json')
     expect(result.status).not.to.equal(0)
     expect(JSON.parse(result.stdout).error.message).to.include('--provider aws or vault')
     expect(uploads()).to.have.length(0)
@@ -405,7 +405,7 @@ else console.log('{}');
     fs.writeFileSync('config.toml', toml.stringify({db: {DSTACK_DB_CONNECTION_STRING: 'postgresql+asyncpg://user:fake-password@db:5432/dstack?ssl=require'}}))
     importBoth()
     generate()
-    const secrets = loadDstackSecretPublication(readDstackControllerConfig()!, 'values/dstack-controller-production.yaml', 'dstack-system')
+    const secrets = loadDstackSecretPublication(readDstackControllerConfig()!, 'values/dstack-controller-production.yaml', 'default')
     expect(secrets.map(secret => secret.metadata.name)).to.include('custom-db').and.have.length(5)
     expect(secrets.at(-1)!.stringData.dsn).to.include('postgresql+asyncpg:')
   })

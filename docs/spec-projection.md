@@ -270,8 +270,10 @@ templates fail before writing output. Use `--force` to regenerate existing files
 Direct values generation does not copy Makefile/native configuration helpers.
 Makefile node install/delete targets and required values follow the declared sequencer/bootnode counts. Review chart pins,
 enabled optional services and operational policy before installation. The optional
-capacity-manager service has no standard SDK release here; configuring dstack
-does not implicitly configure capacity management.
+capacity-manager service uses the independent SDK chart from PR #145. Select
+`capacityManager` explicitly and use matching SDK templates; configuring dstack
+alone does not enable it. Staged preparation generates its final values during
+`setup render`, with installation and GPU allocation remaining manual.
 
 `.data/spec-bootstrap.json` records the SDK revision, source template hashes and
 stages still requiring execution. Bootstrap does not create fake genesis,

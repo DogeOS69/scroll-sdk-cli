@@ -1,8 +1,9 @@
 import type {DeploymentSpec} from '../types/deployment-spec.js'
+import type {DstackControllerConfig} from '../types/dstack-controller.js'
 
 /** One target for generated Helm commands and preparation Secret uploads. */
 export function specKubernetesTarget(spec: DeploymentSpec): {kubeContext?: string; namespace: string} {
-  const infra = spec.infrastructure
+  const infra = spec.infrastructure ?? {}
   const upload = spec.preparation?.secretUpload
   if (infra.kubeContext && upload?.kubeContext && infra.kubeContext !== upload.kubeContext) {
     throw new Error('infrastructure.kubeContext and preparation.secretUpload.kubeContext must match')
@@ -34,5 +35,26 @@ export function bindMakefileTarget(source: string, spec: DeploymentSpec): string
     source = declaration.test(source) ? source.replace(declaration, line) : `${line}\n${source}`
   }
 
-  return source
+  if (spec.capacityManager) {
+    const recipe = '\tscrollsdk setup capacity-manager credentials --dir . --kube-context "$(KUBE_CONTEXT)" --namespace "$(NAMESPACE)"\n'
+    if (!/^install-capacity-manager:/m.test(source)) throw new Error('SDK Makefile lacks install-capacity-manager; use the matching capacity-manager SDK checkout')
+    // The operator invokes Make only. This API synchronization happens after
+    // dstack startup, before Helm can start a manager and rent workers.
+    source = source.replace(/^(install-capacity-manager:[^\n]*\n)(?:\tscrollsdk setup capacity-manager credentials[^\n]*\n)?/m, `$1${recipe}`)
+  }
+
+  // Older SDK templates used a separate namespace. Normal spec deployments do not.
+  return source.replaceAll(/^DSTACK_NAMESPACE\s*\?=.*\n/gm, '').replaceAll('$(DSTACK_NAMESPACE)', '$(NAMESPACE)')
+}
+
+/** Spec deployments have one namespace, including controller monitoring and credentials. */
+export function specDstackController(spec: DeploymentSpec): DstackControllerConfig | undefined {
+  const config = spec.dstackController
+  if (!config || config.enabled === false) return config
+  const {namespace} = specKubernetesTarget(spec)
+  if (config.monitoring?.namespace && config.monitoring.namespace !== namespace) {
+    throw new Error('dstackController.monitoring.namespace must match infrastructure.namespace; spec deployments use one namespace')
+  }
+
+  return {...config, monitoring: {...config.monitoring, namespace}}
 }

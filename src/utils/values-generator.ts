@@ -1,3 +1,4 @@
+import {resolveCapacityManager} from './capacity-manager.js'
 import {reconcileEthereumRpcSecrets} from './ethereum-rpc-secrets.js'
 import {reconcileMonitoringSlack} from './monitoring-slack.js'
 import {specAwsSecretPrefix} from './spec-secret-prefix.js'
@@ -343,6 +344,7 @@ function resolveImage(
  */
 export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: string): GeneratedValuesFiles {
   const normalizedSpec = normalizeDeploymentSpec(spec)
+  if (normalizedSpec.capacityManager) resolveCapacityManager(normalizedSpec)
   if (normalizedSpec.bridge.freshGenesisInit !== undefined && typeof normalizedSpec.bridge.freshGenesisInit !== 'boolean') {
     throw new TypeError('bridge.freshGenesisInit must be a boolean')
   }
@@ -357,6 +359,7 @@ export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: s
   )) throw new Error('DeploymentSpec proof enforcement requires active real proving')
 
   const files: GeneratedValuesFiles = {}
+  if (normalizedSpec.capacityManager) files['capacity-manager-production.yaml'] = yaml.dump({image: normalizedSpec.capacityManager.image, prepared: false})
   if (normalizedSpec.monitoring?.slack?.enabled && !monitoringTemplate) throw new Error('Slack generation requires values/scroll-monitor-production.yaml in the output directory or the selected SDK templates')
   if (monitoringTemplate) {
     const monitor = yaml.load(monitoringTemplate) as Record<string, any> ?? {}

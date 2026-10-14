@@ -6,6 +6,7 @@ import path from 'node:path'
 import type {DeploymentSpec} from '../types/deployment-spec.js'
 
 import {resolveBridgeGenesisImage} from '../commands/setup/bridge-init.js'
+import {resolveCapacityManager} from './capacity-manager.js'
 import {DeploymentSpecFieldError} from './deployment-spec-fields.js'
 import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec} from './deployment-spec-generator.js'
 import {usesDstackPostgres} from './dstack-database.js'
@@ -20,7 +21,7 @@ import {rentalEnvelope, resolveProofWorkers} from './proof-workers-config.js'
 import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {planSpecBootstrap, resolveSdkRevision} from './spec-bootstrap.js'
 import {resolveCubesignerIdentity} from './spec-cubesigner.js'
-import {specKubernetesTarget} from './spec-kubernetes-target.js'
+import {specDstackController, specKubernetesTarget} from './spec-kubernetes-target.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
 import {specAwsSecretPrefix} from './spec-secret-prefix.js'
 
@@ -107,11 +108,15 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
     add('proof-workers-intent', `GPU capacity declared for separate proof-workers apply: ${workers.count} x ${workers.gpu}, ${workers.maxDurationHours}h, USD ${rentalEnvelope(workers)} rental envelope (no allocation now)`)
   }
 
+  if (spec.capacityManager) add('capacity-manager', 'Prepare Core capacity-manager values for separate Helm installation (no allocation now)')
+
   return staged ? stagedPreparationSteps(steps) : steps
 }
 
 export function validatePreparation(spec: DeploymentSpec): void {
+  if (spec.capacityManager) resolveCapacityManager(spec)
   specKubernetesTarget(spec)
+  specDstackController(spec)
   feeVaultRecipientHash(spec.contracts?.feeVaultDogeRecipientAddress ?? '', spec.dogecoin.network)
   const p = spec.preparation
   if (spec.proofWorkers) {

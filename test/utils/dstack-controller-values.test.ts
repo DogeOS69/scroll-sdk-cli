@@ -55,7 +55,7 @@ describe('dstack controller production values', () => {
     const spec = dstackSpec(controller)
     const original = structuredClone(spec)
     const dogeConfig = toml.parse(generateDogeConfigToml(spec))
-    expect(dogeConfig.dstackController).to.deep.equal(controller)
+    expect(dogeConfig.dstackController).to.deep.equal({...controller, monitoring: {namespace: 'default'}})
     expect(generateDstackControllerValues(dogeConfig.dstackController as DstackControllerConfig)).to.equal(generateDstackControllerValues(controller))
     const source = generateValuesFiles(spec)[DSTACK_CONTROLLER_VALUES_FILE]
     for (const provider of ['aws', 'gcp', 'local'] as const) {
@@ -83,7 +83,7 @@ describe('dstack controller production values', () => {
     const spec = dstackSpec(controller)
     expect(validateDeploymentSpec(spec).errors.filter(error => error.path.startsWith('dstackController'))).to.deep.equal([])
     const saved = toml.parse(generateDogeConfigToml(spec)).dstackController as DstackControllerConfig
-    expect(saved).to.deep.equal(controller)
+    expect(saved).to.deep.equal({...controller, monitoring: {namespace: 'default'}})
     const source = generateValuesFiles(spec)[DSTACK_CONTROLLER_VALUES_FILE]
     expect(generateDstackControllerValues(saved)).to.equal(source)
     const values = yaml.load(source) as any

@@ -78,7 +78,7 @@ describe('setup prep-charts dstack controller', () => {
     const doge = path.join(directory, 'doge.toml')
     const spec = path.join(directory, 'controller.yaml')
     fs.writeFileSync(doge, 'network = "testnet"\n[wallet]\npath = "test-wallet.json"\n[dstackController]\nenabled = false\n')
-    fs.writeFileSync(spec, 'version: "1.0"\ndstackController:\n  enabled: true\n  database:\n    type: sqlite\n')
+    fs.writeFileSync(spec, 'version: "1.0"\ninfrastructure:\n  namespace: chain\ndstackController:\n  enabled: true\n  database:\n    type: sqlite\n')
     Object.assign(command, {
       configData: {}, error(message: string) {throw new Error(message)}, jsonCtx: {info() {}, logSuccess() {}},
       warn() {},
@@ -96,7 +96,7 @@ describe('setup prep-charts dstack controller', () => {
         }
 
         expect(command.dstackController).to.deep.equal('spec' in flags
-          ? {database: {type: 'sqlite'}, enabled: true} : {enabled: false})
+          ? {database: {type: 'sqlite'}, enabled: true, monitoring: {namespace: 'chain'}} : {enabled: false})
       }
     } finally {
       process.chdir(originalDirectory)
