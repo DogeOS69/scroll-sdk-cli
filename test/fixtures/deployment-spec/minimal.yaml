@@ -139,16 +139,15 @@ contracts:
   gasOracle:
     blobScalar: 7400000000
     commitScalar: 600000000
-    scalar: 1
-    penaltyThreshold: 100
+    scalar: 938846
     penaltyFactor: 10000
 
 genesis:
   gasLimit: 30000000
-  maxEthSupplyWei: "100000000000000000000000000000"
-  # 1,000 native DOGE; L2 balances use 18 decimal places.
-  deployerInitialBalanceWei: "1000000000000000000000"
-  baseFeePerGasWei: 1000000000
+  maxEthSupplyWei: "226156424291633194186662080095093570025917938800079226639565593765455331328"
+  # 10 native DOGE; matches scroll-contracts/docker/templates/config.toml.
+  deployerInitialBalanceWei: "10000000000000000000"
+  baseFeePerGasWei: 100000000
 
 # Enable after filling SLACK_WEBHOOK_URL in private deployment.env.
 monitoring:

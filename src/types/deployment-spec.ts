@@ -761,10 +761,9 @@ export interface ContractsConfig {
   /** Gas oracle settings */
   gasOracle: {
     blobScalar: number
-    /** Galileo commit scalar. Defaults to the rc.5 contracts template value 600_000_000. */
+    /** Galileo commit scalar. Defaults to the contracts template value 600_000_000. */
     commitScalar?: number
     penaltyFactor: number
-    penaltyThreshold: number
     scalar: number
   }
 

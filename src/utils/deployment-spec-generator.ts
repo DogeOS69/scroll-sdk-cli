@@ -341,7 +341,7 @@ function getDogecoinClusterRpc(spec: DeploymentSpec): NonNullable<DeploymentSpec
   }
 }
 
-const DEFAULT_L1_FEE_VAULT_ADDR = '0x1111111111111111111111111111111111111111'
+const DEFAULT_L1_FEE_VAULT_ADDR = '0x0000000000000000000000000000000000000001'
 const ZERO_BYTES32 = '0x0000000000000000000000000000000000000000000000000000000000000000'
 const PLACEHOLDER_L1_SCROLL_MESSENGER_ADDRESS = '0x0000000000000000000000000000000000000001'
 const PLACEHOLDER_L2_MESSENGER_ADDRESS = '0x0000000000000000000000000000000000000002'
@@ -1424,7 +1424,6 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     L2_BRIDGE_FEE_RECIPIENT_ADDR: spec.bridge.feeRecipient,
     MIN_WITHDRAWAL_AMOUNT: bridgeFees.minWithdrawalAmountWei,
     PENALTY_FACTOR: spec.contracts.gasOracle.penaltyFactor,
-    PENALTY_THRESHOLD: spec.contracts.gasOracle.penaltyThreshold,
     SCALAR: spec.contracts.gasOracle.scalar,
     WITHDRAWAL_FEE: bridgeFees.withdrawalFeeWei,
   }
