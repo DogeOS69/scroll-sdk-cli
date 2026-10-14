@@ -25,6 +25,7 @@ import {exportCoordinatorMaterializers} from './proof-image-tools.js'
 import {readProofMaterials} from './proof-materials.js'
 import {readProofSoftwareRelease} from './proof-software-release.js'
 import {buildProofTopology} from './proof-topology-init.js'
+import {specKubernetesTarget} from './spec-kubernetes-target.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
 import {specAwsSecretPrefix} from './spec-secret-prefix.js'
 
@@ -260,9 +261,10 @@ export class CommandPreparationRunner implements PreparationRunner {
       case 'secret-upload': {
         const upload = p.secretUpload ?? (spec.infrastructure.provider === 'aws' ? {provider: 'aws' as const} : undefined)
         if (!upload) throw new Error('Configure preparation.secretUpload for the external Secret store before uploading')
-        if (spec.monitoring?.slack?.enabled && !upload.kubeContext) throw new AwaitingInput({message: 'Set preparation.secretUpload.kubeContext to upload monitoring Secrets'})
-        await command(['push-secrets', '-N', '--provider', upload.provider, ...optional('aws-region', upload.awsRegion ?? spec.infrastructure.aws?.region), ...optional('aws-prefix', upload.provider === 'aws' ? specAwsSecretPrefix(spec) : undefined), ...optional('kube-context', upload.kubeContext), ...optional('namespace', upload.namespace ?? spec.infrastructure.namespace ?? 'default')])
-        if (upload.kubeContext) await command(['monitoring-secrets', '--apply', '--kube-context', upload.kubeContext, '--namespace', upload.namespace ?? spec.infrastructure.namespace ?? 'default'])
+        const {kubeContext, namespace} = specKubernetesTarget(spec)
+        if (spec.monitoring?.slack?.enabled && !kubeContext) throw new AwaitingInput({message: 'Set infrastructure.kubeContext to upload monitoring Secrets'})
+        await command(['push-secrets', '-N', '--provider', upload.provider, ...optional('aws-region', upload.awsRegion ?? spec.infrastructure.aws?.region), ...optional('aws-prefix', upload.provider === 'aws' ? specAwsSecretPrefix(spec) : undefined), ...optional('kube-context', kubeContext), ...optional('namespace', namespace)])
+        if (kubeContext) await command(['monitoring-secrets', '--apply', '--kube-context', kubeContext, '--namespace', namespace])
         break
       }
 

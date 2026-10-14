@@ -113,7 +113,7 @@ export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kin
   "$.images.services.rollupRelayer": {"keys":["pullPolicy","repository","tag"],"kind":"object"},
   "$.images.services.tsoService": {"keys":["pullPolicy","repository","tag"],"kind":"object"},
   "$.images.services.withdrawalProcessor": {"keys":["pullPolicy","repository","tag"],"kind":"object"},
-  "$.infrastructure": {"keys":["aws","bootnodeCount","bootnodes","gcp","local","namespace","provider","sequencerCount","sequencers"],"kind":"object"},
+  "$.infrastructure": {"keys":["aws","bootnodeCount","bootnodes","gcp","kubeContext","local","namespace","provider","sequencerCount","sequencers"],"kind":"object"},
   "$.infrastructure.aws": {"keys":["accountId","eksClusterName","region","secretsPrefix"],"kind":"object"},
   "$.infrastructure.bootnodes": {"kind":"array"},
   "$.infrastructure.bootnodes[]": {"keys":["enodeUrl","index","publicEndpoint"],"kind":"object"},

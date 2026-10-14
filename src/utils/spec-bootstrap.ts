@@ -4,6 +4,8 @@ import {createHash} from 'node:crypto'
 
 import type {DeploymentSpec} from '../types/deployment-spec.js'
 
+import {bindMakefileTarget} from './spec-kubernetes-target.js'
+
 const REQUIRED_TEMPLATES = [
   'Makefile.example', 'withdrawal-processor/WithdrawalProcessor.toml',
   'proof-coordinator/ProofCoordinator.toml', 'values/scroll-monitor-production.yaml',
@@ -79,7 +81,7 @@ export function planSpecBootstrap(spec: DeploymentSpec, sdkDirectory?: string): 
     delete hashes['values/l1-devnet-production.yaml']
   }
 
-  files.Makefile = adaptNodeCounts(files.Makefile, spec)
+  files.Makefile = bindMakefileTarget(adaptNodeCounts(files.Makefile, spec), spec)
   files['.data/spec-bootstrap.json'] = JSON.stringify({
     pendingStages: ['identity provisioning/import', 'contract and genesis generation', 'Bridge initialization and canonical protocol context', 'proof materials, compilation and publication', 'secret preparation and chart reconciliation'], schema: 'dogeos/spec-bootstrap/v1', sdkRevision: revision,
     templateHashes: hashes,

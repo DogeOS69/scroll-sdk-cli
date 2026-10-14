@@ -695,6 +695,23 @@ describe('resumable preparation plan', () => {
     expect(() => validatePreparation(spec)).to.throw('must match')
   })
 
+  it('shares the infrastructure target with Secret upload and monitoring Secret apply', async () => {
+    const spec = fixture()
+    spec.infrastructure.aws = {accountId: '123456789012', eksClusterName: 'test-cluster', region: 'us-east-1'}
+    spec.infrastructure.kubeContext = 'selected-cluster'
+    spec.infrastructure.namespace = 'selected-namespace'
+    spec.preparation!.secretUpload = {awsRegion: 'us-east-1', provider: 'aws'}
+    const calls: string[][] = []
+    const runner = new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)})
+    await runner.run(preparationSteps(spec).find(step => step.id === 'secret-upload')!, spec, deployment, await makePlan())
+    expect(calls).to.have.length(2)
+    for (const args of calls) {
+      expect(args[args.indexOf('--kube-context') + 1]).to.equal('selected-cluster')
+      expect(args[args.indexOf('--namespace') + 1]).to.equal('selected-namespace')
+    }
+    expect(calls[1][0]).to.equal('monitoring-secrets')
+  })
+
   it('rejects incomplete cloud destinations before any resources are created', () => {
     const spec = fixture()
     spec.preparation!.secretUpload = {awsPrefix: 'explicit-local-test', provider: 'aws'}

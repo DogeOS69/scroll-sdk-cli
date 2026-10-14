@@ -214,7 +214,10 @@ export interface InfrastructureConfig {
     useK8sSecrets?: boolean
   }
 
-  /** Kubernetes namespace */
+  /** Exact kubeconfig context name used by generated Makefile and Secret upload. */
+  kubeContext?: string
+
+  /** Kubernetes namespace (defaults to default). */
   namespace?: string
 
   /** Cloud provider: aws, gcp, local */

@@ -22,7 +22,7 @@ export async function runPreparationStage(stage: PreparationStage, directory: st
     if (!json) {
       output.info(JSON.stringify(report, null, 2))
       if (nextCommand) output.info(`Continue with: ${nextCommand}`)
-      else output.info('Preparation complete. Install Helm releases manually using the generated Makefile and explicit Kubernetes context/namespace.')
+      else output.info('Preparation complete. Install Helm releases manually using the generated Makefile; verify its KUBE_CONTEXT and NAMESPACE defaults before installation.')
     }
 
     output.success(report)
