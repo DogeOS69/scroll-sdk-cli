@@ -150,6 +150,12 @@ export function validateRotationExport(input: unknown): RotationExport {
   }
 }
 
+/** A WP-reported outpoint: `{txid: "0x<64 hex>", vout: u32}`. */
+export function isOutpoint(value: unknown): value is LivenessOutpoint {
+  const outpoint = value as LivenessOutpoint | null | undefined
+  return typeof outpoint?.txid === 'string' && /^0x[\da-f]{64}$/i.test(outpoint.txid) && Number.isSafeInteger(outpoint.vout) && outpoint.vout >= 0 && outpoint.vout <= 0xFF_FF_FF_FF
+}
+
 /** `<txid>:<vout>` as `dogecoin-cli` prints it; a `0x` prefix is accepted. */
 export function parseLivenessOutpoint(value: string): LivenessOutpoint {
   const match = /^(?:0x)?([\da-f]{64}):(\d{1,10})$/i.exec(value)

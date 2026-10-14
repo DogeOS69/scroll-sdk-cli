@@ -102,7 +102,7 @@ describe('bridge rotation export: null grace, regtest and kept signers', () => {
   it('matches a stored intent from a null-grace request whatever grace the WP resolved', () => {
     const rotation = validateRotationExport(nullGrace())
     const intent = (change: Partial<RotateKeyIntent['payload']>): RotateKeyIntent => ({activation_wf_tx_number: null, deprecation_wf_tx_number: null, job_status: null,
-      payload: {grace_wf_txs: 10, new_bridge_redeem_script_hex: rotation.target.redeem_script_hex, new_key_hash: rotation.target.key_hash, ...change}, signed_txid: null, status: 'pending'})
+      payload: {grace_wf_txs: 10, liveness_outpoint: {txid: `0x${'1f'.repeat(32)}`, vout: 1}, new_bridge_redeem_script_hex: rotation.target.redeem_script_hex, new_key_hash: rotation.target.key_hash, ...change}, signed_txid: null, status: 'pending'})
     assertIntentMatches(rotation, intent({}))
     assertIntentMatches(rotation, intent({grace_wf_txs: 20_160}))
     expect(() => assertIntentMatches(rotation, intent({new_key_hash: rotation.current.key_hash}))).to.throw('different rotation')
@@ -340,6 +340,9 @@ describe('bridge rotation online check', () => {
 describe('bridge rotation liveness outpoint', () => {
   it('parses <txid>:<vout> into the WP form, and rejects anything else', () => {
     expect(parseLivenessOutpoint(`${'AB'.repeat(32)}:3`)).to.deep.equal({txid: `0x${'ab'.repeat(32)}`, vout: 3})
+    // Not a palindrome: the txid keeps dogecoin-cli's display order, which the WP's Txid32 parses.
+    const display = '0123456789abcdef'.repeat(4)
+    expect(parseLivenessOutpoint(`${display}:0`)).to.deep.equal({txid: `0x${display}`, vout: 0})
     expect(parseLivenessOutpoint(`0x${'ab'.repeat(32)}:4294967295`)).to.deep.equal({txid: `0x${'ab'.repeat(32)}`, vout: 4_294_967_295})
     for (const bad of ['ab'.repeat(32), `${'ab'.repeat(31)}:0`, `${'ab'.repeat(32)}:-1`, `${'ab'.repeat(32)}:4294967296`, `${'ab'.repeat(32)}:1.5`, `${'zz'.repeat(32)}:0`]) {
       expect(() => parseLivenessOutpoint(bad)).to.throw('--liveness-outpoint')
@@ -353,7 +356,7 @@ describe('bridge rotation send', () => {
   const fresh = () => [...rotation.current.signers, ...rotation.target.signers].map(s => `tso_core_signer_last_poll_timestamp_seconds{signer_pubkey="${s.public_key}"} ${Math.floor(Date.now() / 1000)}`).join('\n')
   const stored = (change: Partial<RotateKeyIntent['payload']> = {}, state = 'completed'): RotateKeyIntent => ({
     activation_wf_tx_number: 41, deprecation_wf_tx_number: 20_201, job_status: 'completed',
-    payload: {grace_wf_txs: 20_160, new_bridge_redeem_script_hex: rotation.target.redeem_script_hex, new_key_hash: rotation.target.key_hash, ...change}, signed_txid: 'aa'.repeat(32), status: state,
+    payload: {grace_wf_txs: 20_160, liveness_outpoint: OUTPOINT, new_bridge_redeem_script_hex: rotation.target.redeem_script_hex, new_key_hash: rotation.target.key_hash, ...change}, signed_txid: 'aa'.repeat(32), status: state,
   })
 
   function cluster(intent: RotateKeyIntent | null, post: (route: string) => Promise<{body: unknown; status: number}> = async () => ({body: {status: 'pending'}, status: 202})) {
@@ -369,8 +372,9 @@ describe('bridge rotation send', () => {
   }
 
   it('only send without --preview calls /propose; --preview calls /build', async () => {
-    const preview = cluster(null, async () => ({body: {wf_unsigned_txid: 'ab'}, status: 200}))
-    expect(await sendRotation({cluster: preview.cluster, livenessOutpoint: OUTPOINT, preview: true, rotation})).to.deep.equal({kind: 'preview', response: {wf_unsigned_txid: 'ab'}})
+    const built = {liveness_outpoint: OUTPOINT, liveness_value_sats: 100_000_000, wf_unsigned_txid: 'ab'}
+    const preview = cluster(null, async () => ({body: built, status: 200}))
+    expect(await sendRotation({cluster: preview.cluster, livenessOutpoint: OUTPOINT, preview: true, rotation})).to.deep.equal({kind: 'preview', liveness: {outpoint: `${'1f'.repeat(32)}:1`, valueSats: 100_000_000}, response: built})
     expect(preview.posts).to.deep.equal(['/build'])
     const send = cluster(null)
     expect(await sendRotation({cluster: send.cluster, livenessOutpoint: OUTPOINT, preview: false, rotation})).to.deep.include({kind: 'proposed', status: 202})
@@ -391,6 +395,15 @@ describe('bridge rotation send', () => {
     expect(BRIDGE_FUNDING_MARKER_HEX).to.equal(`6a4901${'00'.repeat(72)}`)
   })
 
+  it('refuses a preview whose response does not echo the liveness outpoint and its value', async () => {
+    for (const body of [{wf_unsigned_txid: 'ab'}, {liveness_outpoint: {...OUTPOINT, vout: 2}, liveness_value_sats: 100_000_000}, {liveness_outpoint: OUTPOINT}]) {
+      const ignoring = cluster(null, async () => ({body, status: 200}))
+      let error: unknown
+      try {await sendRotation({cluster: ignoring.cluster, livenessOutpoint: OUTPOINT, preview: true, rotation})} catch (error_) {error = error_}
+      expect((error as Error).message).to.contain('does not echo the liveness outpoint')
+    }
+  })
+
   it('shows the WP reason when the preview rejects the liveness outpoint', async () => {
     const reason = `liveness_outpoint ${'1f'.repeat(32)}:1 is not locked to P2SH(new_key_hash)`
     const rejected = cluster(null, async () => ({body: {error: reason}, status: 422}))
@@ -399,27 +412,23 @@ describe('bridge rotation send', () => {
     expect((error as Error).message).to.equal(`WP preview (/build) returned HTTP 422: ${reason}; nothing was stored`)
     const proposed = cluster(null, async () => ({body: {error: reason}, status: 422}))
     try {await sendRotation({cluster: proposed.cluster, livenessOutpoint: OUTPOINT, preview: false, rotation})} catch (error_) {error = error_}
-    expect((error as Error).message).to.contain(`HTTP 422: ${reason}`)
+    expect((error as Error).message).to.equal(`/propose was refused (HTTP 422: ${reason}); nothing was stored. Fix the cause, then re-run send`)
   })
 
   it('reports an existing intent without an outpoint, and refuses one stored with another outpoint', async () => {
     const existing = cluster(stored({liveness_outpoint: OUTPOINT}, 'pending'))
     expect(await sendRotation({cluster: existing.cluster, preview: false, rotation})).to.deep.include({exitCode: 2, kind: 'existing'})
     expect(await sendRotation({cluster: existing.cluster, livenessOutpoint: parseLivenessOutpoint(`${'1F'.repeat(32)}:1`), preview: false, rotation})).to.deep.include({kind: 'existing'})
-    for (const [other, storedText] of [[{...OUTPOINT, vout: 2}, `${'1f'.repeat(32)}:2`], [null, 'none']] as const) {
-      const mismatch = cluster(stored({liveness_outpoint: other}, 'pending'))
-      let error: unknown
-      try {await sendRotation({cluster: mismatch.cluster, livenessOutpoint: OUTPOINT, preview: false, rotation})} catch (error_) {error = error_}
-      expect((error as Error).message).to.contain('different rotation').and.contain(`stored liveness outpoint ${storedText}, requested ${'1f'.repeat(32)}:1`)
-    }
+    const mismatch = cluster(stored({liveness_outpoint: {...OUTPOINT, vout: 2}}, 'pending'))
+    let error: unknown
+    try {await sendRotation({cluster: mismatch.cluster, livenessOutpoint: OUTPOINT, preview: false, rotation})} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain('different rotation').and.contain(`stored liveness outpoint ${'1f'.repeat(32)}:2, requested ${'1f'.repeat(32)}:1`)
 
     expect(existing.posts).to.deep.equal([])
   })
 
-  it('prints the stored liveness outpoint of an existing intent as <txid>:<vout>, or null for an older intent', () => {
+  it('prints the stored liveness outpoint of an existing intent as <txid>:<vout>', () => {
     expect(existingIntentReport(rotation, stored({liveness_outpoint: {txid: `0x${'1F'.repeat(32)}`, vout: 1}}))).to.deep.include({idempotencyKey: rotation.wp_rotate_key_request.idempotency_key, livenessOutpoint: `${'1f'.repeat(32)}:1`})
-    expect(existingIntentReport(rotation, stored({liveness_outpoint: null})).livenessOutpoint).to.equal(null)
-    expect(existingIntentReport(rotation, stored()).livenessOutpoint).to.equal(null)
   })
 
   it('reports an existing intent and never resubmits it, even with --preview', async () => {
@@ -446,7 +455,7 @@ describe('bridge rotation send', () => {
   })
 
   it('says the submission may already be stored on any /propose HTTP failure', async () => {
-    for (const post of [async () => {throw new Error('socket hang up')}, async () => ({body: {}, status: 503}), async () => ({body: {}, status: 422})]) {
+    for (const post of [async () => {throw new Error('socket hang up')}, async () => ({body: {}, status: 503}), async () => ({body: {}, status: 500})]) {
       const failing = cluster(null, post)
       let error: unknown
       try {await sendRotation({cluster: failing.cluster, livenessOutpoint: OUTPOINT, preview: false, rotation})} catch (error_) {error = error_}
@@ -460,13 +469,16 @@ describe('bridge rotation send', () => {
       [{active_intent: {idempotency_key: 'other', status: 'pending'}}, 'active rotation intent'],
       [{current_key_hash: rotation.target.key_hash}, 'stale or already applied'],
     ]
+    // Without an outpoint too: a blocked rotation is reported before the operator is asked to fund one.
     for (const [change, message] of cases) {
-      const blocked = cluster(null)
-      blocked.cluster.wpStatus = async () => status(rotation, change)
-      let error: unknown
-      try {await sendRotation({cluster: blocked.cluster, livenessOutpoint: OUTPOINT, preview: false, rotation})} catch (error_) {error = error_}
-      expect((error as Error).message).to.contain(message)
-      expect(blocked.posts).to.deep.equal([])
+      for (const livenessOutpoint of [OUTPOINT, undefined]) {
+        const blocked = cluster(null)
+        blocked.cluster.wpStatus = async () => status(rotation, change)
+        let error: unknown
+        try {await sendRotation({cluster: blocked.cluster, livenessOutpoint, preview: false, rotation})} catch (error_) {error = error_}
+        expect((error as Error).message).to.contain(message)
+        expect(blocked.posts).to.deep.equal([])
+      }
     }
 
     const offline = cluster(null)

@@ -3,8 +3,7 @@ import {execFileSync, spawn} from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import type {LivenessOutpoint, RotateKeyRequest, RotateKeyStatus} from './rotation-export.js'
-
+import {type LivenessOutpoint, type RotateKeyRequest, type RotateKeyStatus, isOutpoint} from './rotation-export.js'
 import {WP_VALUES_FILE} from './tso-signer-polls.js'
 
 /** The `/build` and `/propose` body: the export's request plus the operator's liveness outpoint. */
@@ -15,8 +14,7 @@ export interface RotateKeyIntent {
   activation_wf_tx_number: null | number
   deprecation_wf_tx_number: null | number
   job_status: null | string
-  /** `liveness_outpoint` is null only for an intent stored before the liveness requirement. */
-  payload: {grace_wf_txs: number; liveness_outpoint?: LivenessOutpoint | null; new_bridge_redeem_script_hex: string; new_key_hash: string}
+  payload: {grace_wf_txs: number; liveness_outpoint: LivenessOutpoint; new_bridge_redeem_script_hex: string; new_key_hash: string}
   signed_txid: null | string
   status: string
 }
@@ -83,7 +81,9 @@ export class RotationCluster {
   async wpIntent(idempotencyKey: string): Promise<RotateKeyIntent | null> {
     const response = await this.request(this.wpUrl, 'withdrawal-processor-0', `${ROTATE_KEY}/intents/${encodeURIComponent(idempotencyKey)}`)
     if (response.status === 404) return null
-    return wpJson(response, 'intent') as RotateKeyIntent
+    const intent = wpJson(response, 'intent') as RotateKeyIntent
+    if (!isOutpoint(intent?.payload?.liveness_outpoint)) throw new Error('WP rotate-key intent has no valid payload.liveness_outpoint')
+    return intent
   }
 
   async wpStatus(): Promise<RotateKeyStatus> {

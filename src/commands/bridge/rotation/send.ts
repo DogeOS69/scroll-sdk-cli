@@ -32,7 +32,7 @@ export default class RotationSend extends Command {
 
     const file = besideExport(args.export, outcome.kind === 'preview' ? 'preview' : 'send')
     fs.writeFileSync(file, `${JSON.stringify(outcome.response, null, 2)}\n`, {mode: 0o600})
-    const preview = {liveness: 'The WP validated the liveness outpoint over Dogecoin RPC; see liveness_outpoint and liveness_value_sats.', note: 'Preview only; nothing was stored.'}
+    const preview = outcome.kind === 'preview' ? {liveness: {...outcome.liveness, validated: 'The WP checked this outpoint over Dogecoin RPC and echoed it'}, note: 'Preview only; nothing was stored.'} : {}
     this.log(JSON.stringify({onlineCheck: ONLINE_CHECK_LIMITS, response: outcome.response, saved: file, ...(outcome.kind === 'proposed' ? {httpStatus: outcome.status, next: 'Re-run send with the same export to see the stored intent state.'} : preview)}, null, 2))
   }
 }
