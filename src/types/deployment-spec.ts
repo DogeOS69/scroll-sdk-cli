@@ -756,7 +756,7 @@ export interface RollupConfig {
 export interface ContractsConfig {
   /** Deployment salt for deterministic addresses */
   deploymentSalt: string
-  /** Dogecoin P2PKH recipient of fee-vault withdrawals; required before deploying L2 contracts. */
+  /** Dogecoin P2PKH recipient of fee-vault withdrawals; required by full spec validation and setup plan/apply. */
   feeVaultDogeRecipientAddress?: string
   /** Gas oracle settings */
   gasOracle: {

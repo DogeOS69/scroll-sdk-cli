@@ -477,7 +477,7 @@ should not have to copy protocol addresses into the spec:
 | Spec supply intent | `genesis.L2_MAX_NATIVE_DOGE_SUPPLY`, using the existing `genesis.maxEthSupplyWei` input name |
 | Gas policy | Explicit genesis gas limit and base fee; Galileo scalars and penalty factor; L2 system-config base fee overhead |
 | Prepared identities | Deployer/owner addresses and the L2 gas oracle service's public address, including KMS identities |
-| Fee-vault withdrawal destination | `contracts.feeVaultDogeRecipientAddress` is a Dogecoin P2PKH address. The CLI validates the network and derives its hash160 for `FEE_VAULT_DOGE_RECIPIENT_ADDR`. This is not an EVM account or an automatic choice of the Bridge fee-wallet. |
+| Fee-vault withdrawal destination | Required: `contracts.feeVaultDogeRecipientAddress` is a Dogecoin P2PKH address. Plan rejects a missing or invalid recipient before SDK resolution, CubeSigner lookup or proof-release downloads; apply also rejects saved plans missing it before running any step. The CLI validates the network and derives its hash160 for `FEE_VAULT_DOGE_RECIPIENT_ADDR`. This is not an EVM account or an automatic choice of the Bridge fee-wallet. |
 | Optional components | Blockscout database, explorer verification, Ethereum devnet and public service hostnames are configured only for the selected components |
 
 Keep the fee-vault recipient key under separate custody. The spec needs only its

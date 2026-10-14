@@ -737,7 +737,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   }
 
   if (spec.contracts?.feeVaultDogeRecipientAddress === undefined) {
-    warnings.push({message: 'Fee-vault withdrawal recipient is not selected', path: 'contracts.feeVaultDogeRecipientAddress', suggestion: 'Set a Dogecoin P2PKH recipient before deploying L2 contracts; the template zero address is not deployable.'})
+    errors.push({code: 'E002_MISSING_REQUIRED_FIELD', message: 'Set contracts.feeVaultDogeRecipientAddress to a Dogecoin P2PKH withdrawal recipient for the selected network; it is required for contract deployment.', path: 'contracts.feeVaultDogeRecipientAddress'})
   } else {
     try {feeVaultRecipientHash(spec.contracts.feeVaultDogeRecipientAddress, spec.dogecoin.network)} catch {
       errors.push({code: 'E004_INVALID_ADDRESS', message: 'Fee-vault recipient must be a Dogecoin P2PKH address for the selected network', path: 'contracts.feeVaultDogeRecipientAddress'})

@@ -9,6 +9,7 @@ import {resolveBridgeGenesisImage} from '../commands/setup/bridge-init.js'
 import {DeploymentSpecFieldError} from './deployment-spec-fields.js'
 import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec} from './deployment-spec-generator.js'
 import {usesDstackPostgres} from './dstack-database.js'
+import {feeVaultRecipientHash} from './fee-vault-recipient.js'
 import {AwaitingInput, digest, loadPreparationEnv, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolvePreparationProofRelease} from './preparation-release.js'
 import {refreshPreparationRuntime} from './preparation-runtime-refresh.js'
@@ -95,6 +96,7 @@ export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
 }
 
 export function validatePreparation(spec: DeploymentSpec): void {
+  feeVaultRecipientHash(spec.contracts?.feeVaultDogeRecipientAddress ?? '', spec.dogecoin.network)
   const p = spec.preparation
   if (spec.proofWorkers) {
     resolveProofWorkers(spec.proofWorkers)
@@ -214,6 +216,9 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
     throw new Error('Cannot load DeploymentSpec; check field names, YAML syntax and environment references (values omitted)')
   }
 
+  // Reject a missing/invalid withdrawal destination before SDK lookup, CubeSigner
+  // authentication or proof-release downloads. Apply rechecks it on saved plans.
+  feeVaultRecipientHash(spec.contracts?.feeVaultDogeRecipientAddress ?? '', spec.dogecoin.network)
   spec.templates = {sdkRevision: resolveSdkRevision(options.sdkDirectory, spec.templates?.sdkRevision)}
   spec = resolveCubesignerIdentity(spec)
   spec = await resolvePreparationProofRelease(spec, options.output)

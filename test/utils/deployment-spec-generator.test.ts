@@ -60,6 +60,7 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
     },
     contracts: {
       deploymentSalt: '0xabcdef',
+      feeVaultDogeRecipientAddress: new bitcore.Address(Buffer.alloc(20, 1), bitcore.Networks.testnet, 'pubkeyhash').toString(),
       gasOracle: { blobScalar: 1, penaltyFactor: 1, scalar: 1 },
     },
     database: {
@@ -840,6 +841,7 @@ describe('deployment-spec-generator', () => {
       it(`derives the ${network} L1 chain ID consistently across configuration and values`, () => {
         const spec = createMinimalSpec();
         spec.dogecoin.network = network;
+        spec.contracts.feeVaultDogeRecipientAddress = new bitcore.Address(Buffer.alloc(20, 1), network === 'mainnet' ? bitcore.Networks.livenet : bitcore.Networks.testnet, 'pubkeyhash').toString();
         expect(validateDeploymentSpec(spec).valid).to.be.true;
         expect(normalizeDeploymentSpec(spec).network).not.to.have.property('l1ChainId');
         const configs = generateAllConfigs(spec);
@@ -943,7 +945,13 @@ describe('deployment-spec-generator', () => {
       expect(config.contracts.FEE_VAULT_DOGE_RECIPIENT_ADDR).to.equal('0x' + address.hashBuffer.toString('hex'));
       delete spec.contracts.feeVaultDogeRecipientAddress;
       expect((toml.parse(generateConfigToml(spec)) as any).contracts.FEE_VAULT_DOGE_RECIPIENT_ADDR).to.equal('0x' + '0'.repeat(40));
-      expect(validateDeploymentSpec(spec).warnings.some(warning => warning.path === 'contracts.feeVaultDogeRecipientAddress')).to.equal(true);
+      const validation = validateDeploymentSpec(spec);
+      expect(validation.valid).to.equal(false);
+      expect(validation.errors).to.deep.include({
+        code: 'E002_MISSING_REQUIRED_FIELD',
+        message: 'Set contracts.feeVaultDogeRecipientAddress to a Dogecoin P2PKH withdrawal recipient for the selected network; it is required for contract deployment.',
+        path: 'contracts.feeVaultDogeRecipientAddress',
+      });
     });
 
     it('rejects fee-vault recipients for the wrong network, P2SH recipients, EVM addresses and placeholders', () => {
