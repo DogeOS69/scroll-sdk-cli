@@ -7,9 +7,11 @@ import type {DstackControllerConfig} from '../types/dstack-controller.js'
 
 import {validateDstackControllerConfig} from './dstack-controller-values.js'
 
-export type DstackProvider = 'gcp' | 'vastai'
+export type DstackProvider = 'aws' | 'gcp' | 'vastai'
+export interface DstackAwsBackend {iamInstanceProfile?: string; publicIps?: boolean; vpcIds: Record<string, string>}
 export interface DstackCredentials {
   adminToken: string
+  aws?: DstackAwsBackend
   encryptionKey: string
   gcp?: {projectId: string; serviceAccount: string}
   /** Optional for backward-compatible migration of existing private state. */
@@ -60,7 +62,7 @@ export function validateGcpServiceAccount(content: string): string {
 
 export function validateDstackCredentials(value: DstackCredentials): void {
   if (value.version !== 1 || !Array.isArray(value.providers) || value.providers.length === 0
-    || value.providers.some(provider => !['gcp', 'vastai'].includes(provider))
+    || value.providers.some(provider => !['aws', 'gcp', 'vastai'].includes(provider))
     || new Set(value.providers).size !== value.providers.length) throw new Error('Invalid dstack credential state providers/version')
   if (typeof value.project !== 'string' || !/^[\w-]+$/.test(value.project)) throw new Error('Invalid dstack project name')
   if (value.monitoringToken !== undefined && (typeof value.monitoringToken !== 'string' || !/^[\da-f]{64}$/.test(value.monitoringToken))) throw new Error('Invalid stored dstack monitoring token; restore credential state from backup')
@@ -71,10 +73,20 @@ export function validateDstackCredentials(value: DstackCredentials): void {
     throw new Error('Vast.ai API key is required and must not contain whitespace')
   }
 
+  if (value.providers.includes('aws')) validateDstackAwsBackend(value.aws)
+
   if (value.providers.includes('gcp')) {
     if (!value.gcp || typeof value.gcp.serviceAccount !== 'string' || !value.gcp.projectId?.trim()) throw new Error('GCP service account is required')
     validateGcpServiceAccount(value.gcp.serviceAccount)
   }
+}
+
+/** Explicit existing VPCs avoid accidental default-VPC discovery and cross-region placement. */
+export function validateDstackAwsBackend(value: DstackAwsBackend | undefined): void {
+  if (!value || !value.vpcIds || typeof value.vpcIds !== 'object' || Array.isArray(value.vpcIds) || Object.keys(value.vpcIds).length === 0
+    || Object.entries(value.vpcIds).some(([region, id]) => !/^[a-z]{2}(?:-[a-z]+)+-\d$/.test(region) || typeof id !== 'string' || !/^vpc-[\da-f]+$/.test(id))) throw new Error('AWS dstack backend requires existing region-to-VPC IDs in preparation.dstack.aws.vpcIds')
+  if (value.publicIps !== undefined && typeof value.publicIps !== 'boolean') throw new Error('AWS dstack publicIps must be boolean')
+  if (value.iamInstanceProfile !== undefined && !/^[\w+,.=@-]{1,128}$/.test(value.iamInstanceProfile)) throw new Error('Invalid dstack AWS instance profile name')
 }
 
 export function readDstackCredentials(directory = process.cwd()): DstackCredentials | undefined {
@@ -121,6 +133,7 @@ export function newDstackCredentials(): DstackCredentials {
 export function configureDstackCredentialRefs(config: DstackControllerConfig, state: DstackCredentials): DstackControllerConfig {
   validateDstackControllerConfig(config)
   const next = structuredClone(config)
+  if (state.providers.includes('aws') && (config.defaultCredentialsEnabled !== true || !/^arn:aws(?:-[a-z]+)?:iam::\d{12}:role\/[\w+,./=@-]+$/.test(config.serviceAccount?.annotations?.['eks.amazonaws.com/role-arn'] ?? ''))) throw new Error('AWS dstack requires defaultCredentialsEnabled and an existing controller IRSA serviceAccount role annotation')
   next.enabled = true
   if (state.providers.includes('gcp')) {
     next.credentialSecrets ??= []
@@ -170,6 +183,7 @@ export function renderDstackSecrets(config: DstackControllerConfig, state: Dstac
   validateDstackCredentials(state)
   const refs = dstackSecretRefs(config, state)
   const backends: unknown[] = []
+  if (state.providers.includes('aws')) backends.push({creds: {type: 'default'}, default_vpcs: false, ...(state.aws!.iamInstanceProfile ? {iam_instance_profile: state.aws!.iamInstanceProfile} : {}), public_ips: state.aws!.publicIps ?? false, regions: Object.keys(state.aws!.vpcIds).sort(), type: 'aws', vpc_ids: state.aws!.vpcIds})
   if (state.providers.includes('vastai')) backends.push({creds: {api_key: state.vastaiApiKey, type: 'api_key'}, type: 'vastai'})
   if (state.providers.includes('gcp')) backends.push({creds: {filename: '/etc/dstack/credentials/gcp/service-account.json', type: 'service_account'}, project_id: state.gcp!.projectId, type: 'gcp'})
   const server = yaml.dump({

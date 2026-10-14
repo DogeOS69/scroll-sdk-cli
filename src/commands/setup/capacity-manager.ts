@@ -8,7 +8,7 @@ import {fileURLToPath} from 'node:url'
 import {CAPACITY_MANAGER_PLAN, assertSdkWorkersRetired, prepareCapacityManager} from '../../utils/capacity-manager.js'
 import {DEFAULT_DEPLOYMENT} from '../../utils/deployment-paths.js'
 import {JsonOutputContext} from '../../utils/json-output.js'
-import {localPath} from '../../utils/preparation-io.js'
+import {digest, localPath} from '../../utils/preparation-io.js'
 import {capacityExec} from '../../utils/proof-workers-lifecycle.js'
 
 export default class CapacityManager extends Command {
@@ -50,6 +50,13 @@ export default class CapacityManager extends Command {
       assertSdkWorkersRetired(root)
       const values = yaml.load(fs.readFileSync(localPath(root, plan.valuesFile), 'utf8')) as any
       if (values.manager.dstack.project !== plan.project || values.manager.workerTokenSecret !== plan.workerTokenSecret) throw new Error('Regenerate the capacity-manager plan after changing its credential bindings')
+      if (!plan.fleets?.files?.length || !['create', 'reuse'].includes(plan.fleets.action)) throw new Error('Fleet preparation is missing; rerun setup render before installing capacity-manager')
+      const fleets = plan.fleets.files.map((file: {path: string; sha256: string}) => {
+        const content = fs.readFileSync(localPath(root, file.path), 'utf8')
+        if (digest(content) !== file.sha256) throw new Error('Prepared fleet YAML changed; rerun setup render')
+        return yaml.load(content) as any
+      })
+      if (JSON.stringify(fleets.map((fleet: any) => fleet.name)) !== JSON.stringify(values.manager.dstack.fleets)) throw new Error('Fleet bindings changed; rerun setup render')
       const readSecret = (namespace: string, name: string, key: string) => {
         const response = run(namespace, ['get', 'secret', name, '-o', 'json'])
         let secret
@@ -63,8 +70,8 @@ export default class CapacityManager extends Command {
       if (values.dstackAuth?.existingSecret !== plan.dstack.auth.existingSecret || values.dstackAuth?.key !== plan.dstack.auth.key) throw new Error('Dstack credential bindings changed; rerun setup render')
       // Both releases mount the same Secret; no token readback/copy is necessary.
       const adapter = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../config/capacity-manager-credentials.py'), 'utf8')
-      run(plan.dstack.namespace, ['exec', '-i', `deployment/${plan.dstack.deployment}`, '-c', 'controller', '--', '/root/.local/share/uv/tools/dstack/bin/python', '-c', adapter], JSON.stringify({fleets: values.manager.dstack.fleets, project: plan.project, secretName: plan.workerTokenSecret, token: workerToken}))
-      out.info('Prepared credential references only. No workers started; explicitly install the capacity-manager release after reviewing the generated policy.')
+      run(plan.dstack.namespace, ['exec', '-i', `deployment/${plan.dstack.deployment}`, '-c', 'controller', '--', '/root/.local/share/uv/tools/dstack/bin/python', '-c', adapter], JSON.stringify({fleetAction: plan.fleets.action, fleets, project: plan.project, secretName: plan.workerTokenSecret, token: workerToken}))
+      out.info('Prepared empty fleets and credential references. No workers started; explicitly install the capacity-manager release after reviewing the generated policy.')
       out.success({namespace: plan.namespace, project: plan.project, updated: true})
     } catch (error) {out.error('E761_CAPACITY_MANAGER_FAILED', error instanceof Error ? error.message : 'Capacity manager preparation failed', 'CONFIGURATION', true)}
   }

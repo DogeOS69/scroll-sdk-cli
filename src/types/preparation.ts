@@ -29,6 +29,12 @@ export interface PreparationConfig {
   }
   databases?: Array<'blockscout'>
   dstack?: {
+    /** Existing AWS networking; controller uses its workload role, never static access keys. */
+    aws?: {
+      iamInstanceProfile?: string
+      publicIps?: boolean
+      vpcIds: Record<string, string>
+    }
     /** Existing asyncpg connection URL; mutually exclusive with database creation. */
     databaseUrlEnv?: string
     gcpProjectId?: string
@@ -36,7 +42,7 @@ export interface PreparationConfig {
     initializeDatabase?: boolean
     mode: 'external' | 'import'
     project?: string
-    providers?: Array<'gcp' | 'vastai'>
+    providers?: Array<'aws' | 'gcp' | 'vastai'>
     /** Name of an environment variable; mutually exclusive with vastaiApiKeyFile. */
     vastaiApiKeyEnv?: string
     vastaiApiKeyFile?: string

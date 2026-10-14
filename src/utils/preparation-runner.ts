@@ -115,7 +115,13 @@ export class CommandPreparationRunner implements PreparationRunner {
         }
 
         if (d?.mode === 'external') break
-        const args = ['dstack-config', '-N', ...(d?.providers ?? []).flatMap(provider => ['--provider', provider]), ...optional('project', d?.project), ...optional('gcp-project-id', d?.gcpProjectId)]
+        const args = ['dstack-config', '-N', ...(d?.providers ?? []).flatMap(provider => ['--provider', provider]), ...optional('project', spec.capacityManager?.project ?? d?.project), ...optional('gcp-project-id', d?.gcpProjectId)]
+        if (d?.aws) {
+          const awsConfig = path.join(root, '.data/dstack/aws-backend.json')
+          privateWrite(awsConfig, JSON.stringify(d.aws, null, 2) + '\n')
+          args.push('--aws-backend-config', awsConfig)
+        }
+
         if (d?.vastaiApiKeyEnv) {
           if (!process.env[d.vastaiApiKeyEnv]?.trim()) throw new AwaitingInput({message: `Set ${d.vastaiApiKeyEnv} to the Vast.ai API key, then rerun the same preparation command`})
           args.push('--vastai-api-key-env', d.vastaiApiKeyEnv)

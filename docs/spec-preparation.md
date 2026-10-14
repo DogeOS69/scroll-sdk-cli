@@ -867,6 +867,12 @@ capacityManager:
   gpu: L4
   project: dogeos-aws-provers
   fleets: [dogeos-aws-l4]
+  fleet:
+    action: create
+    cpus: 16
+    memoryGiB: 64
+    diskSizeGiB: 200
+    idleDurationSeconds: 600
   regions: [us-east-1]
   instanceTypes: [g6.4xlarge]
   minWorkers: 1
@@ -890,8 +896,7 @@ this workflow neither builds nor publishes it.
 - `setup upload-secrets` uses the normal secret destination. It does not connect
   to dstack or rent GPU workers.
 - Install the supporting releases manually, including WP with the generated
-  NetworkPolicy, proof token Secrets, and the dstack controller. Prepare an
-  isolated dstack project and fleet according to the SDK runbook.
+  NetworkPolicy, proof token Secrets, and the dstack controller.
 - No separate capacity-manager preparation or credential command is required.
   Make synchronizes the referenced Worker token to the selected dstack project
   before Helm installs the manager. Its controller token is referenced in place.
@@ -930,10 +935,68 @@ dstack's rollout, reads the referenced worker token from Kubernetes (after the
 proof chart's ExternalSecret has synchronized), and registers it in the selected
 dstack project via its API. It then installs the manager. Failure to synchronize
 stops the recipe before Helm; retry the same Make target after fixing the cause.
-This synchronization is idempotent and never creates a fleet or starts a worker.
-The project and named fleets must already exist. The Helm installation can start
-paid GPU allocation according to the declared policy.
+The preflight first checks project/backend availability and creates missing
+empty fleets (`fleet.action: create`, the default), or checks existing fleets
+(`fleet.action: reuse`). Both modes compare the effective fleet configuration;
+a difference stops installation without changing the existing fleet. It never
+force-applies a fleet or starts a worker. The Helm installation can start paid
+GPU allocation according to the declared policy.
 
 The generated Makefile passes its context and namespace explicitly. Namespace
 changes require regenerating the values, since service DNS and Secret references
 are bound to that namespace.
+
+### Project, backend and empty fleet preparation
+
+With `preparation.dstack.mode: import`, the generated controller configuration
+creates the project named by `capacityManager.project` at server startup. Omit
+`preparation.dstack.project`; if supplied it must match. The imported providers
+must include `capacityManager.provider`. External mode keeps project/backend
+configuration operator-owned and the install preflight verifies that it exists.
+
+For Vast, retain `providers: [vastai]` and `vastaiApiKeyEnv: VASTAI_API_KEY` in
+`preparation.dstack`; the value stays in `deployment.env` and generated Secrets.
+For AWS, use the controller's existing IRSA role and explicit existing VPCs:
+
+```yaml
+dstackController:
+  enabled: true
+  defaultCredentialsEnabled: true
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/REPLACE_WITH_DSTACK_ROLE
+preparation:
+  dstack:
+    mode: import
+    providers: [aws]
+    aws:
+      vpcIds:
+        us-east-1: vpc-REPLACE_WITH_EXISTING_VPC_ID
+      publicIps: false
+```
+
+Merge these into the existing blocks rather than duplicating YAML keys. Every
+selected AWS region needs a VPC mapping. Private networking requires suitable
+private subnets, outbound access and controller-to-worker reachability. Optional
+`iamInstanceProfile` is an existing worker instance profile name. The CLI does
+not create provisioning IAM roles, networks or quotas, and it does not fall back
+to a default VPC. AWS static access keys are not imported by this path.
+
+`setup render` saves reviewable definitions in
+`.scrollsdk/capacity-manager/fleets/*.yaml` and records their hashes in the local
+plan. Provider, GPU, regions, instance types, price ceiling and maximum node
+count come from `capacityManager`. Each fleet starts with `min: 0, target: 0`;
+creating it does not rent an initial instance. Fleet defaults are 16 CPUs,
+64 GiB RAM (128 GiB for L40S), 200 GiB disk and 600 seconds of idle time, all
+configurable under `capacityManager.fleet`. The idle timer releases unused
+instances; it does not limit worker runtime. Core's `minWorkers` independently
+controls warm workers after the manager starts. Existing fleets are reused only
+when their effective configuration matches, including limits and idle policy.
+Review and change spec before planning rather than editing locked fleet files.
+
+When upgrading an existing controller's server-config Secret, restart/redeploy
+that controller so it loads the new project/backend configuration before running
+the install preflight. Initial installations load it automatically. No provider
+API calls or GPU allocation occur during local render or offline tests. Live
+acceptance still needs provider availability, a real proof, restart adoption and
+confirmed instance cleanup.

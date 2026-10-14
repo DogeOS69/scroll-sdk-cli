@@ -6,16 +6,16 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import type {DstackControllerConfig} from '../../types/dstack-controller.js'
-import type {DstackProvider} from '../../utils/dstack-credentials.js'
+import type {DstackAwsBackend, DstackProvider} from '../../utils/dstack-credentials.js'
 
 import {
   DSTACK_CREDENTIALS_FILE, checkPrivatePath, configureDstackCredentialRefs, newDstackCredentials,
-  readDstackCredentials, renderDstackSecrets, validateDstackCredentials, validateGcpServiceAccount, writePrivateFile,
+  parsePrivateJson, readDstackCredentials, renderDstackSecrets, validateDstackCredentials, validateGcpServiceAccount, writePrivateFile,
 } from '../../utils/dstack-credentials.js'
 import {CliExitError, JsonOutputContext} from '../../utils/json-output.js'
 
 export default class DstackConfig extends Command {
-  static override description = 'Import Vast.ai/GCP credentials locally and configure dstack controller Secret references'
+  static override description = 'Import provider credentials and AWS workload-role configuration locally and configure dstack controller Secret references'
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --vastai-api-key-file /private/vastai-key --gcp-service-account /private/service-account.json -N',
@@ -23,13 +23,14 @@ export default class DstackConfig extends Command {
   ]
 
   static override flags = {
+    'aws-backend-config': Flags.string({description: 'Path to JSON with existing AWS vpcIds, optional publicIps and iamInstanceProfile; uses the controller workload role'}),
     'doge-config': Flags.string({description: 'Public TOML configuration to update (default .data/doge-config.toml)', exclusive: ['spec']}),
     'gcp-project-id': Flags.string({description: 'GCP project to provision in (default service account project_id)'}),
     'gcp-service-account': Flags.string({description: 'Path to GCP service-account JSON; imported into private local state'}),
     json: Flags.boolean({default: false, description: 'Output metadata as JSON; never print credentials'}),
     'non-interactive': Flags.boolean({char: 'N', default: false, description: 'Use supplied files and existing state; fail on missing credentials'}),
     project: Flags.string({description: 'Dstack project name (default main on first import)'}),
-    provider: Flags.string({description: 'Exact enabled provider set; repeat for multiple providers. Omit to retain existing and add supplied providers.', multiple: true, options: ['vastai', 'gcp']}),
+    provider: Flags.string({description: 'Exact enabled provider set; repeat for multiple providers. Omit to retain existing and add supplied providers.', multiple: true, options: ['aws', 'vastai', 'gcp']}),
     spec: Flags.string({description: 'Update an existing DeploymentSpec YAML instead of doge-config TOML', exclusive: ['doge-config']}),
     'vastai-api-key-env': Flags.string({description: 'Environment variable containing the Vast.ai API key', exclusive: ['vastai-api-key-file']}),
     'vastai-api-key-file': Flags.string({description: 'Path to a file containing only the Vast.ai API key; avoids credentials in command arguments', exclusive: ['vastai-api-key-env']}),
@@ -82,10 +83,15 @@ export default class DstackConfig extends Command {
         supplied.push('gcp')
       }
 
+      if (flags['aws-backend-config']) {
+        state.aws = parsePrivateJson(fs.readFileSync(path.resolve(flags['aws-backend-config']), 'utf8')) as unknown as DstackAwsBackend
+        supplied.push('aws')
+      }
+
       state.providers = flags.provider ? [...new Set(flags.provider)] as DstackProvider[] : [...new Set([...state.providers, ...supplied])]
       if (!flags['non-interactive'] && !flags.provider) {
         state.providers = await checkbox<DstackProvider>({
-          choices: [{checked: state.providers.includes('vastai'), name: 'Vast.ai', value: 'vastai'}, {checked: state.providers.includes('gcp'), name: 'GCP', value: 'gcp'}],
+          choices: [{checked: state.providers.includes('aws'), name: 'AWS (existing workload role and VPC configuration)', value: 'aws'}, {checked: state.providers.includes('vastai'), name: 'Vast.ai', value: 'vastai'}, {checked: state.providers.includes('gcp'), name: 'GCP', value: 'gcp'}],
           message: 'Select GPU providers for this dstack controller:',
           required: true,
         })
@@ -107,6 +113,7 @@ export default class DstackConfig extends Command {
       }
 
       if (flags.project) state.project = flags.project
+      if (!state.providers.includes('aws')) delete state.aws
       if (!state.providers.includes('gcp')) delete state.gcp
       if (!state.providers.includes('vastai')) delete state.vastaiApiKey
       validateDstackCredentials(state)

@@ -9,6 +9,7 @@ import {resolveBridgeGenesisImage} from '../commands/setup/bridge-init.js'
 import {resolveCapacityManager} from './capacity-manager.js'
 import {DeploymentSpecFieldError} from './deployment-spec-fields.js'
 import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec} from './deployment-spec-generator.js'
+import {validateDstackAwsBackend} from './dstack-credentials.js'
 import {usesDstackPostgres} from './dstack-database.js'
 import {feeVaultRecipientHash} from './fee-vault-recipient.js'
 import {needsPreparationPolicy} from './preparation-cubesigner-policy.js'
@@ -156,6 +157,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
   if (spec.dstackController && spec.dstackController.enabled !== false && !p.dstack) throw new Error('Enabled dstack requires preparation.dstack with explicit import or external credentials mode')
   if (p.dstack && !['external', 'import'].includes(p.dstack.mode)) throw new Error('Dstack preparation mode must be import or external')
   if (p.dstack?.mode === 'import' && (!p.dstack.providers?.length || p.dstack.providers.includes('vastai') && !p.dstack.vastaiApiKeyFile && !p.dstack.vastaiApiKeyEnv || p.dstack.providers.includes('gcp') && !p.dstack.gcpServiceAccountFile)) throw new Error('Dstack import requires providers and their credential file or environment references')
+  if (p.dstack?.mode === 'import' && p.dstack.providers?.includes('aws')) validateDstackAwsBackend(p.dstack.aws)
   if (p.dstack?.vastaiApiKeyEnv && !/^[A-Z_a-z]\w*$/.test(p.dstack.vastaiApiKeyEnv)) throw new Error('Dstack vastaiApiKeyEnv must name an environment variable')
   if (p.dstack?.vastaiApiKeyEnv && p.dstack.vastaiApiKeyFile) throw new Error('Choose vastaiApiKeyEnv or vastaiApiKeyFile, not both')
   if (p.dstack?.databaseUrlEnv && !/^[A-Z_a-z]\w*$/.test(p.dstack.databaseUrlEnv)) throw new Error('Dstack databaseUrlEnv must name an environment variable')
@@ -163,7 +165,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
   if (usesDstackPostgres(spec.dstackController) && !p.dstack?.initializeDatabase && !p.dstack?.databaseUrlEnv) throw new Error('PostgreSQL dstack requires initializeDatabase or databaseUrlEnv')
   if (p.dstack?.initializeDatabase !== undefined && typeof p.dstack.initializeDatabase !== 'boolean') throw new Error('initializeDatabase must be boolean')
   if (p.dstack && (!spec.dstackController || spec.dstackController.enabled === false)) throw new Error('Dstack preparation requires an enabled dstackController')
-  if (p.dstack?.providers?.some(provider => !['gcp', 'vastai'].includes(provider))) throw new Error('Unsupported dstack credential provider')
+  if (p.dstack?.providers?.some(provider => !['aws', 'gcp', 'vastai'].includes(provider))) throw new Error('Unsupported dstack credential provider')
   if (p.proofAws && (!spec.infrastructure.aws?.eksClusterName || !spec.infrastructure.aws.region)) throw new Error('Proof AWS provisioning requires an existing EKS cluster and region')
   if (p.bridge.mode === 'helper' && !spec.bridge.seedString?.trim()) throw new Error('Test-helper preparation requires bridge.seedString')
   if (p.bridge.mode === 'helper' && (spec.dogecoin.network === 'mainnet' || spec.metadata.environment === 'mainnet')) throw new Error('The deterministic helper is test-only; choose production Bridge preparation')

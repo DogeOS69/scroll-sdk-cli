@@ -9,7 +9,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {fileURLToPath} from 'node:url'
 
-import {DSTACK_CREDENTIALS_FILE, readDstackCredentials, writePrivateFile} from '../../../src/utils/dstack-credentials.js'
+import {DSTACK_CREDENTIALS_FILE, configureDstackCredentialRefs, readDstackCredentials, renderDstackSecrets, writePrivateFile} from '../../../src/utils/dstack-credentials.js'
 import {readDstackControllerConfig} from '../../../src/utils/dstack-database.js'
 import {loadDstackSecretPublication, publishDstackSecrets, runSecretKubectl} from '../../../src/utils/dstack-secret-publisher.js'
 import {writeGrafanaAdminSecret} from '../../../src/utils/grafana-admin.js'
@@ -90,6 +90,20 @@ else console.log('{}');
     process.env.PATH = originalPath
     process.chdir(originalCwd)
     fs.rmSync(directory, {force: true, recursive: true})
+  })
+
+  it('imports an AWS workload-role backend into the selected project without static AWS keys', () => {
+    fs.writeFileSync('aws-backend.json', JSON.stringify({vpcIds: {'us-east-1': 'vpc-00000000000000000'}}))
+    fs.writeFileSync('aws-spec.yaml', yaml.dump({dstackController: {database: {type: 'sqlite'}, defaultCredentialsEnabled: true, enabled: true, serviceAccount: {annotations: {'eks.amazonaws.com/role-arn': 'arn:aws:iam::000000000000:role/example-dstack'}}}}))
+    run('dstack-config', '--spec', 'aws-spec.yaml', '--provider', 'aws', '--project', 'dedicated-provers', '--aws-backend-config', 'aws-backend.json')
+    const state = readDstackCredentials()!
+    const config = (yaml.load(fs.readFileSync('aws-spec.yaml', 'utf8')) as any).dstackController
+    const server = yaml.load(renderDstackSecrets(config, state)[0].stringData['config.yml']) as any
+    expect(server.projects[0].name).to.equal('dedicated-provers')
+    expect(server.projects[0].backends).to.deep.equal([{creds: {type: 'default'}, default_vpcs: false, public_ips: false, regions: ['us-east-1'], type: 'aws', vpc_ids: {'us-east-1': 'vpc-00000000000000000'}}])
+    expect(JSON.stringify(state)).not.to.include('access_key')
+    config.defaultCredentialsEnabled = false
+    expect(() => configureDstackCredentialRefs(config, state)).to.throw('IRSA')
   })
 
   it('imports a Vast.ai key from an environment variable without exposing it', () => {

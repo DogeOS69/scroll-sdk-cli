@@ -8,9 +8,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import {assertSdkWorkersRetired, buildCapacityManagerValues, prepareCapacityManager, resolveCapacityManager} from '../../src/utils/capacity-manager.js'
+import {assertSdkWorkersRetired, buildCapacityManagerValues, capacityManagerFleets, prepareCapacityManager, resolveCapacityManager} from '../../src/utils/capacity-manager.js'
 import {writeJson} from '../../src/utils/preparation-io.js'
 import {preparationSteps} from '../../src/utils/preparation-plan.js'
+import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
 import {operateWorkerCapacity} from '../../src/utils/proof-workers-lifecycle.js'
 import {capacityPlan} from '../../src/utils/proof-workers-plan.js'
 import {planSpecBootstrap} from '../../src/utils/spec-bootstrap.js'
@@ -21,6 +22,7 @@ function fixture() {
   const {input} = fixturePlan()
   delete input.spec.proofWorkers
   input.spec.dstackController = {enabled: true}
+  input.spec.preparation!.dstack = {mode: 'external'}
   input.spec.proofTopology = {deployment: {}, generation: 'real', mode: 'active'} as any
   input.spec.capacityManager = {fleets: ['aws-l4'], gpu: 'L4', image: {digest: `sha256:${'c'.repeat(64)}`, repository: 'example.invalid/capacity-manager'}, project: 'isolated-aws', provider: 'aws', regions: ['us-east-1']}
   input.imageCheck.cudaArchitectures = ['89']
@@ -28,6 +30,43 @@ function fixture() {
 }
 
 describe('Core capacity manager', () => {
+  it('binds imported controller project/backend to capacity intent without extra operator commands', async () => {
+    const {spec} = fixture()
+    spec.preparation!.bridge = {image: 'example.invalid/bridge:offline', mode: 'production'}
+    spec.preparation!.dstack = {aws: {vpcIds: {'us-east-1': 'vpc-00000000000000000'}}, mode: 'import', providers: ['aws']}
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-import-'))
+    const calls: string[][] = []
+    try {
+      await new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)}).run({effect: 'local', id: 'dstack', retry: 'safe', title: 'Import'}, spec, root, {} as any)
+      expect(calls).to.have.length(1)
+      expect(calls[0]).to.include.members(['dstack-config', '--provider', 'aws', '--project', 'isolated-aws', '--aws-backend-config'])
+      expect(JSON.parse(fs.readFileSync(path.join(root, '.data/dstack/aws-backend.json'), 'utf8'))).to.deep.equal(spec.preparation!.dstack!.aws)
+    } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+
+  it('generates empty bounded fleets and validates imported project/backend bindings', () => {
+    const {spec} = fixture()
+    const fleets = capacityManagerFleets(spec)
+    expect(fleets.action).to.equal('create')
+    expect(fleets.configurations[0]).to.include({idle_duration: '600s', max_price: 1.5, name: 'aws-l4'})
+    expect(fleets.configurations[0].nodes).to.deep.equal({max: 2, min: 0, target: 0})
+    expect(fleets.configurations[0].resources).to.deep.equal({cpu: '16..', disk: {size: '200GB..'}, gpu: {count: 1, name: ['L4'], vendor: 'nvidia'}, memory: '64GB..'})
+    spec.capacityManager!.fleet = {action: 'reuse', idleDurationSeconds: 1200}
+    expect(capacityManagerFleets(spec)).to.include({action: 'reuse'})
+    spec.preparation = {dstack: {mode: 'import', project: 'wrong-project', providers: ['aws']}} as any
+    expect(() => resolveCapacityManager(spec)).to.throw('must match capacityManager.project')
+    delete spec.preparation!.dstack!.project
+    expect(() => resolveCapacityManager(spec)).to.throw('VPC IDs')
+    spec.preparation!.dstack!.aws = {vpcIds: {'us-east-1': 'vpc-00000000000000000'}}
+    expect(() => resolveCapacityManager(spec)).to.throw('IRSA')
+    spec.dstackController = {defaultCredentialsEnabled: true, enabled: true, serviceAccount: {annotations: {'eks.amazonaws.com/role-arn': 'arn:aws:iam::000000000000:role/example-dstack'}}}
+    expect(() => resolveCapacityManager(spec)).not.to.throw()
+    spec.capacityManager!.regions = ['us-west-2']
+    expect(() => resolveCapacityManager(spec)).to.throw('explicit dstack VPC ID')
+    spec.preparation!.dstack!.providers = ['vastai']
+    expect(() => resolveCapacityManager(spec)).to.throw('must include')
+  })
+
   it('rejects missing SDK templates and excludes deployment-specific DevNet profiles', () => {
     const {spec} = fixture()
     const sdk = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-sdk-'))
@@ -91,6 +130,8 @@ describe('Core capacity manager', () => {
       const contract: any = {components: {proofCoordinator: {valuesFile: 'values/proof-coordinator-production.yaml'}, withdrawalProcessor: {valuesFile: 'values/withdrawal-processor-production.yaml'}}, generation: 'real', generationId: 'test-generation', inputs: {publication: {path: '.data/publication.json'}}, mode: 'active', worker: {contractFile: '.data/worker.json'}}
       const result = prepareCapacityManager(root, () => contract)
       const first = fs.readFileSync(result.valuesFile, 'utf8')
+      const fleet = yaml.load(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/fleets/aws-l4.yaml'), 'utf8')) as any
+      expect(fleet.nodes).to.deep.equal({max: 2, min: 0, target: 0})
       const values = yaml.load(first) as any
       expect(result.namespace).to.equal('chain')
       expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), 'utf8')).kubeContext).to.equal('saved-cluster-context')
