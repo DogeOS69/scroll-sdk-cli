@@ -2,7 +2,9 @@ import {confirm, input, select} from '@inquirer/prompts'
 import {Command, Flags} from '@oclif/core'
 import path from 'node:path'
 
+import {DEFAULT_DEPLOYMENT} from '../../utils/deployment-paths.js'
 import {JsonOutputContext} from '../../utils/json-output.js'
+import {runPreparationStage} from '../../utils/preparation-stage-command.js'
 import {
   DEFAULT_PROOF_MATERIALS_RECEIPT,
   DEFAULT_PROOF_MATERIALS_ROOT,
@@ -16,7 +18,7 @@ import {
 } from '../../utils/proof-worker-image-check.js'
 
 export default class ProofMaterials extends Command {
-  static description = 'Prepare shared proof identities for mock, or identities plus real proving artifacts for production'
+  static description = 'Resume the saved proof-materials stage; explicit material flags select standalone material preparation'
 
   static examples = [
     '$ scrollsdk setup proof-materials --generation mock',
@@ -34,6 +36,7 @@ export default class ProofMaterials extends Command {
     'chunk-materializer': Flags.string({description: 'materialize-chunk-oneshot from the release proof-coordinator image (setup proof-image-tools --action export); required for real materialization'}),
     'compiler-image': Flags.string({description: 'dogeos-proof-topology tag or digest from the approved release lineage'}),
     'deployment-dir': Flags.string({default: '.', description: 'Deployment directory'}),
+    dir: Flags.string({description: 'Saved deployment directory for stage mode (default: ./deployment); use --generation for standalone preparation'}),
     'expected-core-revision': Flags.string({description: 'Full dogeos-core Git SHA that baked --artifact-root; real only'}),
     generation: Flags.string({description: 'Materials to prepare: mock imports shared identities only; real imports the full proving release', options: ['mock', 'real']}),
     'identity-env': Flags.string({description: 'Optional real-identity.env for staging real identities during mock; required for real'}),
@@ -51,6 +54,15 @@ export default class ProofMaterials extends Command {
 
   public async run(): Promise<void> {
     const {flags} = await this.parse(ProofMaterials)
+    const standalone = this.argv.some(argument => /^--?/.test(argument) && !['--deployment-dir', '--dir', '--json'].includes(argument.split('=')[0]))
+    if (!standalone) {
+      const explicitDeployment = this.argv.some(argument => argument === '--deployment-dir' || argument.startsWith('--deployment-dir='))
+      if (flags.dir && explicitDeployment) throw new Error('Choose --dir or --deployment-dir, not both')
+      await runPreparationStage('proof-materials', flags.dir ?? (explicitDeployment ? flags['deployment-dir'] : DEFAULT_DEPLOYMENT), flags.json)
+      return
+    }
+
+    if (flags.dir) throw new Error('--dir selects stage mode; use --deployment-dir with standalone material flags')
     const output = new JsonOutputContext('setup proof-materials', flags.json)
     try {
       const required = async (value: string | undefined, message: string, name: string, defaultValue?: string): Promise<string> => {

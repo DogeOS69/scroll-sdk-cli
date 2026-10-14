@@ -21,7 +21,7 @@ export function productionFeeWallet(root: string, spec: DeploymentSpec): {addres
     if (!/^(02|03)[\da-f]{64}$/.test(publicKey) || new bitcore.PrivateKey(key.toString(), selectedNetwork).toWIF() !== value) throw new Error('Invalid key network or compression')
     address = key.toPublicKey().toAddress(selectedNetwork).toString()
   } catch {
-    throw new AwaitingInput({message: `Set ${FEE_WALLET_KEY_ENV} in the private deployment.env to a valid compressed ${network} Dogecoin WIF, then rerun apply. Its public key and funding address are derived automatically.`})
+    throw new AwaitingInput({message: `Set ${FEE_WALLET_KEY_ENV} in the private deployment.env to a valid compressed ${network} Dogecoin WIF, then rerun the same preparation command. Its public key and funding address are derived automatically.`})
   }
 
   const file = localPath(root, '.data/bridge-fee-wallet.json')

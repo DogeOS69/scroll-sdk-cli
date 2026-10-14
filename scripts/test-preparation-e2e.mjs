@@ -178,7 +178,12 @@ function fund(address, amount, marker = false) {
 }
 try {
     await cmd('01-plan', ['plan', '--spec', root + '/intent.yaml', '--output', deployment, '--sdk-dir', sdk, '--env-file', root + '/environment']);
-    let result = await cmd('02-apply', ['apply', '--dir', deployment]);
+    let result = await cmd('02-genesis', ['genesis', '--dir', deployment]);
+    if (result?.status !== 'stage-complete' || !fs.existsSync(deployment + '/genesis.json'))
+        throw Error('Local genesis stage did not complete');
+    if (calls.length !== 0) throw Error('Genesis contacted a chain RPC');
+    await cmd('03-aws-local-identities', ['aws', '--dir', deployment]);
+    result = await cmd('04-wallet-wait', ['bridge-funding', '--dir', deployment]);
     if (result?.currentStep !== 'production-wallets')
         throw Error('Expected production wallet funding pause');
     const walletSetup = toml.parse(fs.readFileSync(deployment + '/.data/setup_defaults.toml', 'utf8'));
@@ -187,17 +192,19 @@ try {
     };
     const file = deployment + '/.scrollsdk/inputs/bridge-funding.json';
     fs.writeFileSync(file, JSON.stringify(input));
-    result = await cmd('03-wallets', ['apply', '--dir', deployment]);
+    result = await cmd('05-wallets', ['bridge-funding', '--dir', deployment]);
     if (result?.currentStep !== 'production-funding')
         throw Error('Expected marked bridge funding pause');
     const bridge = JSON.parse(fs.readFileSync(deployment + '/.data/bridge.json', 'utf8'));
     const setup = toml.parse(fs.readFileSync(deployment + '/.data/setup_defaults.toml', 'utf8'));
     input.bridge = fund(bridge.p2sh_address, setup.bridge_target_amount, true);
     fs.writeFileSync(file, JSON.stringify(input));
-    result = await cmd('04-complete', ['apply', '--dir', deployment]);
-    if (result?.status !== 'prepared')
-        throw Error('Preparation did not complete');
-    await cmd('05-rerun', ['apply', '--dir', deployment]);
+    await cmd('06-bridge-complete', ['bridge-funding', '--dir', deployment]);
+    await cmd('07-proof-materials', ['proof-materials', '--dir', deployment]);
+    result = await cmd('08-render', ['render', '--dir', deployment]);
+    if (result?.status !== 'stage-complete' || !result.nextCommand.includes('upload-secrets'))
+        throw Error('Preparation did not complete rendering');
+    await cmd('09-rerun-render', ['render', '--dir', deployment]);
     if (calls.some(name => name === 'sendrawtransaction'))
         throw Error('Production preparation broadcast a transaction');
     fs.writeFileSync(root + '/evidence.json', JSON.stringify({

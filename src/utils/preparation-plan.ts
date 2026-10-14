@@ -13,6 +13,7 @@ import {feeVaultRecipientHash} from './fee-vault-recipient.js'
 import {AwaitingInput, digest, loadPreparationEnv, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolvePreparationProofRelease} from './preparation-release.js'
 import {refreshPreparationRuntime} from './preparation-runtime-refresh.js'
+import {PREPARATION_STAGES, type PreparationStage, stageCommand, stagedPreparationSteps} from './preparation-stages.js'
 import {rentalEnvelope, resolveProofWorkers} from './proof-workers-config.js'
 import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {planSpecBootstrap, resolveSdkRevision} from './spec-bootstrap.js'
@@ -20,18 +21,20 @@ import {resolveCubesignerIdentity} from './spec-cubesigner.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
 import {specAwsSecretPrefix} from './spec-secret-prefix.js'
 
-export interface PreparationStep {effect: 'chain' | 'cloud' | 'local' | 'read'; id: string; retry: 'reconcile' | 'safe'; title: string}
-export interface PreparationPlan {deploymentName: string; envFile?: string; id: string; schema: 'scrollsdk/preparation/v1'; sdkDirectory: string; specHash: string; steps: PreparationStep[]}
+export interface PreparationStep {effect: 'chain' | 'cloud' | 'local' | 'read'; id: string; retry: 'reconcile' | 'safe'; stage?: PreparationStage; title: string}
+export interface PreparationPlan {deploymentName: string; envFile?: string; id: string; schema: 'scrollsdk/preparation/v1' | 'scrollsdk/preparation/v2'; sdkDirectory: string; specHash: string; steps: PreparationStep[]}
 export interface PreparationState {
+  completedStage?: PreparationStage
   currentStep?: string
   files: Record<string, string>
+  nextStage?: PreparationStage
   planId: string
-  status: 'failed' | 'pending' | 'prepared' | 'recovery-required' | 'running' | 'waiting'
+  status: 'failed' | 'pending' | 'prepared' | 'recovery-required' | 'running' | 'stage-complete' | 'waiting'
   steps: Record<string, 'completed' | 'failed' | 'recovery-required' | 'running'>
   waiting?: AwaitingInput['details']
 }
 export const WORKFLOW_DIR = '.scrollsdk'
-export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
+export function preparationSteps(spec: DeploymentSpec, staged = false): PreparationStep[] {
   const p = spec.preparation!
   const steps: PreparationStep[] = []
   const add = (id: string, title: string, effect: PreparationStep['effect'] = 'local', retry: PreparationStep['retry'] = 'safe') => steps.push({effect, id, retry, title})
@@ -92,7 +95,7 @@ export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
     add('proof-workers-intent', `GPU capacity declared for separate proof-workers apply: ${workers.count} x ${workers.gpu}, ${workers.maxDurationHours}h, USD ${rentalEnvelope(workers)} rental envelope (no allocation now)`)
   }
 
-  return steps
+  return staged ? stagedPreparationSteps(steps) : steps
 }
 
 export function validatePreparation(spec: DeploymentSpec): void {
@@ -203,11 +206,11 @@ function fingerprint(root: string): Record<string, string> {
     else throw new Error(`Unsupported managed artifact: ${relative}`)
   }
 
-  for (const name of ['config.toml', 'config-contracts.toml', 'Makefile', '.data', 'values', 'secrets', 'withdrawal-processor', 'proof-coordinator', 'eth-da-submitter', 'signer-policy-bundle']) visit(name)
+  for (const name of ['genesis.json', 'genesis.yaml', 'config.toml', 'config-contracts.toml', 'Makefile', '.data', 'values', 'secrets', 'withdrawal-processor', 'proof-coordinator', 'eth-da-submitter', 'signer-policy-bundle']) visit(name)
   return files
 }
 
-export async function createPreparationPlan(options: {envFile?: string; output: string; sdkDirectory: string; spec: string}): Promise<PreparationPlan> {
+export async function createPreparationPlan(options: {envFile?: string; output: string; sdkDirectory: string; spec: string; staged?: boolean}): Promise<PreparationPlan> {
   const envFile = options.envFile ? path.resolve(options.envFile) : undefined
   loadPreparationEnv(envFile)
   let spec: DeploymentSpec
@@ -229,13 +232,13 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   const root = path.resolve(options.output)
   if (fs.existsSync(root) && fs.lstatSync(root).isSymbolicLink()) throw new Error('Deployment root cannot be a symlink')
   const specText = JSON.stringify(spec, null, 2) + '\n'
-  const body = {...(envFile ? {envFile} : {}), deploymentName: spec.metadata.name, schema: 'scrollsdk/preparation/v1' as const, sdkDirectory: fs.realpathSync(options.sdkDirectory), specHash: digest(specText), steps: preparationSteps(spec)}
+  const body = {...(envFile ? {envFile} : {}), deploymentName: spec.metadata.name, schema: options.staged ? 'scrollsdk/preparation/v2' as const : 'scrollsdk/preparation/v1' as const, sdkDirectory: fs.realpathSync(options.sdkDirectory), specHash: digest(specText), steps: preparationSteps(spec, options.staged)}
   const plan = {...body, id: digest(JSON.stringify(body))}
   const directory = path.join(root, WORKFLOW_DIR)
   if (fs.existsSync(path.join(directory, 'state.json'))) {
     const current = JSON.parse(fs.readFileSync(path.join(directory, 'plan.json'), 'utf8')) as PreparationPlan
     if (current.id === plan.id) return current
-    throw new Error('An existing preparation plan is immutable; supply external inputs and rerun apply, or choose a new deployment directory for a different spec')
+    throw new Error('An existing preparation plan is immutable; supply external inputs and rerun the same preparation command, or choose a new deployment directory for a different spec')
   }
 
   if (fs.existsSync(root) && fs.readdirSync(root).length > 0) throw new Error('setup plan requires an empty output directory')
@@ -244,26 +247,38 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   privateWrite(path.join(root, '.scrollsdkignore'), '.scrollsdk/\n.data/contracts-build/\n')
   privateWrite(path.join(directory, 'intent.json'), specText)
   writeJson(path.join(directory, 'plan.json'), plan)
-  writeJson(path.join(directory, 'state.json'), {files: {}, planId: plan.id, status: 'pending', steps: {}} satisfies PreparationState)
+  writeJson(path.join(directory, 'state.json'), {files: {}, ...(options.staged ? {nextStage: 'genesis' as const} : {}), planId: plan.id, status: 'pending', steps: {}} satisfies PreparationState)
   return plan
 }
 
 export interface PreparationRunner {run(step: PreparationStep, spec: DeploymentSpec, root: string, plan: PreparationPlan): Promise<void>}
-export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}, options: {dogecoinRoutingSpec?: string; refreshRuntime?: boolean} = {}): Promise<PreparationState> {
+export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}, options: {dogecoinRoutingSpec?: string; refreshRuntime?: boolean; stage?: PreparationStage} = {}): Promise<PreparationState> {
   if (options.dogecoinRoutingSpec && !options.refreshRuntime) throw new Error('Dogecoin routing updates require --refresh-runtime')
   const root = fs.realpathSync(rootInput)
   const directory = localPath(root, WORKFLOW_DIR)
   const plan = JSON.parse(fs.readFileSync(localPath(root, `${WORKFLOW_DIR}/plan.json`), 'utf8')) as PreparationPlan
   const text = fs.readFileSync(localPath(root, `${WORKFLOW_DIR}/intent.json`), 'utf8')
   const {id, ...body} = plan
-  if (plan.schema !== 'scrollsdk/preparation/v1' || digest(JSON.stringify(body)) !== id || digest(text) !== plan.specHash) throw new Error('Preparation plan or frozen intent changed')
+  if (!['scrollsdk/preparation/v1', 'scrollsdk/preparation/v2'].includes(plan.schema) || digest(JSON.stringify(body)) !== id || digest(text) !== plan.specHash) throw new Error('Preparation plan or frozen intent changed')
   loadPreparationEnv(plan.envFile)
   const spec = JSON.parse(text) as DeploymentSpec
   validatePreparation(spec)
-  if (JSON.stringify(preparationSteps(spec)) !== JSON.stringify(plan.steps)) throw new Error('CLI workflow changed; this plan requires its original CLI version')
+  if (JSON.stringify(preparationSteps(spec, plan.schema === 'scrollsdk/preparation/v2')) !== JSON.stringify(plan.steps)) throw new Error('CLI workflow changed; this plan requires its original CLI version')
   const statePath = localPath(root, `${WORKFLOW_DIR}/state.json`)
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as PreparationState
   if (state.planId !== id) throw new Error('Workflow state does not match plan')
+  const staged = plan.schema === 'scrollsdk/preparation/v2'
+  if (options.stage && !staged) throw new Error('Stage commands require a new staged plan; resume this legacy plan with setup apply')
+  if (staged && !options.stage && state.status !== 'prepared') throw new Error(`Select a preparation stage: ${stageCommand('genesis', root)}`)
+  if (staged && options.refreshRuntime) throw new Error('Runtime refresh is a legacy apply operation; it is not a staged deployment operation')
+  if (options.stage) {
+    const index = PREPARATION_STAGES.indexOf(options.stage)
+    if (index < 0) throw new Error('Unknown preparation stage')
+    const missing = plan.steps.find(step => PREPARATION_STAGES.indexOf(step.stage!) < index && state.steps[step.id] !== 'completed')
+    if (missing) throw new Error(`Prerequisite ${missing.stage} is incomplete. Run ${stageCommand(missing.stage!, root)}`)
+  }
+
+  if (staged) state.nextStage = plan.steps.find(step => state.steps[step.id] !== 'completed')?.stage
   const lock = path.join(directory, 'apply.lock')
   // Never steal an ambiguous lock. An interrupted process leaves an explicit recovery record.
   let fd: number
@@ -277,6 +292,7 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
     }
 
     for (const step of plan.steps) {
+      if (options.stage && step.stage !== options.stage) continue
       if (state.steps[step.id] === 'completed') continue
       if (state.steps[step.id] === 'recovery-required' || state.steps[step.id] === 'running' && step.retry === 'reconcile') {
         state.status = 'recovery-required'; state.currentStep = step.id
@@ -285,7 +301,8 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
       }
 
       progress(step)
-      state.status = 'running'; state.currentStep = step.id; delete state.waiting
+      state.status = 'running'; state.currentStep = step.id; delete state.waiting; delete state.completedStage
+      if (staged) state.nextStage = step.stage
       state.steps[step.id] = 'running'; writeJson(statePath, state)
       try {
         await runner.run(step, spec, root, plan)
@@ -307,7 +324,13 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
       state.files = fingerprint(root); writeJson(statePath, state)
     }
 
-    state.status = 'prepared'; delete state.currentStep; delete state.waiting
+    state.status = plan.steps.every(step => state.steps[step.id] === 'completed') ? 'prepared' : 'stage-complete'
+    if (options.stage) {
+      state.completedStage = options.stage
+      state.nextStage = plan.steps.find(step => state.steps[step.id] !== 'completed')?.stage
+    }
+
+    delete state.currentStep; delete state.waiting
     writeJson(statePath, state)
     return state
   } finally {fs.unlinkSync(lock)}

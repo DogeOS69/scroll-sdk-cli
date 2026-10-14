@@ -15,12 +15,14 @@ import {fileURLToPath} from 'node:url'
 import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 import type {Rpc} from '../../src/utils/preparation-funding.js'
 
-import {generateSetupDefaultsToml} from '../../src/utils/deployment-spec-generator.js'
+import {generateConfigToml, generateSetupDefaultsToml} from '../../src/utils/deployment-spec-generator.js'
 import {BRIDGE_FUNDING_MARKER, inspectFunding, prepareEthereumAnchor, publicKeyAddress, verifyDogecoinNetwork} from '../../src/utils/preparation-funding.js'
+import {prepareLocalGenesis} from '../../src/utils/preparation-genesis.js'
 import {AwaitingInput, loadPreparationEnv} from '../../src/utils/preparation-io.js'
 import {applyPreparation, createPreparationPlan, preparationSteps, validatePreparation} from '../../src/utils/preparation-plan.js'
 import {resolvePreparationProofRelease} from '../../src/utils/preparation-release.js'
 import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
+import {PREPARATION_STAGES} from '../../src/utils/preparation-stages.js'
 import {buildProofAwsConfig, writeProofAwsConfig} from '../../src/utils/proof-aws-config.js'
 import {PROOF_RELEASE_IMAGE_NAMES} from '../../src/utils/proof-software-release.js'
 import {createSdkFixture} from '../helpers/sdk-templates.js'
@@ -137,8 +139,8 @@ describe('resumable preparation plan', () => {
 
     // Complete synthetic steps in-process; the actual CLI resume must not run
     // any cloud, Docker, chain or Kubernetes operations in this path test.
-    try {await applyPreparation(output, {async run() {}})} finally {delete process.env.DEPLOYMENT_PATH_TEST_OWNER}
-    for (const args of [['apply'], ['apply', '--deployment-dir', 'deployment']]) {
+    try {for (const stage of PREPARATION_STAGES) await applyPreparation(output, {async run() {}}, undefined, {stage})} finally {delete process.env.DEPLOYMENT_PATH_TEST_OWNER}
+    for (const args of [['apply'], ['apply', '--deployment-dir', 'deployment'], ...PREPARATION_STAGES.map(stage => [stage]), ['proof-materials', '--dir', 'deployment']]) {
       const applied = command(args)
       expect(applied.status, applied.stderr + applied.stdout).to.equal(0)
       expect(JSON.parse(applied.stdout).data.status).to.equal('prepared')
@@ -153,6 +155,111 @@ describe('resumable preparation plan', () => {
     const generated = command(['generate-from-spec', '--dry-run'])
     expect(generated.status, generated.stderr + generated.stdout).to.equal(0)
     expect(fs.existsSync(path.join(instance, 'config.toml'))).to.equal(false)
+  })
+
+  it('executes only the selected stage and resumes both production funding handoffs without replaying earlier work', async () => {
+    const spec = fixture()
+    spec.preparation!.bridge.mode = 'production'
+    spec.preparation!.bridge.production = {
+      ethereumAnchor: {blockTag: 'finalized'},
+      recoveryPublicKeys: Array.from({length: spec.bridge.thresholds.recovery}, () => new bitcore.PrivateKey().toPublicKey().toString()),
+      sequencerKeyEnv: 'DISPOSABLE_SEQUENCER_KEY', sequencerPublicKey: new bitcore.PrivateKey().toPublicKey().toString(),
+    }
+    spec.bridge.teePubkey = new bitcore.PrivateKey().toPublicKey().toString()
+    spec.bridge.timelock = 10_000_000
+    fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
+    const plan = await createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml'), staged: true})
+    const calls: string[] = []
+    let walletsFunded = false
+    let bridgeFunded = false
+    const runner = {async run(step: {id: string}) {
+      calls.push(step.id)
+      if (step.id === 'production-wallets' && !walletsFunded) throw new AwaitingInput({message: 'Fund sequencer vout 0 and fee wallet'})
+      if (step.id === 'production-funding' && !bridgeFunded) throw new AwaitingInput({message: 'Fund final bridge with OP_RETURN'})
+    }}
+    const stage = (selected: typeof PREPARATION_STAGES[number]) => applyPreparation(deployment, runner, undefined, {stage: selected})
+    expect(plan.schema).to.equal('scrollsdk/preparation/v2')
+    await rejected(() => applyPreparation(deployment, runner), 'Select a preparation stage')
+    await rejected(() => stage('aws'), 'Prerequisite genesis')
+    expect(calls).to.deep.equal([])
+    expect((await stage('genesis')).status).to.equal('stage-complete')
+    expect(calls).to.deep.equal(['bootstrap', 'genesis-local'])
+    expect((await stage('genesis')).nextStage).to.equal('aws')
+    expect(calls).to.deep.equal(['bootstrap', 'genesis-local'])
+    await rejected(() => stage('bridge-funding'), 'Prerequisite aws')
+    await stage('aws')
+    const walletWait = await stage('bridge-funding')
+    expect(walletWait.status).to.equal('waiting')
+    expect(walletWait.nextStage).to.equal('bridge-funding')
+    expect(calls).not.to.include('bridge-info')
+    walletsFunded = true
+    const bridgeWait = await stage('bridge-funding')
+    expect(bridgeWait.status).to.equal('waiting')
+    expect(bridgeWait.currentStep).to.equal('production-funding')
+    expect(calls.filter(id => id === 'bridge-info')).to.have.length(1)
+    bridgeFunded = true
+    expect((await stage('bridge-funding')).nextStage).to.equal('proof-materials')
+    expect(calls.filter(id => id === 'production-wallets')).to.have.length(2)
+    expect(calls.filter(id => id === 'genesis-local')).to.have.length(1)
+    expect(calls).not.to.include('protocol-context')
+    expect((await stage('proof-materials')).nextStage).to.equal('render')
+    expect(calls).not.to.include('secrets')
+    expect(calls).not.to.include('secret-upload')
+    expect((await stage('render')).nextStage).to.equal('upload-secrets')
+    expect((await stage('upload-secrets')).status).to.equal('prepared')
+    expect(calls.filter(id => id === 'secret-upload')).to.have.length(1)
+    expect(plan.steps.filter(step => step.stage === 'genesis').every(step => step.effect === 'local')).to.equal(true)
+  })
+
+  it('pins the supplied or generated genesis deployer on retry without preparing runtime identities', async () => {
+    const spec = fixture()
+    fs.mkdirSync(deployment)
+    fs.writeFileSync(path.join(deployment, 'config.toml'), generateConfigToml(spec))
+    let attempts = 0
+    let deployer = ''
+    const generator = async (directory: string, step: string, args: string[]) => {
+      attempts++
+      expect(step).to.equal('genesis-local')
+      expect(args[0]).to.equal('gen-l2-artifacts')
+      expect(args).to.include('--skip-deployment-salt-update')
+      expect(args).to.include('--skip-l1-fee-vault-update')
+      expect(directory).to.equal(path.join(deployment, '.scrollsdk/genesis-build'))
+      expect(fs.existsSync(path.join(directory, '.data/doge-config.toml'))).to.equal(false)
+      const input: any = toml.parse(fs.readFileSync(path.join(directory, 'config.toml'), 'utf8'))
+      expect(input.accounts.L2_GAS_ORACLE_SENDER_ADDR).to.equal(input.accounts.DEPLOYER_ADDR)
+      expect(input.sequencer.L2GETH_SIGNER_ADDRESS).to.equal('0x' + '0'.repeat(40))
+      if (attempts === 1) {deployer = input.accounts.DEPLOYER_ADDR; throw new Error('Disposable generator interruption')}
+      expect(input.accounts.DEPLOYER_ADDR).to.equal(deployer)
+      fs.mkdirSync(path.join(directory, 'values'), {recursive: true})
+      fs.writeFileSync(path.join(directory, 'values/genesis.yaml'), yaml.dump({scrollConfig: JSON.stringify({alloc: {}, config: {chainId: spec.network.l2ChainId}})}))
+      fs.writeFileSync(path.join(directory, 'config-contracts.toml'), '[contracts]\n')
+      fs.writeFileSync(path.join(directory, 'frontend-config.yaml'), 'generator-only: true\n')
+    }
+
+    await rejected(() => prepareLocalGenesis(deployment, spec, generator), 'Disposable generator interruption')
+    await prepareLocalGenesis(deployment, spec, generator)
+    const saved: any = toml.parse(fs.readFileSync(path.join(deployment, 'config.toml'), 'utf8'))
+    expect(saved.accounts.DEPLOYER_ADDR).to.equal(deployer)
+    expect(saved.accounts.L2_GAS_ORACLE_SENDER_ADDR).not.to.equal(deployer)
+    expect(fs.existsSync(path.join(deployment, 'frontend-config.yaml'))).to.equal(false)
+    expect(fs.readFileSync(path.join(deployment, 'genesis.json')).equals(fs.readFileSync(path.join(deployment, '.data/genesis.json')))).to.equal(true)
+    const imported = Wallet.createRandom()
+    saved.accounts.DEPLOYER_PRIVATE_KEY = imported.privateKey
+    saved.accounts.DEPLOYER_ADDR = imported.address
+    fs.writeFileSync(path.join(deployment, 'config.toml'), toml.stringify(saved))
+    deployer = imported.address
+    await prepareLocalGenesis(deployment, spec, generator)
+    saved.accounts.DEPLOYER_ADDR = Wallet.createRandom().address
+    fs.writeFileSync(path.join(deployment, 'config.toml'), toml.stringify(saved))
+    await rejected(() => prepareLocalGenesis(deployment, spec, generator), 'does not match its address')
+    expect(attempts).to.equal(3)
+  })
+
+  it('protects completed genesis artifacts from edits between stages', async () => {
+    await createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml'), staged: true})
+    await applyPreparation(deployment, {async run() {fs.writeFileSync(path.join(deployment, 'genesis.json'), '{}')}}, undefined, {stage: 'genesis'})
+    fs.writeFileSync(path.join(deployment, 'genesis.json'), '{"modified":true}')
+    await rejected(() => applyPreparation(deployment, {async run() {throw new Error('must not run')}}, undefined, {stage: 'aws'}), 'changed outside')
   })
 
   it('refreshes only the runtime tail, archives previous evidence and preserves pinned deployment artifacts', async () => {
@@ -397,6 +504,10 @@ describe('resumable preparation plan', () => {
     const runner = new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)})
     await runner.run(preparationSteps(spec).find(step => step.id === 'secret-upload')!, spec, deployment, await makePlan())
     expect(calls[0][calls[0].indexOf('--aws-prefix') + 1]).to.equal(`dogeos/test-cluster/partner/${spec.metadata.name}`)
+    delete spec.preparation!.secretUpload
+    await runner.run(preparationSteps(spec, true).find(step => step.id === 'secret-upload')!, spec, deployment, await makePlan())
+    expect(calls[1]).to.deep.equal(calls[0])
+    spec.preparation!.secretUpload = {provider: 'aws'}
     spec.preparation!.secretUpload.awsPrefix = 'conflicting'
     spec.infrastructure.aws!.secretsPrefix = 'another'
     expect(() => validatePreparation(spec)).to.throw('must match')

@@ -21,9 +21,9 @@ export async function importSignerReceipts(root: string): Promise<void> {
   const inbox = '.scrollsdk/inputs/signer-receipts'
   const requests = active.map((id, index) => ({file: `${index + 1}.json`, publicKey: signers.find(signer => signer.id === id)!.publicKey, signerId: id}))
   const manifestSha256 = proofFileHash(manifest)
-  writeJson(localPath(root, `${inbox}/request.json`), {bundleDirectory: 'signer-policy-bundle', bundleManifestSha256: `sha256:${manifestSha256}`, instructions: 'Send the signer-policy-bundle to partners. Each partner validates their final enforce configuration against the selected release and returns a policy-validation receipt from that verification. Save each receipt at its listed filename, then rerun setup apply.', receipts: requests, schema: 'scrollsdk/signer-validation-request/v1'})
+  writeJson(localPath(root, `${inbox}/request.json`), {bundleDirectory: 'signer-policy-bundle', bundleManifestSha256: `sha256:${manifestSha256}`, instructions: 'Send the signer-policy-bundle to partners. Each partner validates their final enforce configuration against the selected release and returns a policy-validation receipt from that verification. Save each receipt at its listed filename, then rerun the same preparation command.', receipts: requests, schema: 'scrollsdk/signer-validation-request/v1'})
   const missing = requests.filter(item => !fs.existsSync(localPath(root, `${inbox}/${item.file}`)))
-  if (missing.length > 0) throw new AwaitingInput({file: localPath(root, `${inbox}/request.json`), message: `Waiting for partner policy-validation receipts: ${missing.map(item => item.signerId).join(', ')}. See request.json for filenames and handoff instructions, then rerun apply`})
+  if (missing.length > 0) throw new AwaitingInput({file: localPath(root, `${inbox}/request.json`), message: `Waiting for partner policy-validation receipts: ${missing.map(item => item.signerId).join(', ')}. See request.json for filenames and handoff instructions, then rerun the same preparation command`})
   const receipts = requests.map(item => {
     const relative = `${inbox}/${item.file}`
     const file = proofRegularFile(localPath(root, relative), 4 * 1024 * 1024)
@@ -37,7 +37,7 @@ export async function importSignerReceipts(root: string): Promise<void> {
     const content = fs.readFileSync(localPath(root, reference.path))
     return {content, reference}
   })
-  if (contents.some(({content, reference}) => createHash('sha256').update(content).digest('hex') !== reference.sha256)) throw new Error('Partner receipt changed during import; retry apply')
+  if (contents.some(({content, reference}) => createHash('sha256').update(content).digest('hex') !== reference.sha256)) throw new Error('Partner receipt changed during import; retry the same preparation command')
   const managed = contents.map(({content, reference}, index) => {
     const destination = `.data/signer-policy-validation/${index + 1}.json`
     privateWrite(localPath(root, destination), content)

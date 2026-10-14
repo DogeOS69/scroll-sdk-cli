@@ -13,6 +13,7 @@ import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
 import {parseDatabaseUrl} from './dstack-database.js'
 import {productionFeeWallet} from './preparation-fee-wallet.js'
 import {checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
+import {prepareLocalGenesis} from './preparation-genesis.js'
 import {prepareGrafanaAdmin} from './preparation-grafana.js'
 import {AwaitingInput, localPath, privateWrite} from './preparation-io.js'
 import {bindPreparedProofAws, reuseProofAws} from './preparation-proof-aws.js'
@@ -43,7 +44,7 @@ export const invokePreparationCommand: Invoke = async (root, step, args, environ
 function requiredFile(root: string, input: string | undefined, label: string): string {
   if (!input) throw new AwaitingInput({message: `${label} is required`})
   const file = path.resolve(root, input)
-  if (!fs.existsSync(file)) throw new AwaitingInput({file, message: `Supply ${label}, then rerun apply`})
+  if (!fs.existsSync(file)) throw new AwaitingInput({file, message: `Supply ${label}, then rerun the same preparation command`})
   if (!fs.statSync(file).isFile()) throw new Error(`${label} must be a regular file`)
   return file
 }
@@ -66,6 +67,8 @@ export class CommandPreparationRunner implements PreparationRunner {
         await command(['generate-from-spec', '--spec', '.scrollsdk/intent.json', '--output', '.', '--bootstrap', '--sdk-dir', plan.sdkDirectory, '--force'])
         break
       }
+
+      case 'genesis-local': {await prepareLocalGenesis(root, spec, this.invoke); break}
 
       case 'identities': {
         await command(['gen-keystore', '-N']); break
@@ -104,7 +107,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         if (d?.mode === 'external') break
         const args = ['dstack-config', '-N', ...(d?.providers ?? []).flatMap(provider => ['--provider', provider]), ...optional('project', d?.project), ...optional('gcp-project-id', d?.gcpProjectId)]
         if (d?.vastaiApiKeyEnv) {
-          if (!process.env[d.vastaiApiKeyEnv]?.trim()) throw new AwaitingInput({message: `Set ${d.vastaiApiKeyEnv} to the Vast.ai API key, then rerun apply`})
+          if (!process.env[d.vastaiApiKeyEnv]?.trim()) throw new AwaitingInput({message: `Set ${d.vastaiApiKeyEnv} to the Vast.ai API key, then rerun the same preparation command`})
           args.push('--vastai-api-key-env', d.vastaiApiKeyEnv)
         }
 
@@ -195,7 +198,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         break
       }
 
-      case 'charts': case 'charts-published': case 'charts-validated': {
+      case 'charts': case 'charts-published': case 'charts-validated': case 'render-final': {
         if (step.id === 'charts' && spec.identities?.bootnodes?.length) {
           const file = localPath(root, '.data/doge-config.toml')
           const before = toml.parse(fs.readFileSync(file, 'utf8')) as any
@@ -241,7 +244,8 @@ export class CommandPreparationRunner implements PreparationRunner {
       case 'signer-receipts': {await importSignerReceipts(root); break}
       case 'proof-check': {await command(['proof-config-check']); break}
       case 'secret-upload': {
-        const upload = p.secretUpload!
+        const upload = p.secretUpload ?? (spec.infrastructure.provider === 'aws' ? {provider: 'aws' as const} : undefined)
+        if (!upload) throw new Error('Configure preparation.secretUpload for the external Secret store before uploading')
         if (spec.monitoring?.slack?.enabled && !upload.kubeContext) throw new AwaitingInput({message: 'Set preparation.secretUpload.kubeContext to upload monitoring Secrets'})
         await command(['push-secrets', '-N', '--provider', upload.provider, ...optional('aws-region', upload.awsRegion ?? spec.infrastructure.aws?.region), ...optional('aws-prefix', upload.provider === 'aws' ? specAwsSecretPrefix(spec) : undefined), ...optional('kube-context', upload.kubeContext), ...optional('namespace', upload.namespace ?? spec.infrastructure.namespace ?? 'default')])
         if (upload.kubeContext) await command(['monitoring-secrets', '--apply', '--kube-context', upload.kubeContext, '--namespace', upload.namespace ?? spec.infrastructure.namespace ?? 'default'])

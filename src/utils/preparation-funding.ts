@@ -36,7 +36,7 @@ export function dogecoinRpc(root: string): Rpc {
       const data = await response.json() as any
       if (!response.ok || data.error || data.result === undefined) throw new Error('RPC failed')
       return data.result
-    } catch {throw new AwaitingInput({message: `Dogecoin ${method} failed; check RPC availability and credentials, then rerun apply`})}
+    } catch {throw new AwaitingInput({message: `Dogecoin ${method} failed; check RPC availability and credentials, then rerun the same preparation command`})}
   }
 }
 

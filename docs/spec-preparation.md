@@ -1,7 +1,9 @@
-# Prepare a deployment with plan and apply
+# Prepare a deployment in explicit stages
 
-`setup plan` and `setup apply` orchestrate fresh-deployment preparation. They reuse
-the existing setup commands, persist completed steps and stop for external inputs.
+`setup plan` saves a fresh deployment plan. Six stage commands execute only their
+selected stage, persist completed steps and stop for external inputs. Run the
+commands from the private working directory containing your spec and environment
+file. A stage checks its prerequisites and never executes another stage for you.
 They do not install Helm releases or claim that a running chain has passed acceptance.
 
 The CLI does not create or modify `.gitignore` in generated deployment directories
@@ -12,9 +14,10 @@ and is independent of Git.
 After preparation, install the frontend and monitoring releases from the generated
 directory with `make install-frontends` and `make install-scroll-monitor`, passing
 explicit `KUBE_CONTEXT` and `NAMESPACE`. Monitoring belongs early in the Helm
-deployment sequence because it supplies Prometheus Operator CRDs. The `secrets`
-step initializes the bundled Grafana admin credentials once and preserves them on
-resume. `secrets/grafana-admin.env` is uploaded by `setup push-secrets` to AWS
+deployment sequence because it supplies Prometheus Operator CRDs. Proof preparation
+initializes the bundled Grafana admin credentials once before binding proof
+configuration and preserves them on resume. The `render` stage exports the private
+Secret files. `secrets/grafana-admin.env` is uploaded by `setup push-secrets` to AWS
 Secrets Manager or Vault, like Dogecoin RPC credentials. The monitor chart's
 ExternalSecret synchronizes the referenced Kubernetes Secret; do not upload a
 standalone Grafana admin YAML.
@@ -29,6 +32,10 @@ and enable ingress in the relevant values file. Existing operator choices are
 preserved on regeneration. Blockscout values may be generated for later use,
 but `make install-all` does not install Blockscout or its contract verifier.
 Prepare its database and values, then opt in with `make install-blockscout`.
+Before planning, the selected SDK templates must also contain reviewed ingress
+certificate references and TSO network-policy CIDRs when those features are
+enabled. Their placeholders fail chart preparation; the immutable workflow does
+not permit hand-editing generated values between stages.
 These defaults come from the committed SDK revision selected by plan/bootstrap;
 an older checkout or an existing deployment retains its own settings.
 
@@ -40,7 +47,8 @@ under `test/fixtures/deployment-spec/`; those are not operator templates.
 
 The SDK example selects testnet production Bridge preparation and active/real/enforce
 proofs; it generates real identities from an approved proof release after the protocol
-context exists. Apply waits for partner enforcing-policy receipts, verifies them and regenerates
+context exists. `setup proof-materials` waits for partner enforcing-policy receipts and verifies
+them. `setup render` regenerates
 the configuration before the final enforcing check.
 
 ## Prepare the private environment file
@@ -87,14 +95,14 @@ and Bridge funding outpoints use their separately declared files.
 
 ### Optionally supply an existing deployer key
 
-Before the first `setup plan` / `setup apply`, uncomment the optional
+Before the first `setup plan` / `setup genesis`, uncomment the optional
 `accounts.deployer.privateKey: "$ENV:DEPLOYER_PRIVATE_KEY"` entry in your copy of
 the SDK spec, and the matching `DEPLOYER_PRIVATE_KEY` entry in your private
 `deployment.env`. Replace the environment placeholder with your EVM private key;
 Dogecoin WIF and KMS key IDs are not accepted here. Keep the key in the private
 environment file, and let the CLI derive its address.
 
-Leave both entries commented to have apply generate a random deployer identity
+Leave both entries commented to have `setup genesis` generate a random deployer identity
 and reuse the saved identity on resume. Setting the environment variable alone
 does not enable import. This choice is for a fresh deployment; changing it after
 genesis has been generated is not a deployer rotation procedure.
@@ -112,7 +120,7 @@ never inherit the server provider credentials.
 
 The default AWS prefix is
 `dogeos/<eksClusterName>/<namespace>/<metadata.name>` (`namespace` defaults to
-`default`). Values generation, `apply` and standalone uploads from the deployment
+`default`). Values generation, `setup upload-secrets` and standalone uploads from the deployment
 directory use the same destination persisted in `.data/doge-config.toml`.
 Without that file, standalone uploads can read `deployment-spec.yaml`; without
 sufficient deployment context or an explicit `--aws-prefix`, they refuse to use
@@ -132,14 +140,26 @@ the L2 RPC; its fee sampling RPC is independent of that balance check and of DA.
 The complete bridge-operator sequence (inputs, funding, external Secrets,
 installation order, partner handoff, GPU startup and runtime acceptance) is in
 [`scroll-sdk/examples/bridge-operator-deployment.md`](https://github.com/DogeOS69/scroll-sdk/blob/feat/spec-preparation-examples/examples/bridge-operator-deployment.md).
-`plan` / `apply` are preparation entrypoints; they do not replace Helm installation
+`plan` and the six stage commands are preparation entrypoints; they do not replace Helm installation
 or automatically rent a GPU.
 
 
 ```bash
 # From the private working directory containing the edited inputs:
 scrollsdk setup plan
-scrollsdk setup apply
+scrollsdk setup genesis
+scrollsdk setup aws
+scrollsdk setup bridge-funding
+# Fund the two wallets, record their outpoints, then rerun this same stage.
+scrollsdk setup bridge-funding
+# Fund the final Bridge with its OP_RETURN marker, record it, then rerun.
+scrollsdk setup bridge-funding
+scrollsdk setup proof-materials
+# For enforce mode: collect the requested partner receipts, then rerun.
+scrollsdk setup proof-materials
+scrollsdk setup render
+scrollsdk setup upload-secrets
+# Review deployment/Makefile and install releases manually.
 ```
 
 | Path | Convention | Optional override |
@@ -148,10 +168,10 @@ scrollsdk setup apply
 | Private environment | `./deployment.env` when present | `plan --env-file <file>` |
 | SDK checkout | `../scroll-sdk` | `plan --sdk-dir <directory>` |
 | Output | `./deployment/` | `plan --output <directory>` |
-| Plan to apply | `./deployment/` | `apply --dir <directory>` (alias `--deployment-dir`) |
+| Saved plan | `./deployment/` | Any stage: `--dir <directory>` (alias `--deployment-dir`) |
 
-Paths are relative to the working directory; keep running plan/apply there.
-A custom plan output requires the matching apply override. Plan prints that command.
+Paths are relative to the working directory; keep running plan and stage commands there.
+A custom plan output requires the matching `--dir` on each stage. Plan prints that command.
 The lower-level `generate-from-spec` command uses the same spec and environment
 conventions, writes to `.` by default, and uses `../scroll-sdk` for `--bootstrap`.
 It does not search `.env` or `.env.local`; select another filename explicitly.
@@ -168,17 +188,31 @@ available when applying. Planning resolves spec environment references into a
 private intent snapshot; wallet import references still identify environment
 variable names resolved at execution time.
 
-With all inputs available, these are two commands. External funding and partner
-handoffs can require additional invocations of the same `apply` command. No
-underlying setup command is required during normal execution. Starting with no
-funding normally means four invocations: one `plan`, then three `apply` calls
-(initial wallet wait, final Bridge wait, completion). If the independently known
-wallet addresses are funded and their outpoints are supplied before the first
-apply, this becomes one `plan` and two `apply` calls.
+Each command returns naturally when its stage is complete or waiting. A successful
+`genesis` produces `deployment/genesis.json`, `deployment/genesis.yaml` and their
+runtime copies, then stops. It creates no AWS resources and does not prepare KMS
+or service signing identities. The imported or generated deployer is saved before
+generation so a retry uses the same identity.
+
+| Command | Work performed | Boundary |
+| --- | --- | --- |
+| `setup genesis` | Bootstrap pinned templates; pin the deployer; generate local genesis and contract addresses. | No AWS calls, funding or service identity creation. |
+| `setup aws` | Prepare declared service identities, proof store/IAM/token, archive access, Bridge sequencer KMS, controller credentials and selected existing databases. | Resource facts are saved automatically; no copy back into the spec. No GPU allocation. |
+| `setup bridge-funding` | Bind genesis/DA anchor; verify sequencer and fee-wallet funding; derive namespace/final Bridge; verify marked Bridge funding. | Two operator wallet handoffs; rerun this stage to resume. Production mode does not broadcast payments. |
+| `setup proof-materials` | Generate protocol context; import declared inputs; bake/import proof materials; compile/publish proof configuration; export signer bundle and validate enforce receipts. | Preliminary chart compilation is needed to bind the signer bundle. Wait for receipts within this stage. |
+| `setup render` | Render final values/native configuration with the accepted receipts; generate private Secrets; run proof checks. | Helm releases remain uninstalled. |
+| `setup upload-secrets` | Upload using the saved provider, region, namespace and Secret prefix. | AWS defaults to the deployment-specific prefix; no retyping it. |
+
+`setup proof-materials --generation ...` and other explicit material flags retain
+the standalone material utility. Without material flags, the command runs the
+saved stage and defaults to `deployment/`, like the other stage commands.
+
+Existing v1 plans remain resumable with `setup apply`; new v2 plans require the
+explicit stage commands. `setup apply` does not execute an unfinished staged plan.
 
 Planning validates the spec and pinned SDK templates, writes the private plan,
 and lists local, read-only, cloud and chain steps. It does not provision resources
-or send transactions. Applying is authorization to execute the operations listed
+or send transactions. Running a stage authorizes its operations listed
 in that saved plan, including expressly selected cloud provisioning and test-helper
 broadcasts. Production Bridge mode delegates payments to the operator's wallet;
 the CLI verifies those payments without signing or broadcasting funding transactions.
@@ -253,7 +287,7 @@ from a production spec; production output contains no helper funding placeholder
 The two Dogecoin wallet identities are distinct from the L2 Reth signer and the
 Ethereum DA/fee-oracle identities. With
 `images.services.withdrawalProcessor: {repository: dogeos69/withdrawal-processor, tag: v0.3.0-beta.6-kms}`,
-select `sequencerKms: {action: create}`. Apply creates or reuses
+select `sequencerKms: {action: create}`. `setup aws` creates or reuses
 `alias/dogeos/<metadata.name>/<eksClusterName>/bridge-sequencer`, pins the key ARN
 and compressed public key in `.data/bridge-sequencer-kms.json`, and derives the
 funding address. No sequencer private key is exported or requested.
@@ -273,8 +307,8 @@ WP IRSA role. Proof/KMS role mismatches fail instead of overwriting annotations.
 set only `DOGECOIN_FEE_WALLET_KEY` in the private environment file. Spec fields
 `feeWalletPublicKey` and `feeWalletKeyEnv` are not accepted. Apply validates its
 compressed WIF and Dogecoin network, derives the public key and funding address,
-and pins that public identity in `.data/bridge-fee-wallet.json` before cloud
-provisioning. No private key is written to that record. Resume rejects a changed
+and pins that public identity in `.data/bridge-fee-wallet.json` at the start of
+`bridge-funding`. No private key is written to that record. Resume rejects a changed
 fee-wallet key so funding cannot silently switch to another wallet.
 Runtime native TOML receives `[sequencer_signer_kms]` with `key_id`, `region` and
 `expected_pubkey`; the sequencer WIF entry is absent from Secrets/ExternalSecrets.
@@ -312,13 +346,13 @@ The workflow:
 5. Runs the core namespace and bridge-artifact tools against that verified
    sequencer outpoint. No placeholder namespace is presented as a funding target.
 6. Displays the final Bridge address and the required funding marker. Waits for
-   a confirmed marked funding output, verifies it, then generates the canonical
-   protocol context and continues service/proof configuration.
+   a confirmed marked funding output, verifies it, then completes the funding stage. The next explicit command,
+   `setup proof-materials`, generates protocol context and proof configuration.
 
 The default funding input is `.scrollsdk/inputs/bridge-funding.json`; omit
 `fundingFile` unless a custom location is needed. No file is required at plan
-time. Apply creates it at the funding wait and prints both wallet addresses,
-amounts and a JSON template. Fill only real outpoints, then rerun `apply`:
+time. `setup bridge-funding` creates it at the funding wait and prints both wallet addresses,
+amounts and a JSON template. Fill only real outpoints, then rerun `scrollsdk setup bridge-funding`:
 
 ```json
 {
@@ -420,16 +454,28 @@ Receipt-derived topology currently requires an S3 proof artifact store. For a
 local-filesystem proof store, supply an existing explicit topology and compiler
 identity without a material receipt.
 
-Real proof baking is performed by apply using the selected producer image.
+Real proof baking is performed by `setup proof-materials` using the selected producer image.
 CubeSigner account/session authorization and partner Phase A remain owner
-operations. Apply waits for external inputs instead of inventing facts. The workflow does not create an
+operations. CubeSigner policy Wasm building is a separate `setup cubesigner-policy
+build` operation requiring its own pinned compiler image; the preparation stages
+do not build, upload or attach that policy. The proof release manifest does not
+select a CubeSigner policy compiler. Import required policy evidence through the
+declared external inputs. The current CLI policy-build adapter expects a request
+and receipt interface; it needs separate compatibility work for the current
+[core #1458 at 8e3163c](https://github.com/DogeOS69/dogeos-core/pull/1458)
+compiler that accepts an optional output directory and emits only
+Wasm. Do not assume that publishing that compiler image makes this adapter
+compatible. The workflow waits for external inputs instead of inventing facts. The workflow does not create an
 EKS cluster, rent GPU capacity or install releases.
 
 ## State and outcomes
 
-JSON output returns `status`, `currentStep`, `completed` and optional `waiting`
-instructions. Exit codes: `0` prepared, `2` waiting for external input, `1` failed
-or requiring reconciliation. A successfully printed JSON result with
+JSON output returns `stage`, `status`, `currentStep`, `completed`, `nextCommand`
+and optional `waiting` instructions. Exit codes: `0` for `stage-complete` or
+`prepared`, `2` for `waiting`, and `1` for failure or `recovery-required`.
+`stage-complete` means only the selected stage is complete. `prepared` means all
+six stages are complete; running-service acceptance remains separate. A wait or
+failure reports the same stage as the next command. A successfully printed JSON result with
 `status: waiting` is not a completed deployment.
 
 Each completed step and the managed artifact hashes are saved before proceeding.
@@ -445,7 +491,7 @@ migration. After an abrupt process termination, inspect the lock's host/PID and
 any child/provider activity before removing a stale lock; interrupted broadcasts
 remain blocked regardless. Runtime deployment acceptance remains a separate step.
 
-After a CLI runtime-generation fix, `setup apply --dir /private/deployment
+For legacy v1 plans only, after a CLI runtime-generation fix, `setup apply --dir /private/deployment
 --refresh-runtime` archives the previous publication receipt and signer bundle,
 then resumes at `charts`. It preserves the frozen plan, identities, genesis,
 funding outpoints and baked proof materials. Publication is performed and read
@@ -476,7 +522,7 @@ should not have to copy protocol addresses into the spec:
 | Stable genesis timestamp | `genesis.TIMESTAMP = 0`, never the generation time |
 | Spec supply intent | `genesis.L2_MAX_NATIVE_DOGE_SUPPLY`, using the existing `genesis.maxEthSupplyWei` input name |
 | Gas policy | Explicit genesis gas limit and base fee; Galileo scalars and penalty factor; L2 system-config base fee overhead |
-| Prepared identities | Deployer/owner addresses and the L2 gas oracle service's public address, including KMS identities |
+| Prepared identities | Genesis uses deployer/owner inputs. The isolated rc.6 generator config uses the deployer for the shared reader's mandatory Fee Oracle address; this does not become the runtime Fee Oracle identity. The AWS stage prepares the actual service identity |
 | Fee-vault withdrawal destination | Required: `contracts.feeVaultDogeRecipientAddress` is a Dogecoin P2PKH address. Plan rejects a missing or invalid recipient before SDK resolution, CubeSigner lookup or proof-release downloads; apply also rejects saved plans missing it before running any step. The CLI validates the network and derives its hash160 for `FEE_VAULT_DOGE_RECIPIENT_ADDR`. This is not an EVM account or an automatic choice of the Bridge fee-wallet. |
 | Optional components | Blockscout database, explorer verification, Ethereum devnet and public service hostnames are configured only for the selected components |
 
@@ -515,7 +561,9 @@ node scripts/test-preparation-e2e.mjs /path/to/scroll-sdk \
 ```
 
 It runs the default contracts genesis and beta.6 Bridge/compiler containers, verifies both
-funding pauses, resumes to `prepared`, then reruns to verify completion is stable.
+funding pauses, explicitly completes proof preparation and rendering, then
+reruns render to verify completion is stable. It stops before `upload-secrets`;
+that cloud mutation is covered with a mocked destination-handoff test.
 Private generated files and child logs remain in the reported temporary directory;
 only sanitized step outcomes and RPC method names are printed. Docker must be
 available. This verifies orchestration and artifact compatibility, not real chain
