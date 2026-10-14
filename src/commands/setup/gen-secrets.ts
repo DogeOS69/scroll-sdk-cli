@@ -196,6 +196,7 @@ export default class SetupGenSecrets extends Command {
       'blockscout',
       'fee-oracle',
       'contracts',
+      'preinstalls',
       'dogecoin',
       'testnet-activity-helper',
       'l1-interface',
@@ -275,6 +276,7 @@ export default class SetupGenSecrets extends Command {
         'DOGECOIN_RPC_USER:DOGECOIN_RPC_USER',
         'DOGECOIN_RPC_PASSWORD:DOGECOIN_RPC_PASSWORD',
       ],
+      'preinstalls': ['DEPLOYER_PRIVATE_KEY:PRIV_KEY'],
       'testnet-activity-helper': [
         'L2_TESTNET_ACTIVITY_HELPER_PRIVATE_KEY:private-key',
       ],

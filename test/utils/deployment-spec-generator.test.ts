@@ -1787,6 +1787,16 @@ describe('deployment-spec-generator', () => {
         expect(node).not.to.have.property('configMaps');
       }
 
+      const preinstalls = yaml.load(files['preinstalls-production.yaml']) as any;
+      expect(preinstalls.configMaps['preinstalls-env'].data).to.deep.equal({L2_RPC_ENDPOINT: 'http://l2-rpc:8545'});
+      expect(preinstalls.envFrom).to.deep.include({secretRef: {name: 'preinstalls-secret-env'}});
+      expect(preinstalls.externalSecrets['preinstalls-secret-env'].data).to.deep.equal([{
+        remoteRef: {key: 'dogeos-test/preinstalls-secret-env', property: 'PRIV_KEY'}, secretKey: 'PRIV_KEY',
+      }]);
+      // Image and source-verification policy belong to the SDK values template.
+      expect(preinstalls).not.to.have.property('image');
+      expect(preinstalls).not.to.have.property('verify');
+
       const contractsValues = yaml.load(files['contracts-production.yaml']) as any;
       expect(contractsValues.image).to.include({repository: DOCKER_REPOSITORY, tag: `deploy-${CONTRACTS_DOCKER_DEFAULT_TAG}`});
       expect(contractsValues.configMaps['contracts-deployment-env'].data).to.deep.equal({

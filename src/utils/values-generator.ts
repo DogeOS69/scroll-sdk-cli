@@ -407,6 +407,9 @@ export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: s
   files['frontends-config.yaml'] = generateFrontendsConfigValues(normalizedSpec)
   files['blockscout-production.yaml'] = generateBlockscoutValues(normalizedSpec)
 
+  // Standard EVM preinstalls run before the DogeOS contracts deployment.
+  files['preinstalls-production.yaml'] = generatePreinstallsValues(normalizedSpec)
+
   // Contracts deployment
   files['contracts-production.yaml'] = generateContractsValues(normalizedSpec)
 
@@ -1562,4 +1565,21 @@ function generateContractsValues(spec: DeploymentSpec): string {
   }
 
   return yaml.dump(values)
+}
+
+/** Bind the SDK preinstalls template to the deployment RPC and deployer Secret. */
+function generatePreinstallsValues(spec: DeploymentSpec): string {
+  const externalSecrets = generateExternalSecrets(
+    'preinstalls-secret-env',
+    getSecretProviderConfig(spec),
+    [{property: 'PRIV_KEY', remoteKey: 'preinstalls-secret-env', secretKey: 'PRIV_KEY'}],
+  )
+  return yaml.dump({
+    configMaps: {'preinstalls-env': {data: {L2_RPC_ENDPOINT}}},
+    envFrom: [
+      {secretRef: {name: 'preinstalls-secret-env'}},
+      {configMapRef: {name: 'preinstalls-env'}},
+    ],
+    ...(externalSecrets && {externalSecrets}),
+  })
 }
