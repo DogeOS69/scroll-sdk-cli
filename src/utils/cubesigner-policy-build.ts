@@ -3,7 +3,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import {parseImmutableProofImage} from './proof-materials.js'
-import {readProofReleasePreparation} from './proof-release-preparation.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
 
 export type PolicyToolRunner = (program: string, args: string[]) => string
@@ -14,52 +13,44 @@ export const runPolicyTool: PolicyToolRunner = (program, args) => {
   return result.stdout
 }
 
+export const POLICY_BUILD_RECEIPT_SCHEMA = 'dogeos/cubesigner-policy-build-receipt/v2'
+const WASM = 'cubesigner_verifier_policy.wasm'
+const COMPONENT_MAGIC = Buffer.from([0, 97, 115, 109, 13, 0, 1, 0])
+
+/**
+ * Export the CubeSigner policy Wasm from the release's compiler image. The policy's release values are
+ * constants committed at that core revision, so the image takes no inputs: it writes the Wasm and its
+ * `.sha256` to one output directory. The image is published only to the private GHCR package
+ * ghcr.io/dogeos69/cubesigner-policy-compiler; pulling it needs a `docker login ghcr.io` with a token
+ * that has `read:packages`.
+ */
 export function buildCubesignerPolicy(options: {
-  compilerImage: string; expectedRevision: string; output: string; preparationReceipt: string
-  protocolContext: string; resolverBaseUrl: string; run?: PolicyToolRunner
-}): {directory: string; receipt: string; receiptSha256: string; wasm: string} {
+  compilerImage: string; expectedRevision: string; output: string; run?: PolicyToolRunner
+}): {directory: string; receipt: string; receiptSha256: string; wasm: string; wasmSha256: string} {
   const run = options.run ?? runPolicyTool
   parseImmutableProofImage(options.compilerImage, 'policy compiler')
   if (!/^[\da-f]{40}$/.test(options.expectedRevision)) throw new Error('Expected a full core revision')
-  const preparation = readProofReleasePreparation(options.preparationReceipt)
-  if (preparation.coreRevision !== options.expectedRevision) throw new Error('Policy compiler and preparation must use the same core revision')
-  const context = proofRegularFile(options.protocolContext)
-  if (proofFileHash(context) !== preparation.files.protocolContext.sha256) throw new Error('Preparation belongs to a different protocol context')
-  const resolver = new URL(options.resolverBaseUrl)
-  if (resolver.protocol !== 'https:' || resolver.username || resolver.password || resolver.search || resolver.hash || !resolver.pathname.endsWith('/')) throw new Error('Policy resolver requires a public HTTPS base URL ending in /')
   const target = path.resolve(options.output)
   if (fs.existsSync(target)) throw new Error('Policy output already exists')
   fs.mkdirSync(path.dirname(target), {recursive: true})
   if (fs.realpathSync(path.dirname(target)) !== path.dirname(target)) throw new Error('Policy output parent contains a symlink')
   const stage = fs.mkdtempSync(path.join(path.dirname(target), '.policy-build-'))
   try {
-    const inputDir = path.join(stage, 'inputs')
-    fs.mkdirSync(inputDir)
-    const request: Record<string, unknown> = {resolverBaseUrl: options.resolverBaseUrl, schema: 'dogeos/cubesigner-policy-build/v1'}
-    for (const [name, source] of Object.entries({aggregateVerifyingKey: preparation.files.scroll.aggregateVerifyingKey.path, bridgeManifest: preparation.files.bridge.nativeManifest.path, protocolContext: context})) {
-      const file = proofRegularFile(source)
-      const copy = path.join(inputDir, name)
-      fs.copyFileSync(file, copy)
-      if (proofFileHash(file) !== proofFileHash(copy)) throw new Error('Policy input changed during copy')
-      request[name] = {path: name, sha256: proofFileHash(copy)}
-    }
-
-    fs.writeFileSync(path.join(inputDir, 'request.json'), JSON.stringify(request) + '\n', {mode: 0o600})
     run('docker', ['pull', options.compilerImage])
     const revision = run('docker', ['image', 'inspect', options.compilerImage, '--format', '{{ index .Config.Labels "org.opencontainers.image.revision" }}']).trim()
     if (revision !== options.expectedRevision) throw new Error('Policy compiler image revision mismatch')
-    run('docker', ['run', '--rm', '--network', 'none', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--tmpfs', '/tmp:rw,nosuid,nodev', '--user', `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`, '-v', `${inputDir}:/input:ro`, '-v', `${stage}:/output`, options.compilerImage, '/input/request.json', '/output/artifact'])
+    run('docker', ['run', '--rm', '--network', 'none', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--tmpfs', '/tmp:rw,nosuid,nodev', '--user', `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`, '-v', `${stage}:/output`, options.compilerImage, '/output/artifact'])
     const artifact = path.join(stage, 'artifact')
-    const receiptPath = proofRegularFile(path.join(artifact, 'build-receipt.json'), 1024 * 1024)
-    const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
-    const wasm = proofRegularFile(path.join(artifact, 'cubesigner_verifier_policy.wasm'), 128 * 1024 * 1024)
-    if (receipt.schema !== 'dogeos/cubesigner-policy-build-receipt/v1' || receipt.coreRevision !== revision || receipt.requestSha256 !== proofFileHash(path.join(inputDir, 'request.json')) || receipt.pins.protocolContextSha256 !== proofFileHash(context) || receipt.wasm.path !== path.basename(wasm) || receipt.wasm.sha256 !== proofFileHash(wasm) || receipt.wasm.sizeBytes !== fs.statSync(wasm).size || receipt.checks.componentImportSubset !== 'passed') throw new Error('Policy build receipt does not match its inputs and Wasm')
-    if (!fs.readFileSync(wasm).subarray(0, 8).equals(Buffer.from([0, 97, 115, 109, 13, 0, 1, 0]))) throw new Error('Expected a WebAssembly component')
-    fs.writeFileSync(path.join(artifact, 'compiler.json'), JSON.stringify({image: options.compilerImage, preparationReceiptSha256: proofFileHash(options.preparationReceipt), revision}, null, 2) + '\n')
-    fs.renameSync(inputDir, path.join(artifact, 'inputs'))
+    const wasm = proofRegularFile(path.join(artifact, WASM), 128 * 1024 * 1024)
+    const digestLine = fs.readFileSync(proofRegularFile(path.join(artifact, `${WASM}.sha256`), 1024), 'utf8')
+    const wasmSha256 = proofFileHash(wasm)
+    if (digestLine !== `${wasmSha256}  ${WASM}\n`) throw new Error('Policy Wasm does not match the compiler image sha256')
+    if (!fs.readFileSync(wasm).subarray(0, 8).equals(COMPONENT_MAGIC)) throw new Error('Expected a WebAssembly component')
+    const receipt = {compilerImage: options.compilerImage, coreRevision: revision, schema: POLICY_BUILD_RECEIPT_SCHEMA, wasm: {path: WASM, sha256: wasmSha256, sizeBytes: fs.statSync(wasm).size}}
+    fs.writeFileSync(path.join(artifact, 'build-receipt.json'), JSON.stringify(receipt, null, 2) + '\n')
     fs.renameSync(artifact, target)
     const receiptFile = path.join(target, 'build-receipt.json')
-    return {directory: target, receipt: receiptFile, receiptSha256: proofFileHash(receiptFile), wasm: path.join(target, path.basename(wasm))}
+    return {directory: target, receipt: receiptFile, receiptSha256: proofFileHash(receiptFile), wasm: path.join(target, WASM), wasmSha256}
   } finally {
     fs.rmSync(stage, {force: true, recursive: true})
   }

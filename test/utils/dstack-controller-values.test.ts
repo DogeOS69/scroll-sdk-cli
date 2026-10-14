@@ -12,7 +12,7 @@ import {DSTACK_CONTROLLER_IMAGE, DSTACK_CONTROLLER_VALUES_FILE, generateDstackCo
 import {generateValuesFiles} from '../../src/utils/values-generator.js'
 
 export function dstackSpec(controller?: DstackControllerConfig): DeploymentSpec {
-  const fixture = fs.readFileSync(new URL('../../src/config/deployment-spec.minimal.yaml', import.meta.url), 'utf8')
+  const fixture = fs.readFileSync(new URL('../fixtures/deployment-spec/minimal.yaml', import.meta.url), 'utf8')
     .replaceAll('$ENV:OWNER_ADDRESS', `0x${'e'.repeat(40)}`)
     .replaceAll(/\$ENV:\w+/g, 'test-only')
   return {...yaml.load(fixture) as DeploymentSpec, dstackController: controller}

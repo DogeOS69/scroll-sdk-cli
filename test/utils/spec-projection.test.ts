@@ -27,7 +27,7 @@ import {generateValuesFiles} from '../../src/utils/values-generator.js'
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
 function fixture(): DeploymentSpec {
-  const text = fs.readFileSync(path.join(cliRoot, 'src/config/deployment-spec.minimal.yaml'), 'utf8')
+  const text = fs.readFileSync(path.join(cliRoot, 'test/fixtures/deployment-spec/minimal.yaml'), 'utf8')
     .replaceAll('$ENV:OWNER_ADDRESS', '0x0000000000000000000000000000000000000001')
     .replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')
   const spec = normalizeDeploymentSpec(yaml.load(text) as DeploymentSpec)
