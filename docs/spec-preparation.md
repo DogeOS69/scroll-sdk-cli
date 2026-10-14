@@ -635,7 +635,7 @@ should not have to copy protocol addresses into the spec:
 | Stable genesis timestamp | `genesis.TIMESTAMP = 0`, never the generation time |
 | Spec supply intent | `genesis.L2_MAX_NATIVE_DOGE_SUPPLY`, using the existing `genesis.maxEthSupplyWei` input name |
 | Gas policy | Explicit genesis gas limit and base fee; Galileo scalars and penalty factor; L2 system-config base fee overhead |
-| Prepared identities | Genesis uses deployer/owner inputs. The isolated rc.6 generator config uses the deployer for the shared reader's mandatory Fee Oracle address; this does not become the runtime Fee Oracle identity. The AWS stage prepares the actual service identity |
+| Prepared identities | Genesis uses deployer/owner inputs. The isolated generator config uses the deployer for the shared reader's mandatory Fee Oracle address; this does not become the runtime Fee Oracle identity. The AWS stage prepares the actual service identity |
 | Fee-vault withdrawal destination | Required: `contracts.feeVaultDogeRecipientAddress` is a Dogecoin P2PKH address. Plan rejects a missing or invalid recipient before SDK resolution, CubeSigner lookup or proof-release downloads; apply also rejects saved plans missing it before running any step. The CLI validates the network and derives its hash160 for `FEE_VAULT_DOGE_RECIPIENT_ADDR`. This is not an EVM account or an automatic choice of the Bridge fee-wallet. |
 | Optional components | Blockscout database, explorer verification, Ethereum devnet and public service hostnames are configured only for the selected components |
 
@@ -645,15 +645,16 @@ An omitted recipient retains the upstream template's zero placeholder and emits
 a warning: it must be selected before deploying L2 contracts.
 
 `setup gen-l2-artifacts` passes `config.toml` to
-`dogeos69/scroll-stack-contracts:gen-configs-dogeos-v0.3.0-rc.6`. The contracts
+`dogeos69/scroll-stack-contracts:gen-configs-dogeos-v0.3.0-rc.7`. The contracts
 image produces `genesis.yaml`; the CLI checks mandatory predeploy code before
 copying the result to `values/genesis.yaml`. It never synthesizes or patches
 contract bytecode or genesis storage. A regression fixture records every field
 and predeploy address from the pinned contracts template, with explicit
-exceptions for optional components. The rc.6 release leaves that rc.5
-configuration template unchanged; its genesis generator now omits zero-valued
-storage allocations. Review and refresh
-the fixture when the contracts template changes.
+exceptions for optional components. The rc.6 release introduced omission of
+zero-valued storage allocations. The rc.7 upstream template changes its default
+deployer balance to 10 DOGE; the CLI continues to pass the deployment's explicit
+`genesis.deployerInitialBalanceWei` instead of silently changing that intent.
+Review and refresh the fixture when the contracts template changes.
 
 Do not replace genesis in an already prepared deployment without regenerating
 its protocol context, proof materials and signer handoff. Use a new preparation
