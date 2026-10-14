@@ -96,7 +96,7 @@ describe('production Bridge sequencer KMS', () => {
     const fee = feeKey()
     process.env.DOGECOIN_FEE_WALLET_KEY = fee.toWIF()
     const publicKey = fee.toPublicKey().toString()
-    spec = {attestationSigners: [{attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), name: 'partner-a', transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()}], bridge: {confirmationsRequired: 6, teePubkey: publicKey, thresholds: {attestation: 1, recovery: 2}, timelock: 100_000}, dogecoin: {network: 'testnet'}, images: {services: {withdrawalProcessor: {tag: 'v0.3.0-beta.6-kms'}}}, infrastructure: {aws: {accountId: account, eksClusterName: 'cluster', region}, namespace: 'test', provider: 'aws'}, metadata: {name: 'test'}, preparation: {bridge: {image: `dogeos69/bridge-genesis-tools@sha256:${'a'.repeat(64)}`, mode: 'production', production: {ethereumAnchor: {blockTag: 'finalized'}, recoveryPublicKeys: [publicKey, feeKey().toPublicKey().toString()], sequencerKms: {action: 'create'}}}, proofMaterials: {mode: 'existing'}}} as DeploymentSpec
+    spec = {attestationSigners: [{attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), name: 'partner-a', transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()}], bridge: {confirmationsRequired: 6, teePubkey: publicKey, thresholds: {attestation: 1, recovery: 2}, timelock: 100_000}, contracts: {feeVaultDogeRecipientAddress: new bitcore.Address(Buffer.alloc(20, 1), bitcore.Networks.testnet, 'pubkeyhash').toString()}, dogecoin: {network: 'testnet'}, images: {services: {withdrawalProcessor: {tag: 'v0.3.0-beta.6-kms'}}}, infrastructure: {aws: {accountId: account, eksClusterName: 'cluster', region}, namespace: 'test', provider: 'aws'}, metadata: {name: 'test'}, preparation: {bridge: {image: `dogeos69/bridge-genesis-tools@sha256:${'a'.repeat(64)}`, mode: 'production', production: {ethereumAnchor: {blockTag: 'finalized'}, recoveryPublicKeys: [publicKey, feeKey().toPublicKey().toString()], sequencerKms: {action: 'create'}}}, proofMaterials: {mode: 'existing'}}} as DeploymentSpec
   })
   afterEach(() => {
     fs.rmSync(root, {force: true, recursive: true})
@@ -301,7 +301,7 @@ describe('production Bridge sequencer KMS', () => {
     const minimal = normalizeDeploymentSpec(yaml.load(fs.readFileSync(path.join(cliRoot, 'test/fixtures/deployment-spec/minimal.yaml'), 'utf8')
       .replaceAll('$ENV:OWNER_ADDRESS', '0x0000000000000000000000000000000000000001')
       .replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')) as DeploymentSpec)
-    spec = {...minimal, ...spec, bridge: {...minimal.bridge, ...spec.bridge}, dogecoin: {...minimal.dogecoin, ...spec.dogecoin}}
+    spec = {...minimal, ...spec, bridge: {...minimal.bridge, ...spec.bridge}, contracts: {...minimal.contracts, ...spec.contracts}, dogecoin: {...minimal.dogecoin, ...spec.dogecoin}}
     spec.bridge.initialAttestationKeyset = {signerIds: ['partner-a'], threshold: 1}
     prepareSequencerKms(root, spec, runner())
     const sequencer = productionSequencer(root, spec)
