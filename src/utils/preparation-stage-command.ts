@@ -17,7 +17,7 @@ export const preparationStageFlags = {
 export async function runPreparationStage(stage: PreparationStage, directory: string, json: boolean): Promise<void> {
   const output = new JsonOutputContext(`setup ${stage}`, json)
   try {
-    const state = await applyPreparation(directory, new CommandPreparationRunner(), step => output.info(`${step.id}: ${step.title}`), {stage})
+    const state = await applyPreparation(directory, new CommandPreparationRunner(), step => output.info(`${step.id}: ${step.title}`), {stage, warn: message => output.addWarning(message)})
     const nextCommand = state.nextStage ? stageCommand(state.nextStage, directory === DEFAULT_DEPLOYMENT ? undefined : directory) : undefined
     const policyBuild = state.steps['cubesigner-policy-build'] === 'completed' ? {directory: `${directory}/${POLICY_OUTPUT}`, governanceHandoff: `${directory}/.data/cubesigner-policy-governance-handoff.json`, status: 'built-not-published-or-attached'} : undefined
     const report = {completed: Object.keys(state.steps).filter(id => state.steps[id] === 'completed'), currentStep: state.currentStep, nextCommand, policyBuild, stage, status: state.status, waiting: state.waiting}

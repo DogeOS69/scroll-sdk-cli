@@ -106,9 +106,11 @@ describe('resumable preparation plan', () => {
     expect(JSON.parse(fs.readFileSync(path.join(deployment, '.scrollsdk/plan.json'), 'utf8')).id).eq(plan.id)
     const configFile = path.join(deployment, '.data/doge-config.toml')
     expect((toml.parse(fs.readFileSync(configFile, 'utf8')).cubesigner as toml.JsonMap).policyReceipts).deep.eq(refs)
-    // Normal workflow fingerprinting is preserved after the authorized import.
+    // Subsequent operator edits are advisory, including after an authorized import.
     fs.appendFileSync(configFile, '\n# operator edit\n')
-    await rejected(() => stage('upload-secrets'), 'changed outside the workflow')
+    const uploaded = await stage('upload-secrets')
+    expect(uploaded.status).eq('prepared')
+    expect(uploaded.warnings?.join('\n')).include('.data/doge-config.toml')
   })
 
   for (const recipient of [undefined, '', 'REPLACE_WITH_DOGECOIN_P2PKH_ADDRESS', `0x${'1'.repeat(40)}`]) {
@@ -192,6 +194,15 @@ describe('resumable preparation plan', () => {
       const applied = command(args)
       expect(applied.status, applied.stderr + applied.stdout).to.equal(0)
       expect(JSON.parse(applied.stdout).data.status).to.equal('prepared')
+    }
+
+    // Warnings must reach both command adapters' JSON output, not just state.json.
+    const intentFile = path.join(output, '.scrollsdk/intent.json')
+    fs.appendFileSync(intentFile, '\n')
+    for (const name of ['apply', 'render']) {
+      const resumed = command([name])
+      expect(resumed.status, resumed.stderr + resumed.stdout).eq(0)
+      expect(JSON.parse(resumed.stdout).warnings.join('\n')).include('.scrollsdk/intent.json')
     }
 
     const custom = command(['plan', '--spec', 'deployment-spec.yaml', '--env-file', 'deployment.env', '--sdk-dir', '../scroll-sdk', '--output', 'custom output'])
@@ -334,11 +345,18 @@ describe('resumable preparation plan', () => {
     expect(attempts).to.equal(3)
   })
 
-  it('protects completed genesis artifacts from edits between stages', async () => {
+  it('warns about edited genesis artifacts and continues the next stage without regeneration', async () => {
     await createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml'), staged: true})
     await applyPreparation(deployment, {async run() {fs.writeFileSync(path.join(deployment, 'genesis.json'), '{}')}}, undefined, {stage: 'genesis'})
     fs.writeFileSync(path.join(deployment, 'genesis.json'), '{"modified":true}')
-    await rejected(() => applyPreparation(deployment, {async run() {throw new Error('must not run')}}, undefined, {stage: 'aws'}), 'changed outside')
+    const calls: string[] = []
+    const warnings: string[] = []
+    const result = await applyPreparation(deployment, {async run(step) {calls.push(step.id)}}, undefined, {stage: 'aws', warn: message => warnings.push(message)})
+    expect(result.status).eq('stage-complete')
+    expect(warnings.join('\n')).include('genesis.json')
+    expect(result.warnings).deep.eq(warnings)
+    expect(calls).include('identities').and.not.include('genesis-local')
+    expect(fs.readFileSync(path.join(deployment, 'genesis.json'), 'utf8')).eq('{"modified":true}')
   })
 
   it('refreshes only the runtime tail, archives previous evidence and preserves pinned deployment artifacts', async () => {
@@ -372,7 +390,9 @@ describe('resumable preparation plan', () => {
     expect(fs.readFileSync(saved, 'utf8')).to.equal('{"testEvidence":true}')
     expect(fs.readFileSync(path.join(deployment, 'deployment-kit-k-0123456789ab/deployment-kit.json'), 'utf8')).to.equal('{"kept":true}')
     fs.appendFileSync(path.join(deployment, '.data/genesis.json'), ' ')
-    await rejected(() => applyPreparation(deployment, runner, undefined, {refreshRuntime: true}), 'outside the workflow')
+    const refreshed = await applyPreparation(deployment, runner, undefined, {refreshRuntime: true})
+    expect(refreshed.status).eq('prepared')
+    expect(refreshed.warnings?.join('\n')).include('.data/genesis.json')
   })
 
   it('refuses runtime refresh before immutable preparation has completed', async () => {
@@ -777,13 +797,25 @@ describe('resumable preparation plan', () => {
     expect(broadcasts).to.equal(1)
   })
 
-  it('rejects changed plan input and changed completed artifacts', async () => {
+  it('reports changed or removed files and saved intent without replaying completed work', async () => {
     await makePlan()
     await applyPreparation(deployment, {async run() {fs.writeFileSync(path.join(deployment, 'config.toml'), 'network = "testnet"')}})
     fs.writeFileSync(path.join(deployment, 'config.toml'), 'network = "mainnet"')
-    await rejected(() => applyPreparation(deployment, {async run() {throw new Error('must not execute')}}), 'changed outside')
+    const runner = {async run() {throw new Error('completed steps must not execute')}}
+    const edited = await applyPreparation(deployment, runner)
+    expect(edited.status).eq('prepared')
+    expect(edited.warnings?.join('\n')).include('config.toml').and.not.include('mainnet')
+    expect((await applyPreparation(deployment, runner)).warnings).deep.eq([])
+    fs.rmSync(path.join(deployment, 'config.toml'))
     fs.appendFileSync(path.join(deployment, '.scrollsdk/intent.json'), ' ')
-    await rejected(() => applyPreparation(deployment, {async run() {}}), 'frozen intent changed')
+    const planFile = path.join(deployment, '.scrollsdk/plan.json')
+    const plan = JSON.parse(fs.readFileSync(planFile, 'utf8'))
+    plan.deploymentName = 'renamed-by-operator'
+    fs.writeFileSync(planFile, JSON.stringify(plan))
+    const resumed = await applyPreparation(deployment, runner)
+    expect(resumed.status).eq('prepared')
+    expect(resumed.warnings).length(3)
+    expect(resumed.warnings?.join('\n')).include('plan.json').and.include('intent.json').and.include('missing: config.toml')
   })
 
   it('uploads to the same cluster-scoped prefix used by generated references', async () => {

@@ -36,8 +36,9 @@ Before final `setup render`, fill the enabled ingress certificate references and
 TSO edge network-policy CIDRs in the deployment values. Intermediate chart
 compilation inside `setup proof-materials` defers these edge inputs and status-page
 reconciliation, while still validating internal callers and enabled isolation.
-Operator-owned values YAML and Makefile may be edited between stages; their
-fingerprints are not locked. The frozen spec and managed TOML remain protected.
+Local configuration may be edited between stages. Changes to recorded TOML,
+genesis or other generated files produce warnings and do not block preparation.
+Values YAML and Makefile remain excluded from fingerprint tracking.
 These defaults come from the committed SDK revision selected by plan/bootstrap;
 an older checkout or an existing deployment retains its own settings.
 
@@ -602,24 +603,35 @@ The workflow does not create an EKS cluster, rent GPU capacity or install releas
 ## State and outcomes
 
 JSON output returns `stage`, `status`, `currentStep`, `completed`, `nextCommand`
-and optional `waiting` instructions. Exit codes: `0` for `stage-complete` or
+and optional `waiting` instructions; the response's `warnings` lists detected
+local file changes. Exit codes: `0` for `stage-complete` or
 `prepared`, `2` for `waiting`, and `1` for failure or `recovery-required`.
 `stage-complete` means only the selected stage is complete. `prepared` means all
 six stages are complete; running-service acceptance remains separate. A wait or
 failure reports the same stage as the next command. A successfully printed JSON result with
 `status: waiting` is not a completed deployment.
 
-Each completed step and the managed artifact hashes are saved before proceeding.
-Reruns preserve completed identities and artifacts. An apply lock excludes
-concurrent execution. Unexpected edits to recorded artifacts stop the run;
-operator-owned `values/*.yaml` (including nested YAML files) and `Makefile` are
-excluded from hash locking, including hashes saved by older CLI versions. External
-funding inputs remain editable under `.scrollsdk/inputs/`. Do not edit
-generated TOML to bypass the state checks.
+Each completed step and artifact fingerprints are saved before proceeding.
+Fingerprints are diagnostic only: edited or missing files produce warnings,
+and the next step runs using the files currently on disk. This also applies to
+old saved plans, with no opt-out flag or manual state-file repair. Warnings name
+files without printing their contents. Operator-owned `values/*.yaml` (including
+nested YAML files) and `Makefile` remain excluded from fingerprint tracking.
+External funding and governance inputs remain editable under `.scrollsdk/inputs/`.
 
-The initial interface is for fresh deployments. Saved plans are immutable: the
-same spec can be planned again, but a changed spec requires a new deployment
-directory. It does not implement in-place upgrades, key rotation or destructive
+Changes to the saved `plan.json` or `intent.json` content hashes also produce
+warnings instead of stopping execution. The workflow still reads its saved
+intent, not the original source spec, and skips completed steps: editing a file
+does not automatically regenerate dependent artifacts, reprovision AWS resources
+or replay funding. An apply lock still excludes concurrent execution. Required
+input parsing, step prerequisites, ambiguous broadcast recovery and externally
+pinned release/governance evidence validation remain in effect; a later step can
+report a concrete missing or invalid input rather than a generic file-hash error.
+
+The initial interface is for fresh deployments. Replanning from a changed source
+spec still requires a new deployment directory; resume commands use the saved
+plan and intent with the advisory file checks described above. This does not
+implement in-place upgrades, key rotation or destructive
 migration. After an abrupt process termination, inspect the lock's host/PID and
 any child/provider activity before removing a stale lock; interrupted broadcasts
 remain blocked regardless. Runtime deployment acceptance remains a separate step.
