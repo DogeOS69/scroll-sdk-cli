@@ -31,16 +31,16 @@ infrastructure:
 ```
 
 This is a fragment, not a complete deployment spec. Identifiers are placeholders.
-Add bindings for all enabled HTTP ingresses, or explicitly disable those not
-exposed. ALB, listener and target group references are mandatory; the CLI never
+Add bindings for enabled HTTP ingresses of the supported applications below,
+or disable those not exposed. ALB, listener and target group references are mandatory; the CLI never
 falls back to creating resources. The selected SDK commit must contain
 the selected applications' `templates/targetgroupbindings.yaml` files. Use the
 matching application chart versions from that SDK revision.
 
 Binding keys map to existing application values: `tso-service`,
-`proof-coordinator`, `frontends`, `l1-devnet`, `l1-interface`,
-`l2-reth-rpc-public`, `l2-reth-rpc-public-ws`, `dogecoin`, `blockbook`,
-`dstack-controller`, `scroll-monitor`, `blockscout-api`, `blockscout-frontend`.
+`proof-coordinator`, `frontends`, `l2-reth-rpc-public`,
+`l2-reth-rpc-public-ws`, `blockscout-api`, `blockscout-frontend`.
+This workflow does not modify or restrict other applications' ingress settings.
 Each binding requires its actual Kubernetes Service name and numeric Service
 port. HTTP and WebSocket RPC require separate target groups and distinguishable
 host/path rules. All Services use the spec's namespace.
@@ -48,9 +48,9 @@ host/path rules. All Services use the spec's namespace.
 Hosts and paths are taken from existing values, not duplicated in this block.
 Generation disables the Ingress and marks it with `existingAlbBinding`, then
 writes `targetGroupBindings` into each application's own values file. Both fresh
-generation and repeated preparation preserve this boundary. An enabled ingress without a binding is an
-error. Final AWS spec-based `prep-charts` rejects enabled HTTP ingress without
-an `alb` selection; legacy non-spec commands retain their existing behavior.
+generation and repeated preparation preserve this boundary. An enabled ingress
+in a supported application without a binding is an error. Final AWS spec-based `prep-charts` requires an `alb` selection for those
+enabled ingresses; legacy non-spec commands retain their existing behavior.
 
 TLS termination, certificates, DNS, rules, target groups and security groups
 belong to external infrastructure. This release supports HTTPS 443 listeners
@@ -61,9 +61,7 @@ the whole service is rejected. Preserve backend security groups and NetworkPolic
 TSO still requires edge peers when the managed Ingress is disabled.
 
 Disable `preparation.tsoAlbEdge` and configure the chosen ALB's subnet CIDRs in
-operator NetworkPolicy values. For dstack, use an internal endpoint and
-`dstackController.ingress.hosts`; `dstackController.internalTls` selects the old
-controller-owned workflow and cannot be combined with existing mode.
+operator NetworkPolicy values.
 
 Commands, run from the prepared deployment directory:
 

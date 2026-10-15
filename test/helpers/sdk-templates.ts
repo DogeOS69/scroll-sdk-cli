@@ -36,7 +36,7 @@ export function createSdkFixture(directory: string): string {
     }
   }
 
-  for (const chart of ['blockbook', 'blockscout', 'dogecoin', 'dstack-controller', 'frontends', 'l1-devnet', 'l1-interface', 'l2-reth', 'proof-coordinator', 'scroll-monitor', 'tso-service']) {
+  for (const chart of ['blockscout', 'frontends', 'l2-reth', 'proof-coordinator', 'tso-service']) {
     const target = path.join(directory, 'charts', chart, 'templates/targetgroupbindings.yaml')
     fs.mkdirSync(path.dirname(target), {recursive: true})
     fs.writeFileSync(target, '# Nonfunctional chart capability fixture\n')

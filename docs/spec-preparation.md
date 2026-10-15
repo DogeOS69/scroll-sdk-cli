@@ -1,6 +1,6 @@
 # Prepare a deployment in explicit stages
 
-For AWS HTTP ingress, select [existing ALB references](existing-alb.md) in
+For supported public applications on AWS, select [existing ALB references](existing-alb.md) in
 `infrastructure.aws.alb`. Final preparation requires bindings for exposed
 endpoints; Helm installs bindings without owning the ALB lifecycle.
 
@@ -883,7 +883,7 @@ the compiler Worker contract without additional input files or path flags.
 
 ## ALB edges, internal isolation and workload permissions
 
-For existing ALBs, use [existing ALB mode](existing-alb.md). Application charts
+For the supported public applications, use [existing ALB mode](existing-alb.md). Their charts
 own their bindings, while ALBs, certificates and forwarding rules remain
 externally managed. The managed-Ingress annotation workflow below applies to
 legacy deployments; it does not configure external ALBs.
@@ -1108,9 +1108,6 @@ This is an offline integrity gate; it does not re-fetch remote objects or claim
 that a GPU worker is operational.
 
 ## Internal dstack HTTPS with managed certificate renewal
-
-This managed-Ingress option cannot be combined with `infrastructure.aws.alb`.
-For existing ALBs, configure an internal endpoint and `dstackController.ingress.hosts`.
 
 For AWS deployments, `dstackController.internalTls` generates an internal ALB
 Ingress and binds capacity-manager to its HTTPS hostname. This is an opt-in

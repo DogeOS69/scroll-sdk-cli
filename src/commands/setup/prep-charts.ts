@@ -1339,7 +1339,6 @@ export default class SetupPrepCharts extends Command {
       const transaction = GenerationTransaction.begin(root)
       try {
         const generation = await this.processDstackControllerValues(transaction.toStagingPath(valuesDir))
-        if (this.albSpec) projectExistingAlbDirectory(transaction.toStagingPath(valuesDir), this.albSpec, true)
         const {changedFiles} = transaction.commit()
         if (this.jsonMode) this.jsonCtx.success({changedFiles, ...generation, valuesDir})
       } catch (error) {
@@ -1864,7 +1863,6 @@ export default class SetupPrepCharts extends Command {
       const changes = this.reconcileDogecoinValues(productionYaml)
       const apply = changes.length > 0 && (this.nonInteractive || await confirm({message: `Apply Dogecoin configuration changes to ${filename}?`}))
       if (apply) fs.writeFileSync(target, yaml.dump(productionYaml, YAML_DUMP_OPTIONS))
-      if (this.albSpec) projectExistingAlbDirectory(transaction.toStagingPath(valuesDir), this.albSpec, true)
       const {changedFiles} = transaction.commit()
       this.jsonCtx.logSuccess(apply ? `Updated ${filename}` : `No changes applied to ${filename}`)
       if (this.jsonMode) this.jsonCtx.success({
@@ -2060,7 +2058,6 @@ export default class SetupPrepCharts extends Command {
           values.ingress.className = existing.ingress.className ?? values.ingress.className
         }
 
-        suppressExistingAlbIngress(values, DSTACK_CONTROLLER_VALUES_FILE, this.albSpec)
         reconcileDeploymentIngresses(values, 'dstack-controller', !this.flags['proof-preparation'])
         // Keep the generated header and byte stability when no operator overlay applies.
         if (!isDeepStrictEqual(values, yaml.load(content))) content = yaml.dump(values, {lineWidth: -1, noRefs: true, sortKeys: true})
@@ -3474,7 +3471,6 @@ export default class SetupPrepCharts extends Command {
   private reconcileDogecoinValues(productionYaml: any): Array<{key: string; newValue: string; oldValue: string}> {
     const changes: Array<{key: string; newValue: string; oldValue: string}> = []
     const oldIngress = JSON.stringify(productionYaml.ingress)
-    suppressExistingAlbIngress(productionYaml, 'dogecoin-production.yaml', this.albSpec)
     reconcileDeploymentIngresses(productionYaml, 'dogecoin', !this.flags['proof-preparation'])
     if (oldIngress !== JSON.stringify(productionYaml.ingress)) changes.push({key: 'ingress', newValue: 'ALB', oldValue: 'previous controller settings'})
     const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(this.dogeConfig)

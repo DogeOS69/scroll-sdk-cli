@@ -57,8 +57,8 @@ describe('existing ALB lifecycle', () => {
     expect(regenerated.ingress.main.enabled).to.equal(false)
   })
 
-  it('rejects every unbound enabled ingress atomically, including nested Grafana', () => {
-    const values = {...files(), 'scroll-monitor-production.yaml': yaml.dump({grafana: {ingress: {enabled: true, hosts: ['grafana.example.invalid']}}})}
+  it('rejects every unbound enabled ingress atomically, including nested Blockscout', () => {
+    const values = {...files(), 'blockscout-production.yaml': yaml.dump({'blockscout-stack': {blockscout: {ingress: {enabled: true, hostname: 'explorer.example.invalid'}}}})}
     const before = {...values}
     expect(() => projectExistingAlb(values, spec())).to.throw('enabled ingress has no existing ALB binding')
     expect(values).to.deep.equal(before)
@@ -94,13 +94,30 @@ describe('existing ALB lifecycle', () => {
     ['invalid service port', (s: any) => {s.infrastructure.aws.alb.bindings['tso-service'].serviceRef.port = 0}, 'numeric port'],
   ] as const) it(`rejects ${name}`, () => {const input = spec(); mutate(input); expect(() => validateExistingAlb(input)).to.throw(message)})
 
-  it('suppresses regenerated dstack ingress before certificate annotation validation', () => {
-    const input = spec()
-    input.infrastructure.aws!.alb!.bindings = {'dstack-controller': {...input.infrastructure.aws!.alb!.bindings['tso-service']}}
-    const values = {ingress: {annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>'}, enabled: true, hosts: ['dstack.example.invalid']}}
-    suppressExistingAlbIngress(values, 'dstack-controller-production.yaml', input)
-    reconcileDeploymentIngresses(values, 'dstack-controller')
-    expect(values.ingress.enabled).to.equal(false)
+  it('leaves excluded application ingresses unchanged, including final preparation without ALB selection', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alb-unrelated-values-'))
+    const unrelated = Object.fromEntries(['l1-devnet', 'dogecoin', 'blockbook', 'l1-interface', 'scroll-monitor', 'dstack-controller'].map(name => [
+      `${name}-production.yaml`, yaml.dump(name === 'scroll-monitor'
+        ? {grafana: {ingress: {enabled: true, hosts: ['monitor.example.invalid']}}}
+        : {ingress: {enabled: true, hosts: ['operator.example.invalid']}}),
+    ]))
+    try {
+      const input = spec()
+      input.dstackController = {internalTls: {hostname: 'private.example.invalid'}} as any
+      const values: Record<string, string> = {...unrelated, ...files()}
+      projectExistingAlb(values, input)
+      for (const [file, content] of Object.entries(unrelated)) {
+        expect(values[file]).to.equal(content)
+        const document = yaml.load(content) as any
+        suppressExistingAlbIngress(document, file, input)
+        expect(document).to.deep.equal(yaml.load(content))
+        fs.writeFileSync(path.join(root, file), content)
+      }
+
+      delete input.infrastructure.aws!.alb
+      projectExistingAlbDirectory(root, input, true)
+      for (const [file, content] of Object.entries(unrelated)) expect(fs.readFileSync(path.join(root, file), 'utf8')).to.equal(content)
+    } finally {fs.rmSync(root, {force: true, recursive: true})}
   })
 
   it('verifies selected AWS resources using only describe calls', () => {

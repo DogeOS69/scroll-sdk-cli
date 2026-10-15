@@ -12,20 +12,15 @@ import {resolveSdkRevision} from './spec-bootstrap.js'
 
 // Binding keys select an existing SDK ingress, so hosts/paths have one source.
 export const ALB_SERVICES: Record<string, {file: string; ingress: string[]}> = {
-  'blockbook': {file: 'blockbook-production.yaml', ingress: ['ingress']},
   'blockscout-api': {file: 'blockscout-production.yaml', ingress: ['blockscout-stack', 'blockscout', 'ingress']},
   'blockscout-frontend': {file: 'blockscout-production.yaml', ingress: ['blockscout-stack', 'frontend', 'ingress']},
-  'dogecoin': {file: 'dogecoin-production.yaml', ingress: ['ingress']},
-  'dstack-controller': {file: 'dstack-controller-production.yaml', ingress: ['ingress']},
   'frontends': {file: 'frontends-production.yaml', ingress: ['ingress', 'main']},
-  'l1-devnet': {file: 'l1-devnet-production.yaml', ingress: ['ingress', 'main']},
-  'l1-interface': {file: 'l1-interface-production.yaml', ingress: ['ingress', 'main']},
   'l2-reth-rpc-public': {file: 'l2-reth-rpc-public-production.yaml', ingress: ['ingress', 'main']},
   'l2-reth-rpc-public-ws': {file: 'l2-reth-rpc-public-production.yaml', ingress: ['ingress', 'websocket']},
   'proof-coordinator': {file: 'proof-coordinator-production.yaml', ingress: ['ingress', 'main']},
-  'scroll-monitor': {file: 'scroll-monitor-production.yaml', ingress: ['grafana', 'ingress']},
   'tso-service': {file: 'tso-service-production.yaml', ingress: ['ingress', 'main']},
 }
+const ALB_VALUE_FILES = new Set(Object.values(ALB_SERVICES).map(entry => entry.file))
 const label = /^[\da-z](?:[\da-z-]{0,61}[\da-z])?$/
 const object = (value: any): boolean => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 const fail = (message: string): never => {throw new Error(`Existing ALB: ${message}`)}
@@ -36,7 +31,6 @@ export function validateExistingAlb(spec: DeploymentSpec): void {
   if (config === undefined) return
   if (spec.infrastructure.provider !== 'aws' || !object(config) || config.mode !== 'existing') fail('infrastructure.aws.alb.mode must be existing on AWS')
   if (!object(config.endpoints) || Object.keys(config.endpoints).length === 0 || !object(config.bindings) || Object.keys(config.bindings).length === 0) fail('endpoints and bindings must be nonempty maps')
-  if (spec.dstackController?.internalTls) fail('replace dstackController.internalTls with an existing private endpoint and dstackController.ingress.hosts')
   if (spec.preparation?.tsoAlbEdge?.enabled) fail('disable preparation.tsoAlbEdge; configure NetworkPolicy for the selected existing ALB subnets')
   const arnPrefix = `arn:aws:elasticloadbalancing:${aws!.region}:${aws!.accountId}:`
   for (const [name, endpoint] of Object.entries(config.endpoints)) {
@@ -82,10 +76,7 @@ export function suppressExistingAlbIngress(values: any, file: string, spec?: Dep
     const entry = ALB_SERVICES[name]
     if (entry?.file !== file) continue
     const ingress = entry.ingress.reduce((value, key) => value?.[key], values)
-    if (object(ingress)) {
-      Object.assign(ingress, {enabled: false, existingAlbBinding: name})
-      if (name === 'dstack-controller') ingress.annotations = {...ingress.annotations, 'alb.ingress.kubernetes.io/scheme': 'internal'}
-    }
+    if (object(ingress)) Object.assign(ingress, {enabled: false, existingAlbBinding: name})
   }
 }
 
@@ -107,7 +98,7 @@ export function projectExistingAlb(files: Record<string, string>, spec: Deployme
   const config = spec.infrastructure.aws?.alb
   if (!config) {
     for (const [file, content] of Object.entries(files)) {
-      if (!file.endsWith('.yaml')) continue
+      if (!ALB_VALUE_FILES.has(file)) continue
       const values = yaml.load(content) as any ?? {}
       if (Object.keys(values.targetGroupBindings ?? {}).length > 0 || deploymentIngresses(values).some(ingress => ingress.existingAlbBinding)) fail('cannot remove alb configuration while values still reference existing ALB bindings')
     }
@@ -128,7 +119,7 @@ export function projectExistingAlb(files: Record<string, string>, spec: Deployme
   }
 
   for (const [file, content] of Object.entries(projected)) {
-    if (!file.endsWith('.yaml')) continue
+    if (!ALB_VALUE_FILES.has(file)) continue
     const values = yaml.load(content) as any ?? {}
     for (const name of Object.keys(values.targetGroupBindings ?? {})) {
       if (!Object.hasOwn(config.bindings, name) || ALB_SERVICES[name].file !== file) fail(`${file}: stale or misplaced targetGroupBindings entry`)
@@ -151,7 +142,7 @@ export function readAlbValues(directory: string): Record<string, string> {
 export function projectExistingAlbDirectory(directory: string, spec: DeploymentSpec, requireSelection = false): void {
   const before = readAlbValues(directory)
   if (requireSelection && spec.infrastructure.provider === 'aws' && !spec.infrastructure.aws?.alb) {
-    for (const [file, content] of Object.entries(before)) if (deploymentIngresses(yaml.load(content) as any ?? {}).some(ingress => ingress.enabled !== false)) fail(`${file}: AWS chart preparation requires infrastructure.aws.alb or explicitly disabled HTTP ingress`)
+    for (const [file, content] of Object.entries(before)) if (ALB_VALUE_FILES.has(file) && deploymentIngresses(yaml.load(content) as any ?? {}).some(ingress => ingress.enabled !== false)) fail(`${file}: AWS chart preparation requires infrastructure.aws.alb or explicitly disabled HTTP ingress`)
   }
 
   const files = {...before}
@@ -205,6 +196,7 @@ export function verifyExistingAlb(spec: DeploymentSpec, files: Record<string, st
   projectExistingAlb(projected, spec)
   // Verification must not silently fix a re-enabled Ingress or stale binding file.
   for (const file of Object.keys(projected)) {
+    if (!ALB_VALUE_FILES.has(file)) continue
     if (JSON.stringify(yaml.load(projected[file])) !== JSON.stringify(yaml.load(files[file] ?? 'null'))) fail(`${file}: stale values; regenerate before installation`)
   }
 
@@ -244,11 +236,11 @@ export function verifyExistingAlb(spec: DeploymentSpec, files: Record<string, st
     const {certificates, lb, otherRules, rules} = endpoints.get(binding.endpoint)!
     const ingress = existingAlbIngress(files, name)
     const annotations = ingress.annotations ?? {}
-    const scheme = annotations['alb.ingress.kubernetes.io/scheme'] ?? (name === 'dstack-controller' ? 'internal' : 'internet-facing')
-    if (lb.Scheme !== scheme || name === 'dstack-controller' && lb.Scheme !== 'internal') fail(`${name}: ALB scheme does not match the intended exposure`)
+    const scheme = annotations['alb.ingress.kubernetes.io/scheme'] ?? 'internet-facing'
+    if (lb.Scheme !== scheme) fail(`${name}: ALB scheme does not match the intended exposure`)
     const tg = read(['elbv2', 'describe-target-groups', '--target-group-arns', binding.targetGroupArn]).TargetGroups?.[0]
     if (!tg || tg.TargetGroupArn !== binding.targetGroupArn || tg.TargetType !== 'ip' || tg.VpcId !== lb.VpcId || tg.Protocol !== 'HTTP' || !tg.LoadBalancerArns?.includes(endpoint.loadBalancerArn)) fail(`${name}: target group must be an HTTP/IP group attached to the selected ALB in the same VPC`)
-    const healthPath = annotations['alb.ingress.kubernetes.io/healthcheck-path'] ?? (name === 'tso-service' ? '/health' : name === 'proof-coordinator' ? '/healthz' : name === 'dstack-controller' ? '/healthcheck' : name === 'scroll-monitor' ? '/api/health' : '/')
+    const healthPath = annotations['alb.ingress.kubernetes.io/healthcheck-path'] ?? (name === 'tso-service' ? '/health' : name === 'proof-coordinator' ? '/healthz' : '/')
     if (tg.HealthCheckEnabled !== true || tg.HealthCheckPath !== healthPath || tg.HealthCheckProtocol !== 'HTTP' || tg.HealthCheckPort !== 'traffic-port') fail(`${name}: target group health check must use HTTP traffic-port ${healthPath}`)
     if (tg.Matcher?.HttpCode !== (annotations['alb.ingress.kubernetes.io/success-codes'] ?? '200')) fail(`${name}: target group health-check success codes differ from the application values`)
     if (name === 'proof-coordinator') {
