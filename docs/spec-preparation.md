@@ -32,10 +32,12 @@ and enable ingress in the relevant values file. Existing operator choices are
 preserved on regeneration. Blockscout values may be generated for later use,
 but `make install-all` does not install Blockscout or its contract verifier.
 Prepare its database and values, then opt in with `make install-blockscout`.
-Before planning, the selected SDK templates must also contain reviewed ingress
-certificate references and TSO network-policy CIDRs when those features are
-enabled. Their placeholders fail chart preparation; the immutable workflow does
-not permit hand-editing generated values between stages.
+Before final `setup render`, fill the enabled ingress certificate references and
+TSO edge network-policy CIDRs in the deployment values. Intermediate chart
+compilation inside `setup proof-materials` defers these edge inputs and status-page
+reconciliation, while still validating internal callers and enabled isolation.
+Operator-owned values YAML and Makefile may be edited between stages; their
+fingerprints are not locked. The frozen spec and managed TOML remain protected.
 These defaults come from the committed SDK revision selected by plan/bootstrap;
 an older checkout or an existing deployment retains its own settings.
 
@@ -835,9 +837,10 @@ values when using external Ethereum. Private devnet clients use the internal
 Service with ingress disabled by default. Public development access requires
 an explicit ingress opt-in and a hostname/certificate.
 
-Production TSO/WP NetworkPolicy is enabled. Before the charts stage, fill the
-TSO ALB subnet CIDRs and review same-namespace caller selectors. Empty selectors,
-unrestricted CIDRs and disabled isolation are rejected by prep-charts. Verify
+Production TSO/WP NetworkPolicy is enabled. Before final render, fill the
+TSO ALB subnet CIDRs; review same-namespace caller selectors before proof
+preparation. Standalone `prep-charts` validates all of these inputs by default.
+Empty selectors, unrestricted CIDRs and disabled isolation are rejected. Verify
 the cluster CNI enforces the rendered rules before launch. Metrics/API share a
 port, so monitoring peers also have management-port reachability.
 
